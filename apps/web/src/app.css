@@ -1,0 +1,371 @@
+@import 'tailwindcss';
+
+/* ──────────────────────────────────────────────────────────
+   Light theme (default)
+   ────────────────────────────────────────────────────────── */
+:root {
+	/* shadcn-svelte */
+	--background: 0 0% 100%;
+	--foreground: 240 10% 4%;
+	--card: 0 0% 100%;
+	--card-foreground: 240 10% 4%;
+	--popover: 0 0% 100%;
+	--popover-foreground: 240 10% 4%;
+	--primary: 217 91% 60%;
+	--primary-foreground: 0 0% 100%;
+	--secondary: 240 5% 96%;
+	--secondary-foreground: 240 6% 10%;
+	--muted: 240 5% 96%;
+	--muted-foreground: 240 4% 46%;
+	--accent: 240 5% 96%;
+	--accent-foreground: 240 6% 10%;
+	--destructive: 0 84% 60%;
+	--destructive-foreground: 0 0% 100%;
+	--border: 240 6% 90%;
+	--input: 240 6% 90%;
+	--ring: 217 91% 60%;
+	--radius: 0.5rem;
+
+	/* Rev palette */
+	--rev-bg-primary: #ffffff;
+	--rev-bg-secondary: #f4f4f5;
+	--rev-bg-tertiary: #e4e4e7;
+	--rev-bg-elevated: #ffffff;
+	--rev-border: #d4d4d8;
+	--rev-border-subtle: #e4e4e7;
+	--rev-text-primary: #18181b;
+	--rev-text-secondary: #52525b;
+	--rev-text-muted: #a1a1aa;
+	--rev-accent: #3b82f6;
+	--rev-accent-hover: #2563eb;
+	--rev-success: #16a34a;
+	--rev-warning: #ca8a04;
+	--rev-danger: #dc2626;
+
+	/* Diff canvas */
+	--rev-diff-bg: #fafafa;
+	--rev-diff-gutter-bg: #f5f5f5;
+	--rev-diff-gutter-border: #e5e5e5;
+
+	/* Addition lines */
+	--rev-diff-add-bg: #dcfce7;
+	--rev-diff-add-bg-hover: #bbf7d0;
+	--rev-diff-add-word: #86efac;
+	--rev-diff-add-gutter: #dcfce7;
+	--rev-diff-add-text: #166534;
+
+	/* Deletion lines */
+	--rev-diff-del-bg: #fee2e2;
+	--rev-diff-del-bg-hover: #fecaca;
+	--rev-diff-del-word: #fca5a5;
+	--rev-diff-del-gutter: #fee2e2;
+	--rev-diff-del-text: #991b1b;
+
+	/* Context line hover */
+	--rev-diff-ctx-bg-hover: #f5f5f5;
+	--rev-diff-selected-bg: rgba(59, 130, 246, 0.08);
+
+	/* Gutter markers */
+	--rev-marker-open: #3b82f6;
+	--rev-marker-open-glow: rgba(59, 130, 246, 0.25);
+	--rev-marker-pending: #f59e0b;
+	--rev-marker-pending-glow: rgba(245, 158, 11, 0.25);
+	--rev-marker-resolved: #d4d4d8;
+
+	/* Line action floating pill */
+	--rev-pill-bg: rgba(255, 255, 255, 0.95);
+	--rev-pill-border: rgba(0, 0, 0, 0.08);
+	--rev-pill-shadow: 0 8px 24px rgba(0, 0, 0, 0.1), 0 2px 6px rgba(0, 0, 0, 0.06);
+
+	/* Comment / thread */
+	--rev-thread-bg: #ffffff;
+	--rev-input-bg: #f4f4f5;
+	--rev-input-focus-ring: rgba(59, 130, 246, 0.4);
+
+	/* Context panel */
+	--rev-panel-bg: #fafafa;
+	--rev-panel-header-bg: rgba(255, 255, 255, 0.95);
+	--rev-stream-cursor: #3b82f6;
+
+	/* File tree */
+	--rev-tree-active-bg: rgba(59, 130, 246, 0.08);
+	--rev-tree-active-text: #2563eb;
+	--rev-tree-hover-bg: #f4f4f5;
+
+	/* Floating tabs */
+	--rev-tab-active-bg: #ffffff;
+	--rev-tab-inactive-text: #a1a1aa;
+}
+
+/* ──────────────────────────────────────────────────────────
+   Dark theme
+   ────────────────────────────────────────────────────────── */
+:root.dark {
+	/* shadcn-svelte */
+	--background: 0 0% 4%;
+	--foreground: 240 5% 91%;
+	--card: 0 0% 7%;
+	--card-foreground: 240 5% 91%;
+	--popover: 0 0% 7%;
+	--popover-foreground: 240 5% 91%;
+	--primary: 217 91% 60%;
+	--primary-foreground: 0 0% 100%;
+	--secondary: 0 0% 13%;
+	--secondary-foreground: 240 5% 91%;
+	--muted: 0 0% 13%;
+	--muted-foreground: 240 5% 65%;
+	--accent: 0 0% 13%;
+	--accent-foreground: 240 5% 91%;
+	--destructive: 0 84% 60%;
+	--destructive-foreground: 0 0% 100%;
+	--border: 0 0% 15%;
+	--input: 0 0% 15%;
+	--ring: 217 91% 60%;
+
+	/* Rev palette */
+	--rev-bg-primary: #0a0a0a;
+	--rev-bg-secondary: #111111;
+	--rev-bg-tertiary: #1a1a1a;
+	--rev-bg-elevated: #222222;
+	--rev-border: #262626;
+	--rev-border-subtle: #1a1a1a;
+	--rev-text-primary: #e4e4e7;
+	--rev-text-secondary: #a1a1aa;
+	--rev-text-muted: #52525b;
+	--rev-accent: #3b82f6;
+	--rev-accent-hover: #2563eb;
+	--rev-success: #22c55e;
+	--rev-warning: #eab308;
+	--rev-danger: #ef4444;
+
+	/* Diff canvas */
+	--rev-diff-bg: #0d0d0d;
+	--rev-diff-gutter-bg: #0a0a0a;
+	--rev-diff-gutter-border: #1e1e1e;
+
+	/* Addition lines */
+	--rev-diff-add-bg: #0d1f0d;
+	--rev-diff-add-bg-hover: #112811;
+	--rev-diff-add-word: #162d16;
+	--rev-diff-add-gutter: #0e1f0e;
+	--rev-diff-add-text: #4ade80;
+
+	/* Deletion lines */
+	--rev-diff-del-bg: #1f0d0d;
+	--rev-diff-del-bg-hover: #281212;
+	--rev-diff-del-word: #2d1212;
+	--rev-diff-del-gutter: #1c0e0e;
+	--rev-diff-del-text: #f87171;
+
+	/* Context line hover */
+	--rev-diff-ctx-bg-hover: #131313;
+	--rev-diff-selected-bg: rgba(59, 130, 246, 0.08);
+
+	/* Gutter markers */
+	--rev-marker-open: #3b82f6;
+	--rev-marker-open-glow: rgba(59, 130, 246, 0.35);
+	--rev-marker-pending: #f59e0b;
+	--rev-marker-pending-glow: rgba(245, 158, 11, 0.35);
+	--rev-marker-resolved: #3f3f46;
+
+	/* Line action floating pill */
+	--rev-pill-bg: rgba(26, 26, 26, 0.92);
+	--rev-pill-border: rgba(255, 255, 255, 0.07);
+	--rev-pill-shadow: 0 8px 24px rgba(0, 0, 0, 0.6), 0 2px 6px rgba(0, 0, 0, 0.4);
+
+	/* Comment / thread */
+	--rev-thread-bg: #111111;
+	--rev-input-bg: #161616;
+	--rev-input-focus-ring: rgba(59, 130, 246, 0.4);
+
+	/* Context panel */
+	--rev-panel-bg: #0e0e0e;
+	--rev-panel-header-bg: rgba(17, 17, 17, 0.95);
+	--rev-stream-cursor: #3b82f6;
+
+	/* File tree */
+	--rev-tree-active-bg: rgba(59, 130, 246, 0.1);
+	--rev-tree-active-text: #93c5fd;
+	--rev-tree-hover-bg: #141414;
+
+	/* Floating tabs */
+	--rev-tab-active-bg: #1a1a1a;
+	--rev-tab-inactive-text: #71717a;
+}
+
+/* ──────────────────────────────────────────────────────────
+   Tailwind v4 design tokens — reference the themed CSS vars
+   ────────────────────────────────────────────────────────── */
+@theme {
+	--color-bg-primary: var(--rev-bg-primary);
+	--color-bg-secondary: var(--rev-bg-secondary);
+	--color-bg-tertiary: var(--rev-bg-tertiary);
+	--color-bg-elevated: var(--rev-bg-elevated);
+	--color-border: var(--rev-border);
+	--color-border-subtle: var(--rev-border-subtle);
+	--color-text-primary: var(--rev-text-primary);
+	--color-text-secondary: var(--rev-text-secondary);
+	--color-text-muted: var(--rev-text-muted);
+	--color-accent: var(--rev-accent);
+	--color-accent-hover: var(--rev-accent-hover);
+	--color-success: var(--rev-success);
+	--color-warning: var(--rev-warning);
+	--color-danger: var(--rev-danger);
+	--font-sans: 'Inter', system-ui, sans-serif;
+	--font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+
+	/* Diff canvas */
+	--color-diff-bg: var(--rev-diff-bg);
+	--color-diff-gutter-bg: var(--rev-diff-gutter-bg);
+	--color-diff-gutter-border: var(--rev-diff-gutter-border);
+
+	/* Addition lines */
+	--color-diff-add-bg: var(--rev-diff-add-bg);
+	--color-diff-add-bg-hover: var(--rev-diff-add-bg-hover);
+	--color-diff-add-word: var(--rev-diff-add-word);
+	--color-diff-add-gutter: var(--rev-diff-add-gutter);
+	--color-diff-add-text: var(--rev-diff-add-text);
+
+	/* Deletion lines */
+	--color-diff-del-bg: var(--rev-diff-del-bg);
+	--color-diff-del-bg-hover: var(--rev-diff-del-bg-hover);
+	--color-diff-del-word: var(--rev-diff-del-word);
+	--color-diff-del-gutter: var(--rev-diff-del-gutter);
+	--color-diff-del-text: var(--rev-diff-del-text);
+
+	/* Context line hover */
+	--color-diff-ctx-bg-hover: var(--rev-diff-ctx-bg-hover);
+	--color-diff-selected-bg: var(--rev-diff-selected-bg);
+
+	/* Gutter markers */
+	--color-marker-open: var(--rev-marker-open);
+	--color-marker-open-glow: var(--rev-marker-open-glow);
+	--color-marker-pending: var(--rev-marker-pending);
+	--color-marker-pending-glow: var(--rev-marker-pending-glow);
+	--color-marker-resolved: var(--rev-marker-resolved);
+
+	/* Line action floating pill */
+	--color-pill-bg: var(--rev-pill-bg);
+	--color-pill-border: var(--rev-pill-border);
+	--color-pill-shadow: var(--rev-pill-shadow);
+
+	/* Comment / thread */
+	--color-thread-bg: var(--rev-thread-bg);
+	--color-input-bg: var(--rev-input-bg);
+	--color-input-focus-ring: var(--rev-input-focus-ring);
+
+	/* Context panel */
+	--color-panel-bg: var(--rev-panel-bg);
+	--color-panel-header-bg: var(--rev-panel-header-bg);
+	--color-stream-cursor: var(--rev-stream-cursor);
+
+	/* File tree */
+	--color-tree-active-bg: var(--rev-tree-active-bg);
+	--color-tree-active-text: var(--rev-tree-active-text);
+	--color-tree-hover-bg: var(--rev-tree-hover-bg);
+
+	/* Floating tabs */
+	--color-tab-active-bg: var(--rev-tab-active-bg);
+	--color-tab-inactive-text: var(--rev-tab-inactive-text);
+
+	/* Motion */
+	--duration-snap: 120ms;
+	--duration-quick: 160ms;
+	--duration-smooth: 220ms;
+	--ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+	--ease-soft: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ──────────────────────────────────────────────────────────
+   Animations
+   ────────────────────────────────────────────────────────── */
+@keyframes pulse-marker {
+	0%,
+	100% {
+		box-shadow: 0 0 0 0 var(--color-marker-open-glow);
+	}
+	50% {
+		box-shadow: 0 0 0 4px transparent;
+	}
+}
+
+@keyframes stream-cursor-blink {
+	0%,
+	100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0;
+	}
+}
+
+@keyframes fade-in-up {
+	from {
+		opacity: 0;
+		transform: translateY(4px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+@keyframes fade-in-scale {
+	from {
+		opacity: 0;
+		transform: scale(0.96);
+	}
+	to {
+		opacity: 1;
+		transform: scale(1);
+	}
+}
+
+@keyframes shimmer {
+	from {
+		background-position: 200% 0;
+	}
+	to {
+		background-position: -200% 0;
+	}
+}
+
+/* ──────────────────────────────────────────────────────────
+   Base
+   ────────────────────────────────────────────────────────── */
+html,
+body {
+	height: 100%;
+	margin: 0;
+	padding: 0;
+	overflow: hidden;
+	background-color: var(--color-bg-primary);
+	color: var(--color-text-primary);
+	font-family: var(--font-sans);
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+	width: 6px;
+	height: 6px;
+}
+
+::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+	background: var(--color-border);
+	border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+	background: var(--color-text-muted);
+}
+
+/* Selection */
+::selection {
+	background-color: color-mix(in srgb, var(--color-accent) 30%, transparent);
+}

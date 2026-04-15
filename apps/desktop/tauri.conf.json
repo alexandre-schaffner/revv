@@ -1,0 +1,90 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nickel-org/nickel.rs/refs/heads/master/nickel/tauri-schema.json",
+  "productName": "Rev",
+  "identifier": "com.rev.app",
+  "version": "0.0.1",
+  "build": {
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../web/build",
+    "beforeBuildCommand": "",
+    "beforeDevCommand": ""
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "DeveloperTool",
+    "shortDescription": "AI-powered code review",
+    "longDescription": "Rev is a desktop application that brings AI-powered intelligence to your code review workflow. Review pull requests with AI assistance, inline comments, and smart suggestions.",
+    "copyright": "Copyright 2025 Rev contributors",
+    "macOS": {
+      "minimumSystemVersion": "10.15",
+      "dmg": {
+        "appPosition": {
+          "x": 180,
+          "y": 170
+        },
+        "applicationFolderPosition": {
+          "x": 480,
+          "y": 170
+        },
+        "windowSize": {
+          "width": 660,
+          "height": 400
+        }
+      }
+    },
+    "windows": {
+      "wix": {
+        "language": "en-US"
+      },
+      "nsis": {
+        "installMode": "both",
+        "displayLanguageSelector": false,
+        "compression": "lzma"
+      }
+    },
+    "linux": {
+      "deb": {
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libgtk-3-0"
+        ],
+        "section": "devel"
+      },
+      "appimage": {
+        "bundleMediaFramework": false
+      }
+    }
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Rev",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 600,
+        "decorations": true,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' http://localhost:45678; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:"
+    }
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["rev"]
+      }
+    }
+  }
+}

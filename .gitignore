@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+
+# Build output
+apps/web/build/
+apps/web/.svelte-kit/
+apps/server/dist/
+apps/desktop/target/
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+
+# Database
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Turbo
+.turbo/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
