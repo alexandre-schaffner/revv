@@ -1,5 +1,4 @@
 import { authClient } from '$lib/auth-client';
-import { isTauri } from '$lib/utils/platform';
 import { API_BASE_URL } from '@rev/shared';
 import * as prs from '$lib/stores/prs.svelte';
 import * as settings from '$lib/stores/settings.svelte';
@@ -14,9 +13,14 @@ let user = $state<{ name: string; email: string; image?: string } | null>(null);
 let isLoading = $state(false);
 
 /** Sign-in flow state */
-type SignInPhase = 'idle' | 'waiting';
+type SignInPhase = 'idle' | 'waiting' | 'code-ready';
 let phase = $state<SignInPhase>('idle');
 let error = $state<string | null>(null);
+
+/** Device code flow state */
+let deviceCode = $state<string | null>(null);
+let userCode = $state<string | null>(null);
+let verificationUri = $state<string | null>(null);
 let pollTimer = $state<ReturnType<typeof setInterval> | null>(null);
 
 let isAuthenticated = $derived(token !== null && token.length > 0);
@@ -33,14 +37,21 @@ export function getError(): string | null {
 	return error;
 }
 
+export function getUserCode(): string | null {
+	return userCode;
+}
+
+export function getVerificationUri(): string | null {
+	return verificationUri;
+}
+
 export function setToken(newToken: string): void {
 	token = newToken;
 	if (typeof localStorage !== 'undefined') {
 		localStorage.setItem('rev_session_token', newToken);
 	}
-	// If we were waiting for auth, we're done
 	phase = 'idle';
-	stopPolling();
+	clearDeviceState();
 }
 
 export function clearToken(): void {
@@ -52,61 +63,122 @@ export function clearToken(): void {
 }
 
 /**
- * Initiates the GitHub OAuth sign-in flow.
+ * Initiates the GitHub Device Code OAuth flow.
  *
- * Opens the server's OAuth redirect endpoint in an external browser (Tauri)
- * or the current window (browser dev mode), then polls for the resulting
- * token as a fallback for when deep-links don't fire.
+ * Requests a device code from the server, then starts polling for authorization.
+ * The user must visit the verification URI and enter the user code on GitHub.
  */
 export async function signIn(): Promise<void> {
 	error = null;
 	phase = 'waiting';
 
-	const signInUrl = `${API_BASE_URL}/api/auth/sign-in/github`;
-
 	try {
-		if (isTauri()) {
-			const { openUrl } = await import('@tauri-apps/plugin-opener');
-			await openUrl(signInUrl);
-		} else {
-			window.open(signInUrl, '_blank');
+		const res = await fetch(`${API_BASE_URL}/api/auth/device/code`, { method: 'POST' });
+		if (!res.ok) {
+			const data = (await res.json()) as { error?: string };
+			error = data.error ?? `Request failed: ${res.status}`;
+			phase = 'idle';
+			return;
 		}
-	} catch (e) {
-		error = `Failed to open sign-in page: ${e}`;
-		phase = 'idle';
-		return;
-	}
 
-	// Start polling /api/auth/pending-token as a fallback
-	startPolling();
+		const data = (await res.json()) as {
+			device_code: string;
+			user_code: string;
+			verification_uri: string;
+			expires_in: number;
+			interval: number;
+		};
+
+		deviceCode = data.device_code;
+		userCode = data.user_code;
+		verificationUri = data.verification_uri;
+		phase = 'code-ready';
+
+		const pollIntervalMs = Math.max(data.interval * 1000, 5000);
+		startPolling(data.device_code, pollIntervalMs);
+	} catch (e) {
+		error = `Failed to start sign-in: ${e}`;
+		phase = 'idle';
+	}
 }
 
 export function cancelSignIn(): void {
 	phase = 'idle';
 	error = null;
-	stopPolling();
+	clearDeviceState();
 }
 
-function startPolling(): void {
+function clearDeviceState(): void {
 	stopPolling();
-	pollTimer = setInterval(async () => {
+	deviceCode = null;
+	userCode = null;
+	verificationUri = null;
+}
+
+function startPolling(currentDeviceCode: string, intervalMs: number): void {
+	stopPolling();
+
+	let currentInterval = intervalMs;
+
+	const poll = async () => {
 		try {
-			const res = await fetch(`${API_BASE_URL}/api/auth/pending-token`);
-			const data = (await res.json()) as { token: string | null };
-			if (data.token) {
-				setToken(data.token);
-				await loadUser();
-				await focusWindow();
+			const res = await fetch(`${API_BASE_URL}/api/auth/device/poll`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ device_code: currentDeviceCode }),
+			});
+
+			const data = (await res.json()) as
+				| { status: 'pending' }
+				| { status: 'slow_down' }
+				| { status: 'expired' }
+				| { status: 'denied' }
+				| { status: 'error'; message: string }
+				| { status: 'success'; token: string };
+
+			switch (data.status) {
+				case 'pending':
+					// Keep polling — no change needed
+					break;
+				case 'slow_down':
+					// Double the interval and reschedule
+					stopPolling();
+					currentInterval = currentInterval * 2;
+					pollTimer = setInterval(poll, currentInterval);
+					break;
+				case 'success':
+					setToken(data.token);
+					await loadUser();
+					await focusWindow();
+					break;
+				case 'expired':
+					error = 'Authorization expired. Please try again.';
+					phase = 'idle';
+					clearDeviceState();
+					break;
+				case 'denied':
+					error = 'Authorization was denied.';
+					phase = 'idle';
+					clearDeviceState();
+					break;
+				case 'error':
+					error = data.message;
+					phase = 'idle';
+					clearDeviceState();
+					break;
 			}
 		} catch {
 			// Silently retry on next interval
 		}
-	}, 1500);
+	};
+
+	pollTimer = setInterval(poll, currentInterval);
 }
 
 /** Bring the app window to the foreground after auth completes. */
 async function focusWindow(): Promise<void> {
 	try {
+		const { isTauri } = await import('$lib/utils/platform');
 		if (isTauri()) {
 			const { getCurrentWindow } = await import('@tauri-apps/api/window');
 			await getCurrentWindow().setFocus();

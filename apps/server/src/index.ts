@@ -2,9 +2,7 @@ import { Elysia } from 'elysia';
 import { cors } from '@elysiajs/cors';
 import { API_PORT } from '@rev/shared';
 import { auth } from './auth';
-import { authRedirectRoute } from './routes/auth-redirect';
-import { authSuccessRoute } from './routes/auth-success';
-import { authPendingRoute } from './routes/auth-pending';
+import { deviceAuthRoutes } from './routes/device-auth';
 import { explainRoute } from './routes/explain';
 import { repoRoutes } from './routes/repos';
 import { githubRoutes } from './routes/github';
@@ -25,9 +23,7 @@ const app = new Elysia()
 		})
 	)
 	.mount(auth.handler)
-	.use(authRedirectRoute)
-	.use(authSuccessRoute)
-	.use(authPendingRoute)
+	.use(deviceAuthRoutes)
 	.use(explainRoute)
 	.use(repoRoutes)
 	.use(githubRoutes)

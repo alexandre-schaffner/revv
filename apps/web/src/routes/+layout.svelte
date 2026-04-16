@@ -8,14 +8,11 @@
 	import * as sync from '$lib/services/sync';
 	import { initTheme } from '$lib/stores/theme.svelte';
 	import { initShortcuts } from '$lib/stores/shortcuts.svelte';
-	import { isTauri } from '$lib/utils/platform';
 
 	let { children } = $props();
 	let hydrated = false;
 
-	// When user becomes authenticated (from any path — deep-link, polling,
-	// or restored token), hydrate app data.  This single effect replaces
-	// the previous per-path hydrate() calls so no auth path can miss it.
+	// When user becomes authenticated, hydrate app data.
 	$effect(() => {
 		const user = auth.getUser();
 		if (user && !hydrated) {
@@ -31,28 +28,6 @@
 		const cleanupTheme = initTheme();
 		const cleanupShortcuts = initShortcuts();
 
-		// Listen for Tauri deep-link callbacks (rev://auth/callback?token=...)
-		let cleanupDeepLink: (() => void) | undefined;
-		if (isTauri()) {
-			import('$lib/utils/deep-link').then(({ initDeepLinkListener }) => {
-				initDeepLinkListener(async (token) => {
-					auth.setToken(token);
-					await auth.loadUser();
-					// hydrate() is triggered by the reactive $effect above
-					if (auth.getIsAuthenticated()) {
-						try {
-							const { getCurrentWindow } = await import('@tauri-apps/api/window');
-							await getCurrentWindow().setFocus();
-						} catch {
-							// best-effort
-						}
-					}
-				}).then((unlisten) => {
-					cleanupDeepLink = unlisten;
-				});
-			});
-		}
-
 		// On mount: try to restore auth from localStorage.
 		// If the token is valid, loadUser() sets the user, which triggers
 		// the hydration effect above.
@@ -63,7 +38,6 @@
 		return () => {
 			cleanupTheme();
 			cleanupShortcuts();
-			cleanupDeepLink?.();
 			sync.stopPolling();
 		};
 	});
@@ -86,3 +60,4 @@
 	<ErrorBanner />
 	{@render children()}
 </AppShell>
+

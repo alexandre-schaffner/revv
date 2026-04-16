@@ -1,8 +1,34 @@
 <script lang="ts">
 	import * as auth from '$lib/stores/auth.svelte';
+	import { isTauri } from '$lib/utils/platform';
 
 	const phase = $derived(auth.getPhase());
 	const error = $derived(auth.getError());
+	const userCode = $derived(auth.getUserCode());
+	const verificationUri = $derived(auth.getVerificationUri());
+
+	let copied = $state(false);
+
+	async function copyCode() {
+		if (!userCode) return;
+		await navigator.clipboard.writeText(userCode);
+		copied = true;
+		setTimeout(() => (copied = false), 2000);
+	}
+
+	async function openGitHub() {
+		if (!verificationUri) return;
+		try {
+			if (isTauri()) {
+				const { openUrl } = await import('@tauri-apps/plugin-opener');
+				await openUrl(verificationUri);
+			} else {
+				window.open(verificationUri, '_blank');
+			}
+		} catch {
+			// best-effort
+		}
+	}
 </script>
 
 {#if phase === 'idle'}
@@ -27,8 +53,43 @@
 				<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
 				<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
 			</svg>
-			Waiting for GitHub authorization...
+			Requesting device code...
 		</div>
+	</div>
+{:else if phase === 'code-ready'}
+	<div class="flex flex-col items-center gap-5">
+		<div class="flex flex-col items-center gap-2 text-center">
+			<p class="text-sm text-text-muted">Enter this code on GitHub to authorize:</p>
+			<div class="flex items-center gap-3">
+				<span class="font-mono text-2xl font-bold tracking-widest text-text-primary">{userCode}</span>
+				<button
+					class="rounded-md border border-border bg-bg-elevated px-2.5 py-1 text-xs font-medium text-text-secondary transition-colors hover:bg-bg-tertiary"
+					onclick={copyCode}
+					title="Copy code"
+				>
+					{copied ? 'Copied!' : 'Copy'}
+				</button>
+			</div>
+		</div>
+
+		<button
+			class="flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90"
+			onclick={openGitHub}
+		>
+			Open GitHub
+			<svg class="h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+				<path fill-rule="evenodd" d="M4.25 5.5a.75.75 0 00-.75.75v8.5c0 .414.336.75.75.75h8.5a.75.75 0 00.75-.75v-4a.75.75 0 011.5 0v4A2.25 2.25 0 0112.75 17h-8.5A2.25 2.25 0 012 14.75v-8.5A2.25 2.25 0 014.25 4h5a.75.75 0 010 1.5h-5z" clip-rule="evenodd"/>
+				<path fill-rule="evenodd" d="M6.194 12.753a.75.75 0 001.06.053L16.5 4.44v2.81a.75.75 0 001.5 0v-4.5a.75.75 0 00-.75-.75h-4.5a.75.75 0 000 1.5h2.553l-9.056 8.194a.75.75 0 00-.053 1.06z" clip-rule="evenodd"/>
+			</svg>
+		</button>
+
+		<div class="flex items-center gap-2 text-xs text-text-muted animate-pulse">
+			<svg class="h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+				<path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm.75-13a.75.75 0 00-1.5 0v5c0 .414.336.75.75.75h4a.75.75 0 000-1.5h-3.25V5z" clip-rule="evenodd"/>
+			</svg>
+			Waiting for authorization…
+		</div>
+
 		<button
 			class="text-xs text-text-muted underline transition-colors hover:text-text-secondary"
 			onclick={() => auth.cancelSignIn()}
