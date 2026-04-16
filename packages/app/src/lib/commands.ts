@@ -1,59 +1,55 @@
 import { createServerFn } from "@tanstack/react-start";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
-import { readdir } from "node:fs/promises";
+import {
+  approve,
+  deny,
+  enqueue,
+  getCommand,
+  getLog,
+  getPending,
+  type CommandEntry,
+} from "./command-log";
 
-export const getCwd = createServerFn({ method: "GET" }).handler(async () => {
-  return process.cwd();
-});
-
-export const setCwd = createServerFn({ method: "POST" })
-  .inputValidator((input: { path: string }) => input)
-  .handler(async ({ data }) => {
-    process.chdir(data.path);
-    return process.cwd();
+/** Enqueue a command for approval. Returns the pending entry. */
+export const enqueueCommand = createServerFn({ method: "POST" })
+  .inputValidator(
+    (input: { block: string; cmd: string; args?: string[]; cwd?: string }) =>
+      input,
+  )
+  .handler(async ({ data }): Promise<CommandEntry> => {
+    return enqueue(data.block, data.cmd, data.args ?? [], data.cwd);
   });
 
-export const getGitRepos = createServerFn({ method: "GET" }).handler(
-  async () => {
-    const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
-    const searchDirs = [
-      join(home, "dev"),
-      join(home, "Developer"),
-      join(home, "projects"),
-      join(home, "src"),
-      join(home, "code"),
-      join(home, "repos"),
-      join(home, "workspace"),
-    ];
+/** Get a command by ID (poll for status changes). */
+export const getCommandById = createServerFn({ method: "GET" })
+  .inputValidator((input: { id: string }) => input)
+  .handler(async ({ data }): Promise<CommandEntry | null> => {
+    return getCommand(data.id);
+  });
 
-    const repos: string[] = [];
+/** Get the full command log, optionally filtered by block name. */
+export const getCommandLog = createServerFn({ method: "GET" })
+  .inputValidator((input: { block?: string }) => input)
+  .handler(async ({ data }): Promise<CommandEntry[]> => {
+    return getLog(data.block);
+  });
 
-    for (const dir of searchDirs) {
-      if (!existsSync(dir)) continue;
-      try {
-        const entries = await readdir(dir, { withFileTypes: true });
-        for (const entry of entries) {
-          if (!entry.isDirectory()) continue;
-          const fullPath = join(dir, entry.name);
-          if (existsSync(join(fullPath, ".git"))) {
-            repos.push(fullPath);
-          }
-        }
-      } catch {
-        // skip inaccessible dirs
-      }
-    }
+/** Get pending commands awaiting approval. */
+export const getPendingCommands = createServerFn({ method: "GET" })
+  .inputValidator((input: { block?: string }) => input)
+  .handler(async ({ data }): Promise<CommandEntry[]> => {
+    return getPending(data.block);
+  });
 
-    try {
-      const cwd = process.cwd();
-      if (existsSync(join(cwd, ".git")) && !repos.includes(cwd)) {
-        repos.unshift(cwd);
-      }
-    } catch {
-      // ignore
-    }
+/** Approve a pending command — executes it and returns the result. */
+export const approveCommand = createServerFn({ method: "POST" })
+  .inputValidator((input: { id: string }) => input)
+  .handler(async ({ data }): Promise<CommandEntry> => {
+    return approve(data.id);
+  });
 
-    return repos.sort();
-  },
-);
+/** Deny a pending command. */
+export const denyCommand = createServerFn({ method: "POST" })
+  .inputValidator((input: { id: string }) => input)
+  .handler(async ({ data }): Promise<CommandEntry> => {
+    return deny(data.id);
+  });
