@@ -32,6 +32,7 @@
     "postinstall": "echo '\\n  Run `bun run dev` to start developing, or `bun run dist` to build an installer.\\n'"
   },
   "devDependencies": {
+    "@opentelemetry/api": "^1.9.1",
     "@tauri-apps/cli": "^2",
     "concurrently": "^9.2.1",
     "turbo": "^2.4.0",

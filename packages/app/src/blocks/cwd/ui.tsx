@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { getCwd, setCwd, getGitRepos } from "../lib/commands";
+import { getCwd, setCwd, getGitRepos } from "./commands";
 import {
   Popover,
   PopoverTrigger,
