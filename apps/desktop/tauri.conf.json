@@ -80,11 +80,5 @@
       "csp": "default-src 'self'; connect-src 'self' http://localhost:45678; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:"
     }
   },
-  "plugins": {
-    "deep-link": {
-      "desktop": {
-        "schemes": ["rev"]
-      }
-    }
-  }
+  "plugins": {}
 }
