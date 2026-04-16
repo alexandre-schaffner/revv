@@ -1,0 +1,37 @@
+{
+  "name": "@rev/ui",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./components/*": "./src/components/*.tsx",
+    "./hooks/*": "./src/hooks/*.tsx",
+    "./lib/*": "./src/lib/*.ts",
+    "./styles/*": "./src/styles/*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "echo 'no linter configured'"
+  },
+  "dependencies": {
+    "@radix-ui/react-popover": "^1.1.15",
+    "@radix-ui/react-slot": "^1.2.4",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "catalog:",
+    "lucide-react": "^0.474.0",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "tailwind-merge": "catalog:",
+    "tailwindcss-animate": "^1.0.7"
+  },
+  "devDependencies": {
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "tailwindcss": "catalog:",
+    "typescript": "catalog:"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  }
+}
