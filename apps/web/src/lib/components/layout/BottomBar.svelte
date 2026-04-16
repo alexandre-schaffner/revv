@@ -2,11 +2,18 @@
 	import AgentSelector from './AgentSelector.svelte';
 	import ModelSelector from './ModelSelector.svelte';
 	import ThinkingEffortSelector from './ThinkingEffortSelector.svelte';
+	import { getSelectedPr } from '$lib/stores/prs.svelte';
+
+	const pr = $derived(getSelectedPr());
 </script>
 
 <div class="flex h-full items-center justify-between bg-bg-primary px-4">
-	<!-- Left: model info -->
+	<!-- Left: PR ref + model info -->
 	<div class="flex items-center gap-3">
+		{#if pr}
+			<span class="truncate font-mono text-[10px] text-text-muted">{pr.sourceBranch}</span>
+			<span class="h-3 w-px shrink-0 bg-border"></span>
+		{/if}
 		<AgentSelector />
 		<ModelSelector />
 		<ThinkingEffortSelector />

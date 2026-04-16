@@ -41,6 +41,8 @@
 			? 'sidebar-nav-focused'
 			: ''}"
 		onclick={toggle}
+		aria-label="Toggle {repository.fullName}"
+		aria-expanded={expanded}
 		data-sidebar-nav={navId}
 		data-nav-type="repo"
 		data-nav-expanded={expanded}

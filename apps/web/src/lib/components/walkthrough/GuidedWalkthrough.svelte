@@ -4,8 +4,8 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Separator } from '$lib/components/ui/separator';
 	import { RefreshCw, ArrowDown, Search, FileText, Brain, PenTool, CheckCircle, AlertTriangle } from '@lucide/svelte';
-	import { Tooltip, TooltipContent, TooltipTrigger } from '$lib/components/ui/tooltip';
 	import { getDiffThemeType } from '$lib/stores/theme.svelte';
+	import { initHighlighter } from '$lib/utils/code-highlight.svelte';
 	import {
 		getBlocks,
 		getSummary,
@@ -164,8 +164,26 @@
 		}
 	});
 
-	onMount(() => {
-		loadSession(prId);
+	// ── Stagger tracking ────────────────────────────────────────────────
+	// On initial load (cached walkthrough), blocks appear all at once.
+	// We stagger their entrance animation. During streaming, blocks arrive
+	// one at a time so we skip stagger to avoid cumulative delay.
+
+	let initialBatchRendered = $state(false);
+	let hasSeenBlocks = false;
+
+	$effect(() => {
+		if (blocks.length > 0 && !hasSeenBlocks) {
+			hasSeenBlocks = true;
+			requestAnimationFrame(() => {
+				initialBatchRendered = true;
+			});
+		}
+	});
+
+	onMount(async () => {
+		initHighlighter();
+		await loadSession(prId);
 		streamWalkthrough(prId);
 	});
 
@@ -193,6 +211,7 @@
 				<p class="error-hint">Add your Anthropic API key in Settings to enable walkthroughs.</p>
 			{/if}
 			<Button variant="outline" size="sm" onclick={() => regenerate(prId)}>
+				<RefreshCw size={14} />
 				Try again
 			</Button>
 		</div>
@@ -293,6 +312,7 @@
 		<div class="walkthrough-empty">
 			<p class="loading-text">No walkthrough data received. The AI may have timed out.</p>
 			<Button variant="outline" size="sm" onclick={() => regenerate(prId)}>
+				<RefreshCw size={14} />
 				Try again
 			</Button>
 		</div>
@@ -313,8 +333,8 @@
 				{#if streamError}
 					<p class="error-inline">{streamError}</p>
 				{/if}
-				<div class="summary-actions">
-					{#if isStreaming}
+				{#if isStreaming}
+					<div class="summary-actions">
 						<span class="streaming-indicator">
 							<span class="streaming-dots">
 								<span class="streaming-dot"></span>
@@ -323,24 +343,8 @@
 							</span>
 							{phaseMessage}
 						</span>
-					{:else}
-						<Tooltip>
-							<TooltipTrigger>
-								{#snippet child({ props })}
-									<Button
-										{...props}
-										variant="ghost"
-										size="icon-sm"
-										onclick={() => regenerate(prId)}
-									>
-										<RefreshCw size={14} />
-									</Button>
-								{/snippet}
-							</TooltipTrigger>
-							<TooltipContent>Regenerate walkthrough</TooltipContent>
-						</Tooltip>
-					{/if}
-				</div>
+					</div>
+				{/if}
 			</div>
 
 			<Separator />
@@ -353,8 +357,8 @@
 						<span>{issues.length} issue{issues.length !== 1 ? 's' : ''} flagged</span>
 					</div>
 					<div class="issues-list">
-						{#each issues as issue (issue.id)}
-							<div class="issue-item issue-item--{issue.severity}" style="animation: fadeIn 0.2s ease-in">
+						{#each issues as issue, i (issue.id)}
+							<div class="issue-item issue-item--{issue.severity}" style:--issue-delay="{Math.min(i, 6) * 50}ms">
 								<div class="issue-top">
 									<span class={severityClasses[issue.severity] ?? 'issue-badge issue-badge--info'}>
 										{severityLabels[issue.severity] ?? issue.severity}
@@ -376,14 +380,17 @@
 
 			<!-- Blocks -->
 			<div class="blocks">
-			{#each blocks as block (block.id)}
-				<div class="block-wrapper">
+			{#each blocks as block, i (block.id)}
+				<div
+					class="block-wrapper"
+					style:--enter-delay="{initialBatchRendered ? 0 : Math.min(i, 8) * 60}ms"
+				>
 					{#if block.type === 'markdown'}
-						<WalkthroughMarkdownBlock content={block.content} animateEntrance={isStreaming && block.id === blocks.at(-1)?.id} />
+						<WalkthroughMarkdownBlock content={block.content} />
 					{:else if block.type === 'code'}
-						<WalkthroughCodeBlock {block} {themeType} animateEntrance={isStreaming && block.id === blocks.at(-1)?.id} />
+						<WalkthroughCodeBlock {block} {themeType} />
 					{:else if block.type === 'diff'}
-						<WalkthroughDiffBlock {block} {themeType} animateEntrance={isStreaming && block.id === blocks.at(-1)?.id} />
+						<WalkthroughDiffBlock {block} {themeType} />
 					{/if}
 				</div>
 			{/each}
@@ -723,6 +730,7 @@
 
 	.summary-section {
 		margin-bottom: 20px;
+		animation: content-enter 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
 	}
 
 	.summary-header {
@@ -822,6 +830,7 @@
 		display: flex;
 		flex-direction: column;
 		gap: 10px;
+		animation: content-enter 0.5s cubic-bezier(0.16, 1, 0.3, 1) 0.15s both;
 	}
 
 	.issues-header {
@@ -850,6 +859,8 @@
 		display: flex;
 		flex-direction: column;
 		gap: 4px;
+		animation: content-enter 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+		animation-delay: var(--issue-delay, 0ms);
 	}
 
 	.issue-item--info {
@@ -935,6 +946,8 @@
 
 	.block-wrapper {
 		max-width: 100%;
+		animation: block-slide-up 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+		animation-delay: var(--enter-delay, 0ms);
 	}
 
 	/* ── Streaming bottom indicator ──────────────────────────────────── */
@@ -1063,6 +1076,28 @@
 		from {
 			opacity: 0;
 			transform: translateY(4px);
+		}
+		to {
+			opacity: 1;
+			transform: translateY(0);
+		}
+	}
+
+	@keyframes content-enter {
+		from {
+			opacity: 0;
+			transform: translateY(10px);
+		}
+		to {
+			opacity: 1;
+			transform: translateY(0);
+		}
+	}
+
+	@keyframes block-slide-up {
+		from {
+			opacity: 0;
+			transform: translateY(20px);
 		}
 		to {
 			opacity: 1;

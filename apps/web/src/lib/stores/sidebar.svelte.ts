@@ -18,6 +18,7 @@ function loadPersistedWidth(): number {
 
 let sidebarCollapsed = $state(false);
 let rightPanelOpen = $state(false);
+let addRepoDialogOpen = $state(false);
 let collapseAllSignal = $state(0);
 let sidebarWidth = $state(loadPersistedWidth());
 
@@ -69,6 +70,20 @@ export function setRightPanelOpen(v: boolean): void {
 
 export function toggleRightPanel(): void {
 	rightPanelOpen = !rightPanelOpen;
+}
+
+// ── Add-repo dialog ─────────────────────────────────────
+
+export function getAddRepoDialogOpen(): boolean {
+	return addRepoDialogOpen;
+}
+
+export function setAddRepoDialogOpen(v: boolean): void {
+	addRepoDialogOpen = v;
+}
+
+export function openAddRepoDialog(): void {
+	addRepoDialogOpen = true;
 }
 
 // ── Collapse-all signal ──────────────────────────────────

@@ -95,6 +95,14 @@
 	/* Floating tabs */
 	--rev-tab-active-bg: #ffffff;
 	--rev-tab-inactive-text: #a1a1aa;
+
+	/* Glass pill */
+	--rev-glass-bg: rgba(255, 255, 255, 0.65);
+	--rev-glass-border: rgba(0, 0, 0, 0.08);
+	--rev-glass-highlight: rgba(255, 255, 255, 0.5);
+	--rev-glass-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 16px rgba(0, 0, 0, 0.06);
+	--rev-glass-grain-opacity: 0.25;
+	--rev-glass-active-bg: rgba(255, 255, 255, 0.85);
 }
 
 /* ──────────────────────────────────────────────────────────
@@ -191,12 +199,42 @@
 	/* Floating tabs */
 	--rev-tab-active-bg: #1a1a1a;
 	--rev-tab-inactive-text: #71717a;
+
+	/* Glass pill */
+	--rev-glass-bg: rgba(30, 30, 30, 0.65);
+	--rev-glass-border: rgba(255, 255, 255, 0.10);
+	--rev-glass-highlight: rgba(255, 255, 255, 0.05);
+	--rev-glass-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 4px 16px rgba(0, 0, 0, 0.25);
+	--rev-glass-grain-opacity: 0.2;
+	--rev-glass-active-bg: rgba(255, 255, 255, 0.10);
 }
 
 /* ──────────────────────────────────────────────────────────
    Tailwind v4 design tokens — reference the themed CSS vars
    ────────────────────────────────────────────────────────── */
 @theme {
+	/* shadcn base (HSL triplets → full hsl() values for Tailwind v4) */
+	--color-background: hsl(var(--background));
+	--color-foreground: hsl(var(--foreground));
+	--color-card: hsl(var(--card));
+	--color-card-foreground: hsl(var(--card-foreground));
+	--color-popover: hsl(var(--popover));
+	--color-popover-foreground: hsl(var(--popover-foreground));
+	--color-primary: hsl(var(--primary));
+	--color-primary-foreground: hsl(var(--primary-foreground));
+	--color-secondary: hsl(var(--secondary));
+	--color-secondary-foreground: hsl(var(--secondary-foreground));
+	--color-muted: hsl(var(--muted));
+	--color-muted-foreground: hsl(var(--muted-foreground));
+	--color-accent-shadcn: hsl(var(--accent));
+	--color-accent-foreground: hsl(var(--accent-foreground));
+	--color-destructive: hsl(var(--destructive));
+	--color-destructive-foreground: hsl(var(--destructive-foreground));
+	--color-border-shadcn: hsl(var(--border));
+	--color-input: hsl(var(--input));
+	--color-ring: hsl(var(--ring));
+
+	/* Rev palette */
 	--color-bg-primary: var(--rev-bg-primary);
 	--color-bg-secondary: var(--rev-bg-secondary);
 	--color-bg-tertiary: var(--rev-bg-tertiary);
@@ -267,6 +305,14 @@
 	/* Floating tabs */
 	--color-tab-active-bg: var(--rev-tab-active-bg);
 	--color-tab-inactive-text: var(--rev-tab-inactive-text);
+
+	/* Glass pill */
+	--color-glass-bg: var(--rev-glass-bg);
+	--color-glass-border: var(--rev-glass-border);
+	--color-glass-highlight: var(--rev-glass-highlight);
+	--color-glass-shadow: var(--rev-glass-shadow);
+	--color-glass-grain-opacity: var(--rev-glass-grain-opacity);
+	--color-glass-active-bg: var(--rev-glass-active-bg);
 
 	/* Motion */
 	--duration-snap: 120ms;

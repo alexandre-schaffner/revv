@@ -435,7 +435,7 @@
 	}
 
 	.code-body {
-		overflow: hidden;
+		overflow: visible;
 	}
 
 	/* Narrow: stack vertically */

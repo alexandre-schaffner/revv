@@ -2,10 +2,9 @@ import { Elysia, t } from 'elysia';
 import { Effect } from 'effect';
 import { AppRuntime } from '../runtime';
 import { ReviewService } from '../services/Review';
-import { isReviewError } from '../domain/errors';
 import { WebSocketHub } from '../services/WebSocketHub';
 import type { ThreadStatus } from '@rev/shared';
-import { withAuth } from './middleware';
+import { withAuth, handleAppError } from './middleware';
 
 export const threadRoutes = new Elysia({ prefix: '/api/threads' })
 	.use(withAuth)
@@ -35,15 +34,7 @@ export const threadRoutes = new Elysia({ prefix: '/api/threads' })
 
 				return updated;
 			} catch (e) {
-				if (isReviewError(e)) {
-					if (e.code === 'NOT_FOUND') {
-						ctx.set.status = 404;
-						return { error: 'Thread not found' };
-					}
-					ctx.set.status = 500;
-					return { error: e.message };
-				}
-				throw e;
+				return handleAppError(e, ctx);
 			}
 		},
 		{
@@ -61,9 +52,13 @@ export const threadRoutes = new Elysia({ prefix: '/api/threads' })
 
 	// GET /api/threads/:id/messages — list messages in a thread
 	.get('/:id/messages', async (ctx) => {
-		return AppRuntime.runPromise(
-			Effect.flatMap(ReviewService, (s) => s.getMessages(ctx.params.id)),
-		);
+		try {
+			return await AppRuntime.runPromise(
+				Effect.flatMap(ReviewService, (s) => s.getMessages(ctx.params.id)),
+			);
+		} catch (e) {
+			return handleAppError(e, ctx);
+		}
 	})
 
 	// POST /api/threads/:id/messages — add a message to a thread
@@ -98,11 +93,7 @@ export const threadRoutes = new Elysia({ prefix: '/api/threads' })
 				ctx.set.status = 201;
 				return message;
 			} catch (e) {
-				if (isReviewError(e)) {
-					ctx.set.status = 500;
-					return { error: e.message };
-				}
-				throw e;
+				return handleAppError(e, ctx);
 			}
 		},
 		{
