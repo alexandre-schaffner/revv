@@ -1,4 +1,4 @@
-import type { PullRequest, Repository } from '@rev/shared';
+import type { PullRequest, Repository, CloneStatus } from '@rev/shared';
 import { api } from '$lib/api/client';
 import { goto } from '$app/navigation';
 
@@ -46,6 +46,14 @@ export function setPullRequests(prs: PullRequest[]): void {
 
 export function setRepositories(repos: Repository[]): void {
 	repositories = repos;
+}
+
+export function updateRepoCloneStatus(repoId: string, status: CloneStatus, error?: string): void {
+	repositories = repositories.map((r) =>
+		r.id === repoId
+			? { ...r, cloneStatus: status, cloneError: error ?? r.cloneError }
+			: r
+	);
 }
 
 export async function fetchPrs(): Promise<void> {
@@ -97,6 +105,15 @@ export function setSearchQuery(q: string): void {
 export async function addRepo(fullName: string): Promise<void> {
 	await api.api.repos.post({ fullName });
 	await fetchRepos();
+	// Trigger a sync so PRs for the new repo are fetched immediately.
+	// The server-side POST handler forks a background sync, but that fiber
+	// may complete after the response returns.  An explicit sync here uses
+	// the awaited POST /api/prs/sync endpoint, which guarantees the sync
+	// finishes and broadcasts prs:updated over the WebSocket before
+	// returning.  fetchPrs() is a safety net in case the WS message is
+	// missed.
+	await syncPrs();
+	await fetchPrs();
 }
 
 export async function deleteRepo(id: string): Promise<void> {

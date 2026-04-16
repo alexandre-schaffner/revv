@@ -9,6 +9,7 @@ import type {
 import type { ReviewFile } from '$lib/types/review';
 import { api } from '$lib/api/client';
 import { streamExplanation } from '$lib/api/explain';
+import { enterSidebarMode } from '$lib/stores/focus-mode.svelte';
 
 // --- Review files (shared between sidebar tree + review page) ---
 let reviewFiles = $state<ReviewFile[]>([]);
@@ -112,7 +113,7 @@ export async function loadSession(prId: string): Promise<void> {
 }
 
 // --- Tab state ---
-type ActiveTab = 'walkthrough' | 'diff';
+type ActiveTab = 'walkthrough' | 'diff' | 'request-changes';
 let activeTab = $state<ActiveTab>('diff');
 
 export function getActiveTab(): ActiveTab {
@@ -120,6 +121,15 @@ export function getActiveTab(): ActiveTab {
 }
 
 export function setActiveTab(tab: ActiveTab): void {
+	if (tab === activeTab) return;
+	// When leaving diff, reset focus-mode to sidebar to prevent stale state
+	// when ReviewLayout is destroyed and later recreated
+	if (activeTab === 'diff') {
+		enterSidebarMode();
+	}
+	// Abort any in-flight explanation stream
+	currentExplainController?.abort();
+	currentExplainController = null;
 	activeTab = tab;
 }
 
@@ -284,12 +294,14 @@ export async function addThread(
 
 	const result = data as { thread: CommentThread; message: ThreadMessage };
 
-	// Update local state
-	threads = [...threads, result.thread];
-	threadMessages = {
-		...threadMessages,
-		[result.thread.id]: [result.message],
-	};
+	// Update local state — guard against WS broadcast arriving first
+	if (!threads.some((t) => t.id === result.thread.id)) {
+		threads = [...threads, result.thread];
+		threadMessages = {
+			...threadMessages,
+			[result.thread.id]: [result.message],
+		};
+	}
 
 	return result;
 }
@@ -317,10 +329,14 @@ export async function addThreadMessage(
 
 	const message = data as ThreadMessage;
 
-	threadMessages = {
-		...threadMessages,
-		[threadId]: [...(threadMessages[threadId] ?? []), message],
-	};
+	// Guard against WS broadcast arriving first
+	const existing = threadMessages[threadId] ?? [];
+	if (!existing.some((m) => m.id === message.id)) {
+		threadMessages = {
+			...threadMessages,
+			[threadId]: [...existing, message],
+		};
+	}
 
 	return message;
 }
@@ -341,6 +357,26 @@ export async function resolveThread(threadId: string): Promise<void> {
 
 	if (error) {
 		console.error('[review] Failed to resolve thread, reverting:', error);
+		threads = prevThreads;
+	}
+}
+
+/**
+ * Reopen a resolved thread. Optimistic: updates UI immediately, reverts on API failure.
+ */
+export async function reopenThread(threadId: string): Promise<void> {
+	// Optimistic update
+	const prevThreads = threads;
+	threads = threads.map((t) =>
+		t.id === threadId
+			? { ...t, status: 'open' as const, resolvedAt: null }
+			: t
+	);
+
+	const { error } = await api.api.threads({ id: threadId }).patch({ status: 'open' });
+
+	if (error) {
+		console.error('[review] Failed to reopen thread, reverting:', error);
 		threads = prevThreads;
 	}
 }
@@ -432,72 +468,56 @@ export function getRejectedHunks(filePath: string): Set<number> {
 	return rejectedHunks.get(filePath) ?? new Set();
 }
 
-export async function acceptHunk(filePath: string, hunkIndex: number): Promise<void> {
+async function setHunkDecision(
+	filePath: string,
+	hunkIndex: number,
+	decision: 'accepted' | 'rejected',
+): Promise<void> {
 	// Optimistic update
 	const prevAccepted = new Map(acceptedHunks);
 	const prevRejected = new Map(rejectedHunks);
 
-	// Remove from rejected if present
-	const nextR = new Map(rejectedHunks);
-	const rSet = new Set(nextR.get(filePath) ?? []);
-	if (rSet.delete(hunkIndex)) {
-		nextR.set(filePath, rSet);
-		rejectedHunks = nextR;
+	const opposite = decision === 'accepted' ? rejectedHunks : acceptedHunks;
+	const own = decision === 'accepted' ? acceptedHunks : rejectedHunks;
+
+	// Remove from the opposite map if present
+	const oppSet = new Set(opposite.get(filePath) ?? []);
+	if (oppSet.delete(hunkIndex)) {
+		const next = new Map(opposite);
+		next.set(filePath, oppSet);
+		if (decision === 'accepted') rejectedHunks = next;
+		else acceptedHunks = next;
 	}
-	// Add to accepted
-	const next = new Map(acceptedHunks);
-	const set = new Set(next.get(filePath) ?? []);
-	set.add(hunkIndex);
-	next.set(filePath, set);
-	acceptedHunks = next;
+
+	// Add to own map
+	const ownNext = new Map(own);
+	const ownSet = new Set(ownNext.get(filePath) ?? []);
+	ownSet.add(hunkIndex);
+	ownNext.set(filePath, ownSet);
+	if (decision === 'accepted') acceptedHunks = ownNext;
+	else rejectedHunks = ownNext;
 
 	// Persist
 	if (sessionId) {
 		const { error } = await api.api.reviews({ id: sessionId }).hunks.put({
 			filePath,
 			hunkIndex,
-			decision: 'accepted',
+			decision,
 		});
 		if (error) {
-			console.error('[review] Failed to persist hunk accept, reverting:', error);
+			console.error(`[review] Failed to persist hunk ${decision}, reverting:`, error);
 			acceptedHunks = prevAccepted;
 			rejectedHunks = prevRejected;
 		}
 	}
 }
 
+export async function acceptHunk(filePath: string, hunkIndex: number): Promise<void> {
+	return setHunkDecision(filePath, hunkIndex, 'accepted');
+}
+
 export async function rejectHunk(filePath: string, hunkIndex: number): Promise<void> {
-	// Optimistic update
-	const prevAccepted = new Map(acceptedHunks);
-	const prevRejected = new Map(rejectedHunks);
-
-	// Remove from accepted if present
-	const nextA = new Map(acceptedHunks);
-	const aSet = new Set(nextA.get(filePath) ?? []);
-	if (aSet.delete(hunkIndex)) {
-		nextA.set(filePath, aSet);
-		acceptedHunks = nextA;
-	}
-	// Add to rejected
-	const next = new Map(rejectedHunks);
-	const set = new Set(next.get(filePath) ?? []);
-	set.add(hunkIndex);
-	next.set(filePath, set);
-	rejectedHunks = next;
-
-	// Persist
-	if (sessionId) {
-		const { error } = await api.api.reviews({ id: sessionId }).hunks.put({
-			filePath,
-			hunkIndex,
-			decision: 'rejected',
-		});
-		if (error) {
-			console.error('[review] Failed to persist hunk reject, reverting:', error);
-			acceptedHunks = prevAccepted;
-			rejectedHunks = prevRejected;
-		}
-	}
+	return setHunkDecision(filePath, hunkIndex, 'rejected');
 }
 
 export async function undoHunkAction(filePath: string, hunkIndex: number): Promise<void> {
@@ -528,15 +548,6 @@ export async function undoHunkAction(filePath: string, hunkIndex: number): Promi
 			rejectedHunks = prevRejected;
 		}
 	}
-}
-
-export function clearHunkActions(filePath: string): void {
-	const nextA = new Map(acceptedHunks);
-	const nextR = new Map(rejectedHunks);
-	nextA.delete(filePath);
-	nextR.delete(filePath);
-	acceptedHunks = nextA;
-	rejectedHunks = nextR;
 }
 
 // --- Active file in diff ---

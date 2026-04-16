@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { Monitor, Sun, Moon, Check, X, Loader2, ArrowLeft } from '@lucide/svelte';
+	import { Monitor, Sun, Moon, Loader2, ArrowLeft, AlertTriangle } from '@lucide/svelte';
 	import { goto } from '$app/navigation';
 	import { getUser, signOut } from '$lib/stores/auth.svelte';
-	import { getSettings, updateSettings } from '$lib/stores/settings.svelte';
+	import { getSettings, updateSettings, getAvailableModels, fetchModels } from '$lib/stores/settings.svelte';
 	import { getRepositories, deleteRepo, addRepo } from '$lib/stores/prs.svelte';
 	import {
 		getThemePreference,
@@ -10,6 +10,17 @@
 		type ThemePreference,
 	} from '$lib/stores/theme.svelte';
 	import { API_BASE_URL } from '@rev/shared';
+	import { agentSupportsThinkingEffort, getDefaultModel } from '$lib/constants/models';
+	import { authHeaders } from '$lib/utils/session-token';
+	import SignInButton from '$lib/components/auth/SignInButton.svelte';
+
+	import type { AiAgent, ThinkingEffort } from '@rev/shared';
+
+	const THINKING_EFFORT_OPTIONS: { label: string; value: ThinkingEffort }[] = [
+		{ label: 'High', value: 'high' },
+		{ label: 'Medium', value: 'medium' },
+		{ label: 'Low', value: 'low' },
+	];
 
 	const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[] = [
 		{ value: 'system', label: 'System', icon: Monitor },
@@ -49,44 +60,33 @@
 	];
 
 	// --- AI Configuration state ---
-	let aiKeyInput = $state('');
-	let aiKeySaving = $state(false);
-	let aiKeyStatus = $state<'idle' | 'valid' | 'invalid'>('idle');
-	let aiKeyError = $state('');
 	let aiConfigured = $state(false);
-	let aiKeySource = $state<'settings' | 'environment' | 'none'>('none');
 	let aiStatusLoading = $state(true);
+	let modelsLoading = $state(false);
+	let aiAgent = $derived((getSettings()?.aiAgent ?? 'opencode') as AiAgent);
 
-	const modelOptions = [
-		{ label: 'Claude Sonnet 4', value: 'claude-sonnet-4-20250514' },
-		{ label: 'Claude Haiku 4', value: 'claude-haiku-4-20250414' },
-	];
+	// Reactive model options and visibility based on selected agent
+	let modelOptions = $derived(getAvailableModels());
+	let showThinkingEffort = $derived(agentSupportsThinkingEffort(aiAgent));
 
-	function getAuthHeaders(): Record<string, string> {
-		const token =
-			typeof localStorage !== 'undefined' ? (localStorage.getItem('rev_session_token') ?? '') : '';
-		return token ? { Authorization: `Bearer ${token}` } : {};
-	}
-
-	// Fetch AI status on mount
+	// Fetch AI status and models on mount
 	$effect(() => {
 		fetchAiStatus();
+		void loadModels();
 	});
 
 	async function fetchAiStatus(): Promise<void> {
 		aiStatusLoading = true;
 		try {
 			const res = await fetch(`${API_BASE_URL}/api/settings/ai-status`, {
-				headers: getAuthHeaders(),
+				headers: authHeaders(),
 			});
 			if (res.ok) {
 				const data = (await res.json()) as {
 					configured: boolean;
-					keySource: 'settings' | 'environment' | 'none';
 					model: string;
 				};
 				aiConfigured = data.configured;
-				aiKeySource = data.keySource;
 			}
 		} catch {
 			// Ignore — status will show as unconfigured
@@ -95,50 +95,17 @@
 		}
 	}
 
-	async function handleSaveAiKey(): Promise<void> {
-		if (!aiKeyInput.trim()) return;
-		aiKeySaving = true;
-		aiKeyStatus = 'idle';
-		aiKeyError = '';
+	async function loadModels(): Promise<void> {
+		modelsLoading = true;
 		try {
-			const res = await fetch(`${API_BASE_URL}/api/settings/ai-key`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-				body: JSON.stringify({ apiKey: aiKeyInput.trim() }),
-			});
-			const data = (await res.json()) as { configured?: boolean; error?: string };
-			if (res.ok && data.configured) {
-				aiKeyStatus = 'valid';
-				aiConfigured = true;
-				aiKeySource = 'settings';
-				aiKeyInput = '';
-			} else {
-				aiKeyStatus = 'invalid';
-				aiKeyError = data.error ?? 'Invalid API key';
-			}
-		} catch {
-			aiKeyStatus = 'invalid';
-			aiKeyError = 'Network error';
+			await fetchModels();
 		} finally {
-			aiKeySaving = false;
-		}
-	}
-
-	async function handleRemoveAiKey(): Promise<void> {
-		try {
-			await fetch(`${API_BASE_URL}/api/settings/ai-key`, {
-				method: 'DELETE',
-				headers: getAuthHeaders(),
-			});
-			aiKeyStatus = 'idle';
-			aiKeyError = '';
-			// Re-fetch status — may fall back to env var
-			await fetchAiStatus();
-		} catch {
-			// Ignore
+			modelsLoading = false;
 		}
 	}
 </script>
+
+<svelte:window onkeydown={(e) => e.key === 'Escape' && goto('/')} />
 
 <div class="mx-auto max-w-2xl space-y-8 px-6 py-8">
 	<div class="flex items-center gap-3">
@@ -179,13 +146,17 @@
 				</button>
 			</div>
 		{:else}
-			<p class="text-sm text-text-muted">Not connected</p>
+			<div class="flex items-center justify-between">
+				<p class="text-sm text-text-muted">Not signed in</p>
+				<SignInButton />
+			</div>
 		{/if}
 	</section>
 
 	<!-- Repositories -->
 	<section class="rounded-lg border border-border bg-bg-secondary p-5">
 		<h2 class="mb-4 text-sm font-semibold text-text-primary">Repositories</h2>
+		{#if getUser()}
 
 		<!-- Add repo -->
 		<div class="mb-4 flex gap-2">
@@ -220,6 +191,17 @@
 								<img src={repo.avatarUrl} alt="" class="h-4 w-4 rounded-sm" />
 							{/if}
 							<span class="text-sm text-text-primary">{repo.fullName}</span>
+							{#if repo.cloneStatus === 'cloning'}
+								<span class="flex items-center gap-1 text-[10px] text-text-muted">
+									<Loader2 size={10} class="animate-spin" />
+									Cloning
+								</span>
+							{:else if repo.cloneStatus === 'error'}
+								<span class="flex items-center gap-1 text-[10px] text-amber-500" title={repo.cloneError ?? 'Clone failed'}>
+									<AlertTriangle size={10} />
+									Clone failed
+								</span>
+							{/if}
 						</div>
 						<button
 							class="text-xs text-text-muted transition-colors hover:text-danger"
@@ -230,6 +212,10 @@
 					</div>
 				{/each}
 			</div>
+		{/if}
+
+		{:else}
+			<p class="text-sm text-text-muted">Sign in with GitHub to manage repositories.</p>
 		{/if}
 	</section>
 
@@ -243,85 +229,36 @@
 				{#if aiStatusLoading}
 					<div class="h-2 w-2 rounded-full bg-text-muted"></div>
 					<span class="text-xs text-text-muted">Checking…</span>
-				{:else if aiConfigured && aiKeySource === 'environment'}
+				{:else if aiConfigured}
 					<div class="h-2 w-2 rounded-full bg-emerald-500"></div>
-					<span class="text-xs text-text-muted">Using system API key (ANTHROPIC_API_KEY)</span>
-				{:else if aiConfigured && aiKeySource === 'settings'}
-					<div class="h-2 w-2 rounded-full bg-emerald-500"></div>
-					<span class="text-xs text-text-muted">API key configured</span>
+					<span class="text-xs text-text-muted">Using {aiAgent === 'claude' ? 'Claude Code' : 'OpenCode'}</span>
 				{:else}
 					<div class="h-2 w-2 rounded-full bg-amber-500"></div>
-					<span class="text-xs text-text-muted">No API key</span>
+					<span class="text-xs text-text-muted">CLI agent not found</span>
 				{/if}
 			</div>
 
-			<!-- Environment key detected notice -->
-			{#if !aiStatusLoading && aiKeySource === 'environment' && !aiConfigured}
-				<!-- This case shouldn't happen (env = configured), but defensive -->
-			{/if}
-
-			{#if !aiStatusLoading && aiKeySource === 'environment'}
-				<div class="rounded-md border border-emerald-500/20 bg-emerald-500/5 px-3 py-2.5">
-					<p class="text-xs font-medium text-emerald-400">Detected from environment</p>
+			<!-- CLI not found notice -->
+			{#if !aiStatusLoading && !aiConfigured}
+				<div class="rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2.5">
+					<p class="text-xs font-medium text-amber-400">No CLI agent detected</p>
 					<p class="mt-0.5 text-xs text-text-muted">
-						Using the <code class="rounded bg-bg-tertiary px-1 py-0.5 font-mono text-[10px]">ANTHROPIC_API_KEY</code> environment variable from your system (e.g. Claude Code).
-						You can override it below by saving a different key.
+						Install <a href="https://opencode.ai" class="text-accent underline underline-offset-2">OpenCode</a>
+						or <a href="https://claude.ai/code" class="text-accent underline underline-offset-2">Claude Code</a>
+						and authenticate to enable AI features.
 					</p>
 				</div>
 			{/if}
 
-			<!-- Provider -->
-			<div class="flex items-center justify-between">
-				<div>
-					<p class="text-sm text-text-primary">Provider</p>
-					<p class="text-xs text-text-muted">Anthropic Claude</p>
-				</div>
-			</div>
-
-			<!-- API Key -->
-			<div>
-				<label class="mb-1.5 block text-sm text-text-primary" for="ai-key">
-					{#if aiKeySource === 'environment'}
-						Override API Key
-					{:else}
-						API Key
-					{/if}
-				</label>
-				<div class="flex gap-2">
-					<input
-						id="ai-key"
-						type="password"
-						class="h-8 flex-1 rounded-md border border-border bg-bg-elevated px-3 text-sm text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
-						placeholder={aiKeySource === 'settings' ? '••••••••••••••••' : 'sk-ant-...'}
-						bind:value={aiKeyInput}
-						onkeydown={(e) => e.key === 'Enter' && handleSaveAiKey()}
-						disabled={aiKeySaving}
-					/>
-					<button
-						class="flex items-center gap-1.5 rounded-md bg-accent px-3 text-sm font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
-						onclick={handleSaveAiKey}
-						disabled={aiKeySaving || !aiKeyInput.trim()}
-					>
-						{#if aiKeySaving}
-							<Loader2 size={13} class="animate-spin" />
-							Validating…
-						{:else}
-							Save
-						{/if}
-					</button>
-				</div>
-				{#if aiKeyStatus === 'valid'}
-					<p class="mt-1.5 flex items-center gap-1 text-xs text-emerald-500">
-						<Check size={12} />
-						Key validated successfully
+			<!-- CLI detected notice -->
+			{#if !aiStatusLoading && aiConfigured}
+				<div class="rounded-md border border-emerald-500/20 bg-emerald-500/5 px-3 py-2.5">
+					<p class="text-xs font-medium text-emerald-400">{aiAgent === 'claude' ? 'Claude Code' : 'OpenCode'} detected</p>
+					<p class="mt-0.5 text-xs text-text-muted">
+						Using your {aiAgent === 'claude' ? 'Claude Code' : 'OpenCode'} CLI for AI-powered reviews.
 					</p>
-				{:else if aiKeyStatus === 'invalid'}
-					<p class="mt-1.5 flex items-center gap-1 text-xs text-danger">
-						<X size={12} />
-						{aiKeyError}
-					</p>
-				{/if}
-			</div>
+				</div>
+			{/if}
 
 			<!-- Model selector -->
 			<div class="flex items-center justify-between">
@@ -329,30 +266,63 @@
 					<label class="text-sm text-text-primary" for="ai-model">Model</label>
 					<p class="text-xs text-text-muted">Claude model for AI explanations</p>
 				</div>
+				{#if modelsLoading}
+					<div class="h-8 w-40 animate-pulse rounded-md bg-bg-elevated"></div>
+				{:else}
 				<select
 					id="ai-model"
 					class="rounded-md border border-border bg-bg-elevated px-3 py-1.5 text-sm text-text-primary focus:border-accent focus:outline-none"
-					value={getSettings()?.aiModel ?? 'claude-sonnet-4-20250514'}
+					value={getSettings()?.aiModel ?? 'opencode/big-pickle'}
 					onchange={(e) =>
 						updateSettings({ aiModel: (e.target as HTMLSelectElement).value })}
 				>
-					{#each modelOptions as opt}
-						<option value={opt.value}>{opt.label}</option>
-					{/each}
+				{#each modelOptions as opt}
+					<option value={opt.value}>{opt.label}</option>
+				{/each}
 				</select>
+				{/if}
 			</div>
 
-			<!-- Remove key (only when a saved key exists, not for env-only) -->
-			{#if aiKeySource === 'settings'}
-				<div class="border-t border-border-subtle pt-4">
-					<button
-						class="rounded-md border border-border px-3 py-1.5 text-xs text-text-muted transition-colors hover:border-danger hover:text-danger"
-						onclick={handleRemoveAiKey}
+			<!-- Thinking Effort selector -->
+			{#if showThinkingEffort}
+				<div class="flex items-center justify-between">
+					<div>
+						<label class="text-sm text-text-primary" for="ai-thinking-effort">Thinking Effort</label>
+						<p class="text-xs text-text-muted">Extended thinking budget for Claude</p>
+					</div>
+					<select
+						id="ai-thinking-effort"
+						class="rounded-md border border-border bg-bg-elevated px-3 py-1.5 text-sm text-text-primary focus:border-accent focus:outline-none"
+						value={getSettings()?.aiThinkingEffort ?? 'medium'}
+						onchange={(e) => updateSettings({ aiThinkingEffort: (e.target as HTMLSelectElement).value as ThinkingEffort })}
 					>
-						Remove Saved Key
-					</button>
+						{#each THINKING_EFFORT_OPTIONS as opt}
+							<option value={opt.value}>{opt.label}</option>
+						{/each}
+					</select>
 				</div>
 			{/if}
+
+			<!-- Agent selector -->
+			<div class="flex items-center justify-between">
+				<div>
+					<label class="text-sm text-text-primary" for="ai-agent">CLI Agent</label>
+					<p class="text-xs text-text-muted">Tool used for AI-powered walkthroughs</p>
+				</div>
+				<select
+					id="ai-agent"
+					class="rounded-md border border-border bg-bg-elevated px-3 py-1.5 text-sm text-text-primary focus:border-accent focus:outline-none"
+					value={aiAgent}
+					onchange={async (e) => {
+						const newAgent = (e.target as HTMLSelectElement).value as AiAgent;
+						await updateSettings({ aiAgent: newAgent, aiModel: getDefaultModel(newAgent) });
+						await loadModels();
+					}}
+				>
+					<option value="opencode">OpenCode</option>
+					<option value="claude">Claude Code</option>
+				</select>
+			</div>
 		</div>
 	</section>
 

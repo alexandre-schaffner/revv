@@ -15,6 +15,9 @@ function rowToRepo(row: typeof repositories.$inferSelect): Repository {
 		defaultBranch: row.defaultBranch,
 		avatarUrl: row.avatarUrl ?? null,
 		addedAt: row.addedAt,
+		cloneStatus: row.cloneStatus,
+		clonePath: row.clonePath ?? null,
+		cloneError: row.cloneError ?? null,
 	};
 }
 
@@ -23,7 +26,7 @@ export class RepositoryService extends Context.Tag('RepositoryService')<
 	{
 		readonly listRepos: () => Effect.Effect<Repository[], never, DbService>;
 		readonly addRepo: (
-			data: Omit<Repository, 'id' | 'addedAt'>
+			data: Omit<Repository, 'id' | 'addedAt' | 'cloneStatus' | 'clonePath' | 'cloneError'>
 		) => Effect.Effect<Repository, ValidationError, DbService>;
 		readonly deleteRepo: (id: string) => Effect.Effect<void, NotFoundError, DbService>;
 		readonly getRepoById: (id: string) => Effect.Effect<Repository, NotFoundError, DbService>;
@@ -69,6 +72,9 @@ export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
 				defaultBranch: data.defaultBranch,
 				avatarUrl: data.avatarUrl ?? null,
 				addedAt,
+				cloneStatus: 'pending',
+				clonePath: null,
+				cloneError: null,
 			});
 		}),
 

@@ -20,6 +20,8 @@ export const pullRequests = sqliteTable('pull_requests', {
 	additions: integer('additions').notNull().default(0),
 	deletions: integer('deletions').notNull().default(0),
 	changedFiles: integer('changed_files').notNull().default(0),
+	headSha: text('head_sha'),
+	baseSha: text('base_sha'),
 	createdAt: text('created_at').notNull(),
 	updatedAt: text('updated_at').notNull(),
 	fetchedAt: text('fetched_at').notNull(),

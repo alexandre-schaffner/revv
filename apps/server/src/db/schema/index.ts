@@ -7,3 +7,7 @@ export { reviewSessions } from './review-sessions';
 export { commentThreads } from './comment-threads';
 export { threadMessages } from './thread-messages';
 export { hunkDecisions } from './hunk-decisions';
+export { walkthroughs } from './walkthroughs';
+export { walkthroughBlocks } from './walkthrough-blocks';
+export { walkthroughIssues } from './walkthrough-issues';
+export { prDiffFiles } from './pr-diff-files';

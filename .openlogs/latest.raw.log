@@ -1,0 +1,19 @@
+[0m[2m[35m$[0m [2m[1mconcurrently --kill-others "bun run dev:web" "bun run dev:server" "sleep 3 && cd apps/desktop && bunx tauri dev"[0m
+[0m[0][0m [0m[2m[35m$[0m [2m[1mcd apps/web && bun run dev[0m
+[0m[1][0m [0m[2m[35m$[0m [2m[1mcd apps/server && bun run dev[0m
+[0m[0][0m [0m[2m[35m$[0m [2m[1mvite dev[0m
+[0m[1][0m [0m[2m[35m$[0m [2m[1mREV_DEBUG=1 bun run --watch src/index.ts[0m
+[0m[1][0m [rev-server] listening on http://localhost:45678
+[0m[0][0m 
+[0m[0][0m   [32m[1mVITE[22m v6.4.2[39m  [2mready in [0m[1m872[22m[2m[0m ms[22m
+[0m[0][0m 
+[0m[0][0m   [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m5173[22m/[39m
+[0m[0][0m [2m  [32m➜[39m  [1mNetwork[22m[2m: use [22m[1m--host[22m[2m to expose[22m
+[0m[2][0m      Running DevCommand (`cargo  run --no-default-features --color always --`)
+[0m[2][0m         Info Watching /Users/alex/Projects/rev/apps/desktop for changes...
+[0m[2][0m [1m[92m    Finished[0m ]8;;https://doc.rust-lang.org/cargo/reference/profiles.html#default-profiles\`dev` profile [unoptimized + debuginfo]]8;;\ target(s) in 0.62s
+[0m[2][0m [1m[92m     Running[0m `target/debug/rev-desktop`
+[0m[0][0m [36m6:52:36 PM [vite-plugin-svelte] src/lib/components/sidebar/AddRepoDialog.svelte:160:6 Avoid using autofocus
+[0m[0][0m https://svelte.dev/e/a11y_autofocus[39m
+[0m[0][0m [36m6:52:36 PM [vite-plugin-svelte] src/lib/components/sidebar/AddRepoDialog.svelte:273:5 Avoid using autofocus
+[0m[0][0m https://svelte.dev/e/a11y_autofocus[39m

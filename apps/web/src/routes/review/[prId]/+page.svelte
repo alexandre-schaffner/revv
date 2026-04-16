@@ -12,17 +12,23 @@
 		setFilesError,
 		clearReviewFiles,
 		loadSession,
+		getActiveTab,
 	} from '$lib/stores/review.svelte';
 	import { getDiffThemeType } from '$lib/stores/theme.svelte';
 	import { api } from '$lib/api/client';
 	import ReviewLayout from '$lib/components/review/ReviewLayout.svelte';
+	import GuidedWalkthrough from '$lib/components/walkthrough/GuidedWalkthrough.svelte';
+	import RequestChanges from '$lib/components/review/RequestChanges.svelte';
+	import { reset as resetWalkthrough } from '$lib/stores/walkthrough.svelte';
 	import { onDestroy } from 'svelte';
+	import AuthGuard from '$lib/components/auth/AuthGuard.svelte';
 
 	const pr = $derived(getSelectedPr());
 	const themeType = $derived(getDiffThemeType());
 	const files = $derived(getReviewFiles());
 	const isLoading = $derived(getIsLoadingFiles());
 	const loadError = $derived(getFilesError());
+	const activeTab = $derived(getActiveTab());
 
 	let currentRequestId = 0;
 
@@ -80,9 +86,11 @@
 		// Invalidate any in-flight request and clean up store state
 		currentRequestId++;
 		clearReviewFiles();
+		resetWalkthrough();
 	});
 </script>
 
+<AuthGuard>
 {#if isLoading}
 	<div class="loading">
 		<p>Loading diff…</p>
@@ -91,17 +99,28 @@
 	<div class="loading error">
 		<p>{loadError}</p>
 	</div>
-{:else if pr !== null && files.length > 0}
-	<ReviewLayout prId={page.params['prId'] ?? ''} {files} {themeType} />
 {:else if pr !== null}
-	<div class="loading">
-		<p>No changed files in this PR</p>
+	<!-- Walkthrough: always mounted to avoid re-render freeze on tab switch.
+	     Heavy blocks (PierreFile, FileDiff, markdown) stay alive in DOM. -->
+	<div style={activeTab === 'walkthrough' ? 'display: contents' : 'display: none'}>
+		<GuidedWalkthrough prId={page.params['prId'] ?? ''} />
 	</div>
+
+	{#if activeTab === 'request-changes'}
+		<RequestChanges prId={page.params['prId'] ?? ''} />
+	{:else if activeTab === 'diff' && files.length > 0}
+		<ReviewLayout prId={page.params['prId'] ?? ''} {files} {themeType} />
+	{:else if activeTab === 'diff'}
+		<div class="loading">
+			<p>No changed files in this PR</p>
+		</div>
+	{/if}
 {:else}
 	<div class="loading">
 		<p>Loading…</p>
 	</div>
 {/if}
+</AuthGuard>
 
 <style>
 	.loading {

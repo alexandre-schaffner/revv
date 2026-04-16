@@ -7,6 +7,8 @@ export type ReviewStatus =
 	| 'reviewed'
 	| 'changes_proposed';
 
+export type CloneStatus = 'pending' | 'cloning' | 'ready' | 'error';
+
 export interface Repository {
 	id: string;
 	provider: string;
@@ -16,6 +18,9 @@ export interface Repository {
 	defaultBranch: string;
 	avatarUrl: string | null;
 	addedAt: string;
+	cloneStatus: CloneStatus;
+	clonePath: string | null;
+	cloneError: string | null;
 }
 
 export interface PullRequest {
@@ -34,16 +39,23 @@ export interface PullRequest {
 	additions: number;
 	deletions: number;
 	changedFiles: number;
+	headSha: string | null;
+	baseSha: string | null;
 	createdAt: string;
 	updatedAt: string;
 	fetchedAt: string;
 }
 
+export type ThinkingEffort = 'low' | 'medium' | 'high';
+
+export type AiAgent = 'opencode' | 'claude';
+
 export interface UserSettings {
 	id: string;
 	aiProvider: string;
 	aiModel: string;
-	aiApiKeyRef: string | null;
+	aiThinkingEffort: ThinkingEffort;
+	aiAgent: AiAgent;
 	theme: string;
 	diffViewMode: string;
 	autoFetchInterval: number;

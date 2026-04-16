@@ -22,6 +22,8 @@ function rowToPr(row: typeof pullRequests.$inferSelect): PullRequest {
 		additions: row.additions,
 		deletions: row.deletions,
 		changedFiles: row.changedFiles,
+		headSha: row.headSha ?? null,
+		baseSha: row.baseSha ?? null,
 		createdAt: row.createdAt,
 		updatedAt: row.updatedAt,
 		fetchedAt: row.fetchedAt,
@@ -82,9 +84,11 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
 							updatedAt: pr.updatedAt,
 							fetchedAt: pr.fetchedAt,
 						};
-						// Only set optional fields when non-null to satisfy exactOptionalPropertyTypes
-						if (pr.body !== null) base.body = pr.body;
-						if (pr.authorAvatarUrl !== null) base.authorAvatarUrl = pr.authorAvatarUrl;
+					// Only set optional fields when non-null to satisfy exactOptionalPropertyTypes
+					if (pr.body !== null) base.body = pr.body;
+					if (pr.authorAvatarUrl !== null) base.authorAvatarUrl = pr.authorAvatarUrl;
+					if (pr.headSha !== null) base.headSha = pr.headSha;
+					if (pr.baseSha !== null) base.baseSha = pr.baseSha;
 						return base;
 					});
 					return Promise.resolve(
@@ -100,6 +104,8 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
 									additions: pullRequests.additions,
 									deletions: pullRequests.deletions,
 									changedFiles: pullRequests.changedFiles,
+									headSha: pullRequests.headSha,
+									baseSha: pullRequests.baseSha,
 									updatedAt: pullRequests.updatedAt,
 									fetchedAt: pullRequests.fetchedAt,
 								},

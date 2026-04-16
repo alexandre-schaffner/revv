@@ -15,6 +15,57 @@ const retrySchedule = Schedule.intersect(
 	Schedule.recurs(3)
 );
 
+/** Parse "owner/repo" into parts, failing with GitHubNotFoundError if malformed. */
+function parseRepoFullName(
+	fullName: string
+): Effect.Effect<{ owner: string; repo: string }, GitHubNotFoundError> {
+	const [owner, repo] = fullName.split('/');
+	if (!owner || !repo) {
+		return Effect.fail(new GitHubNotFoundError({ resource: 'repo', id: fullName }));
+	}
+	return Effect.succeed({ owner, repo });
+}
+
+/** Pass through known GitHub errors; wrap unknown ones in GitHubNetworkError. */
+function toGitHubError(e: unknown): GitHubError {
+	if (
+		e instanceof GitHubAuthError ||
+		e instanceof GitHubRateLimitError ||
+		e instanceof GitHubNotFoundError ||
+		e instanceof GitHubNetworkError
+	) {
+		return e;
+	}
+	return new GitHubNetworkError({ cause: e });
+}
+
+/** Build the standard headers for GitHub API requests. */
+function githubHeaders(token: string): Record<string, string> {
+	return {
+		Authorization: `Bearer ${token}`,
+		Accept: 'application/vnd.github.v3+json',
+		'X-GitHub-Api-Version': '2022-11-28',
+	};
+}
+
+/** Assert a fetch response is successful, throwing the appropriate domain error on failure. */
+function assertGitHubOk(res: Response, path: string): void {
+	if (res.status === 401) {
+		throw new GitHubAuthError({ message: 'Invalid or expired GitHub token' });
+	}
+	if (res.status === 403) {
+		const resetHeader = res.headers.get('X-RateLimit-Reset');
+		const resetAt = resetHeader ? new Date(Number(resetHeader) * 1000) : new Date();
+		throw new GitHubRateLimitError({ resetAt });
+	}
+	if (res.status === 404) {
+		throw new GitHubNotFoundError({ resource: path, id: path });
+	}
+	if (!res.ok) {
+		throw new GitHubNetworkError({ cause: `HTTP ${res.status}` });
+	}
+}
+
 function githubFetch(
 	path: string,
 	token: string
@@ -22,39 +73,12 @@ function githubFetch(
 	return Effect.tryPromise({
 		try: async () => {
 			const res = await fetch(`${GITHUB_API}${path}`, {
-				headers: {
-					Authorization: `Bearer ${token}`,
-					Accept: 'application/vnd.github.v3+json',
-					'X-GitHub-Api-Version': '2022-11-28',
-				},
+				headers: githubHeaders(token),
 			});
-			if (res.status === 401) {
-				throw new GitHubAuthError({ message: 'Invalid or expired GitHub token' });
-			}
-			if (res.status === 403) {
-				const resetHeader = res.headers.get('X-RateLimit-Reset');
-				const resetAt = resetHeader ? new Date(Number(resetHeader) * 1000) : new Date();
-				throw new GitHubRateLimitError({ resetAt });
-			}
-			if (res.status === 404) {
-				throw new GitHubNotFoundError({ resource: path, id: path });
-			}
-			if (!res.ok) {
-				throw new GitHubNetworkError({ cause: `HTTP ${res.status}` });
-			}
+			assertGitHubOk(res, path);
 			return res.json();
 		},
-		catch: (e) => {
-			if (
-				e instanceof GitHubAuthError ||
-				e instanceof GitHubRateLimitError ||
-				e instanceof GitHubNotFoundError ||
-				e instanceof GitHubNetworkError
-			) {
-				return e;
-			}
-			return new GitHubNetworkError({ cause: e });
-		},
+		catch: toGitHubError,
 	});
 }
 
@@ -81,26 +105,9 @@ function githubFetchPaginated(
 
 			for (let page = 0; page < maxPages && url; page++) {
 				const res = await fetch(url, {
-					headers: {
-						Authorization: `Bearer ${token}`,
-						Accept: 'application/vnd.github.v3+json',
-						'X-GitHub-Api-Version': '2022-11-28',
-					},
+					headers: githubHeaders(token),
 				});
-				if (res.status === 401) {
-					throw new GitHubAuthError({ message: 'Invalid or expired GitHub token' });
-				}
-				if (res.status === 403) {
-					const resetHeader = res.headers.get('X-RateLimit-Reset');
-					const resetAt = resetHeader ? new Date(Number(resetHeader) * 1000) : new Date();
-					throw new GitHubRateLimitError({ resetAt });
-				}
-				if (res.status === 404) {
-					throw new GitHubNotFoundError({ resource: path, id: path });
-				}
-				if (!res.ok) {
-					throw new GitHubNetworkError({ cause: `HTTP ${res.status}` });
-				}
+				assertGitHubOk(res, path);
 
 				const data = await res.json();
 				if (Array.isArray(data)) {
@@ -112,17 +119,7 @@ function githubFetchPaginated(
 
 			return results;
 		},
-		catch: (e) => {
-			if (
-				e instanceof GitHubAuthError ||
-				e instanceof GitHubRateLimitError ||
-				e instanceof GitHubNotFoundError ||
-				e instanceof GitHubNetworkError
-			) {
-				return e;
-			}
-			return new GitHubNetworkError({ cause: e });
-		},
+		catch: toGitHubError,
 	});
 }
 
@@ -151,6 +148,8 @@ function mapPr(raw: Record<string, unknown>, repositoryId: string): PullRequest 
 		additions: (raw['additions'] as number | undefined) ?? 0,
 		deletions: (raw['deletions'] as number | undefined) ?? 0,
 		changedFiles: (raw['changed_files'] as number | undefined) ?? 0,
+		headSha: head['sha'] as string,
+		baseSha: base['sha'] as string,
 		createdAt: raw['created_at'] as string,
 		updatedAt: raw['updated_at'] as string,
 		fetchedAt: new Date().toISOString(),
@@ -168,6 +167,9 @@ function mapRepo(raw: Record<string, unknown>): Repository {
 		defaultBranch: (raw['default_branch'] as string | undefined) ?? 'main',
 		avatarUrl: (owner['avatar_url'] as string | null) ?? null,
 		addedAt: new Date().toISOString(),
+		cloneStatus: 'pending',
+		clonePath: null,
+		cloneError: null,
 	};
 }
 
@@ -227,14 +229,7 @@ export class GitHubService extends Context.Tag('GitHubService')<
 export const GitHubServiceLive = Layer.succeed(GitHubService, {
 	listPrs: (repoFullName, repositoryId, token) =>
 		Effect.gen(function* () {
-			const parts = repoFullName.split('/');
-			const owner = parts[0];
-			const repo = parts[1];
-			if (!owner || !repo) {
-				return yield* Effect.fail(
-					new GitHubNotFoundError({ resource: 'repo', id: repoFullName })
-				);
-			}
+			const { owner, repo } = yield* parseRepoFullName(repoFullName);
 			const data = yield* githubFetch(
 				`/repos/${owner}/${repo}/pulls?state=open&per_page=100`,
 				token
@@ -244,14 +239,7 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
 
 	getPr: (repoFullName, prNumber, token) =>
 		Effect.gen(function* () {
-			const parts = repoFullName.split('/');
-			const owner = parts[0];
-			const repo = parts[1];
-			if (!owner || !repo) {
-				return yield* Effect.fail(
-					new GitHubNotFoundError({ resource: 'repo', id: repoFullName })
-				);
-			}
+			const { owner, repo } = yield* parseRepoFullName(repoFullName);
 			const data = yield* githubFetch(
 				`/repos/${owner}/${repo}/pulls/${prNumber}`,
 				token
@@ -261,14 +249,7 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
 
 	getRepo: (fullName, token) =>
 		Effect.gen(function* () {
-			const parts = fullName.split('/');
-			const owner = parts[0];
-			const repo = parts[1];
-			if (!owner || !repo) {
-				return yield* Effect.fail(
-					new GitHubNotFoundError({ resource: 'repo', id: fullName })
-				);
-			}
+			const { owner, repo } = yield* parseRepoFullName(fullName);
 			const data = yield* githubFetch(`/repos/${owner}/${repo}`, token);
 			return mapRepo(data as Record<string, unknown>);
 		}).pipe(Effect.retry(retrySchedule)),
@@ -285,14 +266,7 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
 
 	getPrMeta: (repoFullName, prNumber, token) =>
 		Effect.gen(function* () {
-			const parts = repoFullName.split('/');
-			const owner = parts[0];
-			const repo = parts[1];
-			if (!owner || !repo) {
-				return yield* Effect.fail(
-					new GitHubNotFoundError({ resource: 'repo', id: repoFullName })
-				);
-			}
+			const { owner, repo } = yield* parseRepoFullName(repoFullName);
 			const data = yield* githubFetch(
 				`/repos/${owner}/${repo}/pulls/${prNumber}`,
 				token
@@ -305,14 +279,7 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
 
 	getPrFiles: (repoFullName, prNumber, token) =>
 		Effect.gen(function* () {
-			const parts = repoFullName.split('/');
-			const owner = parts[0];
-			const repo = parts[1];
-			if (!owner || !repo) {
-				return yield* Effect.fail(
-					new GitHubNotFoundError({ resource: 'repo', id: repoFullName })
-				);
-			}
+			const { owner, repo } = yield* parseRepoFullName(repoFullName);
 			const data = yield* githubFetch(
 				`/repos/${owner}/${repo}/pulls/${prNumber}/files?per_page=100`,
 				token
@@ -329,14 +296,7 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
 
 	getFileContent: (repoFullName, path, ref, token) =>
 		Effect.gen(function* () {
-			const parts = repoFullName.split('/');
-			const owner = parts[0];
-			const repo = parts[1];
-			if (!owner || !repo) {
-				return yield* Effect.fail(
-					new GitHubNotFoundError({ resource: 'repo', id: repoFullName })
-				);
-			}
+			const { owner, repo } = yield* parseRepoFullName(repoFullName);
 			const encodedPath = path.split('/').map(encodeURIComponent).join('/');
 			const data = yield* githubFetch(
 				`/repos/${owner}/${repo}/contents/${encodedPath}?ref=${ref}`,

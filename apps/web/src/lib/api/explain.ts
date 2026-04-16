@@ -1,4 +1,6 @@
 import { API_BASE_URL } from '@rev/shared';
+import { authHeaders } from '$lib/utils/session-token';
+import { parseSSEBuffer } from '$lib/utils/sse-parser';
 
 export interface ExplainRequestParams {
 	prId: string;
@@ -23,8 +25,6 @@ export function streamExplanation(
 	callbacks: ExplainCallbacks
 ): AbortController {
 	const controller = new AbortController();
-	const token =
-		typeof localStorage !== 'undefined' ? (localStorage.getItem('rev_session_token') ?? '') : '';
 
 	const queryParams = new URLSearchParams({
 		prId: params.prId,
@@ -35,7 +35,7 @@ export function streamExplanation(
 	});
 
 	fetch(`${API_BASE_URL}/api/explain?${queryParams.toString()}`, {
-		headers: token ? { Authorization: `Bearer ${token}` } : {},
+		headers: authHeaders(),
 		signal: controller.signal,
 	})
 		.then(async (res) => {
@@ -63,52 +63,22 @@ export function streamExplanation(
 
 				buffer += decoder.decode(value, { stream: true });
 
-				// Parse SSE frames from the buffer
-				const parts = buffer.split('\n\n');
-				// Last element is incomplete — keep it in the buffer
-				buffer = parts.pop() ?? '';
+				const result = parseSSEBuffer<string>(buffer);
+				buffer = result.remaining;
 
-				for (const part of parts) {
-					const lines = part.split('\n');
+				if (result.error) {
+					callbacks.onError(result.error);
+					gotError = true;
+					continue;
+				}
 
-					// Check for error event
-					const eventLine = lines.find((l) => l.startsWith('event: '));
-					if (eventLine?.slice(7) === 'error') {
-						const dataLine = lines.find((l) => l.startsWith('data: '));
-						if (dataLine) {
-							try {
-								const errData = JSON.parse(dataLine.slice(6)) as {
-									code: string;
-									message: string;
-								};
-								callbacks.onError(errData);
-								gotError = true;
-							} catch {
-								callbacks.onError({
-									code: 'PARSE_ERROR',
-									message: 'Failed to parse error',
-								});
-								gotError = true;
-							}
-						}
-						continue;
-					}
+				for (const text of result.events) {
+					callbacks.onChunk(text);
+				}
 
-					// Regular data event
-					for (const line of lines) {
-						if (!line.startsWith('data: ')) continue;
-						const payload = line.slice(6);
-						if (payload === '[DONE]') {
-							callbacks.onDone();
-							return;
-						}
-						try {
-							const text = JSON.parse(payload) as string;
-							callbacks.onChunk(text);
-						} catch {
-							// Skip malformed data lines
-						}
-					}
+				if (result.done) {
+					callbacks.onDone();
+					return;
 				}
 			}
 

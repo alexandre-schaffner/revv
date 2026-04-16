@@ -5,8 +5,8 @@ import { API_PORT } from '@rev/shared';
 import { createDb } from './db/index';
 
 // Config values — replaced at build time or via env vars
-const GITHUB_CLIENT_ID = process.env['GITHUB_CLIENT_ID'] ?? 'BUNDLED_CLIENT_ID';
-const GITHUB_CLIENT_SECRET = process.env['GITHUB_CLIENT_SECRET'] ?? 'BUNDLED_CLIENT_SECRET';
+export const GITHUB_CLIENT_ID = process.env['GITHUB_CLIENT_ID'] ?? 'BUNDLED_CLIENT_ID';
+export const GITHUB_CLIENT_SECRET = process.env['GITHUB_CLIENT_SECRET'] ?? 'BUNDLED_CLIENT_SECRET';
 const BETTER_AUTH_SECRET = process.env['BETTER_AUTH_SECRET'] ?? 'dev-secret-change-in-production-32ch';
 
 const db = createDb();

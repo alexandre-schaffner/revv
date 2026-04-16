@@ -36,25 +36,49 @@ export class ValidationError extends Data.TaggedError('ValidationError')<{
 }> {}
 
 // AI errors
-export class AiRateLimitError extends Data.TaggedError('AiRateLimitError')<{
-	readonly retryAfter: number;
-}> {}
-
-export class AiAuthError extends Data.TaggedError('AiAuthError')<{
-	readonly message: string;
-}> {}
-
 export class AiGenerationError extends Data.TaggedError('AiGenerationError')<{
 	readonly cause: unknown;
 }> {}
 
 export class AiNotConfiguredError extends Data.TaggedError('AiNotConfiguredError')<{}> {}
 
-export type AiError = AiRateLimitError | AiAuthError | AiGenerationError | AiNotConfiguredError;
+export type AiError = AiGenerationError | AiNotConfiguredError;
 
 export class ReviewError extends Data.TaggedError('ReviewError')<{
 	readonly message: string;
 	readonly code?: string;
 }> {}
 
-export type AppError = GitHubError | AiError | NotFoundError | ValidationError | ReviewError;
+// Clone errors
+export class CloneError extends Data.TaggedError('CloneError')<{
+	readonly message: string;
+	readonly cause?: unknown;
+}> {}
+
+export class CloneNotReadyError extends Data.TaggedError('CloneNotReadyError')<{
+	readonly repoId: string;
+}> {}
+
+export type AppError =
+	| GitHubError
+	| AiError
+	| NotFoundError
+	| ValidationError
+	| ReviewError
+	| CloneError
+	| CloneNotReadyError;
+
+/**
+ * Type guard for ReviewError.
+ * Checks both instanceof (for directly thrown errors) and _tag (defensive for
+ * serialized/deserialized errors crossing async boundaries, e.g. Effect channels).
+ */
+export function isReviewError(e: unknown): e is ReviewError {
+	return (
+		e instanceof ReviewError ||
+		(e !== null &&
+			typeof e === 'object' &&
+			'_tag' in e &&
+			(e as { _tag: unknown })._tag === 'ReviewError')
+	);
+}

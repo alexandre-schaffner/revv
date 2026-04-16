@@ -1,1 +1,0 @@
-CREATE UNIQUE INDEX `uq_repositories_full_name` ON `repositories` (`full_name`);

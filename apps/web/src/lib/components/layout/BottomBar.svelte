@@ -1,11 +1,15 @@
+<script lang="ts">
+	import AgentSelector from './AgentSelector.svelte';
+	import ModelSelector from './ModelSelector.svelte';
+	import ThinkingEffortSelector from './ThinkingEffortSelector.svelte';
+</script>
+
 <div class="flex h-full items-center justify-between bg-bg-primary px-4">
 	<!-- Left: model info -->
 	<div class="flex items-center gap-3">
-		<div class="flex items-center gap-1.5 rounded-md bg-bg-secondary px-2 py-1">
-			<div class="h-1.5 w-1.5 rounded-full bg-success"></div>
-			<span class="text-xs text-text-secondary">Claude Sonnet</span>
-		</div>
-		<span class="text-xs text-text-muted">High</span>
+		<AgentSelector />
+		<ModelSelector />
+		<ThinkingEffortSelector />
 	</div>
 
 	<!-- Right: action buttons -->

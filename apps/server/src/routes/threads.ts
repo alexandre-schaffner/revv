@@ -1,28 +1,18 @@
 import { Elysia, t } from 'elysia';
 import { Effect } from 'effect';
-import { auth } from '../auth';
 import { AppRuntime } from '../runtime';
 import { ReviewService } from '../services/Review';
-import { ReviewError } from '../domain/errors';
+import { isReviewError } from '../domain/errors';
 import { WebSocketHub } from '../services/WebSocketHub';
 import type { ThreadStatus } from '@rev/shared';
-
-function isReviewError(e: unknown): e is ReviewError {
-	return e instanceof ReviewError ||
-		(e !== null && typeof e === 'object' && '_tag' in e && (e as { _tag: unknown })._tag === 'ReviewError');
-}
+import { withAuth } from './middleware';
 
 export const threadRoutes = new Elysia({ prefix: '/api/threads' })
+	.use(withAuth)
 	// PATCH /api/threads/:id — update thread status
 	.patch(
 		'/:id',
 		async (ctx) => {
-			const session = await auth.api.getSession({ headers: ctx.request.headers });
-			if (!session) {
-				ctx.set.status = 401;
-				return { error: 'Unauthorized' };
-			}
-
 			try {
 				const updated = await AppRuntime.runPromise(
 					Effect.gen(function* () {
@@ -71,12 +61,6 @@ export const threadRoutes = new Elysia({ prefix: '/api/threads' })
 
 	// GET /api/threads/:id/messages — list messages in a thread
 	.get('/:id/messages', async (ctx) => {
-		const session = await auth.api.getSession({ headers: ctx.request.headers });
-		if (!session) {
-			ctx.set.status = 401;
-			return { error: 'Unauthorized' };
-		}
-
 		return AppRuntime.runPromise(
 			Effect.flatMap(ReviewService, (s) => s.getMessages(ctx.params.id)),
 		);
@@ -86,12 +70,6 @@ export const threadRoutes = new Elysia({ prefix: '/api/threads' })
 	.post(
 		'/:id/messages',
 		async (ctx) => {
-			const session = await auth.api.getSession({ headers: ctx.request.headers });
-			if (!session) {
-				ctx.set.status = 401;
-				return { error: 'Unauthorized' };
-			}
-
 			try {
 				const message = await AppRuntime.runPromise(
 					Effect.gen(function* () {

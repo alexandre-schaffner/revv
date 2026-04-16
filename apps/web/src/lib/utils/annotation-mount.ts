@@ -61,3 +61,48 @@ export function cleanupAllMounted(): void {
 		registry.delete(target);
 	}
 }
+
+// ── Scoped annotation registry ───────────────────────────────────────────────
+// Use when multiple components independently mount annotations and need
+// isolated cleanup (e.g. walkthrough blocks alongside DiffViewerInner).
+
+export interface AnnotationScope {
+	mountInto<Props extends Record<string, unknown>>(
+		target: HTMLElement,
+		Comp: Component<Props>,
+		props: Props,
+	): void;
+	cleanupAll(): void;
+}
+
+/**
+ * Create an isolated annotation mount scope. Each scope tracks its own set
+ * of mounted Svelte components and can clean them up independently without
+ * affecting other scopes or the global registry.
+ */
+export function createAnnotationScope(): AnnotationScope {
+	const scopeRegistry = new Map<HTMLElement, MountedInstance>();
+
+	return {
+		mountInto<Props extends Record<string, unknown>>(
+			target: HTMLElement,
+			Comp: Component<Props>,
+			props: Props,
+		): void {
+			const existing = scopeRegistry.get(target);
+			if (existing) {
+				try { unmount(existing); } catch { /* ignore */ }
+				scopeRegistry.delete(target);
+			}
+			const instance = mount(Comp, { target, props });
+			scopeRegistry.set(target, instance);
+		},
+
+		cleanupAll(): void {
+			for (const [, instance] of scopeRegistry) {
+				try { unmount(instance); } catch { /* ignore */ }
+			}
+			scopeRegistry.clear();
+		},
+	};
+}

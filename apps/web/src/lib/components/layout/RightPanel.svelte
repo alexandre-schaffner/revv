@@ -100,8 +100,9 @@
 						<Settings size={24} class="error-icon" />
 						<p class="error-primary">AI not configured</p>
 						<p class="error-hint">
-							Set your <code>ANTHROPIC_API_KEY</code> environment variable (e.g. via Claude Code), or add a key in
-							<a href="/settings" class="error-link">Settings</a>.
+							Install <a href="https://opencode.ai" class="error-link">OpenCode</a>
+							or <a href="https://claude.ai/code" class="error-link">Claude Code</a>
+							and authenticate, then select your CLI agent in <a href="/settings" class="error-link">Settings</a>.
 						</p>
 					{:else if error.code === 'RATE_LIMITED'}
 						<AlertTriangle size={24} class="error-icon" />

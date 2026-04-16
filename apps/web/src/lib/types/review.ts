@@ -50,30 +50,3 @@ export type {
 	HunkDecisionType,
 	SessionStatus,
 } from '@rev/shared';
-
-/** Detect language from file extension for badge display */
-export function detectLanguage(path: string): string {
-	const ext = path.split('.').pop()?.toLowerCase() ?? '';
-	const map: Record<string, string> = {
-		ts: 'TypeScript',
-		tsx: 'TSX',
-		js: 'JavaScript',
-		jsx: 'JSX',
-		svelte: 'Svelte',
-		py: 'Python',
-		go: 'Go',
-		rs: 'Rust',
-		java: 'Java',
-		kt: 'Kotlin',
-		swift: 'Swift',
-		css: 'CSS',
-		html: 'HTML',
-		json: 'JSON',
-		yaml: 'YAML',
-		yml: 'YAML',
-		md: 'Markdown',
-		sh: 'Shell',
-		sql: 'SQL'
-	};
-	return map[ext] ?? (ext.toUpperCase() || 'Text');
-}

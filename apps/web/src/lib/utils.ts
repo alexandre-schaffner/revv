@@ -15,6 +15,4 @@ export type WithElementRef<T, E extends Element = HTMLElement> = T & {
 // but make it optional so consumers aren't required to pass it.
 export type WithoutChild<T> = Omit<T, 'children'> & { children?: Snippet };
 
-export type WithoutChildren<T> = Omit<T, 'children'> & { children?: Snippet };
-
 export type WithoutChildrenOrChild<T> = Omit<T, 'children'> & { children?: Snippet };

@@ -152,11 +152,16 @@ export async function signOut(): Promise<void> {
 	// Stop background sync and disconnect WebSocket first
 	sync.stopPolling();
 
-	// Invalidate server session — don't block local cleanup on failure
+	// Revoke GitHub token and invalidate session — don't block local cleanup on failure
 	try {
-		await authClient.signOut();
+		await fetch(`${API_BASE_URL}/api/auth/revoke-and-sign-out`, {
+			method: 'POST',
+			headers: {
+				Authorization: `Bearer ${token}`,
+			},
+		});
 	} catch {
-		// Server-side sign-out may fail (expired session, network error) — proceed anyway
+		// Revocation may fail (expired session, network error) — proceed with local cleanup
 	}
 
 	// Clear all local state

@@ -1,0 +1,555 @@
+import { execSync } from 'node:child_process';
+import type { RiskLevel, WalkthroughBlock, WalkthroughStreamEvent, MarkdownBlock, CodeBlock, DiffBlock } from '@rev/shared';
+import type { PrFileMeta } from '../../services/GitHub';
+import { CLI_WALKTHROUGH_TIMEOUT_MS, CLI_CACHE_TTL_MS } from '../../constants';
+import { debug } from '../../logger';
+import {
+	buildWalkthroughPrompt,
+	buildExplorationDescription,
+} from '../prompts/walkthrough';
+
+// ── CLI-specific system prompt ─────────────────────────────────────────────
+// Uses tagged JSON lines so we can parse & stream blocks incrementally
+// instead of waiting for the entire process to exit.
+
+const WALKTHROUGH_CLI_SYSTEM_PROMPT = `You are analyzing a GitHub pull request for a code review walkthrough.
+
+Your task:
+1. First, explore the repository structure to understand the codebase context
+2. Read the files changed in this PR and related files (tests, configs, imports)
+3. Check for patterns, dependencies, and potential issues beyond the diff
+4. Output the walkthrough as a series of tagged JSON lines (see format below)
+
+## Output format
+
+Output each piece on its OWN LINE using these exact tags. Each line must contain a complete, valid JSON object. Do NOT wrap in code fences.
+
+First, output the summary:
+@SUMMARY {"summary": "2-3 sentence summary of what this PR does and why", "risk_level": "low"}
+
+Then output blocks (8-20 total), one per line:
+@BLOCK {"type": "markdown", "id": "block-0", "order": 0, "content": "## Overview\\n\\nMarkdown content here..."}
+@BLOCK {"type": "code", "id": "block-1", "order": 1, "filePath": "src/app.ts", "startLine": 10, "endLine": 20, "language": "typescript", "content": "const x = 1;", "annotation": "Key change here", "annotationPosition": "left"}
+@BLOCK {"type": "diff", "id": "block-2", "order": 2, "filePath": "src/app.ts", "patch": "@@ -1,3 +1,4 @@...", "annotation": "Added new import", "annotationPosition": "right"}
+
+Finally, signal completion:
+@DONE
+
+Rules:
+- EACH tagged line must be on a SINGLE line — escape newlines as \\n within JSON string values
+- Start with a markdown overview block explaining the big picture
+- Group changes by CONCEPT, not by file
+- Use your file reading tools to get the actual code, not just the diff
+- Check related tests, type definitions, and documentation
+- Alternate annotation_position between "left" and "right" for visual variety
+- Flag concerns with bold text or blockquotes in markdown blocks
+- Generate 8-20 blocks total depending on PR complexity
+- risk_level: "low" for straightforward changes, "medium" for critical paths/complexity, "high" for security/breaking changes
+- Be direct — reviewers are engineers, not beginners`;
+
+// ── CLI agent detection (cached) ─────────────────────────────────────────────
+
+let cachedCliAuth: { result: boolean; expiresAt: number; agent: string } | null = null;
+
+function isCliAgentAvailable(agent: 'opencode' | 'claude'): boolean {
+	try {
+		const result = execSync(`which ${agent}`, { encoding: 'utf-8', timeout: 3000 });
+		return result.trim().length > 0;
+	} catch {
+		return false;
+	}
+}
+
+export function checkCliAvailability(agent: 'opencode' | 'claude'): boolean {
+	if (cachedCliAuth && Date.now() < cachedCliAuth.expiresAt && cachedCliAuth.agent === agent) {
+		return cachedCliAuth.result;
+	}
+
+	const available = isCliAgentAvailable(agent);
+	cachedCliAuth = { result: available, expiresAt: Date.now() + CLI_CACHE_TTL_MS, agent };
+	return available;
+}
+
+// ── Tagged-line incremental parsing ─────────────────────────────────────────
+
+/**
+ * Normalize a raw block object from CLI JSON into a typed WalkthroughBlock.
+ */
+function normalizeBlock(raw: Record<string, unknown>, fallbackOrder: number): WalkthroughBlock {
+	const type = (raw['type'] as string) ?? 'markdown';
+	const id = (raw['id'] as string) ?? `block-${raw['order'] ?? fallbackOrder}`;
+	const order = (raw['order'] as number) ?? fallbackOrder;
+
+	if (type === 'code') {
+		return {
+			type: 'code',
+			id,
+			order,
+			filePath: (raw['filePath'] as string) ?? '',
+			startLine: (raw['startLine'] as number) ?? 0,
+			endLine: (raw['endLine'] as number) ?? 0,
+			language: (raw['language'] as string) ?? 'text',
+			content: (raw['content'] as string) ?? '',
+			annotation: (raw['annotation'] as string | null) ?? null,
+			annotationPosition: (raw['annotationPosition'] as 'left' | 'right') ?? 'left',
+		} satisfies CodeBlock;
+	} else if (type === 'diff') {
+		return {
+			type: 'diff',
+			id,
+			order,
+			filePath: (raw['filePath'] as string) ?? '',
+			patch: (raw['patch'] as string) ?? '',
+			annotation: (raw['annotation'] as string | null) ?? null,
+			annotationPosition: (raw['annotationPosition'] as 'left' | 'right') ?? 'left',
+		} satisfies DiffBlock;
+	}
+	return {
+		type: 'markdown',
+		id,
+		order,
+		content: (raw['content'] as string) ?? '',
+	} satisfies MarkdownBlock;
+}
+
+/**
+ * Scan accumulated text for complete tagged walkthrough lines.
+ * Returns parsed events and the remaining (incomplete) text.
+ */
+function extractTaggedLines(
+	text: string,
+	blockCounter: { value: number },
+): { events: WalkthroughStreamEvent[]; remaining: string } {
+	const events: WalkthroughStreamEvent[] = [];
+	let remaining = text;
+
+	while (true) {
+		const nlIdx = remaining.indexOf('\n');
+		if (nlIdx === -1) break;
+
+		const line = remaining.slice(0, nlIdx).trim();
+		remaining = remaining.slice(nlIdx + 1);
+
+		if (line.startsWith('@SUMMARY ')) {
+			try {
+				const data = JSON.parse(line.slice(9)) as { summary: string; risk_level: string };
+				events.push({
+					type: 'summary' as const,
+					data: { summary: data.summary, riskLevel: (data.risk_level ?? 'low') as RiskLevel },
+				});
+			} catch {
+				debug('walkthrough-cli', 'Failed to parse @SUMMARY line');
+			}
+		} else if (line.startsWith('@BLOCK ')) {
+			try {
+				const data = JSON.parse(line.slice(7)) as Record<string, unknown>;
+				events.push({
+					type: 'block' as const,
+					data: normalizeBlock(data, blockCounter.value),
+				});
+				blockCounter.value++;
+			} catch {
+				debug('walkthrough-cli', 'Failed to parse @BLOCK line');
+			}
+		} else if (line === '@DONE' || line.startsWith('@DONE')) {
+			events.push({
+				type: 'done' as const,
+				data: {
+					walkthroughId: '',
+					tokenUsage: { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+				},
+			});
+		}
+		// Non-tagged lines are silently ignored (model preamble text, etc.)
+	}
+
+	return { events, remaining };
+}
+
+// ── Fallback: parse a single JSON blob (legacy format) ──────────────────────
+
+function parseLegacyJsonBlob(fullText: string): {
+	summary: string;
+	risk_level: string;
+	steps: WalkthroughBlock[];
+} | null {
+	let jsonText = fullText.trim();
+
+	// Strip code fences
+	const fenceMatch = jsonText.match(/```(?:json)?\s*\n([\s\S]*?)\n\s*```/);
+	if (fenceMatch?.[1]) {
+		jsonText = fenceMatch[1].trim();
+	}
+
+	// If it doesn't start with '{', try to find the first '{' and last '}'
+	if (!jsonText.startsWith('{')) {
+		const firstBrace = jsonText.indexOf('{');
+		const lastBrace = jsonText.lastIndexOf('}');
+		if (firstBrace !== -1 && lastBrace > firstBrace) {
+			jsonText = jsonText.slice(firstBrace, lastBrace + 1);
+		}
+	}
+
+	try {
+		return JSON.parse(jsonText) as { summary: string; risk_level: string; steps: WalkthroughBlock[] };
+	} catch {
+		return null;
+	}
+}
+
+// ── CLI walkthrough streaming ───────────────────────────────────────────────
+
+/**
+ * Stream walkthrough via opencode or claude CLI.
+ * Runs the CLI in the worktree so it can explore the actual source files.
+ *
+ * Blocks are streamed incrementally using tagged JSON lines (@SUMMARY, @BLOCK, @DONE).
+ * Falls back to parsing a single JSON blob if the model doesn't use the tagged format.
+ */
+export function streamWalkthroughViaCLI(params: {
+	pr: { title: string; body: string | null; sourceBranch: string; targetBranch: string; url: string };
+	files: PrFileMeta[];
+	worktreePath: string;
+}, model?: string, agent: 'opencode' | 'claude' = 'opencode'): AsyncGenerator<WalkthroughStreamEvent> {
+	const userMessage = WALKTHROUGH_CLI_SYSTEM_PROMPT + '\n\n---\n\n' + buildWalkthroughPrompt(params);
+
+	return (async function* (): AsyncGenerator<WalkthroughStreamEvent> {
+		try {
+			debug('walkthrough-cli', 'Starting CLI walkthrough via:', agent, 'in:', params.worktreePath, 'model:', model ?? 'default');
+
+			// Build CLI args — prompt is piped via stdin (not a positional arg) to
+			// avoid OS argument-length limits on large PRs.
+			const cliArgs = agent === 'claude'
+				? [
+						'claude',
+						'-p',
+						'--output-format', 'json',
+						'--dangerously-skip-permissions',
+						...(model ? ['--model', model] : []),
+					]
+				: [
+						'opencode',
+						'run',
+						'--format', 'json',
+						'--dangerously-skip-permissions',
+						...(model ? ['--model', model] : []),
+					];
+
+			const proc = Bun.spawn(cliArgs, {
+				cwd: params.worktreePath,
+				stdin: 'pipe',
+				stdout: 'pipe',
+				stderr: 'pipe',
+			});
+
+			// Pipe the prompt via stdin
+			proc.stdin.write(userMessage);
+			proc.stdin.end();
+
+			// Collect stderr for error reporting (runs concurrently with stdout loop)
+			const stderrPromise = new Response(proc.stderr).text();
+
+			const decoder = new TextDecoder();
+			let buffer = '';
+			let fullText = '';
+			let streamedBlockCount = 0; // tracks how many blocks we've yielded incrementally
+			let streamedSummary = false;
+			let streamedDone = false;
+			const blockCounter = { value: 0 };
+
+			let killed = false;
+			const timeoutId = setTimeout(() => {
+				killed = true;
+				proc.kill();
+			}, CLI_WALKTHROUGH_TIMEOUT_MS);
+
+			try {
+				for await (const chunk of proc.stdout) {
+					buffer += decoder.decode(chunk, { stream: true });
+					const lines = buffer.split('\n');
+					buffer = lines.pop() ?? '';
+
+					for (const line of lines) {
+						const trimmed = line.trim();
+						if (!trimmed) continue;
+
+						let msg: {
+							type: string;
+							part?: {
+								type?: string;
+								text?: string;
+								tool?: string;
+								state?: { status?: string; input?: unknown; output?: string };
+								time?: unknown;
+							};
+						};
+						try {
+							msg = JSON.parse(trimmed) as typeof msg;
+						} catch {
+							continue;
+						}
+
+						if (msg.type === 'text' && msg.part?.type === 'text' && msg.part.text) {
+							fullText += msg.part.text;
+
+							// Incrementally extract tagged walkthrough lines
+							const extracted = extractTaggedLines(fullText, blockCounter);
+							fullText = extracted.remaining;
+
+						for (const evt of extracted.events) {
+							if (evt.type === 'summary') streamedSummary = true;
+							if (evt.type === 'block') {
+								// If the model skipped @SUMMARY and went straight to blocks,
+								// synthesize a placeholder summary so the client can render content.
+								if (!streamedSummary) {
+									streamedSummary = true;
+									yield {
+										type: 'summary' as const,
+										data: { summary: 'Walkthrough generated.', riskLevel: 'low' as RiskLevel },
+									};
+								}
+								streamedBlockCount++;
+							}
+							if (evt.type === 'done') streamedDone = true;
+							yield evt;
+						}
+
+						// @DONE may be the last output without a trailing newline —
+							// detect it in the remaining buffer so we don't wait for process exit.
+							if (!streamedDone && fullText.trim() === '@DONE') {
+								streamedDone = true;
+								yield {
+									type: 'done' as const,
+									data: {
+										walkthroughId: '',
+										tokenUsage: { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+									},
+								};
+								fullText = '';
+							}
+						} else if (msg.type === 'tool_use' && msg.part?.tool) {
+							const description = buildExplorationDescription(msg.part.tool, msg.part.state?.input);
+							yield { type: 'exploration' as const, data: { tool: msg.part.tool, description } };
+						} else if (msg.type === 'result') {
+							// OpenCode signals end-of-response — model is done generating.
+							// If we have a walkthrough but @DONE was missing, synthesize it.
+							if (!streamedDone && streamedSummary && streamedBlockCount > 0) {
+								// Flush any remaining tagged lines in fullText
+								if (fullText.trim()) {
+									const extracted = extractTaggedLines(fullText + '\n', blockCounter);
+									fullText = extracted.remaining;
+								for (const evt of extracted.events) {
+									if (evt.type === 'summary') streamedSummary = true;
+									if (evt.type === 'block') {
+										if (!streamedSummary) {
+											streamedSummary = true;
+											yield {
+												type: 'summary' as const,
+												data: { summary: 'Walkthrough generated.', riskLevel: 'low' as RiskLevel },
+											};
+										}
+										streamedBlockCount++;
+									}
+									if (evt.type === 'done') streamedDone = true;
+									yield evt;
+								}
+								}
+								if (!streamedDone) {
+									streamedDone = true;
+									yield {
+										type: 'done' as const,
+										data: {
+											walkthroughId: '',
+											tokenUsage: { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+										},
+									};
+								}
+							}
+						}
+					}
+
+					// Walkthrough is complete — stop reading stdout instead of
+					// waiting for the CLI process to close it (which may never happen).
+					if (streamedDone) {
+						debug('walkthrough-cli', 'Walkthrough complete, breaking out of stdout loop');
+						break;
+					}
+				}
+			} finally {
+				clearTimeout(timeoutId);
+				// Kill subprocess if still running (e.g., guard aborted us via .return())
+				// This prevents orphaned processes when the stream guard's inactivity
+				// timeout fires and calls iter.return() on our generator.
+				try { proc.kill(); } catch { /* already dead */ }
+			}
+
+			// Process remaining text (last line may lack trailing newline)
+			if (fullText.trim()) {
+				// Append a newline so extractTaggedLines can pick up the last line
+				const extracted = extractTaggedLines(fullText + '\n', blockCounter);
+			for (const evt of extracted.events) {
+				if (evt.type === 'summary') streamedSummary = true;
+				if (evt.type === 'block') {
+					if (!streamedSummary) {
+						streamedSummary = true;
+						yield {
+							type: 'summary' as const,
+							data: { summary: 'Walkthrough generated.', riskLevel: 'low' as RiskLevel },
+						};
+					}
+					streamedBlockCount++;
+				}
+				if (evt.type === 'done') streamedDone = true;
+				yield evt;
+			}
+				fullText = extracted.remaining;
+			}
+
+			// If we broke out of the stdout loop early (walkthrough complete),
+			// kill the process instead of waiting for it to exit on its own.
+			let killedAfterComplete = false;
+			if (streamedDone && !killed) {
+				proc.kill();
+				killedAfterComplete = true;
+			}
+			await proc.exited;
+
+			const stderrText = await stderrPromise;
+
+			// Timeout kill → error (but NOT if we killed after successful completion)
+			if (killed && !killedAfterComplete) {
+				yield { type: 'error' as const, data: { code: 'AiGenerationError', message: 'Walkthrough generation timed out after 10 minutes' } };
+				return;
+			}
+
+			// Non-zero exit code → error (ignore if we killed after completion)
+			if (!killedAfterComplete && proc.exitCode !== 0) {
+				const errorMsg = stderrText.trim() || `${agent} exited with code ${proc.exitCode}`;
+				yield { type: 'error' as const, data: { code: 'AiGenerationError', message: errorMsg } };
+				return;
+			}
+
+			// If we already streamed blocks via tagged lines, just ensure done was sent
+			if (streamedSummary && streamedBlockCount > 0) {
+				debug('walkthrough-cli', 'Streamed incrementally:', streamedBlockCount, 'blocks');
+				if (!streamedDone) {
+					yield {
+						type: 'done' as const,
+						data: {
+							walkthroughId: '',
+							tokenUsage: { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+						},
+					};
+				}
+				return;
+			}
+
+			// ── Fallback: parse as a single JSON blob (legacy format) ────────
+			debug('walkthrough-cli', 'No tagged lines found, trying legacy JSON parse. Text length:', fullText.length);
+
+			const parsed = parseLegacyJsonBlob(fullText);
+			if (!parsed) {
+				const preview = fullText.length > 500 ? fullText.slice(0, 500) + '...' : fullText;
+				const errMsg = stderrText.trim()
+					? `${agent} error: ${stderrText.trim()}`
+					: `${agent} returned unexpected output: ${preview || '(empty)'}`;
+				yield { type: 'error' as const, data: { code: 'AiGenerationError', message: errMsg } };
+				return;
+			}
+
+			debug('walkthrough-cli', 'Legacy parse: yielding summary, riskLevel:', parsed.risk_level);
+			yield { type: 'summary' as const, data: { summary: parsed.summary, riskLevel: parsed.risk_level as RiskLevel } };
+
+			debug('walkthrough-cli', 'Legacy parse: yielding', parsed.steps.length, 'blocks');
+			for (const block of parsed.steps) {
+				yield { type: 'block' as const, data: block };
+			}
+
+			yield {
+				type: 'done' as const,
+				data: {
+					walkthroughId: '',
+					tokenUsage: { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+				},
+			};
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			yield { type: 'error' as const, data: { code: 'AiGenerationError', message } };
+		}
+	})();
+}
+
+// ── Dynamic model listing ─────────────────────────────────────────────────────
+
+export type CliModelOption = { label: string; value: string };
+
+/**
+ * List models available to the selected CLI agent.
+ * For opencode: runs `opencode models --verbose` and parses output.
+ * For claude: returns a hardcoded list (no offline model listing available).
+ */
+export async function listCliModels(agent: 'opencode' | 'claude'): Promise<CliModelOption[]> {
+  if (agent === 'claude') {
+    return [
+      { label: 'Claude Opus 4.6', value: 'claude-opus-4-6' },
+      { label: 'Claude Sonnet 4.6', value: 'claude-sonnet-4-6' },
+      { label: 'Claude Haiku 4.5', value: 'claude-haiku-4-5-20251001' },
+      { label: 'Claude Opus 4.5', value: 'claude-opus-4-5-20251101' },
+      { label: 'Claude Sonnet 4.5', value: 'claude-sonnet-4-5-20250929' },
+      { label: 'Claude Opus 4.0', value: 'claude-opus-4-20250514' },
+      { label: 'Claude Sonnet 4.0', value: 'claude-sonnet-4-20250514' },
+      { label: 'Claude Haiku 4.0', value: 'claude-haiku-4-20250414' },
+    ];
+  }
+
+  // opencode: run `opencode models --verbose` and parse interleaved output
+  // Format: line with "provider/id", then JSON blob with model metadata, repeated
+  try {
+    const proc = Bun.spawn(['opencode', 'models', '--verbose'], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const text = await new Response(proc.stdout).text();
+    await proc.exited;
+
+    const models: CliModelOption[] = [];
+    const lines = text.split('\n');
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i]?.trim();
+      if (!line) { i++; continue; }
+
+      // Check if this line looks like a model ID (e.g. "provider/model-id")
+      if (!line.startsWith('{') && line.includes('/')) {
+        const modelId = line;
+        // Next non-empty content should be a JSON blob — collect until balanced braces
+        let jsonStr = '';
+        let depth = 0;
+        i++;
+        while (i < lines.length) {
+          const jsonLine = lines[i] ?? '';
+          jsonStr += jsonLine + '\n';
+          for (const ch of jsonLine) {
+            if (ch === '{') depth++;
+            else if (ch === '}') depth--;
+          }
+          i++;
+          if (depth === 0 && jsonStr.trim().startsWith('{')) break;
+        }
+        try {
+          const meta = JSON.parse(jsonStr.trim()) as { name?: string; providerID?: string };
+          const label = meta.name ?? modelId;
+          models.push({ label, value: modelId });
+        } catch {
+          models.push({ label: modelId, value: modelId });
+        }
+      } else {
+        i++;
+      }
+    }
+    return models;
+  } catch {
+    // Fallback: empty list (frontend will show empty state)
+    return [];
+  }
+}

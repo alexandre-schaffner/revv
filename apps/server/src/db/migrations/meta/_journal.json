@@ -5,36 +5,8 @@
     {
       "idx": 0,
       "version": "6",
-      "when": 1776198290040,
-      "tag": "0000_chunky_dark_phoenix",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "6",
-      "when": 1776198331401,
-      "tag": "0001_stale_the_hand",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "6",
-      "when": 1776247593180,
-      "tag": "0002_outstanding_power_pack",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "6",
-      "when": 1776278936693,
-      "tag": "0003_greedy_magus",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "6",
-      "when": 1776279380420,
-      "tag": "0004_dashing_barracuda",
+      "when": 1776336176692,
+      "tag": "0000_init",
       "breakpoints": true
     }
   ]

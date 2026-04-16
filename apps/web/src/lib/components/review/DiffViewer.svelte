@@ -8,12 +8,9 @@
 		getThreadsForFile,
 		getThreadMessages,
 		addThread,
+		addThreadMessage,
 		resolveThread,
-		acceptHunk,
-		rejectHunk,
-		undoHunkAction,
-		getAcceptedHunks,
-		getRejectedHunks,
+		reopenThread,
 		applyCommentSuggestion
 	} from '$lib/stores/review.svelte';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
@@ -37,14 +34,19 @@
 		onLineClick?: (info: LineClickInfo) => void;
 		onModeChange?: (mode: 'unified' | 'split') => void;
 		onTokenHover?: (info: TokenHoverInfo | null) => void;
+		/** When set, triggers opening a comment input at the given line range. */
+		commentTrigger?: { startLine: number; endLine: number; side: 'additions' | 'deletions'; seq: number } | null;
 	}
 
-	let { file, themeType = 'dark', onLineClick, onModeChange, onTokenHover }: Props = $props();
+	let { file, themeType = 'dark', onLineClick, onModeChange, onTokenHover, commentTrigger = null }: Props = $props();
 
 	// ── Interaction state ─────────────────────────────────────────────────────
 
 	/** Thread IDs currently expanded inline. */
 	const expandedThreadIds = new SvelteSet<string>();
+
+	/** The thread currently showing a reply input (only one at a time). */
+	let replyingThreadId = $state<string | null>(null);
 
 	/** Pending new-comment inputs keyed by `${filePath}::${lineNumber}::${side}` */
 	const pendingInputs = new SvelteMap<
@@ -52,11 +54,12 @@
 		{ side: 'deletions' | 'additions'; lineNo: number; code: string }
 	>();
 
+	/** Stores the endLine for pending comment inputs, keyed the same way as pendingInputs. */
+	const pendingEndLines = new SvelteMap<string, number>();
+
 	// ── Derived values ────────────────────────────────────────────────────────
 
 	const mode = $derived(getDiffMode());
-	const acceptedHunkSet = $derived(file ? getAcceptedHunks(file.path) : new Set<number>());
-	const rejectedHunkSet = $derived(file ? getRejectedHunks(file.path) : new Set<number>());
 
 	// Key changes → Svelte destroys + recreates DiffViewerInner (full lifecycle)
 	const viewKey = $derived(file ? `${file.path}::${mode}::${themeType}` : '');
@@ -78,7 +81,8 @@
 				status: thread.status,
 				messageCount: getThreadMessages(thread.id).length,
 				isExpanded: expandedThreadIds.has(thread.id),
-				isInputActive: false
+				isInputActive: false,
+				isReplying: replyingThreadId === thread.id
 			}
 		}));
 
@@ -95,7 +99,8 @@
 					status: '',
 					messageCount: 0,
 					isExpanded: false,
-					isInputActive: true
+					isInputActive: true,
+					isReplying: false
 				}
 			});
 		}
@@ -124,6 +129,14 @@
 
 	// ── Handlers ──────────────────────────────────────────────────────────────
 
+	// Watch for external comment trigger (from keyboard shortcuts in ReviewLayout)
+	$effect(() => {
+		const trigger = commentTrigger;
+		if (!trigger || !file) return;
+		const key = `${file.path}::${trigger.startLine}::${trigger.side}`;
+		pendingInputs.set(key, { side: trigger.side, lineNo: trigger.startLine, code: '' });
+	});
+
 	function handleLineClick(info: LineClickInfo) {
 		if (!file) return;
 
@@ -148,9 +161,29 @@
 	function handleAnnotationToggle(threadId: string) {
 		if (expandedThreadIds.has(threadId)) {
 			expandedThreadIds.delete(threadId);
+			// Clear reply state when collapsing
+			if (replyingThreadId === threadId) replyingThreadId = null;
 		} else {
 			expandedThreadIds.add(threadId);
 		}
+	}
+
+	function handleReplyToggle(threadId: string) {
+		replyingThreadId = replyingThreadId === threadId ? null : threadId;
+		// Ensure thread is expanded when reply input is opened
+		if (replyingThreadId === threadId) {
+			expandedThreadIds.add(threadId);
+		}
+	}
+
+	async function handleReplySubmit(threadId: string, body: string) {
+		replyingThreadId = null;
+		await addThreadMessage(threadId, {
+			authorRole: 'reviewer',
+			authorName: 'You',
+			body,
+			messageType: 'reply',
+		});
 	}
 
 	async function handleCommentSubmit(
@@ -163,11 +196,13 @@
 
 		// Remove pending input immediately for responsiveness
 		pendingInputs.delete(key);
+		const endLine = pendingEndLines.get(key) ?? lineNo;
+		pendingEndLines.delete(key);
 
 		const result = await addThread({
 			filePath,
 			startLine: lineNo,
-			endLine: lineNo,
+			endLine,
 			diffSide: side === 'deletions' ? 'old' : 'new',
 			message: {
 				authorRole: 'reviewer',
@@ -187,6 +222,7 @@
 		for (const k of [...pendingInputs.keys()]) {
 			if (k.startsWith(`${filePath}::${lineNo}::`)) {
 				pendingInputs.delete(k);
+				pendingEndLines.delete(k);
 			}
 		}
 	}
@@ -195,16 +231,8 @@
 		await resolveThread(threadId);
 	}
 
-	async function handleHunkAccept(filePath: string, hunkIndex: number) {
-		await acceptHunk(filePath, hunkIndex);
-	}
-
-	async function handleHunkReject(filePath: string, hunkIndex: number) {
-		await rejectHunk(filePath, hunkIndex);
-	}
-
-	async function handleHunkUndo(filePath: string, hunkIndex: number) {
-		await undoHunkAction(filePath, hunkIndex);
+	async function handleCommentReopen(threadId: string) {
+		await reopenThread(threadId);
 	}
 
 	async function handleApplySuggestion(threadId: string, suggestion: string) {
@@ -221,17 +249,15 @@
 			{annotations}
 			{threadMessages}
 			{threadById}
-			acceptedHunks={acceptedHunkSet}
-			rejectedHunks={rejectedHunkSet}
 			onLineClick={handleLineClick}
 			{onModeChange}
 			onAnnotationToggle={handleAnnotationToggle}
+			onReplyToggle={handleReplyToggle}
+			onReplySubmit={handleReplySubmit}
 			onCommentSubmit={handleCommentSubmit}
 			onCommentDismiss={handleCommentDismiss}
 			onCommentResolve={handleCommentResolve}
-			onHunkAccept={handleHunkAccept}
-			onHunkReject={handleHunkReject}
-			onHunkUndo={handleHunkUndo}
+			onCommentReopen={handleCommentReopen}
 			{onTokenHover}
 			onApplySuggestion={handleApplySuggestion}
 		/>

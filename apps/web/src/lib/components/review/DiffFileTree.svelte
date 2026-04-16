@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
-	import { ChevronRight, FileCode2, FolderOpen, Folder } from '@lucide/svelte';
+	import { ChevronRight, FileCode2, FilePlus2, FileMinus2, FolderOpen, Folder } from '@lucide/svelte';
 	import type { FileTreeEntry } from '$lib/types/review';
 	import { getFocusedId } from '$lib/stores/sidebar-nav.svelte';
 
@@ -133,7 +133,13 @@
 						data-nav-type={fileNavId ? 'file' : undefined}
 						data-nav-parent={parentNav}
 					>
-						<FileCode2 size={13} class="file-icon" />
+						{#if node.file?.isNew}
+						<FilePlus2 size={13} class="file-icon file-icon--added" />
+					{:else if node.file?.isDeleted}
+						<FileMinus2 size={13} class="file-icon file-icon--deleted" />
+					{:else}
+						<FileCode2 size={13} class="file-icon file-icon--modified" />
+					{/if}
 						<span class="file-name">{node.name}</span>
 						{#if node.file}
 							<span class="file-stats">
@@ -262,6 +268,14 @@
 		color: var(--color-text-muted);
 		flex-shrink: 0;
 		transition: color var(--duration-snap);
+	}
+
+	:global(.file-icon--added) {
+		color: var(--color-success);
+	}
+
+	:global(.file-icon--deleted) {
+		color: var(--color-danger);
 	}
 
 	.tree-row:hover :global(.file-icon) {

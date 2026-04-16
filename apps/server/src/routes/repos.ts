@@ -1,19 +1,16 @@
 import { Elysia, t } from 'elysia';
 import { Effect } from 'effect';
-import { auth } from '../auth';
 import { AppRuntime } from '../runtime';
 import { GitHubService } from '../services/GitHub';
 import { PollScheduler } from '../services/PollScheduler';
+import { RepoCloneService } from '../services/RepoClone';
 import { RepositoryService } from '../services/Repository';
+import { TokenProvider } from '../services/TokenProvider';
+import { withAuth, handleAppError } from './middleware';
 
 export const repoRoutes = new Elysia({ prefix: '/api/repos' })
+	.use(withAuth)
 	.get('/', async (ctx) => {
-		const session = await auth.api.getSession({ headers: ctx.request.headers });
-		if (!session) {
-			ctx.set.status = 401;
-			return { error: 'Unauthorized' };
-		}
-
 		return AppRuntime.runPromise(
 			Effect.flatMap(RepositoryService, (s) => s.listRepos())
 		);
@@ -21,61 +18,70 @@ export const repoRoutes = new Elysia({ prefix: '/api/repos' })
 	.post(
 		'/',
 		async (ctx) => {
-			const session = await auth.api.getSession({ headers: ctx.request.headers });
-			if (!session) {
-				ctx.set.status = 401;
-				return { error: 'Unauthorized' };
-			}
-
 			const { fullName } = ctx.body;
 
-			return AppRuntime.runPromise(
-				Effect.gen(function* () {
-					const github = yield* GitHubService;
-					const repoSvc = yield* RepositoryService;
-					const scheduler = yield* PollScheduler;
+			try {
+				return await AppRuntime.runPromise(
+					Effect.gen(function* () {
+						const github = yield* GitHubService;
+						const repoSvc = yield* RepositoryService;
+						const scheduler = yield* PollScheduler;
+						const tokenProvider = yield* TokenProvider;
+						const cloneSvc = yield* RepoCloneService;
 
-					// Validate repo exists on GitHub using a placeholder token
-					// (In production, get the user's token from Better Auth)
-					const token = yield* Effect.tryPromise({
-						try: async () => {
-							const result = await auth.api.getAccessToken({
-								body: { providerId: 'github', userId: session.user.id },
-							});
-							return result?.accessToken ?? '';
-						},
-						catch: () => null as unknown,
-					}).pipe(Effect.orElseSucceed(() => ''));
+						const token = yield* tokenProvider.getGitHubToken(ctx.session.user.id);
+						const repoData = yield* github.getRepo(fullName, token);
+						const saved = yield* repoSvc.addRepo(repoData);
 
-					const repoData = yield* github.getRepo(fullName, token as string);
-					const saved = yield* repoSvc.addRepo(repoData);
+						// Trigger a sync in the background
+						yield* Effect.fork(scheduler.syncNow());
 
-					// Trigger a sync in the background
-					yield* Effect.fork(scheduler.syncNow());
+						// Trigger shallow clone in background — fire and forget
+						yield* Effect.fork(
+							cloneSvc.cloneRepo(saved, token).pipe(
+								Effect.catchAll(() => Effect.void) // errors tracked in DB, don't fail the add
+							)
+						);
 
-					return saved;
-				})
-			);
+						return saved;
+					})
+				);
+			} catch (e) {
+				return handleAppError(e, ctx);
+			}
 		},
 		{ body: t.Object({ fullName: t.String() }) }
 	)
-	.delete('/:id', async (ctx) => {
-		const session = await auth.api.getSession({ headers: ctx.request.headers });
-		if (!session) {
-			ctx.set.status = 401;
-			return { error: 'Unauthorized' };
-		}
-
+	.get('/:id/clone-status', async (ctx) => {
 		try {
-			await AppRuntime.runPromise(
-				Effect.flatMap(RepositoryService, (s) => s.deleteRepo(ctx.params.id))
+			return await AppRuntime.runPromise(
+				Effect.gen(function* () {
+					const cloneSvc = yield* RepoCloneService;
+					return yield* cloneSvc.getCloneStatus(ctx.params.id);
+				})
 			);
 		} catch (e) {
-			if (e && typeof e === 'object' && '_tag' in e && (e as {_tag: string})._tag === 'NotFoundError') {
-				ctx.set.status = 404;
-				return { error: 'Repository not found' };
-			}
-			throw e;
+			return handleAppError(e, ctx);
+		}
+	})
+	.delete('/:id', async (ctx) => {
+		try {
+			await AppRuntime.runPromise(
+				Effect.gen(function* () {
+					const cloneSvc = yield* RepoCloneService;
+					const repoSvc = yield* RepositoryService;
+
+					// Clean up clone dir first (best effort)
+					yield* cloneSvc.deleteClone(ctx.params.id).pipe(
+						Effect.catchAll(() => Effect.void)
+					);
+
+					// Then delete DB record
+					yield* repoSvc.deleteRepo(ctx.params.id);
+				})
+			);
+		} catch (e) {
+			return handleAppError(e, ctx);
 		}
 
 		return { success: true };

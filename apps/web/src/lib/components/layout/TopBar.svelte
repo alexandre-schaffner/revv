@@ -1,9 +1,10 @@
 <script lang="ts">
-	import { ChevronRight, Sun, Moon, Monitor } from '@lucide/svelte';
+	import { Sun, Moon, Monitor } from '@lucide/svelte';
 	import FloatingTabs from './FloatingTabs.svelte';
 	import { getSelectedPr } from '$lib/stores/prs.svelte';
 	import { getActiveTab, setActiveTab } from '$lib/stores/review.svelte';
 	import { getThemePreference, setThemePreference, type ThemePreference } from '$lib/stores/theme.svelte';
+	import { getActivePanel } from '$lib/stores/focus-mode.svelte';
 
 	interface Props {
 		rightPanelOpen: boolean;
@@ -34,14 +35,11 @@
 </script>
 
 <div class="topbar">
-	<!-- Left: PR breadcrumb or app name -->
-	<div class="breadcrumb">
+	<!-- Left: PR title block or app name -->
+	<div class="title-block">
 		{#if pr}
-			<span class="repo-name">{pr.repositoryId}</span>
-			<ChevronRight size={10} class="chevron" />
-			<span class="pr-number">#{pr.externalId}</span>
-			<ChevronRight size={10} class="chevron" />
 			<span class="pr-title">{pr.title}</span>
+			<span class="pr-subtitle">#{pr.externalId} · {pr.sourceBranch} → {pr.targetBranch}</span>
 		{:else}
 			<span class="app-name">Rev</span>
 		{/if}
@@ -50,7 +48,7 @@
 	<!-- Center: floating pill tabs (only when viewing a PR) -->
 	{#if pr}
 		<div class="tabs-center">
-			<FloatingTabs {activeTab} onTabChange={setActiveTab} />
+			<FloatingTabs {activeTab} onTabChange={setActiveTab} mode={getActivePanel()} />
 		</div>
 	{/if}
 
@@ -92,9 +90,6 @@
 				<rect width="18" height="18" x="3" y="3" rx="2" />
 				<path d="M15 3v18" />
 			</svg>
-			{#if !rightPanelOpen}
-				<span class="panel-label">Panel</span>
-			{/if}
 		</button>
 	</div>
 </div>
@@ -106,14 +101,16 @@
 		justify-content: space-between;
 		height: 100%;
 		padding: 0 16px;
-		background: var(--color-bg-primary);
+		background: var(--color-bg-secondary);
+		border-bottom: 1px solid var(--color-border);
 		position: relative;
 	}
 
-	.breadcrumb {
+	.title-block {
 		display: flex;
-		align-items: center;
-		gap: 6px;
+		flex-direction: column;
+		justify-content: center;
+		gap: 1px;
 		min-width: 0;
 		flex: 1;
 	}
@@ -124,34 +121,27 @@
 		color: var(--color-text-primary);
 	}
 
-	.repo-name {
-		font-size: 12px;
-		color: var(--color-text-muted);
-		white-space: nowrap;
-		flex-shrink: 0;
-	}
-
-	.pr-number {
-		font-size: 11px;
-		font-family: var(--font-mono);
-		color: var(--color-text-muted);
-		white-space: nowrap;
-		flex-shrink: 0;
-	}
-
 	.pr-title {
 		font-size: 13px;
-		font-weight: 500;
+		font-weight: 600;
 		color: var(--color-text-primary);
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
-		max-width: 280px;
+		min-width: 0;
+		line-height: 1.3;
 	}
 
-	:global(.chevron) {
+	.pr-subtitle {
+		font-size: 11px;
+		font-family: var(--font-mono);
 		color: var(--color-text-muted);
-		flex-shrink: 0;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		min-width: 0;
+		opacity: 0.6;
+		line-height: 1.3;
 	}
 
 	.tabs-center {
@@ -192,9 +182,9 @@
 	.panel-btn {
 		display: flex;
 		align-items: center;
-		gap: 6px;
+		justify-content: center;
+		width: 28px;
 		height: 28px;
-		padding: 0 10px;
 		border-radius: 6px;
 		border: none;
 		background: transparent;
@@ -218,10 +208,5 @@
 	.panel-btn--open:hover {
 		background: rgba(59, 130, 246, 0.12);
 		color: var(--color-tree-active-text);
-	}
-
-	.panel-label {
-		font-size: 12px;
-		font-weight: 500;
 	}
 </style>

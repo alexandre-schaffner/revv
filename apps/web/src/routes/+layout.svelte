@@ -1,7 +1,6 @@
 <script lang="ts">
 	import '../app.css';
 	import AppShell from '$lib/components/layout/AppShell.svelte';
-	import AuthGuard from '$lib/components/auth/AuthGuard.svelte';
 	import ErrorBanner from '$lib/components/shared/ErrorBanner.svelte';
 	import * as auth from '$lib/stores/auth.svelte';
 	import * as prs from '$lib/stores/prs.svelte';
@@ -12,6 +11,21 @@
 	import { isTauri } from '$lib/utils/platform';
 
 	let { children } = $props();
+	let hydrated = false;
+
+	// When user becomes authenticated (from any path — deep-link, polling,
+	// or restored token), hydrate app data.  This single effect replaces
+	// the previous per-path hydrate() calls so no auth path can miss it.
+	$effect(() => {
+		const user = auth.getUser();
+		if (user && !hydrated) {
+			hydrated = true;
+			hydrate();
+		}
+		if (!user) {
+			hydrated = false;
+		}
+	});
 
 	$effect(() => {
 		const cleanupTheme = initTheme();
@@ -24,15 +38,14 @@
 				initDeepLinkListener(async (token) => {
 					auth.setToken(token);
 					await auth.loadUser();
+					// hydrate() is triggered by the reactive $effect above
 					if (auth.getIsAuthenticated()) {
-						// Focus the Tauri window so the user returns to the app
 						try {
 							const { getCurrentWindow } = await import('@tauri-apps/api/window');
 							await getCurrentWindow().setFocus();
 						} catch {
 							// best-effort
 						}
-						hydrate();
 					}
 				}).then((unlisten) => {
 					cleanupDeepLink = unlisten;
@@ -40,12 +53,12 @@
 			});
 		}
 
-		// On mount: try to restore auth from localStorage
-		auth.loadUser().then(() => {
-			if (auth.getIsAuthenticated()) {
-				hydrate();
-			}
-		});
+		// On mount: try to restore auth from localStorage.
+		// If the token is valid, loadUser() sets the user, which triggers
+		// the hydration effect above.
+		auth.loadUser();
+		// Fetch settings immediately — route is now public, no auth needed
+		void settings.fetchSettings();
 
 		return () => {
 			cleanupTheme();
@@ -71,7 +84,5 @@
 
 <AppShell>
 	<ErrorBanner />
-	<AuthGuard>
-		{@render children()}
-	</AuthGuard>
+	{@render children()}
 </AppShell>

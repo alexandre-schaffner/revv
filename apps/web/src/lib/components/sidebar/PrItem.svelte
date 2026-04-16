@@ -7,7 +7,10 @@
 		getIsLoadingFiles,
 		getActiveFilePath,
 		setActiveFilePath,
+		getActiveTab,
+		setActiveTab,
 	} from '$lib/stores/review.svelte';
+	import { enterScrollMode } from '$lib/stores/focus-mode.svelte';
 	import { toFileTreeEntries } from '$lib/types/review';
 	import StatusDot from '$lib/components/shared/StatusDot.svelte';
 	import DiffFileTree from '$lib/components/review/DiffFileTree.svelte';
@@ -43,6 +46,10 @@
 
 	function handleFileSelect(path: string) {
 		setActiveFilePath(path);
+		if (getActiveTab() !== 'diff') {
+			setActiveTab('diff');
+		}
+		enterScrollMode();
 	}
 </script>
 

@@ -32,6 +32,9 @@ function handleMessage(msg: WsServerMessage): void {
 		case 'repos:updated':
 			prs.setRepositories(msg.data);
 			break;
+		case 'repos:clone-status':
+			prs.updateRepoCloneStatus(msg.data.repoId, msg.data.status, msg.data.error);
+			break;
 		case 'error':
 			errors.setError(msg.data);
 			break;

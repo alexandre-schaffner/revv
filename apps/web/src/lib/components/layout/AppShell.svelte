@@ -205,7 +205,6 @@
 	/* ── Other areas ── */
 	.topbar-area {
 		grid-area: topbar;
-		border-bottom: 1px solid var(--color-border-subtle);
 	}
 
 	.main-area {

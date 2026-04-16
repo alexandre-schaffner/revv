@@ -7,6 +7,7 @@
 		messageCount: number;
 		isExpanded: boolean;
 		isInputActive: boolean;
+		isReplying: boolean;
 	}
 </script>
 
@@ -19,49 +20,22 @@
 		type HunkData,
 		type DiffTokenEventBaseProps
 	} from '@pierre/diffs';
-	import { getOrCreateWorkerPoolSingleton } from '@pierre/diffs/worker';
 	import type { ReviewFile, CommentThread, ThreadMessage } from '$lib/types/review';
+	import { workerManager } from '$lib/utils/worker-pool';
 	import { onMount, onDestroy } from 'svelte';
 	import { mountInto, cleanupAllMounted } from '$lib/utils/annotation-mount';
 	import AnnotationThread from './AnnotationThread.svelte';
 	import AnnotationCommentInput from './AnnotationCommentInput.svelte';
 	import type { LineClickInfo } from './DiffViewer.svelte';
-
-	// ── Worker pool ───────────────────────────────────────────────────────────
-	// Module-level singleton — created once, shared across all FileDiff instances.
-	const workerManager =
-		typeof window !== 'undefined'
-			? getOrCreateWorkerPoolSingleton({
-					poolOptions: {
-						workerFactory: () =>
-							new Worker(
-								new URL(
-									'@pierre/diffs/worker/worker-portable.js',
-									import.meta.url
-								),
-								{ type: 'module' }
-							),
-						poolSize: 2
-					},
-					highlighterOptions: {
-						langs: [
-							'typescript',
-							'javascript',
-							'svelte',
-							'css',
-							'json',
-							'python',
-							'go',
-							'rust',
-							'html',
-							'shellscript',
-							'yaml',
-							'sql'
-						],
-						theme: { dark: 'pierre-dark', light: 'pierre-light' }
-					}
-				})
-			: undefined;
+	import {
+		getActivePanel,
+		getCursorLineIndex,
+		getCursorSide,
+		getAnchorLineIndex,
+		setTotalLineCount,
+		isInLineCursorMode
+	} from '$lib/stores/focus-mode.svelte';
+	import { countPatchLines } from '$lib/utils/count-patch-lines';
 
 	// ── Token hover info ──────────────────────────────────────────────────────
 
@@ -83,19 +57,15 @@
 		threadMessages: Record<string, ThreadMessage[]>;
 		/** Map from threadId → CommentThread, for expanded thread rendering */
 		threadById: Record<string, CommentThread>;
-		/** Set of hunk indices that have been accepted */
-		acceptedHunks: Set<number>;
-		/** Set of hunk indices that have been rejected */
-		rejectedHunks: Set<number>;
 		onLineClick?: ((info: LineClickInfo) => void) | undefined;
 		onModeChange?: ((mode: 'unified' | 'split') => void) | undefined;
 		onAnnotationToggle?: ((threadId: string) => void) | undefined;
+		onReplyToggle?: ((threadId: string) => void) | undefined;
+		onReplySubmit?: ((threadId: string, body: string) => void) | undefined;
 		onCommentSubmit?: ((filePath: string, lineNo: number, side: 'deletions' | 'additions', body: string) => void) | undefined;
 		onCommentDismiss?: ((filePath: string, lineNo: number) => void) | undefined;
 		onCommentResolve?: ((threadId: string) => void) | undefined;
-		onHunkAccept?: ((filePath: string, hunkIndex: number) => void) | undefined;
-		onHunkReject?: ((filePath: string, hunkIndex: number) => void) | undefined;
-		onHunkUndo?: ((filePath: string, hunkIndex: number) => void) | undefined;
+		onCommentReopen?: ((threadId: string) => void) | undefined;
 		onTokenHover?: ((info: TokenHoverInfo | null) => void) | undefined;
 		onApplySuggestion?: ((threadId: string, suggestion: string) => void) | undefined;
 	}
@@ -107,17 +77,15 @@
 		annotations,
 		threadMessages,
 		threadById,
-		acceptedHunks,
-		rejectedHunks,
 		onLineClick,
 		onModeChange,
 		onAnnotationToggle,
+		onReplyToggle,
+		onReplySubmit,
 		onCommentSubmit,
 		onCommentDismiss,
 		onCommentResolve,
-		onHunkAccept,
-		onHunkReject,
-		onHunkUndo,
+		onCommentReopen,
 		onTokenHover,
 		onApplySuggestion
 	}: Props = $props();
@@ -166,9 +134,12 @@
 	let wrapperEl: HTMLDivElement | null = null;
 	let instance = $state.raw<FileDiff<ThreadMeta> | null>(null);
 	let error = $state<string | null>(null);
+	/** Reference to the original options object for setOptions() merging. */
+	let initialOptions: FileDiffOptions<ThreadMeta> | null = null;
 
-	// Mutable container so the hunkSeparators closure always reads fresh state.
-	const hunkState = { accepted: new Set<number>(), rejected: new Set<number>() };
+	// Note: $effect blocks that guard on `!instance` or `!initialOptions` rely on
+	// Svelte 5's ordering guarantee that onMount runs before $effects first execute.
+	// This is intentional — do not make instance $state (it would deep-proxy a large object).
 
 	function captureEl(el: HTMLDivElement) {
 		wrapperEl = el;
@@ -179,20 +150,97 @@
 		};
 	}
 
+	// ── Shadow DOM helpers ────────────────────────────────────────────────────
+
+	/** Walk children looking for an element with a shadowRoot. */
+	function findShadowHost(container: HTMLElement): HTMLElement | null {
+		for (const child of container.children) {
+			if (child instanceof HTMLElement && child.shadowRoot) return child;
+		}
+		for (const child of container.children) {
+			if (child instanceof HTMLElement) {
+				for (const grandchild of child.children) {
+					if (grandchild instanceof HTMLElement && grandchild.shadowRoot) return grandchild;
+				}
+			}
+		}
+		return null;
+	}
+
+	function getShadowRoot(): ShadowRoot | null {
+		if (!wrapperEl) return null;
+		const host = findShadowHost(wrapperEl);
+		return host?.shadowRoot ?? null;
+	}
+
 	// ── Reactive updates ──────────────────────────────────────────────────────
-	// Unified effect for annotation + hunk decision changes.  Updating
-	// `hunkState` ensures the `hunkSeparators` closure sees the latest
-	// accepted/rejected sets on the next render.
+	// Re-render when annotations change.
 	$effect(() => {
 		if (!instance) return;
 		const currentAnnotations = annotations;
 
-		// Refresh the mutable container so the separator closure reads fresh data.
-		hunkState.accepted = acceptedHunks;
-		hunkState.rejected = rejectedHunks;
-
-		// forceRender ensures hunkSeparators are regenerated with new state.
 		instance.render({ lineAnnotations: currentAnnotations, forceRender: true });
+	});
+
+	// ── Line cursor highlight (diff-line mode) ────────────────────────────────
+	$effect(() => {
+		if (!instance || !initialOptions) return;
+		const panel = getActivePanel();
+		const lineIdx = getCursorLineIndex();
+
+		if (panel === 'diff-line') {
+			const css = `[data-line-index="${lineIdx}"] { background-color: rgba(59, 130, 246, 0.10) !important; outline: 1px solid rgba(59, 130, 246, 0.25); outline-offset: -1px; }`;
+			instance.setOptions({ ...initialOptions, unsafeCSS: css });
+		} else if (panel !== 'diff-visual') {
+			// Clear highlight when not in line/visual mode
+			// (visual mode uses setSelectedLines instead)
+			instance.setOptions({ ...initialOptions, unsafeCSS: '' });
+		}
+	});
+
+	// ── Scroll active line into view ──────────────────────────────────────────
+	$effect(() => {
+		if (!isInLineCursorMode()) return;
+		const lineIdx = getCursorLineIndex();
+
+		requestAnimationFrame(() => {
+			const shadowRoot = getShadowRoot();
+			if (!shadowRoot) return;
+			const lineEl = shadowRoot.querySelector<HTMLElement>(`[data-line-index="${lineIdx}"]`);
+			if (lineEl) {
+				lineEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+			}
+		});
+	});
+
+	// ── Visual line selection (diff-visual mode) ──────────────────────────────
+	$effect(() => {
+		if (!instance) return;
+		const panel = getActivePanel();
+
+		if (panel === 'diff-visual') {
+			const cursor = getCursorLineIndex();
+			const anchor = getAnchorLineIndex();
+			if (anchor === null) return;
+
+			const start = Math.min(anchor, cursor);
+			const end = Math.max(anchor, cursor);
+			const side = getCursorSide();
+
+			// With exactOptionalPropertyTypes, omit side entirely when null
+			const range = side !== null
+				? { start, end, side, endSide: side }
+				: { start, end };
+
+			instance.setSelectedLines(range);
+			// Clear unsafeCSS line highlight — selection replaces it
+			if (initialOptions) {
+				instance.setOptions({ ...initialOptions, unsafeCSS: '' });
+			}
+		} else {
+			// Clear selection when leaving visual mode
+			instance.setSelectedLines(null);
+		}
 	});
 
 	// ── Instance lifecycle ────────────────────────────────────────────────────
@@ -214,133 +262,15 @@
 				enableGutterUtility: true,
 				enableLineSelection: true,
 
-				// ── Hunk separators with accept/reject buttons ─────────────────
+				// ── Hunk separators: minimal thin line ────────────────────────
 				// Reads from `hunkState` (mutated by the $effect) so the closure
 				// always reflects the latest accepted/rejected decisions.
 				hunkSeparators(hunk: HunkData, _inst) {
 					const frag = document.createDocumentFragment();
-					const isAccepted = hunkState.accepted.has(hunk.hunkIndex);
-					const isRejected = hunkState.rejected.has(hunk.hunkIndex);
-					const hasDecision = isAccepted || isRejected;
 
 					const row = document.createElement('div');
 					row.dataset.hunkIndex = String(hunk.hunkIndex);
-					row.style.cssText = [
-						'display:flex',
-						'align-items:center',
-						'padding:0 10px',
-						'min-height:28px',
-						'gap:6px',
-						'font-size:11px',
-						'color:var(--color-text-muted,#888)',
-						'font-family:var(--font-mono,monospace)',
-						'border-top:1px solid var(--color-border-subtle,#2a2a32)',
-						'border-bottom:1px solid var(--color-border-subtle,#2a2a32)',
-						isAccepted
-							? 'background:rgba(34,197,94,0.06)'
-							: isRejected
-								? 'background:rgba(239,68,68,0.06)'
-								: 'background:var(--color-bg-secondary,#13131a)',
-					].join(';');
-
-					const label = document.createElement('span');
-					label.textContent = `@@ hunk ${hunk.hunkIndex + 1}`;
-					label.style.cssText = 'flex:1;';
-					row.appendChild(label);
-
-					if (hasDecision) {
-						// ── Decided state: status badge + undo ──────────────────
-						const badge = document.createElement('span');
-						badge.textContent = isAccepted ? '✓ Accepted' : '✕ Rejected';
-						const badgeColor = isAccepted ? '#22c55e' : '#ef4444';
-						badge.style.cssText = [
-							'font-size:10px',
-							'font-weight:600',
-							`color:${badgeColor}`,
-						].join(';');
-						row.appendChild(badge);
-
-						const undoBtn = document.createElement('button');
-						undoBtn.textContent = 'Undo';
-						undoBtn.title = `Undo decision for hunk ${hunk.hunkIndex + 1}`;
-						undoBtn.style.cssText = [
-							'font-size:10px',
-							'font-weight:500',
-							'border:1px solid var(--color-border-subtle,#2a2a32)',
-							'background:transparent',
-							'color:var(--color-text-muted,#888)',
-							'border-radius:3px',
-							'padding:1px 7px',
-							'cursor:pointer',
-							'transition:background-color 80ms,color 80ms',
-						].join(';');
-						undoBtn.addEventListener('mouseenter', () => {
-							undoBtn.style.background = 'rgba(255,255,255,0.06)';
-							undoBtn.style.color = 'var(--color-text-secondary,#aaa)';
-						});
-						undoBtn.addEventListener('mouseleave', () => {
-							undoBtn.style.background = 'transparent';
-							undoBtn.style.color = 'var(--color-text-muted,#888)';
-						});
-						undoBtn.addEventListener('click', (e) => {
-							e.stopPropagation();
-							onHunkUndo?.(file.path, hunk.hunkIndex);
-						});
-						row.appendChild(undoBtn);
-					} else {
-						// ── Undecided: accept / reject buttons ──────────────────
-						const acceptBtn = document.createElement('button');
-						acceptBtn.textContent = '✓ Accept';
-						acceptBtn.title = `Accept hunk ${hunk.hunkIndex + 1}`;
-						acceptBtn.style.cssText = [
-							'font-size:10px',
-							'font-weight:500',
-							'border:1px solid rgba(34,197,94,0.3)',
-							'background:rgba(34,197,94,0.08)',
-							'color:#22c55e',
-							'border-radius:3px',
-							'padding:1px 7px',
-							'cursor:pointer',
-							'transition:background-color 80ms',
-						].join(';');
-						acceptBtn.addEventListener('mouseenter', () => {
-							acceptBtn.style.background = 'rgba(34,197,94,0.18)';
-						});
-						acceptBtn.addEventListener('mouseleave', () => {
-							acceptBtn.style.background = 'rgba(34,197,94,0.08)';
-						});
-						acceptBtn.addEventListener('click', (e) => {
-							e.stopPropagation();
-							onHunkAccept?.(file.path, hunk.hunkIndex);
-						});
-						row.appendChild(acceptBtn);
-
-						const rejectBtn = document.createElement('button');
-						rejectBtn.textContent = '✕ Reject';
-						rejectBtn.title = `Reject hunk ${hunk.hunkIndex + 1}`;
-						rejectBtn.style.cssText = [
-							'font-size:10px',
-							'font-weight:500',
-							'border:1px solid rgba(239,68,68,0.3)',
-							'background:rgba(239,68,68,0.08)',
-							'color:#ef4444',
-							'border-radius:3px',
-							'padding:1px 7px',
-							'cursor:pointer',
-							'transition:background-color 80ms',
-						].join(';');
-						rejectBtn.addEventListener('mouseenter', () => {
-							rejectBtn.style.background = 'rgba(239,68,68,0.18)';
-						});
-						rejectBtn.addEventListener('mouseleave', () => {
-							rejectBtn.style.background = 'rgba(239,68,68,0.08)';
-						});
-						rejectBtn.addEventListener('click', (e) => {
-							e.stopPropagation();
-							onHunkReject?.(file.path, hunk.hunkIndex);
-						});
-						row.appendChild(rejectBtn);
-					}
+					row.style.cssText = 'height:2px;width:100%;background:var(--color-border-subtle,#2a2a32)';
 
 					frag.appendChild(row);
 					return frag;
@@ -437,20 +367,30 @@
 						const messages = threadMessages[meta.threadId] ?? [];
 						if (!thread) return host;
 
-						mountInto(host, AnnotationThread, {
-							thread,
-							messages,
-							onReply: () => {
-								onAnnotationToggle?.(meta.threadId);
-							},
-							onResolve: () => {
-								onCommentResolve?.(meta.threadId);
-							},
-							onCollapse: () => {
-								onAnnotationToggle?.(meta.threadId);
-							},
+					mountInto(host, AnnotationThread, {
+						thread,
+						messages,
+						onReply: () => {
+							onReplyToggle?.(meta.threadId);
+						},
+						onResolve: () => {
+							onCommentResolve?.(meta.threadId);
+						},
+						onReopen: () => {
+							onCommentReopen?.(meta.threadId);
+						},
+						onCollapse: () => {
+							onAnnotationToggle?.(meta.threadId);
+						},
 							onApplySuggestion: (suggestion: string) =>
-								onApplySuggestion?.(meta.threadId, suggestion)
+								onApplySuggestion?.(meta.threadId, suggestion),
+							isReplying: meta.isReplying,
+							onReplySubmit: (body: string) => {
+								onReplySubmit?.(meta.threadId, body);
+							},
+							onReplyDismiss: () => {
+								onReplyToggle?.(meta.threadId);
+							}
 						});
 					} else {
 						const dot = document.createElement('span');
@@ -487,14 +427,18 @@
 			};
 
 			instance = new FileDiff<ThreadMeta>(options, workerManager);
+			// Store reference for setOptions() merging
+			initialOptions = options;
 
 			// Parse the git patch string directly — this preserves the exact
 			// additions/deletions counts from GitHub's diff, so the library's
 			// header stats match the file tree without any overrides.
 			const patchHeader = [
 				`diff --git a/${file.oldPath ?? file.path} b/${file.path}`,
-				`--- a/${file.oldPath ?? file.path}`,
-				`+++ b/${file.path}`,
+				...(file.isNew ? ['new file mode 100644'] : []),
+				...(file.isDeleted ? ['deleted file mode 100644'] : []),
+				`--- ${file.isNew ? '/dev/null' : `a/${file.oldPath ?? file.path}`}`,
+				`+++ ${file.isDeleted ? '/dev/null' : `b/${file.path}`}`,
 			].join('\n');
 			const fullPatch = file.patch
 				? `${patchHeader}\n${file.patch}`
@@ -512,6 +456,12 @@
 				lineAnnotations: annotations,
 				forceRender: true
 			});
+
+			// Set total line count for keyboard cursor navigation
+			if (file.patch) {
+				setTotalLineCount(countPatchLines(file.patch));
+			}
+
 		} catch (e) {
 			console.error('[DiffViewerInner] Render error:', e);
 			error = e instanceof Error ? e.message : String(e);
@@ -599,4 +549,5 @@
 		flex-shrink: 0;
 		background-color: var(--color-border);
 	}
+
 </style>

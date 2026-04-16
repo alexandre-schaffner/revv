@@ -12,6 +12,7 @@ import { prRoutes } from './routes/prs';
 import { reviewRoutes } from './routes/reviews';
 import { threadRoutes } from './routes/threads';
 import { settingsRoutes } from './routes/settings';
+import { signOutRoute } from './routes/sign-out';
 import { wsRoute } from './routes/ws';
 
 const app = new Elysia()
@@ -20,7 +21,7 @@ const app = new Elysia()
 			origin: /localhost/,
 			credentials: true,
 			allowedHeaders: ['Content-Type', 'Authorization'],
-			methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+			methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 		})
 	)
 	.mount(auth.handler)
@@ -34,6 +35,7 @@ const app = new Elysia()
 	.use(reviewRoutes)
 	.use(threadRoutes)
 	.use(settingsRoutes)
+	.use(signOutRoute)
 	.use(wsRoute)
 	.get('/api/health', () => ({
 		status: 'ok' as const,

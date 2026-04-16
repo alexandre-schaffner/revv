@@ -10,7 +10,7 @@
 	import { requestSync } from '$lib/stores/ws.svelte';
 	import { handleKey as handleNavKey, clearFocus, setFocusedId } from '$lib/stores/sidebar-nav.svelte';
 	import { getPaletteOpen } from '$lib/stores/shortcuts.svelte';
-	import { getActivePanel, enterDiffMode } from '$lib/stores/focus-mode.svelte';
+	import { getActivePanel, enterScrollMode } from '$lib/stores/focus-mode.svelte';
 	import SearchFilter from '$lib/components/sidebar/SearchFilter.svelte';
 	import RepoGroup from '$lib/components/sidebar/RepoGroup.svelte';
 	import AddRepoDialog from '$lib/components/sidebar/AddRepoDialog.svelte';
@@ -42,11 +42,11 @@
 		// Only process sidebar nav keys when the sidebar panel is active
 		if (getActivePanel() !== 'sidebar') return;
 
-		// 'e', 'i', or 'v' enters diff/code viewer mode (vim-inspired)
+		// 'v' enters diff scroll mode (viewport scrolling with j/k/d/u/G/gg)
 		// Note: Space toggle is handled centrally in ReviewLayout to avoid double-fire.
-		if (e.key === 'e' || e.key === 'i' || e.key === 'v') {
+		if (e.key === 'v') {
 			e.preventDefault();
-			enterDiffMode();
+			enterScrollMode();
 			return;
 		}
 
@@ -143,7 +143,7 @@
 			<button
 				class="settings-btn"
 				class:settings-btn--active={page.url.pathname === '/settings'}
-				onclick={() => goto('/settings')}
+				onclick={() => goto(page.url.pathname === '/settings' ? '/' : '/settings')}
 			>
 				<Settings size={14} />
 				Settings

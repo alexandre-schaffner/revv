@@ -1,24 +1,28 @@
 <script lang="ts">
 	import { tick } from 'svelte';
+	import type { FocusPanel } from '$lib/stores/focus-mode.svelte';
 
-	type Tab = 'walkthrough' | 'diff';
+	type Tab = 'walkthrough' | 'diff' | 'request-changes';
 
 	interface Props {
 		activeTab: Tab;
 		onTabChange: (tab: Tab) => void;
+		mode?: FocusPanel;
 	}
 
-	let { activeTab, onTabChange }: Props = $props();
+	let { activeTab, onTabChange, mode = 'sidebar' }: Props = $props();
 
 	const tabs: { id: Tab; label: string }[] = [
 		{ id: 'walkthrough', label: 'Walkthrough' },
-		{ id: 'diff', label: 'Diff' }
+		{ id: 'diff', label: 'Diff' },
+		{ id: 'request-changes', label: 'Request Changes' },
 	];
 
 	let containerEl: HTMLDivElement;
 	let tabEls: Record<Tab, HTMLButtonElement | null> = $state({
 		walkthrough: null,
-		diff: null
+		diff: null,
+		'request-changes': null,
 	});
 
 	let indicatorStyle = $state('');
@@ -42,23 +46,54 @@
 	});
 </script>
 
-<div class="tabs-container" bind:this={containerEl}>
-	<!-- Sliding indicator -->
-	<span class="tab-indicator" style={indicatorStyle} aria-hidden="true"></span>
+<div class="tabs-wrapper">
+	<div class="tabs-container" bind:this={containerEl}>
+		<!-- Sliding indicator -->
+		<span class="tab-indicator" style={indicatorStyle} aria-hidden="true"></span>
 
-	{#each tabs as tab}
-		<button
-			class="tab-btn"
-			class:tab-active={activeTab === tab.id}
-			bind:this={tabEls[tab.id]}
-			onclick={() => onTabChange(tab.id)}
-		>
-			{tab.label}
-		</button>
-	{/each}
+		{#each tabs as tab}
+			<button
+				class="tab-btn"
+				class:tab-active={activeTab === tab.id}
+				bind:this={tabEls[tab.id]}
+				onclick={() => onTabChange(tab.id)}
+			>
+				{tab.label}
+			</button>
+		{/each}
+	</div>
+
+	<span
+		class="mode-dot"
+		class:mode-dot--scroll={mode === 'diff-scroll' || mode === 'diff-line' || mode === 'diff-visual'}
+		aria-hidden="true"
+	></span>
 </div>
 
 <style>
+	.tabs-wrapper {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+
+	.mode-dot {
+		width: 6px;
+		height: 6px;
+		border-radius: 50%;
+		background: transparent;
+		opacity: 0;
+		transition:
+			opacity var(--duration-snap),
+			background-color var(--duration-snap);
+		flex-shrink: 0;
+	}
+
+	.mode-dot--scroll {
+		background: var(--color-accent);
+		opacity: 1;
+	}
+
 	.tabs-container {
 		position: relative;
 		display: flex;

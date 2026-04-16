@@ -1,16 +1,21 @@
 <script lang="ts">
 	import type { CommentThread, ThreadMessage } from '$lib/types/review';
+	import AnnotationCommentInput from './AnnotationCommentInput.svelte';
 
 	interface Props {
 		thread: CommentThread;
 		messages: ThreadMessage[];
 		onReply?: () => void;
 		onResolve?: () => void;
+		onReopen?: () => void;
 		onCollapse?: () => void;
 		onApplySuggestion?: (suggestion: string) => void;
+		isReplying?: boolean;
+		onReplySubmit?: (body: string) => void;
+		onReplyDismiss?: () => void;
 	}
 
-	let { thread, messages, onReply, onResolve, onCollapse, onApplySuggestion }: Props = $props();
+	let { thread, messages, onReply, onResolve, onReopen, onCollapse, onApplySuggestion, isReplying = false, onReplySubmit, onReplyDismiss }: Props = $props();
 
 	const isResolved = $derived(thread.status === 'resolved' || thread.status === 'wont_fix');
 	const isPending = $derived(
@@ -86,29 +91,32 @@
 		</div>
 	{/each}
 
+	{#if isReplying && !isResolved}
+		<AnnotationCommentInput
+			filePath=""
+			lineNo={0}
+			onSubmit={(body) => onReplySubmit?.(body)}
+			onDismiss={() => onReplyDismiss?.()}
+		/>
+	{/if}
+
 	<div class="thread-footer">
-		{#if !isResolved}
-			{#if onReply}
-				<button class="footer-btn footer-btn--reply" onclick={onReply}>
-					<svg
-						width="11"
-						height="11"
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						stroke-width="2"
-					>
-						<polyline points="9 17 4 12 9 7" />
-						<path d="M20 18v-2a4 4 0 0 0-4-4H4" />
-					</svg>
-					Reply
-				</button>
-			{/if}
-			{#if onResolve}
-				<button class="footer-btn footer-btn--resolve" onclick={onResolve}>Resolve</button>
-			{/if}
-		{:else}
-			<span class="resolved-label">Resolved</span>
+		{#if !isResolved && onReply}
+			<button class="footer-btn footer-btn--reply" class:footer-btn--reply-active={isReplying} onclick={onReply}>
+				<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+					<polyline points="9 17 4 12 9 7" />
+					<path d="M20 18v-2a4 4 0 0 0-4-4H4" />
+				</svg>
+				{isReplying ? 'Cancel' : 'Reply'}
+			</button>
+		{/if}
+		{#if isResolved ? onReopen : onResolve}
+			<button
+				class="footer-btn"
+				class:footer-btn--resolve={!isResolved}
+				class:footer-btn--reopen={isResolved}
+				onclick={isResolved ? onReopen : onResolve}
+			>{isResolved ? 'Unresolve' : 'Resolve'}</button>
 		{/if}
 		{#if onCollapse}
 			<button
@@ -293,11 +301,19 @@
 		margin-left: auto;
 	}
 
-	.resolved-label {
-		font-size: 11px;
-		color: var(--color-text-muted, #888);
+	.footer-btn--reply-active {
+		color: var(--color-text-secondary, #c4c4c8);
 		background: var(--color-bg-tertiary, #2a2a32);
-		border-radius: 4px;
-		padding: 2px 8px;
+	}
+
+	.footer-btn--reopen {
+		color: var(--color-text-muted, #888);
+		border: 1px solid var(--color-border-subtle, #2a2a32);
+	}
+
+	.footer-btn--reopen:hover {
+		color: var(--color-text-secondary, #c4c4c8);
+		background: var(--color-bg-tertiary, #2a2a32);
+		border-color: var(--color-border, #3a3a42);
 	}
 </style>

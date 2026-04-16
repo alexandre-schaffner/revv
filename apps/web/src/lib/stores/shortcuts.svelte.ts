@@ -94,6 +94,14 @@ function handleKeydown(e: KeyboardEvent): void {
 		setActiveTab('diff');
 		return;
 	}
+
+	// Cmd+3 → Request Changes tab
+	if (e.key === '3') {
+		e.preventDefault();
+		e.stopPropagation();
+		setActiveTab('request-changes');
+		return;
+	}
 }
 
 /** Attach global keyboard listener. Returns cleanup function. */

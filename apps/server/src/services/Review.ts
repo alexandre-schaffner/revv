@@ -299,32 +299,12 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 			const isResolving = status === 'resolved' || status === 'wont_fix';
 			const isReopening = status === 'open' || status === 'pending_coder' || status === 'pending_reviewer';
 
-			const updates: Partial<typeof commentThreads.$inferInsert> = { status };
-			if (isResolving) {
-				updates.resolvedAt = new Date().toISOString();
-			} else if (isReopening) {
-				updates.resolvedAt = undefined; // Drizzle treats undefined as "don't set" — use null
-			}
-
-			// For clearing resolvedAt on reopen, we need to set it explicitly to null
 			yield* Effect.try({
 				try: () => {
-					if (isReopening) {
-						db.update(commentThreads)
-							.set({ status, resolvedAt: null })
-							.where(eq(commentThreads.id, threadId))
-							.run();
-					} else if (isResolving) {
-						db.update(commentThreads)
-							.set({ status, resolvedAt: new Date().toISOString() })
-							.where(eq(commentThreads.id, threadId))
-							.run();
-					} else {
-						db.update(commentThreads)
-							.set({ status })
-							.where(eq(commentThreads.id, threadId))
-							.run();
-					}
+					const setObj: Partial<typeof commentThreads.$inferInsert> = { status };
+					if (isResolving) setObj.resolvedAt = new Date().toISOString();
+					else if (isReopening) setObj.resolvedAt = null;
+					db.update(commentThreads).set(setObj).where(eq(commentThreads.id, threadId)).run();
 				},
 				catch: (e) =>
 					new ReviewError({ message: `Failed to update thread: ${String(e)}` }),
