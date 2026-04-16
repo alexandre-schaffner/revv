@@ -2,15 +2,20 @@
 set -euo pipefail
 
 # ──────────────────────────────────────────────────────────────
-# Rev — Developer Environment Installer
-# Sets up everything needed to develop and build Rev from source.
-# Usage:  ./install.sh          (interactive, prompts before installs)
-#         ./install.sh --yes    (non-interactive, auto-approve)
+# Rev — Developer Environment Setup
+# Makes `bun run dev:desktop` work flawlessly from a clean machine.
+#
+# Usage:
+#   ./install.sh              Interactive mode (prompts before actions)
+#   ./install.sh --yes        Non-interactive, auto-approve all installs
+#   ./install.sh --skip-env   Skip GitHub OAuth credential setup
+#   ./install.sh --ci         --yes + --skip-env (for CI pipelines)
 # ──────────────────────────────────────────────────────────────
 
 REQUIRED_BUN_MAJOR=1
 REQUIRED_BUN_MINOR=3
 AUTO_YES=false
+SKIP_ENV=false
 
 # ── Colors & helpers ──────────────────────────────────────────
 
@@ -23,28 +28,55 @@ BOLD='\033[1m'
 DIM='\033[2m'
 RESET='\033[0m'
 
+# Track what passed/failed for the summary
+PASSED=()
+FAILED=()
+WARNED=()
+
 info()    { printf "${BLUE}[info]${RESET}  %s\n" "$*"; }
 success() { printf "${GREEN}[  ok]${RESET}  %s\n" "$*"; }
 warn()    { printf "${YELLOW}[warn]${RESET}  %s\n" "$*"; }
-fail()    { printf "${RED}[fail]${RESET}  %s\n" "$*"; exit 1; }
+fail()    { printf "${RED}[FAIL]${RESET}  %s\n" "$*" >&2; exit 1; }
 step()    { printf "\n${BOLD}${CYAN}▸ %s${RESET}\n" "$*"; }
+
+pass()  { PASSED+=("$1");  success "$1"; }
+miss()  { FAILED+=("$1");  warn "MISSING: $1"; }
+caution() { WARNED+=("$1"); warn "$1"; }
 
 confirm() {
   if $AUTO_YES; then return 0; fi
   printf "${YELLOW}  → %s [Y/n] ${RESET}" "$1"
-  read -r reply
+  read -r reply </dev/tty
   [[ -z "$reply" || "$reply" =~ ^[Yy] ]]
+}
+
+prompt_value() {
+  # Usage: prompt_value "Label" "ENV_VAR_NAME"
+  local label="$1" varname="$2" value=""
+  printf "${YELLOW}  → Enter %s: ${RESET}" "$label"
+  read -r value </dev/tty
+  echo "$value"
+}
+
+check_command() {
+  command -v "$1" &>/dev/null
 }
 
 # ── Parse args ────────────────────────────────────────────────
 
 for arg in "$@"; do
   case "$arg" in
-    --yes|-y) AUTO_YES=true ;;
+    --yes|-y)       AUTO_YES=true ;;
+    --skip-env)     SKIP_ENV=true ;;
+    --ci)           AUTO_YES=true; SKIP_ENV=true ;;
     --help|-h)
-      echo "Usage: ./install.sh [--yes|-y] [--help|-h]"
-      echo "  --yes, -y   Non-interactive mode (auto-approve all installs)"
-      echo "  --help, -h  Show this help message"
+      echo "Usage: ./install.sh [options]"
+      echo ""
+      echo "Options:"
+      echo "  --yes, -y     Non-interactive mode (auto-approve all installs)"
+      echo "  --skip-env    Skip GitHub OAuth credential setup"
+      echo "  --ci          Alias for --yes --skip-env (for CI pipelines)"
+      echo "  --help, -h    Show this help message"
       exit 0
       ;;
   esac
@@ -59,104 +91,132 @@ printf "  │       AI-Powered Code Review         │\n"
 printf "  └─────────────────────────────────────┘\n"
 printf "${RESET}\n"
 
-# ── Detect platform ───────────────────────────────────────────
+# ── Move to project root ──────────────────────────────────────
+
+cd "$(dirname "$0")"
+PROJECT_ROOT="$(pwd)"
+info "Project root: $PROJECT_ROOT"
+
+# ── 1. Detect platform ────────────────────────────────────────
+
+step "Detecting platform"
 
 OS="$(uname -s)"
 ARCH="$(uname -m)"
-info "Platform: $OS $ARCH"
+info "Platform: $OS / $ARCH"
 
 case "$OS" in
   Darwin) PLATFORM="macos" ;;
   Linux)  PLATFORM="linux" ;;
-  *)      fail "Unsupported operating system: $OS. Use install.ps1 for Windows." ;;
+  *)      fail "Unsupported OS: $OS. Use install.ps1 for Windows." ;;
 esac
 
-# ── 1. System dependencies ───────────────────────────────────
+# Determine the expected Rust target triple
+if [[ "$PLATFORM" == "macos" ]]; then
+  if [[ "$ARCH" == "arm64" ]]; then
+    RUST_TARGET="aarch64-apple-darwin"
+  else
+    RUST_TARGET="x86_64-apple-darwin"
+  fi
+elif [[ "$PLATFORM" == "linux" ]]; then
+  if [[ "$ARCH" == "aarch64" ]]; then
+    RUST_TARGET="aarch64-unknown-linux-gnu"
+  else
+    RUST_TARGET="x86_64-unknown-linux-gnu"
+  fi
+fi
+pass "Platform: $OS $ARCH → target $RUST_TARGET"
 
-step "Checking system dependencies"
+# ── 2. Git ────────────────────────────────────────────────────
 
-check_command() {
-  command -v "$1" &>/dev/null
-}
+step "Checking git"
 
-# Git
 if check_command git; then
-  success "git $(git --version | awk '{print $3}')"
+  pass "git $(git --version | awk '{print $3}')"
 else
-  fail "git is not installed. Please install git first: https://git-scm.com"
+  fail "git is not installed. Install it from https://git-scm.com and re-run."
 fi
 
-# Platform-specific build tools
+# ── 3. System build dependencies ─────────────────────────────
+
+step "Checking system build dependencies"
+
 if [[ "$PLATFORM" == "macos" ]]; then
   if xcode-select -p &>/dev/null; then
-    success "Xcode Command Line Tools installed"
+    pass "Xcode Command Line Tools"
   else
     warn "Xcode Command Line Tools not found"
-    if confirm "Install Xcode Command Line Tools?"; then
-      xcode-select --install
-      info "Waiting for Xcode CLT installation to complete..."
-      info "Please complete the installation dialog, then re-run this script."
-      exit 0
+    if confirm "Install Xcode Command Line Tools now?"; then
+      xcode-select --install &>/dev/null || true
+      printf "\n"
+      info "A dialog has opened to install Xcode CLT."
+      info "Please complete the installation, then press Enter to continue."
+      read -r _ </dev/tty
+      if xcode-select -p &>/dev/null; then
+        pass "Xcode Command Line Tools"
+      else
+        fail "Xcode CLT still not found. Please install manually and re-run."
+      fi
     else
-      fail "Xcode Command Line Tools are required for building Tauri on macOS"
+      fail "Xcode Command Line Tools are required to build Tauri on macOS."
     fi
   fi
+
 elif [[ "$PLATFORM" == "linux" ]]; then
   MISSING_PKGS=()
 
-  # Check for essential Tauri Linux dependencies
-  for cmd in pkg-config; do
-    if ! check_command "$cmd"; then
-      MISSING_PKGS+=("$cmd")
-    fi
-  done
+  if ! check_command pkg-config; then
+    MISSING_PKGS+=("pkg-config")
+  fi
 
-  # Check for libraries via pkg-config
-  for lib in webkit2gtk-4.1 gtk+-3.0 libssl openssl; do
-    if ! pkg-config --exists "$lib" 2>/dev/null; then
-      MISSING_PKGS+=("$lib")
-    fi
-  done
+  # Check for Tauri-required libraries (only if pkg-config is available)
+  if check_command pkg-config; then
+    REQUIRED_LIBS=("webkit2gtk-4.1" "gtk+-3.0" "openssl")
+    for lib in "${REQUIRED_LIBS[@]}"; do
+      if ! pkg-config --exists "$lib" 2>/dev/null; then
+        MISSING_PKGS+=("$lib")
+      fi
+    done
+  fi
 
-  if [[ ${#MISSING_PKGS[@]} -gt 0 ]]; then
+  if [[ ${#MISSING_PKGS[@]} -eq 0 ]]; then
+    pass "Linux system libraries (webkit2gtk, gtk3, openssl)"
+  else
     warn "Missing system packages: ${MISSING_PKGS[*]}"
-    info "On Ubuntu/Debian, install with:"
-    echo "  sudo apt update && sudo apt install -y \\"
-    echo "    build-essential curl wget file \\"
-    echo "    libssl-dev libgtk-3-dev libwebkit2gtk-4.1-dev \\"
-    echo "    librsvg2-dev patchelf libayatana-appindicator3-dev"
+    info "Required packages for Tauri on Ubuntu/Debian:"
     echo ""
-    info "On Fedora:"
-    echo "  sudo dnf install -y \\"
-    echo "    openssl-devel gtk3-devel webkit2gtk4.1-devel \\"
-    echo "    librsvg2-devel patchelf libappindicator-gtk3-devel"
+    echo "    sudo apt update && sudo apt install -y \\"
+    echo "      build-essential curl wget file \\"
+    echo "      libssl-dev libgtk-3-dev libwebkit2gtk-4.1-dev \\"
+    echo "      librsvg2-dev patchelf libayatana-appindicator3-dev"
     echo ""
-
-    if [[ "$PLATFORM" == "linux" ]] && check_command apt; then
-      if confirm "Install missing packages via apt?"; then
+    if check_command apt; then
+      if confirm "Install missing packages via apt now?"; then
         sudo apt update
         sudo apt install -y \
           build-essential curl wget file \
           libssl-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
           librsvg2-dev patchelf libayatana-appindicator3-dev
-        success "System packages installed"
+        pass "Linux system packages"
       else
-        warn "Skipping — build may fail without these packages"
+        caution "Skipped system packages — Tauri build may fail"
       fi
+    else
+      info "On Fedora/RHEL:"
+      echo "    sudo dnf install -y openssl-devel gtk3-devel webkit2gtk4.1-devel \\"
+      echo "      librsvg2-devel patchelf libappindicator-gtk3-devel"
+      caution "Install the packages above manually, then re-run this script"
     fi
-  else
-    success "Linux system dependencies look good"
   fi
 fi
 
-# ── 2. Bun ────────────────────────────────────────────────────
+# ── 4. Bun ────────────────────────────────────────────────────
 
 step "Checking Bun runtime"
 
 install_bun() {
   info "Installing Bun..."
   curl -fsSL https://bun.sh/install | bash
-  # Source the new PATH
   export BUN_INSTALL="$HOME/.bun"
   export PATH="$BUN_INSTALL/bin:$PATH"
 }
@@ -168,142 +228,254 @@ if check_command bun; then
 
   if [[ "$BUN_MAJOR" -gt "$REQUIRED_BUN_MAJOR" ]] || \
      [[ "$BUN_MAJOR" -eq "$REQUIRED_BUN_MAJOR" && "$BUN_MINOR" -ge "$REQUIRED_BUN_MINOR" ]]; then
-    success "bun $BUN_VERSION (>= $REQUIRED_BUN_MAJOR.$REQUIRED_BUN_MINOR required)"
+    pass "bun $BUN_VERSION"
   else
-    warn "bun $BUN_VERSION found but >= $REQUIRED_BUN_MAJOR.$REQUIRED_BUN_MINOR is required"
+    warn "bun $BUN_VERSION is older than required $REQUIRED_BUN_MAJOR.$REQUIRED_BUN_MINOR"
     if confirm "Upgrade Bun?"; then
       install_bun
-      success "bun $(bun --version)"
+      pass "bun $(bun --version)"
     else
-      warn "Continuing with older Bun — build may fail"
+      caution "Older Bun detected — build may fail"
     fi
   fi
 else
-  warn "Bun is not installed"
+  warn "Bun not found"
   if confirm "Install Bun? (https://bun.sh)"; then
     install_bun
-    success "bun $(bun --version)"
+    pass "bun $(bun --version)"
   else
-    fail "Bun is required to build Rev"
+    fail "Bun is required. Install from https://bun.sh and re-run."
   fi
 fi
 
-# ── 3. Rust toolchain ────────────────────────────────────────
+# ── 5. Rust toolchain ─────────────────────────────────────────
 
 step "Checking Rust toolchain"
 
 install_rust() {
   info "Installing Rust via rustup..."
-  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
   source "$HOME/.cargo/env"
 }
 
+# Ensure cargo is in PATH even if just installed
+if [[ -f "$HOME/.cargo/env" ]]; then
+  source "$HOME/.cargo/env"
+fi
+
 if check_command rustc && check_command cargo; then
   RUST_VERSION="$(rustc --version | awk '{print $2}')"
-  success "rustc $RUST_VERSION"
-  success "cargo $(cargo --version | awk '{print $2}')"
+  pass "rustc $RUST_VERSION"
 else
   warn "Rust toolchain not found"
   if confirm "Install Rust via rustup? (https://rustup.rs)"; then
     install_rust
-    success "rustc $(rustc --version | awk '{print $2}')"
+    pass "rustc $(rustc --version | awk '{print $2}')"
   else
-    fail "Rust is required to build the Tauri desktop shell"
+    fail "Rust is required to build the Tauri desktop shell."
   fi
 fi
 
-# ── 4. Tauri CLI ──────────────────────────────────────────────
+# Verify the platform Rust target is installed
+step "Checking Rust target: $RUST_TARGET"
 
-step "Checking Tauri CLI"
-
-# Tauri CLI is a dev dependency, but we verify it's accessible
-if bun pm ls 2>/dev/null | grep -q "@tauri-apps/cli" 2>/dev/null; then
-  success "@tauri-apps/cli found in dependencies"
+if rustup target list --installed 2>/dev/null | grep -q "^$RUST_TARGET$"; then
+  pass "Rust target $RUST_TARGET"
 else
-  info "@tauri-apps/cli will be installed with dependencies"
+  warn "Rust target $RUST_TARGET is not installed"
+  if confirm "Add Rust target $RUST_TARGET?"; then
+    rustup target add "$RUST_TARGET"
+    pass "Rust target $RUST_TARGET"
+  else
+    caution "Missing Rust target — Tauri build may fail"
+  fi
 fi
 
-# ── 5. Install project dependencies ──────────────────────────
+# ── 6. Check port availability ───────────────────────────────
+
+step "Checking port availability"
+
+check_port() {
+  local port="$1" name="$2"
+  local in_use=false
+
+  if check_command lsof; then
+    lsof -iTCP:"$port" -sTCP:LISTEN -t &>/dev/null 2>&1 && in_use=true || true
+  elif check_command ss; then
+    ss -tlnp 2>/dev/null | grep -q ":$port " && in_use=true || true
+  elif check_command netstat; then
+    netstat -tlnp 2>/dev/null | grep -q ":$port " && in_use=true || true
+  else
+    info "Cannot check port $port ($name) — install lsof for port conflict detection"
+    return
+  fi
+
+  if $in_use; then
+    caution "Port $port ($name) is already in use — stop the existing process before running dev"
+  else
+    pass "Port $port ($name) is free"
+  fi
+}
+
+check_port 5173 "Vite / web frontend"
+check_port 45678 "Elysia API server"
+
+# ── 7. Install project dependencies ──────────────────────────
 
 step "Installing project dependencies"
 
-cd "$(dirname "$0")"
-PROJECT_ROOT="$(pwd)"
-info "Project root: $PROJECT_ROOT"
-
 info "Running bun install..."
 bun install
-success "All npm dependencies installed"
+pass "npm/bun dependencies"
 
-# ── 6. Verify workspace packages ─────────────────────────────
+# ── 8. Environment configuration ─────────────────────────────
 
-step "Verifying workspace structure"
+step "Environment configuration (.env)"
 
-for dir in apps/web apps/server apps/desktop packages/shared; do
-  if [[ -d "$dir" ]]; then
-    success "$dir"
+if $SKIP_ENV; then
+  info "--skip-env set, skipping .env setup"
+else
+  if [[ -f ".env" ]]; then
+    info ".env already exists"
+
+    # Check if the env file has empty values
+    CLIENT_ID_VAL="$(grep '^GITHUB_CLIENT_ID=' .env | cut -d= -f2)"
+    CLIENT_SECRET_VAL="$(grep '^GITHUB_CLIENT_SECRET=' .env | cut -d= -f2)"
+
+    if [[ -z "$CLIENT_ID_VAL" || -z "$CLIENT_SECRET_VAL" ]]; then
+      warn "GITHUB_CLIENT_ID or GITHUB_CLIENT_SECRET is empty in .env"
+      if confirm "Enter GitHub OAuth credentials now?"; then
+        if [[ -z "$CLIENT_ID_VAL" ]]; then
+          NEW_ID="$(prompt_value "GitHub Client ID" "GITHUB_CLIENT_ID")"
+          if [[ -n "$NEW_ID" ]]; then
+            NEW_ID_ESC="$(printf '%s\n' "$NEW_ID" | sed 's/[\/&]/\\&/g')"
+            sed -i.bak "s/^GITHUB_CLIENT_ID=.*/GITHUB_CLIENT_ID=$NEW_ID_ESC/" .env && rm -f .env.bak
+          fi
+        fi
+        if [[ -z "$CLIENT_SECRET_VAL" ]]; then
+          NEW_SECRET="$(prompt_value "GitHub Client Secret" "GITHUB_CLIENT_SECRET")"
+          if [[ -n "$NEW_SECRET" ]]; then
+            NEW_SECRET_ESC="$(printf '%s\n' "$NEW_SECRET" | sed 's/[\/&]/\\&/g')"
+            sed -i.bak "s/^GITHUB_CLIENT_SECRET=.*/GITHUB_CLIENT_SECRET=$NEW_SECRET_ESC/" .env && rm -f .env.bak
+          fi
+        fi
+        pass ".env credentials configured"
+      else
+        caution ".env missing credentials — GitHub OAuth login will not work"
+        info "Create a GitHub OAuth App at: https://github.com/settings/developers"
+        info "  Homepage URL:    http://localhost:5173"
+        info "  Callback URL:    http://localhost:45678/api/auth/callback/github"
+        info "Then add your credentials to .env"
+      fi
+    else
+      pass ".env credentials present"
+    fi
   else
-    fail "Missing workspace directory: $dir"
+    info ".env not found — creating from .env.example"
+    cp .env.example .env
+    success "Created .env from .env.example"
+
+    printf "\n"
+    printf "  ${BOLD}GitHub OAuth App setup${RESET}\n"
+    printf "  Rev needs a GitHub OAuth App for authentication.\n"
+    printf "  Create one at: ${CYAN}https://github.com/settings/developers${RESET}\n"
+    printf "\n"
+    printf "  Use these settings:\n"
+    printf "    ${DIM}Application name:${RESET}        Rev (local dev)\n"
+    printf "    ${DIM}Homepage URL:${RESET}            http://localhost:5173\n"
+    printf "    ${DIM}Authorization callback URL:${RESET} http://localhost:45678/api/auth/callback/github\n"
+    printf "\n"
+
+    if confirm "Enter your GitHub OAuth credentials now?"; then
+      CLIENT_ID="$(prompt_value "GitHub Client ID" "GITHUB_CLIENT_ID")"
+      CLIENT_SECRET="$(prompt_value "GitHub Client Secret" "GITHUB_CLIENT_SECRET")"
+
+      if [[ -n "$CLIENT_ID" ]]; then
+        CLIENT_ID_ESC="$(printf '%s\n' "$CLIENT_ID" | sed 's/[\/&]/\\&/g')"
+        sed -i.bak "s/^GITHUB_CLIENT_ID=.*/GITHUB_CLIENT_ID=$CLIENT_ID_ESC/" .env && rm -f .env.bak
+      fi
+      if [[ -n "$CLIENT_SECRET" ]]; then
+        CLIENT_SECRET_ESC="$(printf '%s\n' "$CLIENT_SECRET" | sed 's/[\/&]/\\&/g')"
+        sed -i.bak "s/^GITHUB_CLIENT_SECRET=.*/GITHUB_CLIENT_SECRET=$CLIENT_SECRET_ESC/" .env && rm -f .env.bak
+      fi
+      pass ".env credentials configured"
+    else
+      caution ".env created but credentials are empty — fill them in before running dev"
+      info "Edit .env and add your GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET"
+    fi
   fi
-done
-
-# ── 7. Build shared package ──────────────────────────────────
-
-step "Building shared package"
-
-info "Type-checking @rev/shared..."
-cd "$PROJECT_ROOT/packages/shared"
-if bun run typecheck 2>/dev/null; then
-  success "@rev/shared types verified"
-else
-  warn "@rev/shared typecheck had issues (may be fine for dev)"
-fi
-cd "$PROJECT_ROOT"
-
-# ── 8. Initialize database ───────────────────────────────────
-
-step "Initializing database"
-
-if [[ -f "apps/server/rev.db" ]]; then
-  info "Database already exists at apps/server/rev.db"
-  success "Database ready"
-else
-  info "Database will be created on first server start"
-  success "Database setup deferred to first run"
 fi
 
-# ── 9. Verify builds ─────────────────────────────────────────
+# ── 9. Verify Rust/Cargo workspace ───────────────────────────
 
-step "Verifying build system"
+step "Verifying Cargo workspace (dry-run check)"
 
-info "Running typecheck across all packages..."
-if bun run typecheck 2>/dev/null; then
-  success "All packages pass typecheck"
+if [[ -f "apps/desktop/Cargo.toml" ]]; then
+  info "Checking Cargo manifest (cargo metadata)..."
+  if cargo metadata --manifest-path "apps/desktop/Cargo.toml" --no-deps --quiet &>/dev/null 2>&1; then
+    pass "Cargo workspace is valid"
+  else
+    caution "Cargo metadata check failed — run 'cargo check' in apps/desktop for details"
+  fi
 else
-  warn "Typecheck had issues — this is expected during initial development"
+  caution "apps/desktop/Cargo.toml not found — skipping Rust check"
 fi
 
 # ── 10. Summary ───────────────────────────────────────────────
 
 printf "\n"
-printf "${BOLD}${GREEN}"
-printf "  ┌─────────────────────────────────────┐\n"
-printf "  │         Setup Complete!              │\n"
-printf "  └─────────────────────────────────────┘\n"
-printf "${RESET}\n"
+printf "${BOLD}${CYAN}  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}\n"
+printf "${BOLD}  Setup Summary${RESET}\n"
+printf "${BOLD}${CYAN}  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}\n\n"
 
-printf "  ${BOLD}Quick start:${RESET}\n"
-printf "    ${DIM}$${RESET} bun run dev           ${DIM}# Start all services in dev mode${RESET}\n"
-printf "    ${DIM}$${RESET} bun run dev:web       ${DIM}# Start just the frontend${RESET}\n"
-printf "    ${DIM}$${RESET} bun run dev:server    ${DIM}# Start just the backend${RESET}\n"
-printf "    ${DIM}$${RESET} bun run dev:desktop   ${DIM}# Start the Tauri desktop app${RESET}\n"
+if [[ ${#PASSED[@]} -gt 0 ]]; then
+  printf "  ${GREEN}${BOLD}Passed (${#PASSED[@]})${RESET}\n"
+  for item in "${PASSED[@]}"; do
+    printf "    ${GREEN}✓${RESET}  %s\n" "$item"
+  done
+  printf "\n"
+fi
+
+if [[ ${#WARNED[@]} -gt 0 ]]; then
+  printf "  ${YELLOW}${BOLD}Warnings (${#WARNED[@]})${RESET}\n"
+  for item in "${WARNED[@]}"; do
+    printf "    ${YELLOW}⚠${RESET}  %s\n" "$item"
+  done
+  printf "\n"
+fi
+
+if [[ ${#FAILED[@]} -gt 0 ]]; then
+  printf "  ${RED}${BOLD}Missing (${#FAILED[@]})${RESET}\n"
+  for item in "${FAILED[@]}"; do
+    printf "    ${RED}✗${RESET}  %s\n" "$item"
+  done
+  printf "\n"
+fi
+
+if [[ ${#WARNED[@]} -eq 0 && ${#FAILED[@]} -eq 0 ]]; then
+  printf "${BOLD}${GREEN}"
+  printf "  ┌─────────────────────────────────────┐\n"
+  printf "  │   ✓  Everything looks good!          │\n"
+  printf "  └─────────────────────────────────────┘\n"
+  printf "${RESET}\n"
+else
+  printf "${BOLD}${YELLOW}"
+  printf "  ┌─────────────────────────────────────┐\n"
+  printf "  │   ⚠  Setup complete with warnings   │\n"
+  printf "  └─────────────────────────────────────┘\n"
+  printf "${RESET}\n"
+  info "Address warnings above before running dev for best results."
+fi
+
 printf "\n"
-printf "  ${BOLD}Build for distribution:${RESET}\n"
-printf "    ${DIM}$${RESET} make dist             ${DIM}# Build platform installer (.dmg/.msi/.deb)${RESET}\n"
-printf "    ${DIM}$${RESET} bun run build         ${DIM}# Build all packages (no installer)${RESET}\n"
+printf "  ${BOLD}Start developing:${RESET}\n"
+printf "    ${DIM}\$${RESET} bun run dev:desktop   ${DIM}# Tauri desktop + web + server${RESET}\n"
+printf "    ${DIM}\$${RESET} bun run dev           ${DIM}# All services via Turborepo${RESET}\n"
+printf "    ${DIM}\$${RESET} bun run dev:web       ${DIM}# Web frontend only (port 5173)${RESET}\n"
+printf "    ${DIM}\$${RESET} bun run dev:server    ${DIM}# API server only (port 45678)${RESET}\n"
 printf "\n"
-printf "  ${BOLD}Architecture:${RESET}\n"
-printf "    ${DIM}Web UI${RESET}    → http://localhost:5173  ${DIM}(SvelteKit + Tailwind)${RESET}\n"
-printf "    ${DIM}API${RESET}       → http://localhost:45678 ${DIM}(Elysia + SQLite)${RESET}\n"
-printf "    ${DIM}Desktop${RESET}   → Tauri v2 native window\n"
+printf "  ${BOLD}Other useful commands:${RESET}\n"
+printf "    ${DIM}\$${RESET} make typecheck        ${DIM}# TypeScript type checking${RESET}\n"
+printf "    ${DIM}\$${RESET} make dist             ${DIM}# Build .dmg / .deb / .msi installer${RESET}\n"
+printf "    ${DIM}\$${RESET} make reset-db         ${DIM}# Delete local SQLite database${RESET}\n"
 printf "\n"
