@@ -45,13 +45,6 @@
 		{/if}
 	</div>
 
-	<!-- Center: floating pill tabs (only when viewing a PR) -->
-	{#if pr}
-		<div class="tabs-center">
-			<FloatingTabs {activeTab} onTabChange={setActiveTab} mode={getActivePanel()} />
-		</div>
-	{/if}
-
 	<!-- Right: theme toggle + panel toggle -->
 	<div class="panel-toggle-wrap">
 		<button
@@ -101,8 +94,6 @@
 		justify-content: space-between;
 		height: 100%;
 		padding: 0 16px;
-		background: var(--color-bg-secondary);
-		border-bottom: 1px solid var(--color-border);
 		position: relative;
 	}
 
@@ -122,8 +113,8 @@
 	}
 
 	.pr-title {
-		font-size: 13px;
-		font-weight: 600;
+		font-size: 16px;
+		font-weight: 700;
 		color: var(--color-text-primary);
 		white-space: nowrap;
 		overflow: hidden;
@@ -142,12 +133,6 @@
 		min-width: 0;
 		opacity: 0.6;
 		line-height: 1.3;
-	}
-
-	.tabs-center {
-		position: absolute;
-		left: 50%;
-		transform: translateX(-50%);
 	}
 
 	.panel-toggle-wrap {

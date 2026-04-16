@@ -8,6 +8,8 @@
 	import * as sync from '$lib/services/sync';
 	import { initTheme } from '$lib/stores/theme.svelte';
 	import { initShortcuts } from '$lib/stores/shortcuts.svelte';
+	import { isTauri } from '$lib/utils/platform';
+	import { TooltipProvider } from '$lib/components/ui/tooltip';
 
 	let { children } = $props();
 	let hydrated = false;
@@ -56,8 +58,9 @@
 	}
 </script>
 
-<AppShell>
-	<ErrorBanner />
-	{@render children()}
-</AppShell>
-
+<TooltipProvider>
+	<AppShell>
+		<ErrorBanner />
+		{@render children()}
+	</AppShell>
+</TooltipProvider>

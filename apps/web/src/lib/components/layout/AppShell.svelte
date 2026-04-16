@@ -4,6 +4,10 @@
 	import RightPanel from './RightPanel.svelte';
 	import BottomBar from './BottomBar.svelte';
 	import CommandPalette from './CommandPalette.svelte';
+	import FloatingTabs from './FloatingTabs.svelte';
+	import { getSelectedPr } from '$lib/stores/prs.svelte';
+	import { getActiveTab, setActiveTab, getPanelOpenRequested, consumePanelOpenRequest } from '$lib/stores/review.svelte';
+	import { getActivePanel } from '$lib/stores/focus-mode.svelte';
 	import {
 		getSidebarCollapsed,
 		toggleSidebar,
@@ -21,7 +25,6 @@
 		getPaletteMode,
 		closePalette,
 	} from '$lib/stores/shortcuts.svelte';
-	import { getPanelOpenRequested, consumePanelOpenRequest } from '$lib/stores/review.svelte';
 	import { page } from '$app/state';
 
 	let { children } = $props();
@@ -31,6 +34,8 @@
 	const paletteOpen = $derived(getPaletteOpen());
 	const paletteMode = $derived(getPaletteMode());
 	const sidebarWidth = $derived(getSidebarWidth());
+	const pr = $derived(getSelectedPr());
+	const activeTab = $derived(getActiveTab());
 
 	// Drag state — not reactive $state, just local mutable refs
 	let isDragging = $state(false);
@@ -114,6 +119,11 @@
 
 	<header class="topbar-area">
 		<TopBar {rightPanelOpen} onTogglePanel={toggleRightPanel} />
+		{#if pr}
+			<div class="tabs-float">
+				<FloatingTabs {activeTab} onTabChange={setActiveTab} mode={getActivePanel()} />
+			</div>
+		{/if}
 	</header>
 
 	<main class="main-area">
@@ -205,11 +215,25 @@
 	/* ── Other areas ── */
 	.topbar-area {
 		grid-area: topbar;
+		position: relative;
 	}
 
 	.main-area {
 		grid-area: main;
 		overflow-y: auto;
+	}
+
+	.tabs-float {
+		position: absolute;
+		top: 50%;
+		left: 50%;
+		transform: translate(-50%, -50%);
+		z-index: 20;
+		pointer-events: none;
+	}
+
+	.tabs-float :global(*) {
+		pointer-events: auto;
 	}
 
 	.bottombar-area {

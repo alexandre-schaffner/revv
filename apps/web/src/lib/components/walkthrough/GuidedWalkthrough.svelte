@@ -3,7 +3,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Separator } from '$lib/components/ui/separator';
-	import { RefreshCw, ArrowDown, Search, FileText, Brain, PenTool, CheckCircle } from '@lucide/svelte';
+	import { RefreshCw, ArrowDown, Search, FileText, Brain, PenTool, CheckCircle, AlertTriangle } from '@lucide/svelte';
 	import { Tooltip, TooltipContent, TooltipTrigger } from '$lib/components/ui/tooltip';
 	import { getDiffThemeType } from '$lib/stores/theme.svelte';
 	import {
@@ -16,9 +16,11 @@
 		getPhase,
 		getPhaseMessage,
 		getStreamStartedAt,
+		getIssues,
 		streamWalkthrough,
 		regenerate,
 	} from '$lib/stores/walkthrough.svelte';
+	import { loadSession } from '$lib/stores/review.svelte';
 	import WalkthroughMarkdownBlock from './WalkthroughMarkdownBlock.svelte';
 	import WalkthroughCodeBlock from './WalkthroughCodeBlock.svelte';
 	import WalkthroughDiffBlock from './WalkthroughDiffBlock.svelte';
@@ -39,11 +41,24 @@
 	const phaseMessage = $derived(getPhaseMessage());
 	const streamStartedAt = $derived(getStreamStartedAt());
 	const themeType = $derived(getDiffThemeType());
+	const issues = $derived(getIssues());
 
 	const riskClasses: Record<string, string> = {
 		low: 'risk-badge risk-badge--low',
 		medium: 'risk-badge risk-badge--medium',
 		high: 'risk-badge risk-badge--high',
+	};
+
+	const severityClasses: Record<string, string> = {
+		info: 'issue-badge issue-badge--info',
+		warning: 'issue-badge issue-badge--warning',
+		critical: 'issue-badge issue-badge--critical',
+	};
+
+	const severityLabels: Record<string, string> = {
+		info: 'Info',
+		warning: 'Warning',
+		critical: 'Critical',
 	};
 
 	// ── Elapsed time ────────────────────────────────────────────────────
@@ -150,6 +165,7 @@
 	});
 
 	onMount(() => {
+		loadSession(prId);
 		streamWalkthrough(prId);
 	});
 
@@ -328,6 +344,35 @@
 			</div>
 
 			<Separator />
+
+			<!-- Issues -->
+			{#if issues.length > 0}
+				<div class="issues-section">
+					<div class="issues-header">
+						<AlertTriangle size={13} />
+						<span>{issues.length} issue{issues.length !== 1 ? 's' : ''} flagged</span>
+					</div>
+					<div class="issues-list">
+						{#each issues as issue (issue.id)}
+							<div class="issue-item issue-item--{issue.severity}" style="animation: fadeIn 0.2s ease-in">
+								<div class="issue-top">
+									<span class={severityClasses[issue.severity] ?? 'issue-badge issue-badge--info'}>
+										{severityLabels[issue.severity] ?? issue.severity}
+									</span>
+									<span class="issue-title">{issue.title}</span>
+								</div>
+								<p class="issue-description">{issue.description}</p>
+								{#if issue.filePath}
+									<span class="issue-location">
+										{issue.filePath}{issue.startLine != null ? `:${issue.startLine}` : ''}
+									</span>
+								{/if}
+							</div>
+						{/each}
+					</div>
+				</div>
+				<Separator />
+			{/if}
 
 			<!-- Blocks -->
 			<div class="blocks">
@@ -768,6 +813,116 @@
 	:global(.dark) .summary-header :global(.risk-badge--high) {
 		color: #f87171;
 	}
+
+	/* ── Issues ──────────────────────────────────────────────────────── */
+
+	.issues-section {
+		margin-top: 20px;
+		margin-bottom: 4px;
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+	}
+
+	.issues-header {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		font-size: 11px;
+		font-weight: 600;
+		color: var(--color-text-muted);
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+	}
+
+	.issues-list {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+
+	.issue-item {
+		padding: 10px 14px;
+		border-radius: 8px;
+		border-left: 3px solid transparent;
+		background: var(--color-bg-secondary);
+		border: 1px solid var(--color-border);
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+	}
+
+	.issue-item--info {
+		border-left-color: #60a5fa;
+	}
+
+	.issue-item--warning {
+		border-left-color: #f59e0b;
+	}
+
+	.issue-item--critical {
+		border-left-color: #ef4444;
+		background: color-mix(in srgb, #ef4444 4%, var(--color-bg-secondary));
+	}
+
+	.issue-top {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+
+	.issue-title {
+		font-size: 13px;
+		font-weight: 500;
+		color: var(--color-text-primary);
+	}
+
+	.issue-description {
+		font-size: 12px;
+		color: var(--color-text-secondary);
+		line-height: 1.5;
+		margin: 0;
+	}
+
+	.issue-location {
+		font-size: 11px;
+		font-family: var(--font-mono, monospace);
+		color: var(--color-text-muted);
+		opacity: 0.8;
+	}
+
+	.issue-badge {
+		font-size: 10px;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		padding: 1px 7px;
+		border-radius: 999px;
+		border: 1px solid transparent;
+		flex-shrink: 0;
+	}
+
+	.issue-badge--info {
+		background: color-mix(in srgb, #60a5fa 12%, transparent);
+		color: #2563eb;
+		border-color: color-mix(in srgb, #60a5fa 30%, transparent);
+	}
+
+	.issue-badge--warning {
+		background: color-mix(in srgb, #f59e0b 12%, transparent);
+		color: #b45309;
+		border-color: color-mix(in srgb, #f59e0b 30%, transparent);
+	}
+
+	.issue-badge--critical {
+		background: color-mix(in srgb, #ef4444 12%, transparent);
+		color: #dc2626;
+		border-color: color-mix(in srgb, #ef4444 30%, transparent);
+	}
+
+	:global(.dark) .issue-badge--info { color: #93c5fd; }
+	:global(.dark) .issue-badge--warning { color: #fbbf24; }
+	:global(.dark) .issue-badge--critical { color: #f87171; }
 
 	/* ── Blocks ──────────────────────────────────────────────────────── */
 

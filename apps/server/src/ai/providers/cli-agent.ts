@@ -1,5 +1,5 @@
 import { execSync } from 'node:child_process';
-import type { RiskLevel, WalkthroughBlock, WalkthroughStreamEvent, MarkdownBlock, CodeBlock, DiffBlock } from '@rev/shared';
+import type { RiskLevel, WalkthroughBlock, WalkthroughStreamEvent, MarkdownBlock, CodeBlock, DiffBlock, WalkthroughIssue } from '@rev/shared';
 import type { PrFileMeta } from '../../services/GitHub';
 import { CLI_WALKTHROUGH_TIMEOUT_MS, CLI_CACHE_TTL_MS } from '../../constants';
 import { debug } from '../../logger';
@@ -32,6 +32,11 @@ Then output blocks (8-20 total), one per line:
 @BLOCK {"type": "code", "id": "block-1", "order": 1, "filePath": "src/app.ts", "startLine": 10, "endLine": 20, "language": "typescript", "content": "const x = 1;", "annotation": "Key change here", "annotationPosition": "left"}
 @BLOCK {"type": "diff", "id": "block-2", "order": 2, "filePath": "src/app.ts", "patch": "@@ -1,3 +1,4 @@...", "annotation": "Added new import", "annotationPosition": "right"}
 
+For any concern you identify (security vulnerabilities, race conditions, missing tests, edge cases, breaking changes, performance issues), output an issue line:
+@ISSUE {"severity": "warning", "title": "Short title (10 words max)", "description": "Clear explanation of the concern and why it matters (1-3 sentences)", "file_path": "src/app.ts", "start_line": 42, "end_line": 50}
+
+You can also use file_path: null if the concern is PR-wide. severity must be "info", "warning", or "critical".
+
 Finally, signal completion:
 @DONE
 
@@ -42,10 +47,11 @@ Rules:
 - Use your file reading tools to get the actual code, not just the diff
 - Check related tests, type definitions, and documentation
 - Alternate annotation_position between "left" and "right" for visual variety
-- Flag concerns with bold text or blockquotes in markdown blocks
+- Every @ISSUE MUST be accompanied by a @BLOCK markdown that explains it in detail — what the problem is, why it matters, and what to do about it
 - Generate 8-20 blocks total depending on PR complexity
 - risk_level: "low" for straightforward changes, "medium" for critical paths/complexity, "high" for security/breaking changes
-- Be direct — reviewers are engineers, not beginners`;
+- Be direct — reviewers are engineers, not beginners
+- Call @ISSUE for every concern — security, races, missing tests, edge cases, breaking changes. Always ALSO output a @BLOCK markdown explaining the concern in depth. The @ISSUE provides the structured record; the @BLOCK provides the explanation. Both are required.`;
 
 // ── CLI agent detection (cached) ─────────────────────────────────────────────
 
@@ -151,6 +157,29 @@ function extractTaggedLines(
 			} catch {
 				debug('walkthrough-cli', 'Failed to parse @BLOCK line');
 			}
+		} else if (line.startsWith('@ISSUE ')) {
+			try {
+				const data = JSON.parse(line.slice(7)) as {
+					severity: string;
+					title: string;
+					description: string;
+					file_path?: string | null;
+					start_line?: number | null;
+					end_line?: number | null;
+				};
+				const issue: WalkthroughIssue = {
+					id: `issue-${blockCounter.value++}`,
+					severity: (data.severity ?? 'info') as 'info' | 'warning' | 'critical',
+					title: data.title ?? '',
+					description: data.description ?? '',
+					...(data.file_path != null ? { filePath: data.file_path } : {}),
+					...(data.start_line != null ? { startLine: data.start_line } : {}),
+					...(data.end_line != null ? { endLine: data.end_line } : {}),
+				};
+				events.push({ type: 'issue' as const, data: issue });
+			} catch {
+				debug('walkthrough-cli', 'Failed to parse @ISSUE line');
+			}
 		} else if (line === '@DONE' || line.startsWith('@DONE')) {
 			events.push({
 				type: 'done' as const,
@@ -242,12 +271,23 @@ export function streamWalkthroughViaCLI(params: {
 				stderr: 'pipe',
 			});
 
+			console.error('[walkthrough-cli] proc spawned, pid:', proc.pid);
+
 			// Pipe the prompt via stdin
 			proc.stdin.write(userMessage);
 			proc.stdin.end();
 
-			// Collect stderr for error reporting (runs concurrently with stdout loop)
-			const stderrPromise = new Response(proc.stderr).text();
+			// Collect stderr for error reporting AND log lines in real time
+			const stderrLines: string[] = [];
+			const stderrPromise = (async () => {
+				const dec = new TextDecoder();
+				for await (const chunk of proc.stderr) {
+					const text = dec.decode(chunk, { stream: true });
+					stderrLines.push(text);
+					if (text.trim()) console.error('[walkthrough-cli] stderr:', text.trim().slice(0, 300));
+				}
+				return stderrLines.join('');
+			})();
 
 			const decoder = new TextDecoder();
 			let buffer = '';
@@ -273,16 +313,17 @@ export function streamWalkthroughViaCLI(params: {
 						const trimmed = line.trim();
 						if (!trimmed) continue;
 
-						let msg: {
-							type: string;
-							part?: {
-								type?: string;
-								text?: string;
-								tool?: string;
-								state?: { status?: string; input?: unknown; output?: string };
-								time?: unknown;
-							};
+					let msg: {
+						type: string;
+						part?: {
+							type?: string;
+							text?: string;
+							tool?: string;
+							reason?: string;
+							state?: { status?: string; input?: unknown; output?: string };
+							time?: unknown;
 						};
+					};
 						try {
 							msg = JSON.parse(trimmed) as typeof msg;
 						} catch {
@@ -330,7 +371,7 @@ export function streamWalkthroughViaCLI(params: {
 						} else if (msg.type === 'tool_use' && msg.part?.tool) {
 							const description = buildExplorationDescription(msg.part.tool, msg.part.state?.input);
 							yield { type: 'exploration' as const, data: { tool: msg.part.tool, description } };
-						} else if (msg.type === 'result') {
+						} else if (msg.type === 'step_finish' && msg.part?.reason === 'stop') {
 							// OpenCode signals end-of-response — model is done generating.
 							// If we have a walkthrough but @DONE was missing, synthesize it.
 							if (!streamedDone && streamedSummary && streamedBlockCount > 0) {
@@ -381,6 +422,7 @@ export function streamWalkthroughViaCLI(params: {
 				// This prevents orphaned processes when the stream guard's inactivity
 				// timeout fires and calls iter.return() on our generator.
 				try { proc.kill(); } catch { /* already dead */ }
+				console.error('[walkthrough-cli] proc exited with code:', proc.exitCode);
 			}
 
 			// Process remaining text (last line may lack trailing newline)
