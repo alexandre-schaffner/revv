@@ -18,6 +18,13 @@ apps/desktop/target/
 *.db-wal
 *.db-shm
 
+# New packages
+packages/app/.output/
+packages/app/.vinxi/
+packages/ui/dist/
+apps/desktop-electrobun/dist/
+apps/desktop-electrobun/build/
+
 # Turbo
 .turbo/
 
