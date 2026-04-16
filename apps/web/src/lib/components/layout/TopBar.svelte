@@ -1,10 +1,13 @@
 <script lang="ts">
-	import { Sun, Moon, Monitor } from '@lucide/svelte';
+	import { Sun, Moon, Monitor, RefreshCw } from '@lucide/svelte';
 	import FloatingTabs from './FloatingTabs.svelte';
 	import { getSelectedPr } from '$lib/stores/prs.svelte';
 	import { getActiveTab, setActiveTab } from '$lib/stores/review.svelte';
 	import { getThemePreference, setThemePreference, type ThemePreference } from '$lib/stores/theme.svelte';
 	import { getActivePanel } from '$lib/stores/focus-mode.svelte';
+	import { getTopbarCollapsed } from '$lib/stores/topbar.svelte';
+	import { getIsStreaming as getWalkthroughStreaming, getSummary as getWalkthroughSummary, regenerate as regenerateWalkthrough } from '$lib/stores/walkthrough.svelte';
+	import { page } from '$app/state';
 
 	interface Props {
 		rightPanelOpen: boolean;
@@ -16,7 +19,9 @@
 	const pr = $derived(getSelectedPr());
 	const activeTab = $derived(getActiveTab());
 	const theme = $derived(getThemePreference());
-
+	const collapsed = $derived(getTopbarCollapsed());
+	const walkthroughStreaming = $derived(getWalkthroughStreaming());
+	const walkthroughSummary = $derived(getWalkthroughSummary());
 	const cycle: Record<ThemePreference, ThemePreference> = {
 		system: 'light',
 		light: 'dark',
@@ -34,19 +39,28 @@
 	}
 </script>
 
-<div class="topbar">
-	<!-- Left: PR title block or app name -->
+<div class="topbar" data-tauri-drag-region>
+	<!-- Left: app name / inline PR title when scrolled -->
 	<div class="title-block">
-		{#if pr}
-			<span class="pr-title">{pr.title}</span>
-			<span class="pr-subtitle">#{pr.externalId} · {pr.sourceBranch} → {pr.targetBranch}</span>
-		{:else}
+		{#if collapsed && pr}
+			<span class="inline-title"><span class="pr-number">#{pr.externalId}</span> {pr.title}</span>
+		{:else if !pr}
 			<span class="app-name">Rev</span>
 		{/if}
 	</div>
 
-	<!-- Right: theme toggle + panel toggle -->
+	<!-- Right: regenerate + theme toggle + panel toggle -->
 	<div class="panel-toggle-wrap">
+		{#if collapsed && activeTab === 'walkthrough' && !walkthroughStreaming && walkthroughSummary}
+			<button
+				class="theme-btn"
+				onclick={() => regenerateWalkthrough(page.params['prId'] ?? '')}
+				aria-label="Regenerate walkthrough"
+				title="Regenerate walkthrough"
+			>
+				<RefreshCw size={14} />
+			</button>
+		{/if}
 		<button
 			class="theme-btn"
 			onclick={cycleTheme}
@@ -93,7 +107,7 @@
 		align-items: center;
 		justify-content: space-between;
 		height: 100%;
-		padding: 0 16px;
+		padding: 0 8px;
 		position: relative;
 	}
 
@@ -107,32 +121,24 @@
 	}
 
 	.app-name {
-		font-size: 13px;
+		font-size: 12px;
 		font-weight: 600;
 		color: var(--color-text-primary);
 	}
 
-	.pr-title {
-		font-size: 16px;
-		font-weight: 700;
-		color: var(--color-text-primary);
+	.inline-title {
+		font-size: 12px;
+		font-weight: 400;
+		color: var(--color-text-secondary);
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
-		min-width: 0;
-		line-height: 1.3;
 	}
 
-	.pr-subtitle {
-		font-size: 11px;
-		font-family: var(--font-mono);
+	.pr-number {
 		color: var(--color-text-muted);
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		min-width: 0;
-		opacity: 0.6;
-		line-height: 1.3;
+		font-weight: 500;
+		margin-right: 4px;
 	}
 
 	.panel-toggle-wrap {
@@ -141,6 +147,27 @@
 		gap: 4px;
 		flex: 1;
 		justify-content: flex-end;
+	}
+
+	/* In Tauri, position elements in the traffic-light zone */
+	:global(html.tauri) .topbar {
+		position: static;
+	}
+
+	:global(html.tauri) .panel-toggle-wrap {
+		position: absolute;
+		top: 4px;
+		right: 8px;
+		height: 22px;
+		flex: none;
+	}
+
+	:global(html.tauri) .title-block {
+		position: absolute;
+		top: 4px;
+		left: 84px;
+		right: 80px;
+		height: 22px;
 	}
 
 	.theme-btn {

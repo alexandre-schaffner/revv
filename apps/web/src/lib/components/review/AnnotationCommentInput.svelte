@@ -90,16 +90,16 @@
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		background: var(--color-input-bg, #16161a);
-		border-top: 1px solid var(--color-border, #2a2a32);
-		border-left: 2px solid var(--color-accent, #3b82f6);
+		background: var(--color-input-bg);
+		border-top: 1px solid var(--color-border);
+		border-left: 2px solid var(--color-accent);
 		padding: 6px 10px;
 		transition: border-color 80ms;
 	}
 
 	.comment-input--focused {
-		border-left-color: var(--color-accent, #3b82f6);
-		background: var(--color-bg-elevated, #1a1a1f);
+		border-left-color: var(--color-accent);
+		background: var(--color-bg-elevated);
 	}
 
 	.textarea {
@@ -108,17 +108,17 @@
 		border: none;
 		outline: none;
 		resize: none;
-		font-family: var(--font-sans, system-ui, sans-serif);
+		font-family: var(--font-sans);
 		font-size: 12px;
 		line-height: 1.6;
-		color: var(--color-text-primary, #e4e4e7);
+		color: var(--color-text-primary);
 		min-height: 20px;
 		max-height: 68px;
 		overflow-y: auto;
 	}
 
 	.textarea::placeholder {
-		color: var(--color-text-muted, #888);
+		color: var(--color-text-muted);
 	}
 
 	.actions {
@@ -133,8 +133,8 @@
 		height: 22px;
 		border-radius: 4px;
 		border: none;
-		background: var(--color-bg-tertiary, #2a2a32);
-		color: var(--color-text-muted, #888);
+		background: var(--color-bg-tertiary);
+		color: var(--color-text-muted);
 		cursor: default;
 		display: flex;
 		align-items: center;
@@ -143,13 +143,13 @@
 	}
 
 	.submit-btn--active {
-		background: var(--color-accent, #3b82f6);
+		background: var(--color-accent);
 		color: white;
 		cursor: pointer;
 	}
 
 	.submit-btn--active:hover {
-		background: var(--color-accent-hover, #2563eb);
+		background: var(--color-accent-hover);
 	}
 
 	.submit-btn:disabled {
