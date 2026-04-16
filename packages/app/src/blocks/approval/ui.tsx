@@ -5,6 +5,8 @@ import {
   denyCommand,
 } from "../../lib/commands";
 import type { CommandEntry } from "../../lib/command-log";
+import { Button } from "@rev/ui/components/ui/button";
+import { Kbd } from "@rev/ui/components/ui/kbd";
 
 export function ApprovalBlock() {
   const [pending, setPending] = useState<CommandEntry[]>([]);
@@ -19,15 +21,45 @@ export function ApprovalBlock() {
     return () => clearInterval(id);
   }, [poll]);
 
-  const handleApprove = async (cmdId: string) => {
-    await approveCommand({ data: { id: cmdId } });
-    poll();
-  };
+  const handleApprove = useCallback(
+    async (cmdId: string) => {
+      await approveCommand({ data: { id: cmdId } });
+      poll();
+    },
+    [poll],
+  );
 
-  const handleDeny = async (cmdId: string) => {
-    await denyCommand({ data: { id: cmdId } });
-    poll();
-  };
+  const handleDeny = useCallback(
+    async (cmdId: string) => {
+      await denyCommand({ data: { id: cmdId } });
+      poll();
+    },
+    [poll],
+  );
+
+  // Cmd+A approves the first pending command
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.metaKey && e.key === "a" && pending.length > 0) {
+        e.preventDefault();
+        handleApprove(pending[0]!.id);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [pending, handleApprove]);
+
+  // Cmd+D denies the first pending command
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.metaKey && e.key === "d" && pending.length > 0) {
+        e.preventDefault();
+        handleDeny(pending[0]!.id);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [pending, handleDeny]);
 
   if (pending.length === 0) {
     return (
@@ -39,7 +71,7 @@ export function ApprovalBlock() {
 
   return (
     <div className="flex flex-col gap-1">
-      {pending.map((entry) => (
+      {pending.map((entry, i) => (
         <div
           key={entry.id}
           className="flex items-center gap-2 text-xs font-mono"
@@ -48,18 +80,21 @@ export function ApprovalBlock() {
           <span className="text-foreground truncate">
             {entry.cmd}{entry.args.length > 0 ? ` ${entry.args.join(" ")}` : ""}
           </span>
-          <div className="ml-auto flex items-center gap-1 shrink-0">
-            <button
-              type="button"
+          <div className="ml-auto flex items-center gap-1.5 shrink-0">
+            <Button
+              variant="default"
+              size="sm"
+              className="h-5 px-2 text-[10px] rounded-sm"
               onClick={() => handleApprove(entry.id)}
-              className="px-2 py-0.5 rounded-sm bg-foreground text-background text-[10px] font-medium hover:bg-foreground/80 transition-colors cursor-pointer"
             >
               Accept
-            </button>
+              {i === 0 && <Kbd className="ml-1 h-3.5 text-[9px] bg-primary-foreground/20 text-primary-foreground">&#8984;A</Kbd>}
+            </Button>
             <button
               type="button"
               onClick={() => handleDeny(entry.id)}
               className="p-0.5 rounded-sm text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+              title={i === 0 ? "Deny (⌘D)" : "Deny"}
             >
               <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
                 <path d="M3 3l6 6M9 3l-6 6" />
