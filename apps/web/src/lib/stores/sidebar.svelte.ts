@@ -1,4 +1,4 @@
-const SIDEBAR_WIDTH_KEY = 'rev:sidebar-width';
+const SIDEBAR_WIDTH_KEY = 'revv:sidebar-width';
 const SIDEBAR_WIDTH_DEFAULT = 280;
 const SIDEBAR_WIDTH_MIN = 180;
 const SIDEBAR_WIDTH_MAX = 480;

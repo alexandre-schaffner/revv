@@ -49,6 +49,12 @@ export class ReviewError extends Data.TaggedError('ReviewError')<{
 	readonly code?: string;
 }> {}
 
+export class SyncError extends Data.TaggedError('SyncError')<{
+	readonly message: string;
+	readonly threadId?: string;
+	readonly cause?: unknown;
+}> {}
+
 // Clone errors
 export class CloneError extends Data.TaggedError('CloneError')<{
 	readonly message: string;
@@ -65,6 +71,7 @@ export type AppError =
 	| NotFoundError
 	| ValidationError
 	| ReviewError
+	| SyncError
 	| CloneError
 	| CloneNotReadyError;
 

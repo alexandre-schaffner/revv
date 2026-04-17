@@ -116,8 +116,12 @@
 		{/if}
 	</div>
 
-	<!-- Rest of sidebar — hidden when collapsed -->
-	{#if !collapsed}
+	<!--
+		Kept mounted (with display: contents) so RepoGroup / PrItem / DiffFileTree
+		preserve their expand state across sidebar collapse/expand. When collapsed,
+		the wrapper switches to display: none which hides without unmounting.
+	-->
+	<div class="sidebar-body" class:sidebar-body--hidden={collapsed} aria-hidden={collapsed}>
 		<SearchFilter onAddRepo={() => setAddRepoDialogOpen(true)} />
 
 		<div class="pr-list">
@@ -150,7 +154,7 @@
 				Settings
 			</button>
 		</div>
-	{/if}
+	</div>
 </div>
 
 <AddRepoDialog open={addRepoOpen} onClose={() => setAddRepoDialogOpen(false)} />
@@ -188,6 +192,16 @@
 		flex: 1;
 		white-space: nowrap;
 		overflow: hidden;
+	}
+
+	/* Body wrapper — display:contents keeps children as direct flex-children of .sidebar
+		 (so .pr-list still flex:1), while display:none when collapsed hides without unmounting. */
+	.sidebar-body {
+		display: contents;
+	}
+
+	.sidebar-body--hidden {
+		display: none;
 	}
 
 	/* Icon buttons used in the header */

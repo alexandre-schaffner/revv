@@ -4,9 +4,11 @@ import { auth } from '../auth';
 import {
 	AiNotConfiguredError,
 	GitHubAuthError,
+	GitHubNetworkError,
 	GitHubNotFoundError,
 	GitHubRateLimitError,
 	NotFoundError,
+	SyncError,
 	isReviewError,
 } from '../domain/errors';
 
@@ -89,6 +91,21 @@ export function handleAppError(
 		}
 		ctx.set.status = 500;
 		return { error: e.message };
+	}
+
+	if (e instanceof SyncError) {
+		ctx.set.status = 502;
+		return { error: e.message };
+	}
+
+	if (e instanceof GitHubNetworkError) {
+		ctx.set.status = 502;
+		return { error: `GitHub API error: ${String(e.cause)}` };
+	}
+
+	if (e instanceof GitHubRateLimitError) {
+		ctx.set.status = 429;
+		return { error: `GitHub rate limit exceeded, resets at ${e.resetAt.toISOString()}` };
 	}
 
 	throw raw;

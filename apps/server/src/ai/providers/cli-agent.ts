@@ -1,5 +1,5 @@
 import { execSync } from 'node:child_process';
-import type { RiskLevel, WalkthroughBlock, WalkthroughStreamEvent, MarkdownBlock, CodeBlock, DiffBlock, WalkthroughIssue } from '@rev/shared';
+import type { RiskLevel, WalkthroughBlock, WalkthroughStreamEvent, MarkdownBlock, CodeBlock, DiffBlock, WalkthroughIssue } from '@revv/shared';
 import type { PrFileMeta } from '../../services/GitHub';
 import { CLI_WALKTHROUGH_TIMEOUT_MS, CLI_CACHE_TTL_MS } from '../../constants';
 import { debug } from '../../logger';
@@ -281,7 +281,7 @@ export function streamWalkthroughViaCLI(params: {
 			const stderrLines: string[] = [];
 			const stderrPromise = (async () => {
 				const dec = new TextDecoder();
-				for await (const chunk of proc.stderr) {
+				for await (const chunk of proc.stderr as unknown as AsyncIterable<Uint8Array>) {
 					const text = dec.decode(chunk, { stream: true });
 					stderrLines.push(text);
 					if (text.trim()) console.error('[walkthrough-cli] stderr:', text.trim().slice(0, 300));
@@ -304,7 +304,7 @@ export function streamWalkthroughViaCLI(params: {
 			}, CLI_WALKTHROUGH_TIMEOUT_MS);
 
 			try {
-				for await (const chunk of proc.stdout) {
+				for await (const chunk of proc.stdout as unknown as AsyncIterable<Uint8Array>) {
 					buffer += decoder.decode(chunk, { stream: true });
 					const lines = buffer.split('\n');
 					buffer = lines.pop() ?? '';

@@ -84,4 +84,5 @@ export type WalkthroughStreamEvent =
 	| { type: 'error'; data: { code: string; message: string } }
 	| { type: 'exploration'; data: { tool: string; description: string } }
 	| { type: 'issue'; data: WalkthroughIssue }
-	| { type: 'phase'; data: { phase: WalkthroughPhase; message: string } };
+	| { type: 'phase'; data: { phase: WalkthroughPhase; message: string } }
+	| { type: 'in-progress'; data: { walkthroughId: string } };

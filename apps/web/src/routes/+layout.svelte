@@ -10,6 +10,7 @@
 	import { initShortcuts } from '$lib/stores/shortcuts.svelte';
 	import { isTauri } from '$lib/utils/platform';
 	import { TooltipProvider } from '$lib/components/ui/tooltip';
+	import { Toaster } from '$lib/components/ui/sonner';
 
 	let { children } = $props();
 	let hydrated = false;
@@ -63,4 +64,5 @@
 		<ErrorBanner />
 		{@render children()}
 	</AppShell>
+	<Toaster />
 </TooltipProvider>

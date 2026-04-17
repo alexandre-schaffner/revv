@@ -1,146 +1,55 @@
 $ concurrently --kill-others "bun run dev:web" "bun run dev:server" "sleep 3 && cd apps/desktop && bunx tauri dev"
 [0] $ cd apps/web && bun run dev
 [1] $ cd apps/server && bun run dev
-[1] $ bun run --watch src/index.ts
 [0] $ vite dev
-[1] [rev-server] listening on http://localhost:45678
+[1] $ bun run --watch src/index.ts
+[1] [revv-server] listening on http://localhost:45678
 [0] 
-[0]   VITE v6.4.2  ready in 870 ms
+[0]   VITE v6.4.2  ready in 634 ms
 [0] 
 [0]   ➜  Local:   http://localhost:5173/
 [0]   ➜  Network: use --host to expose
 [2]      Running DevCommand (`cargo  run --no-default-features --color always --`)
-[2]         Info Watching /Users/alex/Projects/rev/apps/desktop for changes...
-[2]     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.71s
+[2]         Info Watching /Users/alex/Projects/revv/apps/desktop for changes...
+[2]     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.51s
 [2]      Running `target/debug/rev-desktop`
-[0] 7:55:14 PM [vite-plugin-svelte] src/lib/components/sidebar/AddRepoDialog.svelte:160:6 Avoid using autofocus
+[0] 5:48:57 AM [vite-plugin-svelte] src/lib/components/sidebar/AddRepoDialog.svelte:163:6 Avoid using autofocus
 [0] https://svelte.dev/e/a11y_autofocus
-[0] 7:55:14 PM [vite-plugin-svelte] src/lib/components/sidebar/AddRepoDialog.svelte:273:5 Avoid using autofocus
+[0] 5:48:57 AM [vite-plugin-svelte] src/lib/components/sidebar/AddRepoDialog.svelte:276:5 Avoid using autofocus
 [0] https://svelte.dev/e/a11y_autofocus
-[1] [walkthrough-cli] proc spawned, pid: 54142
-[1] [walkthrough-cli] stderr: ~  https://opncd.ai/share/gz1hf5Ar
-[0] 7:55:52 PM [vite] (client) hmr update /src/lib/components/layout/TopBar.svelte, /src/app.css, /src/lib/components/layout/TopBar.svelte?svelte&type=style&lang.css
-[0] 7:55:52 PM [vite-plugin-svelte] src/lib/components/layout/TopBar.svelte:140:1 Unused CSS selector ".tabs-center"
-[0] https://svelte.dev/e/css_unused_selector
-[0] 7:55:59 PM [vite-plugin-svelte] src/lib/components/layout/TopBar.svelte:138:1 Unused CSS selector ".tabs-center"
-[0] https://svelte.dev/e/css_unused_selector
-[0] 7:55:59 PM [vite] (client) hmr update /src/lib/components/layout/TopBar.svelte?svelte&type=style&lang.css
-[0] 7:56:04 PM [vite-plugin-svelte] src/lib/components/layout/TopBar.svelte:138:1 Unused CSS selector ".tabs-center"
-[0] https://svelte.dev/e/css_unused_selector
-[0] 7:56:04 PM [vite] (client) hmr update /src/lib/components/layout/TopBar.svelte?svelte&type=style&lang.css
-[0] 7:56:09 PM [vite] (client) hmr update /src/lib/components/layout/TopBar.svelte?svelte&type=style&lang.css
-[1] [walkthrough-cli] proc exited with code: null
-[0] 7:56:36 PM [vite] (client) hmr update /src/lib/components/layout/AppShell.svelte, /src/app.css, /src/lib/components/layout/AppShell.svelte?svelte&type=style&lang.css
-[0] 7:56:46 PM [vite] (client) hmr update /src/lib/components/layout/AppShell.svelte, /src/app.css
-[0] 7:56:55 PM [vite] (client) hmr update /src/lib/components/layout/AppShell.svelte, /src/app.css
-[0] 7:57:02 PM [vite] (client) hmr update /src/lib/components/layout/AppShell.svelte?svelte&type=style&lang.css
-[0] 7:57:20 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/0.js
-[0] 7:57:20 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/1.js
-[0] 7:57:20 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/2.js
-[0] 7:57:20 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/4.js
-[0] 7:57:21 PM [vite] (client) page reload .svelte-kit/generated/client/app.js
-[0] 7:57:21 PM [vite] (client) page reload .svelte-kit/generated/client/matchers.js
-[0] 7:57:21 PM [vite] (ssr) page reload .svelte-kit/generated/server/internal.js
-[0] 7:57:21 PM [vite] (client) page reload .svelte-kit/generated/root.js
-[0] 7:57:21 PM [vite] (ssr) page reload .svelte-kit/generated/root.js
-[0] 7:57:35 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/0.js
-[0] 7:57:35 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/1.js
-[0] 7:57:35 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/2.js
-[0] 7:57:35 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/4.js
-[0] 7:57:35 PM [vite] (client) page reload .svelte-kit/generated/client/app.js
-[0] 7:57:35 PM [vite] (client) page reload .svelte-kit/generated/client/matchers.js
-[0] 7:57:35 PM [vite] (ssr)39m page reload .svelte-kit/generated/server/internal.js
-[0] 7:57:35 PM [vite] (client) page reload .svelte-kit/generated/root.js
-[0] 7:57:35 PM [vite] (ssr) page reload .svelte-kit/generated/root.js
-[0] 7:57:49 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/0.js
-[0] 7:57:49 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/1.js
-[0] 7:57:49 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/2.js
-[0] 7:57:49 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/4.js
-[0] 7:57:49 PM [vite] (client) page reload .svelte-kit/generated/client/app.js
-[0] 7:57:49 PM [vite] (client) page reload .svelte-kit/generated/client/matchers.js
-[0] 7:57:49 PM [vite] (ssr) page reload .svelte-kit/generated/server/internal.js
-[0] 7:57:49 PM [vite] (client)[39m page reload .svelte-kit/generated/root.js
-[0] 7:57:49 PM [vite] (ssr) page reload .svelte-kit/generated/root.js
-[1] [rev-server] listening on http://localhost:45678
-[1] [rev-server] listening on http://localhost:45678
-[0] 7:58:33 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/0.js
-[0] 7:58:33 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/1.js
-[0] 7:58:33 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/2.js
-[0] 7:58:33 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/4.js
-[0] 7:58:33 PM [vite] (client) page reload .svelte-kit/generated/client/app.js
-[0] 7:58:33 PM [vite] (client) page reload .svelte-kit/generated/client/matchers.js
-[0] 7:58:33 PM [vite] (ssr) page reload .svelte-kit/generated/server/internal.js
-[0] 7:58:33 PM [vite] (client)[39m page reload .svelte-kit/generated/root.js
-[0] 7:58:33 PM [vite] (ssr) page reload .svelte-kit/generated/root.js
-[0] 7:58:47 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/0.js
-[0] 7:58:47 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/1.js
-[0] 7:58:47 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/2.js
-[0] 7:58:47 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/4.js
-[0] 7:58:47 PM [vite] (client) page reload .svelte-kit/generated/client/app.js
-[0] 7:58:47 PM [vite] (client) page reload .svelte-kit/generated/client/matchers.js
-[0] 7:58:47 PM [vite] (ssr) page reload .svelte-kit/generated/server/internal.js
-[0] 7:58:47 PM [vite] (client)[39m page reload .svelte-kit/generated/root.js
-[0] 7:58:47 PM [vite] (ssr) page reload .svelte-kit/generated/root.js
-[0] 7:58:52 PM [vite] (client) hmr update /src/lib/components/layout/AppShell.svelte?svelte&type=style&lang.css
-[0] 8:00:33 PM [vite] (client) hmr update /src/lib/components/layout/AppShell.svelte, /src/app.css
-[0] 8:00:41 PM [vite] (client) hmr update /src/lib/components/layout/AppShell.svelte?svelte&type=style&lang.css
-[0] 8:00:54 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/0.js
-[0] 8:00:54 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/1.js
-[0] 8:00:54 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/2.js
-[0] 8:00:54 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/4.js
-[0] 8:00:54 PM [vite] (client) page reload .svelte-kit/generated/client/app.js
-[0] 8:00:54 PM [vite] (client) page reload .svelte-kit/generated/client/matchers.js
-[0] 8:00:54 PM [vite] (ssr) page reload .svelte-kit/generated/server/internal.js
-[0] 8:00:54 PM [vite] (client)[39m page reload .svelte-kit/generated/root.js
-[0] 8:00:54 PM [vite] (ssr) page reload .svelte-kit/generated/root.js
-[0] 8:01:08 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/0.js
-[0] 8:01:08 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/1.js
-[0] 8:01:08 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/2.js
-[0] 8:01:08 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/4.js
-[0] 8:01:08 PM [vite] (client) page reload .svelte-kit/generated/client/app.js
-[0] 8:01:08 PM [vite] (client) page reload .svelte-kit/generated/client/matchers.js
-[0] 8:01:08 PM [vite] (ssr)39m page reload .svelte-kit/generated/server/internal.js
-[0] 8:01:08 PM [vite] (client) page reload .svelte-kit/generated/root.js
-[0] 8:01:08 PM [vite] (ssr) page reload .svelte-kit/generated/root.js
-[1] [walkthrough-cli] proc spawned, pid: 95329
-[1] [walkthrough-cli] stderr: ~  https://opncd.ai/share/cCPfSDRr
-[1] [walkthrough-cli] proc exited with code: null
-[1] [rev-server] listening on http://localhost:45678
-[1] [rev-server] listening on http://localhost:45678
-[1] [rev-server] listening on http://localhost:45678
-[0] 8:08:05 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/0.js
-[0] 8:08:05 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/1.js
-[0] 8:08:05 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/2.js
-[0] 8:08:05 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/4.js
-[0] 8:08:05 PM [vite] (client) page reload .svelte-kit/generated/client/app.js
-[0] 8:08:05 PM [vite] (client) page reload .svelte-kit/generated/client/matchers.js
-[0] 8:08:05 PM [vite] (ssr) page reload .svelte-kit/generated/server/internal.js
-[0] 8:08:05 PM [vite] (client) page reload .svelte-kit/generated/root.js
-[0] 8:08:05 PM [vite] (ssr) page reload .svelte-kit/generated/root.js
-[0] 8:09:40 PM [vite] (client) hmr update /src/lib/components/walkthrough/GuidedWalkthrough.svelte, /src/app.css
-[0] 8:09:50 PM [vite] (client) hmr update /src/lib/components/walkthrough/GuidedWalkthrough.svelte, /src/app.css
-[0] 8:09:56 PM [vite] (client) hmr update /src/lib/components/walkthrough/GuidedWalkthrough.svelte, /src/app.css
-[1] [walkthrough-cli] proc spawned, pid: 15786
-[0] 8:10:06 PM [vite] (client) hmr update /src/lib/components/walkthrough/GuidedWalkthrough.svelte, /src/app.css
-[1] [walkthrough-cli] stderr: ~  https://opncd.ai/share/6P6IEQAj
-[0] 8:10:16 PM [vite] (client) hmr update /src/lib/components/walkthrough/GuidedWalkthrough.svelte, /src/app.css
-[0] 8:10:32 PM [vite] (client) hmr update /src/lib/components/walkthrough/GuidedWalkthrough.svelte?svelte&type=style&lang.css
-[0] 8:10:56 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/0.js
-[0] 8:10:56 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/1.js
-[0] 8:10:56 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/2.js
-[0] 8:10:56 PM [vite] (client) page reload .svelte-kit/generated/client/nodes/4.js
-[0] 8:10:56 PM [vite] (client) page reload .svelte-kit/generated/client/app.js
-[0] 8:10:56 PM [vite] (client) page reload .svelte-kit/generated/client/matchers.js
-[0] 8:10:56 PM [vite] (ssr)39m page reload .svelte-kit/generated/server/internal.js
-[0] 8:10:56 PM [vite] (client) page reload .svelte-kit/generated/root.js
-[0] 8:10:56 PM [vite] (ssr) page reload .svelte-kit/generated/root.js
-[1] [walkthrough-cli] proc spawned, pid: 19574
-[1] [walkthrough-cli] stderr: ~  https://opncd.ai/share/0Xpg4AYm
-[1] [walkthrough-cli] proc exited with code: null
-[1] [walkthrough-cli] proc exited with code: null
-[1] [walkthrough-cli] proc spawned, pid: 42918
-[1] [walkthrough-cli] stderr: ~  https://opncd.ai/share/kSWdSxet
-[1] [walkthrough-cli] proc exited with code: null
-[1] [rev-server] listening on http://localhost:45678
-[1] [rev-server] listening on http://localhost:45678
-https://opncd.ai/share/cCPfSDRr
+[1] [walkthrough-sse] Failed to persist issue: (FiberFailure) ReviewError: Failed to save walkthrough issue: SQLiteError: UNIQUE constraint failed: walkthrough_issues.id
+[1]     at catch (/Users/alex/Projects/revv/apps/server/src/services/Walkthrough.ts:220:10)
+[1] [walkthrough-sse] Failed to persist issue: (FiberFailure) ReviewError: Failed to save walkthrough issue: SQLiteError: UNIQUE constraint failed: walkthrough_issues.id
+[1]     at catch (/Users/alex/Projects/revv/apps/server/src/services/Walkthrough.ts:220:10)
+[1] [walkthrough-sse] Failed to persist issue: (FiberFailure) ReviewError: Failed to save walkthrough issue: SQLiteError: UNIQUE constraint failed: walkthrough_issues.id
+[1]     at catch (/Users/alex/Projects/revv/apps/server/src/services/Walkthrough.ts:220:10)
+[1] [walkthrough-sse] Failed to persist issue: (FiberFailure) ReviewError: Failed to save walkthrough issue: SQLiteError: UNIQUE constraint failed: walkthrough_issues.id
+[1]     at catch (/Users/alex/Projects/revv/apps/server/src/services/Walkthrough.ts:220:10)
+[1] [walkthrough-sse] Failed to persist issue: (FiberFailure) ReviewError: Failed to save walkthrough issue: SQLiteError: UNIQUE constraint failed: walkthrough_issues.id
+[1]     at catch (/Users/alex/Projects/revv/apps/server/src/services/Walkthrough.ts:220:10)
+[1] [walkthrough-sse] Failed to persist issue: (FiberFailure) ReviewError: Failed to save walkthrough issue: SQLiteError: UNIQUE constraint failed: walkthrough_issues.id
+[1]     at catch (/Users/alex/Projects/revv/apps/server/src/services/Walkthrough.ts:220:10)
+[1] [walkthrough-sse] Failed to persist issue: (FiberFailure) ReviewError: Failed to save walkthrough issue: SQLiteError: UNIQUE constraint failed: walkthrough_issues.id
+[1]     at catch (/Users/alex/Projects/revv/apps/server/src/services/Walkthrough.ts:220:10)
+[1] [walkthrough-sse] Failed to persist issue: (FiberFailure) ReviewError: Failed to save walkthrough issue: SQLiteError: UNIQUE constraint failed: walkthrough_issues.id
+[1]     at catch (/Users/alex/Projects/revv/apps/server/src/services/Walkthrough.ts:220:10)
+[1] [walkthrough-sse] Failed to persist issue: (FiberFailure) ReviewError: Failed to save walkthrough issue: SQLiteError: UNIQUE constraint failed: walkthrough_issues.id
+[1]     at catch (/Users/alex/Projects/revv/apps/server/src/services/Walkthrough.ts:220:10)
+[1] [walkthrough-sse] Failed to persist issue: (FiberFailure) ReviewError: Failed to save walkthrough issue: SQLiteError: UNIQUE constraint failed: walkthrough_issues.id
+[1]     at catch (/Users/alex/Projects/revv/apps/server/src/services/Walkthrough.ts:220:10)
+[1] [walkthrough-sse] Failed to persist issue: (FiberFailure) ReviewError: Failed to save walkthrough issue: SQLiteError: UNIQUE constraint failed: walkthrough_issues.id
+[1]     at catch (/Users/alex/Projects/revv/apps/server/src/services/Walkthrough.ts:220:10)
+[1] [walkthrough-sse] Failed to persist issue: (FiberFailure) ReviewError: Failed to save walkthrough issue: SQLiteError: UNIQUE constraint failed: walkthrough_issues.id
+[1]     at catch (/Users/alex/Projects/revv/apps/server/src/services/Walkthrough.ts:220:10)
+[0] 5:49:31 AM [vite] (client) hmr update /src/lib/components/layout/FloatingTabs.svelte?svelte&type=style&lang.css
+[0] 5:53:47 AM [vite] (client) hmr update /src/lib/components/layout/AppShell.svelte, /src/app.css
+[2] sleep 3 && cd apps/desktop && bunx tauri dev exited with code 0
+--> Sending SIGTERM to other processes..
+[1] error: script "dev:server" was terminated by signal SIGTERM (Polite quit request)
+[1] error: script "dev" was terminated by signal SIGTERM (Polite quit request)
+[1] bun run dev:server exited with code SIGTERM
+--> Sending SIGTERM to other processes..
+[0] error: script "dev:web" was terminated by signal SIGTERM (Polite quit request)
+[0] error: script "dev" exited with code 143
+[0] bun run dev:web exited with code SIGTERM
+error: script "dev:desktop" exited with code 1

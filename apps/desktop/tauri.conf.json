@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nickel-org/nickel.rs/refs/heads/master/nickel/tauri-schema.json",
-  "productName": "Rev",
-  "identifier": "com.rev.app",
+  "productName": "Revv",
+  "identifier": "com.revv.app",
   "version": "0.0.1",
   "build": {
     "devUrl": "http://localhost:5173",
@@ -21,8 +21,8 @@
     ],
     "category": "DeveloperTool",
     "shortDescription": "AI-powered code review",
-    "longDescription": "Rev is a desktop application that brings AI-powered intelligence to your code review workflow. Review pull requests with AI assistance, inline comments, and smart suggestions.",
-    "copyright": "Copyright 2025 Rev contributors",
+    "longDescription": "Revv is a desktop application that brings AI-powered intelligence to your code review workflow. Review pull requests with AI assistance, inline comments, and smart suggestions.",
+    "copyright": "Copyright 2025 Revv contributors",
     "macOS": {
       "minimumSystemVersion": "10.15",
       "dmg": {
@@ -67,7 +67,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Rev",
+        "title": "Revv",
         "width": 1280,
         "height": 800,
         "minWidth": 900,

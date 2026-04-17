@@ -6,7 +6,7 @@ import type {
 	WalkthroughIssue,
 	WalkthroughTokenUsage,
 	RiskLevel,
-} from '@rev/shared';
+} from '@revv/shared';
 import { ReviewError } from '../domain/errors';
 import { walkthroughs } from '../db/schema/walkthroughs';
 import { walkthroughBlocks } from '../db/schema/walkthrough-blocks';

@@ -6,8 +6,8 @@
 	import CommandPalette from './CommandPalette.svelte';
 	import FloatingTabs from './FloatingTabs.svelte';
 	import { getSelectedPr } from '$lib/stores/prs.svelte';
+	import { getSummary } from '$lib/stores/sync.svelte';
 	import { getActiveTab, setActiveTab, getPanelOpenRequested, consumePanelOpenRequest } from '$lib/stores/review.svelte';
-	import { getActivePanel } from '$lib/stores/focus-mode.svelte';
 	import {
 		getSidebarCollapsed,
 		toggleSidebar,
@@ -36,6 +36,7 @@
 	const paletteMode = $derived(getPaletteMode());
 	const sidebarWidth = $derived(getSidebarWidth());
 	const pr = $derived(getSelectedPr());
+	const prSummary = $derived(pr ? getSummary(pr.id) : null);
 	const activeTab = $derived(getActiveTab());
 	const topbarCollapsed = $derived(getTopbarCollapsed());
 
@@ -51,6 +52,12 @@
 			consumePanelOpenRequest();
 		}
 	});
+
+	const tabsStyle = $derived(
+		sidebarCollapsed
+			? ''
+			: `--sidebar-offset: ${Math.round(sidebarWidth / 2)}px`
+	);
 
 	// Inline style for the grid — drives the dynamic sidebar column width
 	const gridStyle = $derived(
@@ -123,8 +130,8 @@
 	<header class="topbar-area" data-tauri-drag-region>
 		<TopBar {rightPanelOpen} onTogglePanel={toggleRightPanel} />
 		{#if pr}
-			<div class="tabs-float">
-				<FloatingTabs {activeTab} onTabChange={setActiveTab} mode={getActivePanel()} />
+			<div class="tabs-float" style={tabsStyle}>
+				<FloatingTabs {activeTab} onTabChange={setActiveTab} openThreads={prSummary?.open ?? 0} pendingThreads={prSummary?.pendingYou ?? 0} />
 			</div>
 		{/if}
 	</header>
@@ -243,7 +250,7 @@
 		position: absolute;
 		top: 100%;
 		left: 50%;
-		transform: translateX(-50%);
+		transform: translateX(calc(-50% + var(--sidebar-offset, 0px)));
 		z-index: 20;
 		pointer-events: none;
 		padding-top: 12px;

@@ -1,5 +1,5 @@
 import { Context, Effect, Layer, Schedule } from 'effect';
-import type { PullRequest, Repository } from '@rev/shared';
+import type { PullRequest, Repository } from '@revv/shared';
 import {
 	GitHubAuthError,
 	GitHubNetworkError,
@@ -77,6 +77,61 @@ function githubFetch(
 			});
 			assertGitHubOk(res, path);
 			return res.json();
+		},
+		catch: toGitHubError,
+	});
+}
+
+function githubPost(
+	path: string,
+	token: string,
+	body: Record<string, unknown>
+): Effect.Effect<unknown, GitHubError> {
+	return Effect.tryPromise({
+		try: async () => {
+			const res = await fetch(`${GITHUB_API}${path}`, {
+				method: 'POST',
+				headers: { ...githubHeaders(token), 'Content-Type': 'application/json' },
+				body: JSON.stringify(body),
+			});
+			if (res.status === 422) {
+				const text = await res.text().catch(() => '');
+				throw new GitHubNetworkError({ cause: `422 Unprocessable Entity: ${text}` });
+			}
+			assertGitHubOk(res, path);
+			return res.json();
+		},
+		catch: toGitHubError,
+	});
+}
+
+/**
+ * POST a GraphQL query/mutation. Throws on `errors[]` in the response body
+ * even if the HTTP status is 200 (GitHub convention).
+ */
+function githubGraphql<T = unknown>(
+	query: string,
+	variables: Record<string, unknown>,
+	token: string
+): Effect.Effect<T, GitHubError> {
+	return Effect.tryPromise({
+		try: async () => {
+			const res = await fetch(`${GITHUB_API}/graphql`, {
+				method: 'POST',
+				headers: { ...githubHeaders(token), 'Content-Type': 'application/json' },
+				body: JSON.stringify({ query, variables }),
+			});
+			assertGitHubOk(res, '/graphql');
+			const payload = (await res.json()) as { data?: T; errors?: Array<{ message: string }> };
+			if (payload.errors && payload.errors.length > 0) {
+				throw new GitHubNetworkError({
+					cause: `GraphQL: ${payload.errors.map((e) => e.message).join('; ')}`,
+				});
+			}
+			if (!payload.data) {
+				throw new GitHubNetworkError({ cause: 'GraphQL: empty data field' });
+			}
+			return payload.data;
 		},
 		catch: toGitHubError,
 	});
@@ -223,8 +278,88 @@ export class GitHubService extends Context.Tag('GitHubService')<
 			ref: string,
 			token: string
 		) => Effect.Effect<string, GitHubError>;
+		readonly postReview: (
+			repoFullName: string,
+			prNumber: number,
+			review: {
+				readonly body: string;
+				readonly event: 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT';
+				readonly comments: ReadonlyArray<{
+					readonly path: string;
+					readonly body: string;
+					readonly line: number;
+					readonly side: 'LEFT' | 'RIGHT';
+					readonly startLine?: number;
+					readonly startSide?: 'LEFT' | 'RIGHT';
+				}>;
+			},
+			token: string
+		) => Effect.Effect<{ id: number; htmlUrl: string }, GitHubError>;
+		readonly postReviewComment: (
+			repoFullName: string,
+			prNumber: number,
+			comment: {
+				readonly path: string;
+				readonly body: string;
+				readonly line: number;
+				readonly side: 'LEFT' | 'RIGHT';
+				readonly startLine?: number;
+				readonly startSide?: 'LEFT' | 'RIGHT';
+				readonly commitSha: string;
+			},
+			token: string
+		) => Effect.Effect<{ id: number; htmlUrl: string; createdAt: string }, GitHubError>;
+		readonly replyToComment: (
+			repoFullName: string,
+			prNumber: number,
+			commentId: string | number,
+			body: string,
+			token: string
+		) => Effect.Effect<{ id: number; htmlUrl: string; createdAt: string }, GitHubError>;
+		readonly listReviewComments: (
+			repoFullName: string,
+			prNumber: number,
+			since: string | null,
+			token: string
+		) => Effect.Effect<GhReviewComment[], GitHubError>;
+		readonly listReviewThreads: (
+			repoFullName: string,
+			prNumber: number,
+			token: string
+		) => Effect.Effect<GhReviewThread[], GitHubError>;
+		readonly resolveReviewThread: (
+			threadNodeId: string,
+			token: string
+		) => Effect.Effect<void, GitHubError>;
+		readonly unresolveReviewThread: (
+			threadNodeId: string,
+			token: string
+		) => Effect.Effect<void, GitHubError>;
+		readonly getAuthenticatedUser: (
+			token: string
+		) => Effect.Effect<{ login: string; id: number }, GitHubError>;
 	}
 >() {}
+
+export interface GhReviewComment {
+	readonly id: number;
+	readonly inReplyToId: number | null;
+	readonly path: string;
+	readonly line: number | null;
+	readonly startLine: number | null;
+	readonly side: 'LEFT' | 'RIGHT';
+	readonly body: string;
+	readonly authorLogin: string;
+	readonly createdAt: string;
+	readonly updatedAt: string;
+	readonly htmlUrl: string;
+}
+
+export interface GhReviewThread {
+	readonly nodeId: string;
+	readonly isResolved: boolean;
+	readonly commentDatabaseIds: ReadonlyArray<number>;
+}
 
 export const GitHubServiceLive = Layer.succeed(GitHubService, {
 	listPrs: (repoFullName, repositoryId, token) =>
@@ -308,5 +443,195 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
 			}
 			// Binary or unsupported encoding
 			return '';
+		}).pipe(Effect.retry(retrySchedule)),
+
+	postReview: (repoFullName, prNumber, review, token) =>
+		Effect.gen(function* () {
+			const { owner, repo } = yield* parseRepoFullName(repoFullName);
+			const payload: Record<string, unknown> = {
+				event: review.event,
+				body: review.body,
+			};
+			if (review.comments.length > 0) {
+				payload['comments'] = review.comments.map((c) => {
+					const comment: Record<string, unknown> = {
+						path: c.path,
+						body: c.body,
+						line: c.line,
+						side: c.side,
+					};
+					if (c.startLine !== undefined && c.startLine !== c.line) {
+						comment['start_line'] = c.startLine;
+						comment['start_side'] = c.startSide ?? c.side;
+					}
+					return comment;
+				});
+			}
+			const data = yield* githubPost(
+				`/repos/${owner}/${repo}/pulls/${prNumber}/reviews`,
+				token,
+				payload
+			);
+			const raw = data as Record<string, unknown>;
+			return {
+				id: raw['id'] as number,
+				htmlUrl: (raw['html_url'] as string | undefined) ?? '',
+			};
+		}),
+
+	postReviewComment: (repoFullName, prNumber, c, token) =>
+		Effect.gen(function* () {
+			const { owner, repo } = yield* parseRepoFullName(repoFullName);
+			const payload: Record<string, unknown> = {
+				body: c.body,
+				commit_id: c.commitSha,
+				path: c.path,
+				line: c.line,
+				side: c.side,
+			};
+			if (c.startLine !== undefined && c.startLine !== c.line) {
+				payload['start_line'] = c.startLine;
+				payload['start_side'] = c.startSide ?? c.side;
+			}
+			const data = yield* githubPost(
+				`/repos/${owner}/${repo}/pulls/${prNumber}/comments`,
+				token,
+				payload
+			);
+			const raw = data as Record<string, unknown>;
+			return {
+				id: raw['id'] as number,
+				htmlUrl: (raw['html_url'] as string | undefined) ?? '',
+				createdAt: (raw['created_at'] as string | undefined) ?? new Date().toISOString(),
+			};
+		}),
+
+	replyToComment: (repoFullName, prNumber, commentId, body, token) =>
+		Effect.gen(function* () {
+			const { owner, repo } = yield* parseRepoFullName(repoFullName);
+			const data = yield* githubPost(
+				`/repos/${owner}/${repo}/pulls/${prNumber}/comments/${commentId}/replies`,
+				token,
+				{ body }
+			);
+			const raw = data as Record<string, unknown>;
+			return {
+				id: raw['id'] as number,
+				htmlUrl: (raw['html_url'] as string | undefined) ?? '',
+				createdAt: (raw['created_at'] as string | undefined) ?? new Date().toISOString(),
+			};
+		}),
+
+	listReviewComments: (repoFullName, prNumber, since, token) =>
+		Effect.gen(function* () {
+			const { owner, repo } = yield* parseRepoFullName(repoFullName);
+			const sinceQ = since ? `&since=${encodeURIComponent(since)}` : '';
+			const data = yield* githubFetchPaginated(
+				`/repos/${owner}/${repo}/pulls/${prNumber}/comments?per_page=100${sinceQ}`,
+				token,
+				5
+			);
+			return (data as Record<string, unknown>[]).map((raw): GhReviewComment => {
+				const user = (raw['user'] as Record<string, unknown> | null) ?? {};
+				return {
+					id: raw['id'] as number,
+					inReplyToId: (raw['in_reply_to_id'] as number | undefined) ?? null,
+					path: raw['path'] as string,
+					line: (raw['line'] as number | null) ?? (raw['original_line'] as number | null) ?? null,
+					startLine: (raw['start_line'] as number | null) ?? null,
+					side: ((raw['side'] as 'LEFT' | 'RIGHT' | undefined) ?? 'RIGHT'),
+					body: (raw['body'] as string | undefined) ?? '',
+					authorLogin: (user['login'] as string | undefined) ?? '',
+					createdAt: raw['created_at'] as string,
+					updatedAt: raw['updated_at'] as string,
+					htmlUrl: (raw['html_url'] as string | undefined) ?? '',
+				};
+			});
+		}).pipe(Effect.retry(retrySchedule)),
+
+	listReviewThreads: (repoFullName, prNumber, token) =>
+		Effect.gen(function* () {
+			const { owner, repo } = yield* parseRepoFullName(repoFullName);
+			// GraphQL paginates at 100 per page — most PRs fit, but we page just in case.
+			const query = `
+				query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+					repository(owner: $owner, name: $repo) {
+						pullRequest(number: $number) {
+							reviewThreads(first: 100, after: $cursor) {
+								pageInfo { hasNextPage endCursor }
+								nodes {
+									id
+									isResolved
+									comments(first: 100) {
+										nodes { databaseId }
+									}
+								}
+							}
+						}
+					}
+				}
+			`;
+			interface ReviewThreadsResp {
+				repository: {
+					pullRequest: {
+						reviewThreads: {
+							pageInfo: { hasNextPage: boolean; endCursor: string | null };
+							nodes: Array<{
+								id: string;
+								isResolved: boolean;
+								comments: { nodes: Array<{ databaseId: number }> };
+							}>;
+						};
+					};
+				};
+			}
+			const out: GhReviewThread[] = [];
+			let cursor: string | null = null;
+			for (let p = 0; p < 5; p++) {
+				const data: ReviewThreadsResp = yield* githubGraphql<ReviewThreadsResp>(
+					query,
+					{ owner, repo, number: prNumber, cursor },
+					token
+				);
+				const page = data.repository.pullRequest.reviewThreads;
+				for (const node of page.nodes) {
+					out.push({
+						nodeId: node.id,
+						isResolved: node.isResolved,
+						commentDatabaseIds: node.comments.nodes.map((n: { databaseId: number }) => n.databaseId),
+					});
+				}
+				if (!page.pageInfo.hasNextPage) break;
+				cursor = page.pageInfo.endCursor;
+			}
+			return out;
+		}).pipe(Effect.retry(retrySchedule)),
+
+	resolveReviewThread: (threadNodeId, token) =>
+		Effect.gen(function* () {
+			yield* githubGraphql(
+				`mutation($id: ID!) { resolveReviewThread(input: { threadId: $id }) { clientMutationId } }`,
+				{ id: threadNodeId },
+				token
+			);
+		}),
+
+	unresolveReviewThread: (threadNodeId, token) =>
+		Effect.gen(function* () {
+			yield* githubGraphql(
+				`mutation($id: ID!) { unresolveReviewThread(input: { threadId: $id }) { clientMutationId } }`,
+				{ id: threadNodeId },
+				token
+			);
+		}),
+
+	getAuthenticatedUser: (token) =>
+		Effect.gen(function* () {
+			const data = yield* githubFetch(`/user`, token);
+			const raw = data as Record<string, unknown>;
+			return {
+				login: raw['login'] as string,
+				id: raw['id'] as number,
+			};
 		}).pipe(Effect.retry(retrySchedule)),
 });

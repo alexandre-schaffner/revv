@@ -6,7 +6,7 @@
 	} from '$lib/components/ui/popover/index.js';
 	import { getSettings, updateSettings } from '$lib/stores/settings.svelte';
 	import { agentSupportsThinkingEffort } from '$lib/constants/models';
-	import type { ThinkingEffort, AiAgent } from '@rev/shared';
+	import type { ThinkingEffort, AiAgent } from '@revv/shared';
 	import Brain from '@lucide/svelte/icons/brain';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import Check from '@lucide/svelte/icons/check';

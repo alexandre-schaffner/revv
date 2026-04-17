@@ -1,5 +1,5 @@
 import type { PrFileMeta } from '../../services/GitHub';
-import type { WalkthroughBlock } from '@rev/shared';
+import type { WalkthroughBlock } from '@revv/shared';
 
 // ── Continuation context (imported here to avoid circular deps) ──────────────
 

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { PullRequest } from '@rev/shared';
+	import type { PullRequest } from '@revv/shared';
 	import { selectPr } from '$lib/stores/prs.svelte';
 	import { getFocusedId } from '$lib/stores/sidebar-nav.svelte';
 	import {
@@ -14,7 +14,6 @@
 	import { toFileTreeEntries } from '$lib/types/review';
 	import StatusDot from '$lib/components/shared/StatusDot.svelte';
 	import DiffFileTree from '$lib/components/review/DiffFileTree.svelte';
-
 	let { pr, isSelected = false }: { pr: PullRequest; isSelected?: boolean } = $props();
 
 	let expanded = $state(false);
@@ -101,3 +100,6 @@
 		{/if}
 	{/if}
 </div>
+
+<style>
+</style>

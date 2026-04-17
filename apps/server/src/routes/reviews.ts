@@ -9,12 +9,13 @@ import { PullRequestService } from '../services/PullRequest';
 import { RepoCloneService } from '../services/RepoClone';
 import { RepositoryService } from '../services/Repository';
 import { ReviewService } from '../services/Review';
+import { SyncService } from '../services/Sync';
 import { TokenProvider } from '../services/TokenProvider';
 import { WalkthroughService } from '../services/Walkthrough';
 import { WebSocketHub } from '../services/WebSocketHub';
 import { POLL_CLONE_MAX_ATTEMPTS, POLL_CLONE_INTERVAL_SECONDS } from '../constants';
 import { withAuth, handleAppError, unwrapEffectError, jsonResponse, mapErrorToSSEResponse } from './middleware';
-import type { RiskLevel, WalkthroughStreamEvent, Repository } from '@rev/shared';
+import type { RiskLevel, WalkthroughStreamEvent, Repository } from '@revv/shared';
 
 /**
  * Ensure a git clone exists and a PR worktree is set up.
@@ -73,7 +74,7 @@ export const reviewRoutes = new Elysia({ prefix: '/api/reviews' })
 					const threads = yield* reviewService.getThreadsForSession(reviewSession.id);
 
 					// Load messages for all threads
-					const messages: Record<string, import('@rev/shared').ThreadMessage[]> = {};
+					const messages: Record<string, import('@revv/shared').ThreadMessage[]> = {};
 					for (const thread of threads) {
 						messages[thread.id] = yield* reviewService.getMessages(thread.id);
 					}
@@ -156,6 +157,7 @@ export const reviewRoutes = new Elysia({ prefix: '/api/reviews' })
 					Effect.gen(function* () {
 						const reviewService = yield* ReviewService;
 						const hub = yield* WebSocketHub;
+						const sync = yield* SyncService;
 
 						const thread = yield* reviewService.createThread(ctx.params.id, {
 							filePath: ctx.body.filePath,
@@ -174,12 +176,24 @@ export const reviewRoutes = new Elysia({ prefix: '/api/reviews' })
 								: {}),
 						});
 
+						// Auto-transition based on author role.
+						const transitioned = yield* reviewService
+							.transitionStatus(thread.id, ctx.body.message.authorRole)
+							.pipe(Effect.catchAll(() => Effect.succeed(null)));
+
 						yield* hub.broadcast({
 							type: 'thread:created',
-							data: { sessionId: ctx.params.id, thread, message },
+							data: {
+								sessionId: ctx.params.id,
+								thread: transitioned ?? thread,
+								message,
+							},
 						});
 
-						return { thread, message };
+						// Fire-and-forget auto-push to GitHub.
+						yield* sync.pushThread(thread.id).pipe(Effect.catchAll(() => Effect.void));
+
+						return { thread: transitioned ?? thread, message };
 					}),
 				);
 
@@ -367,9 +381,27 @@ export const reviewRoutes = new Elysia({ prefix: '/api/reviews' })
 							const ageMs = Date.now() - new Date(partial.generatedAt).getTime();
 							const fiveMinutesMs = 5 * 60 * 1000;
 							if (ageMs < fiveMinutesMs && partial.status !== 'error') {
-								return yield* Effect.fail(
-									new Error('Walkthrough generation is already in progress for this PR'),
-								);
+								// Generation is running in the background — replay existing
+								// data and tell the client to listen on WS for completion.
+								const replayGen = (async function* (): AsyncGenerator<WalkthroughStreamEvent> {
+									yield { type: 'summary' as const, data: { summary: partial.summary, riskLevel: partial.riskLevel } };
+									for (const block of partial.blocks) {
+										yield { type: 'block' as const, data: block };
+									}
+									for (const issue of partial.issues) {
+										yield { type: 'issue' as const, data: issue };
+									}
+									yield { type: 'in-progress' as const, data: { walkthroughId: partial.id } };
+								})();
+								return {
+									generator: replayGen,
+									reviewSessionId: partial.reviewSessionId,
+									prId: pr.id,
+									headSha: meta.headSha,
+									modelUsed: partial.modelUsed,
+									existingWalkthroughId: undefined as string | undefined,
+									resumeFromBlockCount: 0,
+								};
 							}
 							const continuation: ContinuationContext = {
 								walkthroughId: partial.id,
@@ -469,12 +501,9 @@ export const reviewRoutes = new Elysia({ prefix: '/api/reviews' })
 				let issueOrderCounter = 0;
 
 				for await (const event of generator) {
-					if (cancelled) {
-						debug('walkthrough-sse', 'client disconnected, stopping generator');
-						break;
-					}
 					debug('walkthrough-sse', 'got event:', event.type);
 
+					// ── Persist regardless of client connection ──────────────
 					if (event.type === 'summary') {
 						collectedSummary = event.data.summary;
 						collectedRiskLevel = event.data.riskLevel;
@@ -530,33 +559,33 @@ export const reviewRoutes = new Elysia({ prefix: '/api/reviews' })
 						).catch((err) => {
 							logError('walkthrough-sse', 'Failed to mark walkthrough complete:', err);
 						});
+						// Broadcast completion via WebSocket so background listeners are notified
+						await AppRuntime.runPromise(
+							Effect.gen(function* () {
+								const hub = yield* WebSocketHub;
+								yield* hub.broadcast({ type: 'walkthrough:complete', data: { prId, walkthroughId: capturedId } });
+							}),
+						).catch(() => { /* best-effort */ });
 						// Overwrite empty walkthroughId in done event with real ID before sending
-						const doneEvent = { ...event, data: { ...event.data, walkthroughId: capturedId } };
-						try {
-							controller.enqueue(encoder.encode(`data: ${JSON.stringify(doneEvent)}\n\n`));
-						} catch {
-							// Controller closed between cancelled check and enqueue
-							break;
+						if (!cancelled) {
+							const doneEvent = { ...event, data: { ...event.data, walkthroughId: capturedId } };
+							try {
+								controller.enqueue(encoder.encode(`data: ${JSON.stringify(doneEvent)}\n\n`));
+							} catch { cancelled = true; }
 						}
 						continue;
 					}
 
-					try {
-						controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
-					} catch {
-						// Controller closed between cancelled check and enqueue
-						break;
+					// ── Stream to SSE only if client is still connected ─────
+					if (!cancelled) {
+						try {
+							controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+						} catch {
+							// Client disconnected — continue generating in background
+							cancelled = true;
+							debug('walkthrough-sse', 'client disconnected, continuing generation in background');
+						}
 					}
-				}
-
-				if (cancelled && walkthroughId !== null) {
-					const capturedId = walkthroughId;
-					AppRuntime.runPromise(
-						Effect.gen(function* () {
-							const ws = yield* WalkthroughService;
-							yield* ws.markError(capturedId);
-						}),
-					).catch(() => { /* best-effort */ });
 				}
 
 				if (!cancelled) {
@@ -579,6 +608,13 @@ export const reviewRoutes = new Elysia({ prefix: '/api/reviews' })
 				}
 				const e = unwrapEffectError(err);
 				const message = e instanceof Error ? e.message : 'Walkthrough generation failed';
+				// Broadcast error via WebSocket so background listeners are notified
+				AppRuntime.runPromise(
+					Effect.gen(function* () {
+						const hub = yield* WebSocketHub;
+						yield* hub.broadcast({ type: 'walkthrough:error', data: { prId: ctx.params.id, message } });
+					}),
+				).catch(() => { /* best-effort */ });
 				try {
 					controller.enqueue(
 						encoder.encode(`data: ${JSON.stringify({ type: 'error', data: { code: 'GENERATION_ERROR', message } })}\n\n`),
@@ -640,4 +676,87 @@ export const reviewRoutes = new Elysia({ prefix: '/api/reviews' })
 		} catch (e) {
 			return handleAppError(e, ctx);
 		}
-	});
+	})
+
+	// POST /api/reviews/:id/github-submit — submit a review to GitHub
+	.post(
+		'/:id/github-submit',
+		async (ctx) => {
+			try {
+				const result = await AppRuntime.runPromise(
+					Effect.gen(function* () {
+						const prService = yield* PullRequestService;
+						const repoService = yield* RepositoryService;
+						const tokenProvider = yield* TokenProvider;
+						const github = yield* GitHubService;
+
+						const pr = yield* prService.getPr(ctx.params.id);
+						const repo = yield* repoService.getRepoById(pr.repositoryId);
+						const ghToken = yield* tokenProvider.getGitHubToken(ctx.session.user.id);
+
+						const eventMap = {
+							approve: 'APPROVE',
+							request_changes: 'REQUEST_CHANGES',
+							comment: 'COMMENT',
+						} as const;
+
+						const comments = (ctx.body.comments ?? []).map((c) => {
+							const comment: {
+								path: string;
+								body: string;
+								line: number;
+								side: 'LEFT' | 'RIGHT';
+								startLine?: number;
+								startSide?: 'LEFT' | 'RIGHT';
+							} = {
+								path: c.path,
+								body: c.body,
+								line: c.line,
+								side: c.side,
+							};
+							if (c.startLine !== undefined && c.startLine !== c.line) {
+								comment.startLine = c.startLine;
+								comment.startSide = c.side;
+							}
+							return comment;
+						});
+
+						return yield* github.postReview(
+							repo.fullName,
+							pr.externalId,
+							{
+								event: eventMap[ctx.body.action],
+								body: ctx.body.body ?? '',
+								comments,
+							},
+							ghToken,
+						);
+					}),
+				);
+				return result;
+			} catch (e) {
+				return handleAppError(e, ctx);
+			}
+		},
+		{
+			body: t.Object({
+				action: t.Union([
+					t.Literal('approve'),
+					t.Literal('request_changes'),
+					t.Literal('comment'),
+				]),
+				body: t.Optional(t.String()),
+				comments: t.Optional(
+					t.Array(
+						t.Object({
+							path: t.String(),
+							body: t.String(),
+							line: t.Number(),
+							side: t.Union([t.Literal('LEFT'), t.Literal('RIGHT')]),
+							startLine: t.Optional(t.Number()),
+						}),
+					),
+				),
+			}),
+		},
+	);

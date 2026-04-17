@@ -9,7 +9,7 @@ export const CLONE_TIMEOUT_MS = 600_000; // 10 minutes
 export const CLI_WALKTHROUGH_TIMEOUT_MS = 600_000; // 10 minutes
 
 /** Inactivity timeout for walkthrough stream guard (no events for this long = abort). */
-export const WALKTHROUGH_INACTIVITY_TIMEOUT_MS = 90_000; // 90 seconds
+export const WALKTHROUGH_INACTIVITY_TIMEOUT_MS = 120_000; // 120 seconds -- 2 min
 
 /** Exploration-stall timeout: if only exploration events arrive for this long with no
  *  summary/block/phase progress, the model is stuck reading files — abort with an error. */

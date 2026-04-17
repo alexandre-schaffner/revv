@@ -85,5 +85,5 @@ clean-all: clean ## Remove build artifacts AND node_modules
 	rm -rf packages/shared/node_modules
 
 reset-db: ## Delete the local database (will be recreated on next server start)
-	rm -f apps/server/rev.db apps/server/re.db-shm apps/server/rev.db-wal
+	rm -f apps/server/revv.db apps/server/revv.db-shm apps/server/revv.db-wal
 	@printf "Database deleted. It will be recreated on next server start.\n"

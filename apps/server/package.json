@@ -1,5 +1,5 @@
 {
-  "name": "@rev/server",
+  "name": "@revv/server",
   "version": "0.0.1",
   "private": true,
   "exports": {
@@ -13,7 +13,7 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.110",
     "@elysiajs/cors": "^1",
-"@rev/shared": "workspace:*",
+"@revv/shared": "workspace:*",
     "@sinclair/typebox": "^0.34.49",
     "better-auth": "^1.6.3",
     "drizzle-orm": "^0.38",

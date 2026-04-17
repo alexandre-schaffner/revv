@@ -14,4 +14,7 @@ export const commentThreads = sqliteTable('comment_threads', {
 	status: text('status').notNull().default('open'),
 	createdAt: text('created_at').notNull(),
 	resolvedAt: text('resolved_at'),
+	externalThreadId: text('external_thread_id'),
+	externalCommentId: text('external_comment_id'),
+	lastSyncedAt: text('last_synced_at'),
 });

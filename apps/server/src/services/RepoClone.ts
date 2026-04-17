@@ -4,7 +4,7 @@ import { rm } from 'node:fs/promises';
 import { existsSync, mkdirSync } from 'node:fs';
 import { Context, Effect, Layer } from 'effect';
 import { eq } from 'drizzle-orm';
-import type { Repository, CloneStatus } from '@rev/shared';
+import type { Repository, CloneStatus } from '@revv/shared';
 import { CloneError, CloneNotReadyError } from '../domain/errors';
 import { CLONE_TIMEOUT_MS } from '../constants';
 import { repositories } from '../db/schema/index';

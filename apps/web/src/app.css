@@ -27,82 +27,82 @@
 	--radius: 0.5rem;
 
 	/* Rev palette */
-	--rev-bg-primary: #ffffff;
-	--rev-bg-secondary: #f4f4f5;
-	--rev-bg-tertiary: #e4e4e7;
-	--rev-bg-elevated: #ffffff;
-	--rev-border: #d4d4d8;
-	--rev-border-subtle: #e4e4e7;
-	--rev-text-primary: #18181b;
-	--rev-text-secondary: #52525b;
-	--rev-text-muted: #a1a1aa;
-	--rev-accent: #3b82f6;
-	--rev-accent-hover: #2563eb;
-	--rev-success: #16a34a;
-	--rev-warning: #ca8a04;
-	--rev-danger: #dc2626;
+	--revv-bg-primary: #ffffff;
+	--revv-bg-secondary: #f4f4f5;
+	--revv-bg-tertiary: #e4e4e7;
+	--revv-bg-elevated: #ffffff;
+	--revv-border: #d4d4d8;
+	--revv-border-subtle: #e4e4e7;
+	--revv-text-primary: #18181b;
+	--revv-text-secondary: #52525b;
+	--revv-text-muted: #a1a1aa;
+	--revv-accent: #3b82f6;
+	--revv-accent-hover: #2563eb;
+	--revv-success: #16a34a;
+	--revv-warning: #ca8a04;
+	--revv-danger: #dc2626;
 
 	/* Diff canvas */
-	--rev-diff-bg: #fafafa;
-	--rev-diff-gutter-bg: #f5f5f5;
-	--rev-diff-gutter-border: #e5e5e5;
+	--revv-diff-bg: #fafafa;
+	--revv-diff-gutter-bg: #f5f5f5;
+	--revv-diff-gutter-border: #e5e5e5;
 
 	/* Addition lines */
-	--rev-diff-add-bg: #dcfce7;
-	--rev-diff-add-bg-hover: #bbf7d0;
-	--rev-diff-add-word: #86efac;
-	--rev-diff-add-gutter: #dcfce7;
-	--rev-diff-add-text: #166534;
+	--revv-diff-add-bg: #dcfce7;
+	--revv-diff-add-bg-hover: #bbf7d0;
+	--revv-diff-add-word: #86efac;
+	--revv-diff-add-gutter: #dcfce7;
+	--revv-diff-add-text: #166534;
 
 	/* Deletion lines */
-	--rev-diff-del-bg: #fee2e2;
-	--rev-diff-del-bg-hover: #fecaca;
-	--rev-diff-del-word: #fca5a5;
-	--rev-diff-del-gutter: #fee2e2;
-	--rev-diff-del-text: #991b1b;
+	--revv-diff-del-bg: #fee2e2;
+	--revv-diff-del-bg-hover: #fecaca;
+	--revv-diff-del-word: #fca5a5;
+	--revv-diff-del-gutter: #fee2e2;
+	--revv-diff-del-text: #991b1b;
 
 	/* Context line hover */
-	--rev-diff-ctx-bg-hover: #f5f5f5;
-	--rev-diff-selected-bg: rgba(59, 130, 246, 0.08);
+	--revv-diff-ctx-bg-hover: #f5f5f5;
+	--revv-diff-selected-bg: rgba(59, 130, 246, 0.08);
 
 	/* Gutter markers */
-	--rev-marker-open: #3b82f6;
-	--rev-marker-open-glow: rgba(59, 130, 246, 0.25);
-	--rev-marker-pending: #f59e0b;
-	--rev-marker-pending-glow: rgba(245, 158, 11, 0.25);
-	--rev-marker-resolved: #d4d4d8;
+	--revv-marker-open: #3b82f6;
+	--revv-marker-open-glow: rgba(59, 130, 246, 0.25);
+	--revv-marker-pending: #f59e0b;
+	--revv-marker-pending-glow: rgba(245, 158, 11, 0.25);
+	--revv-marker-your-turn: #f97316;
+	--revv-marker-resolved: #d4d4d8;
 
 	/* Line action floating pill */
-	--rev-pill-bg: rgba(255, 255, 255, 0.95);
-	--rev-pill-border: rgba(0, 0, 0, 0.08);
-	--rev-pill-shadow: 0 8px 24px rgba(0, 0, 0, 0.1), 0 2px 6px rgba(0, 0, 0, 0.06);
+	--revv-pill-bg: rgba(255, 255, 255, 0.95);
+	--revv-pill-border: rgba(0, 0, 0, 0.08);
+	--revv-pill-shadow: 0 8px 24px rgba(0, 0, 0, 0.1), 0 2px 6px rgba(0, 0, 0, 0.06);
 
 	/* Comment / thread */
-	--rev-thread-bg: #ffffff;
-	--rev-input-bg: #f4f4f5;
-	--rev-input-focus-ring: rgba(59, 130, 246, 0.4);
+	--revv-thread-bg: #ffffff;
+	--revv-input-bg: #f4f4f5;
+	--revv-input-focus-ring: rgba(59, 130, 246, 0.4);
 
 	/* Context panel */
-	--rev-panel-bg: #fafafa;
-	--rev-panel-header-bg: rgba(255, 255, 255, 0.95);
-	--rev-stream-cursor: #3b82f6;
+	--revv-panel-bg: #fafafa;
+	--revv-panel-header-bg: rgba(255, 255, 255, 0.95);
+	--revv-stream-cursor: #3b82f6;
 
 	/* File tree */
-	--rev-tree-active-bg: rgba(59, 130, 246, 0.08);
-	--rev-tree-active-text: #2563eb;
-	--rev-tree-hover-bg: #f4f4f5;
+	--revv-tree-active-bg: rgba(59, 130, 246, 0.08);
+	--revv-tree-active-text: #2563eb;
+	--revv-tree-hover-bg: #f4f4f5;
 
 	/* Floating tabs */
-	--rev-tab-active-bg: #ffffff;
-	--rev-tab-inactive-text: #a1a1aa;
+	--revv-tab-active-bg: #ffffff;
+	--revv-tab-inactive-text: #a1a1aa;
 
 	/* Glass pill */
-	--rev-glass-bg: rgba(255, 255, 255, 0.65);
-	--rev-glass-border: rgba(0, 0, 0, 0.08);
-	--rev-glass-highlight: rgba(255, 255, 255, 0.5);
-	--rev-glass-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 16px rgba(0, 0, 0, 0.06);
-	--rev-glass-grain-opacity: 0.25;
-	--rev-glass-active-bg: rgba(255, 255, 255, 0.85);
+	--revv-glass-bg: rgba(255, 255, 255, 0.65);
+	--revv-glass-border: rgba(0, 0, 0, 0.08);
+	--revv-glass-highlight: rgba(255, 255, 255, 0.5);
+	--revv-glass-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 16px rgba(0, 0, 0, 0.06);
+	--revv-glass-active-bg: rgba(255, 255, 255, 0.85);
 }
 
 /* ──────────────────────────────────────────────────────────
@@ -131,82 +131,82 @@
 	--ring: 217 91% 60%;
 
 	/* Rev palette */
-	--rev-bg-primary: #0a0a0a;
-	--rev-bg-secondary: #111111;
-	--rev-bg-tertiary: #1a1a1a;
-	--rev-bg-elevated: #222222;
-	--rev-border: #262626;
-	--rev-border-subtle: #1a1a1a;
-	--rev-text-primary: #e4e4e7;
-	--rev-text-secondary: #a1a1aa;
-	--rev-text-muted: #52525b;
-	--rev-accent: #3b82f6;
-	--rev-accent-hover: #2563eb;
-	--rev-success: #22c55e;
-	--rev-warning: #eab308;
-	--rev-danger: #ef4444;
+	--revv-bg-primary: #0a0a0a;
+	--revv-bg-secondary: #111111;
+	--revv-bg-tertiary: #1a1a1a;
+	--revv-bg-elevated: #222222;
+	--revv-border: #262626;
+	--revv-border-subtle: #1a1a1a;
+	--revv-text-primary: #e4e4e7;
+	--revv-text-secondary: #a1a1aa;
+	--revv-text-muted: #52525b;
+	--revv-accent: #3b82f6;
+	--revv-accent-hover: #2563eb;
+	--revv-success: #22c55e;
+	--revv-warning: #eab308;
+	--revv-danger: #ef4444;
 
 	/* Diff canvas */
-	--rev-diff-bg: #0d0d0d;
-	--rev-diff-gutter-bg: #0a0a0a;
-	--rev-diff-gutter-border: #1e1e1e;
+	--revv-diff-bg: #0d0d0d;
+	--revv-diff-gutter-bg: #0a0a0a;
+	--revv-diff-gutter-border: #1e1e1e;
 
 	/* Addition lines */
-	--rev-diff-add-bg: #0d1f0d;
-	--rev-diff-add-bg-hover: #112811;
-	--rev-diff-add-word: #162d16;
-	--rev-diff-add-gutter: #0e1f0e;
-	--rev-diff-add-text: #4ade80;
+	--revv-diff-add-bg: #0d1f0d;
+	--revv-diff-add-bg-hover: #112811;
+	--revv-diff-add-word: #162d16;
+	--revv-diff-add-gutter: #0e1f0e;
+	--revv-diff-add-text: #4ade80;
 
 	/* Deletion lines */
-	--rev-diff-del-bg: #1f0d0d;
-	--rev-diff-del-bg-hover: #281212;
-	--rev-diff-del-word: #2d1212;
-	--rev-diff-del-gutter: #1c0e0e;
-	--rev-diff-del-text: #f87171;
+	--revv-diff-del-bg: #1f0d0d;
+	--revv-diff-del-bg-hover: #281212;
+	--revv-diff-del-word: #2d1212;
+	--revv-diff-del-gutter: #1c0e0e;
+	--revv-diff-del-text: #f87171;
 
 	/* Context line hover */
-	--rev-diff-ctx-bg-hover: #131313;
-	--rev-diff-selected-bg: rgba(59, 130, 246, 0.08);
+	--revv-diff-ctx-bg-hover: #131313;
+	--revv-diff-selected-bg: rgba(59, 130, 246, 0.08);
 
 	/* Gutter markers */
-	--rev-marker-open: #3b82f6;
-	--rev-marker-open-glow: rgba(59, 130, 246, 0.35);
-	--rev-marker-pending: #f59e0b;
-	--rev-marker-pending-glow: rgba(245, 158, 11, 0.35);
-	--rev-marker-resolved: #3f3f46;
+	--revv-marker-open: #3b82f6;
+	--revv-marker-open-glow: rgba(59, 130, 246, 0.35);
+	--revv-marker-pending: #f59e0b;
+	--revv-marker-pending-glow: rgba(245, 158, 11, 0.35);
+	--revv-marker-your-turn: #fb923c;
+	--revv-marker-resolved: #3f3f46;
 
 	/* Line action floating pill */
-	--rev-pill-bg: rgba(26, 26, 26, 0.92);
-	--rev-pill-border: rgba(255, 255, 255, 0.07);
-	--rev-pill-shadow: 0 8px 24px rgba(0, 0, 0, 0.6), 0 2px 6px rgba(0, 0, 0, 0.4);
+	--revv-pill-bg: rgba(26, 26, 26, 0.92);
+	--revv-pill-border: rgba(255, 255, 255, 0.07);
+	--revv-pill-shadow: 0 8px 24px rgba(0, 0, 0, 0.6), 0 2px 6px rgba(0, 0, 0, 0.4);
 
 	/* Comment / thread */
-	--rev-thread-bg: #111111;
-	--rev-input-bg: #161616;
-	--rev-input-focus-ring: rgba(59, 130, 246, 0.4);
+	--revv-thread-bg: #111111;
+	--revv-input-bg: #161616;
+	--revv-input-focus-ring: rgba(59, 130, 246, 0.4);
 
 	/* Context panel */
-	--rev-panel-bg: #0e0e0e;
-	--rev-panel-header-bg: rgba(17, 17, 17, 0.95);
-	--rev-stream-cursor: #3b82f6;
+	--revv-panel-bg: #0e0e0e;
+	--revv-panel-header-bg: rgba(17, 17, 17, 0.95);
+	--revv-stream-cursor: #3b82f6;
 
 	/* File tree */
-	--rev-tree-active-bg: rgba(59, 130, 246, 0.1);
-	--rev-tree-active-text: #93c5fd;
-	--rev-tree-hover-bg: #141414;
+	--revv-tree-active-bg: rgba(59, 130, 246, 0.1);
+	--revv-tree-active-text: #93c5fd;
+	--revv-tree-hover-bg: #141414;
 
 	/* Floating tabs */
-	--rev-tab-active-bg: #1a1a1a;
-	--rev-tab-inactive-text: #71717a;
+	--revv-tab-active-bg: #1a1a1a;
+	--revv-tab-inactive-text: #71717a;
 
 	/* Glass pill */
-	--rev-glass-bg: rgba(30, 30, 30, 0.65);
-	--rev-glass-border: rgba(255, 255, 255, 0.10);
-	--rev-glass-highlight: rgba(255, 255, 255, 0.05);
-	--rev-glass-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 4px 16px rgba(0, 0, 0, 0.25);
-	--rev-glass-grain-opacity: 0.2;
-	--rev-glass-active-bg: rgba(255, 255, 255, 0.10);
+	--revv-glass-bg: rgba(30, 30, 30, 0.65);
+	--revv-glass-border: rgba(255, 255, 255, 0.10);
+	--revv-glass-highlight: rgba(255, 255, 255, 0.05);
+	--revv-glass-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 4px 16px rgba(0, 0, 0, 0.25);
+	--revv-glass-active-bg: rgba(255, 255, 255, 0.10);
 }
 
 /* ──────────────────────────────────────────────────────────
@@ -235,84 +235,84 @@
 	--color-ring: hsl(var(--ring));
 
 	/* Rev palette */
-	--color-bg-primary: var(--rev-bg-primary);
-	--color-bg-secondary: var(--rev-bg-secondary);
-	--color-bg-tertiary: var(--rev-bg-tertiary);
-	--color-bg-elevated: var(--rev-bg-elevated);
-	--color-border: var(--rev-border);
-	--color-border-subtle: var(--rev-border-subtle);
-	--color-text-primary: var(--rev-text-primary);
-	--color-text-secondary: var(--rev-text-secondary);
-	--color-text-muted: var(--rev-text-muted);
-	--color-accent: var(--rev-accent);
-	--color-accent-hover: var(--rev-accent-hover);
-	--color-success: var(--rev-success);
-	--color-warning: var(--rev-warning);
-	--color-danger: var(--rev-danger);
+	--color-bg-primary: var(--revv-bg-primary);
+	--color-bg-secondary: var(--revv-bg-secondary);
+	--color-bg-tertiary: var(--revv-bg-tertiary);
+	--color-bg-elevated: var(--revv-bg-elevated);
+	--color-border: var(--revv-border);
+	--color-border-subtle: var(--revv-border-subtle);
+	--color-text-primary: var(--revv-text-primary);
+	--color-text-secondary: var(--revv-text-secondary);
+	--color-text-muted: var(--revv-text-muted);
+	--color-accent: var(--revv-accent);
+	--color-accent-hover: var(--revv-accent-hover);
+	--color-success: var(--revv-success);
+	--color-warning: var(--revv-warning);
+	--color-danger: var(--revv-danger);
 	--font-sans: 'Inter', system-ui, sans-serif;
 	--font-mono: 'JetBrains Mono', 'Fira Code', monospace;
 
 	/* Diff canvas */
-	--color-diff-bg: var(--rev-diff-bg);
-	--color-diff-gutter-bg: var(--rev-diff-gutter-bg);
-	--color-diff-gutter-border: var(--rev-diff-gutter-border);
+	--color-diff-bg: var(--revv-diff-bg);
+	--color-diff-gutter-bg: var(--revv-diff-gutter-bg);
+	--color-diff-gutter-border: var(--revv-diff-gutter-border);
 
 	/* Addition lines */
-	--color-diff-add-bg: var(--rev-diff-add-bg);
-	--color-diff-add-bg-hover: var(--rev-diff-add-bg-hover);
-	--color-diff-add-word: var(--rev-diff-add-word);
-	--color-diff-add-gutter: var(--rev-diff-add-gutter);
-	--color-diff-add-text: var(--rev-diff-add-text);
+	--color-diff-add-bg: var(--revv-diff-add-bg);
+	--color-diff-add-bg-hover: var(--revv-diff-add-bg-hover);
+	--color-diff-add-word: var(--revv-diff-add-word);
+	--color-diff-add-gutter: var(--revv-diff-add-gutter);
+	--color-diff-add-text: var(--revv-diff-add-text);
 
 	/* Deletion lines */
-	--color-diff-del-bg: var(--rev-diff-del-bg);
-	--color-diff-del-bg-hover: var(--rev-diff-del-bg-hover);
-	--color-diff-del-word: var(--rev-diff-del-word);
-	--color-diff-del-gutter: var(--rev-diff-del-gutter);
-	--color-diff-del-text: var(--rev-diff-del-text);
+	--color-diff-del-bg: var(--revv-diff-del-bg);
+	--color-diff-del-bg-hover: var(--revv-diff-del-bg-hover);
+	--color-diff-del-word: var(--revv-diff-del-word);
+	--color-diff-del-gutter: var(--revv-diff-del-gutter);
+	--color-diff-del-text: var(--revv-diff-del-text);
 
 	/* Context line hover */
-	--color-diff-ctx-bg-hover: var(--rev-diff-ctx-bg-hover);
-	--color-diff-selected-bg: var(--rev-diff-selected-bg);
+	--color-diff-ctx-bg-hover: var(--revv-diff-ctx-bg-hover);
+	--color-diff-selected-bg: var(--revv-diff-selected-bg);
 
 	/* Gutter markers */
-	--color-marker-open: var(--rev-marker-open);
-	--color-marker-open-glow: var(--rev-marker-open-glow);
-	--color-marker-pending: var(--rev-marker-pending);
-	--color-marker-pending-glow: var(--rev-marker-pending-glow);
-	--color-marker-resolved: var(--rev-marker-resolved);
+	--color-marker-open: var(--revv-marker-open);
+	--color-marker-open-glow: var(--revv-marker-open-glow);
+	--color-marker-pending: var(--revv-marker-pending);
+	--color-marker-pending-glow: var(--revv-marker-pending-glow);
+	--color-marker-resolved: var(--revv-marker-resolved);
+	--color-marker-your-turn: var(--revv-marker-your-turn);
 
 	/* Line action floating pill */
-	--color-pill-bg: var(--rev-pill-bg);
-	--color-pill-border: var(--rev-pill-border);
-	--color-pill-shadow: var(--rev-pill-shadow);
+	--color-pill-bg: var(--revv-pill-bg);
+	--color-pill-border: var(--revv-pill-border);
+	--color-pill-shadow: var(--revv-pill-shadow);
 
 	/* Comment / thread */
-	--color-thread-bg: var(--rev-thread-bg);
-	--color-input-bg: var(--rev-input-bg);
-	--color-input-focus-ring: var(--rev-input-focus-ring);
+	--color-thread-bg: var(--revv-thread-bg);
+	--color-input-bg: var(--revv-input-bg);
+	--color-input-focus-ring: var(--revv-input-focus-ring);
 
 	/* Context panel */
-	--color-panel-bg: var(--rev-panel-bg);
-	--color-panel-header-bg: var(--rev-panel-header-bg);
-	--color-stream-cursor: var(--rev-stream-cursor);
+	--color-panel-bg: var(--revv-panel-bg);
+	--color-panel-header-bg: var(--revv-panel-header-bg);
+	--color-stream-cursor: var(--revv-stream-cursor);
 
 	/* File tree */
-	--color-tree-active-bg: var(--rev-tree-active-bg);
-	--color-tree-active-text: var(--rev-tree-active-text);
-	--color-tree-hover-bg: var(--rev-tree-hover-bg);
+	--color-tree-active-bg: var(--revv-tree-active-bg);
+	--color-tree-active-text: var(--revv-tree-active-text);
+	--color-tree-hover-bg: var(--revv-tree-hover-bg);
 
 	/* Floating tabs */
-	--color-tab-active-bg: var(--rev-tab-active-bg);
-	--color-tab-inactive-text: var(--rev-tab-inactive-text);
+	--color-tab-active-bg: var(--revv-tab-active-bg);
+	--color-tab-inactive-text: var(--revv-tab-inactive-text);
 
 	/* Glass pill */
-	--color-glass-bg: var(--rev-glass-bg);
-	--color-glass-border: var(--rev-glass-border);
-	--color-glass-highlight: var(--rev-glass-highlight);
-	--color-glass-shadow: var(--rev-glass-shadow);
-	--color-glass-grain-opacity: var(--rev-glass-grain-opacity);
-	--color-glass-active-bg: var(--rev-glass-active-bg);
+	--color-glass-bg: var(--revv-glass-bg);
+	--color-glass-border: var(--revv-glass-border);
+	--color-glass-highlight: var(--revv-glass-highlight);
+	--color-glass-shadow: var(--revv-glass-shadow);
+	--color-glass-active-bg: var(--revv-glass-active-bg);
 
 	/* Motion */
 	--duration-snap: 120ms;
@@ -415,3 +415,4 @@ body {
 ::selection {
 	background-color: color-mix(in srgb, var(--color-accent) 30%, transparent);
 }
+

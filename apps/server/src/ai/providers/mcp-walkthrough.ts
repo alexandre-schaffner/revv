@@ -1,5 +1,5 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
-import type { WalkthroughStreamEvent, WalkthroughTokenUsage, WalkthroughBlock } from '@rev/shared';
+import type { WalkthroughStreamEvent, WalkthroughTokenUsage, WalkthroughBlock } from '@revv/shared';
 import type { PrFileMeta } from '../../services/GitHub';
 import { debug } from '../../logger';
 import {

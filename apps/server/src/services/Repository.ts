@@ -1,6 +1,6 @@
 import { Context, Effect, Layer } from 'effect';
 import { eq } from 'drizzle-orm';
-import type { Repository } from '@rev/shared';
+import type { Repository } from '@revv/shared';
 import { NotFoundError, ValidationError } from '../domain/errors';
 import { repositories } from '../db/schema/index';
 import { DbService } from './Db';

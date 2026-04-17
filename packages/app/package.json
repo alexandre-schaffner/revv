@@ -1,5 +1,5 @@
 {
-  "name": "@rev/app",
+  "name": "@revv/app",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -10,8 +10,8 @@
     "lint": "echo 'no linter configured'"
   },
   "dependencies": {
-    "@rev/shared": "workspace:*",
-    "@rev/ui": "workspace:*",
+    "@revv/shared": "workspace:*",
+    "@revv/ui": "workspace:*",
     "@tanstack/react-router": "^1.168.0",
     "@tanstack/react-start": "^1.167.0",
     "react": "catalog:",

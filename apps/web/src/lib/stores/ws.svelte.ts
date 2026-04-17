@@ -1,17 +1,25 @@
-import type { WsServerMessage } from '@rev/shared';
-import { API_BASE_URL } from '@rev/shared';
+import type { WsServerMessage } from '@revv/shared';
+import { API_BASE_URL } from '@revv/shared';
 import * as prs from './prs.svelte';
+import { getSelectedPrId } from './prs.svelte';
 import * as errors from './errors.svelte';
+import * as sync from './sync.svelte';
 import {
 	addThreadFromWs,
 	updateThreadStatusFromWs,
 	addMessageFromWs,
+	loadSession,
 } from './review.svelte';
+import {
+	onWalkthroughComplete,
+	onWalkthroughError,
+} from './walkthrough.svelte';
 
 let ws: WebSocket | null = null;
 let connected = $state(false);
 let reconnectAttempts = $state(0);
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingThreadSync: string | null = null;
 
 const MAX_RECONNECT_DELAY_MS = 30_000;
 
@@ -47,6 +55,21 @@ function handleMessage(msg: WsServerMessage): void {
 		case 'thread:message':
 			addMessageFromWs(msg.data.threadId, msg.data.message);
 			break;
+		case 'threads:synced':
+			sync.applySynced(msg.data.prId, msg.data.summary, msg.data.timestamp);
+			if (msg.data.prId === getSelectedPrId()) {
+				void loadSession(msg.data.prId);
+			}
+			break;
+		case 'threads:new-reply':
+			addThreadFromWs(msg.data.thread, msg.data.message);
+			break;
+		case 'walkthrough:complete':
+			onWalkthroughComplete(msg.data.prId, msg.data.walkthroughId);
+			break;
+		case 'walkthrough:error':
+			onWalkthroughError(msg.data.prId, msg.data.message);
+			break;
 	}
 }
 
@@ -62,6 +85,12 @@ export function connect(token: string): void {
 		if (reconnectTimer) {
 			clearTimeout(reconnectTimer);
 			reconnectTimer = null;
+		}
+		// Flush any pending thread sync requested before connection was ready
+		if (pendingThreadSync) {
+			const prId = pendingThreadSync;
+			pendingThreadSync = null;
+			ws?.send(JSON.stringify({ type: 'threads:request-sync', data: { prId } }));
 		}
 	});
 
@@ -96,6 +125,15 @@ function scheduleReconnect(token: string): void {
 export function requestSync(): void {
 	if (ws?.readyState === WebSocket.OPEN) {
 		ws.send(JSON.stringify({ type: 'prs:request-sync' }));
+	}
+}
+
+export function requestThreadSync(prId: string): void {
+	if (ws?.readyState === WebSocket.OPEN) {
+		ws.send(JSON.stringify({ type: 'threads:request-sync', data: { prId } }));
+	} else {
+		// WS not ready yet — queue it to be sent on connect
+		pendingThreadSync = prId;
 	}
 }
 

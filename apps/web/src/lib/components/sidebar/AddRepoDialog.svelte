@@ -7,6 +7,7 @@
 		getAvailableReposLoading,
 		fetchAvailableRepos,
 	} from '$lib/stores/prs.svelte';
+	import { toast } from '$lib/utils/toast';
 
 	let { open = false, onClose }: { open?: boolean; onClose: () => void } = $props();
 
@@ -69,8 +70,8 @@
 		addingRepos = new Set([...addingRepos, repoFullName]);
 		try {
 			await addRepo(repoFullName);
-		} catch {
-			// error handled elsewhere
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Failed to add repository');
 		} finally {
 			const next = new Set(addingRepos);
 			next.delete(repoFullName);
@@ -91,7 +92,9 @@
 			fullName = '';
 			onClose();
 		} catch (e) {
-			localError = e instanceof Error ? e.message : 'Failed to add repository';
+			const msg = e instanceof Error ? e.message : 'Failed to add repository';
+			localError = msg;
+			toast.error(msg);
 		} finally {
 			isLoading = false;
 		}

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { PullRequestStatus, ReviewStatus } from '@rev/shared';
+	import type { PullRequestStatus, ReviewStatus } from '@revv/shared';
 
 	let { status, reviewStatus = 'pending' }: { status: PullRequestStatus; reviewStatus?: ReviewStatus } = $props();
 

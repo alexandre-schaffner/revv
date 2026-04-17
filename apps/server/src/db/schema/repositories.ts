@@ -1,6 +1,6 @@
 import { text } from 'drizzle-orm/sqlite-core';
 import { sqliteTable, uniqueIndex } from 'drizzle-orm/sqlite-core';
-import type { CloneStatus } from '@rev/shared';
+import type { CloneStatus } from '@revv/shared';
 
 export const repositories = sqliteTable(
 	'repositories',

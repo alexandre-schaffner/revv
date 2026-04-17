@@ -4,7 +4,7 @@ import { auth } from '../auth';
 import { AppRuntime } from '../runtime';
 import { PollScheduler } from '../services/PollScheduler';
 import { WebSocketHub } from '../services/WebSocketHub';
-import type { WsClientMessage } from '@rev/shared';
+import type { WsClientMessage } from '@revv/shared';
 
 export const wsRoute = new Elysia().ws('/ws', {
 	async open(ws) {
@@ -51,6 +51,11 @@ export const wsRoute = new Elysia().ws('/ws', {
 			await AppRuntime.runPromise(
 				Effect.flatMap(PollScheduler, (s) => s.syncNow())
 			);
+		} else if (parsed.type === 'threads:request-sync') {
+			const prId = parsed.data.prId;
+			await AppRuntime.runPromise(
+				Effect.flatMap(PollScheduler, (s) => s.syncThreadsNow(prId))
+			).catch(() => { /* best-effort */ });
 		}
 	},
 });

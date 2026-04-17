@@ -1,4 +1,4 @@
-import { API_BASE_URL } from '@rev/shared';
+import { API_BASE_URL } from '@revv/shared';
 import { authHeaders } from '$lib/utils/session-token';
 import { parseSSEBuffer } from '$lib/utils/sse-parser';
 

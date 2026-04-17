@@ -1,15 +1,14 @@
 <script lang="ts">
-	import type { FocusPanel } from '$lib/stores/focus-mode.svelte';
-
 	type Tab = 'walkthrough' | 'diff' | 'request-changes';
 
 	interface Props {
 		activeTab: Tab;
 		onTabChange: (tab: Tab) => void;
-		mode?: FocusPanel;
+		openThreads?: number;
+		pendingThreads?: number;
 	}
 
-	let { activeTab, onTabChange, mode = 'sidebar' }: Props = $props();
+	let { activeTab, onTabChange, openThreads = 0, pendingThreads = 0 }: Props = $props();
 
 	const tabs: { id: Tab; label: string }[] = [
 		{ id: 'walkthrough', label: 'Walkthrough' },
@@ -43,7 +42,9 @@
 
 	<span
 		class="mode-dot"
-		class:mode-dot--scroll={mode === 'diff-scroll' || mode === 'diff-line' || mode === 'diff-visual'}
+		class:mode-dot--pending={pendingThreads > 0}
+		class:mode-dot--open={pendingThreads === 0 && openThreads > 0}
+		class:mode-dot--visible={openThreads > 0 || pendingThreads > 0}
 		aria-hidden="true"
 	></span>
 </div>
@@ -67,18 +68,22 @@
 		flex-shrink: 0;
 	}
 
-	.mode-dot--scroll {
-		background: var(--color-accent);
+	.mode-dot--visible {
 		opacity: 1;
+	}
+
+	.mode-dot--pending {
+		background: #d97706;
+	}
+
+	.mode-dot--open {
+		background: var(--color-accent);
 	}
 
 	.pill {
 		position: relative;
 		display: flex;
 		align-items: center;
-		background: var(--color-glass-bg);
-		backdrop-filter: blur(16px) saturate(1.4);
-		-webkit-backdrop-filter: blur(16px) saturate(1.4);
 		border: 1px solid var(--color-glass-border);
 		border-radius: 9999px;
 		padding: 3px;
@@ -89,23 +94,23 @@
 		isolation: isolate;
 	}
 
-	/* Grain noise overlay */
-	.pill::after {
+	.pill::before {
 		content: '';
 		position: absolute;
-		inset: 0;
-		border-radius: inherit;
-		background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-		background-size: 128px 128px;
-		opacity: var(--color-glass-grain-opacity);
-		pointer-events: none;
-		mix-blend-mode: overlay;
+		inset: -1px;
+		border-radius: 9999px;
+		background: var(--color-glass-bg);
+		backdrop-filter: blur(16px) saturate(1.4);
+		-webkit-backdrop-filter: blur(16px) saturate(1.4);
 		z-index: 0;
+		pointer-events: none;
 	}
+
 
 	.pill-segment {
 		position: relative;
 		z-index: 1;
+		transform: translateZ(0);
 		height: 36px;
 		padding: 0 20px;
 		border-radius: 9999px;

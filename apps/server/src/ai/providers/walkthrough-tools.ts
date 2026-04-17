@@ -7,7 +7,7 @@ import type {
 	CodeBlock,
 	DiffBlock,
 	RiskLevel,
-} from '@rev/shared';
+} from '@revv/shared';
 
 // ── Emitter interface ───────────────────────────────────────────────────────
 

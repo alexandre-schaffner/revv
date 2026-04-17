@@ -1,9 +1,13 @@
 import { Elysia, t } from 'elysia';
 import { Effect } from 'effect';
+import { eq } from 'drizzle-orm';
 import { AppRuntime } from '../runtime';
+import { db } from '../auth';
+import { user } from '../db/schema';
 import { PollScheduler } from '../services/PollScheduler';
 import { PullRequestService } from '../services/PullRequest';
 import { RepositoryService } from '../services/Repository';
+import { SyncService } from '../services/Sync';
 import { TokenProvider } from '../services/TokenProvider';
 import { getOrFetchDiffFiles } from '../services/DiffCache';
 import { withAuth, handleAppError } from './middleware';
@@ -76,6 +80,33 @@ export const prRoutes = new Elysia({ prefix: '/api/prs' })
 			);
 
 			return { success: true };
+		} catch (e) {
+			return handleAppError(e, ctx);
+		}
+	})
+
+	.post('/:id/sync-threads', async (ctx) => {
+		try {
+			return await AppRuntime.runPromise(
+				Effect.flatMap(SyncService, (s) => s.syncThreads(ctx.params.id))
+			);
+		} catch (e) {
+			return handleAppError(e, ctx);
+		}
+	})
+
+	.get('/:id/thread-summary', async (ctx) => {
+		try {
+			// Look up the current user's GitHub login for role-aware counts.
+			const rows = await db
+				.select({ githubLogin: user.githubLogin })
+				.from(user)
+				.where(eq(user.id, ctx.session.user.id));
+			const login = rows[0]?.githubLogin ?? null;
+
+			return await AppRuntime.runPromise(
+				Effect.flatMap(SyncService, (s) => s.getThreadSummary(ctx.params.id, login))
+			);
 		} catch (e) {
 			return handleAppError(e, ctx);
 		}

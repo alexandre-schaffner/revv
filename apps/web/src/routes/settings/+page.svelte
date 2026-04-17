@@ -9,12 +9,13 @@
 		setThemePreference,
 		type ThemePreference,
 	} from '$lib/stores/theme.svelte';
-	import { API_BASE_URL } from '@rev/shared';
+	import { API_BASE_URL } from '@revv/shared';
 	import { agentSupportsThinkingEffort, getDefaultModel } from '$lib/constants/models';
 	import { authHeaders } from '$lib/utils/session-token';
 	import SignInButton from '$lib/components/auth/SignInButton.svelte';
+	import { toast } from '$lib/utils/toast';
 
-	import type { AiAgent, ThinkingEffort } from '@rev/shared';
+	import type { AiAgent, ThinkingEffort } from '@revv/shared';
 
 	const THINKING_EFFORT_OPTIONS: { label: string; value: ThinkingEffort }[] = [
 		{ label: 'High', value: 'high' },
@@ -44,7 +45,9 @@
 			await addRepo(trimmed);
 			addRepoValue = '';
 		} catch (e) {
-			addRepoError = e instanceof Error ? e.message : 'Failed to add repo';
+			const msg = e instanceof Error ? e.message : 'Failed to add repo';
+			addRepoError = msg;
+			toast.error(msg);
 		} finally {
 			addRepoLoading = false;
 		}
