@@ -19,6 +19,13 @@ interface WalkthroughEntry {
 	phase: WalkthroughPhase;
 	phaseMessage: string;
 	streamStartedAt: number | null;
+	/**
+	 * True once we've observed the server advance past the `connecting` phase —
+	 * which only happens during a live generation. Cached replays stream
+	 * summary → blocks → issues → done without emitting phase events, so this
+	 * stays false. The UI uses it to hide the progress stepper on cache hits.
+	 */
+	liveGeneration: boolean;
 }
 
 function freshEntry(): WalkthroughEntry {
@@ -35,6 +42,7 @@ function freshEntry(): WalkthroughEntry {
 		phase: 'connecting',
 		phaseMessage: 'Connecting...',
 		streamStartedAt: Date.now(),
+		liveGeneration: false,
 	};
 }
 
@@ -94,6 +102,9 @@ export function getPhaseMessage(): string {
 }
 export function getStreamStartedAt(): number | null {
 	return active()?.streamStartedAt ?? null;
+}
+export function getIsLiveGeneration(): boolean {
+	return active()?.liveGeneration ?? false;
 }
 
 // ── Status query (for sidebar / external consumers) ─────────────────────────
@@ -277,6 +288,9 @@ function applyEvents(prId: string, events: WalkthroughStreamEvent[]): void {
 				case 'phase':
 					entry.phase = event.data.phase;
 					entry.phaseMessage = event.data.message;
+					if (event.data.phase !== 'connecting') {
+						entry.liveGeneration = true;
+					}
 					break;
 				case 'error':
 					entry.streamError = event.data.message;
@@ -288,6 +302,7 @@ function applyEvents(prId: string, events: WalkthroughStreamEvent[]): void {
 					entry.walkthroughId = event.data.walkthroughId;
 					entry.phase = 'writing';
 					entry.phaseMessage = 'Generating in background...';
+					entry.liveGeneration = true;
 					break;
 			}
 		}

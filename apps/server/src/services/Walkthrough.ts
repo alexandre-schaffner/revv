@@ -26,15 +26,27 @@ function rowToWalkthrough(
 
 	const sortedIssues = [...issues]
 		.sort((a, b) => a.order - b.order)
-		.map((i): WalkthroughIssue => ({
-			id: i.id,
-			severity: i.severity as WalkthroughIssue['severity'],
-			title: i.title,
-			description: i.description,
-			...(i.filePath !== null ? { filePath: i.filePath } : {}),
-			...(i.startLine !== null ? { startLine: i.startLine } : {}),
-			...(i.endLine !== null ? { endLine: i.endLine } : {}),
-		}));
+		.map((i): WalkthroughIssue => {
+			let blockIds: string[] = [];
+			try {
+				const parsed: unknown = JSON.parse(i.blockIds);
+				if (Array.isArray(parsed)) {
+					blockIds = parsed.filter((v): v is string => typeof v === 'string');
+				}
+			} catch {
+				// Legacy row or corrupt JSON — fall back to empty linkage.
+			}
+			return {
+				id: i.id,
+				severity: i.severity as WalkthroughIssue['severity'],
+				title: i.title,
+				description: i.description,
+				blockIds,
+				...(i.filePath !== null ? { filePath: i.filePath } : {}),
+				...(i.startLine !== null ? { startLine: i.startLine } : {}),
+				...(i.endLine !== null ? { endLine: i.endLine } : {}),
+			};
+		});
 
 	return {
 		id: row.id,
@@ -213,6 +225,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 							filePath: issue.filePath ?? null,
 							startLine: issue.startLine ?? null,
 							endLine: issue.endLine ?? null,
+							blockIds: JSON.stringify(issue.blockIds ?? []),
 							createdAt: new Date().toISOString(),
 						})
 						.run(),

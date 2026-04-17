@@ -41,6 +41,11 @@ export interface WalkthroughIssue {
 	severity: 'info' | 'warning' | 'critical';
 	title: string;
 	description: string;
+	/**
+	 * IDs of the walkthrough block(s) that explain this issue. New issues have
+	 * at least one; legacy rows predating the issue-step linkage may be empty.
+	 */
+	blockIds: string[];
 	filePath?: string;
 	startLine?: number;
 	endLine?: number;

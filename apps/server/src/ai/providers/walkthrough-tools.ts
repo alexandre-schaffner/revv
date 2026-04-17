@@ -88,12 +88,12 @@ export function createWalkthroughMcpServer(
 			// ── add_markdown_section ─────────────────────────────────────
 			tool(
 				"add_markdown_section",
-				"Add a markdown text section to the walkthrough. Use for explanations, headings, analysis, concerns, and lists.",
+				"Add a RICHLY FORMATTED markdown section to the walkthrough. This is the narrative spine of the document — use real markdown, not flat plain text.",
 				{
 					content: z
 						.string()
 						.describe(
-							"Markdown content (headings, paragraphs, lists, inline code). Use ## for section headings.",
+							"GitHub-flavored markdown. USE THE FULL TOOLKIT: headings (## / ###), **bold** for key terms, *italics*, `inline code` for identifiers and paths, bulleted / numbered lists, > blockquotes, [links](url), and ```fenced``` snippets for tiny illustrative code. A single flat sentence is a missed opportunity — add a heading, a bold term, or a short bullet list. Do not push rich prose into annotations and leave this barebones.",
 						),
 				},
 				async (args) => {
@@ -163,7 +163,7 @@ export function createWalkthroughMcpServer(
 						.string()
 						.nullable()
 						.describe(
-							"Explanatory note displayed alongside the code, or null for no annotation",
+							"Markdown note displayed alongside the code, or null for no annotation. Keep concise (1-3 sentences) for purely explanatory blocks. If this block will be the target of a flag_issue link, the annotation must be LONG — a multi-paragraph explanation covering the failure mode, why it matters, affected code paths, and the recommended fix.",
 						),
 					annotation_position: z
 						.enum(["left", "right"])
@@ -239,7 +239,7 @@ export function createWalkthroughMcpServer(
 						.string()
 						.nullable()
 						.describe(
-							"Explanatory note displayed alongside the diff, or null for no annotation",
+							"Markdown note displayed alongside the diff, or null for no annotation. Keep concise (1-3 sentences) for purely explanatory blocks. If this block will be the target of a flag_issue link, the annotation must be LONG — a multi-paragraph explanation covering the failure mode, why it matters, affected code paths, and the recommended fix.",
 						),
 					annotation_position: z
 						.enum(["left", "right"])
@@ -302,7 +302,7 @@ export function createWalkthroughMcpServer(
 			// ── flag_issue ───────────────────────────────────────────────────────
 			tool(
 				"flag_issue",
-				"Flag a structured concern or issue found in the PR. Call this for every concern you identify — security vulnerabilities, race conditions, missing tests, edge cases, breaking changes, etc. You can call this alongside your narrative markdown sections.",
+				"Flag a structured concern or issue found in the PR. Call this for every concern you identify — security vulnerabilities, race conditions, missing tests, edge cases, breaking changes, etc. Must be called AFTER the block(s) that explain the concern have been added, and must link to them via block_orders.",
 				{
 					severity: z
 						.enum(["info", "warning", "critical"])
@@ -315,7 +315,13 @@ export function createWalkthroughMcpServer(
 					description: z
 						.string()
 						.describe(
-							"Clear explanation of the concern and why it matters (1-3 sentences)",
+							"MINIMAL one-sentence label for the issues-list card (≤ ~15 words). Do not explain the concern here — the full explanation belongs in the annotation of the linked block (block_orders).",
+						),
+					block_orders: z
+						.array(z.number().int().nonnegative())
+						.min(1)
+						.describe(
+							"Order numbers of the block(s) that explain this concern — reviewers click the issue to jump to the first referenced block. Must reference blocks already added (i.e. < current block count). Provide every block the reviewer should read to understand the issue; at least one is required.",
 						),
 					file_path: z
 						.string()
@@ -355,11 +361,27 @@ export function createWalkthroughMcpServer(
 							isError: true,
 						};
 					}
+					const maxOrder = emitter.state.blockCount - 1;
+					const invalid = args.block_orders.filter((o) => o > maxOrder);
+					if (invalid.length > 0) {
+						return {
+							content: [
+								{
+									type: "text" as const,
+									text: `Error: block_orders [${invalid.join(", ")}] reference blocks that haven't been added yet (current block count: ${emitter.state.blockCount}). Add the explaining block(s) first with add_markdown_section / add_code_block / add_diff_block, then call flag_issue.`,
+								},
+							],
+							isError: true,
+						};
+					}
+					const uniqueOrders = Array.from(new Set(args.block_orders));
+					const blockIds = uniqueOrders.map((o) => `block-${o}`);
 					const issue: WalkthroughIssue = {
 						id: `issue-${emitter.state.issueCount}`,
 						severity: args.severity,
 						title: args.title,
 						description: args.description,
+						blockIds,
 						...(args.file_path !== null ? { filePath: args.file_path } : {}),
 						...(args.start_line !== null ? { startLine: args.start_line } : {}),
 						...(args.end_line !== null ? { endLine: args.end_line } : {}),
@@ -370,7 +392,7 @@ export function createWalkthroughMcpServer(
 						content: [
 							{
 								type: "text" as const,
-								text: `Issue flagged: [${issue.severity}] ${issue.title}`,
+								text: `Issue flagged: [${issue.severity}] ${issue.title} (linked to ${blockIds.join(", ")})`,
 							},
 						],
 					};

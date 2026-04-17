@@ -2,13 +2,14 @@ import { Elysia, t } from 'elysia';
 import { Context, Duration, Effect } from 'effect';
 import { AppRuntime } from '../runtime';
 import { debug, logError } from '../logger';
-import { AiService, type ContinuationContext } from '../services/Ai';
+import { AiService, type ContinuationContext, resolveAgent } from '../services/Ai';
 import { GitHubService } from '../services/GitHub';
 import { getOrFetchDiffFiles } from '../services/DiffCache';
 import { PullRequestService } from '../services/PullRequest';
 import { RepoCloneService } from '../services/RepoClone';
 import { RepositoryService } from '../services/Repository';
 import { ReviewService } from '../services/Review';
+import { SettingsService } from '../services/Settings';
 import { SyncService } from '../services/Sync';
 import { TokenProvider } from '../services/TokenProvider';
 import { WalkthroughService } from '../services/Walkthrough';
@@ -403,41 +404,52 @@ export const reviewRoutes = new Elysia({ prefix: '/api/reviews' })
 									resumeFromBlockCount: 0,
 								};
 							}
-							const continuation: ContinuationContext = {
-								walkthroughId: partial.id,
-								existingBlocks: partial.blocks,
-								existingIssueCount: partial.issues.length,
-							};
-							const reviewSession = yield* reviewService.getOrCreateActiveSession(pr.id);
-							const continuationGenerator = yield* ai.streamWalkthrough({
-								pr: {
-									title: pr.title,
-									body: pr.body,
-									sourceBranch: pr.sourceBranch,
-									targetBranch: pr.targetBranch,
-									url: pr.url,
-								},
-								files,
-								worktreePath,
-								continuation,
-							});
-							const existingBlocks = [...partial.blocks];
-							const replayAndContinueGen = (async function* (): AsyncGenerator<WalkthroughStreamEvent> {
-								yield { type: 'summary' as const, data: { summary: partial.summary, riskLevel: partial.riskLevel } };
-								for (const block of existingBlocks) {
-									yield { type: 'block' as const, data: block };
-								}
-								yield* continuationGenerator;
-							})();
-							return {
-								generator: replayAndContinueGen,
-								reviewSessionId: reviewSession.id,
-								prId: pr.id,
-								headSha: meta.headSha,
-								modelUsed: 'claude-sonnet-4-20250514',
-								existingWalkthroughId: partial.id,
-								resumeFromBlockCount: existingBlocks.length,
-							};
+							// Only the MCP (claude) provider honors `continuation` by
+							// offsetting its block counter. The CLI (opencode) provider
+							// regenerates from scratch starting at block-0, which collides
+							// with the replayed block IDs and breaks the keyed each on the
+							// client. For CLI, drop the stale partial and fall through to a
+							// fresh generation.
+							const settingsService = yield* SettingsService;
+							const settings = yield* settingsService.getSettings();
+							if (resolveAgent(settings) === 'claude') {
+								const continuation: ContinuationContext = {
+									walkthroughId: partial.id,
+									existingBlocks: partial.blocks,
+									existingIssueCount: partial.issues.length,
+								};
+								const reviewSession = yield* reviewService.getOrCreateActiveSession(pr.id);
+								const continuationGenerator = yield* ai.streamWalkthrough({
+									pr: {
+										title: pr.title,
+										body: pr.body,
+										sourceBranch: pr.sourceBranch,
+										targetBranch: pr.targetBranch,
+										url: pr.url,
+									},
+									files,
+									worktreePath,
+									continuation,
+								});
+								const existingBlocks = [...partial.blocks];
+								const replayAndContinueGen = (async function* (): AsyncGenerator<WalkthroughStreamEvent> {
+									yield { type: 'summary' as const, data: { summary: partial.summary, riskLevel: partial.riskLevel } };
+									for (const block of existingBlocks) {
+										yield { type: 'block' as const, data: block };
+									}
+									yield* continuationGenerator;
+								})();
+								return {
+									generator: replayAndContinueGen,
+									reviewSessionId: reviewSession.id,
+									prId: pr.id,
+									headSha: meta.headSha,
+									modelUsed: 'claude-sonnet-4-20250514',
+									existingWalkthroughId: partial.id,
+									resumeFromBlockCount: existingBlocks.length,
+								};
+							}
+							yield* walkthroughService.invalidateForPr(pr.id);
 						}
 
 						// ── Check cache ──────────────────────────────────────────────

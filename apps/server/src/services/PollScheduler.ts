@@ -90,13 +90,14 @@ export const PollSchedulerLive = Layer.effect(
 
 			const allPrs = results.flat();
 
-			// Clear diff cache for PRs that were open before but are gone now (closed/merged)
+			// Delete PRs that were open before but are gone now (closed/merged on GitHub).
+			// Cascade deletes their diff cache, review sessions, threads, and walkthroughs.
 			const freshPrIdSet = new Set(allPrs.map((pr) => pr.id));
 			const closedPrIds = existingPrs
 				.filter((pr) => pr.status === 'open' && !freshPrIdSet.has(pr.id))
 				.map((pr) => pr.id);
 			if (closedPrIds.length > 0) {
-				yield* withDb(diffCache.invalidateFilesForPrs(closedPrIds)).pipe(
+				yield* withDb(prService.deletePrs(closedPrIds)).pipe(
 					Effect.orElseSucceed(() => undefined)
 				);
 			}

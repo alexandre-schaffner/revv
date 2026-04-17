@@ -67,6 +67,7 @@ function clearSession(): void {
 	threadMessages = {};
 	acceptedHunks = new Map();
 	rejectedHunks = new Map();
+	threadsVersion++;
 }
 
 let loadSessionSeq = 0;
@@ -116,6 +117,7 @@ export async function loadSession(prId: string): Promise<void> {
 		}
 		acceptedHunks = accepted;
 		rejectedHunks = rejected;
+		threadsVersion++;
 	} finally {
 		// Only clear loading if this is still the active request
 		if (seq === loadSessionSeq) {
@@ -257,6 +259,14 @@ export function requestExplanation(params: {
 let threads = $state<CommentThread[]>([]);
 let threadMessages = $state<Record<string, ThreadMessage[]>>({});
 let threadSyncErrors = $state<Set<string>>(new Set());
+// Monotonic counter bumped on every thread mutation. Consumed inside reactive
+// derivations that need to force-recompute (e.g. DiffViewer's annotations),
+// because @pierre/diffs caches annotations by metadata reference.
+let threadsVersion = $state(0);
+
+export function getThreadsVersion(): number {
+	return threadsVersion;
+}
 
 export function getThreadSyncError(threadId: string): boolean {
 	return threadSyncErrors.has(threadId);
@@ -325,6 +335,7 @@ export async function addThread(
 			...threadMessages,
 			[result.thread.id]: [result.message],
 		};
+		threadsVersion++;
 	}
 
 	// Fire-and-forget: push thread to GitHub
@@ -390,12 +401,14 @@ export async function resolveThread(threadId: string): Promise<void> {
 			? { ...t, status: 'resolved' as const, resolvedAt: new Date().toISOString() }
 			: t
 	);
+	threadsVersion++;
 
 	const { error } = await api.api.threads({ id: threadId }).patch({ status: 'resolved' });
 
 	if (error) {
 		console.error('[review] Failed to resolve thread, reverting:', error);
 		threads = prevThreads;
+		threadsVersion++;
 		toast.error('Failed to resolve thread');
 	}
 }
@@ -411,12 +424,14 @@ export async function reopenThread(threadId: string): Promise<void> {
 			? { ...t, status: 'open' as const, resolvedAt: null }
 			: t
 	);
+	threadsVersion++;
 
 	const { error } = await api.api.threads({ id: threadId }).patch({ status: 'open' });
 
 	if (error) {
 		console.error('[review] Failed to reopen thread, reverting:', error);
 		threads = prevThreads;
+		threadsVersion++;
 	}
 }
 
@@ -434,6 +449,7 @@ export function updateThreadStatusFromWs(threadId: string, status: ThreadStatus)
 				}
 			: t
 	);
+	threadsVersion++;
 }
 
 /**
@@ -442,6 +458,7 @@ export function updateThreadStatusFromWs(threadId: string, status: ThreadStatus)
 export function addThreadFromWs(thread: CommentThread, message: ThreadMessage): void {
 	if (!threads.some((t) => t.id === thread.id)) {
 		threads = [...threads, thread];
+		threadsVersion++;
 	}
 	// Always add the message if not already present
 	const existing = threadMessages[thread.id] ?? [];

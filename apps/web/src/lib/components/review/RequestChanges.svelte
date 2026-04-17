@@ -3,7 +3,7 @@
 	import { getThreads, getThreadMessages } from '$lib/stores/review.svelte';
 	import { api } from '$lib/api/client';
 	import { toast } from 'svelte-sonner';
-	import { AlertTriangle, MessageSquare, Check, X, MessageCircle } from '@lucide/svelte';
+	import { AlertTriangle, MessageSquare, Check, X, Sparkles } from '@lucide/svelte';
 
 	interface Props {
 		prId: string;
@@ -301,7 +301,7 @@
 					? 'Select at least one item to post comments'
 					: 'Post selected items as GitHub review comments'}
 			>
-				<MessageCircle size={14} />
+				<Sparkles size={14} />
 				{submitting === 'comment' ? 'Generating…' : 'Generate changes'}
 			</button>
 			<button
@@ -324,7 +324,7 @@
 					: 'Request changes on this pull request'}
 			>
 				<X size={14} />
-				{submitting === 'request_changes' ? 'Submitting…' : 'Request changes'}
+				{submitting === 'request_changes' ? 'Submitting…' : 'Submit Review'}
 			</button>
 		</div>
 
@@ -586,9 +586,16 @@
 	}
 
 	.action-approve:not(:disabled) {
+		background: transparent;
+		border-color: var(--color-success, #22c55e);
+		color: var(--color-success, #22c55e);
+	}
+
+	.action-approve:not(:disabled):hover {
 		background: color-mix(in srgb, var(--color-success, #22c55e) 88%, black);
 		border-color: var(--color-success, #22c55e);
 		color: #fff;
+		filter: none;
 	}
 
 	.action-reject:not(:disabled) {

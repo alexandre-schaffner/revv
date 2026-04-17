@@ -19,14 +19,14 @@
 	import ReviewLayout from '$lib/components/review/ReviewLayout.svelte';
 	import GuidedWalkthrough from '$lib/components/walkthrough/GuidedWalkthrough.svelte';
 	import RequestChanges from '$lib/components/review/RequestChanges.svelte';
-	import { deactivate as deactivateWalkthrough, getIsStreaming as getWalkthroughStreaming, getSummary as getWalkthroughSummary, regenerate as regenerateWalkthrough } from '$lib/stores/walkthrough.svelte';
+	import { deactivate as deactivateWalkthrough, getIsStreaming as getWalkthroughStreaming, getSummary as getWalkthroughSummary, regenerate as regenerateWalkthrough, abort as abortWalkthrough } from '$lib/stores/walkthrough.svelte';
 	import { setTopbarCollapsed } from '$lib/stores/topbar.svelte';
 	import { requestThreadSync } from '$lib/stores/ws.svelte';
-	import { onDestroy } from 'svelte';
+	import { onDestroy, untrack } from 'svelte';
 	import AuthGuard from '$lib/components/auth/AuthGuard.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Tooltip, TooltipContent, TooltipTrigger } from '$lib/components/ui/tooltip';
-	import { RefreshCw } from '@lucide/svelte';
+	import { RefreshCw, Square } from '@lucide/svelte';
 
 	const pr = $derived(getSelectedPr());
 	const themeType = $derived(getDiffThemeType());
@@ -72,51 +72,57 @@
 		const prId = page.params['prId'];
 		if (!prId) return;
 
-		// Bump request ID so any in-flight fetch for a previous PR is ignored
-		const requestId = ++currentRequestId;
+		// Everything below mutates store state. Calls like `clearReviewFiles()`
+		// invoke `clearSession()`, which does `threadsVersion++` — a read-then-
+		// write on $state. Inside an untracked block, that read doesn't subscribe
+		// the effect to threadsVersion, so the write can't re-trigger us.
+		untrack(() => {
+			// Bump request ID so any in-flight fetch for a previous PR is ignored
+			const requestId = ++currentRequestId;
 
-		setSelectedPrId(prId);
-		requestThreadSync(prId);
-		clearExplanations();
-		clearReviewFiles();
-		setIsLoadingFiles(true);
+			setSelectedPrId(prId);
+			requestThreadSync(prId);
+			clearExplanations();
+			clearReviewFiles();
+			setIsLoadingFiles(true);
 
-		(async () => {
-			try {
-				// Fetch files and session in parallel — session failure shouldn't block diff
-				const [filesResult] = await Promise.all([
-					api.api.prs({ id: prId }).files.get(),
-					loadSession(prId).catch((e) =>
-						console.error('[review] Session load failed (non-blocking):', e)
-					),
-				]);
+			(async () => {
+				try {
+					// Fetch files and session in parallel — session failure shouldn't block diff
+					const [filesResult] = await Promise.all([
+						api.api.prs({ id: prId }).files.get(),
+						loadSession(prId).catch((e) =>
+							console.error('[review] Session load failed (non-blocking):', e)
+						),
+					]);
 
-				if (requestId !== currentRequestId) return;
+					if (requestId !== currentRequestId) return;
 
-				const { data, error } = filesResult;
-				if (error) throw new Error('Failed to fetch PR files');
-				if (Array.isArray(data)) {
-					const mapped = data.map((f) => ({
-						path: f.path,
-						patch: f.patch ?? null,
-						additions: f.additions,
-						deletions: f.deletions,
-						...(f.oldPath ? { oldPath: f.oldPath } : {}),
-						...(f.isNew ? { isNew: true as const } : {}),
-						...(f.isDeleted ? { isDeleted: true as const } : {}),
-					}));
-					setReviewFiles(mapped);
-					if (mapped.length > 0) {
-						setActiveFilePath(mapped[0]!.path);
+					const { data, error } = filesResult;
+					if (error) throw new Error('Failed to fetch PR files');
+					if (Array.isArray(data)) {
+						const mapped = data.map((f) => ({
+							path: f.path,
+							patch: f.patch ?? null,
+							additions: f.additions,
+							deletions: f.deletions,
+							...(f.oldPath ? { oldPath: f.oldPath } : {}),
+							...(f.isNew ? { isNew: true as const } : {}),
+							...(f.isDeleted ? { isDeleted: true as const } : {}),
+						}));
+						setReviewFiles(mapped);
+						if (mapped.length > 0) {
+							setActiveFilePath(mapped[0]!.path);
+						}
 					}
+				} catch (e) {
+					if (requestId !== currentRequestId) return;
+					setFilesError(e instanceof Error ? e.message : 'Failed to load diff');
+				} finally {
+					if (requestId === currentRequestId) setIsLoadingFiles(false);
 				}
-			} catch (e) {
-				if (requestId !== currentRequestId) return;
-				setFilesError(e instanceof Error ? e.message : 'Failed to load diff');
-			} finally {
-				if (requestId === currentRequestId) setIsLoadingFiles(false);
-			}
-		})();
+			})();
+		});
 	});
 
 	onDestroy(() => {
@@ -159,7 +165,24 @@
 			<div class="page-title-section" bind:this={titleEl}>
 				<div class="title-row">
 					<h1 class="page-title">{pr.title}</h1>
-					{#if activeTab === 'walkthrough' && !walkthroughStreaming && walkthroughSummary}
+					{#if activeTab === 'walkthrough' && walkthroughStreaming}
+						<Tooltip>
+							<TooltipTrigger>
+								{#snippet child({ props })}
+									<Button
+										{...props}
+										variant="ghost"
+										size="icon-sm"
+										class="stop-generation"
+										onclick={abortWalkthrough}
+									>
+										<Square size={14} fill="currentColor" />
+									</Button>
+								{/snippet}
+							</TooltipTrigger>
+							<TooltipContent>Stop generation</TooltipContent>
+						</Tooltip>
+					{:else if activeTab === 'walkthrough' && walkthroughSummary}
 						<Tooltip>
 							<TooltipTrigger>
 								{#snippet child({ props })}

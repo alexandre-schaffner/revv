@@ -16,21 +16,49 @@
 		{ id: 'request-changes', label: 'Request Changes' },
 	];
 
+	let segmentEls: (HTMLButtonElement | null)[] = $state(tabs.map(() => null));
+	let hoveredIndex = $state<number | null>(null);
+	let indicatorLeft = $state(0);
+	let indicatorWidth = $state(0);
+	let hasMeasured = $state(false);
+
+	$effect(() => {
+		const activeIndex = tabs.findIndex((t) => t.id === activeTab);
+		const index = hoveredIndex ?? activeIndex;
+		const el = segmentEls[index];
+		if (!el) return;
+		indicatorLeft = el.offsetLeft;
+		indicatorWidth = el.offsetWidth;
+		hasMeasured = true;
+	});
+
 	function showDivider(index: number): boolean {
 		if (index === tabs.length - 1) return false;
-		const currentActive = tabs[index]?.id === activeTab;
-		const nextActive = tabs[index + 1]?.id === activeTab;
-		return !currentActive && !nextActive;
+		const activeIndex = tabs.findIndex((t) => t.id === activeTab);
+		const highlighted = hoveredIndex ?? activeIndex;
+		return index !== highlighted && index + 1 !== highlighted;
 	}
 </script>
 
 <div class="tabs-wrapper">
 	<div class="pill">
+		<span
+			class="pill-indicator"
+			class:pill-indicator--ready={hasMeasured}
+			style="transform: translateX({indicatorLeft}px); width: {indicatorWidth}px;"
+			aria-hidden="true"
+		></span>
 		{#each tabs as tab, i}
 			<button
+				bind:this={segmentEls[i]}
 				class="pill-segment"
 				class:pill-segment--active={activeTab === tab.id}
+				class:pill-segment--hovered={hoveredIndex === i}
 				onclick={() => onTabChange(tab.id)}
+				onpointerenter={() => (hoveredIndex = i)}
+				onpointerleave={() => {
+					if (hoveredIndex === i) hoveredIndex = null;
+				}}
 			>
 				{tab.label}
 			</button>
@@ -120,17 +148,36 @@
 		-webkit-font-smoothing: antialiased;
 	}
 
-	.pill-segment:hover:not(.pill-segment--active) {
+	.pill-segment--hovered:not(.pill-segment--active) {
 		color: var(--color-text-secondary);
-		background: var(--color-glass-highlight);
 	}
 
 	.pill-segment--active {
 		color: var(--color-text-primary);
+	}
+
+	.pill-indicator {
+		position: absolute;
+		top: 3px;
+		left: 0;
+		height: 36px;
+		border-radius: 9999px;
 		background: var(--color-glass-active-bg);
 		box-shadow:
 			0 1px 3px rgba(0, 0, 0, 0.12),
 			inset 0 0.5px 0 0 var(--color-glass-highlight);
+		pointer-events: none;
+		z-index: 0;
+		opacity: 0;
+		will-change: transform, width;
+	}
+
+	.pill-indicator--ready {
+		opacity: 1;
+		transition:
+			transform var(--duration-smooth) var(--ease-out-expo),
+			width var(--duration-smooth) var(--ease-out-expo),
+			opacity var(--duration-snap);
 	}
 
 	.pill-divider {

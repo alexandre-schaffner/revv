@@ -32,10 +32,12 @@ Then output blocks (8-20 total), one per line:
 @BLOCK {"type": "code", "id": "block-1", "order": 1, "filePath": "src/app.ts", "startLine": 10, "endLine": 20, "language": "typescript", "content": "const x = 1;", "annotation": "Key change here", "annotationPosition": "left"}
 @BLOCK {"type": "diff", "id": "block-2", "order": 2, "filePath": "src/app.ts", "patch": "@@ -1,3 +1,4 @@...", "annotation": "Added new import", "annotationPosition": "right"}
 
-For any concern you identify (security vulnerabilities, race conditions, missing tests, edge cases, breaking changes, performance issues), output an issue line:
-@ISSUE {"severity": "warning", "title": "Short title (10 words max)", "description": "Clear explanation of the concern and why it matters (1-3 sentences)", "file_path": "src/app.ts", "start_line": 42, "end_line": 50}
+For any concern you identify (security vulnerabilities, race conditions, missing tests, edge cases, breaking changes, performance issues), output an issue line AFTER the block(s) that explain it:
+@ISSUE {"severity": "warning", "title": "Short title (10 words max)", "description": "Clear explanation of the concern and why it matters (1-3 sentences)", "block_orders": [2], "file_path": "src/app.ts", "start_line": 42, "end_line": 50}
 
-You can also use file_path: null if the concern is PR-wide. severity must be "info", "warning", or "critical".
+- block_orders is REQUIRED and must contain at least one order number of a @BLOCK that was already emitted above. Reviewers click the issue card to jump to the first referenced block, so the link must exist.
+- Prefer linking to the single block that most directly explains the concern. Include additional orders only when the reviewer genuinely needs more than one block to understand the issue.
+- You can use file_path: null if the concern is PR-wide. severity must be "info", "warning", or "critical".
 
 Finally, signal completion:
 @DONE
@@ -43,15 +45,46 @@ Finally, signal completion:
 Rules:
 - EACH tagged line must be on a SINGLE line — escape newlines as \\n within JSON string values
 - Start with a markdown overview block explaining the big picture
+
+MARKDOWN BLOCKS ARE FULLY RENDERED — use rich markdown, not plain text:
+- @BLOCK markdown "content" is rendered as GitHub-flavored markdown. Use the full toolkit (remember to \\n-escape):
+  - Headings: "## Section", "### Subsection"
+  - Emphasis: "**bold**" for key terms, "*italics*" for subtle emphasis
+  - Inline code: \`SessionStore.refresh()\`, \`session_secret\`, file paths like \`src/auth/middleware.ts\`
+  - Lists: bulleted (- item) or numbered (1. item), for enumerating cases, steps, or risks
+  - Blockquotes: "> …" for callouts or quoted decisions
+  - Links: "[label](https://…)" when referencing external docs/specs
+  - Fenced code snippets (\`\`\`ts …\`\`\`) for TINY illustrative snippets that don't warrant a full @BLOCK code (one-liner type signatures, shell commands, pseudocode). Still prefer real @BLOCK code blocks for actual source.
+- A markdown block that is just one flat sentence is almost always a missed opportunity. Add structure: a heading, a bolded term, a short bullet list of key points.
+- DO NOT dump all your prose into annotations while leaving markdown blocks barebones. The markdown blocks ARE the narrative spine of the document — they deserve the richest, best-formatted prose.
+
+READING RHYTHM (HIGH PRIORITY — the walkthrough MUST read like an article, not a code dump):
+- The document alternates: **markdown → code/diff → markdown → code/diff → …**. Markdown blocks are the spine; code/diff blocks are the evidence. NEVER emit two code/diff blocks back-to-back.
+- The markdown-to-code ratio should be roughly 1:1. Aim for **at least as many markdown @BLOCKs as code+diff @BLOCKs combined**. If you've emitted 5 code/diff blocks, you should have emitted ~5 (or more) markdown blocks. Count as you go.
+- Use markdown headings ("## Heading" or "### Subheading") to introduce each new concept / section — do not dump blocks under one giant heading. A new area of the PR deserves its own heading, and every heading paragraph should be followed by 1-2 code/diff blocks, then a bridge paragraph, then possibly another block.
+- Before each code/diff block, emit a short @BLOCK markdown (1-3 sentences) that names what the reader is about to see and why it matters. After a dense block, a one-sentence "so what" bridge ties it back to the narrative.
+- Keep connective markdown blocks SHORT (1-3 sentences). Reserve longer markdown for section intros, multi-block concept summaries, or list-form takeaways. Many small paragraphs beats one long one.
+- Example skeleton of a good section:
+  @BLOCK {"type":"markdown",...,"content":"## Authentication flow\\n\\nThe PR replaces the static bearer token with a rotating session cookie. Here is the new issuance path:"}
+  @BLOCK {"type":"code",...}
+  @BLOCK {"type":"markdown",...,"content":"Note the cookie is signed with the new \`SESSION_SECRET\` — refresh happens on every authenticated request."}
+  @BLOCK {"type":"diff",...}
+  @BLOCK {"type":"markdown",...,"content":"### Why this matters\\n\\nShort paragraph connecting back to the big picture."}
+- If you catch yourself about to emit a second code/diff block in a row, STOP and insert a markdown bridge first.
+
 - Group changes by CONCEPT, not by file
 - Use your file reading tools to get the actual code, not just the diff
 - Check related tests, type definitions, and documentation
 - Alternate annotation_position between "left" and "right" for visual variety
-- Every @ISSUE MUST be accompanied by a @BLOCK markdown that explains it in detail — what the problem is, why it matters, and what to do about it
+- Every @ISSUE MUST come AFTER the @BLOCK(s) that explain it, and MUST link to them via "block_orders". The linked block's ANNOTATION is the DETAILED explanation; the issue card is a short label that points to it.
+- The @ISSUE card must be MINIMAL: a punchy "title" and a one-short-sentence "description" (≤ ~15 words). Do not cram analysis into the description — it is just a label for the issues list.
+- The ANNOTATION on the linked @BLOCK (code or diff) is where the full explanation lives — and it should be substantially longer/richer than a normal annotation. Spell out: the concrete failure mode, why it matters in this codebase, the specific lines/paths involved, and the recommended fix. Multi-paragraph markdown is fine here (remember \\n-escaping), use **bold** for key terms and inline \`code\` references. Think of it as the body of a code-review comment, not a caption.
+- Most other annotations stay concise (1-3 sentences). The long-form treatment is reserved for blocks that are targets of @ISSUE links.
+- Never let the annotation just restate the issue card. If it isn't materially richer, expand it with context, example inputs, affected code paths, or the reasoning behind the fix.
 - Generate 8-20 blocks total depending on PR complexity
 - risk_level: "low" for straightforward changes, "medium" for critical paths/complexity, "high" for security/breaking changes
 - Be direct — reviewers are engineers, not beginners
-- Call @ISSUE for every concern — security, races, missing tests, edge cases, breaking changes. Always ALSO output a @BLOCK markdown explaining the concern in depth. The @ISSUE provides the structured record; the @BLOCK provides the explanation. Both are required.`;
+- Call @ISSUE for every concern — security, races, missing tests, edge cases, breaking changes. Always ALSO output a @BLOCK markdown explaining the concern in depth first, then reference its order in block_orders.`;
 
 // ── CLI agent detection (cached) ─────────────────────────────────────────────
 
@@ -166,12 +199,19 @@ function extractTaggedLines(
 					file_path?: string | null;
 					start_line?: number | null;
 					end_line?: number | null;
+					block_orders?: number[] | null;
 				};
+				const blockIds = Array.isArray(data.block_orders)
+					? data.block_orders
+							.filter((o): o is number => typeof o === 'number' && Number.isInteger(o) && o >= 0)
+							.map((o) => `block-${o}`)
+					: [];
 				const issue: WalkthroughIssue = {
 					id: `issue-${blockCounter.value++}`,
 					severity: (data.severity ?? 'info') as 'info' | 'warning' | 'critical',
 					title: data.title ?? '',
 					description: data.description ?? '',
+					blockIds,
 					...(data.file_path != null ? { filePath: data.file_path } : {}),
 					...(data.start_line != null ? { startLine: data.start_line } : {}),
 					...(data.end_line != null ? { endLine: data.end_line } : {}),
