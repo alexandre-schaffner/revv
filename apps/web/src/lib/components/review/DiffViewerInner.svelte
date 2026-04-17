@@ -129,6 +129,9 @@
 		return pill;
 	}
 
+	// ── Base shadow-DOM CSS (always injected) ─────────────────────────────────
+	const BASE_CSS = `[data-diffs-header='default'] { position: sticky !important; }`;
+
 	// ── Local state ───────────────────────────────────────────────────────────
 
 	let wrapperEl: HTMLDivElement | null = null;
@@ -189,12 +192,12 @@
 		const lineIdx = getCursorLineIndex();
 
 		if (panel === 'diff-line') {
-			const css = `[data-line-index="${lineIdx}"] { background-color: rgba(59, 130, 246, 0.10) !important; outline: 1px solid rgba(59, 130, 246, 0.25); outline-offset: -1px; }`;
+			const css = `${BASE_CSS} [data-line-index="${lineIdx}"] { background-color: rgba(59, 130, 246, 0.10) !important; outline: 1px solid rgba(59, 130, 246, 0.25); outline-offset: -1px; }`;
 			instance.setOptions({ ...initialOptions, unsafeCSS: css });
 		} else if (panel !== 'diff-visual') {
 			// Clear highlight when not in line/visual mode
 			// (visual mode uses setSelectedLines instead)
-			instance.setOptions({ ...initialOptions, unsafeCSS: '' });
+			instance.setOptions({ ...initialOptions, unsafeCSS: BASE_CSS });
 		}
 	});
 
@@ -235,7 +238,7 @@
 			instance.setSelectedLines(range);
 			// Clear unsafeCSS line highlight — selection replaces it
 			if (initialOptions) {
-				instance.setOptions({ ...initialOptions, unsafeCSS: '' });
+				instance.setOptions({ ...initialOptions, unsafeCSS: BASE_CSS });
 			}
 		} else {
 			// Clear selection when leaving visual mode
@@ -261,6 +264,7 @@
 				lineHoverHighlight: 'both',
 				enableGutterUtility: true,
 				enableLineSelection: true,
+				unsafeCSS: BASE_CSS,
 
 				// ── Hunk separators: minimal thin line ────────────────────────
 				// Reads from `hunkState` (mutated by the $effect) so the closure
@@ -512,16 +516,39 @@
 
 	/* ── View-mode pill toggle (lives in light DOM inside diffs-container) ── */
 	:global([data-view-pill]) {
+		position: relative;
 		display: inline-flex;
 		align-items: stretch;
 		border-radius: 6px;
 		overflow: hidden;
 		margin-left: 4px;
 		vertical-align: middle;
-		border: 1px solid var(--color-border);
+		background: var(--color-glass-bg);
+		backdrop-filter: blur(16px) saturate(1.4);
+		-webkit-backdrop-filter: blur(16px) saturate(1.4);
+		border: 1px solid var(--color-glass-border);
+		box-shadow:
+			var(--color-glass-shadow),
+			inset 0 0.5px 0 0 var(--color-glass-highlight);
+	}
+
+	/* Grain noise overlay */
+	:global([data-view-pill]::after) {
+		content: '';
+		position: absolute;
+		inset: 0;
+		border-radius: inherit;
+		background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+		background-size: 128px 128px;
+		opacity: var(--color-glass-grain-opacity);
+		pointer-events: none;
+		mix-blend-mode: overlay;
+		z-index: 0;
 	}
 
 	:global([data-view-btn]) {
+		position: relative;
+		z-index: 1;
 		display: flex;
 		align-items: center;
 		justify-content: center;
@@ -533,21 +560,23 @@
 	}
 
 	:global([data-view-btn]:hover) {
-		background-color: var(--color-bg-secondary);
+		background-color: var(--color-glass-highlight);
 	}
 
 	:global([data-view-btn='active']) {
-		background-color: var(--color-bg-tertiary);
+		background-color: var(--color-glass-active-bg);
 	}
 
 	:global([data-view-btn='active']:hover) {
-		background-color: var(--color-bg-tertiary);
+		background-color: var(--color-glass-active-bg);
 	}
 
 	:global([data-view-sep]) {
+		position: relative;
+		z-index: 1;
 		width: 1px;
 		flex-shrink: 0;
-		background-color: var(--color-border);
+		background-color: var(--color-glass-border);
 	}
 
 </style>

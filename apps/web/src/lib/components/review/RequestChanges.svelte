@@ -39,16 +39,6 @@
 </script>
 
 <div class="request-changes">
-	<header class="rc-header">
-		<h2 class="rc-title">
-			<Zap size={16} />
-			Request Changes
-		</h2>
-		{#if totalCount > 0}
-			<span class="rc-count">{totalCount} item{totalCount === 1 ? '' : 's'}</span>
-		{/if}
-	</header>
-
 	<div class="rc-sections">
 		<!-- Issues from Walkthrough -->
 		<section class="rc-section">
@@ -162,37 +152,6 @@
 		background: var(--color-bg-primary);
 	}
 
-	.rc-header {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		padding: 20px 24px 16px;
-		border-bottom: 1px solid var(--color-border);
-		flex-shrink: 0;
-	}
-
-	.rc-title {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		margin: 0;
-		font-size: 14px;
-		font-weight: 600;
-		color: var(--color-text-primary);
-		letter-spacing: -0.02em;
-	}
-
-	.rc-count {
-		margin-left: auto;
-		font-size: 11px;
-		font-weight: 500;
-		color: var(--color-text-muted);
-		background: var(--color-bg-secondary);
-		border: 1px solid var(--color-border);
-		border-radius: 10px;
-		padding: 2px 8px;
-	}
-
 	.rc-sections {
 		flex: 1;
 		overflow-y: auto;
@@ -274,7 +233,7 @@
 
 	.rc-filepath {
 		font-size: 11px;
-		font-family: var(--font-mono, monospace);
+		font-family: var(--font-mono);
 		color: var(--color-text-secondary);
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -284,7 +243,7 @@
 
 	.rc-line-range {
 		font-size: 11px;
-		font-family: var(--font-mono, monospace);
+		font-family: var(--font-mono);
 		color: var(--color-text-muted);
 	}
 
@@ -309,21 +268,21 @@
 	}
 
 	.severity-critical {
-		background: color-mix(in srgb, var(--color-danger, #ef4444) 15%, transparent);
-		color: var(--color-danger, #ef4444);
-		border: 1px solid color-mix(in srgb, var(--color-danger, #ef4444) 30%, transparent);
+		background: color-mix(in srgb, var(--color-danger) 15%, transparent);
+		color: var(--color-danger);
+		border: 1px solid color-mix(in srgb, var(--color-danger) 30%, transparent);
 	}
 
 	.severity-warning {
-		background: color-mix(in srgb, #f59e0b 15%, transparent);
-		color: #f59e0b;
-		border: 1px solid color-mix(in srgb, #f59e0b 30%, transparent);
+		background: color-mix(in srgb, var(--color-warning) 15%, transparent);
+		color: var(--color-warning);
+		border: 1px solid color-mix(in srgb, var(--color-warning) 30%, transparent);
 	}
 
 	.severity-info {
-		background: color-mix(in srgb, var(--color-accent, #6366f1) 15%, transparent);
-		color: var(--color-accent, #6366f1);
-		border: 1px solid color-mix(in srgb, var(--color-accent, #6366f1) 30%, transparent);
+		background: color-mix(in srgb, var(--color-accent) 15%, transparent);
+		color: var(--color-accent);
+		border: 1px solid color-mix(in srgb, var(--color-accent) 30%, transparent);
 	}
 
 	/* Footer */
@@ -347,12 +306,12 @@
 		font-size: 13px;
 		font-weight: 600;
 		letter-spacing: -0.01em;
-		background: var(--color-accent, #6366f1);
+		background: var(--color-accent);
 		color: #fff;
 		border: none;
 		cursor: not-allowed;
 		opacity: 0.4;
-		transition: opacity var(--duration-snap, 150ms);
+		transition: opacity var(--duration-snap);
 	}
 
 	.propose-hint {

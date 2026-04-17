@@ -32,6 +32,17 @@ export interface ExplainParams {
 
 export type { ContinuationContext };
 
+// ── Agent resolution ────────────────────────────────────────────────────────
+
+export type CliAgent = 'opencode' | 'claude';
+
+/** Safely resolve the configured CLI agent, falling back to 'opencode'. */
+export function resolveAgent(settings: { aiAgent: string | null }): CliAgent {
+	const agent = settings.aiAgent ?? 'opencode';
+	if (agent === 'opencode' || agent === 'claude') return agent;
+	return 'opencode';
+}
+
 // ── Service definition ───────────────────────────────────────────────────────
 
 export class AiService extends Context.Tag('AiService')<
@@ -70,7 +81,7 @@ export const AiServiceLive = Layer.effect(
 		const checkConfigured = (): Effect.Effect<boolean> =>
 			Effect.gen(function* () {
 				const settings = yield* getSettings();
-				const agent = (settings.aiAgent ?? 'opencode') as 'opencode' | 'claude';
+				const agent = resolveAgent(settings);
 				return checkCliAvailability(agent);
 			}).pipe(Effect.catchAll(() => Effect.succeed(false)));
 
@@ -78,7 +89,7 @@ export const AiServiceLive = Layer.effect(
 			explainCode: (params: ExplainParams) =>
 				Effect.gen(function* () {
 					const settings = yield* getSettings();
-					const agent = (settings.aiAgent ?? 'opencode') as 'opencode' | 'claude';
+					const agent = resolveAgent(settings);
 
 					if (!checkCliAvailability(agent)) {
 						return yield* Effect.fail(new AiNotConfiguredError());
@@ -91,7 +102,7 @@ export const AiServiceLive = Layer.effect(
 			streamWalkthrough: (params) =>
 				Effect.gen(function* () {
 					const settings = yield* getSettings();
-					const agent = (settings.aiAgent ?? 'opencode') as 'opencode' | 'claude';
+					const agent = resolveAgent(settings);
 
 					if (!checkCliAvailability(agent)) {
 						return yield* Effect.fail(new AiNotConfiguredError());

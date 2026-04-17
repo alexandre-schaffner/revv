@@ -328,10 +328,10 @@
 
 <svelte:window onkeydown={handleGlobalKeydown} />
 
-<div class="review-layout">
+<div class="relative flex h-full flex-col overflow-hidden bg-diff-bg">
 	<!-- @pierre/diffs renderer -->
 	<div
-		class="diff-scroll"
+		class="diff-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden outline-none"
 		class:mode-scroll={panel === 'diff-scroll'}
 		class:mode-line={panel === 'diff-line'}
 		class:mode-visual={panel === 'diff-visual'}
@@ -374,26 +374,3 @@
 	/>
 {/if}
 
-<style>
-	.review-layout {
-		display: flex;
-		flex-direction: column;
-		height: 100%;
-		overflow: hidden;
-		background: var(--color-diff-bg);
-		position: relative;
-	}
-
-	/* Diff scroll area — @pierre/diffs only handles *horizontal* scroll
-	   internally (the <code> elements use overflow: scroll clip, i.e.
-	   overflow-x:scroll / overflow-y:clip). Vertical scrolling must come
-	   from this outer container. */
-	.diff-scroll {
-		flex: 1;
-		overflow-y: auto;
-		overflow-x: hidden;
-		min-height: 0;
-		outline: none;
-	}
-
-</style>

@@ -214,11 +214,30 @@ export function abort(): void {
 }
 
 export async function regenerate(prId: string): Promise<void> {
-	await fetch(`${API_BASE_URL}/api/reviews/${prId}/walkthrough/regenerate`, {
-		method: 'POST',
-		headers: authHeaders(),
-	});
-	reset();
+	// Reset UI immediately so the error disappears and the loading state
+	// shows while we wait for the server to invalidate the cache.
+	currentPrId = null;
+	streamError = null;
+	isStreaming = true;
+	blocks = [];
+	summary = null;
+	issues = [];
+	explorationSteps = [];
+	phase = 'connecting';
+	phaseMessage = 'Regenerating...';
+
+	// Await cache invalidation so the subsequent stream request doesn't
+	// race and find the old errored walkthrough still in the database.
+	try {
+		await fetch(`${API_BASE_URL}/api/reviews/${prId}/walkthrough/regenerate`, {
+			method: 'POST',
+			headers: authHeaders(),
+		});
+	} catch {
+		// If invalidation fails, streamWalkthrough will still attempt a
+		// fresh generation — worst case the server resumes the partial.
+	}
+
 	await streamWalkthrough(prId);
 }
 

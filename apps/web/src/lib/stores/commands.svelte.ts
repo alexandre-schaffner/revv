@@ -1,5 +1,5 @@
 import { setThemePreference, setDiffThemePreference } from './theme.svelte';
-import { collapseAllRepoGroups, toggleSidebar, toggleRightPanel } from './sidebar.svelte';
+import { collapseAllRepoGroups, toggleSidebar, toggleRightPanel, openAddRepoDialog } from './sidebar.svelte';
 
 export interface Command {
 	id: string;
@@ -75,6 +75,13 @@ let commands = $state<Command[]>([
 		shortcut: '\u2318R',
 		keywords: ['right', 'panel', 'hide', 'show', 'context'],
 		action: () => toggleRightPanel(),
+	},
+	{
+		id: 'repo:add',
+		label: 'Add Repository',
+		category: 'Repository',
+		keywords: ['repo', 'new', 'track', 'github', 'import'],
+		action: () => openAddRepoDialog(),
 	},
 ]);
 

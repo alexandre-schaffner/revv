@@ -25,6 +25,7 @@
 		getPaletteMode,
 		closePalette,
 	} from '$lib/stores/shortcuts.svelte';
+	import { getTopbarCollapsed } from '$lib/stores/topbar.svelte';
 	import { page } from '$app/state';
 
 	let { children } = $props();
@@ -36,6 +37,7 @@
 	const sidebarWidth = $derived(getSidebarWidth());
 	const pr = $derived(getSelectedPr());
 	const activeTab = $derived(getActiveTab());
+	const topbarCollapsed = $derived(getTopbarCollapsed());
 
 	// Drag state — not reactive $state, just local mutable refs
 	let isDragging = $state(false);
@@ -97,6 +99,7 @@
 	class:sidebar-collapsed={sidebarCollapsed}
 	class:panel-open={rightPanelOpen}
 	class:is-resizing={isDragging}
+	class:topbar-compact={topbarCollapsed}
 	style={gridStyle}
 >
 	<aside class="sidebar-area">
@@ -117,7 +120,7 @@
 		{/if}
 	</aside>
 
-	<header class="topbar-area">
+	<header class="topbar-area" data-tauri-drag-region>
 		<TopBar {rightPanelOpen} onTogglePanel={toggleRightPanel} />
 		{#if pr}
 			<div class="tabs-float">
@@ -146,16 +149,18 @@
 <style>
 	.app-shell {
 		display: grid;
-		grid-template-rows: 48px 1fr 40px;
+		grid-template-rows: auto 1fr 40px;
 		grid-template-areas:
-			'sidebar topbar'
+			'topbar  topbar'
 			'sidebar main'
 			'sidebar bottombar';
 		height: 100vh;
 		width: 100vw;
 		overflow: hidden;
 		background-color: var(--color-bg-primary);
-		transition: grid-template-columns var(--duration-smooth) var(--ease-out-expo);
+		transition:
+			grid-template-columns var(--duration-smooth) var(--ease-out-expo),
+			grid-template-rows var(--duration-smooth) var(--ease-out-expo);
 	}
 
 	/* Suppress the column transition while dragging so resize feels instant */
@@ -166,9 +171,9 @@
 	/* Right panel — update grid areas */
 	.app-shell.panel-open {
 		grid-template-areas:
-			'sidebar topbar rightpanel'
-			'sidebar main rightpanel'
-			'sidebar bottombar rightpanel';
+			'topbar  topbar     topbar'
+			'sidebar main       rightpanel'
+			'sidebar bottombar  rightpanel';
 	}
 
 	/* ── Sidebar area ── */
@@ -212,12 +217,23 @@
 		background: var(--color-border-focus, var(--color-accent));
 	}
 
-	/* ── Other areas ── */
+	/* ── Top bar ── */
 	.topbar-area {
 		grid-area: topbar;
 		position: relative;
+		z-index: 10;
+		height: 20px;
+		background: var(--color-bg-primary);
+		border-bottom: 1px solid color-mix(in srgb, var(--color-border) 40%, transparent);
 	}
 
+	/* Tauri overlay title bar — traffic light clearance */
+	:global(html.tauri) .topbar-area {
+		height: calc(22px + 6px);
+		padding-top: 22px;
+	}
+
+	/* ── Main area ── */
 	.main-area {
 		grid-area: main;
 		overflow-y: auto;
@@ -225,11 +241,12 @@
 
 	.tabs-float {
 		position: absolute;
-		top: 50%;
+		top: 100%;
 		left: 50%;
-		transform: translate(-50%, -50%);
+		transform: translateX(-50%);
 		z-index: 20;
 		pointer-events: none;
+		padding-top: 12px;
 	}
 
 	.tabs-float :global(*) {
