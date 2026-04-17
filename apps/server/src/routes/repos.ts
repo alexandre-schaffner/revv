@@ -11,13 +11,9 @@ import { withAuth, handleAppError } from './middleware';
 export const repoRoutes = new Elysia({ prefix: '/api/repos' })
 	.use(withAuth)
 	.get('/', async (ctx) => {
-		try {
-			return await AppRuntime.runPromise(
-				Effect.flatMap(RepositoryService, (s) => s.listRepos())
-			);
-		} catch (e) {
-			return handleAppError(e, ctx);
-		}
+		return AppRuntime.runPromise(
+			Effect.flatMap(RepositoryService, (s) => s.listRepos())
+		);
 	})
 	.post(
 		'/',

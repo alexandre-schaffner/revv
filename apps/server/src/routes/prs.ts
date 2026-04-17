@@ -15,14 +15,10 @@ export const prRoutes = new Elysia({ prefix: '/api/prs' })
 	.get(
 		'/',
 		async (ctx) => {
-			try {
-				const repoId = ctx.query.repo;
-				return await AppRuntime.runPromise(
-					Effect.flatMap(PullRequestService, (s) => s.listPrs(repoId))
-				);
-			} catch (e) {
-				return handleAppError(e, ctx);
-			}
+			const repoId = ctx.query.repo;
+			return AppRuntime.runPromise(
+				Effect.flatMap(PullRequestService, (s) => s.listPrs(repoId))
+			);
 		},
 		{ query: t.Object({ repo: t.Optional(t.String()) }) }
 	)
@@ -70,13 +66,9 @@ export const prRoutes = new Elysia({ prefix: '/api/prs' })
 		}
 	})
 	.post('/sync', async (ctx) => {
-		try {
-			await AppRuntime.runPromise(
-				Effect.flatMap(PollScheduler, (s) => s.syncNow())
-			);
+		await AppRuntime.runPromise(
+			Effect.flatMap(PollScheduler, (s) => s.syncNow())
+		);
 
-			return { success: true };
-		} catch (e) {
-			return handleAppError(e, ctx);
-		}
+		return { success: true };
 	});

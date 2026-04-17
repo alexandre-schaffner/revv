@@ -59,8 +59,6 @@
 			? 'bg-bg-elevated'
 			: ''} {isFocused ? 'sidebar-nav-focused' : ''}"
 		onclick={handleClick}
-		aria-label="PR #{pr.externalId}: {pr.title}"
-		aria-expanded={expanded}
 		data-sidebar-nav={navId}
 		data-nav-type="pr"
 		data-nav-expanded={expanded}
@@ -87,9 +85,9 @@
 
 	{#if isSelected && expanded}
 		{#if isLoadingFiles}
-			<div class="px-3 py-1.5 text-[11px] italic text-text-muted">Loading files…</div>
+			<div class="file-tree-loading">Loading files…</div>
 		{:else if treeFiles.length > 0}
-			<div class="py-0.5">
+			<div class="file-tree-inline">
 				<DiffFileTree
 					files={treeFiles}
 					{activeFilePath}
@@ -101,3 +99,15 @@
 		{/if}
 	{/if}
 </div>
+
+<style>
+	.file-tree-loading {
+		font-size: 11px;
+		color: var(--color-text-muted);
+		padding: 6px 12px;
+	}
+
+	.file-tree-inline {
+		padding: 2px 0 4px;
+	}
+</style>

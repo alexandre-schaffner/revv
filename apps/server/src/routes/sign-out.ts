@@ -2,7 +2,6 @@ import { Elysia } from 'elysia';
 import { eq } from 'drizzle-orm';
 import { auth, db, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET } from '../auth';
 import { account } from '../db/schema';
-import { logError } from '../logger';
 import { withAuth } from './middleware';
 
 /**
@@ -50,11 +49,11 @@ export const signOutRoute = new Elysia()
 				);
 				if (!res.ok && res.status !== 422) {
 					// 422 means token was already invalid — that's fine
-					logError('sign-out', `GitHub token revocation returned ${res.status}`);
+					console.warn(`[sign-out] GitHub token revocation returned ${res.status}`);
 				}
 			} catch (e) {
 				// Network error calling GitHub — log but don't block sign-out
-				logError('sign-out', 'Failed to revoke GitHub token:', e);
+				console.warn('[sign-out] Failed to revoke GitHub token:', e);
 			}
 		}
 
@@ -65,7 +64,7 @@ export const signOutRoute = new Elysia()
 				.set({ accessToken: null, refreshToken: null })
 				.where(eq(account.userId, userId));
 		} catch (e) {
-			logError('sign-out', 'Failed to clear account tokens:', e);
+			console.warn('[sign-out] Failed to clear account tokens:', e);
 		}
 
 		// 4. Invalidate the better-auth session

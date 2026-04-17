@@ -66,34 +66,19 @@
 		display: flex;
 		align-items: center;
 		gap: 0;
-		background: var(--color-glass-bg, rgba(20, 20, 28, 0.55));
-		backdrop-filter: blur(16px) saturate(1.4);
-		-webkit-backdrop-filter: blur(16px) saturate(1.4);
-		border: 1px solid var(--color-glass-border, rgba(255, 255, 255, 0.08));
+		background: var(--color-pill-bg, rgba(20, 20, 28, 0.96));
+		backdrop-filter: blur(12px);
+		-webkit-backdrop-filter: blur(12px);
+		border: 1px solid var(--color-pill-border, rgba(255, 255, 255, 0.08));
 		border-radius: 6px;
 		padding: 3px 4px 3px 10px;
 		box-shadow:
-			var(--color-glass-shadow, 0 4px 20px rgba(0, 0, 0, 0.5)),
-			inset 0 0.5px 0 0 var(--color-glass-highlight, rgba(255, 255, 255, 0.04));
+			0 4px 20px rgba(0, 0, 0, 0.5),
+			0 1px 4px rgba(0, 0, 0, 0.3);
 		pointer-events: auto;
 		animation: tt-in 70ms ease-out both;
 		max-width: 320px;
 		white-space: nowrap;
-		overflow: hidden;
-	}
-
-	/* Grain noise overlay */
-	.token-tooltip::before {
-		content: '';
-		position: absolute;
-		inset: 0;
-		border-radius: inherit;
-		background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-		background-size: 128px 128px;
-		opacity: var(--color-glass-grain-opacity, 0.25);
-		pointer-events: none;
-		mix-blend-mode: overlay;
-		z-index: 0;
 	}
 
 	@keyframes tt-in {
@@ -108,8 +93,6 @@
 	}
 
 	.token-text {
-		position: relative;
-		z-index: 1;
 		font-family: var(--font-mono, monospace);
 		font-size: 11px;
 		color: var(--color-text-secondary, #c4c4c8);
@@ -119,18 +102,14 @@
 	}
 
 	.sep {
-		position: relative;
-		z-index: 1;
 		width: 1px;
 		height: 14px;
-		background: var(--color-glass-border, rgba(255, 255, 255, 0.08));
+		background: var(--color-border-subtle, rgba(255, 255, 255, 0.08));
 		margin: 0 6px;
 		flex-shrink: 0;
 	}
 
 	.explain-btn {
-		position: relative;
-		z-index: 1;
 		display: flex;
 		align-items: center;
 		gap: 4px;

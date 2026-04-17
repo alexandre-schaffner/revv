@@ -24,10 +24,10 @@
 
 	const borderColor = $derived(
 		isResolved
-			? 'var(--color-marker-resolved)'
+			? 'var(--color-marker-resolved, #3f3f46)'
 			: isPending
-				? 'var(--color-marker-pending)'
-				: 'var(--color-marker-open)'
+				? 'var(--color-marker-pending, #f59e0b)'
+				: 'var(--color-marker-open, #3b82f6)'
 	);
 
 	function formatTime(iso: string): string {
@@ -141,12 +141,12 @@
 
 <style>
 	.annotation-thread {
-		background: var(--color-thread-bg);
-		border-top: 1px solid var(--color-border-subtle);
-		border-bottom: 1px solid var(--color-border-subtle);
+		background: var(--color-thread-bg, #1a1a1f);
+		border-top: 1px solid var(--color-border-subtle, #2a2a32);
+		border-bottom: 1px solid var(--color-border-subtle, #2a2a32);
 		border-left: 2px solid transparent;
 		padding: 10px 14px 8px;
-		font-family: var(--font-sans);
+		font-family: var(--font-sans, system-ui, sans-serif);
 		transition: opacity 400ms;
 	}
 
@@ -165,7 +165,7 @@
 		width: 18px;
 		height: 18px;
 		border-radius: 50%;
-		background: var(--color-bg-elevated);
+		background: var(--color-bg-elevated, #2a2a32);
 		display: flex;
 		align-items: center;
 		justify-content: center;
@@ -176,13 +176,13 @@
 	.avatar span {
 		font-size: 9px;
 		font-weight: 600;
-		color: var(--color-text-muted);
+		color: var(--color-text-muted, #888);
 	}
 
 	.author {
 		font-size: 12px;
 		font-weight: 500;
-		color: var(--color-text-primary);
+		color: var(--color-text-primary, #e4e4e7);
 	}
 
 	.role-badge {
@@ -190,29 +190,29 @@
 		font-weight: 600;
 		letter-spacing: 0.05em;
 		text-transform: uppercase;
-		background: var(--color-bg-tertiary);
-		color: var(--color-tab-inactive-text);
+		background: var(--color-bg-tertiary, #2a2a32);
+		color: var(--color-tab-inactive-text, #999);
 		border-radius: 3px;
 		padding: 1px 5px;
 	}
 
 	.timestamp {
 		font-size: 11px;
-		color: var(--color-text-muted);
+		color: var(--color-text-muted, #888);
 		margin-left: auto;
 	}
 
 	.msg-body {
 		font-size: 13px;
 		line-height: 1.6;
-		color: var(--color-text-secondary);
+		color: var(--color-text-secondary, #c4c4c8);
 		white-space: pre-wrap;
 		word-break: break-word;
 	}
 
 	.suggestion-block {
 		margin-top: 8px;
-		border: 1px solid var(--color-border-subtle);
+		border: 1px solid var(--color-border-subtle, #2a2a32);
 		border-radius: 5px;
 		overflow: hidden;
 	}
@@ -223,19 +223,19 @@
 		gap: 5px;
 		padding: 5px 9px;
 		font-size: 11px;
-		color: var(--color-text-muted);
-		background: var(--color-diff-bg);
-		border-bottom: 1px solid var(--color-border-subtle);
+		color: var(--color-text-muted, #888);
+		background: var(--color-diff-bg, #0d0d10);
+		border-bottom: 1px solid var(--color-border-subtle, #2a2a32);
 	}
 
 	.suggestion-code {
 		margin: 0;
 		padding: 8px 12px;
-		font-family: var(--font-mono);
+		font-family: var(--font-mono, monospace);
 		font-size: 11px;
 		line-height: 1.6;
-		color: var(--color-text-secondary);
-		background: var(--color-diff-bg);
+		color: var(--color-text-secondary, #c4c4c8);
+		background: var(--color-diff-bg, #0d0d10);
 		overflow-x: auto;
 		white-space: pre;
 	}
@@ -245,17 +245,17 @@
 		width: 100%;
 		padding: 5px 9px;
 		font-size: 11px;
-		color: var(--color-success);
-		background: color-mix(in srgb, var(--color-success) 8%, transparent);
+		color: var(--color-success, #22c55e);
+		background: rgba(34, 197, 94, 0.08);
 		border: none;
-		border-top: 1px solid color-mix(in srgb, var(--color-success) 12%, transparent);
+		border-top: 1px solid rgba(34, 197, 94, 0.12);
 		cursor: pointer;
 		text-align: left;
 		transition: background-color 80ms;
 	}
 
 	.apply-btn:hover {
-		background: color-mix(in srgb, var(--color-success) 14%, transparent);
+		background: rgba(34, 197, 94, 0.14);
 	}
 
 	.thread-footer {
@@ -263,7 +263,7 @@
 		align-items: center;
 		gap: 6px;
 		padding-top: 8px;
-		border-top: 1px solid var(--color-border-subtle);
+		border-top: 1px solid var(--color-border-subtle, #2a2a32);
 	}
 
 	.footer-btn {
@@ -279,22 +279,22 @@
 		transition:
 			background-color 80ms,
 			color 80ms;
-		color: var(--color-text-muted);
+		color: var(--color-text-muted, #888);
 	}
 
 	.footer-btn:hover {
-		background: var(--color-bg-tertiary);
-		color: var(--color-text-secondary);
+		background: var(--color-bg-tertiary, #2a2a32);
+		color: var(--color-text-secondary, #c4c4c8);
 	}
 
 	.footer-btn--resolve {
-		color: var(--color-success);
-		background: color-mix(in srgb, var(--color-success) 8%, transparent);
-		border: 1px solid color-mix(in srgb, var(--color-success) 12%, transparent);
+		color: var(--color-success, #22c55e);
+		background: rgba(34, 197, 94, 0.08);
+		border: 1px solid rgba(34, 197, 94, 0.12);
 	}
 
 	.footer-btn--resolve:hover {
-		background: color-mix(in srgb, var(--color-success) 14%, transparent);
+		background: rgba(34, 197, 94, 0.14);
 	}
 
 	.footer-btn--collapse {
@@ -302,18 +302,18 @@
 	}
 
 	.footer-btn--reply-active {
-		color: var(--color-text-secondary);
-		background: var(--color-bg-tertiary);
+		color: var(--color-text-secondary, #c4c4c8);
+		background: var(--color-bg-tertiary, #2a2a32);
 	}
 
 	.footer-btn--reopen {
-		color: var(--color-text-muted);
-		border: 1px solid var(--color-border-subtle);
+		color: var(--color-text-muted, #888);
+		border: 1px solid var(--color-border-subtle, #2a2a32);
 	}
 
 	.footer-btn--reopen:hover {
-		color: var(--color-text-secondary);
-		background: var(--color-bg-tertiary);
-		border-color: var(--color-border);
+		color: var(--color-text-secondary, #c4c4c8);
+		background: var(--color-bg-tertiary, #2a2a32);
+		border-color: var(--color-border, #3a3a42);
 	}
 </style>

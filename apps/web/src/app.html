@@ -13,7 +13,6 @@
 					(s !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
 				if (d) document.documentElement.classList.add('dark');
 				document.documentElement.style.colorScheme = d ? 'dark' : 'light';
-				if (window.__TAURI__) document.documentElement.classList.add('tauri');
 			})();
 		</script>
 		<link rel="preconnect" href="https://fonts.googleapis.com" />

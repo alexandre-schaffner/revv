@@ -13,6 +13,7 @@ import { TokenProvider } from '../services/TokenProvider';
 import { WalkthroughService } from '../services/Walkthrough';
 import { WebSocketHub } from '../services/WebSocketHub';
 import { POLL_CLONE_MAX_ATTEMPTS, POLL_CLONE_INTERVAL_SECONDS } from '../constants';
+import { isReviewError } from '../domain/errors';
 import { withAuth, handleAppError, unwrapEffectError, jsonResponse, mapErrorToSSEResponse } from './middleware';
 import type { RiskLevel, WalkthroughStreamEvent, Repository } from '@rev/shared';
 
@@ -84,7 +85,11 @@ export const reviewRoutes = new Elysia({ prefix: '/api/reviews' })
 				}),
 			);
 		} catch (e) {
-			return handleAppError(e, ctx);
+			if (isReviewError(e)) {
+				ctx.set.status = 500;
+				return { error: e.message };
+			}
+			throw e;
 		}
 	})
 
@@ -99,7 +104,11 @@ export const reviewRoutes = new Elysia({ prefix: '/api/reviews' })
 					),
 				);
 			} catch (e) {
-				return handleAppError(e, ctx);
+				if (isReviewError(e)) {
+					ctx.set.status = 500;
+					return { error: e.message };
+				}
+				throw e;
 			}
 		},
 		{ body: t.Object({ pullRequestId: t.String() }) },
@@ -127,22 +136,18 @@ export const reviewRoutes = new Elysia({ prefix: '/api/reviews' })
 	.get(
 		'/:id/threads',
 		async (ctx) => {
-			try {
-				return await AppRuntime.runPromise(
-					Effect.gen(function* () {
-						const reviewService = yield* ReviewService;
-						if (ctx.query.filePath) {
-							return yield* reviewService.getThreadsForFile(
-								ctx.params.id,
-								ctx.query.filePath,
-							);
-						}
-						return yield* reviewService.getThreadsForSession(ctx.params.id);
-					}),
-				);
-			} catch (e) {
-				return handleAppError(e, ctx);
-			}
+			return AppRuntime.runPromise(
+				Effect.gen(function* () {
+					const reviewService = yield* ReviewService;
+					if (ctx.query.filePath) {
+						return yield* reviewService.getThreadsForFile(
+							ctx.params.id,
+							ctx.query.filePath,
+						);
+					}
+					return yield* reviewService.getThreadsForSession(ctx.params.id);
+				}),
+			);
 		},
 		{ query: t.Object({ filePath: t.Optional(t.String()) }) },
 	)
@@ -186,7 +191,11 @@ export const reviewRoutes = new Elysia({ prefix: '/api/reviews' })
 				ctx.set.status = 201;
 				return result;
 			} catch (e) {
-				return handleAppError(e, ctx);
+				if (isReviewError(e)) {
+					ctx.set.status = 500;
+					return { error: e.message };
+				}
+				throw e;
 			}
 		},
 		{
@@ -217,35 +226,27 @@ export const reviewRoutes = new Elysia({ prefix: '/api/reviews' })
 
 	// GET /api/reviews/:id/hunks — list hunk decisions
 	.get('/:id/hunks', async (ctx) => {
-		try {
-			return await AppRuntime.runPromise(
-				Effect.flatMap(ReviewService, (s) => s.getHunkDecisions(ctx.params.id)),
-			);
-		} catch (e) {
-			return handleAppError(e, ctx);
-		}
+		return AppRuntime.runPromise(
+			Effect.flatMap(ReviewService, (s) => s.getHunkDecisions(ctx.params.id)),
+		);
 	})
 
 	// PUT /api/reviews/:id/hunks — set a hunk decision (upsert)
 	.put(
 		'/:id/hunks',
 		async (ctx) => {
-			try {
-				await AppRuntime.runPromise(
-					Effect.flatMap(ReviewService, (s) =>
-						s.setHunkDecision(
-							ctx.params.id,
-							ctx.body.filePath,
-							ctx.body.hunkIndex,
-							ctx.body.decision,
-						),
+			await AppRuntime.runPromise(
+				Effect.flatMap(ReviewService, (s) =>
+					s.setHunkDecision(
+						ctx.params.id,
+						ctx.body.filePath,
+						ctx.body.hunkIndex,
+						ctx.body.decision,
 					),
-				);
+				),
+			);
 
-				return { success: true };
-			} catch (e) {
-				return handleAppError(e, ctx);
-			}
+			return { success: true };
 		},
 		{
 			body: t.Object({
@@ -258,21 +259,17 @@ export const reviewRoutes = new Elysia({ prefix: '/api/reviews' })
 
 	// DELETE /api/reviews/:id/hunks/:filePath/:hunkIndex — clear a hunk decision
 	.delete('/:id/hunks/:filePath/:hunkIndex', async (ctx) => {
-		try {
-			await AppRuntime.runPromise(
-				Effect.flatMap(ReviewService, (s) =>
-					s.clearHunkDecision(
-						ctx.params.id,
-						decodeURIComponent(ctx.params.filePath),
-						Number(ctx.params.hunkIndex),
-					),
+		await AppRuntime.runPromise(
+			Effect.flatMap(ReviewService, (s) =>
+				s.clearHunkDecision(
+					ctx.params.id,
+					decodeURIComponent(ctx.params.filePath),
+					Number(ctx.params.hunkIndex),
 				),
-			);
+			),
+		);
 
-			return { success: true };
-		} catch (e) {
-			return handleAppError(e, ctx);
-		}
+		return { success: true };
 	})
 
 	// GET /api/reviews/:id/walkthrough — SSE streaming walkthrough
@@ -446,14 +443,14 @@ export const reviewRoutes = new Elysia({ prefix: '/api/reviews' })
 							worktreePath,
 						});
 						return {
-							generator,
-							reviewSessionId: reviewSession.id,
-							prId: pr.id,
-							headSha: meta.headSha,
-							modelUsed: 'claude-sonnet-4-20250514',
-							existingWalkthroughId: undefined as string | undefined,
-							resumeFromBlockCount: 0,
-						};
+					generator,
+					reviewSessionId: reviewSession.id,
+					prId: pr.id,
+					headSha: meta.headSha,
+					modelUsed: 'claude-sonnet-4-20250514',
+					existingWalkthroughId: undefined as string | undefined,
+					resumeFromBlockCount: 0,
+				};
 				}).pipe(
 					Effect.timeout(Duration.minutes(2)),
 					Effect.catchTag('TimeoutException', () => Effect.fail(new Error('AI setup timed out after 2 minutes.'))),
@@ -637,7 +634,8 @@ export const reviewRoutes = new Elysia({ prefix: '/api/reviews' })
 				}),
 			);
 			return { success: true };
-		} catch (e) {
-			return handleAppError(e, ctx);
+		} catch {
+			ctx.set.status = 500;
+			return { error: 'Failed to invalidate walkthrough cache' };
 		}
 	});

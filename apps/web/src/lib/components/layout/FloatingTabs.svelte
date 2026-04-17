@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { tick } from 'svelte';
 	import type { FocusPanel } from '$lib/stores/focus-mode.svelte';
 
 	type Tab = 'walkthrough' | 'diff' | 'request-changes';
@@ -17,27 +18,48 @@
 		{ id: 'request-changes', label: 'Request Changes' },
 	];
 
-	function showDivider(index: number): boolean {
-		if (index === tabs.length - 1) return false;
-		const currentActive = tabs[index]?.id === activeTab;
-		const nextActive = tabs[index + 1]?.id === activeTab;
-		return !currentActive && !nextActive;
+	let containerEl: HTMLDivElement;
+	let tabEls: Record<Tab, HTMLButtonElement | null> = $state({
+		walkthrough: null,
+		diff: null,
+		'request-changes': null,
+	});
+
+	let indicatorStyle = $state('');
+
+	async function updateIndicator(tab: Tab) {
+		await tick();
+		const container = containerEl;
+		const activeEl = tabEls[tab];
+		if (!container || !activeEl) return;
+
+		const containerRect = container.getBoundingClientRect();
+		const activeRect = activeEl.getBoundingClientRect();
+
+		const left = activeRect.left - containerRect.left - 2; // -2 for container padding
+		const width = activeRect.width;
+		indicatorStyle = `transform: translateX(${left}px); width: ${width}px;`;
 	}
+
+	$effect(() => {
+		updateIndicator(activeTab);
+	});
 </script>
 
 <div class="tabs-wrapper">
-	<div class="pill">
-		{#each tabs as tab, i}
+	<div class="tabs-container" bind:this={containerEl}>
+		<!-- Sliding indicator -->
+		<span class="tab-indicator" style={indicatorStyle} aria-hidden="true"></span>
+
+		{#each tabs as tab}
 			<button
-				class="pill-segment"
-				class:pill-segment--active={activeTab === tab.id}
+				class="tab-btn"
+				class:tab-active={activeTab === tab.id}
+				bind:this={tabEls[tab.id]}
 				onclick={() => onTabChange(tab.id)}
 			>
 				{tab.label}
 			</button>
-			{#if showDivider(i)}
-				<span class="pill-divider" aria-hidden="true"></span>
-			{/if}
 		{/each}
 	</div>
 
@@ -72,78 +94,56 @@
 		opacity: 1;
 	}
 
-	.pill {
+	.tabs-container {
 		position: relative;
 		display: flex;
 		align-items: center;
-		background: var(--color-glass-bg);
-		backdrop-filter: blur(16px) saturate(1.4);
-		-webkit-backdrop-filter: blur(16px) saturate(1.4);
-		border: 1px solid var(--color-glass-border);
-		border-radius: 9999px;
-		padding: 3px;
-		box-shadow:
-			var(--color-glass-shadow),
-			inset 0 0.5px 0 0 var(--color-glass-highlight);
-		transform: translateZ(0);
-		isolation: isolate;
+		background: var(--color-bg-secondary);
+		border: 1px solid var(--color-border);
+		border-radius: 8px;
+		padding: 2px;
 	}
 
-	/* Grain noise overlay */
-	.pill::after {
-		content: '';
+	.tab-indicator {
 		position: absolute;
-		inset: 0;
-		border-radius: inherit;
-		background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-		background-size: 128px 128px;
-		opacity: var(--color-glass-grain-opacity);
+		top: 2px;
+		left: 0;
+		height: calc(100% - 4px);
+		background: var(--color-tab-active-bg);
+		border-radius: 6px;
+		box-shadow:
+			0 1px 3px rgba(0, 0, 0, 0.5),
+			inset 0 1px 0 rgba(255, 255, 255, 0.04);
+		transition:
+			transform var(--duration-snap) var(--ease-out-expo),
+			width var(--duration-snap) var(--ease-out-expo);
 		pointer-events: none;
-		mix-blend-mode: overlay;
 		z-index: 0;
 	}
 
-	.pill-segment {
+	.tab-btn {
 		position: relative;
 		z-index: 1;
-		height: 36px;
-		padding: 0 20px;
-		border-radius: 9999px;
-		font-size: 13px;
+		height: 28px;
+		padding: 0 12px;
+		border-radius: 6px;
+		font-size: 12px;
 		font-weight: 500;
 		letter-spacing: -0.01em;
 		color: var(--color-tab-inactive-text);
 		background: transparent;
 		border: none;
 		cursor: pointer;
-		transition:
-			color var(--duration-snap),
-			background-color var(--duration-snap),
-			box-shadow var(--duration-snap);
+		transition: color var(--duration-snap);
 		user-select: none;
 		white-space: nowrap;
-		-webkit-font-smoothing: antialiased;
 	}
 
-	.pill-segment:hover:not(.pill-segment--active) {
+	.tab-btn:hover {
 		color: var(--color-text-secondary);
-		background: var(--color-glass-highlight);
 	}
 
-	.pill-segment--active {
-		color: var(--color-text-primary);
-		background: var(--color-glass-active-bg);
-		box-shadow:
-			0 1px 3px rgba(0, 0, 0, 0.12),
-			inset 0 0.5px 0 0 var(--color-glass-highlight);
-	}
-
-	.pill-divider {
-		position: relative;
-		z-index: 1;
-		width: 1px;
-		height: 14px;
-		background: var(--color-glass-border);
-		flex-shrink: 0;
+	.tab-active {
+		color: var(--color-text-primary) !important;
 	}
 </style>

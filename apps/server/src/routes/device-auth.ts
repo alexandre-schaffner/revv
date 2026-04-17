@@ -2,7 +2,6 @@ import { Elysia, t } from 'elysia';
 import { eq, and } from 'drizzle-orm';
 import { GITHUB_CLIENT_ID, db } from '../auth';
 import { user, account, session } from '../db/schema';
-import { jsonResponse } from './middleware';
 
 interface GitHubDeviceCodeResponse {
 	device_code: string;
@@ -137,7 +136,10 @@ export const deviceAuthRoutes = new Elysia()
 			});
 
 			if (!res.ok) {
-				return jsonResponse({ error: `GitHub device code request failed: ${res.status}` }, 500);
+				return new Response(
+					JSON.stringify({ error: `GitHub device code request failed: ${res.status}` }),
+					{ status: 500, headers: { 'Content-Type': 'application/json' } }
+				);
 			}
 
 			const data = (await res.json()) as GitHubDeviceCodeResponse;
@@ -149,7 +151,10 @@ export const deviceAuthRoutes = new Elysia()
 				interval: data.interval,
 			};
 		} catch (e) {
-			return jsonResponse({ error: String(e) }, 500);
+			return new Response(JSON.stringify({ error: String(e) }), {
+				status: 500,
+				headers: { 'Content-Type': 'application/json' },
+			});
 		}
 	})
 	.post(
@@ -172,7 +177,10 @@ export const deviceAuthRoutes = new Elysia()
 				});
 
 				if (!res.ok) {
-					return jsonResponse({ status: 'error', message: `GitHub poll failed: ${res.status}` }, 500);
+					return new Response(
+						JSON.stringify({ status: 'error', message: `GitHub poll failed: ${res.status}` }),
+						{ status: 500, headers: { 'Content-Type': 'application/json' } }
+					);
 				}
 
 				const data = (await res.json()) as GitHubAccessTokenResponse;
@@ -199,13 +207,19 @@ export const deviceAuthRoutes = new Elysia()
 					case 'access_denied':
 						return { status: 'denied' as const };
 					default:
-						return jsonResponse({
-							status: 'error',
-							message: data.error_description ?? data.error ?? 'Unknown GitHub error',
-						}, 500);
+						return new Response(
+							JSON.stringify({
+								status: 'error',
+								message: data.error_description ?? data.error ?? 'Unknown GitHub error',
+							}),
+							{ status: 500, headers: { 'Content-Type': 'application/json' } }
+						);
 				}
 			} catch (e) {
-				return jsonResponse({ status: 'error', message: String(e) }, 500);
+				return new Response(JSON.stringify({ status: 'error', message: String(e) }), {
+					status: 500,
+					headers: { 'Content-Type': 'application/json' },
+				});
 			}
 		},
 		{

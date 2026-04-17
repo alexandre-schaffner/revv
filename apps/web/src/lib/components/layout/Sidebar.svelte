@@ -11,7 +11,6 @@
 	import { handleKey as handleNavKey, clearFocus, setFocusedId } from '$lib/stores/sidebar-nav.svelte';
 	import { getPaletteOpen } from '$lib/stores/shortcuts.svelte';
 	import { getActivePanel, enterScrollMode } from '$lib/stores/focus-mode.svelte';
-	import { getAddRepoDialogOpen, setAddRepoDialogOpen } from '$lib/stores/sidebar.svelte';
 	import SearchFilter from '$lib/components/sidebar/SearchFilter.svelte';
 	import RepoGroup from '$lib/components/sidebar/RepoGroup.svelte';
 	import AddRepoDialog from '$lib/components/sidebar/AddRepoDialog.svelte';
@@ -23,7 +22,7 @@
 
 	let { collapsed = false, onToggle }: Props = $props();
 
-	let addRepoOpen = $derived(getAddRepoDialogOpen());
+	let addRepoOpen = $state(false);
 
 	function handleSidebarClick(e: MouseEvent): void {
 		const navEl = (e.target as HTMLElement).closest<HTMLElement>('[data-sidebar-nav]');
@@ -118,7 +117,7 @@
 
 	<!-- Rest of sidebar — hidden when collapsed -->
 	{#if !collapsed}
-		<SearchFilter onAddRepo={() => setAddRepoDialogOpen(true)} />
+		<SearchFilter onAddRepo={() => (addRepoOpen = true)} />
 
 		<div class="pr-list">
 			{#if getRepositories().length === 0}
@@ -128,7 +127,7 @@
 						<path d="M9 18c-4.51 2-5-2-7-2"/>
 					</svg>
 					<p class="empty-text">No repositories added</p>
-					<button class="add-link" onclick={() => setAddRepoDialogOpen(true)}>
+					<button class="add-link" onclick={() => (addRepoOpen = true)}>
 						Add a repository
 					</button>
 				</div>
@@ -153,7 +152,7 @@
 	{/if}
 </div>
 
-<AddRepoDialog open={addRepoOpen} onClose={() => setAddRepoDialogOpen(false)} />
+<AddRepoDialog open={addRepoOpen} onClose={() => (addRepoOpen = false)} />
 
 <style>
 	.sidebar {
@@ -164,8 +163,6 @@
 		background: var(--color-bg-secondary);
 		overflow: hidden;
 	}
-
-	/* Tauri — traffic lights are in the topbar row above, no extra clearance needed */
 
 	/* Header */
 	.sidebar-header {
@@ -180,7 +177,7 @@
 	}
 
 	.header-label {
-		font-size: 9px;
+		font-size: 10px;
 		font-weight: 600;
 		letter-spacing: 0.08em;
 		text-transform: uppercase;
@@ -243,13 +240,13 @@
 	}
 
 	.empty-text {
-		font-size: 11px;
+		font-size: 12px;
 		color: var(--color-text-muted);
 		margin: 0;
 	}
 
 	.add-link {
-		font-size: 11px;
+		font-size: 12px;
 		color: var(--color-accent);
 		background: none;
 		border: none;
@@ -277,7 +274,7 @@
 		border-radius: 6px;
 		border: none;
 		background: transparent;
-		font-size: 11px;
+		font-size: 12px;
 		color: var(--color-text-muted);
 		cursor: pointer;
 		transition:
