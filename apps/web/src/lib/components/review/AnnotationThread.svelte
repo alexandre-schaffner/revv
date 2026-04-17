@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { CommentThread, ThreadMessage } from '$lib/types/review';
+	import type { CommentThread, ThreadMessage } from '@revv/shared';
 	import AnnotationCommentInput from './AnnotationCommentInput.svelte';
 
 	interface Props {
@@ -13,9 +13,10 @@
 		isReplying?: boolean;
 		onReplySubmit?: (body: string) => void;
 		onReplyDismiss?: () => void;
+		currentUserRole?: 'reviewer' | 'coder' | 'unknown';
 	}
 
-	let { thread, messages, onReply, onResolve, onReopen, onCollapse, onApplySuggestion, isReplying = false, onReplySubmit, onReplyDismiss }: Props = $props();
+	let { thread, messages, onReply, onResolve, onReopen, onCollapse, onApplySuggestion, isReplying = false, onReplySubmit, onReplyDismiss, currentUserRole = 'unknown' }: Props = $props();
 
 	const isResolved = $derived(thread.status === 'resolved' || thread.status === 'wont_fix');
 	const isPending = $derived(
@@ -25,9 +26,29 @@
 	const borderColor = $derived(
 		isResolved
 			? 'var(--color-marker-resolved)'
-			: isPending
-				? 'var(--color-marker-pending)'
-				: 'var(--color-marker-open)'
+			: thread.status === 'pending_coder'
+				? currentUserRole === 'coder'
+					? 'var(--color-marker-your-turn)'
+					: 'var(--color-marker-pending)'
+				: thread.status === 'pending_reviewer'
+					? currentUserRole === 'reviewer'
+						? 'var(--color-marker-your-turn)'
+						: 'var(--color-marker-pending)'
+					: 'var(--color-marker-open)'
+	);
+
+	const statusChip = $derived(
+		isResolved
+			? 'Resolved'
+			: thread.status === 'pending_coder'
+				? currentUserRole === 'coder'
+					? 'Pending you'
+					: 'Waiting on coder'
+				: thread.status === 'pending_reviewer'
+					? currentUserRole === 'reviewer'
+						? 'Pending you'
+						: 'Waiting on reviewer'
+					: null
 	);
 
 	function formatTime(iso: string): string {
@@ -101,6 +122,9 @@
 	{/if}
 
 	<div class="thread-footer">
+		{#if statusChip}
+			<span class="status-chip status-chip--{isResolved ? 'resolved' : 'pending'}">{statusChip}</span>
+		{/if}
 		{#if !isResolved && onReply}
 			<button class="footer-btn footer-btn--reply" class:footer-btn--reply-active={isReplying} onclick={onReply}>
 				<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -116,7 +140,7 @@
 				class:footer-btn--resolve={!isResolved}
 				class:footer-btn--reopen={isResolved}
 				onclick={isResolved ? onReopen : onResolve}
-			>{isResolved ? 'Unresolve' : 'Resolve'}</button>
+			>{isResolved ? 'Reopen' : 'Resolve'}</button>
 		{/if}
 		{#if onCollapse}
 			<button
@@ -315,5 +339,21 @@
 		color: var(--color-text-secondary);
 		background: var(--color-bg-tertiary);
 		border-color: var(--color-border);
+	}
+
+	.status-chip {
+		font-size: 10px;
+		font-weight: 500;
+		padding: 2px 7px;
+		border-radius: 10px;
+		line-height: 1.4;
+	}
+	.status-chip--resolved {
+		background: color-mix(in srgb, var(--color-marker-resolved) 15%, transparent);
+		color: var(--color-text-muted);
+	}
+	.status-chip--pending {
+		background: color-mix(in srgb, var(--color-marker-your-turn, var(--color-marker-pending)) 15%, transparent);
+		color: var(--color-marker-your-turn, var(--color-marker-pending));
 	}
 </style>

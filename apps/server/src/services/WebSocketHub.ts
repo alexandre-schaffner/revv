@@ -1,5 +1,5 @@
 import { Context, Effect, Layer, Ref } from 'effect';
-import type { WsServerMessage } from '@rev/shared';
+import type { WsServerMessage } from '@revv/shared';
 
 // Use `any` to avoid Bun type conflicts — we only call .send(string) in practice
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

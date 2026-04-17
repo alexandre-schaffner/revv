@@ -2,8 +2,9 @@ import { Elysia, t } from 'elysia';
 import { Effect } from 'effect';
 import { AppRuntime } from '../runtime';
 import { ReviewService } from '../services/Review';
+import { SyncService } from '../services/Sync';
 import { WebSocketHub } from '../services/WebSocketHub';
-import type { ThreadStatus } from '@rev/shared';
+import type { ThreadStatus } from '@revv/shared';
 import { withAuth, handleAppError } from './middleware';
 
 export const threadRoutes = new Elysia({ prefix: '/api/threads' })
@@ -17,6 +18,7 @@ export const threadRoutes = new Elysia({ prefix: '/api/threads' })
 					Effect.gen(function* () {
 						const reviewService = yield* ReviewService;
 						const hub = yield* WebSocketHub;
+						const sync = yield* SyncService;
 
 						const thread = yield* reviewService.updateThreadStatus(
 							ctx.params.id,
@@ -27,6 +29,12 @@ export const threadRoutes = new Elysia({ prefix: '/api/threads' })
 							type: 'thread:updated',
 							data: { threadId: ctx.params.id, status: thread.status },
 						});
+
+						// Push resolve/unresolve to GitHub if the thread has been synced.
+						// Best-effort — don't fail the local update if GitHub push fails.
+						yield* sync.pushThreadStatus(ctx.params.id).pipe(
+							Effect.catchAll(() => Effect.void),
+						);
 
 						return thread;
 					}),
@@ -50,6 +58,57 @@ export const threadRoutes = new Elysia({ prefix: '/api/threads' })
 		},
 	)
 
+	// POST /api/threads/:id/reopen — convenience endpoint that flips to open + syncs
+	.post('/:id/reopen', async (ctx) => {
+		try {
+			const updated = await AppRuntime.runPromise(
+				Effect.gen(function* () {
+					const reviewService = yield* ReviewService;
+					const hub = yield* WebSocketHub;
+					const sync = yield* SyncService;
+
+					const thread = yield* reviewService.updateThreadStatus(ctx.params.id, 'open');
+					yield* hub.broadcast({
+						type: 'thread:updated',
+						data: { threadId: ctx.params.id, status: thread.status },
+					});
+					yield* sync.pushThreadStatus(ctx.params.id).pipe(
+						Effect.catchAll(() => Effect.void),
+					);
+					return thread;
+				}),
+			);
+			return updated;
+		} catch (e) {
+			return handleAppError(e, ctx);
+		}
+	})
+
+	// POST /api/threads/:id/push — push this thread to GitHub (create the review comment).
+	// Used by the frontend immediately after creating a thread to get it round-tripping.
+	.post('/:id/push', async (ctx) => {
+		try {
+			await AppRuntime.runPromise(
+				Effect.flatMap(SyncService, (s) => s.pushThread(ctx.params.id)),
+			);
+			return { success: true };
+		} catch (e) {
+			return handleAppError(e, ctx);
+		}
+	})
+
+	// POST /api/threads/:id/messages/:messageId/push — push a single reply.
+	.post('/:id/messages/:messageId/push', async (ctx) => {
+		try {
+			await AppRuntime.runPromise(
+				Effect.flatMap(SyncService, (s) => s.pushReply(ctx.params.messageId)),
+			);
+			return { success: true };
+		} catch (e) {
+			return handleAppError(e, ctx);
+		}
+	})
+
 	// GET /api/threads/:id/messages — list messages in a thread
 	.get('/:id/messages', async (ctx) => {
 		try {
@@ -70,6 +129,7 @@ export const threadRoutes = new Elysia({ prefix: '/api/threads' })
 					Effect.gen(function* () {
 						const reviewService = yield* ReviewService;
 						const hub = yield* WebSocketHub;
+						const sync = yield* SyncService;
 
 						const msg = yield* reviewService.addMessage(ctx.params.id, {
 							authorRole: ctx.body.authorRole,
@@ -81,10 +141,24 @@ export const threadRoutes = new Elysia({ prefix: '/api/threads' })
 								: {}),
 						});
 
+						// Auto-transition thread status based on author role.
+						const transitioned = yield* reviewService
+							.transitionStatus(ctx.params.id, ctx.body.authorRole)
+							.pipe(Effect.catchAll(() => Effect.succeed(null)));
+
 						yield* hub.broadcast({
 							type: 'thread:message',
 							data: { threadId: ctx.params.id, message: msg },
 						});
+						if (transitioned) {
+							yield* hub.broadcast({
+								type: 'thread:updated',
+								data: { threadId: ctx.params.id, status: transitioned.status },
+							});
+						}
+
+						// Fire-and-forget: push reply to GitHub if the thread is already synced.
+						yield* sync.pushReply(msg.id).pipe(Effect.catchAll(() => Effect.void));
 
 						return msg;
 					}),

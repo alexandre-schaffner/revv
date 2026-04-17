@@ -1,6 +1,6 @@
 import { Elysia } from 'elysia';
 import { Effect } from 'effect';
-import type { Repository } from '@rev/shared';
+import type { Repository } from '@revv/shared';
 import { AppRuntime } from '../runtime';
 import { GitHubService } from '../services/GitHub';
 import { TokenProvider } from '../services/TokenProvider';

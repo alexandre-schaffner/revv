@@ -1,8 +1,7 @@
 import { Elysia } from 'elysia';
 import { cors } from '@elysiajs/cors';
-import { API_PORT } from '@rev/shared';
+import { API_PORT } from '@revv/shared';
 import { auth } from './auth';
-import { deviceAuthRoutes } from './routes/device-auth';
 import { explainRoute } from './routes/explain';
 import { repoRoutes } from './routes/repos';
 import { githubRoutes } from './routes/github';
@@ -11,6 +10,8 @@ import { reviewRoutes } from './routes/reviews';
 import { threadRoutes } from './routes/threads';
 import { settingsRoutes } from './routes/settings';
 import { signOutRoute } from './routes/sign-out';
+import { deviceAuthRoutes } from './routes/device-auth';
+import { userRoutes } from './routes/user';
 import { wsRoute } from './routes/ws';
 
 const app = new Elysia()
@@ -23,7 +24,6 @@ const app = new Elysia()
 		})
 	)
 	.mount(auth.handler)
-	.use(deviceAuthRoutes)
 	.use(explainRoute)
 	.use(repoRoutes)
 	.use(githubRoutes)
@@ -32,6 +32,8 @@ const app = new Elysia()
 	.use(threadRoutes)
 	.use(settingsRoutes)
 	.use(signOutRoute)
+	.use(deviceAuthRoutes)
+	.use(userRoutes)
 	.use(wsRoute)
 	.get('/api/health', () => ({
 		status: 'ok' as const,
@@ -39,6 +41,6 @@ const app = new Elysia()
 	}))
 	.listen(API_PORT);
 
-console.log(`[rev-server] listening on http://localhost:${API_PORT}`);
+console.log(`[revv-server] listening on http://localhost:${API_PORT}`);
 
 export type App = typeof app;

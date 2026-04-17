@@ -6,7 +6,7 @@
 	import { getPullRequests, getRepositories, selectPr } from '$lib/stores/prs.svelte';
 	import { getFilteredCommands, setQuery as setCommandQuery, resetQuery, fuzzyScore } from '$lib/stores/commands.svelte';
 	import { setPaletteMode, closePalette, type PaletteMode } from '$lib/stores/shortcuts.svelte';
-	import type { PullRequest, Repository } from '@rev/shared';
+	import type { PullRequest, Repository } from '@revv/shared';
 
 	interface Props {
 		open: boolean;

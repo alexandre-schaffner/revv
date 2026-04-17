@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
+	import { fade } from 'svelte/transition';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Separator } from '$lib/components/ui/separator';
@@ -17,19 +18,22 @@
 		getPhaseMessage,
 		getStreamStartedAt,
 		getIssues,
+		getIsLiveGeneration,
 		streamWalkthrough,
 		regenerate,
 	} from '$lib/stores/walkthrough.svelte';
-	import { loadSession } from '$lib/stores/review.svelte';
+
 	import WalkthroughMarkdownBlock from './WalkthroughMarkdownBlock.svelte';
 	import WalkthroughCodeBlock from './WalkthroughCodeBlock.svelte';
 	import WalkthroughDiffBlock from './WalkthroughDiffBlock.svelte';
 
 	interface Props {
 		prId: string;
+		scrollRoot?: HTMLElement | undefined;
+		isActive?: boolean;
 	}
 
-	let { prId }: Props = $props();
+	let { prId, scrollRoot, isActive = true }: Props = $props();
 
 	const blocks = $derived(getBlocks());
 	const summary = $derived(getSummary());
@@ -42,6 +46,7 @@
 	const streamStartedAt = $derived(getStreamStartedAt());
 	const themeType = $derived(getDiffThemeType());
 	const issues = $derived(getIssues());
+	const isLiveGeneration = $derived(getIsLiveGeneration());
 
 	const riskClasses: Record<string, string> = {
 		low: 'risk-badge risk-badge--low',
@@ -64,6 +69,7 @@
 	// ── Elapsed time ────────────────────────────────────────────────────
 	let elapsedSeconds = $state(0);
 	let elapsedTimer: ReturnType<typeof setInterval> | null = null;
+	let walkthroughDebounce: ReturnType<typeof setTimeout> | undefined;
 
 	$effect(() => {
 		if (isStreaming && streamStartedAt) {
@@ -109,6 +115,17 @@
 		return PHASE_ORDER.indexOf(p as typeof PHASE_ORDER[number]);
 	}
 
+	// ── Stepper visibility ──────────────────────────────────────────────
+	// Only shown when the walkthrough is being generated live — the stepper
+	// stays visible through every phase (connecting, exploring, analyzing,
+	// writing, finishing) and remains on screen after the stream completes
+	// so the user keeps a permanent map of what happened. Cached replays
+	// never advance past the `connecting` phase, so `isLiveGeneration` stays
+	// false and we skip the stepper entirely.
+	const stepperVisible = $derived(isLiveGeneration);
+
+	const allPhasesDone = $derived(!isStreaming && stepperVisible);
+
 	// ── Unique files explored ───────────────────────────────────────────
 	const filesExplored = $derived(() => {
 		const files = new Set<string>();
@@ -123,76 +140,136 @@
 		return files.size;
 	});
 
-	// ── Auto-scroll ─────────────────────────────────────────────────────
-	let scrollEl: HTMLDivElement | undefined = $state(undefined);
+	// ── Scroll tracking ─────────────────────────────────────────────────
+	// The scroll container lives in the parent page. We only *track* its
+	// position (to show a "new content" pill); we never programmatically
+	// scroll. A walkthrough is something you read top-to-bottom — yanking
+	// the scroll to the tail while the user is still reading the summary
+	// is hostile. The pill lets them jump down explicitly if they want.
 	let userScrolledUp = $state(false);
 
-	function onScroll() {
-		if (!scrollEl) return;
-		const atBottom = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 50;
-		userScrolledUp = !atBottom;
-	}
-
 	function scrollToBottom() {
+		if (!scrollRoot) return;
 		userScrolledUp = false;
-		scrollEl?.scrollTo({ top: scrollEl.scrollHeight, behavior: 'smooth' });
+		scrollRoot.scrollTo({ top: scrollRoot.scrollHeight, behavior: 'smooth' });
 	}
-
-	// Auto-scroll when new blocks arrive — throttled to avoid flooding rAF queue
-	let lastAutoScrollTime = 0;
-	let autoScrollTimer: ReturnType<typeof setTimeout> | null = null;
 
 	$effect(() => {
-		const _ = blocks.length;
-		if (userScrolledUp || !scrollEl) return;
-
-		const now = Date.now();
-		const elapsed = now - lastAutoScrollTime;
-
-		if (elapsed >= 150) {
-			// Enough time has passed — scroll immediately
-			lastAutoScrollTime = now;
-			scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'instant' });
-		} else {
-			// Too soon — schedule a trailing scroll
-			if (autoScrollTimer !== null) clearTimeout(autoScrollTimer);
-			autoScrollTimer = setTimeout(() => {
-				autoScrollTimer = null;
-				lastAutoScrollTime = Date.now();
-				scrollEl?.scrollTo({ top: scrollEl.scrollHeight, behavior: 'instant' });
-			}, 150 - elapsed);
-		}
+		if (!scrollRoot || !isActive) return;
+		const el = scrollRoot;
+		const onScroll = () => {
+			const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+			userScrolledUp = !atBottom && el.scrollTop > 0;
+		};
+		el.addEventListener('scroll', onScroll);
+		return () => el.removeEventListener('scroll', onScroll);
 	});
 
 	// ── Stagger tracking ────────────────────────────────────────────────
-	// On initial load (cached walkthrough), blocks appear all at once.
-	// We stagger their entrance animation. During streaming, blocks arrive
-	// one at a time so we skip stagger to avoid cumulative delay.
+	// Assign a per-block entrance delay the first time each block is
+	// observed. Blocks added in the same reactive tick form an "arrival
+	// batch" and cascade — so a cached walkthrough, a mid-stream tick,
+	// or an end-of-stream flush all fan out smoothly instead of slamming
+	// in as a wall of text. Delays are memoized so later re-renders
+	// don't re-trigger animations for blocks already on screen.
 
-	let initialBatchRendered = $state(false);
-	let hasSeenBlocks = false;
+	const STAGGER_MS = 85;
+	const STAGGER_CAP = 10;
+	const blockDelays = new Map<string, number>();
 
-	$effect(() => {
-		if (blocks.length > 0 && !hasSeenBlocks) {
-			hasSeenBlocks = true;
-			requestAnimationFrame(() => {
-				initialBatchRendered = true;
-			});
-		}
+	// ── Issue → step navigation ─────────────────────────────────────────
+	// Issues carry `blockIds` — the block(s) that explain them. Clicking an
+	// issue card scrolls to the first linked block and briefly pulses it so
+	// the user visually connects the card they clicked to the block they
+	// landed on. Handled with a DOM lookup + requestAnimationFrame to avoid
+	// piping refs through every block component.
+
+	function stepNumberFor(blockId: string): number | null {
+		const idx = blocks.findIndex((b) => b.id === blockId);
+		return idx >= 0 ? idx + 1 : null;
+	}
+
+	let highlightedBlockId = $state<string | null>(null);
+	let highlightTimeout: ReturnType<typeof setTimeout> | null = null;
+
+	function jumpToStep(blockId: string): void {
+		const el = document.getElementById(`step-${blockId}`);
+		if (!el) return;
+		el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+		highlightedBlockId = blockId;
+		if (highlightTimeout) clearTimeout(highlightTimeout);
+		highlightTimeout = setTimeout(() => {
+			highlightedBlockId = null;
+			highlightTimeout = null;
+		}, 1600);
+	}
+
+	const blocksWithDelay = $derived.by(() => {
+		let newInBatch = 0;
+		return blocks.map((block) => {
+			let delay = blockDelays.get(block.id);
+			if (delay === undefined) {
+				delay = Math.min(newInBatch, STAGGER_CAP) * STAGGER_MS;
+				blockDelays.set(block.id, delay);
+				newInBatch += 1;
+			}
+			return { block, delay };
+		});
 	});
 
-	onMount(async () => {
+	onMount(() => {
 		initHighlighter();
-		await loadSession(prId);
-		streamWalkthrough(prId);
+		walkthroughDebounce = setTimeout(() => {
+			streamWalkthrough(prId);
+		}, 2000);
 	});
 
 	onDestroy(() => {
 		if (elapsedTimer) clearInterval(elapsedTimer);
+		if (walkthroughDebounce) clearTimeout(walkthroughDebounce);
+		if (highlightTimeout) clearTimeout(highlightTimeout);
 	});
 </script>
 
 <div class="walkthrough">
+	{#if stepperVisible && !streamError}
+		<!-- Persistent progress header. Shown through every phase and remains
+		     on screen after the stream completes so the user keeps a map of
+		     what happened. Rendered outside the main branching so it stays
+		     visible when we switch from the skeleton (loading) view to the
+		     real content (writing/finishing) view. -->
+		<div class="walkthrough-stepper-header" transition:fade={{ duration: 300 }}>
+			<div class="phase-stepper">
+				{#each PHASE_ORDER as step, i (step)}
+					{@const currentIdx = phaseIndex(phase)}
+					{@const isActive = i === currentIdx && !allPhasesDone}
+					{@const isDone = allPhasesDone || i < currentIdx}
+					<div class="phase-step" class:phase-step--active={isActive} class:phase-step--done={isDone}>
+						<div class="phase-step-icon">
+							{#if isDone}
+								<CheckCircle size={14} />
+							{:else if step === 'connecting'}
+								<div class="phase-dot" class:phase-dot--active={isActive}></div>
+							{:else if step === 'exploring'}
+								<Search size={14} />
+							{:else if step === 'analyzing'}
+								<Brain size={14} />
+							{:else if step === 'writing'}
+								<PenTool size={14} />
+							{:else}
+								<CheckCircle size={14} />
+							{/if}
+						</div>
+						<span class="phase-step-label">{phaseLabels[step]}</span>
+					</div>
+					{#if i < PHASE_ORDER.length - 1}
+						<div class="phase-connector" class:phase-connector--done={allPhasesDone || i < currentIdx}></div>
+					{/if}
+				{/each}
+			</div>
+		</div>
+	{/if}
+
 	{#if streamError && !summary && blocks.length === 0}
 		<!-- Error state: no data at all -->
 		<div class="walkthrough-empty">
@@ -215,39 +292,11 @@
 				Try again
 			</Button>
 		</div>
-	{:else if !summary && isStreaming}
-		<!-- Loading state with phase progress -->
+	{:else if blocks.length === 0 && isStreaming}
+		<!-- Loading state: skeleton + exploration feed.
+		     The phase stepper lives above as a sibling of this branch so it
+		     stays visible when we transition to the content view. -->
 		<div class="walkthrough-loading">
-			<!-- Phase stepper -->
-			<div class="phase-stepper">
-				{#each PHASE_ORDER as step, i (step)}
-					{@const currentIdx = phaseIndex(phase)}
-					{@const isActive = i === currentIdx}
-					{@const isDone = i < currentIdx}
-					<div class="phase-step" class:phase-step--active={isActive} class:phase-step--done={isDone}>
-						<div class="phase-step-icon">
-							{#if isDone}
-								<CheckCircle size={14} />
-							{:else if step === 'connecting'}
-								<div class="phase-dot" class:phase-dot--active={isActive}></div>
-							{:else if step === 'exploring'}
-								<Search size={14} />
-							{:else if step === 'analyzing'}
-								<Brain size={14} />
-							{:else if step === 'writing'}
-								<PenTool size={14} />
-							{:else}
-								<CheckCircle size={14} />
-							{/if}
-						</div>
-						<span class="phase-step-label">{phaseLabels[step]}</span>
-					</div>
-					{#if i < PHASE_ORDER.length - 1}
-						<div class="phase-connector" class:phase-connector--done={i < currentIdx}></div>
-					{/if}
-				{/each}
-			</div>
-
 			<!-- Status message + timer -->
 			<div class="status-bar">
 				<div class="status-message">
@@ -318,7 +367,7 @@
 		</div>
 	{:else if summary}
 		<!-- Landing page content -->
-		<div class="walkthrough-content" bind:this={scrollEl} onscroll={onScroll}>
+		<div class="walkthrough-content" in:fade={{ duration: 280, delay: 60 }}>
 			<!-- Summary header -->
 			<div class="summary-section">
 				<div class="summary-header">
@@ -358,20 +407,48 @@
 					</div>
 					<div class="issues-list">
 						{#each issues as issue, i (issue.id)}
-							<div class="issue-item issue-item--{issue.severity}" style:--issue-delay="{Math.min(i, 6) * 50}ms">
-								<div class="issue-top">
-									<span class={severityClasses[issue.severity] ?? 'issue-badge issue-badge--info'}>
-										{severityLabels[issue.severity] ?? issue.severity}
-									</span>
-									<span class="issue-title">{issue.title}</span>
+							{@const targetBlockId = issue.blockIds?.[0] ?? null}
+							{@const stepN = targetBlockId ? stepNumberFor(targetBlockId) : null}
+							{#if targetBlockId}
+								<button
+									type="button"
+									class="issue-item issue-item--{issue.severity} issue-item--clickable"
+									style:--issue-delay="{Math.min(i, 6) * 50}ms"
+									onclick={() => jumpToStep(targetBlockId)}
+									aria-label="Jump to step {stepN} — {issue.title}"
+								>
+									<div class="issue-top">
+										<span class={severityClasses[issue.severity] ?? 'issue-badge issue-badge--info'}>
+											{severityLabels[issue.severity] ?? issue.severity}
+										</span>
+										<span class="issue-title">{issue.title}</span>
+										{#if stepN !== null}
+											<span class="issue-step-tag">→ Step {stepN}</span>
+										{/if}
+									</div>
+									<p class="issue-description">{issue.description}</p>
+									{#if issue.filePath}
+										<span class="issue-location">
+											{issue.filePath}{issue.startLine != null ? `:${issue.startLine}` : ''}
+										</span>
+									{/if}
+								</button>
+							{:else}
+								<div class="issue-item issue-item--{issue.severity}" style:--issue-delay="{Math.min(i, 6) * 50}ms">
+									<div class="issue-top">
+										<span class={severityClasses[issue.severity] ?? 'issue-badge issue-badge--info'}>
+											{severityLabels[issue.severity] ?? issue.severity}
+										</span>
+										<span class="issue-title">{issue.title}</span>
+									</div>
+									<p class="issue-description">{issue.description}</p>
+									{#if issue.filePath}
+										<span class="issue-location">
+											{issue.filePath}{issue.startLine != null ? `:${issue.startLine}` : ''}
+										</span>
+									{/if}
 								</div>
-								<p class="issue-description">{issue.description}</p>
-								{#if issue.filePath}
-									<span class="issue-location">
-										{issue.filePath}{issue.startLine != null ? `:${issue.startLine}` : ''}
-									</span>
-								{/if}
-							</div>
+							{/if}
 						{/each}
 					</div>
 				</div>
@@ -380,10 +457,12 @@
 
 			<!-- Blocks -->
 			<div class="blocks">
-			{#each blocks as block, i (block.id)}
+			{#each blocksWithDelay as { block, delay } (block.id)}
 				<div
+					id="step-{block.id}"
 					class="block-wrapper"
-					style:--enter-delay="{initialBatchRendered ? 0 : Math.min(i, 8) * 60}ms"
+					class:block-wrapper--highlighted={highlightedBlockId === block.id}
+					style:--enter-delay="{delay}ms"
 				>
 					{#if block.type === 'markdown'}
 						<WalkthroughMarkdownBlock content={block.content} />
@@ -427,16 +506,11 @@
 	.walkthrough {
 		display: flex;
 		flex-direction: column;
-		height: 100%;
 		background: var(--color-bg-primary);
-		position: relative;
 	}
 
 	.walkthrough-content {
-		flex: 1;
-		overflow-y: auto;
 		padding: 28px 32px;
-		min-height: 0;
 	}
 
 	.walkthrough-empty {
@@ -444,7 +518,8 @@
 		flex-direction: column;
 		align-items: center;
 		justify-content: center;
-		height: 100%;
+		min-height: 60vh;
+		padding: 80px 32px;
 		gap: 12px;
 	}
 
@@ -453,8 +528,18 @@
 		flex-direction: column;
 		padding: 28px 32px;
 		gap: 20px;
-		height: 100%;
-		overflow-y: auto;
+	}
+
+	.walkthrough-stepper-header {
+		padding: 24px 32px 4px;
+	}
+
+	/* When the stepper header is present, tighten the top padding of the
+	   following content/loading block so the two sections feel like one
+	   continuous region instead of two stacked panels with a big gap. */
+	.walkthrough-stepper-header + .walkthrough-loading,
+	.walkthrough-stepper-header + .walkthrough-content {
+		padding-top: 14px;
 	}
 
 	/* ── Phase stepper ────────────────────────────────────────────────── */
@@ -730,7 +815,7 @@
 
 	.summary-section {
 		margin-bottom: 20px;
-		animation: content-enter 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+		animation: content-enter 0.6s cubic-bezier(0.22, 0.61, 0.36, 1) both;
 	}
 
 	.summary-header {
@@ -830,7 +915,7 @@
 		display: flex;
 		flex-direction: column;
 		gap: 10px;
-		animation: content-enter 0.5s cubic-bezier(0.16, 1, 0.3, 1) 0.15s both;
+		animation: content-enter 0.6s cubic-bezier(0.22, 0.61, 0.36, 1) 0.15s both;
 	}
 
 	.issues-header {
@@ -859,8 +944,45 @@
 		display: flex;
 		flex-direction: column;
 		gap: 4px;
-		animation: content-enter 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+		animation: content-enter 0.55s cubic-bezier(0.22, 0.61, 0.36, 1) both;
 		animation-delay: var(--issue-delay, 0ms);
+		text-align: left;
+		font: inherit;
+		color: inherit;
+		width: 100%;
+	}
+
+	button.issue-item {
+		cursor: pointer;
+		transition: transform 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+	}
+
+	button.issue-item:hover {
+		transform: translateY(-1px);
+		border-color: color-mix(in srgb, var(--color-accent) 40%, var(--color-border));
+		box-shadow: 0 2px 8px color-mix(in srgb, var(--color-text-primary) 6%, transparent);
+	}
+
+	button.issue-item:focus-visible {
+		outline: 2px solid var(--color-accent);
+		outline-offset: 2px;
+	}
+
+	.issue-step-tag {
+		margin-left: auto;
+		font-size: 10px;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		color: var(--color-text-muted);
+		padding: 1px 6px;
+		border-radius: 4px;
+		background: var(--color-bg-tertiary);
+		flex-shrink: 0;
+	}
+
+	button.issue-item:hover .issue-step-tag {
+		color: var(--color-accent);
 	}
 
 	.issue-item--info {
@@ -946,8 +1068,18 @@
 
 	.block-wrapper {
 		max-width: 100%;
-		animation: block-slide-up 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+		animation: block-slide-up 0.65s cubic-bezier(0.22, 0.61, 0.36, 1) both;
 		animation-delay: var(--enter-delay, 0ms);
+		will-change: opacity, transform, filter;
+		scroll-margin-top: 16px;
+		border-radius: 8px;
+		outline: 2px solid transparent;
+		outline-offset: 2px;
+		transition: outline-color 200ms ease;
+	}
+
+	.block-wrapper--highlighted {
+		outline-color: var(--color-accent);
 	}
 
 	/* ── Streaming bottom indicator ──────────────────────────────────── */
@@ -1000,7 +1132,7 @@
 	/* ── Scroll-to-bottom pill ──────────────────────────────────────── */
 
 	.scroll-to-bottom {
-		position: absolute;
+		position: fixed;
 		bottom: 20px;
 		left: 50%;
 		transform: translateX(-50%);
@@ -1085,23 +1217,41 @@
 
 	@keyframes content-enter {
 		from {
-			opacity: 0;
-			transform: translateY(10px);
+			transform: translateY(6px);
+			filter: blur(3px);
 		}
 		to {
-			opacity: 1;
 			transform: translateY(0);
+			filter: blur(0);
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.block-wrapper,
+		.summary-section,
+		.issues-section,
+		.issue-item,
+		button.issue-item {
+			animation-duration: 0.01ms !important;
+			animation-delay: 0ms !important;
+			transition: none !important;
+		}
+
+		button.issue-item:hover {
+			transform: none;
 		}
 	}
 
 	@keyframes block-slide-up {
 		from {
 			opacity: 0;
-			transform: translateY(20px);
+			transform: translateY(10px);
+			filter: blur(4px);
 		}
 		to {
 			opacity: 1;
 			transform: translateY(0);
+			filter: blur(0);
 		}
 	}
 

@@ -13,5 +13,6 @@ export const walkthroughIssues = sqliteTable('walkthrough_issues', {
 	filePath: text('file_path'),
 	startLine: integer('start_line'),
 	endLine: integer('end_line'),
+	blockIds: text('block_ids').notNull().default('[]'),
 	createdAt: text('created_at').notNull(),
 });

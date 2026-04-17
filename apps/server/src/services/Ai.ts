@@ -9,7 +9,7 @@ import { DbService } from './Db';
 import { withDb } from '../effects/with-db';
 import { SettingsService } from './Settings';
 import type { PrFileMeta } from './GitHub';
-import type { WalkthroughStreamEvent } from '@rev/shared';
+import type { WalkthroughStreamEvent } from '@revv/shared';
 
 // ── Prompt & provider imports (split out of this file) ──────────────────────
 import { EXPLAIN_SYSTEM_PROMPT, buildExplainPrompt } from '../ai/prompts/explain';

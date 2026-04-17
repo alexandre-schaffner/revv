@@ -1,8 +1,13 @@
 import { Elysia, t } from 'elysia';
-import { eq, and } from 'drizzle-orm';
-import { GITHUB_CLIENT_ID, db } from '../auth';
-import { user, account, session } from '../db/schema';
-import { jsonResponse } from './middleware';
+import { eq } from 'drizzle-orm';
+import { db, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET } from '../auth';
+import { user, session, account } from '../db/schema';
+
+const GITHUB_DEVICE_CODE_URL = 'https://github.com/login/device/code';
+const GITHUB_TOKEN_URL = 'https://github.com/login/oauth/access_token';
+const GITHUB_API_USER_URL = 'https://api.github.com/user';
+const GITHUB_API_EMAILS_URL = 'https://api.github.com/user/emails';
+const DEVICE_FLOW_SCOPE = 'repo read:org user:email';
 
 interface GitHubDeviceCodeResponse {
 	device_code: string;
@@ -12,19 +17,18 @@ interface GitHubDeviceCodeResponse {
 	interval: number;
 }
 
-interface GitHubAccessTokenResponse {
+interface GitHubTokenResponse {
 	access_token?: string;
-	token_type?: string;
-	scope?: string;
 	error?: string;
-	error_description?: string;
+	interval?: number;
 }
 
 interface GitHubUser {
 	id: number;
+	login: string;
 	name: string | null;
 	email: string | null;
-	login: string;
+	avatar_url: string;
 }
 
 interface GitHubEmail {
@@ -33,81 +37,100 @@ interface GitHubEmail {
 	verified: boolean;
 }
 
+function generateSecureToken(): string {
+	const bytes = crypto.getRandomValues(new Uint8Array(32));
+	return Array.from(bytes)
+		.map((b) => b.toString(16).padStart(2, '0'))
+		.join('');
+}
+
 async function fetchGitHubUser(accessToken: string): Promise<GitHubUser> {
-	const res = await fetch('https://api.github.com/user', {
-		headers: { Authorization: `Bearer ${accessToken}` },
+	const res = await fetch(GITHUB_API_USER_URL, {
+		headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
 	});
 	if (!res.ok) throw new Error(`GitHub user fetch failed: ${res.status}`);
 	return res.json() as Promise<GitHubUser>;
 }
 
-async function fetchPrimaryEmail(accessToken: string): Promise<string> {
-	const res = await fetch('https://api.github.com/user/emails', {
-		headers: { Authorization: `Bearer ${accessToken}` },
+async function fetchPrimaryEmail(accessToken: string): Promise<string | null> {
+	const res = await fetch(GITHUB_API_EMAILS_URL, {
+		headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
 	});
-	if (!res.ok) throw new Error(`GitHub emails fetch failed: ${res.status}`);
+	if (!res.ok) return null;
 	const emails = (await res.json()) as GitHubEmail[];
-	const primary = emails.find((e) => e.primary && e.verified);
-	if (!primary) throw new Error('No primary verified email found on GitHub account');
-	return primary.email;
+	return emails.find((e) => e.primary)?.email ?? null;
 }
 
-async function upsertUserAndCreateSession(
-	accessToken: string,
-	scope: string,
-	githubUser: GitHubUser,
-	email: string
+async function upsertUserAndSession(
+	accessToken: string
 ): Promise<string> {
-	const now = new Date();
-	const displayName = githubUser.name ?? githubUser.login;
+	const githubUser = await fetchGitHubUser(accessToken);
+	const primaryEmail = await fetchPrimaryEmail(accessToken);
+	const email = primaryEmail ?? githubUser.email;
 
-	// Find or create user by email
+	if (!email) throw new Error('No email address found on GitHub account');
+
+	const now = new Date();
+	const accountId = githubUser.id.toString();
+
+	// Upsert user by email
 	const existingUsers = await db.select().from(user).where(eq(user.email, email));
 	const existingUser = existingUsers[0];
-	const userId = existingUser?.id ?? crypto.randomUUID();
 
-	if (!existingUser) {
+	let userId: string;
+	if (existingUser) {
+		userId = existingUser.id;
+		await db
+			.update(user)
+			.set({
+				name: githubUser.name ?? githubUser.login,
+				image: githubUser.avatar_url,
+				githubLogin: githubUser.login,
+				updatedAt: now,
+			})
+			.where(eq(user.id, userId));
+	} else {
+		userId = crypto.randomUUID();
 		await db.insert(user).values({
 			id: userId,
-			name: displayName,
+			name: githubUser.name ?? githubUser.login,
 			email,
 			emailVerified: true,
+			image: githubUser.avatar_url,
+			githubLogin: githubUser.login,
 			createdAt: now,
 			updatedAt: now,
 		});
-	} else {
-		await db.update(user).set({ name: displayName, updatedAt: now }).where(eq(user.id, userId));
 	}
 
-	// Upsert GitHub account record
-	const githubAccountId = String(githubUser.id);
+	// Upsert account by providerId + accountId
 	const existingAccounts = await db
 		.select()
 		.from(account)
-		.where(and(eq(account.providerId, 'github'), eq(account.accountId, githubAccountId)));
-	const existingAccount = existingAccounts[0];
+		.where(eq(account.accountId, accountId));
+	const existingAccount = existingAccounts.find((a) => a.providerId === 'github');
 
-	if (!existingAccount) {
+	if (existingAccount) {
+		await db
+			.update(account)
+			.set({ accessToken, updatedAt: now, userId })
+			.where(eq(account.id, existingAccount.id));
+	} else {
 		await db.insert(account).values({
 			id: crypto.randomUUID(),
+			accountId,
 			providerId: 'github',
-			accountId: githubAccountId,
 			userId,
 			accessToken,
-			scope,
+			scope: DEVICE_FLOW_SCOPE,
 			createdAt: now,
 			updatedAt: now,
 		});
-	} else {
-		await db
-			.update(account)
-			.set({ accessToken, scope, updatedAt: now })
-			.where(eq(account.id, existingAccount.id));
 	}
 
 	// Create new session
-	const sessionToken = crypto.randomUUID();
-	const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+	const sessionToken = generateSecureToken();
+	const expiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000); // 30 days
 
 	await db.insert(session).values({
 		id: crypto.randomUUID(),
@@ -122,95 +145,56 @@ async function upsertUserAndCreateSession(
 }
 
 export const deviceAuthRoutes = new Elysia()
-	.post('/api/auth/device/code', async () => {
-		try {
-			const res = await fetch('https://github.com/login/device/code', {
-				method: 'POST',
-				headers: {
-					Accept: 'application/json',
-					'Content-Type': 'application/json',
-				},
-				body: JSON.stringify({
-					client_id: GITHUB_CLIENT_ID,
-					scope: 'repo read:org user:email',
-				}),
-			});
+	.post('/api/auth/device/init', async ({ status }) => {
+		const res = await fetch(GITHUB_DEVICE_CODE_URL, {
+			method: 'POST',
+			headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+			body: JSON.stringify({ client_id: GITHUB_CLIENT_ID, scope: DEVICE_FLOW_SCOPE }),
+		});
 
-			if (!res.ok) {
-				return jsonResponse({ error: `GitHub device code request failed: ${res.status}` }, 500);
-			}
+		if (!res.ok) return status(502, { error: 'Failed to initiate device flow' });
 
-			const data = (await res.json()) as GitHubDeviceCodeResponse;
-			return {
-				device_code: data.device_code,
-				user_code: data.user_code,
-				verification_uri: data.verification_uri,
-				expires_in: data.expires_in,
-				interval: data.interval,
-			};
-		} catch (e) {
-			return jsonResponse({ error: String(e) }, 500);
-		}
+		const data = (await res.json()) as GitHubDeviceCodeResponse;
+		return {
+			device_code: data.device_code,
+			user_code: data.user_code,
+			verification_uri: data.verification_uri,
+			expires_in: data.expires_in,
+			interval: data.interval,
+		};
 	})
 	.post(
 		'/api/auth/device/poll',
-		async ({ body }) => {
-			const { device_code } = body;
+		async ({ body, status }) => {
+			const res = await fetch(GITHUB_TOKEN_URL, {
+				method: 'POST',
+				headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					client_id: GITHUB_CLIENT_ID,
+					client_secret: GITHUB_CLIENT_SECRET,
+					device_code: body.device_code,
+					grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+				}),
+			});
 
-			try {
-				const res = await fetch('https://github.com/login/oauth/access_token', {
-					method: 'POST',
-					headers: {
-						Accept: 'application/json',
-						'Content-Type': 'application/json',
-					},
-					body: JSON.stringify({
-						client_id: GITHUB_CLIENT_ID,
-						device_code,
-						grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
-					}),
-				});
+			const data = (await res.json()) as GitHubTokenResponse;
 
-				if (!res.ok) {
-					return jsonResponse({ status: 'error', message: `GitHub poll failed: ${res.status}` }, 500);
-				}
-
-				const data = (await res.json()) as GitHubAccessTokenResponse;
-
-				if (data.access_token) {
-					const githubUser = await fetchGitHubUser(data.access_token);
-					const email = await fetchPrimaryEmail(data.access_token);
-					const token = await upsertUserAndCreateSession(
-						data.access_token,
-						data.scope ?? '',
-						githubUser,
-						email
-					);
+			if (data.access_token) {
+				try {
+					const token = await upsertUserAndSession(data.access_token);
 					return { status: 'success' as const, token };
+				} catch (e) {
+					return status(500, { error: `Session creation failed: ${e}` });
 				}
-
-				switch (data.error) {
-					case 'authorization_pending':
-						return { status: 'pending' as const };
-					case 'slow_down':
-						return { status: 'slow_down' as const };
-					case 'expired_token':
-						return { status: 'expired' as const };
-					case 'access_denied':
-						return { status: 'denied' as const };
-					default:
-						return jsonResponse({
-							status: 'error',
-							message: data.error_description ?? data.error ?? 'Unknown GitHub error',
-						}, 500);
-				}
-			} catch (e) {
-				return jsonResponse({ status: 'error', message: String(e) }, 500);
 			}
+
+			if (data.error === 'authorization_pending') return { status: 'pending' as const };
+			if (data.error === 'slow_down')
+				return { status: 'slow_down' as const, interval: data.interval ?? 10 };
+			if (data.error === 'expired_token') return status(400, { error: 'expired' });
+			if (data.error === 'access_denied') return status(400, { error: 'access_denied' });
+
+			return status(400, { error: data.error ?? 'Unknown error from GitHub' });
 		},
-		{
-			body: t.Object({
-				device_code: t.String(),
-			}),
-		}
+		{ body: t.Object({ device_code: t.String() }) }
 	);

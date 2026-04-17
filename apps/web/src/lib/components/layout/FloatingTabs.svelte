@@ -1,15 +1,14 @@
 <script lang="ts">
-	import type { FocusPanel } from '$lib/stores/focus-mode.svelte';
-
 	type Tab = 'walkthrough' | 'diff' | 'request-changes';
 
 	interface Props {
 		activeTab: Tab;
 		onTabChange: (tab: Tab) => void;
-		mode?: FocusPanel;
+		openThreads?: number;
+		pendingThreads?: number;
 	}
 
-	let { activeTab, onTabChange, mode = 'sidebar' }: Props = $props();
+	let { activeTab, onTabChange, openThreads = 0, pendingThreads = 0 }: Props = $props();
 
 	const tabs: { id: Tab; label: string }[] = [
 		{ id: 'walkthrough', label: 'Walkthrough' },
@@ -17,21 +16,49 @@
 		{ id: 'request-changes', label: 'Request Changes' },
 	];
 
+	let segmentEls: (HTMLButtonElement | null)[] = $state(tabs.map(() => null));
+	let hoveredIndex = $state<number | null>(null);
+	let indicatorLeft = $state(0);
+	let indicatorWidth = $state(0);
+	let hasMeasured = $state(false);
+
+	$effect(() => {
+		const activeIndex = tabs.findIndex((t) => t.id === activeTab);
+		const index = hoveredIndex ?? activeIndex;
+		const el = segmentEls[index];
+		if (!el) return;
+		indicatorLeft = el.offsetLeft;
+		indicatorWidth = el.offsetWidth;
+		hasMeasured = true;
+	});
+
 	function showDivider(index: number): boolean {
 		if (index === tabs.length - 1) return false;
-		const currentActive = tabs[index]?.id === activeTab;
-		const nextActive = tabs[index + 1]?.id === activeTab;
-		return !currentActive && !nextActive;
+		const activeIndex = tabs.findIndex((t) => t.id === activeTab);
+		const highlighted = hoveredIndex ?? activeIndex;
+		return index !== highlighted && index + 1 !== highlighted;
 	}
 </script>
 
 <div class="tabs-wrapper">
 	<div class="pill">
+		<span
+			class="pill-indicator"
+			class:pill-indicator--ready={hasMeasured}
+			style="transform: translateX({indicatorLeft}px); width: {indicatorWidth}px;"
+			aria-hidden="true"
+		></span>
 		{#each tabs as tab, i}
 			<button
+				bind:this={segmentEls[i]}
 				class="pill-segment"
 				class:pill-segment--active={activeTab === tab.id}
+				class:pill-segment--hovered={hoveredIndex === i}
 				onclick={() => onTabChange(tab.id)}
+				onpointerenter={() => (hoveredIndex = i)}
+				onpointerleave={() => {
+					if (hoveredIndex === i) hoveredIndex = null;
+				}}
 			>
 				{tab.label}
 			</button>
@@ -43,7 +70,9 @@
 
 	<span
 		class="mode-dot"
-		class:mode-dot--scroll={mode === 'diff-scroll' || mode === 'diff-line' || mode === 'diff-visual'}
+		class:mode-dot--pending={pendingThreads > 0}
+		class:mode-dot--open={pendingThreads === 0 && openThreads > 0}
+		class:mode-dot--visible={openThreads > 0 || pendingThreads > 0}
 		aria-hidden="true"
 	></span>
 </div>
@@ -67,9 +96,16 @@
 		flex-shrink: 0;
 	}
 
-	.mode-dot--scroll {
-		background: var(--color-accent);
+	.mode-dot--visible {
 		opacity: 1;
+	}
+
+	.mode-dot--pending {
+		background: #d97706;
+	}
+
+	.mode-dot--open {
+		background: var(--color-accent);
 	}
 
 	.pill {
@@ -89,19 +125,6 @@
 		isolation: isolate;
 	}
 
-	/* Grain noise overlay */
-	.pill::after {
-		content: '';
-		position: absolute;
-		inset: 0;
-		border-radius: inherit;
-		background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-		background-size: 128px 128px;
-		opacity: var(--color-glass-grain-opacity);
-		pointer-events: none;
-		mix-blend-mode: overlay;
-		z-index: 0;
-	}
 
 	.pill-segment {
 		position: relative;
@@ -125,17 +148,36 @@
 		-webkit-font-smoothing: antialiased;
 	}
 
-	.pill-segment:hover:not(.pill-segment--active) {
+	.pill-segment--hovered:not(.pill-segment--active) {
 		color: var(--color-text-secondary);
-		background: var(--color-glass-highlight);
 	}
 
 	.pill-segment--active {
 		color: var(--color-text-primary);
+	}
+
+	.pill-indicator {
+		position: absolute;
+		top: 3px;
+		left: 0;
+		height: 36px;
+		border-radius: 9999px;
 		background: var(--color-glass-active-bg);
 		box-shadow:
 			0 1px 3px rgba(0, 0, 0, 0.12),
 			inset 0 0.5px 0 0 var(--color-glass-highlight);
+		pointer-events: none;
+		z-index: 0;
+		opacity: 0;
+		will-change: transform, width;
+	}
+
+	.pill-indicator--ready {
+		opacity: 1;
+		transition:
+			transform var(--duration-smooth) var(--ease-out-expo),
+			width var(--duration-smooth) var(--ease-out-expo),
+			opacity var(--duration-snap);
 	}
 
 	.pill-divider {

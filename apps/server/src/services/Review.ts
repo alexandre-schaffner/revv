@@ -9,7 +9,7 @@ import type {
 	AuthorRole,
 	MessageType,
 	HunkDecisionType,
-} from '@rev/shared';
+} from '@revv/shared';
 import { ReviewError } from '../domain/errors';
 import { reviewSessions } from '../db/schema/review-sessions';
 import { commentThreads } from '../db/schema/comment-threads';
@@ -40,6 +40,9 @@ function rowToThread(row: typeof commentThreads.$inferSelect): CommentThread {
 		status: row.status as CommentThread['status'],
 		createdAt: row.createdAt,
 		resolvedAt: row.resolvedAt ?? null,
+		externalThreadId: row.externalThreadId ?? null,
+		externalCommentId: row.externalCommentId ?? null,
+		lastSyncedAt: row.lastSyncedAt ?? null,
 	};
 }
 
@@ -76,6 +79,9 @@ export interface CreateThreadParams {
 	startLine: number;
 	endLine: number;
 	diffSide: 'old' | 'new';
+	externalThreadId?: string;
+	externalCommentId?: string;
+	lastSyncedAt?: string;
 }
 
 export interface CreateMessageParams {
@@ -84,6 +90,8 @@ export interface CreateMessageParams {
 	body: string;
 	messageType: MessageType;
 	codeSuggestion?: string;
+	externalId?: string;
+	createdAt?: string;
 }
 
 // ── Service definition ───────────────────────────────────────────────────────
@@ -105,6 +113,9 @@ export class ReviewService extends Context.Tag('ReviewService')<
 			sessionId: string,
 			params: CreateThreadParams,
 		) => Effect.Effect<CommentThread, ReviewError, DbService>;
+		readonly getThread: (
+			threadId: string,
+		) => Effect.Effect<CommentThread, ReviewError, DbService>;
 		readonly getThreadsForSession: (
 			sessionId: string,
 		) => Effect.Effect<CommentThread[], ReviewError, DbService>;
@@ -112,9 +123,27 @@ export class ReviewService extends Context.Tag('ReviewService')<
 			sessionId: string,
 			filePath: string,
 		) => Effect.Effect<CommentThread[], ReviewError, DbService>;
+		readonly getThreadByExternalCommentId: (
+			sessionId: string,
+			externalCommentId: string,
+		) => Effect.Effect<CommentThread | null, ReviewError, DbService>;
 		readonly updateThreadStatus: (
 			threadId: string,
 			status: ThreadStatus,
+		) => Effect.Effect<CommentThread, ReviewError, DbService>;
+		readonly setThreadExternalIds: (
+			threadId: string,
+			ids: { externalThreadId?: string; externalCommentId?: string; lastSyncedAt?: string },
+		) => Effect.Effect<void, ReviewError, DbService>;
+		/**
+		 * Apply the status-machine transition for a reply by `authorRole`.
+		 * Reviewer → pending_coder; Coder → pending_reviewer; AI → unchanged.
+		 * Only transitions from open/pending_* states — never reopens resolved threads.
+		 * Returns the resulting (possibly unchanged) thread.
+		 */
+		readonly transitionStatus: (
+			threadId: string,
+			authorRole: AuthorRole,
 		) => Effect.Effect<CommentThread, ReviewError, DbService>;
 
 		// Messages
@@ -125,6 +154,21 @@ export class ReviewService extends Context.Tag('ReviewService')<
 		readonly getMessages: (
 			threadId: string,
 		) => Effect.Effect<ThreadMessage[], ReviewError, DbService>;
+		readonly getMessage: (
+			messageId: string,
+		) => Effect.Effect<ThreadMessage, ReviewError, DbService>;
+		readonly setMessageExternalId: (
+			messageId: string,
+			externalId: string,
+		) => Effect.Effect<void, ReviewError, DbService>;
+		readonly updateMessageBody: (
+			messageId: string,
+			body: string,
+			editedAt: string,
+		) => Effect.Effect<void, ReviewError, DbService>;
+		readonly findMessageByExternalId: (
+			externalId: string,
+		) => Effect.Effect<ThreadMessage | null, ReviewError, DbService>;
 
 		// Hunk decisions
 		readonly setHunkDecision: (
@@ -223,16 +267,19 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 			const id = crypto.randomUUID();
 			const createdAt = new Date().toISOString();
 
-			const row = {
+			const row: typeof commentThreads.$inferInsert = {
 				id,
 				reviewSessionId: sessionId,
 				filePath: params.filePath,
 				startLine: params.startLine,
 				endLine: params.endLine,
 				diffSide: params.diffSide,
-				status: 'open' as const,
+				status: 'open',
 				createdAt,
-			} satisfies typeof commentThreads.$inferInsert;
+			};
+			if (params.externalThreadId !== undefined) row.externalThreadId = params.externalThreadId;
+			if (params.externalCommentId !== undefined) row.externalCommentId = params.externalCommentId;
+			if (params.lastSyncedAt !== undefined) row.lastSyncedAt = params.lastSyncedAt;
 
 			yield* Effect.try({
 				try: () => db.insert(commentThreads).values(row).run(),
@@ -250,7 +297,89 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 				status: 'open' as const,
 				createdAt,
 				resolvedAt: null,
+				externalThreadId: params.externalThreadId ?? null,
+				externalCommentId: params.externalCommentId ?? null,
+				lastSyncedAt: params.lastSyncedAt ?? null,
 			};
+		}),
+
+	getThread: (threadId) =>
+		Effect.gen(function* () {
+			const { db } = yield* DbService;
+			const row = db.select().from(commentThreads).where(eq(commentThreads.id, threadId)).get();
+			if (!row) {
+				return yield* Effect.fail(
+					new ReviewError({ message: 'Thread not found', code: 'NOT_FOUND' }),
+				);
+			}
+			return rowToThread(row);
+		}),
+
+	getThreadByExternalCommentId: (sessionId, externalCommentId) =>
+		Effect.gen(function* () {
+			const { db } = yield* DbService;
+			const row = db
+				.select()
+				.from(commentThreads)
+				.where(
+					and(
+						eq(commentThreads.reviewSessionId, sessionId),
+						eq(commentThreads.externalCommentId, externalCommentId),
+					),
+				)
+				.get();
+			return row ? rowToThread(row) : null;
+		}),
+
+	setThreadExternalIds: (threadId, ids) =>
+		Effect.gen(function* () {
+			const { db } = yield* DbService;
+			const setObj: Partial<typeof commentThreads.$inferInsert> = {};
+			if (ids.externalThreadId !== undefined) setObj.externalThreadId = ids.externalThreadId;
+			if (ids.externalCommentId !== undefined) setObj.externalCommentId = ids.externalCommentId;
+			if (ids.lastSyncedAt !== undefined) setObj.lastSyncedAt = ids.lastSyncedAt;
+			if (Object.keys(setObj).length === 0) return;
+			yield* Effect.try({
+				try: () =>
+					db.update(commentThreads).set(setObj).where(eq(commentThreads.id, threadId)).run(),
+				catch: (e) =>
+					new ReviewError({ message: `Failed to update thread IDs: ${String(e)}` }),
+			});
+		}),
+
+	transitionStatus: (threadId, authorRole) =>
+		Effect.gen(function* () {
+			const { db } = yield* DbService;
+			const existing = db
+				.select()
+				.from(commentThreads)
+				.where(eq(commentThreads.id, threadId))
+				.get();
+			if (!existing) {
+				return yield* Effect.fail(
+					new ReviewError({ message: 'Thread not found', code: 'NOT_FOUND' }),
+				);
+			}
+			// AI messages never change status; resolved/wont_fix are terminal until an
+			// explicit reopen — replies don't auto-reopen.
+			if (authorRole === 'ai_agent') return rowToThread(existing);
+			if (existing.status === 'resolved' || existing.status === 'wont_fix') {
+				return rowToThread(existing);
+			}
+			const nextStatus: ThreadStatus =
+				authorRole === 'reviewer' ? 'pending_coder' : 'pending_reviewer';
+			if (nextStatus === existing.status) return rowToThread(existing);
+			yield* Effect.try({
+				try: () =>
+					db
+						.update(commentThreads)
+						.set({ status: nextStatus })
+						.where(eq(commentThreads.id, threadId))
+						.run(),
+				catch: (e) =>
+					new ReviewError({ message: `Failed to transition thread status: ${String(e)}` }),
+			});
+			return rowToThread({ ...existing, status: nextStatus });
 		}),
 
 	getThreadsForSession: (sessionId) =>
@@ -325,20 +454,19 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 		Effect.gen(function* () {
 			const { db } = yield* DbService;
 			const id = crypto.randomUUID();
-			const createdAt = new Date().toISOString();
+			const createdAt = params.createdAt ?? new Date().toISOString();
 
-			const row = {
+			const row: typeof threadMessages.$inferInsert = {
 				id,
 				threadId,
 				authorRole: params.authorRole,
 				authorName: params.authorName,
 				body: params.body,
 				messageType: params.messageType,
-				...(params.codeSuggestion !== undefined
-					? { codeSuggestion: params.codeSuggestion }
-					: {}),
 				createdAt,
-			} satisfies typeof threadMessages.$inferInsert;
+			};
+			if (params.codeSuggestion !== undefined) row.codeSuggestion = params.codeSuggestion;
+			if (params.externalId !== undefined) row.externalId = params.externalId;
 
 			yield* Effect.try({
 				try: () => db.insert(threadMessages).values(row).run(),
@@ -356,7 +484,7 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 				codeSuggestion: params.codeSuggestion ?? null,
 				createdAt,
 				editedAt: null,
-				externalId: null,
+				externalId: params.externalId ?? null,
 			};
 		}),
 
@@ -370,6 +498,63 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 				.orderBy(threadMessages.createdAt)
 				.all();
 			return rows.map(rowToMessage);
+		}),
+
+	getMessage: (messageId) =>
+		Effect.gen(function* () {
+			const { db } = yield* DbService;
+			const row = db
+				.select()
+				.from(threadMessages)
+				.where(eq(threadMessages.id, messageId))
+				.get();
+			if (!row) {
+				return yield* Effect.fail(
+					new ReviewError({ message: 'Message not found', code: 'NOT_FOUND' }),
+				);
+			}
+			return rowToMessage(row);
+		}),
+
+	setMessageExternalId: (messageId, externalId) =>
+		Effect.gen(function* () {
+			const { db } = yield* DbService;
+			yield* Effect.try({
+				try: () =>
+					db
+						.update(threadMessages)
+						.set({ externalId })
+						.where(eq(threadMessages.id, messageId))
+						.run(),
+				catch: (e) =>
+					new ReviewError({ message: `Failed to set message externalId: ${String(e)}` }),
+			});
+		}),
+
+	updateMessageBody: (messageId, body, editedAt) =>
+		Effect.gen(function* () {
+			const { db } = yield* DbService;
+			yield* Effect.try({
+				try: () =>
+					db
+						.update(threadMessages)
+						.set({ body, editedAt })
+						.where(eq(threadMessages.id, messageId))
+						.run(),
+				catch: (e) =>
+					new ReviewError({ message: `Failed to update message body: ${String(e)}` }),
+			});
+		}),
+
+	findMessageByExternalId: (externalId) =>
+		Effect.gen(function* () {
+			const { db } = yield* DbService;
+			const row = db
+				.select()
+				.from(threadMessages)
+				.where(eq(threadMessages.externalId, externalId))
+				.get();
+			return row ? rowToMessage(row) : null;
 		}),
 
 	// ── Hunk decisions ────────────────────────────────────────────────────────

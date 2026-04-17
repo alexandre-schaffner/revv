@@ -7,6 +7,7 @@
 		getDiffMode,
 		getThreadsForFile,
 		getThreadMessages,
+		getThreadsVersion,
 		addThread,
 		addThreadMessage,
 		resolveThread,
@@ -66,6 +67,10 @@
 
 	// Build annotations from current thread + pending input state
 	const annotations = $derived.by((): DiffLineAnnotation<ThreadMeta>[] => {
+		// Subscribe to the threads-version signal so this derivation recomputes on
+		// every thread mutation. @pierre/diffs caches annotations by metadata
+		// reference, so we must hand it a freshly-constructed annotation array.
+		getThreadsVersion();
 		if (!file) return [];
 
 		const threads = getThreadsForFile(file.path);
@@ -110,6 +115,7 @@
 
 	// Build threadById / threadMessages lookup maps for DiffViewerInner
 	const threadById = $derived.by((): Record<string, CommentThread> => {
+		getThreadsVersion();
 		if (!file) return {};
 		const result: Record<string, CommentThread> = {};
 		for (const t of getThreadsForFile(file.path)) {
@@ -119,6 +125,7 @@
 	});
 
 	const threadMessages = $derived.by((): Record<string, ThreadMessage[]> => {
+		getThreadsVersion();
 		if (!file) return {};
 		const result: Record<string, ThreadMessage[]> = {};
 		for (const t of getThreadsForFile(file.path)) {

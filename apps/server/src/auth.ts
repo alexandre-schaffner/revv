@@ -1,13 +1,14 @@
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { bearer } from 'better-auth/plugins';
-import { API_PORT } from '@rev/shared';
+import { API_PORT } from '@revv/shared';
 import { createDb } from './db/index';
 
 // Config values — replaced at build time or via env vars
 export const GITHUB_CLIENT_ID = process.env['GITHUB_CLIENT_ID'] ?? 'BUNDLED_CLIENT_ID';
 export const GITHUB_CLIENT_SECRET = process.env['GITHUB_CLIENT_SECRET'] ?? 'BUNDLED_CLIENT_SECRET';
-const BETTER_AUTH_SECRET = process.env['BETTER_AUTH_SECRET'] ?? 'dev-secret-change-in-production-32ch';
+const BETTER_AUTH_SECRET = process.env['BETTER_AUTH_SECRET'];
+if (!BETTER_AUTH_SECRET) throw new Error('BETTER_AUTH_SECRET environment variable is required. Generate one with: openssl rand -hex 32');
 
 const db = createDb();
 

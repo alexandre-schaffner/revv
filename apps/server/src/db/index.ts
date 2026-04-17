@@ -4,7 +4,7 @@ import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
 import * as schema from './schema';
 
 export function createDb(path?: string) {
-	const dbPath = path ?? process.env['REV_DB_PATH'] ?? './rev.db';
+	const dbPath = path ?? process.env['REVV_DB_PATH'] ?? './revv.db';
 	const sqlite = new Database(dbPath, { create: true });
 
 	// Enable WAL mode for better concurrent read performance

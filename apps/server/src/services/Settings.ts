@@ -1,7 +1,7 @@
 import { Context, Effect, Layer } from 'effect';
 import { eq } from 'drizzle-orm';
-import type { AiAgent, ThinkingEffort, UserSettings } from '@rev/shared';
-import { AUTO_FETCH_DEFAULT_INTERVAL } from '@rev/shared';
+import type { AiAgent, ThinkingEffort, UserSettings } from '@revv/shared';
+import { AUTO_FETCH_DEFAULT_INTERVAL } from '@revv/shared';
 import { ValidationError } from '../domain/errors';
 import { userSettings } from '../db/schema/index';
 import { DbService } from './Db';

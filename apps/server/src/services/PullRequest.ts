@@ -1,6 +1,6 @@
 import { Context, Effect, Layer } from 'effect';
-import { eq } from 'drizzle-orm';
-import type { PullRequest } from '@rev/shared';
+import { eq, inArray } from 'drizzle-orm';
+import type { PullRequest } from '@revv/shared';
 import { NotFoundError, ValidationError } from '../domain/errors';
 import { pullRequests } from '../db/schema/index';
 import { DbService } from './Db';
@@ -36,6 +36,7 @@ export class PullRequestService extends Context.Tag('PullRequestService')<
 		readonly listPrs: (repoId?: string) => Effect.Effect<PullRequest[], never, DbService>;
 		readonly getPr: (id: string) => Effect.Effect<PullRequest, NotFoundError, DbService>;
 		readonly upsertPrs: (prs: PullRequest[]) => Effect.Effect<void, ValidationError, DbService>;
+		readonly deletePrs: (ids: string[]) => Effect.Effect<void, ValidationError, DbService>;
 	}
 >() {}
 
@@ -113,6 +114,19 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
 							.run()
 					);
 				},
+				catch: (e) => new ValidationError({ message: String(e) }),
+			});
+		}),
+
+	deletePrs: (ids) =>
+		Effect.gen(function* () {
+			const { db } = yield* DbService;
+			if (ids.length === 0) return;
+			yield* Effect.tryPromise({
+				try: () =>
+					Promise.resolve(
+						db.delete(pullRequests).where(inArray(pullRequests.id, ids)).run()
+					),
 				catch: (e) => new ValidationError({ message: String(e) }),
 			});
 		}),

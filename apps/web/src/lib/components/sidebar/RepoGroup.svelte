@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { PullRequest, Repository } from '@rev/shared';
+	import type { PullRequest, Repository } from '@revv/shared';
 	import { untrack } from 'svelte';
 	import { getSelectedPrId } from '$lib/stores/prs.svelte';
 	import { getCollapseAllSignal } from '$lib/stores/sidebar.svelte';

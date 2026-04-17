@@ -1,5 +1,5 @@
-import type { UserSettings } from '@rev/shared';
-import { API_BASE_URL } from '@rev/shared';
+import type { UserSettings } from '@revv/shared';
+import { API_BASE_URL } from '@revv/shared';
 import { api } from '$lib/api/client';
 import type { ModelOption } from '$lib/constants/models';
 import { authHeaders } from '$lib/utils/session-token';

@@ -6,7 +6,7 @@
 	} from '$lib/components/ui/popover/index.js';
 	import { getSettings, updateSettings } from '$lib/stores/settings.svelte';
 	import { getDefaultModel } from '$lib/constants/models';
-	import type { AiAgent } from '@rev/shared';
+	import type { AiAgent } from '@revv/shared';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import Check from '@lucide/svelte/icons/check';
 	import AnthropicIcon from '$lib/components/icons/AnthropicIcon.svelte';

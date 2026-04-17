@@ -1,6 +1,6 @@
-# @rev/app
+# @revv/app
 
-React frontend for Rev, built with [TanStack Start](https://tanstack.com/start).
+React frontend for Revv, built with [TanStack Start](https://tanstack.com/start).
 
 ## Development
 
@@ -13,4 +13,4 @@ bun run build  # Production build
 
 - `src/routes/` — File-based routing (TanStack Router)
 - `src/router.tsx` — Router configuration
-- Uses `@rev/ui` for shared components and styles
+- Uses `@revv/ui` for shared components and styles

@@ -7,10 +7,11 @@
 	import { getSettings, updateSettings } from '$lib/stores/settings.svelte';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import Check from '@lucide/svelte/icons/check';
-	import { API_BASE_URL } from '@rev/shared';
+	import { API_BASE_URL } from '@revv/shared';
 	import { authHeaders } from '$lib/utils/session-token';
-	import type { AiAgent } from '@rev/shared';
+	import type { AiAgent } from '@revv/shared';
 	import { SvelteMap } from 'svelte/reactivity';
+	import { toast } from 'svelte-sonner';
 
 	let open = $state(false);
 
@@ -48,11 +49,12 @@
 					updateSettings({ aiModel: firstModel });
 				}
 			})
-			.catch((err) => {
-				console.error('[ModelSelector] Failed to fetch models:', err);
-				fetchedModels = [];
-				fetchDone = true;
-			});
+		.catch((err: Error) => {
+			console.error('[ModelSelector] Failed to fetch models:', err);
+			toast.error('Failed to load models');
+			fetchedModels = [];
+			fetchDone = true;
+		});
 	});
 
 	function getProvider(value: string): string | null {

@@ -37,7 +37,7 @@ export function toFileTreeEntries(files: ReviewFile[]): FileTreeEntry[] {
 	}));
 }
 
-// ── Comment / Thread types (re-exported from @rev/shared) ────────────────────
+// ── Comment / Thread types (re-exported from @revv/shared) ────────────────────
 
 export type {
 	ThreadStatus,
@@ -49,4 +49,4 @@ export type {
 	HunkDecision,
 	HunkDecisionType,
 	SessionStatus,
-} from '@rev/shared';
+} from '@revv/shared';

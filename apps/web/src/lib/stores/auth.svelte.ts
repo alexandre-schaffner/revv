@@ -1,27 +1,27 @@
 import { authClient } from '$lib/auth-client';
-import { API_BASE_URL } from '@rev/shared';
 import * as prs from '$lib/stores/prs.svelte';
 import * as settings from '$lib/stores/settings.svelte';
 import * as sync from '$lib/services/sync';
 import { goto } from '$app/navigation';
+import { API_BASE_URL } from '@revv/shared';
 
 const storedToken =
 	typeof localStorage !== 'undefined' ? localStorage.getItem('rev_session_token') : null;
 
 let token = $state<string | null>(storedToken);
-let user = $state<{ name: string; email: string; image?: string } | null>(null);
+let user = $state<{ name: string; email: string; image?: string; githubLogin?: string | null } | null>(null);
 let isLoading = $state(false);
-
-/** Sign-in flow state */
-type SignInPhase = 'idle' | 'waiting' | 'code-ready';
-let phase = $state<SignInPhase>('idle');
 let error = $state<string | null>(null);
 
-/** Device code flow state */
-let deviceCode = $state<string | null>(null);
-let userCode = $state<string | null>(null);
-let verificationUri = $state<string | null>(null);
-let pollTimer = $state<ReturnType<typeof setInterval> | null>(null);
+let deviceFlow = $state<{
+	userCode: string;
+	verificationUri: string;
+	deviceCode: string;
+	interval: number;
+	expiresAt: number;
+} | null>(null);
+let isPolling = $state(false);
+let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
 let isAuthenticated = $derived(token !== null && token.length > 0);
 
@@ -29,20 +29,16 @@ export function getIsAuthenticated(): boolean {
 	return isAuthenticated;
 }
 
-export function getPhase(): SignInPhase {
-	return phase;
-}
-
 export function getError(): string | null {
 	return error;
 }
 
-export function getUserCode(): string | null {
-	return userCode;
+export function getDeviceFlow(): typeof deviceFlow {
+	return deviceFlow;
 }
 
-export function getVerificationUri(): string | null {
-	return verificationUri;
+export function getIsPolling(): boolean {
+	return isPolling;
 }
 
 export function setToken(newToken: string): void {
@@ -50,8 +46,6 @@ export function setToken(newToken: string): void {
 	if (typeof localStorage !== 'undefined') {
 		localStorage.setItem('rev_session_token', newToken);
 	}
-	phase = 'idle';
-	clearDeviceState();
 }
 
 export function clearToken(): void {
@@ -62,25 +56,12 @@ export function clearToken(): void {
 	}
 }
 
-/**
- * Initiates the GitHub Device Code OAuth flow.
- *
- * Requests a device code from the server, then starts polling for authorization.
- * The user must visit the verification URI and enter the user code on GitHub.
- */
 export async function signIn(): Promise<void> {
 	error = null;
-	phase = 'waiting';
-
+	isLoading = true;
 	try {
-		const res = await fetch(`${API_BASE_URL}/api/auth/device/code`, { method: 'POST' });
-		if (!res.ok) {
-			const data = (await res.json()) as { error?: string };
-			error = data.error ?? `Request failed: ${res.status}`;
-			phase = 'idle';
-			return;
-		}
-
+		const res = await fetch(`${API_BASE_URL}/api/auth/device/init`, { method: 'POST' });
+		if (!res.ok) throw new Error('Failed to initiate sign-in');
 		const data = (await res.json()) as {
 			device_code: string;
 			user_code: string;
@@ -88,113 +69,104 @@ export async function signIn(): Promise<void> {
 			expires_in: number;
 			interval: number;
 		};
-
-		deviceCode = data.device_code;
-		userCode = data.user_code;
-		verificationUri = data.verification_uri;
-		phase = 'code-ready';
-
-		const pollIntervalMs = Math.max(data.interval * 1000, 5000);
-		startPolling(data.device_code, pollIntervalMs);
+		deviceFlow = {
+			userCode: data.user_code,
+			verificationUri: data.verification_uri,
+			deviceCode: data.device_code,
+			interval: data.interval ?? 5,
+			expiresAt: Date.now() + (data.expires_in ?? 900) * 1000,
+		};
+		try {
+			const { isTauri } = await import('$lib/utils/platform');
+			if (isTauri()) {
+				const { openUrl } = await import('@tauri-apps/plugin-opener');
+				await openUrl(data.verification_uri);
+			} else {
+				window.open(data.verification_uri, '_blank');
+			}
+		} catch {
+			// Opening browser is best-effort
+		}
+		startPolling();
 	} catch (e) {
 		error = `Failed to start sign-in: ${e}`;
-		phase = 'idle';
+	} finally {
+		isLoading = false;
+	}
+}
+
+function startPolling(): void {
+	if (!deviceFlow) return;
+	isPolling = true;
+	schedulePoll(deviceFlow.interval);
+}
+
+function schedulePoll(intervalSeconds: number): void {
+	pollTimer = setTimeout(() => poll(), intervalSeconds * 1000);
+}
+
+async function poll(): Promise<void> {
+	if (!deviceFlow) return;
+
+	if (Date.now() > deviceFlow.expiresAt) {
+		error = 'Sign-in timed out. Please try again.';
+		cancelSignIn();
+		return;
+	}
+
+	try {
+		const res = await fetch(`${API_BASE_URL}/api/auth/device/poll`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ device_code: deviceFlow.deviceCode }),
+		});
+		const data = (await res.json()) as {
+			status?: string;
+			token?: string;
+			error?: string;
+			interval?: number;
+		};
+
+		if (data.status === 'pending') {
+			schedulePoll(deviceFlow.interval);
+			return;
+		}
+
+		if (data.status === 'slow_down') {
+			const newInterval = data.interval ?? deviceFlow.interval + 5;
+			deviceFlow = { ...deviceFlow, interval: newInterval };
+			schedulePoll(newInterval);
+			return;
+		}
+
+		if (data.status === 'success' && data.token) {
+			setToken(data.token);
+			deviceFlow = null;
+			isPolling = false;
+			await loadUser();
+			await focusWindow();
+			return;
+		}
+
+		// Error cases
+		error =
+			data.error === 'expired'
+				? 'Sign-in timed out. Please try again.'
+				: data.error === 'access_denied'
+					? 'Sign-in was cancelled.'
+					: 'Sign-in failed. Please try again.';
+		cancelSignIn();
+	} catch {
+		// Network error — retry after current interval
+		if (deviceFlow) schedulePoll(deviceFlow.interval);
 	}
 }
 
 export function cancelSignIn(): void {
-	phase = 'idle';
-	error = null;
-	clearDeviceState();
-}
-
-function clearDeviceState(): void {
-	stopPolling();
-	deviceCode = null;
-	userCode = null;
-	verificationUri = null;
-}
-
-function startPolling(currentDeviceCode: string, intervalMs: number): void {
-	stopPolling();
-
-	let currentInterval = intervalMs;
-
-	const poll = async () => {
-		try {
-			const res = await fetch(`${API_BASE_URL}/api/auth/device/poll`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ device_code: currentDeviceCode }),
-			});
-
-			const data = (await res.json()) as
-				| { status: 'pending' }
-				| { status: 'slow_down' }
-				| { status: 'expired' }
-				| { status: 'denied' }
-				| { status: 'error'; message: string }
-				| { status: 'success'; token: string };
-
-			switch (data.status) {
-				case 'pending':
-					// Keep polling — no change needed
-					break;
-				case 'slow_down':
-					// Double the interval and reschedule
-					stopPolling();
-					currentInterval = currentInterval * 2;
-					pollTimer = setInterval(poll, currentInterval);
-					break;
-				case 'success':
-					setToken(data.token);
-					await loadUser();
-					await focusWindow();
-					break;
-				case 'expired':
-					error = 'Authorization expired. Please try again.';
-					phase = 'idle';
-					clearDeviceState();
-					break;
-				case 'denied':
-					error = 'Authorization was denied.';
-					phase = 'idle';
-					clearDeviceState();
-					break;
-				case 'error':
-					error = data.message;
-					phase = 'idle';
-					clearDeviceState();
-					break;
-			}
-		} catch {
-			// Silently retry on next interval
-		}
-	};
-
-	pollTimer = setInterval(poll, currentInterval);
-}
-
-/** Bring the app window to the foreground after auth completes. */
-async function focusWindow(): Promise<void> {
-	try {
-		const { isTauri } = await import('$lib/utils/platform');
-		if (isTauri()) {
-			const { getCurrentWindow } = await import('@tauri-apps/api/window');
-			await getCurrentWindow().setFocus();
-		} else {
-			window.focus();
-		}
-	} catch {
-		// Focus is best-effort — ignore failures
-	}
-}
-
-function stopPolling(): void {
-	if (pollTimer !== null) {
-		clearInterval(pollTimer);
-		pollTimer = null;
-	}
+	if (pollTimer) clearTimeout(pollTimer);
+	pollTimer = null;
+	deviceFlow = null;
+	isPolling = false;
 }
 
 export async function loadUser(): Promise<void> {
@@ -209,8 +181,19 @@ export async function loadUser(): Promise<void> {
 				email: u.email,
 				...(u.image != null ? { image: u.image } : {}),
 			};
+			// Fetch GitHub login separately — better-auth doesn't expose it.
+			try {
+				const res = await fetch(`${API_BASE_URL}/api/user/identity`, {
+					headers: { Authorization: `Bearer ${token}` },
+				});
+				if (res.ok) {
+					const data = (await res.json()) as { login: string | null };
+					if (user) user = { ...user, githubLogin: data.login };
+				}
+			} catch {
+				// best-effort
+			}
 		} else {
-			// Token is invalid — clear it
 			clearToken();
 		}
 	} catch {
@@ -221,10 +204,8 @@ export async function loadUser(): Promise<void> {
 }
 
 export async function signOut(): Promise<void> {
-	// Stop background sync and disconnect WebSocket first
 	sync.stopPolling();
 
-	// Revoke GitHub token and invalidate session — don't block local cleanup on failure
 	try {
 		await fetch(`${API_BASE_URL}/api/auth/revoke-and-sign-out`, {
 			method: 'POST',
@@ -233,10 +214,9 @@ export async function signOut(): Promise<void> {
 			},
 		});
 	} catch {
-		// Revocation may fail (expired session, network error) — proceed with local cleanup
+		// Revocation may fail — proceed with local cleanup
 	}
 
-	// Clear all local state
 	clearToken();
 	prs.reset();
 	settings.reset();
@@ -248,10 +228,40 @@ export function getToken(): string | null {
 	return token;
 }
 
-export function getUser(): { name: string; email: string; image?: string } | null {
+export function getUser(): { name: string; email: string; image?: string; githubLogin?: string | null } | null {
 	return user;
+}
+
+/** Current user's GitHub login, or null if not yet loaded or missing. */
+export function getCurrentUserLogin(): string | null {
+	return user?.githubLogin ?? null;
+}
+
+/**
+ * Role of the current user relative to a PR's author.
+ * 'coder' when the PR author matches; 'reviewer' otherwise; 'unknown' if either side is missing.
+ */
+export function getUserRoleForPr(prAuthorLogin: string | null | undefined): 'reviewer' | 'coder' | 'unknown' {
+	const me = user?.githubLogin;
+	if (!me || !prAuthorLogin) return 'unknown';
+	return me === prAuthorLogin ? 'coder' : 'reviewer';
 }
 
 export function getIsLoading(): boolean {
 	return isLoading;
+}
+
+/** Bring the app window to the foreground after auth completes. */
+export async function focusWindow(): Promise<void> {
+	try {
+		const { isTauri } = await import('$lib/utils/platform');
+		if (isTauri()) {
+			const { getCurrentWindow } = await import('@tauri-apps/api/window');
+			await getCurrentWindow().setFocus();
+		} else {
+			window.focus();
+		}
+	} catch {
+		// Focus is best-effort
+	}
 }

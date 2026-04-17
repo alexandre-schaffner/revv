@@ -4,7 +4,7 @@ import { getToken } from '$lib/stores/auth.svelte';
  * Get the current session token for API requests.
  * Reads from the auth store's reactive state.
  */
-export function getSessionToken(): string {
+function getSessionToken(): string {
 	return getToken() ?? '';
 }
 

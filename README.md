@@ -1,6 +1,6 @@
-# Rev — AI-Powered Code Review
+# Revv — AI-Powered Code Review
 
-An intelligent code review desktop application that brings AI-assisted analysis to your pull request workflows. Rev syncs your GitHub PRs and enables deep, conversational code review right from your desktop.
+An intelligent code review desktop application that brings AI-assisted analysis to your pull request workflows. Revv syncs your GitHub PRs and enables deep, conversational code review right from your desktop.
 
 ## Features
 
@@ -31,7 +31,7 @@ An intelligent code review desktop application that brings AI-assisted analysis 
 ```bash
 # Clone and install
 git clone <repo-url>
-cd rev
+cd revv
 bun install
 ```
 
@@ -46,6 +46,7 @@ bun install
    ```env
    GITHUB_CLIENT_ID=your_client_id
    GITHUB_CLIENT_SECRET=your_client_secret
+   BETTER_AUTH_SECRET=your_secret   # Generate with: openssl rand -hex 32
    ```
 
 ### Development
@@ -73,7 +74,7 @@ make reset-db            # Reset SQLite database
 ## Project Structure
 
 ```
-rev/
+revv/
 ├── apps/
 │   ├── web/            # SvelteKit frontend (served by Tauri)
 │   ├── server/         # Elysia HTTP + WebSocket API
@@ -108,7 +109,7 @@ Elysia API server with Effect-based services. Runs on port 45678.
 
 Tauri v2 desktop shell serving the SvelteKit build.
 
-- Deep-link handling via `rev://` scheme
+- Deep-link handling via `revv://` scheme
 - Plugin setup for opener and deep-link support
 - Configured for localhost API calls via CSP
 
@@ -117,7 +118,7 @@ Tauri v2 desktop shell serving the SvelteKit build.
 Shared types and constants imported by all apps.
 
 ```ts
-import { API_PORT, APP_NAME } from '@rev/shared'
+import { API_PORT, APP_NAME } from '@revv/shared'
 ```
 
 ## Architecture Highlights

@@ -1,8 +1,8 @@
 export type ThemePreference = 'system' | 'light' | 'dark';
 export type DiffThemePreference = 'sync' | 'light' | 'dark';
 
-const STORAGE_KEY = 'rev-theme';
-const DIFF_STORAGE_KEY = 'rev-diff-theme';
+const STORAGE_KEY = 'revv-theme';
+const DIFF_STORAGE_KEY = 'revv-diff-theme';
 
 let preference = $state<ThemePreference>(getStoredPreference());
 let diffPreference = $state<DiffThemePreference>(getStoredDiffPreference());

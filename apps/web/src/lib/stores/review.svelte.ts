@@ -5,11 +5,12 @@ import type {
 	AuthorRole,
 	MessageType,
 	HunkDecision,
-} from '@rev/shared';
+} from '@revv/shared';
 import type { ReviewFile } from '$lib/types/review';
 import { api } from '$lib/api/client';
 import { streamExplanation } from '$lib/api/explain';
 import { enterSidebarMode } from '$lib/stores/focus-mode.svelte';
+import { toast } from 'svelte-sonner';
 
 // --- Review files (shared between sidebar tree + review page) ---
 let reviewFiles = $state<ReviewFile[]>([]);
@@ -60,21 +61,30 @@ export function getSessionLoading(): boolean {
 	return sessionLoading;
 }
 
-export function clearSession(): void {
+function clearSession(): void {
 	sessionId = null;
 	threads = [];
 	threadMessages = {};
 	acceptedHunks = new Map();
 	rejectedHunks = new Map();
+	threadsVersion++;
 }
+
+let loadSessionSeq = 0;
 
 /** Load (or create) the active review session for a PR, hydrating all state. */
 export async function loadSession(prId: string): Promise<void> {
+	const seq = ++loadSessionSeq;
 	sessionLoading = true;
 	try {
 		const { data, error } = await api.api.reviews.active({ prId }).get();
+
+		// Discard if a newer call has started
+		if (seq !== loadSessionSeq) return;
+
 		if (error || !data) {
 			console.error('[review] Failed to load session:', error);
+			toast.error('Failed to load review session');
 			return;
 		}
 
@@ -107,8 +117,12 @@ export async function loadSession(prId: string): Promise<void> {
 		}
 		acceptedHunks = accepted;
 		rejectedHunks = rejected;
+		threadsVersion++;
 	} finally {
-		sessionLoading = false;
+		// Only clear loading if this is still the active request
+		if (seq === loadSessionSeq) {
+			sessionLoading = false;
+		}
 	}
 }
 
@@ -231,11 +245,12 @@ export function requestExplanation(params: {
 				finishExplanation();
 				currentExplainController = null;
 			},
-			onError: (err: { code: string; message: string }) => {
-				explanationError = err;
-				finishExplanation();
-				currentExplainController = null;
-			},
+		onError: (err: { code: string; message: string }) => {
+			explanationError = err;
+			toast.error(err.message || 'AI explanation failed');
+			finishExplanation();
+			currentExplainController = null;
+		},
 		}
 	);
 }
@@ -243,6 +258,25 @@ export function requestExplanation(params: {
 // --- Comment threads ---
 let threads = $state<CommentThread[]>([]);
 let threadMessages = $state<Record<string, ThreadMessage[]>>({});
+let threadSyncErrors = $state<Set<string>>(new Set());
+// Monotonic counter bumped on every thread mutation. Consumed inside reactive
+// derivations that need to force-recompute (e.g. DiffViewer's annotations),
+// because @pierre/diffs caches annotations by metadata reference.
+let threadsVersion = $state(0);
+
+export function getThreadsVersion(): number {
+	return threadsVersion;
+}
+
+export function getThreadSyncError(threadId: string): boolean {
+	return threadSyncErrors.has(threadId);
+}
+
+export function clearThreadSyncError(threadId: string): void {
+	const next = new Set(threadSyncErrors);
+	next.delete(threadId);
+	threadSyncErrors = next;
+}
 
 export function getThreads(): CommentThread[] {
 	return threads;
@@ -301,7 +335,16 @@ export async function addThread(
 			...threadMessages,
 			[result.thread.id]: [result.message],
 		};
+		threadsVersion++;
 	}
+
+	// Fire-and-forget: push thread to GitHub
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	void (api.api.threads({ id: result.thread.id, threadId: result.thread.id } as any) as any).push.post().catch(() => {
+		const next = new Set(threadSyncErrors);
+		next.add(result.thread.id);
+		threadSyncErrors = next;
+	});
 
 	return result;
 }
@@ -338,6 +381,12 @@ export async function addThreadMessage(
 		};
 	}
 
+	// Fire-and-forget: push reply to GitHub
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	void (api.api.threads({ id: threadId, threadId } as any) as any).messages({ messageId: message.id }).push.post().catch(() => {
+		threadSyncErrors = new Set([...threadSyncErrors, threadId]);
+	});
+
 	return message;
 }
 
@@ -352,12 +401,15 @@ export async function resolveThread(threadId: string): Promise<void> {
 			? { ...t, status: 'resolved' as const, resolvedAt: new Date().toISOString() }
 			: t
 	);
+	threadsVersion++;
 
 	const { error } = await api.api.threads({ id: threadId }).patch({ status: 'resolved' });
 
 	if (error) {
 		console.error('[review] Failed to resolve thread, reverting:', error);
 		threads = prevThreads;
+		threadsVersion++;
+		toast.error('Failed to resolve thread');
 	}
 }
 
@@ -372,12 +424,14 @@ export async function reopenThread(threadId: string): Promise<void> {
 			? { ...t, status: 'open' as const, resolvedAt: null }
 			: t
 	);
+	threadsVersion++;
 
 	const { error } = await api.api.threads({ id: threadId }).patch({ status: 'open' });
 
 	if (error) {
 		console.error('[review] Failed to reopen thread, reverting:', error);
 		threads = prevThreads;
+		threadsVersion++;
 	}
 }
 
@@ -395,19 +449,25 @@ export function updateThreadStatusFromWs(threadId: string, status: ThreadStatus)
 				}
 			: t
 	);
+	threadsVersion++;
 }
 
 /**
  * Push a thread and message from a WebSocket broadcast (no API call needed).
  */
 export function addThreadFromWs(thread: CommentThread, message: ThreadMessage): void {
-	// Avoid duplicates
-	if (threads.some((t) => t.id === thread.id)) return;
-	threads = [...threads, thread];
-	threadMessages = {
-		...threadMessages,
-		[thread.id]: [...(threadMessages[thread.id] ?? []), message],
-	};
+	if (!threads.some((t) => t.id === thread.id)) {
+		threads = [...threads, thread];
+		threadsVersion++;
+	}
+	// Always add the message if not already present
+	const existing = threadMessages[thread.id] ?? [];
+	if (!existing.some((m) => m.id === message.id)) {
+		threadMessages = {
+			...threadMessages,
+			[thread.id]: [...existing, message],
+		};
+	}
 }
 
 /**
@@ -508,6 +568,7 @@ async function setHunkDecision(
 			console.error(`[review] Failed to persist hunk ${decision}, reverting:`, error);
 			acceptedHunks = prevAccepted;
 			rejectedHunks = prevRejected;
+			toast.error('Failed to save hunk decision');
 		}
 	}
 }

@@ -201,7 +201,7 @@ export function jumpCursor(target: 'top' | 'bottom' | 'half-up' | 'half-down'): 
  * Reset cursor/selection state to defaults.
  * Called when returning to sidebar or entering scroll mode.
  */
-export function resetCursorState(): void {
+function resetCursorState(): void {
 	cursorLineIndex = 1;
 	cursorSide = null;
 	anchorLineIndex = null;

@@ -96,6 +96,24 @@ export interface CommentThread {
 	status: ThreadStatus;
 	createdAt: string;
 	resolvedAt: string | null;
+	externalThreadId: string | null;
+	externalCommentId: string | null;
+	lastSyncedAt: string | null;
+}
+
+export interface ThreadSummary {
+	total: number;
+	open: number;
+	pendingYou: number;
+	pendingThem: number;
+	resolved: number;
+}
+
+export type UserRole = 'reviewer' | 'coder' | 'unknown';
+
+export interface UserIdentity {
+	login: string | null;
+	role: UserRole;
 }
 
 export interface ThreadMessage {

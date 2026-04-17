@@ -1,4 +1,4 @@
-import type { WalkthroughStreamEvent, WalkthroughPhase } from '@rev/shared';
+import type { WalkthroughStreamEvent, WalkthroughPhase } from '@revv/shared';
 import { WALKTHROUGH_INACTIVITY_TIMEOUT_MS, WALKTHROUGH_EXPLORATION_STALL_MS } from '../../constants';
 import { debug } from '../../logger';
 

@@ -116,8 +116,12 @@
 		{/if}
 	</div>
 
-	<!-- Rest of sidebar — hidden when collapsed -->
-	{#if !collapsed}
+	<!--
+		Kept mounted (with display: contents) so RepoGroup / PrItem / DiffFileTree
+		preserve their expand state across sidebar collapse/expand. When collapsed,
+		the wrapper switches to display: none which hides without unmounting.
+	-->
+	<div class="sidebar-body" class:sidebar-body--hidden={collapsed} aria-hidden={collapsed}>
 		<SearchFilter onAddRepo={() => setAddRepoDialogOpen(true)} />
 
 		<div class="pr-list">
@@ -139,8 +143,24 @@
 				{/each}
 			{/if}
 		</div>
+	</div>
 
-		<div class="sidebar-footer">
+	<!--
+		Footer lives outside .sidebar-body so the Settings button stays visible
+		and clickable even when the sidebar is collapsed (body is display:none).
+	-->
+	<div class="sidebar-footer" class:sidebar-footer--collapsed={collapsed}>
+		{#if collapsed}
+			<button
+				class="icon-btn"
+				class:icon-btn--active={page.url.pathname === '/settings'}
+				onclick={() => goto(page.url.pathname === '/settings' ? '/' : '/settings')}
+				title="Settings"
+				aria-label="Settings"
+			>
+				<Settings size={14} />
+			</button>
+		{:else}
 			<button
 				class="settings-btn"
 				class:settings-btn--active={page.url.pathname === '/settings'}
@@ -149,8 +169,8 @@
 				<Settings size={14} />
 				Settings
 			</button>
-		</div>
-	{/if}
+		{/if}
+	</div>
 </div>
 
 <AddRepoDialog open={addRepoOpen} onClose={() => setAddRepoDialogOpen(false)} />
@@ -190,6 +210,16 @@
 		overflow: hidden;
 	}
 
+	/* Body wrapper — display:contents keeps children as direct flex-children of .sidebar
+		 (so .pr-list still flex:1), while display:none when collapsed hides without unmounting. */
+	.sidebar-body {
+		display: contents;
+	}
+
+	.sidebar-body--hidden {
+		display: none;
+	}
+
 	/* Icon buttons used in the header */
 	.icon-btn {
 		display: flex;
@@ -216,6 +246,11 @@
 	.icon-btn:disabled {
 		opacity: 0.4;
 		cursor: default;
+	}
+
+	.icon-btn--active {
+		background: var(--color-bg-elevated);
+		color: var(--color-text-secondary);
 	}
 
 	/* PR list */
@@ -261,11 +296,19 @@
 		text-decoration: underline;
 	}
 
-	/* Footer */
+	/* Footer — kept outside .sidebar-body so Settings is reachable while collapsed.
+		 margin-top:auto pins it to the bottom even when .pr-list is hidden (collapsed). */
 	.sidebar-footer {
+		margin-top: auto;
 		border-top: 1px solid var(--color-border);
 		padding: 8px;
 		flex-shrink: 0;
+	}
+
+	.sidebar-footer--collapsed {
+		display: flex;
+		justify-content: center;
+		padding: 7px 0; /* centers the 26px icon-btn in the 40px collapsed column */
 	}
 
 	.settings-btn {

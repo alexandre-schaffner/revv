@@ -1,6 +1,6 @@
 import { Context, Duration, Effect, Fiber, Layer, Ref, Schedule } from 'effect';
-import { AUTO_FETCH_DEFAULT_INTERVAL } from '@rev/shared';
-import type { PullRequest } from '@rev/shared';
+import { AUTO_FETCH_DEFAULT_INTERVAL, THREAD_SYNC_INTERVAL_SECONDS } from '@revv/shared';
+import type { PullRequest } from '@revv/shared';
 import { DbService } from './Db';
 import { withDb as withDbHelper } from '../effects/with-db';
 import { DiffCacheService } from './DiffCache';
@@ -8,6 +8,7 @@ import { GitHubService } from './GitHub';
 import { PullRequestService } from './PullRequest';
 import { RepositoryService } from './Repository';
 import { SettingsService } from './Settings';
+import { SyncService } from './Sync';
 import { TokenProvider } from './TokenProvider';
 import { WebSocketHub } from './WebSocketHub';
 
@@ -16,6 +17,7 @@ type PollSchedulerService = {
 	readonly stop: () => Effect.Effect<void>;
 	readonly restart: (intervalMinutes: number) => Effect.Effect<void>;
 	readonly syncNow: () => Effect.Effect<void>;
+	readonly syncThreadsNow: (prId: string) => Effect.Effect<void>;
 };
 
 export class PollScheduler extends Context.Tag('PollScheduler')<
@@ -33,6 +35,7 @@ export const PollSchedulerLive = Layer.effect(
 		const diffCache = yield* DiffCacheService;
 		const repoService = yield* RepositoryService;
 		const settingsService = yield* SettingsService;
+		const syncService = yield* SyncService;
 		const tokenProvider = yield* TokenProvider;
 		const { db } = yield* DbService;
 
@@ -87,13 +90,14 @@ export const PollSchedulerLive = Layer.effect(
 
 			const allPrs = results.flat();
 
-			// Clear diff cache for PRs that were open before but are gone now (closed/merged)
+			// Delete PRs that were open before but are gone now (closed/merged on GitHub).
+			// Cascade deletes their diff cache, review sessions, threads, and walkthroughs.
 			const freshPrIdSet = new Set(allPrs.map((pr) => pr.id));
 			const closedPrIds = existingPrs
 				.filter((pr) => pr.status === 'open' && !freshPrIdSet.has(pr.id))
 				.map((pr) => pr.id);
 			if (closedPrIds.length > 0) {
-				yield* withDb(diffCache.invalidateFilesForPrs(closedPrIds)).pipe(
+				yield* withDb(prService.deletePrs(closedPrIds)).pipe(
 					Effect.orElseSucceed(() => undefined)
 				);
 			}
@@ -180,6 +184,52 @@ export const PollSchedulerLive = Layer.effect(
 			}
 		});
 
+		// ── Thread sync loop ──────────────────────────────────────────────────
+		// Separate, lightweight fiber that polls every ~30s to keep threads in
+		// sync with GitHub. Runs in addition to the PR-sync fiber above.
+		const threadFiberRef = yield* Ref.make<Fiber.RuntimeFiber<number, never> | null>(null);
+
+		const syncThreadsForOpenPrs: Effect.Effect<void> = Effect.gen(function* () {
+			const prs = yield* withDb(prService.listPrs()).pipe(
+				Effect.orElseSucceed(() => [] as PullRequest[]),
+			);
+			const openPrs = prs.filter((p) => p.status === 'open');
+			// Sequential is fine: each PR-sync is lightweight (REST + a small
+			// GraphQL call). Running them concurrently would spike rate-limit risk.
+			yield* Effect.forEach(
+				openPrs,
+				(pr) =>
+					withDb(syncService.syncThreads(pr.id)).pipe(
+						Effect.asVoid,
+						Effect.orElseSucceed(() => undefined),
+					),
+				{ concurrency: 1 },
+			);
+		}).pipe(
+			Effect.catchAllCause((cause) =>
+				hub.broadcast({
+					type: 'error',
+					data: { code: 'THREAD_SYNC_ERROR', message: String(cause) },
+				}),
+			),
+		);
+
+		const stopThreadFiber: Effect.Effect<void> = Effect.gen(function* () {
+			const fiber = yield* Ref.get(threadFiberRef);
+			if (fiber !== null) {
+				yield* Fiber.interrupt(fiber).pipe(Effect.asVoid);
+				yield* Ref.set(threadFiberRef, null);
+			}
+		});
+
+		const startThreadFiber: Effect.Effect<void> = Effect.gen(function* () {
+			const schedule = Schedule.spaced(Duration.seconds(THREAD_SYNC_INTERVAL_SECONDS));
+			const fiber: Fiber.RuntimeFiber<number, never> = yield* Effect.fork(
+				syncThreadsForOpenPrs.pipe(Effect.repeat(schedule)),
+			);
+			yield* Ref.set(threadFiberRef, fiber);
+		});
+
 		const startWithInterval = (intervalMinutes: number): Effect.Effect<void> =>
 			Effect.gen(function* () {
 				if (intervalMinutes <= 0) return;
@@ -194,13 +244,22 @@ export const PollSchedulerLive = Layer.effect(
 		return {
 			start: () =>
 				Effect.gen(function* () {
+					// Guard: don't start duplicate fibers if already running
+					const existingFiber = yield* Ref.get(threadFiberRef);
+					if (existingFiber !== null) return;
+
 					const s = yield* withDb(settingsService.getSettings()).pipe(
 						Effect.orElseSucceed(() => ({ autoFetchInterval: AUTO_FETCH_DEFAULT_INTERVAL }))
 					);
 					yield* startWithInterval(s.autoFetchInterval);
+					yield* startThreadFiber;
 				}),
 
-			stop: () => stopFiber,
+			stop: () =>
+				Effect.gen(function* () {
+					yield* stopFiber;
+					yield* stopThreadFiber;
+				}),
 
 			restart: (minutes) =>
 				Effect.gen(function* () {
@@ -209,6 +268,12 @@ export const PollSchedulerLive = Layer.effect(
 				}),
 
 			syncNow: () => syncAllRepos,
+
+			syncThreadsNow: (prId: string) =>
+				withDb(syncService.syncThreads(prId)).pipe(
+					Effect.asVoid,
+					Effect.catchAllCause(() => Effect.void),
+				),
 		};
 	})
 );

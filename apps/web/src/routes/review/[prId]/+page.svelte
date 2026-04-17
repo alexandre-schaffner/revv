@@ -19,13 +19,14 @@
 	import ReviewLayout from '$lib/components/review/ReviewLayout.svelte';
 	import GuidedWalkthrough from '$lib/components/walkthrough/GuidedWalkthrough.svelte';
 	import RequestChanges from '$lib/components/review/RequestChanges.svelte';
-	import { reset as resetWalkthrough, getIsStreaming as getWalkthroughStreaming, getSummary as getWalkthroughSummary, regenerate as regenerateWalkthrough } from '$lib/stores/walkthrough.svelte';
+	import { deactivate as deactivateWalkthrough, getIsStreaming as getWalkthroughStreaming, getSummary as getWalkthroughSummary, regenerate as regenerateWalkthrough, abort as abortWalkthrough } from '$lib/stores/walkthrough.svelte';
 	import { setTopbarCollapsed } from '$lib/stores/topbar.svelte';
-	import { onDestroy } from 'svelte';
+	import { requestThreadSync } from '$lib/stores/ws.svelte';
+	import { onDestroy, untrack } from 'svelte';
 	import AuthGuard from '$lib/components/auth/AuthGuard.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Tooltip, TooltipContent, TooltipTrigger } from '$lib/components/ui/tooltip';
-	import { RefreshCw } from '@lucide/svelte';
+	import { RefreshCw, Square } from '@lucide/svelte';
 
 	const pr = $derived(getSelectedPr());
 	const themeType = $derived(getDiffThemeType());
@@ -36,34 +37,33 @@
 	const walkthroughStreaming = $derived(getWalkthroughStreaming());
 	const walkthroughSummary = $derived(getWalkthroughSummary());
 
-	// ── Title collapse on inner scroll ──────────────────────────────────
-	let reviewPageEl: HTMLDivElement | undefined = $state(undefined);
-	let isCompact = $state(false);
+	// The title lives inside the scroll container and scrolls away naturally.
+	// An IntersectionObserver on the title element drives the compact topbar.
+	let scrollRootEl: HTMLDivElement | undefined = $state(undefined);
+	let titleEl: HTMLDivElement | undefined = $state(undefined);
 
-	// Diff tab always shows the PR title in the topbar, no big title section
+	// Diff tab has its own layout and no big title — always show the compact PR title in the topbar.
 	const forceCompact = $derived(activeTab === 'diff');
 
-	function onInnerScroll(e: Event) {
-		const el = e.target as HTMLElement;
-		if (el === reviewPageEl) return;
-		// Only react to vertically scrollable containers
-		if (el.scrollHeight <= el.clientHeight) return;
-		const scrolled = el.scrollTop > 8;
-		if (scrolled !== isCompact) {
-			isCompact = scrolled;
-			setTopbarCollapsed(forceCompact || scrolled);
+	$effect(() => {
+		if (forceCompact) {
+			setTopbarCollapsed(true);
+			return;
 		}
-	}
-
-	// Keep topbar in sync when switching tabs
-	$effect(() => {
-		setTopbarCollapsed(forceCompact || isCompact);
-	});
-
-	$effect(() => {
-		if (!reviewPageEl) return;
-		reviewPageEl.addEventListener('scroll', onInnerScroll, { capture: true });
-		return () => reviewPageEl?.removeEventListener('scroll', onInnerScroll, { capture: true });
+		if (!titleEl || !scrollRootEl) {
+			setTopbarCollapsed(false);
+			return;
+		}
+		const target = titleEl;
+		const io = new IntersectionObserver(
+			([entry]) => {
+				if (!entry) return;
+				setTopbarCollapsed(!entry.isIntersecting);
+			},
+			{ root: scrollRootEl, threshold: 0 }
+		);
+		io.observe(target);
+		return () => io.disconnect();
 	});
 
 	let currentRequestId = 0;
@@ -72,57 +72,64 @@
 		const prId = page.params['prId'];
 		if (!prId) return;
 
-		// Bump request ID so any in-flight fetch for a previous PR is ignored
-		const requestId = ++currentRequestId;
+		// Everything below mutates store state. Calls like `clearReviewFiles()`
+		// invoke `clearSession()`, which does `threadsVersion++` — a read-then-
+		// write on $state. Inside an untracked block, that read doesn't subscribe
+		// the effect to threadsVersion, so the write can't re-trigger us.
+		untrack(() => {
+			// Bump request ID so any in-flight fetch for a previous PR is ignored
+			const requestId = ++currentRequestId;
 
-		setSelectedPrId(prId);
-		clearExplanations();
-		clearReviewFiles();
-		setIsLoadingFiles(true);
+			setSelectedPrId(prId);
+			requestThreadSync(prId);
+			clearExplanations();
+			clearReviewFiles();
+			setIsLoadingFiles(true);
 
-		(async () => {
-			try {
-				// Fetch files and session in parallel — session failure shouldn't block diff
-				const [filesResult] = await Promise.all([
-					api.api.prs({ id: prId }).files.get(),
-					loadSession(prId).catch((e) =>
-						console.error('[review] Session load failed (non-blocking):', e)
-					),
-				]);
+			(async () => {
+				try {
+					// Fetch files and session in parallel — session failure shouldn't block diff
+					const [filesResult] = await Promise.all([
+						api.api.prs({ id: prId }).files.get(),
+						loadSession(prId).catch((e) =>
+							console.error('[review] Session load failed (non-blocking):', e)
+						),
+					]);
 
-				if (requestId !== currentRequestId) return;
+					if (requestId !== currentRequestId) return;
 
-				const { data, error } = filesResult;
-				if (error) throw new Error('Failed to fetch PR files');
-				if (Array.isArray(data)) {
-					const mapped = data.map((f) => ({
-						path: f.path,
-						patch: f.patch ?? null,
-						additions: f.additions,
-						deletions: f.deletions,
-						...(f.oldPath ? { oldPath: f.oldPath } : {}),
-						...(f.isNew ? { isNew: true as const } : {}),
-						...(f.isDeleted ? { isDeleted: true as const } : {}),
-					}));
-					setReviewFiles(mapped);
-					if (mapped.length > 0) {
-						setActiveFilePath(mapped[0]!.path);
+					const { data, error } = filesResult;
+					if (error) throw new Error('Failed to fetch PR files');
+					if (Array.isArray(data)) {
+						const mapped = data.map((f) => ({
+							path: f.path,
+							patch: f.patch ?? null,
+							additions: f.additions,
+							deletions: f.deletions,
+							...(f.oldPath ? { oldPath: f.oldPath } : {}),
+							...(f.isNew ? { isNew: true as const } : {}),
+							...(f.isDeleted ? { isDeleted: true as const } : {}),
+						}));
+						setReviewFiles(mapped);
+						if (mapped.length > 0) {
+							setActiveFilePath(mapped[0]!.path);
+						}
 					}
+				} catch (e) {
+					if (requestId !== currentRequestId) return;
+					setFilesError(e instanceof Error ? e.message : 'Failed to load diff');
+				} finally {
+					if (requestId === currentRequestId) setIsLoadingFiles(false);
 				}
-			} catch (e) {
-				if (requestId !== currentRequestId) return;
-				setFilesError(e instanceof Error ? e.message : 'Failed to load diff');
-			} finally {
-				if (requestId === currentRequestId) setIsLoadingFiles(false);
-			}
-		})();
+			})();
+		});
 	});
 
 	onDestroy(() => {
 		// Invalidate any in-flight request and clean up store state
 		currentRequestId++;
 		clearReviewFiles();
-		resetWalkthrough();
+		deactivateWalkthrough(); // Clear active view without aborting background generation
 		setTopbarCollapsed(false);
 	});
 </script>
@@ -137,46 +144,77 @@
 		<p>{loadError}</p>
 	</div>
 {:else if pr !== null}
-	<div class="review-page" bind:this={reviewPageEl}>
-		<div class="page-title-section" class:compact={forceCompact || isCompact}>
-			<div class="title-row">
-				<h1 class="page-title">{pr.title}</h1>
-				{#if activeTab === 'walkthrough' && !walkthroughStreaming && walkthroughSummary}
-					<Tooltip>
-						<TooltipTrigger>
-							{#snippet child({ props })}
-								<Button
-									{...props}
-									variant="ghost"
-									size="icon-sm"
-									onclick={() => regenerateWalkthrough(page.params['prId'] ?? '')}
-								>
-									<RefreshCw size={14} />
-								</Button>
-							{/snippet}
-						</TooltipTrigger>
-						<TooltipContent>Regenerate walkthrough</TooltipContent>
-					</Tooltip>
-				{/if}
-			</div>
-			<span class="page-subtitle">#{pr.externalId} · {pr.sourceBranch} → {pr.targetBranch}</span>
-		</div>
+	<div class="review-page">
+		{#if activeTab === 'diff'}
+			{#if files.length > 0}
+				<ReviewLayout prId={page.params['prId'] ?? ''} {files} {themeType} />
+			{:else}
+				<div class="loading">
+					<p>No changed files in this PR</p>
+				</div>
+			{/if}
+		{/if}
 
-		<div class="review-content" class:tabs-clearance={forceCompact}>
+		<!-- Scroll root for walkthrough and request-changes tabs. Kept mounted
+		     across diff-tab switches so the walkthrough never unmounts. -->
+		<div
+			class="review-content"
+			bind:this={scrollRootEl}
+			style={activeTab === 'diff' ? 'display: none' : ''}
+		>
+			<div class="page-title-section" bind:this={titleEl}>
+				<div class="title-row">
+					<h1 class="page-title">{pr.title}</h1>
+					{#if activeTab === 'walkthrough' && walkthroughStreaming}
+						<Tooltip>
+							<TooltipTrigger>
+								{#snippet child({ props })}
+									<Button
+										{...props}
+										variant="ghost"
+										size="icon-sm"
+										class="stop-generation"
+										onclick={abortWalkthrough}
+									>
+										<Square size={14} fill="currentColor" />
+									</Button>
+								{/snippet}
+							</TooltipTrigger>
+							<TooltipContent>Stop generation</TooltipContent>
+						</Tooltip>
+					{:else if activeTab === 'walkthrough' && walkthroughSummary}
+						<Tooltip>
+							<TooltipTrigger>
+								{#snippet child({ props })}
+									<Button
+										{...props}
+										variant="ghost"
+										size="icon-sm"
+										onclick={() => regenerateWalkthrough(page.params['prId'] ?? '')}
+									>
+										<RefreshCw size={14} />
+									</Button>
+								{/snippet}
+							</TooltipTrigger>
+							<TooltipContent>Regenerate walkthrough</TooltipContent>
+						</Tooltip>
+					{/if}
+				</div>
+				<span class="page-subtitle">#{pr.externalId} · {pr.sourceBranch} → {pr.targetBranch}</span>
+			</div>
+
 			<!-- Walkthrough: always mounted to avoid re-render freeze on tab switch.
 			     Heavy blocks (PierreFile, FileDiff, markdown) stay alive in DOM. -->
 			<div style={activeTab === 'walkthrough' ? 'display: contents' : 'display: none'}>
-				<GuidedWalkthrough prId={page.params['prId'] ?? ''} />
+				<GuidedWalkthrough
+					prId={page.params['prId'] ?? ''}
+					scrollRoot={scrollRootEl}
+					isActive={activeTab === 'walkthrough'}
+				/>
 			</div>
 
 			{#if activeTab === 'request-changes'}
 				<RequestChanges prId={page.params['prId'] ?? ''} />
-			{:else if activeTab === 'diff' && files.length > 0}
-				<ReviewLayout prId={page.params['prId'] ?? ''} {files} {themeType} />
-			{:else if activeTab === 'diff'}
-				<div class="loading">
-					<p>No changed files in this PR</p>
-				</div>
 			{/if}
 		</div>
 	</div>
@@ -196,7 +234,15 @@
 		position: relative;
 	}
 
-	/* ── Title section (expands / collapses) ────────────────────────── */
+	/* ── Scroll container for walkthrough / request-changes ──────────── */
+
+	.review-content {
+		flex: 1;
+		min-height: 0;
+		overflow-y: auto;
+	}
+
+	/* ── Title section (scrolls away naturally with content) ─────────── */
 
 	.page-title-section {
 		display: flex;
@@ -204,21 +250,6 @@
 		gap: 4px;
 		padding: 76px 32px 16px;
 		flex-shrink: 0;
-		border-bottom: 1px solid transparent;
-		max-height: 160px;
-		transition:
-			padding var(--duration-smooth) var(--ease-out-expo),
-			gap var(--duration-smooth) var(--ease-out-expo),
-			max-height var(--duration-smooth) var(--ease-out-expo),
-			border-color var(--duration-smooth) var(--ease-out-expo);
-	}
-
-	.page-title-section.compact {
-		padding: 0 32px;
-		gap: 0;
-		max-height: 0;
-		overflow: hidden;
-		border-bottom-color: transparent;
 	}
 
 	.title-row {
@@ -258,27 +289,6 @@
 		color: var(--color-text-muted);
 		opacity: 0.5;
 		line-height: 1.4;
-		overflow: hidden;
-		max-height: 20px;
-		transition:
-			opacity var(--duration-smooth) var(--ease-out-expo),
-			max-height var(--duration-smooth) var(--ease-out-expo);
-	}
-
-	.compact .page-subtitle {
-		opacity: 0;
-		max-height: 0;
-	}
-
-	/* ── Content area ────────────────────────────────────────────────── */
-
-	.review-content {
-		flex: 1;
-		min-height: 0;
-	}
-
-	.review-content.tabs-clearance {
-		padding-top: 0;
 	}
 
 	.loading {

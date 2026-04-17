@@ -1,5 +1,5 @@
 {
-  "name": "@rev/shared",
+  "name": "@revv/shared",
   "version": "0.0.1",
   "private": true,
   "main": "./src/index.ts",

@@ -1,6 +1,9 @@
-import type { PullRequest, Repository, CloneStatus } from '@rev/shared';
+import type { PullRequest, Repository, CloneStatus, ThreadSummary } from '@revv/shared';
 import { api } from '$lib/api/client';
 import { goto } from '$app/navigation';
+import { API_BASE_URL } from '@revv/shared';
+import { setBatchSummaries } from '$lib/stores/sync.svelte';
+import { toast } from 'svelte-sonner';
 
 let pullRequests = $state<PullRequest[]>([]);
 let repositories = $state<Repository[]>([]);
@@ -56,11 +59,41 @@ export function updateRepoCloneStatus(repoId: string, status: CloneStatus, error
 	);
 }
 
+export async function fetchThreadSummaries(prIds: string[]): Promise<void> {
+	if (prIds.length === 0) return;
+	try {
+		const token = typeof localStorage !== 'undefined' ? localStorage.getItem('rev_session_token') : null;
+		if (!token) return;
+		const results = await Promise.allSettled(
+			prIds.slice(0, 20).map(async (prId) => {
+				const res = await fetch(`${API_BASE_URL}/api/prs/${encodeURIComponent(prId)}/thread-summary`, {
+					headers: { Authorization: `Bearer ${token}` },
+				});
+				if (!res.ok) return null;
+				const summary = await res.json() as ThreadSummary;
+				return { prId, summary };
+			})
+		);
+		const entries = results
+			.filter((r): r is PromiseFulfilledResult<{ prId: string; summary: ThreadSummary } | null> => r.status === 'fulfilled')
+			.map((r) => r.value)
+			.filter((v): v is { prId: string; summary: ThreadSummary } => v !== null);
+		setBatchSummaries(entries);
+	} catch {
+		// best-effort
+	}
+}
+
 export async function fetchPrs(): Promise<void> {
 	isLoading = true;
 	try {
 		const { data } = await api.api.prs.get();
-		if (data) pullRequests = data as PullRequest[];
+		if (data) {
+			pullRequests = data as PullRequest[];
+			// Fire-and-forget: load thread summaries for all open PRs
+			const openIds = (data as PullRequest[]).filter((p) => p.status === 'open').map((p) => p.id);
+			void fetchThreadSummaries(openIds);
+		}
 	} catch {
 		// error handled by wsStore or caller
 	} finally {
@@ -117,9 +150,14 @@ export async function addRepo(fullName: string): Promise<void> {
 }
 
 export async function deleteRepo(id: string): Promise<void> {
-	await api.api.repos({ id }).delete();
-	await fetchRepos();
-	await fetchPrs();
+	try {
+		await api.api.repos({ id }).delete();
+		await fetchRepos();
+		await fetchPrs();
+	} catch (e) {
+		toast.error(e instanceof Error ? e.message : 'Failed to remove repository');
+		throw e;
+	}
 }
 
 export function getPullRequests(): PullRequest[] {

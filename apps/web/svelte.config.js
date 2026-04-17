@@ -9,8 +9,8 @@ const config = {
 			fallback: 'index.html'
 		}),
 		alias: {
-			'@rev/server': '../../apps/server/src/index.ts',
-			'@rev/server/*': '../../apps/server/src/*',
+			'@revv/server': '../../apps/server/src/index.ts',
+			'@revv/server/*': '../../apps/server/src/*',
 		}
 	}
 };

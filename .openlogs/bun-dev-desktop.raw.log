@@ -1,146 +1,55 @@
 [0m[2m[35m$[0m [2m[1mconcurrently --kill-others "bun run dev:web" "bun run dev:server" "sleep 3 && cd apps/desktop && bunx tauri dev"[0m
 [0m[0][0m [0m[2m[35m$[0m [2m[1mcd apps/web && bun run dev[0m
 [0m[1][0m [0m[2m[35m$[0m [2m[1mcd apps/server && bun run dev[0m
-[0m[1][0m [0m[2m[35m$[0m [2m[1mbun run --watch src/index.ts[0m
 [0m[0][0m [0m[2m[35m$[0m [2m[1mvite dev[0m
-[0m[1][0m [rev-server] listening on http://localhost:45678
+[0m[1][0m [0m[2m[35m$[0m [2m[1mbun run --watch src/index.ts[0m
+[0m[1][0m [revv-server] listening on http://localhost:45678
 [0m[0][0m 
-[0m[0][0m   [32m[1mVITE[22m v6.4.2[39m  [2mready in [0m[1m870[22m[2m[0m ms[22m
+[0m[0][0m   [32m[1mVITE[22m v6.4.2[39m  [2mready in [0m[1m634[22m[2m[0m ms[22m
 [0m[0][0m 
 [0m[0][0m   [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m5173[22m/[39m
 [0m[0][0m [2m  [32m➜[39m  [1mNetwork[22m[2m: use [22m[1m--host[22m[2m to expose[22m
 [0m[2][0m      Running DevCommand (`cargo  run --no-default-features --color always --`)
-[0m[2][0m         Info Watching /Users/alex/Projects/rev/apps/desktop for changes...
-[0m[2][0m [1m[92m    Finished[0m ]8;;https://doc.rust-lang.org/cargo/reference/profiles.html#default-profiles\`dev` profile [unoptimized + debuginfo]]8;;\ target(s) in 0.71s
+[0m[2][0m         Info Watching /Users/alex/Projects/revv/apps/desktop for changes...
+[0m[2][0m [1m[92m    Finished[0m ]8;;https://doc.rust-lang.org/cargo/reference/profiles.html#default-profiles\`dev` profile [unoptimized + debuginfo]]8;;\ target(s) in 0.51s
 [0m[2][0m [1m[92m     Running[0m `target/debug/rev-desktop`
-[0m[0][0m [36m7:55:14 PM [vite-plugin-svelte] src/lib/components/sidebar/AddRepoDialog.svelte:160:6 Avoid using autofocus
+[0m[0][0m [36m5:48:57 AM [vite-plugin-svelte] src/lib/components/sidebar/AddRepoDialog.svelte:163:6 Avoid using autofocus
 [0m[0][0m https://svelte.dev/e/a11y_autofocus[39m
-[0m[0][0m [36m7:55:14 PM [vite-plugin-svelte] src/lib/components/sidebar/AddRepoDialog.svelte:273:5 Avoid using autofocus
+[0m[0][0m [36m5:48:57 AM [vite-plugin-svelte] src/lib/components/sidebar/AddRepoDialog.svelte:276:5 Avoid using autofocus
 [0m[0][0m https://svelte.dev/e/a11y_autofocus[39m
-[0m[1][0m [0m[31m[walkthrough-cli] proc spawned, pid: [0m[33m54142[0m[0m
-[0m[1][0m [0m[31m[walkthrough-cli] stderr: [94m[1m~  https://opncd.ai/share/gz1hf5Ar[0m
-[0m[0][0m [2m7:55:52 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/lib/components/layout/TopBar.svelte, /src/app.css, /src/lib/components/layout/TopBar.svelte?svelte&type=style&lang.css[22m
-[0m[0][0m [36m7:55:52 PM [vite-plugin-svelte] src/lib/components/layout/TopBar.svelte:140:1 Unused CSS selector ".tabs-center"
-[0m[0][0m https://svelte.dev/e/css_unused_selector[39m
-[0m[0][0m [36m7:55:59 PM [vite-plugin-svelte] src/lib/components/layout/TopBar.svelte:138:1 Unused CSS selector ".tabs-center"
-[0m[0][0m https://svelte.dev/e/css_unused_selector[39m
-[0m[0][0m [2m7:55:59 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/lib/components/layout/TopBar.svelte?svelte&type=style&lang.css[22m
-[0m[0][0m [36m7:56:04 PM [vite-plugin-svelte] src/lib/components/layout/TopBar.svelte:138:1 Unused CSS selector ".tabs-center"
-[0m[0][0m https://svelte.dev/e/css_unused_selector[39m
-[0m[0][0m [2m7:56:04 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/lib/components/layout/TopBar.svelte?svelte&type=style&lang.css[22m
-[0m[0][0m [2m7:56:09 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/lib/components/layout/TopBar.svelte?svelte&type=style&lang.css[22m
-[0m[1][0m [0m[31m[walkthrough-cli] proc exited with code: [0m[33mnull[0m[0m
-[0m[0][0m [2m7:56:36 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/lib/components/layout/AppShell.svelte, /src/app.css, /src/lib/components/layout/AppShell.svelte?svelte&type=style&lang.css[22m
-[0m[0][0m [2m7:56:46 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/lib/components/layout/AppShell.svelte, /src/app.css[22m
-[0m[0][0m [2m7:56:55 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/lib/components/layout/AppShell.svelte, /src/app.css[22m
-[0m[0][0m [2m7:57:02 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/lib/components/layout/AppShell.svelte?svelte&type=style&lang.css[22m
-[0m[0][0m [2m7:57:20 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/0.js[22m
-[0m[0][0m [2m7:57:20 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/1.js[22m
-[0m[0][0m [2m7:57:20 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/2.js[22m
-[0m[0][0m [2m7:57:20 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/4.js[22m
-[0m[0][0m [2m7:57:21 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/app.js[22m
-[0m[0][0m [2m7:57:21 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/matchers.js[22m
-[0m[0][0m [2m7:57:21 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/server/internal.js[22m
-[0m[0][0m [2m7:57:21 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/root.js[22m
-[0m[0][0m [2m7:57:21 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/root.js[22m
-[0m[0][0m [2m7:57:35 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/0.js[22m
-[0m[0][0m [2m7:57:35 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/1.js[22m
-[0m[0][0m [2m7:57:35 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/2.js[22m
-[0m[0][0m [2m7:57:35 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/4.js[22m
-[0m[0][0m [2m7:57:35 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/app.js[22m
-[0m[0][0m [2m7:57:35 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/matchers.js[22m
-[0m[0][0m [2m7:57:35 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/server/internal.js[22m
-[0m[0][0m [2m7:57:35 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/root.js[22m
-[0m[0][0m [2m7:57:35 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/root.js[22m
-[0m[0][0m [2m7:57:49 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/0.js[22m
-[0m[0][0m [2m7:57:49 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/1.js[22m
-[0m[0][0m [2m7:57:49 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/2.js[22m
-[0m[0][0m [2m7:57:49 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/4.js[22m
-[0m[0][0m [2m7:57:49 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/app.js[22m
-[0m[0][0m [2m7:57:49 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/matchers.js[22m
-[0m[0][0m [2m7:57:49 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/server/internal.js[22m
-[0m[0][0m [2m7:57:49 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/root.js[22m
-[0m[0][0m [2m7:57:49 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/root.js[22m
-[0m[1][0m [2J[3J[H[2J[3J[H[rev-server] listening on http://localhost:45678
-[0m[1][0m [2J[3J[H[2J[3J[H[rev-server] listening on http://localhost:45678
-[0m[0][0m [2m7:58:33 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/0.js[22m
-[0m[0][0m [2m7:58:33 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/1.js[22m
-[0m[0][0m [2m7:58:33 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/2.js[22m
-[0m[0][0m [2m7:58:33 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/4.js[22m
-[0m[0][0m [2m7:58:33 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/app.js[22m
-[0m[0][0m [2m7:58:33 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/matchers.js[22m
-[0m[0][0m [2m7:58:33 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/server/internal.js[22m
-[0m[0][0m [2m7:58:33 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/root.js[22m
-[0m[0][0m [2m7:58:33 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/root.js[22m
-[0m[0][0m [2m7:58:47 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/0.js[22m
-[0m[0][0m [2m7:58:47 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/1.js[22m
-[0m[0][0m [2m7:58:47 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/2.js[22m
-[0m[0][0m [2m7:58:47 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/4.js[22m
-[0m[0][0m [2m7:58:47 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/app.js[22m
-[0m[0][0m [2m7:58:47 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/matchers.js[22m
-[0m[0][0m [2m7:58:47 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/server/internal.js[22m
-[0m[0][0m [2m7:58:47 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/root.js[22m
-[0m[0][0m [2m7:58:47 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/root.js[22m
-[0m[0][0m [2m7:58:52 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/lib/components/layout/AppShell.svelte?svelte&type=style&lang.css[22m
-[0m[0][0m [2m8:00:33 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/lib/components/layout/AppShell.svelte, /src/app.css[22m
-[0m[0][0m [2m8:00:41 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/lib/components/layout/AppShell.svelte?svelte&type=style&lang.css[22m
-[0m[0][0m [2m8:00:54 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/0.js[22m
-[0m[0][0m [2m8:00:54 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/1.js[22m
-[0m[0][0m [2m8:00:54 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/2.js[22m
-[0m[0][0m [2m8:00:54 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/4.js[22m
-[0m[0][0m [2m8:00:54 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/app.js[22m
-[0m[0][0m [2m8:00:54 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/matchers.js[22m
-[0m[0][0m [2m8:00:54 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/server/internal.js[22m
-[0m[0][0m [2m8:00:54 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/root.js[22m
-[0m[0][0m [2m8:00:54 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/root.js[22m
-[0m[0][0m [2m8:01:08 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/0.js[22m
-[0m[0][0m [2m8:01:08 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/1.js[22m
-[0m[0][0m [2m8:01:08 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/2.js[22m
-[0m[0][0m [2m8:01:08 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/4.js[22m
-[0m[0][0m [2m8:01:08 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/app.js[22m
-[0m[0][0m [2m8:01:08 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/matchers.js[22m
-[0m[0][0m [2m8:01:08 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/server/internal.js[22m
-[0m[0][0m [2m8:01:08 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/root.js[22m
-[0m[0][0m [2m8:01:08 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/root.js[22m
-[0m[1][0m [0m[31m[walkthrough-cli] proc spawned, pid: [0m[33m95329[0m[0m
-[0m[1][0m [0m[31m[walkthrough-cli] stderr: [94m[1m~  https://opncd.ai/share/cCPfSDRr[0m
-[0m[1][0m [0m[31m[walkthrough-cli] proc exited with code: [0m[33mnull[0m[0m
-[0m[1][0m [2J[3J[H[2J[3J[H[rev-server] listening on http://localhost:45678
-[0m[1][0m [2J[3J[H[2J[3J[H[rev-server] listening on http://localhost:45678
-[0m[1][0m [2J[3J[H[2J[3J[H[rev-server] listening on http://localhost:45678
-[0m[0][0m [2m8:08:05 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/0.js[22m
-[0m[0][0m [2m8:08:05 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/1.js[22m
-[0m[0][0m [2m8:08:05 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/2.js[22m
-[0m[0][0m [2m8:08:05 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/4.js[22m
-[0m[0][0m [2m8:08:05 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/app.js[22m
-[0m[0][0m [2m8:08:05 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/matchers.js[22m
-[0m[0][0m [2m8:08:05 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/server/internal.js[22m
-[0m[0][0m [2m8:08:05 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/root.js[22m
-[0m[0][0m [2m8:08:05 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/root.js[22m
-[0m[0][0m [2m8:09:40 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/lib/components/walkthrough/GuidedWalkthrough.svelte, /src/app.css[22m
-[0m[0][0m [2m8:09:50 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/lib/components/walkthrough/GuidedWalkthrough.svelte, /src/app.css[22m
-[0m[0][0m [2m8:09:56 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/lib/components/walkthrough/GuidedWalkthrough.svelte, /src/app.css[22m
-[0m[1][0m [0m[31m[walkthrough-cli] proc spawned, pid: [0m[33m15786[0m[0m
-[0m[0][0m [2m8:10:06 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/lib/components/walkthrough/GuidedWalkthrough.svelte, /src/app.css[22m
-[0m[1][0m [0m[31m[walkthrough-cli] stderr: [94m[1m~  https://opncd.ai/share/6P6IEQAj[0m
-[0m[0][0m [2m8:10:16 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/lib/components/walkthrough/GuidedWalkthrough.svelte, /src/app.css[22m
-[0m[0][0m [2m8:10:32 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/lib/components/walkthrough/GuidedWalkthrough.svelte?svelte&type=style&lang.css[22m
-[0m[0][0m [2m8:10:56 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/0.js[22m
-[0m[0][0m [2m8:10:56 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/1.js[22m
-[0m[0][0m [2m8:10:56 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/2.js[22m
-[0m[0][0m [2m8:10:56 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/4.js[22m
-[0m[0][0m [2m8:10:56 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/app.js[22m
-[0m[0][0m [2m8:10:56 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/matchers.js[22m
-[0m[0][0m [2m8:10:56 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/server/internal.js[22m
-[0m[0][0m [2m8:10:56 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/root.js[22m
-[0m[0][0m [2m8:10:56 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/root.js[22m
-[0m[1][0m [0m[31m[walkthrough-cli] proc spawned, pid: [0m[33m19574[0m[0m
-[0m[1][0m [0m[31m[walkthrough-cli] stderr: [94m[1m~  https://opncd.ai/share/0Xpg4AYm[0m
-[0m[1][0m [0m[31m[walkthrough-cli] proc exited with code: [0m[33mnull[0m[0m
-[0m[1][0m [0m[31m[walkthrough-cli] proc exited with code: [0m[33mnull[0m[0m
-[0m[1][0m [0m[31m[walkthrough-cli] proc spawned, pid: [0m[33m42918[0m[0m
-[0m[1][0m [0m[31m[walkthrough-cli] stderr: [94m[1m~  https://opncd.ai/share/kSWdSxet[0m
-[0m[1][0m [0m[31m[walkthrough-cli] proc exited with code: [0m[33mnull[0m[0m
-[0m[1][0m [2J[3J[H[2J[3J[H[rev-server] listening on http://localhost:45678
-[0m[1][0m [2J[3J[H[2J[3J[H[rev-server] listening on http://localhost:45678
-https://opncd.ai/share/cCPfSDRr
+[0m[1][0m [0m[31m[walkthrough-sse] Failed to persist issue: (FiberFailure) ReviewError: Failed to save walkthrough issue: SQLiteError: UNIQUE constraint failed: walkthrough_issues.id
+[0m[1][0m     at catch (/Users/alex/Projects/revv/apps/server/src/services/Walkthrough.ts:220:10)[0m
+[0m[1][0m [0m[31m[walkthrough-sse] Failed to persist issue: (FiberFailure) ReviewError: Failed to save walkthrough issue: SQLiteError: UNIQUE constraint failed: walkthrough_issues.id
+[0m[1][0m     at catch (/Users/alex/Projects/revv/apps/server/src/services/Walkthrough.ts:220:10)[0m
+[0m[1][0m [0m[31m[walkthrough-sse] Failed to persist issue: (FiberFailure) ReviewError: Failed to save walkthrough issue: SQLiteError: UNIQUE constraint failed: walkthrough_issues.id
+[0m[1][0m     at catch (/Users/alex/Projects/revv/apps/server/src/services/Walkthrough.ts:220:10)[0m
+[0m[1][0m [0m[31m[walkthrough-sse] Failed to persist issue: (FiberFailure) ReviewError: Failed to save walkthrough issue: SQLiteError: UNIQUE constraint failed: walkthrough_issues.id
+[0m[1][0m     at catch (/Users/alex/Projects/revv/apps/server/src/services/Walkthrough.ts:220:10)[0m
+[0m[1][0m [0m[31m[walkthrough-sse] Failed to persist issue: (FiberFailure) ReviewError: Failed to save walkthrough issue: SQLiteError: UNIQUE constraint failed: walkthrough_issues.id
+[0m[1][0m     at catch (/Users/alex/Projects/revv/apps/server/src/services/Walkthrough.ts:220:10)[0m
+[0m[1][0m [0m[31m[walkthrough-sse] Failed to persist issue: (FiberFailure) ReviewError: Failed to save walkthrough issue: SQLiteError: UNIQUE constraint failed: walkthrough_issues.id
+[0m[1][0m     at catch (/Users/alex/Projects/revv/apps/server/src/services/Walkthrough.ts:220:10)[0m
+[0m[1][0m [0m[31m[walkthrough-sse] Failed to persist issue: (FiberFailure) ReviewError: Failed to save walkthrough issue: SQLiteError: UNIQUE constraint failed: walkthrough_issues.id
+[0m[1][0m     at catch (/Users/alex/Projects/revv/apps/server/src/services/Walkthrough.ts:220:10)[0m
+[0m[1][0m [0m[31m[walkthrough-sse] Failed to persist issue: (FiberFailure) ReviewError: Failed to save walkthrough issue: SQLiteError: UNIQUE constraint failed: walkthrough_issues.id
+[0m[1][0m     at catch (/Users/alex/Projects/revv/apps/server/src/services/Walkthrough.ts:220:10)[0m
+[0m[1][0m [0m[31m[walkthrough-sse] Failed to persist issue: (FiberFailure) ReviewError: Failed to save walkthrough issue: SQLiteError: UNIQUE constraint failed: walkthrough_issues.id
+[0m[1][0m     at catch (/Users/alex/Projects/revv/apps/server/src/services/Walkthrough.ts:220:10)[0m
+[0m[1][0m [0m[31m[walkthrough-sse] Failed to persist issue: (FiberFailure) ReviewError: Failed to save walkthrough issue: SQLiteError: UNIQUE constraint failed: walkthrough_issues.id
+[0m[1][0m     at catch (/Users/alex/Projects/revv/apps/server/src/services/Walkthrough.ts:220:10)[0m
+[0m[1][0m [0m[31m[walkthrough-sse] Failed to persist issue: (FiberFailure) ReviewError: Failed to save walkthrough issue: SQLiteError: UNIQUE constraint failed: walkthrough_issues.id
+[0m[1][0m     at catch (/Users/alex/Projects/revv/apps/server/src/services/Walkthrough.ts:220:10)[0m
+[0m[1][0m [0m[31m[walkthrough-sse] Failed to persist issue: (FiberFailure) ReviewError: Failed to save walkthrough issue: SQLiteError: UNIQUE constraint failed: walkthrough_issues.id
+[0m[1][0m     at catch (/Users/alex/Projects/revv/apps/server/src/services/Walkthrough.ts:220:10)[0m
+[0m[0][0m [2m5:49:31 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/lib/components/layout/FloatingTabs.svelte?svelte&type=style&lang.css[22m
+[0m[0][0m [2m5:53:47 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/lib/components/layout/AppShell.svelte, /src/app.css[22m
+[0m[2][0m [0msleep 3 && cd apps/desktop && bunx tauri dev exited with code 0[0m
+[0m-->[0m [0mSending SIGTERM to other processes..[0m
+[0m[1][0m [0m[31merror[0m[2m:[0m script [1m"dev:server"[0m was terminated by signal SIGTERM [2m(Polite quit request)[0m[0m
+[0m[1][0m [0m[31merror[0m[2m:[0m script [1m"dev"[0m was terminated by signal SIGTERM [2m(Polite quit request)[0m[0m
+[0m[1][0m [0mbun run dev:server exited with code SIGTERM[0m
+[0m-->[0m [0mSending SIGTERM to other processes..[0m
+[0m[0][0m [0m[31merror[0m[2m:[0m script [1m"dev:web"[0m was terminated by signal SIGTERM [2m(Polite quit request)[0m[0m
+[0m[0][0m [0m[31merror[0m[2m:[0m script [1m"dev"[0m exited with code 143[0m
+[0m[0][0m [0mbun run dev:web exited with code SIGTERM[0m
+[0m[31merror[0m[2m:[0m script [1m"dev:desktop"[0m exited with code 1[0m

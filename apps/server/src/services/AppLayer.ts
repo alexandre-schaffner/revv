@@ -9,6 +9,7 @@ import { RepoCloneServiceLive } from './RepoClone';
 import { RepositoryServiceLive } from './Repository';
 import { ReviewServiceLive } from './Review';
 import { SettingsServiceLive } from './Settings';
+import { SyncServiceLive } from './Sync';
 import { TokenProviderLive } from './TokenProvider';
 import { WalkthroughServiceLive } from './Walkthrough';
 import { WebSocketHubLive } from './WebSocketHub';
@@ -30,8 +31,13 @@ const BaseLayers = Layer.mergeAll(
 	DiffCacheServiceLive,
 );
 
-// PollScheduler depends on all of the above, so provide BaseLayers to it
-const PollSchedulerWithDeps = PollSchedulerLive.pipe(Layer.provide(BaseLayers));
+// SyncService depends on GitHub, Review, PR, Repo, Token, WSHub — all in BaseLayers
+const SyncServiceWithDeps = SyncServiceLive.pipe(Layer.provide(BaseLayers));
+
+// PollScheduler depends on all of the above plus SyncService (for thread polling)
+const PollSchedulerWithDeps = PollSchedulerLive.pipe(
+	Layer.provide(Layer.mergeAll(BaseLayers, SyncServiceWithDeps)),
+);
 
 // AiService depends on DbService + SettingsService (both in BaseLayers)
 const AiServiceWithDeps = AiServiceLive.pipe(Layer.provide(BaseLayers));
@@ -42,6 +48,7 @@ const RepoCloneServiceWithDeps = RepoCloneServiceLive.pipe(Layer.provide(BaseLay
 // AppLayer merges everything together so consumers get all services
 export const AppLayer = Layer.mergeAll(
 	BaseLayers,
+	SyncServiceWithDeps,
 	PollSchedulerWithDeps,
 	AiServiceWithDeps,
 	RepoCloneServiceWithDeps,
