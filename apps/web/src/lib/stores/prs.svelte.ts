@@ -3,7 +3,7 @@ import { api } from '$lib/api/client';
 import { goto } from '$app/navigation';
 import { API_BASE_URL } from '@revv/shared';
 import { setBatchSummaries } from '$lib/stores/sync.svelte';
-import { toast } from '$lib/utils/toast';
+import { toast } from 'svelte-sonner';
 
 let pullRequests = $state<PullRequest[]>([]);
 let repositories = $state<Repository[]>([]);

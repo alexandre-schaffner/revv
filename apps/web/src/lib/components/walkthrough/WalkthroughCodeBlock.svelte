@@ -15,6 +15,12 @@
 		block.annotation ? renderMarkdown(block.annotation) : null
 	);
 
+	let instance: PierreFile<never> | null = null;
+
+	$effect(() => {
+		instance?.setThemeType(themeType);
+	});
+
 	function mountCodeBlock(el: HTMLDivElement) {
 		const options: FileOptions<never> = {
 			theme: { dark: 'pierre-dark', light: 'pierre-light' },
@@ -22,7 +28,7 @@
 			overflow: 'scroll',
 		};
 
-		const instance = new PierreFile<never>(options, workerManager);
+		instance = new PierreFile<never>(options, workerManager);
 		instance.render({
 			containerWrapper: el,
 			file: {
@@ -34,7 +40,8 @@
 
 		return {
 			destroy() {
-				instance.cleanUp();
+				instance?.cleanUp();
+				instance = null;
 			},
 		};
 	}

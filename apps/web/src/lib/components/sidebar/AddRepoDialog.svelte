@@ -7,7 +7,7 @@
 		getAvailableReposLoading,
 		fetchAvailableRepos,
 	} from '$lib/stores/prs.svelte';
-	import { toast } from '$lib/utils/toast';
+	import { toast } from 'svelte-sonner';
 
 	let { open = false, onClose }: { open?: boolean; onClose: () => void } = $props();
 

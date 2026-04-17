@@ -2,7 +2,7 @@ import type { WalkthroughBlock, RiskLevel, WalkthroughStreamEvent, WalkthroughIs
 import { API_BASE_URL } from '@revv/shared';
 import { authHeaders } from '$lib/utils/session-token';
 import { parseSSEBuffer } from '$lib/utils/sse-parser';
-import { toast } from '$lib/utils/toast';
+import { toast } from 'svelte-sonner';
 
 // ── Per-PR state entry ──────────────────────────────────────────────────────
 

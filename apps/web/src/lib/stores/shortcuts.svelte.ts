@@ -13,7 +13,7 @@ export function getPaletteOpen(): boolean {
 	return paletteOpen;
 }
 
-export function setPaletteOpen(v: boolean): void {
+function setPaletteOpen(v: boolean): void {
 	paletteOpen = v;
 }
 
@@ -25,7 +25,7 @@ export function setPaletteMode(mode: PaletteMode): void {
 	paletteMode = mode;
 }
 
-export function openPalette(mode: PaletteMode): void {
+function openPalette(mode: PaletteMode): void {
 	paletteMode = mode;
 	paletteOpen = true;
 }

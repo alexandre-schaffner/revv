@@ -56,7 +56,7 @@
 	const tabsStyle = $derived(
 		sidebarCollapsed
 			? ''
-			: `--sidebar-offset: ${Math.round(sidebarWidth / 2)}px`
+			: `--sidebar-offset: ${sidebarWidth / 2}px`
 	);
 
 	// Inline style for the grid — drives the dynamic sidebar column width

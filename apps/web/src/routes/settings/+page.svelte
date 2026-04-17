@@ -13,7 +13,7 @@
 	import { agentSupportsThinkingEffort, getDefaultModel } from '$lib/constants/models';
 	import { authHeaders } from '$lib/utils/session-token';
 	import SignInButton from '$lib/components/auth/SignInButton.svelte';
-	import { toast } from '$lib/utils/toast';
+	import { toast } from 'svelte-sonner';
 
 	import type { AiAgent, ThinkingEffort } from '@revv/shared';
 

@@ -84,6 +84,9 @@
 		position: relative;
 		display: flex;
 		align-items: center;
+		background: var(--color-glass-bg);
+		backdrop-filter: blur(16px) saturate(1.4);
+		-webkit-backdrop-filter: blur(16px) saturate(1.4);
 		border: 1px solid var(--color-glass-border);
 		border-radius: 9999px;
 		padding: 3px;
@@ -94,23 +97,10 @@
 		isolation: isolate;
 	}
 
-	.pill::before {
-		content: '';
-		position: absolute;
-		inset: -1px;
-		border-radius: 9999px;
-		background: var(--color-glass-bg);
-		backdrop-filter: blur(16px) saturate(1.4);
-		-webkit-backdrop-filter: blur(16px) saturate(1.4);
-		z-index: 0;
-		pointer-events: none;
-	}
-
 
 	.pill-segment {
 		position: relative;
 		z-index: 1;
-		transform: translateZ(0);
 		height: 36px;
 		padding: 0 20px;
 		border-radius: 9999px;

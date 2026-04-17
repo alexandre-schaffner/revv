@@ -2,7 +2,7 @@
 	import { getIssues } from '$lib/stores/walkthrough.svelte';
 	import { getThreads, getThreadMessages } from '$lib/stores/review.svelte';
 	import { api } from '$lib/api/client';
-	import { toast } from '$lib/utils/toast';
+	import { toast } from 'svelte-sonner';
 	import { AlertTriangle, MessageSquare, Check, X, MessageCircle } from '@lucide/svelte';
 
 	interface Props {

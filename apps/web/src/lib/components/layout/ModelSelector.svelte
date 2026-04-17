@@ -11,7 +11,7 @@
 	import { authHeaders } from '$lib/utils/session-token';
 	import type { AiAgent } from '@revv/shared';
 	import { SvelteMap } from 'svelte/reactivity';
-	import { toast } from '$lib/utils/toast';
+	import { toast } from 'svelte-sonner';
 
 	let open = $state(false);
 

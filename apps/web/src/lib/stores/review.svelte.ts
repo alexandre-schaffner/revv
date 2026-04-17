@@ -10,7 +10,7 @@ import type { ReviewFile } from '$lib/types/review';
 import { api } from '$lib/api/client';
 import { streamExplanation } from '$lib/api/explain';
 import { enterSidebarMode } from '$lib/stores/focus-mode.svelte';
-import { toast } from '$lib/utils/toast';
+import { toast } from 'svelte-sonner';
 
 // --- Review files (shared between sidebar tree + review page) ---
 let reviewFiles = $state<ReviewFile[]>([]);
@@ -61,7 +61,7 @@ export function getSessionLoading(): boolean {
 	return sessionLoading;
 }
 
-export function clearSession(): void {
+function clearSession(): void {
 	sessionId = null;
 	threads = [];
 	threadMessages = {};
