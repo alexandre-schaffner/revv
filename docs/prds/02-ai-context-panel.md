@@ -1,7 +1,9 @@
 # PRD-02: AI Context Panel
 
 ## Priority: P0 (First AI integration)
+
 ## Dependencies: PRD-01 (persisted sessions needed for context)
+
 ## Estimated: 3-4 days
 
 ---
@@ -10,13 +12,14 @@
 
 Wire the existing right panel to a Claude-powered explanation service. When a reviewer clicks "Explain" on a diff line (or walkthrough code block later), the right panel streams a contextual AI explanation — what changed, why it matters, what depends on it, and what could go wrong.
 
-This is Rev's first AI integration point. It establishes the Anthropic SDK wiring, API key management, and streaming SSE pattern that PRD-03 and PRD-05 will reuse.
+This is Revv's first AI integration point. It establishes the Anthropic SDK wiring, API key management, and streaming SSE pattern that PRD-03 and PRD-05 will reuse.
 
 ---
 
 ## Current State
 
 The frontend already has:
+
 - `RightPanel.svelte` — toggleable panel (320px, `Cmd+R` to toggle)
 - `ExplanationEntry` type in `review.svelte.ts` — `{ filePath, lineRange, codeSnippet, content, isStreaming }`
 - `startExplanation()` / `appendExplanationChunk()` / `finishExplanation()` — streaming state management in the store
@@ -24,6 +27,7 @@ The frontend already has:
 - Line click interaction in the diff viewer that can trigger an "Explain" action
 
 The server has:
+
 - `userSettings.aiProvider` (default: `"anthropic"`) and `userSettings.aiModel` (default: `"claude-sonnet-4-20250514"`) in the database
 - No actual AI SDK integration, no API key storage, no streaming endpoint
 
@@ -40,39 +44,54 @@ The Anthropic API key needs secure handling:
 3. **Runtime**: The `AiService` reads the API key from server-side config (never sent to frontend after initial setup)
 4. **Validation**: On key save, make a lightweight Claude API call (e.g., count tokens) to verify the key works
 
-For v1 simplicity: store the key in a separate file (`~/.rev/ai-key` or in the SQLite DB as an encrypted column). The `aiApiKeyRef` column tracks whether a key is configured (`"configured"` | `null`).
+For v1 simplicity: store the key in a separate file (`~/.revv/ai-key` or in the SQLite DB as an encrypted column). The `aiApiKeyRef` column tracks whether a key is configured (`"configured"` | `null`).
 
 ### Effect Service: AiService
 
 ```typescript
-class AiService extends Context.Tag("AiService")<AiService, {
-  explainCode: (params: ExplainParams) => Stream<string, AiError>;
-  isConfigured: () => Effect<boolean, never>;
-  validateKey: () => Effect<void, AiError>;
-}>() {}
+class AiService extends Context.Tag("AiService")<
+  AiService,
+  {
+    explainCode: (params: ExplainParams) => Stream<string, AiError>;
+    isConfigured: () => Effect<boolean, never>;
+    validateKey: () => Effect<void, AiError>;
+  }
+>() {}
 
 interface ExplainParams {
   filePath: string;
   lineRange: [number, number];
   codeSnippet: string;
-  fullFileContent: string;      // from fileContentCache
+  fullFileContent: string; // from fileContentCache
   prTitle: string;
   prBody: string | null;
-  diff: string;                 // relevant file's unified diff
+  diff: string; // relevant file's unified diff
 }
 
 // Tagged errors
-class AiRateLimitError extends Data.TaggedError("AiRateLimitError")<{ retryAfter: number }> {}
-class AiAuthError extends Data.TaggedError("AiAuthError")<{ message: string }> {}
-class AiGenerationError extends Data.TaggedError("AiGenerationError")<{ cause: unknown }> {}
-class AiNotConfiguredError extends Data.TaggedError("AiNotConfiguredError")<{}> {}
-type AiError = AiRateLimitError | AiAuthError | AiGenerationError | AiNotConfiguredError;
+class AiRateLimitError extends Data.TaggedError("AiRateLimitError")<{
+  retryAfter: number;
+}> {}
+class AiAuthError extends Data.TaggedError("AiAuthError")<{
+  message: string;
+}> {}
+class AiGenerationError extends Data.TaggedError("AiGenerationError")<{
+  cause: unknown;
+}> {}
+class AiNotConfiguredError extends Data.TaggedError(
+  "AiNotConfiguredError",
+)<{}> {}
+type AiError =
+  | AiRateLimitError
+  | AiAuthError
+  | AiGenerationError
+  | AiNotConfiguredError;
 ```
 
 ### Anthropic SDK Integration
 
 ```typescript
-import Anthropic from '@anthropic-ai/sdk';
+import Anthropic from "@anthropic-ai/sdk";
 
 // Inside AiServiceLive implementation
 const client = new Anthropic({ apiKey });
@@ -81,12 +100,15 @@ const stream = client.messages.stream({
   model: settings.aiModel,
   max_tokens: 1024,
   system: EXPLAIN_SYSTEM_PROMPT,
-  messages: [{ role: 'user', content: buildExplainPrompt(params) }],
+  messages: [{ role: "user", content: buildExplainPrompt(params) }],
 });
 
 // Yield text chunks as they arrive
 for await (const event of stream) {
-  if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+  if (
+    event.type === "content_block_delta" &&
+    event.delta.type === "text_delta"
+  ) {
     yield event.delta.text;
   }
 }
@@ -125,16 +147,17 @@ GET /api/explain?filePath=...&startLine=...&endLine=...&prId=...
 
 ### Elysia Routes
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/explain` | SSE stream — AI explanation for selected code |
-| `POST` | `/api/settings/ai-key` | Save Anthropic API key (validates first) |
-| `DELETE` | `/api/settings/ai-key` | Remove API key |
-| `GET` | `/api/settings/ai-status` | Check if AI is configured and key is valid |
+| Method   | Path                      | Description                                   |
+| -------- | ------------------------- | --------------------------------------------- |
+| `GET`    | `/api/explain`            | SSE stream — AI explanation for selected code |
+| `POST`   | `/api/settings/ai-key`    | Save Anthropic API key (validates first)      |
+| `DELETE` | `/api/settings/ai-key`    | Remove API key                                |
+| `GET`    | `/api/settings/ai-status` | Check if AI is configured and key is valid    |
 
 ### Frontend Changes
 
 **Right panel content (`RightPanel.svelte`):**
+
 - Show explanation history (list of past explanations in this session)
 - Active explanation streams in with a typing indicator
 - Each entry shows: file path, line range, explanation text
@@ -142,12 +165,14 @@ GET /api/explain?filePath=...&startLine=...&endLine=...&prId=...
 - "Not configured" state with link to settings when API key is missing
 
 **Diff viewer integration:**
+
 - The existing line click → "Explain" action now calls the SSE endpoint
 - `startExplanation()` opens the panel and creates a new entry
 - Chunks from SSE are appended via `appendExplanationChunk()`
 - On stream end, `finishExplanation()` marks it complete
 
 **Settings page:**
+
 - New section: "AI Configuration"
 - API key input (password field) with "Save" button
 - Validation indicator: checking → valid ✓ / invalid ✗
@@ -157,6 +182,7 @@ GET /api/explain?filePath=...&startLine=...&endLine=...&prId=...
 ### Markdown Rendering
 
 Explanation content is markdown. Render with:
+
 1. `marked` for markdown → HTML
 2. `DOMPurify` for sanitization
 3. Svelte `{@html}` for display
@@ -225,13 +251,13 @@ Explanation content is markdown. Render with:
 
 ### Error States
 
-| State | UI |
-|---|---|
+| State                 | UI                                                                                       |
+| --------------------- | ---------------------------------------------------------------------------------------- |
 | No API key configured | Panel shows "Set up your Anthropic API key in Settings to get AI explanations" with link |
-| Invalid API key | Toast error + settings shows "Key is invalid" |
-| Rate limited | Panel shows "Rate limited — retry in Xs" with countdown |
-| Generation failure | Panel shows error message with "Retry" button |
-| Network error | Panel shows "Connection error" with retry |
+| Invalid API key       | Toast error + settings shows "Key is invalid"                                            |
+| Rate limited          | Panel shows "Rate limited — retry in Xs" with countdown                                  |
+| Generation failure    | Panel shows error message with "Retry" button                                            |
+| Network error         | Panel shows "Connection error" with retry                                                |
 
 ---
 

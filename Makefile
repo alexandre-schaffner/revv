@@ -1,5 +1,5 @@
 # ──────────────────────────────────────────────────────────────
-# Rev — Build & Development Commands
+# Revv — Build & Development Commands
 # ──────────────────────────────────────────────────────────────
 
 .PHONY: install dev build dist clean typecheck help
@@ -47,7 +47,7 @@ build-server: ## Build the API server only
 # ── Distribution ──────────────────────────────────────────────
 
 dist: ## Build platform installer (.dmg on macOS, .msi on Windows, .deb on Linux)
-	@printf "\n\033[1m\033[36m▸ Building Rev distribution package...\033[0m\n\n"
+	@printf "\n\033[1m\033[36m▸ Building Revv distribution package...\033[0m\n\n"
 	@printf "  Step 1/3: Building shared package\n"
 	cd packages/shared && bun run typecheck
 	@printf "  Step 2/3: Building web frontend + API server\n"

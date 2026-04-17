@@ -1,7 +1,9 @@
 # PRD-05: Post-Review Agent
 
 ## Priority: P1 (AI automation)
+
 ## Dependencies: PRD-01 (persisted threads), PRD-02 (AiService), PRD-03 (walkthrough context), PRD-04 (synced threads with GitHub IDs)
+
 ## Estimated: 5-6 days
 
 ---
@@ -15,6 +17,7 @@ After a reviewer finishes commenting, they trigger an AI agent that collects all
 ## Current State
 
 By the time we reach this PRD, we'll have:
+
 - Persisted threads with messages in SQLite (PRD-01)
 - `AiService` with Claude integration and SSE streaming (PRD-02)
 - Walkthrough summaries cached per PR (PRD-03)
@@ -67,24 +70,44 @@ CREATE TABLE proposed_changes (
 ### Effect Service: AgentService
 
 ```typescript
-class AgentService extends Context.Tag("AgentService")<AgentService, {
-  proposeChanges: (sessionId: string) => Stream<AgentProgressEvent, AgentError>;
-  getAgentRun: (runId: string) => Effect<AgentRun & { proposals: ProposedChange[] }, AgentError>;
-  listAgentRuns: (sessionId: string) => Effect<AgentRun[], AgentError>;
-  updateProposalStatus: (changeId: string, status: ProposalStatus, editedContent?: string) => Effect<void, AgentError>;
-  pushAccepted: (runId: string, method: PushMethod) => Effect<PushResult, PushError>;
-}>() {}
+class AgentService extends Context.Tag("AgentService")<
+  AgentService,
+  {
+    proposeChanges: (
+      sessionId: string,
+    ) => Stream<AgentProgressEvent, AgentError>;
+    getAgentRun: (
+      runId: string,
+    ) => Effect<AgentRun & { proposals: ProposedChange[] }, AgentError>;
+    listAgentRuns: (sessionId: string) => Effect<AgentRun[], AgentError>;
+    updateProposalStatus: (
+      changeId: string,
+      status: ProposalStatus,
+      editedContent?: string,
+    ) => Effect<void, AgentError>;
+    pushAccepted: (
+      runId: string,
+      method: PushMethod,
+    ) => Effect<PushResult, PushError>;
+  }
+>() {}
 
-type PushMethod = 'github_suggestions' | 'fixup_commit';
+type PushMethod = "github_suggestions" | "fixup_commit";
 
 type AgentProgressEvent =
-  | { type: 'collecting'; data: { threadCount: number; messageCount: number } }
-  | { type: 'analyzing'; data: { message: string } }
-  | { type: 'generating'; data: { current: number; total: number } }
-  | { type: 'proposal'; data: ProposedChange }
-  | { type: 'summary'; data: { summary: string } }
-  | { type: 'done'; data: { totalChanges: number; tokenUsage: { input: number; output: number } } }
-  | { type: 'error'; data: { message: string } };
+  | { type: "collecting"; data: { threadCount: number; messageCount: number } }
+  | { type: "analyzing"; data: { message: string } }
+  | { type: "generating"; data: { current: number; total: number } }
+  | { type: "proposal"; data: ProposedChange }
+  | { type: "summary"; data: { summary: string } }
+  | {
+      type: "done";
+      data: {
+        totalChanges: number;
+        tokenUsage: { input: number; output: number };
+      };
+    }
+  | { type: "error"; data: { message: string } };
 
 interface PushResult {
   method: PushMethod;
@@ -131,6 +154,7 @@ GET /api/reviews/:id/agent/propose
 ```
 
 Streams `AgentProgressEvent` objects as SSE events. The agent works through phases:
+
 1. **Collecting** — gathers threads, messages, file contents
 2. **Analyzing** — Claude processes the review context
 3. **Generating** — proposals stream out one by one
@@ -138,18 +162,20 @@ Streams `AgentProgressEvent` objects as SSE events. The agent works through phas
 
 ### Elysia Routes
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/reviews/:id/agent/propose` | Stream change proposals (SSE) |
-| `GET` | `/api/reviews/:id/agent/runs` | List past agent runs for this session |
-| `GET` | `/api/agent-runs/:id` | Get a specific run with all its proposals |
-| `PATCH` | `/api/proposed-changes/:id` | Update proposal status (accept/reject/edit) |
-| `POST` | `/api/agent-runs/:id/push` | Push accepted changes to GitHub |
+| Method  | Path                             | Description                                 |
+| ------- | -------------------------------- | ------------------------------------------- |
+| `GET`   | `/api/reviews/:id/agent/propose` | Stream change proposals (SSE)               |
+| `GET`   | `/api/reviews/:id/agent/runs`    | List past agent runs for this session       |
+| `GET`   | `/api/agent-runs/:id`            | Get a specific run with all its proposals   |
+| `PATCH` | `/api/proposed-changes/:id`      | Update proposal status (accept/reject/edit) |
+| `POST`  | `/api/agent-runs/:id/push`       | Push accepted changes to GitHub             |
 
 ### Push to GitHub
 
 **Option A: GitHub Suggestions**
+
 - For each accepted proposal, post a GitHub review comment with a suggestion block:
+
   ````markdown
   This addresses the concern about [thread summary].
 
@@ -157,24 +183,26 @@ Streams `AgentProgressEvent` objects as SSE events. The agent works through phas
   proposed code here
   ```
   ````
+
 - Suggestion blocks render as one-click-apply on GitHub
 - Requires the thread's `external_thread_id` for correct placement
 
 **Option B: Fixup Commit**
+
 - Collect all accepted proposals, apply them to the PR branch
-- Create a single commit: `fixup: apply review suggestions from Rev`
+- Create a single commit: `fixup: apply review suggestions from Revv`
 - Uses GitHub Contents API (for single files) or Git Data API (for multi-file commits)
 - Update `proposed_changes.push_status` and `external_id` (commit SHA)
 
 ### Frontend Components
 
-| Component | Description |
-|-----------|-------------|
-| `AgentTrigger.svelte` | Floating button at bottom-right: "Propose Changes (N threads)" |
-| `AgentPanel.svelte` | Full-height slide-out panel for agent output |
-| `AgentProgress.svelte` | Phase checklist: collecting → analyzing → generating → done |
-| `ProposalCard.svelte` | Single proposal: related threads, rationale, diff, accept/reject/edit |
-| `PushControls.svelte` | After review: choose push method, execute, show results |
+| Component              | Description                                                           |
+| ---------------------- | --------------------------------------------------------------------- |
+| `AgentTrigger.svelte`  | Floating button at bottom-right: "Propose Changes (N threads)"        |
+| `AgentPanel.svelte`    | Full-height slide-out panel for agent output                          |
+| `AgentProgress.svelte` | Phase checklist: collecting → analyzing → generating → done           |
+| `ProposalCard.svelte`  | Single proposal: related threads, rationale, diff, accept/reject/edit |
+| `PushControls.svelte`  | After review: choose push method, execute, show results               |
 
 ### Agent Store State
 
@@ -182,13 +210,17 @@ Add to `review.svelte.ts` or create `agent.svelte.ts`:
 
 ```typescript
 let agentRunId = $state<string | null>(null);
-let agentStatus = $state<AgentRun['status']>('pending');
+let agentStatus = $state<AgentRun["status"]>("pending");
 let proposals = $state<ProposedChange[]>([]);
 let agentSummary = $state<string | null>(null);
 let isAgentStreaming = $state(false);
 
-export function getProposals(): ProposedChange[] { return proposals; }
-export function getAgentStatus(): string { return agentStatus; }
+export function getProposals(): ProposedChange[] {
+  return proposals;
+}
+export function getAgentStatus(): string {
+  return agentStatus;
+}
 // ... etc
 ```
 
@@ -277,6 +309,7 @@ After generation completes, the panel shows a scrollable document:
 ### Edit Flow
 
 Clicking "Edit" on a proposal:
+
 1. The proposed code becomes editable (textarea or CodeMirror)
 2. The diff updates in real-time as the user types
 3. "Save Edit" confirms → status becomes `accepted` with `edited_content`
@@ -285,6 +318,7 @@ Clicking "Edit" on a proposal:
 ### Push Status
 
 After pushing, each proposal card shows:
+
 - ✅ `Pushed as GitHub suggestion` — with link to the comment
 - ✅ `Pushed in commit abc123` — with link to the commit
 - ❌ `Push failed: [reason]` — with retry button

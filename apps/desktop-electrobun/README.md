@@ -1,6 +1,6 @@
-# @rev/desktop-electrobun
+# @revv/desktop-electrobun
 
-Electrobun desktop shell for Rev. Wraps `@rev/app` in a native window with system webview.
+Electrobun desktop shell for Revv. Wraps `@revv/app` in a native window with system webview.
 
 ## Development
 

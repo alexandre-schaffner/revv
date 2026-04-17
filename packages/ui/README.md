@@ -1,4 +1,4 @@
-# @rev/ui
+# @revv/ui
 
 Shared React component library built with [shadcn/ui](https://ui.shadcn.com).
 
@@ -12,7 +12,7 @@ bunx shadcn@latest add button
 ## Usage
 
 ```tsx
-import { Button } from "@rev/ui/components/button";
-import { cn } from "@rev/ui/lib/utils";
-import "@rev/ui/styles/globals.css";
+import { Button } from "@revv/ui/components/button";
+import { cn } from "@revv/ui/lib/utils";
+import "@revv/ui/styles/globals.css";
 ```

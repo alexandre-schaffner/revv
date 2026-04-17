@@ -1,37 +1,44 @@
-import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { rm } from 'node:fs/promises';
-import { existsSync, mkdirSync } from 'node:fs';
-import { Context, Effect, Layer } from 'effect';
-import { eq } from 'drizzle-orm';
-import type { Repository, CloneStatus } from '@revv/shared';
-import { CloneError, CloneNotReadyError } from '../domain/errors';
-import { CLONE_TIMEOUT_MS } from '../constants';
-import { repositories } from '../db/schema/index';
-import { DbService } from './Db';
-import { WebSocketHub } from './WebSocketHub';
+import { existsSync, mkdirSync } from "node:fs";
+import { rm } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import type { CloneStatus, Repository } from "@revv/shared";
+import { eq } from "drizzle-orm";
+import { Context, Effect, Layer } from "effect";
+import { CLONE_TIMEOUT_MS } from "../constants";
+import { repositories } from "../db/schema/index";
+import { CloneError, CloneNotReadyError } from "../domain/errors";
+import { DbService } from "./Db";
+import { WebSocketHub } from "./WebSocketHub";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const CLONE_BASE_DIR = join(homedir(), '.rev', 'repos');
+const CLONE_BASE_DIR = join(homedir(), ".revv", "repos");
 
 // ── Service definition ────────────────────────────────────────────────────────
 
-export class RepoCloneService extends Context.Tag('RepoCloneService')<
+export class RepoCloneService extends Context.Tag("RepoCloneService")<
 	RepoCloneService,
 	{
 		/** Start a shallow clone for a repo. Updates DB status. Fire-and-forget via Effect.fork. */
-		readonly cloneRepo: (repo: Repository, githubToken: string) => Effect.Effect<void, CloneError>;
+		readonly cloneRepo: (
+			repo: Repository,
+			githubToken: string,
+		) => Effect.Effect<void, CloneError>;
 		/** Fetch the PR ref and create/update a git worktree. Returns worktree path. */
 		readonly ensurePrWorktree: (
 			repoId: string,
 			prNumber: number,
-			githubToken: string
+			githubToken: string,
 		) => Effect.Effect<string, CloneError | CloneNotReadyError>;
 		/** Get the clone status for a repo. */
 		readonly getCloneStatus: (
-			repoId: string
-		) => Effect.Effect<{ status: CloneStatus; path: string | null; error: string | null }>;
+			repoId: string,
+		) => Effect.Effect<{
+			status: CloneStatus;
+			path: string | null;
+			error: string | null;
+		}>;
 		/** Delete clone directory and reset DB fields. */
 		readonly deleteClone: (repoId: string) => Effect.Effect<void, CloneError>;
 	}
@@ -40,18 +47,22 @@ export class RepoCloneService extends Context.Tag('RepoCloneService')<
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /** Spawn a git command and wait for it, throwing if it exits non-zero or times out. */
-async function runGit(args: string[], cwd?: string, timeoutMs = 120_000): Promise<void> {
-	const proc = Bun.spawn(['git', ...args], {
+async function runGit(
+	args: string[],
+	cwd?: string,
+	timeoutMs = 120_000,
+): Promise<void> {
+	const proc = Bun.spawn(["git", ...args], {
 		...(cwd !== undefined ? { cwd } : {}),
-		stdout: 'pipe',
-		stderr: 'pipe',
+		stdout: "pipe",
+		stderr: "pipe",
 	});
 
 	const timeoutPromise = new Promise<never>((_, reject) =>
 		setTimeout(() => {
 			proc.kill();
 			reject(new Error(`git ${args[0]} timed out after ${timeoutMs / 1000}s`));
-		}, timeoutMs)
+		}, timeoutMs),
 	);
 
 	await Promise.race([proc.exited, timeoutPromise]);
@@ -65,18 +76,18 @@ async function runGit(args: string[], cwd?: string, timeoutMs = 120_000): Promis
 /** Race a git clone against a timeout, killing the process if it exceeds the limit. */
 async function runGitCloneWithTimeout(
 	args: string[],
-	timeoutMs: number
+	timeoutMs: number,
 ): Promise<void> {
-	const proc = Bun.spawn(['git', ...args], {
-		stdout: 'pipe',
-		stderr: 'pipe',
+	const proc = Bun.spawn(["git", ...args], {
+		stdout: "pipe",
+		stderr: "pipe",
 	});
 
 	const timeoutPromise = new Promise<never>((_, reject) =>
 		setTimeout(() => {
 			proc.kill();
 			reject(new Error(`git clone timed out after ${timeoutMs / 1000}s`));
-		}, timeoutMs)
+		}, timeoutMs),
 	);
 
 	await Promise.race([proc.exited, timeoutPromise]);
@@ -106,8 +117,11 @@ export const RepoCloneServiceLive = Layer.effect(
 
 		// Startup recovery: reset any repos that were mid-clone when server restarted
 		db.update(repositories)
-			.set({ cloneStatus: 'pending', cloneError: 'Server restarted during clone' })
-			.where(eq(repositories.cloneStatus, 'cloning'))
+			.set({
+				cloneStatus: "pending",
+				cloneError: "Server restarted during clone",
+			})
+			.where(eq(repositories.cloneStatus, "cloning"))
 			.run();
 
 		return {
@@ -118,7 +132,11 @@ export const RepoCloneServiceLive = Layer.effect(
 
 					// Mark as cloning in DB
 					db.update(repositories)
-						.set({ cloneStatus: 'cloning', clonePath: cloneDir, cloneError: null })
+						.set({
+							cloneStatus: "cloning",
+							clonePath: cloneDir,
+							cloneError: null,
+						})
 						.where(eq(repositories.id, repo.id))
 						.run();
 
@@ -134,14 +152,25 @@ export const RepoCloneServiceLive = Layer.effect(
 							}
 
 							await runGitCloneWithTimeout(
-								['clone', '--depth=1', '--no-single-branch', cloneUrl, cloneDir],
-								CLONE_TIMEOUT_MS
+								[
+									"clone",
+									"--depth=1",
+									"--no-single-branch",
+									cloneUrl,
+									cloneDir,
+								],
+								CLONE_TIMEOUT_MS,
 							);
 
 							// Strip the auth token from the remote URL (security hygiene)
 							await runGit(
-								['remote', 'set-url', 'origin', `https://github.com/${repo.fullName}.git`],
-								cloneDir
+								[
+									"remote",
+									"set-url",
+									"origin",
+									`https://github.com/${repo.fullName}.git`,
+								],
+								cloneDir,
 							);
 						},
 						catch: (err) =>
@@ -155,13 +184,13 @@ export const RepoCloneServiceLive = Layer.effect(
 								Effect.gen(function* () {
 									// Mark as ready in DB then broadcast success
 									db.update(repositories)
-										.set({ cloneStatus: 'ready' })
+										.set({ cloneStatus: "ready" })
 										.where(eq(repositories.id, repo.id))
 										.run();
 
 									yield* wsHub.broadcast({
-										type: 'repos:clone-status',
-										data: { repoId: repo.id, status: 'ready' },
+										type: "repos:clone-status",
+										data: { repoId: repo.id, status: "ready" },
 									});
 								}),
 							onFailure: (err) =>
@@ -177,24 +206,32 @@ export const RepoCloneServiceLive = Layer.effect(
 									// Record the failure in DB then broadcast error
 									const errorMessage = err.message;
 									db.update(repositories)
-										.set({ cloneStatus: 'error', cloneError: errorMessage })
+										.set({ cloneStatus: "error", cloneError: errorMessage })
 										.where(eq(repositories.id, repo.id))
 										.run();
 
 									yield* wsHub.broadcast({
-										type: 'repos:clone-status',
-										data: { repoId: repo.id, status: 'error', error: errorMessage },
+										type: "repos:clone-status",
+										data: {
+											repoId: repo.id,
+											status: "error",
+											error: errorMessage,
+										},
 									});
 
 									return yield* Effect.fail(err);
 								}),
-						})
+						}),
 					);
 
 					return cloneResult;
 				}),
 
-			ensurePrWorktree: (repoId: string, prNumber: number, githubToken: string) =>
+			ensurePrWorktree: (
+				repoId: string,
+				prNumber: number,
+				githubToken: string,
+			) =>
 				Effect.tryPromise({
 					try: async () => {
 						const row = db
@@ -203,7 +240,7 @@ export const RepoCloneServiceLive = Layer.effect(
 							.where(eq(repositories.id, repoId))
 							.get();
 
-						if (!row || row.cloneStatus !== 'ready') {
+						if (!row || row.cloneStatus !== "ready") {
 							throw new CloneNotReadyError({ repoId });
 						}
 
@@ -212,38 +249,53 @@ export const RepoCloneServiceLive = Layer.effect(
 							throw new CloneNotReadyError({ repoId });
 						}
 
-					const worktreePath = join(clonePath, 'worktrees', `pr-${prNumber}`);
+						const worktreePath = join(clonePath, "worktrees", `pr-${prNumber}`);
 
-					// Temporarily set authenticated remote URL for fetch
-					const authedUrl = `https://x-access-token:${githubToken}@github.com/${row.fullName}.git`;
-					const cleanUrl = `https://github.com/${row.fullName}.git`;
+						// Temporarily set authenticated remote URL for fetch
+						const authedUrl = `https://x-access-token:${githubToken}@github.com/${row.fullName}.git`;
+						const cleanUrl = `https://github.com/${row.fullName}.git`;
 
-					try {
-						await runGit(['remote', 'set-url', 'origin', authedUrl], clonePath);
-
-						if (existsSync(worktreePath)) {
-							// Worktree exists — fetch latest and reset inside it
+						try {
 							await runGit(
-								['fetch', 'origin', `refs/pull/${prNumber}/head`],
-								worktreePath,
-							);
-							await runGit(['reset', '--hard', 'FETCH_HEAD'], worktreePath);
-						} else {
-							// Fresh setup — fetch ref into local branch, then create worktree
-							await runGit(
-								['fetch', 'origin', `+refs/pull/${prNumber}/head:refs/heads/pr-${prNumber}`],
+								["remote", "set-url", "origin", authedUrl],
 								clonePath,
 							);
+
+							if (existsSync(worktreePath)) {
+								// Worktree exists — fetch latest and reset inside it
+								await runGit(
+									["fetch", "origin", `refs/pull/${prNumber}/head`],
+									worktreePath,
+								);
+								await runGit(["reset", "--hard", "FETCH_HEAD"], worktreePath);
+							} else {
+								// Fresh setup — fetch ref into local branch, then create worktree
+								await runGit(
+									[
+										"fetch",
+										"origin",
+										`+refs/pull/${prNumber}/head:refs/heads/pr-${prNumber}`,
+									],
+									clonePath,
+								);
+								await runGit(
+									[
+										"worktree",
+										"add",
+										join("worktrees", `pr-${prNumber}`),
+										`pr-${prNumber}`,
+									],
+									clonePath,
+								);
+							}
+						} finally {
 							await runGit(
-								['worktree', 'add', join('worktrees', `pr-${prNumber}`), `pr-${prNumber}`],
+								["remote", "set-url", "origin", cleanUrl],
 								clonePath,
 							);
 						}
-					} finally {
-						await runGit(['remote', 'set-url', 'origin', cleanUrl], clonePath);
-					}
 
-					return worktreePath;
+						return worktreePath;
 					},
 					catch: (err) => {
 						if (err instanceof CloneNotReadyError) return err;
@@ -264,7 +316,7 @@ export const RepoCloneServiceLive = Layer.effect(
 						.get();
 
 					return {
-						status: (row?.cloneStatus ?? 'pending') as CloneStatus,
+						status: (row?.cloneStatus ?? "pending") as CloneStatus,
 						path: row?.clonePath ?? null,
 						error: row?.cloneError ?? null,
 					};
@@ -290,7 +342,11 @@ export const RepoCloneServiceLive = Layer.effect(
 
 						// Reset clone state in DB regardless of whether a dir existed
 						db.update(repositories)
-							.set({ cloneStatus: 'pending', clonePath: null, cloneError: null })
+							.set({
+								cloneStatus: "pending",
+								clonePath: null,
+								cloneError: null,
+							})
 							.where(eq(repositories.id, repoId))
 							.run();
 					},
@@ -303,5 +359,5 @@ export const RepoCloneServiceLive = Layer.effect(
 					},
 				}),
 		};
-	})
+	}),
 );

@@ -1,6 +1,6 @@
 # ──────────────────────────────────────────────────────────────
-# Rev — Developer Environment Installer (Windows)
-# Sets up everything needed to develop and build Rev from source.
+# Revv — Developer Environment Installer (Windows)
+# Sets up everything needed to develop and build Revv from source.
 # Usage:  .\install.ps1          (interactive, prompts before installs)
 #         .\install.ps1 -Yes     (non-interactive, auto-approve)
 # ──────────────────────────────────────────────────────────────
@@ -47,7 +47,7 @@ if ($Help) {
 
 Write-Host ""
 Write-Host "  +-------------------------------------+" -ForegroundColor White
-Write-Host "  |       Rev - Development Setup       |" -ForegroundColor White
+Write-Host "  |       Revv - Development Setup       |" -ForegroundColor White
 Write-Host "  |       AI-Powered Code Review        |" -ForegroundColor White
 Write-Host "  +-------------------------------------+" -ForegroundColor White
 Write-Host ""
@@ -123,7 +123,7 @@ if (Test-Command "bun") {
         $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "User") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "Machine")
         Write-Success "Bun installed"
     } else {
-        Write-Fail "Bun is required to build Rev"
+        Write-Fail "Bun is required to build Revv"
     }
 }
 
@@ -179,13 +179,13 @@ foreach ($dir in @("apps\web", "apps\server", "apps\desktop", "packages\shared")
 
 Write-Step "Building shared package"
 
-Write-Info "Type-checking @rev/shared..."
+Write-Info "Type-checking @revv/shared..."
 Set-Location "$ProjectRoot\packages\shared"
 try {
     bun run typecheck 2>$null
-    Write-Success "@rev/shared types verified"
+    Write-Success "@revv/shared types verified"
 } catch {
-    Write-Warn "@rev/shared typecheck had issues (may be fine for dev)"
+    Write-Warn "@revv/shared typecheck had issues (may be fine for dev)"
 }
 Set-Location $ProjectRoot
 

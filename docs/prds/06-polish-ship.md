@@ -1,20 +1,23 @@
 # PRD-06: Polish, Performance & Ship
 
 ## Priority: P2 (Ship quality)
+
 ## Dependencies: PRD-01 through PRD-05
+
 ## Estimated: 6-8 days
 
 ---
 
 ## Objective
 
-Make Rev production-grade: complete the keyboard-first experience, expand the command palette, optimize performance for large PRs, add offline support, build an onboarding flow, wire up system tray with notifications, and sign/notarize for macOS distribution.
+Make Revv production-grade: complete the keyboard-first experience, expand the command palette, optimize performance for large PRs, add offline support, build an onboarding flow, wire up system tray with notifications, and sign/notarize for macOS distribution.
 
 ---
 
 ## Current State
 
 Several polish items are already partially done:
+
 - **Command palette**: `Cmd+K` works with fuzzy search; theme, sidebar, and panel commands registered
 - **Keyboard shortcuts**: `Cmd+B` (sidebar), `Cmd+R` (panel), `Cmd+K` (palette) work
 - **Theme system**: light/dark/system with independent diff theme — fully functional
@@ -28,51 +31,51 @@ Several polish items are already partially done:
 
 ### Global
 
-| Shortcut | Action |
-|----------|--------|
-| `Cmd+K` | Command palette *(already works)* |
-| `Cmd+,` | Open settings |
-| `Cmd+Shift+S` | Sync PRs |
-| `Cmd+B` | Toggle sidebar *(already works)* |
-| `Cmd+R` | Toggle right panel *(already works)* |
-| `Escape` | Close palette / cancel / collapse |
-| `?` | Show keyboard shortcut cheat sheet |
+| Shortcut      | Action                               |
+| ------------- | ------------------------------------ |
+| `Cmd+K`       | Command palette _(already works)_    |
+| `Cmd+,`       | Open settings                        |
+| `Cmd+Shift+S` | Sync PRs                             |
+| `Cmd+B`       | Toggle sidebar _(already works)_     |
+| `Cmd+R`       | Toggle right panel _(already works)_ |
+| `Escape`      | Close palette / cancel / collapse    |
+| `?`           | Show keyboard shortcut cheat sheet   |
 
 ### Sidebar
 
-| Shortcut | Action |
-|----------|--------|
+| Shortcut  | Action                   |
+| --------- | ------------------------ |
 | `j` / `k` | Move selection down / up |
-| `Enter` | Open selected PR |
-| `/` | Focus search bar |
-| `Escape` | Clear search, unfocus |
+| `Enter`   | Open selected PR         |
+| `/`       | Focus search bar         |
+| `Escape`  | Clear search, unfocus    |
 
 ### Review — Diff Tab
 
-| Shortcut | Action |
-|----------|--------|
-| `1` / `2` | Switch to Walkthrough / Diff tab |
-| `n` / `p` | Next / previous file |
-| `j` / `k` | Next / previous hunk (within file) |
-| `c` | Comment on focused line |
-| `e` | Explain focused line |
-| `a` | Accept focused hunk |
-| `x` | Reject focused hunk |
-| `Cmd+Enter` | Submit comment |
-| `Escape` | Close comment / collapse thread |
+| Shortcut    | Action                             |
+| ----------- | ---------------------------------- |
+| `1` / `2`   | Switch to Walkthrough / Diff tab   |
+| `n` / `p`   | Next / previous file               |
+| `j` / `k`   | Next / previous hunk (within file) |
+| `c`         | Comment on focused line            |
+| `e`         | Explain focused line               |
+| `a`         | Accept focused hunk                |
+| `x`         | Reject focused hunk                |
+| `Cmd+Enter` | Submit comment                     |
+| `Escape`    | Close comment / collapse thread    |
 
 ### Review — Walkthrough Tab
 
-| Shortcut | Action |
-|----------|--------|
-| `←` / `→` | Previous / next step |
-| `1` / `2` | Switch tabs |
-| `c` | Comment on focused code block |
+| Shortcut  | Action                        |
+| --------- | ----------------------------- |
+| `←` / `→` | Previous / next step          |
+| `1` / `2` | Switch tabs                   |
+| `c`       | Comment on focused code block |
 
 ### Review — Agent
 
-| Shortcut | Action |
-|----------|--------|
+| Shortcut      | Action                    |
+| ------------- | ------------------------- |
 | `Cmd+Shift+P` | Trigger post-review agent |
 
 ### Implementation
@@ -91,13 +94,13 @@ The palette already works with fuzzy search. Expand it:
 
 ### Dynamic Command Sources
 
-| Category | Source | When Available |
-|----------|--------|----------------|
-| PRs | All PRs from `prs.svelte.ts` store | Always |
-| Files | Changed files in current PR | When in review view |
-| Actions | Global actions (sync, settings, theme) | Always |
-| Review Actions | Comment, explain, accept/reject, agent | When in review view |
-| Navigation | Jump to walkthrough step N | When walkthrough is loaded |
+| Category       | Source                                 | When Available             |
+| -------------- | -------------------------------------- | -------------------------- |
+| PRs            | All PRs from `prs.svelte.ts` store     | Always                     |
+| Files          | Changed files in current PR            | When in review view        |
+| Actions        | Global actions (sync, settings, theme) | Always                     |
+| Review Actions | Comment, explain, accept/reject, agent | When in review view        |
+| Navigation     | Jump to walkthrough step N             | When walkthrough is loaded |
 
 ### Registration Pattern
 
@@ -107,10 +110,10 @@ Each view registers its commands on mount and deregisters on unmount:
 // In a review component
 onMount(() => {
   const unregister = registerCommand({
-    id: 'review:next-file',
-    label: 'Next File',
-    category: 'Review',
-    shortcut: 'N',
+    id: "review:next-file",
+    label: "Next File",
+    category: "Review",
+    shortcut: "N",
     action: () => goToNextFile(),
   });
   return unregister;
@@ -128,6 +131,7 @@ Track recently selected commands in localStorage. Show them first when palette o
 ### Virtualized Diff Scrolling
 
 Diffs with 500+ lines need virtualized rendering:
+
 - Only render visible lines + a buffer zone (±50 lines)
 - Use Intersection Observer or a virtual scroll container
 - Gutter annotations and comment threads must work within virtualized list
@@ -148,25 +152,25 @@ Diffs with 500+ lines need virtualized rendering:
 
 ### Caching Strategy
 
-| Data | Cache Location | Invalidation |
-|------|---------------|--------------|
-| PR list | Svelte store + SQLite | On sync |
-| File diffs | In-memory per session | On file switch (LRU, keep last 5) |
-| File content | `fileContentCache` table | On new commits (SHA check) |
-| Walkthrough | `walkthroughs` table | On new commits (SHA check) |
-| Shiki grammars | In-memory singleton | Never (loaded once) |
-| Explanation history | Svelte store | On PR switch |
+| Data                | Cache Location           | Invalidation                      |
+| ------------------- | ------------------------ | --------------------------------- |
+| PR list             | Svelte store + SQLite    | On sync                           |
+| File diffs          | In-memory per session    | On file switch (LRU, keep last 5) |
+| File content        | `fileContentCache` table | On new commits (SHA check)        |
+| Walkthrough         | `walkthroughs` table     | On new commits (SHA check)        |
+| Shiki grammars      | In-memory singleton      | Never (loaded once)               |
+| Explanation history | Svelte store             | On PR switch                      |
 
 ### Performance Targets
 
-| Metric | Target |
-|--------|--------|
-| App launch → interactive | < 2 seconds |
-| PR list render (100 PRs) | < 500ms |
-| Diff render (500 lines) | < 1 second |
-| Diff scroll (2000 lines) | 60fps |
-| Walkthrough first step | < 3 seconds (AI-bound) |
-| File switch in diff | < 300ms |
+| Metric                   | Target                 |
+| ------------------------ | ---------------------- |
+| App launch → interactive | < 2 seconds            |
+| PR list render (100 PRs) | < 500ms                |
+| Diff render (500 lines)  | < 1 second             |
+| Diff scroll (2000 lines) | 60fps                  |
+| Walkthrough first step   | < 3 seconds (AI-bound) |
+| File switch in diff      | < 300ms                |
 
 ---
 
@@ -208,11 +212,11 @@ First-time wizard shown when no settings are configured:
 
 ### Steps
 
-1. **Welcome** — "Rev: AI-powered code review" + [Get Started]
+1. **Welcome** — "Revv: AI-powered code review" + [Get Started]
 2. **Sign in with GitHub** — OAuth button → Better Auth flow → shows "Connected as @username"
 3. **Add Repositories** — search by name, select repos, bulk add
 4. **AI Setup** — Anthropic API key input with validation → shows model selector
-5. **Ready** — "Your PRs are syncing now" → [Open Rev]
+5. **Ready** — "Your PRs are syncing now" → [Open Revv]
 
 ### Implementation
 
@@ -227,24 +231,25 @@ First-time wizard shown when no settings are configured:
 
 ### Behavior
 
-- Rev icon in macOS menu bar
+- Revv icon in macOS menu bar
 - Badge count: number of PRs with threads pending the user
-- Click: bring Rev window to front
+- Click: bring Revv window to front
 - Right-click menu:
-  - Open Rev
+  - Open Revv
   - Sync Now
   - ── separator ──
-  - Quit Rev
+  - Quit Revv
 
 ### Implementation
 
 - Use Tauri's tray API (`tauri-plugin-tray`)
 - Badge count updated on each sync cycle
-- Icon: monochrome Rev logo SVG (fits macOS menu bar style)
+- Icon: monochrome Revv logo SVG (fits macOS menu bar style)
 
 ### Native Notifications
 
 Via Tauri notification API:
+
 - "New reply on PR #142" — when sync detects replies on pending threads
 - "Sync complete: 3 new PRs" — after background sync finds new PRs
 - Respect system notification preferences (can be disabled in settings)

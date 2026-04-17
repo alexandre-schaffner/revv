@@ -15,7 +15,7 @@
 					R
 				</div>
 			</div>
-			<h1 class="text-xl font-semibold text-text-primary">Welcome to Rev</h1>
+			<h1 class="text-xl font-semibold text-text-primary">Welcome to Revv</h1>
 			<p class="mt-1 text-sm text-text-muted">Connect your GitHub account to start reviewing PRs</p>
 		</div>
 		<SignInButton />

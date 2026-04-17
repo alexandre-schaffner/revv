@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ──────────────────────────────────────────────────────────────
-# Rev — Developer Environment Setup
+# Revv — Developer Environment Setup
 # Makes `bun run dev:desktop` work flawlessly from a clean machine.
 #
 # Usage:
@@ -86,7 +86,7 @@ done
 
 printf "\n${BOLD}"
 printf "  ┌─────────────────────────────────────┐\n"
-printf "  │       Rev — Development Setup        │\n"
+printf "  │       Revv — Development Setup        │\n"
 printf "  │       AI-Powered Code Review         │\n"
 printf "  └─────────────────────────────────────┘\n"
 printf "${RESET}\n"
@@ -377,11 +377,11 @@ else
 
     printf "\n"
     printf "  ${BOLD}GitHub OAuth App setup${RESET}\n"
-    printf "  Rev needs a GitHub OAuth App for authentication.\n"
+    printf "  Revv needs a GitHub OAuth App for authentication.\n"
     printf "  Create one at: ${CYAN}https://github.com/settings/developers${RESET}\n"
     printf "\n"
     printf "  Use these settings:\n"
-    printf "    ${DIM}Application name:${RESET}        Rev (local dev)\n"
+    printf "    ${DIM}Application name:${RESET}        Revv (local dev)\n"
     printf "    ${DIM}Homepage URL:${RESET}            http://localhost:5173\n"
     printf "    ${DIM}Authorization callback URL:${RESET} http://localhost:45678/api/auth/callback/github\n"
     printf "\n"
