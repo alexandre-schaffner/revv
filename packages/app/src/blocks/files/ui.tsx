@@ -60,14 +60,11 @@ export function FilesBlock() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-border">
-        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-          Files
-        </span>
+      <div className="flex items-center justify-end px-3 py-1">
         <button
           type="button"
           onClick={requestFiles}
-          className="text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+          className="text-[10px] text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
         >
           refresh
         </button>
