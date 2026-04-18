@@ -13,7 +13,7 @@ function rowToRepo(row: typeof repositories.$inferSelect): Repository {
 		name: row.name,
 		fullName: row.fullName,
 		defaultBranch: row.defaultBranch,
-		avatarUrl: row.avatarUrl ?? null,
+		avatarUrl: row.avatarUrl ?? (row.provider === 'github' ? `https://avatars.githubusercontent.com/${row.owner}` : null),
 		addedAt: row.addedAt,
 		cloneStatus: row.cloneStatus,
 		clonePath: row.clonePath ?? null,

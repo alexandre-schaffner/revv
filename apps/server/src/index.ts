@@ -13,6 +13,7 @@ import { signOutRoute } from './routes/sign-out';
 import { deviceAuthRoutes } from './routes/device-auth';
 import { userRoutes } from './routes/user';
 import { wsRoute } from './routes/ws';
+import { debugRoutes } from './routes/debug';
 
 const app = new Elysia()
 	.use(
@@ -35,6 +36,7 @@ const app = new Elysia()
 	.use(deviceAuthRoutes)
 	.use(userRoutes)
 	.use(wsRoute)
+	.use(debugRoutes)
 	.get('/api/health', () => ({
 		status: 'ok' as const,
 		timestamp: new Date().toISOString(),

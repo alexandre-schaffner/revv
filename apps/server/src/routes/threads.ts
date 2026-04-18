@@ -97,9 +97,71 @@ export const threadRoutes = new Elysia({ prefix: '/api/threads' })
 		}
 	})
 
-	// POST /api/threads/:id/messages/:messageId/push — push a single reply.
-	.post('/:id/messages/:messageId/push', async (ctx) => {
+	// DELETE /api/threads/:id — delete a pending (unsynced) thread.
+	.delete('/:id', async (ctx) => {
 		try {
+			await AppRuntime.runPromise(
+				Effect.gen(function* () {
+					const reviewService = yield* ReviewService;
+					const hub = yield* WebSocketHub;
+
+					const thread = yield* reviewService.getThread(ctx.params.id);
+
+					if (thread.externalCommentId !== null) {
+						return yield* Effect.fail(new Error('Cannot discard a thread already synced to GitHub'));
+					}
+
+					yield* reviewService.deleteThread(ctx.params.id);
+
+					yield* hub.broadcast({
+						type: 'thread:deleted',
+						data: { threadId: ctx.params.id },
+					});
+				}),
+			);
+			return { success: true };
+		} catch (e) {
+			return handleAppError(e, ctx);
+		}
+	})
+
+	// PATCH /api/threads/:id/messages/:messageId — edit a pending message body
+	.patch(
+		'/:id/messages/:messageId',
+		async (ctx) => {
+			try {
+				const updated = await AppRuntime.runPromise(
+					Effect.gen(function* () {
+						const reviewService = yield* ReviewService;
+						const hub = yield* WebSocketHub;
+
+						const message = yield* reviewService.editMessage(
+							ctx.params.messageId,
+							ctx.body.body,
+						);
+
+						yield* hub.broadcast({
+							type: 'thread:message:edited',
+							data: { threadId: ctx.params.id, message },
+						});
+
+						return message;
+					}),
+				);
+				return updated;
+			} catch (e) {
+				return handleAppError(e, ctx);
+			}
+		},
+		{
+			body: t.Object({
+				body: t.String(),
+			}),
+		},
+	)
+
+	// POST /api/threads/:id/messages/:messageId/push — push a single reply.
+	.post('/:id/messages/:messageId/push', async (ctx) => {		try {
 			await AppRuntime.runPromise(
 				Effect.flatMap(SyncService, (s) => s.pushReply(ctx.params.messageId)),
 			);
@@ -156,9 +218,6 @@ export const threadRoutes = new Elysia({ prefix: '/api/threads' })
 								data: { threadId: ctx.params.id, status: transitioned.status },
 							});
 						}
-
-						// Fire-and-forget: push reply to GitHub if the thread is already synced.
-						yield* sync.pushReply(msg.id).pipe(Effect.catchAll(() => Effect.void));
 
 						return msg;
 					}),

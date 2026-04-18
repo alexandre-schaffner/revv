@@ -12,7 +12,9 @@
 		addThreadMessage,
 		resolveThread,
 		reopenThread,
-		applyCommentSuggestion
+		deleteThread,
+		applyCommentSuggestion,
+		editThreadMessage
 	} from '$lib/stores/review.svelte';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
@@ -87,7 +89,8 @@
 				messageCount: getThreadMessages(thread.id).length,
 				isExpanded: expandedThreadIds.has(thread.id),
 				isInputActive: false,
-				isReplying: replyingThreadId === thread.id
+				isReplying: replyingThreadId === thread.id,
+				isPending: thread.externalCommentId == null
 			}
 		}));
 
@@ -105,7 +108,8 @@
 					messageCount: 0,
 					isExpanded: false,
 					isInputActive: true,
-					isReplying: false
+					isReplying: false,
+					isPending: false
 				}
 			});
 		}
@@ -141,6 +145,7 @@
 		const trigger = commentTrigger;
 		if (!trigger || !file) return;
 		const key = `${file.path}::${trigger.startLine}::${trigger.side}`;
+		pendingInputs.clear();
 		pendingInputs.set(key, { side: trigger.side, lineNo: trigger.startLine, code: '' });
 	});
 
@@ -156,6 +161,7 @@
 		}
 
 		// Open new comment input for this line
+		pendingInputs.clear();
 		pendingInputs.set(key, {
 			side: info.side,
 			lineNo: info.lineNumber,
@@ -242,8 +248,16 @@
 		await reopenThread(threadId);
 	}
 
+	async function handleCommentDiscard(threadId: string) {
+		await deleteThread(threadId);
+	}
+
 	async function handleApplySuggestion(threadId: string, suggestion: string) {
 		await applyCommentSuggestion(threadId, suggestion);
+	}
+
+	async function handleEditMessage(threadId: string, messageId: string, body: string) {
+		await editThreadMessage(threadId, messageId, body);
 	}
 </script>
 
@@ -265,8 +279,10 @@
 			onCommentDismiss={handleCommentDismiss}
 			onCommentResolve={handleCommentResolve}
 			onCommentReopen={handleCommentReopen}
+			onCommentDiscard={handleCommentDiscard}
 			{onTokenHover}
 			onApplySuggestion={handleApplySuggestion}
+			onEditMessage={handleEditMessage}
 		/>
 	{/key}
 {/if}

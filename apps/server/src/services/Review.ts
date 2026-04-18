@@ -16,6 +16,7 @@ import { commentThreads } from '../db/schema/comment-threads';
 import { threadMessages } from '../db/schema/thread-messages';
 import { hunkDecisions } from '../db/schema/hunk-decisions';
 import { DbService } from './Db';
+import { tryDb } from '../effects/db-try';
 
 // ── Row-to-domain converters ─────────────────────────────────────────────────
 
@@ -145,6 +146,9 @@ export class ReviewService extends Context.Tag('ReviewService')<
 			threadId: string,
 			authorRole: AuthorRole,
 		) => Effect.Effect<CommentThread, ReviewError, DbService>;
+		readonly deleteThread: (
+			threadId: string,
+		) => Effect.Effect<void, ReviewError, DbService>;
 
 		// Messages
 		readonly addMessage: (
@@ -166,6 +170,10 @@ export class ReviewService extends Context.Tag('ReviewService')<
 			body: string,
 			editedAt: string,
 		) => Effect.Effect<void, ReviewError, DbService>;
+		readonly editMessage: (
+			messageId: string,
+			body: string,
+		) => Effect.Effect<ThreadMessage, ReviewError, DbService>;
 		readonly findMessageByExternalId: (
 			externalId: string,
 		) => Effect.Effect<ThreadMessage | null, ReviewError, DbService>;
@@ -213,14 +221,12 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 			const id = crypto.randomUUID();
 			const startedAt = new Date().toISOString();
 
-			yield* Effect.try({
-				try: () =>
-					db
-						.insert(reviewSessions)
-						.values({ id, pullRequestId: prId, startedAt, status: 'active' })
-						.run(),
-				catch: (e) => new ReviewError({ message: `Failed to create session: ${String(e)}` }),
-			});
+			yield* tryDb('create session', (db) =>
+				db
+					.insert(reviewSessions)
+					.values({ id, pullRequestId: prId, startedAt, status: 'active' })
+					.run(),
+			);
 
 			return {
 				id,
@@ -247,16 +253,13 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 				);
 			}
 
-			yield* Effect.try({
-				try: () =>
-					db
-						.update(reviewSessions)
-						.set({ status, completedAt: new Date().toISOString() })
-						.where(eq(reviewSessions.id, id))
-						.run(),
-				catch: (e) =>
-					new ReviewError({ message: `Failed to update session: ${String(e)}` }),
-			});
+			yield* tryDb('update session', (db) =>
+				db
+					.update(reviewSessions)
+					.set({ status, completedAt: new Date().toISOString() })
+					.where(eq(reviewSessions.id, id))
+					.run(),
+			);
 		}),
 
 	// ── Threads ───────────────────────────────────────────────────────────────
@@ -281,11 +284,9 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 			if (params.externalCommentId !== undefined) row.externalCommentId = params.externalCommentId;
 			if (params.lastSyncedAt !== undefined) row.lastSyncedAt = params.lastSyncedAt;
 
-			yield* Effect.try({
-				try: () => db.insert(commentThreads).values(row).run(),
-				catch: (e) =>
-					new ReviewError({ message: `Failed to create thread: ${String(e)}` }),
-			});
+			yield* tryDb('create thread', (db) =>
+				db.insert(commentThreads).values(row).run(),
+			);
 
 			return {
 				id,
@@ -339,12 +340,9 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 			if (ids.externalCommentId !== undefined) setObj.externalCommentId = ids.externalCommentId;
 			if (ids.lastSyncedAt !== undefined) setObj.lastSyncedAt = ids.lastSyncedAt;
 			if (Object.keys(setObj).length === 0) return;
-			yield* Effect.try({
-				try: () =>
-					db.update(commentThreads).set(setObj).where(eq(commentThreads.id, threadId)).run(),
-				catch: (e) =>
-					new ReviewError({ message: `Failed to update thread IDs: ${String(e)}` }),
-			});
+			yield* tryDb('update thread IDs', (db) =>
+				db.update(commentThreads).set(setObj).where(eq(commentThreads.id, threadId)).run(),
+			);
 		}),
 
 	transitionStatus: (threadId, authorRole) =>
@@ -369,16 +367,13 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 			const nextStatus: ThreadStatus =
 				authorRole === 'reviewer' ? 'pending_coder' : 'pending_reviewer';
 			if (nextStatus === existing.status) return rowToThread(existing);
-			yield* Effect.try({
-				try: () =>
-					db
-						.update(commentThreads)
-						.set({ status: nextStatus })
-						.where(eq(commentThreads.id, threadId))
-						.run(),
-				catch: (e) =>
-					new ReviewError({ message: `Failed to transition thread status: ${String(e)}` }),
-			});
+			yield* tryDb('transition thread status', (db) =>
+				db
+					.update(commentThreads)
+					.set({ status: nextStatus })
+					.where(eq(commentThreads.id, threadId))
+					.run(),
+			);
 			return rowToThread({ ...existing, status: nextStatus });
 		}),
 
@@ -391,6 +386,13 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 				.where(eq(commentThreads.reviewSessionId, sessionId))
 				.all();
 			return rows.map(rowToThread);
+		}),
+
+	deleteThread: (threadId) =>
+		Effect.gen(function* () {
+			yield* tryDb('delete thread', (db) =>
+				db.delete(commentThreads).where(eq(commentThreads.id, threadId)).run(),
+			);
 		}),
 
 	getThreadsForFile: (sessionId, filePath) =>
@@ -428,15 +430,11 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 			const isResolving = status === 'resolved' || status === 'wont_fix';
 			const isReopening = status === 'open' || status === 'pending_coder' || status === 'pending_reviewer';
 
-			yield* Effect.try({
-				try: () => {
-					const setObj: Partial<typeof commentThreads.$inferInsert> = { status };
-					if (isResolving) setObj.resolvedAt = new Date().toISOString();
-					else if (isReopening) setObj.resolvedAt = null;
-					db.update(commentThreads).set(setObj).where(eq(commentThreads.id, threadId)).run();
-				},
-				catch: (e) =>
-					new ReviewError({ message: `Failed to update thread: ${String(e)}` }),
+			yield* tryDb('update thread', (db) => {
+				const setObj: Partial<typeof commentThreads.$inferInsert> = { status };
+				if (isResolving) setObj.resolvedAt = new Date().toISOString();
+				else if (isReopening) setObj.resolvedAt = null;
+				db.update(commentThreads).set(setObj).where(eq(commentThreads.id, threadId)).run();
 			});
 
 			const updated = db
@@ -445,14 +443,22 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 				.where(eq(commentThreads.id, threadId))
 				.get();
 
-			return rowToThread(updated!);
+			if (!updated) {
+				return yield* Effect.fail(
+					new ReviewError({
+						message: 'Thread disappeared after update',
+						code: 'NOT_FOUND',
+					}),
+				);
+			}
+
+			return rowToThread(updated);
 		}),
 
 	// ── Messages ──────────────────────────────────────────────────────────────
 
 	addMessage: (threadId, params) =>
 		Effect.gen(function* () {
-			const { db } = yield* DbService;
 			const id = crypto.randomUUID();
 			const createdAt = params.createdAt ?? new Date().toISOString();
 
@@ -468,11 +474,9 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 			if (params.codeSuggestion !== undefined) row.codeSuggestion = params.codeSuggestion;
 			if (params.externalId !== undefined) row.externalId = params.externalId;
 
-			yield* Effect.try({
-				try: () => db.insert(threadMessages).values(row).run(),
-				catch: (e) =>
-					new ReviewError({ message: `Failed to add message: ${String(e)}` }),
-			});
+			yield* tryDb('add message', (db) =>
+				db.insert(threadMessages).values(row).run(),
+			);
 
 			return {
 				id,
@@ -517,33 +521,71 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 		}),
 
 	setMessageExternalId: (messageId, externalId) =>
-		Effect.gen(function* () {
-			const { db } = yield* DbService;
-			yield* Effect.try({
-				try: () =>
-					db
-						.update(threadMessages)
-						.set({ externalId })
-						.where(eq(threadMessages.id, messageId))
-						.run(),
-				catch: (e) =>
-					new ReviewError({ message: `Failed to set message externalId: ${String(e)}` }),
-			});
-		}),
+		tryDb('set message externalId', (db) =>
+			db
+				.update(threadMessages)
+				.set({ externalId })
+				.where(eq(threadMessages.id, messageId))
+				.run(),
+		).pipe(Effect.asVoid),
 
 	updateMessageBody: (messageId, body, editedAt) =>
+		tryDb('update message body', (db) =>
+			db
+				.update(threadMessages)
+				.set({ body, editedAt })
+				.where(eq(threadMessages.id, messageId))
+				.run(),
+		).pipe(Effect.asVoid),
+
+	editMessage: (messageId, body) =>
 		Effect.gen(function* () {
 			const { db } = yield* DbService;
-			yield* Effect.try({
-				try: () =>
-					db
-						.update(threadMessages)
-						.set({ body, editedAt })
-						.where(eq(threadMessages.id, messageId))
-						.run(),
-				catch: (e) =>
-					new ReviewError({ message: `Failed to update message body: ${String(e)}` }),
-			});
+
+			const msgRow = db
+				.select()
+				.from(threadMessages)
+				.where(eq(threadMessages.id, messageId))
+				.get();
+
+			if (!msgRow) {
+				return yield* Effect.fail(
+					new ReviewError({ message: 'Message not found', code: 'NOT_FOUND' }),
+				);
+			}
+
+			const threadRow = db
+				.select()
+				.from(commentThreads)
+				.where(eq(commentThreads.id, msgRow.threadId))
+				.get();
+
+			if (!threadRow) {
+				return yield* Effect.fail(
+					new ReviewError({ message: 'Thread not found', code: 'NOT_FOUND' }),
+				);
+			}
+
+			if (threadRow.externalCommentId !== null) {
+				return yield* Effect.fail(
+					new ReviewError({
+						message: 'Cannot edit a message that has already been synced to GitHub',
+						code: 'FORBIDDEN',
+					}),
+				);
+			}
+
+			const editedAt = new Date().toISOString();
+
+			yield* tryDb('edit message', (d) =>
+				d
+					.update(threadMessages)
+					.set({ body, editedAt })
+					.where(eq(threadMessages.id, messageId))
+					.run(),
+			);
+
+			return rowToMessage({ ...msgRow, body, editedAt });
 		}),
 
 	findMessageByExternalId: (externalId) =>
@@ -559,50 +601,38 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 
 	// ── Hunk decisions ────────────────────────────────────────────────────────
 
-	setHunkDecision: (sessionId, filePath, hunkIndex, decision) =>
-		Effect.gen(function* () {
-			const { db } = yield* DbService;
-			const id = crypto.randomUUID();
-			const decidedAt = new Date().toISOString();
-
-			yield* Effect.try({
-				try: () =>
-					db
-						.insert(hunkDecisions)
-						.values({ id, reviewSessionId: sessionId, filePath, hunkIndex, decision, decidedAt })
-						.onConflictDoUpdate({
-							target: [
-								hunkDecisions.reviewSessionId,
-								hunkDecisions.filePath,
-								hunkDecisions.hunkIndex,
-							],
-							set: { decision, decidedAt },
-						})
-						.run(),
-				catch: (e) =>
-					new ReviewError({ message: `Failed to set hunk decision: ${String(e)}` }),
-			});
-		}),
+	setHunkDecision: (sessionId, filePath, hunkIndex, decision) => {
+		const id = crypto.randomUUID();
+		const decidedAt = new Date().toISOString();
+		return tryDb('set hunk decision', (db) =>
+			db
+				.insert(hunkDecisions)
+				.values({ id, reviewSessionId: sessionId, filePath, hunkIndex, decision, decidedAt })
+				.onConflictDoUpdate({
+					target: [
+						hunkDecisions.reviewSessionId,
+						hunkDecisions.filePath,
+						hunkDecisions.hunkIndex,
+					],
+					set: { decision, decidedAt },
+				})
+				.run(),
+		).pipe(Effect.asVoid);
+	},
 
 	clearHunkDecision: (sessionId, filePath, hunkIndex) =>
-		Effect.gen(function* () {
-			const { db } = yield* DbService;
-			yield* Effect.try({
-				try: () =>
-					db
-						.delete(hunkDecisions)
-						.where(
-							and(
-								eq(hunkDecisions.reviewSessionId, sessionId),
-								eq(hunkDecisions.filePath, filePath),
-								eq(hunkDecisions.hunkIndex, hunkIndex),
-							),
-						)
-						.run(),
-				catch: (e) =>
-					new ReviewError({ message: `Failed to clear hunk decision: ${String(e)}` }),
-			});
-		}),
+		tryDb('clear hunk decision', (db) =>
+			db
+				.delete(hunkDecisions)
+				.where(
+					and(
+						eq(hunkDecisions.reviewSessionId, sessionId),
+						eq(hunkDecisions.filePath, filePath),
+						eq(hunkDecisions.hunkIndex, hunkIndex),
+					),
+				)
+				.run(),
+		).pipe(Effect.asVoid),
 
 	getHunkDecisions: (sessionId) =>
 		Effect.gen(function* () {

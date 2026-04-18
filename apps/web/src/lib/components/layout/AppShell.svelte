@@ -6,7 +6,7 @@
 	import CommandPalette from './CommandPalette.svelte';
 	import FloatingTabs from './FloatingTabs.svelte';
 	import { getSelectedPr } from '$lib/stores/prs.svelte';
-	import { getSummary } from '$lib/stores/sync.svelte';
+	import { getPrWalkthroughStatus } from '$lib/stores/walkthrough.svelte';
 	import { getActiveTab, setActiveTab, getPanelOpenRequested, consumePanelOpenRequest } from '$lib/stores/review.svelte';
 	import {
 		getSidebarCollapsed,
@@ -36,9 +36,10 @@
 	const paletteMode = $derived(getPaletteMode());
 	const sidebarWidth = $derived(getSidebarWidth());
 	const pr = $derived(getSelectedPr());
-	const prSummary = $derived(pr ? getSummary(pr.id) : null);
+	const walkthroughStatus = $derived(pr ? getPrWalkthroughStatus(pr.id) : 'idle');
 	const activeTab = $derived(getActiveTab());
 	const topbarCollapsed = $derived(getTopbarCollapsed());
+	const isSettingsRoute = $derived(page.url.pathname.startsWith('/settings'));
 
 	// Drag state — not reactive $state, just local mutable refs
 	let isDragging = $state(false);
@@ -129,9 +130,9 @@
 
 	<header class="topbar-area" data-tauri-drag-region>
 		<TopBar {rightPanelOpen} onTogglePanel={toggleRightPanel} />
-		{#if pr}
+		{#if pr && !isSettingsRoute}
 			<div class="tabs-float" style={tabsStyle}>
-				<FloatingTabs {activeTab} onTabChange={setActiveTab} openThreads={prSummary?.open ?? 0} pendingThreads={prSummary?.pendingYou ?? 0} />
+				<FloatingTabs {activeTab} onTabChange={setActiveTab} {walkthroughStatus} />
 			</div>
 		{/if}
 	</header>
@@ -166,12 +167,16 @@
 		overflow: hidden;
 		background-color: var(--color-bg-primary);
 		transition:
-			grid-template-columns var(--duration-smooth) var(--ease-out-expo),
-			grid-template-rows var(--duration-smooth) var(--ease-out-expo);
+			grid-template-columns 100ms var(--ease-out-expo),
+			grid-template-rows 100ms var(--ease-out-expo);
 	}
 
 	/* Suppress the column transition while dragging so resize feels instant */
 	.app-shell.is-resizing {
+		transition: none;
+	}
+
+	.app-shell.is-resizing .tabs-float {
 		transition: none;
 	}
 
@@ -254,6 +259,7 @@
 		z-index: 20;
 		pointer-events: none;
 		padding-top: 12px;
+		transition: transform 100ms var(--ease-out-expo);
 	}
 
 	.tabs-float :global(*) {

@@ -1,16 +1,18 @@
-import { Context, Duration, Effect, Fiber, Layer, Ref, Schedule } from 'effect';
+import { Cause, Context, Duration, Effect, Fiber, Layer, Ref, Schedule } from 'effect';
 import { AUTO_FETCH_DEFAULT_INTERVAL, THREAD_SYNC_INTERVAL_SECONDS } from '@revv/shared';
-import type { PullRequest } from '@revv/shared';
+import type { PullRequest, SyncChange } from '@revv/shared';
 import { DbService } from './Db';
 import { withDb as withDbHelper } from '../effects/with-db';
 import { DiffCacheService } from './DiffCache';
 import { GitHubService } from './GitHub';
+import { GitHubEtagCache } from './GitHubEtagCache';
 import { PullRequestService } from './PullRequest';
 import { RepositoryService } from './Repository';
 import { SettingsService } from './Settings';
 import { SyncService } from './Sync';
 import { TokenProvider } from './TokenProvider';
 import { WebSocketHub } from './WebSocketHub';
+import { user } from '../db/schema/auth';
 
 type PollSchedulerService = {
 	readonly start: () => Effect.Effect<void>;
@@ -37,24 +39,56 @@ export const PollSchedulerLive = Layer.effect(
 		const settingsService = yield* SettingsService;
 		const syncService = yield* SyncService;
 		const tokenProvider = yield* TokenProvider;
+		const etagCache = yield* GitHubEtagCache;
 		const { db } = yield* DbService;
 
 		// Bind the captured db handle for convenience
 		const withDb = <A, E>(eff: Effect.Effect<A, E, DbService>) => withDbHelper(db, eff);
 
+		// Provide `DbService` + `GitHubEtagCache` (both captured at layer
+		// construction) so effects that transitively call `github.*` REST methods
+		// — which now participate in the ETag cache — don't leak those services
+		// into the public Tag signatures.
+		const provideInfra = <A, E>(
+			eff: Effect.Effect<A, E, DbService | GitHubEtagCache>,
+		): Effect.Effect<A, E> =>
+			eff.pipe(
+				Effect.provideService(DbService, { db }),
+				Effect.provideService(GitHubEtagCache, etagCache),
+			);
+
+		// Tracks whether at least one periodic sync has completed.
+		// The first periodic sync is used as baseline — we don't know what
+		// changed vs the prior server run, so we skip notifications for it.
+		const hasPeriodicSyncedOnceRef = yield* Ref.make(false);
+		// Set to true by syncNow to suppress the summary during manual syncs.
+		const suppressSummaryRef = yield* Ref.make(false);
+
 		// Fiber ref for the running poll loop — null when stopped
 		const fiberRef = yield* Ref.make<Fiber.RuntimeFiber<number, never> | null>(null);
 
-		// The core sync effect — all services are plain values captured from the closure
-		const syncAllRepos: Effect.Effect<void> = Effect.gen(function* () {
+		// The core sync effect — all services are plain values captured from the closure.
+		// `DbService | GitHubEtagCache` remain in R because `github.*` methods depend
+		// on them internally (for ETag cache reads/writes); the layer that constructs
+		// PollScheduler already has both provided, so the forked fiber inherits them.
+		const syncAllRepos: Effect.Effect<void, never, DbService | GitHubEtagCache> = Effect.gen(function* () {
 			yield* hub.broadcast({ type: 'prs:sync-started' });
+
+			// Snapshot ETag-cache counters so we can report deltas for this cycle.
+			const etagStatsBefore = etagCache.stats();
 
 			const allRepos = yield* withDb(repoService.listRepos());
 
 			if (allRepos.length === 0) {
+				const etagStatsAfter = etagCache.stats();
 				yield* hub.broadcast({
 					type: 'prs:sync-complete',
-					data: { count: 0, timestamp: new Date().toISOString() },
+					data: {
+						count: 0,
+						timestamp: new Date().toISOString(),
+						cached: etagStatsAfter.hits304 - etagStatsBefore.hits304,
+						refetched: etagStatsAfter.misses200 - etagStatsBefore.misses200,
+					},
 				});
 				return;
 			}
@@ -69,9 +103,18 @@ export const PollSchedulerLive = Layer.effect(
 				allRepos,
 				(repo) =>
 					Effect.gen(function* () {
-						const token = yield* tokenProvider
-							.getGitHubToken('single-user')
-							.pipe(Effect.orElseSucceed(() => ''));
+						// Auth failures must not silently poison the token: log + skip this
+						// repo's PR sync this cycle. All other errors are logged generically.
+						const token = yield* tokenProvider.getGitHubToken('single-user').pipe(
+							Effect.catchTag('GitHubAuthError', (err) =>
+								Effect.sync(() => {
+									console.warn(
+										`[PollScheduler] GitHub auth unavailable; skipping PR sync for ${repo.fullName}: ${err.message}`,
+									);
+									return '';
+								}),
+							),
+						);
 
 						if (!token) return [] as PullRequest[];
 
@@ -134,9 +177,16 @@ export const PollSchedulerLive = Layer.effect(
 								const repo = allRepos.find((r) => r.id === pr.repositoryId);
 								if (!repo) return;
 
-								const token = yield* tokenProvider
-									.getGitHubToken('single-user')
-									.pipe(Effect.orElseSucceed(() => ''));
+								const token = yield* tokenProvider.getGitHubToken('single-user').pipe(
+									Effect.catchTag('GitHubAuthError', (err) =>
+										Effect.sync(() => {
+											console.warn(
+												`[PollScheduler] GitHub auth unavailable; skipping diff refresh for PR ${prId}: ${err.message}`,
+											);
+											return '';
+										}),
+									),
+								);
 								if (!token) return;
 
 								const fileList = yield* github
@@ -163,9 +213,65 @@ export const PollSchedulerLive = Layer.effect(
 			}
 
 			yield* hub.broadcast({ type: 'prs:updated', data: allPrs });
+
+			// ── Sync diff: compute what changed for notifications ────────────────
+			const changes: SyncChange[] = [];
+
+			if (existingPrs.length > 0) {
+				const userRow = db.select({ githubLogin: user.githubLogin }).from(user).get();
+				const userLogin = userRow?.githubLogin ?? null;
+
+				const existingMap = new Map(existingPrs.map((pr) => [pr.id, pr]));
+
+				for (const pr of allPrs) {
+					const repoFullName = allRepos.find((r) => r.id === pr.repositoryId)?.fullName ?? pr.repositoryId;
+					const existing = existingMap.get(pr.id);
+
+					if (!existing) {
+						if (userLogin && pr.requestedReviewers.includes(userLogin)) {
+							changes.push({ kind: 'review_requested', prId: pr.id, prTitle: pr.title, prNumber: pr.externalId, repoFullName });
+						} else if (userLogin && pr.authorLogin === userLogin) {
+							changes.push({ kind: 'pr_authored', prId: pr.id, prTitle: pr.title, prNumber: pr.externalId, repoFullName });
+						}
+					} else {
+						if (existing.headSha !== pr.headSha) {
+							changes.push({ kind: 'pr_updated', prId: pr.id, prTitle: pr.title, prNumber: pr.externalId, repoFullName });
+						} else if (
+							userLogin &&
+							pr.requestedReviewers.includes(userLogin) &&
+							!existing.requestedReviewers.includes(userLogin)
+						) {
+							changes.push({ kind: 'review_requested', prId: pr.id, prTitle: pr.title, prNumber: pr.externalId, repoFullName });
+						}
+					}
+				}
+
+				for (const prId of closedPrIds) {
+					const pr = existingMap.get(prId);
+					if (pr) {
+						const repoFullName = allRepos.find((r) => r.id === pr.repositoryId)?.fullName ?? pr.repositoryId;
+						changes.push({ kind: 'pr_closed', prId: prId, prTitle: pr.title, prNumber: pr.externalId, repoFullName });
+					}
+				}
+			}
+
+			const suppressSummary = yield* Ref.get(suppressSummaryRef);
+			const hasPeriodicSyncedOnce = yield* Ref.get(hasPeriodicSyncedOnceRef);
+			if (!suppressSummary && hasPeriodicSyncedOnce && changes.length > 0) {
+				yield* hub.broadcast({ type: 'prs:sync-summary', data: changes });
+			}
+			yield* Ref.set(hasPeriodicSyncedOnceRef, true);
+			yield* Ref.set(suppressSummaryRef, false);
+
+			const etagStatsAfter = etagCache.stats();
 			yield* hub.broadcast({
 				type: 'prs:sync-complete',
-				data: { count: allPrs.length, timestamp: new Date().toISOString() },
+				data: {
+					count: allPrs.length,
+					timestamp: new Date().toISOString(),
+					cached: etagStatsAfter.hits304 - etagStatsBefore.hits304,
+					refetched: etagStatsAfter.misses200 - etagStatsBefore.misses200,
+				},
 			});
 		}).pipe(
 			Effect.catchAllCause((cause) =>
@@ -201,7 +307,11 @@ export const PollSchedulerLive = Layer.effect(
 				(pr) =>
 					withDb(syncService.syncThreads(pr.id)).pipe(
 						Effect.asVoid,
-						Effect.orElseSucceed(() => undefined),
+						Effect.catchAllCause((cause) =>
+							Effect.sync(() => {
+								console.error(`[PollScheduler] Thread sync failed for PR ${pr.id}:`, Cause.pretty(cause));
+							})
+						),
 					),
 				{ concurrency: 1 },
 			);
@@ -236,7 +346,7 @@ export const PollSchedulerLive = Layer.effect(
 				// Run immediately on start, then repeat at the given interval
 				const schedule = Schedule.spaced(Duration.minutes(intervalMinutes));
 				const fiber: Fiber.RuntimeFiber<number, never> = yield* Effect.fork(
-					syncAllRepos.pipe(Effect.repeat(schedule))
+					provideInfra(syncAllRepos.pipe(Effect.repeat(schedule))),
 				);
 				yield* Ref.set(fiberRef, fiber);
 			});
@@ -267,12 +377,25 @@ export const PollSchedulerLive = Layer.effect(
 					yield* startWithInterval(minutes);
 				}),
 
-			syncNow: () => syncAllRepos,
+			syncNow: () =>
+				provideInfra(
+					Effect.gen(function* () {
+						yield* Ref.set(suppressSummaryRef, true);
+						yield* syncAllRepos;
+					}),
+				),
 
 			syncThreadsNow: (prId: string) =>
 				withDb(syncService.syncThreads(prId)).pipe(
 					Effect.asVoid,
-					Effect.catchAllCause(() => Effect.void),
+					Effect.catchAllCause((cause) => {
+						const message = Cause.pretty(cause);
+						console.error(`[PollScheduler] Manual thread sync failed for PR ${prId}:`, message);
+						return hub.broadcast({
+							type: 'threads:sync-error',
+							data: { prId, message },
+						});
+					}),
 				),
 		};
 	})

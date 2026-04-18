@@ -443,7 +443,7 @@
 		font-size: 12px;
 		font-weight: 500;
 		color: var(--color-accent);
-		background: rgba(124, 106, 247, 0.1);
+		background: color-mix(in srgb, var(--color-ai-accent) 10%, transparent);
 		border: none;
 		border-radius: 5px;
 		padding: 5px 12px;
@@ -452,7 +452,7 @@
 	}
 
 	.retry-btn:hover {
-		background: rgba(124, 106, 247, 0.2);
+		background: color-mix(in srgb, var(--color-ai-accent) 20%, transparent);
 	}
 
 	/* Explanation body — prose styles for rendered markdown HTML */

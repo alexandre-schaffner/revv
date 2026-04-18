@@ -4,22 +4,32 @@
 		Trigger as PopoverTrigger,
 		Content as PopoverContent,
 	} from '$lib/components/ui/popover/index.js';
-	import { getSettings, updateSettings } from '$lib/stores/settings.svelte';
+	import {
+		getSettings,
+		updateSettings,
+		getAvailableModels,
+		areModelsLoaded,
+		fetchModels,
+	} from '$lib/stores/settings.svelte';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import Check from '@lucide/svelte/icons/check';
-	import { API_BASE_URL } from '@revv/shared';
-	import { authHeaders } from '$lib/utils/session-token';
-	import type { AiAgent } from '@revv/shared';
+	import type { AiAgent, ContextWindow } from '@revv/shared';
 	import { SvelteMap } from 'svelte/reactivity';
-	import { toast } from 'svelte-sonner';
+
+	const CONTEXT_WINDOW_OPTIONS: { label: string; value: ContextWindow }[] = [
+		{ label: '200K', value: '200k' },
+		{ label: '1M', value: '1m' },
+	];
 
 	let open = $state(false);
 
 	let currentAgent = $derived((getSettings()?.aiAgent ?? 'opencode') as AiAgent);
-	let fetchedModels = $state<{ label: string; value: string }[]>([]);
-	let fetchDone = $state(false);
-	let localModel = $state('');
-	let currentModel = $derived(getSettings()?.aiModel ?? localModel);
+	// Read models for the *current* agent straight from the cached store.
+	// This eliminates the race where a local fetch could resolve with models
+	// for an agent the user has already switched away from.
+	let fetchedModels = $derived(getAvailableModels(currentAgent));
+	let fetchDone = $derived(areModelsLoaded(currentAgent));
+	let currentModel = $derived(getSettings()?.aiModel ?? '');
 	let currentLabel = $derived(
 		!fetchDone
 			? 'Loading...'
@@ -28,33 +38,14 @@
 				: (fetchedModels.find((m) => m.value === currentModel)?.label ?? (currentModel || 'Select model'))
 	);
 
+	// Cache-miss fallback: if the bootstrap prefetch hasn't populated this
+	// agent's models yet (e.g. the server was unreachable at app start), kick
+	// off a single fetch. `fetchModels` internally de-dupes concurrent calls.
 	$effect(() => {
-		// Capture for reactivity — re-runs when agent changes
-		const _agent = currentAgent;
-		void _agent;
-		fetchDone = false;
-		fetch(`${API_BASE_URL}/api/settings/models`, { headers: authHeaders() })
-			.then((r) => {
-				if (!r.ok) throw new Error(`HTTP ${r.status}`);
-				return r.json();
-			})
-			.then((data: { models: { label: string; value: string }[] }) => {
-				fetchedModels = data.models ?? [];
-				fetchDone = true;
-				// Auto-select first model if none is set
-				if (!getSettings()?.aiModel && fetchedModels.length > 0) {
-					const firstModel = fetchedModels[0]!.value;
-					localModel = firstModel;
-					// Try to persist — will fail silently if unauthenticated
-					updateSettings({ aiModel: firstModel });
-				}
-			})
-		.catch((err: Error) => {
-			console.error('[ModelSelector] Failed to fetch models:', err);
-			toast.error('Failed to load models');
-			fetchedModels = [];
-			fetchDone = true;
-		});
+		const agent = currentAgent;
+		if (!areModelsLoaded(agent)) {
+			void fetchModels(agent);
+		}
 	});
 
 	function getProvider(value: string): string | null {
@@ -166,9 +157,15 @@
 
 	let currentProvider = $derived(getProvider(currentModel));
 	let currentProviderIcon = $derived(getProviderIcon(currentProvider));
+	let currentWindow = $derived((getSettings()?.aiContextWindow ?? '200k') as ContextWindow);
 
 	function select(value: string) {
 		updateSettings({ aiModel: value });
+		// Keep popover open so the user can also pick the context window in one session
+	}
+
+	function selectWindow(value: ContextWindow) {
+		updateSettings({ aiContextWindow: value });
 		open = false;
 	}
 </script>
@@ -194,6 +191,10 @@
 			</svg>
 		{/if}
 			<span class="text-xs text-text-secondary">{currentLabel}</span>
+			{#if currentAgent === 'claude'}
+				<span class="text-xs text-text-muted">·</span>
+				<span class="text-xs text-text-secondary">{currentWindow === '1m' ? '1M' : '200K'}</span>
+			{/if}
 			<ChevronDown size={10} class="text-text-muted" />
 		</button>
 	</PopoverTrigger>
@@ -245,21 +246,41 @@
 				class="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs text-text-secondary transition-colors hover:bg-bg-tertiary"
 				onclick={() => select(opt.value)}
 			>
-				<svg
-					width="14"
-					height="14"
-					viewBox={icon.viewBox}
-					fill="currentColor"
-					class="shrink-0 opacity-60 text-text-secondary"
-					aria-hidden="true"
-				>
-					<path d={icon.path} fill-rule={icon.fillRule ?? 'nonzero'} />
-					{#each icon.paths ?? [] as p}
-						<path d={p} />
-					{/each}
-				</svg>
+				{#if icon.path}
+					<svg
+						width="14"
+						height="14"
+						viewBox={icon.viewBox}
+						fill="currentColor"
+						class="shrink-0 opacity-60 text-text-secondary"
+						aria-hidden="true"
+					>
+						<path d={icon.path} fill-rule={icon.fillRule ?? 'nonzero'} />
+						{#each icon.paths ?? [] as p}
+							<path d={p} />
+						{/each}
+					</svg>
+				{/if}
 					<span class="min-w-0 flex-1 truncate text-left">{opt.label}</span>
 					{#if currentModel === opt.value}
+						<Check size={12} class="shrink-0 text-accent" />
+					{/if}
+				</button>
+			{/each}
+		{/if}
+
+		{#if currentAgent === 'claude'}
+			<div class="my-1 border-t border-border"></div>
+			<div class="px-2 pt-2 pb-1 text-[10px] font-medium uppercase tracking-wider text-text-muted">
+				Context Window
+			</div>
+			{#each CONTEXT_WINDOW_OPTIONS as opt (opt.value)}
+				<button
+					class="flex w-full items-center justify-between rounded-sm px-2 py-1.5 text-xs text-text-secondary transition-colors hover:bg-bg-tertiary"
+					onclick={() => selectWindow(opt.value)}
+				>
+					{opt.label}
+					{#if currentWindow === opt.value}
 						<Check size={12} class="shrink-0 text-accent" />
 					{/if}
 				</button>

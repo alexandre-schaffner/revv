@@ -1,9 +1,9 @@
 import type { PullRequest, Repository, CloneStatus, ThreadSummary } from '@revv/shared';
 import { api } from '$lib/api/client';
 import { goto } from '$app/navigation';
-import { API_BASE_URL } from '@revv/shared';
 import { setBatchSummaries } from '$lib/stores/sync.svelte';
 import { toast } from 'svelte-sonner';
+import { getCurrentUserLogin } from '$lib/stores/auth.svelte';
 
 let pullRequests = $state<PullRequest[]>([]);
 let repositories = $state<Repository[]>([]);
@@ -26,6 +26,18 @@ let groupedByRepo = $derived(
 	Map.groupBy(filteredPrs, (pr) => pr.repositoryId)
 );
 
+let needsYourReview = $derived(
+	(() => {
+		const login = getCurrentUserLogin();
+		if (!login) return [] as PullRequest[];
+		return filteredPrs.filter((pr) => pr.requestedReviewers.includes(login));
+	})()
+);
+
+let needsYourReviewByRepo = $derived(
+	Map.groupBy(needsYourReview, (pr) => pr.repositoryId)
+);
+
 let selectedPr = $derived(
 	pullRequests.find((pr) => pr.id === selectedPrId) ?? null
 );
@@ -38,12 +50,43 @@ export function getGroupedByRepo(): Map<string, PullRequest[]> {
 	return groupedByRepo;
 }
 
+export function getNeedsYourReview(): PullRequest[] {
+	return needsYourReview;
+}
+
+export function getNeedsYourReviewByRepo(): Map<string, PullRequest[]> {
+	return needsYourReviewByRepo;
+}
+
 export function getSelectedPr(): PullRequest | null {
 	return selectedPr;
 }
 
 export function setPullRequests(prs: PullRequest[]): void {
 	pullRequests = prs;
+	lastSynced = new Date();
+}
+
+/**
+ * Merge-patch the in-memory PR list from a WebSocket `prs:updated` event.
+ * Updates existing PRs by id in place, appends genuinely new ones.
+ * Preserves existing order and derived state.
+ */
+export function mergePullRequests(incoming: PullRequest[]): void {
+	const map = new Map(pullRequests.map((pr) => [pr.id, pr]));
+	for (const pr of incoming) {
+		map.set(pr.id, pr);
+	}
+	const existingIds = new Set(pullRequests.map((pr) => pr.id));
+	const merged: PullRequest[] = [];
+	for (const pr of pullRequests) {
+		const updated = map.get(pr.id);
+		if (updated) merged.push(updated);
+	}
+	for (const pr of incoming) {
+		if (!existingIds.has(pr.id)) merged.push(pr);
+	}
+	pullRequests = merged;
 	lastSynced = new Date();
 }
 
@@ -62,20 +105,20 @@ export function updateRepoCloneStatus(repoId: string, status: CloneStatus, error
 export async function fetchThreadSummaries(prIds: string[]): Promise<void> {
 	if (prIds.length === 0) return;
 	try {
-		const token = typeof localStorage !== 'undefined' ? localStorage.getItem('rev_session_token') : null;
-		if (!token) return;
 		const results = await Promise.allSettled(
 			prIds.slice(0, 20).map(async (prId) => {
-				const res = await fetch(`${API_BASE_URL}/api/prs/${encodeURIComponent(prId)}/thread-summary`, {
-					headers: { Authorization: `Bearer ${token}` },
-				});
-				if (!res.ok) return null;
-				const summary = await res.json() as ThreadSummary;
-				return { prId, summary };
-			})
+				const { data, error } = await api.api
+					.prs({ id: prId })
+					['thread-summary'].get();
+				if (error || !data) return null;
+				return { prId, summary: data as ThreadSummary };
+			}),
 		);
 		const entries = results
-			.filter((r): r is PromiseFulfilledResult<{ prId: string; summary: ThreadSummary } | null> => r.status === 'fulfilled')
+			.filter(
+				(r): r is PromiseFulfilledResult<{ prId: string; summary: ThreadSummary } | null> =>
+					r.status === 'fulfilled',
+			)
 			.map((r) => r.value)
 			.filter((v): v is { prId: string; summary: ThreadSummary } => v !== null);
 		setBatchSummaries(entries);
@@ -121,7 +164,7 @@ export async function syncPrs(): Promise<void> {
 	}
 }
 
-export function setSelectedPrId(id: string): void {
+export function setSelectedPrId(id: string | null): void {
 	selectedPrId = id;
 }
 

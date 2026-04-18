@@ -68,12 +68,32 @@ function clearSession(): void {
 	acceptedHunks = new Map();
 	rejectedHunks = new Map();
 	threadsVersion++;
+	// Reset the short-circuit window too — an explicit clear means callers
+	// want a fresh hydration on the next `loadSession` call.
+	lastSessionPrId = null;
+	lastSessionAt = 0;
 }
 
 let loadSessionSeq = 0;
 
+// Phase 1 stopgap: skip redundant session loads when the same PR was hydrated
+// within the last minute AND we still have a live session id. Phase 3's
+// queryStore replaces this with per-key cache semantics.
+let lastSessionPrId: string | null = null;
+let lastSessionAt = 0;
+const SESSION_REFETCH_WINDOW_MS = 60_000;
+
 /** Load (or create) the active review session for a PR, hydrating all state. */
 export async function loadSession(prId: string): Promise<void> {
+	// Short-circuit: same PR, recent hydration, session still live.
+	if (
+		prId === lastSessionPrId &&
+		Date.now() - lastSessionAt < SESSION_REFETCH_WINDOW_MS &&
+		sessionId !== null
+	) {
+		return;
+	}
+
 	const seq = ++loadSessionSeq;
 	sessionLoading = true;
 	try {
@@ -118,6 +138,8 @@ export async function loadSession(prId: string): Promise<void> {
 		acceptedHunks = accepted;
 		rejectedHunks = rejected;
 		threadsVersion++;
+		lastSessionPrId = prId;
+		lastSessionAt = Date.now();
 	} finally {
 		// Only clear loading if this is still the active request
 		if (seq === loadSessionSeq) {
@@ -128,7 +150,15 @@ export async function loadSession(prId: string): Promise<void> {
 
 // --- Tab state ---
 type ActiveTab = 'walkthrough' | 'diff' | 'request-changes';
-let activeTab = $state<ActiveTab>('diff');
+
+interface PrViewState {
+	activeTab: ActiveTab;
+}
+
+const prViewStates = new Map<string, PrViewState>();
+let currentPrId: string | null = null;
+
+let activeTab = $state<ActiveTab>('walkthrough');
 
 export function getActiveTab(): ActiveTab {
 	return activeTab;
@@ -145,6 +175,29 @@ export function setActiveTab(tab: ActiveTab): void {
 	currentExplainController?.abort();
 	currentExplainController = null;
 	activeTab = tab;
+	// Persist for the current PR
+	if (currentPrId !== null) {
+		prViewStates.set(currentPrId, { activeTab: tab });
+	}
+}
+
+/** Call when navigating to a PR. Saves state for the previous PR, restores (or defaults) for the new one. */
+export function switchPrViewState(newPrId: string): void {
+	// Save current state before switching
+	if (currentPrId !== null) {
+		prViewStates.set(currentPrId, { activeTab });
+	}
+	currentPrId = newPrId;
+	// Restore saved state, or default to walkthrough for first visit
+	const saved = prViewStates.get(newPrId);
+	const restoredTab = saved?.activeTab ?? 'walkthrough';
+	// Use direct assignment to bypass the guard in setActiveTab (no stream to abort, no focus reset needed here)
+	if (activeTab === 'diff' && restoredTab !== 'diff') {
+		enterSidebarMode();
+	}
+	currentExplainController?.abort();
+	currentExplainController = null;
+	activeTab = restoredTab;
 }
 
 // --- Context panel explanation state ---
@@ -258,7 +311,6 @@ export function requestExplanation(params: {
 // --- Comment threads ---
 let threads = $state<CommentThread[]>([]);
 let threadMessages = $state<Record<string, ThreadMessage[]>>({});
-let threadSyncErrors = $state<Set<string>>(new Set());
 // Monotonic counter bumped on every thread mutation. Consumed inside reactive
 // derivations that need to force-recompute (e.g. DiffViewer's annotations),
 // because @pierre/diffs caches annotations by metadata reference.
@@ -266,16 +318,6 @@ let threadsVersion = $state(0);
 
 export function getThreadsVersion(): number {
 	return threadsVersion;
-}
-
-export function getThreadSyncError(threadId: string): boolean {
-	return threadSyncErrors.has(threadId);
-}
-
-export function clearThreadSyncError(threadId: string): void {
-	const next = new Set(threadSyncErrors);
-	next.delete(threadId);
-	threadSyncErrors = next;
 }
 
 export function getThreads(): CommentThread[] {
@@ -338,14 +380,6 @@ export async function addThread(
 		threadsVersion++;
 	}
 
-	// Fire-and-forget: push thread to GitHub
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	void (api.api.threads({ id: result.thread.id, threadId: result.thread.id } as any) as any).push.post().catch(() => {
-		const next = new Set(threadSyncErrors);
-		next.add(result.thread.id);
-		threadSyncErrors = next;
-	});
-
 	return result;
 }
 
@@ -380,12 +414,6 @@ export async function addThreadMessage(
 			[threadId]: [...existing, message],
 		};
 	}
-
-	// Fire-and-forget: push reply to GitHub
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	void (api.api.threads({ id: threadId, threadId } as any) as any).messages({ messageId: message.id }).push.post().catch(() => {
-		threadSyncErrors = new Set([...threadSyncErrors, threadId]);
-	});
 
 	return message;
 }
@@ -485,6 +513,11 @@ export function addMessageFromWs(threadId: string, message: ThreadMessage): void
 
 export function getThreadsForFile(filePath: string): CommentThread[] {
 	return threads.filter((t) => t.filePath === filePath);
+}
+
+/** Returns threads that have not yet been pushed to GitHub (no externalCommentId). */
+export function getUnsyncedThreads(): CommentThread[] {
+	return threads.filter((t) => t.externalCommentId == null);
 }
 
 // --- Diff view mode ---
@@ -611,6 +644,28 @@ export async function undoHunkAction(filePath: string, hunkIndex: number): Promi
 	}
 }
 
+// --- Pending diff jump ---
+interface PendingDiffJump {
+	filePath: string;
+	lineNumber: number;
+}
+
+let pendingDiffJump = $state<PendingDiffJump | null>(null);
+
+export function getPendingDiffJump(): PendingDiffJump | null {
+	return pendingDiffJump;
+}
+
+export function jumpToDiffLine(filePath: string, lineNumber: number): void {
+	pendingDiffJump = { filePath, lineNumber };
+	setActiveFilePath(filePath);
+	setActiveTab('diff');
+}
+
+export function clearPendingDiffJump(): void {
+	pendingDiffJump = null;
+}
+
 // --- Active file in diff ---
 let activeFilePath = $state<string | null>(null);
 
@@ -622,8 +677,81 @@ export function setActiveFilePath(path: string | null): void {
 	activeFilePath = path;
 }
 
-// --- Apply suggestion ---
-// Replaces the content of a thread's first message with the suggested code.
+/**
+ * Delete a pending (unsynced) thread. Optimistic: removes from local state
+ * immediately and reverts on API failure.
+ */
+export async function deleteThread(threadId: string): Promise<boolean> {
+	const prev = threads;
+	threads = threads.filter((t) => t.id !== threadId);
+	const prevMessages = { ...threadMessages };
+	const { [threadId]: _, ...rest } = threadMessages;
+	threadMessages = rest;
+	threadsVersion++;
+
+	const { error } = await api.api.threads({ id: threadId }).delete();
+	if (error) {
+		threads = prev;
+		threadMessages = prevMessages;
+		threadsVersion++;
+		toast.error('Failed to discard comment');
+		return false;
+	}
+	return true;
+}
+
+/**
+ * Remove a thread from local state in response to a WebSocket broadcast.
+ */
+export function removeThreadFromWs(threadId: string): void {
+	threads = threads.filter((t) => t.id !== threadId);
+	const { [threadId]: _, ...rest } = threadMessages;
+	threadMessages = rest;
+	threadsVersion++;
+}
+
+/**
+ * Update a message body from a WebSocket broadcast (no API call needed).
+ */
+export function updateMessageFromWs(threadId: string, message: ThreadMessage): void {
+	threadMessages = {
+		...threadMessages,
+		[threadId]: (threadMessages[threadId] ?? []).map((m) =>
+			m.id === message.id ? message : m
+		),
+	};
+}
+
+/**
+ * Edit the body of a pending thread's first message.
+ * Optimistic: updates UI immediately, reverts on API failure.
+ */
+export async function editThreadMessage(
+	threadId: string,
+	messageId: string,
+	body: string,
+): Promise<boolean> {
+	const prev = { ...threadMessages };
+	threadMessages = {
+		...threadMessages,
+		[threadId]: (threadMessages[threadId] ?? []).map((m) =>
+			m.id === messageId ? { ...m, body } : m
+		),
+	};
+
+	const { error } = await api.api.threads({ id: threadId }).messages({ messageId }).patch({ body });
+	if (error) {
+		threadMessages = prev;
+		toast.error('Failed to save edit');
+		return false;
+	}
+	return true;
+}
+
+/**
+ * Apply the suggestion from a comment thread's first message.
+ * Replaces content with the suggested code.
+ */
 export async function applyCommentSuggestion(
 	threadId: string,
 	suggestion: string,

@@ -180,7 +180,7 @@
 {#if open}
 	<!-- Backdrop -->
 	<div
-		class="fixed inset-0 z-40 bg-black/60"
+		class="fixed inset-0 z-40 bg-black/30"
 		role="presentation"
 		onclick={onClose}
 		transition:fade={{ duration: 150 }}
@@ -229,6 +229,9 @@
 									src={result.pr.authorAvatarUrl}
 									alt=""
 									class="pr-avatar"
+									loading="lazy"
+									referrerpolicy="no-referrer"
+									onerror={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')}
 								/>
 							{/if}
 							<span class="pr-title">{result.pr.title}</span>
@@ -284,11 +287,11 @@
 		width: 100%;
 		max-width: 520px;
 		border-radius: 12px;
-		border: 1px solid var(--color-border);
-		background: var(--color-bg-secondary);
-		box-shadow:
-			0 16px 48px rgba(0, 0, 0, 0.2),
-			0 4px 12px rgba(0, 0, 0, 0.1);
+		border: 1px solid var(--color-glass-border);
+		background: var(--color-glass-bg);
+		backdrop-filter: blur(16px) saturate(1.4);
+		-webkit-backdrop-filter: blur(16px) saturate(1.4);
+		box-shadow: var(--color-shadow-xl);
 		overflow: hidden;
 	}
 

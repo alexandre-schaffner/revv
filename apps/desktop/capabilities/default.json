@@ -2,5 +2,5 @@
   "identifier": "default",
   "description": "Default capabilities for Revv",
   "windows": ["main"],
-  "permissions": ["core:default", "deep-link:default", "opener:default"]
+  "permissions": ["core:default", "deep-link:default", "opener:default", "core:window:allow-start-dragging", "mcp-bridge:default"]
 }

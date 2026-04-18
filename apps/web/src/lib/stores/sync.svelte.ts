@@ -40,12 +40,19 @@ export function applySynced(prId: string, summary: ThreadSummary, timestamp: str
 	summaries = next;
 	lastSyncAt = timestamp;
 	syncError = null;
+	syncing = false;
 }
 
 export function setBatchSummaries(entries: Array<{ prId: string; summary: ThreadSummary }>): void {
 	const next = new Map(summaries);
 	for (const { prId, summary } of entries) next.set(prId, summary);
 	summaries = next;
+}
+
+export function resetForSync(): void {
+	lastSyncAt = null;
+	syncing = true;
+	syncError = null;
 }
 
 export function reset(): void {

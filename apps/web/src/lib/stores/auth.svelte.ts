@@ -1,6 +1,7 @@
 import { authClient } from '$lib/auth-client';
 import * as prs from '$lib/stores/prs.svelte';
 import * as settings from '$lib/stores/settings.svelte';
+import { openAddRepoDialog } from '$lib/stores/sidebar.svelte';
 import * as sync from '$lib/services/sync';
 import { goto } from '$app/navigation';
 import { API_BASE_URL } from '@revv/shared';
@@ -145,6 +146,9 @@ async function poll(): Promise<void> {
 			isPolling = false;
 			await loadUser();
 			await focusWindow();
+			if (prs.getRepositories().length === 0) {
+				openAddRepoDialog();
+			}
 			return;
 		}
 

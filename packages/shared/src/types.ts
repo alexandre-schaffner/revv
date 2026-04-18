@@ -31,6 +31,7 @@ export interface PullRequest {
 	body: string | null;
 	authorLogin: string;
 	authorAvatarUrl: string | null;
+	requestedReviewers: string[];
 	status: PullRequestStatus;
 	reviewStatus: ReviewStatus;
 	sourceBranch: string;
@@ -46,7 +47,9 @@ export interface PullRequest {
 	fetchedAt: string;
 }
 
-export type ThinkingEffort = 'low' | 'medium' | 'high';
+export type ThinkingEffort = 'ultrathink' | 'max' | 'extra-high' | 'high' | 'medium' | 'low';
+
+export type ContextWindow = '200k' | '1m';
 
 export type AiAgent = 'opencode' | 'claude';
 
@@ -56,6 +59,7 @@ export interface UserSettings {
 	aiModel: string;
 	aiThinkingEffort: ThinkingEffort;
 	aiAgent: AiAgent;
+	aiContextWindow: ContextWindow;
 	theme: string;
 	diffViewMode: string;
 	autoFetchInterval: number;
@@ -136,4 +140,14 @@ export interface HunkDecision {
 	hunkIndex: number;
 	decision: HunkDecisionType;
 	decidedAt: string;
+}
+
+export type SyncChangeKind = 'review_requested' | 'pr_updated' | 'pr_closed' | 'pr_authored';
+
+export interface SyncChange {
+	kind: SyncChangeKind;
+	prId: string;
+	prTitle: string;
+	prNumber: number;
+	repoFullName: string;
 }

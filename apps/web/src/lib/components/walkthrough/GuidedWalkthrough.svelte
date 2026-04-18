@@ -4,7 +4,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Separator } from '$lib/components/ui/separator';
-	import { RefreshCw, ArrowDown, Search, FileText, Brain, PenTool, CheckCircle, AlertTriangle } from '@lucide/svelte';
+	import { RefreshCw, ArrowDown, Search, FileText, Brain, PenTool, CheckCircle, AlertTriangle, Gauge } from '@lucide/svelte';
 	import { getDiffThemeType } from '$lib/stores/theme.svelte';
 	import { initHighlighter } from '$lib/utils/code-highlight.svelte';
 	import {
@@ -18,22 +18,35 @@
 		getPhaseMessage,
 		getStreamStartedAt,
 		getIssues,
-		getIsLiveGeneration,
-		streamWalkthrough,
-		regenerate,
-	} from '$lib/stores/walkthrough.svelte';
+		getRatings,
+	getIsLiveGeneration,
+	hasBlockAnimated,
+	markBlockAnimated,
+	prepareEntry,
+	streamWalkthrough,
+	hydrateFromCache,
+	regenerate,
+} from '$lib/stores/walkthrough.svelte';
+	import { jumpToDiffLine } from '$lib/stores/review.svelte';
+	import { Skeleton } from '$lib/components/ui/skeleton/index.js';
+	import { groupIssuesBySeverityWithIndex } from '$lib/utils/walkthrough-issues';
 
+	import FileBadge from '$lib/components/ui/FileBadge.svelte';
+	import IssueCard from './IssueCard.svelte';
 	import WalkthroughMarkdownBlock from './WalkthroughMarkdownBlock.svelte';
 	import WalkthroughCodeBlock from './WalkthroughCodeBlock.svelte';
 	import WalkthroughDiffBlock from './WalkthroughDiffBlock.svelte';
+	import WalkthroughRatingsPanel from './WalkthroughRatingsPanel.svelte';
+	import RegenerateDialog from './RegenerateDialog.svelte';
 
 	interface Props {
 		prId: string;
 		scrollRoot?: HTMLElement | undefined;
 		isActive?: boolean;
+		sidebarOffset?: number;
 	}
 
-	let { prId, scrollRoot, isActive = true }: Props = $props();
+	let { prId, scrollRoot, isActive = true, sidebarOffset = 0 }: Props = $props();
 
 	const blocks = $derived(getBlocks());
 	const summary = $derived(getSummary());
@@ -46,6 +59,8 @@
 	const streamStartedAt = $derived(getStreamStartedAt());
 	const themeType = $derived(getDiffThemeType());
 	const issues = $derived(getIssues());
+	const issueGroups = $derived(groupIssuesBySeverityWithIndex(issues));
+	const ratings = $derived(getRatings());
 	const isLiveGeneration = $derived(getIsLiveGeneration());
 
 	const riskClasses: Record<string, string> = {
@@ -54,22 +69,11 @@
 		high: 'risk-badge risk-badge--high',
 	};
 
-	const severityClasses: Record<string, string> = {
-		info: 'issue-badge issue-badge--info',
-		warning: 'issue-badge issue-badge--warning',
-		critical: 'issue-badge issue-badge--critical',
-	};
-
-	const severityLabels: Record<string, string> = {
-		info: 'Info',
-		warning: 'Warning',
-		critical: 'Critical',
-	};
-
 	// ── Elapsed time ────────────────────────────────────────────────────
 	let elapsedSeconds = $state(0);
 	let elapsedTimer: ReturnType<typeof setInterval> | null = null;
 	let walkthroughDebounce: ReturnType<typeof setTimeout> | undefined;
+	let destroyed = false;
 
 	$effect(() => {
 		if (isStreaming && streamStartedAt) {
@@ -101,13 +105,18 @@
 	}
 
 	// ── Phase steps ─────────────────────────────────────────────────────
-	const PHASE_ORDER = ['connecting', 'exploring', 'analyzing', 'writing', 'finishing'] as const;
+	// `rating` sits between `writing` and `finishing` — the model writes the
+	// narrative, then runs a batched scorecard pass, then wraps up. Without
+	// its own phase, 9 back-to-back rate_axis calls look identical to a stall
+	// on the "Writing" step.
+	const PHASE_ORDER = ['connecting', 'exploring', 'analyzing', 'writing', 'rating', 'finishing'] as const;
 
 	const phaseLabels: Record<string, string> = {
 		connecting: 'Connect',
 		exploring: 'Explore',
 		analyzing: 'Analyze',
 		writing: 'Write',
+		rating: 'Score',
 		finishing: 'Finish',
 	};
 
@@ -175,7 +184,21 @@
 
 	const STAGGER_MS = 85;
 	const STAGGER_CAP = 10;
-	const blockDelays = new Map<string, number>();
+
+	const blocksWithDelay = $derived.by(() => {
+		let newInBatch = 0;
+		return blocks.map((block) => {
+			if (hasBlockAnimated(prId, block.id)) {
+				// Already animated in a previous mount — skip animation entirely
+				return { block, delay: -1 };
+			}
+			// New block — assign staggered delay and record it immediately
+			const delay = Math.min(newInBatch, STAGGER_CAP) * STAGGER_MS;
+			markBlockAnimated(prId, block.id);
+			newInBatch += 1;
+			return { block, delay };
+		});
+	});
 
 	// ── Issue → step navigation ─────────────────────────────────────────
 	// Issues carry `blockIds` — the block(s) that explain them. Clicking an
@@ -189,46 +212,61 @@
 		return idx >= 0 ? idx + 1 : null;
 	}
 
-	let highlightedBlockId = $state<string | null>(null);
-	let highlightTimeout: ReturnType<typeof setTimeout> | null = null;
-
 	function jumpToStep(blockId: string): void {
 		const el = document.getElementById(`step-${blockId}`);
-		if (!el) return;
-		el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-		highlightedBlockId = blockId;
-		if (highlightTimeout) clearTimeout(highlightTimeout);
-		highlightTimeout = setTimeout(() => {
-			highlightedBlockId = null;
-			highlightTimeout = null;
-		}, 1600);
+		if (!el || !scrollRoot) return;
+		// Compute offset relative to the scroll container so repeated clicks
+		// always trigger a scroll (scrollIntoView is a no-op when already in view)
+		const containerRect = scrollRoot.getBoundingClientRect();
+		const elRect = el.getBoundingClientRect();
+		const offset = elRect.top - containerRect.top + scrollRoot.scrollTop - 16;
+    scrollRoot.scrollTo({ top: offset, behavior: 'smooth' });
+    // Defer the highlight class toggle to the next animation frame so the
+    // forced reflow doesn't cancel the smooth scroll we just initiated
+    requestAnimationFrame(() => {
+        el.classList.remove('block-wrapper--highlighted');
+        void el.offsetWidth;
+        el.classList.add('block-wrapper--highlighted');
+    });
 	}
-
-	const blocksWithDelay = $derived.by(() => {
-		let newInBatch = 0;
-		return blocks.map((block) => {
-			let delay = blockDelays.get(block.id);
-			if (delay === undefined) {
-				delay = Math.min(newInBatch, STAGGER_CAP) * STAGGER_MS;
-				blockDelays.set(block.id, delay);
-				newInBatch += 1;
-			}
-			return { block, delay };
-		});
-	});
 
 	onMount(() => {
 		initHighlighter();
-		walkthroughDebounce = setTimeout(() => {
-			streamWalkthrough(prId);
-		}, 2000);
+		// Seed a loading entry synchronously so the UI renders the skeleton
+		// while we check the cache. Without this, the derived state resolves
+		// to defaults (no summary, not streaming, no error) and the template
+		// briefly shows the "No walkthrough data received" empty state.
+		prepareEntry(prId);
+		// Try to hydrate instantly from the JSON cache endpoint. On a hit the
+		// walkthrough renders immediately with no SSE round-trip. On a miss
+		// we fall back to the debounced SSE stream — the debounce is intentional
+		// for uncached PRs so quickly arrowing through the PR list doesn't
+		// trigger spurious AI generations.
+		hydrateFromCache(prId).then((hit) => {
+			if (!hit && !destroyed) {
+				walkthroughDebounce = setTimeout(() => {
+					streamWalkthrough(prId);
+				}, 2000);
+			}
+		});
 	});
 
 	onDestroy(() => {
+		destroyed = true;
 		if (elapsedTimer) clearInterval(elapsedTimer);
 		if (walkthroughDebounce) clearTimeout(walkthroughDebounce);
-		if (highlightTimeout) clearTimeout(highlightTimeout);
 	});
+
+	// ── Regenerate dialog ───────────────────────────────────────────────
+	let regenerateDialogOpen = $state(false);
+
+	function handleRegenerate(): void {
+		if (issues.length > 0) {
+			regenerateDialogOpen = true;
+		} else {
+			regenerate(prId);
+		}
+	}
 </script>
 
 <div class="walkthrough">
@@ -256,6 +294,8 @@
 								<Brain size={14} />
 							{:else if step === 'writing'}
 								<PenTool size={14} />
+							{:else if step === 'rating'}
+								<Gauge size={14} />
 							{:else}
 								<CheckCircle size={14} />
 							{/if}
@@ -287,11 +327,11 @@
 			{#if streamError.includes('not configured') || streamError.includes('API key')}
 				<p class="error-hint">Add your Anthropic API key in Settings to enable walkthroughs.</p>
 			{/if}
-			<Button variant="outline" size="sm" onclick={() => regenerate(prId)}>
-				<RefreshCw size={14} />
-				Try again
-			</Button>
-		</div>
+		<Button variant="outline" size="sm" onclick={handleRegenerate}>
+			<RefreshCw size={14} />
+			Try again
+		</Button>
+	</div>
 	{:else if blocks.length === 0 && isStreaming}
 		<!-- Loading state: skeleton + exploration feed.
 		     The phase stepper lives above as a sibling of this branch so it
@@ -307,23 +347,23 @@
 			</div>
 
 			<!-- Skeleton placeholder -->
-			<div class="skeleton-body">
+			<div class="skeleton-body" aria-hidden="true">
 				<div class="skeleton-summary">
-					<div class="skeleton-badge"></div>
-					<div class="skeleton-line" style="width: 95%"></div>
-					<div class="skeleton-line" style="width: 80%"></div>
-					<div class="skeleton-line" style="width: 50%"></div>
+					<Skeleton class="h-[22px] w-[60px] rounded-full" />
+					<Skeleton class="h-[14px] w-[95%]" />
+					<Skeleton class="h-[14px] w-[80%]" />
+					<Skeleton class="h-[14px] w-[50%]" />
 				</div>
 
 				<div class="skeleton-separator"></div>
 
 				<div class="skeleton-card">
 					<div class="skeleton-card-body">
-						<div class="skeleton-line" style="width: 90%"></div>
-						<div class="skeleton-line" style="width: 100%"></div>
-						<div class="skeleton-line" style="width: 85%"></div>
-						<div class="skeleton-line" style="width: 75%"></div>
-						<div class="skeleton-line" style="width: 60%"></div>
+						<Skeleton class="h-[14px] w-[90%]" />
+						<Skeleton class="h-[14px] w-full" />
+						<Skeleton class="h-[14px] w-[85%]" />
+						<Skeleton class="h-[14px] w-[75%]" />
+						<Skeleton class="h-[14px] w-[60%]" />
 					</div>
 				</div>
 			</div>
@@ -360,25 +400,18 @@
 		<!-- Stream ended with no data -->
 		<div class="walkthrough-empty">
 			<p class="loading-text">No walkthrough data received. The AI may have timed out.</p>
-			<Button variant="outline" size="sm" onclick={() => regenerate(prId)}>
-				<RefreshCw size={14} />
-				Try again
-			</Button>
-		</div>
+		<Button variant="outline" size="sm" onclick={handleRegenerate}>
+			<RefreshCw size={14} />
+			Try again
+		</Button>
+	</div>
 	{:else if summary}
 		<!-- Landing page content -->
 		<div class="walkthrough-content" in:fade={{ duration: 280, delay: 60 }}>
 			<!-- Summary header -->
-			<div class="summary-section">
-				<div class="summary-header">
-					<Badge variant="outline" class={riskClasses[riskLevel] ?? 'risk-badge risk-badge--low'}>
-						{riskLevel} risk
-					</Badge>
-					{#if isStreaming}
-						<span class="elapsed-badge">{formatElapsed(elapsedSeconds)}</span>
-					{/if}
-				</div>
-				<p class="summary-text">{summary}</p>
+		<div class="summary-section">
+			<h2 class="summary-heading">Overview</h2>
+			<p class="summary-text">{summary}</p>
 				{#if streamError}
 					<p class="error-inline">{streamError}</p>
 				{/if}
@@ -398,57 +431,55 @@
 
 			<Separator />
 
-			<!-- Issues -->
+			<!-- Issues — bucketed by severity (Critical → Warning → Info) so the
+			     reviewer's eye lands on blockers before nice-to-knows. The overall
+			     "N issues flagged" line is preserved as the section header; each
+			     bucket then carries its own labeled sub-header with a count. -->
 			{#if issues.length > 0}
 				<div class="issues-section">
 					<div class="issues-header">
 						<AlertTriangle size={13} />
 						<span>{issues.length} issue{issues.length !== 1 ? 's' : ''} flagged</span>
 					</div>
-					<div class="issues-list">
-						{#each issues as issue, i (issue.id)}
-							{@const targetBlockId = issue.blockIds?.[0] ?? null}
-							{@const stepN = targetBlockId ? stepNumberFor(targetBlockId) : null}
-							{#if targetBlockId}
-								<button
-									type="button"
-									class="issue-item issue-item--{issue.severity} issue-item--clickable"
-									style:--issue-delay="{Math.min(i, 6) * 50}ms"
-									onclick={() => jumpToStep(targetBlockId)}
-									aria-label="Jump to step {stepN} — {issue.title}"
-								>
-									<div class="issue-top">
-										<span class={severityClasses[issue.severity] ?? 'issue-badge issue-badge--info'}>
-											{severityLabels[issue.severity] ?? issue.severity}
-										</span>
-										<span class="issue-title">{issue.title}</span>
-										{#if stepN !== null}
-											<span class="issue-step-tag">→ Step {stepN}</span>
-										{/if}
-									</div>
-									<p class="issue-description">{issue.description}</p>
-									{#if issue.filePath}
-										<span class="issue-location">
-											{issue.filePath}{issue.startLine != null ? `:${issue.startLine}` : ''}
-										</span>
-									{/if}
-								</button>
-							{:else}
-								<div class="issue-item issue-item--{issue.severity}" style:--issue-delay="{Math.min(i, 6) * 50}ms">
-									<div class="issue-top">
-										<span class={severityClasses[issue.severity] ?? 'issue-badge issue-badge--info'}>
-											{severityLabels[issue.severity] ?? issue.severity}
-										</span>
-										<span class="issue-title">{issue.title}</span>
-									</div>
-									<p class="issue-description">{issue.description}</p>
-									{#if issue.filePath}
-										<span class="issue-location">
-											{issue.filePath}{issue.startLine != null ? `:${issue.startLine}` : ''}
-										</span>
-									{/if}
+					<div class="issues-groups">
+						{#each issueGroups as group (group.severity)}
+							<div class="issues-group">
+								<div class="issues-group-header issues-group-header--{group.severity}">
+									<span class="issues-group-dot"></span>
+									<span class="issues-group-label">{group.label}</span>
+									<span class="issues-group-count">{group.issues.length}</span>
 								</div>
-							{/if}
+								<div class="issues-list">
+									{#each group.issues as { issue, globalIndex } (issue.id)}
+										{@const targetBlockId = issue.blockIds?.[0] ?? null}
+										{@const stepN = targetBlockId ? stepNumberFor(targetBlockId) : null}
+										<!-- Gate clickability on the referenced block actually existing in
+										     the current render. `blockIds` can point to a block that isn't in
+										     `blocks` (kept issues after regenerate, or a mid-stream race
+										     between the issue arriving and its block rendering) — in which
+										     case jumpToStep would silently no-op and the click would feel
+										     broken. stepN is null whenever the lookup fails, which catches
+										     both a missing targetBlockId and an id that doesn't resolve. -->
+										{#if stepN !== null && targetBlockId}
+											<IssueCard
+												{issue}
+												clickable
+												onclick={() => jumpToStep(targetBlockId)}
+												stepTag={`→ Step ${stepN}`}
+												animationDelay="{Math.min(globalIndex, 6) * 50}ms"
+												onfileclick={(filePath, line) => jumpToDiffLine(filePath, line)}
+											/>
+										{:else}
+											<IssueCard
+												{issue}
+												stepTag={null}
+												animationDelay="{Math.min(globalIndex, 6) * 50}ms"
+												onfileclick={(filePath, line) => jumpToDiffLine(filePath, line)}
+											/>
+										{/if}
+									{/each}
+								</div>
+							</div>
 						{/each}
 					</div>
 				</div>
@@ -458,15 +489,23 @@
 			<!-- Blocks -->
 			<div class="blocks">
 			{#each blocksWithDelay as { block, delay } (block.id)}
-				<div
-					id="step-{block.id}"
-					class="block-wrapper"
-					class:block-wrapper--highlighted={highlightedBlockId === block.id}
-					style:--enter-delay="{delay}ms"
-				>
-					{#if block.type === 'markdown'}
+			<div
+				id="step-{block.id}"
+				class="block-wrapper"
+				class:block-wrapper--no-anim={delay === -1}
+
+				style:--enter-delay="{delay}ms"
+			>
+				{#if block.type === 'markdown'}
+					{@const isSentiment = block.content.trimStart().startsWith('## Overall Sentiment')}
+					{#if isSentiment}
+						<div class="sentiment-card">
+							<WalkthroughMarkdownBlock content={block.content} />
+						</div>
+					{:else}
 						<WalkthroughMarkdownBlock content={block.content} />
-					{:else if block.type === 'code'}
+					{/if}
+				{:else if block.type === 'code'}
 						<WalkthroughCodeBlock {block} {themeType} />
 					{:else if block.type === 'diff'}
 						<WalkthroughDiffBlock {block} {themeType} />
@@ -490,17 +529,30 @@
 					{/if}
 				</div>
 			{/if}
+
+			<!-- Scorecard -->
+			{#if ratings.length > 0}
+				<Separator />
+				<WalkthroughRatingsPanel {ratings} {blocks} onJump={jumpToStep} />
+			{/if}
 		</div>
 
 		<!-- Scroll-to-bottom floating button -->
 		{#if userScrolledUp && isStreaming}
-			<button class="scroll-to-bottom" onclick={scrollToBottom}>
+			<button class="scroll-to-bottom" style="--sidebar-offset: {sidebarOffset}px" onclick={scrollToBottom}>
 				<ArrowDown size={14} />
 				New content
 			</button>
 		{/if}
 	{/if}
 </div>
+
+<RegenerateDialog
+	bind:open={regenerateDialogOpen}
+	{issues}
+	onconfirm={(kept) => regenerate(prId, kept)}
+	oncancel={() => {}}
+/>
 
 <style>
 	.walkthrough {
@@ -565,10 +617,10 @@
 		opacity: 1;
 	}
 
-	.phase-step--done {
-		color: var(--color-text-secondary);
-		opacity: 0.7;
-	}
+.phase-step--done {
+    color: var(--color-accent);
+    opacity: 1;
+}
 
 	.phase-step-icon {
 		display: flex;
@@ -659,7 +711,7 @@
 		font-variant-numeric: tabular-nums;
 		padding: 2px 8px;
 		background: var(--color-bg-tertiary);
-		border-radius: 999px;
+		border-radius: 9999px;
 	}
 
 	/* ── Skeleton ──────────────────────────────────────────────────────── */
@@ -694,39 +746,6 @@
 		flex-direction: column;
 		gap: 8px;
 		padding: 16px;
-	}
-
-	.skeleton-badge {
-		width: 60px;
-		height: 22px;
-		border-radius: 999px;
-		background: var(--color-bg-tertiary);
-		position: relative;
-		overflow: hidden;
-		flex-shrink: 0;
-	}
-
-	.skeleton-line {
-		height: 14px;
-		border-radius: 4px;
-		background: var(--color-bg-tertiary);
-		position: relative;
-		overflow: hidden;
-	}
-
-	.skeleton-badge::after,
-	.skeleton-line::after {
-		content: '';
-		position: absolute;
-		inset: 0;
-		background: linear-gradient(
-			90deg,
-			transparent 0%,
-			color-mix(in srgb, var(--color-text-primary) 6%, transparent) 50%,
-			transparent 100%
-		);
-		transform: translateX(-100%);
-		animation: shimmer 1.5s ease-in-out infinite;
 	}
 
 	/* ── Exploration feed ──────────────────────────────────────────────── */
@@ -825,6 +844,13 @@
 		margin-bottom: 10px;
 	}
 
+	.summary-heading {
+		font-size: 18px;
+		font-weight: 700;
+		color: var(--color-text-primary);
+		margin: 0 0 6px;
+	}
+
 	.summary-text {
 		font-size: 14px;
 		line-height: 1.6;
@@ -870,44 +896,44 @@
 
 	/* ── Risk badge colors ────────────────────────────────────────────── */
 
-	.summary-header :global(.risk-badge) {
+	:global(.risk-badge) {
 		font-weight: 600;
 		text-transform: uppercase;
 		font-size: 11px;
 		letter-spacing: 0.04em;
 	}
 
-	.summary-header :global(.risk-badge--low) {
-		background: color-mix(in srgb, #22c55e 12%, transparent);
-		color: #15803d;
-		border-color: color-mix(in srgb, #22c55e 30%, transparent);
+	:global(.risk-badge--low) {
+		background: color-mix(in srgb, var(--color-success) 12%, transparent);
+		color: var(--color-success);
+		border-color: color-mix(in srgb, var(--color-success) 30%, transparent);
 	}
 
-	.summary-header :global(.risk-badge--medium) {
-		background: color-mix(in srgb, #f59e0b 12%, transparent);
-		color: #b45309;
-		border-color: color-mix(in srgb, #f59e0b 30%, transparent);
+	:global(.risk-badge--medium) {
+		background: color-mix(in srgb, var(--color-warning) 12%, transparent);
+		color: var(--color-warning);
+		border-color: color-mix(in srgb, var(--color-warning) 30%, transparent);
 	}
 
-	.summary-header :global(.risk-badge--high) {
-		background: color-mix(in srgb, #ef4444 12%, transparent);
-		color: #dc2626;
-		border-color: color-mix(in srgb, #ef4444 30%, transparent);
+	:global(.risk-badge--high) {
+		background: color-mix(in srgb, var(--color-danger) 12%, transparent);
+		color: var(--color-danger);
+		border-color: color-mix(in srgb, var(--color-danger) 30%, transparent);
 	}
 
-	:global(.dark) .summary-header :global(.risk-badge--low) {
-		color: #4ade80;
+	:global(.dark) :global(.risk-badge--low) {
+		color: var(--color-success);
 	}
 
-	:global(.dark) .summary-header :global(.risk-badge--medium) {
-		color: #fbbf24;
+	:global(.dark) :global(.risk-badge--medium) {
+		color: var(--color-warning);
 	}
 
-	:global(.dark) .summary-header :global(.risk-badge--high) {
-		color: #f87171;
+	:global(.dark) :global(.risk-badge--high) {
+		color: var(--color-danger);
 	}
 
-	/* ── Issues ──────────────────────────────────────────────────────── */
+	/* ── Issues layout ───────────────────────────────────────────────── */
 
 	.issues-section {
 		margin-top: 20px;
@@ -929,135 +955,62 @@
 		letter-spacing: 0.05em;
 	}
 
+	.issues-groups {
+		display: flex;
+		flex-direction: column;
+		gap: 14px;
+	}
+
+	.issues-group {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
+
+	.issues-group-header {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		font-size: 10px;
+		font-weight: 600;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+		color: var(--color-text-secondary);
+	}
+
+	.issues-group-dot {
+		width: 6px;
+		height: 6px;
+		border-radius: 50%;
+		background: var(--severity-color, var(--color-text-muted));
+	}
+
+	.issues-group-label {
+		color: var(--severity-color, var(--color-text-secondary));
+	}
+
+	.issues-group-count {
+		color: var(--color-text-muted);
+		font-variant-numeric: tabular-nums;
+		font-weight: 500;
+	}
+
+	.issues-group-header--critical { --severity-color: var(--color-danger); }
+	.issues-group-header--warning { --severity-color: var(--color-warning); }
+	.issues-group-header--info { --severity-color: var(--color-accent); }
+
 	.issues-list {
 		display: flex;
 		flex-direction: column;
 		gap: 8px;
 	}
 
-	.issue-item {
-		padding: 10px 14px;
-		border-radius: 8px;
-		border-left: 3px solid transparent;
-		background: var(--color-bg-secondary);
-		border: 1px solid var(--color-border);
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-		animation: content-enter 0.55s cubic-bezier(0.22, 0.61, 0.36, 1) both;
-		animation-delay: var(--issue-delay, 0ms);
-		text-align: left;
-		font: inherit;
-		color: inherit;
-		width: 100%;
-	}
-
-	button.issue-item {
-		cursor: pointer;
-		transition: transform 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
-	}
-
-	button.issue-item:hover {
-		transform: translateY(-1px);
-		border-color: color-mix(in srgb, var(--color-accent) 40%, var(--color-border));
-		box-shadow: 0 2px 8px color-mix(in srgb, var(--color-text-primary) 6%, transparent);
-	}
-
-	button.issue-item:focus-visible {
-		outline: 2px solid var(--color-accent);
-		outline-offset: 2px;
-	}
-
-	.issue-step-tag {
-		margin-left: auto;
-		font-size: 10px;
-		font-weight: 600;
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
-		color: var(--color-text-muted);
-		padding: 1px 6px;
-		border-radius: 4px;
-		background: var(--color-bg-tertiary);
-		flex-shrink: 0;
-	}
-
-	button.issue-item:hover .issue-step-tag {
-		color: var(--color-accent);
-	}
-
-	.issue-item--info {
-		border-left-color: #60a5fa;
-	}
-
-	.issue-item--warning {
-		border-left-color: #f59e0b;
-	}
-
-	.issue-item--critical {
-		border-left-color: #ef4444;
-		background: color-mix(in srgb, #ef4444 4%, var(--color-bg-secondary));
-	}
-
-	.issue-top {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-	}
-
-	.issue-title {
-		font-size: 13px;
-		font-weight: 500;
-		color: var(--color-text-primary);
-	}
-
-	.issue-description {
-		font-size: 12px;
-		color: var(--color-text-secondary);
-		line-height: 1.5;
-		margin: 0;
-	}
-
-	.issue-location {
-		font-size: 11px;
-		font-family: var(--font-mono, monospace);
-		color: var(--color-text-muted);
-		opacity: 0.8;
-	}
-
-	.issue-badge {
-		font-size: 10px;
-		font-weight: 600;
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
-		padding: 1px 7px;
-		border-radius: 999px;
-		border: 1px solid transparent;
-		flex-shrink: 0;
-	}
-
-	.issue-badge--info {
-		background: color-mix(in srgb, #60a5fa 12%, transparent);
-		color: #2563eb;
-		border-color: color-mix(in srgb, #60a5fa 30%, transparent);
-	}
-
-	.issue-badge--warning {
-		background: color-mix(in srgb, #f59e0b 12%, transparent);
-		color: #b45309;
-		border-color: color-mix(in srgb, #f59e0b 30%, transparent);
-	}
-
-	.issue-badge--critical {
-		background: color-mix(in srgb, #ef4444 12%, transparent);
-		color: #dc2626;
-		border-color: color-mix(in srgb, #ef4444 30%, transparent);
-	}
-
-	:global(.dark) .issue-badge--info { color: #93c5fd; }
-	:global(.dark) .issue-badge--warning { color: #fbbf24; }
-	:global(.dark) .issue-badge--critical { color: #f87171; }
-
 	/* ── Blocks ──────────────────────────────────────────────────────── */
+
+	/* Give every Separator inside the walkthrough content breathing room */
+	.walkthrough-content :global([data-slot="separator"]) {
+		margin: 28px 0;
+	}
 
 	.blocks {
 		display: flex;
@@ -1078,8 +1031,21 @@
 		transition: outline-color 200ms ease;
 	}
 
+	@keyframes block-pulse {
+		0%   { outline-color: var(--color-accent); }
+		70%  { outline-color: var(--color-accent); }
+		100% { outline-color: transparent; }
+	}
+
 	.block-wrapper--highlighted {
-		outline-color: var(--color-accent);
+		animation: block-pulse 1.6s ease forwards;
+	}
+
+	.block-wrapper--no-anim {
+		animation: none;
+		opacity: 1;
+		transform: none;
+		filter: none;
 	}
 
 	/* ── Streaming bottom indicator ──────────────────────────────────── */
@@ -1097,7 +1063,7 @@
 		gap: 4px;
 		padding: 8px 14px;
 		background: var(--color-bg-secondary);
-		border-radius: 999px;
+		border-radius: 9999px;
 		border: 1px solid var(--color-border);
 	}
 
@@ -1135,20 +1101,20 @@
 		position: fixed;
 		bottom: 20px;
 		left: 50%;
-		transform: translateX(-50%);
+		transform: translateX(calc(-50% + var(--sidebar-offset, 0px)));
 		display: flex;
 		align-items: center;
 		gap: 6px;
 		background: var(--color-accent);
-		color: white;
+		color: var(--color-primary-foreground);
 		border: none;
-		border-radius: 999px;
+		border-radius: 9999px;
 		padding: 6px 14px;
 		font-size: 12px;
 		font-weight: 500;
 		cursor: pointer;
-		box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-		transition: opacity 150ms;
+		box-shadow: var(--color-shadow-sm);
+		transition: opacity 150ms, transform 100ms var(--ease-out-expo);
 		z-index: 10;
 	}
 
@@ -1160,14 +1126,14 @@
 
 	.error-text {
 		font-size: 12px;
-		color: var(--color-danger, #ef4444);
+		color: var(--color-danger);
 		white-space: pre-wrap;
 		word-break: break-word;
 		overflow-y: auto;
 		max-height: 200px;
 		max-width: 480px;
 		width: 100%;
-		background: color-mix(in srgb, var(--color-danger, #ef4444) 8%, transparent);
+		background: color-mix(in srgb, var(--color-danger) 8%, transparent);
 		border: 1px solid color-mix(in srgb, var(--color-danger, #ef4444) 25%, transparent);
 		border-radius: 6px;
 		padding: 10px 12px;
@@ -1188,11 +1154,6 @@
 	}
 
 	/* ── Animations ──────────────────────────────────────────────────── */
-
-	@keyframes shimmer {
-		0% { transform: translateX(-100%); }
-		100% { transform: translateX(100%); }
-	}
 
 	@keyframes pulse {
 		0%, 100% { opacity: 0.3; }
@@ -1229,16 +1190,10 @@
 	@media (prefers-reduced-motion: reduce) {
 		.block-wrapper,
 		.summary-section,
-		.issues-section,
-		.issue-item,
-		button.issue-item {
+		.issues-section {
 			animation-duration: 0.01ms !important;
 			animation-delay: 0ms !important;
 			transition: none !important;
-		}
-
-		button.issue-item:hover {
-			transform: none;
 		}
 	}
 
@@ -1264,5 +1219,14 @@
 			opacity: 1;
 			transform: scale(1);
 		}
+	}
+
+	/* ── Sentiment card ──────────────────────────────────────────────── */
+
+	.sentiment-card {
+		background: color-mix(in srgb, var(--color-accent) 5%, var(--color-bg-secondary));
+		border: 1px solid color-mix(in srgb, var(--color-accent) 20%, transparent);
+		border-radius: 10px;
+		padding: 16px 20px;
 	}
 </style>

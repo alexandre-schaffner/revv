@@ -8,6 +8,7 @@ const PHASE_MESSAGES: Record<string, { phase: WalkthroughPhase; message: string 
 	exploration: { phase: 'exploring', message: 'Reading files and understanding changes...' },
 	summary: { phase: 'analyzing', message: 'Forming assessment and risk analysis...' },
 	block: { phase: 'writing', message: 'Building walkthrough...' },
+	rating: { phase: 'rating', message: 'Scoring the PR across 9 axes...' },
 };
 
 // ── Guard wrapper ───────────────────────────────────────────────────────────
@@ -45,6 +46,7 @@ export function guardWalkthroughStream(
 
 		let sawSummary = false;
 		let sawBlock = false;
+		let sawRating = false;
 		let sawDone = false;
 		let sawError = false;
 
@@ -52,6 +54,7 @@ export function guardWalkthroughStream(
 		let emittedExploringPhase = false;
 		let emittedAnalyzingPhase = false;
 		let emittedWritingPhase = false;
+		let emittedRatingPhase = false;
 
 		let inactivityTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -93,6 +96,7 @@ export function guardWalkthroughStream(
 				// Track state
 				if (event.type === 'summary') sawSummary = true;
 				if (event.type === 'block') sawBlock = true;
+				if (event.type === 'rating') sawRating = true;
 				if (event.type === 'done') sawDone = true;
 				if (event.type === 'error') sawError = true;
 
@@ -109,6 +113,10 @@ export function guardWalkthroughStream(
 					if (event.type === 'block' && !emittedWritingPhase) {
 						emittedWritingPhase = true;
 						yield { type: 'phase' as const, data: PHASE_MESSAGES['block']! };
+					}
+					if (event.type === 'rating' && !emittedRatingPhase) {
+						emittedRatingPhase = true;
+						yield { type: 'phase' as const, data: PHASE_MESSAGES['rating']! };
 					}
 				}
 
@@ -146,8 +154,14 @@ export function guardWalkthroughStream(
 			// Synthesize one based on what we observed.
 			if (!sawDone && !sawError) {
 				if (sawSummary && sawBlock) {
-					// We have content but no explicit done — synthesize it
-					debug(label, 'Generator ended without done event, synthesizing done');
+					// We have content but no explicit done — synthesize it. Ratings are
+					// optional for this degraded path: a walkthrough with summary + blocks
+					// is still useful even if the model never got around to the scorecard.
+					debug(
+						label,
+						'Generator ended without done event, synthesizing done. sawRating:',
+						sawRating,
+					);
 					yield {
 						type: 'done' as const,
 						data: {

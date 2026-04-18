@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/nickel-org/nickel.rs/refs/heads/master/nickel/tauri-schema.json",
-  "productName": "Revv",
+  "productName": "Revv (Alpha)",
   "identifier": "com.revv.app",
   "version": "0.0.1",
   "build": {
@@ -67,7 +67,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Revv",
+        "title": "Revv (Alpha)",
         "width": 1280,
         "height": 800,
         "minWidth": 900,
@@ -79,7 +79,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' http://localhost:45678; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:"
+      "csp": "default-src 'self'; connect-src 'self' http://localhost:45678 ws://localhost:9223; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:"
     }
   },
   "plugins": {

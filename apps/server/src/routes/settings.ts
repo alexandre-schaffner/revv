@@ -43,7 +43,15 @@ export const settingsRoutes = new Elysia({ prefix: '/api/settings' })
 				t.Object({
 					aiProvider: t.String(),
 					aiModel: t.String(),
-					aiThinkingEffort: t.Union([t.Literal('low'), t.Literal('medium'), t.Literal('high')]),
+					aiThinkingEffort: t.Union([
+						t.Literal('ultrathink'),
+						t.Literal('max'),
+						t.Literal('extra-high'),
+						t.Literal('high'),
+						t.Literal('medium'),
+						t.Literal('low'),
+					]),
+					aiContextWindow: t.Union([t.Literal('200k'), t.Literal('1m')]),
 					aiAgent: t.Union([t.Literal('opencode'), t.Literal('claude')]),
 					theme: t.String(),
 					diffViewMode: t.String(),
@@ -67,14 +75,33 @@ export const settingsRoutes = new Elysia({ prefix: '/api/settings' })
 			return handleAppError(e, ctx);
 		}
 	})
-	.get('/models', async (ctx) => {
-		try {
-			const settings = await AppRuntime.runPromise(
-				Effect.flatMap(SettingsService, (s) => s.getSettings())
-			);
-			const models = await listCliModels(resolveAgent(settings));
-			return { models };
-		} catch (e) {
-			return handleAppError(e, ctx);
+	.get(
+		'/models',
+		async (ctx) => {
+			try {
+				const agentParam = ctx.query?.agent;
+				let agent: 'opencode' | 'claude';
+				if (agentParam === 'opencode' || agentParam === 'claude') {
+					agent = agentParam;
+				} else {
+					const settings = await AppRuntime.runPromise(
+						Effect.flatMap(SettingsService, (s) => s.getSettings())
+					);
+					agent = resolveAgent(settings);
+				}
+				const models = await listCliModels(agent);
+				return { models, agent };
+			} catch (e) {
+				return handleAppError(e, ctx);
+			}
+		},
+		{
+			query: t.Optional(
+				t.Object({
+					agent: t.Optional(
+						t.Union([t.Literal('opencode'), t.Literal('claude')])
+					),
+				})
+			),
 		}
-	});
+	);

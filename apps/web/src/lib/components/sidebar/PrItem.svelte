@@ -12,13 +12,20 @@
 	} from '$lib/stores/review.svelte';
 	import { enterScrollMode } from '$lib/stores/focus-mode.svelte';
 	import { toFileTreeEntries } from '$lib/types/review';
+	import { User } from '@lucide/svelte';
 	import StatusDot from '$lib/components/shared/StatusDot.svelte';
 	import DiffFileTree from '$lib/components/review/DiffFileTree.svelte';
-	let { pr, isSelected = false }: { pr: PullRequest; isSelected?: boolean } = $props();
+	let { pr, isSelected = false, navPrefix = 'pr' }: { pr: PullRequest; isSelected?: boolean; navPrefix?: string } = $props();
 
 	let expanded = $state(false);
+	let avatarFailed = $state(false);
 
-	const navId = $derived(`pr:${pr.id}`);
+	$effect(() => {
+		pr.authorAvatarUrl;
+		avatarFailed = false;
+	});
+
+	const navId = $derived(`${navPrefix}:${pr.id}`);
 	const isFocused = $derived(getFocusedId() === navId);
 	const reviewFiles = $derived(getReviewFiles());
 	const isLoadingFiles = $derived(getIsLoadingFiles());
@@ -70,16 +77,20 @@
 			<span class="text-text-muted">#{pr.externalId}</span>
 			<span class="text-text-primary">{pr.title}</span>
 		</span>
-		{#if pr.authorAvatarUrl}
+		{#if pr.authorAvatarUrl && !avatarFailed}
 			<img
 				src={pr.authorAvatarUrl}
 				alt={pr.authorLogin}
-				class="h-4 w-4 shrink-0 rounded-full"
+				class="h-4 w-4 shrink-0 rounded-full object-cover"
 				loading="lazy"
+				onerror={() => (avatarFailed = true)}
 			/>
 		{:else}
-			<span class="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-bg-elevated text-[9px] text-text-muted">
-				{pr.authorLogin[0]?.toUpperCase() ?? '?'}
+			<span
+				class="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-bg-elevated text-text-muted"
+				title={pr.authorLogin}
+			>
+				<User size={10} aria-hidden="true" />
 			</span>
 		{/if}
 	</button>
@@ -95,6 +106,7 @@
 					onFileSelect={handleFileSelect}
 					showHeader={false}
 					navParentId="pr:{pr.id}"
+					prId={pr.id}
 				/>
 			</div>
 		{/if}

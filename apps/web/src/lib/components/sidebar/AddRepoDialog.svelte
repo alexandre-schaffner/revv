@@ -16,6 +16,8 @@
 	// -- Browse tab state --
 	let browseSearch = $state('');
 	let addingRepos = $state(new Set<string>());
+	let highlightedIndex = $state(-1);
+	let repoListEl = $state<HTMLDivElement | null>(null);
 
 	let trackedFullNames = $derived(new Set(getRepositories().map((r) => r.fullName)));
 
@@ -43,6 +45,12 @@
 		return groups;
 	});
 
+	// Reset highlight when search changes
+	$effect(() => {
+		browseSearch;
+		highlightedIndex = -1;
+	});
+
 	// -- Manual tab state --
 	let fullName = $state('');
 	let isLoading = $state(false);
@@ -62,6 +70,7 @@
 			fullName = '';
 			localError = '';
 			activeTab = 'browse';
+			highlightedIndex = -1;
 		}
 	});
 
@@ -100,9 +109,39 @@
 		}
 	}
 
+	function scrollHighlightedIntoView() {
+		if (!repoListEl) return;
+		const el = repoListEl.querySelector<HTMLElement>('[data-highlighted="true"]');
+		el?.scrollIntoView({ block: 'nearest' });
+	}
+
+	function handleBrowseKeydown(e: KeyboardEvent) {
+		if (e.key === 'Escape') {
+			onClose();
+		} else if (e.key === 'ArrowDown') {
+			e.preventDefault();
+			highlightedIndex = Math.min(highlightedIndex + 1, filteredAvailable.length - 1);
+			scrollHighlightedIntoView();
+		} else if (e.key === 'ArrowUp') {
+			e.preventDefault();
+			if (highlightedIndex > 0) highlightedIndex--;
+			scrollHighlightedIntoView();
+		} else if (e.key === 'Enter' && highlightedIndex >= 0) {
+			const repo = filteredAvailable[highlightedIndex];
+			if (repo) handleBrowseAdd(repo.fullName);
+		} else if (e.key === 'Tab' && e.shiftKey) {
+			e.preventDefault();
+			activeTab = activeTab === 'browse' ? 'manual' : 'browse';
+		}
+	}
+
 	function handleManualKeydown(e: KeyboardEvent) {
 		if (e.key === 'Enter') handleManualAdd();
 		if (e.key === 'Escape') onClose();
+		if (e.key === 'Tab' && e.shiftKey) {
+			e.preventDefault();
+			activeTab = 'browse';
+		}
 	}
 </script>
 
@@ -159,7 +198,7 @@
 						class="h-8 flex-1 rounded-md border border-border bg-bg-elevated px-3 text-xs text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
 						placeholder="Search repositories..."
 						bind:value={browseSearch}
-						onkeydown={(e) => e.key === 'Escape' && onClose()}
+						onkeydown={handleBrowseKeydown}
 						autofocus
 					/>
 					<button
@@ -176,7 +215,7 @@
 				</div>
 
 				<!-- Repo list -->
-				<div class="flex-1 overflow-y-auto px-2 pb-3">
+				<div class="flex-1 overflow-y-auto px-2 pb-3" bind:this={repoListEl}>
 					{#if getAvailableReposLoading() && getAvailableRepos().length === 0}
 						<div class="flex items-center justify-center py-12">
 							<Loader2 size={18} class="animate-spin text-text-muted" />
@@ -201,7 +240,10 @@
 										<img
 											src={repos[0].avatarUrl}
 											alt=""
-											class="h-4 w-4 rounded-full"
+											class="h-4 w-4 rounded-full object-cover"
+											loading="lazy"
+											referrerpolicy="no-referrer"
+											onerror={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')}
 										/>
 									{/if}
 									<span class="text-[10px] font-semibold uppercase tracking-wider text-text-muted"
@@ -213,11 +255,16 @@
 								{#each repos as repo (repo.fullName)}
 									{@const isTracked = trackedFullNames.has(repo.fullName)}
 									{@const isAdding = addingRepos.has(repo.fullName)}
+									{@const flatIndex = filteredAvailable.indexOf(repo)}
+									{@const isHighlighted = flatIndex === highlightedIndex}
 									<button
 										class="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left transition-colors
 											{isTracked
 											? 'opacity-50'
-											: 'hover:bg-bg-elevated'}"
+											: isHighlighted
+												? 'bg-bg-elevated ring-1 ring-accent/40'
+												: 'hover:bg-bg-elevated'}"
+										data-highlighted={isHighlighted ? 'true' : undefined}
 										onclick={() => handleBrowseAdd(repo.fullName)}
 										disabled={isTracked || isAdding}
 									>

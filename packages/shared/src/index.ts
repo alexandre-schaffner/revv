@@ -7,6 +7,7 @@ export type {
 	PullRequest,
 	UserSettings,
 	ThinkingEffort,
+	ContextWindow,
 	AiAgent,
 	SessionStatus,
 	ThreadStatus,
@@ -20,6 +21,8 @@ export type {
 	ThreadSummary,
 	UserRole,
 	UserIdentity,
+	SyncChangeKind,
+	SyncChange,
 } from './types';
 export type { WsServerMessage, WsClientMessage } from './ws';
 export * from './walkthrough';

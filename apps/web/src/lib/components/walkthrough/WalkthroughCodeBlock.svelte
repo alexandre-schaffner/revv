@@ -3,6 +3,8 @@
 	import { File as PierreFile, type FileOptions } from '@pierre/diffs';
 	import { workerManager } from '$lib/utils/worker-pool';
 	import { renderMarkdown } from '$lib/utils/markdown';
+	import { jumpToDiffLine } from '$lib/stores/review.svelte';
+	import { ArrowUpRight } from '@lucide/svelte';
 
 	interface Props {
 		block: CodeBlock;
@@ -26,13 +28,16 @@
 			theme: { dark: 'pierre-dark', light: 'pierre-light' },
 			themeType,
 			overflow: 'scroll',
+			// Suppress Pierre's built-in file header — we render our own clickable
+			// header above so the user can jump to this file in the Diff tab.
+			disableFileHeader: true,
 		};
 
 		instance = new PierreFile<never>(options, workerManager);
 		instance.render({
 			containerWrapper: el,
 			file: {
-				name: `${block.filePath}:${block.startLine}-${block.endLine}`,
+				name: block.filePath,
 				contents: block.content,
 				lang: block.language as any,
 			},
@@ -57,10 +62,13 @@
 	{/if}
 
 	<div class="code-panel">
-		<div class="code-header">
+		<button class="code-header" onclick={() => jumpToDiffLine(block.filePath, block.startLine)}>
 			<span class="code-file-path">{block.filePath}</span>
-			<span class="code-line-range">:{block.startLine}-{block.endLine}</span>
-		</div>
+			<span class="code-header-right">
+				<span class="code-line-range">:{block.startLine}-{block.endLine}</span>
+				<span class="code-jump-icon"><ArrowUpRight size={11} /></span>
+			</span>
+		</button>
 		<div class="code-body" use:mountCodeBlock></div>
 	</div>
 
@@ -89,10 +97,10 @@
 
 	.annotation {
 		display: flex;
-		align-items: center;
+		align-items: flex-start;
 		padding: 16px 20px;
 		background: var(--revv-bg-secondary);
-		font-size: 13px;
+		font-size: 14px;
 		line-height: 1.6;
 		color: var(--revv-text-secondary);
 	}
@@ -119,7 +127,7 @@
 
 	.annotation-content :global(code) {
 		font-family: var(--font-mono);
-		font-size: 11px;
+		font-size: 12px;
 		background: var(--revv-bg-tertiary);
 		padding: 1px 4px;
 		border-radius: 3px;
@@ -146,6 +154,37 @@
 		font-family: var(--font-mono);
 		font-size: 11px;
 		color: var(--revv-text-muted);
+		width: 100%;
+		border: none;
+		border-bottom: 1px solid var(--revv-diff-gutter-border);
+		border-radius: 0;
+		cursor: pointer;
+		text-align: left;
+		transition: background-color 120ms ease;
+	}
+
+	.code-header:hover {
+		background: color-mix(in srgb, var(--revv-accent) 8%, var(--revv-diff-bg));
+	}
+
+	.code-header:hover .code-jump-icon {
+		opacity: 1;
+	}
+
+	.code-header-right {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		flex-shrink: 0;
+		margin-left: 8px;
+	}
+
+	.code-jump-icon {
+		display: flex;
+		align-items: center;
+		color: var(--revv-accent);
+		opacity: 0;
+		transition: opacity 120ms ease;
 	}
 
 	.code-file-path {
@@ -158,7 +197,6 @@
 
 	.code-line-range {
 		flex-shrink: 0;
-		margin-left: 8px;
 	}
 
 	.code-body {

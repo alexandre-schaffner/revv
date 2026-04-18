@@ -28,7 +28,7 @@
 		bind:ref
 		data-slot="dialog-content"
 		class={cn(
-			"bg-popover text-popover-foreground data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 data-closed:zoom-out-95 data-open:zoom-in-95 ring-foreground/10 grid max-w-[calc(100%-2rem)] gap-4 rounded-xl p-4 text-sm ring-1 duration-100 sm:max-w-sm fixed top-1/2 left-1/2 z-50 w-full -translate-x-1/2 -translate-y-1/2 outline-none",
+			"text-popover-foreground data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 grid max-w-[calc(100%-2rem)] gap-4 rounded-xl p-6 text-sm duration-150 sm:max-w-sm fixed top-[20%] inset-x-0 mx-auto z-50 w-full outline-none",
 			className
 		)}
 		{...restProps}
@@ -37,7 +37,7 @@
 		{#if showCloseButton}
 			<DialogPrimitive.Close data-slot="dialog-close">
 				{#snippet child({ props })}
-					<Button variant="ghost" class="absolute top-2 right-2" size="icon-sm" {...props}>
+					<Button variant="ghost" class="absolute top-3 right-3" size="icon-sm" {...props}>
 						<XIcon  />
 						<span class="sr-only">Close</span>
 					</Button>
@@ -46,3 +46,29 @@
 		{/if}
 	</DialogPrimitive.Content>
 </DialogPortal>
+
+<style>
+	@keyframes dialog-spring-in {
+		0% {
+			opacity: 0;
+			scale: 0.96;
+			translate: 0 12px;
+		}
+		100% {
+			opacity: 1;
+			scale: 1;
+			translate: 0 0;
+		}
+	}
+
+	:global([data-slot="dialog-content"]) {
+		background: var(--color-glass-bg);
+		backdrop-filter: blur(16px) saturate(1.4);
+		-webkit-backdrop-filter: blur(16px) saturate(1.4);
+		border: 1px solid var(--color-glass-border);
+	}
+
+	:global([data-slot="dialog-content"][data-state="open"]) {
+		animation: dialog-spring-in 320ms cubic-bezier(0.16, 1, 0.3, 1) both;
+	}
+</style>

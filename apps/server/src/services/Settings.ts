@@ -1,6 +1,6 @@
 import { Context, Effect, Layer } from 'effect';
 import { eq } from 'drizzle-orm';
-import type { AiAgent, ThinkingEffort, UserSettings } from '@revv/shared';
+import type { AiAgent, ContextWindow, ThinkingEffort, UserSettings } from '@revv/shared';
 import { AUTO_FETCH_DEFAULT_INTERVAL } from '@revv/shared';
 import { ValidationError } from '../domain/errors';
 import { userSettings } from '../db/schema/index';
@@ -12,6 +12,7 @@ const DEFAULT_SETTINGS: UserSettings = {
 	aiModel: 'opencode/big-pickle',
 	aiThinkingEffort: 'medium',
 	aiAgent: 'opencode',
+	aiContextWindow: '200k',
 	theme: 'dark',
 	diffViewMode: 'unified',
 	autoFetchInterval: AUTO_FETCH_DEFAULT_INTERVAL,
@@ -24,6 +25,7 @@ function rowToSettings(row: typeof userSettings.$inferSelect): UserSettings {
 		aiModel: row.aiModel,
 		aiThinkingEffort: (row.aiThinkingEffort as ThinkingEffort) ?? 'medium',
 		aiAgent: (row.aiAgent as AiAgent) ?? 'opencode',
+		aiContextWindow: (row.aiContextWindow as ContextWindow) ?? '200k',
 		theme: row.theme,
 		diffViewMode: row.diffViewMode,
 		autoFetchInterval: row.autoFetchInterval,
@@ -57,6 +59,7 @@ export const SettingsServiceLive = Layer.succeed(SettingsService, {
 				aiModel: DEFAULT_SETTINGS.aiModel,
 				aiThinkingEffort: DEFAULT_SETTINGS.aiThinkingEffort,
 				aiAgent: DEFAULT_SETTINGS.aiAgent,
+				aiContextWindow: DEFAULT_SETTINGS.aiContextWindow,
 				theme: DEFAULT_SETTINGS.theme,
 				diffViewMode: DEFAULT_SETTINGS.diffViewMode,
 				autoFetchInterval: DEFAULT_SETTINGS.autoFetchInterval,
@@ -82,6 +85,8 @@ export const SettingsServiceLive = Layer.succeed(SettingsService, {
 			if (partial.aiThinkingEffort !== undefined)
 				updateSet.aiThinkingEffort = partial.aiThinkingEffort;
 			if (partial.aiAgent !== undefined) updateSet.aiAgent = partial.aiAgent;
+			if (partial.aiContextWindow !== undefined)
+				updateSet.aiContextWindow = partial.aiContextWindow;
 			yield* Effect.tryPromise({
 				try: () =>
 					Promise.resolve(

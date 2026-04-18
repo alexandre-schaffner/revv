@@ -12,15 +12,8 @@
     {
       "idx": 1,
       "version": "6",
-      "when": 1776500000000,
-      "tag": "0001_sync_metadata",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "6",
-      "when": 1776427932695,
-      "tag": "0002_fast_union_jack",
+      "when": 1776595200000,
+      "tag": "0010_cache_entries",
       "breakpoints": true
     }
   ]

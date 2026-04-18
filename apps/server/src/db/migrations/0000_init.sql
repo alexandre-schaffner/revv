@@ -1,4 +1,4 @@
-CREATE TABLE `account` (
+CREATE TABLE IF NOT EXISTS `account` (
 	`id` text PRIMARY KEY NOT NULL,
 	`account_id` text NOT NULL,
 	`provider_id` text NOT NULL,
@@ -15,7 +15,24 @@ CREATE TABLE `account` (
 	FOREIGN KEY (`user_id`) REFERENCES `user`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE TABLE `comment_threads` (
+CREATE TABLE IF NOT EXISTS `ai_explanations` (
+	`id` text PRIMARY KEY NOT NULL,
+	`pr_id` text NOT NULL,
+	`head_sha` text NOT NULL,
+	`file_path` text NOT NULL,
+	`range_start` integer NOT NULL,
+	`range_end` integer NOT NULL,
+	`snippet_hash` text NOT NULL,
+	`model` text NOT NULL,
+	`content` text NOT NULL,
+	`token_usage` text NOT NULL DEFAULT '{}',
+	`fetched_at` text NOT NULL,
+	FOREIGN KEY (`pr_id`) REFERENCES `pull_requests`(`id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS `ai_explanations_key_idx` ON `ai_explanations` (`pr_id`,`head_sha`,`file_path`,`range_start`,`range_end`,`snippet_hash`,`model`);
+--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS `comment_threads` (
 	`id` text PRIMARY KEY NOT NULL,
 	`review_session_id` text NOT NULL,
 	`file_path` text NOT NULL,
@@ -25,16 +42,27 @@ CREATE TABLE `comment_threads` (
 	`status` text DEFAULT 'open' NOT NULL,
 	`created_at` text NOT NULL,
 	`resolved_at` text,
+	`external_thread_id` text,
+	`external_comment_id` text,
+	`last_synced_at` text,
 	FOREIGN KEY (`review_session_id`) REFERENCES `review_sessions`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE TABLE `file_content_cache` (
+CREATE TABLE IF NOT EXISTS `file_content_cache` (
 	`id` text PRIMARY KEY NOT NULL,
 	`content` text NOT NULL,
 	`fetched_at` text NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE `hunk_decisions` (
+CREATE TABLE IF NOT EXISTS `github_etag_cache` (
+	`cache_key` text PRIMARY KEY NOT NULL,
+	`etag` text NOT NULL,
+	`last_modified` text,
+	`body_json` text NOT NULL,
+	`fetched_at` text NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS `hunk_decisions` (
 	`id` text PRIMARY KEY NOT NULL,
 	`review_session_id` text NOT NULL,
 	`file_path` text NOT NULL,
@@ -44,8 +72,19 @@ CREATE TABLE `hunk_decisions` (
 	FOREIGN KEY (`review_session_id`) REFERENCES `review_sessions`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX `uq_hunk_session_file_index` ON `hunk_decisions` (`review_session_id`,`file_path`,`hunk_index`);--> statement-breakpoint
-CREATE TABLE `pr_diff_files` (
+CREATE UNIQUE INDEX IF NOT EXISTS `uq_hunk_session_file_index` ON `hunk_decisions` (`review_session_id`,`file_path`,`hunk_index`);
+--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS `kv_cache` (
+	`ns` text NOT NULL,
+	`key` text NOT NULL,
+	`value_json` text NOT NULL,
+	`etag` text,
+	`fetched_at` text NOT NULL,
+	`expires_at` text,
+	PRIMARY KEY (`ns`, `key`)
+);
+--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS `pr_diff_files` (
 	`id` text PRIMARY KEY NOT NULL,
 	`pr_id` text NOT NULL,
 	`path` text NOT NULL,
@@ -58,7 +97,7 @@ CREATE TABLE `pr_diff_files` (
 	FOREIGN KEY (`pr_id`) REFERENCES `pull_requests`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE TABLE `pull_requests` (
+CREATE TABLE IF NOT EXISTS `pull_requests` (
 	`id` text PRIMARY KEY NOT NULL,
 	`external_id` integer NOT NULL,
 	`repository_id` text NOT NULL,
@@ -79,10 +118,13 @@ CREATE TABLE `pull_requests` (
 	`created_at` text NOT NULL,
 	`updated_at` text NOT NULL,
 	`fetched_at` text NOT NULL,
+	`requested_reviewers` text NOT NULL DEFAULT '[]',
+	`comments_synced_at` text,
+	`threads_fingerprint` text,
 	FOREIGN KEY (`repository_id`) REFERENCES `repositories`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE TABLE `repositories` (
+CREATE TABLE IF NOT EXISTS `repositories` (
 	`id` text PRIMARY KEY NOT NULL,
 	`provider` text DEFAULT 'github' NOT NULL,
 	`owner` text NOT NULL,
@@ -96,8 +138,9 @@ CREATE TABLE `repositories` (
 	`clone_error` text
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX `uq_repositories_full_name` ON `repositories` (`full_name`);--> statement-breakpoint
-CREATE TABLE `review_sessions` (
+CREATE UNIQUE INDEX IF NOT EXISTS `uq_repositories_full_name` ON `repositories` (`full_name`);
+--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS `review_sessions` (
 	`id` text PRIMARY KEY NOT NULL,
 	`pull_request_id` text NOT NULL,
 	`started_at` text NOT NULL,
@@ -106,7 +149,7 @@ CREATE TABLE `review_sessions` (
 	FOREIGN KEY (`pull_request_id`) REFERENCES `pull_requests`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE TABLE `session` (
+CREATE TABLE IF NOT EXISTS `session` (
 	`id` text PRIMARY KEY NOT NULL,
 	`expires_at` integer NOT NULL,
 	`token` text NOT NULL,
@@ -118,8 +161,9 @@ CREATE TABLE `session` (
 	FOREIGN KEY (`user_id`) REFERENCES `user`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX `session_token_unique` ON `session` (`token`);--> statement-breakpoint
-CREATE TABLE `thread_messages` (
+CREATE UNIQUE INDEX IF NOT EXISTS `session_token_unique` ON `session` (`token`);
+--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS `thread_messages` (
 	`id` text PRIMARY KEY NOT NULL,
 	`thread_id` text NOT NULL,
 	`author_role` text DEFAULT 'reviewer' NOT NULL,
@@ -133,18 +177,20 @@ CREATE TABLE `thread_messages` (
 	FOREIGN KEY (`thread_id`) REFERENCES `comment_threads`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE TABLE `user` (
+CREATE TABLE IF NOT EXISTS `user` (
 	`id` text PRIMARY KEY NOT NULL,
 	`name` text NOT NULL,
 	`email` text NOT NULL,
 	`email_verified` integer DEFAULT false NOT NULL,
 	`image` text,
 	`created_at` integer NOT NULL,
-	`updated_at` integer NOT NULL
+	`updated_at` integer NOT NULL,
+	`github_login` text
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX `user_email_unique` ON `user` (`email`);--> statement-breakpoint
-CREATE TABLE `user_settings` (
+CREATE UNIQUE INDEX IF NOT EXISTS `user_email_unique` ON `user` (`email`);
+--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS `user_settings` (
 	`id` text PRIMARY KEY DEFAULT 'default' NOT NULL,
 	`ai_provider` text DEFAULT 'anthropic' NOT NULL,
 	`ai_model` text DEFAULT 'opencode/big-pickle' NOT NULL,
@@ -152,10 +198,11 @@ CREATE TABLE `user_settings` (
 	`diff_view_mode` text DEFAULT 'unified' NOT NULL,
 	`auto_fetch_interval` integer DEFAULT 5 NOT NULL,
 	`ai_thinking_effort` text DEFAULT 'medium' NOT NULL,
-	`ai_agent` text DEFAULT 'opencode' NOT NULL
+	`ai_agent` text DEFAULT 'opencode' NOT NULL,
+	`ai_context_window` text DEFAULT '200k' NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE `verification` (
+CREATE TABLE IF NOT EXISTS `verification` (
 	`id` text PRIMARY KEY NOT NULL,
 	`identifier` text NOT NULL,
 	`value` text NOT NULL,
@@ -164,7 +211,7 @@ CREATE TABLE `verification` (
 	`updated_at` integer
 );
 --> statement-breakpoint
-CREATE TABLE `walkthrough_blocks` (
+CREATE TABLE IF NOT EXISTS `walkthrough_blocks` (
 	`id` text PRIMARY KEY NOT NULL,
 	`walkthrough_id` text NOT NULL,
 	`order` integer NOT NULL,
@@ -174,7 +221,7 @@ CREATE TABLE `walkthrough_blocks` (
 	FOREIGN KEY (`walkthrough_id`) REFERENCES `walkthroughs`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE TABLE `walkthrough_issues` (
+CREATE TABLE IF NOT EXISTS `walkthrough_issues` (
 	`id` text PRIMARY KEY NOT NULL,
 	`walkthrough_id` text NOT NULL,
 	`order` integer NOT NULL,
@@ -184,11 +231,28 @@ CREATE TABLE `walkthrough_issues` (
 	`file_path` text,
 	`start_line` integer,
 	`end_line` integer,
+	`block_ids` text DEFAULT '[]' NOT NULL,
 	`created_at` text NOT NULL,
 	FOREIGN KEY (`walkthrough_id`) REFERENCES `walkthroughs`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE TABLE `walkthroughs` (
+CREATE TABLE IF NOT EXISTS `walkthrough_ratings` (
+	`id` text PRIMARY KEY NOT NULL,
+	`walkthrough_id` text NOT NULL,
+	`axis` text NOT NULL,
+	`verdict` text NOT NULL,
+	`confidence` text NOT NULL,
+	`rationale` text NOT NULL,
+	`citations` text DEFAULT '[]' NOT NULL,
+	`block_ids` text DEFAULT '[]' NOT NULL,
+	`details` text NOT NULL DEFAULT '',
+	`created_at` text NOT NULL,
+	FOREIGN KEY (`walkthrough_id`) REFERENCES `walkthroughs`(`id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS `walkthrough_ratings_wt_axis_unique` ON `walkthrough_ratings` (`walkthrough_id`,`axis`);
+--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS `walkthroughs` (
 	`id` text PRIMARY KEY NOT NULL,
 	`review_session_id` text NOT NULL,
 	`pull_request_id` text NOT NULL,
@@ -199,6 +263,7 @@ CREATE TABLE `walkthroughs` (
 	`model_used` text NOT NULL,
 	`token_usage` text DEFAULT '{}' NOT NULL,
 	`pr_head_sha` text NOT NULL,
+	`opencode_session_id` text,
 	FOREIGN KEY (`review_session_id`) REFERENCES `review_sessions`(`id`) ON UPDATE no action ON DELETE cascade,
 	FOREIGN KEY (`pull_request_id`) REFERENCES `pull_requests`(`id`) ON UPDATE no action ON DELETE cascade
 );

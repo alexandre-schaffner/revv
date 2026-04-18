@@ -2,11 +2,10 @@ import { Elysia, t } from 'elysia';
 import { Effect } from 'effect';
 import { AppRuntime } from '../runtime';
 import { AiService } from '../services/Ai';
-import { GitHubService } from '../services/GitHub';
+import { FileContentService } from '../services/FileContent';
 import { getOrFetchDiffFiles } from '../services/DiffCache';
-import { PullRequestService } from '../services/PullRequest';
-import { RepositoryService } from '../services/Repository';
-import { TokenProvider } from '../services/TokenProvider';
+import { GitHubService } from '../services/GitHub';
+import { PrContextService } from '../services/PrContext';
 import { withAuth, mapErrorToSSEResponse, textStreamToSSE } from './middleware';
 
 export const explainRoute = new Elysia()
@@ -17,41 +16,50 @@ export const explainRoute = new Elysia()
 			try {
 				const textStream = await AppRuntime.runPromise(
 					Effect.gen(function* () {
-					const ai = yield* AiService;
-					const prService = yield* PullRequestService;
-					const repoService = yield* RepositoryService;
-					const tokenProvider = yield* TokenProvider;
-					const github = yield* GitHubService;
+						const ai = yield* AiService;
+						const prCtx = yield* PrContextService;
+						const fileContent = yield* FileContentService;
 
-					// Resolve PR context
-					const pr = yield* prService.getPr(ctx.query.prId);
-					const repo = yield* repoService.getRepoById(pr.repositoryId);
-					const ghToken = yield* tokenProvider.getGitHubToken(ctx.session.user.id);
+						// Single call resolves PR + repo + GitHub token
+						const { pr, repo, token } = yield* prCtx.resolveBasic(
+							ctx.query.prId,
+							ctx.session.user.id,
+						);
 
-					// Get file patches from the PR (cached)
-					const files = yield* getOrFetchDiffFiles(
-						pr.id,
-						repo.fullName,
-						pr.externalId,
-						ghToken
-					);
-					const fileMeta = files.find((f) => f.path === ctx.query.filePath);
-					const diff = fileMeta?.patch ?? '';
-
-						// Get head SHA to fetch full file content
-						const meta = yield* github.getPrMeta(
+						// Cached PR diff files
+						const files = yield* getOrFetchDiffFiles(
+							pr.id,
 							repo.fullName,
 							pr.externalId,
-							ghToken
+							token,
 						);
-						const fullFileContent = yield* github.getFileContent(
+						const fileMeta = files.find((f) => f.path === ctx.query.filePath);
+						const diff = fileMeta?.patch ?? '';
+
+						// Use headSha from the DB row — no extra GitHub round-trip.
+						// Fall back to a fresh getPrMeta only in the rare case the
+						// cached row is missing one (shouldn't happen for open PRs
+						// that PollScheduler has touched).
+						let headSha = pr.headSha;
+						if (!headSha) {
+							const github = yield* GitHubService;
+							const meta = yield* github.getPrMeta(
+								repo.fullName,
+								pr.externalId,
+								token,
+							);
+							headSha = meta.headSha;
+						}
+
+						// Immutable-by-ref file content cache — second call for the
+						// same (repo, path, sha) returns directly from SQLite.
+						const fullFileContent = yield* fileContent.getOrFetch(
 							repo.fullName,
 							ctx.query.filePath,
-							meta.headSha,
-							ghToken
+							headSha,
+							token,
 						);
 
-						// Stream AI explanation
 						return yield* ai.explainCode({
 							filePath: ctx.query.filePath,
 							lineRange: [Number(ctx.query.startLine), Number(ctx.query.endLine)],
@@ -61,7 +69,7 @@ export const explainRoute = new Elysia()
 							prBody: pr.body,
 							diff,
 						});
-					})
+					}),
 				);
 
 				return new Response(textStreamToSSE(textStream), {
@@ -83,5 +91,5 @@ export const explainRoute = new Elysia()
 				endLine: t.String(),
 				codeSnippet: t.Optional(t.String()),
 			}),
-		}
+		},
 	);

@@ -28,83 +28,136 @@
 
     /* Revv palette */
     --revv-bg-primary: #ffffff;
-    --revv-bg-secondary: #f4f4f5;
-    --revv-bg-tertiary: #e4e4e7;
+    --revv-bg-secondary: #f7f7f8;
+    --revv-bg-tertiary: #eeeff1;
     --revv-bg-elevated: #ffffff;
-    --revv-border: #d4d4d8;
-    --revv-border-subtle: #e4e4e7;
-    --revv-text-primary: #18181b;
-    --revv-text-secondary: #52525b;
-    --revv-text-muted: #a1a1aa;
+    --revv-border: #d0d0d6;
+    --revv-border-subtle: #e5e5ea;
+    --revv-text-primary: #111118;
+    --revv-text-secondary: #44444f;
+    --revv-text-muted: #72727e;
     --revv-accent: #3b82f6;
     --revv-accent-hover: #2563eb;
     --revv-success: #16a34a;
-    --revv-warning: #ca8a04;
+    --revv-warning: #b45309;
     --revv-danger: #dc2626;
 
     /* Diff canvas */
-    --revv-diff-bg: #fafafa;
-    --revv-diff-gutter-bg: #f5f5f5;
-    --revv-diff-gutter-border: #e5e5e5;
+    --revv-diff-bg: #f9f9fa;
+    --revv-diff-gutter-bg: #f2f2f5;
+    --revv-diff-gutter-border: #e0e0e5;
 
     /* Addition lines */
-    --revv-diff-add-bg: #dcfce7;
-    --revv-diff-add-bg-hover: #bbf7d0;
-    --revv-diff-add-word: #86efac;
-    --revv-diff-add-gutter: #dcfce7;
-    --revv-diff-add-text: #166534;
+    --revv-diff-add-bg: #e8f8ee;
+    --revv-diff-add-bg-hover: #d3f2dd;
+    --revv-diff-add-word: #a7e8bc;
+    --revv-diff-add-gutter: #e0f5e8;
+    --revv-diff-add-text: #156534;
 
     /* Deletion lines */
-    --revv-diff-del-bg: #fee2e2;
-    --revv-diff-del-bg-hover: #fecaca;
-    --revv-diff-del-word: #fca5a5;
-    --revv-diff-del-gutter: #fee2e2;
-    --revv-diff-del-text: #991b1b;
+    --revv-diff-del-bg: #fdeef0;
+    --revv-diff-del-bg-hover: #fad8dc;
+    --revv-diff-del-word: #f5b8be;
+    --revv-diff-del-gutter: #fae0e2;
+    --revv-diff-del-text: #951b1b;
 
     /* Context line hover */
-    --revv-diff-ctx-bg-hover: #f5f5f5;
-    --revv-diff-selected-bg: rgba(59, 130, 246, 0.08);
+    --revv-diff-ctx-bg-hover: #f2f2f5;
+    --revv-diff-selected-bg: rgba(59, 130, 246, 0.07);
 
     /* Gutter markers */
     --revv-marker-open: #3b82f6;
-    --revv-marker-open-glow: rgba(59, 130, 246, 0.25);
-    --revv-marker-pending: #f59e0b;
-    --revv-marker-pending-glow: rgba(245, 158, 11, 0.25);
-    --revv-marker-your-turn: #f97316;
-    --revv-marker-resolved: #d4d4d8;
+    --revv-marker-open-glow: rgba(59, 130, 246, 0.22);
+    --revv-marker-pending: #d97706;
+    --revv-marker-pending-glow: rgba(217, 119, 6, 0.22);
+    --revv-marker-your-turn: #ea6b15;
+    --revv-marker-resolved: #b0b0ba;
 
     /* Line action floating pill */
-    --revv-pill-bg: rgba(255, 255, 255, 0.95);
-    --revv-pill-border: rgba(0, 0, 0, 0.08);
+    --revv-pill-bg: rgba(255, 255, 255, 0.97);
+    --revv-pill-border: rgba(0, 0, 0, 0.1);
     --revv-pill-shadow:
-        0 8px 24px rgba(0, 0, 0, 0.1), 0 2px 6px rgba(0, 0, 0, 0.06);
+        0 8px 24px rgba(0, 0, 0, 0.13), 0 2px 6px rgba(0, 0, 0, 0.08);
 
     /* Comment / thread */
     --revv-thread-bg: #ffffff;
-    --revv-input-bg: #f4f4f5;
-    --revv-input-focus-ring: rgba(59, 130, 246, 0.4);
+    --revv-input-bg: #f7f7f8;
+    --revv-input-focus-ring: rgba(59, 130, 246, 0.35);
 
     /* Context panel */
-    --revv-panel-bg: #fafafa;
-    --revv-panel-header-bg: rgba(255, 255, 255, 0.95);
+    --revv-panel-bg: #f7f7f8;
+    --revv-panel-header-bg: rgba(247, 247, 248, 0.96);
     --revv-stream-cursor: #3b82f6;
 
     /* File tree */
     --revv-tree-active-bg: rgba(59, 130, 246, 0.08);
-    --revv-tree-active-text: #2563eb;
-    --revv-tree-hover-bg: #f4f4f5;
+    --revv-tree-active-text: #1d4ed8;
+    --revv-tree-hover-bg: #f2f2f5;
 
     /* Floating tabs */
     --revv-tab-active-bg: #ffffff;
-    --revv-tab-inactive-text: #a1a1aa;
+    --revv-tab-inactive-text: #8888a0;
 
     /* Glass pill */
-    --revv-glass-bg: rgba(255, 255, 255, 0.65);
-    --revv-glass-border: rgba(0, 0, 0, 0.08);
-    --revv-glass-highlight: rgba(255, 255, 255, 0.5);
+    --revv-glass-bg: rgba(248, 248, 252, 0.75);
+    --revv-glass-border: rgba(0, 0, 0, 0.09);
+    --revv-glass-highlight: rgba(255, 255, 255, 0.6);
     --revv-glass-shadow:
-        0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 16px rgba(0, 0, 0, 0.06);
-    --revv-glass-active-bg: rgba(255, 255, 255, 0.85);
+        0 1px 2px rgba(0, 0, 0, 0.06), 0 4px 16px rgba(0, 0, 0, 0.09);
+    --revv-glass-active-bg: rgba(0, 0, 0, 0.055);
+
+    /* Elevation shadows (theme-aware) */
+    --revv-shadow-indicator: 0 1px 2px rgba(0, 0, 0, 0.05);
+    --revv-shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.08);
+    --revv-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.1);
+    --revv-shadow-lg:
+        0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06);
+    --revv-shadow-xl:
+        0 16px 48px rgba(0, 0, 0, 0.18), 0 4px 12px rgba(0, 0, 0, 0.1);
+
+    /* Outline-style button (inverts with theme) */
+    --revv-btn-outline: color-mix(
+        in srgb,
+        var(--revv-text-primary) 55%,
+        transparent
+    );
+    --revv-btn-outline-fill: var(--revv-text-primary);
+    --revv-btn-outline-fg: var(--revv-bg-primary);
+
+    /* AI accent */
+    --revv-ai-accent: #7c6af7;
+
+    /* Tooltip */
+    --revv-tooltip-bg: rgba(15, 15, 22, 0.88);
+    --revv-tooltip-border: rgba(0, 0, 0, 0.12);
+    --revv-tooltip-item-bg: rgba(0, 0, 0, 0.04);
+
+    /* Scorecard — backgrounds mirror the Walkthrough IssueCard palette
+       (4% tint of a themed severity color over --revv-bg-secondary) so
+       score cards and issue cards read as the same visual family. */
+    --revv-score-pass-bg: color-mix(in srgb, var(--revv-success) 4%, var(--revv-bg-secondary));
+    --revv-score-pass-border: #16a34a;
+    --revv-score-pass-icon: #16a34a;
+    --revv-score-pass-label: #145f30;
+    --revv-score-pass-axis: #44444f;
+    --revv-score-pass-conf-bg: color-mix(in srgb, #16a34a 12%, transparent);
+    --revv-score-pass-conf: #16a34a;
+
+    --revv-score-concern-bg: color-mix(in srgb, var(--revv-warning) 4%, var(--revv-bg-secondary));
+    --revv-score-concern-border: #d97706;
+    --revv-score-concern-icon: #b45309;
+    --revv-score-concern-label: #92400e;
+    --revv-score-concern-axis: #44444f;
+    --revv-score-concern-conf-bg: color-mix(in srgb, #d97706 12%, transparent);
+    --revv-score-concern-conf: #b45309;
+
+    --revv-score-blocker-bg: color-mix(in srgb, var(--revv-danger) 4%, var(--revv-bg-secondary));
+    --revv-score-blocker-border: #dc2626;
+    --revv-score-blocker-icon: #dc2626;
+    --revv-score-blocker-label: #991b1b;
+    --revv-score-blocker-axis: #44444f;
+    --revv-score-blocker-conf-bg: color-mix(in srgb, #dc2626 12%, transparent);
+    --revv-score-blocker-conf: #dc2626;
 }
 
 /* ──────────────────────────────────────────────────────────
@@ -145,7 +198,7 @@
     --revv-accent: #3b82f6;
     --revv-accent-hover: #2563eb;
     --revv-success: #22c55e;
-    --revv-warning: #eab308;
+    --revv-warning: #f59e0b;
     --revv-danger: #ef4444;
 
     /* Diff canvas */
@@ -211,6 +264,55 @@
     --revv-glass-shadow:
         0 1px 2px rgba(0, 0, 0, 0.2), 0 4px 16px rgba(0, 0, 0, 0.25);
     --revv-glass-active-bg: rgba(255, 255, 255, 0.1);
+
+    /* Elevation shadows (theme-aware) */
+    --revv-shadow-indicator: 0 1px 3px rgba(0, 0, 0, 0.35);
+    --revv-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.35);
+    --revv-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.45);
+    --revv-shadow-lg:
+        0 8px 24px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.35);
+    --revv-shadow-xl:
+        0 16px 48px rgba(0, 0, 0, 0.65), 0 4px 12px rgba(0, 0, 0, 0.45);
+
+    /* Outline-style button (inverts with theme) */
+    --revv-btn-outline: rgba(255, 255, 255, 0.7);
+    --revv-btn-outline-fill: #ffffff;
+    --revv-btn-outline-fg: #000000;
+
+    /* AI accent */
+    --revv-ai-accent: #7c6af7;
+
+    /* Tooltip */
+    --revv-tooltip-bg: rgba(20, 20, 28, 0.92);
+    --revv-tooltip-border: rgba(255, 255, 255, 0.08);
+    --revv-tooltip-item-bg: rgba(255, 255, 255, 0.04);
+
+    /* Scorecard — backgrounds mirror the Walkthrough IssueCard palette
+       (4% tint of a themed severity color over --revv-bg-secondary) so
+       score cards and issue cards read as the same visual family. */
+    --revv-score-pass-bg: color-mix(in srgb, var(--revv-success) 4%, var(--revv-bg-secondary));
+    --revv-score-pass-border: #10b981;
+    --revv-score-pass-icon: #34d399;
+    --revv-score-pass-label: #6ee7b7;
+    --revv-score-pass-axis: #6ee7b7;
+    --revv-score-pass-conf-bg: color-mix(in srgb, #10b981 25%, transparent);
+    --revv-score-pass-conf: #34d399;
+
+    --revv-score-concern-bg: color-mix(in srgb, var(--revv-warning) 4%, var(--revv-bg-secondary));
+    --revv-score-concern-border: #f59e0b;
+    --revv-score-concern-icon: #fbbf24;
+    --revv-score-concern-label: #fcd34d;
+    --revv-score-concern-axis: #fcd34d;
+    --revv-score-concern-conf-bg: color-mix(in srgb, #f59e0b 25%, transparent);
+    --revv-score-concern-conf: #fbbf24;
+
+    --revv-score-blocker-bg: color-mix(in srgb, var(--revv-danger) 4%, var(--revv-bg-secondary));
+    --revv-score-blocker-border: #ef4444;
+    --revv-score-blocker-icon: #f87171;
+    --revv-score-blocker-label: #fca5a5;
+    --revv-score-blocker-axis: #fca5a5;
+    --revv-score-blocker-conf-bg: color-mix(in srgb, #ef4444 25%, transparent);
+    --revv-score-blocker-conf: #f87171;
 }
 
 /* ──────────────────────────────────────────────────────────
@@ -318,6 +420,51 @@
     --color-glass-shadow: var(--revv-glass-shadow);
     --color-glass-active-bg: var(--revv-glass-active-bg);
 
+    /* Elevation shadows */
+    --color-shadow-indicator: var(--revv-shadow-indicator);
+    --color-shadow-sm: var(--revv-shadow-sm);
+    --color-shadow-md: var(--revv-shadow-md);
+    --color-shadow-lg: var(--revv-shadow-lg);
+    --color-shadow-xl: var(--revv-shadow-xl);
+
+    /* Outline button */
+    --color-btn-outline: var(--revv-btn-outline);
+    --color-btn-outline-fill: var(--revv-btn-outline-fill);
+    --color-btn-outline-fg: var(--revv-btn-outline-fg);
+
+    /* AI accent */
+    --color-ai-accent: var(--revv-ai-accent);
+
+    /* Tooltip */
+    --color-tooltip-bg: var(--revv-tooltip-bg);
+    --color-tooltip-border: var(--revv-tooltip-border);
+    --color-tooltip-item-bg: var(--revv-tooltip-item-bg);
+
+    /* Scorecard */
+    --color-score-pass-bg: var(--revv-score-pass-bg);
+    --color-score-pass-border: var(--revv-score-pass-border);
+    --color-score-pass-icon: var(--revv-score-pass-icon);
+    --color-score-pass-label: var(--revv-score-pass-label);
+    --color-score-pass-axis: var(--revv-score-pass-axis);
+    --color-score-pass-conf-bg: var(--revv-score-pass-conf-bg);
+    --color-score-pass-conf: var(--revv-score-pass-conf);
+
+    --color-score-concern-bg: var(--revv-score-concern-bg);
+    --color-score-concern-border: var(--revv-score-concern-border);
+    --color-score-concern-icon: var(--revv-score-concern-icon);
+    --color-score-concern-label: var(--revv-score-concern-label);
+    --color-score-concern-axis: var(--revv-score-concern-axis);
+    --color-score-concern-conf-bg: var(--revv-score-concern-conf-bg);
+    --color-score-concern-conf: var(--revv-score-concern-conf);
+
+    --color-score-blocker-bg: var(--revv-score-blocker-bg);
+    --color-score-blocker-border: var(--revv-score-blocker-border);
+    --color-score-blocker-icon: var(--revv-score-blocker-icon);
+    --color-score-blocker-label: var(--revv-score-blocker-label);
+    --color-score-blocker-axis: var(--revv-score-blocker-axis);
+    --color-score-blocker-conf-bg: var(--revv-score-blocker-conf-bg);
+    --color-score-blocker-conf: var(--revv-score-blocker-conf);
+
     /* Motion */
     --duration-snap: 120ms;
     --duration-quick: 160ms;
@@ -418,4 +565,19 @@ body {
 /* Selection */
 ::selection {
     background-color: color-mix(in srgb, var(--color-accent) 30%, transparent);
+}
+
+/* ──────────────────────────────────────────────────────────
+   Shiki syntax highlighting — global dark-mode toggle
+   Shiki dual-theme output uses CSS custom properties; swap
+   to the --shiki-dark-* variants whenever :root.dark is set.
+   This single rule covers ALL shiki code blocks app-wide.
+   ────────────────────────────────────────────────────────── */
+:root.dark .shiki,
+:root.dark .shiki span {
+    color: var(--shiki-dark) !important;
+    background-color: var(--shiki-dark-bg) !important;
+    font-style: var(--shiki-dark-font-style) !important;
+    font-weight: var(--shiki-dark-font-weight) !important;
+    text-decoration: var(--shiki-dark-text-decoration) !important;
 }

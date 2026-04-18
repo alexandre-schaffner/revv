@@ -9,10 +9,9 @@ import { SyncError } from '../domain/errors';
 import { reviewSessions } from '../db/schema/review-sessions';
 import { DbService } from './Db';
 import { GitHubService, type GhReviewComment } from './GitHub';
+import { PrContextService } from './PrContext';
 import { PullRequestService } from './PullRequest';
-import { RepositoryService } from './Repository';
 import { ReviewService } from './Review';
-import { TokenProvider } from './TokenProvider';
 import { WebSocketHub } from './WebSocketHub';
 
 export interface PullResult {
@@ -73,18 +72,13 @@ export const SyncServiceLive = Layer.effect(
 	Effect.gen(function* () {
 		const github = yield* GitHubService;
 		const prService = yield* PullRequestService;
-		const repoService = yield* RepositoryService;
+		const prContext = yield* PrContextService;
 		const reviewService = yield* ReviewService;
-		const tokenProvider = yield* TokenProvider;
 		const hub = yield* WebSocketHub;
 
+		// Background-worker PR context — always uses the 'single-user' token.
 		const resolvePrContext = (prId: string) =>
-			Effect.gen(function* () {
-				const pr = yield* prService.getPr(prId);
-				const repo = yield* repoService.getRepoById(pr.repositoryId);
-				const token = yield* tokenProvider.getGitHubToken('single-user');
-				return { pr, repo, token };
-			});
+			prContext.resolveBasic(prId, 'single-user');
 
 		const resolvePrIdFromSession = (
 			sessionId: string,
@@ -264,10 +258,13 @@ export const SyncServiceLive = Layer.effect(
 				const { pr, repo, token } = yield* resolvePrContext(prId);
 				const session = yield* reviewService.getOrCreateActiveSession(pr.id);
 
+				// Incremental poll: ask GitHub only for comments newer than our
+				// last successful sync. Null on cold-start pulls everything.
+				const since = yield* prService.getCommentsSyncedAt(pr.id);
 				const comments = yield* github.listReviewComments(
 					repo.fullName,
 					pr.externalId,
-					null,
+					since,
 					token,
 				);
 
@@ -388,6 +385,19 @@ export const SyncServiceLive = Layer.effect(
 							statusChanges++;
 						}
 						break;
+					}
+				}
+
+				// Advance the high-water-mark only when the GitHub call
+				// succeeded AND produced comments — otherwise keep the old
+				// watermark so the next tick refetches from the same point.
+				if (comments.length > 0) {
+					const watermark = comments.reduce(
+						(max, c) => (c.updatedAt > max ? c.updatedAt : max),
+						'',
+					);
+					if (watermark) {
+						yield* prService.setCommentsSyncedAt(pr.id, watermark);
 					}
 				}
 

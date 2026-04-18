@@ -64,7 +64,7 @@ let commands = $state<Command[]>([
 		id: 'sidebar:toggle',
 		label: 'Toggle Sidebar',
 		category: 'Sidebar',
-		shortcut: '\u2318B',
+		shortcut: '\u2318B / \u2318S',
 		keywords: ['left', 'panel', 'hide', 'show'],
 		action: () => toggleSidebar(),
 	},

@@ -8,12 +8,24 @@
 	import * as sync from '$lib/services/sync';
 	import { initTheme } from '$lib/stores/theme.svelte';
 	import { initShortcuts } from '$lib/stores/shortcuts.svelte';
-	import { isTauri } from '$lib/utils/platform';
 	import { TooltipProvider } from '$lib/components/ui/tooltip';
 	import { Toaster } from '$lib/components/ui/sonner';
+	import CacheInspector from '$lib/components/dev/CacheInspector.svelte';
 
 	let { children } = $props();
 	let hydrated = false;
+	let cacheInspectorOpen = $state(false);
+
+	$effect(() => {
+		function handleKeydown(e: KeyboardEvent): void {
+			if (import.meta.env.DEV && e.metaKey && e.shiftKey && e.key === 'C') {
+				e.preventDefault();
+				cacheInspectorOpen = !cacheInspectorOpen;
+			}
+		}
+		window.addEventListener('keydown', handleKeydown);
+		return () => window.removeEventListener('keydown', handleKeydown);
+	});
 
 	// When user becomes authenticated, hydrate app data.
 	$effect(() => {
@@ -37,6 +49,10 @@
 		auth.loadUser();
 		// Fetch settings immediately — route is now public, no auth needed
 		void settings.fetchSettings();
+		// Prefetch both agents' model lists so agent/model dropdowns can
+		// swap instantly without a round-trip (and without a race between
+		// the PUT that changes the agent and the GET that lists models).
+		void settings.fetchAllModels();
 
 		return () => {
 			cleanupTheme();
@@ -65,4 +81,7 @@
 		{@render children()}
 	</AppShell>
 	<Toaster />
+	{#if import.meta.env.DEV && cacheInspectorOpen}
+		<CacheInspector onclose={() => { cacheInspectorOpen = false; }} />
+	{/if}
 </TooltipProvider>

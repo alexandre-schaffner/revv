@@ -14,6 +14,7 @@ function rowToPr(row: typeof pullRequests.$inferSelect): PullRequest {
 		body: row.body ?? null,
 		authorLogin: row.authorLogin,
 		authorAvatarUrl: row.authorAvatarUrl ?? null,
+		requestedReviewers: JSON.parse(row.requestedReviewers ?? '[]') as string[],
 		status: row.status as PullRequest['status'],
 		reviewStatus: row.reviewStatus as PullRequest['reviewStatus'],
 		sourceBranch: row.sourceBranch,
@@ -37,6 +38,32 @@ export class PullRequestService extends Context.Tag('PullRequestService')<
 		readonly getPr: (id: string) => Effect.Effect<PullRequest, NotFoundError, DbService>;
 		readonly upsertPrs: (prs: PullRequest[]) => Effect.Effect<void, ValidationError, DbService>;
 		readonly deletePrs: (ids: string[]) => Effect.Effect<void, ValidationError, DbService>;
+		/**
+		 * Read the high-water-mark for review-comment sync. Used as the `?since=`
+		 * parameter on the next poll so we don't re-download comments we've
+		 * already ingested. Null on a cache cold-start.
+		 */
+		readonly getCommentsSyncedAt: (
+			prId: string,
+		) => Effect.Effect<string | null, never, DbService>;
+		/** Persist the watermark after a successful sync. */
+		readonly setCommentsSyncedAt: (
+			prId: string,
+			timestamp: string,
+		) => Effect.Effect<void, never, DbService>;
+		/**
+		 * Read the GraphQL-thread fingerprint for a PR. Used to skip redundant
+		 * downstream DB writes and WS events when nothing changed on GitHub.
+		 * Null = fingerprint has never been computed for this PR.
+		 */
+		readonly getThreadsFingerprint: (
+			prId: string,
+		) => Effect.Effect<string | null, never, DbService>;
+		/** Store a new threads fingerprint after each GraphQL pull. */
+		readonly setThreadsFingerprint: (
+			prId: string,
+			fingerprint: string,
+		) => Effect.Effect<void, never, DbService>;
 	}
 >() {}
 
@@ -83,8 +110,9 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
 							changedFiles: pr.changedFiles,
 							createdAt: pr.createdAt,
 							updatedAt: pr.updatedAt,
-							fetchedAt: pr.fetchedAt,
-						};
+					fetchedAt: pr.fetchedAt,
+						requestedReviewers: JSON.stringify(pr.requestedReviewers ?? []),
+					};
 					// Only set optional fields when non-null to satisfy exactOptionalPropertyTypes
 					if (pr.body !== null) base.body = pr.body;
 					if (pr.authorAvatarUrl !== null) base.authorAvatarUrl = pr.authorAvatarUrl;
@@ -107,9 +135,10 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
 									changedFiles: pullRequests.changedFiles,
 									headSha: pullRequests.headSha,
 									baseSha: pullRequests.baseSha,
-									updatedAt: pullRequests.updatedAt,
-									fetchedAt: pullRequests.fetchedAt,
-								},
+								updatedAt: pullRequests.updatedAt,
+								fetchedAt: pullRequests.fetchedAt,
+								requestedReviewers: pullRequests.requestedReviewers,
+							},
 							})
 							.run()
 					);
@@ -129,5 +158,45 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
 					),
 				catch: (e) => new ValidationError({ message: String(e) }),
 			});
+		}),
+
+	getCommentsSyncedAt: (prId) =>
+		Effect.gen(function* () {
+			const { db } = yield* DbService;
+			const row = db
+				.select({ ts: pullRequests.commentsSyncedAt })
+				.from(pullRequests)
+				.where(eq(pullRequests.id, prId))
+				.get();
+			return row?.ts ?? null;
+		}),
+
+	setCommentsSyncedAt: (prId, timestamp) =>
+		Effect.gen(function* () {
+			const { db } = yield* DbService;
+			db.update(pullRequests)
+				.set({ commentsSyncedAt: timestamp })
+				.where(eq(pullRequests.id, prId))
+				.run();
+		}),
+
+	getThreadsFingerprint: (prId) =>
+		Effect.gen(function* () {
+			const { db } = yield* DbService;
+			const row = db
+				.select({ fp: pullRequests.threadsFingerprint })
+				.from(pullRequests)
+				.where(eq(pullRequests.id, prId))
+				.get();
+			return row?.fp ?? null;
+		}),
+
+	setThreadsFingerprint: (prId, fingerprint) =>
+		Effect.gen(function* () {
+			const { db } = yield* DbService;
+			db.update(pullRequests)
+				.set({ threadsFingerprint: fingerprint })
+				.where(eq(pullRequests.id, prId))
+				.run();
 		}),
 });

@@ -293,7 +293,7 @@
 
 	/* Selection highlight shows through transparent text */
 	.edit-layer::selection {
-		background: rgba(59, 130, 246, 0.3);
+		background: var(--color-input-focus-ring);
 		color: transparent;
 	}
 </style>

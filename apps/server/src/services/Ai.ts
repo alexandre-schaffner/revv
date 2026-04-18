@@ -9,12 +9,13 @@ import { DbService } from './Db';
 import { withDb } from '../effects/with-db';
 import { SettingsService } from './Settings';
 import type { PrFileMeta } from './GitHub';
-import type { WalkthroughStreamEvent } from '@revv/shared';
+import type { WalkthroughStreamEvent, CarriedOverIssue } from '@revv/shared';
 
 // ── Prompt & provider imports (split out of this file) ──────────────────────
 import { EXPLAIN_SYSTEM_PROMPT, buildExplainPrompt } from '../ai/prompts/explain';
-import { checkCliAvailability, streamWalkthroughViaCLI } from '../ai/providers/cli-agent';
+import { checkCliAvailability } from '../ai/providers/cli-agent';
 import { streamWalkthroughViaMCP, type ContinuationContext } from '../ai/providers/mcp-walkthrough';
+import { streamWalkthroughViaOpencodeMCP } from '../ai/providers/mcp-walkthrough-opencode';
 import { guardWalkthroughStream } from '../ai/providers/stream-guard';
 import { streamViaClaudeCode } from '../ai/providers/claude-code';
 
@@ -56,6 +57,8 @@ export class AiService extends Context.Tag('AiService')<
 			files: PrFileMeta[];
 			worktreePath: string;
 			continuation?: ContinuationContext;
+			onSessionId?: (sessionId: string) => void;
+			carriedOverIssues?: CarriedOverIssue[];
 		}) => Effect.Effect<AsyncGenerator<WalkthroughStreamEvent>, AiError>;
 		readonly isConfigured: () => Effect.Effect<boolean>;
 	}
@@ -109,12 +112,12 @@ export const AiServiceLive = Layer.effect(
 					}
 
 					if (agent === 'opencode') {
-						const raw = streamWalkthroughViaCLI(params, settings.aiModel ?? undefined, 'opencode');
-						return guardWalkthroughStream(raw, { label: 'opencode', synthesizePhases: true });
+						const raw = streamWalkthroughViaOpencodeMCP(params, settings.aiModel ?? undefined);
+						return guardWalkthroughStream(raw, { label: 'opencode-mcp', synthesizePhases: false });
 					}
 					const raw = streamWalkthroughViaMCP(params, settings.aiModel ?? undefined);
 					// MCP provider already emits phase events — don't double-emit
-					return guardWalkthroughStream(raw, { label: 'mcp', synthesizePhases: false });
+					return guardWalkthroughStream(raw, { label: 'claude-mcp', synthesizePhases: false });
 				}),
 
 			isConfigured: () => checkConfigured(),

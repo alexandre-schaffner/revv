@@ -1,6 +1,6 @@
 import { Elysia } from 'elysia';
 import { eq } from 'drizzle-orm';
-import { auth, db, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET } from '../auth';
+import { auth, db, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, GITHUB_API_BASE } from '../auth';
 import { account } from '../db/schema';
 import { logError } from '../logger';
 import { withAuth } from './middleware';
@@ -37,7 +37,7 @@ export const signOutRoute = new Elysia()
 			try {
 				const credentials = btoa(`${GITHUB_CLIENT_ID}:${GITHUB_CLIENT_SECRET}`);
 				const res = await fetch(
-					`https://api.github.com/applications/${GITHUB_CLIENT_ID}/token`,
+					`${GITHUB_API_BASE}/applications/${GITHUB_CLIENT_ID}/token`,
 					{
 						method: 'DELETE',
 						headers: {

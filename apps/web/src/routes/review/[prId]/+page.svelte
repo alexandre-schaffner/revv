@@ -2,31 +2,35 @@
 	import { page } from '$app/state';
 	import { getSelectedPr, setSelectedPrId } from '$lib/stores/prs.svelte';
 	import {
-		setActiveFilePath,
-		clearExplanations,
-		getReviewFiles,
-		getIsLoadingFiles,
-		getFilesError,
-		setReviewFiles,
-		setIsLoadingFiles,
-		setFilesError,
-		clearReviewFiles,
-		loadSession,
-		getActiveTab,
-	} from '$lib/stores/review.svelte';
+	setActiveFilePath,
+	clearExplanations,
+	getReviewFiles,
+	getIsLoadingFiles,
+	getFilesError,
+	setReviewFiles,
+	setIsLoadingFiles,
+	setFilesError,
+	clearReviewFiles,
+	loadSession,
+	getActiveTab,
+	switchPrViewState,
+} from '$lib/stores/review.svelte';
 	import { getDiffThemeType } from '$lib/stores/theme.svelte';
 	import { api } from '$lib/api/client';
 	import ReviewLayout from '$lib/components/review/ReviewLayout.svelte';
 	import GuidedWalkthrough from '$lib/components/walkthrough/GuidedWalkthrough.svelte';
 	import RequestChanges from '$lib/components/review/RequestChanges.svelte';
-	import { deactivate as deactivateWalkthrough, getIsStreaming as getWalkthroughStreaming, getSummary as getWalkthroughSummary, regenerate as regenerateWalkthrough, abort as abortWalkthrough } from '$lib/stores/walkthrough.svelte';
+	import { deactivate as deactivateWalkthrough, getIsStreaming as getWalkthroughStreaming, getSummary as getWalkthroughSummary, regenerate as regenerateWalkthrough, abort as abortWalkthrough, getIssues as getWalkthroughIssues, getRiskLevel as getWalkthroughRiskLevel } from '$lib/stores/walkthrough.svelte';
 	import { setTopbarCollapsed } from '$lib/stores/topbar.svelte';
+	import { getSidebarCollapsed, getSidebarWidth } from '$lib/stores/sidebar.svelte';
 	import { requestThreadSync } from '$lib/stores/ws.svelte';
 	import { onDestroy, untrack } from 'svelte';
 	import AuthGuard from '$lib/components/auth/AuthGuard.svelte';
 	import { Button } from '$lib/components/ui/button';
+	import { Badge } from '$lib/components/ui/badge';
 	import { Tooltip, TooltipContent, TooltipTrigger } from '$lib/components/ui/tooltip';
 	import { RefreshCw, Square } from '@lucide/svelte';
+	import RegenerateDialog from '$lib/components/walkthrough/RegenerateDialog.svelte';
 
 	const pr = $derived(getSelectedPr());
 	const themeType = $derived(getDiffThemeType());
@@ -36,6 +40,18 @@
 	const activeTab = $derived(getActiveTab());
 	const walkthroughStreaming = $derived(getWalkthroughStreaming());
 	const walkthroughSummary = $derived(getWalkthroughSummary());
+	const walkthroughIssues = $derived(getWalkthroughIssues());
+	const walkthroughRiskLevel = $derived(getWalkthroughRiskLevel());
+
+	const sidebarCollapsed = $derived(getSidebarCollapsed());
+	const sidebarWidth = $derived(getSidebarWidth());
+	const sidebarOffset = $derived(sidebarCollapsed ? 0 : sidebarWidth / 2);
+
+	const riskClasses: Record<string, string> = {
+		low: 'risk-badge risk-badge--low',
+		medium: 'risk-badge risk-badge--medium',
+		high: 'risk-badge risk-badge--high',
+	};
 
 	// The title lives inside the scroll container and scrolls away naturally.
 	// An IntersectionObserver on the title element drives the compact topbar.
@@ -66,7 +82,37 @@
 		return () => io.disconnect();
 	});
 
+	const tabScrollPositions = new Map<string, number>();
+	let prevTab: string | undefined;
+
+	// Save BEFORE the DOM update (while the container is still visible)
+	$effect.pre(() => {
+		const tab = activeTab;
+		if (scrollRootEl && prevTab && prevTab !== 'diff') {
+			tabScrollPositions.set(prevTab, scrollRootEl.scrollTop);
+		}
+		prevTab = tab;
+	});
+
+	// Restore AFTER the DOM update (container is now visible again)
+	// Only fires when activeTab changes — not on every re-render
+	let restoredForTab: string | null = null;
+	$effect(() => {
+		const tab = activeTab;
+		if (!scrollRootEl || tab === 'diff') return;
+		if (tab === restoredForTab) return;
+		restoredForTab = tab;
+		const saved = tabScrollPositions.get(tab) ?? 0;
+		scrollRootEl.scrollTop = saved;
+	});
+
 	let currentRequestId = 0;
+
+	// Phase 1 stopgap: avoid refetching diff files when the user bounces back to
+	// the same PR within a minute. Replaced by queryStore in Phase 3.
+	let lastLoadedPrId: string | null = null;
+	let lastLoadedAt = 0;
+	const PR_REFETCH_WINDOW_MS = 60_000;
 
 	$effect(() => {
 		const prId = page.params['prId'];
@@ -81,7 +127,26 @@
 			const requestId = ++currentRequestId;
 
 			setSelectedPrId(prId);
+			switchPrViewState(prId);
 			requestThreadSync(prId);
+
+			// Short-circuit: same PR, recent load, files still in memory —
+			// keep rendering what's there. A WS `cache:invalidated` (Phase 3)
+			// or a hard refresh will bust this.
+			const now = Date.now();
+			const currentFiles = getReviewFiles();
+			if (
+				prId === lastLoadedPrId &&
+				now - lastLoadedAt < PR_REFETCH_WINDOW_MS &&
+				currentFiles.length > 0
+			) {
+				// Still kick off a session load so thread-counts refresh; cheap.
+				loadSession(prId).catch((e) =>
+					console.error('[review] Session load failed (non-blocking):', e),
+				);
+				return;
+			}
+
 			clearExplanations();
 			clearReviewFiles();
 			setIsLoadingFiles(true);
@@ -114,6 +179,8 @@
 						if (mapped.length > 0) {
 							setActiveFilePath(mapped[0]!.path);
 						}
+						lastLoadedPrId = prId;
+						lastLoadedAt = Date.now();
 					}
 				} catch (e) {
 					if (requestId !== currentRequestId) return;
@@ -132,6 +199,17 @@
 		deactivateWalkthrough(); // Clear active view without aborting background generation
 		setTopbarCollapsed(false);
 	});
+
+	let regenerateDialogOpen = $state(false);
+
+	function handleRegenerate(): void {
+		const prId = page.params['prId'] ?? '';
+		if (walkthroughIssues.length > 0) {
+			regenerateDialogOpen = true;
+		} else {
+			regenerateWalkthrough(prId);
+		}
+	}
 </script>
 
 <AuthGuard>
@@ -190,7 +268,7 @@
 										{...props}
 										variant="ghost"
 										size="icon-sm"
-										onclick={() => regenerateWalkthrough(page.params['prId'] ?? '')}
+										onclick={handleRegenerate}
 									>
 										<RefreshCw size={14} />
 									</Button>
@@ -201,6 +279,11 @@
 					{/if}
 				</div>
 				<span class="page-subtitle">#{pr.externalId} · {pr.sourceBranch} → {pr.targetBranch}</span>
+			{#if activeTab === 'walkthrough' && walkthroughRiskLevel}
+					<Badge variant="outline" class={riskClasses[walkthroughRiskLevel] ?? ''}>
+						{walkthroughRiskLevel} risk
+					</Badge>
+				{/if}
 			</div>
 
 			<!-- Walkthrough: always mounted to avoid re-render freeze on tab switch.
@@ -210,12 +293,13 @@
 					prId={page.params['prId'] ?? ''}
 					scrollRoot={scrollRootEl}
 					isActive={activeTab === 'walkthrough'}
+					{sidebarOffset}
 				/>
 			</div>
 
-			{#if activeTab === 'request-changes'}
+			<div style={activeTab === 'request-changes' ? 'display: contents' : 'display: none'}>
 				<RequestChanges prId={page.params['prId'] ?? ''} />
-			{/if}
+			</div>
 		</div>
 	</div>
 {:else}
@@ -224,6 +308,13 @@
 	</div>
 {/if}
 </AuthGuard>
+
+<RegenerateDialog
+	bind:open={regenerateDialogOpen}
+	issues={walkthroughIssues}
+	onconfirm={(kept) => regenerateWalkthrough(page.params['prId'] ?? '', kept)}
+	oncancel={() => {}}
+/>
 
 <style>
 	.review-page {
@@ -291,6 +382,18 @@
 		line-height: 1.4;
 	}
 
+	/* ── Risk badge (walkthrough) ─────────────────────────────────────── */
+
+	:global(.risk-badge) {
+		font-size: 10px;
+		font-weight: 600;
+		letter-spacing: 0.05em;
+		text-transform: uppercase;
+		border-radius: 9999px;
+		padding: 1px 6px;
+		width: fit-content;
+	}
+
 	.loading {
 		display: flex;
 		height: 100%;
@@ -301,6 +404,16 @@
 	}
 
 	.error {
-		color: var(--color-danger, #ef4444);
+		color: var(--color-danger);
+	}
+
+	:global(.stop-generation) {
+		color: var(--color-danger) !important;
+		opacity: 1 !important;
+	}
+
+	:global(.stop-generation:hover) {
+		color: var(--color-danger) !important;
+		opacity: 0.8 !important;
 	}
 </style>

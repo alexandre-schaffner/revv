@@ -144,7 +144,7 @@
 
 	.submit-btn--active {
 		background: var(--color-accent);
-		color: white;
+		color: var(--color-primary-foreground);
 		cursor: pointer;
 	}
 

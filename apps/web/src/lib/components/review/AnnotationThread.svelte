@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { CommentThread, ThreadMessage } from '@revv/shared';
+	import { User, Bot, Clock } from '@lucide/svelte';
 	import AnnotationCommentInput from './AnnotationCommentInput.svelte';
 
 	interface Props {
@@ -8,18 +9,21 @@
 		onReply?: () => void;
 		onResolve?: () => void;
 		onReopen?: () => void;
+		onDiscard?: () => void;
 		onCollapse?: () => void;
 		onApplySuggestion?: (suggestion: string) => void;
+		onEditMessage?: (messageId: string, body: string) => void;
 		isReplying?: boolean;
 		onReplySubmit?: (body: string) => void;
 		onReplyDismiss?: () => void;
 		currentUserRole?: 'reviewer' | 'coder' | 'unknown';
+		isPending?: boolean;
 	}
 
-	let { thread, messages, onReply, onResolve, onReopen, onCollapse, onApplySuggestion, isReplying = false, onReplySubmit, onReplyDismiss, currentUserRole = 'unknown' }: Props = $props();
+	let { thread, messages, onReply, onResolve, onReopen, onDiscard, onCollapse, onApplySuggestion, onEditMessage, isReplying = false, onReplySubmit, onReplyDismiss, currentUserRole = 'unknown', isPending = false }: Props = $props();
 
 	const isResolved = $derived(thread.status === 'resolved' || thread.status === 'wont_fix');
-	const isPending = $derived(
+	const isStatusPending = $derived(
 		thread.status === 'pending_coder' || thread.status === 'pending_reviewer'
 	);
 
@@ -63,6 +67,35 @@
 		if (hrs < 24) return `${hrs}h ago`;
 		return `${days}d ago`;
 	}
+
+	// ── Inline edit state ─────────────────────────────────────────────────────
+
+	let editingMessageId = $state<string | null>(null);
+	let editBody = $state('');
+
+	function startEdit(msg: ThreadMessage): void {
+		editingMessageId = msg.id;
+		editBody = msg.body;
+	}
+
+	function saveEdit(): void {
+		if (!editingMessageId) return;
+		const trimmed = editBody.trim();
+		const original = messages.find((m) => m.id === editingMessageId)?.body ?? '';
+		if (trimmed && trimmed !== original) {
+			onEditMessage?.(editingMessageId, trimmed);
+		}
+		editingMessageId = null;
+	}
+
+	function cancelEdit(): void {
+		editingMessageId = null;
+	}
+
+	function focusOnMount(node: HTMLTextAreaElement) {
+		node.focus();
+		node.setSelectionRange(node.value.length, node.value.length);
+	}
 </script>
 
 <div
@@ -72,8 +105,12 @@
 	{#each messages as msg, i (msg.id)}
 		<div class="message" class:message--first={i === 0}>
 			<div class="msg-header">
-				<div class="avatar">
-					<span>{msg.authorName[0]?.toUpperCase() ?? '?'}</span>
+				<div class="avatar" title={msg.authorName}>
+					{#if msg.authorRole === 'ai_agent'}
+						<Bot size={12} aria-hidden="true" />
+					{:else}
+						<User size={12} aria-hidden="true" />
+					{/if}
 				</div>
 				<span class="author">{msg.authorName}</span>
 				{#if msg.authorRole !== 'reviewer'}
@@ -82,10 +119,38 @@
 				<span class="timestamp">{formatTime(msg.createdAt)}</span>
 			</div>
 
-			<div class="msg-body">{msg.body}</div>
+			{#if isPending && i === 0}
+				{#if editingMessageId === msg.id}
+					<div class="msg-edit">
+						<textarea
+							class="edit-textarea"
+							bind:value={editBody}
+							onkeydown={(e) => {
+								if (e.key === 'Escape') cancelEdit();
+								else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) saveEdit();
+							}}
+							use:focusOnMount
+						></textarea>
+						<div class="edit-actions">
+							<button class="edit-save-btn" onclick={saveEdit} disabled={!editBody.trim()}>Save</button>
+							<button class="edit-cancel-btn" onclick={cancelEdit}>Cancel</button>
+						</div>
+					</div>
+				{:else}
+					<div
+						class="msg-body msg-body--editable"
+						role="button"
+						tabindex="0"
+						title="Click to edit"
+						onclick={() => startEdit(msg)}
+						onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') startEdit(msg); }}
+					>{msg.body}</div>
+				{/if}
+			{:else}
+				<div class="msg-body">{msg.body}</div>
+			{/if}
 
-			{#if msg.codeSuggestion}
-				<div class="suggestion-block">
+			{#if msg.codeSuggestion}				<div class="suggestion-block">
 					<div class="suggestion-label">
 						<svg
 							width="11"
@@ -122,8 +187,14 @@
 	{/if}
 
 	<div class="thread-footer">
-		{#if statusChip}
+		{#if statusChip && !isPending}
 			<span class="status-chip status-chip--{isResolved ? 'resolved' : 'pending'}">{statusChip}</span>
+		{/if}
+		{#if isPending}
+			<span class="pending-badge">
+				<Clock size={11} aria-hidden="true" />
+				Not synced
+			</span>
 		{/if}
 		{#if !isResolved && onReply}
 			<button class="footer-btn footer-btn--reply" class:footer-btn--reply-active={isReplying} onclick={onReply}>
@@ -134,7 +205,12 @@
 				{isReplying ? 'Cancel' : 'Reply'}
 			</button>
 		{/if}
-		{#if isResolved ? onReopen : onResolve}
+		{#if isPending && onDiscard}
+			<button
+				class="footer-btn footer-btn--discard"
+				onclick={onDiscard}
+			>Discard</button>
+		{:else if isResolved ? onReopen : onResolve}
 			<button
 				class="footer-btn"
 				class:footer-btn--resolve={!isResolved}
@@ -195,11 +271,6 @@
 		justify-content: center;
 		overflow: hidden;
 		flex-shrink: 0;
-	}
-
-	.avatar span {
-		font-size: 9px;
-		font-weight: 600;
 		color: var(--color-text-muted);
 	}
 
@@ -341,6 +412,14 @@
 		border-color: var(--color-border);
 	}
 
+	.footer-btn--discard {
+		color: var(--color-danger, #ef4444);
+		opacity: 0.8;
+	}
+	.footer-btn--discard:hover {
+		opacity: 1;
+	}
+
 	.status-chip {
 		font-size: 10px;
 		font-weight: 500;
@@ -355,5 +434,75 @@
 	.status-chip--pending {
 		background: color-mix(in srgb, var(--color-marker-your-turn, var(--color-marker-pending)) 15%, transparent);
 		color: var(--color-marker-your-turn, var(--color-marker-pending));
+	}
+
+	.pending-badge {
+		display: flex;
+		align-items: center;
+		gap: 3px;
+		font-size: 10px;
+		color: var(--color-text-muted);
+		opacity: 0.7;
+	}
+
+	.msg-body--editable {
+		cursor: text;
+		border-radius: 3px;
+		margin: -2px -4px;
+		padding: 2px 4px;
+		transition: background-color 80ms;
+	}
+	.msg-body--editable:hover {
+		background: var(--color-bg-tertiary);
+	}
+	.msg-edit {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
+	.edit-textarea {
+		width: 100%;
+		min-height: 60px;
+		background: var(--color-input-bg);
+		border: 1px solid var(--color-accent);
+		border-radius: 4px;
+		padding: 6px 8px;
+		font-family: var(--font-sans);
+		font-size: 13px;
+		line-height: 1.6;
+		color: var(--color-text-primary);
+		resize: vertical;
+		outline: none;
+		box-sizing: border-box;
+	}
+	.edit-actions {
+		display: flex;
+		gap: 6px;
+		justify-content: flex-end;
+	}
+	.edit-save-btn {
+		font-size: 11px;
+		padding: 3px 10px;
+		border-radius: 4px;
+		border: none;
+		background: var(--color-accent);
+		color: var(--color-primary-foreground);
+		cursor: pointer;
+	}
+	.edit-save-btn:disabled {
+		opacity: 0.5;
+		cursor: default;
+	}
+	.edit-cancel-btn {
+		font-size: 11px;
+		padding: 3px 10px;
+		border-radius: 4px;
+		border: 1px solid var(--color-border);
+		background: transparent;
+		color: var(--color-text-muted);
+		cursor: pointer;
+	}
+	.edit-cancel-btn:hover {
+		background: var(--color-bg-tertiary);
 	}
 </style>

@@ -9,7 +9,7 @@
 		switch (reviewStatus) {
 			case 'in_progress': return 'bg-warning';
 			case 'reviewed': return 'bg-success';
-			case 'changes_proposed': return 'bg-[#a855f7]';
+			case 'changes_proposed': return 'bg-[var(--color-ai-accent)]';
 			default: return 'bg-accent';
 		}
 	});

@@ -1,12 +1,18 @@
 import { Elysia, t } from 'elysia';
 import { eq } from 'drizzle-orm';
-import { db, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET } from '../auth';
+import { db, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, GITHUB_HOST, GITHUB_API_BASE } from '../auth';
 import { user, session, account } from '../db/schema';
 
-const GITHUB_DEVICE_CODE_URL = 'https://github.com/login/device/code';
-const GITHUB_TOKEN_URL = 'https://github.com/login/oauth/access_token';
-const GITHUB_API_USER_URL = 'https://api.github.com/user';
-const GITHUB_API_EMAILS_URL = 'https://api.github.com/user/emails';
+if (GITHUB_CLIENT_ID === 'BUNDLED_CLIENT_ID') {
+	console.warn('[device-auth] WARNING: GITHUB_CLIENT_ID is not set — sign-in will fail. Set it in .env');
+}
+
+const githubBase = `https://${GITHUB_HOST}`;
+
+const GITHUB_DEVICE_CODE_URL = `${githubBase}/login/device/code`;
+const GITHUB_TOKEN_URL = `${githubBase}/login/oauth/access_token`;
+const GITHUB_API_USER_URL = `${GITHUB_API_BASE}/user`;
+const GITHUB_API_EMAILS_URL = `${GITHUB_API_BASE}/user/emails`;
 const DEVICE_FLOW_SCOPE = 'repo read:org user:email';
 
 interface GitHubDeviceCodeResponse {
@@ -152,7 +158,11 @@ export const deviceAuthRoutes = new Elysia()
 			body: JSON.stringify({ client_id: GITHUB_CLIENT_ID, scope: DEVICE_FLOW_SCOPE }),
 		});
 
-		if (!res.ok) return status(502, { error: 'Failed to initiate device flow' });
+		if (!res.ok) {
+			const body = await res.text().catch(() => '(unreadable)');
+			console.error(`[device-auth] GitHub device code request failed: ${res.status} ${res.statusText}`, body);
+			return status(502, { error: 'Failed to initiate device flow' });
+		}
 
 		const data = (await res.json()) as GitHubDeviceCodeResponse;
 		return {

@@ -80,6 +80,14 @@ function handleKeydown(e: KeyboardEvent): void {
 		return;
 	}
 
+	// Cmd+S → toggle sidebar (same as Cmd+B)
+	if (!e.shiftKey && e.key.toLowerCase() === 's') {
+		e.preventDefault();
+		e.stopPropagation();
+		toggleSidebar();
+		return;
+	}
+
 	// Cmd+R → toggle right panel
 	if (!e.shiftKey && e.key.toLowerCase() === 'r') {
 		e.preventDefault();

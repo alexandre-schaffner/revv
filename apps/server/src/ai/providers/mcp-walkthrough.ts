@@ -1,8 +1,10 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type {
+	RatingAxis,
 	WalkthroughStreamEvent,
 	WalkthroughTokenUsage,
 	WalkthroughBlock,
+	CarriedOverIssue,
 } from "@revv/shared";
 import { debug } from "../../logger";
 import type { PrFileMeta } from "../../services/GitHub";
@@ -22,13 +24,15 @@ export interface ContinuationContext {
 	walkthroughId: string;
 	existingBlocks: WalkthroughBlock[];
 	existingIssueCount: number;
+	existingRatedAxes: RatingAxis[];
+	opencodeSessionId?: string; // only used by opencode provider
 }
 
 // ── Built-in tools the model can use for file exploration ───────────────────
 
 const EXPLORATION_TOOLS = new Set(["Read", "Grep", "Glob", "Bash"]);
 
-const MCP_TOOL_PREFIX = "mcp__rev-walkthrough__";
+const MCP_TOOL_PREFIX = "mcp__revv-walkthrough__";
 
 const ALLOWED_TOOLS = [
 	// Built-in exploration
@@ -41,6 +45,7 @@ const ALLOWED_TOOLS = [
 	`${MCP_TOOL_PREFIX}add_code_block`,
 	`${MCP_TOOL_PREFIX}add_diff_block`,
 	`${MCP_TOOL_PREFIX}flag_issue`,
+	`${MCP_TOOL_PREFIX}rate_axis`,
 	`${MCP_TOOL_PREFIX}complete_walkthrough`,
 ];
 
@@ -63,6 +68,7 @@ export function streamWalkthroughViaMCP(
 		files: PrFileMeta[];
 		worktreePath: string;
 		continuation?: ContinuationContext;
+		carriedOverIssues?: CarriedOverIssue[];
 	},
 	model?: string,
 ): AsyncGenerator<WalkthroughStreamEvent> {
@@ -88,15 +94,22 @@ export function streamWalkthroughViaMCP(
 			issueCount: 0,
 			completed: false,
 			writingPhaseEmitted: false,
+			ratedAxes: new Set<RatingAxis>(),
 		},
 	};
 
-	// When resuming, pre-seed emitter state so new blocks get correct order indices
+	// When resuming, pre-seed emitter state so new blocks get correct order
+	// indices AND so the 9-axis completeness check knows which axes were
+	// already rated in the previous partial run. Without ratedAxes pre-seeding,
+	// complete_walkthrough would fail on any resume that had already rated
+	// some axes, and the model would waste turns re-rating them.
 	const initialState = params.continuation
 		? {
 				summarySet: true,
 				blockCount: params.continuation.existingBlocks.length,
 				issueCount: params.continuation.existingIssueCount,
+				writingPhaseEmitted: params.continuation.existingBlocks.length > 0,
+				ratedAxes: params.continuation.existingRatedAxes,
 			}
 		: undefined;
 	const walkthroughServer = createWalkthroughMcpServer(emitter, initialState);
@@ -106,6 +119,7 @@ export function streamWalkthroughViaMCP(
 		params,
 		undefined,
 		params.continuation,
+		params.carriedOverIssues,
 	);
 
 	// ── Run query in background ─────────────────────────────────────────
@@ -148,6 +162,7 @@ export function streamWalkthroughViaMCP(
 			| "exploring"
 			| "analyzing"
 			| "writing"
+			| "rating"
 			| "finishing" = "connecting";
 
 		try {
@@ -162,7 +177,10 @@ export function streamWalkthroughViaMCP(
 					permissionMode: "bypassPermissions",
 					allowDangerouslySkipPermissions: true,
 					persistSession: false,
-					maxTurns: 30,
+					// 9 rate_axis calls are layered on top of the existing block +
+					// flag_issue tool usage. Raise the turn ceiling so complex PRs
+					// don't silently truncate ratings before complete_walkthrough.
+					maxTurns: 45,
 					abortController,
 					...(model ? { model } : {}),
 				},
@@ -236,6 +254,23 @@ export function streamWalkthroughViaMCP(
 							}
 						}
 						// Transition to writing when the model starts emitting content blocks
+						// (handled by walkthrough-tools the first time a block is added).
+						// Transition to rating when the model starts the batched scorecard pass.
+						if (
+							block.type === "tool_use" &&
+							block.name === `${MCP_TOOL_PREFIX}rate_axis`
+						) {
+							if (currentPhase !== "rating" && currentPhase !== "finishing") {
+								currentPhase = "rating";
+								push({
+									type: "phase",
+									data: {
+										phase: "rating",
+										message: "Scoring the PR across 9 axes...",
+									},
+								});
+							}
+						}
 						// Transition to finishing when complete_walkthrough is called
 						if (
 							block.type === "tool_use" &&

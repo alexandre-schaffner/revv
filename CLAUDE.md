@@ -70,6 +70,10 @@ make reset-db            # Delete SQLite database (apps/server/revv.db)
 
 All packages extend `tsconfig.base.json` which enables `strict`, `exactOptionalPropertyTypes`, and `noUncheckedIndexedAccess`. These are enforced — don't suppress errors with `as` casts unless unavoidable.
 
+## UI Conventions
+
+**Always use icons, never emojis.** For any glyph in the UI — buttons, fallback avatars, placeholders, status indicators, empty states, inline hints — use an icon component (`@lucide/svelte`, or an inline SVG for brand/octicon-style marks). Do not use emoji characters (🎉, ✅, ❌, 👤, etc.) in rendered UI, toast messages, or component text. Existing Lucide imports are the preferred source; only inline SVG when no Lucide equivalent fits.
+
 ## Environment
 
 The only required env vars are in `.env` at the repo root (read by `apps/server`):

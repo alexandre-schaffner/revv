@@ -66,15 +66,15 @@
 		display: flex;
 		align-items: center;
 		gap: 0;
-		background: var(--color-glass-bg, rgba(20, 20, 28, 0.55));
+		background: var(--color-tooltip-bg);
 		backdrop-filter: blur(16px) saturate(1.4);
 		-webkit-backdrop-filter: blur(16px) saturate(1.4);
-		border: 1px solid var(--color-glass-border, rgba(255, 255, 255, 0.08));
+		border: 1px solid var(--color-tooltip-border);
 		border-radius: 6px;
 		padding: 3px 4px 3px 10px;
 		box-shadow:
-			var(--color-glass-shadow, 0 4px 20px rgba(0, 0, 0, 0.5)),
-			inset 0 0.5px 0 0 var(--color-glass-highlight, rgba(255, 255, 255, 0.04));
+			var(--color-glass-shadow),
+			inset 0 0.5px 0 0 var(--color-tooltip-item-bg);
 		pointer-events: auto;
 		animation: tt-in 70ms ease-out both;
 		max-width: 320px;
@@ -99,7 +99,7 @@
 		z-index: 1;
 		font-family: var(--font-mono, monospace);
 		font-size: 11px;
-		color: var(--color-text-secondary, #c4c4c8);
+		color: var(--color-text-secondary);
 		overflow: hidden;
 		text-overflow: ellipsis;
 		max-width: 200px;
@@ -110,7 +110,7 @@
 		z-index: 1;
 		width: 1px;
 		height: 14px;
-		background: var(--color-glass-border, rgba(255, 255, 255, 0.08));
+		background: var(--color-tooltip-border);
 		margin: 0 6px;
 		flex-shrink: 0;
 	}
@@ -123,8 +123,8 @@
 		gap: 4px;
 		font-size: 11px;
 		font-weight: 500;
-		color: var(--color-accent, #7c6af7);
-		background: rgba(124, 106, 247, 0.12);
+		color: var(--color-accent);
+		background: color-mix(in srgb, var(--color-ai-accent) 12%, transparent);
 		border: none;
 		border-radius: 4px;
 		padding: 3px 8px;
@@ -134,6 +134,6 @@
 	}
 
 	.explain-btn:hover {
-		background: rgba(124, 106, 247, 0.22);
+		background: color-mix(in srgb, var(--color-ai-accent) 22%, transparent);
 	}
 </style>

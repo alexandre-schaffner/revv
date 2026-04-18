@@ -1,3 +1,8 @@
+<script lang="ts" module>
+	/** Persist expanded-dir state per PR so toggling survives PR switches. */
+	const savedExpandedDirs = new Map<string, Set<string>>();
+</script>
+
 <script lang="ts">
 	import { untrack } from 'svelte';
 	import { ChevronRight, FileCode2, FilePlus2, FileMinus2, FolderOpen, Folder } from '@lucide/svelte';
@@ -11,9 +16,11 @@
 		showHeader?: boolean;
 		/** When set, file/dir rows get data-sidebar-nav attributes for vim navigation. */
 		navParentId?: string | undefined;
+		/** Identifies the PR so expand state is persisted across PR switches. */
+		prId?: string | undefined;
 	}
 
-	let { files, activeFilePath, onFileSelect, showHeader = true, navParentId }: Props = $props();
+	let { files, activeFilePath, onFileSelect, showHeader = true, navParentId, prId }: Props = $props();
 
 	const focusedNavId = $derived(getFocusedId());
 
@@ -56,11 +63,35 @@
 		return root.children;
 	}
 
+	/** Collect every directory path from a flat file list. */
+	function allDirPaths(files: FileTreeEntry[]): Set<string> {
+		const dirs = new Set<string>();
+		for (const file of files) {
+			const parts = file.path.split('/');
+			for (let i = 1; i < parts.length; i++) {
+				dirs.add(parts.slice(0, i).join('/'));
+			}
+		}
+		return dirs;
+	}
+
 	let expandedDirs = $state<Set<string>>(new Set());
 
 	const tree = $derived(buildTree(files));
 
-	// Auto-expand all dirs that contain the active file
+	// Initialise expanded state: restore saved state for this PR, or expand all.
+	$effect(() => {
+		// Re-run when the file list or prId changes
+		void files;
+		const key = prId;
+		if (key && savedExpandedDirs.has(key)) {
+			expandedDirs = new Set(savedExpandedDirs.get(key)!);
+		} else {
+			expandedDirs = allDirPaths(files);
+		}
+	});
+
+	// Auto-expand dirs that contain the active file (additive — never collapses).
 	$effect(() => {
 		if (!activeFilePath) return;
 		const parts = activeFilePath.split('/');
@@ -76,6 +107,10 @@
 		if (next.has(path)) next.delete(path);
 		else next.add(path);
 		expandedDirs = next;
+		// Persist for this PR
+		if (prId) {
+			savedExpandedDirs.set(prId, new Set(next));
+		}
 	}
 </script>
 
@@ -246,7 +281,7 @@
 	}
 
 	:global(.dir-icon) {
-		color: rgba(59, 130, 246, 0.5);
+		color: color-mix(in srgb, var(--color-accent) 50%, transparent);
 		flex-shrink: 0;
 	}
 

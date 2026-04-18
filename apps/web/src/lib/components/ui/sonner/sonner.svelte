@@ -12,8 +12,9 @@
 
 <Sonner
 	theme={(mode.current ?? 'system') as 'light' | 'dark' | 'system'}
+	position="top-right"
 	class="toaster group"
-	style="--normal-bg: var(--color-popover); --normal-text: var(--color-popover-foreground); --normal-border: var(--color-border);"
+	style="--normal-bg: var(--color-popover); --normal-text: var(--color-popover-foreground); --normal-border: var(--color-border); --normal-description: var(--color-text-secondary);"
 	{...restProps}
 >
 	{#snippet loadingIcon()}

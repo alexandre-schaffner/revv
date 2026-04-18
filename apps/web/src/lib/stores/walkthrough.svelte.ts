@@ -1,7 +1,7 @@
-import type { WalkthroughBlock, RiskLevel, WalkthroughStreamEvent, WalkthroughIssue, WalkthroughPhase } from '@revv/shared';
+import type { WalkthroughBlock, RiskLevel, WalkthroughStreamEvent, WalkthroughIssue, WalkthroughPhase, WalkthroughRating, CarriedOverIssue } from '@revv/shared';
 import { API_BASE_URL } from '@revv/shared';
 import { authHeaders } from '$lib/utils/session-token';
-import { parseSSEBuffer } from '$lib/utils/sse-parser';
+import { runWalkthroughSse } from '$lib/services/walkthrough-sse';
 import { toast } from 'svelte-sonner';
 
 // ── Per-PR state entry ──────────────────────────────────────────────────────
@@ -9,13 +9,14 @@ import { toast } from 'svelte-sonner';
 interface WalkthroughEntry {
 	blocks: WalkthroughBlock[];
 	summary: string | null;
-	riskLevel: RiskLevel;
+	riskLevel: RiskLevel | null;
 	isStreaming: boolean;
 	streamError: string | null;
 	walkthroughId: string | null;
 	doneReceived: boolean;
 	explorationSteps: Array<{ tool: string; description: string }>;
 	issues: WalkthroughIssue[];
+	ratings: WalkthroughRating[];
 	phase: WalkthroughPhase;
 	phaseMessage: string;
 	streamStartedAt: number | null;
@@ -32,13 +33,14 @@ function freshEntry(): WalkthroughEntry {
 	return {
 		blocks: [],
 		summary: null,
-		riskLevel: 'low',
+		riskLevel: null,
 		isStreaming: true,
 		streamError: null,
 		walkthroughId: null,
 		doneReceived: false,
 		explorationSteps: [],
 		issues: [],
+		ratings: [],
 		phase: 'connecting',
 		phaseMessage: 'Connecting...',
 		streamStartedAt: Date.now(),
@@ -61,7 +63,7 @@ const controllers = new Map<string, { abort: AbortController; reader: ReadableSt
 // fetches (e.g. /api/prs/:id/files) queue forever — manifesting as the
 // review page sitting on "Loading diff…". Server keeps generating after
 // we disconnect and caches the result, so aborting is non-destructive.
-const MAX_CONCURRENT_STREAMS = 3;
+const MAX_CONCURRENT_STREAMS = 5;
 
 // ── Getters (resolve from active PR entry) ──────────────────────────────────
 
@@ -76,8 +78,8 @@ export function getBlocks(): WalkthroughBlock[] {
 export function getSummary(): string | null {
 	return active()?.summary ?? null;
 }
-export function getRiskLevel(): RiskLevel {
-	return active()?.riskLevel ?? 'low';
+export function getRiskLevel(): RiskLevel | null {
+	return active()?.riskLevel ?? null;
 }
 export function getIsStreaming(): boolean {
 	return active()?.isStreaming ?? false;
@@ -93,6 +95,13 @@ export function getExplorationSteps(): Array<{ tool: string; description: string
 }
 export function getIssues(): WalkthroughIssue[] {
 	return active()?.issues ?? [];
+}
+export function getIssuesForFile(filePath: string): WalkthroughIssue[] {
+	const issues = active()?.issues ?? [];
+	return issues.filter((i) => i.filePath === filePath);
+}
+export function getRatings(): WalkthroughRating[] {
+	return active()?.ratings ?? [];
 }
 export function getPhase(): WalkthroughPhase {
 	return active()?.phase ?? 'connecting';
@@ -141,17 +150,58 @@ function updateEntry(prId: string, updater: (e: WalkthroughEntry) => void): void
 
 // ── Core streaming ──────────────────────────────────────────────────────────
 
+/**
+ * Synchronously mark a PR as active and seed a "loading" entry if one
+ * doesn't already exist in a usable state. Runs on component mount,
+ * before the stream-start debounce fires, so the UI can render the
+ * skeleton immediately instead of briefly flashing the "No walkthrough
+ * data received" empty state — which would otherwise show whenever the
+ * store has no entry yet (first visit) or only holds a bare stub from
+ * a `walkthrough:complete` WebSocket event.
+ *
+ * Does NOT start a fetch — that's streamWalkthrough's job. The two
+ * coordinate via the `controllers` Map: a seeded entry has
+ * `isStreaming: true` but no controller, so streamWalkthrough knows
+ * it's still pending and proceeds with the fetch.
+ */
+export function prepareEntry(prId: string): void {
+	activePrId = prId;
+	// Leave in-flight fetches alone — their entry is already correct.
+	if (controllers.has(prId)) return;
+	const existing = entries.get(prId);
+	// Leave entries that already hold complete data alone.
+	if (existing && existing.summary !== null && existing.blocks.length > 0 && existing.doneReceived && !existing.streamError) return;
+	// Replace stub / errored / missing entries with a fresh loading one so
+	// the UI shows the skeleton during the debounce window.
+	entries.set(prId, freshEntry());
+	entries = new Map(entries);
+}
+
 export async function streamWalkthrough(prId: string): Promise<void> {
 	// Switch the active view
 	activePrId = prId;
 
 	const existing = entries.get(prId);
 
-	// Already streaming this PR — just switch the view
-	if (existing?.isStreaming) return;
+	// An active fetch for this PR is already in-flight — just switch the
+	// view, unless that fetch appears stale (started >10min ago with no
+	// completion), in which case fall through and re-fetch.
+	//
+	// We key the guard off `controllers.has(prId)` (not `entry.isStreaming`)
+	// because prepareEntry seeds an entry with `isStreaming: true` before
+	// any fetch starts. Checking isStreaming would make streamWalkthrough
+	// return early for a just-prepared entry and silently skip the fetch.
+	const STALE_STREAM_MS = 10 * 60 * 1000;
+	const hasController = controllers.has(prId);
+	const isStale =
+		hasController &&
+		existing?.streamStartedAt != null &&
+		!existing.doneReceived &&
+		Date.now() - existing.streamStartedAt > STALE_STREAM_MS;
+	if (hasController && !isStale) return;
 
 	// Already have completed data for this PR — just show it
-	if (existing && existing.summary !== null && existing.blocks.length > 0 && !existing.streamError) return;
+	if (existing && existing.summary !== null && existing.blocks.length > 0 && existing.doneReceived && !existing.streamError) return;
 
 	// Abort any existing SSE for this specific PR (e.g. errored state, regenerate)
 	abortPr(prId);
@@ -160,8 +210,24 @@ export async function streamWalkthrough(prId: string): Promise<void> {
 	// (so this PR isn't already in controllers) and before controllers.set.
 	enforceStreamCap();
 
-	// Create fresh entry
-	const entry = freshEntry();
+	// Reuse a prepared-but-untouched entry if one is sitting in the Map —
+	// that way prepareEntry's `streamStartedAt` carries over and the elapsed
+	// timer doesn't reset to 0 the moment the fetch begins. Anything past a
+	// freshly-seeded state (has data, error, exploration activity, etc.) is
+	// discarded for a clean slate.
+	const reusable = !!existing
+		&& !existing.streamError
+		&& existing.summary === null
+		&& existing.blocks.length === 0
+		&& existing.explorationSteps.length === 0
+		&& existing.issues.length === 0
+		&& existing.ratings.length === 0;
+	const entry = reusable && existing ? existing : freshEntry();
+	entry.isStreaming = true;
+	if (pendingKeptIssues.length > 0) {
+		entry.issues = [...pendingKeptIssues];
+		pendingKeptIssues = [];
+	}
 	entries.set(prId, entry);
 	entries = new Map(entries);
 
@@ -169,65 +235,19 @@ export async function streamWalkthrough(prId: string): Promise<void> {
 	controllers.set(prId, { abort: abortCtrl, reader: null });
 
 	try {
-		const res = await fetch(`${API_BASE_URL}/api/reviews/${prId}/walkthrough`, {
-			headers: authHeaders(),
+		await runWalkthroughSse({
+			url: `${API_BASE_URL}/api/reviews/${prId}/walkthrough`,
 			signal: abortCtrl.signal,
+			onReaderReady: (reader) => {
+				const ctrl = controllers.get(prId);
+				if (ctrl) ctrl.reader = reader;
+			},
+			onEvents: (events) => applyEvents(prId, events),
+			explorationStallMessage:
+				'Walkthrough stalled — the model explored files for 3 minutes without producing output. Try regenerating.',
+			inactivityMessage:
+				'Walkthrough generation appears stuck — no progress for 3 minutes. Try regenerating.',
 		});
-		if (!res.ok || !res.body) {
-			const text = await res.text().catch(() => '');
-			let message = `HTTP ${res.status}`;
-			try {
-				const body = JSON.parse(text);
-				message = body.message ?? body.error ?? message;
-			} catch { /* use default */ }
-			throw new Error(message);
-		}
-
-		const reader = res.body.getReader();
-		const ctrl = controllers.get(prId);
-		if (ctrl) ctrl.reader = reader;
-		const decoder = new TextDecoder();
-		let buffer = '';
-
-		const INACTIVITY_TIMEOUT_MS = 90 * 1000;
-		let lastEventTime = Date.now();
-
-		const EXPLORATION_STALL_MS = 3 * 60 * 1000;
-		let lastProgressEventTime = Date.now();
-
-		while (true) {
-			const { done, value } = await reader.read();
-			if (done) break;
-
-			buffer += decoder.decode(value, { stream: true });
-
-			const result = parseSSEBuffer<WalkthroughStreamEvent>(buffer);
-			buffer = result.remaining;
-
-			if (result.events.length > 0) {
-				lastEventTime = Date.now();
-
-				const hasProgress = result.events.some(e => e.type !== 'exploration');
-				if (hasProgress) {
-					lastProgressEventTime = Date.now();
-				} else if (Date.now() - lastProgressEventTime > EXPLORATION_STALL_MS) {
-					throw new Error('Walkthrough stalled — the model explored files for 3 minutes without producing output. Try regenerating.');
-				}
-
-				applyEvents(prId, result.events);
-			} else if (Date.now() - lastEventTime > INACTIVITY_TIMEOUT_MS) {
-				throw new Error('Walkthrough generation appears stuck — no progress for 3 minutes. Try regenerating.');
-			}
-
-			if (result.done) break;
-		}
-
-		if (buffer.trim()) {
-			const result = parseSSEBuffer<WalkthroughStreamEvent>(buffer + '\n\n');
-			if (result.events.length > 0) {
-				applyEvents(prId, result.events);
-			}
-		}
 	} catch (e) {
 		if ((e as Error).name !== 'AbortError') {
 			updateEntry(prId, (en) => {
@@ -254,6 +274,150 @@ export async function streamWalkthrough(prId: string): Promise<void> {
 			// If we have partial data (summary exists), keep isStreaming true —
 			// the server is still generating in the background.
 		}
+		// Only remove our controller — fetchCachedWalkthrough may have already
+		// replaced it with a new stream's controller.
+		const current = controllers.get(prId);
+		if (current?.abort === abortCtrl) {
+			controllers.delete(prId);
+		}
+	}
+}
+
+/**
+ * Try to hydrate the walkthrough store for a PR from the cached JSON endpoint.
+ * Returns true if the cache was hit and the store was populated, false if no
+ * cache exists (caller should fall back to SSE streaming).
+ *
+ * This is intentionally a cheap JSON fetch — not SSE — so it can run
+ * immediately on mount without holding an HTTP connection open.
+ */
+export async function hydrateFromCache(prId: string): Promise<boolean> {
+	// Already have complete data — nothing to do
+	const existing = entries.get(prId);
+	if (
+		existing &&
+		existing.summary !== null &&
+		existing.blocks.length > 0 &&
+		existing.doneReceived &&
+		!existing.streamError
+	) {
+		activePrId = prId;
+		return true;
+	}
+
+	try {
+		const res = await fetch(`${API_BASE_URL}/api/reviews/${prId}/walkthrough/cached`, {
+			headers: authHeaders(),
+			credentials: 'include',
+		});
+		if (!res.ok) return false;
+
+		const body = (await res.json()) as
+			| { cached: false }
+			| {
+					cached: true;
+					walkthrough: {
+						id: string;
+						summary: string;
+						riskLevel: RiskLevel;
+						blocks: WalkthroughBlock[];
+						issues: WalkthroughIssue[];
+						ratings: WalkthroughRating[];
+						tokenUsage: unknown;
+						reviewSessionId: string;
+					};
+			  };
+
+		if (!body.cached) return false;
+
+		const wt = body.walkthrough;
+
+		// Hydrate the entry directly from JSON — no SSE round-trip needed
+		const entry = entries.get(prId) ?? freshEntry();
+		entry.summary = wt.summary;
+		entry.riskLevel = wt.riskLevel;
+		entry.blocks = wt.blocks;
+		entry.issues = wt.issues;
+		entry.ratings = wt.ratings;
+		entry.walkthroughId = wt.id;
+		entry.doneReceived = true;
+		entry.isStreaming = false;
+		entry.streamError = null;
+		entry.phase = 'finishing';
+		entry.phaseMessage = 'Complete';
+		entry.liveGeneration = false;
+		entries.set(prId, entry);
+		entries = new Map(entries);
+
+		activePrId = prId;
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Start a background walkthrough generation for a PR without changing
+ * the active (visible) PR. Used to pre-generate walkthroughs for PRs
+ * that just appeared in the "Needs Your Review" list.
+ */
+export async function prefetchWalkthrough(prId: string): Promise<void> {
+	const existing = entries.get(prId);
+
+	// Already streaming or already has complete data — nothing to do
+	if (existing?.isStreaming) return;
+	if (existing && existing.summary !== null && existing.blocks.length > 0 && !existing.streamError) return;
+
+	// Abort any existing (errored) entry for this PR
+	abortPr(prId);
+
+	// Reserve our slot before enforcing the cap so concurrent prefetches
+	// are counted correctly and the cap is never exceeded.
+	const abortCtrl = new AbortController();
+	controllers.set(prId, { abort: abortCtrl, reader: null });
+
+	// Enforce the cap — may evict this PR if it's not active
+	enforceStreamCap();
+
+	// If we were evicted by enforceStreamCap, bail out
+	if (!controllers.has(prId)) return;
+
+	// Create fresh entry
+	const entry = freshEntry();
+	entries.set(prId, entry);
+	entries = new Map(entries);
+
+	try {
+		await runWalkthroughSse({
+			url: `${API_BASE_URL}/api/reviews/${prId}/walkthrough`,
+			signal: abortCtrl.signal,
+			onReaderReady: (reader) => {
+				const ctrl = controllers.get(prId);
+				if (ctrl) ctrl.reader = reader;
+			},
+			onEvents: (events) => applyEvents(prId, events),
+			explorationStallMessage: 'Walkthrough stalled during prefetch.',
+			inactivityMessage: 'Walkthrough prefetch appears stuck.',
+		});
+	} catch (e) {
+		if ((e as Error).name !== 'AbortError') {
+			updateEntry(prId, (en) => {
+				en.streamError = e instanceof Error ? e.message : 'Prefetch failed';
+				en.isStreaming = false;
+			});
+		}
+	} finally {
+		const en = entries.get(prId);
+		if (en?.isStreaming && !en.doneReceived && !en.streamError) {
+			// SSE closed while server still generating in background — keep
+			// isStreaming true; WS walkthrough:complete will update it.
+			if (!en.summary) {
+				updateEntry(prId, (e) => {
+					e.isStreaming = false;
+					// Don't set streamError — user hasn't seen this PR yet
+				});
+			}
+		}
 		controllers.delete(prId);
 	}
 }
@@ -270,7 +434,9 @@ function applyEvents(prId: string, events: WalkthroughStreamEvent[]): void {
 					break;
 				case 'block':
 					if (!newBlocks) newBlocks = [...entry.blocks];
-					newBlocks.push(event.data);
+					if (!newBlocks.some((b) => b.id === event.data.id)) {
+						newBlocks.push(event.data);
+					}
 					break;
 				case 'done':
 					entry.walkthroughId = event.data.walkthroughId;
@@ -285,6 +451,18 @@ function applyEvents(prId: string, events: WalkthroughStreamEvent[]): void {
 						entry.issues = [...entry.issues, event.data];
 					}
 					break;
+				case 'rating': {
+					// Replace-by-axis so resume can re-emit a rating without duplicating it.
+					// The DB layer uses INSERT…ON CONFLICT; the client mirrors that semantics
+					// so reloading / continuing a generation doesn't briefly double-render a card.
+					const idx = entry.ratings.findIndex((r) => r.axis === event.data.axis);
+					if (idx >= 0) {
+						entry.ratings = entry.ratings.map((r, i) => (i === idx ? event.data : r));
+					} else {
+						entry.ratings = [...entry.ratings, event.data];
+					}
+					break;
+				}
 				case 'phase':
 					entry.phase = event.data.phase;
 					entry.phaseMessage = event.data.message;
@@ -301,7 +479,7 @@ function applyEvents(prId: string, events: WalkthroughStreamEvent[]): void {
 					// Keep isStreaming true — WS will notify on completion.
 					entry.walkthroughId = event.data.walkthroughId;
 					entry.phase = 'writing';
-					entry.phaseMessage = 'Generating in background...';
+					entry.phaseMessage = 'Generating walkthrough...';
 					entry.liveGeneration = true;
 					break;
 			}
@@ -331,7 +509,6 @@ function abortPr(prId: string): void {
  * server's partial cache means the user doesn't lose progress.
  */
 function enforceStreamCap(): void {
-	let mutated = false;
 	while (controllers.size >= MAX_CONCURRENT_STREAMS) {
 		let victim: string | null = null;
 		for (const prId of controllers.keys()) {
@@ -341,18 +518,10 @@ function enforceStreamCap(): void {
 		}
 		if (victim === null) break; // only activePrId left — nothing to drop
 		abortPr(victim);
-		const entry = entries.get(victim);
-		if (entry) {
-			entry.isStreaming = false;
-			entry.summary = null;
-			entry.blocks = [];
-			entry.issues = [];
-			entry.explorationSteps = [];
-			entry.doneReceived = false;
-			mutated = true;
-		}
+		updateEntry(victim, (e) => {
+			e.isStreaming = false;
+		});
 	}
-	if (mutated) entries = new Map(entries);
 }
 
 export function abort(): void {
@@ -364,7 +533,14 @@ export function abort(): void {
 	}
 }
 
-export async function regenerate(prId: string): Promise<void> {
+// Issues to seed into the fresh entry immediately after creation.
+// Set by `regenerate()` before calling `streamWalkthrough()`.
+let pendingKeptIssues: WalkthroughIssue[] = [];
+
+export async function regenerate(prId: string, keptIssues?: WalkthroughIssue[]): Promise<void> {
+	// Capture the current entry BEFORE aborting so we can extract block context
+	const oldEntry = entries.get(prId);
+
 	// Abort and remove existing entry for this PR
 	abortPr(prId);
 	entries.delete(prId);
@@ -378,12 +554,29 @@ export async function regenerate(prId: string): Promise<void> {
 	entries.set(prId, entry);
 	entries = new Map(entries);
 
+	// Build enriched carried-over issues by resolving each issue's block IDs
+	// to their original annotation/content text so the agent can reassess them.
+	const enrichedKeptIssues: CarriedOverIssue[] = (keptIssues ?? []).map((issue) => {
+		const blockTexts = issue.blockIds.flatMap((blockId) => {
+			const block = oldEntry?.blocks.find((b) => b.id === blockId);
+			if (!block) return [];
+			if (block.type === 'markdown') return [block.content.slice(0, 500)];
+			return [block.annotation ?? ''];
+		}).filter((text) => text.length > 0);
+
+		return {
+			...issue,
+			originalContext: blockTexts.join('\n\n'),
+		};
+	});
+
 	// Await cache invalidation so the subsequent stream request doesn't
 	// race and find the old errored walkthrough still in the database.
 	try {
 		await fetch(`${API_BASE_URL}/api/reviews/${prId}/walkthrough/regenerate`, {
 			method: 'POST',
-			headers: authHeaders(),
+			headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+			body: JSON.stringify({ keptIssues: enrichedKeptIssues }),
 		});
 	} catch {
 		// If invalidation fails, streamWalkthrough will still attempt a
@@ -393,6 +586,17 @@ export async function regenerate(prId: string): Promise<void> {
 	// Remove the temp entry so streamWalkthrough creates a clean one
 	entries.delete(prId);
 	entries = new Map(entries);
+
+	// Seed kept issues so the new entry pre-populates them before streaming.
+	// Strip `blockIds` — those ids point into the OLD walkthrough's blocks and
+	// are meaningless against the new ones. Block ids are order-based
+	// (`block-0`, `block-1`, …), so a stale id can either reference nothing
+	// (fewer blocks this time → silent click failure) or coincidentally match
+	// a semantically-unrelated new block (click jumps to the wrong step). Both
+	// show up to the user as "clicking the issue is buggy." Clearing the link
+	// renders kept issues as non-clickable labels until the model re-flags them
+	// against a real new block.
+	pendingKeptIssues = (keptIssues ?? []).map((i) => ({ ...i, blockIds: [] }));
 
 	await streamWalkthrough(prId);
 }
@@ -416,14 +620,24 @@ export function reset(): void {
 export function onWalkthroughComplete(prId: string, walkthroughId: string): void {
 	const entry = entries.get(prId);
 	if (entry) {
+		// Snapshot BEFORE mutation — updateEntry mutates in-place, so reading
+		// entry.doneReceived after the call always returns true, making the
+		// missingRatings check below permanently false.
+		const hadBlocks = entry.blocks.length > 0;
+		const hadRatings = entry.ratings.length > 0;
+		const wasDone = entry.doneReceived;
+
 		updateEntry(prId, (e) => {
 			e.isStreaming = false;
 			e.doneReceived = true;
 			e.walkthroughId = walkthroughId;
 		});
-		// If this is the active PR and we don't have blocks yet (SSE was disconnected
-		// before data arrived), fetch the full walkthrough from the server.
-		if (activePrId === prId && entry.blocks.length === 0) {
+		// Fetch the full walkthrough from cache if:
+		// 1. No blocks yet (SSE disconnected early), OR
+		// 2. Has blocks but missing ratings and never received the done event
+		//    (SSE dropped before the ratings/done phase at the end of generation)
+		const missingRatings = hadBlocks && !hadRatings && !wasDone;
+		if (activePrId === prId && (!hadBlocks || missingRatings)) {
 			fetchCachedWalkthrough(prId);
 		}
 	} else {
@@ -446,6 +660,26 @@ export function onWalkthroughError(prId: string, message: string): void {
 			e.streamError = message;
 		});
 	}
+}
+
+// ── Animated block tracking ─────────────────────────────────────────────────
+// Non-reactive — tracks which block IDs have already animated, keyed by PR ID.
+// Lives outside `entries` so it survives component remounts.
+const animatedBlocks = new Map<string, Set<string>>();
+
+/** Returns true if this block has already played its entrance animation. */
+export function hasBlockAnimated(prId: string, blockId: string): boolean {
+	return animatedBlocks.get(prId)?.has(blockId) ?? false;
+}
+
+/** Mark a block as having played its entrance animation. */
+export function markBlockAnimated(prId: string, blockId: string): void {
+	let set = animatedBlocks.get(prId);
+	if (!set) {
+		set = new Set();
+		animatedBlocks.set(prId, set);
+	}
+	set.add(blockId);
 }
 
 async function fetchCachedWalkthrough(prId: string): Promise<void> {

@@ -18,4 +18,5 @@ export const walkthroughs = sqliteTable('walkthroughs', {
 	modelUsed: text('model_used').notNull(),
 	tokenUsage: text('token_usage').notNull().default('{}'),
 	prHeadSha: text('pr_head_sha').notNull(),
+	opencodeSessionId: text('opencode_session_id'),
 });

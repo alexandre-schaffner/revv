@@ -1,15 +1,15 @@
 <script lang="ts">
 	import { Sun, Moon, Monitor, RefreshCw } from '@lucide/svelte';
+
 	import FloatingTabs from './FloatingTabs.svelte';
-	import { getSelectedPr, getSelectedPrId } from '$lib/stores/prs.svelte';
+	import { getSelectedPr } from '$lib/stores/prs.svelte';
 	import { getActiveTab, setActiveTab } from '$lib/stores/review.svelte';
 	import { getThemePreference, setThemePreference, type ThemePreference } from '$lib/stores/theme.svelte';
 	import { getActivePanel } from '$lib/stores/focus-mode.svelte';
-	import { getTopbarCollapsed } from '$lib/stores/topbar.svelte';
-	import { getIsStreaming as getWalkthroughStreaming, getSummary as getWalkthroughSummary, regenerate as regenerateWalkthrough } from '$lib/stores/walkthrough.svelte';
-	import { getLastSyncAt, getSyncing, getSyncError, setSyncing, setSyncError } from '$lib/stores/sync.svelte';
-	import { requestThreadSync } from '$lib/stores/ws.svelte';
+	import { getTopbarCollapsed, getTopbarSubtitle } from '$lib/stores/topbar.svelte';
+	import { getIsStreaming as getWalkthroughStreaming, getSummary as getWalkthroughSummary, regenerate as regenerateWalkthrough, getIssues as getWalkthroughIssues } from '$lib/stores/walkthrough.svelte';
 	import { page } from '$app/state';
+	import RegenerateDialog from '$lib/components/walkthrough/RegenerateDialog.svelte';
 
 	interface Props {
 		rightPanelOpen: boolean;
@@ -22,12 +22,10 @@
 	const activeTab = $derived(getActiveTab());
 	const theme = $derived(getThemePreference());
 	const collapsed = $derived(getTopbarCollapsed());
+	const topbarSubtitle = $derived(getTopbarSubtitle());
 	const walkthroughStreaming = $derived(getWalkthroughStreaming());
 	const walkthroughSummary = $derived(getWalkthroughSummary());
-	const syncing = $derived(getSyncing());
-	const syncError = $derived(getSyncError());
-	const lastSyncAt = $derived(getLastSyncAt());
-	const selectedPrId = $derived(getSelectedPrId());
+	const walkthroughIssues = $derived(getWalkthroughIssues());
 	const cycle: Record<ThemePreference, ThemePreference> = {
 		system: 'light',
 		light: 'dark',
@@ -44,62 +42,41 @@
 		setThemePreference(cycle[theme]);
 	}
 
-	function formatSyncAge(iso: string | null): string {
-		if (!iso) return '';
-		const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
-		if (diff < 5) return 'just now';
-		if (diff < 60) return `${diff}s ago`;
-		const mins = Math.floor(diff / 60);
-		if (mins < 60) return `${mins}m ago`;
-		return `${Math.floor(mins / 60)}h ago`;
-	}
+	let regenerateDialogOpen = $state(false);
 
-	function handleRetrySync() {
-		if (selectedPrId) {
-			setSyncing(true);
-			setSyncError(null);
-			requestThreadSync(selectedPrId);
+	function handleRegenerate(): void {
+		const prId = page.params['prId'] ?? '';
+		if (walkthroughIssues.length > 0) {
+			regenerateDialogOpen = true;
+		} else {
+			regenerateWalkthrough(prId);
 		}
 	}
 </script>
 
 <div class="topbar" data-tauri-drag-region>
 	<!-- Left: app name / inline PR title when scrolled -->
-	<div class="title-block">
+	<div class="title-block" data-tauri-drag-region>
 		{#if collapsed && pr}
-			<span class="inline-title"><span class="pr-number">#{pr.externalId}</span> {pr.title}</span>
+			<span class="inline-title" data-tauri-drag-region>
+				<span class="pr-number" data-tauri-drag-region>#{pr.externalId}</span>{pr.title}{#if topbarSubtitle}<span class="title-separator" data-tauri-drag-region> / </span><span class="title-subtitle" data-tauri-drag-region>{topbarSubtitle}</span>{/if}
+			</span>
 		{:else if !pr}
-			<span class="app-name">Revv</span>
+			<span class="app-name" data-tauri-drag-region>Revv</span>
 		{/if}
 	</div>
 
 	<!-- Right: regenerate + sync indicator + theme toggle + panel toggle -->
-	<div class="panel-toggle-wrap">
+	<div class="panel-toggle-wrap" data-tauri-drag-region>
 		{#if collapsed && activeTab === 'walkthrough' && !walkthroughStreaming && walkthroughSummary}
 			<button
 				class="theme-btn"
-				onclick={() => regenerateWalkthrough(page.params['prId'] ?? '')}
+				onclick={handleRegenerate}
 				aria-label="Regenerate walkthrough"
 				title="Regenerate walkthrough"
 			>
 				<RefreshCw size={14} />
 			</button>
-		{/if}
-		{#if pr && lastSyncAt !== null}
-			<div class="sync-indicator" class:sync-indicator--error={!!syncError}>
-				{#if syncing}
-					<span class="sync-icon sync-icon--spinning"><RefreshCw size={11} /></span>
-					<span class="sync-label">Syncing…</span>
-				{:else if syncError}
-					<span class="sync-label sync-label--error">Sync failed</span>
-					<button class="sync-retry" onclick={handleRetrySync} title="Retry sync">
-						<RefreshCw size={11} />
-					</button>
-				{:else}
-					<RefreshCw size={11} class="sync-icon" />
-					<span class="sync-label">Synced {formatSyncAge(lastSyncAt)}</span>
-				{/if}
-			</div>
 		{/if}
 		<button
 			class="theme-btn"
@@ -140,6 +117,13 @@
 		</button>
 	</div>
 </div>
+
+<RegenerateDialog
+	bind:open={regenerateDialogOpen}
+	issues={walkthroughIssues}
+	onconfirm={(kept) => regenerateWalkthrough(page.params['prId'] ?? '', kept)}
+	oncancel={() => {}}
+/>
 
 <style>
 	.topbar {
@@ -258,46 +242,19 @@
 	}
 
 	.panel-btn--open:hover {
-		background: rgba(59, 130, 246, 0.12);
+		background: var(--color-tree-active-bg);
 		color: var(--color-tree-active-text);
 	}
 
-	.sync-indicator {
-		display: flex;
-		align-items: center;
-		gap: 4px;
-		font-size: 10px;
+	.title-separator {
 		color: var(--color-text-muted);
-		padding: 0 4px;
-		user-select: none;
+		opacity: 0.5;
+		margin: 0 4px;
 	}
-	.sync-indicator--error {
-		color: var(--color-danger, #dc2626);
-	}
-	.sync-icon--spinning {
-		animation: spin 1s linear infinite;
-	}
-	@keyframes spin {
-		to { transform: rotate(360deg); }
-	}
-	.sync-label {
-		white-space: nowrap;
-	}
-	.sync-label--error {
-		color: var(--color-danger, #dc2626);
-	}
-	.sync-retry {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		background: transparent;
-		border: none;
-		cursor: pointer;
-		color: inherit;
-		padding: 2px;
-		border-radius: 3px;
-	}
-	.sync-retry:hover {
-		background: var(--color-bg-tertiary);
+
+	.title-subtitle {
+		color: var(--color-text-muted);
+		font-family: var(--font-mono, monospace);
+		font-size: 11px;
 	}
 </style>

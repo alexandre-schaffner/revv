@@ -8,6 +8,7 @@
 		isExpanded: boolean;
 		isInputActive: boolean;
 		isReplying: boolean;
+		isPending: boolean;
 	}
 </script>
 
@@ -36,6 +37,7 @@
 		isInLineCursorMode
 	} from '$lib/stores/focus-mode.svelte';
 	import { countPatchLines } from '$lib/utils/count-patch-lines';
+	import { getPendingDiffJump, clearPendingDiffJump } from '$lib/stores/review.svelte';
 
 	// ── Token hover info ──────────────────────────────────────────────────────
 
@@ -66,8 +68,10 @@
 		onCommentDismiss?: ((filePath: string, lineNo: number) => void) | undefined;
 		onCommentResolve?: ((threadId: string) => void) | undefined;
 		onCommentReopen?: ((threadId: string) => void) | undefined;
+		onCommentDiscard?: ((threadId: string) => void) | undefined;
 		onTokenHover?: ((info: TokenHoverInfo | null) => void) | undefined;
 		onApplySuggestion?: ((threadId: string, suggestion: string) => void) | undefined;
+		onEditMessage?: ((threadId: string, messageId: string, body: string) => void) | undefined;
 	}
 
 	let {
@@ -86,8 +90,10 @@
 		onCommentDismiss,
 		onCommentResolve,
 		onCommentReopen,
+		onCommentDiscard,
 		onTokenHover,
-		onApplySuggestion
+		onApplySuggestion,
+		onEditMessage
 	}: Props = $props();
 
 	// ── Header DOM helpers ────────────────────────────────────────────────────
@@ -130,7 +136,7 @@
 	}
 
 	// ── Base shadow-DOM CSS (always injected) ─────────────────────────────────
-	const BASE_CSS = `[data-diffs-header='default'] { position: sticky !important; }`;
+	const BASE_CSS = `[data-diffs-header='default'] { position: static !important; }`;
 
 	// ── Local state ───────────────────────────────────────────────────────────
 
@@ -176,6 +182,42 @@
 		return host?.shadowRoot ?? null;
 	}
 
+	/**
+	 * Given a patch string and a target new-file line number, return the
+	 * 0-based `data-line-index` of the closest non-deletion line in the patch.
+	 */
+	function findPatchLineIndex(patch: string, targetLine: number): number | null {
+		const lines = patch.split('\n');
+		let patchLineIdx = 0;
+		let newLineNum = 0;
+		let bestIdx: number | null = null;
+
+		for (const raw of lines) {
+			if (raw.startsWith('@@')) {
+				// Parse hunk header: @@ -old,count +new,count @@
+				const m = /\+(\d+)/.exec(raw);
+				if (m?.[1]) {
+					newLineNum = parseInt(m[1], 10) - 1;
+				}
+				// hunk headers don't get a data-line-index slot
+				continue;
+			}
+			if (raw.startsWith('-')) {
+				// deletion — advances no new line number, but does occupy a patch line index
+				patchLineIdx++;
+				continue;
+			}
+			// context or addition
+			patchLineIdx++;
+			newLineNum++;
+			if (newLineNum >= targetLine) {
+				return patchLineIdx - 1;
+			}
+			bestIdx = patchLineIdx - 1;
+		}
+		return bestIdx;
+	}
+
 	// ── Reactive updates ──────────────────────────────────────────────────────
 	// Re-render when annotations change.
 	$effect(() => {
@@ -192,7 +234,7 @@
 		const lineIdx = getCursorLineIndex();
 
 		if (panel === 'diff-line') {
-			const css = `${BASE_CSS} [data-line-index="${lineIdx}"] { background-color: rgba(59, 130, 246, 0.10) !important; outline: 1px solid rgba(59, 130, 246, 0.25); outline-offset: -1px; }`;
+			const css = `${BASE_CSS} [data-line-index="${lineIdx}"] { background-color: var(--color-tree-active-bg) !important; outline: 1px solid color-mix(in srgb, var(--color-accent) 25%, transparent); outline-offset: -1px; }`;
 			instance.setOptions({ ...initialOptions, unsafeCSS: css });
 		} else if (panel !== 'diff-visual') {
 			// Clear highlight when not in line/visual mode
@@ -214,6 +256,32 @@
 				lineEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 			}
 		});
+	});
+
+	// ── Walkthrough → diff jump ───────────────────────────────────────────────
+	$effect(() => {
+		const jump = getPendingDiffJump();
+		if (!jump || jump.filePath !== file.path || !file.patch) return;
+
+		// Clear first — instance is $state.raw so this effect won't re-run for it;
+		// clearing early prevents another instance from picking up the same jump
+		clearPendingDiffJump();
+
+		if (!instance) return;
+
+		const patchLineIdx = findPatchLineIndex(file.patch, jump.lineNumber);
+		if (patchLineIdx === null) return;
+
+		setTimeout(() => {
+			requestAnimationFrame(() => {
+				const shadowRoot = getShadowRoot();
+				if (!shadowRoot) return;
+				const lineEl = shadowRoot.querySelector<HTMLElement>(`[data-line-index="${patchLineIdx}"]`);
+				if (lineEl) {
+					lineEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+				}
+			});
+		}, 50);
 	});
 
 	// ── Visual line selection (diff-visual mode) ──────────────────────────────
@@ -300,14 +368,14 @@
 						const badge = document.createElement('span');
 						const label =
 							type === 'new' ? 'new' : type === 'deleted' ? 'deleted' : 'renamed';
-						const color =
-							type === 'new'
-								? '#22c55e'
-								: type === 'deleted'
-									? '#ef4444'
-									: '#f59e0b';
+					const color =
+						type === 'new'
+							? 'var(--color-success)'
+							: type === 'deleted'
+								? 'var(--color-danger)'
+								: 'var(--color-warning)';
 						badge.textContent = label;
-						badge.style.cssText = `font-size:9px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;background:${color}22;color:${color};border-radius:3px;padding:1px 5px;`;
+						badge.style.cssText = `font-size:9px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;background:color-mix(in srgb, ${color} 13%, transparent);color:${color};border-radius:3px;padding:1px 5px;`;
 						wrap.appendChild(badge);
 					}
 
@@ -376,7 +444,7 @@
 						const messages = threadMessages[meta.threadId] ?? [];
 						if (!thread) return host;
 
-					mountInto(host, AnnotationThread, {
+						mountInto(host, AnnotationThread, {
 						thread,
 						messages,
 						onReply: () => {
@@ -388,18 +456,25 @@
 						onReopen: () => {
 							onCommentReopen?.(meta.threadId);
 						},
+						onDiscard: () => {
+							onCommentDiscard?.(meta.threadId);
+						},
 						onCollapse: () => {
 							onAnnotationToggle?.(meta.threadId);
 						},
 							onApplySuggestion: (suggestion: string) =>
 								onApplySuggestion?.(meta.threadId, suggestion),
 							isReplying: meta.isReplying,
+							isPending: meta.isPending,
 							onReplySubmit: (body: string) => {
 								onReplySubmit?.(meta.threadId, body);
 							},
 							onReplyDismiss: () => {
 								onReplyToggle?.(meta.threadId);
-							}
+							},
+							onEditMessage: (messageId: string, body: string) => {
+								onEditMessage?.(meta.threadId, messageId, body);
+							},
 						});
 					} else {
 						const dot = document.createElement('span');
@@ -408,14 +483,14 @@
 						const isPending =
 							meta.status === 'pending_coder' ||
 							meta.status === 'pending_reviewer';
-						const color = isResolved
-							? '#3f3f46'
-							: isPending
-								? '#f59e0b'
-								: '#3b82f6';
-						dot.style.cssText = `display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:${color}22;border:1.5px solid ${color};cursor:pointer;margin:4px;`;
-						const inner = document.createElement('span');
-						inner.style.cssText = `display:block;width:6px;height:6px;border-radius:50%;background:${color};`;
+					const color = isResolved
+						? 'var(--color-border)'
+						: isPending
+							? 'var(--color-warning)'
+							: 'var(--color-accent)';
+					dot.style.cssText = `display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:color-mix(in srgb, ${color} 13%, transparent);border:1.5px solid ${color};cursor:pointer;margin:4px;`;
+					const inner = document.createElement('span');
+					inner.style.cssText = `display:block;width:6px;height:6px;border-radius:50%;background:${color};`;
 						dot.appendChild(inner);
 						dot.addEventListener('click', () => {
 							onAnnotationToggle?.(meta.threadId);

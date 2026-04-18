@@ -18,28 +18,73 @@ An intelligent code review desktop application that brings AI-assisted analysis 
 - **Desktop** — Tauri v2 (Rust)
 - **Monorepo** — Turborepo
 
-## Quick Start
+## Install on macOS (one command)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/alexandre-schaffner/revv/main/scripts/install-macos.sh | bash
+```
+
+That single command will:
+
+1. Install build prerequisites if missing (Xcode CLT, Bun, Rust)
+2. Clone the source to `~/Library/Application Support/Revv/src`
+3. Prompt once for your GitHub OAuth credentials and auto-generate `BETTER_AUTH_SECRET`
+4. Run `make dist` to build `Revv.app`
+5. Copy `Revv.app` to `/Applications`
+6. Install a LaunchAgent so the API server runs in the background on login
+7. Install a `revv` CLI to `~/.local/bin` for updates and maintenance
+
+Before running it you need a GitHub OAuth App (`Settings → Developer settings → OAuth Apps → New OAuth App`):
+- **Homepage URL:** `http://localhost:5173`
+- **Authorization callback URL:** `http://localhost:45678/api/auth/callback/github`
+
+You can also pass credentials up front to skip the prompt:
+
+```bash
+REVV_GITHUB_CLIENT_ID=xxx REVV_GITHUB_CLIENT_SECRET=yyy \
+  bash <(curl -fsSL https://raw.githubusercontent.com/alexandre-schaffner/revv/main/scripts/install-macos.sh)
+```
+
+### Managing the install
+
+```bash
+revv status      # show install paths, versions, server state, update availability
+revv update      # git pull + rebuild + reinstall + reload service
+revv restart     # restart the background API server
+revv logs        # tail ~/Library/Logs/Revv/server.{out,err}.log
+revv open        # launch Revv.app
+revv uninstall   # remove app, source, LaunchAgent, and the CLI itself
+```
+
+Updates are purely source-pull-and-rebuild — no signing/notarization infrastructure required.
+
+---
+
+## Develop from a clone
 
 ### Prerequisites
 
-- Node.js 18+ or Bun 1.0+
-- Git
-- GitHub OAuth credentials (see [Setup](#setup))
+- Bun 1.3+
+- Rust (via rustup)
+- Xcode Command Line Tools
 
 ### Installation
 
 ```bash
-# Clone and install
-git clone <repo-url>
+git clone https://github.com/alexandre-schaffner/revv.git
 cd revv
-bun install
+./install.sh          # provisions toolchain + prompts for GitHub OAuth creds
 ```
 
-### Setup
+The developer installer (`./install.sh`) is distinct from the user installer
+(`scripts/install-macos.sh`): it only prepares the current checkout for
+`bun run dev`, it does not build or install the `.app`.
+
+### Setup (manual alternative)
 
 1. Create a GitHub OAuth App:
    - Go to Settings → Developer settings → OAuth Apps → New OAuth App
-   - Set Authorization callback URL to `http://localhost:45678/api/auth/callback/github`
+   - Authorization callback URL: `http://localhost:45678/api/auth/callback/github`
    - Copy the Client ID and Client Secret
 
 2. Create `.env` at the repo root:

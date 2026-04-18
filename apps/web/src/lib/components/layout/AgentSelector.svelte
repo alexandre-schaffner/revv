@@ -4,7 +4,12 @@
 		Trigger as PopoverTrigger,
 		Content as PopoverContent,
 	} from '$lib/components/ui/popover/index.js';
-	import { getSettings, updateSettings } from '$lib/stores/settings.svelte';
+	import {
+		getSettings,
+		updateSettings,
+		getAvailableModels,
+		fetchModels,
+	} from '$lib/stores/settings.svelte';
 	import { getDefaultModel } from '$lib/constants/models';
 	import type { AiAgent } from '@revv/shared';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
@@ -23,8 +28,26 @@
 	let currentLabel = $derived(AGENT_OPTIONS.find((a) => a.value === currentAgent)?.label ?? 'OpenCode');
 	let CurrentIcon = $derived(AGENT_OPTIONS.find((a) => a.value === currentAgent)?.icon ?? OpenCodeIcon);
 
+	/**
+	 * Pick a valid model for the new agent from the cached list, falling back
+	 * to the hardcoded default if the cache is empty. This guarantees the
+	 * model dropdown is in a consistent state the moment the agent changes,
+	 * rather than briefly showing a model name that doesn't exist in the
+	 * new agent's catalog.
+	 */
+	function pickModelForAgent(value: AiAgent): string {
+		const cached = getAvailableModels(value);
+		const fallback = getDefaultModel(value);
+		if (cached.length === 0) return fallback;
+		// Prefer the default if it's in the list; otherwise the first entry.
+		return cached.find((m) => m.value === fallback)?.value ?? cached[0]!.value;
+	}
+
 	function select(value: AiAgent) {
-		updateSettings({ aiAgent: value, aiModel: getDefaultModel(value) });
+		// If the cache is cold (e.g. app-start prefetch hadn't completed yet),
+		// kick a fetch so subsequent agent switches are race-free.
+		void fetchModels(value);
+		updateSettings({ aiAgent: value, aiModel: pickModelForAgent(value) });
 		open = false;
 	}
 </script>

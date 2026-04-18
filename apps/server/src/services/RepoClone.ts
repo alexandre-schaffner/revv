@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { CloneStatus, Repository } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
+import { GITHUB_HOST } from "../auth";
 import { CLONE_TIMEOUT_MS } from "../constants";
 import { repositories } from "../db/schema/index";
 import { CloneError, CloneNotReadyError } from "../domain/errors";
@@ -128,7 +129,7 @@ export const RepoCloneServiceLive = Layer.effect(
 			cloneRepo: (repo: Repository, githubToken: string) =>
 				Effect.gen(function* () {
 					const cloneDir = join(CLONE_BASE_DIR, repo.owner, repo.name);
-					const cloneUrl = `https://x-access-token:${githubToken}@github.com/${repo.fullName}.git`;
+					const cloneUrl = `https://x-access-token:${githubToken}@${GITHUB_HOST}/${repo.fullName}.git`;
 
 					// Mark as cloning in DB
 					db.update(repositories)
@@ -168,7 +169,7 @@ export const RepoCloneServiceLive = Layer.effect(
 									"remote",
 									"set-url",
 									"origin",
-									`https://github.com/${repo.fullName}.git`,
+									`https://${GITHUB_HOST}/${repo.fullName}.git`,
 								],
 								cloneDir,
 							);
@@ -252,8 +253,8 @@ export const RepoCloneServiceLive = Layer.effect(
 						const worktreePath = join(clonePath, "worktrees", `pr-${prNumber}`);
 
 						// Temporarily set authenticated remote URL for fetch
-						const authedUrl = `https://x-access-token:${githubToken}@github.com/${row.fullName}.git`;
-						const cleanUrl = `https://github.com/${row.fullName}.git`;
+						const authedUrl = `https://x-access-token:${githubToken}@${GITHUB_HOST}/${row.fullName}.git`;
+						const cleanUrl = `https://${GITHUB_HOST}/${row.fullName}.git`;
 
 						try {
 							await runGit(

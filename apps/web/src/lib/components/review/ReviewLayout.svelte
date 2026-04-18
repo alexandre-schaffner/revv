@@ -2,6 +2,7 @@
 	import { onDestroy } from 'svelte';
 	import type { ReviewFile } from '$lib/types/review';
 	import DiffViewer from './DiffViewer.svelte';
+	import FileIssues from './FileIssues.svelte';
 	import TokenTooltip from './TokenTooltip.svelte';
 	import {
 		getActiveFilePath,
@@ -25,6 +26,7 @@
 		isInDiffMode
 	} from '$lib/stores/focus-mode.svelte';
 	import type { TokenHoverInfo } from './DiffViewerInner.svelte';
+	import { setTopbarSubtitle } from '$lib/stores/topbar.svelte';
 
 	// ── Props ─────────────────────────────────────────────────────────────────
 
@@ -40,6 +42,7 @@
 
 	const activeFilePath = $derived(getActiveFilePath());
 	const activeFile = $derived(files.find((f) => f.path === activeFilePath) ?? null);
+	const activeFileName = $derived(activeFile ? (activeFile.path.split('/').pop() ?? activeFile.path) : '');
 
 	// ── Token hover state ────────────────────────────────────────────────────
 
@@ -52,6 +55,7 @@
 	}
 	let tokenHover = $state<TokenHoverState | null>(null);
 	let tokenHoverTimer: ReturnType<typeof setTimeout> | null = null;
+	let fileTitleSectionEl = $state<HTMLElement | null>(null);
 
 	function handleTokenHover(info: TokenHoverInfo | null) {
 		if (tokenHoverTimer !== null) {
@@ -93,9 +97,49 @@
 
 	// ── Timer cleanup ────────────────────────────────────────────────────────
 
+	// ── Topbar subtitle (show full path when file title scrolls out) ─────────
+	let fileTitleObserver: IntersectionObserver | null = null;
+
+	function setupFileTitleObserver() {
+		if (fileTitleObserver) {
+			fileTitleObserver.disconnect();
+			fileTitleObserver = null;
+		}
+		if (!fileTitleSectionEl) {
+			setTopbarSubtitle(null);
+			return;
+		}
+		fileTitleObserver = new IntersectionObserver(
+			([entry]) => {
+				setTopbarSubtitle(entry?.isIntersecting ? null : activeFilePath || null);
+			},
+			{ threshold: 0 }
+		);
+		fileTitleObserver.observe(fileTitleSectionEl);
+	}
+
+	$effect(() => {
+		setupFileTitleObserver();
+		return () => {
+			if (fileTitleObserver) {
+				fileTitleObserver.disconnect();
+				fileTitleObserver = null;
+			}
+			setTopbarSubtitle(null);
+		};
+	});
+
+	// Keep subtitle in sync when file changes while title is scrolled out of view
+	$effect(() => {
+		activeFilePath; // track
+		if (fileTitleObserver) setupFileTitleObserver();
+	});
+
 	onDestroy(() => {
 		if (gTimer !== undefined) clearTimeout(gTimer);
 		if (tokenHoverTimer !== null) clearTimeout(tokenHoverTimer);
+		if (fileTitleObserver) fileTitleObserver.disconnect();
+		setTopbarSubtitle(null);
 	});
 
 	// ── Keyboard navigation ──────────────────────────────────────────────────
@@ -338,6 +382,12 @@
 		tabindex="-1"
 		role="presentation"
 	>
+		{#if activeFile}
+			<div class="file-title-section" bind:this={fileTitleSectionEl}>
+				<h1 class="file-title">{activeFileName}</h1>
+			</div>
+			<FileIssues filePath={activeFile.path} />
+		{/if}
 		<DiffViewer
 			file={activeFile}
 			{themeType}
@@ -373,4 +423,25 @@
 		}}
 	/>
 {/if}
+
+<style>
+	.file-title-section {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		padding: 76px 32px 16px;
+		flex-shrink: 0;
+	}
+
+	.file-title {
+		font-size: 32px;
+		font-weight: 700;
+		color: var(--color-text-primary);
+		line-height: 1.2;
+		letter-spacing: -0.02em;
+		margin: 0;
+		font-family: var(--font-mono, monospace);
+		word-break: break-all;
+	}
+</style>
 

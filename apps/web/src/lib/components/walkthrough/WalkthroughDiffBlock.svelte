@@ -3,6 +3,9 @@
 	import { FileDiff, parsePatchFiles, type FileDiffOptions } from '@pierre/diffs';
 	import { workerManager } from '$lib/utils/worker-pool';
 	import { renderMarkdown } from '$lib/utils/markdown';
+	import { jumpToDiffLine } from '$lib/stores/review.svelte';
+	import { ArrowUpRight } from '@lucide/svelte';
+	import FileBadge from '$lib/components/ui/FileBadge.svelte';
 
 	interface Props {
 		block: DiffBlock;
@@ -15,15 +18,34 @@
 		block.annotation ? renderMarkdown(block.annotation) : null
 	);
 
+	/**
+	 * First added-line number from the first hunk header, used as the jump target
+	 * when the user clicks the header to open this file in the Diff tab. Falls
+	 * back to line 1 if the patch has no parseable hunk header.
+	 */
+	const targetLine = $derived.by(() => {
+		const match = block.patch.match(/^@@[^\n]*?\+(\d+)/m);
+		return match?.[1] ? parseInt(match[1], 10) : 1;
+	});
+
+	let instance: FileDiff<never> | null = null;
+
+	$effect(() => {
+		instance?.setThemeType(themeType);
+	});
+
 	function mountDiffBlock(el: HTMLDivElement) {
 		const options: FileDiffOptions<never> = {
 			diffStyle: 'unified',
 			theme: { dark: 'pierre-dark', light: 'pierre-light' },
 			themeType,
 			overflow: 'scroll',
+			// Suppress Pierre's built-in file header — we render our own clickable
+			// header above so the user can jump to this file in the Diff tab.
+			disableFileHeader: true,
 		};
 
-		const instance = new FileDiff<never>(options, workerManager);
+		instance = new FileDiff<never>(options, workerManager);
 
 		const patchHeader = [
 			`diff --git a/${block.filePath} b/${block.filePath}`,
@@ -42,7 +64,8 @@
 
 		return {
 			destroy() {
-				instance.cleanUp();
+				instance?.cleanUp();
+				instance = null;
 			},
 		};
 	}
@@ -58,9 +81,12 @@
 	{/if}
 
 	<div class="diff-panel">
-		<div class="diff-header">
-			<span class="diff-file-path">{block.filePath}</span>
-		</div>
+		<button class="diff-header" onclick={() => jumpToDiffLine(block.filePath, targetLine)}>
+			<FileBadge filePath={block.filePath} />
+			<span class="diff-header-right">
+				<span class="diff-jump-icon"><ArrowUpRight size={11} /></span>
+			</span>
+		</button>
 		<div class="diff-body" use:mountDiffBlock></div>
 	</div>
 
@@ -89,10 +115,10 @@
 
 	.annotation {
 		display: flex;
-		align-items: center;
+		align-items: flex-start;
 		padding: 16px 20px;
 		background: var(--revv-bg-secondary);
-		font-size: 13px;
+		font-size: 14px;
 		line-height: 1.6;
 		color: var(--revv-text-secondary);
 	}
@@ -119,7 +145,7 @@
 
 	.annotation-content :global(code) {
 		font-family: var(--font-mono);
-		font-size: 11px;
+		font-size: 12px;
 		background: var(--revv-bg-tertiary);
 		padding: 1px 4px;
 		border-radius: 3px;
@@ -139,20 +165,43 @@
 	.diff-header {
 		display: flex;
 		align-items: center;
+		justify-content: space-between;
 		background: var(--revv-diff-bg);
-		border-bottom: 1px solid var(--revv-diff-gutter-border);
 		padding: 6px 12px;
 		font-family: var(--font-mono);
 		font-size: 11px;
 		color: var(--revv-text-muted);
+		width: 100%;
+		border: none;
+		border-bottom: 1px solid var(--revv-diff-gutter-border);
+		border-radius: 0;
+		cursor: pointer;
+		text-align: left;
+		transition: background-color 120ms ease;
 	}
 
-	.diff-file-path {
-		font-weight: 500;
-		color: var(--revv-text-secondary);
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
+	.diff-header:hover {
+		background: color-mix(in srgb, var(--revv-accent) 8%, var(--revv-diff-bg));
+	}
+
+	.diff-header:hover .diff-jump-icon {
+		opacity: 1;
+	}
+
+	.diff-header-right {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		flex-shrink: 0;
+		margin-left: 8px;
+	}
+
+	.diff-jump-icon {
+		display: flex;
+		align-items: center;
+		color: var(--revv-accent);
+		opacity: 0;
+		transition: opacity 120ms ease;
 	}
 
 	.diff-body {

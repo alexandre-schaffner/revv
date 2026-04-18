@@ -3,12 +3,15 @@ import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { bearer } from 'better-auth/plugins';
 import { API_PORT } from '@revv/shared';
 import { createDb } from './db/index';
+import { serverEnv } from './config';
 
-// Config values — replaced at build time or via env vars
-export const GITHUB_CLIENT_ID = process.env['GITHUB_CLIENT_ID'] ?? 'BUNDLED_CLIENT_ID';
-export const GITHUB_CLIENT_SECRET = process.env['GITHUB_CLIENT_SECRET'] ?? 'BUNDLED_CLIENT_SECRET';
-const BETTER_AUTH_SECRET = process.env['BETTER_AUTH_SECRET'];
-if (!BETTER_AUTH_SECRET) throw new Error('BETTER_AUTH_SECRET environment variable is required. Generate one with: openssl rand -hex 32');
+// Re-exported for the handful of routes that still reach in directly.
+// All values are sourced from the centralized `serverEnv` snapshot in
+// `config.ts`, which resolves Effect's `ServerConfig` once at startup.
+export const GITHUB_CLIENT_ID = serverEnv.githubClientId;
+export const GITHUB_CLIENT_SECRET = serverEnv.githubClientSecret;
+export const GITHUB_HOST = serverEnv.githubHost;
+export const GITHUB_API_BASE = serverEnv.githubApiBase;
 
 const db = createDb();
 
@@ -16,7 +19,7 @@ export { db };
 
 export const auth = betterAuth({
 	baseURL: `http://localhost:${API_PORT}`,
-	secret: BETTER_AUTH_SECRET,
+	secret: serverEnv.betterAuthSecret,
 	database: drizzleAdapter(db, {
 		provider: 'sqlite',
 	}),

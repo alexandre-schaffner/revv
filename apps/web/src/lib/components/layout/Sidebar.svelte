@@ -1,13 +1,15 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { PanelLeftClose, PanelLeftOpen, Settings } from '@lucide/svelte';
+	import { PanelLeftClose, PanelLeftOpen, Settings, GitPullRequestArrow, GitPullRequest } from '@lucide/svelte';
 	import {
 		getRepositories,
 		getGroupedByRepo,
 		getIsLoading,
-	} from '$lib/stores/prs.svelte';
-	import { requestSync } from '$lib/stores/ws.svelte';
+		getNeedsYourReview,
+		getNeedsYourReviewByRepo,
+		getSelectedPrId,
+	} from '$lib/stores/prs.svelte';	import { requestSync, requestFullSync } from '$lib/stores/ws.svelte';
 	import { handleKey as handleNavKey, clearFocus, setFocusedId } from '$lib/stores/sidebar-nav.svelte';
 	import { getPaletteOpen } from '$lib/stores/shortcuts.svelte';
 	import { getActivePanel, enterScrollMode } from '$lib/stores/focus-mode.svelte';
@@ -15,6 +17,7 @@
 	import SearchFilter from '$lib/components/sidebar/SearchFilter.svelte';
 	import RepoGroup from '$lib/components/sidebar/RepoGroup.svelte';
 	import AddRepoDialog from '$lib/components/sidebar/AddRepoDialog.svelte';
+	import PrItem from '$lib/components/sidebar/PrItem.svelte';
 
 	interface Props {
 		collapsed?: boolean;
@@ -24,6 +27,15 @@
 	let { collapsed = false, onToggle }: Props = $props();
 
 	let addRepoOpen = $derived(getAddRepoDialogOpen());
+	const selectedPrId = $derived(getSelectedPrId());
+
+	function handleRefresh() {
+		if (selectedPrId) {
+			requestFullSync(selectedPrId);
+		} else {
+			requestSync(); // no PR selected, just sync PRs
+		}
+	}
 
 	function handleSidebarClick(e: MouseEvent): void {
 		const navEl = (e.target as HTMLElement).closest<HTMLElement>('[data-sidebar-nav]');
@@ -94,7 +106,7 @@
 			<span class="header-label">Pull Requests</span>
 			<button
 				class="icon-btn"
-				onclick={requestSync}
+				onclick={handleRefresh}
 				disabled={getIsLoading()}
 				title="Sync PRs"
 				aria-label="Sync pull requests"
@@ -125,6 +137,21 @@
 		<SearchFilter onAddRepo={() => setAddRepoDialogOpen(true)} />
 
 		<div class="pr-list">
+			{#if getNeedsYourReview().length > 0}
+				<div class="needs-review-section">
+					<div class="section-header">
+						<GitPullRequestArrow size={11} />
+						<span>Needs Your Review</span>
+						<span class="section-count">{getNeedsYourReview().length}</span>
+					</div>
+					<div class="section-items">
+						{#each getRepositories().filter(r => (getNeedsYourReviewByRepo().get(r.id) ?? []).length > 0) as repo (repo.id)}
+							{@const prs = getNeedsYourReviewByRepo().get(repo.id) ?? []}
+							<RepoGroup repository={repo} {prs} navPrefix="review" />
+						{/each}
+					</div>
+				</div>
+			{/if}
 			{#if getRepositories().length === 0}
 				<div class="empty-state">
 					<svg class="empty-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -136,12 +163,24 @@
 						Add a repository
 					</button>
 				</div>
-			{:else}
-				{#each getRepositories() as repo (repo.id)}
-					{@const prs = getGroupedByRepo().get(repo.id) ?? []}
+		{:else}
+			{@const allOpenPrsCount = getRepositories().reduce((sum, repo) => {
+				const reviewIds = new Set((getNeedsYourReviewByRepo().get(repo.id) ?? []).map(p => p.id));
+				return sum + (getGroupedByRepo().get(repo.id) ?? []).filter(p => !reviewIds.has(p.id)).length;
+			}, 0)}
+			<div class="section-header">
+				<GitPullRequest size={11} />
+				<span>All Open PRs</span>
+				<span class="section-count">{allOpenPrsCount}</span>
+			</div>
+			{#each getRepositories() as repo (repo.id)}
+				{@const reviewIds = new Set((getNeedsYourReviewByRepo().get(repo.id) ?? []).map(p => p.id))}
+				{@const prs = (getGroupedByRepo().get(repo.id) ?? []).filter(p => !reviewIds.has(p.id))}
+				{#if prs.length > 0}
 					<RepoGroup repository={repo} {prs} />
-				{/each}
-			{/if}
+				{/if}
+			{/each}
+		{/if}
 		</div>
 	</div>
 
@@ -258,6 +297,41 @@
 		flex: 1;
 		overflow-y: auto;
 		padding: 4px 0;
+	}
+
+	.needs-review-section {
+		border-bottom: 1px solid var(--color-border);
+		padding-bottom: 4px;
+		margin-bottom: 4px;
+	}
+
+	.section-header {
+		display: flex;
+		align-items: center;
+		gap: 5px;
+		padding: 6px 12px 4px;
+		font-size: 9px;
+		font-weight: 600;
+		letter-spacing: 0.07em;
+		text-transform: uppercase;
+		color: var(--color-text-muted);
+	}
+
+	.section-count {
+		margin-left: auto;
+		border-radius: 9999px;
+		background: var(--color-bg-elevated);
+		padding: 0 6px;
+		font-size: 10px;
+		font-weight: 500;
+		letter-spacing: 0;
+		text-transform: none;
+	}
+
+	.section-items {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
 	}
 
 	/* Empty state */

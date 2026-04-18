@@ -1,14 +1,14 @@
 <script lang="ts">
 	type Tab = 'walkthrough' | 'diff' | 'request-changes';
+	type WalkthroughStatus = 'idle' | 'generating' | 'complete' | 'error';
 
 	interface Props {
 		activeTab: Tab;
 		onTabChange: (tab: Tab) => void;
-		openThreads?: number;
-		pendingThreads?: number;
+		walkthroughStatus?: WalkthroughStatus;
 	}
 
-	let { activeTab, onTabChange, openThreads = 0, pendingThreads = 0 }: Props = $props();
+	let { activeTab, onTabChange, walkthroughStatus = 'idle' }: Props = $props();
 
 	const tabs: { id: Tab; label: string }[] = [
 		{ id: 'walkthrough', label: 'Walkthrough' },
@@ -27,9 +27,23 @@
 		const index = hoveredIndex ?? activeIndex;
 		const el = segmentEls[index];
 		if (!el) return;
-		indicatorLeft = el.offsetLeft;
-		indicatorWidth = el.offsetWidth;
-		hasMeasured = true;
+
+		const measure = () => {
+			indicatorLeft = el.offsetLeft;
+			indicatorWidth = el.offsetWidth;
+			hasMeasured = true;
+		};
+
+		measure();
+
+		// Re-measure when any segment's size changes (e.g., web font swap
+		// from system-ui to Inter). Observing every segment catches sibling
+		// resizes that shift the active segment's offsetLeft.
+		const observer = new ResizeObserver(measure);
+		for (const s of segmentEls) {
+			if (s) observer.observe(s);
+		}
+		return () => observer.disconnect();
 	});
 
 	function showDivider(index: number): boolean {
@@ -70,10 +84,18 @@
 
 	<span
 		class="mode-dot"
-		class:mode-dot--pending={pendingThreads > 0}
-		class:mode-dot--open={pendingThreads === 0 && openThreads > 0}
-		class:mode-dot--visible={openThreads > 0 || pendingThreads > 0}
-		aria-hidden="true"
+		class:mode-dot--generating={walkthroughStatus === 'generating'}
+		class:mode-dot--complete={walkthroughStatus === 'complete'}
+		class:mode-dot--error={walkthroughStatus === 'error'}
+		class:mode-dot--visible={walkthroughStatus !== 'idle'}
+		title={walkthroughStatus === 'generating'
+			? 'Walkthrough generating'
+			: walkthroughStatus === 'complete'
+				? 'Walkthrough ready'
+				: walkthroughStatus === 'error'
+					? 'Walkthrough failed'
+					: ''}
+		aria-label="Walkthrough status: {walkthroughStatus}"
 	></span>
 </div>
 
@@ -100,12 +122,34 @@
 		opacity: 1;
 	}
 
-	.mode-dot--pending {
-		background: #d97706;
+	.mode-dot--generating {
+		background: var(--color-accent);
+		animation: mode-dot-pulse 1.4s ease-in-out infinite;
 	}
 
-	.mode-dot--open {
-		background: var(--color-accent);
+	.mode-dot--complete {
+		background: var(--color-success);
+	}
+
+	.mode-dot--error {
+		background: var(--color-danger);
+	}
+
+	@keyframes mode-dot-pulse {
+		0%, 100% {
+			opacity: 1;
+			transform: scale(1);
+		}
+		50% {
+			opacity: 0.45;
+			transform: scale(0.85);
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.mode-dot--generating {
+			animation: none;
+		}
 	}
 
 	.pill {
@@ -162,9 +206,9 @@
 		left: 0;
 		height: 36px;
 		border-radius: 9999px;
-		background: var(--color-glass-active-bg);
+		background: var(--color-tab-active-bg);
 		box-shadow:
-			0 1px 3px rgba(0, 0, 0, 0.12),
+			var(--color-shadow-indicator),
 			inset 0 0.5px 0 0 var(--color-glass-highlight);
 		pointer-events: none;
 		z-index: 0;

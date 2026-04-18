@@ -107,7 +107,9 @@
 		margin: 20px 0;
 	}
 
-	/* ── Shiki syntax highlighting theme toggle ───────────────────────── */
+	/* ── Shiki syntax highlighting layout ──────────────────────────────
+	   Dark/light color swap is handled globally in app.css.
+	   ─────────────────────────────────────────────────────────────────── */
 
 	.prose :global(.shiki) {
 		font-family: var(--font-mono);
@@ -123,14 +125,5 @@
 		background: none;
 		padding: 0;
 		font-size: inherit;
-	}
-
-	:global(:root.dark) .prose :global(.shiki),
-	:global(:root.dark) .prose :global(.shiki span) {
-		color: var(--shiki-dark) !important;
-		background-color: var(--shiki-dark-bg) !important;
-		font-style: var(--shiki-dark-font-style) !important;
-		font-weight: var(--shiki-dark-font-weight) !important;
-		text-decoration: var(--shiki-dark-text-decoration) !important;
 	}
 </style>

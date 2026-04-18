@@ -27,7 +27,6 @@
     "dist": "cd apps/desktop && bunx tauri build",
     "dist:debug": "cd apps/desktop && bunx tauri build --debug",
     "dev:app": "cd packages/app && bun run dev",
-    "dev:electrobun": "concurrently --kill-others \"bun run dev:app\" \"sleep 3 && cd apps/desktop-electrobun && bun run dev\"",
     "clean": "rm -rf apps/web/build apps/web/.svelte-kit apps/server/dist apps/desktop/target .turbo",
     "postinstall": "echo '\\n  Run `bun run dev` to start developing, or `bun run dist` to build an installer.\\n'"
   },

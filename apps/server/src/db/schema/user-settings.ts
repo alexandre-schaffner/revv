@@ -10,4 +10,5 @@ export const userSettings = sqliteTable('user_settings', {
 	autoFetchInterval: integer('auto_fetch_interval').notNull().default(5),
 	aiThinkingEffort: text('ai_thinking_effort').notNull().default('medium'),
 	aiAgent: text('ai_agent').notNull().default('opencode'),
+	aiContextWindow: text('ai_context_window').notNull().default('200k'),
 });
