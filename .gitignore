@@ -1,17 +1,22 @@
 # Dependencies
 node_modules/
 
-.openlogs/
-
 # Build output
 apps/web/build/
 apps/web/.svelte-kit/
 apps/server/dist/
 apps/desktop/target/
+packages/shared/dist/
+
+# TypeScript
+*.tsbuildinfo
 
 # Environment & secrets
 .env
 .env.local
+.env.development.local
+.env.test.local
+.env.production.local
 .env.*.local
 
 # Database
@@ -20,13 +25,12 @@ apps/desktop/target/
 *.db-wal
 *.db-shm
 
-# New packages
-packages/app/.output/
-packages/app/.vinxi/
-packages/ui/dist/
-
 # Turbo
 .turbo/
+
+# Logs
+*.log
+bun-debug.log*
 
 # OS
 .DS_Store
@@ -35,5 +39,6 @@ Thumbs.db
 # Editor
 .vscode/
 .idea/
+.openlogs/
 *.swp
 *.swo
