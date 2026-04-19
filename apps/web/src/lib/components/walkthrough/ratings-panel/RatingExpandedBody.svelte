@@ -6,6 +6,7 @@
         Verdict,
         Confidence,
     } from "@revv/shared";
+    import { RATING_AXIS_LABELS } from "@revv/shared";
     import FileBadge from "$lib/components/ui/FileBadge.svelte";
     import * as Tooltip from "$lib/components/ui/tooltip";
     import { jumpToDiffLine } from "$lib/stores/review.svelte";
@@ -16,9 +17,14 @@
         /** Full ordered block list — used to resolve blockIds to step numbers. */
         blocks: WalkthroughBlock[];
         onJump: (blockId: string) => void;
+        /** When `true`, render the uppercase axis-name title above the Status
+         *  divider. Grid popovers set this so the header echoes the card that
+         *  opened it; the list view leaves it off because the row header
+         *  already shows the axis name one level up. Defaults to `false`. */
+        showTitle?: boolean;
     }
 
-    let { rating, blocks, onJump }: Props = $props();
+    let { rating, blocks, onJump, showTitle = false }: Props = $props();
 
     // Resolve each blockId to its GLOBAL position in the walkthrough. Filter
     // out ids that don't resolve — those would make the chip broken (no jump
@@ -72,8 +78,24 @@
 </script>
 
 <div class="expanded-body" data-verdict={rating.verdict}>
-    <div class="rationale">
-        <p class="rationale-text">{rating.rationale}</p>
+    <!-- Score title — echoes the grid cell's axis label so the popover header
+         provides visual continuity with the card it opened from. Rendered
+         uppercase mono like the cell but upgraded to primary text color for
+         prominence (the cell uses muted). Gated on `showTitle` because the
+         list-view row already shows the axis name one level up (in the row
+         header), so duplicating it inside the expanded body would be noise. -->
+    {#if showTitle}
+        <h3 class="score-title">{RATING_AXIS_LABELS[rating.axis]}</h3>
+    {/if}
+
+    <!-- Status section — always leads. For concern/blocker verdicts it opens
+         with a Jest-style Expected/Received diff ("you got X, we wanted pass")
+         and then the rationale reads as the explanation. For pass verdicts we
+         skip the Expected/Received block and the rationale becomes the whole
+         status body. The `status` divider mirrors the `details`/`references`
+         dividers below so all three sections share a visual header. -->
+    <div class="section-divider section-divider--lead" aria-hidden="true">
+        <span class="section-divider-label">status</span>
     </div>
 
     {#if rating.verdict !== "pass"}
@@ -93,6 +115,10 @@
             </div>
         </div>
     {/if}
+
+    <div class="rationale">
+        <p class="rationale-text">{rating.rationale}</p>
+    </div>
 
     {#if detailsHtml}
         <div class="section-divider" aria-hidden="true">
@@ -277,6 +303,24 @@
         letter-spacing: 0.02em;
     }
 
+    /* ── Score title (axis name, heads the popover) ──────────────── */
+
+    .score-title {
+        /* Mirrors the grid cell's `.cell-label` treatment (uppercase mono)
+           but steps the color up from muted → primary and the size up from
+           10.5px → 12px so the popover header reads as more authoritative
+           than the card it opened from. Zero margin because the flex parent
+           `.expanded-body` already provides `gap: 12px` between children. */
+        margin: 0;
+        font-family: var(--font-mono);
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--color-text-primary);
+        line-height: 1;
+    }
+
     /* ── Section divider ─────────────────────────────────────────── */
 
     .section-divider {
@@ -289,6 +333,13 @@
         text-transform: uppercase;
         letter-spacing: 0.08em;
         margin-top: 4px;
+    }
+
+    /* The lead divider (Status) sits at the very top of the popover — the
+       container's own top padding already provides breathing room, so the
+       4px extra stacks unnecessarily. Zero it out for this one variant. */
+    .section-divider--lead {
+        margin-top: 0;
     }
 
     .section-divider::before,

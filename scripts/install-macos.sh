@@ -94,7 +94,7 @@ printf "%s\n" "$RESET"
 
 # ── 1. Sanity checks ─────────────────────────────────────────
 step "Verifying macOS"
-[[ "$(uname -s)" == "Darwin" ]] || fail "This installer targets macOS. On Linux/Windows use install.sh / install.ps1 in a clone."
+[[ "$(uname -s)" == "Darwin" ]] || fail "This installer targets macOS only."
 success "macOS $(sw_vers -productVersion) on $(uname -m)"
 
 # ── 2. Xcode CLT (needed for git, cargo, codesign) ──────────

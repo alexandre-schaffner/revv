@@ -40,7 +40,7 @@
 	import WalkthroughMarkdownBlock from './WalkthroughMarkdownBlock.svelte';
 	import WalkthroughCodeBlock from './WalkthroughCodeBlock.svelte';
 	import WalkthroughDiffBlock from './WalkthroughDiffBlock.svelte';
-	import WalkthroughRatingsPanel from './WalkthroughRatingsPanel.svelte';
+	import WalkthroughRatingsGrid from './WalkthroughRatingsGrid.svelte';
 	import RegenerateDialog from './RegenerateDialog.svelte';
 
 	interface Props {
@@ -557,19 +557,12 @@
 
 				<!-- `.block-group` is a transparent wrapper (display: contents) for
 				     normal blocks. For the Overall Sentiment block, it flips to a
-				     horizontal flex container so the scorecard sits beside it
-				     ("sentiment + evidence" read as a single unit). flex-wrap kicks
-				     in at narrow widths and stacks them again.
-				     Scorecard renders BEFORE the sentiment in the DOM so it appears
-				     on the left visually — this also keeps DOM order aligned with
-				     visual/focus order for screen readers and keyboard nav. -->
-				<div class="block-group" class:block-group--sentiment-row={hasScorecard}>
-					{#if hasScorecard}
-						<div class="sentiment-scorecard">
-							<WalkthroughRatingsPanel {ratings} {blocks} onJump={jumpToStep} />
-						</div>
-					{/if}
-
+				     vertical flex container so the scorecard stacks BELOW the
+				     sentiment card — the grid is wider than it is tall, so giving
+				     it the full content width reads better than cramming it beside
+				     the sentiment prose. DOM order matches visual order, which
+				     keeps keyboard tab order and screen-reader flow intuitive. -->
+				<div class="block-group" class:block-group--sentiment-stack={hasScorecard}>
 					<div
 						id="step-{block.id}"
 						class="block-wrapper"
@@ -590,6 +583,12 @@
 							<WalkthroughDiffBlock {block} {themeType} />
 						{/if}
 					</div>
+
+					{#if hasScorecard}
+						<div class="sentiment-scorecard">
+							<WalkthroughRatingsGrid {ratings} {blocks} onJump={jumpToStep} />
+						</div>
+					{/if}
 				</div>
 			{/each}
 			</div>
@@ -1133,23 +1132,23 @@
 		display: contents;
 	}
 
-	/* Sentiment pairing: side-by-side the sentiment card and the scorecard.
-	   flex-wrap + flex-basis means at wide viewports both sit on one row taking
-	   ~half width each; at narrow viewports they wrap and stack. No explicit
-	   breakpoint needed — the content's natural min-width triggers wrap. */
-	.block-group--sentiment-row {
+	/* Sentiment pairing: stack the sentiment card above the scorecard so the
+	   grid gets the full content width it needs to read as a 3×3 map. The
+	   previous side-by-side layout squeezed the grid into ~half the content
+	   width, which made cells cramped and forced the container query to
+	   collapse to 2 columns. Stacking restores the natural 3×3 shape. */
+	.block-group--sentiment-stack {
 		display: flex;
-		flex-direction: row;
-		flex-wrap: wrap;
+		flex-direction: column;
 		gap: 16px;
-		align-items: flex-start;
+		align-items: stretch;
 	}
 
-	.block-group--sentiment-row > :global(*) {
-		/* Grow/shrink freely from a 420px preferred basis — wraps below ~860px
-		   container width. `min-width: 0` lets long monospace content inside
-		   the scorecard shrink rather than forcing horizontal overflow. */
-		flex: 1 1 420px;
+	.block-group--sentiment-stack > :global(*) {
+		/* Each child takes full width. `min-width: 0` keeps long monospace
+		   content inside the scorecard shrinkable rather than forcing
+		   horizontal overflow. */
+		width: 100%;
 		min-width: 0;
 	}
 

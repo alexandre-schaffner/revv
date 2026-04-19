@@ -272,7 +272,7 @@
 											{isTracked
 											? 'opacity-50'
 											: isHighlighted
-												? 'bg-bg-elevated ring-1 ring-accent/40'
+												? 'bg-bg-elevated ring-1 ring-inset ring-accent/40'
 												: 'hover:bg-bg-elevated'}"
 										data-highlighted={isHighlighted ? 'true' : undefined}
 										onclick={() => handleBrowseAdd(repo.fullName)}

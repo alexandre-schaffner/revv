@@ -108,7 +108,7 @@ info "Platform: $OS / $ARCH"
 case "$OS" in
   Darwin) PLATFORM="macos" ;;
   Linux)  PLATFORM="linux" ;;
-  *)      fail "Unsupported OS: $OS. Use install.ps1 for Windows." ;;
+  *)      fail "Unsupported OS: $OS" ;;
 esac
 
 # Determine the expected Rust target triple

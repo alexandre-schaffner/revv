@@ -6,7 +6,7 @@ apps/web/build/
 apps/web/.svelte-kit/
 apps/server/dist/
 apps/desktop/target/
-packages/shared/dist/
+packages/app/dist/
 
 # TypeScript
 *.tsbuildinfo
@@ -14,9 +14,6 @@ packages/shared/dist/
 # Environment & secrets
 .env
 .env.local
-.env.development.local
-.env.test.local
-.env.production.local
 .env.*.local
 
 # Database
@@ -30,15 +27,9 @@ packages/shared/dist/
 
 # Logs
 *.log
-bun-debug.log*
 
 # OS
 .DS_Store
-Thumbs.db
 
-# Editor
-.vscode/
-.idea/
+# Tooling
 .openlogs/
-*.swp
-*.swo
