@@ -1,5 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useState } from "react";
 import { useTheme, themes, type ThemeId } from "../lib/theme";
+import { useStreamingText } from "../lib/use-streaming-text";
+import { Markdown } from "../components/markdown";
+import { PatchDiff, MultiFileDiff } from "@pierre/diffs/react";
+import type { BaseDiffOptions } from "@pierre/diffs/react";
 import { Button } from "@rev/ui/components/ui/button";
 import { Badge } from "@rev/ui/components/ui/badge";
 import {
@@ -32,6 +37,7 @@ import { Alert, AlertTitle, AlertDescription } from "@rev/ui/components/ui/alert
 import { Skeleton } from "@rev/ui/components/ui/skeleton";
 import { Spinner } from "@rev/ui/components/ui/spinner";
 import { Kbd } from "@rev/ui/components/ui/kbd";
+/* Note: Spinner is also used in StreamingDemo */
 import { Toggle } from "@rev/ui/components/ui/toggle";
 import {
   Tabs,
@@ -98,6 +104,168 @@ function Showcase({
   );
 }
 
+// ── Sample data ──
+
+const samplePatch = `--- a/src/lib/auth.ts
++++ b/src/lib/auth.ts
+@@ -12,10 +12,15 @@ export class AuthService {
+   private tokenStore: Map<string, Token> = new Map();
+
+   async authenticate(credentials: Credentials): Promise<Session> {
+-    const token = await this.provider.getToken(credentials);
+-    this.tokenStore.set(token.id, token);
++    const token = await this.provider.getToken(credentials, {
++      scope: "read write",
++      expiresIn: "24h",
++    });
++    this.tokenStore.set(token.id, { ...token, createdAt: Date.now() });
+     return { token, user: await this.resolveUser(token) };
+   }
++
++  isExpired(token: Token): boolean {
++    return Date.now() - token.createdAt > token.expiresIn;
++  }
+ }`;
+
+const sampleMarkdown = `## Code Review: Auth Service Refactor
+
+The authentication service was updated to support **scoped tokens** with expiration.
+
+### Key Changes
+
+1. Token creation now accepts \`scope\` and \`expiresIn\` options
+2. Tokens are stored with a \`createdAt\` timestamp
+3. New \`isExpired()\` helper method
+
+Here's the relevant diff:
+
+\`\`\`diff
+--- a/src/lib/auth.ts
++++ b/src/lib/auth.ts
+@@ -12,8 +12,11 @@ export class AuthService {
+   async authenticate(credentials: Credentials): Promise<Session> {
+-    const token = await this.provider.getToken(credentials);
+-    this.tokenStore.set(token.id, token);
++    const token = await this.provider.getToken(credentials, {
++      scope: "read write",
++      expiresIn: "24h",
++    });
++    this.tokenStore.set(token.id, { ...token, createdAt: Date.now() });
+     return { token, user: await this.resolveUser(token) };
+   }
+\`\`\`
+
+### Usage Example
+
+\`\`\`typescript
+const auth = new AuthService(provider);
+const session = await auth.authenticate({ email, password });
+
+if (auth.isExpired(session.token)) {
+  console.log("Session expired, re-authenticating...");
+}
+\`\`\`
+
+> **Note:** The \`expiresIn\` value is parsed as a duration string (e.g. \`"24h"\`, \`"7d"\`).
+
+| Property | Type | Default |
+|----------|------|---------|
+| scope | \`string\` | \`"read"\` |
+| expiresIn | \`string\` | \`"1h"\` |
+| refreshable | \`boolean\` | \`false\` |
+`;
+
+const streamingMarkdown = `## Analyzing your pull request...
+
+I've reviewed the changes in \`src/lib/auth.ts\`. Here's my analysis:
+
+### Summary
+
+This PR refactors the authentication flow to support **scoped tokens with TTL**. The changes are well-structured and backwards-compatible.
+
+### Diff walkthrough
+
+The core change is in the \`authenticate\` method:
+
+\`\`\`diff
+--- a/src/lib/auth.ts
++++ b/src/lib/auth.ts
+@@ -14,5 +14,8 @@ export class AuthService {
+-    const token = await this.provider.getToken(credentials);
++    const token = await this.provider.getToken(credentials, {
++      scope: "read write",
++      expiresIn: "24h",
++    });
+\`\`\`
+
+### Suggestions
+
+1. Consider adding a **refresh token** mechanism for long-lived sessions
+2. The \`isExpired\` check should handle clock skew gracefully:
+
+\`\`\`typescript
+isExpired(token: Token, skewMs = 30_000): boolean {
+  return Date.now() - token.createdAt > token.expiresIn - skewMs;
+}
+\`\`\`
+
+Overall this looks **good to merge** with the minor suggestions above.
+`;
+
+function StreamingDemo() {
+  const [running, setRunning] = useState(false);
+  const { text, isStreaming, isDone, start } = useStreamingText(streamingMarkdown, {
+    autoStart: false,
+    interval: 12,
+    chunkSize: { min: 2, max: 6 },
+  });
+
+  return (
+    <Section title="Streaming Markdown (LLM simulation)">
+      <Card>
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="text-sm">AI Review Output</CardTitle>
+              <CardDescription>
+                Simulates token-by-token LLM streaming. Markdown and diffs render progressively.
+              </CardDescription>
+            </div>
+            <Button
+              size="sm"
+              variant={isStreaming ? "secondary" : "default"}
+              onClick={() => { setRunning(true); start(); }}
+              disabled={isStreaming}
+            >
+              {isStreaming ? (
+                <><Spinner className="mr-2" /> Streaming...</>
+              ) : isDone && running ? (
+                "Restart"
+              ) : (
+                "Start stream"
+              )}
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {running ? (
+            <div className="min-h-[200px]">
+              <Markdown>{text}</Markdown>
+              {isStreaming && (
+                <span className="inline-block w-2 h-4 bg-primary animate-pulse ml-0.5 align-text-bottom" />
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center justify-center h-[200px] text-muted-foreground text-sm">
+              Click "Start stream" to simulate LLM output
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </Section>
+  );
+}
+
 const themeSwatches: Record<ThemeId, string> = {
   "zinc-light": "bg-white border border-zinc-300",
   "zinc-dark": "bg-zinc-900 border border-zinc-700",
@@ -149,6 +317,11 @@ const ansiBrightColors = [
 
 function DesignPage() {
   const { theme, setTheme } = useTheme();
+  const meta = themes[theme];
+  const diffsOptions: BaseDiffOptions = {
+    theme: meta.shikiTheme,
+    themeType: meta.dark ? "dark" : "light",
+  };
 
   return (
     <TooltipProvider>
@@ -183,6 +356,70 @@ function DesignPage() {
               ))}
             </div>
           </header>
+
+          {/* ── Diff Viewer (@pierre/diffs) ── */}
+          <Section title="Diff Viewer">
+            <div className="space-y-6">
+              <Showcase label="Unified diff from patch string">
+                <div className="rounded-lg border overflow-hidden">
+                  <PatchDiff
+                    patch={samplePatch}
+                    options={{
+                      ...diffsOptions,
+                      diffStyle: "unified",
+                      overflow: "scroll",
+                      hunkSeparators: "simple",
+                    }}
+                  />
+                </div>
+              </Showcase>
+
+              <Showcase label="Side-by-side diff">
+                <div className="rounded-lg border overflow-hidden">
+                  <MultiFileDiff
+                    oldFile={{
+                      name: "config.ts",
+                      contents: `export const config = {\n  port: 3000,\n  host: "localhost",\n  debug: false,\n  logLevel: "info",\n};`,
+                    }}
+                    newFile={{
+                      name: "config.ts",
+                      contents: `export const config = {\n  port: 8080,\n  host: "0.0.0.0",\n  debug: true,\n  logLevel: "debug",\n  timeout: 5000,\n};`,
+                    }}
+                    options={{
+                      ...diffsOptions,
+                      diffStyle: "split",
+                      overflow: "scroll",
+                      hunkSeparators: "simple",
+                    }}
+                  />
+                </div>
+              </Showcase>
+            </div>
+          </Section>
+
+          <Separator />
+
+          {/* ── Rich Markdown ── */}
+          <Section title="Rich Markdown">
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm">Rendered Markdown with embedded diffs</CardTitle>
+                <CardDescription>
+                  Code blocks use @pierre/diffs for syntax highlighting. <code className="text-xs bg-muted px-1 py-0.5 rounded">```diff</code> blocks render as interactive diffs.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Markdown>{sampleMarkdown}</Markdown>
+              </CardContent>
+            </Card>
+          </Section>
+
+          <Separator />
+
+          {/* ── Streaming Demo ── */}
+          <StreamingDemo />
+
+          <Separator />
 
           {/* ── Syntax Highlighting ── */}
           <Section title="Syntax Highlighting">

@@ -75,11 +75,11 @@
   --color-ansi-bright-cyan: var(--ansi-bright-cyan);
   --color-ansi-bright-white: var(--ansi-bright-white);
 
-  /* ── Diff ── */
+  /* ── Diff (derived from ANSI terminal palette) ── */
   --color-diff-add-bg: var(--diff-add-bg);
-  --color-diff-add-fg: var(--diff-add-fg);
+  --color-diff-add-fg: var(--ansi-green);
   --color-diff-del-bg: var(--diff-del-bg);
-  --color-diff-del-fg: var(--diff-del-fg);
+  --color-diff-del-fg: var(--ansi-red);
   --color-diff-change-bg: var(--diff-change-bg);
 }
 
@@ -168,9 +168,9 @@
 
   /* Diff */
   --diff-add-bg: #dcfce7;
-  --diff-add-fg: #166534;
+
   --diff-del-bg: #fee2e2;
-  --diff-del-fg: #991b1b;
+
   --diff-change-bg: #fef9c3;
 }
 
@@ -245,9 +245,9 @@
 
   /* Diff */
   --diff-add-bg: #052e16;
-  --diff-add-fg: #4ade80;
+
   --diff-del-bg: #450a0a;
-  --diff-del-fg: #fca5a5;
+
   --diff-change-bg: #422006;
 }
 
@@ -322,9 +322,9 @@
 
   /* Diff */
   --diff-add-bg: rgba(166, 227, 161, 0.1);
-  --diff-add-fg: #a6e3a1;
+
   --diff-del-bg: rgba(243, 139, 168, 0.1);
-  --diff-del-fg: #f38ba8;
+
   --diff-change-bg: rgba(249, 226, 175, 0.1);
 }
 
@@ -399,9 +399,9 @@
 
   /* Diff */
   --diff-add-bg: rgba(64, 160, 43, 0.1);
-  --diff-add-fg: #40a02b;
+
   --diff-del-bg: rgba(210, 15, 57, 0.1);
-  --diff-del-fg: #d20f39;
+
   --diff-change-bg: rgba(223, 142, 29, 0.1);
 }
 
@@ -476,9 +476,9 @@
 
   /* Diff */
   --diff-add-bg: rgba(184, 187, 38, 0.12);
-  --diff-add-fg: #b8bb26;
+
   --diff-del-bg: rgba(251, 73, 52, 0.12);
-  --diff-del-fg: #fb4934;
+
   --diff-change-bg: rgba(250, 189, 47, 0.12);
 }
 
@@ -553,8 +553,8 @@
 
   /* Diff */
   --diff-add-bg: rgba(121, 116, 14, 0.12);
-  --diff-add-fg: #79740e;
+
   --diff-del-bg: rgba(157, 0, 6, 0.12);
-  --diff-del-fg: #9d0006;
+
   --diff-change-bg: rgba(181, 118, 20, 0.12);
 }

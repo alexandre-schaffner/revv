@@ -10,13 +10,16 @@
     "lint": "echo 'no linter configured'"
   },
   "dependencies": {
+    "@pierre/diffs": "^1.1.15",
     "@rev/shared": "workspace:*",
     "@rev/ui": "workspace:*",
     "@tanstack/react-router": "^1.168.0",
     "@tanstack/react-start": "^1.167.0",
     "lucide-react": "^1.8.0",
     "react": "catalog:",
-    "react-dom": "catalog:"
+    "react-dom": "catalog:",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.2.2",

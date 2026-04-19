@@ -1,12 +1,12 @@
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 
 export const themes = {
-  "zinc-light": { label: "Zinc", dark: false, family: "zinc" },
-  "zinc-dark": { label: "Zinc", dark: true, family: "zinc" },
-  "catppuccin-latte": { label: "Catppuccin Latte", dark: false, family: "catppuccin" },
-  "catppuccin-mocha": { label: "Catppuccin Mocha", dark: true, family: "catppuccin" },
-  "gruvbox-light": { label: "Gruvbox", dark: false, family: "gruvbox" },
-  "gruvbox-dark": { label: "Gruvbox", dark: true, family: "gruvbox" },
+  "zinc-light": { label: "Zinc", dark: false, family: "zinc", shikiTheme: "github-light" },
+  "zinc-dark": { label: "Zinc", dark: true, family: "zinc", shikiTheme: "github-dark" },
+  "catppuccin-latte": { label: "Catppuccin Latte", dark: false, family: "catppuccin", shikiTheme: "catppuccin-latte" },
+  "catppuccin-mocha": { label: "Catppuccin Mocha", dark: true, family: "catppuccin", shikiTheme: "catppuccin-mocha" },
+  "gruvbox-light": { label: "Gruvbox", dark: false, family: "gruvbox", shikiTheme: "gruvbox-light-medium" },
+  "gruvbox-dark": { label: "Gruvbox", dark: true, family: "gruvbox", shikiTheme: "gruvbox-dark-medium" },
 } as const;
 
 export type ThemeId = keyof typeof themes;
@@ -34,6 +34,10 @@ function applyTheme(id: ThemeId) {
   if (themes[id].dark) {
     root.classList.add("dark");
   }
+
+  // Set color-scheme so CSS light-dark() resolves correctly
+  // (this also propagates into Shadow DOM for @pierre/diffs)
+  root.style.colorScheme = themes[id].dark ? "dark" : "light";
 }
 
 function getStoredTheme(): ThemeId {
