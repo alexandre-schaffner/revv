@@ -14,5 +14,6 @@ export const walkthroughIssues = sqliteTable('walkthrough_issues', {
 	startLine: integer('start_line'),
 	endLine: integer('end_line'),
 	blockIds: text('block_ids').notNull().default('[]'),
+	commentThreadId: text('comment_thread_id'),
 	createdAt: text('created_at').notNull(),
 });
