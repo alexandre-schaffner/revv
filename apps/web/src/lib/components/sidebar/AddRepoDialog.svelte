@@ -11,6 +11,16 @@
 
 	let { open = false, onClose }: { open?: boolean; onClose: () => void } = $props();
 
+	// Focus an input on mount. Preferred over the `autofocus` attribute,
+	// which Svelte's a11y lints flag because it can disorient screen
+	// reader users when focus moves without a user-initiated action.
+	// Here the input only mounts when the user opens the dialog or
+	// switches tabs, which is an explicit user action — so focusing
+	// the first field is the expected behaviour.
+	function focusOnMount(node: HTMLElement) {
+		node.focus();
+	}
+
 	let activeTab = $state<'browse' | 'manual'>('browse');
 
 	// -- Browse tab state --
@@ -199,7 +209,7 @@
 						placeholder="Search repositories..."
 						bind:value={browseSearch}
 						onkeydown={handleBrowseKeydown}
-						autofocus
+						use:focusOnMount
 					/>
 					<button
 						class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border text-text-muted transition-colors hover:border-accent hover:text-accent disabled:opacity-50"
@@ -320,7 +330,7 @@
 					bind:value={fullName}
 					onkeydown={handleManualKeydown}
 					disabled={isLoading}
-					autofocus
+					use:focusOnMount
 				/>
 
 				{#if localError}

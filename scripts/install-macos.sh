@@ -250,22 +250,42 @@ fi
 check_cmd bun   || fail "bun not found on PATH after install.sh ran."
 check_cmd cargo || fail "cargo not found on PATH after install.sh ran."
 
-# ── 7. Build the distribution .app ───────────────────────────
-step "Building Revv.app (this takes a few minutes on first run)"
-# `make dist` builds shared, web, server, then tauri.
-# `tauri build` will emit to apps/desktop/target/release/bundle/
-make dist
+# ── 7. Build the .app bundle (skip DMG) ──────────────────────
+#
+# We deliberately do NOT run `make dist`. That target invokes
+# `tauri build` with the default `bundle.targets: "all"`, which
+# also produces a .dmg via create-dmg's `bundle_dmg.sh`. That script
+# is fragile with paths containing spaces or parentheses (e.g.
+# "Revv (Alpha).app" under "~/Library/Application Support/..."),
+# and the installer copies the .app directly to /Applications — it
+# never uses the DMG. Build the .app only with `--bundles app`.
+step "Building the .app bundle (first run takes a few minutes)"
+(
+  cd "$INSTALL_DIR/packages/shared" && bun run typecheck
+)
+(
+  cd "$INSTALL_DIR" && bun run build
+)
+(
+  cd "$INSTALL_DIR/apps/desktop" && bunx tauri build --bundles app
+)
 
-BUNDLE_APP="$INSTALL_DIR/apps/desktop/target/release/bundle/macos/Revv.app"
-if [[ ! -d "$BUNDLE_APP" ]]; then
-  # Tauri sometimes builds under a target-triple subdir if cross-compiling.
-  BUNDLE_APP="$(find "$INSTALL_DIR/apps/desktop/target" -maxdepth 6 -type d -name 'Revv.app' -path '*/bundle/macos/*' 2>/dev/null | head -1)"
+# Tauri writes the .app to bundle/macos/ with a name derived from
+# `productName` in tauri.conf.json (e.g. "Revv.app", "Revv (Alpha).app").
+# Discover whatever was produced rather than hardcoding a name.
+BUNDLE_MACOS_DIR="$INSTALL_DIR/apps/desktop/target/release/bundle/macos"
+BUNDLE_APP="$(find "$BUNDLE_MACOS_DIR" -maxdepth 1 -type d -name '*.app' 2>/dev/null | head -1)"
+if [[ -z "$BUNDLE_APP" ]]; then
+  # Fallback: cross-compiled builds land under a target-triple subdir.
+  BUNDLE_APP="$(find "$INSTALL_DIR/apps/desktop/target" -maxdepth 6 -type d -name '*.app' -path '*/bundle/macos/*' 2>/dev/null | head -1)"
 fi
-[[ -n "$BUNDLE_APP" && -d "$BUNDLE_APP" ]] || fail "Build finished but Revv.app was not found under apps/desktop/target/"
+[[ -n "$BUNDLE_APP" && -d "$BUNDLE_APP" ]] || fail "Build finished but no .app was found under $BUNDLE_MACOS_DIR"
+APP_NAME="$(basename "$BUNDLE_APP")"
+APP_PROCESS_NAME="${APP_NAME%.app}"
 success "Built $BUNDLE_APP"
 
-# ── 8. Install Revv.app to /Applications (or ~/Applications) ─
-step "Installing Revv.app"
+# ── 8. Install the .app to /Applications (or ~/Applications) ─
+step "Installing $APP_NAME"
 
 # Decide target: /Applications if writable, else ~/Applications.
 if [[ -w "$APP_DIR" ]]; then
@@ -275,7 +295,7 @@ else
   DEST_APP_DIR="$HOME/Applications"
   mkdir -p "$DEST_APP_DIR"
 fi
-DEST_APP="$DEST_APP_DIR/Revv.app"
+DEST_APP="$DEST_APP_DIR/$APP_NAME"
 
 # Remove quarantine attrs preemptively — the app is locally built but macOS
 # may still flag it since it's not notarized.
@@ -284,7 +304,7 @@ xattr -cr "$BUNDLE_APP" 2>/dev/null || true
 # Stop the running LaunchAgent before replacing, in case a prior install exists.
 launchctl unload "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
 # If the app is currently running, quit it so we can replace it.
-osascript -e 'tell application "Revv" to quit' 2>/dev/null || true
+osascript -e "tell application \"$APP_PROCESS_NAME\" to quit" 2>/dev/null || true
 # Give it a moment.
 sleep 1
 

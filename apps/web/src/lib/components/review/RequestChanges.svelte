@@ -1,6 +1,12 @@
 <script lang="ts">
 	import { getIssues, getRatings, getBlocks } from '$lib/stores/walkthrough.svelte';
-	import { getThreads, getThreadMessages, loadSession, jumpToDiffLine } from '$lib/stores/review.svelte';
+	import {
+		getThreads,
+		getThreadMessages,
+		loadSession,
+		jumpToDiffLine,
+		jumpToWalkthroughBlock,
+	} from '$lib/stores/review.svelte';
 	import { api } from '$lib/api/client';
 	import { toast } from 'svelte-sonner';
 	import { AlertTriangle, MessageSquare, Check, ArrowUp, Sparkles } from '@lucide/svelte';
@@ -297,23 +303,35 @@
 				<ul class="rc-list">
 					{#each unresolvedThreads as thread (thread.id)}
 						{@const firstMessage = getThreadMessages(thread.id)[0]}
-						<li class="rc-item" onclick={() => jumpToDiffLine(thread.filePath, thread.startLine)}>
-							<span class="severity-icon severity-thread">
-								<MessageSquare size={13} />
-							</span>
-							<span class="issue-text">
-								<div class="issue-location">
-									<FileBadge
-										filePath={thread.filePath}
-										startLine={thread.startLine}
-										endLine={thread.endLine}
-										onclick={() => jumpToDiffLine(thread.filePath, thread.startLine)}
-									/>
-								</div>
-								{#if firstMessage?.body}
-									<p class="thread-preview">{firstMessage.body}</p>
-								{/if}
-							</span>
+						<li class="rc-item-host">
+							<div
+								class="rc-item"
+								role="button"
+								tabindex="0"
+								onclick={() => jumpToDiffLine(thread.filePath, thread.startLine)}
+								onkeydown={(e) => {
+									if (e.key === 'Enter' || e.key === ' ') {
+										e.preventDefault();
+										jumpToDiffLine(thread.filePath, thread.startLine);
+									}
+								}}
+							>
+								<span class="severity-icon severity-thread">
+									<MessageSquare size={13} />
+								</span>
+								<span class="issue-text">
+									<span class="issue-location">
+										<FileBadge
+											filePath={thread.filePath}
+											startLine={thread.startLine}
+											endLine={thread.endLine}
+										/>
+									</span>
+									{#if firstMessage?.body}
+										<p class="thread-preview">{firstMessage.body}</p>
+									{/if}
+								</span>
+							</div>
 						</li>
 					{/each}
 				</ul>
@@ -321,7 +339,7 @@
 		</section>
 		{#if ratings.length > 0}
 			<div class="rc-scorecard">
-				<WalkthroughRatingsPanel {ratings} {blocks} onJump={() => {}} />
+				<WalkthroughRatingsPanel {ratings} {blocks} onJump={jumpToWalkthroughBlock} />
 			</div>
 		{/if}
 	</div>
@@ -656,6 +674,12 @@
 		max-width: 100%;
 	}
 
+	.rc-item-host {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+	}
+
 	.rc-item {
 		display: flex;
 		align-items: flex-start;
@@ -670,6 +694,11 @@
 
 	.rc-item:hover {
 		background: var(--color-bg-elevated);
+	}
+
+	.rc-item:focus-visible {
+		outline: 2px solid var(--color-accent);
+		outline-offset: 2px;
 	}
 
 	.severity-icon {
@@ -695,8 +724,8 @@
 		align-items: center;
 	}
 
-	.rc-scorecard {
-		padding-bottom: 4px;
-		border-bottom: 1px solid var(--color-border);
-	}
+	/* .rc-scorecard is a plain wrapper — no section header here. The scorecard
+	   renders its own internal summary bar ("Scores" title + count pills), so a
+	   wrapping section header would be redundant. Separation from siblings is
+	   handled by the 20px gap on .rc-sections. */
 </style>

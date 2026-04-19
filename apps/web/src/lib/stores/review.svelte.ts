@@ -554,11 +554,13 @@ let acceptedHunks = $state<Map<string, Set<number>>>(new Map());
 let rejectedHunks = $state<Map<string, Set<number>>>(new Map());
 
 export function getAcceptedHunks(filePath: string): Set<number> {
-	return acceptedHunks.get(filePath) ?? new Set();
+	const existing = acceptedHunks.get(filePath);
+	return existing ?? new Set();
 }
 
 export function getRejectedHunks(filePath: string): Set<number> {
-	return rejectedHunks.get(filePath) ?? new Set();
+	const existing = rejectedHunks.get(filePath);
+	return existing ?? new Set();
 }
 
 async function setHunkDecision(
@@ -664,6 +666,27 @@ export function jumpToDiffLine(filePath: string, lineNumber: number): void {
 
 export function clearPendingDiffJump(): void {
 	pendingDiffJump = null;
+}
+
+// --- Pending walkthrough-block jump ---
+// Mirrors the pending-diff-jump pattern: RequestChanges (and potentially other
+// tabs) can request a scroll to a specific walkthrough block without needing a
+// direct ref to the walkthrough's scroll root. GuidedWalkthrough consumes this
+// when it becomes active and clears it after scrolling.
+
+let pendingWalkthroughBlockJump = $state<string | null>(null);
+
+export function getPendingWalkthroughBlockJump(): string | null {
+	return pendingWalkthroughBlockJump;
+}
+
+export function jumpToWalkthroughBlock(blockId: string): void {
+	pendingWalkthroughBlockJump = blockId;
+	setActiveTab('walkthrough');
+}
+
+export function clearPendingWalkthroughBlockJump(): void {
+	pendingWalkthroughBlockJump = null;
 }
 
 // --- Active file in diff ---

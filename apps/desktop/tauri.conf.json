@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nickel-org/nickel.rs/refs/heads/master/nickel/tauri-schema.json",
   "productName": "Revv (Alpha)",
-  "identifier": "com.revv.app",
+  "identifier": "com.revv.desktop",
   "version": "0.0.1",
   "build": {
     "devUrl": "http://localhost:5173",

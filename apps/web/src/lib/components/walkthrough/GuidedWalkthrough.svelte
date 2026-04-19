@@ -27,7 +27,11 @@
 	hydrateFromCache,
 	regenerate,
 } from '$lib/stores/walkthrough.svelte';
-	import { jumpToDiffLine } from '$lib/stores/review.svelte';
+	import {
+		jumpToDiffLine,
+		getPendingWalkthroughBlockJump,
+		clearPendingWalkthroughBlockJump,
+	} from '$lib/stores/review.svelte';
 	import { Skeleton } from '$lib/components/ui/skeleton/index.js';
 	import { groupIssuesBySeverityWithIndex } from '$lib/utils/walkthrough-issues';
 
@@ -120,20 +124,39 @@
 		finishing: 'Finish',
 	};
 
+	// Full-sentence status shown beneath the stepper row during streaming.
+	// These override the backend phaseMessage in the stepper specifically so we
+	// can craft user-facing language (e.g. "Rating the PR…") independently of
+	// the terse backend strings ("Scoring the PR across 9 axes...").
+	const phaseStatusLabels: Record<string, string> = {
+		connecting: 'Connecting…',
+		exploring: 'Exploring the code…',
+		analyzing: 'Analyzing changes…',
+		writing: 'Writing the walkthrough…',
+		rating: 'Rating the PR…',
+		finishing: 'Finalizing…',
+	};
+
 	function phaseIndex(p: string): number {
 		return PHASE_ORDER.indexOf(p as typeof PHASE_ORDER[number]);
 	}
 
 	// ── Stepper visibility ──────────────────────────────────────────────
-	// Only shown when the walkthrough is being generated live — the stepper
-	// stays visible through every phase (connecting, exploring, analyzing,
-	// writing, finishing) and remains on screen after the stream completes
-	// so the user keeps a permanent map of what happened. Cached replays
-	// never advance past the `connecting` phase, so `isLiveGeneration` stays
-	// false and we skip the stepper entirely.
-	const stepperVisible = $derived(isLiveGeneration);
+	// Always visible. The stepper gives the user a persistent map of
+	// walkthrough phases — useful during streaming (see what's happening now),
+	// after completion (reminder of what ran), and even on fresh PRs (preview
+	// of what will happen when they kick off a walkthrough). Only suppressed
+	// on fatal streamError (see the template guard) since then the phases are
+	// meaningless.
+	const stepperVisible = $derived(true);
 
-	const allPhasesDone = $derived(!isStreaming && stepperVisible);
+	// "All phases done" needs actual evidence of completion. A fresh PR with
+	// no content shouldn't flash all checkmarks just because !isStreaming — so
+	// we require that we actually have SOMETHING to show for it.
+	const hasWalkthroughContent = $derived(
+		summary !== null || blocks.length > 0 || ratings.length > 0
+	);
+	const allPhasesDone = $derived(!isStreaming && hasWalkthroughContent);
 
 	// ── Unique files explored ───────────────────────────────────────────
 	const filesExplored = $derived(() => {
@@ -230,6 +253,21 @@
     });
 	}
 
+	// Cross-tab jump: when another tab (e.g. Request Changes) calls
+	// jumpToWalkthroughBlock(), the store flips activeTab → 'walkthrough' and
+	// stashes the blockId. We consume it here once we're active + scrollRoot is
+	// bound. One rAF of slack lets the display swap (`display: none` → `display:
+	// contents`) settle so getBoundingClientRect returns real geometry.
+	$effect(() => {
+		const pendingBlockId = getPendingWalkthroughBlockJump();
+		if (!pendingBlockId) return;
+		if (!isActive || !scrollRoot) return;
+		requestAnimationFrame(() => {
+			jumpToStep(pendingBlockId);
+			clearPendingWalkthroughBlockJump();
+		});
+	});
+
 	onMount(() => {
 		initHighlighter();
 		// Seed a loading entry synchronously so the UI renders the skeleton
@@ -307,6 +345,20 @@
 					{/if}
 				{/each}
 			</div>
+
+			<!-- Full-sentence status line under the stepper row. Tells the user
+			     exactly what's happening right now — "Rating the PR…" during the
+			     scoring phase, "Exploring the code…" during exploration, etc.
+			     Only rendered while something is actually running so the stepper
+			     doesn't announce stale phase text after completion. -->
+			{#if isStreaming}
+				<div class="phase-status" aria-live="polite">
+					<span class="phase-status-dot" aria-hidden="true"></span>
+					<span class="phase-status-text">
+						{phaseStatusLabels[phase] ?? phaseMessage ?? 'Working…'}
+					</span>
+				</div>
+			{/if}
 		</div>
 	{/if}
 
@@ -489,27 +541,55 @@
 			<!-- Blocks -->
 			<div class="blocks">
 			{#each blocksWithDelay as { block, delay } (block.id)}
-			<div
-				id="step-{block.id}"
-				class="block-wrapper"
-				class:block-wrapper--no-anim={delay === -1}
+				{@const isSentiment =
+					block.type === 'markdown' &&
+					block.content.trimStart().startsWith('## Overall Sentiment')}
+				{@const hasScorecard = isSentiment && ratings.length > 0}
 
-				style:--enter-delay="{delay}ms"
-			>
-				{#if block.type === 'markdown'}
-					{@const isSentiment = block.content.trimStart().startsWith('## Overall Sentiment')}
-					{#if isSentiment}
-						<div class="sentiment-card">
-							<WalkthroughMarkdownBlock content={block.content} />
+				<!-- Visual break between the walkthrough body and the conclusion
+				     (sentiment + scorecard). Only rendered for the sentiment block
+				     so the body blocks keep their tight `.blocks` gap rhythm. The
+				     global .walkthrough-content Separator rule gives this 28px of
+				     vertical breathing room on each side automatically. -->
+				{#if isSentiment}
+					<Separator />
+				{/if}
+
+				<!-- `.block-group` is a transparent wrapper (display: contents) for
+				     normal blocks. For the Overall Sentiment block, it flips to a
+				     horizontal flex container so the scorecard sits beside it
+				     ("sentiment + evidence" read as a single unit). flex-wrap kicks
+				     in at narrow widths and stacks them again.
+				     Scorecard renders BEFORE the sentiment in the DOM so it appears
+				     on the left visually — this also keeps DOM order aligned with
+				     visual/focus order for screen readers and keyboard nav. -->
+				<div class="block-group" class:block-group--sentiment-row={hasScorecard}>
+					{#if hasScorecard}
+						<div class="sentiment-scorecard">
+							<WalkthroughRatingsPanel {ratings} {blocks} onJump={jumpToStep} />
 						</div>
-					{:else}
-						<WalkthroughMarkdownBlock content={block.content} />
 					{/if}
-				{:else if block.type === 'code'}
-						<WalkthroughCodeBlock {block} {themeType} />
-					{:else if block.type === 'diff'}
-						<WalkthroughDiffBlock {block} {themeType} />
-					{/if}
+
+					<div
+						id="step-{block.id}"
+						class="block-wrapper"
+						class:block-wrapper--no-anim={delay === -1}
+						style:--enter-delay="{delay}ms"
+					>
+						{#if block.type === 'markdown'}
+							{#if isSentiment}
+								<div class="sentiment-card">
+									<WalkthroughMarkdownBlock content={block.content} />
+								</div>
+							{:else}
+								<WalkthroughMarkdownBlock content={block.content} />
+							{/if}
+						{:else if block.type === 'code'}
+							<WalkthroughCodeBlock {block} {themeType} />
+						{:else if block.type === 'diff'}
+							<WalkthroughDiffBlock {block} {themeType} />
+						{/if}
+					</div>
 				</div>
 			{/each}
 			</div>
@@ -530,11 +610,8 @@
 				</div>
 			{/if}
 
-			<!-- Scorecard -->
-			{#if ratings.length > 0}
-				<Separator />
-				<WalkthroughRatingsPanel {ratings} {blocks} onJump={jumpToStep} />
-			{/if}
+			<!-- Scorecard lives inline under the Overall Sentiment card now
+			     (see the .blocks loop above). No end-of-walkthrough rendering. -->
 		</div>
 
 		<!-- Scroll-to-bottom floating button -->
@@ -666,6 +743,37 @@
 	.phase-dot--active {
 		background: var(--color-accent);
 		animation: pulse 1.5s ease-in-out infinite;
+	}
+
+	/* ── Phase status line (under the stepper) ───────────────────────── */
+
+	.phase-status {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 4px 0 6px;
+		font-size: 12.5px;
+		color: var(--color-text-secondary);
+		font-variant-numeric: tabular-nums;
+	}
+
+	.phase-status-dot {
+		width: 6px;
+		height: 6px;
+		border-radius: 50%;
+		background: var(--color-accent);
+		animation: pulse 1.5s ease-in-out infinite;
+		flex-shrink: 0;
+	}
+
+	.phase-status-text {
+		line-height: 1.3;
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.phase-status-dot {
+			animation: none;
+		}
 	}
 
 	/* ── Status bar ───────────────────────────────────────────────────── */
@@ -1017,6 +1125,32 @@
 		flex-direction: column;
 		gap: 20px;
 		margin-top: 20px;
+	}
+
+	/* Transparent wrapper for regular blocks — the single child .block-wrapper
+	   reads as a direct flex item of .blocks, preserving the original layout. */
+	.block-group {
+		display: contents;
+	}
+
+	/* Sentiment pairing: side-by-side the sentiment card and the scorecard.
+	   flex-wrap + flex-basis means at wide viewports both sit on one row taking
+	   ~half width each; at narrow viewports they wrap and stack. No explicit
+	   breakpoint needed — the content's natural min-width triggers wrap. */
+	.block-group--sentiment-row {
+		display: flex;
+		flex-direction: row;
+		flex-wrap: wrap;
+		gap: 16px;
+		align-items: flex-start;
+	}
+
+	.block-group--sentiment-row > :global(*) {
+		/* Grow/shrink freely from a 420px preferred basis — wraps below ~860px
+		   container width. `min-width: 0` lets long monospace content inside
+		   the scorecard shrink rather than forcing horizontal overflow. */
+		flex: 1 1 420px;
+		min-width: 0;
 	}
 
 	.block-wrapper {
