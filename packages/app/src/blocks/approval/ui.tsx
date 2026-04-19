@@ -6,8 +6,8 @@ import {
 } from "../../lib/commands";
 import type { CommandEntry } from "../../lib/command-log";
 import { Button } from "@rev/ui/components/ui/button";
-import { Kbd } from "@rev/ui/components/ui/kbd";
 import { useRegisterShortcuts, formatKeysString, type ShortcutDef } from "../../lib/shortcuts";
+import { ShortcutKbd } from "../../components/shortcut-kbd";
 import { Terminal, Check } from "lucide-react";
 
 type CmdPhase = "idle" | "exiting" | "entering";
@@ -146,7 +146,7 @@ export function ApprovalBlock() {
             onClick={() => handleApprove(entry.id)}
           >
             Accept
-            <Kbd className="ml-1 h-3.5 text-[9px] bg-primary-foreground/20 text-primary-foreground">{formatKeysString({ mod: true, key: "a" })}</Kbd>
+            <ShortcutKbd shortcut="approval:accept" className="ml-1 h-3.5 text-[9px] bg-primary-foreground/20 text-primary-foreground" />
           </Button>
         </span>
         <button

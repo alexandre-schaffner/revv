@@ -17,8 +17,8 @@ import { FilesBlock } from "../blocks/files/ui";
 import { PrsBlock } from "../blocks/prs/ui";
 import { Terminal, Blocks, Palette } from "lucide-react";
 import { ThemeProvider, useTheme, themes, type ThemeId } from "../lib/theme";
-import { initShortcuts, useRegisterShortcuts, toggleMode, useActiveMode, useShortcutPressed, formatKeysString, type ShortcutDef } from "../lib/shortcuts";
-import { Kbd } from "@rev/ui/components/ui/kbd";
+import { initShortcuts, useRegisterShortcuts, toggleMode, useActiveMode, type ShortcutDef } from "../lib/shortcuts";
+import { ShortcutKbd } from "../components/shortcut-kbd";
 
 export const Route = createRootRoute({
   head: () => ({
@@ -143,9 +143,6 @@ function ThemePicker() {
 function SidebarTabs() {
   const [tab, setTab] = useState("files");
   const modeActive = useActiveMode() === "sidebar";
-  const focusPressed = useShortcutPressed("sidebar:focus");
-  const filesPressed = useShortcutPressed("sidebar:files");
-  const prsPressed = useShortcutPressed("sidebar:prs");
 
   const switchToFiles = useCallback(() => setTab("files"), []);
   const switchToPrs = useCallback(() => setTab("prs"), []);
@@ -162,6 +159,8 @@ function SidebarTabs() {
 
   useRegisterShortcuts(shortcuts);
 
+  const modeHighlight = modeActive ? "bg-primary/15 text-primary border-primary/25" : "";
+
   return (
     <Tabs value={tab} onValueChange={setTab} className="flex flex-col h-full">
       <div className="flex items-center h-8 border-b border-border shrink-0">
@@ -172,19 +171,17 @@ function SidebarTabs() {
             modeActive ? "text-primary" : "text-muted-foreground hover:text-foreground"
           }`}
         >
-          <Kbd className={`text-[9px] transition-all duration-100 ${modeActive ? "bg-primary/15 text-primary border-primary/25" : ""} ${focusPressed ? "translate-y-px scale-95 brightness-90" : ""}`}>
-            {formatKeysString({ mod: true, key: "r" })}
-          </Kbd>
+          <ShortcutKbd shortcut="sidebar:focus" className={`text-[9px] ${modeHighlight}`} />
         </button>
         <div className="w-px self-stretch my-1.5 bg-border" />
         <TabsList className="h-8 rounded-none bg-transparent p-0 border-0">
           <TabsTrigger value="files" className="h-8 rounded-none text-xs data-[state=active]:shadow-none data-[state=active]:bg-background/50">
             Files
-            <Kbd className={`ml-1.5 text-[9px] transition-all duration-100 ${modeActive ? "bg-primary/15 text-primary border-primary/25" : "opacity-50"} ${filesPressed ? "translate-y-px scale-95 brightness-90" : ""}`}>1</Kbd>
+            <ShortcutKbd shortcut="sidebar:files" className={`ml-1.5 text-[9px] ${modeActive ? modeHighlight : "opacity-50"}`}>1</ShortcutKbd>
           </TabsTrigger>
           <TabsTrigger value="prs" className="h-8 rounded-none text-xs data-[state=active]:shadow-none data-[state=active]:bg-background/50">
             PRs
-            <Kbd className={`ml-1.5 text-[9px] transition-all duration-100 ${modeActive ? "bg-primary/15 text-primary border-primary/25" : "opacity-50"} ${prsPressed ? "translate-y-px scale-95 brightness-90" : ""}`}>2</Kbd>
+            <ShortcutKbd shortcut="sidebar:prs" className={`ml-1.5 text-[9px] ${modeActive ? modeHighlight : "opacity-50"}`}>2</ShortcutKbd>
           </TabsTrigger>
         </TabsList>
       </div>
