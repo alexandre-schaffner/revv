@@ -121,6 +121,19 @@ const flagIssueSchema = z.object({
 		.describe("Path to the relevant file, or null if PR-wide"),
 	start_line: z.number().int().nullable().describe("Starting line number of the concern, or null"),
 	end_line: z.number().int().nullable().describe("Ending line number of the concern, or null"),
+	comment: z
+		.string()
+		.nullable()
+		.describe(
+			"Optional inline review comment body to create at this location. Write as GitHub-flavored markdown. The comment will be anchored to comment_line (or end_line if omitted). Only provide when you have a concrete, actionable comment to leave — not every issue needs one.",
+		),
+	comment_line: z
+		.number()
+		.int()
+		.nullable()
+		.describe(
+			"Line number within the file to anchor the comment to. Must be within start_line..end_line. Defaults to end_line if null.",
+		),
 });
 
 const rateAxisSchema = z.object({
@@ -433,6 +446,9 @@ export const TOOL_SPECS: Array<ToolSpec<any>> = [
 				...(args.file_path !== null ? { filePath: args.file_path } : {}),
 				...(args.start_line !== null ? { startLine: args.start_line } : {}),
 				...(args.end_line !== null ? { endLine: args.end_line } : {}),
+				// pass comment fields through to the stream event
+				...(args.comment !== null && args.comment !== undefined ? { comment: args.comment } : {}),
+				...(args.comment_line !== null && args.comment_line !== undefined ? { commentLine: args.comment_line } : {}),
 			};
 			state.issueCount++;
 			emit({ type: "issue", data: issue });
@@ -440,7 +456,7 @@ export const TOOL_SPECS: Array<ToolSpec<any>> = [
 				content: [
 					{
 						type: "text" as const,
-						text: `Issue flagged: [${issue.severity}] ${issue.title} (linked to ${blockIds.join(", ")})`,
+						text: `Issue flagged: [${issue.severity}] ${issue.title} (linked to ${blockIds.join(", ")})${issue.comment ? ' [comment queued]' : ''}`,
 					},
 				],
 			};

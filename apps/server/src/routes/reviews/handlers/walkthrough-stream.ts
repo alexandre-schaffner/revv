@@ -300,7 +300,35 @@ async function handleEvent(
 		await AppRuntime.runPromise(
 			Effect.gen(function* () {
 				const ws = yield* WalkthroughService;
-				yield* ws.addIssue(capturedId, event.data, issueOrder);
+				const issue = event.data;
+
+				// If the agent provided a comment body and we have a file location,
+				// create a comment thread + message and link it to the issue.
+				let commentThreadId: string | undefined;
+				if (
+					issue.comment &&
+					issue.filePath &&
+					issue.startLine !== undefined &&
+					issue.endLine !== undefined
+				) {
+					const reviewSvc = yield* ReviewService;
+					const anchorLine = issue.commentLine ?? issue.endLine;
+					const thread = yield* reviewSvc.createThread(state.reviewSessionId, {
+						filePath: issue.filePath,
+						startLine: anchorLine,
+						endLine: anchorLine,
+						diffSide: 'new',
+					});
+					yield* reviewSvc.addMessage(thread.id, {
+						authorRole: 'ai_agent',
+						authorName: 'Revv AI',
+						body: issue.comment,
+						messageType: 'comment',
+					});
+					commentThreadId = thread.id;
+				}
+
+				yield* ws.addIssue(capturedId, { ...issue, ...(commentThreadId !== undefined ? { commentThreadId } : {}) }, issueOrder);
 			}),
 		).catch((err) => {
 			logError('walkthrough-sse', 'Failed to persist issue:', err);

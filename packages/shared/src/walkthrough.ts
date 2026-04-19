@@ -49,6 +49,12 @@ export interface WalkthroughIssue {
 	filePath?: string;
 	startLine?: number;
 	endLine?: number;
+	/** Body text of the inline review comment the agent wants to leave at this location. Present on the in-flight event; cleared after the thread is created. */
+	comment?: string;
+	/** The specific line the comment should be anchored to (within startLine..endLine). Falls back to endLine if omitted. */
+	commentLine?: number;
+	/** ID of the comment thread created from this issue's comment. Set after persistence. */
+	commentThreadId?: string;
 }
 
 /**

@@ -309,8 +309,9 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 							filePath: issue.filePath ?? null,
 							startLine: issue.startLine ?? null,
 							endLine: issue.endLine ?? null,
-							blockIds: JSON.stringify(issue.blockIds ?? []),
-							createdAt: new Date().toISOString(),
+						blockIds: JSON.stringify(issue.blockIds ?? []),
+						commentThreadId: issue.commentThreadId ?? null,
+						createdAt: new Date().toISOString(),
 						})
 						.run(),
 				catch: (e) =>
