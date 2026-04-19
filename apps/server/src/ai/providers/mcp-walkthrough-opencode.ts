@@ -253,6 +253,13 @@ export function streamWalkthroughViaOpencodeMCP(
 		continuation?: ContinuationContext;
 		onSessionId?: (sessionId: string) => void;
 		carriedOverIssues?: CarriedOverIssue[];
+		/**
+		 * Caller-owned abort signal. When provided, `.abort()` kills the spawned
+		 * `opencode run` subprocess — this is how {@link WalkthroughJobs.cancel}
+		 * propagates into the AI turn. The built-in 10-minute timeout layers on
+		 * top of this controller, not a separately-minted one.
+		 */
+		abortController?: AbortController;
 	},
 	model?: string,
 ): AsyncGenerator<WalkthroughStreamEvent> {
@@ -342,6 +349,35 @@ export function streamWalkthroughViaOpencodeMCP(
 			proc.stdin.write(userMessage);
 			proc.stdin.end();
 
+			// Wire external cancellation into the subprocess lifecycle. If the
+			// caller aborts (e.g. {@link WalkthroughJobs.cancel} for a
+			// regenerate), we mark the run killed and terminate opencode so the
+			// for-await loop below unwinds cleanly instead of waiting on stdout.
+			const externalAbort = params.abortController;
+			let cancelledByCaller = false;
+			const onExternalAbort = () => {
+				cancelledByCaller = true;
+				debug(
+					"walkthrough-opencode-mcp",
+					"Received external abort — killing opencode subprocess",
+				);
+				try {
+					proc.kill();
+				} catch {
+					/* already dead */
+				}
+			};
+			if (externalAbort) {
+				if (externalAbort.signal.aborted) {
+					// Already aborted before we spawned — kill immediately.
+					onExternalAbort();
+				} else {
+					externalAbort.signal.addEventListener("abort", onExternalAbort, {
+						once: true,
+					});
+				}
+			}
+
 			// Collect stderr for debugging
 			const stderrPromise = (async () => {
 				const dec = new TextDecoder();
@@ -363,7 +399,8 @@ export function streamWalkthroughViaOpencodeMCP(
 				cacheCreationInputTokens: 0,
 			};
 
-			// Hard timeout
+			// Hard timeout — layered on top of the external controller so both
+			// paths converge on a single "subprocess is dead" state.
 			let killed = false;
 			const timeoutId = setTimeout(() => {
 				killed = true;
@@ -375,6 +412,16 @@ export function streamWalkthroughViaOpencodeMCP(
 					proc.kill();
 				} catch {
 					/* already dead */
+				}
+				// Also signal the external controller so any peers waiting on
+				// `abortController.signal` (e.g. Scope finalizers) see a consistent
+				// aborted state.
+				try {
+					externalAbort?.abort(
+						new Error("Walkthrough generation timed out after 10 minutes"),
+					);
+				} catch {
+					/* already aborted */
 				}
 			}, CLI_WALKTHROUGH_TIMEOUT_MS);
 
@@ -487,12 +534,19 @@ export function streamWalkthroughViaOpencodeMCP(
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
 				debug("walkthrough-opencode-mcp", "stdout read error:", message);
-				if (!killed) {
+				// Swallow errors triggered by caller-initiated cancellation — the
+				// registry (or Scope finalizer) is already aware and will tear down
+				// the job; surfacing a spurious "AiGenerationError" would race the
+				// real "interrupted" signal.
+				if (!killed && !cancelledByCaller) {
 					errorEmitted = true;
 					push({ type: "error", data: { code: "AiGenerationError", message } });
 				}
 			} finally {
 				clearTimeout(timeoutId);
+				if (externalAbort) {
+					externalAbort.signal.removeEventListener("abort", onExternalAbort);
+				}
 				try {
 					proc.kill();
 				} catch {
@@ -503,7 +557,7 @@ export function streamWalkthroughViaOpencodeMCP(
 			await proc.exited;
 			await stderrPromise;
 
-			if (killed) {
+			if (killed && !cancelledByCaller) {
 				errorEmitted = true;
 				push({
 					type: "error",

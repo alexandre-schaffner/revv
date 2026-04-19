@@ -122,8 +122,14 @@ function rowToWalkthrough(
 export class WalkthroughService extends Context.Tag('WalkthroughService')<
 	WalkthroughService,
 	{
-		/** Insert a new walkthrough row at start of generation. Returns the new ID. */
+		/**
+		 * Insert a new walkthrough row at start of generation. Returns the new ID.
+		 * Accepts an optional preassigned `id` so {@link WalkthroughJobs} can
+		 * pre-mint the walkthroughId before the first summary event arrives —
+		 * subscribers can then look the job up by id from the moment it's forked.
+		 */
 		readonly createPartial: (params: {
+			id?: string;
 			reviewSessionId: string;
 			prId: string;
 			summary: string;
@@ -184,6 +190,33 @@ export class WalkthroughService extends Context.Tag('WalkthroughService')<
 			sessionId: string,
 		) => Effect.Effect<void, never, DbService>;
 
+		/**
+		 * List all walkthroughs still in `status='generating'`. Used on server boot
+		 * to find rows stranded by a previous crash/restart so {@link WalkthroughJobs}
+		 * can re-launch their generators.
+		 */
+		readonly listGenerating: () => Effect.Effect<
+			Array<{
+				readonly id: string;
+				readonly pullRequestId: string;
+				readonly prHeadSha: string;
+				readonly opencodeSessionId: string | null;
+				readonly resumeAttempts: number;
+			}>,
+			never,
+			DbService
+		>;
+
+		/**
+		 * Bump the row's resume counter. Returns the new value so the caller can
+		 * compare against `WALKTHROUGH_MAX_RESUME_ATTEMPTS` and give up cleanly.
+		 * Swallows DB errors — a failed bump falls back to 0 which is treated as
+		 * "still worth trying" by the caller.
+		 */
+		readonly incrementResumeAttempts: (
+			walkthroughId: string,
+		) => Effect.Effect<number, never, DbService>;
+
 		/** Store carried-over issues from a regenerate request, keyed by prId. */
 		readonly setPendingCarriedOver: (
 			prId: string,
@@ -210,7 +243,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 	createPartial: (params) =>
 		Effect.gen(function* () {
 			const { db } = yield* DbService;
-			const id = crypto.randomUUID();
+			const id = params.id ?? crypto.randomUUID();
 			const generatedAt = new Date().toISOString();
 
 			yield* Effect.try({
@@ -228,6 +261,9 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 							modelUsed: params.modelUsed,
 							tokenUsage: '{}',
 							prHeadSha: params.prHeadSha,
+							// Fresh row — attempts start at 0 even if an older partial for the
+							// same PR was retried multiple times before being invalidated.
+							resumeAttempts: 0,
 						})
 						.run(),
 				catch: (e) =>
@@ -472,4 +508,49 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 			pendingCarriedOverMap.delete(prId);
 			return issues;
 		}),
+
+	listGenerating: () =>
+		Effect.gen(function* () {
+			const { db } = yield* DbService;
+			// Select only the minimum WalkthroughJobs needs to re-spawn a fiber —
+			// full blocks/issues/ratings are re-loaded later through getPartial()
+			// when the resumed job actually starts streaming.
+			const rows = db
+				.select({
+					id: walkthroughs.id,
+					pullRequestId: walkthroughs.pullRequestId,
+					prHeadSha: walkthroughs.prHeadSha,
+					opencodeSessionId: walkthroughs.opencodeSessionId,
+					resumeAttempts: walkthroughs.resumeAttempts,
+				})
+				.from(walkthroughs)
+				.where(eq(walkthroughs.status, 'generating'))
+				.all();
+			return rows.map((r) => ({
+				id: r.id,
+				pullRequestId: r.pullRequestId,
+				prHeadSha: r.prHeadSha,
+				opencodeSessionId: r.opencodeSessionId ?? null,
+				resumeAttempts: r.resumeAttempts,
+			}));
+		}),
+
+	incrementResumeAttempts: (walkthroughId) =>
+		Effect.gen(function* () {
+			const { db } = yield* DbService;
+			// Read-then-write is fine: resume is single-threaded via the job
+			// registry, so there's no concurrent writer racing this update.
+			const row = db
+				.select({ resumeAttempts: walkthroughs.resumeAttempts })
+				.from(walkthroughs)
+				.where(eq(walkthroughs.id, walkthroughId))
+				.get();
+			const next = (row?.resumeAttempts ?? 0) + 1;
+			db
+				.update(walkthroughs)
+				.set({ resumeAttempts: next })
+				.where(eq(walkthroughs.id, walkthroughId))
+				.run();
+			return next;
+		}).pipe(Effect.catchAll(() => Effect.succeed(0))),
 });

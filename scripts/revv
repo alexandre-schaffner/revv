@@ -2,13 +2,13 @@
 # ──────────────────────────────────────────────────────────────
 # revv — Management CLI for a Revv source install
 #
-# Installed by scripts/install-macos.sh to ~/.local/bin/revv.
+# Installed by install.sh to ~/.local/bin/revv.
 # Drives the source tree at ~/Library/Application Support/Revv/src
 # and the LaunchAgent at ~/Library/LaunchAgents/com.revv.server.plist.
 #
 # Commands:
 #   revv update      Pull latest, rebuild, reinstall, reload service
-#   revv uninstall   Remove app, source, LaunchAgent, and this CLI
+#   revv uninstall   Remove app, source, LaunchAgent, auth key, and this CLI
 #   revv start       Load + start the server LaunchAgent
 #   revv stop        Unload + stop the server LaunchAgent
 #   revv restart     Stop + start
@@ -41,27 +41,51 @@ if [[ -f "$CONFIG_FILE" ]]; then
   [[ -n "${APP_PATH:-}" && -d "$APP_PATH" ]] && APP_CANDIDATES=("$APP_PATH" "${APP_CANDIDATES[@]}")
 fi
 
-# ── Colors ───────────────────────────────────────────────────
-if [[ -t 1 ]]; then
-  RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'
-  BLUE=$'\033[0;34m'; CYAN=$'\033[0;36m'; BOLD=$'\033[1m'
-  DIM=$'\033[2m'; RESET=$'\033[0m'
-else
-  RED=""; GREEN=""; YELLOW=""; BLUE=""; CYAN=""; BOLD=""; DIM=""; RESET=""
+# ── Load shared helpers ───────────────────────────────────────
+# Prefer the copy shipped alongside this CLI (~/.local/share/revv/common.sh).
+# Fall back to the one in the source tree for in-checkout invocations. If
+# neither is available, define just enough inline helpers to keep the CLI
+# working (useful if the user copied just the `revv` binary to a new machine).
+__revv_lib_paths=(
+  "$HOME/.local/share/revv/common.sh"
+  "$INSTALL_DIR/scripts/lib/common.sh"
+  "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/common.sh"
+)
+__revv_lib_loaded=0
+for __lib in "${__revv_lib_paths[@]}"; do
+  if [[ -f "$__lib" ]]; then
+    # shellcheck disable=SC1090
+    source "$__lib"
+    __revv_lib_loaded=1
+    break
+  fi
+done
+
+if [[ "$__revv_lib_loaded" -eq 0 ]]; then
+  # Inline fallbacks. Keep these in sync with scripts/lib/common.sh.
+  if [[ -t 1 ]]; then
+    RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'
+    BLUE=$'\033[0;34m'; CYAN=$'\033[0;36m'; BOLD=$'\033[1m'
+    DIM=$'\033[2m'; RESET=$'\033[0m'
+  else
+    RED=""; GREEN=""; YELLOW=""; BLUE=""; CYAN=""; BOLD=""; DIM=""; RESET=""
+  fi
+  info()    { printf "%s[info]%s  %s\n" "$BLUE" "$RESET" "$*"; }
+  success() { printf "%s[  ok]%s  %s\n" "$GREEN" "$RESET" "$*"; }
+  warn()    { printf "%s[warn]%s  %s\n" "$YELLOW" "$RESET" "$*"; }
+  fail()    { printf "%s[FAIL]%s  %s\n" "$RED" "$RESET" "$*" >&2; exit 1; }
+  step()    { printf "\n%s%s▸ %s%s\n" "$BOLD" "$CYAN" "$*" "$RESET"; }
+  confirm() {
+    local reply
+    printf "%s  → %s [y/N] %s" "$YELLOW" "$1" "$RESET"
+    read -r reply
+    [[ "$reply" =~ ^[Yy] ]]
+  }
 fi
 
-info()    { printf "%s[info]%s  %s\n" "$BLUE" "$RESET" "$*"; }
-success() { printf "%s[  ok]%s  %s\n" "$GREEN" "$RESET" "$*"; }
-warn()    { printf "%s[warn]%s  %s\n" "$YELLOW" "$RESET" "$*"; }
-fail()    { printf "%s[FAIL]%s  %s\n" "$RED" "$RESET" "$*" >&2; exit 1; }
-step()    { printf "\n%s%s▸ %s%s\n" "$BOLD" "$CYAN" "$*" "$RESET"; }
-
-confirm() {
-  local reply
-  printf "%s  → %s [y/N] %s" "$YELLOW" "$1" "$RESET"
-  read -r reply
-  [[ "$reply" =~ ^[Yy] ]]
-}
+# Canonical paths (auth key, support dir, etc.)
+REVV_SUPPORT_DIR="${REVV_SUPPORT_DIR:-$HOME/Library/Application Support/Revv}"
+REVV_AUTH_KEY="${REVV_AUTH_KEY:-$REVV_SUPPORT_DIR/auth.key}"
 
 find_app() {
   for p in "${APP_CANDIDATES[@]}"; do
@@ -73,7 +97,7 @@ find_app() {
 ensure_install_dir() {
   [[ -d "$INSTALL_DIR/.git" ]] || fail "No Revv source install found at $INSTALL_DIR.
 Run the installer first:
-  curl -fsSL https://raw.githubusercontent.com/alexandre-schaffner/revv/main/scripts/install-macos.sh | bash"
+  curl -fsSL https://raw.githubusercontent.com/alexandre-schaffner/revv/main/install.sh | bash"
 }
 
 load_bun_path() {
@@ -117,6 +141,7 @@ Source:        $INSTALL_DIR
 App:           $(find_app || printf "(not installed)")
 LaunchAgent:   $LAUNCH_AGENT_PLIST
 Logs:          $LOG_DIR
+Auth key:      $REVV_AUTH_KEY
 CLI:           $CLI_PATH
 EOF
 }
@@ -268,10 +293,14 @@ cmd_update() {
   launchctl unload "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
   launchctl load -w "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
 
-  # Refresh the CLI itself in case it changed upstream.
+  # Refresh the CLI itself + helper lib in case they changed upstream.
   if [[ -f "$INSTALL_DIR/scripts/revv" ]]; then
     cp "$INSTALL_DIR/scripts/revv" "$CLI_PATH"
     chmod +x "$CLI_PATH"
+  fi
+  if [[ -f "$INSTALL_DIR/scripts/lib/common.sh" ]]; then
+    mkdir -p "$HOME/.local/share/revv"
+    cp "$INSTALL_DIR/scripts/lib/common.sh" "$HOME/.local/share/revv/common.sh"
   fi
 
   success "Updated to $(git -C "$INSTALL_DIR" rev-parse --short HEAD)"
@@ -286,7 +315,10 @@ This will remove:
   • $INSTALL_DIR
   • $LAUNCH_AGENT_PLIST
   • $LOG_DIR
+  • $REVV_SUPPORT_DIR/config
+  • $REVV_AUTH_KEY
   • $CLI_PATH
+  • $HOME/.local/share/revv/common.sh
 EOF
   confirm "Proceed with uninstall?" || { info "Aborted."; return 0; }
 
@@ -301,8 +333,15 @@ EOF
     [[ -d "$p" ]] && rm -rf "$p"
   done
 
-  # Remove source and logs
+  # Remove source, logs, auth key, installer config
   rm -rf "$INSTALL_DIR" "$LOG_DIR"
+  rm -f "$REVV_AUTH_KEY" "$REVV_SUPPORT_DIR/config"
+  # Clean up the support dir if it's now empty.
+  rmdir "$REVV_SUPPORT_DIR" 2>/dev/null || true
+
+  # Remove shared helper shipped alongside the CLI.
+  rm -f "$HOME/.local/share/revv/common.sh"
+  rmdir "$HOME/.local/share/revv" 2>/dev/null || true
 
   # Remove self — do this last so the script can finish executing.
   if [[ -f "$CLI_PATH" ]]; then
@@ -324,17 +363,21 @@ cmd_doctor() {
   if command -v bun >/dev/null 2>&1; then success "bun $(bun --version)"; else warn "bun not on PATH"; bump; fi
   if command -v cargo >/dev/null 2>&1; then success "cargo $(cargo --version | awk '{print $2}')"; else warn "cargo not on PATH"; bump; fi
   if server_running; then success "API server responding on $API_URL"; else warn "API server not responding — try 'revv restart'"; bump; fi
-  if [[ -f "$INSTALL_DIR/.env" ]]; then
-    if grep -q '^GITHUB_CLIENT_ID=..*' "$INSTALL_DIR/.env" \
-       && grep -q '^GITHUB_CLIENT_SECRET=..*' "$INSTALL_DIR/.env" \
-       && grep -q '^BETTER_AUTH_SECRET=..*' "$INSTALL_DIR/.env"; then
-      success ".env has all required values"
+
+  # Auth key check — replaces the old .env check. The server auto-generates
+  # this on first start, so its presence + 0600 mode is what we verify.
+  if [[ -f "$REVV_AUTH_KEY" ]]; then
+    local mode
+    # `stat -f` on macOS/BSD, `stat -c` on GNU. Try both.
+    mode="$(stat -f '%Lp' "$REVV_AUTH_KEY" 2>/dev/null || stat -c '%a' "$REVV_AUTH_KEY" 2>/dev/null || echo '?')"
+    if [[ "$mode" == "600" ]]; then
+      success "Auth key present (mode 600)"
     else
-      warn ".env is missing one or more required values"
+      warn "Auth key exists but permissions are $mode — expected 600. Fix with: chmod 600 '$REVV_AUTH_KEY'"
       bump
     fi
   else
-    warn ".env missing at $INSTALL_DIR/.env"
+    warn "Auth key missing at $REVV_AUTH_KEY — server will create it on next start"
     bump
   fi
 

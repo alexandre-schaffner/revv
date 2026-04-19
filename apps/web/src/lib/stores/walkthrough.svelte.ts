@@ -541,6 +541,14 @@ export async function regenerate(prId: string, keptIssues?: WalkthroughIssue[]):
 	// Capture the current entry BEFORE aborting so we can extract block context
 	const oldEntry = entries.get(prId);
 
+	// Reset animation trackers so the newly-streamed content animates in
+	// like a first-time view (stepper/content/summary/issues section fade in,
+	// blocks and issue cards stagger). Without this, regenerate would pop
+	// content into place with no visual acknowledgment of the new data.
+	animatedBlocks.delete(prId);
+	animatedIssues.delete(prId);
+	animatedContainers.delete(prId);
+
 	// Abort and remove existing entry for this PR
 	abortPr(prId);
 	entries.delete(prId);
@@ -665,7 +673,22 @@ export function onWalkthroughError(prId: string, message: string): void {
 // ── Animated block tracking ─────────────────────────────────────────────────
 // Non-reactive — tracks which block IDs have already animated, keyed by PR ID.
 // Lives outside `entries` so it survives component remounts.
+//
+// Why all three maps exist: the walkthrough tab is never unmounted on tab
+// switch (the parent just toggles `display: contents` ↔ `display: none`), but
+// browsers restart CSS animations on a subtree the moment it re-enters the
+// render tree. Without these trackers, every hop back to the Walkthrough tab
+// replays all entrance animations. Each tracker is per-PR because tracking
+// is meaningful per walkthrough lifetime, and is cleared on `regenerate()`
+// so a fresh stream animates again like a first view.
 const animatedBlocks = new Map<string, Set<string>>();
+
+// Per-PR tracker of which issue IDs have played their entrance animation.
+const animatedIssues = new Map<string, Set<string>>();
+
+// Per-PR tracker of one-shot container animations
+// (keys: 'stepper', 'content', 'summary', 'issues-section').
+const animatedContainers = new Map<string, Set<string>>();
 
 /** Returns true if this block has already played its entrance animation. */
 export function hasBlockAnimated(prId: string, blockId: string): boolean {
@@ -680,6 +703,36 @@ export function markBlockAnimated(prId: string, blockId: string): void {
 		animatedBlocks.set(prId, set);
 	}
 	set.add(blockId);
+}
+
+/** Returns true if this issue card has already played its entrance animation. */
+export function hasIssueAnimated(prId: string, issueId: string): boolean {
+	return animatedIssues.get(prId)?.has(issueId) ?? false;
+}
+
+/** Mark an issue card as having played its entrance animation. */
+export function markIssueAnimated(prId: string, issueId: string): void {
+	let set = animatedIssues.get(prId);
+	if (!set) {
+		set = new Set();
+		animatedIssues.set(prId, set);
+	}
+	set.add(issueId);
+}
+
+/** Returns true if this container (stepper/content/summary/issues-section) has already animated. */
+export function hasContainerAnimated(prId: string, key: string): boolean {
+	return animatedContainers.get(prId)?.has(key) ?? false;
+}
+
+/** Mark a container as having played its entrance animation. */
+export function markContainerAnimated(prId: string, key: string): void {
+	let set = animatedContainers.get(prId);
+	if (!set) {
+		set = new Set();
+		animatedContainers.set(prId, set);
+	}
+	set.add(key);
 }
 
 async function fetchCachedWalkthrough(prId: string): Promise<void> {

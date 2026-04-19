@@ -1,6 +1,6 @@
 <script lang="ts">
     import {
-        Terminal,
+        Star,
         Check,
         AlertCircle,
         X,
@@ -51,7 +51,7 @@
 <div class="summary-bar">
     <div class="summary-left">
         <span class="spec-icon" aria-hidden="true">
-            <Terminal size={14} />
+            <Star size={14} />
         </span>
         <span class="spec-title">Scores</span>
 

@@ -11,10 +11,26 @@
 	import { TooltipProvider } from '$lib/components/ui/tooltip';
 	import { Toaster } from '$lib/components/ui/sonner';
 	import CacheInspector from '$lib/components/dev/CacheInspector.svelte';
+	import { page } from '$app/state';
 
 	let { children } = $props();
 	let hydrated = false;
 	let cacheInspectorOpen = $state(false);
+
+	// Keep `selectedPrId` in sync with the URL.
+	//
+	// Previously the store was only written to when a PR page mounted, and
+	// never cleared when navigating away. That stale value drove
+	// `PrItem`'s `isSelected` prop, so after leaving a PR (e.g. Cmd+W
+	// → homepage) the sidebar still thought that PR was selected — and
+	// clicking it just toggled the file-tree expander instead of
+	// navigating back. Deriving from the URL here makes the URL the
+	// single source of truth for every entry/exit path (Cmd+W, sidebar
+	// settings link, logout, mouse back, deep link, WS-driven nav, …).
+	$effect(() => {
+		const match = page.url.pathname.match(/^\/review\/([^/]+)/);
+		prs.setSelectedPrId(match?.[1] ?? null);
+	});
 
 	$effect(() => {
 		function handleKeydown(e: KeyboardEvent): void {

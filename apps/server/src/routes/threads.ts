@@ -171,6 +171,33 @@ export const threadRoutes = new Elysia({ prefix: '/api/threads' })
 		}
 	})
 
+	// DELETE /api/threads/:id/messages/:messageId — discard a pending (unsynced) reply.
+	// Service-level guards enforce: message exists, externalId is null, and the
+	// message isn't the thread's first message.
+	.delete('/:id/messages/:messageId', async (ctx) => {
+		try {
+			await AppRuntime.runPromise(
+				Effect.gen(function* () {
+					const reviewService = yield* ReviewService;
+					const hub = yield* WebSocketHub;
+
+					yield* reviewService.deleteMessage(ctx.params.messageId);
+
+					yield* hub.broadcast({
+						type: 'thread:message:deleted',
+						data: {
+							threadId: ctx.params.id,
+							messageId: ctx.params.messageId,
+						},
+					});
+				}),
+			);
+			return { success: true };
+		} catch (e) {
+			return handleAppError(e, ctx);
+		}
+	})
+
 	// GET /api/threads/:id/messages — list messages in a thread
 	.get('/:id/messages', async (ctx) => {
 		try {
@@ -198,6 +225,9 @@ export const threadRoutes = new Elysia({ prefix: '/api/threads' })
 							authorName: ctx.body.authorName,
 							body: ctx.body.body,
 							messageType: ctx.body.messageType,
+							...(ctx.body.authorAvatarUrl !== undefined
+								? { authorAvatarUrl: ctx.body.authorAvatarUrl }
+								: {}),
 							...(ctx.body.codeSuggestion !== undefined
 								? { codeSuggestion: ctx.body.codeSuggestion }
 								: {}),
@@ -237,6 +267,7 @@ export const threadRoutes = new Elysia({ prefix: '/api/threads' })
 					t.Literal('ai_agent'),
 				]),
 				authorName: t.String(),
+				authorAvatarUrl: t.Optional(t.Union([t.String(), t.Null()])),
 				body: t.String(),
 				messageType: t.Union([
 					t.Literal('comment'),

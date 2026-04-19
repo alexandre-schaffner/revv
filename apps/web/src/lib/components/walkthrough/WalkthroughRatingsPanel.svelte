@@ -12,7 +12,6 @@
     import RatingTestRow, {
         type RowState,
     } from "./ratings-panel/RatingTestRow.svelte";
-    import { formatDuration } from "./ratings-panel/format-duration";
 
     interface Props {
         ratings: WalkthroughRating[];
@@ -113,20 +112,6 @@
             firstArrivalTime !== null &&
             firstArrivalTime - mountTime < 200,
     );
-
-    function durationLabel(axis: RatingAxis, index: number): string {
-        const t = arrivals.get(axis);
-        if (t === undefined) return "—";
-        if (isCachedReplay) return "—";
-        if (index === 0) {
-            return firstArrivalTime !== null
-                ? formatDuration(t - firstArrivalTime)
-                : "—";
-        }
-        const prevAxis = RATING_AXES[index - 1];
-        const pt = prevAxis ? arrivals.get(prevAxis) : undefined;
-        return pt !== undefined ? formatDuration(t - pt) : "—";
-    }
 
     // Total elapsed — from first arrival to last arrival. Null until all 9
     // have landed so the number isn't jumpy mid-stream.
@@ -334,7 +319,6 @@
                         {state}
                         {blocks}
                         open={isRowOpen(axis)}
-                        durationLabel={durationLabel(axis, i)}
                         onToggle={() => toggleRow(axis)}
                         {onJump}
                         bind:triggerRef={rowRefs[axis]}

@@ -15,6 +15,20 @@
       "when": 1776595200000,
       "tag": "0010_cache_entries",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1776800000000,
+      "tag": "0020_walkthroughs_resume_attempts",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1776900000000,
+      "tag": "0030_thread_message_avatars",
+      "breakpoints": true
     }
   ]
 }

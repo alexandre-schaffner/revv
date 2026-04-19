@@ -25,8 +25,6 @@
         /** Full ordered block list — needed to resolve a blockId to a step N. */
         blocks: WalkthroughBlock[];
         open: boolean;
-        /** Duration label for the chip. Either a formatted string or "—" for cached. */
-        durationLabel: string;
         /** Triggered when user clicks the row header. */
         onToggle: () => void;
         /** Jump to walkthrough block (from block-link chips). */
@@ -42,7 +40,6 @@
         state,
         blocks,
         open,
-        durationLabel,
         onToggle,
         onJump,
         triggerRef = $bindable(null),
@@ -96,6 +93,7 @@
     class="row {verdictClass}"
     data-state={state}
     data-verdict={rating?.verdict ?? "pending"}
+    data-open={open ? "true" : undefined}
     aria-busy={state === "running" ? "true" : undefined}
 >
     <Collapsible.Root
@@ -166,13 +164,6 @@
             </span>
 
             <span
-                class="row-duration"
-                class:row-duration--hidden={state !== "resolved"}
-            >
-                {durationLabel}
-            </span>
-
-            <span
                 class="row-chevron"
                 class:row-chevron--open={open}
                 aria-hidden="true"
@@ -207,10 +198,23 @@
         );
         --c-rating-conf: var(--color-text-muted);
         --c-gutter-flash: var(--c-rating-icon);
+        /* Darker wash for the expanded body — neutral 10% black overlay over
+           the panel bg, matching CommentExpandedBody exactly. The drawer
+           intentionally drops the verdict tint; verdict is already carried by
+           the gutter and the accent-tinted open trigger one level up. */
+        --c-rating-expanded-bg: color-mix(in srgb, black 10%, transparent);
 
         list-style: none;
         position: relative;
         display: block;
+    }
+
+    /* Confine the verdict gutter to the clickable trigger row — without this,
+       the gutter (absolute, top/bottom:0) spans the full .row and bleeds
+       through the expanded body. Scoped via .row so other panels that reuse
+       the .row-trigger name (if any) are unaffected. */
+    .row :global(.row-trigger) {
+        position: relative;
     }
 
     /* ── Verdict color palettes ──────────────────────────────────── */
@@ -264,12 +268,11 @@
 
     :global(.row-trigger) {
         display: grid;
-        /* icon (2ch) · axis (auto) · rationale (1fr) · conf (auto) · dur (auto) · chevron (auto) */
+        /* icon (2ch) · axis (auto) · rationale (1fr) · conf (auto) · chevron (auto) */
         grid-template-columns:
             2ch
             minmax(max-content, auto)
             minmax(0, 1fr)
-            auto
             auto
             16px;
         align-items: center;
@@ -303,6 +306,20 @@
         background: color-mix(
             in srgb,
             var(--c-rating-bg) 50%,
+            transparent
+        );
+    }
+
+    /* When the row is expanded, keep the verdict tint on the trigger so the
+       clicked row reads as the "active" one. Uses `--c-rating-icon` (the
+       full-saturation hue that paints the gutter) mixed onto the panel at
+       ~8% — strong enough to be visible against the panel's bg-secondary
+       (unlike `--c-rating-bg`, which is pre-mixed with bg-secondary at ~4%
+       and therefore invisible when layered on top of that same bg). */
+    .row[data-open="true"] :global(.row-trigger:not(:disabled):not([aria-disabled="true"])) {
+        background: color-mix(
+            in srgb,
+            var(--c-rating-icon) 8%,
             transparent
         );
     }
@@ -475,20 +492,6 @@
         display: none;
     }
 
-    /* ── Duration chip ───────────────────────────────────────────── */
-
-    .row-duration {
-        font-family: var(--font-mono);
-        font-size: 11px;
-        color: var(--color-text-muted);
-        font-variant-numeric: tabular-nums;
-        white-space: nowrap;
-    }
-
-    .row-duration--hidden {
-        visibility: hidden;
-    }
-
     /* ── Chevron ─────────────────────────────────────────────────── */
 
     .row-chevron {
@@ -531,18 +534,8 @@
     /* ── Narrow width (RequestChanges sidebar) ──────────────────── */
 
     @container ratings (max-width: 420px) {
-        :global(.row-trigger) {
-            grid-template-columns:
-                2ch
-                minmax(max-content, auto)
-                minmax(0, 1fr)
-                auto
-                16px;
-        }
-        .row-duration {
-            display: none;
-        }
-        /* Swap full confidence label for single-letter chip. */
+        /* Swap full confidence label for single-letter chip. The base grid
+           already omits the duration column, so no template override needed. */
         .conf-full {
             display: none;
         }

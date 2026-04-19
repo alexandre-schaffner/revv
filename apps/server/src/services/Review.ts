@@ -53,6 +53,7 @@ function rowToMessage(row: typeof threadMessages.$inferSelect): ThreadMessage {
 		threadId: row.threadId,
 		authorRole: row.authorRole as ThreadMessage['authorRole'],
 		authorName: row.authorName,
+		authorAvatarUrl: row.authorAvatarUrl ?? null,
 		body: row.body,
 		messageType: row.messageType as ThreadMessage['messageType'],
 		codeSuggestion: row.codeSuggestion ?? null,
@@ -88,6 +89,7 @@ export interface CreateThreadParams {
 export interface CreateMessageParams {
 	authorRole: AuthorRole;
 	authorName: string;
+	authorAvatarUrl?: string | null;
 	body: string;
 	messageType: MessageType;
 	codeSuggestion?: string;
@@ -165,6 +167,10 @@ export class ReviewService extends Context.Tag('ReviewService')<
 			messageId: string,
 			externalId: string,
 		) => Effect.Effect<void, ReviewError, DbService>;
+		readonly setMessageAvatar: (
+			messageId: string,
+			authorAvatarUrl: string | null,
+		) => Effect.Effect<void, ReviewError, DbService>;
 		readonly updateMessageBody: (
 			messageId: string,
 			body: string,
@@ -174,6 +180,18 @@ export class ReviewService extends Context.Tag('ReviewService')<
 			messageId: string,
 			body: string,
 		) => Effect.Effect<ThreadMessage, ReviewError, DbService>;
+		/**
+		 * Delete a reply message that hasn't been synced to GitHub yet.
+		 * Guards:
+		 *   - message must exist
+		 *   - message must be unsynced (`externalId === null`)
+		 *   - message must not be the thread's first message (those belong to the
+		 *     thread itself — use `deleteThread` instead)
+		 * Returns the parent threadId so the route can broadcast.
+		 */
+		readonly deleteMessage: (
+			messageId: string,
+		) => Effect.Effect<{ threadId: string }, ReviewError, DbService>;
 		readonly findMessageByExternalId: (
 			externalId: string,
 		) => Effect.Effect<ThreadMessage | null, ReviewError, DbService>;
@@ -471,6 +489,7 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 				messageType: params.messageType,
 				createdAt,
 			};
+			if (params.authorAvatarUrl !== undefined) row.authorAvatarUrl = params.authorAvatarUrl;
 			if (params.codeSuggestion !== undefined) row.codeSuggestion = params.codeSuggestion;
 			if (params.externalId !== undefined) row.externalId = params.externalId;
 
@@ -483,6 +502,7 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 				threadId,
 				authorRole: params.authorRole as ThreadMessage['authorRole'],
 				authorName: params.authorName,
+				authorAvatarUrl: params.authorAvatarUrl ?? null,
 				body: params.body,
 				messageType: params.messageType as ThreadMessage['messageType'],
 				codeSuggestion: params.codeSuggestion ?? null,
@@ -525,6 +545,15 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 			db
 				.update(threadMessages)
 				.set({ externalId })
+				.where(eq(threadMessages.id, messageId))
+				.run(),
+		).pipe(Effect.asVoid),
+
+	setMessageAvatar: (messageId, authorAvatarUrl) =>
+		tryDb('set message avatar', (db) =>
+			db
+				.update(threadMessages)
+				.set({ authorAvatarUrl })
 				.where(eq(threadMessages.id, messageId))
 				.run(),
 		).pipe(Effect.asVoid),
@@ -586,6 +615,57 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 			);
 
 			return rowToMessage({ ...msgRow, body, editedAt });
+		}),
+
+	deleteMessage: (messageId) =>
+		Effect.gen(function* () {
+			const { db } = yield* DbService;
+
+			const msgRow = db
+				.select()
+				.from(threadMessages)
+				.where(eq(threadMessages.id, messageId))
+				.get();
+
+			if (!msgRow) {
+				return yield* Effect.fail(
+					new ReviewError({ message: 'Message not found', code: 'NOT_FOUND' }),
+				);
+			}
+
+			if (msgRow.externalId !== null) {
+				return yield* Effect.fail(
+					new ReviewError({
+						message: 'Cannot discard a reply already synced to GitHub',
+						code: 'FORBIDDEN',
+					}),
+				);
+			}
+
+			// Prevent deleting the thread's first message via this endpoint — those
+			// carry the thread-level content and should be removed by deleteThread.
+			const first = db
+				.select({ id: threadMessages.id })
+				.from(threadMessages)
+				.where(eq(threadMessages.threadId, msgRow.threadId))
+				.orderBy(threadMessages.createdAt)
+				.limit(1)
+				.get();
+
+			if (first?.id === messageId) {
+				return yield* Effect.fail(
+					new ReviewError({
+						message: "Cannot discard a thread's first message — discard the thread instead",
+						code: 'FORBIDDEN',
+					}),
+				);
+			}
+
+			yield* tryDb('delete message', (d) =>
+				d.delete(threadMessages).where(eq(threadMessages.id, messageId)).run(),
+			);
+
+			return { threadId: msgRow.threadId };
 		}),
 
 	findMessageByExternalId: (externalId) =>

@@ -28,6 +28,7 @@ export type WsServerMessage =
 	| { type: 'prs:sync-summary'; data: SyncChange[] }
 	| { type: 'thread:deleted'; data: { threadId: string } }
 	| { type: 'thread:message:edited'; data: { threadId: string; message: ThreadMessage } }
+	| { type: 'thread:message:deleted'; data: { threadId: string; messageId: string } }
 	| { type: 'cache:invalidated'; data: { scope: 'pr'; prId: string; reasons: string[] } };
 
 export type WsClientMessage =

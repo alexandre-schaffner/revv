@@ -69,6 +69,7 @@
 		onCommentResolve?: ((threadId: string) => void) | undefined;
 		onCommentReopen?: ((threadId: string) => void) | undefined;
 		onCommentDiscard?: ((threadId: string) => void) | undefined;
+		onDiscardReply?: ((threadId: string, messageId: string) => void) | undefined;
 		onTokenHover?: ((info: TokenHoverInfo | null) => void) | undefined;
 		onApplySuggestion?: ((threadId: string, suggestion: string) => void) | undefined;
 		onEditMessage?: ((threadId: string, messageId: string, body: string) => void) | undefined;
@@ -91,6 +92,7 @@
 		onCommentResolve,
 		onCommentReopen,
 		onCommentDiscard,
+		onDiscardReply,
 		onTokenHover,
 		onApplySuggestion,
 		onEditMessage
@@ -458,6 +460,9 @@
 						},
 						onDiscard: () => {
 							onCommentDiscard?.(meta.threadId);
+						},
+						onDiscardReply: (messageId: string) => {
+							onDiscardReply?.(meta.threadId, messageId);
 						},
 						onCollapse: () => {
 							onAnnotationToggle?.(meta.threadId);

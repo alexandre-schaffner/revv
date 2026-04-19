@@ -117,6 +117,9 @@ export const reviewRoutes = new Elysia({ prefix: '/api/reviews' })
 							authorName: ctx.body.message.authorName,
 							body: ctx.body.message.body,
 							messageType: ctx.body.message.messageType,
+							...(ctx.body.message.authorAvatarUrl !== undefined
+								? { authorAvatarUrl: ctx.body.message.authorAvatarUrl }
+								: {}),
 							...(ctx.body.message.codeSuggestion !== undefined
 								? { codeSuggestion: ctx.body.message.codeSuggestion }
 								: {}),
@@ -159,6 +162,7 @@ export const reviewRoutes = new Elysia({ prefix: '/api/reviews' })
 						t.Literal('ai_agent'),
 					]),
 					authorName: t.String(),
+					authorAvatarUrl: t.Optional(t.Union([t.String(), t.Null()])),
 					body: t.String(),
 					messageType: t.Union([
 						t.Literal('comment'),

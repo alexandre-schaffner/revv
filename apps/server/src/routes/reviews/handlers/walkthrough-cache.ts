@@ -2,6 +2,7 @@ import { Effect } from 'effect';
 import { AppRuntime } from '../../../runtime';
 import { GitHubService } from '../../../services/GitHub';
 import { PrContextService } from '../../../services/PrContext';
+import { WalkthroughJobs } from '../../../services/WalkthroughJobs';
 import { WalkthroughService } from '../../../services/Walkthrough';
 import type { CarriedOverIssue } from '@revv/shared';
 
@@ -31,13 +32,31 @@ export function getCachedWalkthroughHandler(prId: string, userId: string) {
 }
 
 /**
- * POST /api/reviews/:id/walkthrough/regenerate — invalidate all cached
- * walkthroughs for a PR. The next SSE request will generate fresh.
+ * POST /api/reviews/:id/walkthrough/regenerate — cancel any in-flight
+ * generation for this PR and invalidate cached walkthroughs so the next
+ * SSE request starts fresh.
+ *
+ * Order matters: we cancel BEFORE invalidate. Cancel awaits fiber
+ * termination so the scope finalizers (worktree cleanup, abort signal)
+ * have run by the time we touch the DB. If we invalidated first, the
+ * still-running fiber could race its `markComplete` / `addBlock` writes
+ * against our delete, producing orphan rows or partial-new rows.
  */
 export function regenerateWalkthroughHandler(prId: string, keptIssues: CarriedOverIssue[]) {
 	return AppRuntime.runPromise(
 		Effect.gen(function* () {
+			const jobs = yield* WalkthroughJobs;
 			const walkthroughService = yield* WalkthroughService;
+
+			// Cancel the active job (if any). `cancel` awaits Fiber.interrupt,
+			// which flushes the job's scope — worktree is removed, controller
+			// is aborted, and the row has been marked `error` so the next
+			// invalidate clears clean state.
+			const active = yield* jobs.findActiveByPr(prId);
+			if (active !== null) {
+				yield* jobs.cancel(active.walkthroughId);
+			}
+
 			yield* walkthroughService.invalidateForPr(prId);
 			if (keptIssues.length > 0) {
 				yield* walkthroughService.setPendingCarriedOver(prId, keptIssues);

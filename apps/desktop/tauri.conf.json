@@ -67,6 +67,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
+        "label": "main",
         "title": "Revv (Alpha)",
         "width": 1280,
         "height": 800,
@@ -75,7 +76,8 @@
         "decorations": true,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
-        "resizable": true
+        "resizable": true,
+        "visible": false
       }
     ],
     "security": {

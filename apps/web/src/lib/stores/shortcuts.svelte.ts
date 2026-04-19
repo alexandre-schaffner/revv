@@ -64,11 +64,30 @@ function handleKeydown(e: KeyboardEvent): void {
 		return;
 	}
 
-	// Cmd+W → navigate to homepage
+	// Cmd+W → close the current PR view.
+	//
+	// When we're on a PR, we prefer `history.back()` over `goto('/')`
+	// so the navigation is symmetric with the mouse/trackpad back gesture:
+	// we step *back* over the PR entry instead of pushing a new homepage
+	// entry on top of it. Without this, Cmd+W leaves the PR stranded in
+	// the forward-history — reachable only by the mouse back button, never
+	// by a keyboard shortcut.
+	//
+	// Falls back to `goto('/')` when there is no prior entry — e.g. the
+	// app was deep-linked straight into `/review/[prId]`. SvelteKit stamps
+	// a monotonically-increasing `sveltekit:index` on every history entry
+	// it owns; index 0 means "first entry in this session, nothing behind".
 	if (!e.shiftKey && e.key.toLowerCase() === 'w') {
 		e.preventDefault();
 		e.stopPropagation();
-		goto('/');
+		const onPrPage = window.location.pathname.startsWith('/review/');
+		const state = window.history.state as { 'sveltekit:index'?: number } | null;
+		const index = state?.['sveltekit:index'] ?? 0;
+		if (onPrPage && index > 0) {
+			window.history.back();
+		} else {
+			goto('/');
+		}
 		return;
 	}
 

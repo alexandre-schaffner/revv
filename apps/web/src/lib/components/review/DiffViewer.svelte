@@ -13,9 +13,11 @@
 		resolveThread,
 		reopenThread,
 		deleteThread,
+		deleteThreadMessage,
 		applyCommentSuggestion,
 		editThreadMessage
 	} from '$lib/stores/review.svelte';
+	import { getUser } from '$lib/stores/auth.svelte';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
 	// ── Re-export for consumers ───────────────────────────────────────────────
@@ -191,9 +193,13 @@
 
 	async function handleReplySubmit(threadId: string, body: string) {
 		replyingThreadId = null;
+		const u = getUser();
+		const authorName = u?.githubLogin ?? u?.name ?? 'You';
+		const authorAvatarUrl = u?.image ?? null;
 		await addThreadMessage(threadId, {
 			authorRole: 'reviewer',
-			authorName: 'You',
+			authorName,
+			authorAvatarUrl,
 			body,
 			messageType: 'reply',
 		});
@@ -212,6 +218,10 @@
 		const endLine = pendingEndLines.get(key) ?? lineNo;
 		pendingEndLines.delete(key);
 
+		const u = getUser();
+		const authorName = u?.githubLogin ?? u?.name ?? 'You';
+		const authorAvatarUrl = u?.image ?? null;
+
 		const result = await addThread({
 			filePath,
 			startLine: lineNo,
@@ -219,7 +229,8 @@
 			diffSide: side === 'deletions' ? 'old' : 'new',
 			message: {
 				authorRole: 'reviewer',
-				authorName: 'You',
+				authorName,
+				authorAvatarUrl,
 				body,
 				messageType: 'comment',
 			},
@@ -252,6 +263,10 @@
 		await deleteThread(threadId);
 	}
 
+	async function handleDiscardReply(threadId: string, messageId: string) {
+		await deleteThreadMessage(threadId, messageId);
+	}
+
 	async function handleApplySuggestion(threadId: string, suggestion: string) {
 		await applyCommentSuggestion(threadId, suggestion);
 	}
@@ -280,6 +295,7 @@
 			onCommentResolve={handleCommentResolve}
 			onCommentReopen={handleCommentReopen}
 			onCommentDiscard={handleCommentDiscard}
+			onDiscardReply={handleDiscardReply}
 			{onTokenHover}
 			onApplySuggestion={handleApplySuggestion}
 			onEditMessage={handleEditMessage}

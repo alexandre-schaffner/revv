@@ -162,6 +162,16 @@
     --revv-score-blocker-axis: #44444f;
     --revv-score-blocker-conf-bg: color-mix(in srgb, #dc2626 12%, transparent);
     --revv-score-blocker-conf: #dc2626;
+
+    /* Info — accent-derived palette used by the Issues panel for the lowest
+       severity. Parallel to pass/concern/blocker so a shared SpecRow can
+       paint an info-severity gutter without inlining color-mix expressions. */
+    --revv-score-info-bg: color-mix(in srgb, var(--revv-accent) 4%, var(--revv-bg-secondary));
+    --revv-score-info-border: #3b82f6;
+    --revv-score-info-icon: #2563eb;
+    --revv-score-info-label: #1d4ed8;
+    --revv-score-info-conf-bg: color-mix(in srgb, #3b82f6 12%, transparent);
+    --revv-score-info-conf: #2563eb;
 }
 
 /* ──────────────────────────────────────────────────────────
@@ -321,6 +331,15 @@
     --revv-score-blocker-axis: #fca5a5;
     --revv-score-blocker-conf-bg: color-mix(in srgb, #ef4444 25%, transparent);
     --revv-score-blocker-conf: #f87171;
+
+    /* Info — accent-derived palette (dark variant). Blues brightened to
+       read against dark bg without losing distinction from pass-green. */
+    --revv-score-info-bg: color-mix(in srgb, var(--revv-accent) 4%, var(--revv-bg-secondary));
+    --revv-score-info-border: #3b82f6;
+    --revv-score-info-icon: #60a5fa;
+    --revv-score-info-label: #93c5fd;
+    --revv-score-info-conf-bg: color-mix(in srgb, #3b82f6 25%, transparent);
+    --revv-score-info-conf: #60a5fa;
 }
 
 /* ──────────────────────────────────────────────────────────
@@ -473,6 +492,16 @@
     --color-score-blocker-axis: var(--revv-score-blocker-axis);
     --color-score-blocker-conf-bg: var(--revv-score-blocker-conf-bg);
     --color-score-blocker-conf: var(--revv-score-blocker-conf);
+
+    /* Info — used by the Issues panel (walkthrough info-severity). Parallel
+       to pass/concern/blocker but keyed off --revv-accent rather than a new
+       color, so the palette reads as "same family, lower severity". */
+    --color-score-info-bg: var(--revv-score-info-bg);
+    --color-score-info-border: var(--revv-score-info-border);
+    --color-score-info-icon: var(--revv-score-info-icon);
+    --color-score-info-label: var(--revv-score-info-label);
+    --color-score-info-conf-bg: var(--revv-score-info-conf-bg);
+    --color-score-info-conf: var(--revv-score-info-conf);
 
     /* Motion */
     --duration-snap: 120ms;

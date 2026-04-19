@@ -17,6 +17,7 @@ import { SettingsServiceLive } from './Settings';
 import { SyncServiceLive } from './Sync';
 import { TokenProviderLive } from './TokenProvider';
 import { WalkthroughServiceLive } from './Walkthrough';
+import { WalkthroughJobsLive } from './WalkthroughJobs';
 import { WebSocketHubLive } from './WebSocketHub';
 
 // TokenProvider now needs DbService
@@ -66,6 +67,23 @@ const AiServiceWithDeps = AiServiceLive.pipe(Layer.provide(BaseLayers));
 // RepoCloneService depends on DbService + WebSocketHub (both in BaseLayers)
 const RepoCloneServiceWithDeps = RepoCloneServiceLive.pipe(Layer.provide(BaseLayers));
 
+// WalkthroughJobs is the central orchestrator for walkthrough generation —
+// it depends on PrContext (to resolve PR metadata), RepoClone (for scoped
+// worktrees), Ai (to run the actual generator), Review (for session ids),
+// plus everything in BaseLayers. Splitting this out as its own layer lets
+// consumers (SSE handler, regenerate handler, index.ts startup) tag it
+// directly without needing to know the full dependency graph.
+const WalkthroughJobsWithDeps = WalkthroughJobsLive.pipe(
+	Layer.provide(
+		Layer.mergeAll(
+			BaseLayers,
+			PrContextServiceWithDeps,
+			AiServiceWithDeps,
+			RepoCloneServiceWithDeps,
+		),
+	),
+);
+
 // AppLayer merges everything together so consumers get all services
 export const AppLayer = Layer.mergeAll(
 	BaseLayers,
@@ -74,4 +92,5 @@ export const AppLayer = Layer.mergeAll(
 	PollSchedulerWithDeps,
 	AiServiceWithDeps,
 	RepoCloneServiceWithDeps,
+	WalkthroughJobsWithDeps,
 );

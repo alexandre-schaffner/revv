@@ -125,6 +125,7 @@ export interface ThreadMessage {
 	threadId: string;
 	authorRole: AuthorRole;
 	authorName: string;
+	authorAvatarUrl: string | null;
 	body: string;
 	messageType: MessageType;
 	codeSuggestion: string | null;

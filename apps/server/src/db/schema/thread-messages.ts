@@ -9,6 +9,7 @@ export const threadMessages = sqliteTable('thread_messages', {
 		.references(() => commentThreads.id, { onDelete: 'cascade' }),
 	authorRole: text('author_role').notNull().default('reviewer'),
 	authorName: text('author_name').notNull(),
+	authorAvatarUrl: text('author_avatar_url'),
 	body: text('body').notNull(),
 	messageType: text('message_type').notNull().default('comment'),
 	codeSuggestion: text('code_suggestion'),

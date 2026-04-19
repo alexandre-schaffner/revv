@@ -38,6 +38,14 @@ export interface SseStream {
 	writer: SseWriter;
 	/** Stops the heartbeat interval. Call from the finally block of the handler. */
 	stopHeartbeat: () => void;
+	/**
+	 * Register a callback that fires once when the client disconnects OR the
+	 * writer is closed. Useful for unsubscribing from long-lived pub/sub
+	 * sources (e.g. {@link WalkthroughJobs.subscribe}) without polling
+	 * `isCancelled()` from a timer. Safe to register multiple callbacks; they
+	 * all fire in registration order and each runs at most once.
+	 */
+	onCancel: (fn: () => void) => void;
 }
 
 /**
@@ -48,6 +56,20 @@ export function createSseStream(heartbeatIntervalMs = 15_000): SseStream {
 	// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
 	let controller!: ReadableStreamDefaultController<Uint8Array>;
 	let cancelled = false;
+	const cancelCallbacks: Array<() => void> = [];
+
+	const fireCancelCallbacks = () => {
+		// Drain the queue so repeat close/cancel calls don't double-fire.
+		while (cancelCallbacks.length > 0) {
+			const fn = cancelCallbacks.shift();
+			if (!fn) continue;
+			try {
+				fn();
+			} catch {
+				// Swallow — a misbehaving cleanup hook shouldn't poison siblings.
+			}
+		}
+	};
 
 	const stream = new ReadableStream<Uint8Array>({
 		start(c) {
@@ -55,6 +77,7 @@ export function createSseStream(heartbeatIntervalMs = 15_000): SseStream {
 		},
 		cancel() {
 			cancelled = true;
+			fireCancelCallbacks();
 		},
 	});
 
@@ -66,6 +89,7 @@ export function createSseStream(heartbeatIntervalMs = 15_000): SseStream {
 		} catch {
 			// Controller closed or client disconnected
 			cancelled = true;
+			fireCancelCallbacks();
 			return false;
 		}
 	};
@@ -79,11 +103,13 @@ export function createSseStream(heartbeatIntervalMs = 15_000): SseStream {
 			writer.close();
 		},
 		close: () => {
+			cancelled = true;
 			try {
 				controller.close();
 			} catch {
 				// Already closed — fine
 			}
+			fireCancelCallbacks();
 		},
 		isCancelled: () => cancelled,
 	};
@@ -97,6 +123,19 @@ export function createSseStream(heartbeatIntervalMs = 15_000): SseStream {
 		stream,
 		writer,
 		stopHeartbeat: () => clearInterval(heartbeat),
+		onCancel: (fn) => {
+			// Late registration after disconnect should still run the hook
+			// so callers don't accidentally leak subscriptions.
+			if (cancelled) {
+				try {
+					fn();
+				} catch {
+					/* ignore */
+				}
+				return;
+			}
+			cancelCallbacks.push(fn);
+		},
 	};
 }
 

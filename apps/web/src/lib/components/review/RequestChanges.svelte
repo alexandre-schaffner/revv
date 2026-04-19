@@ -9,12 +9,11 @@
 	} from '$lib/stores/review.svelte';
 	import { api } from '$lib/api/client';
 	import { toast } from 'svelte-sonner';
-	import { AlertTriangle, MessageSquare, Check, ArrowUp, Sparkles } from '@lucide/svelte';
+	import { Check, ArrowUp, Sparkles } from '@lucide/svelte';
 	import WalkthroughRatingsPanel from '$lib/components/walkthrough/WalkthroughRatingsPanel.svelte';
-	import IssueCard from '$lib/components/walkthrough/IssueCard.svelte';
-	import FileBadge from '$lib/components/ui/FileBadge.svelte';
+	import IssuesPanel from './issues-panel/IssuesPanel.svelte';
+	import CommentsPanel from './comments-panel/CommentsPanel.svelte';
 	import ApproveWithIssuesDialog from './ApproveWithIssuesDialog.svelte';
-	import { groupIssuesBySeverityWithIndex } from '$lib/utils/walkthrough-issues';
 
 	// Module-level: survives component remount, keyed by PR ID
 	const _submittedByPr = new Map<string, Set<string>>();
@@ -27,7 +26,6 @@
 	type Action = 'approve' | 'request_changes';
 
 	const issues = $derived(getIssues());
-	const issueGroups = $derived(groupIssuesBySeverityWithIndex(issues));
 	const threads = $derived(getThreads());
 	const unresolvedThreads = $derived(threads.filter((t) => t.status !== 'resolved' && t.status !== 'wont_fix'));
 	const ratings = $derived(getRatings());
@@ -56,7 +54,7 @@
 	}
 
 	const selectedCount = $derived(selectedIssueIds.size);
-	const hasContent = $derived(selectedCount > 0 || unresolvedThreads.length > 0);
+	const hasContent = $derived(selectedCount > 0);
 
 	const approveBlockerSummary = $derived.by(() => {
 		const parts: string[] = [];
@@ -114,11 +112,8 @@
 			threadId: string;
 		}> = [];
 
-		// Collect IDs of all unresolved threads — these are always included
-		const threadIdsToInclude = new Set(unresolvedThreads.map((t) => t.id));
-
+		// Collect IDs of all unresolved threads
 		for (const thread of unresolvedThreads) {
-			if (!threadIdsToInclude.has(thread.id)) continue;
 			const messages = getThreadMessages(thread.id).filter(
 				(m) => m.authorRole === 'reviewer' && m.externalId == null
 			);
@@ -151,9 +146,6 @@
 		submitting = action;
 		submitError = null;
 		submitSuccess = null;
-
-		// Capture pending comment count BEFORE the submit (all unresolved threads are included)
-		const pendingCount = unresolvedThreads.length;
 
 		try {
 			const body = buildBody();
@@ -192,17 +184,13 @@
 
 			const payload = data as { htmlUrl?: string } | null;
 			submitSuccess = { action, htmlUrl: payload?.htmlUrl ?? '' };
-			const commentSuffix =
-				pendingCount > 0
-					? ` — ${pendingCount} comment${pendingCount !== 1 ? 's' : ''} posted`
-					: '';
-			toast.success(actionLabel(action) + ' on GitHub' + commentSuffix);
+			toast.success(actionLabel(action) + ' on GitHub');
 			// Remember which issues were just submitted so we can mark them as posted
 			const merged = new Set([...submittedIssueIds, ...selectedIssueIds]);
 			_submittedByPr.set(prId, merged);
-		submittedIssueIds = merged;
-		selectedIssueIds = new Set();
-	} catch (e) {
+			submittedIssueIds = merged;
+			selectedIssueIds = new Set();
+		} catch (e) {
 			const msg = e instanceof Error ? e.message : 'Failed to submit review';
 			submitError = msg;
 			toast.error(msg);
@@ -239,104 +227,23 @@
 
 <div class="request-changes">
 	<div class="rc-sections">
-		<!-- Issues from Walkthrough -->
-		<section class="rc-section">
-			<div class="rc-section-header">
-				<AlertTriangle size={18} />
-				<h2 class="rc-section-title">Walkthrough Issues</h2>
-				<span class="rc-badge">{issues.length}</span>
-				{#if issues.length > 0}
-					<button
-						type="button"
-						class="rc-select-all"
-						onclick={toggleAllIssues}
-					>
-						{allIssuesSelected ? 'Clear' : 'Select all'}
-					</button>
-				{/if}
-			</div>
+		<IssuesPanel
+			{issues}
+			selectedIds={selectedIssueIds}
+			submittedIds={submittedIssueIds}
+			onToggleSelect={toggleIssue}
+			onToggleSelectAll={toggleAllIssues}
+			onFileClick={jumpToDiffLine}
+			{blocks}
+			onBlockJump={jumpToWalkthroughBlock}
+		/>
 
-			{#if issues.length === 0}
-				<div class="rc-empty">No issues flagged by walkthrough</div>
-			{:else}
-				<!-- Bucketed by severity (Critical → Warning → Info) so the highest-
-				     stakes selections sit at the top of the submit panel. -->
-				<div class="rc-issue-groups">
-					{#each issueGroups as group (group.severity)}
-						<div class="rc-issue-group">
-							<div class="rc-issue-group-header rc-issue-group-header--{group.severity}">
-								<span class="rc-issue-group-dot"></span>
-								<span class="rc-issue-group-label">{group.label}</span>
-								<span class="rc-issue-group-count">{group.issues.length}</span>
-							</div>
-							<div class="rc-list">
-								{#each group.issues as { issue, globalIndex } (issue.id)}
-									<IssueCard
-										{issue}
-										checkable
-										checked={selectedIssueIds.has(issue.id)}
-										disabled={submittedIssueIds.has(issue.id)}
-										submitted={submittedIssueIds.has(issue.id)}
-										animationDelay="{Math.min(globalIndex, 6) * 50}ms"
-										oncheck={() => toggleIssue(issue.id)}
-										onfileclick={(filePath, line) => jumpToDiffLine(filePath, line)}
-									/>
-								{/each}
-							</div>
-						</div>
-					{/each}
-				</div>
-			{/if}
-		</section>
+		<CommentsPanel
+			threads={unresolvedThreads}
+			{getThreadMessages}
+			onJump={jumpToDiffLine}
+		/>
 
-			<!-- Unresolved Comment Threads -->
-		<section class="rc-section">
-			<div class="rc-section-header">
-				<MessageSquare size={18} />
-				<h2 class="rc-section-title">Unresolved Comments</h2>
-				<span class="rc-badge">{unresolvedThreads.length}</span>
-			</div>
-
-			{#if unresolvedThreads.length === 0}
-				<div class="rc-empty">No unresolved comment threads</div>
-			{:else}
-				<ul class="rc-list">
-					{#each unresolvedThreads as thread (thread.id)}
-						{@const firstMessage = getThreadMessages(thread.id)[0]}
-						<li class="rc-item-host">
-							<div
-								class="rc-item"
-								role="button"
-								tabindex="0"
-								onclick={() => jumpToDiffLine(thread.filePath, thread.startLine)}
-								onkeydown={(e) => {
-									if (e.key === 'Enter' || e.key === ' ') {
-										e.preventDefault();
-										jumpToDiffLine(thread.filePath, thread.startLine);
-									}
-								}}
-							>
-								<span class="severity-icon severity-thread">
-									<MessageSquare size={13} />
-								</span>
-								<span class="issue-text">
-									<span class="issue-location">
-										<FileBadge
-											filePath={thread.filePath}
-											startLine={thread.startLine}
-											endLine={thread.endLine}
-										/>
-									</span>
-									{#if firstMessage?.body}
-										<p class="thread-preview">{firstMessage.body}</p>
-									{/if}
-								</span>
-							</div>
-						</li>
-					{/each}
-				</ul>
-			{/if}
-		</section>
 		{#if ratings.length > 0}
 			<div class="rc-scorecard">
 				<WalkthroughRatingsPanel {ratings} {blocks} onJump={jumpToWalkthroughBlock} />
@@ -394,8 +301,8 @@
 		{:else}
 			<span class="propose-hint">
 				{selectedCount === 0
-					? 'Approve directly, or select issues to include in request changes'
-					: `${selectedCount} item${selectedCount === 1 ? '' : 's'} selected`}
+					? 'Approve directly, or select walkthrough issues to include in request changes'
+					: `${selectedCount} issue${selectedCount === 1 ? '' : 's'} selected`}
 			</span>
 		{/if}
 	</footer>
@@ -424,109 +331,6 @@
 		flex-direction: column;
 		gap: 20px;
 	}
-
-	.rc-section {
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
-	}
-
-	.rc-section-header {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		color: var(--color-text-muted);
-	}
-
-	.rc-section-title {
-		font-size: 18px;
-		font-weight: 700;
-		color: var(--color-text-primary);
-		margin: 0;
-	}
-
-	.rc-badge {
-		margin-left: auto;
-		font-size: 11px;
-		font-weight: 600;
-		font-variant-numeric: tabular-nums;
-		color: var(--color-text-secondary);
-	}
-
-	.rc-select-all {
-		background: none;
-		border: none;
-		padding: 2px 6px;
-		font-size: 10px;
-		font-weight: 600;
-		letter-spacing: 0.04em;
-		text-transform: uppercase;
-		color: var(--color-accent);
-		cursor: pointer;
-		border-radius: 4px;
-		transition: background var(--duration-snap);
-	}
-
-	.rc-select-all:hover {
-		background: color-mix(in srgb, var(--color-accent) 12%, transparent);
-	}
-
-	.rc-empty {
-		font-size: 12px;
-		color: var(--color-text-muted);
-		padding: 10px 0 4px;
-		font-style: italic;
-	}
-
-	.rc-list {
-		display: flex;
-		flex-direction: column;
-		gap: 6px;
-	}
-
-	.rc-issue-groups {
-		display: flex;
-		flex-direction: column;
-		gap: 12px;
-	}
-
-	.rc-issue-group {
-		display: flex;
-		flex-direction: column;
-		gap: 6px;
-	}
-
-	.rc-issue-group-header {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		font-size: 10px;
-		font-weight: 600;
-		letter-spacing: 0.06em;
-		text-transform: uppercase;
-		color: var(--color-text-secondary);
-	}
-
-	.rc-issue-group-dot {
-		width: 6px;
-		height: 6px;
-		border-radius: 50%;
-		background: var(--severity-color, var(--color-text-muted));
-	}
-
-	.rc-issue-group-label {
-		color: var(--severity-color, var(--color-text-secondary));
-	}
-
-	.rc-issue-group-count {
-		color: var(--color-text-muted);
-		font-variant-numeric: tabular-nums;
-		font-weight: 500;
-	}
-
-	.rc-issue-group-header--critical { --severity-color: var(--color-danger); }
-	.rc-issue-group-header--warning { --severity-color: var(--color-warning); }
-	.rc-issue-group-header--info { --severity-color: var(--color-accent); }
 
 	/* Footer */
 	.rc-footer {
@@ -664,68 +468,8 @@
 		margin-left: 4px;
 	}
 
-	.thread-preview {
-		margin: 0;
-		font-size: 11px;
-		color: var(--color-text-secondary);
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		max-width: 100%;
-	}
-
-	.rc-item-host {
-		list-style: none;
-		margin: 0;
-		padding: 0;
-	}
-
-	.rc-item {
-		display: flex;
-		align-items: flex-start;
-		gap: 8px;
-		padding: 7px 10px;
-		border-radius: 6px;
-		border: 1px solid var(--color-border);
-		background: var(--color-bg-secondary);
-		cursor: pointer;
-		transition: background var(--duration-snap);
-	}
-
-	.rc-item:hover {
-		background: var(--color-bg-elevated);
-	}
-
-	.rc-item:focus-visible {
-		outline: 2px solid var(--color-accent);
-		outline-offset: 2px;
-	}
-
-	.severity-icon {
-		display: flex;
-		align-items: center;
-		flex-shrink: 0;
-		margin-top: 1px;
-	}
-
-	.severity-thread {
-		color: var(--color-accent, #2563eb);
-	}
-
-	.issue-text {
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-		min-width: 0;
-	}
-
-	.issue-location {
-		display: flex;
-		align-items: center;
-	}
-
 	/* .rc-scorecard is a plain wrapper — no section header here. The scorecard
-	   renders its own internal summary bar ("Scores" title + count pills), so a
-	   wrapping section header would be redundant. Separation from siblings is
-	   handled by the 20px gap on .rc-sections. */
+	   renders its own internal summary bar, so a wrapping section header would
+	   be redundant. Separation from siblings is handled by the 20px gap on
+	   .rc-sections. */
 </style>

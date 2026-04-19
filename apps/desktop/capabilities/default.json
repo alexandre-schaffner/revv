@@ -2,5 +2,16 @@
   "identifier": "default",
   "description": "Default capabilities for Revv",
   "windows": ["main"],
-  "permissions": ["core:default", "deep-link:default", "opener:default", "core:window:allow-start-dragging", "mcp-bridge:default"]
+  "permissions": [
+    "core:default",
+    "deep-link:default",
+    "opener:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-set-focus",
+    "core:window:allow-unminimize",
+    "mcp-bridge:default",
+    "autostart:default"
+  ]
 }

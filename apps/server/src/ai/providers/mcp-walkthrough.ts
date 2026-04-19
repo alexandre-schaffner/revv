@@ -69,6 +69,13 @@ export function streamWalkthroughViaMCP(
 		worktreePath: string;
 		continuation?: ContinuationContext;
 		carriedOverIssues?: CarriedOverIssue[];
+		/**
+		 * Caller-owned abort signal. When provided, the MCP query uses this
+		 * controller directly instead of minting its own; calling `.abort()`
+		 * upstream kills the child turn immediately. The built-in 10-minute
+		 * timeout is still scheduled, but it also routes through this controller.
+		 */
+		abortController?: AbortController;
 	},
 	model?: string,
 ): AsyncGenerator<WalkthroughStreamEvent> {
@@ -139,10 +146,11 @@ export function streamWalkthroughViaMCP(
 			data: { phase: "connecting", message: "Connecting to AI model..." },
 		});
 
-		const abortController = new AbortController();
-		// Hard timeout: if the Claude API stops responding mid-generation (e.g. between
-		// exploration and MCP tool calls), the for-await loop hangs forever. AbortController
-		// gives us a clean way to unblock it and surface an error to the user.
+		// Prefer the caller-supplied controller so `cancel(walkthroughId)` or a
+		// Scope finalizer can signal abort from outside this module. The local
+		// 10-minute timeout then fires through the shared controller so both
+		// external cancellation and the hard timeout converge on the same signal.
+		const abortController = params.abortController ?? new AbortController();
 		const timeoutId = setTimeout(
 			() => {
 				debug(

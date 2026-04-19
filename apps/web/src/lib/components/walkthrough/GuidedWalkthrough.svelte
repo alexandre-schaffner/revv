@@ -1,6 +1,5 @@
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
-	import { fade } from 'svelte/transition';
+	import { onMount, onDestroy, untrack } from 'svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Separator } from '$lib/components/ui/separator';
@@ -22,6 +21,10 @@
 	getIsLiveGeneration,
 	hasBlockAnimated,
 	markBlockAnimated,
+	hasIssueAnimated,
+	markIssueAnimated,
+	hasContainerAnimated,
+	markContainerAnimated,
 	prepareEntry,
 	streamWalkthrough,
 	hydrateFromCache,
@@ -223,6 +226,74 @@
 		});
 	});
 
+	// Mirror the block-stagger logic for issue cards. Issue cards have their
+	// own CSS entrance animation (`issue-card-enter`), so without tracking they
+	// replay on every tab revisit the same way blocks used to.
+	const issueDelayById = $derived.by(() => {
+		const map = new Map<string, number>();
+		let newInBatch = 0;
+		for (const issue of issues) {
+			if (hasIssueAnimated(prId, issue.id)) {
+				map.set(issue.id, -1);
+				continue;
+			}
+			const delay = Math.min(newInBatch, STAGGER_CAP) * STAGGER_MS;
+			markIssueAnimated(prId, issue.id);
+			newInBatch += 1;
+			map.set(issue.id, delay);
+		}
+		return map;
+	});
+
+	// ── Container animation gating ──────────────────────────────────────
+	// One-shot entrance animations for the stepper, content wrapper, summary,
+	// and issues section. Each element carries a `*--no-anim` class whose value
+	// is a reactive `$state` flag; the flag flips to `true` on `animationend`.
+	// After that, the class stays applied for the life of the component — so
+	// tab-switch display toggles, which in browsers normally restart CSS
+	// animations on subtrees re-entering the render tree, find `animation:
+	// none` and do nothing.
+	//
+	// Initial values come from the store so remounting the component for a PR
+	// the user has already viewed doesn't replay the first animation either.
+	// The effect below re-syncs from the store when the content identity
+	// changes (regenerate → new `streamStartedAt`, or the component is reused
+	// for a different PR → new `prId`), because `regenerate()` clears the
+	// trackers for fresh content to animate again.
+	// Seed from the tracker — `untrack` makes it explicit that we want the
+	// one-shot value at mount time. The $effect below handles any later
+	// reactive re-sync (regenerate, or the component instance being reused
+	// for a different PR — the latter won't happen with SvelteKit's route
+	// remount semantics, but we guard for it anyway).
+	let stepperAnimated = $state(untrack(() => hasContainerAnimated(prId, 'stepper')));
+	let contentAnimated = $state(untrack(() => hasContainerAnimated(prId, 'content')));
+	let summaryAnimated = $state(untrack(() => hasContainerAnimated(prId, 'summary')));
+	let issuesSectionAnimated = $state(untrack(() => hasContainerAnimated(prId, 'issues-section')));
+
+	let lastSyncedFor: string | null = untrack(() => `${prId}:${streamStartedAt ?? 'init'}`);
+	$effect(() => {
+		const key = `${prId}:${streamStartedAt ?? 'init'}`;
+		if (key === lastSyncedFor) return;
+		lastSyncedFor = key;
+		stepperAnimated = hasContainerAnimated(prId, 'stepper');
+		contentAnimated = hasContainerAnimated(prId, 'content');
+		summaryAnimated = hasContainerAnimated(prId, 'summary');
+		issuesSectionAnimated = hasContainerAnimated(prId, 'issues-section');
+	});
+
+	type ContainerKey = 'stepper' | 'content' | 'summary' | 'issues-section';
+
+	function lockContainerAnimation(key: ContainerKey, event: AnimationEvent): void {
+		// Filter out bubbled events from descendants (issue-card-enter bubbles
+		// up through .issues-section, block-slide-up through .walkthrough-content).
+		if (event.target !== event.currentTarget) return;
+		markContainerAnimated(prId, key);
+		if (key === 'stepper') stepperAnimated = true;
+		else if (key === 'content') contentAnimated = true;
+		else if (key === 'summary') summaryAnimated = true;
+		else issuesSectionAnimated = true;
+	}
+
 	// ── Issue → step navigation ─────────────────────────────────────────
 	// Issues carry `blockIds` — the block(s) that explain them. Clicking an
 	// issue card scrolls to the first linked block and briefly pulses it so
@@ -314,7 +385,11 @@
 		     what happened. Rendered outside the main branching so it stays
 		     visible when we switch from the skeleton (loading) view to the
 		     real content (writing/finishing) view. -->
-		<div class="walkthrough-stepper-header" transition:fade={{ duration: 300 }}>
+		<div
+			class="walkthrough-stepper-header"
+			class:walkthrough-stepper-header--no-anim={stepperAnimated}
+			onanimationend={(e) => lockContainerAnimation('stepper', e)}
+		>
 			<div class="phase-stepper">
 				{#each PHASE_ORDER as step, i (step)}
 					{@const currentIdx = phaseIndex(phase)}
@@ -459,9 +534,17 @@
 	</div>
 	{:else if summary}
 		<!-- Landing page content -->
-		<div class="walkthrough-content" in:fade={{ duration: 280, delay: 60 }}>
+		<div
+			class="walkthrough-content"
+			class:walkthrough-content--no-anim={contentAnimated}
+			onanimationend={(e) => lockContainerAnimation('content', e)}
+		>
 			<!-- Summary header -->
-		<div class="summary-section">
+		<div
+			class="summary-section"
+			class:summary-section--no-anim={summaryAnimated}
+			onanimationend={(e) => lockContainerAnimation('summary', e)}
+		>
 			<h2 class="summary-heading">Overview</h2>
 			<p class="summary-text">{summary}</p>
 				{#if streamError}
@@ -488,7 +571,11 @@
 			     "N issues flagged" line is preserved as the section header; each
 			     bucket then carries its own labeled sub-header with a count. -->
 			{#if issues.length > 0}
-				<div class="issues-section">
+				<div
+					class="issues-section"
+					class:issues-section--no-anim={issuesSectionAnimated}
+					onanimationend={(e) => lockContainerAnimation('issues-section', e)}
+				>
 					<div class="issues-header">
 						<AlertTriangle size={13} />
 						<span>{issues.length} issue{issues.length !== 1 ? 's' : ''} flagged</span>
@@ -519,14 +606,18 @@
 												onclick={() => jumpToStep(targetBlockId)}
 												stepTag={`→ Step ${stepN}`}
 												animationDelay="{Math.min(globalIndex, 6) * 50}ms"
+												noAnim={issueDelayById.get(issue.id) === -1}
 												onfileclick={(filePath, line) => jumpToDiffLine(filePath, line)}
+												hideFileBadge={true}
 											/>
 										{:else}
 											<IssueCard
 												{issue}
 												stepTag={null}
 												animationDelay="{Math.min(globalIndex, 6) * 50}ms"
+												noAnim={issueDelayById.get(issue.id) === -1}
 												onfileclick={(filePath, line) => jumpToDiffLine(filePath, line)}
+												hideFileBadge={true}
 											/>
 										{/if}
 									{/each}
@@ -639,6 +730,17 @@
 
 	.walkthrough-content {
 		padding: 28px 32px;
+		animation: fadeIn 0.28s cubic-bezier(0.22, 0.61, 0.36, 1) 60ms both;
+	}
+
+	/* Suppress the entrance animation on tab revisits. Paired with the
+	   `walkthrough-content--no-anim` class toggled from the component script
+	   after the first `animationend` — without this, browsers restart the
+	   animation when the subtree re-enters the render tree after the tab's
+	   `display: none` is lifted. */
+	.walkthrough-content--no-anim {
+		animation: none;
+		opacity: 1;
 	}
 
 	.walkthrough-empty {
@@ -660,6 +762,13 @@
 
 	.walkthrough-stepper-header {
 		padding: 24px 32px 4px;
+		animation: fadeIn 0.3s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+	}
+
+	/* Tab-revisit override — see .walkthrough-content--no-anim for why. */
+	.walkthrough-stepper-header--no-anim {
+		animation: none;
+		opacity: 1;
 	}
 
 	/* When the stepper header is present, tighten the top padding of the
@@ -944,6 +1053,14 @@
 		animation: content-enter 0.6s cubic-bezier(0.22, 0.61, 0.36, 1) both;
 	}
 
+	/* Tab-revisit override — see .walkthrough-content--no-anim for why. */
+	.summary-section--no-anim {
+		animation: none;
+		opacity: 1;
+		filter: none;
+		transform: none;
+	}
+
 	.summary-header {
 		display: flex;
 		align-items: center;
@@ -1049,6 +1166,14 @@
 		flex-direction: column;
 		gap: 10px;
 		animation: content-enter 0.6s cubic-bezier(0.22, 0.61, 0.36, 1) 0.15s both;
+	}
+
+	/* Tab-revisit override — see .walkthrough-content--no-anim for why. */
+	.issues-section--no-anim {
+		animation: none;
+		opacity: 1;
+		filter: none;
+		transform: none;
 	}
 
 	.issues-header {
@@ -1323,7 +1448,9 @@
 	@media (prefers-reduced-motion: reduce) {
 		.block-wrapper,
 		.summary-section,
-		.issues-section {
+		.issues-section,
+		.walkthrough-content,
+		.walkthrough-stepper-header {
 			animation-duration: 0.01ms !important;
 			animation-delay: 0ms !important;
 			transition: none !important;

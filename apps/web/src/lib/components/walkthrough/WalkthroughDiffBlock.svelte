@@ -105,7 +105,10 @@
 		grid-template-columns: 1fr 1fr;
 		border: 1px solid var(--revv-border);
 		border-radius: 10px;
-		overflow: hidden;
+		/* overflow: clip clips like `hidden` but does NOT create a scroll container,
+		   so descendant `position: sticky` inside .annotation-content keeps tracking
+		   page scroll. */
+		overflow: clip;
 		container-type: inline-size;
 	}
 
@@ -133,6 +136,15 @@
 
 	.annotation-content {
 		width: 100%;
+		/* Sticky pins the annotation text to the top of the viewport as the card
+		   scrolls past, while the surrounding .annotation cell background still
+		   fills the full grid row for the card look. `overflow: clip` on the
+		   .annotated-block ancestor ensures sticky works across the card. */
+		position: sticky;
+		top: 16px;
+		align-self: flex-start;
+		max-height: calc(100vh - 32px);
+		overflow-y: auto;
 	}
 
 	.annotation-content :global(p) {
@@ -205,7 +217,12 @@
 	}
 
 	.diff-body {
-		overflow: hidden;
+		/* Cap the diff panel so the card stays dense even when the patch is long
+		   beside a short annotation. 640px ≈ 32 lines; 70vh keeps it sane on
+		   short screens. Pierre's own overflow option handles horizontal scroll
+		   for long lines. */
+		max-height: min(70vh, 640px);
+		overflow: auto;
 	}
 
 	/* Narrow: stack vertically */
@@ -222,6 +239,17 @@
 		.annotation--right {
 			border-left: none;
 			border-top: 2px solid var(--revv-accent);
+		}
+
+		/* Sticky is noisy when stacked — annotation would detach from its diff. */
+		.annotation-content {
+			position: static;
+			max-height: none;
+			overflow: visible;
+		}
+
+		.diff-body {
+			max-height: min(80vh, 720px);
 		}
 	}
 

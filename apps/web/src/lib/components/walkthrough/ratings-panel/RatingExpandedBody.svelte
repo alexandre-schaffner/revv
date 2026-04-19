@@ -203,26 +203,19 @@
         display: flex;
         flex-direction: column;
         gap: 12px;
-        padding: 10px 12px 16px;
+        padding: 16px 12px;
         /* Inset so it aligns with the axis-name column in the row, giving a
            "test output under the test name" feel. 2ch ≈ icon column + gap. */
         padding-left: calc(2ch + 14px);
         font-family: var(--font-mono);
         font-size: 12.5px;
         color: var(--color-text-secondary);
-        /* Tint the background with the verdict color so the expanded body
-           visually reads as "belonging to" the row header above it. The
-           `--c-rating-bg` token is set on the parent <li class="row row--*">
-           by RatingTestRow, so it propagates down here. We mix with transparent
-           at ~65% so the tint is clearly perceptible without overwhelming the
-           long-form prose inside (rationale, details). Goes slightly stronger
-           than the 50% trigger-hover tint so the two states remain
-           distinguishable. */
-        background: color-mix(
-            in srgb,
-            var(--c-rating-bg) 65%,
-            transparent
-        );
+        /* Default to the pre-mixed verdict tint (--c-rating-bg = bg-secondary
+           + verdict 4%). The inline list row overrides this with a darker
+           variant via --c-rating-expanded-bg to match the Comments panel's
+           "inset drawer" treatment; the grid popover keeps the lighter tint
+           since the popover chrome already provides the elevation contrast. */
+        background: var(--c-rating-expanded-bg, var(--c-rating-bg));
     }
 
     /* ── Rationale ──────────────────────────────────────────────── */
@@ -234,15 +227,7 @@
         position: relative;
     }
 
-    .rationale::before {
-        content: "";
-        flex-shrink: 0;
-        width: 6px;
-        height: 6px;
-        margin-top: 8px;
-        border-radius: 9999px;
-        background: var(--c-rating-icon, var(--color-text-muted));
-    }
+
 
     .rationale-text {
         font-family: var(--font-sans);

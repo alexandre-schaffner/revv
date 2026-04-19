@@ -10,6 +10,7 @@
 		onResolve?: () => void;
 		onReopen?: () => void;
 		onDiscard?: () => void;
+		onDiscardReply?: (messageId: string) => void;
 		onCollapse?: () => void;
 		onApplySuggestion?: (suggestion: string) => void;
 		onEditMessage?: (messageId: string, body: string) => void;
@@ -20,9 +21,25 @@
 		isPending?: boolean;
 	}
 
-	let { thread, messages, onReply, onResolve, onReopen, onDiscard, onCollapse, onApplySuggestion, onEditMessage, isReplying = false, onReplySubmit, onReplyDismiss, currentUserRole = 'unknown', isPending = false }: Props = $props();
+	let { thread, messages, onReply, onResolve, onReopen, onDiscard, onDiscardReply, onCollapse, onApplySuggestion, onEditMessage, isReplying = false, onReplySubmit, onReplyDismiss, currentUserRole = 'unknown', isPending = false }: Props = $props();
 
 	const isResolved = $derived(thread.status === 'resolved' || thread.status === 'wont_fix');
+
+	// ── Pending (unsynced) reply detection ────────────────────────────────────
+	// A reply is "pending" once submitted but before the sync loop has pushed it
+	// to GitHub (externalId still null). While the thread itself is pending
+	// (`isPending`), every message is trivially unsynced and the thread-level
+	// Discard handles removal, so we only care about non-first messages on a
+	// synced thread. The most recent such message is the one a Discard click
+	// should reach for (LIFO — undo the last thing the user did).
+	const pendingReply = $derived.by((): ThreadMessage | null => {
+		if (isPending) return null;
+		for (let i = messages.length - 1; i > 0; i--) {
+			const m = messages[i];
+			if (m && m.externalId === null) return m;
+		}
+		return null;
+	});
 	const isStatusPending = $derived(
 		thread.status === 'pending_coder' || thread.status === 'pending_reviewer'
 	);
@@ -73,6 +90,10 @@
 	let editingMessageId = $state<string | null>(null);
 	let editBody = $state('');
 
+	// Per-message avatar load-failure tracking. Use reassignment (new Set(...))
+	// rather than `.add()` so Svelte 5 runes observe the change.
+	let failedAvatars = $state<Set<string>>(new Set());
+
 	function startEdit(msg: ThreadMessage): void {
 		editingMessageId = msg.id;
 		editBody = msg.body;
@@ -103,11 +124,21 @@
 	style="border-left-color: {borderColor}; opacity: {isResolved ? 0.65 : 1};"
 >
 	{#each messages as msg, i (msg.id)}
-		<div class="message" class:message--first={i === 0}>
+		{@const isMsgPending = !isPending && i > 0 && msg.externalId === null}
+		<div class="message" class:message--first={i === 0} class:message--pending={isMsgPending}>
 			<div class="msg-header">
 				<div class="avatar" title={msg.authorName}>
 					{#if msg.authorRole === 'ai_agent'}
 						<Bot size={12} aria-hidden="true" />
+					{:else if msg.authorAvatarUrl && !failedAvatars.has(msg.id)}
+						<img
+							src={msg.authorAvatarUrl}
+							alt={msg.authorName}
+							class="avatar-img"
+							loading="lazy"
+							referrerpolicy="no-referrer"
+							onerror={() => { failedAvatars = new Set([...failedAvatars, msg.id]); }}
+						/>
 					{:else}
 						<User size={12} aria-hidden="true" />
 					{/if}
@@ -115,6 +146,12 @@
 				<span class="author">{msg.authorName}</span>
 				{#if msg.authorRole !== 'reviewer'}
 					<span class="role-badge">{msg.authorRole === 'ai_agent' ? 'AI' : 'Coder'}</span>
+				{/if}
+				{#if isMsgPending}
+					<span class="msg-pending-badge" title="Not yet synced to GitHub">
+						<Clock size={10} aria-hidden="true" />
+						Not synced
+					</span>
 				{/if}
 				<span class="timestamp">{formatTime(msg.createdAt)}</span>
 			</div>
@@ -210,6 +247,13 @@
 				class="footer-btn footer-btn--discard"
 				onclick={onDiscard}
 			>Discard</button>
+		{:else if pendingReply && !isResolved && onDiscardReply}
+			{@const replyId = pendingReply.id}
+			<button
+				class="footer-btn footer-btn--discard"
+				onclick={() => onDiscardReply?.(replyId)}
+				title="Discard your pending reply"
+			>Discard</button>
 		{:else if isResolved ? onReopen : onResolve}
 			<button
 				class="footer-btn"
@@ -272,6 +316,13 @@
 		overflow: hidden;
 		flex-shrink: 0;
 		color: var(--color-text-muted);
+	}
+
+	.avatar-img {
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
+		display: block;
 	}
 
 	.author {
@@ -443,6 +494,23 @@
 		font-size: 10px;
 		color: var(--color-text-muted);
 		opacity: 0.7;
+	}
+
+	.msg-pending-badge {
+		display: inline-flex;
+		align-items: center;
+		gap: 3px;
+		font-size: 9px;
+		font-weight: 500;
+		color: var(--color-text-muted);
+		background: var(--color-bg-tertiary);
+		border-radius: 3px;
+		padding: 1px 5px;
+		opacity: 0.85;
+	}
+
+	.message--pending .msg-body {
+		opacity: 0.85;
 	}
 
 	.msg-body--editable {

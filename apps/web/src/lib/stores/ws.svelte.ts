@@ -11,6 +11,7 @@ import {
 	updateThreadStatusFromWs,
 	addMessageFromWs,
 	removeThreadFromWs,
+	removeMessageFromWs,
 	updateMessageFromWs,
 	loadSession,
 } from './review.svelte';
@@ -94,6 +95,9 @@ function handleMessage(msg: WsServerMessage): void {
 			break;
 		case 'thread:message:edited':
 			updateMessageFromWs(msg.data.threadId, msg.data.message);
+			break;
+		case 'thread:message:deleted':
+			removeMessageFromWs(msg.data.threadId, msg.data.messageId);
 			break;
 		case 'threads:synced':
 			sync.applySynced(msg.data.prId, msg.data.summary, msg.data.timestamp);

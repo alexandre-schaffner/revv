@@ -27,10 +27,9 @@ export const wsRoute = new Elysia().ws('/ws', {
 			Effect.flatMap(WebSocketHub, (hub) => hub.register(ws.raw))
 		);
 
-		// Start poll scheduler if not running
-		await AppRuntime.runPromise(
-			Effect.flatMap(PollScheduler, (s) => s.start())
-		).catch(() => {/* already running */});
+		// PollScheduler is started on server boot (see `index.ts`) so that
+		// background sync runs even when the Tauri window is closed to the
+		// tray. No client-side start needed here.
 	},
 
 	async close(ws) {

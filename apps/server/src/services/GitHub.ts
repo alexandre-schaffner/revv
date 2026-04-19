@@ -444,6 +444,7 @@ export interface GhReviewComment {
 	readonly side: 'LEFT' | 'RIGHT';
 	readonly body: string;
 	readonly authorLogin: string;
+	readonly authorAvatarUrl: string | null;
 	readonly createdAt: string;
 	readonly updatedAt: string;
 	readonly htmlUrl: string;
@@ -660,6 +661,7 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
 					side: ((raw['side'] as 'LEFT' | 'RIGHT' | undefined) ?? 'RIGHT'),
 					body: (raw['body'] as string | undefined) ?? '',
 					authorLogin: (user['login'] as string | undefined) ?? '',
+					authorAvatarUrl: (user['avatar_url'] as string | undefined) ?? null,
 					createdAt: raw['created_at'] as string,
 					updatedAt: raw['updated_at'] as string,
 					htmlUrl: (raw['html_url'] as string | undefined) ?? '',

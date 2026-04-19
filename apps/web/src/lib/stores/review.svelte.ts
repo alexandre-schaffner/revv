@@ -336,6 +336,7 @@ export interface AddThreadParams {
 	message: {
 		authorRole: AuthorRole;
 		authorName: string;
+		authorAvatarUrl?: string | null;
 		body: string;
 		messageType: MessageType;
 		codeSuggestion?: string;
@@ -392,6 +393,7 @@ export async function addThreadMessage(
 	params: {
 		authorRole: AuthorRole;
 		authorName: string;
+		authorAvatarUrl?: string | null;
 		body: string;
 		messageType: MessageType;
 		codeSuggestion?: string;
@@ -743,6 +745,49 @@ export function updateMessageFromWs(threadId: string, message: ThreadMessage): v
 			m.id === message.id ? message : m
 		),
 	};
+}
+
+/**
+ * Remove a message from local state in response to a WebSocket broadcast.
+ */
+export function removeMessageFromWs(threadId: string, messageId: string): void {
+	const existing = threadMessages[threadId];
+	if (!existing) return;
+	threadMessages = {
+		...threadMessages,
+		[threadId]: existing.filter((m) => m.id !== messageId),
+	};
+}
+
+/**
+ * Discard a pending (unsynced) reply message on a thread.
+ * Optimistic: removes from local state immediately, reverts on API failure.
+ * Server enforces that the message is unsynced and isn't the thread's first
+ * message — those guards are intentionally duplicated client-side so the
+ * Discard button only surfaces when this call is expected to succeed.
+ */
+export async function deleteThreadMessage(
+	threadId: string,
+	messageId: string,
+): Promise<boolean> {
+	const prevMessages = { ...threadMessages };
+	const existing = threadMessages[threadId] ?? [];
+	threadMessages = {
+		...threadMessages,
+		[threadId]: existing.filter((m) => m.id !== messageId),
+	};
+
+	const { error } = await api.api
+		.threads({ id: threadId })
+		.messages({ messageId })
+		.delete();
+
+	if (error) {
+		threadMessages = prevMessages;
+		toast.error('Failed to discard reply');
+		return false;
+	}
+	return true;
 }
 
 /**

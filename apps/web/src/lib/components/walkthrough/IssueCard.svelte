@@ -12,6 +12,13 @@
 		oncheck?: (checked: boolean) => void;
 		submitted?: boolean;
 		animationDelay?: string;
+		/**
+		 * When true, suppress the entrance animation entirely. Used on tab
+		 * revisits where the card has already animated once — browsers otherwise
+		 * restart CSS animations when a subtree re-enters the render tree after
+		 * `display: none`.
+		 */
+		noAnim?: boolean;
 		onfileclick?: (filePath: string, line: number) => void;
 		stepTag?: string | null;
 		hideFileBadge?: boolean;
@@ -27,6 +34,7 @@
 		oncheck,
 		submitted = false,
 		animationDelay = '0ms',
+		noAnim = false,
 		onfileclick,
 		stepTag = null,
 		hideFileBadge = false,
@@ -37,6 +45,22 @@
 		warning: 'Warning',
 		critical: 'Critical',
 	};
+
+	// Once the entrance animation completes (or if the parent tells us to skip
+	// it), lock the card into its final visual state by applying `--no-anim`.
+	// Without this, browsers restart CSS animations on elements that re-enter
+	// the render tree after `display: none` — so every tab switch back to the
+	// Walkthrough would replay the card's fade-in.
+	let animEnded = $state(false);
+	const animLocked = $derived(noAnim || animEnded);
+
+	function onAnimEnd(event: AnimationEvent): void {
+		// Only react to the card's own animation, not descendants bubbling up.
+		if (event.target !== event.currentTarget) return;
+		if (event.animationName === 'issue-card-enter') {
+			animEnded = true;
+		}
+	}
 </script>
 
 {#if clickable}
@@ -44,7 +68,9 @@
 		type="button"
 		class="issue-card issue-card--{issue.severity}"
 		class:issue-card--submitted={submitted}
+		class:issue-card--no-anim={animLocked}
 		style:--issue-delay={animationDelay}
+		onanimationend={onAnimEnd}
 		{onclick}
 	>
 		{@render cardContent()}
@@ -54,7 +80,9 @@
 		class="issue-card issue-card--{issue.severity}"
 		class:issue-card--submitted={submitted}
 		class:issue-card--checked={checked}
+		class:issue-card--no-anim={animLocked}
 		style:--issue-delay={animationDelay}
+		onanimationend={onAnimEnd}
 	>
 		{@render cardContent()}
 	</label>
@@ -62,7 +90,9 @@
 	<div
 		class="issue-card issue-card--{issue.severity}"
 		class:issue-card--submitted={submitted}
+		class:issue-card--no-anim={animLocked}
 		style:--issue-delay={animationDelay}
+		onanimationend={onAnimEnd}
 	>
 		{@render cardContent()}
 	</div>
@@ -131,6 +161,15 @@
 		cursor: default;
 	}
 
+	/* Suppress the entrance animation on tab revisits. Browsers restart CSS
+	   animations when an element re-enters the render tree after `display:
+	   none`, which would otherwise replay issue-card-enter on every hop back
+	   to the Walkthrough tab. */
+	.issue-card--no-anim {
+		animation: none;
+		opacity: 1;
+	}
+
 	/* Severity left-border + hover shadow color */
 	.issue-card--info {
 		--severity-color: var(--color-accent);
@@ -161,7 +200,7 @@
 	}
 
 	button.issue-card:hover .issue-step-tag {
-		color: var(--color-accent);
+		color: var(--severity-color, var(--color-accent));
 	}
 
 	button.issue-card:focus-visible {

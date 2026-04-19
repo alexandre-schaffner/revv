@@ -1,10 +1,16 @@
 import { Elysia, t } from 'elysia';
 import { eq } from 'drizzle-orm';
-import { db, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, GITHUB_HOST, GITHUB_API_BASE } from '../auth';
+import { db, GITHUB_CLIENT_ID, GITHUB_HOST, GITHUB_API_BASE } from '../auth';
 import { user, session, account } from '../db/schema';
 
-if (GITHUB_CLIENT_ID === 'BUNDLED_CLIENT_ID') {
-	console.warn('[device-auth] WARNING: GITHUB_CLIENT_ID is not set — sign-in will fail. Set it in .env');
+// The device-code flow needs `client_id` only — no client_secret. If the
+// bundled id is missing (someone replaced it with a placeholder), warn early
+// so sign-in failures are easy to diagnose.
+if (!GITHUB_CLIENT_ID || GITHUB_CLIENT_ID.startsWith('BUNDLED_') || GITHUB_CLIENT_ID.startsWith('REPLACE_')) {
+	console.warn(
+		'[device-auth] WARNING: GITHUB_CLIENT_ID looks like a placeholder — sign-in will fail. ' +
+			'Override with the GITHUB_CLIENT_ID env var or fix the bundled value in apps/server/src/config.ts',
+	);
 }
 
 const githubBase = `https://${GITHUB_HOST}`;
@@ -176,12 +182,13 @@ export const deviceAuthRoutes = new Elysia()
 	.post(
 		'/api/auth/device/poll',
 		async ({ body, status }) => {
+			// Per GitHub's docs, device-flow token exchange does not take a
+			// client_secret — only client_id, device_code, and grant_type.
 			const res = await fetch(GITHUB_TOKEN_URL, {
 				method: 'POST',
 				headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
 				body: JSON.stringify({
 					client_id: GITHUB_CLIENT_ID,
-					client_secret: GITHUB_CLIENT_SECRET,
 					device_code: body.device_code,
 					grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
 				}),

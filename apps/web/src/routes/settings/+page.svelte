@@ -6,6 +6,7 @@
         Loader2,
         ArrowLeft,
         AlertTriangle,
+        ExternalLink,
     } from "@lucide/svelte";
     import { getUser, signOut } from "$lib/stores/auth.svelte";
     import {
@@ -203,6 +204,19 @@
                     Sign out
                 </button>
             </div>
+            <p class="mt-3 text-xs text-text-muted">
+                Signing out clears Revv's local copy of your GitHub token. To
+                revoke Revv's access on GitHub's side, visit
+                <a
+                    href="https://github.com/settings/applications"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="inline-flex items-center gap-1 text-accent underline underline-offset-2 hover:text-accent-hover"
+                >
+                    your authorized applications
+                    <ExternalLink size={10} />
+                </a>.
+            </p>
         {:else}
             <div class="flex items-center justify-between">
                 <p class="text-sm text-text-muted">Not signed in</p>

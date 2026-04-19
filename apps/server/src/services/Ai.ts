@@ -59,6 +59,13 @@ export class AiService extends Context.Tag('AiService')<
 			continuation?: ContinuationContext;
 			onSessionId?: (sessionId: string) => void;
 			carriedOverIssues?: CarriedOverIssue[];
+			/**
+			 * Optional caller-owned abort controller. When provided, it is
+			 * forwarded to the underlying provider so external cancellation
+			 * (regenerate, scope close, shutdown) propagates straight into the
+			 * Claude Agent SDK turn or the `opencode run` subprocess.
+			 */
+			abortController?: AbortController;
 		}) => Effect.Effect<AsyncGenerator<WalkthroughStreamEvent>, AiError>;
 		readonly isConfigured: () => Effect.Effect<boolean>;
 	}
@@ -111,6 +118,9 @@ export const AiServiceLive = Layer.effect(
 						return yield* Effect.fail(new AiNotConfiguredError());
 					}
 
+					// `params` already carries the optional `abortController` — both
+					// providers accept the same field, so passing the whole object
+					// through is the cleanest way to keep the contract identical.
 					if (agent === 'opencode') {
 						const raw = streamWalkthroughViaOpencodeMCP(params, settings.aiModel ?? undefined);
 						return guardWalkthroughStream(raw, { label: 'opencode-mcp', synthesizePhases: false });
