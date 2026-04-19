@@ -3,7 +3,11 @@
 @custom-variant dark (&:is(.dark *));
 @source "../../src";
 
+/* ──────────────────────────────────────────────────────────
+   Tailwind v4 design tokens
+   ────────────────────────────────────────────────────────── */
 @theme inline {
+  /* ── UI framework (shadcn) ── */
   --color-background: hsl(var(--background));
   --color-foreground: hsl(var(--foreground));
   --color-card: hsl(var(--card));
@@ -35,6 +39,48 @@
   --color-sidebar-primary: var(--sidebar-primary);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar: var(--sidebar);
+
+  /* ── Syntax highlighting ── */
+  --color-syntax-keyword: var(--syntax-keyword);
+  --color-syntax-string: var(--syntax-string);
+  --color-syntax-comment: var(--syntax-comment);
+  --color-syntax-function: var(--syntax-function);
+  --color-syntax-variable: var(--syntax-variable);
+  --color-syntax-type: var(--syntax-type);
+  --color-syntax-constant: var(--syntax-constant);
+  --color-syntax-operator: var(--syntax-operator);
+  --color-syntax-punctuation: var(--syntax-punctuation);
+  --color-syntax-tag: var(--syntax-tag);
+  --color-syntax-attribute: var(--syntax-attribute);
+  --color-syntax-number: var(--syntax-number);
+  --color-syntax-regex: var(--syntax-regex);
+  --color-syntax-added: var(--syntax-added);
+  --color-syntax-deleted: var(--syntax-deleted);
+
+  /* ── ANSI terminal (standard 16) ── */
+  --color-ansi-black: var(--ansi-black);
+  --color-ansi-red: var(--ansi-red);
+  --color-ansi-green: var(--ansi-green);
+  --color-ansi-yellow: var(--ansi-yellow);
+  --color-ansi-blue: var(--ansi-blue);
+  --color-ansi-magenta: var(--ansi-magenta);
+  --color-ansi-cyan: var(--ansi-cyan);
+  --color-ansi-white: var(--ansi-white);
+  --color-ansi-bright-black: var(--ansi-bright-black);
+  --color-ansi-bright-red: var(--ansi-bright-red);
+  --color-ansi-bright-green: var(--ansi-bright-green);
+  --color-ansi-bright-yellow: var(--ansi-bright-yellow);
+  --color-ansi-bright-blue: var(--ansi-bright-blue);
+  --color-ansi-bright-magenta: var(--ansi-bright-magenta);
+  --color-ansi-bright-cyan: var(--ansi-bright-cyan);
+  --color-ansi-bright-white: var(--ansi-bright-white);
+
+  /* ── Diff ── */
+  --color-diff-add-bg: var(--diff-add-bg);
+  --color-diff-add-fg: var(--diff-add-fg);
+  --color-diff-del-bg: var(--diff-del-bg);
+  --color-diff-del-fg: var(--diff-del-fg);
+  --color-diff-change-bg: var(--diff-change-bg);
 }
 
 @layer base {
@@ -51,7 +97,11 @@
   }
 }
 
-:root {
+/* ══════════════════════════════════════════════════════════
+   THEME: Zinc Light (default)
+   ══════════════════════════════════════════════════════════ */
+:root,
+.theme-zinc-light {
   --background: 0 0% 100%;
   --foreground: 240 10% 4%;
   --card: 0 0% 100%;
@@ -80,9 +130,75 @@
   --sidebar-accent-foreground: hsl(240 5.9% 10%);
   --sidebar-border: hsl(220 13% 91%);
   --sidebar-ring: hsl(217.2 91.2% 59.8%);
+
+  /* Syntax */
+  --syntax-keyword: #7c3aed;
+  --syntax-string: #16a34a;
+  --syntax-comment: #a1a1aa;
+  --syntax-function: #2563eb;
+  --syntax-variable: #18181b;
+  --syntax-type: #ca8a04;
+  --syntax-constant: #ea580c;
+  --syntax-operator: #0891b2;
+  --syntax-punctuation: #71717a;
+  --syntax-tag: #7c3aed;
+  --syntax-attribute: #2563eb;
+  --syntax-number: #ea580c;
+  --syntax-regex: #16a34a;
+  --syntax-added: #16a34a;
+  --syntax-deleted: #dc2626;
+
+  /* ANSI */
+  --ansi-black: #18181b;
+  --ansi-red: #dc2626;
+  --ansi-green: #16a34a;
+  --ansi-yellow: #ca8a04;
+  --ansi-blue: #2563eb;
+  --ansi-magenta: #9333ea;
+  --ansi-cyan: #0891b2;
+  --ansi-white: #e4e4e7;
+  --ansi-bright-black: #71717a;
+  --ansi-bright-red: #ef4444;
+  --ansi-bright-green: #22c55e;
+  --ansi-bright-yellow: #eab308;
+  --ansi-bright-blue: #3b82f6;
+  --ansi-bright-magenta: #a855f7;
+  --ansi-bright-cyan: #06b6d4;
+  --ansi-bright-white: #fafafa;
+
+  /* Diff */
+  --diff-add-bg: #dcfce7;
+  --diff-add-fg: #166534;
+  --diff-del-bg: #fee2e2;
+  --diff-del-fg: #991b1b;
+  --diff-change-bg: #fef9c3;
 }
 
+/* ══════════════════════════════════════════════════════════
+   THEME: Zinc Dark
+   ══════════════════════════════════════════════════════════ */
+.theme-zinc-dark,
 .dark {
+  --background: 240 10% 4%;
+  --foreground: 0 0% 95%;
+  --card: 240 10% 6%;
+  --card-foreground: 0 0% 95%;
+  --popover: 240 10% 8%;
+  --popover-foreground: 0 0% 95%;
+  --primary: 217 91% 60%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 240 4% 16%;
+  --secondary-foreground: 0 0% 95%;
+  --muted: 240 4% 16%;
+  --muted-foreground: 240 5% 65%;
+  --accent: 240 4% 16%;
+  --accent-foreground: 0 0% 95%;
+  --destructive: 0 63% 31%;
+  --destructive-foreground: 0 0% 95%;
+  --border: 240 4% 16%;
+  --input: 240 4% 16%;
+  --ring: 217 91% 60%;
+  --radius: 0.5rem;
   --sidebar: hsl(240 5.9% 10%);
   --sidebar-foreground: hsl(240 4.8% 95.9%);
   --sidebar-primary: hsl(224.3 76.3% 48%);
@@ -91,4 +207,354 @@
   --sidebar-accent-foreground: hsl(240 4.8% 95.9%);
   --sidebar-border: hsl(240 3.7% 15.9%);
   --sidebar-ring: hsl(217.2 91.2% 59.8%);
+
+  /* Syntax */
+  --syntax-keyword: #a78bfa;
+  --syntax-string: #4ade80;
+  --syntax-comment: #52525b;
+  --syntax-function: #60a5fa;
+  --syntax-variable: #e4e4e7;
+  --syntax-type: #fbbf24;
+  --syntax-constant: #fb923c;
+  --syntax-operator: #22d3ee;
+  --syntax-punctuation: #a1a1aa;
+  --syntax-tag: #a78bfa;
+  --syntax-attribute: #60a5fa;
+  --syntax-number: #fb923c;
+  --syntax-regex: #4ade80;
+  --syntax-added: #4ade80;
+  --syntax-deleted: #f87171;
+
+  /* ANSI */
+  --ansi-black: #27272a;
+  --ansi-red: #f87171;
+  --ansi-green: #4ade80;
+  --ansi-yellow: #fbbf24;
+  --ansi-blue: #60a5fa;
+  --ansi-magenta: #c084fc;
+  --ansi-cyan: #22d3ee;
+  --ansi-white: #e4e4e7;
+  --ansi-bright-black: #52525b;
+  --ansi-bright-red: #fca5a5;
+  --ansi-bright-green: #86efac;
+  --ansi-bright-yellow: #fde68a;
+  --ansi-bright-blue: #93c5fd;
+  --ansi-bright-magenta: #d8b4fe;
+  --ansi-bright-cyan: #67e8f9;
+  --ansi-bright-white: #fafafa;
+
+  /* Diff */
+  --diff-add-bg: #052e16;
+  --diff-add-fg: #4ade80;
+  --diff-del-bg: #450a0a;
+  --diff-del-fg: #fca5a5;
+  --diff-change-bg: #422006;
+}
+
+/* ══════════════════════════════════════════════════════════
+   THEME: Catppuccin Mocha
+   Palette: github.com/catppuccin — Mocha (darkest)
+   ══════════════════════════════════════════════════════════ */
+.theme-catppuccin-mocha {
+  --background: 240 21% 15%;      /* base #1e1e2e */
+  --foreground: 226 64% 88%;      /* text #cdd6f4 */
+  --card: 233 16% 23%;            /* surface0 #313244 */
+  --card-foreground: 226 64% 88%;
+  --popover: 233 12% 31%;         /* surface1 #45475a */
+  --popover-foreground: 226 64% 88%;
+  --primary: 217 92% 76%;         /* blue #89b4fa */
+  --primary-foreground: 240 23% 9%; /* crust #11111b */
+  --secondary: 233 12% 31%;       /* surface1 */
+  --secondary-foreground: 226 64% 88%;
+  --muted: 233 16% 23%;           /* surface0 */
+  --muted-foreground: 228 13% 55%; /* overlay1 #7f849c */
+  --accent: 233 12% 31%;          /* surface1 */
+  --accent-foreground: 226 64% 88%;
+  --destructive: 343 81% 75%;     /* red #f38ba8 */
+  --destructive-foreground: 240 23% 9%;
+  --border: 228 11% 39%;          /* surface2 #585b70 */
+  --input: 228 11% 39%;
+  --ring: 217 92% 76%;
+  --radius: 0.5rem;
+  --sidebar: #181825;              /* mantle */
+  --sidebar-foreground: #bac2de;   /* subtext1 */
+  --sidebar-primary: #89b4fa;      /* blue */
+  --sidebar-primary-foreground: #11111b;
+  --sidebar-accent: #313244;       /* surface0 */
+  --sidebar-accent-foreground: #cdd6f4;
+  --sidebar-border: #45475a;       /* surface1 */
+  --sidebar-ring: #89b4fa;
+
+  /* Syntax — Catppuccin semantic mapping */
+  --syntax-keyword: #cba6f7;   /* mauve */
+  --syntax-string: #a6e3a1;    /* green */
+  --syntax-comment: #6c7086;   /* overlay0 */
+  --syntax-function: #89b4fa;  /* blue */
+  --syntax-variable: #cdd6f4;  /* text */
+  --syntax-type: #f9e2af;      /* yellow */
+  --syntax-constant: #fab387;  /* peach */
+  --syntax-operator: #89dceb;  /* sky */
+  --syntax-punctuation: #9399b2; /* overlay2 */
+  --syntax-tag: #cba6f7;       /* mauve */
+  --syntax-attribute: #89b4fa; /* blue */
+  --syntax-number: #fab387;    /* peach */
+  --syntax-regex: #f5c2e7;     /* pink */
+  --syntax-added: #a6e3a1;     /* green */
+  --syntax-deleted: #f38ba8;   /* red */
+
+  /* ANSI */
+  --ansi-black: #45475a;       /* surface1 */
+  --ansi-red: #f38ba8;         /* red */
+  --ansi-green: #a6e3a1;       /* green */
+  --ansi-yellow: #f9e2af;      /* yellow */
+  --ansi-blue: #89b4fa;        /* blue */
+  --ansi-magenta: #f5c2e7;     /* pink */
+  --ansi-cyan: #94e2d5;        /* teal */
+  --ansi-white: #bac2de;       /* subtext1 */
+  --ansi-bright-black: #585b70; /* surface2 */
+  --ansi-bright-red: #f38ba8;
+  --ansi-bright-green: #a6e3a1;
+  --ansi-bright-yellow: #f9e2af;
+  --ansi-bright-blue: #89b4fa;
+  --ansi-bright-magenta: #f5c2e7;
+  --ansi-bright-cyan: #94e2d5;
+  --ansi-bright-white: #cdd6f4; /* text */
+
+  /* Diff */
+  --diff-add-bg: rgba(166, 227, 161, 0.1);
+  --diff-add-fg: #a6e3a1;
+  --diff-del-bg: rgba(243, 139, 168, 0.1);
+  --diff-del-fg: #f38ba8;
+  --diff-change-bg: rgba(249, 226, 175, 0.1);
+}
+
+/* ══════════════════════════════════════════════════════════
+   THEME: Catppuccin Latte
+   Palette: github.com/catppuccin — Latte (light)
+   ══════════════════════════════════════════════════════════ */
+.theme-catppuccin-latte {
+  --background: 220 23% 95%;       /* base #eff1f5 */
+  --foreground: 234 16% 35%;       /* text #4c4f69 */
+  --card: 0 0% 100%;               /* white for cards on the tinted bg */
+  --card-foreground: 234 16% 35%;
+  --popover: 222 10% 83%;          /* surface0 #ccd0da */
+  --popover-foreground: 234 16% 35%;
+  --primary: 220 91% 54%;          /* blue #1e66f5 */
+  --primary-foreground: 220 23% 95%;
+  --secondary: 222 10% 83%;        /* surface0 */
+  --secondary-foreground: 234 16% 35%;
+  --muted: 222 10% 83%;
+  --muted-foreground: 231 10% 47%; /* subtext0 #6c6f85 */
+  --accent: 222 10% 83%;
+  --accent-foreground: 234 16% 35%;
+  --destructive: 347 94% 44%;      /* red #d20f39 */
+  --destructive-foreground: 220 23% 95%;
+  --border: 223 10% 71%;           /* surface2 #acb0be */
+  --input: 223 10% 71%;
+  --ring: 220 91% 54%;
+  --radius: 0.5rem;
+  --sidebar: #e6e9ef;               /* mantle */
+  --sidebar-foreground: #5c5f77;    /* subtext1 */
+  --sidebar-primary: #1e66f5;       /* blue */
+  --sidebar-primary-foreground: #eff1f5;
+  --sidebar-accent: #ccd0da;        /* surface0 */
+  --sidebar-accent-foreground: #4c4f69;
+  --sidebar-border: #bcc0cc;        /* surface1 */
+  --sidebar-ring: #1e66f5;
+
+  /* Syntax */
+  --syntax-keyword: #8839ef;   /* mauve */
+  --syntax-string: #40a02b;    /* green */
+  --syntax-comment: #9ca0b0;   /* overlay0 */
+  --syntax-function: #1e66f5;  /* blue */
+  --syntax-variable: #4c4f69;  /* text */
+  --syntax-type: #df8e1d;      /* yellow */
+  --syntax-constant: #fe640b;  /* peach */
+  --syntax-operator: #04a5e5;  /* sky */
+  --syntax-punctuation: #7c7f93; /* overlay2 */
+  --syntax-tag: #8839ef;       /* mauve */
+  --syntax-attribute: #1e66f5; /* blue */
+  --syntax-number: #fe640b;    /* peach */
+  --syntax-regex: #ea76cb;     /* pink */
+  --syntax-added: #40a02b;     /* green */
+  --syntax-deleted: #d20f39;   /* red */
+
+  /* ANSI */
+  --ansi-black: #bcc0cc;       /* surface1 */
+  --ansi-red: #d20f39;         /* red */
+  --ansi-green: #40a02b;       /* green */
+  --ansi-yellow: #df8e1d;      /* yellow */
+  --ansi-blue: #1e66f5;        /* blue */
+  --ansi-magenta: #ea76cb;     /* pink */
+  --ansi-cyan: #179299;        /* teal */
+  --ansi-white: #5c5f77;       /* subtext1 */
+  --ansi-bright-black: #acb0be; /* surface2 */
+  --ansi-bright-red: #e64553;  /* maroon */
+  --ansi-bright-green: #40a02b;
+  --ansi-bright-yellow: #df8e1d;
+  --ansi-bright-blue: #7287fd; /* lavender */
+  --ansi-bright-magenta: #ea76cb;
+  --ansi-bright-cyan: #04a5e5; /* sky */
+  --ansi-bright-white: #4c4f69; /* text */
+
+  /* Diff */
+  --diff-add-bg: rgba(64, 160, 43, 0.1);
+  --diff-add-fg: #40a02b;
+  --diff-del-bg: rgba(210, 15, 57, 0.1);
+  --diff-del-fg: #d20f39;
+  --diff-change-bg: rgba(223, 142, 29, 0.1);
+}
+
+/* ══════════════════════════════════════════════════════════
+   THEME: Gruvbox Dark
+   Palette: github.com/morhetz/gruvbox
+   ══════════════════════════════════════════════════════════ */
+.theme-gruvbox-dark {
+  --background: 0 0% 16%;          /* bg0 #282828 */
+  --foreground: 40 55% 81%;        /* fg1 #ebdbb2 */
+  --card: 20 5% 22%;               /* bg1 #3c3836 */
+  --card-foreground: 40 55% 81%;
+  --popover: 20 5% 22%;
+  --popover-foreground: 40 55% 81%;
+  --primary: 42 95% 58%;           /* bright yellow #fabd2f */
+  --primary-foreground: 0 0% 16%;
+  --secondary: 20 5% 22%;          /* bg1 */
+  --secondary-foreground: 40 55% 81%;
+  --muted: 20 7% 29%;              /* bg2 #504945 */
+  --muted-foreground: 27 11% 51%;  /* gray #928374 */
+  --accent: 20 7% 29%;
+  --accent-foreground: 40 55% 81%;
+  --destructive: 8 96% 59%;        /* bright red #fb4934 */
+  --destructive-foreground: 0 0% 16%;
+  --border: 20 7% 29%;             /* bg2 */
+  --input: 20 7% 29%;
+  --ring: 42 95% 58%;
+  --radius: 0.375rem;
+  --sidebar: #1d2021;               /* bg0_hard */
+  --sidebar-foreground: #ebdbb2;    /* fg1 */
+  --sidebar-primary: #fabd2f;       /* bright yellow */
+  --sidebar-primary-foreground: #282828;
+  --sidebar-accent: #3c3836;        /* bg1 */
+  --sidebar-accent-foreground: #ebdbb2;
+  --sidebar-border: #504945;        /* bg2 */
+  --sidebar-ring: #fabd2f;
+
+  /* Syntax — Gruvbox semantic mapping */
+  --syntax-keyword: #fb4934;   /* bright red */
+  --syntax-string: #b8bb26;    /* bright green */
+  --syntax-comment: #928374;   /* gray */
+  --syntax-function: #83a598;  /* bright blue */
+  --syntax-variable: #ebdbb2;  /* fg1 */
+  --syntax-type: #fabd2f;      /* bright yellow */
+  --syntax-constant: #d3869b;  /* bright purple */
+  --syntax-operator: #8ec07c;  /* bright aqua */
+  --syntax-punctuation: #a89984; /* fg4 */
+  --syntax-tag: #fb4934;       /* bright red */
+  --syntax-attribute: #fabd2f; /* bright yellow */
+  --syntax-number: #d3869b;    /* bright purple */
+  --syntax-regex: #8ec07c;     /* bright aqua */
+  --syntax-added: #b8bb26;     /* bright green */
+  --syntax-deleted: #fb4934;   /* bright red */
+
+  /* ANSI */
+  --ansi-black: #282828;       /* bg0 */
+  --ansi-red: #cc241d;         /* neutral red */
+  --ansi-green: #98971a;       /* neutral green */
+  --ansi-yellow: #d79921;      /* neutral yellow */
+  --ansi-blue: #458588;        /* neutral blue */
+  --ansi-magenta: #b16286;     /* neutral purple */
+  --ansi-cyan: #689d6a;        /* neutral aqua */
+  --ansi-white: #a89984;       /* fg4 */
+  --ansi-bright-black: #928374; /* gray */
+  --ansi-bright-red: #fb4934;
+  --ansi-bright-green: #b8bb26;
+  --ansi-bright-yellow: #fabd2f;
+  --ansi-bright-blue: #83a598;
+  --ansi-bright-magenta: #d3869b;
+  --ansi-bright-cyan: #8ec07c;
+  --ansi-bright-white: #ebdbb2; /* fg1 */
+
+  /* Diff */
+  --diff-add-bg: rgba(184, 187, 38, 0.12);
+  --diff-add-fg: #b8bb26;
+  --diff-del-bg: rgba(251, 73, 52, 0.12);
+  --diff-del-fg: #fb4934;
+  --diff-change-bg: rgba(250, 189, 47, 0.12);
+}
+
+/* ══════════════════════════════════════════════════════════
+   THEME: Gruvbox Light
+   Palette: github.com/morhetz/gruvbox
+   ══════════════════════════════════════════════════════════ */
+.theme-gruvbox-light {
+  --background: 45 76% 88%;        /* bg0 #fbf1c7 */
+  --foreground: 0 0% 16%;          /* fg0 #282828 */
+  --card: 40 55% 81%;              /* bg1 #ebdbb2 */
+  --card-foreground: 0 0% 16%;
+  --popover: 40 55% 81%;
+  --popover-foreground: 0 0% 16%;
+  --primary: 191 89% 25%;          /* faded blue #076678 */
+  --primary-foreground: 45 76% 88%;
+  --secondary: 40 55% 81%;         /* bg1 */
+  --secondary-foreground: 0 0% 16%;
+  --muted: 35 34% 74%;             /* bg2 #d5c4a1 */
+  --muted-foreground: 27 11% 51%;  /* gray #928374 */
+  --accent: 35 34% 74%;
+  --accent-foreground: 0 0% 16%;
+  --destructive: 0 100% 31%;       /* faded red #9d0006 */
+  --destructive-foreground: 45 76% 88%;
+  --border: 35 34% 74%;            /* bg2 */
+  --input: 35 34% 74%;
+  --ring: 191 89% 25%;
+  --radius: 0.375rem;
+  --sidebar: #f9f5d7;               /* bg0_hard */
+  --sidebar-foreground: #3c3836;    /* fg1 (dark) = dark1 */
+  --sidebar-primary: #076678;       /* faded blue */
+  --sidebar-primary-foreground: #fbf1c7;
+  --sidebar-accent: #ebdbb2;        /* bg1 */
+  --sidebar-accent-foreground: #282828;
+  --sidebar-border: #d5c4a1;        /* bg2 */
+  --sidebar-ring: #076678;
+
+  /* Syntax — Gruvbox semantic mapping (faded palette for light) */
+  --syntax-keyword: #9d0006;   /* faded red */
+  --syntax-string: #79740e;    /* faded green */
+  --syntax-comment: #928374;   /* gray */
+  --syntax-function: #076678;  /* faded blue */
+  --syntax-variable: #282828;  /* fg0 */
+  --syntax-type: #b57614;      /* faded yellow */
+  --syntax-constant: #8f3f71;  /* faded purple */
+  --syntax-operator: #427b58;  /* faded aqua */
+  --syntax-punctuation: #7c6f64; /* fg4 (dark side) */
+  --syntax-tag: #9d0006;       /* faded red */
+  --syntax-attribute: #b57614; /* faded yellow */
+  --syntax-number: #8f3f71;    /* faded purple */
+  --syntax-regex: #427b58;     /* faded aqua */
+  --syntax-added: #79740e;     /* faded green */
+  --syntax-deleted: #9d0006;   /* faded red */
+
+  /* ANSI */
+  --ansi-black: #fbf1c7;       /* bg0 */
+  --ansi-red: #9d0006;         /* faded red */
+  --ansi-green: #79740e;       /* faded green */
+  --ansi-yellow: #b57614;      /* faded yellow */
+  --ansi-blue: #076678;        /* faded blue */
+  --ansi-magenta: #8f3f71;     /* faded purple */
+  --ansi-cyan: #427b58;        /* faded aqua */
+  --ansi-white: #7c6f64;       /* dark4 */
+  --ansi-bright-black: #928374; /* gray */
+  --ansi-bright-red: #cc241d;  /* neutral red */
+  --ansi-bright-green: #98971a;
+  --ansi-bright-yellow: #d79921;
+  --ansi-bright-blue: #458588;
+  --ansi-bright-magenta: #b16286;
+  --ansi-bright-cyan: #689d6a;
+  --ansi-bright-white: #282828; /* fg0 */
+
+  /* Diff */
+  --diff-add-bg: rgba(121, 116, 14, 0.12);
+  --diff-add-fg: #79740e;
+  --diff-del-bg: rgba(157, 0, 6, 0.12);
+  --diff-del-fg: #9d0006;
+  --diff-change-bg: rgba(181, 118, 20, 0.12);
 }

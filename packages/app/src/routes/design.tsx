@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useTheme, themes, type ThemeId } from "../lib/theme";
 import { Button } from "@rev/ui/components/ui/button";
 import { Badge } from "@rev/ui/components/ui/badge";
 import {
@@ -97,20 +98,240 @@ function Showcase({
   );
 }
 
+const themeSwatches: Record<ThemeId, string> = {
+  "zinc-light": "bg-white border border-zinc-300",
+  "zinc-dark": "bg-zinc-900 border border-zinc-700",
+  "catppuccin-latte": "bg-[#eff1f5] border border-[#acb0be]",
+  "catppuccin-mocha": "bg-[#1e1e2e] border border-[#585b70]",
+  "gruvbox-light": "bg-[#fbf1c7] border border-[#d5c4a1]",
+  "gruvbox-dark": "bg-[#282828] border border-[#504945]",
+};
+
+const syntaxTokens = [
+  { name: "keyword", cls: "text-syntax-keyword", example: "import" },
+  { name: "string", cls: "text-syntax-string", example: '"hello"' },
+  { name: "comment", cls: "text-syntax-comment", example: "// note" },
+  { name: "function", cls: "text-syntax-function", example: "render()" },
+  { name: "variable", cls: "text-syntax-variable", example: "count" },
+  { name: "type", cls: "text-syntax-type", example: "string" },
+  { name: "constant", cls: "text-syntax-constant", example: "true" },
+  { name: "number", cls: "text-syntax-number", example: "42" },
+  { name: "operator", cls: "text-syntax-operator", example: "===" },
+  { name: "punctuation", cls: "text-syntax-punctuation", example: "{ }" },
+  { name: "tag", cls: "text-syntax-tag", example: "<div>" },
+  { name: "attribute", cls: "text-syntax-attribute", example: "class=" },
+  { name: "regex", cls: "text-syntax-regex", example: "/ab+c/" },
+  { name: "added", cls: "text-syntax-added", example: "+ new" },
+  { name: "deleted", cls: "text-syntax-deleted", example: "- old" },
+];
+
+const ansiColors = [
+  { name: "black", cls: "bg-ansi-black" },
+  { name: "red", cls: "bg-ansi-red" },
+  { name: "green", cls: "bg-ansi-green" },
+  { name: "yellow", cls: "bg-ansi-yellow" },
+  { name: "blue", cls: "bg-ansi-blue" },
+  { name: "magenta", cls: "bg-ansi-magenta" },
+  { name: "cyan", cls: "bg-ansi-cyan" },
+  { name: "white", cls: "bg-ansi-white" },
+];
+
+const ansiBrightColors = [
+  { name: "br-black", cls: "bg-ansi-bright-black" },
+  { name: "br-red", cls: "bg-ansi-bright-red" },
+  { name: "br-green", cls: "bg-ansi-bright-green" },
+  { name: "br-yellow", cls: "bg-ansi-bright-yellow" },
+  { name: "br-blue", cls: "bg-ansi-bright-blue" },
+  { name: "br-magenta", cls: "bg-ansi-bright-magenta" },
+  { name: "br-cyan", cls: "bg-ansi-bright-cyan" },
+  { name: "br-white", cls: "bg-ansi-bright-white" },
+];
+
 function DesignPage() {
+  const { theme, setTheme } = useTheme();
+
   return (
     <TooltipProvider>
       <div className="h-full overflow-y-auto">
         <div className="max-w-5xl mx-auto px-8 py-10 space-y-12">
-          <header>
-            <h1 className="text-2xl font-bold tracking-tight">Design System</h1>
-            <p className="text-muted-foreground mt-1">
-              Component showcase for <code className="text-xs bg-muted px-1.5 py-0.5 rounded">@rev/ui</code>
-            </p>
+          <header className="flex items-start justify-between gap-6">
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight">Design System</h1>
+              <p className="text-muted-foreground mt-1">
+                Component showcase for <code className="text-xs bg-muted px-1.5 py-0.5 rounded">@rev/ui</code>
+              </p>
+            </div>
+            <div className="flex items-center gap-1.5 bg-muted rounded-lg p-1">
+              {(Object.keys(themes) as ThemeId[]).map((id) => (
+                <Tooltip key={id}>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={() => setTheme(id)}
+                      className={`w-7 h-7 rounded-md flex items-center justify-center transition-all ${
+                        theme === id
+                          ? "ring-2 ring-primary ring-offset-1 ring-offset-background scale-110"
+                          : "hover:scale-105"
+                      }`}
+                    >
+                      <span className={`w-4 h-4 rounded-full ${themeSwatches[id]}`} />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {themes[id].label} {themes[id].dark ? "(dark)" : "(light)"}
+                  </TooltipContent>
+                </Tooltip>
+              ))}
+            </div>
           </header>
 
-          {/* ── Colors ── */}
-          <Section title="Colors">
+          {/* ── Syntax Highlighting ── */}
+          <Section title="Syntax Highlighting">
+            <Card>
+              <CardContent className="pt-6">
+                <div className="grid grid-cols-3 gap-x-6 gap-y-2">
+                  {syntaxTokens.map(({ name, cls, example }) => (
+                    <div key={name} className="flex items-center justify-between gap-3 py-1">
+                      <span className="text-xs text-muted-foreground font-mono">{name}</span>
+                      <code className={`text-sm font-mono font-medium ${cls}`}>{example}</code>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Live code preview */}
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm">Code Preview</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <pre className="text-sm font-mono leading-relaxed bg-background rounded-md p-4 border">
+                  <span className="text-syntax-keyword">import</span>
+                  <span className="text-syntax-punctuation">{" { "}</span>
+                  <span className="text-syntax-variable">useState</span>
+                  <span className="text-syntax-punctuation">{" } "}</span>
+                  <span className="text-syntax-keyword">from</span>
+                  <span className="text-syntax-string"> "react"</span>
+                  <span className="text-syntax-punctuation">;</span>
+                  {"\n\n"}
+                  <span className="text-syntax-comment">{"// A simple counter component"}</span>
+                  {"\n"}
+                  <span className="text-syntax-keyword">export function</span>
+                  <span className="text-syntax-function"> Counter</span>
+                  <span className="text-syntax-punctuation">{"("}</span>
+                  <span className="text-syntax-punctuation">{")"}</span>
+                  <span className="text-syntax-punctuation">{" {"}</span>
+                  {"\n  "}
+                  <span className="text-syntax-keyword">const</span>
+                  <span className="text-syntax-punctuation"> [</span>
+                  <span className="text-syntax-variable">count</span>
+                  <span className="text-syntax-punctuation">, </span>
+                  <span className="text-syntax-function">setCount</span>
+                  <span className="text-syntax-punctuation">]</span>
+                  <span className="text-syntax-operator"> = </span>
+                  <span className="text-syntax-function">useState</span>
+                  <span className="text-syntax-punctuation">(</span>
+                  <span className="text-syntax-number">0</span>
+                  <span className="text-syntax-punctuation">);</span>
+                  {"\n  "}
+                  <span className="text-syntax-keyword">const</span>
+                  <span className="text-syntax-variable"> max</span>
+                  <span className="text-syntax-punctuation">: </span>
+                  <span className="text-syntax-type">number</span>
+                  <span className="text-syntax-operator"> = </span>
+                  <span className="text-syntax-number">100</span>
+                  <span className="text-syntax-punctuation">;</span>
+                  {"\n  "}
+                  <span className="text-syntax-keyword">const</span>
+                  <span className="text-syntax-variable"> active</span>
+                  <span className="text-syntax-operator"> = </span>
+                  <span className="text-syntax-constant">true</span>
+                  <span className="text-syntax-punctuation">;</span>
+                  {"\n\n  "}
+                  <span className="text-syntax-keyword">return</span>
+                  <span className="text-syntax-punctuation"> (</span>
+                  {"\n    "}
+                  <span className="text-syntax-tag">{"<"}</span>
+                  <span className="text-syntax-tag">button</span>
+                  <span className="text-syntax-attribute"> onClick</span>
+                  <span className="text-syntax-operator">{"="}</span>
+                  <span className="text-syntax-punctuation">{"{"}</span>
+                  <span className="text-syntax-punctuation">() </span>
+                  <span className="text-syntax-operator">{"=>"}</span>
+                  <span className="text-syntax-function"> setCount</span>
+                  <span className="text-syntax-punctuation">(</span>
+                  <span className="text-syntax-variable">count</span>
+                  <span className="text-syntax-operator"> + </span>
+                  <span className="text-syntax-number">1</span>
+                  <span className="text-syntax-punctuation">)</span>
+                  <span className="text-syntax-punctuation">{"}"}</span>
+                  <span className="text-syntax-tag">{">"}</span>
+                  {"\n      "}
+                  <span className="text-syntax-variable">{"Count: {count}"}</span>
+                  {"\n    "}
+                  <span className="text-syntax-tag">{"</"}</span>
+                  <span className="text-syntax-tag">button</span>
+                  <span className="text-syntax-tag">{">"}</span>
+                  {"\n  "}
+                  <span className="text-syntax-punctuation">);</span>
+                  {"\n"}
+                  <span className="text-syntax-punctuation">{"}"}</span>
+                </pre>
+              </CardContent>
+            </Card>
+          </Section>
+
+          <Separator />
+
+          {/* ── ANSI Terminal Colors ── */}
+          <Section title="ANSI Terminal Colors">
+            <div className="grid grid-cols-2 gap-6">
+              <Showcase label="Standard (0-7)">
+                <div className="grid grid-cols-8 gap-1.5">
+                  {ansiColors.map(({ name, cls }) => (
+                    <div key={name} className="space-y-1">
+                      <div className={`h-8 rounded-md ${cls}`} />
+                      <p className="text-[9px] text-muted-foreground text-center font-mono">{name}</p>
+                    </div>
+                  ))}
+                </div>
+              </Showcase>
+
+              <Showcase label="Bright (8-15)">
+                <div className="grid grid-cols-8 gap-1.5">
+                  {ansiBrightColors.map(({ name, cls }) => (
+                    <div key={name} className="space-y-1">
+                      <div className={`h-8 rounded-md ${cls}`} />
+                      <p className="text-[9px] text-muted-foreground text-center font-mono">{name}</p>
+                    </div>
+                  ))}
+                </div>
+              </Showcase>
+            </div>
+          </Section>
+
+          <Separator />
+
+          {/* ── Diff Colors ── */}
+          <Section title="Diff Colors">
+            <Card>
+              <CardContent className="pt-6 font-mono text-sm">
+                <div className="rounded-md border overflow-hidden">
+                  <div className="bg-diff-add-bg text-diff-add-fg px-4 py-1">+ const greeting = "hello world";</div>
+                  <div className="bg-diff-add-bg text-diff-add-fg px-4 py-1">+ const version = 2;</div>
+                  <div className="px-4 py-1">  export default greeting;</div>
+                  <div className="bg-diff-del-bg text-diff-del-fg px-4 py-1">- const legacy = true;</div>
+                  <div className="bg-diff-del-bg text-diff-del-fg px-4 py-1">- const oldApi = "/v1";</div>
+                  <div className="bg-diff-change-bg px-4 py-1">~ const api = "/v2"; {/* changed */}</div>
+                </div>
+              </CardContent>
+            </Card>
+          </Section>
+
+          <Separator />
+
+          {/* ── UI Colors ── */}
+          <Section title="UI Colors">
             <div className="grid grid-cols-2 gap-6">
               <Showcase label="Theme colors">
                 <div className="grid grid-cols-4 gap-2">
@@ -466,18 +687,18 @@ function DesignPage() {
                 </AccordionContent>
               </AccordionItem>
               <AccordionItem value="item-2">
-                <AccordionTrigger>How are they styled?</AccordionTrigger>
+                <AccordionTrigger>What themes are available?</AccordionTrigger>
                 <AccordionContent>
-                  All components use Tailwind CSS with CSS variables for theming.
-                  Colors are defined in the globals.css using HSL values that support
-                  both light and dark modes.
+                  Zinc (light/dark), Catppuccin Latte & Mocha, and Gruvbox (light/dark).
+                  Each theme defines UI colors, syntax highlighting, ANSI terminal palette, and diff colors.
                 </AccordionContent>
               </AccordionItem>
               <AccordionItem value="item-3">
-                <AccordionTrigger>Can I customize them?</AccordionTrigger>
+                <AccordionTrigger>How do I add a new theme?</AccordionTrigger>
                 <AccordionContent>
-                  Yes. Each component accepts a className prop for overrides, and the
-                  design tokens in globals.css control the overall theme.
+                  Add a new <code className="text-xs bg-muted px-1 py-0.5 rounded">.theme-*</code> class
+                  in <code className="text-xs bg-muted px-1 py-0.5 rounded">globals.css</code> with
+                  all the CSS variables, then register it in <code className="text-xs bg-muted px-1 py-0.5 rounded">theme.tsx</code>.
                 </AccordionContent>
               </AccordionItem>
             </Accordion>
