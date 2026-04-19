@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { requestPrList } from "./commands";
 import { getCommandById } from "../../lib/commands";
 import { Spinner } from "@rev/ui/components/ui/spinner";
 import { PRList, type PrEntry } from "./ui/pr";
+import { useRegisterShortcuts, type ShortcutDef } from "../../lib/shortcuts";
 
 export function PrsBlock() {
   const [prs, setPrs] = useState<PrEntry[]>([]);
@@ -44,6 +45,15 @@ export function PrsBlock() {
       if (pollRef.current) clearInterval(pollRef.current);
     };
   }, [requestPrs]);
+
+  const shortcuts = useMemo<ShortcutDef[]>(
+    () => [
+      { id: "prs:refresh", label: "Refresh", keys: { mod: true, shift: true, key: "r" }, mode: "sidebar", category: "PRs", action: requestPrs },
+    ],
+    [requestPrs],
+  );
+
+  useRegisterShortcuts(shortcuts);
 
   return (
     <div className="flex flex-col h-full">

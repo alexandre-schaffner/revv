@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { requestLs } from "./commands";
 import { getCommandById } from "../../lib/commands";
 import type { CommandEntry } from "../../lib/command-log";
+import { useRegisterShortcuts, type ShortcutDef } from "../../lib/shortcuts";
 
 interface FileEntry {
   permissions: string;
@@ -57,6 +58,15 @@ export function FilesBlock() {
       if (pollRef.current) clearInterval(pollRef.current);
     };
   }, [requestFiles]);
+
+  const shortcuts = useMemo<ShortcutDef[]>(
+    () => [
+      { id: "files:refresh", label: "Refresh", keys: { mod: true, shift: true, key: "r" }, mode: "sidebar", category: "Files", action: requestFiles },
+    ],
+    [requestFiles],
+  );
+
+  useRegisterShortcuts(shortcuts);
 
   return (
     <div className="flex flex-col h-full">
