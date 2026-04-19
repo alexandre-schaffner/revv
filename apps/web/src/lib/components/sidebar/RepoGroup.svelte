@@ -73,6 +73,7 @@
 				alt=""
 				class="h-3.5 w-3.5 shrink-0 rounded-sm object-cover"
 				loading="lazy"
+				referrerpolicy="no-referrer"
 				onerror={() => (avatarFailed = true)}
 			/>
 		{:else}

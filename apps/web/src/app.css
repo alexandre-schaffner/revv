@@ -96,6 +96,7 @@
 
     /* Floating tabs */
     --revv-tab-active-bg: #ffffff;
+    --revv-tab-track-bg: rgba(0, 0, 0, 0.06);
     --revv-tab-inactive-text: #8888a0;
 
     /* Glass pill */
@@ -107,7 +108,10 @@
     --revv-glass-active-bg: rgba(0, 0, 0, 0.055);
 
     /* Elevation shadows (theme-aware) */
-    --revv-shadow-indicator: 0 1px 2px rgba(0, 0, 0, 0.05);
+    --revv-shadow-indicator:
+        0 1px 3px rgba(0, 0, 0, 0.08),
+        0 2px 8px rgba(0, 0, 0, 0.06),
+        0 0 0 0.5px rgba(0, 0, 0, 0.04);
     --revv-shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.08);
     --revv-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.1);
     --revv-shadow-lg:
@@ -254,8 +258,9 @@
     --revv-tree-hover-bg: #141414;
 
     /* Floating tabs */
-    --revv-tab-active-bg: #1a1a1a;
-    --revv-tab-inactive-text: #71717a;
+    --revv-tab-active-bg: #3a3a3e;
+    --revv-tab-track-bg: rgba(0, 0, 0, 0.35);
+    --revv-tab-inactive-text: #8a8a90;
 
     /* Glass pill */
     --revv-glass-bg: rgba(30, 30, 30, 0.65);
@@ -266,7 +271,10 @@
     --revv-glass-active-bg: rgba(255, 255, 255, 0.1);
 
     /* Elevation shadows (theme-aware) */
-    --revv-shadow-indicator: 0 1px 3px rgba(0, 0, 0, 0.35);
+    --revv-shadow-indicator:
+        0 1px 3px rgba(0, 0, 0, 0.4),
+        0 4px 12px rgba(0, 0, 0, 0.35),
+        inset 0 0.5px 0 0 rgba(255, 255, 255, 0.08);
     --revv-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.35);
     --revv-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.45);
     --revv-shadow-lg:
@@ -411,6 +419,7 @@
 
     /* Floating tabs */
     --color-tab-active-bg: var(--revv-tab-active-bg);
+    --color-tab-track-bg: var(--revv-tab-track-bg);
     --color-tab-inactive-text: var(--revv-tab-inactive-text);
 
     /* Glass pill */

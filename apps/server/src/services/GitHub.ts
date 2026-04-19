@@ -336,6 +336,17 @@ export class GitHubService extends Context.Tag('GitHubService')<
 			fullName: string,
 			token: string
 		) => Effect.Effect<Repository, GitHubError, DbService | GitHubEtagCache>;
+		/**
+		 * Like `getRepo`, but bypasses the ETag cache. Required for fields that
+		 * rotate server-side without changing the endpoint's ETag — notably
+		 * GitHub Enterprise signed `avatar_url`s, whose token expires but whose
+		 * ETag stays the same. Hitting `getRepo` would replay the cached body
+		 * with the now-dead token; this variant forces a 200 every time.
+		 */
+		readonly getRepoFresh: (
+			fullName: string,
+			token: string
+		) => Effect.Effect<Repository, GitHubError>;
 		readonly listUserRepos: (
 			token: string
 		) => Effect.Effect<Repository[], GitHubError>;
@@ -469,6 +480,13 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
 		Effect.gen(function* () {
 			const { owner, repo } = yield* parseRepoFullName(fullName);
 			const data = yield* conditionalFetch(`/repos/${owner}/${repo}`, token);
+			return mapRepo(data as Record<string, unknown>);
+		}).pipe(Effect.retry(retrySchedule)),
+
+	getRepoFresh: (fullName, token) =>
+		Effect.gen(function* () {
+			const { owner, repo } = yield* parseRepoFullName(fullName);
+			const data = yield* githubFetch(`/repos/${owner}/${repo}`, token);
 			return mapRepo(data as Record<string, unknown>);
 		}).pipe(Effect.retry(retrySchedule)),
 

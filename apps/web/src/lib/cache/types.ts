@@ -69,6 +69,18 @@ export interface CacheBackend {
 	readonly keys: () => Promise<string[]>;
 }
 
+/**
+ * Metadata a fetcher may stamp onto its cache entry via
+ * {@link FetchContext.setMeta}. Populated by the M5 HTTP wrapper so ETag /
+ * Last-Modified / SHA survive a revalidation round-trip — the base
+ * `createQuery` API stays `(ctx) => Promise<T>` either way.
+ */
+export interface FetcherMeta {
+	readonly etag?: string;
+	readonly lastModified?: string;
+	readonly sha?: string;
+}
+
 /** Fetch context — passed into fetchers so they can do conditional requests. */
 export interface FetchContext {
 	readonly signal: AbortSignal;
@@ -78,4 +90,10 @@ export interface FetchContext {
 	readonly previousEtag?: string;
 	/** Prior Last-Modified for conditional requests. */
 	readonly previousLastModified?: string;
+	/**
+	 * Stamp metadata onto the cache entry that will be written after this
+	 * fetch resolves. Typically called from an HTTP wrapper once response
+	 * headers are available. Multiple calls merge shallowly.
+	 */
+	readonly setMeta: (meta: FetcherMeta) => void;
 }

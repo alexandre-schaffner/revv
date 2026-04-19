@@ -86,8 +86,8 @@ done
 
 printf "\n${BOLD}"
 printf "  ┌─────────────────────────────────────┐\n"
-printf "  │       Revv — Development Setup        │\n"
-printf "  │       AI-Powered Code Review         │\n"
+printf "  │      Revv — Development Setup       │\n"
+printf "  │       AI-Powered Code Review        │\n"
 printf "  └─────────────────────────────────────┘\n"
 printf "${RESET}\n"
 
@@ -270,24 +270,56 @@ else
   warn "Rust toolchain not found"
   if confirm "Install Rust via rustup? (https://rustup.rs)"; then
     install_rust
-    pass "rustc $(rustc --version | awk '{print $2}')"
+    if check_command rustup; then
+      pass "rustc $(rustc --version | awk '{print $2}')"
+    else
+      fail "Rust installation failed or rustup not in PATH. Try: source \$HOME/.cargo/env"
+    fi
   else
     fail "Rust is required to build the Tauri desktop shell."
   fi
 fi
 
-# Verify the platform Rust target is installed
+# Verify the platform Rust target is installed.
+#
+# rustup is the canonical way to manage targets, but rustc can also be
+# installed via Homebrew / a system package / from source — in which case
+# rustup is absent and the only target available is rustc's built-in host
+# triple. That's fine for a native build (Tauri defaults to the host
+# target), so detect this case and pass without asking for rustup.
 step "Checking Rust target: $RUST_TARGET"
 
-if rustup target list --installed 2>/dev/null | grep -q "^$RUST_TARGET$"; then
-  pass "Rust target $RUST_TARGET"
-else
-  warn "Rust target $RUST_TARGET is not installed"
-  if confirm "Add Rust target $RUST_TARGET?"; then
-    rustup target add "$RUST_TARGET"
+rustc_host_target() {
+  rustc -vV 2>/dev/null | awk '/^host:/ {print $2}'
+}
+
+if check_command rustup; then
+  if rustup target list --installed 2>/dev/null | grep -q "^$RUST_TARGET$"; then
     pass "Rust target $RUST_TARGET"
   else
-    caution "Missing Rust target — Tauri build may fail"
+    warn "Rust target $RUST_TARGET is not installed"
+    if confirm "Add Rust target $RUST_TARGET?"; then
+      rustup target add "$RUST_TARGET"
+      pass "Rust target $RUST_TARGET"
+    else
+      caution "Missing Rust target — Tauri build may fail"
+    fi
+  fi
+else
+  # No rustup — rustc likely came from Homebrew or a system package.
+  # Compare against rustc's native host target; if it matches, the build
+  # will succeed without any target management.
+  HOST_TARGET="$(rustc_host_target || true)"
+  if [[ -n "$HOST_TARGET" && "$HOST_TARGET" == "$RUST_TARGET" ]]; then
+    pass "Rust target $RUST_TARGET (native host, rustup not required)"
+  else
+    warn "rustup not found; cannot add target '$RUST_TARGET'"
+    if [[ -n "$HOST_TARGET" ]]; then
+      info "rustc's host target is '$HOST_TARGET', which differs from '$RUST_TARGET'."
+    fi
+    info "Install rustup to manage cross-compilation targets:"
+    info "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y"
+    caution "Missing rustup — Tauri build may fail if it needs '$RUST_TARGET'"
   fi
 fi
 
@@ -455,7 +487,7 @@ fi
 if [[ ${#WARNED[@]} -eq 0 && ${#FAILED[@]} -eq 0 ]]; then
   printf "${BOLD}${GREEN}"
   printf "  ┌─────────────────────────────────────┐\n"
-  printf "  │   ✓  Everything looks good!          │\n"
+  printf "  │   ✓  Everything looks good!         │\n"
   printf "  └─────────────────────────────────────┘\n"
   printf "${RESET}\n"
 else

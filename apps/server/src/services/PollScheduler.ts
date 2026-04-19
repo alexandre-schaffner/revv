@@ -99,6 +99,46 @@ export const PollSchedulerLive = Layer.effect(
 				existingPrs.map((pr) => [pr.id, { headSha: pr.headSha, baseSha: pr.baseSha }])
 			);
 
+			// ── Refresh repo metadata (avatar URL, default branch) ────────────────
+			// Bypasses the ETag cache — some GitHub Enterprise instances return
+			// signed `avatar_url`s whose token expires without invalidating the
+			// endpoint's ETag, so a plain `getRepo` would replay the stale body.
+			// Runs before PR sync so the sidebar sees fresh avatars ASAP after
+			// server startup.
+			let anyRepoChanged = false;
+			yield* Effect.forEach(
+				allRepos,
+				(repo) =>
+					Effect.gen(function* () {
+						const token = yield* tokenProvider.getGitHubToken('single-user').pipe(
+							Effect.catchAll(() => Effect.succeed('')),
+						);
+						if (!token) return;
+						const fresh = yield* github.getRepoFresh(repo.fullName, token).pipe(
+							Effect.catchAll(() => Effect.succeed(null)),
+						);
+						if (!fresh) return;
+						if (
+							fresh.avatarUrl !== repo.avatarUrl ||
+							fresh.defaultBranch !== repo.defaultBranch
+						) {
+							yield* withDb(
+								repoService.updateRepoMetadata(repo.id, {
+									avatarUrl: fresh.avatarUrl,
+									defaultBranch: fresh.defaultBranch,
+								}),
+							).pipe(Effect.orElseSucceed(() => undefined));
+							anyRepoChanged = true;
+						}
+					}).pipe(Effect.orElseSucceed(() => undefined)),
+				{ concurrency: 3 },
+			);
+
+			if (anyRepoChanged) {
+				const refreshedRepos = yield* withDb(repoService.listRepos());
+				yield* hub.broadcast({ type: 'repos:updated', data: refreshedRepos });
+			}
+
 			const results = yield* Effect.forEach(
 				allRepos,
 				(repo) =>

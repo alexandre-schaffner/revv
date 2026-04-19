@@ -33,6 +33,10 @@ export class RepositoryService extends Context.Tag('RepositoryService')<
 		readonly getRepoByFullName: (
 			fullName: string
 		) => Effect.Effect<Repository | null, never, DbService>;
+		readonly updateRepoMetadata: (
+			id: string,
+			data: { readonly avatarUrl?: string | null; readonly defaultBranch?: string }
+		) => Effect.Effect<Repository, NotFoundError, DbService>;
 	}
 >() {}
 
@@ -115,5 +119,29 @@ export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
 				.where(eq(repositories.fullName, fullName))
 				.get();
 			return row ? rowToRepo(row) : null;
+		}),
+
+	updateRepoMetadata: (id, data) =>
+		Effect.gen(function* () {
+			const { db } = yield* DbService;
+			const existing = db.select().from(repositories).where(eq(repositories.id, id)).get();
+			if (!existing) {
+				return yield* Effect.fail(new NotFoundError({ resource: 'repository', id }));
+			}
+			const updates: Partial<typeof repositories.$inferInsert> = {};
+			if (data.avatarUrl !== undefined) updates.avatarUrl = data.avatarUrl;
+			if (data.defaultBranch !== undefined) updates.defaultBranch = data.defaultBranch;
+			if (Object.keys(updates).length === 0) {
+				return rowToRepo(existing);
+			}
+			yield* Effect.try({
+				try: () => db.update(repositories).set(updates).where(eq(repositories.id, id)).run(),
+				catch: (e) => new Error(String(e)),
+			}).pipe(Effect.orDie);
+			const updated = db.select().from(repositories).where(eq(repositories.id, id)).get();
+			if (!updated) {
+				return yield* Effect.fail(new NotFoundError({ resource: 'repository', id }));
+			}
+			return rowToRepo(updated);
 		}),
 });

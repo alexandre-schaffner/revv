@@ -83,6 +83,7 @@
 				alt={pr.authorLogin}
 				class="h-4 w-4 shrink-0 rounded-full object-cover"
 				loading="lazy"
+				referrerpolicy="no-referrer"
 				onerror={() => (avatarFailed = true)}
 			/>
 		{:else}
