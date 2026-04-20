@@ -87,6 +87,17 @@
   "plugins": {
     "deep-link": {
       "enable": true
+    },
+    "updater": {
+      "active": true,
+      "endpoints": [
+        "https://github.com/alexmerkl/revv/releases/latest/download/latest.json"
+      ],
+      "dialog": false,
+      "pubkey": "REPLACE_WITH_MINISIGN_PUBLIC_KEY",
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

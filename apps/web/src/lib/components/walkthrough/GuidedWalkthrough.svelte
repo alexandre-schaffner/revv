@@ -6,6 +6,7 @@
 	import { RefreshCw, ArrowDown, Search, FileText, Brain, CheckCircle, AlertTriangle, Gauge, Loader2 } from '@lucide/svelte';
 	import { getDiffThemeType } from '$lib/stores/theme.svelte';
 	import { initHighlighter } from '$lib/utils/code-highlight.svelte';
+	import { renderMarkdown } from '$lib/utils/markdown';
 	import {
 		getBlocks,
 		getSummary,
@@ -31,8 +32,12 @@
 	streamWalkthrough,
 	hydrateFromCache,
 	regenerate,
+	pollCloneUntilResolved,
+	stopClonePoll,
 } from '$lib/stores/walkthrough.svelte';
 	import { getRepositories } from '$lib/stores/prs.svelte';
+	import { API_BASE_URL } from '@revv/shared';
+	import { authHeaders } from '$lib/utils/session-token';
 	import { Progress } from '$lib/components/ui/progress';
 	import {
 		jumpToDiffLine,
@@ -71,6 +76,11 @@
 	const themeType = $derived(getDiffThemeType());
 	const issues = $derived(getIssues());
 	const issueGroups = $derived(groupIssuesBySeverityWithIndex(issues));
+	// Summary is markdown — inline code (`foo`), bold (**foo**), and code fences
+	// all appear in real walkthroughs. Rendering `{summary}` as plain text (the
+	// old behavior) leaked backticks and asterisks into the DOM; render to HTML
+	// and inject via {@html} so it reads like the rest of the walkthrough.
+	const renderedSummary = $derived(summary ? renderMarkdown(summary) : '');
 	const ratings = $derived(getRatings());
 	const isLiveGeneration = $derived(getIsLiveGeneration());
 	const cloneInProgress = $derived(getCloneInProgress());
@@ -217,15 +227,22 @@
 	const blocksWithDelay = $derived.by(() => {
 		let newInBatch = 0;
 		return blocks.map((block) => {
+			// Pre-render annotation markdown once per block so the template can
+			// emit the annotation as a sibling grid item without each re-render
+			// re-parsing markdown. Only code/diff blocks carry annotations.
+			const renderedAnnotation =
+				(block.type === 'code' || block.type === 'diff') && block.annotation
+					? renderMarkdown(block.annotation)
+					: null;
 			if (hasBlockAnimated(prId, block.id)) {
 				// Already animated in a previous mount — skip animation entirely
-				return { block, delay: -1 };
+				return { block, delay: -1, renderedAnnotation };
 			}
 			// New block — assign staggered delay and record it immediately
 			const delay = Math.min(newInBatch, STAGGER_CAP) * STAGGER_MS;
 			markBlockAnimated(prId, block.id);
 			newInBatch += 1;
-			return { block, delay };
+			return { block, delay, renderedAnnotation };
 		});
 	});
 
@@ -309,6 +326,29 @@
 		return idx >= 0 ? idx + 1 : null;
 	}
 
+	// ── Block → flagged-issue severity ─────────────────────────────────
+	// For each block referenced by at least one issue, pick the highest
+	// severity across all issues pointing at it. Used to render a colored dot
+	// to the left of the block so the reader can spot flagged steps while
+	// scrolling without having to cross-reference the Issues section.
+	const SEVERITY_RANK: Record<'info' | 'warning' | 'critical', number> = {
+		info: 1,
+		warning: 2,
+		critical: 3,
+	};
+	const blockIssueSeverity = $derived.by(() => {
+		const map = new Map<string, 'info' | 'warning' | 'critical'>();
+		for (const issue of issues) {
+			for (const bid of issue.blockIds) {
+				const current = map.get(bid);
+				if (!current || SEVERITY_RANK[issue.severity] > SEVERITY_RANK[current]) {
+					map.set(bid, issue.severity);
+				}
+			}
+		}
+		return map;
+	});
+
 	function jumpToStep(blockId: string): void {
 		const el = document.getElementById(`step-${blockId}`);
 		if (!el || !scrollRoot) return;
@@ -367,18 +407,51 @@
 		destroyed = true;
 		if (elapsedTimer) clearInterval(elapsedTimer);
 		if (walkthroughDebounce) clearTimeout(walkthroughDebounce);
+		stopClonePoll(prId);
 	});
 
 	// ── Clone-in-progress auto-retry ────────────────────────────────────
 	// When the server rejects the walkthrough because the repo is still
-	// cloning, watch for the clone to become ready and auto-retry.
+	// cloning, we used to rely solely on a WS-delivered `cloneStatus === 'ready'`
+	// update to auto-retry. That's fragile: missed WS messages, server restarts
+	// that reset clone state to 'pending', and outright clone failures would
+	// leave the UI permanently stuck on "Cloning repository…". Now we start a
+	// poller against `GET /api/repos/:id/clone-status` that is authoritative for
+	// all terminal states (ready/error/pending) regardless of WS delivery. The
+	// WS fast-path still runs: if the repositories store already reports 'ready'
+	// (from a WS broadcast) we stream immediately without waiting for the next
+	// poll tick.
 	$effect(() => {
 		if (!cloneInProgress || !cloneRepoId) return;
 		const repo = repositories.find((r) => r.id === cloneRepoId);
 		if (repo?.cloneStatus === 'ready') {
 			streamWalkthrough(prId);
+			return;
 		}
+		void pollCloneUntilResolved(prId, cloneRepoId);
+		return () => stopClonePoll(prId);
 	});
+
+	// ── Retry-clone button (escape hatch) ────────────────────────────────
+	// Visible when the UI is stuck in the clone-in-progress state. Hits the
+	// server's `/retry-clone` endpoint, which resets the repo's clone state and
+	// kicks off a fresh clone, then restarts the poller so the UI un-sticks
+	// regardless of whether the WS fast-path fires.
+	let retryingClone = $state(false);
+	async function handleRetryClone(): Promise<void> {
+		if (!cloneRepoId || retryingClone) return;
+		const repoId = cloneRepoId;
+		retryingClone = true;
+		try {
+			await fetch(`${API_BASE_URL}/api/repos/${repoId}/retry-clone`, {
+				method: 'POST',
+				headers: authHeaders(),
+			});
+			void pollCloneUntilResolved(prId, repoId);
+		} finally {
+			retryingClone = false;
+		}
+	}
 
 	// ── Regenerate dialog ───────────────────────────────────────────────
 	let regenerateDialogOpen = $state(false);
@@ -463,13 +536,44 @@
 		</Button>
 	</div>
 	{:else if cloneInProgress && !summary && blocks.length === 0}
-		<!-- Clone-in-progress state: show indeterminate progress bar -->
+		<!-- Clone-in-progress state: show indeterminate progress bar + Retry
+		     escape hatch. The poller set up in the $effect above drives this
+		     view to a terminal state (streamWalkthrough on 'ready', or a
+		     streamError branch on 'error'/'pending'), but a stuck server or
+		     network partition can still happen — the Retry button gives the
+		     user an explicit way out. When cloneRepoId is somehow null (SSE
+		     error event didn't carry it), we can't address the retry at a
+		     specific repo, so we fall back to a generic Try again that
+		     regenerates the walkthrough. -->
+		{@const repo = cloneRepoId ? repositories.find((r) => r.id === cloneRepoId) : null}
+		{@const repoError = repo?.cloneError ?? null}
 		<div class="walkthrough-empty">
-			<div class="clone-progress-container">
-				<p class="loading-text">Cloning repository…</p>
-				<Progress indeterminate class="clone-progress-bar" />
-				<p class="loading-subtext">The walkthrough will start automatically when cloning completes.</p>
-			</div>
+			{#if !cloneRepoId}
+				<AlertTriangle size={20} />
+				<p class="loading-text">Couldn't identify the repository that was cloning.</p>
+				<Button variant="outline" size="sm" onclick={handleRegenerate}>
+					<RefreshCw size={14} />
+					Try again
+				</Button>
+			{:else}
+				<div class="clone-progress-container">
+					<p class="loading-text">Cloning repository…</p>
+					<Progress indeterminate class="clone-progress-bar" />
+					<p class="loading-subtext">The walkthrough will start automatically when cloning completes.</p>
+					{#if repoError}
+						<pre class="error-text">{repoError}</pre>
+					{/if}
+					<Button
+						variant="outline"
+						size="sm"
+						disabled={retryingClone}
+						onclick={handleRetryClone}
+					>
+						<RefreshCw size={14} />
+						Retry clone
+					</Button>
+				</div>
+			{/if}
 		</div>
 	{:else if blocks.length === 0 && isStreaming}
 		<!-- Loading state: skeleton + exploration feed.
@@ -558,7 +662,9 @@
 			onanimationend={(e) => lockContainerAnimation('summary', e)}
 		>
 			<h2 class="summary-heading">Overview</h2>
-			<p class="summary-text">{summary}</p>
+			<!-- div, not p: renderMarkdown emits its own <p> elements, so wrapping
+			     in <p> would nest block elements illegally. -->
+			<div class="summary-text">{@html renderedSummary}</div>
 				{#if streamError}
 					<p class="error-inline">{streamError}</p>
 				{/if}
@@ -639,11 +745,13 @@
 
 			<!-- Blocks -->
 			<div class="blocks">
-			{#each blocksWithDelay as { block, delay } (block.id)}
+			{#each blocksWithDelay as { block, delay, renderedAnnotation } (block.id)}
 				{@const isSentiment =
 					block.type === 'markdown' &&
 					block.content.trimStart().startsWith('## Overall Sentiment')}
 				{@const hasScorecard = isSentiment && ratings.length > 0}
+				{@const hasAnnotation = renderedAnnotation !== null}
+				{@const blockSeverity = blockIssueSeverity.get(block.id) ?? null}
 
 				<!-- Visual break between the walkthrough body and the conclusion
 				     (sentiment + scorecard). Only rendered for the sentiment block
@@ -655,12 +763,12 @@
 				{/if}
 
 				<!-- `.block-group` is a transparent wrapper (display: contents) for
-				     normal blocks. For the Overall Sentiment block, it flips to a
-				     vertical flex container so the scorecard stacks BELOW the
-				     sentiment card — the grid is wider than it is tall, so giving
-				     it the full content width reads better than cramming it beside
-				     the sentiment prose. DOM order matches visual order, which
-				     keeps keyboard tab order and screen-reader flow intuitive. -->
+				     normal blocks — so .block-wrapper and .block-annotation become
+				     direct grid items of .blocks and land in columns 1 / 2 via their
+				     own `grid-column` rules. For the Overall Sentiment block, it
+				     flips to a vertical flex container (escaping display:contents) so
+				     the scorecard stacks BELOW the sentiment card and the whole pair
+				     spans the full content+rail width (grid-column: 1 / -1). -->
 				<div class="block-group" class:block-group--sentiment-stack={hasScorecard}>
 					<div
 						id="step-{block.id}"
@@ -668,6 +776,18 @@
 						class:block-wrapper--no-anim={delay === -1}
 						style:--enter-delay="{delay}ms"
 					>
+						{#if blockSeverity}
+							<!-- Severity dot positioned just outside the block's left edge.
+							     The block-wrapper is `position: relative` so the absolute dot
+							     anchors here even though it visually overflows into the grid
+							     column's left margin. Color picks up the same severity tokens
+							     used by IssueCard so "the red dot over there" and "the critical
+							     issue up here" are visually consistent. -->
+							<span
+								class="step-issue-dot step-issue-dot--{blockSeverity}"
+								aria-label="Flagged with {blockSeverity} issue"
+							></span>
+						{/if}
 						{#if block.type === 'markdown'}
 							{#if isSentiment}
 								<div class="sentiment-card">
@@ -677,11 +797,28 @@
 								<WalkthroughMarkdownBlock content={block.content} />
 							{/if}
 						{:else if block.type === 'code'}
-							<WalkthroughCodeBlock {block} {themeType} />
+							<WalkthroughCodeBlock {block} {themeType} hideAnnotation />
 						{:else if block.type === 'diff'}
-							<WalkthroughDiffBlock {block} {themeType} />
+							<WalkthroughDiffBlock {block} {themeType} hideAnnotation />
 						{/if}
 					</div>
+
+					{#if hasAnnotation}
+						<!-- Annotation rail: Notion-style floating note to the right of
+						     its block. Animation delay matches the block's so rail text
+						     and block slide in in sync. The same `delay === -1` sentinel
+						     used elsewhere suppresses re-animation on tab-revisit. -->
+						<aside
+							class="block-annotation"
+							class:block-annotation--no-anim={delay === -1}
+							style:--enter-delay="{delay}ms"
+							aria-label="Annotation"
+						>
+							<div class="block-annotation-inner">
+								{@html renderedAnnotation}
+							</div>
+						</aside>
+					{/if}
 
 					{#if hasScorecard}
 						<div class="sentiment-scorecard">
@@ -737,8 +874,32 @@
 	}
 
 	.walkthrough-content {
-		padding: 28px 32px;
+		/* Asymmetric 6-col grid: 420 left-extra + 1fr + 820 content + 40 gap +
+		   380 rail + 1fr. The 420 left-extra matches (rail + gap) on the right,
+		   which makes the CONTENT column (col 3) exactly centered in the
+		   viewport regardless of viewport width ≥ 1700px. Rail is 380 (was 300)
+		   so long inline code tokens in the annotation cards have room to breathe
+		   before needing to wrap. */
+		display: grid;
+		grid-template-columns:
+			420px
+			minmax(0, 1fr)
+			minmax(0, 820px)
+			40px
+			380px
+			minmax(0, 1fr);
+		padding: 28px 0;
 		animation: fadeIn 0.28s cubic-bezier(0.22, 0.61, 0.36, 1) 60ms both;
+	}
+
+	/* Single-column sections live in the content column (col 3). The Separator
+	   and streaming-bottom are direct children; .summary-section and
+	   .issues-section sit there too. */
+	.walkthrough-content > .summary-section,
+	.walkthrough-content > .issues-section,
+	.walkthrough-content > .streaming-bottom,
+	.walkthrough-content > :global([data-slot="separator"]) {
+		grid-column: 3;
 	}
 
 	/* Suppress the entrance animation on tab revisits. Paired with the
@@ -761,26 +922,74 @@
 		gap: 12px;
 	}
 
+	/* Loading / stepper / connect-progress all use the SAME 6-col grid as
+	   `.walkthrough-content` so their inner content lands in col 3 — the
+	   820 content column — exactly where the streamed walkthrough blocks
+	   will render. A plain max-width: 900; margin-inline: auto would NOT
+	   align with col 3 because the asymmetric grid makes col 3 centered
+	   in the viewport but cols 3–5 (including rail) are shifted right, so
+	   a viewport-centered box lands offset from where content actually goes.
+	   Grid here guarantees pixel-identical alignment with the eventual
+	   walkthrough content column. */
 	.walkthrough-loading {
-		display: flex;
-		flex-direction: column;
-		padding: 28px 32px;
-		gap: 20px;
+		display: grid;
+		grid-template-columns:
+			420px
+			minmax(0, 1fr)
+			minmax(0, 820px)
+			40px
+			380px
+			minmax(0, 1fr);
+		padding: 28px 0;
+		row-gap: 20px;
+	}
+
+	/* Each skeleton / status-bar / exploration-feed lands in col 3 (the 820
+	   content column). */
+	.walkthrough-loading > * {
+		grid-column: 3;
 	}
 
 	/* ── Connect progress bar (shown during 'connecting' phase) ──────── */
 
 	.walkthrough-connect-progress {
-		height: 28px;
-		display: flex;
+		display: grid;
+		grid-template-columns:
+			420px
+			minmax(0, 1fr)
+			minmax(0, 820px)
+			40px
+			380px
+			minmax(0, 1fr);
 		align-items: center;
-		padding: 24px 32px 4px;
+		padding: 24px 0 4px;
 		overflow: hidden;
 	}
 
+	/* `:global(*)` — Progress is a Svelte component from a different file,
+	   so its root element has a different scope hash than this component.
+	   A scoped `> *` selector would compile to `*.walkthrough-hash` and miss
+	   the Progress root. Without :global, Progress falls to grid auto-flow
+	   placement (lands in col 1 of the empty grid), not col 3. */
+	.walkthrough-connect-progress > :global(*) {
+		grid-column: 3;
+	}
+
 	.walkthrough-stepper-header {
-		padding: 24px 32px 4px;
+		display: grid;
+		grid-template-columns:
+			420px
+			minmax(0, 1fr)
+			minmax(0, 820px)
+			40px
+			380px
+			minmax(0, 1fr);
+		padding: 24px 0 4px;
 		animation: fadeIn 0.3s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+	}
+
+	.walkthrough-stepper-header > * {
+		grid-column: 3;
 	}
 
 	/* Tab-revisit override — see .walkthrough-content--no-anim for why. */
@@ -971,8 +1180,11 @@
 	}
 
 	.exploration-feed {
+		/* Fill the parent (.exploration-section → grid col 3, 820px). The
+		   prior `max-width: 520px` dates from the old left-anchored layout and
+		   now makes the tool-call list visually narrower than the skeleton and
+		   status-bar siblings. */
 		width: 100%;
-		max-width: 520px;
 		display: flex;
 		flex-direction: column;
 		gap: 3px;
@@ -1009,6 +1221,11 @@
 	.exploration-feed--error {
 		opacity: 0.5;
 		margin-bottom: 8px;
+		/* Re-apply the readability cap for the error state, where the feed
+		   lives inside the centered .walkthrough-empty (no grid col 3 to
+		   constrain it). The loading-state feed doesn't need this because
+		   .walkthrough-loading places it in col 3 (820 max). */
+		max-width: 520px;
 	}
 
 	.exploration-cursor {
@@ -1067,6 +1284,48 @@
 		line-height: 1.6;
 		color: var(--color-text-secondary);
 		margin: 0;
+	}
+
+	/* Markdown output (emitted by renderMarkdown) — matches the same tokens
+	   the block-annotation rail uses so Overview inline code / bold / lists
+	   read consistently with the rest of the walkthrough. :global() is
+	   required because the HTML is injected via {@html}, so Svelte's scoped
+	   class hashing can't reach those elements. */
+	.summary-text :global(p) {
+		margin: 0 0 8px;
+	}
+
+	.summary-text :global(p:last-child) {
+		margin-bottom: 0;
+	}
+
+	.summary-text :global(code) {
+		font-family: var(--font-mono);
+		font-size: 12px;
+		background: var(--color-bg-tertiary);
+		padding: 1px 4px;
+		border-radius: 3px;
+	}
+
+	.summary-text :global(strong) {
+		color: var(--color-text-primary);
+		font-weight: 600;
+	}
+
+	.summary-text :global(a) {
+		color: var(--color-accent);
+		text-decoration: underline;
+		text-underline-offset: 2px;
+	}
+
+	.summary-text :global(ul),
+	.summary-text :global(ol) {
+		margin: 4px 0 8px;
+		padding-left: 20px;
+	}
+
+	.summary-text :global(li) {
+		margin: 2px 0;
 	}
 
 	.summary-actions {
@@ -1172,28 +1431,55 @@
 	}
 
 	.blocks {
-		display: flex;
-		flex-direction: column;
-		gap: 20px;
+		/* Blocks spans the full width of the walkthrough-content grid and
+		   re-declares the same column tracks so its .block-wrapper (col 3) and
+		   .block-annotation (col 5) align pixel-for-pixel with the single-column
+		   sections above. Since .blocks spans `1 / -1` of its parent, its total
+		   width equals the parent's total width, so its 1fr resolves identically
+		   to the parent's 1fr — no subgrid needed. */
+		display: grid;
+		grid-column: 1 / -1;
+		grid-template-columns:
+			420px
+			minmax(0, 1fr)
+			minmax(0, 820px)
+			40px
+			380px
+			minmax(0, 1fr);
+		row-gap: 20px;
 		margin-top: 20px;
+		grid-auto-flow: row;
 	}
 
-	/* Transparent wrapper for regular blocks — the single child .block-wrapper
-	   reads as a direct flex item of .blocks, preserving the original layout. */
+	/* Transparent wrapper: .block-wrapper and .block-annotation become direct
+	   grid items of .blocks via display:contents. Explicit grid-column
+	   assignments below are what force each item into its correct column —
+	   without them, a block without an annotation would let the next block's
+	   wrapper slip into col 2 via auto-placement. */
 	.block-group {
 		display: contents;
 	}
 
-	/* Sentiment pairing: stack the sentiment card above the scorecard so the
-	   grid gets the full content width it needs to read as a 3×3 map. The
-	   previous side-by-side layout squeezed the grid into ~half the content
-	   width, which made cells cramped and forced the container query to
-	   collapse to 2 columns. Stacking restores the natural 3×3 shape. */
+	.block-group > .block-wrapper {
+		grid-column: 3;
+	}
+
+	.block-group > .block-annotation {
+		grid-column: 5;
+	}
+
+	/* Sentiment pairing: stack the sentiment card above the scorecard in the
+	   content column only. `display: flex` here escapes `display: contents`,
+	   so the whole group becomes a single grid item that can declare grid-column.
+	   With the grid now spanning the full viewport (not a 1264 container),
+	   spanning `1 / -1` would stretch the 3×3 scorecard across 2000+px on
+	   wide monitors, so we confine to col 3. */
 	.block-group--sentiment-stack {
 		display: flex;
 		flex-direction: column;
 		gap: 16px;
 		align-items: stretch;
+		grid-column: 3;
 	}
 
 	.block-group--sentiment-stack > :global(*) {
@@ -1205,6 +1491,9 @@
 	}
 
 	.block-wrapper {
+		/* position: relative so the severity dot (see .step-issue-dot) can sit
+		   just outside the block's left edge via `left: -<n>px`. */
+		position: relative;
 		max-width: 100%;
 		animation: block-slide-up 0.65s cubic-bezier(0.22, 0.61, 0.36, 1) both;
 		animation-delay: var(--enter-delay, 0ms);
@@ -1214,6 +1503,36 @@
 		outline: 2px solid transparent;
 		outline-offset: 2px;
 		transition: outline-color 200ms ease;
+	}
+
+	/* ── Severity dot ────────────────────────────────────────────────────
+	   Small colored dot to the left of a step whose block is referenced by
+	   one or more issues. Color follows issue severity (same tokens as
+	   IssueCard). Sits in the left gutter of the grid column — at the
+	   1700px minimum viewport, grid col 2 is ~20px wide so the dot fits
+	   cleanly; at wider viewports it gains even more breathing room. A
+	   translucent halo makes it visible against both light and dark block
+	   backgrounds without fighting the block card's own border. */
+	.step-issue-dot {
+		position: absolute;
+		top: 14px;
+		left: -18px;
+		width: 8px;
+		height: 8px;
+		border-radius: 50%;
+		background: var(--severity-color, var(--color-text-muted));
+		box-shadow: 0 0 0 3px color-mix(in srgb, var(--severity-color, var(--color-text-muted)) 18%, transparent);
+		pointer-events: none;
+	}
+
+	.step-issue-dot--info {
+		--severity-color: var(--color-accent);
+	}
+	.step-issue-dot--warning {
+		--severity-color: var(--color-warning);
+	}
+	.step-issue-dot--critical {
+		--severity-color: var(--color-danger);
 	}
 
 	@keyframes block-pulse {
@@ -1231,6 +1550,73 @@
 		opacity: 1;
 		transform: none;
 		filter: none;
+	}
+
+	/* ── Annotation rail ─────────────────────────────────────────────────
+	   Sits top-aligned beside its block in the grid row. No sticky — CSS
+	   sticky has no cross-sibling awareness, so two annotations in adjacent
+	   rows will collide at top: 24px during the row-transition (while row N
+	   is still partially on screen, row N+1's annotation has already started
+	   sticking). Since code/diff blocks are capped at `min(70vh, 640px)` with
+	   their own internal overflow, the outer page never scrolls past a single
+	   block for long enough to need the annotation pinned — the whole row
+	   (block + annotation) scrolls as a unit. */
+	.block-annotation {
+		align-self: start;
+		padding: 4px 0;
+		/* Match the block's entrance timing so rail text appears in sync
+		   with its block. Paired with the --enter-delay inline style. */
+		animation: block-slide-up 0.65s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+		animation-delay: var(--enter-delay, 0ms);
+	}
+
+	.block-annotation--no-anim {
+		animation: none;
+		opacity: 1;
+		transform: none;
+		filter: none;
+	}
+
+	.block-annotation-inner {
+		/* Outlined card — matches the bordered treatment of the code/diff blocks
+		   in the content column, so the rail reads as a balanced peer instead
+		   of loose text next to a bordered panel. Uses the same border token
+		   the code/diff blocks use (--color-border). */
+		background: var(--color-bg-primary);
+		border: 1px solid var(--color-border);
+		border-radius: 8px;
+		padding: 14px 16px;
+		font-size: 14px;
+		line-height: 1.6;
+		color: var(--color-text-secondary);
+		/* Allow long identifiers inside inline <code> (e.g. dotted API paths
+		   like AuthService.isTokenRevoked(payload.jti)) to break anywhere so
+		   they don't overflow the 380px card. `overflow-wrap: anywhere`
+		   (rather than `break-word`) contributes to min-content sizing, which
+		   keeps the card honest if a future narrower viewport lets grid col 5
+		   shrink. */
+		overflow-wrap: anywhere;
+	}
+
+	.block-annotation-inner :global(p) {
+		margin: 0 0 8px;
+	}
+
+	.block-annotation-inner :global(p:last-child) {
+		margin-bottom: 0;
+	}
+
+	.block-annotation-inner :global(code) {
+		font-family: var(--font-mono);
+		font-size: 12px;
+		background: var(--color-bg-tertiary);
+		padding: 1px 4px;
+		border-radius: 3px;
+	}
+
+	.block-annotation-inner :global(strong) {
+		color: var(--color-text-primary);
+		font-weight: 600;
 	}
 
 	/* ── Streaming bottom indicator ──────────────────────────────────── */
@@ -1374,6 +1760,7 @@
 
 	@media (prefers-reduced-motion: reduce) {
 		.block-wrapper,
+		.block-annotation,
 		.summary-section,
 		.issues-section,
 		.walkthrough-content,
@@ -1430,5 +1817,90 @@
 		border: 1px solid color-mix(in srgb, var(--color-accent) 20%, transparent);
 		border-radius: 10px;
 		padding: 16px 20px;
+	}
+
+	/* ── Narrow-viewport fallback ────────────────────────────────────────
+	   Below 1700px the grid has no breathing room (420 + 820 + 40 + 380 =
+	   1660 is the geometric minimum; 1700 gives a 40px buffer so the grid
+	   doesn't collapse the instant the viewport hits the bleeding edge).
+	   Collapse to a single centered 860-max column and stack the annotation
+	   card directly below its block. Sticky was already removed at the wide
+	   layer — here we just give the stacked card a small top margin so it
+	   reads as attached-to-but-distinct-from its block. */
+	@media (max-width: 1700px) {
+		/* Collapse the grid: revert to a single centered 860-max column. */
+		.walkthrough-content {
+			display: block;
+			padding: 28px 32px;
+			max-width: 860px;
+			margin-inline: auto;
+		}
+
+		/* Children no longer need explicit column placement. */
+		.walkthrough-content > .summary-section,
+		.walkthrough-content > .issues-section,
+		.walkthrough-content > .streaming-bottom,
+		.walkthrough-content > :global([data-slot="separator"]) {
+			grid-column: auto;
+		}
+
+		/* Collapse the loading / stepper / connect-progress grids to a simple
+		   centered 860-max box at narrow viewport. Children stop spanning a
+		   specific grid column and just flow normally. */
+		.walkthrough-loading,
+		.walkthrough-stepper-header,
+		.walkthrough-connect-progress {
+			display: block;
+			max-width: 860px;
+			padding-left: 32px;
+			padding-right: 32px;
+			margin-inline: auto;
+			box-sizing: border-box;
+		}
+
+		.walkthrough-loading {
+			/* Restore the flex-column gap behavior we had before the grid was
+			   introduced, so skeleton + status-bar + exploration-feed get the
+			   20px vertical spacing back. */
+			display: flex;
+			flex-direction: column;
+			gap: 20px;
+		}
+
+		.walkthrough-connect-progress {
+			/* Preserve the original flex vertical-center behavior for the
+			   Progress bar. */
+			display: flex;
+			align-items: center;
+		}
+
+		.walkthrough-loading > *,
+		.walkthrough-stepper-header > *,
+		.walkthrough-connect-progress > * {
+			grid-column: auto;
+		}
+
+		.blocks {
+			display: block;
+			grid-column: auto;
+		}
+
+		.block-group > .block-wrapper,
+		.block-group > .block-annotation {
+			grid-column: auto;
+		}
+
+		.block-group--sentiment-stack {
+			grid-column: auto;
+		}
+
+		/* Annotation card stacks directly below its block. Sticky was already
+		   removed at the wide layer; here we just give the stacked card a
+		   small top margin so it reads as attached-to-but-distinct-from
+		   its block. */
+		.block-annotation {
+			padding: 0;
+			margin-top: 10px;
+		}
 	}
 </style>

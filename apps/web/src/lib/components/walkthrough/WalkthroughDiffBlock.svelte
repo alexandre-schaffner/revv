@@ -10,9 +10,10 @@
 	interface Props {
 		block: DiffBlock;
 		themeType: 'light' | 'dark' | 'system';
+		hideAnnotation?: boolean;
 	}
 
-	let { block, themeType }: Props = $props();
+	let { block, themeType, hideAnnotation = false }: Props = $props();
 
 	const renderedAnnotation = $derived(
 		block.annotation ? renderMarkdown(block.annotation) : null
@@ -71,8 +72,8 @@
 	}
 </script>
 
-<div class="annotated-block" class:annotated-block--no-annotation={!block.annotation}>
-	{#if block.annotation && block.annotationPosition === 'left'}
+<div class="annotated-block" class:annotated-block--no-annotation={!block.annotation || hideAnnotation}>
+	{#if !hideAnnotation && block.annotation && block.annotationPosition === 'left'}
 		<div class="annotation annotation--left">
 			<div class="annotation-content">
 				{@html renderedAnnotation}
@@ -90,7 +91,7 @@
 		<div class="diff-body" use:mountDiffBlock></div>
 	</div>
 
-	{#if block.annotation && block.annotationPosition === 'right'}
+	{#if !hideAnnotation && block.annotation && block.annotationPosition === 'right'}
 		<div class="annotation annotation--right">
 			<div class="annotation-content">
 				{@html renderedAnnotation}

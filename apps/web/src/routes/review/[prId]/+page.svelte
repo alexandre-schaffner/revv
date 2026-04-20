@@ -243,7 +243,11 @@
 			bind:this={scrollRootEl}
 			style={activeTab === 'diff' ? 'display: none' : ''}
 		>
-			<div class="page-title-section" bind:this={titleEl}>
+			<div
+				class="page-title-section"
+				class:page-title-section--narrow={activeTab === 'walkthrough' || activeTab === 'request-changes'}
+				bind:this={titleEl}
+			>
 				<div class="title-row">
 					<h1 class="page-title">{pr.title}</h1>
 					{#if activeTab === 'walkthrough' && walkthroughStreaming}
@@ -346,6 +350,55 @@
 		flex-shrink: 0;
 	}
 
+	/* Walkthrough / Request Changes tabs: title + subtitle align with the
+	   820 content column of the GuidedWalkthrough grid below. We can't just
+	   use `max-width: 900; margin-inline: auto` here because the asymmetric
+	   6-col grid ({420, 1fr, 820, 40, 380, 1fr}) makes the content column
+	   centered in the viewport but cols 3–5 (content + gap + rail) shift
+	   210px right of center — so a viewport-centered box would land LEFT
+	   of where the content actually renders. Re-declare the same 6-col
+	   grid here and drop the title row into col 3, giving pixel-identical
+	   alignment with the walkthrough content and loading/stepper below. */
+	.page-title-section--narrow {
+		display: grid;
+		grid-template-columns:
+			420px
+			minmax(0, 1fr)
+			minmax(0, 820px)
+			40px
+			380px
+			minmax(0, 1fr);
+		padding-left: 0;
+		padding-right: 0;
+	}
+
+	/* `:global(*)` is required here because the Badge rendered by this section
+	   (for the risk level) lives in a different Svelte component's CSS scope,
+	   so a scoped `> *` selector won't match it — Svelte would rewrite the
+	   child as `*.svelte-hash`, and Badge has a different hash. Without this,
+	   Badge falls to grid auto-placement and lands in cols 4/5/6 (far right
+	   of the title column), which is the "misplaced" symptom. */
+	.page-title-section--narrow > :global(*) {
+		grid-column: 3;
+	}
+
+	@media (max-width: 1700px) {
+		/* Collapse the grid at narrow viewports — same pattern the walkthrough
+		   uses. Falls back to a simple centered 860-max box with 32px padding. */
+		.page-title-section--narrow {
+			display: block;
+			max-width: 860px;
+			padding-left: 32px;
+			padding-right: 32px;
+			margin-inline: auto;
+			box-sizing: border-box;
+		}
+
+		.page-title-section--narrow > :global(*) {
+			grid-column: auto;
+		}
+	}
+
 	.title-row {
 		display: flex;
 		align-items: center;
@@ -395,6 +448,32 @@
 		border-radius: 9999px;
 		padding: 1px 6px;
 		width: fit-content;
+	}
+
+	/* Risk-level color modifiers. The Badge is rendered with
+	   `variant="outline"` which sets `border-color: var(--color-border)` and
+	   `color: var(--color-foreground)`. These modifier rules override both
+	   so medium/high/low are visually distinct. Uses `color-mix` to produce
+	   a translucent tinted background that works on both light and dark
+	   themes without hardcoding a specific shade. !important is needed
+	   because Badge's Tailwind border/text classes have equal specificity
+	   and are authored later in the cascade. */
+	:global(.risk-badge--low) {
+		background: color-mix(in srgb, var(--color-success) 12%, transparent) !important;
+		color: var(--color-success) !important;
+		border-color: color-mix(in srgb, var(--color-success) 35%, transparent) !important;
+	}
+
+	:global(.risk-badge--medium) {
+		background: color-mix(in srgb, var(--color-warning) 12%, transparent) !important;
+		color: var(--color-warning) !important;
+		border-color: color-mix(in srgb, var(--color-warning) 35%, transparent) !important;
+	}
+
+	:global(.risk-badge--high) {
+		background: color-mix(in srgb, var(--color-danger) 12%, transparent) !important;
+		color: var(--color-danger) !important;
+		border-color: color-mix(in srgb, var(--color-danger) 35%, transparent) !important;
 	}
 
 	.loading {

@@ -8,7 +8,11 @@
         AlertTriangle,
         ExternalLink,
         RefreshCw,
+        Download,
     } from "@lucide/svelte";
+    import { getCommitHash } from "$lib/updater/client";
+    import { runCheck as runUpdaterCheck } from "$lib/updater/service";
+    import { isTauri } from "$lib/utils/platform";
     import { getUser, signOut } from "$lib/stores/auth.svelte";
     import {
         getSettings,
@@ -178,6 +182,25 @@
 
     function goBack() {
         history.back();
+    }
+
+    // --- Updates section state ---
+    // `commitHash` is inlined at build time by Vite (see `vite.config.ts`),
+    // so reading it is synchronous and works in both the Tauri app and the
+    // browser dev build. The `checking` flag disables the manual-check
+    // button while a request is in flight so rapid-clicking doesn't queue
+    // duplicate checks.
+    let checking = $state(false);
+    const runningInTauri = isTauri();
+    const commitHash = getCommitHash();
+
+    async function handleCheckNow(): Promise<void> {
+        checking = true;
+        try {
+            await runUpdaterCheck({ manual: true });
+        } finally {
+            checking = false;
+        }
     }
 </script>
 
@@ -625,5 +648,99 @@
                 </Select.Root>
             </div>
         </div>
+    </section>
+
+    <!-- Updates -->
+    <section class="rounded-lg border border-border bg-bg-secondary p-5">
+        <h2 class="mb-4 text-sm font-semibold text-text-primary">Updates</h2>
+        {#if !runningInTauri}
+            <p class="text-sm text-text-muted">
+                Auto-updates are available in the desktop app. The browser
+                dev build uses your local source tree.
+            </p>
+        {:else}
+            <div class="space-y-4">
+                <!-- Current version -->
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-sm text-text-primary">Current build</p>
+                        <p class="text-xs text-text-muted">
+                            Git commit snapshotted when this build was produced.
+                        </p>
+                    </div>
+                    <span class="text-sm font-mono text-text-secondary">
+                        {commitHash}
+                    </span>
+                </div>
+
+                <!-- Divider -->
+                <div class="border-t border-border-subtle"></div>
+
+                <!-- Install updates automatically -->
+                <div class="flex items-center justify-between">
+                    <div class="pr-4">
+                        <p class="text-sm text-text-primary">
+                            Install updates automatically
+                        </p>
+                        <p class="text-xs text-text-muted">
+                            When on, new versions download and install in the
+                            background. You'll be prompted to restart.
+                        </p>
+                    </div>
+                    <div
+                        class="flex gap-1 rounded-lg border border-border bg-bg-elevated p-1"
+                    >
+                        <button
+                            class="rounded-md px-3 py-1.5 text-xs font-medium transition-colors
+                                {!(getSettings()?.autoInstallUpdates ?? false)
+                                    ? 'bg-bg-tertiary text-text-primary shadow-sm'
+                                    : 'text-text-muted hover:text-text-secondary'}"
+                            aria-pressed={!(getSettings()?.autoInstallUpdates ?? false)}
+                            onclick={() => updateSettings({ autoInstallUpdates: false })}
+                        >
+                            Off
+                        </button>
+                        <button
+                            class="rounded-md px-3 py-1.5 text-xs font-medium transition-colors
+                                {getSettings()?.autoInstallUpdates ?? false
+                                    ? 'bg-bg-tertiary text-text-primary shadow-sm'
+                                    : 'text-text-muted hover:text-text-secondary'}"
+                            aria-pressed={getSettings()?.autoInstallUpdates ?? false}
+                            onclick={() => updateSettings({ autoInstallUpdates: true })}
+                        >
+                            On
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Divider -->
+                <div class="border-t border-border-subtle"></div>
+
+                <!-- Check for updates now -->
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-sm text-text-primary">
+                            Check for updates now
+                        </p>
+                        <p class="text-xs text-text-muted">
+                            Revv checks automatically every hour.
+                        </p>
+                    </div>
+                    <button
+                        class="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:border-accent hover:text-text-primary disabled:opacity-50"
+                        onclick={handleCheckNow}
+                        disabled={checking}
+                    >
+                        {#if checking}
+                            <Loader2 size={12} class="animate-spin" />
+                            Checking…
+                        {:else}
+                            <Download size={12} />
+                            Check now
+                        {/if}
+                    </button>
+                </div>
+            </div>
+        {/if}
     </section>
 </div>

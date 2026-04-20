@@ -63,6 +63,13 @@ export interface UserSettings {
 	theme: string;
 	diffViewMode: string;
 	autoFetchInterval: number;
+	/**
+	 * When true, background update checks download and install the new version
+	 * silently (then prompt the user to restart). When false, the user is
+	 * notified and must click Install to apply the update. Default is false so
+	 * users opt in to silent installs. See `apps/web/src/lib/updater/`.
+	 */
+	autoInstallUpdates: boolean;
 }
 
 // ── Review domain types ──────────────────────────────────────────────────────

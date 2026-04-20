@@ -12,6 +12,7 @@
     "core:window:allow-set-focus",
     "core:window:allow-unminimize",
     "mcp-bridge:default",
-    "autostart:default"
+    "autostart:default",
+    "updater:default"
   ]
 }

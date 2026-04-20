@@ -325,21 +325,106 @@
 		background: var(--color-bg-primary);
 	}
 
+	/* Both sections and footer use the SAME asymmetric 6-col grid as
+	   `.walkthrough-content` and `.page-title-section--narrow`, so the
+	   Request Changes tab aligns horizontally with the content column
+	   (col 3, 820 wide) above. No annotation rail here — Request Changes
+	   has no per-block commentary — but we still use the full 6-col grid
+	   so the content column lands at the same viewport position as in
+	   the walkthrough tab. A plain `max-width: 900; margin-inline: auto`
+	   would center in the viewport, but col 3 of the asymmetric grid is
+	   shifted ~210px right of viewport center, so viewport-centering
+	   would misalign with the title above. */
 	.rc-sections {
-		padding: 16px 24px;
-		display: flex;
-		flex-direction: column;
-		gap: 20px;
+		display: grid;
+		grid-template-columns:
+			420px
+			minmax(0, 1fr)
+			minmax(0, 820px)
+			40px
+			380px
+			minmax(0, 1fr);
+		padding: 16px 0;
+		row-gap: 20px;
 	}
 
-	/* Footer */
+	/* Inner sections land in col 3 (820 content column). */
+	.rc-sections > :global(*) {
+		grid-column: 3;
+	}
+
+	/* Footer — same grid. The border-top spans only col 3 (same width as
+	   the content above), which reads as a natural continuation of the
+	   centered column rather than a full-width divider slicing the page. */
 	.rc-footer {
 		flex-shrink: 0;
-		padding: 16px 24px 20px;
+		display: grid;
+		grid-template-columns:
+			420px
+			minmax(0, 1fr)
+			minmax(0, 820px)
+			40px
+			380px
+			minmax(0, 1fr);
+		padding: 16px 0 20px;
+		row-gap: 8px;
+	}
+
+	.rc-footer > * {
+		grid-column: 3;
+	}
+
+	/* The border-top should sit inside col 3 so it lines up with the
+	   content width. Apply it to a ::before pseudo-element on the footer
+	   spanning col 3. */
+	.rc-footer::before {
+		content: '';
+		grid-column: 3;
 		border-top: 1px solid var(--color-border);
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
+		/* Zero-height pseudo that carries only the border, placed as the
+		   first grid item so everything after flows below it. */
+		height: 0;
+	}
+
+	/* Narrow-viewport fallback — matches the GuidedWalkthrough breakpoint
+	   so all three containers (walkthrough, title, request-changes) collapse
+	   at the same viewport width. */
+	@media (max-width: 1700px) {
+		.rc-sections,
+		.rc-footer {
+			display: block;
+			max-width: 860px;
+			padding-left: 32px;
+			padding-right: 32px;
+			margin-inline: auto;
+			box-sizing: border-box;
+		}
+
+		.rc-sections {
+			padding-top: 16px;
+			padding-bottom: 16px;
+			display: flex;
+			flex-direction: column;
+			gap: 20px;
+		}
+
+		.rc-footer {
+			padding-top: 16px;
+			padding-bottom: 20px;
+			display: flex;
+			flex-direction: column;
+			gap: 8px;
+			border-top: 1px solid var(--color-border);
+		}
+
+		.rc-footer::before {
+			display: none;
+		}
+
+		.rc-sections > :global(*),
+		.rc-footer > * {
+			grid-column: auto;
+		}
 	}
 
 	.rc-actions {

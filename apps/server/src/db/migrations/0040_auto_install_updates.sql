@@ -1,0 +1,11 @@
+-- Add the auto_install_updates flag backing the "Install updates
+-- automatically" toggle in Settings. Stored as SQLite integer (0/1)
+-- mapped to boolean in the Settings service. Default 0 means existing
+-- users get the opt-in toast flow; they can switch to silent installs
+-- from the Updates section on the Settings page.
+--
+-- SQLite lacks IF NOT EXISTS on ALTER TABLE ADD COLUMN; if a dev already
+-- applied the column directly the Drizzle runner will swallow the error.
+-- NOT NULL + default 0 means existing rows (there's only one: id='default')
+-- don't need a backfill step.
+ALTER TABLE `user_settings` ADD COLUMN `auto_install_updates` integer DEFAULT 0 NOT NULL;

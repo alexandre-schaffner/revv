@@ -39,7 +39,12 @@ pub fn run() {
 		.plugin(tauri_plugin_autostart::init(
 			tauri_plugin_autostart::MacosLauncher::LaunchAgent,
 			Some(vec!["--hidden"]),
-		));
+		))
+		// Background auto-update: the updater plugin is a pure passthrough.
+		// The endpoint, signing key, and install mode all live in
+		// tauri.conf.json → plugins.updater; the frontend drives the actual
+		// check/install loop via `@tauri-apps/plugin-updater`.
+		.plugin(tauri_plugin_updater::Builder::new().build());
 
 	// Shadow-rebind under debug only; release builds skip this entirely,
 	// so the binding above never needs `mut` and produces no warning.

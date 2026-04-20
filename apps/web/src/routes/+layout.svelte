@@ -6,6 +6,7 @@
 	import * as prs from '$lib/stores/prs.svelte';
 	import * as settings from '$lib/stores/settings.svelte';
 	import * as sync from '$lib/services/sync';
+	import { startUpdater, stopUpdater } from '$lib/updater/service';
 	import { initTheme } from '$lib/stores/theme.svelte';
 	import { initShortcuts } from '$lib/stores/shortcuts.svelte';
 	import { TooltipProvider } from '$lib/components/ui/tooltip';
@@ -63,17 +64,25 @@
 		// If the token is valid, loadUser() sets the user, which triggers
 		// the hydration effect above.
 		auth.loadUser();
-		// Fetch settings immediately — route is now public, no auth needed
-		void settings.fetchSettings();
-		// Prefetch both agents' model lists so agent/model dropdowns can
-		// swap instantly without a round-trip (and without a race between
-		// the PUT that changes the agent and the GET that lists models).
+		// Fetch settings first — the updater needs to know `autoInstallUpdates`
+		// before its first check, so we await that before arming the check
+		// loop. Model prefetch doesn't block anything, so it starts in
+		// parallel.
 		void settings.fetchAllModels();
+		void settings.fetchSettings().then(() => {
+			// 5s delay so the first update check doesn't compete with
+			// initial PR sync for network. After that the service runs on
+			// its own hourly timer. Tauri-only — the service no-ops in dev.
+			setTimeout(() => {
+				startUpdater();
+			}, 5000);
+		});
 
 		return () => {
 			cleanupTheme();
 			cleanupShortcuts();
 			sync.stopPolling();
+			stopUpdater();
 		};
 	});
 

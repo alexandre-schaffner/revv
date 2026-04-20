@@ -1,7 +1,9 @@
-import type { WalkthroughBlock, RiskLevel, WalkthroughStreamEvent, WalkthroughIssue, WalkthroughPhase, WalkthroughRating, CarriedOverIssue } from '@revv/shared';
+import type { WalkthroughBlock, RiskLevel, WalkthroughStreamEvent, WalkthroughIssue, WalkthroughPhase, WalkthroughRating, CarriedOverIssue, CloneStatus } from '@revv/shared';
 import { API_BASE_URL } from '@revv/shared';
 import { authHeaders } from '$lib/utils/session-token';
 import { runWalkthroughSse } from '$lib/services/walkthrough-sse';
+import { api } from '$lib/api/client';
+import { updateRepoCloneStatus } from '$lib/stores/prs.svelte';
 import { toast } from 'svelte-sonner';
 
 // ── Per-PR state entry ──────────────────────────────────────────────────────
@@ -62,6 +64,11 @@ let activePrId = $state<string | null>(null);
 // Non-reactive — abort controllers keyed by PR ID.
 // Map iteration order = insertion order, so iterating gives oldest-first.
 const controllers = new Map<string, { abort: AbortController; reader: ReadableStreamDefaultReader<Uint8Array> | null }>();
+
+// Non-reactive — clone-status pollers keyed by PR ID. One active poller per PR
+// at a time; the `cancelled` flag lets either the component's effect cleanup
+// or the next poll-start call stop the loop cooperatively between ticks.
+const clonePollers = new Map<string, { cancelled: boolean }>();
 
 // Cap on concurrent walkthrough SSE streams. WebKit caps HTTP/1.1 at ~6
 // connections per host; each SSE stream holds one indefinitely. Without a
@@ -128,6 +135,107 @@ export function getCloneRepoId(): string | null {
 	return active()?.cloneRepoId ?? null;
 }
 
+// ── Clone-status polling (self-healing un-stick) ────────────────────────────
+//
+// The walkthrough SSE returns a terminal `CloneInProgress` error when the
+// server sees the repo is still cloning. To un-stick, we rely on a WS-driven
+// $effect in GuidedWalkthrough that watches repositories[repoId].cloneStatus.
+// That's brittle: the server only broadcasts `repos:clone-status` on
+// 'ready'/'error', so any missed/out-of-order WS delivery — or a server
+// restart mid-clone that resets status to 'pending' — leaves the UI stuck
+// forever with no escape hatch.
+//
+// Polling the existing `GET /api/repos/:id/clone-status` endpoint closes
+// that gap deterministically. It runs only while the entry is in a
+// clone-in-progress state, coalesces concurrent starts, cancels on
+// $effect cleanup, and surfaces an actionable error on terminal
+// 'error'/'pending' states instead of hanging.
+
+const CLONE_POLL_INTERVAL_MS = 2000;
+const CLONE_POLL_MAX_MS = 10 * 60 * 1000;
+
+export function stopClonePoll(prId: string): void {
+	const p = clonePollers.get(prId);
+	if (p) p.cancelled = true;
+	clonePollers.delete(prId);
+}
+
+export async function pollCloneUntilResolved(prId: string, repoId: string): Promise<void> {
+	// Coalesce: if an in-flight poll is already running for this PR, do
+	// nothing. $effect re-runs with the same deps would otherwise spawn
+	// duplicate loops.
+	if (clonePollers.has(prId)) return;
+	const token = { cancelled: false };
+	clonePollers.set(prId, token);
+	const startedAt = Date.now();
+	try {
+		while (!token.cancelled) {
+			// Bail if the entry is no longer in the clone-in-progress state the
+			// poller was started for — could mean: user regenerated, WS already
+			// flipped to 'ready' and triggered the fast-path retry, navigated
+			// away, or the store reset for some other reason.
+			const entry = entries.get(prId);
+			if (!entry || !entry.cloneInProgress || entry.cloneRepoId !== repoId) return;
+
+			let status: CloneStatus = 'cloning';
+			let error: string | null = null;
+			try {
+				const { data } = await api.api.repos({ id: repoId })['clone-status'].get();
+				// The endpoint's response is a union of { status, path, error }
+				// (success) and { error } (handleAppError fallback). Narrow on
+				// `status in data` so the error-only shape doesn't misread as a
+				// successful status lookup.
+				if (data && 'status' in data) {
+					status = data.status;
+					error = data.error ?? null;
+				}
+			} catch {
+				// Transient network blip — keep polling until the overall timeout.
+			}
+
+			if (token.cancelled) return;
+
+			// Mirror to the prs store so Settings + the fast-path $effect stay
+			// consistent even if we never received the WS message.
+			updateRepoCloneStatus(repoId, status, error ?? undefined);
+
+			if (status === 'ready') {
+				// streamWalkthrough clears cloneInProgress / cloneRepoId at its top,
+				// which will make the next loop iteration exit if somehow we re-enter.
+				void streamWalkthrough(prId);
+				return;
+			}
+			if (status === 'error' || status === 'pending') {
+				updateEntry(prId, (e) => {
+					e.cloneInProgress = false;
+					e.cloneRepoId = null;
+					e.isStreaming = false;
+					e.streamError = status === 'error'
+						? `Repository clone failed${error ? `: ${error}` : ''}. Retry to try again.`
+						: 'Repository clone was reset. Retry to try again.';
+				});
+				return;
+			}
+
+			if (Date.now() - startedAt > CLONE_POLL_MAX_MS) {
+				updateEntry(prId, (e) => {
+					e.cloneInProgress = false;
+					e.cloneRepoId = null;
+					e.isStreaming = false;
+					e.streamError = 'Repository clone is taking too long. Retry to try again.';
+				});
+				return;
+			}
+
+			await new Promise((r) => setTimeout(r, CLONE_POLL_INTERVAL_MS));
+		}
+	} finally {
+		// Only remove our own token — a concurrent stopClonePoll/restart may
+		// have already deleted or replaced the entry.
+		if (clonePollers.get(prId) === token) clonePollers.delete(prId);
+	}
+}
+
 // ── Status query (for sidebar / external consumers) ─────────────────────────
 
 export function getPrWalkthroughStatus(prId: string): 'idle' | 'generating' | 'complete' | 'error' {
@@ -192,6 +300,11 @@ export function prepareEntry(prId: string): void {
 export async function streamWalkthrough(prId: string): Promise<void> {
 	// Switch the active view
 	activePrId = prId;
+
+	// Any in-flight clone poll for this PR is now redundant — we're kicking
+	// off a fresh SSE that will either succeed or produce a new error that
+	// updates the entry. Stop the poll so it can't race us.
+	stopClonePoll(prId);
 
 	const existing = entries.get(prId);
 
@@ -486,10 +599,18 @@ function applyEvents(prId: string, events: WalkthroughStreamEvent[]): void {
 					}
 					break;
 				case 'error':
-					if (event.data.code === 'CloneInProgress') {
+					if (event.data.code === 'CloneInProgress' && event.data.repoId != null) {
 						entry.cloneInProgress = true;
-						entry.cloneRepoId = event.data.repoId ?? null;
+						entry.cloneRepoId = event.data.repoId;
 						entry.isStreaming = false;
+					} else if (event.data.code === 'CloneInProgress') {
+						// Defensive: if the server omitted repoId we can't poll or
+						// auto-retry. Surface a real error so the UI renders a
+						// retry button instead of an indeterminate progress bar.
+						entry.cloneInProgress = false;
+						entry.cloneRepoId = null;
+						entry.isStreaming = false;
+						entry.streamError = 'Walkthrough could not start: the repository is cloning, but the server did not report which one. Retry to try again.';
 					} else {
 						entry.streamError = event.data.message;
 						entry.isStreaming = false;
@@ -522,6 +643,9 @@ function abortPr(prId: string): void {
 		ctrl.abort.abort();
 		controllers.delete(prId);
 	}
+	// A clone poll, if any, is tied to the clone-in-progress state we just
+	// cleared out — cancel it too so we don't leak a loop.
+	stopClonePoll(prId);
 }
 
 /**

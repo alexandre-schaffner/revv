@@ -56,6 +56,7 @@ export const settingsRoutes = new Elysia({ prefix: '/api/settings' })
 					theme: t.String(),
 					diffViewMode: t.String(),
 					autoFetchInterval: t.Number(),
+					autoInstallUpdates: t.Boolean(),
 				})
 			),
 		}
