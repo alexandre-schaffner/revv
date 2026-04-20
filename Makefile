@@ -46,19 +46,26 @@ build-server: ## Build the API server only
 
 # ── Distribution ──────────────────────────────────────────────
 
-dist: ## Build platform installer (.dmg on macOS, .msi on Windows, .deb on Linux)
+dist: ## Build the Revv.app bundle used by the source installer
 	@printf "\n\033[1m\033[36m▸ Building Revv distribution package...\033[0m\n\n"
 	@printf "  Step 1/3: Building shared package\n"
 	cd packages/shared && bun run typecheck
 	@printf "  Step 2/3: Building web frontend + API server\n"
 	bun run build
-	@printf "  Step 3/3: Building Tauri desktop installer\n"
-	cd apps/desktop && bunx tauri build
+	@printf "  Step 3/3: Building Tauri desktop bundle (.app only)\n"
+	# --bundles app skips DMG/MSI/DEB. Revv is distributed via source install,
+	# not via a signed DMG, and tauri-bundler's bundle_dmg.sh has been flaky
+	# on machines where it's blocked from Finder/AppleEvents. Use `make dmg`
+	# explicitly if you actually need the .dmg.
+	cd apps/desktop && bunx tauri build --bundles app
 	@printf "\n\033[1m\033[32m  Build complete!\033[0m\n"
-	@printf "  Installer located in: apps/desktop/target/release/bundle/\n\n"
+	@printf "  Bundle located in: apps/desktop/target/release/bundle/macos/\n\n"
+
+dmg: ## Build the full DMG installer (requires Finder/AppleEvents permission)
+	cd apps/desktop && bunx tauri build --bundles dmg
 
 dist-debug: ## Build a debug distribution (faster, larger binary)
-	cd apps/desktop && bunx tauri build --debug
+	cd apps/desktop && bunx tauri build --debug --bundles app
 
 # ── Quality ───────────────────────────────────────────────────
 
