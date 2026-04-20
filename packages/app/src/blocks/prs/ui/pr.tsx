@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import { Avatar, AvatarImage, AvatarFallback } from "@rev/ui/components/ui/avatar";
 import { GitPullRequest, GitPullRequestClosed, GitMerge, GitBranch, User } from "lucide-react";
 
@@ -23,7 +24,11 @@ function PrStateIcon({ state }: { state: string }) {
 
 export function PRListItem({ pr }: { pr: PrEntry }) {
   return (
-    <div className="flex flex-col gap-1 px-3 py-2 hover:bg-accent/50 transition-colors rounded-md mx-1 cursor-default">
+    <Link
+      to="/pr/$number"
+      params={{ number: String(pr.number) }}
+      className="flex flex-col gap-1 px-3 py-2 hover:bg-accent/50 transition-colors rounded-md mx-1 cursor-pointer no-underline"
+    >
       {/* Line 1: state icon + title */}
       <div className="flex items-center gap-1.5 min-w-0">
         <PrStateIcon state={pr.state} />
@@ -57,7 +62,7 @@ export function PRListItem({ pr }: { pr: PrEntry }) {
           {pr.headRefName}
         </span>
       </div>
-    </div>
+    </Link>
   );
 }
 

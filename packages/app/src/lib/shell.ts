@@ -21,7 +21,7 @@ export function exec(
       args,
       {
         cwd: options?.cwd,
-        timeout: options?.timeout ?? 10_000,
+        timeout: options?.timeout ?? 30_000,
         maxBuffer: 1024 * 1024,
       },
       (error, stdout, stderr) => {

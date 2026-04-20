@@ -1,7 +1,5 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { requestLs } from "./commands";
-import { getCommandById } from "../../lib/commands";
-import type { CommandEntry } from "../../lib/command-log";
 import { useRegisterShortcuts, type ShortcutDef } from "../../lib/shortcuts";
 
 interface FileEntry {
@@ -27,36 +25,19 @@ function parseLsLine(line: string): FileEntry | null {
 
 export function FilesBlock() {
   const [files, setFiles] = useState<FileEntry[]>([]);
-  const [status, setStatus] = useState<"idle" | "pending" | "done" | "denied">("idle");
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [status, setStatus] = useState<"idle" | "loading" | "done" | "error">("idle");
 
   const requestFiles = useCallback(async () => {
-    setStatus("pending");
+    setStatus("loading");
     setFiles([]);
     const entry = await requestLs();
-    // poll for completion
-    pollRef.current = setInterval(async () => {
-      const updated = await getCommandById({ data: { id: entry.id } });
-      if (!updated) return;
-      if (updated.status === "done" || updated.status === "error") {
-        if (pollRef.current) clearInterval(pollRef.current);
-        pollRef.current = null;
-        const lines = (updated.result?.stdout ?? "").split("\n");
-        setFiles(lines.map(parseLsLine).filter((f): f is FileEntry => f !== null));
-        setStatus("done");
-      } else if (updated.status === "denied") {
-        if (pollRef.current) clearInterval(pollRef.current);
-        pollRef.current = null;
-        setStatus("denied");
-      }
-    }, 500);
+    const lines = (entry.result?.stdout ?? "").split("\n");
+    setFiles(lines.map(parseLsLine).filter((f): f is FileEntry => f !== null));
+    setStatus(entry.status === "done" ? "done" : "error");
   }, []);
 
   useEffect(() => {
     requestFiles();
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
   }, [requestFiles]);
 
   const shortcuts = useMemo<ShortcutDef[]>(
@@ -80,14 +61,14 @@ export function FilesBlock() {
         </button>
       </div>
       <div className="flex-1 overflow-y-auto py-1">
-        {status === "pending" && (
+        {status === "loading" && (
           <span className="px-3 py-2 text-xs text-muted-foreground block">
-            Awaiting approval…
+            Loading…
           </span>
         )}
-        {status === "denied" && (
+        {status === "error" && (
           <span className="px-3 py-2 text-xs text-muted-foreground block">
-            Command denied.
+            Failed to list files.
           </span>
         )}
         {status === "done" && files.length === 0 && (
