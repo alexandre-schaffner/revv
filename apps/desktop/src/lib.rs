@@ -31,9 +31,14 @@ pub fn run() {
 		// Registered so the frontend can toggle launch-on-login via the
 		// `plugin:autostart|enable` / `disable` / `is_enabled` IPC commands.
 		// No automatic behavior — users opt in explicitly from Settings.
+		//
+		// `--hidden` is appended to the login launcher so we can distinguish
+		// autostart-triggered launches from manual ones: on login we keep
+		// the window in the tray (Slack/Linear convention), on a manual
+		// launch we surface it. See setup() below.
 		.plugin(tauri_plugin_autostart::init(
 			tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-			None,
+			Some(vec!["--hidden"]),
 		));
 
 	// Shadow-rebind under debug only; release builds skip this entirely,
@@ -81,6 +86,19 @@ pub fn run() {
 					}
 				})
 				.build(app)?;
+
+			// Surface the main window on launch. The window is configured
+			// with `visible: false` in tauri.conf.json to prevent a flash
+			// before setup finishes wiring up the tray; we make the call
+			// here so the UI appears alongside (not instead of) the tray.
+			//
+			// Skip when `--hidden` is in argv: that arg is only passed by
+			// the autostart LaunchAgent, so a login-triggered launch stays
+			// in the tray while a manual launch opens the window.
+			let launched_hidden = std::env::args().any(|arg| arg == "--hidden");
+			if !launched_hidden {
+				show_main_window(app.handle());
+			}
 
 			Ok(())
 		})
