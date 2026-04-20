@@ -12,7 +12,6 @@ import {
 	regenerateWalkthroughHandler,
 } from './reviews/handlers/walkthrough-cache';
 import { submitGithubReviewHandler } from './reviews/handlers/github-submit';
-import type { CarriedOverIssue } from '@revv/shared';
 
 /**
  * Review routes — thin Elysia router. Handler bodies live in
@@ -245,11 +244,7 @@ export const reviewRoutes = new Elysia({ prefix: '/api/reviews' })
 
 	.post('/:id/walkthrough/regenerate', async (ctx) => {
 		try {
-			const body = ctx.body as { keptIssues?: unknown } | null | undefined;
-			const keptIssues = Array.isArray(body?.keptIssues)
-				? (body.keptIssues as CarriedOverIssue[])
-				: [];
-			await regenerateWalkthroughHandler(ctx.params.id, keptIssues);
+			await regenerateWalkthroughHandler(ctx.params.id);
 			return { success: true };
 		} catch (e) {
 			return handleAppError(e, ctx);
@@ -290,6 +285,7 @@ export const reviewRoutes = new Elysia({ prefix: '/api/reviews' })
 						}),
 					),
 				),
+				issueIds: t.Optional(t.Array(t.String())),
 			}),
 		},
 	);

@@ -10,6 +10,7 @@
 		getNeedsYourReviewByRepo,
 		getSelectedPrId,
 	} from '$lib/stores/prs.svelte';	import { requestSync, requestFullSync } from '$lib/stores/ws.svelte';
+	import { getPrListSyncing } from '$lib/stores/sync.svelte';
 	import { handleKey as handleNavKey, clearFocus, setFocusedId } from '$lib/stores/sidebar-nav.svelte';
 	import { getPaletteOpen } from '$lib/stores/shortcuts.svelte';
 	import { getActivePanel, enterScrollMode } from '$lib/stores/focus-mode.svelte';
@@ -28,6 +29,11 @@
 
 	let addRepoOpen = $derived(getAddRepoDialogOpen());
 	const selectedPrId = $derived(getSelectedPrId());
+	// `isLoading` covers direct HTTP syncs (fetchPrs/syncPrs); `getPrListSyncing()`
+	// covers WebSocket-driven PR-list syncs (prs:sync-started → prs:sync-complete)
+	// which is what handleRefresh below actually triggers. Combine both so the
+	// spinner reflects any in-flight PR-list sync regardless of transport.
+	const isSyncing = $derived(getIsLoading() || getPrListSyncing());
 
 	function handleRefresh() {
 		if (selectedPrId) {
@@ -107,12 +113,12 @@
 			<button
 				class="icon-btn"
 				onclick={handleRefresh}
-				disabled={getIsLoading()}
+				disabled={isSyncing}
 				title="Sync PRs"
 				aria-label="Sync pull requests"
 			>
 				<svg
-					class="size-[14px] {getIsLoading() ? 'animate-spin' : ''}"
+					class="size-[14px] {isSyncing ? 'animate-spin' : ''}"
 					xmlns="http://www.w3.org/2000/svg"
 					viewBox="0 0 24 24"
 					fill="none"

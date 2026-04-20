@@ -1,4 +1,4 @@
-import type { WalkthroughBlock, RiskLevel, WalkthroughStreamEvent, WalkthroughIssue, WalkthroughPhase, WalkthroughRating, CarriedOverIssue, CloneStatus } from '@revv/shared';
+import type { WalkthroughBlock, RiskLevel, WalkthroughStreamEvent, WalkthroughIssue, WalkthroughPhase, WalkthroughRating, CloneStatus } from '@revv/shared';
 import { API_BASE_URL } from '@revv/shared';
 import { authHeaders } from '$lib/utils/session-token';
 import { runWalkthroughSse } from '$lib/services/walkthrough-sse';
@@ -352,10 +352,6 @@ export async function streamWalkthrough(prId: string): Promise<void> {
 	entry.isStreaming = true;
 	entry.cloneInProgress = false;
 	entry.cloneRepoId = null;
-	if (pendingKeptIssues.length > 0) {
-		entry.issues = [...pendingKeptIssues];
-		pendingKeptIssues = [];
-	}
 	entries.set(prId, entry);
 	entries = new Map(entries);
 
@@ -678,14 +674,7 @@ export function abort(): void {
 	}
 }
 
-// Issues to seed into the fresh entry immediately after creation.
-// Set by `regenerate()` before calling `streamWalkthrough()`.
-let pendingKeptIssues: WalkthroughIssue[] = [];
-
-export async function regenerate(prId: string, keptIssues?: WalkthroughIssue[]): Promise<void> {
-	// Capture the current entry BEFORE aborting so we can extract block context
-	const oldEntry = entries.get(prId);
-
+export async function regenerate(prId: string): Promise<void> {
 	// Reset animation trackers so the newly-streamed content animates in
 	// like a first-time view (stepper/content/summary/issues section fade in,
 	// blocks and issue cards stagger). Without this, regenerate would pop
@@ -707,29 +696,12 @@ export async function regenerate(prId: string, keptIssues?: WalkthroughIssue[]):
 	entries.set(prId, entry);
 	entries = new Map(entries);
 
-	// Build enriched carried-over issues by resolving each issue's block IDs
-	// to their original annotation/content text so the agent can reassess them.
-	const enrichedKeptIssues: CarriedOverIssue[] = (keptIssues ?? []).map((issue) => {
-		const blockTexts = issue.blockIds.flatMap((blockId) => {
-			const block = oldEntry?.blocks.find((b) => b.id === blockId);
-			if (!block) return [];
-			if (block.type === 'markdown') return [block.content.slice(0, 500)];
-			return [block.annotation ?? ''];
-		}).filter((text) => text.length > 0);
-
-		return {
-			...issue,
-			originalContext: blockTexts.join('\n\n'),
-		};
-	});
-
 	// Await cache invalidation so the subsequent stream request doesn't
 	// race and find the old errored walkthrough still in the database.
 	try {
 		await fetch(`${API_BASE_URL}/api/reviews/${prId}/walkthrough/regenerate`, {
 			method: 'POST',
-			headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-			body: JSON.stringify({ keptIssues: enrichedKeptIssues }),
+			headers: authHeaders(),
 		});
 	} catch {
 		// If invalidation fails, streamWalkthrough will still attempt a
@@ -739,17 +711,6 @@ export async function regenerate(prId: string, keptIssues?: WalkthroughIssue[]):
 	// Remove the temp entry so streamWalkthrough creates a clean one
 	entries.delete(prId);
 	entries = new Map(entries);
-
-	// Seed kept issues so the new entry pre-populates them before streaming.
-	// Strip `blockIds` — those ids point into the OLD walkthrough's blocks and
-	// are meaningless against the new ones. Block ids are order-based
-	// (`block-0`, `block-1`, …), so a stale id can either reference nothing
-	// (fewer blocks this time → silent click failure) or coincidentally match
-	// a semantically-unrelated new block (click jumps to the wrong step). Both
-	// show up to the user as "clicking the issue is buggy." Clearing the link
-	// renders kept issues as non-clickable labels until the model re-flags them
-	// against a real new block.
-	pendingKeptIssues = (keptIssues ?? []).map((i) => ({ ...i, blockIds: [] }));
 
 	await streamWalkthrough(prId);
 }
@@ -803,6 +764,30 @@ export function onWalkthroughComplete(prId: string, walkthroughId: string): void
 		entries.set(prId, stub);
 		entries = new Map(entries);
 	}
+}
+
+/**
+ * Stamp `submittedAt` on the given walkthrough issues of the given PR so the
+ * UI's "already posted to GitHub" treatment renders immediately after a
+ * Submit / Approve succeeds. The server has already persisted the same value
+ * onto the walkthrough_issues rows, so this mirror survives refreshes via
+ * the next cache hydrate / SSE replay.
+ *
+ * Unknown ids are ignored — the walkthrough may have been regenerated between
+ * the user selecting the issues and the submit landing.
+ */
+export function markIssuesAsSubmitted(
+	prId: string,
+	issueIds: readonly string[],
+	submittedAt: string,
+): void {
+	if (issueIds.length === 0) return;
+	const idSet = new Set(issueIds);
+	updateEntry(prId, (entry) => {
+		entry.issues = entry.issues.map((i) =>
+			idSet.has(i.id) ? { ...i, submittedAt } : i,
+		);
+	});
 }
 
 export function onWalkthroughError(prId: string, message: string): void {

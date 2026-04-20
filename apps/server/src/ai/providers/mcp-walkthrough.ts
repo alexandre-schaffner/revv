@@ -4,7 +4,6 @@ import type {
 	WalkthroughStreamEvent,
 	WalkthroughTokenUsage,
 	WalkthroughBlock,
-	CarriedOverIssue,
 } from "@revv/shared";
 import { debug } from "../../logger";
 import type { PrFileMeta } from "../../services/GitHub";
@@ -69,7 +68,6 @@ export function streamWalkthroughViaMCP(
 		files: PrFileMeta[];
 		worktreePath: string;
 		continuation?: ContinuationContext;
-		carriedOverIssues?: CarriedOverIssue[];
 		/**
 		 * Caller-owned abort signal. When provided, the MCP query uses this
 		 * controller directly instead of minting its own; calling `.abort()`
@@ -127,7 +125,6 @@ export function streamWalkthroughViaMCP(
 		params,
 		undefined,
 		params.continuation,
-		params.carriedOverIssues,
 	);
 
 	// ── Run query in background ─────────────────────────────────────────

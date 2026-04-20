@@ -5,14 +5,14 @@
 	import CommitsDropdown from './CommitsDropdown.svelte';
 	import { RefreshCw } from '@lucide/svelte';
 	import { getSelectedPr, getSelectedPrId } from '$lib/stores/prs.svelte';
-	import { getLastSyncAt, getSyncing, getSyncError } from '$lib/stores/sync.svelte';
+	import { getLastSyncAt, getThreadsSyncing, getSyncError } from '$lib/stores/sync.svelte';
 	import { requestFullSync } from '$lib/stores/ws.svelte';
 
 	const pr = $derived(getSelectedPr());
 	const selectedPrId = $derived(getSelectedPrId());
-	const lastSyncAt = $derived(getLastSyncAt());
-	const syncing = $derived(getSyncing());
-	const syncError = $derived(getSyncError());
+	const lastSyncAt = $derived(getLastSyncAt(selectedPrId));
+	const syncing = $derived(getThreadsSyncing(selectedPrId));
+	const syncError = $derived(getSyncError(selectedPrId));
 
 	let tick = $state(0);
 	$effect(() => {
@@ -51,12 +51,12 @@
 
 	<!-- Right: sync indicator + branch/sha -->
 	<div class="flex items-center gap-2">
-		{#if lastSyncAt !== null}
+		{#if selectedPrId}
 			<button
 				class="flex items-center gap-1.5 text-[10px] text-text-muted rounded px-1 py-0.5 transition-colors hover:bg-bg-elevated hover:text-text-secondary disabled:cursor-default disabled:opacity-60"
 				onclick={handleRetrySync}
 				disabled={syncing}
-				title="Sync comments"
+				title="Sync comments for this PR"
 			>
 				{#if syncing}
 					<span class="flex items-center animate-spin"><RefreshCw size={11} /></span>
@@ -64,9 +64,12 @@
 				{:else if syncError}
 					<RefreshCw size={11} />
 					<span class="whitespace-nowrap text-red-400">Sync failed</span>
-				{:else}
+				{:else if lastSyncAt}
 					<RefreshCw size={11} />
 					<span class="whitespace-nowrap">Synced {syncLabel}</span>
+				{:else}
+					<RefreshCw size={11} />
+					<span class="whitespace-nowrap">Sync now</span>
 				{/if}
 			</button>
 		{/if}

@@ -3,7 +3,6 @@ import type {
 	WalkthroughBlock,
 	WalkthroughStreamEvent,
 	WalkthroughTokenUsage,
-	CarriedOverIssue,
 } from "@revv/shared";
 import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../../constants";
 import { debug } from "../../logger";
@@ -253,7 +252,6 @@ export function streamWalkthroughViaOpencodeMCP(
 		worktreePath: string;
 		continuation?: ContinuationContext;
 		onSessionId?: (sessionId: string) => void;
-		carriedOverIssues?: CarriedOverIssue[];
 		/**
 		 * Caller-owned abort signal. When provided, `.abort()` kills the spawned
 		 * `opencode run` subprocess — this is how {@link WalkthroughJobs.cancel}
@@ -291,7 +289,7 @@ export function streamWalkthroughViaOpencodeMCP(
 
 	// ── Build prompt and config ───────────────────────────────────────────
 	const userMessage =
-		WALKTHROUGH_MCP_SYSTEM_PROMPT + "\n\n---\n\n" + buildWalkthroughPrompt(params, undefined, params.continuation, params.carriedOverIssues);
+		WALKTHROUGH_MCP_SYSTEM_PROMPT + "\n\n---\n\n" + buildWalkthroughPrompt(params, undefined, params.continuation);
 
 	const initialState = params.continuation
 		? {

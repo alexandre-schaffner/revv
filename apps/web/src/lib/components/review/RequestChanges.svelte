@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { getIssues, getRatings, getBlocks } from '$lib/stores/walkthrough.svelte';
+	import { getIssues, getRatings, getBlocks, markIssuesAsSubmitted } from '$lib/stores/walkthrough.svelte';
 	import {
 		getThreads,
 		getThreadMessages,
@@ -15,9 +15,6 @@
 	import CommentsPanel from './comments-panel/CommentsPanel.svelte';
 	import ApproveWithIssuesDialog from './ApproveWithIssuesDialog.svelte';
 
-	// Module-level: survives component remount, keyed by PR ID
-	const _submittedByPr = new Map<string, Set<string>>();
-
 	interface Props {
 		prId: string;
 	}
@@ -32,7 +29,14 @@
 	const blocks = $derived(getBlocks());
 
 	let selectedIssueIds = $state<Set<string>>(new Set());
-	let submittedIssueIds = $state<Set<string>>((() => _submittedByPr.get(prId) ?? new Set())());
+	// Derived from the walkthrough store — each issue carries its own
+	// `submittedAt` once persisted on the server. Deriving here (instead of
+	// caching a module-level Map) means the "already posted" treatment
+	// survives reloads, PR-switches, and app restarts: on next mount the
+	// cached walkthrough fetch hydrates `issues` with the timestamp intact.
+	const submittedIssueIds = $derived(
+		new Set(issues.filter((i) => i.submittedAt != null).map((i) => i.id)),
+	);
 	let submitting = $state<Action | null>(null);
 	let submitError = $state<string | null>(null);
 	let submitSuccess = $state<{ action: Action; htmlUrl: string } | null>(null);
@@ -150,10 +154,11 @@
 		try {
 			const body = buildBody();
 			const comments = buildComments();
+			const issueIdsForSubmit = Array.from(selectedIssueIds);
 			const { data, error } = await api.api
 				.reviews({ id: prId })
 				['github-submit']
-				.post({ action, body, comments });
+				.post({ action, body, comments, issueIds: issueIdsForSubmit });
 			if (error) {
 				const msg =
 					typeof error.value === 'object' && error.value !== null && 'error' in error.value
@@ -182,13 +187,20 @@
 			// Reload session so externalCommentId fields are refreshed locally
 			await loadSession(prId);
 
-			const payload = data as { htmlUrl?: string } | null;
+			const payload = data as {
+				htmlUrl?: string;
+				issuesSubmittedAt?: string | null;
+				submittedIssueIds?: string[];
+			} | null;
 			submitSuccess = { action, htmlUrl: payload?.htmlUrl ?? '' };
 			toast.success(actionLabel(action) + ' on GitHub');
-			// Remember which issues were just submitted so we can mark them as posted
-			const merged = new Set([...submittedIssueIds, ...selectedIssueIds]);
-			_submittedByPr.set(prId, merged);
-			submittedIssueIds = merged;
+			// Mirror the server-side stamp onto the local walkthrough store so
+			// the "already posted" treatment renders immediately without
+			// waiting for a cache refetch. The server is the source of truth
+			// on reload; this is just an optimistic echo.
+			const stampedIds = payload?.submittedIssueIds ?? issueIdsForSubmit;
+			const stampedAt = payload?.issuesSubmittedAt ?? new Date().toISOString();
+			markIssuesAsSubmitted(prId, stampedIds, stampedAt);
 			selectedIssueIds = new Set();
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : 'Failed to submit review';

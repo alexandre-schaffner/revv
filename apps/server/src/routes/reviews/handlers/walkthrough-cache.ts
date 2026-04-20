@@ -4,7 +4,6 @@ import { GitHubService } from '../../../services/GitHub';
 import { PrContextService } from '../../../services/PrContext';
 import { WalkthroughJobs } from '../../../services/WalkthroughJobs';
 import { WalkthroughService } from '../../../services/Walkthrough';
-import type { CarriedOverIssue } from '@revv/shared';
 
 /**
  * GET /api/reviews/:id/walkthrough/cached — check whether a cached
@@ -42,7 +41,7 @@ export function getCachedWalkthroughHandler(prId: string, userId: string) {
  * still-running fiber could race its `markComplete` / `addBlock` writes
  * against our delete, producing orphan rows or partial-new rows.
  */
-export function regenerateWalkthroughHandler(prId: string, keptIssues: CarriedOverIssue[]) {
+export function regenerateWalkthroughHandler(prId: string) {
 	return AppRuntime.runPromise(
 		Effect.gen(function* () {
 			const jobs = yield* WalkthroughJobs;
@@ -58,9 +57,6 @@ export function regenerateWalkthroughHandler(prId: string, keptIssues: CarriedOv
 			}
 
 			yield* walkthroughService.invalidateForPr(prId);
-			if (keptIssues.length > 0) {
-				yield* walkthroughService.setPendingCarriedOver(prId, keptIssues);
-			}
 		}),
 	);
 }

@@ -1,5 +1,5 @@
 import { Context, Effect, Layer } from 'effect';
-import { and, eq, ne } from 'drizzle-orm';
+import { and, eq, inArray, ne } from 'drizzle-orm';
 import type {
 	Walkthrough,
 	WalkthroughBlock,
@@ -11,7 +11,6 @@ import type {
 	Verdict,
 	Confidence,
 	RiskLevel,
-	CarriedOverIssue,
 } from '@revv/shared';
 import { ReviewError } from '../domain/errors';
 import { walkthroughs } from '../db/schema/walkthroughs';
@@ -92,6 +91,7 @@ function rowToWalkthrough(
 				...(i.filePath !== null ? { filePath: i.filePath } : {}),
 				...(i.startLine !== null ? { startLine: i.startLine } : {}),
 				...(i.endLine !== null ? { endLine: i.endLine } : {}),
+				...(i.submittedAt !== null ? { submittedAt: i.submittedAt } : {}),
 			};
 		});
 
@@ -217,27 +217,21 @@ export class WalkthroughService extends Context.Tag('WalkthroughService')<
 			walkthroughId: string,
 		) => Effect.Effect<number, never, DbService>;
 
-		/** Store carried-over issues from a regenerate request, keyed by prId. */
-		readonly setPendingCarriedOver: (
-			prId: string,
-			issues: CarriedOverIssue[],
-		) => Effect.Effect<void, never, never>;
-
 		/**
-		 * Read and clear carried-over issues for a prId.
-		 * Returns empty array if none stored.
+		 * Stamp the given issue ids with `submittedAt` so the UI's "already
+		 * posted to GitHub" state survives app restarts and PR-switches. Unknown
+		 * ids are silently ignored — they might have been wiped by a regenerate
+		 * between the reviewer opening the tab and clicking Submit. Returns the
+		 * timestamp that was written so the caller can echo it back to the
+		 * client for optimistic local state.
 		 */
-		readonly consumePendingCarriedOver: (
-			prId: string,
-		) => Effect.Effect<CarriedOverIssue[], never, never>;
+		readonly markIssuesSubmitted: (
+			issueIds: readonly string[],
+		) => Effect.Effect<string, never, DbService>;
 	}
 >() {}
 
 // ── Live implementation ─────────────────────────────────────────────────────
-
-// In-memory store for carried-over issues bridging POST /regenerate → GET /walkthrough SSE.
-// Keyed by prId. Cleared on read. Transient — lost on server restart (acceptable).
-const pendingCarriedOverMap = new Map<string, CarriedOverIssue[]>();
 
 export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 	createPartial: (params) =>
@@ -497,18 +491,6 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 				.run();
 		}).pipe(Effect.catchAll(() => Effect.void)),
 
-	setPendingCarriedOver: (prId, issues) =>
-		Effect.sync(() => {
-			pendingCarriedOverMap.set(prId, issues);
-		}),
-
-	consumePendingCarriedOver: (prId) =>
-		Effect.sync(() => {
-			const issues = pendingCarriedOverMap.get(prId) ?? [];
-			pendingCarriedOverMap.delete(prId);
-			return issues;
-		}),
-
 	listGenerating: () =>
 		Effect.gen(function* () {
 			const { db } = yield* DbService;
@@ -553,4 +535,22 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 				.run();
 			return next;
 		}).pipe(Effect.catchAll(() => Effect.succeed(0))),
+
+	markIssuesSubmitted: (issueIds) =>
+		Effect.gen(function* () {
+			const submittedAt = new Date().toISOString();
+			if (issueIds.length === 0) return submittedAt;
+			const { db } = yield* DbService;
+			// Issue ids are globally unique (crypto.randomUUID on creation), so
+			// we can update by id without joining through walkthroughs. If the
+			// walkthrough was regenerated between the reviewer selecting these
+			// issues and the submit landing here, the rows are gone and this
+			// no-ops — acceptable.
+			db
+				.update(walkthroughIssues)
+				.set({ submittedAt })
+				.where(inArray(walkthroughIssues.id, [...issueIds]))
+				.run();
+			return submittedAt;
+		}).pipe(Effect.catchAll(() => Effect.succeed(new Date().toISOString()))),
 });

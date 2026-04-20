@@ -1,17 +1,12 @@
 // Runtime driver for the in-app updater.
 //
 // Flow:
-//   1. `startUpdater()` is called once from the root layout, after settings
-//      have been fetched so `autoInstallUpdates` is known.
+//   1. `startUpdater()` is called once from the root layout.
 //   2. ~5s later we run the first check (delay is in the caller — see the
 //      root layout — so startup network goes to the PR sync first).
 //   3. Every hour thereafter we run another check.
-//   4. On finding an update:
-//        - if auto-install is OFF, show a persistent Sonner toast with
-//          Install / Dismiss buttons
-//        - if auto-install is ON, download + install silently and (on
-//          success) relaunch. If the relaunch throws, fall back to the
-//          same toast flow so the user can retry manually.
+//   4. On finding an update, a persistent Sonner toast is shown with
+//      Install / Dismiss buttons. The user must click Install to apply.
 //
 // Dismissals are session-scoped: we store the dismissed version in a
 // module-level variable so the toast doesn't reappear on the next hourly
@@ -22,7 +17,6 @@
 import { toast } from 'svelte-sonner';
 import Download from '@lucide/svelte/icons/download';
 import { isTauri } from '$lib/utils/platform';
-import { getSettings } from '$lib/stores/settings.svelte';
 import { checkForUpdate, type UpdateInfo } from './client';
 
 const HOURLY_MS = 60 * 60 * 1000;
@@ -34,8 +28,7 @@ let inFlight = false;
 
 /**
  * Kick off the background update checker. Idempotent and a no-op outside
- * Tauri. Call this from the root layout's `$effect` once settings have
- * been loaded.
+ * Tauri. Call this from the root layout's `$effect`.
  */
 export function startUpdater(): void {
 	if (started || !isTauri()) return;
@@ -81,22 +74,7 @@ export async function runCheck(options: { manual?: boolean } = {}): Promise<void
 			// re-toast on every hourly tick. The flag resets on app restart.
 			return;
 		}
-		const autoInstall = getSettings()?.autoInstallUpdates ?? false;
-		if (autoInstall) {
-			try {
-				await update.install();
-				// If `install()` succeeds the app has already been relaunched
-				// and we never reach this line. If we do, the relaunch call
-				// returned without tearing down the process — show the
-				// fallback toast so the user can restart manually.
-				showRestartFallbackToast();
-			} catch (err) {
-				console.error('auto-install failed, falling back to prompt', err);
-				showUpdateToast(update);
-			}
-		} else {
-			showUpdateToast(update);
-		}
+		showUpdateToast(update);
 	} catch (err) {
 		// Background checks fail silently — the endpoint might be down, the
 		// user might be offline, etc. Surface errors only for manual checks.

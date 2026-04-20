@@ -53,7 +53,6 @@
 	import WalkthroughCodeBlock from './WalkthroughCodeBlock.svelte';
 	import WalkthroughDiffBlock from './WalkthroughDiffBlock.svelte';
 	import WalkthroughRatingsGrid from './WalkthroughRatingsGrid.svelte';
-	import RegenerateDialog from './RegenerateDialog.svelte';
 
 	interface Props {
 		prId: string;
@@ -453,15 +452,9 @@
 		}
 	}
 
-	// ── Regenerate dialog ───────────────────────────────────────────────
-	let regenerateDialogOpen = $state(false);
-
+	// ── Regenerate ──────────────────────────────────────────────────────
 	function handleRegenerate(): void {
-		if (issues.length > 0) {
-			regenerateDialogOpen = true;
-		} else {
-			regenerate(prId);
-		}
+		regenerate(prId);
 	}
 </script>
 
@@ -589,27 +582,29 @@
 				<span class="elapsed-time">{formatElapsed(elapsedSeconds)}</span>
 			</div>
 
-			<!-- Skeleton placeholder -->
-			<div class="skeleton-body" aria-hidden="true">
-				<div class="skeleton-summary">
-					<Skeleton class="h-[22px] w-[60px] rounded-full" />
-					<Skeleton class="h-[14px] w-[95%]" />
-					<Skeleton class="h-[14px] w-[80%]" />
-					<Skeleton class="h-[14px] w-[50%]" />
-				</div>
+			<!-- Skeleton placeholder: only shown during the Analyze phase -->
+			{#if normalizePhase(phase) === 'writing'}
+				<div class="skeleton-body" aria-hidden="true">
+					<div class="skeleton-summary">
+						<Skeleton class="h-[22px] w-[60px] rounded-full" />
+						<Skeleton class="h-[14px] w-[95%]" />
+						<Skeleton class="h-[14px] w-[80%]" />
+						<Skeleton class="h-[14px] w-[50%]" />
+					</div>
 
-				<div class="skeleton-separator"></div>
+					<div class="skeleton-separator"></div>
 
-				<div class="skeleton-card">
-					<div class="skeleton-card-body">
-						<Skeleton class="h-[14px] w-[90%]" />
-						<Skeleton class="h-[14px] w-full" />
-						<Skeleton class="h-[14px] w-[85%]" />
-						<Skeleton class="h-[14px] w-[75%]" />
-						<Skeleton class="h-[14px] w-[60%]" />
+					<div class="skeleton-card">
+						<div class="skeleton-card-body">
+							<Skeleton class="h-[14px] w-[90%]" />
+							<Skeleton class="h-[14px] w-full" />
+							<Skeleton class="h-[14px] w-[85%]" />
+							<Skeleton class="h-[14px] w-[75%]" />
+							<Skeleton class="h-[14px] w-[60%]" />
+						</div>
 					</div>
 				</div>
-			</div>
+			{/if}
 
 			<!-- Exploration feed -->
 			{#if explorationSteps.length > 0}
@@ -858,13 +853,6 @@
 		{/if}
 	{/if}
 </div>
-
-<RegenerateDialog
-	bind:open={regenerateDialogOpen}
-	{issues}
-	onconfirm={(kept) => regenerate(prId, kept)}
-	oncancel={() => {}}
-/>
 
 <style>
 	.walkthrough {

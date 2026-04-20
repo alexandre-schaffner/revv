@@ -7,9 +7,8 @@
 	import { getThemePreference, setThemePreference, type ThemePreference } from '$lib/stores/theme.svelte';
 	import { getActivePanel } from '$lib/stores/focus-mode.svelte';
 	import { getTopbarCollapsed, getTopbarSubtitle } from '$lib/stores/topbar.svelte';
-	import { getIsStreaming as getWalkthroughStreaming, getSummary as getWalkthroughSummary, regenerate as regenerateWalkthrough, getIssues as getWalkthroughIssues } from '$lib/stores/walkthrough.svelte';
+	import { getIsStreaming as getWalkthroughStreaming, getSummary as getWalkthroughSummary, regenerate as regenerateWalkthrough } from '$lib/stores/walkthrough.svelte';
 	import { page } from '$app/state';
-	import RegenerateDialog from '$lib/components/walkthrough/RegenerateDialog.svelte';
 
 	interface Props {
 		rightPanelOpen: boolean;
@@ -25,7 +24,6 @@
 	const topbarSubtitle = $derived(getTopbarSubtitle());
 	const walkthroughStreaming = $derived(getWalkthroughStreaming());
 	const walkthroughSummary = $derived(getWalkthroughSummary());
-	const walkthroughIssues = $derived(getWalkthroughIssues());
 	const cycle: Record<ThemePreference, ThemePreference> = {
 		system: 'light',
 		light: 'dark',
@@ -42,15 +40,9 @@
 		setThemePreference(cycle[theme]);
 	}
 
-	let regenerateDialogOpen = $state(false);
-
 	function handleRegenerate(): void {
 		const prId = page.params['prId'] ?? '';
-		if (walkthroughIssues.length > 0) {
-			regenerateDialogOpen = true;
-		} else {
-			regenerateWalkthrough(prId);
-		}
+		regenerateWalkthrough(prId);
 	}
 </script>
 
@@ -117,13 +109,6 @@
 		</button>
 	</div>
 </div>
-
-<RegenerateDialog
-	bind:open={regenerateDialogOpen}
-	issues={walkthroughIssues}
-	onconfirm={(kept) => regenerateWalkthrough(page.params['prId'] ?? '', kept)}
-	oncancel={() => {}}
-/>
 
 <style>
 	.topbar {

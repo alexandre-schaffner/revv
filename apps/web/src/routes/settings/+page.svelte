@@ -676,46 +676,6 @@
                 <!-- Divider -->
                 <div class="border-t border-border-subtle"></div>
 
-                <!-- Install updates automatically -->
-                <div class="flex items-center justify-between">
-                    <div class="pr-4">
-                        <p class="text-sm text-text-primary">
-                            Install updates automatically
-                        </p>
-                        <p class="text-xs text-text-muted">
-                            When on, new versions download and install in the
-                            background. You'll be prompted to restart.
-                        </p>
-                    </div>
-                    <div
-                        class="flex gap-1 rounded-lg border border-border bg-bg-elevated p-1"
-                    >
-                        <button
-                            class="rounded-md px-3 py-1.5 text-xs font-medium transition-colors
-                                {!(getSettings()?.autoInstallUpdates ?? false)
-                                    ? 'bg-bg-tertiary text-text-primary shadow-sm'
-                                    : 'text-text-muted hover:text-text-secondary'}"
-                            aria-pressed={!(getSettings()?.autoInstallUpdates ?? false)}
-                            onclick={() => updateSettings({ autoInstallUpdates: false })}
-                        >
-                            Off
-                        </button>
-                        <button
-                            class="rounded-md px-3 py-1.5 text-xs font-medium transition-colors
-                                {getSettings()?.autoInstallUpdates ?? false
-                                    ? 'bg-bg-tertiary text-text-primary shadow-sm'
-                                    : 'text-text-muted hover:text-text-secondary'}"
-                            aria-pressed={getSettings()?.autoInstallUpdates ?? false}
-                            onclick={() => updateSettings({ autoInstallUpdates: true })}
-                        >
-                            On
-                        </button>
-                    </div>
-                </div>
-
-                <!-- Divider -->
-                <div class="border-t border-border-subtle"></div>
-
                 <!-- Check for updates now -->
                 <div class="flex items-center justify-between">
                     <div>

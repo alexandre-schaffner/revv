@@ -14,13 +14,14 @@
 	loadSession,
 	getActiveTab,
 	switchPrViewState,
+	setLoadedHeadSha,
 } from '$lib/stores/review.svelte';
 	import { getDiffThemeType } from '$lib/stores/theme.svelte';
 	import { api } from '$lib/api/client';
 	import ReviewLayout from '$lib/components/review/ReviewLayout.svelte';
 	import GuidedWalkthrough from '$lib/components/walkthrough/GuidedWalkthrough.svelte';
 	import RequestChanges from '$lib/components/review/RequestChanges.svelte';
-	import { deactivate as deactivateWalkthrough, getIsStreaming as getWalkthroughStreaming, getSummary as getWalkthroughSummary, regenerate as regenerateWalkthrough, abort as abortWalkthrough, getIssues as getWalkthroughIssues, getRiskLevel as getWalkthroughRiskLevel } from '$lib/stores/walkthrough.svelte';
+	import { deactivate as deactivateWalkthrough, getIsStreaming as getWalkthroughStreaming, getSummary as getWalkthroughSummary, regenerate as regenerateWalkthrough, abort as abortWalkthrough, getRiskLevel as getWalkthroughRiskLevel } from '$lib/stores/walkthrough.svelte';
 	import { setTopbarCollapsed } from '$lib/stores/topbar.svelte';
 	import { getSidebarCollapsed, getSidebarWidth } from '$lib/stores/sidebar.svelte';
 	import { requestThreadSync } from '$lib/stores/ws.svelte';
@@ -30,7 +31,6 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Tooltip, TooltipContent, TooltipTrigger } from '$lib/components/ui/tooltip';
 	import { RefreshCw, Square } from '@lucide/svelte';
-	import RegenerateDialog from '$lib/components/walkthrough/RegenerateDialog.svelte';
 
 	const pr = $derived(getSelectedPr());
 	const themeType = $derived(getDiffThemeType());
@@ -40,7 +40,6 @@
 	const activeTab = $derived(getActiveTab());
 	const walkthroughStreaming = $derived(getWalkthroughStreaming());
 	const walkthroughSummary = $derived(getWalkthroughSummary());
-	const walkthroughIssues = $derived(getWalkthroughIssues());
 	const walkthroughRiskLevel = $derived(getWalkthroughRiskLevel());
 
 	const sidebarCollapsed = $derived(getSidebarCollapsed());
@@ -182,6 +181,15 @@
 					if (mapped.length > 0) {
 						setActiveFilePath(mapped[0]!.path);
 					}
+					// Stamp the SHA the diff was loaded against so the FloatingTabs
+					// dot can detect when a later `prs:updated` swaps in a newer one.
+					// Reading from the store captures any `prs:updated` that merged
+					// mid-fetch — the server has already re-cached the diff against
+					// that same SHA, so they agree.
+					const currentPr = getSelectedPr();
+					if (currentPr?.id === prId && currentPr.headSha) {
+						setLoadedHeadSha(prId, currentPr.headSha);
+					}
 					lastLoadedPrId = prId;
 					lastLoadedAt = Date.now();
 				}
@@ -203,15 +211,9 @@
 		setTopbarCollapsed(false);
 	});
 
-	let regenerateDialogOpen = $state(false);
-
 	function handleRegenerate(): void {
 		const prId = page.params['prId'] ?? '';
-		if (walkthroughIssues.length > 0) {
-			regenerateDialogOpen = true;
-		} else {
-			regenerateWalkthrough(prId);
-		}
+		regenerateWalkthrough(prId);
 	}
 </script>
 
@@ -316,13 +318,6 @@
 {/if}
 </AuthGuard>
 
-<RegenerateDialog
-	bind:open={regenerateDialogOpen}
-	issues={walkthroughIssues}
-	onconfirm={(kept) => regenerateWalkthrough(page.params['prId'] ?? '', kept)}
-	oncancel={() => {}}
-/>
-
 <style>
 	.review-page {
 		display: flex;
@@ -338,6 +333,16 @@
 		flex: 1;
 		min-height: 0;
 		overflow-y: auto;
+		/* Reserve the scrollbar gutter on BOTH sides, not just the inline-end.
+		   With `stable` (single-side), WebKit on macOS was asymmetric between
+		   states: in the collapsed case it reserved 15px on the right and
+		   centered content in (viewport − 15); when expanding made the
+		   content overflow, the overlay scrollbar appeared but didn't consume
+		   the reserved space — the content effectively re-expanded to the
+		   full viewport and snapped RIGHT. `both-edges` keeps the reserved
+		   space symmetric, so col 3 of the asymmetric 6-col grid stays
+		   centered regardless of whether the scrollbar is visible. */
+		scrollbar-gutter: stable both-edges;
 	}
 
 	/* ── Title section (scrolls away naturally with content) ─────────── */

@@ -5,7 +5,7 @@ import * as prs from './prs.svelte';
 import { getSelectedPrId, mergePullRequests } from './prs.svelte';
 import * as errors from './errors.svelte';
 import * as sync from './sync.svelte';
-import { resetForSync } from './sync.svelte';
+import { markThreadsSyncing } from './sync.svelte';
 import { applyUserUpdate } from './auth.svelte';
 import {
 	addThreadFromWs,
@@ -68,10 +68,10 @@ function handleMessage(msg: WsServerMessage): void {
 			mergePullRequests(msg.data);
 			break;
 		case 'prs:sync-started':
-			sync.setSyncing(true);
+			sync.setPrListSyncing(true);
 			break;
 		case 'prs:sync-complete':
-			sync.setSyncing(false);
+			sync.setPrListSyncing(false);
 			break;
 		case 'repos:updated':
 			prs.setRepositories(msg.data);
@@ -116,8 +116,7 @@ function handleMessage(msg: WsServerMessage): void {
 			break;
 		case 'threads:sync-error':
 			console.error('[ws] Thread sync error for PR', msg.data.prId, msg.data.message);
-			sync.setSyncing(false);
-			sync.setSyncError(msg.data.message);
+			sync.applySyncError(msg.data.prId, msg.data.message);
 			toast.error('Failed to sync comments from GitHub', {
 				description: 'Check your connection or try re-authenticating.',
 				duration: 6000,
@@ -157,7 +156,7 @@ export function connect(token: string): void {
 		if (pendingThreadSync) {
 			const prId = pendingThreadSync;
 			pendingThreadSync = null;
-			resetForSync();
+			markThreadsSyncing(prId);
 			ws?.send(JSON.stringify({ type: 'threads:request-sync', data: { prId } }));
 		}
 	});
@@ -197,7 +196,7 @@ export function requestSync(): void {
 }
 
 export function requestThreadSync(prId: string): void {
-	resetForSync();
+	markThreadsSyncing(prId);
 	if (ws?.readyState === WebSocket.OPEN) {
 		ws.send(JSON.stringify({ type: 'threads:request-sync', data: { prId } }));
 	} else {
@@ -207,7 +206,7 @@ export function requestThreadSync(prId: string): void {
 }
 
 export function requestFullSync(prId: string): void {
-	resetForSync();
+	markThreadsSyncing(prId);
 	if (ws?.readyState === WebSocket.OPEN) {
 		ws.send(JSON.stringify({ type: 'prs:request-sync' }));
 		ws.send(JSON.stringify({ type: 'threads:request-sync', data: { prId } }));

@@ -3,6 +3,7 @@ import { AppRuntime } from '../../../runtime';
 import { GitHubService } from '../../../services/GitHub';
 import { PrContextService } from '../../../services/PrContext';
 import { ReviewService } from '../../../services/Review';
+import { WalkthroughService } from '../../../services/Walkthrough';
 
 export interface SubmitReviewCommentInput {
 	path: string;
@@ -17,6 +18,12 @@ export interface SubmitReviewInput {
 	action: 'approve' | 'request_changes' | 'comment';
 	body?: string;
 	comments?: SubmitReviewCommentInput[];
+	/**
+	 * Walkthrough issue ids included in this submission. Persisted onto the
+	 * issue rows so the UI's "already posted" state survives reloads and
+	 * PR-switches. Empty / missing for pure approve flows with no issue list.
+	 */
+	issueIds?: string[];
 }
 
 /**
@@ -39,6 +46,7 @@ export function submitGithubReviewHandler(
 			const prContext = yield* PrContextService;
 			const github = yield* GitHubService;
 			const reviewService = yield* ReviewService;
+			const walkthroughService = yield* WalkthroughService;
 
 			const { pr, repo, token: ghToken } = yield* prContext.resolveBasic(prId, userId);
 
@@ -123,7 +131,23 @@ export function submitGithubReviewHandler(
 				}
 			}
 
-			return { id: review.id, htmlUrl: review.htmlUrl };
+			// Persist which walkthrough issues the reviewer just sent so the
+			// "already posted" treatment (grayed-out, unselectable) survives
+			// reloads and PR-switches. Stamped regardless of action — an
+			// approve that happens to include walkthrough issues in the body
+			// also counts as "sent to GitHub."
+			const issueIds = body.issueIds ?? [];
+			const issuesSubmittedAt =
+				issueIds.length > 0
+					? yield* walkthroughService.markIssuesSubmitted(issueIds)
+					: null;
+
+			return {
+				id: review.id,
+				htmlUrl: review.htmlUrl,
+				issuesSubmittedAt,
+				submittedIssueIds: issueIds,
+			};
 		}),
 	);
 }

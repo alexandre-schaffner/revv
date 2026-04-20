@@ -64,10 +64,8 @@
 		// If the token is valid, loadUser() sets the user, which triggers
 		// the hydration effect above.
 		auth.loadUser();
-		// Fetch settings first — the updater needs to know `autoInstallUpdates`
-		// before its first check, so we await that before arming the check
-		// loop. Model prefetch doesn't block anything, so it starts in
-		// parallel.
+		// Fetch settings before arming the updater check loop.
+		// Model prefetch doesn't block anything, so it starts in parallel.
 		void settings.fetchAllModels();
 		void settings.fetchSettings().then(() => {
 			// 5s delay so the first update check doesn't compete with

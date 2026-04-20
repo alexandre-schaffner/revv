@@ -360,9 +360,6 @@ export const WalkthroughJobsLive = Layer.effect(
 						abortController: job.abortController,
 					});
 				} else {
-					// Consume any carried-over issues stashed by the regenerate handler.
-					const carriedOverIssues = yield* walkthroughService
-						.consumePendingCarriedOver(ctx.pr.id);
 					generator = yield* ai.streamWalkthrough({
 						pr: {
 							title: ctx.pr.title,
@@ -374,7 +371,6 @@ export const WalkthroughJobsLive = Layer.effect(
 						files: ctx.files as never,
 						worktreePath,
 						abortController: job.abortController,
-						...(carriedOverIssues.length > 0 ? { carriedOverIssues } : {}),
 					});
 				}
 

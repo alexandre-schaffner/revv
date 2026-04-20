@@ -1,5 +1,5 @@
 import type { PrFileMeta } from '../../services/GitHub';
-import type { RatingAxis, WalkthroughBlock, CarriedOverIssue } from '@revv/shared';
+import type { RatingAxis, WalkthroughBlock } from '@revv/shared';
 
 // ── Continuation context (imported here to avoid circular deps) ──────────────
 
@@ -172,7 +172,7 @@ export function buildExplorationDescription(toolName: string, input: unknown): s
 export function buildWalkthroughPrompt(params: {
 	pr: { title: string; body: string | null; sourceBranch: string; targetBranch: string; url: string };
 	files: PrFileMeta[];
-}, maxTokenBudget = 40000, continuation?: PromptContinuationContext, carriedOverIssues?: CarriedOverIssue[]): string {
+}, maxTokenBudget = 40000, continuation?: PromptContinuationContext): string {
 	const lines: string[] = [
 		`## Pull Request: ${params.pr.title}`,
 		`Branch: ${params.pr.sourceBranch} → ${params.pr.targetBranch}`,
@@ -199,33 +199,6 @@ export function buildWalkthroughPrompt(params: {
 			approxTokens += patchTokens;
 		} else {
 			lines.push(header, '[No patch available — binary or too large]', '');
-		}
-	}
-	if (carriedOverIssues && carriedOverIssues.length > 0) {
-		lines.push(
-			'',
-			'## Carried-Over Issues (Reassess These)',
-			'',
-			'The reviewer flagged these concerns in a previous generation and wants you to reassess them.',
-			'For each issue:',
-			'- If the concern is **still valid** in this PR: write the explaining block(s) as usual, then call `flag_issue` to re-register it (new block linkages will be created automatically).',
-			'- If the concern is a **false positive** (the code is fine, the previous generation was wrong): briefly acknowledge it in a markdown section (e.g. "Regarding X — this is not an issue because...") but do NOT call `flag_issue` for it.',
-			'',
-		);
-		for (const issue of carriedOverIssues) {
-			lines.push(`### Issue: ${issue.title}`);
-			lines.push(`**Severity:** ${issue.severity}`);
-			lines.push(`**Summary:** ${issue.description}`);
-			if (issue.filePath) {
-				const loc = issue.startLine != null
-					? `${issue.filePath}:${issue.startLine}–${issue.endLine ?? issue.startLine}`
-					: issue.filePath;
-				lines.push(`**Location:** \`${loc}\``);
-			}
-			if (issue.originalContext) {
-				lines.push('', '**Original explanation:**', issue.originalContext);
-			}
-			lines.push('');
 		}
 	}
 	if (

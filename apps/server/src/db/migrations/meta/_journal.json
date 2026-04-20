@@ -36,6 +36,13 @@
       "when": 1777000000000,
       "tag": "0040_auto_install_updates",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1777100000000,
+      "tag": "0050_walkthrough_issues_submitted_at",
+      "breakpoints": true
     }
   ]
 }

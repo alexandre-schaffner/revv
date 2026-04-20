@@ -16,9 +16,6 @@ const DEFAULT_SETTINGS: UserSettings = {
 	theme: 'dark',
 	diffViewMode: 'unified',
 	autoFetchInterval: AUTO_FETCH_DEFAULT_INTERVAL,
-	// Default OFF — users must opt in to silent installs. The background
-	// *check* still runs regardless; only the install step is gated.
-	autoInstallUpdates: false,
 };
 
 function rowToSettings(row: typeof userSettings.$inferSelect): UserSettings {
@@ -32,7 +29,6 @@ function rowToSettings(row: typeof userSettings.$inferSelect): UserSettings {
 		theme: row.theme,
 		diffViewMode: row.diffViewMode,
 		autoFetchInterval: row.autoFetchInterval,
-		autoInstallUpdates: Boolean(row.autoInstallUpdates),
 	};
 }
 
@@ -67,7 +63,6 @@ export const SettingsServiceLive = Layer.succeed(SettingsService, {
 				theme: DEFAULT_SETTINGS.theme,
 				diffViewMode: DEFAULT_SETTINGS.diffViewMode,
 				autoFetchInterval: DEFAULT_SETTINGS.autoFetchInterval,
-				autoInstallUpdates: DEFAULT_SETTINGS.autoInstallUpdates ? 1 : 0,
 			};
 			yield* Effect.tryPromise({
 				try: () => Promise.resolve(db.insert(userSettings).values(insertValues).run()),
@@ -92,8 +87,6 @@ export const SettingsServiceLive = Layer.succeed(SettingsService, {
 			if (partial.aiAgent !== undefined) updateSet.aiAgent = partial.aiAgent;
 			if (partial.aiContextWindow !== undefined)
 				updateSet.aiContextWindow = partial.aiContextWindow;
-			if (partial.autoInstallUpdates !== undefined)
-				updateSet.autoInstallUpdates = partial.autoInstallUpdates ? 1 : 0;
 			yield* Effect.tryPromise({
 				try: () =>
 					Promise.resolve(

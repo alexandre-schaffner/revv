@@ -10,6 +10,8 @@ import type { ReviewFile } from '$lib/types/review';
 import { api } from '$lib/api/client';
 import { streamExplanation } from '$lib/api/explain';
 import { enterSidebarMode } from '$lib/stores/focus-mode.svelte';
+import { getPullRequests } from '$lib/stores/prs.svelte';
+import { regenerate as regenerateWalkthrough } from '$lib/stores/walkthrough.svelte';
 import { toast } from 'svelte-sonner';
 
 // --- Review files (shared between sidebar tree + review page) ---
@@ -47,6 +49,101 @@ export function clearReviewFiles(): void {
 	filesError = null;
 	activeFilePath = null;
 	clearSession();
+}
+
+// --- New-commit-available detection ------------------------------------------
+//
+// Tracks which git SHA the currently-rendered `reviewFiles[]` correspond to,
+// per-PR. When a `prs:updated` WebSocket event swaps in a new `pr.headSha`, the
+// in-memory PR changes but the on-screen diff still reflects the older SHA.
+// Comparing `pr.headSha` to the stamped value tells the FloatingTabs dot
+// whether to morph into a "Pull" button.
+//
+// Map reassignment is the Svelte-5 idiom for making a Map reactive — same
+// pattern walkthrough.svelte.ts uses for its `entries` map.
+let loadedHeadShas = $state(new Map<string, string>());
+
+export function setLoadedHeadSha(prId: string, sha: string): void {
+	loadedHeadShas.set(prId, sha);
+	loadedHeadShas = new Map(loadedHeadShas);
+}
+
+export function getLoadedHeadSha(prId: string): string | null {
+	return loadedHeadShas.get(prId) ?? null;
+}
+
+export function clearLoadedHeadSha(prId: string): void {
+	if (!loadedHeadShas.has(prId)) return;
+	loadedHeadShas.delete(prId);
+	loadedHeadShas = new Map(loadedHeadShas);
+}
+
+// Per-PR in-flight flag so the pull button can show a spinner without
+// racing a second click. Set-reassignment for reactivity, matching the
+// loadedHeadShas pattern above.
+let isPullingCommit = $state(new Set<string>());
+
+export function getIsPullingCommit(prId: string): boolean {
+	return isPullingCommit.has(prId);
+}
+
+/**
+ * Refetch the PR's diff files against the current `pr.headSha`, restamp
+ * the loaded SHA, and regenerate the walkthrough against the new content.
+ * The server's PollScheduler has already invalidated + repopulated its diff
+ * cache on SHA change, so the `files.get()` call returns the fresh diff.
+ * Coalesces concurrent calls for the same PR.
+ */
+export async function pullLatestCommit(prId: string): Promise<void> {
+	if (isPullingCommit.has(prId)) return;
+	isPullingCommit.add(prId);
+	isPullingCommit = new Set(isPullingCommit);
+
+	try {
+		setIsLoadingFiles(true);
+		setFilesError(null);
+
+		const { data, error } = await api.api.prs({ id: prId }).files.get();
+		if (error || !Array.isArray(data)) {
+			throw new Error('Failed to refetch files');
+		}
+
+		const mapped: ReviewFile[] = data.map((f) => ({
+			path: f.path,
+			patch: f.patch ?? null,
+			additions: f.additions,
+			deletions: f.deletions,
+			...(f.oldPath ? { oldPath: f.oldPath } : {}),
+			...(f.isNew ? { isNew: true as const } : {}),
+			...(f.isDeleted ? { isDeleted: true as const } : {}),
+		}));
+
+		setReviewFiles(mapped);
+		// If the user has an active file that's gone in the new diff, fall back
+		// to the first file. If the active file still exists, leave it alone so
+		// the user's scroll position in the diff tab isn't reset.
+		const activePath = getActiveFilePath();
+		const stillExists = activePath !== null && mapped.some((f) => f.path === activePath);
+		if (!stillExists && mapped.length > 0) {
+			setActiveFilePath(mapped[0]!.path);
+		}
+
+		// Stamp the current PR head SHA. Read from the live PR list so we pick
+		// up whatever `prs:updated` has already merged — even if another
+		// `prs:updated` has landed since the UI signalled "new commit available."
+		const pr = getPullRequests().find((p) => p.id === prId);
+		if (pr?.headSha) setLoadedHeadSha(prId, pr.headSha);
+
+		// Regenerate the walkthrough with no kept issues — the new commit may
+		// have addressed any existing ones, so a fresh pass is the right default.
+		await regenerateWalkthrough(prId);
+	} catch (e) {
+		setFilesError(e instanceof Error ? e.message : 'Failed to pull latest commit');
+	} finally {
+		setIsLoadingFiles(false);
+		isPullingCommit.delete(prId);
+		isPullingCommit = new Set(isPullingCommit);
+	}
 }
 
 // --- Session state ---

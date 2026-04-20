@@ -49,15 +49,13 @@ export interface WalkthroughIssue {
 	filePath?: string;
 	startLine?: number;
 	endLine?: number;
-}
-
-/**
- * A WalkthroughIssue carried over from a previous generation, enriched with
- * the original block annotation text so the agent can reassess it.
- */
-export interface CarriedOverIssue extends WalkthroughIssue {
-	/** Combined text of the original block annotations that explained this issue. */
-	originalContext: string;
+	/**
+	 * ISO 8601 timestamp recorded when the reviewer submitted this issue to
+	 * GitHub via the Request Changes flow. Absent = not yet sent. Drives the
+	 * "already posted" (grayed out) treatment in IssuesPanel and survives
+	 * across sessions because it's persisted on the walkthrough_issues row.
+	 */
+	submittedAt?: string;
 }
 
 // ── Risk & token tracking ───────────────────────────────────────────────────

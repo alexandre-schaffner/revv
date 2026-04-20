@@ -15,4 +15,8 @@ export const walkthroughIssues = sqliteTable('walkthrough_issues', {
 	endLine: integer('end_line'),
 	blockIds: text('block_ids').notNull().default('[]'),
 	createdAt: text('created_at').notNull(),
+	// ISO 8601 timestamp recorded when the reviewer posts this issue to GitHub
+	// via the Request Changes flow. Null = not yet sent. Used to persist the
+	// "already submitted" treatment (grayed-out, unselectable) across sessions.
+	submittedAt: text('submitted_at'),
 });

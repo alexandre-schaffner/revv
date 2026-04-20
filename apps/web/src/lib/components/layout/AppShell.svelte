@@ -7,7 +7,15 @@
 	import FloatingTabs from './FloatingTabs.svelte';
 	import { getSelectedPr } from '$lib/stores/prs.svelte';
 	import { getPrWalkthroughStatus } from '$lib/stores/walkthrough.svelte';
-	import { getActiveTab, setActiveTab, getPanelOpenRequested, consumePanelOpenRequest } from '$lib/stores/review.svelte';
+	import {
+		getActiveTab,
+		setActiveTab,
+		getPanelOpenRequested,
+		consumePanelOpenRequest,
+		getLoadedHeadSha,
+		getIsPullingCommit,
+		pullLatestCommit,
+	} from '$lib/stores/review.svelte';
 	import {
 		getSidebarCollapsed,
 		toggleSidebar,
@@ -40,6 +48,19 @@
 	const activeTab = $derived(getActiveTab());
 	const topbarCollapsed = $derived(getTopbarCollapsed());
 	const isSettingsRoute = $derived(page.url.pathname.startsWith('/settings'));
+
+	// New-commit-available signal: the PR's current headSha differs from the
+	// SHA the diff was loaded against. `getLoadedHeadSha` returns null until the
+	// first successful fetch, suppressing the signal on fresh visits.
+	const hasNewCommit = $derived.by(() => {
+		if (!pr || !pr.headSha) return false;
+		const loaded = getLoadedHeadSha(pr.id);
+		return loaded !== null && loaded !== pr.headSha;
+	});
+	const isPulling = $derived(pr ? getIsPullingCommit(pr.id) : false);
+	function onPullCommit(): void {
+		if (pr) void pullLatestCommit(pr.id);
+	}
 
 	// Drag state — not reactive $state, just local mutable refs
 	let isDragging = $state(false);
@@ -132,7 +153,14 @@
 		<TopBar {rightPanelOpen} onTogglePanel={toggleRightPanel} />
 		{#if pr && !isSettingsRoute}
 			<div class="tabs-float" style={tabsStyle}>
-				<FloatingTabs {activeTab} onTabChange={setActiveTab} {walkthroughStatus} />
+				<FloatingTabs
+					{activeTab}
+					onTabChange={setActiveTab}
+					{walkthroughStatus}
+					{hasNewCommit}
+					{isPulling}
+					{onPullCommit}
+				/>
 			</div>
 		{/if}
 	</header>
