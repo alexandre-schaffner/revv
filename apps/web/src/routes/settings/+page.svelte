@@ -60,6 +60,19 @@
     let addRepoError = $state("");
     let addRepoLoading = $state(false);
     let retryingClone = $state(new Set<string>());
+    // Fall back to initials if the GitHub-signed avatar URL has expired —
+    // mirrors the `avatarFailed` pattern used for repo avatars in the sidebar.
+    let userAvatarFailed = $state(false);
+    // Clear the failed flag whenever the server pushes a fresh avatar URL via
+    // the `user:updated` WS message, so we re-attempt loading the new URL.
+    let lastAvatarUrl = $state<string | undefined>(undefined);
+    $effect(() => {
+        const current = getUser()?.image;
+        if (current !== lastAvatarUrl) {
+            lastAvatarUrl = current;
+            userAvatarFailed = false;
+        }
+    });
 
     async function retryClone(repoId: string): Promise<void> {
         retryingClone = new Set([...retryingClone, repoId]);
@@ -191,11 +204,13 @@
         {#if getUser()}
             <div class="flex items-center justify-between">
                 <div class="flex items-center gap-3">
-                    {#if getUser()?.image}
+                    {#if getUser()?.image && !userAvatarFailed}
                         <img
                             src={getUser()?.image}
                             alt={getUser()?.name}
                             class="h-9 w-9 rounded-full"
+                            referrerpolicy="no-referrer"
+                            onerror={() => (userAvatarFailed = true)}
                         />
                     {:else}
                         <div

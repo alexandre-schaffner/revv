@@ -113,7 +113,10 @@ detect_platform() {
 # REVV_LAUNCH_AGENT_PLIST, REVV_CLI_DIR, REVV_AUTH_KEY.
 revv_paths() {
   : "${PLATFORM:=$(uname -s)}"
-  case "${PLATFORM,,}" in
+  # bash 3.2 (macOS /bin/bash) lacks ${VAR,,}; lowercase via tr.
+  local __platform_lc
+  __platform_lc="$(printf '%s' "$PLATFORM" | tr '[:upper:]' '[:lower:]')"
+  case "$__platform_lc" in
     macos|darwin)
       REVV_SUPPORT_DIR="${REVV_SUPPORT_DIR:-$HOME/Library/Application Support/Revv}"
       REVV_LOG_DIR="${REVV_LOG_DIR:-$HOME/Library/Logs/Revv}"

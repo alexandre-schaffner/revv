@@ -444,7 +444,24 @@ export class GitHubService extends Context.Tag('GitHubService')<
 		) => Effect.Effect<void, GitHubError>;
 		readonly getAuthenticatedUser: (
 			token: string
-		) => Effect.Effect<{ login: string; id: number }, GitHubError, DbService | GitHubEtagCache>;
+		) => Effect.Effect<
+			{ login: string; id: number; avatarUrl: string | null },
+			GitHubError,
+			DbService | GitHubEtagCache
+		>;
+		/**
+		 * Like `getAuthenticatedUser`, but bypasses the ETag cache. Required for
+		 * the same reason as {@link getRepoFresh}: GitHub Enterprise signed
+		 * `avatar_url`s rotate server-side without changing the endpoint's ETag,
+		 * so a plain `getAuthenticatedUser` would replay the cached body with the
+		 * now-dead token. This variant forces a 200 every time.
+		 */
+		readonly getAuthenticatedUserFresh: (
+			token: string
+		) => Effect.Effect<
+			{ login: string; id: number; avatarUrl: string | null },
+			GitHubError
+		>;
 	}
 >() {}
 
@@ -839,6 +856,18 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
 			return {
 				login: raw['login'] as string,
 				id: raw['id'] as number,
+				avatarUrl: (raw['avatar_url'] as string | null) ?? null,
+			};
+		}).pipe(Effect.retry(retrySchedule)),
+
+	getAuthenticatedUserFresh: (token) =>
+		Effect.gen(function* () {
+			const data = yield* githubFetch(`/user`, token);
+			const raw = data as Record<string, unknown>;
+			return {
+				login: raw['login'] as string,
+				id: raw['id'] as number,
+				avatarUrl: (raw['avatar_url'] as string | null) ?? null,
 			};
 		}).pipe(Effect.retry(retrySchedule)),
 });

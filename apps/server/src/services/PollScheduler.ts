@@ -1,4 +1,5 @@
 import { Cause, Context, Duration, Effect, Fiber, Layer, Ref, Schedule } from 'effect';
+import { eq } from 'drizzle-orm';
 import { AUTO_FETCH_DEFAULT_INTERVAL, THREAD_SYNC_INTERVAL_SECONDS } from '@revv/shared';
 import type { PullRequest, SyncChange } from '@revv/shared';
 import { DbService } from './Db';
@@ -138,6 +139,46 @@ export const PollSchedulerLive = Layer.effect(
 				const refreshedRepos = yield* withDb(repoService.listRepos());
 				yield* hub.broadcast({ type: 'repos:updated', data: refreshedRepos });
 			}
+
+			// ── Refresh authenticated user avatar ────────────────────────────────
+			// Same rationale as the repo-metadata refresh above: GitHub Enterprise
+			// signed `avatar_url`s on the /user endpoint expire without the ETag
+			// changing, so a cached response replays a dead token. Bypassing the
+			// ETag cache keeps the stored `user.image` fresh so sidebars, comment
+			// headers, and the settings page don't render broken avatars after the
+			// signed URL rotates.
+			yield* Effect.gen(function* () {
+				const token = yield* tokenProvider.getGitHubToken('single-user').pipe(
+					Effect.catchAll(() => Effect.succeed('')),
+				);
+				if (!token) return;
+				const fresh = yield* github.getAuthenticatedUserFresh(token).pipe(
+					Effect.catchAll(() => Effect.succeed(null)),
+				);
+				if (!fresh) return;
+				const userRow = db.select().from(user).limit(1).get();
+				if (!userRow) return;
+				if (userRow.image === fresh.avatarUrl) return;
+				yield* Effect.try({
+					try: () =>
+						db
+							.update(user)
+							.set({ image: fresh.avatarUrl, updatedAt: new Date() })
+							.where(eq(user.id, userRow.id))
+							.run(),
+					catch: (e) => new Error(String(e)),
+				}).pipe(Effect.orElseSucceed(() => undefined));
+				yield* hub.broadcast({
+					type: 'user:updated',
+					data: {
+						id: userRow.id,
+						name: userRow.name,
+						email: userRow.email,
+						image: fresh.avatarUrl,
+						githubLogin: userRow.githubLogin ?? null,
+					},
+				});
+			}).pipe(Effect.orElseSucceed(() => undefined));
 
 			const results = yield* Effect.forEach(
 				allRepos,

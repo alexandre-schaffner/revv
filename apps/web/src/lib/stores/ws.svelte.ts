@@ -6,6 +6,7 @@ import { getSelectedPrId, mergePullRequests } from './prs.svelte';
 import * as errors from './errors.svelte';
 import * as sync from './sync.svelte';
 import { resetForSync } from './sync.svelte';
+import { applyUserUpdate } from './auth.svelte';
 import {
 	addThreadFromWs,
 	updateThreadStatusFromWs,
@@ -77,6 +78,14 @@ function handleMessage(msg: WsServerMessage): void {
 			break;
 		case 'repos:clone-status':
 			prs.updateRepoCloneStatus(msg.data.repoId, msg.data.status, msg.data.error);
+			break;
+		case 'user:updated':
+			applyUserUpdate({
+				image: msg.data.image,
+				githubLogin: msg.data.githubLogin,
+				name: msg.data.name,
+				email: msg.data.email,
+			});
 			break;
 		case 'error':
 			errors.setError(msg.data);

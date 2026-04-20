@@ -185,14 +185,27 @@ export async function loadUser(): Promise<void> {
 				email: u.email,
 				...(u.image != null ? { image: u.image } : {}),
 			};
-			// Fetch GitHub login separately — better-auth doesn't expose it.
+			// Fetch GitHub login + fresh avatar URL. The server refreshes
+			// `user.image` on each poll cycle (same pattern as repo avatars) so
+			// the signed-URL-expiry issue that used to break user avatars
+			// resolves itself without requiring re-auth.
 			try {
 				const res = await fetch(`${API_BASE_URL}/api/user/identity`, {
 					headers: { Authorization: `Bearer ${token}` },
 				});
 				if (res.ok) {
-					const data = (await res.json()) as { login: string | null };
-					if (user) user = { ...user, githubLogin: data.login };
+					const data = (await res.json()) as {
+						login: string | null;
+						avatarUrl?: string | null;
+					};
+					if (user) {
+						const next: typeof user = { ...user, githubLogin: data.login };
+						// Prefer the server's freshly-refreshed avatar URL when available.
+						if (data.avatarUrl != null) {
+							next.image = data.avatarUrl;
+						}
+						user = next;
+					}
 				}
 			} catch {
 				// best-effort
@@ -205,6 +218,29 @@ export async function loadUser(): Promise<void> {
 	} finally {
 		isLoading = false;
 	}
+}
+
+/**
+ * Apply a server-pushed user update (e.g. avatar URL rotation).
+ * Called by the WS handler when the poll scheduler detects that the
+ * authenticated user's GitHub profile changed.
+ */
+export function applyUserUpdate(update: {
+	image: string | null;
+	githubLogin: string | null;
+	name?: string;
+	email?: string;
+}): void {
+	if (!user) return;
+	const next: typeof user = {
+		name: update.name ?? user.name,
+		email: update.email ?? user.email,
+		githubLogin: update.githubLogin,
+	};
+	if (update.image != null) {
+		next.image = update.image;
+	}
+	user = next;
 }
 
 export async function signOut(): Promise<void> {

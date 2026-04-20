@@ -16,6 +16,16 @@ export type WsServerMessage =
 	  }
 	| { type: 'repos:updated'; data: Repository[] }
 	| { type: 'repos:clone-status'; data: { repoId: string; status: CloneStatus; error?: string } }
+	| {
+			type: 'user:updated';
+			data: {
+				id: string;
+				name: string;
+				email: string;
+				image: string | null;
+				githubLogin: string | null;
+			};
+	  }
 	| { type: 'error'; data: { code: string; message: string; retryAfter?: number } }
 	| { type: 'thread:created'; data: { sessionId: string; thread: CommentThread; message: ThreadMessage } }
 	| { type: 'thread:updated'; data: { threadId: string; status: ThreadStatus } }

@@ -118,6 +118,12 @@ export type UserRole = 'reviewer' | 'coder' | 'unknown';
 export interface UserIdentity {
 	login: string | null;
 	role: UserRole;
+	/**
+	 * The user's GitHub avatar URL. Refreshed server-side by the poll scheduler
+	 * so that expired GitHub Enterprise signed URLs get rotated without
+	 * requiring the user to sign out and back in.
+	 */
+	avatarUrl: string | null;
 }
 
 export interface ThreadMessage {

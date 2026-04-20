@@ -28,30 +28,37 @@ export const userRoutes = new Elysia({ prefix: '/api/user' })
 			try {
 				const userId = ctx.session.user.id;
 
-				// Read current stored login
+				// Read current stored login + image (server-refreshed avatar URL).
 				const rows = await db
-					.select({ githubLogin: user.githubLogin })
+					.select({ githubLogin: user.githubLogin, image: user.image })
 					.from(user)
 					.where(eq(user.id, userId));
 				let login: string | null = rows[0]?.githubLogin ?? null;
+				let avatarUrl: string | null = rows[0]?.image ?? null;
 
 				// Backfill if missing — best-effort, don't fail the endpoint.
-				if (!login) {
+				// Also lazily refresh the avatar URL here so callers loading the
+				// app get a fresh signed URL even if the poll scheduler hasn't
+				// run yet this session.
+				if (!login || !avatarUrl) {
 					const backfilled = await AppRuntime.runPromise(
 						Effect.gen(function* () {
 							const tokenProvider = yield* TokenProvider;
 							const github = yield* GitHubService;
 							const token = yield* tokenProvider.getGitHubToken(userId);
-							const gh = yield* github.getAuthenticatedUser(token);
-							return gh.login;
+							const gh = yield* github.getAuthenticatedUserFresh(token);
+							return gh;
 						}).pipe(Effect.orElseSucceed(() => null)),
 					);
 					if (backfilled) {
-						await db
-							.update(user)
-							.set({ githubLogin: backfilled, updatedAt: new Date() })
-							.where(eq(user.id, userId));
-						login = backfilled;
+						const updates: { githubLogin?: string; image?: string | null; updatedAt: Date } = {
+							updatedAt: new Date(),
+						};
+						if (!login) updates.githubLogin = backfilled.login;
+						if (!avatarUrl) updates.image = backfilled.avatarUrl;
+						await db.update(user).set(updates).where(eq(user.id, userId));
+						login = login ?? backfilled.login;
+						avatarUrl = avatarUrl ?? backfilled.avatarUrl;
 					}
 				}
 
@@ -67,7 +74,7 @@ export const userRoutes = new Elysia({ prefix: '/api/user' })
 					if (pr) role = pr.authorLogin === login ? 'coder' : 'reviewer';
 				}
 
-				const identity: UserIdentity = { login, role };
+				const identity: UserIdentity = { login, role, avatarUrl };
 				return identity;
 			} catch (e) {
 				return handleAppError(e, ctx);
