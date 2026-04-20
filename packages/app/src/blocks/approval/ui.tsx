@@ -1,34 +1,58 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useCallback, useMemo, useRef, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { createServerFn } from "@tanstack/react-start";
 import {
-  getPendingCommands,
-  approveCommand,
-  denyCommand,
-} from "../../lib/commands";
-import type { CommandEntry } from "../../lib/command-log";
+  getPending,
+  approve,
+  deny,
+  type CommandEntry,
+} from "../../lib/command-log";
 import { Button } from "@rev/ui/components/ui/button";
-import { useRegisterShortcuts, formatKeysString, type ShortcutDef } from "../../lib/shortcuts";
+import {
+  useRegisterShortcuts,
+  formatKeysString,
+  type ShortcutDef,
+} from "../../lib/shortcuts";
 import { ShortcutKbd } from "../../components/shortcut-kbd";
 import { Terminal, Check } from "lucide-react";
+
+// ── Server functions for approval ────────────────────────
+
+const getPendingCommands = createServerFn({ method: "GET" }).handler(
+  async (): Promise<CommandEntry[]> => getPending(),
+);
+
+const approveCommand = createServerFn({ method: "POST" })
+  .inputValidator((input: { id: string }) => input)
+  .handler(async ({ data }) => approve(data.id));
+
+const denyCommand = createServerFn({ method: "POST" })
+  .inputValidator((input: { id: string }) => input)
+  .handler(async ({ data }) => deny(data.id));
+
+// ── Component ────────────────────────────────────────────
 
 type CmdPhase = "idle" | "exiting" | "entering";
 
 export function ApprovalBlock() {
-  const [pending, setPending] = useState<CommandEntry[]>([]);
+  const { data: pending = [], refetch } = useQuery({
+    queryKey: ["_pending"],
+    queryFn: () => getPendingCommands(),
+    refetchInterval: 500,
+  });
+
   const [cmdPhase, setCmdPhase] = useState<CmdPhase>("idle");
   const [ringKey, setRingKey] = useState(0);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
 
-  const poll = useCallback(() => {
-    getPendingCommands({ data: {} }).then(setPending);
-  }, []);
-
-  useEffect(() => {
-    poll();
-    const id = setInterval(poll, 1000);
-    return () => clearInterval(id);
-  }, [poll]);
-
-  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
+  useEffect(
+    () => () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    },
+    [],
+  );
 
   const handleApprove = useCallback(
     async (cmdId: string) => {
@@ -38,7 +62,7 @@ export function ApprovalBlock() {
       approveCommand({ data: { id: cmdId } });
 
       timerRef.current = setTimeout(() => {
-        poll();
+        refetch();
         setCmdPhase("entering");
 
         timerRef.current = setTimeout(() => {
@@ -46,15 +70,15 @@ export function ApprovalBlock() {
         }, 200);
       }, 150);
     },
-    [poll, cmdPhase],
+    [refetch, cmdPhase],
   );
 
   const handleDeny = useCallback(
     async (cmdId: string) => {
       await denyCommand({ data: { id: cmdId } });
-      poll();
+      refetch();
     },
-    [poll],
+    [refetch],
   );
 
   const hasPending = pending.length > 0;
@@ -99,7 +123,6 @@ export function ApprovalBlock() {
 
   return (
     <div className="flex items-center gap-2 text-xs font-mono">
-      {/* Command text — slides down & fades out, next one fades in */}
       <div className="flex-1 min-w-0 overflow-hidden">
         <div
           className={`flex items-center gap-2 transition-all duration-150 ease-out ${
@@ -123,9 +146,10 @@ export function ApprovalBlock() {
             />
           </span>
 
-          <span className="text-muted-foreground shrink-0">{entry.block}</span>
+          <span className="text-muted-foreground shrink-0">{entry.name}</span>
           <span className="text-foreground truncate">
-            {entry.cmd}{entry.args.length > 0 ? ` ${entry.args.join(" ")}` : ""}
+            {entry.bin}
+            {entry.args.length > 0 ? ` ${entry.args.join(" ")}` : ""}
           </span>
           {pending.length > 1 && (
             <span className="text-muted-foreground/50 shrink-0">
@@ -135,10 +159,12 @@ export function ApprovalBlock() {
         </div>
       </div>
 
-      {/* Buttons — stay in place, ring flash only */}
       <div className="flex items-center gap-1.5 shrink-0">
         <span className="relative inline-flex">
-          <span key={ringKey} className={`absolute -inset-[3px] rounded-md border border-emerald-500 pointer-events-none ${ringKey > 0 ? "animate-[ringFlash_200ms_ease-out_forwards]" : "opacity-0"}`} />
+          <span
+            key={ringKey}
+            className={`absolute -inset-[3px] rounded-md border border-emerald-500 pointer-events-none ${ringKey > 0 ? "animate-[ringFlash_200ms_ease-out_forwards]" : "opacity-0"}`}
+          />
           <Button
             variant="default"
             size="sm"
@@ -146,7 +172,10 @@ export function ApprovalBlock() {
             onClick={() => handleApprove(entry.id)}
           >
             Accept
-            <ShortcutKbd shortcut="approval:accept" className="ml-1 h-3.5 text-[9px] bg-primary-foreground/20 text-primary-foreground" />
+            <ShortcutKbd
+              shortcut="approval:accept"
+              className="ml-1 h-3.5 text-[9px] bg-primary-foreground/20 text-primary-foreground"
+            />
           </Button>
         </span>
         <button
@@ -155,7 +184,15 @@ export function ApprovalBlock() {
           className="p-0.5 rounded-sm text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
           title={`Deny (${formatKeysString({ mod: true, key: "d" })})`}
         >
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 12 12"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+          >
             <path d="M3 3l6 6M9 3l-6 6" />
           </svg>
         </button>

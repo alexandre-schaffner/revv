@@ -7,7 +7,10 @@ import {
   Scripts,
   useMatches,
 } from "@tanstack/react-router";
+import { QueryClientProvider } from "@tanstack/react-query";
 import appCss from "@rev/ui/styles/globals.css?url";
+import { queryClient } from "../lib/query-client";
+import { WorktreeProvider } from "../lib/worktree";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@rev/ui/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@rev/ui/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@rev/ui/components/ui/popover";
@@ -204,6 +207,8 @@ function RootComponent() {
         <HeadContent />
       </head>
       <body className="flex h-screen flex-col overflow-hidden">
+        <QueryClientProvider client={queryClient}>
+        <WorktreeProvider>
         <ThemeProvider>
         <TooltipProvider delayDuration={300}>
           <div className="flex flex-1 min-h-0">
@@ -224,6 +229,8 @@ function RootComponent() {
           </footer>
         </TooltipProvider>
         </ThemeProvider>
+        </WorktreeProvider>
+        </QueryClientProvider>
         <Scripts />
       </body>
     </html>

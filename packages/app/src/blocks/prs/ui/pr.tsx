@@ -1,15 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { Avatar, AvatarImage, AvatarFallback } from "@rev/ui/components/ui/avatar";
 import { GitPullRequest, GitPullRequestClosed, GitMerge, GitBranch, User } from "lucide-react";
-
-export interface PrEntry {
-  number: number;
-  title: string;
-  author: { login: string; avatarUrl?: string };
-  state: string;
-  headRefName: string;
-  updatedAt: string;
-}
+import type { PrEntry } from "../commands";
 
 function PrStateIcon({ state }: { state: string }) {
   switch (state) {

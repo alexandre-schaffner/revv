@@ -1,59 +1,35 @@
-import { createServerFn } from "@tanstack/react-start";
-import { run } from "../../lib/command-log";
+import { Type } from "@sinclair/typebox";
+import { cmd } from "../../lib/cmd";
 
-const BLOCK = "cwd";
-
-export const getCwd = createServerFn({ method: "GET" }).handler(async () => {
-  const entry = await run(BLOCK, "pwd");
-  return entry.result!.stdout.trim();
-});
-
-// cd can't work in a subprocess, but we log it through the bus
-export const setCwd = createServerFn({ method: "POST" })
-  .inputValidator((input: { path: string }) => input)
-  .handler(async ({ data }) => {
-    await run(BLOCK, "cd", [data.path]);
-    process.chdir(data.path);
-    const entry = await run(BLOCK, "pwd");
-    return entry.result!.stdout.trim();
-  });
-
-export const getGitRepos = createServerFn({ method: "GET" }).handler(
-  async () => {
-    const home = (await run(BLOCK, "sh", ["-c", "echo $HOME"])).result!.stdout.trim();
-
-    const searchDirs = [
-      "dev",
-      "Developer",
-      "projects",
-      "src",
-      "code",
-      "repos",
-      "workspace",
-    ].map((d) => `${home}/${d}`);
-
-    const results = await Promise.all(
-      searchDirs.map((dir) =>
-        run(BLOCK, "find", [dir, "-maxdepth", "2", "-name", ".git", "-type", "d"]),
-      ),
-    );
-
-    const repos = results
-      .flatMap((entry) =>
-        (entry.result?.stdout ?? "")
+export const listGitRepos = cmd(
+  "sh",
+  Type.Array(Type.String()),
+  {
+    args: () => {
+      const dirs = [
+        "dev",
+        "Developer",
+        "projects",
+        "src",
+        "code",
+        "repos",
+        "workspace",
+      ]
+        .map((d) => `~/${d}`)
+        .join(" ");
+      return [
+        "-c",
+        `for d in ${dirs}; do [ -d "$d" ] && find "$d" -maxdepth 2 -name .git -type d 2>/dev/null; done`,
+      ];
+    },
+    parse: (stdout: string) =>
+      [...new Set(
+        stdout
           .split("\n")
           .map((l) => l.trim())
-          .filter(Boolean),
-      )
-      .map((gitDir) => gitDir.replace(/\/\.git$/, ""))
-      .filter(Boolean);
-
-    const cwd = (await run(BLOCK, "pwd")).result!.stdout.trim();
-    const cwdCheck = await run(BLOCK, "git", ["rev-parse", "--git-dir"]);
-    if (cwdCheck.result?.code === 0 && !repos.includes(cwd)) {
-      repos.unshift(cwd);
-    }
-
-    return [...new Set(repos)].sort();
+          .filter(Boolean)
+          .map((p) => p.replace(/\/\.git$/, "")),
+      )].sort(),
+    staleTime: 60_000,
   },
 );

@@ -3,37 +3,49 @@ import { execFile } from "node:child_process";
 export interface ShellResult {
   stdout: string;
   stderr: string;
-  code: number;
+  exitCode: number;
+  durationMs: number;
+}
+
+export interface ShellOptions {
+  cwd?: string;
+  timeout?: number;
+  env?: Record<string, string>;
 }
 
 /**
  * Run a command and return its output.
- * First arg is the binary, rest are args — no shell interpolation.
+ * Uses execFile — no shell interpolation.
+ * CWD is per-call, never mutates process.cwd().
  */
 export function exec(
-  cmd: string,
+  bin: string,
   args: string[] = [],
-  options?: { cwd?: string; timeout?: number },
+  options?: ShellOptions,
 ): Promise<ShellResult> {
+  const start = performance.now();
   return new Promise((resolve) => {
     execFile(
-      cmd,
+      bin,
       args,
       {
         cwd: options?.cwd,
         timeout: options?.timeout ?? 30_000,
         maxBuffer: 1024 * 1024,
+        env: options?.env ? { ...process.env, ...options.env } : undefined,
       },
       (error, stdout, stderr) => {
+        const durationMs = Math.round(performance.now() - start);
         resolve({
           stdout: stdout?.toString() ?? "",
           stderr: stderr?.toString() ?? "",
-          code:
+          exitCode:
             error && "code" in error
               ? (error.code as number)
               : error
                 ? 1
                 : 0,
+          durationMs,
         });
       },
     );
@@ -42,12 +54,12 @@ export function exec(
 
 /** Run a command, return stdout lines (trimmed, empty lines filtered). */
 export async function execLines(
-  cmd: string,
+  bin: string,
   args: string[] = [],
-  options?: { cwd?: string; timeout?: number },
+  options?: ShellOptions,
 ): Promise<string[]> {
-  const result = await exec(cmd, args, options);
-  if (result.code !== 0) return [];
+  const result = await exec(bin, args, options);
+  if (result.exitCode !== 0) return [];
   return result.stdout
     .split("\n")
     .map((l) => l.trim())

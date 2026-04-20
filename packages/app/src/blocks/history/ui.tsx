@@ -1,7 +1,6 @@
-import { useState, useEffect, useCallback } from "react";
-import { getCommandLog } from "../../lib/commands";
-import type { CommandEntry } from "../../lib/command-log";
-import type { CommandStatus } from "../../lib/command-log";
+import { useQuery } from "@tanstack/react-query";
+import { createServerFn } from "@tanstack/react-start";
+import { getLog, type CommandEntry, type CommandStatus } from "../../lib/command-log";
 import {
   Table,
   TableBody,
@@ -17,6 +16,14 @@ import {
   CollapsibleTrigger,
 } from "@rev/ui/components/ui/collapsible";
 
+// ── Server function ──────────────────────────────────────
+
+const getCommandLog = createServerFn({ method: "GET" }).handler(
+  async (): Promise<CommandEntry[]> => getLog(),
+);
+
+// ── Helpers ──────────────────────────────────────────────
+
 function statusVariant(
   status: CommandStatus,
 ): "default" | "secondary" | "destructive" | "outline" {
@@ -31,8 +38,6 @@ function statusVariant(
       return "outline";
     case "running":
       return "secondary";
-    case "approved":
-      return "secondary";
   }
 }
 
@@ -44,18 +49,14 @@ function formatTime(ts: number): string {
   });
 }
 
+// ── Component ────────────────────────────────────────────
+
 export function HistoryBlock() {
-  const [entries, setEntries] = useState<CommandEntry[]>([]);
-
-  const poll = useCallback(() => {
-    getCommandLog({ data: {} }).then(setEntries);
-  }, []);
-
-  useEffect(() => {
-    poll();
-    const id = setInterval(poll, 1000);
-    return () => clearInterval(id);
-  }, [poll]);
+  const { data: entries = [] } = useQuery({
+    queryKey: ["_history"],
+    queryFn: () => getCommandLog(),
+    refetchInterval: 1000,
+  });
 
   if (entries.length === 0) {
     return (
@@ -80,7 +81,6 @@ export function HistoryBlock() {
           <TableHeader>
             <TableRow>
               <TableHead className="h-8 px-4 text-xs">Time</TableHead>
-              <TableHead className="h-8 px-4 text-xs">Block</TableHead>
               <TableHead className="h-8 px-4 text-xs">Command</TableHead>
               <TableHead className="h-8 px-4 text-xs">Status</TableHead>
               <TableHead className="h-8 px-4 text-xs">Exit</TableHead>
@@ -101,7 +101,7 @@ function CommandRow({ entry }: { entry: CommandEntry }) {
   const hasOutput =
     entry.result &&
     (entry.result.stdout.length > 0 || entry.result.stderr.length > 0);
-  const cmdStr = [entry.cmd, ...entry.args].join(" ");
+  const cmdStr = [entry.bin, ...entry.args].join(" ");
 
   if (!hasOutput) {
     return (
@@ -109,15 +109,8 @@ function CommandRow({ entry }: { entry: CommandEntry }) {
         <TableCell className="py-1.5 px-4 text-xs font-mono text-muted-foreground whitespace-nowrap">
           {formatTime(entry.createdAt)}
         </TableCell>
-        <TableCell className="py-1.5 px-4">
-          <Badge
-            variant="secondary"
-            className="text-[10px] px-1.5 py-0 font-mono"
-          >
-            {entry.block}
-          </Badge>
-        </TableCell>
         <TableCell className="py-1.5 px-4 text-xs font-mono max-w-md truncate">
+          <span className="text-muted-foreground">{entry.name}</span>{" "}
           {cmdStr}
         </TableCell>
         <TableCell className="py-1.5 px-4">
@@ -129,7 +122,7 @@ function CommandRow({ entry }: { entry: CommandEntry }) {
           </Badge>
         </TableCell>
         <TableCell className="py-1.5 px-4 text-xs font-mono text-muted-foreground">
-          {entry.result ? entry.result.code : "—"}
+          {entry.result ? entry.result.exitCode : "\u2014"}
         </TableCell>
       </TableRow>
     );
@@ -141,14 +134,6 @@ function CommandRow({ entry }: { entry: CommandEntry }) {
         <TableRow className="cursor-pointer">
           <TableCell className="py-1.5 px-4 text-xs font-mono text-muted-foreground whitespace-nowrap">
             {formatTime(entry.createdAt)}
-          </TableCell>
-          <TableCell className="py-1.5 px-4">
-            <Badge
-              variant="secondary"
-              className="text-[10px] px-1.5 py-0 font-mono"
-            >
-              {entry.block}
-            </Badge>
           </TableCell>
           <TableCell className="py-1.5 px-4 text-xs font-mono max-w-md">
             <CollapsibleTrigger className="flex items-center gap-1.5 text-left cursor-pointer hover:text-foreground transition-colors w-full">
@@ -163,6 +148,7 @@ function CommandRow({ entry }: { entry: CommandEntry }) {
               >
                 <path d="M3 1.5l4 3.5-4 3.5" />
               </svg>
+              <span className="text-muted-foreground">{entry.name}</span>{" "}
               <span className="truncate">{cmdStr}</span>
             </CollapsibleTrigger>
           </TableCell>
@@ -175,12 +161,12 @@ function CommandRow({ entry }: { entry: CommandEntry }) {
             </Badge>
           </TableCell>
           <TableCell className="py-1.5 px-4 text-xs font-mono text-muted-foreground">
-            {entry.result ? entry.result.code : "—"}
+            {entry.result ? entry.result.exitCode : "\u2014"}
           </TableCell>
         </TableRow>
         <CollapsibleContent asChild>
           <tr>
-            <td colSpan={5} className="p-0">
+            <td colSpan={4} className="p-0">
               <div className="bg-muted/50 border-y border-border px-4 py-2 space-y-2">
                 {entry.result!.stdout && (
                   <div>
@@ -204,8 +190,9 @@ function CommandRow({ entry }: { entry: CommandEntry }) {
                 )}
                 <div className="text-[10px] text-muted-foreground font-mono">
                   cwd: {entry.cwd}
-                  {entry.finishedAt &&
-                    ` · ${entry.finishedAt - entry.createdAt}ms`}
+                  {entry.result &&
+                    entry.finishedAt &&
+                    ` \u00b7 ${entry.result.durationMs}ms`}
                 </div>
               </div>
             </td>

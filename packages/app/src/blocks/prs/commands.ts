@@ -1,86 +1,70 @@
-import { createServerFn } from "@tanstack/react-start";
-import { run } from "../../lib/command-log";
-import type { CommandEntry } from "../../lib/command-log";
+import { Type, type Static } from "@sinclair/typebox";
+import { cmd } from "../../lib/cmd";
 
-const BLOCK = "prs";
+// ── Schemas ──────────────────────────────────────────────
 
-/** Run `gh pr list` for the current repo. Returns the completed command. */
-export const requestPrList = createServerFn({ method: "POST" }).handler(
-  async (): Promise<CommandEntry> => {
-    return run(BLOCK, "gh", [
-      "pr",
-      "list",
-      "--json",
-      "number,title,author,state,headRefName,updatedAt",
-    ]);
-  },
+const PrEntry = Type.Object({
+  number: Type.Number(),
+  title: Type.String(),
+  author: Type.Object({
+    login: Type.String(),
+    avatarUrl: Type.Optional(Type.String()),
+  }),
+  state: Type.String(),
+  headRefName: Type.String(),
+  updatedAt: Type.String(),
+});
+
+export type PrEntry = Static<typeof PrEntry>;
+
+const PrDetail = Type.Object({
+  title: Type.String(),
+  state: Type.String(),
+  author: Type.Object({ login: Type.String() }),
+  headRefName: Type.String(),
+  url: Type.String(),
+  body: Type.String(),
+});
+
+export type PrDetail = Static<typeof PrDetail>;
+
+// ── Commands ─────────────────────────────────────────────
+
+export const listPrs = cmd(
+  "gh pr list --json number,title,author,state,headRefName,updatedAt",
+  Type.Array(PrEntry),
+  { staleTime: 10_000, refetchInterval: 30_000, cwd: "worktree" },
 );
 
-export interface PrDetail {
-  body: string;
-  url: string;
-  title: string;
-  state: string;
-  author: string;
-  branch: string;
-  files: string[];
-}
+export const viewPr = cmd("gh pr view", PrDetail, {
+  args: ({ number }: { number: number }) => [
+    String(number),
+    "--json",
+    "title,state,author,headRefName,url,body",
+  ],
+  staleTime: 30_000,
+});
 
-/** Split a multi-file unified diff into an array of single-file diffs. */
-function splitDiffByFile(diff: string): string[] {
-  const chunks: string[] = [];
-  let current: string[] = [];
-  for (const line of diff.split("\n")) {
-    if (line.startsWith("diff --git ") && current.length > 0) {
-      chunks.push(current.join("\n"));
-      current = [];
+/**
+ * Fetch PR diff as an array of per-file patches.
+ * `gh pr diff` outputs raw unified diff, we split by file.
+ */
+export const getPrDiff = cmd("gh pr diff", Type.Array(Type.String()), {
+  args: ({ number }: { number: number }) => [String(number)],
+  parse: (stdout: string) => {
+    if (!stdout.trim()) return [];
+    const chunks: string[] = [];
+    let current: string[] = [];
+    for (const line of stdout.split("\n")) {
+      if (line.startsWith("diff --git ") && current.length > 0) {
+        chunks.push(current.join("\n"));
+        current = [];
+      }
+      current.push(line);
     }
-    current.push(line);
-  }
-  if (current.length > 0) {
-    chunks.push(current.join("\n"));
-  }
-  return chunks;
-}
-
-/** Fetch full PR detail via `gh pr view`. */
-export const fetchPrDetail = createServerFn({ method: "POST" })
-  .inputValidator((input: { number: number }) => input)
-  .handler(async ({ data }): Promise<PrDetail> => {
-    const meta = await run(BLOCK, "gh", [
-      "pr", "view", String(data.number),
-      "--json", "title,state,author,headRefName,url,body",
-    ]);
-
-    if (meta.status !== "done" || !meta.result) {
-      throw new Error(`gh pr view failed: ${meta.result?.stderr ?? "unknown error"}`);
-    }
-
-    const pr = JSON.parse(meta.result.stdout) as {
-      title: string;
-      state: string;
-      author: { login: string };
-      headRefName: string;
-      url: string;
-      body: string;
-    };
-
-    const diffEntry = await run(BLOCK, "gh", [
-      "pr", "diff", String(data.number),
-    ]);
-
-    const diffStdout = diffEntry.result?.stdout ?? "";
-    const files = diffEntry.status === "done" && diffStdout.trim().length > 0
-      ? splitDiffByFile(diffStdout)
-      : [];
-
-    return {
-      body: pr.body ?? "",
-      url: pr.url,
-      title: pr.title,
-      state: pr.state,
-      author: pr.author.login,
-      branch: pr.headRefName,
-      files,
-    };
-  });
+    if (current.length > 0) chunks.push(current.join("\n"));
+    return chunks;
+  },
+  staleTime: 30_000,
+  cwd: "worktree",
+});

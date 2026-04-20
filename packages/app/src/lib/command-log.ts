@@ -1,66 +1,124 @@
-import { exec as rawExec } from "./shell";
+import { exec } from "./shell";
 import type { ShellResult } from "./shell";
+
+// ── Types ────────────────────────────────────────────────
 
 export type CommandStatus =
   | "pending"
-  | "approved"
   | "denied"
   | "running"
   | "done"
   | "error";
 
+export type Gate = "auto" | "confirm";
+
 export interface CommandEntry {
   id: string;
-  block: string;
-  cmd: string;
+  name: string;
+  bin: string;
   args: string[];
   cwd: string;
+  gate: Gate;
   status: CommandStatus;
   result: ShellResult | null;
   createdAt: number;
+  startedAt: number | null;
   finishedAt: number | null;
 }
 
-let counter = 0;
+// ── In-memory ring buffer ────────────────────────────────
+
+const MAX_LOG_SIZE = 500;
 const log: CommandEntry[] = [];
+let idCounter = 0;
 
 function nextId(): string {
-  return `cmd_${++counter}_${Date.now()}`;
+  return `cmd_${++idCounter}_${Date.now()}`;
 }
 
-/** Push a command into the log as pending. Returns the entry. */
+function pushEntry(entry: CommandEntry) {
+  log.push(entry);
+  if (log.length > MAX_LOG_SIZE) {
+    log.splice(0, log.length - MAX_LOG_SIZE);
+  }
+}
+
+// ── Event subscription ───────────────────────────────────
+
+type LogEvent = "enqueue" | "update";
+type LogListener = (event: LogEvent, entry: CommandEntry) => void;
+
+const listeners = new Set<LogListener>();
+
+export function subscribe(listener: LogListener): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+function emit(event: LogEvent, entry: CommandEntry) {
+  for (const fn of listeners) fn(event, entry);
+}
+
+// ── Promise-based approval callbacks ─────────────────────
+
+const pendingCallbacks = new Map<
+  string,
+  { resolve: (result: ShellResult) => void; reject: (reason: string) => void }
+>();
+
+// ── Core operations ──────────────────────────────────────
+
+/** Push a command into the log as pending. */
 export function enqueue(
-  block: string,
-  cmd: string,
+  name: string,
+  bin: string,
   args: string[] = [],
   cwd?: string,
+  gate: Gate = "auto",
 ): CommandEntry {
   const entry: CommandEntry = {
     id: nextId(),
-    block,
-    cmd,
+    name,
+    bin,
     args,
     cwd: cwd ?? process.cwd(),
+    gate,
     status: "pending",
     result: null,
     createdAt: Date.now(),
+    startedAt: null,
     finishedAt: null,
   };
-  log.push(entry);
+  pushEntry(entry);
+  emit("enqueue", entry);
   return entry;
 }
 
-/** Approve and execute a pending command. */
+/** Execute a pending command. */
 export async function approve(id: string): Promise<CommandEntry> {
   const entry = log.find((e) => e.id === id);
   if (!entry) throw new Error(`Command ${id} not found`);
-  if (entry.status !== "pending") throw new Error(`Command ${id} is ${entry.status}, not pending`);
+  if (entry.status !== "pending")
+    throw new Error(`Command ${id} is ${entry.status}, not pending`);
 
   entry.status = "running";
-  const result = await rawExec(entry.cmd, entry.args, { cwd: entry.cwd });
+  entry.startedAt = Date.now();
+  emit("update", entry);
+
+  const result = await exec(entry.bin, entry.args, { cwd: entry.cwd });
   entry.result = result;
-  entry.status = result.code === 0 ? "done" : "error";
+  entry.status = result.exitCode === 0 ? "done" : "error";
   entry.finishedAt = Date.now();
+  emit("update", entry);
+
+  // Resolve any waiting gated promise
+  const cb = pendingCallbacks.get(id);
+  if (cb) {
+    if (entry.status === "done") cb.resolve(result);
+    else cb.reject(result.stderr || `Exit code ${result.exitCode}`);
+    pendingCallbacks.delete(id);
+  }
+
   return entry;
 }
 
@@ -68,27 +126,59 @@ export async function approve(id: string): Promise<CommandEntry> {
 export function deny(id: string): CommandEntry {
   const entry = log.find((e) => e.id === id);
   if (!entry) throw new Error(`Command ${id} not found`);
-  if (entry.status !== "pending") throw new Error(`Command ${id} is ${entry.status}, not pending`);
+  if (entry.status !== "pending")
+    throw new Error(`Command ${id} is ${entry.status}, not pending`);
 
   entry.status = "denied";
   entry.finishedAt = Date.now();
+  emit("update", entry);
+
+  // Reject any waiting gated promise
+  const cb = pendingCallbacks.get(id);
+  if (cb) {
+    cb.reject("denied");
+    pendingCallbacks.delete(id);
+  }
+
   return entry;
 }
 
-/** Shortcut: enqueue + approve in one call. For commands that don't need gating. */
+/**
+ * Enqueue + approve in one call. For auto-gate commands.
+ */
 export async function run(
-  block: string,
-  cmd: string,
+  name: string,
+  bin: string,
   args: string[] = [],
   cwd?: string,
 ): Promise<CommandEntry> {
-  const entry = enqueue(block, cmd, args, cwd);
+  const entry = enqueue(name, bin, args, cwd, "auto");
   return approve(entry.id);
 }
 
-/** Get the full log, optionally filtered by block. */
-export function getLog(block?: string): CommandEntry[] {
-  if (block) return log.filter((e) => e.block === block);
+/**
+ * Enqueue a gated command. Returns a promise that resolves with the
+ * ShellResult when the command is approved+executed, or rejects when denied.
+ * The mutation stays in `isPending` until the user acts.
+ */
+export function enqueueGated(
+  name: string,
+  bin: string,
+  args: string[] = [],
+  cwd?: string,
+): { entry: CommandEntry; result: Promise<ShellResult> } {
+  const entry = enqueue(name, bin, args, cwd, "confirm");
+  const result = new Promise<ShellResult>((resolve, reject) => {
+    pendingCallbacks.set(entry.id, { resolve, reject });
+  });
+  return { entry, result };
+}
+
+// ── Queries ──────────────────────────────────────────────
+
+/** Get the full log, optionally filtered by command name prefix. */
+export function getLog(namePrefix?: string): CommandEntry[] {
+  if (namePrefix) return log.filter((e) => e.name.startsWith(namePrefix));
   return [...log];
 }
 
@@ -98,6 +188,6 @@ export function getCommand(id: string): CommandEntry | null {
 }
 
 /** Get pending commands awaiting approval. */
-export function getPending(block?: string): CommandEntry[] {
-  return getLog(block).filter((e) => e.status === "pending");
+export function getPending(): CommandEntry[] {
+  return log.filter((e) => e.status === "pending");
 }

@@ -27,6 +27,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@rev/ui/components/ui/select";
+import { TagInput } from "@rev/ui/components/ui/tag-input";
 import { Separator } from "@rev/ui/components/ui/separator";
 import {
   Avatar,
@@ -314,6 +315,35 @@ const ansiBrightColors = [
   { name: "br-cyan", cls: "bg-ansi-bright-cyan" },
   { name: "br-white", cls: "bg-ansi-bright-white" },
 ];
+
+const chainSuggestions = [
+  "Ethereum",
+  "Arbitrum",
+  "Optimism",
+  "Polygon",
+  "Base",
+  "Avalanche",
+  "BNB Chain",
+  "Solana",
+  "Fantom",
+  "zkSync",
+  "Scroll",
+  "Linea",
+  "Starknet",
+  "Cosmos",
+];
+
+function TagInputDemo() {
+  const [chains, setChains] = useState<string[]>([]);
+  return (
+    <TagInput
+      value={chains}
+      onChange={setChains}
+      suggestions={chainSuggestions}
+      placeholder="Add chains..."
+    />
+  );
+}
 
 function DesignPage() {
   const { theme, setTheme } = useTheme();
@@ -697,18 +727,8 @@ function DesignPage() {
                 <Textarea placeholder="Type your message here..." />
               </Showcase>
 
-              <Showcase label="Select">
-                <Select>
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Select a framework" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="react">React</SelectItem>
-                    <SelectItem value="svelte">Svelte</SelectItem>
-                    <SelectItem value="vue">Vue</SelectItem>
-                    <SelectItem value="solid">Solid</SelectItem>
-                  </SelectContent>
-                </Select>
+              <Showcase label="Tag Input">
+                <TagInputDemo />
               </Showcase>
 
               <Showcase label="Checkbox, Switch & Slider">
