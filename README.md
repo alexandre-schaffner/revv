@@ -21,29 +21,40 @@ An intelligent code review desktop application that brings AI-assisted analysis 
 ## Install on macOS (one command)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/alexandre-schaffner/revv/main/scripts/install-macos.sh | bash
+curl -fsSL https://raw.githubusercontent.com/alexandre-schaffner/revv/main/install.sh | bash
 ```
 
 That single command will:
 
 1. Install build prerequisites if missing (Xcode CLT, Bun, Rust)
 2. Clone the source to `~/Library/Application Support/Revv/src`
-3. Prompt once for your GitHub OAuth credentials and auto-generate `BETTER_AUTH_SECRET`
-4. Run `make dist` to build `Revv.app`
-5. Copy `Revv.app` to `/Applications`
-6. Install a LaunchAgent so the API server runs in the background on login
-7. Install a `revv` CLI to `~/.local/bin` for updates and maintenance
+3. Build `Revv.app` (`make dist`) and copy it to `/Applications`
+4. Install a LaunchAgent so the API server runs in the background on login
+5. Install a `revv` CLI to `~/.local/bin` for updates and maintenance
 
-Before running it you need a GitHub OAuth App (`Settings → Developer settings → OAuth Apps → New OAuth App`):
-- **Homepage URL:** `http://localhost:5173`
-- **Authorization callback URL:** `http://localhost:45678/api/auth/callback/github`
+No OAuth prompts and no `.env` file to manage — Revv ships with a bundled GitHub OAuth App, and `BETTER_AUTH_SECRET` is generated on first run and stored at `~/Library/Application Support/Revv/auth.key` (mode `0600`). Nothing sensitive ever leaves your machine.
 
-You can also pass credentials up front to skip the prompt:
+### Non-interactive / customization
+
+The installer honors a few environment variables — everything else is baked in:
 
 ```bash
-REVV_GITHUB_CLIENT_ID=xxx REVV_GITHUB_CLIENT_SECRET=yyy \
-  bash <(curl -fsSL https://raw.githubusercontent.com/alexandre-schaffner/revv/main/scripts/install-macos.sh)
+REVV_AUTO_YES=1 \
+REVV_BRANCH=main \
+REVV_INSTALL_DIR="$HOME/Library/Application Support/Revv/src" \
+REVV_APP_DIR=/Applications \
+  bash <(curl -fsSL https://raw.githubusercontent.com/alexandre-schaffner/revv/main/install.sh)
 ```
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `REVV_AUTO_YES` | `0` | `1` skips every confirm prompt (same as `--yes`) |
+| `REVV_BRANCH` | `main` | Branch to clone/update |
+| `REVV_REPO_URL` | Upstream | Git URL to clone from (fork-friendly) |
+| `REVV_INSTALL_DIR` | `~/Library/Application Support/Revv/src` | Where the source tree lives |
+| `REVV_APP_DIR` | `/Applications` | Falls back to `~/Applications` if not writable |
+
+To self-host against your own GitHub OAuth App (with **Device Flow enabled** — see Troubleshooting), set `GITHUB_CLIENT_ID` in the LaunchAgent's `EnvironmentVariables` after install, or edit the default in `apps/server/src/config.ts`.
 
 ### Managing the install
 
@@ -73,26 +84,25 @@ Updates are purely source-pull-and-rebuild — no signing/notarization infrastru
 ```bash
 git clone https://github.com/alexandre-schaffner/revv.git
 cd revv
-./install.sh          # provisions toolchain + prompts for GitHub OAuth creds
+./install.sh --dev    # installs toolchain + runs `bun install`, stops there
 ```
 
-The developer installer (`./install.sh`) is distinct from the user installer
-(`scripts/install-macos.sh`): it only prepares the current checkout for
-`bun run dev`, it does not build or install the `.app`.
+`install.sh` is a single script with two modes. Running it **from a checkout with `--dev`** only prepares the tree for `make dev` — it does not build or install `Revv.app` or the LaunchAgent. Without `--dev` it runs the full user install (same as the curl one-liner above).
 
 ### Setup (manual alternative)
 
-1. Create a GitHub OAuth App:
-   - Go to Settings → Developer settings → OAuth Apps → New OAuth App
-   - Authorization callback URL: `http://localhost:45678/api/auth/callback/github`
-   - Copy the Client ID and Client Secret
+No `.env` is required — the bundled OAuth client_id and an auto-generated auth secret are enough. Override only what you need:
 
-2. Create `.env` at the repo root:
-   ```env
-   GITHUB_CLIENT_ID=your_client_id
-   GITHUB_CLIENT_SECRET=your_client_secret
-   BETTER_AUTH_SECRET=your_secret   # Generate with: openssl rand -hex 32
-   ```
+```env
+# apps/server/.env — all optional
+GITHUB_CLIENT_ID=your_client_id      # override the bundled OAuth App (must have Device Flow enabled)
+GITHUB_HOST=github.com               # for GitHub Enterprise: set to your host
+BETTER_AUTH_SECRET=                  # auto-generated on first run; override only for CI/dev parity
+PORT=45678                           # API server port
+REVV_DB_PATH=./revv.db               # SQLite location
+```
+
+The device-code flow does **not** use a client secret — don't look for one.
 
 ### Development
 
@@ -146,7 +156,7 @@ Elysia API server with Effect-based services. Runs on port 45678.
 - `src/db/` — Database schema (Drizzle)
 
 **Features:**
-- GitHub OAuth with `better-auth`
+- GitHub device-code sign-in (`src/routes/device-auth.ts`), sessions via `better-auth`
 - WebSocket for real-time updates
 - Polling & syncing of PRs from GitHub
 
@@ -170,7 +180,9 @@ import { API_PORT, APP_NAME } from '@revv/shared'
 
 ### Authentication
 
-GitHub Device Code OAuth flow via `better-auth`. Token stored client-side, passed to API via Bearer token.
+GitHub **Device Code** OAuth flow. The server calls `POST https://github.com/login/device/code` with the bundled `client_id` (no client secret — device flow doesn't use one), returns a `user_code` + `verification_uri` to the desktop client, and polls GitHub until the user approves the code in their browser. On success the server mints a 30-day session token, stored client-side and passed to the API as `Authorization: Bearer`.
+
+`better-auth` is present for session/account storage plumbing, but the interactive sign-in path is the device-code endpoints in `apps/server/src/routes/device-auth.ts` — not a browser-redirect callback.
 
 ### Real-Time Updates
 
@@ -191,9 +203,15 @@ Don't bypass Effect when modifying services.
 
 ### Database
 
-SQLite with Drizzle ORM. Schema in `src/db/schema.ts`.
+SQLite with Drizzle ORM. Schema in `apps/server/src/db/schema.ts`; migrations in `apps/server/src/db/migrations/` (generated by `drizzle-kit` and applied by `migrate()` on server startup). The database lives at `apps/server/revv.db` by default; override with `REVV_DB_PATH`.
 
-**Note:** No migration runner — schema is applied directly on server start.
+To generate a new migration after changing `schema.ts`:
+
+```bash
+cd apps/server && bun run drizzle-kit generate
+```
+
+To reset the local DB entirely: `make reset-db`.
 
 ## TypeScript
 
@@ -208,12 +226,42 @@ Avoid suppressing errors with `as` casts unless unavoidable.
 
 See `apps/server/src/routes/` for full API docs. Key endpoints:
 
-- `POST /api/auth/callback/github` — OAuth callback
-- `GET /api/auth/pending-token` — Poll for pending token (browser dev)
+**Auth (device-code flow)**
+- `POST /api/auth/device/init` — Start device flow; returns `device_code`, `user_code`, `verification_uri`
+- `POST /api/auth/device/poll` — Exchange an approved `device_code` for a session token
+
+**Data**
 - `GET /api/prs` — List pull requests
 - `GET /api/repos` — List repositories
 - `POST /api/reviews` — Create or update review
 - `GET /api/reviews/:id` — Fetch review
+
+All data endpoints require `Authorization: Bearer <session-token>`. The WebSocket at `ws://localhost:45678` authenticates via `?token=<session-token>` query param.
+
+## Troubleshooting
+
+### `Failed to start sign-in: TypeError: Load failed`
+
+The desktop app can't reach the local API server. Check it's running:
+
+```bash
+curl http://localhost:45678/       # expect a response (404 on `/` is fine)
+launchctl list | grep revv         # PID in column 1 means running; `-` means crashed
+revv logs                          # tail ~/Library/Logs/Revv/server.{out,err}.log
+```
+
+If crashed, `revv logs` will show the reason. Common cause: a stale LaunchAgent from a previous broken build — `revv restart` usually resolves it.
+
+### `Failed to start sign-in: Error: Failed to initiate sign-in`
+
+Server is reachable but GitHub returned 502. `revv logs` will show the real cause; almost always one of:
+
+- **GitHub 404 Not Found** — you're using a custom `GITHUB_CLIENT_ID` but the OAuth App does not have **Device Flow enabled**. Fix it at `github.com/settings/developers` → your app → check "Enable Device Flow" → **Update application**.
+- **Invalid `client_id`** — the env var is set to a typo or a non-existent App.
+
+### `revv status` / `revv doctor`
+
+Both ship with the `revv` CLI and print install paths, service state, and run basic health checks. Start there.
 
 ## Roadmap
 
