@@ -26,7 +26,7 @@ export const ServerConfig = Config.all({
 	githubClientId: Config.string('GITHUB_CLIENT_ID').pipe(
 		Config.withDefault('0v23g4GLrM59sDrek6wo'),
 	),
-	githubHost: Config.string('GITHUB_HOST').pipe(Config.withDefault('github.com')),
+	githubHost: Config.string('GITHUB_HOST').pipe(Config.withDefault('nocturlab.ghe.com')),
 	revDebug: Config.boolean('REV_DEBUG').pipe(Config.withDefault(false)),
 });
 

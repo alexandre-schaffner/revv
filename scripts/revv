@@ -101,9 +101,17 @@ Run the installer first:
 }
 
 load_bun_path() {
-  [[ -d "$HOME/.bun/bin" ]] && export PATH="$HOME/.bun/bin:$PATH"
-  [[ -f "$HOME/.cargo/env" ]] && { # shellcheck disable=SC1091
-    source "$HOME/.cargo/env"; }
+  # NOTE: use `if` rather than `&&` chains so a false condition on the last
+  # line doesn't make the function return non-zero — that would trip `set -e`
+  # at the call site and exit the script silently (e.g. when Rust is installed
+  # via Homebrew instead of rustup, so ~/.cargo/env doesn't exist).
+  if [[ -d "$HOME/.bun/bin" ]]; then
+    export PATH="$HOME/.bun/bin:$PATH"
+  fi
+  if [[ -f "$HOME/.cargo/env" ]]; then
+    # shellcheck disable=SC1091
+    source "$HOME/.cargo/env"
+  fi
 }
 
 server_running() {

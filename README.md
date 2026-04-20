@@ -54,7 +54,7 @@ REVV_APP_DIR=/Applications \
 | `REVV_INSTALL_DIR` | `~/Library/Application Support/Revv/src` | Where the source tree lives |
 | `REVV_APP_DIR` | `/Applications` | Falls back to `~/Applications` if not writable |
 
-To self-host against your own GitHub OAuth App (with **Device Flow enabled** — see Troubleshooting), set `GITHUB_CLIENT_ID` in the LaunchAgent's `EnvironmentVariables` after install, or edit the default in `apps/server/src/config.ts`.
+Revv bundles an OAuth App registered on `nocturlab.ghe.com` (GitHub Enterprise Cloud). To self-host against a different GitHub instance — public github.com or your own GHE Server — override **both** `GITHUB_CLIENT_ID` and `GITHUB_HOST` in the LaunchAgent's `EnvironmentVariables` after install (or edit the defaults in `apps/server/src/config.ts`). The OAuth App must have **Device Flow enabled** — see Troubleshooting.
 
 ### Managing the install
 
@@ -88,21 +88,6 @@ cd revv
 ```
 
 `install.sh` is a single script with two modes. Running it **from a checkout with `--dev`** only prepares the tree for `make dev` — it does not build or install `Revv.app` or the LaunchAgent. Without `--dev` it runs the full user install (same as the curl one-liner above).
-
-### Setup (manual alternative)
-
-No `.env` is required — the bundled OAuth client_id and an auto-generated auth secret are enough. Override only what you need:
-
-```env
-# apps/server/.env — all optional
-GITHUB_CLIENT_ID=your_client_id      # override the bundled OAuth App (must have Device Flow enabled)
-GITHUB_HOST=github.com               # for GitHub Enterprise: set to your host
-BETTER_AUTH_SECRET=                  # auto-generated on first run; override only for CI/dev parity
-PORT=45678                           # API server port
-REVV_DB_PATH=./revv.db               # SQLite location
-```
-
-The device-code flow does **not** use a client secret — don't look for one.
 
 ### Development
 
