@@ -23,10 +23,17 @@ set -euo pipefail
 
 CONFIG_FILE="$HOME/Library/Application Support/Revv/config"
 INSTALL_DIR="${REVV_INSTALL_DIR:-$HOME/Library/Application Support/Revv/src}"
-APP_CANDIDATES=(
-  "/Applications/Revv.app"
-  "$HOME/Applications/Revv.app"
-)
+# Glob `Revv*.app` so we find the actual bundle regardless of productName
+# ("Revv.app" vs "Revv (Alpha).app", etc.). CONFIG_FILE's APP_PATH — written
+# by install.sh with the exact path it just copied — is prepended below and
+# takes precedence for normal installs.
+APP_CANDIDATES=()
+for __dir in "/Applications" "$HOME/Applications"; do
+  for __app in "$__dir"/Revv*.app; do
+    [[ -d "$__app" ]] && APP_CANDIDATES+=("$__app")
+  done
+done
+unset __dir __app
 LAUNCH_AGENT_LABEL="com.revv.server"
 LAUNCH_AGENT_PLIST="$HOME/Library/LaunchAgents/$LAUNCH_AGENT_LABEL.plist"
 LOG_DIR="$HOME/Library/Logs/Revv"
@@ -268,28 +275,43 @@ cmd_update() {
   info "Building (make dist)"
   (cd "$INSTALL_DIR" && make dist)
 
-  # Find the newly built .app and copy it over the installed one
-  local bundle_app
-  bundle_app="$INSTALL_DIR/apps/desktop/target/release/bundle/macos/Revv.app"
-  if [[ ! -d "$bundle_app" ]]; then
-    bundle_app="$(find "$INSTALL_DIR/apps/desktop/target" -maxdepth 6 -type d -name 'Revv.app' -path '*/bundle/macos/*' 2>/dev/null | head -1)"
+  # Find the newly built .app. Use a wildcard (*.app) so productName changes
+  # — e.g. "Revv" vs "Revv (Alpha).app" — don't break the lookup. install.sh
+  # uses the same pattern.
+  local bundle_app app_name
+  bundle_app="$(find "$INSTALL_DIR/apps/desktop/target/release/bundle/macos" -maxdepth 1 -type d -name '*.app' 2>/dev/null | head -1)"
+  if [[ -z "$bundle_app" ]]; then
+    bundle_app="$(find "$INSTALL_DIR/apps/desktop/target" -maxdepth 6 -type d -name '*.app' -path '*/bundle/macos/*' 2>/dev/null | head -1)"
   fi
-  [[ -d "$bundle_app" ]] || fail "Build finished but Revv.app was not produced."
+  [[ -d "$bundle_app" ]] || fail "Build finished but no .app bundle was produced."
+  app_name="$(basename "$bundle_app")"
 
   # Replace the installed .app (prefer the same location it was at).
-  local dest_app
-  dest_app="$(find_app)" || dest_app="/Applications/Revv.app"
-  local dest_dir
-  dest_dir="$(dirname "$dest_app")"
+  local dest_app dest_dir old_app
+  old_app="$(find_app)" || old_app=""
+  if [[ -n "$old_app" ]]; then
+    dest_dir="$(dirname "$old_app")"
+  else
+    dest_dir="/Applications"
+  fi
   if [[ ! -w "$dest_dir" ]]; then
     warn "$dest_dir is not writable — falling back to ~/Applications"
     dest_dir="$HOME/Applications"
     mkdir -p "$dest_dir"
-    dest_app="$dest_dir/Revv.app"
+  fi
+  dest_app="$dest_dir/$app_name"
+
+  # If the productName changed (old "Revv.app" -> new "Revv (Alpha).app"), the
+  # old bundle still sits there at its original path. Remove it so we don't
+  # leave two copies in /Applications.
+  if [[ -n "$old_app" && "$old_app" != "$dest_app" && -d "$old_app" ]]; then
+    info "Product name changed — removing stale $old_app"
+    rm -rf "$old_app"
   fi
 
   info "Quitting Revv if it's running"
   osascript -e 'tell application "Revv" to quit' 2>/dev/null || true
+  osascript -e 'tell application "Revv (Alpha)" to quit' 2>/dev/null || true
   sleep 1
 
   info "Replacing $dest_app"
