@@ -319,6 +319,14 @@ export interface PrFileMeta {
 	readonly patch: string | null;
 }
 
+export interface PrCommit {
+	readonly sha: string;
+	readonly message: string;
+	readonly authorLogin: string | null;
+	readonly authorAvatarUrl: string | null;
+	readonly date: string | null;
+}
+
 export class GitHubService extends Context.Tag('GitHubService')<
 	GitHubService,
 	{
@@ -360,6 +368,11 @@ export class GitHubService extends Context.Tag('GitHubService')<
 			prNumber: number,
 			token: string
 		) => Effect.Effect<PrFileMeta[], GitHubError, DbService | GitHubEtagCache>;
+		readonly listPrCommits: (
+			repoFullName: string,
+			prNumber: number,
+			token: string
+		) => Effect.Effect<PrCommit[], GitHubError>;
 		readonly getFileContent: (
 			repoFullName: string,
 			path: string,
@@ -528,6 +541,80 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
 				additions: (f['additions'] as number | undefined) ?? 0,
 				deletions: (f['deletions'] as number | undefined) ?? 0,
 				patch: (f['patch'] as string | undefined) ?? null,
+			}));
+		}).pipe(Effect.retry(retrySchedule)),
+
+	listPrCommits: (repoFullName, prNumber, token) =>
+		Effect.gen(function* () {
+			const { owner, repo } = yield* parseRepoFullName(repoFullName);
+			const data = yield* githubFetch(
+				`/repos/${owner}/${repo}/pulls/${prNumber}/commits?per_page=20`,
+				token
+			);
+			// Extract parent SHAs so we can topologically sort. GitHub's docs
+			// claim this endpoint returns commits "in the order they appear on
+			// the branch," but that order is not stable across force-pushes,
+			// cherry-picks, and unusual merge histories — the root cause of
+			// reports where the dropdown shows commits in an unexpected order.
+			// Walking the first-parent chain from head is deterministic.
+			type RawCommit = PrCommit & { readonly parents: readonly string[] };
+			const raw: RawCommit[] = (data as Record<string, unknown>[]).map((c) => {
+				const commit = c['commit'] as Record<string, unknown>;
+				const author = c['author'] as Record<string, unknown> | null;
+				const commitAuthor = commit['author'] as Record<string, unknown> | null;
+				const parentsRaw =
+					(c['parents'] as Record<string, unknown>[] | undefined) ?? [];
+				const parents = parentsRaw.map((p) => p['sha'] as string);
+				const message = commit['message'] as string;
+				return {
+					sha: c['sha'] as string,
+					message: message.split('\n')[0] ?? message,
+					authorLogin: author ? (author['login'] as string) : null,
+					authorAvatarUrl: author
+						? ((author['avatar_url'] as string | null) ?? null)
+						: null,
+					date: commitAuthor
+						? ((commitAuthor['date'] as string | null) ?? null)
+						: null,
+					parents,
+				};
+			});
+
+			// Topological sort: walk first-parent chain from head → oldest.
+			// `head` is the one commit in the list that isn't a parent of any
+			// other commit in the list (base commits outside the PR aren't in
+			// `inRange`, so the first PR commit's out-of-range parent is
+			// correctly ignored).
+			const byHash = new Map(raw.map((c) => [c.sha, c]));
+			const inRange = new Set(raw.map((c) => c.sha));
+			const isParentInRange = new Set<string>();
+			for (const c of raw) {
+				for (const p of c.parents) {
+					if (inRange.has(p)) isParentInRange.add(p);
+				}
+			}
+			const head = raw.find((c) => !isParentInRange.has(c.sha));
+			const ordered: RawCommit[] = [];
+			const visited = new Set<string>();
+			let current: RawCommit | undefined = head;
+			while (current && !visited.has(current.sha)) {
+				visited.add(current.sha);
+				ordered.push(current);
+				const firstParent = current.parents[0];
+				current = firstParent ? byHash.get(firstParent) : undefined;
+			}
+			// Append anything unreached (rare: disconnected merge histories).
+			// Keeps those commits visible rather than silently dropping them.
+			for (const c of raw) {
+				if (!visited.has(c.sha)) ordered.push(c);
+			}
+
+			return ordered.map((c): PrCommit => ({
+				sha: c.sha,
+				message: c.message,
+				authorLogin: c.authorLogin,
+				authorAvatarUrl: c.authorAvatarUrl,
+				date: c.date,
 			}));
 		}).pipe(Effect.retry(retrySchedule)),
 

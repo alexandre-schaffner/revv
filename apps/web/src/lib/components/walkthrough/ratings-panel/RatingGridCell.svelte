@@ -88,7 +88,7 @@
     data-verdict={rating?.verdict ?? "pending"}
     aria-busy={state === "running" ? "true" : undefined}
 >
-    <Popover.Root>
+        <Popover.Root>
         <Popover.Trigger
             class="cell-trigger"
             disabled={isDisabled}

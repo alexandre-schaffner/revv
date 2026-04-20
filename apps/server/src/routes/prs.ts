@@ -10,6 +10,7 @@ import { RepositoryService } from '../services/Repository';
 import { SyncService } from '../services/Sync';
 import { TokenProvider } from '../services/TokenProvider';
 import { getOrFetchDiffFiles } from '../services/DiffCache';
+import { GitHubService } from '../services/GitHub';
 import { withAuth, handleAppError } from './middleware';
 
 // ── Routes ───────────────────────────────────────────────────────────────────
@@ -49,8 +50,11 @@ export const prRoutes = new Elysia({ prefix: '/api/prs' })
 
 					const pr = yield* prService.getPr(ctx.params.id);
 					const repo = yield* repoService.getRepoById(pr.repositoryId);
-					const token = yield* tokenProvider.getGitHubToken(ctx.session.user.id);
 
+					// Always the full PR diff (merge-base 3-dot, matching GitHub's
+					// "Files changed" tab). No per-commit selection anymore — the
+					// commits dropdown is read-only.
+					const token = yield* tokenProvider.getGitHubToken(ctx.session.user.id);
 					const files = yield* getOrFetchDiffFiles(
 						pr.id,
 						repo.fullName,
@@ -80,6 +84,27 @@ export const prRoutes = new Elysia({ prefix: '/api/prs' })
 			);
 
 			return { success: true };
+		} catch (e) {
+			return handleAppError(e, ctx);
+		}
+	})
+
+	.get('/:id/commits', async (ctx) => {
+		try {
+			return await AppRuntime.runPromise(
+				Effect.gen(function* () {
+					const prService = yield* PullRequestService;
+					const repoService = yield* RepositoryService;
+					const tokenProvider = yield* TokenProvider;
+					const githubService = yield* GitHubService;
+
+					const pr = yield* prService.getPr(ctx.params.id);
+					const repo = yield* repoService.getRepoById(pr.repositoryId);
+					const token = yield* tokenProvider.getGitHubToken(ctx.session.user.id);
+
+					return yield* githubService.listPrCommits(repo.fullName, pr.externalId, token);
+				})
+			);
 		} catch (e) {
 			return handleAppError(e, ctx);
 		}

@@ -3,7 +3,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Separator } from '$lib/components/ui/separator';
-	import { RefreshCw, ArrowDown, Search, FileText, Brain, PenTool, CheckCircle, AlertTriangle, Gauge } from '@lucide/svelte';
+	import { RefreshCw, ArrowDown, Search, FileText, Brain, CheckCircle, AlertTriangle, Gauge, Loader2 } from '@lucide/svelte';
 	import { getDiffThemeType } from '$lib/stores/theme.svelte';
 	import { initHighlighter } from '$lib/utils/code-highlight.svelte';
 	import {
@@ -19,6 +19,8 @@
 		getIssues,
 		getRatings,
 	getIsLiveGeneration,
+	getCloneInProgress,
+	getCloneRepoId,
 	hasBlockAnimated,
 	markBlockAnimated,
 	hasIssueAnimated,
@@ -30,6 +32,8 @@
 	hydrateFromCache,
 	regenerate,
 } from '$lib/stores/walkthrough.svelte';
+	import { getRepositories } from '$lib/stores/prs.svelte';
+	import { Progress } from '$lib/components/ui/progress';
 	import {
 		jumpToDiffLine,
 		getPendingWalkthroughBlockJump,
@@ -69,12 +73,9 @@
 	const issueGroups = $derived(groupIssuesBySeverityWithIndex(issues));
 	const ratings = $derived(getRatings());
 	const isLiveGeneration = $derived(getIsLiveGeneration());
-
-	const riskClasses: Record<string, string> = {
-		low: 'risk-badge risk-badge--low',
-		medium: 'risk-badge risk-badge--medium',
-		high: 'risk-badge risk-badge--high',
-	};
+	const cloneInProgress = $derived(getCloneInProgress());
+	const cloneRepoId = $derived(getCloneRepoId());
+	const repositories = $derived(getRepositories());
 
 	// ── Elapsed time ────────────────────────────────────────────────────
 	let elapsedSeconds = $state(0);
@@ -116,15 +117,12 @@
 	// narrative, then runs a batched scorecard pass, then wraps up. Without
 	// its own phase, 9 back-to-back rate_axis calls look identical to a stall
 	// on the "Writing" step.
-	const PHASE_ORDER = ['connecting', 'exploring', 'analyzing', 'writing', 'rating', 'finishing'] as const;
+	const PHASE_ORDER = ['exploring', 'writing', 'rating'] as const;
 
 	const phaseLabels: Record<string, string> = {
-		connecting: 'Connect',
 		exploring: 'Explore',
-		analyzing: 'Analyze',
-		writing: 'Write',
+		writing: 'Analyze',
 		rating: 'Score',
-		finishing: 'Finish',
 	};
 
 	// Full-sentence status shown beneath the stepper row during streaming.
@@ -132,16 +130,21 @@
 	// can craft user-facing language (e.g. "Rating the PR…") independently of
 	// the terse backend strings ("Scoring the PR across 9 axes...").
 	const phaseStatusLabels: Record<string, string> = {
-		connecting: 'Connecting…',
 		exploring: 'Exploring the code…',
-		analyzing: 'Analyzing changes…',
-		writing: 'Writing the walkthrough…',
+		writing: 'Analyzing changes…',
 		rating: 'Rating the PR…',
-		finishing: 'Finalizing…',
 	};
 
+	// analyzing happens in the same agent turn as the last exploration step;
+	// map it to exploring so the stepper doesn't show a phantom 4th step.
+	function normalizePhase(p: string): string {
+		if (p === 'connecting' || p === 'analyzing') return 'exploring';
+		if (p === 'finishing') return 'writing';
+		return p;
+	}
+
 	function phaseIndex(p: string): number {
-		return PHASE_ORDER.indexOf(p as typeof PHASE_ORDER[number]);
+		return PHASE_ORDER.indexOf(normalizePhase(p) as typeof PHASE_ORDER[number]);
 	}
 
 	// ── Stepper visibility ──────────────────────────────────────────────
@@ -366,6 +369,17 @@
 		if (walkthroughDebounce) clearTimeout(walkthroughDebounce);
 	});
 
+	// ── Clone-in-progress auto-retry ────────────────────────────────────
+	// When the server rejects the walkthrough because the repo is still
+	// cloning, watch for the clone to become ready and auto-retry.
+	$effect(() => {
+		if (!cloneInProgress || !cloneRepoId) return;
+		const repo = repositories.find((r) => r.id === cloneRepoId);
+		if (repo?.cloneStatus === 'ready') {
+			streamWalkthrough(prId);
+		}
+	});
+
 	// ── Regenerate dialog ───────────────────────────────────────────────
 	let regenerateDialogOpen = $state(false);
 
@@ -379,62 +393,51 @@
 </script>
 
 <div class="walkthrough">
-	{#if stepperVisible && !streamError}
-		<!-- Persistent progress header. Shown through every phase and remains
-		     on screen after the stream completes so the user keeps a map of
-		     what happened. Rendered outside the main branching so it stays
-		     visible when we switch from the skeleton (loading) view to the
-		     real content (writing/finishing) view. -->
-		<div
-			class="walkthrough-stepper-header"
-			class:walkthrough-stepper-header--no-anim={stepperAnimated}
-			onanimationend={(e) => lockContainerAnimation('stepper', e)}
-		>
-			<div class="phase-stepper">
-				{#each PHASE_ORDER as step, i (step)}
-					{@const currentIdx = phaseIndex(phase)}
-					{@const isActive = i === currentIdx && !allPhasesDone}
-					{@const isDone = allPhasesDone || i < currentIdx}
-					<div class="phase-step" class:phase-step--active={isActive} class:phase-step--done={isDone}>
-						<div class="phase-step-icon">
-							{#if isDone}
-								<CheckCircle size={14} />
-							{:else if step === 'connecting'}
-								<div class="phase-dot" class:phase-dot--active={isActive}></div>
-							{:else if step === 'exploring'}
-								<Search size={14} />
-							{:else if step === 'analyzing'}
-								<Brain size={14} />
-							{:else if step === 'writing'}
-								<PenTool size={14} />
-							{:else if step === 'rating'}
-								<Gauge size={14} />
-							{:else}
-								<CheckCircle size={14} />
-							{/if}
-						</div>
-						<span class="phase-step-label">{phaseLabels[step]}</span>
-					</div>
-					{#if i < PHASE_ORDER.length - 1}
-						<div class="phase-connector" class:phase-connector--done={allPhasesDone || i < currentIdx}></div>
-					{/if}
-				{/each}
-			</div>
-
-			<!-- Full-sentence status line under the stepper row. Tells the user
-			     exactly what's happening right now — "Rating the PR…" during the
-			     scoring phase, "Exploring the code…" during exploration, etc.
-			     Only rendered while something is actually running so the stepper
-			     doesn't announce stale phase text after completion. -->
-			{#if isStreaming}
-				<div class="phase-status" aria-live="polite">
-					<span class="phase-status-dot" aria-hidden="true"></span>
-					<span class="phase-status-text">
-						{phaseStatusLabels[phase] ?? phaseMessage ?? 'Working…'}
-					</span>
+	{#if !streamError}
+		{#if stepperVisible}
+			{#if phase === 'connecting' && isStreaming && !hasWalkthroughContent}
+				<!-- Indeterminate progress bar during initial connection phase -->
+				<div class="walkthrough-connect-progress">
+					<Progress indeterminate class="h-1" />
 				</div>
 			{/if}
-		</div>
+			<!-- Persistent progress header. Shown through every phase and remains
+			     on screen after the stream completes so the user keeps a map of
+			     what happened. Rendered outside the main branching so it stays
+			     visible when we switch from the skeleton (loading) view to the
+			     real content (writing/finishing) view. -->
+			<div
+				class="walkthrough-stepper-header"
+				class:walkthrough-stepper-header--no-anim={stepperAnimated}
+				onanimationend={(e) => lockContainerAnimation('stepper', e)}
+			>
+				<div class="phase-stepper">
+					{#each PHASE_ORDER as step, i (step)}
+						{@const currentIdx = phaseIndex(phase)}
+						{@const isActive = i === currentIdx && !allPhasesDone}
+						{@const isDone = allPhasesDone || i < currentIdx}
+						<div class="phase-step" class:phase-step--active={isActive} class:phase-step--done={isDone}>
+							<div class="phase-step-icon">
+							{#if isDone}
+								<CheckCircle size={14} />
+							{:else if step === 'exploring'}
+								<Search size={14} />
+							{:else if step === 'writing'}
+									<Brain size={14} />
+								{:else if step === 'rating'}
+									<Gauge size={14} />
+								{/if}
+							</div>
+							<span class="phase-step-label">{phaseLabels[step]}</span>
+						</div>
+						{#if i < PHASE_ORDER.length - 1}
+							<div class="phase-connector" class:phase-connector--done={allPhasesDone || i < currentIdx}></div>
+						{/if}
+					{/each}
+				</div>
+
+			</div>
+		{/if}
 	{/if}
 
 	{#if streamError && !summary && blocks.length === 0}
@@ -459,6 +462,15 @@
 			Try again
 		</Button>
 	</div>
+	{:else if cloneInProgress && !summary && blocks.length === 0}
+		<!-- Clone-in-progress state: show indeterminate progress bar -->
+		<div class="walkthrough-empty">
+			<div class="clone-progress-container">
+				<p class="loading-text">Cloning repository…</p>
+				<Progress indeterminate class="clone-progress-bar" />
+				<p class="loading-subtext">The walkthrough will start automatically when cloning completes.</p>
+			</div>
+		</div>
 	{:else if blocks.length === 0 && isStreaming}
 		<!-- Loading state: skeleton + exploration feed.
 		     The phase stepper lives above as a sibling of this branch so it
@@ -552,14 +564,10 @@
 				{/if}
 				{#if isStreaming}
 					<div class="summary-actions">
-						<span class="streaming-indicator">
-							<span class="streaming-dots">
-								<span class="streaming-dot"></span>
-								<span class="streaming-dot"></span>
-								<span class="streaming-dot"></span>
-							</span>
-							{phaseMessage}
-						</span>
+					<span class="streaming-indicator">
+						<Loader2 size={12} class="animate-spin" />
+						{phaseMessage}
+					</span>
 					</div>
 				{/if}
 			</div>
@@ -706,10 +714,10 @@
 
 		<!-- Scroll-to-bottom floating button -->
 		{#if userScrolledUp && isStreaming}
-			<button class="scroll-to-bottom" style="--sidebar-offset: {sidebarOffset}px" onclick={scrollToBottom}>
-				<ArrowDown size={14} />
-				New content
-			</button>
+		<Button variant="secondary" class="scroll-to-bottom" style="--sidebar-offset: {sidebarOffset}px" onclick={scrollToBottom}>
+			<ArrowDown size={14} />
+			New content
+		</Button>
 		{/if}
 	{/if}
 </div>
@@ -758,6 +766,16 @@
 		flex-direction: column;
 		padding: 28px 32px;
 		gap: 20px;
+	}
+
+	/* ── Connect progress bar (shown during 'connecting' phase) ──────── */
+
+	.walkthrough-connect-progress {
+		height: 28px;
+		display: flex;
+		align-items: center;
+		padding: 24px 32px 4px;
+		overflow: hidden;
 	}
 
 	.walkthrough-stepper-header {
@@ -851,37 +869,6 @@
 	.phase-dot--active {
 		background: var(--color-accent);
 		animation: pulse 1.5s ease-in-out infinite;
-	}
-
-	/* ── Phase status line (under the stepper) ───────────────────────── */
-
-	.phase-status {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		padding: 4px 0 6px;
-		font-size: 12.5px;
-		color: var(--color-text-secondary);
-		font-variant-numeric: tabular-nums;
-	}
-
-	.phase-status-dot {
-		width: 6px;
-		height: 6px;
-		border-radius: 50%;
-		background: var(--color-accent);
-		animation: pulse 1.5s ease-in-out infinite;
-		flex-shrink: 0;
-	}
-
-	.phase-status-text {
-		line-height: 1.3;
-	}
-
-	@media (prefers-reduced-motion: reduce) {
-		.phase-status-dot {
-			animation: none;
-		}
 	}
 
 	/* ── Status bar ───────────────────────────────────────────────────── */
@@ -1097,66 +1084,6 @@
 		color: var(--color-accent);
 	}
 
-	.streaming-dots {
-		display: flex;
-		gap: 3px;
-	}
-
-	.streaming-dot {
-		width: 4px;
-		height: 4px;
-		border-radius: 50%;
-		background: var(--color-accent);
-		animation: cursorBounce 1.4s ease-in-out infinite;
-	}
-
-	.streaming-dot:nth-child(2) {
-		animation-delay: 0.16s;
-	}
-
-	.streaming-dot:nth-child(3) {
-		animation-delay: 0.32s;
-	}
-
-	/* ── Risk badge colors ────────────────────────────────────────────── */
-
-	:global(.risk-badge) {
-		font-weight: 600;
-		text-transform: uppercase;
-		font-size: 11px;
-		letter-spacing: 0.04em;
-	}
-
-	:global(.risk-badge--low) {
-		background: color-mix(in srgb, var(--color-success) 12%, transparent);
-		color: var(--color-success);
-		border-color: color-mix(in srgb, var(--color-success) 30%, transparent);
-	}
-
-	:global(.risk-badge--medium) {
-		background: color-mix(in srgb, var(--color-warning) 12%, transparent);
-		color: var(--color-warning);
-		border-color: color-mix(in srgb, var(--color-warning) 30%, transparent);
-	}
-
-	:global(.risk-badge--high) {
-		background: color-mix(in srgb, var(--color-danger) 12%, transparent);
-		color: var(--color-danger);
-		border-color: color-mix(in srgb, var(--color-danger) 30%, transparent);
-	}
-
-	:global(.dark) :global(.risk-badge--low) {
-		color: var(--color-success);
-	}
-
-	:global(.dark) :global(.risk-badge--medium) {
-		color: var(--color-warning);
-	}
-
-	:global(.dark) :global(.risk-badge--high) {
-		color: var(--color-danger);
-	}
-
 	/* ── Issues layout ───────────────────────────────────────────────── */
 
 	.issues-section {
@@ -1355,7 +1282,7 @@
 
 	/* ── Scroll-to-bottom pill ──────────────────────────────────────── */
 
-	.scroll-to-bottom {
+	:global(.scroll-to-bottom) {
 		position: fixed;
 		bottom: 20px;
 		left: 50%;
@@ -1376,7 +1303,7 @@
 		z-index: 10;
 	}
 
-	.scroll-to-bottom:hover {
+	:global(.scroll-to-bottom):hover {
 		opacity: 0.9;
 	}
 
@@ -1479,6 +1406,21 @@
 			opacity: 1;
 			transform: scale(1);
 		}
+	}
+
+	/* ── Clone-in-progress state ────────────────────────────────────── */
+
+	.clone-progress-container {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 10px;
+		width: 100%;
+		max-width: 320px;
+	}
+
+	:global(.clone-progress-bar) {
+		width: 100%;
 	}
 
 	/* ── Sentiment card ──────────────────────────────────────────────── */

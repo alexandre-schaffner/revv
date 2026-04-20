@@ -14,7 +14,7 @@
      * for each column.
      *
      * Columns (grid-template):
-     *   icon (2ch) · label (max-content) · preview (1fr) · trailing (auto) · chevron (16px)
+     *   icon (2ch) · label+preview (1fr) · trailing (auto) · chevron (16px)
      *
      * The row is always collapsible (unless `disabled`). There's no "no
      * collapse" variant — panels that want click-to-jump use the scorecard's
@@ -97,15 +97,10 @@
 
             <span class="spec-row-label">
                 {#if label}{@render label()}{/if}
+                {#if !open && preview}
+                    <span class="spec-row-preview">{@render preview()}</span>
+                {/if}
             </span>
-
-            {#if !open && preview}
-                <span class="spec-row-preview">
-                    {@render preview()}
-                </span>
-            {:else}
-                <span class="spec-row-preview spec-row-preview--hidden" aria-hidden="true"></span>
-            {/if}
 
             <span class="spec-row-trailing">
                 {#if trailing}{@render trailing()}{/if}
@@ -140,16 +135,16 @@
 
     :global(.spec-row-trigger) {
         display: grid;
-        /* icon · label · preview · trailing · chevron */
+        /* icon · label+preview · trailing · chevron */
         grid-template-columns:
             2ch
-            minmax(max-content, auto)
             minmax(0, 1fr)
             auto
             16px;
         align-items: center;
         gap: 8px;
         width: 100%;
+        overflow: hidden;
         min-height: 36px;
         padding: 0 10px 0 16px;
         background: transparent;
@@ -252,6 +247,7 @@
         white-space: nowrap;
         letter-spacing: 0.01em;
         min-width: 0;
+        overflow: hidden;
     }
 
     .spec-row-preview {
@@ -262,10 +258,9 @@
         text-overflow: ellipsis;
         white-space: nowrap;
         min-width: 0;
-    }
-
-    .spec-row-preview--hidden {
-        visibility: hidden;
+        flex: 1 1 0;
+        font-weight: 400;
+        letter-spacing: 0;
     }
 
     .spec-row-trailing {
@@ -273,6 +268,7 @@
         align-items: center;
         gap: 6px;
         white-space: nowrap;
+        min-width: 0;
     }
 
     /* ── Chevron ────────────────────────────────────────────────── */

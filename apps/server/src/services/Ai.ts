@@ -83,7 +83,7 @@ export const AiServiceLive = Layer.effect(
 		const getSettings = () =>
 			withDb(db, settingsService.getSettings()).pipe(
 				Effect.mapError(
-					(e: ValidationError) => new AiGenerationError({ cause: e }) as AiError
+					(e: ValidationError) => new AiGenerationError({ cause: e, message: e.message }) as AiError
 				)
 			);
 

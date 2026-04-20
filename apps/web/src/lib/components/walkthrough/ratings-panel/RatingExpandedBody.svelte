@@ -85,7 +85,10 @@
          list-view row already shows the axis name one level up (in the row
          header), so duplicating it inside the expanded body would be noise. -->
     {#if showTitle}
-        <h3 class="score-title">{RATING_AXIS_LABELS[rating.axis]}</h3>
+        <h3 class="score-title">
+            <span class="score-title-dot" aria-hidden="true"></span>
+            {RATING_AXIS_LABELS[rating.axis]}
+        </h3>
     {/if}
 
     <!-- Status section — always leads. For concern/blocker verdicts it opens
@@ -98,23 +101,21 @@
         <span class="section-divider-label">status</span>
     </div>
 
-    {#if rating.verdict !== "pass"}
-        <div class="expected-received">
-            <div class="er-row">
-                <span class="er-label">Expected:</span>
-                <span class="er-value er-value--pass">pass</span>
-            </div>
-            <div class="er-row">
-                <span class="er-label">Received:</span>
-                <span class="er-value er-value--{rating.verdict}"
-                    >{verdictLabels[rating.verdict]}</span
-                >
-                <span class="er-confidence"
-                    >{confidenceLabels[rating.confidence]}</span
-                >
-            </div>
+    <div class="expected-received">
+        <div class="er-row">
+            <span class="er-label">Expected:</span>
+            <span class="er-value er-value--pass">pass</span>
         </div>
-    {/if}
+        <div class="er-row">
+            <span class="er-label">Received:</span>
+            <span class="er-value er-value--{rating.verdict}"
+                >{verdictLabels[rating.verdict]}</span
+            >
+            <span class="er-confidence"
+                >{confidenceLabels[rating.confidence]}</span
+            >
+        </div>
+    </div>
 
     <div class="rationale">
         <p class="rationale-text">{rating.rationale}</p>
@@ -215,7 +216,7 @@
            variant via --c-rating-expanded-bg to match the Comments panel's
            "inset drawer" treatment; the grid popover keeps the lighter tint
            since the popover chrome already provides the elevation contrast. */
-        background: var(--c-rating-expanded-bg, var(--c-rating-bg));
+         background: var(--color-bg-secondary);
     }
 
     /* ── Rationale ──────────────────────────────────────────────── */
@@ -292,18 +293,32 @@
 
     .score-title {
         /* Mirrors the grid cell's `.cell-label` treatment (uppercase mono)
-           but steps the color up from muted → primary and the size up from
-           10.5px → 12px so the popover header reads as more authoritative
-           than the card it opened from. Zero margin because the flex parent
-           `.expanded-body` already provides `gap: 12px` between children. */
+           but steps the color up from muted → verdict-tinted label color and
+           the size up from 10.5px → 12px so the popover header reads as more
+           authoritative than the card it opened from. Zero margin because the
+           flex parent `.expanded-body` already provides `gap: 12px` between
+           children. */
         margin: 0;
         font-family: var(--font-mono);
         font-size: 12px;
         font-weight: 600;
         letter-spacing: 0.1em;
         text-transform: uppercase;
-        color: var(--color-text-primary);
-        line-height: 1;
+        color: var(--c-rating-label);
+        display: flex;
+        align-items: center;
+    }
+
+    .score-title-dot {
+        display: inline-block;
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--c-rating-icon);
+        margin-right: 7px;
+        flex-shrink: 0;
+        position: relative;
+        top: -1px;
     }
 
     /* ── Section divider ─────────────────────────────────────────── */

@@ -152,43 +152,46 @@
 			setIsLoadingFiles(true);
 
 			(async () => {
-				try {
-					// Fetch files and session in parallel — session failure shouldn't block diff
-					const [filesResult] = await Promise.all([
-						api.api.prs({ id: prId }).files.get(),
-						loadSession(prId).catch((e) =>
-							console.error('[review] Session load failed (non-blocking):', e)
-						),
-					]);
+			try {
+				// Fetch the PR's "Files changed" diff directly from GitHub via the
+				// server. The diff is always baseSha...headSha (merge-base, 3-dot),
+				// matching GitHub's "Files changed" tab. There is no per-commit
+				// selection — the dropdown is read-only.
+				const [filesResult] = await Promise.all([
+					api.api.prs({ id: prId }).files.get(),
+					loadSession(prId).catch((e) =>
+						console.error('[review] Session load failed (non-blocking):', e)
+					),
+				]);
 
-					if (requestId !== currentRequestId) return;
+				if (requestId !== currentRequestId) return;
 
-					const { data, error } = filesResult;
-					if (error) throw new Error('Failed to fetch PR files');
-					if (Array.isArray(data)) {
-						const mapped = data.map((f) => ({
-							path: f.path,
-							patch: f.patch ?? null,
-							additions: f.additions,
-							deletions: f.deletions,
-							...(f.oldPath ? { oldPath: f.oldPath } : {}),
-							...(f.isNew ? { isNew: true as const } : {}),
-							...(f.isDeleted ? { isDeleted: true as const } : {}),
-						}));
-						setReviewFiles(mapped);
-						if (mapped.length > 0) {
-							setActiveFilePath(mapped[0]!.path);
-						}
-						lastLoadedPrId = prId;
-						lastLoadedAt = Date.now();
+				const { data, error } = filesResult;
+				if (error) throw new Error('Failed to fetch PR files');
+				if (Array.isArray(data)) {
+					const mapped = data.map((f) => ({
+						path: f.path,
+						patch: f.patch ?? null,
+						additions: f.additions,
+						deletions: f.deletions,
+						...(f.oldPath ? { oldPath: f.oldPath } : {}),
+						...(f.isNew ? { isNew: true as const } : {}),
+						...(f.isDeleted ? { isDeleted: true as const } : {}),
+					}));
+					setReviewFiles(mapped);
+					if (mapped.length > 0) {
+						setActiveFilePath(mapped[0]!.path);
 					}
-				} catch (e) {
-					if (requestId !== currentRequestId) return;
-					setFilesError(e instanceof Error ? e.message : 'Failed to load diff');
-				} finally {
-					if (requestId === currentRequestId) setIsLoadingFiles(false);
+					lastLoadedPrId = prId;
+					lastLoadedAt = Date.now();
 				}
-			})();
+			} catch (e) {
+				if (requestId !== currentRequestId) return;
+				setFilesError(e instanceof Error ? e.message : 'Failed to load diff');
+			} finally {
+				if (requestId === currentRequestId) setIsLoadingFiles(false);
+			}
+		})();
 		});
 	});
 

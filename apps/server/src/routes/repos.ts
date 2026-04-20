@@ -37,15 +37,15 @@ export const repoRoutes = new Elysia({ prefix: '/api/repos' })
 						const repoData = yield* github.getRepo(fullName, token);
 						const saved = yield* repoSvc.addRepo(repoData);
 
-						// Trigger a sync in the background
-						yield* Effect.fork(scheduler.syncNow());
+					// Trigger a sync in the background
+					yield* Effect.forkDaemon(scheduler.syncNow());
 
-						// Trigger shallow clone in background — fire and forget
-						yield* Effect.fork(
-							cloneSvc.cloneRepo(saved, token).pipe(
-								Effect.catchAll(() => Effect.void) // errors tracked in DB, don't fail the add
-							)
-						);
+					// Trigger shallow clone in background — fire and forget
+					yield* Effect.forkDaemon(
+						cloneSvc.cloneRepo(saved, token).pipe(
+							Effect.catchAll(() => Effect.void) // errors tracked in DB, don't fail the add
+						)
+					);
 
 						return saved;
 					})
@@ -62,6 +62,30 @@ export const repoRoutes = new Elysia({ prefix: '/api/repos' })
 				Effect.gen(function* () {
 					const cloneSvc = yield* RepoCloneService;
 					return yield* cloneSvc.getCloneStatus(ctx.params.id);
+				})
+			);
+		} catch (e) {
+			return handleAppError(e, ctx);
+		}
+	})
+	.post('/:id/retry-clone', async (ctx) => {
+		try {
+			return await AppRuntime.runPromise(
+				Effect.gen(function* () {
+					const repoSvc = yield* RepositoryService;
+					const tokenProvider = yield* TokenProvider;
+					const cloneSvc = yield* RepoCloneService;
+
+					const repo = yield* repoSvc.getRepoById(ctx.params.id);
+					const token = yield* tokenProvider.getGitHubToken(ctx.session.user.id);
+
+					yield* Effect.forkDaemon(
+						cloneSvc.cloneRepo(repo, token).pipe(
+							Effect.catchAll(() => Effect.void)
+						)
+					);
+
+					return { success: true };
 				})
 			);
 		} catch (e) {

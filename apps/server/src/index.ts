@@ -19,6 +19,7 @@ import { wsRoute } from './routes/ws';
 import { debugRoutes } from './routes/debug';
 import { PollScheduler } from './services/PollScheduler';
 import { WalkthroughJobs } from './services/WalkthroughJobs';
+import { RepoCloneService } from './services/RepoClone';
 
 const app = new Elysia()
 	.use(
@@ -74,6 +75,15 @@ AppRuntime.runPromise(
 	Effect.flatMap(PollScheduler, (s) => s.start()),
 ).catch((err) => {
 	logError('poll-scheduler', 'start failed on boot:', err);
+});
+
+// Resume any repos with cloneStatus 'pending' or 'error' on boot so that
+// repos that failed to clone (e.g. due to a server restart mid-clone) are
+// automatically retried without requiring user intervention.
+AppRuntime.runPromise(
+	Effect.flatMap(RepoCloneService, (svc) => svc.resumePendingClones()),
+).catch((err) => {
+	logError('repo-clone', 'resumePendingClones failed on boot:', err);
 });
 
 export type App = typeof app;

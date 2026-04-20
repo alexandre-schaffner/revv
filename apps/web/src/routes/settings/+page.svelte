@@ -7,6 +7,7 @@
         ArrowLeft,
         AlertTriangle,
         ExternalLink,
+        RefreshCw,
     } from "@lucide/svelte";
     import { getUser, signOut } from "$lib/stores/auth.svelte";
     import {
@@ -58,6 +59,21 @@
     let addRepoValue = $state("");
     let addRepoError = $state("");
     let addRepoLoading = $state(false);
+    let retryingClone = $state(new Set<string>());
+
+    async function retryClone(repoId: string): Promise<void> {
+        retryingClone = new Set([...retryingClone, repoId]);
+        try {
+            await fetch(`${API_BASE_URL}/api/repos/${repoId}/retry-clone`, {
+                method: "POST",
+                headers: authHeaders(),
+            });
+        } finally {
+            const next = new Set(retryingClone);
+            next.delete(repoId);
+            retryingClone = next;
+        }
+    }
 
     async function handleAddRepo() {
         const trimmed = addRepoValue.trim();
@@ -299,6 +315,31 @@
                                         <AlertTriangle size={10} />
                                         Clone failed
                                     </span>
+                                    <button
+                                        class="flex h-5 w-5 items-center justify-center rounded text-text-muted transition-colors hover:text-text-primary disabled:opacity-50"
+                                        onclick={() => retryClone(repo.id)}
+                                        disabled={retryingClone.has(repo.id)}
+                                        title="Retry clone"
+                                        aria-label="Retry clone"
+                                    >
+                                        <RefreshCw
+                                            size={10}
+                                            class={retryingClone.has(repo.id) ? "animate-spin" : ""}
+                                        />
+                                    </button>
+                                {:else if repo.cloneStatus === "pending"}
+                                    <button
+                                        class="flex h-5 w-5 items-center justify-center rounded text-text-muted transition-colors hover:text-text-primary disabled:opacity-50"
+                                        onclick={() => retryClone(repo.id)}
+                                        disabled={retryingClone.has(repo.id)}
+                                        title="Start clone"
+                                        aria-label="Start clone"
+                                    >
+                                        <RefreshCw
+                                            size={10}
+                                            class={retryingClone.has(repo.id) ? "animate-spin" : ""}
+                                        />
+                                    </button>
                                 {/if}
                             </div>
                             <button

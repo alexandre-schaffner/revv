@@ -27,6 +27,10 @@ interface WalkthroughEntry {
 	 * stays false. The UI uses it to hide the progress stepper on cache hits.
 	 */
 	liveGeneration: boolean;
+	/** True when the server rejected the walkthrough because the repo is mid-clone. */
+	cloneInProgress: boolean;
+	/** The repo ID that is being cloned, when cloneInProgress is true. */
+	cloneRepoId: string | null;
 }
 
 function freshEntry(): WalkthroughEntry {
@@ -45,6 +49,8 @@ function freshEntry(): WalkthroughEntry {
 		phaseMessage: 'Connecting...',
 		streamStartedAt: Date.now(),
 		liveGeneration: false,
+		cloneInProgress: false,
+		cloneRepoId: null,
 	};
 }
 
@@ -114,6 +120,12 @@ export function getStreamStartedAt(): number | null {
 }
 export function getIsLiveGeneration(): boolean {
 	return active()?.liveGeneration ?? false;
+}
+export function getCloneInProgress(): boolean {
+	return active()?.cloneInProgress ?? false;
+}
+export function getCloneRepoId(): string | null {
+	return active()?.cloneRepoId ?? null;
 }
 
 // ── Status query (for sidebar / external consumers) ─────────────────────────
@@ -217,6 +229,7 @@ export async function streamWalkthrough(prId: string): Promise<void> {
 	// discarded for a clean slate.
 	const reusable = !!existing
 		&& !existing.streamError
+		&& !existing.cloneInProgress
 		&& existing.summary === null
 		&& existing.blocks.length === 0
 		&& existing.explorationSteps.length === 0
@@ -224,6 +237,8 @@ export async function streamWalkthrough(prId: string): Promise<void> {
 		&& existing.ratings.length === 0;
 	const entry = reusable && existing ? existing : freshEntry();
 	entry.isStreaming = true;
+	entry.cloneInProgress = false;
+	entry.cloneRepoId = null;
 	if (pendingKeptIssues.length > 0) {
 		entry.issues = [...pendingKeptIssues];
 		pendingKeptIssues = [];
@@ -471,8 +486,14 @@ function applyEvents(prId: string, events: WalkthroughStreamEvent[]): void {
 					}
 					break;
 				case 'error':
-					entry.streamError = event.data.message;
-					entry.isStreaming = false;
+					if (event.data.code === 'CloneInProgress') {
+						entry.cloneInProgress = true;
+						entry.cloneRepoId = event.data.repoId ?? null;
+						entry.isStreaming = false;
+					} else {
+						entry.streamError = event.data.message;
+						entry.isStreaming = false;
+					}
 					break;
 				case 'in-progress':
 					// Server says generation is running in the background.

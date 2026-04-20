@@ -183,8 +183,8 @@ export function setActiveTab(tab: ActiveTab): void {
 
 /** Call when navigating to a PR. Saves state for the previous PR, restores (or defaults) for the new one. */
 export function switchPrViewState(newPrId: string): void {
-	// Save current state before switching
-	if (currentPrId !== null) {
+	// Only save current state if we're actually leaving a different PR
+	if (currentPrId !== null && currentPrId !== newPrId) {
 		prViewStates.set(currentPrId, { activeTab });
 	}
 	currentPrId = newPrId;

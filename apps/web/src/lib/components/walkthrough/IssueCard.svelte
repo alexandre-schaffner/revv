@@ -171,18 +171,18 @@
 	}
 
 	/* Severity left-border + hover shadow color */
-	.issue-card--info {
-		--severity-color: var(--color-accent);
-		background: color-mix(in srgb, var(--color-accent) 4%, var(--color-bg-secondary));
-	}
-	.issue-card--warning {
-		--severity-color: var(--color-warning);
-		background: color-mix(in srgb, var(--color-warning) 4%, var(--color-bg-secondary));
-	}
-	.issue-card--critical {
-		--severity-color: var(--color-danger);
-		background: color-mix(in srgb, var(--color-danger) 4%, var(--color-bg-secondary));
-	}
+.issue-card--info {
+    --severity-color: var(--color-accent);
+    background: color-mix(in srgb, var(--color-accent) 4%, var(--color-bg-secondary));
+}
+.issue-card--warning {
+    --severity-color: var(--color-warning);
+    background: color-mix(in srgb, var(--color-warning) 4%, var(--color-bg-secondary));
+}
+.issue-card--critical {
+    --severity-color: var(--color-danger);
+    background: color-mix(in srgb, var(--color-danger) 4%, var(--color-bg-secondary));
+}
 
 	/* ── Clickable (button) variant ─────────────────────────────────── */
 	button.issue-card {

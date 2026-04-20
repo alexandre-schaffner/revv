@@ -3,7 +3,7 @@ import { rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { CloneStatus, Repository } from "@revv/shared";
-import { eq } from "drizzle-orm";
+import { eq, or } from "drizzle-orm";
 import { Context, Effect, Layer, type Scope } from "effect";
 import { GITHUB_HOST } from "../auth";
 import { CLONE_TIMEOUT_MS } from "../constants";
@@ -11,6 +11,7 @@ import { repositories } from "../db/schema/index";
 import { CloneError, CloneNotReadyError } from "../domain/errors";
 import { debug, logError } from "../logger";
 import { DbService } from "./Db";
+import { TokenProvider } from "./TokenProvider";
 import { WebSocketHub } from "./WebSocketHub";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -43,6 +44,8 @@ export class RepoCloneService extends Context.Tag("RepoCloneService")<
 		}>;
 		/** Delete clone directory and reset DB fields. */
 		readonly deleteClone: (repoId: string) => Effect.Effect<void, CloneError>;
+		/** Resume any repos with cloneStatus 'pending' or 'error' by re-triggering cloneRepo. */
+		readonly resumePendingClones: () => Effect.Effect<void>;
 		/**
 		 * Acquire a dedicated git worktree pinned to `prHeadSha` for a single
 		 * walkthrough job. The worktree is created at
@@ -134,6 +137,7 @@ export const RepoCloneServiceLive = Layer.effect(
 	Effect.gen(function* () {
 		const { db } = yield* DbService;
 		const wsHub = yield* WebSocketHub;
+		const tokenProvider = yield* TokenProvider;
 
 		// Startup recovery: reset any repos that were mid-clone when server restarted
 		db.update(repositories)
@@ -144,10 +148,9 @@ export const RepoCloneServiceLive = Layer.effect(
 			.where(eq(repositories.cloneStatus, "cloning"))
 			.run();
 
-		return {
-			cloneRepo: (repo: Repository, githubToken: string) =>
-				Effect.gen(function* () {
-					const cloneDir = join(CLONE_BASE_DIR, repo.owner, repo.name);
+		const cloneRepo = (repo: Repository, githubToken: string): Effect.Effect<void, CloneError> =>
+			Effect.gen(function* () {
+				const cloneDir = join(CLONE_BASE_DIR, repo.owner, repo.name);
 					const cloneUrl = `https://x-access-token:${githubToken}@${GITHUB_HOST}/${repo.fullName}.git`;
 
 					// Mark as cloning in DB
@@ -244,8 +247,11 @@ export const RepoCloneServiceLive = Layer.effect(
 						}),
 					);
 
-					return cloneResult;
-				}),
+				return cloneResult;
+			});
+
+		return {
+			cloneRepo,
 
 			ensurePrWorktree: (
 				repoId: string,
@@ -380,7 +386,7 @@ export const RepoCloneServiceLive = Layer.effect(
 				}),
 
 			acquireWalkthroughWorktree: (
-				repoId: string,
+			repoId: string,
 				walkthroughId: string,
 				prHeadSha: string,
 				githubToken: string,
@@ -518,8 +524,70 @@ export const RepoCloneServiceLive = Layer.effect(
 						}),
 					);
 
-					return worktreePath;
-				}),
-		};
-	}),
+				return worktreePath;
+			}),
+
+		resumePendingClones: () =>
+			Effect.gen(function* () {
+				const pendingRepos = db
+					.select()
+					.from(repositories)
+					.where(
+						or(
+							eq(repositories.cloneStatus, "pending"),
+							eq(repositories.cloneStatus, "error"),
+						),
+					)
+					.all();
+
+				if (pendingRepos.length === 0) return;
+
+				debug(
+					"repo-clone",
+					`resuming ${pendingRepos.length} pending/error clone(s)`,
+				);
+
+				for (const repo of pendingRepos) {
+					const tokenOption = yield* tokenProvider
+						.getGitHubToken("single-user")
+						.pipe(Effect.option);
+
+					if (tokenOption._tag === "None") {
+						debug(
+							"repo-clone",
+							`skipping repo ${repo.fullName} — no token available`,
+						);
+						continue;
+					}
+
+					const repoRecord = {
+						id: repo.id,
+						provider: repo.provider,
+						owner: repo.owner,
+						name: repo.name,
+						fullName: repo.fullName,
+						defaultBranch: repo.defaultBranch,
+						avatarUrl: repo.avatarUrl ?? null,
+						addedAt: repo.addedAt,
+						cloneStatus: repo.cloneStatus,
+						clonePath: repo.clonePath ?? null,
+						cloneError: repo.cloneError ?? null,
+					};
+
+					const token = tokenOption.value;
+					yield* Effect.forkDaemon(
+						cloneRepo(repoRecord, token).pipe(
+							Effect.catchAll((err) => {
+								debug(
+									"repo-clone",
+									`clone failed for ${repo.fullName}: ${err.message}`,
+								);
+								return Effect.void;
+							}),
+						),
+					);
+				}
+			}),
+	};
+}),
 );

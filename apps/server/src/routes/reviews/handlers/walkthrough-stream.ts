@@ -245,11 +245,21 @@ export function walkthroughStreamHandler(ctx: {
 		} catch (err) {
 			logError('walkthrough-sse', 'handler error:', err);
 			const e = unwrapEffectError(err);
-			const message = e instanceof Error ? e.message : 'Walkthrough connection failed';
-			forwardEvent({
-				type: 'error',
-				data: { code: 'SetupError', message },
-			});
+			// Check for clone-in-progress — send special code with repoId so
+			// the UI can show a progress bar and auto-retry when ready.
+			if (e != null && typeof e === 'object' && '_tag' in e && (e as { _tag: string })._tag === 'CloneInProgressError') {
+				const cloneErr = e as unknown as { repoId: string };
+				forwardEvent({
+					type: 'error',
+					data: { code: 'CloneInProgress', message: 'Repository is being cloned', repoId: cloneErr.repoId },
+				});
+			} else {
+				const message = e instanceof Error ? e.message : 'Walkthrough connection failed';
+				forwardEvent({
+					type: 'error',
+					data: { code: 'SetupError', message },
+				});
+			}
 		}
 	})();
 

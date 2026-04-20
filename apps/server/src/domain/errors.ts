@@ -38,6 +38,7 @@ export class ValidationError extends Data.TaggedError('ValidationError')<{
 // AI errors
 export class AiGenerationError extends Data.TaggedError('AiGenerationError')<{
 	readonly cause: unknown;
+	readonly message?: string;
 }> {}
 
 export class AiNotConfiguredError extends Data.TaggedError('AiNotConfiguredError')<{}> {}
@@ -65,6 +66,10 @@ export class CloneNotReadyError extends Data.TaggedError('CloneNotReadyError')<{
 	readonly repoId: string;
 }> {}
 
+export class CloneInProgressError extends Data.TaggedError('CloneInProgressError')<{
+	readonly repoId: string;
+}> {}
+
 export type AppError =
 	| GitHubError
 	| AiError
@@ -73,7 +78,8 @@ export type AppError =
 	| ReviewError
 	| SyncError
 	| CloneError
-	| CloneNotReadyError;
+	| CloneNotReadyError
+	| CloneInProgressError;
 
 /**
  * Type guard for ReviewError.

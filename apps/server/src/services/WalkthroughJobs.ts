@@ -21,15 +21,17 @@ import {
 	Effect,
 	Fiber,
 	Layer,
+	Option,
 	Ref,
 	type Scope,
 } from "effect";
 import type { Walkthrough, WalkthroughStreamEvent } from "@revv/shared";
 import {
 	AiGenerationError,
+	CloneInProgressError,
+	CloneNotReadyError,
 	type AiError,
 	type CloneError,
-	type CloneNotReadyError,
 	type GitHubError,
 	type NotFoundError,
 	type ReviewError,
@@ -94,6 +96,7 @@ export type StartJobTrigger = "user" | "resume";
 export type StartJobError =
 	| AiError
 	| CloneError
+	| CloneInProgressError
 	| CloneNotReadyError
 	| GitHubError
 	| NotFoundError
@@ -311,14 +314,17 @@ export const WalkthroughJobsLive = Layer.effect(
 						ctx.token,
 						ctx.pr.externalId,
 					)
-					.pipe(
-						Effect.mapError(
-							(e) =>
-								new AiGenerationError({
-									cause: e,
-								}),
-						),
-					);
+			.pipe(
+				Effect.mapError((e) => {
+					const message =
+						e._tag === 'CloneNotReadyError'
+							? `Repository clone is not ready — check Settings to ensure the repo is cloned`
+							: e._tag === 'CloneError'
+								? `Repository clone error: ${e.message}`
+								: String(e);
+					return new AiGenerationError({ cause: e, message });
+				}),
+			);
 
 				// Build the underlying AI generator (resume or fresh).
 				const partial = ctx.partial;
@@ -608,11 +614,43 @@ export const WalkthroughJobsLive = Layer.effect(
 						const cancelledByUser = job.cancelledByUser;
 
 						if (!interruptedOnly) {
-							logError(
-								"walkthrough-jobs",
-								"job failed:",
-								Cause.pretty(cause),
-							);
+					logError(
+							"walkthrough-jobs",
+							"job failed:",
+							Cause.pretty(cause),
+						);
+					const failure = Cause.failureOption(cause);
+					if (Option.isSome(failure)) {
+						const err = failure.value;
+						// AiGenerationError has typed .message and .cause fields
+						const aiErr = err as { _tag: string; message?: string; cause?: unknown };
+						const tag = aiErr._tag ?? 'unknown';
+						const msg = aiErr.message ?? null;
+						const detail = aiErr.cause instanceof Error
+							? aiErr.cause.message
+							: aiErr.cause != null
+								? String(aiErr.cause)
+								: null;
+						logError(
+							"walkthrough-jobs",
+							"error detail:",
+							[tag, msg, detail].filter(Boolean).join(' — '),
+						);
+					}
+
+						// Log defects (unhandled thrown exceptions — not typed failures)
+						const defect = Cause.defects(cause);
+						if (defect.length > 0) {
+							for (const d of defect) {
+								logError(
+									"walkthrough-jobs",
+									"defect:",
+									d instanceof Error
+										? `${d.constructor.name}: ${d.message}\n${d.stack ?? ''}`
+										: JSON.stringify(d, null, 2),
+								);
+							}
+						}
 						}
 
 						// Server-shutdown interrupt (no user cancel) — PRESERVE
@@ -726,6 +764,22 @@ export const WalkthroughJobsLive = Layer.effect(
 					prContextService.resolveWithDiff(params.prId, params.userId),
 				);
 				const { pr, repo, token, meta, files } = resolved;
+
+			// Pre-flight: ensure the repo clone is ready before launching the job.
+			// Failing here surfaces a synchronous StartJobError that the SSE handler
+			// can forward to the UI immediately — no race between job failure and subscribe.
+			const cloneStatus = yield* repoCloneService.getCloneStatus(repo.id);
+			if (cloneStatus.status !== 'ready') {
+				if (cloneStatus.status === 'cloning') {
+					return yield* Effect.fail(new CloneInProgressError({ repoId: repo.id }));
+				}
+				const message = cloneStatus.status === 'error'
+					? `Repository clone failed: ${cloneStatus.error ?? 'unknown error'} — check Settings`
+					: 'Repository has not been cloned yet — check Settings';
+				return yield* Effect.fail(
+					new AiGenerationError({ cause: new CloneNotReadyError({ repoId: repo.id }), message }),
+				);
+			}
 
 				// Look for a partial. If the caller pinned a walkthroughId but
 				// the partial's id doesn't match, we're in a stale-resume case

@@ -170,7 +170,7 @@ export type WalkthroughStreamEvent =
 	| { type: 'summary'; data: { summary: string; riskLevel: RiskLevel } }
 	| { type: 'block'; data: WalkthroughBlock }
 	| { type: 'done'; data: { walkthroughId: string; tokenUsage: WalkthroughTokenUsage } }
-	| { type: 'error'; data: { code: string; message: string } }
+	| { type: 'error'; data: { code: string; message: string; repoId?: string } }
 	| { type: 'exploration'; data: { tool: string; description: string } }
 	| { type: 'issue'; data: WalkthroughIssue }
 	| { type: 'rating'; data: WalkthroughRating }
