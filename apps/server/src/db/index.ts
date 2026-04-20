@@ -1,4 +1,5 @@
 import { Database } from 'bun:sqlite';
+import { fileURLToPath } from 'url';
 import { drizzle } from 'drizzle-orm/bun-sqlite';
 import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
 import * as schema from './schema';
@@ -15,7 +16,9 @@ export function createDb(path?: string) {
 	const db = drizzle(sqlite, { schema });
 
 	// Run migrations on startup
-	migrate(db, { migrationsFolder: new URL('./migrations', import.meta.url).pathname });
+	// fileURLToPath decodes percent-encoded chars (e.g. %20 from "Application Support")
+	// that URL.pathname leaves encoded, which breaks fs.existsSync inside Drizzle's migrator.
+	migrate(db, { migrationsFolder: fileURLToPath(new URL('./migrations', import.meta.url)) });
 
 	return db;
 }
