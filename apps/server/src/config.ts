@@ -24,7 +24,7 @@ export const ServerConfig = Config.all({
 	// Bundled OAuth App client_id. `GITHUB_CLIENT_ID` env var overrides for
 	// development, self-hosting, or GitHub Enterprise deployments.
 	githubClientId: Config.string('GITHUB_CLIENT_ID').pipe(
-		Config.withDefault('0v23g4GLrM59sDrek6wo'),
+		Config.withDefault('Ov23g4GLrM59sDrek6wo'),
 	),
 	githubHost: Config.string('GITHUB_HOST').pipe(Config.withDefault('nocturlab.ghe.com')),
 	revDebug: Config.boolean('REV_DEBUG').pipe(Config.withDefault(false)),
