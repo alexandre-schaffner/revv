@@ -20,6 +20,7 @@ import { debugRoutes } from './routes/debug';
 import { PollScheduler } from './services/PollScheduler';
 import { WalkthroughJobs } from './services/WalkthroughJobs';
 import { RepoCloneService } from './services/RepoClone';
+import { DbMaintenance } from './services/DbMaintenance';
 
 const app = new Elysia()
 	.use(
@@ -84,6 +85,14 @@ AppRuntime.runPromise(
 	Effect.flatMap(RepoCloneService, (svc) => svc.resumePendingClones()),
 ).catch((err) => {
 	logError('repo-clone', 'resumePendingClones failed on boot:', err);
+});
+
+// Start DB maintenance scheduler: sweeps expired cache rows and checkpoints
+// the WAL every 6 hours to prevent unbounded disk growth.
+AppRuntime.runPromise(
+	Effect.flatMap(DbMaintenance, (svc) => svc.start()),
+).catch((err) => {
+	logError('db-maintenance', 'start failed on boot:', err);
 });
 
 export type App = typeof app;

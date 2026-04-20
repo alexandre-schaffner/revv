@@ -343,6 +343,7 @@
 		   space symmetric, so col 3 of the asymmetric 6-col grid stays
 		   centered regardless of whether the scrollbar is visible. */
 		scrollbar-gutter: stable both-edges;
+		container-type: inline-size;
 	}
 
 	/* ── Title section (scrolls away naturally with content) ─────────── */
@@ -387,7 +388,7 @@
 		grid-column: 3;
 	}
 
-	@media (max-width: 1700px) {
+	@container (max-width: 1700px) {
 		/* Collapse the grid at narrow viewports — same pattern the walkthrough
 		   uses. Falls back to a simple centered 860-max box with 32px padding. */
 		.page-title-section--narrow {

@@ -276,7 +276,9 @@
 	/* ── Main area ── */
 	.main-area {
 		grid-area: main;
-		overflow-y: auto;
+		overflow: hidden;
+		min-height: 0;
+		min-width: 0;
 	}
 
 	.tabs-float {

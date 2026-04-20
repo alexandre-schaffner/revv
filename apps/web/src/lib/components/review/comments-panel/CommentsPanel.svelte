@@ -197,6 +197,8 @@
         font-family: var(--font-mono);
         container-type: inline-size;
         container-name: comments;
+        /* See IssuesPanel for why width:100% is needed alongside container-type */
+        width: 100%;
     }
 
     .comments-panel--empty {

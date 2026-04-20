@@ -6,15 +6,41 @@
      *
      * Parallels RatingExpandedBody.svelte but trimmed to what a walkthrough
      * issue actually has (no citations, no markdown details — just the
-     * description).
+     * description, plus a references section listing the file and any
+     * walkthrough steps that explain this issue).
      */
-    import type { WalkthroughIssue } from "@revv/shared";
+    import { ArrowUpRight } from "@lucide/svelte";
+    import type { WalkthroughIssue, WalkthroughBlock } from "@revv/shared";
+    import FileBadge from "$lib/components/ui/FileBadge.svelte";
 
     interface Props {
         issue: WalkthroughIssue;
+        /** Full ordered block list — used to resolve blockIds to step numbers. */
+        blocks: WalkthroughBlock[];
+        /** Jump to diff line when the FileBadge is clicked. */
+        onFileClick?: ((filePath: string, line: number) => void) | undefined;
+        /** Jump to a walkthrough block by id. Step chips are only rendered
+         *  when this callback is supplied AND the issue has blockIds. */
+        onBlockJump?: ((blockId: string) => void) | undefined;
     }
 
-    let { issue }: Props = $props();
+    let { issue, blocks, onFileClick, onBlockJump }: Props = $props();
+
+    // Resolve blockIds to step numbers using the blocks array. Filter out ids
+    // that don't resolve — matches the gating in IssueTestRow's original
+    // trailing column and RatingExpandedBody's `resolvedBlockLinks`.
+    const resolvedBlockLinks = $derived.by(() => {
+        const out: { blockId: string; stepN: number }[] = [];
+        for (const blockId of issue.blockIds) {
+            const idx = blocks.findIndex((b) => b.id === blockId);
+            if (idx >= 0) out.push({ blockId, stepN: idx + 1 });
+        }
+        return out;
+    });
+
+    const hasReferences = $derived(
+        !!issue.filePath || (resolvedBlockLinks.length > 0 && !!onBlockJump),
+    );
 </script>
 
 <div class="expanded-body">
@@ -27,6 +53,42 @@
     <div class="description">
         <p class="description-text">{issue.description}</p>
     </div>
+
+    {#if hasReferences}
+        <div class="section-divider" aria-hidden="true">
+            <span class="section-divider-label">references</span>
+        </div>
+        {#if issue.filePath}
+            <ul class="references">
+                <li class="reference-item">
+                    <FileBadge
+                        filePath={issue.filePath}
+                        startLine={issue.startLine}
+                        endLine={issue.endLine}
+                        onclick={onFileClick
+                            ? () => onFileClick(issue.filePath!, issue.startLine ?? 1)
+                            : undefined}
+                    />
+                </li>
+            </ul>
+        {/if}
+        {#if resolvedBlockLinks.length > 0 && onBlockJump}
+            <ul class="step-chips">
+                {#each resolvedBlockLinks as { blockId, stepN } (blockId)}
+                    <li>
+                        <button
+                            type="button"
+                            class="step-chip"
+                            onclick={() => onBlockJump?.(blockId)}
+                        >
+                            <ArrowUpRight size={10} aria-hidden="true" />
+                            step {stepN}
+                        </button>
+                    </li>
+                {/each}
+            </ul>
+        {/if}
+    {/if}
 </div>
 
 <style>
@@ -97,5 +159,79 @@
 
     .section-divider-label {
         flex-shrink: 0;
+    }
+
+    /* ── References (files, stack-trace style) ────────────────── */
+
+    .references {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        align-items: flex-start;
+    }
+
+    .reference-item {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-family: var(--font-mono);
+        font-size: 12px;
+        color: var(--color-text-secondary);
+    }
+
+    /* "at " prefix — mimics a Node.js/Vitest stack-trace frame. */
+    .reference-item::before {
+        content: "at ";
+        color: var(--color-text-muted);
+        font-family: var(--font-mono);
+        font-size: 12px;
+        letter-spacing: 0.02em;
+    }
+
+    /* ── Step chips — navigate to the walkthrough block(s) that
+       explain this issue. Mirrors RatingExpandedBody's block-links
+       but uses the severity-tinted palette like the trigger header. ─ */
+
+    .step-chips {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+
+    .step-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        padding: 2px 8px;
+        border-radius: 9999px;
+        border: 1px solid color-mix(in srgb, var(--c-gutter-color) 45%, transparent);
+        background: color-mix(in srgb, var(--c-gutter-color) 8%, transparent);
+        color: var(--c-gutter-color);
+        font-family: var(--font-mono);
+        font-size: 10.5px;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        text-transform: lowercase;
+        cursor: pointer;
+        transition:
+            border-color var(--duration-snap) var(--ease-soft),
+            color var(--duration-snap) var(--ease-soft),
+            background var(--duration-snap) var(--ease-soft);
+    }
+
+    .step-chip:hover {
+        border-color: var(--c-gutter-color);
+        background: color-mix(in srgb, var(--c-gutter-color) 15%, transparent);
+    }
+
+    .step-chip:focus-visible {
+        outline: 2px solid var(--color-accent);
+        outline-offset: 2px;
     }
 </style>

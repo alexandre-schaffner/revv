@@ -352,6 +352,8 @@
         /* Container-query context for nested narrow-width behavior. */
         container-type: inline-size;
         container-name: ratings;
+        /* See IssuesPanel for why width:100% is needed alongside container-type */
+        width: 100%;
     }
 
     .sr-only {

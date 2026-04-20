@@ -18,8 +18,6 @@
     import { groupIssuesBySeverityWithIndex } from "$lib/utils/walkthrough-issues";
     import IssueSummaryBar from "./IssueSummaryBar.svelte";
     import IssueTestRow from "./IssueTestRow.svelte";
-    import FileBadge from "$lib/components/ui/FileBadge.svelte";
-    import { ArrowUpRight } from "@lucide/svelte";
 
     interface Props {
         issues: readonly WalkthroughIssue[];
@@ -135,34 +133,6 @@
         return list;
     });
 
-    // ── DOM measurement for trailing column alignment ────────
-    // Derive the widest filename and max step number so we can render
-    // hidden measurement elements and read their exact pixel widths.
-    const longestFileName = $derived.by(() => {
-        let longest = '';
-        for (const issue of visibleIssues) {
-            if (!issue.filePath) continue;
-            const name = issue.filePath.split('/').at(-1) ?? '';
-            if (name.length > longest.length) longest = name;
-        }
-        return longest;
-    });
-
-    const maxStepNumber = $derived.by(() => {
-        let max = 0;
-        for (const issue of visibleIssues) {
-            for (const blockId of issue.blockIds) {
-                const idx = blocks.findIndex((b) => b.id === blockId);
-                if (idx >= 0 && idx + 1 > max) max = idx + 1;
-            }
-        }
-        return max;
-    });
-
-    // Bound widths from the hidden measurement elements.
-    let measuredFileW = $state(0);
-    let measuredStepsW = $state(0);
-
     // ── Keyboard navigation ──────────────────────────────────
 
     // Non-reactive ref map — rows push their trigger elements in via a
@@ -243,24 +213,6 @@
 </script>
 
 {#if issues.length > 0}
-    <!-- Hidden measurement elements — rendered off-screen so the browser
-         computes the exact pixel widths of the step chip and FileBadge for
-         the widest content in the current visible set. These drive the
-         --trailing-steps-w and --trailing-file-w CSS variables so all rows
-         align their trailing columns without pixel estimation. -->
-    <div class="measure-offscreen" aria-hidden="true">
-        {#if longestFileName}
-            <span class="measure-file-badge" bind:clientWidth={measuredFileW}>
-                <FileBadge filePath={longestFileName} />
-            </span>
-        {/if}
-        {#if maxStepNumber > 0}
-            <span class="measure-step-chip" bind:clientWidth={measuredStepsW}>
-                <ArrowUpRight size={10} />
-                step {maxStepNumber}
-            </span>
-        {/if}
-    </div>
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <section
         class="issues-panel"
@@ -291,12 +243,7 @@
                 {/if}
             </div>
         {:else}
-            <div
-                class="issue-rows"
-                role="list"
-                style:--trailing-file-w="{measuredFileW > 0 ? measuredFileW + 'px' : undefined}"
-                style:--trailing-steps-w="{measuredStepsW > 0 ? measuredStepsW + 'px' : undefined}"
-            >
+            <div class="issue-rows" role="list">
                 {#each visibleIssues as issue, i (issue.id)}
                     <IssueTestRow
                         {issue}
@@ -333,6 +280,11 @@
         container-type: inline-size;
         container-name: issues;
         min-width: 0;
+        /* container-type: inline-size makes the browser report zero intrinsic
+           inline size for this element, which breaks both grid justify-self:stretch
+           and flex align-self:stretch. An explicit width:100% bypasses intrinsic
+           sizing and ensures the panel always fills its grid track or flex parent. */
+        width: 100%;
     }
 
     .issues-panel--empty {
@@ -361,34 +313,5 @@
 
     .empty-state--quiet {
         padding: 10px 12px;
-    }
-
-    /* ── Off-screen measurement container ───────────────────── */
-    .measure-offscreen {
-        position: absolute;
-        visibility: hidden;
-        pointer-events: none;
-        white-space: nowrap;
-        top: 0;
-        left: 0;
-    }
-
-    /* Match step-chip font exactly so measurement is accurate */
-    .measure-step-chip {
-        display: inline-flex;
-        align-items: center;
-        gap: 3px;
-        padding: 2px 7px;
-        border-radius: 9999px;
-        border: 1px solid transparent;
-        font-family: var(--font-mono);
-        font-size: 10.5px;
-        font-weight: 600;
-        letter-spacing: 0.02em;
-    }
-
-    /* FileBadge renders its own styles, just needs a flex wrapper */
-    .measure-file-badge {
-        display: inline-flex;
     }
 </style>

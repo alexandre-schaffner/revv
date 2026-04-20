@@ -346,13 +346,26 @@
 	   the walkthrough tab. A plain `max-width: 900; margin-inline: auto`
 	   would center in the viewport, but col 3 of the asymmetric grid is
 	   shifted ~210px right of viewport center, so viewport-centering
-	   would misalign with the title above. */
+	   would misalign with the title above.
+
+	   Col 3 is a FIXED 820px (not `minmax(0, 820px)`) because every direct
+	   child in col 3 — IssuesPanel, CommentsPanel, WalkthroughRatingsPanel —
+	   sets `container-type: inline-size` for its own container queries.
+	   Inline-size containment means the element's intrinsic size isn't
+	   derived from its descendants, so when the grid algorithm asks those
+	   panels for their max-content to size a `minmax(0, 820px)` track,
+	   they all report ~0 and the track collapses — leaving the panels
+	   squished to min-content inside a ~0-wide column while the two 1fr
+	   tracks absorb the leftover space. Fixing col 3 at 820px sidesteps
+	   the content-sized track entirely. The narrow-viewport fallback
+	   (@media max-width: 1700px) collapses the whole grid anyway, so
+	   we never overflow at small widths. */
 	.rc-sections {
 		display: grid;
 		grid-template-columns:
 			420px
 			minmax(0, 1fr)
-			minmax(0, 820px)
+			820px
 			40px
 			380px
 			minmax(0, 1fr);
@@ -367,14 +380,16 @@
 
 	/* Footer — same grid. The border-top spans only col 3 (same width as
 	   the content above), which reads as a natural continuation of the
-	   centered column rather than a full-width divider slicing the page. */
+	   centered column rather than a full-width divider slicing the page.
+	   Col 3 is a fixed 820px here too, matching `.rc-sections` so the
+	   footer stays column-aligned regardless of how its contents size. */
 	.rc-footer {
 		flex-shrink: 0;
 		display: grid;
 		grid-template-columns:
 			420px
 			minmax(0, 1fr)
-			minmax(0, 820px)
+			820px
 			40px
 			380px
 			minmax(0, 1fr);
@@ -413,6 +428,7 @@
 		}
 
 		.rc-sections {
+			width: 100%;
 			padding-top: 16px;
 			padding-bottom: 16px;
 			display: flex;
@@ -421,6 +437,7 @@
 		}
 
 		.rc-footer {
+			width: 100%;
 			padding-top: 16px;
 			padding-bottom: 20px;
 			display: flex;

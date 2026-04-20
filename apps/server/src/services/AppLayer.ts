@@ -1,6 +1,7 @@
 import { Layer } from 'effect';
 import { CacheStatsLive, InvalidationBusLive } from '../cache/index';
 import { AiServiceLive } from './Ai';
+import { DbMaintenanceLive } from './DbMaintenance';
 import { DbServiceLive } from './Db';
 import { DiffCacheServiceLive } from './DiffCache';
 import { FileContentServiceLive } from './FileContent';
@@ -67,6 +68,9 @@ const AiServiceWithDeps = AiServiceLive.pipe(Layer.provide(BaseLayers));
 // RepoCloneService depends on DbService + WebSocketHub (both in BaseLayers)
 const RepoCloneServiceWithDeps = RepoCloneServiceLive.pipe(Layer.provide(BaseLayers));
 
+// DbMaintenance only needs DbService (already in BaseLayers)
+const DbMaintenanceWithDeps = DbMaintenanceLive.pipe(Layer.provide(DbServiceLive));
+
 // WalkthroughJobs is the central orchestrator for walkthrough generation —
 // it depends on PrContext (to resolve PR metadata), RepoClone (for scoped
 // worktrees), Ai (to run the actual generator), Review (for session ids),
@@ -93,4 +97,5 @@ export const AppLayer = Layer.mergeAll(
 	AiServiceWithDeps,
 	RepoCloneServiceWithDeps,
 	WalkthroughJobsWithDeps,
+	DbMaintenanceWithDeps,
 );

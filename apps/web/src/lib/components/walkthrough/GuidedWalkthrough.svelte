@@ -1815,7 +1815,7 @@
 	   card directly below its block. Sticky was already removed at the wide
 	   layer — here we just give the stacked card a small top margin so it
 	   reads as attached-to-but-distinct-from its block. */
-	@media (max-width: 1700px) {
+	@container (max-width: 1700px) {
 		/* Collapse the grid: revert to a single centered 860-max column. */
 		.walkthrough-content {
 			display: block;
@@ -1839,6 +1839,7 @@
 		.walkthrough-stepper-header,
 		.walkthrough-connect-progress {
 			display: block;
+			width: 100%;
 			max-width: 860px;
 			padding-left: 32px;
 			padding-right: 32px;
@@ -1853,6 +1854,7 @@
 			display: flex;
 			flex-direction: column;
 			gap: 20px;
+			width: 100%;
 		}
 
 		.walkthrough-connect-progress {
@@ -1860,6 +1862,7 @@
 			   Progress bar. */
 			display: flex;
 			align-items: center;
+			width: 100%;
 		}
 
 		.walkthrough-loading > *,

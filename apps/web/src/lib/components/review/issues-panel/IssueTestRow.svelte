@@ -4,23 +4,23 @@
      *
      * Reads left-to-right like a lint diagnostic:
      *
-     *   [✓]  E  async/unhandled-error  Unhandled async error in login  src/auth.ts:42-47  ›
-     *   │    │  │                      │                                │
-     *   │    │  │                      └ title (mono 13 / 600)          └ FileBadge trailing
-     *   │    │  └ rule-slug chip (ESLint-ID style, lowercase mono)
+     *   [✓]  E  Unhandled async error in login   description…                             ›
+     *   │    │  │                                │
+     *   │    │  │                                └ preview (single-line description)
+     *   │    │  └ title (mono 13 / 600)
      *   │    └ severity code letter (E/W/I — like TS2345 / clippy::lint / etc)
      *   └ selection checkbox (or green Check glyph when submitted)
      *
-     * Wraps SpecRow; consumes it via snippets for icon/label/preview/trailing.
+     * Wraps SpecRow; consumes it via snippets for icon/label/preview. File
+     * paths and step chips live in the expanded body's "references" section
+     * so the clickable row stays clean — no nested click targets.
      * Selection checkbox must NOT bubble to the SpecRow trigger (otherwise
      * checking a box would also expand the row, which feels hostile).
      */
-    import { Check, ArrowUpRight } from "@lucide/svelte";
+    import { Check } from "@lucide/svelte";
     import type { WalkthroughIssue, WalkthroughBlock } from "@revv/shared";
-    import FileBadge from "$lib/components/ui/FileBadge.svelte";
     import SpecRow, { type SpecRowState } from "../shared/SpecRow.svelte";
     import IssueExpandedBody from "./IssueExpandedBody.svelte";
-    import { ruleSlugFor } from "./rule-slug";
 
     interface Props {
         issue: WalkthroughIssue;
@@ -89,11 +89,6 @@
         info: "Info",
     };
 
-    // Rule-slug — deterministic, client-side derived from the title. Purely
-    // cosmetic (nothing behaves on it); if the helper returns null we
-    // silently drop the chip and fall back to the severity word.
-    const ruleSlug = $derived(ruleSlugFor(issue));
-
     const ariaLabel = $derived(
         `${severityLabels[issue.severity]}: ${issue.title}` +
             (submitted ? " (posted)" : ""),
@@ -107,16 +102,6 @@
     // Deliberately named `rowState` — avoid `state` which collides with
     // the Svelte $state rune name in svelte-check's flow analysis.
     const rowState: SpecRowState = $derived(submitted ? "submitted" : "resolved");
-
-    // Resolve blockIds to step numbers using the blocks array.
-    const resolvedBlockLinks = $derived.by(() => {
-        const out: { blockId: string; stepN: number }[] = [];
-        for (const blockId of issue.blockIds) {
-            const idx = blocks.findIndex((b) => b.id === blockId);
-            if (idx >= 0) out.push({ blockId, stepN: idx + 1 });
-        }
-        return out;
-    });
 
     function handleCheckboxChange(e: Event): void {
         e.stopPropagation();
@@ -178,43 +163,8 @@
             <span class="issue-preview">{issue.description}</span>
         {/snippet}
 
-        {#snippet trailing()}
-            <span class="trailing-steps">
-                {#if resolvedBlockLinks.length > 0 && onBlockJump}
-                    {#each resolvedBlockLinks as { blockId, stepN } (blockId)}
-                        <button
-                            type="button"
-                            class="step-chip"
-                            onclick={(e) => { e.stopPropagation(); onBlockJump(blockId); }}
-                        >
-                            <ArrowUpRight size={10} aria-hidden="true" />
-                            step {stepN}
-                        </button>
-                    {/each}
-                {/if}
-            </span>
-            <span class="trailing-file">
-                {#if issue.filePath}
-                    <span
-                        class="file-badge-slot"
-                        onclick={(e) => e.stopPropagation()}
-                        role="presentation"
-                    >
-                        <FileBadge
-                            filePath={issue.filePath}
-                            startLine={issue.startLine}
-                            endLine={issue.endLine}
-                            onclick={onFileClick
-                                ? () => onFileClick(issue.filePath!, issue.startLine ?? 1)
-                                : undefined}
-                        />
-                    </span>
-                {/if}
-            </span>
-        {/snippet}
-
         {#snippet content()}
-            <IssueExpandedBody {issue} />
+            <IssueExpandedBody {issue} {blocks} {onFileClick} {onBlockJump} />
         {/snippet}
     </SpecRow>
 </div>
@@ -335,78 +285,6 @@
         color: var(--color-text-muted);
         white-space: nowrap;
         min-width: 0;
-    }
-
-    /* ── FileBadge slot — stop propagation on clicks so the badge
-       jumps to the diff without toggling the row. ─────────────── */
-
-    .file-badge-slot {
-        display: inline-flex;
-        align-items: center;
-    }
-
-    /* ── Trailing column slots — DOM-measured widths give cross-row alignment ── */
-
-    .trailing-steps {
-        display: inline-flex;
-        align-items: center;
-        justify-content: flex-end;
-        width: var(--trailing-steps-w, auto);
-        flex-shrink: 0;
-    }
-
-    .trailing-file {
-        display: inline-flex;
-        align-items: center;
-        justify-content: flex-start;
-        width: var(--trailing-file-w, auto);
-        flex-shrink: 0;
-    }
-
-    /* ── Step chips — navigate to walkthrough block ──────────── */
-
-    .step-chip {
-        display: inline-flex;
-        align-items: center;
-        gap: 3px;
-        padding: 2px 7px;
-        border-radius: 9999px;
-        border: 1px solid var(--color-border);
-        background: transparent;
-        color: var(--color-text-muted);
-        font-family: var(--font-mono);
-        font-size: 10.5px;
-        font-weight: 600;
-        letter-spacing: 0.02em;
-        text-transform: lowercase;
-        cursor: pointer;
-        flex-shrink: 0;
-        transition:
-            border-color var(--duration-snap) var(--ease-soft),
-            color var(--duration-snap) var(--ease-soft),
-            background var(--duration-snap) var(--ease-soft);
-    }
-    .step-chip:hover {
-        border-color: color-mix(in srgb, var(--c-gutter-color) 55%, transparent);
-        color: color-mix(in srgb, var(--c-gutter-color) 75%, var(--color-text-muted));
-        background: color-mix(in srgb, var(--c-gutter-color) 8%, transparent);
-    }
-    .step-chip:focus-visible {
-        outline: 2px solid var(--color-accent);
-        outline-offset: 2px;
-    }
-
-    /* ── When row is open, step chips adopt the severity colour ──── */
-
-    .issue-row[data-open="true"] .step-chip {
-        border-color: color-mix(in srgb, var(--c-gutter-color) 45%, transparent);
-        color: var(--c-gutter-color);
-        background: color-mix(in srgb, var(--c-gutter-color) 8%, transparent);
-    }
-
-    .issue-row[data-open="true"] .step-chip:hover {
-        border-color: var(--c-gutter-color);
-        background: color-mix(in srgb, var(--c-gutter-color) 15%, transparent);
     }
 
     /* ── Entry animation ─────────────────────────────────────── */
