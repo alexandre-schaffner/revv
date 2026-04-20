@@ -303,54 +303,11 @@ bun_bin="$HOME/.bun/bin/bun"
 server_entry="$PROJECT_ROOT/apps/server/src/index.ts"
 [[ -f "$server_entry" ]] || fail "Server entry point missing: $server_entry"
 
-cat > "$REVV_LAUNCH_AGENT_PLIST" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.revv.server</string>
-
-    <key>ProgramArguments</key>
-    <array>
-        <string>$bun_bin</string>
-        <string>run</string>
-        <string>apps/server/src/index.ts</string>
-    </array>
-
-    <key>WorkingDirectory</key>
-    <string>$PROJECT_ROOT</string>
-
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>PATH</key>
-        <string>$HOME/.bun/bin:$HOME/.cargo/bin:/usr/local/bin:/usr/bin:/bin</string>
-        <key>HOME</key>
-        <string>$HOME</string>
-    </dict>
-
-    <key>RunAtLoad</key>
-    <true/>
-
-    <key>KeepAlive</key>
-    <dict>
-        <key>SuccessfulExit</key>
-        <false/>
-        <key>Crashed</key>
-        <true/>
-    </dict>
-
-    <key>ThrottleInterval</key>
-    <integer>10</integer>
-
-    <key>StandardOutPath</key>
-    <string>$REVV_LOG_DIR/server.out.log</string>
-
-    <key>StandardErrorPath</key>
-    <string>$REVV_LOG_DIR/server.err.log</string>
-</dict>
-</plist>
-PLIST
+write_launch_agent_plist \
+  "$REVV_LAUNCH_AGENT_PLIST" \
+  "$bun_bin" \
+  "$PROJECT_ROOT" \
+  "$REVV_LOG_DIR"
 
 launchctl unload "$REVV_LAUNCH_AGENT_PLIST" 2>/dev/null || true
 launchctl load -w "$REVV_LAUNCH_AGENT_PLIST"

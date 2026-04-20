@@ -1,11 +1,35 @@
 import { execSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { CLI_CACHE_TTL_MS } from '../../constants';
+import { serverEnv } from '../../config';
 
-// ── CLI agent detection (cached) ─────────────────────────────────────────────
+// ── CLI agent detection ──────────────────────────────────────────────────────
+//
+// Resolution chain, in order:
+//
+//   1. REVV_CLAUDE_BIN / REVV_OPENCODE_BIN — absolute paths baked into the
+//      LaunchAgent at install time by `write_launch_agent_plist` in
+//      scripts/lib/common.sh (which runs `command -v <tool>` with the
+//      installer's shell PATH). Survives restricted LaunchAgent PATH.
+//   2. `which <tool>` at runtime — covers `make dev` / dev shells where the
+//      env var isn't in play and PATH is rich.
+//
+// No hardcoded dir list: if neither source finds the binary, treat it as
+// not installed.
+//
+// Detection is cached per-agent with a short TTL (see CLI_CACHE_TTL_MS).
 
 let cachedCliAuth: { result: boolean; expiresAt: number; agent: string } | null = null;
 
-function isCliAgentAvailable(agent: 'opencode' | 'claude'): boolean {
+type CliAgent = 'opencode' | 'claude';
+
+function pinnedBin(agent: CliAgent): string {
+	const pinned = agent === 'claude' ? serverEnv.claudeBin : serverEnv.opencodeBin;
+	return pinned && existsSync(pinned) ? pinned : '';
+}
+
+function isCliAgentAvailable(agent: CliAgent): boolean {
+	if (pinnedBin(agent)) return true;
 	try {
 		const result = execSync(`which ${agent}`, { encoding: 'utf-8', timeout: 3000 });
 		return result.trim().length > 0;
@@ -14,7 +38,16 @@ function isCliAgentAvailable(agent: 'opencode' | 'claude'): boolean {
 	}
 }
 
-export function checkCliAvailability(agent: 'opencode' | 'claude'): boolean {
+/**
+ * Absolute path to the CLI binary if we have one, else the bare name so
+ * Bun.spawn falls back to PATH resolution. Callers should pass the result
+ * directly as argv[0] of a spawn call.
+ */
+export function resolveCliBin(agent: CliAgent): string {
+	return pinnedBin(agent) || agent;
+}
+
+export function checkCliAvailability(agent: CliAgent): boolean {
 	if (cachedCliAuth && Date.now() < cachedCliAuth.expiresAt && cachedCliAuth.agent === agent) {
 		return cachedCliAuth.result;
 	}
@@ -45,7 +78,7 @@ export async function listCliModels(agent: 'opencode' | 'claude'): Promise<CliMo
 	// opencode: run `opencode models --verbose` and parse interleaved output
 	// Format: line with "provider/id", then JSON blob with model metadata, repeated
 	try {
-		const proc = Bun.spawn(['opencode', 'models', '--verbose'], {
+		const proc = Bun.spawn([resolveCliBin('opencode'), 'models', '--verbose'], {
 			stdout: 'pipe',
 			stderr: 'pipe',
 		});

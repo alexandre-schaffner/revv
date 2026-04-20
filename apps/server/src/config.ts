@@ -28,6 +28,14 @@ export const ServerConfig = Config.all({
 	),
 	githubHost: Config.string('GITHUB_HOST').pipe(Config.withDefault('nocturlab.ghe.com')),
 	revDebug: Config.boolean('REV_DEBUG').pipe(Config.withDefault(false)),
+	// Absolute paths to the `claude` / `opencode` CLIs, resolved once by the
+	// installer's shell (which has the user's full PATH including Homebrew,
+	// asdf, mise, nix, etc.) and baked into the LaunchAgent plist's
+	// EnvironmentVariables. Empty string = "not detected at install time" —
+	// the server falls back to a runtime `which` lookup. See
+	// apps/server/src/ai/providers/cli-agent.ts for the resolution chain.
+	claudeBin: Config.string('REVV_CLAUDE_BIN').pipe(Config.withDefault('')),
+	opencodeBin: Config.string('REVV_OPENCODE_BIN').pipe(Config.withDefault('')),
 });
 
 export type ServerConfig = Config.Config.Success<typeof ServerConfig>;

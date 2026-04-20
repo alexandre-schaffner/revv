@@ -271,3 +271,86 @@ ensure_rust() {
     fi
   fi
 }
+
+# ── LaunchAgent plist generator ───────────────────────────────
+#
+# Writes the com.revv.server LaunchAgent plist at $plist_path. Shared between
+# install.sh (first-time install) and scripts/revv cmd_update (refreshes the
+# plist so existing installs pick up new PATH defaults and freshly-detected
+# CLI tool locations without a full reinstall).
+#
+# `command -v claude` / `command -v opencode` run here inherit the caller's
+# shell PATH — the user's full PATH at install time — so any install method
+# (Homebrew, asdf, mise, nix, custom prefix) is captured as an absolute path.
+# The server reads REVV_CLAUDE_BIN / REVV_OPENCODE_BIN via Effect Config and
+# uses those absolute paths directly, bypassing the LaunchAgent's own
+# (necessarily restricted) PATH at runtime.
+#
+# Usage: write_launch_agent_plist <plist_path> <bun_bin> <project_root> <log_dir>
+write_launch_agent_plist() {
+  local plist_path="$1" bun_bin="$2" project_root="$3" log_dir="$4"
+  [[ -n "$plist_path"   ]] || fail "write_launch_agent_plist: plist_path required"
+  [[ -x "$bun_bin"      ]] || fail "write_launch_agent_plist: bun_bin missing or not executable: $bun_bin"
+  [[ -d "$project_root" ]] || fail "write_launch_agent_plist: project_root missing: $project_root"
+  [[ -n "$log_dir"      ]] || fail "write_launch_agent_plist: log_dir required"
+
+  local claude_bin opencode_bin
+  claude_bin="$(command -v claude 2>/dev/null || true)"
+  opencode_bin="$(command -v opencode 2>/dev/null || true)"
+  [[ -n "$claude_bin"   ]] && info "Detected claude at $claude_bin"
+  [[ -n "$opencode_bin" ]] && info "Detected opencode at $opencode_bin"
+
+  mkdir -p "$(dirname "$plist_path")"
+  cat > "$plist_path" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.revv.server</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>$bun_bin</string>
+        <string>run</string>
+        <string>apps/server/src/index.ts</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>$project_root</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>$HOME/.bun/bin:$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>$HOME</string>
+        <key>REVV_CLAUDE_BIN</key>
+        <string>$claude_bin</string>
+        <key>REVV_OPENCODE_BIN</key>
+        <string>$opencode_bin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>$log_dir/server.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>$log_dir/server.err.log</string>
+</dict>
+</plist>
+PLIST
+}

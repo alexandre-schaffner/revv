@@ -17,6 +17,7 @@ import {
 	createWalkthroughMcpServer,
 	type WalkthroughEmitter,
 } from "./walkthrough-tools";
+import { resolveCliBin } from "./cli-agent";
 
 // ── Continuation context ─────────────────────────────────────────────────────
 
@@ -174,6 +175,12 @@ export function streamWalkthroughViaMCP(
 			| "finishing" = "connecting";
 
 		try {
+			const pinnedClaude = resolveCliBin("claude");
+			const pathOption =
+				pinnedClaude !== "claude"
+					? { pathToClaudeCodeExecutable: pinnedClaude }
+					: {};
+
 			const q = query({
 				prompt: userMessage,
 				options: {
@@ -191,6 +198,7 @@ export function streamWalkthroughViaMCP(
 					maxTurns: 45,
 					abortController,
 					...(model ? { model } : {}),
+					...pathOption,
 				},
 			});
 

@@ -1,11 +1,18 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { AiGenerationError } from '../../domain/errors';
+import { resolveCliBin } from './cli-agent';
 
 /**
  * Stream text from Claude Code via the agent SDK.
  * Returns a ReadableStream of text chunks (no tool use, single turn).
  */
 export function streamViaClaudeCode(prompt: string, systemPrompt: string): ReadableStream<string> {
+	// Only pass the absolute path when we actually resolved one — the bare
+	// string 'claude' is the SDK's own default lookup path, which it handles
+	// better without our intervention.
+	const pinned = resolveCliBin('claude');
+	const pathOption = pinned !== 'claude' ? { pathToClaudeCodeExecutable: pinned } : {};
+
 	return new ReadableStream<string>({
 		async start(controller) {
 			try {
@@ -15,6 +22,7 @@ export function streamViaClaudeCode(prompt: string, systemPrompt: string): Reada
 						systemPrompt,
 						allowedTools: [], // No tool use — just text generation
 						maxTurns: 1, // Single response, no agentic loop
+						...pathOption,
 					},
 				});
 

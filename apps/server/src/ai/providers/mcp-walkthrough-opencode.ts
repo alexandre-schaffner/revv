@@ -8,6 +8,7 @@ import type {
 import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../../constants";
 import { debug } from "../../logger";
 import type { PrFileMeta } from "../../services/GitHub";
+import { resolveCliBin } from "./cli-agent";
 import {
 	buildExplorationDescription,
 	buildWalkthroughPrompt,
@@ -328,7 +329,7 @@ export function streamWalkthroughViaOpencodeMCP(
 			});
 
 			const cliArgs = [
-				"opencode",
+				resolveCliBin("opencode"),
 				"run",
 				"--format",
 				"json",

@@ -297,9 +297,34 @@ cmd_update() {
   cp -R "$bundle_app" "$dest_app"
   xattr -cr "$dest_app" 2>/dev/null || true
 
-  info "Reloading server LaunchAgent"
-  launchctl unload "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
-  launchctl load -w "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
+  # Re-source common.sh from the freshly-pulled tree so we pick up any new
+  # helpers (e.g. write_launch_agent_plist) that didn't exist in the version
+  # this revv CLI started with. Unset the double-source guard first.
+  if [[ -f "$INSTALL_DIR/scripts/lib/common.sh" ]]; then
+    unset __REVV_COMMON_LOADED__
+    # shellcheck disable=SC1091
+    source "$INSTALL_DIR/scripts/lib/common.sh"
+  fi
+
+  info "Refreshing LaunchAgent (picks up new PATH + detected CLI binary locations)"
+  local bun_for_plist
+  bun_for_plist="$(command -v bun || true)"
+  [[ -x "$bun_for_plist" ]] || fail "Cannot locate bun for the LaunchAgent."
+
+  if declare -F write_launch_agent_plist >/dev/null 2>&1; then
+    launchctl unload "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
+    write_launch_agent_plist \
+      "$LAUNCH_AGENT_PLIST" \
+      "$bun_for_plist" \
+      "$INSTALL_DIR" \
+      "$LOG_DIR"
+    launchctl load -w "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
+  else
+    # Older common.sh without the helper — just reload the existing plist.
+    warn "write_launch_agent_plist not found in common.sh; keeping existing plist"
+    launchctl unload "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
+    launchctl load -w "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
+  fi
 
   # Refresh the CLI itself + helper lib in case they changed upstream.
   if [[ -f "$INSTALL_DIR/scripts/revv" ]]; then
