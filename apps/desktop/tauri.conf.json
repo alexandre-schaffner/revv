@@ -81,7 +81,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' http://localhost:45678 ws://localhost:9223; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:"
+      "csp": "default-src 'self'; connect-src 'self' http://localhost:45678 http://localhost:45679 ws://localhost:45678 ws://localhost:45679 ws://localhost:9223; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:"
     }
   },
   "plugins": {

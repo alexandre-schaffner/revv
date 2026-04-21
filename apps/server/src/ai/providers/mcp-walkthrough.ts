@@ -139,11 +139,6 @@ export function streamWalkthroughViaMCP(
 			model ?? "default",
 		);
 
-		push({
-			type: "phase",
-			data: { phase: "connecting", message: "Connecting to AI model..." },
-		});
-
 		// Prefer the caller-supplied controller so `cancel(walkthroughId)` or a
 		// Scope finalizer can signal abort from outside this module. The local
 		// 10-minute timeout then fires through the shared controller so both

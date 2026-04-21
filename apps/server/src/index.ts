@@ -48,9 +48,9 @@ const app = new Elysia()
 		status: 'ok' as const,
 		timestamp: new Date().toISOString(),
 	}))
-	.listen(API_PORT);
+	.listen(Number(process.env['PORT']) || API_PORT);
 
-console.log(`[revv-server] listening on http://localhost:${API_PORT}`);
+console.log(`[revv-server] listening on http://localhost:${Number(process.env['PORT']) || API_PORT}`);
 
 // Re-launch walkthrough fibers for any rows left in `status='generating'`
 // by a previous run. Runs in the background so boot isn't blocked by slow

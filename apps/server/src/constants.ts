@@ -11,6 +11,9 @@ export const CLI_WALKTHROUGH_TIMEOUT_MS = 600_000; // 10 minutes
 /** Inactivity timeout for walkthrough stream guard (no events for this long = abort). */
 export const WALKTHROUGH_INACTIVITY_TIMEOUT_MS = 120_000; // 120 seconds -- 2 min
 
+/** Timeout for the first event from the AI provider — shorter since healthy providers emit immediately. */
+export const WALKTHROUGH_FIRST_EVENT_TIMEOUT_MS = 90_000; // 90 seconds
+
 /** Exploration-stall timeout: if only exploration events arrive for this long with no
  *  summary/block/phase progress, the model is stuck reading files — abort with an error. */
 export const WALKTHROUGH_EXPLORATION_STALL_MS = 3 * 60 * 1000; // 3 minutes

@@ -1,5 +1,5 @@
 import type { WalkthroughStreamEvent, WalkthroughPhase } from '@revv/shared';
-import { WALKTHROUGH_INACTIVITY_TIMEOUT_MS, WALKTHROUGH_EXPLORATION_STALL_MS } from '../../constants';
+import { WALKTHROUGH_INACTIVITY_TIMEOUT_MS, WALKTHROUGH_EXPLORATION_STALL_MS, WALKTHROUGH_FIRST_EVENT_TIMEOUT_MS } from '../../constants';
 import { debug } from '../../logger';
 
 // ── Phase synthesis messages ────────────────────────────────────────────────
@@ -30,16 +30,19 @@ export function guardWalkthroughStream(
 		explorationStallMs?: number;
 		synthesizePhases?: boolean;
 		label?: string;
+		firstEventTimeoutMs?: number;
 	},
 ): AsyncGenerator<WalkthroughStreamEvent> {
 	const inactivityMs = options?.inactivityTimeoutMs ?? WALKTHROUGH_INACTIVITY_TIMEOUT_MS;
 	const explorationStallMs = options?.explorationStallMs ?? WALKTHROUGH_EXPLORATION_STALL_MS;
 	const synthesize = options?.synthesizePhases ?? true;
 	const label = options?.label ?? 'guard';
+	const firstEventMs = options?.firstEventTimeoutMs ?? WALKTHROUGH_FIRST_EVENT_TIMEOUT_MS;
 
 	// Tracks when we last saw a non-exploration event (summary, block, phase, done, error).
 	// Used to detect a model that keeps reading files but never produces walkthrough output.
 	let lastProgressTime = Date.now();
+	let isFirstEvent = true;
 
 	return (async function* (): AsyncGenerator<WalkthroughStreamEvent> {
 		const iter = inner[Symbol.asyncIterator]();
@@ -63,35 +66,40 @@ export function guardWalkthroughStream(
 				// Race the next event against the inactivity timeout
 				const result = await Promise.race([
 					iter.next().then((r) => ({ kind: 'value' as const, ...r })),
-					new Promise<{ kind: 'timeout' }>((resolve) => {
-						inactivityTimer = setTimeout(
-							() => resolve({ kind: 'timeout' }),
-							inactivityMs,
-						);
-					}),
+				new Promise<{ kind: 'timeout' }>((resolve) => {
+					inactivityTimer = setTimeout(
+						() => resolve({ kind: 'timeout' }),
+						isFirstEvent ? firstEventMs : inactivityMs,
+					);
+				}),
 				]);
 
 				clearTimeout(inactivityTimer);
 				inactivityTimer = undefined;
 
-				if (result.kind === 'timeout') {
-					debug(label, 'Inactivity timeout — no events for', inactivityMs, 'ms');
-					yield {
-						type: 'error' as const,
-						data: {
-							code: 'InactivityTimeout',
-							message: `Walkthrough generation stalled — no progress for ${Math.round(inactivityMs / 1000)}s. Try regenerating.`,
-						},
-					};
-					return;
-				}
+			if (result.kind === 'timeout') {
+				const timeoutDuration = isFirstEvent ? firstEventMs : inactivityMs;
+				const timeoutMessage = isFirstEvent
+					? `AI provider failed to start within ${Math.round(firstEventMs / 1000)}s — the model may be unavailable or misconfigured.`
+					: `Walkthrough generation stalled — no progress for ${Math.round(inactivityMs / 1000)}s. Try regenerating.`;
+				debug(label, isFirstEvent ? 'First-event timeout' : 'Inactivity timeout', '—', timeoutDuration, 'ms');
+				yield {
+					type: 'error' as const,
+					data: {
+						code: isFirstEvent ? 'FirstEventTimeout' : 'InactivityTimeout',
+						message: timeoutMessage,
+					},
+				};
+				return;
+			}
 
-				if (result.done) {
-					// Inner generator ended — fall through to terminal event check
-					break;
-				}
+			if (result.done) {
+				// Inner generator ended — fall through to terminal event check
+				break;
+			}
 
-				const event = result.value;
+			const event = result.value;
+			isFirstEvent = false;
 
 				// Track state
 				if (event.type === 'summary') sawSummary = true;

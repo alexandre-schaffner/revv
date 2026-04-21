@@ -1,5 +1,5 @@
 import type { WalkthroughBlock, RiskLevel, WalkthroughStreamEvent, WalkthroughIssue, WalkthroughPhase, WalkthroughRating, CloneStatus } from '@revv/shared';
-import { API_BASE_URL } from '@revv/shared';
+import { API_BASE_URL } from '$lib/api/base-url';
 import { authHeaders } from '$lib/utils/session-token';
 import { runWalkthroughSse } from '$lib/services/walkthrough-sse';
 import { api } from '$lib/api/client';
@@ -291,9 +291,9 @@ export function prepareEntry(prId: string): void {
 	const existing = entries.get(prId);
 	// Leave entries that already hold complete data alone.
 	if (existing && existing.summary !== null && existing.blocks.length > 0 && existing.doneReceived && !existing.streamError) return;
-	// Replace stub / errored / missing entries with a fresh loading one so
-	// the UI shows the skeleton during the debounce window.
-	entries.set(prId, freshEntry());
+	// Seed a waiting (not yet streaming) entry so the UI can show a ready
+	// state before the user-triggered stream actually begins.
+	entries.set(prId, { ...freshEntry(), isStreaming: false, phaseMessage: '', streamStartedAt: null });
 	entries = new Map(entries);
 }
 
@@ -335,9 +335,8 @@ export async function streamWalkthrough(prId: string): Promise<void> {
 	// (so this PR isn't already in controllers) and before controllers.set.
 	enforceStreamCap();
 
-	// Reuse a prepared-but-untouched entry if one is sitting in the Map —
-	// that way prepareEntry's `streamStartedAt` carries over and the elapsed
-	// timer doesn't reset to 0 the moment the fetch begins. Anything past a
+	// Reuse the prepared entry to avoid resetting exploration state;
+	// streamStartedAt is always stamped fresh below. Anything past a
 	// freshly-seeded state (has data, error, exploration activity, etc.) is
 	// discarded for a clean slate.
 	const reusable = !!existing
@@ -350,6 +349,7 @@ export async function streamWalkthrough(prId: string): Promise<void> {
 		&& existing.ratings.length === 0;
 	const entry = reusable && existing ? existing : freshEntry();
 	entry.isStreaming = true;
+	entry.streamStartedAt = Date.now();
 	entry.cloneInProgress = false;
 	entry.cloneRepoId = null;
 	entries.set(prId, entry);

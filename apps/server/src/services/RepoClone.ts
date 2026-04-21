@@ -1,11 +1,11 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { rm } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import type { CloneStatus, Repository } from "@revv/shared";
 import { eq, or } from "drizzle-orm";
 import { Context, Effect, Layer, type Scope } from "effect";
 import { GITHUB_HOST } from "../auth";
+import { serverEnv } from "../config";
 import { CLONE_TIMEOUT_MS } from "../constants";
 import { repositories } from "../db/schema/index";
 import { CloneError, CloneNotReadyError } from "../domain/errors";
@@ -16,7 +16,7 @@ import { WebSocketHub } from "./WebSocketHub";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const CLONE_BASE_DIR = join(homedir(), ".revv", "repos");
+const CLONE_BASE_DIR = serverEnv.cloneDir;
 
 // ── Service definition ────────────────────────────────────────────────────────
 

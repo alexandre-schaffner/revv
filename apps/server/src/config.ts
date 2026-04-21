@@ -1,4 +1,6 @@
 import { Config, Effect } from 'effect';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
 /**
  * Server configuration schema resolved from environment variables via Effect's
@@ -36,6 +38,9 @@ export const ServerConfig = Config.all({
 	// apps/server/src/ai/providers/cli-agent.ts for the resolution chain.
 	claudeBin: Config.string('REVV_CLAUDE_BIN').pipe(Config.withDefault('')),
 	opencodeBin: Config.string('REVV_OPENCODE_BIN').pipe(Config.withDefault('')),
+	cloneDir: Config.string('REVV_CLONE_DIR').pipe(
+		Config.withDefault(join(homedir(), '.revv', 'repos')),
+	),
 });
 
 export type ServerConfig = Config.Config.Success<typeof ServerConfig>;

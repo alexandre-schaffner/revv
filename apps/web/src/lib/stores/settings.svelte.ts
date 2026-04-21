@@ -1,5 +1,5 @@
 import type { AiAgent, UserSettings } from '@revv/shared';
-import { API_BASE_URL } from '@revv/shared';
+import { API_BASE_URL } from '$lib/api/base-url';
 import { api } from '$lib/api/client';
 import type { ModelOption } from '$lib/constants/models';
 import { authHeaders } from '$lib/utils/session-token';

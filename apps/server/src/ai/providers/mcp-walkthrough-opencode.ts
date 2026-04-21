@@ -5,7 +5,7 @@ import type {
 	WalkthroughTokenUsage,
 } from "@revv/shared";
 import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../../constants";
-import { debug } from "../../logger";
+import { debug, logError } from "../../logger";
 import type { PrFileMeta } from "../../services/GitHub";
 import { resolveCliBin } from "./cli-agent";
 import {
@@ -320,12 +320,6 @@ export function streamWalkthroughViaOpencodeMCP(
 				"model:",
 				model ?? "default",
 			);
-
-			push({
-				type: "phase",
-				data: { phase: "connecting", message: "Connecting to AI model..." },
-			});
-
 			const cliArgs = [
 				resolveCliBin("opencode"),
 				"run",
@@ -384,9 +378,9 @@ export function streamWalkthroughViaOpencodeMCP(
 				for await (const chunk of proc.stderr as unknown as AsyncIterable<Uint8Array>) {
 					const text = dec.decode(chunk, { stream: true });
 					lines.push(text);
-					if (text.trim()) {
-						debug("walkthrough-opencode-mcp", "stderr:", text.trim().slice(0, 300));
-					}
+				if (text.trim()) {
+					logError("walkthrough-opencode-mcp", "stderr:", text.trim().slice(0, 300));
+				}
 				}
 				return lines.join("");
 			})();
@@ -427,6 +421,7 @@ export function streamWalkthroughViaOpencodeMCP(
 			try {
 				const decoder = new TextDecoder();
 				let buffer = "";
+				let connectingEventEmitted = false;
 				let currentPhase:
 					| "connecting"
 					| "exploring"
@@ -437,7 +432,7 @@ export function streamWalkthroughViaOpencodeMCP(
 
 				for await (const chunk of proc.stdout as unknown as AsyncIterable<Uint8Array>) {
 					buffer += decoder.decode(chunk, { stream: true });
-					const lines = buffer.split("\n");
+						const lines = buffer.split("\n");
 					buffer = lines.pop() ?? "";
 
 					for (const line of lines) {
@@ -446,18 +441,27 @@ export function streamWalkthroughViaOpencodeMCP(
 
 						let frame: OpencodeFrame;
 						try {
-							frame = JSON.parse(trimmed) as OpencodeFrame;
-						} catch {
-							continue;
-						}
+					frame = JSON.parse(trimmed) as OpencodeFrame;
+				} catch {
+					continue;
+				}
 
-						// ── Session ID capture ─────────────────────────────────────
-						if (frame.type === "session") {
-							const sessionId = frame.part?.sessionId ?? frame.id;
-							if (sessionId && params.onSessionId) {
-								params.onSessionId(sessionId);
-							}
-						}
+				// Any frame from opencode proves the subprocess is alive — signal the stream guard
+				if (!connectingEventEmitted) {
+					connectingEventEmitted = true;
+					push({
+						type: "phase",
+						data: { phase: "connecting", message: "Connected to AI model..." },
+					});
+				}
+
+			// ── Session ID capture ─────────────────────────────────────
+				if (frame.type === "session") {
+					const sessionId = frame.part?.sessionId ?? frame.id;
+					if (sessionId && params.onSessionId) {
+						params.onSessionId(sessionId);
+					}
+				}
 
 						// ── Tool use ───────────────────────────────────────────────
 						if (frame.type === "tool_use" && frame.part?.tool) {
@@ -530,9 +534,9 @@ export function streamWalkthroughViaOpencodeMCP(
 						}
 					}
 				}
-			} catch (err) {
-				const message = err instanceof Error ? err.message : String(err);
-				debug("walkthrough-opencode-mcp", "stdout read error:", message);
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			logError("walkthrough-opencode-mcp", "stdout read error:", message);
 				// Swallow errors triggered by caller-initiated cancellation — the
 				// registry (or Scope finalizer) is already aware and will tear down
 				// the job; surfacing a spurious "AiGenerationError" would race the
@@ -553,31 +557,45 @@ export function streamWalkthroughViaOpencodeMCP(
 				}
 			}
 
-			await proc.exited;
-			await stderrPromise;
+		await proc.exited;
+		const stderrOutput = await stderrPromise;
 
-			if (killed && !cancelledByCaller) {
-				errorEmitted = true;
-				push({
-					type: "error",
-					data: {
-						code: "AiGenerationError",
-						message: "Walkthrough generation timed out after 10 minutes",
-					},
-				});
-			}
+		if (killed && !cancelledByCaller) {
+			errorEmitted = true;
+			push({
+				type: "error",
+				data: {
+					code: "AiGenerationError",
+					message: "Walkthrough generation timed out after 10 minutes",
+				},
+			});
+		} else if (!killed && !cancelledByCaller && !errorEmitted && proc.exitCode !== 0) {
+			// Process exited with error before producing meaningful output.
+			// Surface the stderr so the user sees the actual failure reason
+			// instead of waiting for the 120s inactivity timeout.
+			const trimmedStderr = stderrOutput.trim().slice(-500);
+			const exitMsg = trimmedStderr
+				? `opencode exited with code ${proc.exitCode}: ${trimmedStderr}`
+				: `opencode exited with code ${proc.exitCode} (no stderr output)`;
+			logError("walkthrough-opencode-mcp", "non-zero exit:", exitMsg);
+			errorEmitted = true;
+			push({
+				type: "error",
+				data: { code: "AiGenerationError", message: exitMsg },
+			});
+		}
 
-			debug(
-				"walkthrough-opencode-mcp",
-				"opencode exited. Blocks emitted:",
-				state.blockCount,
-			);
+		debug(
+			"walkthrough-opencode-mcp",
+			"opencode exited. Blocks emitted:",
+			state.blockCount,
+		);
 
-			return tokenUsage;
+		return tokenUsage;
 		},
 	).catch((err: unknown): WalkthroughTokenUsage => {
 		const message = err instanceof Error ? err.message : String(err);
-		debug("walkthrough-opencode-mcp", "queryTask error:", message);
+		logError("walkthrough-opencode-mcp", "queryTask error:", message);
 		errorEmitted = true;
 		push({ type: "error", data: { code: "AiGenerationError", message } });
 		return {
@@ -603,7 +621,7 @@ export function streamWalkthroughViaOpencodeMCP(
 			if (events.length > 0) {
 				const batch = events.splice(0);
 				for (const e of batch) {
-					yield e;
+						yield e;
 				}
 			} else if (queryDone) {
 				break;

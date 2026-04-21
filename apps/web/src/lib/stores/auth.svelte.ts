@@ -4,7 +4,7 @@ import * as settings from '$lib/stores/settings.svelte';
 import { openAddRepoDialog } from '$lib/stores/sidebar.svelte';
 import * as sync from '$lib/services/sync';
 import { goto } from '$app/navigation';
-import { API_BASE_URL } from '@revv/shared';
+import { API_BASE_URL } from '$lib/api/base-url';
 
 const storedToken =
 	typeof localStorage !== 'undefined' ? localStorage.getItem('rev_session_token') : null;

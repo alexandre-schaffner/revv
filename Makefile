@@ -21,17 +21,21 @@ install-deps: ## Install project dependencies only (skip tool checks)
 
 # ── Development ───────────────────────────────────────────────
 
+# Dev env: use a different port/db/clone-dir so dev doesn't clash with the
+# installed (production) Revv instance running in the background.
+DEV_ENV = PORT=45679 REVV_DB_PATH=./revv-dev.db REVV_CLONE_DIR=$$HOME/.revv/repos-dev VITE_API_PORT=45679 REV_DEBUG=1
+
 dev: ## Start all services in development mode
-	bun run dev
+	$(DEV_ENV) bun run dev
 
 dev-web: ## Start only the web frontend (port 5173)
-	bun run dev:web
+	VITE_API_PORT=45679 bun run dev:web
 
-dev-server: ## Start only the API server (port 45678)
-	bun run dev:server
+dev-server: ## Start only the API server (port 45679)
+	REV_DEBUG=1 PORT=45679 REVV_DB_PATH=./revv-dev.db REVV_CLONE_DIR=$$HOME/.revv/repos-dev bun run dev:server
 
 dev-desktop: ## Start the Tauri desktop app in dev mode
-	bun run dev:desktop
+	$(DEV_ENV) bun run dev:desktop
 
 # ── Build ─────────────────────────────────────────────────────
 
@@ -93,4 +97,5 @@ clean-all: clean ## Remove build artifacts AND node_modules
 
 reset-db: ## Delete the local database (will be recreated on next server start)
 	rm -f apps/server/revv.db apps/server/revv.db-shm apps/server/revv.db-wal
+	rm -f apps/server/revv-dev.db apps/server/revv-dev.db-shm apps/server/revv-dev.db-wal
 	@printf "Database deleted. It will be recreated on next server start.\n"

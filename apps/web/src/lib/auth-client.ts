@@ -1,5 +1,5 @@
 import { createAuthClient } from 'better-auth/svelte';
-import { API_BASE_URL } from '@revv/shared';
+import { API_BASE_URL } from '$lib/api/base-url';
 import { getToken, setToken } from '$lib/stores/auth.svelte';
 
 export const authClient = createAuthClient({

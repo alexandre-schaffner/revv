@@ -1,5 +1,5 @@
 import type { WsServerMessage, SyncChange } from '@revv/shared';
-import { API_BASE_URL } from '@revv/shared';
+import { WS_BASE_URL } from '$lib/api/base-url';
 import { toast } from 'svelte-sonner';
 import * as prs from './prs.svelte';
 import { getSelectedPrId, mergePullRequests } from './prs.svelte';
@@ -142,8 +142,7 @@ function handleMessage(msg: WsServerMessage): void {
 export function connect(token: string): void {
 	if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
 
-	const wsUrl = API_BASE_URL.replace(/^http/, 'ws');
-	ws = new WebSocket(`${wsUrl}/ws?token=${encodeURIComponent(token)}`);
+	ws = new WebSocket(`${WS_BASE_URL}/ws?token=${encodeURIComponent(token)}`);
 
 	ws.addEventListener('open', () => {
 		connected = true;

@@ -246,11 +246,60 @@ export function buildWalkthroughPrompt(params: {
 				lines.push(`Still need to rate: ${remaining.join(', ')}`);
 			}
 		}
-		lines.push(
-			``,
-			`Continue from block ${N}. Call add_markdown_section / add_code_block / add_diff_block to add NEW blocks only, starting at order index ${N}.`,
-			`Do NOT call set_walkthrough_summary (already done).`,
+		// Determine what's missing to provide targeted instructions
+		const hasSentiment = continuation.existingBlocks.some(
+			(b) =>
+				b.type === 'markdown' &&
+				b.content.trimStart().startsWith('## Overall Sentiment'),
 		);
+		const missingAxes = (
+			[
+				'correctness',
+				'scope',
+				'tests',
+				'clarity',
+				'safety',
+				'consistency',
+				'api_changes',
+				'performance',
+				'description',
+			] as const
+		).filter((axis) => !continuation.existingRatedAxes.includes(axis));
+
+		lines.push('');
+
+		if (!hasSentiment && missingAxes.length > 0) {
+			// Model stopped before both sentiment and ratings
+			lines.push(
+				`**CRITICAL — you were interrupted before finishing.** Do these steps IN ORDER:`,
+				`1. Call add_markdown_section with a \`## Overall Sentiment\` heading (2–4 sentences, your honest verdict on the PR).`,
+				`2. Call rate_axis for each of: ${missingAxes.join(', ')} — back to back, no prose between them.`,
+				`3. Call complete_walkthrough.`,
+				`Do NOT add any other blocks or revisit earlier content. Go straight to finishing.`,
+			);
+		} else if (missingAxes.length > 0) {
+			// Sentiment exists but ratings are incomplete
+			lines.push(
+				`**CRITICAL — you were interrupted before finishing the scorecard.** Do these steps IN ORDER:`,
+				`1. Call rate_axis for each of: ${missingAxes.join(', ')} — back to back, no prose between them.`,
+				`2. Call complete_walkthrough.`,
+				`Do NOT add any other blocks. Go straight to rating the remaining axes.`,
+			);
+		} else if (!hasSentiment) {
+			// Ratings done but sentiment block missing (unlikely but handle it)
+			lines.push(
+				`**CRITICAL — you were interrupted before the Overall Sentiment section.** Do these steps IN ORDER:`,
+				`1. Call add_markdown_section with a \`## Overall Sentiment\` heading (2–4 sentences).`,
+				`2. Call complete_walkthrough.`,
+			);
+		} else {
+			// Everything seems present, just call complete
+			lines.push(
+				`Continue from block ${N}. Call add_markdown_section / add_code_block / add_diff_block to add NEW blocks only, starting at order index ${N}.`,
+			);
+		}
+
+		lines.push(`Do NOT call set_walkthrough_summary (already done).`);
 	}
 	return lines.join('\n');
 }

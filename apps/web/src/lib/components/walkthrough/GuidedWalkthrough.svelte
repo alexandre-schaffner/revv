@@ -3,7 +3,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Separator } from '$lib/components/ui/separator';
-	import { RefreshCw, ArrowDown, Search, FileText, Brain, CheckCircle, AlertTriangle, Gauge, Loader2 } from '@lucide/svelte';
+	import { RefreshCw, ArrowDown, Search, FileText, Brain, CheckCircle, AlertTriangle, Gauge, Loader2, Sparkles } from '@lucide/svelte';
 	import { getDiffThemeType } from '$lib/stores/theme.svelte';
 	import { initHighlighter } from '$lib/utils/code-highlight.svelte';
 	import { renderMarkdown } from '$lib/utils/markdown';
@@ -91,6 +91,8 @@
 	let elapsedTimer: ReturnType<typeof setInterval> | null = null;
 	let walkthroughDebounce: ReturnType<typeof setTimeout> | undefined;
 	let destroyed = false;
+	let showGenerateButton = $state(false);
+	let hydrating = $state(true);
 
 	$effect(() => {
 		if (isStreaming && streamStartedAt) {
@@ -156,15 +158,6 @@
 		return PHASE_ORDER.indexOf(normalizePhase(p) as typeof PHASE_ORDER[number]);
 	}
 
-	// ── Stepper visibility ──────────────────────────────────────────────
-	// Always visible. The stepper gives the user a persistent map of
-	// walkthrough phases — useful during streaming (see what's happening now),
-	// after completion (reminder of what ran), and even on fresh PRs (preview
-	// of what will happen when they kick off a walkthrough). Only suppressed
-	// on fatal streamError (see the template guard) since then the phases are
-	// meaningless.
-	const stepperVisible = $derived(true);
-
 	// "All phases done" needs actual evidence of completion. A fresh PR with
 	// no content shouldn't flash all checkmarks just because !isStreaming — so
 	// we require that we actually have SOMETHING to show for it.
@@ -172,6 +165,13 @@
 		summary !== null || blocks.length > 0 || ratings.length > 0
 	);
 	const allPhasesDone = $derived(!isStreaming && hasWalkthroughContent);
+
+	// ── Stepper visibility ──────────────────────────────────────────────
+	// Hidden only in the initial "not yet generated" state (when the
+	// "Generate walkthrough" button is showing and nothing has started).
+	// Visible once streaming begins, after content exists, or whenever
+	// the generate button is not shown.
+	const stepperVisible = $derived(!showGenerateButton || isStreaming || hasWalkthroughContent);
 
 	// ── Unique files explored ───────────────────────────────────────────
 	const filesExplored = $derived(() => {
@@ -394,10 +394,9 @@
 		// for uncached PRs so quickly arrowing through the PR list doesn't
 		// trigger spurious AI generations.
 		hydrateFromCache(prId).then((hit) => {
+			hydrating = false;
 			if (!hit && !destroyed) {
-				walkthroughDebounce = setTimeout(() => {
-					streamWalkthrough(prId);
-				}, 2000);
+				showGenerateButton = true;
 			}
 		});
 	});
@@ -523,8 +522,8 @@
 			{#if streamError.includes('not configured') || streamError.includes('API key')}
 				<p class="error-hint">Add your Anthropic API key in Settings to enable walkthroughs.</p>
 			{/if}
-		<Button variant="outline" size="sm" onclick={handleRegenerate}>
-			<RefreshCw size={14} />
+		<Button variant="outline" size="lg" style="cursor: pointer;" onclick={handleRegenerate}>
+			<RefreshCw size={16} />
 			Try again
 		</Button>
 	</div>
@@ -544,10 +543,10 @@
 			{#if !cloneRepoId}
 				<AlertTriangle size={20} />
 				<p class="loading-text">Couldn't identify the repository that was cloning.</p>
-				<Button variant="outline" size="sm" onclick={handleRegenerate}>
-					<RefreshCw size={14} />
-					Try again
-				</Button>
+			<Button variant="outline" size="lg" style="cursor: pointer;" onclick={handleRegenerate}>
+				<RefreshCw size={16} />
+				Try again
+			</Button>
 			{:else}
 				<div class="clone-progress-container">
 					<p class="loading-text">Cloning repository…</p>
@@ -556,17 +555,26 @@
 					{#if repoError}
 						<pre class="error-text">{repoError}</pre>
 					{/if}
-					<Button
-						variant="outline"
-						size="sm"
-						disabled={retryingClone}
-						onclick={handleRetryClone}
-					>
-						<RefreshCw size={14} />
-						Retry clone
-					</Button>
+                <Button
+                    variant="outline"
+                    size="lg"
+                    style="cursor: pointer;"
+                    disabled={retryingClone}
+                    onclick={handleRetryClone}
+                >
+                    <RefreshCw size={16} />
+                    Retry clone
+                </Button>
 				</div>
 			{/if}
+		</div>
+	{:else if showGenerateButton && !isStreaming && !summary && blocks.length === 0}
+		<div class="walkthrough-empty">
+			<p class="loading-text">No walkthrough generated yet for this PR.</p>
+			<Button variant="outline" size="lg" style="cursor: pointer;" onclick={() => { showGenerateButton = false; streamWalkthrough(prId); }}>
+				<Sparkles size={14} />
+				Generate walkthrough
+			</Button>
 		</div>
 	{:else if blocks.length === 0 && isStreaming}
 		<!-- Loading state: skeleton + exploration feed.
@@ -634,14 +642,14 @@
 				</div>
 			{/if}
 		</div>
-	{:else if !summary && !isStreaming && !streamError}
+	{:else if !summary && !isStreaming && !streamError && !hydrating}
 		<!-- Stream ended with no data -->
 		<div class="walkthrough-empty">
 			<p class="loading-text">No walkthrough data received. The AI may have timed out.</p>
-		<Button variant="outline" size="sm" onclick={handleRegenerate}>
-			<RefreshCw size={14} />
-			Try again
-		</Button>
+	<Button variant="outline" size="lg" style="cursor: pointer;" onclick={handleRegenerate}>
+		<RefreshCw size={16} />
+		Try again
+	</Button>
 	</div>
 	{:else if summary}
 		<!-- Landing page content -->
@@ -740,7 +748,7 @@
 
 			<!-- Blocks -->
 			<div class="blocks">
-			{#each blocksWithDelay as { block, delay, renderedAnnotation } (block.id)}
+			{#each blocksWithDelay as { block, delay, renderedAnnotation }, blockIndex (block.id)}
 				{@const isSentiment =
 					block.type === 'markdown' &&
 					block.content.trimStart().startsWith('## Overall Sentiment')}
@@ -764,25 +772,23 @@
 				     flips to a vertical flex container (escaping display:contents) so
 				     the scorecard stacks BELOW the sentiment card and the whole pair
 				     spans the full content+rail width (grid-column: 1 / -1). -->
-				<div class="block-group" class:block-group--sentiment-stack={hasScorecard}>
-					<div
-						id="step-{block.id}"
-						class="block-wrapper"
+			<div class="block-group" class:block-group--sentiment-stack={hasScorecard}>
+				{#if !isSentiment}
+					<span
+						class="block-step-number"
+						class:block-step-number--info={blockSeverity === 'info'}
+						class:block-step-number--warning={blockSeverity === 'warning'}
+						class:block-step-number--critical={blockSeverity === 'critical'}
+					>#{blockIndex + 1}</span>
+				{/if}
+				<div
+					id="step-{block.id}"
+					class="block-wrapper"
 						class:block-wrapper--no-anim={delay === -1}
 						style:--enter-delay="{delay}ms"
 					>
-						{#if blockSeverity}
-							<!-- Severity dot positioned just outside the block's left edge.
-							     The block-wrapper is `position: relative` so the absolute dot
-							     anchors here even though it visually overflows into the grid
-							     column's left margin. Color picks up the same severity tokens
-							     used by IssueCard so "the red dot over there" and "the critical
-							     issue up here" are visually consistent. -->
-							<span
-								class="step-issue-dot step-issue-dot--{blockSeverity}"
-								aria-label="Flagged with {blockSeverity} issue"
-							></span>
-						{/if}
+
+
 						{#if block.type === 'markdown'}
 							{#if isSentiment}
 								<div class="sentiment-card">
@@ -1478,6 +1484,33 @@
 		min-width: 0;
 	}
 
+	.block-step-number {
+		grid-column: 2;
+		display: flex;
+		align-items: flex-start;
+		justify-content: flex-end;
+		padding-top: 10px;
+		padding-right: 12px;
+		font-size: 11px;
+		font-family: var(--font-mono, monospace);
+		color: var(--color-text-muted);
+		opacity: 0.45;
+		user-select: none;
+		white-space: nowrap;
+	}
+	.block-step-number--info {
+		color: var(--color-accent);
+		opacity: 0.75;
+	}
+	.block-step-number--warning {
+		color: var(--color-warning);
+		opacity: 0.75;
+	}
+	.block-step-number--critical {
+		color: var(--color-danger);
+		opacity: 0.75;
+	}
+
 	.block-wrapper {
 		/* position: relative so the severity dot (see .step-issue-dot) can sit
 		   just outside the block's left edge via `left: -<n>px`. */
@@ -1491,36 +1524,6 @@
 		outline: 2px solid transparent;
 		outline-offset: 2px;
 		transition: outline-color 200ms ease;
-	}
-
-	/* ── Severity dot ────────────────────────────────────────────────────
-	   Small colored dot to the left of a step whose block is referenced by
-	   one or more issues. Color follows issue severity (same tokens as
-	   IssueCard). Sits in the left gutter of the grid column — at the
-	   1700px minimum viewport, grid col 2 is ~20px wide so the dot fits
-	   cleanly; at wider viewports it gains even more breathing room. A
-	   translucent halo makes it visible against both light and dark block
-	   backgrounds without fighting the block card's own border. */
-	.step-issue-dot {
-		position: absolute;
-		top: 14px;
-		left: -18px;
-		width: 8px;
-		height: 8px;
-		border-radius: 50%;
-		background: var(--severity-color, var(--color-text-muted));
-		box-shadow: 0 0 0 3px color-mix(in srgb, var(--severity-color, var(--color-text-muted)) 18%, transparent);
-		pointer-events: none;
-	}
-
-	.step-issue-dot--info {
-		--severity-color: var(--color-accent);
-	}
-	.step-issue-dot--warning {
-		--severity-color: var(--color-warning);
-	}
-	.step-issue-dot--critical {
-		--severity-color: var(--color-danger);
 	}
 
 	@keyframes block-pulse {

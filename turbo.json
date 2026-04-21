@@ -3,7 +3,8 @@
   "tasks": {
     "dev": {
       "persistent": true,
-      "cache": false
+      "cache": false,
+      "passThroughEnv": ["PORT", "REVV_DB_PATH", "REVV_CLONE_DIR", "VITE_API_PORT"]
     },
     "build": {
       "dependsOn": ["^build"],

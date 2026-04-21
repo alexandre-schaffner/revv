@@ -62,6 +62,13 @@ export const MAX_CONCURRENT_JOBS = 5;
  */
 export const WALKTHROUGH_MAX_RESUME_ATTEMPTS = 3;
 
+/**
+ * Maximum number of automatic in-flight continuations when the AI generator
+ * exits without completing all 9 scorecard ratings or the Overall Sentiment
+ * block. Capped to prevent infinite loops if the model persistently fails.
+ */
+export const MAX_AUTO_CONTINUATIONS = 2;
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 type Subscriber = (event: WalkthroughStreamEvent) => void;
@@ -352,11 +359,20 @@ export const WalkthroughJobsLive = Layer.effect(
 							url: ctx.pr.url,
 						},
 						files: ctx.files as never,
-						worktreePath,
-						continuation,
-						onSessionId: (id) => {
-							capturedOpencodeSessionId = id;
-						},
+					worktreePath,
+					continuation,
+					onSessionId: (id) => {
+						capturedOpencodeSessionId = id;
+						if (localWalkthroughId !== null) {
+							// Fire-and-forget: persist the new session ID immediately so a
+							// crash between iterations doesn't lose it.
+							Effect.runPromise(
+								provideDb(
+									walkthroughService.setOpencodeSessionId(localWalkthroughId, id),
+								).pipe(Effect.catchAll(() => Effect.void)),
+							).catch(() => {/* ignore */});
+						}
+					},
 						abortController: job.abortController,
 					});
 				} else {
@@ -384,6 +400,16 @@ export const WalkthroughJobsLive = Layer.effect(
 				// Issue orders on resume: new issues start after the existing ones.
 				const issueOrderOffset = partial?.issues.length ?? 0;
 
+				// ── Auto-continuation tracking ──────────────────────────────
+				const ratedAxesSeen = new Set<string>(
+					partial?.ratings.map((r) => r.axis) ?? [],
+				);
+				let sentimentBlockSeen = partial?.blocks.some(
+					(b) =>
+						b.type === 'markdown' &&
+						b.content.trimStart().startsWith('## Overall Sentiment'),
+				) ?? false;
+
 				// Compose a ready-to-run Effect that persists a single event +
 				// fans it out. Uses the captured service closure so nothing
 				// needs to be re-yielded per event.
@@ -392,6 +418,17 @@ export const WalkthroughJobsLive = Layer.effect(
 				): Effect.Effect<void> =>
 					Effect.gen(function* () {
 						debug("walkthrough-jobs", "event:", event.type);
+
+					// Track completion state for auto-continuation
+					if (event.type === 'rating') {
+						ratedAxesSeen.add(event.data.axis);
+					} else if (
+						event.type === 'block' &&
+						event.data.type === 'markdown' &&
+						event.data.content.trimStart().startsWith('## Overall Sentiment')
+					) {
+						sentimentBlockSeen = true;
+					}
 
 						if (event.type === "summary") {
 							if (localWalkthroughId === null) {
@@ -559,30 +596,186 @@ export const WalkthroughJobsLive = Layer.effect(
 					walkthroughId: job.walkthroughId,
 					prId: ctx.pr.id,
 				};
+				// ── Generator consumption with auto-continuation ───────────
+				// If the AI exits without completing all 9 ratings or the
+				// Overall Sentiment block, reload the partial from DB and
+				// re-launch the generator as a continuation.
+			let autoContinuations = 0;
+			let accumulatedTokenUsage = {
+				inputTokens: 0,
+				outputTokens: 0,
+				cacheReadInputTokens: 0,
+				cacheCreationInputTokens: 0,
+			};
+			let currentGenerator = generator;
+
 				yield* Effect.tryPromise({
 					try: () =>
 						withLogContext(logCtx, async () => {
-							try {
-								for await (const event of generator) {
-									await Effect.runPromise(persistAndFanout(event));
+							while (true) {
+								try {
+									for await (const event of currentGenerator) {
+										// Intercept synthetic `done` when ratings are incomplete:
+										// the stream-guard or provider fallback emits `done` even
+										// when the model stopped early. We suppress it and break
+										// out to the continuation check instead.
+									if (event.type === 'done' && ratedAxesSeen.size < 9) {
+										// Accumulate token usage before suppressing
+										accumulatedTokenUsage = {
+											inputTokens: accumulatedTokenUsage.inputTokens + event.data.tokenUsage.inputTokens,
+											outputTokens: accumulatedTokenUsage.outputTokens + event.data.tokenUsage.outputTokens,
+											cacheReadInputTokens: accumulatedTokenUsage.cacheReadInputTokens + event.data.tokenUsage.cacheReadInputTokens,
+											cacheCreationInputTokens: accumulatedTokenUsage.cacheCreationInputTokens + event.data.tokenUsage.cacheCreationInputTokens,
+										};
+										debug(
+												"walkthrough-jobs",
+												"generator emitted done with only",
+												ratedAxesSeen.size,
+												"of 9 ratings — checking for auto-continuation",
+											);
+											break;
+										}
+										await Effect.runPromise(persistAndFanout(event));
+										// Terminal events end the loop
+										if (event.type === 'done' || event.type === 'error') {
+											return;
+										}
+									}
+								} finally {
+									// Best-effort: persist the opencode session id once
+									// the generator terminates, so future resumes of
+									// this walkthrough can continue the same session.
+									if (
+										capturedOpencodeSessionId !== undefined &&
+										localWalkthroughId !== null
+									) {
+										await Effect.runPromise(
+											provideDb(
+												walkthroughService.setOpencodeSessionId(
+													localWalkthroughId,
+													capturedOpencodeSessionId,
+												),
+											).pipe(Effect.catchAll(() => Effect.void)),
+										);
+									}
 								}
-							} finally {
-								// Best-effort: persist the opencode session id once
-								// the generator terminates, so future resumes of
-								// this walkthrough can continue the same session.
+
+								// ── Auto-continuation check ────────────────────────
 								if (
-									capturedOpencodeSessionId !== undefined &&
-									localWalkthroughId !== null
+									localWalkthroughId === null ||
+									autoContinuations >= MAX_AUTO_CONTINUATIONS ||
+									job.abortController.signal.aborted
 								) {
-									await Effect.runPromise(
-										provideDb(
-											walkthroughService.setOpencodeSessionId(
-												localWalkthroughId,
-												capturedOpencodeSessionId,
-											),
-										).pipe(Effect.catchAll(() => Effect.void)),
+									// Nothing to continue or exhausted retries — accept as-is.
+									// Synthesize a done event so subscribers see a terminal.
+									debug(
+										"walkthrough-jobs",
+										"skipping auto-continuation:",
+										localWalkthroughId === null
+											? "no walkthrough id"
+											: autoContinuations >= MAX_AUTO_CONTINUATIONS
+												? "max continuations reached"
+												: "aborted",
 									);
+									await Effect.runPromise(
+										persistAndFanout({
+											type: 'done',
+											data: {
+												walkthroughId: localWalkthroughId ?? '',
+												tokenUsage: accumulatedTokenUsage,
+											},
+										}),
+									);
+									return;
 								}
+
+								// Load the partial to build continuation context
+								const partialForContinuation = await Effect.runPromise(
+									provideDb(
+										walkthroughService.getPartial(ctx.pr.id, ctx.prHeadSha),
+									).pipe(Effect.catchAll(() => Effect.succeed(null))),
+								);
+
+								if (!partialForContinuation) {
+									debug(
+										"walkthrough-jobs",
+										"auto-continuation: no partial found — accepting incomplete",
+									);
+									await Effect.runPromise(
+										persistAndFanout({
+											type: 'done',
+											data: {
+												walkthroughId: localWalkthroughId,
+												tokenUsage: accumulatedTokenUsage,
+											},
+										}),
+									);
+									return;
+								}
+
+								autoContinuations++;
+								debug(
+									"walkthrough-jobs",
+									`auto-continuation ${autoContinuations}/${MAX_AUTO_CONTINUATIONS}:`,
+									`${ratedAxesSeen.size}/9 ratings,`,
+									`sentiment=${sentimentBlockSeen}`,
+								);
+
+								// Emit phase event so UI shows feedback
+								fanOut(job, {
+									type: 'phase',
+									data: {
+										phase: 'rating',
+										message: `Finishing scorecard (${ratedAxesSeen.size}/9 axes rated)...`,
+									},
+								});
+
+								// Build continuation context for the next generator
+								const continuationCtx: ContinuationContext = {
+									walkthroughId: partialForContinuation.id,
+									existingBlocks: partialForContinuation.blocks,
+									existingIssueCount: partialForContinuation.issues.length,
+									existingRatedAxes: partialForContinuation.ratings.map(
+										(r) => r.axis,
+									),
+									...(partialForContinuation.opencodeSessionId
+										? {
+												opencodeSessionId:
+													partialForContinuation.opencodeSessionId,
+											}
+										: {}),
+								};
+
+								const continuationGenerator = await Effect.runPromise(
+									ai.streamWalkthrough({
+										pr: {
+											title: ctx.pr.title,
+											body: ctx.pr.body,
+											sourceBranch: ctx.pr.sourceBranch,
+											targetBranch: ctx.pr.targetBranch,
+											url: ctx.pr.url,
+										},
+										files: ctx.files as never,
+										worktreePath,
+										continuation: continuationCtx,
+									onSessionId: (id) => {
+										capturedOpencodeSessionId = id;
+										if (localWalkthroughId !== null) {
+											// Fire-and-forget: persist the new session ID immediately so a
+											// crash between iterations doesn't lose it.
+											Effect.runPromise(
+												provideDb(
+													walkthroughService.setOpencodeSessionId(localWalkthroughId, id),
+												).pipe(Effect.catchAll(() => Effect.void)),
+											).catch(() => {/* ignore */});
+										}
+									},
+										abortController: job.abortController,
+									}),
+								);
+
+								resumeFromBlockCount = partialForContinuation.blocks.length;
+							currentGenerator = continuationGenerator;
 							}
 						}),
 					catch: (err) => new AiGenerationError({ cause: err }),
