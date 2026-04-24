@@ -337,38 +337,35 @@
 		background: var(--color-bg-primary);
 	}
 
-	/* Both sections and footer use the SAME asymmetric 6-col grid as
-	   `.walkthrough-content` and `.page-title-section--narrow`, so the
-	   Request Changes tab aligns horizontally with the content column
-	   (col 3, 820 wide) above. No annotation rail here — Request Changes
-	   has no per-block commentary — but we still use the full 6-col grid
-	   so the content column lands at the same viewport position as in
-	   the walkthrough tab. A plain `max-width: 900; margin-inline: auto`
-	   would center in the viewport, but col 3 of the asymmetric grid is
-	   shifted ~210px right of viewport center, so viewport-centering
-	   would misalign with the title above.
+	/* Both sections and footer use the SAME viewport-anchored 6-col grid as
+	   `.walkthrough-content` (see GuidedWalkthrough.svelte for the col_1
+	   derivation — it keeps the content column stable under sidebar toggle/
+	   resize and aligns with the `.page-title-section--narrow` header above).
+	   Column layout must stay byte-identical to the walkthrough grids so the
+	   title, the Request Changes panels, and the walkthrough content all
+	   land in the same horizontal band.
 
-	   Col 3 is a FIXED 820px (not `minmax(0, 820px)`) because every direct
-	   child in col 3 — IssuesPanel, CommentsPanel, WalkthroughRatingsPanel —
-	   sets `container-type: inline-size` for its own container queries.
-	   Inline-size containment means the element's intrinsic size isn't
-	   derived from its descendants, so when the grid algorithm asks those
-	   panels for their max-content to size a `minmax(0, 820px)` track,
-	   they all report ~0 and the track collapses — leaving the panels
-	   squished to min-content inside a ~0-wide column while the two 1fr
-	   tracks absorb the leftover space. Fixing col 3 at 820px sidesteps
-	   the content-sized track entirely. The narrow-viewport fallback
-	   (@media max-width: 1700px) collapses the whole grid anyway, so
-	   we never overflow at small widths. */
+	   One deliberate deviation: col 3 is a FIXED 820px (not
+	   `minmax(0, 820px)`) because every direct child in col 3 — IssuesPanel,
+	   CommentsPanel, WalkthroughRatingsPanel — sets `container-type:
+	   inline-size` for its own container queries. Inline-size containment
+	   means the element's intrinsic size isn't derived from its descendants,
+	   so when the grid algorithm asks those panels for their max-content to
+	   size a `minmax(0, 820px)` track, they all report ~0 and the track
+	   collapses — leaving the panels squished to min-content inside a 0-wide
+	   column while the two flex tracks absorb the leftover space. Fixing
+	   col 3 at 820px sidesteps the content-sized track entirely. The
+	   narrow-viewport fallback below collapses the whole grid anyway, so we
+	   never overflow at small widths. */
 	.rc-sections {
 		display: grid;
 		grid-template-columns:
-			420px
-			minmax(0, 1fr)
+			max(24px, min(calc(100% - 50vw - 458px), calc(100% - 1312px)))
+			48px
 			820px
 			40px
 			380px
-			minmax(0, 1fr);
+			minmax(24px, 1fr);
 		padding: 16px 0;
 		row-gap: 20px;
 	}
@@ -378,21 +375,22 @@
 		grid-column: 3;
 	}
 
-	/* Footer — same grid. The border-top spans only col 3 (same width as
-	   the content above), which reads as a natural continuation of the
-	   centered column rather than a full-width divider slicing the page.
-	   Col 3 is a fixed 820px here too, matching `.rc-sections` so the
-	   footer stays column-aligned regardless of how its contents size. */
+	/* Footer — same grid as `.rc-sections` (must stay in lockstep). The
+	   border-top spans only col 3 (same width as the content above), which
+	   reads as a natural continuation of the centred column rather than a
+	   full-width divider slicing the page. Col 3 is a fixed 820px here too,
+	   matching `.rc-sections` so the footer stays column-aligned regardless
+	   of how its contents size. */
 	.rc-footer {
 		flex-shrink: 0;
 		display: grid;
 		grid-template-columns:
-			420px
-			minmax(0, 1fr)
+			max(24px, min(calc(100% - 50vw - 458px), calc(100% - 1312px)))
+			48px
 			820px
 			40px
 			380px
-			minmax(0, 1fr);
+			minmax(24px, 1fr);
 		padding: 16px 0 20px;
 		row-gap: 8px;
 	}
@@ -413,10 +411,14 @@
 		height: 0;
 	}
 
-	/* Narrow-viewport fallback — matches the GuidedWalkthrough breakpoint
-	   so all three containers (walkthrough, title, request-changes) collapse
-	   at the same viewport width. */
-	@media (max-width: 1700px) {
+	/* Narrow-viewport fallback — matches the GuidedWalkthrough + page-title
+	   breakpoint so all three containers collapse at the same main-area
+	   width. `@container` (not `@media`) is load-bearing: we're gating on
+	   `.review-content`'s inline-size, which shrinks when the sidebar
+	   expands. An `@media` rule would keep the grid active at wide viewports
+	   even when the main-area has dropped below the 1336 geometric minimum
+	   (wide viewport + wide sidebar), causing overflow. */
+	@container (max-width: 1335px) {
 		.rc-sections,
 		.rc-footer {
 			display: block;

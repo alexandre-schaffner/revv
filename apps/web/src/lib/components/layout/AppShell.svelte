@@ -75,12 +75,6 @@
 		}
 	});
 
-	const tabsStyle = $derived(
-		sidebarCollapsed
-			? ''
-			: `--sidebar-offset: ${sidebarWidth / 2}px`
-	);
-
 	// Inline style for the grid — drives the dynamic sidebar column width
 	const gridStyle = $derived(
 		sidebarCollapsed
@@ -152,7 +146,7 @@
 	<header class="topbar-area" data-tauri-drag-region>
 		<TopBar {rightPanelOpen} onTogglePanel={toggleRightPanel} />
 		{#if pr && !isSettingsRoute}
-			<div class="tabs-float" style={tabsStyle}>
+			<div class="tabs-float">
 				<FloatingTabs
 					{activeTab}
 					onTabChange={setActiveTab}
@@ -201,10 +195,6 @@
 
 	/* Suppress the column transition while dragging so resize feels instant */
 	.app-shell.is-resizing {
-		transition: none;
-	}
-
-	.app-shell.is-resizing .tabs-float {
 		transition: none;
 	}
 
@@ -282,14 +272,20 @@
 	}
 
 	.tabs-float {
+		/* Viewport-centred. The topbar spans the full viewport (grid-area
+		   'topbar topbar' with optional rightpanel), so `left: 50%` resolves
+		   to 50vw. We deliberately do NOT offset by the sidebar width — the
+		   tabs are anchored to the viewport, not the main-area, so toggling
+		   or dragging the sidebar doesn't shift them horizontally. This
+		   matches the walkthrough content column's viewport-anchored centre
+		   (see GuidedWalkthrough.svelte, `.walkthrough-content`). */
 		position: absolute;
 		top: 100%;
 		left: 50%;
-		transform: translateX(calc(-50% + var(--sidebar-offset, 0px)));
+		transform: translateX(-50%);
 		z-index: 20;
 		pointer-events: none;
 		padding-top: 12px;
-		transition: transform 100ms var(--ease-out-expo);
 	}
 
 	.tabs-float :global(*) {

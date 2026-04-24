@@ -206,6 +206,7 @@
 
 <svelte:window onkeydown={(e) => e.key === "Escape" && goBack()} />
 
+<div class="h-full overflow-y-auto">
 <div class="mx-auto max-w-2xl space-y-8 px-6 py-8">
     <div class="flex items-center gap-3">
         <button
@@ -703,4 +704,5 @@
             </div>
         {/if}
     </section>
+</div>
 </div>

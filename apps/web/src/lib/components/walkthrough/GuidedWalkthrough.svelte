@@ -3,7 +3,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Separator } from '$lib/components/ui/separator';
-	import { RefreshCw, ArrowDown, Search, FileText, Brain, CheckCircle, AlertTriangle, AlertCircle, Circle, Gauge, Loader2, Sparkles } from '@lucide/svelte';
+	import { RefreshCw, ArrowDown, FileText, CheckCircle, AlertTriangle, AlertCircle, Circle, Loader2, Sparkles } from '@lucide/svelte';
 	import { getDiffThemeType } from '$lib/stores/theme.svelte';
 	import { initHighlighter } from '$lib/utils/code-highlight.svelte';
 	import { renderMarkdown } from '$lib/utils/markdown';
@@ -61,10 +61,9 @@
 		prId: string;
 		scrollRoot?: HTMLElement | undefined;
 		isActive?: boolean;
-		sidebarOffset?: number;
 	}
 
-	let { prId, scrollRoot, isActive = true, sidebarOffset = 0 }: Props = $props();
+	let { prId, scrollRoot, isActive = true }: Props = $props();
 
 	const blocks = $derived(getBlocks());
 	const summary = $derived(getSummary());
@@ -135,47 +134,20 @@
 		return `${m}m ${s.toString().padStart(2, '0')}s`;
 	}
 
-	// ── Phase steps ─────────────────────────────────────────────────────
-	// `rating` sits between `writing` and `finishing` — the model writes the
-	// narrative, then runs a batched scorecard pass, then wraps up. Without
-	// its own phase, 9 back-to-back rate_axis calls look identical to a stall
-	// on the "Writing" step.
-	const PHASE_ORDER = ['exploring', 'writing', 'rating'] as const;
-
-	const phaseLabels: Record<string, string> = {
-		exploring: 'Explore',
-		writing: 'Analyze',
-		rating: 'Score',
-	};
-
-	// Full-sentence status shown beneath the stepper row during streaming.
-	// These override the backend phaseMessage in the stepper specifically so we
-	// can craft user-facing language (e.g. "Rating the PR…") independently of
-	// the terse backend strings ("Scoring the PR across 9 axes...").
-	const phaseStatusLabels: Record<string, string> = {
-		exploring: 'Exploring the code…',
-		writing: 'Analyzing changes…',
-		rating: 'Rating the PR…',
-	};
-
 	// analyzing happens in the same agent turn as the last exploration step;
-	// map it to exploring so the stepper doesn't show a phantom 4th step.
+	// map it to exploring so the skeleton phase check works correctly.
 	function normalizePhase(p: string): string {
 		if (p === 'connecting' || p === 'analyzing') return 'exploring';
 		if (p === 'finishing') return 'writing';
 		return p;
 	}
 
-	function phaseIndex(p: string): number {
-		return PHASE_ORDER.indexOf(normalizePhase(p) as typeof PHASE_ORDER[number]);
-	}
-
 	// ── Pipeline phase indicator (A→B→C→D) ──────────────────────────────
-	// Distinct from the UI lifecycle PHASE_ORDER above. The pipeline phase is
-	// the agent-side content pointer: what has been *persisted*, not what the
-	// model is currently doing. Drives a 4-dot progress indicator rendered in
-	// the walkthrough header while the stream is live — on completion we hide
-	// it (all 4 dots filled carries no info at rest).
+	// The pipeline phase is the agent-side content pointer: what has been
+	// *persisted*, not what the model is currently doing. Drives a 4-step
+	// progress indicator rendered in the walkthrough header while the stream
+	// is live — on completion we hide it (all 4 steps filled carries no info
+	// at rest).
 	const PIPELINE_STEPS = [
 		{ key: 'A', label: 'Overview' },
 		{ key: 'B', label: 'Diff analysis' },
@@ -554,36 +526,10 @@
 				class:walkthrough-stepper-header--no-anim={stepperAnimated}
 				onanimationend={(e) => lockContainerAnimation('stepper', e)}
 			>
-				<div class="phase-stepper">
-					{#each PHASE_ORDER as step, i (step)}
-						{@const currentIdx = phaseIndex(phase)}
-						{@const isActive = i === currentIdx && !allPhasesDone}
-						{@const isDone = allPhasesDone || i < currentIdx}
-						<div class="phase-step" class:phase-step--active={isActive} class:phase-step--done={isDone}>
-							<div class="phase-step-icon">
-							{#if isDone}
-								<CheckCircle size={14} />
-							{:else if step === 'exploring'}
-								<Search size={14} />
-							{:else if step === 'writing'}
-									<Brain size={14} />
-								{:else if step === 'rating'}
-									<Gauge size={14} />
-								{/if}
-							</div>
-							<span class="phase-step-label">{phaseLabels[step]}</span>
-						</div>
-						{#if i < PHASE_ORDER.length - 1}
-							<div class="phase-connector" class:phase-connector--done={allPhasesDone || i < currentIdx}></div>
-						{/if}
-					{/each}
-				</div>
-
 				<!-- Pipeline phase indicator (A→B→C→D). Only while generating —
 				     a fully-complete walkthrough shows 4/4 dots that carry no
 				     new signal at rest, and a terminal error is already covered
-				     by the error view below. Distinct from the lifecycle stepper
-				     above: this tracks *persisted* content, not agent activity. -->
+				     by the error view below. Tracks *persisted* content phases. -->
 				{#if isStreaming}
 					<div
 						class="pipeline-phase"
@@ -692,8 +638,12 @@
 				Generate walkthrough
 			</Button>
 		</div>
-	{:else if blocks.length === 0 && isStreaming}
-		<!-- Loading state: skeleton + exploration feed.
+	{:else if !summary && blocks.length === 0 && sentiment === null && ratings.length === 0 && isStreaming}
+		<!-- Loading state: skeleton + exploration feed. Only shown before the
+		     first MCP write lands. The moment Phase A's summary (or any later
+		     phase's content) arrives, we fall through to the content branch
+		     below so subsequent MCP writes — diff steps, sentiment, ratings —
+		     render incrementally as they're committed.
 		     The phase stepper lives above as a sibling of this branch so it
 		     stays visible when we transition to the content view. -->
 		<div class="walkthrough-loading">
@@ -926,6 +876,9 @@
 				<div class="block-group block-group--sentiment-stack">
 					{#if sentiment !== null}
 						<div class="sentiment-card" aria-label="Overall sentiment">
+							<div class="sentiment-card-header">
+								<h3 class="sentiment-card-title">Overall Sentiment</h3>
+							</div>
 							<div class="sentiment-card-body">{@html renderedSentiment}</div>
 						</div>
 					{/if}
@@ -960,7 +913,7 @@
 
 		<!-- Scroll-to-bottom floating button -->
 		{#if userScrolledUp && isStreaming}
-		<Button variant="secondary" class="scroll-to-bottom" style="--sidebar-offset: {sidebarOffset}px" onclick={scrollToBottom}>
+		<Button variant="secondary" class="scroll-to-bottom" onclick={scrollToBottom}>
 			<ArrowDown size={14} />
 			New content
 		</Button>
@@ -976,20 +929,49 @@
 	}
 
 	.walkthrough-content {
-		/* Asymmetric 6-col grid: 420 left-extra + 1fr + 820 content + 40 gap +
-		   380 rail + 1fr. The 420 left-extra matches (rail + gap) on the right,
-		   which makes the CONTENT column (col 3) exactly centered in the
-		   viewport regardless of viewport width ≥ 1700px. Rail is 380 (was 300)
-		   so long inline code tokens in the annotation cards have room to breathe
-		   before needing to wrap. */
+		/* 6-col grid that anchors the content column to the VIEWPORT centre
+		   (not the main-area centre), so resizing or toggling the left pane
+		   doesn't shift the content horizontally. Content only moves left —
+		   and only by exactly the required distance — when the main-area
+		   has shrunk enough that rail-plus-content would overflow.
+
+		   col 1 = max(24px, min(100% - 50vw - 458px, 100% - 1312px))
+		     - 100% - 50vw - 458px : the col_1 width that places the content
+		         column's centre at viewport x = 50vw. Derivation: sidebar
+		         width S = 100vw - 100% (because 100% = main-area width =
+		         V - S). Content's viewport x-centre = S + col_1 + 48 + 410;
+		         setting that to V/2 = 50vw gives col_1 = 100% - 50vw - 458.
+		         When S changes (sidebar toggle/resize), 100% and 50vw shift
+		         in lockstep so that S + col_1 + 458 stays at V/2 — content
+		         position in the viewport is stable.
+		     - 100% - 1312px : the largest col_1 that still lets the rail end
+		         at exactly 100% - 24 (24px right gutter inside main-area).
+		         When this binds (narrow main-area), content's viewport x
+		         = S + (100% - 1312) + 458 = V - 854 — also independent of S,
+		         so toggling the sidebar still doesn't jump the content.
+		     min() picks whichever binds. They cross when V ≥ 1708 (viewport,
+		     not main-area); above, viewport-centring wins; below, rail
+		     pinning wins. Floor of 24px keeps a minimum left gutter.
+		   col 2 = 48        (step-number gutter)
+		   col 3 = 820       (content)
+		   col 4 = 40        (content ↔ rail gap)
+		   col 5 = 380       (annotation rail)
+		   col 6 = 1fr, ≥ 24 (right gutter; absorbs excess past the rail)
+
+		   Geometric min of main-area width = 24 + 48 + 820 + 40 + 380 + 24
+		   = 1336. Below that the side-by-side grid physically doesn't fit;
+		   the @container rule at the bottom falls through to a stacked
+		   layout. The breakpoint is on main-area width (100%, via
+		   container-type: inline-size on .review-content) so the collapse
+		   triggers only when the sidebar has eaten enough room to matter. */
 		display: grid;
 		grid-template-columns:
-			420px
-			minmax(0, 1fr)
+			max(24px, min(calc(100% - 50vw - 458px), calc(100% - 1312px)))
+			48px
 			minmax(0, 820px)
 			40px
 			380px
-			minmax(0, 1fr);
+			minmax(24px, 1fr);
 		padding: 28px 0;
 		animation: fadeIn 0.28s cubic-bezier(0.22, 0.61, 0.36, 1) 60ms both;
 	}
@@ -1014,14 +996,49 @@
 		opacity: 1;
 	}
 
+	/* Viewport-anchored centering for the empty state — mirrors the approach
+	   used by `.walkthrough-content` but simplified because there is NO side
+	   rail in the empty state, so we don't need to reserve col 5.
+	   Using the content-layout's full 6-col formula here would clamp col_1 to
+	   its 24px floor on common laptop widths (the `100% - 1312px` term
+	   reserves space for a rail that doesn't exist), pushing the Try again /
+	   Generate walkthrough button hard-left instead of viewport-centered.
+
+	   col 1 = max(24px, calc(100% - 50vw - 410px))
+	     - 100% - 50vw - 410px : places col-2 centre at viewport x = 50vw.
+	         Derivation: sidebar width S = 100vw - 100% (since 100% = main
+	         width = V - S). Content viewport-centre = S + col_1 + 410;
+	         setting that to V/2 = 50vw gives col_1 = 100% - 50vw - 410. When
+	         S changes via pane toggle, `100%` and `50vw` shift in lockstep
+	         so content viewport x stays at V/2 — no horizontal jump.
+	     - 24px floor : fallback on viewports so narrow that viewport-centering
+	         would overlap the sidebar. In that regime the jump is
+	         geometrically unavoidable; 24px at least keeps the content inside
+	         the main area.
+	   col 2 = 820px content track (same width as `.walkthrough-content` col 3
+	           for visual parity with the populated state).
+	   col 3 = minmax(24px, 1fr) right gutter; soaks up remaining space. */
 	.walkthrough-empty {
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		justify-content: center;
+		display: grid;
+		grid-template-columns:
+			max(24px, calc(100% - 50vw - 410px))
+			minmax(0, 820px)
+			minmax(24px, 1fr);
+		align-content: center;
+		justify-items: center;
 		min-height: 60vh;
-		padding: 80px 32px;
-		gap: 12px;
+		padding: 80px 0;
+		row-gap: 12px;
+	}
+
+	/* `:global(*)` — same reason as `.walkthrough-connect-progress > :global(*)`:
+	   children include a shadcn Button and other components whose roots carry
+	   a different Svelte scope hash, so a scoped `> *` rule would skip them
+	   and they'd fall into grid auto-flow (landing in col 1/3 instead of col 2,
+	   which is exactly the mis-placement that showed the Try again button
+	   drifting into the rail column). */
+	.walkthrough-empty > :global(*) {
+		grid-column: 2;
 	}
 
 	/* Loading / stepper / connect-progress all use the SAME 6-col grid as
@@ -1036,12 +1053,12 @@
 	.walkthrough-loading {
 		display: grid;
 		grid-template-columns:
-			420px
-			minmax(0, 1fr)
+			max(24px, min(calc(100% - 50vw - 458px), calc(100% - 1312px)))
+			48px
 			minmax(0, 820px)
 			40px
 			380px
-			minmax(0, 1fr);
+			minmax(24px, 1fr);
 		padding: 28px 0;
 		row-gap: 20px;
 	}
@@ -1057,12 +1074,12 @@
 	.walkthrough-connect-progress {
 		display: grid;
 		grid-template-columns:
-			420px
-			minmax(0, 1fr)
+			max(24px, min(calc(100% - 50vw - 458px), calc(100% - 1312px)))
+			48px
 			minmax(0, 820px)
 			40px
 			380px
-			minmax(0, 1fr);
+			minmax(24px, 1fr);
 		align-items: center;
 		padding: 24px 0 4px;
 		overflow: hidden;
@@ -1080,12 +1097,12 @@
 	.walkthrough-stepper-header {
 		display: grid;
 		grid-template-columns:
-			420px
-			minmax(0, 1fr)
+			max(24px, min(calc(100% - 50vw - 458px), calc(100% - 1312px)))
+			48px
 			minmax(0, 820px)
 			40px
 			380px
-			minmax(0, 1fr);
+			minmax(24px, 1fr);
 		padding: 24px 0 4px;
 		animation: fadeIn 0.3s cubic-bezier(0.22, 0.61, 0.36, 1) both;
 	}
@@ -1188,12 +1205,12 @@
 	.walkthrough-banner {
 		display: grid;
 		grid-template-columns:
-			420px
-			minmax(0, 1fr)
+			max(24px, min(calc(100% - 50vw - 458px), calc(100% - 1312px)))
+			48px
 			minmax(0, 820px)
 			40px
 			380px
-			minmax(0, 1fr);
+			minmax(24px, 1fr);
 		padding: 14px 0 0;
 	}
 
@@ -1241,80 +1258,6 @@
 		font-size: 12px;
 		color: var(--color-text-muted);
 		margin: 0;
-	}
-
-	/* ── Phase stepper ────────────────────────────────────────────────── */
-
-	.phase-stepper {
-		display: flex;
-		align-items: center;
-		gap: 0;
-		padding: 4px 0 8px;
-	}
-
-	.phase-step {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		color: var(--color-text-muted);
-		opacity: 0.4;
-		transition: opacity 0.3s ease, color 0.3s ease;
-	}
-
-	.phase-step--active {
-		color: var(--color-accent);
-		opacity: 1;
-	}
-
-.phase-step--done {
-    color: var(--color-accent);
-    opacity: 1;
-}
-
-	.phase-step-icon {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 22px;
-		height: 22px;
-		flex-shrink: 0;
-	}
-
-	.phase-step--active .phase-step-icon {
-		animation: pulseIcon 2s ease-in-out infinite;
-	}
-
-	.phase-step-label {
-		font-size: 11px;
-		font-weight: 500;
-		letter-spacing: 0.02em;
-		white-space: nowrap;
-	}
-
-	.phase-connector {
-		flex: 1;
-		height: 1px;
-		background: var(--color-border);
-		margin: 0 8px;
-		min-width: 16px;
-		transition: background 0.3s ease;
-	}
-
-	.phase-connector--done {
-		background: var(--color-accent);
-		opacity: 0.5;
-	}
-
-	.phase-dot {
-		width: 8px;
-		height: 8px;
-		border-radius: 50%;
-		background: var(--color-text-muted);
-	}
-
-	.phase-dot--active {
-		background: var(--color-accent);
-		animation: pulse 1.5s ease-in-out infinite;
 	}
 
 	/* ── Status bar ───────────────────────────────────────────────────── */
@@ -1672,17 +1615,17 @@
 		   re-declares the same column tracks so its .block-wrapper (col 3) and
 		   .block-annotation (col 5) align pixel-for-pixel with the single-column
 		   sections above. Since .blocks spans `1 / -1` of its parent, its total
-		   width equals the parent's total width, so its 1fr resolves identically
-		   to the parent's 1fr — no subgrid needed. */
+		   width equals the parent's total width, so the minmax tracks resolve
+		   identically to the parent's — no subgrid needed. */
 		display: grid;
 		grid-column: 1 / -1;
 		grid-template-columns:
-			420px
-			minmax(0, 1fr)
+			max(24px, min(calc(100% - 50vw - 458px), calc(100% - 1312px)))
+			48px
 			minmax(0, 820px)
 			40px
 			380px
-			minmax(0, 1fr);
+			minmax(24px, 1fr);
 		row-gap: 20px;
 		margin-top: 20px;
 		grid-auto-flow: row;
@@ -1910,10 +1853,14 @@
 	/* ── Scroll-to-bottom pill ──────────────────────────────────────── */
 
 	:global(.scroll-to-bottom) {
+		/* Viewport-centred (50vw). Same rationale as `.tabs-float` in
+		   AppShell.svelte — anchored to the viewport, not the main-area, so
+		   the pill doesn't hop horizontally when the sidebar is toggled or
+		   resized. */
 		position: fixed;
 		bottom: 20px;
 		left: 50%;
-		transform: translateX(calc(-50% + var(--sidebar-offset, 0px)));
+		transform: translateX(-50%);
 		display: flex;
 		align-items: center;
 		gap: 6px;
@@ -2066,6 +2013,17 @@
 		padding: 16px 20px;
 	}
 
+	.sentiment-card-header {
+		margin-bottom: 10px;
+	}
+
+	.sentiment-card-title {
+		font-size: 16px;
+		font-weight: 600;
+		color: var(--color-text-primary);
+		margin: 0;
+	}
+
 	.sentiment-card-body {
 		font-size: 14px;
 		line-height: 1.65;
@@ -2110,14 +2068,12 @@
 	}
 
 	/* ── Narrow-viewport fallback ────────────────────────────────────────
-	   Below 1700px the grid has no breathing room (420 + 820 + 40 + 380 =
-	   1660 is the geometric minimum; 1700 gives a 40px buffer so the grid
-	   doesn't collapse the instant the viewport hits the bleeding edge).
-	   Collapse to a single centered 860-max column and stack the annotation
-	   card directly below its block. Sticky was already removed at the wide
-	   layer — here we just give the stacked card a small top margin so it
-	   reads as attached-to-but-distinct-from its block. */
-	@container (max-width: 1700px) {
+	   Below the 1336px geometric minimum (24 left + 48 + 820 + 40 + 380 +
+	   24 right) the side-by-side grid physically can't fit. Collapse to a
+	   single centered 860-max column and stack the annotation card directly
+	   below its block. Matches at `max-width: 1335px` (inclusive), so V=1336
+	   is the first width at which side-by-side activates. */
+	@container (max-width: 1335px) {
 		/* Collapse the grid: revert to a single centered 860-max column. */
 		.walkthrough-content {
 			display: block;
@@ -2134,12 +2090,13 @@
 			grid-column: auto;
 		}
 
-		/* Collapse the loading / stepper / connect-progress grids to a simple
-		   centered 860-max box at narrow viewport. Children stop spanning a
-		   specific grid column and just flow normally. */
+		/* Collapse the loading / stepper / connect-progress / banner grids to a
+		   simple centered 860-max box at narrow viewport. Children stop spanning
+		   a specific grid column and just flow normally. */
 		.walkthrough-loading,
 		.walkthrough-stepper-header,
-		.walkthrough-connect-progress {
+		.walkthrough-connect-progress,
+		.walkthrough-banner {
 			display: block;
 			width: 100%;
 			max-width: 860px;
@@ -2147,6 +2104,10 @@
 			padding-right: 32px;
 			margin-inline: auto;
 			box-sizing: border-box;
+		}
+
+		.walkthrough-banner > .walkthrough-banner-row {
+			grid-column: auto;
 		}
 
 		.walkthrough-loading {

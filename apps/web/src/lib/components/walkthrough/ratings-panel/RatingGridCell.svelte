@@ -284,18 +284,40 @@
 
     .icon-queued {
         display: inline-flex;
+        align-items: center;
+        justify-content: center;
         opacity: 0.4;
+    }
+
+    .icon-queued :global(svg) {
+        display: block;
     }
 
     .icon-running {
         display: inline-flex;
+        align-items: center;
+        justify-content: center;
         animation: spin 900ms linear infinite;
+        transform-origin: center;
         color: var(--color-accent);
+    }
+
+    /* Block removes the inline baseline gap that shifts the element's
+       bounding box downward — without it, transform-origin: center lands
+       below the visual centre of the arc and the spin looks off-axis. */
+    .icon-running :global(svg) {
+        display: block;
     }
 
     .icon-resolved {
         display: inline-flex;
+        align-items: center;
+        justify-content: center;
         animation: icon-in 180ms var(--ease-out-expo) 1;
+    }
+
+    .icon-resolved :global(svg) {
+        display: block;
     }
 
     .cell-status-text {

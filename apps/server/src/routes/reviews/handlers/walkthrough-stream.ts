@@ -7,7 +7,16 @@ import { WalkthroughJobs } from '../../../services/WalkthroughJobs';
 import { WalkthroughService } from '../../../services/Walkthrough';
 import { unwrapEffectError } from '../../middleware';
 import { createSseStream, sseHeaders } from '../sse';
-import type { WalkthroughStreamEvent } from '@revv/shared';
+import type { WalkthroughPipelinePhase, WalkthroughStreamEvent } from '@revv/shared';
+
+/** Monotonic ordering for phase:advanced dedupe. */
+const PHASE_RANK: Record<WalkthroughPipelinePhase, number> = {
+	none: 0,
+	A: 1,
+	B: 2,
+	C: 3,
+	D: 4,
+};
 
 /**
  * GET /api/reviews/:id/walkthrough — SSE streaming walkthrough.
@@ -49,6 +58,8 @@ export function walkthroughStreamHandler(ctx: {
 		const seenBlocks = new Set<string>();
 		const seenIssues = new Set<string>();
 		const seenRatingAxes = new Set<string>();
+		let seenSentiment = false;
+		let highestEmittedPhase: WalkthroughPipelinePhase = 'none';
 		let terminated = false;
 
 		const forwardEvent = (event: WalkthroughStreamEvent): void => {
@@ -70,6 +81,18 @@ export function walkthroughStreamHandler(ctx: {
 				case 'rating':
 					if (seenRatingAxes.has(event.data.axis)) return;
 					seenRatingAxes.add(event.data.axis);
+					break;
+				case 'sentiment':
+					if (seenSentiment) return;
+					seenSentiment = true;
+					break;
+				case 'phase:advanced':
+					// Monotonic: drop anything that doesn't strictly advance the
+					// client past what we've already told it. Guards the replay
+					// window where a live phase:advanced and the snapshot's
+					// lastCompletedPhase can both arrive.
+					if (PHASE_RANK[event.data.lastCompletedPhase] <= PHASE_RANK[highestEmittedPhase]) return;
+					highestEmittedPhase = event.data.lastCompletedPhase;
 					break;
 				default:
 					break;
@@ -121,6 +144,13 @@ export function walkthroughStreamHandler(ctx: {
 				for (const block of cached.blocks) forwardEvent({ type: 'block', data: block });
 				for (const issue of cached.issues) forwardEvent({ type: 'issue', data: issue });
 				for (const rating of cached.ratings) forwardEvent({ type: 'rating', data: rating });
+				// Sentiment is a first-class walkthrough field; without this
+				// replay, SSE-reconnects to a cached row render the blocks +
+				// ratings but lose the "Overall Sentiment" card that the JSON
+				// hydration path (hydrateFromCache) correctly surfaces.
+				if (cached.sentiment !== null) {
+					forwardEvent({ type: 'sentiment', data: { sentiment: cached.sentiment } });
+				}
 				forwardEvent({
 					type: 'done',
 					data: { walkthroughId: cached.id, tokenUsage: cached.tokenUsage },
@@ -166,6 +196,9 @@ export function walkthroughStreamHandler(ctx: {
 					),
 				);
 				if (finalState) {
+					// status='complete' from getCached implies Phase D was
+					// reached, so summary / sentiment / lastCompletedPhase are
+					// all guaranteed populated — no empty-string guard needed.
 					forwardEvent({
 						type: 'summary',
 						data: { summary: finalState.summary, riskLevel: finalState.riskLevel },
@@ -173,6 +206,16 @@ export function walkthroughStreamHandler(ctx: {
 					for (const block of finalState.blocks) forwardEvent({ type: 'block', data: block });
 					for (const issue of finalState.issues) forwardEvent({ type: 'issue', data: issue });
 					for (const rating of finalState.ratings) forwardEvent({ type: 'rating', data: rating });
+					if (finalState.sentiment !== null) {
+						forwardEvent({
+							type: 'sentiment',
+							data: { sentiment: finalState.sentiment },
+						});
+					}
+					forwardEvent({
+						type: 'phase:advanced',
+						data: { lastCompletedPhase: finalState.lastCompletedPhase },
+					});
 					forwardEvent({
 						type: 'done',
 						data: { walkthroughId: finalState.id, tokenUsage: finalState.tokenUsage },
@@ -187,13 +230,32 @@ export function walkthroughStreamHandler(ctx: {
 					),
 				);
 				if (partial) {
-					forwardEvent({
-						type: 'summary',
-						data: { summary: partial.summary, riskLevel: partial.riskLevel },
-					});
+					// Partial may be from a very early failure (placeholder
+					// summary written at createPartial, Phase A never ran).
+					// Guard the empty string so the client gets a clean
+					// empty-state → error transition instead of a bogus
+					// summary=''.
+					if (partial.summary !== '') {
+						forwardEvent({
+							type: 'summary',
+							data: { summary: partial.summary, riskLevel: partial.riskLevel },
+						});
+					}
 					for (const block of partial.blocks) forwardEvent({ type: 'block', data: block });
 					for (const issue of partial.issues) forwardEvent({ type: 'issue', data: issue });
 					for (const rating of partial.ratings) forwardEvent({ type: 'rating', data: rating });
+					if (partial.sentiment !== null) {
+						forwardEvent({
+							type: 'sentiment',
+							data: { sentiment: partial.sentiment },
+						});
+					}
+					if (partial.lastCompletedPhase !== 'none') {
+						forwardEvent({
+							type: 'phase:advanced',
+							data: { lastCompletedPhase: partial.lastCompletedPhase },
+						});
+					}
 					forwardEvent({
 						type: 'error',
 						data: { code: 'AiGenerationError', message: 'Walkthrough generation failed' },
@@ -226,13 +288,37 @@ export function walkthroughStreamHandler(ctx: {
 				),
 			);
 			if (snapshot) {
-				forwardEvent({
-					type: 'summary',
-					data: { summary: snapshot.summary, riskLevel: snapshot.riskLevel },
-				});
+				// Guard against replaying the placeholder summary written at
+				// `createPartial` (empty string, riskLevel='low'). If Phase A
+				// hasn't committed yet, the real summary event is still in the
+				// buffered queue — replaying '' here would mark seenSummary and
+				// cause the flushed real event to be dropped, leaving the client
+				// with a permanently-falsy summary and no content view.
+				if (snapshot.summary !== '') {
+					forwardEvent({
+						type: 'summary',
+						data: { summary: snapshot.summary, riskLevel: snapshot.riskLevel },
+					});
+				}
 				for (const block of snapshot.blocks) forwardEvent({ type: 'block', data: block });
 				for (const issue of snapshot.issues) forwardEvent({ type: 'issue', data: issue });
 				for (const rating of snapshot.ratings) forwardEvent({ type: 'rating', data: rating });
+				// Sentiment and pipeline phase are first-class walkthrough fields
+				// that weren't previously replayed — a client reconnecting after
+				// Phase C/D would never catch up. Replayed through forwardEvent
+				// so the matching live events in the buffered queue dedupe.
+				if (snapshot.sentiment !== null) {
+					forwardEvent({
+						type: 'sentiment',
+						data: { sentiment: snapshot.sentiment },
+					});
+				}
+				if (snapshot.lastCompletedPhase !== 'none') {
+					forwardEvent({
+						type: 'phase:advanced',
+						data: { lastCompletedPhase: snapshot.lastCompletedPhase },
+					});
+				}
 			}
 
 			// ── Step 6: Drain the buffer, switch to direct-forward mode. ─

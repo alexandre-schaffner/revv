@@ -23,7 +23,6 @@
 	import RequestChanges from '$lib/components/review/RequestChanges.svelte';
 	import { deactivate as deactivateWalkthrough, getIsStreaming as getWalkthroughStreaming, getSummary as getWalkthroughSummary, regenerate as regenerateWalkthrough, abort as abortWalkthrough, getRiskLevel as getWalkthroughRiskLevel } from '$lib/stores/walkthrough.svelte';
 	import { setTopbarCollapsed } from '$lib/stores/topbar.svelte';
-	import { getSidebarCollapsed, getSidebarWidth } from '$lib/stores/sidebar.svelte';
 	import { requestThreadSync } from '$lib/stores/ws.svelte';
 	import { onDestroy, untrack } from 'svelte';
 	import AuthGuard from '$lib/components/auth/AuthGuard.svelte';
@@ -41,10 +40,6 @@
 	const walkthroughStreaming = $derived(getWalkthroughStreaming());
 	const walkthroughSummary = $derived(getWalkthroughSummary());
 	const walkthroughRiskLevel = $derived(getWalkthroughRiskLevel());
-
-	const sidebarCollapsed = $derived(getSidebarCollapsed());
-	const sidebarWidth = $derived(getSidebarWidth());
-	const sidebarOffset = $derived(sidebarCollapsed ? 0 : sidebarWidth / 2);
 
 	const riskClasses: Record<string, string> = {
 		low: 'risk-badge risk-badge--low',
@@ -288,7 +283,7 @@
 					{/if}
 				</div>
 				<span class="page-subtitle">#{pr.externalId} · {pr.sourceBranch} → {pr.targetBranch}</span>
-			{#if activeTab === 'walkthrough' && walkthroughRiskLevel}
+				{#if activeTab === 'walkthrough' && walkthroughRiskLevel}
 					<Badge variant="outline" class={riskClasses[walkthroughRiskLevel] ?? ''}>
 						{walkthroughRiskLevel} risk
 					</Badge>
@@ -302,7 +297,6 @@
 					prId={page.params['prId'] ?? ''}
 					scrollRoot={scrollRootEl}
 					isActive={activeTab === 'walkthrough'}
-					{sidebarOffset}
 				/>
 			</div>
 
@@ -356,24 +350,22 @@
 		flex-shrink: 0;
 	}
 
-	/* Walkthrough / Request Changes tabs: title + subtitle align with the
-	   820 content column of the GuidedWalkthrough grid below. We can't just
-	   use `max-width: 900; margin-inline: auto` here because the asymmetric
-	   6-col grid ({420, 1fr, 820, 40, 380, 1fr}) makes the content column
-	   centered in the viewport but cols 3–5 (content + gap + rail) shift
-	   210px right of center — so a viewport-centered box would land LEFT
-	   of where the content actually renders. Re-declare the same 6-col
-	   grid here and drop the title row into col 3, giving pixel-identical
-	   alignment with the walkthrough content and loading/stepper below. */
+	/* Walkthrough / Request Changes tabs: title row lands on the exact same
+	   6-col grid used by every container inside GuidedWalkthrough (content,
+	   loading skeleton, stepper header, blocks, …). See the derivation in
+	   GuidedWalkthrough.svelte → `.walkthrough-content` for the col_1 math
+	   (viewport-anchored centring that stays stable under sidebar toggle/
+	   resize). Template must stay byte-for-byte identical to the walkthrough
+	   grids so the title above and the content below align pixel-for-pixel. */
 	.page-title-section--narrow {
 		display: grid;
 		grid-template-columns:
-			420px
-			minmax(0, 1fr)
+			max(24px, min(calc(100% - 50vw - 458px), calc(100% - 1312px)))
+			48px
 			minmax(0, 820px)
 			40px
 			380px
-			minmax(0, 1fr);
+			minmax(24px, 1fr);
 		padding-left: 0;
 		padding-right: 0;
 	}
@@ -388,9 +380,12 @@
 		grid-column: 3;
 	}
 
-	@container (max-width: 1700px) {
-		/* Collapse the grid at narrow viewports — same pattern the walkthrough
-		   uses. Falls back to a simple centered 860-max box with 32px padding. */
+	@container (max-width: 1335px) {
+		/* Collapse the grid below the 1336-px geometric minimum of the
+		   viewport-anchored layout — same breakpoint as the walkthrough's
+		   own fallback (GuidedWalkthrough.svelte), so the title-section and
+		   the content below always collapse together. Falls back to a simple
+		   centered 860-max box with 32px padding. */
 		.page-title-section--narrow {
 			display: block;
 			max-width: 860px;
@@ -437,6 +432,7 @@
 	}
 
 	.page-subtitle {
+		display: block;
 		font-size: 13px;
 		font-family: var(--font-mono, monospace);
 		color: var(--color-text-muted);
@@ -447,6 +443,7 @@
 	/* ── Risk badge (walkthrough) ─────────────────────────────────────── */
 
 	:global(.risk-badge) {
+		display: inline-flex;
 		font-size: 10px;
 		font-weight: 600;
 		letter-spacing: 0.05em;
@@ -454,6 +451,7 @@
 		border-radius: 9999px;
 		padding: 1px 6px;
 		width: fit-content;
+		margin-top: 6px;
 	}
 
 	/* Risk-level color modifiers. The Badge is rendered with
