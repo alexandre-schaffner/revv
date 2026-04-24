@@ -12,6 +12,7 @@ import { RepositoryService } from './Repository';
 import { SettingsService } from './Settings';
 import { SyncService } from './Sync';
 import { TokenProvider } from './TokenProvider';
+import { WalkthroughJobs } from './WalkthroughJobs';
 import { WebSocketHub } from './WebSocketHub';
 import { user } from '../db/schema/auth';
 
@@ -41,6 +42,7 @@ export const PollSchedulerLive = Layer.effect(
 		const syncService = yield* SyncService;
 		const tokenProvider = yield* TokenProvider;
 		const etagCache = yield* GitHubEtagCache;
+		const walkthroughJobs = yield* WalkthroughJobs;
 		const { db } = yield* DbService;
 
 		// Bind the captured db handle for convenience
@@ -234,6 +236,23 @@ export const PollSchedulerLive = Layer.effect(
 					return existing.headSha !== pr.headSha || existing.baseSha !== pr.baseSha;
 				})
 				.map((pr) => pr.id);
+
+			// Head-SHA change → walkthroughs for this PR pin to the OLD SHA and
+			// are now stale. Per doctrine invariant #7 (walkthroughs are immutable
+			// per head SHA), we mark them 'superseded' rather than mutate or
+			// delete. A fresh walkthrough row is created on the next user-opens-PR
+			// flow for the new SHA.
+			const headShaChangedPrIds = allPrs
+				.filter((pr) => {
+					const existing = existingShaMap.get(pr.id);
+					return existing !== undefined && existing.headSha !== pr.headSha;
+				})
+				.map((pr) => pr.id);
+			for (const prId of headShaChangedPrIds) {
+				yield* walkthroughJobs
+					.supersedeForPr(prId)
+					.pipe(Effect.catchAll(() => Effect.void));
+			}
 
 			// Refresh diffs only for PRs that had SHA changes AND already have cached diffs
 			if (changedPrIds.length > 0) {

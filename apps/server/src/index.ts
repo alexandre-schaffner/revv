@@ -17,6 +17,7 @@ import { deviceAuthRoutes } from './routes/device-auth';
 import { userRoutes } from './routes/user';
 import { wsRoute } from './routes/ws';
 import { debugRoutes } from './routes/debug';
+import { mcpWalkthroughRoute } from './routes/mcp/walkthrough';
 import { PollScheduler } from './services/PollScheduler';
 import { WalkthroughJobs } from './services/WalkthroughJobs';
 import { RepoCloneService } from './services/RepoClone';
@@ -44,6 +45,7 @@ const app = new Elysia()
 	.use(userRoutes)
 	.use(wsRoute)
 	.use(debugRoutes)
+	.use(mcpWalkthroughRoute)
 	.get('/api/health', () => ({
 		status: 'ok' as const,
 		timestamp: new Date().toISOString(),

@@ -1,4 +1,13 @@
-import type { WalkthroughBlock, RiskLevel, WalkthroughStreamEvent, WalkthroughIssue, WalkthroughPhase, WalkthroughRating, CloneStatus } from '@revv/shared';
+import type {
+	WalkthroughBlock,
+	RiskLevel,
+	WalkthroughStreamEvent,
+	WalkthroughIssue,
+	WalkthroughLifecyclePhase,
+	WalkthroughPipelinePhase,
+	WalkthroughRating,
+	CloneStatus,
+} from '@revv/shared';
 import { API_BASE_URL } from '$lib/api/base-url';
 import { authHeaders } from '$lib/utils/session-token';
 import { runWalkthroughSse } from '$lib/services/walkthrough-sse';
@@ -12,14 +21,38 @@ interface WalkthroughEntry {
 	blocks: WalkthroughBlock[];
 	summary: string | null;
 	riskLevel: RiskLevel | null;
+	/**
+	 * Phase C output — "Overall Sentiment" markdown. Null until Phase C
+	 * completes. Replaces the old convention of detecting a specially-formatted
+	 * markdown block. When this is non-null, any legacy markdown block whose
+	 * content starts with `## Overall Sentiment` is suppressed at render time
+	 * so rehydrated old walkthroughs don't render both.
+	 */
+	sentiment: string | null;
+	/**
+	 * Pointer into the A→B→C→D content pipeline:
+	 *   'none' — nothing persisted yet
+	 *   'A'    — Phase A (overview + risk) complete
+	 *   'B'    — Phase B (diff analysis) complete
+	 *   'C'    — Phase C (sentiment) complete
+	 *   'D'    — Phase D (all 9 axes rated) complete
+	 */
+	lastCompletedPhase: WalkthroughPipelinePhase;
 	isStreaming: boolean;
 	streamError: string | null;
 	walkthroughId: string | null;
 	doneReceived: boolean;
+	/**
+	 * True when the server marked this walkthrough `superseded` — a new commit
+	 * landed mid-generation and a fresher walkthrough has been created. The UI
+	 * renders a banner offering Regenerate when cached/replayed data is in this
+	 * state.
+	 */
+	superseded: boolean;
 	explorationSteps: Array<{ tool: string; description: string }>;
 	issues: WalkthroughIssue[];
 	ratings: WalkthroughRating[];
-	phase: WalkthroughPhase;
+	phase: WalkthroughLifecyclePhase;
 	phaseMessage: string;
 	streamStartedAt: number | null;
 	/**
@@ -40,10 +73,13 @@ function freshEntry(): WalkthroughEntry {
 		blocks: [],
 		summary: null,
 		riskLevel: null,
+		sentiment: null,
+		lastCompletedPhase: 'none',
 		isStreaming: true,
 		streamError: null,
 		walkthroughId: null,
 		doneReceived: false,
+		superseded: false,
 		explorationSteps: [],
 		issues: [],
 		ratings: [],
@@ -116,7 +152,7 @@ export function getIssuesForFile(filePath: string): WalkthroughIssue[] {
 export function getRatings(): WalkthroughRating[] {
 	return active()?.ratings ?? [];
 }
-export function getPhase(): WalkthroughPhase {
+export function getPhase(): WalkthroughLifecyclePhase {
 	return active()?.phase ?? 'connecting';
 }
 export function getPhaseMessage(): string {
@@ -133,6 +169,26 @@ export function getCloneInProgress(): boolean {
 }
 export function getCloneRepoId(): string | null {
 	return active()?.cloneRepoId ?? null;
+}
+/**
+ * Phase C markdown — the "Overall Sentiment" paragraph. Null until Phase C
+ * completes. Components render this directly instead of sniffing blocks for a
+ * `## Overall Sentiment` header.
+ */
+export function getSentiment(): string | null {
+	return active()?.sentiment ?? null;
+}
+/** Current pointer into the A→B→C→D content pipeline. */
+export function getLastCompletedPhase(): WalkthroughPipelinePhase {
+	return active()?.lastCompletedPhase ?? 'none';
+}
+/**
+ * True when this walkthrough was marked `superseded` by the server (a newer
+ * commit landed mid-generation). Used to render the "this walkthrough is
+ * outdated" banner with a Regenerate action.
+ */
+export function getIsSuperseded(): boolean {
+	return active()?.superseded ?? false;
 }
 
 // ── Clone-status polling (self-healing un-stick) ────────────────────────────
@@ -352,6 +408,10 @@ export async function streamWalkthrough(prId: string): Promise<void> {
 	entry.streamStartedAt = Date.now();
 	entry.cloneInProgress = false;
 	entry.cloneRepoId = null;
+	// Starting a fresh stream implicitly clears any previous superseded marker —
+	// the server is about to give us the current HEAD SHA's walkthrough (the
+	// one that superseded the old one, or a fresh generation of it).
+	entry.superseded = false;
 	entries.set(prId, entry);
 	entries = new Map(entries);
 
@@ -444,6 +504,15 @@ export async function hydrateFromCache(prId: string): Promise<boolean> {
 						id: string;
 						summary: string;
 						riskLevel: RiskLevel;
+						sentiment?: string | null;
+						lastCompletedPhase?: WalkthroughPipelinePhase;
+						/**
+						 * Optional status flag — the cached endpoint today only returns
+						 * 'complete' walkthroughs, but if the server ever extends this
+						 * to include 'superseded' rows (so the UI can show stale
+						 * content with a regenerate banner) we'll honor it here.
+						 */
+						status?: 'complete' | 'superseded';
 						blocks: WalkthroughBlock[];
 						issues: WalkthroughIssue[];
 						ratings: WalkthroughRating[];
@@ -460,6 +529,12 @@ export async function hydrateFromCache(prId: string): Promise<boolean> {
 		const entry = entries.get(prId) ?? freshEntry();
 		entry.summary = wt.summary;
 		entry.riskLevel = wt.riskLevel;
+		// Sentiment and lastCompletedPhase are first-class fields on the cached
+		// row. Fall back to null / 'D' for rehydrated pre-pipeline rows —
+		// GetCached only returns status='complete', so the pipeline must have
+		// run to the end to produce a cacheable row.
+		entry.sentiment = wt.sentiment ?? null;
+		entry.lastCompletedPhase = wt.lastCompletedPhase ?? 'D';
 		entry.blocks = wt.blocks;
 		entry.issues = wt.issues;
 		entry.ratings = wt.ratings;
@@ -467,6 +542,7 @@ export async function hydrateFromCache(prId: string): Promise<boolean> {
 		entry.doneReceived = true;
 		entry.isStreaming = false;
 		entry.streamError = null;
+		entry.superseded = wt.status === 'superseded';
 		entry.phase = 'finishing';
 		entry.phaseMessage = 'Complete';
 		entry.liveGeneration = false;
@@ -556,6 +632,13 @@ function applyEvents(prId: string, events: WalkthroughStreamEvent[]): void {
 					entry.summary = event.data.summary;
 					entry.riskLevel = event.data.riskLevel;
 					break;
+				case 'sentiment':
+					// Phase C output — the "Overall Sentiment" paragraph. Arrives
+					// as a discrete event now; components read entry.sentiment
+					// instead of sniffing markdown blocks for a "## Overall
+					// Sentiment" header.
+					entry.sentiment = event.data.sentiment;
+					break;
 				case 'block':
 					if (!newBlocks) newBlocks = [...entry.blocks];
 					if (!newBlocks.some((b) => b.id === event.data.id)) {
@@ -593,6 +676,14 @@ function applyEvents(prId: string, events: WalkthroughStreamEvent[]): void {
 					if (event.data.phase !== 'connecting') {
 						entry.liveGeneration = true;
 					}
+					break;
+				case 'phase:advanced':
+					// Monotonic pointer into the A→B→C→D pipeline. Drives the
+					// 4-dot header progress indicator independently of the UI
+					// lifecycle phase (`phase` event), which reflects what the
+					// agent is *doing* rather than what it has persisted.
+					entry.lastCompletedPhase = event.data.lastCompletedPhase;
+					entry.liveGeneration = true;
 					break;
 				case 'error':
 					if (event.data.code === 'CloneInProgress' && event.data.repoId != null) {

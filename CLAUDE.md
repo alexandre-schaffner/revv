@@ -80,7 +80,6 @@ The only required env vars are in `.env` at the repo root (read by `apps/server`
 
 ```
 GITHUB_CLIENT_ID=
-GITHUB_CLIENT_SECRET=
 BETTER_AUTH_SECRET=   # Generate with: openssl rand -hex 32
 ```
 
@@ -90,11 +89,91 @@ Create a GitHub OAuth App with callback URL `http://localhost:45678/api/auth/cal
 
 `docs/prds/` contains 6 sequential PRDs describing the remaining feature roadmap. The README there documents what's already built vs what's next. Read these before implementing new features to understand intended design.
 
-| PRD | Title | Priority |
-|-----|-------|----------|
-| 01 | Comment Persistence & Review Sessions | P0 |
-| 02 | AI Context Panel | P0 |
-| 03 | AI Guided Walkthrough | P1 |
-| 04 | GitHub Sync & Conversations | P1 |
-| 05 | Post-Review Agent | P1 |
-| 06 | Polish, Performance & Ship | P2 |
+| PRD | Title                                 | Priority |
+| --- | ------------------------------------- | -------- |
+| 01  | Comment Persistence & Review Sessions | P0       |
+| 02  | AI Context Panel                      | P0       |
+| 03  | AI Guided Walkthrough                 | P1       |
+| 04  | GitHub Sync & Conversations           | P1       |
+| 05  | Post-Review Agent                     | P1       |
+| 06  | Polish, Performance & Ship            | P2       |
+
+## Agent Subsystem Invariants
+
+These rules govern every AI-agent pipeline in Revv (walkthrough generation today, post-review
+agent tomorrow). Any change that violates them is wrong by construction — push back, don't
+"just make it work."
+
+### The Four Actors
+
+- **SQLite (journal).** Single source of truth for all state affecting correctness or
+  resumability. On crash, the system reconstructs itself from here and nothing else.
+- **Elysia (orchestrator + lifecycle owner).** Schedules jobs, enforces concurrency, runs
+  resume-on-boot, spawns agents, owns lifecycle writes (`status`, `last_completed_phase`,
+  `resumeAttempts`, watermarks). Holds ephemeral coordination caches that are reconstructible.
+- **MCP server (agent write gateway).** The only path by which an agent's content reaches
+  SQLite. Each tool is an atomic, idempotent upsert on a deterministic key, and each tool is
+  bound to a specific phase. Transport may be in-process (Claude Agent SDK) or HTTP
+  (opencode); **tool handler implementations are always shared in-process code.**
+- **Agent (stateless-across-runs worker).** In-memory reasoning state is never authoritative.
+  Between runs, the agent reconstructs its context from DB via an MCP read tool.
+
+### Invariants
+
+1. **SQLite is authoritative.** In-memory state is a reconstructible cache. Correctness must
+   survive `kill -9` at any instruction.
+2. **Agent content writes go through MCP, only.** Orchestrator lifecycle writes stay in
+   Elysia and must not be routed through MCP. The MCP *transport* may vary; the *handlers*
+   are shared.
+3. **Each MCP tool call is one atomic idempotent write** keyed on a deterministic identity.
+   Replays are no-ops.
+4. **Content generation is a strict 4-phase pipeline: A → B → C → D.** Phases complete in
+   order. Schema enforces it; tool surface enforces it; orchestrator enforces it.
+   - **Phase A — Overview + Risk.** One atomic write: `set_overview(summary, risk_level)`.
+     `last_completed_phase` becomes `'A'`.
+   - **Phase B — Diff Analysis.** Multi-step. Each step is exactly one atomic write:
+     `add_diff_step(step_index, markdown, code_snippet?, annotations?)`. Deterministically
+     keyed on `(walkthrough_id, step_index)`. Agent calls one step per call; batching is
+     forbidden at the tool-surface level.
+   - **Phase C — Overall Sentiment.** One atomic write: `set_sentiment(markdown)`.
+     Implicitly closes Phase B (requires ≥1 diff step).
+   - **Phase D — 9-Axis Rating.** Nine atomic writes via `rate_axis(axis, ...)`. Keyed on
+     `(walkthrough_id, axis)` with `onConflictDoUpdate`. `last_completed_phase` becomes
+     `'D'` only when all 9 axes are rated.
+5. **Phase preconditions are tool-level.** Out-of-order calls fail fast with a structured
+   error the agent can recover from.
+6. **Resumption reads state via an MCP read tool**, not env vars. On every run start,
+   including resumes, the agent calls `get_walkthrough_state(walkthrough_id)` first.
+7. **Walkthroughs are immutable per head SHA.** A new commit produces a new walkthrough row;
+   the old is marked `'superseded'` with a `superseded_by` back-reference. Never mutate
+   in place.
+8. **Commit first, broadcast second.** DB upsert is the commit point. SSE/WebSocket
+   broadcast is best-effort. Subscribers reconnecting after a miss MUST reconcile by
+   re-reading the DB.
+9. **Bounded retries with explicit budgets.** `WALKTHROUGH_MAX_RESUME_ATTEMPTS = 3`,
+   `MAX_AUTO_CONTINUATIONS = 2`, `MAX_CONCURRENT_JOBS = 5`. Exceeding marks the row
+   terminal (`error`) and stops.
+10. **Per-job resource scoping.** Each job owns a dedicated git worktree at `head_sha`,
+    registered as a scope finalizer so cleanup happens on every exit path.
+11. **Status transitions are orchestrator-only.** Agents never write `status` or
+    `last_completed_phase` directly. MCP tool handlers update phase fields as a side-effect
+    of their own writes; `status ∈ {generating, complete, error, superseded}` is only ever
+    set by `WalkthroughJobs`.
+12. **`complete_walkthrough` is a validation gate.** Asserts `last_completed_phase = 'D'`
+    AND all 9 axes rated AND summary/sentiment non-empty AND ≥1 diff step. Only then does
+    the orchestrator transition `status` to `complete`.
+13. **Agent-path parity.** Both agent paths (Claude Agent SDK, opencode) must exhibit
+    byte-for-byte identical externally-observable behavior during a review. Divergence in
+    the model's reasoning style is allowed; divergence in events, lifecycle, phase
+    transitions, retry, or resume semantics is a bug.
+14. **Agent-daemon lifecycle.** Agent daemons (e.g., `opencode serve`) are lazy-started
+    only when the selected agent requires them and an active job needs them; they are
+    stopped when idle or when the selected agent changes. Their credentials and bound
+    port are ephemeral and never persisted.
+
+### Implications for new agent features (e.g., PRD-05)
+
+New agent subsystems must mirror this architecture: durable `*_jobs` table with `status` +
+phase enum + `resumeAttempts`, MCP tool surface with phase preconditions, orchestrator
+owns lifecycle, resume-on-boot. If you find yourself adding in-memory state that couldn't
+survive a `kill -9`, stop — you're building on sand.

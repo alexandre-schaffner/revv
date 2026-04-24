@@ -25,7 +25,10 @@ marked.use({
 });
 
 export function renderMarkdown(source: string): string {
-	const raw = marked.parse(source, { async: false }) as string;
+	// Normalize literal \n escape sequences (AI output artefact) to real newlines
+	// so that marked sees actual paragraph breaks instead of two-character text.
+	const normalized = source.replace(/\\n/g, '\n');
+	const raw = marked.parse(normalized, { async: false }) as string;
 	return DOMPurify.sanitize(raw, {
 		ADD_ATTR: ['style', 'class', 'tabindex'],
 	});

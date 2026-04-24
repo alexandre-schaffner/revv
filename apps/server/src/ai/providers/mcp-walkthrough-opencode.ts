@@ -1,268 +1,118 @@
+// ─── mcp-walkthrough-opencode ───────────────────────────────────────────────
+//
+// Opencode driver. Delegates all tool handling to the shared HTTP MCP route
+// (apps/server/src/routes/mcp/walkthrough.ts) which runs the SAME handlers the
+// Claude SDK path uses. Per doctrine invariant #13 (agent-path parity), there
+// is no "opencode-side tool logic" anymore — this file is purely a session
+// driver that:
+//
+//   1. Asks the OpencodeSupervisor for a running daemon (lazy-started).
+//   2. Obtains a one-time session token from WalkthroughJobs for the job.
+//   3. Registers /mcp/walkthrough on the daemon as a remote MCP server,
+//      passing the bearer token in the connection headers.
+//   4. Creates an opencode session, posts the user message, subscribes to
+//      /event SSE filtered to this session, and translates the subset of
+//      events we care about (exploration, error, session lifecycle) into
+//      WalkthroughStreamEvent. Tool-call events do NOT come through here —
+//      the tool handlers on the HTTP MCP route already emitted the
+//      corresponding events via WalkthroughJobs.emitEvent.
+//   5. Wires the caller's AbortController into `client.abortSession`.
+//
+// The 10-minute hard timeout is preserved (layered on top of the caller's
+// controller). On stream end we synthesize `done` or `error` as appropriate.
+//
+// Dependencies (OpencodeSupervisor, WalkthroughJobs) are threaded in as
+// plain callbacks through the `deps` parameter so this file has no Effect
+// layer-graph cycles with Ai.ts.
+
 import type {
-	RatingAxis,
-	WalkthroughBlock,
 	WalkthroughStreamEvent,
 	WalkthroughTokenUsage,
 } from "@revv/shared";
+import { API_PORT } from "@revv/shared";
 import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../../constants";
 import { debug, logError } from "../../logger";
 import type { PrFileMeta } from "../../services/GitHub";
-import { resolveCliBin } from "./cli-agent";
+import type { UserSettings } from "@revv/shared";
+import type {
+	OpencodeEndpoint,
+	OpencodeHttpClient,
+} from "../../services/OpencodeSupervisor";
 import {
 	buildExplorationDescription,
 	buildWalkthroughPrompt,
 	WALKTHROUGH_MCP_SYSTEM_PROMPT,
 } from "../prompts/walkthrough";
 import type { ContinuationContext } from "./mcp-walkthrough";
-import {
-	buildOpencodeConfig,
-	getStdioServerPath,
-	withTempOpencodeConfig,
-} from "./opencode-config";
-import { createInitialState, type WalkthroughToolState } from "./walkthrough-tool-spec";
+import type { Db } from "../../db";
 
-// ── Built-in exploration tools opencode exposes ──────────────────────────────
+// ── Built-in exploration tool suffixes opencode exposes ──────────────────────
+//
+// The HTTP MCP route handlers emit their own content events; we only need to
+// surface exploration (Read / Grep / Glob / Bash) here so the UI can show
+// what the model is looking at.
+const EXPLORATION_TOOLS = new Set([
+	"Read",
+	"Grep",
+	"Glob",
+	"Bash",
+	"TodoRead",
+	"TodoWrite",
+]);
 
-const EXPLORATION_TOOLS = new Set(["Read", "Grep", "Glob", "Bash", "TodoRead", "TodoWrite"]);
-const MCP_TOOL_PREFIX = "revv-walkthrough_";
+// ── Deps injected by the caller (AiService) ──────────────────────────────────
 
-// ── JSON frame shapes from opencode --format json ────────────────────────────
-
-interface OpencodeFrame {
-	type: string;
-	part?: {
-		type?: string;
-		tool?: string;
-		state?: { input?: unknown; output?: string };
-		reason?: string;
-		sessionId?: string;
-	};
-	id?: string;
-	usage?: {
-		// camelCase (opencode's format)
-		inputTokens?: number;
-		outputTokens?: number;
-		cacheReadInputTokens?: number;
-		cacheCreationInputTokens?: number;
-		// snake_case fallback
-		input_tokens?: number;
-		output_tokens?: number;
-		cache_read_input_tokens?: number;
-		cache_creation_input_tokens?: number;
-	};
-}
-
-// ── Event reconstruction helper ───────────────────────────────────────────────
-
-/**
- * Given a tool name suffix (without the MCP prefix) and the tool's input args,
- * reconstruct the WalkthroughStreamEvent(s) that the tool handler would emit.
- * Mutates `state` to keep counters in sync.
- */
-function reconstructEvents(
-	toolSuffix: string,
-	input: unknown,
-	state: WalkthroughToolState,
-): WalkthroughStreamEvent[] {
-	const args = (input ?? {}) as Record<string, unknown>;
-	const events: WalkthroughStreamEvent[] = [];
-
-	if (toolSuffix === "set_walkthrough_summary") {
-		state.summarySet = true;
-		events.push({
-			type: "phase",
-			data: { phase: "analyzing", message: "Forming assessment and risk analysis..." },
-		});
-		events.push({
-			type: "summary",
-			data: {
-				summary: String(args["summary"] ?? ""),
-				riskLevel: (args["risk_level"] as "low" | "medium" | "high") ?? "low",
-			},
-		});
-	} else if (
-		toolSuffix === "add_markdown_section" ||
-		toolSuffix === "add_code_block" ||
-		toolSuffix === "add_diff_block"
-	) {
-		if (!state.writingPhaseEmitted) {
-			state.writingPhaseEmitted = true;
-			events.push({
-				type: "phase",
-				data: { phase: "writing", message: "Building walkthrough..." },
-			});
-		}
-
-		if (toolSuffix === "add_markdown_section") {
-			const block: WalkthroughBlock = {
-				type: "markdown",
-				id: `block-${state.blockCount}`,
-				order: state.blockCount,
-				content: String(args["content"] ?? ""),
-			};
-			state.blockCount++;
-			events.push({ type: "block", data: block });
-		} else if (toolSuffix === "add_code_block") {
-			const block: WalkthroughBlock = {
-				type: "code",
-				id: `block-${state.blockCount}`,
-				order: state.blockCount,
-				filePath: String(args["file_path"] ?? ""),
-				startLine: Number(args["start_line"] ?? 0),
-				endLine: Number(args["end_line"] ?? 0),
-				language: String(args["language"] ?? "text"),
-				content: String(args["content"] ?? ""),
-				annotation:
-					args["annotation"] !== undefined && args["annotation"] !== null
-						? String(args["annotation"])
-						: null,
-				annotationPosition:
-					args["annotation_position"] === "right" ? "right" : "left",
-			};
-			state.blockCount++;
-			events.push({ type: "block", data: block });
-		} else {
-			// add_diff_block
-			const block: WalkthroughBlock = {
-				type: "diff",
-				id: `block-${state.blockCount}`,
-				order: state.blockCount,
-				filePath: String(args["file_path"] ?? ""),
-				patch: String(args["patch"] ?? ""),
-				annotation:
-					args["annotation"] !== undefined && args["annotation"] !== null
-						? String(args["annotation"])
-						: null,
-				annotationPosition:
-					args["annotation_position"] === "right" ? "right" : "left",
-			};
-			state.blockCount++;
-			events.push({ type: "block", data: block });
-		}
-	} else if (toolSuffix === "flag_issue") {
-		const rawBlockOrders = args["block_orders"];
-		const blockOrders: number[] = Array.isArray(rawBlockOrders)
-			? rawBlockOrders.filter((o): o is number => typeof o === "number")
-			: [];
-		const uniqueOrders = Array.from(new Set(blockOrders));
-		const blockIds = uniqueOrders.map((o) => `block-${o}`);
-
-		const rawSeverity = String(args["severity"] ?? "info");
-		const severity: "info" | "warning" | "critical" =
-			rawSeverity === "warning" || rawSeverity === "critical" ? rawSeverity : "info";
-
-		const issue = {
-			id: `issue-${state.issueCount}`,
-			severity,
-			title: String(args["title"] ?? ""),
-			description: String(args["description"] ?? ""),
-			blockIds,
-			...(args["file_path"] != null ? { filePath: String(args["file_path"]) } : {}),
-			...(args["start_line"] != null ? { startLine: Number(args["start_line"]) } : {}),
-			...(args["end_line"] != null ? { endLine: Number(args["end_line"]) } : {}),
-		};
-		state.issueCount++;
-		events.push({ type: "issue", data: issue });
-	} else if (toolSuffix === "rate_axis") {
-		const axis = String(args["axis"] ?? "") as RatingAxis;
-		if (!state.ratedAxes.has(axis)) {
-			state.ratedAxes.add(axis);
-
-			if (state.ratedAxes.size === 1) {
-				// First rating — emit phase transition
-				events.push({
-					type: "phase",
-					data: { phase: "rating", message: "Scoring the PR across 9 axes..." },
-				});
-			}
-
-			const rawCitations = args["citations"];
-			const citations = Array.isArray(rawCitations)
-				? rawCitations
-						.filter(
-							(c): c is Record<string, unknown> =>
-								typeof c === "object" && c !== null,
-						)
-						.map((c) => ({
-							filePath: String(c["file_path"] ?? ""),
-							startLine: Number(c["start_line"] ?? 0),
-							endLine: Number(c["end_line"] ?? 0),
-							...(c["note"] != null ? { note: String(c["note"]) } : {}),
-						}))
-				: [];
-
-			const rawBlockOrders = args["block_orders"];
-			const blockOrders: number[] = Array.isArray(rawBlockOrders)
-				? rawBlockOrders.filter((o): o is number => typeof o === "number")
-				: [];
-			const blockIds = Array.from(new Set(blockOrders)).map((o) => `block-${o}`);
-
-			events.push({
-				type: "rating",
-				data: {
-					axis,
-					verdict: (args["verdict"] as "pass" | "concern" | "blocker") ?? "pass",
-					confidence: (args["confidence"] as "low" | "medium" | "high") ?? "low",
-					rationale: String(args["rationale"] ?? ""),
-					details: String(args["details"] ?? ""),
-					citations,
-					blockIds,
-				},
-			});
-		}
-	} else if (toolSuffix === "complete_walkthrough") {
-		events.push({
-			type: "phase",
-			data: { phase: "finishing", message: "Wrapping up..." },
-		});
-		events.push({
-			type: "done",
-			data: {
-				walkthroughId: "",
-				tokenUsage: {
-					inputTokens: 0,
-					outputTokens: 0,
-					cacheReadInputTokens: 0,
-					cacheCreationInputTokens: 0,
-				},
-			},
-		});
-	}
-
-	return events;
+export interface OpencodeProviderDeps {
+	/** Ensure the daemon is running; returns credentials + port. */
+	ensureDaemon: () => Promise<OpencodeEndpoint>;
+	/** Bump active-job ref count on the supervisor. */
+	jobStarted: () => Promise<void>;
+	/** Decrement ref count so the supervisor can idle-stop. */
+	jobEnded: () => Promise<void>;
+	/** Fetch the current supervisor HTTP client (may be null if daemon died). */
+	client: () => Promise<OpencodeHttpClient | null>;
+	/** Mint a session token bound to this walkthroughId. */
+	issueSessionToken: (walkthroughId: string) => Promise<string>;
+	/** Invalidate the token when we're done. */
+	clearSessionToken: (token: string) => Promise<void>;
 }
 
 // ── Main entry point ─────────────────────────────────────────────────────────
 
+export interface OpencodeStreamParams {
+	walkthroughId: string;
+	db: Db;
+	pr: {
+		title: string;
+		body: string | null;
+		sourceBranch: string;
+		targetBranch: string;
+		url: string;
+	};
+	files: PrFileMeta[];
+	worktreePath: string;
+	continuation?: ContinuationContext;
+	onSessionId?: (sessionId: string) => void;
+	/**
+	 * Caller-owned abort signal. When `.abort()` is called upstream (user
+	 * cancel, scope finalizer, shutdown), we invoke `client.abortSession` on
+	 * the daemon so the model stops producing output. The 10-minute timeout
+	 * layers on top, routing through the same controller.
+	 */
+	abortController?: AbortController;
+	/** Injected dependencies (supervisor + session-token accessors). */
+	deps: OpencodeProviderDeps;
+}
+
 /**
- * Stream a walkthrough by spawning opencode with an MCP config that registers
- * the revv-walkthrough tools. Events are reconstructed by observing tool_use
- * frames in opencode's --format json stdout stream.
+ * Stream a walkthrough through the persistent opencode daemon. Replaces the
+ * prior "spawn `opencode run` per job + stdio MCP" design.
  */
 export function streamWalkthroughViaOpencodeMCP(
-	params: {
-		pr: {
-			title: string;
-			body: string | null;
-			sourceBranch: string;
-			targetBranch: string;
-			url: string;
-		};
-		files: PrFileMeta[];
-		worktreePath: string;
-		continuation?: ContinuationContext;
-		onSessionId?: (sessionId: string) => void;
-		/**
-		 * Caller-owned abort signal. When provided, `.abort()` kills the spawned
-		 * `opencode run` subprocess — this is how {@link WalkthroughJobs.cancel}
-		 * propagates into the AI turn. The built-in 10-minute timeout layers on
-		 * top of this controller, not a separately-minted one.
-		 */
-		abortController?: AbortController;
-	},
+	params: OpencodeStreamParams,
 	model?: string,
+	_settings?: UserSettings,
 ): AsyncGenerator<WalkthroughStreamEvent> {
-	// ── Shared event queue + waiter pattern ──────────────────────────────
 	const events: WalkthroughStreamEvent[] = [];
 	let waiter: { resolve: () => void } | null = null;
 	let queryDone = false;
@@ -275,95 +125,61 @@ export function streamWalkthroughViaOpencodeMCP(
 		}
 	}
 
-	// ── Local emitter state (mirrors what the stdio server holds) ────────
-	const state = createInitialState();
-	if (params.continuation) {
-		state.summarySet = true;
-		state.blockCount = params.continuation.existingBlocks.length;
-		state.issueCount = params.continuation.existingIssueCount;
-		state.writingPhaseEmitted = params.continuation.existingBlocks.length > 0;
-		for (const axis of params.continuation.existingRatedAxes) {
-			state.ratedAxes.add(axis);
-		}
-	}
-
-	// ── Build prompt and config ───────────────────────────────────────────
-	const userMessage =
-		WALKTHROUGH_MCP_SYSTEM_PROMPT + "\n\n---\n\n" + buildWalkthroughPrompt(params, undefined, params.continuation);
-
-	const initialState = params.continuation
-		? {
-				blockCount: params.continuation.existingBlocks.length,
-				issueCount: params.continuation.existingIssueCount,
-				summarySet: true,
-				ratedAxes: params.continuation.existingRatedAxes,
-			}
-		: undefined;
-
-	const configContent = buildOpencodeConfig({
-		stdioServerPath: getStdioServerPath(),
-		...(initialState !== undefined ? { initialState } : {}),
-		...(model !== undefined ? { model } : {}),
-	});
-
-	// ── Run opencode in background ────────────────────────────────────────
 	let errorEmitted = false;
+	let anySummaryEmitted = false;
+	let cancelledByCaller = false;
 
-	const queryTask = withTempOpencodeConfig(
-		params.worktreePath,
-		configContent,
-		async (): Promise<WalkthroughTokenUsage> => {
+	const userMessage =
+		WALKTHROUGH_MCP_SYSTEM_PROMPT +
+		"\n\n---\n\n" +
+		buildWalkthroughPrompt(params, undefined, params.continuation);
+
+	const queryTask = (async (): Promise<WalkthroughTokenUsage> => {
+		// ── 1. Start daemon (or attach to existing) ──────────────────────
+		await params.deps.jobStarted();
+		let sessionToken: string | null = null;
+		let sessionId: string | null = null;
+
+		const externalAbort = params.abortController;
+		let killed = false;
+		let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+		const onExternalAbort = () => {
+			cancelledByCaller = true;
 			debug(
 				"walkthrough-opencode-mcp",
-				"Starting opencode MCP walkthrough in:",
-				params.worktreePath,
-				"model:",
-				model ?? "default",
+				"external abort received — calling abortSession",
 			);
-			const cliArgs = [
-				resolveCliBin("opencode"),
-				"run",
-				"--format",
-				"json",
-				"--dangerously-skip-permissions",
-				...(model !== undefined ? ["--model", model] : []),
-				...(params.continuation?.opencodeSessionId !== undefined
-					? ["--session", params.continuation.opencodeSessionId]
-					: []),
-			];
+			if (sessionId) {
+				void (async () => {
+					const client = await params.deps.client();
+					if (!client) return;
+					try {
+						await client.abortSession(sessionId!);
+					} catch (err) {
+						debug(
+							"walkthrough-opencode-mcp",
+							"abortSession failed:",
+							err instanceof Error ? err.message : String(err),
+						);
+					}
+				})();
+			}
+		};
 
-			const proc = Bun.spawn(cliArgs, {
-				cwd: params.worktreePath,
-				stdin: "pipe",
-				stdout: "pipe",
-				stderr: "pipe",
-			});
-
-			proc.stdin.write(userMessage);
-			proc.stdin.end();
-
-			// Wire external cancellation into the subprocess lifecycle. If the
-			// caller aborts (e.g. {@link WalkthroughJobs.cancel} for a
-			// regenerate), we mark the run killed and terminate opencode so the
-			// for-await loop below unwinds cleanly instead of waiting on stdout.
-			const externalAbort = params.abortController;
-			let cancelledByCaller = false;
-			const onExternalAbort = () => {
-				cancelledByCaller = true;
-				debug(
-					"walkthrough-opencode-mcp",
-					"Received external abort — killing opencode subprocess",
+		try {
+			const endpoint = await params.deps.ensureDaemon();
+			const client = await params.deps.client();
+			if (!client) {
+				throw new Error(
+					"OpencodeSupervisor reports daemon-running but no HTTP client available",
 				);
-				try {
-					proc.kill();
-				} catch {
-					/* already dead */
-				}
-			};
+			}
+
+			// Hook abort listeners as early as possible.
 			if (externalAbort) {
 				if (externalAbort.signal.aborted) {
-					// Already aborted before we spawned — kill immediately.
-					onExternalAbort();
+					cancelledByCaller = true;
 				} else {
 					externalAbort.signal.addEventListener("abort", onExternalAbort, {
 						once: true,
@@ -371,242 +187,180 @@ export function streamWalkthroughViaOpencodeMCP(
 				}
 			}
 
-			// Collect stderr for debugging
-			const stderrPromise = (async () => {
-				const dec = new TextDecoder();
-				const lines: string[] = [];
-				for await (const chunk of proc.stderr as unknown as AsyncIterable<Uint8Array>) {
-					const text = dec.decode(chunk, { stream: true });
-					lines.push(text);
-				if (text.trim()) {
-					logError("walkthrough-opencode-mcp", "stderr:", text.trim().slice(0, 300));
-				}
-				}
-				return lines.join("");
-			})();
-
-			let tokenUsage: WalkthroughTokenUsage = {
-				inputTokens: 0,
-				outputTokens: 0,
-				cacheReadInputTokens: 0,
-				cacheCreationInputTokens: 0,
-			};
-
-			// Hard timeout — layered on top of the external controller so both
-			// paths converge on a single "subprocess is dead" state.
-			let killed = false;
-			const timeoutId = setTimeout(() => {
+			// Wall-clock hard timeout.
+			timeoutId = setTimeout(() => {
 				killed = true;
 				debug(
 					"walkthrough-opencode-mcp",
-					"Aborting walkthrough — timed out after 10 minutes",
+					"hard timeout — aborting session",
 				);
 				try {
-					proc.kill();
-				} catch {
-					/* already dead */
-				}
-				// Also signal the external controller so any peers waiting on
-				// `abortController.signal` (e.g. Scope finalizers) see a consistent
-				// aborted state.
-				try {
 					externalAbort?.abort(
-						new Error("Walkthrough generation timed out after 10 minutes"),
+						new Error(
+							`Walkthrough generation timed out after ${Math.round(
+								CLI_WALKTHROUGH_TIMEOUT_MS / 60_000,
+							)} minutes`,
+						),
 					);
 				} catch {
 					/* already aborted */
 				}
 			}, CLI_WALKTHROUGH_TIMEOUT_MS);
 
-			try {
-				const decoder = new TextDecoder();
-				let buffer = "";
-				let connectingEventEmitted = false;
-				let currentPhase:
-					| "connecting"
-					| "exploring"
-					| "analyzing"
-					| "writing"
-					| "rating"
-					| "finishing" = "connecting";
-
-				for await (const chunk of proc.stdout as unknown as AsyncIterable<Uint8Array>) {
-					buffer += decoder.decode(chunk, { stream: true });
-						const lines = buffer.split("\n");
-					buffer = lines.pop() ?? "";
-
-					for (const line of lines) {
-						const trimmed = line.trim();
-						if (!trimmed) continue;
-
-						let frame: OpencodeFrame;
-						try {
-					frame = JSON.parse(trimmed) as OpencodeFrame;
-				} catch {
-					continue;
-				}
-
-				// Any frame from opencode proves the subprocess is alive — signal the stream guard
-				if (!connectingEventEmitted) {
-					connectingEventEmitted = true;
-					push({
-						type: "phase",
-						data: { phase: "connecting", message: "Connected to AI model..." },
-					});
-				}
-
-			// ── Session ID capture ─────────────────────────────────────
-				if (frame.type === "session") {
-					const sessionId = frame.part?.sessionId ?? frame.id;
-					if (sessionId && params.onSessionId) {
-						params.onSessionId(sessionId);
-					}
-				}
-
-						// ── Tool use ───────────────────────────────────────────────
-						if (frame.type === "tool_use" && frame.part?.tool) {
-							const tool = frame.part.tool;
-							const input = frame.part.state?.input;
-
-							if (tool.startsWith(MCP_TOOL_PREFIX)) {
-								const suffix = tool.slice(MCP_TOOL_PREFIX.length);
-								const reconstructed = reconstructEvents(suffix, input, state);
-
-								// Phase tracking — only advance forward
-								for (const evt of reconstructed) {
-									if (evt.type === "phase") {
-										const phase = evt.data.phase;
-										if (
-											phase === "analyzing" &&
-											currentPhase !== "analyzing" &&
-											currentPhase !== "writing" &&
-											currentPhase !== "rating" &&
-											currentPhase !== "finishing"
-										) {
-											currentPhase = "analyzing";
-										} else if (
-											phase === "writing" &&
-											currentPhase !== "writing" &&
-											currentPhase !== "rating" &&
-											currentPhase !== "finishing"
-										) {
-											currentPhase = "writing";
-										} else if (
-											phase === "rating" &&
-											currentPhase !== "rating" &&
-											currentPhase !== "finishing"
-										) {
-											currentPhase = "rating";
-										} else if (phase === "finishing") {
-											currentPhase = "finishing";
-										}
-									}
-									push(evt);
-								}
-							} else if (EXPLORATION_TOOLS.has(tool)) {
-								// Transition to exploring phase on first exploration tool call
-								if (currentPhase === "connecting") {
-									currentPhase = "exploring";
-									push({
-										type: "phase",
-										data: {
-											phase: "exploring",
-											message: "Reading files and understanding changes...",
-										},
-									});
-								}
-								const description = buildExplorationDescription(tool, input);
-								push({ type: "exploration", data: { tool, description } });
-							}
-						}
-
-						// ── Token usage from result frame ───────────────────────────
-						if (frame.type === "result" && frame.usage) {
-							const u = frame.usage;
-							tokenUsage = {
-								inputTokens: u.inputTokens ?? u.input_tokens ?? 0,
-								outputTokens: u.outputTokens ?? u.output_tokens ?? 0,
-								cacheReadInputTokens:
-									u.cacheReadInputTokens ?? u.cache_read_input_tokens ?? 0,
-								cacheCreationInputTokens:
-									u.cacheCreationInputTokens ?? u.cache_creation_input_tokens ?? 0,
-							};
-						}
-					}
-				}
-		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
-			logError("walkthrough-opencode-mcp", "stdout read error:", message);
-				// Swallow errors triggered by caller-initiated cancellation — the
-				// registry (or Scope finalizer) is already aware and will tear down
-				// the job; surfacing a spurious "AiGenerationError" would race the
-				// real "interrupted" signal.
-				if (!killed && !cancelledByCaller) {
-					errorEmitted = true;
-					push({ type: "error", data: { code: "AiGenerationError", message } });
-				}
-			} finally {
-				clearTimeout(timeoutId);
-				if (externalAbort) {
-					externalAbort.signal.removeEventListener("abort", onExternalAbort);
-				}
-				try {
-					proc.kill();
-				} catch {
-					/* already dead */
-				}
-			}
-
-		await proc.exited;
-		const stderrOutput = await stderrPromise;
-
-		if (killed && !cancelledByCaller) {
-			errorEmitted = true;
-			push({
-				type: "error",
-				data: {
-					code: "AiGenerationError",
-					message: "Walkthrough generation timed out after 10 minutes",
+			// ── 2. Issue session token + register MCP server ─────────────
+			sessionToken = await params.deps.issueSessionToken(params.walkthroughId);
+			const mcpUrl = `http://127.0.0.1:${API_PORT}/mcp/walkthrough`;
+			const registrationName = `revv-walkthrough-${params.walkthroughId}`;
+			debug(
+				"walkthrough-opencode-mcp",
+				`registering MCP ${registrationName} → ${mcpUrl}`,
+				"endpoint:",
+				`${endpoint.hostname}:${endpoint.port}`,
+			);
+			await client.registerMcp({
+				name: registrationName,
+				config: {
+					type: "remote",
+					url: mcpUrl,
+					headers: {
+						Authorization: `Bearer ${sessionToken}`,
+					},
 				},
 			});
-		} else if (!killed && !cancelledByCaller && !errorEmitted && proc.exitCode !== 0) {
-			// Process exited with error before producing meaningful output.
-			// Surface the stderr so the user sees the actual failure reason
-			// instead of waiting for the 120s inactivity timeout.
-			const trimmedStderr = stderrOutput.trim().slice(-500);
-			const exitMsg = trimmedStderr
-				? `opencode exited with code ${proc.exitCode}: ${trimmedStderr}`
-				: `opencode exited with code ${proc.exitCode} (no stderr output)`;
-			logError("walkthrough-opencode-mcp", "non-zero exit:", exitMsg);
-			errorEmitted = true;
-			push({
-				type: "error",
-				data: { code: "AiGenerationError", message: exitMsg },
+
+			// ── 3. Create opencode session ──────────────────────────────
+			const created = await client.createSession({
+				title: `walkthrough-${params.walkthroughId}`,
+				...(params.continuation?.opencodeSessionId !== undefined
+					? { parentID: params.continuation.opencodeSessionId }
+					: {}),
 			});
+			sessionId = created.id;
+			debug("walkthrough-opencode-mcp", "created session:", sessionId);
+			if (params.onSessionId) params.onSessionId(sessionId);
+
+			// ── 4. Subscribe to /event BEFORE posting the message ───────
+			//
+			// Race-free: we need the SSE listener active before the model
+			// starts emitting events. The subscription runs as a fire-and-
+			// forget Promise; we abort it via the external controller on
+			// finish.
+			const subscribeController = new AbortController();
+			if (externalAbort) {
+				externalAbort.signal.addEventListener(
+					"abort",
+					() => subscribeController.abort(),
+					{ once: true },
+				);
+			}
+
+			const subscribePromise = client.subscribeToEvents({
+				sessionId,
+				signal: subscribeController.signal,
+				onEvent: (ev: unknown) => {
+					translateOpencodeEvent(ev, {
+						onExploration: (tool, description) => {
+							push({
+								type: "exploration",
+								data: { tool, description },
+							});
+						},
+						onError: (message) => {
+							if (!errorEmitted) {
+								errorEmitted = true;
+								push({
+									type: "error",
+									data: { code: "AiGenerationError", message },
+								});
+							}
+						},
+					});
+				},
+			}).catch((err) => {
+				// Aborts are expected on finish; anything else is noteworthy.
+				if (!subscribeController.signal.aborted) {
+					debug(
+						"walkthrough-opencode-mcp",
+						"SSE subscribe ended:",
+						err instanceof Error ? err.message : String(err),
+					);
+				}
+			});
+
+			// ── 5. Post the user message ────────────────────────────────
+			const postParts = [{ type: "text", text: userMessage }];
+			debug(
+				"walkthrough-opencode-mcp",
+				`posting message to session ${sessionId}`,
+				"model:",
+				model ?? "(default)",
+			);
+
+			await client.postMessage({
+				sessionId,
+				parts: postParts,
+				system: WALKTHROUGH_MCP_SYSTEM_PROMPT,
+				...(model !== undefined ? { model } : {}),
+			});
+
+			// The postMessage resolves when the daemon finishes producing the
+			// turn (or returns control). We still wait for the SSE loop to
+			// drain so any trailing events land before we return.
+			subscribeController.abort();
+			await subscribePromise;
+
+			// Fabricate anySummaryEmitted signal from the DB side-effects:
+			// if anything landed for this walkthroughId via /mcp/walkthrough
+			// we consider the run successful. We don't have a direct channel
+			// to know this from inside the provider (content events went
+			// through WalkthroughJobs.emitEvent, bypassing `push`), so we
+			// rely on the orchestrator's DB poll (in WalkthroughJobs) to
+			// detect completion. For our own generator-end signal we treat
+			// "no error emitted and not cancelled" as a successful run.
+			anySummaryEmitted = !errorEmitted && !cancelledByCaller;
+
+			return {
+				inputTokens: 0,
+				outputTokens: 0,
+				cacheReadInputTokens: 0,
+				cacheCreationInputTokens: 0,
+			};
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			logError("walkthrough-opencode-mcp", "queryTask error:", message);
+			if (!killed && !cancelledByCaller && !errorEmitted) {
+				errorEmitted = true;
+				push({
+					type: "error",
+					data: { code: "AiGenerationError", message },
+				});
+			}
+			return {
+				inputTokens: 0,
+				outputTokens: 0,
+				cacheReadInputTokens: 0,
+				cacheCreationInputTokens: 0,
+			};
+		} finally {
+			if (timeoutId !== undefined) clearTimeout(timeoutId);
+			if (externalAbort) {
+				externalAbort.signal.removeEventListener("abort", onExternalAbort);
+			}
+			if (sessionToken) {
+				try {
+					await params.deps.clearSessionToken(sessionToken);
+				} catch {
+					/* ignore */
+				}
+			}
+			try {
+				await params.deps.jobEnded();
+			} catch {
+				/* ignore */
+			}
 		}
+	})();
 
-		debug(
-			"walkthrough-opencode-mcp",
-			"opencode exited. Blocks emitted:",
-			state.blockCount,
-		);
-
-		return tokenUsage;
-		},
-	).catch((err: unknown): WalkthroughTokenUsage => {
-		const message = err instanceof Error ? err.message : String(err);
-		logError("walkthrough-opencode-mcp", "queryTask error:", message);
-		errorEmitted = true;
-		push({ type: "error", data: { code: "AiGenerationError", message } });
-		return {
-			inputTokens: 0,
-			outputTokens: 0,
-			cacheReadInputTokens: 0,
-			cacheCreationInputTokens: 0,
-		};
-	});
-
-	// ── Async generator that yields events from the queue ────────────────
 	return (async function* (): AsyncGenerator<WalkthroughStreamEvent> {
 		const resultPromise = queryTask.then((usage) => {
 			queryDone = true;
@@ -621,7 +375,7 @@ export function streamWalkthroughViaOpencodeMCP(
 			if (events.length > 0) {
 				const batch = events.splice(0);
 				for (const e of batch) {
-						yield e;
+					yield e;
 				}
 			} else if (queryDone) {
 				break;
@@ -632,31 +386,117 @@ export function streamWalkthroughViaOpencodeMCP(
 			}
 		}
 
-		// Drain remaining events
 		for (const e of events.splice(0)) {
 			yield e;
 		}
 
 		const tokenUsage = await resultPromise;
 
-		if (state.summarySet) {
+		if (anySummaryEmitted) {
 			yield {
 				type: "done" as const,
-				data: { walkthroughId: "", tokenUsage },
+				data: {
+					walkthroughId: params.walkthroughId,
+					tokenUsage,
+				},
 			};
 		} else if (!errorEmitted) {
 			debug(
 				"walkthrough-opencode-mcp",
-				"opencode completed without producing a summary — emitting fallback error",
+				"Session ended without producing content — emitting fallback error",
 			);
 			yield {
 				type: "error" as const,
 				data: {
 					code: "NoSummaryGenerated",
 					message:
-						"The AI finished exploring but did not produce a walkthrough. This can happen with complex PRs. Try regenerating.",
+						"The AI finished without producing a walkthrough. This can happen with complex PRs. Try regenerating.",
 				},
 			};
 		}
 	})();
+}
+
+// ── Opencode /event → WalkthroughStreamEvent translator ──────────────────────
+//
+// We only surface the subset of events we care about here:
+//   - Exploration tool calls (Read/Grep/Glob/Bash) — for the "reading files"
+//     UI feedback.
+//   - Error / failure events — so we can emit a terminal `error`.
+//
+// Content events (summary, block, issue, rating, sentiment, phase:advanced)
+// are NEVER emitted from this path — they flow through WalkthroughJobs.emitEvent
+// from the HTTP MCP route's handlers, which is the authoritative commit-first
+// path (doctrine invariant #8).
+
+interface EventCallbacks {
+	onExploration: (tool: string, description: string) => void;
+	onError: (message: string) => void;
+}
+
+/**
+ * Walk an opencode /event envelope and emit translated callbacks. The
+ * opencode event shape is: `{ type: "...", properties: { ... } }` where
+ * `type` is something like `session.updated`, `message.part.updated`, etc.
+ * We're conservative: unknown shapes are ignored.
+ *
+ * TODO(verify): the exact event envelope from opencode is documented at
+ * https://opencode.ai/docs/api — confirm the shapes below once an end-to-end
+ * run has been validated. The current implementation tolerates both flat
+ * (`ev.tool`) and nested (`ev.properties.part.tool`) shapes.
+ */
+function translateOpencodeEvent(
+	ev: unknown,
+	cb: EventCallbacks,
+): void {
+	if (ev === null || typeof ev !== "object") return;
+	const root = ev as Record<string, unknown>;
+	const type = typeof root["type"] === "string" ? root["type"] : null;
+	const props =
+		root["properties"] && typeof root["properties"] === "object"
+			? (root["properties"] as Record<string, unknown>)
+			: root;
+
+	// Tool-use events — find the tool name + input.
+	const maybePart = props["part"];
+	const partObj =
+		maybePart && typeof maybePart === "object"
+			? (maybePart as Record<string, unknown>)
+			: null;
+	const partType =
+		partObj && typeof partObj["type"] === "string"
+			? (partObj["type"] as string)
+			: null;
+	const toolName =
+		partObj && typeof partObj["tool"] === "string"
+			? (partObj["tool"] as string)
+			: typeof props["tool"] === "string"
+				? (props["tool"] as string)
+				: null;
+
+	if ((partType === "tool" || partType === "tool_use") && toolName) {
+		if (EXPLORATION_TOOLS.has(toolName)) {
+			const state =
+				partObj && typeof partObj["state"] === "object"
+					? (partObj["state"] as Record<string, unknown>)
+					: null;
+			const input = state?.["input"] ?? props["input"];
+			cb.onExploration(toolName, buildExplorationDescription(toolName, input));
+			return;
+		}
+		// MCP tool calls flow through the HTTP route — do not surface here.
+		return;
+	}
+
+	// Error events.
+	if (type && /error/i.test(type)) {
+		const message =
+			typeof props["message"] === "string"
+				? (props["message"] as string)
+				: typeof props["error"] === "string"
+					? (props["error"] as string)
+					: `opencode reported error (${type})`;
+		cb.onError(message);
+		return;
+	}
 }

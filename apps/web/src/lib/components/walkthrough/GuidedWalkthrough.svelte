@@ -3,7 +3,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Separator } from '$lib/components/ui/separator';
-	import { RefreshCw, ArrowDown, Search, FileText, Brain, CheckCircle, AlertTriangle, Gauge, Loader2, Sparkles } from '@lucide/svelte';
+	import { RefreshCw, ArrowDown, Search, FileText, Brain, CheckCircle, AlertTriangle, AlertCircle, Circle, Gauge, Loader2, Sparkles } from '@lucide/svelte';
 	import { getDiffThemeType } from '$lib/stores/theme.svelte';
 	import { initHighlighter } from '$lib/utils/code-highlight.svelte';
 	import { renderMarkdown } from '$lib/utils/markdown';
@@ -19,6 +19,9 @@
 		getStreamStartedAt,
 		getIssues,
 		getRatings,
+	getSentiment,
+	getLastCompletedPhase,
+	getIsSuperseded,
 	getIsLiveGeneration,
 	getCloneInProgress,
 	getCloneRepoId,
@@ -85,6 +88,15 @@
 	const cloneInProgress = $derived(getCloneInProgress());
 	const cloneRepoId = $derived(getCloneRepoId());
 	const repositories = $derived(getRepositories());
+	// Phase C markdown — rendered inline as its own sentiment card when set.
+	// Replaces the legacy heuristic of sniffing markdown blocks for a `##
+	// Overall Sentiment` heading.
+	const sentiment = $derived(getSentiment());
+	const renderedSentiment = $derived(sentiment ? renderMarkdown(sentiment) : '');
+	// Pointer into the A→B→C→D pipeline — drives the 4-dot header indicator.
+	const lastCompletedPhase = $derived(getLastCompletedPhase());
+	// Newer commit invalidated this walkthrough mid-render — show a banner.
+	const superseded = $derived(getIsSuperseded());
 
 	// ── Elapsed time ────────────────────────────────────────────────────
 	let elapsedSeconds = $state(0);
@@ -158,6 +170,29 @@
 		return PHASE_ORDER.indexOf(normalizePhase(p) as typeof PHASE_ORDER[number]);
 	}
 
+	// ── Pipeline phase indicator (A→B→C→D) ──────────────────────────────
+	// Distinct from the UI lifecycle PHASE_ORDER above. The pipeline phase is
+	// the agent-side content pointer: what has been *persisted*, not what the
+	// model is currently doing. Drives a 4-dot progress indicator rendered in
+	// the walkthrough header while the stream is live — on completion we hide
+	// it (all 4 dots filled carries no info at rest).
+	const PIPELINE_STEPS = [
+		{ key: 'A', label: 'Overview' },
+		{ key: 'B', label: 'Diff analysis' },
+		{ key: 'C', label: 'Sentiment' },
+		{ key: 'D', label: 'Rated' },
+	] as const;
+
+	const PIPELINE_STEP_INDEX: Record<'none' | 'A' | 'B' | 'C' | 'D', number> = {
+		none: 0,
+		A: 1,
+		B: 2,
+		C: 3,
+		D: 4,
+	};
+
+	const pipelineCompletedCount = $derived(PIPELINE_STEP_INDEX[lastCompletedPhase]);
+
 	// "All phases done" needs actual evidence of completion. A fresh PR with
 	// no content shouldn't flash all checkmarks just because !isStreaming — so
 	// we require that we actually have SOMETHING to show for it.
@@ -223,9 +258,26 @@
 	const STAGGER_MS = 85;
 	const STAGGER_CAP = 10;
 
+	// Legacy-row suppression: older walkthroughs (pre-Phase C field) encoded
+	// the sentiment paragraph as a markdown block starting with "## Overall
+	// Sentiment". When the new `sentiment` field is populated, we drop any
+	// such block here so rehydrated data doesn't render the paragraph twice.
+	// When `sentiment` is null we leave legacy blocks in place — they're the
+	// only copy we have.
+	const visibleBlocks = $derived.by(() => {
+		if (sentiment === null) return blocks;
+		return blocks.filter(
+			(b) =>
+				!(
+					b.type === 'markdown' &&
+					b.content.trimStart().startsWith('## Overall Sentiment')
+				),
+		);
+	});
+
 	const blocksWithDelay = $derived.by(() => {
 		let newInBatch = 0;
-		return blocks.map((block) => {
+		return visibleBlocks.map((block) => {
 			// Pre-render annotation markdown once per block so the template can
 			// emit the annotation as a sibling grid item without each re-render
 			// re-parsing markdown. Only code/diff blocks carry annotations.
@@ -321,7 +373,10 @@
 	// piping refs through every block component.
 
 	function stepNumberFor(blockId: string): number | null {
-		const idx = blocks.findIndex((b) => b.id === blockId);
+		// Use visibleBlocks so the step number matches the user-facing ordinal.
+		// A legacy "## Overall Sentiment" block, when suppressed, must not shift
+		// the numbering that the user sees in the rendered walkthrough.
+		const idx = visibleBlocks.findIndex((b) => b.id === blockId);
 		return idx >= 0 ? idx + 1 : null;
 	}
 
@@ -458,6 +513,29 @@
 </script>
 
 <div class="walkthrough">
+	{#if superseded}
+		<!-- Outdated-walkthrough banner. The server marked this row 'superseded'
+		     because a new commit landed mid-render and a fresher walkthrough
+		     was created for the newer head SHA. Regenerate swaps this entry for
+		     the new one via the /walkthrough/regenerate endpoint. -->
+		<div class="walkthrough-banner" role="status">
+			<div class="walkthrough-banner-row walkthrough-banner-row--superseded">
+				<div class="walkthrough-banner-icon">
+					<AlertCircle size={16} />
+				</div>
+				<div class="walkthrough-banner-body">
+					<p class="walkthrough-banner-title">This walkthrough is outdated</p>
+					<p class="walkthrough-banner-subtitle">
+						The PR has new commits since this review was generated.
+					</p>
+				</div>
+				<Button variant="outline" size="sm" style="cursor: pointer;" onclick={handleRegenerate}>
+					<RefreshCw size={14} />
+					Regenerate
+				</Button>
+			</div>
+		</div>
+	{/if}
 	{#if !streamError}
 		{#if stepperVisible}
 			{#if phase === 'connecting' && isStreaming && !hasWalkthroughContent}
@@ -500,6 +578,44 @@
 						{/if}
 					{/each}
 				</div>
+
+				<!-- Pipeline phase indicator (A→B→C→D). Only while generating —
+				     a fully-complete walkthrough shows 4/4 dots that carry no
+				     new signal at rest, and a terminal error is already covered
+				     by the error view below. Distinct from the lifecycle stepper
+				     above: this tracks *persisted* content, not agent activity. -->
+				{#if isStreaming}
+					<div
+						class="pipeline-phase"
+						role="progressbar"
+						aria-label="Walkthrough pipeline phase"
+						aria-valuenow={pipelineCompletedCount}
+						aria-valuemin={0}
+						aria-valuemax={PIPELINE_STEPS.length}
+					>
+						{#each PIPELINE_STEPS as step, i (step.key)}
+							{@const isDone = i < pipelineCompletedCount}
+							{@const isCurrent = i === pipelineCompletedCount}
+							<div
+								class="pipeline-step"
+								class:pipeline-step--done={isDone}
+								class:pipeline-step--current={isCurrent}
+							>
+								<div class="pipeline-step-dot">
+									{#if isDone}
+										<CheckCircle size={12} />
+									{:else}
+										<Circle size={12} />
+									{/if}
+								</div>
+								<span class="pipeline-step-label">{step.label}</span>
+							</div>
+							{#if i < PIPELINE_STEPS.length - 1}
+								<div class="pipeline-connector" class:pipeline-connector--done={isDone}></div>
+							{/if}
+						{/each}
+					</div>
+				{/if}
 
 			</div>
 		{/if}
@@ -746,57 +862,35 @@
 				<Separator />
 			{/if}
 
-			<!-- Blocks -->
+			<!-- Blocks — Phase B diff-analysis content. Phase C (sentiment) and
+			     Phase D (scorecard) live in their own cards below the loop now
+			     that sentiment is a first-class walkthrough field rather than a
+			     magic markdown-block convention. Legacy rows that still carry
+			     a "## Overall Sentiment" block are filtered upstream in
+			     `visibleBlocks` when `sentiment` is populated. -->
 			<div class="blocks">
 			{#each blocksWithDelay as { block, delay, renderedAnnotation }, blockIndex (block.id)}
-				{@const isSentiment =
-					block.type === 'markdown' &&
-					block.content.trimStart().startsWith('## Overall Sentiment')}
-				{@const hasScorecard = isSentiment && ratings.length > 0}
 				{@const hasAnnotation = renderedAnnotation !== null}
 				{@const blockSeverity = blockIssueSeverity.get(block.id) ?? null}
 
-				<!-- Visual break between the walkthrough body and the conclusion
-				     (sentiment + scorecard). Only rendered for the sentiment block
-				     so the body blocks keep their tight `.blocks` gap rhythm. The
-				     global .walkthrough-content Separator rule gives this 28px of
-				     vertical breathing room on each side automatically. -->
-				{#if isSentiment}
-					<Separator />
-				{/if}
-
-				<!-- `.block-group` is a transparent wrapper (display: contents) for
-				     normal blocks — so .block-wrapper and .block-annotation become
-				     direct grid items of .blocks and land in columns 1 / 2 via their
-				     own `grid-column` rules. For the Overall Sentiment block, it
-				     flips to a vertical flex container (escaping display:contents) so
-				     the scorecard stacks BELOW the sentiment card and the whole pair
-				     spans the full content+rail width (grid-column: 1 / -1). -->
-			<div class="block-group" class:block-group--sentiment-stack={hasScorecard}>
-				{#if !isSentiment}
+				<!-- `.block-group` is a transparent wrapper (display: contents) so
+				     .block-wrapper and .block-annotation become direct grid items
+				     of .blocks and land in their own columns. -->
+				<div class="block-group">
 					<span
 						class="block-step-number"
 						class:block-step-number--info={blockSeverity === 'info'}
 						class:block-step-number--warning={blockSeverity === 'warning'}
 						class:block-step-number--critical={blockSeverity === 'critical'}
 					>#{blockIndex + 1}</span>
-				{/if}
-				<div
-					id="step-{block.id}"
-					class="block-wrapper"
+					<div
+						id="step-{block.id}"
+						class="block-wrapper"
 						class:block-wrapper--no-anim={delay === -1}
 						style:--enter-delay="{delay}ms"
 					>
-
-
 						{#if block.type === 'markdown'}
-							{#if isSentiment}
-								<div class="sentiment-card">
-									<WalkthroughMarkdownBlock content={block.content} />
-								</div>
-							{:else}
-								<WalkthroughMarkdownBlock content={block.content} />
-							{/if}
+							<WalkthroughMarkdownBlock content={block.content} />
 						{:else if block.type === 'code'}
 							<WalkthroughCodeBlock {block} {themeType} hideAnnotation />
 						{:else if block.type === 'diff'}
@@ -820,14 +914,28 @@
 							</div>
 						</aside>
 					{/if}
+				</div>
+			{/each}
 
-					{#if hasScorecard}
+			<!-- Phase C / D conclusion: sentiment card above the scorecard.
+			     Rendered as a single grid item (block-group--sentiment-stack)
+			     so the pair spans the content column cleanly regardless of how
+			     many diff steps preceded it. Hidden when neither field exists
+			     — e.g. a freshly-started stream that hasn't reached Phase C. -->
+			{#if sentiment !== null || ratings.length > 0}
+				<div class="block-group block-group--sentiment-stack">
+					{#if sentiment !== null}
+						<div class="sentiment-card" aria-label="Overall sentiment">
+							<div class="sentiment-card-body">{@html renderedSentiment}</div>
+						</div>
+					{/if}
+					{#if ratings.length > 0}
 						<div class="sentiment-scorecard">
-							<WalkthroughRatingsGrid {ratings} {blocks} onJump={jumpToStep} />
+							<WalkthroughRatingsGrid {ratings} blocks={visibleBlocks} onJump={jumpToStep} />
 						</div>
 					{/if}
 				</div>
-			{/each}
+			{/if}
 			</div>
 
 			{#if isStreaming && blocks.length > 0}
@@ -998,6 +1106,141 @@
 	.walkthrough-stepper-header + .walkthrough-loading,
 	.walkthrough-stepper-header + .walkthrough-content {
 		padding-top: 14px;
+	}
+
+	/* ── Pipeline phase (A→B→C→D) indicator ──────────────────────────
+	   Rendered below the lifecycle stepper while generating. Distinct visual
+	   language (small dots, muted until complete) so reviewers can tell at
+	   a glance which is which — the lifecycle row tells them what the agent
+	   is *doing* this instant, the pipeline row tells them what has been
+	   *persisted*. */
+
+	.pipeline-phase {
+		display: flex;
+		align-items: center;
+		gap: 0;
+		padding: 4px 0 8px;
+		margin-top: 4px;
+		border-top: 1px dashed color-mix(in srgb, var(--color-border) 60%, transparent);
+		padding-top: 10px;
+	}
+
+	.pipeline-step {
+		display: flex;
+		align-items: center;
+		gap: 5px;
+		color: var(--color-text-muted);
+		opacity: 0.45;
+		transition: opacity 0.25s ease, color 0.25s ease;
+	}
+
+	.pipeline-step--current {
+		color: var(--color-accent);
+		opacity: 1;
+	}
+
+	.pipeline-step--done {
+		color: var(--color-accent);
+		opacity: 1;
+	}
+
+	.pipeline-step-dot {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 16px;
+		height: 16px;
+		flex-shrink: 0;
+	}
+
+	.pipeline-step--current .pipeline-step-dot {
+		animation: pulseIcon 2s ease-in-out infinite;
+	}
+
+	.pipeline-step-label {
+		font-size: 10.5px;
+		font-weight: 500;
+		letter-spacing: 0.03em;
+		white-space: nowrap;
+		text-transform: uppercase;
+	}
+
+	.pipeline-connector {
+		flex: 1;
+		height: 1px;
+		background: var(--color-border);
+		margin: 0 6px;
+		min-width: 12px;
+		transition: background 0.25s ease;
+	}
+
+	.pipeline-connector--done {
+		background: var(--color-accent);
+		opacity: 0.5;
+	}
+
+	/* ── Superseded banner ──────────────────────────────────────────────
+	   Renders at the top of the walkthrough when the server marked this row
+	   `superseded`. The outer grid aligns it with the content column (col 3
+	   of the 6-col walkthrough grid), and the inner flex row stacks an icon,
+	   a two-line message, and a Regenerate button on one line. */
+
+	.walkthrough-banner {
+		display: grid;
+		grid-template-columns:
+			420px
+			minmax(0, 1fr)
+			minmax(0, 820px)
+			40px
+			380px
+			minmax(0, 1fr);
+		padding: 14px 0 0;
+	}
+
+	.walkthrough-banner > .walkthrough-banner-row {
+		grid-column: 3;
+	}
+
+	.walkthrough-banner-row {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		padding: 10px 12px;
+		border-radius: 8px;
+	}
+
+	.walkthrough-banner-row--superseded {
+		background: color-mix(in srgb, var(--color-warning) 8%, transparent);
+		border: 1px solid color-mix(in srgb, var(--color-warning) 28%, transparent);
+	}
+
+	.walkthrough-banner-icon {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		flex-shrink: 0;
+		color: var(--color-warning);
+	}
+
+	.walkthrough-banner-body {
+		flex: 1;
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+	}
+
+	.walkthrough-banner-title {
+		font-size: 13px;
+		font-weight: 600;
+		color: var(--color-text-primary);
+		margin: 0;
+	}
+
+	.walkthrough-banner-subtitle {
+		font-size: 12px;
+		color: var(--color-text-muted);
+		margin: 0;
 	}
 
 	/* ── Phase stepper ────────────────────────────────────────────────── */
@@ -1474,6 +1717,13 @@
 		gap: 16px;
 		align-items: stretch;
 		grid-column: 3;
+		/* Extra breathing room above the Phase C / D conclusion so the body
+		   blocks feel closed out before the sentiment card appears. The old
+		   layout achieved this with a <Separator /> inside the loop; the new
+		   layout places the pair outside the loop, so we lean on margin. */
+		margin-top: 16px;
+		padding-top: 16px;
+		border-top: 1px solid var(--color-border);
 	}
 
 	.block-group--sentiment-stack > :global(*) {
@@ -1801,13 +2051,62 @@
 		width: 100%;
 	}
 
-	/* ── Sentiment card ──────────────────────────────────────────────── */
+	/* ── Sentiment card ────────────────────────────────────────────────
+	   Renders `walkthrough.sentiment` (Phase C markdown) as a distinct
+	   accent-tinted card between the diff-step body and the 9-axis
+	   scorecard. Styling tokens match the content column's `.summary-text`
+	   markdown so inline code / lists / bold read consistently across the
+	   walkthrough. :global() is required because renderMarkdown emits its
+	   own DOM that isn't scoped to this component. */
 
 	.sentiment-card {
 		background: color-mix(in srgb, var(--color-accent) 5%, var(--color-bg-secondary));
 		border: 1px solid color-mix(in srgb, var(--color-accent) 20%, transparent);
 		border-radius: 10px;
 		padding: 16px 20px;
+	}
+
+	.sentiment-card-body {
+		font-size: 14px;
+		line-height: 1.65;
+		color: var(--color-text-secondary);
+	}
+
+	.sentiment-card-body :global(p) {
+		margin: 0 0 8px;
+	}
+
+	.sentiment-card-body :global(p:last-child) {
+		margin-bottom: 0;
+	}
+
+	.sentiment-card-body :global(code) {
+		font-family: var(--font-mono);
+		font-size: 12px;
+		background: var(--color-bg-tertiary);
+		padding: 1px 4px;
+		border-radius: 3px;
+	}
+
+	.sentiment-card-body :global(strong) {
+		color: var(--color-text-primary);
+		font-weight: 600;
+	}
+
+	.sentiment-card-body :global(ul),
+	.sentiment-card-body :global(ol) {
+		margin: 4px 0 8px;
+		padding-left: 20px;
+	}
+
+	.sentiment-card-body :global(li) {
+		margin: 2px 0;
+	}
+
+	.sentiment-card-body :global(a) {
+		color: var(--color-accent);
+		text-decoration: underline;
+		text-underline-offset: 2px;
 	}
 
 	/* ── Narrow-viewport fallback ────────────────────────────────────────

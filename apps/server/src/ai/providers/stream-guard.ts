@@ -1,10 +1,24 @@
-import type { WalkthroughStreamEvent, WalkthroughPhase } from '@revv/shared';
+import type { WalkthroughStreamEvent, WalkthroughLifecyclePhase } from '@revv/shared';
 import { WALKTHROUGH_INACTIVITY_TIMEOUT_MS, WALKTHROUGH_EXPLORATION_STALL_MS, WALKTHROUGH_FIRST_EVENT_TIMEOUT_MS } from '../../constants';
 import { debug } from '../../logger';
 
 // ── Phase synthesis messages ────────────────────────────────────────────────
+//
+// Under the new architecture (opencode serve + HTTP MCP route), content
+// events (summary/block/issue/rating/sentiment) NO LONGER flow through the
+// provider's generator — they come from WalkthroughJobs.emitEvent fed by the
+// /mcp/walkthrough route's handlers. The opencode provider's generator now
+// mostly emits {exploration, error, done}. The Claude SDK path still emits
+// content events through the same generator because its tool handlers run
+// in-process and push into the same queue the provider drains.
+//
+// The guard's job therefore shrinks to cross-agent normalization:
+//   - inactivity + first-event + exploration-stall timeouts,
+//   - synthesizing a terminal `done` / `error` if the inner generator ends
+//     without one,
+//   - optional phase synthesis for providers that don't emit their own.
 
-const PHASE_MESSAGES: Record<string, { phase: WalkthroughPhase; message: string }> = {
+const PHASE_MESSAGES: Record<string, { phase: WalkthroughLifecyclePhase; message: string }> = {
 	exploration: { phase: 'exploring', message: 'Reading files and understanding changes...' },
 	summary: { phase: 'analyzing', message: 'Forming assessment and risk analysis...' },
 	block: { phase: 'writing', message: 'Building walkthrough...' },

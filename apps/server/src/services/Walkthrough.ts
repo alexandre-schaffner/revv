@@ -1,10 +1,35 @@
+// ─── WalkthroughService ──────────────────────────────────────────────────────
+//
+// Thin DB adapter for the walkthroughs tables. Scope is deliberately narrow
+// post-refactor:
+//
+//   • ORCHESTRATOR LIFECYCLE writes (per doctrine invariant #2 + #11):
+//     - createPartial    (inserts the row when a job begins)
+//     - setStatus        (generating → complete | error | superseded)
+//     - supersede        (old row → superseded, links to new row)
+//     - setOpencodeSessionId (opencode continuation id)
+//     - incrementResumeAttempts (resume counter)
+//     - markIssuesSubmitted (GitHub push bookkeeping)
+//
+//   • READ-SIDE:
+//     - getCached
+//     - getPartial
+//     - listGenerating
+//
+// Content writes (summary/risk, diff steps, issues, ratings, sentiment) are
+// NOT here — they live inside MCP tool handlers in walkthrough-tools.ts, per
+// doctrine invariant #2 ("agent content writes go through MCP, only"). Any
+// method that used to synthesize content on behalf of an agent is gone.
+
 import { Context, Effect, Layer } from 'effect';
 import { and, eq, inArray, ne } from 'drizzle-orm';
 import type {
 	Walkthrough,
 	WalkthroughBlock,
 	WalkthroughIssue,
+	WalkthroughPipelinePhase,
 	WalkthroughRating,
+	WalkthroughStatus,
 	WalkthroughTokenUsage,
 	RatingAxis,
 	RatingCitation,
@@ -106,9 +131,11 @@ function rowToWalkthrough(
 		reviewSessionId: row.reviewSessionId,
 		pullRequestId: row.pullRequestId,
 		summary: row.summary,
+		sentiment: row.sentiment ?? null,
 		blocks: sortedBlocks,
 		issues: sortedIssues,
 		ratings: sortedRatings,
+		lastCompletedPhase: row.lastCompletedPhase as WalkthroughPipelinePhase,
 		riskLevel: row.riskLevel as RiskLevel,
 		generatedAt: row.generatedAt,
 		modelUsed: row.modelUsed,
@@ -123,49 +150,56 @@ export class WalkthroughService extends Context.Tag('WalkthroughService')<
 	WalkthroughService,
 	{
 		/**
-		 * Insert a new walkthrough row at start of generation. Returns the new ID.
-		 * Accepts an optional preassigned `id` so {@link WalkthroughJobs} can
-		 * pre-mint the walkthroughId before the first summary event arrives —
-		 * subscribers can then look the job up by id from the moment it's forked.
+		 * Insert a new walkthrough row at start of generation. Idempotent: if a
+		 * row with `(prId, prHeadSha)` already exists, returns its id (enforced
+		 * by UNIQUE INDEX walkthroughs_pr_head_sha_unique). This is the sole
+		 * "start a walkthrough" insert path — the agent never creates its own
+		 * row, it only mutates the row the orchestrator created.
+		 *
+		 * The row is inserted with empty summary/riskLevel and
+		 * lastCompletedPhase='none'. Phase A (set_overview) fills the overview.
 		 */
 		readonly createPartial: (params: {
 			id?: string;
 			reviewSessionId: string;
 			prId: string;
-			summary: string;
-			riskLevel: RiskLevel;
 			modelUsed: string;
 			prHeadSha: string;
 		}) => Effect.Effect<string, ReviewError, DbService>;
 
-		/** Persist a single block row. */
-		readonly addBlock: (
+		/**
+		 * Set `walkthroughs.status`. The ONLY caller is {@link WalkthroughJobs};
+		 * every other module that needs to transition lifecycle goes through
+		 * the orchestrator (doctrine invariant #11).
+		 */
+		readonly setStatus: (
 			walkthroughId: string,
-			block: WalkthroughBlock,
-		) => Effect.Effect<void, ReviewError, DbService>;
+			status: WalkthroughStatus,
+			options?: { tokenUsage?: WalkthroughTokenUsage },
+		) => Effect.Effect<void, never, DbService>;
 
-		/** Persist a single issue row. */
-		readonly addIssue: (
-			walkthroughId: string,
-			issue: WalkthroughIssue,
-			order: number,
-		) => Effect.Effect<void, ReviewError, DbService>;
+		/**
+		 * Atomically mark `oldId` as `'superseded'` with `supersededBy = newId`.
+		 * Called by {@link WalkthroughJobs.supersedeWalkthrough} when the PR
+		 * gets a new head SHA. Per doctrine invariant #7, walkthroughs are
+		 * immutable per head SHA — a new commit produces a new row, never
+		 * mutates the old.
+		 */
+		readonly supersede: (
+			oldId: string,
+			newId: string,
+		) => Effect.Effect<void, never, DbService>;
 
-		/** Persist (or replace) a single rating row for an axis. */
-		readonly addRating: (
-			walkthroughId: string,
-			rating: WalkthroughRating,
-		) => Effect.Effect<void, ReviewError, DbService>;
-
-		/** Mark generation complete with final token usage. */
-		readonly markComplete: (
-			walkthroughId: string,
-			tokenUsage: WalkthroughTokenUsage,
-		) => Effect.Effect<void, ReviewError, DbService>;
-
-		/** Mark generation as errored. */
-		readonly markError: (
-			walkthroughId: string,
+		/**
+		 * Mark all non-superseded walkthroughs for a PR as 'superseded'.
+		 * `supersededBy` is left NULL — it gets backfilled when a new
+		 * walkthrough row is subsequently created for the PR's new head SHA,
+		 * or stays NULL if no new walkthrough is ever generated. Called by
+		 * {@link WalkthroughJobs.supersedeForPr} in response to a detected
+		 * head-SHA change.
+		 */
+		readonly supersedeAllForPr: (
+			prId: string,
 		) => Effect.Effect<void, never, DbService>;
 
 		/** Get a complete (cached) walkthrough by PR + sha. */
@@ -174,11 +208,21 @@ export class WalkthroughService extends Context.Tag('WalkthroughService')<
 			headSha: string,
 		) => Effect.Effect<Walkthrough | null, never, DbService>;
 
-		/** Get an incomplete (generating/error) walkthrough + its blocks for resume. */
+		/**
+		 * Get an incomplete (generating/error) walkthrough + its blocks for resume.
+		 * Superseded rows are NOT returned — they're terminal from the job's perspective.
+		 */
 		readonly getPartial: (
 			prId: string,
 			headSha: string,
-		) => Effect.Effect<(Walkthrough & { status: 'generating' | 'error'; opencodeSessionId: string | null }) | null, never, DbService>;
+		) => Effect.Effect<
+			(Walkthrough & {
+				status: 'generating' | 'error';
+				opencodeSessionId: string | null;
+			}) | null,
+			never,
+			DbService
+		>;
 
 		readonly invalidateForPr: (
 			prId: string,
@@ -240,6 +284,9 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 			const id = params.id ?? crypto.randomUUID();
 			const generatedAt = new Date().toISOString();
 
+			// onConflictDoNothing on the (prId, prHeadSha) unique index makes
+			// this idempotent — a second concurrent startJob returns the
+			// existing id (see `.get()` fallback below).
 			yield* Effect.try({
 				try: () =>
 					db
@@ -248,145 +295,85 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 							id,
 							reviewSessionId: params.reviewSessionId,
 							pullRequestId: params.prId,
-							summary: params.summary,
-							riskLevel: params.riskLevel,
+							summary: '',
+							riskLevel: 'low',
+							sentiment: null,
 							status: 'generating',
+							lastCompletedPhase: 'none',
 							generatedAt,
 							modelUsed: params.modelUsed,
 							tokenUsage: '{}',
 							prHeadSha: params.prHeadSha,
-							// Fresh row — attempts start at 0 even if an older partial for the
-							// same PR was retried multiple times before being invalidated.
 							resumeAttempts: 0,
 						})
-						.run(),
-				catch: (e) =>
-					new ReviewError({ message: `Failed to create walkthrough: ${String(e)}` }),
-			});
-
-			return id;
-		}),
-
-	addBlock: (walkthroughId, block) =>
-		Effect.gen(function* () {
-			const { db } = yield* DbService;
-
-			yield* Effect.try({
-				try: () =>
-					db
-						.insert(walkthroughBlocks)
-						.values({
-							id: crypto.randomUUID(),
-							walkthroughId,
-							order: block.order,
-							type: block.type,
-							data: JSON.stringify(block),
-							createdAt: new Date().toISOString(),
+						.onConflictDoNothing({
+							target: [
+								walkthroughs.pullRequestId,
+								walkthroughs.prHeadSha,
+							],
 						})
 						.run(),
 				catch: (e) =>
-					new ReviewError({ message: `Failed to save walkthrough block: ${String(e)}` }),
+					new ReviewError({
+						message: `Failed to create walkthrough: ${String(e)}`,
+					}),
 			});
+
+			// If an existing row preempted our insert, return ITS id. The
+			// uniqueness is on (prId, prHeadSha), so the row we'd have inserted
+			// is interchangeable with the one already there.
+			const existing = db
+				.select({ id: walkthroughs.id })
+				.from(walkthroughs)
+				.where(
+					and(
+						eq(walkthroughs.pullRequestId, params.prId),
+						eq(walkthroughs.prHeadSha, params.prHeadSha),
+					),
+				)
+				.get();
+
+			return existing?.id ?? id;
 		}),
 
-	markComplete: (walkthroughId, tokenUsage) =>
+	setStatus: (walkthroughId, status, options) =>
 		Effect.gen(function* () {
 			const { db } = yield* DbService;
+			db.update(walkthroughs)
+				.set({
+					status,
+					...(options?.tokenUsage
+						? { tokenUsage: JSON.stringify(options.tokenUsage) }
+						: {}),
+				})
+				.where(eq(walkthroughs.id, walkthroughId))
+				.run();
+		}).pipe(Effect.catchAll(() => Effect.void)),
 
-			yield* Effect.try({
-				try: () =>
-					db
-						.update(walkthroughs)
-						.set({ status: 'complete', tokenUsage: JSON.stringify(tokenUsage) })
-						.where(eq(walkthroughs.id, walkthroughId))
-						.run(),
-				catch: (e) =>
-					new ReviewError({ message: `Failed to mark walkthrough complete: ${String(e)}` }),
-			});
-		}),
-
-	markError: (walkthroughId) =>
+	supersede: (oldId, newId) =>
 		Effect.gen(function* () {
 			const { db } = yield* DbService;
+			db.transaction(() => {
+				db.update(walkthroughs)
+					.set({ status: 'superseded', supersededBy: newId })
+					.where(eq(walkthroughs.id, oldId))
+					.run();
+			});
+		}).pipe(Effect.catchAll(() => Effect.void)),
 
-			yield* Effect.try({
-				try: () =>
-					db
-						.update(walkthroughs)
-						.set({ status: 'error' })
-						.where(eq(walkthroughs.id, walkthroughId))
-						.run(),
-				catch: (e) =>
-					new ReviewError({ message: `Failed to mark walkthrough error: ${String(e)}` }),
-			}).pipe(Effect.catchAll(() => Effect.void));
-		}),
-
-	addIssue: (walkthroughId, issue, order) =>
+	supersedeAllForPr: (prId) =>
 		Effect.gen(function* () {
 			const { db } = yield* DbService;
-
-			yield* Effect.try({
-				try: () =>
-					db
-						.insert(walkthroughIssues)
-						.values({
-							id: issue.id,
-							walkthroughId,
-							order,
-							severity: issue.severity,
-							title: issue.title,
-							description: issue.description,
-							filePath: issue.filePath ?? null,
-							startLine: issue.startLine ?? null,
-							endLine: issue.endLine ?? null,
-							blockIds: JSON.stringify(issue.blockIds ?? []),
-							createdAt: new Date().toISOString(),
-						})
-						.run(),
-				catch: (e) =>
-					new ReviewError({ message: `Failed to save walkthrough issue: ${String(e)}` }),
-			});
-		}),
-
-	addRating: (walkthroughId, rating) =>
-		Effect.gen(function* () {
-			const { db } = yield* DbService;
-
-			// INSERT ... ON CONFLICT DO UPDATE keeps persistence idempotent: if a
-			// resume flow re-emits a previously-rated axis, we don't trip the
-			// UNIQUE (walkthroughId, axis) index, we just refresh the row.
-			yield* Effect.try({
-				try: () =>
-					db
-						.insert(walkthroughRatings)
-						.values({
-							id: crypto.randomUUID(),
-							walkthroughId,
-							axis: rating.axis,
-							verdict: rating.verdict,
-							confidence: rating.confidence,
-							rationale: rating.rationale,
-							details: rating.details,
-							citations: JSON.stringify(rating.citations ?? []),
-							blockIds: JSON.stringify(rating.blockIds ?? []),
-							createdAt: new Date().toISOString(),
-						})
-						.onConflictDoUpdate({
-							target: [walkthroughRatings.walkthroughId, walkthroughRatings.axis],
-							set: {
-								verdict: rating.verdict,
-								confidence: rating.confidence,
-								rationale: rating.rationale,
-								details: rating.details,
-								citations: JSON.stringify(rating.citations ?? []),
-								blockIds: JSON.stringify(rating.blockIds ?? []),
-							},
-						})
-						.run(),
-				catch: (e) =>
-					new ReviewError({ message: `Failed to save walkthrough rating: ${String(e)}` }),
-			});
-		}),
+			db.update(walkthroughs)
+				.set({ status: 'superseded' })
+				.where(
+					and(
+						eq(walkthroughs.pullRequestId, prId),
+						ne(walkthroughs.status, 'superseded'),
+					),
+				)
+				.run();
+		}).pipe(Effect.catchAll(() => Effect.void)),
 
 	getCached: (prId, headSha) =>
 		Effect.gen(function* () {
@@ -431,6 +418,9 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 		Effect.gen(function* () {
 			const { db } = yield* DbService;
 
+			// "Partial" = not yet 'complete' and not 'superseded'. Superseded
+			// rows are terminal from a resume perspective — their head_sha is
+			// stale and their supersededBy target is the active one.
 			const row = db
 				.select()
 				.from(walkthroughs)
@@ -439,6 +429,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 						eq(walkthroughs.pullRequestId, prId),
 						eq(walkthroughs.prHeadSha, headSha),
 						ne(walkthroughs.status, 'complete'),
+						ne(walkthroughs.status, 'superseded'),
 					),
 				)
 				.get();
@@ -475,8 +466,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 			const { db } = yield* DbService;
 			// walkthrough_blocks, walkthrough_issues, and walkthrough_ratings
 			// rows are all cascade-deleted via their FK → walkthroughs.id.
-			db
-				.delete(walkthroughs)
+			db.delete(walkthroughs)
 				.where(eq(walkthroughs.pullRequestId, prId))
 				.run();
 		}),
@@ -484,8 +474,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 	setOpencodeSessionId: (walkthroughId, sessionId) =>
 		Effect.gen(function* () {
 			const { db } = yield* DbService;
-			db
-				.update(walkthroughs)
+			db.update(walkthroughs)
 				.set({ opencodeSessionId: sessionId })
 				.where(eq(walkthroughs.id, walkthroughId))
 				.run();
@@ -494,9 +483,6 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 	listGenerating: () =>
 		Effect.gen(function* () {
 			const { db } = yield* DbService;
-			// Select only the minimum WalkthroughJobs needs to re-spawn a fiber —
-			// full blocks/issues/ratings are re-loaded later through getPartial()
-			// when the resumed job actually starts streaming.
 			const rows = db
 				.select({
 					id: walkthroughs.id,
@@ -520,16 +506,13 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 	incrementResumeAttempts: (walkthroughId) =>
 		Effect.gen(function* () {
 			const { db } = yield* DbService;
-			// Read-then-write is fine: resume is single-threaded via the job
-			// registry, so there's no concurrent writer racing this update.
 			const row = db
 				.select({ resumeAttempts: walkthroughs.resumeAttempts })
 				.from(walkthroughs)
 				.where(eq(walkthroughs.id, walkthroughId))
 				.get();
 			const next = (row?.resumeAttempts ?? 0) + 1;
-			db
-				.update(walkthroughs)
+			db.update(walkthroughs)
 				.set({ resumeAttempts: next })
 				.where(eq(walkthroughs.id, walkthroughId))
 				.run();
@@ -541,13 +524,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 			const submittedAt = new Date().toISOString();
 			if (issueIds.length === 0) return submittedAt;
 			const { db } = yield* DbService;
-			// Issue ids are globally unique (crypto.randomUUID on creation), so
-			// we can update by id without joining through walkthroughs. If the
-			// walkthrough was regenerated between the reviewer selecting these
-			// issues and the submit landing here, the rows are gone and this
-			// no-ops — acceptable.
-			db
-				.update(walkthroughIssues)
+			db.update(walkthroughIssues)
 				.set({ submittedAt })
 				.where(inArray(walkthroughIssues.id, [...issueIds]))
 				.run();

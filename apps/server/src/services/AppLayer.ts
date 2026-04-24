@@ -8,6 +8,7 @@ import { FileContentServiceLive } from './FileContent';
 import { CacheServiceLive } from './Cache';
 import { GitHubServiceLive } from './GitHub';
 import { GitHubEtagCacheLive } from './GitHubEtagCache';
+import { OpencodeSupervisorLive } from './OpencodeSupervisor';
 import { PollSchedulerLive } from './PollScheduler';
 import { PrContextServiceLive } from './PrContext';
 import { PullRequestServiceLive } from './PullRequest';
@@ -27,6 +28,13 @@ const TokenProviderWithDeps = TokenProviderLive.pipe(Layer.provide(DbServiceLive
 // GitHub service now depends on the etag cache for conditional requests.
 const GitHubServiceWithDeps = GitHubServiceLive.pipe(Layer.provide(GitHubEtagCacheLive));
 
+// OpencodeSupervisor depends on DbService + SettingsService (for detecting
+// agent-changed + resolving the selected agent). It's in BaseLayers because
+// AiService needs it; AiService in turn is consumed by WalkthroughJobs.
+const OpencodeSupervisorWithDeps = OpencodeSupervisorLive.pipe(
+	Layer.provide(Layer.mergeAll(DbServiceLive, SettingsServiceLive)),
+);
+
 // Base layer: all services that have no deps or only depend on DbService
 const BaseLayers = Layer.mergeAll(
 	DbServiceLive,
@@ -42,6 +50,7 @@ const BaseLayers = Layer.mergeAll(
 	DiffCacheServiceLive,
 	FileContentServiceLive,
 	CacheServiceLive,
+	OpencodeSupervisorWithDeps,
 	// Unified cache layer (M1 Foundations) — InvalidationBus is live with zero
 	// publishers yet; CacheStats is ready for per-namespace registrations as
 	// existing services migrate to adapters in M2.
@@ -55,11 +64,6 @@ const PrContextServiceWithDeps = PrContextServiceLive.pipe(Layer.provide(BaseLay
 // SyncService depends on BaseLayers + PrContext (for resolving repo/token chains)
 const SyncServiceWithDeps = SyncServiceLive.pipe(
 	Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps)),
-);
-
-// PollScheduler depends on all of the above plus SyncService (for thread polling)
-const PollSchedulerWithDeps = PollSchedulerLive.pipe(
-	Layer.provide(Layer.mergeAll(BaseLayers, SyncServiceWithDeps)),
 );
 
 // AiService depends on DbService + SettingsService (both in BaseLayers)
@@ -85,6 +89,14 @@ const WalkthroughJobsWithDeps = WalkthroughJobsLive.pipe(
 			AiServiceWithDeps,
 			RepoCloneServiceWithDeps,
 		),
+	),
+);
+
+// PollScheduler depends on BaseLayers + SyncService (for thread polling) +
+// WalkthroughJobs (for superseding walkthroughs when a new head SHA arrives).
+const PollSchedulerWithDeps = PollSchedulerLive.pipe(
+	Layer.provide(
+		Layer.mergeAll(BaseLayers, SyncServiceWithDeps, WalkthroughJobsWithDeps),
 	),
 );
 

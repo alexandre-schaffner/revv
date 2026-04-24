@@ -8,8 +8,10 @@ import {
 import { DbService } from './Db';
 import { withDb } from '../effects/with-db';
 import { SettingsService } from './Settings';
+import { OpencodeSupervisor } from './OpencodeSupervisor';
 import type { PrFileMeta } from './GitHub';
 import type { WalkthroughStreamEvent } from '@revv/shared';
+import type { OpencodeProviderDeps } from '../ai/providers/mcp-walkthrough-opencode';
 
 // ── Prompt & provider imports (split out of this file) ──────────────────────
 import { EXPLAIN_SYSTEM_PROMPT, buildExplainPrompt } from '../ai/prompts/explain';
@@ -53,6 +55,14 @@ export class AiService extends Context.Tag('AiService')<
 			params: ExplainParams
 		) => Effect.Effect<ReadableStream<string>, AiError>;
 		readonly streamWalkthrough: (params: {
+			/**
+			 * The deterministic walkthrough id the MCP tool handlers will scope
+			 * all writes to. Issued by {@link WalkthroughJobs.startJob} via
+			 * `walkthroughService.createPartial` BEFORE the provider is spawned.
+			 * The providers inject this into the shared tool-handler context
+			 * (doctrine invariant #11 — identity is orchestrator-provided).
+			 */
+			walkthroughId: string;
 			pr: { title: string; body: string | null; sourceBranch: string; targetBranch: string; url: string };
 			files: PrFileMeta[];
 			worktreePath: string;
@@ -62,9 +72,21 @@ export class AiService extends Context.Tag('AiService')<
 			 * Optional caller-owned abort controller. When provided, it is
 			 * forwarded to the underlying provider so external cancellation
 			 * (regenerate, scope close, shutdown) propagates straight into the
-			 * Claude Agent SDK turn or the `opencode run` subprocess.
+			 * Claude Agent SDK turn or the opencode HTTP session.
 			 */
 			abortController?: AbortController;
+			/**
+			 * Optional caller-provided callbacks for minting + clearing the
+			 * opencode HTTP-MCP session token. Only consulted when the
+			 * resolved agent is 'opencode'; the Claude SDK path ignores them.
+			 * WalkthroughJobs supplies these because it owns the session-token
+			 * map (in-process, ephemeral per invariant #1). Kept as plain
+			 * callbacks so AiService doesn't need a layer dependency on
+			 * WalkthroughJobs (that would cycle — WalkthroughJobs depends on
+			 * AiService already).
+			 */
+			issueOpencodeSessionToken?: (walkthroughId: string) => Promise<string>;
+			clearOpencodeSessionToken?: (token: string) => Promise<void>;
 		}) => Effect.Effect<AsyncGenerator<WalkthroughStreamEvent>, AiError>;
 		readonly isConfigured: () => Effect.Effect<boolean>;
 	}
@@ -77,6 +99,7 @@ export const AiServiceLive = Layer.effect(
 	Effect.gen(function* () {
 		const settingsService = yield* SettingsService;
 		const { db } = yield* DbService;
+		const supervisor = yield* OpencodeSupervisor;
 
 		// Map ValidationError from getSettings() to AiGenerationError
 		const getSettings = () =>
@@ -117,15 +140,52 @@ export const AiServiceLive = Layer.effect(
 						return yield* Effect.fail(new AiNotConfiguredError());
 					}
 
-					// `params` already carries the optional `abortController` — both
-					// providers accept the same field, so passing the whole object
-					// through is the cleanest way to keep the contract identical.
+					// Both providers receive the same param shape (including
+					// walkthroughId + db) and the tool handlers they register
+					// are byte-for-byte the same code — doctrine invariant #13
+					// (Agent-path parity).
+					const providerParams = { ...params, db };
+
 					if (agent === 'opencode') {
-						const raw = streamWalkthroughViaOpencodeMCP(params, settings.aiModel ?? undefined);
+						if (
+							!params.issueOpencodeSessionToken ||
+							!params.clearOpencodeSessionToken
+						) {
+							return yield* Effect.fail(
+								new AiGenerationError({
+									cause: new Error(
+										'missing opencode session-token callbacks',
+									),
+									message:
+										'opencode provider requires caller-supplied session-token callbacks',
+								}),
+							);
+						}
+						const issueToken = params.issueOpencodeSessionToken;
+						const clearToken = params.clearOpencodeSessionToken;
+						const deps: OpencodeProviderDeps = {
+							ensureDaemon: () =>
+								Effect.runPromise(supervisor.ensureRunning()),
+							jobStarted: () =>
+								Effect.runPromise(supervisor.jobStarted()),
+							jobEnded: () => Effect.runPromise(supervisor.jobEnded()),
+							client: () => Effect.runPromise(supervisor.client()),
+							issueSessionToken: (walkthroughId) =>
+								issueToken(walkthroughId),
+							clearSessionToken: (token) => clearToken(token),
+						};
+						const raw = streamWalkthroughViaOpencodeMCP(
+							{ ...providerParams, deps },
+							settings.aiModel ?? undefined,
+							settings,
+						);
 						return guardWalkthroughStream(raw, { label: 'opencode-mcp', synthesizePhases: false });
 					}
-					const raw = streamWalkthroughViaMCP(params, settings.aiModel ?? undefined);
-					// MCP provider already emits phase events — don't double-emit
+					const raw = streamWalkthroughViaMCP(
+						providerParams,
+						settings.aiModel ?? undefined,
+						settings,
+					);
 					return guardWalkthroughStream(raw, { label: 'claude-mcp', synthesizePhases: false });
 				}),
 

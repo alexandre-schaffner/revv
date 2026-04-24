@@ -43,6 +43,13 @@
       "when": 1777100000000,
       "tag": "0050_walkthrough_issues_submitted_at",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1777200000000,
+      "tag": "0060_walkthrough_phases",
+      "breakpoints": true
     }
   ]
 }

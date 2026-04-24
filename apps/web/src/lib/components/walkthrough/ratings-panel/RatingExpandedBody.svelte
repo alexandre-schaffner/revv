@@ -39,6 +39,9 @@
         return out;
     });
 
+    // Rationale is short prose — render inline, no overflow gate needed.
+    const rationaleHtml = $derived(renderMarkdown(rating.rationale));
+
     // Details markdown is rendered async through marked + highlighter; gate with
     // {#await} in the template so we never flash raw markdown at the user.
     const detailsHtml = $derived(
@@ -118,7 +121,7 @@
     </div>
 
     <div class="rationale">
-        <p class="rationale-text">{rating.rationale}</p>
+        <div class="rationale-text">{@html rationaleHtml}</div>
     </div>
 
     {#if detailsHtml}
@@ -241,6 +244,40 @@
            reading speed and comprehension. On narrow containers (sidebar) the
            container width wins, so this is a no-op there. */
         max-width: 65ch;
+    }
+
+    /* Prose rules for markdown-rendered rationale. Mirror .rating-details but
+       without the max-height / overflow treatment — rationale is short prose. */
+    .rationale-text :global(p) {
+        margin: 0 0 8px;
+        color: var(--color-text-primary);
+    }
+    .rationale-text :global(p:last-child) {
+        margin-bottom: 0;
+    }
+    .rationale-text :global(strong) {
+        font-weight: 600;
+        color: var(--color-text-primary);
+    }
+    .rationale-text :global(code) {
+        font-family: var(--font-mono, ui-monospace, monospace);
+        font-size: 0.85em;
+        background: color-mix(
+            in srgb,
+            var(--color-text-muted) 12%,
+            transparent
+        );
+        padding: 1px 4px;
+        border-radius: 3px;
+    }
+    .rationale-text :global(ul),
+    .rationale-text :global(ol) {
+        margin: 4px 0 8px;
+        padding-left: 1.25em;
+    }
+    .rationale-text :global(li) {
+        margin-bottom: 3px;
+        color: var(--color-text-primary);
     }
 
     /* ── Expected / Received (Jest-style) ────────────────────────── */

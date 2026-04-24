@@ -6,95 +6,152 @@ import type {
 	RatingCitation,
 	RiskLevel,
 	WalkthroughIssue,
+	WalkthroughPipelinePhase,
 	WalkthroughRating,
+	WalkthroughState,
 	WalkthroughStreamEvent,
 } from "@revv/shared";
 import { RATING_AXES } from "@revv/shared";
 import { z } from "zod";
+import type { Db } from "../../db";
 
-// ── State ────────────────────────────────────────────────────────────────────
+// ─── Doctrine & phase model ─────────────────────────────────────────────────
+//
+// The walkthrough content pipeline is strictly A → B → C → D (see
+// "Agent Subsystem Invariants" in the repo-root CLAUDE.md). Every MCP tool in
+// this file is bound to a specific phase and enforces its precondition at the
+// tool-call level — out-of-order calls fail fast with a structured error the
+// agent can recover from.
+//
+//   Phase A — set_overview     (one call; fills walkthroughs.summary + risk)
+//   Phase B — add_diff_step    (many calls; one per step)
+//            flag_issue        (any number; only during B, linked to steps)
+//   Phase C — set_sentiment    (one call; fills walkthroughs.sentiment)
+//   Phase D — rate_axis        (nine calls, one per RatingAxis)
+//   Finish  — complete_walkthrough (validation gate; advances status)
+//
+// Plus one read tool:
+//   get_walkthrough_state      (read-only; called first on every run to
+//                               reconstruct context from DB — replaces the old
+//                               env-var continuation channel)
+//
+// Handler contract:
+//   Each handler is a pure function `(ctx, input) => Promise<ToolResult>` that:
+//     1. Opens a db.transaction().
+//     2. Reads the walkthrough row (for `last_completed_phase` + identity).
+//     3. Validates the phase precondition + any tool-specific invariants.
+//     4. Performs one atomic upsert (or read) against the walkthrough tables.
+//     5. Advances `last_completed_phase` if appropriate (same transaction).
+//     6. Emits a WalkthroughStreamEvent via ctx.emit (outside DB commit).
+//     7. Returns { content, isError? } for the MCP transport layer.
+//   The transport layer (Claude Agent SDK wrapper OR HTTP MCP route) is
+//   indifferent — same handler runs inside the same Elysia process either way.
 
-export interface WalkthroughToolState {
-	summarySet: boolean;
-	blockCount: number;
-	issueCount: number;
-	completed: boolean;
-	writingPhaseEmitted: boolean;
-	ratedAxes: Set<RatingAxis>;
+// ── Handler execution context ─────────────────────────────────────────────────
+
+export interface WalkthroughToolContext {
+	/** Direct DB handle (Bun sqlite + drizzle). */
+	readonly db: Db;
+	/** The walkthrough this tool call is scoped to — deterministic identity. */
+	readonly walkthroughId: string;
+	/**
+	 * Event sink. The handler calls this AFTER the DB commit so subscribers
+	 * never see an event that doesn't have a corresponding durable row. Per
+	 * doctrine invariant #8: "Commit first, broadcast second."
+	 */
+	readonly emit: (event: WalkthroughStreamEvent) => void;
 }
 
-export function createInitialState(): WalkthroughToolState {
-	return {
-		summarySet: false,
-		blockCount: 0,
-		issueCount: 0,
-		completed: false,
-		writingPhaseEmitted: false,
-		ratedAxes: new Set<RatingAxis>(),
-	};
+export interface WalkthroughToolResult {
+	content: Array<{ type: "text"; text: string }>;
+	isError?: boolean;
+	// MCP SDK's tool() signature uses an open-ended response type with a
+	// string index signature. This extra field lets our narrower type unify
+	// with that shape when the SDK wraps us; it's never populated.
+	[k: string]: unknown;
 }
 
-// ── Tool spec shape ──────────────────────────────────────────────────────────
+export type WalkthroughToolHandler<TInput> = (
+	ctx: WalkthroughToolContext,
+	input: TInput,
+) => Promise<WalkthroughToolResult>;
 
 export interface ToolSpec<TShape extends z.ZodRawShape> {
-	name: string;
-	description: string;
-	inputSchema: z.ZodObject<TShape>;
+	readonly name: string;
+	readonly description: string;
+	readonly inputSchema: z.ZodObject<TShape>;
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	handler: (
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		args: any,
-		state: WalkthroughToolState,
-		emit: (event: WalkthroughStreamEvent) => void,
-	) => Promise<{ content: Array<{ type: "text"; text: string }>; isError?: boolean }>;
+	readonly handler: WalkthroughToolHandler<any>;
 }
 
-// ── Tool specs ───────────────────────────────────────────────────────────────
+// ── Tool input schemas (zod) ─────────────────────────────────────────────────
 
-const setSummarySchema = z.object({
-	summary: z.string().describe("2-3 sentence summary of what this PR does and why"),
-	risk_level: z.enum(["low", "medium", "high"]).describe("Overall risk assessment"),
+const getWalkthroughStateSchema = z.object({});
+
+const setOverviewSchema = z.object({
+	summary: z
+		.string()
+		.describe("2-3 sentence summary of what this PR does and why"),
+	risk_level: z
+		.enum(["low", "medium", "high"])
+		.describe("Overall risk assessment"),
 });
 
-const addMarkdownSchema = z.object({
-	content: z
-		.string()
+/**
+ * Phase B step input — exactly one step per tool call. The tool schema rejects
+ * arrays and batch submissions deliberately (doctrine invariant #4): each step
+ * is a separate atomic MCP call so resume is idempotent and crash loss is
+ * bounded to at most one in-flight step.
+ */
+const addDiffStepSchema = z.object({
+	step_index: z
+		.number()
+		.int()
+		.nonnegative()
 		.describe(
-			"GitHub-flavored markdown. USE THE FULL TOOLKIT: headings (## / ###), **bold** for key terms, *italics*, `inline code` for identifiers and paths, bulleted / numbered lists, > blockquotes, [links](url), and ```fenced``` snippets for tiny illustrative code. A single flat sentence is a missed opportunity — add a heading, a bold term, or a short bullet list. Do not push rich prose into annotations and leave this barebones.",
+			"Monotonic zero-based index for this step within Phase B. Required. Upsert key: a retry with the same index replaces (not duplicates) the prior row.",
 		),
-});
-
-const addCodeBlockSchema = z.object({
-	file_path: z.string().describe("Relative path to the source file"),
-	start_line: z.number().int().describe("Starting line number"),
-	end_line: z.number().int().describe("Ending line number"),
-	language: z
-		.string()
-		.describe("Programming language for syntax highlighting (e.g. typescript, python, go)"),
-	content: z.string().describe("The actual code text to display"),
-	annotation: z
-		.string()
+	/** One of three mutually-exclusive block shapes. Agent picks which to send. */
+	markdown: z
+		.object({
+			content: z
+				.string()
+				.describe(
+					"GitHub-flavored markdown. USE THE FULL TOOLKIT: headings (## / ###), **bold** for key terms, *italics*, `inline code` for identifiers and paths, bulleted / numbered lists, > blockquotes, [links](url), and ```fenced``` snippets for tiny illustrative code. A single flat sentence is a missed opportunity.",
+				),
+		})
 		.nullable()
+		.optional()
 		.describe(
-			"Markdown note displayed alongside the code, or null for no annotation. Keep concise (1-3 sentences) for purely explanatory blocks. If this block will be the target of a flag_issue link, the annotation must be LONG — a multi-paragraph explanation covering the failure mode, why it matters, affected code paths, and the recommended fix.",
+			"Use for narrative/explanatory content. Mutually exclusive with `code` and `diff`.",
 		),
-	annotation_position: z
-		.enum(["left", "right"])
-		.describe("Which side to display the annotation relative to the code"),
-});
-
-const addDiffBlockSchema = z.object({
-	file_path: z.string().describe("Path to the changed file"),
-	patch: z.string().describe("Unified diff patch text (with @@ hunk headers)"),
-	annotation: z
-		.string()
+	code: z
+		.object({
+			file_path: z.string(),
+			start_line: z.number().int(),
+			end_line: z.number().int(),
+			language: z.string(),
+			content: z.string(),
+			annotation: z.string().nullable(),
+			annotation_position: z.enum(["left", "right"]),
+		})
 		.nullable()
+		.optional()
 		.describe(
-			"Markdown note displayed alongside the diff, or null for no annotation. Keep concise (1-3 sentences) for purely explanatory blocks. If this block will be the target of a flag_issue link, the annotation must be LONG — a multi-paragraph explanation covering the failure mode, why it matters, affected code paths, and the recommended fix.",
+			"Use for source-code excerpts. Mutually exclusive with `markdown` and `diff`. Annotations on issue-target blocks must be LONG (multi-paragraph).",
 		),
-	annotation_position: z
-		.enum(["left", "right"])
-		.describe("Which side to display the annotation relative to the diff"),
+	diff: z
+		.object({
+			file_path: z.string(),
+			patch: z.string(),
+			annotation: z.string().nullable(),
+			annotation_position: z.enum(["left", "right"]),
+		})
+		.nullable()
+		.optional()
+		.describe(
+			"Use for unified-diff hunks. Mutually exclusive with `markdown` and `code`. Annotations on issue-target blocks must be LONG (multi-paragraph).",
+		),
 });
 
 const flagIssueSchema = z.object({
@@ -107,20 +164,36 @@ const flagIssueSchema = z.object({
 	description: z
 		.string()
 		.describe(
-			"MINIMAL one-sentence label for the issues-list card (≤ ~15 words). Do not explain the concern here — the full explanation belongs in the annotation of the linked block (block_orders).",
+			"MINIMAL one-sentence label for the issues-list card (≤ ~15 words). Do not explain the concern here — the full explanation belongs in the annotation of the linked diff step.",
 		),
 	block_orders: z
 		.array(z.number().int().nonnegative())
 		.min(1)
 		.describe(
-			"Order numbers of the block(s) that explain this concern — reviewers click the issue to jump to the first referenced block. Must reference blocks already added (i.e. < current block count). Provide every block the reviewer should read to understand the issue; at least one is required.",
+			"Order numbers (= step_index) of the diff step(s) that explain this concern. Must reference steps already added. Provide every step the reviewer should read to understand the issue.",
 		),
 	file_path: z
 		.string()
 		.nullable()
 		.describe("Path to the relevant file, or null if PR-wide"),
-	start_line: z.number().int().nullable().describe("Starting line number of the concern, or null"),
-	end_line: z.number().int().nullable().describe("Ending line number of the concern, or null"),
+	start_line: z
+		.number()
+		.int()
+		.nullable()
+		.describe("Starting line number of the concern, or null"),
+	end_line: z
+		.number()
+		.int()
+		.nullable()
+		.describe("Ending line number of the concern, or null"),
+});
+
+const setSentimentSchema = z.object({
+	markdown: z
+		.string()
+		.describe(
+			"GitHub-flavored markdown, 2–4 sentences, direct verdict. Covers the reviewer's bottom-line read of the PR after the diff analysis. Replaces the old convention of emitting a '## Overall Sentiment' markdown block.",
+		),
 });
 
 const rateAxisSchema = z.object({
@@ -157,18 +230,15 @@ const rateAxisSchema = z.object({
 	details: z
 		.string()
 		.describe(
-			"Rich GitHub-flavored markdown expanding on the rationale. USE THE FULL TOOLKIT: **bold** key terms, `inline code` for identifiers/paths, bullet lists for multiple findings, and ### subheadings if needed. For pass: 2–4 sentences explaining what was checked and why it's clean. For concern/blocker: explain the problem clearly, why it matters, affected code paths, and the recommended fix. Minimum 3 sentences. Do not repeat the rationale verbatim — go deeper.",
+			"Rich GitHub-flavored markdown expanding on the rationale. USE THE FULL TOOLKIT: **bold** key terms, `inline code` for identifiers/paths, bullet lists for multiple findings, and ### subheadings if needed. For pass: 2–4 sentences explaining what was checked and why it's clean. For concern/blocker: explain the problem clearly, why it matters, affected code paths, and the recommended fix. Minimum 3 sentences.",
 		),
 	citations: z
 		.array(
 			z.object({
-				file_path: z.string().describe("Path to the cited file"),
-				start_line: z.number().int().describe("Starting line number"),
-				end_line: z.number().int().describe("Ending line number"),
-				note: z
-					.string()
-					.nullable()
-					.describe("Optional short note about what to look at at this location"),
+				file_path: z.string(),
+				start_line: z.number().int(),
+				end_line: z.number().int(),
+				note: z.string().nullable(),
 			}),
 		)
 		.describe(
@@ -177,412 +247,79 @@ const rateAxisSchema = z.object({
 	block_orders: z
 		.array(z.number().int().nonnegative())
 		.describe(
-			"Order numbers of walkthrough block(s) that explain this rating in depth — reviewers click through from the rating card to these blocks. May be empty (e.g. for an uneventful pass). Each entry must reference a block already added (< current block count).",
+			"Order numbers (= step_index) of Phase-B diff step(s) that explain this rating in depth. May be empty. Each entry must reference a step already added.",
 		),
 });
 
 const completeWalkthroughSchema = z.object({});
 
-// ── Exported TOOL_SPECS array ─────────────────────────────────────────────────
+// ── Type exports (so handlers can be written with static input types) ────────
 
-// Using a tuple-of-unknowns workaround because each spec has a different ZodObject shape.
-// Callers that need type safety access individual specs from the array.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const TOOL_SPECS: Array<ToolSpec<any>> = [
-	// ── set_walkthrough_summary ──────────────────────────────────────────
-	{
-		name: "set_walkthrough_summary",
-		description:
-			"Set the PR summary and risk level. Must be called exactly once, before any other walkthrough tools.",
-		inputSchema: setSummarySchema,
-		handler: async (
-			args: z.infer<typeof setSummarySchema>,
-			state: WalkthroughToolState,
-			emit: (event: WalkthroughStreamEvent) => void,
-		) => {
-			if (state.summarySet) {
-				return {
-					content: [
-						{
-							type: "text" as const,
-							text: "Error: summary already set. You can only call set_walkthrough_summary once.",
-						},
-					],
-					isError: true,
-				};
-			}
-			state.summarySet = true;
-			emit({
-				type: "summary",
-				data: {
-					summary: args.summary,
-					riskLevel: args.risk_level as RiskLevel,
-				},
-			});
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: "Summary set successfully. Now add walkthrough blocks.",
-					},
-				],
-			};
-		},
-	},
+export type GetWalkthroughStateInput = z.infer<typeof getWalkthroughStateSchema>;
+export type SetOverviewInput = z.infer<typeof setOverviewSchema>;
+export type AddDiffStepInput = z.infer<typeof addDiffStepSchema>;
+export type FlagIssueInput = z.infer<typeof flagIssueSchema>;
+export type SetSentimentInput = z.infer<typeof setSentimentSchema>;
+export type RateAxisInput = z.infer<typeof rateAxisSchema>;
+export type CompleteWalkthroughInput = z.infer<typeof completeWalkthroughSchema>;
 
-	// ── add_markdown_section ─────────────────────────────────────────────
-	{
-		name: "add_markdown_section",
-		description:
-			"Add a RICHLY FORMATTED markdown section to the walkthrough. This is the narrative spine of the document — use real markdown, not flat plain text.",
-		inputSchema: addMarkdownSchema,
-		handler: async (
-			args: z.infer<typeof addMarkdownSchema>,
-			state: WalkthroughToolState,
-			emit: (event: WalkthroughStreamEvent) => void,
-		) => {
-			if (!state.summarySet) {
-				return {
-					content: [{ type: "text" as const, text: "Error: call set_walkthrough_summary first." }],
-					isError: true,
-				};
-			}
-			if (state.completed) {
-				return {
-					content: [{ type: "text" as const, text: "Error: walkthrough already completed." }],
-					isError: true,
-				};
-			}
-			if (!state.writingPhaseEmitted) {
-				state.writingPhaseEmitted = true;
-				emit({
-					type: "phase",
-					data: { phase: "writing", message: "Building walkthrough..." },
-				});
-			}
-			const block: MarkdownBlock = {
-				type: "markdown",
-				id: `block-${state.blockCount}`,
-				order: state.blockCount,
-				content: args.content,
-			};
-			state.blockCount++;
-			emit({ type: "block", data: block });
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: `Markdown section added (block ${block.order}).`,
-					},
-				],
-			};
-		},
-	},
+// Re-exported so both the Claude SDK wrapper and the HTTP MCP route can
+// construct the spec list without reimporting zod for every shape.
+export {
+	getWalkthroughStateSchema,
+	setOverviewSchema,
+	addDiffStepSchema,
+	flagIssueSchema,
+	setSentimentSchema,
+	rateAxisSchema,
+	completeWalkthroughSchema,
+};
 
-	// ── add_code_block ───────────────────────────────────────────────────
-	{
-		name: "add_code_block",
-		description:
-			"Add an annotated code block showing source code from a specific file. Use to highlight important code the reviewer should see.",
-		inputSchema: addCodeBlockSchema,
-		handler: async (
-			args: z.infer<typeof addCodeBlockSchema>,
-			state: WalkthroughToolState,
-			emit: (event: WalkthroughStreamEvent) => void,
-		) => {
-			if (!state.summarySet) {
-				return {
-					content: [{ type: "text" as const, text: "Error: call set_walkthrough_summary first." }],
-					isError: true,
-				};
-			}
-			if (state.completed) {
-				return {
-					content: [{ type: "text" as const, text: "Error: walkthrough already completed." }],
-					isError: true,
-				};
-			}
-			if (!state.writingPhaseEmitted) {
-				state.writingPhaseEmitted = true;
-				emit({
-					type: "phase",
-					data: { phase: "writing", message: "Building walkthrough..." },
-				});
-			}
-			const block: CodeBlock = {
-				type: "code",
-				id: `block-${state.blockCount}`,
-				order: state.blockCount,
-				filePath: args.file_path,
-				startLine: args.start_line,
-				endLine: args.end_line,
-				language: args.language,
-				content: args.content,
-				annotation: args.annotation,
-				annotationPosition: args.annotation_position,
-			};
-			state.blockCount++;
-			emit({ type: "block", data: block });
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: `Code block added: ${args.file_path}:${args.start_line}-${args.end_line} (block ${block.order}).`,
-					},
-				],
-			};
-		},
-	},
+// ── Specs are declared where handlers are defined ─────────────────────────────
+//
+// See `walkthrough-tools.ts` for TOOL_SPECS (the array both transports
+// consume). Keeping the handler implementations there keeps the DB-imports
+// out of this spec file so tests can stub handlers without pulling in
+// SQLite.
 
-	// ── add_diff_block ───────────────────────────────────────────────────
-	{
-		name: "add_diff_block",
-		description:
-			"Add an annotated diff block showing changes in unified diff format. Use to highlight specific changes the reviewer should focus on.",
-		inputSchema: addDiffBlockSchema,
-		handler: async (
-			args: z.infer<typeof addDiffBlockSchema>,
-			state: WalkthroughToolState,
-			emit: (event: WalkthroughStreamEvent) => void,
-		) => {
-			if (!state.summarySet) {
-				return {
-					content: [{ type: "text" as const, text: "Error: call set_walkthrough_summary first." }],
-					isError: true,
-				};
-			}
-			if (state.completed) {
-				return {
-					content: [{ type: "text" as const, text: "Error: walkthrough already completed." }],
-					isError: true,
-				};
-			}
-			if (!state.writingPhaseEmitted) {
-				state.writingPhaseEmitted = true;
-				emit({
-					type: "phase",
-					data: { phase: "writing", message: "Building walkthrough..." },
-				});
-			}
-			const block: DiffBlock = {
-				type: "diff",
-				id: `block-${state.blockCount}`,
-				order: state.blockCount,
-				filePath: args.file_path,
-				patch: args.patch,
-				annotation: args.annotation,
-				annotationPosition: args.annotation_position,
-			};
-			state.blockCount++;
-			emit({ type: "block", data: block });
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: `Diff block added: ${args.file_path} (block ${block.order}).`,
-					},
-				],
-			};
-		},
-	},
+// Re-exported constants for handler shape callers
+export type { WalkthroughState, WalkthroughPipelinePhase } from "@revv/shared";
 
-	// ── flag_issue ───────────────────────────────────────────────────────
-	{
-		name: "flag_issue",
-		description:
-			"Flag a structured concern or issue found in the PR. Call this for every concern you identify — security vulnerabilities, race conditions, missing tests, edge cases, breaking changes, etc. Must be called AFTER the block(s) that explain the concern have been added, and must link to them via block_orders.",
-		inputSchema: flagIssueSchema,
-		handler: async (
-			args: z.infer<typeof flagIssueSchema>,
-			state: WalkthroughToolState,
-			emit: (event: WalkthroughStreamEvent) => void,
-		) => {
-			if (!state.summarySet) {
-				return {
-					content: [{ type: "text" as const, text: "Error: call set_walkthrough_summary first." }],
-					isError: true,
-				};
-			}
-			if (state.completed) {
-				return {
-					content: [{ type: "text" as const, text: "Error: walkthrough already completed." }],
-					isError: true,
-				};
-			}
-			const maxOrder = state.blockCount - 1;
-			const invalid = args.block_orders.filter((o: number) => o > maxOrder);
-			if (invalid.length > 0) {
-				return {
-					content: [
-						{
-							type: "text" as const,
-							text: `Error: block_orders [${invalid.join(", ")}] reference blocks that haven't been added yet (current block count: ${state.blockCount}). Add the explaining block(s) first with add_markdown_section / add_code_block / add_diff_block, then call flag_issue.`,
-						},
-					],
-					isError: true,
-				};
-			}
-			const uniqueOrders = Array.from(new Set(args.block_orders));
-			const blockIds = uniqueOrders.map((o: number) => `block-${o}`);
-			const issue: WalkthroughIssue = {
-				id: `issue-${state.issueCount}`,
-				severity: args.severity,
-				title: args.title,
-				description: args.description,
-				blockIds,
-				...(args.file_path !== null ? { filePath: args.file_path } : {}),
-				...(args.start_line !== null ? { startLine: args.start_line } : {}),
-				...(args.end_line !== null ? { endLine: args.end_line } : {}),
-			};
-			state.issueCount++;
-			emit({ type: "issue", data: issue });
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: `Issue flagged: [${issue.severity}] ${issue.title} (linked to ${blockIds.join(", ")})`,
-					},
-				],
-			};
-		},
-	},
+// ── Shared helpers reused by handlers ──────────────────────────────────────
 
-	// ── rate_axis ─────────────────────────────────────────────────────────
-	{
-		name: "rate_axis",
-		description:
-			"Rate the PR on a single scorecard axis. Must be called exactly once for EACH of the 9 axes before complete_walkthrough. Use the asymmetric 3-level scale (pass/concern/blocker) — LLMs calibrate poorly on 1–10 numeric scales, and reviewers care about outliers, not fine-grained scores. Non-pass verdicts MUST cite specific file:line ranges so the reviewer can jump straight to the evidence.",
-		inputSchema: rateAxisSchema,
-		handler: async (
-			args: z.infer<typeof rateAxisSchema>,
-			state: WalkthroughToolState,
-			emit: (event: WalkthroughStreamEvent) => void,
-		) => {
-			if (!state.summarySet) {
-				return {
-					content: [{ type: "text" as const, text: "Error: call set_walkthrough_summary first." }],
-					isError: true,
-				};
-			}
-			if (state.completed) {
-				return {
-					content: [{ type: "text" as const, text: "Error: walkthrough already completed." }],
-					isError: true,
-				};
-			}
-			if (state.ratedAxes.has(args.axis)) {
-				return {
-					content: [
-						{
-							type: "text" as const,
-							text: `Error: axis '${args.axis}' has already been rated. Each axis is rated exactly once per walkthrough.`,
-						},
-					],
-					isError: true,
-				};
-			}
-			if (args.verdict !== "pass" && args.citations.length === 0) {
-				return {
-					content: [
-						{
-							type: "text" as const,
-							text: `Error: verdict='${args.verdict}' requires at least one citation. Add a citation pointing to the specific line range that prompted the verdict, or downgrade to 'pass' with an explanatory rationale.`,
-						},
-					],
-					isError: true,
-				};
-			}
-			const maxOrder = state.blockCount - 1;
-			const invalid = args.block_orders.filter((o: number) => o > maxOrder);
-			if (invalid.length > 0) {
-				return {
-					content: [
-						{
-							type: "text" as const,
-							text: `Error: block_orders [${invalid.join(", ")}] reference blocks that haven't been added yet (current block count: ${state.blockCount}). Add the explaining block(s) first, then call rate_axis.`,
-						},
-					],
-					isError: true,
-				};
-			}
+/**
+ * Deterministic issue id. Collision-resistant (SHA-256) and stable across
+ * resumes: if the agent calls `flag_issue` with the same title + file + start
+ * line twice (e.g. after a crash), both calls produce the same row id and the
+ * second becomes a no-op via `onConflictDoUpdate`.
+ */
+export async function computeIssueId(
+	walkthroughId: string,
+	title: string,
+	filePath: string | null,
+	startLine: number | null,
+): Promise<string> {
+	const input = `${walkthroughId}\0${title}\0${filePath ?? ""}\0${startLine ?? ""}`;
+	const data = new TextEncoder().encode(input);
+	const digest = await crypto.subtle.digest("SHA-256", data);
+	return Array.from(new Uint8Array(digest))
+		.map((b) => b.toString(16).padStart(2, "0"))
+		.join("");
+}
 
-			const uniqueOrders = Array.from(new Set(args.block_orders));
-			const blockIds = uniqueOrders.map((o: number) => `block-${o}`);
-			const citations: RatingCitation[] = args.citations.map(
-				(c: { file_path: string; start_line: number; end_line: number; note: string | null }) => ({
-					filePath: c.file_path,
-					startLine: c.start_line,
-					endLine: c.end_line,
-					...(c.note !== null ? { note: c.note } : {}),
-				}),
-			);
-			const rating: WalkthroughRating = {
-				axis: args.axis,
-				verdict: args.verdict,
-				confidence: args.confidence,
-				rationale: args.rationale,
-				details: args.details,
-				citations,
-				blockIds,
-			};
-			state.ratedAxes.add(args.axis);
-			emit({ type: "rating", data: rating });
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: `Rated ${args.axis}: ${args.verdict} (${args.confidence} confidence). ${state.ratedAxes.size}/${RATING_AXES.length} axes rated.`,
-					},
-				],
-			};
-		},
-	},
+/** Canonical RATING_AXES re-export so handlers can reference it locally. */
+export { RATING_AXES };
 
-	// ── complete_walkthrough ─────────────────────────────────────────────
-	{
-		name: "complete_walkthrough",
-		description:
-			"Signal that the walkthrough is complete. Call this once after all sections, blocks, flagged issues, and all 9 rate_axis calls have been made.",
-		inputSchema: completeWalkthroughSchema,
-		handler: async (
-			_args: z.infer<typeof completeWalkthroughSchema>,
-			state: WalkthroughToolState,
-			emit: (event: WalkthroughStreamEvent) => void,
-		) => {
-			if (state.completed) {
-				return {
-					content: [{ type: "text" as const, text: "Error: walkthrough already completed." }],
-					isError: true,
-				};
-			}
-			const missing = RATING_AXES.filter((axis) => !state.ratedAxes.has(axis));
-			if (missing.length > 0) {
-				return {
-					content: [
-						{
-							type: "text" as const,
-							text: `Error: missing ratings for [${missing.join(", ")}]. Call rate_axis for each before complete_walkthrough. Every PR must score on all 9 axes — use verdict=pass with a rationale starting 'n/a for this PR — ' for axes that don't apply.`,
-						},
-					],
-					isError: true,
-				};
-			}
-			state.completed = true;
-			emit({
-				type: "done",
-				data: {
-					walkthroughId: "",
-					tokenUsage: {
-						inputTokens: 0,
-						outputTokens: 0,
-						cacheReadInputTokens: 0,
-						cacheCreationInputTokens: 0,
-					},
-				},
-			});
-			return {
-				content: [{ type: "text" as const, text: "Walkthrough complete." }],
-			};
-		},
-	},
-];
+// Re-export the canonical types used by handlers so walkthrough-tools.ts does
+// not need separate @revv/shared imports.
+export type {
+	CodeBlock,
+	DiffBlock,
+	MarkdownBlock,
+	RatingAxis,
+	RatingCitation,
+	RiskLevel,
+	WalkthroughIssue,
+	WalkthroughRating,
+	WalkthroughStreamEvent,
+};
