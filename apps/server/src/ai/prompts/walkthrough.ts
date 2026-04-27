@@ -1,5 +1,5 @@
-import type { PrFileMeta } from '../../services/GitHub';
-import type { RatingAxis, WalkthroughBlock } from '@revv/shared';
+import type { RatingAxis, WalkthroughBlock } from "@revv/shared";
+import type { PrFileMeta } from "../../services/GitHub";
 
 // ── Continuation context (imported here to avoid circular deps) ──────────────
 //
@@ -8,9 +8,9 @@ import type { RatingAxis, WalkthroughBlock } from '@revv/shared';
 // invariant #6, it calls `get_walkthrough_state` via MCP instead.
 
 export interface PromptContinuationContext {
-	walkthroughId: string;
-	existingBlocks: WalkthroughBlock[];
-	existingRatedAxes: RatingAxis[];
+  walkthroughId: string;
+  existingBlocks: WalkthroughBlock[];
+  existingRatedAxes: RatingAxis[];
 }
 
 // ── MCP-based walkthrough prompt (phase-bound, A→B→C→D) ─────────────────────
@@ -187,68 +187,81 @@ Never re-call \`set_overview\` or \`set_sentiment\` — they fail. Never re-rate
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-export function buildExplorationDescription(toolName: string, input: unknown): string {
-	const inp = input as Record<string, string> | null | undefined;
-	switch (toolName) {
-		case 'Read':
-			return `Reading ${inp?.['file_path'] ?? 'file'}`;
-		case 'Grep':
-			return `Searching for '${inp?.['pattern'] ?? ''}' in ${inp?.['path'] ?? 'codebase'}`;
-		case 'Glob':
-			return `Finding files matching ${inp?.['pattern'] ?? '*'}`;
-		case 'LS':
-			return `Listing ${inp?.['path'] ?? '.'}`;
-		default:
-			return `Using ${toolName}`;
-	}
+export function buildExplorationDescription(
+  toolName: string,
+  input: unknown,
+): string {
+  const inp = input as Record<string, string> | null | undefined;
+  switch (toolName) {
+    case "Read":
+      return `Reading ${inp?.file_path ?? "file"}`;
+    case "Grep":
+      return `Searching for '${inp?.pattern ?? ""}' in ${inp?.path ?? "codebase"}`;
+    case "Glob":
+      return `Finding files matching ${inp?.pattern ?? "*"}`;
+    case "LS":
+      return `Listing ${inp?.path ?? "."}`;
+    default:
+      return `Using ${toolName}`;
+  }
 }
 
-export function buildWalkthroughPrompt(params: {
-	pr: { title: string; body: string | null; sourceBranch: string; targetBranch: string; url: string };
-	files: PrFileMeta[];
-}, maxTokenBudget = 40000, continuation?: PromptContinuationContext): string {
-	const lines: string[] = [
-		`## Pull Request: ${params.pr.title}`,
-		`Branch: ${params.pr.sourceBranch} → ${params.pr.targetBranch}`,
-	];
-	if (params.pr.body) {
-		lines.push('', '### Description', params.pr.body);
-	}
-	lines.push(
-		'',
-		'### Changed Files (diff — you can read full file contents with your tools)',
-		''
-	);
+export function buildWalkthroughPrompt(
+  params: {
+    pr: {
+      title: string;
+      body: string | null;
+      sourceBranch: string;
+      targetBranch: string;
+      url: string;
+    };
+    files: PrFileMeta[];
+  },
+  maxTokenBudget = 40000,
+  continuation?: PromptContinuationContext,
+): string {
+  const lines: string[] = [
+    `## Pull Request: ${params.pr.title}`,
+    `Branch: ${params.pr.sourceBranch} → ${params.pr.targetBranch}`,
+  ];
+  if (params.pr.body) {
+    lines.push("", "### Description", params.pr.body);
+  }
+  lines.push(
+    "",
+    "### Changed Files (diff — you can read full file contents with your tools)",
+    "",
+  );
 
-	let approxTokens = 0;
-	for (const file of params.files) {
-		const header = `#### ${file.filename} (${file.status}, +${file.additions} -${file.deletions})`;
-		if (file.patch) {
-			const patchTokens = file.patch.length / 4;
-			if (approxTokens + patchTokens > maxTokenBudget) {
-				lines.push(header, '[PATCH OMITTED — context limit reached]', '');
-				continue;
-			}
-			lines.push(header, '```diff', file.patch, '```', '');
-			approxTokens += patchTokens;
-		} else {
-			lines.push(header, '[No patch available — binary or too large]', '');
-		}
-	}
+  let approxTokens = 0;
+  for (const file of params.files) {
+    const header = `#### ${file.filename} (${file.status}, +${file.additions} -${file.deletions})`;
+    if (file.patch) {
+      const patchTokens = file.patch.length / 4;
+      if (approxTokens + patchTokens > maxTokenBudget) {
+        lines.push(header, "[PATCH OMITTED — context limit reached]", "");
+        continue;
+      }
+      lines.push(header, "```diff", file.patch, "```", "");
+      approxTokens += patchTokens;
+    } else {
+      lines.push(header, "[No patch available — binary or too large]", "");
+    }
+  }
 
-	lines.push(
-		'',
-		'## First action',
-		'',
-		'Call `get_walkthrough_state` before any other tool. The response will tell you whether this is a fresh run or a resume, and exactly which phase + steps are persisted. Use it to decide where to pick up. Never assume you are starting from scratch.',
-	);
+  lines.push(
+    "",
+    "## First action",
+    "",
+    "Call `get_walkthrough_state` before any other tool. The response will tell you whether this is a fresh run or a resume, and exactly which phase + steps are persisted. Use it to decide where to pick up. Never assume you are starting from scratch.",
+  );
 
-	if (continuation) {
-		lines.push(
-			'',
-			'(Informational only — authoritative state lives in get_walkthrough_state. Provider hint: continuation context was provided; if your state query shows a resume scenario, follow the resume discipline in the system prompt.)',
-		);
-	}
+  if (continuation) {
+    lines.push(
+      "",
+      "(Informational only — authoritative state lives in get_walkthrough_state. Provider hint: continuation context was provided; if your state query shows a resume scenario, follow the resume discipline in the system prompt.)",
+    );
+  }
 
-	return lines.join('\n');
+  return lines.join("\n");
 }

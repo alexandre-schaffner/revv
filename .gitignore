@@ -7,6 +7,10 @@ apps/web/.svelte-kit/
 apps/server/dist/
 apps/desktop/target/
 packages/app/dist/
+apps/web-solid/dist/
+apps/web-solid/.output/
+apps/desktop-electrobun/dist/
+apps/desktop-electrobun/build/
 
 # TypeScript
 *.tsbuildinfo

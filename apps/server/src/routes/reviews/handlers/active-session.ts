@@ -1,7 +1,7 @@
-import { Effect } from 'effect';
-import { AppRuntime } from '../../../runtime';
-import { ReviewService } from '../../../services/Review';
-import type { ThreadMessage } from '@revv/shared';
+import type { ThreadMessage } from "@revv/shared";
+import { Effect } from "effect";
+import { AppRuntime } from "../../../runtime";
+import { ReviewService } from "../../../services/Review";
 
 /**
  * GET /api/reviews/active/:prId — get or create the active session,
@@ -12,21 +12,25 @@ import type { ThreadMessage } from '@revv/shared';
  * session, its threads, and each thread's messages.
  */
 export function activeSessionHandler(prId: string) {
-	return AppRuntime.runPromise(
-		Effect.gen(function* () {
-			const reviewService = yield* ReviewService;
+  return AppRuntime.runPromise(
+    Effect.gen(function* () {
+      const reviewService = yield* ReviewService;
 
-			const reviewSession = yield* reviewService.getOrCreateActiveSession(prId);
-			const threads = yield* reviewService.getThreadsForSession(reviewSession.id);
+      const reviewSession = yield* reviewService.getOrCreateActiveSession(prId);
+      const threads = yield* reviewService.getThreadsForSession(
+        reviewSession.id,
+      );
 
-			const messages: Record<string, ThreadMessage[]> = {};
-			for (const thread of threads) {
-				messages[thread.id] = yield* reviewService.getMessages(thread.id);
-			}
+      const messages: Record<string, ThreadMessage[]> = {};
+      for (const thread of threads) {
+        messages[thread.id] = yield* reviewService.getMessages(thread.id);
+      }
 
-			const hunkDecisions = yield* reviewService.getHunkDecisions(reviewSession.id);
+      const hunkDecisions = yield* reviewService.getHunkDecisions(
+        reviewSession.id,
+      );
 
-			return { session: reviewSession, threads, messages, hunkDecisions };
-		}),
-	);
+      return { session: reviewSession, threads, messages, hunkDecisions };
+    }),
+  );
 }

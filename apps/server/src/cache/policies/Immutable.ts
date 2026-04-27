@@ -1,5 +1,10 @@
-import type { CacheRow, FetcherResult } from '../types';
-import { buildPersist, isoNow, type Policy, type WriteDecision } from './Policy';
+import type { CacheRow, FetcherResult } from "../types";
+import {
+  buildPersist,
+  isoNow,
+  type Policy,
+  type WriteDecision,
+} from "./Policy";
 
 /**
  * Content-addressed freshness: the key already encodes the content (e.g.
@@ -12,31 +17,31 @@ import { buildPersist, isoNow, type Policy, type WriteDecision } from './Policy'
  * caller is responsible for explicit invalidation.
  */
 export class ImmutablePolicy implements Policy {
-	readonly kind = 'immutable';
+  readonly kind = "immutable";
 
-	decideRead(_row: CacheRow, _now: number): 'fresh' | 'stale' | 'drop' {
-		return 'fresh';
-	}
+  decideRead(_row: CacheRow, _now: number): "fresh" | "stale" | "drop" {
+    return "fresh";
+  }
 
-	decideWrite<V>(
-		result: FetcherResult<V>,
-		previous: CacheRow | null,
-		now: number,
-	): WriteDecision {
-		switch (result.kind) {
-			case 'invalid':
-				return { kind: 'drop' };
-			case 'unchanged':
-				// 304-style no-op on an immutable key just refreshes fetchedAt.
-				return { kind: 'touch', fetchedAt: isoNow(now), expiresAt: null };
-			case 'fresh':
-				return buildPersist({
-					value: result.value,
-					meta: result.meta,
-					tag: null,
-					ttlMs: null,
-					now,
-				});
-		}
-	}
+  decideWrite<V>(
+    result: FetcherResult<V>,
+    _previous: CacheRow | null,
+    now: number,
+  ): WriteDecision {
+    switch (result.kind) {
+      case "invalid":
+        return { kind: "drop" };
+      case "unchanged":
+        // 304-style no-op on an immutable key just refreshes fetchedAt.
+        return { kind: "touch", fetchedAt: isoNow(now), expiresAt: null };
+      case "fresh":
+        return buildPersist({
+          value: result.value,
+          meta: result.meta,
+          tag: null,
+          ttlMs: null,
+          now,
+        });
+    }
+  }
 }

@@ -1,195 +1,208 @@
-import { Context, Effect, Layer } from 'effect';
-import {
-	AiGenerationError,
-	AiNotConfiguredError,
-	type AiError,
-	type ValidationError,
-} from '../domain/errors';
-import { DbService } from './Db';
-import { withDb } from '../effects/with-db';
-import { SettingsService } from './Settings';
-import { OpencodeSupervisor } from './OpencodeSupervisor';
-import type { PrFileMeta } from './GitHub';
-import type { WalkthroughStreamEvent } from '@revv/shared';
-import type { OpencodeProviderDeps } from '../ai/providers/mcp-walkthrough-opencode';
-
+import type { WalkthroughStreamEvent } from "@revv/shared";
+import { Context, Effect, Layer } from "effect";
 // ── Prompt & provider imports (split out of this file) ──────────────────────
-import { EXPLAIN_SYSTEM_PROMPT, buildExplainPrompt } from '../ai/prompts/explain';
-import { checkCliAvailability } from '../ai/providers/cli-agent';
-import { streamWalkthroughViaMCP, type ContinuationContext } from '../ai/providers/mcp-walkthrough';
-import { streamWalkthroughViaOpencodeMCP } from '../ai/providers/mcp-walkthrough-opencode';
-import { guardWalkthroughStream } from '../ai/providers/stream-guard';
-import { streamViaClaudeCode } from '../ai/providers/claude-code';
+import {
+  buildExplainPrompt,
+  EXPLAIN_SYSTEM_PROMPT,
+} from "../ai/prompts/explain";
+import { streamViaClaudeCode } from "../ai/providers/claude-code";
+import { checkCliAvailability } from "../ai/providers/cli-agent";
+import {
+  type ContinuationContext,
+  streamWalkthroughViaMCP,
+} from "../ai/providers/mcp-walkthrough";
+import type { OpencodeProviderDeps } from "../ai/providers/mcp-walkthrough-opencode";
+import { streamWalkthroughViaOpencodeMCP } from "../ai/providers/mcp-walkthrough-opencode";
+import { guardWalkthroughStream } from "../ai/providers/stream-guard";
+import {
+  type AiError,
+  AiGenerationError,
+  AiNotConfiguredError,
+  type ValidationError,
+} from "../domain/errors";
+import { withDb } from "../effects/with-db";
+import { DbService } from "./Db";
+import type { PrFileMeta } from "./GitHub";
+import { OpencodeSupervisor } from "./OpencodeSupervisor";
+import { SettingsService } from "./Settings";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export interface ExplainParams {
-	readonly filePath: string;
-	readonly lineRange: [number, number];
-	readonly codeSnippet: string;
-	readonly fullFileContent: string;
-	readonly prTitle: string;
-	readonly prBody: string | null;
-	readonly diff: string;
+  readonly filePath: string;
+  readonly lineRange: [number, number];
+  readonly codeSnippet: string;
+  readonly fullFileContent: string;
+  readonly prTitle: string;
+  readonly prBody: string | null;
+  readonly diff: string;
 }
 
 export type { ContinuationContext };
 
 // ── Agent resolution ────────────────────────────────────────────────────────
 
-export type CliAgent = 'opencode' | 'claude';
+export type CliAgent = "opencode" | "claude";
 
 /** Safely resolve the configured CLI agent, falling back to 'opencode'. */
 export function resolveAgent(settings: { aiAgent: string | null }): CliAgent {
-	const agent = settings.aiAgent ?? 'opencode';
-	if (agent === 'opencode' || agent === 'claude') return agent;
-	return 'opencode';
+  const agent = settings.aiAgent ?? "opencode";
+  if (agent === "opencode" || agent === "claude") return agent;
+  return "opencode";
 }
 
 // ── Service definition ───────────────────────────────────────────────────────
 
-export class AiService extends Context.Tag('AiService')<
-	AiService,
-	{
-		readonly explainCode: (
-			params: ExplainParams
-		) => Effect.Effect<ReadableStream<string>, AiError>;
-		readonly streamWalkthrough: (params: {
-			/**
-			 * The deterministic walkthrough id the MCP tool handlers will scope
-			 * all writes to. Issued by {@link WalkthroughJobs.startJob} via
-			 * `walkthroughService.createPartial` BEFORE the provider is spawned.
-			 * The providers inject this into the shared tool-handler context
-			 * (doctrine invariant #11 — identity is orchestrator-provided).
-			 */
-			walkthroughId: string;
-			pr: { title: string; body: string | null; sourceBranch: string; targetBranch: string; url: string };
-			files: PrFileMeta[];
-			worktreePath: string;
-			continuation?: ContinuationContext;
-			onSessionId?: (sessionId: string) => void;
-			/**
-			 * Optional caller-owned abort controller. When provided, it is
-			 * forwarded to the underlying provider so external cancellation
-			 * (regenerate, scope close, shutdown) propagates straight into the
-			 * Claude Agent SDK turn or the opencode HTTP session.
-			 */
-			abortController?: AbortController;
-			/**
-			 * Optional caller-provided callbacks for minting + clearing the
-			 * opencode HTTP-MCP session token. Only consulted when the
-			 * resolved agent is 'opencode'; the Claude SDK path ignores them.
-			 * WalkthroughJobs supplies these because it owns the session-token
-			 * map (in-process, ephemeral per invariant #1). Kept as plain
-			 * callbacks so AiService doesn't need a layer dependency on
-			 * WalkthroughJobs (that would cycle — WalkthroughJobs depends on
-			 * AiService already).
-			 */
-			issueOpencodeSessionToken?: (walkthroughId: string) => Promise<string>;
-			clearOpencodeSessionToken?: (token: string) => Promise<void>;
-		}) => Effect.Effect<AsyncGenerator<WalkthroughStreamEvent>, AiError>;
-		readonly isConfigured: () => Effect.Effect<boolean>;
-	}
+export class AiService extends Context.Tag("AiService")<
+  AiService,
+  {
+    readonly explainCode: (
+      params: ExplainParams,
+    ) => Effect.Effect<ReadableStream<string>, AiError>;
+    readonly streamWalkthrough: (params: {
+      /**
+       * The deterministic walkthrough id the MCP tool handlers will scope
+       * all writes to. Issued by {@link WalkthroughJobs.startJob} via
+       * `walkthroughService.createPartial` BEFORE the provider is spawned.
+       * The providers inject this into the shared tool-handler context
+       * (doctrine invariant #11 — identity is orchestrator-provided).
+       */
+      walkthroughId: string;
+      pr: {
+        title: string;
+        body: string | null;
+        sourceBranch: string;
+        targetBranch: string;
+        url: string;
+      };
+      files: PrFileMeta[];
+      worktreePath: string;
+      continuation?: ContinuationContext;
+      onSessionId?: (sessionId: string) => void;
+      /**
+       * Optional caller-owned abort controller. When provided, it is
+       * forwarded to the underlying provider so external cancellation
+       * (regenerate, scope close, shutdown) propagates straight into the
+       * Claude Agent SDK turn or the opencode HTTP session.
+       */
+      abortController?: AbortController;
+      /**
+       * Optional caller-provided callbacks for minting + clearing the
+       * opencode HTTP-MCP session token. Only consulted when the
+       * resolved agent is 'opencode'; the Claude SDK path ignores them.
+       * WalkthroughJobs supplies these because it owns the session-token
+       * map (in-process, ephemeral per invariant #1). Kept as plain
+       * callbacks so AiService doesn't need a layer dependency on
+       * WalkthroughJobs (that would cycle — WalkthroughJobs depends on
+       * AiService already).
+       */
+      issueOpencodeSessionToken?: (walkthroughId: string) => Promise<string>;
+      clearOpencodeSessionToken?: (token: string) => Promise<void>;
+    }) => Effect.Effect<AsyncGenerator<WalkthroughStreamEvent>, AiError>;
+    readonly isConfigured: () => Effect.Effect<boolean>;
+  }
 >() {}
 
 // ── Live implementation ──────────────────────────────────────────────────────
 
 export const AiServiceLive = Layer.effect(
-	AiService,
-	Effect.gen(function* () {
-		const settingsService = yield* SettingsService;
-		const { db } = yield* DbService;
-		const supervisor = yield* OpencodeSupervisor;
+  AiService,
+  Effect.gen(function* () {
+    const settingsService = yield* SettingsService;
+    const { db } = yield* DbService;
+    const supervisor = yield* OpencodeSupervisor;
 
-		// Map ValidationError from getSettings() to AiGenerationError
-		const getSettings = () =>
-			withDb(db, settingsService.getSettings()).pipe(
-				Effect.mapError(
-					(e: ValidationError) => new AiGenerationError({ cause: e, message: e.message }) as AiError
-				)
-			);
+    // Map ValidationError from getSettings() to AiGenerationError
+    const getSettings = () =>
+      withDb(db, settingsService.getSettings()).pipe(
+        Effect.mapError(
+          (e: ValidationError) =>
+            new AiGenerationError({ cause: e, message: e.message }) as AiError,
+        ),
+      );
 
-		// Check if a CLI agent is available
-		const checkConfigured = (): Effect.Effect<boolean> =>
-			Effect.gen(function* () {
-				const settings = yield* getSettings();
-				const agent = resolveAgent(settings);
-				return checkCliAvailability(agent);
-			}).pipe(Effect.catchAll(() => Effect.succeed(false)));
+    // Check if a CLI agent is available
+    const checkConfigured = (): Effect.Effect<boolean> =>
+      Effect.gen(function* () {
+        const settings = yield* getSettings();
+        const agent = resolveAgent(settings);
+        return checkCliAvailability(agent);
+      }).pipe(Effect.catchAll(() => Effect.succeed(false)));
 
-		return {
-			explainCode: (params: ExplainParams) =>
-				Effect.gen(function* () {
-					const settings = yield* getSettings();
-					const agent = resolveAgent(settings);
+    return {
+      explainCode: (params: ExplainParams) =>
+        Effect.gen(function* () {
+          const settings = yield* getSettings();
+          const agent = resolveAgent(settings);
 
-					if (!checkCliAvailability(agent)) {
-						return yield* Effect.fail(new AiNotConfiguredError());
-					}
+          if (!checkCliAvailability(agent)) {
+            return yield* Effect.fail(new AiNotConfiguredError());
+          }
 
-					const userMessage = buildExplainPrompt(params);
-					return streamViaClaudeCode(userMessage, EXPLAIN_SYSTEM_PROMPT);
-				}),
+          const userMessage = buildExplainPrompt(params);
+          return streamViaClaudeCode(userMessage, EXPLAIN_SYSTEM_PROMPT);
+        }),
 
-			streamWalkthrough: (params) =>
-				Effect.gen(function* () {
-					const settings = yield* getSettings();
-					const agent = resolveAgent(settings);
+      streamWalkthrough: (params) =>
+        Effect.gen(function* () {
+          const settings = yield* getSettings();
+          const agent = resolveAgent(settings);
 
-					if (!checkCliAvailability(agent)) {
-						return yield* Effect.fail(new AiNotConfiguredError());
-					}
+          if (!checkCliAvailability(agent)) {
+            return yield* Effect.fail(new AiNotConfiguredError());
+          }
 
-					// Both providers receive the same param shape (including
-					// walkthroughId + db) and the tool handlers they register
-					// are byte-for-byte the same code — doctrine invariant #13
-					// (Agent-path parity).
-					const providerParams = { ...params, db };
+          // Both providers receive the same param shape (including
+          // walkthroughId + db) and the tool handlers they register
+          // are byte-for-byte the same code — doctrine invariant #13
+          // (Agent-path parity).
+          const providerParams = { ...params, db };
 
-					if (agent === 'opencode') {
-						if (
-							!params.issueOpencodeSessionToken ||
-							!params.clearOpencodeSessionToken
-						) {
-							return yield* Effect.fail(
-								new AiGenerationError({
-									cause: new Error(
-										'missing opencode session-token callbacks',
-									),
-									message:
-										'opencode provider requires caller-supplied session-token callbacks',
-								}),
-							);
-						}
-						const issueToken = params.issueOpencodeSessionToken;
-						const clearToken = params.clearOpencodeSessionToken;
-						const deps: OpencodeProviderDeps = {
-							ensureDaemon: () =>
-								Effect.runPromise(supervisor.ensureRunning()),
-							jobStarted: () =>
-								Effect.runPromise(supervisor.jobStarted()),
-							jobEnded: () => Effect.runPromise(supervisor.jobEnded()),
-							client: () => Effect.runPromise(supervisor.client()),
-							issueSessionToken: (walkthroughId) =>
-								issueToken(walkthroughId),
-							clearSessionToken: (token) => clearToken(token),
-						};
-						const raw = streamWalkthroughViaOpencodeMCP(
-							{ ...providerParams, deps },
-							settings.aiModel ?? undefined,
-							settings,
-						);
-						return guardWalkthroughStream(raw, { label: 'opencode-mcp', synthesizePhases: false });
-					}
-					const raw = streamWalkthroughViaMCP(
-						providerParams,
-						settings.aiModel ?? undefined,
-						settings,
-					);
-					return guardWalkthroughStream(raw, { label: 'claude-mcp', synthesizePhases: false });
-				}),
+          if (agent === "opencode") {
+            if (
+              !params.issueOpencodeSessionToken ||
+              !params.clearOpencodeSessionToken
+            ) {
+              return yield* Effect.fail(
+                new AiGenerationError({
+                  cause: new Error("missing opencode session-token callbacks"),
+                  message:
+                    "opencode provider requires caller-supplied session-token callbacks",
+                }),
+              );
+            }
+            const issueToken = params.issueOpencodeSessionToken;
+            const clearToken = params.clearOpencodeSessionToken;
+            const deps: OpencodeProviderDeps = {
+              ensureDaemon: () => Effect.runPromise(supervisor.ensureRunning()),
+              jobStarted: () => Effect.runPromise(supervisor.jobStarted()),
+              jobEnded: () => Effect.runPromise(supervisor.jobEnded()),
+              client: () => Effect.runPromise(supervisor.client()),
+              issueSessionToken: (walkthroughId) => issueToken(walkthroughId),
+              clearSessionToken: (token) => clearToken(token),
+            };
+            const raw = streamWalkthroughViaOpencodeMCP(
+              { ...providerParams, deps },
+              settings.aiModel ?? undefined,
+              settings,
+            );
+            return guardWalkthroughStream(raw, {
+              label: "opencode-mcp",
+              synthesizePhases: false,
+            });
+          }
+          const raw = streamWalkthroughViaMCP(
+            providerParams,
+            settings.aiModel ?? undefined,
+            settings,
+          );
+          return guardWalkthroughStream(raw, {
+            label: "claude-mcp",
+            synthesizePhases: false,
+          });
+        }),
 
-			isConfigured: () => checkConfigured(),
-		};
-	})
+      isConfigured: () => checkConfigured(),
+    };
+  }),
 );

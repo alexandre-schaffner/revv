@@ -1,4 +1,9 @@
-import { sqliteTable, text, integer, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import {
+  integer,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from "drizzle-orm/sqlite-core";
 
 /**
  * Durable cache for AI code explanations.
@@ -15,31 +20,31 @@ import { sqliteTable, text, integer, uniqueIndex } from 'drizzle-orm/sqlite-core
  * minor whitespace changes in the editor don't reuse wrong explanations.
  */
 export const aiExplanations = sqliteTable(
-	'ai_explanations',
-	{
-		id: text('id').primaryKey(),
-		prId: text('pr_id').notNull(),
-		headSha: text('head_sha').notNull(),
-		filePath: text('file_path').notNull(),
-		rangeStart: integer('range_start').notNull(),
-		rangeEnd: integer('range_end').notNull(),
-		snippetHash: text('snippet_hash').notNull(),
-		model: text('model').notNull(),
-		/** Full streamed response, concatenated. */
-		content: text('content').notNull(),
-		/** JSON blob matching AI token-usage shape. */
-		tokenUsage: text('token_usage').notNull().default('{}'),
-		fetchedAt: text('fetched_at').notNull(),
-	},
-	(table) => [
-		uniqueIndex('ai_explanations_key_idx').on(
-			table.prId,
-			table.headSha,
-			table.filePath,
-			table.rangeStart,
-			table.rangeEnd,
-			table.snippetHash,
-			table.model,
-		),
-	],
+  "ai_explanations",
+  {
+    id: text("id").primaryKey(),
+    prId: text("pr_id").notNull(),
+    headSha: text("head_sha").notNull(),
+    filePath: text("file_path").notNull(),
+    rangeStart: integer("range_start").notNull(),
+    rangeEnd: integer("range_end").notNull(),
+    snippetHash: text("snippet_hash").notNull(),
+    model: text("model").notNull(),
+    /** Full streamed response, concatenated. */
+    content: text("content").notNull(),
+    /** JSON blob matching AI token-usage shape. */
+    tokenUsage: text("token_usage").notNull().default("{}"),
+    fetchedAt: text("fetched_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("ai_explanations_key_idx").on(
+      table.prId,
+      table.headSha,
+      table.filePath,
+      table.rangeStart,
+      table.rangeEnd,
+      table.snippetHash,
+      table.model,
+    ),
+  ],
 );

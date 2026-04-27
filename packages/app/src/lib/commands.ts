@@ -1,12 +1,12 @@
 import { createServerFn } from "@tanstack/react-start";
 import {
   approve,
+  type CommandEntry,
   deny,
   enqueue,
   getCommand,
   getLog,
   getPending,
-  type CommandEntry,
 } from "./command-log";
 
 /** Enqueue a command for approval. Returns the pending entry. */

@@ -1,4 +1,4 @@
-import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 /**
  * ETag cache for GitHub REST responses.
@@ -10,10 +10,10 @@ import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
  *
  * Not used for GraphQL (GitHub's GraphQL endpoint does not advertise ETags).
  */
-export const githubEtagCache = sqliteTable('github_etag_cache', {
-	cacheKey: text('cache_key').primaryKey(),
-	etag: text('etag').notNull(),
-	lastModified: text('last_modified'),
-	bodyJson: text('body_json').notNull(),
-	fetchedAt: text('fetched_at').notNull(),
+export const githubEtagCache = sqliteTable("github_etag_cache", {
+  cacheKey: text("cache_key").primaryKey(),
+  etag: text("etag").notNull(),
+  lastModified: text("last_modified"),
+  bodyJson: text("body_json").notNull(),
+  fetchedAt: text("fetched_at").notNull(),
 });

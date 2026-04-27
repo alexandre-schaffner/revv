@@ -1,6 +1,6 @@
-import { Effect } from 'effect';
-import type { DbService } from '../services/Db';
-import type { CacheRow } from './types';
+import type { Effect } from "effect";
+import type { DbService } from "../services/Db";
+import type { CacheRow } from "./types";
 
 /**
  * Pluggable backend that a {@link CacheLayer} uses for persistence.
@@ -24,30 +24,36 @@ import type { CacheRow } from './types';
  * exception. Backends log internally.
  */
 export interface StorageBackend {
-	readonly kind: 'memory' | 'sqlite' | 'layered';
-	readonly readOne: (
-		ns: string,
-		key: string,
-	) => Effect.Effect<CacheRow | null, never, DbService>;
-	readonly writeOne: (row: CacheRow) => Effect.Effect<void, never, DbService>;
-	readonly deleteOne: (
-		ns: string,
-		key: string,
-	) => Effect.Effect<void, never, DbService>;
-	readonly deleteByPrefix: (
-		ns: string,
-		keyPrefix: string,
-	) => Effect.Effect<void, never, DbService>;
-	readonly deleteNamespace: (ns: string) => Effect.Effect<void, never, DbService>;
-	readonly countEntries: (
-		ns: string,
-	) => Effect.Effect<{ entries: number; approxBytes: number }, never, DbService>;
-	readonly bounds: (
-		ns: string,
-	) => Effect.Effect<
-		{ oldestAt: string | null; newestAt: string | null },
-		never,
-		DbService
-	>;
-	readonly sweepExpired: () => Effect.Effect<number, never, DbService>;
+  readonly kind: "memory" | "sqlite" | "layered";
+  readonly readOne: (
+    ns: string,
+    key: string,
+  ) => Effect.Effect<CacheRow | null, never, DbService>;
+  readonly writeOne: (row: CacheRow) => Effect.Effect<void, never, DbService>;
+  readonly deleteOne: (
+    ns: string,
+    key: string,
+  ) => Effect.Effect<void, never, DbService>;
+  readonly deleteByPrefix: (
+    ns: string,
+    keyPrefix: string,
+  ) => Effect.Effect<void, never, DbService>;
+  readonly deleteNamespace: (
+    ns: string,
+  ) => Effect.Effect<void, never, DbService>;
+  readonly countEntries: (
+    ns: string,
+  ) => Effect.Effect<
+    { entries: number; approxBytes: number },
+    never,
+    DbService
+  >;
+  readonly bounds: (
+    ns: string,
+  ) => Effect.Effect<
+    { oldestAt: string | null; newestAt: string | null },
+    never,
+    DbService
+  >;
+  readonly sweepExpired: () => Effect.Effect<number, never, DbService>;
 }

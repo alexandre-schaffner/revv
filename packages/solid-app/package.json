@@ -1,0 +1,24 @@
+{
+  "name": "@revv/solid-app",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check ."
+  },
+  "dependencies": {
+    "@revv/solid-ui": "workspace:*",
+    "@tanstack/solid-form": "^1.28.4",
+    "@tanstack/solid-hotkeys": "^0.9.1",
+    "lucide-solid": "^0.577.0",
+    "solid-js": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "typescript": "catalog:"
+  }
+}

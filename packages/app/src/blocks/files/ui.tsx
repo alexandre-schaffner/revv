@@ -1,7 +1,6 @@
-import { useState, useEffect, useCallback, useRef } from "react";
-import { requestLs } from "./commands";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getCommandById } from "../../lib/commands";
-import type { CommandEntry } from "../../lib/command-log";
+import { requestLs } from "./commands";
 
 interface FileEntry {
   permissions: string;
@@ -14,7 +13,12 @@ function parseLsLine(line: string): FileEntry | null {
   const parts = line.split(/\s+/);
   if (parts.length < 9) return null;
   const permissions = parts[0]!;
-  if (!permissions.startsWith("d") && !permissions.startsWith("-") && !permissions.startsWith("l")) return null;
+  if (
+    !permissions.startsWith("d") &&
+    !permissions.startsWith("-") &&
+    !permissions.startsWith("l")
+  )
+    return null;
   const name = parts.slice(8).join(" ");
   if (name === "." || name === "..") return null;
   return {
@@ -26,7 +30,9 @@ function parseLsLine(line: string): FileEntry | null {
 
 export function FilesBlock() {
   const [files, setFiles] = useState<FileEntry[]>([]);
-  const [status, setStatus] = useState<"idle" | "pending" | "done" | "denied">("idle");
+  const [status, setStatus] = useState<"idle" | "pending" | "done" | "denied">(
+    "idle",
+  );
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const requestFiles = useCallback(async () => {
@@ -41,7 +47,9 @@ export function FilesBlock() {
         if (pollRef.current) clearInterval(pollRef.current);
         pollRef.current = null;
         const lines = (updated.result?.stdout ?? "").split("\n");
-        setFiles(lines.map(parseLsLine).filter((f): f is FileEntry => f !== null));
+        setFiles(
+          lines.map(parseLsLine).filter((f): f is FileEntry => f !== null),
+        );
         setStatus("done");
       } else if (updated.status === "denied") {
         if (pollRef.current) clearInterval(pollRef.current);
@@ -96,7 +104,11 @@ export function FilesBlock() {
             <span className="text-muted-foreground w-3 text-center shrink-0">
               {file.isDir ? "d" : " "}
             </span>
-            <span className={file.isDir ? "text-foreground" : "text-muted-foreground"}>
+            <span
+              className={
+                file.isDir ? "text-foreground" : "text-muted-foreground"
+              }
+            >
               {file.name}
             </span>
           </div>

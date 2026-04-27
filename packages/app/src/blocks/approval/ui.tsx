@@ -1,10 +1,10 @@
-import { useState, useEffect, useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
+import type { CommandEntry } from "../../lib/command-log";
 import {
-  getPendingCommands,
   approveCommand,
   denyCommand,
+  getPendingCommands,
 } from "../../lib/commands";
-import type { CommandEntry } from "../../lib/command-log";
 
 export function ApprovalBlock() {
   const [pending, setPending] = useState<CommandEntry[]>([]);
@@ -46,7 +46,8 @@ export function ApprovalBlock() {
         >
           <span className="text-muted-foreground shrink-0">{entry.block}</span>
           <span className="text-foreground truncate">
-            {entry.cmd}{entry.args.length > 0 ? ` ${entry.args.join(" ")}` : ""}
+            {entry.cmd}
+            {entry.args.length > 0 ? ` ${entry.args.join(" ")}` : ""}
           </span>
           <div className="ml-auto flex items-center gap-1 shrink-0">
             <button
@@ -61,7 +62,16 @@ export function ApprovalBlock() {
               onClick={() => handleDeny(entry.id)}
               className="p-0.5 rounded-sm text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
             >
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+              <svg
+                width="12"
+                height="12"
+                viewBox="0 0 12 12"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+              >
+                <title>Deny</title>
                 <path d="M3 3l6 6M9 3l-6 6" />
               </svg>
             </button>

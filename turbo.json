@@ -4,11 +4,23 @@
     "dev": {
       "persistent": true,
       "cache": false,
-      "passThroughEnv": ["PORT", "REVV_DB_PATH", "REVV_CLONE_DIR", "VITE_API_PORT"]
+      "passThroughEnv": [
+        "PORT",
+        "REVV_DB_PATH",
+        "REVV_CLONE_DIR",
+        "VITE_API_PORT",
+        "VITE_WEB_PORT"
+      ]
     },
     "build": {
       "dependsOn": ["^build"],
-      "outputs": ["build/**", "dist/**", ".svelte-kit/**"]
+      "outputs": [
+        "build/**",
+        "dist/**",
+        ".svelte-kit/**",
+        ".output/**",
+        ".vinxi/**"
+      ]
     },
     "typecheck": {
       "dependsOn": ["^typecheck"]

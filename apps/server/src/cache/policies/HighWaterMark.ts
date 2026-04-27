@@ -1,11 +1,11 @@
-import type { CacheRow, FetcherResult } from '../types';
+import type { CacheRow, FetcherResult } from "../types";
 import {
-	buildPersist,
-	isoNow,
-	readTag,
-	type Policy,
-	type WriteDecision,
-} from './Policy';
+  buildPersist,
+  isoNow,
+  type Policy,
+  readTag,
+  type WriteDecision,
+} from "./Policy";
 
 /**
  * High-water-mark freshness: the cache stores a cursor (e.g. the last
@@ -18,37 +18,37 @@ import {
  * dashboard even though the backing column lives elsewhere.
  */
 export interface WatermarkTag extends Record<string, unknown> {
-	readonly watermark: string;
+  readonly watermark: string;
 }
 
 export class HighWaterMarkPolicy implements Policy {
-	readonly kind = 'high-water-mark';
+  readonly kind = "high-water-mark";
 
-	decideRead(row: CacheRow, _now: number): 'fresh' | 'stale' | 'drop' {
-		const tag = readTag<WatermarkTag>(row.tagJson);
-		return tag ? 'fresh' : 'drop';
-	}
+  decideRead(row: CacheRow, _now: number): "fresh" | "stale" | "drop" {
+    const tag = readTag<WatermarkTag>(row.tagJson);
+    return tag ? "fresh" : "drop";
+  }
 
-	decideWrite<V>(
-		result: FetcherResult<V>,
-		_previous: CacheRow | null,
-		now: number,
-	): WriteDecision {
-		switch (result.kind) {
-			case 'invalid':
-				return { kind: 'drop' };
-			case 'unchanged':
-				return { kind: 'touch', fetchedAt: isoNow(now), expiresAt: null };
-			case 'fresh': {
-				const tag = (result.meta?.tag ?? null) as WatermarkTag | null;
-				return buildPersist({
-					value: result.value,
-					meta: result.meta,
-					tag,
-					ttlMs: null,
-					now,
-				});
-			}
-		}
-	}
+  decideWrite<V>(
+    result: FetcherResult<V>,
+    _previous: CacheRow | null,
+    now: number,
+  ): WriteDecision {
+    switch (result.kind) {
+      case "invalid":
+        return { kind: "drop" };
+      case "unchanged":
+        return { kind: "touch", fetchedAt: isoNow(now), expiresAt: null };
+      case "fresh": {
+        const tag = (result.meta?.tag ?? null) as WatermarkTag | null;
+        return buildPersist({
+          value: result.value,
+          meta: result.meta,
+          tag,
+          ttlMs: null,
+          now,
+        });
+      }
+    }
+  }
 }

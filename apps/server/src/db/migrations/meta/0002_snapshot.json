@@ -105,12 +105,8 @@
           "name": "account_user_id_user_id_fk",
           "tableFrom": "account",
           "tableTo": "user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -215,12 +211,8 @@
           "name": "comment_threads_review_session_id_review_sessions_id_fk",
           "tableFrom": "comment_threads",
           "tableTo": "review_sessions",
-          "columnsFrom": [
-            "review_session_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["review_session_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -309,11 +301,7 @@
       "indexes": {
         "uq_hunk_session_file_index": {
           "name": "uq_hunk_session_file_index",
-          "columns": [
-            "review_session_id",
-            "file_path",
-            "hunk_index"
-          ],
+          "columns": ["review_session_id", "file_path", "hunk_index"],
           "isUnique": true
         }
       },
@@ -322,12 +310,8 @@
           "name": "hunk_decisions_review_session_id_review_sessions_id_fk",
           "tableFrom": "hunk_decisions",
           "tableTo": "review_sessions",
-          "columnsFrom": [
-            "review_session_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["review_session_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -411,12 +395,8 @@
           "name": "pr_diff_files_pr_id_pull_requests_id_fk",
           "tableFrom": "pr_diff_files",
           "tableTo": "pull_requests",
-          "columnsFrom": [
-            "pr_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["pr_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -580,12 +560,8 @@
           "name": "pull_requests_repository_id_repositories_id_fk",
           "tableFrom": "pull_requests",
           "tableTo": "repositories",
-          "columnsFrom": [
-            "repository_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["repository_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -681,9 +657,7 @@
       "indexes": {
         "uq_repositories_full_name": {
           "name": "uq_repositories_full_name",
-          "columns": [
-            "full_name"
-          ],
+          "columns": ["full_name"],
           "isUnique": true
         }
       },
@@ -738,12 +712,8 @@
           "name": "review_sessions_pull_request_id_pull_requests_id_fk",
           "tableFrom": "review_sessions",
           "tableTo": "pull_requests",
-          "columnsFrom": [
-            "pull_request_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["pull_request_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -815,9 +785,7 @@
       "indexes": {
         "session_token_unique": {
           "name": "session_token_unique",
-          "columns": [
-            "token"
-          ],
+          "columns": ["token"],
           "isUnique": true
         }
       },
@@ -826,12 +794,8 @@
           "name": "session_user_id_user_id_fk",
           "tableFrom": "session",
           "tableTo": "user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -922,12 +886,8 @@
           "name": "thread_messages_thread_id_comment_threads_id_fk",
           "tableFrom": "thread_messages",
           "tableTo": "comment_threads",
-          "columnsFrom": [
-            "thread_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["thread_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1000,9 +960,7 @@
       "indexes": {
         "user_email_unique": {
           "name": "user_email_unique",
-          "columns": [
-            "email"
-          ],
+          "columns": ["email"],
           "isUnique": true
         }
       },
@@ -1189,12 +1147,8 @@
           "name": "walkthrough_blocks_walkthrough_id_walkthroughs_id_fk",
           "tableFrom": "walkthrough_blocks",
           "tableTo": "walkthroughs",
-          "columnsFrom": [
-            "walkthrough_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["walkthrough_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1291,12 +1245,8 @@
           "name": "walkthrough_issues_walkthrough_id_walkthroughs_id_fk",
           "tableFrom": "walkthrough_issues",
           "tableTo": "walkthroughs",
-          "columnsFrom": [
-            "walkthrough_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["walkthrough_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1388,12 +1338,8 @@
           "name": "walkthroughs_review_session_id_review_sessions_id_fk",
           "tableFrom": "walkthroughs",
           "tableTo": "review_sessions",
-          "columnsFrom": [
-            "review_session_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["review_session_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1401,12 +1347,8 @@
           "name": "walkthroughs_pull_request_id_pull_requests_id_fk",
           "tableFrom": "walkthroughs",
           "tableTo": "pull_requests",
-          "columnsFrom": [
-            "pull_request_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["pull_request_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }

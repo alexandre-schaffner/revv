@@ -29,11 +29,7 @@ export function exec(
           stdout: stdout?.toString() ?? "",
           stderr: stderr?.toString() ?? "",
           code:
-            error && "code" in error
-              ? (error.code as number)
-              : error
-                ? 1
-                : 0,
+            error && "code" in error ? (error.code as number) : error ? 1 : 0,
         });
       },
     );

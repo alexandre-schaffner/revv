@@ -7,7 +7,7 @@
     "dev": "vite dev --port 3000",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "lint": "echo 'no linter configured'"
+    "lint": "biome check ."
   },
   "dependencies": {
     "@revv/shared": "workspace:*",
@@ -24,7 +24,7 @@
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "^4.4.0",
-    "tailwindcss": "catalog:",
+    "tailwindcss": "^4.1.0",
     "typescript": "catalog:",
     "vite": "catalog:",
     "vite-tsconfig-paths": "^4.3.0"

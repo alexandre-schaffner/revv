@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
-import { enqueue } from "../../lib/command-log";
 import type { CommandEntry } from "../../lib/command-log";
+import { enqueue } from "../../lib/command-log";
 
 const BLOCK = "files";
 

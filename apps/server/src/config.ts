@@ -1,6 +1,6 @@
-import { Config, Effect } from 'effect';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { Config, Effect } from "effect";
 
 /**
  * Server configuration schema resolved from environment variables via Effect's
@@ -21,26 +21,28 @@ import { join } from 'node:path';
  *     The env var is still honored as an escape hatch for dev/CI.
  */
 export const ServerConfig = Config.all({
-	port: Config.integer('PORT').pipe(Config.withDefault(45678)),
-	dbPath: Config.string('REVV_DB_PATH').pipe(Config.withDefault('./revv.db')),
-	// Bundled OAuth App client_id. `GITHUB_CLIENT_ID` env var overrides for
-	// development, self-hosting, or GitHub Enterprise deployments.
-	githubClientId: Config.string('GITHUB_CLIENT_ID').pipe(
-		Config.withDefault('Ov23g4GLrM59sDrek6wo'),
-	),
-	githubHost: Config.string('GITHUB_HOST').pipe(Config.withDefault('nocturlab.ghe.com')),
-	revDebug: Config.boolean('REV_DEBUG').pipe(Config.withDefault(false)),
-	// Absolute paths to the `claude` / `opencode` CLIs, resolved once by the
-	// installer's shell (which has the user's full PATH including Homebrew,
-	// asdf, mise, nix, etc.) and baked into the LaunchAgent plist's
-	// EnvironmentVariables. Empty string = "not detected at install time" —
-	// the server falls back to a runtime `which` lookup. See
-	// apps/server/src/ai/providers/cli-agent.ts for the resolution chain.
-	claudeBin: Config.string('REVV_CLAUDE_BIN').pipe(Config.withDefault('')),
-	opencodeBin: Config.string('REVV_OPENCODE_BIN').pipe(Config.withDefault('')),
-	cloneDir: Config.string('REVV_CLONE_DIR').pipe(
-		Config.withDefault(join(homedir(), '.revv', 'repos')),
-	),
+  port: Config.integer("PORT").pipe(Config.withDefault(45678)),
+  dbPath: Config.string("REVV_DB_PATH").pipe(Config.withDefault("./revv.db")),
+  // Bundled OAuth App client_id. `GITHUB_CLIENT_ID` env var overrides for
+  // development, self-hosting, or GitHub Enterprise deployments.
+  githubClientId: Config.string("GITHUB_CLIENT_ID").pipe(
+    Config.withDefault("Ov23g4GLrM59sDrek6wo"),
+  ),
+  githubHost: Config.string("GITHUB_HOST").pipe(
+    Config.withDefault("nocturlab.ghe.com"),
+  ),
+  revDebug: Config.boolean("REV_DEBUG").pipe(Config.withDefault(false)),
+  // Absolute paths to the `claude` / `opencode` CLIs, resolved once by the
+  // installer's shell (which has the user's full PATH including Homebrew,
+  // asdf, mise, nix, etc.) and baked into the LaunchAgent plist's
+  // EnvironmentVariables. Empty string = "not detected at install time" —
+  // the server falls back to a runtime `which` lookup. See
+  // apps/server/src/ai/providers/cli-agent.ts for the resolution chain.
+  claudeBin: Config.string("REVV_CLAUDE_BIN").pipe(Config.withDefault("")),
+  opencodeBin: Config.string("REVV_OPENCODE_BIN").pipe(Config.withDefault("")),
+  cloneDir: Config.string("REVV_CLONE_DIR").pipe(
+    Config.withDefault(join(homedir(), ".revv", "repos")),
+  ),
 });
 
 export type ServerConfig = Config.Config.Success<typeof ServerConfig>;
@@ -54,20 +56,20 @@ export type ServerConfig = Config.Config.Success<typeof ServerConfig>;
  * dependency stays explicit.
  */
 const resolved = Effect.runSync(
-	Effect.gen(function* () {
-		return yield* ServerConfig;
-	}),
+  Effect.gen(function* () {
+    return yield* ServerConfig;
+  }),
 );
 
 /** `api.github.com` for github.com, `api.<host>` for GitHub Enterprise. */
 const githubApiBase =
-	resolved.githubHost === 'github.com'
-		? 'https://api.github.com'
-		: `https://api.${resolved.githubHost}`;
+  resolved.githubHost === "github.com"
+    ? "https://api.github.com"
+    : `https://api.${resolved.githubHost}`;
 
 export const serverEnv = {
-	...resolved,
-	githubApiBase,
+  ...resolved,
+  githubApiBase,
 } as const;
 
 export type ServerEnv = typeof serverEnv;

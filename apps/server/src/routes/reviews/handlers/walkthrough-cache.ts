@@ -1,9 +1,9 @@
-import { Effect } from 'effect';
-import { AppRuntime } from '../../../runtime';
-import { GitHubService } from '../../../services/GitHub';
-import { PrContextService } from '../../../services/PrContext';
-import { WalkthroughJobs } from '../../../services/WalkthroughJobs';
-import { WalkthroughService } from '../../../services/Walkthrough';
+import { Effect } from "effect";
+import { AppRuntime } from "../../../runtime";
+import { GitHubService } from "../../../services/GitHub";
+import { PrContextService } from "../../../services/PrContext";
+import { WalkthroughService } from "../../../services/Walkthrough";
+import { WalkthroughJobs } from "../../../services/WalkthroughJobs";
 
 /**
  * GET /api/reviews/:id/walkthrough/cached — check whether a cached
@@ -13,21 +13,21 @@ import { WalkthroughService } from '../../../services/Walkthrough';
  * instantly vs. opening the SSE stream to generate a fresh walkthrough.
  */
 export function getCachedWalkthroughHandler(prId: string, userId: string) {
-	return AppRuntime.runPromise(
-		Effect.gen(function* () {
-			const prContext = yield* PrContextService;
-			const github = yield* GitHubService;
-			const walkthroughService = yield* WalkthroughService;
+  return AppRuntime.runPromise(
+    Effect.gen(function* () {
+      const prContext = yield* PrContextService;
+      const github = yield* GitHubService;
+      const walkthroughService = yield* WalkthroughService;
 
-			const { pr, repo, token } = yield* prContext.resolveBasic(prId, userId);
-			const meta = yield* github.getPrMeta(repo.fullName, pr.externalId, token);
+      const { pr, repo, token } = yield* prContext.resolveBasic(prId, userId);
+      const meta = yield* github.getPrMeta(repo.fullName, pr.externalId, token);
 
-			const cached = yield* walkthroughService.getCached(pr.id, meta.headSha);
-			return cached
-				? { cached: true as const, walkthrough: cached }
-				: { cached: false as const };
-		}),
-	);
+      const cached = yield* walkthroughService.getCached(pr.id, meta.headSha);
+      return cached
+        ? { cached: true as const, walkthrough: cached }
+        : { cached: false as const };
+    }),
+  );
 }
 
 /**
@@ -42,21 +42,21 @@ export function getCachedWalkthroughHandler(prId: string, userId: string) {
  * against our delete, producing orphan rows or partial-new rows.
  */
 export function regenerateWalkthroughHandler(prId: string) {
-	return AppRuntime.runPromise(
-		Effect.gen(function* () {
-			const jobs = yield* WalkthroughJobs;
-			const walkthroughService = yield* WalkthroughService;
+  return AppRuntime.runPromise(
+    Effect.gen(function* () {
+      const jobs = yield* WalkthroughJobs;
+      const walkthroughService = yield* WalkthroughService;
 
-			// Cancel the active job (if any). `cancel` awaits Fiber.interrupt,
-			// which flushes the job's scope — worktree is removed, controller
-			// is aborted, and the row has been marked `error` so the next
-			// invalidate clears clean state.
-			const active = yield* jobs.findActiveByPr(prId);
-			if (active !== null) {
-				yield* jobs.cancel(active.walkthroughId);
-			}
+      // Cancel the active job (if any). `cancel` awaits Fiber.interrupt,
+      // which flushes the job's scope — worktree is removed, controller
+      // is aborted, and the row has been marked `error` so the next
+      // invalidate clears clean state.
+      const active = yield* jobs.findActiveByPr(prId);
+      if (active !== null) {
+        yield* jobs.cancel(active.walkthroughId);
+      }
 
-			yield* walkthroughService.invalidateForPr(prId);
-		}),
-	);
+      yield* walkthroughService.invalidateForPr(prId);
+    }),
+  );
 }

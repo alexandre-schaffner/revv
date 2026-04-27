@@ -3,17 +3,23 @@
   "private": true,
   "packageManager": "bun@1.3.4",
   "workspaces": {
-    "packages": ["apps/*", "packages/*"],
+    "packages": [
+      "apps/*",
+      "packages/*"
+    ],
     "catalog": {
       "react": "^19.1.0",
       "react-dom": "^19.1.0",
       "@types/react": "^19.1.0",
       "@types/react-dom": "^19.1.0",
       "typescript": "^5.7.0",
-      "tailwindcss": "^4.1.0",
       "clsx": "^2.1.1",
       "tailwind-merge": "^3.3.0",
-      "vite": "^6.3.0"
+      "vite": "^6.3.0",
+      "solid-js": "^1.9.0",
+      "vite-plugin-solid": "^2.11.0",
+      "@tanstack/solid-router": "^1.168.0",
+      "@tanstack/solid-start": "^1.167.0"
     }
   },
   "scripts": {
@@ -27,17 +33,36 @@
     "dist": "cd apps/desktop && bunx tauri build",
     "dist:debug": "cd apps/desktop && bunx tauri build --debug",
     "dev:app": "cd packages/app && bun run dev",
-    "clean": "rm -rf apps/web/build apps/web/.svelte-kit apps/server/dist apps/desktop/target .turbo",
+    "dev:solid-web": "cd apps/web-solid && bun run dev",
+    "dev:solid-desktop": "cd apps/desktop-electrobun && bun run dev",
+    "clean": "rm -rf apps/web/build apps/web/.svelte-kit apps/server/dist apps/desktop/target apps/web-solid/dist apps/desktop-electrobun/dist apps/desktop-electrobun/build .turbo",
     "postinstall": "echo '\\n  Run `bun run dev` to start developing, or `bun run dist` to build an installer.\\n'"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.4.13",
     "@opentelemetry/api": "^1.9.1",
+    "@tanstack/solid-hotkeys": "^0.10.0",
     "@tauri-apps/cli": "^2",
     "concurrently": "^9.2.1",
     "turbo": "^2.4.0",
     "typescript": "^5.7.0"
   },
   "dependencies": {
-    "@pierre/diffs": "^1.1.15"
+    "@elysiajs/cors": "^1.4.2",
+    "@elysiajs/eden": "^1.4.9",
+    "@pierre/diffs": "^1.1.15",
+    "@tanstack/browser-db-sqlite-persistence": "^0.1.9",
+    "@tanstack/db": "^0.6.5",
+    "@tanstack/solid-db": "^0.2.19",
+    "@tanstack/solid-query": "^5.100.5",
+    "@tanstack/solid-router": "^1.168.25",
+    "@tanstack/solid-start": "^1.167.48",
+    "@tanstack/store": "^0.11.0",
+    "@types/better-sqlite3": "^7.6.13",
+    "better-sqlite3": "^12.9.0",
+    "drizzle-kit": "^0.31.10",
+    "drizzle-orm": "^0.45.2",
+    "elysia": "^1.4.28",
+    "zod": "^4.3.6"
   }
 }

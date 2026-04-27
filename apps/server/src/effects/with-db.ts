@@ -1,6 +1,6 @@
-import { Effect } from 'effect';
-import { DbService } from '../services/Db';
-import type { Db } from '../db/index';
+import { Effect } from "effect";
+import type { Db } from "../db/index";
+import { DbService } from "../services/Db";
 
 /**
  * Provide a captured `db` handle to an effect that requires DbService.
@@ -10,5 +10,7 @@ import type { Db } from '../db/index';
  * effects that still declare `DbService` in their `R` channel without
  * requiring the full layer.
  */
-export const withDb = <A, E>(db: Db, eff: Effect.Effect<A, E, DbService>): Effect.Effect<A, E> =>
-	Effect.provideService(eff, DbService, { db });
+export const withDb = <A, E>(
+  db: Db,
+  eff: Effect.Effect<A, E, DbService>,
+): Effect.Effect<A, E> => Effect.provideService(eff, DbService, { db });

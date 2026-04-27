@@ -19,21 +19,21 @@
  * policy reads it back on subsequent `get`s to make freshness decisions.
  */
 export interface PolicyWriteMeta {
-	/** ETag from upstream. Used by the {@link EtagPolicy}. */
-	readonly etag?: string;
-	/** Last-Modified from upstream. */
-	readonly lastModified?: string;
-	/**
-	 * Opaque tag — policies store their own discriminator here (e.g. the
-	 * `headSha` for {@link ShaKeyedPolicy}, the query hash for
-	 * {@link QueryHashPolicy}).
-	 */
-	readonly tag?: Record<string, unknown>;
-	/**
-	 * Explicit TTL override. If omitted, the policy picks a default.
-	 * A value of `null` means "no expiry".
-	 */
-	readonly ttlMs?: number | null;
+  /** ETag from upstream. Used by the {@link EtagPolicy}. */
+  readonly etag?: string;
+  /** Last-Modified from upstream. */
+  readonly lastModified?: string;
+  /**
+   * Opaque tag — policies store their own discriminator here (e.g. the
+   * `headSha` for {@link ShaKeyedPolicy}, the query hash for
+   * {@link QueryHashPolicy}).
+   */
+  readonly tag?: Record<string, unknown>;
+  /**
+   * Explicit TTL override. If omitted, the policy picks a default.
+   * A value of `null` means "no expiry".
+   */
+  readonly ttlMs?: number | null;
 }
 
 /**
@@ -44,27 +44,27 @@ export interface PolicyWriteMeta {
  * which handles (de)serialization.
  */
 export interface CacheRow {
-	readonly ns: string;
-	readonly key: string;
-	readonly valueJson: string;
-	readonly etag: string | null;
-	readonly lastModified: string | null;
-	readonly tagJson: string | null;
-	readonly fetchedAt: string; // ISO-8601
-	readonly expiresAt: string | null; // ISO-8601 or null
-	readonly approxBytes: number;
+  readonly ns: string;
+  readonly key: string;
+  readonly valueJson: string;
+  readonly etag: string | null;
+  readonly lastModified: string | null;
+  readonly tagJson: string | null;
+  readonly fetchedAt: string; // ISO-8601
+  readonly expiresAt: string | null; // ISO-8601 or null
+  readonly approxBytes: number;
 }
 
 /** Hint passed into `getOrFetch` fetchers so they can make conditional requests. */
 export interface RevalidationHint<V> {
-	/** The previously cached value, if any. Useful for SWR fetchers. */
-	readonly previousValue: V | null;
-	/** Previous ETag, if the policy captured one. */
-	readonly previousEtag: string | null;
-	/** Previous Last-Modified, if the policy captured one. */
-	readonly previousLastModified: string | null;
-	/** The row we're revalidating (if we have one). */
-	readonly previousRow: CacheRow | null;
+  /** The previously cached value, if any. Useful for SWR fetchers. */
+  readonly previousValue: V | null;
+  /** Previous ETag, if the policy captured one. */
+  readonly previousEtag: string | null;
+  /** Previous Last-Modified, if the policy captured one. */
+  readonly previousLastModified: string | null;
+  /** The row we're revalidating (if we have one). */
+  readonly previousRow: CacheRow | null;
 }
 
 /**
@@ -72,25 +72,29 @@ export interface RevalidationHint<V> {
  * a real refresh, a 304-style no-op, and an upstream-removed resource.
  */
 export type FetcherResult<V> =
-	| { readonly kind: 'fresh'; readonly value: V; readonly meta?: PolicyWriteMeta }
-	| { readonly kind: 'unchanged' }
-	| { readonly kind: 'invalid' };
+  | {
+      readonly kind: "fresh";
+      readonly value: V;
+      readonly meta?: PolicyWriteMeta;
+    }
+  | { readonly kind: "unchanged" }
+  | { readonly kind: "invalid" };
 
 /** Aggregate observability shape surfaced via `/api/cache/stats`. */
 export interface CacheNamespaceStats {
-	readonly namespace: string;
-	readonly policy: string;
-	readonly storage: 'memory' | 'sqlite' | 'layered';
-	readonly hits: number;
-	readonly misses: number;
-	readonly revalidatedUnchanged: number;
-	readonly inflightDedups: number;
-	readonly bytesSaved: number;
-	readonly entries: number;
-	readonly approxBytes: number;
-	readonly hitRate: number;
-	readonly oldestEntryAt: string | null;
-	readonly newestEntryAt: string | null;
+  readonly namespace: string;
+  readonly policy: string;
+  readonly storage: "memory" | "sqlite" | "layered";
+  readonly hits: number;
+  readonly misses: number;
+  readonly revalidatedUnchanged: number;
+  readonly inflightDedups: number;
+  readonly bytesSaved: number;
+  readonly entries: number;
+  readonly approxBytes: number;
+  readonly hitRate: number;
+  readonly oldestEntryAt: string | null;
+  readonly newestEntryAt: string | null;
 }
 
 /**
@@ -98,9 +102,9 @@ export interface CacheNamespaceStats {
  * derives `hitRate` from `hits / (hits + misses)`.
  */
 export interface CacheCounters {
-	hits: number;
-	misses: number;
-	revalidatedUnchanged: number;
-	inflightDedups: number;
-	bytesSaved: number;
+  hits: number;
+  misses: number;
+  revalidatedUnchanged: number;
+  inflightDedups: number;
+  bytesSaved: number;
 }

@@ -1,5 +1,5 @@
-import { exec as rawExec } from "./shell";
 import type { ShellResult } from "./shell";
+import { exec as rawExec } from "./shell";
 
 export type CommandStatus =
   | "pending"
@@ -54,7 +54,8 @@ export function enqueue(
 export async function approve(id: string): Promise<CommandEntry> {
   const entry = log.find((e) => e.id === id);
   if (!entry) throw new Error(`Command ${id} not found`);
-  if (entry.status !== "pending") throw new Error(`Command ${id} is ${entry.status}, not pending`);
+  if (entry.status !== "pending")
+    throw new Error(`Command ${id} is ${entry.status}, not pending`);
 
   entry.status = "running";
   const result = await rawExec(entry.cmd, entry.args, { cwd: entry.cwd });
@@ -68,7 +69,8 @@ export async function approve(id: string): Promise<CommandEntry> {
 export function deny(id: string): CommandEntry {
   const entry = log.find((e) => e.id === id);
   if (!entry) throw new Error(`Command ${id} not found`);
-  if (entry.status !== "pending") throw new Error(`Command ${id} is ${entry.status}, not pending`);
+  if (entry.status !== "pending")
+    throw new Error(`Command ${id} is ${entry.status}, not pending`);
 
   entry.status = "denied";
   entry.finishedAt = Date.now();

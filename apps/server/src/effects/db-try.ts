@@ -1,7 +1,7 @@
-import { Effect } from 'effect';
-import { ReviewError } from '../domain/errors';
-import { DbService } from '../services/Db';
-import type { Db } from '../db/index';
+import { Effect } from "effect";
+import type { Db } from "../db/index";
+import { ReviewError } from "../domain/errors";
+import { DbService } from "../services/Db";
 
 /**
  * Wrap a synchronous Drizzle call in an Effect that fails with a tagged
@@ -18,13 +18,14 @@ import type { Db } from '../db/index';
  * convention (e.g. "Failed to insert thread: SQLITE_CONSTRAINT: …").
  */
 export const tryDb = <A>(
-	label: string,
-	run: (db: Db) => A,
+  label: string,
+  run: (db: Db) => A,
 ): Effect.Effect<A, ReviewError, DbService> =>
-	Effect.gen(function* () {
-		const { db } = yield* DbService;
-		return yield* Effect.try({
-			try: () => run(db),
-			catch: (e) => new ReviewError({ message: `Failed to ${label}: ${String(e)}` }),
-		});
-	});
+  Effect.gen(function* () {
+    const { db } = yield* DbService;
+    return yield* Effect.try({
+      try: () => run(db),
+      catch: (e) =>
+        new ReviewError({ message: `Failed to ${label}: ${String(e)}` }),
+    });
+  });
