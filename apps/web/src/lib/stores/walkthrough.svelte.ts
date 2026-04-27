@@ -430,7 +430,7 @@ export async function streamWalkthrough(prId: string): Promise<void> {
 			explorationStallMessage:
 				'Walkthrough stalled — the model explored files for 3 minutes without producing output. Try regenerating.',
 			inactivityMessage:
-				'Walkthrough generation appears stuck — no events for 90 seconds. Try regenerating.',
+				'Lost connection to the walkthrough server. Check that the local server is running and try again.',
 		});
 	} catch (e) {
 		if ((e as Error).name !== 'AbortError') {

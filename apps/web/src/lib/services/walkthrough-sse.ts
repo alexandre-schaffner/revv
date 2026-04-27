@@ -2,7 +2,14 @@ import type { WalkthroughStreamEvent } from '@revv/shared';
 import { authHeaders } from '$lib/utils/session-token';
 import { parseSSEBuffer } from '$lib/utils/sse-parser';
 
-/** No-events inactivity timeout — the stream is dropped. */
+/**
+ * No-bytes inactivity timeout — the stream is considered dead.
+ *
+ * The server emits `: ping` heartbeats every 15s, so this only fires when the
+ * transport itself is dead (connection closed silently, network gone). Real
+ * "agent stalled" cases are detected server-side and arrive as structured
+ * `error` events.
+ */
 const INACTIVITY_TIMEOUT_MS = 90 * 1000;
 
 /** Exploration-only stall timeout — AI explored files but produced no output. */
@@ -73,14 +80,22 @@ export async function runWalkthroughSse(opts: RunWalkthroughSseOptions): Promise
 		const { done, value } = await reader.read();
 		if (done) break;
 
+		// Any bytes from the server — including `: ping` heartbeats that the SSE
+		// parser strips as comments — prove the transport is alive. Reset the
+		// inactivity timer here so the 90s guard only fires on a genuinely dead
+		// connection. Real "agent stalled" detection lives on the server
+		// (WALKTHROUGH_INACTIVITY_TIMEOUT_MS + stream-guard) and arrives as a
+		// structured `error` event.
+		if (value && value.byteLength > 0) {
+			lastEventTime = Date.now();
+		}
+
 		buffer += decoder.decode(value, { stream: true });
 
 		const result = parseSSEBuffer<WalkthroughStreamEvent>(buffer);
 		buffer = result.remaining;
 
 		if (result.events.length > 0) {
-			lastEventTime = Date.now();
-
 			const hasProgress = result.events.some((e) => e.type !== 'exploration');
 			if (hasProgress) {
 				lastProgressEventTime = Date.now();
@@ -93,9 +108,11 @@ export async function runWalkthroughSse(opts: RunWalkthroughSseOptions): Promise
 
 			opts.onEvents(result.events);
 		} else if (Date.now() - lastEventTime > INACTIVITY_TIMEOUT_MS) {
+			// Reachable only if even heartbeats have stopped — the connection is
+			// dead, not just the model thinking.
 			throw new Error(
 				opts.inactivityMessage ??
-					'Walkthrough appears stuck — no progress for 90 seconds.',
+					'Walkthrough connection lost — no data from server for 90 seconds.',
 			);
 		}
 
