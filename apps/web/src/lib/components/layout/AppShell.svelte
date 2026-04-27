@@ -75,15 +75,18 @@
 		}
 	});
 
-	// Inline style for the grid — drives the dynamic sidebar column width
+	// Inline style for the grid — drives the dynamic sidebar column width.
+	// The right pane is NOT a grid column: it's positioned absolutely on
+	// top of the main row so opening it does not shrink the main column.
+	// This is what keeps the walkthrough/page-title/Request Changes content
+	// render byte-identical when the right pane toggles — matching the
+	// user's expectation that "the right pane should behave exactly like
+	// the left pane: it does not change the main content display." See
+	// `.rightpanel-area` below for the overlay positioning rationale.
 	const gridStyle = $derived(
 		sidebarCollapsed
-			? rightPanelOpen
-				? 'grid-template-columns: 40px 1fr 340px'
-				: 'grid-template-columns: 40px 1fr'
-			: rightPanelOpen
-				? `grid-template-columns: ${sidebarWidth}px 1fr 340px`
-				: `grid-template-columns: ${sidebarWidth}px 1fr`,
+			? `grid-template-columns: 40px 1fr`
+			: `grid-template-columns: ${sidebarWidth}px 1fr`,
 	);
 
 	function onHandlePointerDown(event: PointerEvent): void {
@@ -120,7 +123,6 @@
 <div
 	class="app-shell"
 	class:sidebar-collapsed={sidebarCollapsed}
-	class:panel-open={rightPanelOpen}
 	class:is-resizing={isDragging}
 	class:topbar-compact={topbarCollapsed}
 	style={gridStyle}
@@ -167,11 +169,13 @@
 		<BottomBar />
 	</footer>
 
-	{#if rightPanelOpen}
-		<aside class="rightpanel-area">
-			<RightPanel onClose={toggleRightPanel} prId={page.params['prId'] ?? ''} />
-		</aside>
-	{/if}
+	<aside
+		class="rightpanel-area"
+		class:rightpanel-area--open={rightPanelOpen}
+		aria-hidden={!rightPanelOpen}
+	>
+		<RightPanel onClose={toggleRightPanel} prId={page.params['prId'] ?? ''} />
+	</aside>
 </div>
 
 <CommandPalette open={paletteOpen} mode={paletteMode} onClose={closePalette} />
@@ -187,6 +191,8 @@
 		height: 100vh;
 		width: 100vw;
 		overflow: hidden;
+		/* Positioning context for the absolutely-positioned right pane. */
+		position: relative;
 		background-color: var(--color-bg-primary);
 		transition:
 			grid-template-columns 100ms var(--ease-out-expo),
@@ -196,14 +202,6 @@
 	/* Suppress the column transition while dragging so resize feels instant */
 	.app-shell.is-resizing {
 		transition: none;
-	}
-
-	/* Right panel — update grid areas */
-	.app-shell.panel-open {
-		grid-template-areas:
-			'topbar  topbar     topbar'
-			'sidebar main       rightpanel'
-			'sidebar bottombar  rightpanel';
 	}
 
 	/* ── Sidebar area ── */
@@ -273,12 +271,12 @@
 
 	.tabs-float {
 		/* Viewport-centred. The topbar spans the full viewport (grid-area
-		   'topbar topbar' with optional rightpanel), so `left: 50%` resolves
-		   to 50vw. We deliberately do NOT offset by the sidebar width — the
-		   tabs are anchored to the viewport, not the main-area, so toggling
-		   or dragging the sidebar doesn't shift them horizontally. This
-		   matches the walkthrough content column's viewport-anchored centre
-		   (see GuidedWalkthrough.svelte, `.walkthrough-content`). */
+		   'topbar topbar'), so `left: 50%` resolves to 50vw. We deliberately
+		   do NOT offset by the sidebar width — the tabs are anchored to the
+		   viewport, not the main-area, so toggling or dragging the sidebar
+		   doesn't shift them horizontally. This matches the walkthrough
+		   content column's viewport-anchored centre (see
+		   GuidedWalkthrough.svelte, `.walkthrough-content`). */
 		position: absolute;
 		top: 100%;
 		left: 50%;
@@ -297,21 +295,44 @@
 		border-top: 1px solid var(--color-border);
 	}
 
+	/* ── Right pane (chat) ──
+	   Overlay-positioned, NOT a grid column. Toggling it open/closed must
+	   leave the main grid (sidebar + main + bottombar) byte-identical so
+	   the walkthrough/page-title/Request Changes content does not shift,
+	   reflow, or rewrap. The user's spec was "behave exactly like the left
+	   pane: do not change the main content display"; the left pane achieves
+	   non-disruption via viewport-anchored math inside the inner grids,
+	   but the right pane sits to the right of the 380px annotation rail
+	   where that math cannot absorb a 340px column without squeezing the
+	   820px content track. Overlay sidesteps the geometric impossibility:
+	   main-area width is independent of right-pane state.
+
+	   Position: top below the 20px topbar (28px in Tauri to clear the
+	   traffic-light row), right at viewport edge, bottom above the 40px
+	   bottombar. Slides in/out via translateX so the panel can keep its
+	   chat state mounted across toggles. */
 	.rightpanel-area {
-		grid-area: rightpanel;
+		position: absolute;
+		top: 20px;
+		right: 0;
+		bottom: 40px;
+		width: 340px;
 		border-left: 1px solid var(--color-border-subtle);
-		overflow-y: auto;
-		animation: slide-in var(--duration-smooth) var(--ease-out-expo);
+		overflow: hidden;
+		background: var(--color-panel-bg);
+		transform: translateX(100%);
+		transition: transform 100ms var(--ease-out-expo);
+		/* Above main content, below topbar/CommandPalette. */
+		z-index: 5;
 	}
 
-	@keyframes slide-in {
-		from {
-			opacity: 0;
-			transform: translateX(16px);
-		}
-		to {
-			opacity: 1;
-			transform: translateX(0);
-		}
+	.rightpanel-area--open {
+		transform: translateX(0);
+	}
+
+	/* Tauri overlay title bar — topbar is taller, so the right pane starts
+	   lower to clear the traffic lights. Mirrors `.topbar-area` height. */
+	:global(html.tauri) .rightpanel-area {
+		top: calc(22px + 6px);
 	}
 </style>

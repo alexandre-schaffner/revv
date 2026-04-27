@@ -7,6 +7,9 @@
 		jumpToDiffLine,
 		jumpToWalkthroughBlock,
 	} from '$lib/stores/review.svelte';
+	import { setRightPanelOpen } from '$lib/stores/sidebar.svelte';
+	import { sendChatMessage } from '$lib/stores/chat.svelte';
+	import { buildAddressIssuesPrompt } from '$lib/utils/prompts';
 	import { api } from '$lib/api/client';
 	import { toast } from 'svelte-sonner';
 	import { Check, ArrowUp, Sparkles } from '@lucide/svelte';
@@ -211,6 +214,23 @@
 		}
 	}
 
+	/**
+	 * Hand the selected walkthrough issues to the right-pane chat agent and
+	 * ask it to address them as commits on the chat worktree's working
+	 * branch. The user can then inspect the proposed-changes strip in the
+	 * chat panel and choose which commits to keep.
+	 */
+	function generateChanges(): void {
+		const selected = issues.filter((i) => selectedIssueIds.has(i.id));
+		if (selected.length === 0) {
+			toast.error('Select at least one issue to address.');
+			return;
+		}
+		const prompt = buildAddressIssuesPrompt(selected);
+		setRightPanelOpen(true);
+		sendChatMessage({ prId, message: prompt });
+	}
+
 	function actionLabel(a: Action): string {
 		if (a === 'approve') return 'Approved';
 		return 'Changes requested';
@@ -265,16 +285,18 @@
 
 	<footer class="rc-footer">
 		<div class="rc-actions">
-		<span class="wip-btn-wrapper">
 			<button
 				type="button"
 				class="action-btn action-comment"
-				disabled
+				disabled={submitting !== null || selectedCount === 0}
+				onclick={generateChanges}
+				title={selectedCount === 0
+					? 'Select at least one issue to ask the agent to address'
+					: 'Open the chat panel and ask the agent to address the selected issues as commits'}
 			>
 				<Sparkles size={14} />
 				Generate changes
 			</button>
-		</span>
 			<button
 				type="button"
 				class="action-btn action-reject"
@@ -463,39 +485,6 @@
 		grid-template-columns: repeat(3, 1fr);
 		gap: 8px;
 	}
-
-	.wip-btn-wrapper {
-		position: relative;
-	}
-
-	.wip-btn-wrapper > button {
-		width: 100%;
-		cursor: not-allowed;
-	}
-
-	.wip-btn-wrapper::after {
-		content: 'WIP feature';
-		position: absolute;
-		bottom: calc(100% + 6px);
-		left: 50%;
-		transform: translateX(-50%);
-		background: var(--color-bg-elevated, #1a1a1a);
-		color: var(--color-text-primary, #fff);
-		font-size: 11px;
-		font-weight: 500;
-		padding: 4px 8px;
-		border-radius: 5px;
-		white-space: nowrap;
-		pointer-events: none;
-		opacity: 0;
-		transition: opacity 0.15s ease;
-		z-index: 10;
-	}
-
-	.wip-btn-wrapper:hover::after {
-		opacity: 1;
-	}
-
 
 	/* ── Action buttons — outline→filled pattern via --btn-* variables ── */
 

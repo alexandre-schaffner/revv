@@ -50,6 +50,20 @@
       "when": 1777200000000,
       "tag": "0060_walkthrough_phases",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1777300000000,
+      "tag": "0070_chat_sessions",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1777400000000,
+      "tag": "0080_comment_threads_walkthrough_issue_id",
+      "breakpoints": true
     }
   ]
 }

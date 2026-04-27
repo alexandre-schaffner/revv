@@ -3,12 +3,10 @@
 	import type { ReviewFile } from '$lib/types/review';
 	import DiffViewer from './DiffViewer.svelte';
 	import FileIssues from './FileIssues.svelte';
-	import TokenTooltip from './TokenTooltip.svelte';
 	import {
 		getActiveFilePath,
 		setActiveFilePath,
-		setDiffMode,
-		requestExplanation
+		setDiffMode
 	} from '$lib/stores/review.svelte';
 	import {
 		getActivePanel,
@@ -25,7 +23,6 @@
 		getTotalLineCount,
 		isInDiffMode
 	} from '$lib/stores/focus-mode.svelte';
-	import type { TokenHoverInfo } from './DiffViewerInner.svelte';
 	import { setTopbarSubtitle } from '$lib/stores/topbar.svelte';
 
 	// ── Props ─────────────────────────────────────────────────────────────────
@@ -45,38 +42,12 @@
 	const activeFileName = $derived(activeFile ? (activeFile.path.split('/').pop() ?? activeFile.path) : '');
 
 	// ── Token hover state ────────────────────────────────────────────────────
-
-	interface TokenHoverState {
-		tokenText: string;
-		x: number;
-		y: number;
-		lineNumber: number;
-		side: string;
-	}
-	let tokenHover = $state<TokenHoverState | null>(null);
-	let tokenHoverTimer: ReturnType<typeof setTimeout> | null = null;
+	//
+	// The legacy explanation feature wired sparkle-tooltip explanations to
+	// token hover. With the right pane now hosting the chat agent, that
+	// affordance was removed — see CLAUDE.md "AI chat" doctrine. Keeping the
+	// `fileTitleSectionEl` ref because other parts of this component bind to it.
 	let fileTitleSectionEl = $state<HTMLElement | null>(null);
-
-	function handleTokenHover(info: TokenHoverInfo | null) {
-		if (tokenHoverTimer !== null) {
-			clearTimeout(tokenHoverTimer);
-			tokenHoverTimer = null;
-		}
-		if (!info) {
-			tokenHoverTimer = setTimeout(() => {
-				tokenHover = null;
-			}, 150);
-			return;
-		}
-		const rect = info.element.getBoundingClientRect();
-		tokenHover = {
-			tokenText: info.tokenText,
-			x: rect.left,
-			y: rect.top,
-			lineNumber: info.lineNumber,
-			side: info.side
-		};
-	}
 
 	// ── Comment trigger ──────────────────────────────────────────────────────
 
@@ -137,7 +108,6 @@
 
 	onDestroy(() => {
 		if (gTimer !== undefined) clearTimeout(gTimer);
-		if (tokenHoverTimer !== null) clearTimeout(tokenHoverTimer);
 		if (fileTitleObserver) fileTitleObserver.disconnect();
 		setTopbarSubtitle(null);
 	});
@@ -392,37 +362,11 @@
 			file={activeFile}
 			{themeType}
 			onModeChange={(m) => setDiffMode(m)}
-			onTokenHover={handleTokenHover}
 			commentTrigger={pendingCommentTrigger}
 		/>
 	</div>
 
 </div>
-
-<!-- Floating overlays (outside shadow DOM, positioned via fixed coords) -->
-
-{#if tokenHover}
-	<TokenTooltip
-		tokenText={tokenHover.tokenText}
-		x={tokenHover.x}
-		y={tokenHover.y}
-		onExplain={() => {
-			const hover = tokenHover;
-			if (hover && activeFilePath) {
-				requestExplanation({
-					prId,
-					filePath: activeFilePath,
-					lineRange: [hover.lineNumber, hover.lineNumber],
-					codeSnippet: hover.tokenText
-				});
-			}
-			tokenHover = null;
-		}}
-		onDismiss={() => {
-			tokenHover = null;
-		}}
-	/>
-{/if}
 
 <style>
 	.file-title-section {

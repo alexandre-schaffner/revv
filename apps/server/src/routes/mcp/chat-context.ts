@@ -1,47 +1,26 @@
-// ── /mcp/walkthrough ────────────────────────────────────────────────────────
+// ── /mcp/chat-context ──────────────────────────────────────────────────────
 //
-// HTTP transport for the walkthrough MCP tool surface. Mounted alongside the
-// rest of the Elysia server. The opencode daemon registers this route as a
-// remote MCP server; each of its tool calls hits POST /mcp/walkthrough with
-// a Bearer token that WalkthroughJobs issued for the job.
+// HTTP transport for the right-pane chat agent's read-only context tools.
+// Mirrors `/mcp/walkthrough` (see that file's header for the design
+// rationale) but with a much smaller surface — read-only, no event bus, no
+// per-job emit channel.
 //
-// Per doctrine invariant #13 (agent-path parity), the handlers invoked here
-// are the SAME handlers the Claude Agent SDK uses in-process
-// (apps/server/src/ai/providers/walkthrough-tools.ts). This file is a thin
-// JSON-RPC router that:
-//   1. Authenticates the bearer token via WalkthroughJobs.resolveSessionToken.
-//   2. Builds a WalkthroughToolContext with `emit` piped back through
-//      WalkthroughJobs.emitEvent (so opencode-triggered tool calls surface
-//      on the same in-process event bus the SSE subscribers listen on).
-//   3. Dispatches `tools/list` / `tools/call` / `initialize` JSON-RPC methods
-//      to the shared TOOL_SPECS array.
-//
-// We implement the JSON-RPC surface directly rather than pulling in the MCP
-// SDK's Streamable HTTP transport — the surface we need is tiny (3 methods)
-// and the SDK's transport is Express-focused, which doesn't compose cleanly
-// with Elysia's handler model. Keep this route tight: a handful of methods,
-// no persistence, no per-connection state.
+// Authentication: bearer token issued by `ChatMcpTokens.issue(prId)` from
+// the chat-opencode.ts driver. Revoked when the chat turn finishes.
 
 import { Elysia } from "elysia";
 import { Effect } from "effect";
-import type {
-	WalkthroughStreamEvent,
-	WsServerMessage,
-} from "@revv/shared";
 import { AppRuntime } from "../../runtime";
 import { DbService } from "../../services/Db";
-import { WalkthroughJobs } from "../../services/WalkthroughJobs";
-import { WebSocketHub } from "../../services/WebSocketHub";
+import { ChatMcpTokens } from "../../services/ChatMcpTokens";
 import { debug, logError } from "../../logger";
 import {
-	TOOL_SPECS,
-} from "../../ai/providers/walkthrough-tools";
-import type {
-	WalkthroughToolContext,
-	WalkthroughToolResult,
-} from "../../ai/providers/walkthrough-tool-spec";
+	CHAT_TOOL_SPECS,
+	type ChatToolContext,
+	type ChatToolResult,
+} from "../../ai/providers/chat-mcp-tools";
 
-// ── JSON-RPC 2.0 types ───────────────────────────────────────────────────────
+// ── JSON-RPC 2.0 types ──────────────────────────────────────────────────────
 
 interface JsonRpcRequest {
 	jsonrpc: "2.0";
@@ -63,8 +42,6 @@ interface JsonRpcError {
 }
 
 type JsonRpcResponse = JsonRpcSuccess | JsonRpcError;
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
 
 function jsonRpcSuccess(
 	id: number | string | null,
@@ -93,19 +70,9 @@ function extractBearer(req: Request): string | null {
 	return match && match[1] ? match[1].trim() : null;
 }
 
-/**
- * Convert a zod object schema to an MCP-ish JSON Schema object. We use a
- * hand-rolled shape that opencode's MCP client will accept — the full JSON
- * Schema surface is not required for simple parameter introspection, but the
- * structural type + nested object/array support is. Fallback: if anything
- * fails, emit `{ type: "object", properties: {}, additionalProperties: true }`
- * so the tool is still callable (the zod schema still validates on handler
- * entry).
- */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function toJsonSchema(schema: any): Record<string, unknown> {
 	try {
-		// zod v4 exposes `.toJSONSchema()` / `z.toJSONSchema()`.
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		if (schema && typeof (schema as any).toJSONSchema === "function") {
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -114,19 +81,15 @@ function toJsonSchema(schema: any): Record<string, unknown> {
 	} catch {
 		/* fall through */
 	}
-	return {
-		type: "object",
-		properties: {},
-		additionalProperties: true,
-	};
+	return { type: "object", properties: {}, additionalProperties: true };
 }
 
-// ── Token-scoped context builder ─────────────────────────────────────────────
+// ── Token-scoped context builder ────────────────────────────────────────────
 
 async function resolveContext(
 	req: Request,
 ): Promise<
-	| { ok: true; ctx: WalkthroughToolContext }
+	| { ok: true; ctx: ChatToolContext }
 	| { ok: false; status: number; message: string }
 > {
 	const token = extractBearer(req);
@@ -136,72 +99,35 @@ async function resolveContext(
 	const db = await AppRuntime.runPromise(
 		Effect.flatMap(DbService, (s) => Effect.succeed(s.db)),
 	);
-	const resolved = await AppRuntime.runPromise(
-		Effect.flatMap(WalkthroughJobs, (jobs) => jobs.resolveSessionToken(token)),
+	const prId = await AppRuntime.runPromise(
+		Effect.flatMap(ChatMcpTokens, (t) => t.resolve(token)),
 	);
-	if (!resolved) {
+	if (!prId) {
 		return {
 			ok: false,
 			status: 403,
-			message: "Session token not recognized or job no longer running",
+			message: "Chat MCP token not recognized or already revoked",
 		};
 	}
-	const walkthroughId = resolved.walkthroughId;
-	const emit = (event: WalkthroughStreamEvent): void => {
-		void AppRuntime.runPromise(
-			Effect.flatMap(WalkthroughJobs, (jobs) =>
-				jobs.emitEvent(walkthroughId, event),
-			),
-		).catch((err) => {
-			logError(
-				"mcp-walkthrough-route",
-				`emitEvent failed for ${walkthroughId}:`,
-				err instanceof Error ? err.message : String(err),
-			);
-		});
-	};
-	// WebSocket broadcaster used by tools that mutate non-walkthrough tables
-	// (currently only `add_issue_comment` → `comment_threads`). Same shape as
-	// the in-process Claude SDK path for byte-identical handler behavior
-	// (doctrine invariant #13).
-	const broadcastThreadEvent = (msg: WsServerMessage): void => {
-		void AppRuntime.runPromise(
-			Effect.flatMap(WebSocketHub, (hub) => hub.broadcast(msg)),
-		).catch((err) => {
-			logError(
-				"mcp-walkthrough-route",
-				`broadcastThreadEvent failed for ${walkthroughId}:`,
-				err instanceof Error ? err.message : String(err),
-			);
-		});
-	};
-	return {
-		ok: true,
-		ctx: { db, walkthroughId, emit, broadcastThreadEvent },
-	};
+	return { ok: true, ctx: { db, prId } };
 }
 
-// ── JSON-RPC method handlers ─────────────────────────────────────────────────
+// ── JSON-RPC method handlers ────────────────────────────────────────────────
 
 async function handleInitialize(
 	id: number | string | null,
 ): Promise<JsonRpcResponse> {
 	return jsonRpcSuccess(id, {
 		protocolVersion: "2024-11-05",
-		capabilities: {
-			tools: {},
-		},
-		serverInfo: {
-			name: "revv-walkthrough",
-			version: "2.0.0",
-		},
+		capabilities: { tools: {} },
+		serverInfo: { name: "revv-chat-context", version: "1.0.0" },
 	});
 }
 
 async function handleToolsList(
 	id: number | string | null,
 ): Promise<JsonRpcResponse> {
-	const tools = TOOL_SPECS.map((spec) => ({
+	const tools = CHAT_TOOL_SPECS.map((spec) => ({
 		name: spec.name,
 		description: spec.description,
 		inputSchema: toJsonSchema(spec.inputSchema),
@@ -212,7 +138,7 @@ async function handleToolsList(
 async function handleToolsCall(
 	id: number | string | null,
 	params: unknown,
-	ctx: WalkthroughToolContext,
+	ctx: ChatToolContext,
 ): Promise<JsonRpcResponse> {
 	if (params === null || typeof params !== "object") {
 		return jsonRpcError(id, -32602, "tools/call: params must be an object");
@@ -222,7 +148,7 @@ async function handleToolsCall(
 	if (!name) {
 		return jsonRpcError(id, -32602, "tools/call: missing tool name");
 	}
-	const spec = TOOL_SPECS.find((s) => s.name === name);
+	const spec = CHAT_TOOL_SPECS.find((s) => s.name === name);
 	if (!spec) {
 		return jsonRpcError(id, -32601, `tools/call: unknown tool '${name}'`);
 	}
@@ -235,12 +161,12 @@ async function handleToolsCall(
 			`tools/call: invalid arguments for '${name}': ${parsed.error.message}`,
 		);
 	}
-	let result: WalkthroughToolResult;
+	let result: ChatToolResult;
 	try {
 		result = await spec.handler(ctx, parsed.data);
 	} catch (err) {
 		logError(
-			"mcp-walkthrough-route",
+			"mcp-chat-context",
 			`handler '${name}' threw:`,
 			err instanceof Error ? err.message : String(err),
 		);
@@ -254,10 +180,10 @@ async function handleToolsCall(
 	return jsonRpcSuccess(id, result);
 }
 
-// ── Elysia route ─────────────────────────────────────────────────────────────
+// ── Elysia route ────────────────────────────────────────────────────────────
 
-export const mcpWalkthroughRoute = new Elysia({ prefix: "/mcp" }).post(
-	"/walkthrough",
+export const mcpChatContextRoute = new Elysia({ prefix: "/mcp" }).post(
+	"/chat-context",
 	async (ctx) => {
 		const req = ctx.request;
 
@@ -276,7 +202,6 @@ export const mcpWalkthroughRoute = new Elysia({ prefix: "/mcp" }).post(
 			);
 		}
 
-		// Accept batched JSON-RPC requests (array) as well as single requests.
 		const requests: JsonRpcRequest[] = Array.isArray(body)
 			? (body as JsonRpcRequest[])
 			: [body as JsonRpcRequest];
@@ -311,7 +236,11 @@ export const mcpWalkthroughRoute = new Elysia({ prefix: "/mcp" }).post(
 		for (const rpc of requests) {
 			if (!rpc || rpc.jsonrpc !== "2.0" || typeof rpc.method !== "string") {
 				responses.push(
-					jsonRpcError(rpc?.id ?? null, -32600, "Invalid JSON-RPC 2.0 request"),
+					jsonRpcError(
+						rpc?.id ?? null,
+						-32600,
+						"Invalid JSON-RPC 2.0 request",
+					),
 				);
 				continue;
 			}
@@ -320,8 +249,6 @@ export const mcpWalkthroughRoute = new Elysia({ prefix: "/mcp" }).post(
 				if (rpc.method === "initialize") {
 					responses.push(await handleInitialize(rpcId));
 				} else if (rpc.method === "notifications/initialized") {
-					// Notification — no response required. If an id was given we
-					// still need to respond; otherwise we skip.
 					if (rpc.id !== undefined && rpc.id !== null) {
 						responses.push(jsonRpcSuccess(rpcId, null));
 					}
@@ -338,7 +265,7 @@ export const mcpWalkthroughRoute = new Elysia({ prefix: "/mcp" }).post(
 				}
 			} catch (err) {
 				logError(
-					"mcp-walkthrough-route",
+					"mcp-chat-context",
 					`dispatch error for method '${rpc.method}':`,
 					err instanceof Error ? err.message : String(err),
 				);
@@ -354,8 +281,8 @@ export const mcpWalkthroughRoute = new Elysia({ prefix: "/mcp" }).post(
 		}
 
 		debug(
-			"mcp-walkthrough-route",
-			`served ${requests.length} request(s), walkthroughId=${resolved.ctx.walkthroughId}`,
+			"mcp-chat-context",
+			`served ${requests.length} request(s), prId=${resolved.ctx.prId}`,
 		);
 
 		const payload = Array.isArray(body) ? responses : responses[0];

@@ -10,6 +10,7 @@ import type {
 	WalkthroughRating,
 	WalkthroughState,
 	WalkthroughStreamEvent,
+	WsServerMessage,
 } from "@revv/shared";
 import { RATING_AXES } from "@revv/shared";
 import { z } from "zod";
@@ -60,6 +61,15 @@ export interface WalkthroughToolContext {
 	 * doctrine invariant #8: "Commit first, broadcast second."
 	 */
 	readonly emit: (event: WalkthroughStreamEvent) => void;
+	/**
+	 * General WebSocket broadcast hook (separate channel from the walkthrough
+	 * SSE stream above). Used by handlers that mutate non-walkthrough tables —
+	 * specifically `add_issue_comment`, which writes to `comment_threads` /
+	 * `thread_messages` and must notify any open `DiffViewerInner` so the
+	 * agent's comment shows up inline in the diff. Like `emit`, it is called
+	 * AFTER the DB commit so subscribers never see an event without a row.
+	 */
+	readonly broadcastThreadEvent: (msg: WsServerMessage) => void;
 }
 
 export interface WalkthroughToolResult {
@@ -158,7 +168,7 @@ const flagIssueSchema = z.object({
 	severity: z
 		.enum(["info", "warning", "critical"])
 		.describe(
-			"info: minor note; warning: should be addressed before merge; critical: blocks merge or introduces serious risk",
+			"DEFAULT TO 'warning' WHEN UNSURE. Calibration: 'info' = nitpick the coder can ignore (style preference, optional cleanup, observation a real reviewer would not block on) — RARE, most reviews have zero info. 'warning' = a real concern the coder should address before merge (concrete bug, missing test, error path not handled, design issue, unclear naming on critical path, missing edge-case handling) — this is the COMMON case for any concern worth surfacing. 'critical' = hard merge blocker (security flaw, auth bypass, data loss, broken migration, breaking API change without compatibility shim, race condition in shared state, unhandled error that crashes the process). Do not soften 'critical' to 'warning' — if it would cause an incident, call it critical. Do not soften 'warning' to 'info' to hedge — if you would mention it as a reviewer, it is at minimum a warning.",
 		),
 	title: z.string().describe("Short title of the concern (10 words max)"),
 	description: z
@@ -186,6 +196,42 @@ const flagIssueSchema = z.object({
 		.int()
 		.nullable()
 		.describe("Ending line number of the concern, or null"),
+});
+
+const addIssueCommentSchema = z.object({
+	issue_id: z
+		.string()
+		.describe(
+			"The walkthrough_issues.id returned (in the ok result text) by a prior flag_issue call. The issue must exist for this walkthrough — calls referencing an unknown id are rejected.",
+		),
+	file_path: z
+		.string()
+		.describe(
+			"Path of the file the comment anchors to — must match a path present in the PR diff.",
+		),
+	start_line: z
+		.number()
+		.int()
+		.describe(
+			"1-based start line of the anchor range. Must be inside a hunk present in the PR diff (same rule as human review comments on GitHub).",
+		),
+	end_line: z
+		.number()
+		.int()
+		.describe(
+			"1-based inclusive end line. Equal to start_line for a single-line comment.",
+		),
+	diff_side: z
+		.enum(["old", "new"])
+		.default("new")
+		.describe(
+			"'new' for added/modified lines (right side of a split diff), 'old' for deleted lines.",
+		),
+	body: z
+		.string()
+		.describe(
+			"Markdown body of the comment. Speak to the coder directly — explain the issue, why it matters, and the recommended fix. Idempotency: a retry with the same anchor (issue_id + file_path + start_line + end_line + diff_side) replaces the body of the existing comment rather than creating a duplicate.",
+		),
 });
 
 const setSentimentSchema = z.object({
@@ -259,6 +305,7 @@ export type GetWalkthroughStateInput = z.infer<typeof getWalkthroughStateSchema>
 export type SetOverviewInput = z.infer<typeof setOverviewSchema>;
 export type AddDiffStepInput = z.infer<typeof addDiffStepSchema>;
 export type FlagIssueInput = z.infer<typeof flagIssueSchema>;
+export type AddIssueCommentInput = z.infer<typeof addIssueCommentSchema>;
 export type SetSentimentInput = z.infer<typeof setSentimentSchema>;
 export type RateAxisInput = z.infer<typeof rateAxisSchema>;
 export type CompleteWalkthroughInput = z.infer<typeof completeWalkthroughSchema>;
@@ -270,6 +317,7 @@ export {
 	setOverviewSchema,
 	addDiffStepSchema,
 	flagIssueSchema,
+	addIssueCommentSchema,
 	setSentimentSchema,
 	rateAxisSchema,
 	completeWalkthroughSchema,
@@ -300,6 +348,29 @@ export async function computeIssueId(
 	startLine: number | null,
 ): Promise<string> {
 	const input = `${walkthroughId}\0${title}\0${filePath ?? ""}\0${startLine ?? ""}`;
+	const data = new TextEncoder().encode(input);
+	const digest = await crypto.subtle.digest("SHA-256", data);
+	return Array.from(new Uint8Array(digest))
+		.map((b) => b.toString(16).padStart(2, "0"))
+		.join("");
+}
+
+/**
+ * Deterministic comment-thread id for the `add_issue_comment` MCP tool.
+ * Collision-resistant (SHA-256) and stable across resumes — a retry of
+ * `add_issue_comment` with the same anchor produces the same id, so the
+ * underlying `comment_threads` upsert is idempotent (one thread per
+ * (issue, file, start_line, end_line, diff_side) tuple).
+ */
+export async function computeAnchorThreadId(
+	walkthroughId: string,
+	issueId: string,
+	filePath: string,
+	startLine: number,
+	endLine: number,
+	diffSide: "old" | "new",
+): Promise<string> {
+	const input = `${walkthroughId}\0${issueId}\0${filePath}\0${startLine}\0${endLine}\0${diffSide}`;
 	const data = new TextEncoder().encode(input);
 	const digest = await crypto.subtle.digest("SHA-256", data);
 	return Array.from(new Uint8Array(digest))

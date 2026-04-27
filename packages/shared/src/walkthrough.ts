@@ -225,7 +225,38 @@ export interface WalkthroughState {
 		blockType: WalkthroughBlock['type'];
 	}>;
 	ratedAxes: RatingAxis[];
+	/**
+	 * Identities of every issue already flagged for this walkthrough. The agent
+	 * uses these `id` values when calling `add_issue_comment` so resumes can
+	 * attach line comments to issues from prior runs without re-flagging. Empty
+	 * for fresh walkthroughs. The order matches insertion order.
+	 */
+	issues: Array<{
+		id: string;
+		title: string;
+		filePath: string | null;
+		startLine: number | null;
+		endLine: number | null;
+	}>;
+	/** Convenience — equal to `issues.length`. Retained for forward compatibility. */
 	issueCount: number;
+	/**
+	 * Subset of `issues` filtered to entries that REQUIRE an inline review
+	 * comment but don't yet have one — i.e. severity is `'warning'` or
+	 * `'critical'` AND `filePath` + `startLine` are both set, AND no
+	 * `comment_threads` row references the issue. The walkthrough cannot
+	 * transition to `'complete'` until this list is empty (enforced by
+	 * `complete_walkthrough` AND the orchestrator). On a resumed run, the
+	 * agent should call `add_issue_comment` for every entry here before
+	 * calling `complete_walkthrough`.
+	 */
+	issuesNeedingInlineComment: Array<{
+		id: string;
+		severity: 'warning' | 'critical';
+		title: string;
+		filePath: string;
+		startLine: number;
+	}>;
 }
 
 // ── SSE stream events ───────────────────────────────────────────────────────

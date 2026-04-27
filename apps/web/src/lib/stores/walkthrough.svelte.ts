@@ -430,7 +430,7 @@ export async function streamWalkthrough(prId: string): Promise<void> {
 			explorationStallMessage:
 				'Walkthrough stalled — the model explored files for 3 minutes without producing output. Try regenerating.',
 			inactivityMessage:
-				'Walkthrough generation appears stuck — no progress for 3 minutes. Try regenerating.',
+				'Walkthrough generation appears stuck — no events for 90 seconds. Try regenerating.',
 		});
 	} catch (e) {
 		if ((e as Error).name !== 'AbortError') {
@@ -804,6 +804,42 @@ export async function regenerate(prId: string): Promise<void> {
 	entries = new Map(entries);
 
 	await streamWalkthrough(prId);
+}
+
+/**
+ * Invalidate the walkthrough for a PR after a Pull without starting a new
+ * stream. Used by the Pull button so the user sees the "Generate walkthrough"
+ * button and opts in explicitly, rather than burning tokens on every pull.
+ *
+ * Mirrors `regenerate()` but skips the placeholder entry and `streamWalkthrough`
+ * call. After this returns the entries Map has no entry for the PR, so
+ * GuidedWalkthrough's onMount → hydrateFromCache miss will surface the
+ * Generate button.
+ */
+export async function invalidateForPull(prId: string): Promise<void> {
+	// Reset animation trackers so any later generation animates in fresh.
+	animatedBlocks.delete(prId);
+	animatedIssues.delete(prId);
+	animatedContainers.delete(prId);
+
+	// Abort any in-flight SSE and wipe local state immediately so the UI
+	// transitions to the "no walkthrough" state without waiting for the server.
+	abortPr(prId);
+	entries.delete(prId);
+	entries = new Map(entries);
+
+	// Cancel the server-side job and invalidate the cached walkthrough row so
+	// hydrateFromCache returns a miss on the next mount.
+	try {
+		await fetch(`${API_BASE_URL}/api/reviews/${prId}/walkthrough/regenerate`, {
+			method: 'POST',
+			headers: authHeaders(),
+		});
+	} catch {
+		// Non-fatal: the local state is already cleared, so the Generate button
+		// will appear. The stale server row will be superseded on the next pull
+		// or explicit generation.
+	}
 }
 
 /** Clear active PR without aborting any background streams. */

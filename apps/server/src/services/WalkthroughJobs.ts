@@ -56,6 +56,7 @@ import {
 } from "../domain/errors";
 import { debug, logError, withLogContext, type LogContext } from "../logger";
 import { withDb } from "../effects/with-db";
+import { findIssuesMissingInlineComment } from "../ai/providers/walkthrough-tools";
 import { AiService, resolveAgent, type ContinuationContext } from "./Ai";
 import { DbService } from "./Db";
 import { GitHubEtagCache } from "./GitHubEtagCache";
@@ -532,44 +533,85 @@ export const WalkthroughJobsLive = Layer.effect(
 											if (
 												dbState?.lastCompletedPhase === "D"
 											) {
-												// Phase D reached — transition to
-												// complete.
-												await Effect.runPromise(
-													setStatus(
+												// Phase D reached — but Phase D is a
+												// NECESSARY, not SUFFICIENT, condition
+												// for `complete`. The comment-pairing
+												// invariant (warning/critical
+												// line-anchored issues must each have
+												// ≥1 inline comment, doctrine #12)
+												// also has to hold — otherwise the
+												// agent could finish all 9 axes and
+												// silently leave the coder with no
+												// inline review comments at the spots
+												// that matter.
+												//
+												// Same query `complete_walkthrough`
+												// runs at the tool surface — kept in
+												// the shared utility so both gates
+												// can never drift apart.
+												const missingComments =
+													findIssuesMissingInlineComment(
+														db,
 														job.walkthroughId,
-														"complete",
-														{
+													);
+												if (missingComments.length === 0) {
+													await Effect.runPromise(
+														setStatus(
+															job.walkthroughId,
+															"complete",
+															{
+																tokenUsage:
+																	accumulatedTokenUsage,
+															},
+														),
+													);
+													await Effect.runPromise(
+														hub
+															.broadcast({
+																type: "walkthrough:complete",
+																data: {
+																	prId: ctx.pr.id,
+																	walkthroughId:
+																		job.walkthroughId,
+																},
+															})
+															.pipe(
+																Effect.catchAll(
+																	() => Effect.void,
+																),
+															),
+													);
+													fanOut(job, {
+														type: "done",
+														data: {
+															walkthroughId:
+																job.walkthroughId,
 															tokenUsage:
 																accumulatedTokenUsage,
 														},
-													),
+													});
+													return;
+												}
+												debug(
+													"walkthrough-jobs",
+													`phase=D but ${missingComments.length} warning/critical issue(s) missing inline comment(s) — falling through to auto-continuation:`,
+													missingComments
+														.map(
+															(i) =>
+																`${i.id}[${i.severity}]@${i.filePath}:${i.startLine}`,
+														)
+														.join(", "),
 												);
-												await Effect.runPromise(
-													hub
-														.broadcast({
-															type: "walkthrough:complete",
-															data: {
-																prId: ctx.pr.id,
-																walkthroughId:
-																	job.walkthroughId,
-															},
-														})
-														.pipe(
-															Effect.catchAll(
-																() => Effect.void,
-															),
-														),
-												);
-												fanOut(job, {
-													type: "done",
-													data: {
-														walkthroughId:
-															job.walkthroughId,
-														tokenUsage:
-															accumulatedTokenUsage,
-													},
-												});
-												return;
+												// Fall through into auto-continuation
+												// just as if Phase D had not been
+												// reached — same budget, same
+												// re-prompt path. The agent's first
+												// call on resume is
+												// get_walkthrough_state, which
+												// surfaces `issuesNeedingInlineComment`
+												// explicitly so the model knows what
+												// to fix.
+												break;
 											}
 
 											// Phase < D — need to continue if we
@@ -639,8 +681,15 @@ export const WalkthroughJobsLive = Layer.effect(
 											? "max continuations reached"
 											: "aborted",
 									);
-									// Mark error if we never reached Phase D — otherwise
-									// the row stays in `generating` forever.
+									// Mark error if either:
+									//   (a) we never reached Phase D, OR
+									//   (b) we reached Phase D but the
+									//       comment-pairing invariant (doctrine
+									//       #12) is still violated.
+									// Otherwise the row would stay in
+									// `generating` forever (case a) or land in
+									// `complete` despite missing inline
+									// comments (case b).
 									const finalState = await Effect.runPromise(
 										provideDb(
 											walkthroughService.getPartial(
@@ -653,7 +702,28 @@ export const WalkthroughJobsLive = Layer.effect(
 											),
 										),
 									);
-									if (finalState?.lastCompletedPhase !== "D") {
+									const phaseD =
+										finalState?.lastCompletedPhase === "D";
+									const missingCommentsAtExhaustion = phaseD
+										? findIssuesMissingInlineComment(
+												db,
+												job.walkthroughId,
+											)
+										: [];
+									if (
+										!phaseD ||
+										missingCommentsAtExhaustion.length > 0
+									) {
+										if (
+											phaseD &&
+											missingCommentsAtExhaustion.length >
+												0
+										) {
+											debug(
+												"walkthrough-jobs",
+												`exhausted auto-continuations with ${missingCommentsAtExhaustion.length} warning/critical issue(s) still missing inline comment(s) — marking error`,
+											);
+										}
 										await Effect.runPromise(
 											setStatus(
 												job.walkthroughId,

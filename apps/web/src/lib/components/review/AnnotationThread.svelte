@@ -2,6 +2,7 @@
 	import type { CommentThread, ThreadMessage } from '@revv/shared';
 	import { User, Bot, Clock } from '@lucide/svelte';
 	import AnnotationCommentInput from './AnnotationCommentInput.svelte';
+	import { renderMarkdown } from '$lib/utils/markdown';
 
 	interface Props {
 		thread: CommentThread;
@@ -184,7 +185,7 @@
 					>{msg.body}</div>
 				{/if}
 			{:else}
-				<div class="msg-body">{msg.body}</div>
+				<div class="msg-body prose">{@html renderMarkdown(msg.body)}</div>
 			{/if}
 
 			{#if msg.codeSuggestion}				<div class="suggestion-block">
@@ -352,8 +353,60 @@
 		font-size: 13px;
 		line-height: 1.6;
 		color: var(--color-text-secondary);
-		white-space: pre-wrap;
 		word-break: break-word;
+	}
+
+	.msg-body :global(p) {
+		margin: 0 0 6px;
+	}
+	.msg-body :global(p:last-child) {
+		margin-bottom: 0;
+	}
+	.msg-body :global(strong) {
+		font-weight: 600;
+		color: var(--color-text-primary);
+	}
+	.msg-body :global(em) {
+		font-style: italic;
+	}
+	.msg-body :global(code) {
+		font-family: var(--font-mono, ui-monospace, monospace);
+		font-size: 0.85em;
+		background: color-mix(in srgb, var(--color-text-muted) 12%, transparent);
+		padding: 1px 4px;
+		border-radius: 3px;
+	}
+	.msg-body :global(ul),
+	.msg-body :global(ol) {
+		margin: 4px 0 6px;
+		padding-left: 1.4em;
+	}
+	.msg-body :global(li) {
+		margin-bottom: 2px;
+	}
+	.msg-body :global(pre) {
+		background: var(--color-bg-tertiary);
+		padding: 8px 10px;
+		border-radius: 4px;
+		overflow-x: auto;
+		font-size: 12px;
+		margin: 6px 0;
+	}
+	.msg-body :global(pre code) {
+		background: transparent;
+		padding: 0;
+		font-size: inherit;
+	}
+	.msg-body :global(blockquote) {
+		margin: 4px 0;
+		padding-left: 10px;
+		border-left: 2px solid var(--color-border);
+		color: var(--color-text-muted);
+	}
+	.msg-body :global(a) {
+		color: var(--color-accent);
+		text-decoration: underline;
+		text-underline-offset: 2px;
 	}
 
 	.suggestion-block {

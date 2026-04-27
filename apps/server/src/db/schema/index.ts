@@ -15,4 +15,4 @@ export { prDiffFiles } from './pr-diff-files';
 export { githubEtagCache } from './github-etag-cache';
 export { kvCache } from './kv-cache';
 export { cacheEntries } from './cache-entries';
-export { aiExplanations } from './ai-explanations';
+export { chatSessions } from './chat-sessions';

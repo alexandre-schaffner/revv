@@ -157,10 +157,10 @@
 			tabindex={buttonVisible && !isPulling ? 0 : -1}
 			aria-hidden={!buttonVisible}
 			onclick={handlePullClick}
-			title={isPulling ? 'Pulling new commit…' : 'New commit — click to pull and refresh'}
+			title={isPulling ? 'Pulling new commit…' : 'New commit — click to pull'}
 			aria-label={isPulling
 				? 'Pulling new commit'
-				: 'New commit available. Click to pull and regenerate walkthrough.'}
+				: 'New commit available. Click to pull the latest changes.'}
 		>
 			{#if isPulling}
 				<Loader2 size={12} class="animate-spin" />

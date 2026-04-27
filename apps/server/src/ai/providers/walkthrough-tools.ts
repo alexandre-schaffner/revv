@@ -21,11 +21,13 @@ import { and, eq, inArray } from "drizzle-orm";
 import { tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import type {
 	CodeBlock,
+	CommentThread,
 	DiffBlock,
 	MarkdownBlock,
 	RatingAxis,
 	RatingCitation,
 	RiskLevel,
+	ThreadMessage,
 	WalkthroughBlock,
 	WalkthroughIssue,
 	WalkthroughPipelinePhase,
@@ -35,6 +37,8 @@ import type {
 } from "@revv/shared";
 import { RATING_AXES } from "@revv/shared";
 import type { Db } from "../../db";
+import { commentThreads } from "../../db/schema/comment-threads";
+import { threadMessages } from "../../db/schema/thread-messages";
 import { walkthroughs } from "../../db/schema/walkthroughs";
 import { walkthroughBlocks } from "../../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../../db/schema/walkthrough-issues";
@@ -42,7 +46,9 @@ import { walkthroughRatings } from "../../db/schema/walkthrough-ratings";
 import {
 	RATING_AXES as RATING_AXES_SPEC,
 	addDiffStepSchema,
+	addIssueCommentSchema,
 	completeWalkthroughSchema,
+	computeAnchorThreadId,
 	computeIssueId,
 	flagIssueSchema,
 	getWalkthroughStateSchema,
@@ -50,6 +56,7 @@ import {
 	setOverviewSchema,
 	setSentimentSchema,
 	type AddDiffStepInput,
+	type AddIssueCommentInput,
 	type CompleteWalkthroughInput,
 	type FlagIssueInput,
 	type GetWalkthroughStateInput,
@@ -112,6 +119,106 @@ function loadWalkthroughRow(
 	);
 }
 
+// ── Comment-pairing validation ───────────────────────────────────────────────
+//
+// Single source of truth for the "warning/critical line-anchored issues must
+// have ≥1 inline comment" rule (doctrine invariant #12). Both
+// `complete_walkthrough` (tool-surface gate) and `WalkthroughJobs`
+// (orchestrator gate before transitioning `status='complete'`) call this.
+// They MUST stay in lockstep — otherwise the agent can finish at phase=D
+// with no comments and the orchestrator silently marks the walkthrough
+// `complete`.
+
+export interface MissingInlineComment {
+	id: string;
+	severity: "warning" | "critical";
+	title: string;
+	filePath: string;
+	startLine: number;
+}
+
+/**
+ * Returns the list of warning/critical, line-anchored issues that have no
+ * inline comment thread yet. Empty array means the comment-pairing
+ * invariant holds — `complete_walkthrough` may proceed and the orchestrator
+ * may transition `status` to `'complete'`.
+ *
+ * Exempt by design (returned as "satisfied"):
+ *   - severity = 'info'           (nitpicks; reviewers want a clean panel)
+ *   - filePath / startLine = null (PR-wide concerns; no anchor possible)
+ */
+export function findIssuesMissingInlineComment(
+	db: Db,
+	walkthroughId: string,
+): MissingInlineComment[] {
+	const requiresCommentIssues = db
+		.select({
+			id: walkthroughIssues.id,
+			title: walkthroughIssues.title,
+			severity: walkthroughIssues.severity,
+			filePath: walkthroughIssues.filePath,
+			startLine: walkthroughIssues.startLine,
+		})
+		.from(walkthroughIssues)
+		.where(eq(walkthroughIssues.walkthroughId, walkthroughId))
+		.all()
+		.filter(
+			(
+				i,
+			): i is typeof i & {
+				filePath: string;
+				startLine: number;
+				severity: "warning" | "critical";
+			} =>
+				i.filePath !== null &&
+				i.startLine !== null &&
+				(i.severity === "warning" || i.severity === "critical"),
+		);
+
+	if (requiresCommentIssues.length === 0) return [];
+
+	const issueIds = requiresCommentIssues.map((i) => i.id);
+	const commentedRows = db
+		.select({ walkthroughIssueId: commentThreads.walkthroughIssueId })
+		.from(commentThreads)
+		.where(inArray(commentThreads.walkthroughIssueId, issueIds))
+		.all();
+	const commentedSet = new Set(
+		commentedRows
+			.map((r) => r.walkthroughIssueId)
+			.filter((v): v is string => v !== null),
+	);
+	return requiresCommentIssues
+		.filter((i) => !commentedSet.has(i.id))
+		.map((i) => ({
+			id: i.id,
+			severity: i.severity,
+			title: i.title,
+			filePath: i.filePath,
+			startLine: i.startLine,
+		}));
+}
+
+/**
+ * Renders the canonical error message for a missing-inline-comment list.
+ * Used by both `complete_walkthrough` (returned to the agent) and the
+ * orchestrator (for log messages on the auto-continuation path). Keeping
+ * the format unified means the agent sees the same wording whether the
+ * gate trips at the tool surface or surfaces via `get_walkthrough_state`
+ * on a resumed run.
+ */
+export function renderMissingInlineCommentError(
+	uncommented: MissingInlineComment[],
+): string {
+	const list = uncommented
+		.map(
+			(i) =>
+				`  - id=${i.id} [${i.severity}] (${i.filePath}:${i.startLine}) "${i.title}"`,
+		)
+		.join("\n");
+	return `Error: ${uncommented.length} flagged issue(s) at severity 'warning' or 'critical' have no inline comment. For each, you MUST also call add_issue_comment with the matching issue_id. Missing:\n${list}\n\nCall add_issue_comment for each, then retry complete_walkthrough. (Severity 'info' issues do not require an inline comment.)`;
+}
+
 // ── Handler: get_walkthrough_state ───────────────────────────────────────────
 //
 // The first call every agent run makes, including resumes. Returns enough
@@ -148,8 +255,15 @@ export const getWalkthroughStateHandler: WalkthroughToolHandler<
 		.where(eq(walkthroughRatings.walkthroughId, ctx.walkthroughId))
 		.all();
 
-	const issueCountRow = ctx.db
-		.select({ id: walkthroughIssues.id })
+	const issueRows = ctx.db
+		.select({
+			id: walkthroughIssues.id,
+			order: walkthroughIssues.order,
+			title: walkthroughIssues.title,
+			filePath: walkthroughIssues.filePath,
+			startLine: walkthroughIssues.startLine,
+			endLine: walkthroughIssues.endLine,
+		})
 		.from(walkthroughIssues)
 		.where(eq(walkthroughIssues.walkthroughId, ctx.walkthroughId))
 		.all();
@@ -162,6 +276,27 @@ export const getWalkthroughStateHandler: WalkthroughToolHandler<
 			blockType: b.type as WalkthroughBlock["type"],
 		}));
 
+	const issues = issueRows
+		.slice()
+		.sort((a, b) => a.order - b.order)
+		.map((r) => ({
+			id: r.id,
+			title: r.title,
+			filePath: r.filePath,
+			startLine: r.startLine,
+			endLine: r.endLine,
+		}));
+
+	// Surface unfinished comment-pairing work so resumes (and any agent that
+	// is reasoning about whether it can call `complete_walkthrough` yet)
+	// don't have to deduce it from the issues list. This is the same query
+	// the orchestrator and `complete_walkthrough` use — single source of
+	// truth (see findIssuesMissingInlineComment).
+	const issuesNeedingInlineComment = findIssuesMissingInlineComment(
+		ctx.db,
+		ctx.walkthroughId,
+	);
+
 	const state: WalkthroughState = {
 		walkthroughId: row.id,
 		prHeadSha: row.prHeadSha,
@@ -173,11 +308,24 @@ export const getWalkthroughStateHandler: WalkthroughToolHandler<
 		sentiment: row.sentiment ?? null,
 		diffSteps,
 		ratedAxes: ratingRows.map((r) => r.axis as RatingAxis),
-		issueCount: issueCountRow.length,
+		issues,
+		issueCount: issues.length,
+		issuesNeedingInlineComment,
 	};
 
+	// Loud, plain-text banner when the agent has unfinished comment work.
+	// The JSON state still contains the full list, but the prefix makes it
+	// impossible for the model to skim past — especially on resume, where
+	// missing this would lead straight back to the same complete_walkthrough
+	// validation failure.
+	const stateJson = JSON.stringify(state);
+	const text =
+		issuesNeedingInlineComment.length > 0
+			? `WARNING: ${issuesNeedingInlineComment.length} line-anchored issue(s) at severity 'warning' or 'critical' have no inline comment yet — call add_issue_comment for each before complete_walkthrough.\n\n${stateJson}`
+			: stateJson;
+
 	return {
-		content: [{ type: "text" as const, text: JSON.stringify(state) }],
+		content: [{ type: "text" as const, text }],
 	};
 };
 
@@ -547,8 +695,227 @@ export const flagIssueHandler: WalkthroughToolHandler<FlagIssueInput> = async (
 	if (issueEvent) {
 		ctx.emit({ type: "issue", data: issueEvent });
 	}
+	const hasLineAnchor =
+		input.file_path !== null && input.start_line !== null;
+	const requiresInlineComment =
+		hasLineAnchor &&
+		(input.severity === "warning" || input.severity === "critical");
+	let nextStepHint: string;
+	if (requiresInlineComment) {
+		nextStepHint = `\n\nNEXT STEP — REQUIRED: call add_issue_comment with issue_id="${issueId}", file_path="${input.file_path}", start_line=${input.start_line}, end_line=${input.end_line ?? input.start_line}, and a body that explains the concern to the coder (2–6 sentences, markdown, second-person voice). Without that follow-up call this issue has no inline comment in the diff and complete_walkthrough will reject. If the concern affects multiple call-sites, call add_issue_comment once per line range with the same issue_id.`;
+	} else if (input.severity === "info") {
+		nextStepHint = `\n\n(Severity 'info' — nitpick, no inline comment needed. Continue with the next concern or diff step.)`;
+	} else {
+		// warning/critical without a line anchor → PR-wide, no anchor possible
+		nextStepHint = `\n\n(PR-wide issue with no line anchor — no inline comment needed. Continue with the next concern or diff step.)`;
+	}
 	return okResult(
-		`Issue flagged: [${input.severity}] ${input.title} (id: ${issueId}).`,
+		`Issue flagged: [${input.severity}] ${input.title} (id: ${issueId}).${nextStepHint}`,
+	);
+};
+
+// ── Handler: add_issue_comment (Phase B) ─────────────────────────────────────
+//
+// Phase precondition: last_completed_phase ∈ {'A', 'B'} (same as flag_issue —
+// comments are line-level evidence for issues, both are Phase B artifacts).
+// Cross-reference precondition: input.issue_id must point at a walkthrough
+// issue belonging to ctx.walkthroughId.
+//
+// Writes (one transaction): one `comment_threads` row + one `thread_messages`
+// row, both keyed on deterministic ids so retries upsert in place. Does NOT
+// advance phase. After commit broadcasts a `thread:created` WS event so any
+// open `DiffViewerInner` re-renders inline at the anchor.
+//
+// Idempotency:
+//   thread.id   = computeAnchorThreadId(walkthroughId, issueId, file, l1, l2, side)
+//   message.id  = `${thread.id}-msg-0`
+// A retry with the same anchor replaces the message body in place rather than
+// stacking duplicate threads.
+
+export const addIssueCommentHandler: WalkthroughToolHandler<
+	AddIssueCommentInput
+> = async (ctx, input) => {
+	if (input.end_line < input.start_line) {
+		return errorResult(
+			`Error: end_line (${input.end_line}) is before start_line (${input.start_line}). Use end_line === start_line for a single-line comment.`,
+		);
+	}
+
+	// Hashing happens before the transaction — sha256 is deterministic and the
+	// inputs are already validated, so doing it outside DB scope keeps the
+	// transaction tight.
+	const threadId = await computeAnchorThreadId(
+		ctx.walkthroughId,
+		input.issue_id,
+		input.file_path,
+		input.start_line,
+		input.end_line,
+		input.diff_side,
+	);
+	const messageId = `${threadId}-msg-0`;
+
+	let result: WalkthroughToolResult | null = null;
+	let createdThread: CommentThread | null = null;
+	let createdMessage: ThreadMessage | null = null;
+	let sessionId = "";
+	ctx.db.transaction(() => {
+		const row = loadWalkthroughRow(ctx.db, ctx.walkthroughId);
+		if (!row) {
+			result = errorResult(
+				`Walkthrough ${ctx.walkthroughId} not found.`,
+			);
+			return;
+		}
+		const phase = row.lastCompletedPhase as WalkthroughPipelinePhase;
+		if (!phaseAtLeast(phase, "A") || !phaseAtMost(phase, "B")) {
+			result = errorResult(
+				`Error: add_issue_comment is only valid during Phase A/B. Current phase: '${phase}'. Comments are line-level evidence for issues; they belong with the diff analysis, not after sentiment or rating.`,
+			);
+			return;
+		}
+
+		// Cross-reference: the issue must exist for this walkthrough.
+		const issueRow = ctx.db
+			.select({
+				id: walkthroughIssues.id,
+				title: walkthroughIssues.title,
+			})
+			.from(walkthroughIssues)
+			.where(
+				and(
+					eq(walkthroughIssues.id, input.issue_id),
+					eq(walkthroughIssues.walkthroughId, ctx.walkthroughId),
+				),
+			)
+			.get();
+		if (!issueRow) {
+			result = errorResult(
+				`Error: issue_id '${input.issue_id}' does not match any flagged issue for this walkthrough. Call flag_issue first; the result text contains the issue id you must pass back here.`,
+			);
+			return;
+		}
+
+		sessionId = row.reviewSessionId;
+		const now = new Date().toISOString();
+
+		// Upsert comment_threads row keyed on deterministic threadId.
+		// A retry with the same anchor lands here as a no-op (we keep the row
+		// untouched — only the message body, below, ever changes on retry).
+		ctx.db
+			.insert(commentThreads)
+			.values({
+				id: threadId,
+				reviewSessionId: sessionId,
+				filePath: input.file_path,
+				startLine: input.start_line,
+				endLine: input.end_line,
+				diffSide: input.diff_side,
+				status: "open",
+				createdAt: now,
+				walkthroughIssueId: input.issue_id,
+			})
+			.onConflictDoNothing({ target: commentThreads.id })
+			.run();
+
+		// Upsert thread_messages row — one message per thread for AI authors.
+		// On retry we replace the body and stamp editedAt; the row id is
+		// deterministic so we never accumulate duplicates.
+		ctx.db
+			.insert(threadMessages)
+			.values({
+				id: messageId,
+				threadId,
+				authorRole: "ai_agent",
+				authorName: "Revv AI",
+				authorAvatarUrl: null,
+				body: input.body,
+				messageType: "comment",
+				codeSuggestion: null,
+				createdAt: now,
+				editedAt: null,
+				externalId: null,
+			})
+			.onConflictDoUpdate({
+				target: threadMessages.id,
+				set: {
+					body: input.body,
+					editedAt: now,
+				},
+			})
+			.run();
+
+		// Read back the canonical rows so the broadcast payload reflects what's
+		// actually persisted (matches the shape POST /api/reviews/:id/threads
+		// emits today).
+		const persistedThread = ctx.db
+			.select()
+			.from(commentThreads)
+			.where(eq(commentThreads.id, threadId))
+			.get();
+		const persistedMessage = ctx.db
+			.select()
+			.from(threadMessages)
+			.where(eq(threadMessages.id, messageId))
+			.get();
+		if (!persistedThread || !persistedMessage) {
+			result = errorResult(
+				"Internal error: comment_threads / thread_messages upsert succeeded but read-back returned no row.",
+			);
+			return;
+		}
+
+		createdThread = {
+			id: persistedThread.id,
+			reviewSessionId: persistedThread.reviewSessionId,
+			filePath: persistedThread.filePath,
+			startLine: persistedThread.startLine,
+			endLine: persistedThread.endLine,
+			diffSide: persistedThread.diffSide as CommentThread["diffSide"],
+			status: persistedThread.status as CommentThread["status"],
+			createdAt: persistedThread.createdAt,
+			resolvedAt: persistedThread.resolvedAt ?? null,
+			externalThreadId: persistedThread.externalThreadId ?? null,
+			externalCommentId: persistedThread.externalCommentId ?? null,
+			lastSyncedAt: persistedThread.lastSyncedAt ?? null,
+		};
+		createdMessage = {
+			id: persistedMessage.id,
+			threadId: persistedMessage.threadId,
+			authorRole: persistedMessage.authorRole as ThreadMessage["authorRole"],
+			authorName: persistedMessage.authorName,
+			authorAvatarUrl: persistedMessage.authorAvatarUrl ?? null,
+			body: persistedMessage.body,
+			messageType:
+				persistedMessage.messageType as ThreadMessage["messageType"],
+			codeSuggestion: persistedMessage.codeSuggestion ?? null,
+			createdAt: persistedMessage.createdAt,
+			editedAt: persistedMessage.editedAt ?? null,
+			externalId: persistedMessage.externalId ?? null,
+		};
+	});
+	if (result) return result;
+	if (!createdThread || !createdMessage) {
+		return errorResult(
+			"Internal error: add_issue_comment reached emit without a persisted thread + message.",
+		);
+	}
+
+	// Commit-first / broadcast-second (doctrine invariant #8). We always emit
+	// thread:created — `DiffViewerInner` dedupes by thread id, so retried
+	// upserts are harmless on the UI side.
+	ctx.broadcastThreadEvent({
+		type: "thread:created",
+		data: {
+			sessionId,
+			thread: createdThread,
+			message: createdMessage,
+		},
+	});
+
+	return okResult(
+		`Comment posted on ${input.file_path}:${input.start_line}${
+			input.end_line !== input.start_line ? `-${input.end_line}` : ""
+		} (${input.diff_side} side) for issue ${input.issue_id}. Thread id: ${threadId}.`,
 	);
 };
 
@@ -823,6 +1190,24 @@ export const completeWalkthroughHandler: WalkthroughToolHandler<
 		);
 	}
 
+	// Every line-anchored WARNING or CRITICAL issue must have at least one
+	// inline comment. The agent's job is `flag_issue` (sidebar card) +
+	// `add_issue_comment` (inline review comment); a warning/critical with no
+	// inline comment is invisible to the coder at the place that matters.
+	// Exempt: severity='info' (nitpicks — no inline noise expected) and
+	// PR-wide issues (file_path / start_line NULL — no anchor possible).
+	//
+	// Shared with WalkthroughJobs.ts — see findIssuesMissingInlineComment
+	// above. Both gates MUST agree, otherwise the orchestrator can mark
+	// `complete` while the tool surface would still reject.
+	const uncommented = findIssuesMissingInlineComment(
+		ctx.db,
+		ctx.walkthroughId,
+	);
+	if (uncommented.length > 0) {
+		return errorResult(renderMissingInlineCommentError(uncommented));
+	}
+
 	// Deliberately NO stream emit here. The AI provider's generator end
 	// (stream-guard synthesizes `done` with real token accounting) is the
 	// authoritative completion signal that WalkthroughJobs observes. This
@@ -869,6 +1254,13 @@ export const TOOL_SPECS: Array<ToolSpec<any>> = [
 			"Phase B. Flag a structured concern (security, correctness, tests, perf, etc.). Must be called AFTER the diff step(s) that explain the concern, and must link to them via block_orders (= step_index values).",
 		inputSchema: flagIssueSchema,
 		handler: flagIssueHandler,
+	},
+	{
+		name: "add_issue_comment",
+		description:
+			"Phase B. Attach a line-anchored comment to a previously flagged issue — appears inline in the diff view like a human review comment. Call AFTER flag_issue, passing its returned issue id. You may call this multiple times per issue to annotate multiple lines (one tool call per anchor). Idempotent per (issue_id, file_path, start_line, end_line, diff_side): a retry replaces the comment body, never duplicates the thread.",
+		inputSchema: addIssueCommentSchema,
+		handler: addIssueCommentHandler,
 	},
 	{
 		name: "set_sentiment",

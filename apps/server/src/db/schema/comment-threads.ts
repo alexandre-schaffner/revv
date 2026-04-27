@@ -1,6 +1,7 @@
 import { integer, text } from 'drizzle-orm/sqlite-core';
 import { sqliteTable } from 'drizzle-orm/sqlite-core';
 import { reviewSessions } from './review-sessions';
+import { walkthroughIssues } from './walkthrough-issues';
 
 export const commentThreads = sqliteTable('comment_threads', {
 	id: text('id').primaryKey(),
@@ -17,4 +18,13 @@ export const commentThreads = sqliteTable('comment_threads', {
 	externalThreadId: text('external_thread_id'),
 	externalCommentId: text('external_comment_id'),
 	lastSyncedAt: text('last_synced_at'),
+	// Optional back-reference to a walkthrough_issues row when this thread was
+	// authored by the AI agent via the `add_issue_comment` MCP tool. Null for
+	// every human-authored thread. Lets us trace AI comments to their source
+	// issue and (via the cascading walkthrough_issues → walkthroughs FK chain)
+	// drop AI comments cleanly when the underlying walkthrough is superseded.
+	walkthroughIssueId: text('walkthrough_issue_id').references(
+		() => walkthroughIssues.id,
+		{ onDelete: 'cascade' },
+	),
 });

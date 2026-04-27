@@ -1,6 +1,8 @@
 import { Layer } from 'effect';
 import { CacheStatsLive, InvalidationBusLive } from '../cache/index';
 import { AiServiceLive } from './Ai';
+import { ChatMcpTokensLive } from './ChatMcpTokens';
+import { ChatSessionServiceLive } from './ChatSession';
 import { DbMaintenanceLive } from './DbMaintenance';
 import { DbServiceLive } from './Db';
 import { DiffCacheServiceLive } from './DiffCache';
@@ -35,6 +37,13 @@ const OpencodeSupervisorWithDeps = OpencodeSupervisorLive.pipe(
 	Layer.provide(Layer.mergeAll(DbServiceLive, SettingsServiceLive)),
 );
 
+// ChatSessionService is a thin Drizzle wrapper for the right-pane chat —
+// uses Layer.effect to grab `db` at construction, so we satisfy DbService
+// at the same boundary other DB-dependent services do.
+const ChatSessionServiceWithDeps = ChatSessionServiceLive.pipe(
+	Layer.provide(DbServiceLive),
+);
+
 // Base layer: all services that have no deps or only depend on DbService
 const BaseLayers = Layer.mergeAll(
 	DbServiceLive,
@@ -51,6 +60,8 @@ const BaseLayers = Layer.mergeAll(
 	FileContentServiceLive,
 	CacheServiceLive,
 	OpencodeSupervisorWithDeps,
+	ChatSessionServiceWithDeps,
+	ChatMcpTokensLive,
 	// Unified cache layer (M1 Foundations) — InvalidationBus is live with zero
 	// publishers yet; CacheStats is ready for per-namespace registrations as
 	// existing services migrate to adapters in M2.

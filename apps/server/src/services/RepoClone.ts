@@ -64,12 +64,60 @@ export class RepoCloneService extends Context.Tag("RepoCloneService")<
 			githubToken: string,
 			prNumber: number,
 		) => Effect.Effect<string, CloneError | CloneNotReadyError, Scope.Scope>;
+		/**
+		 * Acquire (or reuse) a per-(PR, head SHA) git worktree for the right-pane
+		 * AI chat. Mirrors {@link acquireWalkthroughWorktree} with three deltas:
+		 *   1. Path is `chat-{prId}-{sha12}` instead of `walkthrough-{id}` so chat
+		 *      worktrees never collide with walkthrough worktrees.
+		 *   2. The worktree is checked out on a real branch
+		 *      (`revv-chat/{prId}-{sha12}`) instead of detached HEAD, so the agent
+		 *      can `git commit` proposed changes.
+		 *   3. **No scope finalizer.** Chat worktrees outlive a single request —
+		 *      the conversation persists across messages, server restarts, and
+		 *      desktop sessions. Cleanup is explicit via {@link releaseChatWorktree}.
+		 *
+		 * Idempotent: if the directory + branch already exist for this key, return
+		 * the existing handle; otherwise prune any stale registration and create
+		 * fresh.
+		 */
+		readonly acquireChatWorktree: (params: {
+			readonly repoId: string;
+			readonly prId: string;
+			readonly prHeadSha: string;
+			readonly githubToken: string;
+			readonly prNumber: number;
+		}) => Effect.Effect<
+			{ readonly worktreePath: string; readonly branchName: string },
+			CloneError | CloneNotReadyError
+		>;
+		/**
+		 * Tear down a chat worktree + its working branch. Best-effort throughout
+		 * — failures are logged and swallowed so a stale row never blocks the
+		 * caller. Called by the chat route on:
+		 *   - DELETE /api/chat/:prId (clear conversation)
+		 *   - stale-sibling detection when a new PR head SHA arrives
+		 */
+		readonly releaseChatWorktree: (params: {
+			readonly clonePath: string;
+			readonly worktreePath: string;
+			readonly branchName: string;
+		}) => Effect.Effect<void>;
 	}
 >() {}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /** Spawn a git command and wait for it, throwing if it exits non-zero or times out. */
+// Environment overrides applied to every git subprocess. These prevent git
+// from blocking on interactive prompts — critical in the production LaunchAgent
+// where there is no TTY and a hanging credential helper would freeze the job.
+const GIT_ENV: Record<string, string> = {
+	...process.env,
+	GIT_TERMINAL_PROMPT: "0",   // never prompt for credentials
+	GIT_ASKPASS: "echo",         // answer any askpass with an empty string
+	GIT_SSH_COMMAND: "ssh -o BatchMode=yes -o StrictHostKeyChecking=no",
+} as Record<string, string>;
+
 async function runGit(
 	args: string[],
 	cwd?: string,
@@ -79,6 +127,8 @@ async function runGit(
 		...(cwd !== undefined ? { cwd } : {}),
 		stdout: "pipe",
 		stderr: "pipe",
+		stdin: "ignore",
+		env: GIT_ENV,
 	});
 
 	const timeoutPromise = new Promise<never>((_, reject) =>
@@ -104,6 +154,8 @@ async function runGitCloneWithTimeout(
 	const proc = Bun.spawn(["git", ...args], {
 		stdout: "pipe",
 		stderr: "pipe",
+		stdin: "ignore",
+		env: GIT_ENV,
 	});
 
 	const timeoutPromise = new Promise<never>((_, reject) =>
@@ -118,6 +170,62 @@ async function runGitCloneWithTimeout(
 	if (proc.exitCode !== 0) {
 		const stderr = await new Response(proc.stderr).text();
 		throw new Error(`git clone failed: ${stderr.trim()}`);
+	}
+}
+
+/**
+ * Fire-and-forget git subprocess with a hard timeout. Used for cleanup
+ * operations where we never want to block — errors and non-zero exits are
+ * silently swallowed. Returns true if the process exited 0 within the budget.
+ */
+async function runGitBestEffort(
+	args: string[],
+	cwd: string,
+	timeoutMs = 10_000,
+): Promise<boolean> {
+	try {
+		const proc = Bun.spawn(["git", ...args], {
+			cwd,
+			stdout: "pipe",
+			stderr: "pipe",
+			stdin: "ignore",
+			env: GIT_ENV,
+		});
+		const timer = setTimeout(() => proc.kill(), timeoutMs);
+		await proc.exited;
+		clearTimeout(timer);
+		return proc.exitCode === 0;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Read the contents of a worktree's `.git` HEAD file. For a worktree-checkout
+ * `.git` is a single-line file pointing at the actual gitdir; the actual HEAD
+ * lives at `<gitdir>/HEAD`. We resolve that, then return the trimmed line.
+ *
+ * Returns null on any read failure. Used by `acquireChatWorktree` to skip the
+ * recreate path when the directory is already on the expected branch.
+ */
+async function readGitHead(worktreePath: string): Promise<string | null> {
+	try {
+		const dotGitPath = join(worktreePath, ".git");
+		const dotGit = await Bun.file(dotGitPath).text();
+		const trimmed = dotGit.trim();
+		// For worktree checkouts, .git is a file: `gitdir: <abs path>`.
+		// For regular checkouts, it's a directory containing HEAD directly.
+		let gitdir: string;
+		if (trimmed.startsWith("gitdir:")) {
+			gitdir = trimmed.slice("gitdir:".length).trim();
+		} else {
+			gitdir = dotGitPath;
+		}
+		const headPath = join(gitdir, "HEAD");
+		const head = await Bun.file(headPath).text();
+		return head.trim().replace(/^ref:\s*/, "");
+	} catch {
+		return null;
 	}
 }
 
@@ -430,12 +538,14 @@ export const RepoCloneServiceLive = Layer.effect(
 								// Make sure the exact SHA is present locally. `cat-file -e`
 								// fails if the object isn't in the repo; on failure we fetch
 								// the PR ref which is the source of truth for the head sha.
-								const hasObjectProc = Bun.spawn(
-									["git", "cat-file", "-e", `${prHeadSha}^{commit}`],
-									{ cwd: clonePath, stdout: "pipe", stderr: "pipe" },
+								// Use runGitBestEffort so a slow/hanging cat-file never blocks
+								// indefinitely — treat any non-zero / timeout as "not found".
+								const hasObject = await runGitBestEffort(
+									["cat-file", "-e", `${prHeadSha}^{commit}`],
+									clonePath,
+									10_000,
 								);
-								await hasObjectProc.exited;
-								if (hasObjectProc.exitCode !== 0) {
+								if (!hasObject) {
 									await runGit(
 										[
 											"fetch",
@@ -452,14 +562,20 @@ export const RepoCloneServiceLive = Layer.effect(
 								);
 							}
 
+							// Prune stale worktree registrations left by previously crashed
+							// jobs. Without this, accumulated entries from old runs (that
+							// never had their scope finalizers execute) can cause
+							// `git worktree add` to behave unexpectedly on an existing clone.
+							await runGitBestEffort(["worktree", "prune"], clonePath, 15_000);
+
 							// Clean up any stale directory from a previous crashed job with the
 							// same walkthroughId. `git worktree add` refuses to overwrite, so
 							// remove the registration first (ignoring errors), then rm the dir.
-							const pruneProc = Bun.spawn(
-								["git", "worktree", "remove", "--force", worktreePath],
-								{ cwd: clonePath, stdout: "pipe", stderr: "pipe" },
+							await runGitBestEffort(
+								["worktree", "remove", "--force", worktreePath],
+								clonePath,
+								10_000,
 							);
-							await pruneProc.exited;
 							if (existsSync(worktreePath)) {
 								await rm(worktreePath, { recursive: true, force: true });
 							}
@@ -489,25 +605,20 @@ export const RepoCloneServiceLive = Layer.effect(
 					// finalizer failure can never mask a downstream error or block fiber
 					// exit. `git worktree remove --force` also deletes the directory, so
 					// the rm() below is defensive for the case where the command fails.
+					// Both operations use runGitBestEffort (hard timeout) so a
+					// stale lock or slow filesystem can never block fiber exit.
 					yield* Effect.addFinalizer(() =>
 						Effect.promise(async () => {
-							try {
-								const proc = Bun.spawn(
-									[
-										"git",
-										"worktree",
-										"remove",
-										"--force",
-										worktreePath,
-									],
-									{ cwd: clonePath, stdout: "pipe", stderr: "pipe" },
-								);
-								await proc.exited;
-							} catch (err) {
+							const removed = await runGitBestEffort(
+								["worktree", "remove", "--force", worktreePath],
+								clonePath,
+								10_000,
+							);
+							if (!removed) {
 								debug(
 									"walkthrough-worktree",
-									"worktree remove failed (will fall back to rm):",
-									err instanceof Error ? err.message : String(err),
+									"worktree remove failed or timed out (will fall back to rm):",
+									worktreePath,
 								);
 							}
 							try {
@@ -526,6 +637,165 @@ export const RepoCloneServiceLive = Layer.effect(
 
 				return worktreePath;
 			}),
+
+			acquireChatWorktree: ({
+				repoId,
+				prId,
+				prHeadSha,
+				githubToken,
+				prNumber,
+			}) =>
+				Effect.tryPromise({
+					try: async () => {
+						const row = db
+							.select()
+							.from(repositories)
+							.where(eq(repositories.id, repoId))
+							.get();
+
+						if (!row || row.cloneStatus !== "ready" || !row.clonePath) {
+							throw new CloneNotReadyError({ repoId });
+						}
+
+						const clonePath = row.clonePath;
+						const sha12 = prHeadSha.slice(0, 12);
+						// PR ids in this codebase can include characters illegal
+						// in git refnames (e.g. `:` for `<repoId>:<number>` —
+						// see `man git check-ref-format`). Sanitize aggressively
+						// down to `[A-Za-z0-9_-]` so both the branch and the
+						// filesystem path are always valid. The chat_sessions
+						// row stores the resulting paths verbatim, so lookups
+						// stay O(1) by prId.
+						const safeId = prId.replace(/[^A-Za-z0-9_-]/g, "_");
+						const branchName = `revv-chat/${safeId}-${sha12}`;
+						const worktreePath = join(
+							clonePath,
+							"worktrees",
+							`chat-${safeId}-${sha12}`,
+						);
+
+						// Idempotent fast path: worktree already on disk and on the
+						// expected branch. We don't verify the branch tip is at
+						// `prHeadSha` — the agent may have committed on top of it,
+						// which is exactly what's allowed.
+						if (existsSync(worktreePath)) {
+							const headRef = await readGitHead(worktreePath);
+							if (headRef === `refs/heads/${branchName}`) {
+								return { worktreePath, branchName };
+							}
+							// Stale directory — different branch / detached HEAD.
+							// Fall through to recreate.
+							await runGitBestEffort(
+								["worktree", "remove", "--force", worktreePath],
+								clonePath,
+								10_000,
+							);
+							await rm(worktreePath, { recursive: true, force: true });
+						}
+
+						// Make sure the exact PR head SHA is reachable locally.
+						// Same fetch dance as the walkthrough worktree above.
+						const authedUrl = `https://x-access-token:${githubToken}@${GITHUB_HOST}/${row.fullName}.git`;
+						const cleanUrl = `https://${GITHUB_HOST}/${row.fullName}.git`;
+						try {
+							await runGit(
+								["remote", "set-url", "origin", authedUrl],
+								clonePath,
+							);
+							const hasObject = await runGitBestEffort(
+								["cat-file", "-e", `${prHeadSha}^{commit}`],
+								clonePath,
+								10_000,
+							);
+							if (!hasObject) {
+								await runGit(
+									[
+										"fetch",
+										"origin",
+										`+refs/pull/${prNumber}/head:refs/heads/pr-${prNumber}`,
+									],
+									clonePath,
+								);
+							}
+						} finally {
+							await runGit(
+								["remote", "set-url", "origin", cleanUrl],
+								clonePath,
+							);
+						}
+
+						// Prune stale worktree registrations.
+						await runGitBestEffort(["worktree", "prune"], clonePath, 15_000);
+
+						// Best-effort delete the branch in case a previous incarnation
+						// left it behind without an attached worktree (defensive).
+						await runGitBestEffort(
+							["branch", "-D", branchName],
+							clonePath,
+							10_000,
+						);
+
+						// Create the worktree on a fresh branch pinned to the head SHA.
+						// The `-b <branch>` form refuses to overwrite an existing branch
+						// — we just deleted any stale one above.
+						await runGit(
+							[
+								"worktree",
+								"add",
+								"-b",
+								branchName,
+								worktreePath,
+								prHeadSha,
+							],
+							clonePath,
+						);
+
+						return { worktreePath, branchName };
+					},
+					catch: (err) => {
+						if (err instanceof CloneNotReadyError) return err;
+						return new CloneError({
+							message: err instanceof Error ? err.message : String(err),
+							cause: err,
+						});
+					},
+				}),
+
+			releaseChatWorktree: ({ clonePath, worktreePath, branchName }) =>
+				Effect.promise(async () => {
+					const removed = await runGitBestEffort(
+						["worktree", "remove", "--force", worktreePath],
+						clonePath,
+						10_000,
+					);
+					if (!removed) {
+						debug(
+							"chat-worktree",
+							"worktree remove failed or timed out (will fall back to rm):",
+							worktreePath,
+						);
+					}
+					try {
+						if (existsSync(worktreePath)) {
+							await rm(worktreePath, { recursive: true, force: true });
+						}
+					} catch (err) {
+						logError(
+							"chat-worktree",
+							"failed to rm worktree dir:",
+							err instanceof Error ? err.message : String(err),
+						);
+					}
+					// Remove the working branch. `worktree remove` already deletes the
+					// branch if it was created via `worktree add -b`, but we ran a
+					// guarded best-effort delete here too in case the registration was
+					// already broken before we tried to remove the worktree.
+					await runGitBestEffort(
+						["branch", "-D", branchName],
+						clonePath,
+						10_000,
+					);
+				}),
 
 		resumePendingClones: () =>
 			Effect.gen(function* () {

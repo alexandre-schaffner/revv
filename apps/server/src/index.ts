@@ -5,7 +5,7 @@ import { API_PORT } from '@revv/shared';
 import { auth } from './auth';
 import { logError } from './logger';
 import { AppRuntime } from './runtime';
-import { explainRoute } from './routes/explain';
+import { chatRoute } from './routes/chat';
 import { repoRoutes } from './routes/repos';
 import { githubRoutes } from './routes/github';
 import { prRoutes } from './routes/prs';
@@ -17,6 +17,7 @@ import { deviceAuthRoutes } from './routes/device-auth';
 import { userRoutes } from './routes/user';
 import { wsRoute } from './routes/ws';
 import { debugRoutes } from './routes/debug';
+import { mcpChatContextRoute } from './routes/mcp/chat-context';
 import { mcpWalkthroughRoute } from './routes/mcp/walkthrough';
 import { PollScheduler } from './services/PollScheduler';
 import { WalkthroughJobs } from './services/WalkthroughJobs';
@@ -33,7 +34,7 @@ const app = new Elysia()
 		})
 	)
 	.mount(auth.handler)
-	.use(explainRoute)
+	.use(chatRoute)
 	.use(repoRoutes)
 	.use(githubRoutes)
 	.use(prRoutes)
@@ -46,6 +47,7 @@ const app = new Elysia()
 	.use(wsRoute)
 	.use(debugRoutes)
 	.use(mcpWalkthroughRoute)
+	.use(mcpChatContextRoute)
 	.get('/api/health', () => ({
 		status: 'ok' as const,
 		timestamp: new Date().toISOString(),

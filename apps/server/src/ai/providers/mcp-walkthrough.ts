@@ -7,16 +7,20 @@
 // source of truth, two drivers.
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { Effect } from "effect";
 import type {
 	RatingAxis,
 	UserSettings,
 	WalkthroughBlock,
 	WalkthroughStreamEvent,
 	WalkthroughTokenUsage,
+	WsServerMessage,
 } from "@revv/shared";
-import { debug } from "../../logger";
+import { debug, logError } from "../../logger";
 import type { Db } from "../../db";
 import type { PrFileMeta } from "../../services/GitHub";
+import { AppRuntime } from "../../runtime";
+import { WebSocketHub } from "../../services/WebSocketHub";
 import {
 	buildExplorationDescription,
 	buildWalkthroughPrompt,
@@ -59,6 +63,7 @@ const ALLOWED_TOOLS = [
 	`${MCP_TOOL_PREFIX}set_overview`,
 	`${MCP_TOOL_PREFIX}add_diff_step`,
 	`${MCP_TOOL_PREFIX}flag_issue`,
+	`${MCP_TOOL_PREFIX}add_issue_comment`,
 	`${MCP_TOOL_PREFIX}set_sentiment`,
 	`${MCP_TOOL_PREFIX}rate_axis`,
 	`${MCP_TOOL_PREFIX}complete_walkthrough`,
@@ -137,12 +142,29 @@ export function streamWalkthroughViaMCP(
 		}
 	}
 
+	// Fire-and-forget WebSocket broadcaster used by tools that mutate
+	// non-walkthrough tables (currently only `add_issue_comment` →
+	// `comment_threads`). Same shape as the HTTP MCP path so handler behavior
+	// is byte-identical across transports (doctrine invariant #13).
+	const broadcastThreadEvent = (msg: WsServerMessage): void => {
+		void AppRuntime.runPromise(
+			Effect.flatMap(WebSocketHub, (hub) => hub.broadcast(msg)),
+		).catch((err) => {
+			logError(
+				"walkthrough-mcp",
+				"broadcastThreadEvent failed:",
+				err instanceof Error ? err.message : String(err),
+			);
+		});
+	};
+
 	// Shared tool handlers run with this context. No mutable "state" object
 	// anymore — all state lives in the DB (doctrine invariant #1).
 	const walkthroughServer = createWalkthroughMcpServer({
 		db: params.db,
 		walkthroughId: params.walkthroughId,
 		emit: push,
+		broadcastThreadEvent,
 	});
 
 	const userMessage = buildWalkthroughPrompt(

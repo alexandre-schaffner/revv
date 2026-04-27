@@ -963,7 +963,14 @@
 		   the @container rule at the bottom falls through to a stacked
 		   layout. The breakpoint is on main-area width (100%, via
 		   container-type: inline-size on .review-content) so the collapse
-		   triggers only when the sidebar has eaten enough room to matter. */
+		   triggers only when the sidebar has eaten enough room to matter.
+
+		   Note: the right pane (chat) is positioned absolutely on top of
+		   the main-area in AppShell.svelte (NOT a grid column), so opening
+		   it does not change `100%` and therefore does not affect any of
+		   the math here. That's by design — the user wants the right-pane
+		   toggle to leave the main-content render byte-identical, which
+		   requires not shrinking main-area. */
 		display: grid;
 		grid-template-columns:
 			max(24px, min(calc(100% - 50vw - 458px), calc(100% - 1312px)))

@@ -179,3 +179,34 @@ export function textStreamToSSE(textStream: ReadableStream<string>): ReadableStr
 		},
 	});
 }
+
+/**
+ * Wrap a stream of typed frames (`{kind: 'text' | 'tool', data}`) used by the
+ * chat route into an SSE-formatted byte stream. Each frame becomes a single
+ * `data: <json>\n\n` event so the client's `parseSSEBuffer<ChatStreamFrame>`
+ * gets the discriminator preserved.
+ */
+export function chatStreamToSSE<T>(frameStream: ReadableStream<T>): ReadableStream<Uint8Array> {
+	const encoder = new TextEncoder();
+	return new ReadableStream<Uint8Array>({
+		async start(controller) {
+			const reader = frameStream.getReader();
+			try {
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) break;
+					controller.enqueue(encoder.encode(`data: ${JSON.stringify(value)}\n\n`));
+				}
+				controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+				controller.close();
+			} catch (err) {
+				const errMsg = JSON.stringify({
+					code: 'GENERATION_ERROR',
+					message: err instanceof Error ? err.message : 'Unknown error',
+				});
+				controller.enqueue(encoder.encode(`event: error\ndata: ${errMsg}\n\n`));
+				controller.close();
+			}
+		},
+	});
+}

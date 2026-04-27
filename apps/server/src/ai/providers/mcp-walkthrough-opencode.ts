@@ -51,11 +51,17 @@ import type { Db } from "../../db";
 // The HTTP MCP route handlers emit their own content events; we only need to
 // surface exploration (Read / Grep / Glob / Bash) here so the UI can show
 // what the model is looking at.
+//
+// Chat consumers (chat-opencode.ts) also want Write/Edit so the UI can show
+// "Edited src/foo.ts" inline; the walkthrough caller never produces those
+// because its tool surface is read-only.
 const EXPLORATION_TOOLS = new Set([
 	"Read",
 	"Grep",
 	"Glob",
 	"Bash",
+	"Write",
+	"Edit",
 	"TodoRead",
 	"TodoWrite",
 ]);
@@ -429,9 +435,17 @@ export function streamWalkthroughViaOpencodeMCP(
 // from the HTTP MCP route's handlers, which is the authoritative commit-first
 // path (doctrine invariant #8).
 
-interface EventCallbacks {
-	onExploration: (tool: string, description: string) => void;
-	onError: (message: string) => void;
+/**
+ * Callbacks the opencode event interpreter feeds. `onText` is opt-in — the
+ * walkthrough caller leaves it undefined because content events for that
+ * pipeline flow through the MCP tool handlers (doctrine invariant #8). The
+ * chat caller (chat-opencode.ts) provides it to surface assistant text
+ * deltas.
+ */
+export interface OpencodeEventCallbacks {
+	readonly onExploration: (tool: string, description: string) => void;
+	readonly onError: (message: string) => void;
+	readonly onText?: ((chunk: string) => void) | undefined;
 }
 
 /**
@@ -445,9 +459,9 @@ interface EventCallbacks {
  * run has been validated. The current implementation tolerates both flat
  * (`ev.tool`) and nested (`ev.properties.part.tool`) shapes.
  */
-function translateOpencodeEvent(
+export function translateOpencodeEvent(
 	ev: unknown,
-	cb: EventCallbacks,
+	cb: OpencodeEventCallbacks,
 ): void {
 	if (ev === null || typeof ev !== "object") return;
 	const root = ev as Record<string, unknown>;
@@ -486,6 +500,32 @@ function translateOpencodeEvent(
 		}
 		// MCP tool calls flow through the HTTP route — do not surface here.
 		return;
+	}
+
+	// Text deltas — assistant message content. opencode emits text either as
+	// a standalone `partType === "text"` (with `.text` on the part) or via
+	// `message.part.updated` events whose props carry `{ delta: { text } }`.
+	// We handle both shapes; consumers that don't care about text (walkthrough)
+	// just don't pass `onText`.
+	if (cb.onText) {
+		if (partType === "text" && partObj) {
+			const text =
+				typeof partObj["text"] === "string"
+					? (partObj["text"] as string)
+					: null;
+			if (text) {
+				cb.onText(text);
+				return;
+			}
+		}
+		const delta = props["delta"];
+		if (delta && typeof delta === "object") {
+			const deltaText = (delta as Record<string, unknown>)["text"];
+			if (typeof deltaText === "string" && deltaText.length > 0) {
+				cb.onText(deltaText);
+				return;
+			}
+		}
 	}
 
 	// Error events.

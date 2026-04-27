@@ -3,7 +3,6 @@
 	import { getSelectedPr, setSelectedPrId } from '$lib/stores/prs.svelte';
 	import {
 	setActiveFilePath,
-	clearExplanations,
 	getReviewFiles,
 	getIsLoadingFiles,
 	getFilesError,
@@ -141,7 +140,6 @@
 				return;
 			}
 
-			clearExplanations();
 			clearReviewFiles();
 			setIsLoadingFiles(true);
 

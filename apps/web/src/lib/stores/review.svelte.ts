@@ -8,10 +8,9 @@ import type {
 } from '@revv/shared';
 import type { ReviewFile } from '$lib/types/review';
 import { api } from '$lib/api/client';
-import { streamExplanation } from '$lib/api/explain';
 import { enterSidebarMode } from '$lib/stores/focus-mode.svelte';
 import { getPullRequests } from '$lib/stores/prs.svelte';
-import { regenerate as regenerateWalkthrough } from '$lib/stores/walkthrough.svelte';
+import { invalidateForPull } from '$lib/stores/walkthrough.svelte';
 import { toast } from 'svelte-sonner';
 
 // --- Review files (shared between sidebar tree + review page) ---
@@ -134,9 +133,10 @@ export async function pullLatestCommit(prId: string): Promise<void> {
 		const pr = getPullRequests().find((p) => p.id === prId);
 		if (pr?.headSha) setLoadedHeadSha(prId, pr.headSha);
 
-		// Regenerate the walkthrough with no kept issues — the new commit may
-		// have addressed any existing ones, so a fresh pass is the right default.
-		await regenerateWalkthrough(prId);
+		// Invalidate the walkthrough so the user sees the "Generate walkthrough"
+		// button and opts in explicitly. This avoids burning tokens on every pull
+		// and unblocks the page immediately — we no longer await the SSE stream.
+		await invalidateForPull(prId);
 	} catch (e) {
 		setFilesError(e instanceof Error ? e.message : 'Failed to pull latest commit');
 	} finally {
@@ -268,9 +268,6 @@ export function setActiveTab(tab: ActiveTab): void {
 	if (activeTab === 'diff') {
 		enterSidebarMode();
 	}
-	// Abort any in-flight explanation stream
-	currentExplainController?.abort();
-	currentExplainController = null;
 	activeTab = tab;
 	// Persist for the current PR
 	if (currentPrId !== null) {
@@ -288,121 +285,11 @@ export function switchPrViewState(newPrId: string): void {
 	// Restore saved state, or default to walkthrough for first visit
 	const saved = prViewStates.get(newPrId);
 	const restoredTab = saved?.activeTab ?? 'walkthrough';
-	// Use direct assignment to bypass the guard in setActiveTab (no stream to abort, no focus reset needed here)
+	// Use direct assignment to bypass the guard in setActiveTab (no focus reset needed here)
 	if (activeTab === 'diff' && restoredTab !== 'diff') {
 		enterSidebarMode();
 	}
-	currentExplainController?.abort();
-	currentExplainController = null;
 	activeTab = restoredTab;
-}
-
-// --- Context panel explanation state ---
-export interface ExplanationEntry {
-	filePath: string;
-	lineRange: [number, number];
-	codeSnippet: string;
-	content: string;
-	isStreaming: boolean;
-}
-
-let explanations = $state<ExplanationEntry[]>([]);
-let activeExplanationIdx = $state<number>(-1);
-
-export function getExplanations(): ExplanationEntry[] {
-	return explanations;
-}
-
-export function getActiveExplanation(): ExplanationEntry | null {
-	return explanations[activeExplanationIdx] ?? null;
-}
-
-export function startExplanation(entry: Omit<ExplanationEntry, 'content' | 'isStreaming'>): void {
-	const newEntry: ExplanationEntry = { ...entry, content: '', isStreaming: true };
-	explanations = [...explanations, newEntry];
-	activeExplanationIdx = explanations.length - 1;
-	requestPanelOpen();
-}
-
-export function appendExplanationChunk(chunk: string): void {
-	if (activeExplanationIdx < 0) return;
-	explanations = explanations.map((e, i) =>
-		i === activeExplanationIdx ? { ...e, content: e.content + chunk } : e
-	);
-}
-
-export function finishExplanation(): void {
-	if (activeExplanationIdx < 0) return;
-	explanations = explanations.map((e, i) =>
-		i === activeExplanationIdx ? { ...e, isStreaming: false } : e
-	);
-}
-
-export function setActiveExplanationIdx(idx: number): void {
-	activeExplanationIdx = idx;
-}
-
-export function clearExplanations(): void {
-	explanations = [];
-	activeExplanationIdx = -1;
-	explanationError = null;
-	currentExplainController?.abort();
-	currentExplainController = null;
-}
-
-// --- Explanation error state ---
-let explanationError = $state<{ code: string; message: string } | null>(null);
-let currentExplainController: AbortController | null = null;
-
-export function getExplanationError(): { code: string; message: string } | null {
-	return explanationError;
-}
-
-/**
- * Request an AI explanation by opening an SSE stream to the server.
- * Aborts any in-flight explanation before starting a new one.
- */
-export function requestExplanation(params: {
-	prId: string;
-	filePath: string;
-	lineRange: [number, number];
-	codeSnippet: string;
-}): void {
-	// Abort any in-flight explanation
-	currentExplainController?.abort();
-	currentExplainController = null;
-	explanationError = null;
-
-	// Create the entry and open the panel
-	startExplanation({
-		filePath: params.filePath,
-		lineRange: params.lineRange,
-		codeSnippet: params.codeSnippet,
-	});
-
-	// Open SSE stream
-	currentExplainController = streamExplanation(
-		{
-			prId: params.prId,
-			filePath: params.filePath,
-			startLine: params.lineRange[0],
-			endLine: params.lineRange[1],
-			codeSnippet: params.codeSnippet,
-		},
-		{
-			onChunk: appendExplanationChunk,
-			onDone: () => {
-				finishExplanation();
-				currentExplainController = null;
-			},
-		onError: (err: { code: string; message: string }) => {
-			explanationError = err;
-			toast.error(err.message || 'AI explanation failed');
-			finishExplanation();
-			currentExplainController = null;
-		},
-		}
-	);
 }
 
 // --- Comment threads ---

@@ -5,6 +5,7 @@ import {
 	type AiError,
 	type ValidationError,
 } from '../domain/errors';
+import { ChatMcpTokens } from './ChatMcpTokens';
 import { DbService } from './Db';
 import { withDb } from '../effects/with-db';
 import { SettingsService } from './Settings';
@@ -14,26 +15,34 @@ import type { WalkthroughStreamEvent } from '@revv/shared';
 import type { OpencodeProviderDeps } from '../ai/providers/mcp-walkthrough-opencode';
 
 // ── Prompt & provider imports (split out of this file) ──────────────────────
-import { EXPLAIN_SYSTEM_PROMPT, buildExplainPrompt } from '../ai/prompts/explain';
 import { checkCliAvailability } from '../ai/providers/cli-agent';
 import { streamWalkthroughViaMCP, type ContinuationContext } from '../ai/providers/mcp-walkthrough';
 import { streamWalkthroughViaOpencodeMCP } from '../ai/providers/mcp-walkthrough-opencode';
 import { guardWalkthroughStream } from '../ai/providers/stream-guard';
-import { streamViaClaudeCode } from '../ai/providers/claude-code';
+import {
+	type ChatPrContext,
+	type ChatWalkthroughContext,
+	buildChatSystemPrompt,
+	buildChatUserMessage,
+} from '../ai/prompts/chat';
+import { type ChatStreamFrame, streamChatViaClaude } from '../ai/providers/chat-claude';
+import { streamChatViaOpencode } from '../ai/providers/chat-opencode';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-export interface ExplainParams {
-	readonly filePath: string;
-	readonly lineRange: [number, number];
-	readonly codeSnippet: string;
-	readonly fullFileContent: string;
-	readonly prTitle: string;
-	readonly prBody: string | null;
-	readonly diff: string;
-}
-
 export type { ContinuationContext };
+
+export interface ChatParams {
+	readonly pr: ChatPrContext;
+	readonly walkthrough: ChatWalkthroughContext | null;
+	readonly message: string;
+	readonly cwd: string;
+	readonly branchName: string;
+	readonly resumeSessionId: string | null;
+	readonly onSessionId: (id: string) => void;
+	readonly prId: string;
+	readonly abortController?: AbortController;
+}
 
 // ── Agent resolution ────────────────────────────────────────────────────────
 
@@ -51,9 +60,6 @@ export function resolveAgent(settings: { aiAgent: string | null }): CliAgent {
 export class AiService extends Context.Tag('AiService')<
 	AiService,
 	{
-		readonly explainCode: (
-			params: ExplainParams
-		) => Effect.Effect<ReadableStream<string>, AiError>;
 		readonly streamWalkthrough: (params: {
 			/**
 			 * The deterministic walkthrough id the MCP tool handlers will scope
@@ -88,6 +94,19 @@ export class AiService extends Context.Tag('AiService')<
 			issueOpencodeSessionToken?: (walkthroughId: string) => Promise<string>;
 			clearOpencodeSessionToken?: (token: string) => Promise<void>;
 		}) => Effect.Effect<AsyncGenerator<WalkthroughStreamEvent>, AiError>;
+		/**
+		 * Stream a single chat turn for the right-pane chat. Resolves the
+		 * configured agent, builds the system prompt + user message, and hands
+		 * off to the provider. The returned stream emits both text deltas and
+		 * tool-use lines so the UI can render the agent's actions inline.
+		 *
+		 * Session lifecycle (claude `resume:` / opencode session id) is owned
+		 * by the caller (the chat route) — this method just wires the
+		 * `resumeSessionId` and `onSessionId` callback through.
+		 */
+		readonly chat: (
+			params: ChatParams,
+		) => Effect.Effect<ReadableStream<ChatStreamFrame>, AiError>;
 		readonly isConfigured: () => Effect.Effect<boolean>;
 	}
 >() {}
@@ -100,6 +119,7 @@ export const AiServiceLive = Layer.effect(
 		const settingsService = yield* SettingsService;
 		const { db } = yield* DbService;
 		const supervisor = yield* OpencodeSupervisor;
+		const chatMcpTokens = yield* ChatMcpTokens;
 
 		// Map ValidationError from getSettings() to AiGenerationError
 		const getSettings = () =>
@@ -118,19 +138,6 @@ export const AiServiceLive = Layer.effect(
 			}).pipe(Effect.catchAll(() => Effect.succeed(false)));
 
 		return {
-			explainCode: (params: ExplainParams) =>
-				Effect.gen(function* () {
-					const settings = yield* getSettings();
-					const agent = resolveAgent(settings);
-
-					if (!checkCliAvailability(agent)) {
-						return yield* Effect.fail(new AiNotConfiguredError());
-					}
-
-					const userMessage = buildExplainPrompt(params);
-					return streamViaClaudeCode(userMessage, EXPLAIN_SYSTEM_PROMPT);
-				}),
-
 			streamWalkthrough: (params) =>
 				Effect.gen(function* () {
 					const settings = yield* getSettings();
@@ -187,6 +194,60 @@ export const AiServiceLive = Layer.effect(
 						settings,
 					);
 					return guardWalkthroughStream(raw, { label: 'claude-mcp', synthesizePhases: false });
+				}),
+
+			chat: (params: ChatParams) =>
+				Effect.gen(function* () {
+					const settings = yield* getSettings();
+					const agent = resolveAgent(settings);
+
+					if (!checkCliAvailability(agent)) {
+						return yield* Effect.fail(new AiNotConfiguredError());
+					}
+
+					const systemPrompt = buildChatSystemPrompt({
+						pr: params.pr,
+						walkthrough: params.walkthrough,
+						branchName: params.branchName,
+					});
+					const message = buildChatUserMessage({ message: params.message });
+
+					if (agent === 'claude') {
+						return streamChatViaClaude({
+							message,
+							systemPrompt,
+							resumeSessionId: params.resumeSessionId ?? undefined,
+							cwd: params.cwd,
+							onSessionId: params.onSessionId,
+							abortController: params.abortController,
+							model: settings.aiModel ?? undefined,
+							db,
+							prId: params.prId,
+						});
+					}
+
+					// opencode path
+					const deps = {
+						ensureDaemon: () => Effect.runPromise(supervisor.ensureRunning()),
+						jobStarted: () => Effect.runPromise(supervisor.jobStarted()),
+						jobEnded: () => Effect.runPromise(supervisor.jobEnded()),
+						client: () => Effect.runPromise(supervisor.client()),
+						issueChatMcpToken: (prId: string) =>
+							Effect.runPromise(chatMcpTokens.issue(prId)),
+						clearChatMcpToken: (token: string) =>
+							Effect.runPromise(chatMcpTokens.clear(token)),
+					};
+					return streamChatViaOpencode({
+						message,
+						systemPrompt,
+						resumeSessionId: params.resumeSessionId ?? undefined,
+						cwd: params.cwd,
+						onSessionId: params.onSessionId,
+						abortController: params.abortController,
+						model: settings.aiModel ?? undefined,
+						deps,
+						prId: params.prId,
+					});
 				}),
 
 			isConfigured: () => checkConfigured(),
