@@ -224,10 +224,6 @@ export class WalkthroughService extends Context.Tag('WalkthroughService')<
 			DbService
 		>;
 
-		readonly invalidateForPr: (
-			prId: string,
-		) => Effect.Effect<void, never, DbService>;
-
 		/** Persist the opencode session ID for resumption. */
 		readonly setOpencodeSessionId: (
 			walkthroughId: string,
@@ -459,16 +455,6 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 				status: row.status as 'generating' | 'error',
 				opencodeSessionId: row.opencodeSessionId ?? null,
 			};
-		}),
-
-	invalidateForPr: (prId) =>
-		Effect.gen(function* () {
-			const { db } = yield* DbService;
-			// walkthrough_blocks, walkthrough_issues, and walkthrough_ratings
-			// rows are all cascade-deleted via their FK → walkthroughs.id.
-			db.delete(walkthroughs)
-				.where(eq(walkthroughs.pullRequestId, prId))
-				.run();
 		}),
 
 	setOpencodeSessionId: (walkthroughId, sessionId) =>

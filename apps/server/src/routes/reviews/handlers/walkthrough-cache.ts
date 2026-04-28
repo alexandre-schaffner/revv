@@ -32,31 +32,24 @@ export function getCachedWalkthroughHandler(prId: string, userId: string) {
 
 /**
  * POST /api/reviews/:id/walkthrough/regenerate — cancel any in-flight
- * generation for this PR and invalidate cached walkthroughs so the next
- * SSE request starts fresh.
+ * generation for this PR and mark every existing walkthrough row
+ * 'superseded' so the next SSE request creates a fresh row at the new
+ * head SHA.
  *
- * Order matters: we cancel BEFORE invalidate. Cancel awaits fiber
- * termination so the scope finalizers (worktree cleanup, abort signal)
- * have run by the time we touch the DB. If we invalidated first, the
- * still-running fiber could race its `markComplete` / `addBlock` writes
- * against our delete, producing orphan rows or partial-new rows.
+ * Doctrine invariant #7 (CLAUDE.md): walkthroughs are immutable per head
+ * SHA. We SUPERSEDE rather than DELETE so audit trail and AI comment
+ * history survive across regenerations. `WalkthroughJobs.supersedeForPr`
+ * is the chokepoint that already does both halves of the work — it
+ * cancels any in-flight fiber first (Fiber.interrupt awaits the scope's
+ * finalizers so the worktree is removed, the abort signal fires, and the
+ * registry/sessionToken/semaphore entries are released before the DB
+ * write), then transitions the rows to 'superseded' via UPDATE. This
+ * matches the path taken by PollScheduler when it detects a head-SHA
+ * change in the background, so the user-clicked Pull and the
+ * polling-detected commit produce identical externally-observable state.
  */
 export function regenerateWalkthroughHandler(prId: string) {
 	return AppRuntime.runPromise(
-		Effect.gen(function* () {
-			const jobs = yield* WalkthroughJobs;
-			const walkthroughService = yield* WalkthroughService;
-
-			// Cancel the active job (if any). `cancel` awaits Fiber.interrupt,
-			// which flushes the job's scope — worktree is removed, controller
-			// is aborted, and the row has been marked `error` so the next
-			// invalidate clears clean state.
-			const active = yield* jobs.findActiveByPr(prId);
-			if (active !== null) {
-				yield* jobs.cancel(active.walkthroughId);
-			}
-
-			yield* walkthroughService.invalidateForPr(prId);
-		}),
+		Effect.flatMap(WalkthroughJobs, (jobs) => jobs.supersedeForPr(prId)),
 	);
 }
