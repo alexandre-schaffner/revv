@@ -562,15 +562,34 @@ export const RepoCloneServiceLive = Layer.effect(
 								);
 							}
 
-							// Prune stale worktree registrations left by previously crashed
-							// jobs. Without this, accumulated entries from old runs (that
-							// never had their scope finalizers execute) can cause
-							// `git worktree add` to behave unexpectedly on an existing clone.
+							// ── Stale-worktree cleanup ───────────────────────────────────
+							//
+							// When the server is killed mid-run (SIGTERM, crash, dev-watch
+							// restart) the scope finalizer for the previous fiber may not
+							// have had time to run, leaving a stale worktree directory AND
+							// a stale `.git/worktrees/<name>` registration. `git worktree
+							// add` rejects both conditions with "already exists" / "is
+							// already checked out", so we need to clear both before adding.
+							//
+							// Three-step approach, each step a best-effort with a hard
+							// timeout so a stuck git process can never block fiber startup:
+							//
+							//   1. `worktree prune` — removes orphaned git registrations
+							//      whose working-tree directories no longer exist.
+							//   2. `worktree remove --force` — high-level removal of both
+							//      the git registration and the directory if it's a live
+							//      (or dead-with-dir) worktree.
+							//   3. `rm -rf` — belt-and-suspenders for the directory itself
+							//      in case step 2 timed out or git decided the path wasn't
+							//      a registered worktree.
+							//   4. Second `worktree prune` — run AFTER the rm so that if
+							//      steps 1-2 left a stale `.git/worktrees/<name>` entry
+							//      (e.g. step 2 timed out, step 3 removed the dir but the
+							//      git metadata survived), prune notices the dir is gone
+							//      and removes the orphaned entry. Without this second
+							//      prune, `git worktree add` still fails with "already
+							//      exists" even though the directory is gone.
 							await runGitBestEffort(["worktree", "prune"], clonePath, 15_000);
-
-							// Clean up any stale directory from a previous crashed job with the
-							// same walkthroughId. `git worktree add` refuses to overwrite, so
-							// remove the registration first (ignoring errors), then rm the dir.
 							await runGitBestEffort(
 								["worktree", "remove", "--force", worktreePath],
 								clonePath,
@@ -579,6 +598,9 @@ export const RepoCloneServiceLive = Layer.effect(
 							if (existsSync(worktreePath)) {
 								await rm(worktreePath, { recursive: true, force: true });
 							}
+							// Second prune: clears any git-internal metadata that survived
+							// the directory removal. Idempotent; safe to skip on success.
+							await runGitBestEffort(["worktree", "prune"], clonePath, 15_000);
 
 							// Create the detached worktree pinned to the exact head sha —
 							// "detached" means no local branch, so concurrent jobs for the

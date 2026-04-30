@@ -150,14 +150,31 @@ export class WalkthroughService extends Context.Tag('WalkthroughService')<
 	WalkthroughService,
 	{
 		/**
-		 * Insert a new walkthrough row at start of generation. Idempotent: if a
-		 * row with `(prId, prHeadSha)` already exists, returns its id (enforced
-		 * by UNIQUE INDEX walkthroughs_pr_head_sha_unique). This is the sole
-		 * "start a walkthrough" insert path — the agent never creates its own
-		 * row, it only mutates the row the orchestrator created.
+		 * Insert a new walkthrough row at start of generation. Behavior depends
+		 * on whether a row already exists at `(prId, prHeadSha)`:
 		 *
-		 * The row is inserted with empty summary/riskLevel and
-		 * lastCompletedPhase='none'. Phase A (set_overview) fills the overview.
+		 *   • no row              → INSERT a fresh row, return its id.
+		 *   • row in 'generating' → return the existing id (the in-flight job
+		 *                            owns this row; concurrent startJob is
+		 *                            idempotent).
+		 *   • row in 'complete'   → return the existing id (caller is expected
+		 *                            to have hit the cache path first; defensive
+		 *                            no-op so we never clobber a finished
+		 *                            walkthrough).
+		 *   • row in 'superseded' → RECYCLE: delete the stale row (cascades
+		 *                            blocks/issues/ratings + AI-authored
+		 *                            comment_threads via the issue FK) and
+		 *                            insert a fresh row with a new id. This is
+		 *                            the regenerate path — the user explicitly
+		 *                            asked for a do-over at the same head SHA,
+		 *                            so the failed/cancelled prior attempt's
+		 *                            content is intentionally cleared.
+		 *   • row in 'error'      → RECYCLE: same as superseded. The row is
+		 *                            terminal and has no live fiber, so a fresh
+		 *                            run replaces it cleanly.
+		 *
+		 * All-in-one transaction so the lookup + delete + insert can't race a
+		 * concurrent startJob for the same (prId, prHeadSha).
 		 */
 		readonly createPartial: (params: {
 			id?: string;
@@ -277,59 +294,85 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 	createPartial: (params) =>
 		Effect.gen(function* () {
 			const { db } = yield* DbService;
-			const id = params.id ?? crypto.randomUUID();
+			const newId = params.id ?? crypto.randomUUID();
 			const generatedAt = new Date().toISOString();
 
-			// onConflictDoNothing on the (prId, prHeadSha) unique index makes
-			// this idempotent — a second concurrent startJob returns the
-			// existing id (see `.get()` fallback below).
-			yield* Effect.try({
+			// Atomically: look at any existing row at (prId, prHeadSha), recycle
+			// it if it's terminal (superseded/error), otherwise reuse it. The
+			// transaction ensures concurrent startJob calls for the same
+			// (prId, prHeadSha) can't race the delete-then-insert and produce
+			// duplicate rows or zero rows.
+			//
+			// Cascade chain on DELETE walkthroughs:
+			//   walkthrough_blocks   (FK onDelete: cascade)
+			//   walkthrough_issues   (FK onDelete: cascade)
+			//     └─ comment_threads.walkthrough_issue_id (FK onDelete: cascade)
+			//        — drops AI-authored inline comments tied to the failed run
+			//   walkthrough_ratings  (FK onDelete: cascade)
+			// Other walkthroughs that referenced this row via supersededBy get
+			// their pointer NULLed (FK onDelete: set null), which is fine — the
+			// audit chain just truncates at the recycled row.
+			const result = yield* Effect.try({
 				try: () =>
-					db
-						.insert(walkthroughs)
-						.values({
-							id,
-							reviewSessionId: params.reviewSessionId,
-							pullRequestId: params.prId,
-							summary: '',
-							riskLevel: 'low',
-							sentiment: null,
-							status: 'generating',
-							lastCompletedPhase: 'none',
-							generatedAt,
-							modelUsed: params.modelUsed,
-							tokenUsage: '{}',
-							prHeadSha: params.prHeadSha,
-							resumeAttempts: 0,
-						})
-						.onConflictDoNothing({
-							target: [
-								walkthroughs.pullRequestId,
-								walkthroughs.prHeadSha,
-							],
-						})
-						.run(),
+					db.transaction((tx): { id: string } => {
+						const existing = tx
+							.select({
+								id: walkthroughs.id,
+								status: walkthroughs.status,
+							})
+							.from(walkthroughs)
+							.where(
+								and(
+									eq(walkthroughs.pullRequestId, params.prId),
+									eq(walkthroughs.prHeadSha, params.prHeadSha),
+								),
+							)
+							.get();
+
+						if (existing) {
+							if (
+								existing.status === 'generating' ||
+								existing.status === 'complete'
+							) {
+								// In-flight or finished — keep the row. The
+								// orchestrator's idempotent-startJob and cache
+								// paths upstream of this call already handle
+								// these cases; we only reach here on a race.
+								return { id: existing.id };
+							}
+							// 'superseded' or 'error' — drop the row. Cascades
+							// clean every child row tied to the prior attempt.
+							tx.delete(walkthroughs)
+								.where(eq(walkthroughs.id, existing.id))
+								.run();
+						}
+
+						tx.insert(walkthroughs)
+							.values({
+								id: newId,
+								reviewSessionId: params.reviewSessionId,
+								pullRequestId: params.prId,
+								summary: '',
+								riskLevel: 'low',
+								sentiment: null,
+								status: 'generating',
+								lastCompletedPhase: 'none',
+								generatedAt,
+								modelUsed: params.modelUsed,
+								tokenUsage: '{}',
+								prHeadSha: params.prHeadSha,
+								resumeAttempts: 0,
+							})
+							.run();
+						return { id: newId };
+					}),
 				catch: (e) =>
 					new ReviewError({
 						message: `Failed to create walkthrough: ${String(e)}`,
 					}),
 			});
 
-			// If an existing row preempted our insert, return ITS id. The
-			// uniqueness is on (prId, prHeadSha), so the row we'd have inserted
-			// is interchangeable with the one already there.
-			const existing = db
-				.select({ id: walkthroughs.id })
-				.from(walkthroughs)
-				.where(
-					and(
-						eq(walkthroughs.pullRequestId, params.prId),
-						eq(walkthroughs.prHeadSha, params.prHeadSha),
-					),
-				)
-				.get();
-
-			return existing?.id ?? id;
+			return result.id;
 		}),
 
 	setStatus: (walkthroughId, status, options) =>
