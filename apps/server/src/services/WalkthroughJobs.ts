@@ -1281,6 +1281,18 @@ export const WalkthroughJobsLive = Layer.effect(
 					"generating rows",
 				);
 
+				// GC any walkthrough worktrees on disk whose ids don't appear
+				// among the rows we're about to resume. This catches dirs
+				// orphaned by a crash mid-fiber (no scope finalizer ran) AND
+				// dirs orphaned by createPartial's recycle-on-regenerate path
+				// (the new walkthrough picks a fresh uuid, leaving the old
+				// path with nobody to reference it). Best-effort — failures
+				// are logged and swallowed inside the GC, so a stuck git or
+				// permission error never prevents resumes.
+				yield* repoCloneService.gcStaleWalkthroughWorktrees(
+					new Set(rows.map((r) => r.id)),
+				);
+
 				for (const row of rows) {
 					const attempts = yield* provideDb(
 						walkthroughService.incrementResumeAttempts(row.id),

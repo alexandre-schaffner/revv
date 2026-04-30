@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync } from "node:fs";
-import { rm } from "node:fs/promises";
+import { readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { CloneStatus, Repository } from "@revv/shared";
 import { eq, or } from "drizzle-orm";
@@ -102,6 +102,28 @@ export class RepoCloneService extends Context.Tag("RepoCloneService")<
 			readonly worktreePath: string;
 			readonly branchName: string;
 		}) => Effect.Effect<void>;
+		/**
+		 * Garbage-collect stale walkthrough worktrees on startup.
+		 *
+		 * A walkthrough fiber that crashes (kill -9, OOM, dev-server restart
+		 * mid-run) doesn't get to run its scope finalizer, so its
+		 * `worktrees/walkthrough-{id}` directory leaks onto disk. Once
+		 * {@link Walkthrough.createPartial} started recycling terminal rows to
+		 * fresh ids, those leaked dirs are also unreachable from the DB —
+		 * nothing references them, and the next run picks a different uuid
+		 * which sidesteps the path collision. Without this GC they'd accumulate
+		 * forever.
+		 *
+		 * Scans every cloned repo's `worktrees/` for `walkthrough-*` entries
+		 * and removes any whose embedded uuid isn't in `keepIds` (the
+		 * orchestrator passes the set of ids it's about to resume). Each
+		 * removal is best-effort — `git worktree remove --force` + `rm -rf` +
+		 * `git worktree prune` — so a stuck git or filesystem can never block
+		 * boot.
+		 */
+		readonly gcStaleWalkthroughWorktrees: (
+			keepIds: ReadonlySet<string>,
+		) => Effect.Effect<void>;
 	}
 >() {}
 
@@ -689,7 +711,11 @@ export const RepoCloneServiceLive = Layer.effect(
 						// row stores the resulting paths verbatim, so lookups
 						// stay O(1) by prId.
 						const safeId = prId.replace(/[^A-Za-z0-9_-]/g, "_");
-						const branchName = `revv-chat/${safeId}-${sha12}`;
+						// Use the PR's own tracking branch so the agent commits
+						// land directly on the PR branch rather than a parallel
+						// revv-chat/… branch. The worktree path still embeds the
+						// sha12 so GC can swap it out when the PR gets a new push.
+						const branchName = `pr-${prNumber}`;
 						const worktreePath = join(
 							clonePath,
 							"worktrees",
@@ -715,8 +741,10 @@ export const RepoCloneServiceLive = Layer.effect(
 							await rm(worktreePath, { recursive: true, force: true });
 						}
 
-						// Make sure the exact PR head SHA is reachable locally.
-						// Same fetch dance as the walkthrough worktree above.
+						// Always fetch to ensure the local pr-N ref points to
+						// prHeadSha. The `+` prefix force-updates the ref, which is
+						// safe because any agent commits from a previous session are
+						// already superseded once the PR has a new head.
 						const authedUrl = `https://x-access-token:${githubToken}@${GITHUB_HOST}/${row.fullName}.git`;
 						const cleanUrl = `https://${GITHUB_HOST}/${row.fullName}.git`;
 						try {
@@ -724,21 +752,14 @@ export const RepoCloneServiceLive = Layer.effect(
 								["remote", "set-url", "origin", authedUrl],
 								clonePath,
 							);
-							const hasObject = await runGitBestEffort(
-								["cat-file", "-e", `${prHeadSha}^{commit}`],
+							await runGit(
+								[
+									"fetch",
+									"origin",
+									`+refs/pull/${prNumber}/head:refs/heads/${branchName}`,
+								],
 								clonePath,
-								10_000,
 							);
-							if (!hasObject) {
-								await runGit(
-									[
-										"fetch",
-										"origin",
-										`+refs/pull/${prNumber}/head:refs/heads/pr-${prNumber}`,
-									],
-									clonePath,
-								);
-							}
 						} finally {
 							await runGit(
 								["remote", "set-url", "origin", cleanUrl],
@@ -749,26 +770,10 @@ export const RepoCloneServiceLive = Layer.effect(
 						// Prune stale worktree registrations.
 						await runGitBestEffort(["worktree", "prune"], clonePath, 15_000);
 
-						// Best-effort delete the branch in case a previous incarnation
-						// left it behind without an attached worktree (defensive).
-						await runGitBestEffort(
-							["branch", "-D", branchName],
-							clonePath,
-							10_000,
-						);
-
-						// Create the worktree on a fresh branch pinned to the head SHA.
-						// The `-b <branch>` form refuses to overwrite an existing branch
-						// — we just deleted any stale one above.
+						// Create the worktree on the existing PR branch.
+						// No `-b` flag — the branch was just updated by the fetch above.
 						await runGit(
-							[
-								"worktree",
-								"add",
-								"-b",
-								branchName,
-								worktreePath,
-								prHeadSha,
-							],
+							["worktree", "add", worktreePath, branchName],
 							clonePath,
 						);
 
@@ -808,15 +813,17 @@ export const RepoCloneServiceLive = Layer.effect(
 							err instanceof Error ? err.message : String(err),
 						);
 					}
-					// Remove the working branch. `worktree remove` already deletes the
-					// branch if it was created via `worktree add -b`, but we ran a
-					// guarded best-effort delete here too in case the registration was
-					// already broken before we tried to remove the worktree.
-					await runGitBestEffort(
-						["branch", "-D", branchName],
-						clonePath,
-						10_000,
-					);
+					// Only delete the local branch if it is a revv-owned working
+					// branch. PR tracking branches (pr-N) are fetched refs that
+					// must not be deleted — they are re-used across sessions and
+					// needed for future chat worktrees on the same PR.
+					if (branchName.startsWith("revv-chat/")) {
+						await runGitBestEffort(
+							["branch", "-D", branchName],
+							clonePath,
+							10_000,
+						);
+					}
 				}),
 
 		resumePendingClones: () =>
@@ -880,6 +887,112 @@ export const RepoCloneServiceLive = Layer.effect(
 					);
 				}
 			}),
+
+		gcStaleWalkthroughWorktrees: (keepIds) => {
+			// Snapshot the ready clones — the only places where walkthrough
+			// worktrees can live. Repos in 'pending' / 'error' status don't
+			// have a clonePath we can trust. The DB read is sync; the rest of
+			// the work runs inside an Effect.promise so we can await readdir +
+			// runGitBestEffort + rm without leaving the Effect world.
+			const readyRepos = db
+				.select({ id: repositories.id, clonePath: repositories.clonePath })
+				.from(repositories)
+				.where(eq(repositories.cloneStatus, "ready"))
+				.all();
+
+			return Effect.promise(async () => {
+				let scanned = 0;
+				let removed = 0;
+
+				for (const repo of readyRepos) {
+					const clonePath = repo.clonePath;
+					if (!clonePath) continue;
+
+					// Hard-bound the safety check so a corrupt DB row can't
+					// trick us into rm -rf'ing a path outside the clone base dir.
+					try {
+						assertSafeClonePath(clonePath);
+					} catch (err) {
+						logError(
+							"walkthrough-worktree-gc",
+							"refusing to scan unsafe clone path:",
+							err instanceof Error ? err.message : String(err),
+						);
+						continue;
+					}
+
+					const worktreesDir = join(clonePath, "worktrees");
+					if (!existsSync(worktreesDir)) continue;
+
+					let entries: string[];
+					try {
+						entries = await readdir(worktreesDir);
+					} catch (err) {
+						debug(
+							"walkthrough-worktree-gc",
+							`failed to list ${worktreesDir}:`,
+							err instanceof Error ? err.message : String(err),
+						);
+						continue;
+					}
+
+					for (const name of entries) {
+						if (!name.startsWith("walkthrough-")) continue;
+						scanned++;
+						// Strip the leading "walkthrough-" — what remains is
+						// the uuid, which itself contains hyphens. Don't split
+						// on "-".
+						const uuid = name.slice("walkthrough-".length);
+						if (keepIds.has(uuid)) continue;
+
+						const worktreePath = join(worktreesDir, name);
+						debug(
+							"walkthrough-worktree-gc",
+							"removing stale worktree:",
+							worktreePath,
+						);
+
+						// Same belt-and-suspenders sequence as
+						// acquireWalkthroughWorktree's stale-cleanup block:
+						// remove --force → rm → prune. Each step is best-effort
+						// with a hard timeout.
+						await runGitBestEffort(
+							["worktree", "remove", "--force", worktreePath],
+							clonePath,
+							10_000,
+						);
+						try {
+							if (existsSync(worktreePath)) {
+								await rm(worktreePath, {
+									recursive: true,
+									force: true,
+								});
+							}
+						} catch (err) {
+							logError(
+								"walkthrough-worktree-gc",
+								"rm failed for",
+								worktreePath,
+								err instanceof Error ? err.message : String(err),
+							);
+						}
+						await runGitBestEffort(
+							["worktree", "prune"],
+							clonePath,
+							15_000,
+						);
+						removed++;
+					}
+				}
+
+				if (scanned > 0) {
+					debug(
+						"walkthrough-worktree-gc",
+						`scanned ${scanned} walkthrough worktree(s), removed ${removed} stale`,
+					);
+				}
+			});
+		},
 	};
 }),
 );

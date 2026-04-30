@@ -11,7 +11,7 @@ import { pullRequests } from './pull-requests';
  *                       for opencode it's the daemon's session id.
  *   - `worktreePath`  — absolute path to the chat worktree (`chat-{prId}-{sha12}`)
  *                       checked out at `prHeadSha`. The agent's `cwd`.
- *   - `branchName`    — the working branch (`revv-chat/{prId}-{sha12}`) the
+ *   - `branchName`    — the local PR tracking branch (`pr-{prNumber}`) the
  *                       agent commits its proposed changes to.
  *
  * A new commit on the PR ⇒ different `prHeadSha` ⇒ new row, new agent
