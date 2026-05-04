@@ -79,7 +79,7 @@
 			side="top"
 			align="end"
 			sideOffset={6}
-			class="z-50 min-w-[340px] rounded-lg border border-border bg-bg-primary py-1 shadow-lg"
+			class="z-50 max-h-[60vh] min-w-[340px] overflow-y-auto overscroll-contain rounded-lg border border-border bg-bg-primary py-1 shadow-lg"
 		>
 			{#if loading}
 				<div class="flex items-center justify-center gap-2 px-3 py-3 text-xs text-text-muted">
@@ -87,7 +87,7 @@
 					<span>Loading commits…</span>
 				</div>
 			{:else if commits !== null}
-				{#each commits.slice(0, 10) as commit (commit.sha)}
+				{#each commits as commit (commit.sha)}
 					{@const isLatest = commit.sha === pr.headSha}
 					<div
 						class="flex items-center gap-2 px-3 py-1.5 text-xs outline-none"
