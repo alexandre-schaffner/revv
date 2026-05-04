@@ -3,10 +3,16 @@
 	import type { ReviewFile } from '$lib/types/review';
 	import DiffViewer from './DiffViewer.svelte';
 	import FileIssues from './FileIssues.svelte';
+	import FileViewer from './FileViewer.svelte';
 	import {
 		getActiveFilePath,
 		setActiveFilePath,
-		setDiffMode
+		setDiffMode,
+		getRepoFileStatus,
+		getRepoFilePath,
+		getRepoFileContent,
+		getRepoFileSize,
+		getRepoFileError,
 	} from '$lib/stores/review.svelte';
 	import {
 		getActivePanel,
@@ -39,7 +45,30 @@
 
 	const activeFilePath = $derived(getActiveFilePath());
 	const activeFile = $derived(files.find((f) => f.path === activeFilePath) ?? null);
-	const activeFileName = $derived(activeFile ? (activeFile.path.split('/').pop() ?? activeFile.path) : '');
+	// Filename for the title bar — falls back to the raw path when neither
+	// `activeFile` (PR-changed) nor a tree-selection has populated something.
+	// Used by both the diff path and the file-viewer path so they share one
+	// rendering pipeline for the big title at the top of the main pane.
+	const activeFileName = $derived.by((): string => {
+		if (activeFile) return activeFile.path.split('/').pop() ?? activeFile.path;
+		if (activeFilePath) return activeFilePath.split('/').pop() ?? activeFilePath;
+		return '';
+	});
+
+	// File-viewer surface — used when the user picks a file that *isn't* in
+	// the PR diff, so DiffViewer has nothing to render. We mirror the path
+	// the loader is fetching so the viewer doesn't flash stale content while
+	// a new request is in flight.
+	const repoFileStatus = $derived(getRepoFileStatus());
+	const repoFilePath = $derived(getRepoFilePath());
+	const repoFileContent = $derived(getRepoFileContent());
+	const repoFileSize = $derived(getRepoFileSize());
+	const repoFileError = $derived(getRepoFileError());
+	const showFileViewer = $derived(
+		activeFilePath !== null &&
+			activeFile === null &&
+			(repoFilePath === activeFilePath || repoFileStatus === 'loading'),
+	);
 
 	// ── Token hover state ────────────────────────────────────────────────────
 	//
@@ -357,13 +386,35 @@
 				<h1 class="file-title">{activeFileName}</h1>
 			</div>
 			<FileIssues filePath={activeFile.path} />
+			<DiffViewer
+				file={activeFile}
+				{themeType}
+				onModeChange={(m) => setDiffMode(m)}
+				commentTrigger={pendingCommentTrigger}
+			/>
+		{:else if showFileViewer && activeFilePath}
+			<!-- Title rendered by the layout (same as the diff path) so the
+			     file viewer fills the pane edge-to-edge — no inner padding,
+			     full-width gutter, identical font / sizing to the diff. -->
+			<div class="file-title-section" bind:this={fileTitleSectionEl}>
+				<h1 class="file-title">{activeFileName}</h1>
+			</div>
+			<FileViewer
+				path={activeFilePath}
+				content={repoFileContent}
+				isBinary={repoFileStatus === 'binary'}
+				size={repoFileSize}
+				status={repoFileStatus}
+				errorMessage={repoFileError}
+			/>
+		{:else}
+			<DiffViewer
+				file={null}
+				{themeType}
+				onModeChange={(m) => setDiffMode(m)}
+				commentTrigger={pendingCommentTrigger}
+			/>
 		{/if}
-		<DiffViewer
-			file={activeFile}
-			{themeType}
-			onModeChange={(m) => setDiffMode(m)}
-			commentTrigger={pendingCommentTrigger}
-		/>
 	</div>
 
 </div>

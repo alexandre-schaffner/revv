@@ -228,8 +228,14 @@
 								{:else if item.isStreaming}
 									<div class="skeleton-line"></div>
 								{/if}
-								{#if item.isStreaming}
+								{#if item.isStreaming && !item.error}
 									<span class="stream-cursor" aria-hidden="true"></span>
+								{/if}
+								{#if item.error}
+									<div class="inline-error" role="alert">
+										<AlertTriangle size={12} class="inline-error-icon" />
+										<span class="inline-error-text">{item.error}</span>
+									</div>
 								{/if}
 							</div>
 						</li>
@@ -653,6 +659,33 @@
 	@keyframes stream-cursor-blink {
 		0%, 100% { opacity: 1; }
 		50% { opacity: 0.2; }
+	}
+
+	/* Inline error chip — attached to an assistant bubble whose stream
+	   errored mid-turn. Distinct from the panel-level error-state block,
+	   which renders only when there's no bubble to attach to. */
+	.inline-error {
+		display: flex;
+		align-items: flex-start;
+		gap: 6px;
+		margin-top: 8px;
+		padding: 6px 8px;
+		border-radius: 4px;
+		background: var(--color-bg-tertiary);
+		border-left: 2px solid var(--color-text-muted);
+		font-size: 11px;
+		color: var(--color-text-muted);
+		line-height: 1.4;
+	}
+
+	:global(.inline-error-icon) {
+		flex-shrink: 0;
+		margin-top: 2px;
+	}
+
+	.inline-error-text {
+		word-wrap: break-word;
+		min-width: 0;
 	}
 
 	/* Empty state */

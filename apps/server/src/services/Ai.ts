@@ -6,8 +6,10 @@ import {
 	type ValidationError,
 } from '../domain/errors';
 import { ChatMcpTokens } from './ChatMcpTokens';
+import { ChatSessionService } from './ChatSession';
 import { DbService } from './Db';
 import { withDb } from '../effects/with-db';
+import { logError } from '../logger';
 import { SettingsService } from './Settings';
 import { OpencodeSupervisor } from './OpencodeSupervisor';
 import type { PrFileMeta } from './GitHub';
@@ -39,7 +41,16 @@ export interface ChatParams {
 	readonly cwd: string;
 	readonly branchName: string;
 	readonly resumeSessionId: string | null;
-	readonly onSessionId: (id: string) => void;
+	/**
+	 * Reports the agent-side session id back to the chat route so it can
+	 * persist `(prId, agent, prHeadSha) → sessionId` in `chat_sessions`.
+	 * Drivers MUST await this before streaming user-visible content
+	 * (opencode path, where the id is known up front) or before closing
+	 * their stream (claude path, where the id arrives after the first SDK
+	 * iteration). Awaiting closes the race where a follow-up turn arrives
+	 * before the upsert commits and creates a fresh agent session.
+	 */
+	readonly onSessionId: (id: string) => Promise<void> | void;
 	readonly prId: string;
 	readonly abortController?: AbortController;
 }
@@ -120,6 +131,29 @@ export const AiServiceLive = Layer.effect(
 		const { db } = yield* DbService;
 		const supervisor = yield* OpencodeSupervisor;
 		const chatMcpTokens = yield* ChatMcpTokens;
+		const chatSessions = yield* ChatSessionService;
+
+		// Invariant #14 (agent-daemon lifecycle): daemon-bound state is
+		// ephemeral. When the opencode daemon exits — crash, idle cooldown,
+		// settings change — every session id we recorded for it now points
+		// to a process that's gone. Drop those rows so the next chat turn
+		// for any PR creates a fresh session with the system prompt + walk-
+		// through context re-attached, instead of trying to resume against
+		// the new daemon (which would 404, manifesting as Bug 1).
+		//
+		// Best-effort: failures here only mean the next chat turn might
+		// still hit a stale id and surface an error to the user. The exit
+		// handler is fire-and-forget by contract — never throw.
+		supervisor.onDaemonExit(() => {
+			void Effect.runPromise(chatSessions.clearAllForAgent('opencode'))
+				.catch((err) => {
+					logError(
+						'ai',
+						'clearAllForAgent(opencode) failed on daemon exit:',
+						err instanceof Error ? err.message : String(err),
+					);
+				});
+		});
 
 		// Map ValidationError from getSettings() to AiGenerationError
 		const getSettings = () =>

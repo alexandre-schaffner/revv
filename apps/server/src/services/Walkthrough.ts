@@ -42,6 +42,7 @@ import { walkthroughs } from '../db/schema/walkthroughs';
 import { walkthroughBlocks } from '../db/schema/walkthrough-blocks';
 import { walkthroughIssues } from '../db/schema/walkthrough-issues';
 import { walkthroughRatings } from '../db/schema/walkthrough-ratings';
+import { commentThreads } from '../db/schema/comment-threads';
 import { DbService } from './Db';
 
 // ── Row-to-domain converter ─────────────────────────────────────────────────
@@ -393,6 +394,21 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 		Effect.gen(function* () {
 			const { db } = yield* DbService;
 			db.transaction(() => {
+				// Drop AI-authored comment threads tied to the outgoing walkthrough's
+				// issues. Human threads (walkthroughIssueId IS NULL) are untouched.
+				// The walkthroughs row itself is kept for audit (superseded_by chain);
+				// we can't rely on the cascade-on-delete path here.
+				const issueIds = db
+					.select({ id: walkthroughIssues.id })
+					.from(walkthroughIssues)
+					.where(eq(walkthroughIssues.walkthroughId, oldId))
+					.all()
+					.map((r) => r.id);
+				if (issueIds.length > 0) {
+					db.delete(commentThreads)
+						.where(inArray(commentThreads.walkthroughIssueId, issueIds))
+						.run();
+				}
 				db.update(walkthroughs)
 					.set({ status: 'superseded', supersededBy: newId })
 					.where(eq(walkthroughs.id, oldId))
@@ -403,15 +419,46 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 	supersedeAllForPr: (prId) =>
 		Effect.gen(function* () {
 			const { db } = yield* DbService;
-			db.update(walkthroughs)
-				.set({ status: 'superseded' })
-				.where(
-					and(
-						eq(walkthroughs.pullRequestId, prId),
-						ne(walkthroughs.status, 'superseded'),
-					),
-				)
-				.run();
+			db.transaction(() => {
+				// Collect the IDs of every walkthrough that is about to be superseded.
+				const activeIds = db
+					.select({ id: walkthroughs.id })
+					.from(walkthroughs)
+					.where(
+						and(
+							eq(walkthroughs.pullRequestId, prId),
+							ne(walkthroughs.status, 'superseded'),
+						),
+					)
+					.all()
+					.map((r) => r.id);
+
+				if (activeIds.length === 0) return;
+
+				// Drop all AI-authored comment threads linked to those walkthroughs'
+				// issues before marking the rows superseded.
+				const issueIds = db
+					.select({ id: walkthroughIssues.id })
+					.from(walkthroughIssues)
+					.where(inArray(walkthroughIssues.walkthroughId, activeIds))
+					.all()
+					.map((r) => r.id);
+				if (issueIds.length > 0) {
+					db.delete(commentThreads)
+						.where(inArray(commentThreads.walkthroughIssueId, issueIds))
+						.run();
+				}
+
+				db.update(walkthroughs)
+					.set({ status: 'superseded' })
+					.where(
+						and(
+							eq(walkthroughs.pullRequestId, prId),
+							ne(walkthroughs.status, 'superseded'),
+						),
+					)
+					.run();
+			});
 		}).pipe(Effect.catchAll(() => Effect.void)),
 
 	getCached: (prId, headSha) =>

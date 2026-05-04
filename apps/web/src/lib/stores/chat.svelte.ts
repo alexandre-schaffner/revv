@@ -28,6 +28,12 @@ export type ChatItem =
 			role: 'user' | 'assistant';
 			content: string;
 			isStreaming: boolean;
+			/**
+			 * Set when this turn errored mid-stream and we kept the bubble
+			 * around so partial content + tool-use lines aren't orphaned.
+			 * Renders an inline AlertTriangle + message under the body.
+			 */
+			error?: string;
 	  }
 	| {
 			kind: 'tool';
@@ -194,8 +200,24 @@ export function sendChatMessage(params: SendChatMessageParams): void {
 				void refreshProposedChanges(prId);
 			},
 			onError: (err) => {
-				// Drop the empty assistant placeholder so the error banner stands alone.
-				removeItem(prId, assistantId);
+				// Preserve any partial content the agent already streamed —
+				// tool-use lines were spliced *before* this bubble, so removing
+				// it would leave them orphaned. Only drop the bubble if it's
+				// truly empty (no streamed text yet); otherwise mark it errored
+				// and let the renderer attach an inline error chip.
+				const items = chatHistories.get(prId) ?? [];
+				const placeholder = items.find((i) => i.id === assistantId);
+				const hasContent =
+					placeholder?.kind === 'message' && placeholder.content.length > 0;
+				if (hasContent) {
+					patchItem(prId, assistantId, (item) =>
+						item.kind === 'message'
+							? { ...item, isStreaming: false, error: err.message }
+							: item,
+					);
+				} else {
+					removeItem(prId, assistantId);
+				}
 				setError(prId, err);
 				setStreaming(prId, false);
 				abortControllers.delete(prId);

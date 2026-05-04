@@ -9,6 +9,7 @@ export type {
 	ThinkingEffort,
 	ContextWindow,
 	AiAgent,
+	FileTreeScope,
 	SessionStatus,
 	ThreadStatus,
 	AuthorRole,

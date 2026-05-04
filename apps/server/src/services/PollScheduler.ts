@@ -1,4 +1,4 @@
-import { Cause, Context, Duration, Effect, Fiber, Layer, Ref, Schedule } from 'effect';
+import { Cause, Chunk, Context, Duration, Effect, Fiber, Layer, Ref, Schedule } from 'effect';
 import { eq } from 'drizzle-orm';
 import { AUTO_FETCH_DEFAULT_INTERVAL, THREAD_SYNC_INTERVAL_SECONDS } from '@revv/shared';
 import type { PullRequest, SyncChange } from '@revv/shared';
@@ -489,11 +489,53 @@ export const PollSchedulerLive = Layer.effect(
 				withDb(syncService.syncThreads(prId)).pipe(
 					Effect.asVoid,
 					Effect.catchAllCause((cause) => {
-						const message = Cause.pretty(cause);
-						console.error(`[PollScheduler] Manual thread sync failed for PR ${prId}:`, message);
+						// Cause.pretty alone collapses to "An error has occurred"
+						// when the failure's wrapper Error has no useful .message.
+						// Dig into the typed failure (SyncError carries `.cause`
+						// pointing at whatever blew up underneath) and print BOTH
+						// the pretty cause AND the underlying error's message +
+						// stack so we can actually diagnose what broke.
+						const pretty = Cause.pretty(cause);
+						const failure = Cause.failureOption(cause);
+						const detail = (() => {
+							if (failure._tag !== 'Some') return null;
+							const v = failure.value as {
+								_tag?: string;
+								message?: string;
+								cause?: unknown;
+								threadId?: string;
+							};
+							const tag = v._tag ?? 'unknown';
+							const msg = v.message ?? null;
+							const inner =
+								v.cause instanceof Error
+									? `${v.cause.name}: ${v.cause.message}\n${v.cause.stack ?? ''}`
+									: v.cause != null
+										? String(v.cause)
+										: null;
+							const tid = v.threadId ? ` (thread ${v.threadId})` : '';
+							return [tag + tid, msg, inner].filter(Boolean).join(' — ');
+						})();
+						const defects = Chunk.toReadonlyArray(Cause.defects(cause));
+						const defectStr = defects.length
+							? defects
+									.map((d) =>
+										d instanceof Error
+											? `${d.name}: ${d.message}\n${d.stack ?? ''}`
+											: JSON.stringify(d, null, 2),
+									)
+									.join('\n')
+							: null;
+						console.error(
+							`[PollScheduler] Manual thread sync failed for PR ${prId}:`,
+							[detail, defectStr, pretty].filter(Boolean).join('\n'),
+						);
 						return hub.broadcast({
 							type: 'threads:sync-error',
-							data: { prId, message },
+							data: {
+								prId,
+								message: detail ?? defectStr ?? pretty,
+							},
 						});
 					}),
 				),

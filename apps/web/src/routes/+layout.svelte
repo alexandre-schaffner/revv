@@ -9,6 +9,8 @@
 	import { startUpdater, stopUpdater } from '$lib/updater/service';
 	import { initTheme } from '$lib/stores/theme.svelte';
 	import { initShortcuts } from '$lib/stores/shortcuts.svelte';
+	import { setSidebarView } from '$lib/stores/sidebar.svelte';
+	import { loadRepoTreeForPr, getRepoTreeStatus } from '$lib/stores/review.svelte';
 	import { TooltipProvider } from '$lib/components/ui/tooltip';
 	import { Toaster } from '$lib/components/ui/sonner';
 	import CacheInspector from '$lib/components/dev/CacheInspector.svelte';
@@ -31,6 +33,52 @@
 	$effect(() => {
 		const match = page.url.pathname.match(/^\/review\/([^/]+)/);
 		prs.setSelectedPrId(match?.[1] ?? null);
+	});
+
+	// Drive sidebar view-state + repo-tree fetch off the URL-derived
+	// `selectedPrId`. Two effects so the deps are explicit:
+	//   1. When a PR is selected → load its repo tree (idempotent / cached
+	//      per (prId, headSha)). Reading the PR object's headSha makes that
+	//      reactive too, so a `prs:updated` event that brings in a new
+	//      headSha for the active PR retriggers the load.
+	//   2. When the URL leaves a PR route → reset the sidebar to the PR list
+	//      so a hard reload at `/` doesn't strand the user on an empty tree
+	//      view.
+	$effect(() => {
+		const id = prs.getSelectedPrId();
+		if (!id) return;
+		// Touch headSha so this effect re-runs when a new commit lands.
+		// Bare access for the dep — the value itself is read again inside
+		// loadRepoTreeForPr.
+		const pr = prs.getPullRequests().find((p) => p.id === id);
+		void pr?.headSha;
+		void loadRepoTreeForPr(id);
+	});
+
+	$effect(() => {
+		const id = prs.getSelectedPrId();
+		if (!id) {
+			setSidebarView('prs');
+		}
+	});
+
+	// When a previously-cloning repo finishes cloning (broadcast via
+	// `repos:clone-status` → `prs.updateRepoCloneStatus`), retry the tree
+	// load. Reads the live repo status off the store so this fires for any
+	// transition into `'ready'` on the currently-selected PR's repo.
+	$effect(() => {
+		const id = prs.getSelectedPrId();
+		if (!id) return;
+		const pr = prs.getPullRequests().find((p) => p.id === id);
+		if (!pr) return;
+		const repo = prs.getRepositories().find((r) => r.id === pr.repositoryId);
+		if (!repo) return;
+		// Only retry when the repo just became ready *and* we're still in the
+		// soft 'cloning' state. If the repo flips to 'ready' while we already
+		// have a tree, the cache check inside loadRepoTreeForPr no-ops.
+		if (repo.cloneStatus === 'ready' && getRepoTreeStatus() === 'cloning') {
+			void loadRepoTreeForPr(id);
+		}
 	});
 
 	$effect(() => {

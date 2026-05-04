@@ -64,6 +64,20 @@
       "when": 1777400000000,
       "tag": "0080_comment_threads_walkthrough_issue_id",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1777500000000,
+      "tag": "0090_user_settings_file_tree_scope",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1777600000000,
+      "tag": "0100_drop_user_settings",
+      "breakpoints": true
     }
   ]
 }

@@ -53,6 +53,15 @@ export type ContextWindow = '200k' | '1m';
 
 export type AiAgent = 'opencode' | 'claude';
 
+/**
+ * Scope of the sidebar's repo file tree on a PR review page.
+ * - `'changed'`: only files modified in the PR's diff (the original behavior)
+ * - `'all'`:     every file in the repo at the PR's head SHA, with diff
+ *                files visually highlighted (the default since the
+ *                tree-software integration)
+ */
+export type FileTreeScope = 'changed' | 'all';
+
 export interface UserSettings {
 	id: string;
 	aiProvider: string;
@@ -63,6 +72,7 @@ export interface UserSettings {
 	theme: string;
 	diffViewMode: string;
 	autoFetchInterval: number;
+	fileTreeScope: FileTreeScope;
 }
 
 // ── Review domain types ──────────────────────────────────────────────────────

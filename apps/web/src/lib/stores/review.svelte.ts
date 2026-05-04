@@ -47,7 +47,295 @@ export function clearReviewFiles(): void {
 	isLoadingFiles = false;
 	filesError = null;
 	activeFilePath = null;
+	clearRepoTree();
+	clearRepoFile();
 	clearSession();
+}
+
+// --- Unchanged-file content viewer ------------------------------------------
+//
+// When the user clicks a file in the sidebar repo tree that ISN'T part of the
+// PR's diff, we still want the main pane to show something useful: the file's
+// content at the PR's head SHA. The endpoint reads from the local clone via
+// `git cat-file`, so this is fast and rate-limit-free.
+//
+// Cache shape: a single (path → payload) record for the *currently viewed*
+// file. We don't try to keep a multi-file cache because (a) clicks are
+// infrequent and (b) each payload can be up to a few MB. Switching files
+// flushes the previous content.
+
+type RepoFileStatus =
+	| 'idle'
+	| 'loading'
+	| 'ready'
+	| 'binary'
+	| 'too-large'
+	| 'not-found'
+	| 'error';
+
+let repoFileStatus = $state<RepoFileStatus>('idle');
+let repoFilePath = $state<string | null>(null);
+let repoFileContent = $state<string>('');
+let repoFileSize = $state<number>(0);
+let repoFileError = $state<string | null>(null);
+
+export function getRepoFileStatus(): RepoFileStatus {
+	return repoFileStatus;
+}
+export function getRepoFilePath(): string | null {
+	return repoFilePath;
+}
+export function getRepoFileContent(): string {
+	return repoFileContent;
+}
+export function getRepoFileSize(): number {
+	return repoFileSize;
+}
+export function getRepoFileError(): string | null {
+	return repoFileError;
+}
+
+export function clearRepoFile(): void {
+	repoFileStatus = 'idle';
+	repoFilePath = null;
+	repoFileContent = '';
+	repoFileSize = 0;
+	repoFileError = null;
+}
+
+let repoFileLoadSeq = 0;
+
+/**
+ * Fetch the contents of a single file at the PR's head SHA. Skip-noop if
+ * the same path was just loaded; otherwise transitions through 'loading'
+ * to one of the terminal states.
+ */
+export async function loadRepoFile(prId: string, path: string): Promise<void> {
+	if (repoFilePath === path && repoFileStatus !== 'idle' && repoFileStatus !== 'error') {
+		return;
+	}
+	const seq = ++repoFileLoadSeq;
+	repoFileStatus = 'loading';
+	repoFilePath = path;
+	repoFileContent = '';
+	repoFileSize = 0;
+	repoFileError = null;
+
+	try {
+		const { data, error, status } = await api.api
+			.prs({ id: prId })
+			['repo-file'].get({ query: { path } });
+
+		if (seq !== repoFileLoadSeq) return;
+
+		if (error || !data) {
+			const body = (error?.value ?? null) as
+				| { status?: string; message?: string; size?: number }
+				| null;
+			if (body?.status === 'cloning' || status === 202) {
+				repoFileStatus = 'loading';
+				return;
+			}
+			if (body?.status === 'not-found' || status === 404) {
+				repoFileStatus = 'not-found';
+				return;
+			}
+			if (body?.status === 'too-large' || status === 413) {
+				repoFileStatus = 'too-large';
+				if (typeof body?.size === 'number') repoFileSize = body.size;
+				return;
+			}
+			repoFileStatus = 'error';
+			repoFileError = body?.message ?? 'Failed to load file';
+			return;
+		}
+
+		const payload = data as
+			| {
+					status: 'ready';
+					headSha: string;
+					path: string;
+					content: string;
+					isBinary: boolean;
+					size: number;
+			  }
+			| { status: 'cloning' }
+			| { status: 'not-found' }
+			| { status: 'too-large'; size: number }
+			| { status: 'error'; message: string };
+
+		if (payload.status === 'cloning') {
+			repoFileStatus = 'loading';
+			return;
+		}
+		if (payload.status === 'not-found') {
+			repoFileStatus = 'not-found';
+			return;
+		}
+		if (payload.status === 'too-large') {
+			repoFileStatus = 'too-large';
+			repoFileSize = payload.size;
+			return;
+		}
+		if (payload.status === 'error') {
+			repoFileStatus = 'error';
+			repoFileError = payload.message;
+			return;
+		}
+
+		// status === 'ready'
+		repoFileSize = payload.size;
+		if (payload.isBinary) {
+			repoFileStatus = 'binary';
+			repoFileContent = '';
+		} else {
+			repoFileStatus = 'ready';
+			repoFileContent = payload.content;
+		}
+	} catch (e) {
+		if (seq !== repoFileLoadSeq) return;
+		repoFileStatus = 'error';
+		repoFileError = e instanceof Error ? e.message : 'Failed to load file';
+	}
+}
+
+// --- Repo tree (full filesystem at PR head_sha) ------------------------------
+//
+// Sidebar's file-tree view shows every file in the repo at the selected PR's
+// head SHA, with PR-changed files decorated by `setGitStatus`. Source is the
+// long-lived local clone (`~/.revv/repos/{owner}/{name}`) — see
+// `apps/server/src/services/RepoClone.ts:listFilesAtSha`. The endpoint is
+// idempotent and immutable per (repo, head_sha), so a successful load doesn't
+// need to be refetched until the PR's head SHA changes.
+
+type RepoTreeStatus = 'idle' | 'loading' | 'ready' | 'cloning' | 'error';
+
+let repoTreePaths = $state<string[]>([]);
+let repoTreeStatus = $state<RepoTreeStatus>('idle');
+// The (prId, headSha) pair we last successfully loaded. Used as a cache key so
+// switching back to a PR we already fetched doesn't re-hit the network.
+let repoTreePrId = $state<string | null>(null);
+let repoTreeHeadSha = $state<string | null>(null);
+let repoTreeError = $state<string | null>(null);
+
+export function getRepoTreePaths(): string[] {
+	return repoTreePaths;
+}
+
+export function getRepoTreeStatus(): RepoTreeStatus {
+	return repoTreeStatus;
+}
+
+export function getRepoTreeHeadSha(): string | null {
+	return repoTreeHeadSha;
+}
+
+export function getRepoTreeError(): string | null {
+	return repoTreeError;
+}
+
+export function clearRepoTree(): void {
+	repoTreePaths = [];
+	repoTreeStatus = 'idle';
+	repoTreePrId = null;
+	repoTreeHeadSha = null;
+	repoTreeError = null;
+}
+
+// Coalesce concurrent requests to the same PR.
+let repoTreeLoadSeq = 0;
+
+/**
+ * Fetch the repo file tree for the given PR. No-op if the (prId, headSha)
+ * pair is already loaded. Status transitions:
+ *
+ *   idle/error → loading → ready | cloning | error
+ *
+ * `cloning` is a soft state — the UI shows a placeholder until the
+ * `repos:clone-status` WebSocket event flips the repo to `'ready'`, at
+ * which point `+layout.svelte` calls this again and we get a real tree.
+ */
+export async function loadRepoTreeForPr(prId: string): Promise<void> {
+	// Look up the PR's current head SHA from the live PR list. Bail if the
+	// PR isn't in the store yet — the caller will retry once `prs:updated`
+	// merges it in.
+	const pr = getPullRequests().find((p) => p.id === prId);
+	const headSha = pr?.headSha;
+	if (!headSha) {
+		// Reset to idle for the in-flight selection so the UI doesn't keep
+		// showing a stale tree from a previously-selected PR.
+		repoTreePaths = [];
+		repoTreeStatus = 'idle';
+		repoTreePrId = prId;
+		repoTreeHeadSha = null;
+		repoTreeError = null;
+		return;
+	}
+
+	// Cache hit — same PR + same SHA, already loaded.
+	if (
+		repoTreeStatus === 'ready' &&
+		repoTreePrId === prId &&
+		repoTreeHeadSha === headSha
+	) {
+		return;
+	}
+
+	const seq = ++repoTreeLoadSeq;
+	repoTreeStatus = 'loading';
+	repoTreeError = null;
+	// Hold onto the previous `repoTreePaths` while loading so the UI doesn't
+	// flash empty between PR switches; SidebarFilesView decides whether to
+	// show "Loading…" by checking status + paths.length.
+	repoTreePrId = prId;
+
+	try {
+		const { data, error, status } = await api.api.prs({ id: prId })['repo-tree'].get();
+
+		// Discard if a newer call started while we were waiting.
+		if (seq !== repoTreeLoadSeq) return;
+
+		if (error || !data) {
+			// 202 (cloning) lands here because Eden treats non-2xx as an
+			// error. Disambiguate via the response data.
+			const body = (error?.value ?? null) as { status?: string; message?: string } | null;
+			if (body?.status === 'cloning' || status === 202) {
+				repoTreePaths = [];
+				repoTreeStatus = 'cloning';
+				repoTreeHeadSha = null;
+				return;
+			}
+			repoTreeStatus = 'error';
+			repoTreeError = body?.message ?? 'Failed to load repo tree';
+			return;
+		}
+
+		// Type-narrow on the discriminator returned by the server.
+		const payload = data as
+			| { status: 'ready'; headSha: string; paths: string[] }
+			| { status: 'cloning' }
+			| { status: 'error'; message: string };
+
+		if (payload.status === 'cloning') {
+			repoTreePaths = [];
+			repoTreeStatus = 'cloning';
+			repoTreeHeadSha = null;
+			return;
+		}
+		if (payload.status === 'error') {
+			repoTreeStatus = 'error';
+			repoTreeError = payload.message;
+			return;
+		}
+
+		repoTreePaths = payload.paths;
+		repoTreeHeadSha = payload.headSha;
+		repoTreeStatus = 'ready';
+	} catch (e) {
+		if (seq !== repoTreeLoadSeq) return;
+		repoTreeStatus = 'error';
+		repoTreeError = e instanceof Error ? e.message : 'Failed to load repo tree';
+	}
 }
 
 // --- New-commit-available detection ------------------------------------------

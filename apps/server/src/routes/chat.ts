@@ -225,29 +225,18 @@ export const chatRoute = new Elysia()
 						);
 						const agent = resolveAgent(settings);
 
-						// GC any stale row at a previous head SHA — its worktree
-						// + branch are no longer relevant.
-						const stale = yield* chatSessions.findStaleSibling(
-							pr.id,
-							agent,
-							headSha,
-						);
-						if (stale && repo.clonePath) {
-							yield* chatSessions.clear(pr.id, agent, stale.prHeadSha);
-							yield* repoClone.releaseChatWorktree({
-								clonePath: repo.clonePath,
-								worktreePath: stale.worktreePath,
-								branchName: stale.branchName,
-							});
-						}
-
-						// Acquire (or reuse) the chat worktree on its working branch.
-						const { worktreePath, branchName } = yield* repoClone.acquireChatWorktree({
+						// Acquire (or refresh) the per-PR worktree. Shared across
+						// walkthrough generation and every chat session for this
+						// PR. On SHA change, the dir is fast-forwarded in place
+						// rather than torn down and recreated. Any chat-agent
+						// commits that haven't been pushed yet will be lost on
+						// the `git reset --hard` — agents in this codebase push
+						// immediately after each commit, so this is acceptable.
+						const { worktreePath, branchName } = yield* repoClone.acquirePrWorktree({
 							repoId: repo.id,
-							prId: pr.id,
+							prNumber: pr.externalId,
 							prHeadSha: headSha,
 							githubToken: token,
-							prNumber: pr.externalId,
 						});
 
 						const existing = yield* chatSessions.find(pr.id, agent, headSha);
@@ -258,23 +247,31 @@ export const chatRoute = new Elysia()
 							? null
 							: fetchWalkthroughContext(db, pr.id);
 
-						const onSessionId = (sid: string) => {
-							void AppRuntime.runPromise(
-								chatSessions.upsert({
-									prId: pr.id,
-									agent,
-									prHeadSha: headSha,
-									sessionId: sid,
-									worktreePath,
-									branchName,
-								}),
-							).catch((err) => {
+						// Synchronous-by-await: drivers must await this before
+						// streaming any user-visible content (opencode) or before
+						// closing their stream (claude). That serializes the
+						// SQLite write so a follow-up `chatSessions.find()` for
+						// the same (prId, agent, headSha) reliably sees the row,
+						// preventing the "fresh session on resend" race.
+						const onSessionId = async (sid: string): Promise<void> => {
+							try {
+								await AppRuntime.runPromise(
+									chatSessions.upsert({
+										prId: pr.id,
+										agent,
+										prHeadSha: headSha,
+										sessionId: sid,
+										worktreePath,
+										branchName,
+									}),
+								);
+							} catch (err) {
 								logError(
 									'chat',
 									'chatSessions.upsert failed:',
 									err instanceof Error ? err.message : String(err),
 								);
-							});
+							}
 						};
 
 						return yield* ai.chat({
@@ -321,11 +318,10 @@ export const chatRoute = new Elysia()
 					Effect.gen(function* () {
 						const prCtx = yield* PrContextService;
 						const chatSessions = yield* ChatSessionService;
-						const repoClone = yield* RepoCloneService;
 						const settingsService = yield* SettingsService;
 						const { db } = yield* DbService;
 
-						const { pr, repo } = yield* prCtx.resolveBasic(
+						const { pr } = yield* prCtx.resolveBasic(
 							ctx.params.prId,
 							ctx.session.user.id,
 						);
@@ -337,21 +333,11 @@ export const chatRoute = new Elysia()
 						);
 						const agent = resolveAgent(settings);
 
-						// Drop every chat-session row for (pr, agent) and release
-						// each worktree+branch. The user explicitly asked for a
-						// fresh start so we tear down both the active row and any
-						// stale-SHA row that hadn't been GC'd yet.
-						const cleared = yield* chatSessions.clearAllForPr(pr.id, agent);
-						if (repo.clonePath) {
-							const cp = repo.clonePath;
-							for (const handle of cleared) {
-								yield* repoClone.releaseChatWorktree({
-									clonePath: cp,
-									worktreePath: handle.worktreePath,
-									branchName: handle.branchName,
-								});
-							}
-						}
+						// Drop every chat-session row for (pr, agent). The
+						// per-PR worktree itself stays put — it's shared with
+						// walkthrough generation and re-used across chat
+						// sessions, refreshed in place on the next acquire.
+						yield* chatSessions.clearAllForPr(pr.id, agent);
 					}),
 				);
 				return new Response(null, { status: 204 });

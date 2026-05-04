@@ -22,6 +22,18 @@ let addRepoDialogOpen = $state(false);
 let collapseAllSignal = $state(0);
 let sidebarWidth = $state(loadPersistedWidth());
 
+// Two-view drawer: 'prs' (the PR list) ⇄ 'files' (full repo tree at the
+// selected PR's head SHA). Transient — not persisted across reloads. Resets to
+// 'prs' when the URL leaves a /review/[prId] route (see +layout.svelte).
+type SidebarView = 'prs' | 'files';
+let sidebarView = $state<SidebarView>('prs');
+
+// Files-mode search query. Drives `tree.setSearch(...)` on the Pierre file
+// tree via a prop on <PierreFileTree>. Transient — cleared whenever we leave
+// files view (see setSidebarView below) and on PR / scope switches inside
+// SidebarFilesView. Empty string means "no filter".
+let fileSearchQuery = $state<string>('');
+
 $effect.root(() => {
 	$effect(() => {
 		localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth));
@@ -96,4 +108,32 @@ export function getCollapseAllSignal(): number {
 
 export function collapseAllRepoGroups(): void {
 	collapseAllSignal++;
+}
+
+// ── Sidebar view (PR list ⇄ file tree) ──────────────────
+
+export function getSidebarView(): SidebarView {
+	return sidebarView;
+}
+
+export function setSidebarView(v: SidebarView): void {
+	sidebarView = v;
+	// Single chokepoint for clearing the files-mode search query when we
+	// leave files view. Both the user-driven swipe-back paths
+	// (Sidebar.handleKeydown's Esc/h, the breadcrumb back button) and the
+	// route-driven auto-reset in +layout.svelte funnel through this setter,
+	// so dropping the query here covers every exit.
+	if (v === 'prs') {
+		fileSearchQuery = '';
+	}
+}
+
+// ── Files-mode search ───────────────────────────────────
+
+export function getFileSearchQuery(): string {
+	return fileSearchQuery;
+}
+
+export function setFileSearchQuery(v: string): void {
+	fileSearchQuery = v;
 }

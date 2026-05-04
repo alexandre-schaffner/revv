@@ -1,6 +1,7 @@
 export { repositories } from './repositories';
 export { pullRequests } from './pull-requests';
-export { userSettings } from './user-settings';
+// `user_settings` table was dropped in migration 0100 — preferences now
+// live in `~/.revv/settings.json` (see apps/server/src/services/Settings.ts).
 export { user, session, account, verification } from './auth';
 export { fileContentCache } from './file-content-cache';
 export { reviewSessions } from './review-sessions';

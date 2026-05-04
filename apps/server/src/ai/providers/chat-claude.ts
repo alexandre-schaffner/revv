@@ -25,7 +25,16 @@ export interface StreamChatViaClaudeOptions {
 	readonly systemPrompt: string;
 	readonly resumeSessionId?: string | undefined;
 	readonly cwd: string;
-	readonly onSessionId?: ((id: string) => void) | undefined;
+	/**
+	 * Awaited by the driver as soon as the SDK exposes a session id (which
+	 * happens after the first iteration of the async generator). The route's
+	 * SQLite upsert of `(prId, agent, headSha) → sessionId` therefore lands
+	 * before the stream closes, so a follow-up turn's `find()` reliably
+	 * sees the row and resumes instead of creating a fresh session.
+	 */
+	readonly onSessionId?:
+		| ((id: string) => Promise<void> | void)
+		| undefined;
 	readonly abortController?: AbortController | undefined;
 	readonly model?: string | undefined;
 	/** Bound to the chat MCP server so its `get_review_context` tool can scope queries to the right PR. */
@@ -110,22 +119,29 @@ export function streamChatViaClaude(
 				});
 
 				let sessionIdReported = false;
-				const tryReportSessionId = () => {
+				const tryReportSessionId = async (): Promise<void> => {
 					if (sessionIdReported || !opts.onSessionId) return;
+					let sid: string | undefined;
 					try {
-						const sid = (q as { sessionId?: string }).sessionId;
-						if (typeof sid === "string" && sid.length > 0) {
-							opts.onSessionId(sid);
-							sessionIdReported = true;
-						}
+						sid = (q as { sessionId?: string }).sessionId;
 					} catch {
 						// `q.sessionId` getter throws before the session is
 						// initialized — keep trying on later iterations.
+						return;
+					}
+					if (typeof sid === "string" && sid.length > 0) {
+						// Mark first so concurrent calls (the post-loop "last
+						// chance") don't fire the callback twice.
+						sessionIdReported = true;
+						// Awaited: SQLite upsert in the route handler must
+						// commit before the stream closes so a follow-up turn
+						// can resume this session.
+						await opts.onSessionId(sid);
 					}
 				};
 
 				for await (const message of q) {
-					tryReportSessionId();
+					await tryReportSessionId();
 
 					if (message.type === "assistant") {
 						const content = (
@@ -171,7 +187,7 @@ export function streamChatViaClaude(
 
 				// Last chance to grab the session id — some early aborts never
 				// emit an assistant message.
-				tryReportSessionId();
+				await tryReportSessionId();
 				controller.close();
 			} catch (err) {
 				controller.error(new AiGenerationError({ cause: err }));

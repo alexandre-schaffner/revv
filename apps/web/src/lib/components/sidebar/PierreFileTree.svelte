@@ -242,32 +242,51 @@
 						 * here, the virtualized scroll container that owns
 						 * \`overflow-x: auto\` above — so \`right: 0\` glues the
 						 * decoration cell to the right inset of the sidebar.
-						 * \`margin-left: auto\` right-aligns it within the row so
-						 * short paths still leave the badge flush right rather
-						 * than butting up against the file name.
+						 *
+						 * The library's base layer gives the decoration cell
+						 * \`flex: 1 1 0\` + \`min-width: 0\`, which collapses it to
+						 * zero width before sticky offsets resolve and breaks
+						 * the right-alignment. Override to \`flex: 0 0 auto\`
+						 * with \`width: max-content\` so the cell holds its
+						 * intrinsic size, then \`margin-inline-start: auto\`
+						 * right-aligns it within the row.
 						 *
 						 * The opaque background-color is required: without it
 						 * file names paint *through* the sticky cell as they
 						 * scroll, producing an unreadable smear. Using
 						 * \`--trees-bg-override\` matches the default row
-						 * background; the selected-row override below keeps the
-						 * badge seamless when the row is active. The leading
-						 * \`padding-inline-start\` creates breathing room
-						 * between the scrolling text and the pinned badge. */
+						 * background; the selected and hover overrides below
+						 * keep the badge seamless when the row is active or
+						 * pointed at. The leading \`padding-inline-start\`
+						 * creates breathing room between the scrolling text
+						 * and the pinned badge. */
 						button[data-type='item'] > [data-item-section='decoration'] {
 							position: sticky;
 							right: 0;
+							flex: 0 0 auto;
+							width: max-content;
+							min-width: 0;
 							margin-inline-start: auto;
 							padding-inline-start: 8px;
 							background-color: var(--trees-bg-override);
 							z-index: 1;
 						}
-						button[data-type='item'][data-selected='true'] > [data-item-section='decoration'],
-						button[data-type='item'][aria-selected='true'] > [data-item-section='decoration'] {
-							background-color: var(--trees-selected-bg-override);
-						}
+						/* Hover bg first, selected bg after — source order matters
+						 * because both selectors land at the same specificity.
+						 * Putting selected last makes the badge follow the row
+						 * background when the active row is also being hovered,
+						 * matching the library's own row-bg precedence. */
 						button[data-type='item']:hover > [data-item-section='decoration'] {
 							background-color: var(--trees-bg-muted-override);
+						}
+						/* The library writes both \`data-item-selected="true"\` and
+						 * \`aria-selected="true"\` on the row for non-sticky rows,
+						 * but sticky rows only get \`data-item-selected\` — so we
+						 * key off that one (the previous \`data-selected\` selector
+						 * matched nothing and left sticky-active rows showing
+						 * the default badge bg over a tinted row). */
+						button[data-type='item'][data-item-selected='true'] > [data-item-section='decoration'] {
+							background-color: var(--trees-selected-bg-override);
 						}
 					`,
 					// ── Right-side line-count badge ────────────────────────────

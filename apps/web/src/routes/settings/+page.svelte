@@ -9,6 +9,8 @@
         ExternalLink,
         RefreshCw,
         Download,
+        FileText,
+        FolderTree,
     } from "@lucide/svelte";
     import { getCommitHash } from "$lib/updater/client";
     import { runCheck as runUpdaterCheck } from "$lib/updater/service";
@@ -43,7 +45,24 @@
     import { toast } from "svelte-sonner";
     import * as Select from "$lib/components/ui/select";
 
-    import type { AiAgent, ContextWindow, ThinkingEffort } from "@revv/shared";
+    import type {
+        AiAgent,
+        ContextWindow,
+        FileTreeScope,
+        ThinkingEffort,
+    } from "@revv/shared";
+
+    // Two-option pill for the sidebar repo-tree scope. `'all'` shows every
+    // file in the repo at the PR's head SHA; `'changed'` falls back to the
+    // pre-tree-software behavior of listing only PR-modified files.
+    const fileTreeScopeOptions: {
+        value: FileTreeScope;
+        label: string;
+        icon: typeof FileText;
+    }[] = [
+        { value: "all", label: "Whole repo", icon: FolderTree },
+        { value: "changed", label: "Changed only", icon: FileText },
+    ];
 
     const CONTEXT_WINDOW_OPTIONS: { label: string; value: ContextWindow }[] = [
         { label: "200K", value: "200k" },
@@ -647,6 +666,36 @@
                         {/each}
                     </Select.Content>
                 </Select.Root>
+            </div>
+
+            <!-- Divider -->
+            <div class="border-t border-border-subtle"></div>
+
+            <!-- Sidebar file-tree scope -->
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-sm text-text-primary">Sidebar file tree</p>
+                    <p class="text-xs text-text-muted">
+                        Show every file in the repo at the PR's head SHA, or
+                        only files modified by the PR.
+                    </p>
+                </div>
+                <div
+                    class="flex gap-1 rounded-lg border border-border bg-bg-elevated p-1"
+                >
+                    {#each fileTreeScopeOptions as opt (opt.value)}
+                        <button
+                            class="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors
+                                {(getSettings()?.fileTreeScope ?? 'all') === opt.value
+                                ? 'bg-bg-tertiary text-text-primary shadow-sm'
+                                : 'text-text-muted hover:text-text-secondary'}"
+                            onclick={() => updateSettings({ fileTreeScope: opt.value })}
+                        >
+                            <opt.icon size={14} />
+                            {opt.label}
+                        </button>
+                    {/each}
+                </div>
             </div>
         </div>
     </section>

@@ -13,30 +13,6 @@ export interface ReviewFile {
 	isBinary?: boolean;
 }
 
-// ── File tree entry (lightweight, no patch payload) ─────────────────────────
-
-/** Shape consumed by DiffFileTree — metadata only, no file content. */
-export interface FileTreeEntry {
-	path: string;
-	oldPath?: string;
-	additions: number;
-	deletions: number;
-	isNew?: boolean;
-	isDeleted?: boolean;
-}
-
-/** Map ReviewFile[] → FileTreeEntry[] (strips content, respects exactOptionalPropertyTypes). */
-export function toFileTreeEntries(files: ReviewFile[]): FileTreeEntry[] {
-	return files.map((f) => ({
-		path: f.path,
-		...(f.oldPath ? { oldPath: f.oldPath } : {}),
-		additions: f.additions,
-		deletions: f.deletions,
-		...(f.isNew ? { isNew: f.isNew } : {}),
-		...(f.isDeleted ? { isDeleted: f.isDeleted } : {}),
-	}));
-}
-
 // ── Comment / Thread types (re-exported from @revv/shared) ────────────────────
 
 export type {

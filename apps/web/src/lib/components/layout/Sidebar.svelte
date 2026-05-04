@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { PanelLeftClose, PanelLeftOpen, Settings, GitPullRequestArrow, GitPullRequest } from '@lucide/svelte';
+	import { PanelLeftClose, PanelLeftOpen, Settings, GitPullRequestArrow, GitPullRequest, ChevronLeft } from '@lucide/svelte';
 	import {
 		getRepositories,
 		getGroupedByRepo,
@@ -9,16 +9,22 @@
 		getNeedsYourReview,
 		getNeedsYourReviewByRepo,
 		getSelectedPrId,
+		getSelectedPr,
 	} from '$lib/stores/prs.svelte';	import { requestSync, requestFullSync } from '$lib/stores/ws.svelte';
 	import { getPrListSyncing } from '$lib/stores/sync.svelte';
 	import { handleKey as handleNavKey, clearFocus, setFocusedId } from '$lib/stores/sidebar-nav.svelte';
 	import { getPaletteOpen } from '$lib/stores/shortcuts.svelte';
 	import { getActivePanel, enterScrollMode } from '$lib/stores/focus-mode.svelte';
-	import { getAddRepoDialogOpen, setAddRepoDialogOpen } from '$lib/stores/sidebar.svelte';
+	import {
+		getAddRepoDialogOpen,
+		setAddRepoDialogOpen,
+		getSidebarView,
+		setSidebarView,
+	} from '$lib/stores/sidebar.svelte';
 	import SearchFilter from '$lib/components/sidebar/SearchFilter.svelte';
 	import RepoGroup from '$lib/components/sidebar/RepoGroup.svelte';
 	import AddRepoDialog from '$lib/components/sidebar/AddRepoDialog.svelte';
-	import PrItem from '$lib/components/sidebar/PrItem.svelte';
+	import SidebarFilesView from '$lib/components/sidebar/SidebarFilesView.svelte';
 
 	interface Props {
 		collapsed?: boolean;
@@ -29,6 +35,15 @@
 
 	let addRepoOpen = $derived(getAddRepoDialogOpen());
 	const selectedPrId = $derived(getSelectedPrId());
+	const view = $derived(getSidebarView());
+	// Selected PR + its repo, for the file-tree-mode breadcrumb in the
+	// header. Both are nullable: PR list mode renders `null` for both
+	// (header shows "Pull Requests" + refresh) and even in files view the
+	// stores can briefly disagree during a swap.
+	const selectedPr = $derived(getSelectedPr());
+	const selectedRepo = $derived(
+		selectedPr ? getRepositories().find((r) => r.id === selectedPr.repositoryId) ?? null : null,
+	);
 	// `isLoading` covers direct HTTP syncs (fetchPrs/syncPrs); `getPrListSyncing()`
 	// covers WebSocket-driven PR-list syncs (prs:sync-started → prs:sync-complete)
 	// which is what handleRefresh below actually triggers. Combine both so the
@@ -51,6 +66,51 @@
 		}
 	}
 
+	// When a row inside @pierre/trees' shadow root has focus,
+	// document.activeElement returns the shadow host — not the button.
+	// Traverse shadow roots until we reach the real focused element.
+	function getDeepActiveElement(): HTMLElement | null {
+		let el: Element | null = document.activeElement;
+		while (el?.shadowRoot?.activeElement) {
+			el = el.shadowRoot.activeElement;
+		}
+		return el instanceof HTMLElement ? el : null;
+	}
+
+	// Tree rows live inside a shadow root on a child of .pierre-tree-host.
+	// document.querySelector cannot pierce shadow DOM, so walk the host's
+	// children and query each child's shadow root directly.
+	function findFirstFileTreeRow(): HTMLElement | null {
+		const treeHost = document.querySelector<HTMLElement>('.view-pane--files .pierre-tree-host');
+		if (!treeHost) return null;
+		for (const child of Array.from(treeHost.children)) {
+			const row = (child as HTMLElement).shadowRoot?.querySelector<HTMLElement>('[data-type="item"]');
+			if (row) return row;
+		}
+		return null;
+	}
+
+	// Switch to the PR list and restore the keyboard cursor to the selected PR.
+	// Both panes are always mounted (CSS translate, not unmount), so the PR nav
+	// element is queryable even while off-screen. PR nav IDs are
+	// `${prefix}:${pr.id}` where prefix is 'pr' or 'review' — query by suffix
+	// to avoid hard-coding the section prefix.
+	function returnToPrList(): void {
+		setSidebarView('prs');
+		const prId = getSelectedPrId();
+		if (prId) {
+			const prNavEl = document.querySelector<HTMLElement>(
+				`[data-sidebar-nav$=":${prId}"]`
+			);
+			const navId = prNavEl?.getAttribute('data-sidebar-nav');
+			if (navId) {
+				setFocusedId(navId);
+				return;
+			}
+		}
+		clearFocus();
+	}
+
 	function handleKeydown(e: KeyboardEvent) {
 		// Don't handle when sidebar is collapsed, palette is open, or modifier keys held
 		if (collapsed) return;
@@ -61,19 +121,126 @@
 		// Only process sidebar nav keys when the sidebar panel is active
 		if (getActivePanel() !== 'sidebar') return;
 
+		// '/' focuses the search input (vim search convention). Handled
+		// before the files-view branch below so it works in both views —
+		// PR-list mode focuses "Search PRs..." and files mode focuses
+		// "Search files...". Both inputs live under `.sidebar input`.
+		if (e.key === '/') {
+			e.preventDefault();
+			const input = document.querySelector<HTMLInputElement>('.sidebar input');
+			input?.focus();
+			return;
+		}
+
+		// In files view we delegate movement to @pierre/trees' built-in
+		// keyboard handler, which lives on the row buttons inside the tree's
+		// shadow root. We:
+		//   - Escape always swipes back to the PR list
+		//   - h collapses an open directory (ArrowLeft), navigates to parent
+		//     for a nested item (ArrowLeft), and only swipes back to the PR
+		//     list when focus is on a root-level item that has nowhere to go
+		//   - l on a directory: ArrowRight (expand or step into first child)
+		//     l on a file: click() to select and open in the main pane
+		//       (ArrowRight on a leaf just calls focusNextItem in the library,
+		//        never triggering onSelectionChange)
+		//   - j / k: ArrowDown / ArrowUp dispatched on the focused row button
+		if (view === 'files') {
+			if (e.key === 'Escape') {
+				e.preventDefault();
+				returnToPrList();
+				return;
+			}
+
+			if (e.key === 'h') {
+				e.preventDefault();
+				const target = getDeepActiveElement();
+				// Use data-item-parent-path (not a slash-check on data-item-path)
+				// to detect root-level items. Flattened directory rows can have
+				// paths like "src/components" even when they sit at the tree root,
+				// making a "/" test unreliable. data-item-parent-path is absent
+				// (null) on root-level items and set to the parent path otherwise.
+				const isOpenDir = target?.getAttribute('aria-expanded') === 'true';
+				const hasParent = target?.getAttribute('data-item-parent-path') != null;
+				if (isOpenDir || hasParent) {
+					// Can still navigate in the tree: collapse open dir or go up.
+					const rowTarget = target?.closest<HTMLElement>('[data-type="item"]')
+						?? findFirstFileTreeRow();
+					if (rowTarget) {
+						if (rowTarget !== target) rowTarget.focus();
+						rowTarget.dispatchEvent(
+							new KeyboardEvent('keydown', {
+								key: 'ArrowLeft',
+								code: 'ArrowLeft',
+								bubbles: true,
+								cancelable: true,
+							})
+						);
+					}
+					return;
+				}
+				// Root-level closed item (or nothing focused) — go back to PRs.
+				returnToPrList();
+				return;
+			}
+
+			if (e.key === 'l') {
+				e.preventDefault();
+				const target = getDeepActiveElement();
+				const rowTarget = target?.closest<HTMLElement>('[data-type="item"]')
+					?? findFirstFileTreeRow();
+				if (!rowTarget) return;
+				if (rowTarget !== target) rowTarget.focus();
+				if (rowTarget.getAttribute('data-item-type') === 'file') {
+					// File: click to select and open in the main pane.
+					rowTarget.click();
+				} else {
+					// Directory: ArrowRight expands a closed dir or steps into
+					// the first child of an open dir.
+					rowTarget.dispatchEvent(
+						new KeyboardEvent('keydown', {
+							key: 'ArrowRight',
+							code: 'ArrowRight',
+							bubbles: true,
+							cancelable: true,
+						})
+					);
+				}
+				return;
+			}
+
+			const arrowKey =
+				e.key === 'j' ? 'ArrowDown' :
+				e.key === 'k' ? 'ArrowUp' :
+				null;
+			if (arrowKey === null) return;
+
+			e.preventDefault();
+			// document.activeElement returns the shadow host when focus is
+			// inside the tree's shadow root — traverse into the shadow chain
+			// to get the actual focused row button.
+			const target = getDeepActiveElement();
+			// If the focused element is already a tree row use it; otherwise
+			// fall back to the first visible row inside the shadow DOM.
+			const rowTarget = target?.closest<HTMLElement>('[data-type="item"]')
+				?? findFirstFileTreeRow();
+			if (!rowTarget) return;
+			if (rowTarget !== target) rowTarget.focus();
+			rowTarget.dispatchEvent(
+				new KeyboardEvent('keydown', {
+					key: arrowKey,
+					code: arrowKey,
+					bubbles: true,
+					cancelable: true,
+				})
+			);
+			return;
+		}
+
 		// 'v' enters diff scroll mode (viewport scrolling with j/k/d/u/G/gg)
 		// Note: Space toggle is handled centrally in ReviewLayout to avoid double-fire.
 		if (e.key === 'v') {
 			e.preventDefault();
 			enterScrollMode();
-			return;
-		}
-
-		// '/' focuses the search input (vim search convention)
-		if (e.key === '/') {
-			e.preventDefault();
-			const input = document.querySelector<HTMLInputElement>('.sidebar input');
-			input?.focus();
 			return;
 		}
 
@@ -107,86 +274,131 @@
 			{/if}
 		</button>
 
-		<!-- Content clipped when collapsed -->
+		<!-- Content clipped when collapsed.
+			 In files view we replace "Pull Requests" + refresh with a
+			 breadcrumb back-button; the refresh button is dropped in
+			 files mode (sync is reachable from PR-list one swipe back,
+			 and the breadcrumb fully occupies the row anyway). -->
 		{#if !collapsed}
-			<span class="header-label">Pull Requests</span>
-			<button
-				class="icon-btn"
-				onclick={handleRefresh}
-				disabled={isSyncing}
-				title="Sync PRs"
-				aria-label="Sync pull requests"
-			>
-				<svg
-					class="size-[14px] {isSyncing ? 'animate-spin' : ''}"
-					xmlns="http://www.w3.org/2000/svg"
-					viewBox="0 0 24 24"
-					fill="none"
-					stroke="currentColor"
-					stroke-width="2"
+			{#if view === 'files'}
+				<button
+					class="files-header"
+					onclick={() => setSidebarView('prs')}
+					title="Back to PR list (Esc)"
+					aria-label="Back to PR list"
 				>
-					<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
-					<path d="M21 3v5h-5" />
-					<path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
-					<path d="M8 16H3v5" />
-				</svg>
-			</button>
+					<ChevronLeft size={14} class="back-chevron" />
+					{#if selectedPr && selectedRepo}
+						<span class="crumb-repo" title={selectedRepo.fullName}>{selectedRepo.fullName}</span>
+						<span class="crumb-sep">·</span>
+						<span class="crumb-num">#{selectedPr.externalId}</span>
+						<span class="crumb-title" title={selectedPr.title}>{selectedPr.title}</span>
+					{:else}
+						<span class="crumb-title">Pull request</span>
+					{/if}
+				</button>
+			{:else}
+				<span class="header-label">Pull Requests</span>
+				<button
+					class="icon-btn"
+					onclick={handleRefresh}
+					disabled={isSyncing}
+					title="Sync PRs"
+					aria-label="Sync pull requests"
+				>
+					<svg
+						class="size-[14px] {isSyncing ? 'animate-spin' : ''}"
+						xmlns="http://www.w3.org/2000/svg"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2"
+					>
+						<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+						<path d="M21 3v5h-5" />
+						<path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+						<path d="M8 16H3v5" />
+					</svg>
+				</button>
+			{/if}
 		{/if}
 	</div>
 
 	<!--
-		Kept mounted (with display: contents) so RepoGroup / PrItem / DiffFileTree
-		preserve their expand state across sidebar collapse/expand. When collapsed,
-		the wrapper switches to display: none which hides without unmounting.
+		Two-view drawer holding the PR list and the repo file-tree. Each pane is
+		absolutely positioned so the body can host both side-by-side without
+		fighting flex sizing. Swipe is driven by the parent's `--files` class:
+		PRs translate(0) → translate(-100%) and Files translate(100%) →
+		translate(0). Both panes stay mounted so PR-list state (scroll position,
+		expanded repo groups, focus) persists across swipes.
 	-->
-	<div class="sidebar-body" class:sidebar-body--hidden={collapsed} aria-hidden={collapsed}>
-		<SearchFilter onAddRepo={() => setAddRepoDialogOpen(true)} />
+	<div
+		class="sidebar-body"
+		class:sidebar-body--hidden={collapsed}
+		class:sidebar-body--files={view === 'files'}
+		aria-hidden={collapsed}
+	>
+		<div
+			class="view-pane view-pane--prs"
+			aria-hidden={view === 'files'}
+		>
+				<SearchFilter onAddRepo={() => setAddRepoDialogOpen(true)} />
 
-		<div class="pr-list">
-			{#if getNeedsYourReview().length > 0}
-				<div class="needs-review-section">
-					<div class="section-header">
-						<GitPullRequestArrow size={11} />
-						<span>Needs Your Review</span>
-						<span class="section-count">{getNeedsYourReview().length}</span>
-					</div>
-					<div class="section-items">
-						{#each getRepositories().filter(r => (getNeedsYourReviewByRepo().get(r.id) ?? []).length > 0) as repo (repo.id)}
-							{@const prs = getNeedsYourReviewByRepo().get(repo.id) ?? []}
-							<RepoGroup repository={repo} {prs} navPrefix="review" />
+				<div class="pr-list">
+					{#if getNeedsYourReview().length > 0}
+						<div class="needs-review-section">
+							<div class="section-header">
+								<GitPullRequestArrow size={11} />
+								<span>Needs Your Review</span>
+								<span class="section-count">{getNeedsYourReview().length}</span>
+							</div>
+							<div class="section-items">
+								{#each getRepositories().filter(r => (getNeedsYourReviewByRepo().get(r.id) ?? []).length > 0) as repo (repo.id)}
+									{@const prs = getNeedsYourReviewByRepo().get(repo.id) ?? []}
+									<RepoGroup repository={repo} {prs} navPrefix="review" />
+								{/each}
+							</div>
+						</div>
+					{/if}
+					{#if getRepositories().length === 0}
+						<div class="empty-state">
+							<svg class="empty-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+								<path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/>
+								<path d="M9 18c-4.51 2-5-2-7-2"/>
+							</svg>
+							<p class="empty-text">No repositories added</p>
+							<button class="add-link" onclick={() => setAddRepoDialogOpen(true)}>
+								Add a repository
+							</button>
+						</div>
+					{:else}
+						{@const allOpenPrsCount = getRepositories().reduce((sum, repo) => {
+							const reviewIds = new Set((getNeedsYourReviewByRepo().get(repo.id) ?? []).map(p => p.id));
+							return sum + (getGroupedByRepo().get(repo.id) ?? []).filter(p => !reviewIds.has(p.id)).length;
+						}, 0)}
+						<div class="section-header">
+							<GitPullRequest size={11} />
+							<span>All Open PRs</span>
+							<span class="section-count">{allOpenPrsCount}</span>
+						</div>
+						{#each getRepositories() as repo (repo.id)}
+							{@const reviewIds = new Set((getNeedsYourReviewByRepo().get(repo.id) ?? []).map(p => p.id))}
+							{@const prs = (getGroupedByRepo().get(repo.id) ?? []).filter(p => !reviewIds.has(p.id))}
+							{#if prs.length > 0}
+								<RepoGroup repository={repo} {prs} />
+							{/if}
 						{/each}
-					</div>
+					{/if}
 				</div>
+		</div>
+
+		<div
+			class="view-pane view-pane--files"
+			aria-hidden={view !== 'files'}
+		>
+			{#if selectedPrId}
+				<SidebarFilesView />
 			{/if}
-			{#if getRepositories().length === 0}
-				<div class="empty-state">
-					<svg class="empty-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-						<path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/>
-						<path d="M9 18c-4.51 2-5-2-7-2"/>
-					</svg>
-					<p class="empty-text">No repositories added</p>
-					<button class="add-link" onclick={() => setAddRepoDialogOpen(true)}>
-						Add a repository
-					</button>
-				</div>
-		{:else}
-			{@const allOpenPrsCount = getRepositories().reduce((sum, repo) => {
-				const reviewIds = new Set((getNeedsYourReviewByRepo().get(repo.id) ?? []).map(p => p.id));
-				return sum + (getGroupedByRepo().get(repo.id) ?? []).filter(p => !reviewIds.has(p.id)).length;
-			}, 0)}
-			<div class="section-header">
-				<GitPullRequest size={11} />
-				<span>All Open PRs</span>
-				<span class="section-count">{allOpenPrsCount}</span>
-			</div>
-			{#each getRepositories() as repo (repo.id)}
-				{@const reviewIds = new Set((getNeedsYourReviewByRepo().get(repo.id) ?? []).map(p => p.id))}
-				{@const prs = (getGroupedByRepo().get(repo.id) ?? []).filter(p => !reviewIds.has(p.id))}
-				{#if prs.length > 0}
-					<RepoGroup repository={repo} {prs} />
-				{/if}
-			{/each}
-		{/if}
 		</div>
 	</div>
 
@@ -255,14 +467,121 @@
 		overflow: hidden;
 	}
 
-	/* Body wrapper — display:contents keeps children as direct flex-children of .sidebar
-		 (so .pr-list still flex:1), while display:none when collapsed hides without unmounting. */
+	/* Files-view breadcrumb back-button. Replaces "Pull Requests" + refresh
+		 in the top header when the sidebar is in 'files' view. Stretches the
+		 full content row (40px high, gap-respecting padding) so clicking
+		 anywhere on the row swipes back. Scoped styles must live here, with
+		 the markup. */
+	.files-header {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		flex: 1;
+		min-width: 0;
+		height: 100%;
+		padding: 0 4px;
+		border: none;
+		border-radius: 5px;
+		background: transparent;
+		color: var(--color-text-secondary);
+		cursor: pointer;
+		text-align: left;
+		font-size: 11px;
+		transition: background-color var(--duration-snap);
+	}
+
+	.files-header:hover {
+		background: var(--color-bg-elevated);
+	}
+
+	.files-header :global(.back-chevron) {
+		flex-shrink: 0;
+		color: var(--color-text-muted);
+	}
+
+	.crumb-repo {
+		flex-shrink: 0;
+		max-width: 40%;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		color: var(--color-text-muted);
+	}
+
+	.crumb-sep {
+		flex-shrink: 0;
+		color: var(--color-text-muted);
+	}
+
+	.crumb-num {
+		flex-shrink: 0;
+		color: var(--color-text-muted);
+	}
+
+	.crumb-title {
+		flex: 1;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		color: var(--color-text-primary);
+	}
+
+	/* Body wrapper — provides the positioning context for the two stacked
+		 panes. Each pane is absolutely positioned and animates its own
+		 translateX so we never have to fight flex sizing across a 200%-wide
+		 track (an earlier attempt that miscompiled and zeroed the visible
+		 PR list after a swipe-back). The body's overflow:hidden clips the
+		 off-screen pane. */
 	.sidebar-body {
-		display: contents;
+		flex: 1;
+		min-height: 0;
+		overflow: hidden;
+		position: relative;
 	}
 
 	.sidebar-body--hidden {
 		display: none;
+	}
+
+	/* Each pane fills the body and translates horizontally. Default state
+		 ('prs' view): PRs sit at translateX(0) (visible), Files at
+		 translateX(100%) (off-screen right). Toggle the parent's
+		 `--files` modifier to swap. */
+	.view-pane {
+		position: absolute;
+		inset: 0;
+		display: flex;
+		flex-direction: column;
+		min-width: 0;
+		min-height: 0;
+		overflow: hidden;
+		transition: transform 250ms var(--ease-out-expo);
+		will-change: transform;
+	}
+
+	.view-pane--prs {
+		transform: translateX(0);
+	}
+
+	.view-pane--files {
+		transform: translateX(100%);
+	}
+
+	.sidebar-body--files .view-pane--prs {
+		transform: translateX(-100%);
+	}
+
+	.sidebar-body--files .view-pane--files {
+		transform: translateX(0);
+	}
+
+	/* Block stray pointer events on whichever pane is off-screen. Combined
+		 with aria-hidden this is the equivalent of `inert` without the
+		 attribute-handling quirks that previously interacted badly with
+		 the layout. */
+	.sidebar-body:not(.sidebar-body--files) .view-pane--files,
+	.sidebar-body--files .view-pane--prs {
+		pointer-events: none;
 	}
 
 	/* Icon buttons used in the header */

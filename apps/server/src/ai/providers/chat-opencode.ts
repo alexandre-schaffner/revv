@@ -35,7 +35,15 @@ export interface StreamChatViaOpencodeOptions {
 	readonly systemPrompt: string;
 	readonly resumeSessionId?: string | undefined;
 	readonly cwd: string;
-	readonly onSessionId?: ((id: string) => void) | undefined;
+	/**
+	 * Awaited by the driver before posting the user message, so the route's
+	 * SQLite upsert of `(prId, agent, headSha) → sessionId` commits before
+	 * any user-visible content streams. Closes the race where a follow-up
+	 * turn would otherwise see no row and create a fresh agent session.
+	 */
+	readonly onSessionId?:
+		| ((id: string) => Promise<void> | void)
+		| undefined;
 	readonly abortController?: AbortController | undefined;
 	readonly model?: string | undefined;
 	readonly deps: OpencodeChatDeps;
@@ -149,7 +157,11 @@ export function streamChatViaOpencode(
 						title: `revv-chat-${opts.prId}`,
 					});
 					sessionId = created.id;
-					if (opts.onSessionId) opts.onSessionId(sessionId);
+					// Await: this commits the SQLite row that lets the next
+					// chat turn resume this session. Posting before the row
+					// lands risks a follow-up `find()` returning null and
+					// silently starting a fresh session with no context.
+					if (opts.onSessionId) await opts.onSessionId(sessionId);
 				}
 
 				// Subscribe BEFORE posting so we never miss the leading deltas.

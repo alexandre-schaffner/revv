@@ -119,6 +119,15 @@ export class OpencodeSupervisor extends Context.Tag("OpencodeSupervisor")<
 		readonly jobStarted: () => Effect.Effect<void>;
 		/** Signal a job has ended — may schedule cooldown stop. */
 		readonly jobEnded: () => Effect.Effect<void>;
+		/**
+		 * Register a handler that fires whenever a running daemon process
+		 * exits — crash, idle stop, settings-change kill, all of them.
+		 * Returns an unsubscribe function so callers can clean up
+		 * registrations across hot reloads. Used by AiService to invalidate
+		 * stored opencode session ids in `chat_sessions` (per invariant #14:
+		 * daemon-bound state is ephemeral).
+		 */
+		readonly onDaemonExit: (handler: () => void) => () => void;
 	}
 >() {}
 
@@ -362,6 +371,24 @@ export const OpencodeSupervisorLive = Layer.effect(
 		const settingsService = yield* SettingsService;
 		const stateRef = yield* Ref.make<SupervisorState>(INITIAL_STATE);
 
+		// Lives outside Effect state — handlers are plain JS callbacks (no
+		// effectful semantics) and we want to fire them synchronously inside
+		// `proc.exited.then()` without round-tripping through Ref.
+		const exitHandlers = new Set<() => void>();
+		const fireExitHandlers = (): void => {
+			for (const h of exitHandlers) {
+				try {
+					h();
+				} catch (err) {
+					logError(
+						"opencode-supervisor",
+						"daemon-exit handler threw:",
+						err instanceof Error ? err.message : String(err),
+					);
+				}
+			}
+		};
+
 		const resolveAgentName = (): Effect.Effect<string> =>
 			withDb(db, settingsService.getSettings()).pipe(
 				Effect.map((s) => s.aiAgent ?? "opencode"),
@@ -552,6 +579,16 @@ export const OpencodeSupervisorLive = Layer.effect(
 			// Wire exit handler so we know when the daemon dies unexpectedly and
 			// can update state (and consider auto-restart).
 			void proc.exited.then((code) => {
+				// Fire registered exit handlers eagerly — every daemon death
+				// (crash, idle stop, explicit stop, settings change) leaves
+				// any cached session ids referring to a process that's gone.
+				// Consumers (AiService → ChatSessionService) invalidate stored
+				// state here. Fires exactly once per spawn since proc.exited
+				// resolves once. Outside the `s.running !== running` guard on
+				// purpose: the guard exists to skip duplicate ref-clears when
+				// `stopNow()`/`stopIfIdle()` already cleared state, but exit
+				// handlers must still run in those paths.
+				fireExitHandlers();
 				void Effect.runPromise(
 					Effect.gen(function* () {
 						const s = yield* Ref.get(stateRef);
@@ -781,6 +818,13 @@ export const OpencodeSupervisorLive = Layer.effect(
 				}
 			});
 
+		const onDaemonExit = (handler: () => void): (() => void) => {
+			exitHandlers.add(handler);
+			return () => {
+				exitHandlers.delete(handler);
+			};
+		};
+
 		return {
 			ensureRunning,
 			stopIfIdle,
@@ -789,6 +833,7 @@ export const OpencodeSupervisorLive = Layer.effect(
 			isHealthy,
 			jobStarted,
 			jobEnded,
+			onDaemonExit,
 		};
 	}),
 );
