@@ -564,9 +564,15 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
 	listPrCommits: (repoFullName, prNumber, token) =>
 		Effect.gen(function* () {
 			const { owner, repo } = yield* parseRepoFullName(repoFullName);
-			const data = yield* githubFetch(
-				`/repos/${owner}/${repo}/pulls/${prNumber}/commits?per_page=20`,
-				token
+			// Paginate to capture the head commit. GitHub's PR commits endpoint
+			// returns up to 250 commits in ascending date order (oldest first),
+			// so a non-paginated `per_page=20` call on a long-running PR drops
+			// the actual HEAD off the end of page 1 — which is what caused the
+			// dropdown to omit the latest commit. 3 × 100 = 300 covers the cap.
+			const data = yield* githubFetchPaginated(
+				`/repos/${owner}/${repo}/pulls/${prNumber}/commits?per_page=100`,
+				token,
+				3
 			);
 			// Extract parent SHAs so we can topologically sort. GitHub's docs
 			// claim this endpoint returns commits "in the order they appear on
