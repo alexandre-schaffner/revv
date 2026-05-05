@@ -226,15 +226,26 @@
 							scrollbar-gutter: auto;
 							padding-inline: 2px;
 						}
-						/* Pierre's base layer already sets \`overflow: hidden\` and
-						 * \`text-overflow: ellipsis\` on the content cell, but it
-						 * leaves \`white-space: nowrap\` off so callers can opt into
-						 * a middle-truncate wrapper. We render plain text, so turn
-						 * nowrap on here to activate end-truncation with \`…\` —
-						 * keeps long filenames from overflowing into the LOC badge
-						 * on the right. */
-						button[data-type='item'] > [data-item-section='content'] {
-							white-space: nowrap;
+						/* Reserve a fixed slot for the LOC badge on the right edge of
+						 * the row. Pierre's default decoration cell is \`flex: 1 1 0\`
+						 * so it grows to fill remaining space, with the badge
+						 * right-aligned inside via \`justify-content: flex-end\`.
+						 * That works while content fits, but once content exceeds
+						 * the row width the flex shrink algorithm collapses
+						 * decoration (basis 0) to zero before content shrinks —
+						 * so the filename takes the full row, the badge gets
+						 * clipped, and Pierre's MiddleTruncate marker has no
+						 * room to render. Switching decoration to \`flex: 0 0 auto\`
+						 * pins it to its intrinsic size; content is now the only
+						 * shrinkable item and Pierre's MiddleTruncate kicks in
+						 * with \`…\`. \`margin-inline-start: auto\` keeps the badge
+						 * pushed to the right edge when the row is wider than the
+						 * filename. \`padding-inline-start\` gives a small gap
+						 * between the truncate marker and the \`+N\`/\`-N\` glyphs. */
+						button[data-type='item'] > [data-item-section='decoration'] {
+							flex: 0 0 auto;
+							margin-inline-start: auto;
+							padding-inline-start: 8px;
 						}
 					`,
 					// ── Right-side line-count badge ────────────────────────────
