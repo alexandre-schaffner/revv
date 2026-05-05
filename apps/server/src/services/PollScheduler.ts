@@ -242,15 +242,22 @@ export const PollSchedulerLive = Layer.effect(
 			// per head SHA), we mark them 'superseded' rather than mutate or
 			// delete. A fresh walkthrough row is created on the next user-opens-PR
 			// flow for the new SHA.
-			const headShaChangedPrIds = allPrs
-				.filter((pr) => {
-					const existing = existingShaMap.get(pr.id);
-					return existing !== undefined && existing.headSha !== pr.headSha;
-				})
-				.map((pr) => pr.id);
-			for (const prId of headShaChangedPrIds) {
+			//
+			// We pass the NEW headSha as `exceptHeadSha` so a walkthrough the
+			// SSE handler may have just created at that SHA (the user clicked
+			// Generate while this poll was mid-flight) survives — it's by
+			// definition not stale, since "stale" means "pinned to an old
+			// SHA we just learned has been replaced."
+			const headShaChanged = allPrs.flatMap((pr) => {
+				const existing = existingShaMap.get(pr.id);
+				if (existing === undefined || existing.headSha === pr.headSha) {
+					return [];
+				}
+				return [{ prId: pr.id, newHeadSha: pr.headSha ?? undefined }];
+			});
+			for (const { prId, newHeadSha } of headShaChanged) {
 				yield* walkthroughJobs
-					.supersedeForPr(prId)
+					.supersedeForPr(prId, newHeadSha)
 					.pipe(Effect.catchAll(() => Effect.void));
 			}
 

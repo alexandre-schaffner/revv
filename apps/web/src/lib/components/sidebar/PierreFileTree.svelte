@@ -221,72 +221,20 @@
 						 * here: drop the stable gutter and force symmetric 2px
 						 * padding so each row's effective inset (2px container + 2px
 						 * item-margin + 8px item-padding = 12px) matches \`px-3\` on
-						 * both sides. overflow-x: auto enables horizontal scrolling
-						 * so long file paths are reachable without truncation. */
+						 * both sides. */
 						[data-file-tree-virtualized-scroll='true'] {
 							scrollbar-gutter: auto;
 							padding-inline: 2px;
-							overflow-x: auto;
 						}
-						/* Let each row button expand to its natural text width so
-						 * the virtual scroll container can measure overflow correctly
-						 * and show a horizontal scrollbar when paths are wider than
-						 * the sidebar. */
-						button[data-type='item'] {
-							min-width: max-content;
-						}
-						/* Pin the LOC badge to the right edge of the visible
-						 * viewport so it stays readable while long file paths
-						 * scroll under it horizontally. \`position: sticky\` is
-						 * resolved against the nearest scrolling ancestor —
-						 * here, the virtualized scroll container that owns
-						 * \`overflow-x: auto\` above — so \`right: 0\` glues the
-						 * decoration cell to the right inset of the sidebar.
-						 *
-						 * The library's base layer gives the decoration cell
-						 * \`flex: 1 1 0\` + \`min-width: 0\`, which collapses it to
-						 * zero width before sticky offsets resolve and breaks
-						 * the right-alignment. Override to \`flex: 0 0 auto\`
-						 * with \`width: max-content\` so the cell holds its
-						 * intrinsic size, then \`margin-inline-start: auto\`
-						 * right-aligns it within the row.
-						 *
-						 * The opaque background-color is required: without it
-						 * file names paint *through* the sticky cell as they
-						 * scroll, producing an unreadable smear. Using
-						 * \`--trees-bg-override\` matches the default row
-						 * background; the selected and hover overrides below
-						 * keep the badge seamless when the row is active or
-						 * pointed at. The leading \`padding-inline-start\`
-						 * creates breathing room between the scrolling text
-						 * and the pinned badge. */
-						button[data-type='item'] > [data-item-section='decoration'] {
-							position: sticky;
-							right: 0;
-							flex: 0 0 auto;
-							width: max-content;
-							min-width: 0;
-							margin-inline-start: auto;
-							padding-inline-start: 8px;
-							background-color: var(--trees-bg-override);
-							z-index: 1;
-						}
-						/* Hover bg first, selected bg after — source order matters
-						 * because both selectors land at the same specificity.
-						 * Putting selected last makes the badge follow the row
-						 * background when the active row is also being hovered,
-						 * matching the library's own row-bg precedence. */
-						button[data-type='item']:hover > [data-item-section='decoration'] {
-							background-color: var(--trees-bg-muted-override);
-						}
-						/* The library writes both \`data-item-selected="true"\` and
-						 * \`aria-selected="true"\` on the row for non-sticky rows,
-						 * but sticky rows only get \`data-item-selected\` — so we
-						 * key off that one (the previous \`data-selected\` selector
-						 * matched nothing and left sticky-active rows showing
-						 * the default badge bg over a tinted row). */
-						button[data-type='item'][data-item-selected='true'] > [data-item-section='decoration'] {
-							background-color: var(--trees-selected-bg-override);
+						/* Pierre's base layer already sets \`overflow: hidden\` and
+						 * \`text-overflow: ellipsis\` on the content cell, but it
+						 * leaves \`white-space: nowrap\` off so callers can opt into
+						 * a middle-truncate wrapper. We render plain text, so turn
+						 * nowrap on here to activate end-truncation with \`…\` —
+						 * keeps long filenames from overflowing into the LOC badge
+						 * on the right. */
+						button[data-type='item'] > [data-item-section='content'] {
+							white-space: nowrap;
 						}
 					`,
 					// ── Right-side line-count badge ────────────────────────────

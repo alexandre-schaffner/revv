@@ -20,6 +20,7 @@ import {
 	onWalkthroughComplete,
 	onWalkthroughError,
 	prefetchWalkthrough,
+	hydrateFromCache,
 } from './walkthrough.svelte';
 
 let ws: WebSocket | null = null;
@@ -157,6 +158,18 @@ export function connect(token: string): void {
 			pendingThreadSync = null;
 			markThreadsSyncing(prId);
 			ws?.send(JSON.stringify({ type: 'threads:request-sync', data: { prId } }));
+		}
+		// Recover from any `walkthrough:complete` broadcasts the client missed
+		// while WS was unconnected — the canonical case is `resumePending`
+		// finishing a walkthrough between server boot and WS hookup, with the
+		// user already on the PR view (which has `hydrateFromCache`'d while
+		// the row was still `status='generating'` and now sits stuck on the
+		// "Generate walkthrough" button). A fresh cache fetch picks up the
+		// completed row; the Generate button is template-gated on `summary`
+		// being null, so populating the entry hides it automatically.
+		const selectedPrId = getSelectedPrId();
+		if (selectedPrId) {
+			void hydrateFromCache(selectedPrId);
 		}
 	});
 

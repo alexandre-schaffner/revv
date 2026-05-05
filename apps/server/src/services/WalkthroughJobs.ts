@@ -180,8 +180,19 @@ export class WalkthroughJobs extends Context.Tag("WalkthroughJobs")<
 		 * the old work is frozen in place (immutable per SHA, invariant #7)
 		 * and the next user interaction triggers a fresh walkthrough for the
 		 * new SHA.
+		 *
+		 * `exceptHeadSha` (optional): when the caller knows what the new HEAD
+		 * SHA is, jobs whose `prHeadSha` already equals that value are NOT
+		 * cancelled. This protects the SSE-creates-walkthrough-then-poll-detects-
+		 * mismatch race: PollScheduler is asking us to invalidate "everything
+		 * stuck on the OLD sha", not "everything for this PR" — a freshly-
+		 * created walkthrough at the latest SHA is by definition not stale.
+		 * Regenerate (no exception passed) keeps its kill-everything semantics.
 		 */
-		readonly supersedeForPr: (prId: string) => Effect.Effect<void>;
+		readonly supersedeForPr: (
+			prId: string,
+			exceptHeadSha?: string,
+		) => Effect.Effect<void>;
 
 		/**
 		 * Fan an event out to a running job's subscribers. The primary caller
@@ -658,6 +669,34 @@ export const WalkthroughJobsLive = Layer.effect(
 										}
 
 										if (event.type === "error") {
+											// Suppress error surfacing when the abort
+											// came from us (user-clicked Pull /
+											// Regenerate, scope close, shutdown). The
+											// Claude SDK's catch path emits the
+											// generic "Claude Code process aborted by
+											// user" string, and a global WS broadcast
+											// of that message races with the next SSE
+											// the user opens — stamping a misleading
+											// error onto the freshly-created
+											// walkthrough entry. supersedeForPr is
+											// already in flight to mark the row
+											// 'superseded', so we deliberately skip
+											// both the setStatus('error') and the WS
+											// broadcast here. Local fanOut still runs
+											// so any live SSE subscriber tears down
+											// cleanly. Mirrors the opencode path,
+											// which gates its push() on
+											// `cancelledByCaller` (doctrine #13:
+											// agent-path parity).
+											if (job.abortController.signal.aborted) {
+												debug(
+													"walkthrough-jobs",
+													"suppressing error broadcast — abort initiated locally:",
+													event.data.message,
+												);
+												fanOut(job, event);
+												return;
+											}
 											await Effect.runPromise(
 												setStatus(
 													job.walkthroughId,
@@ -1338,18 +1377,33 @@ export const WalkthroughJobsLive = Layer.effect(
 		const supersedeWalkthrough = (oldId: string, newId: string) =>
 			provideDb(walkthroughService.supersede(oldId, newId));
 
-		const supersedeForPr = (prId: string) =>
+		const supersedeForPr = (prId: string, exceptHeadSha?: string) =>
 			Effect.gen(function* () {
 				// Cancel any in-flight job first so the fiber's scope finalizer
 				// runs before we touch the DB row. See regenerateWalkthroughHandler
 				// for the same rationale.
+				//
+				// `exceptHeadSha` is the escape hatch for PollScheduler's
+				// "headSha changed" path: the SSE handler may have raced ahead
+				// and already created a walkthrough at the NEW SHA, in which
+				// case that job is the freshest possible — cancelling it
+				// would just force the user to click Generate again. Regenerate
+				// (no exception) still kills everything, since "user wants a
+				// do-over" includes any in-flight job at any SHA.
 				const map = yield* Ref.get(registry);
 				for (const job of map.values()) {
-					if (job.prId === prId) {
-						yield* cancel(job.walkthroughId);
+					if (job.prId !== prId) continue;
+					if (
+						exceptHeadSha !== undefined &&
+						job.prHeadSha === exceptHeadSha
+					) {
+						continue;
 					}
+					yield* cancel(job.walkthroughId);
 				}
-				yield* provideDb(walkthroughService.supersedeAllForPr(prId));
+				yield* provideDb(
+					walkthroughService.supersedeAllForPr(prId, exceptHeadSha),
+				);
 			});
 
 		const emitEvent = (

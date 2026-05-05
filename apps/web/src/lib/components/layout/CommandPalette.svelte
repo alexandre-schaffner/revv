@@ -6,6 +6,7 @@
 	import { getPullRequests, getRepositories, selectPr } from '$lib/stores/prs.svelte';
 	import { getFilteredCommands, setQuery as setCommandQuery, resetQuery, fuzzyScore } from '$lib/stores/commands.svelte';
 	import { setPaletteMode, closePalette, type PaletteMode } from '$lib/stores/shortcuts.svelte';
+	import { setSidebarView } from '$lib/stores/sidebar.svelte';
 	import type { PullRequest, Repository } from '@revv/shared';
 
 	interface Props {
@@ -160,7 +161,15 @@
 			const result = prResults[selectedIndex];
 			if (result) {
 				onClose();
+				// Mirror `PrItem.handleClick`: navigating to a PR through the
+				// palette must also swipe the sidebar into files view, otherwise
+				// the header renders the prs-mode "PULL REQUESTS" label while
+				// the body is showing the files pane (desynced — the user sees
+				// a file tree under a "Pull Requests" header). Driving both
+				// `selectedPrId` and `sidebarView` together keeps header +
+				// body in lockstep regardless of the entry point.
 				selectPr(result.pr.id);
+				setSidebarView('files');
 			}
 		} else {
 			const cmd = commands[selectedIndex];
@@ -178,21 +187,31 @@
 </script>
 
 {#if open}
-	<!-- Backdrop -->
+	<!-- Backdrop.
+	     `in:fade` only — the backdrop must DISAPPEAR INSTANTLY when the palette
+	     closes, otherwise the full-viewport, `pointer-events: auto` div sits
+	     on top of the app for 150ms post-close and steals any clicks (its
+	     `onclick={onClose}` swallows them as a no-op). That's the "after
+	     Cmd+P I can't click files in the sidebar" bug — the backdrop, not
+	     a sidebar issue. Intro keeps the fade so opening still feels soft. -->
 	<div
 		class="fixed inset-0 z-40 bg-black/30"
 		role="presentation"
 		onclick={onClose}
-		transition:fade={{ duration: 150 }}
+		in:fade={{ duration: 150 }}
 	></div>
 
-	<!-- Palette -->
+	<!-- Palette.
+	     `in:scale` only — same reasoning as the backdrop. The palette is
+	     centered + max-width:520, so it's a smaller hit-zone than the
+	     backdrop, but a click landing on its outroing area would still be
+	     swallowed by the input/list and never reach the underlying UI. -->
 	<div
 		class="palette"
 		role="dialog"
 		aria-modal="true"
 		aria-label={mode === 'command' ? 'Command palette' : 'Search pull requests'}
-		transition:scale={{ duration: 150, start: 0.96, easing: cubicOut }}
+		in:scale={{ duration: 150, start: 0.96, easing: cubicOut }}
 	>
 		<!-- Search input -->
 		<div class="palette-input-wrap">

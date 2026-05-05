@@ -463,6 +463,48 @@ async function readGitHead(worktreePath: string): Promise<string | null> {
 	}
 }
 
+/**
+ * Best-effort removal of stale git lock files belonging to this PR's worktree
+ * and branch ref. When the Claude Code subprocess is SIGTERM'd mid-tool-call
+ * (walkthrough cancel / supersede), git operations it had in flight can leave
+ * `.lock` files behind that no current process is holding. The next
+ * `git fetch` / `git reset` then aborts with `Unable to create '...': File exists`
+ * (or, worse, sits in a retry loop), and the wedge persists across server
+ * restarts because nothing on disk gets cleaned up — until the user removes
+ * and re-adds the repo.
+ *
+ * Scope is intentionally narrow: only locks tied to *this* PR's worktree
+ * gitdir and its branch ref. Bare-clone-wide locks (index.lock, packed-refs.lock,
+ * shallow.lock, etc.) are deliberately NOT touched because a sibling
+ * walkthrough job for a different PR could be holding them legitimately —
+ * `MAX_CONCURRENT_JOBS = 5` allows that concurrency.
+ */
+async function clearStalePrWorktreeLocks(
+	clonePath: string,
+	branchName: string,
+): Promise<void> {
+	const worktreeGitdir = join(clonePath, ".git", "worktrees", branchName);
+	const candidates = [
+		join(worktreeGitdir, "index.lock"),
+		join(worktreeGitdir, "HEAD.lock"),
+		join(clonePath, ".git", "refs", "heads", `${branchName}.lock`),
+	];
+	for (const lockPath of candidates) {
+		try {
+			if (!existsSync(lockPath)) continue;
+			await rm(lockPath, { force: true });
+			debug("pr-worktree", "cleared stale git lock:", lockPath);
+		} catch (err) {
+			logError(
+				"pr-worktree",
+				"failed to clear stale lock:",
+				lockPath,
+				err instanceof Error ? err.message : String(err),
+			);
+		}
+	}
+}
+
 /** Validate that a path is safely within the expected clone base directory. */
 function assertSafeClonePath(clonePath: string): void {
 	if (!clonePath.startsWith(CLONE_BASE_DIR)) {
@@ -720,6 +762,14 @@ export const RepoCloneServiceLive = Layer.effect(
 						const cleanUrl = `https://${GITHUB_HOST}/${row.fullName}.git`;
 
 						try {
+							// Clear any per-worktree git locks left behind by a
+							// SIGTERM'd previous run before any git operation that
+							// would block on them. Without this, an aborted Claude
+							// Code subprocess can wedge `pr-N`'s worktree gitdir
+							// indefinitely; the only known recovery was to remove
+							// and re-add the repo.
+							await clearStalePrWorktreeLocks(clonePath, branchName);
+
 							await runGit(
 								["remote", "set-url", "origin", authedUrl],
 								clonePath,

@@ -215,9 +215,15 @@ export class WalkthroughService extends Context.Tag('WalkthroughService')<
 		 * or stays NULL if no new walkthrough is ever generated. Called by
 		 * {@link WalkthroughJobs.supersedeForPr} in response to a detected
 		 * head-SHA change.
+		 *
+		 * `exceptHeadSha`: rows whose `prHeadSha` matches this value are
+		 * skipped. PollScheduler uses this to spare a freshly-created
+		 * walkthrough at the just-detected new SHA from being marked
+		 * superseded by the very poll cycle that observed the SHA change.
 		 */
 		readonly supersedeAllForPr: (
 			prId: string,
+			exceptHeadSha?: string,
 		) => Effect.Effect<void, never, DbService>;
 
 		/** Get a complete (cached) walkthrough by PR + sha. */
@@ -416,20 +422,30 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 			});
 		}).pipe(Effect.catchAll(() => Effect.void)),
 
-	supersedeAllForPr: (prId) =>
+	supersedeAllForPr: (prId, exceptHeadSha) =>
 		Effect.gen(function* () {
 			const { db } = yield* DbService;
 			db.transaction(() => {
 				// Collect the IDs of every walkthrough that is about to be superseded.
+				// `exceptHeadSha` excludes a specific head-SHA from the sweep —
+				// that's how the SHA-aware PollScheduler path avoids marking the
+				// freshly-created walkthrough at the new head as stale.
+				const baseConditions = [
+					eq(walkthroughs.pullRequestId, prId),
+					ne(walkthroughs.status, 'superseded'),
+				];
+				const condition =
+					exceptHeadSha !== undefined
+						? and(
+								...baseConditions,
+								ne(walkthroughs.prHeadSha, exceptHeadSha),
+							)
+						: and(...baseConditions);
+
 				const activeIds = db
 					.select({ id: walkthroughs.id })
 					.from(walkthroughs)
-					.where(
-						and(
-							eq(walkthroughs.pullRequestId, prId),
-							ne(walkthroughs.status, 'superseded'),
-						),
-					)
+					.where(condition)
 					.all()
 					.map((r) => r.id);
 
@@ -451,12 +467,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 
 				db.update(walkthroughs)
 					.set({ status: 'superseded' })
-					.where(
-						and(
-							eq(walkthroughs.pullRequestId, prId),
-							ne(walkthroughs.status, 'superseded'),
-						),
-					)
+					.where(condition)
 					.run();
 			});
 		}).pipe(Effect.catchAll(() => Effect.void)),

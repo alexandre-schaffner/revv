@@ -1,5 +1,10 @@
 import { setThemePreference, setDiffThemePreference } from './theme.svelte';
 import { collapseAllRepoGroups, toggleSidebar, toggleRightPanel, openAddRepoDialog } from './sidebar.svelte';
+import { fuzzyScore } from '$lib/utils/fuzzy';
+
+// Re-export so existing consumers (CommandPalette) keep importing from here.
+// New callers should import directly from `$lib/utils/fuzzy`.
+export { fuzzyScore };
 
 export interface Command {
 	id: string;
@@ -88,35 +93,8 @@ let commands = $state<Command[]>([
 let query = $state('');
 
 // ── Fuzzy matching ───────────────────────────────────────
-
-/** Score how well `query` matches `text` (higher = better, -1 = no match). */
-export function fuzzyScore(q: string, text: string): number {
-	if (q.length === 0) return 0;
-
-	const lq = q.toLowerCase();
-	const lt = text.toLowerCase();
-
-	// Exact substring match — best score
-	const idx = lt.indexOf(lq);
-	if (idx !== -1) {
-		// Boost for matching at word boundary or start
-		return 100 + (idx === 0 ? 50 : 0);
-	}
-
-	// Sequential character match (fuzzy)
-	let qi = 0;
-	let score = 0;
-	for (let ti = 0; ti < lt.length && qi < lq.length; ti++) {
-		if (lt[ti] === lq[qi]) {
-			// Bonus for matching at word start (after space/separator)
-			if (ti === 0 || /[\s\-_/]/.test(lt[ti - 1]!)) score += 10;
-			score += 5;
-			qi++;
-		}
-	}
-
-	return qi === lq.length ? score : -1;
-}
+// `fuzzyScore` lives in `$lib/utils/fuzzy` and is re-exported above for
+// backwards compatibility with existing imports.
 
 function scoreCommand(cmd: Command, q: string): number {
 	let best = fuzzyScore(q, cmd.label);

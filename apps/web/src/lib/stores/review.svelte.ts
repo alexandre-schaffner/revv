@@ -46,7 +46,10 @@ export function clearReviewFiles(): void {
 	reviewFiles = [];
 	isLoadingFiles = false;
 	filesError = null;
-	activeFilePath = null;
+	// `activeFilePath` is owned by the per-PR `prViewStates` record now, so
+	// we deliberately don't null it here — `switchPrViewState` already loaded
+	// the new PR's saved file path (or `null` for first visits) before this
+	// runs. Wiping it would lose that restore.
 	clearRepoTree();
 	clearRepoFile();
 	clearSession();
@@ -284,9 +287,18 @@ export async function loadRepoTreeForPr(prId: string): Promise<void> {
 	const seq = ++repoTreeLoadSeq;
 	repoTreeStatus = 'loading';
 	repoTreeError = null;
-	// Hold onto the previous `repoTreePaths` while loading so the UI doesn't
-	// flash empty between PR switches; SidebarFilesView decides whether to
-	// show "Loading…" by checking status + paths.length.
+	// Switching to a different PR must drop the previous tree's paths
+	// immediately. Otherwise SidebarFilesView keeps rendering the prior PR's
+	// (potentially different-repo) file rows under `status='loading'`, and any
+	// click during the load window calls `loadRepoFile(newPrId, oldPath)` —
+	// which 404s because that path doesn't exist in the new PR's repo. The
+	// "hold onto previous paths" optimization is only safe for same-PR refreshes
+	// (e.g. a new head SHA on the active PR), which is what the cache-hit
+	// branch above already covers; here we know the PR id changed.
+	if (repoTreePrId !== null && repoTreePrId !== prId) {
+		repoTreePaths = [];
+		repoTreeHeadSha = null;
+	}
 	repoTreePrId = prId;
 
 	try {
@@ -533,17 +545,50 @@ export async function loadSession(prId: string): Promise<void> {
 	}
 }
 
-// --- Tab state ---
+// --- Per-PR view state ---
+//
+// Single canonical record per PR holding everything that needs to survive a
+// PR switch: which tab is active, which file is open, and scroll positions
+// for each of the three panes. Treat `prViewStates` as a Map<prId, PrViewState>
+// keyed off the PR's id — the user's "PR set with one record per PR".
+//
+// Mirrored singletons (`activeTab`, `activeFilePath`) are the reactive
+// surface read by Svelte components; they're kept in sync with the entry for
+// `currentPrId`. Scroll positions are write-only persistence — components
+// read them imperatively on mount and write on scroll, no reactivity needed.
+
 type ActiveTab = 'walkthrough' | 'diff' | 'request-changes';
+export type ScrollPaneKey =
+	| 'walkthrough'
+	| 'diff'
+	| 'requestChanges'
+	| 'sidebar'
+	| 'rightPanel';
 
 interface PrViewState {
 	activeTab: ActiveTab;
+	activeFilePath: string | null;
+	scroll: Partial<Record<ScrollPaneKey, number>>;
+}
+
+function emptyState(): PrViewState {
+	return { activeTab: 'walkthrough', activeFilePath: null, scroll: {} };
 }
 
 const prViewStates = new Map<string, PrViewState>();
 let currentPrId: string | null = null;
 
 let activeTab = $state<ActiveTab>('walkthrough');
+let activeFilePath = $state<string | null>(null);
+
+function getOrCreate(prId: string): PrViewState {
+	let s = prViewStates.get(prId);
+	if (!s) {
+		s = emptyState();
+		prViewStates.set(prId, s);
+	}
+	return s;
+}
 
 export function getActiveTab(): ActiveTab {
 	return activeTab;
@@ -559,7 +604,7 @@ export function setActiveTab(tab: ActiveTab): void {
 	activeTab = tab;
 	// Persist for the current PR
 	if (currentPrId !== null) {
-		prViewStates.set(currentPrId, { activeTab: tab });
+		getOrCreate(currentPrId).activeTab = tab;
 	}
 }
 
@@ -567,17 +612,47 @@ export function setActiveTab(tab: ActiveTab): void {
 export function switchPrViewState(newPrId: string): void {
 	// Only save current state if we're actually leaving a different PR
 	if (currentPrId !== null && currentPrId !== newPrId) {
-		prViewStates.set(currentPrId, { activeTab });
+		const prev = getOrCreate(currentPrId);
+		prev.activeTab = activeTab;
+		prev.activeFilePath = activeFilePath;
 	}
 	currentPrId = newPrId;
-	// Restore saved state, or default to walkthrough for first visit
+	// Restore saved state, or default for first visit
 	const saved = prViewStates.get(newPrId);
 	const restoredTab = saved?.activeTab ?? 'walkthrough';
+	const restoredFilePath = saved?.activeFilePath ?? null;
 	// Use direct assignment to bypass the guard in setActiveTab (no focus reset needed here)
 	if (activeTab === 'diff' && restoredTab !== 'diff') {
 		enterSidebarMode();
 	}
 	activeTab = restoredTab;
+	activeFilePath = restoredFilePath;
+}
+
+// --- Per-PR scroll persistence ---------------------------------------------
+//
+// Read once on mount (or on the trailing edge of a tab/PR switch); write on
+// every scroll event. Components are responsible for plumbing these into the
+// right scroll container — see +page.svelte (walkthrough/requestChanges),
+// ReviewLayout.svelte (diff), Sidebar.svelte (sidebar), RightPanel.svelte
+// (rightPanel).
+
+export function getPrScrollPosition(prId: string, key: ScrollPaneKey): number {
+	return prViewStates.get(prId)?.scroll[key] ?? 0;
+}
+
+export function setPrScrollPosition(
+	prId: string,
+	key: ScrollPaneKey,
+	value: number,
+): void {
+	getOrCreate(prId).scroll[key] = value;
+}
+
+/** Drop the entire view-state record for a PR (e.g. when the PR is deleted). */
+export function clearPrViewState(prId: string): void {
+	prViewStates.delete(prId);
+	if (currentPrId === prId) currentPrId = null;
 }
 
 // --- Comment threads ---
@@ -964,7 +1039,12 @@ export function clearPendingWalkthroughBlockJump(): void {
 }
 
 // --- Active file in diff ---
-let activeFilePath = $state<string | null>(null);
+//
+// Storage lives in the per-PR `prViewStates` map (see top of file). The
+// `activeFilePath` $state declared up there is the reactive mirror for the
+// currently selected PR, kept in sync by `switchPrViewState`. Setting it here
+// also writes through to the per-PR record so a later `switchPrViewState`
+// back to this PR restores the same file.
 
 export function getActiveFilePath(): string | null {
 	return activeFilePath;
@@ -972,6 +1052,9 @@ export function getActiveFilePath(): string | null {
 
 export function setActiveFilePath(path: string | null): void {
 	activeFilePath = path;
+	if (currentPrId !== null) {
+		getOrCreate(currentPrId).activeFilePath = path;
+	}
 }
 
 /**

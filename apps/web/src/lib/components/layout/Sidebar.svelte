@@ -10,7 +10,12 @@
 		getNeedsYourReviewByRepo,
 		getSelectedPrId,
 		getSelectedPr,
-	} from '$lib/stores/prs.svelte';	import { requestSync, requestFullSync } from '$lib/stores/ws.svelte';
+	} from '$lib/stores/prs.svelte';
+	import {
+		getPrScrollPosition,
+		setPrScrollPosition,
+	} from '$lib/stores/review.svelte';
+	import { requestSync, requestFullSync } from '$lib/stores/ws.svelte';
 	import { getPrListSyncing } from '$lib/stores/sync.svelte';
 	import { handleKey as handleNavKey, clearFocus, setFocusedId } from '$lib/stores/sidebar-nav.svelte';
 	import { getPaletteOpen } from '$lib/stores/shortcuts.svelte';
@@ -57,6 +62,35 @@
 			requestSync(); // no PR selected, just sync PRs
 		}
 	}
+
+	// ── Per-PR scroll persistence (left pane) ────────────────────────────────
+	//
+	// The PR-list pane scrolls inside `.pr-list`; we anchor scroll position to
+	// the *currently-selected* PR. Switching to a new PR saves the outgoing
+	// PR's scrollTop and restores the incoming PR's. Continuous-write via
+	// onscroll keeps the value fresh across route changes / unmounts.
+	//
+	// The files-mode pane (PierreFileTree) manages its own scroll via the
+	// shadow-DOM tree library, so we don't try to drive it from here.
+	let prListEl = $state<HTMLElement | null>(null);
+	let suppressNextPrListScroll = false;
+
+	function handlePrListScroll(): void {
+		if (suppressNextPrListScroll) {
+			suppressNextPrListScroll = false;
+			return;
+		}
+		if (!prListEl || !selectedPrId) return;
+		setPrScrollPosition(selectedPrId, 'sidebar', prListEl.scrollTop);
+	}
+
+	$effect(() => {
+		const id = selectedPrId;
+		if (!prListEl || !id) return;
+		const saved = getPrScrollPosition(id, 'sidebar');
+		suppressNextPrListScroll = true;
+		prListEl.scrollTop = saved;
+	});
 
 	function handleSidebarClick(e: MouseEvent): void {
 		const navEl = (e.target as HTMLElement).closest<HTMLElement>('[data-sidebar-nav]');
@@ -344,7 +378,7 @@
 		>
 				<SearchFilter onAddRepo={() => setAddRepoDialogOpen(true)} />
 
-				<div class="pr-list">
+				<div class="pr-list" bind:this={prListEl} onscroll={handlePrListScroll}>
 					{#if getNeedsYourReview().length > 0}
 						<div class="needs-review-section">
 							<div class="section-header">

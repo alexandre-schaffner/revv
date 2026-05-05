@@ -3,6 +3,7 @@
 	import { getSelectedPr, setSelectedPrId } from '$lib/stores/prs.svelte';
 	import {
 	setActiveFilePath,
+	getActiveFilePath,
 	getReviewFiles,
 	getIsLoadingFiles,
 	getFilesError,
@@ -14,6 +15,8 @@
 	getActiveTab,
 	switchPrViewState,
 	setLoadedHeadSha,
+	getPrScrollPosition,
+	setPrScrollPosition,
 } from '$lib/stores/review.svelte';
 	import { getDiffThemeType } from '$lib/stores/theme.svelte';
 	import { api } from '$lib/api/client';
@@ -75,27 +78,50 @@
 		return () => io.disconnect();
 	});
 
-	const tabScrollPositions = new Map<string, number>();
-	let prevTab: string | undefined;
+	// Per-PR scroll persistence for the walkthrough / request-changes tabs.
+	// (Diff tab has its own scroll container inside ReviewLayout.svelte and
+	// persists itself there.) The `prViewStates` map in `review.svelte.ts` is
+	// the single source of truth: `handleScrollRootScroll` writes on every
+	// scroll, the `$effect` below restores once per (prId, tab) change.
+	function tabScrollKey(tab: string): 'walkthrough' | 'requestChanges' | null {
+		if (tab === 'walkthrough') return 'walkthrough';
+		if (tab === 'request-changes') return 'requestChanges';
+		return null;
+	}
 
-	// Save BEFORE the DOM update (while the container is still visible)
-	$effect.pre(() => {
-		const tab = activeTab;
-		if (scrollRootEl && prevTab && prevTab !== 'diff') {
-			tabScrollPositions.set(prevTab, scrollRootEl.scrollTop);
+	// Latch: the scroll handler fires immediately when we restore (because
+	// setting scrollTop emits a 'scroll' event), which would clobber the
+	// freshly-restored value with whatever the *previous* PR's scrollTop
+	// happened to be at that microtask. Suppress one event per restore.
+	let suppressNextScroll = false;
+
+	function handleScrollRootScroll(): void {
+		if (suppressNextScroll) {
+			suppressNextScroll = false;
+			return;
 		}
-		prevTab = tab;
-	});
+		const tab = activeTab;
+		const prId = page.params['prId'];
+		if (!scrollRootEl || tab === 'diff' || !prId) return;
+		const key = tabScrollKey(tab);
+		if (key) setPrScrollPosition(prId, key, scrollRootEl.scrollTop);
+	}
 
-	// Restore AFTER the DOM update (container is now visible again)
-	// Only fires when activeTab changes — not on every re-render
-	let restoredForTab: string | null = null;
+	// Restore AFTER the DOM update (container is now visible again).
+	// Re-runs on tab change AND on PR change — both flows need to land at
+	// the right scroll offset. `restoredFor` keys on `${prId}:${tab}` so
+	// we don't refight the user's own scrolling once they're inside a tab.
+	let restoredFor: string | null = null;
 	$effect(() => {
 		const tab = activeTab;
-		if (!scrollRootEl || tab === 'diff') return;
-		if (tab === restoredForTab) return;
-		restoredForTab = tab;
-		const saved = tabScrollPositions.get(tab) ?? 0;
+		const prId = page.params['prId'];
+		if (!scrollRootEl || tab === 'diff' || !prId) return;
+		const stamp = `${prId}:${tab}`;
+		if (stamp === restoredFor) return;
+		restoredFor = stamp;
+		const key = tabScrollKey(tab);
+		const saved = key ? getPrScrollPosition(prId, key) : 0;
+		suppressNextScroll = true;
 		scrollRootEl.scrollTop = saved;
 	});
 
@@ -172,7 +198,15 @@
 					}));
 					setReviewFiles(mapped);
 					if (mapped.length > 0) {
-						setActiveFilePath(mapped[0]!.path);
+						// Honor the restored per-PR active file when it still exists in
+						// the new diff. First-visits (path is null) and stale paths fall
+						// back to file[0].
+						const restored = getActiveFilePath();
+						const stillExists =
+							restored !== null && mapped.some((f) => f.path === restored);
+						if (!stillExists) {
+							setActiveFilePath(mapped[0]!.path);
+						}
 					}
 					// Stamp the SHA the diff was loaded against so the FloatingTabs
 					// dot can detect when a later `prs:updated` swaps in a newer one.
@@ -236,6 +270,7 @@
 		<div
 			class="review-content"
 			bind:this={scrollRootEl}
+			onscroll={handleScrollRootScroll}
 			style={activeTab === 'diff' ? 'display: none' : ''}
 		>
 			<div

@@ -21,6 +21,10 @@
 		clearChatHistory,
 		refreshProposedChanges,
 	} from '$lib/stores/chat.svelte';
+	import {
+		getPrScrollPosition,
+		setPrScrollPosition,
+	} from '$lib/stores/review.svelte';
 	import { fetchProposedDiff } from '$lib/api/chat';
 	import { renderMarkdown } from '$lib/utils/markdown';
 
@@ -53,16 +57,81 @@
 		textareaEl.style.height = `${Math.min(textareaEl.scrollHeight, max)}px`;
 	});
 
-	// Auto-scroll to bottom on new content.
+	// ── Per-PR scroll persistence (right pane) ──────────────────────────────
+	//
+	// Two flows share the same scroll container:
+	//
+	//   - PR switch  → restore the saved scrollTop (or land at bottom on
+	//                  first visit — chat conversations grow downward, so
+	//                  bottom is the "newest message" default).
+	//   - Content    → auto-scroll-to-bottom on new messages/chunks, but
+	//                  only if the user was already at the bottom. We don't
+	//                  want to yank them out of older content they're reading.
+	//
+	// `wasAtBottom` is updated by the user-driven scroll handler and by the
+	// programmatic restore. The content-change effect is gated on
+	// `prId === lastRestoredPrId`, so a content update that arrives in the
+	// same flush as a PR switch can't beat the restore to the punch.
+	// `suppressNextScroll` swallows the synthetic 'scroll' event emitted when
+	// we mutate scrollTop ourselves, so handleScroll doesn't immediately
+	// overwrite the value we just persisted.
+
+	const AT_BOTTOM_TOLERANCE = 4; // px — accommodates sub-pixel rounding
+
+	let suppressNextScroll = false;
+	let wasAtBottom = true;
+	let lastRestoredPrId: string | undefined;
+
+	function isAtBottom(): boolean {
+		if (!messagesEl) return true;
+		const distance =
+			messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight;
+		return distance <= AT_BOTTOM_TOLERANCE;
+	}
+
+	function handleScroll(): void {
+		if (suppressNextScroll) {
+			suppressNextScroll = false;
+			return;
+		}
+		if (!messagesEl || !prId) return;
+		setPrScrollPosition(prId, 'rightPanel', messagesEl.scrollTop);
+		wasAtBottom = isAtBottom();
+	}
+
+	// Restore on PR change.
 	$effect(() => {
-		// Track items length AND streaming state so we re-scroll on new chunks.
+		if (!messagesEl || !prId) return;
+		if (prId === lastRestoredPrId) return;
+		const incomingPrId = prId;
+		lastRestoredPrId = incomingPrId;
+		const saved = getPrScrollPosition(incomingPrId, 'rightPanel');
+		void tick().then(() => {
+			if (!messagesEl || lastRestoredPrId !== incomingPrId) return;
+			suppressNextScroll = true;
+			if (saved > 0) {
+				messagesEl.scrollTop = saved;
+				wasAtBottom = isAtBottom();
+			} else {
+				messagesEl.scrollTop = messagesEl.scrollHeight;
+				wasAtBottom = true;
+			}
+		});
+	});
+
+	// Auto-scroll on new content. Skips while a PR-switch restore is still in
+	// flight, so it can't race with (and clobber) the restore.
+	$effect(() => {
 		void items.length;
 		void isStreaming;
-		if (!messagesEl) return;
+		if (!messagesEl || !prId) return;
+		if (prId !== lastRestoredPrId) return;
+		if (!wasAtBottom) return;
 		void tick().then(() => {
-			if (messagesEl) {
-				messagesEl.scrollTop = messagesEl.scrollHeight;
-			}
+			if (!messagesEl || prId !== lastRestoredPrId) return;
+			suppressNextScroll = true;
+			messagesEl.scrollTop = messagesEl.scrollHeight;
+			setPrScrollPosition(prId, 'rightPanel', messagesEl.scrollTop);
 		});
 	});
 
@@ -192,7 +261,7 @@
 	{/if}
 
 	<!-- Messages -->
-	<div class="panel-content" bind:this={messagesEl}>
+	<div class="panel-content" bind:this={messagesEl} onscroll={handleScroll}>
 		{#if items.length === 0 && !error}
 			<div class="empty-state">
 				<Bot size={32} class="empty-icon" />

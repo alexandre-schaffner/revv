@@ -1,5 +1,5 @@
 import { Context, Effect, Layer } from 'effect';
-import { eq, inArray } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import type { PullRequest } from '@revv/shared';
 import { NotFoundError, ValidationError } from '../domain/errors';
 import { pullRequests } from '../db/schema/index';
@@ -126,19 +126,30 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
 							.values(values)
 							.onConflictDoUpdate({
 								target: pullRequests.id,
+								// Drizzle expands a bare column reference like
+								// `pullRequests.headSha` to `head_sha = head_sha`
+								// — a no-op self-assignment. We need the EXCLUDED
+								// (newly-supplied) value, so every column the poll
+								// is meant to refresh has to go through
+								// `sql\`excluded.<col>\`` explicitly. Without this
+								// the row never moves past its initial-insert state,
+								// PollScheduler's existingShaMap-vs-fresh comparison
+								// fires `supersedeForPr` on every cycle, and an
+								// in-flight walkthrough at the latest SHA gets
+								// cancelled the next time the poll ticks.
 								set: {
-									title: pullRequests.title,
-									body: pullRequests.body,
-									status: pullRequests.status,
-									additions: pullRequests.additions,
-									deletions: pullRequests.deletions,
-									changedFiles: pullRequests.changedFiles,
-									headSha: pullRequests.headSha,
-									baseSha: pullRequests.baseSha,
-								updatedAt: pullRequests.updatedAt,
-								fetchedAt: pullRequests.fetchedAt,
-								requestedReviewers: pullRequests.requestedReviewers,
-							},
+									title: sql`excluded.title`,
+									body: sql`excluded.body`,
+									status: sql`excluded.status`,
+									additions: sql`excluded.additions`,
+									deletions: sql`excluded.deletions`,
+									changedFiles: sql`excluded.changed_files`,
+									headSha: sql`excluded.head_sha`,
+									baseSha: sql`excluded.base_sha`,
+									updatedAt: sql`excluded.updated_at`,
+									fetchedAt: sql`excluded.fetched_at`,
+									requestedReviewers: sql`excluded.requested_reviewers`,
+								},
 							})
 							.run()
 					);

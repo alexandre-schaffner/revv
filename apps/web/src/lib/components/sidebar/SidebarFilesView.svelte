@@ -14,6 +14,7 @@
 		setActiveFilePath,
 		getActiveTab,
 		setActiveTab,
+		getIsLoadingFiles,
 		loadRepoFile,
 		clearRepoFile,
 	} from '$lib/stores/review.svelte';
@@ -35,12 +36,19 @@
 		}
 		return getRepoTreePaths();
 	});
-	// In 'changed' mode we always have content to show as long as
-	// reviewFiles is populated — bypass the loading/cloning flow that the
-	// repo-tree fetch drives.
-	const status = $derived(
-		fileTreeScope === 'changed' ? 'ready' : getRepoTreeStatus(),
-	);
+	// In 'changed' mode the path source is `reviewFiles`, which is fetched by
+	// the review page's effect. While that fetch is in flight (e.g. right
+	// after a Cmd+P jump from one PR to another) `reviewFiles` has been
+	// cleared by `clearReviewFiles()` and the new diff hasn't arrived yet —
+	// surface that as `'loading'` so the placeholder renders instead of an
+	// empty (or worse, stale) tree the user can mis-click. Once the fetch
+	// resolves we settle to `'ready'`.
+	const status = $derived.by(() => {
+		if (fileTreeScope === 'changed') {
+			return getIsLoadingFiles() ? 'loading' : 'ready';
+		}
+		return getRepoTreeStatus();
+	});
 	const activePath = $derived(getActiveFilePath());
 	// Auto-focus the tree's first row whenever this view becomes active so
 	// the library's built-in arrow-key navigation has somewhere to start.
@@ -158,7 +166,9 @@
 		</div>
 	{:else if status === 'loading' && repoPaths.length === 0}
 		<div class="placeholder">
-			<span class="placeholder-text">Loading repo tree…</span>
+			<span class="placeholder-text">
+				{fileTreeScope === 'changed' ? 'Loading files…' : 'Loading repo tree…'}
+			</span>
 		</div>
 	{:else if status === 'error'}
 		<div class="placeholder placeholder--error">

@@ -4,6 +4,7 @@ import { goto } from '$app/navigation';
 import { setBatchSummaries } from '$lib/stores/sync.svelte';
 import { toast } from 'svelte-sonner';
 import { getCurrentUserLogin } from '$lib/stores/auth.svelte';
+import { fuzzyScore } from '$lib/utils/fuzzy';
 
 let pullRequests = $state<PullRequest[]>([]);
 let repositories = $state<Repository[]>([]);
@@ -14,13 +15,37 @@ let searchQuery = $state('');
 let isLoading = $state(false);
 let lastSynced = $state<Date | null>(null);
 
-let filteredPrs = $derived(
-	searchQuery.trim() === ''
-		? pullRequests
-		: pullRequests.filter((pr) =>
-				pr.title.toLowerCase().includes(searchQuery.toLowerCase())
-			)
-);
+// Sidebar PR search uses the same fuzzy scorer as the Cmd+P palette so a
+// search like "auth jw" can match "Add JWT auth middleware" and a search like
+// "feat/login" can match a branch even when it doesn't appear in the title.
+// Fields scored: title, source branch, `#externalId`, author login, and the
+// owner/name of the repo the PR lives in. The PR's best per-field score wins.
+//
+// Result ordering: when there's an active query we sort by score (descending)
+// so the strongest matches surface first within each repo group; with no
+// query we preserve the server-provided order.
+let filteredPrs = $derived.by((): PullRequest[] => {
+	const q = searchQuery.trim();
+	if (q === '') return pullRequests;
+
+	const repoMap = new Map(repositories.map((r) => [r.id, r]));
+
+	return pullRequests
+		.map((pr) => {
+			const repoName = repoMap.get(pr.repositoryId)?.fullName ?? '';
+			const score = Math.max(
+				fuzzyScore(q, pr.title),
+				fuzzyScore(q, pr.sourceBranch),
+				fuzzyScore(q, `#${pr.externalId}`),
+				fuzzyScore(q, pr.authorLogin),
+				fuzzyScore(q, repoName),
+			);
+			return { pr, score };
+		})
+		.filter((r) => r.score >= 0)
+		.sort((a, b) => b.score - a.score)
+		.map((r) => r.pr);
+});
 
 let groupedByRepo = $derived(
 	Map.groupBy(filteredPrs, (pr) => pr.repositoryId)

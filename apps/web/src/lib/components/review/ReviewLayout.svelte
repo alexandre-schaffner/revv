@@ -13,6 +13,8 @@
 		getRepoFileContent,
 		getRepoFileSize,
 		getRepoFileError,
+		getPrScrollPosition,
+		setPrScrollPosition,
 	} from '$lib/stores/review.svelte';
 	import {
 		getActivePanel,
@@ -150,9 +152,36 @@
 	let pendingG = false;
 	let gTimer: ReturnType<typeof setTimeout> | undefined;
 
+	// ── Diff-pane scroll persistence ─────────────────────────────────────────
+	//
+	// ReviewLayout is mounted only while the Diff tab is active (see
+	// +page.svelte's `{#if activeTab === 'diff'}` gate), so we save/restore
+	// against the per-PR `prViewStates` map. Save happens continuously via
+	// `onscroll`; restore happens once on mount. A latch suppresses the
+	// scroll event emitted by setting scrollTop during the restore so it
+	// can't clobber the freshly-restored value.
+	let diffScrollEl = $state<HTMLElement | null>(null);
+	let suppressNextDiffScroll = false;
+
 	function getDiffScroll(): HTMLElement | null {
-		return document.querySelector<HTMLElement>('.diff-scroll');
+		return diffScrollEl ?? document.querySelector<HTMLElement>('.diff-scroll');
 	}
+
+	function handleDiffScroll(): void {
+		if (suppressNextDiffScroll) {
+			suppressNextDiffScroll = false;
+			return;
+		}
+		if (!diffScrollEl) return;
+		setPrScrollPosition(prId, 'diff', diffScrollEl.scrollTop);
+	}
+
+	$effect(() => {
+		if (!diffScrollEl) return;
+		const saved = getPrScrollPosition(prId, 'diff');
+		suppressNextDiffScroll = true;
+		diffScrollEl.scrollTop = saved;
+	});
 
 	function navigateFile(direction: 1 | -1) {
 		const currentIdx = files.findIndex((f) => f.path === activeFilePath);
@@ -380,6 +409,8 @@
 		class:mode-visual={panel === 'diff-visual'}
 		tabindex="-1"
 		role="presentation"
+		bind:this={diffScrollEl}
+		onscroll={handleDiffScroll}
 	>
 		{#if activeFile}
 			<div class="file-title-section" bind:this={fileTitleSectionEl}>
