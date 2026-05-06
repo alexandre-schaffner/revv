@@ -3,7 +3,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Separator } from '$lib/components/ui/separator';
-	import { RefreshCw, ArrowDown, FileText, CheckCircle, AlertTriangle, AlertCircle, Circle, Loader2, Sparkles } from '@lucide/svelte';
+	import { RefreshCw, ArrowDown, FileText, CheckCircle, AlertTriangle, AlertCircle, Circle, Loader2, Sparkles, ChevronDown } from '@lucide/svelte';
 	import { getDiffThemeType } from '$lib/stores/theme.svelte';
 	import { initHighlighter } from '$lib/utils/code-highlight.svelte';
 	import { renderMarkdown } from '$lib/utils/markdown';
@@ -206,6 +206,19 @@
 		if (!scrollRoot) return;
 		userScrolledUp = false;
 		scrollRoot.scrollTo({ top: scrollRoot.scrollHeight, behavior: 'smooth' });
+	}
+
+	function scrollToRating() {
+		if (!scrollRoot) return;
+		const el = document.getElementById('walkthrough-rating');
+		if (!el) {
+			scrollRoot.scrollTo({ top: scrollRoot.scrollHeight, behavior: 'smooth' });
+			return;
+		}
+		const containerRect = scrollRoot.getBoundingClientRect();
+		const elRect = el.getBoundingClientRect();
+		const offset = elRect.top - containerRect.top + scrollRoot.scrollTop - 16;
+		scrollRoot.scrollTo({ top: offset, behavior: 'smooth' });
 	}
 
 	$effect(() => {
@@ -808,6 +821,14 @@
 							</div>
 						{/each}
 					</div>
+					{#if ratings.length > 0}
+						<div class="go-to-rating">
+							<Button variant="ghost" size="sm" style="cursor: pointer;" onclick={scrollToRating}>
+								<ChevronDown size={14} />
+								Go to rating
+							</Button>
+						</div>
+					{/if}
 				</div>
 				<Separator />
 			{/if}
@@ -883,7 +904,7 @@
 						</div>
 					{/if}
 					{#if ratings.length > 0}
-						<div class="sentiment-scorecard">
+						<div id="walkthrough-rating" class="sentiment-scorecard">
 							<WalkthroughRatingsGrid {ratings} blocks={visibleBlocks} onJump={jumpToStep} />
 						</div>
 					{/if}
@@ -1608,6 +1629,12 @@
 		display: flex;
 		flex-direction: column;
 		gap: 8px;
+	}
+
+	.go-to-rating {
+		display: flex;
+		justify-content: flex-start;
+		margin-top: 4px;
 	}
 
 	/* ── Blocks ──────────────────────────────────────────────────────── */

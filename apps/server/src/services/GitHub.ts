@@ -1,5 +1,5 @@
 import { Context, Effect, Layer, Schedule } from 'effect';
-import type { PullRequest, Repository } from '@revv/shared';
+import type { Org, PullRequest, Repository } from '@revv/shared';
 import {
 	GitHubAuthError,
 	GitHubNetworkError,
@@ -358,6 +358,9 @@ export class GitHubService extends Context.Tag('GitHubService')<
 		readonly listUserRepos: (
 			token: string
 		) => Effect.Effect<Repository[], GitHubError>;
+		readonly listUserOrgs: (
+			token: string
+		) => Effect.Effect<Org[], GitHubError>;
 		readonly getPrMeta: (
 			repoFullName: string,
 			prNumber: number,
@@ -529,6 +532,15 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
 				3
 			);
 			return (data as Record<string, unknown>[]).map((raw) => mapRepo(raw));
+		}).pipe(Effect.retry(retrySchedule)),
+
+	listUserOrgs: (token) =>
+		Effect.gen(function* () {
+			const data = yield* githubFetchPaginated('/user/orgs?per_page=100', token, 3);
+			return (data as Record<string, unknown>[]).map((raw) => ({
+				login: raw['login'] as string,
+				avatarUrl: (raw['avatar_url'] as string | null) ?? null,
+			}));
 		}).pipe(Effect.retry(retrySchedule)),
 
 	getPrMeta: (repoFullName, prNumber, token) =>

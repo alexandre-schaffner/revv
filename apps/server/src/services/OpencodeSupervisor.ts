@@ -247,11 +247,29 @@ function buildHttpClient(
 		},
 
 		async postMessage(params) {
-			const { sessionId, ...rest } = params;
+			const { sessionId, model, ...rest } = params;
+			// Opencode's /session/{id}/message body wants `model` as
+			// `{ providerID, modelID }` — we accept the unified
+			// `provider/modelId` slash form everywhere else in Revv and split
+			// here at the wire boundary. Slash-less strings degrade to omitting
+			// the field so the daemon picks its default.
+			const wireModel = (() => {
+				if (model === undefined) return undefined;
+				const slash = model.indexOf("/");
+				if (slash <= 0 || slash === model.length - 1) return undefined;
+				return {
+					providerID: model.slice(0, slash),
+					modelID: model.slice(slash + 1),
+				};
+			})();
+			const body = {
+				...rest,
+				...(wireModel !== undefined ? { model: wireModel } : {}),
+			};
 			const res = await request(
 				"POST",
 				`/session/${encodeURIComponent(sessionId)}/message`,
-				rest,
+				body,
 			);
 			if (!res.ok) {
 				const text = await res.text().catch(() => "");
@@ -278,10 +296,10 @@ function buildHttpClient(
 
 		async subscribeToEvents({ sessionId, signal, onEvent }) {
 			// The /event endpoint is a global SSE stream. We filter by session id
-			// client-side. See https://opencode.ai for the envelope shape; at the
-			// time of writing events carry a `.properties.sessionID` or similar
-			// discriminator. TODO(verify): confirm the exact field name once the
-			// daemon is wired up end-to-end; if it differs, update the filter.
+			// client-side. Verified against `opencode serve` 1.4.x: events carry
+			// `properties.sessionID` (capital ID); some events (e.g.
+			// server.connected) have no session at all and we let those through
+			// so global state changes still arrive.
 			const res = await fetch(`${baseUrl}/event`, {
 				method: "GET",
 				headers: {

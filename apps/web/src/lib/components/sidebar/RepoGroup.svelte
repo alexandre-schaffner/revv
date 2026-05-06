@@ -91,7 +91,7 @@
 		{/if}
 
 		<span class="min-w-0 flex-1 truncate text-left text-xs font-medium text-text-secondary">
-			{repository.fullName}
+			{repository.name}
 		</span>
 
 		<span

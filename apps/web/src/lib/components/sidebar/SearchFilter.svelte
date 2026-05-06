@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { setSearchQuery } from '$lib/stores/prs.svelte';
+	import { setFocusedId } from '$lib/stores/sidebar-nav.svelte';
 
 	let { onAddRepo }: { onAddRepo: () => void } = $props();
 
@@ -11,7 +12,55 @@
 		if (debounceTimer) clearTimeout(debounceTimer);
 		debounceTimer = setTimeout(() => {
 			setSearchQuery(inputValue);
+			debounceTimer = null;
 		}, 300);
+	}
+
+	function flushSearch(): void {
+		if (debounceTimer) {
+			clearTimeout(debounceTimer);
+			debounceTimer = null;
+		}
+		setSearchQuery(inputValue);
+	}
+
+	// Enter / ArrowDown highlight the first PR of the rendered list as if
+	// the user were hovering it — pure visual cue via the sidebar-nav
+	// store (drives the .sidebar-nav-focused class), no navigation. DOM
+	// focus stays on the input so the user can keep typing.
+	//
+	// Repo groups default to collapsed, so on a fresh search the only
+	// data-sidebar-nav nodes in the PR pane are the repo headers — which
+	// is why the previous "first nav item" version landed the highlight
+	// on a header instead of a PR. Here we look for an actual PR row
+	// (data-nav-type="pr"); if none are mounted because every group is
+	// closed, we click the first repo header to expand it and walk the
+	// DOM again on the next frame.
+	function highlightFirstPr(): boolean {
+		const pr = document.querySelector<HTMLElement>(
+			'.view-pane--prs [data-nav-type="pr"]',
+		);
+		const id = pr?.getAttribute('data-sidebar-nav');
+		if (!id) return false;
+		setFocusedId(id);
+		return true;
+	}
+
+	function handleKeydown(e: KeyboardEvent): void {
+		if (e.key !== 'Enter' && e.key !== 'ArrowDown') return;
+		e.preventDefault();
+		flushSearch();
+		requestAnimationFrame(() => {
+			if (highlightFirstPr()) return;
+			const firstGroup = document.querySelector<HTMLElement>(
+				'.view-pane--prs [data-nav-type="repo"]',
+			);
+			if (!firstGroup) return;
+			firstGroup.click();
+			requestAnimationFrame(() => {
+				highlightFirstPr();
+			});
+		});
 	}
 
 	function handleClear() {
@@ -38,6 +87,7 @@
 			placeholder="Search PRs..."
 			value={inputValue}
 			oninput={handleInput}
+			onkeydown={handleKeydown}
 		/>
 		{#if inputValue}
 			<button

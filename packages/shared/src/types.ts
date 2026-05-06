@@ -136,6 +136,11 @@ export interface UserIdentity {
 	avatarUrl: string | null;
 }
 
+export interface Org {
+	login: string;
+	avatarUrl: string | null;
+}
+
 export interface ThreadMessage {
 	id: string;
 	threadId: string;

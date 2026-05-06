@@ -297,22 +297,6 @@
 							</TooltipTrigger>
 							<TooltipContent>Stop generation</TooltipContent>
 						</Tooltip>
-					{:else if activeTab === 'walkthrough' && walkthroughSummary}
-						<Tooltip>
-							<TooltipTrigger>
-								{#snippet child({ props })}
-									<Button
-										{...props}
-										variant="ghost"
-										size="icon-sm"
-										onclick={handleRegenerate}
-									>
-										<RefreshCw size={14} />
-									</Button>
-								{/snippet}
-							</TooltipTrigger>
-							<TooltipContent>Regenerate walkthrough</TooltipContent>
-						</Tooltip>
 					{/if}
 				</div>
 				<span class="page-subtitle">#{pr.externalId} · {pr.sourceBranch} → {pr.targetBranch}</span>
@@ -320,6 +304,20 @@
 					<Badge variant="outline" class={riskClasses[walkthroughRiskLevel] ?? ''}>
 						{walkthroughRiskLevel} risk
 					</Badge>
+				{/if}
+				{#if activeTab === 'walkthrough' && walkthroughSummary && !walkthroughStreaming}
+					<div class="regenerate-row">
+						<Button
+							variant="ghost"
+							size="sm"
+							class="regenerate-btn"
+							style="cursor: pointer;"
+							onclick={handleRegenerate}
+						>
+							<RefreshCw size={14} />
+							Regenerate walkthrough
+						</Button>
+					</div>
 				{/if}
 			</div>
 
@@ -511,6 +509,15 @@
 		background: color-mix(in srgb, var(--color-danger) 12%, transparent) !important;
 		color: var(--color-danger) !important;
 		border-color: color-mix(in srgb, var(--color-danger) 35%, transparent) !important;
+	}
+
+	/* ── Regenerate button (below risk badge) ─────────────────────────── */
+	.regenerate-row {
+		margin-top: 10px;
+	}
+
+	:global(.regenerate-btn) {
+		margin-left: -10px;
 	}
 
 	.loading {

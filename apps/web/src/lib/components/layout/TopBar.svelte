@@ -1,29 +1,46 @@
 <script lang="ts">
-	import { Sun, Moon, Monitor, RefreshCw } from '@lucide/svelte';
+	import { Sun, Moon, Monitor, PanelLeftClose, PanelLeftOpen, RefreshCw } from '@lucide/svelte';
 
 	import FloatingTabs from './FloatingTabs.svelte';
-	import { getSelectedPr } from '$lib/stores/prs.svelte';
-	import { getActiveTab, setActiveTab } from '$lib/stores/review.svelte';
+	import { getSelectedPr, getSelectedPrId, getIsLoading } from '$lib/stores/prs.svelte';
+	import { setActiveTab } from '$lib/stores/review.svelte';
 	import { getThemePreference, setThemePreference, type ThemePreference } from '$lib/stores/theme.svelte';
 	import { getActivePanel } from '$lib/stores/focus-mode.svelte';
 	import { getTopbarCollapsed, getTopbarSubtitle } from '$lib/stores/topbar.svelte';
-	import { getIsStreaming as getWalkthroughStreaming, getSummary as getWalkthroughSummary, regenerate as regenerateWalkthrough } from '$lib/stores/walkthrough.svelte';
-	import { page } from '$app/state';
+	import { requestSync, requestFullSync } from '$lib/stores/ws.svelte';
+	import { getPrListSyncing } from '$lib/stores/sync.svelte';
+	import { fetchOrgs } from '$lib/stores/orgs.svelte';
 
 	interface Props {
 		rightPanelOpen: boolean;
 		onTogglePanel: () => void;
+		sidebarCollapsed: boolean;
+		onToggleSidebar: () => void;
 	}
 
-	let { rightPanelOpen, onTogglePanel }: Props = $props();
+	let { rightPanelOpen, onTogglePanel, sidebarCollapsed, onToggleSidebar }: Props = $props();
 
 	const pr = $derived(getSelectedPr());
-	const activeTab = $derived(getActiveTab());
+	const selectedPrId = $derived(getSelectedPrId());
 	const theme = $derived(getThemePreference());
 	const collapsed = $derived(getTopbarCollapsed());
 	const topbarSubtitle = $derived(getTopbarSubtitle());
-	const walkthroughStreaming = $derived(getWalkthroughStreaming());
-	const walkthroughSummary = $derived(getWalkthroughSummary());
+
+	// Combines direct-HTTP sync (`getIsLoading`) with WebSocket-driven
+	// PR-list sync (`getPrListSyncing`) so the spinner reflects any in-flight
+	// PR-list sync regardless of transport. Mirrors what Sidebar used to do.
+	const isSyncing = $derived(getIsLoading() || getPrListSyncing());
+
+	function handleSyncPrs(): void {
+		if (selectedPrId) {
+			requestFullSync(selectedPrId);
+		} else {
+			requestSync();
+		}
+		// Re-pull the org list — picks up newly-joined orgs and rotates
+		// any signed avatar URLs without requiring re-auth.
+		void fetchOrgs();
+	}
 	const cycle: Record<ThemePreference, ThemePreference> = {
 		system: 'light',
 		light: 'dark',
@@ -39,14 +56,25 @@
 	function cycleTheme() {
 		setThemePreference(cycle[theme]);
 	}
-
-	function handleRegenerate(): void {
-		const prId = page.params['prId'] ?? '';
-		regenerateWalkthrough(prId);
-	}
 </script>
 
 <div class="topbar" data-tauri-drag-region>
+	<!-- Sidebar collapse toggle. In Tauri, absolutely positioned in the
+		 traffic-light overlay row immediately to the right of the macOS
+		 buttons. In browser mode, lives flush-left in the topbar's flex row. -->
+	<button
+		class="left-toggle-btn"
+		onclick={onToggleSidebar}
+		aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+		title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+	>
+		{#if sidebarCollapsed}
+			<PanelLeftOpen size={14} />
+		{:else}
+			<PanelLeftClose size={14} />
+		{/if}
+	</button>
+
 	<!-- Left: app name / inline PR title when scrolled -->
 	<div class="title-block" data-tauri-drag-region>
 		{#if collapsed && pr}
@@ -58,18 +86,17 @@
 		{/if}
 	</div>
 
-	<!-- Right: regenerate + sync indicator + theme toggle + panel toggle -->
+	<!-- Right: sync PRs + theme toggle + panel toggle -->
 	<div class="panel-toggle-wrap" data-tauri-drag-region>
-		{#if collapsed && activeTab === 'walkthrough' && !walkthroughStreaming && walkthroughSummary}
-			<button
-				class="theme-btn"
-				onclick={handleRegenerate}
-				aria-label="Regenerate walkthrough"
-				title="Regenerate walkthrough"
-			>
-				<RefreshCw size={14} />
-			</button>
-		{/if}
+		<button
+			class="theme-btn"
+			onclick={handleSyncPrs}
+			disabled={isSyncing}
+			aria-label="Sync pull requests"
+			title="Sync pull requests"
+		>
+			<RefreshCw size={14} class={isSyncing ? 'animate-spin' : ''} />
+		</button>
 		<button
 			class="theme-btn"
 			onclick={cycleTheme}
@@ -174,8 +201,40 @@
 	:global(html.tauri) .title-block {
 		position: absolute;
 		top: 4px;
-		left: 84px;
+		left: 110px;
 		right: 80px;
+		height: 22px;
+	}
+
+	/* Sidebar collapse toggle. In browser mode, lives in the static flex row
+	   at the left edge. In Tauri, anchored to the overlay row immediately
+	   right of the macOS traffic lights (which occupy ~0–72px). */
+	.left-toggle-btn {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 22px;
+		height: 100%;
+		border: none;
+		border-radius: 4px;
+		background: transparent;
+		color: var(--color-text-muted);
+		cursor: pointer;
+		flex-shrink: 0;
+		transition:
+			background-color var(--duration-snap),
+			color var(--duration-snap);
+	}
+
+	.left-toggle-btn:hover {
+		background: var(--color-bg-tertiary);
+		color: var(--color-text-secondary);
+	}
+
+	:global(html.tauri) .left-toggle-btn {
+		position: absolute;
+		top: 4px;
+		left: 78px;
 		height: 22px;
 	}
 
@@ -198,6 +257,16 @@
 	.theme-btn:hover {
 		background: var(--color-bg-tertiary);
 		color: var(--color-text-secondary);
+	}
+
+	.theme-btn:disabled {
+		opacity: 0.5;
+		cursor: default;
+	}
+
+	.theme-btn:disabled:hover {
+		background: transparent;
+		color: var(--color-text-muted);
 	}
 
 	.panel-btn {

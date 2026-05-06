@@ -4,6 +4,7 @@ import { goto } from '$app/navigation';
 import { setBatchSummaries } from '$lib/stores/sync.svelte';
 import { toast } from 'svelte-sonner';
 import { getCurrentUserLogin } from '$lib/stores/auth.svelte';
+import { getActiveOrg } from '$lib/stores/orgs.svelte';
 import { fuzzyScore } from '$lib/utils/fuzzy';
 
 let pullRequests = $state<PullRequest[]>([]);
@@ -50,6 +51,15 @@ let filteredPrs = $derived.by((): PullRequest[] => {
 let groupedByRepo = $derived(
 	Map.groupBy(filteredPrs, (pr) => pr.repositoryId)
 );
+
+// Repos visible in the sidebar after the active-org filter is applied. The
+// underlying `repositories` array is left untouched so background sync,
+// polling, and selection lookups continue to resolve every repo regardless
+// of the org filter — only the rendered list narrows.
+let visibleRepositories = $derived.by(() => {
+	const owner = getActiveOrg();
+	return owner ? repositories.filter((r) => r.owner === owner) : repositories;
+});
 
 let needsYourReview = $derived(
 	(() => {
@@ -234,6 +244,10 @@ export function getPullRequests(): PullRequest[] {
 
 export function getRepositories(): Repository[] {
 	return repositories;
+}
+
+export function getVisibleRepositories(): Repository[] {
+	return visibleRepositories;
 }
 
 export function getSelectedPrId(): string | null {

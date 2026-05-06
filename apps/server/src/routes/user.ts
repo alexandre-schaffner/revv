@@ -8,7 +8,7 @@ import { PullRequestService } from '../services/PullRequest';
 import { GitHubService } from '../services/GitHub';
 import { TokenProvider } from '../services/TokenProvider';
 import { withAuth, handleAppError } from './middleware';
-import type { UserIdentity, UserRole } from '@revv/shared';
+import type { Org, UserIdentity, UserRole } from '@revv/shared';
 
 /**
  * Return the current user's GitHub identity and (optionally) their role for a PR.
@@ -85,4 +85,20 @@ export const userRoutes = new Elysia({ prefix: '/api/user' })
 				prId: t.Optional(t.String()),
 			}),
 		},
-	);
+	)
+	.get('/orgs', async (ctx) => {
+		try {
+			const userId = ctx.session.user.id;
+			const orgs = await AppRuntime.runPromise(
+				Effect.gen(function* () {
+					const tokenProvider = yield* TokenProvider;
+					const github = yield* GitHubService;
+					const token = yield* tokenProvider.getGitHubToken(userId);
+					return yield* github.listUserOrgs(token);
+				}).pipe(Effect.orElseSucceed(() => [] as Org[])),
+			);
+			return { orgs };
+		} catch (e) {
+			return handleAppError(e, ctx);
+		}
+	});

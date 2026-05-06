@@ -1,11 +1,9 @@
 <script lang="ts">
-	import { goto } from '$app/navigation';
-	import { page } from '$app/state';
-	import { PanelLeftClose, PanelLeftOpen, Settings, GitPullRequestArrow, GitPullRequest, ChevronLeft } from '@lucide/svelte';
+	import { GitPullRequestArrow, GitPullRequest, ChevronLeft } from '@lucide/svelte';
 	import {
 		getRepositories,
+		getVisibleRepositories,
 		getGroupedByRepo,
-		getIsLoading,
 		getNeedsYourReview,
 		getNeedsYourReviewByRepo,
 		getSelectedPrId,
@@ -15,8 +13,6 @@
 		getPrScrollPosition,
 		setPrScrollPosition,
 	} from '$lib/stores/review.svelte';
-	import { requestSync, requestFullSync } from '$lib/stores/ws.svelte';
-	import { getPrListSyncing } from '$lib/stores/sync.svelte';
 	import { handleKey as handleNavKey, clearFocus, setFocusedId } from '$lib/stores/sidebar-nav.svelte';
 	import { getPaletteOpen } from '$lib/stores/shortcuts.svelte';
 	import { getActivePanel, enterScrollMode } from '$lib/stores/focus-mode.svelte';
@@ -30,38 +26,25 @@
 	import RepoGroup from '$lib/components/sidebar/RepoGroup.svelte';
 	import AddRepoDialog from '$lib/components/sidebar/AddRepoDialog.svelte';
 	import SidebarFilesView from '$lib/components/sidebar/SidebarFilesView.svelte';
+	import OrgSwitcher from '$lib/components/sidebar/OrgSwitcher.svelte';
+	import UserMenu from '$lib/components/sidebar/UserMenu.svelte';
 
 	interface Props {
 		collapsed?: boolean;
-		onToggle?: () => void;
 	}
 
-	let { collapsed = false, onToggle }: Props = $props();
+	let { collapsed = false }: Props = $props();
 
 	let addRepoOpen = $derived(getAddRepoDialogOpen());
 	const selectedPrId = $derived(getSelectedPrId());
 	const view = $derived(getSidebarView());
-	// Selected PR + its repo, for the file-tree-mode breadcrumb in the
-	// header. Both are nullable: PR list mode renders `null` for both
-	// (header shows "Pull Requests" + refresh) and even in files view the
-	// stores can briefly disagree during a swap.
+	// Selected PR + its repo, used to drive the breadcrumb back-button in
+	// files view. Both are nullable: PR-list mode renders `null` for both,
+	// and even in files view the stores can briefly disagree during a swap.
 	const selectedPr = $derived(getSelectedPr());
 	const selectedRepo = $derived(
 		selectedPr ? getRepositories().find((r) => r.id === selectedPr.repositoryId) ?? null : null,
 	);
-	// `isLoading` covers direct HTTP syncs (fetchPrs/syncPrs); `getPrListSyncing()`
-	// covers WebSocket-driven PR-list syncs (prs:sync-started → prs:sync-complete)
-	// which is what handleRefresh below actually triggers. Combine both so the
-	// spinner reflects any in-flight PR-list sync regardless of transport.
-	const isSyncing = $derived(getIsLoading() || getPrListSyncing());
-
-	function handleRefresh() {
-		if (selectedPrId) {
-			requestFullSync(selectedPrId);
-		} else {
-			requestSync(); // no PR selected, just sync PRs
-		}
-	}
 
 	// ── Per-PR scroll persistence (left pane) ────────────────────────────────
 	//
@@ -152,19 +135,26 @@
 		if (e.metaKey || e.ctrlKey || e.altKey) return;
 		if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 
-		// Only process sidebar nav keys when the sidebar panel is active
-		if (getActivePanel() !== 'sidebar') return;
-
-		// '/' focuses the search input (vim search convention). Handled
-		// before the files-view branch below so it works in both views —
-		// PR-list mode focuses "Search PRs..." and files mode focuses
-		// "Search files...". Both inputs live under `.sidebar input`.
+		// '/' is the global "go to search" shortcut. Resolved against the
+		// visible pane — PR search in 'prs' view, file search in 'files'
+		// view — instead of the previous `.sidebar input` lookup, which
+		// always landed on the first DOM input (PR search) even while the
+		// files pane was the one on screen. Sits above the active-panel
+		// guard so it also works from diff-scroll / diff-line modes.
 		if (e.key === '/') {
 			e.preventDefault();
-			const input = document.querySelector<HTMLInputElement>('.sidebar input');
+			const selector =
+				view === 'files'
+					? '.view-pane--files input'
+					: '.view-pane--prs input';
+			const input = document.querySelector<HTMLInputElement>(selector);
 			input?.focus();
+			input?.select();
 			return;
 		}
+
+		// Only process sidebar nav keys when the sidebar panel is active
+		if (getActivePanel() !== 'sidebar') return;
 
 		// In files view we delegate movement to @pierre/trees' built-in
 		// keyboard handler, which lives on the row buttons inside the tree's
@@ -292,69 +282,40 @@
 	anchored at the left edge and remains clickable even when collapsed to 40px.
 -->
 <div class="sidebar" role="none" onclick={handleSidebarClick}>
-	<!-- Header — always visible -->
-	<div class="sidebar-header">
-		<!-- Toggle button: leftmost, always in the visible area -->
-		<button
-			class="icon-btn"
-			onclick={onToggle}
-			title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-			aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-		>
-			{#if collapsed}
-				<PanelLeftOpen size={14} />
-			{:else}
-				<PanelLeftClose size={14} />
-			{/if}
-		</button>
-
-		<!-- Content clipped when collapsed.
-			 In files view we replace "Pull Requests" + refresh with a
-			 breadcrumb back-button; the refresh button is dropped in
-			 files mode (sync is reachable from PR-list one swipe back,
-			 and the breadcrumb fully occupies the row anyway). -->
-		{#if !collapsed}
-			{#if view === 'files'}
-				<button
-					class="files-header"
-					onclick={() => setSidebarView('prs')}
-					title="Back to PR list (Esc)"
-					aria-label="Back to PR list"
-				>
-					<ChevronLeft size={14} class="back-chevron" />
-					{#if selectedPr && selectedRepo}
-						<span class="crumb-repo" title={selectedRepo.fullName}>{selectedRepo.fullName}</span>
-						<span class="crumb-sep">·</span>
-						<span class="crumb-num">#{selectedPr.externalId}</span>
-						<span class="crumb-title" title={selectedPr.title}>{selectedPr.title}</span>
-					{:else}
-						<span class="crumb-title">Pull request</span>
-					{/if}
-				</button>
-			{:else}
-				<span class="header-label">Pull Requests</span>
-				<button
-					class="icon-btn"
-					onclick={handleRefresh}
-					disabled={isSyncing}
-					title="Sync PRs"
-					aria-label="Sync pull requests"
-				>
+	<!-- Header — keeps the org avatar visible at all times so the user
+		 always knows the active scope, even when the sidebar is collapsed.
+		 Expand affordance lives in the topbar next to the macOS traffic lights. -->
+	<div class="sidebar-header" class:sidebar-header--collapsed={collapsed}>
+		{#if !collapsed && view === 'files'}
+			<button
+				class="files-header"
+				onclick={() => setSidebarView('prs')}
+				title="Back to PR list (Esc)"
+				aria-label="Back to PR list"
+			>
+				<ChevronLeft size={14} class="back-chevron" />
+				{#if selectedPr && selectedRepo}
 					<svg
-						class="size-[14px] {isSyncing ? 'animate-spin' : ''}"
+						class="crumb-repo-icon"
 						xmlns="http://www.w3.org/2000/svg"
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						stroke-width="2"
+						viewBox="0 0 16 16"
+						fill="currentColor"
+						aria-hidden="true"
 					>
-						<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
-						<path d="M21 3v5h-5" />
-						<path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
-						<path d="M8 16H3v5" />
+						<path
+							d="M2 2.5A2.5 2.5 0 0 1 4.5 0h8.75a.75.75 0 0 1 .75.75v12.5a.75.75 0 0 1-.75.75h-2.5a.75.75 0 0 1 0-1.5h1.75v-2h-8a1 1 0 0 0-.714 1.7.75.75 0 1 1-1.072 1.05A2.495 2.495 0 0 1 2 11.5Zm10.5-1h-8a1 1 0 0 0-1 1v6.708A2.486 2.486 0 0 1 4.5 9h8ZM5 12.25a.25.25 0 0 1 .25-.25h3.5a.25.25 0 0 1 .25.25v3.25a.25.25 0 0 1-.4.2l-1.45-1.087a.249.249 0 0 0-.3 0L5.4 15.7a.75.75 0 0 1-.4-.2Z"
+						/>
 					</svg>
-				</button>
-			{/if}
+					<span class="crumb-repo" title={selectedRepo.fullName}>{selectedRepo.name}</span>
+					<span class="crumb-sep">·</span>
+					<span class="crumb-num">#{selectedPr.externalId}</span>
+					<span class="crumb-title" title={selectedPr.title}>{selectedPr.title}</span>
+				{:else}
+					<span class="crumb-title">Pull request</span>
+				{/if}
+			</button>
+		{:else}
+			<OrgSwitcher {collapsed} />
 		{/if}
 	</div>
 
@@ -387,7 +348,7 @@
 								<span class="section-count">{getNeedsYourReview().length}</span>
 							</div>
 							<div class="section-items">
-								{#each getRepositories().filter(r => (getNeedsYourReviewByRepo().get(r.id) ?? []).length > 0) as repo (repo.id)}
+								{#each getVisibleRepositories().filter(r => (getNeedsYourReviewByRepo().get(r.id) ?? []).length > 0) as repo (repo.id)}
 									{@const prs = getNeedsYourReviewByRepo().get(repo.id) ?? []}
 									<RepoGroup repository={repo} {prs} navPrefix="review" />
 								{/each}
@@ -406,7 +367,7 @@
 							</button>
 						</div>
 					{:else}
-						{@const allOpenPrsCount = getRepositories().reduce((sum, repo) => {
+						{@const allOpenPrsCount = getVisibleRepositories().reduce((sum, repo) => {
 							const reviewIds = new Set((getNeedsYourReviewByRepo().get(repo.id) ?? []).map(p => p.id));
 							return sum + (getGroupedByRepo().get(repo.id) ?? []).filter(p => !reviewIds.has(p.id)).length;
 						}, 0)}
@@ -415,7 +376,7 @@
 							<span>All Open PRs</span>
 							<span class="section-count">{allOpenPrsCount}</span>
 						</div>
-						{#each getRepositories() as repo (repo.id)}
+						{#each getVisibleRepositories() as repo (repo.id)}
 							{@const reviewIds = new Set((getNeedsYourReviewByRepo().get(repo.id) ?? []).map(p => p.id))}
 							{@const prs = (getGroupedByRepo().get(repo.id) ?? []).filter(p => !reviewIds.has(p.id))}
 							{#if prs.length > 0}
@@ -437,30 +398,11 @@
 	</div>
 
 	<!--
-		Footer lives outside .sidebar-body so the Settings button stays visible
+		Footer lives outside .sidebar-body so the user menu stays visible
 		and clickable even when the sidebar is collapsed (body is display:none).
 	-->
 	<div class="sidebar-footer" class:sidebar-footer--collapsed={collapsed}>
-		{#if collapsed}
-			<button
-				class="icon-btn"
-				class:icon-btn--active={page.url.pathname === '/settings'}
-				onclick={() => goto(page.url.pathname === '/settings' ? '/' : '/settings')}
-				title="Settings"
-				aria-label="Settings"
-			>
-				<Settings size={14} />
-			</button>
-		{:else}
-			<button
-				class="settings-btn"
-				class:settings-btn--active={page.url.pathname === '/settings'}
-				onclick={() => goto(page.url.pathname === '/settings' ? '/' : '/settings')}
-			>
-				<Settings size={14} />
-				Settings
-			</button>
-		{/if}
+		<UserMenu {collapsed} />
 	</div>
 </div>
 
@@ -483,25 +425,20 @@
 		display: flex;
 		align-items: center;
 		gap: 4px;
-		padding: 0 6px;
-		height: 40px;
+		padding: 4px 6px;
+		height: 48px;
 		border-bottom: 1px solid var(--color-border);
 		flex-shrink: 0;
 		/* No min-width — must be happy at 40px */
 	}
 
-	.header-label {
-		font-size: 9px;
-		font-weight: 600;
-		letter-spacing: 0.08em;
-		text-transform: uppercase;
-		color: var(--color-text-muted);
-		flex: 1;
-		white-space: nowrap;
-		overflow: hidden;
+	.sidebar-header--collapsed {
+		justify-content: center;
+		padding: 0;
+		height: 40px;
 	}
 
-	/* Files-view breadcrumb back-button. Replaces "Pull Requests" + refresh
+	/* Files-view breadcrumb back-button. Replaces the org switcher + refresh
 		 in the top header when the sidebar is in 'files' view. Stretches the
 		 full content row (40px high, gap-respecting padding) so clicking
 		 anywhere on the row swipes back. Scoped styles must live here, with
@@ -513,14 +450,14 @@
 		flex: 1;
 		min-width: 0;
 		height: 100%;
-		padding: 0 4px;
+		padding: 0 6px;
 		border: none;
 		border-radius: 5px;
 		background: transparent;
 		color: var(--color-text-secondary);
 		cursor: pointer;
 		text-align: left;
-		font-size: 11px;
+		font-size: 12px;
 		transition: background-color var(--duration-snap);
 	}
 
@@ -529,6 +466,13 @@
 	}
 
 	.files-header :global(.back-chevron) {
+		flex-shrink: 0;
+		color: var(--color-text-muted);
+	}
+
+	.crumb-repo-icon {
+		width: 13px;
+		height: 13px;
 		flex-shrink: 0;
 		color: var(--color-text-muted);
 	}
@@ -618,39 +562,6 @@
 		pointer-events: none;
 	}
 
-	/* Icon buttons used in the header */
-	.icon-btn {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 26px;
-		height: 26px;
-		border: none;
-		border-radius: 5px;
-		background: transparent;
-		color: var(--color-text-muted);
-		cursor: pointer;
-		flex-shrink: 0; /* never squeeze away */
-		transition:
-			background-color var(--duration-snap),
-			color var(--duration-snap);
-	}
-
-	.icon-btn:hover {
-		background: var(--color-bg-elevated);
-		color: var(--color-text-secondary);
-	}
-
-	.icon-btn:disabled {
-		opacity: 0.4;
-		cursor: default;
-	}
-
-	.icon-btn--active {
-		background: var(--color-bg-elevated);
-		color: var(--color-text-secondary);
-	}
-
 	/* PR list */
 	.pr-list {
 		flex: 1;
@@ -734,40 +645,15 @@
 	.sidebar-footer {
 		margin-top: auto;
 		border-top: 1px solid var(--color-border);
-		padding: 8px;
+		padding: 4px 8px;
 		flex-shrink: 0;
 	}
 
 	.sidebar-footer--collapsed {
 		display: flex;
 		justify-content: center;
-		padding: 7px 0; /* centers the 26px icon-btn in the 40px collapsed column */
-	}
-
-	.settings-btn {
-		display: flex;
 		align-items: center;
-		gap: 8px;
-		width: 100%;
-		padding: 6px 8px;
-		border-radius: 6px;
-		border: none;
-		background: transparent;
-		font-size: 11px;
-		color: var(--color-text-muted);
-		cursor: pointer;
-		transition:
-			background-color var(--duration-snap),
-			color var(--duration-snap);
-	}
-
-	.settings-btn:hover {
-		background: var(--color-bg-tertiary);
-		color: var(--color-text-secondary);
-	}
-
-	.settings-btn--active {
-		background: var(--color-bg-elevated);
-		color: var(--color-text-secondary);
+		padding: 0;
+		height: 40px; /* matches BottomBar height */
 	}
 </style>

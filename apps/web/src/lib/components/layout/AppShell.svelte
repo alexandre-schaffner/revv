@@ -128,7 +128,7 @@
 	style={gridStyle}
 >
 	<aside class="sidebar-area">
-		<Sidebar collapsed={sidebarCollapsed} onToggle={toggleSidebar} />
+		<Sidebar collapsed={sidebarCollapsed} />
 
 		{#if !sidebarCollapsed}
 			<div
@@ -146,7 +146,12 @@
 	</aside>
 
 	<header class="topbar-area" data-tauri-drag-region>
-		<TopBar {rightPanelOpen} onTogglePanel={toggleRightPanel} />
+		<TopBar
+			{rightPanelOpen}
+			onTogglePanel={toggleRightPanel}
+			{sidebarCollapsed}
+			onToggleSidebar={toggleSidebar}
+		/>
 		{#if pr && !isSettingsRoute}
 			<div class="tabs-float">
 				<FloatingTabs

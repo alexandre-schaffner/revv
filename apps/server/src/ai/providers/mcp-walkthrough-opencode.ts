@@ -26,6 +26,7 @@
 // layer-graph cycles with Ai.ts.
 
 import type {
+	WalkthroughLifecyclePhase,
 	WalkthroughStreamEvent,
 	WalkthroughTokenUsage,
 } from "@revv/shared";
@@ -55,6 +56,30 @@ import type { Db } from "../../db";
 // Chat consumers (chat-opencode.ts) also want Write/Edit so the UI can show
 // "Edited src/foo.ts" inline; the walkthrough caller never produces those
 // because its tool surface is read-only.
+//
+// Opencode's daemon emits built-in tool names in lowercase (`read`, `grep`,
+// `bash`, …) on /event, while the rest of Revv uses Anthropic's canonical
+// capitalized form (`Read`, `Grep`, …). The map below normalizes opencode's
+// shape into the canonical names so `EXPLORATION_TOOLS.has(...)` and
+// `buildExplorationDescription` keep working. Without this, every opencode
+// tool event slipped past the lookup and the provider's queue stayed empty,
+// tripping the guard's 90 s first-event timeout on every walkthrough run.
+const OPENCODE_TOOL_NAME_MAP: Record<string, string> = {
+	read: "Read",
+	grep: "Grep",
+	glob: "Glob",
+	bash: "Bash",
+	write: "Write",
+	edit: "Edit",
+	list: "LS",
+	todoread: "TodoRead",
+	todowrite: "TodoWrite",
+};
+
+function normalizeToolName(raw: string): string {
+	return OPENCODE_TOOL_NAME_MAP[raw.toLowerCase()] ?? raw;
+}
+
 const EXPLORATION_TOOLS = new Set([
 	"Read",
 	"Grep",
@@ -134,6 +159,18 @@ export function streamWalkthroughViaOpencodeMCP(
 	let errorEmitted = false;
 	let anySummaryEmitted = false;
 	let cancelledByCaller = false;
+	// Phase tracking mirrors the Claude SDK path (mcp-walkthrough.ts:293-365)
+	// so both providers emit the same phase lifecycle (invariant #13). We key
+	// off MCP tool-call names since that's what the agent actually does.
+	let currentPhase: WalkthroughLifecyclePhase = "connecting";
+	const transitionPhase = (
+		next: WalkthroughLifecyclePhase,
+		message: string,
+	): void => {
+		if (currentPhase === next) return;
+		currentPhase = next;
+		push({ type: "phase", data: { phase: next, message } });
+	};
 
 	const userMessage =
 		WALKTHROUGH_MCP_SYSTEM_PROMPT +
@@ -266,6 +303,10 @@ export function streamWalkthroughViaOpencodeMCP(
 				onEvent: (ev: unknown) => {
 					translateOpencodeEvent(ev, {
 						onExploration: (tool, description) => {
+							transitionPhase(
+								"exploring",
+								"Reading files and understanding changes...",
+							);
 							push({
 								type: "exploration",
 								data: { tool, description },
@@ -278,6 +319,44 @@ export function streamWalkthroughViaOpencodeMCP(
 									type: "error",
 									data: { code: "AiGenerationError", message },
 								});
+							}
+						},
+						onMcpTool: (rawToolName) => {
+							// Opencode prefixes MCP tool names with the registered
+							// server name (e.g. `revv-walkthrough-<id>_set_overview`)
+							// or similar. We don't know the exact format up front
+							// across opencode versions, so match by suffix on the
+							// stable function names defined in walkthroughMcpRoute.
+							const suffix = (s: string): boolean =>
+								rawToolName === s || rawToolName.endsWith(`_${s}`);
+							if (suffix("set_overview")) {
+								anySummaryEmitted = true;
+								transitionPhase(
+									"analyzing",
+									"Forming assessment and risk analysis...",
+								);
+							} else if (suffix("add_diff_step")) {
+								transitionPhase("writing", "Building walkthrough...");
+							} else if (suffix("rate_axis")) {
+								transitionPhase(
+									"rating",
+									"Scoring the PR across 9 axes...",
+								);
+							} else if (suffix("complete_walkthrough")) {
+								transitionPhase("finishing", "Wrapping up...");
+							} else if (currentPhase === "connecting") {
+								// Other MCP tools (get_walkthrough_state,
+								// set_sentiment, flag_issue, add_issue_comment)
+								// don't drive their own phase transition, but if
+								// they're the agent's first action we still need
+								// to leave 'connecting' so the guard's first-event
+								// timer resets. "exploring" is the right initial
+								// phase: the agent is gathering state before it
+								// produces content.
+								transitionPhase(
+									"exploring",
+									"Reading files and understanding changes...",
+								);
 							}
 						},
 					});
@@ -427,7 +506,12 @@ export function streamWalkthroughViaOpencodeMCP(
 //
 // We only surface the subset of events we care about here:
 //   - Exploration tool calls (Read/Grep/Glob/Bash) — for the "reading files"
-//     UI feedback.
+//     UI feedback. The caller maps this to a `phase: 'exploring'` plus an
+//     `exploration` event.
+//   - MCP tool calls (e.g. set_overview, add_diff_step) — for phase
+//     transitions only. The content those tools wrote flows through the
+//     HTTP MCP route (invariant #8). Surfaced via the opt-in `onMcpTool`
+//     callback so chat consumers can keep ignoring them.
 //   - Error / failure events — so we can emit a terminal `error`.
 //
 // Content events (summary, block, issue, rating, sentiment, phase:advanced)
@@ -441,23 +525,37 @@ export function streamWalkthroughViaOpencodeMCP(
  * pipeline flow through the MCP tool handlers (doctrine invariant #8). The
  * chat caller (chat-opencode.ts) provides it to surface assistant text
  * deltas.
+ *
+ * `onMcpTool` is opt-in too. The walkthrough caller uses it to drive phase
+ * transitions (analyzing/writing/rating/finishing) when the agent calls an
+ * MCP tool — the content of those calls still flows through the HTTP MCP
+ * route (invariant #8), but the *phase signal* needs to reach the provider's
+ * queue so the guard's first-event timer resets and agent-path parity
+ * (invariant #13) holds with the Claude SDK path.
  */
 export interface OpencodeEventCallbacks {
 	readonly onExploration: (tool: string, description: string) => void;
 	readonly onError: (message: string) => void;
 	readonly onText?: ((chunk: string) => void) | undefined;
+	readonly onMcpTool?: ((tool: string) => void) | undefined;
 }
 
 /**
  * Walk an opencode /event envelope and emit translated callbacks. The
- * opencode event shape is: `{ type: "...", properties: { ... } }` where
- * `type` is something like `session.updated`, `message.part.updated`, etc.
- * We're conservative: unknown shapes are ignored.
+ * opencode event shape (verified against `opencode serve` 1.4.x) is:
  *
- * TODO(verify): the exact event envelope from opencode is documented at
- * https://opencode.ai/docs/api — confirm the shapes below once an end-to-end
- * run has been validated. The current implementation tolerates both flat
- * (`ev.tool`) and nested (`ev.properties.part.tool`) shapes.
+ *   { type: "message.part.updated",
+ *     properties: { sessionID: "...",
+ *                   part: { type: "tool", tool: "read",
+ *                           callID: "...",
+ *                           state: { status: "pending"|"running"|"completed",
+ *                                    input: {...} } } } }
+ *
+ * Each tool call produces three updates (pending → running → completed). We
+ * fire callbacks once, on `running`, when the input is fully populated; this
+ * dedupes UI rows and phase transitions while still resetting the guard's
+ * first-event timer on the agent's first real action. Unknown shapes are
+ * tolerated: if `state.status` is missing we fire on the first event we see.
  */
 export function translateOpencodeEvent(
 	ev: unknown,
@@ -481,24 +579,42 @@ export function translateOpencodeEvent(
 		partObj && typeof partObj["type"] === "string"
 			? (partObj["type"] as string)
 			: null;
-	const toolName =
+	const rawToolName =
 		partObj && typeof partObj["tool"] === "string"
 			? (partObj["tool"] as string)
 			: typeof props["tool"] === "string"
 				? (props["tool"] as string)
 				: null;
 
-	if ((partType === "tool" || partType === "tool_use") && toolName) {
+	if ((partType === "tool" || partType === "tool_use") && rawToolName) {
+		// Opencode emits three events per tool call (pending → running →
+		// completed). Fire callbacks once, on `running`, when the input is
+		// fully populated. This avoids duplicate UI rows and duplicate phase
+		// transitions while still resetting the guard's first-event timer
+		// on the agent's first real action.
+		const state =
+			partObj && typeof partObj["state"] === "object"
+				? (partObj["state"] as Record<string, unknown>)
+				: null;
+		const status =
+			state && typeof state["status"] === "string"
+				? (state["status"] as string)
+				: null;
+		// Tolerate missing/legacy shapes: if there's no state.status field
+		// we fire once on the first event we see for this part type.
+		if (status !== null && status !== "running") return;
+
+		const toolName = normalizeToolName(rawToolName);
 		if (EXPLORATION_TOOLS.has(toolName)) {
-			const state =
-				partObj && typeof partObj["state"] === "object"
-					? (partObj["state"] as Record<string, unknown>)
-					: null;
 			const input = state?.["input"] ?? props["input"];
 			cb.onExploration(toolName, buildExplorationDescription(toolName, input));
 			return;
 		}
-		// MCP tool calls flow through the HTTP route — do not surface here.
+		// MCP tool calls — content flows through the HTTP MCP route per
+		// invariant #8, but we still notify the caller so it can emit a
+		// phase event (invariant #13: agent-path parity with the Claude
+		// SDK path which fires phase transitions on tool_use blocks).
+		cb.onMcpTool?.(rawToolName);
 		return;
 	}
 

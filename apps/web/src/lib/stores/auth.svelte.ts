@@ -1,6 +1,7 @@
 import { authClient } from '$lib/auth-client';
 import * as prs from '$lib/stores/prs.svelte';
 import * as settings from '$lib/stores/settings.svelte';
+import * as orgs from '$lib/stores/orgs.svelte';
 import { openAddRepoDialog } from '$lib/stores/sidebar.svelte';
 import * as sync from '$lib/services/sync';
 import { goto } from '$app/navigation';
@@ -210,6 +211,9 @@ export async function loadUser(): Promise<void> {
 			} catch {
 				// best-effort
 			}
+			// Fire-and-forget org list fetch so the sidebar switcher has
+			// data ready when the user opens it. Failures degrade silently.
+			void orgs.fetchOrgs();
 		} else {
 			clearToken();
 		}
@@ -260,6 +264,7 @@ export async function signOut(): Promise<void> {
 	clearToken();
 	prs.reset();
 	settings.reset();
+	orgs.reset();
 
 	await goto('/');
 }

@@ -22,6 +22,7 @@ export type {
 	ThreadSummary,
 	UserRole,
 	UserIdentity,
+	Org,
 	SyncChangeKind,
 	SyncChange,
 } from './types';

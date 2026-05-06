@@ -36,6 +36,52 @@
 		}, 300);
 	}
 
+	function flushSearch(): void {
+		if (debounceTimer) {
+			clearTimeout(debounceTimer);
+			debounceTimer = null;
+		}
+		setFileSearchQuery(inputValue);
+	}
+
+	// Walk the @pierre/trees shadow root for the first row whose item-type
+	// is a file. Search-mode hides non-matches but keeps ancestor dirs
+	// visible — skipping dirs lands us on the first actual matching file
+	// instead of an unrelated parent folder.
+	function findFirstFileRow(): HTMLElement | null {
+		const treeHost = document.querySelector<HTMLElement>('.view-pane--files .pierre-tree-host');
+		if (!treeHost) return null;
+		for (const child of Array.from(treeHost.children)) {
+			const sr = (child as HTMLElement).shadowRoot;
+			if (!sr) continue;
+			const rows = sr.querySelectorAll<HTMLElement>('[data-type="item"]');
+			for (const row of rows) {
+				if (row.getAttribute('data-item-type') === 'file') return row;
+			}
+		}
+		return null;
+	}
+
+	// Enter / ArrowDown highlight the first matching file as if the user
+	// were hovering it — DOM focus is the @pierre/trees library's
+	// selected-row cue, so .focus() doubles as the hover-style visual.
+	// We deliberately don't .click(): click would fire onSelectionChange,
+	// which routes through SidebarFilesView.handleSelect and opens the
+	// file. This stays purely visual; a follow-up Enter on the now-focused
+	// row (handled by the library's row keydown) is what activates.
+	// One rAF lets the flushed setFileSearchQuery reach the tree's
+	// $effect → controller.setSearch → virtual re-render before we walk
+	// the shadow DOM.
+	function handleKeydown(e: KeyboardEvent): void {
+		if (e.key !== 'Enter' && e.key !== 'ArrowDown') return;
+		e.preventDefault();
+		flushSearch();
+		requestAnimationFrame(() => {
+			const row = findFirstFileRow();
+			row?.focus();
+		});
+	}
+
 	function handleClear() {
 		inputValue = '';
 		if (debounceTimer) {
@@ -64,6 +110,7 @@
 			placeholder="Search files..."
 			value={inputValue}
 			oninput={handleInput}
+			onkeydown={handleKeydown}
 		/>
 		{#if inputValue}
 			<button
