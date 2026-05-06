@@ -231,6 +231,22 @@ export class WalkthroughJobs extends Context.Tag("WalkthroughJobs")<
 
 		/** Invalidate a session token early (e.g. on job cancel). */
 		readonly clearSessionToken: (token: string) => Effect.Effect<void>;
+
+		/**
+		 * Register a callback that fires whenever emitEvent is called for the given
+		 * walkthroughId. Used by the opencode provider to keep the stream guard's
+		 * inactivity timer alive during MCP tool calls. Pure side-effect — never
+		 * throws, no-op if already registered (last writer wins).
+		 */
+		readonly registerActivityNotifier: (
+			walkthroughId: string,
+			callback: () => void,
+		) => Effect.Effect<void>;
+
+		/** Remove the activity notifier for a walkthroughId. No-op if not present. */
+		readonly unregisterActivityNotifier: (
+			walkthroughId: string,
+		) => Effect.Effect<void>;
 	}
 >() {}
 
@@ -303,6 +319,32 @@ export const WalkthroughJobsLive = Layer.effect(
 			new Map<string, SessionTokenEntry>(),
 		);
 
+		// Activity notifiers for the opencode provider path. Keyed by walkthroughId.
+		// The opencode provider registers a callback here; emitEvent fires it after
+		// each tool call so the stream guard's inactivity timer resets even when the
+		// opencode SSE subscription misses events.
+		const activityNotifiers = yield* Ref.make(
+			new Map<string, () => void>(),
+		);
+
+		const registerActivityNotifier = (
+			walkthroughId: string,
+			callback: () => void,
+		) =>
+			Ref.update(activityNotifiers, (map) => {
+				const next = new Map(map);
+				next.set(walkthroughId, callback);
+				return next;
+			});
+
+		const unregisterActivityNotifier = (walkthroughId: string) =>
+			Ref.update(activityNotifiers, (map) => {
+				if (!map.has(walkthroughId)) return map;
+				const next = new Map(map);
+				next.delete(walkthroughId);
+				return next;
+			});
+
 		const provideInfra = <A, E>(
 			eff: Effect.Effect<A, E, DbService | GitHubEtagCache>,
 		): Effect.Effect<A, E> =>
@@ -358,12 +400,15 @@ export const WalkthroughJobsLive = Layer.effect(
 		};
 
 		const removeJob = (walkthroughId: string) =>
-			Ref.update(registry, (map) => {
-				if (!map.has(walkthroughId)) return map;
-				const next = new Map(map);
-				next.delete(walkthroughId);
-				return next;
-			});
+			Effect.all([
+				Ref.update(registry, (map) => {
+					if (!map.has(walkthroughId)) return map;
+					const next = new Map(map);
+					next.delete(walkthroughId);
+					return next;
+				}),
+				unregisterActivityNotifier(walkthroughId),
+			], { discard: true });
 
 		// ── Core job body ───────────────────────────────────────────────────
 
@@ -484,6 +529,10 @@ export const WalkthroughJobsLive = Layer.effect(
 						Effect.runPromise(issueSessionToken(walkthroughId)),
 					clearOpencodeSessionToken: (token: string) =>
 						Effect.runPromise(clearSessionToken(token)),
+					registerOpencodeActivityNotifier: (walkthroughId: string, callback: () => void) =>
+						Effect.runPromise(registerActivityNotifier(walkthroughId, callback)),
+					unregisterOpencodeActivityNotifier: (walkthroughId: string) =>
+						Effect.runPromise(unregisterActivityNotifier(walkthroughId)),
 				});
 
 				if (partial) {
@@ -1415,6 +1464,14 @@ export const WalkthroughJobsLive = Layer.effect(
 				const job = map.get(walkthroughId);
 				if (!job) return;
 				fanOut(job, event);
+				// Fire the activity notifier so the opencode provider's stream guard
+				// resets its inactivity timer. This runs even when the SSE subscription
+				// from the daemon doesn't surface the tool-call event.
+				const notifiers = yield* Ref.get(activityNotifiers);
+				const notify = notifiers.get(walkthroughId);
+				if (notify) {
+					try { notify(); } catch { /* notifier threw — ignore */ }
+				}
 			});
 
 		const issueSessionToken = (walkthroughId: string) =>
@@ -1468,6 +1525,8 @@ export const WalkthroughJobsLive = Layer.effect(
 			issueSessionToken,
 			resolveSessionToken,
 			clearSessionToken,
+			registerActivityNotifier,
+			unregisterActivityNotifier,
 		};
 	}),
 );

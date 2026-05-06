@@ -106,6 +106,10 @@ export interface OpencodeProviderDeps {
 	issueSessionToken: (walkthroughId: string) => Promise<string>;
 	/** Invalidate the token when we're done. */
 	clearSessionToken: (token: string) => Promise<void>;
+	/** Register a heartbeat notifier in WalkthroughJobs so the stream guard timer resets on each MCP tool call. */
+	registerActivityNotifier: (walkthroughId: string, callback: () => void) => Promise<void>;
+	/** Unregister the heartbeat notifier (called from finally). */
+	unregisterActivityNotifier: (walkthroughId: string) => Promise<void>;
 }
 
 // ── Main entry point ─────────────────────────────────────────────────────────
@@ -182,6 +186,17 @@ export function streamWalkthroughViaOpencodeMCP(
 		await params.deps.jobStarted();
 		let sessionToken: string | null = null;
 		let sessionId: string | null = null;
+
+		// Register a heartbeat so the stream guard's inactivity timer resets on
+		// every MCP tool call, even if the opencode SSE subscription misses events.
+		await params.deps.registerActivityNotifier(params.walkthroughId, () => {
+			if (!queryDone && !errorEmitted && !cancelledByCaller) {
+				push({
+					type: "exploration",
+					data: { tool: "mcp-heartbeat", description: "MCP tool activity" },
+				});
+			}
+		});
 
 		const externalAbort = params.abortController;
 		let killed = false;
@@ -297,12 +312,26 @@ export function streamWalkthroughViaOpencodeMCP(
 				);
 			}
 
-			const subscribePromise = client.subscribeToEvents({
+			let lastHeartbeat = Date.now();
+
+		const subscribePromise = client.subscribeToEvents({
 				sessionId,
 				signal: subscribeController.signal,
 				onEvent: (ev: unknown) => {
 					translateOpencodeEvent(ev, {
+						onText: () => {
+							const now = Date.now();
+							if (now - lastHeartbeat < 30_000) return;
+							lastHeartbeat = now;
+							if (!queryDone && !errorEmitted && !cancelledByCaller) {
+								push({
+									type: "exploration",
+									data: { tool: "thinking", description: "Model reasoning..." },
+								});
+							}
+						},
 						onExploration: (tool, description) => {
+							lastHeartbeat = Date.now();
 							transitionPhase(
 								"exploring",
 								"Reading files and understanding changes...",
@@ -322,6 +351,7 @@ export function streamWalkthroughViaOpencodeMCP(
 							}
 						},
 						onMcpTool: (rawToolName) => {
+							lastHeartbeat = Date.now();
 							// Opencode prefixes MCP tool names with the registered
 							// server name (e.g. `revv-walkthrough-<id>_set_overview`)
 							// or similar. We don't know the exact format up front
@@ -381,18 +411,34 @@ export function streamWalkthroughViaOpencodeMCP(
 				model ?? "(default)",
 			);
 
-			await client.postMessage({
-				sessionId,
-				parts: postParts,
-				system: WALKTHROUGH_MCP_SYSTEM_PROMPT,
-				...(model !== undefined ? { model } : {}),
-			});
+			// Keep the stream guard alive during model time-to-first-token.
+			// The opencode SSE stream is silent until the model starts streaming;
+			// this interval ensures the guard's inactivity timer resets every 60s.
+			const keepaliveInterval = setInterval(() => {
+				if (!queryDone && !errorEmitted && !cancelledByCaller) {
+					push({
+						type: "exploration",
+						data: { tool: "waiting", description: "Waiting for model response..." },
+					});
+				}
+			}, 60_000);
 
-			// The postMessage resolves when the daemon finishes producing the
-			// turn (or returns control). We still wait for the SSE loop to
-			// drain so any trailing events land before we return.
-			subscribeController.abort();
-			await subscribePromise;
+			try {
+				await client.postMessage({
+					sessionId,
+					parts: postParts,
+					system: WALKTHROUGH_MCP_SYSTEM_PROMPT,
+					...(model !== undefined ? { model } : {}),
+				});
+
+				// The postMessage resolves when the daemon finishes producing the
+				// turn (or returns control). We still wait for the SSE loop to
+				// drain so any trailing events land before we return.
+				subscribeController.abort();
+				await subscribePromise;
+			} finally {
+				clearInterval(keepaliveInterval);
+			}
 
 			// Fabricate anySummaryEmitted signal from the DB side-effects:
 			// if anything landed for this walkthroughId via /mcp/walkthrough
@@ -431,6 +477,7 @@ export function streamWalkthroughViaOpencodeMCP(
 			if (externalAbort) {
 				externalAbort.signal.removeEventListener("abort", onExternalAbort);
 			}
+			await params.deps.unregisterActivityNotifier(params.walkthroughId).catch(() => {/* ignore */});
 			if (sessionToken) {
 				try {
 					await params.deps.clearSessionToken(sessionToken);

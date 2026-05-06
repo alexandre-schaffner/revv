@@ -104,6 +104,8 @@ export class AiService extends Context.Tag('AiService')<
 			 */
 			issueOpencodeSessionToken?: (walkthroughId: string) => Promise<string>;
 			clearOpencodeSessionToken?: (token: string) => Promise<void>;
+			registerOpencodeActivityNotifier?: (walkthroughId: string, callback: () => void) => Promise<void>;
+			unregisterOpencodeActivityNotifier?: (walkthroughId: string) => Promise<void>;
 		}) => Effect.Effect<AsyncGenerator<WalkthroughStreamEvent>, AiError>;
 		/**
 		 * Stream a single chat turn for the right-pane chat. Resolves the
@@ -202,8 +204,24 @@ export const AiServiceLive = Layer.effect(
 								}),
 							);
 						}
+						if (
+							!params.registerOpencodeActivityNotifier ||
+							!params.unregisterOpencodeActivityNotifier
+						) {
+							return yield* Effect.fail(
+								new AiGenerationError({
+									cause: new Error(
+										'missing opencode activity-notifier callbacks',
+									),
+									message:
+										'opencode provider requires caller-supplied activity-notifier callbacks',
+								}),
+							);
+						}
 						const issueToken = params.issueOpencodeSessionToken;
 						const clearToken = params.clearOpencodeSessionToken;
+						const registerNotifier = params.registerOpencodeActivityNotifier;
+						const unregisterNotifier = params.unregisterOpencodeActivityNotifier;
 						const deps: OpencodeProviderDeps = {
 							ensureDaemon: () =>
 								Effect.runPromise(supervisor.ensureRunning()),
@@ -214,6 +232,10 @@ export const AiServiceLive = Layer.effect(
 							issueSessionToken: (walkthroughId) =>
 								issueToken(walkthroughId),
 							clearSessionToken: (token) => clearToken(token),
+							registerActivityNotifier: (walkthroughId, callback) =>
+								registerNotifier(walkthroughId, callback),
+							unregisterActivityNotifier: (walkthroughId) =>
+								unregisterNotifier(walkthroughId),
 						};
 						const raw = streamWalkthroughViaOpencodeMCP(
 							{ ...providerParams, deps },
