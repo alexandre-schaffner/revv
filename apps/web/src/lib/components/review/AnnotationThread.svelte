@@ -176,13 +176,13 @@
 					</div>
 				{:else}
 					<div
-						class="msg-body msg-body--editable"
+						class="msg-body msg-body--editable prose"
 						role="button"
 						tabindex="0"
 						title="Click to edit"
 						onclick={() => startEdit(msg)}
 						onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') startEdit(msg); }}
-					>{msg.body}</div>
+					>{@html renderMarkdown(msg.body)}</div>
 				{/if}
 			{:else}
 				<div class="msg-body prose">{@html renderMarkdown(msg.body)}</div>
