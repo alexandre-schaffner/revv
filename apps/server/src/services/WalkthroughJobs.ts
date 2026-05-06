@@ -240,7 +240,7 @@ export class WalkthroughJobs extends Context.Tag("WalkthroughJobs")<
 		 */
 		readonly registerActivityNotifier: (
 			walkthroughId: string,
-			callback: () => void,
+			callback: (event: WalkthroughStreamEvent) => void,
 		) => Effect.Effect<void>;
 
 		/** Remove the activity notifier for a walkthroughId. No-op if not present. */
@@ -324,12 +324,12 @@ export const WalkthroughJobsLive = Layer.effect(
 		// each tool call so the stream guard's inactivity timer resets even when the
 		// opencode SSE subscription misses events.
 		const activityNotifiers = yield* Ref.make(
-			new Map<string, () => void>(),
+			new Map<string, (event: WalkthroughStreamEvent) => void>(),
 		);
 
 		const registerActivityNotifier = (
 			walkthroughId: string,
-			callback: () => void,
+			callback: (event: WalkthroughStreamEvent) => void,
 		) =>
 			Ref.update(activityNotifiers, (map) => {
 				const next = new Map(map);
@@ -529,7 +529,7 @@ export const WalkthroughJobsLive = Layer.effect(
 						Effect.runPromise(issueSessionToken(walkthroughId)),
 					clearOpencodeSessionToken: (token: string) =>
 						Effect.runPromise(clearSessionToken(token)),
-					registerOpencodeActivityNotifier: (walkthroughId: string, callback: () => void) =>
+					registerOpencodeActivityNotifier: (walkthroughId: string, callback: (event: WalkthroughStreamEvent) => void) =>
 						Effect.runPromise(registerActivityNotifier(walkthroughId, callback)),
 					unregisterOpencodeActivityNotifier: (walkthroughId: string) =>
 						Effect.runPromise(unregisterActivityNotifier(walkthroughId)),
@@ -1470,7 +1470,7 @@ export const WalkthroughJobsLive = Layer.effect(
 				const notifiers = yield* Ref.get(activityNotifiers);
 				const notify = notifiers.get(walkthroughId);
 				if (notify) {
-					try { notify(); } catch { /* notifier threw — ignore */ }
+					try { notify(event); } catch { /* notifier threw — ignore */ }
 				}
 			});
 

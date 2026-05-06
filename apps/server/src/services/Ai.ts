@@ -104,7 +104,7 @@ export class AiService extends Context.Tag('AiService')<
 			 */
 			issueOpencodeSessionToken?: (walkthroughId: string) => Promise<string>;
 			clearOpencodeSessionToken?: (token: string) => Promise<void>;
-			registerOpencodeActivityNotifier?: (walkthroughId: string, callback: () => void) => Promise<void>;
+			registerOpencodeActivityNotifier?: (walkthroughId: string, callback: (event: WalkthroughStreamEvent) => void) => Promise<void>;
 			unregisterOpencodeActivityNotifier?: (walkthroughId: string) => Promise<void>;
 		}) => Effect.Effect<AsyncGenerator<WalkthroughStreamEvent>, AiError>;
 		/**
@@ -242,7 +242,7 @@ export const AiServiceLive = Layer.effect(
 							settings.aiModel ?? undefined,
 							settings,
 						);
-						return guardWalkthroughStream(raw, { label: 'opencode-mcp', synthesizePhases: false });
+						return guardWalkthroughStream(raw, { label: 'opencode-mcp', synthesizePhases: false, explorationStallMs: Infinity });
 					}
 					const raw = streamWalkthroughViaMCP(
 						providerParams,

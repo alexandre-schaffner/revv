@@ -107,7 +107,7 @@ export interface OpencodeProviderDeps {
 	/** Invalidate the token when we're done. */
 	clearSessionToken: (token: string) => Promise<void>;
 	/** Register a heartbeat notifier in WalkthroughJobs so the stream guard timer resets on each MCP tool call. */
-	registerActivityNotifier: (walkthroughId: string, callback: () => void) => Promise<void>;
+	registerActivityNotifier: (walkthroughId: string, callback: (event: WalkthroughStreamEvent) => void) => Promise<void>;
 	/** Unregister the heartbeat notifier (called from finally). */
 	unregisterActivityNotifier: (walkthroughId: string) => Promise<void>;
 }
@@ -189,12 +189,9 @@ export function streamWalkthroughViaOpencodeMCP(
 
 		// Register a heartbeat so the stream guard's inactivity timer resets on
 		// every MCP tool call, even if the opencode SSE subscription misses events.
-		await params.deps.registerActivityNotifier(params.walkthroughId, () => {
+		await params.deps.registerActivityNotifier(params.walkthroughId, (event) => {
 			if (!queryDone && !errorEmitted && !cancelledByCaller) {
-				push({
-					type: "exploration",
-					data: { tool: "mcp-heartbeat", description: "MCP tool activity" },
-				});
+				push(event);
 			}
 		});
 
