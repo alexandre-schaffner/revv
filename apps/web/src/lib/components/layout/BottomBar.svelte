@@ -53,7 +53,7 @@
 	<div class="flex items-center gap-2">
 		{#if selectedPrId}
 			<button
-				class="flex items-center gap-1.5 text-[10px] text-text-muted rounded px-1 py-0.5 transition-colors hover:bg-bg-elevated hover:text-text-secondary disabled:cursor-default disabled:opacity-60"
+				class="flex cursor-pointer items-center gap-1.5 text-[10px] text-text-muted rounded px-1 py-0.5 transition-colors hover:bg-bg-elevated hover:text-text-secondary disabled:cursor-default disabled:opacity-60"
 				onclick={handleRetrySync}
 				disabled={syncing}
 				title="Sync comments for this PR"

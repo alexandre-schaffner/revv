@@ -184,6 +184,19 @@ export function streamWalkthroughViaOpencodeMCP(
 	const queryTask = (async (): Promise<WalkthroughTokenUsage> => {
 		// ── 1. Start daemon (or attach to existing) ──────────────────────
 		await params.deps.jobStarted();
+
+		// Keepalive — runs for the entire task lifetime, not just during postMessage.
+		// Guards against silent periods (SSE gaps, model latency, postMessage resolving
+		// early) that would otherwise trigger the stream guard's 120s inactivity timeout.
+		const keepaliveInterval = setInterval(() => {
+			if (!queryDone && !errorEmitted && !cancelledByCaller) {
+				push({
+					type: "exploration",
+					data: { tool: "waiting", description: "Waiting for model response..." },
+				});
+			}
+		}, 60_000);
+
 		let sessionToken: string | null = null;
 		let sessionId: string | null = null;
 
@@ -399,43 +412,29 @@ export function streamWalkthroughViaOpencodeMCP(
 				}
 			});
 
-			// ── 5. Post the user message ────────────────────────────────
-			const postParts = [{ type: "text", text: userMessage }];
-			debug(
-				"walkthrough-opencode-mcp",
-				`posting message to session ${sessionId}`,
-				"model:",
-				model ?? "(default)",
-			);
+		// ── 5. Post the user message ────────────────────────────────
+		const postParts = [{ type: "text", text: userMessage }];
+		debug(
+			"walkthrough-opencode-mcp",
+			`posting message to session ${sessionId}`,
+			"model:",
+			model ?? "(default)",
+		);
 
-			// Keep the stream guard alive during model time-to-first-token.
-			// The opencode SSE stream is silent until the model starts streaming;
-			// this interval ensures the guard's inactivity timer resets every 60s.
-			const keepaliveInterval = setInterval(() => {
-				if (!queryDone && !errorEmitted && !cancelledByCaller) {
-					push({
-						type: "exploration",
-						data: { tool: "waiting", description: "Waiting for model response..." },
-					});
-				}
-			}, 60_000);
-
-			try {
-				await client.postMessage({
-					sessionId,
-					parts: postParts,
-					system: WALKTHROUGH_MCP_SYSTEM_PROMPT,
-					...(model !== undefined ? { model } : {}),
-				});
-
-				// The postMessage resolves when the daemon finishes producing the
-				// turn (or returns control). We still wait for the SSE loop to
-				// drain so any trailing events land before we return.
-				subscribeController.abort();
-				await subscribePromise;
-			} finally {
-				clearInterval(keepaliveInterval);
-			}
+		try {
+			await client.postMessage({
+				sessionId,
+				parts: postParts,
+				system: WALKTHROUGH_MCP_SYSTEM_PROMPT,
+				...(model !== undefined ? { model } : {}),
+			});
+		} finally {
+			// Always abort the SSE subscription and drain it — whether postMessage
+			// resolved normally, threw, or was externally cancelled. Without this,
+			// a postMessage failure leaves the subscription running indefinitely.
+			subscribeController.abort();
+			await subscribePromise;
+		}
 
 			// Fabricate anySummaryEmitted signal from the DB side-effects:
 			// if anything landed for this walkthroughId via /mcp/walkthrough
@@ -470,6 +469,7 @@ export function streamWalkthroughViaOpencodeMCP(
 				cacheCreationInputTokens: 0,
 			};
 		} finally {
+			clearInterval(keepaliveInterval);
 			if (timeoutId !== undefined) clearTimeout(timeoutId);
 			if (externalAbort) {
 				externalAbort.signal.removeEventListener("abort", onExternalAbort);

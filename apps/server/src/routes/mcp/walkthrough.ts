@@ -261,10 +261,12 @@ export const mcpWalkthroughRoute = new Elysia({ prefix: "/mcp" }).post(
 	async (ctx) => {
 		const req = ctx.request;
 
-		let body: unknown;
-		try {
-			body = (await req.json()) as unknown;
-		} catch {
+		// Elysia pre-parses the request body (consuming the stream) before the
+		// handler runs, so `req.json()` would fail with "Body already used".
+		// Use `ctx.body` which holds the already-parsed value.
+		const body: unknown = ctx.body;
+
+		if (body === null || body === undefined || typeof body !== "object") {
 			return new Response(
 				JSON.stringify(
 					jsonRpcError(null, -32700, "Parse error: body is not valid JSON"),

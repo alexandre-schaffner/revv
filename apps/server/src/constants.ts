@@ -16,7 +16,7 @@ export const WALKTHROUGH_FIRST_EVENT_TIMEOUT_MS = 90_000; // 90 seconds
 
 /** Exploration-stall timeout: if only exploration events arrive for this long with no
  *  summary/block/phase progress, the model is stuck reading files — abort with an error. */
-export const WALKTHROUGH_EXPLORATION_STALL_MS = 3 * 60 * 1000; // 3 minutes
+export const WALKTHROUGH_EXPLORATION_STALL_MS = 6 * 60 * 1000; // 6 minutes
 
 /** Maximum time for an SDK-driven walkthrough (direct Anthropic API). */
 export const SDK_WALKTHROUGH_TIMEOUT_MS = 120_000; // 2 minutes
