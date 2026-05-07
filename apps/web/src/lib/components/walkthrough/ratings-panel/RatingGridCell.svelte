@@ -106,7 +106,7 @@
                         </span>
                     {:else if state === "running"}
                         <span class="icon-running">
-                            <Loader2 size={13} />
+                            <Loader2 size={13} class="animate-spin" />
                         </span>
                     {:else if rating?.verdict === "pass"}
                         <span class="icon-resolved">
@@ -297,16 +297,7 @@
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        animation: spin 900ms linear infinite;
-        transform-origin: center;
         color: var(--color-accent);
-    }
-
-    /* Block removes the inline baseline gap that shifts the element's
-       bounding box downward — without it, transform-origin: center lands
-       below the visual centre of the arc and the spin looks off-axis. */
-    .icon-running :global(svg) {
-        display: block;
     }
 
     .icon-resolved {
@@ -362,15 +353,6 @@
         animation: cell-resolve 220ms var(--ease-out-expo) 1;
     }
 
-    @keyframes spin {
-        from {
-            transform: rotate(0deg);
-        }
-        to {
-            transform: rotate(360deg);
-        }
-    }
-
     @keyframes icon-in {
         from {
             transform: scale(0.85);
@@ -421,9 +403,6 @@
     /* ── Reduced motion ──────────────────────────────────────────── */
 
     @media (prefers-reduced-motion: reduce) {
-        .icon-running {
-            animation: none;
-        }
         .icon-resolved {
             animation: none;
         }

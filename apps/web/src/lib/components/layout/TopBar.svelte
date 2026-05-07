@@ -6,7 +6,7 @@
 	import { setActiveTab } from '$lib/stores/review.svelte';
 	import { getThemePreference, setThemePreference, type ThemePreference } from '$lib/stores/theme.svelte';
 	import { getActivePanel } from '$lib/stores/focus-mode.svelte';
-	import { getTopbarCollapsed, getTopbarSubtitle } from '$lib/stores/topbar.svelte';
+	import { getTopbarSubtitle } from '$lib/stores/topbar.svelte';
 	import { requestSync, requestFullSync } from '$lib/stores/ws.svelte';
 	import { getPrListSyncing } from '$lib/stores/sync.svelte';
 	import { fetchOrgs } from '$lib/stores/orgs.svelte';
@@ -23,7 +23,6 @@
 	const pr = $derived(getSelectedPr());
 	const selectedPrId = $derived(getSelectedPrId());
 	const theme = $derived(getThemePreference());
-	const collapsed = $derived(getTopbarCollapsed());
 	const topbarSubtitle = $derived(getTopbarSubtitle());
 
 	// Combines direct-HTTP sync (`getIsLoading`) with WebSocket-driven
@@ -77,11 +76,11 @@
 
 	<!-- Left: app name / inline PR title when scrolled -->
 	<div class="title-block" data-tauri-drag-region>
-		{#if collapsed && pr}
+		{#if pr}
 			<span class="inline-title" data-tauri-drag-region>
 				<span class="pr-number" data-tauri-drag-region>#{pr.externalId}</span>{pr.title}{#if topbarSubtitle}<span class="title-separator" data-tauri-drag-region> / </span><span class="title-subtitle" data-tauri-drag-region>{topbarSubtitle}</span>{/if}
 			</span>
-		{:else if !pr}
+		{:else}
 			<span class="app-name" data-tauri-drag-region>Revv</span>
 		{/if}
 	</div>

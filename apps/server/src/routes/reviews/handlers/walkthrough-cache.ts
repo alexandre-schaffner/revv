@@ -6,11 +6,25 @@ import { WalkthroughJobs } from '../../../services/WalkthroughJobs';
 import { WalkthroughService } from '../../../services/Walkthrough';
 
 /**
- * GET /api/reviews/:id/walkthrough/cached — check whether a cached
- * walkthrough exists for the PR's current HEAD commit.
+ * GET /api/reviews/:id/walkthrough/cached — check whether a walkthrough
+ * row exists for the PR's current HEAD commit, complete OR in-progress.
  *
- * The client uses this to decide between rendering cached content
- * instantly vs. opening the SSE stream to generate a fresh walkthrough.
+ * Three response shapes:
+ *   • `cached: true`,  `status: 'complete'`   → final cached row; client
+ *     renders inline with no SSE round-trip.
+ *   • `cached: true`,  `status: 'generating'` → resumed/in-flight job has
+ *     partial content. Client hydrates what's available AND opens the SSE
+ *     stream so subsequent writes (and the final `done`) flow through.
+ *     This is the resume-on-restart path: without it, a `generating` row
+ *     would look like `cached: false` to the client and fall through to
+ *     the "Generate walkthrough" button while the server is already
+ *     producing the walkthrough in the background.
+ *   • `cached: false` → no walkthrough at this head SHA. Client shows
+ *     the Generate button.
+ *
+ * The internal `opencodeSessionId` field on the partial result is
+ * intentionally stripped before send — it's an orchestrator credential,
+ * not something the UI consumes.
  */
 export function getCachedWalkthroughHandler(prId: string, userId: string) {
 	return AppRuntime.runPromise(
@@ -23,9 +37,25 @@ export function getCachedWalkthroughHandler(prId: string, userId: string) {
 			const meta = yield* github.getPrMeta(repo.fullName, pr.externalId, token);
 
 			const cached = yield* walkthroughService.getCached(pr.id, meta.headSha);
-			return cached
-				? { cached: true as const, walkthrough: cached }
-				: { cached: false as const };
+			if (cached) {
+				return {
+					cached: true as const,
+					status: 'complete' as const,
+					walkthrough: cached,
+				};
+			}
+
+			const partial = yield* walkthroughService.getPartial(pr.id, meta.headSha);
+			if (partial && partial.status === 'generating') {
+				const { opencodeSessionId: _ignored, status: _status, ...walkthrough } = partial;
+				return {
+					cached: true as const,
+					status: 'generating' as const,
+					walkthrough,
+				};
+			}
+
+			return { cached: false as const };
 		}),
 	);
 }

@@ -322,6 +322,16 @@
 	// `select()` between those, we re-emit `onSelectionChange` and Preact
 	// schedules a render between the two state changes which can swallow
 	// the toggle).
+	//
+	// Deselect the previously-selected paths *before* selecting the new
+	// one. `item.select()` is the multi-select primitive: it appends to
+	// the current selection. If we just call `item.select(path)` while a
+	// previous path is still selected, `onSelectionChange` fires with
+	// `[oldPath, newPath]`, and the SidebarFilesView consumer reads
+	// `selected[0]` (the *old* path) and re-applies it via
+	// `setActiveFilePath`, undoing the jumpToDiffLine that triggered this
+	// effect (e.g. clicking opportunity.service.ts badge from walkthrough
+	// would land back on the previously-viewed campaign.repository.ts).
 	$effect(() => {
 		const path = activePath;
 		if (!tree) return;
@@ -329,8 +339,10 @@
 			if (path == null) return;
 			const current = tree?.getSelectedPaths() ?? [];
 			if (current.length === 1 && current[0] === path) return;
-			const item = tree?.getItem(path);
-			item?.select();
+			for (const p of current) {
+				if (p !== path) tree?.getItem(p)?.deselect();
+			}
+			tree?.getItem(path)?.select();
 		});
 	});
 

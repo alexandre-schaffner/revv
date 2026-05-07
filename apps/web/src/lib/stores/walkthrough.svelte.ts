@@ -99,7 +99,19 @@ let activePrId = $state<string | null>(null);
 
 // Non-reactive — abort controllers keyed by PR ID.
 // Map iteration order = insertion order, so iterating gives oldest-first.
-const controllers = new Map<string, { abort: AbortController; reader: ReadableStreamDefaultReader<Uint8Array> | null }>();
+//
+// `intentional` flips to true when the abort is driven by us (navigation
+// away, regenerate, evict-by-cap) rather than by an unexpected stream end.
+// streamWalkthrough's finally consults it to decide whether the
+// "ended unexpectedly" stream-error message should fire — for an
+// intentional disconnect the server-side job is still running and there
+// is no error to surface.
+type ControllerEntry = {
+	abort: AbortController;
+	reader: ReadableStreamDefaultReader<Uint8Array> | null;
+	intentional: boolean;
+};
+const controllers = new Map<string, ControllerEntry>();
 
 // Non-reactive — clone-status pollers keyed by PR ID. One active poller per PR
 // at a time; the `cancelled` flag lets either the component's effect cleanup
@@ -393,8 +405,21 @@ export async function streamWalkthrough(prId: string): Promise<void> {
 
 	// Reuse the prepared entry to avoid resetting exploration state;
 	// streamStartedAt is always stamped fresh below. Anything past a
-	// freshly-seeded state (has data, error, exploration activity, etc.) is
-	// discarded for a clean slate.
+	// freshly-seeded state (error, navigated-away cache, etc.) is discarded
+	// for a clean slate — EXCEPT entries hydrated from a `generating` partial
+	// (`liveGeneration: true` && summary/blocks present && !doneReceived).
+	// Those need to keep their hydrated content so the user keeps seeing it
+	// while the SSE stream catches up; the snapshot replay then dedupes by
+	// block/issue/rating id inside applyEvents, so duplicates are impossible.
+	const isResumeFromHydratedPartial = !!existing
+		&& !existing.streamError
+		&& !existing.cloneInProgress
+		&& !existing.doneReceived
+		&& existing.liveGeneration
+		&& (existing.summary !== null
+			|| existing.blocks.length > 0
+			|| existing.issues.length > 0
+			|| existing.ratings.length > 0);
 	const reusable = !!existing
 		&& !existing.streamError
 		&& !existing.cloneInProgress
@@ -403,7 +428,7 @@ export async function streamWalkthrough(prId: string): Promise<void> {
 		&& existing.explorationSteps.length === 0
 		&& existing.issues.length === 0
 		&& existing.ratings.length === 0;
-	const entry = reusable && existing ? existing : freshEntry();
+	const entry = (reusable || isResumeFromHydratedPartial) && existing ? existing : freshEntry();
 	entry.isStreaming = true;
 	entry.streamStartedAt = Date.now();
 	entry.cloneInProgress = false;
@@ -416,7 +441,8 @@ export async function streamWalkthrough(prId: string): Promise<void> {
 	entries = new Map(entries);
 
 	const abortCtrl = new AbortController();
-	controllers.set(prId, { abort: abortCtrl, reader: null });
+	const ctrlEntry: ControllerEntry = { abort: abortCtrl, reader: null, intentional: false };
+	controllers.set(prId, ctrlEntry);
 
 	try {
 		await runWalkthroughSse({
@@ -443,7 +469,15 @@ export async function streamWalkthrough(prId: string): Promise<void> {
 		const en = entries.get(prId);
 		// If the stream ended but we never received a terminal event (done/error/in-progress),
 		// and the entry is still marked as streaming, check what happened.
-		if (en?.isStreaming && !en.doneReceived && !en.streamError) {
+		// Skip this branch entirely for intentional aborts (navigation away,
+		// regenerate, cap-eviction) — the server-side job is still running and
+		// the next streamWalkthrough/hydrateFromCache will re-attach.
+		if (
+			en?.isStreaming &&
+			!en.doneReceived &&
+			!en.streamError &&
+			!ctrlEntry.intentional
+		) {
 			// The SSE connection closed — but the server may still be generating.
 			// Don't show an error; the entry stays in a "generating" state and
 			// the WS walkthrough:complete / walkthrough:error will update it.
@@ -500,19 +534,23 @@ export async function hydrateFromCache(prId: string): Promise<boolean> {
 			| { cached: false }
 			| {
 					cached: true;
+					/**
+					 * 'complete' — final walkthrough; render inline, no SSE.
+					 * 'generating' — resumed/in-flight job on the server. Hydrate
+					 *   whatever partial content already landed, then open the SSE
+					 *   stream so the UI receives the rest as it's written. Without
+					 *   this branch the resume-on-restart case shows the Generate
+					 *   button while the server is already producing the walkthrough.
+					 * 'superseded' — left as a future hook; the endpoint doesn't
+					 *   currently return this, but the field is read defensively.
+					 */
+					status?: 'complete' | 'generating' | 'superseded';
 					walkthrough: {
 						id: string;
 						summary: string;
 						riskLevel: RiskLevel;
 						sentiment?: string | null;
 						lastCompletedPhase?: WalkthroughPipelinePhase;
-						/**
-						 * Optional status flag — the cached endpoint today only returns
-						 * 'complete' walkthroughs, but if the server ever extends this
-						 * to include 'superseded' rows (so the UI can show stale
-						 * content with a regenerate banner) we'll honor it here.
-						 */
-						status?: 'complete' | 'superseded';
 						blocks: WalkthroughBlock[];
 						issues: WalkthroughIssue[];
 						ratings: WalkthroughRating[];
@@ -524,32 +562,64 @@ export async function hydrateFromCache(prId: string): Promise<boolean> {
 		if (!body.cached) return false;
 
 		const wt = body.walkthrough;
+		// `status` lives at the top level of the response; older clients that
+		// expected it on the walkthrough object won't see it, but new server
+		// builds always set it. Default 'complete' preserves the original
+		// behavior for any caller still hitting an old server build.
+		const status = body.status ?? 'complete';
+		const isGenerating = status === 'generating';
 
-		// Hydrate the entry directly from JSON — no SSE round-trip needed
+		// Hydrate the entry directly from JSON — no SSE round-trip needed for
+		// the complete case. For the generating case we still hydrate the
+		// partial content here so the UI can render what we have immediately,
+		// then open the SSE stream below for the remaining writes.
 		const entry = entries.get(prId) ?? freshEntry();
-		entry.summary = wt.summary;
-		entry.riskLevel = wt.riskLevel;
+		// `createPartial` seeds the row with summary='' / riskLevel='low' as a
+		// placeholder before Phase A runs. Mirror the SSE handler's guard:
+		// treat an empty placeholder as "no summary yet" so the loading
+		// skeleton renders instead of a content view with an empty Overview.
+		const hasRealSummary = wt.summary !== '';
+		entry.summary = hasRealSummary ? wt.summary : null;
+		entry.riskLevel = hasRealSummary ? wt.riskLevel : null;
 		// Sentiment and lastCompletedPhase are first-class fields on the cached
-		// row. Fall back to null / 'D' for rehydrated pre-pipeline rows —
-		// GetCached only returns status='complete', so the pipeline must have
-		// run to the end to produce a cacheable row.
+		// row. Fall back to null / 'D' for rehydrated pre-pipeline complete
+		// rows; for generating rows the server reports the actual phase pointer
+		// so the A→B→C→D dot indicator stays accurate during the resume.
 		entry.sentiment = wt.sentiment ?? null;
-		entry.lastCompletedPhase = wt.lastCompletedPhase ?? 'D';
+		entry.lastCompletedPhase = wt.lastCompletedPhase ?? (isGenerating ? 'none' : 'D');
 		entry.blocks = wt.blocks;
 		entry.issues = wt.issues;
 		entry.ratings = wt.ratings;
 		entry.walkthroughId = wt.id;
-		entry.doneReceived = true;
-		entry.isStreaming = false;
+		entry.doneReceived = !isGenerating;
+		entry.isStreaming = isGenerating;
 		entry.streamError = null;
-		entry.superseded = wt.status === 'superseded';
-		entry.phase = 'finishing';
-		entry.phaseMessage = 'Complete';
-		entry.liveGeneration = false;
+		entry.superseded = status === 'superseded';
+		entry.phase = isGenerating ? 'writing' : 'finishing';
+		entry.phaseMessage = isGenerating ? 'Resuming walkthrough…' : 'Complete';
+		// `liveGeneration` gates the progress stepper. A resumed job IS live
+		// generation — the server is actively writing — so the stepper should
+		// show through to completion just like it would for a fresh stream.
+		entry.liveGeneration = isGenerating;
+		// Stamp a fresh streamStartedAt for the resume so the elapsed timer
+		// counts the wait the user actually sees (we don't have the original
+		// generation start time, and surfacing a stale negative-ish number
+		// from a previous app session would be worse than restarting at 0).
+		if (isGenerating) entry.streamStartedAt = Date.now();
 		entries.set(prId, entry);
 		entries = new Map(entries);
 
 		activePrId = prId;
+
+		if (isGenerating) {
+			// The server already has a live job for this PR (registered via
+			// resumePending or still alive from before a UI reconnect).
+			// streamWalkthrough subscribes to it — its snapshot replay is
+			// idempotent w.r.t. the partial we just hydrated (block ids /
+			// issue ids / rating axes dedupe inside applyEvents).
+			void streamWalkthrough(prId);
+		}
+
 		return true;
 	} catch {
 		return false;
@@ -574,7 +644,8 @@ export async function prefetchWalkthrough(prId: string): Promise<void> {
 	// Reserve our slot before enforcing the cap so concurrent prefetches
 	// are counted correctly and the cap is never exceeded.
 	const abortCtrl = new AbortController();
-	controllers.set(prId, { abort: abortCtrl, reader: null });
+	const ctrlEntry: ControllerEntry = { abort: abortCtrl, reader: null, intentional: false };
+	controllers.set(prId, ctrlEntry);
 
 	// Enforce the cap — may evict this PR if it's not active
 	enforceStreamCap();
@@ -722,9 +793,10 @@ function applyEvents(prId: string, events: WalkthroughStreamEvent[]): void {
 
 // ── Abort / reset ───────────────────────────────────────────────────────────
 
-function abortPr(prId: string): void {
+function abortPr(prId: string, intentional: boolean = true): void {
 	const ctrl = controllers.get(prId);
 	if (ctrl) {
+		ctrl.intentional = intentional;
 		ctrl.reader?.cancel().catch(() => {});
 		ctrl.reader = null;
 		ctrl.abort.abort();
@@ -842,8 +914,34 @@ export async function invalidateForPull(prId: string): Promise<void> {
 	}
 }
 
-/** Clear active PR without aborting any background streams. */
+/**
+ * Disconnect the active PR's SSE on navigation away. The server-side job
+ * continues running in the background (jobs are forkDaemon fibers protected
+ * by a 5-permit semaphore, see WalkthroughJobs); aborting the SSE just drops
+ * the client-side subscriber so we don't orphan a stalled controller in
+ * `controllers`.
+ *
+ * Why we abort even though "the server keeps generating": leaving the
+ * controller in the map after the page unmounts means the next mount cycle
+ * (hydrateFromCache → streamWalkthrough) short-circuits at the
+ * `controllers.has(prId)` guard and never opens a fresh SSE — so when the
+ * user comes back to the PR, the in-progress generation appears frozen even
+ * though the server has been writing to the DB the whole time. By aborting
+ * here, the next streamWalkthrough opens a fresh SSE whose snapshot replay
+ * catches the UI up to the server's actual state.
+ *
+ * Marks the abort as `intentional: true` so streamWalkthrough's finally
+ * block doesn't surface an "ended unexpectedly" error when the user
+ * navigates away early in generation (before any summary lands). The
+ * entry's `isStreaming` flag stays true so `getPrWalkthroughStatus`
+ * continues to report 'generating' from the sidebar/topbar perspective
+ * until the WS `walkthrough:complete` lands or the user navigates back
+ * and the SSE re-attaches.
+ */
 export function deactivate(): void {
+	if (activePrId) {
+		abortPr(activePrId, true);
+	}
 	activePrId = null;
 }
 
@@ -867,19 +965,42 @@ export function onWalkthroughComplete(prId: string, walkthroughId: string): void
 		const hadBlocks = entry.blocks.length > 0;
 		const hadRatings = entry.ratings.length > 0;
 		const wasDone = entry.doneReceived;
+		// A complete walkthrough has all 9 rating axes (doctrine invariant
+		// #4 / Phase D). If we don't have all 9, the in-memory entry is
+		// partial — typically because the user navigated away mid-generation
+		// and `deactivate()` aborted the SSE before the trailing
+		// rating/done events landed. The server-side job ran to completion
+		// regardless, so the DB has the full row; we just haven't pulled it
+		// into memory yet.
+		const hasFullData = entry.ratings.length === 9 && hadBlocks && entry.summary !== null;
 
-		updateEntry(prId, (e) => {
-			e.isStreaming = false;
-			e.doneReceived = true;
-			e.walkthroughId = walkthroughId;
-		});
-		// Fetch the full walkthrough from cache if:
-		// 1. No blocks yet (SSE disconnected early), OR
-		// 2. Has blocks but missing ratings and never received the done event
-		//    (SSE dropped before the ratings/done phase at the end of generation)
-		const missingRatings = hadBlocks && !hadRatings && !wasDone;
-		if (activePrId === prId && (!hadBlocks || missingRatings)) {
-			fetchCachedWalkthrough(prId);
+		if (hasFullData || activePrId === prId) {
+			updateEntry(prId, (e) => {
+				e.isStreaming = false;
+				e.doneReceived = true;
+				e.walkthroughId = walkthroughId;
+			});
+			// Fetch the full walkthrough from cache if:
+			// 1. No blocks yet (SSE disconnected early), OR
+			// 2. Has blocks but missing ratings and never received the done event
+			//    (SSE dropped before the ratings/done phase at the end of generation)
+			const missingRatings = hadBlocks && !hadRatings && !wasDone;
+			if (activePrId === prId && (!hadBlocks || missingRatings)) {
+				fetchCachedWalkthrough(prId);
+			}
+		} else {
+			// Partial in-memory entry for a non-active PR. Marking
+			// `doneReceived: true` here would make the next mount's
+			// `prepareEntry` / `hydrateFromCache` early-return on the
+			// "already complete" check at lines 348-349 / 494-503 and
+			// surface stale partial content. Stash the walkthroughId so
+			// the next visit knows what id the row resolves to, and leave
+			// `isStreaming: true` / `doneReceived: false` so the next
+			// mount's hydrateFromCache fetches the canonical row from the
+			// server and overwrites the partial state.
+			updateEntry(prId, (e) => {
+				e.walkthroughId = walkthroughId;
+			});
 		}
 	} else {
 		// No entry — the user hasn't viewed this PR yet. Create a stub so the

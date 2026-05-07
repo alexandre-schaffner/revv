@@ -23,15 +23,11 @@
 	import ReviewLayout from '$lib/components/review/ReviewLayout.svelte';
 	import GuidedWalkthrough from '$lib/components/walkthrough/GuidedWalkthrough.svelte';
 	import RequestChanges from '$lib/components/review/RequestChanges.svelte';
-	import { deactivate as deactivateWalkthrough, getIsStreaming as getWalkthroughStreaming, getSummary as getWalkthroughSummary, regenerate as regenerateWalkthrough, abort as abortWalkthrough, getRiskLevel as getWalkthroughRiskLevel } from '$lib/stores/walkthrough.svelte';
-	import { setTopbarCollapsed } from '$lib/stores/topbar.svelte';
+	import { deactivate as deactivateWalkthrough, getRiskLevel as getWalkthroughRiskLevel } from '$lib/stores/walkthrough.svelte';
 	import { requestThreadSync } from '$lib/stores/ws.svelte';
 	import { onDestroy, untrack } from 'svelte';
 	import AuthGuard from '$lib/components/auth/AuthGuard.svelte';
-	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
-	import { Tooltip, TooltipContent, TooltipTrigger } from '$lib/components/ui/tooltip';
-	import { RefreshCw, Square } from '@lucide/svelte';
 
 	const pr = $derived(getSelectedPr());
 	const themeType = $derived(getDiffThemeType());
@@ -39,8 +35,6 @@
 	const isLoading = $derived(getIsLoadingFiles());
 	const loadError = $derived(getFilesError());
 	const activeTab = $derived(getActiveTab());
-	const walkthroughStreaming = $derived(getWalkthroughStreaming());
-	const walkthroughSummary = $derived(getWalkthroughSummary());
 	const walkthroughRiskLevel = $derived(getWalkthroughRiskLevel());
 
 	const riskClasses: Record<string, string> = {
@@ -49,34 +43,7 @@
 		high: 'risk-badge risk-badge--high',
 	};
 
-	// The title lives inside the scroll container and scrolls away naturally.
-	// An IntersectionObserver on the title element drives the compact topbar.
 	let scrollRootEl: HTMLDivElement | undefined = $state(undefined);
-	let titleEl: HTMLDivElement | undefined = $state(undefined);
-
-	// Diff tab has its own layout and no big title — always show the compact PR title in the topbar.
-	const forceCompact = $derived(activeTab === 'diff');
-
-	$effect(() => {
-		if (forceCompact) {
-			setTopbarCollapsed(true);
-			return;
-		}
-		if (!titleEl || !scrollRootEl) {
-			setTopbarCollapsed(false);
-			return;
-		}
-		const target = titleEl;
-		const io = new IntersectionObserver(
-			([entry]) => {
-				if (!entry) return;
-				setTopbarCollapsed(!entry.isIntersecting);
-			},
-			{ root: scrollRootEl, threshold: 0 }
-		);
-		io.observe(target);
-		return () => io.disconnect();
-	});
 
 	// Per-PR scroll persistence for the walkthrough / request-changes tabs.
 	// (Diff tab has its own scroll container inside ReviewLayout.svelte and
@@ -234,14 +201,15 @@
 		// Invalidate any in-flight request and clean up store state
 		currentRequestId++;
 		clearReviewFiles();
-		deactivateWalkthrough(); // Clear active view without aborting background generation
-		setTopbarCollapsed(false);
+		// Drops the SSE subscription for this PR (so the controllers map
+		// doesn't keep an orphaned, possibly-stalled handle that would block
+		// the next mount from opening a fresh stream). The server-side job
+		// keeps running — walkthrough generation is decoupled from which PR
+		// is on screen, so two concurrent walkthroughs progress in parallel
+		// even after navigating between them.
+		deactivateWalkthrough();
 	});
 
-	function handleRegenerate(): void {
-		const prId = page.params['prId'] ?? '';
-		regenerateWalkthrough(prId);
-	}
 </script>
 
 <AuthGuard>
@@ -276,48 +244,15 @@
 			<div
 				class="page-title-section"
 				class:page-title-section--narrow={activeTab === 'walkthrough' || activeTab === 'request-changes'}
-				bind:this={titleEl}
 			>
 				<div class="title-row">
 					<h1 class="page-title">{pr.title}</h1>
-					{#if activeTab === 'walkthrough' && walkthroughStreaming}
-						<Tooltip>
-							<TooltipTrigger>
-								{#snippet child({ props })}
-									<Button
-										{...props}
-										variant="ghost"
-										size="icon-sm"
-										class="stop-generation"
-										onclick={abortWalkthrough}
-									>
-										<Square size={14} fill="currentColor" />
-									</Button>
-								{/snippet}
-							</TooltipTrigger>
-							<TooltipContent>Stop generation</TooltipContent>
-						</Tooltip>
-					{/if}
 				</div>
 				<span class="page-subtitle">#{pr.externalId} · {pr.sourceBranch} → {pr.targetBranch}</span>
 				{#if activeTab === 'walkthrough' && walkthroughRiskLevel}
 					<Badge variant="outline" class={riskClasses[walkthroughRiskLevel] ?? ''}>
 						{walkthroughRiskLevel} risk
 					</Badge>
-				{/if}
-				{#if activeTab === 'walkthrough' && walkthroughSummary && !walkthroughStreaming}
-					<div class="regenerate-row">
-						<Button
-							variant="ghost"
-							size="sm"
-							class="regenerate-btn"
-							style="cursor: pointer;"
-							onclick={handleRegenerate}
-						>
-							<RefreshCw size={14} />
-							Regenerate walkthrough
-						</Button>
-					</div>
 				{/if}
 			</div>
 
@@ -438,16 +373,6 @@
 		min-width: 0;
 	}
 
-	.title-row :global(button) {
-		flex-shrink: 0;
-		opacity: 0.5;
-		transition: opacity 150ms ease;
-	}
-
-	.title-row :global(button:hover) {
-		opacity: 1;
-	}
-
 	.page-title {
 		font-size: 32px;
 		font-weight: 700;
@@ -511,15 +436,6 @@
 		border-color: color-mix(in srgb, var(--color-danger) 35%, transparent) !important;
 	}
 
-	/* ── Regenerate button (below risk badge) ─────────────────────────── */
-	.regenerate-row {
-		margin-top: 10px;
-	}
-
-	:global(.regenerate-btn) {
-		margin-left: -10px;
-	}
-
 	.loading {
 		display: flex;
 		height: 100%;
@@ -531,15 +447,5 @@
 
 	.error {
 		color: var(--color-danger);
-	}
-
-	:global(.stop-generation) {
-		color: var(--color-danger) !important;
-		opacity: 1 !important;
-	}
-
-	:global(.stop-generation:hover) {
-		color: var(--color-danger) !important;
-		opacity: 0.8 !important;
 	}
 </style>

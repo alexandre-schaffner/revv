@@ -90,9 +90,7 @@
 
             {#if runningCount > 0}
                 <span class="count-pill count-pill--running" title="{runningCount} running">
-                    <span class="spinner" aria-hidden="true">
-                        <Loader2 size={11} />
-                    </span>
+                    <Loader2 size={11} class="animate-spin" aria-hidden="true" />
                     <span class="count-label">{runningCount} running</span>
                 </span>
             {/if}
@@ -242,20 +240,6 @@
         font-variant-numeric: tabular-nums;
     }
 
-    .spinner {
-        display: inline-flex;
-        animation: spin 900ms linear infinite;
-    }
-
-    @keyframes spin {
-        from {
-            transform: rotate(0deg);
-        }
-        to {
-            transform: rotate(360deg);
-        }
-    }
-
     .summary-controls {
         display: flex;
         align-items: center;
@@ -325,12 +309,6 @@
         background: var(--color-border);
         opacity: 0.6;
         margin: 0;
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-        .spinner {
-            animation: none;
-        }
     }
 
     /* Narrow-width (RequestChanges sidebar ~320px): hide the elapsed chunk,

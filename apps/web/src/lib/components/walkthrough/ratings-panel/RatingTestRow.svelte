@@ -123,7 +123,7 @@
                     </span>
                 {:else if state === "running"}
                     <span class="icon-running">
-                        <Loader2 size={14} />
+                        <Loader2 size={14} class="animate-spin" />
                     </span>
                 {:else if rating?.verdict === "pass"}
                     <span class="icon-resolved">
@@ -388,22 +388,12 @@
 
     .icon-running {
         display: inline-flex;
-        animation: spin 900ms linear infinite;
         color: var(--color-accent);
     }
 
     .icon-resolved {
         display: inline-flex;
         animation: icon-in 180ms var(--ease-out-expo) 1;
-    }
-
-    @keyframes spin {
-        from {
-            transform: rotate(0deg);
-        }
-        to {
-            transform: rotate(360deg);
-        }
     }
 
     @keyframes icon-in {
@@ -551,9 +541,6 @@
     /* ── Reduced motion ──────────────────────────────────────────── */
 
     @media (prefers-reduced-motion: reduce) {
-        .icon-running {
-            animation: none;
-        }
         .icon-resolved {
             animation: none;
         }

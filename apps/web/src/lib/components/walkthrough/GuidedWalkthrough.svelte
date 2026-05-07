@@ -669,31 +669,9 @@
 				<span class="elapsed-time">{formatElapsed(elapsedSeconds)}</span>
 			</div>
 
-			<!-- Skeleton placeholder: only shown during the Analyze phase -->
-			{#if normalizePhase(phase) === 'writing'}
-				<div class="skeleton-body" aria-hidden="true">
-					<div class="skeleton-summary">
-						<Skeleton class="h-[22px] w-[60px] rounded-full" />
-						<Skeleton class="h-[14px] w-[95%]" />
-						<Skeleton class="h-[14px] w-[80%]" />
-						<Skeleton class="h-[14px] w-[50%]" />
-					</div>
-
-					<div class="skeleton-separator"></div>
-
-					<div class="skeleton-card">
-						<div class="skeleton-card-body">
-							<Skeleton class="h-[14px] w-[90%]" />
-							<Skeleton class="h-[14px] w-full" />
-							<Skeleton class="h-[14px] w-[85%]" />
-							<Skeleton class="h-[14px] w-[75%]" />
-							<Skeleton class="h-[14px] w-[60%]" />
-						</div>
-					</div>
-				</div>
-			{/if}
-
-			<!-- Exploration feed -->
+			<!-- Operations (past work) above skeleton (upcoming content). On
+			     resume both render together because hydrateFromCache forces
+			     phase='writing' before the summary lands. -->
 			{#if explorationSteps.length > 0}
 				<div class="exploration-section">
 					<div class="exploration-header">
@@ -716,6 +694,30 @@
 							<span class="cursor-dot"></span>
 							<span class="cursor-dot"></span>
 							<span class="cursor-dot"></span>
+						</div>
+					</div>
+				</div>
+			{/if}
+
+			<!-- Skeleton placeholder for the upcoming summary; only meaningful once writing has begun. -->
+			{#if normalizePhase(phase) === 'writing'}
+				<div class="skeleton-body" aria-hidden="true">
+					<div class="skeleton-summary">
+						<Skeleton class="h-[22px] w-[60px] rounded-full" />
+						<Skeleton class="h-[14px] w-[95%]" />
+						<Skeleton class="h-[14px] w-[80%]" />
+						<Skeleton class="h-[14px] w-[50%]" />
+					</div>
+
+					<div class="skeleton-separator"></div>
+
+					<div class="skeleton-card">
+						<div class="skeleton-card-body">
+							<Skeleton class="h-[14px] w-[90%]" />
+							<Skeleton class="h-[14px] w-full" />
+							<Skeleton class="h-[14px] w-[85%]" />
+							<Skeleton class="h-[14px] w-[75%]" />
+							<Skeleton class="h-[14px] w-[60%]" />
 						</div>
 					</div>
 				</div>

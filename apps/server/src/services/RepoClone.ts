@@ -505,6 +505,71 @@ async function clearStalePrWorktreeLocks(
 	}
 }
 
+/**
+ * Check whether a commit SHA is present in the local object store. Used as a
+ * cheap gate before attempting `reset --hard` so we can fetch the SHA on
+ * demand rather than letting reset fail with the cryptic
+ * `fatal: Could not parse object 'SHA'`.
+ */
+async function commitExists(cwd: string, sha: string): Promise<boolean> {
+	try {
+		await runGit(["cat-file", "-e", `${sha}^{commit}`], cwd, 10_000);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Ensure `prHeadSha` is present in the local object store at `cwd`, fetching
+ * from `origin` if necessary.
+ *
+ * Why this exists: the previous flow fetched `refs/pull/{N}/head` (the PR's
+ * *current* head on GitHub) and then `reset --hard prHeadSha`. When the PR
+ * advanced or was force-pushed between the metadata resolution that produced
+ * `prHeadSha` and the worktree acquire, the fetched ref no longer contained
+ * the requested SHA and reset failed with `fatal: Could not parse object`.
+ *
+ * Strategy:
+ *   1. Fast path — SHA already in objects, no remote round-trip.
+ *   2. Targeted SHA fetch (`git fetch origin <sha>`). GitHub honors this for
+ *      any commit reachable from any ref via `uploadpack.allowReachableSHA1InWant`,
+ *      which is enabled by default and crucially covers commits that were
+ *      force-pushed away from a PR — they remain reachable through GitHub's
+ *      internal refs for ~90 days.
+ *   3. Fallback — fetch the PR's current head ref. Only useful when (a) the
+ *      direct-SHA fetch is blocked (e.g. a self-hosted GHE with the want-SHA
+ *      knob disabled) AND (b) `prHeadSha` happens to match the current head.
+ *
+ * Throws with a clear, user-actionable message if the SHA can't be obtained.
+ */
+async function ensurePrCommitPresent(
+	cwd: string,
+	prHeadSha: string,
+	prNumber: number,
+): Promise<void> {
+	if (await commitExists(cwd, prHeadSha)) return;
+
+	try {
+		await runGit(["fetch", "origin", prHeadSha], cwd);
+		if (await commitExists(cwd, prHeadSha)) return;
+	} catch (err) {
+		debug(
+			"pr-worktree",
+			`direct SHA fetch failed for ${prHeadSha}, falling back to PR ref:`,
+			err instanceof Error ? err.message : String(err),
+		);
+	}
+
+	await runGit(["fetch", "origin", `refs/pull/${prNumber}/head`], cwd);
+
+	if (!(await commitExists(cwd, prHeadSha))) {
+		throw new Error(
+			`commit ${prHeadSha} is not available on origin — it may have been force-pushed away or garbage-collected by GitHub`,
+		);
+	}
+}
+
 /** Validate that a path is safely within the expected clone base directory. */
 function assertSafeClonePath(clonePath: string): void {
 	if (!clonePath.startsWith(CLONE_BASE_DIR)) {
@@ -792,18 +857,21 @@ export const RepoCloneServiceLive = Layer.effect(
 										return { worktreePath, branchName };
 									}
 									// Pull the requested commit into the local object
-									// store via FETCH_HEAD only (no destination ref).
-									// Doing this from the bare clone with a
-									// `:refs/heads/pr-N` destination would fail with
-									// "refusing to fetch into branch 'refs/heads/pr-N'
-									// checked out at <worktreePath>"; running the fetch
-									// *from inside the worktree that owns the branch*
-									// sidesteps that check, and the subsequent
-									// `reset --hard` updates both the working tree and
-									// the branch ref atomically.
-									await runGit(
-										["fetch", "origin", `refs/pull/${prNumber}/head`],
+									// store. We target `prHeadSha` directly rather than
+									// `refs/pull/{N}/head` because the PR's current head
+									// can have advanced past `prHeadSha` since metadata
+									// was resolved — fetching the ref in that case would
+									// pull the wrong objects and the subsequent reset
+									// would fail with "Could not parse object". The
+									// fetch runs from inside the worktree that owns the
+									// branch so the subsequent `reset --hard` updates
+									// both working tree and branch ref atomically
+									// without tripping git's "refusing to fetch into
+									// branch checked out at <path>" guard.
+									await ensurePrCommitPresent(
 										worktreePath,
+										prHeadSha,
+										prNumber,
 									);
 									await runGit(
 										["reset", "--hard", prHeadSha],
@@ -903,7 +971,11 @@ export const RepoCloneServiceLive = Layer.effect(
 							// Realign to the caller's requested SHA in case the PR
 							// head on GitHub has advanced past it (rare but possible
 							// when the caller is acting on a slightly-stale snapshot,
-							// e.g. resuming a walkthrough at its original SHA).
+							// e.g. resuming a walkthrough at its original SHA). The
+							// PR-ref fetch above only pulls the *current* head, so we
+							// have to ensure `prHeadSha` is fetched explicitly before
+							// resetting — otherwise reset fails with
+							// "Could not parse object".
 							const tipSha = (
 								await runGitCapture(
 									["rev-parse", "HEAD"],
@@ -911,6 +983,11 @@ export const RepoCloneServiceLive = Layer.effect(
 								)
 							).trim();
 							if (tipSha !== prHeadSha) {
+								await ensurePrCommitPresent(
+									worktreePath,
+									prHeadSha,
+									prNumber,
+								);
 								await runGit(
 									["reset", "--hard", prHeadSha],
 									worktreePath,

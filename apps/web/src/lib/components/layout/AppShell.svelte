@@ -6,7 +6,14 @@
 	import CommandPalette from './CommandPalette.svelte';
 	import FloatingTabs from './FloatingTabs.svelte';
 	import { getSelectedPr } from '$lib/stores/prs.svelte';
-	import { getPrWalkthroughStatus } from '$lib/stores/walkthrough.svelte';
+	import {
+		getPrWalkthroughStatus,
+		getIsStreaming as getWalkthroughStreaming,
+		getSummary as getWalkthroughSummary,
+		regenerate as regenerateWalkthrough,
+		abort as abortWalkthrough,
+	} from '$lib/stores/walkthrough.svelte';
+	import { RefreshCw, Square } from '@lucide/svelte';
 	import {
 		getActiveTab,
 		setActiveTab,
@@ -33,7 +40,6 @@
 		getPaletteMode,
 		closePalette,
 	} from '$lib/stores/shortcuts.svelte';
-	import { getTopbarCollapsed } from '$lib/stores/topbar.svelte';
 	import { page } from '$app/state';
 
 	let { children } = $props();
@@ -46,8 +52,15 @@
 	const pr = $derived(getSelectedPr());
 	const walkthroughStatus = $derived(pr ? getPrWalkthroughStatus(pr.id) : 'idle');
 	const activeTab = $derived(getActiveTab());
-	const topbarCollapsed = $derived(getTopbarCollapsed());
 	const isSettingsRoute = $derived(page.url.pathname.startsWith('/settings'));
+	const walkthroughStreaming = $derived(getWalkthroughStreaming());
+	const walkthroughSummary = $derived(getWalkthroughSummary());
+	const showFloatingActions = $derived(
+		!!pr &&
+			!isSettingsRoute &&
+			activeTab === 'walkthrough' &&
+			(walkthroughStreaming || !!walkthroughSummary),
+	);
 
 	// New-commit-available signal: the PR's current headSha differs from the
 	// SHA the diff was loaded against. `getLoadedHeadSha` returns null until the
@@ -124,7 +137,6 @@
 	class="app-shell"
 	class:sidebar-collapsed={sidebarCollapsed}
 	class:is-resizing={isDragging}
-	class:topbar-compact={topbarCollapsed}
 	style={gridStyle}
 >
 	<aside class="sidebar-area">
@@ -173,6 +185,30 @@
 	<footer class="bottombar-area">
 		<BottomBar />
 	</footer>
+
+	{#if showFloatingActions}
+		<div class="walkthrough-actions-float">
+			{#if walkthroughStreaming}
+				<button
+					type="button"
+					class="walkthrough-action-btn walkthrough-action-btn--danger"
+					onclick={abortWalkthrough}
+				>
+					<Square size={14} fill="currentColor" />
+					Stop generation
+				</button>
+			{:else if pr}
+				<button
+					type="button"
+					class="walkthrough-action-btn"
+					onclick={() => regenerateWalkthrough(pr.id)}
+				>
+					<RefreshCw size={14} />
+					Regenerate walkthrough
+				</button>
+			{/if}
+		</div>
+	{/if}
 
 	<aside
 		class="rightpanel-area"
@@ -298,6 +334,69 @@
 	.bottombar-area {
 		grid-area: bottombar;
 		border-top: 1px solid var(--color-border);
+	}
+
+	/* Bottom-anchored mirror of `.tabs-float`. Sits 12px above the 40px
+	   bottombar, viewport-centred via `left: 50%` so a sidebar collapse/
+	   resize does not shift it horizontally. `pointer-events: none` on the
+	   wrapper prevents the invisible padding zone from swallowing clicks
+	   meant for content below. */
+	.walkthrough-actions-float {
+		position: absolute;
+		bottom: 40px;
+		left: 50%;
+		transform: translateX(-50%);
+		z-index: 20;
+		pointer-events: none;
+		padding-bottom: 12px;
+	}
+
+	.walkthrough-actions-float :global(*) {
+		pointer-events: auto;
+	}
+
+	/* Glass pill — mirrors `.pill-segment` in FloatingTabs.svelte so the
+	   bottom action and the top tabs read as members of the same family. */
+	.walkthrough-action-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+		height: 36px;
+		padding: 0 16px;
+		background: var(--color-tab-track-bg);
+		backdrop-filter: blur(16px) saturate(1.4);
+		-webkit-backdrop-filter: blur(16px) saturate(1.4);
+		border: 1px solid var(--color-glass-border);
+		border-radius: 9999px;
+		box-shadow:
+			var(--color-glass-shadow),
+			inset 0 0.5px 0 0 var(--color-glass-highlight);
+		font-family: inherit;
+		font-size: 13px;
+		font-weight: 500;
+		letter-spacing: -0.01em;
+		line-height: 1;
+		color: var(--color-text-primary);
+		cursor: pointer;
+		transition:
+			background-color var(--duration-snap),
+			color var(--duration-snap),
+			box-shadow var(--duration-snap);
+		-webkit-font-smoothing: antialiased;
+		white-space: nowrap;
+	}
+
+	.walkthrough-action-btn:hover {
+		background: color-mix(in srgb, var(--color-tab-active-bg) 80%, var(--color-tab-track-bg));
+	}
+
+	.walkthrough-action-btn:focus-visible {
+		outline: 2px solid var(--color-accent);
+		outline-offset: 2px;
+	}
+
+	.walkthrough-action-btn--danger {
+		color: var(--color-danger);
 	}
 
 	/* ── Right pane (chat) ──
