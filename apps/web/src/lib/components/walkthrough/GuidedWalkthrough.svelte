@@ -45,6 +45,7 @@
 	import { API_BASE_URL } from '@revv/shared';
 	import { authHeaders } from '$lib/utils/session-token';
 	import { Progress } from '$lib/components/ui/progress';
+	import { Dotmatrix } from '$lib/components/ui/dotmatrix/index.js';
 	import {
 		jumpToDiffLine,
 		getPendingWalkthroughBlockJump,
@@ -175,57 +176,8 @@
 		{ id: 'overview', label: 'Overview', blurb: 'What changed and why', activeBlurb: 'Reading the diff…', spinner: 'ripple', targetId: 'walkthrough-overview' },
 		{ id: 'diff', label: 'Diff Analysis', blurb: 'Hunk-by-hunk reasoning', activeBlurb: 'Analyzing hunks…', spinner: 'diagonal', targetId: 'walkthrough-diff' },
 		{ id: 'sentiment', label: 'Sentiment', blurb: 'Overall read on the PR', activeBlurb: 'Forming a verdict…', spinner: 'collapse', targetId: 'walkthrough-sentiment' },
-		{ id: 'rated', label: 'Rating', blurb: 'Across 9 axis', activeBlurb: 'Scoring each axis…', spinner: 'spiral', targetId: 'walkthrough-rating' },
+		{ id: 'rated', label: 'Rating', blurb: 'Across 9 axis', activeBlurb: 'Scoring each axis…', spinner: 'prism-bloom', targetId: 'walkthrough-rating' },
 	] as const;
-
-	// 5×5 dot matrix layout. row/col are static; the per-dot CSS variables
-	// drive 4 different keyframe animations (one per chapter spinner). All
-	// values are pure layout — no reactive state — so we precompute once.
-	// `manhattan`: distance from center (used by ripple).
-	// `pathOrder`: row + col — diagonal sweep front index (used by diagonal).
-	// `spiralOrder`: clockwise spiral index from top-left (used by spiral).
-	// `collapseOrder`: 4 - manhattan — outside-in (used by collapse).
-	const MATRIX_5X5 = (() => {
-		// Spiral order (clockwise from 0,0 → 0,4 → 4,4 → 4,0 → inner).
-		const spiral = new Array<number>(25);
-		const visited = Array.from({ length: 5 }, () => Array<boolean>(5).fill(false));
-		const dirs: Array<[number, number]> = [
-			[0, 1],
-			[1, 0],
-			[0, -1],
-			[-1, 0],
-		];
-		let r = 0, c = 0, di = 0;
-		for (let step = 0; step < 25; step++) {
-			spiral[r * 5 + c] = step;
-			visited[r]![c] = true;
-			const [dr, dc] = dirs[di]!;
-			const nr = r + dr;
-			const nc = c + dc;
-			if (nr < 0 || nr >= 5 || nc < 0 || nc >= 5 || visited[nr]![nc]) {
-				di = (di + 1) % 4;
-				const [dr2, dc2] = dirs[di]!;
-				r += dr2;
-				c += dc2;
-			} else {
-				r = nr;
-				c = nc;
-			}
-		}
-		return Array.from({ length: 25 }, (_, i) => {
-			const row = Math.floor(i / 5);
-			const col = i % 5;
-			const manhattan = Math.abs(row - 2) + Math.abs(col - 2);
-			return {
-				row,
-				col,
-				manhattan,
-				pathOrder: row + col,
-				collapseOrder: 4 - manhattan,
-				spiralOrder: spiral[i] ?? 0,
-			};
-		});
-	})();
 
 	// ── Recent tool calls under the active chapter ───────────────────────
 	// The active chapter cell renders a vertical list of the last 3 tool
@@ -624,14 +576,7 @@
 							<div class="chapter-active-layout">
 								<div class="chapter-title">{chapter.label}</div>
 								<div class="chapter-active-row">
-									<span class="dotmatrix dotmatrix--{chapter.spinner}" aria-hidden="true">
-										{#each MATRIX_5X5 as dot, dotIdx (dotIdx)}
-											<span
-												class="dotmatrix-dot"
-												style="--row: {dot.row}; --col: {dot.col}; --manhattan: {dot.manhattan}; --path-order: {dot.pathOrder}; --spiral-order: {dot.spiralOrder}; --collapse-order: {dot.collapseOrder};"
-											></span>
-										{/each}
-									</span>
+							<Dotmatrix variant={chapter.spinner} active={active} />
 									{#if recentExplorationSteps.length > 0}
 										<div class="chapter-tool-calls">
 											{#each recentExplorationSteps.slice(-2) as step, i (step.tool + step.description)}
@@ -1368,78 +1313,6 @@
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
-	}
-
-	/* ── Dotmatrix spinners ─────────────────────────────────────────────
-	   Faithful Svelte port of the dotmatrix loaders from
-	   https://dotmatrix.zzzzshawn.cloud (github.com/zzzzshawn/matrix). The
-	   structure mirrors the upstream library: a 5×5 grid of `currentColor`
-	   dots with per-dot CSS variables (--row, --col, --manhattan, --path-order,
-	   --spiral-order, --collapse-order) wired to four CSS keyframes — one
-	   per chapter — that drive the visual via animation-delay on each dot.
-
-	   Each variant traces a different "shape" of motion across the grid:
-	     ripple    — center-out radial pulse, delay = manhattan distance
-	     diagonal  — diagonal sweep, delay = row + col
-	     collapse  — outside-in collapse, delay = 4 - manhattan
-	     spiral    — clockwise spiral, delay = order along the spiral path
-
-	   Color pulled from the inherited `currentColor`, which we set to
-	   `var(--color-accent)` on the wrapper. Sized at 29×29 (5 dots × 5px
-	   + 4 gaps × 1px = 29px). */
-
-	.dotmatrix {
-		display: inline-grid;
-		grid-template-columns: repeat(5, 5px);
-		grid-template-rows: repeat(5, 5px);
-		gap: 1px;
-		flex-shrink: 0;
-		color: var(--color-accent);
-		--dotmatrix-cycle: 1500ms;
-	}
-
-	.dotmatrix-dot {
-		width: 5px;
-		height: 5px;
-		border-radius: 999px;
-		background: currentColor;
-		opacity: 0.16;
-		will-change: opacity;
-	}
-
-	/* Variant 1: Ripple (Overview) — radial pulse from center outward.
-	   Delay scales with Manhattan distance from center; cycle is one full
-	   wave outward, then settle. */
-	.dotmatrix--ripple .dotmatrix-dot {
-		animation: dotmatrix-ripple var(--dotmatrix-cycle) cubic-bezier(0.42, 0, 0.58, 1) infinite;
-		animation-delay: calc(var(--manhattan, 0) * 0.18 * var(--dotmatrix-cycle));
-	}
-	@keyframes dotmatrix-ripple {
-		0%, 100% { opacity: 0.16; }
-		50% { opacity: 1; }
-	}
-
-	/* Variant 2: Diagonal sweep (Diff Analysis) — top-left → bottom-right
-	   wave. Delay scales with row + col so the front travels diagonally. */
-	.dotmatrix--diagonal .dotmatrix-dot {
-		animation: dotmatrix-ripple var(--dotmatrix-cycle) linear infinite;
-		animation-delay: calc(var(--path-order, 0) * 0.11 * var(--dotmatrix-cycle));
-	}
-
-	/* Variant 3: Collapse (Sentiment) — outside-in. Delay scales with
-	   4 - manhattan so the outer ring fires first and the center fires
-	   last. Conceptually: gathering signals before forming the verdict. */
-	.dotmatrix--collapse .dotmatrix-dot {
-		animation: dotmatrix-ripple var(--dotmatrix-cycle) ease-in-out infinite;
-		animation-delay: calc(var(--collapse-order, 0) * 0.14 * var(--dotmatrix-cycle));
-	}
-
-	/* Variant 4: Spiral (Rating) — clockwise spiral from outer ring inward.
-	   Delay scales with the spiral order index (0..24). Maps nicely onto
-	   the 9-axis rating semantic — the agent is "scoring around" each axis. */
-	.dotmatrix--spiral .dotmatrix-dot {
-		animation: dotmatrix-ripple var(--dotmatrix-cycle) linear infinite;
-		animation-delay: calc(var(--spiral-order, 0) * 0.045 * var(--dotmatrix-cycle));
 	}
 
 	/* ── Superseded banner ──────────────────────────────────────────────

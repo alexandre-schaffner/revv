@@ -21,6 +21,7 @@
 		scrollToBottom as scrollWalkthroughToBottom,
 		scrollToRatings as scrollWalkthroughToRatings,
 		getUserScrolledUp as getWalkthroughUserScrolledUp,
+		getHasNewContentBelow as getWalkthroughHasNewContentBelow,
 	} from '$lib/stores/walkthroughNav.svelte';
 	import { ArrowDown, ArrowUp, Check, Gauge, Play, RefreshCw, Sparkles, Square } from '@lucide/svelte';
 	import {
@@ -76,6 +77,7 @@
 	const walkthroughCanResume = $derived(getWalkthroughCanResume());
 	const walkthroughHasRatings = $derived(getWalkthroughRatings().length > 0);
 	const walkthroughUserScrolledUp = $derived(getWalkthroughUserScrolledUp());
+	const walkthroughHasNewContentBelow = $derived(getWalkthroughHasNewContentBelow());
 	const walkthroughHasContent = $derived(
 		walkthroughStreaming ||
 			!!walkthroughSummary ||
@@ -228,7 +230,7 @@
 						<Square size={14} fill="currentColor" />
 						Stop generation
 					</button>
-					{#if walkthroughUserScrolledUp}
+					{#if walkthroughHasNewContentBelow}
 						<button
 							type="button"
 							class="walkthrough-action-btn"
