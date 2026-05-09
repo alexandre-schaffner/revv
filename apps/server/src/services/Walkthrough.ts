@@ -22,7 +22,7 @@
 // method that used to synthesize content on behalf of an agent is gone.
 
 import { Context, Effect, Layer } from 'effect';
-import { and, eq, inArray, ne } from 'drizzle-orm';
+import { and, desc, eq, inArray, ne } from 'drizzle-orm';
 import type {
 	Walkthrough,
 	WalkthroughBlock,
@@ -267,6 +267,26 @@ export class WalkthroughService extends Context.Tag('WalkthroughService')<
 				readonly opencodeSessionId: string | null;
 				readonly resumeAttempts: number;
 			}>,
+			never,
+			DbService
+		>;
+
+		/**
+		 * Find the most recent non-superseded `status='generating'` walkthrough
+		 * for a given PR. Used by the manual-resume HTTP endpoint to look up
+		 * which walkthroughId to hand to {@link WalkthroughJobs.startJob}. A PR
+		 * can only have one active generating row at a time (createPartial
+		 * recycles or supersedes earlier rows under transaction), so the
+		 * "most recent by generatedAt" tiebreak is just a safety net.
+		 */
+		readonly findResumable: (
+			prId: string,
+		) => Effect.Effect<
+			{
+				readonly id: string;
+				readonly pullRequestId: string;
+				readonly prHeadSha: string;
+			} | null,
 			never,
 			DbService
 		>;
@@ -588,6 +608,27 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 				opencodeSessionId: r.opencodeSessionId ?? null,
 				resumeAttempts: r.resumeAttempts,
 			}));
+		}),
+
+	findResumable: (prId) =>
+		Effect.gen(function* () {
+			const { db } = yield* DbService;
+			const row = db
+				.select({
+					id: walkthroughs.id,
+					pullRequestId: walkthroughs.pullRequestId,
+					prHeadSha: walkthroughs.prHeadSha,
+				})
+				.from(walkthroughs)
+				.where(
+					and(
+						eq(walkthroughs.pullRequestId, prId),
+						eq(walkthroughs.status, 'generating'),
+					),
+				)
+				.orderBy(desc(walkthroughs.generatedAt))
+				.get();
+			return row ?? null;
 		}),
 
 	incrementResumeAttempts: (walkthroughId) =>

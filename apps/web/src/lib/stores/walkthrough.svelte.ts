@@ -195,6 +195,20 @@ export function getLastCompletedPhase(): WalkthroughPipelinePhase {
 	return active()?.lastCompletedPhase ?? 'none';
 }
 /**
+ * True when the active PR has a stopped walkthrough that the server can
+ * resume from where it left off — some progress exists, the pipeline never
+ * reached Phase D, no error is set, and no stream is currently open. Gates
+ * the **Resume** floating button.
+ */
+export function getCanResume(): boolean {
+	const e = active();
+	if (!e) return false;
+	if (e.isStreaming) return false;
+	if (e.streamError) return false;
+	if (e.lastCompletedPhase === 'D') return false;
+	return e.summary !== null || e.blocks.length > 0;
+}
+/**
  * True when this walkthrough was marked `superseded` by the server (a newer
  * commit landed mid-generation). Used to render the "this walkthrough is
  * outdated" banner with a Regenerate action.
@@ -875,6 +889,31 @@ export async function regenerate(prId: string): Promise<void> {
 	entries.delete(prId);
 	entries = new Map(entries);
 
+	await streamWalkthrough(prId);
+}
+
+/**
+ * Manually resume a walkthrough the user previously stopped via `abort()`.
+ * Unlike `regenerate`, the existing entry is preserved — partial blocks /
+ * summary stay on screen while the SSE re-opens. `streamWalkthrough` already
+ * detects the rehydrate-from-partial path (`isResumeFromHydratedPartial`)
+ * and reuses the entry rather than reseating a fresh one, so the user sees
+ * a seamless continuation instead of a flicker back to the title block.
+ *
+ * No-ops silently if the server returns a non-OK status (most likely 404
+ * because the row was superseded by a head-SHA advance, or 500 because the
+ * resume-attempt cap was exceeded). The user can still click Regenerate.
+ */
+export async function resume(prId: string): Promise<void> {
+	try {
+		const res = await fetch(`${API_BASE_URL}/api/reviews/${prId}/walkthrough/resume`, {
+			method: 'POST',
+			headers: authHeaders(),
+		});
+		if (!res.ok) return;
+	} catch {
+		return;
+	}
 	await streamWalkthrough(prId);
 }
 

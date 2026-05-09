@@ -10,6 +10,7 @@ import { walkthroughStreamHandler } from './reviews/handlers/walkthrough-stream'
 import {
 	getCachedWalkthroughHandler,
 	regenerateWalkthroughHandler,
+	resumeWalkthroughHandler,
 } from './reviews/handlers/walkthrough-cache';
 import { submitGithubReviewHandler } from './reviews/handlers/github-submit';
 
@@ -246,6 +247,15 @@ export const reviewRoutes = new Elysia({ prefix: '/api/reviews' })
 		try {
 			await regenerateWalkthroughHandler(ctx.params.id);
 			return { success: true };
+		} catch (e) {
+			return handleAppError(e, ctx);
+		}
+	})
+
+	.post('/:id/walkthrough/resume', async (ctx) => {
+		try {
+			const result = await resumeWalkthroughHandler(ctx.params.id);
+			return { success: true, walkthroughId: result.walkthroughId };
 		} catch (e) {
 			return handleAppError(e, ctx);
 		}

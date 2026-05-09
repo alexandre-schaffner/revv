@@ -10,10 +10,17 @@
 		getPrWalkthroughStatus,
 		getIsStreaming as getWalkthroughStreaming,
 		getSummary as getWalkthroughSummary,
+		getRatings as getWalkthroughRatings,
+		getCanResume as getWalkthroughCanResume,
 		regenerate as regenerateWalkthrough,
+		resume as resumeWalkthrough,
 		abort as abortWalkthrough,
 	} from '$lib/stores/walkthrough.svelte';
-	import { RefreshCw, Square } from '@lucide/svelte';
+	import {
+		scrollToTop as scrollWalkthroughToTop,
+		scrollToRatings as scrollWalkthroughToRatings,
+	} from '$lib/stores/walkthroughNav.svelte';
+	import { ArrowUp, Gauge, Play, RefreshCw, Square } from '@lucide/svelte';
 	import {
 		getActiveTab,
 		setActiveTab,
@@ -55,11 +62,16 @@
 	const isSettingsRoute = $derived(page.url.pathname.startsWith('/settings'));
 	const walkthroughStreaming = $derived(getWalkthroughStreaming());
 	const walkthroughSummary = $derived(getWalkthroughSummary());
+	const walkthroughCanResume = $derived(getWalkthroughCanResume());
+	const walkthroughHasRatings = $derived(getWalkthroughRatings().length > 0);
+	const walkthroughHasContent = $derived(
+		walkthroughStreaming ||
+			!!walkthroughSummary ||
+			walkthroughCanResume ||
+			walkthroughHasRatings,
+	);
 	const showFloatingActions = $derived(
-		!!pr &&
-			!isSettingsRoute &&
-			activeTab === 'walkthrough' &&
-			(walkthroughStreaming || !!walkthroughSummary),
+		!!pr && !isSettingsRoute && activeTab === 'walkthrough' && walkthroughHasContent,
 	);
 
 	// New-commit-available signal: the PR's current headSha differs from the
@@ -188,25 +200,61 @@
 
 	{#if showFloatingActions}
 		<div class="walkthrough-actions-float">
-			{#if walkthroughStreaming}
-				<button
-					type="button"
-					class="walkthrough-action-btn walkthrough-action-btn--danger"
-					onclick={abortWalkthrough}
-				>
-					<Square size={14} fill="currentColor" />
-					Stop generation
-				</button>
-			{:else if pr}
+			<div class="walkthrough-actions-row">
+				{#if walkthroughStreaming}
+					<button
+						type="button"
+						class="walkthrough-action-btn walkthrough-action-btn--danger"
+						onclick={abortWalkthrough}
+					>
+						<Square size={14} fill="currentColor" />
+						Stop generation
+					</button>
+				{:else}
+					{#if walkthroughCanResume && pr}
+						<button
+							type="button"
+							class="walkthrough-action-btn"
+							onclick={() => resumeWalkthrough(pr.id)}
+						>
+							<Play size={14} fill="currentColor" />
+							Resume
+						</button>
+					{/if}
+					{#if walkthroughSummary && pr}
+						<button
+							type="button"
+							class="walkthrough-action-btn"
+							onclick={() => regenerateWalkthrough(pr.id)}
+						>
+							<RefreshCw size={14} />
+							Regenerate
+						</button>
+					{/if}
+				{/if}
+
 				<button
 					type="button"
 					class="walkthrough-action-btn"
-					onclick={() => regenerateWalkthrough(pr.id)}
+					onclick={scrollWalkthroughToTop}
+					aria-label="Scroll to top of walkthrough"
 				>
-					<RefreshCw size={14} />
-					Regenerate walkthrough
+					<ArrowUp size={14} />
+					Top
 				</button>
-			{/if}
+
+				{#if walkthroughHasRatings}
+					<button
+						type="button"
+						class="walkthrough-action-btn"
+						onclick={scrollWalkthroughToRatings}
+						aria-label="Scroll to rating panel"
+					>
+						<Gauge size={14} />
+						Rating
+					</button>
+				{/if}
+			</div>
 		</div>
 	{/if}
 
@@ -353,6 +401,12 @@
 
 	.walkthrough-actions-float :global(*) {
 		pointer-events: auto;
+	}
+
+	.walkthrough-actions-row {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
 	}
 
 	/* Glass pill — mirrors `.pill-segment` in FloatingTabs.svelte so the

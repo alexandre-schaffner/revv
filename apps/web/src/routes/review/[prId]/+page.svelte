@@ -24,6 +24,7 @@
 	import GuidedWalkthrough from '$lib/components/walkthrough/GuidedWalkthrough.svelte';
 	import RequestChanges from '$lib/components/review/RequestChanges.svelte';
 	import { deactivate as deactivateWalkthrough, getRiskLevel as getWalkthroughRiskLevel } from '$lib/stores/walkthrough.svelte';
+	import { setScrollRoot } from '$lib/stores/walkthroughNav.svelte';
 	import { requestThreadSync } from '$lib/stores/ws.svelte';
 	import { onDestroy, untrack } from 'svelte';
 	import AuthGuard from '$lib/components/auth/AuthGuard.svelte';
@@ -90,6 +91,14 @@
 		const saved = key ? getPrScrollPosition(prId, key) : 0;
 		suppressNextScroll = true;
 		scrollRootEl.scrollTop = saved;
+	});
+
+	// Register the scroll container with the walkthrough-nav store so the
+	// floating Top / Rating buttons in AppShell can scroll it without
+	// having to reach across components for the DOM ref.
+	$effect(() => {
+		setScrollRoot(scrollRootEl ?? null);
+		return () => setScrollRoot(null);
 	});
 
 	let currentRequestId = 0;

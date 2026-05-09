@@ -1,5 +1,6 @@
 import { Effect } from 'effect';
 import { AppRuntime } from '../../../runtime';
+import { NotFoundError } from '../../../domain/errors';
 import { GitHubService } from '../../../services/GitHub';
 import { PrContextService } from '../../../services/PrContext';
 import { WalkthroughJobs } from '../../../services/WalkthroughJobs';
@@ -81,5 +82,48 @@ export function getCachedWalkthroughHandler(prId: string, userId: string) {
 export function regenerateWalkthroughHandler(prId: string) {
 	return AppRuntime.runPromise(
 		Effect.flatMap(WalkthroughJobs, (jobs) => jobs.supersedeForPr(prId)),
+	);
+}
+
+/**
+ * POST /api/reviews/:id/walkthrough/resume — manually re-trigger generation
+ * for an in-progress walkthrough that the user previously stopped.
+ *
+ * After `abort()` on the client, the DB row stays `status='generating'` with
+ * `lastCompletedPhase` preserved (doctrine: orchestrator owns lifecycle, not
+ * the user's stop button). Boot-time `WalkthroughJobs.resumePending()` already
+ * handles such rows on server restart; this endpoint exposes the same path
+ * to a user click so they can stop → think → resume without losing partial
+ * progress.
+ *
+ * 404 when no row matches — the UI gates the Resume button on the same
+ * "lastCompletedPhase < D + has-some-progress" signal, so a 404 here would
+ * indicate either a head-SHA advance superseded the partial, or the row
+ * was never created. Either way, Regenerate is the right next action.
+ *
+ * Resume-attempt cap (`WALKTHROUGH_MAX_RESUME_ATTEMPTS = 3`) is enforced
+ * inside `startJob` for the resume trigger. Exceeded → 500 with the
+ * underlying error surfaced.
+ */
+export function resumeWalkthroughHandler(
+	prId: string,
+): Promise<{ walkthroughId: string }> {
+	return AppRuntime.runPromise(
+		Effect.gen(function* () {
+			const jobs = yield* WalkthroughJobs;
+			const service = yield* WalkthroughService;
+			const row = yield* service.findResumable(prId);
+			if (!row) {
+				return yield* Effect.fail(
+					new NotFoundError({ resource: 'walkthrough', id: prId }),
+				);
+			}
+			return yield* jobs.startJob({
+				prId,
+				userId: 'single-user',
+				trigger: 'resume',
+				walkthroughId: row.id,
+			});
+		}),
 	);
 }
