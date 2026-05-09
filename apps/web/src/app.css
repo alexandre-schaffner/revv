@@ -3,121 +3,130 @@
 /* ──────────────────────────────────────────────────────────
    Light theme (default)
    ────────────────────────────────────────────────────────── */
+/* ──────────────────────────────────────────────────────────
+   Light theme — "neutral surface, deep teal"
+   - Backgrounds stay nearly neutral (very faint warm tint, not bone)
+     so the canvas reads clean. The single distinctive move is the
+     deep teal accent (#0f766e) replacing the generic Tailwind blue
+     every other dashboard ships. Distinctive without being precious.
+   - Severity colors deepen slightly so reds/greens read as
+     considered, not stock-Tailwind-bright.
+   ────────────────────────────────────────────────────────── */
 :root {
-    /* shadcn-svelte */
+    /* shadcn-svelte (HSL triplets — neutral bg, deep teal primary) */
     --background: 0 0% 100%;
-    --foreground: 240 10% 4%;
+    --foreground: 240 8% 10%;            /* #18181c */
     --card: 0 0% 100%;
-    --card-foreground: 240 10% 4%;
+    --card-foreground: 240 8% 10%;
     --popover: 240 5% 96%;
-    --popover-foreground: 240 10% 4%;
-    --primary: 217 91% 60%;
+    --popover-foreground: 240 8% 10%;
+    --primary: 174 78% 26%;              /* #0f766e teal-700 */
     --primary-foreground: 0 0% 100%;
     --secondary: 240 5% 96%;
-    --secondary-foreground: 240 6% 10%;
+    --secondary-foreground: 240 6% 12%;
     --muted: 240 5% 96%;
-    --muted-foreground: 240 4% 46%;
+    --muted-foreground: 240 4% 44%;
     --accent: 240 5% 96%;
-    --accent-foreground: 240 6% 10%;
-    --destructive: 0 84% 60%;
+    --accent-foreground: 240 6% 12%;
+    --destructive: 0 72% 42%;            /* #b91c1c */
     --destructive-foreground: 0 0% 100%;
     --border: 240 6% 90%;
     --input: 240 6% 90%;
-    --ring: 217 91% 60%;
+    --ring: 174 78% 26%;
     --radius: 0.5rem;
 
-    /* Revv palette */
+    /* Revv palette — near-neutral surfaces, teal brand */
     --revv-bg-primary: #ffffff;
-    --revv-bg-secondary: #f7f7f8;
-    --revv-bg-tertiary: #eeeff1;
+    --revv-bg-secondary: #f5f5f6;        /* neutral light gray — sidebars, panels */
+    --revv-bg-tertiary: #ebebec;         /* neutral mid gray — tracks, hover */
     --revv-bg-elevated: #ffffff;
-    --revv-border: #d0d0d6;
-    --revv-border-subtle: #e5e5ea;
-    --revv-text-primary: #111118;
-    --revv-text-secondary: #44444f;
-    --revv-text-muted: #72727e;
-    --revv-accent: #3b82f6;
-    --revv-accent-hover: #2563eb;
-    --revv-success: #16a34a;
-    --revv-warning: #b45309;
-    --revv-danger: #dc2626;
+    --revv-border: #d4d4d6;
+    --revv-border-subtle: #e7e7e9;
+    --revv-text-primary: #18181c;
+    --revv-text-secondary: #46464d;
+    --revv-text-muted: #74747c;
+    --revv-accent: #0f766e;              /* teal-700 — the one distinctive move */
+    --revv-accent-hover: #115e59;        /* teal-800 */
+    --revv-success: #15803d;             /* green-700 — slightly deeper than Tailwind 500 */
+    --revv-warning: #b45309;             /* amber-700 — keep */
+    --revv-danger: #b91c1c;              /* red-700 — slightly deeper */
 
-    /* Diff canvas */
-    --revv-diff-bg: #f9f9fa;
-    --revv-diff-gutter-bg: #f2f2f5;
-    --revv-diff-gutter-border: #e0e0e5;
+    /* Diff canvas — neutral with subtle bias */
+    --revv-diff-bg: #fafafb;
+    --revv-diff-gutter-bg: #f2f2f3;
+    --revv-diff-gutter-border: #e2e2e5;
 
-    /* Addition lines */
-    --revv-diff-add-bg: #e8f8ee;
-    --revv-diff-add-bg-hover: #d3f2dd;
-    --revv-diff-add-word: #a7e8bc;
-    --revv-diff-add-gutter: #e0f5e8;
-    --revv-diff-add-text: #156534;
+    /* Addition lines — clean green, slightly deeper than stock */
+    --revv-diff-add-bg: #e6f4ec;
+    --revv-diff-add-bg-hover: #d0ebd9;
+    --revv-diff-add-word: #a3dab6;
+    --revv-diff-add-gutter: #ddf0e3;
+    --revv-diff-add-text: #14532d;
 
-    /* Deletion lines */
-    --revv-diff-del-bg: #fdeef0;
-    --revv-diff-del-bg-hover: #fad8dc;
-    --revv-diff-del-word: #f5b8be;
-    --revv-diff-del-gutter: #fae0e2;
-    --revv-diff-del-text: #951b1b;
+    /* Deletion lines — clean red, slightly warmer */
+    --revv-diff-del-bg: #fbe9eb;
+    --revv-diff-del-bg-hover: #f5d0d4;
+    --revv-diff-del-word: #efb4ba;
+    --revv-diff-del-gutter: #f7d9dc;
+    --revv-diff-del-text: #8e1c1c;
 
     /* Context line hover */
-    --revv-diff-ctx-bg-hover: #f2f2f5;
-    --revv-diff-selected-bg: rgba(59, 130, 246, 0.07);
+    --revv-diff-ctx-bg-hover: #f2f2f3;
+    --revv-diff-selected-bg: rgba(15, 118, 110, 0.08);  /* teal selection */
 
-    /* Gutter markers */
-    --revv-marker-open: #3b82f6;
-    --revv-marker-open-glow: rgba(59, 130, 246, 0.22);
-    --revv-marker-pending: #d97706;
-    --revv-marker-pending-glow: rgba(217, 119, 6, 0.22);
-    --revv-marker-your-turn: #ea6b15;
-    --revv-marker-resolved: #b0b0ba;
+    /* Gutter markers — open pinned to brand teal */
+    --revv-marker-open: #0f766e;
+    --revv-marker-open-glow: rgba(15, 118, 110, 0.25);
+    --revv-marker-pending: #b45309;
+    --revv-marker-pending-glow: rgba(180, 83, 9, 0.25);
+    --revv-marker-your-turn: #c2410c;    /* warm orange-700 — "demands attention" */
+    --revv-marker-resolved: #a8a18d;
 
     /* Line action floating pill */
     --revv-pill-bg: rgba(255, 255, 255, 0.97);
-    --revv-pill-border: rgba(0, 0, 0, 0.1);
+    --revv-pill-border: rgba(0, 0, 0, 0.10);
     --revv-pill-shadow:
-        0 8px 24px rgba(0, 0, 0, 0.13), 0 2px 6px rgba(0, 0, 0, 0.08);
+        0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.07);
 
     /* Comment / thread */
     --revv-thread-bg: #ffffff;
-    --revv-input-bg: #f7f7f8;
-    --revv-input-focus-ring: rgba(59, 130, 246, 0.35);
+    --revv-input-bg: #f5f5f6;
+    --revv-input-focus-ring: rgba(15, 118, 110, 0.40);
 
     /* Context panel */
-    --revv-panel-bg: #f7f7f8;
-    --revv-panel-header-bg: rgba(247, 247, 248, 0.96);
-    --revv-stream-cursor: #3b82f6;
+    --revv-panel-bg: #f5f5f6;
+    --revv-panel-header-bg: rgba(245, 245, 246, 0.96);
+    --revv-stream-cursor: #0f766e;
 
     /* File tree */
-    --revv-tree-active-bg: rgba(59, 130, 246, 0.08);
-    --revv-tree-active-text: #1d4ed8;
-    --revv-tree-hover-bg: #f2f2f5;
+    --revv-tree-active-bg: rgba(15, 118, 110, 0.10);
+    --revv-tree-active-text: #115e59;
+    --revv-tree-hover-bg: #f2f2f3;
 
     /* Floating tabs */
     --revv-tab-active-bg: #ffffff;
     --revv-tab-track-bg: rgba(0, 0, 0, 0.06);
-    --revv-tab-inactive-text: #8888a0;
+    --revv-tab-inactive-text: #74747c;
 
     /* Glass pill */
-    --revv-glass-bg: rgba(248, 248, 252, 0.75);
+    --revv-glass-bg: rgba(252, 252, 253, 0.78);
     --revv-glass-border: rgba(0, 0, 0, 0.09);
     --revv-glass-highlight: rgba(255, 255, 255, 0.6);
     --revv-glass-shadow:
         0 1px 2px rgba(0, 0, 0, 0.06), 0 4px 16px rgba(0, 0, 0, 0.09);
     --revv-glass-active-bg: rgba(0, 0, 0, 0.055);
 
-    /* Elevation shadows (theme-aware) */
+    /* Elevation shadows */
     --revv-shadow-indicator:
         0 1px 3px rgba(0, 0, 0, 0.08),
         0 2px 8px rgba(0, 0, 0, 0.06),
         0 0 0 0.5px rgba(0, 0, 0, 0.04);
     --revv-shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.08);
-    --revv-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.1);
+    --revv-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.10);
     --revv-shadow-lg:
         0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06);
     --revv-shadow-xl:
-        0 16px 48px rgba(0, 0, 0, 0.18), 0 4px 12px rgba(0, 0, 0, 0.1);
+        0 16px 48px rgba(0, 0, 0, 0.18), 0 4px 12px rgba(0, 0, 0, 0.10);
 
     /* Outline-style button (inverts with theme) */
     --revv-btn-outline: color-mix(
@@ -128,11 +137,11 @@
     --revv-btn-outline-fill: var(--revv-text-primary);
     --revv-btn-outline-fg: var(--revv-bg-primary);
 
-    /* AI accent */
-    --revv-ai-accent: #7c6af7;
+    /* AI accent — deeper violet, less generic-lavender */
+    --revv-ai-accent: #6d28d9;
 
     /* Tooltip */
-    --revv-tooltip-bg: rgba(15, 15, 22, 0.88);
+    --revv-tooltip-bg: rgba(20, 20, 24, 0.90);
     --revv-tooltip-border: rgba(0, 0, 0, 0.12);
     --revv-tooltip-item-bg: rgba(0, 0, 0, 0.04);
 
@@ -140,38 +149,37 @@
        (4% tint of a themed severity color over --revv-bg-secondary) so
        score cards and issue cards read as the same visual family. */
     --revv-score-pass-bg: color-mix(in srgb, var(--revv-success) 4%, var(--revv-bg-secondary));
-    --revv-score-pass-border: #16a34a;
-    --revv-score-pass-icon: #16a34a;
-    --revv-score-pass-label: #145f30;
-    --revv-score-pass-axis: #44444f;
-    --revv-score-pass-conf-bg: color-mix(in srgb, #16a34a 12%, transparent);
-    --revv-score-pass-conf: #16a34a;
+    --revv-score-pass-border: #15803d;
+    --revv-score-pass-icon: #15803d;
+    --revv-score-pass-label: #14532d;
+    --revv-score-pass-axis: #46464d;
+    --revv-score-pass-conf-bg: color-mix(in srgb, #15803d 12%, transparent);
+    --revv-score-pass-conf: #15803d;
 
     --revv-score-concern-bg: color-mix(in srgb, var(--revv-warning) 4%, var(--revv-bg-secondary));
-    --revv-score-concern-border: #d97706;
+    --revv-score-concern-border: #b45309;
     --revv-score-concern-icon: #b45309;
-    --revv-score-concern-label: #92400e;
-    --revv-score-concern-axis: #44444f;
-    --revv-score-concern-conf-bg: color-mix(in srgb, #d97706 12%, transparent);
+    --revv-score-concern-label: #7c2d12;
+    --revv-score-concern-axis: #46464d;
+    --revv-score-concern-conf-bg: color-mix(in srgb, #b45309 12%, transparent);
     --revv-score-concern-conf: #b45309;
 
     --revv-score-blocker-bg: color-mix(in srgb, var(--revv-danger) 4%, var(--revv-bg-secondary));
-    --revv-score-blocker-border: #dc2626;
-    --revv-score-blocker-icon: #dc2626;
-    --revv-score-blocker-label: #991b1b;
-    --revv-score-blocker-axis: #44444f;
-    --revv-score-blocker-conf-bg: color-mix(in srgb, #dc2626 12%, transparent);
-    --revv-score-blocker-conf: #dc2626;
+    --revv-score-blocker-border: #b91c1c;
+    --revv-score-blocker-icon: #b91c1c;
+    --revv-score-blocker-label: #7c1d1d;
+    --revv-score-blocker-axis: #46464d;
+    --revv-score-blocker-conf-bg: color-mix(in srgb, #b91c1c 12%, transparent);
+    --revv-score-blocker-conf: #b91c1c;
 
-    /* Info — accent-derived palette used by the Issues panel for the lowest
-       severity. Parallel to pass/concern/blocker so a shared SpecRow can
-       paint an info-severity gutter without inlining color-mix expressions. */
+    /* Info — accent-derived palette. With the brand teal accent, info
+       reads as a calm "FYI" rather than the old "click here" blue. */
     --revv-score-info-bg: color-mix(in srgb, var(--revv-accent) 4%, var(--revv-bg-secondary));
-    --revv-score-info-border: #3b82f6;
-    --revv-score-info-icon: #2563eb;
-    --revv-score-info-label: #1d4ed8;
-    --revv-score-info-conf-bg: color-mix(in srgb, #3b82f6 12%, transparent);
-    --revv-score-info-conf: #2563eb;
+    --revv-score-info-border: #0f766e;
+    --revv-score-info-icon: #115e59;
+    --revv-score-info-label: #134e4a;
+    --revv-score-info-conf-bg: color-mix(in srgb, #0f766e 12%, transparent);
+    --revv-score-info-conf: #115e59;
 }
 
 /* ──────────────────────────────────────────────────────────
@@ -503,12 +511,29 @@
     --color-score-info-conf-bg: var(--revv-score-info-conf-bg);
     --color-score-info-conf: var(--revv-score-info-conf);
 
-    /* Motion */
-    --duration-snap: 120ms;
-    --duration-quick: 160ms;
-    --duration-smooth: 220ms;
-    --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+    /* Motion — durations
+       Mirrored verbatim in src/lib/motion/tokens.ts. Edit both. */
+    --duration-instant: 80ms;   /* hover, focus rings, micro-state */
+    --duration-snap: 120ms;     /* small surfaces, chevrons, badges */
+    --duration-quick: 160ms;    /* default UI motion */
+    --duration-smooth: 220ms;   /* panels, sidebars, larger reveals */
+    --duration-slow: 320ms;     /* dialogs, sheets, big surfaces */
+    --duration-page: 480ms;     /* route / shared-element morphs */
+
+    /* Motion — easings
+       --ease-soft     : in/out, used for exits and bidirectional state
+       --ease-out-expo : enter, slight overshoot, default for "appearance"
+       --ease-standard : Material standard, used by walkthrough chapters
+       --ease-anticipate : playful overshoot, reserve for delight moments */
     --ease-soft: cubic-bezier(0.4, 0, 0.2, 1);
+    --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+    --ease-standard: cubic-bezier(0.22, 0.61, 0.36, 1);
+    --ease-anticipate: cubic-bezier(0.68, -0.55, 0.27, 1.55);
+
+    /* Motion — stagger steps (per-item delay in list reveals) */
+    --stagger-tight: 25ms;
+    --stagger-default: 40ms;
+    --stagger-loose: 80ms;
 }
 
 /* ──────────────────────────────────────────────────────────
@@ -627,4 +652,50 @@ body {
 }
 .animate-indeterminate-progress {
     animation: indeterminate-progress 1.5s ease-in-out infinite;
+}
+
+/* ──────────────────────────────────────────────────────────
+   Motion preset keyframes (used by bits-ui primitives whose
+   transitions are CSS-data-state-driven, not Svelte transitions).
+   Pair with the named JS presets in src/lib/motion/transitions.ts —
+   keep numerics aligned by hand (small price for the duplication).
+   ────────────────────────────────────────────────────────── */
+@keyframes motion-dialog-spring-in {
+    0%   { opacity: 0; scale: 0.96; translate: 0 12px; }
+    100% { opacity: 1; scale: 1;    translate: 0 0; }
+}
+@keyframes motion-popover-pop-in {
+    0%   { opacity: 0; scale: 0.96; }
+    100% { opacity: 1; scale: 1; }
+}
+@keyframes motion-tooltip-pop-in {
+    0%   { opacity: 0; scale: 0.92; translate: 0 4px; }
+    100% { opacity: 1; scale: 1;    translate: 0 0; }
+}
+
+/* ──────────────────────────────────────────────────────────
+   Reduced-motion contract.
+   Sledgehammer all transitions/animations to ~instant; opt
+   semantically-essential animations (state-meaning indicators)
+   back in via the .motion-essential-* utility classes.
+
+   Add new exceptions sparingly. Each one needs a comment
+   explaining why losing the animation would harm meaning.
+   ────────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 1ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 1ms !important;
+        scroll-behavior: auto !important;
+    }
+
+    /* AI-is-still-streaming indicator. Without movement, users
+       on reduce-motion lose the "still working" signal. Slow the
+       blink down (2s steps(2)) instead of disabling it. */
+    .motion-essential-stream-cursor {
+        animation: stream-cursor-blink 2s steps(2, end) infinite !important;
+    }
 }

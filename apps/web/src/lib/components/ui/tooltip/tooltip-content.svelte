@@ -86,19 +86,19 @@
 
 	:global([data-slot="tooltip-content"][data-state="delayed-open"][data-side="right"]),
 	:global([data-slot="tooltip-content"][data-state="instant-open"][data-side="right"]) {
-		animation: tooltip-in-right 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
+		animation: tooltip-in-right var(--duration-quick) var(--ease-out-expo) both;
 	}
 	:global([data-slot="tooltip-content"][data-state="delayed-open"][data-side="left"]),
 	:global([data-slot="tooltip-content"][data-state="instant-open"][data-side="left"]) {
-		animation: tooltip-in-left 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
+		animation: tooltip-in-left var(--duration-quick) var(--ease-out-expo) both;
 	}
 	:global([data-slot="tooltip-content"][data-state="delayed-open"][data-side="top"]),
 	:global([data-slot="tooltip-content"][data-state="instant-open"][data-side="top"]) {
-		animation: tooltip-in-top 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
+		animation: tooltip-in-top var(--duration-quick) var(--ease-out-expo) both;
 	}
 	:global([data-slot="tooltip-content"][data-state="delayed-open"][data-side="bottom"]),
 	:global([data-slot="tooltip-content"][data-state="instant-open"][data-side="bottom"]) {
-		animation: tooltip-in-bottom 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
+		animation: tooltip-in-bottom var(--duration-quick) var(--ease-out-expo) both;
 	}
 
 	@keyframes -global-tooltip-out {
@@ -107,6 +107,6 @@
 	}
 
 	:global([data-slot="tooltip-content"][data-state="closed"]) {
-		animation: tooltip-out 120ms ease-in both;
+		animation: tooltip-out var(--duration-snap) var(--ease-soft) both;
 	}
 </style>

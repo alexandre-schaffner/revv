@@ -28,7 +28,7 @@
 		bind:ref
 		data-slot="dialog-content"
 		class={cn(
-			"text-popover-foreground data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 grid max-w-[calc(100%-2rem)] gap-4 rounded-xl p-6 text-sm duration-150 sm:max-w-sm fixed top-[20%] inset-x-0 mx-auto z-50 w-full outline-none",
+			"text-popover-foreground data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 grid max-w-[calc(100%-2rem)] gap-4 rounded-xl p-6 text-sm duration-quick ease-soft sm:max-w-sm fixed top-[20%] inset-x-0 mx-auto z-50 w-full outline-none",
 			className
 		)}
 		{...restProps}
@@ -48,6 +48,10 @@
 </DialogPortal>
 
 <style>
+	/* The shared `motion-dialog-spring-in` keyframe in app.css matches this
+	   one; we keep a local copy with a unique name to avoid coupling the
+	   primitive to the global keyframe (and to stay scoped via Svelte's
+	   :global). The duration/easing are tokens, however — single source. */
 	@keyframes dialog-spring-in {
 		0% {
 			opacity: 0;
@@ -69,6 +73,6 @@
 	}
 
 	:global([data-slot="dialog-content"][data-state="open"]) {
-		animation: dialog-spring-in 320ms cubic-bezier(0.16, 1, 0.3, 1) both;
+		animation: dialog-spring-in var(--duration-slow) var(--ease-out-expo) both;
 	}
 </style>

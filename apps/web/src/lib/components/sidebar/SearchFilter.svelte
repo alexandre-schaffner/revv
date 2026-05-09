@@ -1,6 +1,12 @@
 <script lang="ts">
 	import { setSearchQuery } from '$lib/stores/prs.svelte';
-	import { setFocusedId } from '$lib/stores/sidebar-nav.svelte';
+	import {
+		setFocusedId,
+		getFocusedId,
+		moveDown,
+		moveUp,
+		expandOrSelect,
+	} from '$lib/stores/sidebar-nav.svelte';
 
 	let { onAddRepo }: { onAddRepo: () => void } = $props();
 
@@ -24,18 +30,12 @@
 		setSearchQuery(inputValue);
 	}
 
-	// Enter / ArrowDown highlight the first PR of the rendered list as if
-	// the user were hovering it — pure visual cue via the sidebar-nav
-	// store (drives the .sidebar-nav-focused class), no navigation. DOM
-	// focus stays on the input so the user can keep typing.
-	//
 	// Repo groups default to collapsed, so on a fresh search the only
-	// data-sidebar-nav nodes in the PR pane are the repo headers — which
-	// is why the previous "first nav item" version landed the highlight
-	// on a header instead of a PR. Here we look for an actual PR row
-	// (data-nav-type="pr"); if none are mounted because every group is
-	// closed, we click the first repo header to expand it and walk the
-	// DOM again on the next frame.
+	// data-sidebar-nav nodes in the PR pane are the repo headers. We
+	// land the highlight on an actual PR row (data-nav-type="pr"); if
+	// none are mounted because every group is closed, we click the
+	// first repo header to expand it and walk the DOM again on the next
+	// frame.
 	function highlightFirstPr(): boolean {
 		const pr = document.querySelector<HTMLElement>(
 			'.view-pane--prs [data-nav-type="pr"]',
@@ -46,21 +46,58 @@
 		return true;
 	}
 
-	function handleKeydown(e: KeyboardEvent): void {
-		if (e.key !== 'Enter' && e.key !== 'ArrowDown') return;
-		e.preventDefault();
-		flushSearch();
+	function jumpToFirstResult(): void {
+		if (highlightFirstPr()) return;
+		const firstGroup = document.querySelector<HTMLElement>(
+			'.view-pane--prs [data-nav-type="repo"]',
+		);
+		if (!firstGroup) return;
+		firstGroup.click();
 		requestAnimationFrame(() => {
-			if (highlightFirstPr()) return;
-			const firstGroup = document.querySelector<HTMLElement>(
-				'.view-pane--prs [data-nav-type="repo"]',
-			);
-			if (!firstGroup) return;
-			firstGroup.click();
-			requestAnimationFrame(() => {
-				highlightFirstPr();
-			});
+			highlightFirstPr();
 		});
+	}
+
+	// Returns whether the currently-focused sidebar-nav id still points
+	// at a rendered DOM node — i.e. the keyboard cursor is on something
+	// real that moveDown/moveUp can step from. False on the very first
+	// arrow press, and false again if the active query filtered the
+	// focused PR out.
+	function focusedItemRendered(): boolean {
+		const id = getFocusedId();
+		if (!id) return false;
+		return (
+			document.querySelector(
+				`[data-sidebar-nav="${CSS.escape(id)}"]`,
+			) !== null
+		);
+	}
+
+	// Keyboard nav from the search input.
+	//
+	// First press lands the cursor on the first matching PR (auto-
+	// expanding the lead repo group if needed). Subsequent presses step
+	// through the list via the shared sidebar-nav store, so DOM focus
+	// stays on the input — the user can keep typing while navigating.
+	// Enter activates whatever the cursor is on (selects the PR via the
+	// nav-store's expandOrSelect, which clicks the focused button).
+	function handleKeydown(e: KeyboardEvent): void {
+		if (e.key !== 'Enter' && e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+		e.preventDefault();
+
+		if (focusedItemRendered()) {
+			if (e.key === 'ArrowDown') moveDown();
+			else if (e.key === 'ArrowUp') moveUp();
+			else expandOrSelect();
+			return;
+		}
+
+		// ArrowUp from a fresh state has nowhere to go — don't surprise
+		// the user by jumping into the list from below.
+		if (e.key === 'ArrowUp') return;
+
+		flushSearch();
+		requestAnimationFrame(jumpToFirstResult);
 	}
 
 	function handleClear() {

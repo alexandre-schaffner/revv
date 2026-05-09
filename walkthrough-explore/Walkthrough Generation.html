@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Walkthrough Generation — 7 Explorations</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap" rel="stylesheet" />
+<style>
+  html, body { margin:0; padding:0; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+    background: #f0eee9;
+  }
+  /* shared revv tokens (light theme) */
+  :root {
+    --revv-bg-primary: #ffffff;
+    --revv-bg-secondary: #f7f7f8;
+    --revv-bg-tertiary: #eeeff1;
+    --revv-border: #d0d0d6;
+    --revv-border-subtle: #e5e5ea;
+    --revv-text-primary: #111118;
+    --revv-text-secondary: #44444f;
+    --revv-text-muted: #72727e;
+    --revv-accent: #3b82f6;
+    --revv-accent-hover: #2563eb;
+    --revv-success: #16a34a;
+    --revv-warning: #b45309;
+    --revv-danger: #dc2626;
+    --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    --serif: 'Newsreader', Georgia, serif;
+  }
+  /* hide scrollbars in artboards but keep scroll */
+  .scroll-clean { scrollbar-width: thin; scrollbar-color: rgba(0,0,0,0.15) transparent; }
+  .scroll-clean::-webkit-scrollbar { width: 6px; height: 6px; }
+  .scroll-clean::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.15); border-radius: 3px; }
+  .scroll-clean::-webkit-scrollbar-track { background: transparent; }
+  @keyframes blinkCursor { 0%, 50% { opacity: 1 } 51%, 100% { opacity: 0 } }
+  .blink-cursor { animation: blinkCursor 1.1s steps(1, end) infinite; }
+  @keyframes pulseDot { 0%, 100% { opacity: 0.45; transform: scale(0.9) } 50% { opacity: 1; transform: scale(1.05) } }
+  .pulse-dot { animation: pulseDot 1.4s ease-in-out infinite; }
+  @keyframes shimmerSlide {
+    0% { background-position: -200% 0 }
+    100% { background-position: 200% 0 }
+  }
+  .shimmer {
+    background: linear-gradient(90deg, transparent 0%, rgba(59,130,246,0.18) 50%, transparent 100%);
+    background-size: 200% 100%;
+    animation: shimmerSlide 1.6s linear infinite;
+  }
+  @keyframes glyphRotate {
+    0%   { content: '⠋'; }
+    12%  { content: '⠙'; }
+    24%  { content: '⠹'; }
+    36%  { content: '⠸'; }
+    48%  { content: '⠼'; }
+    60%  { content: '⠴'; }
+    72%  { content: '⠦'; }
+    84%  { content: '⠧'; }
+    100% { content: '⠇'; }
+  }
+  .braille-spinner::before {
+    content: '⠋';
+    animation: brailleSpin 0.8s linear infinite;
+    display: inline-block;
+    width: 1ch;
+  }
+  @keyframes brailleSpin {
+    0%   { content: '⠋'; }
+    12.5%{ content: '⠙'; }
+    25%  { content: '⠹'; }
+    37.5%{ content: '⠸'; }
+    50%  { content: '⠼'; }
+    62.5%{ content: '⠴'; }
+    75%  { content: '⠦'; }
+    87.5%{ content: '⠧'; }
+    100% { content: '⠇'; }
+  }
+  /* progress sweep for variation 6 */
+  @keyframes sweepDown {
+    0% { transform: translateY(-100%); opacity: 0 }
+    20% { opacity: 1 }
+    80% { opacity: 1 }
+    100% { transform: translateY(100%); opacity: 0 }
+  }
+  .sweep-line { animation: sweepDown 2.4s ease-in-out infinite; }
+  /* gentle fade-in for streamed lines */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(2px) }
+    to { opacity: 1; transform: translateY(0) }
+  }
+  .fade-up { animation: fadeUp .5s ease-out both; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="design-canvas.jsx"></script>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="tweak-context.jsx"></script>
+<script type="text/babel" src="shared.jsx"></script>
+<script type="text/babel" src="v1-current.jsx"></script>
+<script type="text/babel" src="v2-livelog.jsx"></script>
+<script type="text/babel" src="v3-twocolumn.jsx"></script>
+<script type="text/babel" src="v4-stream.jsx"></script>
+<script type="text/babel" src="v4-5-realstream.jsx"></script>
+<script type="text/babel" src="v5-tree.jsx"></script>
+<script type="text/babel" src="v6-cinema.jsx"></script>
+<script type="text/babel" src="v7-cockpit.jsx"></script>
+<script type="text/babel" src="steppers.jsx"></script>
+<script type="text/babel" src="steppers-chapters.jsx"></script>
+<script type="text/babel" src="app.jsx"></script>
+</body>
+</html>

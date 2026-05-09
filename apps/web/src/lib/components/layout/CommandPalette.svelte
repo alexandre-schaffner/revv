@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
-	import { fade, scale } from 'svelte/transition';
-	import { cubicOut } from 'svelte/easing';
+	import { softFade, commandPaletteEnter } from '$lib/motion';
 	import { Search } from '@lucide/svelte';
 	import { getPullRequests, getRepositories, selectPr } from '$lib/stores/prs.svelte';
 	import { getFilteredCommands, setQuery as setCommandQuery, resetQuery, fuzzyScore } from '$lib/stores/commands.svelte';
@@ -198,7 +197,7 @@
 		class="fixed inset-0 z-40 bg-black/30"
 		role="presentation"
 		onclick={onClose}
-		in:fade={{ duration: 150 }}
+		in:softFade
 	></div>
 
 	<!-- Palette.
@@ -211,7 +210,7 @@
 		role="dialog"
 		aria-modal="true"
 		aria-label={mode === 'command' ? 'Command palette' : 'Search pull requests'}
-		in:scale={{ duration: 150, start: 0.96, easing: cubicOut }}
+		in:commandPaletteEnter
 	>
 		<!-- Search input -->
 		<div class="palette-input-wrap">

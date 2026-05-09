@@ -17,15 +17,24 @@
         ratings: WalkthroughRating[];
         blocks: WalkthroughBlock[];
         onJump: (blockId: string) => void;
+        /**
+         * When true, render the grid even with zero ratings — used during
+         * live generation so the user sees the queued grid from the
+         * beginning instead of having it pop in only when Phase D starts.
+         * Defaults to false to preserve the cached-replay safety: a stored
+         * pre-scorecard walkthrough still won't render empty queued cells.
+         */
+        forceShow?: boolean;
     }
 
-    let { ratings, blocks, onJump }: Props = $props();
+    let { ratings, blocks, onJump, forceShow = false }: Props = $props();
 
-    // ── Hide-when-empty guard ────────────────────────────────────
-    // Preserve the list-view behavior: nothing renders until the first rating
-    // arrives. A cached walkthrough generated before the scorecard feature
-    // existed would otherwise show 9 "queued" cells forever.
-    const hasAnyRating = $derived(ratings.length > 0);
+    // ── Visibility gate ──────────────────────────────────────────
+    // Render whenever ratings have arrived OR the parent explicitly opted
+    // in via `forceShow` (live generation). Cached pre-scorecard
+    // walkthroughs (no ratings, forceShow not set) stay hidden the same
+    // way they always have.
+    const hasAnyRating = $derived(ratings.length > 0 || forceShow);
 
     // ── Lookup: axis → rating ────────────────────────────────────
     const ratingByAxis = $derived.by(() => {
@@ -64,8 +73,15 @@
     // so an axis is "running" iff it hasn't arrived AND either it's first or
     // the previous axis has resolved. This is a visual approximation (the
     // backend doesn't announce "started axis X") that reads as sequential.
+    //
+    // When no rating has arrived yet (`ratings.length === 0`), we're not in
+    // the Rating phase yet — the agent might be mid-overview, mid-diff, or
+    // mid-sentiment. In that case ALL cells are queued, including the first;
+    // promoting the first cell to "running" prematurely would lie about the
+    // agent's actual state. Once any rating arrives, the cascade kicks in.
     function cellState(axis: RatingAxis, index: number): CellState {
         if (ratingByAxis.has(axis)) return "resolved";
+        if (ratings.length === 0) return "queued";
         if (index === 0) return "running";
         const prevAxis = RATING_AXES[index - 1];
         if (prevAxis && ratingByAxis.has(prevAxis)) return "running";

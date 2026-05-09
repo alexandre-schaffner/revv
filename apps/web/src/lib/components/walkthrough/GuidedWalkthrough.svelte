@@ -1,9 +1,13 @@
 <script lang="ts">
 	import { onMount, onDestroy, untrack } from 'svelte';
+	import { fly } from 'svelte/transition';
+	import { cubicOut, cubicIn } from 'svelte/easing';
+
+	const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Separator } from '$lib/components/ui/separator';
-	import { RefreshCw, ArrowDown, FileText, CheckCircle, AlertTriangle, AlertCircle, Circle, Loader2, Sparkles, ChevronDown } from '@lucide/svelte';
+	import { RefreshCw, AlertTriangle, AlertCircle, Sparkles } from '@lucide/svelte';
 	import { getDiffThemeType } from '$lib/stores/theme.svelte';
 	import { initHighlighter } from '$lib/utils/code-highlight.svelte';
 	import { renderMarkdown } from '$lib/utils/markdown';
@@ -15,7 +19,6 @@
 		getStreamError,
 		getExplorationSteps,
 		getPhase,
-		getPhaseMessage,
 		getStreamStartedAt,
 		getIssues,
 		getRatings,
@@ -72,7 +75,6 @@
 	const streamError = $derived(getStreamError());
 	const explorationSteps = $derived(getExplorationSteps());
 	const phase = $derived(getPhase());
-	const phaseMessage = $derived(getPhaseMessage());
 	const streamStartedAt = $derived(getStreamStartedAt());
 	const themeType = $derived(getDiffThemeType());
 	const issues = $derived(getIssues());
@@ -142,28 +144,110 @@
 		return p;
 	}
 
-	// ── Pipeline phase indicator (A→B→C→D) ──────────────────────────────
-	// The pipeline phase is the agent-side content pointer: what has been
-	// *persisted*, not what the model is currently doing. Drives a 4-step
-	// progress indicator rendered in the walkthrough header while the stream
-	// is live — on completion we hide it (all 4 steps filled carries no info
-	// at rest).
-	const PIPELINE_STEPS = [
-		{ key: 'A', label: 'Overview' },
-		{ key: 'B', label: 'Diff analysis' },
-		{ key: 'C', label: 'Sentiment' },
-		{ key: 'D', label: 'Rated' },
-	] as const;
-
-	const PIPELINE_STEP_INDEX: Record<'none' | 'A' | 'B' | 'C' | 'D', number> = {
+	// ── Chapters stepper (Overview → Diff → Sentiment → Rating) ─────────
+	// Active chapter is the one the agent is *currently writing*, not the
+	// one that just finished. The pipeline pointer transitions like this:
+	//
+	//   set_overview        → 'A'  (Phase A done; Phase B starts on next call)
+	//   first add_diff_step → 'B'  (Phase B *started* — more diff steps coming)
+	//   set_sentiment       → 'C'  (Phase B closed, Phase C done; Phase D next)
+	//   9th rate_axis       → 'D'  (everything done)
+	//
+	// So `'B'` does NOT mean "diff is complete" — it means "diff in progress
+	// with at least one step persisted". Mapping `'B'` to chapter 2 (Sentiment)
+	// is the off-by-one bug: diff blocks are still streaming. We map both
+	// `'A'` and `'B'` to chapter 1 (Diff). Sentiment shows briefly between
+	// sentiment landing (`'C'`, ratings still empty) and the first rating
+	// arriving — a narrow window, but the only honest place to highlight it.
+	const PHASE_TO_INDEX: Record<'none' | 'A' | 'B' | 'C' | 'D', number> = {
 		none: 0,
 		A: 1,
-		B: 2,
+		B: 1,
 		C: 3,
-		D: 4,
+		D: 3,
 	};
+	const activeChapterIndex = $derived.by(() => {
+		if (lastCompletedPhase === 'C' && ratings.length === 0) return 2;
+		return PHASE_TO_INDEX[lastCompletedPhase];
+	});
 
-	const pipelineCompletedCount = $derived(PIPELINE_STEP_INDEX[lastCompletedPhase]);
+	const CHAPTERS = [
+		{ id: 'overview', label: 'Overview', blurb: 'What changed and why', activeBlurb: 'Reading the diff…', spinner: 'ripple', targetId: 'walkthrough-overview' },
+		{ id: 'diff', label: 'Diff Analysis', blurb: 'Hunk-by-hunk reasoning', activeBlurb: 'Analyzing hunks…', spinner: 'diagonal', targetId: 'walkthrough-diff' },
+		{ id: 'sentiment', label: 'Sentiment', blurb: 'Overall read on the PR', activeBlurb: 'Forming a verdict…', spinner: 'collapse', targetId: 'walkthrough-sentiment' },
+		{ id: 'rated', label: 'Rating', blurb: 'Across 9 axis', activeBlurb: 'Scoring each axis…', spinner: 'spiral', targetId: 'walkthrough-rating' },
+	] as const;
+
+	// 5×5 dot matrix layout. row/col are static; the per-dot CSS variables
+	// drive 4 different keyframe animations (one per chapter spinner). All
+	// values are pure layout — no reactive state — so we precompute once.
+	// `manhattan`: distance from center (used by ripple).
+	// `pathOrder`: row + col — diagonal sweep front index (used by diagonal).
+	// `spiralOrder`: clockwise spiral index from top-left (used by spiral).
+	// `collapseOrder`: 4 - manhattan — outside-in (used by collapse).
+	const MATRIX_5X5 = (() => {
+		// Spiral order (clockwise from 0,0 → 0,4 → 4,4 → 4,0 → inner).
+		const spiral = new Array<number>(25);
+		const visited = Array.from({ length: 5 }, () => Array<boolean>(5).fill(false));
+		const dirs: Array<[number, number]> = [
+			[0, 1],
+			[1, 0],
+			[0, -1],
+			[-1, 0],
+		];
+		let r = 0, c = 0, di = 0;
+		for (let step = 0; step < 25; step++) {
+			spiral[r * 5 + c] = step;
+			visited[r]![c] = true;
+			const [dr, dc] = dirs[di]!;
+			const nr = r + dr;
+			const nc = c + dc;
+			if (nr < 0 || nr >= 5 || nc < 0 || nc >= 5 || visited[nr]![nc]) {
+				di = (di + 1) % 4;
+				const [dr2, dc2] = dirs[di]!;
+				r += dr2;
+				c += dc2;
+			} else {
+				r = nr;
+				c = nc;
+			}
+		}
+		return Array.from({ length: 25 }, (_, i) => {
+			const row = Math.floor(i / 5);
+			const col = i % 5;
+			const manhattan = Math.abs(row - 2) + Math.abs(col - 2);
+			return {
+				row,
+				col,
+				manhattan,
+				pathOrder: row + col,
+				collapseOrder: 4 - manhattan,
+				spiralOrder: spiral[i] ?? 0,
+			};
+		});
+	})();
+
+	// ── Recent tool calls under the active chapter ───────────────────────
+	// The active chapter cell renders a vertical list of the last 3 tool
+	// calls scoped to the *current* chapter. When the chapter advances we
+	// reset the floor to the count at that moment, so explorations from
+	// earlier chapters don't bleed forward into the new chapter's window.
+	//
+	// `chapterStartIndex` re-evaluates only when `activeChapterIndex`
+	// changes. Inside the body we read `explorationSteps.length` via
+	// `untrack` so the derived isn't subscribed to it (which would defeat
+	// the floor by re-snapping every time a new step arrives).
+	const TOOL_CALL_WINDOW = 3;
+	const chapterStartIndex = $derived.by(() => {
+		// Reading `activeChapterIndex` makes this derived re-run on chapter
+		// transitions; the void avoids the unused-expression warning while
+		// still establishing the dependency.
+		void activeChapterIndex;
+		return untrack(() => explorationSteps.length);
+	});
+	const recentExplorationSteps = $derived(
+		explorationSteps.slice(chapterStartIndex).slice(-TOOL_CALL_WINDOW),
+	);
 
 	// "All phases done" needs actual evidence of completion. A fresh PR with
 	// no content shouldn't flash all checkmarks just because !isStreaming — so
@@ -171,7 +255,6 @@
 	const hasWalkthroughContent = $derived(
 		summary !== null || blocks.length > 0 || ratings.length > 0
 	);
-	const allPhasesDone = $derived(!isStreaming && hasWalkthroughContent);
 
 	// ── Stepper visibility ──────────────────────────────────────────────
 	// Hidden only in the initial "not yet generated" state (when the
@@ -179,58 +262,6 @@
 	// Visible once streaming begins, after content exists, or whenever
 	// the generate button is not shown.
 	const stepperVisible = $derived(!showGenerateButton || isStreaming || hasWalkthroughContent);
-
-	// ── Unique files explored ───────────────────────────────────────────
-	const filesExplored = $derived(() => {
-		const files = new Set<string>();
-		for (const step of explorationSteps) {
-			// Extract file path from description (the exploration descriptions typically start with the path)
-			const desc = step.description;
-			if (desc && !desc.startsWith('*') && !desc.startsWith('"')) {
-				const match = desc.match(/^([^\s]+\.\w+)/);
-				if (match?.[1]) files.add(match[1]);
-			}
-		}
-		return files.size;
-	});
-
-	// ── Scroll tracking ─────────────────────────────────────────────────
-	// The scroll container lives in the parent page. We only *track* its
-	// position (to show a "new content" pill); we never programmatically
-	// scroll. A walkthrough is something you read top-to-bottom — yanking
-	// the scroll to the tail while the user is still reading the summary
-	// is hostile. The pill lets them jump down explicitly if they want.
-	let userScrolledUp = $state(false);
-
-	function scrollToBottom() {
-		if (!scrollRoot) return;
-		userScrolledUp = false;
-		scrollRoot.scrollTo({ top: scrollRoot.scrollHeight, behavior: 'smooth' });
-	}
-
-	function scrollToRating() {
-		if (!scrollRoot) return;
-		const el = document.getElementById('walkthrough-rating');
-		if (!el) {
-			scrollRoot.scrollTo({ top: scrollRoot.scrollHeight, behavior: 'smooth' });
-			return;
-		}
-		const containerRect = scrollRoot.getBoundingClientRect();
-		const elRect = el.getBoundingClientRect();
-		const offset = elRect.top - containerRect.top + scrollRoot.scrollTop - 16;
-		scrollRoot.scrollTo({ top: offset, behavior: 'smooth' });
-	}
-
-	$effect(() => {
-		if (!scrollRoot || !isActive) return;
-		const el = scrollRoot;
-		const onScroll = () => {
-			const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
-			userScrolledUp = !atBottom && el.scrollTop > 0;
-		};
-		el.addEventListener('scroll', onScroll);
-		return () => el.removeEventListener('scroll', onScroll);
-	});
 
 	// ── Stagger tracking ────────────────────────────────────────────────
 	// Assign a per-block entrance delay the first time each block is
@@ -259,6 +290,17 @@
 				),
 		);
 	});
+
+	// ── Per-chapter availability ────────────────────────────────────────
+	// A chapter is "available" when its target section has been written —
+	// clicking it should land on real content, not an empty anchor. Used
+	// post-streaming to gate clickability and pick the right visual state.
+	const chapterAvailability = $derived([
+		summary !== null,
+		visibleBlocks.length > 0,
+		sentiment !== null,
+		ratings.length > 0,
+	]);
 
 	const blocksWithDelay = $derived.by(() => {
 		let newInBatch = 0;
@@ -406,6 +448,20 @@
     });
 	}
 
+	// Stepper-cell click handler. Same scroll math as jumpToStep but no
+	// highlight pulse — the chapter sections (overview, diff, sentiment,
+	// scorecard) are large enough that a moving outline would be more
+	// visual noise than signal. The 16px breathing room above the anchor
+	// matches jumpToStep and the floating Top/Rating pills.
+	function jumpToSection(elementId: string): void {
+		const el = document.getElementById(elementId);
+		if (!el || !scrollRoot) return;
+		const containerRect = scrollRoot.getBoundingClientRect();
+		const elRect = el.getBoundingClientRect();
+		const offset = elRect.top - containerRect.top + scrollRoot.scrollTop - 16;
+		scrollRoot.scrollTo({ top: offset, behavior: 'smooth' });
+	}
+
 	// Cross-tab jump: when another tab (e.g. Request Changes) calls
 	// jumpToWalkthroughBlock(), the store flips activeTab → 'walkthrough' and
 	// stashes the blockId. We consume it here once we're active + scrollRoot is
@@ -521,63 +577,92 @@
 			</div>
 		</div>
 	{/if}
-	{#if !streamError}
-		{#if stepperVisible}
-			{#if phase === 'connecting' && isStreaming && !hasWalkthroughContent}
-				<!-- Indeterminate progress bar during initial connection phase -->
-				<div class="walkthrough-connect-progress">
-					<Progress indeterminate class="h-1" />
-				</div>
-			{/if}
-			<!-- Persistent progress header. Shown through every phase and remains
-			     on screen after the stream completes so the user keeps a map of
-			     what happened. Rendered outside the main branching so it stays
-			     visible when we switch from the skeleton (loading) view to the
-			     real content (writing/finishing) view. -->
+	{#if !streamError && stepperVisible}
+		<!-- Persistent chapters stepper. Replaces the old A→B→C→D dot indicator.
+		     Lives outside the if/else ladder so it stays mounted as the streaming
+		     view transitions from the loading skeleton (pre-summary) into the
+		     content view (post-summary), and stays mounted after generation
+		     completes as a navigation aid. `stepperAnimated` gates the one-shot
+		     entrance animation so a tab revisit doesn't replay the fade. During
+		     streaming, the active cell is driven by `lastCompletedPhase`: 'none'
+		     → Overview, 'A' → Diff, 'B' → Sentiment, 'C' → Rating. After streaming,
+		     all cells with content become clickable jumps to their section. -->
+		<div
+			class="walkthrough-stepper-header"
+			class:walkthrough-stepper-header--no-anim={stepperAnimated}
+			onanimationend={(e) => lockContainerAnimation('stepper', e)}
+		>
 			<div
-				class="walkthrough-stepper-header"
-				class:walkthrough-stepper-header--no-anim={stepperAnimated}
-				onanimationend={(e) => lockContainerAnimation('stepper', e)}
+				class="chapter-stepper"
+				role="progressbar"
+				aria-label="Walkthrough chapters"
+				aria-valuenow={activeChapterIndex + 1}
+				aria-valuemin={1}
+				aria-valuemax={CHAPTERS.length}
 			>
-				<!-- Pipeline phase indicator (A→B→C→D). Only while generating —
-				     a fully-complete walkthrough shows 4/4 dots that carry no
-				     new signal at rest, and a terminal error is already covered
-				     by the error view below. Tracks *persisted* content phases. -->
-				{#if isStreaming}
-					<div
-						class="pipeline-phase"
-						role="progressbar"
-						aria-label="Walkthrough pipeline phase"
-						aria-valuenow={pipelineCompletedCount}
-						aria-valuemin={0}
-						aria-valuemax={PIPELINE_STEPS.length}
+				{#each CHAPTERS as chapter, i (chapter.id)}
+					{@const active = isStreaming && i === activeChapterIndex}
+					{@const done = isStreaming && i < activeChapterIndex}
+					{@const queued = isStreaming && i > activeChapterIndex}
+					{@const available = chapterAvailability[i] ?? false}
+					{@const clickable = !active && available}
+					<button
+						type="button"
+						class="chapter-cell"
+						class:chapter-cell--active={active}
+						class:chapter-cell--done={done}
+						class:chapter-cell--queued={queued}
+						class:chapter-cell--available={!isStreaming && available}
+						class:chapter-cell--unavailable={!isStreaming && !available}
+						class:chapter-cell--clickable={clickable}
+						disabled={!clickable}
+						aria-label={clickable ? `Jump to ${chapter.label}` : chapter.label}
+						onclick={clickable ? () => jumpToSection(chapter.targetId) : undefined}
 					>
-						{#each PIPELINE_STEPS as step, i (step.key)}
-							{@const isDone = i < pipelineCompletedCount}
-							{@const isCurrent = i === pipelineCompletedCount}
-							<div
-								class="pipeline-step"
-								class:pipeline-step--done={isDone}
-								class:pipeline-step--current={isCurrent}
-							>
-								<div class="pipeline-step-dot">
-									{#if isDone}
-										<CheckCircle size={12} />
+						<div class="chapter-eyebrow">Chapter {String(i + 1).padStart(2, '0')}</div>
+						{#if active}
+							<div class="chapter-active-layout">
+								<div class="chapter-title">{chapter.label}</div>
+								<div class="chapter-active-row">
+									<span class="dotmatrix dotmatrix--{chapter.spinner}" aria-hidden="true">
+										{#each MATRIX_5X5 as dot, dotIdx (dotIdx)}
+											<span
+												class="dotmatrix-dot"
+												style="--row: {dot.row}; --col: {dot.col}; --manhattan: {dot.manhattan}; --path-order: {dot.pathOrder}; --spiral-order: {dot.spiralOrder}; --collapse-order: {dot.collapseOrder};"
+											></span>
+										{/each}
+									</span>
+									{#if recentExplorationSteps.length > 0}
+										<div class="chapter-tool-calls">
+											{#each recentExplorationSteps.slice(-2) as step, i (step.tool + step.description)}
+												<div
+													class="chapter-tool-call"
+													style="top: {i * TOOL_CALL_ROW_H}px"
+													in:fly={{ y: TOOL_CALL_ROW_H, duration: 220, easing: cubicOut }}
+													out:fly={{ y: -TOOL_CALL_ROW_H, duration: 160, easing: cubicIn }}
+												>
+													<span class="chapter-tool-call-tool">{step.tool}</span>
+													<span class="chapter-tool-call-desc">{step.description}</span>
+												</div>
+											{/each}
+										</div>
 									{:else}
-										<Circle size={12} />
+										<span>{chapter.activeBlurb}</span>
 									{/if}
 								</div>
-								<span class="pipeline-step-label">{step.label}</span>
 							</div>
-							{#if i < PIPELINE_STEPS.length - 1}
-								<div class="pipeline-connector" class:pipeline-connector--done={isDone}></div>
-							{/if}
-						{/each}
-					</div>
-				{/if}
-
+						{:else}
+							<div class="chapter-title-row">
+								<div class="chapter-title">{chapter.label}</div>
+							</div>
+							<div class="chapter-body">
+								<div class="chapter-blurb">{chapter.blurb}</div>
+							</div>
+						{/if}
+					</button>
+				{/each}
 			</div>
-		{/if}
+		</div>
 	{/if}
 
 	{#if streamError && !summary && blocks.length === 0}
@@ -657,47 +742,12 @@
 		     phase's content) arrives, we fall through to the content branch
 		     below so subsequent MCP writes — diff steps, sentiment, ratings —
 		     render incrementally as they're committed.
-		     The phase stepper lives above as a sibling of this branch so it
-		     stays visible when we transition to the content view. -->
+		     The chapters stepper above is rendered as a sibling outside this
+		     ladder, so it stays mounted across the loading → content transition. -->
 		<div class="walkthrough-loading">
-			<!-- Status message + timer -->
-			<div class="status-bar">
-				<div class="status-message">
-					<div class="status-dot"></div>
-					<span>{phaseMessage}</span>
-				</div>
-				<span class="elapsed-time">{formatElapsed(elapsedSeconds)}</span>
-			</div>
-
-			<!-- Operations (past work) above skeleton (upcoming content). On
-			     resume both render together because hydrateFromCache forces
-			     phase='writing' before the summary lands. -->
-			{#if explorationSteps.length > 0}
-				<div class="exploration-section">
-					<div class="exploration-header">
-						<FileText size={12} />
-						<span>
-							{explorationSteps.length} operation{explorationSteps.length !== 1 ? 's' : ''}
-							{#if filesExplored() > 0}
-								across {filesExplored()} file{filesExplored() !== 1 ? 's' : ''}
-							{/if}
-						</span>
-					</div>
-					<div class="exploration-feed">
-						{#each explorationSteps.slice(-8) as step, i (i)}
-							<div class="exploration-item">
-								<span class="exploration-tool">{step.tool}</span>
-								<span class="exploration-desc">{step.description}</span>
-							</div>
-						{/each}
-						<div class="exploration-cursor">
-							<span class="cursor-dot"></span>
-							<span class="cursor-dot"></span>
-							<span class="cursor-dot"></span>
-						</div>
-					</div>
-				</div>
-			{/if}
+			<!-- Tool calls render inside the active chapter cell of the
+			     stepper above (`.chapter-tool-calls`); we don't duplicate
+			     them in a separate exploration section here. -->
 
 			<!-- Skeleton placeholder for the upcoming summary; only meaningful once writing has begun. -->
 			{#if normalizePhase(phase) === 'writing'}
@@ -722,6 +772,23 @@
 					</div>
 				</div>
 			{/if}
+
+			<!-- Empty rating grid, mounted from the start of generation so the
+			     reviewer sees the 9-axis scorecard up front and watches cells
+			     resolve as Phase D unfolds. `forceShow` opts out of the
+			     hide-when-empty guard inside WalkthroughRatingsGrid (which
+			     stays in place for cached pre-scorecard walkthroughs). The
+			     same component is also rendered post-summary by the content
+			     branch below — Svelte unmounts this instance and remounts
+			     there, but the visual is identical so the swap is seamless. -->
+			<div id="walkthrough-rating" class="sentiment-scorecard">
+				<WalkthroughRatingsGrid
+					{ratings}
+					blocks={visibleBlocks}
+					onJump={jumpToStep}
+					forceShow={true}
+				/>
+			</div>
 		</div>
 	{:else if !summary && !isStreaming && !streamError && !hydrating}
 		<!-- Stream ended with no data -->
@@ -741,6 +808,7 @@
 		>
 			<!-- Summary header -->
 		<div
+			id="walkthrough-overview"
 			class="summary-section"
 			class:summary-section--no-anim={summaryAnimated}
 			onanimationend={(e) => lockContainerAnimation('summary', e)}
@@ -751,14 +819,6 @@
 			<div class="summary-text">{@html renderedSummary}</div>
 				{#if streamError}
 					<p class="error-inline">{streamError}</p>
-				{/if}
-				{#if isStreaming}
-					<div class="summary-actions">
-					<span class="streaming-indicator">
-						<Loader2 size={12} class="animate-spin" />
-						{phaseMessage}
-					</span>
-					</div>
 				{/if}
 			</div>
 
@@ -823,14 +883,6 @@
 							</div>
 						{/each}
 					</div>
-					{#if ratings.length > 0}
-						<div class="go-to-rating">
-							<Button variant="ghost" size="sm" style="cursor: pointer;" onclick={scrollToRating}>
-								<ChevronDown size={14} />
-								Go to rating
-							</Button>
-						</div>
-					{/if}
 				</div>
 				<Separator />
 			{/if}
@@ -841,7 +893,7 @@
 			     magic markdown-block convention. Legacy rows that still carry
 			     a "## Overall Sentiment" block are filtered upstream in
 			     `visibleBlocks` when `sentiment` is populated. -->
-			<div class="blocks">
+			<div id="walkthrough-diff" class="blocks">
 			{#each blocksWithDelay as { block, delay, renderedAnnotation }, blockIndex (block.id)}
 				{@const hasAnnotation = renderedAnnotation !== null}
 				{@const blockSeverity = blockIssueSeverity.get(block.id) ?? null}
@@ -893,54 +945,42 @@
 			<!-- Phase C / D conclusion: sentiment card above the scorecard.
 			     Rendered as a single grid item (block-group--sentiment-stack)
 			     so the pair spans the content column cleanly regardless of how
-			     many diff steps preceded it. Hidden when neither field exists
-			     — e.g. a freshly-started stream that hasn't reached Phase C. -->
-			{#if sentiment !== null || ratings.length > 0}
+			     many diff steps preceded it. During streaming we keep the
+			     scorecard mounted (empty queued cells) so the reviewer has a
+			     stable destination for Phase D content. -->
+			{#if sentiment !== null || ratings.length > 0 || isStreaming}
 				<div class="block-group block-group--sentiment-stack">
 					{#if sentiment !== null}
-						<div class="sentiment-card" aria-label="Overall sentiment">
+						<div id="walkthrough-sentiment" class="sentiment-card" aria-label="Overall sentiment">
 							<div class="sentiment-card-header">
 								<h3 class="sentiment-card-title">Overall Sentiment</h3>
 							</div>
 							<div class="sentiment-card-body">{@html renderedSentiment}</div>
 						</div>
 					{/if}
-					{#if ratings.length > 0}
+					{#if ratings.length > 0 || isStreaming}
+						<!-- During streaming, render the grid even before the first
+						     axis arrives so the reviewer has a place for ratings
+						     to land in (cells start in the queued state). After
+						     streaming, fall back to the original guard so cached
+						     pre-scorecard walkthroughs stay clean. -->
 						<div id="walkthrough-rating" class="sentiment-scorecard">
-							<WalkthroughRatingsGrid {ratings} blocks={visibleBlocks} onJump={jumpToStep} />
+							<WalkthroughRatingsGrid
+								{ratings}
+								blocks={visibleBlocks}
+								onJump={jumpToStep}
+								forceShow={isStreaming}
+							/>
 						</div>
 					{/if}
 				</div>
 			{/if}
 			</div>
 
-			{#if isStreaming && blocks.length > 0}
-				<div class="streaming-bottom">
-					<div class="typing-indicator">
-						<span class="typing-dot"></span>
-						<span class="typing-dot"></span>
-						<span class="typing-dot"></span>
-					</div>
-					<p class="loading-text">{phaseMessage}</p>
-					{#if explorationSteps.length > 0}
-						<p class="loading-subtext">
-							{explorationSteps.length} operations completed
-						</p>
-					{/if}
-				</div>
-			{/if}
-
 			<!-- Scorecard lives inline under the Overall Sentiment card now
 			     (see the .blocks loop above). No end-of-walkthrough rendering. -->
 		</div>
 
-		<!-- Scroll-to-bottom floating button -->
-		{#if userScrolledUp && isStreaming}
-		<Button variant="secondary" class="scroll-to-bottom" onclick={scrollToBottom}>
-			<ArrowDown size={14} />
-			New content
-		</Button>
-		{/if}
 	{/if}
 </div>
 
@@ -1006,12 +1046,10 @@
 		animation: fadeIn 0.28s cubic-bezier(0.22, 0.61, 0.36, 1) 60ms both;
 	}
 
-	/* Single-column sections live in the content column (col 3). The Separator
-	   and streaming-bottom are direct children; .summary-section and
-	   .issues-section sit there too. */
+	/* Single-column sections live in the content column (col 3). Separator,
+	   .summary-section, and .issues-section sit there as direct children. */
 	.walkthrough-content > .summary-section,
 	.walkthrough-content > .issues-section,
-	.walkthrough-content > .streaming-bottom,
 	.walkthrough-content > :global([data-slot="separator"]) {
 		grid-column: 3;
 	}
@@ -1061,17 +1099,16 @@
 		row-gap: 12px;
 	}
 
-	/* `:global(*)` — same reason as `.walkthrough-connect-progress > :global(*)`:
-	   children include a shadcn Button and other components whose roots carry
-	   a different Svelte scope hash, so a scoped `> *` rule would skip them
-	   and they'd fall into grid auto-flow (landing in col 1/3 instead of col 2,
-	   which is exactly the mis-placement that showed the Try again button
-	   drifting into the rail column). */
+	/* `:global(*)` — children include a shadcn Button and other components
+	   whose roots carry a different Svelte scope hash, so a scoped `> *` rule
+	   would skip them and they'd fall into grid auto-flow (landing in col 1/3
+	   instead of col 2, which is exactly the mis-placement that showed the
+	   Try again button drifting into the rail column). */
 	.walkthrough-empty > :global(*) {
 		grid-column: 2;
 	}
 
-	/* Loading / stepper / connect-progress all use the SAME 6-col grid as
+	/* Loading and stepper-header use the SAME 6-col grid as
 	   `.walkthrough-content` so their inner content lands in col 3 — the
 	   820 content column — exactly where the streamed walkthrough blocks
 	   will render. A plain max-width: 900; margin-inline: auto would NOT
@@ -1099,30 +1136,11 @@
 		grid-column: 3;
 	}
 
-	/* ── Connect progress bar (shown during 'connecting' phase) ──────── */
-
-	.walkthrough-connect-progress {
-		display: grid;
-		grid-template-columns:
-			max(24px, min(calc(100% - 50vw - 458px), calc(100% - 1312px)))
-			48px
-			minmax(0, 820px)
-			40px
-			380px
-			minmax(24px, 1fr);
-		align-items: center;
-		padding: 24px 0 4px;
-		overflow: hidden;
-	}
-
-	/* `:global(*)` — Progress is a Svelte component from a different file,
-	   so its root element has a different scope hash than this component.
-	   A scoped `> *` selector would compile to `*.walkthrough-hash` and miss
-	   the Progress root. Without :global, Progress falls to grid auto-flow
-	   placement (lands in col 1 of the empty grid), not col 3. */
-	.walkthrough-connect-progress > :global(*) {
-		grid-column: 3;
-	}
+	/* ── Persistent chapters stepper header ─────────────────────────────
+	   Replaces the old A→B→C→D dot indicator. Stays mounted across the
+	   loading → content transition so the user keeps a map of where the
+	   walkthrough is in the pipeline. Aligned to col 3 of the same 6-col
+	   grid as `.walkthrough-loading` and `.walkthrough-content`. */
 
 	.walkthrough-stepper-header {
 		display: grid;
@@ -1141,89 +1159,292 @@
 		grid-column: 3;
 	}
 
-	/* Tab-revisit override — see .walkthrough-content--no-anim for why. */
 	.walkthrough-stepper-header--no-anim {
 		animation: none;
 		opacity: 1;
 	}
 
 	/* When the stepper header is present, tighten the top padding of the
-	   following content/loading block so the two sections feel like one
-	   continuous region instead of two stacked panels with a big gap. */
+	   following loading/content block so the two read as one continuous
+	   region instead of two stacked panels with a big gap. */
 	.walkthrough-stepper-header + .walkthrough-loading,
 	.walkthrough-stepper-header + .walkthrough-content {
 		padding-top: 14px;
 	}
 
-	/* ── Pipeline phase (A→B→C→D) indicator ──────────────────────────
-	   Rendered below the lifecycle stepper while generating. Distinct visual
-	   language (small dots, muted until complete) so reviewers can tell at
-	   a glance which is which — the lifecycle row tells them what the agent
-	   is *doing* this instant, the pipeline row tells them what has been
-	   *persisted*. */
+	/* ── Chapters stepper ────────────────────────────────────────────────
+	   Four-cell horizontal grid. Active cell: 2px accent top rule, italic
+	   serif eyebrow, big serif title, body row of {dot-matrix spinner +
+	   "reading" verb + live mono file path}. Past/queued cells: same title
+	   with a static blurb under it — no "done" affordance, just absence of
+	   the active treatment. */
 
-	.pipeline-phase {
-		display: flex;
-		align-items: center;
-		gap: 0;
-		padding: 4px 0 8px;
-		margin-top: 4px;
-		border-top: 1px dashed color-mix(in srgb, var(--color-border) 60%, transparent);
-		padding-top: 10px;
+	.chapter-stepper {
+		display: grid;
+		grid-template-columns: repeat(4, 1fr);
+		column-gap: 16px;
 	}
 
-	.pipeline-step {
-		display: flex;
-		align-items: center;
-		gap: 5px;
+	.chapter-cell {
+		/* Reset button defaults — the cell is rendered as a <button> so it can
+		   participate in tab order and fire onclick when clickable. Inheriting
+		   the surrounding type styles keeps the visual output identical to the
+		   prior <div>-based markup. */
+		appearance: none;
+		background: transparent;
+		border: none;
+		border-radius: 0;
+		font: inherit;
+		color: inherit;
+		text-align: left;
+		display: block;
+		width: 100%;
+
+		min-width: 0;
+		padding: 10px 0 0;
+		/* `--color-border` (not `--color-border-subtle`): in dark mode the
+		   `subtle` token collapses onto the tertiary surface and the rule
+		   becomes invisible. Border is a tier up — visible against
+		   `--color-bg-primary` in both light and dark themes. */
+		border-top: 2px solid var(--color-border);
+		transition: border-color 0.25s ease, opacity 0.25s ease,
+			transform 0.18s ease, background-color 0.18s ease;
+		cursor: default;
+	}
+
+	.chapter-cell:disabled {
+		cursor: default;
+	}
+
+	.chapter-cell--active {
+		border-top-color: var(--color-accent);
+	}
+
+	.chapter-cell--done {
+		border-top-color: var(--color-accent);
+		opacity: 0.5;
+	}
+
+	.chapter-cell--queued {
+		opacity: 0.35;
+	}
+
+	/* ── Navigation mode (post-streaming) ─────────────────────────────────
+	   Once generation finishes, the stepper persists as a chapter index for
+	   quick jumps to any section. Chapters whose content was written get a
+	   highlighted top rule + clickable hover/focus treatment; chapters that
+	   never wrote (e.g., generation aborted before Phase D) stay muted. */
+
+	.chapter-cell--available {
+		border-top-color: var(--color-accent);
+	}
+
+	.chapter-cell--unavailable {
+		opacity: 0.35;
+	}
+
+	.chapter-cell--clickable {
+		cursor: pointer;
+	}
+
+	.chapter-cell--clickable:hover {
+		background: color-mix(in srgb, var(--color-accent) 6%, transparent);
+	}
+
+	/* Done cells (already-completed phases during streaming) drop to 0.5
+	   opacity by default to read as "past." Bump opacity on hover so the
+	   click affordance is unambiguous when the user reaches for one. */
+	.chapter-cell--clickable.chapter-cell--done:hover {
+		opacity: 1;
+	}
+
+	.chapter-cell--clickable:hover .chapter-title {
+		color: var(--color-accent);
+	}
+
+	.chapter-cell--clickable:focus-visible {
+		outline: 2px solid var(--color-accent);
+		outline-offset: 2px;
+		border-radius: 4px;
+	}
+
+	.chapter-cell--clickable:active {
+		transform: translateY(1px);
+	}
+
+	.chapter-eyebrow {
+		font-family: 'Newsreader', Georgia, serif;
+		font-style: italic;
+		font-size: 11.5px;
+		font-weight: 500;
+		letter-spacing: 0.3px;
 		color: var(--color-text-muted);
-		opacity: 0.45;
-		transition: opacity 0.25s ease, color 0.25s ease;
+		margin-bottom: 2px;
+		white-space: nowrap;
+		transition: color 0.25s ease;
 	}
 
-	.pipeline-step--current {
+	.chapter-cell--active .chapter-eyebrow,
+	.chapter-cell--done .chapter-eyebrow,
+	.chapter-cell--available .chapter-eyebrow {
 		color: var(--color-accent);
-		opacity: 1;
 	}
 
-	.pipeline-step--done {
-		color: var(--color-accent);
-		opacity: 1;
+	.chapter-active-layout {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		min-width: 0;
+		margin-bottom: 6px;
+
 	}
 
-	.pipeline-step-dot {
+	/* inactive path only */
+	.chapter-title-row {
 		display: flex;
 		align-items: center;
-		justify-content: center;
-		width: 16px;
-		height: 16px;
+		gap: 7px;
+		margin-bottom: 6px;
+		min-width: 0;
+	}
+
+	.chapter-title {
+		font-family: 'Newsreader', Georgia, serif;
+		font-size: 18px;
+		font-weight: 500;
+		letter-spacing: -0.012em;
+		line-height: 1.05;
+		color: var(--color-text-primary);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+
+
+	.chapter-body {
+		min-height: 32px;
+	}
+
+	.chapter-active-row {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		font-size: 10px;
+		color: var(--color-accent);
+		min-width: 0;
+	}
+
+	.chapter-tool-calls {
+		position: relative;
+		height: 28px; /* 2 × 14px rows, fixed — prevents layout shift during transitions */
+		min-width: 0;
+		overflow: hidden;
+	}
+
+	.chapter-tool-call {
+		position: absolute;
+		left: 0;
+		right: 0;
+		display: flex;
+		gap: 6px;
+		min-width: 0;
+		transition: top 220ms cubic-bezier(0.22, 0.61, 0.36, 1);
+	}
+
+	.chapter-tool-call-tool {
+		color: var(--color-accent);
+		font-weight: 500;
 		flex-shrink: 0;
 	}
 
-	.pipeline-step--current .pipeline-step-dot {
-		animation: pulseIcon 2s ease-in-out infinite;
-	}
-
-	.pipeline-step-label {
-		font-size: 10.5px;
-		font-weight: 500;
-		letter-spacing: 0.03em;
+	.chapter-tool-call-desc {
+		overflow: hidden;
+		text-overflow: ellipsis;
 		white-space: nowrap;
-		text-transform: uppercase;
+		min-width: 0;
+		color: var(--color-text-muted);
 	}
 
-	.pipeline-connector {
-		flex: 1;
-		height: 1px;
-		background: var(--color-border);
-		margin: 0 6px;
-		min-width: 12px;
-		transition: background 0.25s ease;
+	.chapter-blurb {
+		font-size: 10.5px;
+		line-height: 1.35;
+		color: var(--color-text-muted);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 
-	.pipeline-connector--done {
-		background: var(--color-accent);
-		opacity: 0.5;
+	/* ── Dotmatrix spinners ─────────────────────────────────────────────
+	   Faithful Svelte port of the dotmatrix loaders from
+	   https://dotmatrix.zzzzshawn.cloud (github.com/zzzzshawn/matrix). The
+	   structure mirrors the upstream library: a 5×5 grid of `currentColor`
+	   dots with per-dot CSS variables (--row, --col, --manhattan, --path-order,
+	   --spiral-order, --collapse-order) wired to four CSS keyframes — one
+	   per chapter — that drive the visual via animation-delay on each dot.
+
+	   Each variant traces a different "shape" of motion across the grid:
+	     ripple    — center-out radial pulse, delay = manhattan distance
+	     diagonal  — diagonal sweep, delay = row + col
+	     collapse  — outside-in collapse, delay = 4 - manhattan
+	     spiral    — clockwise spiral, delay = order along the spiral path
+
+	   Color pulled from the inherited `currentColor`, which we set to
+	   `var(--color-accent)` on the wrapper. Sized at 29×29 (5 dots × 5px
+	   + 4 gaps × 1px = 29px). */
+
+	.dotmatrix {
+		display: inline-grid;
+		grid-template-columns: repeat(5, 5px);
+		grid-template-rows: repeat(5, 5px);
+		gap: 1px;
+		flex-shrink: 0;
+		color: var(--color-accent);
+		--dotmatrix-cycle: 1500ms;
+	}
+
+	.dotmatrix-dot {
+		width: 5px;
+		height: 5px;
+		border-radius: 999px;
+		background: currentColor;
+		opacity: 0.16;
+		will-change: opacity;
+	}
+
+	/* Variant 1: Ripple (Overview) — radial pulse from center outward.
+	   Delay scales with Manhattan distance from center; cycle is one full
+	   wave outward, then settle. */
+	.dotmatrix--ripple .dotmatrix-dot {
+		animation: dotmatrix-ripple var(--dotmatrix-cycle) cubic-bezier(0.42, 0, 0.58, 1) infinite;
+		animation-delay: calc(var(--manhattan, 0) * 0.18 * var(--dotmatrix-cycle));
+	}
+	@keyframes dotmatrix-ripple {
+		0%, 100% { opacity: 0.16; }
+		50% { opacity: 1; }
+	}
+
+	/* Variant 2: Diagonal sweep (Diff Analysis) — top-left → bottom-right
+	   wave. Delay scales with row + col so the front travels diagonally. */
+	.dotmatrix--diagonal .dotmatrix-dot {
+		animation: dotmatrix-ripple var(--dotmatrix-cycle) linear infinite;
+		animation-delay: calc(var(--path-order, 0) * 0.11 * var(--dotmatrix-cycle));
+	}
+
+	/* Variant 3: Collapse (Sentiment) — outside-in. Delay scales with
+	   4 - manhattan so the outer ring fires first and the center fires
+	   last. Conceptually: gathering signals before forming the verdict. */
+	.dotmatrix--collapse .dotmatrix-dot {
+		animation: dotmatrix-ripple var(--dotmatrix-cycle) ease-in-out infinite;
+		animation-delay: calc(var(--collapse-order, 0) * 0.14 * var(--dotmatrix-cycle));
+	}
+
+	/* Variant 4: Spiral (Rating) — clockwise spiral from outer ring inward.
+	   Delay scales with the spiral order index (0..24). Maps nicely onto
+	   the 9-axis rating semantic — the agent is "scoring around" each axis. */
+	.dotmatrix--spiral .dotmatrix-dot {
+		animation: dotmatrix-ripple var(--dotmatrix-cycle) linear infinite;
+		animation-delay: calc(var(--spiral-order, 0) * 0.045 * var(--dotmatrix-cycle));
 	}
 
 	/* ── Superseded banner ──────────────────────────────────────────────
@@ -1290,52 +1511,6 @@
 		margin: 0;
 	}
 
-	/* ── Status bar ───────────────────────────────────────────────────── */
-
-	.status-bar {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		padding: 10px 14px;
-		background: color-mix(in srgb, var(--color-accent) 6%, transparent);
-		border: 1px solid color-mix(in srgb, var(--color-accent) 15%, transparent);
-		border-radius: 8px;
-	}
-
-	.status-message {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		font-size: 13px;
-		color: var(--color-text-secondary);
-	}
-
-	.status-dot {
-		width: 6px;
-		height: 6px;
-		border-radius: 50%;
-		background: var(--color-accent);
-		animation: pulse 1.5s ease-in-out infinite;
-		flex-shrink: 0;
-	}
-
-	.elapsed-time {
-		font-size: 12px;
-		font-family: var(--font-mono, monospace);
-		color: var(--color-text-muted);
-		font-variant-numeric: tabular-nums;
-	}
-
-	.elapsed-badge {
-		font-size: 11px;
-		font-family: var(--font-mono, monospace);
-		color: var(--color-text-muted);
-		font-variant-numeric: tabular-nums;
-		padding: 2px 8px;
-		background: var(--color-bg-tertiary);
-		border-radius: 9999px;
-	}
-
 	/* ── Skeleton ──────────────────────────────────────────────────────── */
 
 	.skeleton-body {
@@ -1370,30 +1545,13 @@
 		padding: 16px;
 	}
 
-	/* ── Exploration feed ──────────────────────────────────────────────── */
-
-	.exploration-section {
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
-	}
-
-	.exploration-header {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		font-size: 11px;
-		font-weight: 500;
-		color: var(--color-text-muted);
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
-	}
+	/* ── Exploration feed (error branch only) ────────────────────────────
+	   The active generating UI surfaces tool calls inside the chapter cell
+	   itself (`.chapter-tool-calls`). The error branch still renders the
+	   last few tool calls so a failed generation gives the user a trace
+	   of what the agent attempted before the abort. */
 
 	.exploration-feed {
-		/* Fill the parent (.exploration-section → grid col 3, 820px). The
-		   prior `max-width: 520px` dates from the old left-anchored layout and
-		   now makes the tool-call list visually narrower than the skeleton and
-		   status-bar siblings. */
 		width: 100%;
 		display: flex;
 		flex-direction: column;
@@ -1431,33 +1589,7 @@
 	.exploration-feed--error {
 		opacity: 0.5;
 		margin-bottom: 8px;
-		/* Re-apply the readability cap for the error state, where the feed
-		   lives inside the centered .walkthrough-empty (no grid col 3 to
-		   constrain it). The loading-state feed doesn't need this because
-		   .walkthrough-loading places it in col 3 (820 max). */
 		max-width: 520px;
-	}
-
-	.exploration-cursor {
-		display: flex;
-		gap: 3px;
-		padding-top: 2px;
-	}
-
-	.cursor-dot {
-		width: 4px;
-		height: 4px;
-		border-radius: 50%;
-		background: var(--color-accent);
-		animation: cursorBounce 1.4s ease-in-out infinite;
-	}
-
-	.cursor-dot:nth-child(2) {
-		animation-delay: 0.16s;
-	}
-
-	.cursor-dot:nth-child(3) {
-		animation-delay: 0.32s;
 	}
 
 	/* ── Summary ──────────────────────────────────────────────────────── */
@@ -1538,21 +1670,6 @@
 		margin: 2px 0;
 	}
 
-	.summary-actions {
-		margin-top: 10px;
-		display: flex;
-		align-items: center;
-		gap: 8px;
-	}
-
-	.streaming-indicator {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		font-size: 12px;
-		color: var(--color-accent);
-	}
-
 	/* ── Issues layout ───────────────────────────────────────────────── */
 
 	.issues-section {
@@ -1631,12 +1748,6 @@
 		display: flex;
 		flex-direction: column;
 		gap: 8px;
-	}
-
-	.go-to-rating {
-		display: flex;
-		justify-content: flex-start;
-		margin-top: 4px;
 	}
 
 	/* ── Blocks ──────────────────────────────────────────────────────── */
@@ -1839,41 +1950,6 @@
 		font-weight: 600;
 	}
 
-	/* ── Streaming bottom indicator ──────────────────────────────────── */
-
-	.streaming-bottom {
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		padding: 24px 0;
-		gap: 8px;
-	}
-
-	.typing-indicator {
-		display: flex;
-		gap: 4px;
-		padding: 8px 14px;
-		background: var(--color-bg-secondary);
-		border-radius: 9999px;
-		border: 1px solid var(--color-border);
-	}
-
-	.typing-dot {
-		width: 6px;
-		height: 6px;
-		border-radius: 50%;
-		background: var(--color-accent);
-		animation: cursorBounce 1.4s ease-in-out infinite;
-	}
-
-	.typing-dot:nth-child(2) {
-		animation-delay: 0.16s;
-	}
-
-	.typing-dot:nth-child(3) {
-		animation-delay: 0.32s;
-	}
-
 	.loading-text {
 		font-size: 13px;
 		color: var(--color-text-muted);
@@ -1884,37 +1960,6 @@
 		color: var(--color-text-muted);
 		opacity: 0.6;
 		margin: 0;
-	}
-
-	/* ── Scroll-to-bottom pill ──────────────────────────────────────── */
-
-	:global(.scroll-to-bottom) {
-		/* Viewport-centred (50vw). Same rationale as `.tabs-float` in
-		   AppShell.svelte — anchored to the viewport, not the main-area, so
-		   the pill doesn't hop horizontally when the sidebar is toggled or
-		   resized. */
-		position: fixed;
-		bottom: 20px;
-		left: 50%;
-		transform: translateX(-50%);
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		background: var(--color-accent);
-		color: var(--color-primary-foreground);
-		border: none;
-		border-radius: 9999px;
-		padding: 6px 14px;
-		font-size: 12px;
-		font-weight: 500;
-		cursor: pointer;
-		box-shadow: var(--color-shadow-sm);
-		transition: opacity 150ms, transform 100ms var(--ease-out-expo);
-		z-index: 10;
-	}
-
-	:global(.scroll-to-bottom):hover {
-		opacity: 0.9;
 	}
 
 	/* ── Error states ────────────────────────────────────────────────── */
@@ -1950,16 +1995,6 @@
 
 	/* ── Animations ──────────────────────────────────────────────────── */
 
-	@keyframes pulse {
-		0%, 100% { opacity: 0.3; }
-		50% { opacity: 0.7; }
-	}
-
-	@keyframes pulseIcon {
-		0%, 100% { opacity: 1; transform: scale(1); }
-		50% { opacity: 0.7; transform: scale(1.1); }
-	}
-
 	@keyframes fadeIn {
 		from {
 			opacity: 0;
@@ -1988,7 +2023,8 @@
 		.summary-section,
 		.issues-section,
 		.walkthrough-content,
-		.walkthrough-stepper-header {
+		.walkthrough-stepper-header,
+		.dotmatrix-dot {
 			animation-duration: 0.01ms !important;
 			animation-delay: 0ms !important;
 			transition: none !important;
@@ -2005,17 +2041,6 @@
 			opacity: 1;
 			transform: translateY(0);
 			filter: blur(0);
-		}
-	}
-
-	@keyframes cursorBounce {
-		0%, 80%, 100% {
-			opacity: 0.3;
-			transform: scale(0.8);
-		}
-		40% {
-			opacity: 1;
-			transform: scale(1);
 		}
 	}
 
@@ -2121,17 +2146,15 @@
 		/* Children no longer need explicit column placement. */
 		.walkthrough-content > .summary-section,
 		.walkthrough-content > .issues-section,
-		.walkthrough-content > .streaming-bottom,
 		.walkthrough-content > :global([data-slot="separator"]) {
 			grid-column: auto;
 		}
 
-		/* Collapse the loading / stepper / connect-progress / banner grids to a
-		   simple centered 860-max box at narrow viewport. Children stop spanning
-		   a specific grid column and just flow normally. */
+		/* Collapse the loading / stepper / banner grids to a simple centered
+		   860-max box at narrow viewport. Children stop spanning a specific
+		   grid column and just flow normally. */
 		.walkthrough-loading,
 		.walkthrough-stepper-header,
-		.walkthrough-connect-progress,
 		.walkthrough-banner {
 			display: block;
 			width: 100%;
@@ -2156,17 +2179,8 @@
 			width: 100%;
 		}
 
-		.walkthrough-connect-progress {
-			/* Preserve the original flex vertical-center behavior for the
-			   Progress bar. */
-			display: flex;
-			align-items: center;
-			width: 100%;
-		}
-
 		.walkthrough-loading > *,
-		.walkthrough-stepper-header > *,
-		.walkthrough-connect-progress > * {
+		.walkthrough-stepper-header > * {
 			grid-column: auto;
 		}
 

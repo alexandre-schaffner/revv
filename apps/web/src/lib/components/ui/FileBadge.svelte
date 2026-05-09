@@ -70,7 +70,10 @@
     font-family: var(--font-sans, system-ui, sans-serif);
     color: var(--color-text-primary);
     cursor: default;
-    transition: background 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
+    transition:
+        background var(--duration-snap) var(--ease-soft),
+        border-color var(--duration-snap) var(--ease-soft),
+        box-shadow var(--duration-snap) var(--ease-soft);
     text-align: left;
     overflow: hidden;
     width: fit-content;

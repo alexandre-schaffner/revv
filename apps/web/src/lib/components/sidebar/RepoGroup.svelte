@@ -4,7 +4,13 @@
 	import { getSelectedPrId } from '$lib/stores/prs.svelte';
 	import { getCollapseAllSignal } from '$lib/stores/sidebar.svelte';
 	import { getFocusedId } from '$lib/stores/sidebar-nav.svelte';
+	import { collapsibleSlide, listItemEnter, STAGGER } from '$lib/motion';
 	import PrItem from './PrItem.svelte';
+
+	/* Cap stagger at the first N items so a 50-PR repo doesn't pay 2s of
+	   ladder-in time. Beyond the cap, items render at the cap's delay
+	   (visually arriving "together" once the wrapper finishes opening). */
+	const STAGGER_CAP = 20;
 
 	let {
 		repository,
@@ -57,7 +63,7 @@
 		data-nav-expanded={expanded}
 	>
 		<svg
-			class="h-3 w-3 shrink-0 text-text-muted transition-transform duration-150 {expanded ? 'rotate-90' : ''}"
+			class="h-3 w-3 shrink-0 text-text-muted transition-transform duration-snap ease-out-expo {expanded ? 'rotate-90' : ''}"
 			xmlns="http://www.w3.org/2000/svg"
 			viewBox="0 0 24 24"
 			fill="none"
@@ -102,9 +108,14 @@
 	</button>
 
 	{#if expanded}
-		<div class="ml-2 flex flex-col gap-0.5 border-l border-border-subtle pl-2">
-			{#each prs as pr (pr.id)}
-				<PrItem {pr} isSelected={selectedPrId === pr.id} {navPrefix} />
+		<div
+			class="ml-2 flex flex-col gap-0.5 border-l border-border-subtle pl-2"
+			transition:collapsibleSlide
+		>
+			{#each prs as pr, i (pr.id)}
+				<div in:listItemEnter={{ delay: Math.min(i, STAGGER_CAP) * STAGGER.tight }}>
+					<PrItem {pr} isSelected={selectedPrId === pr.id} {navPrefix} />
+				</div>
 			{/each}
 		</div>
 	{/if}

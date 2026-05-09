@@ -298,7 +298,7 @@
 									<div class="skeleton-line"></div>
 								{/if}
 								{#if item.isStreaming && !item.error}
-									<span class="stream-cursor" aria-hidden="true"></span>
+									<span class="stream-cursor motion-essential-stream-cursor" aria-hidden="true"></span>
 								{/if}
 								{#if item.error}
 									<div class="inline-error" role="alert">

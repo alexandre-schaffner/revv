@@ -18,9 +18,11 @@
 	} from '$lib/stores/walkthrough.svelte';
 	import {
 		scrollToTop as scrollWalkthroughToTop,
+		scrollToBottom as scrollWalkthroughToBottom,
 		scrollToRatings as scrollWalkthroughToRatings,
+		getUserScrolledUp as getWalkthroughUserScrolledUp,
 	} from '$lib/stores/walkthroughNav.svelte';
-	import { ArrowUp, Gauge, Play, RefreshCw, Square } from '@lucide/svelte';
+	import { ArrowDown, ArrowUp, Gauge, Play, RefreshCw, Square } from '@lucide/svelte';
 	import {
 		getActiveTab,
 		setActiveTab,
@@ -64,6 +66,7 @@
 	const walkthroughSummary = $derived(getWalkthroughSummary());
 	const walkthroughCanResume = $derived(getWalkthroughCanResume());
 	const walkthroughHasRatings = $derived(getWalkthroughRatings().length > 0);
+	const walkthroughUserScrolledUp = $derived(getWalkthroughUserScrolledUp());
 	const walkthroughHasContent = $derived(
 		walkthroughStreaming ||
 			!!walkthroughSummary ||
@@ -210,6 +213,17 @@
 						<Square size={14} fill="currentColor" />
 						Stop generation
 					</button>
+					{#if walkthroughUserScrolledUp}
+						<button
+							type="button"
+							class="walkthrough-action-btn"
+							onclick={scrollWalkthroughToBottom}
+							aria-label="Scroll to newest walkthrough content"
+						>
+							<ArrowDown size={14} />
+							New content
+						</button>
+					{/if}
 				{:else}
 					{#if walkthroughCanResume && pr}
 						<button
