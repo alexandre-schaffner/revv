@@ -10,14 +10,15 @@
 		getRepoTreePaths,
 		getRepoTreeStatus,
 		getRepoTreeError,
-		getActiveFilePath,
-		setActiveFilePath,
-		getActiveTab,
-		setActiveTab,
-		getIsLoadingFiles,
-		loadRepoFile,
-		clearRepoFile,
-	} from '$lib/stores/review.svelte';
+	getActiveFilePath,
+	setActiveFilePath,
+	getActiveTab,
+	setActiveTab,
+	getIsLoadingFiles,
+	loadRepoFile,
+	clearRepoFile,
+	requestDiffScrollReset,
+} from '$lib/stores/review.svelte';
 	import { getSelectedPrId } from '$lib/stores/prs.svelte';
 	import { enterScrollMode, getActivePanel } from '$lib/stores/focus-mode.svelte';
 	import { getSettings } from '$lib/stores/settings.svelte';
@@ -133,6 +134,7 @@
 		// double-checking here keeps the contract local to this view.)
 		if (!filePaths.has(path)) return;
 		setActiveFilePath(path);
+		requestDiffScrollReset();
 
 		// Always swap the main pane to the Diff tab so the user sees
 		// *something* (either the diff, or the file viewer for unchanged

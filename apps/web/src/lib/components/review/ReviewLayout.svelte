@@ -1,21 +1,22 @@
 <script lang="ts">
-	import { onDestroy } from 'svelte';
+	import { onDestroy, untrack } from 'svelte';
 	import type { ReviewFile } from '$lib/types/review';
 	import DiffViewer from './DiffViewer.svelte';
 	import FileIssues from './FileIssues.svelte';
 	import FileViewer from './FileViewer.svelte';
 	import {
-		getActiveFilePath,
-		setActiveFilePath,
-		setDiffMode,
-		getRepoFileStatus,
-		getRepoFilePath,
-		getRepoFileContent,
-		getRepoFileSize,
-		getRepoFileError,
-		getPrScrollPosition,
-		setPrScrollPosition,
-	} from '$lib/stores/review.svelte';
+	getActiveFilePath,
+	setActiveFilePath,
+	setDiffMode,
+	getRepoFileStatus,
+	getRepoFilePath,
+	getRepoFileContent,
+	getRepoFileSize,
+	getRepoFileError,
+	getPrScrollPosition,
+	setPrScrollPosition,
+	getDiffScrollResetSeq,
+} from '$lib/stores/review.svelte';
 	import {
 		getActivePanel,
 		enterSidebarMode,
@@ -181,6 +182,17 @@
 		const saved = getPrScrollPosition(prId, 'diff');
 		suppressNextDiffScroll = true;
 		diffScrollEl.scrollTop = saved;
+	});
+
+	// Scroll to top whenever the user explicitly selects a file from the sidebar
+	// (even if it's the same file — common in 1-file PRs).
+	$effect(() => {
+		getDiffScrollResetSeq(); // track
+		untrack(() => {
+			if (!diffScrollEl) return;
+			suppressNextDiffScroll = true;
+			diffScrollEl.scrollTop = 0;
+		});
 	});
 
 	function navigateFile(direction: 1 | -1) {

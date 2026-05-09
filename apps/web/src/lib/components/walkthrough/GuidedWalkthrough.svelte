@@ -749,29 +749,27 @@
 			     stepper above (`.chapter-tool-calls`); we don't duplicate
 			     them in a separate exploration section here. -->
 
-			<!-- Skeleton placeholder for the upcoming summary; only meaningful once writing has begun. -->
-			{#if normalizePhase(phase) === 'writing'}
-				<div class="skeleton-body" aria-hidden="true">
-					<div class="skeleton-summary">
-						<Skeleton class="h-[22px] w-[60px] rounded-full" />
-						<Skeleton class="h-[14px] w-[95%]" />
-						<Skeleton class="h-[14px] w-[80%]" />
-						<Skeleton class="h-[14px] w-[50%]" />
-					</div>
+			<!-- Skeleton placeholder for the upcoming summary; shown immediately when streaming starts. -->
+			<div class="skeleton-body" aria-hidden="true">
+				<div class="skeleton-summary">
+					<Skeleton class="h-[22px] w-[60px] rounded-full" />
+					<Skeleton class="h-[14px] w-[95%]" />
+					<Skeleton class="h-[14px] w-[80%]" />
+					<Skeleton class="h-[14px] w-[50%]" />
+				</div>
 
-					<div class="skeleton-separator"></div>
+				<div class="skeleton-separator"></div>
 
-					<div class="skeleton-card">
-						<div class="skeleton-card-body">
-							<Skeleton class="h-[14px] w-[90%]" />
-							<Skeleton class="h-[14px] w-full" />
-							<Skeleton class="h-[14px] w-[85%]" />
-							<Skeleton class="h-[14px] w-[75%]" />
-							<Skeleton class="h-[14px] w-[60%]" />
-						</div>
+				<div class="skeleton-card">
+					<div class="skeleton-card-body">
+						<Skeleton class="h-[14px] w-[90%]" />
+						<Skeleton class="h-[14px] w-full" />
+						<Skeleton class="h-[14px] w-[85%]" />
+						<Skeleton class="h-[14px] w-[75%]" />
+						<Skeleton class="h-[14px] w-[60%]" />
 					</div>
 				</div>
-			{/if}
+			</div>
 
 			<!-- Empty rating grid, mounted from the start of generation so the
 			     reviewer sees the 9-axis scorecard up front and watches cells

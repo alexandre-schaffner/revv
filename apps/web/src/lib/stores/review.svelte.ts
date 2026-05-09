@@ -629,6 +629,21 @@ export function switchPrViewState(newPrId: string): void {
 	activeFilePath = restoredFilePath;
 }
 
+// --- Diff scroll reset signal -----------------------------------------------
+//
+// Monotonic counter bumped whenever the user explicitly selects a file from
+// the sidebar tree — even if it's the same file already active. ReviewLayout
+// watches this to scroll the diff pane back to the top.
+let diffScrollResetSeq = $state(0);
+
+export function getDiffScrollResetSeq(): number {
+	return diffScrollResetSeq;
+}
+
+export function requestDiffScrollReset(): void {
+	diffScrollResetSeq++;
+}
+
 // --- Per-PR scroll persistence ---------------------------------------------
 //
 // Read once on mount (or on the trailing edge of a tab/PR switch); write on

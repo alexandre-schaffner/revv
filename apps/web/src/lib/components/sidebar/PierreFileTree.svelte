@@ -113,6 +113,8 @@
 
 	let host: HTMLDivElement;
 	let tree: FileTree | null = null;
+	// Cleanup handle for the re-click listener — replaced on each tree build.
+	let clickHandler: (() => void) | null = null;
 	// Remembers what `initialExpansion` the live tree was constructed with.
 	// When the prop flips (e.g. user toggles file-tree scope), we tear the
 	// tree down and rebuild instead of taking the cheap `resetPaths` path —
@@ -167,6 +169,13 @@
 				// store-level reset clears it, but this stays correct under
 				// future reset-policy changes).
 				const initialQuery = searchQuery && searchQuery.length > 0 ? searchQuery : null;
+
+				// Track the last path forwarded via onSelect so we can detect
+				// re-clicks on the already-selected file. Seeded with the
+				// initial selection so the very first re-click is caught even
+				// before `onSelectionChange` has fired once.
+				let lastEmittedPath: string | null = activePath;
+
 				tree = new FileTree({
 					paths: currentPaths,
 					initialExpansion: expansion,
@@ -273,13 +282,35 @@
 						// section was the only reliable way to keep the
 						// library's `item.toggle()` reaching the store.
 						const first = selected[0];
-						if (typeof first === 'string') onSelect(first);
+						if (typeof first === 'string') {
+							lastEmittedPath = first;
+							onSelect(first);
+						}
 					},
 				});
 				tree.render({ containerWrapper: host });
 				// Inject per-path colour rules now that the shadow root exists.
 				syncStatsStyle();
 				liveExpansion = expansion;
+
+				// Re-fire onSelect when the user clicks an already-selected item.
+				// `onSelectionChange` only fires on selection *changes*, so
+				// re-clicking the active file (common in 1-file PRs or when the
+				// user is already on that file) is a no-op without this patch.
+				// We listen on the host, run after a microtask so the library's
+				// own handler settles first, then check if the selection is still
+				// the last emitted path — if so, the user re-clicked it.
+				if (clickHandler) host.removeEventListener('click', clickHandler);
+				clickHandler = () => {
+					Promise.resolve().then(() => {
+						const selected = tree?.getSelectedPaths() ?? [];
+						const path = selected[0];
+						if (typeof path === 'string' && path === lastEmittedPath) {
+							onSelect(path);
+						}
+					});
+				};
+				host.addEventListener('click', clickHandler);
 			} else {
 				// Subsequent updates — replace the path set in place. This
 				// preserves scroll/expand state for unchanged subtrees, which
@@ -430,6 +461,10 @@
 		// `cleanUp` performs full teardown: detaches DOM, drops listeners,
 		// releases the path-store. Calling on a never-mounted instance is
 		// safe but tree is null in that case so we don't bother.
+		if (clickHandler) {
+			host?.removeEventListener('click', clickHandler);
+			clickHandler = null;
+		}
 		tree?.cleanUp();
 		tree = null;
 	});
