@@ -12,11 +12,11 @@
 	import { buildAddressIssuesPrompt } from '$lib/utils/prompts';
 	import { api } from '$lib/api/client';
 	import { toast } from 'svelte-sonner';
-	import { Check, ArrowUp, Sparkles } from '@lucide/svelte';
 	import WalkthroughRatingsPanel from '$lib/components/walkthrough/WalkthroughRatingsPanel.svelte';
 	import IssuesPanel from './issues-panel/IssuesPanel.svelte';
 	import CommentsPanel from './comments-panel/CommentsPanel.svelte';
 	import ApproveWithIssuesDialog from './ApproveWithIssuesDialog.svelte';
+	import { setRcState, setRcHandlers, resetRcActions } from '$lib/stores/rcActions.svelte';
 
 	interface Props {
 		prId: string;
@@ -255,6 +255,26 @@
 			selectedIssueIds = new Set(issues.filter((i) => !submittedIssueIds.has(i.id)).map((i) => i.id));
 		}
 	}
+
+	// Register reactive state and handlers into the shared RC actions store so
+	// AppShell can render the float pill as a direct child of .app-shell.
+	$effect(() => {
+		setRcState({
+			submitting,
+			selectedCount,
+			hasContent,
+			approveBlockerSummary,
+		});
+	});
+
+	$effect(() => {
+		setRcHandlers({
+			onGenerateChanges: generateChanges,
+			onSubmitReview: () => void submit('request_changes'),
+			onApprove: handleApproveClick,
+		});
+		return resetRcActions;
+	});
 </script>
 
 <div class="request-changes">
@@ -282,64 +302,6 @@
 			</div>
 		{/if}
 	</div>
-
-	<footer class="rc-footer">
-		<div class="rc-actions">
-			<button
-				type="button"
-				class="action-btn action-comment"
-				disabled={submitting !== null || selectedCount === 0}
-				onclick={generateChanges}
-				title={selectedCount === 0
-					? 'Select at least one issue to ask the agent to address'
-					: 'Open the chat panel and ask the agent to address the selected issues as commits'}
-			>
-				<Sparkles size={14} />
-				Generate changes
-			</button>
-			<button
-				type="button"
-				class="action-btn action-reject"
-				disabled={submitting !== null || !hasContent}
-				onclick={() => submit('request_changes')}
-				title={!hasContent
-					? 'Add comments or select walkthrough issues first'
-					: 'Request changes on this pull request'}
-			>
-				<ArrowUp size={14} />
-				{submitting === 'request_changes' ? 'Submitting…' : 'Submit Review'}
-			</button>
-			<button
-				type="button"
-				class="action-btn action-approve"
-				disabled={submitting !== null}
-				onclick={handleApproveClick}
-				title={approveBlockerSummary
-					? `Approve this pull request — ${approveBlockerSummary} still open`
-					: 'Approve this pull request on GitHub'}
-			>
-				<Check size={14} />
-				{submitting === 'approve' ? 'Approving…' : 'Approve'}
-			</button>
-		</div>
-
-		{#if submitError}
-			<span class="rc-status rc-status-error">{submitError}</span>
-		{:else if submitSuccess}
-			<span class="rc-status rc-status-success">
-				{actionLabel(submitSuccess.action)} on GitHub.
-				{#if submitSuccess.htmlUrl}
-					<a href={submitSuccess.htmlUrl} target="_blank" rel="noreferrer noopener">View</a>
-				{/if}
-			</span>
-		{:else}
-			<span class="propose-hint">
-				{selectedCount === 0
-					? 'Approve directly, or select walkthrough issues to include in request changes'
-					: `${selectedCount} issue${selectedCount === 1 ? '' : 's'} selected`}
-			</span>
-		{/if}
-	</footer>
 </div>
 
 <ApproveWithIssuesDialog
@@ -359,7 +321,7 @@
 		background: var(--color-bg-primary);
 	}
 
-	/* Both sections and footer use the SAME viewport-anchored 6-col grid as
+	/* Both sections use the SAME viewport-anchored 6-col grid as
 	   `.walkthrough-content` (see GuidedWalkthrough.svelte for the col_1
 	   derivation — it keeps the content column stable under sidebar toggle/
 	   resize and aligns with the `.page-title-section--narrow` header above).
@@ -388,49 +350,15 @@
 			40px
 			380px
 			minmax(24px, 1fr);
-		padding: 16px 0;
+		/* Extra bottom padding keeps the last panel clear of the floating
+		   action bar (approx 36px button + 40px bottom offset + 12px gap). */
+		padding: 16px 0 100px;
 		row-gap: 20px;
 	}
 
 	/* Inner sections land in col 3 (820 content column). */
 	.rc-sections > :global(*) {
 		grid-column: 3;
-	}
-
-	/* Footer — same grid as `.rc-sections` (must stay in lockstep). The
-	   border-top spans only col 3 (same width as the content above), which
-	   reads as a natural continuation of the centred column rather than a
-	   full-width divider slicing the page. Col 3 is a fixed 820px here too,
-	   matching `.rc-sections` so the footer stays column-aligned regardless
-	   of how its contents size. */
-	.rc-footer {
-		flex-shrink: 0;
-		display: grid;
-		grid-template-columns:
-			max(24px, min(calc(100% - 50vw - 458px), calc(100% - 1312px)))
-			48px
-			820px
-			40px
-			380px
-			minmax(24px, 1fr);
-		padding: 16px 0 20px;
-		row-gap: 8px;
-	}
-
-	.rc-footer > * {
-		grid-column: 3;
-	}
-
-	/* The border-top should sit inside col 3 so it lines up with the
-	   content width. Apply it to a ::before pseudo-element on the footer
-	   spanning col 3. */
-	.rc-footer::before {
-		content: '';
-		grid-column: 3;
-		border-top: 1px solid var(--color-border);
-		/* Zero-height pseudo that carries only the border, placed as the
-		   first grid item so everything after flows below it. */
-		height: 0;
 	}
 
 	/* Narrow-viewport fallback — matches the GuidedWalkthrough + page-title
@@ -441,136 +369,24 @@
 	   even when the main-area has dropped below the 1336 geometric minimum
 	   (wide viewport + wide sidebar), causing overflow. */
 	@container (max-width: 1335px) {
-		.rc-sections,
-		.rc-footer {
+		.rc-sections {
 			display: block;
 			max-width: 860px;
 			padding-left: 32px;
 			padding-right: 32px;
 			margin-inline: auto;
 			box-sizing: border-box;
-		}
-
-		.rc-sections {
 			width: 100%;
 			padding-top: 16px;
-			padding-bottom: 16px;
+			padding-bottom: 100px;
 			display: flex;
 			flex-direction: column;
 			gap: 20px;
 		}
 
-		.rc-footer {
-			width: 100%;
-			padding-top: 16px;
-			padding-bottom: 20px;
-			display: flex;
-			flex-direction: column;
-			gap: 8px;
-			border-top: 1px solid var(--color-border);
-		}
-
-		.rc-footer::before {
-			display: none;
-		}
-
-		.rc-sections > :global(*),
-		.rc-footer > * {
+		.rc-sections > :global(*) {
 			grid-column: auto;
 		}
-	}
-
-	.rc-actions {
-		display: grid;
-		grid-template-columns: repeat(3, 1fr);
-		gap: 8px;
-	}
-
-	/* ── Action buttons — outline→filled pattern via --btn-* variables ── */
-
-	.action-btn {
-		--btn-color: var(--color-text-primary);
-		--btn-hover-bg: var(--color-bg-secondary);
-		--btn-hover-text: var(--color-text-primary);
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		gap: 6px;
-		height: 38px;
-		padding: 0 10px;
-		border-radius: 8px;
-		font-size: 12px;
-		font-weight: 600;
-		letter-spacing: -0.01em;
-		border: 1px solid var(--btn-color);
-		background: transparent;
-		color: var(--btn-color);
-		cursor: pointer;
-		transition:
-			background var(--duration-snap),
-			border-color var(--duration-snap),
-			color var(--duration-snap),
-			opacity var(--duration-snap),
-			filter var(--duration-snap);
-	}
-
-	.action-btn:disabled {
-		cursor: not-allowed;
-		opacity: 0.4;
-	}
-
-	.action-btn:not(:disabled):hover {
-		background: var(--btn-hover-bg);
-		border-color: var(--btn-color);
-		color: var(--btn-hover-text);
-		filter: none;
-	}
-
-	/* Generate changes — outline that inverts with theme */
-	.action-comment:not(:disabled) {
-		--btn-color: var(--color-btn-outline);
-		--btn-hover-bg: var(--color-btn-outline-fill);
-		--btn-hover-text: var(--color-btn-outline-fg);
-	}
-
-	/* Approve — success green */
-	.action-approve:not(:disabled) {
-		--btn-color: var(--color-success);
-		--btn-hover-bg: color-mix(in srgb, var(--color-success) 88%, black);
-		--btn-hover-text: var(--color-primary-foreground);
-	}
-
-	/* Submit Review — accent blue */
-	.action-reject:not(:disabled) {
-		--btn-color: var(--color-accent);
-		--btn-hover-bg: color-mix(in srgb, var(--color-accent) 88%, black);
-		--btn-hover-text: var(--color-primary-foreground);
-	}
-
-	.propose-hint {
-		font-size: 11px;
-		color: var(--color-text-muted);
-		text-align: center;
-	}
-
-	.rc-status {
-		font-size: 11px;
-		text-align: center;
-		line-height: 1.5;
-	}
-
-	.rc-status-error {
-		color: var(--color-danger);
-	}
-
-	.rc-status-success {
-		color: var(--color-success);
-	}
-
-	.rc-status a {
-		color: inherit;
-		text-decoration: underline;
-		margin-left: 4px;
 	}
 
 	/* .rc-scorecard is a plain wrapper — no section header here. The scorecard

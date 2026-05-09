@@ -6,7 +6,7 @@
  * Usage: bun run run-pr-rewards-review.ts
  */
 
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { createDb } from "./src/db";
 import { walkthroughs } from "./src/db/schema/walkthroughs";
 import {
@@ -37,6 +37,16 @@ console.log(`Walkthrough ID: ${WALKTHROUGH_ID}`);
 console.log(`DB: ${DB_PATH}\n`);
 
 const db = createDb(DB_PATH);
+
+// Delete any existing walkthrough for this PR + SHA so we can do a clean re-run
+db.delete(walkthroughs)
+	.where(
+		and(
+			eq(walkthroughs.pullRequestId, PULL_REQUEST_ID),
+			eq(walkthroughs.prHeadSha, PR_HEAD_SHA),
+		),
+	)
+	.run();
 
 // Insert a fresh walkthrough row
 const now = new Date().toISOString();

@@ -1247,10 +1247,6 @@
 		cursor: pointer;
 	}
 
-	.chapter-cell--clickable:hover {
-		background: color-mix(in srgb, var(--color-accent) 6%, transparent);
-	}
-
 	/* Done cells (already-completed phases during streaming) drop to 0.5
 	   opacity by default to read as "past." Bump opacity on hover so the
 	   click affordance is unambiguous when the user reaches for one. */

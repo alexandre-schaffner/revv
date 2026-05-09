@@ -22,7 +22,7 @@
 		scrollToRatings as scrollWalkthroughToRatings,
 		getUserScrolledUp as getWalkthroughUserScrolledUp,
 	} from '$lib/stores/walkthroughNav.svelte';
-	import { ArrowDown, ArrowUp, Gauge, Play, RefreshCw, Square } from '@lucide/svelte';
+	import { ArrowDown, ArrowUp, Check, Gauge, Play, RefreshCw, Sparkles, Square } from '@lucide/svelte';
 	import {
 		getActiveTab,
 		setActiveTab,
@@ -49,6 +49,15 @@
 		getPaletteMode,
 		closePalette,
 	} from '$lib/stores/shortcuts.svelte';
+	import {
+		getRcSubmitting,
+		getRcSelectedCount,
+		getRcHasContent,
+		getRcApproveBlockerSummary,
+		getRcOnGenerateChanges,
+		getRcOnSubmitReview,
+		getRcOnApprove,
+	} from '$lib/stores/rcActions.svelte';
 	import { page } from '$app/state';
 
 	let { children } = $props();
@@ -76,6 +85,12 @@
 	const showFloatingActions = $derived(
 		!!pr && !isSettingsRoute && activeTab === 'walkthrough' && walkthroughHasContent,
 	);
+	const showRcActions = $derived(!!pr && !isSettingsRoute && activeTab === 'request-changes');
+
+	const rcSubmitting = $derived(getRcSubmitting());
+	const rcSelectedCount = $derived(getRcSelectedCount());
+	const rcHasContent = $derived(getRcHasContent());
+	const rcApproveBlockerSummary = $derived(getRcApproveBlockerSummary());
 
 	// New-commit-available signal: the PR's current headSha differs from the
 	// SHA the diff was loaded against. `getLoadedHeadSha` returns null until the
@@ -201,7 +216,7 @@
 		<BottomBar />
 	</footer>
 
-	{#if showFloatingActions}
+	{#if showFloatingActions && activeTab === 'walkthrough'}
 		<div class="walkthrough-actions-float">
 			<div class="walkthrough-actions-row">
 				{#if walkthroughStreaming}
@@ -268,6 +283,49 @@
 						Rating
 					</button>
 				{/if}
+			</div>
+		</div>
+	{/if}
+
+	{#if showRcActions && activeTab === 'request-changes'}
+		<div class="walkthrough-actions-float">
+			<div class="walkthrough-actions-row">
+				<button
+					type="button"
+					class="walkthrough-action-btn walkthrough-action-btn--muted"
+					disabled={rcSubmitting !== null || rcSelectedCount === 0}
+					onclick={() => getRcOnGenerateChanges()()}
+					title={rcSelectedCount === 0
+						? 'Select at least one issue to ask the agent to address'
+						: 'Open the chat panel and ask the agent to address the selected issues as commits'}
+				>
+					<Sparkles size={14} />
+					Generate changes
+				</button>
+				<button
+					type="button"
+					class="walkthrough-action-btn walkthrough-action-btn--accent"
+					disabled={rcSubmitting !== null || !rcHasContent}
+					onclick={() => getRcOnSubmitReview()()}
+					title={!rcHasContent
+						? 'Add comments or select walkthrough issues first'
+						: 'Request changes on this pull request'}
+				>
+					<ArrowUp size={14} />
+					{rcSubmitting === 'request_changes' ? 'Submitting…' : 'Submit Review'}
+				</button>
+				<button
+					type="button"
+					class="walkthrough-action-btn walkthrough-action-btn--success"
+					disabled={rcSubmitting !== null}
+					onclick={() => getRcOnApprove()()}
+					title={rcApproveBlockerSummary
+						? `Approve this pull request — ${rcApproveBlockerSummary} still open`
+						: 'Approve this pull request on GitHub'}
+				>
+					<Check size={14} />
+					{rcSubmitting === 'approve' ? 'Approving…' : 'Approve'}
+				</button>
 			</div>
 		</div>
 	{/if}
@@ -465,6 +523,26 @@
 
 	.walkthrough-action-btn--danger {
 		color: var(--color-danger);
+	}
+
+	.walkthrough-action-btn--muted {
+		color: var(--color-text-secondary);
+	}
+
+	/* Submit Review — accent blue tint */
+	.walkthrough-action-btn--accent:not(:disabled) {
+		color: var(--color-accent);
+	}
+
+	/* Approve — success green tint */
+	.walkthrough-action-btn--success:not(:disabled) {
+		color: var(--color-success);
+	}
+
+	/* Disabled state for RC buttons */
+	.walkthrough-action-btn:disabled {
+		cursor: not-allowed;
+		opacity: 0.4;
 	}
 
 	/* ── Right pane (chat) ──
