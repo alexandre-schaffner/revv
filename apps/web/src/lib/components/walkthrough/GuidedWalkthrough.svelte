@@ -1337,6 +1337,7 @@
 
 	.chapter-tool-calls {
 		position: relative;
+		flex: 1;
 		height: 28px; /* 2 × 14px rows, fixed — prevents layout shift during transitions */
 		min-width: 0;
 		overflow: hidden;
