@@ -301,17 +301,15 @@
 	.review-content {
 		flex: 1;
 		min-height: 0;
-		overflow-y: auto;
-		/* Reserve the scrollbar gutter on BOTH sides, not just the inline-end.
-		   With `stable` (single-side), WebKit on macOS was asymmetric between
-		   states: in the collapsed case it reserved 15px on the right and
-		   centered content in (viewport − 15); when expanding made the
-		   content overflow, the overlay scrollbar appeared but didn't consume
-		   the reserved space — the content effectively re-expanded to the
-		   full viewport and snapped RIGHT. `both-edges` keeps the reserved
-		   space symmetric, so col 3 of the asymmetric 6-col grid stays
-		   centered regardless of whether the scrollbar is visible. */
-		scrollbar-gutter: stable both-edges;
+		/* Always show the scrollbar track so the gutter is permanently reserved
+		   on the right. This prevents the layout shift between tabs (walkthrough
+		   has enough content to scroll; request-changes may not) — the right-side
+		   column width stays constant regardless of overflow state. On macOS
+		   WebKit, `overflow-y: scroll` with a non-overflowing tab renders an
+		   inactive-but-present scrollbar, which is the same width as an active
+		   one, so the grid never reflows. */
+		overflow-y: scroll;
+		scrollbar-gutter: stable;
 		container-type: inline-size;
 	}
 
@@ -389,11 +387,6 @@
 		line-height: 1.2;
 		letter-spacing: -0.02em;
 		margin: 0;
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		min-width: 0;
-		flex: 1;
 	}
 
 	.page-subtitle {
