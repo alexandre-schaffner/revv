@@ -1041,11 +1041,18 @@
 
 	/* Pane-anchored centering for the empty state. Absolutely positioned
 	   inside the nearest positioned ancestor (`.review-page` from the route
-	   shell), so the button lands at the dead centre of the visible main
-	   pane regardless of what's rendered above it (page title, dimmed
-	   stepper). Without `position: absolute` the empty state sits in normal
-	   flow under the stepper and its 60vh min-height pushes the centred
-	   content below the pane midline.
+	   shell), so the button lands at the dead centre of the main pane
+	   regardless of what's rendered above it (page title, dimmed stepper).
+	   Without `position: absolute` the empty state sits in normal flow under
+	   the stepper and its 60vh min-height pushes the centred content below
+	   the pane midline.
+
+	   Uses the SAME 6-col viewport-anchored grid as `.walkthrough-stepper-header`
+	   / `.walkthrough-loading` / `.walkthrough-content` so the centred content
+	   stays pinned to col 3 (the 820 content column) when the sidebar toggles.
+	   A flex `align-items: center` would center within the parent width, which
+	   shifts as the sidebar collapses — col 3 is anchored to `50vw`, so it
+	   stays put, matching the stepper's behaviour.
 
 	   `pointer-events: none` on the wrapper + `auto` on direct children lets
 	   the empty grid area pass clicks through to the stepper cells underneath
@@ -1053,19 +1060,29 @@
 	.walkthrough-empty {
 		position: absolute;
 		inset: 0;
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		justify-content: center;
-		gap: 12px;
-		padding: 24px;
+		display: grid;
+		grid-template-columns:
+			max(24px, min(calc(100% - 50vw - 458px), calc(100% - 1312px)))
+			48px
+			minmax(0, 820px)
+			40px
+			380px
+			minmax(24px, 1fr);
+		align-content: center;
+		row-gap: 12px;
+		padding: 24px 0;
 		pointer-events: none;
 	}
 
 	/* `:global(*)` — children include a shadcn Button whose root carries a
-	   different Svelte scope hash, so a scoped `> *` rule would skip it. */
+	   different Svelte scope hash, so a scoped `> *` rule would skip it.
+	   `grid-column: 3` lands every child in the viewport-anchored content
+	   column; `justify-self: center` shrinks each child to its content and
+	   centres it within col 3 (matching the prior flex `align-items: center`). */
 	.walkthrough-empty > :global(*) {
 		pointer-events: auto;
+		grid-column: 3;
+		justify-self: center;
 	}
 
 	/* Loading and stepper-header use the SAME 6-col grid as
@@ -2097,6 +2114,26 @@
 		.walkthrough-loading > *,
 		.walkthrough-stepper-header > * {
 			grid-column: auto;
+		}
+
+		/* Empty state collapses back to a simple flex column at narrow widths.
+		   The 6-col viewport-anchored grid is meaningless when the container
+		   itself is narrower than the grid's minimum, so we revert to the
+		   original "centre within the pane" behaviour. Sidebar-toggle drift
+		   isn't a concern at this size — the sidebar is either collapsed or
+		   forced narrow. */
+		.walkthrough-empty {
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			justify-content: center;
+			gap: 12px;
+			padding: 24px;
+		}
+
+		.walkthrough-empty > :global(*) {
+			grid-column: auto;
+			justify-self: auto;
 		}
 
 		.blocks {

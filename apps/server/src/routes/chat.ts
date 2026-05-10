@@ -21,6 +21,18 @@ import { and, eq, desc } from 'drizzle-orm';
 import { spawn } from 'node:child_process';
 import { AppRuntime } from '../runtime';
 import { AiService, resolveAgent } from '../services/Ai';
+import {
+	ChatChangesPushService,
+	ChatStreamingConflictError,
+	ConcurrentPushError,
+	DirtyWorktreeError,
+	InvalidBranchNameError,
+	NoChangesError,
+	NoChatSessionError,
+	PushRejectedError,
+	RefAlreadyExistsError,
+	type ResolvePushFrame,
+} from '../services/ChatChangesPush';
 import { ChatSessionService } from '../services/ChatSession';
 import { DbService } from '../services/Db';
 import { withDb } from '../effects/with-db';
@@ -372,6 +384,7 @@ export const chatRoute = new Elysia()
 						const chatSessions = yield* ChatSessionService;
 						const repoClone = yield* RepoCloneService;
 						const github = yield* GitHubService;
+						const chatPush = yield* ChatChangesPushService;
 						const { db } = yield* DbService;
 
 						// Resolve PR + repo + token
@@ -485,10 +498,17 @@ export const chatRoute = new Elysia()
 							prId: pr.id,
 						});
 
+						// Mark this PR as streaming so a concurrent push attempt
+						// is refused (the agent might write to the worktree at
+						// any moment, which would race with the push's
+						// `git checkout` / `git merge`).
+						chatPush.markChatStreaming(pr.id, true);
+
 						return {
 							frameStream,
 							chatSessionId: chatSessionRow.id,
 							turnId,
+							prId: pr.id,
 						};
 					}),
 				);
@@ -498,7 +518,39 @@ export const chatRoute = new Elysia()
 					{ chatSessionId: prepared.chatSessionId, turnId: prepared.turnId },
 				);
 
-				return new Response(chatStreamToSSE<ChatStreamFrame>(persistedStream), {
+				// Wrap the persisted stream so we clear the streaming flag
+				// when the SSE consumer finishes — success, error, or client
+				// disconnect.
+				const streamingPrId = prepared.prId;
+				const flagClearingStream = new ReadableStream<ChatStreamFrame>({
+					async start(controller) {
+						const reader = persistedStream.getReader();
+						try {
+							while (true) {
+								const { done, value } = await reader.read();
+								if (done) break;
+								controller.enqueue(value);
+							}
+							controller.close();
+						} catch (err) {
+							controller.error(err);
+						} finally {
+							try {
+								await AppRuntime.runPromise(
+									Effect.flatMap(ChatChangesPushService, (svc) =>
+										Effect.sync(() =>
+											svc.markChatStreaming(streamingPrId, false),
+										),
+									),
+								);
+							} catch {
+								/* never throw from streaming-flag cleanup */
+							}
+						}
+					},
+				});
+
+				return new Response(chatStreamToSSE<ChatStreamFrame>(flagClearingStream), {
 					headers: {
 						'Content-Type': 'text/event-stream',
 						'Cache-Control': 'no-cache',
@@ -746,4 +798,179 @@ export const chatRoute = new Elysia()
 		{
 			params: t.Object({ prId: t.String(), sha: t.String() }),
 		},
+	)
+	.post(
+		'/api/chat/:prId/proposed-changes/merge-and-push',
+		async (ctx) => {
+			try {
+				const body = (ctx.body ?? {}) as {
+					newBranchName?: unknown;
+					force?: unknown;
+				};
+				let newBranchName: string | undefined;
+				if (body.newBranchName !== undefined) {
+					if (typeof body.newBranchName !== 'string') {
+						ctx.set.status = 400;
+						return {
+							code: 'INVALID_BRANCH_NAME',
+							message: 'newBranchName must be a string',
+						};
+					}
+					const trimmed = body.newBranchName.trim();
+					if (
+						trimmed.length === 0 ||
+						/\s/.test(trimmed) ||
+						trimmed.startsWith('-') ||
+						trimmed.includes('..')
+					) {
+						ctx.set.status = 400;
+						return {
+							code: 'INVALID_BRANCH_NAME',
+							message: 'newBranchName is empty or contains invalid characters',
+						};
+					}
+					newBranchName = trimmed;
+				}
+				const force =
+					typeof body.force === 'boolean' ? body.force : undefined;
+
+				const result = await AppRuntime.runPromise(
+					Effect.flatMap(ChatChangesPushService, (svc) =>
+						svc.attemptMergeAndPush({
+							prId: ctx.params.prId,
+							userId: ctx.session.user.id,
+							...(newBranchName !== undefined ? { newBranchName } : {}),
+							...(force !== undefined ? { force } : {}),
+						}),
+					),
+				);
+				// Conflict / remote-changed / ref-exists are expected non-error
+				// outcomes — surface 409 so the client can branch on the status
+				// code in addition to the body.
+				if (result.status === 'conflict') {
+					ctx.set.status = 409;
+					return result;
+				}
+				if (result.status === 'remote-changed') {
+					ctx.set.status = 409;
+					return result;
+				}
+				if (result.status === 'ref-exists') {
+					ctx.set.status = 409;
+					return result;
+				}
+				return result;
+			} catch (e) {
+				const err = unwrapEffectError(e);
+				if (err instanceof ConcurrentPushError) {
+					ctx.set.status = 409;
+					return { code: 'CONCURRENT_PUSH', message: 'A push is already in progress for this PR' };
+				}
+				if (err instanceof ChatStreamingConflictError) {
+					ctx.set.status = 409;
+					return {
+						code: 'CHAT_STREAMING',
+						message: 'Wait for the chat agent to finish before pushing',
+					};
+				}
+				if (err instanceof DirtyWorktreeError) {
+					ctx.set.status = 422;
+					return { code: 'DIRTY_WORKTREE', message: err.message };
+				}
+				if (err instanceof NoChangesError) {
+					ctx.set.status = 422;
+					return { code: 'NO_CHANGES', message: 'No agent commits to push' };
+				}
+				if (err instanceof NoChatSessionError) {
+					ctx.set.status = 422;
+					return {
+						code: 'NO_CHAT_SESSION',
+						message: 'No chat session for this PR — start a chat first',
+					};
+				}
+				if (err instanceof InvalidBranchNameError) {
+					ctx.set.status = 400;
+					return { code: 'INVALID_BRANCH_NAME', message: err.message };
+				}
+				if (err instanceof RefAlreadyExistsError) {
+					ctx.set.status = 409;
+					return { code: 'REF_EXISTS', message: `branch ${err.ref} already exists` };
+				}
+				if (err instanceof PushRejectedError) {
+					ctx.set.status = 502;
+					return { code: 'PUSH_REJECTED', message: err.message };
+				}
+				return handleAppError(e, ctx);
+			}
+		},
+		{
+			params: t.Object({ prId: t.String() }),
+			body: t.Optional(
+				t.Object({
+					newBranchName: t.Optional(t.String()),
+					force: t.Optional(t.Boolean()),
+				}),
+			),
+		},
+	)
+	.post(
+		'/api/chat/:prId/proposed-changes/resolve-and-push',
+		async (ctx) => {
+			try {
+				const stream = await AppRuntime.runPromise(
+					Effect.flatMap(ChatChangesPushService, (svc) =>
+						svc.resolveConflictsAndPush({
+							prId: ctx.params.prId,
+							userId: ctx.session.user.id,
+						}),
+					),
+				);
+
+				return new Response(resolvePushStreamToSSE(stream), {
+					headers: {
+						'Content-Type': 'text/event-stream',
+						'Cache-Control': 'no-cache',
+						Connection: 'keep-alive',
+					},
+				});
+			} catch (e) {
+				return mapErrorToSSEResponse(e);
+			}
+		},
+		{
+			params: t.Object({ prId: t.String() }),
+		},
 	);
+
+/**
+ * Wrap a ResolvePushFrame stream into SSE bytes. Mirrors the shape of
+ * `chatStreamToSSE` so the web client can reuse `parseSSEBuffer`.
+ */
+function resolvePushStreamToSSE(
+	frameStream: ReadableStream<ResolvePushFrame>,
+): ReadableStream<Uint8Array> {
+	const encoder = new TextEncoder();
+	return new ReadableStream<Uint8Array>({
+		async start(controller) {
+			const reader = frameStream.getReader();
+			try {
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) break;
+					controller.enqueue(
+						encoder.encode(`data: ${JSON.stringify(value)}\n\n`),
+					);
+				}
+				controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+				controller.close();
+			} catch (err) {
+				const errMsg = JSON.stringify({
+					code: 'GENERATION_ERROR',
+					message: err instanceof Error ? err.message : 'Unknown error',
+				});
+				controller.enqueue(encoder.encode(`event: error\ndata: ${errMsg}\n\n`));
+				controller.close();
+			}
+		},
+	});
+}

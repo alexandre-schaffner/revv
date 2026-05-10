@@ -15,6 +15,11 @@ const CHAT_SYSTEM_TEMPLATE: string = readFileSync(
 	'utf-8',
 );
 
+const CHAT_RESOLVE_CONFLICTS_TEMPLATE: string = readFileSync(
+	import.meta.dir + '/chat-resolve-conflicts.md',
+	'utf-8',
+);
+
 export interface ChatWalkthroughIssue {
 	readonly severity: string; // 'info' | 'warning' | 'critical'
 	readonly title: string;
@@ -122,4 +127,34 @@ export function buildChatSystemPrompt(params: ChatSystemPromptParams): string {
 
 export function buildChatUserMessage(params: { message: string }): string {
 	return params.message;
+}
+
+export interface ResolveConflictsPromptParams {
+	readonly agentBranch: string;
+	readonly sourceBranch: string;
+	readonly conflictFiles: ReadonlyArray<string>;
+}
+
+/**
+ * Build the one-shot system prompt for the merge-conflict resolver agent.
+ * Substitutes the agent branch, source branch, and conflicting file list into
+ * `chat-resolve-conflicts.md`. The resulting prompt is non-conversational and
+ * is NOT persisted into the chat session — see {@link AiService.resolveMergeConflict}.
+ */
+export function buildResolveConflictsPrompt(
+	params: ResolveConflictsPromptParams,
+): string {
+	const fileLines = params.conflictFiles.length === 0
+		? '_(no specific files listed — check `git status` to find them)_'
+		: params.conflictFiles.map((f) => `- \`${f}\``).join('\n');
+
+	return CHAT_RESOLVE_CONFLICTS_TEMPLATE
+		.replace('{{AGENT_BRANCH}}', params.agentBranch)
+		.replace('{{SOURCE_BRANCH}}', params.sourceBranch)
+		.replace('{{CONFLICT_FILES}}', fileLines);
+}
+
+/** Initial user message that nudges the agent into the resolve-conflicts task. */
+export function buildResolveConflictsUserMessage(): string {
+	return 'Resolve the merge conflicts described in your system prompt, then run `git merge --continue`.';
 }

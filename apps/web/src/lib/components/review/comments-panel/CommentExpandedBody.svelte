@@ -24,6 +24,7 @@
     import type { CommentThread, ThreadMessage } from "@revv/shared";
     import { User, Bot, ArrowUpRight } from "@lucide/svelte";
     import { renderMarkdown } from "$lib/utils/markdown";
+    import { isHighlighterReady } from "$lib/utils/code-highlight.svelte";
 
     interface Props {
         threads: readonly CommentThread[];
@@ -38,9 +39,12 @@
     let failedAvatars = $state<Set<string>>(new Set());
 
     // Flatten to a render-ready shape so the template doesn't recompute on
-    // every iteration. `html` is a Promise — marked + highlighter are lazy.
-    const renderedThreads = $derived.by(() =>
-        threads.map((thread) => {
+    // every iteration. Re-derive when the shiki highlighter becomes ready
+    // so fenced code blocks pick up syntax highlighting on second pass.
+    const highlighterReady = $derived(isHighlighterReady());
+    const renderedThreads = $derived.by(() => {
+        void highlighterReady;
+        return threads.map((thread) => {
             const messages = getThreadMessages(thread.id);
             return {
                 thread,
@@ -50,11 +54,11 @@
                     html:
                         msg.body.trim().length > 0
                             ? renderMarkdown(msg.body)
-                            : Promise.resolve(""),
+                            : "",
                 })),
             };
-        }),
-    );
+        });
+    });
 
     const authorLabels: Record<string, string> = {
         reviewer: "REVIEWER",
@@ -140,15 +144,11 @@
                                 </time>
                             </div>
                             <div class="turn-body prose">
-                                {#await entry.rendered[i]?.html ?? Promise.resolve("")}
-                                    <p class="turn-loading">…</p>
-                                {:then html}
-                                    {#if html}
-                                        {@html html}
-                                    {:else}
-                                        <p class="turn-empty">(empty message)</p>
-                                    {/if}
-                                {/await}
+                                {#if entry.rendered[i]?.html}
+                                    {@html entry.rendered[i].html}
+                                {:else}
+                                    <p class="turn-empty">(empty message)</p>
+                                {/if}
                             </div>
                         </li>
                     {/each}
@@ -357,7 +357,6 @@
         margin-top: 4px;
     }
 
-    .turn-loading,
     .turn-empty {
         margin: 0;
         color: var(--color-text-muted);

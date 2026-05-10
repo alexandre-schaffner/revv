@@ -26,6 +26,8 @@ import {
 	type ChatWalkthroughContext,
 	buildChatSystemPrompt,
 	buildChatUserMessage,
+	buildResolveConflictsPrompt,
+	buildResolveConflictsUserMessage,
 } from '../ai/prompts/chat';
 import { type ChatStreamFrame, streamChatViaClaude } from '../ai/providers/chat-claude';
 import { streamChatViaOpencode } from '../ai/providers/chat-opencode';
@@ -120,6 +122,28 @@ export class AiService extends Context.Tag('AiService')<
 		readonly chat: (
 			params: ChatParams,
 		) => Effect.Effect<ReadableStream<ChatStreamFrame>, AiError>;
+		/**
+		 * One-shot agent invocation for resolving merge conflicts. Runs the
+		 * configured CLI agent against `cwd` (an in-progress merge worktree)
+		 * with a dedicated system prompt that ALLOWS `git merge --continue`
+		 * but forbids push / amend / abort. Does NOT persist the session —
+		 * this is not part of the chat conversation, and we don't want it to
+		 * pollute the session JSONL or `chat_messages` history.
+		 */
+		readonly resolveMergeConflict: (params: {
+			readonly cwd: string;
+			readonly agentBranch: string;
+			readonly sourceBranch: string;
+			readonly conflictFiles: ReadonlyArray<string>;
+			readonly abortController?: AbortController | undefined;
+			/**
+			 * Optional PR id used by the opencode chat MCP server to scope its
+			 * tools. Conflict resolution doesn't actually need review context
+			 * but the opencode driver requires the param to mint its bearer
+			 * token. Pass an empty string for paths where it doesn't matter.
+			 */
+			readonly prId: string;
+		}) => Effect.Effect<ReadableStream<ChatStreamFrame>, AiError>;
 		readonly isConfigured: () => Effect.Effect<boolean>;
 	}
 >() {}
@@ -299,6 +323,73 @@ export const AiServiceLive = Layer.effect(
 						resumeSessionId: params.resumeSessionId ?? undefined,
 						cwd: params.cwd,
 						onSessionId: params.onSessionId,
+						abortController: params.abortController,
+						model: settings.aiModel ?? undefined,
+						deps,
+						prId: params.prId,
+					});
+				}),
+
+			resolveMergeConflict: (params) =>
+				Effect.gen(function* () {
+					const settings = yield* getSettings();
+					const agent = resolveAgent(settings);
+
+					if (!checkCliAvailability(agent)) {
+						return yield* Effect.fail(new AiNotConfiguredError());
+					}
+
+					const systemPrompt = buildResolveConflictsPrompt({
+						agentBranch: params.agentBranch,
+						sourceBranch: params.sourceBranch,
+						conflictFiles: params.conflictFiles,
+					});
+					const message = buildResolveConflictsUserMessage();
+
+					if (agent === 'claude') {
+						return streamChatViaClaude({
+							message,
+							systemPrompt,
+							// No resume — this is a one-shot run that must
+							// not pull in any prior conversation context.
+							resumeSessionId: undefined,
+							cwd: params.cwd,
+							onSessionId: undefined,
+							abortController: params.abortController,
+							model: settings.aiModel ?? undefined,
+							db,
+							prId: params.prId,
+							// Critical: no persistence — this turn must NOT
+							// land in the chat session JSONL on disk, so a
+							// future regular chat resume doesn't see the
+							// system prompt that allowed `git merge --continue`.
+							persistSession: false,
+							// And no review-context MCP — conflict resolution
+							// doesn't need it.
+							enableReviewContextMcp: false,
+						});
+					}
+
+					// opencode: run a fresh, non-resumed session. The opencode
+					// daemon is stateful per session id; using `undefined`
+					// here forces a brand-new session that disappears when
+					// the daemon idles out.
+					const deps = {
+						ensureDaemon: () => Effect.runPromise(supervisor.ensureRunning()),
+						jobStarted: () => Effect.runPromise(supervisor.jobStarted()),
+						jobEnded: () => Effect.runPromise(supervisor.jobEnded()),
+						client: () => Effect.runPromise(supervisor.client()),
+						issueChatMcpToken: (prId: string) =>
+							Effect.runPromise(chatMcpTokens.issue(prId)),
+						clearChatMcpToken: (token: string) =>
+							Effect.runPromise(chatMcpTokens.clear(token)),
+					};
+					return streamChatViaOpencode({
+						message,
+						systemPrompt,
+						resumeSessionId: undefined,
+						cwd: params.cwd,
+						onSessionId: undefined,
 						abortController: params.abortController,
 						model: settings.aiModel ?? undefined,
 						deps,

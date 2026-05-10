@@ -113,6 +113,16 @@ export class ChatSessionService extends Context.Tag("ChatSessionService")<
 		readonly upsert: (
 			params: UpsertChatSessionParams,
 		) => Effect.Effect<void>;
+		/**
+		 * Update the prHeadSha of an existing session row. Called by the
+		 * merge-and-push flow after a successful push so the session lookup
+		 * (keyed on `(prId, agent, prHeadSha)`) keeps finding this conversation
+		 * even after `pull_requests.headSha` advances to the freshly pushed tip.
+		 */
+		readonly updatePrHeadSha: (params: {
+			readonly chatSessionId: string;
+			readonly prHeadSha: string;
+		}) => Effect.Effect<void>;
 		readonly clear: (
 			prId: string,
 			agent: string,
@@ -311,6 +321,15 @@ export const ChatSessionServiceLive = Layer.effect(
 							branchName,
 							lastActivityAt: nowIso(),
 						})
+						.where(eq(chatSessions.id, chatSessionId))
+						.run();
+				}),
+
+			updatePrHeadSha: ({ chatSessionId, prHeadSha }) =>
+				Effect.sync(() => {
+					db
+						.update(chatSessions)
+						.set({ prHeadSha, lastActivityAt: nowIso() })
 						.where(eq(chatSessions.id, chatSessionId))
 						.run();
 				}),

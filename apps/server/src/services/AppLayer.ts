@@ -1,6 +1,7 @@
 import { Layer } from 'effect';
 import { CacheStatsLive, InvalidationBusLive } from '../cache/index';
 import { AiServiceLive } from './Ai';
+import { ChatChangesPushServiceLive } from './ChatChangesPush';
 import { ChatMcpTokensLive } from './ChatMcpTokens';
 import { ChatSessionServiceLive } from './ChatSession';
 import { DbMaintenanceLive } from './DbMaintenance';
@@ -111,6 +112,15 @@ const PollSchedulerWithDeps = PollSchedulerLive.pipe(
 	),
 );
 
+// ChatChangesPush depends on PrContext (for resolving repo+token), AiService
+// (for invoking the conflict-resolution agent), and BaseLayers (db, github,
+// chat sessions, ws hub, pr service, etag cache).
+const ChatChangesPushServiceWithDeps = ChatChangesPushServiceLive.pipe(
+	Layer.provide(
+		Layer.mergeAll(BaseLayers, PrContextServiceWithDeps, AiServiceWithDeps),
+	),
+);
+
 // AppLayer merges everything together so consumers get all services
 export const AppLayer = Layer.mergeAll(
 	BaseLayers,
@@ -121,4 +131,5 @@ export const AppLayer = Layer.mergeAll(
 	RepoCloneServiceWithDeps,
 	WalkthroughJobsWithDeps,
 	DbMaintenanceWithDeps,
+	ChatChangesPushServiceWithDeps,
 );

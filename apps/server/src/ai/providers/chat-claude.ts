@@ -39,6 +39,20 @@ export interface StreamChatViaClaudeOptions {
 	/** Bound to the chat MCP server so its `get_review_context` tool can scope queries to the right PR. */
 	readonly db: Db;
 	readonly prId: string;
+	/**
+	 * When `false`, the SDK runs without `persistSession`. Used for one-shot
+	 * tasks like merge-conflict resolution that must NOT pollute the chat's
+	 * persisted session JSONL on disk. Defaults to `true` for the regular
+	 * chat flow.
+	 */
+	readonly persistSession?: boolean | undefined;
+	/**
+	 * When `false`, the in-process MCP server (`get_review_context`) is not
+	 * registered with the SDK. Useful for one-shot tasks (like conflict
+	 * resolution) where review context isn't relevant and we want a leaner
+	 * tool surface. Defaults to `true`.
+	 */
+	readonly enableReviewContextMcp?: boolean | undefined;
 }
 
 // Tool-use blocks we surface as tool entries in the chat UI. Anything not in
@@ -75,26 +89,32 @@ export function streamChatViaClaude(
 				// `get_review_context` tool returns issues + comments for the
 				// right PR. Created per-call because the cwd / db / prId are
 				// per-call too.
-				const mcpServer = createChatMcpServer({
-					db: opts.db,
-					prId: opts.prId,
-				});
+				const enableMcp = opts.enableReviewContextMcp ?? true;
+				const mcpServer = enableMcp
+					? createChatMcpServer({ db: opts.db, prId: opts.prId })
+					: null;
+
+				const allowedTools = [
+					"Read",
+					"Grep",
+					"Glob",
+					"Write",
+					"Edit",
+					"Bash",
+				];
+				if (enableMcp) {
+					allowedTools.push(`${MCP_TOOL_PREFIX}get_review_context`);
+				}
 
 				const queryOpts: Record<string, unknown> = {
 					cwd: opts.cwd,
-					allowedTools: [
-						"Read",
-						"Grep",
-						"Glob",
-						"Write",
-						"Edit",
-						"Bash",
-						`${MCP_TOOL_PREFIX}get_review_context`,
-					],
-					mcpServers: { "revv-chat-context": mcpServer },
+					allowedTools,
+					...(mcpServer
+						? { mcpServers: { "revv-chat-context": mcpServer } }
+						: {}),
 					permissionMode: "bypassPermissions",
 					allowDangerouslySkipPermissions: true,
-					persistSession: true,
+					persistSession: opts.persistSession ?? true,
 					maxTurns: 50,
 					...pathOption,
 				};

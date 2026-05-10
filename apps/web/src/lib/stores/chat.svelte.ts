@@ -26,9 +26,14 @@ import {
 	clearChat,
 	fetchChatMessages,
 	fetchProposedChanges,
+	pushProposedChanges,
+	resolveConflictsAndPush,
 	streamChatMessage,
+	type MergePushError,
+	type MergePushResult,
 	type PersistedChatEntry,
 	type ProposedChanges,
+	type PushProposedOptions,
 } from '$lib/api/chat';
 import { toast } from 'svelte-sonner';
 
@@ -63,9 +68,12 @@ let chatErrors = $state(
 let streamingPrIds = $state(new Set<string>());
 let loadedPrIds = $state(new Set<string>());
 let proposedChanges = $state(new Map<string, ProposedChanges | null>());
+let pushingPrIds = $state(new Set<string>());
+let resolvingPushPrIds = $state(new Set<string>());
 
 // Non-reactive — abort controllers have no UI semantics.
 const abortControllers = new Map<string, AbortController>();
+const resolveAbortControllers = new Map<string, AbortController>();
 
 // ── Reads ──────────────────────────────────────────────────────────────────
 
@@ -89,6 +97,14 @@ export function isChatHistoryLoaded(prId: string): boolean {
 
 export function getProposedChanges(prId: string): ProposedChanges | null {
 	return proposedChanges.get(prId) ?? null;
+}
+
+export function isPushingProposed(prId: string): boolean {
+	return pushingPrIds.has(prId);
+}
+
+export function isResolvingPush(prId: string): boolean {
+	return resolvingPushPrIds.has(prId);
 }
 
 // ── Internal mutators (each reassigns the container per Svelte-5 reactivity) ─
@@ -149,6 +165,24 @@ function markLoaded(prId: string): void {
 function setProposedChanges(prId: string, value: ProposedChanges | null): void {
 	proposedChanges.set(prId, value);
 	proposedChanges = new Map(proposedChanges);
+}
+
+function setPushing(prId: string, pushing: boolean): void {
+	if (pushing) {
+		pushingPrIds.add(prId);
+	} else {
+		pushingPrIds.delete(prId);
+	}
+	pushingPrIds = new Set(pushingPrIds);
+}
+
+function setResolvingPush(prId: string, resolving: boolean): void {
+	if (resolving) {
+		resolvingPushPrIds.add(prId);
+	} else {
+		resolvingPushPrIds.delete(prId);
+	}
+	resolvingPushPrIds = new Set(resolvingPushPrIds);
 }
 
 // ── Persisted-entry → ChatItem projection ─────────────────────────────────
@@ -332,6 +366,40 @@ export async function clearChatHistory(prId: string): Promise<void> {
 	}
 }
 
+/**
+ * Cancel the in-flight chat turn for a PR. Aborts the SSE fetch, finalizes
+ * the streaming assistant bubble in place (preserving any partial content
+ * + activity rows that already arrived), and clears the streaming flag.
+ * No-op if no turn is in flight.
+ */
+export function abortChatTurn(prId: string): void {
+	const controller = abortControllers.get(prId);
+	if (!controller) return;
+	controller.abort();
+	abortControllers.delete(prId);
+
+	// Finalize whichever assistant bubble is still streaming. The streaming
+	// callbacks won't fire onDone for an aborted fetch, so we close out the
+	// bubble here.
+	const items = chatHistories.get(prId) ?? [];
+	const streamingMsg = items.find(
+		(i) => i.kind === 'message' && i.role === 'assistant' && i.isStreaming,
+	);
+	if (streamingMsg && streamingMsg.kind === 'message') {
+		const hasContent = streamingMsg.content.length > 0;
+		if (hasContent) {
+			patchItem(prId, streamingMsg.id, (item) =>
+				item.kind === 'message'
+					? { ...item, isStreaming: false, error: 'Stopped' }
+					: item,
+			);
+		} else {
+			removeItem(prId, streamingMsg.id);
+		}
+	}
+	setStreaming(prId, false);
+}
+
 export async function refreshProposedChanges(prId: string): Promise<void> {
 	try {
 		const data = await fetchProposedChanges(prId);
@@ -339,4 +407,208 @@ export async function refreshProposedChanges(prId: string): Promise<void> {
 	} catch {
 		// Best-effort — the strip just won't update.
 	}
+}
+
+// ── Merge & push ───────────────────────────────────────────────────────────
+
+/**
+ * Attempt to merge the agent's local commits into the PR's source branch
+ * and push. Returns the structured result so the caller can branch on
+ * conflict / remote-changed / pushed. Toasts success/error itself.
+ *
+ * When `options.newBranchName` is provided the agent's commits are pushed
+ * to that brand-new branch instead of merged into the PR. The caller is
+ * responsible for handling the `ref-exists` result (typically by asking
+ * the user to confirm an overwrite, then re-calling with `force: true`).
+ */
+export async function pushProposed(
+	prId: string,
+	options?: PushProposedOptions,
+): Promise<MergePushResult | null> {
+	if (pushingPrIds.has(prId)) return null;
+	setPushing(prId, true);
+	try {
+		const result = await pushProposedChanges(prId, options);
+		if (result.status === 'pushed') {
+			toast.success(
+				`Pushed ${result.pushedCommits} commit${
+					result.pushedCommits === 1 ? '' : 's'
+				} to ${result.branch}`,
+			);
+			// For the merge path the server has cleared the proposed-changes
+			// baseline (PR head moved); refresh so the strip clears. For the
+			// new-branch path the PR head is unchanged, but refreshing is a
+			// cheap no-op against the same baseline.
+			void refreshProposedChanges(prId);
+		} else if (result.status === 'remote-changed') {
+			toast.error(
+				`The PR branch (${result.branch}) was updated remotely. Sync the latest changes and try again.`,
+			);
+		}
+		// `ref-exists` is intentionally silent — the UI prompts the user
+		// for overwrite confirmation and may retry with force.
+		return result;
+	} catch (e) {
+		const err = e as MergePushError;
+		// DIRTY_WORKTREE / NO_CHAT_SESSION etc. surface as toast — UI also
+		// disables the button when commitCount === 0 or streaming.
+		toast.error(err.message ?? 'Push failed');
+		return null;
+	} finally {
+		setPushing(prId, false);
+	}
+}
+
+/**
+ * Stream the conflict-resolution + push flow. Agent activities and short
+ * status notes are folded into the chat panel as ephemeral items so the
+ * user sees what's happening; on resolution the proposed-changes strip
+ * clears and a success toast fires.
+ *
+ * Note that the conflict-resolution turn is intentionally NOT persisted on
+ * the server (one-shot non-conversational system prompt). The chat items
+ * appended here will disappear on a fresh load — that's acceptable since
+ * the PR's branch state is the durable record of what happened.
+ */
+export async function resolveAndPushProposed(prId: string): Promise<void> {
+	if (resolvingPushPrIds.has(prId)) return;
+	setResolvingPush(prId, true);
+
+	const turnId = crypto.randomUUID();
+	appendItem(prId, {
+		kind: 'message',
+		id: crypto.randomUUID(),
+		role: 'user',
+		content: '(Resolve push conflicts)',
+		isStreaming: false,
+		turnId,
+	});
+	const assistantId = crypto.randomUUID();
+	appendItem(prId, {
+		kind: 'message',
+		id: assistantId,
+		role: 'assistant',
+		content: '',
+		isStreaming: true,
+		turnId,
+	});
+
+	return new Promise<void>((resolve) => {
+		const controller = resolveConflictsAndPush(prId, {
+			onStatus: (message) => {
+				const items = chatHistories.get(prId) ?? [];
+				const idx = items.findIndex((i) => i.id === assistantId);
+				const item: ChatItem = {
+					kind: 'activity',
+					id: crypto.randomUUID(),
+					activityKind: 'tool.other' as ActivityKind,
+					toolName: 'merge-and-push',
+					summary: message,
+					turnId,
+				};
+				if (idx === -1) {
+					setItems(prId, [...items, item]);
+				} else {
+					setItems(prId, [
+						...items.slice(0, idx),
+						item,
+						...items.slice(idx),
+					]);
+				}
+			},
+			onConflictFiles: (files) => {
+				const summary = `Conflicts in ${files.length} file${
+					files.length === 1 ? '' : 's'
+				}: ${files.slice(0, 3).join(', ')}${files.length > 3 ? '…' : ''}`;
+				const items = chatHistories.get(prId) ?? [];
+				const idx = items.findIndex((i) => i.id === assistantId);
+				const item: ChatItem = {
+					kind: 'activity',
+					id: crypto.randomUUID(),
+					activityKind: 'tool.other' as ActivityKind,
+					toolName: 'merge-and-push',
+					summary,
+					turnId,
+				};
+				if (idx === -1) {
+					setItems(prId, [...items, item]);
+				} else {
+					setItems(prId, [
+						...items.slice(0, idx),
+						item,
+						...items.slice(idx),
+					]);
+				}
+			},
+			onAgentText: (chunk) => {
+				patchItem(prId, assistantId, (item) =>
+					item.kind === 'message'
+						? { ...item, content: item.content + chunk }
+						: item,
+				);
+			},
+			onAgentActivity: (activity) => {
+				const items = chatHistories.get(prId) ?? [];
+				const idx = items.findIndex((i) => i.id === assistantId);
+				const item: ChatItem = {
+					kind: 'activity',
+					id: crypto.randomUUID(),
+					activityKind: activity.activityKind as ActivityKind,
+					toolName: activity.toolName ?? activity.activityKind,
+					summary: activity.summary,
+					turnId,
+				};
+				if (idx === -1) {
+					setItems(prId, [...items, item]);
+				} else {
+					setItems(prId, [
+						...items.slice(0, idx),
+						item,
+						...items.slice(idx),
+					]);
+				}
+			},
+			onResult: (result) => {
+				patchItem(prId, assistantId, (item) =>
+					item.kind === 'message'
+						? { ...item, isStreaming: false }
+						: item,
+				);
+				if (result.status === 'pushed') {
+					toast.success(
+						`Pushed ${result.pushedCommits} commit${
+							result.pushedCommits === 1 ? '' : 's'
+						} to ${result.branch}`,
+					);
+					void refreshProposedChanges(prId);
+				} else if (result.status === 'remote-changed') {
+					toast.error(
+						`The PR branch (${result.branch}) moved during push. Sync and retry.`,
+					);
+				} else {
+					toast.error(result.message);
+				}
+			},
+			onError: (err) => {
+				patchItem(prId, assistantId, (item) =>
+					item.kind === 'message'
+						? { ...item, isStreaming: false, error: err.message }
+						: item,
+				);
+				toast.error(err.message || 'Conflict resolution failed');
+			},
+			onDone: () => {
+				patchItem(prId, assistantId, (item) =>
+					item.kind === 'message'
+						? { ...item, isStreaming: false }
+						: item,
+				);
+				resolveAbortControllers.delete(prId);
+				setResolvingPush(prId, false);
+				resolve();
+			},
+		});
+
+		resolveAbortControllers.set(prId, controller);
+	});
 }

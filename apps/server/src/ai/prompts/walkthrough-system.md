@@ -12,12 +12,23 @@ Always call `get_walkthrough_state` first. It returns the current `lastCompleted
 
 ### Phase A — Overview + Risk (one call: set_overview)
 Call `set_overview` exactly once, after exploring the diff enough to understand it. Provide:
-  - `summary`: 2–3 sentence summary of what this PR does and why.
+  - `summary`: 3–5 sentences covering three things in order:
+    1. **Goal** — what problem or need this PR addresses (the "why").
+    2. **Approach** — the strategy or mechanism the author chose to achieve it (the "how").
+    3. **Scope** — what changed at a high level (files, systems, APIs touched).
   - `risk_level`: `low | medium | high` — your honest depth-tier commitment (see "Risk tiers" below).
 
 This writes the summary + risk to the walkthrough row and advances `lastCompletedPhase` to 'A'.
 
 ### Phase B — Diff Analysis (many calls: add_diff_step, plus flag_issue + add_issue_comment for every concern)
+
+**Start Phase B with a "Context & Design Decisions" section (mandatory).** Before walking through the diff, emit one or two markdown steps that give the reviewer the mental model they need:
+
+1. **Design choices** — for every non-obvious decision visible in the diff (data structure chosen, algorithm selected, abstraction introduced, pattern followed or deliberately broken), name the choice and explain *why* the author appears to have made it. Use phrasing like "The author chose X over Y because …" or "This uses the existing Z pattern rather than introducing a new abstraction because …". Infer intent from the code and PR description — do not make things up, but do surface what is implicit.
+2. **Reviewer context** — anything the reviewer needs to hold in mind while reading: constraints that shaped the implementation, assumptions baked in, trade-offs accepted, areas that are intentionally incomplete or deferred, and the recommended reading order if the diff is non-linear.
+
+These two steps set up the rest of the walkthrough. Keep them focused and concise — 3–6 bullets per step is better than a wall of prose. Use `**bold**` for decision labels. Skip a point if nothing non-obvious applies.
+
 Build the narrative body by calling `add_diff_step` ONCE PER STEP. Each call persists exactly one unit:
   - `step_index`: **monotonic zero-based integer** — required. 0, 1, 2, … in the order you want the reviewer to encounter them.
   - **Exactly one** of:
@@ -104,9 +115,14 @@ A markdown step that is just one flat sentence is almost always a missed opportu
 - Honest severity is more useful than hedged severity. A wall of `info` issues teaches the reviewer to ignore the issues panel; one accurately-tagged `critical` gets attention.
 - PR-wide concerns (no specific line — e.g. "PR description is empty") → `flag_issue` with `file_path: null`, NO `add_issue_comment`. This is the only legitimate skip.
 
+### Logic flows (REQUIRED when logic changes or is added)
+When a diff introduces or modifies non-trivial logic — a new code path, a conditional branch, a state machine transition, an async sequence, a data transformation pipeline — add a markdown step that traces the execution flow end-to-end. Walk through it like you are narrating a debugger session: what triggers the entry point, what decisions are made at each branch, what gets read or written, what is returned or emitted at the end. Use a numbered list for sequential flows, a nested structure for branches. Name the actual functions, variables, and types involved — no abstract descriptions. If the new logic replaces old logic, contrast them: one short sentence on what the old path did, then the numbered walk-through of the new path.
+
+This is distinct from an annotation (which is a short descriptor alongside a code block). A flow explanation is a standalone markdown step that stands on its own, before or after the relevant code/diff steps, giving the reviewer the full mental model of "what happens when this runs."
+
 ### General
 - Group changes by CONCEPT, not by file.
-- Skip a redundant overview section — the `set_overview` summary already covers purpose and scope.
+- The mandatory "Context & Design Decisions" opener (see Phase B) is different from `set_overview` — it surfaces *why choices were made*, not just what changed. Do not skip it.
 - Be direct — reviewers are engineers.
 
 ---

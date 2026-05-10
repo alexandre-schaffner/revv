@@ -11,6 +11,14 @@ import { repositories } from "../db/schema/index";
 import { CloneError, CloneNotReadyError } from "../domain/errors";
 import { debug, logError } from "../logger";
 import { DbService } from "./Db";
+import {
+	ensureSignalHandlersInstalled,
+	killStaleCloneProcesses,
+	runGit,
+	runGitBestEffort,
+	runGitCapture,
+	runGitCloneWithTimeout,
+} from "./git-runner";
 import { TokenProvider } from "./TokenProvider";
 import { WebSocketHub } from "./WebSocketHub";
 
@@ -166,273 +174,11 @@ export class RepoCloneService extends Context.Tag("RepoCloneService")<
 >() {}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-/** Spawn a git command and wait for it, throwing if it exits non-zero or times out. */
-// Environment overrides applied to every git subprocess. These prevent git
-// from blocking on interactive prompts — critical in the production LaunchAgent
-// where there is no TTY and a hanging credential helper would freeze the job.
-const GIT_ENV: Record<string, string> = {
-	...process.env,
-	GIT_TERMINAL_PROMPT: "0",   // never prompt for credentials
-	GIT_ASKPASS: "echo",         // answer any askpass with an empty string
-	GIT_SSH_COMMAND: "ssh -o BatchMode=yes -o StrictHostKeyChecking=no",
-} as Record<string, string>;
-
-// ── Subprocess registry + signal handlers ────────────────────────────────────
 //
-// Every git process we spawn is registered here so we can kill them all when
-// the server shuts down. Without this, ctrl-C / SIGTERM / `bun --watch`
-// reload leaves orphan `git clone` processes running indefinitely — they
-// hold open FDs against directories we then `rm -rf` for the next attempt,
-// they fight each other for `.git/shallow.lock`, and they accumulate across
-// dev-server restarts until the user kills them by hand. This registry plus
-// signal-driven cleanup is what prevents that.
-//
-// In-memory only by design: per CLAUDE.md the orchestrator's coordination
-// caches are reconstructible from SQLite. On boot we additionally pkill any
-// lingering orphans (see `killStaleCloneProcesses`) so the cache starts
-// empty regardless of how the previous process died.
-//
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type SpawnedProc = ReturnType<typeof Bun.spawn> & { exited: Promise<number>; pid: number; kill: (sig?: number | string) => void };
-const activeProcs = new Set<SpawnedProc>();
-
-let signalHandlersInstalled = false;
-function ensureSignalHandlersInstalled(): void {
-	if (signalHandlersInstalled) return;
-	signalHandlersInstalled = true;
-	const killAll = () => {
-		for (const proc of activeProcs) {
-			try { proc.kill("SIGTERM"); } catch { /* already dead */ }
-		}
-		// Escalate after a brief grace period — git in `index-pack` can swallow
-		// SIGTERM during pack-writing. We don't await; the process is exiting
-		// anyway, this is just so children don't outlive us.
-		setTimeout(() => {
-			for (const proc of activeProcs) {
-				try { proc.kill("SIGKILL"); } catch { /* already dead */ }
-			}
-		}, 2_000).unref?.();
-	};
-	process.once("SIGTERM", killAll);
-	process.once("SIGINT", killAll);
-	process.once("SIGHUP", killAll);
-	// `beforeExit` fires when the event loop empties; useful for clean exits
-	// (e.g. test harness, normal shutdown). Won't fire on hard signals — the
-	// signal handlers above cover those.
-	process.once("beforeExit", killAll);
-}
-
-/**
- * Spawn `git ...args` and wait for it under a hard timeout. On timeout we
- * send SIGTERM, then escalate to SIGKILL after a grace period; both stdout
- * and stderr are drained concurrently so the OS pipe buffer never fills
- * (which would block git on `write()` and make the wait look like a hang).
- *
- * Returns the captured stderr tail and exit code so callers can build their
- * own error messages without having to consume the streams themselves.
- */
-async function spawnGit(
-	args: string[],
-	opts: {
-		cwd?: string;
-		timeoutMs: number;
-		captureStdout?: boolean;
-	},
-): Promise<{ exitCode: number; stdout: string; stderrTail: string; timedOut: boolean }> {
-	ensureSignalHandlersInstalled();
-
-	const proc = Bun.spawn(["git", ...args], {
-		...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
-		stdout: opts.captureStdout ? "pipe" : "ignore",
-		stderr: "pipe",
-		stdin: "ignore",
-		env: GIT_ENV,
-	}) as unknown as SpawnedProc;
-
-	activeProcs.add(proc);
-
-	// Drain stderr into a 16KB ring so the pipe never blocks. Keep the tail
-	// for error messages — clone progress is verbose, head is just
-	// "Cloning into …" which we don't need.
-	let stderrTail = "";
-	const stderrDrain = (async () => {
-		try {
-			const reader = (proc.stderr as ReadableStream<Uint8Array>).getReader();
-			const decoder = new TextDecoder();
-			while (true) {
-				const { done, value } = await reader.read();
-				if (done) break;
-				stderrTail += decoder.decode(value, { stream: true });
-				if (stderrTail.length > 16_384) {
-					stderrTail = stderrTail.slice(-16_384);
-				}
-			}
-		} catch { /* stream closed by kill — fine */ }
-	})();
-
-	let stdout = "";
-	const stdoutDrain = opts.captureStdout
-		? (async () => {
-			try {
-				const reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();
-				const decoder = new TextDecoder();
-				while (true) {
-					const { done, value } = await reader.read();
-					if (done) break;
-					stdout += decoder.decode(value, { stream: true });
-				}
-			} catch { /* stream closed by kill — fine */ }
-		})()
-		: Promise.resolve();
-
-	let timedOut = false;
-	let killEscalation: ReturnType<typeof setTimeout> | undefined;
-	const timer = setTimeout(() => {
-		timedOut = true;
-		try { proc.kill("SIGTERM"); } catch { /* already dead */ }
-		// Escalate to SIGKILL if SIGTERM doesn't take effect within 5s. git's
-		// pack-writing critical section can swallow SIGTERM until it finishes
-		// the current object — without escalation that wait is unbounded.
-		killEscalation = setTimeout(() => {
-			try { proc.kill("SIGKILL"); } catch { /* already dead */ }
-		}, 5_000);
-		killEscalation.unref?.();
-	}, opts.timeoutMs);
-
-	try {
-		await proc.exited;
-		// Drains resolve when the OS closes the streams, which happens when
-		// the process exits. Safe to await unconditionally.
-		await Promise.allSettled([stderrDrain, stdoutDrain]);
-		return {
-			exitCode: proc.exitCode ?? -1,
-			stdout,
-			stderrTail: stderrTail.trim(),
-			timedOut,
-		};
-	} finally {
-		clearTimeout(timer);
-		if (killEscalation) clearTimeout(killEscalation);
-		activeProcs.delete(proc);
-	}
-}
-
-async function runGit(
-	args: string[],
-	cwd?: string,
-	timeoutMs = 120_000,
-): Promise<void> {
-	const result = await spawnGit(args, {
-		...(cwd !== undefined ? { cwd } : {}),
-		timeoutMs,
-	});
-	if (result.timedOut) {
-		throw new Error(
-			`git ${args[0]} timed out after ${timeoutMs / 1000}s` +
-			(result.stderrTail ? `; tail: ${result.stderrTail.slice(-512)}` : ""),
-		);
-	}
-	if (result.exitCode !== 0) {
-		throw new Error(`git ${args[0]} failed: ${result.stderrTail}`);
-	}
-}
-
-/**
- * Run a git command and return its stdout. Same timeout/error semantics as
- * {@link runGit}, but reads stdout into a string. Used for read-only commands
- * (`ls-tree`, `rev-parse`, etc.) where the output is the whole point.
- */
-async function runGitCapture(
-	args: string[],
-	cwd: string,
-	timeoutMs = 60_000,
-): Promise<string> {
-	const result = await spawnGit(args, { cwd, timeoutMs, captureStdout: true });
-	if (result.timedOut) {
-		throw new Error(
-			`git ${args[0]} timed out after ${timeoutMs / 1000}s` +
-			(result.stderrTail ? `; tail: ${result.stderrTail.slice(-512)}` : ""),
-		);
-	}
-	if (result.exitCode !== 0) {
-		throw new Error(`git ${args[0]} failed: ${result.stderrTail}`);
-	}
-	return result.stdout;
-}
-
-/** Race a git clone against a timeout, killing the process if it exceeds the limit. */
-async function runGitCloneWithTimeout(
-	args: string[],
-	timeoutMs: number,
-): Promise<void> {
-	const result = await spawnGit(args, { timeoutMs });
-	if (result.timedOut) {
-		throw new Error(
-			`git clone timed out after ${timeoutMs / 1000}s` +
-			(result.stderrTail ? `; tail: ${result.stderrTail.slice(-512)}` : ""),
-		);
-	}
-	if (result.exitCode !== 0) {
-		throw new Error(`git clone failed: ${result.stderrTail}`);
-	}
-}
-
-/**
- * Fire-and-forget git subprocess with a hard timeout. Used for cleanup
- * operations where we never want to block — errors and non-zero exits are
- * silently swallowed. Returns true if the process exited 0 within the budget.
- */
-async function runGitBestEffort(
-	args: string[],
-	cwd: string,
-	timeoutMs = 10_000,
-): Promise<boolean> {
-	try {
-		const result = await spawnGit(args, { cwd, timeoutMs });
-		return !result.timedOut && result.exitCode === 0;
-	} catch {
-		return false;
-	}
-}
-
-/**
- * Boot-time orphan reaper. Kill any `git clone`, `git fetch`, or
- * `git index-pack` process whose command line references our clone base
- * directory. These are processes spawned by a previous server lifetime that
- * outlived their parent — the OS kept them as orphans, and they will fight
- * the current lifetime for `.git/shallow.lock`, write to `rm`'d directories
- * via still-open FDs, and generally make the next clone hang.
- *
- * macOS / Linux only. Best-effort: missing pkill, permission errors, or no
- * matching processes are all silently ignored.
- */
-async function killStaleCloneProcesses(): Promise<void> {
-	try {
-		// `pkill -f <pattern>` matches the full command line. Pattern is escaped
-		// just enough that a clone path containing regex specials doesn't blow
-		// it up — the clone dir is under $HOME so it's nearly always literal,
-		// but defense in depth never hurts.
-		const escaped = CLONE_BASE_DIR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-		const proc = Bun.spawn(
-			[
-				"pkill",
-				"-TERM",
-				"-f",
-				`git (clone|fetch|index-pack|remote-https).*${escaped}`,
-			],
-			{ stdout: "ignore", stderr: "ignore", stdin: "ignore" },
-		);
-		// pkill exits 0 if it killed something, 1 if no match — both are fine.
-		const timer = setTimeout(() => {
-			try { proc.kill(); } catch { /* noop */ }
-		}, 5_000);
-		await proc.exited;
-		clearTimeout(timer);
-	} catch {
-		// pkill missing on this OS or otherwise unavailable — nothing we can do.
-	}
-}
+// Subprocess plumbing (spawnGit / runGit / runGitCapture / activeProcs registry /
+// signal handlers / killStaleCloneProcesses) lives in ./git-runner so the
+// merge-and-push service shares the same process registry. Importing
+// `runGit*` here keeps existing call sites unchanged.
 
 /**
  * Read the contents of a worktree's `.git` HEAD file. For a worktree-checkout
@@ -834,6 +580,26 @@ export const RepoCloneServiceLive = Layer.effect(
 							// indefinitely; the only known recovery was to remove
 							// and re-add the repo.
 							await clearStalePrWorktreeLocks(clonePath, branchName);
+
+							// Self-heal a worktree wedged in a mid-merge or
+							// mid-rebase state — leftovers of a SIGKILL'd
+							// merge-and-push run. Without this, the next
+							// `git reset --hard` (lower in this function) trips
+							// over `MERGE_HEAD` / `rebase-merge` directories and
+							// fails with cryptic errors. Best-effort: a clean
+							// worktree no-ops because there's nothing to abort.
+							if (existsSync(worktreePath)) {
+								await runGitBestEffort(
+									["merge", "--abort"],
+									worktreePath,
+									10_000,
+								);
+								await runGitBestEffort(
+									["rebase", "--abort"],
+									worktreePath,
+									10_000,
+								);
+							}
 
 							await runGit(
 								["remote", "set-url", "origin", authedUrl],

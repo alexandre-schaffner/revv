@@ -10,6 +10,10 @@
 		AlertTriangle,
 		Settings,
 		GitCommitHorizontal,
+		Upload,
+		Loader2,
+		Square,
+		GitBranch,
 	} from '@lucide/svelte';
 	import { onMount, tick } from 'svelte';
 	import {
@@ -17,17 +21,33 @@
 		getChatError,
 		isChatStreaming,
 		getProposedChanges,
+		isPushingProposed,
+		isResolvingPush,
 		loadChatHistory,
 		sendChatMessage,
 		clearChatHistory,
 		refreshProposedChanges,
+		pushProposed,
+		resolveAndPushProposed,
+		abortChatTurn,
 	} from '$lib/stores/chat.svelte';
+	import { getSelectedPr } from '$lib/stores/prs.svelte';
 	import {
 		getPrScrollPosition,
 		setPrScrollPosition,
 	} from '$lib/stores/review.svelte';
 	import { fetchProposedDiff } from '$lib/api/chat';
 	import { renderMarkdown } from '$lib/utils/markdown';
+	import { motion } from '$lib/motion';
+	import ProposedDiffModal from '$lib/components/review/ProposedDiffModal.svelte';
+	import {
+		Root as PopoverRoot,
+		Trigger as PopoverTrigger,
+		Content as PopoverContent,
+	} from '$lib/components/ui/popover/index.js';
+	import * as Dialog from '$lib/components/ui/dialog';
+	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
 
 	interface Props {
 		onClose: () => void;
@@ -41,12 +61,25 @@
 	const error = $derived(prId ? getChatError(prId) : null);
 	const proposed = $derived(prId ? getProposedChanges(prId) : null);
 	const commitCount = $derived(proposed?.commits.length ?? 0);
+	const isPushing = $derived(prId ? isPushingProposed(prId) : false);
+	const isResolving = $derived(prId ? isResolvingPush(prId) : false);
+	const selectedPr = $derived(getSelectedPr());
 
 	let inputValue = $state('');
 	let textareaEl: HTMLTextAreaElement | undefined = $state();
 	let messagesEl: HTMLDivElement | undefined = $state();
 	let proposedExpanded = $state(false);
 	let diffOpen = $state<{ sha: string; subject: string; body: string } | null>(null);
+	let conflictDialog = $state<{ files: string[]; branch: string } | null>(null);
+	let pushSuccessTrigger = $state(0);
+	let pushMenuOpen = $state(false);
+	// "Push to new branch" dialog. `input` mode collects the branch name;
+	// `confirm-overwrite` is the inline confirmation shown when the remote
+	// already has that ref.
+	let newBranchDialogOpen = $state(false);
+	let newBranchDialogMode = $state<'input' | 'confirm-overwrite'>('input');
+	let newBranchValue = $state('');
+	let newBranchInputEl: HTMLInputElement | null = $state(null);
 
 	// Auto-grow textarea up to ~3 lines.
 	$effect(() => {
@@ -172,6 +205,97 @@
 		await clearChatHistory(prId);
 	}
 
+	async function handlePush(): Promise<void> {
+		if (!prId || isPushing || isStreaming || isResolving) return;
+		const result = await pushProposed(prId);
+		if (!result) return;
+		if (result.status === 'pushed') {
+			pushSuccessTrigger++;
+		} else if (result.status === 'conflict') {
+			conflictDialog = { files: result.files, branch: result.branch };
+		}
+		// remote-changed already toasts in the store; no extra UI here.
+	}
+
+	function suggestedNewBranchName(): string {
+		const base = selectedPr?.sourceBranch?.trim();
+		return base && base.length > 0 ? `${base}-agent` : 'agent-changes';
+	}
+
+	function openNewBranchDialog(): void {
+		pushMenuOpen = false;
+		newBranchDialogMode = 'input';
+		newBranchValue = suggestedNewBranchName();
+		newBranchDialogOpen = true;
+		// Focus + select on the next tick so the dialog is in the DOM first.
+		void tick().then(() => newBranchInputEl?.select());
+	}
+
+	function isValidNewBranchName(value: string): boolean {
+		const trimmed = value.trim();
+		if (trimmed.length === 0) return false;
+		if (/\s/.test(trimmed)) return false;
+		if (trimmed.startsWith('-')) return false;
+		if (trimmed.includes('..')) return false;
+		return true;
+	}
+
+	async function handleNewBranchSubmit(): Promise<void> {
+		if (!prId || newBranchDialogMode !== 'input') return;
+		const name = newBranchValue.trim();
+		if (!isValidNewBranchName(name)) return;
+		const result = await pushProposed(prId, { newBranchName: name });
+		if (!result) {
+			// Hard failure already toasted by the store.
+			newBranchDialogOpen = false;
+			return;
+		}
+		if (result.status === 'pushed') {
+			pushSuccessTrigger++;
+			newBranchDialogOpen = false;
+			return;
+		}
+		if (result.status === 'ref-exists') {
+			newBranchValue = name;
+			newBranchDialogMode = 'confirm-overwrite';
+			return;
+		}
+		// 'conflict' / 'remote-changed' don't apply to the new-branch path,
+		// but if the server ever returns one we surface it as a generic close.
+		newBranchDialogOpen = false;
+	}
+
+	async function handleConfirmOverwrite(): Promise<void> {
+		if (!prId || newBranchDialogMode !== 'confirm-overwrite') return;
+		const result = await pushProposed(prId, {
+			newBranchName: newBranchValue,
+			force: true,
+		});
+		if (!result) {
+			newBranchDialogOpen = false;
+			return;
+		}
+		if (result.status === 'pushed') {
+			pushSuccessTrigger++;
+		}
+		newBranchDialogOpen = false;
+	}
+
+	async function handleResolveAndPush(): Promise<void> {
+		if (!prId || isResolving) return;
+		conflictDialog = null;
+		await resolveAndPushProposed(prId);
+	}
+
+	function dismissConflictDialog(): void {
+		conflictDialog = null;
+	}
+
+	function handleStop(): void {
+		if (!prId) return;
+		abortChatTurn(prId);
+	}
+
 	async function openDiff(commit: { sha: string; subject: string }): Promise<void> {
 		if (!prId) return;
 		try {
@@ -202,12 +326,67 @@
 			<span class="panel-title">Chat</span>
 		{/if}
 		<div class="header-actions">
+			{#if commitCount > 0}
+				<div
+					class="push-pill"
+					use:motion={{ preset: 'pulse', trigger: pushSuccessTrigger }}
+				>
+					<button
+						type="button"
+						class="push-pill-main"
+						onclick={handlePush}
+						title={`Push ${commitCount} commit${commitCount === 1 ? '' : 's'}${selectedPr?.sourceBranch ? ` to ${selectedPr.sourceBranch}` : ''}`}
+						aria-label={`Push ${commitCount} commit${commitCount === 1 ? '' : 's'} to PR branch`}
+						disabled={isPushing || isStreaming || isResolving}
+					>
+						{#if isPushing}
+							<Loader2 size={12} class="motion-essential-spin" />
+							<span class="push-pill-label">Pushing…</span>
+						{:else}
+							<Upload size={12} />
+							<span class="push-pill-label">
+								Push
+								<span class="push-pill-count">{commitCount}</span>
+							</span>
+						{/if}
+					</button>
+					<PopoverRoot bind:open={pushMenuOpen}>
+						<PopoverTrigger>
+							<button
+								type="button"
+								class="push-pill-chevron"
+								aria-label="Push options"
+								title="Push options"
+								disabled={isPushing || isStreaming || isResolving}
+							>
+								<ChevronDown size={11} />
+							</button>
+						</PopoverTrigger>
+						<PopoverContent class="w-72 p-1" align="end" side="bottom">
+							<button
+								type="button"
+								class="push-menu-item"
+								onclick={openNewBranchDialog}
+							>
+								<GitBranch size={12} class="push-menu-item-icon" />
+								<div class="push-menu-item-body">
+									<span class="push-menu-item-title">Push to new branch…</span>
+									<span class="push-menu-item-hint">
+										Don't change the PR — push the agent's commits to a new ref.
+									</span>
+								</div>
+							</button>
+						</PopoverContent>
+					</PopoverRoot>
+				</div>
+			{/if}
 			{#if items.length > 0}
 				<button
 					class="icon-btn"
 					onclick={handleClear}
 					title="Clear conversation"
 					aria-label="Clear conversation"
+					disabled={isPushing || isResolving}
 				>
 					<Trash2 size={13} />
 				</button>
@@ -243,25 +422,38 @@
 				<ul class="proposed-list">
 					{#each proposed.commits as commit (commit.sha)}
 						<li class="proposed-item">
-							<div class="proposed-row">
+							<!-- role="button" instead of <button> so the Copy <button>
+								 inside doesn't end up as a nested <button> (invalid
+								 HTML — browsers reparent the inner button). Native
+								 keyboard activation is restored via Enter/Space. -->
+							<div
+								class="proposed-row"
+								role="button"
+								tabindex="0"
+								title="View diff"
+								onclick={() => void openDiff(commit)}
+								onkeydown={(e) => {
+									if (e.key === 'Enter' || e.key === ' ') {
+										e.preventDefault();
+										void openDiff(commit);
+									}
+								}}
+							>
 								<code class="proposed-sha">{commit.shortSha}</code>
 								<span class="proposed-subject" title={commit.subject}>
 									{commit.subject}
 								</span>
 								<button
 									class="proposed-icon-btn"
+									type="button"
 									title="Copy SHA"
 									aria-label="Copy SHA"
-									onclick={() => copyToClipboard(commit.sha)}
+									onclick={(e) => {
+										e.stopPropagation();
+										copyToClipboard(commit.sha);
+									}}
 								>
 									<Copy size={11} />
-								</button>
-								<button
-									class="proposed-icon-btn"
-									title="View diff"
-									onclick={() => void openDiff(commit)}
-								>
-									Diff
 								</button>
 							</div>
 						</li>
@@ -296,13 +488,14 @@
 						</li>
 					{:else if item.role === 'user'}
 						<li class="msg msg--user">
-							<span class="msg-label">You</span>
-							<div class="msg-body msg-body--user">{item.content}</div>
+							<div class="bubble bubble--user">{item.content}</div>
 						</li>
 					{:else}
 						<li class="msg msg--assistant">
-							<span class="msg-label">Agent</span>
-							<div class="msg-body msg-body--assistant">
+							<div class="agent-avatar">
+								<Bot size={12} />
+							</div>
+							<div class="bubble bubble--assistant">
 								{#if item.content}
 									{@html assistantHtml(item.content)}
 								{:else if item.isStreaming}
@@ -349,61 +542,232 @@
 
 	<!-- Input -->
 	<form class="input-row" onsubmit={handleSubmit}>
-		<textarea
-			bind:this={textareaEl}
-			bind:value={inputValue}
-			class="input-textarea"
-			placeholder="Ask anything…"
-			rows="1"
-			onkeydown={handleKeydown}
-			disabled={!prId}
-		></textarea>
-		<button
-			class="send-btn"
-			type="submit"
-			disabled={!prId || inputValue.trim().length === 0 || isStreaming}
-			aria-label="Send message"
-		>
-			<Send size={14} />
-		</button>
+		<div class="composer" class:composer--disabled={!prId}>
+			<textarea
+				bind:this={textareaEl}
+				bind:value={inputValue}
+				class="input-textarea"
+				placeholder="Ask anything…"
+				rows="1"
+				onkeydown={handleKeydown}
+				disabled={!prId}
+			></textarea>
+			<div class="composer-actions">
+				{#if isStreaming}
+					<button
+						type="button"
+						class="composer-btn composer-btn--stop"
+						onclick={handleStop}
+						aria-label="Stop generation"
+						title="Stop generation"
+					>
+						<Square size={10} fill="currentColor" />
+					</button>
+				{:else}
+					<button
+						class="composer-btn composer-btn--send"
+						type="submit"
+						disabled={!prId || inputValue.trim().length === 0}
+						aria-label="Send message"
+						title="Send message"
+					>
+						<Send size={12} />
+					</button>
+				{/if}
+			</div>
+		</div>
 	</form>
 </div>
 
-<!-- Diff overlay -->
-{#if diffOpen}
+<!-- Conflict dialog (shown after a push attempt finds conflicts) -->
+{#if conflictDialog}
 	<div
 		class="diff-overlay"
 		role="dialog"
 		aria-modal="true"
-		aria-label="Proposed commit diff"
+		aria-label="Push conflicts"
 	>
 		<button
 			type="button"
 			class="diff-overlay-backdrop"
-			aria-label="Close diff"
-			onclick={() => (diffOpen = null)}
+			aria-label="Close conflict dialog"
+			onclick={dismissConflictDialog}
 		></button>
-		<div class="diff-card" role="document">
-			<div class="diff-card-header">
-				<code class="diff-card-sha">{diffOpen.sha.slice(0, 12)}</code>
-				<span class="diff-card-subject">{diffOpen.subject}</span>
+		<div class="conflict-card" role="document">
+			<div class="conflict-card-header">
+				<AlertTriangle size={14} class="conflict-card-icon" />
+				<span class="conflict-card-title">Push conflicts</span>
 				<button
 					class="icon-btn"
-					onclick={() => (diffOpen = null)}
-					aria-label="Close diff"
+					onclick={dismissConflictDialog}
+					aria-label="Close conflict dialog"
 				>
 					<X size={14} />
 				</button>
 			</div>
-			<pre class="diff-card-body"><code>{diffOpen.body}</code></pre>
+			<div class="conflict-card-body">
+				<p class="conflict-card-summary">
+					The PR branch <code>{conflictDialog.branch}</code> has changed since the agent started, and merging the agent's commits would conflict in:
+				</p>
+				<ul class="conflict-file-list">
+					{#each conflictDialog.files as file (file)}
+						<li><code>{file}</code></li>
+					{/each}
+				</ul>
+				<p class="conflict-card-hint">
+					Want the agent to attempt resolving these conflicts? It will edit the affected files in the worktree, run <code>git merge --continue</code>, then push.
+				</p>
+			</div>
+			<div class="conflict-card-footer">
+				<button
+					type="button"
+					class="conflict-btn conflict-btn--secondary"
+					onclick={dismissConflictDialog}
+				>
+					Cancel
+				</button>
+				<button
+					type="button"
+					class="conflict-btn conflict-btn--primary"
+					onclick={handleResolveAndPush}
+				>
+					Let agent resolve
+				</button>
+			</div>
 		</div>
 	</div>
 {/if}
 
+<!-- New-branch push dialog: `input` mode collects the branch name; once the
+	 server reports the ref already exists we flip to `confirm-overwrite`
+	 inside the same Dialog and require an explicit confirmation before
+	 force-pushing. -->
+<Dialog.Root bind:open={newBranchDialogOpen}>
+	<Dialog.Portal>
+		<Dialog.Overlay />
+		<Dialog.Content class="new-branch-dialog-content">
+			<Dialog.Header>
+				<Dialog.Title>
+					<span class="new-branch-title">
+						{#if newBranchDialogMode === 'input'}
+							<GitBranch size={16} />
+							Push to a new branch
+						{:else}
+							<AlertTriangle size={16} class="new-branch-title-warn" />
+							Branch already exists
+						{/if}
+					</span>
+				</Dialog.Title>
+				<Dialog.Description>
+					{#if newBranchDialogMode === 'input'}
+						Push the agent's commits to a brand-new branch on the remote. The
+						current PR is not modified.
+					{:else}
+						<code>{newBranchValue}</code> already exists on the remote.
+						Overwrite it with the agent's commits?
+					{/if}
+				</Dialog.Description>
+			</Dialog.Header>
+
+			{#if newBranchDialogMode === 'input'}
+				<label class="new-branch-field">
+					<span class="new-branch-label">Branch name</span>
+					<Input
+						bind:ref={newBranchInputEl}
+						type="text"
+						autocomplete="off"
+						spellcheck={false}
+						bind:value={newBranchValue}
+						placeholder={suggestedNewBranchName()}
+						disabled={isPushing}
+						class="font-mono"
+						onkeydown={(e: KeyboardEvent) => {
+							if (e.key === 'Enter' && isValidNewBranchName(newBranchValue)) {
+								e.preventDefault();
+								void handleNewBranchSubmit();
+							}
+						}}
+					/>
+				</label>
+				{#if newBranchValue.length > 0 && !isValidNewBranchName(newBranchValue)}
+					<p class="new-branch-hint new-branch-hint--error">
+						Branch names can't be empty, contain spaces, start with
+						<code>-</code>, or contain <code>..</code>.
+					</p>
+				{:else}
+					<p class="new-branch-hint">
+						The branch will start at the PR's head SHA plus the
+						{commitCount} agent commit{commitCount === 1 ? '' : 's'}.
+					</p>
+				{/if}
+			{:else}
+				<p class="new-branch-hint">
+					This force-pushes the new branch and will discard any commits on the
+					existing remote ref.
+				</p>
+			{/if}
+
+			<Dialog.Footer>
+				<Button
+					variant="outline"
+					size="sm"
+					onclick={() => (newBranchDialogOpen = false)}
+					disabled={isPushing}
+				>
+					Cancel
+				</Button>
+				{#if newBranchDialogMode === 'input'}
+					<Button
+						variant="default"
+						size="sm"
+						onclick={handleNewBranchSubmit}
+						disabled={isPushing || !isValidNewBranchName(newBranchValue)}
+					>
+						{#if isPushing}
+							<Loader2 size={12} class="motion-essential-spin" />
+							Pushing…
+						{:else}
+							Push
+						{/if}
+					</Button>
+				{:else}
+					<Button
+						variant="destructive"
+						size="sm"
+						onclick={handleConfirmOverwrite}
+						disabled={isPushing}
+					>
+						{#if isPushing}
+							<Loader2 size={12} class="motion-essential-spin" />
+							Overwriting…
+						{:else}
+							Overwrite
+						{/if}
+					</Button>
+				{/if}
+			</Dialog.Footer>
+		</Dialog.Content>
+	</Dialog.Portal>
+</Dialog.Root>
+
+<!-- Diff overlay (Pierre-rendered, portaled to body so it centres on the
+	 viewport — the right panel's parent has a transform that would
+	 otherwise scope `position: fixed` to the panel rather than the screen). -->
+{#if diffOpen}
+	<ProposedDiffModal
+		sha={diffOpen.sha}
+		subject={diffOpen.subject}
+		body={diffOpen.body}
+		onClose={() => (diffOpen = null)}
+	/>
+{/if}
+
 <svelte:window
 	onkeydown={(e) => {
-		if (e.key === 'Escape' && diffOpen) {
-			diffOpen = null;
+		if (e.key === 'Escape') {
+			if (diffOpen) diffOpen = null;
+			else if (conflictDialog) conflictDialog = null;
+			// `newBranchDialogOpen` is handled by the shadcn Dialog primitive.
 		}
 	}}
 />
@@ -497,6 +861,171 @@
 		color: var(--color-text-secondary);
 	}
 
+	.icon-btn:disabled {
+		opacity: 0.45;
+		cursor: not-allowed;
+	}
+
+	/* Split-pill push button. Two clickable regions joined by a thin
+	   divider — the wider left half pushes to the PR branch (default),
+	   the narrower right half opens a popover with alternative targets.
+	   The pulse animation on success runs on the wrapper so both halves
+	   share it.
+
+	   Style: a neutral elevated chip. The accent comes through only in
+	   the upload icon + count badge so the button reads as primary
+	   without flooding the panel header with color. Both halves are
+	   transparent and inherit the wrapper background, so the surface
+	   is uniform across the divider. */
+	.push-pill {
+		display: inline-flex;
+		align-items: stretch;
+		height: 24px;
+		border-radius: 6px;
+		overflow: hidden;
+		background: transparent;
+		color: var(--color-text-primary);
+		border: 1px solid color-mix(in srgb, var(--color-text-muted) 55%, transparent);
+		transition: background-color var(--duration-snap), border-color var(--duration-snap);
+	}
+
+	.push-pill:hover:not(:has(button:disabled)) {
+		background: var(--color-bg-tertiary);
+		border-color: var(--color-text-muted);
+	}
+
+	.push-pill-main,
+	.push-pill-chevron {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		border: none;
+		background: transparent;
+		color: inherit;
+		cursor: pointer;
+	}
+
+	/* Click feedback only — hover lives on the wrapper and applies to
+	   the whole pill uniformly. The :active darken gives a momentary
+	   "press" cue on whichever half was actually clicked, without
+	   creating a persistent half-vs-half tint mismatch. */
+	.push-pill-main:active:not(:disabled),
+	.push-pill-chevron:active:not(:disabled) {
+		background: rgba(0, 0, 0, 0.08);
+	}
+
+	.push-pill-main {
+		gap: 6px;
+		padding: 0 9px;
+		font-size: 12px;
+		font-weight: 500;
+		letter-spacing: 0.01em;
+	}
+
+	/* Upload / Loader icon picks up the accent — that's where the color
+	   actually lives. */
+	.push-pill-main :global(svg) {
+		color: var(--color-accent);
+	}
+
+	.push-pill-label {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		line-height: 1;
+		color: var(--color-text-primary);
+	}
+
+	.push-pill-count {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		min-width: 16px;
+		height: 16px;
+		padding: 0 5px;
+		border-radius: 8px;
+		background: color-mix(in srgb, var(--color-accent) 22%, transparent);
+		color: var(--color-accent);
+		font-size: 10px;
+		font-weight: 700;
+		font-variant-numeric: tabular-nums;
+		line-height: 1;
+	}
+
+	.push-pill-chevron {
+		width: 18px;
+		padding: 0;
+		border-left: 1px solid color-mix(in srgb, var(--color-text-muted) 55%, transparent);
+		color: var(--color-text-muted);
+	}
+
+	.push-pill-main:disabled,
+	.push-pill-chevron:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+
+	/* Items inside the shadcn Popover surface; the surface itself comes
+	   styled by PopoverContent (we just pass `w-72 p-1`). The inner radius
+	   is the outer (rounded-xl = 12px) minus the wrapper padding (p-1 = 4px)
+	   so the hover background's corners stay concentric with the popover. */
+	.push-menu-item {
+		display: flex;
+		align-items: flex-start;
+		gap: 8px;
+		width: 100%;
+		padding: 8px 10px;
+		background: transparent;
+		border: none;
+		border-radius: 8px;
+		text-align: left;
+		cursor: pointer;
+		transition: background-color var(--duration-snap);
+	}
+
+	.push-menu-item:hover {
+		background: var(--color-bg-tertiary);
+	}
+
+	:global(.push-menu-item-icon) {
+		flex-shrink: 0;
+		margin-top: 2px;
+		color: var(--color-accent);
+	}
+
+	.push-menu-item-body {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		min-width: 0;
+	}
+
+	.push-menu-item-title {
+		font-size: 12px;
+		font-weight: 500;
+		color: var(--color-text-primary);
+	}
+
+	.push-menu-item-hint {
+		font-size: 11px;
+		color: var(--color-text-muted);
+		line-height: 1.4;
+	}
+
+	/* The Loader2 icon needs to spin during a push. The .motion-essential-*
+	   pattern opts back into animation under prefers-reduced-motion (per
+	   project convention) so users with reduced-motion still see the
+	   loading affordance. Without this they'd see a static icon and have
+	   no signal that a push is in flight. */
+	:global(.motion-essential-spin) {
+		animation: motion-essential-spin 1s linear infinite;
+	}
+
+	@keyframes motion-essential-spin {
+		from { transform: rotate(0deg); }
+		to { transform: rotate(360deg); }
+	}
+
 	/* Proposed-changes strip */
 	.proposed-strip {
 		flex-shrink: 0;
@@ -555,6 +1084,21 @@
 		display: flex;
 		align-items: center;
 		gap: 6px;
+		padding: 2px 4px;
+		margin: 0 -4px;
+		border-radius: 4px;
+		cursor: pointer;
+		transition: background-color var(--duration-snap);
+	}
+
+	.proposed-row:hover {
+		background: var(--color-bg-tertiary);
+	}
+
+	.proposed-row:focus-visible {
+		outline: none;
+		background: var(--color-bg-tertiary);
+		box-shadow: 0 0 0 1px var(--color-accent);
 	}
 
 	.proposed-sha {
@@ -604,43 +1148,71 @@
 	.messages {
 		list-style: none;
 		margin: 0;
-		padding: 12px;
+		padding: 12px 10px;
 		display: flex;
 		flex-direction: column;
-		gap: 10px;
+		gap: 8px;
 	}
 
 	.msg {
 		display: flex;
-		flex-direction: column;
-		gap: 3px;
 	}
 
-	.msg-label {
-		font-size: 10px;
-		font-weight: 600;
-		letter-spacing: 0.05em;
-		text-transform: uppercase;
-		color: var(--color-text-muted);
+	.msg--user {
+		justify-content: flex-end;
 	}
 
-	.msg-body {
+	.msg--assistant {
+		align-items: flex-start;
+		gap: 8px;
+	}
+
+	/* Shared bubble base */
+	.bubble {
 		font-size: 13px;
 		line-height: 1.55;
-		color: var(--color-text-primary);
 		word-wrap: break-word;
 	}
 
-	.msg-body--user {
+	/* User bubble — right-aligned, accent background */
+	.bubble--user {
+		background: var(--color-accent);
+		color: #fff;
+		border-radius: 14px 14px 4px 14px;
+		padding: 8px 12px;
+		max-width: 82%;
 		white-space: pre-wrap;
 	}
 
-	.msg-body--assistant :global(h2) {
+	/* Agent avatar dot */
+	.agent-avatar {
+		width: 22px;
+		height: 22px;
+		border-radius: 50%;
+		background: var(--color-bg-tertiary);
+		border: 1px solid var(--color-border-subtle);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		flex-shrink: 0;
+		margin-top: 2px;
+		color: var(--color-text-muted);
+	}
+
+	/* Assistant — no bubble, plain content next to the avatar */
+	.bubble--assistant {
+		flex: 1;
+		min-width: 0;
+		color: var(--color-text-primary);
+		padding-top: 2px;
+	}
+
+	.bubble--assistant :global(h2) {
 		font-size: 14px;
 		font-weight: 600;
 		margin: 12px 0 4px;
 	}
-	.msg-body--assistant :global(h3) {
+	.bubble--assistant :global(h3) {
 		font-size: 12px;
 		font-weight: 600;
 		text-transform: uppercase;
@@ -648,37 +1220,37 @@
 		color: var(--color-text-secondary);
 		margin: 10px 0 4px;
 	}
-	.msg-body--assistant :global(p) { margin: 4px 0; }
-	.msg-body--assistant :global(ul),
-	.msg-body--assistant :global(ol) { margin: 4px 0; padding-left: 18px; }
-	.msg-body--assistant :global(li) { margin: 2px 0; }
-	.msg-body--assistant :global(strong) { font-weight: 600; }
-	.msg-body--assistant :global(code) {
+	.bubble--assistant :global(p) { margin: 4px 0; }
+	.bubble--assistant :global(ul),
+	.bubble--assistant :global(ol) { margin: 4px 0; padding-left: 18px; }
+	.bubble--assistant :global(li) { margin: 2px 0; }
+	.bubble--assistant :global(strong) { font-weight: 600; }
+	.bubble--assistant :global(code) {
 		font-family: var(--font-mono);
 		font-size: 11.5px;
 		background: var(--color-bg-tertiary);
 		border-radius: 3px;
 		padding: 1px 4px;
 	}
-	.msg-body--assistant :global(pre) {
+	.bubble--assistant :global(pre) {
 		margin: 6px 0;
 		padding: 8px 10px;
 		background: var(--color-diff-bg);
 		border-radius: 4px;
 		overflow-x: auto;
 	}
-	.msg-body--assistant :global(pre code) {
+	.bubble--assistant :global(pre code) {
 		background: none;
 		padding: 0;
 		font-size: 11px;
 		line-height: 1.5;
 	}
-	.msg-body--assistant :global(a) {
+	.bubble--assistant :global(a) {
 		color: var(--color-accent);
 		text-decoration: underline;
 		text-underline-offset: 2px;
 	}
-	.msg-body--assistant :global(blockquote) {
+	.bubble--assistant :global(blockquote) {
 		border-left: 2px solid var(--color-border-subtle);
 		margin: 8px 0;
 		padding: 2px 10px;
@@ -835,56 +1407,129 @@
 		text-underline-offset: 2px;
 	}
 
-	/* Input row */
+	/* Input row — outer form is now just a layout/padding wrapper. The
+	   visible "input" is the .composer surface inside, which unifies the
+	   textarea and the send/stop button into a single bordered chip with
+	   a shared focus-within ring. */
 	.input-row {
 		display: flex;
-		align-items: flex-end;
-		gap: 6px;
-		padding: 8px;
+		padding: 10px 10px 12px;
 		border-top: 1px solid var(--color-border-subtle);
 		background: var(--color-panel-bg);
 		flex-shrink: 0;
 	}
 
+	.composer {
+		position: relative;
+		flex: 1;
+		display: flex;
+		align-items: flex-end;
+		gap: 6px;
+		padding: 6px 6px 6px 14px;
+		background: var(--color-bg-elevated);
+		border: 1px solid var(--color-border-subtle);
+		border-radius: 999px;
+		box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+		transition:
+			border-color var(--duration-quick) var(--ease-out-expo),
+			box-shadow var(--duration-quick) var(--ease-out-expo),
+			background-color var(--duration-quick) var(--ease-out-expo);
+	}
+
+	.composer:hover:not(.composer--disabled):not(:focus-within) {
+		border-color: var(--color-border);
+	}
+
+	.composer:focus-within {
+		border-color: color-mix(in srgb, var(--color-accent) 70%, transparent);
+		box-shadow:
+			0 0 0 3px color-mix(in srgb, var(--color-accent) 14%, transparent),
+			0 1px 0 rgba(0, 0, 0, 0.04);
+	}
+
+	.composer--disabled {
+		opacity: 0.6;
+	}
+
 	.input-textarea {
 		flex: 1;
-		min-height: 28px;
+		min-width: 0;
+		min-height: 22px;
 		max-height: 96px;
-		padding: 6px 10px;
+		padding: 6px 0;
 		font-size: 13px;
-		line-height: 1.4;
+		line-height: 1.45;
 		font-family: inherit;
 		color: var(--color-text-primary);
-		background: var(--color-bg-tertiary);
-		border: 1px solid var(--color-border-subtle);
-		border-radius: 6px;
+		background: transparent;
+		border: none;
+		border-radius: 0;
 		resize: none;
 		outline: none;
-		transition: border-color var(--duration-snap);
 	}
 
-	.input-textarea:focus {
-		border-color: var(--color-accent);
+	.input-textarea::placeholder {
+		color: var(--color-text-muted);
 	}
 
-	.send-btn {
-		width: 30px;
-		height: 30px;
-		border-radius: 6px;
+	.input-textarea:disabled {
+		cursor: not-allowed;
+	}
+
+	.composer-actions {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		flex-shrink: 0;
+		padding-bottom: 1px;
+	}
+
+	.composer-btn {
+		width: 26px;
+		height: 26px;
+		border-radius: 50%;
 		border: none;
-		background: var(--color-accent);
-		color: var(--color-bg-primary);
 		cursor: pointer;
 		display: flex;
 		align-items: center;
 		justify-content: center;
 		flex-shrink: 0;
-		transition: opacity var(--duration-snap);
+		transition:
+			background-color var(--duration-snap),
+			color var(--duration-snap),
+			opacity var(--duration-snap),
+			transform var(--duration-snap);
 	}
 
-	.send-btn:disabled {
-		opacity: 0.4;
+	.composer-btn:active:not(:disabled) {
+		transform: scale(0.94);
+	}
+
+	.composer-btn--send {
+		background: var(--color-accent);
+		color: #fff;
+	}
+
+	.composer-btn--send:hover:not(:disabled) {
+		background: var(--color-accent-hover);
+	}
+
+	.composer-btn--send:disabled {
+		background: var(--color-bg-tertiary);
+		color: var(--color-text-muted);
 		cursor: not-allowed;
+	}
+
+	.composer-btn--stop {
+		background: var(--color-bg-tertiary);
+		color: var(--color-text-secondary);
+		border: 1px solid var(--color-border-subtle);
+	}
+
+	.composer-btn--stop:hover {
+		background: var(--color-bg-primary);
+		color: var(--color-text-primary);
+		border-color: var(--color-border);
 	}
 
 	/* Diff overlay */
@@ -908,12 +1553,10 @@
 		margin: 0;
 	}
 
-	.diff-card {
+	/* Conflict dialog */
+	.conflict-card {
 		position: relative;
-	}
-
-	.diff-card {
-		max-width: min(900px, 90vw);
+		max-width: min(520px, 90vw);
 		max-height: 80vh;
 		background: var(--color-panel-bg);
 		border: 1px solid var(--color-border);
@@ -923,7 +1566,7 @@
 		overflow: hidden;
 	}
 
-	.diff-card-header {
+	.conflict-card-header {
 		display: flex;
 		align-items: center;
 		gap: 8px;
@@ -932,29 +1575,158 @@
 		background: var(--color-bg-secondary);
 	}
 
-	.diff-card-sha {
-		font-family: var(--font-mono);
-		font-size: 11px;
+	:global(.conflict-card-icon) {
 		color: var(--color-accent);
 		flex-shrink: 0;
 	}
 
-	.diff-card-subject {
+	.conflict-card-title {
 		font-size: 13px;
+		font-weight: 600;
 		color: var(--color-text-primary);
 		flex: 1;
 		min-width: 0;
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
 	}
 
-	.diff-card-body {
-		margin: 0;
-		padding: 12px;
+	.conflict-card-body {
+		padding: 14px 16px;
+		font-size: 12px;
+		line-height: 1.55;
+		color: var(--color-text-secondary);
+		overflow-y: auto;
+	}
+
+	.conflict-card-summary,
+	.conflict-card-hint {
+		margin: 0 0 10px;
+	}
+
+	.conflict-card-hint {
+		margin: 12px 0 0;
+		color: var(--color-text-muted);
+	}
+
+	.conflict-card-summary code,
+	.conflict-card-hint code {
 		font-family: var(--font-mono);
 		font-size: 11px;
-		line-height: 1.5;
-		overflow: auto;
+		background: var(--color-bg-tertiary);
+		border-radius: 3px;
+		padding: 1px 4px;
+		color: var(--color-text-primary);
+	}
+
+	.conflict-file-list {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		max-height: 180px;
+		overflow-y: auto;
+	}
+
+	.conflict-file-list li {
+		font-family: var(--font-mono);
+		font-size: 11px;
+		color: var(--color-text-primary);
+		background: var(--color-bg-tertiary);
+		border-radius: 3px;
+		padding: 4px 6px;
+	}
+
+	.conflict-card-footer {
+		display: flex;
+		align-items: center;
+		justify-content: flex-end;
+		gap: 8px;
+		padding: 10px 12px;
+		border-top: 1px solid var(--color-border-subtle);
+		background: var(--color-bg-secondary);
+	}
+
+	.conflict-btn {
+		font-size: 12px;
+		padding: 5px 12px;
+		border-radius: 5px;
+		border: 1px solid transparent;
+		cursor: pointer;
+		transition:
+			background-color var(--duration-snap),
+			border-color var(--duration-snap);
+	}
+
+	.conflict-btn--secondary {
+		background: transparent;
+		color: var(--color-text-secondary);
+		border-color: var(--color-border-subtle);
+	}
+
+	.conflict-btn--secondary:hover {
+		background: var(--color-bg-tertiary);
+		color: var(--color-text-primary);
+	}
+
+	.conflict-btn--primary {
+		background: var(--color-accent);
+		color: var(--color-bg-primary);
+		font-weight: 500;
+	}
+
+	.conflict-btn--primary:hover {
+		opacity: 0.9;
+	}
+
+	/* New-branch dialog (shadcn Dialog content). The shadcn Input
+	   handles its own styling; we add label/hint typography and the
+	   title-with-icon shell. */
+	:global(.new-branch-dialog-content) {
+		max-width: 440px !important;
+		width: 100%;
+	}
+
+	.new-branch-title {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+	}
+
+	:global(.new-branch-title-warn) {
+		color: var(--color-warning, #d97706);
+	}
+
+	.new-branch-field {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+		margin-top: 4px;
+	}
+
+	.new-branch-label {
+		font-size: 11px;
+		font-weight: 600;
+		color: var(--color-text-secondary);
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+	}
+
+	.new-branch-hint {
+		margin: 0;
+		font-size: 11px;
+		color: var(--color-text-muted);
+		line-height: 1.4;
+	}
+
+	.new-branch-hint--error {
+		color: var(--color-danger, #d93b3b);
+	}
+
+	.new-branch-hint code {
+		font-family: var(--font-mono);
+		font-size: 10.5px;
+		background: var(--color-bg-tertiary);
+		border-radius: 3px;
+		padding: 1px 4px;
 	}
 </style>

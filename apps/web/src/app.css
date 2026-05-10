@@ -645,6 +645,100 @@ body {
     text-decoration: var(--shiki-dark-text-decoration) !important;
 }
 
+/* ──────────────────────────────────────────────────────────
+   Prose tables — global styling for GFM tables rendered by
+   marked. The `.prose-table` wrapper is added by the postprocess
+   hook in src/lib/utils/markdown.ts and provides horizontal
+   scroll for tables wider than their container.
+
+   Lives globally (not in per-component prose styles) because all
+   markdown-rendering surfaces should treat tables identically;
+   keeping it out of each component's `:global(...)` block avoids
+   duplication and drift.
+   ────────────────────────────────────────────────────────── */
+.prose-table {
+    width: 100%;
+    overflow-x: auto;
+    margin: 0 0 12px;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 6px;
+    background: var(--color-bg-primary);
+    /* Allow keyboard users to focus and scroll the region. */
+    outline: none;
+}
+
+.prose-table:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+}
+
+.prose-table:last-child {
+    margin-bottom: 0;
+}
+
+.prose-table > table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    line-height: 1.5;
+    /* Keep cells from collapsing to single-character columns; long words
+       still wrap thanks to the wrapper's overflow-x. */
+    min-width: max-content;
+}
+
+.prose-table thead {
+    background: var(--color-bg-secondary);
+}
+
+.prose-table thead th {
+    padding: 8px 12px;
+    text-align: left;
+    font-weight: 600;
+    color: var(--color-text-primary);
+    border-bottom: 1px solid var(--color-border-subtle);
+    white-space: nowrap;
+}
+
+.prose-table tbody td {
+    padding: 8px 12px;
+    color: var(--color-text-secondary);
+    border-top: 1px solid var(--color-border-subtle);
+    vertical-align: top;
+}
+
+.prose-table tbody tr:first-child td {
+    border-top: none;
+}
+
+.prose-table tbody tr:hover td {
+    background: color-mix(in srgb, var(--color-text-muted) 6%, transparent);
+}
+
+/* GFM column-alignment markers (`:---`, `:--:`, `---:`) become `align`
+   attributes on th/td. Honor them. */
+.prose-table th[align="left"],
+.prose-table td[align="left"] { text-align: left; }
+.prose-table th[align="center"],
+.prose-table td[align="center"] { text-align: center; }
+.prose-table th[align="right"],
+.prose-table td[align="right"] { text-align: right; }
+
+/* Inline code inside tables — slightly tighter than free-flowing prose
+   code so cells don't bloat. Component-level `:global(code)` rules win
+   on specificity, so this only kicks in where no override exists. */
+.prose-table code {
+    font-family: var(--font-mono);
+    font-size: 0.9em;
+    background: var(--color-bg-tertiary);
+    padding: 1px 4px;
+    border-radius: 3px;
+    white-space: nowrap;
+}
+
+.prose-table p {
+    margin: 0;
+}
+
 /* ── Progress bar indeterminate animation ───────────────── */
 @keyframes indeterminate-progress {
     0% { transform: translateX(-100%); }

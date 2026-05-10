@@ -30,6 +30,7 @@
   "dependencies": {
     "@elysiajs/eden": "^1.4.9",
     "@internationalized/date": "^3.12.0",
+    "@pierre/diffs": "^1.1.15",
     "@pierre/trees": "^1.0.0-beta.3",
     "@revv/shared": "workspace:*",
     "@tauri-apps/api": "^2.10.1",
