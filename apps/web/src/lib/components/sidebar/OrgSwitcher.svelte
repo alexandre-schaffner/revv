@@ -136,7 +136,12 @@
 		color: var(--color-text-primary);
 		cursor: pointer;
 		text-align: left;
-		transition: background-color var(--duration-snap);
+		transition:
+			background-color var(--duration-snap),
+			width var(--duration-snap) var(--ease-out-expo),
+			height var(--duration-snap) var(--ease-out-expo),
+			padding var(--duration-snap) var(--ease-out-expo),
+			border-radius var(--duration-snap) var(--ease-out-expo);
 	}
 
 	:global(.org-trigger:hover) {
@@ -162,6 +167,10 @@
 		border-radius: 5px;
 		object-fit: cover;
 		flex-shrink: 0;
+		transition:
+			width var(--duration-snap) var(--ease-out-expo),
+			height var(--duration-snap) var(--ease-out-expo),
+			border-radius var(--duration-snap) var(--ease-out-expo);
 	}
 
 	:global(.org-trigger-avatar--collapsed) {

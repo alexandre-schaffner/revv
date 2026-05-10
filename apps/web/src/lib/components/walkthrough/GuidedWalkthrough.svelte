@@ -209,11 +209,13 @@
 	);
 
 	// ── Stepper visibility ──────────────────────────────────────────────
-	// Hidden only in the initial "not yet generated" state (when the
-	// "Generate walkthrough" button is showing and nothing has started).
-	// Visible once streaming begins, after content exists, or whenever
-	// the generate button is not shown.
-	const stepperVisible = $derived(!showGenerateButton || isStreaming || hasWalkthroughContent);
+	// Visible whenever we've finished hydrating — including the pre-generation
+	// state where the "Generate walkthrough" button is showing. In that initial
+	// state every cell falls through to `chapter-cell--unavailable` and renders
+	// dimmed, giving the user a preview of the chapter structure before kickoff.
+	// Hidden only during hydration so we don't flash an empty stepper before
+	// we know whether the cache has content.
+	const stepperVisible = $derived(!hydrating);
 
 	// ── Stagger tracking ────────────────────────────────────────────────
 	// Assign a per-block entrance delay the first time each block is
@@ -1007,48 +1009,33 @@
 		opacity: 1;
 	}
 
-	/* Viewport-anchored centering for the empty state — mirrors the approach
-	   used by `.walkthrough-content` but simplified because there is NO side
-	   rail in the empty state, so we don't need to reserve col 5.
-	   Using the content-layout's full 6-col formula here would clamp col_1 to
-	   its 24px floor on common laptop widths (the `100% - 1312px` term
-	   reserves space for a rail that doesn't exist), pushing the Try again /
-	   Generate walkthrough button hard-left instead of viewport-centered.
+	/* Pane-anchored centering for the empty state. Absolutely positioned
+	   inside the nearest positioned ancestor (`.review-page` from the route
+	   shell), so the button lands at the dead centre of the visible main
+	   pane regardless of what's rendered above it (page title, dimmed
+	   stepper). Without `position: absolute` the empty state sits in normal
+	   flow under the stepper and its 60vh min-height pushes the centred
+	   content below the pane midline.
 
-	   col 1 = max(24px, calc(100% - 50vw - 410px))
-	     - 100% - 50vw - 410px : places col-2 centre at viewport x = 50vw.
-	         Derivation: sidebar width S = 100vw - 100% (since 100% = main
-	         width = V - S). Content viewport-centre = S + col_1 + 410;
-	         setting that to V/2 = 50vw gives col_1 = 100% - 50vw - 410. When
-	         S changes via pane toggle, `100%` and `50vw` shift in lockstep
-	         so content viewport x stays at V/2 — no horizontal jump.
-	     - 24px floor : fallback on viewports so narrow that viewport-centering
-	         would overlap the sidebar. In that regime the jump is
-	         geometrically unavoidable; 24px at least keeps the content inside
-	         the main area.
-	   col 2 = 820px content track (same width as `.walkthrough-content` col 3
-	           for visual parity with the populated state).
-	   col 3 = minmax(24px, 1fr) right gutter; soaks up remaining space. */
+	   `pointer-events: none` on the wrapper + `auto` on direct children lets
+	   the empty grid area pass clicks through to the stepper cells underneath
+	   (they're disabled in this state, but it keeps the layer non-blocking). */
 	.walkthrough-empty {
-		display: grid;
-		grid-template-columns:
-			max(24px, calc(100% - 50vw - 410px))
-			minmax(0, 820px)
-			minmax(24px, 1fr);
-		align-content: center;
-		justify-items: center;
-		min-height: 60vh;
-		padding: 80px 0;
-		row-gap: 12px;
+		position: absolute;
+		inset: 0;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 12px;
+		padding: 24px;
+		pointer-events: none;
 	}
 
-	/* `:global(*)` — children include a shadcn Button and other components
-	   whose roots carry a different Svelte scope hash, so a scoped `> *` rule
-	   would skip them and they'd fall into grid auto-flow (landing in col 1/3
-	   instead of col 2, which is exactly the mis-placement that showed the
-	   Try again button drifting into the rail column). */
+	/* `:global(*)` — children include a shadcn Button whose root carries a
+	   different Svelte scope hash, so a scoped `> *` rule would skip it. */
 	.walkthrough-empty > :global(*) {
-		grid-column: 2;
+		pointer-events: auto;
 	}
 
 	/* Loading and stepper-header use the SAME 6-col grid as

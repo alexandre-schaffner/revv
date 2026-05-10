@@ -4,6 +4,7 @@ import { AppRuntime } from '../runtime';
 import { CacheService } from '../services/Cache';
 import { GitHubEtagCache } from '../services/GitHubEtagCache';
 import { FileContentService } from '../services/FileContent';
+import { WalkthroughJobs } from '../services/WalkthroughJobs';
 import { withAuth } from './middleware';
 
 /**
@@ -37,6 +38,27 @@ export const debugRoutes = new Elysia({ prefix: '/api/_debug' })
 			);
 
 			return stats;
+		} catch (e) {
+			return new Response(
+				JSON.stringify({ error: e instanceof Error ? e.message : String(e) }),
+				{ status: 500, headers: { 'Content-Type': 'application/json' } },
+			);
+		}
+	})
+	.get('/mcp-token/:walkthroughId', async ({ params }) => {
+		if (!import.meta.env?.DEV && process.env['REVV_DEBUG'] !== '1') {
+			return new Response('Not found', { status: 404 });
+		}
+
+		try {
+			const token = await AppRuntime.runPromise(
+				Effect.gen(function* () {
+					const jobs = yield* WalkthroughJobs;
+					return yield* jobs.issueSessionToken(params.walkthroughId);
+				}),
+			);
+
+			return { token };
 		} catch (e) {
 			return new Response(
 				JSON.stringify({ error: e instanceof Error ? e.message : String(e) }),
