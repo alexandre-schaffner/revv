@@ -212,11 +212,19 @@ function buildHttpClient(
 
 	return {
 		async registerMcp(params) {
-			// TODO(verify): the exact request path/shape for registering a remote
-			// MCP server on a running `opencode serve` daemon needs confirmation
-			// against the opencode OpenAPI. We post to /mcp/register with a JSON
-			// body of { name, config }. If the route differs, adjust here.
-			const res = await request("POST", "/mcp/register", {
+			// `mcp.add` per opencode 1.14.x OpenAPI: POST /mcp with body
+			// { name, config }. Returns 200 with `{ [name]: MCPStatus }` whose
+			// status is `connected`, `disabled`, `failed`, `needsAuth`, or
+			// `needsClientRegistration`. Anything other than `connected` means
+			// the daemon couldn't actually use the server — most commonly the
+			// remote URL was unreachable or returned the wrong content type.
+			//
+			// We treat `failed` as a hard error here: the agent has no path to
+			// our walkthrough/chat-context tools, and silently degrading would
+			// leave the user staring at the keepalive's "waiting" rows with no
+			// progress (the exact regression that motivated this check after
+			// the route renamed from /mcp/register).
+			const res = await request("POST", "/mcp", {
 				name: params.name,
 				config: params.config,
 			});
@@ -224,6 +232,32 @@ function buildHttpClient(
 				const text = await res.text().catch(() => "");
 				throw new Error(
 					`opencode mcp register failed (${res.status}): ${text.slice(0, 400)}`,
+				);
+			}
+			const contentType = res.headers.get("content-type") ?? "";
+			if (!contentType.includes("application/json")) {
+				// 200 + text/html means we hit the daemon's SPA fallback — the
+				// route doesn't exist on this opencode version. Surface it
+				// instead of letting registration silently no-op.
+				const text = await res.text().catch(() => "");
+				throw new Error(
+					`opencode mcp register returned non-JSON (likely SPA fallback — route missing on this opencode version): ${text.slice(0, 200)}`,
+				);
+			}
+			const status = (await res.json().catch(() => null)) as
+				| Record<string, { status: string; error?: string }>
+				| null;
+			const entry = status?.[params.name];
+			if (!entry) {
+				throw new Error(
+					`opencode mcp register returned no status for '${params.name}'`,
+				);
+			}
+			if (entry.status !== "connected") {
+				throw new Error(
+					`opencode mcp register: '${params.name}' status=${entry.status}${
+						entry.error ? ` — ${entry.error}` : ""
+					}`,
 				);
 			}
 		},

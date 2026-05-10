@@ -753,8 +753,9 @@
 <!-- Diff overlay (Pierre-rendered, portaled to body so it centres on the
 	 viewport — the right panel's parent has a transform that would
 	 otherwise scope `position: fixed` to the panel rather than the screen). -->
-{#if diffOpen}
+{#if diffOpen && prId}
 	<ProposedDiffModal
+		prId={prId}
 		sha={diffOpen.sha}
 		subject={diffOpen.subject}
 		body={diffOpen.body}

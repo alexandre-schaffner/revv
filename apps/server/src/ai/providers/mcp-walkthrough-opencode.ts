@@ -30,7 +30,8 @@ import type {
 	WalkthroughStreamEvent,
 	WalkthroughTokenUsage,
 } from "@revv/shared";
-import { API_PORT } from "@revv/shared";
+import { classifyTool } from "@revv/shared";
+import { serverEnv } from "../../config";
 import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../../constants";
 import { debug, logError } from "../../logger";
 import type { PrFileMeta } from "../../services/GitHub";
@@ -185,17 +186,12 @@ export function streamWalkthroughViaOpencodeMCP(
 		// ── 1. Start daemon (or attach to existing) ──────────────────────
 		await params.deps.jobStarted();
 
-		// Keepalive — runs for the entire task lifetime, not just during postMessage.
-		// Guards against silent periods (SSE gaps, model latency, postMessage resolving
-		// early) that would otherwise trigger the stream guard's 120s inactivity timeout.
-		const keepaliveInterval = setInterval(() => {
-			if (!queryDone && !errorEmitted && !cancelledByCaller) {
-				push({
-					type: "exploration",
-					data: { tool: "waiting", description: "Waiting for model response..." },
-				});
-			}
-		}, 60_000);
+		// No artificial keepalive: every MCP tool handler calls
+		// WalkthroughJobs.emitEvent → activity notifier → push() (see below),
+		// and every opencode exploration event pushes through onExploration.
+		// Both reset the stream-guard's inactivity timer, so genuine silence
+		// for >120s is a real stall we want surfaced, not papered over with
+		// a fake "Waiting for model response..." chip the user has to read.
 
 		let sessionToken: string | null = null;
 		let sessionId: string | null = null;
@@ -277,7 +273,10 @@ export function streamWalkthroughViaOpencodeMCP(
 
 			// ── 2. Issue session token + register MCP server ─────────────
 			sessionToken = await params.deps.issueSessionToken(params.walkthroughId);
-			const mcpUrl = `http://127.0.0.1:${API_PORT}/mcp/walkthrough`;
+			// Use the runtime port (`serverEnv.port` reads `PORT` env var with
+			// 45678 default) — dev mode runs on 45679 via `make dev`, and
+			// hardcoding `API_PORT` would point opencode at the wrong port.
+			const mcpUrl = `http://127.0.0.1:${serverEnv.port}/mcp/walkthrough`;
 			const registrationName = `revv-walkthrough-${params.walkthroughId}`;
 			debug(
 				"walkthrough-opencode-mcp",
@@ -322,33 +321,23 @@ export function streamWalkthroughViaOpencodeMCP(
 				);
 			}
 
-			let lastHeartbeat = Date.now();
-
 		const subscribePromise = client.subscribeToEvents({
 				sessionId,
 				signal: subscribeController.signal,
 				onEvent: (ev: unknown) => {
 					translateOpencodeEvent(ev, {
-						onText: () => {
-							const now = Date.now();
-							if (now - lastHeartbeat < 30_000) return;
-							lastHeartbeat = now;
-							if (!queryDone && !errorEmitted && !cancelledByCaller) {
-								push({
-									type: "exploration",
-									data: { tool: "thinking", description: "Model reasoning..." },
-								});
-							}
-						},
 						onExploration: (tool, description) => {
-							lastHeartbeat = Date.now();
 							transitionPhase(
 								"exploring",
 								"Reading files and understanding changes...",
 							);
 							push({
 								type: "exploration",
-								data: { tool, description },
+								data: {
+									activityKind: classifyTool(tool),
+									toolName: tool,
+									summary: description,
+								},
 							});
 						},
 						onError: (message) => {
@@ -361,7 +350,6 @@ export function streamWalkthroughViaOpencodeMCP(
 							}
 						},
 						onMcpTool: (rawToolName) => {
-							lastHeartbeat = Date.now();
 							// Opencode prefixes MCP tool names with the registered
 							// server name (e.g. `revv-walkthrough-<id>_set_overview`)
 							// or similar. We don't know the exact format up front
@@ -469,7 +457,6 @@ export function streamWalkthroughViaOpencodeMCP(
 				cacheCreationInputTokens: 0,
 			};
 		} finally {
-			clearInterval(keepaliveInterval);
 			if (timeoutId !== undefined) clearTimeout(timeoutId);
 			if (externalAbort) {
 				externalAbort.signal.removeEventListener("abort", onExternalAbort);

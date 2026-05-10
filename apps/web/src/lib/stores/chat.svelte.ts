@@ -71,6 +71,20 @@ let proposedChanges = $state(new Map<string, ProposedChanges | null>());
 let pushingPrIds = $state(new Set<string>());
 let resolvingPushPrIds = $state(new Set<string>());
 
+// In-progress reviewer comments left on a proposed-changes diff. These are
+// ephemeral feedback bound for the chat agent (NOT PR review threads — the
+// commits aren't on the remote yet, so a real thread would orphan the moment
+// the agent rewrites the SHA). Keyed by `${prId}::${sha}` so they survive
+// closing/reopening the modal but don't bleed across commits.
+export interface ProposedComment {
+	id: string;
+	filePath: string;
+	lineNumber: number;
+	side: 'deletions' | 'additions';
+	body: string;
+}
+let proposedComments = $state(new Map<string, ProposedComment[]>());
+
 // Non-reactive — abort controllers have no UI semantics.
 const abortControllers = new Map<string, AbortController>();
 const resolveAbortControllers = new Map<string, AbortController>();
@@ -105,6 +119,14 @@ export function isPushingProposed(prId: string): boolean {
 
 export function isResolvingPush(prId: string): boolean {
 	return resolvingPushPrIds.has(prId);
+}
+
+function commentKey(prId: string, sha: string): string {
+	return `${prId}::${sha}`;
+}
+
+export function getProposedComments(prId: string, sha: string): ProposedComment[] {
+	return proposedComments.get(commentKey(prId, sha)) ?? [];
 }
 
 // ── Internal mutators (each reassigns the container per Svelte-5 reactivity) ─
@@ -183,6 +205,57 @@ function setResolvingPush(prId: string, resolving: boolean): void {
 		resolvingPushPrIds.delete(prId);
 	}
 	resolvingPushPrIds = new Set(resolvingPushPrIds);
+}
+
+function setProposedComments(
+	prId: string,
+	sha: string,
+	comments: ProposedComment[],
+): void {
+	const key = commentKey(prId, sha);
+	if (comments.length === 0) {
+		proposedComments.delete(key);
+	} else {
+		proposedComments.set(key, comments);
+	}
+	proposedComments = new Map(proposedComments);
+}
+
+export function addProposedComment(
+	prId: string,
+	sha: string,
+	comment: ProposedComment,
+): void {
+	const existing = getProposedComments(prId, sha);
+	setProposedComments(prId, sha, [...existing, comment]);
+}
+
+export function updateProposedComment(
+	prId: string,
+	sha: string,
+	id: string,
+	body: string,
+): void {
+	const existing = getProposedComments(prId, sha);
+	const next = existing.map((c) => (c.id === id ? { ...c, body } : c));
+	setProposedComments(prId, sha, next);
+}
+
+export function removeProposedComment(
+	prId: string,
+	sha: string,
+	id: string,
+): void {
+	const existing = getProposedComments(prId, sha);
+	setProposedComments(
+		prId,
+		sha,
+		existing.filter((c) => c.id !== id),
+	);
+}
+
+export function clearProposedComments(prId: string, sha: string): void {
+	setProposedComments(prId, sha, []);
 }
 
 // ── Persisted-entry → ChatItem projection ─────────────────────────────────
@@ -340,6 +413,38 @@ export function sendChatMessage(params: SendChatMessageParams): void {
 	);
 
 	abortControllers.set(prId, controller);
+}
+
+export interface SendProposedFeedbackParams {
+	prId: string;
+	sha: string;
+	subject: string;
+}
+
+/**
+ * Bundle the reviewer's accumulated inline comments on a proposed commit into
+ * a single chat message and dispatch it through the normal chat pipeline. The
+ * agent receives standard markdown with file/line citations and reacts on its
+ * next turn (typically by amending or appending a commit).
+ *
+ * Returns true if anything was sent, false if there were no comments to send.
+ */
+export function sendProposedFeedback(params: SendProposedFeedbackParams): boolean {
+	const { prId, sha, subject } = params;
+	const comments = getProposedComments(prId, sha);
+	if (comments.length === 0) return false;
+
+	const shortSha = sha.slice(0, 8);
+	const header = `Reviewer feedback on commit \`${shortSha}\` — "${subject}":`;
+	const lines = comments.map((c) => {
+		const sideLabel = c.side === 'deletions' ? 'old' : 'new';
+		return `- **${c.filePath}:${c.lineNumber}** (${sideLabel}) — ${c.body}`;
+	});
+	const message = [header, '', ...lines].join('\n');
+
+	sendChatMessage({ prId, message });
+	clearProposedComments(prId, sha);
+	return true;
 }
 
 export async function clearChatHistory(prId: string): Promise<void> {

@@ -1,16 +1,25 @@
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
+	import { onMount, onDestroy, untrack } from 'svelte';
 
 	interface Props {
 		filePath: string;
 		lineNo: number;
 		onSubmit: (body: string) => void;
 		onDismiss: () => void;
+		initialBody?: string;
 	}
 
-	let { filePath: _filePath, lineNo: _lineNo, onSubmit, onDismiss }: Props = $props();
+	let {
+		filePath: _filePath,
+		lineNo: _lineNo,
+		onSubmit,
+		onDismiss,
+		initialBody = '',
+	}: Props = $props();
 
-	let body = $state('');
+	// `initialBody` seeds the textarea on mount only — later prop changes are
+	// intentionally ignored, so capture the current value with `untrack`.
+	let body = $state(untrack(() => initialBody));
 	let focused = $state(false);
 	let textareaEl: HTMLTextAreaElement | undefined = $state();
 
@@ -47,6 +56,12 @@
 
 	onMount(() => {
 		textareaEl?.focus();
+		// Move caret to the end and right-size the box when an initial body is
+		// pre-filled (used for editing an existing comment).
+		if (textareaEl && body.length > 0) {
+			textareaEl.setSelectionRange(body.length, body.length);
+			autoResize();
+		}
 		window.addEventListener('keydown', handleGlobalKeydown);
 	});
 

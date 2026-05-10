@@ -9,7 +9,8 @@
 // with the Claude path so the chat route doesn't have to branch.
 
 import { AiGenerationError } from "../../domain/errors";
-import { API_PORT } from "@revv/shared";
+import { classifyTool } from "@revv/shared";
+import { serverEnv } from "../../config";
 import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../../constants";
 import { debug, logError } from "../../logger";
 import type {
@@ -126,7 +127,8 @@ export function streamChatViaOpencode(
 				// with the daemon so the agent can call `get_review_context`
 				// for this PR. Token is revoked in `finally`.
 				chatMcpToken = await opts.deps.issueChatMcpToken(opts.prId);
-				const mcpUrl = `http://127.0.0.1:${API_PORT}/mcp/chat-context`;
+				// Use the runtime port (dev mode is 45679, prod is API_PORT 45678).
+				const mcpUrl = `http://127.0.0.1:${serverEnv.port}/mcp/chat-context`;
 				const registrationName = `revv-chat-context-${opts.prId}`;
 				try {
 					await client.registerMcp({
@@ -171,8 +173,13 @@ export function streamChatViaOpencode(
 						signal: subscribeController.signal,
 						onEvent: (ev: unknown) => {
 							translateOpencodeEvent(ev, {
-								onExploration: (_tool, description) => {
-									controller.enqueue({ kind: "tool", data: description });
+								onExploration: (tool, description) => {
+									controller.enqueue({
+										kind: "activity",
+										activityKind: classifyTool(tool),
+										toolName: tool,
+										summary: description,
+									});
 								},
 								onError: (message) => {
 									// Emit as a text frame so the user sees what went wrong;
