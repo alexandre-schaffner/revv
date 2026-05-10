@@ -17,6 +17,7 @@
 		getChatError,
 		isChatStreaming,
 		getProposedChanges,
+		loadChatHistory,
 		sendChatMessage,
 		clearChatHistory,
 		refreshProposedChanges,
@@ -135,9 +136,19 @@
 		});
 	});
 
-	// Pull proposed-changes count when the panel mounts on a new PR.
+	// Pull proposed-changes count + persisted timeline when the panel mounts
+	// on a new PR. `loadChatHistory` is idempotent — only the first call per
+	// PR actually fetches.
 	onMount(() => {
-		if (prId) void refreshProposedChanges(prId);
+		if (prId) {
+			void refreshProposedChanges(prId);
+			void loadChatHistory(prId);
+		}
+	});
+
+	// PR switch — hydrate the timeline for the new PR.
+	$effect(() => {
+		if (prId) void loadChatHistory(prId);
 	});
 
 	function handleSubmit(e?: Event): void {
@@ -278,10 +289,10 @@
 		{:else}
 			<ul class="messages">
 				{#each items as item (item.id)}
-					{#if item.kind === 'tool'}
+					{#if item.kind === 'activity'}
 						<li class="tool-line">
 							<span class="tool-bullet">›</span>
-							<span class="tool-text">{item.description}</span>
+							<span class="tool-text">{item.summary}</span>
 						</li>
 					{:else if item.role === 'user'}
 						<li class="msg msg--user">

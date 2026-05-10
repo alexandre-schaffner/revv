@@ -78,6 +78,13 @@
       "when": 1777600000000,
       "tag": "0100_drop_user_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1777700000000,
+      "tag": "0110_chat_messages_and_activities",
+      "breakpoints": true
     }
   ]
 }

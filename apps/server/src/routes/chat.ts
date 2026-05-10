@@ -3,14 +3,17 @@
 // The right-pane AI chat HTTP surface.
 //
 //   POST   /api/chat                                - stream a turn (SSE)
+//   GET    /api/chat/:prId/messages                 - load persisted timeline
 //   GET    /api/chat/:prId/proposed-changes         - list commits the agent made
 //   GET    /api/chat/:prId/proposed-changes/:sha/diff - unified diff for one
 //   DELETE /api/chat/:prId                          - clear the conversation
 //
 // Sessions are persisted in `chat_sessions` keyed on (prId, agent, prHeadSha).
-// The agent's actual conversation lives in its own session store (Claude SDK
-// JSONL or opencode daemon); we just remember the session id so follow-ups
-// resume the same context.
+// The full transcript (user + assistant messages, structured tool-use rows)
+// lives in `chat_messages` and `chat_activities` so it survives desktop
+// reloads, daemon restarts, and the agent's own session-storage churn (gap
+// A1 + C1 from the gap-analysis roadmap). The agent-side session id is
+// still tracked so follow-up turns resume the same provider context.
 
 import { Elysia, t } from 'elysia';
 import { Effect } from 'effect';
@@ -145,6 +148,176 @@ interface ProposedCommit {
 	files: string[];
 }
 
+/**
+ * Wrap the provider's frame stream so each frame is persisted to SQLite as
+ * it passes through, then re-emitted to the SSE encoder unchanged.
+ *
+ * Persistence rules:
+ *   - text frames: lazily begin the assistant message on the FIRST chunk
+ *     (so the assistant row's sequence lands AFTER any preceding activities,
+ *     matching the "user → activities → assistant" timeline shape). Each
+ *     subsequent chunk appends content via SQL `||`.
+ *   - activity frames: insert a chat_activities row immediately, sequence
+ *     allocated atomically against chat_sessions.next_sequence.
+ *   - stream end (no error): finalize the assistant message if one exists;
+ *     if no text frames ever arrived, create a placeholder assistant row
+ *     so the timeline always closes the turn (the user may have only
+ *     received tool activity).
+ *   - stream error: same as success but populates the assistant message's
+ *     `error` column with the inline-error chip text.
+ *
+ * Persistence is best-effort: if a single insert fails the stream still
+ * forwards the frame to the client. Logging the failure keeps us honest
+ * about partial state without breaking the user's turn.
+ */
+function wrapStreamWithPersistence(
+	source: ReadableStream<ChatStreamFrame>,
+	ctx: { chatSessionId: string; turnId: string },
+): ReadableStream<ChatStreamFrame> {
+	return new ReadableStream<ChatStreamFrame>({
+		async start(controller) {
+			const reader = source.getReader();
+			let assistantMessageId: string | null = null;
+			let textStreamed = false;
+
+			const ensureAssistantMessage = async (): Promise<string> => {
+				if (assistantMessageId) return assistantMessageId;
+				try {
+					const { id } = await AppRuntime.runPromise(
+						Effect.flatMap(ChatSessionService, (svc) =>
+							svc.beginAssistantMessage({
+								chatSessionId: ctx.chatSessionId,
+								turnId: ctx.turnId,
+							}),
+						),
+					);
+					assistantMessageId = id;
+				} catch (err) {
+					logError(
+						'chat',
+						'beginAssistantMessage failed:',
+						err instanceof Error ? err.message : String(err),
+					);
+					// Surface a synthetic id so downstream calls don't keep
+					// trying. They'll silently no-op against a non-existent
+					// row, which we tolerate over crashing the stream.
+					assistantMessageId = '';
+				}
+				return assistantMessageId;
+			};
+
+			const finalize = async (errorMessage: string | null): Promise<void> => {
+				try {
+					if (!assistantMessageId && errorMessage) {
+						// Errored before any text arrived — still record an
+						// assistant row so the inline-error chip renders on
+						// reload.
+						await AppRuntime.runPromise(
+							Effect.flatMap(ChatSessionService, (svc) =>
+								svc.beginAssistantMessage({
+									chatSessionId: ctx.chatSessionId,
+									turnId: ctx.turnId,
+								}),
+							).pipe(
+								Effect.tap(({ id }) =>
+									Effect.flatMap(ChatSessionService, (svc) =>
+										svc.finalizeAssistantMessage({
+											messageId: id,
+											error: errorMessage,
+										}),
+									),
+								),
+							),
+						);
+					} else if (assistantMessageId) {
+						await AppRuntime.runPromise(
+							Effect.flatMap(ChatSessionService, (svc) =>
+								svc.finalizeAssistantMessage({
+									messageId: assistantMessageId!,
+									error: errorMessage,
+								}),
+							),
+						);
+					}
+				} catch (err) {
+					logError(
+						'chat',
+						'finalizeAssistantMessage failed:',
+						err instanceof Error ? err.message : String(err),
+					);
+				}
+			};
+
+			try {
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) break;
+
+					if (value.kind === 'text') {
+						textStreamed = true;
+						const id = await ensureAssistantMessage();
+						if (id) {
+							try {
+								await AppRuntime.runPromise(
+									Effect.flatMap(ChatSessionService, (svc) =>
+										svc.appendAssistantContent({
+											messageId: id,
+											chunk: value.data,
+										}),
+									),
+								);
+							} catch (err) {
+								logError(
+									'chat',
+									'appendAssistantContent failed:',
+									err instanceof Error ? err.message : String(err),
+								);
+							}
+						}
+					} else if (value.kind === 'activity') {
+						try {
+							await AppRuntime.runPromise(
+								Effect.flatMap(ChatSessionService, (svc) =>
+									svc.appendActivity({
+										chatSessionId: ctx.chatSessionId,
+										turnId: ctx.turnId,
+										activityKind: value.activityKind,
+										toolName: value.toolName,
+										summary: value.summary,
+										payload: value.payload,
+									}),
+								),
+							);
+						} catch (err) {
+							logError(
+								'chat',
+								'appendActivity failed:',
+								err instanceof Error ? err.message : String(err),
+							);
+						}
+					}
+
+					controller.enqueue(value);
+				}
+
+				// Stream ended cleanly. If no text was streamed but the agent
+				// did emit activities or completed silently, still close out
+				// the turn with a placeholder row so the timeline is
+				// well-formed on reload.
+				if (!textStreamed && !assistantMessageId) {
+					await ensureAssistantMessage();
+				}
+				await finalize(null);
+				controller.close();
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : 'Stream error';
+				await finalize(msg);
+				controller.error(err);
+			}
+		},
+	});
+}
+
 async function listProposedCommits(
 	worktreePath: string,
 	prHeadSha: string,
@@ -191,7 +364,7 @@ export const chatRoute = new Elysia()
 		'/api/chat',
 		async (ctx) => {
 			try {
-				const frameStream = await AppRuntime.runPromise(
+				const prepared = await AppRuntime.runPromise(
 					Effect.gen(function* () {
 						const ai = yield* AiService;
 						const prCtx = yield* PrContextService;
@@ -239,13 +412,37 @@ export const chatRoute = new Elysia()
 							githubToken: token,
 						});
 
-						const existing = yield* chatSessions.find(pr.id, agent, headSha);
+						// Eagerly create (or look up) the chat_sessions row so
+						// chat_messages and chat_activities can FK to it BEFORE
+						// the agent emits its session id. The agent-side id
+						// arrives mid-stream via onSessionId and is patched in.
+						const chatSessionRow = yield* chatSessions.findOrCreate({
+							prId: pr.id,
+							agent,
+							prHeadSha: headSha,
+							worktreePath,
+							branchName,
+						});
+
+						// "Resume" semantics: present only once the agent has
+						// emitted a session id on a previous turn. A fresh row
+						// (sessionId === null) means we're starting from scratch.
+						const resumeSessionId = chatSessionRow.sessionId ?? null;
 
 						// On new session, fetch walkthrough context for the system prompt.
 						// On resume, the agent already has it baked into its persisted session.
-						const walkthrough = existing
+						const walkthrough = resumeSessionId
 							? null
 							: fetchWalkthroughContext(db, pr.id);
+
+						// Append the user message immediately so it persists even
+						// if the agent process never emits anything (timeout, crash).
+						const turnId = crypto.randomUUID();
+						yield* chatSessions.appendUserMessage({
+							chatSessionId: chatSessionRow.id,
+							turnId,
+							content: ctx.body.message,
+						});
 
 						// Synchronous-by-await: drivers must await this before
 						// streaming any user-visible content (opencode) or before
@@ -256,10 +453,8 @@ export const chatRoute = new Elysia()
 						const onSessionId = async (sid: string): Promise<void> => {
 							try {
 								await AppRuntime.runPromise(
-									chatSessions.upsert({
-										prId: pr.id,
-										agent,
-										prHeadSha: headSha,
+									chatSessions.setAgentSessionId({
+										chatSessionId: chatSessionRow.id,
 										sessionId: sid,
 										worktreePath,
 										branchName,
@@ -268,13 +463,13 @@ export const chatRoute = new Elysia()
 							} catch (err) {
 								logError(
 									'chat',
-									'chatSessions.upsert failed:',
+									'chatSessions.setAgentSessionId failed:',
 									err instanceof Error ? err.message : String(err),
 								);
 							}
 						};
 
-						return yield* ai.chat({
+						const frameStream = yield* ai.chat({
 							pr: {
 								title: pr.title,
 								body: pr.body,
@@ -285,14 +480,25 @@ export const chatRoute = new Elysia()
 							message: ctx.body.message,
 							cwd: worktreePath,
 							branchName,
-							resumeSessionId: existing?.sessionId ?? null,
+							resumeSessionId,
 							onSessionId,
 							prId: pr.id,
 						});
+
+						return {
+							frameStream,
+							chatSessionId: chatSessionRow.id,
+							turnId,
+						};
 					}),
 				);
 
-				return new Response(chatStreamToSSE<ChatStreamFrame>(frameStream), {
+				const persistedStream = wrapStreamWithPersistence(
+					prepared.frameStream,
+					{ chatSessionId: prepared.chatSessionId, turnId: prepared.turnId },
+				);
+
+				return new Response(chatStreamToSSE<ChatStreamFrame>(persistedStream), {
 					headers: {
 						'Content-Type': 'text/event-stream',
 						'Cache-Control': 'no-cache',
@@ -308,6 +514,68 @@ export const chatRoute = new Elysia()
 				prId: t.String(),
 				message: t.String(),
 			}),
+		},
+	)
+	.get(
+		'/api/chat/:prId/messages',
+		async (ctx) => {
+			try {
+				const result = await AppRuntime.runPromise(
+					Effect.gen(function* () {
+						const prCtx = yield* PrContextService;
+						const chatSessions = yield* ChatSessionService;
+						const settingsService = yield* SettingsService;
+						const { db } = yield* DbService;
+
+						const { pr } = yield* prCtx.resolveBasic(
+							ctx.params.prId,
+							ctx.session.user.id,
+						);
+
+						const settings = yield* withDb(db, settingsService.getSettings()).pipe(
+							Effect.orElseSucceed(
+								() => ({ aiAgent: 'opencode' }) as { aiAgent: string | null },
+							),
+						);
+						const agent = resolveAgent(settings);
+
+						if (!pr.headSha) return null;
+
+						// Resolve the chat session for the *current* head SHA
+						// only. Older SHAs are dormant — the user has moved on
+						// and a fresh PR commit creates a fresh session row.
+						const row = yield* chatSessions.find(pr.id, agent, pr.headSha);
+						if (!row) return null;
+
+						const timeline = yield* chatSessions.listTimeline(row.id);
+						return { row, timeline };
+					}),
+				);
+
+				if (!result) {
+					return jsonResponse(
+						{ chatSessionId: null, entries: [] },
+						200,
+					);
+				}
+
+				return jsonResponse(
+					{
+						chatSessionId: result.row.id,
+						entries: result.timeline,
+					},
+					200,
+				);
+			} catch (e) {
+				const err = unwrapEffectError(e);
+				ctx.set.status = 500;
+				return {
+					error: err instanceof Error ? err.message : 'Internal error',
+				};
+			}
+		},
+		{
+			params: t.Object({ prId: t.String() }),
 		},
 	)
 	.delete(

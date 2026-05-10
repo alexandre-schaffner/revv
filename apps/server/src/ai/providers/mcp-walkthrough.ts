@@ -16,6 +16,7 @@ import type {
 	WalkthroughTokenUsage,
 	WsServerMessage,
 } from "@revv/shared";
+import { classifyTool } from "@revv/shared";
 import { debug, logError } from "../../logger";
 import type { Db } from "../../db";
 import type { PrFileMeta } from "../../services/GitHub";
@@ -278,13 +279,18 @@ export function streamWalkthroughViaMCP(
 									},
 								});
 							}
-							const description = buildExplorationDescription(
+							const summary = buildExplorationDescription(
 								block.name,
 								block.input,
 							);
 							push({
 								type: "exploration",
-								data: { tool: block.name, description },
+								data: {
+									activityKind: classifyTool(block.name),
+									toolName: block.name,
+									summary,
+									payload: block.input,
+								},
 							});
 						}
 						// Phase lifecycle (UI-facing). New tool names: set_overview

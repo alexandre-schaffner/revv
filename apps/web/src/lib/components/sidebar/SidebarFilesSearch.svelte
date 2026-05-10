@@ -4,6 +4,7 @@
 
 	// Mirror SearchFilter.svelte's input UX: 300ms debounce so we don't thrash
 	// the tree's setSearch on every keystroke.
+	let inputEl: HTMLInputElement;
 	let inputValue = $state(getFileSearchQuery());
 	let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -76,6 +77,7 @@
 		if (e.key !== 'Enter' && e.key !== 'ArrowDown') return;
 		e.preventDefault();
 		flushSearch();
+		inputEl?.blur();
 		requestAnimationFrame(() => {
 			const row = findFirstFileRow();
 			row?.focus();
@@ -106,6 +108,7 @@
 			<path d="m21 21-4.35-4.35" />
 		</svg>
 		<input
+			bind:this={inputEl}
 			class="h-7 w-full rounded-full border border-border bg-bg-elevated pl-8 pr-7 text-xs text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
 			placeholder="Search files..."
 			value={inputValue}

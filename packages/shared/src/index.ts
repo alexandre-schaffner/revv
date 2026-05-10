@@ -28,3 +28,5 @@ export type {
 } from './types';
 export type { WsServerMessage, WsClientMessage } from './ws';
 export * from './walkthrough';
+export type { Activity, ActivityKind } from './activity';
+export { classifyTool, normalizeToolName } from './activity';

@@ -1,4 +1,4 @@
-import { sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 import { pullRequests } from './pull-requests';
 
 /**
@@ -6,23 +6,31 @@ import { pullRequests } from './pull-requests';
  *
  * Each row is the durable handle for a live agent conversation scoped to
  * `(pullRequestId, agent, prHeadSha)`:
- *   - `sessionId`     — the agent-side session UUID. For the Claude Agent SDK
- *                       this is the UUID under `~/.claude/projects/<dir>/`;
- *                       for opencode it's the daemon's session id.
+ *   - `sessionId`     — the agent-side session UUID. Nullable so the route
+ *                       can create the row eagerly when the user sends the
+ *                       first message and patch in the agent-side id once
+ *                       the SDK / daemon emits it. Required to be non-null
+ *                       on follow-up turns (resume).
+ *                       Claude Agent SDK: UUID under `~/.claude/projects/<dir>/`.
+ *                       Opencode: the daemon's session id.
  *   - `worktreePath`  — absolute path to the chat worktree (`chat-{prId}-{sha12}`)
  *                       checked out at `prHeadSha`. The agent's `cwd`.
  *   - `branchName`    — the local PR tracking branch (`pr-{prNumber}`) the
  *                       agent commits its proposed changes to.
+ *   - `nextSequence`  — per-session monotonic counter shared by `chat_messages`
+ *                       and `chat_activities`. Allocated atomically on every
+ *                       insert so the timeline can be reconstructed in
+ *                       arrival order without relying on timestamp resolution.
  *
  * A new commit on the PR ⇒ different `prHeadSha` ⇒ new row, new agent
  * session, fresh worktree on a fresh branch. The unique index makes the
  * orchestrator's upsert in the chat route naturally idempotent.
  *
  * NOT a doctrine-bound jobs table (CLAUDE.md "Agent Subsystem Invariants"):
- * the only durable artefacts are this row plus the agent's own session
- * persistence and the on-disk git worktree. Writes are confined to the
- * worktree (a reconstructible cache); `kill -9` mid-edit at worst loses an
- * uncommitted edit, which is acceptable for an in-progress AI suggestion.
+ * the only durable artefacts are this row + chat_messages + chat_activities
+ * + the on-disk git worktree. Writes are confined to the worktree (a
+ * reconstructible cache); `kill -9` mid-edit at worst loses an uncommitted
+ * edit, which is acceptable for an in-progress AI suggestion.
  */
 export const chatSessions = sqliteTable(
 	'chat_sessions',
@@ -32,10 +40,11 @@ export const chatSessions = sqliteTable(
 			.notNull()
 			.references(() => pullRequests.id, { onDelete: 'cascade' }),
 		agent: text('agent').notNull(), // 'claude' | 'opencode'
-		sessionId: text('session_id').notNull(),
+		sessionId: text('session_id'),
 		prHeadSha: text('pr_head_sha').notNull(),
 		worktreePath: text('worktree_path').notNull(),
 		branchName: text('branch_name').notNull(),
+		nextSequence: integer('next_sequence').notNull().default(0),
 		createdAt: text('created_at').notNull(),
 		lastActivityAt: text('last_activity_at').notNull(),
 	},

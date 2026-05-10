@@ -181,8 +181,8 @@ export function textStreamToSSE(textStream: ReadableStream<string>): ReadableStr
 }
 
 /**
- * Wrap a stream of typed frames (`{kind: 'text' | 'tool', data}`) used by the
- * chat route into an SSE-formatted byte stream. Each frame becomes a single
+ * Wrap a stream of typed frames (`{kind: 'text' | 'activity', ...}`) used by
+ * the chat route into an SSE-formatted byte stream. Each frame becomes a single
  * `data: <json>\n\n` event so the client's `parseSSEBuffer<ChatStreamFrame>`
  * gets the discriminator preserved.
  */

@@ -44,6 +44,11 @@
 		resetSidebarWidth,
 		SIDEBAR_WIDTH_MIN,
 		SIDEBAR_WIDTH_MAX,
+		getRightPanelWidth,
+		setRightPanelWidth,
+		resetRightPanelWidth,
+		RIGHT_PANEL_WIDTH_MIN,
+		RIGHT_PANEL_WIDTH_MAX,
 	} from '$lib/stores/sidebar.svelte';
 	import {
 		getPaletteOpen,
@@ -68,6 +73,7 @@
 	const paletteOpen = $derived(getPaletteOpen());
 	const paletteMode = $derived(getPaletteMode());
 	const sidebarWidth = $derived(getSidebarWidth());
+	const rightPanelWidth = $derived(getRightPanelWidth());
 	const pr = $derived(getSelectedPr());
 	const walkthroughStatus = $derived(pr ? getPrWalkthroughStatus(pr.id) : 'idle');
 	const activeTab = $derived(getActiveTab());
@@ -111,6 +117,13 @@
 	let isDragging = $state(false);
 	let dragStartX = 0;
 	let dragStartWidth = 0;
+
+	// Right-pane drag state — separate from sidebar so a drag on one handle
+	// can't be confused with the other and the resize-suppression class
+	// applies independently.
+	let isResizingRight = $state(false);
+	let rightDragStartX = 0;
+	let rightDragStartWidth = 0;
 
 	// Auto-open panel when explain is triggered from the review store
 	$effect(() => {
@@ -161,6 +174,36 @@
 
 	function onHandleDblClick(): void {
 		resetSidebarWidth();
+	}
+
+	function onRightHandlePointerDown(event: PointerEvent): void {
+		if (!rightPanelOpen) return;
+		event.preventDefault();
+		isResizingRight = true;
+		rightDragStartX = event.clientX;
+		rightDragStartWidth = rightPanelWidth;
+		(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+	}
+
+	function onRightHandlePointerMove(event: PointerEvent): void {
+		if (!isResizingRight) return;
+		// Dragging left grows the panel, dragging right shrinks it — invert delta.
+		const delta = rightDragStartX - event.clientX;
+		const newWidth = Math.max(
+			RIGHT_PANEL_WIDTH_MIN,
+			Math.min(RIGHT_PANEL_WIDTH_MAX, rightDragStartWidth + delta),
+		);
+		setRightPanelWidth(newWidth);
+	}
+
+	function onRightHandlePointerUp(event: PointerEvent): void {
+		if (!isResizingRight) return;
+		isResizingRight = false;
+		(event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
+	}
+
+	function onRightHandleDblClick(): void {
+		resetRightPanelWidth();
 	}
 
 </script>
@@ -335,8 +378,23 @@
 	<aside
 		class="rightpanel-area"
 		class:rightpanel-area--open={rightPanelOpen}
+		class:rightpanel-area--resizing={isResizingRight}
 		aria-hidden={!rightPanelOpen}
+		style="width: {rightPanelWidth}px"
 	>
+		{#if rightPanelOpen}
+			<div
+				class="right-resize-handle"
+				role="separator"
+				aria-label="Resize right panel"
+				aria-orientation="vertical"
+				tabindex="-1"
+				onpointerdown={onRightHandlePointerDown}
+				onpointermove={onRightHandlePointerMove}
+				onpointerup={onRightHandlePointerUp}
+				ondblclick={onRightHandleDblClick}
+			></div>
+		{/if}
 		<RightPanel onClose={toggleRightPanel} prId={page.params['prId'] ?? ''} />
 	</aside>
 </div>
@@ -568,7 +626,9 @@
 		top: 20px;
 		right: 0;
 		bottom: 40px;
-		width: 340px;
+		/* width is driven inline by `getRightPanelWidth()` so the user-resized
+		   value applies on every render. The store clamps to
+		   [RIGHT_PANEL_WIDTH_MIN, RIGHT_PANEL_WIDTH_MAX]. */
 		border-left: 1px solid var(--color-border-subtle);
 		overflow: hidden;
 		background: var(--color-panel-bg);
@@ -580,6 +640,47 @@
 
 	.rightpanel-area--open {
 		transform: translateX(0);
+	}
+
+	/* Suppress the slide transition while dragging — width changes are
+	   reactive and we don't want a 100ms ease lagging behind the cursor. */
+	.rightpanel-area--resizing {
+		transition: none;
+	}
+
+	/* Left-edge resize handle — mirrors `.resize-handle` on the sidebar but
+	   anchored to the panel's *left* edge (toward the main pane). 5px hit
+	   area, 1px visible line, expands to 3px on hover/active using the
+	   accent border color. */
+	.right-resize-handle {
+		position: absolute;
+		left: -2px;
+		top: 0;
+		bottom: 0;
+		width: 5px;
+		cursor: col-resize;
+		z-index: 10;
+		background: transparent;
+	}
+
+	.right-resize-handle::after {
+		content: '';
+		position: absolute;
+		inset: 0;
+		left: 2px;
+		width: 1px;
+		background: var(--color-border-subtle);
+		transition:
+			width 120ms ease,
+			left 120ms ease,
+			background-color 120ms ease;
+	}
+
+	.right-resize-handle:hover::after,
+	.right-resize-handle:active::after {
+		left: 1px;
+		width: 3px;
+		background: var(--color-border-focus, var(--color-accent));
 	}
 
 	/* Tauri overlay title bar — topbar is taller, so the right pane starts

@@ -1,5 +1,7 @@
 // ── Block types ─────────────────────────────────────────────────────────────
 
+import type { Activity } from './activity';
+
 export type AnnotationPosition = 'left' | 'right';
 
 /** Which phase of the A→B→C→D pipeline a block belongs to. */
@@ -280,7 +282,7 @@ export type WalkthroughStreamEvent =
 	| { type: 'block'; data: WalkthroughBlock }
 	| { type: 'done'; data: { walkthroughId: string; tokenUsage: WalkthroughTokenUsage } }
 	| { type: 'error'; data: { code: string; message: string; repoId?: string } }
-	| { type: 'exploration'; data: { tool: string; description: string } }
+	| { type: 'exploration'; data: Activity }
 	| { type: 'issue'; data: WalkthroughIssue }
 	| { type: 'rating'; data: WalkthroughRating }
 	| { type: 'phase'; data: { phase: WalkthroughLifecyclePhase; message: string } }

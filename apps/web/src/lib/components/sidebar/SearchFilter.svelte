@@ -10,6 +10,7 @@
 
 	let { onAddRepo }: { onAddRepo: () => void } = $props();
 
+	let inputEl: HTMLInputElement;
 	let inputValue = $state('');
 	let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -85,10 +86,20 @@
 		if (e.key !== 'Enter' && e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
 		e.preventDefault();
 
+		if (e.key === 'Enter') {
+			if (focusedItemRendered()) {
+				expandOrSelect();
+			} else {
+				flushSearch();
+				requestAnimationFrame(jumpToFirstResult);
+			}
+			inputEl?.blur();
+			return;
+		}
+
 		if (focusedItemRendered()) {
 			if (e.key === 'ArrowDown') moveDown();
 			else if (e.key === 'ArrowUp') moveUp();
-			else expandOrSelect();
 			return;
 		}
 
@@ -120,6 +131,7 @@
 			<path d="m21 21-4.35-4.35" />
 		</svg>
 		<input
+			bind:this={inputEl}
 			class="h-7 w-full rounded-full border border-border bg-bg-elevated pl-8 pr-7 text-xs text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
 			placeholder="Search PRs..."
 			value={inputValue}

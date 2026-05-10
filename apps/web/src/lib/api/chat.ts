@@ -1,16 +1,25 @@
 // ── Chat API ────────────────────────────────────────────────────────────────
 //
-// Right-pane AI chat HTTP/SSE client. Mirrors the explain client's shape but
-// posts a JSON body and surfaces typed frames (`{kind: 'text' | 'tool', data}`)
-// so the chat panel can render tool-use entries inline between messages.
+// Right-pane AI chat HTTP/SSE client. Surfaces typed frames
+// (`{kind: 'text' | 'activity', ...}`) so the chat panel can render rich
+// activity entries inline between messages.
+//
+// History reload (gap A1) — `fetchChatMessages(prId)` pulls the persisted
+// timeline (messages + activities, ordered by sequence) so the panel hydrates
+// from SQLite on mount instead of starting empty after a desktop reload.
 
+import type { Activity, ActivityKind } from '@revv/shared';
 import { API_BASE_URL } from '$lib/api/base-url';
 import { authHeaders } from '$lib/utils/session-token';
 import { parseSSEBuffer } from '$lib/utils/sse-parser';
 
+// Re-export the canonical activity types so existing call sites in stores
+// and components can keep importing from `$lib/api/chat`.
+export type { Activity, ActivityKind };
+
 export type ChatStreamFrame =
 	| { kind: 'text'; data: string }
-	| { kind: 'tool'; data: string };
+	| ({ kind: 'activity' } & Activity);
 
 export interface ChatRequestParams {
 	prId: string;
@@ -19,7 +28,7 @@ export interface ChatRequestParams {
 
 export interface ChatCallbacks {
 	onText: (chunk: string) => void;
-	onTool: (description: string) => void;
+	onActivity: (activity: Activity) => void;
 	onDone: () => void;
 	onError: (error: { code: string; message: string }) => void;
 }
@@ -84,8 +93,13 @@ export function streamChatMessage(
 				for (const frame of result.events) {
 					if (frame.kind === 'text') {
 						callbacks.onText(frame.data);
-					} else if (frame.kind === 'tool') {
-						callbacks.onTool(frame.data);
+					} else if (frame.kind === 'activity') {
+						callbacks.onActivity({
+							activityKind: frame.activityKind,
+							toolName: frame.toolName,
+							summary: frame.summary,
+							payload: frame.payload,
+						});
 					}
 				}
 
@@ -118,6 +132,55 @@ export async function clearChat(prId: string): Promise<void> {
 		throw new Error(`Failed to clear chat: ${res.status}`);
 	}
 }
+
+// ── History reload ────────────────────────────────────────────────────────
+
+export interface PersistedChatMessage {
+	entryKind: 'message';
+	id: string;
+	chatSessionId: string;
+	role: 'user' | 'assistant';
+	content: string;
+	isStreaming: boolean;
+	sequence: number;
+	turnId: string;
+	error: string | null;
+	createdAt: string;
+	finalizedAt: string | null;
+}
+
+export interface PersistedChatActivity {
+	entryKind: 'activity';
+	id: string;
+	chatSessionId: string;
+	turnId: string;
+	activityKind: string;
+	toolName: string | null;
+	summary: string;
+	payloadJson: string | null;
+	sequence: number;
+	createdAt: string;
+}
+
+export type PersistedChatEntry = PersistedChatMessage | PersistedChatActivity;
+
+export interface ChatTimeline {
+	chatSessionId: string | null;
+	entries: PersistedChatEntry[];
+}
+
+/** Fetch the persisted timeline for a PR's current head-SHA chat session. */
+export async function fetchChatMessages(prId: string): Promise<ChatTimeline> {
+	const res = await fetch(`${API_BASE_URL}/api/chat/${prId}/messages`, {
+		headers: authHeaders(),
+	});
+	if (!res.ok) {
+		throw new Error(`Failed to fetch chat messages: ${res.status}`);
+	}
+	return (await res.json()) as ChatTimeline;
+}
+
+// ── Proposed changes ──────────────────────────────────────────────────────
 
 export interface ProposedCommit {
 	sha: string;

@@ -15,10 +15,9 @@ import { AiGenerationError } from "../../domain/errors";
 import { buildExplorationDescription } from "../prompts/walkthrough";
 import { createChatMcpServer } from "./chat-mcp-tools";
 import { resolveCliBin } from "./cli-agent";
+import { classifyTool, type ChatStreamFrame } from "./chat-types";
 
-export type ChatStreamFrame =
-	| { readonly kind: "text"; readonly data: string }
-	| { readonly kind: "tool"; readonly data: string };
+export type { ChatStreamFrame } from "./chat-types";
 
 export interface StreamChatViaClaudeOptions {
 	readonly message: string;
@@ -167,17 +166,23 @@ export function streamChatViaClaude(
 							) {
 								if (SURFACED_TOOLS.has(block.name)) {
 									controller.enqueue({
-										kind: "tool",
-										data: buildExplorationDescription(
+										kind: "activity",
+										activityKind: classifyTool(block.name),
+										toolName: block.name,
+										summary: buildExplorationDescription(
 											block.name,
 											block.input,
 										),
+										payload: block.input,
 									});
 								} else if (block.name.startsWith(MCP_TOOL_PREFIX)) {
 									const short = block.name.slice(MCP_TOOL_PREFIX.length);
 									controller.enqueue({
-										kind: "tool",
-										data: `Looking up review context (${short})`,
+										kind: "activity",
+										activityKind: "tool.mcp",
+										toolName: block.name,
+										summary: `Looking up review context (${short})`,
+										payload: block.input,
 									});
 								}
 							}

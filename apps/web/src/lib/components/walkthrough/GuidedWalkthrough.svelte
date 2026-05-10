@@ -256,6 +256,13 @@
 		ratings.length > 0,
 	]);
 
+	// Show a skeleton placeholder at the bottom of the diff section while
+	// Phase B is active — i.e. overview landed but diff analysis hasn't
+	// finished (more steps may still arrive).
+	const showDiffSkeleton = $derived(
+		isStreaming && (lastCompletedPhase === 'none' || lastCompletedPhase === 'A' || lastCompletedPhase === 'B')
+	);
+
 	const blocksWithDelay = $derived.by(() => {
 		let newInBatch = 0;
 		return visibleBlocks.map((block) => {
@@ -581,15 +588,15 @@
 							<Dotmatrix variant={chapter.spinner} active={active} />
 									{#if recentExplorationSteps.length > 0}
 										<div class="chapter-tool-calls">
-											{#each recentExplorationSteps.slice(-2) as step, i (step.tool + step.description)}
+											{#each recentExplorationSteps.slice(-2) as step, i (step.toolName + step.summary)}
 												<div
 													class="chapter-tool-call"
 													style="top: {i * TOOL_CALL_ROW_H}px"
 													in:fly={{ y: TOOL_CALL_ROW_H, duration: 220, easing: cubicOut }}
 													out:fly={{ y: -TOOL_CALL_ROW_H, duration: 160, easing: cubicIn }}
 												>
-													<span class="chapter-tool-call-tool">{step.tool}</span>
-													<span class="chapter-tool-call-desc">{step.description}</span>
+													<span class="chapter-tool-call-tool">{step.toolName}</span>
+													<span class="chapter-tool-call-desc">{step.summary}</span>
 												</div>
 											{/each}
 										</div>
@@ -619,8 +626,8 @@
 				<div class="exploration-feed exploration-feed--error">
 					{#each explorationSteps.slice(-6) as step, i (i)}
 						<div class="exploration-item">
-							<span class="exploration-tool">{step.tool}</span>
-							<span class="exploration-desc">{step.description}</span>
+							<span class="exploration-tool">{step.toolName}</span>
+							<span class="exploration-desc">{step.summary}</span>
 						</div>
 					{/each}
 				</div>
@@ -886,6 +893,29 @@
 					{/if}
 				</div>
 			{/each}
+
+			<!-- Diff-analysis skeleton: placeholder block while Phase B is active.
+			     Stays visible from when the overview lands (Phase A done) until the
+			     agent finishes all diff steps and moves to Phase C. -->
+			{#if showDiffSkeleton}
+				<div class="block-group">
+					<span class="block-step-number block-step-number--skeleton" aria-hidden="true">
+						#{blocksWithDelay.length + 1}
+					</span>
+					<div class="block-wrapper block-wrapper--no-anim diff-skeleton-block" aria-hidden="true">
+						<div class="diff-skeleton-header">
+							<Skeleton class="h-[13px] w-[38%]" />
+						</div>
+						<div class="diff-skeleton-body">
+							<Skeleton class="h-[13px] w-[92%]" />
+							<Skeleton class="h-[13px] w-full" />
+							<Skeleton class="h-[13px] w-[78%]" />
+							<Skeleton class="h-[13px] w-[85%]" />
+							<Skeleton class="h-[13px] w-[60%]" />
+						</div>
+					</div>
+				</div>
+			{/if}
 
 			<!-- Phase C / D conclusion: sentiment card above the scorecard.
 			     Rendered as a single grid item (block-group--sentiment-stack)
@@ -1188,6 +1218,10 @@
 		color: var(--color-accent);
 	}
 
+	.chapter-cell--clickable:hover .chapter-blurb {
+		color: var(--color-text-secondary);
+	}
+
 	.chapter-cell--clickable:focus-visible {
 		outline: 2px solid var(--color-accent);
 		outline-offset: 2px;
@@ -1244,6 +1278,7 @@
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
+		transition: color var(--duration-smooth) var(--ease-soft);
 	}
 
 
@@ -1299,6 +1334,7 @@
 		color: var(--color-text-muted);
 		white-space: nowrap;
 		overflow: hidden;
+		transition: color var(--duration-smooth) var(--ease-soft);
 		text-overflow: ellipsis;
 	}
 
@@ -1398,6 +1434,30 @@
 		flex-direction: column;
 		gap: 8px;
 		padding: 16px;
+	}
+
+	/* ── Diff-analysis skeleton block ─────────────────────────────────── */
+
+	.diff-skeleton-block {
+		border: 1px solid var(--color-border);
+		border-radius: 8px;
+		overflow: hidden;
+	}
+
+	.diff-skeleton-header {
+		padding: 10px 14px 8px;
+		border-bottom: 1px solid var(--color-border);
+	}
+
+	.diff-skeleton-body {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+		padding: 14px 16px;
+	}
+
+	.block-step-number--skeleton {
+		opacity: 0.2;
 	}
 
 	/* ── Exploration feed (error branch only) ────────────────────────────

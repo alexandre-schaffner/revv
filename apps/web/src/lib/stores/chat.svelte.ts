@@ -1,22 +1,33 @@
 // ── Chat store ──────────────────────────────────────────────────────────────
 //
-// Per-PR display state for the right-pane AI chat. The agent owns the
-// authoritative conversation (Claude SDK JSONL or opencode session); this
-// store is only the UI cache:
+// Per-PR display state for the right-pane AI chat. Two sources hydrate it:
 //
-//   - `chatHistories` — the message + tool-use list rendered in the panel
+//   1. `loadChatHistory(prId)` — pulled from SQLite via GET /api/chat/:prId/
+//      messages on panel mount or PR switch (gap A1: persistent history).
+//   2. The streaming SSE callbacks during an in-flight turn — text chunks
+//      append to the assistant bubble in place; structured activity frames
+//      become rich `ChatItem` rows.
+//
+// State map shape:
+//   - `chatHistories` — the message + activity list rendered in the panel
 //   - `chatErrors`    — latest error per PR (NOT_CONFIGURED, RATE_LIMITED, …)
 //   - `streamingPrIds`— who's mid-turn so the UI can show the indicator
+//   - `loadedPrIds`   — set of PRs whose persisted history has been hydrated
+//                       at least once. Prevents re-fetching on every panel
+//                       remount.
 //   - `proposedChanges` — commits the agent has made on its working branch,
 //                         shown in the proposed-changes strip above the input
 //
 // Map-reassignment for Svelte-5 reactivity, matching the `loadedHeadShas`
 // idiom in `review.svelte.ts` and the entry maps in `walkthrough.svelte.ts`.
 
+import type { Activity, ActivityKind } from '@revv/shared';
 import {
 	clearChat,
+	fetchChatMessages,
 	fetchProposedChanges,
 	streamChatMessage,
+	type PersistedChatEntry,
 	type ProposedChanges,
 } from '$lib/api/chat';
 import { toast } from 'svelte-sonner';
@@ -28,6 +39,7 @@ export type ChatItem =
 			role: 'user' | 'assistant';
 			content: string;
 			isStreaming: boolean;
+			turnId?: string;
 			/**
 			 * Set when this turn errored mid-stream and we kept the bubble
 			 * around so partial content + tool-use lines aren't orphaned.
@@ -36,9 +48,12 @@ export type ChatItem =
 			error?: string;
 	  }
 	| {
-			kind: 'tool';
+			kind: 'activity';
 			id: string;
-			description: string;
+			activityKind: ActivityKind;
+			toolName: string;
+			summary: string;
+			turnId?: string;
 	  };
 
 let chatHistories = $state(new Map<string, ChatItem[]>());
@@ -46,6 +61,7 @@ let chatErrors = $state(
 	new Map<string, { code: string; message: string } | null>(),
 );
 let streamingPrIds = $state(new Set<string>());
+let loadedPrIds = $state(new Set<string>());
 let proposedChanges = $state(new Map<string, ProposedChanges | null>());
 
 // Non-reactive — abort controllers have no UI semantics.
@@ -65,6 +81,10 @@ export function getChatError(
 
 export function isChatStreaming(prId: string): boolean {
 	return streamingPrIds.has(prId);
+}
+
+export function isChatHistoryLoaded(prId: string): boolean {
+	return loadedPrIds.has(prId);
 }
 
 export function getProposedChanges(prId: string): ProposedChanges | null {
@@ -120,12 +140,68 @@ function setStreaming(prId: string, streaming: boolean): void {
 	streamingPrIds = new Set(streamingPrIds);
 }
 
+function markLoaded(prId: string): void {
+	if (loadedPrIds.has(prId)) return;
+	loadedPrIds.add(prId);
+	loadedPrIds = new Set(loadedPrIds);
+}
+
 function setProposedChanges(prId: string, value: ProposedChanges | null): void {
 	proposedChanges.set(prId, value);
 	proposedChanges = new Map(proposedChanges);
 }
 
+// ── Persisted-entry → ChatItem projection ─────────────────────────────────
+
+function entryToChatItem(entry: PersistedChatEntry): ChatItem {
+	if (entry.entryKind === 'message') {
+		return {
+			kind: 'message',
+			id: entry.id,
+			role: entry.role,
+			content: entry.content,
+			isStreaming: entry.isStreaming,
+			turnId: entry.turnId,
+			...(entry.error ? { error: entry.error } : {}),
+		};
+	}
+	return {
+		kind: 'activity',
+		id: entry.id,
+		activityKind: entry.activityKind as ActivityKind,
+		toolName: entry.toolName ?? entry.activityKind,
+		summary: entry.summary,
+		turnId: entry.turnId,
+	};
+}
+
 // ── Public actions ─────────────────────────────────────────────────────────
+
+/**
+ * Hydrate the panel from the server-persisted timeline. Idempotent — only
+ * the first call per PR actually fetches; subsequent calls no-op until
+ * `clearChatHistory` resets the loaded flag.
+ */
+export async function loadChatHistory(prId: string): Promise<void> {
+	if (loadedPrIds.has(prId)) return;
+	// Optimistically mark loaded to dedupe in-flight fetches if the panel
+	// remounts during the request.
+	markLoaded(prId);
+	try {
+		const timeline = await fetchChatMessages(prId);
+		const items = timeline.entries.map(entryToChatItem);
+		// Only overwrite if no streaming-in-flight items have arrived
+		// since we started fetching. The streaming callbacks own the live
+		// state — they shouldn't be clobbered by a stale history fetch.
+		if (!streamingPrIds.has(prId)) {
+			setItems(prId, items);
+		}
+	} catch (err) {
+		// Best-effort — failures leave the panel empty + the user can still
+		// send a fresh message. Don't toast; the panel renders an empty state.
+		console.warn('Failed to load chat history', err);
+	}
+}
 
 export interface SendChatMessageParams {
 	prId: string;
@@ -171,21 +247,24 @@ export function sendChatMessage(params: SendChatMessageParams): void {
 						: item,
 				);
 			},
-			onTool: (description) => {
-				// Tool entries are inserted BEFORE the streaming assistant
-				// message so the visual order is: user → tool → tool → … →
-				// assistant text. Find the placeholder and splice in front.
+			onActivity: (activity: Activity) => {
+				// Activity entries are inserted BEFORE the streaming
+				// assistant message so the visual order is: user → activity
+				// → activity → … → assistant text. Find the placeholder and
+				// splice in front.
 				const items = chatHistories.get(prId) ?? [];
 				const idx = items.findIndex((i) => i.id === assistantId);
-				const toolItem: ChatItem = {
-					kind: 'tool',
+				const item: ChatItem = {
+					kind: 'activity',
 					id: crypto.randomUUID(),
-					description,
+					activityKind: activity.activityKind,
+					toolName: activity.toolName,
+					summary: activity.summary,
 				};
 				if (idx === -1) {
-					setItems(prId, [...items, toolItem]);
+					setItems(prId, [...items, item]);
 				} else {
-					const next = [...items.slice(0, idx), toolItem, ...items.slice(idx)];
+					const next = [...items.slice(0, idx), item, ...items.slice(idx)];
 					setItems(prId, next);
 				}
 			},
@@ -201,7 +280,7 @@ export function sendChatMessage(params: SendChatMessageParams): void {
 			},
 			onError: (err) => {
 				// Preserve any partial content the agent already streamed —
-				// tool-use lines were spliced *before* this bubble, so removing
+				// activity lines were spliced *before* this bubble, so removing
 				// it would leave them orphaned. Only drop the bubble if it's
 				// truly empty (no streamed text yet); otherwise mark it errored
 				// and let the renderer attach an inline error chip.
@@ -236,6 +315,14 @@ export async function clearChatHistory(prId: string): Promise<void> {
 	setError(prId, null);
 	setStreaming(prId, false);
 	setProposedChanges(prId, null);
+	// Reset the loaded flag so a subsequent navigation re-pulls the
+	// (now-empty) timeline from the server. Clearing the agent-side session
+	// also wipes chat_messages/chat_activities via FK CASCADE on
+	// chat_sessions, so the next fetch will return an empty list.
+	if (loadedPrIds.has(prId)) {
+		loadedPrIds.delete(prId);
+		loadedPrIds = new Set(loadedPrIds);
+	}
 	try {
 		await clearChat(prId);
 	} catch (err) {

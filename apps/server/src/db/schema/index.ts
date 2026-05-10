@@ -17,3 +17,5 @@ export { githubEtagCache } from './github-etag-cache';
 export { kvCache } from './kv-cache';
 export { cacheEntries } from './cache-entries';
 export { chatSessions } from './chat-sessions';
+export { chatMessages } from './chat-messages';
+export { chatActivities } from './chat-activities';

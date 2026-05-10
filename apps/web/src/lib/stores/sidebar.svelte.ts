@@ -3,8 +3,17 @@ const SIDEBAR_WIDTH_DEFAULT = 280;
 const SIDEBAR_WIDTH_MIN = 180;
 const SIDEBAR_WIDTH_MAX = 480;
 
+const RIGHT_PANEL_WIDTH_KEY = 'revv:right-panel-width';
+const RIGHT_PANEL_WIDTH_DEFAULT = 340;
+const RIGHT_PANEL_WIDTH_MIN = 280;
+const RIGHT_PANEL_WIDTH_MAX = 720;
+
 function clampWidth(w: number): number {
 	return Math.max(SIDEBAR_WIDTH_MIN, Math.min(SIDEBAR_WIDTH_MAX, w));
+}
+
+function clampRightPanelWidth(w: number): number {
+	return Math.max(RIGHT_PANEL_WIDTH_MIN, Math.min(RIGHT_PANEL_WIDTH_MAX, w));
 }
 
 function loadPersistedWidth(): number {
@@ -16,11 +25,21 @@ function loadPersistedWidth(): number {
 	return clampWidth(parsed);
 }
 
+function loadPersistedRightPanelWidth(): number {
+	if (typeof localStorage === 'undefined') return RIGHT_PANEL_WIDTH_DEFAULT;
+	const raw = localStorage.getItem(RIGHT_PANEL_WIDTH_KEY);
+	if (raw === null) return RIGHT_PANEL_WIDTH_DEFAULT;
+	const parsed = parseInt(raw, 10);
+	if (isNaN(parsed)) return RIGHT_PANEL_WIDTH_DEFAULT;
+	return clampRightPanelWidth(parsed);
+}
+
 let sidebarCollapsed = $state(false);
 let rightPanelOpen = $state(false);
 let addRepoDialogOpen = $state(false);
 let collapseAllSignal = $state(0);
 let sidebarWidth = $state(loadPersistedWidth());
+let rightPanelWidth = $state(loadPersistedRightPanelWidth());
 
 // Two-view drawer: 'prs' (the PR list) ⇄ 'files' (full repo tree at the
 // selected PR's head SHA). Transient — not persisted across reloads. Resets to
@@ -38,11 +57,15 @@ $effect.root(() => {
 	$effect(() => {
 		localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth));
 	});
+	$effect(() => {
+		localStorage.setItem(RIGHT_PANEL_WIDTH_KEY, String(rightPanelWidth));
+	});
 });
 
 // ── Sidebar ──────────────────────────────────────────────
 
 export { SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX };
+export { RIGHT_PANEL_WIDTH_DEFAULT, RIGHT_PANEL_WIDTH_MIN, RIGHT_PANEL_WIDTH_MAX };
 
 export function getSidebarCollapsed(): boolean {
 	return sidebarCollapsed;
@@ -82,6 +105,20 @@ export function setRightPanelOpen(v: boolean): void {
 
 export function toggleRightPanel(): void {
 	rightPanelOpen = !rightPanelOpen;
+}
+
+// ── Right panel width ───────────────────────────────────
+
+export function getRightPanelWidth(): number {
+	return rightPanelWidth;
+}
+
+export function setRightPanelWidth(w: number): void {
+	rightPanelWidth = clampRightPanelWidth(w);
+}
+
+export function resetRightPanelWidth(): void {
+	rightPanelWidth = RIGHT_PANEL_WIDTH_DEFAULT;
 }
 
 // ── Add-repo dialog ─────────────────────────────────────

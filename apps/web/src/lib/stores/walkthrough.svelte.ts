@@ -1,4 +1,5 @@
 import type {
+	Activity,
 	WalkthroughBlock,
 	RiskLevel,
 	WalkthroughStreamEvent,
@@ -49,7 +50,7 @@ interface WalkthroughEntry {
 	 * state.
 	 */
 	superseded: boolean;
-	explorationSteps: Array<{ tool: string; description: string }>;
+	explorationSteps: Activity[];
 	issues: WalkthroughIssue[];
 	ratings: WalkthroughRating[];
 	phase: WalkthroughLifecyclePhase;
@@ -151,7 +152,7 @@ export function getStreamError(): string | null {
 export function getWalkthroughId(): string | null {
 	return active()?.walkthroughId ?? null;
 }
-export function getExplorationSteps(): Array<{ tool: string; description: string }> {
+export function getExplorationSteps(): Activity[] {
 	return active()?.explorationSteps ?? [];
 }
 export function getIssues(): WalkthroughIssue[] {

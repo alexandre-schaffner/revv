@@ -25,8 +25,8 @@
     import {
         getRepositories,
         deleteRepo,
-        addRepo,
     } from "$lib/stores/prs.svelte";
+    import AddRepoForm from "$lib/components/sidebar/AddRepoForm.svelte";
     import {
         getThemePreference,
         setThemePreference,
@@ -42,7 +42,6 @@
     } from "$lib/constants/models";
     import { authHeaders } from "$lib/utils/session-token";
     import SignInButton from "$lib/components/auth/SignInButton.svelte";
-    import { toast } from "svelte-sonner";
     import * as Select from "$lib/components/ui/select";
 
     import type {
@@ -79,9 +78,6 @@
         { value: "dark", label: "Dark", icon: Moon },
     ];
 
-    let addRepoValue = $state("");
-    let addRepoError = $state("");
-    let addRepoLoading = $state(false);
     let retryingClone = $state(new Set<string>());
     // Fall back to initials if the GitHub-signed avatar URL has expired —
     // mirrors the `avatarFailed` pattern used for repo avatars in the sidebar.
@@ -108,26 +104,6 @@
             const next = new Set(retryingClone);
             next.delete(repoId);
             retryingClone = next;
-        }
-    }
-
-    async function handleAddRepo() {
-        const trimmed = addRepoValue.trim();
-        if (!trimmed.includes("/")) {
-            addRepoError = "Use owner/name format";
-            return;
-        }
-        addRepoLoading = true;
-        addRepoError = "";
-        try {
-            await addRepo(trimmed);
-            addRepoValue = "";
-        } catch (e) {
-            const msg = e instanceof Error ? e.message : "Failed to add repo";
-            addRepoError = msg;
-            toast.error(msg);
-        } finally {
-            addRepoLoading = false;
         }
     }
 
@@ -305,26 +281,12 @@
             Repositories
         </h2>
         {#if getUser()}
-            <!-- Add repo -->
-            <div class="mb-4 flex gap-2">
-                <input
-                    class="h-8 flex-1 rounded-md border border-border bg-bg-elevated px-3 text-sm text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
-                    placeholder="owner/repository"
-                    bind:value={addRepoValue}
-                    onkeydown={(e) => e.key === "Enter" && handleAddRepo()}
-                    disabled={addRepoLoading}
-                />
-                <button
-                    class="rounded-md bg-accent px-3 text-sm font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
-                    onclick={handleAddRepo}
-                    disabled={addRepoLoading || !addRepoValue.trim()}
-                >
-                    {addRepoLoading ? "Adding…" : "Add"}
-                </button>
+            <!-- Add repo: same Browse/Manual form as the sidebar dialog,
+                rendered inline. The form assumes a `p-5` parent for its
+                spacing math, which this section already provides. -->
+            <div class="mb-5 flex max-h-[360px] flex-col">
+                <AddRepoForm autoFocus={false} showTitle={false} />
             </div>
-            {#if addRepoError}
-                <p class="mb-3 text-xs text-danger">{addRepoError}</p>
-            {/if}
 
             <!-- Repo list -->
             {#if getRepositories().length === 0}
