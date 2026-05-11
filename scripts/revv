@@ -334,6 +334,11 @@ cmd_update() {
   [[ -x "$bun_for_plist" ]] || fail "Cannot locate bun for the LaunchAgent."
 
   if declare -F write_launch_agent_plist >/dev/null 2>&1; then
+    # Pass GitHub Enterprise vars through so the refreshed plist keeps them.
+    # write_launch_agent_plist reads REVV_GITHUB_HOST / REVV_GITHUB_CLIENT_ID
+    # and falls back to grepping the source dir's apps/server/.env if unset.
+    export REVV_GITHUB_HOST="${REVV_GITHUB_HOST:-}"
+    export REVV_GITHUB_CLIENT_ID="${REVV_GITHUB_CLIENT_ID:-}"
     launchctl unload "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
     write_launch_agent_plist \
       "$LAUNCH_AGENT_PLIST" \

@@ -286,7 +286,39 @@ ensure_rust() {
 # uses those absolute paths directly, bypassing the LaunchAgent's own
 # (necessarily restricted) PATH at runtime.
 #
+# GitHub Enterprise support: the function reads REVV_GITHUB_HOST and
+# REVV_GITHUB_CLIENT_ID from the caller's environment. If those are unset it
+# falls back to grepping $project_root/apps/server/.env so that GitHub
+# Enterprise installations survive the transition from dev (where the server
+# reads .env directly) to the distributed/installed app (where no .env exists).
+#
 # Usage: write_launch_agent_plist <plist_path> <bun_bin> <project_root> <log_dir>
+#   Caller may export REVV_GITHUB_HOST and/or REVV_GITHUB_CLIENT_ID beforehand.
+
+# Parse a single KEY=value (or KEY="value") line from a .env file.
+# Strips surrounding single- or double-quotes; ignores blank lines and comments.
+# Prints the bare value, or nothing if the key is absent.
+_revv_dotenv_get() {
+  local key="$1" env_file="$2"
+  [[ -f "$env_file" ]] || return 0
+  local line value
+  while IFS= read -r line; do
+    # Skip comments and lines that don't start with KEY=
+    [[ "$line" =~ ^[[:space:]]*# ]] && continue
+    [[ "$line" =~ ^[[:space:]]*${key}[[:space:]]*= ]] || continue
+    # Extract everything after the first '='
+    value="${line#*=}"
+    # Strip surrounding double-quotes
+    value="${value%\"}"
+    value="${value#\"}"
+    # Strip surrounding single-quotes
+    value="${value%\'}"
+    value="${value#\'}"
+    printf '%s' "$value"
+    return 0
+  done < "$env_file"
+}
+
 write_launch_agent_plist() {
   local plist_path="$1" bun_bin="$2" project_root="$3" log_dir="$4"
   [[ -n "$plist_path"   ]] || fail "write_launch_agent_plist: plist_path required"
@@ -299,6 +331,38 @@ write_launch_agent_plist() {
   opencode_bin="$(command -v opencode 2>/dev/null || true)"
   [[ -n "$claude_bin"   ]] && info "Detected claude at $claude_bin"
   [[ -n "$opencode_bin" ]] && info "Detected opencode at $opencode_bin"
+
+  # ── GitHub Enterprise env vars ─────────────────────────────
+  # Prefer values the caller exported; fall back to apps/server/.env so that
+  # GitHub Enterprise users don't lose their config when the installed app
+  # has no .env file at runtime.
+  local dotenv_file="$project_root/apps/server/.env"
+  local github_host="${REVV_GITHUB_HOST:-}"
+  local github_client_id="${REVV_GITHUB_CLIENT_ID:-}"
+
+  if [[ -z "$github_host" ]]; then
+    github_host="$(_revv_dotenv_get GITHUB_HOST "$dotenv_file")"
+  fi
+  if [[ -z "$github_client_id" ]]; then
+    github_client_id="$(_revv_dotenv_get GITHUB_CLIENT_ID "$dotenv_file")"
+  fi
+
+  [[ -n "$github_host"      ]] && info "Injecting GITHUB_HOST=$github_host into LaunchAgent plist"
+  [[ -n "$github_client_id" ]] && info "Injecting GITHUB_CLIENT_ID into LaunchAgent plist"
+
+  # Build optional XML entries; only include keys whose values are non-empty so
+  # the plist never contains blank <string/> nodes.
+  local extra_env_xml=""
+  if [[ -n "$github_host" ]]; then
+    extra_env_xml+="        <key>GITHUB_HOST</key>
+        <string>$github_host</string>
+"
+  fi
+  if [[ -n "$github_client_id" ]]; then
+    extra_env_xml+="        <key>GITHUB_CLIENT_ID</key>
+        <string>$github_client_id</string>
+"
+  fi
 
   mkdir -p "$(dirname "$plist_path")"
   cat > "$plist_path" <<PLIST
@@ -329,7 +393,7 @@ write_launch_agent_plist() {
         <string>$claude_bin</string>
         <key>REVV_OPENCODE_BIN</key>
         <string>$opencode_bin</string>
-    </dict>
+$extra_env_xml    </dict>
 
     <key>RunAtLoad</key>
     <true/>

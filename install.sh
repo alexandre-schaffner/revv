@@ -303,6 +303,14 @@ bun_bin="$HOME/.bun/bin/bun"
 server_entry="$PROJECT_ROOT/apps/server/src/index.ts"
 [[ -f "$server_entry" ]] || fail "Server entry point missing: $server_entry"
 
+# Inject GitHub Enterprise vars into the LaunchAgent plist so they survive
+# after install when no apps/server/.env file is present at runtime.
+# write_launch_agent_plist reads REVV_GITHUB_HOST / REVV_GITHUB_CLIENT_ID;
+# if unset here it will fall back to grepping apps/server/.env automatically.
+# Callers running a GHE install can pre-export these before invoking install.sh.
+export REVV_GITHUB_HOST="${REVV_GITHUB_HOST:-}"
+export REVV_GITHUB_CLIENT_ID="${REVV_GITHUB_CLIENT_ID:-}"
+
 write_launch_agent_plist \
   "$REVV_LAUNCH_AGENT_PLIST" \
   "$bun_bin" \
