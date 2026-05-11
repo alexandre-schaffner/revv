@@ -8,7 +8,7 @@ import { GITHUB_HOST } from "../auth";
 import { serverEnv } from "../config";
 import { CLONE_TIMEOUT_MS } from "../constants";
 import { repositories } from "../db/schema/index";
-import { CloneError, CloneNotReadyError } from "../domain/errors";
+import { CloneError, CloneNotReadyError, WorktreeBlockedByUnpushedCommits } from "../domain/errors";
 import { debug, logError } from "../logger";
 import { DbService } from "./Db";
 import {
@@ -161,15 +161,15 @@ export class RepoCloneService extends Context.Tag("RepoCloneService")<
 		 * other agent is mid-read is the only real hazard, and it's rare in
 		 * practice (the chat is interactive, the walkthrough is bursty).
 		 */
-		readonly acquirePrWorktree: (params: {
-			readonly repoId: string;
-			readonly prNumber: number;
-			readonly prHeadSha: string;
-			readonly githubToken: string;
-		}) => Effect.Effect<
-			{ readonly worktreePath: string; readonly branchName: string },
-			CloneError | CloneNotReadyError
-		>;
+	readonly acquirePrWorktree: (params: {
+		readonly repoId: string;
+		readonly prNumber: number;
+		readonly prHeadSha: string;
+		readonly githubToken: string;
+	}) => Effect.Effect<
+		{ readonly worktreePath: string; readonly branchName: string },
+		CloneError | CloneNotReadyError | WorktreeBlockedByUnpushedCommits
+	>;
 	}
 >() {}
 
@@ -369,6 +369,77 @@ async function findWorktreesOnBranch(
 		}
 	}
 	return paths;
+}
+
+/**
+ * Count commits reachable from `tip` but not from `base` — i.e., commits
+ * above `base` in `tip`'s history. Used to detect unpushed agent commits
+ * before advancing a worktree to a new SHA. Returns 0 on any failure.
+ */
+async function countCommitsAboveSha(
+	worktreePath: string,
+	base: string,
+	tip: string,
+): Promise<number> {
+	try {
+		const out = await runGitCapture(
+			["rev-list", "--count", `${base}..${tip}`],
+			worktreePath,
+		);
+		return parseInt(out.trim(), 10) || 0;
+	} catch {
+		return 0;
+	}
+}
+
+/**
+ * List commits reachable from `tip` but not from `base`.
+ * Returns the same shape used in proposed-changes payloads.
+ */
+async function listCommitsAboveSha(
+	worktreePath: string,
+	base: string,
+	tip: string,
+): Promise<
+	Array<{
+		sha: string;
+		shortSha: string;
+		subject: string;
+		committedAt: string;
+		files: string[];
+	}>
+> {
+	try {
+		const log = await runGitCapture(
+			["log", `${base}..${tip}`, "--pretty=format:%H%x09%s%x09%aI"],
+			worktreePath,
+		);
+		const lines = log.split("\n").filter((l) => l.length > 0);
+		if (lines.length === 0) return [];
+		const commits: Array<{
+			sha: string;
+			shortSha: string;
+			subject: string;
+			committedAt: string;
+			files: string[];
+		}> = [];
+		for (const line of lines) {
+			const parts = line.split("\t");
+			if (parts.length < 3) continue;
+			const sha = parts[0] ?? "";
+			const subject = parts[1] ?? "";
+			const committedAt = parts[2] ?? "";
+			const namesOut = await runGitCapture(
+				["diff-tree", "--no-commit-id", "--name-only", "-r", sha],
+				worktreePath,
+			).catch(() => "");
+			const files = namesOut.split("\n").filter((f) => f.length > 0);
+			commits.push({ sha, shortSha: sha.slice(0, 7), subject, committedAt, files });
+		}
+		return commits;
+	} catch {
+		return [];
+	}
 }
 
 // ── Live implementation ───────────────────────────────────────────────────────
@@ -622,28 +693,52 @@ export const RepoCloneServiceLive = Layer.effect(
 									if (currentSha === prHeadSha) {
 										return { worktreePath, branchName };
 									}
-									// Pull the requested commit into the local object
-									// store. We target `prHeadSha` directly rather than
-									// `refs/pull/{N}/head` because the PR's current head
-									// can have advanced past `prHeadSha` since metadata
-									// was resolved — fetching the ref in that case would
-									// pull the wrong objects and the subsequent reset
-									// would fail with "Could not parse object". The
-									// fetch runs from inside the worktree that owns the
-									// branch so the subsequent `reset --hard` updates
-									// both working tree and branch ref atomically
-									// without tripping git's "refusing to fetch into
-									// branch checked out at <path>" guard.
-									await ensurePrCommitPresent(
+								// Pull the requested commit into the local object
+								// store. We target `prHeadSha` directly rather than
+								// `refs/pull/{N}/head` because the PR's current head
+								// can have advanced past `prHeadSha` since metadata
+								// was resolved — fetching the ref in that case would
+								// pull the wrong objects and the subsequent reset
+								// would fail with "Could not parse object". The
+								// fetch runs from inside the worktree that owns the
+								// branch so the subsequent `reset --hard` updates
+								// both working tree and branch ref atomically
+								// without tripping git's "refusing to fetch into
+								// branch checked out at <path>" guard.
+								//
+								// Before resetting, check if the agent has made
+								// commits above prHeadSha that haven't been pushed.
+								// If so, refuse the advance to preserve them.
+								const agentCommitCount = await countCommitsAboveSha(
+									worktreePath,
+									prHeadSha,
+									currentSha,
+								);
+								if (agentCommitCount > 0) {
+									const commits = await listCommitsAboveSha(
 										worktreePath,
 										prHeadSha,
-										prNumber,
+										currentSha,
 									);
-									await runGit(
-										["reset", "--hard", prHeadSha],
+									throw new WorktreeBlockedByUnpushedCommits({
 										worktreePath,
-									);
-									return { worktreePath, branchName };
+										branchName,
+										oldHeadSha: currentSha,
+										newHeadSha: prHeadSha,
+										commits,
+									});
+								}
+								// No agent commits above prHeadSha — safe to advance.
+								await ensurePrCommitPresent(
+									worktreePath,
+									prHeadSha,
+									prNumber,
+								);
+								await runGit(
+									["reset", "--hard", prHeadSha],
+									worktreePath,
+								);
+								return { worktreePath, branchName };
 								}
 								// Wrong branch / detached / corrupted — tear down so
 								// the fresh-setup path below can recreate cleanly.

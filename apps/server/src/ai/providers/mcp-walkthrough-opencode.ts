@@ -649,22 +649,16 @@ export function translateOpencodeEvent(
 		return;
 	}
 
-	// Text deltas — assistant message content. opencode emits text either as
-	// a standalone `partType === "text"` (with `.text` on the part) or via
-	// `message.part.updated` events whose props carry `{ delta: { text } }`.
-	// We handle both shapes; consumers that don't care about text (walkthrough)
-	// just don't pass `onText`.
+	// Text deltas — assistant message content. opencode emits incremental text
+	// via `message.part.updated` events whose props carry `{ delta: { text } }`.
+	// We use ONLY the delta path here. The full-text `partType === "text"` path
+	// is intentionally omitted: it carries the cumulative text (not a delta),
+	// which would re-emit the entire response on every update — causing echoes.
+	// User-message parts also arrive as `partType === "text"` and would be
+	// incorrectly emitted as assistant text. The postMessage backstop in
+	// chat-opencode.ts catches any deltas missed by the SSE path.
 	if (cb.onText) {
-		if (partType === "text" && partObj) {
-			const text =
-				typeof partObj["text"] === "string"
-					? (partObj["text"] as string)
-					: null;
-			if (text) {
-				cb.onText(text);
-				return;
-			}
-		}
+		// Only emit text from delta events (incremental chunks).
 		const delta = props["delta"];
 		if (delta && typeof delta === "object") {
 			const deltaText = (delta as Record<string, unknown>)["text"];

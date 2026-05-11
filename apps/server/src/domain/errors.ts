@@ -70,6 +70,27 @@ export class CloneInProgressError extends Data.TaggedError('CloneInProgressError
 	readonly repoId: string;
 }> {}
 
+/**
+ * Raised when the PR head SHA has advanced but the worktree has unpushed
+ * agent commits on top of the OLD head. Callers must discard or rebase
+ * those commits before advancing the worktree.
+ */
+export class WorktreeBlockedByUnpushedCommits extends Data.TaggedError(
+	'WorktreeBlockedByUnpushedCommits',
+)<{
+	readonly worktreePath: string;
+	readonly branchName: string;
+	readonly oldHeadSha: string;
+	readonly newHeadSha: string;
+	readonly commits: ReadonlyArray<{
+		sha: string;
+		shortSha: string;
+		subject: string;
+		committedAt: string;
+		files: string[];
+	}>;
+}> {}
+
 export type AppError =
 	| GitHubError
 	| AiError
@@ -79,7 +100,8 @@ export type AppError =
 	| SyncError
 	| CloneError
 	| CloneNotReadyError
-	| CloneInProgressError;
+	| CloneInProgressError
+	| WorktreeBlockedByUnpushedCommits;
 
 /**
  * Type guard for ReviewError.

@@ -374,6 +374,91 @@ export interface ResolvePushCallbacks {
 	onDone: () => void;
 }
 
+// ── Blocked-commit management ─────────────────────────────────────────────
+
+/** Discard a single proposed commit via interactive rebase. */
+export async function discardProposedCommit(prId: string, sha: string): Promise<void> {
+	const res = await fetch(
+		`${API_BASE_URL}/api/chat/${prId}/proposed-changes/${sha}`,
+		{
+			method: 'DELETE',
+			headers: authHeaders(),
+		},
+	);
+	if (!res.ok) {
+		const body = await res.json().catch(() => ({ error: 'Unknown error' })) as Record<string, unknown>;
+		throw new Error(
+			(body['error'] as string | undefined) ??
+			(body['message'] as string | undefined) ??
+			`Failed: ${res.status}`,
+		);
+	}
+}
+
+/** Rebase all agent commits onto a new head SHA. */
+export async function rebaseProposedCommits(
+	prId: string,
+	oldHeadSha: string,
+	newHeadSha: string,
+): Promise<void> {
+	const res = await fetch(
+		`${API_BASE_URL}/api/chat/${prId}/proposed-changes/rebase-onto`,
+		{
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', ...authHeaders() },
+			body: JSON.stringify({ oldHeadSha, newHeadSha }),
+		},
+	);
+	if (!res.ok) {
+		const body = await res.json().catch(() => ({ error: 'Unknown error' })) as Record<string, unknown>;
+		throw new Error(
+			(body['error'] as string | undefined) ??
+			(body['message'] as string | undefined) ??
+			`Failed: ${res.status}`,
+		);
+	}
+}
+
+/** After all blocked commits are handled, advance the worktree to the new PR head. */
+export async function advanceWorktree(prId: string, newHeadSha: string): Promise<void> {
+	const res = await fetch(
+		`${API_BASE_URL}/api/chat/${prId}/proposed-changes/advance`,
+		{
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', ...authHeaders() },
+			body: JSON.stringify({ newHeadSha }),
+		},
+	);
+	if (!res.ok) {
+		const body = await res.json().catch(() => ({ error: 'Unknown error' })) as Record<string, unknown>;
+		throw new Error(
+			(body['error'] as string | undefined) ??
+			(body['message'] as string | undefined) ??
+			`Failed: ${res.status}`,
+		);
+	}
+}
+
+/** Cherry-pick a single proposed commit onto the PR source branch and push. */
+export async function cherryPickProposedCommit(prId: string, sha: string): Promise<void> {
+	const res = await fetch(
+		`${API_BASE_URL}/api/chat/${prId}/proposed-changes/cherry-pick`,
+		{
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', ...authHeaders() },
+			body: JSON.stringify({ sha }),
+		},
+	);
+	if (!res.ok) {
+		const body = await res.json().catch(() => ({ error: 'Unknown error' })) as Record<string, unknown>;
+		throw new Error(
+			(body['error'] as string | undefined) ??
+			(body['message'] as string | undefined) ??
+			`Failed: ${res.status}`,
+		);
+	}
+}
+
 /**
  * Stream the conflict-resolution + push flow. The agent's progress (file
  * edits, bash commands, brief commentary) is emitted inline; the terminal

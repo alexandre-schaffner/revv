@@ -14,6 +14,8 @@
 		Loader2,
 		Square,
 		GitBranch,
+		RefreshCw,
+		GitMerge,
 	} from '@lucide/svelte';
 	import { onMount, tick } from 'svelte';
 	import {
@@ -30,6 +32,13 @@
 		pushProposed,
 		resolveAndPushProposed,
 		abortChatTurn,
+		getWorktreeBlocked,
+		isDiscardingCommit,
+		isRebasingProposed,
+		discardProposedCommitAction,
+		rebaseAllProposedAction,
+		isCherryPickingCommit,
+		cherryPickProposedCommitAction,
 	} from '$lib/stores/chat.svelte';
 	import { getSelectedPr } from '$lib/stores/prs.svelte';
 	import {
@@ -63,7 +72,21 @@
 	const commitCount = $derived(proposed?.commits.length ?? 0);
 	const isPushing = $derived(prId ? isPushingProposed(prId) : false);
 	const isResolving = $derived(prId ? isResolvingPush(prId) : false);
+	const blocked = $derived(prId ? getWorktreeBlocked(prId) : null);
+	const isRebasing = $derived(prId ? isRebasingProposed(prId) : false);
 	const selectedPr = $derived(getSelectedPr());
+
+	const streamingTurnId = $derived(
+		items.findLast((i) => i.kind === 'message' && i.role === 'assistant' && i.isStreaming)?.turnId
+	);
+	const recentToolCalls = $derived(
+		streamingTurnId
+			? items
+				.filter((i) => i.kind === 'activity' && i.turnId === streamingTurnId)
+				.slice(-2)
+				.map((i) => i as Extract<typeof i, { kind: 'activity' }>)
+			: []
+	);
 
 	let inputValue = $state('');
 	let textareaEl: HTMLTextAreaElement | undefined = $state();
@@ -313,14 +336,24 @@
 	function assistantHtml(content: string): string {
 		return content ? renderMarkdown(content) : '';
 	}
+
+	function activitiesForTurn(turnId: string | undefined): Extract<(typeof items)[number], { kind: 'activity' }>[] {
+		if (!turnId) return [];
+		return items.filter((i): i is Extract<(typeof items)[number], { kind: 'activity' }> => i.kind === 'activity' && i.turnId === turnId);
+	}
 </script>
 
 <div class="panel">
 	<!-- Header -->
 	<div class="panel-header">
 		{#if isStreaming}
-			<div class="streaming-dots" aria-label="AI is thinking…">
-				<span></span><span></span><span></span>
+			<div class="streaming-indicator">
+				<div class="streaming-dots" aria-label="AI is thinking…">
+					<span></span><span></span><span></span>
+				</div>
+				{#if recentToolCalls.length > 0}
+					<span class="streaming-tool-label">{recentToolCalls[recentToolCalls.length - 1]?.summary ?? ''}</span>
+				{/if}
 			</div>
 		{:else}
 			<span class="panel-title">Chat</span>
@@ -443,23 +476,107 @@
 								<span class="proposed-subject" title={commit.subject}>
 									{commit.subject}
 								</span>
-								<button
-									class="proposed-icon-btn"
-									type="button"
-									title="Copy SHA"
-									aria-label="Copy SHA"
-									onclick={(e) => {
-										e.stopPropagation();
-										copyToClipboard(commit.sha);
-									}}
-								>
-									<Copy size={11} />
-								</button>
+							<button
+								class="proposed-icon-btn"
+								type="button"
+								title="Copy SHA"
+								aria-label="Copy SHA"
+								onclick={(e) => {
+									e.stopPropagation();
+									copyToClipboard(commit.sha);
+								}}
+							>
+								<Copy size={11} />
+							</button>
+							<button
+								class="proposed-icon-btn proposed-icon-btn--danger"
+								type="button"
+								title="Discard commit"
+								aria-label="Discard commit"
+								disabled={isDiscardingCommit(commit.sha)}
+								onclick={(e) => {
+									e.stopPropagation();
+									if (prId) void discardProposedCommitAction(prId, commit.sha);
+								}}
+							>
+								{#if isDiscardingCommit(commit.sha)}
+									<Loader2 size={11} class="motion-essential-spin" />
+								{:else}
+									<Trash2 size={11} />
+								{/if}
+							</button>
+							<button
+								class="proposed-icon-btn proposed-icon-btn--accent"
+								type="button"
+								title="Push this commit to PR branch"
+								aria-label="Push this commit to PR branch"
+								disabled={isCherryPickingCommit(commit.sha)}
+								onclick={(e) => {
+									e.stopPropagation();
+									if (prId) void cherryPickProposedCommitAction(prId, commit.sha);
+								}}
+							>
+								{#if isCherryPickingCommit(commit.sha)}
+									<Loader2 size={11} class="motion-essential-spin" />
+								{:else}
+									<GitMerge size={11} />
+								{/if}
+							</button>
 							</div>
 						</li>
 					{/each}
 				</ul>
 			{/if}
+		</div>
+	{/if}
+
+	<!-- Blocked-by-unpushed-commits strip -->
+	{#if blocked}
+		<div class="blocked-strip">
+			<div class="blocked-header">
+				<AlertTriangle size={12} class="blocked-icon" />
+				<span class="blocked-title">
+					PR head advanced — {blocked.commits.length} unpushed commit{blocked.commits.length === 1 ? '' : 's'}
+				</span>
+				<button
+					class="blocked-rebase-btn"
+					type="button"
+					onclick={() => prId && rebaseAllProposedAction(prId)}
+					disabled={isRebasing}
+					title="Rebase all commits onto new PR head"
+				>
+					{#if isRebasing}
+						<Loader2 size={11} class="motion-essential-spin" />
+						<span>Rebasing…</span>
+					{:else}
+						<RefreshCw size={11} />
+						<span>Rebase all</span>
+					{/if}
+				</button>
+			</div>
+			<ul class="blocked-list">
+				{#each blocked.commits as commit (commit.sha)}
+					<li class="blocked-item">
+						<code class="blocked-sha">{commit.shortSha}</code>
+						<span class="blocked-subject" title={commit.subject}>{commit.subject}</span>
+						<button
+							class="blocked-discard-btn"
+							type="button"
+							onclick={() => prId && discardProposedCommitAction(prId, commit.sha)}
+							disabled={isDiscardingCommit(commit.sha) || isRebasing}
+							title="Discard this commit"
+							aria-label="Discard commit {commit.shortSha}"
+						>
+							{#if isDiscardingCommit(commit.sha)}
+								<Loader2 size={10} class="motion-essential-spin" />
+							{:else}
+								<Trash2 size={10} />
+							{/if}
+						</button>
+					</li>
+				{/each}
+			</ul>
+			<p class="blocked-hint">Rebase or discard all commits to continue chatting with the updated PR.</p>
 		</div>
 	{/if}
 
@@ -481,21 +598,13 @@
 		{:else}
 			<ul class="messages">
 				{#each items as item (item.id)}
-					{#if item.kind === 'activity'}
-						<li class="tool-line">
-							<span class="tool-bullet">›</span>
-							<span class="tool-text">{item.summary}</span>
-						</li>
-					{:else if item.role === 'user'}
+					{#if item.kind === 'message' && item.role === 'user'}
 						<li class="msg msg--user">
 							<div class="bubble bubble--user">{item.content}</div>
 						</li>
-					{:else}
-						<li class="msg msg--assistant">
-							<div class="agent-avatar">
-								<Bot size={12} />
-							</div>
-							<div class="bubble bubble--assistant">
+					{:else if item.kind === 'message' && item.role === 'assistant'}
+					<li class="msg msg--assistant">
+						<div class="bubble bubble--assistant">
 								{#if item.content}
 									{@html assistantHtml(item.content)}
 								{:else if item.isStreaming}
@@ -503,15 +612,33 @@
 								{/if}
 								{#if item.isStreaming && !item.error}
 									<span class="stream-cursor motion-essential-stream-cursor" aria-hidden="true"></span>
-								{/if}
-								{#if item.error}
-									<div class="inline-error" role="alert">
-										<AlertTriangle size={12} class="inline-error-icon" />
-										<span class="inline-error-text">{item.error}</span>
-									</div>
-								{/if}
-							</div>
-						</li>
+							{/if}
+							{#if item.error}
+								<div class="inline-error" role="alert">
+									<AlertTriangle size={12} class="inline-error-icon" />
+									<span class="inline-error-text">{item.error}</span>
+								</div>
+							{/if}
+						</div>
+						{#if !item.isStreaming}
+							{@const turnActivities = activitiesForTurn(item.turnId)}
+							{#if turnActivities.length > 0}
+								<details class="tools-summary">
+									<summary class="tools-summary-label">
+										{turnActivities.length} tool{turnActivities.length === 1 ? '' : 's'} used
+									</summary>
+									<ul class="tools-summary-list">
+										{#each turnActivities as act}
+											<li class="tools-summary-item">
+												<span class="tools-summary-bullet">›</span>
+												<span class="tools-summary-text">{act.summary}</span>
+											</li>
+										{/each}
+									</ul>
+								</details>
+							{/if}
+						{/if}
+					</li>
 					{/if}
 				{/each}
 			</ul>
@@ -814,6 +941,23 @@
 	}
 
 	/* Streaming dots */
+	.streaming-indicator {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		min-width: 0;
+		flex: 1;
+	}
+
+	.streaming-tool-label {
+		font-size: 11px;
+		color: var(--color-muted-fg, var(--color-muted));
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		max-width: 200px;
+	}
+
 	.streaming-dots {
 		display: flex;
 		align-items: center;
@@ -821,8 +965,8 @@
 	}
 
 	.streaming-dots span {
-		width: 5px;
-		height: 5px;
+		width: 8px;
+		height: 8px;
 		border-radius: 50%;
 		background: var(--color-accent);
 		animation: dot-pulse 1.2s ease-in-out infinite;
@@ -1139,6 +1283,133 @@
 		color: var(--color-text-primary);
 	}
 
+	.proposed-icon-btn--danger:hover:not(:disabled) {
+		color: var(--color-destructive, hsl(0 72% 51%));
+		background: color-mix(in srgb, var(--color-destructive, hsl(0 72% 51%)) 12%, transparent);
+	}
+
+	.proposed-icon-btn--accent:hover:not(:disabled) {
+		color: var(--color-primary);
+		background: color-mix(in srgb, var(--color-primary) 12%, transparent);
+	}
+
+	/* Blocked-by-unpushed-commits strip */
+	.blocked-strip {
+		flex-shrink: 0;
+		background: color-mix(in srgb, var(--color-warning, #f59e0b) 8%, transparent);
+		border-bottom: 1px solid color-mix(in srgb, var(--color-warning, #f59e0b) 25%, transparent);
+		padding: 8px 12px;
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
+
+	.blocked-header {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+	}
+
+	:global(.blocked-icon) {
+		color: var(--color-warning, #f59e0b);
+		flex-shrink: 0;
+	}
+
+	.blocked-title {
+		font-size: 12px;
+		font-weight: 500;
+		flex: 1;
+		min-width: 0;
+	}
+
+	.blocked-rebase-btn {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		font-size: 11px;
+		padding: 3px 8px;
+		border-radius: 4px;
+		border: 1px solid var(--color-border);
+		background: var(--color-bg-secondary);
+		cursor: pointer;
+		color: var(--color-text-secondary);
+		flex-shrink: 0;
+		transition: background-color var(--duration-snap);
+	}
+
+	.blocked-rebase-btn:hover:not(:disabled) {
+		background: var(--color-bg-tertiary);
+		color: var(--color-text-primary);
+	}
+
+	.blocked-rebase-btn:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+
+	.blocked-list {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 3px;
+	}
+
+	.blocked-item {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		font-size: 11px;
+	}
+
+	.blocked-sha {
+		font-family: var(--font-mono);
+		font-size: 10px;
+		color: var(--color-text-muted);
+		flex-shrink: 0;
+	}
+
+	.blocked-subject {
+		flex: 1;
+		min-width: 0;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.blocked-discard-btn {
+		flex-shrink: 0;
+		width: 20px;
+		height: 20px;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		border-radius: 3px;
+		border: none;
+		background: transparent;
+		cursor: pointer;
+		color: var(--color-text-muted);
+		padding: 0;
+		transition: background-color var(--duration-snap), color var(--duration-snap);
+	}
+
+	.blocked-discard-btn:hover:not(:disabled) {
+		color: var(--color-danger, #ef4444);
+		background: color-mix(in srgb, var(--color-danger, #ef4444) 10%, transparent);
+	}
+
+	.blocked-discard-btn:disabled {
+		opacity: 0.4;
+		cursor: not-allowed;
+	}
+
+	.blocked-hint {
+		font-size: 11px;
+		color: var(--color-text-muted);
+		margin: 0;
+	}
+
 	/* Content / messages */
 	.panel-content {
 		flex: 1;
@@ -1185,20 +1456,7 @@
 		white-space: pre-wrap;
 	}
 
-	/* Agent avatar dot */
-	.agent-avatar {
-		width: 22px;
-		height: 22px;
-		border-radius: 50%;
-		background: var(--color-bg-tertiary);
-		border: 1px solid var(--color-border-subtle);
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		flex-shrink: 0;
-		margin-top: 2px;
-		color: var(--color-text-muted);
-	}
+	/* Agent avatar dot — removed; avatar div is no longer rendered */
 
 	/* Assistant — no bubble, plain content next to the avatar */
 	.bubble--assistant {
@@ -1256,26 +1514,6 @@
 		margin: 8px 0;
 		padding: 2px 10px;
 		color: var(--color-text-secondary);
-	}
-
-	/* Tool-use line */
-	.tool-line {
-		display: flex;
-		align-items: baseline;
-		gap: 6px;
-		font-size: 11px;
-		color: var(--color-text-muted);
-		font-family: var(--font-mono);
-	}
-
-	.tool-bullet {
-		color: var(--color-accent);
-	}
-
-	.tool-text {
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
 	}
 
 	/* Skeleton + cursor */

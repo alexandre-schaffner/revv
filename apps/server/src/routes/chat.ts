@@ -54,6 +54,7 @@ import {
 import type { ChatStreamFrame } from '../ai/providers/chat-claude';
 import type { ChatWalkthroughContext } from '../ai/prompts/chat';
 import { logError } from '../logger';
+import { WorktreeBlockedByUnpushedCommits } from '../domain/errors';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -150,6 +151,19 @@ function gitStdout(args: string[], cwd: string, timeoutMs = 10_000): Promise<str
 			reject(err);
 		});
 	});
+}
+
+/**
+ * Best-effort git command runner — ignores all errors. Used for cleanup
+ * operations like `rebase --abort` where we want to clean up after a
+ * failure without risking a secondary error obscuring the first.
+ */
+async function gitStdoutBestEffort(args: string[], cwd: string): Promise<void> {
+	try {
+		await gitStdout(args, cwd, 10_000);
+	} catch {
+		// Intentionally swallowed — best-effort only.
+	}
 }
 
 interface ProposedCommit {
@@ -550,16 +564,32 @@ export const chatRoute = new Elysia()
 					},
 				});
 
-				return new Response(chatStreamToSSE<ChatStreamFrame>(flagClearingStream), {
-					headers: {
-						'Content-Type': 'text/event-stream',
-						'Cache-Control': 'no-cache',
-						Connection: 'keep-alive',
-					},
-				});
-			} catch (e) {
-				return mapErrorToSSEResponse(e);
+			return new Response(chatStreamToSSE<ChatStreamFrame>(flagClearingStream), {
+				headers: {
+					'Content-Type': 'text/event-stream',
+					'Cache-Control': 'no-cache',
+					Connection: 'keep-alive',
+				},
+			});
+		} catch (e) {
+			// Special case: worktree is blocked by unpushed agent commits.
+			// Return a structured JSON 409 so the client can show the
+			// blocked-commits UI instead of treating it as a generic error.
+			const blockedErr = unwrapEffectError(e);
+			if (blockedErr instanceof WorktreeBlockedByUnpushedCommits) {
+				ctx.set.status = 409;
+				return {
+					code: 'WORKTREE_BLOCKED',
+					message: 'PR head advanced but worktree has unpushed agent commits',
+					worktreePath: blockedErr.worktreePath,
+					branchName: blockedErr.branchName,
+					oldHeadSha: blockedErr.oldHeadSha,
+					newHeadSha: blockedErr.newHeadSha,
+					commits: blockedErr.commits,
+				};
 			}
+			return mapErrorToSSEResponse(e);
+		}
 		},
 		{
 			body: t.Object({
@@ -935,6 +965,294 @@ export const chatRoute = new Elysia()
 				});
 			} catch (e) {
 				return mapErrorToSSEResponse(e);
+			}
+		},
+		{
+			params: t.Object({ prId: t.String() }),
+		},
+	)
+	// ── Unpushed commit management ───────────────────────────────────────────
+	// Three endpoints to handle the WorktreeBlockedByUnpushedCommits scenario:
+	//   DELETE …/:sha      — discard a single agent commit via rebase --onto
+	//   POST …/rebase-onto — rebase all agent commits onto the new PR head
+	//   POST …/advance     — advance the worktree to the new PR head (after
+	//                        all commits have been handled)
+	.post(
+		'/api/chat/:prId/proposed-changes/cherry-pick',
+		async (ctx) => {
+			const body = (ctx.body ?? {}) as { sha?: unknown };
+			if (typeof body.sha !== 'string' || !/^[0-9a-f]{7,40}$/i.test(body.sha)) {
+				ctx.set.status = 400;
+				return { error: 'sha is required and must be a valid commit hash' };
+			}
+			const { sha } = body;
+
+			try {
+				const result = await AppRuntime.runPromise(
+					Effect.flatMap(ChatChangesPushService, (svc) =>
+						svc.cherryPickAndPush({
+							prId: ctx.params.prId,
+							userId: ctx.session.user.id,
+							sha,
+						}),
+					),
+				);
+
+				if (result.status === 'pushed') {
+					return jsonResponse({ status: 'pushed', newSha: result.newSha, pushedCommits: result.pushedCommits, branch: result.branch }, 200);
+				}
+				if (result.status === 'remote-changed') {
+					ctx.set.status = 409;
+					return { status: 'remote-changed', branch: result.branch };
+				}
+				ctx.set.status = 500;
+				return { error: 'Unexpected cherry-pick result' };
+			} catch (e) {
+				const err = unwrapEffectError(e);
+				if (err instanceof ConcurrentPushError) {
+					ctx.set.status = 409;
+					return { code: 'CONCURRENT_PUSH', message: 'Another push is already in progress for this PR' };
+				}
+				if (err instanceof DirtyWorktreeError) {
+					ctx.set.status = 409;
+					return { code: 'DIRTY_WORKTREE', message: err.message };
+				}
+				if (err instanceof NoChangesError) {
+					ctx.set.status = 409;
+					return { code: 'NO_CHANGES', message: 'No proposed commits found' };
+				}
+				if (err instanceof NoChatSessionError) {
+					ctx.set.status = 404;
+					return { code: 'NO_CHAT_SESSION', message: 'No chat session found for this PR' };
+				}
+				logError('chat-cherry-pick', err instanceof Error ? err.message : String(err));
+				ctx.set.status = 500;
+				return { error: err instanceof Error ? err.message : 'Internal error' };
+			}
+		},
+		{
+			params: t.Object({ prId: t.String() }),
+		},
+	)
+	.delete(
+		'/api/chat/:prId/proposed-changes/:sha',
+		async (ctx) => {
+			// Validate SHA before doing anything expensive.
+			if (!/^[0-9a-f]{7,40}$/i.test(ctx.params.sha)) {
+				ctx.set.status = 400;
+				return { error: 'Invalid commit SHA' };
+			}
+
+			try {
+				const row = await AppRuntime.runPromise(
+					Effect.gen(function* () {
+						const prCtx = yield* PrContextService;
+						const chatSessions = yield* ChatSessionService;
+						const settingsService = yield* SettingsService;
+						const { db } = yield* DbService;
+
+						const { pr } = yield* prCtx.resolveBasic(
+							ctx.params.prId,
+							ctx.session.user.id,
+						);
+						const settings = yield* withDb(db, settingsService.getSettings()).pipe(
+							Effect.orElseSucceed(
+								() => ({ aiAgent: 'opencode' }) as { aiAgent: string | null },
+							),
+						);
+						const agent = resolveAgent(settings);
+						return yield* chatSessions.findLatestForPr(pr.id, agent);
+					}),
+				);
+
+				if (!row) {
+					ctx.set.status = 404;
+					return { error: 'No chat session found for this PR' };
+				}
+
+				const { worktreePath } = row;
+
+				// Resolve the full 40-char SHA in case a short SHA was supplied.
+				const fullSha = await gitStdout(
+					['rev-parse', ctx.params.sha],
+					worktreePath,
+					5_000,
+				).catch(() => null);
+				if (!fullSha?.trim()) {
+					ctx.set.status = 404;
+					return { error: 'Commit not found in worktree' };
+				}
+				const sha = fullSha.trim();
+
+				const parentSha = await gitStdout(
+					['rev-parse', `${sha}^`],
+					worktreePath,
+					5_000,
+				).catch(() => null);
+				if (!parentSha?.trim()) {
+					ctx.set.status = 422;
+					return { error: 'Cannot discard root commit' };
+				}
+
+				// Drop `sha` by rebasing everything above it onto its parent.
+				// git rebase --onto <parent> <sha> HEAD
+				try {
+					await gitStdout(
+						['rebase', '--onto', parentSha.trim(), sha, 'HEAD'],
+						worktreePath,
+						30_000,
+					);
+				} catch (rebaseErr) {
+					await gitStdoutBestEffort(['rebase', '--abort'], worktreePath);
+					ctx.set.status = 409;
+					return {
+						code: 'REBASE_CONFLICT',
+						message:
+							rebaseErr instanceof Error
+								? rebaseErr.message
+								: 'Rebase conflict — use the agent to resolve',
+					};
+				}
+
+				return jsonResponse({ status: 'discarded' }, 200);
+			} catch (e) {
+				const err = unwrapEffectError(e);
+				ctx.set.status = 500;
+				return { error: err instanceof Error ? err.message : 'Internal error' };
+			}
+		},
+		{
+			params: t.Object({ prId: t.String(), sha: t.String() }),
+		},
+	)
+	.post(
+		'/api/chat/:prId/proposed-changes/rebase-onto',
+		async (ctx) => {
+			const body = (ctx.body ?? {}) as { oldHeadSha?: unknown; newHeadSha?: unknown };
+			if (typeof body.oldHeadSha !== 'string' || typeof body.newHeadSha !== 'string') {
+				ctx.set.status = 400;
+				return { error: 'oldHeadSha and newHeadSha are required strings' };
+			}
+			const { oldHeadSha, newHeadSha } = body;
+
+			try {
+				const row = await AppRuntime.runPromise(
+					Effect.gen(function* () {
+						const prCtx = yield* PrContextService;
+						const chatSessions = yield* ChatSessionService;
+						const settingsService = yield* SettingsService;
+						const { db } = yield* DbService;
+
+						const { pr } = yield* prCtx.resolveBasic(
+							ctx.params.prId,
+							ctx.session.user.id,
+						);
+						const settings = yield* withDb(db, settingsService.getSettings()).pipe(
+							Effect.orElseSucceed(
+								() => ({ aiAgent: 'opencode' }) as { aiAgent: string | null },
+							),
+						);
+						const agent = resolveAgent(settings);
+						return yield* chatSessions.findLatestForPr(pr.id, agent);
+					}),
+				);
+
+				if (!row) {
+					ctx.set.status = 404;
+					return { error: 'No chat session found for this PR' };
+				}
+
+				const { worktreePath } = row;
+
+				// Ensure newHeadSha is present in the local object store.
+				await gitStdoutBestEffort(['fetch', 'origin', newHeadSha], worktreePath);
+
+				// Rebase agent commits onto the new PR head.
+				// git rebase --onto <newHeadSha> <oldHeadSha> HEAD
+				try {
+					await gitStdout(
+						['rebase', '--onto', newHeadSha, oldHeadSha, 'HEAD'],
+						worktreePath,
+						60_000,
+					);
+				} catch (rebaseErr) {
+					await gitStdoutBestEffort(['rebase', '--abort'], worktreePath);
+					ctx.set.status = 409;
+					return {
+						code: 'REBASE_CONFLICT',
+						message:
+							rebaseErr instanceof Error
+								? rebaseErr.message
+								: 'Rebase conflict — use the agent to resolve',
+					};
+				}
+
+				return jsonResponse({ status: 'rebased' }, 200);
+			} catch (e) {
+				const err = unwrapEffectError(e);
+				ctx.set.status = 500;
+				return { error: err instanceof Error ? err.message : 'Internal error' };
+			}
+		},
+		{
+			params: t.Object({ prId: t.String() }),
+		},
+	)
+	.post(
+		'/api/chat/:prId/proposed-changes/advance',
+		async (ctx) => {
+			const body = (ctx.body ?? {}) as { newHeadSha?: unknown };
+			if (typeof body.newHeadSha !== 'string') {
+				ctx.set.status = 400;
+				return { error: 'newHeadSha is required' };
+			}
+			const { newHeadSha } = body;
+
+			try {
+				await AppRuntime.runPromise(
+					Effect.gen(function* () {
+						const prCtx = yield* PrContextService;
+						const chatSessions = yield* ChatSessionService;
+						const settingsService = yield* SettingsService;
+						const repoClone = yield* RepoCloneService;
+						const { db } = yield* DbService;
+
+						const { pr, repo, token } = yield* prCtx.resolveBasic(
+							ctx.params.prId,
+							ctx.session.user.id,
+						);
+						const settings = yield* withDb(db, settingsService.getSettings()).pipe(
+							Effect.orElseSucceed(
+								() => ({ aiAgent: 'opencode' }) as { aiAgent: string | null },
+							),
+						);
+						const agent = resolveAgent(settings);
+
+						const row = yield* chatSessions.findLatestForPr(pr.id, agent);
+						if (!row) return;
+
+						// Re-acquire with the new SHA. At this point all agent
+						// commits have been handled, so this should succeed.
+						yield* repoClone.acquirePrWorktree({
+							repoId: repo.id,
+							prNumber: pr.externalId,
+							prHeadSha: newHeadSha,
+							githubToken: token,
+						});
+
+						// Keep the session row's prHeadSha in sync.
+						yield* chatSessions.updatePrHeadSha({
+							chatSessionId: row.id,
+							prHeadSha: newHeadSha,
+						});
+					}),
+				);
+
+				return jsonResponse({ status: 'advanced' }, 200);
+			} catch (e) {
+				const err = unwrapEffectError(e);
+				ctx.set.status = 500;
+				return { error: err instanceof Error ? err.message : 'Internal error' };
 			}
 		},
 		{

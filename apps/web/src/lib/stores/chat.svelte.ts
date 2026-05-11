@@ -24,6 +24,10 @@
 import type { Activity, ActivityKind } from '@revv/shared';
 import {
 	clearChat,
+	cherryPickProposedCommit,
+	discardProposedCommit,
+	rebaseProposedCommits,
+	advanceWorktree,
 	fetchChatMessages,
 	fetchProposedChanges,
 	pushProposedChanges,
@@ -85,6 +89,32 @@ export interface ProposedComment {
 }
 let proposedComments = $state(new Map<string, ProposedComment[]>());
 
+// ── Worktree-blocked state ─────────────────────────────────────────────────
+//
+// When the PR head SHA advances but the worktree has unpushed agent commits,
+// the POST /api/chat returns a 409 WORKTREE_BLOCKED response. The blocked
+// state is stored here so the UI can present the commit list and offer
+// discard / rebase actions.
+
+export interface BlockedCommit {
+	sha: string;
+	shortSha: string;
+	subject: string;
+	committedAt: string;
+	files: string[];
+}
+
+export interface WorktreeBlockedState {
+	oldHeadSha: string;
+	newHeadSha: string;
+	commits: BlockedCommit[];
+}
+
+let worktreeBlocked = $state(new Map<string, WorktreeBlockedState | null>());
+let discardingCommits = $state(new Set<string>());
+let cherryPickingCommits = $state(new Set<string>());
+let rebasingPrIds = $state(new Set<string>());
+
 // Non-reactive — abort controllers have no UI semantics.
 const abortControllers = new Map<string, AbortController>();
 const resolveAbortControllers = new Map<string, AbortController>();
@@ -127,6 +157,22 @@ function commentKey(prId: string, sha: string): string {
 
 export function getProposedComments(prId: string, sha: string): ProposedComment[] {
 	return proposedComments.get(commentKey(prId, sha)) ?? [];
+}
+
+export function getWorktreeBlocked(prId: string): WorktreeBlockedState | null {
+	return worktreeBlocked.get(prId) ?? null;
+}
+
+export function isDiscardingCommit(sha: string): boolean {
+	return discardingCommits.has(sha);
+}
+
+export function isCherryPickingCommit(sha: string): boolean {
+	return cherryPickingCommits.has(sha);
+}
+
+export function isRebasingProposed(prId: string): boolean {
+	return rebasingPrIds.has(prId);
 }
 
 // ── Internal mutators (each reassigns the container per Svelte-5 reactivity) ─
@@ -219,6 +265,11 @@ function setProposedComments(
 		proposedComments.set(key, comments);
 	}
 	proposedComments = new Map(proposedComments);
+}
+
+function setWorktreeBlocked(prId: string, state: WorktreeBlockedState | null): void {
+	worktreeBlocked.set(prId, state);
+	worktreeBlocked = new Map(worktreeBlocked);
 }
 
 export function addProposedComment(
@@ -386,6 +437,27 @@ export function sendChatMessage(params: SendChatMessageParams): void {
 				void refreshProposedChanges(prId);
 			},
 			onError: (err) => {
+				// Special case: the PR head advanced but the worktree has
+				// unpushed agent commits. Surface the blocked state so the UI
+				// can show the discard/rebase panel instead of a generic error.
+				if (err.code === 'WORKTREE_BLOCKED') {
+					const blocked = err as unknown as {
+						code: string;
+						commits: BlockedCommit[];
+						oldHeadSha: string;
+						newHeadSha: string;
+					};
+					setWorktreeBlocked(prId, {
+						oldHeadSha: blocked.oldHeadSha,
+						newHeadSha: blocked.newHeadSha,
+						commits: blocked.commits,
+					});
+					// The assistant placeholder has no content — remove it.
+					removeItem(prId, assistantId);
+					setStreaming(prId, false);
+					abortControllers.delete(prId);
+					return;
+				}
 				// Preserve any partial content the agent already streamed —
 				// activity lines were spliced *before* this bubble, so removing
 				// it would leave them orphaned. Only drop the bubble if it's
@@ -454,6 +526,7 @@ export async function clearChatHistory(prId: string): Promise<void> {
 	setError(prId, null);
 	setStreaming(prId, false);
 	setProposedChanges(prId, null);
+	setWorktreeBlocked(prId, null);
 	// Reset the loaded flag so a subsequent navigation re-pulls the
 	// (now-empty) timeline from the server. Clearing the agent-side session
 	// also wipes chat_messages/chat_activities via FK CASCADE on
@@ -716,4 +789,88 @@ export async function resolveAndPushProposed(prId: string): Promise<void> {
 
 		resolveAbortControllers.set(prId, controller);
 	});
+}
+
+// ── Blocked-commit actions ─────────────────────────────────────────────────
+
+/**
+ * Discard a single agent commit from the blocked worktree via rebase --onto.
+ * When all commits are discarded, advances the worktree to the new PR head.
+ */
+export async function discardProposedCommitAction(
+	prId: string,
+	sha: string,
+): Promise<void> {
+	if (discardingCommits.has(sha)) return;
+	discardingCommits.add(sha);
+	discardingCommits = new Set(discardingCommits);
+	try {
+		await discardProposedCommit(prId, sha);
+		const blocked = worktreeBlocked.get(prId);
+		if (blocked) {
+			const remainingCommits = blocked.commits.filter((c) => c.sha !== sha);
+			if (remainingCommits.length === 0) {
+				// Last commit discarded — advance the worktree.
+				await advanceWorktree(prId, blocked.newHeadSha);
+				setWorktreeBlocked(prId, null);
+				await refreshProposedChanges(prId);
+			} else {
+				setWorktreeBlocked(prId, { ...blocked, commits: remainingCommits });
+			}
+		} else {
+			await refreshProposedChanges(prId);
+		}
+		toast.success('Commit discarded');
+	} catch (err) {
+		toast.error(err instanceof Error ? err.message : 'Failed to discard commit');
+	} finally {
+		discardingCommits.delete(sha);
+		discardingCommits = new Set(discardingCommits);
+	}
+}
+
+/**
+ * Rebase all agent commits onto the new PR head SHA, then advance the worktree.
+ */
+export async function rebaseAllProposedAction(prId: string): Promise<void> {
+	const blocked = worktreeBlocked.get(prId);
+	if (!blocked) return;
+	if (rebasingPrIds.has(prId)) return;
+	rebasingPrIds.add(prId);
+	rebasingPrIds = new Set(rebasingPrIds);
+	try {
+		await rebaseProposedCommits(prId, blocked.oldHeadSha, blocked.newHeadSha);
+		await advanceWorktree(prId, blocked.newHeadSha);
+		setWorktreeBlocked(prId, null);
+		await refreshProposedChanges(prId);
+		toast.success('Commits rebased onto new PR head');
+	} catch (err) {
+		toast.error(err instanceof Error ? err.message : 'Failed to rebase commits');
+	} finally {
+		rebasingPrIds.delete(prId);
+		rebasingPrIds = new Set(rebasingPrIds);
+	}
+}
+
+/**
+ * Cherry-pick a single proposed commit onto the PR's source branch and push.
+ * After success, refreshes the proposed-changes list.
+ */
+export async function cherryPickProposedCommitAction(
+	prId: string,
+	sha: string,
+): Promise<void> {
+	if (cherryPickingCommits.has(sha)) return;
+	cherryPickingCommits.add(sha);
+	cherryPickingCommits = new Set(cherryPickingCommits);
+	try {
+		await cherryPickProposedCommit(prId, sha);
+		await refreshProposedChanges(prId);
+		toast.success('Commit pushed to PR branch');
+	} catch (err) {
+		toast.error(err instanceof Error ? err.message : 'Failed to push commit');
+	} finally {
+		cherryPickingCommits.delete(sha);
+		cherryPickingCommits = new Set(cherryPickingCommits);
+	}
 }

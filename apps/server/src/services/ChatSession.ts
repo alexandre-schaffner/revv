@@ -18,7 +18,7 @@
 // can't double-issue the same sequence number.
 
 import { Context, Effect, Layer } from "effect";
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { DbService } from "./Db";
 import { chatActivities, chatMessages, chatSessions } from "../db/schema/index";
 
@@ -88,6 +88,15 @@ export class ChatSessionService extends Context.Tag("ChatSessionService")<
 			prId: string,
 			agent: string,
 			prHeadSha: string,
+		) => Effect.Effect<ChatSessionRow | null>;
+		/**
+		 * Find the most recently active chat session for a PR+agent pair,
+		 * regardless of prHeadSha. Used by commit-management endpoints where the
+		 * worktree may be on an old SHA.
+		 */
+		readonly findLatestForPr: (
+			prId: string,
+			agent: string,
 		) => Effect.Effect<ChatSessionRow | null>;
 		/**
 		 * Look up the existing row for (prId, agent, prHeadSha) or insert a
@@ -246,6 +255,23 @@ export const ChatSessionServiceLive = Layer.effect(
 								eq(chatSessions.prHeadSha, prHeadSha),
 							),
 						)
+						.get();
+					return row ? rowToSessionRow(row) : null;
+				}),
+
+			findLatestForPr: (prId, agent) =>
+				Effect.sync(() => {
+					const row = db
+						.select()
+						.from(chatSessions)
+						.where(
+							and(
+								eq(chatSessions.pullRequestId, prId),
+								eq(chatSessions.agent, agent),
+							),
+						)
+						.orderBy(desc(chatSessions.lastActivityAt))
+						.limit(1)
 						.get();
 					return row ? rowToSessionRow(row) : null;
 				}),

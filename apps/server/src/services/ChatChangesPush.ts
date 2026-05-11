@@ -208,6 +208,16 @@ export class ChatChangesPushService extends Context.Tag(
 			DbService | GitHubEtagCache
 		>;
 
+		readonly cherryPickAndPush: (params: {
+			readonly prId: string;
+			readonly userId: string;
+			readonly sha: string;
+		}) => Effect.Effect<
+			AttemptPushResult,
+			ChatPushError,
+			DbService | GitHubEtagCache
+		>;
+
 		readonly isPushing: (prId: string) => boolean;
 		readonly markChatStreaming: (prId: string, streaming: boolean) => void;
 		readonly isChatStreaming: (prId: string) => boolean;
@@ -1304,9 +1314,72 @@ export const ChatChangesPushServiceLive = Layer.effect(
 				return stream;
 			});
 
+		const cherryPickAndPush = (params: {
+			readonly prId: string;
+			readonly userId: string;
+			readonly sha: string;
+		}): Effect.Effect<AttemptPushResult, ChatPushError, DbService | GitHubEtagCache> =>
+			Effect.gen(function* () {
+				yield* beginPush(params.prId);
+				return yield* Effect.gen(function* () {
+					const ctx = yield* preflight(params);
+					const authedUrl = `https://x-access-token:${ctx.token}@${GITHUB_HOST}/${ctx.repo.fullName}.git`;
+
+					// Validate SHA exists in worktree
+					const fullShaOut = yield* Effect.tryPromise({
+						try: () => runGitCapture(['rev-parse', params.sha], ctx.session.worktreePath, 5_000),
+						catch: (err) => new GitOperationError({ message: err instanceof Error ? err.message : String(err), cause: err }),
+					});
+					const fullSha = fullShaOut.trim();
+					if (!isValidSha(fullSha)) {
+						return yield* Effect.fail(new GitOperationError({ message: `Cannot resolve SHA: ${params.sha}` }));
+					}
+
+					const expectedRemoteSha = yield* Effect.tryPromise({
+						try: () => lsRemoteHead(ctx.session.worktreePath, authedUrl, ctx.pr.sourceBranch),
+						catch: (err) => new GitOperationError({ message: err instanceof Error ? err.message : String(err), cause: err }),
+					});
+
+					yield* fetchSourceBranch({ worktreePath: ctx.session.worktreePath, authedUrl, sourceBranch: ctx.pr.sourceBranch });
+
+					// Checkout source branch locally
+					yield* Effect.tryPromise({
+						try: () => runGit(['checkout', '-B', ctx.pr.sourceBranch, `refs/remotes/origin/${ctx.pr.sourceBranch}`], ctx.session.worktreePath),
+						catch: (err) => new GitOperationError({ message: err instanceof Error ? err.message : String(err), cause: err }),
+					});
+
+					// Cherry-pick the single commit
+					const cpResult = yield* Effect.tryPromise({
+						try: () => spawnGit(['cherry-pick', fullSha], { cwd: ctx.session.worktreePath, timeoutMs: 60_000, captureStdout: false }),
+						catch: (err) => new GitOperationError({ message: err instanceof Error ? err.message : String(err), cause: err }),
+					});
+
+					if (cpResult.timedOut || cpResult.exitCode !== 0) {
+						// Abort cherry-pick and restore worktree
+						yield* Effect.tryPromise({
+							try: () => runGitBestEffort(['cherry-pick', '--abort'], ctx.session.worktreePath, 15_000),
+							catch: () => new GitOperationError({ message: 'cherry-pick --abort failed' }),
+						});
+						yield* restoreToAgentBranch({ worktreePath: ctx.session.worktreePath, branchName: ctx.session.branchName });
+						return yield* Effect.fail(new GitOperationError({ message: `Cherry-pick failed: ${cpResult.stderrTail}` }));
+					}
+
+					return yield* completePush({
+						pr: { id: ctx.pr.id, externalId: ctx.pr.externalId, sourceBranch: ctx.pr.sourceBranch },
+						repo: { fullName: ctx.repo.fullName },
+						token: ctx.token,
+						session: { id: ctx.session.id, worktreePath: ctx.session.worktreePath, branchName: ctx.session.branchName },
+						authedUrl,
+						expectedRemoteSha,
+						aheadCount: 1,
+					});
+				}).pipe(Effect.ensuring(releasePush(params.prId)));
+			});
+
 		return {
 			attemptMergeAndPush,
 			resolveConflictsAndPush,
+			cherryPickAndPush,
 			isPushing: (prId: string) => inFlight.has(prId),
 			markChatStreaming: (prId: string, streaming: boolean) => {
 				if (streaming) streamingChats.add(prId);
