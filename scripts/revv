@@ -334,9 +334,16 @@ cmd_update() {
   [[ -x "$bun_for_plist" ]] || fail "Cannot locate bun for the LaunchAgent."
 
   if declare -F write_launch_agent_plist >/dev/null 2>&1; then
-    # Pass GitHub Enterprise vars through so the refreshed plist keeps them.
-    # write_launch_agent_plist reads REVV_GITHUB_HOST / REVV_GITHUB_CLIENT_ID
-    # and falls back to grepping the source dir's apps/server/.env if unset.
+    # Restore GitHub Enterprise config from the persisted conf file so the
+    # refreshed plist keeps the correct host/client-id without re-prompting.
+    # Priority: existing env var > github.conf > empty (defaults to github.com).
+    local _github_conf="${REVV_SUPPORT_DIR}/github.conf"
+    if [[ -z "${REVV_GITHUB_HOST:-}" ]] && declare -F _revv_dotenv_get >/dev/null 2>&1; then
+      REVV_GITHUB_HOST="$(_revv_dotenv_get GITHUB_HOST "$_github_conf")"
+    fi
+    if [[ -z "${REVV_GITHUB_CLIENT_ID:-}" ]] && declare -F _revv_dotenv_get >/dev/null 2>&1; then
+      REVV_GITHUB_CLIENT_ID="$(_revv_dotenv_get GITHUB_CLIENT_ID "$_github_conf")"
+    fi
     export REVV_GITHUB_HOST="${REVV_GITHUB_HOST:-}"
     export REVV_GITHUB_CLIENT_ID="${REVV_GITHUB_CLIENT_ID:-}"
     launchctl unload "$LAUNCH_AGENT_PLIST" 2>/dev/null || true

@@ -344,13 +344,27 @@ write_launch_agent_plist() {
   [[ -n "$opencode_bin" ]] && info "Detected opencode at $opencode_bin"
 
   # ── GitHub Enterprise env vars ─────────────────────────────
-  # Prefer values the caller exported; fall back to apps/server/.env so that
-  # GitHub Enterprise users don't lose their config when the installed app
-  # has no .env file at runtime.
+  # Resolution order (first non-empty value wins):
+  #   1. Caller-exported env vars (REVV_GITHUB_HOST / REVV_GITHUB_CLIENT_ID)
+  #   2. $REVV_SUPPORT_DIR/github.conf  — persisted at install time, readable
+  #      even when no terminal is available (e.g. launchd update triggers)
+  #   3. $project_root/apps/server/.env — dev-checkout fallback
+  #
+  # Ensure REVV_SUPPORT_DIR is set so we can locate the conf file.
+  if [[ -z "${REVV_SUPPORT_DIR:-}" ]]; then
+    revv_paths
+  fi
+  local conf_file="${REVV_SUPPORT_DIR}/github.conf"
   local dotenv_file="$project_root/apps/server/.env"
   local github_host="${REVV_GITHUB_HOST:-}"
   local github_client_id="${REVV_GITHUB_CLIENT_ID:-}"
 
+  if [[ -z "$github_host" ]]; then
+    github_host="$(_revv_dotenv_get GITHUB_HOST "$conf_file")"
+  fi
+  if [[ -z "$github_client_id" ]]; then
+    github_client_id="$(_revv_dotenv_get GITHUB_CLIENT_ID "$conf_file")"
+  fi
   if [[ -z "$github_host" ]]; then
     github_host="$(_revv_dotenv_get GITHUB_HOST "$dotenv_file")"
   fi

@@ -294,7 +294,36 @@ cp -R "$bundle_app" "$dest_app"
 xattr -cr "$dest_app" 2>/dev/null || true
 success "Installed → $dest_app"
 
-# ── 7. LaunchAgent ────────────────────────────────────────────
+# ── 7. GitHub Enterprise config ───────────────────────────────
+step "GitHub Enterprise configuration"
+
+# Allow non-interactive override via env var. In --yes mode default to
+# github.com (public cloud) unless a host is already set.
+if [[ -z "${REVV_GITHUB_HOST:-}" ]]; then
+  read_tty REVV_GITHUB_HOST "GitHub host" "github.com"
+fi
+REVV_GITHUB_HOST="${REVV_GITHUB_HOST:-github.com}"
+
+if [[ "$REVV_GITHUB_HOST" != "github.com" && -z "${REVV_GITHUB_CLIENT_ID:-}" ]]; then
+  read_tty REVV_GITHUB_CLIENT_ID "GitHub OAuth App Client ID"
+  [[ -n "$REVV_GITHUB_CLIENT_ID" ]] \
+    || fail "A GitHub OAuth App Client ID is required for GitHub Enterprise hosts."
+fi
+
+export REVV_GITHUB_HOST
+export REVV_GITHUB_CLIENT_ID="${REVV_GITHUB_CLIENT_ID:-}"
+
+# Persist to $REVV_SUPPORT_DIR/github.conf so revv update can read it back
+# without prompting and write_launch_agent_plist can find it without a terminal.
+mkdir -p "$REVV_SUPPORT_DIR"
+{
+  printf 'GITHUB_HOST=%s\n' "$REVV_GITHUB_HOST"
+  [[ -n "$REVV_GITHUB_CLIENT_ID" ]] && printf 'GITHUB_CLIENT_ID=%s\n' "$REVV_GITHUB_CLIENT_ID"
+} > "$REVV_SUPPORT_DIR/github.conf"
+chmod 600 "$REVV_SUPPORT_DIR/github.conf"
+success "GitHub config saved → $REVV_SUPPORT_DIR/github.conf (host: $REVV_GITHUB_HOST)"
+
+# ── 8. LaunchAgent ────────────────────────────────────────────
 step "Installing background service (LaunchAgent)"
 mkdir -p "$(dirname "$REVV_LAUNCH_AGENT_PLIST")" "$REVV_LOG_DIR"
 bun_bin="$HOME/.bun/bin/bun"
@@ -302,14 +331,6 @@ bun_bin="$HOME/.bun/bin/bun"
 [[ -x "$bun_bin" ]] || fail "Cannot locate bun executable for the LaunchAgent."
 server_entry="$PROJECT_ROOT/apps/server/src/index.ts"
 [[ -f "$server_entry" ]] || fail "Server entry point missing: $server_entry"
-
-# Inject GitHub Enterprise vars into the LaunchAgent plist so they survive
-# after install when no apps/server/.env file is present at runtime.
-# write_launch_agent_plist reads REVV_GITHUB_HOST / REVV_GITHUB_CLIENT_ID;
-# if unset here it will fall back to grepping apps/server/.env automatically.
-# Callers running a GHE install can pre-export these before invoking install.sh.
-export REVV_GITHUB_HOST="${REVV_GITHUB_HOST:-}"
-export REVV_GITHUB_CLIENT_ID="${REVV_GITHUB_CLIENT_ID:-}"
 
 write_launch_agent_plist \
   "$REVV_LAUNCH_AGENT_PLIST" \
@@ -335,7 +356,7 @@ for i in {1..30}; do
   fi
 done
 
-# ── 8. Install the management CLI ─────────────────────────────
+# ── 9. Install the management CLI ─────────────────────────────
 step "Installing revv CLI"
 mkdir -p "$REVV_SUPPORT_DIR"
 cat > "$REVV_SUPPORT_DIR/config" <<CFG
