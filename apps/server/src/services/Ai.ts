@@ -22,6 +22,7 @@ import { streamWalkthroughViaMCP, type ContinuationContext } from '../ai/provide
 import { streamWalkthroughViaOpencodeMCP } from '../ai/providers/mcp-walkthrough-opencode';
 import { guardWalkthroughStream } from '../ai/providers/stream-guard';
 import {
+	type ChatHistoryEntry,
 	type ChatPrContext,
 	type ChatWalkthroughContext,
 	buildChatSystemPrompt,
@@ -31,6 +32,7 @@ import {
 } from '../ai/prompts/chat';
 import { type ChatStreamFrame, streamChatViaClaude } from '../ai/providers/chat-claude';
 import { streamChatViaOpencode } from '../ai/providers/chat-opencode';
+import { WALKTHROUGH_FIRST_EVENT_TIMEOUT_OPENCODE_MS } from '../constants';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -40,6 +42,15 @@ export interface ChatParams {
 	readonly pr: ChatPrContext;
 	readonly walkthrough: ChatWalkthroughContext | null;
 	readonly message: string;
+	/**
+	 * Persisted chat timeline (messages + activities) for the current
+	 * session, NOT including the message being sent in this turn. The chat
+	 * route fetches this from `chat_messages` / `chat_activities` before
+	 * appending the new user message and passes it through so the prompt
+	 * builder can inline a `## Conversation history` block. This keeps the
+	 * agent in-context even when native session resume is unavailable.
+	 */
+	readonly history: ReadonlyArray<ChatHistoryEntry>;
 	readonly cwd: string;
 	readonly branchName: string;
 	readonly resumeSessionId: string | null;
@@ -266,7 +277,7 @@ export const AiServiceLive = Layer.effect(
 							settings.aiModel ?? undefined,
 							settings,
 						);
-						return guardWalkthroughStream(raw, { label: 'opencode-mcp', synthesizePhases: false, explorationStallMs: Infinity });
+						return guardWalkthroughStream(raw, { label: 'opencode-mcp', synthesizePhases: false, explorationStallMs: Infinity, firstEventTimeoutMs: WALKTHROUGH_FIRST_EVENT_TIMEOUT_OPENCODE_MS });
 					}
 					const raw = streamWalkthroughViaMCP(
 						providerParams,
@@ -290,7 +301,18 @@ export const AiServiceLive = Layer.effect(
 						walkthrough: params.walkthrough,
 						branchName: params.branchName,
 					});
-					const message = buildChatUserMessage({ message: params.message });
+					// Only inline the `## Conversation history` block on a fresh
+					// session (no resume id). On resume, the agent daemon already
+					// has the prior turns in its own session state; sending the
+					// transcript again causes the agent to echo it back into its
+					// response, which then renders as a visible "Conversation
+					// history" block in the chat bubble.
+					const message = params.resumeSessionId
+						? params.message
+						: buildChatUserMessage({
+								message: params.message,
+								history: params.history,
+							});
 
 					if (agent === 'claude') {
 						return streamChatViaClaude({

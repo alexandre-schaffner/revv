@@ -116,7 +116,7 @@ export interface SessionTokenEntry {
 	readonly expiresAt: number;
 }
 
-export type StartJobTrigger = "user" | "resume";
+export type StartJobTrigger = "user" | "resume" | "review_requested";
 
 /** Error union surfaced by `startJob`. Inherited from its transitive calls. */
 export type StartJobError =
@@ -1470,7 +1470,11 @@ export const WalkthroughJobsLive = Layer.effect(
 				const notifiers = yield* Ref.get(activityNotifiers);
 				const notify = notifiers.get(walkthroughId);
 				if (notify) {
-					try { notify(event); } catch { /* notifier threw — ignore */ }
+					// Push a phase heartbeat to reset the stream guard's inactivity timer.
+					// Content events already reach the frontend via fanOut — don't re-emit them.
+					try {
+						notify({ type: 'phase', data: { phase: 'exploring', message: 'Processing...' } });
+					} catch { /* notifier threw — ignore */ }
 				}
 			});
 

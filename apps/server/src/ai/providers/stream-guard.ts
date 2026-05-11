@@ -132,7 +132,10 @@ export function guardWalkthroughStream(
 						emittedAnalyzingPhase = true;
 						yield { type: 'phase' as const, data: PHASE_MESSAGES['summary']! };
 					}
-					if (event.type === 'block' && !emittedWritingPhase) {
+					if (
+						(event.type === 'semantic-step' || event.type === 'block') &&
+						!emittedWritingPhase
+					) {
 						emittedWritingPhase = true;
 						yield { type: 'phase' as const, data: PHASE_MESSAGES['block']! };
 					}

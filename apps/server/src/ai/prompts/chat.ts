@@ -125,8 +125,63 @@ export function buildChatSystemPrompt(params: ChatSystemPromptParams): string {
 	return prompt;
 }
 
-export function buildChatUserMessage(params: { message: string }): string {
-	return params.message;
+/**
+ * A single entry from the persisted chat timeline that we re-inline into the
+ * agent's user message. Mirrors the shape of `ChatTimelineEntry` from
+ * `services/ChatSession`, but kept as a local interface so this prompt module
+ * stays free of service-layer imports.
+ */
+export type ChatHistoryEntry =
+	| {
+			readonly entryKind: 'message';
+			readonly role: 'user' | 'assistant';
+			readonly content: string;
+	  }
+	| {
+			readonly entryKind: 'activity';
+			readonly activityKind: string;
+			readonly toolName: string | null;
+			readonly summary: string;
+	  };
+
+export interface ChatUserMessageParams {
+	readonly message: string;
+	/**
+	 * Persisted timeline of the current chat session, in sequence order,
+	 * NOT including the message being sent in this turn. When non-empty,
+	 * it's serialized into a `## Conversation history` block prepended to
+	 * the user's message so the agent sees the full transcript even when
+	 * native session resume isn't available (fresh daemon, missing
+	 * session id, agent switch, etc.).
+	 */
+	readonly history?: ReadonlyArray<ChatHistoryEntry>;
+}
+
+export function buildChatUserMessage(params: ChatUserMessageParams): string {
+	const history = params.history ?? [];
+	if (history.length === 0) return params.message;
+
+	const lines: string[] = ['## Conversation history', ''];
+	for (const entry of history) {
+		if (entry.entryKind === 'message') {
+			const role = entry.role === 'user' ? 'User' : 'Assistant';
+			const body = entry.content.trim();
+			if (body.length === 0) continue;
+			lines.push(`**${role}:**`);
+			lines.push(body);
+			lines.push('');
+		} else {
+			const tool = entry.toolName ? ` (${entry.toolName})` : '';
+			lines.push(`_[${entry.activityKind}${tool}]_ ${entry.summary}`);
+			lines.push('');
+		}
+	}
+	lines.push('---');
+	lines.push('');
+	lines.push('## Current message');
+	lines.push('');
+	lines.push(params.message);
+	return lines.join('\n');
 }
 
 export interface ResolveConflictsPromptParams {

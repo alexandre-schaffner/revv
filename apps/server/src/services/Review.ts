@@ -284,7 +284,6 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 
 	createThread: (sessionId, params) =>
 		Effect.gen(function* () {
-			const { db } = yield* DbService;
 			const id = crypto.randomUUID();
 			const createdAt = new Date().toISOString();
 
@@ -352,7 +351,6 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 
 	setThreadExternalIds: (threadId, ids) =>
 		Effect.gen(function* () {
-			const { db } = yield* DbService;
 			const setObj: Partial<typeof commentThreads.$inferInsert> = {};
 			if (ids.externalThreadId !== undefined) setObj.externalThreadId = ids.externalThreadId;
 			if (ids.externalCommentId !== undefined) setObj.externalCommentId = ids.externalCommentId;

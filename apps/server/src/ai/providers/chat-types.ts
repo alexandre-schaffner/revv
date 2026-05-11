@@ -24,4 +24,5 @@ export { classifyTool, normalizeToolName } from "@revv/shared";
  */
 export type ChatStreamFrame =
 	| { readonly kind: "text"; readonly data: string }
+	| { readonly kind: "reasoning"; readonly data: string }
 	| ({ readonly kind: "activity" } & Activity);

@@ -377,14 +377,19 @@ export function sendChatMessage(params: SendChatMessageParams): void {
 	setError(prId, null);
 
 	// Append the user's message + a placeholder assistant message.
+	// `turnId` correlates the assistant placeholder with the activities that
+	// stream in for the same turn — the RightPanel uses it to fold the last
+	// 2 tool calls into the bubble's dot-matrix loader.
 	const userId = crypto.randomUUID();
 	const assistantId = crypto.randomUUID();
+	const turnId = crypto.randomUUID();
 	appendItem(prId, {
 		kind: 'message',
 		id: userId,
 		role: 'user',
 		content: trimmed,
 		isStreaming: false,
+		turnId,
 	});
 	appendItem(prId, {
 		kind: 'message',
@@ -392,6 +397,7 @@ export function sendChatMessage(params: SendChatMessageParams): void {
 		role: 'assistant',
 		content: '',
 		isStreaming: true,
+		turnId,
 	});
 	setStreaming(prId, true);
 
@@ -418,6 +424,7 @@ export function sendChatMessage(params: SendChatMessageParams): void {
 					activityKind: activity.activityKind,
 					toolName: activity.toolName,
 					summary: activity.summary,
+					turnId,
 				};
 				if (idx === -1) {
 					setItems(prId, [...items, item]);
@@ -551,10 +558,16 @@ export async function clearChatHistory(prId: string): Promise<void> {
  * No-op if no turn is in flight.
  */
 export function abortChatTurn(prId: string): void {
+	// Abort the in-flight fetch if one exists. The streaming flag and the
+	// assistant bubble can outlive the controller (e.g. an SSE error cleared
+	// the controller but a stale streaming flag survived, or HMR reset the
+	// module-level controller map), so the cleanup below runs unconditionally
+	// — otherwise the Stop button becomes a no-op and the user is stuck.
 	const controller = abortControllers.get(prId);
-	if (!controller) return;
-	controller.abort();
-	abortControllers.delete(prId);
+	if (controller) {
+		controller.abort();
+		abortControllers.delete(prId);
+	}
 
 	// Finalize whichever assistant bubble is still streaming. The streaming
 	// callbacks won't fire onDone for an aborted fetch, so we close out the

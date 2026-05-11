@@ -693,6 +693,43 @@ export const RepoCloneServiceLive = Layer.effect(
 									if (currentSha === prHeadSha) {
 										return { worktreePath, branchName };
 									}
+								// HEAD has moved past `prHeadSha`. Two distinct
+								// shapes hide behind that:
+								//
+								//   (a) The chat agent committed on top of
+								//       `prHeadSha` (no push yet). `currentSha`
+								//       is a descendant of `prHeadSha` and those
+								//       commits must survive into the next chat
+								//       turn — they're what the chat-header push
+								//       pill and proposed-changes strip render.
+								//   (b) `prHeadSha` itself advanced on the remote
+								//       (PR head moved) while we held a stale
+								//       snapshot, so the worktree's HEAD has a
+								//       different base than the requested
+								//       `prHeadSha`. Here we want the old reset
+								//       behavior — realign to the new head; any
+								//       unpushed agent commits based on the
+								//       stale head are discarded by design.
+								//
+								// `merge-base --is-ancestor prHeadSha currentSha`
+								// is exit-0 iff (a) — `prHeadSha` is reachable
+								// from `currentSha`. It also exit-0s in the rare
+								// fast-forward case where the worktree is
+								// somehow already past `prHeadSha` without the
+								// agent's involvement, which is still the
+								// correct no-op outcome.
+								const isAncestor = await runGitBestEffort(
+									[
+										"merge-base",
+										"--is-ancestor",
+										prHeadSha,
+										currentSha,
+									],
+									worktreePath,
+								);
+								if (isAncestor) {
+									return { worktreePath, branchName };
+								}
 								// Pull the requested commit into the local object
 								// store. We target `prHeadSha` directly rather than
 								// `refs/pull/{N}/head` because the PR's current head
@@ -705,30 +742,6 @@ export const RepoCloneServiceLive = Layer.effect(
 								// both working tree and branch ref atomically
 								// without tripping git's "refusing to fetch into
 								// branch checked out at <path>" guard.
-								//
-								// Before resetting, check if the agent has made
-								// commits above prHeadSha that haven't been pushed.
-								// If so, refuse the advance to preserve them.
-								const agentCommitCount = await countCommitsAboveSha(
-									worktreePath,
-									prHeadSha,
-									currentSha,
-								);
-								if (agentCommitCount > 0) {
-									const commits = await listCommitsAboveSha(
-										worktreePath,
-										prHeadSha,
-										currentSha,
-									);
-									throw new WorktreeBlockedByUnpushedCommits({
-										worktreePath,
-										branchName,
-										oldHeadSha: currentSha,
-										newHeadSha: prHeadSha,
-										commits,
-									});
-								}
-								// No agent commits above prHeadSha — safe to advance.
 								await ensurePrCommitPresent(
 									worktreePath,
 									prHeadSha,

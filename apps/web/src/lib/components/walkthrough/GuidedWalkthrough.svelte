@@ -22,6 +22,7 @@
 		getStreamStartedAt,
 		getIssues,
 		getRatings,
+	getSemanticSteps,
 	getSentiment,
 	getLastCompletedPhase,
 	getIsSuperseded,
@@ -43,6 +44,7 @@
 } from '$lib/stores/walkthrough.svelte';
 	import { getRepositories } from '$lib/stores/prs.svelte';
 	import { API_BASE_URL } from '@revv/shared';
+	import type { WalkthroughBlock, WalkthroughSemanticStep } from '@revv/shared';
 	import { authHeaders } from '$lib/utils/session-token';
 	import { Progress } from '$lib/components/ui/progress';
 	import { Dotmatrix } from '$lib/components/ui/dotmatrix/index.js';
@@ -56,9 +58,7 @@
 
 	import FileBadge from '$lib/components/ui/FileBadge.svelte';
 	import IssueCard from './IssueCard.svelte';
-	import WalkthroughMarkdownBlock from './WalkthroughMarkdownBlock.svelte';
-	import WalkthroughCodeBlock from './WalkthroughCodeBlock.svelte';
-	import WalkthroughDiffBlock from './WalkthroughDiffBlock.svelte';
+	import WalkthroughSection from './WalkthroughSection.svelte';
 	import WalkthroughRatingsGrid from './WalkthroughRatingsGrid.svelte';
 
 	interface Props {
@@ -70,6 +70,7 @@
 	let { prId, scrollRoot, isActive = true }: Props = $props();
 
 	const blocks = $derived(getBlocks());
+	const semanticSteps = $derived(getSemanticSteps());
 	const summary = $derived(getSummary());
 	const riskLevel = $derived(getRiskLevel());
 	const isStreaming = $derived(getIsStreaming());
@@ -80,11 +81,6 @@
 	const themeType = $derived(getDiffThemeType());
 	const issues = $derived(getIssues());
 	const issueGroups = $derived(groupIssuesBySeverityWithIndex(issues));
-	// Summary is markdown — inline code (`foo`), bold (**foo**), and code fences
-	// all appear in real walkthroughs. Rendering `{summary}` as plain text (the
-	// old behavior) leaked backticks and asterisks into the DOM; render to HTML
-	// and inject via {@html} so it reads like the rest of the walkthrough.
-	const renderedSummary = $derived(summary ? renderMarkdown(summary) : '');
 	const ratings = $derived(getRatings());
 	const isLiveGeneration = $derived(getIsLiveGeneration());
 	const cloneInProgress = $derived(getCloneInProgress());
@@ -104,8 +100,6 @@
 	let elapsedSeconds = $state(0);
 	let elapsedTimer: ReturnType<typeof setInterval> | null = null;
 	let walkthroughDebounce: ReturnType<typeof setTimeout> | undefined;
-	let destroyed = false;
-	let showGenerateButton = $state(false);
 	let hydrating = $state(true);
 
 	$effect(() => {
@@ -285,6 +279,78 @@
 		});
 	});
 
+	// Partition the per-block render entries by their parent semantic step so
+	// each chapter receives only its own atomic blocks. Falls back to a
+	// trailing "Diff analysis" bucket for any blocks that arrive before the
+	// chapter that owns them — should be impossible given the prompt's
+	// declaration order, but defensive against malformed streams.
+	const blocksBySection = $derived.by(() => {
+		const map = new Map<number, typeof blocksWithDelay>();
+		for (const entry of blocksWithDelay) {
+			const idx = entry.block.semanticStepIndex ?? -1;
+			const arr = map.get(idx) ?? [];
+			arr.push(entry);
+			map.set(idx, arr);
+		}
+		return map;
+	});
+
+	// Hide chapters that exist in the DB but carry no atomic blocks yet. Two
+	// callers depend on this:
+	//   (a) The agent's currently-open chapter — there's a brief window after
+	//       `add_semantic_step` lands and before the first `add_diff_step` where
+	//       the section would render with just a heading. The bottom-of-feed
+	//       diff skeleton already signals "more incoming," so an empty chapter
+	//       above is noise.
+	//   (b) Defensive against a stalled agent that opened a chapter and never
+	//       filled it before the run ended. The completion gate rejects this
+	//       case server-side, but a cached partial may still have empty rows;
+	//       filtering keeps the UI honest.
+	const visibleSemanticSteps = $derived(
+		semanticSteps.filter(
+			(s) => (blocksBySection.get(s.semanticStepIndex)?.length ?? 0) > 0,
+		),
+	);
+
+	// Pre-render the overview summary as a synthetic markdown block so it slots
+	// into the same WalkthroughSection grid as the Phase B chapters below. The
+	// id is fixed (one overview per walkthrough) and the chapter index is
+	// negative so it cannot collide with a real semantic_step_index.
+	const overviewSection = $derived({
+		semanticStepIndex: -1,
+		title: 'Overview',
+		summary: null,
+	} satisfies WalkthroughSemanticStep);
+	const overviewEntries = $derived.by(() => {
+		if (summary === null) return [] as typeof blocksWithDelay;
+		const overviewBlock: WalkthroughBlock = {
+			type: 'markdown',
+			id: 'overview-block',
+			order: -1,
+			phase: 'overview',
+			semanticStepIndex: -1,
+			stepIndex: 0,
+			content: summary,
+		};
+		return [
+			{
+				block: overviewBlock,
+				delay: hasBlockAnimated(prId, overviewBlock.id) ? -1 : 0,
+				renderedAnnotation: null,
+			},
+		];
+	});
+	$effect(() => {
+		if (summary !== null) markBlockAnimated(prId, 'overview-block');
+	});
+
+	// Total chapters shown to the reader = the virtual overview chapter (when
+	// summary has arrived) + every visible Phase B chapter. Used by both the
+	// Overview chapter and the Phase B chapter loop for the "Ch N / M" eyebrow.
+	const totalChapters = $derived(
+		(summary !== null ? 1 : 0) + visibleSemanticSteps.length,
+	);
+
 	// Mirror the block-stagger logic for issue cards. Issue cards have their
 	// own CSS entrance animation (`issue-card-enter`), so without tracking they
 	// replay on every tab revisit the same way blocks used to.
@@ -326,7 +392,6 @@
 	// remount semantics, but we guard for it anyway).
 	let stepperAnimated = $state(untrack(() => hasContainerAnimated(prId, 'stepper')));
 	let contentAnimated = $state(untrack(() => hasContainerAnimated(prId, 'content')));
-	let summaryAnimated = $state(untrack(() => hasContainerAnimated(prId, 'summary')));
 	let issuesSectionAnimated = $state(untrack(() => hasContainerAnimated(prId, 'issues-section')));
 
 	let lastSyncedFor: string | null = untrack(() => `${prId}:${streamStartedAt ?? 'init'}`);
@@ -336,11 +401,10 @@
 		lastSyncedFor = key;
 		stepperAnimated = hasContainerAnimated(prId, 'stepper');
 		contentAnimated = hasContainerAnimated(prId, 'content');
-		summaryAnimated = hasContainerAnimated(prId, 'summary');
 		issuesSectionAnimated = hasContainerAnimated(prId, 'issues-section');
 	});
 
-	type ContainerKey = 'stepper' | 'content' | 'summary' | 'issues-section';
+	type ContainerKey = 'stepper' | 'content' | 'issues-section';
 
 	function lockContainerAnimation(key: ContainerKey, event: AnimationEvent): void {
 		// Filter out bubbled events from descendants (issue-card-enter bubbles
@@ -349,7 +413,6 @@
 		markContainerAnimated(prId, key);
 		if (key === 'stepper') stepperAnimated = true;
 		else if (key === 'content') contentAnimated = true;
-		else if (key === 'summary') summaryAnimated = true;
 		else issuesSectionAnimated = true;
 	}
 
@@ -366,6 +429,34 @@
 		// the numbering that the user sees in the rendered walkthrough.
 		const idx = visibleBlocks.findIndex((b) => b.id === blockId);
 		return idx >= 0 ? idx + 1 : null;
+	}
+
+	/**
+	 * Issue card tag — "Ch N · Step M" where N is the 1-based chapter index of
+	 * the block's parent semantic step (matching the chapter eyebrow in
+	 * WalkthroughSection) and M is the 1-based atomic position within that
+	 * chapter. Falls back to a flat "Step N" when the block has no parent
+	 * recorded (legacy data; shouldn't happen post-reset).
+	 */
+	function chapterTagFor(blockId: string): string | null {
+		const block = visibleBlocks.find((b) => b.id === blockId);
+		if (!block) return null;
+		const semanticIdx = block.semanticStepIndex;
+		const stepIdx = block.stepIndex;
+		if (semanticIdx === undefined || stepIdx === undefined) {
+			const n = stepNumberFor(blockId);
+			return n !== null ? `→ Step ${n}` : null;
+		}
+		let chapterLabel: number;
+		if (semanticIdx === -1) {
+			// Virtual Overview chapter — always Ch 1
+			chapterLabel = 1;
+		} else {
+			const pos = visibleSemanticSteps.findIndex((s) => s.semanticStepIndex === semanticIdx);
+			// visibleSemanticSteps is 0-based; +1 for 1-based, +1 more to account for the Overview chapter
+			chapterLabel = pos >= 0 ? pos + 2 : semanticIdx + 2;
+		}
+		return `→ Ch ${chapterLabel} · Step ${stepIdx + 1}`;
 	}
 
 	// ── Block → flagged-issue severity ─────────────────────────────────
@@ -390,6 +481,64 @@
 		}
 		return map;
 	});
+
+	// ── Selected issue (persistent block highlight) ─────────────────────
+	// When the reader clicks an issue card we keep a severity-colored outline
+	// on its linked block until another issue is selected. The brief
+	// `block-wrapper--highlighted` pulse used by other callers (ratings grid,
+	// cross-tab jumps) is intentionally not triggered here — the outline is
+	// the persistent signal, the scroll is the affordance.
+	let selectedIssueId = $state<string | null>(null);
+	const selectedIssue = $derived(
+		selectedIssueId ? issues.find((i) => i.id === selectedIssueId) ?? null : null,
+	);
+	const selectedIssueBlockId = $derived(selectedIssue?.blockIds?.[0] ?? null);
+	const selectedIssueSeverity = $derived(selectedIssue?.severity ?? null);
+
+	// Drop the selection when we switch PRs so a stale id doesn't paint an
+	// outline on an unrelated block in the next walkthrough.
+	$effect(() => {
+		void prId;
+		selectedIssueId = null;
+	});
+
+	// Click-outside: any click that lands outside the selected step's block
+	// clears the highlight. Clicks inside the issue card list are exempt so
+	// the card's own onclick (which re-sets the selection) doesn't race with
+	// this listener — we'd otherwise clear and immediately re-set on every
+	// card click. Only registered while a selection is active.
+	$effect(() => {
+		if (selectedIssueId === null) return;
+		const blockId = selectedIssueBlockId;
+		function onDocumentClick(e: MouseEvent): void {
+			const target = e.target as Element | null;
+			if (!target) return;
+			if (blockId) {
+				const selectedEl = document.getElementById(`step-${blockId}`);
+				if (selectedEl && selectedEl.contains(target)) return;
+			}
+			if (target.closest('.issue-card')) return;
+			selectedIssueId = null;
+		}
+		document.addEventListener('click', onDocumentClick);
+		return () => document.removeEventListener('click', onDocumentClick);
+	});
+
+	function selectIssue(issueId: string, blockId: string): void {
+		selectedIssueId = issueId;
+		// Defer scroll one frame: setting `selectedIssueId` may auto-expand a
+		// collapsed parent section (see WalkthroughSection's $effect), and the
+		// scroll math needs to read the post-expansion getBoundingClientRect to
+		// land on the right spot.
+		requestAnimationFrame(() => {
+			const el = document.getElementById(`step-${blockId}`);
+			if (!el || !scrollRoot) return;
+			const containerRect = scrollRoot.getBoundingClientRect();
+			const elRect = el.getBoundingClientRect();
+			const offset = elRect.top - containerRect.top + scrollRoot.scrollTop - 16;
+			scrollRoot.scrollTo({ top: offset, behavior: 'smooth' });
+		});
+	}
 
 	function jumpToStep(blockId: string): void {
 		const el = document.getElementById(`step-${blockId}`);
@@ -450,16 +599,12 @@
 		// we fall back to the debounced SSE stream — the debounce is intentional
 		// for uncached PRs so quickly arrowing through the PR list doesn't
 		// trigger spurious AI generations.
-		hydrateFromCache(prId).then((hit) => {
+		hydrateFromCache(prId).then(() => {
 			hydrating = false;
-			if (!hit && !destroyed) {
-				showGenerateButton = true;
-			}
 		});
 	});
 
 	onDestroy(() => {
-		destroyed = true;
 		if (elapsedTimer) clearInterval(elapsedTimer);
 		if (walkthroughDebounce) clearTimeout(walkthroughDebounce);
 		stopClonePoll(prId);
@@ -580,7 +725,7 @@
 						aria-label={clickable ? `Jump to ${chapter.label}` : chapter.label}
 						onclick={clickable ? () => jumpToSection(chapter.targetId) : undefined}
 					>
-						<div class="chapter-eyebrow">Chapter {String(i + 1).padStart(2, '0')}</div>
+						<div class="chapter-eyebrow">Step {String(i + 1).padStart(2, '0')}</div>
 						{#if active}
 							<div class="chapter-active-layout">
 								<div class="chapter-title">{chapter.label}</div>
@@ -682,10 +827,10 @@
 				</div>
 			{/if}
 		</div>
-	{:else if showGenerateButton && !isStreaming && !summary && blocks.length === 0}
+	{:else if !isStreaming && !summary && blocks.length === 0 && !streamError && !cloneInProgress && !hydrating}
 		<div class="walkthrough-empty">
 			<p class="loading-text">No walkthrough generated yet for this PR.</p>
-			<Button variant="outline" size="lg" style="cursor: pointer;" onclick={() => { showGenerateButton = false; streamWalkthrough(prId); }}>
+			<Button variant="outline" size="lg" style="cursor: pointer;" onclick={() => streamWalkthrough(prId)}>
 				<Sparkles size={14} />
 				Generate walkthrough
 			</Button>
@@ -742,15 +887,6 @@
 				/>
 			</div>
 		</div>
-	{:else if !summary && !isStreaming && !streamError && !hydrating}
-		<!-- Stream ended with no data -->
-		<div class="walkthrough-empty">
-			<p class="loading-text">No walkthrough data received. The AI may have timed out.</p>
-	<Button variant="outline" size="lg" style="cursor: pointer;" onclick={handleRegenerate}>
-		<RefreshCw size={16} />
-		Try again
-	</Button>
-	</div>
 	{:else if summary}
 		<!-- Landing page content -->
 		<div
@@ -758,23 +894,13 @@
 			class:walkthrough-content--no-anim={contentAnimated}
 			onanimationend={(e) => lockContainerAnimation('content', e)}
 		>
-			<!-- Summary header -->
-		<div
-			id="walkthrough-overview"
-			class="summary-section"
-			class:summary-section--no-anim={summaryAnimated}
-			onanimationend={(e) => lockContainerAnimation('summary', e)}
-		>
-			<h2 class="summary-heading">Overview</h2>
-			<!-- div, not p: renderMarkdown emits its own <p> elements, so wrapping
-			     in <p> would nest block elements illegally. -->
-			<div class="summary-text">{@html renderedSummary}</div>
-				{#if streamError}
-					<p class="error-inline">{streamError}</p>
-				{/if}
-			</div>
-
-			<Separator />
+			<!-- Inline error (only when the stream errored mid-flight after we
+			     already had a summary; the empty-state branches above handle
+			     summary-less errors). Lives in col 3 of the walkthrough grid via
+			     the `.walkthrough-content > .stream-error-inline` rule. -->
+			{#if streamError}
+				<p class="stream-error-inline">{streamError}</p>
+			{/if}
 
 			<!-- Issues — bucketed by severity (Critical → Warning → Info) so the
 			     reviewer's eye lands on blockers before nice-to-knows. The overall
@@ -802,6 +928,7 @@
 									{#each group.issues as { issue, globalIndex } (issue.id)}
 										{@const targetBlockId = issue.blockIds?.[0] ?? null}
 										{@const stepN = targetBlockId ? stepNumberFor(targetBlockId) : null}
+										{@const chapterTag = targetBlockId ? chapterTagFor(targetBlockId) : null}
 										<!-- Gate clickability on the referenced block actually existing in
 										     the current render. `blockIds` can point to a block that isn't in
 										     `blocks` (kept issues after regenerate, or a mid-stream race
@@ -813,8 +940,8 @@
 											<IssueCard
 												{issue}
 												clickable
-												onclick={() => jumpToStep(targetBlockId)}
-												stepTag={`→ Step ${stepN}`}
+												onclick={() => selectIssue(issue.id, targetBlockId)}
+												stepTag={chapterTag ?? `→ Step ${stepN}`}
 												animationDelay="{Math.min(globalIndex, 6) * 50}ms"
 												noAnim={issueDelayById.get(issue.id) === -1}
 												onfileclick={(filePath, line) => jumpToDiffLine(filePath, line)}
@@ -836,62 +963,42 @@
 						{/each}
 					</div>
 				</div>
-				<Separator />
 			{/if}
 
-			<!-- Blocks — Phase B diff-analysis content. Phase C (sentiment) and
-			     Phase D (scorecard) live in their own cards below the loop now
-			     that sentiment is a first-class walkthrough field rather than a
-			     magic markdown-block convention. Legacy rows that still carry
-			     a "## Overall Sentiment" block are filtered upstream in
-			     `visibleBlocks` when `sentiment` is populated. -->
-			<div id="walkthrough-diff" class="blocks">
-			{#each blocksWithDelay as { block, delay, renderedAnnotation }, blockIndex (block.id)}
-				{@const hasAnnotation = renderedAnnotation !== null}
-				{@const blockSeverity = blockIssueSeverity.get(block.id) ?? null}
-
-				<!-- `.block-group` is a transparent wrapper (display: contents) so
-				     .block-wrapper and .block-annotation become direct grid items
-				     of .blocks and land in their own columns. -->
-				<div class="block-group">
-					<span
-						class="block-step-number"
-						class:block-step-number--info={blockSeverity === 'info'}
-						class:block-step-number--warning={blockSeverity === 'warning'}
-						class:block-step-number--critical={blockSeverity === 'critical'}
-					>#{blockIndex + 1}</span>
-					<div
-						id="step-{block.id}"
-						class="block-wrapper"
-						class:block-wrapper--no-anim={delay === -1}
-						style:--enter-delay="{delay}ms"
-					>
-						{#if block.type === 'markdown'}
-							<WalkthroughMarkdownBlock content={block.content} />
-						{:else if block.type === 'code'}
-							<WalkthroughCodeBlock {block} {themeType} hideAnnotation />
-						{:else if block.type === 'diff'}
-							<WalkthroughDiffBlock {block} {themeType} hideAnnotation />
-						{/if}
-					</div>
-
-					{#if hasAnnotation}
-						<!-- Annotation rail: Notion-style floating note to the right of
-						     its block. Animation delay matches the block's so rail text
-						     and block slide in in sync. The same `delay === -1` sentinel
-						     used elsewhere suppresses re-animation on tab-revisit. -->
-						<aside
-							class="block-annotation"
-							class:block-annotation--no-anim={delay === -1}
-							style:--enter-delay="{delay}ms"
-							aria-label="Annotation"
-						>
-							<div class="block-annotation-inner">
-								{@html renderedAnnotation}
-							</div>
-						</aside>
-					{/if}
-				</div>
+			<!-- Body — every chapter renders as a collapsible WalkthroughSection.
+			     The Phase A summary becomes the virtual first chapter ("Overview");
+			     the Phase B semantic_steps follow in declaration order. Each
+			     section owns its atomic blocks via `semanticStepIndex`; the
+			     WalkthroughSection wrapper uses `display: contents` so per-block
+			     grid placement (cols 2/3/5) still resolves against this `.blocks`
+			     grid. Empty Phase B chapters are filtered out (see
+			     `visibleSemanticSteps`) so an open-but-unfilled chapter doesn't
+			     render as a bare heading. Phase C (sentiment) and Phase D
+			     (scorecard) live in their own cards below the loop. -->
+			<div class="blocks">
+			<WalkthroughSection
+				id="walkthrough-overview"
+				section={overviewSection}
+				entries={overviewEntries}
+				{themeType}
+				{blockIssueSeverity}
+				{selectedIssueBlockId}
+				{selectedIssueSeverity}
+				chapterNumber={1}
+				chapterCount={totalChapters}
+			/>
+			{#each visibleSemanticSteps as section, sectionIdx (section.semanticStepIndex)}
+				<WalkthroughSection
+					id={sectionIdx === 0 ? 'walkthrough-diff' : undefined}
+					{section}
+					entries={blocksBySection.get(section.semanticStepIndex) ?? []}
+					{themeType}
+					{blockIssueSeverity}
+					{selectedIssueBlockId}
+					{selectedIssueSeverity}
+					chapterNumber={sectionIdx + 2}
+					chapterCount={totalChapters}
+				/>
 			{/each}
 
 			<!-- Diff-analysis skeleton: placeholder block while Phase B is active.
@@ -899,9 +1006,7 @@
 			     agent finishes all diff steps and moves to Phase C. -->
 			{#if showDiffSkeleton}
 				<div class="block-group">
-					<span class="block-step-number block-step-number--skeleton" aria-hidden="true">
-						#{blocksWithDelay.length + 1}
-					</span>
+					<span class="block-step-dot" aria-hidden="true"></span>
 					<div class="block-wrapper block-wrapper--no-anim diff-skeleton-block" aria-hidden="true">
 						<div class="diff-skeleton-header">
 							<Skeleton class="h-[13px] w-[38%]" />
@@ -990,7 +1095,7 @@
 		     min() picks whichever binds. They cross when V ≥ 1708 (viewport,
 		     not main-area); above, viewport-centring wins; below, rail
 		     pinning wins. Floor of 24px keeps a minimum left gutter.
-		   col 2 = 48        (step-number gutter)
+		   col 2 = 48        (severity-dot gutter)
 		   col 3 = 820       (content)
 		   col 4 = 40        (content ↔ rail gap)
 		   col 5 = 380       (annotation rail)
@@ -1022,11 +1127,18 @@
 	}
 
 	/* Single-column sections live in the content column (col 3). Separator,
-	   .summary-section, and .issues-section sit there as direct children. */
-	.walkthrough-content > .summary-section,
+	   .stream-error-inline, and .issues-section sit there as direct children. */
+	.walkthrough-content > .stream-error-inline,
 	.walkthrough-content > .issues-section,
 	.walkthrough-content > :global([data-slot="separator"]) {
 		grid-column: 3;
+	}
+
+	/* Mid-stream error surfaced above the body when summary already landed. */
+	.stream-error-inline {
+		color: var(--color-danger);
+		font-size: 13px;
+		margin: 0 0 8px;
 	}
 
 	/* Suppress the entrance animation on tab revisits. Paired with the
@@ -1473,9 +1585,6 @@
 		padding: 14px 16px;
 	}
 
-	.block-step-number--skeleton {
-		opacity: 0.2;
-	}
 
 	/* ── Exploration feed (error branch only) ────────────────────────────
 	   The active generating UI surfaces tool calls inside the chapter cell
@@ -1524,83 +1633,10 @@
 		max-width: 520px;
 	}
 
-	/* ── Summary ──────────────────────────────────────────────────────── */
-
-	.summary-section {
-		margin-bottom: 20px;
-		animation: content-enter 0.6s cubic-bezier(0.22, 0.61, 0.36, 1) both;
-	}
-
-	/* Tab-revisit override — see .walkthrough-content--no-anim for why. */
-	.summary-section--no-anim {
-		animation: none;
-		opacity: 1;
-		filter: none;
-		transform: none;
-	}
-
-	.summary-header {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		margin-bottom: 10px;
-	}
-
-	.summary-heading {
-		font-size: 18px;
-		font-weight: 700;
-		color: var(--color-text-primary);
-		margin: 0 0 6px;
-	}
-
-	.summary-text {
-		font-size: 14px;
-		line-height: 1.6;
-		color: var(--color-text-secondary);
-		margin: 0;
-	}
-
-	/* Markdown output (emitted by renderMarkdown) — matches the same tokens
-	   the block-annotation rail uses so Overview inline code / bold / lists
-	   read consistently with the rest of the walkthrough. :global() is
-	   required because the HTML is injected via {@html}, so Svelte's scoped
-	   class hashing can't reach those elements. */
-	.summary-text :global(p) {
-		margin: 0 0 8px;
-	}
-
-	.summary-text :global(p:last-child) {
-		margin-bottom: 0;
-	}
-
-	.summary-text :global(code) {
-		font-family: var(--font-mono);
-		font-size: 12px;
-		background: var(--color-bg-tertiary);
-		padding: 1px 4px;
-		border-radius: 3px;
-	}
-
-	.summary-text :global(strong) {
-		color: var(--color-text-primary);
-		font-weight: 600;
-	}
-
-	.summary-text :global(a) {
-		color: var(--color-accent);
-		text-decoration: underline;
-		text-underline-offset: 2px;
-	}
-
-	.summary-text :global(ul),
-	.summary-text :global(ol) {
-		margin: 4px 0 8px;
-		padding-left: 20px;
-	}
-
-	.summary-text :global(li) {
-		margin: 2px 0;
-	}
+	/* Overview is rendered as the virtual first chapter inside the .blocks
+	   grid (see the template), so it picks up the standard chapter eyebrow,
+	   heading, and markdown-block styling. No standalone summary styling is
+	   needed at this layer. */
 
 	/* ── Issues layout ───────────────────────────────────────────────── */
 
@@ -1723,10 +1759,6 @@
 		grid-column: 3;
 	}
 
-	.block-group > .block-annotation {
-		grid-column: 5;
-	}
-
 	/* Sentiment pairing: stack the sentiment card above the scorecard in the
 	   content column only. `display: flex` here escapes `display: contents`,
 	   so the whole group becomes a single grid item that can declare grid-column.
@@ -1756,36 +1788,35 @@
 		min-width: 0;
 	}
 
-	.block-step-number {
+	/* Severity dot — replaces the old "#N" step indicator. Renders an empty
+	   cell when the block has no linked flagged issue, and a filled colored
+	   circle when one or more issues point at the block. Severity is the
+	   highest across all linked issues (see `blockIssueSeverity`). */
+	.block-step-dot {
 		grid-column: 2;
-		display: flex;
-		align-items: flex-start;
-		justify-content: flex-end;
-		padding-top: 10px;
-		padding-right: 12px;
-		font-size: 11px;
-		font-family: var(--font-mono, monospace);
-		color: var(--color-text-muted);
-		opacity: 0.45;
-		user-select: none;
-		white-space: nowrap;
+		justify-self: end;
+		align-self: flex-start;
+		width: 8px;
+		height: 8px;
+		margin-top: 18px;
+		margin-right: 16px;
+		border-radius: 50%;
+		background: transparent;
 	}
-	.block-step-number--info {
-		color: var(--color-accent);
-		opacity: 0.75;
+	.block-step-dot--info {
+		background: var(--color-accent);
+		box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 18%, transparent);
 	}
-	.block-step-number--warning {
-		color: var(--color-warning);
-		opacity: 0.75;
+	.block-step-dot--warning {
+		background: var(--color-warning);
+		box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-warning) 18%, transparent);
 	}
-	.block-step-number--critical {
-		color: var(--color-danger);
-		opacity: 0.75;
+	.block-step-dot--critical {
+		background: var(--color-danger);
+		box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-danger) 18%, transparent);
 	}
 
 	.block-wrapper {
-		/* position: relative so the severity dot (see .step-issue-dot) can sit
-		   just outside the block's left edge via `left: -<n>px`. */
 		position: relative;
 		max-width: 100%;
 		animation: block-slide-up 0.65s cubic-bezier(0.22, 0.61, 0.36, 1) both;
@@ -1806,6 +1837,22 @@
 
 	.block-wrapper--highlighted {
 		animation: block-pulse 1.6s ease forwards;
+	}
+
+	/* Persistent severity-colored outline on the block linked to the currently
+	   selected issue. Stays on until another issue is clicked, so the reader
+	   can scroll around without losing the visual anchor. The brief pulse
+	   above is animation-driven (transparent at end) while this is a static
+	   outline-color override — they don't fight because nothing else sets
+	   outline-color on .block-wrapper. */
+	.block-wrapper--selected-info {
+		outline-color: var(--color-accent);
+	}
+	.block-wrapper--selected-warning {
+		outline-color: var(--color-warning);
+	}
+	.block-wrapper--selected-critical {
+		outline-color: var(--color-danger);
 	}
 
 	.block-wrapper--no-anim {
@@ -1952,7 +1999,6 @@
 	@media (prefers-reduced-motion: reduce) {
 		.block-wrapper,
 		.block-annotation,
-		.summary-section,
 		.issues-section,
 		.walkthrough-content,
 		.walkthrough-stepper-header,
@@ -1994,8 +2040,8 @@
 	/* ── Sentiment card ────────────────────────────────────────────────
 	   Renders `walkthrough.sentiment` (Phase C markdown) as a distinct
 	   accent-tinted card between the diff-step body and the 9-axis
-	   scorecard. Styling tokens match the content column's `.summary-text`
-	   markdown so inline code / lists / bold read consistently across the
+	   scorecard. Styling tokens match the content column's markdown blocks
+	   so inline code / lists / bold read consistently across the
 	   walkthrough. :global() is required because renderMarkdown emits its
 	   own DOM that isn't scoped to this component. */
 
@@ -2076,7 +2122,7 @@
 		}
 
 		/* Children no longer need explicit column placement. */
-		.walkthrough-content > .summary-section,
+		.walkthrough-content > .stream-error-inline,
 		.walkthrough-content > .issues-section,
 		.walkthrough-content > :global([data-slot="separator"]) {
 			grid-column: auto;
@@ -2141,8 +2187,7 @@
 			grid-column: auto;
 		}
 
-		.block-group > .block-wrapper,
-		.block-group > .block-annotation {
+		.block-group > .block-wrapper {
 			grid-column: auto;
 		}
 

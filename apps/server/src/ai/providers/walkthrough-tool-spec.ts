@@ -6,9 +6,8 @@ import type {
 	RatingCitation,
 	RiskLevel,
 	WalkthroughIssue,
-	WalkthroughPipelinePhase,
 	WalkthroughRating,
-	WalkthroughState,
+	WalkthroughSemanticStep,
 	WalkthroughStreamEvent,
 	WsServerMessage,
 } from "@revv/shared";
@@ -108,18 +107,120 @@ const setOverviewSchema = z.object({
 });
 
 /**
- * Phase B step input — exactly one step per tool call. The tool schema rejects
- * arrays and batch submissions deliberately (doctrine invariant #4): each step
- * is a separate atomic MCP call so resume is idempotent and crash loss is
- * bounded to at most one in-flight step.
+ * Phase B chapter declaration — opens a chapter AND writes its first atomic
+ * block in one transaction. This is the ONLY way to create a chapter. The
+ * `initial_block` argument is REQUIRED: it lands at `step_index=0` of the
+ * chapter, so a chapter cannot exist without content.
+ *
+ * Rationale: a previous version of this tool only opened the chapter and
+ * relied on a follow-up `add_diff_step` call to fill it. Models routinely
+ * stopped between the two calls (open chapter → satisfied → end_turn),
+ * leaving empty chapters that the completion gate would reject and the run
+ * would never recover from. Bundling the first block into the open call
+ * eliminates the failure mode by construction.
+ *
+ * Subsequent atomic blocks in the same chapter (the 2nd–Nth) still go through
+ * `add_diff_step` with `step_index >= 1`.
+ *
+ * One atomic idempotent upsert per call (doctrine invariant #3): retry with
+ * the same `semantic_step_index` replays as a no-op against the unique key
+ * for both the chapter row and the step_index=0 block.
+ */
+const semanticStepInitialBlockSchema = z
+	.object({
+		markdown: z
+			.object({
+				content: z
+					.string()
+					.describe(
+						"GitHub-flavored markdown for the chapter's opening block. Headings, **bold**, `inline code`, lists, blockquotes, fenced snippets — use the full toolkit. This is the first thing the reader sees in the chapter, so set up the narrative.",
+					),
+			})
+			.nullable()
+			.optional()
+			.describe(
+				"Use for narrative/explanatory opening content. Mutually exclusive with `code` and `diff`.",
+			),
+		code: z
+			.object({
+				file_path: z.string(),
+				start_line: z.number().int(),
+				end_line: z.number().int(),
+				language: z.string(),
+				content: z.string(),
+				annotation: z.string().nullable(),
+				annotation_position: z.enum(["left", "right"]),
+			})
+			.nullable()
+			.optional()
+			.describe(
+				"Use for source-code excerpts. Mutually exclusive with `markdown` and `diff`. Annotation REQUIRED (1–3 sentences) — code without annotation is a wall of code.",
+			),
+		diff: z
+			.object({
+				file_path: z.string(),
+				patch: z.string(),
+				annotation: z.string().nullable(),
+				annotation_position: z.enum(["left", "right"]),
+			})
+			.nullable()
+			.optional()
+			.describe(
+				"Use for unified-diff hunks. Mutually exclusive with `markdown` and `code`. Annotation REQUIRED (1–3 sentences).",
+			),
+	})
+	.describe(
+		"REQUIRED. Exactly one of { markdown, code, diff }. Becomes the chapter's step_index=0 block, written atomically with the chapter itself.",
+	);
+
+const addSemanticStepSchema = z.object({
+	semantic_step_index: z
+		.number()
+		.int()
+		.nonnegative()
+		.describe(
+			"Monotonic zero-based ordering for this chapter. Required. Use 0 for the first chapter, 1 for the second, and so on. Upsert key: a retry with the same index replaces (not duplicates) the prior row.",
+		),
+	title: z
+		.string()
+		.min(1)
+		.describe(
+			"Chapter title — the heading the reader sees. Keep it short (≤ ~60 chars). Describe the concept being walked through, e.g. 'Token validation changes', 'Race condition in refresh flow', 'Test coverage gaps'. NOT a file name — chapters span concepts, not files.",
+		),
+	summary: z
+		.string()
+		.nullable()
+		.optional()
+		.describe(
+			"Optional 1–2 sentence prelude rendered under the chapter title. Use to frame what the reader is about to learn in this chapter. Omit (or set null) when the title is self-explanatory.",
+		),
+	initial_block: semanticStepInitialBlockSchema,
+});
+
+/**
+ * Phase B step input — exactly one atomic block per tool call. The tool
+ * schema rejects arrays and batch submissions deliberately (doctrine
+ * invariant #4): each step is a separate atomic MCP call so resume is
+ * idempotent and crash loss is bounded to at most one in-flight step.
+ *
+ * Every block belongs to a parent semantic step (declared earlier via
+ * `add_semantic_step`). The persistence key is
+ * `(walkthroughId, phase, semantic_step_index, step_index)`.
  */
 const addDiffStepSchema = z.object({
+	semantic_step_index: z
+		.number()
+		.int()
+		.nonnegative()
+		.describe(
+			"Index of the parent chapter — must reference a `semantic_step_index` already created via `add_semantic_step`. Required. Use the same value for every block in a chapter.",
+		),
 	step_index: z
 		.number()
 		.int()
 		.nonnegative()
 		.describe(
-			"Monotonic zero-based index for this step within Phase B. Required. Upsert key: a retry with the same index replaces (not duplicates) the prior row.",
+			"Monotonic zero-based index for this atomic block *within* its parent chapter. Restart at 0 in each new chapter. Required. Upsert key: a retry with the same (semantic_step_index, step_index) replaces (not duplicates) the prior row.",
 		),
 	/** One of three mutually-exclusive block shapes. Agent picks which to send. */
 	markdown: z
@@ -164,6 +265,28 @@ const addDiffStepSchema = z.object({
 		),
 });
 
+/**
+ * Reference to a single atomic block by its composite position. Used by
+ * `flag_issue.block_refs` and `rate_axis.block_refs` to point at the
+ * `add_diff_step` calls that explain a concern/rating. The handler
+ * resolves these to canonical `block-{walkthroughId}-{semantic}-{step}` ids
+ * and persists them in the row's `blockIds` JSON.
+ */
+const blockRefSchema = z.object({
+	semantic_step_index: z
+		.number()
+		.int()
+		.nonnegative()
+		.describe("Parent chapter's semantic_step_index."),
+	step_index: z
+		.number()
+		.int()
+		.nonnegative()
+		.describe(
+			"Atomic block's step_index within the chapter (matches the add_diff_step call you want to reference).",
+		),
+});
+
 const flagIssueSchema = z.object({
 	severity: z
 		.enum(["info", "warning", "critical"])
@@ -176,11 +299,11 @@ const flagIssueSchema = z.object({
 		.describe(
 			"MINIMAL one-sentence label for the issues-list card (≤ ~15 words). Do not explain the concern here — the full explanation belongs in the annotation of the linked diff step.",
 		),
-	block_orders: z
-		.array(z.number().int().nonnegative())
+	block_refs: z
+		.array(blockRefSchema)
 		.min(1)
 		.describe(
-			"Order numbers (= step_index) of the diff step(s) that explain this concern. Must reference steps already added. Provide every step the reviewer should read to understand the issue.",
+			"Composite identifiers of the diff step(s) that explain this concern, in the form { semantic_step_index, step_index }. Must reference blocks already added via add_diff_step. Provide every block the reviewer should read to understand the issue.",
 		),
 	file_path: z
 		.string()
@@ -290,10 +413,10 @@ const rateAxisSchema = z.object({
 		.describe(
 			"Specific lines backing the verdict. REQUIRED (>= 1) for verdict=concern or verdict=blocker. Optional (may be empty) for verdict=pass.",
 		),
-	block_orders: z
-		.array(z.number().int().nonnegative())
+	block_refs: z
+		.array(blockRefSchema)
 		.describe(
-			"Order numbers (= step_index) of Phase-B diff step(s) that explain this rating in depth. May be empty. Each entry must reference a step already added.",
+			"Composite identifiers of Phase-B diff blocks that explain this rating in depth, in the form { semantic_step_index, step_index }. May be empty. Each entry must reference a block already added via add_diff_step.",
 		),
 });
 
@@ -303,6 +426,7 @@ const completeWalkthroughSchema = z.object({});
 
 export type GetWalkthroughStateInput = z.infer<typeof getWalkthroughStateSchema>;
 export type SetOverviewInput = z.infer<typeof setOverviewSchema>;
+export type AddSemanticStepInput = z.infer<typeof addSemanticStepSchema>;
 export type AddDiffStepInput = z.infer<typeof addDiffStepSchema>;
 export type FlagIssueInput = z.infer<typeof flagIssueSchema>;
 export type AddIssueCommentInput = z.infer<typeof addIssueCommentSchema>;
@@ -315,6 +439,7 @@ export type CompleteWalkthroughInput = z.infer<typeof completeWalkthroughSchema>
 export {
 	getWalkthroughStateSchema,
 	setOverviewSchema,
+	addSemanticStepSchema,
 	addDiffStepSchema,
 	flagIssueSchema,
 	addIssueCommentSchema,
@@ -392,5 +517,6 @@ export type {
 	RiskLevel,
 	WalkthroughIssue,
 	WalkthroughRating,
+	WalkthroughSemanticStep,
 	WalkthroughStreamEvent,
 };

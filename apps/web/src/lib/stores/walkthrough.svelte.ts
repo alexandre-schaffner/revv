@@ -2,6 +2,7 @@ import type {
 	Activity,
 	WalkthroughBlock,
 	RiskLevel,
+	WalkthroughSemanticStep,
 	WalkthroughStreamEvent,
 	WalkthroughIssue,
 	WalkthroughLifecyclePhase,
@@ -19,6 +20,13 @@ import { toast } from 'svelte-sonner';
 // ── Per-PR state entry ──────────────────────────────────────────────────────
 
 interface WalkthroughEntry {
+	/**
+	 * Phase B chapter manifest in declaration order. Each entry owns 0+ atomic
+	 * blocks in `blocks` linked by `semanticStepIndex`. Populated from
+	 * `add_semantic_step` SSE events during a live stream, or from the cached
+	 * walkthrough payload on hydration.
+	 */
+	semanticSteps: WalkthroughSemanticStep[];
 	blocks: WalkthroughBlock[];
 	summary: string | null;
 	riskLevel: RiskLevel | null;
@@ -71,6 +79,7 @@ interface WalkthroughEntry {
 
 function freshEntry(): WalkthroughEntry {
 	return {
+		semanticSteps: [],
 		blocks: [],
 		summary: null,
 		riskLevel: null,
@@ -136,6 +145,14 @@ function active(): WalkthroughEntry | undefined {
 
 export function getBlocks(): WalkthroughBlock[] {
 	return active()?.blocks ?? [];
+}
+/**
+ * Phase B chapter manifest. Empty until the agent opens the first chapter
+ * via `add_semantic_step`. The UI renders each entry as a collapsible
+ * section containing its atomic blocks.
+ */
+export function getSemanticSteps(): WalkthroughSemanticStep[] {
+	return active()?.semanticSteps ?? [];
 }
 export function getSummary(): string | null {
 	return active()?.summary ?? null;
@@ -346,8 +363,16 @@ function getOrCreateEntry(prId: string): WalkthroughEntry {
 function updateEntry(prId: string, updater: (e: WalkthroughEntry) => void): void {
 	const entry = entries.get(prId);
 	if (!entry) return;
-	updater(entry);
-	// Trigger reactivity by reassigning the Map
+	// Commit a fresh object reference so Svelte 5's per-key Map tracking
+	// invalidates readers. Mutating in place + reassigning the Map binding
+	// is *sometimes* enough, but `$derived` blocks reading
+	// `entries.get(prId).isStreaming` can keep a stale cached result if the
+	// value object identity at that key never changes — the user-visible
+	// symptom is the Stop button persisting until a tab switch forces the
+	// $derived to re-evaluate.
+	const next = { ...entry };
+	updater(next);
+	entries.set(prId, next);
 	entries = new Map(entries);
 }
 
@@ -432,6 +457,7 @@ export async function streamWalkthrough(prId: string): Promise<void> {
 		&& !existing.doneReceived
 		&& existing.liveGeneration
 		&& (existing.summary !== null
+			|| existing.semanticSteps.length > 0
 			|| existing.blocks.length > 0
 			|| existing.issues.length > 0
 			|| existing.ratings.length > 0);
@@ -439,6 +465,7 @@ export async function streamWalkthrough(prId: string): Promise<void> {
 		&& !existing.streamError
 		&& !existing.cloneInProgress
 		&& existing.summary === null
+		&& existing.semanticSteps.length === 0
 		&& existing.blocks.length === 0
 		&& existing.explorationSteps.length === 0
 		&& existing.issues.length === 0
@@ -474,9 +501,21 @@ export async function streamWalkthrough(prId: string): Promise<void> {
 				'Lost connection to the walkthrough server. Check that the local server is running and try again.',
 		});
 	} catch (e) {
-		if ((e as Error).name !== 'AbortError') {
+		// Treat any throw after the abort signal fired as an intentional abort,
+		// regardless of the error's name. Some transports surface aborted
+		// reads as `TypeError`/`NetworkError` rather than `AbortError`, which
+		// would otherwise leak through as a fake streamError and leave the
+		// entry stuck in `isStreaming: true` with a misleading error message.
+		const aborted =
+			abortCtrl.signal.aborted || (e as Error).name === 'AbortError';
+		if (!aborted) {
 			updateEntry(prId, (en) => {
 				en.streamError = e instanceof Error ? e.message : 'Stream failed';
+				// A real load failure means we're not streaming anymore. Without
+				// this, the Stop button keeps rendering (gated on isStreaming)
+				// even though the connection is dead, and clicking it cannot
+				// transition the UI to a Resume/Regenerate state.
+				en.isStreaming = false;
 			});
 			toast.error(e instanceof Error ? e.message : 'Walkthrough failed');
 		}
@@ -566,6 +605,7 @@ export async function hydrateFromCache(prId: string): Promise<boolean> {
 						riskLevel: RiskLevel;
 						sentiment?: string | null;
 						lastCompletedPhase?: WalkthroughPipelinePhase;
+						semanticSteps?: WalkthroughSemanticStep[];
 						blocks: WalkthroughBlock[];
 						issues: WalkthroughIssue[];
 						ratings: WalkthroughRating[];
@@ -602,6 +642,9 @@ export async function hydrateFromCache(prId: string): Promise<boolean> {
 		// so the A→B→C→D dot indicator stays accurate during the resume.
 		entry.sentiment = wt.sentiment ?? null;
 		entry.lastCompletedPhase = wt.lastCompletedPhase ?? (isGenerating ? 'none' : 'D');
+		entry.semanticSteps = (wt.semanticSteps ?? [])
+			.slice()
+			.sort((a, b) => a.semanticStepIndex - b.semanticStepIndex);
 		entry.blocks = wt.blocks;
 		entry.issues = wt.issues;
 		entry.ratings = wt.ratings;
@@ -725,6 +768,26 @@ function applyEvents(prId: string, events: WalkthroughStreamEvent[]): void {
 					// Sentiment" header.
 					entry.sentiment = event.data.sentiment;
 					break;
+				case 'semantic-step': {
+					// Replace-by-index so a re-emit on resume doesn't duplicate
+					// chapters (mirrors the SQL onConflictDoUpdate semantics). New
+					// chapters are appended in declaration order; the agent emits
+					// in monotonic `semanticStepIndex` so the array stays sorted.
+					const idx = entry.semanticSteps.findIndex(
+						(s) => s.semanticStepIndex === event.data.semanticStepIndex,
+					);
+					if (idx >= 0) {
+						entry.semanticSteps = entry.semanticSteps.map((s, i) =>
+							i === idx ? event.data : s,
+						);
+					} else {
+						entry.semanticSteps = [
+							...entry.semanticSteps,
+							event.data,
+						].sort((a, b) => a.semanticStepIndex - b.semanticStepIndex);
+					}
+					break;
+				}
 				case 'block':
 					if (!newBlocks) newBlocks = [...entry.blocks];
 					if (!newBlocks.some((b) => b.id === event.data.id)) {
@@ -789,14 +852,19 @@ function applyEvents(prId: string, events: WalkthroughStreamEvent[]): void {
 						entry.isStreaming = false;
 					}
 					break;
-				case 'in-progress':
-					// Server says generation is running in the background.
-					// Keep isStreaming true — WS will notify on completion.
-					entry.walkthroughId = event.data.walkthroughId;
-					entry.phase = 'writing';
-					entry.phaseMessage = 'Generating walkthrough...';
-					entry.liveGeneration = true;
-					break;
+			case 'in-progress':
+				// Server says generation is running in the background.
+				// Keep isStreaming true — WS will notify on completion.
+				entry.walkthroughId = event.data.walkthroughId;
+				entry.phase = 'writing';
+				entry.phaseMessage = 'Generating walkthrough...';
+				entry.liveGeneration = true;
+				break;
+			case 'thinking':
+				// Heartbeat — model is active but hasn't produced content yet.
+				// No state change needed; this event exists solely to unblock
+				// the stream guard's first-event timer.
+				break;
 			}
 		}
 
@@ -844,12 +912,30 @@ function enforceStreamCap(): void {
 }
 
 export function abort(): void {
-	if (activePrId) {
-		abortPr(activePrId);
-		updateEntry(activePrId, (e) => {
-			e.isStreaming = false;
-		});
+	// Find a PR to abort. Prefer the active one, but fall back to any
+	// streaming entry — the Stop button is gated on `entry.isStreaming`,
+	// so if the user can see it, there must be a streaming entry to clear
+	// even if `activePrId` got out of sync (e.g. a stale `deactivate()`).
+	let prId = activePrId;
+	if (!prId) {
+		for (const [id, entry] of entries) {
+			if (entry.isStreaming) {
+				prId = id;
+				break;
+			}
+		}
 	}
+	if (!prId) return;
+
+	abortPr(prId);
+	updateEntry(prId, (e) => {
+		e.isStreaming = false;
+		// Clear any stale streamError so getCanResume() can flip true and
+		// the Resume button appears. Without this, a prior load failure
+		// that left streamError set would suppress Resume after the user
+		// stops, leaving the walkthrough in a dead-end state.
+		e.streamError = null;
+	});
 }
 
 export async function regenerate(prId: string): Promise<void> {

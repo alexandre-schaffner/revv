@@ -5,6 +5,12 @@
 // #13 (Agent-path parity), the handlers run here via the SDK's `mcpServers`
 // config AND the HTTP MCP route (used by opencode) run the same code — one
 // source of truth, two drivers.
+//
+// Streaming decode (content-block extraction from SDK messages) lives in
+// `../agent-stream.ts`. This file owns walkthrough-specific concerns: the
+// phase state machine, the event-queue/async-generator pattern, the SDK
+// options shape, and the mapping from `NormalizedAgentEvent` to
+// `WalkthroughStreamEvent`.
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { Effect } from "effect";
@@ -16,17 +22,16 @@ import type {
 	WalkthroughTokenUsage,
 	WsServerMessage,
 } from "@revv/shared";
-import { classifyTool } from "@revv/shared";
 import { debug, logError } from "../../logger";
 import type { Db } from "../../db";
 import type { PrFileMeta } from "../../services/GitHub";
 import { AppRuntime } from "../../runtime";
 import { WebSocketHub } from "../../services/WebSocketHub";
 import {
-	buildExplorationDescription,
 	buildWalkthroughPrompt,
 	WALKTHROUGH_MCP_SYSTEM_PROMPT,
 } from "../prompts/walkthrough";
+import { buildActivity, walkClaudeMessages, type NormalizedAgentEvent } from "../agent-stream";
 import { createWalkthroughMcpServer } from "./walkthrough-tools";
 import { resolveCliBin } from "./cli-agent";
 
@@ -50,10 +55,15 @@ export interface ContinuationContext {
 
 const EXPLORATION_TOOLS = new Set(["Read", "Grep", "Glob", "Bash"]);
 
-const MCP_TOOL_PREFIX = "mcp__revv-walkthrough__";
+const WALKTHROUGH_MCP_SERVER = "revv-walkthrough";
+const MCP_TOOL_PREFIX = `mcp__${WALKTHROUGH_MCP_SERVER}__`;
 
 // New phase-bound tool set. See walkthrough-tools.ts TOOL_SPECS for the
 // canonical list; the names here must match the handler registrations.
+// Forgetting an entry here is silent — the SDK refuses to surface the tool
+// to the model, the agent stalls (e.g. cannot leave Phase A because
+// `add_semantic_step` is invisible), and there is no error in any log to
+// point at the gap. Keep this list in sync with TOOL_SPECS.
 const ALLOWED_TOOLS = [
 	// Built-in exploration
 	"Read",
@@ -62,6 +72,7 @@ const ALLOWED_TOOLS = [
 	// MCP walkthrough tools (A→B→C→D)
 	`${MCP_TOOL_PREFIX}get_walkthrough_state`,
 	`${MCP_TOOL_PREFIX}set_overview`,
+	`${MCP_TOOL_PREFIX}add_semantic_step`,
 	`${MCP_TOOL_PREFIX}add_diff_step`,
 	`${MCP_TOOL_PREFIX}flag_issue`,
 	`${MCP_TOOL_PREFIX}add_issue_comment`,
@@ -99,6 +110,78 @@ function applyThinkingEffort(
 		default:
 			return {};
 	}
+}
+
+// ── Phase state machine (walkthrough-only) ──────────────────────────────────
+//
+// The walkthrough UI tracks a 5-step progress arc (`connecting → exploring →
+// analyzing → writing → rating → finishing`). Phase transitions are driven
+// by MCP tool names: `set_overview` → analyzing, `add_diff_step` → writing,
+// `rate_axis` → rating, `complete_walkthrough` → finishing. Once a phase is
+// reached we don't roll back, so each branch double-checks `currentPhase`
+// before pushing.
+//
+// Shared between this driver and `mcp-walkthrough-opencode.ts` only through
+// shape, not code — opencode bakes its own variant inline because the phase
+// pushes ALSO drive its stream-guard heartbeat, which has slightly different
+// rules. The duplication is intentional and minor.
+
+type Phase =
+	| "connecting"
+	| "exploring"
+	| "analyzing"
+	| "writing"
+	| "rating"
+	| "finishing";
+
+interface PhaseMachine {
+	readonly current: () => Phase;
+	readonly transition: (next: Phase, message: string) => WalkthroughStreamEvent | null;
+}
+
+function createPhaseMachine(): PhaseMachine {
+	let phase: Phase = "connecting";
+	return {
+		current: () => phase,
+		transition: (next, message) => {
+			if (phase === next) return null;
+			phase = next;
+			return { type: "phase", data: { phase: next, message } };
+		},
+	};
+}
+
+// MCP tool bare-name → phase transition. Returns the new phase + message
+// pair, or null if the tool doesn't drive a transition.
+function phaseForMcpTool(bareName: string): { phase: Phase; message: string } | null {
+	switch (bareName) {
+		case "set_overview":
+			return { phase: "analyzing", message: "Forming assessment and risk analysis..." };
+		case "add_semantic_step":
+		case "add_diff_step":
+			return { phase: "writing", message: "Building walkthrough..." };
+		case "rate_axis":
+			return { phase: "rating", message: "Scoring the PR across 9 axes..." };
+		case "complete_walkthrough":
+			return { phase: "finishing", message: "Wrapping up..." };
+		default:
+			return null;
+	}
+}
+
+// Phases follow A→B→C→D; once past "writing" we don't roll back to
+// "exploring" just because the agent re-checks a file (helper for the
+// guard).
+const PHASE_ORDER: Phase[] = [
+	"connecting",
+	"exploring",
+	"analyzing",
+	"writing",
+	"rating",
+	"finishing",
+];
+function isForward(current: Phase, next: Phase): boolean {
+	return PHASE_ORDER.indexOf(next) >= PHASE_ORDER.indexOf(current);
 }
 
 // ── Main entry point ────────────────────────────────────────────────────────
@@ -200,13 +283,7 @@ export function streamWalkthroughViaMCP(
 			10 * 60 * 1000,
 		);
 
-		let currentPhase:
-			| "connecting"
-			| "exploring"
-			| "analyzing"
-			| "writing"
-			| "rating"
-			| "finishing" = "connecting";
+		const phaseMachine = createPhaseMachine();
 
 		try {
 			const pinnedClaude = resolveCliBin("claude");
@@ -226,7 +303,7 @@ export function streamWalkthroughViaMCP(
 					cwd: params.worktreePath,
 					tools: ["Read", "Grep", "Glob"],
 					allowedTools: ALLOWED_TOOLS,
-					mcpServers: { "revv-walkthrough": walkthroughServer },
+					mcpServers: { [WALKTHROUGH_MCP_SERVER]: walkthroughServer },
 					permissionMode: "bypassPermissions",
 					allowDangerouslySkipPermissions: true,
 					persistSession: false,
@@ -241,159 +318,50 @@ export function streamWalkthroughViaMCP(
 				},
 			});
 
-			let tokenUsage: WalkthroughTokenUsage = {
+			// Walkthrough doesn't surface text/reasoning to the UI — content
+			// flows commit-first through MCP tool handlers. Tool calls drive
+			// either an `exploration` event (built-in tools) or a phase
+			// transition (MCP walkthrough tools).
+			const emit = (ev: NormalizedAgentEvent): void => {
+				if (ev.kind !== "tool-call") return;
+
+				if (ev.source === "builtin" && EXPLORATION_TOOLS.has(ev.toolName)) {
+					if (phaseMachine.current() === "connecting") {
+						const transition = phaseMachine.transition(
+							"exploring",
+							"Reading files and understanding changes...",
+						);
+						if (transition) push(transition);
+					}
+					const activity = buildActivity(ev.toolName, ev.input);
+					push({ type: "exploration", data: activity });
+					return;
+				}
+
+				if (ev.source === "mcp" && ev.mcpServer === WALKTHROUGH_MCP_SERVER) {
+					if (ev.bareName === "set_overview") {
+						anySummaryEmitted = true;
+					}
+					const phaseTarget = phaseForMcpTool(ev.bareName);
+					if (phaseTarget && isForward(phaseMachine.current(), phaseTarget.phase)) {
+						const transition = phaseMachine.transition(
+							phaseTarget.phase,
+							phaseTarget.message,
+						);
+						if (transition) push(transition);
+					}
+				}
+			};
+
+			const tokenUsage = await walkClaudeMessages(q, emit);
+
+			debug("walkthrough-mcp", "Query complete.");
+			return tokenUsage ?? {
 				inputTokens: 0,
 				outputTokens: 0,
 				cacheReadInputTokens: 0,
 				cacheCreationInputTokens: 0,
 			};
-
-			for await (const message of q) {
-				if (message.type === "assistant") {
-					const content = (
-						message as {
-							type: "assistant";
-							message: {
-								content: Array<{
-									type: string;
-									name?: string;
-									input?: unknown;
-								}>;
-							};
-						}
-					).message.content;
-					for (const block of content) {
-						if (
-							block.type === "tool_use" &&
-							block.name &&
-							EXPLORATION_TOOLS.has(block.name)
-						) {
-							if (currentPhase === "connecting") {
-								currentPhase = "exploring";
-								push({
-									type: "phase",
-									data: {
-										phase: "exploring",
-										message:
-											"Reading files and understanding changes...",
-									},
-								});
-							}
-							const summary = buildExplorationDescription(
-								block.name,
-								block.input,
-							);
-							push({
-								type: "exploration",
-								data: {
-									activityKind: classifyTool(block.name),
-									toolName: block.name,
-									summary,
-									payload: block.input,
-								},
-							});
-						}
-						// Phase lifecycle (UI-facing). New tool names: set_overview
-						// → analyzing, add_diff_step → writing, rate_axis → rating,
-						// complete_walkthrough → finishing.
-						if (
-							block.type === "tool_use" &&
-							block.name === `${MCP_TOOL_PREFIX}set_overview`
-						) {
-							anySummaryEmitted = true;
-							if (
-								currentPhase !== "analyzing" &&
-								currentPhase !== "finishing"
-							) {
-								currentPhase = "analyzing";
-								push({
-									type: "phase",
-									data: {
-										phase: "analyzing",
-										message:
-											"Forming assessment and risk analysis...",
-									},
-								});
-							}
-						}
-						if (
-							block.type === "tool_use" &&
-							block.name === `${MCP_TOOL_PREFIX}add_diff_step`
-						) {
-							if (
-								currentPhase !== "writing" &&
-								currentPhase !== "rating" &&
-								currentPhase !== "finishing"
-							) {
-								currentPhase = "writing";
-								push({
-									type: "phase",
-									data: {
-										phase: "writing",
-										message: "Building walkthrough...",
-									},
-								});
-							}
-						}
-						if (
-							block.type === "tool_use" &&
-							block.name === `${MCP_TOOL_PREFIX}rate_axis`
-						) {
-							if (
-								currentPhase !== "rating" &&
-								currentPhase !== "finishing"
-							) {
-								currentPhase = "rating";
-								push({
-									type: "phase",
-									data: {
-										phase: "rating",
-										message: "Scoring the PR across 9 axes...",
-									},
-								});
-							}
-						}
-						if (
-							block.type === "tool_use" &&
-							block.name ===
-								`${MCP_TOOL_PREFIX}complete_walkthrough`
-						) {
-							if (currentPhase !== "finishing") {
-								currentPhase = "finishing";
-								push({
-									type: "phase",
-									data: {
-										phase: "finishing",
-										message: "Wrapping up...",
-									},
-								});
-							}
-						}
-					}
-				} else if (message.type === "result") {
-					const result = message as {
-						type: "result";
-						subtype: string;
-						usage: {
-							input_tokens: number;
-							output_tokens: number;
-							cache_read_input_tokens?: number;
-							cache_creation_input_tokens?: number;
-						};
-					};
-					tokenUsage = {
-						inputTokens: result.usage.input_tokens,
-						outputTokens: result.usage.output_tokens,
-						cacheReadInputTokens:
-							result.usage.cache_read_input_tokens ?? 0,
-						cacheCreationInputTokens:
-							result.usage.cache_creation_input_tokens ?? 0,
-					};
-				}
-			}
-
-			debug("walkthrough-mcp", "Query complete.");
-			return tokenUsage;
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
 			debug("walkthrough-mcp", "Query error/abort:", message);

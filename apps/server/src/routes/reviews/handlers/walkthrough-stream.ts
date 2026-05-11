@@ -55,6 +55,7 @@ export function walkthroughStreamHandler(ctx: {
 	void (async () => {
 		// Dedupe state for the subscribe-then-replay handoff.
 		let seenSummary = false;
+		const seenSemanticSteps = new Set<number>();
 		const seenBlocks = new Set<string>();
 		const seenIssues = new Set<string>();
 		const seenRatingAxes = new Set<string>();
@@ -69,6 +70,10 @@ export function walkthroughStreamHandler(ctx: {
 				case 'summary':
 					if (seenSummary) return;
 					seenSummary = true;
+					break;
+				case 'semantic-step':
+					if (seenSemanticSteps.has(event.data.semanticStepIndex)) return;
+					seenSemanticSteps.add(event.data.semanticStepIndex);
 					break;
 				case 'block':
 					if (seenBlocks.has(event.data.id)) return;
@@ -141,6 +146,12 @@ export function walkthroughStreamHandler(ctx: {
 			);
 			if (cached) {
 				forwardEvent({ type: 'summary', data: { summary: cached.summary, riskLevel: cached.riskLevel } });
+				// Semantic steps must be replayed BEFORE their child blocks so
+				// the client's `WalkthroughSection` parents exist by the time
+				// the block events land.
+				for (const section of cached.semanticSteps) {
+					forwardEvent({ type: 'semantic-step', data: section });
+				}
 				for (const block of cached.blocks) forwardEvent({ type: 'block', data: block });
 				for (const issue of cached.issues) forwardEvent({ type: 'issue', data: issue });
 				for (const rating of cached.ratings) forwardEvent({ type: 'rating', data: rating });
@@ -203,6 +214,9 @@ export function walkthroughStreamHandler(ctx: {
 						type: 'summary',
 						data: { summary: finalState.summary, riskLevel: finalState.riskLevel },
 					});
+					for (const section of finalState.semanticSteps) {
+						forwardEvent({ type: 'semantic-step', data: section });
+					}
 					for (const block of finalState.blocks) forwardEvent({ type: 'block', data: block });
 					for (const issue of finalState.issues) forwardEvent({ type: 'issue', data: issue });
 					for (const rating of finalState.ratings) forwardEvent({ type: 'rating', data: rating });
@@ -240,6 +254,9 @@ export function walkthroughStreamHandler(ctx: {
 							type: 'summary',
 							data: { summary: partial.summary, riskLevel: partial.riskLevel },
 						});
+					}
+					for (const section of partial.semanticSteps) {
+						forwardEvent({ type: 'semantic-step', data: section });
 					}
 					for (const block of partial.blocks) forwardEvent({ type: 'block', data: block });
 					for (const issue of partial.issues) forwardEvent({ type: 'issue', data: issue });
@@ -299,6 +316,9 @@ export function walkthroughStreamHandler(ctx: {
 						type: 'summary',
 						data: { summary: snapshot.summary, riskLevel: snapshot.riskLevel },
 					});
+				}
+				for (const section of snapshot.semanticSteps) {
+					forwardEvent({ type: 'semantic-step', data: section });
 				}
 				for (const block of snapshot.blocks) forwardEvent({ type: 'block', data: block });
 				for (const issue of snapshot.issues) forwardEvent({ type: 'issue', data: issue });

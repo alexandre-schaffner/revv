@@ -9,6 +9,7 @@ export { commentThreads } from './comment-threads';
 export { threadMessages } from './thread-messages';
 export { hunkDecisions } from './hunk-decisions';
 export { walkthroughs } from './walkthroughs';
+export { walkthroughSemanticSteps } from './walkthrough-semantic-steps';
 export { walkthroughBlocks } from './walkthrough-blocks';
 export { walkthroughIssues } from './walkthrough-issues';
 export { walkthroughRatings } from './walkthrough-ratings';

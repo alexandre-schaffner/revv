@@ -6,16 +6,19 @@
 // `resume: <sessionId>` semantics so multi-turn conversation history lives on
 // the agent side, not in our prompt.
 //
-// Surfaces a unified frame stream — text deltas + tool-use lines — that the
-// chat route forwards over SSE for the UI to render inline.
+// Streaming decode (text/reasoning/tool-call extraction from SDK messages)
+// lives in `../agent-stream.ts`. This file owns chat-specific concerns only:
+// surface filtering (`SURFACED_TOOLS`), MCP review-context registration,
+// session-id reporting, and the mapping from `NormalizedAgentEvent` to
+// `ChatStreamFrame`.
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { Db } from "../../db";
 import { AiGenerationError } from "../../domain/errors";
-import { buildExplorationDescription } from "../prompts/walkthrough";
+import { buildActivity, walkClaudeMessages } from "../agent-stream";
 import { createChatMcpServer } from "./chat-mcp-tools";
 import { resolveCliBin } from "./cli-agent";
-import { classifyTool, type ChatStreamFrame } from "./chat-types";
+import type { ChatStreamFrame } from "./chat-types";
 
 export type { ChatStreamFrame } from "./chat-types";
 
@@ -67,10 +70,8 @@ const SURFACED_TOOLS = new Set([
 	"Bash",
 ]);
 
-// MCP tool names arrive as `mcp__<server>__<tool>`. We render those with a
-// short prefix so the user knows it's structured-context lookup, not a file
-// op.
-const MCP_TOOL_PREFIX = "mcp__revv-chat-context__";
+const CHAT_CONTEXT_MCP_SERVER = "revv-chat-context";
+const CHAT_CONTEXT_MCP_PREFIX = `mcp__${CHAT_CONTEXT_MCP_SERVER}__`;
 
 export function streamChatViaClaude(
 	opts: StreamChatViaClaudeOptions,
@@ -103,14 +104,14 @@ export function streamChatViaClaude(
 					"Bash",
 				];
 				if (enableMcp) {
-					allowedTools.push(`${MCP_TOOL_PREFIX}get_review_context`);
+					allowedTools.push(`${CHAT_CONTEXT_MCP_PREFIX}get_review_context`);
 				}
 
 				const queryOpts: Record<string, unknown> = {
 					cwd: opts.cwd,
 					allowedTools,
 					...(mcpServer
-						? { mcpServers: { "revv-chat-context": mcpServer } }
+						? { mcpServers: { [CHAT_CONTEXT_MCP_SERVER]: mcpServer } }
 						: {}),
 					permissionMode: "bypassPermissions",
 					allowDangerouslySkipPermissions: true,
@@ -159,56 +160,41 @@ export function streamChatViaClaude(
 					}
 				};
 
-				for await (const message of q) {
-					await tryReportSessionId();
-
-					if (message.type === "assistant") {
-						const content = (
-							message as {
-								type: "assistant";
-								message: {
-									content: Array<{
-										type: string;
-										text?: string;
-										name?: string;
-										input?: unknown;
-									}>;
-								};
-							}
-						).message.content;
-
-						for (const block of content) {
-							if (block.type === "text" && typeof block.text === "string") {
-								controller.enqueue({ kind: "text", data: block.text });
-							} else if (
-								block.type === "tool_use" &&
-								typeof block.name === "string"
-							) {
-								if (SURFACED_TOOLS.has(block.name)) {
-									controller.enqueue({
-										kind: "activity",
-										activityKind: classifyTool(block.name),
-										toolName: block.name,
-										summary: buildExplorationDescription(
-											block.name,
-											block.input,
-										),
-										payload: block.input,
-									});
-								} else if (block.name.startsWith(MCP_TOOL_PREFIX)) {
-									const short = block.name.slice(MCP_TOOL_PREFIX.length);
-									controller.enqueue({
-										kind: "activity",
-										activityKind: "tool.mcp",
-										toolName: block.name,
-										summary: `Looking up review context (${short})`,
-										payload: block.input,
-									});
-								}
-							}
+				// Map normalized events → ChatStreamFrame. Reasoning is surfaced
+				// to chat (the panel renders a thinking indicator while it's
+				// streaming); walkthrough drops it on the floor (separate
+				// caller). Tool-call → activity, filtered by `SURFACED_TOOLS`
+				// for built-ins or the chat-context MCP server name for MCP.
+				const emit = (ev: import("../agent-stream").NormalizedAgentEvent): void => {
+					if (ev.kind === "text-delta") {
+						controller.enqueue({ kind: "text", data: ev.data });
+					} else if (ev.kind === "reasoning-delta") {
+						controller.enqueue({ kind: "reasoning", data: ev.data });
+					} else if (ev.kind === "tool-call") {
+						if (ev.source === "builtin") {
+							if (!SURFACED_TOOLS.has(ev.toolName)) return;
+							const activity = buildActivity(ev.toolName, ev.input);
+							controller.enqueue({ kind: "activity", ...activity });
+						} else if (
+							ev.source === "mcp" &&
+							ev.mcpServer === CHAT_CONTEXT_MCP_SERVER
+						) {
+							controller.enqueue({
+								kind: "activity",
+								activityKind: "tool.mcp",
+								toolName: ev.toolName,
+								summary: `Looking up review context (${ev.bareName})`,
+								...(ev.input !== undefined ? { payload: ev.input } : {}),
+							});
 						}
+					} else if (ev.kind === "error") {
+						controller.enqueue({ kind: "text", data: `\n\n_Error: ${ev.message}_` });
 					}
-				}
+				};
+
+				await walkClaudeMessages(q, emit, {
+					onMessage: tryReportSessionId,
+				});
 
 				// Last chance to grab the session id — some early aborts never
 				// emit an assistant message.

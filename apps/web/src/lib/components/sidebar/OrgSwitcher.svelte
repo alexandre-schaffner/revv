@@ -74,6 +74,15 @@
 			{#if !collapsed}
 				<span class="org-trigger-label">{activeOrg}</span>
 			{/if}
+		{:else}
+			{#if user?.image}
+				<img src={user.image} alt="" class={collapsed ? 'org-trigger-avatar org-trigger-avatar--collapsed' : 'org-trigger-avatar'} referrerpolicy="no-referrer" />
+			{:else}
+				<User size={collapsed ? 14 : 16} class="org-trigger-icon" />
+			{/if}
+			{#if !collapsed && user?.name}
+				<span class="org-trigger-label">{user.name}</span>
+			{/if}
 		{/if}
 		{#if !collapsed}
 			<ChevronDown size={14} class="org-trigger-caret" />

@@ -52,7 +52,10 @@ import {
 	unwrapEffectError,
 } from './middleware';
 import type { ChatStreamFrame } from '../ai/providers/chat-claude';
-import type { ChatWalkthroughContext } from '../ai/prompts/chat';
+import type {
+	ChatHistoryEntry,
+	ChatWalkthroughContext,
+} from '../ai/prompts/chat';
 import { logError } from '../logger';
 import { WorktreeBlockedByUnpushedCommits } from '../domain/errors';
 
@@ -427,11 +430,12 @@ export const chatRoute = new Elysia()
 
 						// Acquire (or refresh) the per-PR worktree. Shared across
 						// walkthrough generation and every chat session for this
-						// PR. On SHA change, the dir is fast-forwarded in place
-						// rather than torn down and recreated. Any chat-agent
-						// commits that haven't been pushed yet will be lost on
-						// the `git reset --hard` — agents in this codebase push
-						// immediately after each commit, so this is acceptable.
+						// PR. If HEAD is a descendant of `prHeadSha` — i.e. the
+						// agent has committed on top in a previous turn but not
+						// pushed — those commits are preserved (the chat-header
+						// push pill renders against them). HEAD is only reset
+						// when its base diverges from `prHeadSha`, e.g. the PR
+						// head moved on the remote.
 						const { worktreePath, branchName } = yield* repoClone.acquirePrWorktree({
 							repoId: repo.id,
 							prNumber: pr.externalId,
@@ -461,6 +465,27 @@ export const chatRoute = new Elysia()
 						const walkthrough = resumeSessionId
 							? null
 							: fetchWalkthroughContext(db, pr.id);
+
+						// Snapshot the prior transcript BEFORE appending the new
+						// user message so the agent's history block doesn't end
+						// with a duplicate of the message it's about to receive.
+						const priorTimeline = yield* chatSessions.listTimeline(
+							chatSessionRow.id,
+						);
+						const history: ChatHistoryEntry[] = priorTimeline.map((e) =>
+							e.entryKind === 'message'
+								? {
+										entryKind: 'message',
+										role: e.role,
+										content: e.content,
+									}
+								: {
+										entryKind: 'activity',
+										activityKind: e.activityKind,
+										toolName: e.toolName,
+										summary: e.summary,
+									},
+						);
 
 						// Append the user message immediately so it persists even
 						// if the agent process never emits anything (timeout, crash).
@@ -505,6 +530,7 @@ export const chatRoute = new Elysia()
 							},
 							walkthrough,
 							message: ctx.body.message,
+							history,
 							cwd: worktreePath,
 							branchName,
 							resumeSessionId,

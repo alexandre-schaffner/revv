@@ -201,7 +201,9 @@ export const deviceAuthRoutes = new Elysia()
 					const token = await upsertUserAndSession(data.access_token);
 					return { status: 'success' as const, token };
 				} catch (e) {
-					return status(500, { error: `Session creation failed: ${e}` });
+					console.error('[device-auth] session creation failed:', e);
+					const message = e instanceof Error ? e.message : String(e);
+					return status(500, { error: `Session creation failed: ${message}` });
 				}
 			}
 
@@ -211,6 +213,7 @@ export const deviceAuthRoutes = new Elysia()
 			if (data.error === 'expired_token') return status(400, { error: 'expired' });
 			if (data.error === 'access_denied') return status(400, { error: 'access_denied' });
 
+			console.error('[device-auth] unexpected GitHub token response:', data);
 			return status(400, { error: data.error ?? 'Unknown error from GitHub' });
 		},
 		{ body: t.Object({ device_code: t.String() }) }

@@ -115,8 +115,11 @@ function parseBlock(row: typeof walkthroughBlocks.$inferSelect): ParsedBlock {
 		default:
 			content = JSON.stringify(parsed);
 	}
+	// Synthesize a stable monotonic order from the composite key
+	// (semanticStepIndex, stepIndex) — used by chat tool consumers that want
+	// to display blocks in walkthrough render order.
 	return {
-		orderIndex: row.order,
+		orderIndex: row.semanticStepIndex * 10000 + row.stepIndex,
 		type: row.type,
 		content,
 		filePath: typeof parsed["filePath"] === "string" ? (parsed["filePath"] as string) : null,
@@ -175,7 +178,10 @@ const getReviewContextHandler: ChatToolHandler<GetReviewContextInput> = async (
 				.select()
 				.from(walkthroughBlocks)
 				.where(eq(walkthroughBlocks.walkthroughId, walkthroughRow.id))
-				.orderBy(walkthroughBlocks.order)
+				.orderBy(
+					walkthroughBlocks.semanticStepIndex,
+					walkthroughBlocks.stepIndex,
+				)
 				.all()
 		: [];
 	const blocksById = new Map(blockRows.map((b) => [b.id, b]));

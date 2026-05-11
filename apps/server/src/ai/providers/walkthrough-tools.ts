@@ -17,7 +17,7 @@
 // add_diff_step before set_overview, this module returns a structured error
 // the agent can recover from — the DB row is never touched.
 
-import { and, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import type {
 	CodeBlock,
@@ -32,10 +32,9 @@ import type {
 	WalkthroughIssue,
 	WalkthroughPipelinePhase,
 	WalkthroughRating,
+	WalkthroughSemanticStep,
 	WalkthroughState,
-	WalkthroughStreamEvent,
 } from "@revv/shared";
-import { RATING_AXES } from "@revv/shared";
 import type { Db } from "../../db";
 import { commentThreads } from "../../db/schema/comment-threads";
 import { threadMessages } from "../../db/schema/thread-messages";
@@ -43,10 +42,12 @@ import { walkthroughs } from "../../db/schema/walkthroughs";
 import { walkthroughBlocks } from "../../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../../db/schema/walkthrough-issues";
 import { walkthroughRatings } from "../../db/schema/walkthrough-ratings";
+import { walkthroughSemanticSteps } from "../../db/schema/walkthrough-semantic-steps";
 import {
 	RATING_AXES as RATING_AXES_SPEC,
 	addDiffStepSchema,
 	addIssueCommentSchema,
+	addSemanticStepSchema,
 	completeWalkthroughSchema,
 	computeAnchorThreadId,
 	computeIssueId,
@@ -57,6 +58,7 @@ import {
 	setSentimentSchema,
 	type AddDiffStepInput,
 	type AddIssueCommentInput,
+	type AddSemanticStepInput,
 	type CompleteWalkthroughInput,
 	type FlagIssueInput,
 	type GetWalkthroughStateInput,
@@ -235,8 +237,20 @@ export const getWalkthroughStateHandler: WalkthroughToolHandler<
 		);
 	}
 
+	const semanticRows = ctx.db
+		.select({
+			semanticStepIndex: walkthroughSemanticSteps.semanticStepIndex,
+			title: walkthroughSemanticSteps.title,
+			summary: walkthroughSemanticSteps.summary,
+		})
+		.from(walkthroughSemanticSteps)
+		.where(eq(walkthroughSemanticSteps.walkthroughId, ctx.walkthroughId))
+		.orderBy(asc(walkthroughSemanticSteps.semanticStepIndex))
+		.all();
+
 	const diffBlocks = ctx.db
 		.select({
+			semanticStepIndex: walkthroughBlocks.semanticStepIndex,
 			stepIndex: walkthroughBlocks.stepIndex,
 			type: walkthroughBlocks.type,
 		})
@@ -269,12 +283,32 @@ export const getWalkthroughStateHandler: WalkthroughToolHandler<
 		.all();
 
 	const diffSteps = diffBlocks
-		.filter((b): b is { stepIndex: number; type: string } => b.stepIndex !== null)
-		.sort((a, b) => a.stepIndex - b.stepIndex)
+		.slice()
+		.sort(
+			(a, b) =>
+				a.semanticStepIndex - b.semanticStepIndex ||
+				a.stepIndex - b.stepIndex,
+		)
 		.map((b) => ({
+			semanticStepIndex: b.semanticStepIndex,
 			stepIndex: b.stepIndex,
 			blockType: b.type as WalkthroughBlock["type"],
 		}));
+
+	const stepIndicesBySection = new Map<number, number[]>();
+	for (const b of diffBlocks) {
+		const arr = stepIndicesBySection.get(b.semanticStepIndex) ?? [];
+		arr.push(b.stepIndex);
+		stepIndicesBySection.set(b.semanticStepIndex, arr);
+	}
+	const semanticSteps = semanticRows.map((s) => ({
+		semanticStepIndex: s.semanticStepIndex,
+		title: s.title,
+		summary: s.summary ?? null,
+		stepIndices: (stepIndicesBySection.get(s.semanticStepIndex) ?? [])
+			.slice()
+			.sort((a, b) => a - b),
+	}));
 
 	const issues = issueRows
 		.slice()
@@ -306,6 +340,7 @@ export const getWalkthroughStateHandler: WalkthroughToolHandler<
 		summary: row.summary || null,
 		riskLevel: row.summary ? (row.riskLevel as RiskLevel) : null,
 		sentiment: row.sentiment ?? null,
+		semanticSteps,
 		diffSteps,
 		ratedAxes: ratingRows.map((r) => r.axis as RatingAxis),
 		issues,
@@ -377,16 +412,304 @@ export const setOverviewHandler: WalkthroughToolHandler<SetOverviewInput> =
 			data: { lastCompletedPhase: "A" },
 		});
 		return okResult(
-			"Overview set. Phase A complete — now add diff-analysis steps with add_diff_step (one call per step).",
+			"Overview set. Phase A complete — open the first chapter with add_semantic_step (title + optional summary), then walk through it via add_diff_step calls.",
 		);
 	};
 
-// ── Handler: add_diff_step (Phase B) ─────────────────────────────────────────
+// ── Handler: add_semantic_step (Phase B chapter declaration) ─────────────────
 //
 // Phase precondition: last_completed_phase ∈ {'A', 'B'}.
+// Writes: one walkthrough_semantic_steps row (upsert on (walkthroughId,
+// semanticStepIndex)) AND one walkthrough_blocks row at step_index=0 (upsert
+// on (walkthroughId, phase, semanticStepIndex, stepIndex)) — both in a single
+// transaction. The atomic open+first-block design eliminates the "opened but
+// empty chapter" failure mode by construction: models that stopped between
+// the old `add_semantic_step` and the first `add_diff_step` call now write
+// both rows from a single tool invocation, so a chapter literally cannot
+// exist without content.
+//
+// Owns the Phase A → B transition: the first call advances
+// last_completed_phase to 'B' in the same transaction so subsequent
+// add_diff_step calls accept their writes.
+
+type SemanticStepInitialBlock = AddSemanticStepInput["initial_block"];
+
+function initialBlockVariantCount(block: SemanticStepInitialBlock): number {
+	let n = 0;
+	if (block.markdown != null) n++;
+	if (block.code != null) n++;
+	if (block.diff != null) n++;
+	return n;
+}
+
+export const addSemanticStepHandler: WalkthroughToolHandler<
+	AddSemanticStepInput
+> = async (ctx, input) => {
+	const trimmedTitle = input.title.trim();
+	if (trimmedTitle.length === 0) {
+		return errorResult(
+			"Error: add_semantic_step requires a non-empty title — chapters are named, not anonymous.",
+		);
+	}
+
+	if (initialBlockVariantCount(input.initial_block) !== 1) {
+		return errorResult(
+			"Error: add_semantic_step.initial_block requires exactly one of { markdown, code, diff } — not zero, not two. A chapter cannot be opened without its first block.",
+		);
+	}
+
+	let result: WalkthroughToolResult | null = null;
+	let isFirstStep = false;
+	let block: WalkthroughBlock | null = null;
+	const semanticStep: WalkthroughSemanticStep = {
+		semanticStepIndex: input.semantic_step_index,
+		title: trimmedTitle,
+		summary: input.summary ?? null,
+	};
+	ctx.db.transaction(() => {
+		const row = loadWalkthroughRow(ctx.db, ctx.walkthroughId);
+		if (!row) {
+			result = errorResult(
+				`Walkthrough ${ctx.walkthroughId} not found.`,
+			);
+			return;
+		}
+		const phase = row.lastCompletedPhase as WalkthroughPipelinePhase;
+		if (!phaseAtLeast(phase, "A") || !phaseAtMost(phase, "B")) {
+			result = errorResult(
+				`Error: add_semantic_step requires Phase A complete and Phase C not yet entered. Current phase: '${phase}'. Call set_overview first, or stop adding chapters once sentiment has been set.`,
+			);
+			return;
+		}
+
+		// Sequencing: a NEW chapter (no existing row at this index) may only be
+		// opened if the immediately previous chapter exists. Retries of an
+		// existing chapter (update path) bypass this check. The atomic
+		// open+first-block design means "previous chapter has a block" is
+		// implied by "previous chapter exists" — no separate fill check needed.
+		const existingChapter = ctx.db
+			.select({ id: walkthroughSemanticSteps.id })
+			.from(walkthroughSemanticSteps)
+			.where(
+				and(
+					eq(
+						walkthroughSemanticSteps.walkthroughId,
+						ctx.walkthroughId,
+					),
+					eq(
+						walkthroughSemanticSteps.semanticStepIndex,
+						input.semantic_step_index,
+					),
+				),
+			)
+			.get();
+		if (!existingChapter && input.semantic_step_index > 0) {
+			const prevIdx = input.semantic_step_index - 1;
+			const prevChapter = ctx.db
+				.select({ title: walkthroughSemanticSteps.title })
+				.from(walkthroughSemanticSteps)
+				.where(
+					and(
+						eq(
+							walkthroughSemanticSteps.walkthroughId,
+							ctx.walkthroughId,
+						),
+						eq(
+							walkthroughSemanticSteps.semanticStepIndex,
+							prevIdx,
+						),
+					),
+				)
+				.get();
+			if (!prevChapter) {
+				result = errorResult(
+					`Error: semantic_step_index must be sequential and start at 0. Index ${prevIdx} does not exist yet — open chapter ${prevIdx} first with add_semantic_step({ semantic_step_index: ${prevIdx}, ... }), then open ${input.semantic_step_index}.`,
+				);
+				return;
+			}
+		}
+
+		const id = `semantic-${ctx.walkthroughId}-${input.semantic_step_index}`;
+		const now = new Date().toISOString();
+		ctx.db
+			.insert(walkthroughSemanticSteps)
+			.values({
+				id,
+				walkthroughId: ctx.walkthroughId,
+				semanticStepIndex: input.semantic_step_index,
+				title: trimmedTitle,
+				summary: input.summary ?? null,
+				createdAt: now,
+			})
+			.onConflictDoUpdate({
+				target: [
+					walkthroughSemanticSteps.walkthroughId,
+					walkthroughSemanticSteps.semanticStepIndex,
+				],
+				set: {
+					title: trimmedTitle,
+					summary: input.summary ?? null,
+				},
+			})
+			.run();
+
+		// Atomically write the chapter's step_index=0 block from the same
+		// transaction so the chapter is never persisted without content.
+		const blockId = blockIdFor(
+			ctx.walkthroughId,
+			input.semantic_step_index,
+			0,
+		);
+		const order = input.semantic_step_index * 10000;
+		const initial = input.initial_block;
+		if (initial.markdown) {
+			const md: MarkdownBlock = {
+				type: "markdown",
+				id: blockId,
+				order,
+				phase: "diff_analysis",
+				semanticStepIndex: input.semantic_step_index,
+				stepIndex: 0,
+				content: initial.markdown.content,
+			};
+			block = md;
+			ctx.db
+				.insert(walkthroughBlocks)
+				.values({
+					id: blockId,
+					walkthroughId: ctx.walkthroughId,
+					phase: "diff_analysis",
+					order,
+					semanticStepIndex: input.semantic_step_index,
+					stepIndex: 0,
+					type: "markdown",
+					data: JSON.stringify(md),
+					createdAt: now,
+				})
+				.onConflictDoUpdate({
+					target: [
+						walkthroughBlocks.walkthroughId,
+						walkthroughBlocks.phase,
+						walkthroughBlocks.semanticStepIndex,
+						walkthroughBlocks.stepIndex,
+					],
+					set: { type: "markdown", data: JSON.stringify(md) },
+				})
+				.run();
+		} else if (initial.code) {
+			const code: CodeBlock = {
+				type: "code",
+				id: blockId,
+				order,
+				phase: "diff_analysis",
+				semanticStepIndex: input.semantic_step_index,
+				stepIndex: 0,
+				filePath: initial.code.file_path,
+				startLine: initial.code.start_line,
+				endLine: initial.code.end_line,
+				language: initial.code.language,
+				content: initial.code.content,
+				annotation: initial.code.annotation,
+				annotationPosition: initial.code.annotation_position,
+			};
+			block = code;
+			ctx.db
+				.insert(walkthroughBlocks)
+				.values({
+					id: blockId,
+					walkthroughId: ctx.walkthroughId,
+					phase: "diff_analysis",
+					order,
+					semanticStepIndex: input.semantic_step_index,
+					stepIndex: 0,
+					type: "code",
+					data: JSON.stringify(code),
+					createdAt: now,
+				})
+				.onConflictDoUpdate({
+					target: [
+						walkthroughBlocks.walkthroughId,
+						walkthroughBlocks.phase,
+						walkthroughBlocks.semanticStepIndex,
+						walkthroughBlocks.stepIndex,
+					],
+					set: { type: "code", data: JSON.stringify(code) },
+				})
+				.run();
+		} else if (initial.diff) {
+			const diff: DiffBlock = {
+				type: "diff",
+				id: blockId,
+				order,
+				phase: "diff_analysis",
+				semanticStepIndex: input.semantic_step_index,
+				stepIndex: 0,
+				filePath: initial.diff.file_path,
+				patch: initial.diff.patch,
+				annotation: initial.diff.annotation,
+				annotationPosition: initial.diff.annotation_position,
+			};
+			block = diff;
+			ctx.db
+				.insert(walkthroughBlocks)
+				.values({
+					id: blockId,
+					walkthroughId: ctx.walkthroughId,
+					phase: "diff_analysis",
+					order,
+					semanticStepIndex: input.semantic_step_index,
+					stepIndex: 0,
+					type: "diff",
+					data: JSON.stringify(diff),
+					createdAt: now,
+				})
+				.onConflictDoUpdate({
+					target: [
+						walkthroughBlocks.walkthroughId,
+						walkthroughBlocks.phase,
+						walkthroughBlocks.semanticStepIndex,
+						walkthroughBlocks.stepIndex,
+					],
+					set: { type: "diff", data: JSON.stringify(diff) },
+				})
+				.run();
+		}
+
+		if (phase === "A") {
+			isFirstStep = true;
+			ctx.db
+				.update(walkthroughs)
+				.set({ lastCompletedPhase: "B" })
+				.where(eq(walkthroughs.id, ctx.walkthroughId))
+				.run();
+		}
+	});
+	if (result) return result;
+	if (!block) {
+		return errorResult(
+			"Internal error: add_semantic_step reached emit without a persisted initial block.",
+		);
+	}
+
+	ctx.emit({ type: "semantic-step", data: semanticStep });
+	ctx.emit({ type: "block", data: block });
+	if (isFirstStep) {
+		ctx.emit({
+			type: "phase:advanced",
+			data: { lastCompletedPhase: "B" },
+		});
+	}
+	return okResult(
+		`Chapter ${input.semantic_step_index} ('${trimmedTitle}') opened with its first block at step_index=0. Add 1–4 more atomic blocks for this chapter via add_diff_step({ semantic_step_index: ${input.semantic_step_index}, step_index: 1, ... }) — step_index 2, 3, 4 for the rest. When this chapter is full, open the next chapter via another add_semantic_step call. Do not call set_sentiment until every planned chapter is filled.`,
+	);
+};
+
+// ── Handler: add_diff_step (Phase B) ─────────────────────────────────────────
+//
+// Phase precondition: last_completed_phase === 'B' (a parent semantic step
+// must already exist — `add_semantic_step` owns the A→B transition).
 // Writes: one walkthrough_blocks row (upsert on (walkthroughId, phase,
-// stepIndex)).
-// Advances: last_completed_phase → 'B' (first step only).
+// semanticStepIndex, stepIndex)).
 
 function blockVariantCount(input: AddDiffStepInput): number {
 	let n = 0;
@@ -394,6 +717,15 @@ function blockVariantCount(input: AddDiffStepInput): number {
 	if (input.code != null) n++;
 	if (input.diff != null) n++;
 	return n;
+}
+
+/** Canonical block id derived from the composite identity. */
+function blockIdFor(
+	walkthroughId: string,
+	semanticStepIndex: number,
+	stepIndex: number,
+): string {
+	return `block-${walkthroughId}-${semanticStepIndex}-${stepIndex}`;
 }
 
 export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> =
@@ -407,7 +739,6 @@ export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> =
 
 		let result: WalkthroughToolResult | null = null;
 		let block: WalkthroughBlock | null = null;
-		let isFirstStep = false;
 		ctx.db.transaction(() => {
 			const row = loadWalkthroughRow(ctx.db, ctx.walkthroughId);
 			if (!row) {
@@ -417,22 +748,51 @@ export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> =
 				return;
 			}
 			const phase = row.lastCompletedPhase as WalkthroughPipelinePhase;
-			if (!phaseAtLeast(phase, "A") || !phaseAtMost(phase, "B")) {
+			if (phase !== "B") {
 				result = errorResult(
-					`Error: add_diff_step requires Phase A complete and Phase C not yet entered. Current phase: '${phase}'. Call set_overview first, or stop adding diff steps once sentiment has been set.`,
+					`Error: add_diff_step requires Phase B (open via add_semantic_step) and Phase C not yet entered. Current phase: '${phase}'. ${phase === "A" ? "Call add_semantic_step first to open the first chapter — it advances the pipeline to Phase B and creates the parent row this block attaches to." : "Stop adding diff steps once sentiment has been set."}`,
 				);
 				return;
 			}
 
-			const blockId = `block-${ctx.walkthroughId}-${input.step_index}`;
+			// Parent semantic step must exist for the composite key to be valid.
+			const parent = ctx.db
+				.select({ id: walkthroughSemanticSteps.id })
+				.from(walkthroughSemanticSteps)
+				.where(
+					and(
+						eq(
+							walkthroughSemanticSteps.walkthroughId,
+							ctx.walkthroughId,
+						),
+						eq(
+							walkthroughSemanticSteps.semanticStepIndex,
+							input.semantic_step_index,
+						),
+					),
+				)
+				.get();
+			if (!parent) {
+				result = errorResult(
+					`Error: no semantic_step exists at semantic_step_index=${input.semantic_step_index}. Call add_semantic_step first with that index, then retry this add_diff_step.`,
+				);
+				return;
+			}
+
+			const blockId = blockIdFor(
+				ctx.walkthroughId,
+				input.semantic_step_index,
+				input.step_index,
+			);
 			const now = new Date().toISOString();
 
 			if (input.markdown) {
 				const md: MarkdownBlock = {
 					type: "markdown",
 					id: blockId,
-					order: input.step_index,
+					order: input.semantic_step_index * 10000 + input.step_index,
 					phase: "diff_analysis",
+					semanticStepIndex: input.semantic_step_index,
 					stepIndex: input.step_index,
 					content: input.markdown.content,
 				};
@@ -443,8 +803,9 @@ export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> =
 						id: blockId,
 						walkthroughId: ctx.walkthroughId,
 						phase: "diff_analysis",
+						order: input.semantic_step_index * 10000 + input.step_index,
+						semanticStepIndex: input.semantic_step_index,
 						stepIndex: input.step_index,
-						order: input.step_index,
 						type: "markdown",
 						data: JSON.stringify(md),
 						createdAt: now,
@@ -453,11 +814,11 @@ export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> =
 						target: [
 							walkthroughBlocks.walkthroughId,
 							walkthroughBlocks.phase,
+							walkthroughBlocks.semanticStepIndex,
 							walkthroughBlocks.stepIndex,
 						],
 						set: {
 							type: "markdown",
-							order: input.step_index,
 							data: JSON.stringify(md),
 						},
 					})
@@ -466,8 +827,9 @@ export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> =
 				const code: CodeBlock = {
 					type: "code",
 					id: blockId,
-					order: input.step_index,
+					order: input.semantic_step_index * 10000 + input.step_index,
 					phase: "diff_analysis",
+					semanticStepIndex: input.semantic_step_index,
 					stepIndex: input.step_index,
 					filePath: input.code.file_path,
 					startLine: input.code.start_line,
@@ -484,8 +846,9 @@ export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> =
 						id: blockId,
 						walkthroughId: ctx.walkthroughId,
 						phase: "diff_analysis",
+						order: input.semantic_step_index * 10000 + input.step_index,
+						semanticStepIndex: input.semantic_step_index,
 						stepIndex: input.step_index,
-						order: input.step_index,
 						type: "code",
 						data: JSON.stringify(code),
 						createdAt: now,
@@ -494,11 +857,11 @@ export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> =
 						target: [
 							walkthroughBlocks.walkthroughId,
 							walkthroughBlocks.phase,
+							walkthroughBlocks.semanticStepIndex,
 							walkthroughBlocks.stepIndex,
 						],
 						set: {
 							type: "code",
-							order: input.step_index,
 							data: JSON.stringify(code),
 						},
 					})
@@ -507,8 +870,9 @@ export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> =
 				const diff: DiffBlock = {
 					type: "diff",
 					id: blockId,
-					order: input.step_index,
+					order: input.semantic_step_index * 10000 + input.step_index,
 					phase: "diff_analysis",
+					semanticStepIndex: input.semantic_step_index,
 					stepIndex: input.step_index,
 					filePath: input.diff.file_path,
 					patch: input.diff.patch,
@@ -522,8 +886,9 @@ export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> =
 						id: blockId,
 						walkthroughId: ctx.walkthroughId,
 						phase: "diff_analysis",
+						order: input.semantic_step_index * 10000 + input.step_index,
+						semanticStepIndex: input.semantic_step_index,
 						stepIndex: input.step_index,
-						order: input.step_index,
 						type: "diff",
 						data: JSON.stringify(diff),
 						createdAt: now,
@@ -532,23 +897,14 @@ export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> =
 						target: [
 							walkthroughBlocks.walkthroughId,
 							walkthroughBlocks.phase,
+							walkthroughBlocks.semanticStepIndex,
 							walkthroughBlocks.stepIndex,
 						],
 						set: {
 							type: "diff",
-							order: input.step_index,
 							data: JSON.stringify(diff),
 						},
 					})
-					.run();
-			}
-
-			if (phase === "A") {
-				isFirstStep = true;
-				ctx.db
-					.update(walkthroughs)
-					.set({ lastCompletedPhase: "B" })
-					.where(eq(walkthroughs.id, ctx.walkthroughId))
 					.run();
 			}
 		});
@@ -560,14 +916,8 @@ export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> =
 		}
 
 		ctx.emit({ type: "block", data: block });
-		if (isFirstStep) {
-			ctx.emit({
-				type: "phase:advanced",
-				data: { lastCompletedPhase: "B" },
-			});
-		}
 		return okResult(
-			`Diff step ${input.step_index} persisted. Continue with more steps, or call set_sentiment when Phase B is done.`,
+			`Atomic block persisted at chapter ${input.semantic_step_index}, step ${input.step_index}. Continue with more blocks in this chapter, open the next chapter with add_semantic_step, or call set_sentiment when Phase B is done.`,
 		);
 	};
 
@@ -607,9 +957,12 @@ export const flagIssueHandler: WalkthroughToolHandler<FlagIssueInput> = async (
 			return;
 		}
 
-		// Validate all referenced block_orders point at persisted diff steps.
+		// Validate all referenced block_refs point at persisted diff blocks.
 		const stepRows = ctx.db
-			.select({ stepIndex: walkthroughBlocks.stepIndex })
+			.select({
+				semanticStepIndex: walkthroughBlocks.semanticStepIndex,
+				stepIndex: walkthroughBlocks.stepIndex,
+			})
 			.from(walkthroughBlocks)
 			.where(
 				and(
@@ -618,22 +971,28 @@ export const flagIssueHandler: WalkthroughToolHandler<FlagIssueInput> = async (
 				),
 			)
 			.all();
-		const knownSteps = new Set(
-			stepRows
-				.map((r) => r.stepIndex)
-				.filter((n): n is number => n !== null),
+		const knownBlocks = new Set(
+			stepRows.map((r) => `${r.semanticStepIndex}:${r.stepIndex}`),
 		);
-		const unknown = input.block_orders.filter((o) => !knownSteps.has(o));
+		const unknown = input.block_refs.filter(
+			(r) => !knownBlocks.has(`${r.semantic_step_index}:${r.step_index}`),
+		);
 		if (unknown.length > 0) {
 			result = errorResult(
-				`Error: block_orders [${unknown.join(", ")}] reference diff steps that don't exist yet. Call add_diff_step for each before flag_issue.`,
+				`Error: block_refs [${unknown.map((r) => `{semantic_step_index: ${r.semantic_step_index}, step_index: ${r.step_index}}`).join(", ")}] reference diff blocks that don't exist yet. Call add_diff_step for each before flag_issue.`,
 			);
 			return;
 		}
 
-		const uniqueOrders = Array.from(new Set(input.block_orders));
-		const blockIds = uniqueOrders.map(
-			(o) => `block-${ctx.walkthroughId}-${o}`,
+		const seen = new Set<string>();
+		const uniqueRefs = input.block_refs.filter((r) => {
+			const k = `${r.semantic_step_index}:${r.step_index}`;
+			if (seen.has(k)) return false;
+			seen.add(k);
+			return true;
+		});
+		const blockIds = uniqueRefs.map((r) =>
+			blockIdFor(ctx.walkthroughId, r.semantic_step_index, r.step_index),
 		);
 
 		// Issue `order` is the post-row insertion order within this walkthrough —
@@ -1017,10 +1376,13 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (
 			return;
 		}
 
-		// Validate block_orders reference persisted diff steps if any given.
-		if (input.block_orders.length > 0) {
+		// Validate block_refs reference persisted diff blocks if any given.
+		if (input.block_refs.length > 0) {
 			const stepRows = ctx.db
-				.select({ stepIndex: walkthroughBlocks.stepIndex })
+				.select({
+					semanticStepIndex: walkthroughBlocks.semanticStepIndex,
+					stepIndex: walkthroughBlocks.stepIndex,
+				})
 				.from(walkthroughBlocks)
 				.where(
 					and(
@@ -1029,25 +1391,32 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (
 					),
 				)
 				.all();
-			const knownSteps = new Set(
-				stepRows
-					.map((r) => r.stepIndex)
-					.filter((n): n is number => n !== null),
+			const knownBlocks = new Set(
+				stepRows.map((r) => `${r.semanticStepIndex}:${r.stepIndex}`),
 			);
-			const unknown = input.block_orders.filter(
-				(o) => !knownSteps.has(o),
+			const unknown = input.block_refs.filter(
+				(r) =>
+					!knownBlocks.has(
+						`${r.semantic_step_index}:${r.step_index}`,
+					),
 			);
 			if (unknown.length > 0) {
 				result = errorResult(
-					`Error: block_orders [${unknown.join(", ")}] reference diff steps that don't exist.`,
+					`Error: block_refs [${unknown.map((r) => `{semantic_step_index: ${r.semantic_step_index}, step_index: ${r.step_index}}`).join(", ")}] reference diff blocks that don't exist.`,
 				);
 				return;
 			}
 		}
 
-		const uniqueOrders = Array.from(new Set(input.block_orders));
-		const blockIds = uniqueOrders.map(
-			(o) => `block-${ctx.walkthroughId}-${o}`,
+		const seen = new Set<string>();
+		const uniqueRefs = input.block_refs.filter((r) => {
+			const k = `${r.semantic_step_index}:${r.step_index}`;
+			if (seen.has(k)) return false;
+			seen.add(k);
+			return true;
+		});
+		const blockIds = uniqueRefs.map((r) =>
+			blockIdFor(ctx.walkthroughId, r.semantic_step_index, r.step_index),
 		);
 		const citations: RatingCitation[] = input.citations.map((c) => ({
 			filePath: c.file_path,
@@ -1161,8 +1530,10 @@ export const completeWalkthroughHandler: WalkthroughToolHandler<
 		);
 	}
 
-	const stepCount = ctx.db
-		.select({ id: walkthroughBlocks.id })
+	const blockRows = ctx.db
+		.select({
+			semanticStepIndex: walkthroughBlocks.semanticStepIndex,
+		})
 		.from(walkthroughBlocks)
 		.where(
 			and(
@@ -1170,10 +1541,45 @@ export const completeWalkthroughHandler: WalkthroughToolHandler<
 				eq(walkthroughBlocks.phase, "diff_analysis"),
 			),
 		)
-		.all().length;
-	if (stepCount === 0) {
+		.all();
+	if (blockRows.length === 0) {
 		return errorResult(
 			"Error: complete_walkthrough requires at least one diff step.",
+		);
+	}
+
+	const semanticRows = ctx.db
+		.select({
+			semanticStepIndex: walkthroughSemanticSteps.semanticStepIndex,
+		})
+		.from(walkthroughSemanticSteps)
+		.where(eq(walkthroughSemanticSteps.walkthroughId, ctx.walkthroughId))
+		.all();
+	if (semanticRows.length === 0) {
+		return errorResult(
+			"Error: complete_walkthrough requires at least one semantic step (chapter). Call add_semantic_step before any add_diff_step.",
+		);
+	}
+	const knownSections = new Set(semanticRows.map((r) => r.semanticStepIndex));
+	const orphanIndices = Array.from(
+		new Set(
+			blockRows
+				.filter((b) => !knownSections.has(b.semanticStepIndex))
+				.map((b) => b.semanticStepIndex),
+		),
+	);
+	if (orphanIndices.length > 0) {
+		return errorResult(
+			`Error: blocks reference unknown semantic_step_index values [${orphanIndices.join(", ")}]. Each block must belong to a chapter opened by add_semantic_step.`,
+		);
+	}
+	const blockSections = new Set(blockRows.map((b) => b.semanticStepIndex));
+	const emptySections = semanticRows
+		.map((r) => r.semanticStepIndex)
+		.filter((i) => !blockSections.has(i));
+	if (emptySections.length > 0) {
+		return errorResult(
+			`Error: semantic_step(s) [${emptySections.join(", ")}] have no atomic blocks. Each chapter needs ≥1 add_diff_step call.`,
 		);
 	}
 
@@ -1230,7 +1636,7 @@ export const TOOL_SPECS: Array<ToolSpec<any>> = [
 	{
 		name: "get_walkthrough_state",
 		description:
-			"Read-only. Call FIRST on every run, including resumes. Returns current phase, persisted diff steps, rated axes, and metadata so you can pick up exactly where the previous run stopped. Never calls this are silently tolerated but highly discouraged — you risk duplicating work.",
+			"Read-only. Call FIRST on every run, including resumes. Returns current phase, the chapter manifest (semanticSteps), per-chapter atomic blocks, rated axes, and metadata so you can pick up exactly where the previous run stopped. Skipping this risks duplicating work.",
 		inputSchema: getWalkthroughStateSchema,
 		handler: getWalkthroughStateHandler,
 	},
@@ -1242,16 +1648,23 @@ export const TOOL_SPECS: Array<ToolSpec<any>> = [
 		handler: setOverviewHandler,
 	},
 	{
+		name: "add_semantic_step",
+		description:
+			"Phase B. Open a chapter AND write its first atomic block in one atomic transaction. Provide a monotonic zero-based semantic_step_index, a short title, an optional summary, and a REQUIRED initial_block (exactly one of markdown/code/diff — same shape as add_diff_step). The first call advances the pipeline from Phase A to Phase B. Subsequent blocks in the same chapter use add_diff_step with step_index starting at 1. Idempotent upsert on (walkthroughId, semantic_step_index) for both the chapter row and its step_index=0 block — retries replace, never duplicate.",
+		inputSchema: addSemanticStepSchema,
+		handler: addSemanticStepHandler,
+	},
+	{
 		name: "add_diff_step",
 		description:
-			"Phase B. Call ONCE PER STEP. Each call persists one narrative unit: markdown, a code excerpt, or a diff hunk (exactly one of the three). step_index is monotonic zero-based and required — retries with the same index are idempotent upserts. Advances phase to B on the first call.",
+			"Phase B. Append one atomic block (markdown, code excerpt, or diff hunk — exactly one of the three) to an already-opened chapter. Required: semantic_step_index (the parent chapter, opened by add_semantic_step), step_index (monotonic zero-based within the chapter — typically 1, 2, 3, ... since step_index=0 is already written by add_semantic_step's initial_block). Retries with the same composite key are idempotent upserts. Each chapter typically holds 2–5 atomic blocks total (1 from add_semantic_step + 1–4 from add_diff_step).",
 		inputSchema: addDiffStepSchema,
 		handler: addDiffStepHandler,
 	},
 	{
 		name: "flag_issue",
 		description:
-			"Phase B. Flag a structured concern (security, correctness, tests, perf, etc.). Must be called AFTER the diff step(s) that explain the concern, and must link to them via block_orders (= step_index values).",
+			"Phase B. Flag a structured concern (security, correctness, tests, perf, etc.). Must be called AFTER the diff step(s) that explain the concern, and must link to them via block_refs = [{ semantic_step_index, step_index }, ...].",
 		inputSchema: flagIssueSchema,
 		handler: flagIssueHandler,
 	},

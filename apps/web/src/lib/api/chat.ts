@@ -19,6 +19,7 @@ export type { Activity, ActivityKind };
 
 export type ChatStreamFrame =
 	| { kind: 'text'; data: string }
+	| { kind: 'reasoning'; data: string }
 	| ({ kind: 'activity' } & Activity);
 
 export interface ChatRequestParams {
@@ -93,6 +94,9 @@ export function streamChatMessage(
 				for (const frame of result.events) {
 					if (frame.kind === 'text') {
 						callbacks.onText(frame.data);
+					} else if (frame.kind === 'reasoning') {
+						// Reasoning frames are intentionally dropped — the
+						// chat panel never surfaces model reasoning.
 					} else if (frame.kind === 'activity') {
 						callbacks.onActivity({
 							activityKind: frame.activityKind,

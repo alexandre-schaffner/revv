@@ -8,11 +8,23 @@ export const CLONE_TIMEOUT_MS = 600_000; // 10 minutes
 /** Maximum time for a CLI-driven walkthrough (opencode / claude). */
 export const CLI_WALKTHROUGH_TIMEOUT_MS = 600_000; // 10 minutes
 
+/**
+ * Maximum time for a chat turn. Chat turns can legitimately run much longer
+ * than walkthroughs — a single "Request Changes" prompt may ask the agent
+ * to address every walkthrough issue with separate commits, each commit
+ * involving multiple Read/Edit/Bash tool calls. Mirror the opencode TUI's
+ * permissive behaviour: only abort on truly stuck sessions, not on length.
+ */
+export const CLI_CHAT_TURN_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+
 /** Inactivity timeout for walkthrough stream guard (no events for this long = abort). */
 export const WALKTHROUGH_INACTIVITY_TIMEOUT_MS = 120_000; // 120 seconds -- 2 min
 
 /** Timeout for the first event from the AI provider — shorter since healthy providers emit immediately. */
 export const WALKTHROUGH_FIRST_EVENT_TIMEOUT_MS = 90_000; // 90 seconds
+
+/** First-event timeout for the opencode path (daemon cold-start + MCP registration + model TTFT). */
+export const WALKTHROUGH_FIRST_EVENT_TIMEOUT_OPENCODE_MS = 150_000; // 150 seconds
 
 /** Exploration-stall timeout: if only exploration events arrive for this long with no
  *  summary/block/phase progress, the model is stuck reading files — abort with an error. */

@@ -13,6 +13,7 @@ import { SettingsService } from './Settings';
 import { SyncService } from './Sync';
 import { TokenProvider } from './TokenProvider';
 import { WalkthroughJobs } from './WalkthroughJobs';
+import { WalkthroughService } from './Walkthrough';
 import { WebSocketHub } from './WebSocketHub';
 import { user } from '../db/schema/auth';
 
@@ -43,6 +44,7 @@ export const PollSchedulerLive = Layer.effect(
 		const tokenProvider = yield* TokenProvider;
 		const etagCache = yield* GitHubEtagCache;
 		const walkthroughJobs = yield* WalkthroughJobs;
+		const walkthroughService = yield* WalkthroughService;
 		const { db } = yield* DbService;
 
 		// Bind the captured db handle for convenience
@@ -366,6 +368,43 @@ export const PollSchedulerLive = Layer.effect(
 			const hasPeriodicSyncedOnce = yield* Ref.get(hasPeriodicSyncedOnceRef);
 			if (!suppressSummary && hasPeriodicSyncedOnce && changes.length > 0) {
 				yield* hub.broadcast({ type: 'prs:sync-summary', data: changes });
+
+				// Auto-trigger walkthroughs for newly-requested reviews so they're
+				// ready (or already streaming) by the time the user opens the PR.
+				// Gated by the same `!suppressSummary && hasPeriodicSyncedOnce`
+				// condition as the broadcast: the first periodic sync is a baseline
+				// (we don't know what was new since the prior server run) and
+				// manual `syncNow` calls are diagnostic — neither should
+				// mass-spawn AI jobs. Fire-and-forget: the sync loop must not
+				// block on AI work, and `startJob` already daemon-forks the
+				// actual generation fiber.
+				for (const change of changes) {
+					if (change.kind !== 'review_requested') continue;
+					const pr = allPrs.find((p) => p.id === change.prId);
+					if (!pr || pr.headSha === null) continue;
+					const cached = yield* withDb(
+						walkthroughService.getCached(pr.id, pr.headSha),
+					);
+					if (cached !== null) continue;
+					yield* Effect.forkDaemon(
+						walkthroughJobs
+							.startJob({
+								prId: pr.id,
+								userId: 'single-user',
+								trigger: 'review_requested',
+							})
+							.pipe(
+								Effect.catchAllCause((cause) =>
+									Effect.sync(() => {
+										console.warn(
+											`[PollScheduler] Auto-walkthrough trigger failed for PR ${pr.id} (${change.repoFullName}#${change.prNumber}):`,
+											Cause.pretty(cause),
+										);
+									}),
+								),
+							),
+					);
+				}
 			}
 			yield* Ref.set(hasPeriodicSyncedOnceRef, true);
 			yield* Ref.set(suppressSummaryRef, false);

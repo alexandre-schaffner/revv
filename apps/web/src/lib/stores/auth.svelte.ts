@@ -153,13 +153,18 @@ async function poll(): Promise<void> {
 			return;
 		}
 
-		// Error cases
+		// Error cases. Surface the server-provided reason when it's anything
+		// other than the two well-known device-flow outcomes — otherwise every
+		// real failure (no email on account, GitHub API 4xx, DB error, etc.)
+		// gets flattened to the same useless "Sign-in failed" string.
 		error =
 			data.error === 'expired'
 				? 'Sign-in timed out. Please try again.'
 				: data.error === 'access_denied'
 					? 'Sign-in was cancelled.'
-					: 'Sign-in failed. Please try again.';
+					: data.error
+						? `Sign-in failed: ${data.error}`
+						: 'Sign-in failed. Please try again.';
 		cancelSignIn();
 	} catch {
 		// Network error — retry after current interval

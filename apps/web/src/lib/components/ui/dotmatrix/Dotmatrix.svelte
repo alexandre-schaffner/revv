@@ -1,151 +1,137 @@
 <script lang="ts">
-	// ── Dotmatrix spinner component ──────────────────────────────────────
-	// Faithful Svelte port of the dotmatrix loaders from
-	// https://dotmatrix.zzzzshawn.cloud (github.com/zzzzshawn/matrix).
+	// ── Dotmatrix spinner component ──────────────────────────────────────────
+	// Single-dispatch dot-matrix renderer. Every variant — legacy or
+	// square-N — flows through `DOTMATRIX_VARIANTS` in `./variants.ts`:
 	//
-	// Three variants driven by CSS keyframes (delay keyed on per-dot CSS vars):
-	//   ripple   — center-out radial pulse (manhattan distance)
-	//   diagonal — top-left → bottom-right sweep (row + col)
-	//   collapse — outside-in ring collapse (4 - manhattan)
+	//   kind: 'css'      → CSS keyframes own the animation. The resolver
+	//                      returns optional per-dot CSS vars + an optional
+	//                      extra class for variants that fan out to multiple
+	//                      keyframes (e.g. square-4 outer vs middle ring).
+	//                      Keyframes live in `dotmatrix-loader.css`.
 	//
-	// One variant driven by JS frame-stepping:
-	//   prism-bloom — dotm-square-14; palindrome through 4 discrete opacity
-	//                 frames at ~354ms/step with CSS transition crossfade.
+	//   kind: 'stepped'  → JS frame-stepping via setTimeout. The resolver
+	//                      computes opacity per dot per step; component
+	//                      writes it inline.
+	//
+	//   kind: 'phase'    → JS continuous phase 0..1 via rAF. Same shape as
+	//                      `stepped` but with a 0..1 phase argument.
+	//
+	// Layout & styling: ALL CSS — grid, dot dimensions, size variants,
+	// inactive state, keyframes, variant rules — lives in
+	// `./dotmatrix-loader.css` (imported globally via `app.css`). This
+	// component has no local `<style>` so its classes are unhashed and the
+	// global stylesheet matches by class name alone.
+	//
+	// Reduced motion: JS variants skip the ticker and render
+	// `idleOpacity(...)`. CSS variants are caught by the global
+	// `prefers-reduced-motion: reduce` rule in `app.css`. The matrix is
+	// decorative variation on top of the always-present `.stream-cursor`
+	// (motion-essential), so we don't bypass the global reset.
 	//
 	// Props:
-	//   variant — which animation pattern to use
-	//   active  — when false, prism-bloom timer is suspended
+	//   variant — any `DotmatrixVariant` (24 total: 4 legacy + 20 square-N)
+	//   size    — 'default' (5px dots, 29px) | 'small' (3px dots, 19px)
+	//   active  — false suspends the JS sequencers
 
-	type Variant = 'ripple' | 'diagonal' | 'collapse' | 'prism-bloom';
+	import {
+		DOTMATRIX_VARIANTS,
+		type DotmatrixVariant,
+		type PerDotConfig,
+		type VariantConfig,
+	} from './variants';
 
 	interface Props {
-		variant: Variant;
+		variant: DotmatrixVariant;
+		size?: 'default' | 'small';
 		active?: boolean;
 	}
 
-	let { variant, active = true }: Props = $props();
+	let { variant, size = 'default', active = true }: Props = $props();
 
-	// ── 5×5 grid layout ─────────────────────────────────────────────────
-	// Pure geometry — precomputed once at module load. Each dot carries:
-	//   manhattan     — |row-2| + |col-2|, used by ripple & collapse
-	//   pathOrder     — row + col, used by diagonal
-	//   collapseOrder — 4 - manhattan, used by collapse
+	// ── 5×5 grid layout — precomputed once ─────────────────────────────────
 	const MATRIX_5X5 = (() =>
-		Array.from({ length: 25 }, (_, i) => {
-			const row = Math.floor(i / 5);
-			const col = i % 5;
-			const manhattan = Math.abs(row - 2) + Math.abs(col - 2);
-			return { row, col, manhattan, pathOrder: row + col, collapseOrder: 4 - manhattan };
-		}))();
+		Array.from({ length: 25 }, (_, i) => ({
+			row: Math.floor(i / 5),
+			col: i % 5,
+		})))();
 
-	// ── Prism Bloom sequencer (dotm-square-14) ───────────────────────────
-	// Each frame is a 25-char row-major string over the 5×5 grid:
-	//   'x' → opacity 1.0 (peak)
-	//   'o' → opacity 0.52 (mid)
-	//   '.' → opacity 0.08 (dim)
-	// Palindrome sequence [0,1,2,3,2,1] repeats at ~354ms/step (~2.1s cycle).
-	// CSS transition crossfades between steps (Material easing, 180ms).
-	const PRISM_BLOOM_FRAMES = [
-		'x...x.x.x...o...x.x.x...x',
-		'..x...oxo.xooox.oxo...x...',
-		'.x.x.x.o.x..o..x.o.x.x.x.',
-		'x.x.x.o.o.x.o.x.o.o.x.x.x',
-	] as const;
-	const PRISM_BLOOM_SEQUENCE = [0, 1, 2, 3, 2, 1] as const;
-	const PRISM_BLOOM_STEP_MS = 354;
-
-	let prismBloomStep = $state(0);
-
+	// ── Reduced motion detection ───────────────────────────────────────────
+	let reducedMotion = $state(false);
 	$effect(() => {
-		if (!active || variant !== 'prism-bloom') return;
-		let frame: ReturnType<typeof setTimeout>;
-		let seq = 0;
-		function tick() {
-			seq = (seq + 1) % PRISM_BLOOM_SEQUENCE.length;
-			prismBloomStep = PRISM_BLOOM_SEQUENCE[seq] ?? 0;
-			frame = setTimeout(tick, PRISM_BLOOM_STEP_MS);
-		}
-		frame = setTimeout(tick, PRISM_BLOOM_STEP_MS);
-		return () => clearTimeout(frame);
+		if (typeof window === 'undefined') return;
+		const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+		reducedMotion = mq.matches;
+		const update = () => {
+			reducedMotion = mq.matches;
+		};
+		mq.addEventListener('change', update);
+		return () => mq.removeEventListener('change', update);
 	});
 
-	function getPrismBloomOpacity(dotIdx: number): number {
-		const frame = PRISM_BLOOM_FRAMES[prismBloomStep] ?? PRISM_BLOOM_FRAMES[0]!;
-		const char = frame[dotIdx] ?? '.';
-		if (char === 'x') return 1;
-		if (char === 'o') return 0.52;
-		return 0.08;
+	// ── JS sequencer state (used by 'stepped' and 'phase' variants) ────────
+	const config: VariantConfig = $derived(DOTMATRIX_VARIANTS[variant]);
+	let stepIdx = $state(0);
+	let phase = $state(0);
+
+	$effect(() => {
+		const cfg = config;
+		if (!active || reducedMotion) return;
+
+		if (cfg.kind === 'stepped') {
+			const stepMs = cfg.cycleMs / cfg.stepCount;
+			let s = 0;
+			let id: ReturnType<typeof setTimeout> = setTimeout(function tick() {
+				s = (s + 1) % cfg.stepCount;
+				stepIdx = s;
+				id = setTimeout(tick, stepMs);
+			}, stepMs);
+			return () => clearTimeout(id);
+		}
+
+		if (cfg.kind === 'phase') {
+			const start = performance.now();
+			let rafId = 0;
+			const tick = (now: number) => {
+				const elapsed = ((now - start) % cfg.cycleMs + cfg.cycleMs) % cfg.cycleMs;
+				phase = elapsed / cfg.cycleMs;
+				rafId = requestAnimationFrame(tick);
+			};
+			rafId = requestAnimationFrame(tick);
+			return () => cancelAnimationFrame(rafId);
+		}
+	});
+
+	// ── Per-dot resolvers ──────────────────────────────────────────────────
+
+	function dotInlineStyle(idx: number, row: number, col: number): string {
+		if (config.kind === 'css') {
+			const r = config.resolve(idx, row, col);
+			if (r.inactive || !r.vars) return '';
+			return Object.entries(r.vars)
+				.map(([k, v]) => `${k}: ${v}`)
+				.join('; ');
+		}
+		const op = reducedMotion
+			? config.idleOpacity(idx, row, col)
+			: config.kind === 'stepped'
+				? config.opacity(stepIdx, idx, row, col)
+				: config.opacity(phase, idx, row, col);
+		return `opacity: ${op};`;
+	}
+
+	function dotClass(idx: number, row: number, col: number): string {
+		if (config.kind !== 'css') return 'dotmatrix-dot';
+		const r: PerDotConfig = config.resolve(idx, row, col);
+		if (r.inactive) return 'dotmatrix-dot dotmatrix-dot--inactive';
+		return r.className ? `dotmatrix-dot ${r.className}` : 'dotmatrix-dot';
 	}
 </script>
 
-<span class="dotmatrix dotmatrix--{variant}" aria-hidden="true">
+<span
+	class="dotmatrix dotmatrix--{variant} dotmatrix--size-{size}"
+	aria-hidden="true"
+>
 	{#each MATRIX_5X5 as dot, dotIdx (dotIdx)}
-		<span
-			class="dotmatrix-dot"
-			style={variant === 'prism-bloom'
-				? `opacity: ${getPrismBloomOpacity(dotIdx)};`
-				: `--manhattan: ${dot.manhattan}; --path-order: ${dot.pathOrder}; --collapse-order: ${dot.collapseOrder};`}
-		></span>
+		<span class={dotClass(dotIdx, dot.row, dot.col)} style={dotInlineStyle(dotIdx, dot.row, dot.col)}></span>
 	{/each}
 </span>
-
-<style>
-	/* ── Dotmatrix spinner ──────────────────────────────────────────────
-	   5×5 grid of circular dots. CSS-driven variants (ripple, diagonal,
-	   collapse) animate via keyframe delay on per-dot CSS vars.
-	   Prism Bloom (dotm-square-14) is JS-driven: opacity set inline,
-	   crossfaded by CSS transition. Color inherits from currentColor —
-	   set var(--color-accent) on the wrapper to theme it. */
-
-	.dotmatrix {
-		display: inline-grid;
-		grid-template-columns: repeat(5, 5px);
-		grid-template-rows: repeat(5, 5px);
-		gap: 1px;
-		flex-shrink: 0;
-		color: var(--color-accent);
-		--dotmatrix-cycle: 1500ms;
-	}
-
-	.dotmatrix-dot {
-		width: 5px;
-		height: 5px;
-		border-radius: 999px;
-		background: currentColor;
-		opacity: 0.16;
-		will-change: opacity;
-	}
-
-	/* Variant: ripple — center-out radial pulse.
-	   Delay scales with manhattan distance from center. */
-	.dotmatrix--ripple .dotmatrix-dot {
-		animation: dotmatrix-pulse var(--dotmatrix-cycle) cubic-bezier(0.42, 0, 0.58, 1) infinite;
-		animation-delay: calc(var(--manhattan, 0) * 0.18 * var(--dotmatrix-cycle));
-	}
-
-	/* Variant: diagonal — top-left → bottom-right sweep.
-	   Delay scales with row + col. */
-	.dotmatrix--diagonal .dotmatrix-dot {
-		animation: dotmatrix-pulse var(--dotmatrix-cycle) linear infinite;
-		animation-delay: calc(var(--path-order, 0) * 0.11 * var(--dotmatrix-cycle));
-	}
-
-	/* Variant: collapse — outside-in ring collapse.
-	   Delay scales with 4 - manhattan so the outer ring fires first. */
-	.dotmatrix--collapse .dotmatrix-dot {
-		animation: dotmatrix-pulse var(--dotmatrix-cycle) ease-in-out infinite;
-		animation-delay: calc(var(--collapse-order, 0) * 0.14 * var(--dotmatrix-cycle));
-	}
-
-	@keyframes dotmatrix-pulse {
-		0%, 100% { opacity: 0.16; }
-		50% { opacity: 1; }
-	}
-
-	/* Variant: prism-bloom (dotm-square-14) — JS frame-stepping.
-	   Opacity is set inline per dot; this rule provides the crossfade. */
-	.dotmatrix--prism-bloom .dotmatrix-dot {
-		transition: opacity 180ms cubic-bezier(0.4, 0, 0.2, 1);
-		opacity: 0.08;
-	}
-</style>

@@ -17,9 +17,18 @@ export interface BlockPhaseFields {
 	 */
 	phase?: WalkthroughBlockPhase;
 	/**
-	 * Monotonic, zero-based step index within Phase B. Required when
-	 * `phase === 'diff_analysis'`. Agents pass this explicitly so
-	 * `(walkthroughId, phase, stepIndex)` upserts are idempotent.
+	 * Monotonic, zero-based index of the parent semantic step. Required when
+	 * `phase === 'diff_analysis'`. Lets the renderer group atomic blocks under
+	 * their chapter and lets resume reconstructions know which section each
+	 * block belongs to.
+	 */
+	semanticStepIndex?: number;
+	/**
+	 * Monotonic, zero-based atomic-block index *within* the parent semantic
+	 * step. Restarts at 0 in each section. Required when
+	 * `phase === 'diff_analysis'`. The persistence key is
+	 * `(walkthroughId, phase, semanticStepIndex, stepIndex)` — retries with
+	 * the same identity are idempotent upserts.
 	 */
 	stepIndex?: number;
 }
@@ -55,6 +64,23 @@ export interface DiffBlock extends BlockPhaseFields {
 }
 
 export type WalkthroughBlock = MarkdownBlock | CodeBlock | DiffBlock;
+
+// ── Semantic step (Phase B chapter) ─────────────────────────────────────────
+
+/**
+ * A "chapter" of the walkthrough body — a meaningful unit of explanation
+ * focused on one concept, pattern, or concern that may span multiple files
+ * and atomic blocks. Owns 1+ {@link WalkthroughBlock}s linked by
+ * `semanticStepIndex`. Written by the `add_semantic_step` MCP tool.
+ */
+export interface WalkthroughSemanticStep {
+	/** Monotonic, zero-based ordering within the walkthrough. */
+	semanticStepIndex: number;
+	/** Chapter title — the heading shown in the UI. */
+	title: string;
+	/** Optional 1–2 sentence prelude rendered beneath the chapter title. */
+	summary: string | null;
+}
 
 // ── Issue (structured concern flagged by the AI agent) ───────────────────────
 
@@ -195,6 +221,12 @@ export interface Walkthrough {
 	 * Replaces the old convention of a specially-formatted markdown block.
 	 */
 	sentiment: string | null;
+	/**
+	 * Phase B chapters in declaration order. Each chapter owns 0+ entries in
+	 * `blocks` linked by `semanticStepIndex`. Empty for walkthroughs that
+	 * never entered Phase B.
+	 */
+	semanticSteps: WalkthroughSemanticStep[];
 	blocks: WalkthroughBlock[];
 	issues: WalkthroughIssue[];
 	ratings: WalkthroughRating[];
@@ -221,8 +253,21 @@ export interface WalkthroughState {
 	summary: string | null;
 	riskLevel: RiskLevel | null;
 	sentiment: string | null;
-	/** Sorted ascending by `stepIndex`. Missing indices mean "not yet persisted." */
+	/**
+	 * Semantic-step manifest in `semanticStepIndex` order. Each entry includes
+	 * the atomic step indices already persisted under it, so the agent can
+	 * resume either by continuing the in-progress chapter or by opening the
+	 * next chapter.
+	 */
+	semanticSteps: Array<{
+		semanticStepIndex: number;
+		title: string;
+		summary: string | null;
+		stepIndices: number[];
+	}>;
+	/** Sorted ascending by (semanticStepIndex, stepIndex). */
 	diffSteps: Array<{
+		semanticStepIndex: number;
 		stepIndex: number;
 		blockType: WalkthroughBlock['type'];
 	}>;
@@ -279,6 +324,7 @@ export type WalkthroughLifecyclePhase =
 export type WalkthroughStreamEvent =
 	| { type: 'summary'; data: { summary: string; riskLevel: RiskLevel } }
 	| { type: 'sentiment'; data: { sentiment: string } }
+	| { type: 'semantic-step'; data: WalkthroughSemanticStep }
 	| { type: 'block'; data: WalkthroughBlock }
 	| { type: 'done'; data: { walkthroughId: string; tokenUsage: WalkthroughTokenUsage } }
 	| { type: 'error'; data: { code: string; message: string; repoId?: string } }
@@ -290,4 +336,5 @@ export type WalkthroughStreamEvent =
 			type: 'phase:advanced';
 			data: { lastCompletedPhase: WalkthroughPipelinePhase };
 	  }
-	| { type: 'in-progress'; data: { walkthroughId: string } };
+	| { type: 'in-progress'; data: { walkthroughId: string } }
+	| { type: 'thinking'; data: Record<string, never> };

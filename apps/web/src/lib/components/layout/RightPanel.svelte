@@ -18,6 +18,10 @@
 		GitMerge,
 	} from '@lucide/svelte';
 	import { onMount, tick } from 'svelte';
+	import { fly } from 'svelte/transition';
+	import { cubicOut, cubicIn } from 'svelte/easing';
+
+	const TOOL_CALL_ROW_H = 14; // px — match walkthrough's compact tool-call rows
 	import {
 		getChatItems,
 		getChatError,
@@ -57,6 +61,8 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import { Dotmatrix, squareVariantForId } from '$lib/components/ui/dotmatrix/index.js';
+	import StreamingVerb from './StreamingVerb.svelte';
 
 	interface Props {
 		onClose: () => void;
@@ -66,6 +72,28 @@
 	let { onClose, prId }: Props = $props();
 
 	const items = $derived(prId ? getChatItems(prId) : []);
+	// Turn ids whose assistant bubble is still streaming. Activity rows for
+	// these turns get folded into the bubble's dot-matrix loader (walkthrough
+	// style) instead of rendering as standalone tool-lines, so the panel
+	// stays compact during generation.
+	const streamingTurnIds = $derived(
+		new Set(
+			items
+				.filter((i) => i.kind === 'message' && i.role === 'assistant' && i.isStreaming && i.turnId)
+				.map((i) => (i as { turnId: string }).turnId),
+		),
+	);
+	function recentActivitiesForTurn(turnId: string | undefined) {
+		if (!turnId) return [] as Array<{ id: string; toolName: string; summary: string }>;
+		return items
+			.filter((i) => i.kind === 'activity' && i.turnId === turnId)
+			.slice(-2)
+			.map((i) => ({
+				id: i.id,
+				toolName: (i as { toolName: string }).toolName,
+				summary: (i as { summary: string }).summary,
+			}));
+	}
 	const isStreaming = $derived(prId ? isChatStreaming(prId) : false);
 	const error = $derived(prId ? getChatError(prId) : null);
 	const proposed = $derived(prId ? getProposedChanges(prId) : null);
@@ -598,7 +626,14 @@
 		{:else}
 			<ul class="messages">
 				{#each items as item (item.id)}
-					{#if item.kind === 'message' && item.role === 'user'}
+				{#if item.kind === 'activity'}
+						{#if !(item.turnId && streamingTurnIds.has(item.turnId))}
+							<li class="tool-line">
+								<span class="tool-bullet">›</span>
+								<span class="tool-text">{item.summary}</span>
+							</li>
+						{/if}
+					{:else if item.role === 'user'}
 						<li class="msg msg--user">
 							<div class="bubble bubble--user">{item.content}</div>
 						</li>
@@ -607,11 +642,32 @@
 						<div class="bubble bubble--assistant">
 								{#if item.content}
 									{@html assistantHtml(item.content)}
-								{:else if item.isStreaming}
-									<div class="skeleton-line"></div>
 								{/if}
-								{#if item.isStreaming && !item.error}
-									<span class="stream-cursor motion-essential-stream-cursor" aria-hidden="true"></span>
+							{#if item.isStreaming}
+								{@const recent = recentActivitiesForTurn(item.turnId)}
+								<div class="streaming-placeholder">
+									<Dotmatrix
+										variant={squareVariantForId(item.id)}
+										size="small"
+									/>
+									{#if recent.length > 0}
+										<div class="chat-tool-calls">
+											{#each recent as step, i (step.id)}
+												<div
+													class="chat-tool-call"
+													style="top: {i * TOOL_CALL_ROW_H}px"
+													in:fly={{ y: TOOL_CALL_ROW_H, duration: 220, easing: cubicOut }}
+													out:fly={{ y: -TOOL_CALL_ROW_H, duration: 160, easing: cubicIn }}
+												>
+													<span class="chat-tool-call-tool">{step.toolName}</span>
+													<span class="chat-tool-call-desc">{step.summary}</span>
+												</div>
+											{/each}
+										</div>
+									{:else}
+										<StreamingVerb />
+									{/if}
+								</div>
 							{/if}
 							{#if item.error}
 								<div class="inline-error" role="alert">
@@ -620,24 +676,6 @@
 								</div>
 							{/if}
 						</div>
-						{#if !item.isStreaming}
-							{@const turnActivities = activitiesForTurn(item.turnId)}
-							{#if turnActivities.length > 0}
-								<details class="tools-summary">
-									<summary class="tools-summary-label">
-										{turnActivities.length} tool{turnActivities.length === 1 ? '' : 's'} used
-									</summary>
-									<ul class="tools-summary-list">
-										{#each turnActivities as act}
-											<li class="tools-summary-item">
-												<span class="tools-summary-bullet">›</span>
-												<span class="tools-summary-text">{act.summary}</span>
-											</li>
-										{/each}
-									</ul>
-								</details>
-							{/if}
-						{/if}
 					</li>
 					{/if}
 				{/each}
@@ -1516,40 +1554,72 @@
 		color: var(--color-text-secondary);
 	}
 
-	/* Skeleton + cursor */
-	.skeleton-line {
-		height: 13px;
-		width: 60%;
-		border-radius: 3px;
-		background: linear-gradient(
-			90deg,
-			var(--color-bg-tertiary) 25%,
-			var(--color-bg-elevated) 50%,
-			var(--color-bg-tertiary) 75%
-		);
-		background-size: 200% 100%;
-		animation: shimmer 1.5s infinite;
+	/* Tool-use line */
+	.tool-line {
+		display: flex;
+		align-items: baseline;
+		gap: 6px;
+		font-size: 11px;
+		color: var(--color-text-muted);
+		font-family: var(--font-mono);
 	}
 
-	@keyframes shimmer {
-		from { background-position: 200% 0; }
-		to { background-position: -200% 0; }
+	.tool-bullet {
+		color: var(--color-accent);
 	}
 
-	.stream-cursor {
-		display: inline-block;
-		width: 2px;
-		height: 14px;
-		background: var(--color-stream-cursor, var(--color-accent));
-		border-radius: 1px;
-		margin-left: 1px;
-		vertical-align: text-bottom;
-		animation: stream-cursor-blink 800ms ease-in-out infinite;
+	.tool-text {
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 
-	@keyframes stream-cursor-blink {
-		0%, 100% { opacity: 1; }
-		50% { opacity: 0.2; }
+	/* Streaming loader: dot matrix + last 2 tool calls (or rotating verb).
+	   Remains visible for the entire streaming duration, sitting below any
+	   content streamed so far. */
+	.streaming-placeholder {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		font-size: 10px;
+		color: var(--color-accent);
+		min-width: 0;
+	}
+
+	.bubble--assistant > .streaming-placeholder:not(:first-child) {
+		margin-top: 6px;
+	}
+
+	.chat-tool-calls {
+		position: relative;
+		flex: 1;
+		height: 28px; /* 2 × 14px rows — fixed to prevent layout shift */
+		min-width: 0;
+		overflow: hidden;
+	}
+
+	.chat-tool-call {
+		position: absolute;
+		left: 0;
+		right: 0;
+		display: flex;
+		gap: 6px;
+		min-width: 0;
+		transition: top 220ms cubic-bezier(0.22, 0.61, 0.36, 1);
+	}
+
+	.chat-tool-call-tool {
+		color: var(--color-accent);
+		font-weight: 500;
+		flex-shrink: 0;
+	}
+
+	.chat-tool-call-desc {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		min-width: 0;
+		color: var(--color-text-muted);
 	}
 
 	/* Inline error chip — attached to an assistant bubble whose stream

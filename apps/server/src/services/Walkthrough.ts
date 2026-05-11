@@ -22,13 +22,14 @@
 // method that used to synthesize content on behalf of an agent is gone.
 
 import { Context, Effect, Layer } from 'effect';
-import { and, desc, eq, inArray, ne } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, ne } from 'drizzle-orm';
 import type {
 	Walkthrough,
 	WalkthroughBlock,
 	WalkthroughIssue,
 	WalkthroughPipelinePhase,
 	WalkthroughRating,
+	WalkthroughSemanticStep,
 	WalkthroughStatus,
 	WalkthroughTokenUsage,
 	RatingAxis,
@@ -42,6 +43,7 @@ import { walkthroughs } from '../db/schema/walkthroughs';
 import { walkthroughBlocks } from '../db/schema/walkthrough-blocks';
 import { walkthroughIssues } from '../db/schema/walkthrough-issues';
 import { walkthroughRatings } from '../db/schema/walkthrough-ratings';
+import { walkthroughSemanticSteps } from '../db/schema/walkthrough-semantic-steps';
 import { commentThreads } from '../db/schema/comment-threads';
 import { DbService } from './Db';
 
@@ -88,12 +90,25 @@ function rowToRating(row: typeof walkthroughRatings.$inferSelect): WalkthroughRa
 
 function rowToWalkthrough(
 	row: typeof walkthroughs.$inferSelect,
+	semanticSteps: Array<typeof walkthroughSemanticSteps.$inferSelect>,
 	blocks: Array<typeof walkthroughBlocks.$inferSelect>,
 	issues: Array<typeof walkthroughIssues.$inferSelect>,
 	ratings: Array<typeof walkthroughRatings.$inferSelect>,
 ): Walkthrough {
+	const sortedSemanticSteps: WalkthroughSemanticStep[] = [...semanticSteps]
+		.sort((a, b) => a.semanticStepIndex - b.semanticStepIndex)
+		.map((s) => ({
+			semanticStepIndex: s.semanticStepIndex,
+			title: s.title,
+			summary: s.summary ?? null,
+		}));
+
 	const sortedBlocks = [...blocks]
-		.sort((a, b) => a.order - b.order)
+		.sort(
+			(a, b) =>
+				a.semanticStepIndex - b.semanticStepIndex ||
+				a.stepIndex - b.stepIndex,
+		)
 		.map((b) => JSON.parse(b.data) as WalkthroughBlock);
 
 	const sortedIssues = [...issues]
@@ -133,6 +148,7 @@ function rowToWalkthrough(
 		pullRequestId: row.pullRequestId,
 		summary: row.summary,
 		sentiment: row.sentiment ?? null,
+		semanticSteps: sortedSemanticSteps,
 		blocks: sortedBlocks,
 		issues: sortedIssues,
 		ratings: sortedRatings,
@@ -510,6 +526,13 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 
 			if (!row) return null;
 
+			const semanticSteps = db
+				.select()
+				.from(walkthroughSemanticSteps)
+				.where(eq(walkthroughSemanticSteps.walkthroughId, row.id))
+				.orderBy(asc(walkthroughSemanticSteps.semanticStepIndex))
+				.all();
+
 			const blocks = db
 				.select()
 				.from(walkthroughBlocks)
@@ -528,7 +551,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 				.where(eq(walkthroughRatings.walkthroughId, row.id))
 				.all();
 
-			return rowToWalkthrough(row, blocks, issues, ratings);
+			return rowToWalkthrough(row, semanticSteps, blocks, issues, ratings);
 		}),
 
 	getPartial: (prId, headSha) =>
@@ -553,6 +576,13 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 
 			if (!row) return null;
 
+			const semanticSteps = db
+				.select()
+				.from(walkthroughSemanticSteps)
+				.where(eq(walkthroughSemanticSteps.walkthroughId, row.id))
+				.orderBy(asc(walkthroughSemanticSteps.semanticStepIndex))
+				.all();
+
 			const blocks = db
 				.select()
 				.from(walkthroughBlocks)
@@ -572,7 +602,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 				.all();
 
 			return {
-				...rowToWalkthrough(row, blocks, issues, ratings),
+				...rowToWalkthrough(row, semanticSteps, blocks, issues, ratings),
 				status: row.status as 'generating' | 'error',
 				opencodeSessionId: row.opencodeSessionId ?? null,
 			};

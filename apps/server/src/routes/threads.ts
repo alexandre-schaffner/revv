@@ -218,7 +218,6 @@ export const threadRoutes = new Elysia({ prefix: '/api/threads' })
 					Effect.gen(function* () {
 						const reviewService = yield* ReviewService;
 						const hub = yield* WebSocketHub;
-						const sync = yield* SyncService;
 
 						const msg = yield* reviewService.addMessage(ctx.params.id, {
 							authorRole: ctx.body.authorRole,

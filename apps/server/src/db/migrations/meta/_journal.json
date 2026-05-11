@@ -85,6 +85,13 @@
       "when": 1777700000000,
       "tag": "0110_chat_messages_and_activities",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1777800000000,
+      "tag": "0120_walkthrough_semantic_steps",
+      "breakpoints": true
     }
   ]
 }

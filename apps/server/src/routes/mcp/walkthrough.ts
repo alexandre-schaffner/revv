@@ -209,6 +209,40 @@ async function handleToolsList(
 	return jsonRpcSuccess(id, { tools });
 }
 
+// ── MCP phase-tool exploration event map ─────────────────────────────────────
+
+interface PhaseToolMeta {
+	readonly activityKind: "tool.mcp";
+	readonly summary: string;
+}
+
+const PHASE_TOOL_META: Record<string, PhaseToolMeta> = {
+	set_overview: {
+		activityKind: "tool.mcp",
+		summary: "Writing overview and risk assessment...",
+	},
+	add_diff_step: {
+		activityKind: "tool.mcp",
+		summary: "Writing walkthrough step...",
+	},
+	add_semantic_step: {
+		activityKind: "tool.mcp",
+		summary: "Writing walkthrough step...",
+	},
+	rate_axis: {
+		activityKind: "tool.mcp",
+		summary: "Scoring PR quality...",
+	},
+	complete_walkthrough: {
+		activityKind: "tool.mcp",
+		summary: "Finalizing walkthrough...",
+	},
+	get_walkthrough_state: {
+		activityKind: "tool.mcp",
+		summary: "Reading walkthrough state...",
+	},
+};
+
 async function handleToolsCall(
 	id: number | string | null,
 	params: unknown,
@@ -235,6 +269,22 @@ async function handleToolsCall(
 			`tools/call: invalid arguments for '${name}': ${parsed.error.message}`,
 		);
 	}
+
+	// Emit an exploration event before dispatching so the stepper shows
+	// "Calling set_overview..." etc. for MCP phase tools. Only emitted for
+	// known phase tools — generic/unknown tools skip this.
+	const phaseMeta = PHASE_TOOL_META[name];
+	if (phaseMeta) {
+		ctx.emit({
+			type: "exploration",
+			data: {
+				activityKind: phaseMeta.activityKind,
+				toolName: name,
+				summary: phaseMeta.summary,
+			},
+		});
+	}
+
 	let result: WalkthroughToolResult;
 	try {
 		result = await spec.handler(ctx, parsed.data);
@@ -265,6 +315,17 @@ export const mcpWalkthroughRoute = new Elysia({ prefix: "/mcp" }).post(
 		// handler runs, so `req.json()` would fail with "Body already used".
 		// Use `ctx.body` which holds the already-parsed value.
 		const body: unknown = ctx.body;
+
+		// Debug: log every inbound MCP request so we can confirm opencode is
+		// actually reaching this route and which JSON-RPC method it's calling.
+		const inboundMethod = (() => {
+			if (body === null || body === undefined || typeof body !== "object") return "(unparseable)";
+			if (Array.isArray(body)) {
+				return `batch[${body.length}]: ${(body as Array<{ method?: string }>).map((r) => r?.method ?? "?").join(", ")}`;
+			}
+			return (body as { method?: string }).method ?? "(no method)";
+		})();
+		debug("mcp-walkthrough-route", `MCP request received: method=${inboundMethod}`);
 
 		if (body === null || body === undefined || typeof body !== "object") {
 			return new Response(
