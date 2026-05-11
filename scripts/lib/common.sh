@@ -305,7 +305,7 @@ _revv_dotenv_get() {
   while IFS= read -r line; do
     # Skip comments and lines that don't start with KEY=
     [[ "$line" =~ ^[[:space:]]*# ]] && continue
-    [[ "$line" =~ ^[[:space:]]*${key}[[:space:]]*= ]] || continue
+    [[ "$line" =~ ^[[:space:]]*${key}= ]] || continue
     # Extract everything after the first '='
     value="${line#*=}"
     # Strip surrounding double-quotes
@@ -317,6 +317,17 @@ _revv_dotenv_get() {
     printf '%s' "$value"
     return 0
   done < "$env_file"
+}
+
+# XML-escape a value for safe injection into plist XML.
+# Handles &, <, >, and " — the four characters that break XML text nodes.
+_revv_xml_escape() {
+  local v="$1"
+  v="${v//&/&amp;}"
+  v="${v//</&lt;}"
+  v="${v//>/&gt;}"
+  v="${v//\"/&quot;}"
+  printf '%s' "$v"
 }
 
 write_launch_agent_plist() {
@@ -349,6 +360,10 @@ write_launch_agent_plist() {
 
   [[ -n "$github_host"      ]] && info "Injecting GITHUB_HOST=$github_host into LaunchAgent plist"
   [[ -n "$github_client_id" ]] && info "Injecting GITHUB_CLIENT_ID into LaunchAgent plist"
+
+  # XML-escape both values before injecting into the plist heredoc.
+  github_host="$(_revv_xml_escape "$github_host")"
+  github_client_id="$(_revv_xml_escape "$github_client_id")"
 
   # Build optional XML entries; only include keys whose values are non-empty so
   # the plist never contains blank <string/> nodes.
@@ -417,4 +432,9 @@ $extra_env_xml    </dict>
 </dict>
 </plist>
 PLIST
+
+  if command -v plutil >/dev/null 2>&1; then
+    plutil -lint "$plist_path" >/dev/null \
+      || warn "Generated plist may be malformed — check $plist_path"
+  fi
 }
