@@ -168,11 +168,13 @@
         font-family: var(--font-mono);
         font-size: 12.5px;
         color: var(--color-text-secondary);
-        /* Darker neutral wash — deepens below the accent-tinted trigger so the
+        /* Subtle wash — deepens below the accent-tinted trigger so the
            expansion reads as an inset "drawer" under its parent row. Black
            overlay (not --color-text-primary) keeps the direction consistent in
-           both themes: panel darkens rather than lightening in dark mode. */
-        background: color-mix(in srgb, black 10%, transparent);
+           both themes: panel darkens rather than lightening in dark mode.
+           Light theme stacks this on top of --color-bg-secondary, so the
+           percentage is kept low to avoid a heavy slab-gray read. */
+        background: color-mix(in srgb, black 4%, transparent);
     }
 
     /* ── Per-thread block ──────────────────────────────────── */

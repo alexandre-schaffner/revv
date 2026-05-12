@@ -74,14 +74,19 @@
 			{#if !collapsed}
 				<span class="org-trigger-label">{activeOrg}</span>
 			{/if}
-		{:else}
-			{#if user?.image}
+		{:else if user}
+			{#if user.image}
 				<img src={user.image} alt="" class={collapsed ? 'org-trigger-avatar org-trigger-avatar--collapsed' : 'org-trigger-avatar'} referrerpolicy="no-referrer" />
 			{:else}
 				<User size={collapsed ? 14 : 16} class="org-trigger-icon" />
 			{/if}
-			{#if !collapsed && user?.name}
+			{#if !collapsed && user.name}
 				<span class="org-trigger-label">{user.name}</span>
+			{/if}
+		{:else}
+			<Building2 size={collapsed ? 14 : 16} class="org-trigger-icon" />
+			{#if !collapsed}
+				<span class="org-trigger-label">Revv</span>
 			{/if}
 		{/if}
 		{#if !collapsed}

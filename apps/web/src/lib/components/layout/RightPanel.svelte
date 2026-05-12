@@ -83,17 +83,6 @@
 				.map((i) => (i as { turnId: string }).turnId),
 		),
 	);
-	function recentActivitiesForTurn(turnId: string | undefined) {
-		if (!turnId) return [] as Array<{ id: string; toolName: string; summary: string }>;
-		return items
-			.filter((i) => i.kind === 'activity' && i.turnId === turnId)
-			.slice(-2)
-			.map((i) => ({
-				id: i.id,
-				toolName: (i as { toolName: string }).toolName,
-				summary: (i as { summary: string }).summary,
-			}));
-	}
 	const isStreaming = $derived(prId ? isChatStreaming(prId) : false);
 	const error = $derived(prId ? getChatError(prId) : null);
 	const proposed = $derived(prId ? getProposedChanges(prId) : null);
@@ -361,7 +350,7 @@
 		void navigator.clipboard?.writeText(text);
 	}
 
-	function assistantHtml(content: string): string {
+	function messageHtml(content: string): string {
 		return content ? renderMarkdown(content) : '';
 	}
 
@@ -375,12 +364,29 @@
 	<!-- Header -->
 	<div class="panel-header">
 		{#if isStreaming}
-			<div class="streaming-indicator">
-				<div class="streaming-dots" aria-label="AI is thinking…">
-					<span></span><span></span><span></span>
-				</div>
+			<div class="streaming-indicator" aria-label="AI is thinking…">
+				{#if streamingTurnId}
+					<Dotmatrix
+						variant={squareVariantForId(streamingTurnId)}
+						size="small"
+					/>
+				{/if}
 				{#if recentToolCalls.length > 0}
-					<span class="streaming-tool-label">{recentToolCalls[recentToolCalls.length - 1]?.summary ?? ''}</span>
+					<div class="chat-tool-calls">
+						{#each recentToolCalls as step, i (step.id)}
+							<div
+								class="chat-tool-call"
+								style="top: {i * TOOL_CALL_ROW_H}px"
+								in:fly={{ y: TOOL_CALL_ROW_H, duration: 220, easing: cubicOut }}
+								out:fly={{ y: -TOOL_CALL_ROW_H, duration: 160, easing: cubicIn }}
+							>
+								<span class="chat-tool-call-tool">{step.toolName}</span>
+								<span class="chat-tool-call-desc">{step.summary}</span>
+							</div>
+						{/each}
+					</div>
+				{:else}
+					<StreamingVerb />
 				{/if}
 			</div>
 		{:else}
@@ -635,40 +641,14 @@
 						{/if}
 					{:else if item.role === 'user'}
 						<li class="msg msg--user">
-							<div class="bubble bubble--user">{item.content}</div>
+							<div class="bubble bubble--user">{@html messageHtml(item.content)}</div>
 						</li>
 					{:else if item.kind === 'message' && item.role === 'assistant'}
 					<li class="msg msg--assistant">
 						<div class="bubble bubble--assistant">
 								{#if item.content}
-									{@html assistantHtml(item.content)}
+									{@html messageHtml(item.content)}
 								{/if}
-							{#if item.isStreaming}
-								{@const recent = recentActivitiesForTurn(item.turnId)}
-								<div class="streaming-placeholder">
-									<Dotmatrix
-										variant={squareVariantForId(item.id)}
-										size="small"
-									/>
-									{#if recent.length > 0}
-										<div class="chat-tool-calls">
-											{#each recent as step, i (step.id)}
-												<div
-													class="chat-tool-call"
-													style="top: {i * TOOL_CALL_ROW_H}px"
-													in:fly={{ y: TOOL_CALL_ROW_H, duration: 220, easing: cubicOut }}
-													out:fly={{ y: -TOOL_CALL_ROW_H, duration: 160, easing: cubicIn }}
-												>
-													<span class="chat-tool-call-tool">{step.toolName}</span>
-													<span class="chat-tool-call-desc">{step.summary}</span>
-												</div>
-											{/each}
-										</div>
-									{:else}
-										<StreamingVerb />
-									{/if}
-								</div>
-							{/if}
 							{#if item.error}
 								<div class="inline-error" role="alert">
 									<AlertTriangle size={12} class="inline-error-icon" />
@@ -978,49 +958,16 @@
 		gap: 2px;
 	}
 
-	/* Streaming dots */
+	/* Streaming indicator — dot matrix + last-2 tool calls live in the
+	   header during a streaming turn. The chat-tool-calls block (defined
+	   further down) is reused here verbatim so the animated row stack
+	   matches the walkthrough's style. */
 	.streaming-indicator {
 		display: flex;
 		align-items: center;
 		gap: 8px;
 		min-width: 0;
 		flex: 1;
-	}
-
-	.streaming-tool-label {
-		font-size: 11px;
-		color: var(--color-muted-fg, var(--color-muted));
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		max-width: 200px;
-	}
-
-	.streaming-dots {
-		display: flex;
-		align-items: center;
-		gap: 4px;
-	}
-
-	.streaming-dots span {
-		width: 8px;
-		height: 8px;
-		border-radius: 50%;
-		background: var(--color-accent);
-		animation: dot-pulse 1.2s ease-in-out infinite;
-	}
-
-	.streaming-dots span:nth-child(2) {
-		animation-delay: 0.2s;
-	}
-
-	.streaming-dots span:nth-child(3) {
-		animation-delay: 0.4s;
-	}
-
-	@keyframes dot-pulse {
-		0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
-		40% { opacity: 1; transform: scale(1); }
 	}
 
 	.icon-btn {
@@ -1491,7 +1438,50 @@
 		border-radius: 14px 14px 4px 14px;
 		padding: 8px 12px;
 		max-width: 82%;
-		white-space: pre-wrap;
+	}
+
+	/* Inline markdown styling inside the accent-tinted user bubble.
+	   The defaults from `renderMarkdown` lean on the assistant palette
+	   (muted tertiary backgrounds) which is invisible on accent. These
+	   overrides keep code/links/quotes legible on top of the bubble. */
+	.bubble--user :global(p) { margin: 4px 0; }
+	.bubble--user :global(p:first-child) { margin-top: 0; }
+	.bubble--user :global(p:last-child) { margin-bottom: 0; }
+	.bubble--user :global(ul),
+	.bubble--user :global(ol) { margin: 4px 0; padding-left: 18px; }
+	.bubble--user :global(li) { margin: 2px 0; }
+	.bubble--user :global(strong) { font-weight: 600; }
+	.bubble--user :global(em) { font-style: italic; }
+	.bubble--user :global(a) {
+		color: inherit;
+		text-decoration: underline;
+		text-underline-offset: 2px;
+	}
+	.bubble--user :global(code) {
+		font-family: var(--font-mono);
+		font-size: 11.5px;
+		background: rgba(0, 0, 0, 0.22);
+		border-radius: 3px;
+		padding: 1px 4px;
+	}
+	.bubble--user :global(pre) {
+		margin: 6px 0;
+		padding: 8px 10px;
+		background: rgba(0, 0, 0, 0.22);
+		border-radius: 4px;
+		overflow-x: auto;
+	}
+	.bubble--user :global(pre code) {
+		background: none;
+		padding: 0;
+		font-size: 11px;
+		line-height: 1.5;
+	}
+	.bubble--user :global(blockquote) {
+		border-left: 2px solid rgba(255, 255, 255, 0.55);
+		margin: 6px 0;
+		padding: 2px 10px;
+		color: rgba(255, 255, 255, 0.85);
 	}
 
 	/* Agent avatar dot — removed; avatar div is no longer rendered */
@@ -1574,22 +1564,10 @@
 		text-overflow: ellipsis;
 	}
 
-	/* Streaming loader: dot matrix + last 2 tool calls (or rotating verb).
-	   Remains visible for the entire streaming duration, sitting below any
-	   content streamed so far. */
-	.streaming-placeholder {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		font-size: 10px;
-		color: var(--color-accent);
-		min-width: 0;
-	}
-
-	.bubble--assistant > .streaming-placeholder:not(:first-child) {
-		margin-top: 6px;
-	}
-
+	/* Streaming tool-call stack: shown in the panel header during a
+	   streaming turn (next to the dot-matrix loader). Last 2 activities
+	   stack vertically and animate up as new ones arrive — same shape as
+	   the walkthrough's tool-call rows. */
 	.chat-tool-calls {
 		position: relative;
 		flex: 1;
@@ -1605,6 +1583,8 @@
 		display: flex;
 		gap: 6px;
 		min-width: 0;
+		font-size: 10px;
+		line-height: 14px;
 		transition: top 220ms cubic-bezier(0.22, 0.61, 0.36, 1);
 	}
 
@@ -1732,7 +1712,7 @@
 		position: relative;
 		flex: 1;
 		display: flex;
-		align-items: flex-end;
+		align-items: center;
 		gap: 6px;
 		padding: 6px 6px 6px 14px;
 		background: var(--color-bg-elevated);
@@ -1790,7 +1770,6 @@
 		align-items: center;
 		gap: 4px;
 		flex-shrink: 0;
-		padding-bottom: 1px;
 	}
 
 	.composer-btn {

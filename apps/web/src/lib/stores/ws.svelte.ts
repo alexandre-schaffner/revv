@@ -21,6 +21,7 @@ import {
 	onWalkthroughError,
 	prefetchWalkthrough,
 	hydrateFromCache,
+	getUnresolvedStreamingPrIds,
 } from './walkthrough.svelte';
 
 let ws: WebSocket | null = null;

@@ -38,14 +38,14 @@
 
     /* Revv palette — near-neutral surfaces, teal brand */
     --revv-bg-primary: #ffffff;
-    --revv-bg-secondary: #f5f5f6;        /* neutral light gray — sidebars, panels */
-    --revv-bg-tertiary: #ebebec;         /* neutral mid gray — tracks, hover */
+    --revv-bg-secondary: #fafafa;        /* neutral light gray — sidebars, panels */
+    --revv-bg-tertiary: #f2f2f3;         /* neutral mid gray — tracks, hover */
     --revv-bg-elevated: #ffffff;
-    --revv-border: #d4d4d6;
-    --revv-border-subtle: #e7e7e9;
+    --revv-border: #e0e0e2;
+    --revv-border-subtle: #ececee;
     --revv-text-primary: #18181c;
-    --revv-text-secondary: #46464d;
-    --revv-text-muted: #74747c;
+    --revv-text-secondary: #55555d;
+    --revv-text-muted: #8a8a92;
     --revv-accent: #0f766e;              /* teal-700 — the one distinctive move */
     --revv-accent-hover: #115e59;        /* teal-800 */
     --revv-success: #15803d;             /* green-700 — slightly deeper than Tailwind 500 */
@@ -53,9 +53,9 @@
     --revv-danger: #b91c1c;              /* red-700 — slightly deeper */
 
     /* Diff canvas — neutral with subtle bias */
-    --revv-diff-bg: #fafafb;
-    --revv-diff-gutter-bg: #f2f2f3;
-    --revv-diff-gutter-border: #e2e2e5;
+    --revv-diff-bg: #fafbfc;
+    --revv-diff-gutter-bg: #f5f5f6;
+    --revv-diff-gutter-border: #e5e5e7;
 
     /* Addition lines — clean green, slightly deeper than stock */
     --revv-diff-add-bg: #e6f4ec;
@@ -91,12 +91,12 @@
 
     /* Comment / thread */
     --revv-thread-bg: #ffffff;
-    --revv-input-bg: #f5f5f6;
+    --revv-input-bg: #fafafa;
     --revv-input-focus-ring: rgba(15, 118, 110, 0.40);
 
     /* Context panel */
-    --revv-panel-bg: #f5f5f6;
-    --revv-panel-header-bg: rgba(245, 245, 246, 0.96);
+    --revv-panel-bg: #fafafa;
+    --revv-panel-header-bg: rgba(250, 250, 250, 0.96);
     --revv-stream-cursor: #0f766e;
 
     /* File tree */

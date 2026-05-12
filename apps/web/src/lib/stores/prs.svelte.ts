@@ -238,6 +238,23 @@ export async function deleteRepo(id: string): Promise<void> {
 	}
 }
 
+export async function retryClone(id: string): Promise<void> {
+	// Optimistic flip so the spinner appears immediately. The server's
+	// background fiber will broadcast 'cloning' then 'ready'/'error' via the
+	// `repos:clone-status` WS message, which `ws.svelte.ts` routes through
+	// `updateRepoCloneStatus`. If the POST itself fails, we surface the error
+	// state here so the indicator stays actionable.
+	updateRepoCloneStatus(id, 'pending', '');
+	try {
+		await api.api.repos({ id })['retry-clone'].post();
+	} catch (e) {
+		const msg = e instanceof Error ? e.message : 'Failed to retry clone';
+		updateRepoCloneStatus(id, 'error', msg);
+		toast.error(msg);
+		throw e;
+	}
+}
+
 export function getPullRequests(): PullRequest[] {
 	return pullRequests;
 }

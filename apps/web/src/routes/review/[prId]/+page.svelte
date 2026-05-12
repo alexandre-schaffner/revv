@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { getSelectedPr, setSelectedPrId } from '$lib/stores/prs.svelte';
+	import { markVisited as markPrVisited } from '$lib/stores/pr-visits.svelte';
 	import {
 	setActiveFilePath,
 	getActiveFilePath,
@@ -99,6 +100,17 @@
 	$effect(() => {
 		setScrollRoot(scrollRootEl ?? null);
 		return () => setScrollRoot(null);
+	});
+
+	// Record the visit against the current head SHA so the sidebar dot
+	// clears now and only reappears if a new commit lands on this PR.
+	// Waits until the PR row is loaded for the route id — initial deep-link
+	// loads call setSelectedPrId() before fetchPrs() has populated the store.
+	$effect(() => {
+		const current = pr;
+		const routeId = page.params['prId'];
+		if (!current || !routeId || current.id !== routeId) return;
+		markPrVisited(current.id, current.headSha ?? null);
 	});
 
 	let currentRequestId = 0;

@@ -361,13 +361,18 @@ export function streamWalkthroughViaOpencodeMCP(
 					// are no-ops in the post-hoc pass.
 					const emittedTextLen = new Map<string, number>();
 					const seenToolPartIds = new Set<string>();
+					// Share with backstop walk so user-message parts (which
+					// opencode includes in both the SSE stream and the
+					// synchronous response body) don't leak through the
+					// normalized-event pipeline as assistant text.
+					const userMessageIDs = new Set<string>();
 					const sseAbort = new AbortController();
 					const sseDone = subscribeOpencodeStream(
 						client,
 						sessionId,
 						sseAbort.signal,
 						emit,
-						{ emittedTextLen, seenToolPartIds },
+						{ emittedTextLen, seenToolPartIds, userMessageIDs },
 					);
 
 					const onTurnAbort = (): void => sseAbort.abort();
@@ -426,7 +431,12 @@ export function streamWalkthroughViaOpencodeMCP(
 						// anything SSE already streamed.
 						walkOpencodePartsWithState(
 							response.parts,
-							{ emittedTextLen, seenToolPartIds },
+							{
+								emittedTextLen,
+								seenToolPartIds,
+								userMessageIDs,
+								assistantMessageID: response.info.id,
+							},
 							emit,
 						);
 					}

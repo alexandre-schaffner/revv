@@ -3,9 +3,13 @@
 	import { selectPr } from '$lib/stores/prs.svelte';
 	import { getFocusedId } from '$lib/stores/sidebar-nav.svelte';
 	import { setSidebarView } from '$lib/stores/sidebar.svelte';
+	import { getCurrentUserLogin } from '$lib/stores/auth.svelte';
+	import { isPrUnseen } from '$lib/stores/pr-visits.svelte';
 	import { User } from '@lucide/svelte';
 	import StatusDot from '$lib/components/shared/StatusDot.svelte';
 	let { pr, isSelected = false, navPrefix = 'pr' }: { pr: PullRequest; isSelected?: boolean; navPrefix?: string } = $props();
+
+	const showDot = $derived(isPrUnseen(pr, getCurrentUserLogin()));
 
 	let avatarFailed = $state(false);
 
@@ -39,7 +43,7 @@
 		data-nav-type="pr"
 		data-nav-parent="repo:{pr.repositoryId}"
 	>
-		<StatusDot status={pr.status} reviewStatus={pr.reviewStatus} />
+		<StatusDot status={pr.status} reviewStatus={pr.reviewStatus} visible={showDot} />
 		<span class="min-w-0 flex-1 truncate text-xs leading-tight">
 			<span class="text-text-muted">#{pr.externalId}</span>
 			<span class="text-text-primary">{pr.title}</span>

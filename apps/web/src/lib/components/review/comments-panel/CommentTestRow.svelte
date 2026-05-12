@@ -189,12 +189,13 @@
         position: relative;
     }
 
-    /* Open-trigger tint — neutral wash, one step stronger than the body below
-       so the header still reads as the clicked/active row. */
+    /* Open-trigger tint — neutral wash that marks the row as active without
+       slabbing it gray. Kept gentle so the trigger and the drawer below it
+       read as one "active region" rather than two stacked gray bars. */
     .comment-row[data-open="true"] :global(.spec-row-trigger:not(:disabled):not([aria-disabled="true"])) {
         background: color-mix(
             in srgb,
-            var(--color-text-primary) 8%,
+            var(--color-text-primary) 5%,
             transparent
         );
     }

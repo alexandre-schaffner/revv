@@ -24,7 +24,7 @@
 			>
 			<button
 				onclick={copyCode}
-				class="ml-1 rounded p-1 text-text-muted transition-colors hover:bg-bg-tertiary hover:text-text-primary"
+				class="ml-1 cursor-pointer rounded p-1 text-text-muted transition-colors hover:bg-bg-tertiary hover:text-text-primary"
 				aria-label="Copy code"
 			>
 				{#if copied}
@@ -67,7 +67,7 @@
 		</a>
 		<p class="text-xs text-text-muted">Waiting for authorization…</p>
 		<button
-			class="text-xs text-text-muted underline hover:text-text-secondary"
+			class="cursor-pointer text-xs text-text-muted underline hover:text-text-secondary"
 			onclick={auth.cancelSignIn}
 		>
 			Cancel
@@ -79,7 +79,7 @@
 			<p class="text-sm text-danger">{error}</p>
 		{/if}
 		<button
-			class="flex items-center gap-2 rounded-lg border border-border bg-bg-elevated px-4 py-2.5 text-sm font-medium text-text-primary transition-colors hover:bg-bg-tertiary disabled:opacity-50"
+			class="flex cursor-pointer items-center gap-2 rounded-lg border border-border bg-bg-elevated px-4 py-2.5 text-sm font-medium text-text-primary transition-colors hover:bg-bg-tertiary disabled:cursor-not-allowed disabled:opacity-50"
 			onclick={auth.signIn}
 			disabled={isLoading}
 		>

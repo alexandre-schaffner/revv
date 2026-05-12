@@ -92,6 +92,9 @@ export interface OpencodeSubscribe {
  */
 export interface OpencodeMessageResponse {
 	info: {
+		/** AssistantMessage.id — used as the authoritative assistant message
+		 * ID for filtering `response.parts` against user-message echoes. */
+		id: string;
 		sessionID: string;
 		modelID?: string;
 		finish?: string;
@@ -401,7 +404,7 @@ function buildHttpClient(
 				parsed = JSON.parse(responseText) as OpencodeMessageResponse;
 			} catch {
 				// Non-JSON response (shouldn't happen on 200, but guard it).
-				return { info: { sessionID: sessionId }, parts: [] };
+				return { info: { id: "", sessionID: sessionId }, parts: [] };
 			}
 
 			// Always-on summary log (no REV_DEBUG required) so we can spot

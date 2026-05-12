@@ -198,11 +198,11 @@
         );
         --c-rating-conf: var(--color-text-muted);
         --c-gutter-flash: var(--c-rating-icon);
-        /* Darker wash for the expanded body — neutral 10% black overlay over
+        /* Subtle wash for the expanded body — neutral 4% black overlay over
            the panel bg, matching CommentExpandedBody exactly. The drawer
            intentionally drops the verdict tint; verdict is already carried by
            the gutter and the accent-tinted open trigger one level up. */
-        --c-rating-expanded-bg: color-mix(in srgb, black 10%, transparent);
+        --c-rating-expanded-bg: color-mix(in srgb, black 4%, transparent);
 
         list-style: none;
         position: relative;

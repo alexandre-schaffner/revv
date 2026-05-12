@@ -1,10 +1,11 @@
 <script lang="ts">
 	import type { PullRequest, Repository } from '@revv/shared';
 	import { untrack } from 'svelte';
-	import { getSelectedPrId } from '$lib/stores/prs.svelte';
+	import { getSelectedPrId, retryClone } from '$lib/stores/prs.svelte';
 	import { getCollapseAllSignal } from '$lib/stores/sidebar.svelte';
 	import { getFocusedId } from '$lib/stores/sidebar-nav.svelte';
 	import { collapsibleSlide, listItemEnter, STAGGER } from '$lib/motion';
+	import CloneStatusIndicator from '$lib/components/shared/CloneStatusIndicator.svelte';
 	import PrItem from './PrItem.svelte';
 
 	/* Cap stagger at the first N items so a 50-PR repo doesn't pay 2s of
@@ -99,6 +100,13 @@
 		<span class="min-w-0 flex-1 truncate text-left text-xs font-medium text-text-secondary">
 			{repository.name}
 		</span>
+
+		<CloneStatusIndicator
+			status={repository.cloneStatus}
+			error={repository.cloneError}
+			onRetry={() => retryClone(repository.id)}
+			size={12}
+		/>
 
 		<span
 			class="shrink-0 rounded-full bg-bg-elevated px-1.5 py-0.5 text-[10px] font-medium text-text-muted"

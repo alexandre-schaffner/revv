@@ -167,6 +167,13 @@ export function streamChatViaOpencode(
 						// dropped frames). Same maps → events emitted once.
 						const emittedTextLen = new Map<string, number>();
 						const seenToolPartIds = new Set<string>();
+						// Shared with the SSE subscription so it learns user
+						// message IDs from `message.updated` events and skips
+						// their parts. Also shared with the backstop walk so
+						// the same filter applies to the synchronous
+						// `response.parts` body — without this, opencode echoes
+						// the user's input back into the assistant bubble.
+						const userMessageIDs = new Set<string>();
 
 						// Subscribe to /event SSE in parallel with postMessage.
 						const sseAbort = new AbortController();
@@ -175,7 +182,7 @@ export function streamChatViaOpencode(
 							turnSessionId,
 							sseAbort.signal,
 							emit,
-							{ emittedTextLen, seenToolPartIds },
+							{ emittedTextLen, seenToolPartIds, userMessageIDs },
 						);
 
 						// Compose the turn signal: if the harness aborts (timeout
@@ -239,7 +246,20 @@ export function streamChatViaOpencode(
 							);
 							walkOpencodePartsWithState(
 								response.parts,
-								{ emittedTextLen, seenToolPartIds },
+								{
+									emittedTextLen,
+									seenToolPartIds,
+									userMessageIDs,
+									// The turn's authoritative assistant message
+									// ID. Anything in `response.parts` with a
+									// different `messageID` is not assistant
+									// output and must not be emitted — this is
+									// what stops the user-message echo at the
+									// backstop boundary, even if the
+									// `message.updated` SSE event for the user
+									// happened to race the parts walk.
+									assistantMessageID: response.info.id,
+								},
 								emit,
 							);
 						}

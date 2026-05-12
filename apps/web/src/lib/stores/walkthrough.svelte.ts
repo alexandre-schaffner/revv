@@ -405,6 +405,60 @@ export function prepareEntry(prId: string): void {
 	entries = new Map(entries);
 }
 
+/**
+ * After an SSE stream closes without a terminal event, poll `hydrateFromCache`
+ * with exponential backoff to catch `walkthrough:complete` broadcasts that were
+ * silently dropped by the server (5-second timeout + catchAll).
+ *
+ * Stops as soon as:
+ *  - the entry is no longer streaming (WS broadcast arrived, or user navigated away)
+ *  - hydrateFromCache sees a complete/error status in the DB
+ *  - we've exhausted the retry budget
+ */
+function scheduleReconciliationPoll(prId: string, attempt = 0): void {
+	const MAX_ATTEMPTS = 5;
+	// Delays: 4s, 8s, 16s, 30s, 30s
+	const delayMs = Math.min(4_000 * Math.pow(2, attempt), 30_000);
+
+	setTimeout(async () => {
+		const en = entries.get(prId);
+		// Stop if the WS broadcast already resolved the entry, or the user
+		// explicitly stopped/errored, or this entry was evicted.
+		if (!en || !en.isStreaming || en.doneReceived || en.streamError) return;
+
+		// Re-fetch from the DB. If status is now complete/error this will
+		// set isStreaming=false and doneReceived=true (via applyEvents / entry
+		// update inside hydrateFromCache), resolving the stuck UI.
+		const hit = await hydrateFromCache(prId);
+
+		// If still stuck and budget remains, keep polling.
+		if (hit) {
+			// hydrateFromCache updated the entry — re-check isStreaming.
+			const updated = entries.get(prId);
+			if (updated?.isStreaming && !updated.doneReceived && attempt + 1 < MAX_ATTEMPTS) {
+				scheduleReconciliationPoll(prId, attempt + 1);
+			}
+		} else if (attempt + 1 < MAX_ATTEMPTS) {
+			scheduleReconciliationPoll(prId, attempt + 1);
+		}
+	}, delayMs);
+}
+
+/**
+ * Returns the prIds of all entries currently in an unresolved streaming state
+ * (isStreaming=true, no terminal event). Used by the WS reconnect handler to
+ * reconcile any walkthroughs that may have completed while the WS was down.
+ */
+export function getUnresolvedStreamingPrIds(): string[] {
+	const result: string[] = [];
+	for (const [prId, entry] of entries) {
+		if (entry.isStreaming && !entry.doneReceived && !entry.streamError) {
+			result.push(prId);
+		}
+	}
+	return result;
+}
+
 export async function streamWalkthrough(prId: string): Promise<void> {
 	// Switch the active view
 	activePrId = prId;
@@ -542,9 +596,14 @@ export async function streamWalkthrough(prId: string): Promise<void> {
 					e.streamError = 'Walkthrough generation ended unexpectedly. Try regenerating.';
 					e.isStreaming = false;
 				});
+			} else {
+				// Partial data exists — server is still generating in background.
+				// The WS walkthrough:complete broadcast is the primary signal, but
+				// it can be silently swallowed (5s timeout + catchAll on server).
+				// Schedule a reconciliation poll as a safety net so the UI doesn't
+				// stay stuck indefinitely waiting for a broadcast that may never arrive.
+				scheduleReconciliationPoll(prId);
 			}
-			// If we have partial data (summary exists), keep isStreaming true —
-			// the server is still generating in the background.
 		}
 		// Only remove our controller — fetchCachedWalkthrough may have already
 		// replaced it with a new stream's controller.

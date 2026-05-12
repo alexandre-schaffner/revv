@@ -269,6 +269,14 @@ export interface OpencodePart {
 	synthetic?: boolean;
 	ignored?: boolean;
 	callID?: string;
+	/**
+	 * Upstream opencode `Part.messageID` — links this part to its containing
+	 * `UserMessage` or `AssistantMessage`. Used by callers to filter out user
+	 * parts that the daemon re-emits in its SSE stream and synchronous
+	 * response body, which would otherwise echo the user's input back as
+	 * assistant text.
+	 */
+	messageID?: string;
 	[k: string]: unknown;
 }
 
@@ -392,10 +400,32 @@ export function walkOpencodePartsWithState(
 	state: {
 		emittedTextLen: Map<string, number>;
 		seenToolPartIds: Set<string>;
+		/**
+		 * Message IDs we know belong to user messages. Parts carrying these
+		 * IDs are skipped to prevent opencode's habit of including the user's
+		 * input in the response body from echoing back as assistant text.
+		 */
+		userMessageIDs?: Set<string>;
+		/**
+		 * The current turn's assistant message ID (from `response.info.id`).
+		 * When provided, parts whose `messageID` differs are skipped. This is
+		 * the definitive filter — anything not authored by the assistant
+		 * message we just asked for is by definition not assistant output.
+		 */
+		assistantMessageID?: string;
 	},
 	emit: (ev: NormalizedAgentEvent) => void,
 ): void {
 	for (const part of parts) {
+		if (
+			part.messageID &&
+			((state.userMessageIDs && state.userMessageIDs.has(part.messageID)) ||
+				(state.assistantMessageID !== undefined &&
+					state.assistantMessageID !== "" &&
+					part.messageID !== state.assistantMessageID))
+		) {
+			continue;
+		}
 		if (part.type === "tool") {
 			const partId = part.id ?? "";
 			if (!partId) continue;
@@ -450,10 +480,24 @@ export async function subscribeOpencodeStream(
 		 */
 		emittedTextLen?: Map<string, number>;
 		seenToolPartIds?: Set<string>;
+		/**
+		 * Caller-owned set of message IDs known to belong to user messages.
+		 * The SSE handler augments it whenever a `message.updated` event
+		 * arrives with `role === "user"`, and skips any `message.part.updated`
+		 * frame whose `part.messageID` is in the set. Share with the backstop
+		 * walk so user parts the daemon includes in `response.parts` are
+		 * filtered there too. Defaults to a fresh local set when omitted.
+		 *
+		 * Opencode posts the user message before kicking off inference, so
+		 * the `message.updated` for the user message reliably lands before
+		 * any assistant `message.part.updated` events arrive — no race.
+		 */
+		userMessageIDs?: Set<string>;
 	},
 ): Promise<void> {
 	const emittedTextLen = opts?.emittedTextLen ?? new Map<string, number>();
 	const seenToolPartIds = opts?.seenToolPartIds ?? new Set<string>();
+	const userMessageIDs = opts?.userMessageIDs ?? new Set<string>();
 	const drainMs = opts?.drainMs ?? 100;
 
 	// Compose an inner signal so we can run a final 100ms drain after the
@@ -480,6 +524,21 @@ export async function subscribeOpencodeStream(
 				: null;
 		if (!type || !properties) return;
 
+		if (type === "message.updated") {
+			// Learn which message IDs belong to user messages so we can skip
+			// their parts. Opencode creates the user message before kicking
+			// off inference, so this fires before any assistant
+			// `message.part.updated` events — race-free in practice.
+			const info = properties["info"];
+			if (info && typeof info === "object") {
+				const infoObj = info as Record<string, unknown>;
+				if (infoObj["role"] === "user" && typeof infoObj["id"] === "string") {
+					userMessageIDs.add(infoObj["id"] as string);
+				}
+			}
+			return;
+		}
+
 		if (type === "message.part.updated") {
 			const part = properties["part"] as OpencodePart | undefined;
 			const delta =
@@ -487,6 +546,13 @@ export async function subscribeOpencodeStream(
 					? (properties["delta"] as string)
 					: undefined;
 			if (!part || typeof part.type !== "string") return;
+
+			// Skip parts belonging to user messages. Without this, opencode's
+			// re-emission of the user's input as a `text` part gets decoded as
+			// an assistant text-delta and echoed back into the chat bubble.
+			if (part.messageID && userMessageIDs.has(part.messageID)) {
+				return;
+			}
 
 			// Tool parts fire exactly once per partId regardless of dedup
 			// state. Run that filter before invoking decodeOpencodePart so

@@ -38,6 +38,7 @@
 	} from '$lib/stores/focus-mode.svelte';
 	import { countPatchLines } from '$lib/utils/count-patch-lines';
 	import { getPendingDiffJump, clearPendingDiffJump } from '$lib/stores/review.svelte';
+	import { renderHunkSeparator, HUNK_SEPARATOR_CSS } from '$lib/utils/hunk-separator';
 
 	// ── Token hover info ──────────────────────────────────────────────────────
 
@@ -138,7 +139,8 @@
 	}
 
 	// ── Base shadow-DOM CSS (always injected) ─────────────────────────────────
-	const BASE_CSS = `[data-diffs-header='default'] { position: static !important; }`;
+	const BASE_CSS = `[data-diffs-header='default'] { position: static !important; }
+${HUNK_SEPARATOR_CSS}`;
 
 	// ── Local state ───────────────────────────────────────────────────────────
 
@@ -341,18 +343,12 @@
 				enableLineSelection: true,
 				unsafeCSS: BASE_CSS,
 
-				// ── Hunk separators: minimal thin line ────────────────────────
-				// Reads from `hunkState` (mutated by the $effect) so the closure
-				// always reflects the latest accepted/rejected decisions.
+				// ── Hunk separators: clickable expand controls ────────────────
+				// Renders ↑ / "Expand all" / ↓ buttons. The library's
+				// InteractionManager auto-wires the click handlers via the
+				// `data-expand-*` attributes set in renderHunkSeparator.
 				hunkSeparators(hunk: HunkData, _inst) {
-					const frag = document.createDocumentFragment();
-
-					const row = document.createElement('div');
-					row.dataset.hunkIndex = String(hunk.hunkIndex);
-					row.style.cssText = 'height:2px;width:100%;background:var(--color-border-subtle,#2a2a32)';
-
-					frag.appendChild(row);
-					return frag;
+					return renderHunkSeparator(hunk);
 				},
 
 				// ── Header: file status badge ──────────────────────────────────

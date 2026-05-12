@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { mount, onDestroy, onMount, tick, unmount, untrack, type Component } from 'svelte';
-	import { X, PanelLeftClose, PanelLeftOpen, MessageSquare, Send } from '@lucide/svelte';
+	import { X, PanelLeftClose, PanelLeftOpen, MessageSquare, Send, Trash2, GitMerge, Loader2 } from '@lucide/svelte';
 	import {
 		FileDiff as PierreFileDiff,
 		parsePatchFiles,
@@ -8,6 +8,7 @@
 		type FileDiffMetadata,
 		type FileDiffOptions,
 	} from '@pierre/diffs';
+	import { renderHunkSeparator, HUNK_SEPARATOR_CSS } from '$lib/utils/hunk-separator';
 	import { FileTree, type GitStatusEntry } from '@pierre/trees';
 	import { SvelteMap } from 'svelte/reactivity';
 	import { workerManager } from '$lib/utils/worker-pool';
@@ -22,6 +23,10 @@
 		removeProposedComment,
 		sendProposedFeedback,
 		updateProposedComment,
+		discardProposedCommitAction,
+		cherryPickProposedCommitAction,
+		isDiscardingCommit,
+		isCherryPickingCommit,
 		type ProposedComment,
 	} from '$lib/stores/chat.svelte';
 
@@ -114,6 +119,22 @@
 	const commentCount = $derived(comments.length);
 	const isStreaming = $derived(isChatStreaming(prId));
 	const canSend = $derived(commentCount > 0 && !isStreaming);
+	const isDiscarding = $derived(isDiscardingCommit(sha));
+	const isCherryPicking = $derived(isCherryPickingCommit(sha));
+	const commitActionBusy = $derived(isDiscarding || isCherryPicking);
+
+	async function handleDiscardCommit() {
+		if (commitActionBusy) return;
+		await discardProposedCommitAction(prId, sha);
+		// Commit no longer exists — close the modal.
+		onClose();
+	}
+
+	async function handleCherryPickCommit() {
+		if (commitActionBusy) return;
+		await cherryPickProposedCommitAction(prId, sha);
+		onClose();
+	}
 
 	// ── Annotation metadata ───────────────────────────────────────────────────
 	interface CommentMeta {
@@ -170,7 +191,11 @@
 			diffStyle,
 			theme: { dark: 'pierre-dark', light: 'pierre-light' },
 			themeType: theme,
-			hunkSeparators: 'metadata',
+			expandUnchanged: true,
+			expansionLineCount: 20,
+			collapsedContextThreshold: 3,
+			unsafeCSS: HUNK_SEPARATOR_CSS,
+			hunkSeparators: (hunk) => renderHunkSeparator(hunk),
 			lineHoverHighlight: 'both',
 			onLineClick(props) {
 				// Pierre treats context-line clicks as `lineType: 'context'` —
@@ -529,6 +554,38 @@
 					</svg>
 				</button>
 			</div>
+			<div class="commit-actions" role="group" aria-label="Commit actions">
+				<button
+					type="button"
+					class="commit-action-btn commit-action-btn--danger"
+					onclick={handleDiscardCommit}
+					disabled={commitActionBusy}
+					title="Discard this commit"
+					aria-label="Discard commit"
+				>
+					{#if isDiscarding}
+						<Loader2 size={12} class="motion-essential-spin" />
+					{:else}
+						<Trash2 size={12} />
+					{/if}
+					<span>Discard</span>
+				</button>
+				<button
+					type="button"
+					class="commit-action-btn commit-action-btn--accent"
+					onclick={handleCherryPickCommit}
+					disabled={commitActionBusy}
+					title="Cherry-pick this commit onto the PR branch"
+					aria-label="Cherry-pick commit to PR branch"
+				>
+					{#if isCherryPicking}
+						<Loader2 size={12} class="motion-essential-spin" />
+					{:else}
+						<GitMerge size={12} />
+					{/if}
+					<span>Cherry-pick</span>
+				</button>
+			</div>
 			<button class="icon-btn" onclick={onClose} aria-label="Close diff">
 				<X size={14} />
 			</button>
@@ -705,6 +762,55 @@
 		width: 1px;
 		flex-shrink: 0;
 		background: var(--color-border-subtle);
+	}
+
+	/* ── Commit-level actions (discard / cherry-pick) ─────────────────── */
+	.commit-actions {
+		display: inline-flex;
+		align-items: stretch;
+		gap: 4px;
+		flex-shrink: 0;
+	}
+
+	.commit-action-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		height: 24px;
+		padding: 0 8px;
+		border-radius: 5px;
+		font-size: 11px;
+		font-weight: 500;
+		border: 1px solid var(--color-border-subtle);
+		background: var(--color-bg-tertiary);
+		color: var(--color-text-secondary);
+		cursor: pointer;
+		transition:
+			background-color var(--duration-snap),
+			color var(--duration-snap),
+			border-color var(--duration-snap);
+	}
+
+	.commit-action-btn:hover:not(:disabled) {
+		background: var(--color-panel-bg);
+		color: var(--color-text-primary);
+	}
+
+	.commit-action-btn:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+
+	.commit-action-btn--danger:hover:not(:disabled) {
+		color: var(--color-destructive, hsl(0 72% 51%));
+		border-color: color-mix(in srgb, var(--color-destructive, hsl(0 72% 51%)) 45%, transparent);
+		background: color-mix(in srgb, var(--color-destructive, hsl(0 72% 51%)) 10%, transparent);
+	}
+
+	.commit-action-btn--accent:hover:not(:disabled) {
+		color: var(--color-accent);
+		border-color: color-mix(in srgb, var(--color-accent) 45%, transparent);
+		background: color-mix(in srgb, var(--color-accent) 10%, transparent);
 	}
 
 	/* ── Body grid ───────────────────────────────────────────────────────── */

@@ -1,12 +1,16 @@
 <script lang="ts">
-	import { RefreshCw, Check, Loader2 } from '@lucide/svelte';
+	import type { Repository } from '@revv/shared';
+	import { RefreshCw, Loader2 } from '@lucide/svelte';
 	import {
 		addRepo,
 		getRepositories,
 		getAvailableRepos,
 		getAvailableReposLoading,
 		fetchAvailableRepos,
+		retryClone,
+		deleteRepo,
 	} from '$lib/stores/prs.svelte';
+	import CloneStatusIndicator from '$lib/components/shared/CloneStatusIndicator.svelte';
 	import { toast } from 'svelte-sonner';
 
 	// Shared "Add Repository" form. Renders the Browse/Manual tab content
@@ -33,10 +37,17 @@
 	// -- Browse tab state --
 	let browseSearch = $state('');
 	let addingRepos = $state(new Set<string>());
+	let removingRepos = $state(new Set<string>());
 	let highlightedIndex = $state(-1);
 	let repoListEl = $state<HTMLDivElement | null>(null);
 
-	let trackedFullNames = $derived(new Set(getRepositories().map((r) => r.fullName)));
+	// Map keyed by fullName so the trailing-icon block can read live clone
+	// state for repos that were already added. `getRepositories()` is reactive
+	// (server broadcasts `repos:clone-status` → store updates), so this Map
+	// re-derives whenever the clone status of any tracked repo changes.
+	let trackedByFullName = $derived(
+		new Map<string, Repository>(getRepositories().map((r) => [r.fullName, r])),
+	);
 
 	let filteredAvailable = $derived(
 		browseSearch.trim() === ''
@@ -79,7 +90,7 @@
 	});
 
 	async function handleBrowseAdd(repoFullName: string) {
-		if (addingRepos.has(repoFullName) || trackedFullNames.has(repoFullName)) return;
+		if (addingRepos.has(repoFullName) || trackedByFullName.has(repoFullName)) return;
 		addingRepos = new Set([...addingRepos, repoFullName]);
 		try {
 			await addRepo(repoFullName);
@@ -89,6 +100,20 @@
 			const next = new Set(addingRepos);
 			next.delete(repoFullName);
 			addingRepos = next;
+		}
+	}
+
+	async function handleBrowseRemove(repoId: string) {
+		if (removingRepos.has(repoId)) return;
+		removingRepos = new Set([...removingRepos, repoId]);
+		try {
+			await deleteRepo(repoId);
+		} catch {
+			// toast already shown by deleteRepo
+		} finally {
+			const next = new Set(removingRepos);
+			next.delete(repoId);
+			removingRepos = next;
 		}
 	}
 
@@ -156,7 +181,7 @@
 <!-- Tabs -->
 <div class="flex flex-shrink-0 gap-0 border-b border-border">
 	<button
-		class="relative px-3 pb-2 text-xs font-medium transition-colors {activeTab === 'browse'
+		class="relative cursor-pointer px-3 pb-2 text-xs font-medium transition-colors {activeTab === 'browse'
 			? 'text-text-primary'
 			: 'text-text-muted hover:text-text-secondary'}"
 		onclick={() => (activeTab = 'browse')}
@@ -167,7 +192,7 @@
 		{/if}
 	</button>
 	<button
-		class="relative px-3 pb-2 text-xs font-medium transition-colors {activeTab === 'manual'
+		class="relative cursor-pointer px-3 pb-2 text-xs font-medium transition-colors {activeTab === 'manual'
 			? 'text-text-primary'
 			: 'text-text-muted hover:text-text-secondary'}"
 		onclick={() => (activeTab = 'manual')}
@@ -192,7 +217,7 @@
 				use:focusOnMount
 			/>
 			<button
-				class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border text-text-muted transition-colors hover:border-accent hover:text-accent disabled:opacity-50"
+				class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md border border-border text-text-muted transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
 				onclick={() => fetchAvailableRepos(true)}
 				disabled={getAvailableReposLoading()}
 				title="Refresh"
@@ -243,41 +268,75 @@
 
 						<!-- Repos in this group -->
 						{#each repos as repo (repo.fullName)}
-							{@const isTracked = trackedFullNames.has(repo.fullName)}
+							{@const trackedRepo = trackedByFullName.get(repo.fullName)}
+							{@const isTracked = trackedRepo !== undefined}
 							{@const isAdding = addingRepos.has(repo.fullName)}
+							{@const isRemoving = trackedRepo ? removingRepos.has(trackedRepo.id) : false}
 							{@const flatIndex = filteredAvailable.indexOf(repo)}
 							{@const isHighlighted = flatIndex === highlightedIndex}
-							<button
+							<div
+								role="button"
+								tabindex={isTracked || isAdding ? -1 : 0}
+								aria-disabled={isTracked || isAdding ? 'true' : undefined}
 								class="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left transition-colors
-									{isTracked
-									? 'opacity-50'
-									: isHighlighted
-										? 'bg-bg-elevated ring-1 ring-inset ring-accent/40'
-										: 'hover:bg-bg-elevated'}"
+									{isHighlighted
+									? 'bg-bg-elevated ring-1 ring-inset ring-accent/40'
+									: !isTracked
+										? 'hover:bg-bg-elevated'
+										: ''}
+									{!isTracked && !isAdding ? 'cursor-pointer' : ''}"
 								data-highlighted={isHighlighted ? 'true' : undefined}
-								onclick={() => handleBrowseAdd(repo.fullName)}
-								disabled={isTracked || isAdding}
+								onclick={() => {
+									if (!isTracked && !isAdding) handleBrowseAdd(repo.fullName);
+								}}
+								onkeydown={(e) => {
+									if ((e.key === 'Enter' || e.key === ' ') && !isTracked && !isAdding) {
+										e.preventDefault();
+										handleBrowseAdd(repo.fullName);
+									}
+								}}
 							>
 								<div class="min-w-0 flex-1">
 									<div class="flex items-center gap-1.5">
-										<span class="truncate text-xs font-medium text-text-primary"
-											>{repo.name}</span
+										<span
+											class="truncate text-xs font-medium {isTracked
+												? 'text-text-secondary'
+												: 'text-text-primary'}">{repo.name}</span
 										>
 									</div>
 								</div>
-								<div class="flex-shrink-0">
-									{#if isTracked}
-										<Check size={14} class="text-green-500" />
-									{:else if isAdding}
+								<div class="flex flex-shrink-0 items-center gap-2">
+									{#if isAdding}
 										<Loader2 size={14} class="animate-spin text-text-muted" />
-									{:else}
+									{:else if isTracked && trackedRepo.cloneStatus !== 'ready'}
+										<CloneStatusIndicator
+											status={trackedRepo.cloneStatus}
+											error={trackedRepo.cloneError}
+											onRetry={() => retryClone(trackedRepo.id)}
+											size={14}
+											showLabel
+										/>
+									{/if}
+									{#if isTracked}
+										<button
+											class="cursor-pointer text-xs text-text-muted transition-colors hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
+											onclick={(e) => {
+												e.stopPropagation();
+												handleBrowseRemove(trackedRepo.id);
+											}}
+											disabled={isRemoving}
+											aria-label="Remove {repo.fullName}"
+										>
+											{isRemoving ? 'Removing…' : 'Remove'}
+										</button>
+									{:else if !isAdding}
 										<span
 											class="rounded bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent"
 											>Add</span
 										>
 									{/if}
 								</div>
-							</button>
+							</div>
 						{/each}
 					</div>
 				{/each}
@@ -293,7 +352,7 @@
 			class="-mx-5 mt-2 flex flex-shrink-0 justify-end border-t border-border px-5 pt-3"
 		>
 			<button
-				class="rounded-md px-3 py-1.5 text-xs text-text-muted transition-colors hover:text-text-secondary"
+				class="cursor-pointer rounded-md px-3 py-1.5 text-xs text-text-muted transition-colors hover:text-text-secondary"
 				onclick={onClose}
 			>
 				Done
@@ -321,7 +380,7 @@
 		<div class="mt-4 flex justify-end gap-2">
 			{#if onClose}
 				<button
-					class="rounded-md px-3 py-1.5 text-xs text-text-muted transition-colors hover:text-text-secondary"
+					class="cursor-pointer rounded-md px-3 py-1.5 text-xs text-text-muted transition-colors hover:text-text-secondary disabled:cursor-not-allowed disabled:opacity-50"
 					onclick={onClose}
 					disabled={isLoading}
 				>
@@ -329,7 +388,7 @@
 				</button>
 			{/if}
 			<button
-				class="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
+				class="cursor-pointer rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
 				onclick={handleManualAdd}
 				disabled={isLoading || !fullName.trim()}
 			>

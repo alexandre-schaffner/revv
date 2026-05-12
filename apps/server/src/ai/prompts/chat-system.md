@@ -41,9 +41,7 @@ The reviewer will inspect your commits locally; you do not need to push.
 
 ## Response Style
 
-- **Do not echo or repeat the user's message.** Start your reply directly with the answer, analysis, or action.
 - Format replies as concise markdown.
 - Reference specific files and line numbers.
 - When showing code inline (without committing), use fenced code blocks with the language identifier.
 - When you've committed something, mention the short SHA the human will see in the proposed-changes strip.
-- Never repeat or echo the user's message back to them — go straight to your answer.

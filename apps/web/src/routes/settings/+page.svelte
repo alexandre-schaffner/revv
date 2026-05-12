@@ -5,9 +5,7 @@
         Moon,
         Loader2,
         ArrowLeft,
-        AlertTriangle,
         ExternalLink,
-        RefreshCw,
         Download,
         FileText,
         FolderTree,
@@ -22,10 +20,6 @@
         getAvailableModels,
         fetchModels,
     } from "$lib/stores/settings.svelte";
-    import {
-        getRepositories,
-        deleteRepo,
-    } from "$lib/stores/prs.svelte";
     import AddRepoForm from "$lib/components/sidebar/AddRepoForm.svelte";
     import {
         getThemePreference,
@@ -78,7 +72,6 @@
         { value: "dark", label: "Dark", icon: Moon },
     ];
 
-    let retryingClone = $state(new Set<string>());
     // Fall back to initials if the GitHub-signed avatar URL has expired —
     // mirrors the `avatarFailed` pattern used for repo avatars in the sidebar.
     let userAvatarFailed = $state(false);
@@ -92,20 +85,6 @@
             userAvatarFailed = false;
         }
     });
-
-    async function retryClone(repoId: string): Promise<void> {
-        retryingClone = new Set([...retryingClone, repoId]);
-        try {
-            await fetch(`${API_BASE_URL}/api/repos/${repoId}/retry-clone`, {
-                method: "POST",
-                headers: authHeaders(),
-            });
-        } finally {
-            const next = new Set(retryingClone);
-            next.delete(repoId);
-            retryingClone = next;
-        }
-    }
 
     const intervalOptions = [
         { label: "Disabled", value: 0 },
@@ -205,7 +184,7 @@
 <div class="mx-auto max-w-2xl space-y-8 px-6 py-8">
     <div class="flex items-center gap-3">
         <button
-            class="flex h-7 w-7 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary"
+            class="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary"
             onclick={() => goBack()}
             aria-label="Back to pull requests"
             title="Back to pull requests"
@@ -248,7 +227,7 @@
                     </div>
                 </div>
                 <button
-                    class="rounded-md border border-border px-3 py-1.5 text-xs text-text-muted transition-colors hover:border-danger hover:text-danger"
+                    class="cursor-pointer rounded-md border border-border px-3 py-1.5 text-xs text-text-muted transition-colors hover:border-danger hover:text-danger"
                     onclick={signOut}
                 >
                     Sign out
@@ -281,97 +260,14 @@
             Repositories
         </h2>
         {#if getUser()}
-            <!-- Add repo: same Browse/Manual form as the sidebar dialog,
-                rendered inline. The form assumes a `p-5` parent for its
-                spacing math, which this section already provides. -->
-            <div class="mb-5 flex max-h-[360px] flex-col">
+            <!-- Add/remove repos via the same Browse/Manual form as the
+                sidebar dialog. Tracked repos show a Remove action on
+                their row; no separate list is rendered below. The form
+                assumes a `p-5` parent for its spacing math, which this
+                section already provides. -->
+            <div class="flex max-h-[360px] flex-col">
                 <AddRepoForm autoFocus={false} showTitle={false} />
             </div>
-
-            <!-- Repo list -->
-            {#if getRepositories().length === 0}
-                <p class="text-sm text-text-muted">
-                    No repositories added yet.
-                </p>
-            {:else}
-                <div class="space-y-1">
-                    {#each getRepositories() as repo (repo.id)}
-                        <div
-                            class="flex items-center justify-between rounded-md bg-bg-elevated px-3 py-2"
-                        >
-                            <div class="flex items-center gap-2">
-                                {#if repo.avatarUrl}
-                                    <img
-                                        src={repo.avatarUrl}
-                                        alt=""
-                                        class="h-4 w-4 rounded-sm object-cover"
-                                        loading="lazy"
-                                        referrerpolicy="no-referrer"
-                                        onerror={(e) =>
-                                            ((
-                                                e.currentTarget as HTMLImageElement
-                                            ).style.display = "none")}
-                                    />
-                                {/if}
-                                <span class="text-sm text-text-primary"
-                                    >{repo.fullName}</span
-                                >
-                                {#if repo.cloneStatus === "cloning"}
-                                    <span
-                                        class="flex items-center gap-1 text-[10px] text-text-muted"
-                                    >
-                                        <Loader2
-                                            size={10}
-                                            class="animate-spin"
-                                        />
-                                        Cloning
-                                    </span>
-                                {:else if repo.cloneStatus === "error"}
-                                    <span
-                                        class="flex items-center gap-1 text-[10px] text-amber-500"
-                                        title={repo.cloneError ??
-                                            "Clone failed"}
-                                    >
-                                        <AlertTriangle size={10} />
-                                        Clone failed
-                                    </span>
-                                    <button
-                                        class="flex h-5 w-5 items-center justify-center rounded text-text-muted transition-colors hover:text-text-primary disabled:opacity-50"
-                                        onclick={() => retryClone(repo.id)}
-                                        disabled={retryingClone.has(repo.id)}
-                                        title="Retry clone"
-                                        aria-label="Retry clone"
-                                    >
-                                        <RefreshCw
-                                            size={10}
-                                            class={retryingClone.has(repo.id) ? "animate-spin" : ""}
-                                        />
-                                    </button>
-                                {:else if repo.cloneStatus === "pending"}
-                                    <button
-                                        class="flex h-5 w-5 items-center justify-center rounded text-text-muted transition-colors hover:text-text-primary disabled:opacity-50"
-                                        onclick={() => retryClone(repo.id)}
-                                        disabled={retryingClone.has(repo.id)}
-                                        title="Start clone"
-                                        aria-label="Start clone"
-                                    >
-                                        <RefreshCw
-                                            size={10}
-                                            class={retryingClone.has(repo.id) ? "animate-spin" : ""}
-                                        />
-                                    </button>
-                                {/if}
-                            </div>
-                            <button
-                                class="text-xs text-text-muted transition-colors hover:text-danger"
-                                onclick={() => deleteRepo(repo.id)}
-                            >
-                                Remove
-                            </button>
-                        </div>
-                    {/each}
-                </div>
-            {/if}
         {:else}
             <p class="text-sm text-text-muted">
                 Sign in with GitHub to manage repositories.
@@ -590,7 +486,7 @@
                 >
                     {#each themeOptions as opt (opt.value)}
                         <button
-                            class="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors
+                            class="flex cursor-pointer items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors
 								{getThemePreference() === opt.value
                                 ? 'bg-bg-tertiary text-text-primary shadow-sm'
                                 : 'text-text-muted hover:text-text-secondary'}"
@@ -647,7 +543,7 @@
                 >
                     {#each fileTreeScopeOptions as opt (opt.value)}
                         <button
-                            class="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors
+                            class="flex cursor-pointer items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors
                                 {(getSettings()?.fileTreeScope ?? 'all') === opt.value
                                 ? 'bg-bg-tertiary text-text-primary shadow-sm'
                                 : 'text-text-muted hover:text-text-secondary'}"
@@ -699,7 +595,7 @@
                         </p>
                     </div>
                     <button
-                        class="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:border-accent hover:text-text-primary disabled:opacity-50"
+                        class="flex cursor-pointer items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:border-accent hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
                         onclick={handleCheckNow}
                         disabled={checking}
                     >

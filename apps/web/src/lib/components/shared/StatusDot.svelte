@@ -1,9 +1,14 @@
 <script lang="ts">
 	import type { PullRequestStatus, ReviewStatus } from '@revv/shared';
 
-	let { status, reviewStatus = 'pending' }: { status: PullRequestStatus; reviewStatus?: ReviewStatus } = $props();
+	let {
+		status,
+		reviewStatus = 'pending',
+		visible = true,
+	}: { status: PullRequestStatus; reviewStatus?: ReviewStatus; visible?: boolean } = $props();
 
 	let dotClass = $derived(() => {
+		if (!visible) return 'bg-transparent';
 		if (status === 'closed') return 'bg-text-muted';
 		if (status === 'merged') return 'bg-text-muted';
 		switch (reviewStatus) {
@@ -17,5 +22,6 @@
 
 <span
 	class="inline-block h-2 w-2 shrink-0 rounded-full {dotClass()}"
-	aria-label="Status: {status}"
+	aria-hidden={!visible}
+	aria-label={visible ? `Status: ${status}` : undefined}
 ></span>
