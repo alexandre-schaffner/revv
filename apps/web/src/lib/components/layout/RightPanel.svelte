@@ -360,35 +360,7 @@
 <div class="panel">
 	<!-- Header -->
 	<div class="panel-header">
-		{#if isStreaming}
-			<div class="streaming-indicator" aria-label="AI is thinking…">
-				{#if streamingTurnId}
-					<Dotmatrix
-						variant={squareVariantForId(streamingTurnId)}
-						size="small"
-					/>
-				{/if}
-				{#if recentToolCalls.length > 0}
-					<div class="chat-tool-calls">
-						{#each recentToolCalls as step, i (step.id)}
-							<div
-								class="chat-tool-call"
-								style="top: {i * TOOL_CALL_ROW_H}px"
-								in:fly={{ y: TOOL_CALL_ROW_H, duration: 220, easing: cubicOut }}
-								out:fly={{ y: -TOOL_CALL_ROW_H, duration: 160, easing: cubicIn }}
-							>
-								<span class="chat-tool-call-tool">{step.toolName}</span>
-								<span class="chat-tool-call-desc">{step.summary}</span>
-							</div>
-						{/each}
-					</div>
-				{:else}
-					<StreamingVerb />
-				{/if}
-			</div>
-		{:else}
-			<span class="panel-title">Chat</span>
-		{/if}
+		<span class="panel-title">Chat</span>
 		<div class="header-actions">
 			{#if commitCount > 0}
 				<div
@@ -657,6 +629,34 @@
 					{/if}
 				{/each}
 			</ul>
+		{/if}
+
+		{#if isStreaming}
+			<div class="streaming-indicator" aria-label="AI is thinking…">
+				{#if streamingTurnId}
+					<Dotmatrix
+						variant={squareVariantForId(streamingTurnId)}
+						size="small"
+					/>
+				{/if}
+				{#if recentToolCalls.length > 0}
+					<div class="chat-tool-calls">
+						{#each recentToolCalls as step, i (step.id)}
+							<div
+								class="chat-tool-call"
+								style="top: {i * TOOL_CALL_ROW_H}px"
+								in:fly={{ y: TOOL_CALL_ROW_H, duration: 220, easing: cubicOut }}
+								out:fly={{ y: -TOOL_CALL_ROW_H, duration: 160, easing: cubicIn }}
+							>
+								<span class="chat-tool-call-tool">{step.toolName}</span>
+								<span class="chat-tool-call-desc">{step.summary}</span>
+							</div>
+						{/each}
+					</div>
+				{:else}
+					<StreamingVerb />
+				{/if}
+			</div>
 		{/if}
 
 		{#if error && !isStreaming}
@@ -955,16 +955,14 @@
 		gap: 2px;
 	}
 
-	/* Streaming indicator — dot matrix + last-2 tool calls live in the
-	   header during a streaming turn. The chat-tool-calls block (defined
-	   further down) is reused here verbatim so the animated row stack
-	   matches the walkthrough's style. */
+	/* Streaming indicator — dot matrix + last-2 tool calls sit below the
+	   last message during a streaming turn. */
 	.streaming-indicator {
 		display: flex;
 		align-items: center;
 		gap: 8px;
 		min-width: 0;
-		flex: 1;
+		padding: 10px 14px;
 	}
 
 	.icon-btn {

@@ -133,6 +133,37 @@ When a diff introduces or modifies non-trivial logic — a new code path, a cond
 
 This is distinct from an annotation (which is a short descriptor alongside a code block). A flow explanation is a standalone markdown step that stands on its own, before or after the relevant code/diff steps, giving the reviewer the full mental model of "what happens when this runs."
 
+### Worked examples (REQUIRED for bugs and complex concepts)
+
+Whenever you explain a bug or a non-trivial concept, illustrate it with a concrete worked example — not an abstract description of what *could* go wrong, but a specific scenario that shows it happening.
+
+**For bugs:** Show the exact input or state that triggers the bug, trace the execution step by step, and show what the broken output or side effect is. Then show how the fix resolves it. Keep it tight — two or three lines of pseudocode or a short concrete scenario beats a paragraph of abstraction.
+
+```
+// BAD: abstract
+"If the token is expired, the refresh path may leave session undefined."
+
+// GOOD: worked example
+"Given: SessionStore.refresh() rejects with 401.
+ Step 1: refresh() throws → session remains undefined.
+ Step 2: next line reads session.userId → TypeError: cannot read 'userId' of undefined.
+ Fix: add `if (!session) return res.status(401).end()` before the read."
+```
+
+**For complex concepts:** Show a concrete instantiation of the concept in terms of types, data, or control flow from the diff itself. Anchor it to actual variable names, function signatures, or data shapes visible in the code. Never explain with an analogous hypothetical — explain with the real code.
+
+```
+// BAD: concept without grounding
+"The cursor-based pagination here avoids full-table scans."
+
+// GOOD: worked example grounded in the actual code
+"With 10,000 rows, the old offset query (OFFSET 9990 LIMIT 10) scans ~10k rows.
+ The new cursor query (WHERE id > :cursor LIMIT 10) scans exactly 10 — because
+ `id` has a B-tree index and the query starts at the leaf, not the root."
+```
+
+Worked examples belong inside a markdown block, either inline in the narrative or as a dedicated markdown step when the concept warrants it. Use fenced code blocks (` ``` `) with the pseudocode/snippet inside. Length: as short as possible while still being concrete — the goal is "I see exactly what happens", not completeness.
+
 ### Reuse check (REQUIRED for every new function/helper/utility introduced)
 
 Whenever the diff adds a new function, method, class, helper, or utility, you MUST actively search the existing codebase for pre-existing code that could have been reused BEFORE accepting the new implementation as necessary. Duplicate or near-duplicate helpers are one of the highest-signal review findings; skipping this check is a worse failure mode than over-checking.
