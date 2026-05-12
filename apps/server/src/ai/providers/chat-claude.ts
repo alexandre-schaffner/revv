@@ -56,6 +56,11 @@ export interface StreamChatViaClaudeOptions {
 	 * tool surface. Defaults to `true`.
 	 */
 	readonly enableReviewContextMcp?: boolean | undefined;
+	/**
+	 * Maximum number of agent turns within a single chat invocation.
+	 * Sourced from `UserSettings.aiMaxTurns`. Defaults to 60 when omitted.
+	 */
+	readonly maxTurns?: number | undefined;
 }
 
 // Tool-use blocks we surface as tool entries in the chat UI. Anything not in
@@ -116,7 +121,7 @@ export function streamChatViaClaude(
 					permissionMode: "bypassPermissions",
 					allowDangerouslySkipPermissions: true,
 					persistSession: opts.persistSession ?? true,
-					maxTurns: 50,
+					maxTurns: opts.maxTurns ?? 60,
 					...pathOption,
 				};
 

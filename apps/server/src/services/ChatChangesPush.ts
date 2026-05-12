@@ -1396,48 +1396,48 @@ export const ChatChangesPushServiceLive = Layer.effect(
 						catch: (err) => new GitOperationError({ message: err instanceof Error ? err.message : String(err), cause: err }),
 					});
 
-				yield* fetchSourceBranch({ worktreePath: ctx.session.worktreePath, authedUrl, sourceBranch: ctx.pr.sourceBranch });
+					yield* fetchSourceBranch({ worktreePath: ctx.session.worktreePath, authedUrl, sourceBranch: ctx.pr.sourceBranch });
 
-				// Capture the current agent branch tip before we leave it, so we can
-				// rebase the remaining commits onto the new source-branch tip later.
-				const savedAgentTipOut = yield* Effect.tryPromise({
-					try: () => runGitCapture(['rev-parse', ctx.session.branchName], ctx.session.worktreePath, 5_000),
-					catch: (err) => new GitOperationError({ message: err instanceof Error ? err.message : String(err), cause: err }),
-				});
-				const savedAgentTip = savedAgentTipOut.trim();
-
-				// Checkout source branch locally
-				yield* Effect.tryPromise({
-					try: () => runGit(['checkout', '-B', ctx.pr.sourceBranch, `refs/remotes/origin/${ctx.pr.sourceBranch}`], ctx.session.worktreePath),
-					catch: (err) => new GitOperationError({ message: err instanceof Error ? err.message : String(err), cause: err }),
-				});
-
-				// Cherry-pick the single commit
-				const cpResult = yield* Effect.tryPromise({
-					try: () => spawnGit(['cherry-pick', fullSha], { cwd: ctx.session.worktreePath, timeoutMs: 60_000, captureStdout: false }),
-					catch: (err) => new GitOperationError({ message: err instanceof Error ? err.message : String(err), cause: err }),
-				});
-
-				if (cpResult.timedOut || cpResult.exitCode !== 0) {
-					// Abort cherry-pick and restore worktree
-					yield* Effect.tryPromise({
-						try: () => runGitBestEffort(['cherry-pick', '--abort'], ctx.session.worktreePath, 15_000),
-						catch: () => new GitOperationError({ message: 'cherry-pick --abort failed' }),
+					// Capture the agent branch tip before switching to the source branch,
+					// so completePush can rebase the remaining commits onto the new tip.
+					const savedAgentTipOut = yield* Effect.tryPromise({
+						try: () => runGitCapture(['rev-parse', ctx.session.branchName], ctx.session.worktreePath, 5_000),
+						catch: (err) => new GitOperationError({ message: err instanceof Error ? err.message : String(err), cause: err }),
 					});
-					yield* restoreToAgentBranch({ worktreePath: ctx.session.worktreePath, branchName: ctx.session.branchName });
-					return yield* Effect.fail(new GitOperationError({ message: `Cherry-pick failed: ${cpResult.stderrTail}` }));
-				}
+					const savedAgentTip = savedAgentTipOut.trim();
 
-				return yield* completePush({
-					pr: { id: ctx.pr.id, externalId: ctx.pr.externalId, sourceBranch: ctx.pr.sourceBranch },
-					repo: { fullName: ctx.repo.fullName },
-					token: ctx.token,
-					session: { id: ctx.session.id, worktreePath: ctx.session.worktreePath, branchName: ctx.session.branchName },
-					authedUrl,
-					expectedRemoteSha,
-					aheadCount: 1,
-					cherryPickRebase: { cherryPickedSha: fullSha, oldAgentTip: savedAgentTip },
-				});
+					// Checkout source branch locally
+					yield* Effect.tryPromise({
+						try: () => runGit(['checkout', '-B', ctx.pr.sourceBranch, `refs/remotes/origin/${ctx.pr.sourceBranch}`], ctx.session.worktreePath),
+						catch: (err) => new GitOperationError({ message: err instanceof Error ? err.message : String(err), cause: err }),
+					});
+
+					// Cherry-pick the single commit
+					const cpResult = yield* Effect.tryPromise({
+						try: () => spawnGit(['cherry-pick', fullSha], { cwd: ctx.session.worktreePath, timeoutMs: 60_000, captureStdout: false }),
+						catch: (err) => new GitOperationError({ message: err instanceof Error ? err.message : String(err), cause: err }),
+					});
+
+					if (cpResult.timedOut || cpResult.exitCode !== 0) {
+						// Abort cherry-pick and restore worktree
+						yield* Effect.tryPromise({
+							try: () => runGitBestEffort(['cherry-pick', '--abort'], ctx.session.worktreePath, 15_000),
+							catch: () => new GitOperationError({ message: 'cherry-pick --abort failed' }),
+						});
+						yield* restoreToAgentBranch({ worktreePath: ctx.session.worktreePath, branchName: ctx.session.branchName });
+						return yield* Effect.fail(new GitOperationError({ message: `Cherry-pick failed: ${cpResult.stderrTail}` }));
+					}
+
+					return yield* completePush({
+						pr: { id: ctx.pr.id, externalId: ctx.pr.externalId, sourceBranch: ctx.pr.sourceBranch },
+						repo: { fullName: ctx.repo.fullName },
+						token: ctx.token,
+						session: { id: ctx.session.id, worktreePath: ctx.session.worktreePath, branchName: ctx.session.branchName },
+						authedUrl,
+						expectedRemoteSha,
+						aheadCount: 1,
+						cherryPickRebase: { cherryPickedSha: fullSha, oldAgentTip: savedAgentTip },
+					});
 				}).pipe(Effect.ensuring(releasePush(params.prId)));
 			});
 

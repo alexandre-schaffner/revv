@@ -288,12 +288,14 @@ export class WalkthroughService extends Context.Tag('WalkthroughService')<
 		>;
 
 		/**
-		 * Find the most recent non-superseded `status='generating'` walkthrough
-		 * for a given PR. Used by the manual-resume HTTP endpoint to look up
-		 * which walkthroughId to hand to {@link WalkthroughJobs.startJob}. A PR
-		 * can only have one active generating row at a time (createPartial
-		 * recycles or supersedes earlier rows under transaction), so the
-		 * "most recent by generatedAt" tiebreak is just a safety net.
+		 * Find the most recent non-superseded resumable walkthrough for a given
+		 * PR. Used by the manual-resume HTTP endpoint to look up which
+		 * walkthroughId to hand to {@link WalkthroughJobs.startJob}.
+		 *
+		 * Resumable = `status` is `'generating'` or `'error'`. The error case is
+		 * a user-driven retry: the orchestrator revives the row to `generating`
+		 * and resets the retry counter before relaunching, so the partial content
+		 * is preserved instead of getting recycled by `createPartial`.
 		 */
 		readonly findResumable: (
 			prId: string,
@@ -302,6 +304,7 @@ export class WalkthroughService extends Context.Tag('WalkthroughService')<
 				readonly id: string;
 				readonly pullRequestId: string;
 				readonly prHeadSha: string;
+				readonly status: 'generating' | 'error';
 			} | null,
 			never,
 			DbService
@@ -316,6 +319,17 @@ export class WalkthroughService extends Context.Tag('WalkthroughService')<
 		readonly incrementResumeAttempts: (
 			walkthroughId: string,
 		) => Effect.Effect<number, never, DbService>;
+
+		/**
+		 * Reset the row's resume counter to 0. Called by the orchestrator on a
+		 * user-driven resume so the boot-time auto-resume budget restarts —
+		 * the user just expressed fresh intent to finish, and the prior
+		 * accumulation no longer reflects how many *unattended* attempts the
+		 * row has survived.
+		 */
+		readonly resetResumeAttempts: (
+			walkthroughId: string,
+		) => Effect.Effect<void, never, DbService>;
 
 		/**
 		 * Stamp the given issue ids with `submittedAt` so the UI's "already
@@ -648,17 +662,24 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 					id: walkthroughs.id,
 					pullRequestId: walkthroughs.pullRequestId,
 					prHeadSha: walkthroughs.prHeadSha,
+					status: walkthroughs.status,
 				})
 				.from(walkthroughs)
 				.where(
 					and(
 						eq(walkthroughs.pullRequestId, prId),
-						eq(walkthroughs.status, 'generating'),
+						inArray(walkthroughs.status, ['generating', 'error']),
 					),
 				)
 				.orderBy(desc(walkthroughs.generatedAt))
 				.get();
-			return row ?? null;
+			if (!row) return null;
+			return {
+				id: row.id,
+				pullRequestId: row.pullRequestId,
+				prHeadSha: row.prHeadSha,
+				status: row.status as 'generating' | 'error',
+			};
 		}),
 
 	incrementResumeAttempts: (walkthroughId) =>
@@ -676,6 +697,15 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 				.run();
 			return next;
 		}).pipe(Effect.catchAll(() => Effect.succeed(0))),
+
+	resetResumeAttempts: (walkthroughId) =>
+		Effect.gen(function* () {
+			const { db } = yield* DbService;
+			db.update(walkthroughs)
+				.set({ resumeAttempts: 0 })
+				.where(eq(walkthroughs.id, walkthroughId))
+				.run();
+		}).pipe(Effect.catchAll(() => Effect.void)),
 
 	markIssuesSubmitted: (issueIds) =>
 		Effect.gen(function* () {

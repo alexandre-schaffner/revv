@@ -35,6 +35,20 @@ export interface ChatCallbacks {
 }
 
 /**
+ * No-bytes inactivity timeout for the chat SSE — the transport is considered
+ * dead and we fire `onError` so the Stop button can clear.
+ *
+ * The server sends `: keepalive` every 15s (see `chatStreamToSSE` in
+ * apps/server/src/routes/middleware.ts), so this only trips when even
+ * heartbeats have stopped flowing — i.e. the connection is genuinely dead,
+ * not just the model thinking. Without this guard, a silent close (server
+ * crash mid-turn, OS reclaiming the WKWebView socket) leaves `reader.read()`
+ * blocked forever and `setStreaming(false)` is never called, so the Stop
+ * button stays rendered after the agent is effectively gone.
+ */
+const CHAT_INACTIVITY_TIMEOUT_MS = 90 * 1000;
+
+/**
  * Open a streaming chat turn. Returns an AbortController so the caller can
  * cancel mid-stream (e.g. when the user sends a new message before the
  * previous one finishes).
@@ -44,6 +58,30 @@ export function streamChatMessage(
 	callbacks: ChatCallbacks,
 ): AbortController {
 	const controller = new AbortController();
+
+	// Watchdog timer: resets on every byte from the server. Fires once if no
+	// data arrives for `CHAT_INACTIVITY_TIMEOUT_MS` — aborts the fetch so the
+	// `.catch` below converts it into a structured NETWORK_ERROR. The
+	// `inactivityTripped` flag lets the catch distinguish "we aborted" from a
+	// user-driven AbortController.abort() (both surface as AbortError, but the
+	// user case should stay silent — abortChatTurn already finalized the UI).
+	let inactivityTimer: ReturnType<typeof setTimeout> | undefined;
+	let inactivityTripped = false;
+	const armInactivity = (): void => {
+		if (inactivityTimer) clearTimeout(inactivityTimer);
+		inactivityTimer = setTimeout(() => {
+			inactivityTripped = true;
+			controller.abort();
+		}, CHAT_INACTIVITY_TIMEOUT_MS);
+	};
+	const disarmInactivity = (): void => {
+		if (inactivityTimer) {
+			clearTimeout(inactivityTimer);
+			inactivityTimer = undefined;
+		}
+	};
+
+	armInactivity();
 
 	fetch(`${API_BASE_URL}/api/chat`, {
 		method: 'POST',
@@ -59,6 +97,7 @@ export function streamChatMessage(
 	})
 		.then(async (res) => {
 			if (!res.ok) {
+				disarmInactivity();
 				const body = await res
 					.json()
 					.catch(() => ({ code: 'UNKNOWN', message: res.statusText }));
@@ -68,6 +107,7 @@ export function streamChatMessage(
 
 			const reader = res.body?.getReader();
 			if (!reader) {
+				disarmInactivity();
 				callbacks.onError({ code: 'NO_BODY', message: 'No response body' });
 				return;
 			}
@@ -79,6 +119,14 @@ export function streamChatMessage(
 			while (true) {
 				const { done, value } = await reader.read();
 				if (done) break;
+
+				// Any bytes from the server — including `: keepalive` heartbeats
+				// stripped by the SSE parser as comments — prove the transport
+				// is alive. Reset the watchdog so it only trips on a genuinely
+				// dead connection.
+				if (value && value.byteLength > 0) {
+					armInactivity();
+				}
 
 				buffer += decoder.decode(value, { stream: true });
 
@@ -108,16 +156,28 @@ export function streamChatMessage(
 				}
 
 				if (result.done) {
+					disarmInactivity();
 					callbacks.onDone();
 					return;
 				}
 			}
 
+			disarmInactivity();
 			if (!gotError) {
 				callbacks.onDone();
 			}
 		})
 		.catch((err: Error) => {
+			disarmInactivity();
+			// Inactivity watchdog tripped — surface as a structured error so
+			// the chat store clears `isStreaming` and the Stop button hides.
+			if (inactivityTripped) {
+				callbacks.onError({
+					code: 'NETWORK_ERROR',
+					message: 'Lost connection to the local server. The agent may have stopped — check the server logs and try again.',
+				});
+				return;
+			}
 			if (err.name !== 'AbortError') {
 				// WebKit surfaces connection drops as "Load failed"; Chromium as "Failed to fetch".
 				// Both mean the local server closed the connection unexpectedly.

@@ -12,6 +12,7 @@
 		getSummary as getWalkthroughSummary,
 		getRatings as getWalkthroughRatings,
 		getCanResume as getWalkthroughCanResume,
+		getStreamError as getWalkthroughStreamError,
 		regenerate as regenerateWalkthrough,
 		resume as resumeWalkthrough,
 		abort as abortWalkthrough,
@@ -23,7 +24,7 @@
 		getUserScrolledUp as getWalkthroughUserScrolledUp,
 		getHasNewContentBelow as getWalkthroughHasNewContentBelow,
 	} from '$lib/stores/walkthroughNav.svelte';
-	import { ArrowDown, ArrowUp, Check, Gauge, Play, RefreshCw, Sparkles, Square } from '@lucide/svelte';
+	import { ArrowDown, ArrowUp, Check, Gauge, Play, RefreshCw, RotateCcw, Sparkles, Square } from '@lucide/svelte';
 	import {
 		getActiveTab,
 		setActiveTab,
@@ -81,6 +82,7 @@
 	const walkthroughStreaming = $derived(getWalkthroughStreaming());
 	const walkthroughSummary = $derived(getWalkthroughSummary());
 	const walkthroughCanResume = $derived(getWalkthroughCanResume());
+	const walkthroughStreamError = $derived(getWalkthroughStreamError());
 	const walkthroughHasRatings = $derived(getWalkthroughRatings().length > 0);
 	const walkthroughUserScrolledUp = $derived(getWalkthroughUserScrolledUp());
 	const walkthroughHasNewContentBelow = $derived(getWalkthroughHasNewContentBelow());
@@ -88,7 +90,8 @@
 		walkthroughStreaming ||
 			!!walkthroughSummary ||
 			walkthroughCanResume ||
-			walkthroughHasRatings,
+			walkthroughHasRatings ||
+			!!walkthroughStreamError,
 	);
 	const showFloatingActions = $derived(
 		!!pr && !isSettingsRoute && activeTab === 'walkthrough' && walkthroughHasContent,
@@ -284,27 +287,55 @@
 							New content
 						</button>
 					{/if}
-				{:else}
-					{#if walkthroughCanResume && pr}
-						<button
-							type="button"
-							class="walkthrough-action-btn"
-							onclick={() => resumeWalkthrough(pr.id)}
-						>
+				{:else if walkthroughCanResume && pr}
+					<!-- Partial data exists — offer Resume as the primary action.
+					     Applies to both user-stopped and errored states; the server
+					     revives error rows on resume. Regenerate stays available as
+					     a "throw it all away and start over" escape hatch. -->
+					<button
+						type="button"
+						class="walkthrough-action-btn"
+						onclick={() => resumeWalkthrough(pr.id)}
+						aria-label={walkthroughStreamError
+							? 'Retry walkthrough from where it failed'
+							: 'Resume walkthrough from where it stopped'}
+					>
+						{#if walkthroughStreamError}
+							<RotateCcw size={14} />
+							Retry
+						{:else}
 							<Play size={14} fill="currentColor" />
 							Resume
-						</button>
-					{/if}
-					{#if walkthroughSummary && pr}
-						<button
-							type="button"
-							class="walkthrough-action-btn"
-							onclick={() => regenerateWalkthrough(pr.id)}
-						>
-							<RefreshCw size={14} />
-							Regenerate
-						</button>
-					{/if}
+						{/if}
+					</button>
+					<button
+						type="button"
+						class="walkthrough-action-btn"
+						onclick={() => regenerateWalkthrough(pr.id)}
+					>
+						<RefreshCw size={14} />
+						Regenerate
+					</button>
+				{:else if walkthroughStreamError && pr}
+					<!-- Errored before any partial content landed — only path forward is a fresh run. -->
+					<button
+						type="button"
+						class="walkthrough-action-btn"
+						onclick={() => regenerateWalkthrough(pr.id)}
+						aria-label="Retry walkthrough generation after error"
+					>
+						<RefreshCw size={14} />
+						Retry
+					</button>
+				{:else if walkthroughSummary && pr}
+					<button
+						type="button"
+						class="walkthrough-action-btn"
+						onclick={() => regenerateWalkthrough(pr.id)}
+					>
+						<RefreshCw size={14} />
+						Regenerate
+					</button>
 				{/if}
 
 				<button

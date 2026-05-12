@@ -161,6 +161,25 @@ export class WalkthroughJobs extends Context.Tag("WalkthroughJobs")<
 
 		readonly cancel: (walkthroughId: string) => Effect.Effect<void>;
 
+		/**
+		 * Revive a walkthrough row from `status='error'` back to `'generating'`
+		 * and reset the resume-attempt counter. Used by the user-driven resume
+		 * path so an errored row can pick up its partial content instead of
+		 * being recycled by `createPartial` (which drops `'error'` rows).
+		 *
+		 * Per doctrine invariant #11, status transitions are orchestrator-only;
+		 * this is the chokepoint for the error→generating transition. The
+		 * resume-attempt counter is bundled with the transition because the
+		 * user click signals fresh intent — the prior counter measured how
+		 * many *unattended* boot-time retries the row had survived, which is
+		 * no longer the right gate now that a human is asking explicitly.
+		 *
+		 * No-op if the row isn't in `'error'`.
+		 */
+		readonly reviveFromError: (
+			walkthroughId: string,
+		) => Effect.Effect<void>;
+
 		readonly resumePending: () => Effect.Effect<void>;
 
 		/**
@@ -1356,6 +1375,17 @@ export const WalkthroughJobsLive = Layer.effect(
 				}
 			});
 
+		const reviveFromError = (walkthroughId: string): Effect.Effect<void> =>
+			Effect.gen(function* () {
+				// setStatus is the chokepoint (invariant #11). Going through it
+				// keeps any future side-effects (broadcasts, audit hooks) in
+				// one place rather than fanning out across callers.
+				yield* setStatus(walkthroughId, 'generating');
+				yield* provideDb(
+					walkthroughService.resetResumeAttempts(walkthroughId),
+				);
+			});
+
 		const resumePending = (): Effect.Effect<void> =>
 			Effect.gen(function* () {
 				const rows = yield* provideDb(
@@ -1522,6 +1552,7 @@ export const WalkthroughJobsLive = Layer.effect(
 			subscribe,
 			findActiveByPr,
 			cancel,
+			reviveFromError,
 			resumePending,
 			supersedeWalkthrough,
 			supersedeForPr,

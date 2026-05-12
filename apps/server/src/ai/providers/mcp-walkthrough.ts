@@ -308,9 +308,11 @@ export function streamWalkthroughViaMCP(
 					allowDangerouslySkipPermissions: true,
 					persistSession: false,
 					// 9 rate_axis calls layered on top of the N add_diff_step
-					// calls + flag_issue + set_overview + set_sentiment. Raise
-					// the turn ceiling so complex PRs don't truncate.
-					maxTurns: 60,
+					// calls + flag_issue + set_overview + set_sentiment. The
+					// ceiling is user-configurable via `aiMaxTurns` so complex
+					// PRs don't truncate. Default 60 matches the historical
+					// hard-coded value.
+					maxTurns: settings?.aiMaxTurns ?? 60,
 					abortController,
 					...(model ? { model } : {}),
 					...pathOption,

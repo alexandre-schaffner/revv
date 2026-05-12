@@ -783,7 +783,7 @@
 			{/if}
 		<Button variant="outline" size="lg" style="cursor: pointer;" onclick={handleRegenerate}>
 			<RefreshCw size={16} />
-			Try again
+			Retry
 		</Button>
 	</div>
 	{:else if cloneInProgress && !summary && blocks.length === 0}
@@ -804,7 +804,7 @@
 				<p class="loading-text">Couldn't identify the repository that was cloning.</p>
 			<Button variant="outline" size="lg" style="cursor: pointer;" onclick={handleRegenerate}>
 				<RefreshCw size={16} />
-				Try again
+				Retry
 			</Button>
 			{:else}
 				<div class="clone-progress-container">
@@ -851,21 +851,16 @@
 			<!-- Skeleton placeholder for the upcoming summary; shown immediately when streaming starts. -->
 			<div class="skeleton-body" aria-hidden="true">
 				<div class="skeleton-summary">
-					<Skeleton class="h-[22px] w-[60px] rounded-full" />
-					<Skeleton class="h-[14px] w-[95%]" />
-					<Skeleton class="h-[14px] w-[80%]" />
-					<Skeleton class="h-[14px] w-[50%]" />
+					<Skeleton class="h-[20px] w-[56px] rounded-full" />
+					<Skeleton class="h-[13px] w-[85%]" />
+					<Skeleton class="h-[13px] w-[60%]" />
 				</div>
-
-				<div class="skeleton-separator"></div>
 
 				<div class="skeleton-card">
 					<div class="skeleton-card-body">
-						<Skeleton class="h-[14px] w-[90%]" />
-						<Skeleton class="h-[14px] w-full" />
-						<Skeleton class="h-[14px] w-[85%]" />
-						<Skeleton class="h-[14px] w-[75%]" />
-						<Skeleton class="h-[14px] w-[60%]" />
+						<Skeleton class="h-[13px] w-[90%]" />
+						<Skeleton class="h-[13px] w-[70%]" />
+						<Skeleton class="h-[13px] w-[50%]" />
 					</div>
 				</div>
 			</div>
@@ -1003,20 +998,22 @@
 
 			<!-- Diff-analysis skeleton: placeholder block while Phase B is active.
 			     Stays visible from when the overview lands (Phase A done) until the
-			     agent finishes all diff steps and moves to Phase C. -->
+			     agent finishes all diff steps and moves to Phase C.
+			     Shaped like a real diff step (file badge + gutter + code lines) so
+			     the user sees "something" rendering into the same slot real diff
+			     steps will land in. -->
 			{#if showDiffSkeleton}
 				<div class="block-group">
 					<span class="block-step-dot" aria-hidden="true"></span>
-					<div class="block-wrapper block-wrapper--no-anim diff-skeleton-block" aria-hidden="true">
+					<div class="block-wrapper block-wrapper--no-anim diff-skeleton-step" aria-hidden="true">
 						<div class="diff-skeleton-header">
-							<Skeleton class="h-[13px] w-[38%]" />
+							<Skeleton class="h-[16px] w-[28px] rounded" />
+							<Skeleton class="h-[11px] w-[30%] max-w-[180px]" />
 						</div>
-						<div class="diff-skeleton-body">
-							<Skeleton class="h-[13px] w-[92%]" />
-							<Skeleton class="h-[13px] w-full" />
-							<Skeleton class="h-[13px] w-[78%]" />
-							<Skeleton class="h-[13px] w-[85%]" />
-							<Skeleton class="h-[13px] w-[60%]" />
+						<div class="diff-skeleton-code">
+							<Skeleton class="h-[10px] w-[75%]" />
+							<Skeleton class="h-[10px] w-[90%]" />
+							<Skeleton class="h-[10px] w-[55%]" />
 						</div>
 					</div>
 				</div>
@@ -1546,12 +1543,6 @@
 		margin-bottom: 4px;
 	}
 
-	.skeleton-separator {
-		height: 1px;
-		background: var(--color-border);
-		margin: 4px 0;
-	}
-
 	.skeleton-card {
 		border: 1px solid var(--color-border);
 		border-radius: 8px;
@@ -1565,24 +1556,34 @@
 		padding: 16px;
 	}
 
-	/* ── Diff-analysis skeleton block ─────────────────────────────────── */
+	/* ── Diff-analysis skeleton block ───────────────────────────────────
+	   Shaped like a real `WalkthroughDiffBlock`: rounded card, file-badge
+	   strip on top, gutter + code-line body underneath. The shimmer is a
+	   moving highlight across each bar so the placeholder reads as
+	   "actively generating" rather than just "loading". Uses the global
+	   `shimmer` keyframe defined in app.css. */
 
-	.diff-skeleton-block {
+	.diff-skeleton-step {
 		border: 1px solid var(--color-border);
-		border-radius: 8px;
-		overflow: hidden;
+		border-radius: 10px;
+		overflow: clip;
+		background: var(--color-bg-primary);
 	}
 
 	.diff-skeleton-header {
-		padding: 10px 14px 8px;
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 8px 12px;
 		border-bottom: 1px solid var(--color-border);
+		background: var(--color-bg-secondary);
 	}
 
-	.diff-skeleton-body {
+	.diff-skeleton-code {
 		display: flex;
 		flex-direction: column;
 		gap: 8px;
-		padding: 14px 16px;
+		padding: 12px 14px;
 	}
 
 

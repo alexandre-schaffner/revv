@@ -104,6 +104,34 @@ function okResult(text: string): WalkthroughToolResult {
 }
 
 /**
+ * Some agents (notably weaker tool-using models routed via opencode) emit
+ * single-field markdown payloads as a JSON-wrapped string — e.g. passing
+ * `{markdown: '{"markdown": "Solid engineering..."}'}` instead of
+ * `{markdown: 'Solid engineering...'}`. The double-wrap leaks the literal
+ * `{"markdown": "..."}` braces into the rendered UI. Detect that exact shape
+ * and unwrap to the inner string. We only unwrap when the value parses as a
+ * JSON object with a single string field matching the expected key, which
+ * avoids false positives (legitimate prose that happens to start with `{`
+ * won't satisfy both conditions).
+ */
+function unwrapJsonWrappedString(value: string, expectedKey: string): string {
+	const trimmed = value.trim();
+	if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return value;
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(trimmed);
+	} catch {
+		return value;
+	}
+	if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+		return value;
+	}
+	const inner = (parsed as Record<string, unknown>)[expectedKey];
+	if (typeof inner !== "string") return value;
+	return inner;
+}
+
+/**
  * Read the walkthrough row for a tool call. Throws a tool-level error result
  * if the row is missing — the orchestrator is supposed to have created the
  * row before the agent starts calling tools.
@@ -372,6 +400,8 @@ export const getWalkthroughStateHandler: WalkthroughToolHandler<
 
 export const setOverviewHandler: WalkthroughToolHandler<SetOverviewInput> =
 	async (ctx, input) => {
+		const summary = unwrapJsonWrappedString(input.summary, "summary");
+
 		let result: WalkthroughToolResult | null = null;
 		ctx.db.transaction(() => {
 			const row = loadWalkthroughRow(ctx.db, ctx.walkthroughId);
@@ -391,7 +421,7 @@ export const setOverviewHandler: WalkthroughToolHandler<SetOverviewInput> =
 			ctx.db
 				.update(walkthroughs)
 				.set({
-					summary: input.summary,
+					summary,
 					riskLevel: input.risk_level,
 					lastCompletedPhase: "A",
 				})
@@ -403,7 +433,7 @@ export const setOverviewHandler: WalkthroughToolHandler<SetOverviewInput> =
 		ctx.emit({
 			type: "summary",
 			data: {
-				summary: input.summary,
+				summary,
 				riskLevel: input.risk_level as RiskLevel,
 			},
 		});
@@ -1287,6 +1317,8 @@ export const addIssueCommentHandler: WalkthroughToolHandler<
 
 export const setSentimentHandler: WalkthroughToolHandler<SetSentimentInput> =
 	async (ctx, input) => {
+		const markdown = unwrapJsonWrappedString(input.markdown, "markdown");
+
 		let result: WalkthroughToolResult | null = null;
 		ctx.db.transaction(() => {
 			const row = loadWalkthroughRow(ctx.db, ctx.walkthroughId);
@@ -1325,13 +1357,13 @@ export const setSentimentHandler: WalkthroughToolHandler<SetSentimentInput> =
 
 			ctx.db
 				.update(walkthroughs)
-				.set({ sentiment: input.markdown, lastCompletedPhase: "C" })
+				.set({ sentiment: markdown, lastCompletedPhase: "C" })
 				.where(eq(walkthroughs.id, ctx.walkthroughId))
 				.run();
 		});
 		if (result) return result;
 
-		ctx.emit({ type: "sentiment", data: { sentiment: input.markdown } });
+		ctx.emit({ type: "sentiment", data: { sentiment: markdown } });
 		ctx.emit({
 			type: "phase:advanced",
 			data: { lastCompletedPhase: "C" },

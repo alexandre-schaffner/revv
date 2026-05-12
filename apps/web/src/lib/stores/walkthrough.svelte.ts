@@ -213,16 +213,22 @@ export function getLastCompletedPhase(): WalkthroughPipelinePhase {
 	return active()?.lastCompletedPhase ?? 'none';
 }
 /**
- * True when the active PR has a stopped walkthrough that the server can
- * resume from where it left off — some progress exists, the pipeline never
- * reached Phase D, no error is set, and no stream is currently open. Gates
- * the **Resume** floating button.
+ * True when the active PR has a walkthrough the server can resume from where
+ * it left off — some progress exists, the pipeline never reached Phase D, and
+ * no stream is currently open. Gates the **Resume** floating button.
+ *
+ * A `streamError` does NOT disqualify the entry: an error in the middle of
+ * generation leaves the partial content (summary, blocks, issues, ratings)
+ * persisted in SQLite. The resume endpoint revives the row from 'error' back
+ * to 'generating', resets the retry budget, and the agent picks up via
+ * `get_walkthrough_state`. The user gets a "continue from here" path as the
+ * default action when partial work exists, instead of being forced into
+ * Regenerate (which throws away the partial).
  */
 export function getCanResume(): boolean {
 	const e = active();
 	if (!e) return false;
 	if (e.isStreaming) return false;
-	if (e.streamError) return false;
 	if (e.lastCompletedPhase === 'D') return false;
 	return e.summary !== null || e.blocks.length > 0;
 }
@@ -407,8 +413,18 @@ export function prepareEntry(prId: string): void {
 
 /**
  * After an SSE stream closes without a terminal event, poll `hydrateFromCache`
- * with exponential backoff to catch `walkthrough:complete` broadcasts that were
- * silently dropped by the server (5-second timeout + catchAll).
+ * with exponential backoff. Two recovery paths converge here:
+ *
+ *  - Server already finished (broadcast missed during the 5s WS timeout +
+ *    catchAll, or while the client was reconnecting): `hydrateFromCache`
+ *    sees status='complete' and marks the entry done.
+ *  - Server is still generating: `hydrateFromCache` returns status='generating'
+ *    and internally fires a fresh `streamWalkthrough` that rejoins the live
+ *    job. From that point the new SSE owns the stream and these polls become
+ *    idle no-ops.
+ *
+ * Delays start at 1s (not 4s) so the user sees recovery kick in quickly
+ * instead of staring at a frozen panel. Total window ~140s before giving up.
  *
  * Stops as soon as:
  *  - the entry is no longer streaming (WS broadcast arrived, or user navigated away)
@@ -416,9 +432,21 @@ export function prepareEntry(prId: string): void {
  *  - we've exhausted the retry budget
  */
 function scheduleReconciliationPoll(prId: string, attempt = 0): void {
-	const MAX_ATTEMPTS = 5;
-	// Delays: 4s, 8s, 16s, 30s, 30s
-	const delayMs = Math.min(4_000 * Math.pow(2, attempt), 30_000);
+	const MAX_ATTEMPTS = 8;
+	// Delays: 1s, 2s, 4s, 8s, 16s, 30s, 30s, 30s (~120s total)
+	const delayMs = Math.min(1_000 * Math.pow(2, attempt), 30_000);
+
+	// Surface a phase message on the very first attempt so the user knows the
+	// UI is trying to recover rather than silently frozen. Skip on later
+	// attempts so a still-running streamWalkthrough can overwrite the phase
+	// with its real progress message.
+	if (attempt === 0) {
+		updateEntry(prId, (e) => {
+			if (e.isStreaming && !e.doneReceived && !e.streamError) {
+				e.phaseMessage = 'Reconnecting to walkthrough…';
+			}
+		});
+	}
 
 	setTimeout(async () => {
 		const en = entries.get(prId);
@@ -426,9 +454,20 @@ function scheduleReconciliationPoll(prId: string, attempt = 0): void {
 		// explicitly stopped/errored, or this entry was evicted.
 		if (!en || !en.isStreaming || en.doneReceived || en.streamError) return;
 
+		// If a fresh streamWalkthrough is already in flight (e.g. a previous
+		// poll attempt's hydrateFromCache fired one and the SSE is currently
+		// connected), there's nothing to reconcile — that SSE is the source
+		// of truth. Just schedule the next poll as a no-op safety net.
+		if (controllers.has(prId)) {
+			if (attempt + 1 < MAX_ATTEMPTS) scheduleReconciliationPoll(prId, attempt + 1);
+			return;
+		}
+
 		// Re-fetch from the DB. If status is now complete/error this will
 		// set isStreaming=false and doneReceived=true (via applyEvents / entry
-		// update inside hydrateFromCache), resolving the stuck UI.
+		// update inside hydrateFromCache), resolving the stuck UI. If status
+		// is 'generating', hydrateFromCache itself fires streamWalkthrough
+		// which reopens the SSE and rejoins the live job.
 		const hit = await hydrateFromCache(prId);
 
 		// If still stuck and budget remains, keep polling.
@@ -1039,18 +1078,26 @@ export async function regenerate(prId: string): Promise<void> {
 }
 
 /**
- * Manually resume a walkthrough the user previously stopped via `abort()`.
- * Unlike `regenerate`, the existing entry is preserved — partial blocks /
- * summary stay on screen while the SSE re-opens. `streamWalkthrough` already
- * detects the rehydrate-from-partial path (`isResumeFromHydratedPartial`)
- * and reuses the entry rather than reseating a fresh one, so the user sees
- * a seamless continuation instead of a flicker back to the title block.
+ * Manually resume a walkthrough the user previously stopped via `abort()` OR
+ * that ended in `status='error'`. Unlike `regenerate`, the existing entry is
+ * preserved — partial blocks / summary stay on screen while the SSE re-opens.
+ *
+ * The server revives error rows back to `'generating'` and resets the retry
+ * counter as part of the resume call (see `resumeWalkthroughHandler`), so
+ * from the client's perspective both stopped-by-user and errored states use
+ * the same code path. We clear the local `streamError` first so the entry
+ * qualifies for `streamWalkthrough`'s rehydrate-from-partial fast path
+ * (which gates on `!streamError`) and the user sees seamless continuation
+ * instead of a flicker back to the title block.
  *
  * No-ops silently if the server returns a non-OK status (most likely 404
- * because the row was superseded by a head-SHA advance, or 500 because the
- * resume-attempt cap was exceeded). The user can still click Regenerate.
+ * because the row was superseded by a head-SHA advance). The user can still
+ * click Regenerate.
  */
 export async function resume(prId: string): Promise<void> {
+	updateEntry(prId, (e) => {
+		e.streamError = null;
+	});
 	try {
 		const res = await fetch(`${API_BASE_URL}/api/reviews/${prId}/walkthrough/resume`, {
 			method: 'POST',

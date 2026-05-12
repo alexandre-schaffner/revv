@@ -37,6 +37,7 @@
     import { authHeaders } from "$lib/utils/session-token";
     import SignInButton from "$lib/components/auth/SignInButton.svelte";
     import * as Select from "$lib/components/ui/select";
+    import { Input } from "$lib/components/ui/input";
 
     import type {
         AiAgent,
@@ -156,6 +157,45 @@
 
     function goBack() {
         history.back();
+    }
+
+    // Max turns is committed on blur / Enter rather than every keystroke so
+    // partial values (e.g. "" while editing) don't fly through the API and
+    // get clamped back to the floor. `maxTurnsDraft` mirrors the persisted
+    // value and is normalised + committed in `commitMaxTurns`.
+    const MAX_TURNS_MIN = 10;
+    const MAX_TURNS_MAX = 500;
+    let maxTurnsDraft = $state<string>(
+        String(getSettings()?.aiMaxTurns ?? 60),
+    );
+    let lastCommittedMaxTurns = $state<number | null>(
+        getSettings()?.aiMaxTurns ?? null,
+    );
+    $effect(() => {
+        const current = getSettings()?.aiMaxTurns;
+        if (typeof current !== "number") return;
+        // Re-sync the draft only when the server-confirmed value changes
+        // (initial load, or another tab/process wrote settings) — never
+        // overwrite the user's in-progress edit just because their own
+        // optimistic write came back.
+        if (current !== lastCommittedMaxTurns) {
+            maxTurnsDraft = String(current);
+            lastCommittedMaxTurns = current;
+        }
+    });
+
+    function commitMaxTurns(): void {
+        const parsed = Number.parseInt(maxTurnsDraft, 10);
+        const current = getSettings()?.aiMaxTurns ?? 60;
+        if (!Number.isFinite(parsed)) {
+            maxTurnsDraft = String(current);
+            return;
+        }
+        const clamped = Math.min(MAX_TURNS_MAX, Math.max(MAX_TURNS_MIN, parsed));
+        maxTurnsDraft = String(clamped);
+        if (clamped === current) return;
+        lastCommittedMaxTurns = clamped;
+        void updateSettings({ aiMaxTurns: clamped });
     }
 
     // --- Updates section state ---
@@ -430,6 +470,33 @@
                     </Select.Root>
                 </div>
             {/if}
+
+            <!-- Max turns -->
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-sm text-text-primary">Max turns</p>
+                    <p class="text-xs text-text-muted">
+                        Tool-call budget per chat turn and walkthrough run
+                        (between {MAX_TURNS_MIN} and {MAX_TURNS_MAX}).
+                    </p>
+                </div>
+                <Input
+                    type="number"
+                    class="w-28"
+                    min={MAX_TURNS_MIN}
+                    max={MAX_TURNS_MAX}
+                    step={1}
+                    aria-label="Max turns"
+                    bind:value={maxTurnsDraft}
+                    onblur={commitMaxTurns}
+                    onkeydown={(e: KeyboardEvent) => {
+                        if (e.key === "Enter") {
+                            e.preventDefault();
+                            (e.currentTarget as HTMLInputElement).blur();
+                        }
+                    }}
+                />
+            </div>
 
             <!-- Agent selector -->
             <div class="flex items-center justify-between">

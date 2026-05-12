@@ -325,6 +325,7 @@ export const AiServiceLive = Layer.effect(
 							model: settings.aiModel ?? undefined,
 							db,
 							prId: params.prId,
+							maxTurns: settings.aiMaxTurns,
 						});
 					}
 
@@ -389,6 +390,7 @@ export const AiServiceLive = Layer.effect(
 							// And no review-context MCP — conflict resolution
 							// doesn't need it.
 							enableReviewContextMcp: false,
+							maxTurns: settings.aiMaxTurns,
 						});
 					}
 

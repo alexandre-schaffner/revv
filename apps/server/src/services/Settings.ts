@@ -30,11 +30,25 @@ const DEFAULT_SETTINGS: UserSettings = {
 	aiThinkingEffort: 'medium',
 	aiAgent: 'opencode',
 	aiContextWindow: '200k',
+	aiMaxTurns: 60,
 	theme: 'dark',
 	diffViewMode: 'unified',
 	autoFetchInterval: AUTO_FETCH_DEFAULT_INTERVAL,
 	fileTreeScope: 'all',
 };
+
+const MIN_MAX_TURNS = 10;
+const MAX_MAX_TURNS = 500;
+
+function coerceMaxTurns(value: unknown): number {
+	if (typeof value !== 'number' || !Number.isFinite(value)) {
+		return DEFAULT_SETTINGS.aiMaxTurns;
+	}
+	const int = Math.floor(value);
+	if (int < MIN_MAX_TURNS) return MIN_MAX_TURNS;
+	if (int > MAX_MAX_TURNS) return MAX_MAX_TURNS;
+	return int;
+}
 
 /** Coerce an arbitrary JSON value into a fully-shaped `UserSettings`. */
 function normalize(raw: unknown): UserSettings {
@@ -62,6 +76,7 @@ function normalize(raw: unknown): UserSettings {
 			(typeof r['aiContextWindow'] === 'string'
 				? (r['aiContextWindow'] as ContextWindow)
 				: DEFAULT_SETTINGS.aiContextWindow),
+		aiMaxTurns: coerceMaxTurns(r['aiMaxTurns']),
 		theme:
 			typeof r['theme'] === 'string'
 				? (r['theme'] as string)
@@ -150,7 +165,13 @@ export const SettingsServiceLive = Layer.succeed(SettingsService, {
 				// toggles in the same RAF, in which case last-write-wins is
 				// the expected outcome anyway.
 				const current = await readSettingsFile();
-				const next: UserSettings = { ...current, ...partial, id: 'default' };
+				const merged: UserSettings = { ...current, ...partial, id: 'default' };
+				// Clamp aiMaxTurns at the write boundary so a future read can
+				// trust the value without re-normalising.
+				const next: UserSettings = {
+					...merged,
+					aiMaxTurns: coerceMaxTurns(merged.aiMaxTurns),
+				};
 				await writeSettingsFile(next);
 				return next;
 			},

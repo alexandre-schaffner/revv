@@ -69,6 +69,13 @@ export interface UserSettings {
 	aiThinkingEffort: ThinkingEffort;
 	aiAgent: AiAgent;
 	aiContextWindow: ContextWindow;
+	/**
+	 * Maximum number of agent turns (tool-use round trips) within a single
+	 * chat turn or walkthrough generation. Higher values let complex PRs and
+	 * long chat threads complete without truncation, at the cost of
+	 * potentially longer runs.
+	 */
+	aiMaxTurns: number;
 	theme: string;
 	diffViewMode: string;
 	autoFetchInterval: number;

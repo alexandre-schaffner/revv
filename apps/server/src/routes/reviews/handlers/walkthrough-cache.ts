@@ -87,23 +87,28 @@ export function regenerateWalkthroughHandler(prId: string) {
 
 /**
  * POST /api/reviews/:id/walkthrough/resume — manually re-trigger generation
- * for an in-progress walkthrough that the user previously stopped.
+ * for a walkthrough that the user previously stopped OR that errored out.
  *
- * After `abort()` on the client, the DB row stays `status='generating'` with
- * `lastCompletedPhase` preserved (doctrine: orchestrator owns lifecycle, not
- * the user's stop button). Boot-time `WalkthroughJobs.resumePending()` already
- * handles such rows on server restart; this endpoint exposes the same path
- * to a user click so they can stop → think → resume without losing partial
- * progress.
+ * Two source states feed this endpoint:
  *
- * 404 when no row matches — the UI gates the Resume button on the same
- * "lastCompletedPhase < D + has-some-progress" signal, so a 404 here would
- * indicate either a head-SHA advance superseded the partial, or the row
- * was never created. Either way, Regenerate is the right next action.
+ *   • `status='generating'` — user clicked Stop. The SSE was aborted but the
+ *     DB row was never transitioned; boot-time `resumePending()` would have
+ *     picked it up too. Just relaunch.
  *
- * Resume-attempt cap (`WALKTHROUGH_MAX_RESUME_ATTEMPTS = 3`) is enforced
- * inside `startJob` for the resume trigger. Exceeded → 500 with the
- * underlying error surfaced.
+ *   • `status='error'`     — generation failed (e.g. MAX_AUTO_CONTINUATIONS
+ *     exhausted before Phase D, or `resumeAttempts` exceeded
+ *     `WALKTHROUGH_MAX_RESUME_ATTEMPTS`). We REVIVE the row first via the
+ *     orchestrator: transition status back to 'generating' AND reset
+ *     `resumeAttempts` to 0 so the user gets a fresh budget. Without the
+ *     revive, `createPartial` inside `startJob` recycles 'error' rows by
+ *     deleting them — exactly the opposite of "resume from where it left
+ *     off". With the revive, the partial content (summary, blocks, issues,
+ *     ratings already persisted by MCP tools) is preserved and the agent
+ *     reads `get_walkthrough_state` on its first call to pick up where it
+ *     stopped.
+ *
+ * 404 when no resumable row exists — the partial was superseded by a
+ * head-SHA advance or never created. Regenerate is the right next action.
  */
 export function resumeWalkthroughHandler(
 	prId: string,
@@ -117,6 +122,9 @@ export function resumeWalkthroughHandler(
 				return yield* Effect.fail(
 					new NotFoundError({ resource: 'walkthrough', id: prId }),
 				);
+			}
+			if (row.status === 'error') {
+				yield* jobs.reviveFromError(row.id);
 			}
 			return yield* jobs.startJob({
 				prId,
