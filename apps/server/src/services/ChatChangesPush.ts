@@ -565,6 +565,48 @@ export const ChatChangesPushServiceLive = Layer.effect(
 					}),
 			});
 
+		// After cherry-picking a single commit, rebase the remaining agent commits
+		// onto the new source-branch tip, dropping the commit that was just pushed.
+		// If the rebase conflicts, we abort and restore the agent branch to its
+		// pre-cherry-pick state — the push still succeeded so we don't fail the
+		// overall operation, but we log so the user can retry.
+		const rebaseAgentBranchAfterCherryPick = (params: {
+			worktreePath: string;
+			branchName: string;
+			newTip: string;
+			cherryPickedSha: string;
+			oldAgentTip: string;
+		}) =>
+			Effect.promise(async () => {
+				// git rebase --onto <newTip> <cherryPickedSha> <oldAgentTip>
+				// replays the range (cherryPickedSha..oldAgentTip] onto newTip,
+				// which drops the cherry-picked commit and keeps everything else.
+				const result = await spawnGit(
+					["rebase", "--onto", params.newTip, params.cherryPickedSha, params.oldAgentTip],
+					{ cwd: params.worktreePath, timeoutMs: 60_000, captureStdout: false },
+				);
+
+				if (result.timedOut || result.exitCode !== 0) {
+					await runGitBestEffort(["rebase", "--abort"], params.worktreePath, 15_000);
+					await runGitBestEffort(["branch", "-f", params.branchName, params.oldAgentTip], params.worktreePath, 5_000);
+					await runGitBestEffort(["checkout", params.branchName], params.worktreePath, 10_000);
+					logError("cherry-pick", "rebase of remaining agent commits failed; restored agent branch to pre-cherry-pick tip");
+					return;
+				}
+
+				const rebasedTipOut = await runGitCapture(["rev-parse", "HEAD"], params.worktreePath, 5_000).catch(() => null);
+				const rebasedTip = rebasedTipOut?.trim();
+				if (!rebasedTip || !isValidSha(rebasedTip)) {
+					await runGitBestEffort(["branch", "-f", params.branchName, params.oldAgentTip], params.worktreePath, 5_000);
+					await runGitBestEffort(["checkout", params.branchName], params.worktreePath, 10_000);
+					logError("cherry-pick", "could not resolve HEAD after rebase; restored agent branch to pre-cherry-pick tip");
+					return;
+				}
+
+				await runGit(["branch", "-f", params.branchName, rebasedTip], params.worktreePath);
+				await runGit(["checkout", params.branchName], params.worktreePath);
+			});
+
 		const finalizeStateAfterPush = (params: {
 			pr: { readonly id: string };
 			repo: { readonly fullName: string };
@@ -625,6 +667,10 @@ export const ChatChangesPushServiceLive = Layer.effect(
 			authedUrl: string;
 			expectedRemoteSha: string | null;
 			aheadCount: number;
+			// When set, rebase remaining agent commits onto the new tip instead of
+			// force-resetting the branch. Used by cherryPickAndPush so only the
+			// cherry-picked commit is dropped, preserving the rest.
+			cherryPickRebase?: { readonly cherryPickedSha: string; readonly oldAgentTip: string };
 		}) =>
 			Effect.gen(function* () {
 				const pushResult = yield* Effect.tryPromise({
@@ -708,11 +754,21 @@ export const ChatChangesPushServiceLive = Layer.effect(
 					);
 				}
 
-				yield* restoreAgentBranchToTip({
-					worktreePath: params.session.worktreePath,
-					branchName: params.session.branchName,
-					newTip,
-				});
+				if (params.cherryPickRebase) {
+					yield* rebaseAgentBranchAfterCherryPick({
+						worktreePath: params.session.worktreePath,
+						branchName: params.session.branchName,
+						newTip,
+						cherryPickedSha: params.cherryPickRebase.cherryPickedSha,
+						oldAgentTip: params.cherryPickRebase.oldAgentTip,
+					});
+				} else {
+					yield* restoreAgentBranchToTip({
+						worktreePath: params.session.worktreePath,
+						branchName: params.session.branchName,
+						newTip,
+					});
+				}
 
 				yield* finalizeStateAfterPush({
 					pr: { id: params.pr.id },
