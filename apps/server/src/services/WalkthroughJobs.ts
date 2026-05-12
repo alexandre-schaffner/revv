@@ -1242,13 +1242,15 @@ export const WalkthroughJobsLive = Layer.effect(
 
 				const settings = yield* provideDb(settingsService.getSettings());
 				const agent = resolveAgent(settings);
+				const freshModelUsed =
+					settings.aiModel ??
+					(agent === "opencode" ? "opencode" : "claude-sonnet-4-20250514");
 				const modelUsed =
-					partial?.modelUsed && partial.modelUsed !== "unknown"
-						? partial.modelUsed
-						: (settings.aiModel ??
-							(agent === "opencode"
-								? "opencode"
-								: "claude-sonnet-4-20250514"));
+					params.trigger === "resume"
+						? freshModelUsed
+						: (partial?.modelUsed && partial.modelUsed !== "unknown"
+							? partial.modelUsed
+							: freshModelUsed);
 
 				// Idempotent row creation (upsert on the new unique index).
 				// This is the sole "make a walkthrough row exist" call in the
@@ -1275,6 +1277,18 @@ export const WalkthroughJobsLive = Layer.effect(
 							}),
 					),
 				);
+
+				// On user-triggered resume, sync the stored modelUsed to current settings
+				// so the DB reflects which agent is actually running this continuation.
+				if (
+					params.trigger === "resume" &&
+					partial !== null &&
+					partial.modelUsed !== modelUsed
+				) {
+					yield* provideDb(
+						walkthroughService.updateModelUsed(partial.id, modelUsed),
+					);
+				}
 
 				const abortController = new AbortController();
 				const job: ActiveJob = {

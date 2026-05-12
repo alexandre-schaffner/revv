@@ -28,6 +28,6 @@
 		);
 		background-size: 200% 100%;
 		background-repeat: no-repeat;
-		animation: shimmer 2s ease-in-out infinite;
+		animation: shimmer 3.5s ease-in-out infinite;
 	}
 </style>

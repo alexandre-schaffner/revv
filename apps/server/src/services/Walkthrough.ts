@@ -332,6 +332,17 @@ export class WalkthroughService extends Context.Tag('WalkthroughService')<
 		) => Effect.Effect<void, never, DbService>;
 
 		/**
+		 * Update the model/agent recorded on a walkthrough row. Called by the
+		 * orchestrator on resume when the user has changed their AI agent since
+		 * the row was originally created — the new agent should be the one that
+		 * picks up the work.
+		 */
+		readonly updateModelUsed: (
+			walkthroughId: string,
+			modelUsed: string,
+		) => Effect.Effect<void, never, DbService>;
+
+		/**
 		 * Stamp the given issue ids with `submittedAt` so the UI's "already
 		 * posted to GitHub" state survives app restarts and PR-switches. Unknown
 		 * ids are silently ignored — they might have been wiped by a regenerate
@@ -703,6 +714,15 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 			const { db } = yield* DbService;
 			db.update(walkthroughs)
 				.set({ resumeAttempts: 0 })
+				.where(eq(walkthroughs.id, walkthroughId))
+				.run();
+		}).pipe(Effect.catchAll(() => Effect.void)),
+
+	updateModelUsed: (walkthroughId, modelUsed) =>
+		Effect.gen(function* () {
+			const { db } = yield* DbService;
+			db.update(walkthroughs)
+				.set({ modelUsed })
 				.where(eq(walkthroughs.id, walkthroughId))
 				.run();
 		}).pipe(Effect.catchAll(() => Effect.void)),

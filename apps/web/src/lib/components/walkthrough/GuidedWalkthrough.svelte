@@ -781,10 +781,6 @@
 			{#if streamError.includes('not configured') || streamError.includes('API key')}
 				<p class="error-hint">Add your Anthropic API key in Settings to enable walkthroughs.</p>
 			{/if}
-		<Button variant="outline" size="lg" style="cursor: pointer;" onclick={handleRegenerate}>
-			<RefreshCw size={16} />
-			Retry
-		</Button>
 	</div>
 	{:else if cloneInProgress && !summary && blocks.length === 0}
 		<!-- Clone-in-progress state: show indeterminate progress bar + Retry
@@ -800,13 +796,9 @@
 		{@const repoError = repo?.cloneError ?? null}
 		<div class="walkthrough-empty">
 			{#if !cloneRepoId}
-				<AlertTriangle size={20} />
-				<p class="loading-text">Couldn't identify the repository that was cloning.</p>
-			<Button variant="outline" size="lg" style="cursor: pointer;" onclick={handleRegenerate}>
-				<RefreshCw size={16} />
-				Retry
-			</Button>
-			{:else}
+			<AlertTriangle size={20} />
+			<p class="loading-text">Couldn't identify the repository that was cloning.</p>
+		{:else}
 				<div class="clone-progress-container">
 					<p class="loading-text">Cloning repository…</p>
 					<Progress indeterminate class="clone-progress-bar" />
@@ -850,19 +842,8 @@
 
 			<!-- Skeleton placeholder for the upcoming summary; shown immediately when streaming starts. -->
 			<div class="skeleton-body" aria-hidden="true">
-				<div class="skeleton-summary">
-					<Skeleton class="h-[20px] w-[56px] rounded-full" />
-					<Skeleton class="h-[13px] w-[85%]" />
-					<Skeleton class="h-[13px] w-[60%]" />
-				</div>
-
-				<div class="skeleton-card">
-					<div class="skeleton-card-body">
-						<Skeleton class="h-[13px] w-[90%]" />
-						<Skeleton class="h-[13px] w-[70%]" />
-						<Skeleton class="h-[13px] w-[50%]" />
-					</div>
-				</div>
+				<Skeleton class="h-[12px] w-[55%]" />
+				<Skeleton class="h-[12px] w-[35%]" />
 			</div>
 
 			<!-- Empty rating grid, mounted from the start of generation so the
@@ -1002,22 +983,17 @@
 			     Shaped like a real diff step (file badge + gutter + code lines) so
 			     the user sees "something" rendering into the same slot real diff
 			     steps will land in. -->
-			{#if showDiffSkeleton}
-				<div class="block-group">
-					<span class="block-step-dot" aria-hidden="true"></span>
-					<div class="block-wrapper block-wrapper--no-anim diff-skeleton-step" aria-hidden="true">
-						<div class="diff-skeleton-header">
-							<Skeleton class="h-[16px] w-[28px] rounded" />
-							<Skeleton class="h-[11px] w-[30%] max-w-[180px]" />
-						</div>
-						<div class="diff-skeleton-code">
-							<Skeleton class="h-[10px] w-[75%]" />
-							<Skeleton class="h-[10px] w-[90%]" />
-							<Skeleton class="h-[10px] w-[55%]" />
-						</div>
+		{#if showDiffSkeleton}
+			<div class="block-group">
+				<span class="block-step-dot" aria-hidden="true"></span>
+				<div class="block-wrapper block-wrapper--no-anim diff-skeleton-step" aria-hidden="true">
+					<div class="diff-skeleton-code">
+						<Skeleton class="h-[11px] w-[80%]" />
+						<Skeleton class="h-[11px] w-[50%]" />
 					</div>
 				</div>
-			{/if}
+			</div>
+		{/if}
 
 			<!-- Phase C / D conclusion: sentiment card above the scorecard.
 			     Rendered as a single grid item (block-group--sentiment-stack)
@@ -1533,27 +1509,7 @@
 	.skeleton-body {
 		display: flex;
 		flex-direction: column;
-		gap: 16px;
-	}
-
-	.skeleton-summary {
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
-		margin-bottom: 4px;
-	}
-
-	.skeleton-card {
-		border: 1px solid var(--color-border);
-		border-radius: 8px;
-		overflow: hidden;
-	}
-
-	.skeleton-card-body {
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
-		padding: 16px;
+		gap: 10px;
 	}
 
 	/* ── Diff-analysis skeleton block ───────────────────────────────────
@@ -1564,26 +1520,13 @@
 	   `shimmer` keyframe defined in app.css. */
 
 	.diff-skeleton-step {
-		border: 1px solid var(--color-border);
-		border-radius: 10px;
-		overflow: clip;
-		background: var(--color-bg-primary);
-	}
-
-	.diff-skeleton-header {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		padding: 8px 12px;
-		border-bottom: 1px solid var(--color-border);
-		background: var(--color-bg-secondary);
 	}
 
 	.diff-skeleton-code {
 		display: flex;
 		flex-direction: column;
 		gap: 8px;
-		padding: 12px 14px;
+		padding: 4px 0;
 	}
 
 
