@@ -486,6 +486,10 @@ export function sendChatMessage(params: SendChatMessageParams): void {
 				setError(prId, err);
 				setStreaming(prId, false);
 				abortControllers.delete(prId);
+				// The agent may have committed before the stream errored —
+				// refresh so the proposed-changes strip reflects whatever
+				// landed in the worktree.
+				void refreshProposedChanges(prId);
 				toast.error(err.message || 'AI chat failed');
 			},
 		},
@@ -589,6 +593,9 @@ export function abortChatTurn(prId: string): void {
 		}
 	}
 	setStreaming(prId, false);
+	// The agent may have committed before the user hit Stop — refresh so the
+	// proposed-changes strip reflects whatever landed in the worktree.
+	void refreshProposedChanges(prId);
 }
 
 export async function refreshProposedChanges(prId: string): Promise<void> {

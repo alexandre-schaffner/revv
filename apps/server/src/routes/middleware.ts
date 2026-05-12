@@ -1,6 +1,7 @@
 import { Elysia, status } from 'elysia';
 import { Cause, Option } from 'effect';
 import { auth } from '../auth';
+import { debug } from '../logger';
 import {
 	AiNotConfiguredError,
 	GitHubAuthError,
@@ -180,17 +181,33 @@ export function textStreamToSSE(textStream: ReadableStream<string>): ReadableStr
 	});
 }
 
+const CHAT_SSE_HEARTBEAT_MS = 15_000;
+
 /**
  * Wrap a stream of typed frames (`{kind: 'text' | 'activity', ...}`) used by
  * the chat route into an SSE-formatted byte stream. Each frame becomes a single
  * `data: <json>\n\n` event so the client's `parseSSEBuffer<ChatStreamFrame>`
  * gets the discriminator preserved.
+ *
+ * A `: keepalive` comment is sent every 15 s during quiet stretches to prevent
+ * Bun's idle-timeout and WKWebView's TCP-idle drop from killing the connection
+ * mid-turn.
  */
 export function chatStreamToSSE<T>(frameStream: ReadableStream<T>): ReadableStream<Uint8Array> {
 	const encoder = new TextEncoder();
+	let reader: ReadableStreamDefaultReader<T> | undefined;
+	let heartbeat: ReturnType<typeof setInterval> | undefined;
+
 	return new ReadableStream<Uint8Array>({
 		async start(controller) {
-			const reader = frameStream.getReader();
+			reader = frameStream.getReader();
+			heartbeat = setInterval(() => {
+				try {
+					controller.enqueue(encoder.encode(': keepalive\n\n'));
+				} catch {
+					// controller already closed — interval will be cleared in finally
+				}
+			}, CHAT_SSE_HEARTBEAT_MS);
 			try {
 				while (true) {
 					const { done, value } = await reader.read();
@@ -206,7 +223,14 @@ export function chatStreamToSSE<T>(frameStream: ReadableStream<T>): ReadableStre
 				});
 				controller.enqueue(encoder.encode(`event: error\ndata: ${errMsg}\n\n`));
 				controller.close();
+			} finally {
+				clearInterval(heartbeat);
 			}
+		},
+		cancel() {
+			clearInterval(heartbeat);
+			reader?.cancel().catch(() => {});
+			debug('chat-sse', 'client disconnected mid-stream');
 		},
 	});
 }

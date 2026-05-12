@@ -52,9 +52,19 @@ const app = new Elysia()
 		status: 'ok' as const,
 		timestamp: new Date().toISOString(),
 	}))
-	.listen(Number(process.env['PORT']) || API_PORT);
+	.listen({
+		port: Number(process.env['PORT']) || API_PORT,
+		// Prevent Bun's default idle timeout from killing long-running SSE streams
+		// (e.g. agent chat turns that go quiet for >10 s during tool execution).
+		idleTimeout: 255,
+	});
 
 console.log(`[revv-server] listening on http://localhost:${Number(process.env['PORT']) || API_PORT}`);
+
+// Log on graceful shutdown so we can distinguish bun --watch restarts (SIGTERM)
+// from Ctrl-C exits (SIGINT) in server logs. Helps diagnose mid-stream failures.
+process.on('SIGTERM', () => logError('server', 'SIGTERM received — shutting down (bun --watch restart or OS signal)'));
+process.on('SIGINT', () => logError('server', 'SIGINT received — shutting down'));
 
 // Re-launch walkthrough fibers for any rows left in `status='generating'`
 // by a previous run. Runs in the background so boot isn't blocked by slow

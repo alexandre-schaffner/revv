@@ -17,7 +17,7 @@
 		RefreshCw,
 		GitMerge,
 	} from '@lucide/svelte';
-	import { onMount, tick } from 'svelte';
+	import { tick } from 'svelte';
 	import { fly } from 'svelte/transition';
 	import { cubicOut, cubicIn } from 'svelte/easing';
 
@@ -209,19 +209,16 @@
 		});
 	});
 
-	// Pull proposed-changes count + persisted timeline when the panel mounts
-	// on a new PR. `loadChatHistory` is idempotent — only the first call per
-	// PR actually fetches.
-	onMount(() => {
+	// Hydrate on initial mount AND on PR switch. The panel is mounted once in
+	// AppShell and just gets a new `prId` prop on navigation, so this $effect
+	// is the only place that fires on PR switch. `loadChatHistory` is
+	// idempotent (gated by `loadedPrIds`); `refreshProposedChanges` always
+	// re-fetches so the strip reflects the freshly-selected PR's worktree.
+	$effect(() => {
 		if (prId) {
 			void refreshProposedChanges(prId);
 			void loadChatHistory(prId);
 		}
-	});
-
-	// PR switch — hydrate the timeline for the new PR.
-	$effect(() => {
-		if (prId) void loadChatHistory(prId);
 	});
 
 	function handleSubmit(e?: Event): void {

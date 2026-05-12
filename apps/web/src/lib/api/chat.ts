@@ -119,7 +119,16 @@ export function streamChatMessage(
 		})
 		.catch((err: Error) => {
 			if (err.name !== 'AbortError') {
-				callbacks.onError({ code: 'NETWORK_ERROR', message: err.message });
+				// WebKit surfaces connection drops as "Load failed"; Chromium as "Failed to fetch".
+				// Both mean the local server closed the connection unexpectedly.
+				const isConnectionDrop =
+					err.message === 'Load failed' || err.message === 'Failed to fetch';
+				callbacks.onError({
+					code: 'NETWORK_ERROR',
+					message: isConnectionDrop
+						? 'Lost connection to the local server. The agent may have stopped — check the server logs and try again.'
+						: err.message,
+				});
 			}
 		});
 
@@ -555,7 +564,16 @@ export function resolveConflictsAndPush(
 		})
 		.catch((err: Error) => {
 			if (err.name !== 'AbortError') {
-				callbacks.onError({ code: 'NETWORK_ERROR', message: err.message });
+				// WebKit surfaces connection drops as "Load failed"; Chromium as "Failed to fetch".
+				// Both mean the local server closed the connection unexpectedly.
+				const isConnectionDrop =
+					err.message === 'Load failed' || err.message === 'Failed to fetch';
+				callbacks.onError({
+					code: 'NETWORK_ERROR',
+					message: isConnectionDrop
+						? 'Lost connection to the local server. The agent may have stopped — check the server logs and try again.'
+						: err.message,
+				});
 			}
 		});
 
