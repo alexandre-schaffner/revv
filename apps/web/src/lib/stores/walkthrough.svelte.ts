@@ -1100,32 +1100,44 @@ export async function invalidateForPull(prId: string): Promise<void> {
 }
 
 /**
- * Disconnect the active PR's SSE on navigation away. The server-side job
- * continues running in the background (jobs are forkDaemon fibers protected
- * by a 5-permit semaphore, see WalkthroughJobs); aborting the SSE just drops
- * the client-side subscriber so we don't orphan a stalled controller in
- * `controllers`.
+ * Called when the review page unmounts (user navigates to a different PR or
+ * away entirely). We deactivate the active PR tracking but intentionally
+ * keep the SSE stream alive in `controllers` if the walkthrough is still
+ * generating.
  *
- * Why we abort even though "the server keeps generating": leaving the
- * controller in the map after the page unmounts means the next mount cycle
- * (hydrateFromCache → streamWalkthrough) short-circuits at the
- * `controllers.has(prId)` guard and never opens a fresh SSE — so when the
- * user comes back to the PR, the in-progress generation appears frozen even
- * though the server has been writing to the DB the whole time. By aborting
- * here, the next streamWalkthrough opens a fresh SSE whose snapshot replay
- * catches the UI up to the server's actual state.
+ * Why we no longer abort on navigation:
+ * Each SSE stream occupies one HTTP/1.1 connection slot. Aborting on
+ * navigate-away and immediately opening a new one for the destination PR
+ * races with the diff-files fetch for that PR — the browser's connection
+ * pool (capped at ~6 per host) may not release the old slot before the new
+ * fetch queues, causing the diff to appear stuck on "Loading…". By leaving
+ * generating streams alive, the connection is already open and no slot is
+ * transiently double-counted. `enforceStreamCap()` evicts the oldest
+ * non-active stream if needed when a new one opens.
+ *
+ * The original concern ("next mount short-circuits at controllers.has and
+ * appears frozen") is addressed in `streamWalkthrough`, which checks for
+ * stale streams (STALE_STREAM_MS = 10 min) and re-opens when appropriate.
+ * A non-generating (completed / errored) stream is aborted below so its
+ * connection slot is freed promptly.
  *
  * Marks the abort as `intentional: true` so streamWalkthrough's finally
- * block doesn't surface an "ended unexpectedly" error when the user
- * navigates away early in generation (before any summary lands). The
- * entry's `isStreaming` flag stays true so `getPrWalkthroughStatus`
+ * block doesn't surface an "ended unexpectedly" error.
+ * The entry's `isStreaming` flag stays true so `getPrWalkthroughStatus`
  * continues to report 'generating' from the sidebar/topbar perspective
- * until the WS `walkthrough:complete` lands or the user navigates back
- * and the SSE re-attaches.
+ * until the WS `walkthrough:complete` lands or the user navigates back.
  */
 export function deactivate(): void {
 	if (activePrId) {
-		abortPr(activePrId, true);
+		const entry = entries.get(activePrId);
+		// Only abort if the stream is NOT actively generating — i.e., it's
+		// already done, errored, or was never streaming. An active generating
+		// stream is left in `controllers` so it keeps its HTTP connection slot
+		// and doesn't race with the destination PR's diff-files fetch.
+		const isGenerating = entry?.isStreaming === true && !entry?.doneReceived && !entry?.streamError;
+		if (!isGenerating) {
+			abortPr(activePrId, true);
+		}
 	}
 	activePrId = null;
 }
@@ -1180,11 +1192,20 @@ export function onWalkthroughComplete(prId: string, walkthroughId: string): void
 			// "already complete" check at lines 348-349 / 494-503 and
 			// surface stale partial content. Stash the walkthroughId so
 			// the next visit knows what id the row resolves to, and leave
-			// `isStreaming: true` / `doneReceived: false` so the next
-			// mount's hydrateFromCache fetches the canonical row from the
-			// server and overwrites the partial state.
+			// `doneReceived: false` so the next mount's hydrateFromCache
+			// fetches the canonical row from the server and overwrites the
+			// partial state.
+			//
+			// However, we DO abort the SSE controller here: the server just
+			// confirmed generation is complete, so there's nothing left to
+			// stream. Keeping the controller open would permanently hold an
+			// HTTP/1.1 connection slot for a stream that will never deliver
+			// new events. `enforceStreamCap` can't evict it because it only
+			// runs when opening a new stream.
+			abortPr(prId, true);
 			updateEntry(prId, (e) => {
 				e.walkthroughId = walkthroughId;
+				e.isStreaming = false;
 			});
 		}
 	} else {

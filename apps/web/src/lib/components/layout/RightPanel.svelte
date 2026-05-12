@@ -51,6 +51,7 @@
 	} from '$lib/stores/review.svelte';
 	import { fetchProposedDiff } from '$lib/api/chat';
 	import { renderMarkdown } from '$lib/utils/markdown';
+	import { toast } from 'svelte-sonner';
 	import { motion } from '$lib/motion';
 	import ProposedDiffModal from '$lib/components/review/ProposedDiffModal.svelte';
 	import {
@@ -338,8 +339,8 @@
 		try {
 			const body = await fetchProposedDiff(prId, commit.sha);
 			diffOpen = { sha: commit.sha, subject: commit.subject, body };
-		} catch {
-			// Best-effort — failures are silent; the user can retry.
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : 'Failed to load diff');
 		}
 	}
 
