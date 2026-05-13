@@ -44,7 +44,11 @@
 	import { workerManager } from '$lib/utils/worker-pool';
 	import { onMount, onDestroy } from 'svelte';
 	import { mountInto, cleanupAllMounted } from '$lib/utils/annotation-mount';
-	import AnnotationThread from './AnnotationThread.svelte';
+	import {
+		ANNOTATION_HOST_STYLE,
+		createMarkerDot,
+		mountAnnotationThread,
+	} from './annotation-renderers';
 	import AnnotationCommentInput from './AnnotationCommentInput.svelte';
 	import {
 		getActivePanel,
@@ -307,7 +311,7 @@
 					if (!meta) return undefined;
 
 					const host = document.createElement('div');
-					host.style.cssText = 'display:block;width:100%;';
+					host.style.cssText = ANNOTATION_HOST_STYLE;
 
 					if (meta.isInputActive) {
 						mountInto(host, AnnotationCommentInput, {
@@ -325,77 +329,37 @@
 						const messages = threadMessages[meta.threadId] ?? [];
 						if (!thread) return host;
 
-						mountInto(host, AnnotationThread, {
+						mountAnnotationThread(host, {
 							thread,
 							messages,
-							onReply: () => {
-								onReplyToggle?.(meta.threadId);
-							},
-							onResolve: () => {
-								onCommentResolve?.(meta.threadId);
-							},
-							onReopen: () => {
-								onCommentReopen?.(meta.threadId);
-							},
-							onDiscard: () => {
-								onCommentDiscard?.(meta.threadId);
-							},
-							onDiscardReply: (messageId: string) => {
-								onDiscardReply?.(meta.threadId, messageId);
-							},
-							onCollapse: () => {
-								onAnnotationToggle?.(meta.threadId);
-							},
-							onApplySuggestion: (suggestion: string) =>
-								onApplySuggestion?.(meta.threadId, suggestion),
+							threadId: meta.threadId,
 							isReplying: meta.isReplying,
 							isPending: meta.isPending,
-							onReplySubmit: (body: string) => {
-								onReplySubmit?.(meta.threadId, body);
-							},
-							onReplyDismiss: () => {
-								onReplyToggle?.(meta.threadId);
-							},
-							onEditMessage: (messageId: string, body: string) => {
-								onEditMessage?.(meta.threadId, messageId, body);
-							},
+							onReplyToggle,
+							onCommentResolve,
+							onCommentReopen,
+							onCommentDiscard,
+							onDiscardReply,
+							onAnnotationToggle,
+							onApplySuggestion,
+							onReplySubmit,
+							onEditMessage,
 						});
 					} else {
-						const dot = document.createElement('span');
-						const isResolved =
-							meta.status === 'resolved' || meta.status === 'wont_fix';
-						const isPending =
-							meta.status === 'pending_coder' ||
-							meta.status === 'pending_reviewer';
-						const color = isResolved
-							? 'var(--color-border)'
-							: isPending
-								? 'var(--color-warning)'
-								: 'var(--color-accent)';
-						dot.style.cssText =
-							`display:inline-flex;align-items:center;justify-content:center;` +
-							`width:16px;height:16px;border-radius:50%;` +
-							`background:color-mix(in srgb, ${color} 13%, transparent);` +
-							`border:1.5px solid ${color};cursor:pointer;margin:4px;`;
-						const inner = document.createElement('span');
-						inner.style.cssText =
-							`display:block;width:6px;height:6px;border-radius:50%;background:${color};`;
-						dot.appendChild(inner);
-						dot.addEventListener('click', () => {
-							onAnnotationToggle?.(meta.threadId);
-						});
-						host.appendChild(dot);
+						host.appendChild(
+							createMarkerDot(meta, () => onAnnotationToggle?.(meta.threadId))
+						);
 					}
 
 					return host;
 				},
 
 				onPostRender(node) {
+					// Pierre hardcodes `pre.tabIndex = 0` (see setWrapperNodeProps)
+					// with no opt-out. We use focus-mode for line-level keyboard
+					// navigation instead, so opt this pre out of the tab order.
 					const pre = node.shadowRoot?.querySelector('pre');
-					if (pre) {
-						pre.removeAttribute('tabindex');
-						pre.setAttribute('tabindex', '-1');
-					}
+					if (pre) pre.tabIndex = -1;
 				},
 			};
 

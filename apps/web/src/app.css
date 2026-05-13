@@ -512,6 +512,9 @@
     --color-score-info-conf-bg: var(--revv-score-info-conf-bg);
     --color-score-info-conf: var(--revv-score-info-conf);
 
+    /* Radii */
+    --radius-card: 8px;
+
     /* Motion — durations
        Mirrored verbatim in src/lib/motion/tokens.ts. Edit both. */
     --duration-instant: 80ms;   /* hover, focus rings, micro-state */

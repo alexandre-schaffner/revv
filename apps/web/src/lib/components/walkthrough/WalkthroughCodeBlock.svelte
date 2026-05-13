@@ -40,7 +40,7 @@
 			file: {
 				name: block.filePath,
 				contents: block.content,
-				lang: block.language as any,
+				lang: block.language,
 			},
 		});
 

@@ -295,6 +295,40 @@ export async function fetchProposedDiff(
 	return await res.text();
 }
 
+export interface ProposedDiffFile {
+	path: string;
+	oldPath: string | null;
+	oldContent: string | null;
+	newContent: string | null;
+	status: string;
+	binary: boolean;
+}
+
+/**
+ * Fetch full old/new file contents for a proposed commit. The diff modal
+ * uses these with Pierre's `parseDiffFromFile`, which produces a
+ * non-partial `FileDiffMetadata` — the prerequisite for the line-info
+ * separator's expand-up / expand-down controls to be enabled.
+ */
+export async function fetchProposedDiffFiles(
+	prId: string,
+	sha: string,
+): Promise<ProposedDiffFile[]> {
+	const res = await fetch(
+		`${API_BASE_URL}/api/chat/${prId}/proposed-changes/${sha}/files`,
+		{ headers: authHeaders() },
+	);
+	if (!res.ok) {
+		throw new Error(`Failed to fetch files for ${sha}: ${res.status}`);
+	}
+	const data = (await res.json()) as {
+		files?: ProposedDiffFile[];
+		error?: string;
+	};
+	if (data.error) throw new Error(data.error);
+	return data.files ?? [];
+}
+
 // ── Merge & push ──────────────────────────────────────────────────────────
 
 export type MergePushResult =

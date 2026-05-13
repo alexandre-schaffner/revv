@@ -19,6 +19,9 @@ import { Elysia, t } from 'elysia';
 import { Effect } from 'effect';
 import { and, eq, desc } from 'drizzle-orm';
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
+import { join } from 'node:path';
 import { AppRuntime } from '../runtime';
 import { AiService, resolveAgent } from '../services/Ai';
 import {
@@ -157,6 +160,19 @@ function gitStdout(args: string[], cwd: string, timeoutMs = 10_000): Promise<str
 }
 
 /**
+ * Returns the contents of `<sha>:<path>` or `null` if git fails (typically
+ * because the path doesn't exist at that revision — e.g. asking for a
+ * newly-added file at the parent commit).
+ */
+async function gitShowSafe(sha: string, path: string, cwd: string): Promise<string | null> {
+	try {
+		return await gitStdout(['show', `${sha}:${path}`], cwd, 10_000);
+	} catch {
+		return null;
+	}
+}
+
+/**
  * Best-effort git command runner — ignores all errors. Used for cleanup
  * operations like `rebase --abort` where we want to clean up after a
  * failure without risking a secondary error obscuring the first.
@@ -166,6 +182,142 @@ async function gitStdoutBestEffort(args: string[], cwd: string): Promise<void> {
 		await gitStdout(args, cwd, 10_000);
 	} catch {
 		// Intentionally swallowed — best-effort only.
+	}
+}
+
+/**
+ * Rewind a chat worktree back to the PR's head SHA, discarding any unpushed
+ * agent commits sitting on top.
+ *
+ * This is load-bearing for the "clear conversation" flow: if it silently
+ * fails, the agent's old commits stay on the local branch and
+ * `acquirePrWorktree` preserves them on the next turn (its `merge-base
+ * --is-ancestor` check is exit-0, so the descendant tip is kept by design).
+ * The user then sees the *exact same SHAs* re-appear in the proposed-changes
+ * strip after clearing — which is the bug this helper exists to prevent.
+ *
+ * Three failure modes are handled defensively:
+ *   1. Stale `index.lock` / `HEAD.lock` from a SIGTERM'd agent turn — removed
+ *      before reset so it doesn't trip with "Unable to create '.../index.lock'".
+ *   2. Mid-merge / mid-rebase state from a SIGKILL'd merge-push — aborted
+ *      best-effort so the MERGE_HEAD / rebase-merge dir doesn't poison reset.
+ *   3. Detached HEAD (worktree somehow not on the expected branch ref) —
+ *      reattach the branch ref to prHeadSha via `update-ref` and re-point
+ *      HEAD via `symbolic-ref`, so subsequent `acquirePrWorktree` sees a
+ *      clean branch checkout at the right SHA.
+ *
+ * Post-reset we verify HEAD matches `prHeadSha` and log loudly on mismatch
+ * — silent reset failures were the original bug.
+ */
+async function discardAgentCommits(opts: {
+	worktreePath: string;
+	branchName: string;
+	prHeadSha: string;
+}): Promise<void> {
+	const { worktreePath, branchName, prHeadSha } = opts;
+
+	// 1. Clear any lock files. A leftover index.lock from an aborted agent
+	// turn is the single most common reason `reset --hard` fails on this
+	// worktree. The lockfile lives next to the worktree's gitdir, which
+	// sits inside the clone path, not the worktree itself — `git rev-parse
+	// --git-dir` resolves it.
+	let gitDir: string | null = null;
+	try {
+		gitDir = (await gitStdout(['rev-parse', '--git-dir'], worktreePath, 5_000)).trim();
+	} catch (err) {
+		logError(
+			'chat-clear',
+			'rev-parse --git-dir failed (worktree likely corrupt):',
+			err instanceof Error ? err.message : String(err),
+		);
+		return;
+	}
+	const absoluteGitDir = gitDir.startsWith('/') ? gitDir : join(worktreePath, gitDir);
+	for (const lockName of ['index.lock', 'HEAD.lock']) {
+		const lockPath = join(absoluteGitDir, lockName);
+		try {
+			if (existsSync(lockPath)) {
+				await rm(lockPath, { force: true });
+			}
+		} catch (err) {
+			logError(
+				'chat-clear',
+				`failed to clear stale ${lockName}:`,
+				err instanceof Error ? err.message : String(err),
+			);
+		}
+	}
+
+	// 2. Abort any half-finished merge/rebase. Both fail when nothing is in
+	// progress — that's fine, we're using the best-effort variant.
+	await gitStdoutBestEffort(['merge', '--abort'], worktreePath);
+	await gitStdoutBestEffort(['rebase', '--abort'], worktreePath);
+	await gitStdoutBestEffort(['cherry-pick', '--abort'], worktreePath);
+
+	// 3. Ensure HEAD points at the branch ref (not a detached commit). If
+	// HEAD is detached, `reset --hard` only moves HEAD — the branch ref
+	// keeps its old tip, so acquirePrWorktree later reattaches to the old
+	// tip via `worktree add`. Pointing HEAD at the branch first means the
+	// reset below updates both the working tree and the branch ref atomically.
+	try {
+		const headRef = (
+			await gitStdout(['symbolic-ref', '--quiet', 'HEAD'], worktreePath, 5_000).catch(
+				() => '',
+			)
+		).trim();
+		if (headRef !== `refs/heads/${branchName}`) {
+			await gitStdoutBestEffort(
+				['symbolic-ref', 'HEAD', `refs/heads/${branchName}`],
+				worktreePath,
+			);
+		}
+	} catch (err) {
+		logError(
+			'chat-clear',
+			'failed to verify/reattach HEAD:',
+			err instanceof Error ? err.message : String(err),
+		);
+	}
+
+	// 4. The reset itself. This is the load-bearing line — everything above
+	// is just clearing obstacles. We log the actual git failure so we can
+	// diagnose silent-failure regressions like the one that motivated this
+	// helper.
+	try {
+		await gitStdout(['reset', '--hard', prHeadSha], worktreePath, 30_000);
+	} catch (err) {
+		logError(
+			'chat-clear',
+			`reset --hard ${prHeadSha} failed in ${worktreePath}:`,
+			err instanceof Error ? err.message : String(err),
+		);
+		// Fall through to verification — even a failed reset may have
+		// partially worked, and we want the log to capture the final state.
+	}
+
+	// 5. Drop any untracked files the agent created but never committed.
+	// Without this, the next chat session inherits ghost files in the
+	// worktree that confuse `git status` and the agent's own context.
+	await gitStdoutBestEffort(['clean', '-fd'], worktreePath);
+
+	// 6. Verify. If HEAD didn't end up at prHeadSha the next chat turn
+	// will reproduce the original bug (same SHAs reappear) — emit a loud
+	// log so the regression is visible without strace-level debugging.
+	try {
+		const finalSha = (await gitStdout(['rev-parse', 'HEAD'], worktreePath, 5_000)).trim();
+		if (finalSha !== prHeadSha) {
+			logError(
+				'chat-clear',
+				`worktree rewind did not land at prHeadSha. ` +
+					`expected=${prHeadSha} got=${finalSha} worktree=${worktreePath}`,
+			);
+		}
+	} catch (err) {
+		logError(
+			'chat-clear',
+			'post-reset HEAD verification failed:',
+			err instanceof Error ? err.message : String(err),
+		);
 	}
 }
 
@@ -428,6 +580,19 @@ export const chatRoute = new Elysia()
 						);
 						const agent = resolveAgent(settings);
 
+						// Check for an existing session BEFORE acquiring the
+						// worktree. No row means this is a fresh start (e.g.
+						// the user just cleared chat), so after we acquire the
+						// worktree we must hard-reset it — stale agent commits
+						// may have survived the clear if the reset raced with
+						// this new message.
+						const existingSessionRow = yield* chatSessions.find(
+							pr.id,
+							agent,
+							headSha,
+						);
+						const isFreshStart = existingSessionRow === null;
+
 						// Acquire (or refresh) the per-PR worktree. Shared across
 						// walkthrough generation and every chat session for this
 						// PR. If HEAD is a descendant of `prHeadSha` — i.e. the
@@ -442,6 +607,20 @@ export const chatRoute = new Elysia()
 							prHeadSha: headSha,
 							githubToken: token,
 						});
+
+					// Fresh start: hard-reset the worktree to `prHeadSha`
+					// so any stale agent commits that survived the clear
+					// (due to a race between discardAgentCommits and this
+					// handler) are unconditionally removed.
+					if (isFreshStart) {
+						yield* Effect.promise(() =>
+							discardAgentCommits({
+								worktreePath,
+								branchName,
+								prHeadSha: headSha,
+							}),
+						);
+					}
 
 						// Eagerly create (or look up) the chat_sessions row so
 						// chat_messages and chat_activities can FK to it BEFORE
@@ -690,7 +869,7 @@ export const chatRoute = new Elysia()
 		'/api/chat/:prId',
 		async (ctx) => {
 			try {
-				await AppRuntime.runPromise(
+				const latest = await AppRuntime.runPromise(
 					Effect.gen(function* () {
 						const prCtx = yield* PrContextService;
 						const chatSessions = yield* ChatSessionService;
@@ -709,13 +888,30 @@ export const chatRoute = new Elysia()
 						);
 						const agent = resolveAgent(settings);
 
+						// Capture the active worktree before dropping rows so we
+						// can rewind it to the PR head SHA below — clearing the
+						// conversation also discards any unpushed agent commits
+						// the user accumulated during this session.
+						const activeRow = yield* chatSessions.findLatestForPr(pr.id, agent);
+
 						// Drop every chat-session row for (pr, agent). The
 						// per-PR worktree itself stays put — it's shared with
 						// walkthrough generation and re-used across chat
 						// sessions, refreshed in place on the next acquire.
 						yield* chatSessions.clearAllForPr(pr.id, agent);
+
+						return activeRow;
 					}),
 				);
+
+				if (latest && existsSync(latest.worktreePath)) {
+					await discardAgentCommits({
+						worktreePath: latest.worktreePath,
+						branchName: latest.branchName,
+						prHeadSha: latest.prHeadSha,
+					});
+				}
+
 				return new Response(null, { status: 204 });
 			} catch (e) {
 				ctx.set.status = 500;
@@ -843,6 +1039,127 @@ export const chatRoute = new Elysia()
 				return new Response(diff, {
 					headers: { 'Content-Type': 'text/plain; charset=utf-8' },
 				});
+			} catch (e) {
+				const err = unwrapEffectError(e);
+				ctx.set.status = 500;
+				return {
+					error: err instanceof Error ? err.message : 'Internal error',
+				};
+			}
+		},
+		{
+			params: t.Object({ prId: t.String(), sha: t.String() }),
+		},
+	)
+	.get(
+		'/api/chat/:prId/proposed-changes/:sha/files',
+		async (ctx) => {
+			try {
+				const result = await AppRuntime.runPromise(
+					Effect.gen(function* () {
+						const prCtx = yield* PrContextService;
+						const chatSessions = yield* ChatSessionService;
+						const settingsService = yield* SettingsService;
+						const { db } = yield* DbService;
+
+						const { pr } = yield* prCtx.resolveBasic(
+							ctx.params.prId,
+							ctx.session.user.id,
+						);
+
+						const settings = yield* withDb(db, settingsService.getSettings()).pipe(
+							Effect.orElseSucceed(
+								() => ({ aiAgent: 'opencode' }) as { aiAgent: string | null },
+							),
+						);
+						const agent = resolveAgent(settings);
+
+						if (!pr.headSha) return null;
+						return yield* chatSessions.find(pr.id, agent, pr.headSha);
+					}),
+				);
+
+				if (!result) {
+					ctx.set.status = 404;
+					return { error: 'No active chat session for this PR' };
+				}
+
+				if (!/^[0-9a-f]{7,40}$/i.test(ctx.params.sha)) {
+					ctx.set.status = 400;
+					return { error: 'Invalid commit SHA' };
+				}
+
+				// `-z -M --name-status` outputs one record per changed file as
+				// `<status>\0<path>` (or `R<sim>\0<oldPath>\0<newPath>` for renames),
+				// records concatenated with no separator.
+				const raw = await gitStdout(
+					[
+						'diff-tree',
+						'--no-commit-id',
+						'--name-status',
+						'-r',
+						'-z',
+						'-M',
+						ctx.params.sha,
+					],
+					result.worktreePath,
+					15_000,
+				);
+
+				const tokens = raw.split('\0').filter((t) => t.length > 0);
+				const fileTasks: Array<Promise<{
+					path: string;
+					oldPath: string | null;
+					oldContent: string | null;
+					newContent: string | null;
+					status: string;
+					binary: boolean;
+				}>> = [];
+
+				for (let i = 0; i < tokens.length; ) {
+					const status = tokens[i++];
+					if (status == null) break;
+					const isRenameOrCopy = status.startsWith('R') || status.startsWith('C');
+					const oldPath = isRenameOrCopy ? tokens[i++] ?? null : null;
+					const path = tokens[i++];
+					if (path == null) break;
+
+					const isAdd = status === 'A';
+					const isDel = status === 'D';
+					const oldRef = isAdd ? null : oldPath ?? path;
+					const newRef = isDel ? null : path;
+
+					fileTasks.push(
+						(async () => {
+							const [oldRaw, newRaw] = await Promise.all([
+								oldRef
+									? gitShowSafe(`${ctx.params.sha}^`, oldRef, result.worktreePath)
+									: Promise.resolve(null),
+								newRef
+									? gitShowSafe(ctx.params.sha, newRef, result.worktreePath)
+									: Promise.resolve(null),
+							]);
+							// Cheap binary heuristic: a null byte anywhere in either
+							// version. Good enough for the typical mix of text + images
+							// the agent produces; binary files just render as a
+							// no-content placeholder on the client.
+							const binary =
+								(oldRaw != null && oldRaw.includes('\0')) ||
+								(newRaw != null && newRaw.includes('\0'));
+							return {
+								path,
+								oldPath,
+								status,
+								oldContent: binary ? null : oldRaw,
+								newContent: binary ? null : newRaw,
+								binary,
+							};
+						})(),
+					);
+				}
+
+				const files = await Promise.all(fileTasks);
+				return { files };
 			} catch (e) {
 				const err = unwrapEffectError(e);
 				ctx.set.status = 500;

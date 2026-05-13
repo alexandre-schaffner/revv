@@ -546,6 +546,13 @@ export async function clearChatHistory(prId: string): Promise<void> {
 		loadedPrIds.delete(prId);
 		loadedPrIds = new Set(loadedPrIds);
 	}
+	// Clear all proposedComments entries for this prId.
+	for (const key of proposedComments.keys()) {
+		if (key.startsWith(`${prId}::`)) {
+			proposedComments.delete(key);
+		}
+	}
+	proposedComments = new Map(proposedComments);
 	try {
 		await clearChat(prId);
 	} catch (err) {
@@ -839,6 +846,12 @@ export async function discardProposedCommitAction(
 			}
 		} else {
 			await refreshProposedChanges(prId);
+			// Remove orphaned comment state for the discarded SHA.
+			const key = commentKey(prId, sha);
+			if (proposedComments.has(key)) {
+				proposedComments.delete(key);
+				proposedComments = new Map(proposedComments);
+			}
 		}
 		toast.success('Commit discarded');
 	} catch (err) {

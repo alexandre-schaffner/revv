@@ -18,7 +18,7 @@
 		editThreadMessage
 	} from '$lib/stores/review.svelte';
 	import { getUser } from '$lib/stores/auth.svelte';
-	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+	import { SvelteMap } from 'svelte/reactivity';
 
 	// ── Re-export for consumers ───────────────────────────────────────────────
 
@@ -46,9 +46,6 @@
 	let { file, themeType = 'dark', onLineClick, onModeChange, onTokenHover, commentTrigger = null }: Props = $props();
 
 	// ── Interaction state ─────────────────────────────────────────────────────
-
-	/** Thread IDs currently expanded inline. */
-	const expandedThreadIds = new SvelteSet<string>();
 
 	/** The thread currently showing a reply input (only one at a time). */
 	let replyingThreadId = $state<string | null>(null);
@@ -89,7 +86,7 @@
 				threadId: thread.id,
 				status: thread.status,
 				messageCount: getThreadMessages(thread.id).length,
-				isExpanded: expandedThreadIds.has(thread.id),
+				isExpanded: true,
 				isInputActive: false,
 				isReplying: replyingThreadId === thread.id,
 				isPending: thread.externalCommentId == null
@@ -173,22 +170,8 @@
 		onLineClick?.(info);
 	}
 
-	function handleAnnotationToggle(threadId: string) {
-		if (expandedThreadIds.has(threadId)) {
-			expandedThreadIds.delete(threadId);
-			// Clear reply state when collapsing
-			if (replyingThreadId === threadId) replyingThreadId = null;
-		} else {
-			expandedThreadIds.add(threadId);
-		}
-	}
-
 	function handleReplyToggle(threadId: string) {
 		replyingThreadId = replyingThreadId === threadId ? null : threadId;
-		// Ensure thread is expanded when reply input is opened
-		if (replyingThreadId === threadId) {
-			expandedThreadIds.add(threadId);
-		}
 	}
 
 	async function handleReplySubmit(threadId: string, body: string) {
@@ -222,7 +205,7 @@
 		const authorName = u?.githubLogin ?? u?.name ?? 'You';
 		const authorAvatarUrl = u?.image ?? null;
 
-		const result = await addThread({
+		await addThread({
 			filePath,
 			startLine: lineNo,
 			endLine,
@@ -235,10 +218,6 @@
 				messageType: 'comment',
 			},
 		});
-
-		if (result) {
-			expandedThreadIds.add(result.thread.id);
-		}
 	}
 
 	function handleCommentDismiss(filePath: string, lineNo: number) {
@@ -287,7 +266,6 @@
 			{threadById}
 			onLineClick={handleLineClick}
 			{onModeChange}
-			onAnnotationToggle={handleAnnotationToggle}
 			onReplyToggle={handleReplyToggle}
 			onReplySubmit={handleReplySubmit}
 			onCommentSubmit={handleCommentSubmit}

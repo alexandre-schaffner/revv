@@ -646,10 +646,10 @@ export function translateOpencodeEvent(
 		// we fire once on the first event we see for this part type.
 		if (status !== null && status !== "running") return;
 
-		const toolName = normalizeToolName(rawToolName);
-		if (EXPLORATION_TOOLS.has(toolName)) {
-			const input = state?.["input"] ?? props["input"];
-			cb.onExploration(toolName, buildExplorationDescription(toolName, input));
+		const input = state?.["input"] ?? props["input"];
+		const activity = buildActivity(rawToolName, input);
+		if (EXPLORATION_TOOLS.has(activity.toolName)) {
+			cb.onExploration(activity.toolName, activity.summary);
 			return;
 		}
 		// MCP tool calls — content flows through the HTTP MCP route per

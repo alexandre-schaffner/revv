@@ -49,7 +49,7 @@
 		getPrScrollPosition,
 		setPrScrollPosition,
 	} from '$lib/stores/review.svelte';
-	import { fetchProposedDiff } from '$lib/api/chat';
+	import { fetchProposedDiffFiles, type ProposedDiffFile } from '$lib/api/chat';
 	import { renderMarkdown } from '$lib/utils/markdown';
 	import { toast } from 'svelte-sonner';
 	import { motion } from '$lib/motion';
@@ -110,7 +110,11 @@
 	let textareaEl: HTMLTextAreaElement | undefined = $state();
 	let messagesEl: HTMLDivElement | undefined = $state();
 	let proposedExpanded = $state(false);
-	let diffOpen = $state<{ sha: string; subject: string; body: string } | null>(null);
+	let diffOpen = $state<{
+		sha: string;
+		subject: string;
+		fileContents: ProposedDiffFile[];
+	} | null>(null);
 	let conflictDialog = $state<{ files: string[]; branch: string } | null>(null);
 	let pushSuccessTrigger = $state(0);
 	let pushMenuOpen = $state(false);
@@ -337,8 +341,8 @@
 	async function openDiff(commit: { sha: string; subject: string }): Promise<void> {
 		if (!prId) return;
 		try {
-			const body = await fetchProposedDiff(prId, commit.sha);
-			diffOpen = { sha: commit.sha, subject: commit.subject, body };
+			const fileContents = await fetchProposedDiffFiles(prId, commit.sha);
+			diffOpen = { sha: commit.sha, subject: commit.subject, fileContents };
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : 'Failed to load diff');
 		}
@@ -421,8 +425,12 @@
 				<button
 					class="icon-btn"
 					onclick={handleClear}
-					title="Clear conversation"
-					aria-label="Clear conversation"
+					title={commitCount > 0
+						? `Clear conversation and discard ${commitCount} proposed commit${commitCount === 1 ? '' : 's'}`
+						: 'Clear conversation'}
+					aria-label={commitCount > 0
+						? 'Clear conversation and discard proposed commits'
+						: 'Clear conversation'}
 					disabled={isPushing || isResolving}
 				>
 					<Trash2 size={13} />
@@ -901,7 +909,7 @@
 		prId={prId}
 		sha={diffOpen.sha}
 		subject={diffOpen.subject}
-		body={diffOpen.body}
+		fileContents={diffOpen.fileContents}
 		onClose={() => (diffOpen = null)}
 	/>
 {/if}

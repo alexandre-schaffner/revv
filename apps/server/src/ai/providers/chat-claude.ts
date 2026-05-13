@@ -170,16 +170,34 @@ export function streamChatViaClaude(
 				// streaming); walkthrough drops it on the floor (separate
 				// caller). Tool-call → activity, filtered by `SURFACED_TOOLS`
 				// for built-ins or the chat-context MCP server name for MCP.
+				//
+				// `hasEmittedText` + `lastWasNonText` insert a paragraph break
+				// before any text-delta that follows a non-text event (tool
+				// call, reasoning, error). Without this, Claude's content
+				// blocks ("Now let me check:", tool_use, "Clear picture.")
+				// get concatenated into "Now let me check:Clear picture." in
+				// the assistant bubble because text-deltas are appended via
+				// `||`. The separator lands in both the streamed frame and
+				// the persisted content, so reloads also render correctly.
+				let hasEmittedText = false;
+				let lastWasNonText = false;
 				const emit = (ev: import("../agent-stream").NormalizedAgentEvent): void => {
 					if (ev.kind === "text-delta") {
-						controller.enqueue({ kind: "text", data: ev.data });
+						const needsSeparator =
+							hasEmittedText && lastWasNonText && !ev.data.startsWith("\n");
+						const data = needsSeparator ? `\n\n${ev.data}` : ev.data;
+						controller.enqueue({ kind: "text", data });
+						hasEmittedText = true;
+						lastWasNonText = false;
 					} else if (ev.kind === "reasoning-delta") {
 						controller.enqueue({ kind: "reasoning", data: ev.data });
+						lastWasNonText = true;
 					} else if (ev.kind === "tool-call") {
 						if (ev.source === "builtin") {
 							if (!SURFACED_TOOLS.has(ev.toolName)) return;
 							const activity = buildActivity(ev.toolName, ev.input);
 							controller.enqueue({ kind: "activity", ...activity });
+							lastWasNonText = true;
 						} else if (
 							ev.source === "mcp" &&
 							ev.mcpServer === CHAT_CONTEXT_MCP_SERVER
@@ -191,9 +209,12 @@ export function streamChatViaClaude(
 								summary: `Looking up review context (${ev.bareName})`,
 								...(ev.input !== undefined ? { payload: ev.input } : {}),
 							});
+							lastWasNonText = true;
 						}
 					} else if (ev.kind === "error") {
 						controller.enqueue({ kind: "text", data: `\n\n_Error: ${ev.message}_` });
+						hasEmittedText = true;
+						lastWasNonText = false;
 					}
 				};
 

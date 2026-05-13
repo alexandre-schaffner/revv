@@ -3,12 +3,11 @@
 	import { X, PanelLeftClose, PanelLeftOpen, MessageSquare, Send, Trash2, GitMerge, Loader2 } from '@lucide/svelte';
 	import {
 		FileDiff as PierreFileDiff,
-		parsePatchFiles,
+		parseDiffFromFile,
 		type DiffLineAnnotation,
 		type FileDiffMetadata,
 		type FileDiffOptions,
 	} from '@pierre/diffs';
-	import { renderHunkSeparator, HUNK_SEPARATOR_CSS } from '$lib/utils/hunk-separator';
 	import { FileTree, type GitStatusEntry } from '@pierre/trees';
 	import { SvelteMap } from 'svelte/reactivity';
 	import { workerManager } from '$lib/utils/worker-pool';
@@ -29,24 +28,52 @@
 		isCherryPickingCommit,
 		type ProposedComment,
 	} from '$lib/stores/chat.svelte';
+	import type { ProposedDiffFile } from '$lib/api/chat';
 
 	interface Props {
 		prId: string;
 		sha: string;
 		subject: string;
-		body: string;
+		fileContents: ProposedDiffFile[];
 		onClose: () => void;
 	}
 
-	let { prId, sha, subject, body, onClose }: Props = $props();
+	let { prId, sha, subject, fileContents, onClose }: Props = $props();
 
-	// Parsed once on mount. The modal is short-lived (a fresh instance per
-	// commit click), so a snapshot read is exactly what we want — `untrack`
-	// tells Svelte the snapshot is intentional rather than a missed
-	// dependency.
-	const files: FileDiffMetadata[] = untrack(() =>
-		parsePatchFiles(body, `chat-diff-${sha}`).flatMap((p) => p.files),
-	);
+	// Build non-partial FileDiffMetadata from full file pairs. `isPartial: false`
+	// is what unlocks the line-info separator's expand controls — Pierre gates
+	// `isExpandable` on `!fileDiff.isPartial` (DiffHunksRenderer.js).
+	// Binary files (server returns both contents as null) get skipped entirely.
+	const files: FileDiffMetadata[] = untrack(() => {
+		const out: FileDiffMetadata[] = [];
+		for (let i = 0; i < fileContents.length; i++) {
+			const f = fileContents[i];
+			if (!f || f.binary) continue;
+			const oldName = f.oldPath ?? f.path;
+			const newName = f.path;
+			const cacheKeyBase = `chat-diff-${sha}-${i}`;
+			try {
+				const meta = parseDiffFromFile(
+					{
+						name: oldName,
+						contents: f.oldContent ?? '',
+						cacheKey: `${cacheKeyBase}-old`,
+					},
+					{
+						name: newName,
+						contents: f.newContent ?? '',
+						cacheKey: `${cacheKeyBase}-new`,
+					},
+				);
+				out.push(meta);
+			} catch {
+				// `parseDiffFromFile` throws on identical inputs ("if the files
+				// are the same maybe?"). For a rename with no content change we
+				// still want the file listed.
+			}
+		}
+		return out;
+	});
 
 	const paths = files.map((f) => f.name);
 
@@ -191,11 +218,13 @@
 			diffStyle,
 			theme: { dark: 'pierre-dark', light: 'pierre-light' },
 			themeType: theme,
-			expandUnchanged: true,
+			// Collapse unchanged regions by default so line-info separators have
+			// something to expand. With `true`, Pierre flattens the whole file
+			// inline and no separator clicks would be meaningful.
+			expandUnchanged: false,
 			expansionLineCount: 20,
 			collapsedContextThreshold: 3,
-			unsafeCSS: HUNK_SEPARATOR_CSS,
-			hunkSeparators: (hunk) => renderHunkSeparator(hunk),
+			hunkSeparators: 'line-info',
 			lineHoverHighlight: 'both',
 			onLineClick(props) {
 				// Pierre treats context-line clicks as `lineType: 'context'` —
@@ -441,14 +470,18 @@
 			initialExpansion: 'open',
 			initialSelectedPaths: initialSelection,
 			onSelectionChange: (selected) => {
-				const path = selected[0];
-				if (typeof path !== 'string') return;
-				const idx = paths.indexOf(path);
+				const sel = selected[0];
+				if (typeof sel !== 'string') return;
+				let idx = paths.indexOf(sel);
+				if (idx < 0) {
+					// Folder click — jump to the first file under that folder.
+					const prefix = sel.endsWith('/') ? sel : `${sel}/`;
+					idx = paths.findIndex((p) => p.startsWith(prefix));
+				}
 				if (idx < 0) return;
 				const target = diffWrapperEls[idx];
-				if (!target || !scrollEl) return;
-				const top = target.offsetTop - scrollEl.offsetTop;
-				scrollEl.scrollTo({ top, behavior: 'smooth' });
+				if (!target) return;
+				target.scrollIntoView({ block: 'start', behavior: 'smooth' });
 			},
 			unsafeCSS: `
 				button[data-type='item'][data-item-contains-git-change='true'] > [data-item-section='content'] {
@@ -867,7 +900,17 @@
 		--diffs-min-number-column-width: 2ch;
 		border: 1px solid var(--color-border-subtle);
 		border-radius: 6px;
-		overflow: hidden;
+		/* `min-width: 0` lets the flex item shrink to the column track so
+		   Pierre's container-query sizing (data-container-size) computes
+		   against the visible width instead of max-content of the longest
+		   line. Without it, long lines push the block past the modal edge
+		   and the bottom row gets visually clipped by the scroll container. */
+		min-width: 0;
+		/* Keep each block at its natural (content) height so `.card-diffs` is
+		   the single vertical scroll context. Without `flex-shrink: 0` the
+		   column flex container squeezes tall blocks, producing per-block
+		   scrollbars instead of one modal-level scroll. */
+		flex-shrink: 0;
 		background: var(--color-bg-secondary);
 	}
 

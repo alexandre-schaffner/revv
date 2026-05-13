@@ -106,14 +106,18 @@
 		align-items: center;
 		gap: 8px;
 		background: var(--color-input-bg);
-		border-top: 1px solid var(--color-border);
-		border-left: 2px solid var(--color-accent);
+		border: 1px solid var(--color-border-subtle);
+		border-radius: 6px;
+		margin: 8px 0 0;
 		padding: 6px 10px;
-		transition: border-color 80ms;
+		transition:
+			box-shadow var(--duration-snap) var(--ease-soft),
+			border-color var(--duration-snap) var(--ease-soft);
 	}
 
 	.comment-input--focused {
-		border-left-color: var(--color-accent);
+		border-color: var(--color-accent);
+		box-shadow: 0 0 0 2px var(--color-input-focus-ring);
 		background: var(--color-bg-elevated);
 	}
 

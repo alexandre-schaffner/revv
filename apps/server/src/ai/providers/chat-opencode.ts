@@ -131,20 +131,41 @@ export function streamChatViaOpencode(
 				// (`revv-chat-context-<prId>`), so we accept any MCP source
 				// here — the agent only has one MCP tool wired up, the
 				// `get_review_context` one we just registered.
+				//
+				// `hasEmittedText` + `lastWasNonText` insert a paragraph break
+				// before any text-delta that follows a non-text event so
+				// "text → tool → text" sequences render as distinct paragraphs
+				// in the assistant bubble instead of concatenating into one
+				// blob. The separator lands in the persisted content too —
+				// reloads stay legible. Note: text-deltas within a single
+				// part are still appended seamlessly (lastWasNonText only
+				// flips on tool/reasoning/error), so streaming a long answer
+				// doesn't gain spurious breaks.
+				let hasEmittedText = false;
+				let lastWasNonText = false;
 				const emit = (ev: NormalizedAgentEvent): void => {
 					if (ev.kind === "text-delta") {
-						controller.enqueue({ kind: "text", data: ev.data });
+						const needsSeparator =
+							hasEmittedText && lastWasNonText && !ev.data.startsWith("\n");
+						const data = needsSeparator ? `\n\n${ev.data}` : ev.data;
+						controller.enqueue({ kind: "text", data });
+						hasEmittedText = true;
+						lastWasNonText = false;
 					} else if (ev.kind === "reasoning-delta") {
 						controller.enqueue({ kind: "reasoning", data: ev.data });
+						lastWasNonText = true;
 					} else if (ev.kind === "tool-call") {
 						const activity = buildActivity(ev.toolName, ev.input);
 						controller.enqueue({ kind: "activity", ...activity });
+						lastWasNonText = true;
 					} else if (ev.kind === "error") {
 						logError("chat-opencode", "session.error:", ev.message);
 						controller.enqueue({
 							kind: "text",
 							data: `\n\n_Error: ${ev.message}_`,
 						});
+						hasEmittedText = true;
+						lastWasNonText = false;
 					}
 				};
 

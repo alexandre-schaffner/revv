@@ -1,30 +1,18 @@
 <script lang="ts">
     /*
      * CommentExpandedBody — the content that appears when a file-level
-     * comment row is expanded. Renders every thread in the file stacked
-     * vertically, separated by an uppercase-mono "THREADS" hairline so the
-     * panel reads like a terminal transcript:
-     *
-     *     :12-18   [↗ jump]
-     *     REVIEWER · 2h ago
-     *     First message body…
-     *     AUTHOR · 1h ago
-     *     Reply body…
-     *
-     *     ─────── THREADS ───────
-     *
-     *     :45-50   [↗ jump]
-     *     REVIEWER · 40m ago
-     *     …
-     *
-     * Each thread gets a small head row with its line range and an optional
-     * jump-to-diff chip; within a thread, messages render as per-turn
-     * entries with uppercase-mono author lines and sans-serif prose bodies.
+     * comment row is expanded. Each thread renders as a lifted card; the
+     * line-range marker + jump button live at the top of the card, then
+     * every message stacks with the same avatar + name + relative-time
+     * header used by the inline annotation thread. Replies indent with a
+     * thin left guide.
      */
     import type { CommentThread, ThreadMessage } from "@revv/shared";
-    import { User, Bot, ArrowUpRight } from "@lucide/svelte";
+    import { ArrowUpRight } from "@lucide/svelte";
     import { renderMarkdown } from "$lib/utils/markdown";
     import { isHighlighterReady } from "$lib/utils/code-highlight.svelte";
+    import { formatRelativeTime } from "$lib/utils/format-relative-time";
+    import MessageAvatar from "../MessageAvatar.svelte";
 
     interface Props {
         threads: readonly CommentThread[];
@@ -33,10 +21,6 @@
     }
 
     let { threads, getThreadMessages, onJump }: Props = $props();
-
-    // Per-message avatar load-failure tracking. Reassign via `new Set(...)`
-    // so Svelte 5 runes observe the mutation.
-    let failedAvatars = $state<Set<string>>(new Set());
 
     // Flatten to a render-ready shape so the template doesn't recompute on
     // every iteration. Re-derive when the shiki highlighter becomes ready
@@ -59,37 +43,10 @@
             };
         });
     });
-
-    const authorLabels: Record<string, string> = {
-        reviewer: "REVIEWER",
-        coder: "AUTHOR",
-        ai_agent: "AI AGENT",
-    };
-
-    function formatRelative(iso: string): string {
-        const then = Date.parse(iso);
-        if (Number.isNaN(then)) return iso;
-        const delta = Date.now() - then;
-        const sec = Math.round(delta / 1000);
-        if (sec < 45) return "just now";
-        const min = Math.round(sec / 60);
-        if (min < 45) return `${min}m ago`;
-        const hr = Math.round(min / 60);
-        if (hr < 22) return `${hr}h ago`;
-        const day = Math.round(hr / 24);
-        if (day < 10) return `${day}d ago`;
-        return new Date(then).toISOString().slice(0, 10);
-    }
 </script>
 
 <div class="expanded-body">
-    {#each renderedThreads as entry, threadIdx (entry.thread.id)}
-        {#if threadIdx > 0}
-            <div class="section-divider section-divider--threads" aria-hidden="true">
-                <span class="section-divider-label">threads</span>
-            </div>
-        {/if}
-
+    {#each renderedThreads as entry (entry.thread.id)}
         <div class="thread-block">
             <div class="thread-head">
                 <span class="thread-line" aria-label="Line {entry.thread.startLine}">
@@ -113,34 +70,12 @@
             {:else}
                 <ol class="turns">
                     {#each entry.messages as msg, i (msg.id)}
-                        <li class="turn">
+                        <li class="turn" class:turn--reply={i > 0}>
                             <div class="turn-head">
-                                {#if msg.authorRole === 'ai_agent'}
-                                    <span class="turn-avatar turn-avatar--icon" aria-hidden="true">
-                                        <Bot size={11} />
-                                    </span>
-                                {:else if msg.authorAvatarUrl && !failedAvatars.has(msg.id)}
-                                    <img
-                                        src={msg.authorAvatarUrl}
-                                        alt={msg.authorName}
-                                        class="turn-avatar turn-avatar--img"
-                                        loading="lazy"
-                                        referrerpolicy="no-referrer"
-                                        onerror={() => { failedAvatars = new Set([...failedAvatars, msg.id]); }}
-                                    />
-                                {:else}
-                                    <span class="turn-avatar turn-avatar--icon" aria-hidden="true">
-                                        <User size={11} />
-                                    </span>
-                                {/if}
-                                <span class="turn-author">
-                                    {authorLabels[msg.authorRole] ?? msg.authorRole.toUpperCase()}
-                                </span>
-                                <span class="turn-sep" aria-hidden="true">·</span>
+                                <MessageAvatar {msg} />
                                 <span class="turn-name">{msg.authorName}</span>
-                                <span class="turn-sep" aria-hidden="true">·</span>
                                 <time class="turn-time" datetime={msg.createdAt}>
-                                    {formatRelative(msg.createdAt)}
+                                    {formatRelativeTime(msg.createdAt)}
                                 </time>
                             </div>
                             <div class="turn-body prose">
@@ -162,19 +97,9 @@
     .expanded-body {
         display: flex;
         flex-direction: column;
-        gap: 12px;
-        padding: 10px 12px 16px;
-        padding-left: calc(2ch + 14px);
-        font-family: var(--font-mono);
-        font-size: 12.5px;
+        gap: 10px;
+        padding: 12px 16px 16px;
         color: var(--color-text-secondary);
-        /* Subtle wash — deepens below the accent-tinted trigger so the
-           expansion reads as an inset "drawer" under its parent row. Black
-           overlay (not --color-text-primary) keeps the direction consistent in
-           both themes: panel darkens rather than lightening in dark mode.
-           Light theme stacks this on top of --color-bg-secondary, so the
-           percentage is kept low to avoid a heavy slab-gray read. */
-        background: color-mix(in srgb, black 4%, transparent);
     }
 
     /* ── Per-thread block ──────────────────────────────────── */
@@ -183,6 +108,11 @@
         display: flex;
         flex-direction: column;
         gap: 10px;
+        background: var(--color-thread-bg);
+        border: 1px solid var(--color-border-subtle);
+        border-radius: var(--radius-card);
+        box-shadow: var(--color-shadow-sm);
+        padding: 12px 14px;
     }
 
     .thread-head {
@@ -234,36 +164,6 @@
         line-height: 1;
     }
 
-    /* ── Section divider — uppercase mono hairline ──────────── */
-
-    .section-divider {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        color: var(--color-text-muted);
-        font-family: var(--font-mono);
-        font-size: 10.5px;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-    }
-
-    .section-divider--threads {
-        margin: 4px 0;
-    }
-
-    .section-divider::before,
-    .section-divider::after {
-        content: "";
-        flex: 1;
-        height: 1px;
-        background: var(--color-border);
-        opacity: 0.45;
-    }
-
-    .section-divider-label {
-        flex-shrink: 0;
-    }
-
     /* ── Turns ─────────────────────────────────────────────── */
 
     .turns {
@@ -272,91 +172,42 @@
         margin: 0;
         display: flex;
         flex-direction: column;
-        gap: 12px;
+        gap: 10px;
     }
 
-    /* Between-turn hairline — subtle like `git log` separator. */
-    .turn + .turn {
-        position: relative;
-        padding-top: 12px;
+    .turn--reply {
+        margin-left: 26px;
+        padding-left: 12px;
+        border-left: 1px solid var(--color-border-subtle);
     }
 
-    .turn + .turn::before {
-        content: "";
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        height: 1px;
-        background: var(--color-border);
-        opacity: 0.3;
-    }
-
-    /* Author line — uppercase mono, muted. Echoes `git log`'s commit-author
-       line, with a relative timestamp in place of a hash. */
     .turn-head {
         display: flex;
         align-items: center;
         gap: 8px;
-        font-family: var(--font-mono);
-        font-size: 10.5px;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
         color: var(--color-text-muted);
-        flex-wrap: wrap;
-    }
-
-    .turn-avatar {
-        width: 14px;
-        height: 14px;
-        border-radius: 50%;
-        flex-shrink: 0;
-    }
-
-    .turn-avatar--img {
-        object-fit: cover;
-        display: block;
-    }
-
-    .turn-avatar--icon {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        background: var(--color-bg-elevated);
-        color: var(--color-text-muted);
-    }
-
-    .turn-author {
-        color: var(--color-text-secondary);
-        font-weight: 700;
-    }
-
-    .turn-sep {
-        color: var(--color-text-muted);
-        opacity: 0.6;
     }
 
     .turn-name {
-        color: var(--color-text-muted);
-        text-transform: none;
-        letter-spacing: 0;
+        color: var(--color-text-primary);
+        font-size: 13px;
         font-weight: 500;
     }
 
     .turn-time {
         color: var(--color-text-muted);
+        font-size: 12px;
         font-variant-numeric: tabular-nums;
-        letter-spacing: 0;
-        text-transform: none;
+        margin-left: auto;
     }
 
     .turn-body {
         font-family: var(--font-sans);
         font-size: 13px;
         line-height: 1.55;
-        color: var(--color-text-primary);
+        color: var(--color-text-secondary);
         max-width: 65ch;
-        margin-top: 4px;
+        margin-top: 6px;
     }
 
     .turn-empty {
@@ -404,7 +255,6 @@
 
     .empty-thread {
         margin: 0;
-        font-family: var(--font-mono);
         font-size: 12px;
         color: var(--color-text-muted);
         font-style: italic;

@@ -1,8 +1,10 @@
 <script lang="ts">
 	import type { CommentThread, ThreadMessage } from '@revv/shared';
-	import { User, Bot, Clock } from '@lucide/svelte';
+	import { Clock, CornerDownLeft } from '@lucide/svelte';
 	import AnnotationCommentInput from './AnnotationCommentInput.svelte';
+	import MessageAvatar from './MessageAvatar.svelte';
 	import { renderMarkdown } from '$lib/utils/markdown';
+	import { formatRelativeTime } from '$lib/utils/format-relative-time';
 
 	interface Props {
 		thread: CommentThread;
@@ -12,17 +14,16 @@
 		onReopen?: () => void;
 		onDiscard?: () => void;
 		onDiscardReply?: (messageId: string) => void;
-		onCollapse?: () => void;
+		onCollapse?: (() => void) | undefined;
 		onApplySuggestion?: (suggestion: string) => void;
 		onEditMessage?: (messageId: string, body: string) => void;
 		isReplying?: boolean;
 		onReplySubmit?: (body: string) => void;
 		onReplyDismiss?: () => void;
-		currentUserRole?: 'reviewer' | 'coder' | 'unknown';
 		isPending?: boolean;
 	}
 
-	let { thread, messages, onReply, onResolve, onReopen, onDiscard, onDiscardReply, onCollapse, onApplySuggestion, onEditMessage, isReplying = false, onReplySubmit, onReplyDismiss, currentUserRole = 'unknown', isPending = false }: Props = $props();
+	let { thread, messages, onReply, onResolve, onReopen, onDiscard, onDiscardReply, onCollapse, onApplySuggestion, onEditMessage, isReplying = false, onReplySubmit, onReplyDismiss, isPending = false }: Props = $props();
 
 	const isResolved = $derived(thread.status === 'resolved' || thread.status === 'wont_fix');
 
@@ -41,59 +42,11 @@
 		}
 		return null;
 	});
-	const isStatusPending = $derived(
-		thread.status === 'pending_coder' || thread.status === 'pending_reviewer'
-	);
-
-	const borderColor = $derived(
-		isResolved
-			? 'var(--color-marker-resolved)'
-			: thread.status === 'pending_coder'
-				? currentUserRole === 'coder'
-					? 'var(--color-marker-your-turn)'
-					: 'var(--color-marker-pending)'
-				: thread.status === 'pending_reviewer'
-					? currentUserRole === 'reviewer'
-						? 'var(--color-marker-your-turn)'
-						: 'var(--color-marker-pending)'
-					: 'var(--color-marker-open)'
-	);
-
-	const statusChip = $derived(
-		isResolved
-			? 'Resolved'
-			: thread.status === 'pending_coder'
-				? currentUserRole === 'coder'
-					? 'Pending you'
-					: 'Waiting on coder'
-				: thread.status === 'pending_reviewer'
-					? currentUserRole === 'reviewer'
-						? 'Pending you'
-						: 'Waiting on reviewer'
-					: null
-	);
-
-	function formatTime(iso: string): string {
-		const d = new Date(iso);
-		const now = new Date();
-		const diff = now.getTime() - d.getTime();
-		const mins = Math.floor(diff / 60000);
-		const hrs = Math.floor(mins / 60);
-		const days = Math.floor(hrs / 24);
-		if (mins < 1) return 'just now';
-		if (mins < 60) return `${mins}m ago`;
-		if (hrs < 24) return `${hrs}h ago`;
-		return `${days}d ago`;
-	}
 
 	// ── Inline edit state ─────────────────────────────────────────────────────
 
 	let editingMessageId = $state<string | null>(null);
 	let editBody = $state('');
-
-	// Per-message avatar load-failure tracking. Use reassignment (new Set(...))
-	// rather than `.add()` so Svelte 5 runes observe the change.
-	let failedAvatars = $state<Set<string>>(new Set());
 
 	function startEdit(msg: ThreadMessage): void {
 		editingMessageId = msg.id;
@@ -122,39 +75,26 @@
 
 <div
 	class="annotation-thread"
-	style="border-left-color: {borderColor}; opacity: {isResolved ? 0.65 : 1};"
+	style="opacity: {isResolved ? 0.65 : 1};"
 >
 	{#each messages as msg, i (msg.id)}
 		{@const isMsgPending = !isPending && i > 0 && msg.externalId === null}
-		<div class="message" class:message--first={i === 0} class:message--pending={isMsgPending}>
+		<div
+			class="message"
+			class:message--first={i === 0}
+			class:message--reply={i > 0}
+			class:message--pending={isMsgPending}
+		>
 			<div class="msg-header">
-				<div class="avatar" title={msg.authorName}>
-					{#if msg.authorRole === 'ai_agent'}
-						<Bot size={12} aria-hidden="true" />
-					{:else if msg.authorAvatarUrl && !failedAvatars.has(msg.id)}
-						<img
-							src={msg.authorAvatarUrl}
-							alt={msg.authorName}
-							class="avatar-img"
-							loading="lazy"
-							referrerpolicy="no-referrer"
-							onerror={() => { failedAvatars = new Set([...failedAvatars, msg.id]); }}
-						/>
-					{:else}
-						<User size={12} aria-hidden="true" />
-					{/if}
-				</div>
+				<MessageAvatar {msg} />
 				<span class="author">{msg.authorName}</span>
-				{#if msg.authorRole !== 'reviewer'}
-					<span class="role-badge">{msg.authorRole === 'ai_agent' ? 'AI' : 'Coder'}</span>
-				{/if}
 				{#if isMsgPending}
 					<span class="msg-pending-badge" title="Not yet synced to GitHub">
 						<Clock size={10} aria-hidden="true" />
 						Not synced
 					</span>
 				{/if}
-				<span class="timestamp">{formatTime(msg.createdAt)}</span>
+				<span class="timestamp">{formatRelativeTime(msg.createdAt)}</span>
 			</div>
 
 			{#if isPending && i === 0}
@@ -225,47 +165,38 @@
 	{/if}
 
 	<div class="thread-footer">
-		{#if statusChip && !isPending}
-			<span class="status-chip status-chip--{isResolved ? 'resolved' : 'pending'}">{statusChip}</span>
-		{/if}
-		{#if isPending}
-			<span class="pending-badge">
-				<Clock size={11} aria-hidden="true" />
-				Not synced
-			</span>
-		{/if}
 		{#if !isResolved && onReply}
-			<button class="footer-btn footer-btn--reply" class:footer-btn--reply-active={isReplying} onclick={onReply}>
-				<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-					<polyline points="9 17 4 12 9 7" />
-					<path d="M20 18v-2a4 4 0 0 0-4-4H4" />
-				</svg>
-				{isReplying ? 'Cancel' : 'Reply'}
+			<button
+				class="footer-link"
+				class:footer-link--active={isReplying}
+				onclick={onReply}
+			>
+				<CornerDownLeft size={12} aria-hidden="true" />
+				{isReplying ? 'Cancel' : 'Add reply...'}
 			</button>
 		{/if}
 		{#if isPending && onDiscard}
 			<button
-				class="footer-btn footer-btn--discard"
+				class="footer-link footer-link--danger"
 				onclick={onDiscard}
 			>Discard</button>
 		{:else if pendingReply && !isResolved && onDiscardReply}
 			{@const replyId = pendingReply.id}
 			<button
-				class="footer-btn footer-btn--discard"
+				class="footer-link footer-link--danger"
 				onclick={() => onDiscardReply?.(replyId)}
 				title="Discard your pending reply"
 			>Discard</button>
 		{:else if isResolved ? onReopen : onResolve}
 			<button
-				class="footer-btn"
-				class:footer-btn--resolve={!isResolved}
-				class:footer-btn--reopen={isResolved}
+				class="footer-link"
+				class:footer-link--muted={isResolved}
 				onclick={isResolved ? onReopen : onResolve}
 			>{isResolved ? 'Reopen' : 'Resolve'}</button>
 		{/if}
 		{#if onCollapse}
 			<button
-				class="footer-btn footer-btn--collapse"
+				class="footer-collapse"
 				onclick={onCollapse}
 				aria-label="Collapse thread"
 			>
@@ -287,64 +218,43 @@
 <style>
 	.annotation-thread {
 		background: var(--color-thread-bg);
-		border-top: 1px solid var(--color-border-subtle);
-		border-bottom: 1px solid var(--color-border-subtle);
-		border-left: 2px solid transparent;
-		padding: 10px 14px 8px;
+		border: 1px solid var(--color-border-subtle);
+		border-radius: var(--radius-card);
+		box-shadow: var(--color-shadow-sm);
+		padding: 12px 14px 10px;
 		font-family: var(--font-sans);
-		transition: opacity 400ms;
+		transition: opacity var(--duration-smooth) var(--ease-soft);
 	}
 
 	.message {
-		padding-bottom: 8px;
+		padding-bottom: 10px;
+	}
+
+	.message:last-of-type {
+		padding-bottom: 0;
+	}
+
+	.message--reply {
+		margin-left: 26px;
+		padding-left: 12px;
+		border-left: 1px solid var(--color-border-subtle);
 	}
 
 	.msg-header {
 		display: flex;
 		align-items: center;
-		gap: 6px;
-		margin-bottom: 5px;
-	}
-
-	.avatar {
-		width: 18px;
-		height: 18px;
-		border-radius: 50%;
-		background: var(--color-bg-elevated);
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		overflow: hidden;
-		flex-shrink: 0;
-		color: var(--color-text-muted);
-	}
-
-	.avatar-img {
-		width: 100%;
-		height: 100%;
-		object-fit: cover;
-		display: block;
+		gap: 8px;
+		margin-bottom: 6px;
 	}
 
 	.author {
-		font-size: 12px;
+		font-size: 13px;
 		font-weight: 500;
 		color: var(--color-text-primary);
 	}
 
-	.role-badge {
-		font-size: 9px;
-		font-weight: 600;
-		letter-spacing: 0.05em;
-		text-transform: uppercase;
-		background: var(--color-bg-tertiary);
-		color: var(--color-tab-inactive-text);
-		border-radius: 3px;
-		padding: 1px 5px;
-	}
-
 	.timestamp {
-		font-size: 11px;
+		font-size: 12px;
 		color: var(--color-text-muted);
 		margin-left: auto;
 	}
@@ -460,93 +370,64 @@
 	.thread-footer {
 		display: flex;
 		align-items: center;
-		gap: 6px;
+		gap: 12px;
 		padding-top: 8px;
-		border-top: 1px solid var(--color-border-subtle);
 	}
 
-	.footer-btn {
-		display: flex;
+	.footer-link {
+		display: inline-flex;
 		align-items: center;
 		gap: 4px;
-		font-size: 11px;
+		font-family: inherit;
+		font-size: 12px;
 		background: transparent;
 		border: none;
 		cursor: pointer;
-		padding: 2px 6px;
-		border-radius: 4px;
-		transition:
-			background-color 80ms,
-			color 80ms;
+		padding: 2px 0;
+		color: var(--color-accent);
+		transition: color var(--duration-snap) var(--ease-soft);
+	}
+
+	.footer-link:hover {
+		text-decoration: underline;
+		text-underline-offset: 2px;
+	}
+
+	.footer-link--muted {
 		color: var(--color-text-muted);
 	}
 
-	.footer-btn:hover {
-		background: var(--color-bg-tertiary);
+	.footer-link--muted:hover {
 		color: var(--color-text-secondary);
 	}
 
-	.footer-btn--resolve {
-		color: var(--color-success);
-		background: color-mix(in srgb, var(--color-success) 8%, transparent);
-		border: 1px solid color-mix(in srgb, var(--color-success) 12%, transparent);
-	}
-
-	.footer-btn--resolve:hover {
-		background: color-mix(in srgb, var(--color-success) 14%, transparent);
-	}
-
-	.footer-btn--collapse {
-		margin-left: auto;
-	}
-
-	.footer-btn--reply-active {
-		color: var(--color-text-secondary);
-		background: var(--color-bg-tertiary);
-	}
-
-	.footer-btn--reopen {
-		color: var(--color-text-muted);
-		border: 1px solid var(--color-border-subtle);
-	}
-
-	.footer-btn--reopen:hover {
-		color: var(--color-text-secondary);
-		background: var(--color-bg-tertiary);
-		border-color: var(--color-border);
-	}
-
-	.footer-btn--discard {
+	.footer-link--danger {
 		color: var(--color-danger, #ef4444);
-		opacity: 0.8;
-	}
-	.footer-btn--discard:hover {
-		opacity: 1;
 	}
 
-	.status-chip {
-		font-size: 10px;
-		font-weight: 500;
-		padding: 2px 7px;
-		border-radius: 10px;
-		line-height: 1.4;
-	}
-	.status-chip--resolved {
-		background: color-mix(in srgb, var(--color-marker-resolved) 15%, transparent);
+	.footer-link--active {
 		color: var(--color-text-muted);
 	}
-	.status-chip--pending {
-		background: color-mix(in srgb, var(--color-marker-your-turn, var(--color-marker-pending)) 15%, transparent);
-		color: var(--color-marker-your-turn, var(--color-marker-pending));
-	}
 
-	.pending-badge {
-		display: flex;
+	.footer-collapse {
+		margin-left: auto;
+		display: inline-flex;
 		align-items: center;
-		gap: 3px;
-		font-size: 10px;
+		justify-content: center;
+		padding: 2px;
+		background: transparent;
+		border: none;
+		border-radius: 4px;
+		cursor: pointer;
 		color: var(--color-text-muted);
-		opacity: 0.7;
+		transition:
+			background-color var(--duration-snap) var(--ease-soft),
+			color var(--duration-snap) var(--ease-soft);
+	}
+
+	.footer-collapse:hover {
+		background: var(--color-bg-tertiary);
+		color: var(--color-text-secondary);
 	}
 
 	.msg-pending-badge {
