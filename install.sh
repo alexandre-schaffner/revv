@@ -294,36 +294,35 @@ cp -R "$bundle_app" "$dest_app"
 xattr -cr "$dest_app" 2>/dev/null || true
 success "Installed → $dest_app"
 
-# ── 7. GitHub Enterprise config ───────────────────────────────
-step "GitHub Enterprise configuration"
-
-# Allow non-interactive override via env var. In --yes mode default to
-# github.com (public cloud) unless a host is already set.
-if [[ -z "${REVV_GITHUB_HOST:-}" ]]; then
-  read_tty REVV_GITHUB_HOST "GitHub host" "github.com"
-fi
-REVV_GITHUB_HOST="${REVV_GITHUB_HOST:-github.com}"
-
-if [[ "$REVV_GITHUB_HOST" != "github.com" && -z "${REVV_GITHUB_CLIENT_ID:-}" ]]; then
-  read_tty REVV_GITHUB_CLIENT_ID "GitHub OAuth App Client ID"
-  [[ -n "$REVV_GITHUB_CLIENT_ID" ]] \
-    || fail "A GitHub OAuth App Client ID is required for GitHub Enterprise hosts."
-fi
-
-export REVV_GITHUB_HOST
-export REVV_GITHUB_CLIENT_ID="${REVV_GITHUB_CLIENT_ID:-}"
-
-# Persist to $REVV_SUPPORT_DIR/github.conf so revv update can read it back
-# without prompting and write_launch_agent_plist can find it without a terminal.
+# Revv bundles a GitHub OAuth App registered on nocturlab.ghe.com — the host
+# and client_id defaults live in apps/server/src/config.ts and are baked into
+# the server. No installer prompt.
+#
+# Power users can target a different GitHub instance by exporting both
+# REVV_GITHUB_HOST and REVV_GITHUB_CLIENT_ID before running the installer:
+#
+#   curl -fsSL …/install.sh | \
+#     REVV_GITHUB_HOST=github.com \
+#     REVV_GITHUB_CLIENT_ID=<your-oauth-app-client-id> bash
+#
+# When set, we persist them to $REVV_SUPPORT_DIR/github.conf so `revv update`
+# regenerates the LaunchAgent plist with the same overrides. When unset, we
+# wipe any stale conf so the bundled defaults win.
 mkdir -p "$REVV_SUPPORT_DIR"
-{
-  printf 'GITHUB_HOST=%s\n' "$REVV_GITHUB_HOST"
-  [[ -n "$REVV_GITHUB_CLIENT_ID" ]] && printf 'GITHUB_CLIENT_ID=%s\n' "$REVV_GITHUB_CLIENT_ID"
-} > "$REVV_SUPPORT_DIR/github.conf"
-chmod 600 "$REVV_SUPPORT_DIR/github.conf"
-success "GitHub config saved → $REVV_SUPPORT_DIR/github.conf (host: $REVV_GITHUB_HOST)"
+if [[ -n "${REVV_GITHUB_HOST:-}" || -n "${REVV_GITHUB_CLIENT_ID:-}" ]]; then
+  {
+    [[ -n "${REVV_GITHUB_HOST:-}"      ]] && printf 'GITHUB_HOST=%s\n'      "$REVV_GITHUB_HOST"
+    [[ -n "${REVV_GITHUB_CLIENT_ID:-}" ]] && printf 'GITHUB_CLIENT_ID=%s\n' "$REVV_GITHUB_CLIENT_ID"
+  } > "$REVV_SUPPORT_DIR/github.conf"
+  chmod 600 "$REVV_SUPPORT_DIR/github.conf"
+  success "GitHub overrides persisted → $REVV_SUPPORT_DIR/github.conf (host: ${REVV_GITHUB_HOST:-<bundled>})"
+  export REVV_GITHUB_HOST="${REVV_GITHUB_HOST:-}"
+  export REVV_GITHUB_CLIENT_ID="${REVV_GITHUB_CLIENT_ID:-}"
+else
+  rm -f "$REVV_SUPPORT_DIR/github.conf" 2>/dev/null || true
+fi
 
-# ── 8. LaunchAgent ────────────────────────────────────────────
+# ── 7. LaunchAgent ────────────────────────────────────────────
 step "Installing background service (LaunchAgent)"
 mkdir -p "$(dirname "$REVV_LAUNCH_AGENT_PLIST")" "$REVV_LOG_DIR"
 bun_bin="$HOME/.bun/bin/bun"
@@ -356,7 +355,7 @@ for i in {1..30}; do
   fi
 done
 
-# ── 9. Install the management CLI ─────────────────────────────
+# ── 8. Install the management CLI ─────────────────────────────
 step "Installing revv CLI"
 mkdir -p "$REVV_SUPPORT_DIR"
 cat > "$REVV_SUPPORT_DIR/config" <<CFG

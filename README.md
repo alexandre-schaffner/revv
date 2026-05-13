@@ -20,8 +20,19 @@ An intelligent code review desktop application that brings AI-assisted analysis 
 
 ## Install on macOS (one command)
 
+**GitHub Enterprise (`nocturlab.ghe.com`) — default:**
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/alexandre-schaffner/revv/main/install.sh | bash
+```
+
+**Public github.com:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/alexandre-schaffner/revv/main/install.sh | \
+  REVV_GITHUB_HOST=github.com \
+  REVV_GITHUB_CLIENT_ID=Ov23liI36U1MLWk3kF8l \
+  bash
 ```
 
 That single command will:
@@ -53,8 +64,10 @@ REVV_APP_DIR=/Applications \
 | `REVV_REPO_URL` | Upstream | Git URL to clone from (fork-friendly) |
 | `REVV_INSTALL_DIR` | `~/Library/Application Support/Revv/src` | Where the source tree lives |
 | `REVV_APP_DIR` | `/Applications` | Falls back to `~/Applications` if not writable |
+| `REVV_GITHUB_HOST` | `nocturlab.ghe.com` (bundled) | Override to target a different GitHub instance (e.g. `github.com`) |
+| `REVV_GITHUB_CLIENT_ID` | bundled for the default host | Required when `REVV_GITHUB_HOST` is overridden |
 
-Revv bundles an OAuth App registered on `nocturlab.ghe.com` (GitHub Enterprise Cloud). To self-host against a different GitHub instance — public github.com or your own GHE Server — override **both** `GITHUB_CLIENT_ID` and `GITHUB_HOST` in the LaunchAgent's `EnvironmentVariables` after install (or edit the defaults in `apps/server/src/config.ts`). The OAuth App must have **Device Flow enabled** — see Troubleshooting.
+Revv bundles an OAuth App registered on `nocturlab.ghe.com` (GitHub Enterprise Cloud) plus a second one for public `github.com` (client id `Ov23liI36U1MLWk3kF8l`) — either is selected at install time via the variant commands above. To target a third instance (e.g. your own GHE Server), pass `REVV_GITHUB_HOST` + `REVV_GITHUB_CLIENT_ID` for an OAuth App that has **Device Flow enabled** (see Troubleshooting). The installer persists those values to `~/Library/Application Support/Revv/github.conf` so subsequent `revv update` runs preserve the override.
 
 ### Managing the install
 

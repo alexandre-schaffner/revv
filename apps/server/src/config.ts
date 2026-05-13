@@ -23,12 +23,13 @@ import { join } from 'node:path';
 export const ServerConfig = Config.all({
 	port: Config.integer('PORT').pipe(Config.withDefault(45678)),
 	dbPath: Config.string('REVV_DB_PATH').pipe(Config.withDefault('./revv.db')),
-	// Bundled OAuth App client_id. `GITHUB_CLIENT_ID` env var overrides for
-	// development, self-hosting, or GitHub Enterprise deployments.
+	// Bundled OAuth App client_id, registered on `nocturlab.ghe.com`. The
+	// `GITHUB_CLIENT_ID` env var overrides for development or self-hosting
+	// against a different GitHub instance.
 	githubClientId: Config.string('GITHUB_CLIENT_ID').pipe(
 		Config.withDefault('Ov23g4GLrM59sDrek6wo'),
 	),
-	githubHost: Config.string('GITHUB_HOST').pipe(Config.withDefault('github.com')),
+	githubHost: Config.string('GITHUB_HOST').pipe(Config.withDefault('nocturlab.ghe.com')),
 	revDebug: Config.boolean('REV_DEBUG').pipe(Config.withDefault(false)),
 	// Absolute paths to the `claude` / `opencode` CLIs, resolved once by the
 	// installer's shell (which has the user's full PATH including Homebrew,
