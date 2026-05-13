@@ -120,11 +120,15 @@
 			class="ml-2 flex flex-col gap-0.5 border-l border-border-subtle pl-2"
 			transition:collapsibleSlide
 		>
-			{#each prs as pr, i (pr.id)}
-				<div in:listItemEnter={{ delay: Math.min(i, STAGGER_CAP) * STAGGER.tight }}>
-					<PrItem {pr} isSelected={selectedPrId === pr.id} {navPrefix} />
-				</div>
-			{/each}
+			{#if prs.length === 0}
+				<p class="px-2 py-1.5 text-xs text-text-muted">No open pull requests</p>
+			{:else}
+				{#each prs as pr, i (pr.id)}
+					<div in:listItemEnter={{ delay: Math.min(i, STAGGER_CAP) * STAGGER.tight }}>
+						<PrItem {pr} isSelected={selectedPrId === pr.id} {navPrefix} />
+					</div>
+				{/each}
+			{/if}
 		</div>
 	{/if}
 </div>

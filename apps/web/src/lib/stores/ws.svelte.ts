@@ -147,6 +147,7 @@ export function connect(token: string): void {
 	ws = new WebSocket(`${WS_BASE_URL}/ws?token=${encodeURIComponent(token)}`);
 
 	ws.addEventListener('open', () => {
+		const isReconnect = reconnectAttempts > 0;
 		connected = true;
 		reconnectAttempts = 0;
 		if (reconnectTimer) {
@@ -159,6 +160,10 @@ export function connect(token: string): void {
 			pendingThreadSync = null;
 			markThreadsSyncing(prId);
 			ws?.send(JSON.stringify({ type: 'threads:request-sync', data: { prId } }));
+		}
+		// On reconnect, reconcile missed prs:updated / repos:updated broadcasts.
+		if (isReconnect) {
+			void Promise.all([prs.fetchRepos(), prs.fetchPrs()]);
 		}
 		// Recover from any `walkthrough:complete` broadcasts the client missed
 		// while WS was unconnected — the canonical case is `resumePending`

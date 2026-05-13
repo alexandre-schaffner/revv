@@ -11,6 +11,7 @@ let pullRequests = $state<PullRequest[]>([]);
 let repositories = $state<Repository[]>([]);
 let availableRepos = $state<Repository[]>([]);
 let availableReposLoading = $state(false);
+let availableReposFetchFailed = $state(false);
 let selectedPrId = $state<string | null>(null);
 let searchQuery = $state('');
 let isLoading = $state(false);
@@ -58,7 +59,8 @@ let groupedByRepo = $derived(
 // of the org filter — only the rendered list narrows.
 let visibleRepositories = $derived.by(() => {
 	const owner = getActiveOrg();
-	return owner ? repositories.filter((r) => r.owner === owner) : repositories;
+	const ownerLower = owner?.toLowerCase();
+	return ownerLower ? repositories.filter((r) => r.owner.toLowerCase() === ownerLower) : repositories;
 });
 
 let needsYourReview = $derived(
@@ -321,11 +323,19 @@ export function getLastSynced(): Date | null {
 
 export async function fetchAvailableRepos(force = false): Promise<void> {
 	availableReposLoading = true;
+	if (force) availableReposFetchFailed = false;
 	try {
-		const { data } = await api.api.github.repos.get({ query: { force: force ? 'true' : undefined } });
-		if (data) availableRepos = data as Repository[];
+		const { data, error } = await api.api.github.repos.get({ query: { force: force ? 'true' : undefined } });
+		if (error) {
+			availableReposFetchFailed = true;
+			return;
+		}
+		if (data) {
+			availableRepos = data as Repository[];
+			availableReposFetchFailed = false;
+		}
 	} catch {
-		// error handled by caller
+		availableReposFetchFailed = true;
 	} finally {
 		availableReposLoading = false;
 	}
@@ -339,11 +349,16 @@ export function getAvailableReposLoading(): boolean {
 	return availableReposLoading;
 }
 
+export function getAvailableReposFetchFailed(): boolean {
+	return availableReposFetchFailed;
+}
+
 export function reset(): void {
 	pullRequests = [];
 	repositories = [];
 	availableRepos = [];
 	availableReposLoading = false;
+	availableReposFetchFailed = false;
 	selectedPrId = null;
 	searchQuery = '';
 	isLoading = false;

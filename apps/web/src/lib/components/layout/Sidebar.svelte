@@ -364,18 +364,26 @@
 							</div>
 						</div>
 					{/if}
-					{#if getRepositories().length === 0}
-						<div class="empty-state">
-							<svg class="empty-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-								<path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/>
-								<path d="M9 18c-4.51 2-5-2-7-2"/>
-							</svg>
-							<p class="empty-text">No repositories added</p>
-							<button class="add-link" onclick={() => setAddRepoDialogOpen(true)}>
-								Add a repository
-							</button>
-						</div>
-					{:else}
+				{#if getRepositories().length === 0}
+					<div class="empty-state">
+						<svg class="empty-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+							<path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/>
+							<path d="M9 18c-4.51 2-5-2-7-2"/>
+						</svg>
+						<p class="empty-text">No repositories added</p>
+						<button class="add-link" onclick={() => setAddRepoDialogOpen(true)}>
+							Add a repository
+						</button>
+					</div>
+				{:else if getVisibleRepositories().length === 0}
+					<div class="empty-state">
+						<svg class="empty-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+							<path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/>
+							<path d="M9 18c-4.51 2-5-2-7-2"/>
+						</svg>
+						<p class="empty-text">No repositories in this workspace</p>
+					</div>
+				{:else}
 						{@const allOpenPrsCount = getVisibleRepositories().reduce((sum, repo) => {
 							const reviewIds = new Set((getNeedsYourReviewByRepo().get(repo.id) ?? []).map(p => p.id));
 							return sum + (getGroupedByRepo().get(repo.id) ?? []).filter(p => !reviewIds.has(p.id)).length;
@@ -388,9 +396,7 @@
 						{#each getVisibleRepositories() as repo (repo.id)}
 							{@const reviewIds = new Set((getNeedsYourReviewByRepo().get(repo.id) ?? []).map(p => p.id))}
 							{@const prs = (getGroupedByRepo().get(repo.id) ?? []).filter(p => !reviewIds.has(p.id))}
-							{#if prs.length > 0}
-								<RepoGroup repository={repo} {prs} />
-							{/if}
+							<RepoGroup repository={repo} {prs} />
 						{/each}
 					{/if}
 				</div>
