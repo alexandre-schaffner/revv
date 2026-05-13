@@ -179,6 +179,29 @@ function githubPost(
 	});
 }
 
+function githubPatch(
+	path: string,
+	token: string,
+	body: Record<string, unknown>
+): Effect.Effect<unknown, GitHubError> {
+	return Effect.tryPromise({
+		try: async () => {
+			const res = await fetch(`${GITHUB_API}${path}`, {
+				method: 'PATCH',
+				headers: { ...githubHeaders(token), 'Content-Type': 'application/json' },
+				body: JSON.stringify(body),
+			});
+			if (res.status === 422) {
+				const text = await res.text().catch(() => '');
+				throw new GitHubNetworkError({ cause: `422 Unprocessable Entity: ${text}` });
+			}
+			assertGitHubOk(res, path);
+			return res.json();
+		},
+		catch: toGitHubError,
+	});
+}
+
 /**
  * POST a GraphQL query/mutation. Throws on `errors[]` in the response body
  * even if the HTTP status is 200 (GitHub convention).
@@ -274,6 +297,7 @@ function mapPr(raw: Record<string, unknown>, repositoryId: string): PullRequest 
 					: 'closed'
 				: 'open',
 		reviewStatus: 'pending',
+		isDraft: (raw['draft'] as boolean | undefined) ?? false,
 		sourceBranch: head['ref'] as string,
 		targetBranch: base['ref'] as string,
 		url: raw['html_url'] as string,
@@ -452,6 +476,32 @@ export class GitHubService extends Context.Tag('GitHubService')<
 			GitHubError,
 			DbService | GitHubEtagCache
 		>;
+		/**
+		 * Flip an open PR to draft. GitHub only exposes this via GraphQL, which
+		 * needs the PR's GraphQL node id — we resolve it first via a small
+		 * lookup query, then run the mutation.
+		 */
+		readonly convertPrToDraft: (
+			repoFullName: string,
+			prNumber: number,
+			token: string
+		) => Effect.Effect<void, GitHubError>;
+		/** Inverse of {@link convertPrToDraft}: move a draft back to ready-for-review. */
+		readonly markPrReadyForReview: (
+			repoFullName: string,
+			prNumber: number,
+			token: string
+		) => Effect.Effect<void, GitHubError>;
+		/**
+		 * Close (but do not merge) the PR via REST PATCH /pulls/:number with
+		 * `state: 'closed'`. Closing a draft works the same as closing an open
+		 * PR.
+		 */
+		readonly closePullRequest: (
+			repoFullName: string,
+			prNumber: number,
+			token: string
+		) => Effect.Effect<void, GitHubError>;
 		/**
 		 * Like `getAuthenticatedUser`, but bypasses the ETag cache. Required for
 		 * the same reason as {@link getRepoFresh}: GitHub Enterprise signed
@@ -888,4 +938,70 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
 				avatarUrl: (raw['avatar_url'] as string | null) ?? null,
 			};
 		}).pipe(Effect.retry(retrySchedule)),
+
+	convertPrToDraft: (repoFullName, prNumber, token) =>
+		Effect.gen(function* () {
+			const { owner, repo } = yield* parseRepoFullName(repoFullName);
+			const nodeId = yield* resolvePrNodeId(owner, repo, prNumber, token);
+			yield* githubGraphql(
+				`mutation($id: ID!) { convertPullRequestToDraft(input: { pullRequestId: $id }) { clientMutationId } }`,
+				{ id: nodeId },
+				token,
+			);
+		}),
+
+	markPrReadyForReview: (repoFullName, prNumber, token) =>
+		Effect.gen(function* () {
+			const { owner, repo } = yield* parseRepoFullName(repoFullName);
+			const nodeId = yield* resolvePrNodeId(owner, repo, prNumber, token);
+			yield* githubGraphql(
+				`mutation($id: ID!) { markPullRequestReadyForReview(input: { pullRequestId: $id }) { clientMutationId } }`,
+				{ id: nodeId },
+				token,
+			);
+		}),
+
+	closePullRequest: (repoFullName, prNumber, token) =>
+		Effect.gen(function* () {
+			const { owner, repo } = yield* parseRepoFullName(repoFullName);
+			yield* githubPatch(
+				`/repos/${owner}/${repo}/pulls/${prNumber}`,
+				token,
+				{ state: 'closed' },
+			);
+		}),
 });
+
+/**
+ * Look up a PR's GraphQL node id. Required by the draft-toggle mutations
+ * (`convertPullRequestToDraft`, `markPullRequestReadyForReview`), which only
+ * accept the global node id — not owner/repo/number. Cheaper than a full PR
+ * fetch and bypasses the conditional cache so we always get a fresh id.
+ */
+function resolvePrNodeId(
+	owner: string,
+	repo: string,
+	prNumber: number,
+	token: string,
+): Effect.Effect<string, GitHubError> {
+	const query = `
+		query($owner: String!, $repo: String!, $number: Int!) {
+			repository(owner: $owner, name: $repo) {
+				pullRequest(number: $number) { id }
+			}
+		}
+	`;
+	interface Resp {
+		repository: { pullRequest: { id: string } | null } | null;
+	}
+	return Effect.gen(function* () {
+		const data = yield* githubGraphql<Resp>(query, { owner, repo, number: prNumber }, token);
+		const id = data.repository?.pullRequest?.id;
+		if (!id) {
+			return yield* Effect.fail(
+				new GitHubNotFoundError({ resource: 'pull_request', id: `${owner}/${repo}#${prNumber}` }),
+			);
+		}
+		return id;
+	});
+}

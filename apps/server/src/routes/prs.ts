@@ -5,6 +5,7 @@ import { AppRuntime } from '../runtime';
 import { db } from '../auth';
 import { user } from '../db/schema';
 import { PollScheduler } from '../services/PollScheduler';
+import { PrContextService } from '../services/PrContext';
 import { PullRequestService } from '../services/PullRequest';
 import { RepositoryService } from '../services/Repository';
 import { RepoCloneService } from '../services/RepoClone';
@@ -12,6 +13,7 @@ import { SyncService } from '../services/Sync';
 import { TokenProvider } from '../services/TokenProvider';
 import { getOrFetchDiffFiles } from '../services/DiffCache';
 import { GitHubService } from '../services/GitHub';
+import { WebSocketHub } from '../services/WebSocketHub';
 import { withAuth, handleAppError } from './middleware';
 
 // ── Routes ───────────────────────────────────────────────────────────────────
@@ -243,4 +245,74 @@ export const prRoutes = new Elysia({ prefix: '/api/prs' })
 		} catch (e) {
 			return handleAppError(e, ctx);
 		}
+	})
+
+	// ── Owner-only PR mutations (draft toggle, close) ─────────────────────
+	//
+	// All three endpoints follow the same shape: resolve PR + repo + token,
+	// run the GitHub mutation, refresh the local row from a fresh GET, and
+	// broadcast `prs:updated` so other clients see the new state without
+	// waiting for the next poll cycle.
+	.post('/:id/convert-to-draft', async (ctx) => {
+		try {
+			await AppRuntime.runPromise(mutatePr(ctx.params.id, ctx.session.user.id, 'convert-to-draft'));
+			return { success: true };
+		} catch (e) {
+			return handleAppError(e, ctx);
+		}
+	})
+	.post('/:id/ready-for-review', async (ctx) => {
+		try {
+			await AppRuntime.runPromise(mutatePr(ctx.params.id, ctx.session.user.id, 'ready-for-review'));
+			return { success: true };
+		} catch (e) {
+			return handleAppError(e, ctx);
+		}
+	})
+	.post('/:id/close', async (ctx) => {
+		try {
+			await AppRuntime.runPromise(mutatePr(ctx.params.id, ctx.session.user.id, 'close'));
+			return { success: true };
+		} catch (e) {
+			return handleAppError(e, ctx);
+		}
 	});
+
+type PrMutationAction = 'convert-to-draft' | 'ready-for-review' | 'close';
+
+/**
+ * Shared executor for the three owner-only PR mutations above. Each one is
+ * a thin wrapper over a single GitHubService call, so the
+ * resolve → mutate → refresh-row → broadcast scaffolding is identical and
+ * lifted here.
+ */
+function mutatePr(prId: string, userId: string, action: PrMutationAction) {
+	return Effect.gen(function* () {
+		const prContext = yield* PrContextService;
+		const github = yield* GitHubService;
+		const prService = yield* PullRequestService;
+		const hub = yield* WebSocketHub;
+
+		const { pr, repo, token } = yield* prContext.resolveBasic(prId, userId);
+
+		if (action === 'convert-to-draft') {
+			yield* github.convertPrToDraft(repo.fullName, pr.externalId, token);
+		} else if (action === 'ready-for-review') {
+			yield* github.markPrReadyForReview(repo.fullName, pr.externalId, token);
+		} else {
+			yield* github.closePullRequest(repo.fullName, pr.externalId, token);
+		}
+
+		// Refresh from a fresh GET so isDraft / status reflect GitHub's new
+		// state — the mutation responses don't return the full PR shape we
+		// store, and the conditional cache would otherwise replay the
+		// pre-mutation body on the next read.
+		const refreshed = yield* github
+			.getPr(repo.fullName, pr.externalId, token)
+			.pipe(Effect.map((p) => ({ ...p, id: pr.id, repositoryId: pr.repositoryId })));
+		yield* prService.upsertPrs([refreshed]);
+
+		const all = yield* prService.listPrs();
+		yield* hub.broadcast({ type: 'prs:updated', data: all });
+	});
+}

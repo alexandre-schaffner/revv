@@ -238,6 +238,42 @@ export async function deleteRepo(id: string): Promise<void> {
 	}
 }
 
+/**
+ * Owner-only PR mutations. The server runs the GitHub mutation, refreshes
+ * the local row from a fresh GET, and broadcasts `prs:updated` — we only
+ * surface the loading state and toast on failure here. The list refresh
+ * arrives over the WebSocket; no local mutation is required.
+ */
+export async function convertPrToDraft(prId: string): Promise<void> {
+	try {
+		const { error } = await api.api.prs({ id: prId })['convert-to-draft'].post();
+		if (error) throw new Error(`HTTP ${error.status}`);
+	} catch (e) {
+		toast.error(e instanceof Error ? e.message : 'Failed to convert to draft');
+		throw e;
+	}
+}
+
+export async function markPrReadyForReview(prId: string): Promise<void> {
+	try {
+		const { error } = await api.api.prs({ id: prId })['ready-for-review'].post();
+		if (error) throw new Error(`HTTP ${error.status}`);
+	} catch (e) {
+		toast.error(e instanceof Error ? e.message : 'Failed to mark ready for review');
+		throw e;
+	}
+}
+
+export async function closePr(prId: string): Promise<void> {
+	try {
+		const { error } = await api.api.prs({ id: prId }).close.post();
+		if (error) throw new Error(`HTTP ${error.status}`);
+	} catch (e) {
+		toast.error(e instanceof Error ? e.message : 'Failed to close PR');
+		throw e;
+	}
+}
+
 export async function retryClone(id: string): Promise<void> {
 	// Optimistic flip so the spinner appears immediately. The server's
 	// background fiber will broadcast 'cloning' then 'ready'/'error' via the

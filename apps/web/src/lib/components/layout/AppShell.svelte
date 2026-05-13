@@ -5,7 +5,13 @@
 	import BottomBar from './BottomBar.svelte';
 	import CommandPalette from './CommandPalette.svelte';
 	import FloatingTabs from './FloatingTabs.svelte';
-	import { getSelectedPr } from '$lib/stores/prs.svelte';
+	import {
+		getSelectedPr,
+		convertPrToDraft,
+		markPrReadyForReview,
+		closePr,
+	} from '$lib/stores/prs.svelte';
+	import { getCurrentUserLogin } from '$lib/stores/auth.svelte';
 	import {
 		getPrWalkthroughStatus,
 		getIsStreaming as getWalkthroughStreaming,
@@ -24,7 +30,7 @@
 		getUserScrolledUp as getWalkthroughUserScrolledUp,
 		getHasNewContentBelow as getWalkthroughHasNewContentBelow,
 	} from '$lib/stores/walkthroughNav.svelte';
-	import { ArrowDown, ArrowUp, Check, Gauge, Play, RefreshCw, RotateCcw, Sparkles, Square } from '@lucide/svelte';
+	import { ArrowDown, ArrowUp, Check, FileEdit, Gauge, Play, RefreshCw, RotateCcw, Send, Sparkles, Square, XCircle } from '@lucide/svelte';
 	import {
 		getActiveTab,
 		setActiveTab,
@@ -102,6 +108,29 @@
 	const rcSelectedCount = $derived(getRcSelectedCount());
 	const rcHasContent = $derived(getRcHasContent());
 	const rcApproveBlockerSummary = $derived(getRcApproveBlockerSummary());
+
+	// The reviewer-vs-coder distinction comes from the user's GitHub login
+	// matching the PR's authorLogin. When the user owns the PR, the
+	// approve / request-changes pair is replaced by owner-only mutations:
+	// toggle draft state, and close the PR. Generate Changes still applies
+	// (the agent can write code regardless of authorship), so we leave it.
+	const currentUserLogin = $derived(getCurrentUserLogin());
+	const isPrOwner = $derived(!!pr && pr.authorLogin === currentUserLogin);
+
+	type OwnerAction = 'convert-to-draft' | 'ready-for-review' | 'close';
+	let ownerSubmitting = $state<OwnerAction | null>(null);
+
+	async function runOwnerAction(action: OwnerAction): Promise<void> {
+		if (!pr || ownerSubmitting !== null) return;
+		ownerSubmitting = action;
+		try {
+			if (action === 'convert-to-draft') await convertPrToDraft(pr.id);
+			else if (action === 'ready-for-review') await markPrReadyForReview(pr.id);
+			else await closePr(pr.id);
+		} finally {
+			ownerSubmitting = null;
+		}
+	}
 
 	// New-commit-available signal: the PR's current headSha differs from the
 	// SHA the diff was loaded against. `getLoadedHeadSha` returns null until the
@@ -378,30 +407,71 @@
 					<Sparkles size={14} />
 					Generate changes
 				</button>
-				<button
-					type="button"
-					class="walkthrough-action-btn walkthrough-action-btn--accent"
-					disabled={rcSubmitting !== null || !rcHasContent}
-					onclick={() => getRcOnSubmitReview()()}
-					title={!rcHasContent
-						? 'Add comments or select walkthrough issues first'
-						: 'Request changes on this pull request'}
-				>
-					<ArrowUp size={14} />
-					{rcSubmitting === 'request_changes' ? 'Submitting…' : 'Submit Review'}
-				</button>
-				<button
-					type="button"
-					class="walkthrough-action-btn walkthrough-action-btn--success"
-					disabled={rcSubmitting !== null}
-					onclick={() => getRcOnApprove()()}
-					title={rcApproveBlockerSummary
-						? `Approve this pull request — ${rcApproveBlockerSummary} still open`
-						: 'Approve this pull request on GitHub'}
-				>
-					<Check size={14} />
-					{rcSubmitting === 'approve' ? 'Approving…' : 'Approve'}
-				</button>
+
+				{#if isPrOwner && pr}
+					<!-- Owner view — the reviewer's Approve / Request Changes pair
+					     doesn't apply when you authored the PR, so we surface the
+					     two actions a coder actually needs from this screen:
+					     toggle draft state, and close the PR. -->
+					{#if pr.isDraft}
+						<button
+							type="button"
+							class="walkthrough-action-btn walkthrough-action-btn--accent"
+							disabled={ownerSubmitting !== null}
+							onclick={() => runOwnerAction('ready-for-review')}
+							title="Mark this draft as ready for review"
+						>
+							<Send size={14} />
+							{ownerSubmitting === 'ready-for-review' ? 'Marking ready…' : 'Ready for review'}
+						</button>
+					{:else}
+						<button
+							type="button"
+							class="walkthrough-action-btn"
+							disabled={ownerSubmitting !== null}
+							onclick={() => runOwnerAction('convert-to-draft')}
+							title="Move this PR back to draft state"
+						>
+							<FileEdit size={14} />
+							{ownerSubmitting === 'convert-to-draft' ? 'Converting…' : 'Convert to draft'}
+						</button>
+					{/if}
+					<button
+						type="button"
+						class="walkthrough-action-btn walkthrough-action-btn--danger"
+						disabled={ownerSubmitting !== null}
+						onclick={() => runOwnerAction('close')}
+						title="Close this pull request without merging"
+					>
+						<XCircle size={14} />
+						{ownerSubmitting === 'close' ? 'Closing…' : 'Close PR'}
+					</button>
+				{:else}
+					<button
+						type="button"
+						class="walkthrough-action-btn walkthrough-action-btn--accent"
+						disabled={rcSubmitting !== null || !rcHasContent}
+						onclick={() => getRcOnSubmitReview()()}
+						title={!rcHasContent
+							? 'Add comments or select walkthrough issues first'
+							: 'Request changes on this pull request'}
+					>
+						<ArrowUp size={14} />
+						{rcSubmitting === 'request_changes' ? 'Submitting…' : 'Submit Review'}
+					</button>
+					<button
+						type="button"
+						class="walkthrough-action-btn walkthrough-action-btn--success"
+						disabled={rcSubmitting !== null}
+						onclick={() => getRcOnApprove()()}
+						title={rcApproveBlockerSummary
+							? `Approve this pull request — ${rcApproveBlockerSummary} still open`
+							: 'Approve this pull request on GitHub'}
+					>
+						<Check size={14} />
+						{rcSubmitting === 'approve' ? 'Approving…' : 'Approve'}
+					</button>
+				{/if}
 			</div>
 		</div>
 	{/if}

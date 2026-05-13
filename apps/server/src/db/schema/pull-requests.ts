@@ -15,6 +15,7 @@ export const pullRequests = sqliteTable('pull_requests', {
 	requestedReviewers: text('requested_reviewers').notNull().default('[]'),
 	status: text('status').notNull().default('open'),
 	reviewStatus: text('review_status').notNull().default('pending'),
+	isDraft: integer('is_draft', { mode: 'boolean' }).notNull().default(false),
 	sourceBranch: text('source_branch').notNull(),
 	targetBranch: text('target_branch').notNull(),
 	url: text('url').notNull(),

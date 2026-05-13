@@ -34,6 +34,8 @@ export interface PullRequest {
 	requestedReviewers: string[];
 	status: PullRequestStatus;
 	reviewStatus: ReviewStatus;
+	/** GitHub draft state — `true` while the PR is in draft. */
+	isDraft: boolean;
 	sourceBranch: string;
 	targetBranch: string;
 	url: string;
