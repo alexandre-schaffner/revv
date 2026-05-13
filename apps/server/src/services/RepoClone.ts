@@ -4,7 +4,6 @@ import { join } from "node:path";
 import type { CloneStatus, Repository } from "@revv/shared";
 import { eq, or } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
-import { GITHUB_HOST } from "../auth";
 import { serverEnv } from "../config";
 import { CLONE_TIMEOUT_MS } from "../constants";
 import { repositories } from "../db/schema/index";
@@ -19,6 +18,7 @@ import {
 	runGitCapture,
 	runGitCloneWithTimeout,
 } from "./git-runner";
+import { SettingsService } from "./Settings";
 import { TokenProvider } from "./TokenProvider";
 import { WebSocketHub } from "./WebSocketHub";
 
@@ -450,6 +450,17 @@ export const RepoCloneServiceLive = Layer.effect(
 		const { db } = yield* DbService;
 		const wsHub = yield* WebSocketHub;
 		const tokenProvider = yield* TokenProvider;
+		const settingsService = yield* SettingsService;
+
+		// settingsService is captured from the layer constructor — equivalent to
+		// ChatChangesPush.ts's Effect.flatMap(SettingsService, ...) but satisfied
+		// at construction time rather than in the type parameter.
+		const resolveGitHost: Effect.Effect<string> = Effect.gen(function* () {
+			const settings = yield* settingsService.getSettings().pipe(
+				Effect.orElseSucceed(() => null),
+			);
+			return settings?.githubHost?.trim() || serverEnv.githubHost;
+		});
 
 		// Install the signal handlers eagerly so even an early crash (before
 		// the first clone is attempted) gets clean child-process teardown.
@@ -492,7 +503,8 @@ export const RepoCloneServiceLive = Layer.effect(
 
 				return Effect.gen(function* () {
 					const cloneDir = join(CLONE_BASE_DIR, repo.owner, repo.name);
-					const cloneUrl = `https://x-access-token:${githubToken}@${GITHUB_HOST}/${repo.fullName}.git`;
+					const gitHost = yield* resolveGitHost;
+					const cloneUrl = `https://x-access-token:${githubToken}@${gitHost}/${repo.fullName}.git`;
 
 					debug("repo-clone", `starting clone for ${repo.fullName} -> ${cloneDir}`);
 
@@ -534,16 +546,16 @@ export const RepoCloneServiceLive = Layer.effect(
 									"remote",
 									"set-url",
 									"origin",
-									`https://${GITHUB_HOST}/${repo.fullName}.git`,
+									`https://${gitHost}/${repo.fullName}.git`,
 								],
 								cloneDir,
 							);
 						},
-						catch: (err) =>
-							new CloneError({
-								message: err instanceof Error ? err.message : String(err),
-								cause: err,
-							}),
+					catch: (err) =>
+						new CloneError({
+							message: err instanceof Error ? err.message : String(err),
+							cause: err,
+						}),
 					}).pipe(
 						Effect.matchEffect({
 							onSuccess: () =>
@@ -606,7 +618,7 @@ export const RepoCloneServiceLive = Layer.effect(
 						}),
 					);
 
-				return cloneResult;
+					return cloneResult;
 				}).pipe(
 					// Always release the in-flight slot, regardless of success,
 					// failure, or fiber interruption. Without this, a single
@@ -623,8 +635,10 @@ export const RepoCloneServiceLive = Layer.effect(
 		return {
 			cloneRepo,
 
-			acquirePrWorktree: ({ repoId, prNumber, prHeadSha, githubToken }) =>
-				Effect.tryPromise({
+		acquirePrWorktree: ({ repoId, prNumber, prHeadSha, githubToken }) =>
+			Effect.gen(function* () {
+				const gitHost = yield* resolveGitHost;
+				return yield* Effect.tryPromise({
 					try: async () => {
 						const row = db
 							.select()
@@ -640,8 +654,8 @@ export const RepoCloneServiceLive = Layer.effect(
 						const branchName = `pr-${prNumber}`;
 						const worktreePath = join(clonePath, "worktrees", branchName);
 
-						const authedUrl = `https://x-access-token:${githubToken}@${GITHUB_HOST}/${row.fullName}.git`;
-						const cleanUrl = `https://${GITHUB_HOST}/${row.fullName}.git`;
+						const authedUrl = `https://x-access-token:${githubToken}@${gitHost}/${row.fullName}.git`;
+						const cleanUrl = `https://${gitHost}/${row.fullName}.git`;
 
 						try {
 							// Clear any per-worktree git locks left behind by a
@@ -882,15 +896,18 @@ export const RepoCloneServiceLive = Layer.effect(
 							cause: err,
 						});
 					},
-				}),
+				})
+			}),
 
-			listFilesAtSha: (
-				repoId: string,
-				prNumber: number,
-				headSha: string,
-				githubToken: string,
-			) =>
-				Effect.tryPromise({
+		listFilesAtSha: (
+			repoId: string,
+			prNumber: number,
+			headSha: string,
+			githubToken: string,
+		) =>
+			Effect.gen(function* () {
+				const gitHost = yield* resolveGitHost;
+				return yield* Effect.tryPromise({
 					try: async () => {
 						const row = db
 							.select()
@@ -934,8 +951,8 @@ export const RepoCloneServiceLive = Layer.effect(
 						);
 
 						if (!hasObject) {
-							const authedUrl = `https://x-access-token:${githubToken}@${GITHUB_HOST}/${row.fullName}.git`;
-							const cleanUrl = `https://${GITHUB_HOST}/${row.fullName}.git`;
+						const authedUrl = `https://x-access-token:${githubToken}@${gitHost}/${row.fullName}.git`;
+						const cleanUrl = `https://${gitHost}/${row.fullName}.git`;
 
 							try {
 								await runGit(
@@ -977,13 +994,14 @@ export const RepoCloneServiceLive = Layer.effect(
 						return { status: "ready", paths } as const;
 					},
 					catch: (err) =>
-						new CloneError({
-							message: err instanceof Error ? err.message : String(err),
-							cause: err,
-						}),
-				}),
+					new CloneError({
+						message: err instanceof Error ? err.message : String(err),
+						cause: err,
+					}),
+			})
+		}),
 
-			getFileContentAtSha: (
+		getFileContentAtSha: (
 				repoId: string,
 				headSha: string,
 				path: string,

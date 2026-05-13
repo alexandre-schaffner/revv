@@ -21,18 +21,29 @@
 // Map-reassignment for Svelte-5 reactivity, matching the `loadedHeadShas`
 // idiom in `review.svelte.ts` and the entry maps in `walkthrough.svelte.ts`.
 
-import type { Activity, ActivityKind } from '@revv/shared';
+import type {
+	Activity,
+	ActivityKind,
+	ChatPlan,
+	ChatTask,
+	InteractionMode,
+} from '@revv/shared';
 import {
+	approvePlan,
 	clearChat,
 	cherryPickProposedCommit,
 	discardProposedCommit,
+	fetchAvailableAgents,
 	rebaseProposedCommits,
+	rejectPlan,
 	advanceWorktree,
 	fetchChatMessages,
 	fetchProposedChanges,
 	pushProposedChanges,
 	resolveConflictsAndPush,
+	setInteractionMode as setInteractionModeApi,
 	streamChatMessage,
+	type AvailableAgents,
 	type MergePushError,
 	type MergePushResult,
 	type PersistedChatEntry,
@@ -63,6 +74,34 @@ export type ChatItem =
 			toolName: string;
 			summary: string;
 			turnId?: string;
+			/**
+			 * When set, this activity row was emitted by a sub-agent. The
+			 * SubagentInvocation card filters its nested activities by this
+			 * id; the top-level render loop skips them.
+			 */
+			subagentInvocationId?: string;
+	  }
+	| {
+			kind: 'task-list';
+			id: string;
+			turnId: string;
+			tasks: ReadonlyArray<ChatTask>;
+	  }
+	| {
+			kind: 'plan';
+			id: string;
+			turnId: string;
+			markdown: string;
+			status: 'pending' | 'approved' | 'rejected' | 'superseded';
+	  }
+	| {
+			kind: 'subagent';
+			id: string;
+			parentTurnId: string;
+			subagentType: string;
+			description: string;
+			status: 'running' | 'completed' | 'errored';
+			result: string | null;
 	  };
 
 let chatHistories = $state(new Map<string, ChatItem[]>());
@@ -74,6 +113,13 @@ let loadedPrIds = $state(new Set<string>());
 let proposedChanges = $state(new Map<string, ProposedChanges | null>());
 let pushingPrIds = $state(new Set<string>());
 let resolvingPushPrIds = $state(new Set<string>());
+// Session-level interaction mode, keyed by prId. Sourced from the persisted
+// timeline fetch and from explicit toggles. Defaults to 'default'.
+let interactionModes = $state(new Map<string, InteractionMode>());
+// Cached agent-availability probe (one global value — depends on the chosen
+// CLI agent, not on the PR).
+let availableAgents = $state<AvailableAgents | null>(null);
+let availableAgentsLoading = $state(false);
 
 // In-progress reviewer comments left on a proposed-changes diff. These are
 // ephemeral feedback bound for the chat agent (NOT PR review threads — the
@@ -173,6 +219,35 @@ export function isCherryPickingCommit(sha: string): boolean {
 
 export function isRebasingProposed(prId: string): boolean {
 	return rebasingPrIds.has(prId);
+}
+
+export function getInteractionMode(prId: string): InteractionMode {
+	return interactionModes.get(prId) ?? 'default';
+}
+
+export function getAvailableAgents(): AvailableAgents | null {
+	return availableAgents;
+}
+
+export function isPlanModeAvailable(): boolean {
+	return availableAgents?.planAvailable ?? false;
+}
+
+export async function loadAvailableAgents(): Promise<void> {
+	if (availableAgentsLoading || availableAgents !== null) return;
+	availableAgentsLoading = true;
+	try {
+		availableAgents = await fetchAvailableAgents();
+	} catch {
+		// Best-effort — the composer falls back to disabled plan mode.
+		availableAgents = {
+			agent: 'opencode',
+			agents: [],
+			planAvailable: false,
+		};
+	} finally {
+		availableAgentsLoading = false;
+	}
 }
 
 // ── Internal mutators (each reassigns the container per Svelte-5 reactivity) ─
@@ -323,13 +398,45 @@ function entryToChatItem(entry: PersistedChatEntry): ChatItem {
 			...(entry.error ? { error: entry.error } : {}),
 		};
 	}
+	if (entry.entryKind === 'activity') {
+		return {
+			kind: 'activity',
+			id: entry.id,
+			activityKind: entry.activityKind as ActivityKind,
+			toolName: entry.toolName ?? entry.activityKind,
+			summary: entry.summary,
+			turnId: entry.turnId,
+			...(entry.subagentInvocationId
+				? { subagentInvocationId: entry.subagentInvocationId }
+				: {}),
+		};
+	}
+	if (entry.entryKind === 'task-list') {
+		return {
+			kind: 'task-list',
+			id: `task-list-${entry.turnId}`,
+			turnId: entry.turnId,
+			tasks: entry.tasks,
+		};
+	}
+	if (entry.entryKind === 'plan') {
+		return {
+			kind: 'plan',
+			id: entry.id,
+			turnId: entry.turnId,
+			markdown: entry.planMarkdown,
+			status: entry.status,
+		};
+	}
+	// subagent
 	return {
-		kind: 'activity',
+		kind: 'subagent',
 		id: entry.id,
-		activityKind: entry.activityKind as ActivityKind,
-		toolName: entry.toolName ?? entry.activityKind,
-		summary: entry.summary,
-		turnId: entry.turnId,
+		parentTurnId: entry.parentTurnId,
+		subagentType: entry.subagentType,
+		description: entry.description,
+		status: entry.status,
+		result: entry.result,
 	};
 }
 
@@ -354,6 +461,10 @@ export async function loadChatHistory(prId: string): Promise<void> {
 		if (!streamingPrIds.has(prId)) {
 			setItems(prId, items);
 		}
+		// Pull the stored interaction mode so the composer toggle reflects
+		// the persisted state across reloads.
+		interactionModes.set(prId, timeline.interactionMode);
+		interactionModes = new Map(interactionModes);
 	} catch (err) {
 		// Best-effort — failures leave the panel empty + the user can still
 		// send a fresh message. Don't toast; the panel renders an empty state.
@@ -364,10 +475,24 @@ export async function loadChatHistory(prId: string): Promise<void> {
 export interface SendChatMessageParams {
 	prId: string;
 	message: string;
+	/** Plan id being approved with this message. Server flips session to 'default'. */
+	approvedPlanId?: string;
+	/** Override the session's stored interaction mode for this turn. */
+	interactionMode?: InteractionMode;
+}
+
+function spliceBeforeAssistant(prId: string, assistantId: string, item: ChatItem): void {
+	const items = chatHistories.get(prId) ?? [];
+	const idx = items.findIndex((i) => i.id === assistantId);
+	if (idx === -1) {
+		setItems(prId, [...items, item]);
+	} else {
+		setItems(prId, [...items.slice(0, idx), item, ...items.slice(idx)]);
+	}
 }
 
 export function sendChatMessage(params: SendChatMessageParams): void {
-	const { prId, message } = params;
+	const { prId, message, approvedPlanId, interactionMode } = params;
 	const trimmed = message.trim();
 	if (trimmed.length === 0) return;
 
@@ -402,7 +527,12 @@ export function sendChatMessage(params: SendChatMessageParams): void {
 	setStreaming(prId, true);
 
 	const controller = streamChatMessage(
-		{ prId, message: trimmed },
+		{
+			prId,
+			message: trimmed,
+			...(approvedPlanId !== undefined ? { approvedPlanId } : {}),
+			...(interactionMode !== undefined ? { interactionMode } : {}),
+		},
 		{
 			onText: (chunk) => {
 				patchItem(prId, assistantId, (item) =>
@@ -411,27 +541,79 @@ export function sendChatMessage(params: SendChatMessageParams): void {
 						: item,
 				);
 			},
-			onActivity: (activity: Activity) => {
+			onActivity: (activity) => {
 				// Activity entries are inserted BEFORE the streaming
 				// assistant message so the visual order is: user → activity
 				// → activity → … → assistant text. Find the placeholder and
 				// splice in front.
-				const items = chatHistories.get(prId) ?? [];
-				const idx = items.findIndex((i) => i.id === assistantId);
-				const item: ChatItem = {
+				spliceBeforeAssistant(prId, assistantId, {
 					kind: 'activity',
 					id: crypto.randomUUID(),
 					activityKind: activity.activityKind,
 					toolName: activity.toolName,
 					summary: activity.summary,
 					turnId,
-				};
-				if (idx === -1) {
-					setItems(prId, [...items, item]);
+					...(activity.subagentInvocationId
+						? { subagentInvocationId: activity.subagentInvocationId }
+						: {}),
+				});
+			},
+			onTaskList: ({ turnId: taskTurnId, tasks }) => {
+				// Reconcile with any existing task-list for the same turn —
+				// snapshot semantics. If we already have a row, update in
+				// place; otherwise insert.
+				const items = chatHistories.get(prId) ?? [];
+				const existingIdx = items.findIndex(
+					(i) => i.kind === 'task-list' && i.turnId === taskTurnId,
+				);
+				if (existingIdx === -1) {
+					spliceBeforeAssistant(prId, assistantId, {
+						kind: 'task-list',
+						id: `task-list-${taskTurnId}`,
+						turnId: taskTurnId,
+						tasks,
+					});
 				} else {
-					const next = [...items.slice(0, idx), item, ...items.slice(idx)];
-					setItems(prId, next);
+					patchItem(prId, items[existingIdx]!.id, (item) =>
+						item.kind === 'task-list' ? { ...item, tasks } : item,
+					);
 				}
+			},
+			onPlanPresented: ({ planId, turnId: planTurnId, markdown }) => {
+				spliceBeforeAssistant(prId, assistantId, {
+					kind: 'plan',
+					id: planId,
+					turnId: planTurnId,
+					markdown,
+					status: 'pending',
+				});
+			},
+			onSubagentStart: ({
+				invocationId,
+				parentTurnId,
+				subagentType,
+				description,
+			}) => {
+				spliceBeforeAssistant(prId, assistantId, {
+					kind: 'subagent',
+					id: invocationId,
+					parentTurnId,
+					subagentType,
+					description,
+					status: 'running',
+					result: null,
+				});
+			},
+			onSubagentEnd: ({ invocationId, result, ok }) => {
+				patchItem(prId, invocationId, (item) =>
+					item.kind === 'subagent'
+						? {
+								...item,
+								status: ok ? 'completed' : 'errored',
+								result,
+							}
+						: item,
+				);
 			},
 			onDone: () => {
 				patchItem(prId, assistantId, (item) =>
@@ -444,6 +626,32 @@ export function sendChatMessage(params: SendChatMessageParams): void {
 				void refreshProposedChanges(prId);
 			},
 			onError: (err) => {
+				// Plan-pending: the user tried to send a new message while a
+				// plan is awaiting decision. Drop the assistant placeholder,
+				// surface a focused toast pointing at the open plan, and let
+				// the UI scroll the card into view. Keep the user message —
+				// they'll likely want to retry after deciding.
+				if (err.code === 'PLAN_PENDING') {
+					removeItem(prId, assistantId);
+					setStreaming(prId, false);
+					abortControllers.delete(prId);
+					toast.error(
+						'Approve or reject the open plan before sending a new message.',
+					);
+					return;
+				}
+				// AGENT_UNAVAILABLE: user toggled plan mode but the opencode
+				// daemon has no `plan` agent. Disable the toggle and surface
+				// the message so the user knows what to do.
+				if (err.code === 'AGENT_UNAVAILABLE') {
+					removeItem(prId, assistantId);
+					setStreaming(prId, false);
+					abortControllers.delete(prId);
+					interactionModes.set(prId, 'default');
+					interactionModes = new Map(interactionModes);
+					toast.error(err.message ?? 'Plan mode unavailable on this opencode install.');
+					return;
+				}
 				// Special case: the PR head advanced but the worktree has
 				// unpushed agent commits. Surface the blocked state so the UI
 				// can show the discard/rebase panel instead of a generic error.
@@ -498,6 +706,67 @@ export function sendChatMessage(params: SendChatMessageParams): void {
 	abortControllers.set(prId, controller);
 }
 
+// ── Plan / interaction-mode actions ──────────────────────────────────────
+
+export async function setInteractionMode(
+	prId: string,
+	mode: InteractionMode,
+): Promise<void> {
+	const prior = interactionModes.get(prId) ?? 'default';
+	interactionModes.set(prId, mode);
+	interactionModes = new Map(interactionModes);
+	try {
+		await setInteractionModeApi(prId, mode);
+	} catch (err) {
+		// Roll back on failure.
+		interactionModes.set(prId, prior);
+		interactionModes = new Map(interactionModes);
+		toast.error(
+			err instanceof Error ? err.message : 'Failed to set interaction mode',
+		);
+	}
+}
+
+export async function approvePlanAction(
+	prId: string,
+	planId: string,
+): Promise<void> {
+	try {
+		await approvePlan(prId, planId);
+		patchItem(prId, planId, (item) =>
+			item.kind === 'plan' ? { ...item, status: 'approved' } : item,
+		);
+		// Flipping out of plan mode for the execution turn is server-side;
+		// mirror it locally so the toggle UI reflects the new state until
+		// the next refresh.
+		interactionModes.set(prId, 'default');
+		interactionModes = new Map(interactionModes);
+		// Kick off the execution turn carrying the approved plan id.
+		sendChatMessage({
+			prId,
+			message: 'Proceed with the plan above.',
+			approvedPlanId: planId,
+			interactionMode: 'default',
+		});
+	} catch (err) {
+		toast.error(err instanceof Error ? err.message : 'Approve failed');
+	}
+}
+
+export async function rejectPlanAction(
+	prId: string,
+	planId: string,
+): Promise<void> {
+	try {
+		await rejectPlan(prId, planId);
+		patchItem(prId, planId, (item) =>
+			item.kind === 'plan' ? { ...item, status: 'rejected' } : item,
+		);
+	} catch (err) {
+		toast.error(err instanceof Error ? err.message : 'Reject failed');
+	}
+}
+
 export interface SendProposedFeedbackParams {
 	prId: string;
 	sha: string;
@@ -538,6 +807,8 @@ export async function clearChatHistory(prId: string): Promise<void> {
 	setStreaming(prId, false);
 	setProposedChanges(prId, null);
 	setWorktreeBlocked(prId, null);
+	interactionModes.set(prId, 'default');
+	interactionModes = new Map(interactionModes);
 	// Reset the loaded flag so a subsequent navigation re-pulls the
 	// (now-empty) timeline from the server. Clearing the agent-side session
 	// also wipes chat_messages/chat_activities via FK CASCADE on

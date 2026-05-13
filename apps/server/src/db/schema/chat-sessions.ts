@@ -45,6 +45,12 @@ export const chatSessions = sqliteTable(
 		worktreePath: text('worktree_path').notNull(),
 		branchName: text('branch_name').notNull(),
 		nextSequence: integer('next_sequence').notNull().default(0),
+		// 'default' | 'plan' — t3code-style session-level interaction toggle.
+		// In 'plan' mode the driver flips Claude into `permissionMode: 'plan'`
+		// or routes opencode through its named `plan` agent. The flag persists
+		// across turns until the user toggles it back or auto-flip happens on
+		// plan approval.
+		interactionMode: text('interaction_mode').notNull().default('default'),
 		createdAt: text('created_at').notNull(),
 		lastActivityAt: text('last_activity_at').notNull(),
 	},

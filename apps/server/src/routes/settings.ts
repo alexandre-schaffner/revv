@@ -58,6 +58,7 @@ export const settingsRoutes = new Elysia({ prefix: '/api/settings' })
 					diffViewMode: t.String(),
 					autoFetchInterval: t.Number(),
 					fileTreeScope: t.Union([t.Literal('changed'), t.Literal('all')]),
+					githubHost: t.String({ minLength: 1 }),
 				})
 			),
 		}

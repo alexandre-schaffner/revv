@@ -35,6 +35,7 @@ const DEFAULT_SETTINGS: UserSettings = {
 	diffViewMode: 'unified',
 	autoFetchInterval: AUTO_FETCH_DEFAULT_INTERVAL,
 	fileTreeScope: 'all',
+	githubHost: 'nocturlab.ghe.com',
 };
 
 const MIN_MAX_TURNS = 10;
@@ -93,6 +94,10 @@ function normalize(raw: unknown): UserSettings {
 			(typeof r['fileTreeScope'] === 'string'
 				? (r['fileTreeScope'] as FileTreeScope)
 				: DEFAULT_SETTINGS.fileTreeScope),
+		githubHost:
+			typeof r['githubHost'] === 'string' && (r['githubHost'] as string).length > 0
+				? (r['githubHost'] as string)
+				: DEFAULT_SETTINGS.githubHost,
 	};
 }
 

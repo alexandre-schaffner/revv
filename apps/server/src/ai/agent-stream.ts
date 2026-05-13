@@ -63,6 +63,18 @@ import { buildExplorationDescription } from "./prompts/walkthrough";
  * callers that need to match against MCP tool names (walkthrough phase
  * transitions) should compare `bareName` against the known set.
  */
+/**
+ * Snapshot entry inside a `task-list-update`. Mirrors the shared `ChatTask`
+ * shape without the persistence id (the server assigns one downstream).
+ */
+export interface NormalizedTask {
+	readonly id: string;
+	readonly content: string;
+	readonly activeForm: string | null;
+	readonly status: "pending" | "in_progress" | "completed";
+	readonly priority: "low" | "medium" | "high" | null;
+}
+
 export type NormalizedAgentEvent =
 	| {
 			readonly kind: "text-delta";
@@ -85,6 +97,62 @@ export type NormalizedAgentEvent =
 			readonly mcpServer?: string;
 			/** `toolName` with the `mcp__<server>__` prefix stripped. */
 			readonly bareName: string;
+			/**
+			 * When the tool was emitted from inside a sub-agent (Claude
+			 * `parent_tool_use_id` matches a known Task invocation id, or
+			 * opencode part's `messageID` matches a sub-agent message), this
+			 * is the sub-agent's `providerCallId`. Callers can stamp it onto
+			 * the activity row so the UI groups it under the parent
+			 * SubagentInvocation card.
+			 */
+			readonly subagentProviderCallId?: string;
+	  }
+	/**
+	 * Full task-list snapshot. Both providers re-emit the entire list on each
+	 * update — the consumer reconciles against persisted rows.
+	 */
+	| {
+			readonly kind: "task-list-update";
+			readonly tasks: ReadonlyArray<NormalizedTask>;
+			readonly source: "claude" | "opencode";
+	  }
+	/**
+	 * Agent has presented a plan (Claude ExitPlanMode tool, or the opencode
+	 * `plan` agent finishing its turn). `providerPlanId` is the source's id
+	 * for the plan emission (Claude tool_use.id; opencode synthesizes a UUID
+	 * per turn). The chat route persists the plan and forwards a wire-level
+	 * `plan-presented` frame with the assigned `planId`.
+	 */
+	| {
+			readonly kind: "plan-presented";
+			readonly markdown: string;
+			readonly providerPlanId: string;
+			readonly source: "claude" | "opencode";
+	  }
+	/**
+	 * A sub-agent invocation has started. The driver maintains a closure-side
+	 * map keyed by `providerCallId` so the matching `subagent-end` can be
+	 * correlated.
+	 */
+	| {
+			readonly kind: "subagent-start";
+			readonly providerCallId: string;
+			readonly subagentType: string;
+			readonly description: string;
+			readonly prompt: string;
+			readonly source: "claude" | "opencode";
+	  }
+	/**
+	 * A sub-agent invocation has finished. `ok = false` means the sub-agent
+	 * errored out (tool_result `is_error=true` for Claude; agent part state
+	 * marking error for opencode). `result` is the final summary text.
+	 */
+	| {
+			readonly kind: "subagent-end";
+			readonly providerCallId: string;
+			readonly result: string;
+			readonly ok: boolean;
+			readonly source: "claude" | "opencode";
 	  }
 	| { readonly kind: "error"; readonly message: string };
 
@@ -153,6 +221,10 @@ export function buildActivity(
  */
 interface ClaudeMessage {
 	type: string;
+	// Present on both `assistant` and `user` messages — sub-agent activity
+	// inside the parent stream carries this so callers can attribute it back
+	// to the Task tool_use that spawned it.
+	parent_tool_use_id?: string | null;
 	message?: {
 		content?: Array<{
 			type: string;
@@ -162,6 +234,14 @@ interface ClaudeMessage {
 			name?: string;
 			id?: string;
 			input?: unknown;
+			// On `tool_result` blocks (sent in `user` messages):
+			tool_use_id?: string;
+			is_error?: boolean;
+			// `content` on tool_result can be either a string or a list of
+			// content blocks. We accept both shapes; the walker normalizes.
+			content?:
+				| string
+				| Array<{ type: string; text?: string }>;
 		}>;
 	};
 	subtype?: string;
@@ -202,12 +282,38 @@ export async function walkClaudeMessages(
 ): Promise<WalkthroughTokenUsage | null> {
 	let tokenUsage: WalkthroughTokenUsage | null = null;
 
+	// Tracks active Task (sub-agent) invocations by tool_use.id so we can:
+	//   (a) emit `subagent-end` when the matching tool_result arrives, and
+	//   (b) stamp nested tool calls with `subagentProviderCallId` even on
+	//       SDK builds where `parent_tool_use_id` is missing from the
+	//       nested message (stack-based fallback).
+	const activeSubagentCallIds = new Set<string>();
+
 	for await (const raw of iter) {
 		if (opts?.onMessage) {
 			await opts.onMessage(raw);
 		}
 		const message = raw as ClaudeMessage;
+
 		if (message.type === "assistant" && message.message?.content) {
+			// Sub-agent attribution: if this assistant message carries a
+			// parent_tool_use_id we know the agent emitting it is a Task
+			// sub-agent. Stamp every tool-call inside.
+			const parentId =
+				typeof message.parent_tool_use_id === "string" &&
+				activeSubagentCallIds.has(message.parent_tool_use_id)
+					? message.parent_tool_use_id
+					: null;
+			// Fallback: if SDK build doesn't surface parent_tool_use_id on
+			// nested messages, attribute to *any* known-active Task. Safe
+			// because Claude only runs one Task at a time per turn.
+			const fallbackParentId =
+				parentId === null && activeSubagentCallIds.size > 0
+					? // Pick the first (only) active one
+						activeSubagentCallIds.values().next().value ?? null
+					: null;
+			const attribution = parentId ?? fallbackParentId;
+
 			for (const block of message.message.content) {
 				if (block.type === "text" && typeof block.text === "string") {
 					emit({ kind: "text-delta", data: block.text });
@@ -217,15 +323,49 @@ export async function walkClaudeMessages(
 				) {
 					emit({ kind: "reasoning-delta", data: block.thinking });
 				} else if (block.type === "redacted_thinking") {
-					// `data` carries the encrypted blob; we don't surface it.
-					// Emit a sentinel so the guard's first-event timer resets
-					// and any UI that subscribes to reasoning frames can render
-					// a placeholder instead of nothing.
 					emit({
 						kind: "reasoning-delta",
 						data: "[redacted thinking]",
 					});
 				} else if (block.type === "tool_use" && typeof block.name === "string") {
+					// Surface-specific tool routing for TodoWrite / ExitPlanMode
+					// / Task. These don't flow through the generic tool-call
+					// event — they have their own normalized shapes.
+					if (block.name === "TodoWrite") {
+						const tasks = parseClaudeTodoWriteInput(block.input);
+						emit({
+							kind: "task-list-update",
+							tasks,
+							source: "claude",
+						});
+						continue;
+					}
+					if (block.name === "ExitPlanMode") {
+						const plan = extractClaudePlanMarkdown(block.input);
+						if (plan !== null && typeof block.id === "string") {
+							emit({
+								kind: "plan-presented",
+								markdown: plan,
+								providerPlanId: block.id,
+								source: "claude",
+							});
+						}
+						continue;
+					}
+					if (block.name === "Task" && typeof block.id === "string") {
+						const info = parseClaudeTaskInput(block.input);
+						activeSubagentCallIds.add(block.id);
+						emit({
+							kind: "subagent-start",
+							providerCallId: block.id,
+							subagentType: info.subagentType,
+							description: info.description,
+							prompt: info.prompt,
+							source: "claude",
+						});
+						continue;
+					}
+
 					const shape = classifyToolCallShape(block.name);
 					emit({
 						kind: "tool-call",
@@ -237,7 +377,30 @@ export async function walkClaudeMessages(
 							? { mcpServer: shape.mcpServer }
 							: {}),
 						bareName: shape.bareName,
+						...(attribution !== null
+							? { subagentProviderCallId: attribution }
+							: {}),
 					});
+				}
+			}
+		} else if (message.type === "user" && message.message?.content) {
+			// `user` messages carry tool_result blocks. When one matches an
+			// active Task, emit `subagent-end` and drop the mapping.
+			for (const block of message.message.content) {
+				if (
+					block.type === "tool_result" &&
+					typeof block.tool_use_id === "string" &&
+					activeSubagentCallIds.has(block.tool_use_id)
+				) {
+					const resultText = extractClaudeToolResultText(block.content);
+					emit({
+						kind: "subagent-end",
+						providerCallId: block.tool_use_id,
+						result: resultText,
+						ok: block.is_error !== true,
+						source: "claude",
+					});
+					activeSubagentCallIds.delete(block.tool_use_id);
 				}
 			}
 		} else if (message.type === "result" && message.usage) {
@@ -252,6 +415,141 @@ export async function walkClaudeMessages(
 	}
 
 	return tokenUsage;
+}
+
+// ── Claude tool-input decoders ─────────────────────────────────────────────
+
+interface ClaudeTodoInput {
+	content?: string;
+	activeForm?: string;
+	status?: string;
+	priority?: string;
+}
+
+/**
+ * Parse Claude's `TodoWrite` tool input into a normalized snapshot. The SDK
+ * doesn't supply per-todo ids, so we content-hash `(content + activeForm)`
+ * for stability across snapshots — identical entries collapse, which is
+ * acceptable for a display list.
+ */
+function parseClaudeTodoWriteInput(input: unknown): NormalizedTask[] {
+	if (input === null || typeof input !== "object") return [];
+	const obj = input as Record<string, unknown>;
+	const todos = obj["todos"];
+	if (!Array.isArray(todos)) return [];
+
+	const out: NormalizedTask[] = [];
+	for (const raw of todos) {
+		if (raw === null || typeof raw !== "object") continue;
+		const t = raw as ClaudeTodoInput;
+		const content = typeof t.content === "string" ? t.content : "";
+		if (content.length === 0) continue;
+		const activeForm =
+			typeof t.activeForm === "string" && t.activeForm.length > 0
+				? t.activeForm
+				: null;
+		const status = normalizeTaskStatus(t.status);
+		const priority = normalizeTaskPriority(t.priority);
+		out.push({
+			id: claudeTodoHash(content, activeForm),
+			content,
+			activeForm,
+			status,
+			priority,
+		});
+	}
+	return out;
+}
+
+function normalizeTaskStatus(
+	v: unknown,
+): "pending" | "in_progress" | "completed" {
+	if (v === "in_progress") return "in_progress";
+	if (v === "completed") return "completed";
+	// Opencode emits 'cancelled' too — we collapse to 'completed' for UI
+	// simplicity (a cancelled task is closed). Anything else → pending.
+	if (v === "cancelled") return "completed";
+	return "pending";
+}
+
+function normalizeTaskPriority(
+	v: unknown,
+): "low" | "medium" | "high" | null {
+	if (v === "low" || v === "medium" || v === "high") return v;
+	return null;
+}
+
+/**
+ * Deterministic id for Claude todos (no SDK-provided id). Cheap FNV-1a hash
+ * — collisions only matter if two semantically distinct todos render
+ * identical content + activeForm, which would already render as a single
+ * row to the user anyway.
+ */
+function claudeTodoHash(content: string, activeForm: string | null): string {
+	const input = `${content}\x00${activeForm ?? ""}`;
+	let hash = 2166136261;
+	for (let i = 0; i < input.length; i += 1) {
+		hash ^= input.charCodeAt(i);
+		hash = Math.imul(hash, 16777619);
+	}
+	// Render as hex; pad to 8 chars for stable length.
+	return `claude-todo-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+/**
+ * `ExitPlanMode.input` per Claude SDK has a single `plan: string` field.
+ * Defensive: accept other shapes too.
+ */
+function extractClaudePlanMarkdown(input: unknown): string | null {
+	if (input === null || typeof input !== "object") return null;
+	const plan = (input as Record<string, unknown>)["plan"];
+	if (typeof plan === "string" && plan.trim().length > 0) return plan;
+	return null;
+}
+
+/**
+ * `Task.input` per Claude SDK:
+ *   { subagent_type: string, description: string, prompt: string }
+ * Some SDK builds use `subagentType` (camelCase). Accept both.
+ */
+function parseClaudeTaskInput(input: unknown): {
+	subagentType: string;
+	description: string;
+	prompt: string;
+} {
+	const fallback = {
+		subagentType: "general-purpose",
+		description: "Sub-agent task",
+		prompt: "",
+	};
+	if (input === null || typeof input !== "object") return fallback;
+	const obj = input as Record<string, unknown>;
+	const subagentType =
+		(typeof obj["subagent_type"] === "string" && obj["subagent_type"]) ||
+		(typeof obj["subagentType"] === "string" && obj["subagentType"]) ||
+		fallback.subagentType;
+	const description =
+		(typeof obj["description"] === "string" && obj["description"]) ||
+		fallback.description;
+	const prompt =
+		(typeof obj["prompt"] === "string" && obj["prompt"]) || fallback.prompt;
+	return { subagentType, description, prompt };
+}
+
+/**
+ * Tool result content can be a plain string OR a list of content blocks.
+ * Concatenate text blocks into a single string for the sub-agent's result.
+ */
+function extractClaudeToolResultText(
+	content: string | Array<{ type: string; text?: string }> | undefined,
+): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.map((b) =>
+			b && b.type === "text" && typeof b.text === "string" ? b.text : "",
+		)
+		.join("");
 }
 
 // ── Opencode Part decoder ───────────────────────────────────────────────────
@@ -277,6 +575,13 @@ export interface OpencodePart {
 	 * assistant text.
 	 */
 	messageID?: string;
+	// `AgentPart` specific (type: "agent") — names the sub-agent invoked.
+	name?: string;
+	// `SubtaskPart` specific (type: "subtask") — carries the sub-agent
+	// prompt + description + agent name. opencode 1.14+.
+	prompt?: string;
+	description?: string;
+	agent?: string;
 	[k: string]: unknown;
 }
 
@@ -350,8 +655,123 @@ export function decodeOpencodePart(
 		};
 	}
 
-	// step-start / step-finish / file / snapshot / agent / etc. — ignored
+	// step-start / step-finish / file / snapshot / retry / compaction — ignored.
+	// `agent` and `subtask` parts are decoded externally via decodeOpencodeAgentPart
+	// because their start/end semantics require caller-owned dedup state.
 	return { event: null, newEmittedLen: alreadyEmittedLen };
+}
+
+/**
+ * Decode a `type: "agent"` or `type: "subtask"` part into either a
+ * `subagent-start` or `subagent-end` event. State is caller-owned because
+ * opencode resends the part on state transitions and we want exactly one
+ * start and one end per partId.
+ *
+ * Returns null when the part should be skipped (already seen in the
+ * appropriate state).
+ */
+export function decodeOpencodeAgentPart(
+	part: OpencodePart,
+	state: {
+		seenAgentStartPartIds: Set<string>;
+		agentEndedPartIds: Set<string>;
+	},
+): NormalizedAgentEvent | null {
+	if (part.type !== "agent" && part.type !== "subtask") return null;
+	const partId = typeof part.id === "string" ? part.id : null;
+	if (!partId) return null;
+
+	const stateStatus =
+		typeof part.state === "object" && part.state !== null
+			? typeof part.state["status"] === "string"
+				? (part.state["status"] as string)
+				: null
+			: null;
+	// `subtask` parts don't carry a `state.status` — they're emitted once
+	// with the agent name + prompt, and the actual sub-agent message stream
+	// lives on a child messageID. We treat them as "start" on first sighting
+	// and never emit an "end" (the caller pairs with the eventual sub-agent
+	// message's terminal text).
+	const isRunning =
+		stateStatus === null ||
+		stateStatus === "running" ||
+		stateStatus === "pending";
+	const isCompleted =
+		stateStatus === "completed" || stateStatus === "done";
+	const isError =
+		stateStatus === "error" ||
+		stateStatus === "errored" ||
+		stateStatus === "failed";
+
+	if (isRunning) {
+		if (state.seenAgentStartPartIds.has(partId)) return null;
+		state.seenAgentStartPartIds.add(partId);
+		const subagentType =
+			(typeof part.agent === "string" && part.agent) ||
+			(typeof part.name === "string" && part.name) ||
+			"general-purpose";
+		const description =
+			(typeof part.description === "string" && part.description) ||
+			subagentType;
+		const prompt =
+			(typeof part.prompt === "string" && part.prompt) || "";
+		return {
+			kind: "subagent-start",
+			providerCallId: partId,
+			subagentType,
+			description,
+			prompt,
+			source: "opencode",
+		};
+	}
+
+	if (isCompleted || isError) {
+		if (state.agentEndedPartIds.has(partId)) return null;
+		state.agentEndedPartIds.add(partId);
+		const stateObj = part.state as Record<string, unknown> | undefined;
+		const result =
+			typeof stateObj?.["result"] === "string"
+				? (stateObj["result"] as string)
+				: typeof stateObj?.["output"] === "string"
+					? (stateObj["output"] as string)
+					: "";
+		return {
+			kind: "subagent-end",
+			providerCallId: partId,
+			result,
+			ok: !isError,
+			source: "opencode",
+		};
+	}
+
+	return null;
+}
+
+/**
+ * Decode a `todo.updated` SSE event body. Returns the snapshot — caller is
+ * responsible for content-hashing to suppress no-op resends.
+ */
+export function decodeOpencodeTodoUpdate(
+	properties: Record<string, unknown>,
+): NormalizedTask[] {
+	const todos = properties["todos"];
+	if (!Array.isArray(todos)) return [];
+	const out: NormalizedTask[] = [];
+	for (const raw of todos) {
+		if (raw === null || typeof raw !== "object") continue;
+		const t = raw as Record<string, unknown>;
+		const id = typeof t["id"] === "string" ? (t["id"] as string) : null;
+		const content = typeof t["content"] === "string" ? (t["content"] as string) : "";
+		if (!id || content.length === 0) continue;
+		out.push({
+			id,
+			content,
+			activeForm: null,
+			status: normalizeTaskStatus(t["status"]),
+			priority: normalizeTaskPriority(t["priority"]),
+		});
+	}
+	return out;
 }
 
 function pickChunk(
@@ -413,17 +833,45 @@ export function walkOpencodePartsWithState(
 		 * message we just asked for is by definition not assistant output.
 		 */
 		assistantMessageID?: string;
+		seenAgentStartPartIds?: Set<string>;
+		agentEndedPartIds?: Set<string>;
+		subagentMessageIdMap?: Map<string, string>;
 	},
 	emit: (ev: NormalizedAgentEvent) => void,
 ): void {
+	const seenAgentStartPartIds =
+		state.seenAgentStartPartIds ?? new Set<string>();
+	const agentEndedPartIds = state.agentEndedPartIds ?? new Set<string>();
+	const subagentMessageIdMap =
+		state.subagentMessageIdMap ?? new Map<string, string>();
 	for (const part of parts) {
+		// Allow assistant-authored parts AND child-message parts (sub-agent
+		// authored) through the assistant-id filter.
+		const childMatch =
+			part.messageID && subagentMessageIdMap.has(part.messageID);
 		if (
 			part.messageID &&
 			((state.userMessageIDs && state.userMessageIDs.has(part.messageID)) ||
 				(state.assistantMessageID !== undefined &&
 					state.assistantMessageID !== "" &&
-					part.messageID !== state.assistantMessageID))
+					part.messageID !== state.assistantMessageID &&
+					!childMatch))
 		) {
+			continue;
+		}
+		if (part.type === "agent" || part.type === "subtask") {
+			const ev = decodeOpencodeAgentPart(part, {
+				seenAgentStartPartIds,
+				agentEndedPartIds,
+			});
+			if (ev) {
+				if (ev.kind === "subagent-start") {
+					const childMsgId = extractChildMessageId(part);
+					if (childMsgId)
+						subagentMessageIdMap.set(childMsgId, ev.providerCallId);
+				}
+				emit(ev);
+			}
 			continue;
 		}
 		if (part.type === "tool") {
@@ -438,6 +886,18 @@ export function walkOpencodePartsWithState(
 		if (!event) continue;
 		if (event.kind === "text-delta" || event.kind === "reasoning-delta") {
 			state.emittedTextLen.set(partId, newEmittedLen);
+		}
+		// Stamp sub-agent attribution for tool calls authored by a child msg.
+		if (
+			event.kind === "tool-call" &&
+			part.messageID &&
+			subagentMessageIdMap.has(part.messageID)
+		) {
+			emit({
+				...event,
+				subagentProviderCallId: subagentMessageIdMap.get(part.messageID)!,
+			});
+			continue;
 		}
 		emit(event);
 	}
@@ -493,11 +953,44 @@ export async function subscribeOpencodeStream(
 		 * any assistant `message.part.updated` events arrive — no race.
 		 */
 		userMessageIDs?: Set<string>;
+		/**
+		 * Per-partId dedup for sub-agent start emission. Opencode resends
+		 * `agent`/`subtask` parts on state transitions; we only emit one
+		 * `subagent-start` per part. Shared with the backstop walk so the
+		 * synchronous response body doesn't re-emit.
+		 */
+		seenAgentStartPartIds?: Set<string>;
+		/** Same idea for `subagent-end`. */
+		agentEndedPartIds?: Set<string>;
+		/**
+		 * Last task-list snapshot hash, used to suppress no-op `todo.updated`
+		 * resends. Caller-owned so the backstop walk can share if needed.
+		 */
+		lastTodoSnapshotHash?: { value: string | null };
+		/**
+		 * Map from a sub-agent's child messageID to the parent invocation's
+		 * providerCallId. The SSE handler populates this when a `subtask` or
+		 * `agent` part arrives; subsequent tool parts whose messageID hits
+		 * the map get stamped with `subagentProviderCallId` so the UI nests
+		 * them under the parent invocation card.
+		 *
+		 * Heuristic-only — opencode doesn't always expose the child-message
+		 * id on the parent part. Unstamped tool parts render at top level.
+		 */
+		subagentMessageIdMap?: Map<string, string>;
 	},
 ): Promise<void> {
 	const emittedTextLen = opts?.emittedTextLen ?? new Map<string, number>();
 	const seenToolPartIds = opts?.seenToolPartIds ?? new Set<string>();
 	const userMessageIDs = opts?.userMessageIDs ?? new Set<string>();
+	const seenAgentStartPartIds =
+		opts?.seenAgentStartPartIds ?? new Set<string>();
+	const agentEndedPartIds = opts?.agentEndedPartIds ?? new Set<string>();
+	const lastTodoSnapshotHash = opts?.lastTodoSnapshotHash ?? {
+		value: null as string | null,
+	};
+	const subagentMessageIdMap =
+		opts?.subagentMessageIdMap ?? new Map<string, string>();
 	const drainMs = opts?.drainMs ?? 100;
 
 	// Compose an inner signal so we can run a final 100ms drain after the
@@ -539,6 +1032,16 @@ export async function subscribeOpencodeStream(
 			return;
 		}
 
+		if (type === "todo.updated") {
+			const tasks = decodeOpencodeTodoUpdate(properties);
+			const hash = hashTaskSnapshot(tasks);
+			if (hash !== lastTodoSnapshotHash.value) {
+				lastTodoSnapshotHash.value = hash;
+				emit({ kind: "task-list-update", tasks, source: "opencode" });
+			}
+			return;
+		}
+
 		if (type === "message.part.updated") {
 			const part = properties["part"] as OpencodePart | undefined;
 			const delta =
@@ -551,6 +1054,30 @@ export async function subscribeOpencodeStream(
 			// re-emission of the user's input as a `text` part gets decoded as
 			// an assistant text-delta and echoed back into the chat bubble.
 			if (part.messageID && userMessageIDs.has(part.messageID)) {
+				return;
+			}
+
+			// Agent / subtask parts: route through the dedicated decoder
+			// that owns the start/end dedup. Also populate the
+			// messageID → providerCallId map so tool parts authored by
+			// the sub-agent's child message can be stamped.
+			if (part.type === "agent" || part.type === "subtask") {
+				const ev = decodeOpencodeAgentPart(part, {
+					seenAgentStartPartIds,
+					agentEndedPartIds,
+				});
+				if (ev) {
+					if (ev.kind === "subagent-start") {
+						// Best-effort correlation: opencode sometimes carries
+						// the child message id under `state.messageID` or
+						// `messageID` on subtask parts.
+						const childMsgId = extractChildMessageId(part);
+						if (childMsgId) {
+							subagentMessageIdMap.set(childMsgId, ev.providerCallId);
+						}
+					}
+					emit(ev);
+				}
 				return;
 			}
 
@@ -583,6 +1110,17 @@ export async function subscribeOpencodeStream(
 				if (event.kind === "text-delta" || event.kind === "reasoning-delta") {
 					emittedTextLen.set(partId, newEmittedLen);
 				} else if (event.kind === "tool-call") {
+					// Stamp sub-agent attribution if this tool part belongs
+					// to a known child message.
+					const stamped =
+						part.messageID &&
+						subagentMessageIdMap.has(part.messageID)
+							? {
+									...event,
+									subagentProviderCallId:
+										subagentMessageIdMap.get(part.messageID)!,
+								}
+							: event;
 					debug(
 						"agent-stream",
 						"emit tool-call:",
@@ -592,6 +1130,8 @@ export async function subscribeOpencodeStream(
 						"bareName:",
 						event.bareName,
 					);
+					emit(stamped);
+					return;
 				}
 				emit(event);
 			} else if (part.type === "tool") {
@@ -645,6 +1185,49 @@ export async function subscribeOpencodeStream(
 	} finally {
 		if (!signal.aborted) signal.removeEventListener("abort", onCallerAbort);
 	}
+}
+
+// ── Sub-agent + task helpers ────────────────────────────────────────────────
+
+/**
+ * Stable hash of a task-list snapshot. The opencode daemon resends
+ * `todo.updated` events even when the contents are unchanged; we content-hash
+ * to skip those resends and only emit `task-list-update` on real diffs.
+ */
+function hashTaskSnapshot(tasks: ReadonlyArray<NormalizedTask>): string {
+	const parts: string[] = [];
+	for (const t of tasks) {
+		parts.push(
+			`${t.id}|${t.content}|${t.activeForm ?? ""}|${t.status}|${t.priority ?? ""}`,
+		);
+	}
+	const joined = parts.join("\n");
+	let hash = 2166136261;
+	for (let i = 0; i < joined.length; i += 1) {
+		hash ^= joined.charCodeAt(i);
+		hash = Math.imul(hash, 16777619);
+	}
+	return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+/**
+ * Best-effort extraction of the sub-agent's child message id from an
+ * `agent`/`subtask` part. Different opencode versions stash this in
+ * different locations; we try the known ones.
+ */
+function extractChildMessageId(part: OpencodePart): string | null {
+	const state = part.state as Record<string, unknown> | undefined;
+	if (state) {
+		if (typeof state["messageID"] === "string") return state["messageID"];
+		if (typeof state["childMessageID"] === "string")
+			return state["childMessageID"];
+	}
+	// Some builds put the child message id on `part` directly under
+	// `childMessageID`.
+	if (typeof (part as Record<string, unknown>)["childMessageID"] === "string") {
+		return (part as Record<string, unknown>)["childMessageID"] as string;
+	}
+	return null;
 }
 
 // ── Abort + hard-timeout harness ────────────────────────────────────────────

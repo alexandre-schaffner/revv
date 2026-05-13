@@ -1,21 +1,9 @@
 <script lang="ts">
-	import { getIsAuthenticated } from '$lib/stores/auth.svelte';
-	import SignInButton from './SignInButton.svelte';
-
+	// Legacy guard. The unauthenticated welcome UI moved into
+	// `OnboardingGate` + `OnboardingFlow`, which wraps the entire app shell
+	// at the layout level. Keep this component as a pass-through so existing
+	// imports (e.g. `+page.svelte`) don't need updating in this change.
 	let { children } = $props();
 </script>
 
-{#if getIsAuthenticated()}
-	{@render children()}
-{:else}
-	<div class="flex h-full flex-col items-center justify-center gap-6">
-		<div class="text-center">
-			<div class="mb-3 flex justify-center">
-				<img src="/icon.svg" alt="Revv" style="width:96px;height:96px;border-radius:20px;" />
-			</div>
-			<h1 class="text-xl font-semibold text-text-primary">Welcome to Revv</h1>
-			<p class="mt-1 text-sm text-text-muted">Connect your GitHub account to start reviewing PRs</p>
-		</div>
-		<SignInButton />
-	</div>
-{/if}
+{@render children()}

@@ -13,6 +13,10 @@ export const user = sqliteTable('user', {
 	githubLogin: text('github_login'),
 	createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
 	updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
+	// Timestamp of when the user finished the onboarding flow. Null until the
+	// 5-step onboarding (welcome → host → sign-in → connect repo → done)
+	// completes. Surviving across reinstalls — see OnboardingGate.
+	onboardedAt: integer('onboarded_at', { mode: 'timestamp' }),
 });
 
 export const session = sqliteTable('session', {

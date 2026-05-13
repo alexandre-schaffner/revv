@@ -435,11 +435,13 @@
 	$effect(() => {
 		if (!panelActive) return;
 		if (!host) return;
+		let frameId: number;
 		untrack(() => {
-			requestAnimationFrame(() => {
+			frameId = requestAnimationFrame(() => {
 				if (activePath != null && tree != null) {
 					tree.focusPath(activePath);
-					requestAnimationFrame(() => {
+					frameId = requestAnimationFrame(() => {
+						if (!host) return;
 						const sr = tree?.getFileTreeContainer()?.shadowRoot;
 						const row =
 							sr?.querySelector<HTMLElement>('[data-type="item"][tabindex="0"]') ??
@@ -448,6 +450,7 @@
 						else host.focus();
 					});
 				} else {
+					if (!host) return;
 					const container = tree?.getFileTreeContainer();
 					const firstRow = container?.shadowRoot?.querySelector<HTMLElement>('[data-type="item"]');
 					if (firstRow) firstRow.focus();
@@ -455,6 +458,7 @@
 				}
 			});
 		});
+		return () => cancelAnimationFrame(frameId);
 	});
 
 	onDestroy(() => {

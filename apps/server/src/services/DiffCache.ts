@@ -6,6 +6,7 @@ import { withDb } from '../effects/with-db';
 import type { GitHubError } from '../domain/errors';
 import { GitHubService } from './GitHub';
 import { GitHubEtagCache } from './GitHubEtagCache';
+import { SettingsService } from './Settings';
 
 export interface CachedDiffFile {
 	readonly path: string;
@@ -109,7 +110,7 @@ export const getOrFetchDiffFiles = (
 ): Effect.Effect<
 	CachedDiffFile[],
 	GitHubError,
-	DiffCacheService | GitHubService | DbService | GitHubEtagCache
+	DiffCacheService | GitHubService | DbService | GitHubEtagCache | SettingsService
 > =>
 	Effect.gen(function* () {
 		const diffCache = yield* DiffCacheService;

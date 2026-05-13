@@ -12,6 +12,7 @@ import { GitHubService, type GhReviewComment } from './GitHub';
 import { PrContextService } from './PrContext';
 import { PullRequestService } from './PullRequest';
 import { ReviewService } from './Review';
+import { SettingsService } from './Settings';
 import { WebSocketHub } from './WebSocketHub';
 
 export interface PullResult {
@@ -29,11 +30,11 @@ export interface SyncResult {
 export class SyncService extends Context.Tag('SyncService')<
 	SyncService,
 	{
-		readonly pushThread: (threadId: string) => Effect.Effect<void, SyncError, DbService>;
-		readonly pushReply: (messageId: string) => Effect.Effect<void, SyncError, DbService>;
-		readonly pushThreadStatus: (threadId: string) => Effect.Effect<void, SyncError, DbService>;
-		readonly pullComments: (prId: string) => Effect.Effect<PullResult, SyncError, DbService>;
-		readonly syncThreads: (prId: string) => Effect.Effect<SyncResult, SyncError, DbService>;
+		readonly pushThread: (threadId: string) => Effect.Effect<void, SyncError, DbService | SettingsService>;
+		readonly pushReply: (messageId: string) => Effect.Effect<void, SyncError, DbService | SettingsService>;
+		readonly pushThreadStatus: (threadId: string) => Effect.Effect<void, SyncError, DbService | SettingsService>;
+		readonly pullComments: (prId: string) => Effect.Effect<PullResult, SyncError, DbService | SettingsService>;
+		readonly syncThreads: (prId: string) => Effect.Effect<SyncResult, SyncError, DbService | SettingsService>;
 		readonly getThreadSummary: (
 			prId: string,
 			userLogin: string | null,
@@ -98,7 +99,7 @@ export const SyncServiceLive = Layer.effect(
 				return row.pullRequestId;
 			});
 
-		const pushThread = (threadId: string): Effect.Effect<void, SyncError, DbService> =>
+		const pushThread = (threadId: string): Effect.Effect<void, SyncError, DbService | SettingsService> =>
 			Effect.gen(function* () {
 				const thread = yield* reviewService.getThread(threadId);
 				if (thread.externalCommentId) return; // already pushed
@@ -169,7 +170,7 @@ export const SyncServiceLive = Layer.effect(
 				}
 			}).pipe(Effect.mapError(toSyncError(threadId)));
 
-		const pushReply = (messageId: string): Effect.Effect<void, SyncError, DbService> =>
+		const pushReply = (messageId: string): Effect.Effect<void, SyncError, DbService | SettingsService> =>
 			Effect.gen(function* () {
 				const message = yield* reviewService.getMessage(messageId);
 				if (message.externalId) return;
@@ -207,7 +208,7 @@ export const SyncServiceLive = Layer.effect(
 
 		const pushThreadStatus = (
 			threadId: string,
-		): Effect.Effect<void, SyncError, DbService> =>
+		): Effect.Effect<void, SyncError, DbService | SettingsService> =>
 			Effect.gen(function* () {
 				const thread = yield* reviewService.getThread(threadId);
 				if (!thread.externalThreadId) return;
@@ -253,7 +254,7 @@ export const SyncServiceLive = Layer.effect(
 
 		const pullComments = (
 			prId: string,
-		): Effect.Effect<PullResult, SyncError, DbService> =>
+		): Effect.Effect<PullResult, SyncError, DbService | SettingsService> =>
 			Effect.gen(function* () {
 				const { pr, repo, token } = yield* resolvePrContext(prId);
 				const session = yield* reviewService.getOrCreateActiveSession(pr.id);
@@ -415,7 +416,7 @@ export const SyncServiceLive = Layer.effect(
 
 		const syncThreads = (
 			prId: string,
-		): Effect.Effect<SyncResult, SyncError, DbService> =>
+		): Effect.Effect<SyncResult, SyncError, DbService | SettingsService> =>
 			Effect.gen(function* () {
 				const pulled = yield* pullComments(prId);
 				const summary = yield* getThreadSummary(prId, null);

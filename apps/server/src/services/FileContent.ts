@@ -5,6 +5,7 @@ import { DbService } from './Db';
 import { withDb } from '../effects/with-db';
 import type { GitHubError } from '../domain/errors';
 import { GitHubService } from './GitHub';
+import { SettingsService } from './Settings';
 
 /**
  * Service for fetching file contents at a specific commit SHA.
@@ -36,7 +37,7 @@ export class FileContentService extends Context.Tag('FileContentService')<
 			path: string,
 			ref: string,
 			token: string,
-		) => Effect.Effect<string, GitHubError, DbService | GitHubService>;
+		) => Effect.Effect<string, GitHubError, DbService | GitHubService | SettingsService>;
 		/** Stats for observability (hit/miss counters since process start). */
 		readonly stats: () => { readonly hits: number; readonly misses: number };
 	}
@@ -88,7 +89,7 @@ export const FileContentServiceLive = Layer.sync(FileContentService, () => {
 		path: string,
 		ref: string,
 		token: string,
-	): Effect.Effect<string, GitHubError, DbService | GitHubService> =>
+	): Effect.Effect<string, GitHubError, DbService | GitHubService | SettingsService> =>
 		Effect.gen(function* () {
 			const { db } = yield* DbService;
 			const github = yield* GitHubService;

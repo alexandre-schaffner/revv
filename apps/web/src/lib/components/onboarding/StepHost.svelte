@@ -1,0 +1,338 @@
+<script lang="ts">
+	import { ChevronLeft } from '@lucide/svelte';
+	import { getGithubHost, setGithubHost } from '$lib/stores/settings.svelte';
+	import { cancelSignIn, clearToken, getIsAuthenticated } from '$lib/stores/auth.svelte';
+
+	interface Props {
+		onContinue: () => void;
+		onBack?: () => void;
+	}
+
+	let { onContinue, onBack }: Props = $props();
+
+	const NOCTURLAB = 'nocturlab.ghe.com';
+	const PUBLIC = 'github.com';
+
+	let selected = $state<string>(getGithubHost() ?? NOCTURLAB);
+	let isSaving = $state(false);
+
+	async function handleContinue() {
+		const previousHost = getGithubHost();
+		const hostChanged = previousHost !== null && previousHost !== selected;
+
+		if (hostChanged && getIsAuthenticated()) {
+			cancelSignIn();
+			clearToken();
+		}
+
+		isSaving = true;
+		try {
+			await setGithubHost(selected);
+			onContinue();
+		} finally {
+			isSaving = false;
+		}
+	}
+</script>
+
+<div class="host">
+	{#if onBack}
+		<button class="back" onclick={onBack}>
+			<ChevronLeft size={14} />
+			<span>Back</span>
+		</button>
+	{/if}
+
+	<p class="lede">
+		Tell Revv where your repositories live. You can change this later in
+		settings.
+	</p>
+
+	<fieldset class="options">
+		<legend class="visually-hidden">GitHub host</legend>
+
+		<label class="option" data-selected={selected === NOCTURLAB}>
+			<input type="radio" name="host" value={NOCTURLAB} bind:group={selected} />
+			<span class="option-mark" aria-hidden="true"></span>
+			<span class="option-body">
+				<span class="option-row">
+					<span class="option-name">Nocturlab</span>
+					<span class="option-tag">recommended</span>
+				</span>
+				<span class="option-host">{NOCTURLAB}</span>
+			</span>
+		</label>
+
+		<label class="option" data-selected={selected === PUBLIC}>
+			<input type="radio" name="host" value={PUBLIC} bind:group={selected} />
+			<span class="option-mark" aria-hidden="true"></span>
+			<span class="option-body">
+				<span class="option-row">
+					<span class="option-name">GitHub</span>
+				</span>
+				<span class="option-host">{PUBLIC}</span>
+			</span>
+		</label>
+	</fieldset>
+
+	<div class="actions">
+		<button class="primary" onclick={handleContinue} disabled={isSaving}>
+			<span>Continue</span>
+			<svg
+				width="18"
+				height="10"
+				viewBox="0 0 18 10"
+				fill="none"
+				xmlns="http://www.w3.org/2000/svg"
+				aria-hidden="true"
+			>
+				<path d="M0 5h16M12 1l4 4-4 4" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+			</svg>
+		</button>
+	</div>
+</div>
+
+<style>
+	.host {
+		display: flex;
+		flex-direction: column;
+		gap: 32px;
+		max-width: 520px;
+	}
+
+	.back {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		align-self: flex-start;
+		background: none;
+		border: 0;
+		padding: 0;
+		color: #6f6c63;
+		font-family: var(--font-mono, 'JetBrains Mono', monospace);
+		font-size: 10.5px;
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+		cursor: pointer;
+		transition: color var(--duration-quick, 240ms) var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1));
+		margin-bottom: -12px;
+	}
+
+	.back:hover {
+		color: #d4cab2;
+	}
+
+	.back :global(svg) {
+		transition: transform var(--duration-quick, 240ms) var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1));
+	}
+
+	.back:hover :global(svg) {
+		transform: translateX(-3px);
+	}
+
+	.lede {
+		font-family: 'Newsreader', Georgia, serif;
+		font-size: 17px;
+		font-weight: 400;
+		line-height: 1.6;
+		color: #b4b0a4;
+		margin: 0;
+	}
+
+	.options {
+		display: flex;
+		flex-direction: column;
+		gap: 0;
+		margin: 0;
+		padding: 0;
+		border: 0;
+		border-top: 1px solid #2a2925;
+	}
+
+	.visually-hidden {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		padding: 0;
+		margin: -1px;
+		overflow: hidden;
+		clip: rect(0, 0, 0, 0);
+		white-space: nowrap;
+		border: 0;
+	}
+
+	.option {
+		display: flex;
+		align-items: center;
+		gap: 18px;
+		padding: 18px 4px;
+		border-bottom: 1px solid #2a2925;
+		cursor: pointer;
+		transition: background-color 320ms cubic-bezier(0.16, 1, 0.3, 1);
+		animation: option-in 600ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+	}
+
+	.option:nth-child(2) {
+		animation-delay: 80ms;
+	}
+
+	.option:nth-child(3) {
+		animation-delay: 160ms;
+	}
+
+	@keyframes option-in {
+		from {
+			opacity: 0;
+			transform: translateY(6px);
+		}
+		to {
+			opacity: 1;
+			transform: translateY(0);
+		}
+	}
+
+	.option:hover {
+		background: rgba(255, 255, 255, 0.02);
+	}
+
+	.option input {
+		position: absolute;
+		opacity: 0;
+		pointer-events: none;
+	}
+
+	.option-mark {
+		position: relative;
+		flex-shrink: 0;
+		width: 14px;
+		height: 14px;
+		border: 1px solid #46443d;
+		border-radius: 50%;
+		transition: border-color 320ms cubic-bezier(0.16, 1, 0.3, 1);
+	}
+
+	.option[data-selected='true'] .option-mark {
+		border-color: #d4cab2;
+	}
+
+	.option[data-selected='true'] .option-mark::after {
+		content: '';
+		position: absolute;
+		inset: 3px;
+		border-radius: 50%;
+		background: #d4cab2;
+		animation: mark-pop 360ms cubic-bezier(0.34, 1.56, 0.64, 1);
+	}
+
+	@keyframes mark-pop {
+		from {
+			transform: scale(0);
+		}
+		to {
+			transform: scale(1);
+		}
+	}
+
+	.option-body {
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+	}
+
+	.option-row {
+		display: flex;
+		align-items: baseline;
+		gap: 12px;
+	}
+
+	.option-name {
+		font-family: 'Newsreader', Georgia, serif;
+		font-size: 20px;
+		color: #f0ede4;
+		letter-spacing: -0.005em;
+	}
+
+	.option[data-selected='true'] .option-name {
+		font-style: italic;
+	}
+
+	.option-tag {
+		font-family: var(--font-mono, 'JetBrains Mono', monospace);
+		font-size: 9.5px;
+		letter-spacing: 0.18em;
+		text-transform: uppercase;
+		color: #8a8678;
+	}
+
+	.option-host {
+		font-family: var(--font-mono, 'JetBrains Mono', monospace);
+		font-size: 12px;
+		color: #6f6c63;
+	}
+
+	.actions {
+		display: flex;
+		justify-content: flex-end;
+		animation: actions-in 600ms cubic-bezier(0.16, 1, 0.3, 1) 240ms backwards;
+	}
+
+	@keyframes actions-in {
+		from {
+			opacity: 0;
+			transform: translateY(6px);
+		}
+		to {
+			opacity: 1;
+			transform: translateY(0);
+		}
+	}
+
+	.primary {
+		display: inline-flex;
+		align-items: center;
+		gap: 14px;
+		padding: 12px 22px;
+		border: 1px solid #46443d;
+		border-radius: 2px;
+		background: transparent;
+		color: #f0ede4;
+		font-family: 'Newsreader', Georgia, serif;
+		font-style: italic;
+		font-size: 16px;
+		font-weight: 500;
+		cursor: pointer;
+		letter-spacing: 0.01em;
+		transition:
+			background-color 320ms cubic-bezier(0.16, 1, 0.3, 1),
+			border-color 320ms cubic-bezier(0.16, 1, 0.3, 1),
+			color 320ms cubic-bezier(0.16, 1, 0.3, 1),
+			transform 280ms cubic-bezier(0.16, 1, 0.3, 1);
+	}
+
+	.primary svg {
+		transition: transform 320ms cubic-bezier(0.16, 1, 0.3, 1);
+	}
+
+	.primary:hover:not(:disabled) {
+		border-color: #d4cab2;
+		color: #f7f4ec;
+	}
+
+	.primary:hover:not(:disabled) svg {
+		transform: translateX(4px);
+	}
+
+	.primary:disabled {
+		opacity: 0.4;
+		cursor: not-allowed;
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.option,
+		.option[data-selected='true'] .option-mark::after,
+		.actions {
+			animation: none !important;
+		}
+	}
+</style>

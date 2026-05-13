@@ -30,8 +30,9 @@ import {
 	buildResolveConflictsPrompt,
 	buildResolveConflictsUserMessage,
 } from '../ai/prompts/chat';
-import { type ChatStreamFrame, streamChatViaClaude } from '../ai/providers/chat-claude';
+import { type ChatStreamFrame, type RawChatStreamFrame, streamChatViaClaude } from '../ai/providers/chat-claude';
 import { streamChatViaOpencode } from '../ai/providers/chat-opencode';
+import type { InteractionMode } from '@revv/shared';
 import { WALKTHROUGH_FIRST_EVENT_TIMEOUT_OPENCODE_MS } from '../constants';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -66,6 +67,12 @@ export interface ChatParams {
 	readonly onSessionId: (id: string) => Promise<void> | void;
 	readonly prId: string;
 	readonly abortController?: AbortController;
+	/**
+	 * Session-level interaction toggle. Both drivers honor this: Claude flips
+	 * to `permissionMode: 'plan'`; opencode routes through its named `plan`
+	 * agent. Defaults to `'default'`.
+	 */
+	readonly interactionMode?: InteractionMode;
 }
 
 // ── Agent resolution ────────────────────────────────────────────────────────
@@ -132,7 +139,7 @@ export class AiService extends Context.Tag('AiService')<
 		 */
 		readonly chat: (
 			params: ChatParams,
-		) => Effect.Effect<ReadableStream<ChatStreamFrame>, AiError>;
+		) => Effect.Effect<ReadableStream<RawChatStreamFrame>, AiError>;
 		/**
 		 * One-shot agent invocation for resolving merge conflicts. Runs the
 		 * configured CLI agent against `cwd` (an in-progress merge worktree)
@@ -154,7 +161,7 @@ export class AiService extends Context.Tag('AiService')<
 			 * token. Pass an empty string for paths where it doesn't matter.
 			 */
 			readonly prId: string;
-		}) => Effect.Effect<ReadableStream<ChatStreamFrame>, AiError>;
+		}) => Effect.Effect<ReadableStream<RawChatStreamFrame>, AiError>;
 		readonly isConfigured: () => Effect.Effect<boolean>;
 	}
 >() {}
@@ -326,6 +333,7 @@ export const AiServiceLive = Layer.effect(
 							db,
 							prId: params.prId,
 							maxTurns: settings.aiMaxTurns,
+							interactionMode: params.interactionMode,
 						});
 					}
 
@@ -339,6 +347,8 @@ export const AiServiceLive = Layer.effect(
 							Effect.runPromise(chatMcpTokens.issue(prId)),
 						clearChatMcpToken: (token: string) =>
 							Effect.runPromise(chatMcpTokens.clear(token)),
+						hasAgent: (name: string) =>
+							Effect.runPromise(supervisor.hasAgent(name)),
 					};
 					return streamChatViaOpencode({
 						message,
@@ -350,6 +360,7 @@ export const AiServiceLive = Layer.effect(
 						model: settings.aiModel ?? undefined,
 						deps,
 						prId: params.prId,
+						interactionMode: params.interactionMode,
 					});
 				}),
 
@@ -407,6 +418,8 @@ export const AiServiceLive = Layer.effect(
 							Effect.runPromise(chatMcpTokens.issue(prId)),
 						clearChatMcpToken: (token: string) =>
 							Effect.runPromise(chatMcpTokens.clear(token)),
+						hasAgent: (name: string) =>
+							Effect.runPromise(supervisor.hasAgent(name)),
 					};
 					return streamChatViaOpencode({
 						message,

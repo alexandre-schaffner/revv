@@ -30,11 +30,16 @@ export const userRoutes = new Elysia({ prefix: '/api/user' })
 
 				// Read current stored login + image (server-refreshed avatar URL).
 				const rows = await db
-					.select({ githubLogin: user.githubLogin, image: user.image })
+					.select({
+						githubLogin: user.githubLogin,
+						image: user.image,
+						onboardedAt: user.onboardedAt,
+					})
 					.from(user)
 					.where(eq(user.id, userId));
 				let login: string | null = rows[0]?.githubLogin ?? null;
 				let avatarUrl: string | null = rows[0]?.image ?? null;
+				const onboardedAt = rows[0]?.onboardedAt ?? null;
 
 				// Backfill if missing — best-effort, don't fail the endpoint.
 				// Also lazily refresh the avatar URL here so callers loading the
@@ -75,7 +80,10 @@ export const userRoutes = new Elysia({ prefix: '/api/user' })
 				}
 
 				const identity: UserIdentity = { login, role, avatarUrl };
-				return identity;
+				return {
+					...identity,
+					onboardedAt: onboardedAt ? onboardedAt.toISOString() : null,
+				};
 			} catch (e) {
 				return handleAppError(e, ctx);
 			}

@@ -19,8 +19,16 @@
 
 import { Context, Effect, Layer } from "effect";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
+import type { ChatTask, InteractionMode } from "@revv/shared";
 import { DbService } from "./Db";
-import { chatActivities, chatMessages, chatSessions } from "../db/schema/index";
+import {
+	chatActivities,
+	chatMessages,
+	chatPlans,
+	chatSessions,
+	chatSubagentInvocations,
+	chatTasks,
+} from "../db/schema/index";
 
 export interface ChatSessionRow {
 	readonly id: string;
@@ -31,6 +39,7 @@ export interface ChatSessionRow {
 	readonly worktreePath: string;
 	readonly branchName: string;
 	readonly nextSequence: number;
+	readonly interactionMode: InteractionMode;
 	readonly createdAt: string;
 	readonly lastActivityAt: string;
 }
@@ -74,12 +83,70 @@ export interface ChatActivityRow {
 	readonly summary: string;
 	readonly payloadJson: string | null;
 	readonly sequence: number;
+	readonly subagentInvocationId: string | null;
 	readonly createdAt: string;
+}
+
+export interface ChatTaskRow {
+	readonly id: string;
+	readonly chatSessionId: string;
+	readonly turnId: string;
+	readonly taskId: string;
+	readonly content: string;
+	readonly activeForm: string | null;
+	readonly status: "pending" | "in_progress" | "completed";
+	readonly priority: "low" | "medium" | "high" | null;
+	readonly source: "claude" | "opencode";
+	readonly sequence: number;
+	readonly createdAt: string;
+	readonly updatedAt: string;
+}
+
+export interface ChatPlanRow {
+	readonly id: string;
+	readonly chatSessionId: string;
+	readonly turnId: string;
+	readonly planMarkdown: string;
+	readonly status: "pending" | "approved" | "rejected" | "superseded";
+	readonly source: "claude" | "opencode";
+	readonly sequence: number;
+	readonly createdAt: string;
+	readonly decidedAt: string | null;
+}
+
+export interface ChatSubagentInvocationRow {
+	readonly id: string;
+	readonly chatSessionId: string;
+	readonly parentTurnId: string;
+	readonly providerCallId: string;
+	readonly subagentType: string;
+	readonly description: string;
+	readonly prompt: string;
+	readonly status: "running" | "completed" | "errored";
+	readonly result: string | null;
+	readonly source: "claude" | "opencode";
+	readonly sequence: number;
+	readonly startedAt: string;
+	readonly completedAt: string | null;
+}
+
+/**
+ * One synthetic timeline entry for a turn's task list. Aggregated server-side
+ * because tasks land as N rows but the UI renders as one section.
+ */
+export interface ChatTaskListTimelineEntry {
+	readonly entryKind: "task-list";
+	readonly turnId: string;
+	readonly sequence: number;
+	readonly tasks: ReadonlyArray<ChatTask>;
 }
 
 export type ChatTimelineEntry =
 	| (ChatMessageRow & { readonly entryKind: "message" })
-	| (ChatActivityRow & { readonly entryKind: "activity" });
+	| (ChatActivityRow & { readonly entryKind: "activity" })
+	| ChatTaskListTimelineEntry
+	| (ChatPlanRow & { readonly entryKind: "plan" })
+	| (ChatSubagentInvocationRow & { readonly entryKind: "subagent" });
 
 export class ChatSessionService extends Context.Tag("ChatSessionService")<
 	ChatSessionService,
@@ -186,12 +253,92 @@ export class ChatSessionService extends Context.Tag("ChatSessionService")<
 			readonly toolName: string | null;
 			readonly summary: string;
 			readonly payload?: unknown;
+			readonly subagentInvocationId?: string | null;
 		}) => Effect.Effect<{ readonly id: string; readonly sequence: number }>;
 
 		/** Read the full timeline for a session, ordered by sequence. */
 		readonly listTimeline: (
 			chatSessionId: string,
 		) => Effect.Effect<readonly ChatTimelineEntry[]>;
+
+		// ── interaction mode ────────────────────────────────────────────────
+
+		readonly setInteractionMode: (params: {
+			readonly chatSessionId: string;
+			readonly mode: InteractionMode;
+		}) => Effect.Effect<void>;
+
+		// ── tasks ───────────────────────────────────────────────────────────
+
+		/**
+		 * Reconcile a full task-list snapshot. Existing rows matched by
+		 * `(chat_session_id, task_id)` are updated in place (preserving their
+		 * sequence); previously-unseen tasks are inserted at fresh
+		 * sequences. Rows missing from the snapshot are left alone (v1
+		 * decision; reconsider if drift becomes an issue).
+		 */
+		readonly applyTaskListSnapshot: (params: {
+			readonly chatSessionId: string;
+			readonly turnId: string;
+			readonly source: "claude" | "opencode";
+			readonly tasks: ReadonlyArray<ChatTask>;
+		}) => Effect.Effect<readonly ChatTaskRow[]>;
+
+		readonly listTasks: (
+			chatSessionId: string,
+		) => Effect.Effect<readonly ChatTaskRow[]>;
+
+		// ── plans ───────────────────────────────────────────────────────────
+
+		/**
+		 * Insert a new plan in `pending` status. Throws if a plan already
+		 * exists for this turn (unique constraint).
+		 */
+		readonly createPlan: (params: {
+			readonly chatSessionId: string;
+			readonly turnId: string;
+			readonly source: "claude" | "opencode";
+			readonly markdown: string;
+		}) => Effect.Effect<ChatPlanRow>;
+
+		readonly decidePlan: (params: {
+			readonly planId: string;
+			readonly decision: "approved" | "rejected" | "superseded";
+		}) => Effect.Effect<ChatPlanRow | null>;
+
+		readonly findPlan: (
+			planId: string,
+		) => Effect.Effect<ChatPlanRow | null>;
+
+		readonly findPendingPlan: (
+			chatSessionId: string,
+		) => Effect.Effect<ChatPlanRow | null>;
+
+		// ── sub-agents ──────────────────────────────────────────────────────
+
+		readonly startSubagentInvocation: (params: {
+			readonly chatSessionId: string;
+			readonly parentTurnId: string;
+			readonly source: "claude" | "opencode";
+			readonly providerCallId: string;
+			readonly subagentType: string;
+			readonly description: string;
+			readonly prompt: string;
+		}) => Effect.Effect<{
+			readonly invocationId: string;
+			readonly sequence: number;
+		}>;
+
+		readonly completeSubagentInvocation: (params: {
+			readonly invocationId: string;
+			readonly result: string;
+			readonly ok: boolean;
+		}) => Effect.Effect<void>;
+
+		readonly findSubagentInvocationByProviderId: (params: {
+			readonly chatSessionId: string;
+			readonly providerCallId: string;
+		}) => Effect.Effect<ChatSubagentInvocationRow | null>;
 	}
 >() {}
 
@@ -238,8 +385,59 @@ export const ChatSessionServiceLive = Layer.effect(
 			worktreePath: row.worktreePath,
 			branchName: row.branchName,
 			nextSequence: row.nextSequence,
+			interactionMode:
+				row.interactionMode === "plan" ? "plan" : "default",
 			createdAt: row.createdAt,
 			lastActivityAt: row.lastActivityAt,
+		});
+
+		const rowToTaskRow = (
+			row: typeof chatTasks.$inferSelect,
+		): ChatTaskRow => ({
+			id: row.id,
+			chatSessionId: row.chatSessionId,
+			turnId: row.turnId,
+			taskId: row.taskId,
+			content: row.content,
+			activeForm: row.activeForm,
+			status: row.status as ChatTaskRow["status"],
+			priority: (row.priority as ChatTaskRow["priority"]) ?? null,
+			source: row.source as ChatTaskRow["source"],
+			sequence: row.sequence,
+			createdAt: row.createdAt,
+			updatedAt: row.updatedAt,
+		});
+
+		const rowToPlanRow = (
+			row: typeof chatPlans.$inferSelect,
+		): ChatPlanRow => ({
+			id: row.id,
+			chatSessionId: row.chatSessionId,
+			turnId: row.turnId,
+			planMarkdown: row.planMarkdown,
+			status: row.status as ChatPlanRow["status"],
+			source: row.source as ChatPlanRow["source"],
+			sequence: row.sequence,
+			createdAt: row.createdAt,
+			decidedAt: row.decidedAt,
+		});
+
+		const rowToSubagentRow = (
+			row: typeof chatSubagentInvocations.$inferSelect,
+		): ChatSubagentInvocationRow => ({
+			id: row.id,
+			chatSessionId: row.chatSessionId,
+			parentTurnId: row.parentTurnId,
+			providerCallId: row.providerCallId,
+			subagentType: row.subagentType,
+			description: row.description,
+			prompt: row.prompt,
+			status: row.status as ChatSubagentInvocationRow["status"],
+			result: row.result,
+			source: row.source as ChatSubagentInvocationRow["source"],
+			sequence: row.sequence,
+			startedAt: row.startedAt,
+			completedAt: row.completedAt,
 		});
 
 		return {
@@ -319,6 +517,7 @@ export const ChatSessionServiceLive = Layer.effect(
 							worktreePath,
 							branchName,
 							nextSequence: 0,
+							interactionMode: "default",
 							createdAt: now,
 							lastActivityAt: now,
 						})
@@ -332,6 +531,7 @@ export const ChatSessionServiceLive = Layer.effect(
 						worktreePath,
 						branchName,
 						nextSequence: 0,
+						interactionMode: "default" as InteractionMode,
 						createdAt: now,
 						lastActivityAt: now,
 					};
@@ -373,6 +573,7 @@ export const ChatSessionServiceLive = Layer.effect(
 							worktreePath,
 							branchName,
 							nextSequence: 0,
+							interactionMode: "default",
 							createdAt: now,
 							lastActivityAt: now,
 						})
@@ -500,6 +701,7 @@ export const ChatSessionServiceLive = Layer.effect(
 				toolName,
 				summary,
 				payload,
+				subagentInvocationId,
 			}) =>
 				Effect.sync(() => {
 					const sequence = allocateSequence(chatSessionId);
@@ -517,6 +719,7 @@ export const ChatSessionServiceLive = Layer.effect(
 							payloadJson:
 								payload === undefined ? null : JSON.stringify(payload),
 							sequence,
+							subagentInvocationId: subagentInvocationId ?? null,
 							createdAt: now,
 						})
 						.run();
@@ -537,15 +740,76 @@ export const ChatSessionServiceLive = Layer.effect(
 						.where(eq(chatActivities.chatSessionId, chatSessionId))
 						.orderBy(asc(chatActivities.sequence))
 						.all();
+					const plans = db
+						.select()
+						.from(chatPlans)
+						.where(eq(chatPlans.chatSessionId, chatSessionId))
+						.orderBy(asc(chatPlans.sequence))
+						.all();
+					const subagents = db
+						.select()
+						.from(chatSubagentInvocations)
+						.where(eq(chatSubagentInvocations.chatSessionId, chatSessionId))
+						.orderBy(asc(chatSubagentInvocations.sequence))
+						.all();
+					const taskRows = db
+						.select()
+						.from(chatTasks)
+						.where(eq(chatTasks.chatSessionId, chatSessionId))
+						.orderBy(asc(chatTasks.sequence))
+						.all();
 
-					const merged: ChatTimelineEntry[] = [];
-					let mi = 0;
-					let ai = 0;
-					while (mi < messages.length || ai < activities.length) {
-						const m = messages[mi];
-						const a = activities[ai];
-						if (m && (!a || m.sequence < a.sequence)) {
-							merged.push({
+					// Bucket tasks by turn — the UI renders one TaskList per
+					// turn. Each bucket lands at the minimum sequence of its
+					// member tasks so the list appears at the right spot in
+					// the interleaved timeline.
+					const taskBuckets = new Map<
+						string,
+						{ sequence: number; rows: ChatTaskRow[] }
+					>();
+					for (const r of taskRows) {
+						const row = rowToTaskRow(r);
+						const existing = taskBuckets.get(row.turnId);
+						if (existing) {
+							existing.sequence = Math.min(existing.sequence, row.sequence);
+							existing.rows.push(row);
+						} else {
+							taskBuckets.set(row.turnId, {
+								sequence: row.sequence,
+								rows: [row],
+							});
+						}
+					}
+					const taskEntries: ChatTaskListTimelineEntry[] = [];
+					for (const [turnId, bucket] of taskBuckets) {
+						bucket.rows.sort((a, b) => a.sequence - b.sequence);
+						taskEntries.push({
+							entryKind: "task-list",
+							turnId,
+							sequence: bucket.sequence,
+							tasks: bucket.rows.map(
+								(r): ChatTask => ({
+									id: r.id,
+									content: r.content,
+									activeForm: r.activeForm,
+									status: r.status,
+									priority: r.priority,
+								}),
+							),
+						});
+					}
+
+					// k-way merge by sequence. Build a flat list of entries
+					// with their sequence, sort, and emit. This is simpler
+					// than 5-pointer streaming and the data volume is tiny.
+					const entries: Array<{
+						sequence: number;
+						entry: ChatTimelineEntry;
+					}> = [];
+					for (const m of messages) {
+						entries.push({
+							sequence: m.sequence,
+							entry: {
 								entryKind: "message",
 								id: m.id,
 								chatSessionId: m.chatSessionId,
@@ -557,10 +821,13 @@ export const ChatSessionServiceLive = Layer.effect(
 								error: m.error,
 								createdAt: m.createdAt,
 								finalizedAt: m.finalizedAt,
-							});
-							mi += 1;
-						} else if (a) {
-							merged.push({
+							},
+						});
+					}
+					for (const a of activities) {
+						entries.push({
+							sequence: a.sequence,
+							entry: {
 								entryKind: "activity",
 								id: a.id,
 								chatSessionId: a.chatSessionId,
@@ -570,12 +837,366 @@ export const ChatSessionServiceLive = Layer.effect(
 								summary: a.summary,
 								payloadJson: a.payloadJson,
 								sequence: a.sequence,
+								subagentInvocationId: a.subagentInvocationId,
 								createdAt: a.createdAt,
-							});
-							ai += 1;
-						}
+							},
+						});
 					}
-					return merged;
+					for (const p of plans) {
+						entries.push({
+							sequence: p.sequence,
+							entry: { ...rowToPlanRow(p), entryKind: "plan" },
+						});
+					}
+					for (const s of subagents) {
+						entries.push({
+							sequence: s.sequence,
+							entry: { ...rowToSubagentRow(s), entryKind: "subagent" },
+						});
+					}
+					for (const t of taskEntries) {
+						entries.push({ sequence: t.sequence, entry: t });
+					}
+					entries.sort((a, b) => a.sequence - b.sequence);
+					return entries.map((e) => e.entry);
+				}),
+
+			// ── interaction mode ───────────────────────────────────────
+
+			setInteractionMode: ({ chatSessionId, mode }) =>
+				Effect.sync(() => {
+					db
+						.update(chatSessions)
+						.set({ interactionMode: mode, lastActivityAt: nowIso() })
+						.where(eq(chatSessions.id, chatSessionId))
+						.run();
+				}),
+
+			// ── tasks ──────────────────────────────────────────────────
+
+			applyTaskListSnapshot: ({
+				chatSessionId,
+				turnId,
+				source,
+				tasks,
+			}) =>
+				Effect.sync(() => {
+					const result: ChatTaskRow[] = [];
+					db.transaction((tx) => {
+						const now = nowIso();
+						const existing = tx
+							.select()
+							.from(chatTasks)
+							.where(eq(chatTasks.chatSessionId, chatSessionId))
+							.all();
+						const byTaskId = new Map<string, typeof existing[number]>();
+						for (const e of existing) byTaskId.set(e.taskId, e);
+
+						for (const task of tasks) {
+							const prior = byTaskId.get(task.id);
+							if (prior) {
+								// Update in place; preserve sequence.
+								tx
+									.update(chatTasks)
+									.set({
+										content: task.content,
+										activeForm: task.activeForm,
+										status: task.status,
+										priority: task.priority,
+										updatedAt: now,
+										// Track which turn most recently touched it.
+										turnId,
+										source,
+									})
+									.where(eq(chatTasks.id, prior.id))
+									.run();
+								result.push({
+									...rowToTaskRow(prior),
+									content: task.content,
+									activeForm: task.activeForm,
+									status: task.status,
+									priority: task.priority,
+									updatedAt: now,
+									turnId,
+									source,
+								});
+							} else {
+								// New task — allocate sequence atomically.
+								const seqRow = tx
+									.select({ next: chatSessions.nextSequence })
+									.from(chatSessions)
+									.where(eq(chatSessions.id, chatSessionId))
+									.get();
+								if (!seqRow) {
+									throw new Error(
+										`chat_sessions row ${chatSessionId} disappeared during task insert`,
+									);
+								}
+								const sequence = seqRow.next;
+								tx
+									.update(chatSessions)
+									.set({
+										nextSequence: sequence + 1,
+										lastActivityAt: now,
+									})
+									.where(eq(chatSessions.id, chatSessionId))
+									.run();
+								const id = crypto.randomUUID();
+								tx
+									.insert(chatTasks)
+									.values({
+										id,
+										chatSessionId,
+										turnId,
+										taskId: task.id,
+										content: task.content,
+										activeForm: task.activeForm,
+										status: task.status,
+										priority: task.priority,
+										source,
+										sequence,
+										createdAt: now,
+										updatedAt: now,
+									})
+									.run();
+								result.push({
+									id,
+									chatSessionId,
+									turnId,
+									taskId: task.id,
+									content: task.content,
+									activeForm: task.activeForm,
+									status: task.status,
+									priority: task.priority,
+									source,
+									sequence,
+									createdAt: now,
+									updatedAt: now,
+								});
+							}
+						}
+					});
+					return result;
+				}),
+
+			listTasks: (chatSessionId) =>
+				Effect.sync(() => {
+					return db
+						.select()
+						.from(chatTasks)
+						.where(eq(chatTasks.chatSessionId, chatSessionId))
+						.orderBy(asc(chatTasks.sequence))
+						.all()
+						.map(rowToTaskRow);
+				}),
+
+			// ── plans ──────────────────────────────────────────────────
+
+			createPlan: ({ chatSessionId, turnId, source, markdown }) =>
+				Effect.sync(() => {
+					const id = crypto.randomUUID();
+					const now = nowIso();
+					let row: ChatPlanRow | null = null;
+					db.transaction((tx) => {
+						const seqRow = tx
+							.select({ next: chatSessions.nextSequence })
+							.from(chatSessions)
+							.where(eq(chatSessions.id, chatSessionId))
+							.get();
+						if (!seqRow) {
+							throw new Error(
+								`chat_sessions row ${chatSessionId} disappeared during plan insert`,
+							);
+						}
+						const sequence = seqRow.next;
+						tx
+							.update(chatSessions)
+							.set({
+								nextSequence: sequence + 1,
+								lastActivityAt: now,
+							})
+							.where(eq(chatSessions.id, chatSessionId))
+							.run();
+						tx
+							.insert(chatPlans)
+							.values({
+								id,
+								chatSessionId,
+								turnId,
+								planMarkdown: markdown,
+								status: "pending",
+								source,
+								sequence,
+								createdAt: now,
+								decidedAt: null,
+							})
+							.run();
+						row = {
+							id,
+							chatSessionId,
+							turnId,
+							planMarkdown: markdown,
+							status: "pending",
+							source,
+							sequence,
+							createdAt: now,
+							decidedAt: null,
+						};
+					});
+					if (!row) {
+						throw new Error("createPlan transaction did not assign row");
+					}
+					return row;
+				}),
+
+			decidePlan: ({ planId, decision }) =>
+				Effect.sync(() => {
+					const now = nowIso();
+					db
+						.update(chatPlans)
+						.set({ status: decision, decidedAt: now })
+						.where(eq(chatPlans.id, planId))
+						.run();
+					const row = db
+						.select()
+						.from(chatPlans)
+						.where(eq(chatPlans.id, planId))
+						.get();
+					return row ? rowToPlanRow(row) : null;
+				}),
+
+			findPlan: (planId) =>
+				Effect.sync(() => {
+					const row = db
+						.select()
+						.from(chatPlans)
+						.where(eq(chatPlans.id, planId))
+						.get();
+					return row ? rowToPlanRow(row) : null;
+				}),
+
+			findPendingPlan: (chatSessionId) =>
+				Effect.sync(() => {
+					const row = db
+						.select()
+						.from(chatPlans)
+						.where(
+							and(
+								eq(chatPlans.chatSessionId, chatSessionId),
+								eq(chatPlans.status, "pending"),
+							),
+						)
+						.orderBy(desc(chatPlans.sequence))
+						.limit(1)
+						.get();
+					return row ? rowToPlanRow(row) : null;
+				}),
+
+			// ── sub-agents ─────────────────────────────────────────────
+
+			startSubagentInvocation: ({
+				chatSessionId,
+				parentTurnId,
+				source,
+				providerCallId,
+				subagentType,
+				description,
+				prompt,
+			}) =>
+				Effect.sync(() => {
+					const existing = db
+						.select()
+						.from(chatSubagentInvocations)
+						.where(
+							and(
+								eq(chatSubagentInvocations.chatSessionId, chatSessionId),
+								eq(
+									chatSubagentInvocations.providerCallId,
+									providerCallId,
+								),
+							),
+						)
+						.get();
+					if (existing) {
+						return { invocationId: existing.id, sequence: existing.sequence };
+					}
+					const id = crypto.randomUUID();
+					const now = nowIso();
+					let sequence = 0;
+					db.transaction((tx) => {
+						const seqRow = tx
+							.select({ next: chatSessions.nextSequence })
+							.from(chatSessions)
+							.where(eq(chatSessions.id, chatSessionId))
+							.get();
+						if (!seqRow) {
+							throw new Error(
+								`chat_sessions row ${chatSessionId} disappeared during subagent insert`,
+							);
+						}
+						sequence = seqRow.next;
+						tx
+							.update(chatSessions)
+							.set({
+								nextSequence: sequence + 1,
+								lastActivityAt: now,
+							})
+							.where(eq(chatSessions.id, chatSessionId))
+							.run();
+						tx
+							.insert(chatSubagentInvocations)
+							.values({
+								id,
+								chatSessionId,
+								parentTurnId,
+								providerCallId,
+								subagentType,
+								description,
+								prompt,
+								status: "running",
+								result: null,
+								source,
+								sequence,
+								startedAt: now,
+								completedAt: null,
+							})
+							.run();
+					});
+					return { invocationId: id, sequence };
+				}),
+
+			completeSubagentInvocation: ({ invocationId, result, ok }) =>
+				Effect.sync(() => {
+					db
+						.update(chatSubagentInvocations)
+						.set({
+							status: ok ? "completed" : "errored",
+							result,
+							completedAt: nowIso(),
+						})
+						.where(eq(chatSubagentInvocations.id, invocationId))
+						.run();
+				}),
+
+			findSubagentInvocationByProviderId: ({
+				chatSessionId,
+				providerCallId,
+			}) =>
+				Effect.sync(() => {
+					const row = db
+						.select()
+						.from(chatSubagentInvocations)
+						.where(
+							and(
+								eq(chatSubagentInvocations.chatSessionId, chatSessionId),
+								eq(
+									chatSubagentInvocations.providerCallId,
+									providerCallId,
+								),
+							),
+						)
+						.get();
+					return row ? rowToSubagentRow(row) : null;
 				}),
 		};
 	}),

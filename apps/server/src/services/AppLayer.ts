@@ -28,8 +28,11 @@ import { WebSocketHubLive } from './WebSocketHub';
 // TokenProvider now needs DbService
 const TokenProviderWithDeps = TokenProviderLive.pipe(Layer.provide(DbServiceLive));
 
-// GitHub service now depends on the etag cache for conditional requests.
-const GitHubServiceWithDeps = GitHubServiceLive.pipe(Layer.provide(GitHubEtagCacheLive));
+// GitHub service now depends on the etag cache for conditional requests,
+// and on SettingsService to resolve the API base URL dynamically.
+const GitHubServiceWithDeps = GitHubServiceLive.pipe(
+	Layer.provide(Layer.mergeAll(GitHubEtagCacheLive, SettingsServiceLive)),
+);
 
 // OpencodeSupervisor depends on DbService + SettingsService (for detecting
 // agent-changed + resolving the selected agent). It's in BaseLayers because

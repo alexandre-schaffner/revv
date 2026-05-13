@@ -92,6 +92,27 @@
       "when": 1777800000000,
       "tag": "0120_walkthrough_semantic_steps",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1777900000000,
+      "tag": "0130_pull_requests_is_draft",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1778000000000,
+      "tag": "0140_user_onboarded_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "6",
+      "when": 1778100000000,
+      "tag": "0150_chat_subagents_tasks_plans",
+      "breakpoints": true
     }
   ]
 }

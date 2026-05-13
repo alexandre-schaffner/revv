@@ -18,8 +18,8 @@ import { serverEnv } from './config';
 // longer revokes on GitHub's side. Users can revoke from the GitHub app
 // connections page if they want (linked from the settings UI).
 export const GITHUB_CLIENT_ID = serverEnv.githubClientId;
+export const GITHUB_CLIENT_ID_PUBLIC = serverEnv.githubClientIdPublic;
 export const GITHUB_HOST = serverEnv.githubHost;
-export const GITHUB_API_BASE = serverEnv.githubApiBase;
 
 /**
  * Locate (or create) the better-auth signing secret.

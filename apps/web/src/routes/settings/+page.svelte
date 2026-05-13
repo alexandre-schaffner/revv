@@ -13,7 +13,8 @@
     import { getCommitHash } from "$lib/updater/client";
     import { runCheck as runUpdaterCheck } from "$lib/updater/service";
     import { isTauri } from "$lib/utils/platform";
-    import { getUser, signOut } from "$lib/stores/auth.svelte";
+    import { getUser, signOut, resetOnboarding } from "$lib/stores/auth.svelte";
+    import { goto } from "$app/navigation";
     import {
         getSettings,
         updateSettings,
@@ -214,6 +215,22 @@
             await runUpdaterCheck({ manual: true });
         } finally {
             checking = false;
+        }
+    }
+
+    // --- Replay onboarding ---
+    let replaying = $state(false);
+
+    async function handleReplayOnboarding(): Promise<void> {
+        replaying = true;
+        try {
+            // Sets `onboardedAt = null` server-side AND flips the
+            // sessionStorage flag the OnboardingFlow reads to force a start
+            // from the welcome step (bypassing the resume logic).
+            await resetOnboarding();
+            await goto("/");
+        } finally {
+            replaying = false;
         }
     }
 </script>
@@ -622,6 +639,32 @@
                     {/each}
                 </div>
             </div>
+        </div>
+    </section>
+
+    <!-- Onboarding -->
+    <section class="rounded-lg border border-border bg-bg-secondary p-5">
+        <h2 class="mb-4 text-sm font-semibold text-text-primary">Onboarding</h2>
+        <div class="flex items-center justify-between gap-4">
+            <div>
+                <p class="text-sm text-text-primary">Replay onboarding</p>
+                <p class="text-xs text-text-muted">
+                    Walk through the welcome flow again. Your tracked repositories
+                    and GitHub session stay connected.
+                </p>
+            </div>
+            <button
+                class="flex cursor-pointer items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:border-accent hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+                onclick={handleReplayOnboarding}
+                disabled={replaying}
+            >
+                {#if replaying}
+                    <Loader2 size={12} class="animate-spin" />
+                    Resetting…
+                {:else}
+                    Replay
+                {/if}
+            </button>
         </div>
     </section>
 

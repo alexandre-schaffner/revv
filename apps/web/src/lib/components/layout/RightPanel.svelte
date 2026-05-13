@@ -16,6 +16,7 @@
 		GitBranch,
 		RefreshCw,
 		GitMerge,
+		Lightbulb,
 	} from '@lucide/svelte';
 	import { tick } from 'svelte';
 	import { fly } from 'svelte/transition';
@@ -43,7 +44,16 @@
 		rebaseAllProposedAction,
 		isCherryPickingCommit,
 		cherryPickProposedCommitAction,
+		getInteractionMode,
+		setInteractionMode,
+		approvePlanAction,
+		rejectPlanAction,
+		loadAvailableAgents,
+		isPlanModeAvailable,
 	} from '$lib/stores/chat.svelte';
+	import TaskList from '$lib/components/chat/TaskList.svelte';
+	import PlanCard from '$lib/components/chat/PlanCard.svelte';
+	import SubagentInvocation from '$lib/components/chat/SubagentInvocation.svelte';
 	import { getSelectedPr } from '$lib/stores/prs.svelte';
 	import {
 		getPrScrollPosition,
@@ -80,8 +90,14 @@
 	const streamingTurnIds = $derived(
 		new Set(
 			items
-				.filter((i) => i.kind === 'message' && i.role === 'assistant' && i.isStreaming && i.turnId)
-				.map((i) => (i as { turnId: string }).turnId),
+				.filter(
+					(i): i is Extract<typeof i, { kind: 'message' }> =>
+						i.kind === 'message' &&
+						i.role === 'assistant' &&
+						i.isStreaming &&
+						typeof i.turnId === 'string',
+				)
+				.map((i) => i.turnId as string),
 		),
 	);
 	const isStreaming = $derived(prId ? isChatStreaming(prId) : false);
@@ -93,16 +109,23 @@
 	const blocked = $derived(prId ? getWorktreeBlocked(prId) : null);
 	const isRebasing = $derived(prId ? isRebasingProposed(prId) : false);
 	const selectedPr = $derived(getSelectedPr());
+	const interactionMode = $derived(prId ? getInteractionMode(prId) : 'default');
+	const planModeAvailable = $derived(isPlanModeAvailable());
 
 	const streamingTurnId = $derived(
-		items.findLast((i) => i.kind === 'message' && i.role === 'assistant' && i.isStreaming)?.turnId
+		items.findLast(
+			(i): i is Extract<typeof i, { kind: 'message' }> =>
+				i.kind === 'message' && i.role === 'assistant' && i.isStreaming,
+		)?.turnId,
 	);
 	const recentToolCalls = $derived(
 		streamingTurnId
 			? items
-				.filter((i) => i.kind === 'activity' && i.turnId === streamingTurnId)
+				.filter(
+					(i): i is Extract<typeof i, { kind: 'activity' }> =>
+						i.kind === 'activity' && i.turnId === streamingTurnId,
+				)
 				.slice(-2)
-				.map((i) => i as Extract<typeof i, { kind: 'activity' }>)
 			: []
 	);
 
@@ -223,8 +246,32 @@
 		if (prId) {
 			void refreshProposedChanges(prId);
 			void loadChatHistory(prId);
+			void loadAvailableAgents();
 		}
 	});
+
+	function handleTogglePlanMode(): void {
+		if (!prId || !planModeAvailable) return;
+		const next = interactionMode === 'plan' ? 'default' : 'plan';
+		void setInteractionMode(prId, next);
+	}
+
+	function handleApprovePlan(planId: string): void {
+		if (!prId) return;
+		void approvePlanAction(prId, planId);
+	}
+
+	function handleRejectPlan(planId: string): void {
+		if (!prId) return;
+		void rejectPlanAction(prId, planId);
+	}
+
+	function nestedActivitiesFor(invocationId: string) {
+		return items.filter(
+			(i): i is Extract<typeof i, { kind: 'activity' }> =>
+				i.kind === 'activity' && i.subagentInvocationId === invocationId,
+		);
+	}
 
 	function handleSubmit(e?: Event): void {
 		e?.preventDefault();
@@ -611,12 +658,41 @@
 			<ul class="messages">
 				{#each items as item (item.id)}
 				{#if item.kind === 'activity'}
-						{#if !(item.turnId && streamingTurnIds.has(item.turnId))}
+						<!-- Skip nested sub-agent tool calls — they render
+							 inside their SubagentInvocation card. Also fold
+							 active-turn tool calls into the dot-matrix
+							 indicator below. -->
+						{#if !item.subagentInvocationId && !(item.turnId && streamingTurnIds.has(item.turnId))}
 							<li class="tool-line">
 								<span class="tool-bullet">›</span>
 								<span class="tool-text">{item.summary}</span>
 							</li>
 						{/if}
+					{:else if item.kind === 'task-list'}
+						<li class="rich-row">
+							<TaskList tasks={item.tasks} />
+						</li>
+					{:else if item.kind === 'plan'}
+						<li class="rich-row">
+							<PlanCard
+								planId={item.id}
+								markdown={item.markdown}
+								status={item.status}
+								onApprove={() => handleApprovePlan(item.id)}
+								onReject={() => handleRejectPlan(item.id)}
+								disabled={isStreaming}
+							/>
+						</li>
+					{:else if item.kind === 'subagent'}
+						<li class="rich-row">
+							<SubagentInvocation
+								subagentType={item.subagentType}
+								description={item.description}
+								status={item.status}
+								result={item.result}
+								activities={nestedActivitiesFor(item.id)}
+							/>
+						</li>
 					{:else if item.role === 'user'}
 						<li class="msg msg--user">
 							<div class="bubble bubble--user">{@html messageHtml(item.content)}</div>
@@ -704,6 +780,28 @@
 				disabled={!prId}
 			></textarea>
 			<div class="composer-actions">
+				<button
+					type="button"
+					class="composer-btn composer-btn--mode"
+					class:composer-btn--mode-active={interactionMode === 'plan'}
+					onclick={handleTogglePlanMode}
+					aria-pressed={interactionMode === 'plan'}
+					aria-label={
+						interactionMode === 'plan'
+							? 'Plan mode (on)'
+							: 'Plan mode (off)'
+					}
+					title={
+						planModeAvailable
+							? interactionMode === 'plan'
+								? 'Plan mode is on — the agent will propose a plan instead of editing. Click to disable.'
+								: 'Enable plan mode: ask the agent to propose a plan first.'
+							: 'Plan mode requires an opencode install with a `plan` agent.'
+					}
+					disabled={!prId || !planModeAvailable}
+				>
+					<Lightbulb size={11} />
+				</button>
 				{#if isStreaming}
 					<button
 						type="button"
@@ -1822,6 +1920,48 @@
 		background: var(--color-bg-primary);
 		color: var(--color-text-primary);
 		border-color: var(--color-border);
+	}
+
+	.composer-btn--mode {
+		background: transparent;
+		color: var(--color-text-muted);
+		border: 1px solid var(--color-border-subtle);
+		transition:
+			background-color var(--duration-snap),
+			color var(--duration-snap),
+			border-color var(--duration-snap);
+	}
+
+	.composer-btn--mode:hover:not(:disabled) {
+		color: var(--color-text-secondary);
+		background: var(--color-bg-tertiary);
+	}
+
+	.composer-btn--mode-active {
+		background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+		color: var(--color-accent);
+		border-color: color-mix(in srgb, var(--color-accent) 55%, transparent);
+	}
+
+	.composer-btn--mode-active:hover:not(:disabled) {
+		background: color-mix(in srgb, var(--color-accent) 28%, transparent);
+		color: var(--color-accent);
+		border-color: color-mix(in srgb, var(--color-accent) 70%, transparent);
+	}
+
+	.composer-btn--mode:disabled {
+		opacity: 0.4;
+		cursor: not-allowed;
+	}
+
+	/* Rich timeline rows (plans, task lists, sub-agents). They render
+	   full-width slabs inside the messages list, so reset the <li>
+	   spacing that the other variants apply. */
+	.rich-row {
+		display: block;
+		padding: 0;
+		margin: 0;
+		list-style: none;
 	}
 
 	/* Diff overlay */

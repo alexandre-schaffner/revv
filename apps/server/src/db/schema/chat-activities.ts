@@ -36,6 +36,12 @@ export const chatActivities = sqliteTable(
 		summary: text('summary').notNull(),
 		payloadJson: text('payload_json'),
 		sequence: integer('sequence').notNull(),
+		// Optional FK to chat_subagent_invocations. When set, this activity row
+		// is a tool call made *inside* a sub-agent (Claude `Task` or opencode
+		// agent part). The UI nests it under the parent SubagentInvocation card
+		// instead of rendering at top level. ON DELETE SET NULL so dropping an
+		// invocation row doesn't cascade-delete the tool history.
+		subagentInvocationId: text('subagent_invocation_id'),
 		createdAt: text('created_at').notNull(),
 	},
 	(t) => ({

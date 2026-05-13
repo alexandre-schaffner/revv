@@ -50,6 +50,13 @@ export interface Activity {
 	readonly toolName: string;
 	readonly summary: string;
 	readonly payload?: unknown;
+	/**
+	 * When set, this activity row was emitted by a sub-agent (Claude `Task`
+	 * tool, opencode `agent` part) rather than the parent agent. The UI uses
+	 * this to nest the activity inside the matching `ChatSubagentInvocation`
+	 * card. Unset for top-level tool calls.
+	 */
+	readonly subagentInvocationId?: string;
 }
 
 /**

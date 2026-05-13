@@ -10,6 +10,7 @@
 // file owns chat-specific concerns: MCP review-context registration, session
 // creation, and the mapping from `NormalizedAgentEvent` → `ChatStreamFrame`.
 
+import type { InteractionMode } from "@revv/shared";
 import { AiGenerationError } from "../../domain/errors";
 import { serverEnv } from "../../config";
 import { CLI_CHAT_TURN_TIMEOUT_MS } from "../../constants";
@@ -25,7 +26,7 @@ import {
 	withAgentTurn,
 	type NormalizedAgentEvent,
 } from "../agent-stream";
-import type { ChatStreamFrame } from "./chat-claude";
+import type { RawChatStreamFrame } from "./chat-claude";
 
 export interface OpencodeChatDeps {
 	readonly ensureDaemon: () => Promise<OpencodeEndpoint>;
@@ -36,6 +37,29 @@ export interface OpencodeChatDeps {
 	readonly issueChatMcpToken: (prId: string) => Promise<string>;
 	/** Revoke the token once the turn ends. */
 	readonly clearChatMcpToken: (token: string) => Promise<void>;
+	/**
+	 * Check whether the running daemon exposes an agent with this name.
+	 * Used to gate plan mode: if the user's opencode install has no `plan`
+	 * agent (custom .opencode/opencode.toml), the driver falls back to the
+	 * default agent and emits a structured AgentUnavailableError instead of
+	 * silently degrading.
+	 */
+	readonly hasAgent: (name: string) => Promise<boolean>;
+}
+
+/**
+ * Thrown when the chat driver is asked for plan mode but the daemon has no
+ * `plan` agent configured. Carried up to the route which surfaces it as a
+ * 422 with a `code: 'AGENT_UNAVAILABLE'` body the client can interpret.
+ */
+export class AgentUnavailableError extends Error {
+	readonly code = "AGENT_UNAVAILABLE";
+	constructor(public readonly agentName: string) {
+		super(
+			`opencode daemon has no agent named '${agentName}'. Install or configure one in .opencode/opencode.toml.`,
+		);
+		this.name = "AgentUnavailableError";
+	}
 }
 
 export interface StreamChatViaOpencodeOptions {
@@ -57,14 +81,22 @@ export interface StreamChatViaOpencodeOptions {
 	readonly deps: OpencodeChatDeps;
 	/** Used in the daemon-side session title for tracing. */
 	readonly prId: string;
+	/**
+	 * Session-level interaction toggle. When `'plan'`, the driver requests
+	 * the named `plan` agent for this turn. The agent's full assistant text
+	 * is buffered and synthesized into a `plan-presented` event before
+	 * the stream closes (opencode's plan agent doesn't emit a structured
+	 * delimiter — the entire turn IS the plan).
+	 */
+	readonly interactionMode?: InteractionMode | undefined;
 }
 
 const CHAT_CONTEXT_MCP_SERVER = "revv-chat-context";
 
 export function streamChatViaOpencode(
 	opts: StreamChatViaOpencodeOptions,
-): ReadableStream<ChatStreamFrame> {
-	return new ReadableStream<ChatStreamFrame>({
+): ReadableStream<RawChatStreamFrame> {
+	return new ReadableStream<RawChatStreamFrame>({
 		async start(controller) {
 			let chatMcpToken: string | null = null;
 			let sessionId: string | null = opts.resumeSessionId ?? null;
@@ -76,6 +108,18 @@ export function streamChatViaOpencode(
 					throw new Error(
 						"OpencodeSupervisor reports daemon-running but no HTTP client available",
 					);
+				}
+
+				// Plan-mode gate. The named `plan` agent must exist on the
+				// running daemon. If absent we surface a structured error
+				// instead of silently running the default agent (which would
+				// happily mutate the worktree against the user's request).
+				const planMode = opts.interactionMode === "plan";
+				if (planMode) {
+					const planAvailable = await opts.deps.hasAgent("plan");
+					if (!planAvailable) {
+						throw new AgentUnavailableError("plan");
+					}
 				}
 
 				// Mint a token + register the read-only chat-context MCP server
@@ -143,8 +187,14 @@ export function streamChatViaOpencode(
 				// doesn't gain spurious breaks.
 				let hasEmittedText = false;
 				let lastWasNonText = false;
+				// In plan mode we buffer the assistant text and synthesize a
+				// single `plan-presented` event before closing the stream.
+				// Opencode's `plan` agent doesn't emit a structured plan
+				// delimiter — the entire assistant turn IS the plan.
+				const planTextBuffer: string[] = planMode ? [] : [];
 				const emit = (ev: NormalizedAgentEvent): void => {
 					if (ev.kind === "text-delta") {
+						if (planMode) planTextBuffer.push(ev.data);
 						const needsSeparator =
 							hasEmittedText && lastWasNonText && !ev.data.startsWith("\n");
 						const data = needsSeparator ? `\n\n${ev.data}` : ev.data;
@@ -156,7 +206,48 @@ export function streamChatViaOpencode(
 						lastWasNonText = true;
 					} else if (ev.kind === "tool-call") {
 						const activity = buildActivity(ev.toolName, ev.input);
-						controller.enqueue({ kind: "activity", ...activity });
+						const frame = ev.subagentProviderCallId
+							? {
+									kind: "activity" as const,
+									...activity,
+									subagentProviderCallId: ev.subagentProviderCallId,
+								}
+							: { kind: "activity" as const, ...activity };
+						controller.enqueue(frame);
+						lastWasNonText = true;
+					} else if (ev.kind === "task-list-update") {
+						controller.enqueue({
+							kind: "task-list",
+							source: ev.source,
+							tasks: ev.tasks,
+						});
+						lastWasNonText = true;
+					} else if (ev.kind === "plan-presented") {
+						controller.enqueue({
+							kind: "plan-presented",
+							providerPlanId: ev.providerPlanId,
+							markdown: ev.markdown,
+							source: ev.source,
+						});
+						lastWasNonText = true;
+					} else if (ev.kind === "subagent-start") {
+						controller.enqueue({
+							kind: "subagent-start",
+							providerCallId: ev.providerCallId,
+							subagentType: ev.subagentType,
+							description: ev.description,
+							prompt: ev.prompt,
+							source: ev.source,
+						});
+						lastWasNonText = true;
+					} else if (ev.kind === "subagent-end") {
+						controller.enqueue({
+							kind: "subagent-end",
+							providerCallId: ev.providerCallId,
+							result: ev.result,
+							ok: ev.ok,
+							source: ev.source,
+						});
 						lastWasNonText = true;
 					} else if (ev.kind === "error") {
 						logError("chat-opencode", "session.error:", ev.message);
@@ -195,6 +286,15 @@ export function streamChatViaOpencode(
 						// `response.parts` body — without this, opencode echoes
 						// the user's input back into the assistant bubble.
 						const userMessageIDs = new Set<string>();
+						// Sub-agent / todo dedup state — shared with backstop
+						// walk so we don't double-emit start/end events or
+						// stale task snapshots.
+						const seenAgentStartPartIds = new Set<string>();
+						const agentEndedPartIds = new Set<string>();
+						const lastTodoSnapshotHash: { value: string | null } = {
+							value: null,
+						};
+						const subagentMessageIdMap = new Map<string, string>();
 
 						// Subscribe to /event SSE in parallel with postMessage.
 						const sseAbort = new AbortController();
@@ -203,7 +303,15 @@ export function streamChatViaOpencode(
 							turnSessionId,
 							sseAbort.signal,
 							emit,
-							{ emittedTextLen, seenToolPartIds, userMessageIDs },
+							{
+								emittedTextLen,
+								seenToolPartIds,
+								userMessageIDs,
+								seenAgentStartPartIds,
+								agentEndedPartIds,
+								lastTodoSnapshotHash,
+								subagentMessageIdMap,
+							},
 						);
 
 						// Compose the turn signal: if the harness aborts (timeout
@@ -231,6 +339,13 @@ export function streamChatViaOpencode(
 							postParams["model"] = opts.model;
 						}
 						postParams["directory"] = opts.cwd;
+						// Plan-mode: route through the named `plan` agent.
+						// We pre-flighted its existence above, so a daemon
+						// missing the agent has already failed with
+						// AgentUnavailableError.
+						if (planMode) {
+							postParams["agent"] = "plan";
+						}
 
 						let response: Awaited<ReturnType<typeof client.postMessage>> | null = null;
 						try {
@@ -280,12 +395,33 @@ export function streamChatViaOpencode(
 									// `message.updated` SSE event for the user
 									// happened to race the parts walk.
 									assistantMessageID: response.info.id,
+									seenAgentStartPartIds,
+									agentEndedPartIds,
+									subagentMessageIdMap,
 								},
 								emit,
 							);
 						}
 					},
 				});
+
+				// Plan-mode synthesis: emit a single plan-presented event
+				// with the entire buffered assistant turn as its markdown.
+				// One per turn — the route's persistence wrapper drops a
+				// chat_plans row keyed on (session, turn) so a duplicate
+				// synthesis (shouldn't happen, but defensive) would surface
+				// as a unique-constraint violation rather than two cards.
+				if (planMode) {
+					const planMarkdown = planTextBuffer.join("").trim();
+					if (planMarkdown.length > 0) {
+						controller.enqueue({
+							kind: "plan-presented",
+							providerPlanId: `opencode-plan-${turnSessionId}-${Date.now()}`,
+							markdown: planMarkdown,
+							source: "opencode",
+						});
+					}
+				}
 
 				controller.close();
 			} catch (err) {

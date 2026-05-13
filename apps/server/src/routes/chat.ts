@@ -38,6 +38,7 @@ import {
 } from '../services/ChatChangesPush';
 import { ChatSessionService } from '../services/ChatSession';
 import { DbService } from '../services/Db';
+import { OpencodeSupervisor } from '../services/OpencodeSupervisor';
 import { withDb } from '../effects/with-db';
 import { GitHubService } from '../services/GitHub';
 import { PrContextService } from '../services/PrContext';
@@ -54,11 +55,13 @@ import {
 	handleAppError,
 	unwrapEffectError,
 } from './middleware';
-import type { ChatStreamFrame } from '../ai/providers/chat-claude';
+import type { ChatStreamFrame, RawChatStreamFrame } from '../ai/providers/chat-claude';
+import { AgentUnavailableError } from '../ai/providers/chat-opencode';
 import type {
 	ChatHistoryEntry,
 	ChatWalkthroughContext,
 } from '../ai/prompts/chat';
+import type { InteractionMode } from '@revv/shared';
 import { logError } from '../logger';
 import { WorktreeBlockedByUnpushedCommits } from '../domain/errors';
 
@@ -352,14 +355,19 @@ interface ProposedCommit {
  * about partial state without breaking the user's turn.
  */
 function wrapStreamWithPersistence(
-	source: ReadableStream<ChatStreamFrame>,
-	ctx: { chatSessionId: string; turnId: string },
+	source: ReadableStream<RawChatStreamFrame>,
+	ctx: { chatSessionId: string; turnId: string; agent: 'claude' | 'opencode' },
 ): ReadableStream<ChatStreamFrame> {
 	return new ReadableStream<ChatStreamFrame>({
 		async start(controller) {
 			const reader = source.getReader();
 			let assistantMessageId: string | null = null;
 			let textStreamed = false;
+			// Provider call id → server-assigned invocation id. Activity
+			// frames stamped with subagentProviderCallId are translated to
+			// subagentInvocationId here so the wire shape uses server ids
+			// throughout.
+			const providerToInvocationId = new Map<string, string>();
 
 			const ensureAssistantMessage = async (): Promise<string> => {
 				if (assistantMessageId) return assistantMessageId;
@@ -456,6 +464,9 @@ function wrapStreamWithPersistence(
 							}
 						}
 					} else if (value.kind === 'activity') {
+						const subagentInvocationId = value.subagentProviderCallId
+							? providerToInvocationId.get(value.subagentProviderCallId) ?? null
+							: null;
 						try {
 							await AppRuntime.runPromise(
 								Effect.flatMap(ChatSessionService, (svc) =>
@@ -466,6 +477,7 @@ function wrapStreamWithPersistence(
 										toolName: value.toolName,
 										summary: value.summary,
 										payload: value.payload,
+										subagentInvocationId,
 									}),
 								),
 							);
@@ -476,9 +488,139 @@ function wrapStreamWithPersistence(
 								err instanceof Error ? err.message : String(err),
 							);
 						}
+						// Translate Raw → Wire: drop the providerCallId field,
+						// add server-side subagentInvocationId when present.
+						const { subagentProviderCallId: _unused, ...activityRest } = value;
+						void _unused;
+						const wireActivity: ChatStreamFrame = subagentInvocationId
+							? { ...activityRest, subagentInvocationId }
+							: activityRest;
+						controller.enqueue(wireActivity);
+						continue;
+					} else if (value.kind === 'task-list') {
+						try {
+							await AppRuntime.runPromise(
+								Effect.flatMap(ChatSessionService, (svc) =>
+									svc.applyTaskListSnapshot({
+										chatSessionId: ctx.chatSessionId,
+										turnId: ctx.turnId,
+										source: value.source,
+										tasks: value.tasks,
+									}),
+								),
+							);
+						} catch (err) {
+							logError(
+								'chat',
+								'applyTaskListSnapshot failed:',
+								err instanceof Error ? err.message : String(err),
+							);
+						}
+						controller.enqueue({
+							kind: 'task-list',
+							turnId: ctx.turnId,
+							tasks: value.tasks,
+						});
+						continue;
+					} else if (value.kind === 'plan-presented') {
+						let planId: string | null = null;
+						try {
+							const plan = await AppRuntime.runPromise(
+								Effect.flatMap(ChatSessionService, (svc) =>
+									svc.createPlan({
+										chatSessionId: ctx.chatSessionId,
+										turnId: ctx.turnId,
+										source: value.source,
+										markdown: value.markdown,
+									}),
+								),
+							);
+							planId = plan.id;
+						} catch (err) {
+							logError(
+								'chat',
+								'createPlan failed:',
+								err instanceof Error ? err.message : String(err),
+							);
+						}
+						if (planId) {
+							controller.enqueue({
+								kind: 'plan-presented',
+								planId,
+								turnId: ctx.turnId,
+								markdown: value.markdown,
+								status: 'pending',
+							});
+						}
+						continue;
+					} else if (value.kind === 'subagent-start') {
+						let invocationId: string | null = null;
+						try {
+							const { invocationId: id } = await AppRuntime.runPromise(
+								Effect.flatMap(ChatSessionService, (svc) =>
+									svc.startSubagentInvocation({
+										chatSessionId: ctx.chatSessionId,
+										parentTurnId: ctx.turnId,
+										source: value.source,
+										providerCallId: value.providerCallId,
+										subagentType: value.subagentType,
+										description: value.description,
+										prompt: value.prompt,
+									}),
+								),
+							);
+							invocationId = id;
+							providerToInvocationId.set(value.providerCallId, id);
+						} catch (err) {
+							logError(
+								'chat',
+								'startSubagentInvocation failed:',
+								err instanceof Error ? err.message : String(err),
+							);
+						}
+						if (invocationId) {
+							controller.enqueue({
+								kind: 'subagent-start',
+								invocationId,
+								parentTurnId: ctx.turnId,
+								subagentType: value.subagentType,
+								description: value.description,
+							});
+						}
+						continue;
+					} else if (value.kind === 'subagent-end') {
+						const invocationId = providerToInvocationId.get(
+							value.providerCallId,
+						);
+						if (invocationId) {
+							try {
+								await AppRuntime.runPromise(
+									Effect.flatMap(ChatSessionService, (svc) =>
+										svc.completeSubagentInvocation({
+											invocationId,
+											result: value.result,
+											ok: value.ok,
+										}),
+									),
+								);
+							} catch (err) {
+								logError(
+									'chat',
+									'completeSubagentInvocation failed:',
+									err instanceof Error ? err.message : String(err),
+								);
+							}
+							controller.enqueue({
+								kind: 'subagent-end',
+								invocationId,
+								result: value.result,
+								ok: value.ok,
+							});
+						}
+						continue;
 					}
 
-					controller.enqueue(value);
+					controller.enqueue(value as ChatStreamFrame);
 				}
 
 				// Stream ended cleanly. If no text was streamed but the agent
@@ -545,6 +687,14 @@ export const chatRoute = new Elysia()
 		'/api/chat',
 		async (ctx) => {
 			try {
+				const requestedMode: InteractionMode | undefined =
+					ctx.body.interactionMode === 'plan' || ctx.body.interactionMode === 'default'
+						? ctx.body.interactionMode
+						: undefined;
+				const approvedPlanIdInput =
+					typeof ctx.body.approvedPlanId === 'string' && ctx.body.approvedPlanId.length > 0
+						? ctx.body.approvedPlanId
+						: undefined;
 				const prepared = await AppRuntime.runPromise(
 					Effect.gen(function* () {
 						const ai = yield* AiService;
@@ -634,6 +784,49 @@ export const chatRoute = new Elysia()
 							branchName,
 						});
 
+						// Plan-pending gate. If the most recent plan is still
+						// pending and the user didn't explicitly approve it,
+						// refuse the turn so the user has to either approve,
+						// reject, or refine instead of accidentally moving past
+						// it. Tagged return — the outer await unwraps and
+						// surfaces a 409 to the client.
+						const pendingPlan = yield* chatSessions.findPendingPlan(
+							chatSessionRow.id,
+						);
+						if (pendingPlan && pendingPlan.id !== approvedPlanIdInput) {
+							return { kind: 'plan-pending' as const, planId: pendingPlan.id };
+						}
+
+						// Approval path: if the user is approving a plan, mark
+						// it approved before kicking off the execution turn.
+						// Also flip the session out of plan mode so the agent
+						// can actually mutate the worktree this turn.
+						if (approvedPlanIdInput) {
+							const decided = yield* chatSessions.decidePlan({
+								planId: approvedPlanIdInput,
+								decision: 'approved',
+							});
+							if (!decided) {
+								return { kind: 'plan-not-found' as const, planId: approvedPlanIdInput };
+							}
+							yield* chatSessions.setInteractionMode({
+								chatSessionId: chatSessionRow.id,
+								mode: 'default',
+							});
+						} else if (requestedMode !== undefined) {
+							yield* chatSessions.setInteractionMode({
+								chatSessionId: chatSessionRow.id,
+								mode: requestedMode,
+							});
+						}
+
+						// Effective mode for this turn. After approval, we run
+						// in 'default'. Otherwise: requested mode override, or
+						// fall back to the session's stored mode.
+						const effectiveMode: InteractionMode = approvedPlanIdInput
+							? 'default'
+							: requestedMode ?? chatSessionRow.interactionMode;
+
 						// "Resume" semantics: present only once the agent has
 						// emitted a session id on a previous turn. A fresh row
 						// (sessionId === null) means we're starting from scratch.
@@ -648,23 +841,31 @@ export const chatRoute = new Elysia()
 						// Snapshot the prior transcript BEFORE appending the new
 						// user message so the agent's history block doesn't end
 						// with a duplicate of the message it's about to receive.
+						// Plans / tasks / sub-agents aren't surfaced in the
+						// prompt's history block (they have their own dedicated
+						// surfaces) — drop them here.
 						const priorTimeline = yield* chatSessions.listTimeline(
 							chatSessionRow.id,
 						);
-						const history: ChatHistoryEntry[] = priorTimeline.map((e) =>
-							e.entryKind === 'message'
-								? {
-										entryKind: 'message',
-										role: e.role,
-										content: e.content,
-									}
-								: {
-										entryKind: 'activity',
-										activityKind: e.activityKind,
-										toolName: e.toolName,
-										summary: e.summary,
-									},
-						);
+						const history: ChatHistoryEntry[] = [];
+						for (const e of priorTimeline) {
+							if (e.entryKind === 'message') {
+								history.push({
+									entryKind: 'message',
+									role: e.role,
+									content: e.content,
+								});
+							} else if (e.entryKind === 'activity') {
+								history.push({
+									entryKind: 'activity',
+									activityKind: e.activityKind,
+									toolName: e.toolName,
+									summary: e.summary,
+								});
+							}
+							// task-list / plan / subagent: skipped — they're rendered
+							// from their own tables via the frontend timeline.
+						}
 
 						// Append the user message immediately so it persists even
 						// if the agent process never emits anything (timeout, crash).
@@ -715,6 +916,7 @@ export const chatRoute = new Elysia()
 							resumeSessionId,
 							onSessionId,
 							prId: pr.id,
+							interactionMode: effectiveMode,
 						});
 
 						// Mark this PR as streaming so a concurrent push attempt
@@ -724,17 +926,40 @@ export const chatRoute = new Elysia()
 						chatPush.markChatStreaming(pr.id, true);
 
 						return {
+							kind: 'ok' as const,
 							frameStream,
 							chatSessionId: chatSessionRow.id,
 							turnId,
 							prId: pr.id,
+							agent,
 						};
 					}),
 				);
 
+				if (prepared.kind === 'plan-pending') {
+					ctx.set.status = 409;
+					return {
+						code: 'PLAN_PENDING',
+						planId: prepared.planId,
+						message: 'A plan is awaiting your decision. Approve or reject it before sending a new message.',
+					};
+				}
+				if (prepared.kind === 'plan-not-found') {
+					ctx.set.status = 404;
+					return {
+						code: 'PLAN_NOT_FOUND',
+						planId: prepared.planId,
+						message: 'Plan not found',
+					};
+				}
+
 				const persistedStream = wrapStreamWithPersistence(
 					prepared.frameStream,
-					{ chatSessionId: prepared.chatSessionId, turnId: prepared.turnId },
+					{
+						chatSessionId: prepared.chatSessionId,
+						turnId: prepared.turnId,
+						agent: prepared.agent,
+					},
 				);
 
 				// Wrap the persisted stream so we clear the streaming flag
@@ -793,6 +1018,15 @@ export const chatRoute = new Elysia()
 					commits: blockedErr.commits,
 				};
 			}
+			// Plan mode requested but the daemon has no `plan` agent.
+			if (blockedErr instanceof AgentUnavailableError) {
+				ctx.set.status = 422;
+				return {
+					code: 'AGENT_UNAVAILABLE',
+					agentName: blockedErr.agentName,
+					message: blockedErr.message,
+				};
+			}
 			return mapErrorToSSEResponse(e);
 		}
 		},
@@ -800,6 +1034,10 @@ export const chatRoute = new Elysia()
 			body: t.Object({
 				prId: t.String(),
 				message: t.String(),
+				interactionMode: t.Optional(
+					t.Union([t.Literal('default'), t.Literal('plan')]),
+				),
+				approvedPlanId: t.Optional(t.String()),
 			}),
 		},
 	)
@@ -841,7 +1079,7 @@ export const chatRoute = new Elysia()
 
 				if (!result) {
 					return jsonResponse(
-						{ chatSessionId: null, entries: [] },
+						{ chatSessionId: null, entries: [], interactionMode: 'default' },
 						200,
 					);
 				}
@@ -850,6 +1088,7 @@ export const chatRoute = new Elysia()
 					{
 						chatSessionId: result.row.id,
 						entries: result.timeline,
+						interactionMode: result.row.interactionMode,
 					},
 					200,
 				);
@@ -1600,6 +1839,155 @@ export const chatRoute = new Elysia()
 		},
 		{
 			params: t.Object({ prId: t.String() }),
+		},
+	)
+	// ── Interaction mode (plan toggle) ──────────────────────────────────────
+	.patch(
+		'/api/chat/:prId/interaction-mode',
+		async (ctx) => {
+			const body = (ctx.body ?? {}) as { mode?: unknown };
+			if (body.mode !== 'plan' && body.mode !== 'default') {
+				ctx.set.status = 400;
+				return { error: "mode must be 'plan' or 'default'" };
+			}
+			const mode: InteractionMode = body.mode;
+			try {
+				await AppRuntime.runPromise(
+					Effect.gen(function* () {
+						const prCtx = yield* PrContextService;
+						const chatSessions = yield* ChatSessionService;
+						const settingsService = yield* SettingsService;
+						const { db } = yield* DbService;
+						const { pr } = yield* prCtx.resolveBasic(
+							ctx.params.prId,
+							ctx.session.user.id,
+						);
+						const settings = yield* withDb(db, settingsService.getSettings()).pipe(
+							Effect.orElseSucceed(
+								() => ({ aiAgent: 'opencode' }) as { aiAgent: string | null },
+							),
+						);
+						const agent = resolveAgent(settings);
+						if (!pr.headSha) return;
+						const row = yield* chatSessions.find(pr.id, agent, pr.headSha);
+						if (!row) return;
+						yield* chatSessions.setInteractionMode({
+							chatSessionId: row.id,
+							mode,
+						});
+					}),
+				);
+				return jsonResponse({ status: 'ok', mode }, 200);
+			} catch (e) {
+				const err = unwrapEffectError(e);
+				ctx.set.status = 500;
+				return { error: err instanceof Error ? err.message : 'Internal error' };
+			}
+		},
+		{
+			params: t.Object({ prId: t.String() }),
+			body: t.Object({
+				mode: t.Union([t.Literal('default'), t.Literal('plan')]),
+			}),
+		},
+	)
+	// ── Plan approval ───────────────────────────────────────────────────────
+	.post(
+		'/api/chat/:prId/plan/:planId/approve',
+		async (ctx) => {
+			try {
+				const result = await AppRuntime.runPromise(
+					Effect.flatMap(ChatSessionService, (svc) =>
+						svc.decidePlan({
+							planId: ctx.params.planId,
+							decision: 'approved',
+						}),
+					),
+				);
+				if (!result) {
+					ctx.set.status = 404;
+					return { code: 'PLAN_NOT_FOUND', message: 'Plan not found' };
+				}
+				return jsonResponse({ status: 'approved', plan: result }, 200);
+			} catch (e) {
+				const err = unwrapEffectError(e);
+				ctx.set.status = 500;
+				return { error: err instanceof Error ? err.message : 'Internal error' };
+			}
+		},
+		{
+			params: t.Object({ prId: t.String(), planId: t.String() }),
+		},
+	)
+	.post(
+		'/api/chat/:prId/plan/:planId/reject',
+		async (ctx) => {
+			try {
+				const result = await AppRuntime.runPromise(
+					Effect.flatMap(ChatSessionService, (svc) =>
+						svc.decidePlan({
+							planId: ctx.params.planId,
+							decision: 'rejected',
+						}),
+					),
+				);
+				if (!result) {
+					ctx.set.status = 404;
+					return { code: 'PLAN_NOT_FOUND', message: 'Plan not found' };
+				}
+				return jsonResponse({ status: 'rejected', plan: result }, 200);
+			} catch (e) {
+				const err = unwrapEffectError(e);
+				ctx.set.status = 500;
+				return { error: err instanceof Error ? err.message : 'Internal error' };
+			}
+		},
+		{
+			params: t.Object({ prId: t.String(), planId: t.String() }),
+		},
+	)
+	// ── Agent availability ─────────────────────────────────────────────────
+	// Lightweight probe the frontend uses to decide whether to enable the
+	// composer's Plan-mode toggle for the opencode path. For Claude the
+	// toggle is always available (the SDK supplies `permissionMode: 'plan'`).
+	.get(
+		'/api/chat/agents/available',
+		async (ctx) => {
+			try {
+				const result = await AppRuntime.runPromise(
+					Effect.gen(function* () {
+						const settingsService = yield* SettingsService;
+						const { db } = yield* DbService;
+						const settings = yield* withDb(db, settingsService.getSettings()).pipe(
+							Effect.orElseSucceed(
+								() => ({ aiAgent: 'opencode' }) as { aiAgent: string | null },
+							),
+						);
+						const agent = resolveAgent(settings);
+						if (agent === 'claude') {
+							return {
+								agent: 'claude' as const,
+								agents: ['plan', 'general-purpose'] as readonly string[],
+								// Claude SDK exposes plan mode via permissionMode.
+								planAvailable: true,
+							};
+						}
+						// opencode: probe the supervisor's cached agent list.
+						const supervisor = yield* OpencodeSupervisor;
+						const agents = yield* supervisor.listAgents();
+						return {
+							agent: 'opencode' as const,
+							agents,
+							planAvailable: agents.includes('plan'),
+						};
+					}),
+				);
+				return jsonResponse(result, 200);
+			} catch (e) {
+				const err = unwrapEffectError(e);
+				ctx.set.status = 500;
+				return { error: err instanceof Error ? err.message : 'Internal error' };
+			}
 		},
 	);
 

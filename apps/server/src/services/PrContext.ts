@@ -11,6 +11,7 @@ import { GitHubService, type PrMeta } from './GitHub';
 import { GitHubEtagCache } from './GitHubEtagCache';
 import { PullRequestService } from './PullRequest';
 import { RepositoryService } from './Repository';
+import { SettingsService } from './Settings';
 import { TokenProvider } from './TokenProvider';
 import { withDb } from '../effects/with-db';
 
@@ -61,7 +62,7 @@ export class PrContextService extends Context.Tag('PrContextService')<
 		readonly resolveWithDiff: (
 			prId: string,
 			userId: string,
-		) => Effect.Effect<PrContextWithDiff, PrContextError, DbService | GitHubEtagCache>;
+		) => Effect.Effect<PrContextWithDiff, PrContextError, DbService | GitHubEtagCache | SettingsService>;
 	}
 >() {}
 

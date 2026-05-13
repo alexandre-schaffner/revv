@@ -73,6 +73,13 @@
 	let stepIdx = $state(0);
 	let phase = $state(0);
 
+	// Reset sequencer state when variant changes to prevent out-of-bounds access
+	$effect(() => {
+		variant; // track
+		stepIdx = 0;
+		phase = 0;
+	});
+
 	$effect(() => {
 		const cfg = config;
 		if (!active || reducedMotion) return;

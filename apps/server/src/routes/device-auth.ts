@@ -1,25 +1,75 @@
 import { Elysia, t } from 'elysia';
 import { eq } from 'drizzle-orm';
-import { db, GITHUB_CLIENT_ID, GITHUB_HOST, GITHUB_API_BASE } from '../auth';
+import { Effect } from 'effect';
+import { db, GITHUB_CLIENT_ID, GITHUB_CLIENT_ID_PUBLIC } from '../auth';
 import { user, session, account } from '../db/schema';
+import { AppRuntime } from '../runtime';
+import { SettingsService } from '../services/Settings';
+import { serverEnv } from '../config';
 
 // The device-code flow needs `client_id` only — no client_secret. If the
 // bundled id is missing (someone replaced it with a placeholder), warn early
 // so sign-in failures are easy to diagnose.
 if (!GITHUB_CLIENT_ID || GITHUB_CLIENT_ID.startsWith('BUNDLED_') || GITHUB_CLIENT_ID.startsWith('REPLACE_')) {
 	console.warn(
-		'[device-auth] WARNING: GITHUB_CLIENT_ID looks like a placeholder — sign-in will fail. ' +
+		'[device-auth] WARNING: GITHUB_CLIENT_ID looks like a placeholder — sign-in will fail for GHE. ' +
 			'Override with the GITHUB_CLIENT_ID env var or fix the bundled value in apps/server/src/config.ts',
 	);
 }
+// GITHUB_CLIENT_ID_PUBLIC being empty is fine if the user never picks github.com —
+// we warn at request time instead of boot time (see resolveGithubUrls).
 
-const githubBase = `https://${GITHUB_HOST}`;
-
-const GITHUB_DEVICE_CODE_URL = `${githubBase}/login/device/code`;
-const GITHUB_TOKEN_URL = `${githubBase}/login/oauth/access_token`;
-const GITHUB_API_USER_URL = `${GITHUB_API_BASE}/user`;
-const GITHUB_API_EMAILS_URL = `${GITHUB_API_BASE}/user/emails`;
 const DEVICE_FLOW_SCOPE = 'repo read:org user:email';
+
+/**
+ * Resolve the GitHub host at request time from user settings (set during
+ * onboarding) with `config.githubHost` as the fallback for first-run
+ * before the settings file has the field populated.
+ *
+ * `api.github.com` is the public github API hostname; GHE uses `api.<host>`.
+ * Mirrors the derivation in {@link serverEnv}.
+ */
+async function resolveGithubUrls(): Promise<{
+	host: string;
+	clientId: string;
+	deviceCodeUrl: string;
+	tokenUrl: string;
+	userUrl: string;
+	emailsUrl: string;
+}> {
+	const settings = await AppRuntime.runPromise(
+		Effect.flatMap(SettingsService, (s) => s.getSettings()).pipe(
+			Effect.orElseSucceed(() => null),
+		),
+	);
+	const host = settings?.githubHost?.trim() || serverEnv.githubHost;
+	const isPublicGitHub = host === 'github.com';
+	// Use the public client_id when targeting github.com; fail fast if it is
+	// not configured so the user gets a clear error instead of a confusing
+	// "invalid client" response from GitHub.
+	let clientId: string;
+	if (isPublicGitHub) {
+		if (!GITHUB_CLIENT_ID_PUBLIC) {
+			throw new Error(
+				'Public GitHub sign-in requires GITHUB_CLIENT_ID_PUBLIC to be set. ' +
+					'Register an OAuth App on github.com and add GITHUB_CLIENT_ID_PUBLIC=<id> to your .env file.',
+			);
+		}
+		clientId = GITHUB_CLIENT_ID_PUBLIC;
+	} else {
+		clientId = GITHUB_CLIENT_ID;
+	}
+	const githubBase = `https://${host}`;
+	const apiBase = isPublicGitHub ? 'https://api.github.com' : `https://api.${host}`;
+	return {
+		host,
+		clientId,
+		deviceCodeUrl: `${githubBase}/login/device/code`,
+		tokenUrl: `${githubBase}/login/oauth/access_token`,
+		userUrl: `${apiBase}/user`,
+		emailsUrl: `${apiBase}/user/emails`,
+	};
+}
 
 interface GitHubDeviceCodeResponse {
 	device_code: string;
@@ -56,16 +106,22 @@ function generateSecureToken(): string {
 		.join('');
 }
 
-async function fetchGitHubUser(accessToken: string): Promise<GitHubUser> {
-	const res = await fetch(GITHUB_API_USER_URL, {
+async function fetchGitHubUser(
+	accessToken: string,
+	urls: { userUrl: string },
+): Promise<GitHubUser> {
+	const res = await fetch(urls.userUrl, {
 		headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
 	});
 	if (!res.ok) throw new Error(`GitHub user fetch failed: ${res.status}`);
 	return res.json() as Promise<GitHubUser>;
 }
 
-async function fetchPrimaryEmail(accessToken: string): Promise<string | null> {
-	const res = await fetch(GITHUB_API_EMAILS_URL, {
+async function fetchPrimaryEmail(
+	accessToken: string,
+	urls: { emailsUrl: string },
+): Promise<string | null> {
+	const res = await fetch(urls.emailsUrl, {
 		headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
 	});
 	if (!res.ok) return null;
@@ -74,10 +130,11 @@ async function fetchPrimaryEmail(accessToken: string): Promise<string | null> {
 }
 
 async function upsertUserAndSession(
-	accessToken: string
+	accessToken: string,
+	urls: { userUrl: string; emailsUrl: string },
 ): Promise<string> {
-	const githubUser = await fetchGitHubUser(accessToken);
-	const primaryEmail = await fetchPrimaryEmail(accessToken);
+	const githubUser = await fetchGitHubUser(accessToken, urls);
+	const primaryEmail = await fetchPrimaryEmail(accessToken, urls);
 	const email = primaryEmail ?? githubUser.email;
 
 	if (!email) throw new Error('No email address found on GitHub account');
@@ -158,10 +215,11 @@ async function upsertUserAndSession(
 
 export const deviceAuthRoutes = new Elysia()
 	.post('/api/auth/device/init', async ({ status }) => {
-		const res = await fetch(GITHUB_DEVICE_CODE_URL, {
+		const urls = await resolveGithubUrls();
+		const res = await fetch(urls.deviceCodeUrl, {
 			method: 'POST',
 			headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-			body: JSON.stringify({ client_id: GITHUB_CLIENT_ID, scope: DEVICE_FLOW_SCOPE }),
+			body: JSON.stringify({ client_id: urls.clientId, scope: DEVICE_FLOW_SCOPE }),
 		});
 
 		if (!res.ok) {
@@ -182,13 +240,14 @@ export const deviceAuthRoutes = new Elysia()
 	.post(
 		'/api/auth/device/poll',
 		async ({ body, status }) => {
+			const urls = await resolveGithubUrls();
 			// Per GitHub's docs, device-flow token exchange does not take a
 			// client_secret — only client_id, device_code, and grant_type.
-			const res = await fetch(GITHUB_TOKEN_URL, {
+			const res = await fetch(urls.tokenUrl, {
 				method: 'POST',
 				headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
 				body: JSON.stringify({
-					client_id: GITHUB_CLIENT_ID,
+					client_id: urls.clientId,
 					device_code: body.device_code,
 					grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
 				}),
@@ -198,7 +257,7 @@ export const deviceAuthRoutes = new Elysia()
 
 			if (data.access_token) {
 				try {
-					const token = await upsertUserAndSession(data.access_token);
+					const token = await upsertUserAndSession(data.access_token, urls);
 					return { status: 'success' as const, token };
 				} catch (e) {
 					console.error('[device-auth] session creation failed:', e);

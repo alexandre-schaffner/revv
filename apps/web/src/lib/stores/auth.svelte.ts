@@ -2,7 +2,6 @@ import { authClient } from '$lib/auth-client';
 import * as prs from '$lib/stores/prs.svelte';
 import * as settings from '$lib/stores/settings.svelte';
 import * as orgs from '$lib/stores/orgs.svelte';
-import { openAddRepoDialog } from '$lib/stores/sidebar.svelte';
 import * as sync from '$lib/services/sync';
 import { goto } from '$app/navigation';
 import { API_BASE_URL } from '$lib/api/base-url';
@@ -11,7 +10,13 @@ const storedToken =
 	typeof localStorage !== 'undefined' ? localStorage.getItem('rev_session_token') : null;
 
 let token = $state<string | null>(storedToken);
-let user = $state<{ name: string; email: string; image?: string; githubLogin?: string | null } | null>(null);
+let user = $state<{
+	name: string;
+	email: string;
+	image?: string;
+	githubLogin?: string | null;
+	onboardedAt?: string | null;
+} | null>(null);
 let isLoading = $state(false);
 let error = $state<string | null>(null);
 
@@ -29,6 +34,16 @@ let isAuthenticated = $derived(token !== null && token.length > 0);
 
 export function getIsAuthenticated(): boolean {
 	return isAuthenticated;
+}
+
+/**
+ * Whether the user has finished onboarding. Returns `false` until the
+ * `/api/user/identity` response with `onboardedAt` has loaded, so the
+ * onboarding gate stays mounted during the initial hydration window
+ * instead of flashing the app shell.
+ */
+export function getIsOnboarded(): boolean {
+	return Boolean(user?.onboardedAt);
 }
 
 export function getError(): string | null {
@@ -147,9 +162,10 @@ async function poll(): Promise<void> {
 			isPolling = false;
 			await loadUser();
 			await focusWindow();
-			if (prs.getRepositories().length === 0) {
-				openAddRepoDialog();
-			}
+			// Auto-open-add-repo on sign-in used to live here. The onboarding
+			// flow now owns the repo step inline (StepRepo.svelte), so we
+			// intentionally don't pop a dialog — OnboardingGate stays mounted
+			// and advances to its repo step automatically.
 			return;
 		}
 
@@ -179,6 +195,10 @@ export function cancelSignIn(): void {
 	isPolling = false;
 }
 
+export function clearError(): void {
+	error = null;
+}
+
 export async function loadUser(): Promise<void> {
 	if (!token) return;
 	isLoading = true;
@@ -203,9 +223,14 @@ export async function loadUser(): Promise<void> {
 					const data = (await res.json()) as {
 						login: string | null;
 						avatarUrl?: string | null;
+						onboardedAt?: string | null;
 					};
 					if (user) {
-						const next: typeof user = { ...user, githubLogin: data.login };
+						const next: typeof user = {
+							...user,
+							githubLogin: data.login,
+							onboardedAt: data.onboardedAt ?? null,
+						};
 						// Prefer the server's freshly-refreshed avatar URL when available.
 						if (data.avatarUrl != null) {
 							next.image = data.avatarUrl;
@@ -245,11 +270,64 @@ export function applyUserUpdate(update: {
 		name: update.name ?? user.name,
 		email: update.email ?? user.email,
 		githubLogin: update.githubLogin,
+		onboardedAt: user.onboardedAt ?? null,
 	};
 	if (update.image != null) {
 		next.image = update.image;
 	}
 	user = next;
+}
+
+/**
+ * Mark the user as onboarded. Called by `StepDone` once the first repo has
+ * been added; flips `onboardedAt` to the server-supplied timestamp so the
+ * gate stops rendering the onboarding flow on next render.
+ *
+ * Failures are silent: the in-memory `user.onboardedAt` is set optimistically
+ * so the UI advances; the next identity refresh will reconcile if the POST
+ * actually failed.
+ */
+export async function completeOnboarding(): Promise<void> {
+	if (!token || !user) return;
+	const localStamp = new Date().toISOString();
+	user = { ...user, onboardedAt: localStamp };
+	try {
+		const res = await fetch(`${API_BASE_URL}/api/onboarding/complete`, {
+			method: 'POST',
+			headers: { Authorization: `Bearer ${token}` },
+		});
+		if (res.ok) {
+			const data = (await res.json()) as { onboardedAt: string };
+			if (user) user = { ...user, onboardedAt: data.onboardedAt };
+		}
+	} catch {
+		// best-effort — optimistic local stamp keeps the UI moving
+	}
+}
+
+/**
+ * Reset the user's onboarded flag so the OnboardingGate re-shows the flow.
+ * Auth and tracked repos are kept — this is a "replay" affordance for the
+ * settings page, not a destructive reset.
+ *
+ * Pairs with `sessionStorage['revv-onboarding-replay']`, which the
+ * OnboardingFlow reads to bypass its usual "resume on the right step"
+ * logic and always start from the welcome step.
+ */
+export async function resetOnboarding(): Promise<void> {
+	if (!token || !user) return;
+	if (typeof sessionStorage !== 'undefined') {
+		sessionStorage.setItem('revv-onboarding-replay', '1');
+	}
+	user = { ...user, onboardedAt: null };
+	try {
+		await fetch(`${API_BASE_URL}/api/onboarding/reset`, {
+			method: 'POST',
+			headers: { Authorization: `Bearer ${token}` },
+		});
+	} catch {
+		// best-effort — local mirror already flipped; the gate is showing.
+	}
 }
 
 export async function signOut(): Promise<void> {
@@ -278,7 +356,13 @@ export function getToken(): string | null {
 	return token;
 }
 
-export function getUser(): { name: string; email: string; image?: string; githubLogin?: string | null } | null {
+export function getUser(): {
+	name: string;
+	email: string;
+	image?: string;
+	githubLogin?: string | null;
+	onboardedAt?: string | null;
+} | null {
 	return user;
 }
 

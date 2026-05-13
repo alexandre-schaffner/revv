@@ -207,7 +207,10 @@ export function collapsibleSlide(
  * Soft fade — for content swaps where transform would distract.
  * Default duration matches `--duration-quick`.
  */
-export function softFade(_node: Element, { duration = DURATION.quick } = {}): TransitionConfig {
+export function softFade(
+	_node: Element,
+	{ duration = DURATION.quick }: { duration?: number } = {},
+): TransitionConfig {
 	if (prefersReducedMotion()) return reducedConfig();
 	return {
 		duration,

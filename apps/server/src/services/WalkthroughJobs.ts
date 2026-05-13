@@ -365,11 +365,12 @@ export const WalkthroughJobsLive = Layer.effect(
 			});
 
 		const provideInfra = <A, E>(
-			eff: Effect.Effect<A, E, DbService | GitHubEtagCache>,
+			eff: Effect.Effect<A, E, DbService | GitHubEtagCache | SettingsService>,
 		): Effect.Effect<A, E> =>
 			eff.pipe(
 				Effect.provideService(DbService, { db }),
 				Effect.provideService(GitHubEtagCache, etagCache),
+				Effect.provideService(SettingsService, settingsService),
 			);
 
 		const provideDb = <A, E>(

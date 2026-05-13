@@ -2,6 +2,7 @@
 	import '../app.css';
 	import AppShell from '$lib/components/layout/AppShell.svelte';
 	import ErrorBanner from '$lib/components/shared/ErrorBanner.svelte';
+	import OnboardingGate from '$lib/components/onboarding/OnboardingGate.svelte';
 	import * as auth from '$lib/stores/auth.svelte';
 	import * as prs from '$lib/stores/prs.svelte';
 	import * as settings from '$lib/stores/settings.svelte';
@@ -147,10 +148,12 @@
 </script>
 
 <TooltipProvider>
-	<AppShell>
-		<ErrorBanner />
-		{@render children()}
-	</AppShell>
+	<OnboardingGate>
+		<AppShell>
+			<ErrorBanner />
+			{@render children()}
+		</AppShell>
+	</OnboardingGate>
 	<Toaster />
 	{#if import.meta.env.DEV && cacheInspectorOpen}
 		<CacheInspector onclose={() => { cacheInspectorOpen = false; }} />

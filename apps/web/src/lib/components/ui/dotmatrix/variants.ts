@@ -343,7 +343,8 @@ function prismBloomConfig(): VariantConfig {
 		stepCount: PRISM_BLOOM_SEQUENCE.length,
 		cycleMs: PRISM_BLOOM_SEQUENCE.length * 354,
 		opacity: (step, _idx, row, col) => {
-			const frame = PRISM_BLOOM_FRAMES[PRISM_BLOOM_SEQUENCE[step]!]!;
+			const seqIdx = step % PRISM_BLOOM_SEQUENCE.length;
+			const frame = PRISM_BLOOM_FRAMES[PRISM_BLOOM_SEQUENCE[seqIdx]!]!;
 			const ch = frame[rowMajorIndex(row, col)] ?? '.';
 			if (ch === 'x') return 1;
 			if (ch === 'o') return 0.52;

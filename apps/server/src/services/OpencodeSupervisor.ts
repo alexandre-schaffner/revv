@@ -132,6 +132,13 @@ export interface OpencodeHttpClient {
 	 * once per JSON-parsed event. Non-matching events are skipped.
 	 */
 	subscribeToEvents(opts: OpencodeSubscribe): Promise<void>;
+	/**
+	 * `GET /agent` — list available agents. Used at daemon-startup to cache
+	 * which named agents (e.g. `plan`) are configured. Returns an empty
+	 * array on failure (best-effort; the chat-opencode driver gracefully
+	 * degrades when `plan` is unavailable).
+	 */
+	listAgents(directory?: string): Promise<readonly string[]>;
 }
 
 export type OpencodeError = AiError;
@@ -174,6 +181,19 @@ export class OpencodeSupervisor extends Context.Tag("OpencodeSupervisor")<
 		 * daemon-bound state is ephemeral).
 		 */
 		readonly onDaemonExit: (handler: () => void) => () => void;
+		/**
+		 * List the agents available on the running daemon. Cached at startup
+		 * via `GET /agent`; re-probed on each daemon restart since
+		 * `.opencode/opencode.toml` overrides can change between sessions.
+		 * Returns an empty array when no daemon is running.
+		 */
+		readonly listAgents: () => Effect.Effect<readonly string[]>;
+		/**
+		 * Cheap check whether an agent by `name` is available. Reads the
+		 * cached agent list. Returns `false` when the daemon isn't running
+		 * (the chat-opencode driver should ensureDaemon() first).
+		 */
+		readonly hasAgent: (name: string) => Effect.Effect<boolean>;
 	}
 >() {}
 
@@ -194,6 +214,11 @@ interface SupervisorState {
 	readonly restartTimestamps: readonly number[];
 	readonly unhealthy: boolean;
 	readonly lastSelectedAgent: string | null;
+	/**
+	 * Names of agents the running daemon exposes via `GET /agent`. Probed
+	 * once per daemon start; null while not yet probed (or no daemon).
+	 */
+	readonly agentNames: readonly string[] | null;
 }
 
 const INITIAL_STATE: SupervisorState = {
@@ -203,6 +228,7 @@ const INITIAL_STATE: SupervisorState = {
 	restartTimestamps: [],
 	unhealthy: false,
 	lastSelectedAgent: null,
+	agentNames: null,
 };
 
 const IDLE_COOLDOWN_MS = 30_000;
@@ -462,6 +488,43 @@ function buildHttpClient(
 					"opencode-supervisor",
 					`abortSession non-ok (${res.status}): ${text.slice(0, 200)}`,
 				);
+			}
+		},
+
+		async listAgents(directory) {
+			const extraHeaders = directory
+				? { "x-opencode-directory": directory }
+				: undefined;
+			try {
+				const res = await request("GET", "/agent", undefined, extraHeaders);
+				if (!res.ok) {
+					debug(
+						"opencode-supervisor",
+						`listAgents non-ok ${res.status}`,
+					);
+					return [];
+				}
+				const body = (await res.json().catch(() => null)) as
+					| Array<{ name?: unknown }>
+					| null;
+				if (!Array.isArray(body)) return [];
+				const names: string[] = [];
+				for (const entry of body) {
+					if (entry && typeof entry === "object") {
+						const name = (entry as { name?: unknown }).name;
+						if (typeof name === "string" && name.length > 0) {
+							names.push(name);
+						}
+					}
+				}
+				return names;
+			} catch (err) {
+				debug(
+					"opencode-supervisor",
+					"listAgents failed:",
+					err instanceof Error ? err.message : String(err),
+				);
+				return [];
 			}
 		},
 
@@ -960,7 +1023,29 @@ export const OpencodeSupervisorLive = Layer.effect(
 					// Successful start resets the crash-loop counter.
 					restartTimestamps: [],
 					unhealthy: false,
+					// Reset cached agent list — probe again below.
+					agentNames: null,
 				}));
+
+				// Probe available agents. Failures are best-effort: the
+				// chat-opencode driver checks `hasAgent('plan')` before
+				// requesting plan mode and degrades gracefully when missing.
+				const names = yield* Effect.tryPromise({
+					try: () => running.client.listAgents(),
+					catch: (err) => {
+						debug(
+							"opencode-supervisor",
+							"agent probe failed:",
+							err instanceof Error ? err.message : String(err),
+						);
+						return new Error("agent probe failed");
+					},
+				}).pipe(Effect.orElseSucceed(() => [] as readonly string[]));
+				yield* Ref.update(stateRef, (s) => ({ ...s, agentNames: names }));
+				debug(
+					"opencode-supervisor",
+					`agent probe ok: ${names.join(", ")}`,
+				);
 
 				return {
 					port: running.port,
@@ -981,6 +1066,7 @@ export const OpencodeSupervisorLive = Layer.effect(
 					...st,
 					running: null,
 					activeJobCount: 0,
+					agentNames: null,
 				}));
 			});
 
@@ -1012,6 +1098,7 @@ export const OpencodeSupervisorLive = Layer.effect(
 					...st,
 					running: null,
 					idleTimer: null,
+					agentNames: null,
 				}));
 			});
 
@@ -1078,6 +1165,20 @@ export const OpencodeSupervisorLive = Layer.effect(
 			};
 		};
 
+		const listAgents = (): Effect.Effect<readonly string[]> =>
+			Effect.gen(function* () {
+				const s = yield* Ref.get(stateRef);
+				return s.agentNames ?? [];
+			});
+
+		const hasAgent = (name: string): Effect.Effect<boolean> =>
+			Effect.gen(function* () {
+				const s = yield* Ref.get(stateRef);
+				const names = s.agentNames;
+				if (!names) return false;
+				return names.includes(name);
+			});
+
 		return {
 			ensureRunning,
 			stopIfIdle,
@@ -1087,6 +1188,8 @@ export const OpencodeSupervisorLive = Layer.effect(
 			jobStarted,
 			jobEnded,
 			onDaemonExit,
+			listAgents,
+			hasAgent,
 		};
 	}),
 );

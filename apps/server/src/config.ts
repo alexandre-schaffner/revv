@@ -29,6 +29,11 @@ export const ServerConfig = Config.all({
 	githubClientId: Config.string('GITHUB_CLIENT_ID').pipe(
 		Config.withDefault('Ov23g4GLrM59sDrek6wo'),
 	),
+	// Bundled OAuth App client_id, registered on github.com. The
+	// `GITHUB_CLIENT_ID_PUBLIC` env var overrides for self-hosting.
+	githubClientIdPublic: Config.string('GITHUB_CLIENT_ID_PUBLIC').pipe(
+		Config.withDefault('Ov23liI36U1MLWk3kF8l'),
+	),
 	githubHost: Config.string('GITHUB_HOST').pipe(Config.withDefault('nocturlab.ghe.com')),
 	revDebug: Config.boolean('REV_DEBUG').pipe(Config.withDefault(false)),
 	// Absolute paths to the `claude` / `opencode` CLIs, resolved once by the

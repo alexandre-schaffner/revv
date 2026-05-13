@@ -25,6 +25,20 @@ export function getIsLoading(): boolean {
 }
 
 /**
+ * GitHub host the app authenticates against. Returns `null` until the
+ * settings file has been fetched at least once. The onboarding flow reads
+ * this to decide whether to start at the Welcome step (no host yet) or
+ * resume at Sign-In (host already picked).
+ */
+export function getGithubHost(): string | null {
+	return settings?.githubHost ?? null;
+}
+
+export async function setGithubHost(host: string): Promise<void> {
+	await updateSettings({ githubHost: host });
+}
+
+/**
  * Read the cached model list for a given agent (or the currently selected
  * agent when `agent` is omitted). Returns an empty array if models have not
  * been fetched yet — callers can use `areModelsLoaded` to disambiguate

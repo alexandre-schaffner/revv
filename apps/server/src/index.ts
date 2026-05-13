@@ -14,6 +14,7 @@ import { threadRoutes } from './routes/threads';
 import { settingsRoutes } from './routes/settings';
 import { signOutRoute } from './routes/sign-out';
 import { deviceAuthRoutes } from './routes/device-auth';
+import { onboardingRoutes } from './routes/onboarding';
 import { userRoutes } from './routes/user';
 import { wsRoute } from './routes/ws';
 import { debugRoutes } from './routes/debug';
@@ -43,6 +44,7 @@ const app = new Elysia()
 	.use(settingsRoutes)
 	.use(signOutRoute)
 	.use(deviceAuthRoutes)
+	.use(onboardingRoutes)
 	.use(userRoutes)
 	.use(wsRoute)
 	.use(debugRoutes)

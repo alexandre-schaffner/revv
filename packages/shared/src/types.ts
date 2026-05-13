@@ -82,6 +82,13 @@ export interface UserSettings {
 	diffViewMode: string;
 	autoFetchInterval: number;
 	fileTreeScope: FileTreeScope;
+	/**
+	 * GitHub host the app authenticates against. `'nocturlab.ghe.com'` for
+	 * the bundled GHE instance (default) or `'github.com'` for public
+	 * GitHub. Picked during onboarding and consumed by the device-flow
+	 * routes to build per-host OAuth and API URLs.
+	 */
+	githubHost: string;
 }
 
 // ── Review domain types ──────────────────────────────────────────────────────

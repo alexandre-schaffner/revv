@@ -30,3 +30,9 @@ export type { WsServerMessage, WsClientMessage } from './ws';
 export * from './walkthrough';
 export type { Activity, ActivityKind } from './activity';
 export { classifyTool, normalizeToolName } from './activity';
+export type {
+	InteractionMode,
+	ChatTask,
+	ChatPlan,
+	ChatSubagentInvocation,
+} from './chat';

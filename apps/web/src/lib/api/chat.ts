@@ -8,30 +8,77 @@
 // timeline (messages + activities, ordered by sequence) so the panel hydrates
 // from SQLite on mount instead of starting empty after a desktop reload.
 
-import type { Activity, ActivityKind } from '@revv/shared';
+import type {
+	Activity,
+	ActivityKind,
+	ChatPlan,
+	ChatSubagentInvocation,
+	ChatTask,
+	InteractionMode,
+} from '@revv/shared';
 import { API_BASE_URL } from '$lib/api/base-url';
 import { authHeaders } from '$lib/utils/session-token';
 import { parseSSEBuffer } from '$lib/utils/sse-parser';
 
 // Re-export the canonical activity types so existing call sites in stores
 // and components can keep importing from `$lib/api/chat`.
-export type { Activity, ActivityKind };
+export type { Activity, ActivityKind, ChatPlan, ChatSubagentInvocation, ChatTask, InteractionMode };
 
 export type ChatStreamFrame =
 	| { kind: 'text'; data: string }
 	| { kind: 'reasoning'; data: string }
-	| ({ kind: 'activity' } & Activity);
+	| ({ kind: 'activity' } & Activity)
+	| { kind: 'task-list'; turnId: string; tasks: ReadonlyArray<ChatTask> }
+	| {
+			kind: 'plan-presented';
+			planId: string;
+			turnId: string;
+			markdown: string;
+			status: 'pending';
+	  }
+	| {
+			kind: 'subagent-start';
+			invocationId: string;
+			parentTurnId: string;
+			subagentType: string;
+			description: string;
+	  }
+	| {
+			kind: 'subagent-end';
+			invocationId: string;
+			result: string;
+			ok: boolean;
+	  };
 
 export interface ChatRequestParams {
 	prId: string;
 	message: string;
+	interactionMode?: InteractionMode;
+	approvedPlanId?: string;
 }
 
 export interface ChatCallbacks {
 	onText: (chunk: string) => void;
-	onActivity: (activity: Activity) => void;
+	onActivity: (activity: Activity & { subagentInvocationId?: string }) => void;
+	onTaskList: (params: { turnId: string; tasks: ReadonlyArray<ChatTask> }) => void;
+	onPlanPresented: (params: {
+		planId: string;
+		turnId: string;
+		markdown: string;
+	}) => void;
+	onSubagentStart: (params: {
+		invocationId: string;
+		parentTurnId: string;
+		subagentType: string;
+		description: string;
+	}) => void;
+	onSubagentEnd: (params: {
+		invocationId: string;
+		result: string;
+		ok: boolean;
+	}) => void;
 	onDone: () => void;
-	onError: (error: { code: string; message: string }) => void;
+	onError: (error: { code: string; message: string; [k: string]: unknown }) => void;
 }
 
 /**
@@ -92,6 +139,12 @@ export function streamChatMessage(
 		body: JSON.stringify({
 			prId: params.prId,
 			message: params.message,
+			...(params.interactionMode !== undefined
+				? { interactionMode: params.interactionMode }
+				: {}),
+			...(params.approvedPlanId !== undefined
+				? { approvedPlanId: params.approvedPlanId }
+				: {}),
 		}),
 		signal: controller.signal,
 	})
@@ -151,6 +204,33 @@ export function streamChatMessage(
 							toolName: frame.toolName,
 							summary: frame.summary,
 							payload: frame.payload,
+							...(frame.subagentInvocationId !== undefined
+								? { subagentInvocationId: frame.subagentInvocationId }
+								: {}),
+						});
+					} else if (frame.kind === 'task-list') {
+						callbacks.onTaskList({
+							turnId: frame.turnId,
+							tasks: frame.tasks,
+						});
+					} else if (frame.kind === 'plan-presented') {
+						callbacks.onPlanPresented({
+							planId: frame.planId,
+							turnId: frame.turnId,
+							markdown: frame.markdown,
+						});
+					} else if (frame.kind === 'subagent-start') {
+						callbacks.onSubagentStart({
+							invocationId: frame.invocationId,
+							parentTurnId: frame.parentTurnId,
+							subagentType: frame.subagentType,
+							description: frame.description,
+						});
+					} else if (frame.kind === 'subagent-end') {
+						callbacks.onSubagentEnd({
+							invocationId: frame.invocationId,
+							result: frame.result,
+							ok: frame.ok,
 						});
 					}
 				}
@@ -206,6 +286,70 @@ export async function clearChat(prId: string): Promise<void> {
 	}
 }
 
+// ── Plan / interaction-mode endpoints ─────────────────────────────────────
+
+export async function setInteractionMode(
+	prId: string,
+	mode: InteractionMode,
+): Promise<void> {
+	const res = await fetch(`${API_BASE_URL}/api/chat/${prId}/interaction-mode`, {
+		method: 'PATCH',
+		headers: { 'Content-Type': 'application/json', ...authHeaders() },
+		body: JSON.stringify({ mode }),
+	});
+	if (!res.ok) {
+		throw new Error(`Failed to set interaction mode: ${res.status}`);
+	}
+}
+
+export async function approvePlan(prId: string, planId: string): Promise<void> {
+	const res = await fetch(
+		`${API_BASE_URL}/api/chat/${prId}/plan/${planId}/approve`,
+		{
+			method: 'POST',
+			headers: authHeaders(),
+		},
+	);
+	if (!res.ok) {
+		const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+		throw new Error(
+			(body['message'] as string | undefined) ?? `Approve failed: ${res.status}`,
+		);
+	}
+}
+
+export async function rejectPlan(prId: string, planId: string): Promise<void> {
+	const res = await fetch(
+		`${API_BASE_URL}/api/chat/${prId}/plan/${planId}/reject`,
+		{
+			method: 'POST',
+			headers: authHeaders(),
+		},
+	);
+	if (!res.ok) {
+		const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+		throw new Error(
+			(body['message'] as string | undefined) ?? `Reject failed: ${res.status}`,
+		);
+	}
+}
+
+export interface AvailableAgents {
+	agent: 'claude' | 'opencode';
+	agents: readonly string[];
+	planAvailable: boolean;
+}
+
+export async function fetchAvailableAgents(): Promise<AvailableAgents> {
+	const res = await fetch(`${API_BASE_URL}/api/chat/agents/available`, {
+		headers: authHeaders(),
+	});
+	if (!res.ok) {
+		throw new Error(`Failed to load available agents: ${res.status}`);
+	}
+	return (await res.json()) as AvailableAgents;
+}
+
 // ── History reload ────────────────────────────────────────────────────────
 
 export interface PersistedChatMessage {
@@ -232,14 +376,58 @@ export interface PersistedChatActivity {
 	summary: string;
 	payloadJson: string | null;
 	sequence: number;
+	subagentInvocationId: string | null;
 	createdAt: string;
 }
 
-export type PersistedChatEntry = PersistedChatMessage | PersistedChatActivity;
+export interface PersistedChatTaskList {
+	entryKind: 'task-list';
+	turnId: string;
+	sequence: number;
+	tasks: ReadonlyArray<ChatTask>;
+}
+
+export interface PersistedChatPlan {
+	entryKind: 'plan';
+	id: string;
+	chatSessionId: string;
+	turnId: string;
+	planMarkdown: string;
+	status: 'pending' | 'approved' | 'rejected' | 'superseded';
+	source: 'claude' | 'opencode';
+	sequence: number;
+	createdAt: string;
+	decidedAt: string | null;
+}
+
+export interface PersistedChatSubagent {
+	entryKind: 'subagent';
+	id: string;
+	chatSessionId: string;
+	parentTurnId: string;
+	providerCallId: string;
+	subagentType: string;
+	description: string;
+	prompt: string;
+	status: 'running' | 'completed' | 'errored';
+	result: string | null;
+	source: 'claude' | 'opencode';
+	sequence: number;
+	startedAt: string;
+	completedAt: string | null;
+}
+
+export type PersistedChatEntry =
+	| PersistedChatMessage
+	| PersistedChatActivity
+	| PersistedChatTaskList
+	| PersistedChatPlan
+	| PersistedChatSubagent;
 
 export interface ChatTimeline {
 	chatSessionId: string | null;
 	entries: PersistedChatEntry[];
+	interactionMode: InteractionMode;
 }
 
 /** Fetch the persisted timeline for a PR's current head-SHA chat session. */

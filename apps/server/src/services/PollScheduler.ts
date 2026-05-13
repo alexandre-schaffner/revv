@@ -55,11 +55,12 @@ export const PollSchedulerLive = Layer.effect(
 		// — which now participate in the ETag cache — don't leak those services
 		// into the public Tag signatures.
 		const provideInfra = <A, E>(
-			eff: Effect.Effect<A, E, DbService | GitHubEtagCache>,
+			eff: Effect.Effect<A, E, DbService | GitHubEtagCache | SettingsService>,
 		): Effect.Effect<A, E> =>
 			eff.pipe(
 				Effect.provideService(DbService, { db }),
 				Effect.provideService(GitHubEtagCache, etagCache),
+				Effect.provideService(SettingsService, settingsService),
 			);
 
 		// Tracks whether at least one periodic sync has completed.
@@ -73,10 +74,10 @@ export const PollSchedulerLive = Layer.effect(
 		const fiberRef = yield* Ref.make<Fiber.RuntimeFiber<number, never> | null>(null);
 
 		// The core sync effect — all services are plain values captured from the closure.
-		// `DbService | GitHubEtagCache` remain in R because `github.*` methods depend
-		// on them internally (for ETag cache reads/writes); the layer that constructs
-		// PollScheduler already has both provided, so the forked fiber inherits them.
-		const syncAllRepos: Effect.Effect<void, never, DbService | GitHubEtagCache> = Effect.gen(function* () {
+		// `DbService | GitHubEtagCache | SettingsService` remain in R because `github.*`
+		// methods depend on them internally; the layer that constructs PollScheduler
+		// already has all provided, so the forked fiber inherits them.
+		const syncAllRepos: Effect.Effect<void, never, DbService | GitHubEtagCache | SettingsService> = Effect.gen(function* () {
 			yield* hub.broadcast({ type: 'prs:sync-started' });
 
 			// Snapshot ETag-cache counters so we can report deltas for this cycle.
@@ -191,6 +192,14 @@ export const PollSchedulerLive = Layer.effect(
 						// Auth failures must not silently poison the token: log + skip this
 						// repo's PR sync this cycle. All other errors are logged generically.
 						const token = yield* tokenProvider.getGitHubToken('single-user').pipe(
+							Effect.tapError((err) =>
+								Effect.sync(() => {
+									console.error(
+										`[PollScheduler] token fetch error for ${repo.fullName}:`,
+										err,
+									);
+								}),
+							),
 							Effect.catchTag('GitHubAuthError', (err) =>
 								Effect.sync(() => {
 									console.warn(
@@ -205,14 +214,42 @@ export const PollSchedulerLive = Layer.effect(
 
 						const prs = yield* github
 							.listPrs(repo.fullName, repo.id, token)
-							.pipe(Effect.orElseSucceed(() => [] as PullRequest[]));
+							.pipe(
+								Effect.tapError((err) =>
+									Effect.sync(() => {
+										console.error(
+											`[PollScheduler] listPrs error for ${repo.fullName}:`,
+											err,
+										);
+									}),
+								),
+								Effect.orElseSucceed(() => [] as PullRequest[]),
+							);
 
 						yield* withDb(prService.upsertPrs(prs)).pipe(
-							Effect.orElseSucceed(() => undefined)
+							Effect.tapError((err) =>
+								Effect.sync(() => {
+									console.error(
+										`[PollScheduler] upsertPrs error for ${repo.fullName}:`,
+										err,
+									);
+								}),
+							),
+							Effect.orElseSucceed(() => undefined),
 						);
 
 						return prs;
-					}).pipe(Effect.orElseSucceed(() => [] as PullRequest[])),
+					}).pipe(
+						Effect.tapError((err) =>
+							Effect.sync(() => {
+								console.error(
+									`[PollScheduler] outer per-repo sync error for ${repo.fullName}:`,
+									err,
+								);
+							}),
+						),
+						Effect.orElseSucceed(() => [] as PullRequest[]),
+					),
 				{ concurrency: 3 }
 			);
 
@@ -420,6 +457,11 @@ export const PollSchedulerLive = Layer.effect(
 				},
 			});
 		}).pipe(
+			Effect.tapErrorCause((cause) =>
+				Effect.sync(() => {
+					console.error('[PollScheduler] syncAllRepos top-level failure:', Cause.pretty(cause));
+				}),
+			),
 			Effect.catchAllCause((cause) =>
 				hub.broadcast({
 					type: 'error',
@@ -451,7 +493,7 @@ export const PollSchedulerLive = Layer.effect(
 			yield* Effect.forEach(
 				openPrs,
 				(pr) =>
-					withDb(syncService.syncThreads(pr.id)).pipe(
+					provideInfra(syncService.syncThreads(pr.id)).pipe(
 						Effect.asVoid,
 						Effect.catchAllCause((cause) =>
 							Effect.sync(() => {
@@ -531,10 +573,14 @@ export const PollSchedulerLive = Layer.effect(
 					}),
 				),
 
-			syncThreadsNow: (prId: string) =>
-				withDb(syncService.syncThreads(prId)).pipe(
-					Effect.asVoid,
-					Effect.catchAllCause((cause) => {
+		syncThreadsNow: (prId: string) =>
+			provideInfra(syncService.syncThreads(prId)).pipe(
+				Effect.asVoid,
+				Effect.catchIf(
+					(e) => (e as { _tag?: string })._tag === 'NotFoundError',
+					() => Effect.void,
+				),
+				Effect.catchAllCause((cause) => {
 						// Cause.pretty alone collapses to "An error has occurred"
 						// when the failure's wrapper Error has no useful .message.
 						// Dig into the typed failure (SyncError carries `.cause`

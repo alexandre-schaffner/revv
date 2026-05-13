@@ -12,15 +12,16 @@
 // session-id reporting, and the mapping from `NormalizedAgentEvent` to
 // `ChatStreamFrame`.
 
+import type { InteractionMode } from "@revv/shared";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { Db } from "../../db";
 import { AiGenerationError } from "../../domain/errors";
 import { buildActivity, walkClaudeMessages } from "../agent-stream";
 import { createChatMcpServer } from "./chat-mcp-tools";
 import { resolveCliBin } from "./cli-agent";
-import type { ChatStreamFrame } from "./chat-types";
+import type { ChatStreamFrame, RawChatStreamFrame } from "./chat-types";
 
-export type { ChatStreamFrame } from "./chat-types";
+export type { ChatStreamFrame, RawChatStreamFrame } from "./chat-types";
 
 export interface StreamChatViaClaudeOptions {
 	readonly message: string;
@@ -61,10 +62,20 @@ export interface StreamChatViaClaudeOptions {
 	 * Sourced from `UserSettings.aiMaxTurns`. Defaults to 60 when omitted.
 	 */
 	readonly maxTurns?: number | undefined;
+	/**
+	 * Session-level interaction toggle. When `'plan'`, the SDK runs in
+	 * `permissionMode: 'plan'` — the agent can investigate but cannot edit
+	 * or run commands; on completion it must call `ExitPlanMode` to surface
+	 * a plan for the user to approve.
+	 */
+	readonly interactionMode?: InteractionMode | undefined;
 }
 
 // Tool-use blocks we surface as tool entries in the chat UI. Anything not in
 // this set is silently consumed (e.g. system messages, telemetry tools).
+// Note: TodoWrite, Task, and ExitPlanMode have dedicated event paths and are
+// NOT surfaced as plain activity entries — they route through the
+// task-list / subagent-start / plan-presented frames.
 const SURFACED_TOOLS = new Set([
 	"Read",
 	"Grep",
@@ -80,12 +91,12 @@ const CHAT_CONTEXT_MCP_PREFIX = `mcp__${CHAT_CONTEXT_MCP_SERVER}__`;
 
 export function streamChatViaClaude(
 	opts: StreamChatViaClaudeOptions,
-): ReadableStream<ChatStreamFrame> {
+): ReadableStream<RawChatStreamFrame> {
 	const pinned = resolveCliBin("claude");
 	const pathOption =
 		pinned !== "claude" ? { pathToClaudeCodeExecutable: pinned } : {};
 
-	return new ReadableStream<ChatStreamFrame>({
+	return new ReadableStream<RawChatStreamFrame>({
 		async start(controller) {
 			try {
 				// Build the options shape carefully — `resume` and `systemPrompt`
@@ -100,6 +111,9 @@ export function streamChatViaClaude(
 					? createChatMcpServer({ db: opts.db, prId: opts.prId })
 					: null;
 
+				// `Task` enables sub-agent delegation; `TodoWrite` enables the
+				// agent's own task list; `ExitPlanMode` is required for the SDK
+				// to terminate plan-mode cleanly.
 				const allowedTools = [
 					"Read",
 					"Grep",
@@ -107,19 +121,29 @@ export function streamChatViaClaude(
 					"Write",
 					"Edit",
 					"Bash",
+					"Task",
+					"TodoWrite",
+					"ExitPlanMode",
 				];
 				if (enableMcp) {
 					allowedTools.push(`${CHAT_CONTEXT_MCP_PREFIX}get_review_context`);
 				}
 
+				const planMode = opts.interactionMode === "plan";
 				const queryOpts: Record<string, unknown> = {
 					cwd: opts.cwd,
 					allowedTools,
 					...(mcpServer
 						? { mcpServers: { [CHAT_CONTEXT_MCP_SERVER]: mcpServer } }
 						: {}),
-					permissionMode: "bypassPermissions",
-					allowDangerouslySkipPermissions: true,
+					// In plan mode we trade permission bypass for `permissionMode:
+					// 'plan'`. The agent can investigate but cannot mutate the
+					// worktree; it must call `ExitPlanMode` to surface a plan for
+					// approval. Outside plan mode we keep the existing
+					// `bypassPermissions` shape so the chat flow doesn't gain
+					// per-tool permission prompts mid-stream.
+					permissionMode: planMode ? "plan" : "bypassPermissions",
+					...(planMode ? {} : { allowDangerouslySkipPermissions: true }),
 					persistSession: opts.persistSession ?? true,
 					maxTurns: opts.maxTurns ?? 60,
 					...pathOption,
@@ -196,21 +220,67 @@ export function streamChatViaClaude(
 						if (ev.source === "builtin") {
 							if (!SURFACED_TOOLS.has(ev.toolName)) return;
 							const activity = buildActivity(ev.toolName, ev.input);
-							controller.enqueue({ kind: "activity", ...activity });
+							const frame = ev.subagentProviderCallId
+								? {
+										kind: "activity" as const,
+										...activity,
+										subagentProviderCallId: ev.subagentProviderCallId,
+									}
+								: { kind: "activity" as const, ...activity };
+							controller.enqueue(frame);
 							lastWasNonText = true;
 						} else if (
 							ev.source === "mcp" &&
 							ev.mcpServer === CHAT_CONTEXT_MCP_SERVER
 						) {
-							controller.enqueue({
-								kind: "activity",
-								activityKind: "tool.mcp",
+							const base = {
+								kind: "activity" as const,
+								activityKind: "tool.mcp" as const,
 								toolName: ev.toolName,
 								summary: `Looking up review context (${ev.bareName})`,
 								...(ev.input !== undefined ? { payload: ev.input } : {}),
-							});
+							};
+							controller.enqueue(
+								ev.subagentProviderCallId
+									? { ...base, subagentProviderCallId: ev.subagentProviderCallId }
+									: base,
+							);
 							lastWasNonText = true;
 						}
+					} else if (ev.kind === "task-list-update") {
+						controller.enqueue({
+							kind: "task-list",
+							source: ev.source,
+							tasks: ev.tasks,
+						});
+						lastWasNonText = true;
+					} else if (ev.kind === "plan-presented") {
+						controller.enqueue({
+							kind: "plan-presented",
+							providerPlanId: ev.providerPlanId,
+							markdown: ev.markdown,
+							source: ev.source,
+						});
+						lastWasNonText = true;
+					} else if (ev.kind === "subagent-start") {
+						controller.enqueue({
+							kind: "subagent-start",
+							providerCallId: ev.providerCallId,
+							subagentType: ev.subagentType,
+							description: ev.description,
+							prompt: ev.prompt,
+							source: ev.source,
+						});
+						lastWasNonText = true;
+					} else if (ev.kind === "subagent-end") {
+						controller.enqueue({
+							kind: "subagent-end",
+							providerCallId: ev.providerCallId,
+							result: ev.result,
+							ok: ev.ok,
+							source: ev.source,
+						});
+						lastWasNonText = true;
 					} else if (ev.kind === "error") {
 						controller.enqueue({ kind: "text", data: `\n\n_Error: ${ev.message}_` });
 						hasEmittedText = true;

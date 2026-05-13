@@ -4,11 +4,13 @@ import type { Repository } from '@revv/shared';
 import { AppRuntime } from '../runtime';
 import { GitHubService } from '../services/GitHub';
 import { TokenProvider } from '../services/TokenProvider';
+import { SettingsService } from '../services/Settings';
 import { REPO_CACHE_TTL_MS } from '../constants';
+import { serverEnv } from '../config';
 import { withAuth, handleAppError } from './middleware';
 
-/** Simple in-memory cache for the user's GitHub repos. */
-let repoCache: { data: Repository[]; fetchedAt: number } | null = null;
+/** Simple in-memory cache for the user's GitHub repos, keyed by resolved host. */
+let repoCache: { data: Repository[]; fetchedAt: number; host: string } | null = null;
 
 export const githubRoutes = new Elysia({ prefix: '/api/github' })
 	.use(withAuth)
@@ -17,22 +19,28 @@ export const githubRoutes = new Elysia({ prefix: '/api/github' })
 		async (ctx) => {
 			const force = ctx.query['force'] === 'true';
 
-			if (!force && repoCache && Date.now() - repoCache.fetchedAt < REPO_CACHE_TTL_MS) {
-				return repoCache.data;
-			}
-
 			try {
 				const repos = await AppRuntime.runPromise(
 					Effect.gen(function* () {
+						const settingsService = yield* SettingsService;
+						const settings = yield* settingsService.getSettings().pipe(Effect.orElseSucceed(() => null));
+						const host = settings?.githubHost?.trim() || serverEnv.githubHost;
+
+						if (!force && repoCache && repoCache.host === host && Date.now() - repoCache.fetchedAt < REPO_CACHE_TTL_MS) {
+							return repoCache.data;
+						}
+
 						const github = yield* GitHubService;
 						const tokenProvider = yield* TokenProvider;
 
 						const token = yield* tokenProvider.getGitHubToken(ctx.session.user.id);
-						return yield* github.listUserRepos(token);
+						const fetched = yield* github.listUserRepos(token);
+
+						repoCache = { data: fetched, fetchedAt: Date.now(), host };
+						return fetched;
 					})
 				);
 
-				repoCache = { data: repos, fetchedAt: Date.now() };
 				return repos;
 			} catch (e) {
 				return handleAppError(e, ctx);
