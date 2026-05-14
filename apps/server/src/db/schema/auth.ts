@@ -46,6 +46,8 @@ export const account = sqliteTable('account', {
 	refreshTokenExpiresAt: integer('refresh_token_expires_at', { mode: 'timestamp' }),
 	scope: text('scope'),
 	password: text('password'),
+	githubLogin: text('github_login'),
+	avatarUrl: text('avatar_url'),
 	createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
 	updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 });

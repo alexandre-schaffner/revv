@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { GitPullRequestArrow, GitPullRequest, ChevronLeft, PanelLeftOpen } from '@lucide/svelte';
+	import { GitPullRequestArrow, GitPullRequest, ChevronLeft, PanelLeftOpen, Archive } from '@lucide/svelte';
 	import {
 		getRepositories,
 		getVisibleRepositories,
@@ -8,6 +8,8 @@
 		getNeedsYourReviewByRepo,
 		getSelectedPrId,
 		getSelectedPr,
+		getArchivedPrs,
+		getArchivedByRepo,
 	} from '$lib/stores/prs.svelte';
 	import {
 		getPrScrollPosition,
@@ -23,6 +25,7 @@
 		setSidebarView,
 		toggleSidebar,
 	} from '$lib/stores/sidebar.svelte';
+	import { collapsibleSlide } from '$lib/motion';
 	import SearchFilter from '$lib/components/sidebar/SearchFilter.svelte';
 	import RepoGroup from '$lib/components/sidebar/RepoGroup.svelte';
 	import AddRepoDialog from '$lib/components/sidebar/AddRepoDialog.svelte';
@@ -35,6 +38,18 @@
 	}
 
 	let { collapsed = false }: Props = $props();
+
+	let archiveExpanded = $state(
+		typeof localStorage !== 'undefined'
+			? localStorage.getItem('sidebar-archive-expanded') !== 'false'
+			: false
+	);
+	function toggleArchive() {
+		archiveExpanded = !archiveExpanded;
+		if (typeof localStorage !== 'undefined') {
+			localStorage.setItem('sidebar-archive-expanded', String(archiveExpanded));
+		}
+	}
 
 	let addRepoOpen = $derived(getAddRepoDialogOpen());
 	const selectedPrId = $derived(getSelectedPrId());
@@ -393,12 +408,40 @@
 							<span>All Open PRs</span>
 							<span class="section-count">{allOpenPrsCount}</span>
 						</div>
-						{#each getVisibleRepositories() as repo (repo.id)}
-							{@const reviewIds = new Set((getNeedsYourReviewByRepo().get(repo.id) ?? []).map(p => p.id))}
-							{@const prs = (getGroupedByRepo().get(repo.id) ?? []).filter(p => !reviewIds.has(p.id))}
-							<RepoGroup repository={repo} {prs} />
-						{/each}
+					{#each getVisibleRepositories() as repo (repo.id)}
+						{@const reviewIds = new Set((getNeedsYourReviewByRepo().get(repo.id) ?? []).map(p => p.id))}
+						{@const prs = (getGroupedByRepo().get(repo.id) ?? []).filter(p => !reviewIds.has(p.id))}
+						<RepoGroup repository={repo} {prs} />
+					{/each}
+
+					{#if getArchivedPrs().length > 0}
+						<div class="archive-section">
+							<button class="archive-header" onclick={toggleArchive} aria-expanded={archiveExpanded}>
+								<svg
+									class="h-3 w-3 shrink-0 text-text-muted transition-transform duration-snap ease-out-expo {archiveExpanded ? 'rotate-90' : ''}"
+									xmlns="http://www.w3.org/2000/svg"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2"
+								>
+									<path d="m9 18 6-6-6-6" />
+								</svg>
+								<Archive size={11} class="text-text-muted" />
+								<span>Archive</span>
+								<span class="section-count">{getArchivedPrs().length}</span>
+							</button>
+							{#if archiveExpanded}
+								<div transition:collapsibleSlide>
+									{#each getVisibleRepositories().filter(r => (getArchivedByRepo().get(r.id) ?? []).length > 0) as repo (repo.id)}
+										{@const archivedForRepo = getArchivedByRepo().get(repo.id) ?? []}
+										<RepoGroup repository={repo} prs={archivedForRepo} navPrefix="archive" variant="archived" />
+									{/each}
+								</div>
+							{/if}
+						</div>
 					{/if}
+				{/if}
 				</div>
 		</div>
 
@@ -675,6 +718,33 @@
 
 	.add-link:hover {
 		text-decoration: underline;
+	}
+
+	.archive-section {
+		border-top: 1px solid var(--color-border);
+		padding-top: 4px;
+		margin-top: 4px;
+	}
+
+	.archive-header {
+		display: flex;
+		align-items: center;
+		gap: 5px;
+		width: 100%;
+		padding: 6px 12px 4px;
+		font-size: 9px;
+		font-weight: 600;
+		letter-spacing: 0.07em;
+		text-transform: uppercase;
+		color: var(--color-text-muted);
+		background: none;
+		border: none;
+		cursor: pointer;
+		text-align: left;
+	}
+
+	.archive-header:hover {
+		color: var(--color-text-secondary);
 	}
 
 	/* Footer — kept outside .sidebar-body so Settings is reachable while collapsed.

@@ -108,7 +108,7 @@
 		background: none;
 		border: 0;
 		padding: 0;
-		color: #6f6c63;
+		color: var(--ob-text-muted);
 		font-family: var(--font-mono, 'JetBrains Mono', monospace);
 		font-size: 10.5px;
 		letter-spacing: 0.14em;
@@ -119,7 +119,7 @@
 	}
 
 	.back:hover {
-		color: #d4cab2;
+		color: var(--ob-text-italic);
 	}
 
 	.back :global(svg) {
@@ -135,7 +135,7 @@
 		font-size: 17px;
 		font-weight: 400;
 		line-height: 1.6;
-		color: #b4b0a4;
+		color: var(--ob-text-body);
 		margin: 0;
 	}
 
@@ -146,7 +146,7 @@
 		margin: 0;
 		padding: 0;
 		border: 0;
-		border-top: 1px solid #2a2925;
+		border-top: 1px solid var(--ob-border);
 	}
 
 	.visually-hidden {
@@ -166,7 +166,7 @@
 		align-items: center;
 		gap: 18px;
 		padding: 18px 4px;
-		border-bottom: 1px solid #2a2925;
+		border-bottom: 1px solid var(--ob-border);
 		cursor: pointer;
 		transition: background-color 320ms cubic-bezier(0.16, 1, 0.3, 1);
 		animation: option-in 600ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
@@ -192,7 +192,7 @@
 	}
 
 	.option:hover {
-		background: rgba(255, 255, 255, 0.02);
+		background: var(--ob-hover-subtle);
 	}
 
 	.option input {
@@ -206,13 +206,13 @@
 		flex-shrink: 0;
 		width: 14px;
 		height: 14px;
-		border: 1px solid #46443d;
+		border: 1px solid var(--ob-border-btn);
 		border-radius: 50%;
 		transition: border-color 320ms cubic-bezier(0.16, 1, 0.3, 1);
 	}
 
 	.option[data-selected='true'] .option-mark {
-		border-color: #d4cab2;
+		border-color: var(--ob-text-italic);
 	}
 
 	.option[data-selected='true'] .option-mark::after {
@@ -220,7 +220,7 @@
 		position: absolute;
 		inset: 3px;
 		border-radius: 50%;
-		background: #d4cab2;
+		background: var(--ob-text-italic);
 		animation: mark-pop 360ms cubic-bezier(0.34, 1.56, 0.64, 1);
 	}
 
@@ -249,7 +249,7 @@
 	.option-name {
 		font-family: 'Newsreader', Georgia, serif;
 		font-size: 20px;
-		color: #f0ede4;
+		color: var(--ob-text-heading);
 		letter-spacing: -0.005em;
 	}
 
@@ -262,13 +262,13 @@
 		font-size: 9.5px;
 		letter-spacing: 0.18em;
 		text-transform: uppercase;
-		color: #8a8678;
+		color: var(--ob-text-label);
 	}
 
 	.option-host {
 		font-family: var(--font-mono, 'JetBrains Mono', monospace);
 		font-size: 12px;
-		color: #6f6c63;
+		color: var(--ob-text-muted);
 	}
 
 	.actions {
@@ -293,10 +293,10 @@
 		align-items: center;
 		gap: 14px;
 		padding: 12px 22px;
-		border: 1px solid #46443d;
+		border: 1px solid var(--ob-border-btn);
 		border-radius: 2px;
 		background: transparent;
-		color: #f0ede4;
+		color: var(--ob-text-heading);
 		font-family: 'Newsreader', Georgia, serif;
 		font-style: italic;
 		font-size: 16px;
@@ -315,8 +315,8 @@
 	}
 
 	.primary:hover:not(:disabled) {
-		border-color: #d4cab2;
-		color: #f7f4ec;
+		border-color: var(--ob-text-italic);
+		color: var(--ob-text-heading-bright);
 	}
 
 	.primary:hover:not(:disabled) svg {

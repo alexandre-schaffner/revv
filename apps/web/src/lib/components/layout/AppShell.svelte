@@ -62,6 +62,8 @@
 		getPaletteMode,
 		closePalette,
 	} from '$lib/stores/shortcuts.svelte';
+	import { getSettingsOpen, closeSettings } from '$lib/stores/settingsModal.svelte';
+	import SettingsModal from '$lib/components/settings/SettingsModal.svelte';
 	import {
 		getRcSubmitting,
 		getRcSelectedCount,
@@ -501,6 +503,7 @@
 </div>
 
 <CommandPalette open={paletteOpen} mode={paletteMode} onClose={closePalette} />
+<SettingsModal open={getSettingsOpen()} onClose={closeSettings} />
 
 <style>
 	.app-shell {

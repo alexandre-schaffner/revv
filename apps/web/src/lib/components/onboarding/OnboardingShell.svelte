@@ -1,6 +1,8 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
+	import { Sun, Moon, Monitor } from '@lucide/svelte';
 	import { Dotmatrix, type DotmatrixVariant } from '$lib/components/ui/dotmatrix';
+	import { getThemePreference, setThemePreference, type ThemePreference } from '$lib/stores/theme.svelte';
 
 	/**
 	 * Cinematic frame for the onboarding flow. Calm, dark, type-led: a
@@ -40,6 +42,11 @@
 
 	let pageNumber = $derived(String(stepIndex + 1).padStart(2, '0'));
 	let pageTotal = $derived(String(totalSteps).padStart(2, '0'));
+
+	const theme = $derived(getThemePreference());
+	const cycle: Record<ThemePreference, ThemePreference> = { system: 'light', light: 'dark', dark: 'system' };
+	const labels: Record<ThemePreference, string> = { system: 'System theme', light: 'Light theme', dark: 'Dark theme' };
+	function cycleTheme() { setThemePreference(cycle[theme]); }
 </script>
 
 <div class="onboarding-shell" data-step={stepId}>
@@ -60,6 +67,15 @@
 				<span class="page-sep">/</span>
 				<span class="page-total">{pageTotal}</span>
 			</span>
+			<button class="theme-btn" onclick={cycleTheme} aria-label={labels[theme]} title={labels[theme]}>
+				{#if theme === 'light'}
+					<Sun size={13} />
+				{:else if theme === 'dark'}
+					<Moon size={13} />
+				{:else}
+					<Monitor size={13} />
+				{/if}
+			</button>
 		</div>
 	</header>
 
@@ -103,8 +119,8 @@
 		inset: 0;
 		isolation: isolate;
 		overflow: hidden;
-		background: #0a0a0c;
-		color: #e6e4dc;
+		background: var(--ob-bg);
+		color: var(--ob-text);
 		display: grid;
 		grid-template-rows: auto 1fr auto;
 		grid-template-columns: 1fr;
@@ -116,6 +132,54 @@
 		--ob-dur-quick: 280ms;
 		--ob-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
 		--ob-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+		/* ── Light mode (default) ───────────────────────────────────── */
+		--ob-bg: #faf9f6;
+		--ob-text: #2a2825;
+		--ob-text-heading: #1a1816;
+		--ob-text-heading-bright: #0f0e0c;
+		--ob-text-body: #5a5650;
+		--ob-text-label: #7a756c;
+		--ob-text-muted: #9a958c;
+		--ob-text-dimmed: #c4bfb6;
+		--ob-text-italic: #6b5d3e;
+		--ob-text-row: #3a3632;
+		--ob-border: #e4e0d8;
+		--ob-border-subtle: #ece8e0;
+		--ob-border-btn: #c4bfb6;
+		--ob-error: #b5494b;
+		--ob-error-border: #d4888a;
+		--ob-cell-default: #e4e0d8;
+		--ob-cell-past: #a89e8c;
+		--ob-cell-current: #6b5d3e;
+		--ob-row-highlight: rgba(107, 93, 62, 0.05);
+		--ob-hover-subtle: rgba(0, 0, 0, 0.02);
+		--ob-grain-color: rgba(0, 0, 0, 0.4);
+	}
+
+	/* ── Dark mode ──────────────────────────────────────────────── */
+	:global(html.dark) .onboarding-shell {
+		--ob-bg: #0a0a0c;
+		--ob-text: #e6e4dc;
+		--ob-text-heading: #f0ede4;
+		--ob-text-heading-bright: #f7f4ec;
+		--ob-text-body: #b4b0a4;
+		--ob-text-label: #8a8678;
+		--ob-text-muted: #6f6c63;
+		--ob-text-dimmed: #4a4842;
+		--ob-text-italic: #d4cab2;
+		--ob-text-row: #d4d1c6;
+		--ob-border: #2a2925;
+		--ob-border-subtle: #1b1a18;
+		--ob-border-btn: #46443d;
+		--ob-error: #c98a8a;
+		--ob-error-border: #6f3a3a;
+		--ob-cell-default: #2a2925;
+		--ob-cell-past: #6a6253;
+		--ob-cell-current: #d4cab2;
+		--ob-row-highlight: rgba(212, 202, 178, 0.05);
+		--ob-hover-subtle: rgba(255, 255, 255, 0.02);
+		--ob-grain-color: rgba(255, 255, 255, 0.8);
 	}
 
 	/* Film-grain — a barely-perceptible noise that lifts the canvas off
@@ -128,13 +192,13 @@
 		opacity: 0.05;
 		background-image: radial-gradient(
 				1px 1px at 8% 12%,
-				rgba(255, 255, 255, 0.8),
+				var(--ob-grain-color),
 				transparent 50%
 			),
-			radial-gradient(1px 1px at 28% 42%, rgba(255, 255, 255, 0.6), transparent 50%),
-			radial-gradient(1px 1px at 48% 72%, rgba(255, 255, 255, 0.8), transparent 50%),
-			radial-gradient(1px 1px at 68% 32%, rgba(255, 255, 255, 0.7), transparent 50%),
-			radial-gradient(1px 1px at 88% 88%, rgba(255, 255, 255, 0.5), transparent 50%);
+			radial-gradient(1px 1px at 28% 42%, var(--ob-grain-color), transparent 50%),
+			radial-gradient(1px 1px at 48% 72%, var(--ob-grain-color), transparent 50%),
+			radial-gradient(1px 1px at 68% 32%, var(--ob-grain-color), transparent 50%),
+			radial-gradient(1px 1px at 88% 88%, var(--ob-grain-color), transparent 50%);
 		background-size: 200px 200px;
 		animation: grain-drift 16s steps(8) infinite;
 		z-index: 0;
@@ -156,9 +220,18 @@
 			radial-gradient(
 				ellipse at center,
 				transparent 50%,
-				rgba(0, 0, 0, 0.4) 100%
+				rgba(0, 0, 0, 0.15) 100%
 			);
 		z-index: 1;
+	}
+
+	:global(html.dark) .vignette {
+		background:
+			radial-gradient(
+				ellipse at center,
+				transparent 50%,
+				rgba(0, 0, 0, 0.4) 100%
+			);
 	}
 
 	/* Header bar */
@@ -191,7 +264,7 @@
 		font-size: 17px;
 		font-weight: 500;
 		letter-spacing: 0.01em;
-		color: #d4d1c6;
+		color: var(--ob-text-italic);
 	}
 
 	.header-right {
@@ -207,16 +280,35 @@
 		font-family: var(--font-mono, 'JetBrains Mono', monospace);
 		font-size: 11px;
 		letter-spacing: 0.12em;
-		color: #6f6c63;
+		color: var(--ob-text-muted);
 	}
 
 	.page-num {
-		color: #d4d1c6;
+		color: var(--ob-text-italic);
 	}
 
 	.page-sep {
-		color: #4a4842;
+		color: var(--ob-text-dimmed);
 		font-weight: 300;
+	}
+
+	.theme-btn {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 26px;
+		height: 26px;
+		border: 1px solid var(--ob-border-btn);
+		border-radius: 4px;
+		background: transparent;
+		color: var(--ob-text-muted);
+		cursor: pointer;
+		transition: color var(--ob-dur-quick) var(--ob-ease-out), border-color var(--ob-dur-quick) var(--ob-ease-out);
+	}
+
+	.theme-btn:hover {
+		color: var(--ob-text-italic);
+		border-color: var(--ob-text-italic);
 	}
 
 	/* Stage — title + content column */
@@ -249,7 +341,7 @@
 		font-size: 10.5px;
 		letter-spacing: 0.28em;
 		text-transform: uppercase;
-		color: #8a8678;
+		color: var(--ob-text-label);
 	}
 
 	.chapter-label[data-key] {
@@ -260,7 +352,7 @@
 		display: block;
 		width: 36px;
 		height: 1px;
-		background: #4a4842;
+		background: var(--ob-text-dimmed);
 	}
 
 	.title {
@@ -269,7 +361,7 @@
 		font-size: clamp(34px, 5.2vw, 54px);
 		line-height: 1.08;
 		letter-spacing: -0.015em;
-		color: #f0ede4;
+		color: var(--ob-text-heading);
 		margin: 0;
 		display: flex;
 		flex-direction: column;
@@ -286,7 +378,7 @@
 
 	.title-italic {
 		font-style: italic;
-		color: #d4cab2;
+		color: var(--ob-text-italic);
 	}
 
 	.content {
@@ -314,16 +406,16 @@
 	.cell {
 		flex: 1;
 		height: 2px;
-		background: #2a2925;
+		background: var(--ob-cell-default);
 		transition: background-color var(--ob-dur-medium) var(--ob-ease);
 	}
 
 	.cell[data-state='past'] {
-		background: #6a6253;
+		background: var(--ob-cell-past);
 	}
 
 	.cell[data-state='current'] {
-		background: #d4cab2;
+		background: var(--ob-cell-current);
 	}
 
 	@keyframes fade-up {

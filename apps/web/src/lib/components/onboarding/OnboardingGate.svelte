@@ -1,8 +1,9 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import { softFade } from '$lib/motion';
-	import { getIsAuthenticated, getIsOnboarded, getUser, getToken } from '$lib/stores/auth.svelte';
+	import { getIsAuthenticated, getIsOnboarded, getUser, getToken, getLocalAccounts, getAccountJustRemoved, getForceOnboardingFlow, resetForceOnboardingFlow } from '$lib/stores/auth.svelte';
 	import OnboardingFlow from './OnboardingFlow.svelte';
+	import AccountPicker from './AccountPicker.svelte';
 
 	interface Props {
 		children: Snippet;
@@ -11,23 +12,19 @@
 	let { children }: Props = $props();
 
 	/**
-	 * Gate decides which of two roots renders:
-	 *   - OnboardingFlow when the user is not yet through the 5-step flow
-	 *   - The app shell ({@render children()}) once they're authenticated
-	 *     AND have `onboardedAt` set on their user row.
+	 * Gate decides which of three roots renders:
+	 *   - The app shell ({@render children()}) once authenticated and onboarded
+	 *   - AccountPicker when not authenticated but local accounts exist (lock screen)
+	 *   - OnboardingFlow for first-time sign-in or when picker is dismissed
 	 *
-	 * "Onboarded" is the stronger signal: a user can be authenticated
+	 * "Onboarded" is the durable signal: a user can be authenticated
 	 * (i.e. has a session token) but never finished picking a repo if they
-	 * killed the app mid-flow. The DB column is the durable source of truth.
-	 *
-	 * StepDone defers the call to `completeOnboarding()` until after the
-	 * success animation plays, so the optimistic local mutation that flips
-	 * `onboarded` to true coincides with the visual moment the gate should
-	 * actually swap. No "forceShow" override needed.
+	 * killed the app mid-flow. The DB column is the source of truth.
 	 */
 	const authed = $derived(getIsAuthenticated());
 	const onboarded = $derived(getIsOnboarded());
 	const hasUser = $derived(getUser() !== null);
+	const localAccounts = $derived(getLocalAccounts());
 
 	// During a fresh page load with a stored token but no user payload yet,
 	// `authed` is true but `onboarded` is false because the identity request
@@ -36,13 +33,31 @@
 	// until either the user payload lands OR we can confirm there's no token.
 	const ready = $derived(getToken() === null || hasUser);
 
+	let showApp = $derived(authed && onboarded);
+	const forceFlow = $derived(getForceOnboardingFlow());
+	// Show the account picker when: not authenticated, but local accounts exist on this machine
+	// Suppress picker when the account was just removed or force flag is set — fall through to OnboardingFlow instead
+	let showPicker = $derived(!authed && localAccounts.length > 0 && !getAccountJustRemoved() && !forceFlow);
+
+	// User can dismiss the picker to reach the full onboarding flow
+	// (e.g., to sign in with a new account)
+	let pickerDismissed = $state(false);
+
+	// Reset dismissal and force-flow flag when auth state changes (user signed in successfully)
+	$effect(() => {
+		if (authed) {
+			pickerDismissed = false;
+			resetForceOnboardingFlow();
+		}
+	});
+
 	function handleFinish() {
-		// StepDone has already kicked the local `onboardedAt` flip; the
-		// `showApp` derivation handles the swap. Nothing else to do here
-		// — the prop is kept for future hooks (analytics, telemetry).
+		// StepDone has already kicked the local `onboardedAt` flip
 	}
 
-	let showApp = $derived(authed && onboarded);
+	function handleNewAccount() {
+		pickerDismissed = true;
+	}
 </script>
 
 {#if ready}
@@ -50,6 +65,8 @@
 		<div class="root" in:softFade={{ duration: 320 }}>
 			{@render children()}
 		</div>
+	{:else if showPicker && !pickerDismissed}
+		<AccountPicker onNewAccount={handleNewAccount} />
 	{:else}
 		<div out:softFade={{ duration: 220 }}>
 			<OnboardingFlow onFinish={handleFinish} />

@@ -33,93 +33,19 @@ import { DbService } from "../../services/Db";
 import { WalkthroughJobs } from "../../services/WalkthroughJobs";
 import { WebSocketHub } from "../../services/WebSocketHub";
 import { debug, logError } from "../../logger";
-import {
-	TOOL_SPECS,
-} from "../../ai/providers/walkthrough-tools";
+import { TOOL_SPECS } from "../../ai/providers/walkthrough-tools";
 import type {
 	WalkthroughToolContext,
 	WalkthroughToolResult,
 } from "../../ai/providers/walkthrough-tool-spec";
-
-// ── JSON-RPC 2.0 types ───────────────────────────────────────────────────────
-
-interface JsonRpcRequest {
-	jsonrpc: "2.0";
-	id?: number | string | null;
-	method: string;
-	params?: unknown;
-}
-
-interface JsonRpcSuccess {
-	jsonrpc: "2.0";
-	id: number | string | null;
-	result: unknown;
-}
-
-interface JsonRpcError {
-	jsonrpc: "2.0";
-	id: number | string | null;
-	error: { code: number; message: string; data?: unknown };
-}
-
-type JsonRpcResponse = JsonRpcSuccess | JsonRpcError;
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-function jsonRpcSuccess(
-	id: number | string | null,
-	result: unknown,
-): JsonRpcSuccess {
-	return { jsonrpc: "2.0", id, result };
-}
-
-function jsonRpcError(
-	id: number | string | null,
-	code: number,
-	message: string,
-	data?: unknown,
-): JsonRpcError {
-	return {
-		jsonrpc: "2.0",
-		id,
-		error: data === undefined ? { code, message } : { code, message, data },
-	};
-}
-
-function extractBearer(req: Request): string | null {
-	const auth = req.headers.get("authorization");
-	if (!auth) return null;
-	const match = /^Bearer\s+(.+)$/i.exec(auth);
-	return match && match[1] ? match[1].trim() : null;
-}
-
-/**
- * Convert a zod object schema to an MCP-ish JSON Schema object. We use a
- * hand-rolled shape that opencode's MCP client will accept — the full JSON
- * Schema surface is not required for simple parameter introspection, but the
- * structural type + nested object/array support is. Fallback: if anything
- * fails, emit `{ type: "object", properties: {}, additionalProperties: true }`
- * so the tool is still callable (the zod schema still validates on handler
- * entry).
- */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function toJsonSchema(schema: any): Record<string, unknown> {
-	try {
-		// zod v4 exposes `.toJSONSchema()` / `z.toJSONSchema()`.
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		if (schema && typeof (schema as any).toJSONSchema === "function") {
-			// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			return (schema as any).toJSONSchema() as Record<string, unknown>;
-		}
-	} catch {
-		/* fall through */
-	}
-	return {
-		type: "object",
-		properties: {},
-		additionalProperties: true,
-	};
-}
+import {
+	type JsonRpcRequest,
+	type JsonRpcResponse,
+	jsonRpcSuccess,
+	jsonRpcError,
+	extractBearer,
+	toJsonSchema,
+} from "./utils";
 
 // ── Token-scoped context builder ─────────────────────────────────────────────
 

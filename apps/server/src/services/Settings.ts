@@ -35,7 +35,7 @@ const DEFAULT_SETTINGS: UserSettings = {
 	diffViewMode: 'unified',
 	autoFetchInterval: AUTO_FETCH_DEFAULT_INTERVAL,
 	fileTreeScope: 'all',
-	githubHost: 'nocturlab.ghe.com',
+	githubHost: 'github.com',
 };
 
 const MIN_MAX_TURNS = 10;

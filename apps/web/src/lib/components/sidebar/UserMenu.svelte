@@ -1,8 +1,19 @@
 <script lang="ts">
-	import { goto } from '$app/navigation';
-	import { page } from '$app/state';
-	import { User } from '@lucide/svelte';
-	import { getUser } from '$lib/stores/auth.svelte';
+	import {
+		Root as PopoverRoot,
+		Trigger as PopoverTrigger,
+		Content as PopoverContent,
+	} from '$lib/components/ui/popover/index.js';
+	import { Check, ChevronDown, User, Settings, LogOut, Loader2 } from '@lucide/svelte';
+	import {
+		getUser,
+		getLocalAccounts,
+		signOut,
+		getIsSwitching,
+		switchAccount,
+	} from '$lib/stores/auth.svelte';
+	import { getGithubHost } from '$lib/stores/settings.svelte';
+	import { toggleSettings } from '$lib/stores/settingsModal.svelte';
 
 	interface Props {
 		collapsed?: boolean;
@@ -10,62 +21,188 @@
 
 	let { collapsed = false }: Props = $props();
 
-	let avatarFailed = $state(false);
+	type SwitcherEntry = {
+		userId: string;
+		host: string;
+		githubLogin: string | null;
+		avatarUrl: string | null;
+		userImage: string | null;
+		userName: string;
+		userEmail: string;
+	};
+
+	let open = $state(false);
+	let _lastAvatar = $state<string | null>(null);
+	let _avatarFailedForUrl = $state<string | null>(null);
+	let switchingId = $state<string | null>(null);
 
 	const user = $derived(getUser());
-	const primaryLabel = $derived(user?.githubLogin ?? user?.name ?? 'Account');
-	const avatarUrl = $derived(user?.image ?? null);
-	const isActive = $derived(page.url.pathname === '/settings');
+	const localAccounts = $derived(getLocalAccounts());
+	const isSwitching = $derived(getIsSwitching());
 
-	$effect(() => {
-		// Reset failure state if URL rotates.
-		avatarUrl;
-		avatarFailed = false;
-	});
+	const displayAvatar = $derived(user?.image ?? null);
 
-	function handleClick(): void {
-		void goto(isActive ? '/' : '/settings');
+	// avatarFailed is true only when the current URL has previously errored
+	const avatarFailed = $derived(_avatarFailedForUrl === displayAvatar && displayAvatar !== null);
+
+	// When isSwitching drops to false, clear the per-row switching tracker
+	const _switchingActive = $derived(isSwitching ? switchingId : null);
+
+	// Flat list of (userId, host) entries — one row per connected host per user
+	const switcherEntries = $derived(
+		localAccounts.flatMap((la) =>
+			la.accounts.map((acct) => ({
+				userId: la.id,
+				host: acct.host,
+				githubLogin: acct.githubLogin,
+				avatarUrl: acct.avatarUrl,
+				userImage: la.image,
+				userName: la.name,
+				userEmail: la.email,
+			})),
+		),
+	);
+
+	function hostLabel(host: string): string {
+		if (host === 'github.com') return 'GitHub';
+		return host;
+	}
+
+	function isEntryActive(entry: SwitcherEntry): boolean {
+		const currentHost = getGithubHost();
+		return entry.host === currentHost && entry.githubLogin === user?.githubLogin;
+	}
+
+	function entryKey(entry: SwitcherEntry): string {
+		return `${entry.userId}:${entry.host}`;
+	}
+
+	async function handleSwitchEntry(entry: SwitcherEntry): Promise<void> {
+		if (isEntryActive(entry) || isSwitching) return;
+		switchingId = entryKey(entry);
+		await switchAccount(entry.userId, entry.host);
+		switchingId = null;
+		open = false;
+	}
+
+	function handleSettings(): void {
+		open = false;
+		toggleSettings();
+	}
+
+	async function handleSignOut(): Promise<void> {
+		open = false;
+		await signOut();
 	}
 </script>
 
-<button
-	class={collapsed ? 'user-trigger user-trigger--collapsed' : 'user-trigger'}
-	class:user-trigger--active={isActive}
-	onclick={handleClick}
-	title={collapsed ? primaryLabel : undefined}
-	aria-label={collapsed ? `${primaryLabel} — open settings` : undefined}
->
-	{#if avatarUrl && !avatarFailed}
-		<img
-			src={avatarUrl}
-			alt=""
-			class={collapsed ? 'user-avatar user-avatar--collapsed' : 'user-avatar'}
-			referrerpolicy="no-referrer"
-			onerror={() => (avatarFailed = true)}
-		/>
-	{:else}
-		<span
-			class={collapsed
-				? 'user-avatar user-avatar--collapsed user-avatar--fallback'
-				: 'user-avatar user-avatar--fallback'}
-			aria-hidden="true"
-		>
-			<User size={collapsed ? 12 : 14} />
-		</span>
-	{/if}
-
-	{#if !collapsed}
-		<span class="user-text">
-			<span class="user-name">{primaryLabel}</span>
-			{#if user?.email}
-				<span class="user-email">{user.email}</span>
+<PopoverRoot bind:open>
+	<PopoverTrigger class={collapsed ? 'user-trigger user-trigger--collapsed' : 'user-trigger'}>
+		<span class="user-avatar-wrap" class:user-avatar-wrap--switching={isSwitching}>
+			{#if displayAvatar && !avatarFailed}
+				<img
+					src={displayAvatar}
+					alt=""
+					class={collapsed ? 'user-avatar user-avatar--collapsed' : 'user-avatar'}
+					referrerpolicy="no-referrer"
+					onerror={() => (_avatarFailedForUrl = displayAvatar)}
+				/>
+			{:else}
+				<span
+					class={collapsed
+						? 'user-avatar user-avatar--collapsed user-avatar--fallback'
+						: 'user-avatar user-avatar--fallback'}
+					aria-hidden="true"
+				>
+					<User size={collapsed ? 12 : 14} />
+				</span>
+			{/if}
+			{#if isSwitching}
+				<span class="user-avatar-spinner" aria-hidden="true">
+					<Loader2 size={collapsed ? 10 : 12} class="spin-icon" />
+				</span>
 			{/if}
 		</span>
-	{/if}
-</button>
+		{#if !collapsed}
+			<span class="user-text">
+				<span class="user-name">{user?.githubLogin ?? user?.name ?? 'Account'}</span>
+				{#if user?.email}
+					<span class="user-email">{user.email}</span>
+				{/if}
+			</span>
+			<ChevronDown size={12} class="user-caret" />
+		{/if}
+	</PopoverTrigger>
+
+	<PopoverContent
+		class={collapsed ? 'w-64 p-1' : 'p-1'}
+		style={collapsed ? undefined : 'width: var(--bits-popover-anchor-width)'}
+		align="start"
+		side="top"
+	>
+		<!-- Account rows -->
+		{#each switcherEntries as entry (entryKey(entry))}
+			{@const active = isEntryActive(entry)}
+			{@const switching = _switchingActive === entryKey(entry)}
+			{@const avatar = entry.avatarUrl ?? entry.userImage}
+
+			<button
+				class="acct-row"
+				class:acct-row--active={active}
+				onclick={() => handleSwitchEntry(entry)}
+				disabled={isSwitching}
+				aria-pressed={active}
+			>
+				<!-- Avatar -->
+				<span class="acct-avatar-wrap">
+					{#if avatar}
+						<img
+							src={avatar}
+							alt=""
+							class="acct-avatar"
+							referrerpolicy="no-referrer"
+						/>
+					{:else}
+						<User size={13} class="acct-icon" />
+					{/if}
+				</span>
+
+				<!-- Identity -->
+				<span class="acct-body">
+					<span class="acct-login">{entry.githubLogin ?? entry.userName}</span>
+					<span class="acct-host">{entry.githubLogin ?? entry.userEmail} · {hostLabel(entry.host)}</span>
+				</span>
+
+				<!-- Status indicator -->
+				<span class="acct-status-slot">
+					{#if switching}
+						<Loader2 size={12} class="acct-spinner" />
+					{:else if active}
+						<Check size={12} class="acct-check" />
+					{/if}
+				</span>
+			</button>
+		{/each}
+
+		<div class="menu-divider"></div>
+
+		<!-- Settings -->
+		<button class="menu-row" onclick={handleSettings}>
+			<Settings size={13} class="menu-row-icon" />
+			<span class="menu-row-label">Settings</span>
+		</button>
+
+		<!-- Sign out -->
+		<button class="menu-row menu-row--danger" onclick={handleSignOut}>
+			<LogOut size={13} class="menu-row-icon" />
+			<span class="menu-row-label">Sign out</span>
+		</button>
+	</PopoverContent>
+</PopoverRoot>
 
 <style>
-	.user-trigger {
+	/* ── Trigger ── */
+	:global(.user-trigger) {
 		display: flex;
 		align-items: center;
 		gap: 8px;
@@ -81,15 +218,15 @@
 		transition: background-color var(--duration-snap);
 	}
 
-	.user-trigger:hover {
+	:global(.user-trigger:hover) {
 		background: var(--color-bg-tertiary);
 	}
 
-	.user-trigger--active {
+	:global(.user-trigger[data-state='open']) {
 		background: var(--color-bg-elevated);
 	}
 
-	.user-trigger--collapsed {
+	:global(.user-trigger--collapsed) {
 		display: flex;
 		align-items: center;
 		justify-content: center;
@@ -98,6 +235,30 @@
 		padding: 0;
 		margin: 0 auto;
 		border-radius: 5px;
+	}
+
+	/* ── Trigger avatar with spinner overlay ── */
+	.user-avatar-wrap {
+		position: relative;
+		flex-shrink: 0;
+		display: inline-flex;
+	}
+
+	.user-avatar-wrap--switching .user-avatar {
+		opacity: 0.4;
+	}
+
+	.user-avatar-spinner {
+		position: absolute;
+		inset: 0;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+
+	:global(.spin-icon) {
+		color: var(--color-text-muted);
+		animation: spin 1s linear infinite;
 	}
 
 	.user-avatar {
@@ -119,6 +280,7 @@
 		justify-content: center;
 		background: var(--color-bg-elevated);
 		color: var(--color-text-muted);
+		border-radius: 50%;
 	}
 
 	.user-text {
@@ -144,5 +306,151 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+
+	:global(.user-caret) {
+		flex-shrink: 0;
+		color: var(--color-text-muted);
+		margin-left: auto;
+	}
+
+	/* ── Account rows ── */
+	.acct-row {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		width: 100%;
+		padding: 6px 8px;
+		border: none;
+		border-radius: 5px;
+		background: transparent;
+		color: var(--color-text-secondary);
+		cursor: pointer;
+		text-align: left;
+		font-size: 12px;
+		transition: background-color var(--duration-snap);
+	}
+
+	.acct-row:hover:not(:disabled) {
+		background: var(--color-bg-tertiary);
+	}
+
+	.acct-row--active {
+		background: var(--color-bg-tertiary);
+		cursor: default;
+	}
+
+	.acct-row:disabled {
+		cursor: default;
+	}
+
+	.acct-avatar-wrap {
+		flex-shrink: 0;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 20px;
+		height: 20px;
+	}
+
+	.acct-avatar {
+		width: 18px;
+		height: 18px;
+		border-radius: 50%;
+		object-fit: cover;
+	}
+
+	:global(.acct-icon) {
+		color: var(--color-text-muted);
+	}
+
+	.acct-body {
+		display: flex;
+		flex-direction: column;
+		gap: 1px;
+		flex: 1;
+		min-width: 0;
+	}
+
+	.acct-login {
+		font-size: 12px;
+		font-weight: 600;
+		color: var(--color-text-primary);
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.acct-host {
+		font-size: 10px;
+		color: var(--color-text-muted);
+	}
+
+	.acct-status-slot {
+		flex-shrink: 0;
+		width: 16px;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+
+	:global(.acct-check) {
+		color: var(--color-accent);
+	}
+
+	:global(.acct-spinner) {
+		color: var(--color-text-muted);
+		animation: spin 1s linear infinite;
+	}
+
+	/* ── Divider ── */
+	.menu-divider {
+		height: 1px;
+		margin: 4px 6px;
+		background: var(--color-border);
+	}
+
+	/* ── Menu rows (Add account, Settings, Sign out) ── */
+	:global(.menu-row) {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		width: 100%;
+		padding: 6px 8px;
+		border: none;
+		border-radius: 5px;
+		background: transparent;
+		color: var(--color-text-secondary);
+		cursor: pointer;
+		text-align: left;
+		font-size: 12px;
+		transition: background-color var(--duration-snap), color var(--duration-snap);
+	}
+
+	:global(.menu-row:hover) {
+		background: var(--color-bg-tertiary);
+		color: var(--color-text-primary);
+	}
+
+	:global(.menu-row--danger:hover) {
+		color: var(--color-danger, #e05252);
+	}
+
+	:global(.menu-row:hover .menu-row-icon) {
+		color: var(--color-text-secondary);
+	}
+
+	:global(.menu-row-icon) {
+		flex-shrink: 0;
+		color: var(--color-text-muted);
+		transition: color var(--duration-snap);
+	}
+
+	:global(.menu-row-label) {
+		flex: 1;
+	}
+
+	@keyframes spin {
+		to { transform: rotate(360deg); }
 	}
 </style>

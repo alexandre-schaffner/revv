@@ -58,6 +58,7 @@
 	import {
 		getPrScrollPosition,
 		setPrScrollPosition,
+		getLoadedHeadSha,
 	} from '$lib/stores/review.svelte';
 	import { fetchProposedDiffFiles, type ProposedDiffFile } from '$lib/api/chat';
 	import { renderMarkdown } from '$lib/utils/markdown';
@@ -136,7 +137,7 @@
 	let diffOpen = $state<{
 		sha: string;
 		subject: string;
-		fileContents: ProposedDiffFile[];
+		fileContents: ProposedDiffFile[] | null;
 	} | null>(null);
 	let conflictDialog = $state<{ files: string[]; branch: string } | null>(null);
 	let pushSuccessTrigger = $state(0);
@@ -248,6 +249,16 @@
 			void loadChatHistory(prId);
 			void loadAvailableAgents();
 		}
+	});
+
+	// Re-fetch chat history when a pull lands and stamps a new head SHA.
+	// Gated on a non-null SHA so this doesn't fire on initial mount
+	// (the hydration effect above handles that case).
+	$effect(() => {
+		if (!prId) return;
+		const headSha = getLoadedHeadSha(prId);
+		if (headSha === null) return;
+		void loadChatHistory(prId);
 	});
 
 	function handleTogglePlanMode(): void {
@@ -387,16 +398,27 @@
 
 	async function openDiff(commit: { sha: string; subject: string }): Promise<void> {
 		if (!prId) return;
+		// Open modal immediately — ProposedDiffModal renders a skeleton when fileContents is null
+		diffOpen = { sha: commit.sha, subject: commit.subject, fileContents: null };
 		try {
 			const fileContents = await fetchProposedDiffFiles(prId, commit.sha);
-			diffOpen = { sha: commit.sha, subject: commit.subject, fileContents };
+			// Only update if the user hasn't dismissed the modal already
+			if (diffOpen) diffOpen = { sha: commit.sha, subject: commit.subject, fileContents };
 		} catch (err) {
+			diffOpen = null;
 			toast.error(err instanceof Error ? err.message : 'Failed to load diff');
 		}
 	}
 
 	function copyToClipboard(text: string): void {
 		void navigator.clipboard?.writeText(text);
+	}
+
+	function filesSummary(files: string[]): string {
+		const basenames = files.map((f) => f.split('/').pop() ?? f);
+		if (basenames.length === 1) return basenames[0] ?? '';
+		if (basenames.length === 2) return `${basenames[0]} · ${basenames[1]}`;
+		return `${basenames[0]} · +${basenames.length - 1} more`;
 	}
 
 	function messageHtml(content: string): string {
@@ -488,106 +510,6 @@
 			</button>
 		</div>
 	</div>
-
-	<!-- Proposed changes strip -->
-	{#if commitCount > 0 && proposed}
-		<div class="proposed-strip">
-			<button
-				class="proposed-summary"
-				onclick={() => (proposedExpanded = !proposedExpanded)}
-				aria-expanded={proposedExpanded}
-			>
-				{#if proposedExpanded}
-					<ChevronDown size={12} />
-				{:else}
-					<ChevronRight size={12} />
-				{/if}
-				<GitCommitHorizontal size={12} />
-				<span class="proposed-count">
-					{commitCount} commit{commitCount === 1 ? '' : 's'} proposed
-				</span>
-				{#if proposed.branchName}
-					<span class="proposed-branch">{proposed.branchName}</span>
-				{/if}
-			</button>
-			{#if proposedExpanded}
-				<ul class="proposed-list">
-					{#each proposed.commits as commit (commit.sha)}
-						<li class="proposed-item">
-							<!-- role="button" instead of <button> so the Copy <button>
-								 inside doesn't end up as a nested <button> (invalid
-								 HTML — browsers reparent the inner button). Native
-								 keyboard activation is restored via Enter/Space. -->
-							<div
-								class="proposed-row"
-								role="button"
-								tabindex="0"
-								title="View diff"
-								onclick={() => void openDiff(commit)}
-								onkeydown={(e) => {
-									if (e.key === 'Enter' || e.key === ' ') {
-										e.preventDefault();
-										void openDiff(commit);
-									}
-								}}
-							>
-								<code class="proposed-sha">{commit.shortSha}</code>
-								<span class="proposed-subject" title={commit.subject}>
-									{commit.subject}
-								</span>
-							<button
-								class="proposed-icon-btn"
-								type="button"
-								title="Copy SHA"
-								aria-label="Copy SHA"
-								onclick={(e) => {
-									e.stopPropagation();
-									copyToClipboard(commit.sha);
-								}}
-							>
-								<Copy size={11} />
-							</button>
-							<button
-								class="proposed-icon-btn proposed-icon-btn--danger"
-								type="button"
-								title="Discard commit"
-								aria-label="Discard commit"
-								disabled={isDiscardingCommit(commit.sha)}
-								onclick={(e) => {
-									e.stopPropagation();
-									if (prId) void discardProposedCommitAction(prId, commit.sha);
-								}}
-							>
-								{#if isDiscardingCommit(commit.sha)}
-									<Loader2 size={11} class="motion-essential-spin" />
-								{:else}
-									<Trash2 size={11} />
-								{/if}
-							</button>
-							<button
-								class="proposed-icon-btn proposed-icon-btn--accent"
-								type="button"
-								title="Push this commit to PR branch"
-								aria-label="Push this commit to PR branch"
-								disabled={isCherryPickingCommit(commit.sha)}
-								onclick={(e) => {
-									e.stopPropagation();
-									if (prId) void cherryPickProposedCommitAction(prId, commit.sha);
-								}}
-							>
-								{#if isCherryPickingCommit(commit.sha)}
-									<Loader2 size={11} class="motion-essential-spin" />
-								{:else}
-									<GitMerge size={11} />
-								{/if}
-							</button>
-							</div>
-						</li>
-					{/each}
-				</ul>
-			{/if}
-		</div>
-	{/if}
 
 	<!-- Blocked-by-unpushed-commits strip -->
 	{#if blocked}
@@ -766,6 +688,111 @@
 			</div>
 		{/if}
 	</div>
+
+	<!-- Proposed changes strip -->
+	{#if commitCount > 0 && proposed}
+		<div class="proposed-strip">
+			<button
+				class="proposed-summary"
+				onclick={() => (proposedExpanded = !proposedExpanded)}
+				aria-expanded={proposedExpanded}
+			>
+				{#if proposedExpanded}
+					<ChevronDown size={12} />
+				{:else}
+					<ChevronRight size={12} />
+				{/if}
+				<GitCommitHorizontal size={12} />
+				<span class="proposed-count">
+					{commitCount} commit{commitCount === 1 ? '' : 's'} proposed
+				</span>
+				{#if proposed.branchName}
+					<span class="proposed-branch">{proposed.branchName}</span>
+				{/if}
+			</button>
+			{#if proposedExpanded}
+				<ul class="proposed-list">
+					{#each proposed.commits as commit (commit.sha)}
+						<li class="proposed-item">
+							<!-- role="button" instead of <button> so the Copy <button>
+								 inside doesn't end up as a nested <button> (invalid
+								 HTML — browsers reparent the inner button). Native
+								 keyboard activation is restored via Enter/Space. -->
+							<div
+								class="proposed-row"
+								role="button"
+								tabindex="0"
+								title="View diff"
+								onclick={() => void openDiff(commit)}
+								onkeydown={(e) => {
+									if (e.key === 'Enter' || e.key === ' ') {
+										e.preventDefault();
+										void openDiff(commit);
+									}
+								}}
+							>
+								<div class="proposed-row-main">
+									<code class="proposed-sha">{commit.shortSha}</code>
+									<span class="proposed-subject" title={commit.subject}>
+										{commit.subject}
+									</span>
+									<button
+										class="proposed-icon-btn"
+										type="button"
+										title="Copy SHA"
+										aria-label="Copy SHA"
+										onclick={(e) => {
+											e.stopPropagation();
+											copyToClipboard(commit.sha);
+										}}
+									>
+										<Copy size={11} />
+									</button>
+									<button
+										class="proposed-icon-btn proposed-icon-btn--danger"
+										type="button"
+										title="Discard commit"
+										aria-label="Discard commit"
+										disabled={isDiscardingCommit(commit.sha)}
+										onclick={(e) => {
+											e.stopPropagation();
+											if (prId) void discardProposedCommitAction(prId, commit.sha);
+										}}
+									>
+										{#if isDiscardingCommit(commit.sha)}
+											<Loader2 size={11} class="motion-essential-spin" />
+										{:else}
+											<Trash2 size={11} />
+										{/if}
+									</button>
+									<button
+										class="proposed-icon-btn proposed-icon-btn--accent"
+										type="button"
+										title="Push this commit to PR branch"
+										aria-label="Push this commit to PR branch"
+										disabled={isCherryPickingCommit(commit.sha)}
+										onclick={(e) => {
+											e.stopPropagation();
+											if (prId) void cherryPickProposedCommitAction(prId, commit.sha);
+										}}
+									>
+										{#if isCherryPickingCommit(commit.sha)}
+											<Loader2 size={11} class="motion-essential-spin" />
+										{:else}
+											<GitMerge size={11} />
+										{/if}
+									</button>
+								</div>
+								{#if commit.files.length > 0}
+									<span class="proposed-files">{filesSummary(commit.files)}</span>
+								{/if}
+							</div>
+						</li>
+					{/each}
+				</ul>
+			{/if}
+		</div>
+	{/if}
 
 	<!-- Input -->
 	<form class="input-row" onsubmit={handleSubmit}>
@@ -1261,7 +1288,7 @@
 	/* Proposed-changes strip */
 	.proposed-strip {
 		flex-shrink: 0;
-		border-bottom: 1px solid var(--color-border-subtle);
+		border-top: 1px solid var(--color-border-subtle);
 		background: var(--color-bg-secondary);
 	}
 
@@ -1303,20 +1330,20 @@
 		list-style: none;
 		margin: 0;
 		padding: 0 12px 8px;
-		max-height: 160px;
+		max-height: 220px;
 		overflow-y: auto;
 	}
 
 	.proposed-item {
-		padding: 4px 0;
+		padding: 6px 0;
 		border-top: 1px solid var(--color-border-subtle);
 	}
 
 	.proposed-row {
 		display: flex;
-		align-items: center;
-		gap: 6px;
-		padding: 2px 4px;
+		flex-direction: column;
+		gap: 3px;
+		padding: 6px 4px;
 		margin: 0 -4px;
 		border-radius: 4px;
 		cursor: pointer;
@@ -1331,6 +1358,22 @@
 		outline: none;
 		background: var(--color-bg-tertiary);
 		box-shadow: 0 0 0 1px var(--color-accent);
+	}
+
+	.proposed-row-main {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+	}
+
+	.proposed-files {
+		font-size: 10px;
+		color: var(--color-text-muted);
+		font-family: var(--font-mono);
+		padding-left: 2px;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 
 	.proposed-sha {

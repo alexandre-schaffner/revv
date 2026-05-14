@@ -2,7 +2,7 @@ import type { WsServerMessage, SyncChange } from '@revv/shared';
 import { WS_BASE_URL } from '$lib/api/base-url';
 import { toast } from 'svelte-sonner';
 import * as prs from './prs.svelte';
-import { getSelectedPrId, mergePullRequests } from './prs.svelte';
+import { getSelectedPrId, mergePullRequests, fetchArchivedPrs } from './prs.svelte';
 import * as errors from './errors.svelte';
 import * as sync from './sync.svelte';
 import { markThreadsSyncing } from './sync.svelte';
@@ -68,6 +68,7 @@ function handleMessage(msg: WsServerMessage): void {
 	switch (msg.type) {
 		case 'prs:updated':
 			mergePullRequests(msg.data);
+			void fetchArchivedPrs();
 			break;
 		case 'prs:sync-started':
 			sync.setPrListSyncing(true);

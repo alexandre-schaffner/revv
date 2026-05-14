@@ -1,6 +1,7 @@
 import { goto } from '$app/navigation';
 import { toggleSidebar, toggleRightPanel } from './sidebar.svelte';
 import { setActiveTab } from './review.svelte';
+import { toggleSettings } from './settingsModal.svelte';
 
 export type PaletteMode = 'search' | 'command';
 
@@ -136,6 +137,14 @@ function handleKeydown(e: KeyboardEvent): void {
 		e.preventDefault();
 		e.stopPropagation();
 		setActiveTab('request-changes');
+		return;
+	}
+
+	// Cmd+, → toggle settings
+	if (!e.shiftKey && e.key === ',') {
+		e.preventDefault();
+		e.stopPropagation();
+		toggleSettings();
 		return;
 	}
 }

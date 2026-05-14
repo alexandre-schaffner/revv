@@ -1,8 +1,9 @@
 import { Context, Effect, Layer } from 'effect';
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { DbService } from './Db';
 import { GitHubAuthError } from '../domain/errors';
 import { user, account } from '../db/schema';
+import { serverEnv } from '../config';
 
 /**
  * Fetches the GitHub access token stored on the user's linked GitHub account.
@@ -17,7 +18,7 @@ import { user, account } from '../db/schema';
 export class TokenProvider extends Context.Tag('TokenProvider')<
 	TokenProvider,
 	{
-		readonly getGitHubToken: (userId: string) => Effect.Effect<string, GitHubAuthError>;
+		readonly getGitHubToken: (userId: string, host?: string) => Effect.Effect<string, GitHubAuthError>;
 	}
 >() {}
 
@@ -27,7 +28,7 @@ export const TokenProviderLive = Layer.effect(
 		const { db } = yield* DbService;
 
 		return {
-			getGitHubToken: (userId: string) =>
+			getGitHubToken: (userId: string, host?: string) =>
 				Effect.tryPromise({
 					try: async () => {
 						// 'single-user' is a placeholder — resolve to the actual user ID
@@ -38,14 +39,24 @@ export const TokenProviderLive = Layer.effect(
 							if (!firstRow) throw new Error('No user found');
 							resolvedId = firstRow.id;
 						}
+
+						// Build ordered list of providerIds to try: specific host first, legacy fallback last.
+						// Legacy 'github' rows exist for users who signed in before the host-keyed migration.
+						const providerIds = host
+							? [`github:${host}`, 'github']
+							: ['github:github.com', `github:${serverEnv.githubHost}`, 'github'];
+
 						const rows = await db
-							.select({ accessToken: account.accessToken })
+							.select({ accessToken: account.accessToken, providerId: account.providerId })
 							.from(account)
-							.where(and(eq(account.userId, resolvedId), eq(account.providerId, 'github')))
-							.limit(1);
-						const token = rows[0]?.accessToken;
-						if (!token) throw new Error('No access token found');
-						return token;
+							.where(eq(account.userId, resolvedId));
+
+						for (const pid of providerIds) {
+							const match = rows.find((r) => r.providerId === pid);
+							if (match?.accessToken) return match.accessToken;
+						}
+
+						throw new Error('No access token found');
 					},
 					catch: (e) => new GitHubAuthError({ message: String(e) }),
 				}),

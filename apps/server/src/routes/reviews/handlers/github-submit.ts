@@ -1,4 +1,5 @@
 import { Effect } from 'effect';
+import { logError } from '../../../logger';
 import { AppRuntime } from '../../../runtime';
 import { GitHubService } from '../../../services/GitHub';
 import { PrContextService } from '../../../services/PrContext';
@@ -106,10 +107,11 @@ export function submitGithubReviewHandler(
 						return gh.path === input.path && ghLine === effectiveLine && gh.body === input.body;
 					});
 
-					if (!match) {
-						console.warn(
-							`[github-submit] No GitHub comment matched for thread ${input.threadId} (path=${input.path} line=${effectiveLine})`,
-						);
+				if (!match) {
+					logError(
+						'github-submit',
+						`No GitHub comment matched for thread ${input.threadId} (path=${input.path} line=${effectiveLine})`,
+					);
 						continue;
 					}
 

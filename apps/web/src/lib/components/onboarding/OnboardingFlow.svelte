@@ -3,7 +3,7 @@
 	import type { DotmatrixVariant } from '$lib/components/ui/dotmatrix';
 	import { getIsAuthenticated, loadUser } from '$lib/stores/auth.svelte';
 	import { getGithubHost, getSettings, fetchSettings } from '$lib/stores/settings.svelte';
-	import { getRepositories, fetchRepos } from '$lib/stores/prs.svelte';
+	import { fetchRepos } from '$lib/stores/prs.svelte';
 	import OnboardingShell from './OnboardingShell.svelte';
 	import StepWelcome from './StepWelcome.svelte';
 	import StepHost from './StepHost.svelte';
@@ -19,6 +19,14 @@
 	}
 
 	let { onFinish }: Props = $props();
+
+	const isGhe = $derived((getGithubHost() ?? 'github.com') !== 'github.com');
+	const signinMeta = $derived<StepMeta>({
+		chapter: 'Chapter II · Key',
+		title: 'Sign in to',
+		titleItalic: isGhe ? `${getGithubHost()}.` : 'GitHub.',
+		spinnerVariant: 'square-2',
+	});
 
 	const ORDER: StepId[] = ['welcome', 'host', 'signin', 'repo', 'done'];
 
@@ -65,15 +73,14 @@
 		} else {
 			const host = getGithubHost();
 			const authed = getIsAuthenticated();
-			const repoCount = getRepositories().length;
 
-			if (authed && repoCount > 0) {
-				initialStep = 'done';
-			} else if (authed) {
+			if (authed && host) {
 				initialStep = 'repo';
-			} else if (host) {
-				initialStep = 'signin';
+			} else if (authed && !host) {
+				initialStep = 'host';
 			} else {
+				// Not authenticated → always start from welcome.
+				// This handles fresh installs, DB resets, and sign-outs cleanly.
 				initialStep = 'welcome';
 			}
 		}
@@ -154,7 +161,7 @@
 </script>
 
 {#if mounted}
-	{@const m = meta[current]}
+	{@const m = current === 'signin' ? signinMeta : meta[current]}
 	<OnboardingShell
 		stepId={current}
 		stepIndex={stepIndex}
@@ -171,9 +178,9 @@
 				{:else if current === 'host'}
 					<StepHost onContinue={advance} onBack={goBack} />
 				{:else if current === 'signin'}
-					<StepSignIn onBack={goBack} />
+					<StepSignIn onBack={goBack} githubHost={getGithubHost() ?? 'github.com'} />
 				{:else if current === 'repo'}
-					<StepRepo onContinue={advance} onBack={goBack} />
+					<StepRepo onContinue={advance} onBack={goBack} onSkip={advance} isGhe={isGhe} />
 				{:else if current === 'done'}
 					<StepDone onFinish={onFinish} />
 				{/if}

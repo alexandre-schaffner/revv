@@ -1,5 +1,5 @@
 import { Context, Effect, Layer } from 'effect';
-import { eq, inArray, sql } from 'drizzle-orm';
+import { desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import type { PullRequest } from '@revv/shared';
 import { NotFoundError, ValidationError } from '../domain/errors';
 import { pullRequests } from '../db/schema/index';
@@ -29,6 +29,7 @@ function rowToPr(row: typeof pullRequests.$inferSelect): PullRequest {
 		createdAt: row.createdAt,
 		updatedAt: row.updatedAt,
 		fetchedAt: row.fetchedAt,
+		closedAt: row.closedAt ?? null,
 	};
 }
 
@@ -39,6 +40,10 @@ export class PullRequestService extends Context.Tag('PullRequestService')<
 		readonly getPr: (id: string) => Effect.Effect<PullRequest, NotFoundError, DbService>;
 		readonly upsertPrs: (prs: PullRequest[]) => Effect.Effect<void, ValidationError, DbService>;
 		readonly deletePrs: (ids: string[]) => Effect.Effect<void, ValidationError, DbService>;
+		readonly listArchivedPrs: () => Effect.Effect<PullRequest[], never, DbService>;
+		readonly markPrsClosed: (
+			updates: Array<{ id: string; status: 'closed' | 'merged'; closedAt: string }>,
+		) => Effect.Effect<void, ValidationError, DbService>;
 		/**
 		 * Read the high-water-mark for review-comment sync. Used as the `?since=`
 		 * parameter on the next poll so we don't re-download comments we've
@@ -116,10 +121,11 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
 						requestedReviewers: JSON.stringify(pr.requestedReviewers ?? []),
 					};
 					// Only set optional fields when non-null to satisfy exactOptionalPropertyTypes
-					if (pr.body !== null) base.body = pr.body;
-					if (pr.authorAvatarUrl !== null) base.authorAvatarUrl = pr.authorAvatarUrl;
-					if (pr.headSha !== null) base.headSha = pr.headSha;
-					if (pr.baseSha !== null) base.baseSha = pr.baseSha;
+				if (pr.body !== null) base.body = pr.body;
+				if (pr.authorAvatarUrl !== null) base.authorAvatarUrl = pr.authorAvatarUrl;
+				if (pr.headSha !== null) base.headSha = pr.headSha;
+				if (pr.baseSha !== null) base.baseSha = pr.baseSha;
+				if (pr.closedAt !== null) base.closedAt = pr.closedAt;
 						return base;
 					});
 					return Promise.resolve(
@@ -149,10 +155,11 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
 									changedFiles: sql`excluded.changed_files`,
 									headSha: sql`excluded.head_sha`,
 									baseSha: sql`excluded.base_sha`,
-									updatedAt: sql`excluded.updated_at`,
-									fetchedAt: sql`excluded.fetched_at`,
-									requestedReviewers: sql`excluded.requested_reviewers`,
-								},
+								updatedAt: sql`excluded.updated_at`,
+								fetchedAt: sql`excluded.fetched_at`,
+								requestedReviewers: sql`excluded.requested_reviewers`,
+								closedAt: sql`excluded.closed_at`,
+							},
 							})
 							.run()
 					);
@@ -170,6 +177,38 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
 					Promise.resolve(
 						db.delete(pullRequests).where(inArray(pullRequests.id, ids)).run()
 					),
+				catch: (e) => new ValidationError({ message: String(e) }),
+			});
+		}),
+
+	listArchivedPrs: () =>
+		Effect.gen(function* () {
+			const { db } = yield* DbService;
+			const rows = db
+				.select()
+				.from(pullRequests)
+				.where(ne(pullRequests.status, 'open'))
+				.orderBy(desc(pullRequests.closedAt))
+				.limit(20)
+				.all();
+			return rows.map(rowToPr);
+		}),
+
+	markPrsClosed: (updates) =>
+		Effect.gen(function* () {
+			const { db } = yield* DbService;
+			if (updates.length === 0) return;
+			yield* Effect.tryPromise({
+				try: () => {
+					const fetchedAt = new Date().toISOString();
+					for (const { id, status, closedAt } of updates) {
+						db.update(pullRequests)
+							.set({ status, closedAt, fetchedAt })
+							.where(eq(pullRequests.id, id))
+							.run();
+					}
+					return Promise.resolve();
+				},
 				catch: (e) => new ValidationError({ message: String(e) }),
 			});
 		}),

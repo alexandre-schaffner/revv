@@ -1,6 +1,7 @@
 import { text } from 'drizzle-orm/sqlite-core';
 import { sqliteTable, uniqueIndex } from 'drizzle-orm/sqlite-core';
 import type { CloneStatus } from '@revv/shared';
+import { serverEnv } from '../../config';
 
 export const repositories = sqliteTable(
 	'repositories',
@@ -16,6 +17,7 @@ export const repositories = sqliteTable(
 		cloneStatus: text('clone_status').notNull().default('pending').$type<CloneStatus>(),
 		clonePath: text('clone_path'),
 		cloneError: text('clone_error'),
+		githubHost: text('github_host').notNull().default(serverEnv.githubHost),
 	},
 	(table) => [uniqueIndex('uq_repositories_full_name').on(table.fullName)]
 );

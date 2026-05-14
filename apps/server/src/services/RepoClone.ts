@@ -18,7 +18,6 @@ import {
 	runGitCapture,
 	runGitCloneWithTimeout,
 } from "./git-runner";
-import { SettingsService } from "./Settings";
 import { TokenProvider } from "./TokenProvider";
 import { WebSocketHub } from "./WebSocketHub";
 
@@ -450,17 +449,6 @@ export const RepoCloneServiceLive = Layer.effect(
 		const { db } = yield* DbService;
 		const wsHub = yield* WebSocketHub;
 		const tokenProvider = yield* TokenProvider;
-		const settingsService = yield* SettingsService;
-
-		// settingsService is captured from the layer constructor — equivalent to
-		// ChatChangesPush.ts's Effect.flatMap(SettingsService, ...) but satisfied
-		// at construction time rather than in the type parameter.
-		const resolveGitHost: Effect.Effect<string> = Effect.gen(function* () {
-			const settings = yield* settingsService.getSettings().pipe(
-				Effect.orElseSucceed(() => null),
-			);
-			return settings?.githubHost?.trim() || serverEnv.githubHost;
-		});
 
 		// Install the signal handlers eagerly so even an early crash (before
 		// the first clone is attempted) gets clean child-process teardown.
@@ -503,8 +491,8 @@ export const RepoCloneServiceLive = Layer.effect(
 
 				return Effect.gen(function* () {
 					const cloneDir = join(CLONE_BASE_DIR, repo.owner, repo.name);
-					const gitHost = yield* resolveGitHost;
-					const cloneUrl = `https://x-access-token:${githubToken}@${gitHost}/${repo.fullName}.git`;
+				const gitHost = repo.githubHost;
+				const cloneUrl = `https://x-access-token:${githubToken}@${gitHost}/${repo.fullName}.git`;
 
 					debug("repo-clone", `starting clone for ${repo.fullName} -> ${cloneDir}`);
 
@@ -532,9 +520,8 @@ export const RepoCloneServiceLive = Layer.effect(
 							await runGitCloneWithTimeout(
 								[
 									"clone",
-									"--depth=1",
-									"--no-single-branch",
-									cloneUrl,
+								"--depth=1",
+								cloneUrl,
 									cloneDir,
 								],
 								CLONE_TIMEOUT_MS,
@@ -637,7 +624,6 @@ export const RepoCloneServiceLive = Layer.effect(
 
 		acquirePrWorktree: ({ repoId, prNumber, prHeadSha, githubToken }) =>
 			Effect.gen(function* () {
-				const gitHost = yield* resolveGitHost;
 				return yield* Effect.tryPromise({
 					try: async () => {
 						const row = db
@@ -650,6 +636,7 @@ export const RepoCloneServiceLive = Layer.effect(
 							throw new CloneNotReadyError({ repoId });
 						}
 
+						const gitHost = row.githubHost ?? serverEnv.githubHost;
 						const clonePath = row.clonePath;
 						const branchName = `pr-${prNumber}`;
 						const worktreePath = join(clonePath, "worktrees", branchName);
@@ -906,7 +893,6 @@ export const RepoCloneServiceLive = Layer.effect(
 			githubToken: string,
 		) =>
 			Effect.gen(function* () {
-				const gitHost = yield* resolveGitHost;
 				return yield* Effect.tryPromise({
 					try: async () => {
 						const row = db
@@ -940,6 +926,8 @@ export const RepoCloneServiceLive = Layer.effect(
 							// either succeed or move to 'error' explicitly.
 							return { status: "cloning" } as const;
 						}
+
+						const gitHost = row.githubHost ?? serverEnv.githubHost;
 
 						// Make sure the exact head SHA is reachable locally. Cheap
 						// existence check first; only fetch when we're missing the
@@ -1203,19 +1191,20 @@ export const RepoCloneServiceLive = Layer.effect(
 						continue;
 					}
 
-					const repoRecord = {
-						id: repo.id,
-						provider: repo.provider,
-						owner: repo.owner,
-						name: repo.name,
-						fullName: repo.fullName,
-						defaultBranch: repo.defaultBranch,
-						avatarUrl: repo.avatarUrl ?? null,
-						addedAt: repo.addedAt,
-						cloneStatus: repo.cloneStatus,
-						clonePath: repo.clonePath ?? null,
-						cloneError: repo.cloneError ?? null,
-					};
+				const repoRecord = {
+					id: repo.id,
+					provider: repo.provider,
+					owner: repo.owner,
+					name: repo.name,
+					fullName: repo.fullName,
+					defaultBranch: repo.defaultBranch,
+					avatarUrl: repo.avatarUrl ?? null,
+					addedAt: repo.addedAt,
+					cloneStatus: repo.cloneStatus,
+					clonePath: repo.clonePath ?? null,
+					cloneError: repo.cloneError ?? null,
+					githubHost: repo.githubHost,
+				};
 
 					const token = tokenOption.value;
 					yield* Effect.forkDaemon(

@@ -43,7 +43,7 @@
 		font-size: 19px;
 		font-weight: 400;
 		line-height: 1.55;
-		color: #b4b0a4;
+		color: var(--ob-text-body);
 		margin: 0;
 	}
 
@@ -70,10 +70,10 @@
 		align-items: center;
 		gap: 14px;
 		padding: 12px 22px;
-		border: 1px solid #46443d;
+		border: 1px solid var(--ob-border-btn);
 		border-radius: 2px;
 		background: transparent;
-		color: #f0ede4;
+		color: var(--ob-text-heading);
 		font-family: 'Newsreader', Georgia, serif;
 		font-style: italic;
 		font-size: 16px;
@@ -92,8 +92,8 @@
 	}
 
 	.primary:hover {
-		border-color: #d4cab2;
-		color: #f7f4ec;
+		border-color: var(--ob-text-italic);
+		color: var(--ob-text-heading-bright);
 	}
 
 	.primary:hover svg {
@@ -109,7 +109,7 @@
 		font-size: 10.5px;
 		letter-spacing: 0.14em;
 		text-transform: uppercase;
-		color: #6f6c63;
+		color: var(--ob-text-muted);
 	}
 
 	@media (prefers-reduced-motion: reduce) {

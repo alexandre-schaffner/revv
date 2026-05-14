@@ -5,9 +5,15 @@
 	import { setSidebarView } from '$lib/stores/sidebar.svelte';
 	import { getCurrentUserLogin } from '$lib/stores/auth.svelte';
 	import { isPrUnseen } from '$lib/stores/pr-visits.svelte';
-	import { User } from '@lucide/svelte';
+	import { User, GitMerge, GitPullRequestClosed } from '@lucide/svelte';
 	import StatusDot from '$lib/components/shared/StatusDot.svelte';
-	let { pr, isSelected = false, navPrefix = 'pr' }: { pr: PullRequest; isSelected?: boolean; navPrefix?: string } = $props();
+
+	let { pr, isSelected = false, navPrefix = 'pr', variant = 'open' }: {
+		pr: PullRequest;
+		isSelected?: boolean;
+		navPrefix?: string;
+		variant?: 'open' | 'archived';
+	} = $props();
 
 	const showDot = $derived(isPrUnseen(pr, getCurrentUserLogin()));
 
@@ -36,17 +42,25 @@
 	<button
 		class="flex w-full cursor-pointer items-center gap-2 rounded-md px-3 py-1.5 text-left transition-colors hover:bg-bg-tertiary {isSelected
 			? 'bg-bg-elevated'
-			: ''} {isFocused ? 'sidebar-nav-focused' : ''}"
+			: ''} {isFocused ? 'sidebar-nav-focused' : ''} {variant === 'archived' ? 'opacity-70' : ''}"
 		onclick={handleClick}
 		aria-label="PR #{pr.externalId}: {pr.title}"
 		data-sidebar-nav={navId}
 		data-nav-type="pr"
 		data-nav-parent="repo:{pr.repositoryId}"
 	>
-		<StatusDot status={pr.status} reviewStatus={pr.reviewStatus} visible={showDot} />
+		{#if variant === 'archived'}
+			{#if pr.status === 'merged'}
+				<GitMerge size={11} class="shrink-0 text-[var(--color-accent-muted,#8b5cf6)]" aria-hidden="true" />
+			{:else}
+				<GitPullRequestClosed size={11} class="shrink-0 text-text-muted" aria-hidden="true" />
+			{/if}
+		{:else}
+			<StatusDot status={pr.status} reviewStatus={pr.reviewStatus} visible={showDot} />
+		{/if}
 		<span class="min-w-0 flex-1 truncate text-xs leading-tight">
 			<span class="text-text-muted">#{pr.externalId}</span>
-			<span class="text-text-primary">{pr.title}</span>
+			<span class="{variant === 'archived' ? 'text-text-secondary' : 'text-text-primary'}">{pr.title}</span>
 		</span>
 		{#if pr.authorAvatarUrl && !avatarFailed}
 			<img

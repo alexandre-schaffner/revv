@@ -17,10 +17,12 @@
 		repository,
 		prs,
 		navPrefix = 'pr',
+		variant = 'open',
 	}: {
 		repository: Repository;
 		prs: PullRequest[];
 		navPrefix?: string;
+		variant?: 'open' | 'archived';
 	} = $props();
 
 	let expanded = $state(false);
@@ -125,7 +127,7 @@
 			{:else}
 				{#each prs as pr, i (pr.id)}
 					<div in:listItemEnter={{ delay: Math.min(i, STAGGER_CAP) * STAGGER.tight }}>
-						<PrItem {pr} isSelected={selectedPrId === pr.id} {navPrefix} />
+						<PrItem {pr} isSelected={selectedPrId === pr.id} {navPrefix} {variant} />
 					</div>
 				{/each}
 			{/if}

@@ -34,7 +34,7 @@ export const ServerConfig = Config.all({
 	githubClientIdPublic: Config.string('GITHUB_CLIENT_ID_PUBLIC').pipe(
 		Config.withDefault('Ov23liI36U1MLWk3kF8l'),
 	),
-	githubHost: Config.string('GITHUB_HOST').pipe(Config.withDefault('nocturlab.ghe.com')),
+	githubHost: Config.string('GITHUB_HOST').pipe(Config.withDefault('github.com')),
 	revDebug: Config.boolean('REV_DEBUG').pipe(Config.withDefault(false)),
 	// Absolute paths to the `claude` / `opencode` CLIs, resolved once by the
 	// installer's shell (which has the user's full PATH including Homebrew,

@@ -1,4 +1,5 @@
 import { Context, Effect, Layer, Schedule } from 'effect';
+import { logError } from '../logger';
 import type { Org, PullRequest, Repository } from '@revv/shared';
 import {
 	GitHubAuthError,
@@ -72,9 +73,14 @@ function assertGitHubOk(res: Response, path: string): void {
 		throw new GitHubAuthError({ message: 'Invalid or expired GitHub token' });
 	}
 	if (res.status === 403) {
-		const resetHeader = res.headers.get('X-RateLimit-Reset');
-		const resetAt = resetHeader ? new Date(Number(resetHeader) * 1000) : new Date();
-		throw new GitHubRateLimitError({ resetAt });
+		const remaining = res.headers.get('X-RateLimit-Remaining');
+		if (remaining === '0') {
+			const resetHeader = res.headers.get('X-RateLimit-Reset');
+			const resetAt = resetHeader ? new Date(Number(resetHeader) * 1000) : new Date();
+			throw new GitHubRateLimitError({ resetAt });
+		}
+		// Not a rate limit — likely org access restriction or insufficient permissions
+		throw new GitHubNetworkError({ cause: `HTTP 403 – access denied for ${path} (check GitHub org OAuth app policies)` });
 	}
 	if (res.status === 404) {
 		throw new GitHubNotFoundError({ resource: path, id: path });
@@ -330,6 +336,7 @@ function mapPr(raw: Record<string, unknown>, repositoryId: string): PullRequest 
 		createdAt: raw['created_at'] as string,
 		updatedAt: raw['updated_at'] as string,
 		fetchedAt: new Date().toISOString(),
+		closedAt: (raw['closed_at'] as string | null) ?? null,
 	};
 }
 
@@ -347,6 +354,8 @@ function mapRepo(raw: Record<string, unknown>): Repository {
 		cloneStatus: 'pending',
 		clonePath: null,
 		cloneError: null,
+		// githubHost is resolved by the caller (repo.githubHost for syncs, current settings host for add-repo)
+		githubHost: '',
 	};
 }
 
@@ -378,7 +387,8 @@ export class GitHubService extends Context.Tag('GitHubService')<
 		readonly listPrs: (
 			repoFullName: string,
 			repositoryId: string,
-			token: string
+			token: string,
+			apiBase?: string
 		) => Effect.Effect<PullRequest[], GitHubError, DbService | GitHubEtagCache | SettingsService>;
 		readonly getPr: (
 			repoFullName: string,
@@ -398,7 +408,8 @@ export class GitHubService extends Context.Tag('GitHubService')<
 		 */
 		readonly getRepoFresh: (
 			fullName: string,
-			token: string
+			token: string,
+			apiBase?: string
 		) => Effect.Effect<Repository, GitHubError, SettingsService>;
 		readonly listUserRepos: (
 			token: string
@@ -562,9 +573,9 @@ export interface GhReviewThread {
 }
 
 export const GitHubServiceLive = Layer.succeed(GitHubService, {
-	listPrs: (repoFullName, repositoryId, token) =>
+	listPrs: (repoFullName, repositoryId, token, explicitApiBase) =>
 		Effect.gen(function* () {
-			const apiBase = yield* resolveApiBase;
+			const apiBase = explicitApiBase ?? (yield* resolveApiBase);
 			const { owner, repo } = yield* parseRepoFullName(repoFullName);
 			const data = yield* conditionalFetch(
 				`/repos/${owner}/${repo}/pulls?state=open&per_page=100`,
@@ -572,7 +583,7 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
 				apiBase
 			);
 			if (data == null) {
-				console.error(`[GitHub] listPrs: conditionalFetch returned ${String(data)} for ${repoFullName} — treating as empty list`);
+				logError('GitHub', `listPrs: conditionalFetch returned ${String(data)} for ${repoFullName} — treating as empty list`);
 				return [] as ReturnType<typeof mapPr>[];
 			}
 			return (data as Record<string, unknown>[]).map((pr) => mapPr(pr, repositoryId));
@@ -598,9 +609,9 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
 			return mapRepo(data as Record<string, unknown>);
 		}).pipe(Effect.retry(retrySchedule)),
 
-	getRepoFresh: (fullName, token) =>
+	getRepoFresh: (fullName, token, explicitApiBase) =>
 		Effect.gen(function* () {
-			const apiBase = yield* resolveApiBase;
+			const apiBase = explicitApiBase ?? (yield* resolveApiBase);
 			const { owner, repo } = yield* parseRepoFullName(fullName);
 			const data = yield* githubFetch(`/repos/${owner}/${repo}`, token, apiBase);
 			return mapRepo(data as Record<string, unknown>);

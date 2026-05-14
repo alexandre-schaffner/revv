@@ -3,6 +3,8 @@ import * as prs from '$lib/stores/prs.svelte';
 import * as settings from '$lib/stores/settings.svelte';
 import * as orgs from '$lib/stores/orgs.svelte';
 import * as sync from '$lib/services/sync';
+import * as ws from '$lib/stores/ws.svelte';
+import { clearReviewFiles } from '$lib/stores/review.svelte';
 import { goto } from '$app/navigation';
 import { API_BASE_URL } from '$lib/api/base-url';
 
@@ -18,6 +20,7 @@ let user = $state<{
 	onboardedAt?: string | null;
 } | null>(null);
 let isLoading = $state(false);
+let isSwitching = $state(false);
 let error = $state<string | null>(null);
 
 let deviceFlow = $state<{
@@ -26,11 +29,56 @@ let deviceFlow = $state<{
 	deviceCode: string;
 	interval: number;
 	expiresAt: number;
+	host?: string;
 } | null>(null);
 let isPolling = $state(false);
+
+export type ConnectedAccount = {
+	host: string;
+	connected: boolean;
+	githubLogin: string | null;
+	avatarUrl: string | null;
+};
+
+export type LocalAccount = {
+	id: string;
+	name: string;
+	email: string;
+	image: string | null;
+	accounts: Array<{
+		host: string;
+		githubLogin: string | null;
+		avatarUrl: string | null;
+	}>;
+};
+
+let connectedAccounts = $state<ConnectedAccount[]>([]);
+let localAccounts = $state<LocalAccount[]>([]);
+let accountJustRemoved = $state(false);
+
+export function getConnectedAccounts(): ConnectedAccount[] {
+	return connectedAccounts;
+}
+
+export function getLocalAccounts(): LocalAccount[] {
+	return localAccounts;
+}
+
+export function getAccountJustRemoved(): boolean {
+	return accountJustRemoved;
+}
+
+export function getForceOnboardingFlow(): boolean {
+	return forceOnboardingFlow;
+}
+
+export function resetForceOnboardingFlow(): void {
+	forceOnboardingFlow = false;
+}
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
 let isAuthenticated = $derived(token !== null && token.length > 0);
+let forceOnboardingFlow = $state(false);
 
 export function getIsAuthenticated(): boolean {
 	return isAuthenticated;
@@ -41,9 +89,17 @@ export function getIsAuthenticated(): boolean {
  * `/api/user/identity` response with `onboardedAt` has loaded, so the
  * onboarding gate stays mounted during the initial hydration window
  * instead of flashing the app shell.
+ *
+ * Returns `true` during an account switch to suppress the gate while
+ * the new user's identity loads.
  */
 export function getIsOnboarded(): boolean {
+	if (isSwitching) return true;
 	return Boolean(user?.onboardedAt);
+}
+
+export function getIsSwitching(): boolean {
+	return isSwitching;
 }
 
 export function getError(): string | null {
@@ -68,16 +124,22 @@ export function setToken(newToken: string): void {
 export function clearToken(): void {
 	token = null;
 	user = null;
+	connectedAccounts = [];
 	if (typeof localStorage !== 'undefined') {
 		localStorage.removeItem('rev_session_token');
 	}
 }
 
-export async function signIn(): Promise<void> {
+export async function signIn(host?: string): Promise<void> {
 	error = null;
 	isLoading = true;
 	try {
-		const res = await fetch(`${API_BASE_URL}/api/auth/device/init`, { method: 'POST' });
+		const res = await fetch(`${API_BASE_URL}/api/auth/device/init`, {
+			method: 'POST',
+			...(host
+				? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ host }) }
+				: {}),
+		});
 		if (!res.ok) throw new Error('Failed to initiate sign-in');
 		const data = (await res.json()) as {
 			device_code: string;
@@ -92,6 +154,7 @@ export async function signIn(): Promise<void> {
 			deviceCode: data.device_code,
 			interval: data.interval ?? 5,
 			expiresAt: Date.now() + (data.expires_in ?? 900) * 1000,
+			...(host ? { host } : {}),
 		};
 		try {
 			const { isTauri } = await import('$lib/utils/platform');
@@ -135,7 +198,12 @@ async function poll(): Promise<void> {
 		const res = await fetch(`${API_BASE_URL}/api/auth/device/poll`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ device_code: deviceFlow.deviceCode }),
+			body: JSON.stringify((() => {
+				const body: Record<string, string> = { device_code: deviceFlow.deviceCode };
+				if (token) body.session_token = token;
+				if (deviceFlow.host) body.host = deviceFlow.host;
+				return body;
+			})()),
 		});
 		const data = (await res.json()) as {
 			status?: string;
@@ -153,6 +221,14 @@ async function poll(): Promise<void> {
 			const newInterval = data.interval ?? deviceFlow.interval + 5;
 			deviceFlow = { ...deviceFlow, interval: newInterval };
 			schedulePoll(newInterval);
+			return;
+		}
+
+		if (data.status === 'linked') {
+			deviceFlow = null;
+			isPolling = false;
+			await fetchConnectedAccounts();
+			await focusWindow();
 			return;
 		}
 
@@ -236,14 +312,19 @@ export async function loadUser(): Promise<void> {
 							next.image = data.avatarUrl;
 						}
 						user = next;
+					accountJustRemoved = false;
 					}
 				}
 			} catch {
 				// best-effort
 			}
+			// Init per-user org selection before fetching orgs
+			orgs.initForUser(u.id);
 			// Fire-and-forget org list fetch so the sidebar switcher has
 			// data ready when the user opens it. Failures degrade silently.
 			void orgs.fetchOrgs();
+			void fetchConnectedAccounts();
+			void fetchLocalAccounts();
 		} else {
 			clearToken();
 		}
@@ -330,18 +411,136 @@ export async function resetOnboarding(): Promise<void> {
 	}
 }
 
+export async function fetchConnectedAccounts(): Promise<void> {
+	if (!token) return;
+	try {
+		const res = await fetch(`${API_BASE_URL}/api/auth/accounts`, {
+			headers: { Authorization: `Bearer ${token}` },
+		});
+		if (res.ok) {
+			connectedAccounts = (await res.json()) as ConnectedAccount[];
+		}
+	} catch {
+		// best-effort
+	}
+}
+
+export async function fetchLocalAccounts(): Promise<void> {
+	try {
+		const res = await fetch(`${API_BASE_URL}/api/auth/local-accounts`);
+		if (res.ok) {
+			localAccounts = (await res.json()) as LocalAccount[];
+		}
+	} catch {
+		// best-effort
+	}
+}
+
+// Pre-fetch local accounts on module load so the account picker has data
+// before the user has a token (lock-screen scenario).
+if (typeof localStorage !== 'undefined') {
+	void fetchLocalAccounts();
+}
+
+export async function disconnectHost(host: string): Promise<void> {
+	if (!token) return;
+	try {
+		await fetch(`${API_BASE_URL}/api/auth/accounts/disconnect`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+			body: JSON.stringify({ host }),
+		});
+	} catch {
+		// best-effort — proceed with local state update
+	}
+
+	const remaining = connectedAccounts.filter((a) => a.host !== host && a.connected);
+	if (remaining.length === 0) {
+		await signOut();
+		return;
+	}
+
+	const { getGithubHost, setGithubHost } = await import('$lib/stores/settings.svelte');
+	const activeHost = getGithubHost();
+	if (activeHost === host) {
+		const fallback = remaining[0]?.host;
+		if (fallback) await setGithubHost(fallback);
+	}
+
+	await fetchConnectedAccounts();
+}
+
+export async function switchAccount(userId: string, host?: string): Promise<void> {
+	isSwitching = true;
+	isLoading = true;
+	try {
+		const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+		if (token) headers['Authorization'] = `Bearer ${token}`;
+		const res = await fetch(`${API_BASE_URL}/api/auth/switch`, {
+			method: 'POST',
+			headers,
+			body: JSON.stringify({ userId }),
+		});
+		if (!res.ok) throw new Error('Switch failed');
+		const data = (await res.json()) as { token: string };
+		setToken(data.token);
+		prs.reset();
+		settings.reset();
+		orgs.reset();
+		clearReviewFiles();
+		// Reconnect WebSocket with the new session token so the server sends
+		// updates scoped to the switched-to account.
+		ws.disconnect();
+		ws.connect(data.token);
+		await loadUser();
+		// Apply the target host after loadUser so settings.reset() doesn't
+		// clobber the value we're about to set.
+		if (host) {
+			const { setGithubHost } = await import('$lib/stores/settings.svelte');
+			await setGithubHost(host);
+		}
+	} catch (e) {
+		error = `Failed to switch account: ${e}`;
+	} finally {
+		isLoading = false;
+		isSwitching = false;
+	}
+}
+
+export async function removeAccount(): Promise<void> {
+	if (!token) return;
+	sync.stopPolling();
+	const res = await fetch(`${API_BASE_URL}/api/user/account`, {
+		method: 'DELETE',
+		headers: { Authorization: `Bearer ${token}` },
+	});
+	if (!res.ok) {
+		throw new Error(`Failed to remove account: ${res.status}`);
+	}
+	// Server confirmed deletion — now clean up local state
+	accountJustRemoved = true;
+	ws.disconnect();
+	clearToken();
+	prs.reset();
+	settings.reset();
+	orgs.reset();
+	clearReviewFiles();
+	await fetchLocalAccounts();
+	forceOnboardingFlow = true;
+	await goto('/');
+}
+
 export async function signOut(): Promise<void> {
 	sync.stopPolling();
 
+	// Soft sign-out: tell server (no-op), then clear local state
 	try {
 		await fetch(`${API_BASE_URL}/api/auth/revoke-and-sign-out`, {
 			method: 'POST',
-			headers: {
-				Authorization: `Bearer ${token}`,
-			},
+			headers: { Authorization: `Bearer ${token}` },
 		});
 	} catch {
-		// Revocation may fail — proceed with local cleanup
+		// best-effort
 	}
 
 	clearToken();

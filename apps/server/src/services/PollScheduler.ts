@@ -1,4 +1,5 @@
 import { Cause, Chunk, Context, Duration, Effect, Fiber, Layer, Ref, Schedule } from 'effect';
+import { logError } from '../logger';
 import { eq } from 'drizzle-orm';
 import { AUTO_FETCH_DEFAULT_INTERVAL, THREAD_SYNC_INTERVAL_SECONDS } from '@revv/shared';
 import type { PullRequest, SyncChange } from '@revv/shared';
@@ -29,6 +30,11 @@ export class PollScheduler extends Context.Tag('PollScheduler')<
 	PollScheduler,
 	PollSchedulerService
 >() {}
+
+/** Derive the GitHub REST API base URL from a stored repo host string. */
+function hostToApiBase(host: string): string {
+	return host === 'github.com' ? 'https://api.github.com' : `https://api.${host}`;
+}
 
 export const PollSchedulerLive = Layer.effect(
 	PollScheduler,
@@ -73,7 +79,7 @@ export const PollSchedulerLive = Layer.effect(
 		// Fiber ref for the running poll loop — null when stopped
 		const fiberRef = yield* Ref.make<Fiber.RuntimeFiber<number, never> | null>(null);
 
-		// The core sync effect — all services are plain values captured from the closure.
+// The core sync effect — all services are plain values captured from the closure.
 		// `DbService | GitHubEtagCache | SettingsService` remain in R because `github.*`
 		// methods depend on them internally; the layer that constructs PollScheduler
 		// already has all provided, so the forked fiber inherits them.
@@ -111,18 +117,19 @@ export const PollSchedulerLive = Layer.effect(
 			// endpoint's ETag, so a plain `getRepo` would replay the stale body.
 			// Runs before PR sync so the sidebar sees fresh avatars ASAP after
 			// server startup.
-			let anyRepoChanged = false;
-			yield* Effect.forEach(
-				allRepos,
-				(repo) =>
-					Effect.gen(function* () {
-						const token = yield* tokenProvider.getGitHubToken('single-user').pipe(
-							Effect.catchAll(() => Effect.succeed('')),
-						);
-						if (!token) return;
-						const fresh = yield* github.getRepoFresh(repo.fullName, token).pipe(
-							Effect.catchAll(() => Effect.succeed(null)),
-						);
+		let anyRepoChanged = false;
+		yield* Effect.forEach(
+			allRepos,
+			(repo) =>
+				Effect.gen(function* () {
+					const repoApiBase = hostToApiBase(repo.githubHost);
+					const token = yield* tokenProvider.getGitHubToken('single-user', repo.githubHost).pipe(
+						Effect.catchAll(() => Effect.succeed('')),
+					);
+					if (!token) return;
+					const fresh = yield* github.getRepoFresh(repo.fullName, token, repoApiBase).pipe(
+						Effect.catchAll(() => Effect.succeed(null)),
+					);
 						if (!fresh) return;
 						if (
 							fresh.avatarUrl !== repo.avatarUrl ||
@@ -189,81 +196,139 @@ export const PollSchedulerLive = Layer.effect(
 				allRepos,
 				(repo) =>
 					Effect.gen(function* () {
-						// Auth failures must not silently poison the token: log + skip this
-						// repo's PR sync this cycle. All other errors are logged generically.
-						const token = yield* tokenProvider.getGitHubToken('single-user').pipe(
+				// Auth failures must not silently poison the token: log + skip this
+					// repo's PR sync this cycle. All other errors are logged generically.
+					const token = yield* tokenProvider.getGitHubToken('single-user', repo.githubHost).pipe(
 							Effect.tapError((err) =>
 								Effect.sync(() => {
-									console.error(
-										`[PollScheduler] token fetch error for ${repo.fullName}:`,
+									logError(
+										'PollScheduler',
+										`token fetch error for ${repo.fullName}:`,
 										err,
 									);
 								}),
 							),
 							Effect.catchTag('GitHubAuthError', (err) =>
 								Effect.sync(() => {
-									console.warn(
-										`[PollScheduler] GitHub auth unavailable; skipping PR sync for ${repo.fullName}: ${err.message}`,
+									logError(
+										'PollScheduler',
+										`GitHub auth unavailable; skipping PR sync for ${repo.fullName}: ${err.message}`,
 									);
 									return '';
 								}),
 							),
 						);
 
-						if (!token) return [] as PullRequest[];
+				if (!token) return null;
 
-						const prs = yield* github
-							.listPrs(repo.fullName, repo.id, token)
-							.pipe(
-								Effect.tapError((err) =>
-									Effect.sync(() => {
-										console.error(
-											`[PollScheduler] listPrs error for ${repo.fullName}:`,
-											err,
-										);
-									}),
-								),
-								Effect.orElseSucceed(() => [] as PullRequest[]),
-							);
-
-						yield* withDb(prService.upsertPrs(prs)).pipe(
+				const repoApiBase = hostToApiBase(repo.githubHost);
+				const prs = yield* github
+					.listPrs(repo.fullName, repo.id, token, repoApiBase)
+						.pipe(
 							Effect.tapError((err) =>
 								Effect.sync(() => {
-									console.error(
-										`[PollScheduler] upsertPrs error for ${repo.fullName}:`,
+									logError(
+										'PollScheduler',
+										`listPrs error for ${repo.fullName}:`,
 										err,
 									);
 								}),
 							),
-							Effect.orElseSucceed(() => undefined),
+							Effect.map((fetched) => fetched as PullRequest[] | null),
+							Effect.catchAll(() => Effect.succeed(null as PullRequest[] | null)),
 						);
 
-						return prs;
-					}).pipe(
+					// listPrs failed — leave existing DB rows untouched for this repo
+					if (prs === null) return null;
+
+					yield* withDb(prService.upsertPrs(prs)).pipe(
 						Effect.tapError((err) =>
 							Effect.sync(() => {
-								console.error(
-									`[PollScheduler] outer per-repo sync error for ${repo.fullName}:`,
-									err,
-								);
+							logError(
+								'PollScheduler',
+								`upsertPrs error for ${repo.fullName}:`,
+								err,
+							);
 							}),
 						),
-						Effect.orElseSucceed(() => [] as PullRequest[]),
+						Effect.orElseSucceed(() => undefined),
+					);
+
+					return prs;
+				}).pipe(
+					Effect.tapError((err) =>
+					Effect.sync(() => {
+						logError(
+							'PollScheduler',
+							`outer per-repo sync error for ${repo.fullName}:`,
+							err,
+						);
+					}),
 					),
+					Effect.orElseSucceed(() => null as PullRequest[] | null),
+				),
 				{ concurrency: 3 }
 			);
 
-			const allPrs = results.flat();
+			const allPrs = results.flatMap((r) => r ?? []);
 
 			// Delete PRs that were open before but are gone now (closed/merged on GitHub).
+			// Only consider repos whose sync succeeded (result !== null) — if listPrs failed
+			// for a repo, its existing DB rows are left untouched this cycle.
 			// Cascade deletes their diff cache, review sessions, threads, and walkthroughs.
+			const syncedRepoIds = new Set(
+				allRepos
+					.filter((_, i) => results[i] !== null)
+					.map((r) => r.id),
+			);
 			const freshPrIdSet = new Set(allPrs.map((pr) => pr.id));
 			const closedPrIds = existingPrs
-				.filter((pr) => pr.status === 'open' && !freshPrIdSet.has(pr.id))
+				.filter(
+					(pr) =>
+						pr.status === 'open' &&
+						syncedRepoIds.has(pr.repositoryId) &&
+						!freshPrIdSet.has(pr.id),
+				)
 				.map((pr) => pr.id);
 			if (closedPrIds.length > 0) {
-				yield* withDb(prService.deletePrs(closedPrIds)).pipe(
-					Effect.orElseSucceed(() => undefined)
+				const repoMap = new Map(allRepos.map((r) => [r.id, r]));
+				const closedPrObjects = existingPrs.filter((pr) => closedPrIds.includes(pr.id));
+
+				const updates: Array<{ id: string; status: 'closed' | 'merged'; closedAt: string }> =
+					yield* Effect.forEach(
+						closedPrObjects,
+						(pr) =>
+							Effect.gen(function* () {
+								// Cap at 10 API fetches per cycle to avoid hammering GitHub
+								if (closedPrIds.length > 10) {
+									return { id: pr.id, status: 'closed' as const, closedAt: new Date().toISOString() };
+								}
+								const repo = repoMap.get(pr.repositoryId);
+								if (!repo) {
+									return { id: pr.id, status: 'closed' as const, closedAt: new Date().toISOString() };
+								}
+								const token = yield* tokenProvider
+									.getGitHubToken('single-user', repo.githubHost)
+									.pipe(Effect.catchAll(() => Effect.succeed('')));
+								if (!token) {
+									return { id: pr.id, status: 'closed' as const, closedAt: new Date().toISOString() };
+								}
+								const fetched = yield* github
+									.getPr(repo.fullName, pr.externalId, token)
+									.pipe(Effect.catchAll(() => Effect.succeed(null)));
+								if (!fetched) {
+									return { id: pr.id, status: 'closed' as const, closedAt: new Date().toISOString() };
+								}
+								const resolvedStatus =
+									fetched.status === 'merged' ? 'merged' : 'closed';
+								const closedAt = fetched.closedAt ?? new Date().toISOString();
+								return { id: pr.id, status: resolvedStatus as 'closed' | 'merged', closedAt };
+							}),
+						{ concurrency: 5 },
+					);
+
+				yield* withDb(prService.markPrsClosed(updates)).pipe(
+					Effect.orElseSucceed(() => undefined),
 				);
 			}
 
@@ -323,12 +388,13 @@ export const PollSchedulerLive = Layer.effect(
 								const repo = allRepos.find((r) => r.id === pr.repositoryId);
 								if (!repo) return;
 
-								const token = yield* tokenProvider.getGitHubToken('single-user').pipe(
+								const token = yield* tokenProvider.getGitHubToken('single-user', repo.githubHost).pipe(
 									Effect.catchTag('GitHubAuthError', (err) =>
 										Effect.sync(() => {
-											console.warn(
-												`[PollScheduler] GitHub auth unavailable; skipping diff refresh for PR ${prId}: ${err.message}`,
-											);
+								logError(
+											'PollScheduler',
+											`GitHub auth unavailable; skipping diff refresh for PR ${prId}: ${err.message}`,
+										);
 											return '';
 										}),
 									),
@@ -433,10 +499,11 @@ export const PollSchedulerLive = Layer.effect(
 							.pipe(
 								Effect.catchAllCause((cause) =>
 									Effect.sync(() => {
-										console.warn(
-											`[PollScheduler] Auto-walkthrough trigger failed for PR ${pr.id} (${change.repoFullName}#${change.prNumber}):`,
-											Cause.pretty(cause),
-										);
+						logError(
+									'PollScheduler',
+									`Auto-walkthrough trigger failed for PR ${pr.id} (${change.repoFullName}#${change.prNumber}):`,
+									Cause.pretty(cause),
+								);
 									}),
 								),
 							),
@@ -459,7 +526,7 @@ export const PollSchedulerLive = Layer.effect(
 		}).pipe(
 			Effect.tapErrorCause((cause) =>
 				Effect.sync(() => {
-					console.error('[PollScheduler] syncAllRepos top-level failure:', Cause.pretty(cause));
+					logError('PollScheduler', 'syncAllRepos top-level failure:', Cause.pretty(cause));
 				}),
 			),
 			Effect.catchAllCause((cause) =>
@@ -496,9 +563,9 @@ export const PollSchedulerLive = Layer.effect(
 					provideInfra(syncService.syncThreads(pr.id)).pipe(
 						Effect.asVoid,
 						Effect.catchAllCause((cause) =>
-							Effect.sync(() => {
-								console.error(`[PollScheduler] Thread sync failed for PR ${pr.id}:`, Cause.pretty(cause));
-							})
+					Effect.sync(() => {
+							logError('PollScheduler', `Thread sync failed for PR ${pr.id}:`, Cause.pretty(cause));
+						})
 						),
 					),
 				{ concurrency: 1 },
@@ -618,10 +685,11 @@ export const PollSchedulerLive = Layer.effect(
 									)
 									.join('\n')
 							: null;
-						console.error(
-							`[PollScheduler] Manual thread sync failed for PR ${prId}:`,
-							[detail, defectStr, pretty].filter(Boolean).join('\n'),
-						);
+					logError(
+						'PollScheduler',
+						`Manual thread sync failed for PR ${prId}:`,
+						[detail, defectStr, pretty].filter(Boolean).join('\n'),
+					);
 						return hub.broadcast({
 							type: 'threads:sync-error',
 							data: {

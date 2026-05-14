@@ -18,6 +18,7 @@ function rowToRepo(row: typeof repositories.$inferSelect): Repository {
 		cloneStatus: row.cloneStatus,
 		clonePath: row.clonePath ?? null,
 		cloneError: row.cloneError ?? null,
+		githubHost: row.githubHost,
 	};
 }
 
@@ -62,6 +63,7 @@ export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
 				defaultBranch: data.defaultBranch,
 				...(data.avatarUrl !== null ? { avatarUrl: data.avatarUrl } : {}),
 				addedAt,
+				githubHost: data.githubHost,
 			} satisfies typeof repositories.$inferInsert;
 			yield* Effect.tryPromise({
 				try: () => Promise.resolve(db.insert(repositories).values(row).run()),
@@ -79,6 +81,7 @@ export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
 				cloneStatus: 'pending',
 				clonePath: null,
 				cloneError: null,
+				githubHost: data.githubHost,
 			});
 		}),
 

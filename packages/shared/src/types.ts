@@ -21,6 +21,7 @@ export interface Repository {
 	cloneStatus: CloneStatus;
 	clonePath: string | null;
 	cloneError: string | null;
+	githubHost: string;
 }
 
 export interface PullRequest {
@@ -47,6 +48,7 @@ export interface PullRequest {
 	createdAt: string;
 	updatedAt: string;
 	fetchedAt: string;
+	closedAt: string | null;
 }
 
 export type ThinkingEffort = 'ultrathink' | 'max' | 'extra-high' | 'high' | 'medium' | 'low';

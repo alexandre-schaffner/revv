@@ -5,7 +5,7 @@ import { CacheService } from '../services/Cache';
 import { GitHubEtagCache } from '../services/GitHubEtagCache';
 import { FileContentService } from '../services/FileContent';
 import { WalkthroughJobs } from '../services/WalkthroughJobs';
-import { withAuth } from './middleware';
+import { withAuth, jsonResponse } from './middleware';
 
 /**
  * Dev-only cache inspection endpoint.
@@ -39,10 +39,7 @@ export const debugRoutes = new Elysia({ prefix: '/api/_debug' })
 
 			return stats;
 		} catch (e) {
-			return new Response(
-				JSON.stringify({ error: e instanceof Error ? e.message : String(e) }),
-				{ status: 500, headers: { 'Content-Type': 'application/json' } },
-			);
+			return jsonResponse({ error: e instanceof Error ? e.message : String(e) }, 500);
 		}
 	})
 	.get('/mcp-token/:walkthroughId', async ({ params }) => {
@@ -60,9 +57,6 @@ export const debugRoutes = new Elysia({ prefix: '/api/_debug' })
 
 			return { token };
 		} catch (e) {
-			return new Response(
-				JSON.stringify({ error: e instanceof Error ? e.message : String(e) }),
-				{ status: 500, headers: { 'Content-Type': 'application/json' } },
-			);
+			return jsonResponse({ error: e instanceof Error ? e.message : String(e) }, 500);
 		}
 	});

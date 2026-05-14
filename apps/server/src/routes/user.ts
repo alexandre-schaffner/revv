@@ -2,12 +2,13 @@ import { Elysia, t } from 'elysia';
 import { eq } from 'drizzle-orm';
 import { Effect } from 'effect';
 import { db } from '../auth';
-import { user } from '../db/schema';
+import { user, repositories } from '../db/schema';
 import { AppRuntime } from '../runtime';
 import { PullRequestService } from '../services/PullRequest';
 import { GitHubService } from '../services/GitHub';
 import { TokenProvider } from '../services/TokenProvider';
 import { withAuth, handleAppError } from './middleware';
+import { SettingsService } from '../services/Settings';
 import type { Org, UserIdentity, UserRole } from '@revv/shared';
 
 /**
@@ -101,11 +102,28 @@ export const userRoutes = new Elysia({ prefix: '/api/user' })
 				Effect.gen(function* () {
 					const tokenProvider = yield* TokenProvider;
 					const github = yield* GitHubService;
-					const token = yield* tokenProvider.getGitHubToken(userId);
+					const settingsService = yield* SettingsService;
+					const settings = yield* settingsService.getSettings().pipe(Effect.orElseSucceed(() => null));
+					const host = settings?.githubHost?.trim() || undefined;
+					const token = yield* tokenProvider.getGitHubToken(userId, host);
 					return yield* github.listUserOrgs(token);
 				}).pipe(Effect.orElseSucceed(() => [] as Org[])),
 			);
 			return { orgs };
+		} catch (e) {
+			return handleAppError(e, ctx);
+		}
+	})
+	.delete('/account', async (ctx) => {
+		try {
+			const userId = ctx.session.user.id;
+			// Delete all repositories first — pull_requests cascade from repositories,
+			// and review_sessions, walkthroughs, chat_sessions cascade from pull_requests.
+			// This is a single-user local app so all repos belong to the current user.
+			await db.delete(repositories);
+			// Deleting the user row cascades to session and account rows via FK onDelete: 'cascade'.
+			await db.delete(user).where(eq(user.id, userId));
+			return { deleted: true };
 		} catch (e) {
 			return handleAppError(e, ctx);
 		}

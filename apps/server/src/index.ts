@@ -61,7 +61,7 @@ const app = new Elysia()
 		idleTimeout: 255,
 	});
 
-console.log(`[revv-server] listening on http://localhost:${Number(process.env['PORT']) || API_PORT}`);
+logError('server', `listening on http://localhost:${Number(process.env['PORT']) || API_PORT}`);
 
 // Log on graceful shutdown so we can distinguish bun --watch restarts (SIGTERM)
 // from Ctrl-C exits (SIGINT) in server logs. Helps diagnose mid-stream failures.

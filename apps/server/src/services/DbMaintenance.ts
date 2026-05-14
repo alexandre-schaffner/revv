@@ -1,8 +1,8 @@
 import { Context, Duration, Effect, Fiber, Layer, Ref, Schedule } from 'effect';
-import { lt } from 'drizzle-orm';
-import { sql } from 'drizzle-orm';
+import { lt, sql } from 'drizzle-orm';
 import { cacheEntries, kvCache } from '../db/schema/index';
 import { DbService } from './Db';
+import { logError } from '../logger';
 
 const SWEEP_INTERVAL_HOURS = 6;
 
@@ -56,14 +56,12 @@ export const DbMaintenanceLive = Layer.effect(
 
 			const total = cacheEntriesSwept + kvSwept;
 			if (total > 0) {
-				console.log(
-					`[DbMaintenance] sweep complete — cache_entries: ${cacheEntriesSwept} rows, kv_cache: ${kvSwept} rows, WAL checkpointed`,
-				);
+				logError('DbMaintenance', `sweep complete — cache_entries: ${cacheEntriesSwept} rows, kv_cache: ${kvSwept} rows, WAL checkpointed`);
 			}
 		}).pipe(
 			Effect.catchAllCause((cause) =>
 				Effect.sync(() => {
-					console.error('[DbMaintenance] maintenance run failed:', cause);
+					logError('DbMaintenance', 'maintenance run failed:', cause);
 				}),
 			),
 		);

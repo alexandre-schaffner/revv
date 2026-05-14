@@ -1,59 +1,30 @@
 import { Elysia } from 'elysia';
-import { eq } from 'drizzle-orm';
-import { auth, db } from '../auth';
-import { account } from '../db/schema';
-import { logError } from '../logger';
 import { withAuth } from './middleware';
 
 /**
- * Signs the user out locally.
+ * Soft sign-out endpoint for multi-account mode.
  *
- * Flow:
- * 1. Clear the stored GitHub access/refresh tokens in the local `account`
- *    row for this user.
- * 2. Invalidate the better-auth session.
+ * In a single-user web app it would make sense to invalidate the session and
+ * revoke tokens here. Revv is a local desktop app with a different contract:
+ * the user should be able to switch back to any previously-authenticated
+ * account without re-doing the OAuth device-code flow. That requires keeping
+ * both the DB session and the GitHub access token alive.
  *
- * We deliberately do *not* call GitHub's token revocation endpoint
- * (`DELETE /applications/{client_id}/token`) because that endpoint requires
- * HTTP Basic auth with the OAuth App's client_secret, and we no longer
- * collect a client_secret (the app authenticates exclusively via the
- * device-code flow, which doesn't need one).
+ * This endpoint is therefore a deliberate no-op on the server side. The real
+ * work happens client-side: the frontend clears its localStorage token (so
+ * `isAuthenticated` becomes false) and either switches to another account or
+ * navigates to the sign-in screen. Sessions expire naturally after 30 days.
  *
- * Users who want to revoke Revv's authorization on GitHub's side can do so
- * at https://github.com/settings/connections/applications/<client_id>. The
- * settings UI exposes this link.
+ * Security note: this is a local SQLite DB — the access tokens are already
+ * stored in plaintext on the machine. Keeping them alive while the user is
+ * "signed out" of the UI does not meaningfully change the threat model.
  *
- * The client should call this instead of the default authClient.signOut().
+ * A future "Remove account" action (Settings → Accounts) will perform hard
+ * cleanup: revoke the GitHub token server-side and delete all DB sessions for
+ * that user row.
  */
 export const signOutRoute = new Elysia()
 	.use(withAuth)
-	.post('/api/auth/revoke-and-sign-out', async (ctx) => {
-		const userId = ctx.session.user.id;
-
-		// 1. Clear the token from the local account table so it isn't
-		//    usable if the database is copied off the machine.
-		let hadToken = false;
-		try {
-			const rows = await db.select().from(account).where(eq(account.userId, userId));
-			hadToken = rows.some((r) => !!r.accessToken);
-			await db
-				.update(account)
-				.set({ accessToken: null, refreshToken: null })
-				.where(eq(account.userId, userId));
-		} catch (e) {
-			logError('sign-out', 'Failed to clear account tokens:', e);
-		}
-
-		// 2. Invalidate the better-auth session
-		try {
-			await auth.api.signOut({ headers: ctx.request.headers });
-		} catch {
-			// Session may already be expired — proceed
-		}
-
-		// `revoked: false` is a bit of a misnomer post-change (we don't revoke
-		// on GitHub any more), but the old shape is kept so the client doesn't
-		// need changes. It now means "a token existed locally and has been
-		// cleared".
-		return { revoked: hadToken };
+	.post('/api/auth/revoke-and-sign-out', async () => {
+		return { revoked: false };
 	});

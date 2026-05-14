@@ -15,18 +15,20 @@
 	interface Props {
 		onContinue: () => void;
 		onBack?: () => void;
+		onSkip?: () => void;
+		isGhe?: boolean;
 	}
 
-	let { onContinue, onBack }: Props = $props();
+	let { onContinue, onBack, onSkip, isGhe = false }: Props = $props();
 
 	let search = $state('');
 	let isAdding = $state(false);
 	let addingRepoName = $state<string | null>(null);
 	let waitingForClone = $state(false);
-	let mode = $state<'browse' | 'manual'>('browse');
-	let manualValue = $state('');
-	let manualError = $state('');
 	let highlightedIndex = $state(0);
+	let cloneTimeoutId = $state<ReturnType<typeof setTimeout> | null>(null);
+	let skipWaitingTimeoutId = $state<ReturnType<typeof setTimeout> | null>(null);
+	let showSkipWaiting = $state(false);
 
 	function focusOnMount(node: HTMLInputElement) {
 		// Wrapped in rAF so the focus call runs after the step animation
@@ -73,12 +75,38 @@
 		if (!added) return;
 		const status = added.cloneStatus;
 		if (status === 'ready' || status === 'error') {
-			waitingForClone = false;
-			isAdding = false;
-			addingRepoName = null;
-			onContinue();
+			advanceFromClone();
 		}
+		return () => {
+			if (cloneTimeoutId !== null) clearTimeout(cloneTimeoutId);
+			if (skipWaitingTimeoutId !== null) clearTimeout(skipWaitingTimeoutId);
+		};
 	});
+
+	function advanceFromClone() {
+		if (cloneTimeoutId !== null) {
+			clearTimeout(cloneTimeoutId);
+			cloneTimeoutId = null;
+		}
+		if (skipWaitingTimeoutId !== null) {
+			clearTimeout(skipWaitingTimeoutId);
+			skipWaitingTimeoutId = null;
+		}
+		waitingForClone = false;
+		isAdding = false;
+		addingRepoName = null;
+		showSkipWaiting = false;
+		onContinue();
+	}
+
+	function startCloneTimeouts() {
+		skipWaitingTimeoutId = setTimeout(() => {
+			showSkipWaiting = true;
+		}, 8000);
+		cloneTimeoutId = setTimeout(() => {
+			advanceFromClone();
+		}, 60000);
+	}
 
 	let tracked = $derived(new Set(getRepositories().map((r) => r.fullName)));
 
@@ -103,10 +131,15 @@
 	});
 
 	async function select(repo: Repository) {
-		if (isAdding || tracked.has(repo.fullName)) return;
+		if (isAdding) return;
+		if (tracked.has(repo.fullName)) {
+			onSkip?.();
+			return;
+		}
 		isAdding = true;
 		addingRepoName = repo.fullName;
 		waitingForClone = true;
+		startCloneTimeouts();
 		try {
 			await addRepo(repo.fullName);
 			// Don't advance here — the clone-status $effect handles it
@@ -115,31 +148,31 @@
 			waitingForClone = false;
 			isAdding = false;
 			addingRepoName = null;
+			if (cloneTimeoutId !== null) { clearTimeout(cloneTimeoutId); cloneTimeoutId = null; }
+			if (skipWaitingTimeoutId !== null) { clearTimeout(skipWaitingTimeoutId); skipWaitingTimeoutId = null; }
+			showSkipWaiting = false;
 		}
 	}
 
-	async function submitManual() {
-		const trimmed = manualValue.trim();
-		if (!trimmed.includes('/')) {
-			manualError = 'Use owner/name format.';
-			return;
-		}
-		manualError = '';
+	async function submitManual(slug: string) {
+		if (isAdding) return;
 		isAdding = true;
-		addingRepoName = trimmed;
+		addingRepoName = slug;
 		waitingForClone = true;
+		startCloneTimeouts();
 		try {
-			await addRepo(trimmed);
-		} catch (e) {
-			manualError = e instanceof Error ? e.message : 'Could not add repository.';
+			await addRepo(slug);
+		} catch {
 			waitingForClone = false;
 			isAdding = false;
 			addingRepoName = null;
+			if (cloneTimeoutId !== null) { clearTimeout(cloneTimeoutId); cloneTimeoutId = null; }
+			if (skipWaitingTimeoutId !== null) { clearTimeout(skipWaitingTimeoutId); skipWaitingTimeoutId = null; }
+			showSkipWaiting = false;
 		}
 	}
 
 	function handleKey(e: KeyboardEvent) {
-		if (mode !== 'browse') return;
 		if (e.key === 'ArrowDown') {
 			e.preventDefault();
 			highlightedIndex = Math.min(highlightedIndex + 1, filtered.length - 1);
@@ -147,10 +180,12 @@
 			e.preventDefault();
 			highlightedIndex = Math.max(highlightedIndex - 1, 0);
 		} else if (e.key === 'Enter') {
+			e.preventDefault();
 			const repo = filtered[highlightedIndex];
 			if (repo) {
-				e.preventDefault();
 				void select(repo);
+			} else if (search.includes('/') && !isGhe) {
+				void submitManual(search.trim());
 			}
 		}
 	}
@@ -168,14 +203,17 @@
 		<div class="cloning">
 			<Dotmatrix variant="square-15" />
 			<p class="cloning-label">Cloning {addingRepoName}… this may take a moment.</p>
+			{#if showSkipWaiting}
+				<button class="skip-waiting" onclick={advanceFromClone}>Skip waiting →</button>
+			{/if}
 		</div>
-	{:else if mode === 'browse'}
+	{:else}
 		<div class="browse">
 			<div class="search-row">
 				<input
 					class="search"
 					type="text"
-					placeholder="Search repositories…"
+					placeholder={isGhe ? 'Search repositories…' : 'Search or enter owner/repo…'}
 					bind:value={search}
 					onkeydown={handleKey}
 					use:focusOnMount
@@ -208,7 +246,7 @@
 							data-tracked={isTracked}
 							onclick={() => select(repo)}
 							onmouseenter={() => (highlightedIndex = i)}
-							disabled={isAdding || isTracked}
+							disabled={isAdding}
 							style="animation-delay: {Math.min(i, 8) * 30}ms"
 						>
 							<span class="row-owner">{repo.owner}</span>
@@ -226,59 +264,14 @@
 				{/if}
 			</div>
 
-			<button class="mode-toggle" onclick={() => (mode = 'manual')}>
-				or paste a repository slug
-			</button>
-		</div>
-	{:else}
-		<div class="manual">
-			<div class="manual-row">
-				<span class="manual-prefix">https://{'…'}/</span>
-				<input
-					class="manual-input"
-					type="text"
-					placeholder="owner/repository"
-					bind:value={manualValue}
-					onkeydown={(e) => {
-						if (e.key === 'Enter') submitManual();
-					}}
-					use:focusOnMount
-					autocomplete="off"
-					spellcheck="false"
-				/>
-			</div>
-			{#if manualError}
-				<p class="error">{manualError}</p>
+			{#if onSkip}
+				<button class="skip" onclick={onSkip}>
+					Skip for now
+				</button>
 			{/if}
-
-			<div class="manual-actions">
-				<button class="mode-toggle" onclick={() => (mode = 'browse')}>
-					back to list
-				</button>
-				<button class="primary" onclick={submitManual} disabled={isAdding}>
-					<span>{isAdding ? 'Connecting…' : 'Connect'}</span>
-					{#if !isAdding}
-						<svg
-							width="18"
-							height="10"
-							viewBox="0 0 18 10"
-							fill="none"
-							xmlns="http://www.w3.org/2000/svg"
-							aria-hidden="true"
-						>
-							<path
-								d="M0 5h16M12 1l4 4-4 4"
-								stroke="currentColor"
-								stroke-width="1"
-								stroke-linecap="round"
-								stroke-linejoin="round"
-							/>
-						</svg>
-					{/if}
-				</button>
-			</div>
 		</div>
 	{/if}
+
 </div>
 
 <style>
@@ -298,7 +291,7 @@
 		background: none;
 		border: 0;
 		padding: 0;
-		color: #6f6c63;
+		color: var(--ob-text-muted);
 		font-family: var(--font-mono, 'JetBrains Mono', monospace);
 		font-size: 10.5px;
 		letter-spacing: 0.14em;
@@ -309,7 +302,7 @@
 	}
 
 	.back:hover {
-		color: #d4cab2;
+		color: var(--ob-text-italic);
 	}
 
 	.back :global(svg) {
@@ -332,7 +325,7 @@
 		font-family: 'Newsreader', Georgia, serif;
 		font-style: italic;
 		font-size: 17px;
-		color: #8a8880;
+		color: var(--ob-text-label);
 		margin: 0;
 	}
 
@@ -346,7 +339,7 @@
 		display: flex;
 		align-items: center;
 		gap: 12px;
-		border-bottom: 1px solid #2a2925;
+		border-bottom: 1px solid var(--ob-border);
 		padding: 6px 0 10px;
 	}
 
@@ -357,12 +350,12 @@
 		outline: 0;
 		font-family: 'Newsreader', Georgia, serif;
 		font-size: 19px;
-		color: #f0ede4;
+		color: var(--ob-text-heading);
 		padding: 6px 0;
 	}
 
 	.search::placeholder {
-		color: #6f6c63;
+		color: var(--ob-text-muted);
 		font-style: italic;
 	}
 
@@ -372,21 +365,21 @@
 		max-height: 320px;
 		overflow-y: auto;
 		scrollbar-width: thin;
-		scrollbar-color: #2a2925 transparent;
+		scrollbar-color: var(--ob-border) transparent;
 	}
 
 	.empty {
 		font-family: 'Newsreader', Georgia, serif;
 		font-style: italic;
 		font-size: 14px;
-		color: #6f6c63;
+		color: var(--ob-text-muted);
 		text-align: left;
 		padding: 24px 0;
 		margin: 0;
 	}
 
 	.empty.error-state {
-		color: #c98a8a;
+		color: var(--ob-error);
 	}
 
 	.retry-link {
@@ -397,7 +390,7 @@
 		font-family: 'Newsreader', Georgia, serif;
 		font-style: italic;
 		font-size: 14px;
-		color: #8a8880;
+		color: var(--ob-text-label);
 		cursor: pointer;
 		text-decoration: underline;
 		text-underline-offset: 2px;
@@ -405,7 +398,7 @@
 	}
 
 	.retry-link:hover {
-		color: #d4cab2;
+		color: var(--ob-text-italic);
 	}
 
 	.row {
@@ -415,8 +408,8 @@
 		padding: 12px 6px;
 		background: transparent;
 		border: 0;
-		border-bottom: 1px solid #1b1a18;
-		color: #d4d1c6;
+		border-bottom: 1px solid var(--ob-border-subtle);
+		color: var(--ob-text-row);
 		font-family: 'Newsreader', Georgia, serif;
 		font-size: 17px;
 		text-align: left;
@@ -437,24 +430,23 @@
 	}
 
 	.row[data-highlighted='true'] {
-		background: rgba(212, 202, 178, 0.05);
+		background: var(--ob-row-highlight);
 	}
 
 	.row[data-tracked='true'] {
 		opacity: 0.45;
-		cursor: not-allowed;
 	}
 
 	.row-owner {
-		color: #8a8678;
+		color: var(--ob-text-label);
 	}
 
 	.row-slash {
-		color: #4a4842;
+		color: var(--ob-text-dimmed);
 	}
 
 	.row-name {
-		color: #f0ede4;
+		color: var(--ob-text-heading);
 		font-style: italic;
 	}
 
@@ -465,13 +457,13 @@
 		font-size: 10.5px;
 		letter-spacing: 0.14em;
 		text-transform: uppercase;
-		color: #6f6c63;
+		color: var(--ob-text-muted);
 		display: inline-flex;
 		align-items: center;
 	}
 
-	.mode-toggle {
-		align-self: flex-start;
+	.skip {
+		align-self: flex-end;
 		background: none;
 		border: 0;
 		padding: 6px 0;
@@ -479,94 +471,36 @@
 		font-size: 10.5px;
 		letter-spacing: 0.14em;
 		text-transform: uppercase;
-		color: #6f6c63;
+		color: var(--ob-text-dimmed);
 		cursor: pointer;
-		transition: color 280ms cubic-bezier(0.16, 1, 0.3, 1);
+		transition: color var(--duration-quick, 240ms) var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1));
 	}
 
-	.mode-toggle:hover {
-		color: #d4cab2;
+	.skip:hover {
+		color: var(--ob-text-label);
 	}
 
-	/* ── Manual mode ─────────────────────────────────────────────── */
-	.manual {
-		display: flex;
-		flex-direction: column;
-		gap: 20px;
-	}
-
-	.manual-row {
-		display: flex;
-		align-items: baseline;
-		gap: 8px;
-		border-bottom: 1px solid #2a2925;
-		padding: 10px 0;
-	}
-
-	.manual-prefix {
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 13px;
-		color: #4a4842;
-	}
-
-	.manual-input {
-		flex: 1;
-		background: transparent;
+	.skip-waiting {
+		background: none;
 		border: 0;
-		outline: 0;
+		padding: 4px 0;
 		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 16px;
-		color: #f0ede4;
-	}
-
-	.manual-input::placeholder {
-		color: #4a4842;
-	}
-
-	.error {
-		font-family: 'Newsreader', Georgia, serif;
-		font-size: 13px;
-		font-style: italic;
-		color: #c98a8a;
-		margin: 0;
-		padding-left: 10px;
-		border-left: 2px solid #6f3a3a;
-	}
-
-	.manual-actions {
-		display: flex;
-		justify-content: space-between;
-		align-items: center;
-		gap: 18px;
-	}
-
-	.primary {
-		display: inline-flex;
-		align-items: center;
-		gap: 14px;
-		padding: 10px 20px;
-		border: 1px solid #46443d;
-		border-radius: 2px;
-		background: transparent;
-		color: #f0ede4;
-		font-family: 'Newsreader', Georgia, serif;
-		font-style: italic;
-		font-size: 15px;
-		font-weight: 500;
+		font-size: 10.5px;
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+		color: var(--ob-text-dimmed);
 		cursor: pointer;
-		transition:
-			border-color 320ms cubic-bezier(0.16, 1, 0.3, 1),
-			color 320ms cubic-bezier(0.16, 1, 0.3, 1);
+		transition: color var(--duration-quick, 240ms) var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1));
+		animation: fade-in var(--duration-smooth, 400ms) var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1)) both;
 	}
 
-	.primary:hover:not(:disabled) {
-		border-color: #d4cab2;
-		color: #f7f4ec;
+	.skip-waiting:hover {
+		color: var(--ob-text-italic);
 	}
 
-	.primary:disabled {
-		opacity: 0.5;
-		cursor: not-allowed;
+	@keyframes fade-in {
+		from { opacity: 0; }
+		to { opacity: 1; }
 	}
 
 	@media (prefers-reduced-motion: reduce) {

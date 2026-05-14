@@ -34,7 +34,7 @@
 		prId: string;
 		sha: string;
 		subject: string;
-		fileContents: ProposedDiffFile[];
+		fileContents: ProposedDiffFile[] | null;
 		onClose: () => void;
 	}
 
@@ -44,38 +44,42 @@
 	// is what unlocks the line-info separator's expand controls — Pierre gates
 	// `isExpandable` on `!fileDiff.isPartial` (DiffHunksRenderer.js).
 	// Binary files (server returns both contents as null) get skipped entirely.
-	const files: FileDiffMetadata[] = untrack(() => {
-		const out: FileDiffMetadata[] = [];
-		for (let i = 0; i < fileContents.length; i++) {
-			const f = fileContents[i];
-			if (!f || f.binary) continue;
-			const oldName = f.oldPath ?? f.path;
-			const newName = f.path;
-			const cacheKeyBase = `chat-diff-${sha}-${i}`;
-			try {
-				const meta = parseDiffFromFile(
-					{
-						name: oldName,
-						contents: f.oldContent ?? '',
-						cacheKey: `${cacheKeyBase}-old`,
-					},
-					{
-						name: newName,
-						contents: f.newContent ?? '',
-						cacheKey: `${cacheKeyBase}-new`,
-					},
-				);
-				out.push(meta);
-			} catch {
-				// `parseDiffFromFile` throws on identical inputs ("if the files
-				// are the same maybe?"). For a rename with no content change we
-				// still want the file listed.
-			}
-		}
-		return out;
-	});
+	const files: FileDiffMetadata[] = $derived(
+		fileContents == null
+			? []
+			: (() => {
+					const out: FileDiffMetadata[] = [];
+					for (let i = 0; i < fileContents.length; i++) {
+						const f = fileContents[i];
+						if (!f || f.binary) continue;
+						const oldName = f.oldPath ?? f.path;
+						const newName = f.path;
+						const cacheKeyBase = `chat-diff-${sha}-${i}`;
+						try {
+							const meta = parseDiffFromFile(
+								{
+									name: oldName,
+									contents: f.oldContent ?? '',
+									cacheKey: `${cacheKeyBase}-old`,
+								},
+								{
+									name: newName,
+									contents: f.newContent ?? '',
+									cacheKey: `${cacheKeyBase}-new`,
+								},
+							);
+							out.push(meta);
+						} catch {
+							// `parseDiffFromFile` throws on identical inputs ("if the files
+							// are the same maybe?"). For a rename with no content change we
+							// still want the file listed.
+						}
+					}
+					return out;
+				})()
+	);
 
-	const paths = files.map((f) => f.name);
+	const paths = $derived(files.map((f) => f.name));
 
 	function statusFromType(type: FileDiffMetadata['type']): GitStatusEntry['status'] {
 		if (type === 'new') return 'added';
@@ -84,17 +88,28 @@
 		return 'modified';
 	}
 
-	const gitStatus: GitStatusEntry[] = files.map((f) => ({
-		path: f.name,
-		status: statusFromType(f.type),
-	}));
+	const gitStatus: GitStatusEntry[] = $derived(
+		files.map((f) => ({
+			path: f.name,
+			status: statusFromType(f.type),
+		}))
+	);
 
 	// ── DOM refs ──────────────────────────────────────────────────────────────
 	let treeHostEl: HTMLElement | undefined = $state();
 	let scrollEl: HTMLDivElement | undefined = $state();
-	const diffWrapperEls: (HTMLDivElement | null)[] = files.map(() => null);
-	const diffInstances: (PierreFileDiff<CommentMeta> | null)[] = files.map(() => null);
+	let diffWrapperEls = $state<(HTMLDivElement | null)[]>([]);
+	let diffInstances = $state<(PierreFileDiff<CommentMeta> | null)[]>([]);
 	let tree: FileTree | null = null;
+
+	// Resize wrapper/instance arrays reactively when files count changes
+	$effect(() => {
+		const len = files.length;
+		if (diffWrapperEls.length !== len) {
+			diffWrapperEls = Array(len).fill(null);
+			diffInstances = Array(len).fill(null);
+		}
+	});
 
 	// Scoped Svelte mount tracker for annotation hosts. Kept local so the
 	// modal can clean up its own mounts on destroy without disturbing any
@@ -461,12 +476,26 @@
 	// ── File tree ─────────────────────────────────────────────────────────────
 	onMount(() => {
 		if (!treeHostEl || files.length === 0) return;
+		initTree();
+	});
 
-		const initialSelection = paths.length > 0 && paths[0] != null ? [paths[0]] : [];
+	// When fileContents arrives after mount (async load), initialize the tree.
+	$effect(() => {
+		if (!treeHostEl || files.length === 0 || tree) return;
+		// Read reactive dependencies before the untrack block
+		const currentPaths = paths;
+		const currentGitStatus = gitStatus;
+		initTree(currentPaths, currentGitStatus);
+	});
+
+	function initTree(treePaths = paths, treeGitStatus = gitStatus) {
+		if (!treeHostEl || treePaths.length === 0) return;
+
+		const initialSelection = treePaths.length > 0 && treePaths[0] != null ? [treePaths[0]] : [];
 
 		tree = new FileTree({
-			paths,
-			gitStatus,
+			paths: treePaths,
+			gitStatus: treeGitStatus,
 			initialExpansion: 'open',
 			initialSelectedPaths: initialSelection,
 			onSelectionChange: (selected) => {
@@ -498,7 +527,7 @@
 		void tick().then(() => {
 			scrollEl?.scrollTo({ top: 0 });
 		});
-	});
+	}
 
 	onDestroy(() => {
 		// Per-file instances are torn down by their action's `destroy` hooks,
@@ -554,7 +583,7 @@
 			</button>
 			<code class="card-sha">{sha.slice(0, 12)}</code>
 			<span class="card-subject" title={subject}>{subject}</span>
-			<span class="card-files">{files.length} file{files.length === 1 ? '' : 's'}</span>
+			<span class="card-files">{fileContents === null ? '…' : `${files.length} file${files.length === 1 ? '' : 's'}`}</span>
 			<div class="view-pill" role="group" aria-label="Diff view mode">
 				<button
 					type="button"
@@ -626,7 +655,14 @@
 		<div class="card-body" class:card-body--tree-collapsed={isTreeCollapsed}>
 			<aside class="card-tree" bind:this={treeHostEl}></aside>
 			<div class="card-diffs" bind:this={scrollEl}>
-				{#if files.length === 0}
+				{#if fileContents === null}
+					<div class="diff-loading">
+						<span class="diff-loading-icon">
+							<Loader2 size={16} class="motion-essential-spin" />
+						</span>
+						<span class="diff-loading-text">Loading diff…</span>
+					</div>
+				{:else if files.length === 0}
 					<div class="empty">No file changes in this commit.</div>
 				{:else}
 					{#each files as file, i (file.name)}
@@ -919,6 +955,21 @@
 		text-align: center;
 		font-size: 12px;
 		color: var(--color-text-muted);
+	}
+
+	.diff-loading {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 8px;
+		padding: 48px 24px;
+		color: var(--color-text-muted);
+		font-size: 13px;
+	}
+
+	.diff-loading-icon {
+		flex-shrink: 0;
+		color: var(--color-accent);
 	}
 
 	/* ── Footer ──────────────────────────────────────────────────────────── */

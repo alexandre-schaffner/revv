@@ -5,7 +5,9 @@ import { GitHubService } from '../services/GitHub';
 import { PollScheduler } from '../services/PollScheduler';
 import { RepoCloneService } from '../services/RepoClone';
 import { RepositoryService } from '../services/Repository';
+import { SettingsService } from '../services/Settings';
 import { TokenProvider } from '../services/TokenProvider';
+import { serverEnv } from '../config';
 import { withAuth, handleAppError } from './middleware';
 
 export const repoRoutes = new Elysia({ prefix: '/api/repos' })
@@ -32,20 +34,26 @@ export const repoRoutes = new Elysia({ prefix: '/api/repos' })
 						const scheduler = yield* PollScheduler;
 						const tokenProvider = yield* TokenProvider;
 						const cloneSvc = yield* RepoCloneService;
+						const settingsSvc = yield* SettingsService;
 
-						const token = yield* tokenProvider.getGitHubToken(ctx.session.user.id);
+						const currentSettings = yield* settingsSvc.getSettings().pipe(
+							Effect.orElseSucceed(() => null),
+						);
+						const githubHost = currentSettings?.githubHost?.trim() || serverEnv.githubHost;
+
+						const token = yield* tokenProvider.getGitHubToken(ctx.session.user.id, githubHost);
 						const repoData = yield* github.getRepo(fullName, token);
-						const saved = yield* repoSvc.addRepo(repoData);
+						const saved = yield* repoSvc.addRepo({ ...repoData, githubHost });
 
-					// Trigger a sync in the background
-					yield* Effect.forkDaemon(scheduler.syncNow());
+						// Trigger a sync in the background
+						yield* Effect.forkDaemon(scheduler.syncNow());
 
-					// Trigger shallow clone in background — fire and forget
-					yield* Effect.forkDaemon(
-						cloneSvc.cloneRepo(saved, token).pipe(
-							Effect.catchAll(() => Effect.void) // errors tracked in DB, don't fail the add
-						)
-					);
+						// Trigger shallow clone in background — fire and forget
+						yield* Effect.forkDaemon(
+							cloneSvc.cloneRepo(saved, token).pipe(
+								Effect.catchAll(() => Effect.void) // errors tracked in DB, don't fail the add
+							)
+						);
 
 						return saved;
 					})

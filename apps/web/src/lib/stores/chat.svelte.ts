@@ -799,6 +799,35 @@ export function sendProposedFeedback(params: SendProposedFeedbackParams): boolea
 	return true;
 }
 
+/**
+ * Invalidate the local chat history for a PR without touching the server
+ * session. Called after a pull so the next `loadChatHistory` re-fetches
+ * the fresh session the server created for the new head SHA.
+ *
+ * Unlike `clearChatHistory` this does NOT call the delete endpoint and does
+ * NOT reset proposed-changes / worktree state — those are managed by the
+ * review store.
+ *
+ * Items are intentionally left in place so the panel shows stale content
+ * while the re-fetch is in-flight rather than flashing a blank state. They
+ * are atomically replaced when `loadChatHistory` resolves.
+ *
+ * The server's GET /api/chat/:prId/messages endpoint resolves the session
+ * keyed on (prId, agent, pr.headSha), so after a pull the re-fetch will
+ * correctly return an empty timeline for the new SHA until the user sends
+ * a message (which creates the new session row).
+ */
+export function invalidateChatHistory(prId: string): void {
+	abortControllers.get(prId)?.abort();
+	abortControllers.delete(prId);
+	setError(prId, null);
+	setStreaming(prId, false);
+	if (loadedPrIds.has(prId)) {
+		loadedPrIds.delete(prId);
+		loadedPrIds = new Set(loadedPrIds);
+	}
+}
+
 export async function clearChatHistory(prId: string): Promise<void> {
 	abortControllers.get(prId)?.abort();
 	abortControllers.delete(prId);

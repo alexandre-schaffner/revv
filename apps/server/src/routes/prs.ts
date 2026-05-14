@@ -34,6 +34,15 @@ export const prRoutes = new Elysia({ prefix: '/api/prs' })
 		},
 		{ query: t.Object({ repo: t.Optional(t.String()) }) }
 	)
+	.get('/archived', async (ctx) => {
+		try {
+			return await AppRuntime.runPromise(
+				Effect.flatMap(PullRequestService, (s) => s.listArchivedPrs())
+			);
+		} catch (e) {
+			return handleAppError(e, ctx);
+		}
+	})
 	.get('/:id', async (ctx) => {
 		try {
 			return await AppRuntime.runPromise(

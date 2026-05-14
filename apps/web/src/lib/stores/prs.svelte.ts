@@ -5,6 +5,7 @@ import { setBatchSummaries } from '$lib/stores/sync.svelte';
 import { toast } from 'svelte-sonner';
 import { getCurrentUserLogin } from '$lib/stores/auth.svelte';
 import { getActiveOrg } from '$lib/stores/orgs.svelte';
+import { getGithubHost } from '$lib/stores/settings.svelte';
 import { fuzzyScore } from '$lib/utils/fuzzy';
 
 let pullRequests = $state<PullRequest[]>([]);
@@ -16,6 +17,7 @@ let selectedPrId = $state<string | null>(null);
 let searchQuery = $state('');
 let isLoading = $state(false);
 let lastSynced = $state<Date | null>(null);
+let archivedPrs = $state<PullRequest[]>([]);
 
 // Sidebar PR search uses the same fuzzy scorer as the Cmd+P palette so a
 // search like "auth jw" can match "Add JWT auth middleware" and a search like
@@ -60,7 +62,12 @@ let groupedByRepo = $derived(
 let visibleRepositories = $derived.by(() => {
 	const owner = getActiveOrg();
 	const ownerLower = owner?.toLowerCase();
-	return ownerLower ? repositories.filter((r) => r.owner.toLowerCase() === ownerLower) : repositories;
+	const activeHost = getGithubHost();
+	return repositories.filter((r) => {
+		if (ownerLower && r.owner.toLowerCase() !== ownerLower) return false;
+		if (activeHost && r.githubHost !== activeHost) return false;
+		return true;
+	});
 });
 
 let needsYourReview = $derived(
@@ -73,6 +80,10 @@ let needsYourReview = $derived(
 
 let needsYourReviewByRepo = $derived(
 	Map.groupBy(needsYourReview, (pr) => pr.repositoryId)
+);
+
+let archivedByRepo = $derived(
+	Map.groupBy(archivedPrs, (pr) => pr.repositoryId)
 );
 
 let selectedPr = $derived(
@@ -93,6 +104,14 @@ export function getNeedsYourReview(): PullRequest[] {
 
 export function getNeedsYourReviewByRepo(): Map<string, PullRequest[]> {
 	return needsYourReviewByRepo;
+}
+
+export function getArchivedPrs(): PullRequest[] {
+	return archivedPrs;
+}
+
+export function getArchivedByRepo(): Map<string, PullRequest[]> {
+	return archivedByRepo;
 }
 
 export function getSelectedPr(): PullRequest | null {
@@ -173,11 +192,23 @@ export async function fetchPrs(): Promise<void> {
 			// Fire-and-forget: load thread summaries for all open PRs
 			const openIds = (data as PullRequest[]).filter((p) => p.status === 'open').map((p) => p.id);
 			void fetchThreadSummaries(openIds);
+			void fetchArchivedPrs();
 		}
 	} catch {
 		// error handled by wsStore or caller
 	} finally {
 		isLoading = false;
+	}
+}
+
+export async function fetchArchivedPrs(): Promise<void> {
+	try {
+		const { data } = await api.api.prs.archived.get();
+		if (data) {
+			archivedPrs = data as PullRequest[];
+		}
+	} catch {
+		// best-effort
 	}
 }
 
@@ -363,4 +394,5 @@ export function reset(): void {
 	searchQuery = '';
 	isLoading = false;
 	lastSynced = null;
+	archivedPrs = [];
 }

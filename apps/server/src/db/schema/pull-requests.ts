@@ -27,6 +27,7 @@ export const pullRequests = sqliteTable('pull_requests', {
 	createdAt: text('created_at').notNull(),
 	updatedAt: text('updated_at').notNull(),
 	fetchedAt: text('fetched_at').notNull(),
+	closedAt: text('closed_at'),
 	/**
 	 * High-water-mark timestamp of the latest review comment we've ingested
 	 * from GitHub for this PR. Passed as `?since=…` on the next poll so

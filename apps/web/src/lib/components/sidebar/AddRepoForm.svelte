@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { Repository } from '@revv/shared';
-	import { RefreshCw, Loader2 } from '@lucide/svelte';
+	import { RefreshCw, Loader2, Search, Plus, Trash2 } from '@lucide/svelte';
 	import {
 		addRepo,
 		getRepositories,
@@ -178,46 +178,42 @@
 	<h2 class="mb-3 flex-shrink-0 text-sm font-semibold text-text-primary">Add Repository</h2>
 {/if}
 
-<!-- Tabs -->
-<div class="flex flex-shrink-0 gap-0 border-b border-border">
-	<button
-		class="relative cursor-pointer px-3 pb-2 text-xs font-medium transition-colors {activeTab === 'browse'
-			? 'text-text-primary'
-			: 'text-text-muted hover:text-text-secondary'}"
-		onclick={() => (activeTab = 'browse')}
-	>
-		Browse
-		{#if activeTab === 'browse'}
-			<div class="absolute bottom-0 left-0 right-0 h-[2px] bg-accent"></div>
-		{/if}
-	</button>
-	<button
-		class="relative cursor-pointer px-3 pb-2 text-xs font-medium transition-colors {activeTab === 'manual'
-			? 'text-text-primary'
-			: 'text-text-muted hover:text-text-secondary'}"
-		onclick={() => (activeTab = 'manual')}
-	>
-		Manual
-		{#if activeTab === 'manual'}
-			<div class="absolute bottom-0 left-0 right-0 h-[2px] bg-accent"></div>
-		{/if}
-	</button>
+<!-- Segmented control tabs -->
+<div class="tab-switcher mb-3 flex-shrink-0">
+	<div class="tab-track">
+		<div class="tab-indicator" style="transform: translateX({activeTab === 'browse' ? '0%' : '100%'})"></div>
+		<button
+			class="tab-segment {activeTab === 'browse' ? 'tab-active' : ''}"
+			onclick={() => (activeTab = 'browse')}
+		>
+			Browse
+		</button>
+		<button
+			class="tab-segment {activeTab === 'manual' ? 'tab-active' : ''}"
+			onclick={() => (activeTab = 'manual')}
+		>
+			Manual
+		</button>
+	</div>
 </div>
 
 <!-- Tab content -->
 {#if activeTab === 'browse'}
 	<div class="flex min-h-0 flex-1 flex-col">
 		<!-- Search + refresh -->
-		<div class="flex items-center gap-2 pt-3 pb-2">
-			<input
-				class="h-8 flex-1 rounded-md border border-border bg-bg-elevated px-3 text-xs text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
-				placeholder="Search repositories..."
-				bind:value={browseSearch}
-				onkeydown={handleBrowseKeydown}
-				use:focusOnMount
-			/>
+		<div class="flex items-center gap-2 pb-2">
+			<div class="search-input-wrap flex-1">
+				<Search size={12} class="search-icon" />
+				<input
+					class="search-input"
+					placeholder="Search repositories..."
+					bind:value={browseSearch}
+					onkeydown={handleBrowseKeydown}
+					use:focusOnMount
+				/>
+			</div>
 			<button
-				class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md border border-border text-text-muted transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
+				class="icon-btn"
 				onclick={() => fetchAvailableRepos(true)}
 				disabled={getAvailableReposLoading()}
 				title="Refresh"
@@ -226,9 +222,7 @@
 			</button>
 		</div>
 
-		<!-- Repo list. Negative margin lets items sit slightly closer to
-			the parent's padded edge, matching the original dialog's `px-2`
-			list inside an unpadded dialog. -->
+		<!-- Repo list -->
 		<div class="-mx-3 flex-1 overflow-y-auto pb-1" bind:this={repoListEl}>
 			{#if getAvailableReposLoading() && getAvailableRepos().length === 0}
 				<div class="flex items-center justify-center py-12">
@@ -247,9 +241,7 @@
 				{#each [...groupedByOwner] as [owner, repos] (owner)}
 					<div class="mt-1">
 						<!-- Owner header -->
-						<div
-							class="sticky top-0 z-10 flex items-center gap-2 bg-bg-secondary px-3 py-1.5"
-						>
+						<div class="owner-header sticky top-0 z-10 flex items-center gap-2 px-3 py-1.5">
 							{#if repos[0]?.avatarUrl}
 								<img
 									src={repos[0].avatarUrl}
@@ -260,8 +252,7 @@
 									onerror={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')}
 								/>
 							{/if}
-							<span
-								class="text-[10px] font-semibold uppercase tracking-wider text-text-muted"
+							<span class="text-[10px] font-semibold uppercase tracking-wider text-text-muted"
 								>{owner}</span
 							>
 						</div>
@@ -278,13 +269,10 @@
 								role="button"
 								tabindex={isTracked || isAdding ? -1 : 0}
 								aria-disabled={isTracked || isAdding ? 'true' : undefined}
-								class="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left transition-colors
-									{isHighlighted
-									? 'bg-bg-elevated ring-1 ring-inset ring-accent/40'
-									: !isTracked
-										? 'hover:bg-bg-elevated'
-										: ''}
-									{!isTracked && !isAdding ? 'cursor-pointer' : ''}"
+								class="repo-item flex w-full items-center gap-2 px-3 py-2 text-left
+									{isHighlighted ? 'repo-item--highlighted' : ''}
+									{!isTracked && !isAdding ? 'cursor-pointer' : ''}
+									{isTracked ? 'repo-item--tracked' : ''}"
 								data-highlighted={isHighlighted ? 'true' : undefined}
 								onclick={() => {
 									if (!isTracked && !isAdding) handleBrowseAdd(repo.fullName);
@@ -319,7 +307,7 @@
 									{/if}
 									{#if isTracked}
 										<button
-											class="cursor-pointer text-xs text-text-muted transition-colors hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
+											class="remove-btn"
 											onclick={(e) => {
 												e.stopPropagation();
 												handleBrowseRemove(trackedRepo.id);
@@ -327,13 +315,23 @@
 											disabled={isRemoving}
 											aria-label="Remove {repo.fullName}"
 										>
-											{isRemoving ? 'Removing…' : 'Remove'}
+											{#if isRemoving}
+												<Loader2 size={12} class="animate-spin" />
+											{:else}
+												<Trash2 size={12} />
+											{/if}
 										</button>
 									{:else if !isAdding}
-										<span
-											class="rounded bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent"
-											>Add</span
+										<button
+											class="add-badge"
+											onclick={(e) => {
+												e.stopPropagation();
+												handleBrowseAdd(repo.fullName);
+											}}
+											aria-label="Add {repo.fullName}"
 										>
+											<Plus size={11} />
+										</button>
 									{/if}
 								</div>
 							</div>
@@ -345,12 +343,7 @@
 	</div>
 
 	{#if onClose}
-		<!-- Browse footer. Negative horizontal margin lets the top border
-			span the full parent width, then `px-5` puts the button back at
-			the original 5-unit indent. -->
-		<div
-			class="-mx-5 mt-2 flex flex-shrink-0 justify-end border-t border-border px-5 pt-3"
-		>
+		<div class="-mx-5 mt-2 flex flex-shrink-0 justify-end border-t border-border px-5 pt-3">
 			<button
 				class="cursor-pointer rounded-md px-3 py-1.5 text-xs text-text-muted transition-colors hover:text-text-secondary"
 				onclick={onClose}
@@ -397,3 +390,191 @@
 		</div>
 	</div>
 {/if}
+
+<style>
+	/* Segmented control tab switcher */
+	.tab-switcher {
+		padding: 2px;
+	}
+
+	.tab-track {
+		position: relative;
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		height: 28px;
+		background: var(--color-glass-bg, rgba(255, 255, 255, 0.04));
+		border: 1px solid var(--color-glass-border, rgba(255, 255, 255, 0.08));
+		border-radius: 8px;
+		padding: 2px;
+		box-shadow: inset 0 0.5px 0 0 var(--color-glass-highlight, rgba(255, 255, 255, 0.06));
+	}
+
+	.tab-indicator {
+		position: absolute;
+		top: 2px;
+		left: 2px;
+		width: calc(50% - 2px);
+		height: calc(100% - 4px);
+		background: var(--color-glass-active-bg, rgba(255, 255, 255, 0.08));
+		border: 1px solid var(--color-glass-border, rgba(255, 255, 255, 0.1));
+		border-radius: 6px;
+		box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2), inset 0 0.5px 0 0 var(--color-glass-highlight, rgba(255, 255, 255, 0.08));
+		transition: transform var(--duration-quick, 120ms) var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1));
+		pointer-events: none;
+	}
+
+	.tab-segment {
+		position: relative;
+		z-index: 1;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		height: 100%;
+		font-size: 11px;
+		font-weight: 500;
+		cursor: pointer;
+		border-radius: 5px;
+		color: var(--color-text-muted);
+		transition: color var(--duration-quick, 120ms) ease;
+		background: transparent;
+		border: none;
+		padding: 0 12px;
+	}
+
+	.tab-segment.tab-active {
+		color: var(--color-text-primary);
+	}
+
+	/* Search input with icon */
+	.search-input-wrap {
+		position: relative;
+		display: flex;
+		align-items: center;
+	}
+
+	.search-input-wrap :global(.search-icon) {
+		position: absolute;
+		left: 9px;
+		color: var(--color-text-muted);
+		pointer-events: none;
+		flex-shrink: 0;
+	}
+
+	.search-input {
+		height: 32px;
+		width: 100%;
+		padding-left: 28px;
+		padding-right: 10px;
+		font-size: 12px;
+		background: var(--color-glass-bg, rgba(255, 255, 255, 0.04));
+		border: 1px solid var(--color-glass-border, rgba(255, 255, 255, 0.08));
+		border-radius: 7px;
+		color: var(--color-text-primary);
+		box-shadow: inset 0 0.5px 0 0 var(--color-glass-highlight, rgba(255, 255, 255, 0.04));
+		transition: border-color 100ms ease, box-shadow 100ms ease;
+		outline: none;
+	}
+
+	.search-input::placeholder {
+		color: var(--color-text-muted);
+	}
+
+	.search-input:focus {
+		border-color: var(--color-accent);
+		box-shadow: 0 0 0 1px var(--color-accent), inset 0 0.5px 0 0 var(--color-glass-highlight, rgba(255, 255, 255, 0.04));
+	}
+
+	/* Icon button (refresh) */
+	.icon-btn {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		height: 32px;
+		width: 32px;
+		flex-shrink: 0;
+		cursor: pointer;
+		background: var(--color-glass-bg, rgba(255, 255, 255, 0.04));
+		border: 1px solid var(--color-glass-border, rgba(255, 255, 255, 0.08));
+		border-radius: 7px;
+		color: var(--color-text-muted);
+		box-shadow: inset 0 0.5px 0 0 var(--color-glass-highlight, rgba(255, 255, 255, 0.04));
+		transition: border-color 100ms ease, color 100ms ease;
+	}
+
+	.icon-btn:hover:not(:disabled) {
+		border-color: var(--color-accent);
+		color: var(--color-accent);
+	}
+
+	.icon-btn:disabled {
+		cursor: not-allowed;
+		opacity: 0.5;
+	}
+
+	/* Owner section header */
+	.owner-header {
+		background: var(--color-glass-bg, rgba(255, 255, 255, 0.02));
+		backdrop-filter: blur(8px);
+	}
+
+	/* Repo row */
+	.repo-item {
+		transition: background 80ms ease;
+		border-radius: 6px;
+	}
+
+	.repo-item:not(.repo-item--tracked):hover {
+		background: var(--color-glass-active-bg, rgba(255, 255, 255, 0.06));
+	}
+
+	.repo-item--highlighted {
+		background: var(--color-glass-active-bg, rgba(255, 255, 255, 0.06));
+		box-shadow: inset 0 0 0 1px rgba(var(--color-accent-rgb, 99, 102, 241), 0.35);
+	}
+
+	/* Remove button */
+	.remove-btn {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		height: 22px;
+		width: 22px;
+		cursor: pointer;
+		background: transparent;
+		border: 1px solid transparent;
+		border-radius: 5px;
+		color: var(--color-text-muted);
+		transition: color 100ms ease, border-color 100ms ease, background 100ms ease;
+	}
+
+	.remove-btn:hover:not(:disabled) {
+		color: var(--color-danger);
+		border-color: rgba(var(--color-danger-rgb, 239, 68, 68), 0.3);
+		background: rgba(var(--color-danger-rgb, 239, 68, 68), 0.08);
+	}
+
+	.remove-btn:disabled {
+		cursor: not-allowed;
+		opacity: 0.5;
+	}
+
+	/* Add badge (Plus icon) */
+	.add-badge {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		height: 20px;
+		width: 20px;
+		cursor: pointer;
+		background: rgba(var(--color-accent-rgb, 99, 102, 241), 0.1);
+		border: 1px solid rgba(var(--color-accent-rgb, 99, 102, 241), 0.25);
+		border-radius: 5px;
+		color: var(--color-accent);
+		transition: background 100ms ease, border-color 100ms ease;
+	}
+
+	.add-badge:hover {
+		background: rgba(var(--color-accent-rgb, 99, 102, 241), 0.2);
+		border-color: rgba(var(--color-accent-rgb, 99, 102, 241), 0.4);
+	}
+</style>

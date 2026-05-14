@@ -11,6 +11,7 @@ import { api } from '$lib/api/client';
 import { enterSidebarMode } from '$lib/stores/focus-mode.svelte';
 import { getPullRequests } from '$lib/stores/prs.svelte';
 import { invalidateForPull } from '$lib/stores/walkthrough.svelte';
+import { invalidateChatHistory } from '$lib/stores/chat.svelte';
 import { toast } from 'svelte-sonner';
 
 // --- Review files (shared between sidebar tree + review page) ---
@@ -437,6 +438,7 @@ export async function pullLatestCommit(prId: string): Promise<void> {
 		// button and opts in explicitly. This avoids burning tokens on every pull
 		// and unblocks the page immediately — we no longer await the SSE stream.
 		await invalidateForPull(prId);
+		invalidateChatHistory(prId);
 	} catch (e) {
 		setFilesError(e instanceof Error ? e.message : 'Failed to pull latest commit');
 	} finally {

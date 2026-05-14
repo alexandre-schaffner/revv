@@ -80,7 +80,7 @@
 		font-weight: 400;
 		font-style: italic;
 		line-height: 1.55;
-		color: #b4b0a4;
+		color: var(--ob-text-body);
 		margin: 0;
 	}
 
@@ -95,14 +95,14 @@
 	.dash {
 		flex: 0 0 28px;
 		height: 1px;
-		background: #4a4842;
+		background: var(--ob-text-dimmed);
 	}
 
 	.label {
 		font-family: 'Newsreader', Georgia, serif;
 		font-style: italic;
 		font-size: 14px;
-		color: #8a8678;
+		color: var(--ob-text-label);
 		letter-spacing: 0.08em;
 	}
 

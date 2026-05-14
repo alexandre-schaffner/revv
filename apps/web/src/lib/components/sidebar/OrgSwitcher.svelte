@@ -4,13 +4,15 @@
 		Trigger as PopoverTrigger,
 		Content as PopoverContent,
 	} from '$lib/components/ui/popover/index.js';
-	import { Building2, Check, ChevronDown, User } from '@lucide/svelte';
+	import { Building2, Check, ChevronDown, Globe, User } from '@lucide/svelte';
 	import {
 		getAvailableOrgs,
 		getActiveOrg,
 		setActiveOrg,
 	} from '$lib/stores/orgs.svelte';
 	import { getUser, getCurrentUserLogin } from '$lib/stores/auth.svelte';
+	import { getRepositories } from '$lib/stores/prs.svelte';
+	import { getGithubHost } from '$lib/stores/settings.svelte';
 
 	interface Props {
 		collapsed?: boolean;
@@ -32,15 +34,35 @@
 	// then persists the user's explicit choice across sessions.
 	$effect(() => {
 		if (activeOrg !== null) return;
-		const fallback = personalLogin ?? orgs[0]?.login ?? null;
+		const activeHost = getGithubHost();
+		const repos = getRepositories();
+		const hostRepos = activeHost ? repos.filter((r) => r.githubHost === activeHost) : repos;
+		const repoOwner = hostRepos[0]?.owner ?? null;
+		const allKnownOwners = [personalLogin, ...orgs.map((o) => o.login), ...externalOwners].filter(Boolean);
+		const repoFallback = repoOwner && allKnownOwners.includes(repoOwner) ? repoOwner : null;
+		const fallback = repoFallback ?? personalLogin ?? orgs[0]?.login ?? null;
 		if (fallback) setActiveOrg(fallback);
 	});
+
+	const knownOwners = $derived(
+		new Set([personalLogin, ...orgs.map((o) => o.login)].filter((x): x is string => Boolean(x))),
+	);
+	const activeHost = $derived(getGithubHost());
+	const hostFilteredRepos = $derived(
+		activeHost ? getRepositories().filter((r) => r.githubHost === activeHost) : getRepositories(),
+	);
+	const externalOwners = $derived(
+		[...new Set(hostFilteredRepos.map((r) => r.owner).filter((o) => !knownOwners.has(o)))].sort(),
+	);
 
 	const activeOrgRow = $derived(
 		activeOrg ? orgs.find((o) => o.login === activeOrg) ?? null : null,
 	);
 	const isPersonalActive = $derived(
 		activeOrg !== null && personalLogin !== null && activeOrg === personalLogin,
+	);
+	const isExternalActive = $derived(
+		activeOrg !== null && !isPersonalActive && activeOrgRow === null && externalOwners.includes(activeOrg),
 	);
 
 	function select(login: string): void {
@@ -70,7 +92,7 @@
 				<span class="org-trigger-label">{activeOrgRow.login}</span>
 			{/if}
 		{:else if activeOrg}
-			<Building2 size={collapsed ? 14 : 16} class="org-trigger-icon" />
+			<Globe size={collapsed ? 14 : 16} class="org-trigger-icon" />
 			{#if !collapsed}
 				<span class="org-trigger-label">{activeOrg}</span>
 			{/if}
@@ -127,6 +149,20 @@
 					{/if}
 					<span class="org-row-label">{org.login}</span>
 					{#if activeOrg === org.login && !isPersonalActive}
+						<Check size={12} class="org-row-check" />
+					{/if}
+				</button>
+			{/each}
+		{/if}
+
+		{#if externalOwners.length > 0}
+			<div class="org-divider"></div>
+			<span class="org-section-label">External</span>
+			{#each externalOwners as owner (owner)}
+				<button class="org-row" onclick={() => select(owner)}>
+					<Globe size={14} class="org-row-icon" />
+					<span class="org-row-label">{owner}</span>
+					{#if activeOrg === owner}
 						<Check size={12} class="org-row-check" />
 					{/if}
 				</button>
@@ -271,5 +307,15 @@
 		height: 1px;
 		margin: 4px 6px;
 		background: var(--color-border);
+	}
+
+	:global(.org-section-label) {
+		display: block;
+		padding: 4px 8px 2px;
+		font-size: 10px;
+		font-family: var(--font-mono, monospace);
+		color: var(--color-text-muted);
+		letter-spacing: 0.05em;
+		text-transform: uppercase;
 	}
 </style>
