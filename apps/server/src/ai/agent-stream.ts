@@ -40,6 +40,11 @@ import type { ActivityKind, WalkthroughTokenUsage } from "@revv/shared";
 import { classifyTool, normalizeToolName } from "@revv/shared";
 import { debug, logError } from "../logger";
 import type { OpencodeHttpClient } from "../services/OpencodeSupervisor";
+import type {
+	Part as SdkPart,
+	TextPart as SdkTextPart,
+	ToolPart as SdkToolPart,
+} from "@opencode-ai/sdk/resources/session";
 import { buildExplorationDescription } from "./prompts/walkthrough";
 
 // ── Normalized event ────────────────────────────────────────────────────────
@@ -555,26 +560,21 @@ function extractClaudeToolResultText(
 // ── Opencode Part decoder ───────────────────────────────────────────────────
 
 /**
- * Minimal shape of an opencode `Part`. The SDK's `Part` is a discriminated
- * union; we accept a permissive object and narrow inside the decoder.
+ * Undocumented opencode Part types not yet captured by the SDK's `Session.Part`
+ * union. The SDK covers `text`, `tool`, `file`, `step-start`, `step-finish`,
+ * `snapshot`, and `patch`. These are the additional types we handle in practice.
  */
-export interface OpencodePart {
-	type: string;
+interface UndocumentedOpcodePart {
+	type: "reasoning" | "agent" | "subtask" | string;
 	id?: string;
+	messageID?: string;
+	sessionID?: string;
+	// `text`/`reasoning` content
 	text?: string;
-	tool?: string;
-	state?: { input?: unknown; status?: string; [k: string]: unknown };
 	synthetic?: boolean;
 	ignored?: boolean;
-	callID?: string;
-	/**
-	 * Upstream opencode `Part.messageID` — links this part to its containing
-	 * `UserMessage` or `AssistantMessage`. Used by callers to filter out user
-	 * parts that the daemon re-emits in its SSE stream and synchronous
-	 * response body, which would otherwise echo the user's input back as
-	 * assistant text.
-	 */
-	messageID?: string;
+	// `agent` / `subtask` execution state
+	state?: { input?: unknown; status?: string; [k: string]: unknown };
 	// `AgentPart` specific (type: "agent") — names the sub-agent invoked.
 	name?: string;
 	// `SubtaskPart` specific (type: "subtask") — carries the sub-agent
@@ -584,6 +584,19 @@ export interface OpencodePart {
 	agent?: string;
 	[k: string]: unknown;
 }
+
+/**
+ * Union of the SDK's typed `SdkPart` and undocumented opencode Part
+ * types. Use this at the boundary when parsing raw SSE frames or API response
+ * bodies. The SDK types carry precise field shapes; the undocumented arm
+ * remains permissive so we can narrow at runtime.
+ *
+ * `Part.messageID` — links this part to its containing `UserMessage` or
+ * `AssistantMessage`. Used by callers to filter out user parts that the
+ * daemon re-emits in its SSE stream and synchronous response body, which
+ * would otherwise echo the user's input back as assistant text.
+ */
+export type OpencodePart = SdkPart | UndocumentedOpcodePart;
 
 /**
  * Pure per-Part decoder. Returns an event (or null if the part should be
@@ -604,49 +617,65 @@ export function decodeOpencodePart(
 	deltaHint: string | undefined,
 	alreadyEmittedLen: number,
 ): { event: NormalizedAgentEvent | null; newEmittedLen: number } {
-	if (part.type === "text" && typeof part.text === "string") {
-		if (part.synthetic === true || part.ignored === true) {
+	if (part.type === "text") {
+		// SDK's TextPart guarantees `text: string`; undocumented arm may be loose.
+		const textPart = part as SdkTextPart & { ignored?: boolean };
+		if (textPart.synthetic === true || textPart.ignored === true) {
 			return { event: null, newEmittedLen: alreadyEmittedLen };
 		}
-		const chunk = pickChunk(part.text, deltaHint, alreadyEmittedLen);
+		const chunk = pickChunk(textPart.text, deltaHint, alreadyEmittedLen);
 		if (chunk === null) return { event: null, newEmittedLen: alreadyEmittedLen };
 		return {
 			event: {
 				kind: "text-delta",
 				data: chunk,
-				...(part.id ? { partId: part.id } : {}),
+				...(textPart.id ? { partId: textPart.id } : {}),
 			},
-			newEmittedLen: part.text.length,
+			newEmittedLen: textPart.text.length,
 		};
 	}
 
-	if (part.type === "reasoning" && typeof part.text === "string") {
-		const chunk = pickChunk(part.text, deltaHint, alreadyEmittedLen);
+	if (part.type === "reasoning") {
+		// `reasoning` is undocumented — treat as UndocumentedOpcodePart.
+		const reasonPart = part as UndocumentedOpcodePart;
+		if (typeof reasonPart.text !== "string") {
+			return { event: null, newEmittedLen: alreadyEmittedLen };
+		}
+		const chunk = pickChunk(reasonPart.text, deltaHint, alreadyEmittedLen);
 		if (chunk === null) return { event: null, newEmittedLen: alreadyEmittedLen };
 		return {
 			event: {
 				kind: "reasoning-delta",
 				data: chunk,
-				...(part.id ? { partId: part.id } : {}),
+				...(reasonPart.id ? { partId: reasonPart.id } : {}),
 			},
-			newEmittedLen: part.text.length,
+			newEmittedLen: reasonPart.text.length,
 		};
 	}
 
-	if (part.type === "tool" && typeof part.tool === "string") {
-		const shape = classifyToolCallShape(part.tool);
-		const input = part.state?.input;
+	if (part.type === "tool") {
+		// SDK's ToolPart guarantees `tool: string`, `callID: string`, `state`.
+		const toolPart = part as SdkToolPart;
+		const shape = classifyToolCallShape(toolPart.tool);
+		// Extract `input` from the state union: present on Running/Completed/Error.
+		const state = toolPart.state;
+		const input =
+			state.status === "running" ||
+			state.status === "completed" ||
+			state.status === "error"
+				? (state as { input?: unknown }).input
+				: undefined;
 		// Canonicalise the tool name for the caller. Opencode emits built-in
 		// names lowercase (`read`, `grep`); `normalizeToolName` maps them to
 		// Claude-canonical form so the four callers can treat the field
 		// identically regardless of provider.
-		const toolName = normalizeToolName(part.tool);
+		const toolName = normalizeToolName(toolPart.tool);
 		return {
 			event: {
 				kind: "tool-call",
 				toolName,
 				input,
-				...(part.callID ? { callId: part.callID } : {}),
+				...(toolPart.callID ? { callId: toolPart.callID } : {}),
 				source: shape.source,
 				...(shape.mcpServer !== undefined ? { mcpServer: shape.mcpServer } : {}),
 				bareName: shape.bareName,
@@ -678,13 +707,16 @@ export function decodeOpencodeAgentPart(
 	},
 ): NormalizedAgentEvent | null {
 	if (part.type !== "agent" && part.type !== "subtask") return null;
-	const partId = typeof part.id === "string" ? part.id : null;
+	// Both `agent` and `subtask` are undocumented types — narrow to the
+	// permissive arm for field access.
+	const agentPart = part as UndocumentedOpcodePart;
+	const partId = typeof agentPart.id === "string" ? agentPart.id : null;
 	if (!partId) return null;
 
 	const stateStatus =
-		typeof part.state === "object" && part.state !== null
-			? typeof part.state["status"] === "string"
-				? (part.state["status"] as string)
+		typeof agentPart.state === "object" && agentPart.state !== null
+			? typeof agentPart.state["status"] === "string"
+				? (agentPart.state["status"] as string)
 				: null
 			: null;
 	// `subtask` parts don't carry a `state.status` — they're emitted once
@@ -707,14 +739,14 @@ export function decodeOpencodeAgentPart(
 		if (state.seenAgentStartPartIds.has(partId)) return null;
 		state.seenAgentStartPartIds.add(partId);
 		const subagentType =
-			(typeof part.agent === "string" && part.agent) ||
-			(typeof part.name === "string" && part.name) ||
+			(typeof agentPart.agent === "string" && agentPart.agent) ||
+			(typeof agentPart.name === "string" && agentPart.name) ||
 			"general-purpose";
 		const description =
-			(typeof part.description === "string" && part.description) ||
+			(typeof agentPart.description === "string" && agentPart.description) ||
 			subagentType;
 		const prompt =
-			(typeof part.prompt === "string" && part.prompt) || "";
+			(typeof agentPart.prompt === "string" && agentPart.prompt) || "";
 		return {
 			kind: "subagent-start",
 			providerCallId: partId,
@@ -728,7 +760,7 @@ export function decodeOpencodeAgentPart(
 	if (isCompleted || isError) {
 		if (state.agentEndedPartIds.has(partId)) return null;
 		state.agentEndedPartIds.add(partId);
-		const stateObj = part.state as Record<string, unknown> | undefined;
+		const stateObj = agentPart.state as Record<string, unknown> | undefined;
 		const result =
 			typeof stateObj?.["result"] === "string"
 				? (stateObj["result"] as string)
@@ -1216,7 +1248,9 @@ function hashTaskSnapshot(tasks: ReadonlyArray<NormalizedTask>): string {
  * different locations; we try the known ones.
  */
 function extractChildMessageId(part: OpencodePart): string | null {
-	const state = part.state as Record<string, unknown> | undefined;
+	// `agent`/`subtask` parts are undocumented; cast to the permissive arm.
+	const undoc = part as UndocumentedOpcodePart;
+	const state = undoc.state as Record<string, unknown> | undefined;
 	if (state) {
 		if (typeof state["messageID"] === "string") return state["messageID"];
 		if (typeof state["childMessageID"] === "string")
@@ -1224,8 +1258,8 @@ function extractChildMessageId(part: OpencodePart): string | null {
 	}
 	// Some builds put the child message id on `part` directly under
 	// `childMessageID`.
-	if (typeof (part as Record<string, unknown>)["childMessageID"] === "string") {
-		return (part as Record<string, unknown>)["childMessageID"] as string;
+	if (typeof (undoc as Record<string, unknown>)["childMessageID"] === "string") {
+		return (undoc as Record<string, unknown>)["childMessageID"] as string;
 	}
 	return null;
 }
