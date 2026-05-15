@@ -149,8 +149,20 @@ export function streamWalkthroughViaOpencodeMCP(
   // names since that's what the agent actually does.
   let currentPhase: WalkthroughLifecyclePhase = "connecting";
   let lastReasoningPush = 0;
+  // Mirrors the Claude SDK path (invariant #13 agent-path parity).
+  const PHASE_ORDER: WalkthroughLifecyclePhase[] = [
+    "connecting",
+    "exploring",
+    "analyzing",
+    "writing",
+    "rating",
+    "finishing",
+  ];
   const transitionPhase = (next: WalkthroughLifecyclePhase, message: string): void => {
     if (currentPhase === next) return;
+    // Forward-only: never roll the phase machine back (e.g. heartbeats must not
+    // override a "writing" phase with "exploring"). Matches the Claude SDK path.
+    if (PHASE_ORDER.indexOf(next) < PHASE_ORDER.indexOf(currentPhase)) return;
     currentPhase = next;
     push({ type: "phase", data: { phase: next, message } });
   };

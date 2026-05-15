@@ -1366,10 +1366,12 @@ export const WalkthroughJobsLive = Layer.effect(
         const notifiers = yield* Ref.get(activityNotifiers);
         const notify = notifiers.get(walkthroughId);
         if (notify) {
-          // Push a phase heartbeat to reset the stream guard's inactivity timer.
+          // Push a thinking heartbeat to reset the stream guard's inactivity timer.
           // Content events already reach the frontend via fanOut — don't re-emit them.
+          // Using "thinking" (a no-op on the client) rather than a "phase" event so
+          // the heartbeat never rolls back the provider's phase machine (invariant #13).
           try {
-            notify({ type: "phase", data: { phase: "exploring", message: "Processing..." } });
+            notify({ type: "thinking", data: {} });
           } catch {
             /* notifier threw — ignore */
           }

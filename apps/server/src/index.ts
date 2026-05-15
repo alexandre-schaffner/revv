@@ -3,7 +3,9 @@ import { API_PORT } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia } from "elysia";
 import { auth } from "./auth";
+import { serverEnv } from "./config";
 import { logError } from "./logger";
+import { acquireSingleInstance } from "./singleInstance";
 import { chatRoute } from "./routes/chat";
 import { debugRoutes } from "./routes/debug";
 import { deviceAuthRoutes } from "./routes/device-auth";
@@ -26,6 +28,15 @@ import { PollScheduler } from "./services/PollScheduler";
 import { ensureHighlighter } from "./services/PrerenderCache";
 import { RepoCloneService } from "./services/RepoClone";
 import { WalkthroughJobs } from "./services/WalkthroughJobs";
+
+// ── Single-instance guard ────────────────────────────────────────────────────
+// Acquire a PID file keyed on the DB path so dev (revv-dev.db) and prod
+// (revv.db) environments stay independent.  If a stale instance is found it
+// is SIGTERM'd (then SIGKILL'd after 3 s) before we bind the port.
+const port = Number(process.env.PORT) || API_PORT;
+const releasePidFile = acquireSingleInstance(`${serverEnv.dbPath}.pid`);
+
+logError("server", `starting on port ${port}`);
 
 const app = new Elysia()
   .use(
@@ -57,20 +68,60 @@ const app = new Elysia()
     timestamp: new Date().toISOString(),
   }))
   .listen({
-    port: Number(process.env.PORT) || API_PORT,
+    port,
     // Prevent Bun's default idle timeout from killing long-running SSE streams
     // (e.g. agent chat turns that go quiet for >10 s during tool execution).
     idleTimeout: 255,
   });
 
-logError("server", `listening on http://localhost:${Number(process.env.PORT) || API_PORT}`);
+logError("server", `listening on http://localhost:${port}`);
 
-// Log on graceful shutdown so we can distinguish bun --watch restarts (SIGTERM)
-// from Ctrl-C exits (SIGINT) in server logs. Helps diagnose mid-stream failures.
-process.on("SIGTERM", () =>
-  logError("server", "SIGTERM received — shutting down (bun --watch restart or OS signal)"),
-);
-process.on("SIGINT", () => logError("server", "SIGINT received — shutting down"));
+// ── Graceful shutdown ────────────────────────────────────────────────────────
+// SIGTERM arrives on bun --watch restarts and launchd stops.
+// SIGINT  arrives on Ctrl-C.
+//
+// Both previously only logged, leaving the process alive — that's why stale
+// instances accumulated.  Now we: stop Elysia, dispose the Effect runtime
+// (drains PollScheduler / WalkthroughJobs fibers), remove the PID file,
+// then exit.  A hard-kill timer fires after 8 s so a stuck Effect fiber
+// can never hold the process open forever.
+let isShuttingDown = false;
+
+async function gracefulShutdown(signal: string): Promise<void> {
+  if (isShuttingDown) {
+    // Second signal while already shutting down → force exit immediately.
+    process.exit(1);
+  }
+  isShuttingDown = true;
+
+  logError("server", `${signal} received — shutting down…`);
+
+  // Hard-kill fallback: if shutdown takes more than 8 s, give up.
+  const hardKill = setTimeout(() => {
+    logError("server", "shutdown timed out after 8 s — force exit");
+    process.exit(1);
+  }, 8000);
+  // Don't let this timer keep the process alive past a normal exit.
+  hardKill.unref();
+
+  // 1. Stop accepting new connections (drains in-flight requests).
+  try {
+    app.stop();
+  } catch {}
+
+  // 2. Dispose the Effect runtime — stops PollScheduler, WalkthroughJobs, etc.
+  try {
+    await AppRuntime.dispose();
+  } catch {}
+
+  // 3. Release the PID file so the next startup doesn't treat us as stale.
+  releasePidFile();
+
+  process.exit(0);
+}
+
+process.on("SIGTERM", () => void gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => void gracefulShutdown("SIGINT"));
 
 // Re-launch walkthrough fibers for any rows left in `status='generating'`
 // by a previous run. Runs in the background so boot isn't blocked by slow
