@@ -31,7 +31,7 @@
     "postinstall": "echo '\\n  Run `bun run dev` to start developing, or `bun run dist` to build an installer.\\n'"
   },
   "devDependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.126",
+    "@anthropic-ai/claude-agent-sdk": "0.3.142",
     "@opentelemetry/api": "^1.9.1",
     "@tauri-apps/cli": "^2",
     "concurrently": "^9.2.1",
@@ -39,6 +39,7 @@
     "typescript": "^5.7.0"
   },
   "dependencies": {
+    "@opencode-ai/sdk": "1.15.0",
     "@pierre/diffs": "^1.1.15"
   }
 }

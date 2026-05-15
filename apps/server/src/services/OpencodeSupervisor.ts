@@ -24,13 +24,22 @@
 //     polling settings on each jobStarted() — Settings doesn't yet expose a
 //     change stream). The stop is a best-effort kill; credentials are wiped.
 //
-// All HTTP to opencode uses Bun's native fetch. Basic-auth password is sent
-// on every request as `Authorization: Basic <base64(opencode:PASSWORD)>`.
-// SSE event stream from `/event` is consumed via fetch + manual line
-// buffering; see subscribeToEvents below.
+// Transport: `@opencode-ai/sdk` typed client. The supervisor builds one
+// OpencodeClient per daemon spawn (with basic-auth header baked in via the
+// SDK's `headers` option) and exposes it through `client()`. Providers call
+// SDK methods directly — there is no hand-rolled HTTP wrapper. The SDK's
+// default fetch wrapper sets `req.timeout = false` for Bun, which is what
+// prevents Bun's 5-minute idle timeout from killing 10+ minute agent turns
+// (the load-bearing reason the previous SDK migration was reverted before
+// v1.14.50 — see commits 83087451 / d9c78713).
 
 import { resolve } from "node:path";
 import { Context, Effect, Layer, Ref } from "effect";
+import {
+	createOpencodeClient,
+	type OpencodeClient,
+	type Part,
+} from "@opencode-ai/sdk";
 import { debug, logError } from "../logger";
 import { DbService } from "./Db";
 import { SettingsService } from "./Settings";
@@ -46,102 +55,11 @@ export interface OpencodeEndpoint {
 	readonly password: string;
 }
 
-export interface OpencodeMcpRegistration {
-	readonly name: string;
-	readonly directory?: string;
-	readonly config: {
-		readonly type: "remote";
-		readonly url: string;
-		readonly headers?: Record<string, string>;
-	};
-}
-
-export interface OpencodeSessionCreate {
-	readonly title?: string;
-	readonly parentID?: string;
-	readonly directory?: string;
-}
-
-export interface OpencodePostMessage {
-	readonly sessionId: string;
-	readonly model?: string;
-	readonly agent?: string;
-	readonly parts: unknown[];
-	readonly tools?: unknown;
-	readonly system?: string;
-	readonly noReply?: boolean;
-	readonly directory?: string;
-	/**
-	 * Abort signal threaded into the underlying fetch. Wired in by callers
-	 * (the `withAgentTurn` harness) so a hard-timeout or external cancel
-	 * tears down the HTTP call even if the daemon's `/abort` endpoint
-	 * doesn't close the long-poll connection promptly.
-	 */
-	readonly signal?: AbortSignal;
-}
-
-export interface OpencodeSubscribe {
-	readonly sessionId: string;
-	readonly signal: AbortSignal;
-	readonly onEvent: (ev: unknown) => void;
-}
-
-/**
- * Parsed response body from POST /session/:id/message. opencode 1.14.48+
- * returns the full agent turn synchronously — no SSE needed for content.
- */
-export interface OpencodeMessageResponse {
-	info: {
-		/** AssistantMessage.id — used as the authoritative assistant message
-		 * ID for filtering `response.parts` against user-message echoes. */
-		id: string;
-		sessionID: string;
-		modelID?: string;
-		finish?: string;
-		tokens?: { total: number; input: number; output: number; reasoning: number };
-		error?: unknown;
-	};
-	// `Part` per @opencode-ai/sdk types.gen.d.ts. The union covers
-	// TextPart / ReasoningPart / ToolPart / StepStartPart / StepFinishPart /
-	// FilePart / etc. — we type the shared fields permissively here and let
-	// callers narrow with the `type` discriminator.
-	parts: Array<{
-		type: string;
-		text?: string;
-		tool?: string;
-		state?: {
-			input?: unknown;
-			[key: string]: unknown;
-		};
-		synthetic?: boolean;
-		ignored?: boolean;
-		[key: string]: unknown;
-	}>;
-}
-
-export interface OpencodeHttpClient {
-	registerMcp(params: OpencodeMcpRegistration): Promise<void>;
-	isMcpRegistered(name: string): boolean;
-	markMcpRegistered(name: string): void;
-	createSession(params: OpencodeSessionCreate): Promise<{ id: string }>;
-	postMessage(params: OpencodePostMessage): Promise<OpencodeMessageResponse>;
-	abortSession(sessionId: string): Promise<void>;
-	/**
-	 * Open an SSE subscription to /event filtered by sessionId. Resolves when
-	 * the server closes the stream (or signal aborts); `onEvent` is called
-	 * once per JSON-parsed event. Non-matching events are skipped.
-	 */
-	subscribeToEvents(opts: OpencodeSubscribe): Promise<void>;
-	/**
-	 * `GET /agent` — list available agents. Used at daemon-startup to cache
-	 * which named agents (e.g. `plan`) are configured. Returns an empty
-	 * array on failure (best-effort; the chat-opencode driver gracefully
-	 * degrades when `plan` is unavailable).
-	 */
-	listAgents(directory?: string): Promise<readonly string[]>;
-}
-
 export type OpencodeError = AiError;
+
+// Re-export the SDK's typed Part union so the rest of the codebase can import
+// it from one place without depending on the SDK's deep subpaths directly.
+export type { Part, OpencodeClient };
 
 // ── Service tag ──────────────────────────────────────────────────────────────
 
@@ -165,8 +83,8 @@ export class OpencodeSupervisor extends Context.Tag("OpencodeSupervisor")<
 		readonly stopIfIdle: () => Effect.Effect<void>;
 		/** Immediately kill the daemon. */
 		readonly stopNow: () => Effect.Effect<void>;
-		/** Current HTTP client. Null when daemon is not running. */
-		readonly client: () => Effect.Effect<OpencodeHttpClient | null>;
+		/** Current SDK client. Null when daemon is not running. */
+		readonly client: () => Effect.Effect<OpencodeClient | null>;
 		readonly isHealthy: () => Effect.Effect<boolean>;
 		/** Signal a job has started — bumps refcount, cancels any idle timer. */
 		readonly jobStarted: () => Effect.Effect<void>;
@@ -204,7 +122,7 @@ interface RunningState {
 	readonly hostname: string;
 	readonly password: string;
 	readonly proc: ReturnType<typeof Bun.spawn>;
-	readonly client: OpencodeHttpClient;
+	readonly client: OpencodeClient;
 }
 
 interface SupervisorState {
@@ -250,433 +168,41 @@ function basicAuthHeader(password: string): string {
 	return `Basic ${btoa(`opencode:${password}`)}`;
 }
 
-// ── HTTP client construction ─────────────────────────────────────────────────
+// ── SDK client construction ──────────────────────────────────────────────────
 
-function buildHttpClient(
+function buildSdkClient(
 	hostname: string,
 	port: number,
 	password: string,
-): OpencodeHttpClient {
+): OpencodeClient {
 	const baseUrl = `http://${hostname}:${port}`;
 	const authHeader = basicAuthHeader(password);
-	// Tracks registered MCP servers — avoids redundant POST /mcp calls within a daemon instance.
-	const registeredMcps = new Set<string>();
-
-	async function request(
-		method: string,
-		path: string,
-		body?: unknown,
-		extraHeaders?: Record<string, string>,
-		signal?: AbortSignal,
-	): Promise<Response> {
-		const headers: Record<string, string> = {
-			Authorization: authHeader,
-			...(body !== undefined ? { "Content-Type": "application/json" } : {}),
-			...(extraHeaders ?? {}),
-		};
-		// `timeout: false` is a Bun-specific RequestInit extension. Bun's
-		// fetch otherwise enforces a 5-minute idle timeout, which would kill
-		// long-running `postMessage` calls (the agent loop can take 10+
-		// minutes on complex PRs) and prematurely terminate the SSE event
-		// subscription — leading to "no tool calls visible" and "timed out"
-		// symptoms that don't reproduce against the opencode TUI (whose SDK
-		// sets `req.timeout = false` internally). The 10-minute logical
-		// timeout in `withAgentTurn` is the only timeout we want here.
-		const init: RequestInit & { timeout?: boolean } = {
-			method,
-			headers,
-			timeout: false,
-			...(signal ? { signal } : {}),
-			...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-		};
-		const res = await fetch(`${baseUrl}${path}`, init);
-		return res;
-	}
-
-	return {
-		isMcpRegistered(name) {
-			return registeredMcps.has(name);
-		},
-		markMcpRegistered(name) {
-			registeredMcps.add(name);
-		},
-		async registerMcp(params) {
-			const cacheKey = `${params.name}::${params.directory ?? ""}`;
-			if (registeredMcps.has(cacheKey)) return;
-			// `mcp.add` per opencode 1.14.x OpenAPI: POST /mcp with body
-			// { name, config }. Returns 200 with `{ [name]: MCPStatus }` whose
-			// status is `connected`, `disabled`, `failed`, `needsAuth`, or
-			// `needsClientRegistration`. Anything other than `connected` means
-			// the daemon couldn't actually use the server — most commonly the
-			// remote URL was unreachable or returned the wrong content type.
-			//
-			// We treat `failed` as a hard error here: the agent has no path to
-			// our walkthrough/chat-context tools, and silently degrading would
-			// leave the user staring at the keepalive's "waiting" rows with no
-			// progress (the exact regression that motivated this check after
-			// the route renamed from /mcp/register).
-			//
-			// opencode scopes MCP availability per project/directory. Pass the
-			// worktree directory via `x-opencode-directory` so the MCP is
-			// registered in the same project context the session will use.
-			const extraHeaders = params.directory
-				? { "x-opencode-directory": params.directory }
-				: undefined;
-			const res = await request(
-				"POST",
-				"/mcp",
-				{ name: params.name, config: params.config },
-				extraHeaders,
-			);
-			if (!res.ok) {
-				const text = await res.text().catch(() => "");
-				throw new Error(
-					`opencode mcp register failed (${res.status}): ${text.slice(0, 400)}`,
-				);
-			}
-			const contentType = res.headers.get("content-type") ?? "";
-			if (!contentType.includes("application/json")) {
-				// 200 + text/html means we hit the daemon's SPA fallback — the
-				// route doesn't exist on this opencode version. Surface it
-				// instead of letting registration silently no-op.
-				const text = await res.text().catch(() => "");
-				throw new Error(
-					`opencode mcp register returned non-JSON (likely SPA fallback — route missing on this opencode version): ${text.slice(0, 200)}`,
-				);
-			}
-			const status = (await res.json().catch(() => null)) as
-				| Record<string, { status: string; error?: string }>
-				| null;
-			const entry = status?.[params.name];
-			if (!entry) {
-				throw new Error(
-					`opencode mcp register returned no status for '${params.name}'`,
-				);
-			}
-			if (entry.status !== "connected") {
-				throw new Error(
-					`opencode mcp register: '${params.name}' status=${entry.status}${
-						entry.error ? ` — ${entry.error}` : ""
-					}`,
-				);
-			}
-			registeredMcps.add(cacheKey);
-		},
-
-		async createSession(params) {
-			const { directory, ...body } = params;
-			const extraHeaders = directory ? { "x-opencode-directory": directory } : undefined;
-			const res = await request("POST", "/session", {
-				...(body.title !== undefined ? { title: body.title } : {}),
-				...(body.parentID !== undefined
-					? { parentID: body.parentID }
-					: {}),
-			}, extraHeaders);
-			if (!res.ok) {
-				const text = await res.text().catch(() => "");
-				throw new Error(
-					`opencode createSession failed (${res.status}): ${text.slice(0, 400)}`,
-				);
-			}
-			const json = (await res.json()) as { id?: string };
-			if (!json.id) throw new Error("opencode createSession returned no id");
-			return { id: json.id };
-		},
-
-		async postMessage(params) {
-			const { sessionId, model, directory, signal, ...rest } = params;
-			// POST /session/:id/message — blocks until the agent loop completes.
-			// opencode 1.14.48+ returns the full response as a JSON body with a
-			// `parts` array when the LLM finishes. No SSE streaming needed for content.
-			//
-			// The wire `model` field wants { providerID, modelID }; we split the
-			// unified `provider/modelId` form here at the boundary.
-			const wireModel = (() => {
-				if (model === undefined) return undefined;
-				const slash = model.indexOf("/");
-				if (slash <= 0 || slash === model.length - 1) return undefined;
-				return {
-					providerID: model.slice(0, slash),
-					modelID: model.slice(slash + 1),
-				};
-			})();
-			const body = {
-				...rest,
-				...(wireModel !== undefined ? { model: wireModel } : {}),
-			};
-			const extraHeaders = directory ? { "x-opencode-directory": directory } : undefined;
-			const res = await request(
-				"POST",
-				`/session/${encodeURIComponent(sessionId)}/message`,
-				body,
-				extraHeaders,
-				signal,
-			);
-			// Consume the body (drains the stream AND captures error text).
-			const responseText = await res.text().catch(() => "");
-			debug(
-				"opencode-supervisor",
-				`postMessage response: status=${res.status} body=${responseText.slice(0, 500)}`,
-			);
-			if (!res.ok) {
-				throw new Error(
-					`opencode postMessage failed (${res.status}): ${responseText.slice(0, 400)}`,
-				);
-			}
-
-			// Parse the JSON body — opencode returns full response with `parts` array.
-			let parsed: OpencodeMessageResponse;
-			try {
-				parsed = JSON.parse(responseText) as OpencodeMessageResponse;
-			} catch {
-				// Non-JSON response (shouldn't happen on 200, but guard it).
-				return { info: { id: "", sessionID: sessionId }, parts: [] };
-			}
-
-			// Always-on summary log (no REV_DEBUG required) so we can spot
-			// the "agent ran but produced no tool parts" failure mode at a
-			// glance. Includes a per-type histogram + a list of tool names
-			// since vanilla tool visibility is the load-bearing question for
-			// chat-opencode + mcp-walkthrough-opencode.
-			if (Array.isArray(parsed.parts)) {
-				const typeHisto: Record<string, number> = {};
-				const toolNames: string[] = [];
-				for (const part of parsed.parts) {
-					const t = String((part as { type?: unknown }).type ?? "?");
-					typeHisto[t] = (typeHisto[t] ?? 0) + 1;
-					if (t === "tool") {
-						const toolName = (part as { tool?: unknown }).tool;
-						if (typeof toolName === "string") toolNames.push(toolName);
-					}
-				}
-				logError(
-					"opencode-supervisor",
-					`postMessage parts summary: count=${parsed.parts.length} types=${JSON.stringify(typeHisto)} tools=${JSON.stringify(toolNames)}`,
-				);
-			}
-
-			// opencode returns 200 even when the agent loop fails (e.g., model not
-			// found, provider auth missing). The error is embedded under `info.error`.
-			// Surface it so callers see a real error instead of silently empty content.
-			const errObj =
-				parsed.info?.error && typeof parsed.info.error === "object"
-					? (parsed.info.error as Record<string, unknown>)
-					: null;
-			if (errObj) {
-				const data =
-					errObj["data"] && typeof errObj["data"] === "object"
-						? (errObj["data"] as Record<string, unknown>)
-						: null;
-				const errMsg =
-					(typeof data?.["message"] === "string" ? data["message"] : null) ??
-					(typeof errObj["name"] === "string" ? errObj["name"] : null) ??
-					"Unknown agent error";
-				throw new Error(`opencode agent error: ${errMsg}`);
-			}
-
-			return parsed;
-		},
-
-		async abortSession(sessionId) {
-			const res = await request(
-				"POST",
-				`/session/${encodeURIComponent(sessionId)}/abort`,
-			);
-			if (!res.ok && res.status !== 404) {
-				const text = await res.text().catch(() => "");
-				logError(
-					"opencode-supervisor",
-					`abortSession non-ok (${res.status}): ${text.slice(0, 200)}`,
-				);
-			}
-		},
-
-		async listAgents(directory) {
-			const extraHeaders = directory
-				? { "x-opencode-directory": directory }
-				: undefined;
-			try {
-				const res = await request("GET", "/agent", undefined, extraHeaders);
-				if (!res.ok) {
-					debug(
-						"opencode-supervisor",
-						`listAgents non-ok ${res.status}`,
-					);
-					return [];
-				}
-				const body = (await res.json().catch(() => null)) as
-					| Array<{ name?: unknown }>
-					| null;
-				if (!Array.isArray(body)) return [];
-				const names: string[] = [];
-				for (const entry of body) {
-					if (entry && typeof entry === "object") {
-						const name = (entry as { name?: unknown }).name;
-						if (typeof name === "string" && name.length > 0) {
-							names.push(name);
-						}
-					}
-				}
-				return names;
-			} catch (err) {
-				debug(
-					"opencode-supervisor",
-					"listAgents failed:",
-					err instanceof Error ? err.message : String(err),
-				);
-				return [];
-			}
-		},
-
-		async subscribeToEvents({ sessionId, signal, onEvent }) {
-			// We subscribe to `/global/event`, NOT `/event`. The `/event`
-			// endpoint sends a single `server.connected` event then terminates
-			// the chunked response body — confirmed by raw TCP capture against
-			// opencode 1.14.48. `/global/event` is the long-lived event stream
-			// that emits every `message.part.updated`, `session.error`, etc.
-			// across all sessions. We filter by sessionID client-side.
-			//
-			// Event envelope difference: `/global/event` wraps each event under
-			// a `payload` field plus `directory` / `project` metadata:
-			//   {directory, project, payload: {id, type, properties}}
-			// Older shapes (and `/event`) put the event at the top level:
-			//   {id, type, properties}
-			// We unwrap `payload` here so the rest of the pipeline sees the
-			// canonical `{type, properties}` shape regardless of which
-			// endpoint we used.
-			//
-			// `timeout: false` is critical: Bun's default 5-minute idle
-			// timeout would otherwise tear down the SSE connection mid-turn,
-			// dropping `message.part.updated` events for any tool call
-			// after the 5-minute mark. The opencode SDK does the same
-			// (`req.timeout = false`).
-			const sseInit: RequestInit & { timeout?: boolean } = {
-				method: "GET",
-				headers: {
-					Authorization: authHeader,
-					Accept: "text/event-stream",
-				},
-				signal,
-				timeout: false,
-			};
-			const res = await fetch(`${baseUrl}/global/event`, sseInit);
-			if (!res.ok) {
-				throw new Error(
-					`opencode /global/event subscribe failed (${res.status}): ${await res
-						.text()
-						.catch(() => "")}`,
-				);
-			}
-			const body = res.body;
-			if (!body) throw new Error("opencode /global/event returned empty body");
-			const reader = body.getReader();
-			const decoder = new TextDecoder();
-			let buffer = "";
-			let streamEndReason = "unknown";
-			try {
-				while (true) {
-					if (signal.aborted) { streamEndReason = "aborted"; break; }
-					const { done, value } = await reader.read();
-					if (done) { streamEndReason = "stream-closed"; break; }
-					buffer += decoder.decode(value, { stream: true });
-					// SSE framing: events are separated by blank lines; each
-					// event is one or more `<field>: <value>` lines. We only
-					// care about `data:` lines; accumulate until blank-line.
-					let sep = buffer.indexOf("\n\n");
-					while (sep !== -1) {
-						const frame = buffer.slice(0, sep);
-						buffer = buffer.slice(sep + 2);
-						const dataLines: string[] = [];
-						for (const line of frame.split("\n")) {
-							if (line.startsWith("data:")) {
-								dataLines.push(line.slice(5).trimStart());
-							}
-						}
-						if (dataLines.length > 0) {
-							const payloadStr = dataLines.join("\n");
-							try {
-								const parsedRaw = JSON.parse(payloadStr);
-								// Unwrap the `payload` field that `/global/event`
-								// wraps events in. Fall back to the raw event for
-								// any future shape that doesn't wrap.
-								const parsed =
-									parsedRaw &&
-									typeof parsedRaw === "object" &&
-									"payload" in parsedRaw &&
-									typeof (parsedRaw as { payload?: unknown }).payload === "object"
-										? (parsedRaw as { payload: unknown }).payload
-										: parsedRaw;
-								const sid = extractSessionId(parsed);
-								const evType =
-									parsed && typeof parsed === "object" && "type" in parsed
-										? String((parsed as Record<string, unknown>)["type"])
-										: "(unknown)";
-								// Log ALL events before the session filter so mismatched
-								// sessions and global events are visible in logs.
-								debug(
-									"opencode-supervisor",
-									"sse event:",
-									evType,
-									"session:",
-									sid ?? "(global)",
-									sid !== null && sid !== sessionId ? "[filtered]" : "",
-								);
-								if (sid === null || sid === sessionId) {
-									onEvent(parsed);
-								}
-							} catch {
-								/* ignore non-JSON frames */
-							}
-						}
-						sep = buffer.indexOf("\n\n");
-					}
-				}
-				debug("opencode-supervisor", "sse stream ended:", streamEndReason);
-			} finally {
-				try {
-					reader.releaseLock();
-				} catch {
-					/* ignore */
-				}
-			}
-		},
+	// Belt-and-suspenders custom fetch: the SDK's default already sets
+	// `req.timeout = false` for Bun, but providing our own makes the intent
+	// explicit and documents the load-bearing reason — Bun's 5-minute idle
+	// timeout otherwise kills long-running `session.prompt` calls (the agent
+	// loop runs 10+ minutes on complex PRs) and prematurely terminates the
+	// global event SSE subscription. This was the exact failure mode that
+	// caused the alpha-era SDK migration (commit 83087451) to be reverted in
+	// d9c78713 — keep it documented here so the trap isn't re-walked.
+	const customFetch: (req: Request) => ReturnType<typeof fetch> = (req) => {
+		// Bun-specific RequestInit extension; ignored by other runtimes.
+		(req as unknown as { timeout?: boolean }).timeout = false;
+		return fetch(req);
 	};
-}
-
-// Extracts the session ID from an event envelope. Opencode 1.14.x wraps event
-// payloads under `properties` (e.g. `{type: "message.part.updated",
-// properties: {part: {sessionID, ...}, delta}}`); older shapes used `data`.
-// We probe both, and dig one level into `properties.part` for the
-// `message.part.*` family.
-function extractSessionId(ev: unknown): string | null {
-	if (ev === null || typeof ev !== "object") return null;
-	const obj = ev as Record<string, unknown>;
-	const wrappers = ["properties", "data"];
-	const candidates = ["sessionID", "sessionId", "session_id", "session"];
-	for (const wrapper of wrappers) {
-		const w = obj[wrapper];
-		if (w && typeof w === "object") {
-			const props = w as Record<string, unknown>;
-			for (const key of candidates) {
-				const v = props[key];
-				if (typeof v === "string") return v;
-			}
-			// Nested `properties.part.sessionID` for message.part.* events.
-			const part = props["part"];
-			if (part && typeof part === "object") {
-				const p = part as Record<string, unknown>;
-				for (const key of candidates) {
-					const v = p[key];
-					if (typeof v === "string") return v;
-				}
-			}
-		}
-	}
-	for (const key of candidates) {
-		const v = obj[key];
-		if (typeof v === "string") return v;
-	}
-	return null;
+	// Note: `throwOnError` is intentionally NOT set at the client level.
+	// Method-level type inference for each generated SDK call defaults to
+	// `ThrowOnError extends false`, so setting it at construction would make
+	// runtime and types disagree — runtime would throw, types would still
+	// expose an `error` branch. Callers that want throw-on-error pass
+	// `throwOnError: true` per call (where the type narrows correctly to
+	// `{ data, request, response }`); callers that want to inspect the 404
+	// race on abort omit it and branch on `error`.
+	return createOpencodeClient({
+		baseUrl,
+		fetch: customFetch,
+		headers: { Authorization: authHeader },
+	});
 }
 
 // ── Live implementation ──────────────────────────────────────────────────────
@@ -784,6 +310,30 @@ export const OpencodeSupervisorLive = Layer.effect(
 			return null;
 		};
 
+		const probeAgents = async (
+			client: OpencodeClient,
+		): Promise<readonly string[]> => {
+			try {
+				const result = await client.app.agents({ throwOnError: true });
+				const list = result.data;
+				if (!Array.isArray(list)) return [];
+				const names: string[] = [];
+				for (const entry of list) {
+					if (typeof entry.name === "string" && entry.name.length > 0) {
+						names.push(entry.name);
+					}
+				}
+				return names;
+			} catch (err) {
+				debug(
+					"opencode-supervisor",
+					"listAgents failed:",
+					err instanceof Error ? err.message : String(err),
+				);
+				return [];
+			}
+		};
+
 		const spawnDaemon = async (): Promise<RunningState> => {
 			const password = randomPassword();
 			const hostname = "127.0.0.1";
@@ -873,7 +423,7 @@ export const OpencodeSupervisorLive = Layer.effect(
 
 			// Wait for the port to show up in the log stream. Abort on timeout
 			// or if the process exits early.
-			const portPromise = new Promise<number>((resolve, reject) => {
+			const portPromise = new Promise<number>((resolvePort, reject) => {
 				const timeout = setTimeout(() => {
 					reject(
 						new Error(
@@ -883,7 +433,7 @@ export const OpencodeSupervisorLive = Layer.effect(
 				}, HEALTH_POLL_TIMEOUT_MS);
 				portWaiters.push((p) => {
 					clearTimeout(timeout);
-					resolve(p);
+					resolvePort(p);
 				});
 				proc.exited.then((code) => {
 					if (resolvedPort === null) {
@@ -904,7 +454,7 @@ export const OpencodeSupervisorLive = Layer.effect(
 		// the full 15s polling loop.
 		await waitForHealth(hostname, port, password, 5_000);
 
-			const client = buildHttpClient(hostname, port, password);
+			const client = buildSdkClient(hostname, port, password);
 			const running: RunningState = { hostname, port, password, proc, client };
 
 			// Wire exit handler so we know when the daemon dies unexpectedly and
@@ -1031,7 +581,7 @@ export const OpencodeSupervisorLive = Layer.effect(
 				// chat-opencode driver checks `hasAgent('plan')` before
 				// requesting plan mode and degrades gracefully when missing.
 				const names = yield* Effect.tryPromise({
-					try: () => running.client.listAgents(),
+					try: () => probeAgents(running.client),
 					catch: (err) => {
 						debug(
 							"opencode-supervisor",
@@ -1102,7 +652,7 @@ export const OpencodeSupervisorLive = Layer.effect(
 				}));
 			});
 
-		const client = (): Effect.Effect<OpencodeHttpClient | null> =>
+		const client = (): Effect.Effect<OpencodeClient | null> =>
 			Effect.gen(function* () {
 				const s = yield* Ref.get(stateRef);
 				return s.running ? s.running.client : null;
@@ -1134,16 +684,13 @@ export const OpencodeSupervisorLive = Layer.effect(
 					lastSelectedAgent: agent,
 				}));
 				// Pre-warm: kick off daemon spawn in the background so it's ready
-				// by the time the job calls ensureRunning(). Fire-and-forget — if
-				// spawn fails, ensureRunning() will surface the error when called.
-			// Pre-warm: kick off daemon spawn in the background so it's ready
-			// by the time the job calls ensureRunning(). Relies on ensureRunning's
-			// own startPromise coalescing to safely handle concurrent calls.
-			if (agent === "opencode") {
-				void Effect.runPromise(
-					ensureRunning().pipe(Effect.catchAll(() => Effect.void)),
-				);
-			}
+				// by the time the job calls ensureRunning(). Relies on ensureRunning's
+				// own startPromise coalescing to safely handle concurrent calls.
+				if (agent === "opencode") {
+					void Effect.runPromise(
+						ensureRunning().pipe(Effect.catchAll(() => Effect.void)),
+					);
+				}
 			});
 
 		const jobEnded = (): Effect.Effect<void> =>

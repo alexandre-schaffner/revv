@@ -8,19 +8,19 @@
 //
 //   1. Asks the OpencodeSupervisor for a running daemon (lazy-started).
 //   2. Obtains a one-time session token from WalkthroughJobs for the job.
-//   3. Registers /mcp/walkthrough on the daemon as a remote MCP server,
-//      passing the bearer token in the connection headers.
-//   4. Creates an opencode session, posts the user message, walks the
-//      returned `response.parts` via the shared agent-stream decoder, and
-//      maps normalized events into WalkthroughStreamEvents. Tool-call
-//      content does NOT come through here — the tool handlers on the HTTP
-//      MCP route already emitted the corresponding events via
+//   3. Calls `client.mcp.add` to register `/mcp/walkthrough` on the daemon
+//      as a remote MCP server, passing the bearer token in the connection
+//      headers.
+//   4. Calls `client.session.create`, then `client.session.prompt` and walks
+//      the returned `response.parts` via the shared agent-stream decoder.
+//      Tool-call content does NOT come through here — the tool handlers on
+//      the HTTP MCP route already emitted the corresponding events via
 //      WalkthroughJobs.emitEvent (commit-first; doctrine invariant #8).
-//   5. Wires the caller's AbortController into `client.abortSession` via
+//   5. Wires the caller's AbortController into `client.session.abort` via
 //      the shared `withAgentTurn` harness.
 //
-// Streaming decode (`walkOpencodeParts`) and the abort + hard-timeout
-// envelope (`withAgentTurn`) live in `../agent-stream.ts`.
+// Streaming decode (`walkOpencodeParts` / `subscribeOpencodeStream`) and the
+// abort + hard-timeout envelope (`withAgentTurn`) live in `../agent-stream.ts`.
 
 import type {
 	WalkthroughLifecyclePhase,
@@ -33,8 +33,8 @@ import { debug, logError } from "../../logger";
 import type { PrFileMeta } from "../../services/GitHub";
 import type { UserSettings } from "@revv/shared";
 import type {
+	OpencodeClient,
 	OpencodeEndpoint,
-	OpencodeHttpClient,
 } from "../../services/OpencodeSupervisor";
 import {
 	buildWalkthroughPrompt,
@@ -42,6 +42,8 @@ import {
 } from "../prompts/walkthrough";
 import {
 	buildActivity,
+	extractOpencodeErrorMessage,
+	parseOpencodeModel,
 	subscribeOpencodeStream,
 	walkOpencodePartsWithState,
 	withAgentTurn,
@@ -79,8 +81,8 @@ export interface OpencodeProviderDeps {
 	jobStarted: () => Promise<void>;
 	/** Decrement ref count so the supervisor can idle-stop. */
 	jobEnded: () => Promise<void>;
-	/** Fetch the current supervisor HTTP client (may be null if daemon died). */
-	client: () => Promise<OpencodeHttpClient | null>;
+	/** Fetch the current supervisor SDK client (may be null if daemon died). */
+	client: () => Promise<OpencodeClient | null>;
 	/** Mint a session token bound to this walkthroughId. */
 	issueSessionToken: (walkthroughId: string) => Promise<string>;
 	/** Invalidate the token when we're done. */
@@ -109,7 +111,7 @@ export interface OpencodeStreamParams {
 	onSessionId?: (sessionId: string) => void;
 	/**
 	 * Caller-owned abort signal. When `.abort()` is called upstream (user
-	 * cancel, scope finalizer, shutdown), we invoke `client.abortSession` on
+	 * cancel, scope finalizer, shutdown), we invoke `client.session.abort` on
 	 * the daemon so the model stops producing output. The 10-minute timeout
 	 * layers on top, routing through the same controller.
 	 */
@@ -193,7 +195,20 @@ export function streamWalkthroughViaOpencodeMCP(
 					if (!sessionId) return;
 					const client = await params.deps.client();
 					if (!client) return;
-					await client.abortSession(sessionId);
+					// `throwOnError: false` so the 404-when-already-done race
+					// surfaces as `result.error` instead of an exception.
+					const abortResult = await client.session.abort({
+						path: { id: sessionId },
+					});
+					if (abortResult.error) {
+						const status = abortResult.response.status;
+						if (status !== 404) {
+							logError(
+								"walkthrough-opencode-mcp",
+								`abortSession non-ok (${status})`,
+							);
+						}
+					}
 				},
 				run: async (ctx) => {
 					const endpoint = await params.deps.ensureDaemon();
@@ -216,31 +231,62 @@ export function streamWalkthroughViaOpencodeMCP(
 						"endpoint:",
 						`${endpoint.hostname}:${endpoint.port}`,
 					);
-					await client.registerMcp({
-						name: WALKTHROUGH_MCP_SERVER,
-						directory: params.worktreePath,
-						config: {
-							type: "remote",
-							url: mcpUrl,
-							headers: {
-								Authorization: `Bearer ${sessionToken}`,
+					// `mcp.add` returns 200 with `{ [name]: McpStatus }`. We
+					// must verify the embedded status — the daemon returns 200
+					// even when the connection fails. Surface anything that's
+					// not `connected` so the user sees a real error instead of
+					// the keepalive's "waiting" rows with no progress.
+					const mcpResult = await client.mcp.add({
+						body: {
+							name: WALKTHROUGH_MCP_SERVER,
+							config: {
+								type: "remote",
+								url: mcpUrl,
+								headers: {
+									Authorization: `Bearer ${sessionToken}`,
+								},
 							},
 						},
+						query: { directory: params.worktreePath },
 					});
+					if (mcpResult.error) {
+						const detail =
+							(mcpResult.error as { data?: { message?: string } }).data
+								?.message ?? "unknown error";
+						throw new Error(`opencode mcp.add failed: ${detail}`);
+					}
+					const mcpEntry = mcpResult.data?.[WALKTHROUGH_MCP_SERVER];
+					if (!mcpEntry) {
+						throw new Error(
+							`opencode mcp.add returned no status for '${WALKTHROUGH_MCP_SERVER}'`,
+						);
+					}
+					if (mcpEntry.status !== "connected") {
+						throw new Error(
+							`opencode mcp.add: '${WALKTHROUGH_MCP_SERVER}' status=${mcpEntry.status}${
+								"error" in mcpEntry && typeof mcpEntry.error === "string"
+									? ` — ${mcpEntry.error}`
+									: ""
+							}`,
+						);
+					}
 					debug(
 						"walkthrough-opencode-mcp",
 						`MCP registration result: name=${WALKTHROUGH_MCP_SERVER} status=connected (registration succeeded)`,
 					);
 
 					// ── 2. Create opencode session ──────────────────────────
-					const created = await client.createSession({
-						title: `walkthrough-${params.walkthroughId}`,
-						directory: params.worktreePath,
-						...(params.continuation?.opencodeSessionId !== undefined
-							? { parentID: params.continuation.opencodeSessionId }
-							: {}),
+					const created = await client.session.create({
+						body: {
+							title: `walkthrough-${params.walkthroughId}`,
+							...(params.continuation?.opencodeSessionId !== undefined
+								? { parentID: params.continuation.opencodeSessionId }
+								: {}),
+						},
+						query: { directory: params.worktreePath },
+						throwOnError: true,
 					});
-					sessionId = created.id;
+					sessionId = created.data.id;
 					debug("walkthrough-opencode-mcp", "created session:", sessionId);
 					if (params.onSessionId) params.onSessionId(sessionId);
 
@@ -256,7 +302,6 @@ export function streamWalkthroughViaOpencodeMCP(
 					// add_diff_step, etc.) still flow through the HTTP MCP
 					// route (doctrine invariant #8); we only handle exploration
 					// tool feedback + reasoning-keepalive here.
-					const postParts = [{ type: "text", text: userMessage }];
 					debug(
 						"walkthrough-opencode-mcp",
 						`posting message to session ${sessionId}`,
@@ -349,16 +394,16 @@ export function streamWalkthroughViaOpencodeMCP(
 					// the UI in real-time via WalkthroughJobs.emitEvent → the
 					// activity notifier registered above. Built-in tool
 					// events (Read/Grep/Glob/Bash) DO NOT — they only show up
-					// in the synchronous `response.parts` after postMessage
+					// in the synchronous `response.parts` after prompt
 					// returns. That's why the UI used to render MCP work
 					// live but show no exploration pills until the agent
 					// finished.
 					//
-					// Subscribing to /event in parallel with postMessage
+					// Subscribing to /global/event in parallel with the prompt
 					// surfaces those built-in events as soon as the daemon
-					// emits them. The dedup state is shared with the
-					// backstop walk below so events SSE already streamed
-					// are no-ops in the post-hoc pass.
+					// emits them. The dedup state is shared with the backstop
+					// walk below so events SSE already streamed are no-ops in
+					// the post-hoc pass.
 					const emittedTextLen = new Map<string, number>();
 					const seenToolPartIds = new Set<string>();
 					// Share with backstop walk so user-message parts (which
@@ -367,79 +412,133 @@ export function streamWalkthroughViaOpencodeMCP(
 					// normalized-event pipeline as assistant text.
 					const userMessageIDs = new Set<string>();
 					const sseAbort = new AbortController();
+					// Dedupe by *value*, not time. Opencode resends
+					// `message.updated` (and step-finish parts) verbatim across
+					// state transitions, so a time-throttle would either
+					// suppress legitimate updates or pass redundant ones. A
+					// snapshot key lets every real change through instantly
+					// while collapsing no-op resends.
+					let lastUsageKey = "";
+					let tokenCallbackHits = 0;
+					const onAssistantTokens = (tokens: {
+						input: number;
+						output: number;
+						reasoning: number;
+						cache: { read: number; write: number };
+					}): void => {
+						tokenCallbackHits += 1;
+						const inputTokens = tokens.input;
+						const outputTokens = tokens.output + tokens.reasoning;
+						const cacheReadInputTokens = tokens.cache.read;
+						const cacheCreationInputTokens = tokens.cache.write;
+						const key = `${inputTokens}|${outputTokens}|${cacheReadInputTokens}|${cacheCreationInputTokens}`;
+						logError(
+							"walkthrough-opencode-mcp",
+							`[usage-diag] onAssistantTokens hit=${tokenCallbackHits} key=${key} skip=${key === lastUsageKey}`,
+						);
+						if (key === lastUsageKey) return;
+						lastUsageKey = key;
+						push({
+							type: "usage",
+							data: {
+								tokenUsage: {
+									inputTokens,
+									outputTokens,
+									cacheReadInputTokens,
+									cacheCreationInputTokens,
+								},
+							},
+						});
+					};
 					const sseDone = subscribeOpencodeStream(
 						client,
 						sessionId,
 						sseAbort.signal,
 						emit,
-						{ emittedTextLen, seenToolPartIds, userMessageIDs },
+						{
+							emittedTextLen,
+							seenToolPartIds,
+							userMessageIDs,
+							onAssistantTokens,
+						},
 					);
 
 					const onTurnAbort = (): void => sseAbort.abort();
 					if (ctx.signal.aborted) onTurnAbort();
 					else ctx.signal.addEventListener("abort", onTurnAbort, { once: true });
 
-					let response: Awaited<ReturnType<typeof client.postMessage>> | null = null;
-					try {
-						response = await client.postMessage({
-							sessionId,
-							parts: postParts,
-							system: WALKTHROUGH_MCP_SYSTEM_PROMPT,
-							directory: params.worktreePath,
+					const wireModel = parseOpencodeModel(model);
+					const promptResult = await client.session
+						.prompt({
+							path: { id: sessionId },
+							body: {
+								parts: [{ type: "text", text: userMessage }],
+								system: WALKTHROUGH_MCP_SYSTEM_PROMPT,
+								...(wireModel !== undefined ? { model: wireModel } : {}),
+							},
+							query: { directory: params.worktreePath },
 							// Thread the harness signal so timeout/cancel tears
 							// down the HTTP call even if the daemon `/abort`
 							// doesn't promptly close the long-poll.
 							signal: ctx.signal,
-							...(model !== undefined ? { model } : {}),
+							throwOnError: true,
+						})
+						.finally(() => {
+							ctx.signal.removeEventListener("abort", onTurnAbort);
+							sseAbort.abort();
 						});
-					} finally {
-						ctx.signal.removeEventListener("abort", onTurnAbort);
-						sseAbort.abort();
-						await sseDone;
+					await sseDone;
+
+					const response = promptResult.data;
+
+					// opencode returns 200 even when the agent loop fails
+					// (model not found, provider auth missing). Surface
+					// embedded errors so callers see a real error instead of
+					// silently empty content.
+					const errObj = response.info.error;
+					if (errObj) {
+						throw new Error(
+							`opencode agent error: ${extractOpencodeErrorMessage(errObj)}`,
+						);
 					}
 
 					// Log each part for observability — historically helpful
 					// when the daemon shipped a new part shape.
-					if (response) {
-						for (const part of response.parts) {
-							debug(
-								"walkthrough-opencode-mcp",
-								"response part:",
-								part.type,
-								JSON.stringify(part).slice(0, 200),
-							);
-						}
-
-						// Always-on summary log (no REV_DEBUG required). The
-						// "agent ran but no vanilla tool calls" failure mode is
-						// the load-bearing question for this driver — surfacing
-						// the SSE-vs-response-parts counts unconditionally lets
-						// us tell at a glance whether tool parts ever existed
-						// in the first place.
-						const tooledParts = response.parts.filter(
-							(p) =>
-								typeof (p as { type?: unknown }).type === "string" &&
-								(p as { type: string }).type === "tool",
-						).length;
-						logError(
+					for (const part of response.parts) {
+						debug(
 							"walkthrough-opencode-mcp",
-							`backstop walk: response.parts.length=${response.parts.length} tool-parts=${tooledParts} SSE-seen tools=${seenToolPartIds.size} / text-or-reasoning=${emittedTextLen.size}`,
-						);
-
-						// Backstop walk: emit anything SSE missed via the synchronous
-						// response body. Shared dedup maps make this a no-op for
-						// anything SSE already streamed.
-						walkOpencodePartsWithState(
-							response.parts,
-							{
-								emittedTextLen,
-								seenToolPartIds,
-								userMessageIDs,
-								assistantMessageID: response.info.id,
-							},
-							emit,
+							"response part:",
+							part.type,
+							JSON.stringify(part).slice(0, 200),
 						);
 					}
+
+					// SSE-vs-response-parts summary. Behind REV_DEBUG=1 — the
+					// "agent ran but no vanilla tool calls" failure mode is no
+					// longer the day-to-day concern it was during the SDK
+					// migration; promote back to always-on if a regression
+					// resurfaces.
+					const tooledParts = response.parts.filter(
+						(p) => p.type === "tool",
+					).length;
+					debug(
+						"walkthrough-opencode-mcp",
+						`backstop walk: response.parts.length=${response.parts.length} tool-parts=${tooledParts} SSE-seen tools=${seenToolPartIds.size} / text-or-reasoning=${emittedTextLen.size}`,
+					);
+
+					// Backstop walk: emit anything SSE missed via the synchronous
+					// response body. Shared dedup maps make this a no-op for
+					// anything SSE already streamed.
+					walkOpencodePartsWithState(
+						response.parts,
+						{
+							emittedTextLen,
+							seenToolPartIds,
+							userMessageIDs,
+							assistantMessageID: response.info.id,
+						},
+						emit,
+					);
 
 					// Honour `wasCancelled` / `wasTimeout` distinction so the
 					// terminal error message at the bottom of the generator
@@ -452,11 +551,18 @@ export function streamWalkthroughViaOpencodeMCP(
 						anySummaryEmitted = !errorEmitted;
 					}
 
+					// Surface token usage from the opencode response (parity with
+					// the Claude path, doctrine #13). The SDK reports input,
+					// output, reasoning, and cache.{read,write} per turn. We
+					// fold `reasoning` into `outputTokens` because Claude's
+					// `output_tokens` already includes its reasoning tokens —
+					// keeping the four-field shape stable across agents.
+					const t = response.info.tokens;
 					return {
-						inputTokens: 0,
-						outputTokens: 0,
-						cacheReadInputTokens: 0,
-						cacheCreationInputTokens: 0,
+						inputTokens: t.input,
+						outputTokens: t.output + t.reasoning,
+						cacheReadInputTokens: t.cache.read,
+						cacheCreationInputTokens: t.cache.write,
 					};
 				},
 			});
@@ -542,153 +648,4 @@ export function streamWalkthroughViaOpencodeMCP(
 			};
 		}
 	})();
-}
-
-// ── Opencode /event → WalkthroughStreamEvent translator ──────────────────────
-//
-// We only surface the subset of events we care about here:
-//   - Exploration tool calls (Read/Grep/Glob/Bash) — for the "reading files"
-//     UI feedback. The caller maps this to a `phase: 'exploring'` plus an
-//     `exploration` event.
-//   - MCP tool calls (e.g. set_overview, add_diff_step) — for phase
-//     transitions only. The content those tools wrote flows through the
-//     HTTP MCP route (invariant #8). Surfaced via the opt-in `onMcpTool`
-//     callback so chat consumers can keep ignoring them.
-//   - Error / failure events — so we can emit a terminal `error`.
-//
-// Content events (summary, block, issue, rating, sentiment, phase:advanced)
-// are NEVER emitted from this path — they flow through WalkthroughJobs.emitEvent
-// from the HTTP MCP route's handlers, which is the authoritative commit-first
-// path (doctrine invariant #8).
-
-/**
- * Callbacks the opencode event interpreter feeds. `onText` is opt-in — the
- * walkthrough caller leaves it undefined because content events for that
- * pipeline flow through the MCP tool handlers (doctrine invariant #8). The
- * chat caller (chat-opencode.ts) provides it to surface assistant text
- * deltas.
- *
- * `onMcpTool` is opt-in too. The walkthrough caller uses it to drive phase
- * transitions (analyzing/writing/rating/finishing) when the agent calls an
- * MCP tool — the content of those calls still flows through the HTTP MCP
- * route (invariant #8), but the *phase signal* needs to reach the provider's
- * queue so the guard's first-event timer resets and agent-path parity
- * (invariant #13) holds with the Claude SDK path.
- */
-export interface OpencodeEventCallbacks {
-	readonly onExploration: (tool: string, description: string) => void;
-	readonly onError: (message: string) => void;
-	readonly onText?: ((chunk: string) => void) | undefined;
-	readonly onMcpTool?: ((tool: string) => void) | undefined;
-}
-
-/**
- * Walk an opencode /event envelope and emit translated callbacks. The
- * opencode event shape (verified against `opencode serve` 1.4.x) is:
- *
- *   { type: "message.part.updated",
- *     properties: { sessionID: "...",
- *                   part: { type: "tool", tool: "read",
- *                           callID: "...",
- *                           state: { status: "pending"|"running"|"completed",
- *                                    input: {...} } } } }
- *
- * Each tool call produces three updates (pending → running → completed). We
- * fire callbacks once, on `running`, when the input is fully populated; this
- * dedupes UI rows and phase transitions while still resetting the guard's
- * first-event timer on the agent's first real action. Unknown shapes are
- * tolerated: if `state.status` is missing we fire on the first event we see.
- */
-export function translateOpencodeEvent(
-	ev: unknown,
-	cb: OpencodeEventCallbacks,
-): void {
-	if (ev === null || typeof ev !== "object") return;
-	const root = ev as Record<string, unknown>;
-	const type = typeof root["type"] === "string" ? root["type"] : null;
-	const props =
-		root["properties"] && typeof root["properties"] === "object"
-			? (root["properties"] as Record<string, unknown>)
-			: root;
-
-	// Tool-use events — find the tool name + input.
-	const maybePart = props["part"];
-	const partObj =
-		maybePart && typeof maybePart === "object"
-			? (maybePart as Record<string, unknown>)
-			: null;
-	const partType =
-		partObj && typeof partObj["type"] === "string"
-			? (partObj["type"] as string)
-			: null;
-	const rawToolName =
-		partObj && typeof partObj["tool"] === "string"
-			? (partObj["tool"] as string)
-			: typeof props["tool"] === "string"
-				? (props["tool"] as string)
-				: null;
-
-	if ((partType === "tool" || partType === "tool_use") && rawToolName) {
-		// Opencode emits three events per tool call (pending → running →
-		// completed). Fire callbacks once, on `running`, when the input is
-		// fully populated. This avoids duplicate UI rows and duplicate phase
-		// transitions while still resetting the guard's first-event timer
-		// on the agent's first real action.
-		const state =
-			partObj && typeof partObj["state"] === "object"
-				? (partObj["state"] as Record<string, unknown>)
-				: null;
-		const status =
-			state && typeof state["status"] === "string"
-				? (state["status"] as string)
-				: null;
-		// Tolerate missing/legacy shapes: if there's no state.status field
-		// we fire once on the first event we see for this part type.
-		if (status !== null && status !== "running") return;
-
-		const input = state?.["input"] ?? props["input"];
-		const activity = buildActivity(rawToolName, input);
-		if (EXPLORATION_TOOLS.has(activity.toolName)) {
-			cb.onExploration(activity.toolName, activity.summary);
-			return;
-		}
-		// MCP tool calls — content flows through the HTTP MCP route per
-		// invariant #8, but we still notify the caller so it can emit a
-		// phase event (invariant #13: agent-path parity with the Claude
-		// SDK path which fires phase transitions on tool_use blocks).
-		cb.onMcpTool?.(rawToolName);
-		return;
-	}
-
-	// Text deltas — assistant message content. opencode emits incremental text
-	// via `message.part.updated` events whose props carry `{ delta: { text } }`.
-	// We use ONLY the delta path here. The full-text `partType === "text"` path
-	// is intentionally omitted: it carries the cumulative text (not a delta),
-	// which would re-emit the entire response on every update — causing echoes.
-	// User-message parts also arrive as `partType === "text"` and would be
-	// incorrectly emitted as assistant text. The postMessage backstop in
-	// chat-opencode.ts catches any deltas missed by the SSE path.
-	if (cb.onText) {
-		// Only emit text from delta events (incremental chunks).
-		const delta = props["delta"];
-		if (delta && typeof delta === "object") {
-			const deltaText = (delta as Record<string, unknown>)["text"];
-			if (typeof deltaText === "string" && deltaText.length > 0) {
-				cb.onText(deltaText);
-				return;
-			}
-		}
-	}
-
-	// Error events.
-	if (type && /error/i.test(type)) {
-		const message =
-			typeof props["message"] === "string"
-				? (props["message"] as string)
-				: typeof props["error"] === "string"
-					? (props["error"] as string)
-					: `opencode reported error (${type})`;
-	cb.onError(message);
-	return;
-	}
 }

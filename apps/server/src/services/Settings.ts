@@ -5,7 +5,6 @@ import { Context, Effect, Layer } from 'effect';
 import type {
 	AiAgent,
 	ContextWindow,
-	FileTreeScope,
 	ThinkingEffort,
 	UserSettings,
 } from '@revv/shared';
@@ -30,11 +29,15 @@ const DEFAULT_SETTINGS: UserSettings = {
 	aiThinkingEffort: 'medium',
 	aiAgent: 'opencode',
 	aiContextWindow: '200k',
+	// Same default as `aiModel` for the opencode-default install; if the
+	// user is on Claude they should pick a cheaper model (Haiku) via the
+	// settings UI — the AgentSelector also re-picks this when the user
+	// switches agents.
+	aiSuggestionsModel: 'opencode/big-pickle',
 	aiMaxTurns: 60,
 	theme: 'dark',
 	diffViewMode: 'unified',
 	autoFetchInterval: AUTO_FETCH_DEFAULT_INTERVAL,
-	fileTreeScope: 'all',
 	githubHost: 'github.com',
 };
 
@@ -77,6 +80,10 @@ function normalize(raw: unknown): UserSettings {
 			(typeof r['aiContextWindow'] === 'string'
 				? (r['aiContextWindow'] as ContextWindow)
 				: DEFAULT_SETTINGS.aiContextWindow),
+		aiSuggestionsModel:
+			typeof r['aiSuggestionsModel'] === 'string'
+				? (r['aiSuggestionsModel'] as string)
+				: DEFAULT_SETTINGS.aiSuggestionsModel,
 		aiMaxTurns: coerceMaxTurns(r['aiMaxTurns']),
 		theme:
 			typeof r['theme'] === 'string'
@@ -90,10 +97,6 @@ function normalize(raw: unknown): UserSettings {
 			typeof r['autoFetchInterval'] === 'number'
 				? (r['autoFetchInterval'] as number)
 				: DEFAULT_SETTINGS.autoFetchInterval,
-		fileTreeScope:
-			(typeof r['fileTreeScope'] === 'string'
-				? (r['fileTreeScope'] as FileTreeScope)
-				: DEFAULT_SETTINGS.fileTreeScope),
 		githubHost:
 			typeof r['githubHost'] === 'string' && (r['githubHost'] as string).length > 0
 				? (r['githubHost'] as string)

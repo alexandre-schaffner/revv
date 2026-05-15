@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { CloneStatus } from '@revv/shared';
 	import { Clock, Loader2, Check, AlertCircle } from '@lucide/svelte';
-	import { softFade } from '$lib/motion';
+	import { fade } from 'svelte/transition';
 
 	let {
 		status,
@@ -129,7 +129,7 @@
 		class="inline-flex items-center gap-1 text-success"
 		title={tooltip}
 		aria-label={tooltip}
-		transition:softFade
+		transition:fade
 	>
 		<Check {size} />
 		{#if showLabel}

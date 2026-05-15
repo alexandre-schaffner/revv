@@ -11,9 +11,18 @@ import { RepositoryService } from '../services/Repository';
 import { RepoCloneService } from '../services/RepoClone';
 import { SyncService } from '../services/Sync';
 import { TokenProvider } from '../services/TokenProvider';
-import { getOrFetchDiffFiles } from '../services/DiffCache';
+import { DiffCacheService, getOrFetchDiffFiles } from '../services/DiffCache';
 import { GitHubService } from '../services/GitHub';
+import { OpencodeSupervisor } from '../services/OpencodeSupervisor';
+import { SettingsService } from '../services/Settings';
+import { WalkthroughService } from '../services/Walkthrough';
 import { WebSocketHub } from '../services/WebSocketHub';
+import { resolveAgent } from '../services/Ai';
+import {
+	FALLBACK_PROMPTS,
+	generateSuggestions,
+	type SuggestionsWalkthroughContext,
+} from '../ai/providers/suggestions';
 import { withAuth, handleAppError } from './middleware';
 
 // ── Routes ───────────────────────────────────────────────────────────────────
@@ -155,47 +164,17 @@ export const prRoutes = new Elysia({ prefix: '/api/prs' })
 			},
 			{ query: t.Object({ path: t.String() }) },
 		)
-	.get('/:id/repo-tree', async (ctx) => {
-			try {
-				return await AppRuntime.runPromise(
-					Effect.gen(function* () {
-						const prService = yield* PullRequestService;
-						const repoCloneService = yield* RepoCloneService;
-						const tokenProvider = yield* TokenProvider;
+	.get('/:id/suggestions', async (ctx) => {
+		try {
+			const suggestions = await AppRuntime.runPromise(
+				resolveSuggestionsForPr(ctx.params.id),
+			);
+			return { suggestions };
+		} catch (e) {
+			return handleAppError(e, ctx);
+		}
+	})
 
-						const pr = yield* prService.getPr(ctx.params.id);
-						if (!pr.headSha) {
-							ctx.set.status = 404;
-							return { status: 'error' as const, message: 'PR has no head SHA' };
-						}
-
-						const token = yield* tokenProvider.getGitHubToken(ctx.session.user.id);
-						const result = yield* repoCloneService.listFilesAtSha(
-							pr.repositoryId,
-							pr.externalId,
-							pr.headSha,
-							token,
-						);
-
-						if (result.status === 'cloning') {
-							ctx.set.status = 202;
-							return { status: 'cloning' as const };
-						}
-						if (result.status === 'error') {
-							ctx.set.status = 409;
-							return { status: 'error' as const, message: result.message };
-						}
-						return {
-							status: 'ready' as const,
-							headSha: pr.headSha,
-							paths: result.paths,
-						};
-					})
-				);
-			} catch (e) {
-				return handleAppError(e, ctx);
-			}
-		})
 	.post('/sync', async (ctx) => {
 		try {
 			await AppRuntime.runPromise(
@@ -286,6 +265,154 @@ export const prRoutes = new Elysia({ prefix: '/api/prs' })
 			return handleAppError(e, ctx);
 		}
 	});
+
+// ── Suggestions cache + resolver ─────────────────────────────────────────────
+//
+// In-memory cache for the right-panel suggestions endpoint. Keyed on
+// `${prId}:${headSha}:${agent}:${model}` so any of those changing produces a
+// fresh model call. TTL is soft — entries are cleaned up lazily on read.
+//
+// Compliant with CLAUDE.md invariant #1 (SQLite is authoritative): the cache
+// is reconstructible. Any miss re-derives by loading the PR + walkthrough
+// from DB and calling the model. The cache only exists to avoid re-spending
+// tokens when the user opens the same PR repeatedly within one server
+// session.
+//
+// Not invalidated server-side on settings change — the client invalidates
+// its store, and the next request lands on a different `model` key, so the
+// stale entry simply expires unused.
+
+interface SuggestionsCacheEntry {
+	readonly suggestions: string[];
+	readonly expiresAt: number;
+}
+
+const SUGGESTIONS_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const SUGGESTIONS_CACHE_MAX_ENTRIES = 256;
+const suggestionsCache = new Map<string, SuggestionsCacheEntry>();
+
+function suggestionsCacheKey(
+	prId: string,
+	headSha: string,
+	agent: string,
+	model: string,
+): string {
+	return `${prId}:${headSha}:${agent}:${model}`;
+}
+
+function readSuggestionsCache(key: string): string[] | null {
+	const entry = suggestionsCache.get(key);
+	if (!entry) return null;
+	if (entry.expiresAt < Date.now()) {
+		suggestionsCache.delete(key);
+		return null;
+	}
+	return entry.suggestions;
+}
+
+function writeSuggestionsCache(key: string, suggestions: string[]): void {
+	// Bounded eviction: drop the oldest insertion when we hit the cap. Map
+	// preserves insertion order so deleting via `keys().next()` is O(1).
+	if (suggestionsCache.size >= SUGGESTIONS_CACHE_MAX_ENTRIES) {
+		const oldest = suggestionsCache.keys().next().value;
+		if (oldest !== undefined) suggestionsCache.delete(oldest);
+	}
+	suggestionsCache.set(key, {
+		suggestions,
+		expiresAt: Date.now() + SUGGESTIONS_CACHE_TTL_MS,
+	});
+}
+
+function resolveSuggestionsForPr(prId: string) {
+	return Effect.gen(function* () {
+		const settingsSvc = yield* SettingsService;
+		const prService = yield* PullRequestService;
+		const walkthroughSvc = yield* WalkthroughService;
+		const diffCache = yield* DiffCacheService;
+		const supervisor = yield* OpencodeSupervisor;
+
+		const settings = yield* settingsSvc.getSettings();
+		const agent = resolveAgent(settings);
+		const model = settings.aiSuggestionsModel;
+		if (!model || model.length === 0) {
+			return [...FALLBACK_PROMPTS];
+		}
+
+		const pr = yield* prService.getPr(prId);
+		const headSha = pr.headSha ?? 'no-head';
+
+		// Cache check before any DB / model work.
+		const key = suggestionsCacheKey(prId, headSha, agent, model);
+		const cached = readSuggestionsCache(key);
+		if (cached !== null) return cached;
+
+		// Walkthrough context (best-effort) — only available when a
+		// walkthrough has reached `status='complete'` for the current head
+		// SHA. Without it we still produce PR-metadata-only suggestions.
+		let walkthroughContext: SuggestionsWalkthroughContext | null = null;
+		if (pr.headSha) {
+			const walkthrough = yield* walkthroughSvc.getCached(prId, pr.headSha);
+			if (walkthrough) {
+				walkthroughContext = {
+					summary: walkthrough.summary,
+					riskLevel: walkthrough.riskLevel,
+					sentiment: walkthrough.sentiment ?? null,
+					issues: walkthrough.issues.map((i) => ({
+						severity: i.severity,
+						title: i.title,
+						description: i.description,
+						filePath: i.filePath ?? null,
+					})),
+				};
+			}
+		}
+
+		// Diff files (best-effort, cache-only) — we explicitly do NOT
+		// hit GitHub here. If the diff isn't cached yet (e.g., the user
+		// just opened this PR for the first time), we still produce
+		// suggestions from title/body/walkthrough alone.
+		const cachedFiles = yield* diffCache.getCachedFiles(prId);
+		const changedFiles = (cachedFiles ?? []).map((f) => f.path);
+
+		// Build opencode deps lazily — the provider only consults them
+		// when `agent === 'opencode'`. Using the same supervisor
+		// instance that chat/walkthrough share keeps the daemon
+		// single-tenant.
+		const opencodeDeps =
+			agent === 'opencode'
+				? {
+						ensureDaemon: () =>
+							Effect.runPromise(supervisor.ensureRunning()),
+						client: () => Effect.runPromise(supervisor.client()),
+					}
+				: undefined;
+
+		const suggestions = yield* Effect.tryPromise({
+			try: () =>
+				generateSuggestions({
+					prTitle: pr.title,
+					prBody: pr.body,
+					changedFiles,
+					additions: pr.additions,
+					deletions: pr.deletions,
+					walkthrough: walkthroughContext,
+					agent,
+					model,
+					...(opencodeDeps !== undefined ? { opencodeDeps } : {}),
+				}),
+			// Provider has its own internal fallback; this catch is
+			// belt-and-suspenders for the rare case where the Promise
+			// rejects despite the provider's try/catch.
+			catch: () => null as null,
+		}).pipe(
+			Effect.catchAll(() => Effect.succeed([...FALLBACK_PROMPTS] as string[])),
+			Effect.map((v) => (v === null ? [...FALLBACK_PROMPTS] : v)),
+		);
+
+		writeSuggestionsCache(key, suggestions);
+		return suggestions;
+	});
+}
 
 type PrMutationAction = 'convert-to-draft' | 'ready-for-review' | 'close';
 

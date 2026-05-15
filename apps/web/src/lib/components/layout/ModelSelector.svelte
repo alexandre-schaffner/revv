@@ -173,7 +173,7 @@
 <PopoverRoot bind:open>
 	<PopoverTrigger>
 		<button
-			class="flex items-center gap-1.5 rounded-md px-2 py-1 transition-colors hover:bg-bg-secondary"
+			class="flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 transition-colors hover:bg-bg-secondary"
 		>
 		{#if currentProviderIcon.path}
 			<svg
@@ -216,7 +216,7 @@
 				{@const icon = getProviderIcon(group.provider)}
 				{#each group.models as opt (opt.value)}
 					<button
-						class="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs text-text-secondary transition-colors hover:bg-bg-tertiary"
+						class="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-xs text-text-secondary transition-colors hover:bg-bg-tertiary"
 						onclick={() => select(opt.value)}
 					>
 					<svg
@@ -276,7 +276,7 @@
 			</div>
 			{#each CONTEXT_WINDOW_OPTIONS as opt (opt.value)}
 				<button
-					class="flex w-full items-center justify-between rounded-sm px-2 py-1.5 text-xs text-text-secondary transition-colors hover:bg-bg-tertiary"
+					class="flex w-full cursor-pointer items-center justify-between rounded-sm px-2 py-1.5 text-xs text-text-secondary transition-colors hover:bg-bg-tertiary"
 					onclick={() => selectWindow(opt.value)}
 				>
 					{opt.label}

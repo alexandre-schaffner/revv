@@ -51,7 +51,7 @@
     <PopoverRoot bind:open>
         <PopoverTrigger>
             <button
-                class="flex items-center gap-1.5 rounded-md px-2 py-1 transition-colors hover:bg-bg-secondary"
+                class="flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 transition-colors hover:bg-bg-secondary"
             >
                 <Brain size={12} class="text-text-muted" />
                 <span class="text-xs text-text-secondary">{currentLabel}</span>
@@ -61,7 +61,7 @@
         <PopoverContent class="w-40 p-1" align="start" side="top">
             {#each options as opt (opt.value)}
                 <button
-                    class="flex w-full items-center justify-between rounded-sm px-2 py-1.5 text-xs text-text-secondary transition-colors hover:bg-bg-tertiary"
+                    class="flex w-full cursor-pointer items-center justify-between rounded-sm px-2 py-1.5 text-xs text-text-secondary transition-colors hover:bg-bg-tertiary"
                     onclick={() => select(opt.value)}
                 >
                     {opt.label}

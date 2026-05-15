@@ -140,7 +140,7 @@
 		letter-spacing: 0.14em;
 		text-transform: uppercase;
 		cursor: pointer;
-		transition: color var(--duration-quick, 240ms) var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1));
+		transition: color var(--duration-snap) var(--ease-out-expo);
 	}
 
 	.back:hover {
@@ -148,7 +148,7 @@
 	}
 
 	.back :global(svg) {
-		transition: transform var(--duration-quick, 240ms) var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1));
+		transition: transform var(--duration-quick) var(--ease-out-expo);
 	}
 
 	.back:hover :global(svg) {
@@ -202,14 +202,14 @@
 		cursor: pointer;
 		letter-spacing: 0.01em;
 		transition:
-			background-color 320ms cubic-bezier(0.16, 1, 0.3, 1),
-			border-color 320ms cubic-bezier(0.16, 1, 0.3, 1),
-			color 320ms cubic-bezier(0.16, 1, 0.3, 1),
-			transform 280ms cubic-bezier(0.16, 1, 0.3, 1);
+			background-color var(--duration-snap) var(--ease-out-expo),
+			border-color var(--duration-snap) var(--ease-out-expo),
+			color var(--duration-snap) var(--ease-out-expo),
+			transform var(--duration-smooth) var(--ease-out-expo);
 	}
 
 	.primary svg {
-		transition: transform 320ms cubic-bezier(0.16, 1, 0.3, 1);
+		transition: transform var(--duration-smooth) var(--ease-out-expo);
 	}
 
 	.primary:hover:not(:disabled) {
@@ -285,7 +285,7 @@
 		letter-spacing: 0.12em;
 		text-transform: uppercase;
 		cursor: pointer;
-		transition: all 280ms cubic-bezier(0.16, 1, 0.3, 1);
+		transition: all var(--duration-snap) var(--ease-out-expo);
 	}
 
 	.copy-btn:hover {
@@ -298,7 +298,7 @@
 		font-size: 12px;
 		color: var(--ob-text-muted);
 		text-decoration: none;
-		transition: color 280ms cubic-bezier(0.16, 1, 0.3, 1);
+		transition: color var(--duration-snap) var(--ease-out-expo);
 	}
 
 	.link:hover {
@@ -331,7 +331,7 @@
 		border: 0;
 		cursor: pointer;
 		padding: 4px 0;
-		transition: color 280ms cubic-bezier(0.16, 1, 0.3, 1);
+		transition: color var(--duration-snap) var(--ease-out-expo);
 	}
 
 	.cancel:hover {

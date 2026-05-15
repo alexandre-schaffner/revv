@@ -9,7 +9,6 @@ export type {
 	ThinkingEffort,
 	ContextWindow,
 	AiAgent,
-	FileTreeScope,
 	SessionStatus,
 	ThreadStatus,
 	AuthorRole,
@@ -35,4 +34,7 @@ export type {
 	ChatTask,
 	ChatPlan,
 	ChatSubagentInvocation,
+	ChatQuestion,
+	NormalizedQuestion,
+	NormalizedQuestionOption,
 } from './chat';

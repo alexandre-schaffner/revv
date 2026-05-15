@@ -19,12 +19,17 @@
 
 import { Context, Effect, Layer } from "effect";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
-import type { ChatTask, InteractionMode } from "@revv/shared";
+import type {
+	ChatTask,
+	InteractionMode,
+	NormalizedQuestion,
+} from "@revv/shared";
 import { DbService } from "./Db";
 import {
 	chatActivities,
 	chatMessages,
 	chatPlans,
+	chatQuestions,
 	chatSessions,
 	chatSubagentInvocations,
 	chatTasks,
@@ -130,6 +135,23 @@ export interface ChatSubagentInvocationRow {
 	readonly completedAt: string | null;
 }
 
+export interface ChatQuestionRow {
+	readonly id: string;
+	readonly chatSessionId: string;
+	readonly turnId: string;
+	readonly source: "claude" | "opencode";
+	readonly providerRequestId: string;
+	readonly providerToolCallId: string | null;
+	readonly previewFormat: "markdown" | "html";
+	readonly questions: ReadonlyArray<NormalizedQuestion>;
+	readonly status: "pending" | "answered" | "rejected" | "superseded";
+	readonly answers: Readonly<Record<string, ReadonlyArray<string>>> | null;
+	readonly customAnswers: Readonly<Record<string, string>> | null;
+	readonly sequence: number;
+	readonly createdAt: string;
+	readonly answeredAt: string | null;
+}
+
 /**
  * One synthetic timeline entry for a turn's task list. Aggregated server-side
  * because tasks land as N rows but the UI renders as one section.
@@ -146,7 +168,8 @@ export type ChatTimelineEntry =
 	| (ChatActivityRow & { readonly entryKind: "activity" })
 	| ChatTaskListTimelineEntry
 	| (ChatPlanRow & { readonly entryKind: "plan" })
-	| (ChatSubagentInvocationRow & { readonly entryKind: "subagent" });
+	| (ChatSubagentInvocationRow & { readonly entryKind: "subagent" })
+	| (ChatQuestionRow & { readonly entryKind: "question" });
 
 export class ChatSessionService extends Context.Tag("ChatSessionService")<
 	ChatSessionService,
@@ -339,6 +362,52 @@ export class ChatSessionService extends Context.Tag("ChatSessionService")<
 			readonly chatSessionId: string;
 			readonly providerCallId: string;
 		}) => Effect.Effect<ChatSubagentInvocationRow | null>;
+
+		// ── questions ──────────────────────────────────────────────────────
+
+		/**
+		 * Insert a new question prompt in `pending` status. Idempotent on
+		 * `(chat_session_id, provider_request_id)` — re-emitting the same
+		 * provider request returns the existing row unchanged.
+		 */
+		readonly createQuestion: (params: {
+			readonly chatSessionId: string;
+			readonly turnId: string;
+			readonly source: "claude" | "opencode";
+			readonly providerRequestId: string;
+			readonly providerToolCallId?: string | null;
+			readonly previewFormat: "markdown" | "html";
+			readonly questions: ReadonlyArray<NormalizedQuestion>;
+		}) => Effect.Effect<ChatQuestionRow>;
+
+		/**
+		 * Flip the question's status. Idempotent: if the row is already in a
+		 * terminal state (anything other than 'pending'), this is a no-op
+		 * and returns the existing row unchanged. Used by both the user's
+		 * answer endpoint and the opencode SSE follow-up handler — whichever
+		 * runs second hits the no-op path.
+		 */
+		readonly decideQuestion: (params: {
+			readonly questionId: string;
+			readonly status: "answered" | "rejected" | "superseded";
+			readonly answers?: Readonly<Record<string, ReadonlyArray<string>>>;
+			readonly customAnswers?: Readonly<Record<string, string>>;
+		}) => Effect.Effect<ChatQuestionRow | null>;
+
+		readonly findQuestion: (
+			questionId: string,
+		) => Effect.Effect<ChatQuestionRow | null>;
+
+		readonly findPendingQuestion: (
+			chatSessionId: string,
+		) => Effect.Effect<ChatQuestionRow | null>;
+
+		/**
+		 * On boot, mark every pending question as `superseded`. Their
+		 * in-memory deferreds are gone and the agent run that issued them
+		 * has died — re-asking is the only recovery path.
+		 */
+		readonly supersedePendingQuestionsOnBoot: () => Effect.Effect<number>;
 	}
 >() {}
 
@@ -421,6 +490,61 @@ export const ChatSessionServiceLive = Layer.effect(
 			createdAt: row.createdAt,
 			decidedAt: row.decidedAt,
 		});
+
+		const rowToQuestionRow = (
+			row: typeof chatQuestions.$inferSelect,
+		): ChatQuestionRow => {
+			let parsedQuestions: ReadonlyArray<NormalizedQuestion> = [];
+			try {
+				parsedQuestions = JSON.parse(row.questionsJson) as ReadonlyArray<NormalizedQuestion>;
+			} catch {
+				// Corrupt JSON — render as an empty list rather than crashing the
+				// timeline. This should never happen in practice; the column is
+				// only ever populated via JSON.stringify in createQuestion.
+				parsedQuestions = [];
+			}
+			let parsedAnswers:
+				| Readonly<Record<string, ReadonlyArray<string>>>
+				| null = null;
+			if (row.answersJson) {
+				try {
+					parsedAnswers = JSON.parse(row.answersJson) as Record<
+						string,
+						ReadonlyArray<string>
+					>;
+				} catch {
+					parsedAnswers = null;
+				}
+			}
+			let parsedCustom: Readonly<Record<string, string>> | null = null;
+			if (row.customAnswersJson) {
+				try {
+					parsedCustom = JSON.parse(row.customAnswersJson) as Record<
+						string,
+						string
+					>;
+				} catch {
+					parsedCustom = null;
+				}
+			}
+			return {
+				id: row.id,
+				chatSessionId: row.chatSessionId,
+				turnId: row.turnId,
+				source: row.source as ChatQuestionRow["source"],
+				providerRequestId: row.providerRequestId,
+				providerToolCallId: row.providerToolCallId,
+				previewFormat:
+					row.previewFormat === "html" ? "html" : "markdown",
+				questions: parsedQuestions,
+				status: row.status as ChatQuestionRow["status"],
+				answers: parsedAnswers,
+				customAnswers: parsedCustom,
+				sequence: row.sequence,
+				createdAt: row.createdAt,
+				answeredAt: row.answeredAt,
+			};
+		};
 
 		const rowToSubagentRow = (
 			row: typeof chatSubagentInvocations.$inferSelect,
@@ -752,6 +876,12 @@ export const ChatSessionServiceLive = Layer.effect(
 						.where(eq(chatSubagentInvocations.chatSessionId, chatSessionId))
 						.orderBy(asc(chatSubagentInvocations.sequence))
 						.all();
+					const questions = db
+						.select()
+						.from(chatQuestions)
+						.where(eq(chatQuestions.chatSessionId, chatSessionId))
+						.orderBy(asc(chatQuestions.sequence))
+						.all();
 					const taskRows = db
 						.select()
 						.from(chatTasks)
@@ -852,6 +982,12 @@ export const ChatSessionServiceLive = Layer.effect(
 						entries.push({
 							sequence: s.sequence,
 							entry: { ...rowToSubagentRow(s), entryKind: "subagent" },
+						});
+					}
+					for (const q of questions) {
+						entries.push({
+							sequence: q.sequence,
+							entry: { ...rowToQuestionRow(q), entryKind: "question" },
 						});
 					}
 					for (const t of taskEntries) {
@@ -1197,6 +1333,182 @@ export const ChatSessionServiceLive = Layer.effect(
 						)
 						.get();
 					return row ? rowToSubagentRow(row) : null;
+				}),
+
+			// ── questions ──────────────────────────────────────────────
+
+			createQuestion: ({
+				chatSessionId,
+				turnId,
+				source,
+				providerRequestId,
+				providerToolCallId,
+				previewFormat,
+				questions,
+			}) =>
+				Effect.sync(() => {
+					const existing = db
+						.select()
+						.from(chatQuestions)
+						.where(
+							and(
+								eq(chatQuestions.chatSessionId, chatSessionId),
+								eq(chatQuestions.providerRequestId, providerRequestId),
+							),
+						)
+						.get();
+					if (existing) {
+						return rowToQuestionRow(existing);
+					}
+					const id = crypto.randomUUID();
+					const now = nowIso();
+					let row: ChatQuestionRow | null = null;
+					db.transaction((tx) => {
+						const seqRow = tx
+							.select({ next: chatSessions.nextSequence })
+							.from(chatSessions)
+							.where(eq(chatSessions.id, chatSessionId))
+							.get();
+						if (!seqRow) {
+							throw new Error(
+								`chat_sessions row ${chatSessionId} disappeared during question insert`,
+							);
+						}
+						const sequence = seqRow.next;
+						tx
+							.update(chatSessions)
+							.set({
+								nextSequence: sequence + 1,
+								lastActivityAt: now,
+							})
+							.where(eq(chatSessions.id, chatSessionId))
+							.run();
+						tx
+							.insert(chatQuestions)
+							.values({
+								id,
+								chatSessionId,
+								turnId,
+								source,
+								providerRequestId,
+								providerToolCallId: providerToolCallId ?? null,
+								previewFormat,
+								questionsJson: JSON.stringify(questions),
+								status: "pending",
+								answersJson: null,
+								customAnswersJson: null,
+								sequence,
+								createdAt: now,
+								answeredAt: null,
+							})
+							.run();
+						row = {
+							id,
+							chatSessionId,
+							turnId,
+							source,
+							providerRequestId,
+							providerToolCallId: providerToolCallId ?? null,
+							previewFormat,
+							questions,
+							status: "pending",
+							answers: null,
+							customAnswers: null,
+							sequence,
+							createdAt: now,
+							answeredAt: null,
+						};
+					});
+					if (!row) {
+						throw new Error(
+							"createQuestion transaction did not assign row",
+						);
+					}
+					return row;
+				}),
+
+			decideQuestion: ({ questionId, status, answers, customAnswers }) =>
+				Effect.sync(() => {
+					const existing = db
+						.select()
+						.from(chatQuestions)
+						.where(eq(chatQuestions.id, questionId))
+						.get();
+					if (!existing) return null;
+					if (existing.status !== "pending") {
+						// Idempotent: already resolved — return the existing row
+						// untouched so concurrent callers (answer endpoint +
+						// opencode SSE follow-up) settle on the same final state.
+						return rowToQuestionRow(existing);
+					}
+					const now = nowIso();
+					db
+						.update(chatQuestions)
+						.set({
+							status,
+							answersJson:
+								answers === undefined ? null : JSON.stringify(answers),
+							customAnswersJson:
+								customAnswers === undefined
+									? null
+									: JSON.stringify(customAnswers),
+							answeredAt: now,
+						})
+						.where(eq(chatQuestions.id, questionId))
+						.run();
+					const row = db
+						.select()
+						.from(chatQuestions)
+						.where(eq(chatQuestions.id, questionId))
+						.get();
+					return row ? rowToQuestionRow(row) : null;
+				}),
+
+			findQuestion: (questionId) =>
+				Effect.sync(() => {
+					const row = db
+						.select()
+						.from(chatQuestions)
+						.where(eq(chatQuestions.id, questionId))
+						.get();
+					return row ? rowToQuestionRow(row) : null;
+				}),
+
+			findPendingQuestion: (chatSessionId) =>
+				Effect.sync(() => {
+					const row = db
+						.select()
+						.from(chatQuestions)
+						.where(
+							and(
+								eq(chatQuestions.chatSessionId, chatSessionId),
+								eq(chatQuestions.status, "pending"),
+							),
+						)
+						.orderBy(desc(chatQuestions.sequence))
+						.limit(1)
+						.get();
+					return row ? rowToQuestionRow(row) : null;
+				}),
+
+			supersedePendingQuestionsOnBoot: () =>
+				Effect.sync(() => {
+					// Count first (Bun's drizzle `.run()` returns void, so we
+					// can't read `.changes` off the UPDATE). Cheap because the
+					// (chat_session_id, status) index covers pending rows.
+					const pending = db
+						.select({ count: sql<number>`COUNT(*)` })
+						.from(chatQuestions)
+						.where(eq(chatQuestions.status, "pending"))
+						.get();
+					const n = pending?.count ?? 0;
+					if (n === 0) return 0;
+					db
+						.update(chatQuestions)
+						.set({ status: "superseded", answeredAt: nowIso() })
+						.where(eq(chatQuestions.status, "pending"))
+						.run();
+					return n;
 				}),
 		};
 	}),

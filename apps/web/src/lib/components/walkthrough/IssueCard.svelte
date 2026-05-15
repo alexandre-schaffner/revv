@@ -188,9 +188,9 @@
 	button.issue-card {
 		cursor: pointer;
 		transition:
-			transform 120ms ease,
-			border-color 120ms ease,
-			box-shadow 120ms ease;
+			transform var(--duration-snap) var(--ease-soft),
+			border-color var(--duration-snap) var(--ease-soft),
+			box-shadow var(--duration-snap) var(--ease-soft);
 	}
 
 	button.issue-card:hover {
@@ -212,8 +212,8 @@
 	label.issue-card {
 		cursor: pointer;
 		transition:
-			border-color 120ms ease,
-			background 120ms ease;
+			border-color var(--duration-snap) var(--ease-soft),
+			background var(--duration-snap) var(--ease-soft);
 	}
 
 	.issue-card--checked {
@@ -312,7 +312,7 @@
 		border-radius: 9999px;
 		background: var(--color-bg-tertiary);
 		flex-shrink: 0;
-		transition: color 120ms ease;
+		transition: color var(--duration-snap) var(--ease-soft);
 	}
 
 	/* ── Posted badge ─────────────────────────────────────────────────── */

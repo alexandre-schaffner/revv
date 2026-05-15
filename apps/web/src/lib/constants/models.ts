@@ -23,6 +23,18 @@ export function getDefaultModel(agent: 'opencode' | 'claude'): string {
 	return DEFAULT_MODEL_BY_AGENT[agent];
 }
 
+// Low-cost defaults for the right-panel suggestions feature. Pinned to the
+// cheapest reasonable model in each agent's catalog so generating PR-aware
+// prompts on every PR open doesn't burn Sonnet/Opus tokens.
+const DEFAULT_SUGGESTIONS_MODEL_BY_AGENT: Record<'opencode' | 'claude', string> = {
+	opencode: 'opencode/big-pickle',
+	claude: 'claude-haiku-4-5-20251001',
+};
+
+export function getDefaultSuggestionsModel(agent: 'opencode' | 'claude'): string {
+	return DEFAULT_SUGGESTIONS_MODEL_BY_AGENT[agent];
+}
+
 // ThinkingEffort only applies to Claude Code
 export function agentSupportsThinkingEffort(agent: 'opencode' | 'claude'): boolean {
 	return agent === 'claude';

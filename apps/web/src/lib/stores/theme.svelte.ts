@@ -1,71 +1,88 @@
+import { untrack } from 'svelte';
+
 export type ThemePreference = 'system' | 'light' | 'dark';
-export type DiffThemePreference = 'sync' | 'light' | 'dark';
+type DiffThemePreference = 'sync' | 'light' | 'dark';
 
-const STORAGE_KEY = 'revv-theme';
-const DIFF_STORAGE_KEY = 'revv-diff-theme';
+const THEME_KEY = 'revv-theme';
+const DIFF_THEME_KEY = 'revv-diff-theme';
 
-let preference = $state<ThemePreference>(getStoredPreference());
-let diffPreference = $state<DiffThemePreference>(getStoredDiffPreference());
+// ── State ────────────────────────────────────────────────────────────────────
 
-function getStoredPreference(): ThemePreference {
-	if (typeof window === 'undefined') return 'system';
-	const stored = localStorage.getItem(STORAGE_KEY);
-	if (stored === 'light' || stored === 'dark') return stored;
-	return 'system';
+let preference = $state<ThemePreference>(readStored(THEME_KEY, 'system'));
+let diffPreference = $state<DiffThemePreference>(readStored(DIFF_THEME_KEY, 'sync'));
+
+function readStored<T extends string>(key: string, fallback: T): T {
+	if (typeof window === 'undefined') return fallback;
+	const v = localStorage.getItem(key);
+	return v === 'light' || v === 'dark' ? (v as T) : fallback;
 }
 
-function getStoredDiffPreference(): DiffThemePreference {
-	if (typeof window === 'undefined') return 'sync';
-	const stored = localStorage.getItem(DIFF_STORAGE_KEY);
-	if (stored === 'light' || stored === 'dark') return stored;
-	return 'sync';
-}
+// ── DOM ──────────────────────────────────────────────────────────────────────
 
-function applyTheme(pref: ThemePreference): void {
+function apply(pref: ThemePreference): void {
 	const isDark =
 		pref === 'dark' ||
-		(pref === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-
+		(pref === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
 	document.documentElement.classList.toggle('dark', isDark);
 	document.documentElement.style.colorScheme = isDark ? 'dark' : 'light';
 }
 
-/** Call once from the root layout's $effect. Returns a cleanup function. */
-export function initTheme(): () => void {
-	applyTheme(preference);
-
-	const mq = window.matchMedia('(prefers-color-scheme: dark)');
-	const handler = () => {
-		if (preference === 'system') applyTheme('system');
-	};
-	mq.addEventListener('change', handler);
-
-	return () => mq.removeEventListener('change', handler);
+/** Sync the data-diff-theme attribute on <html> so the CSS rules in app.css
+ *  can force Pierre's color-scheme for explicit light/dark overrides.
+ *  When 'sync', the attribute is removed and Pierre inherits from the document. */
+function applyDiffTheme(pref: DiffThemePreference): void {
+	if (pref === 'sync') {
+		delete document.documentElement.dataset.diffTheme;
+	} else {
+		document.documentElement.dataset.diffTheme = pref;
+	}
 }
 
-export function setThemePreference(pref: ThemePreference): void {
-	preference = pref;
-	localStorage.setItem(STORAGE_KEY, pref);
-	applyTheme(pref);
+/** Apply a theme change with a smooth crossfade using the View Transition API.
+ *  The browser captures a screenshot of the old state, applies the new theme
+ *  in the callback, then crossfades the two at the compositor level — one
+ *  uniform fade, no per-element timing issues.
+ *  Falls back to instant switch on browsers without support (Safari <18). */
+function swap(pref: ThemePreference): void {
+	if (!document.startViewTransition) {
+		apply(pref);
+		return;
+	}
+	document.startViewTransition(() => apply(pref));
+}
+
+// ── Public API ───────────────────────────────────────────────────────────────
+
+/** Call once from root layout. Returns cleanup. Untracked — must never re-run. */
+export function initTheme(): () => void {
+	untrack(() => {
+		apply(preference);
+		applyDiffTheme(diffPreference);
+	});
+
+	const mq = matchMedia('(prefers-color-scheme: dark)');
+	const onChange = () =>
+		untrack(() => {
+			if (preference === 'system') {
+				swap('system');
+			}
+		});
+	mq.addEventListener('change', onChange);
+	return () => mq.removeEventListener('change', onChange);
 }
 
 export function getThemePreference(): ThemePreference {
 	return preference;
 }
 
+export function setThemePreference(pref: ThemePreference): void {
+	preference = pref;
+	localStorage.setItem(THEME_KEY, pref);
+	swap(pref);
+}
+
 export function setDiffThemePreference(pref: DiffThemePreference): void {
 	diffPreference = pref;
-	localStorage.setItem(DIFF_STORAGE_KEY, pref);
-}
-
-export function getDiffThemePreference(): DiffThemePreference {
-	return diffPreference;
-}
-
-/** Resolved diff theme type: when diff preference is 'sync', follows the app theme. */
-export function getDiffThemeType(): 'light' | 'dark' | 'system' {
-	if (diffPreference !== 'sync') return diffPreference;
-	if (preference === 'light') return 'light';
-	if (preference === 'dark') return 'dark';
-	return 'system';
+	localStorage.setItem(DIFF_THEME_KEY, pref);
+	applyDiffTheme(pref);
 }

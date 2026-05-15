@@ -18,6 +18,7 @@ import {
 } from './review.svelte';
 import {
 	onWalkthroughComplete,
+	onWalkthroughEdited,
 	onWalkthroughError,
 	prefetchWalkthrough,
 	hydrateFromCache,
@@ -130,6 +131,13 @@ function handleMessage(msg: WsServerMessage): void {
 			break;
 		case 'walkthrough:complete':
 			onWalkthroughComplete(msg.data.prId, msg.data.walkthroughId);
+			break;
+		case 'walkthrough:edited':
+			onWalkthroughEdited(
+				msg.data.prId,
+				msg.data.walkthroughId,
+				msg.data.event,
+			);
 			break;
 		case 'walkthrough:error':
 			onWalkthroughError(msg.data.prId, msg.data.message);

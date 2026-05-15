@@ -57,15 +57,6 @@ export type ContextWindow = '200k' | '1m';
 
 export type AiAgent = 'opencode' | 'claude';
 
-/**
- * Scope of the sidebar's repo file tree on a PR review page.
- * - `'changed'`: only files modified in the PR's diff (the original behavior)
- * - `'all'`:     every file in the repo at the PR's head SHA, with diff
- *                files visually highlighted (the default since the
- *                tree-software integration)
- */
-export type FileTreeScope = 'changed' | 'all';
-
 export interface UserSettings {
 	id: string;
 	aiProvider: string;
@@ -73,6 +64,15 @@ export interface UserSettings {
 	aiThinkingEffort: ThinkingEffort;
 	aiAgent: AiAgent;
 	aiContextWindow: ContextWindow;
+	/**
+	 * Low-cost model used for one-shot, no-tools PR-aware suggestion
+	 * generation (right-panel empty-state prompts). Follows the global
+	 * `aiAgent` — pick from the opencode catalog when `aiAgent='opencode'`,
+	 * the Claude catalog when `aiAgent='claude'`. Defaults to a cheap model
+	 * (e.g. Haiku for Claude) so generating suggestions for every PR open
+	 * doesn't burn the same tokens as the main review agent.
+	 */
+	aiSuggestionsModel: string;
 	/**
 	 * Maximum number of agent turns (tool-use round trips) within a single
 	 * chat turn or walkthrough generation. Higher values let complex PRs and
@@ -83,7 +83,6 @@ export interface UserSettings {
 	theme: string;
 	diffViewMode: string;
 	autoFetchInterval: number;
-	fileTreeScope: FileTreeScope;
 	/**
 	 * GitHub host the app authenticates against. `'nocturlab.ghe.com'` for
 	 * the bundled GHE instance (default) or `'github.com'` for public

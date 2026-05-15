@@ -520,8 +520,8 @@
 		position: relative;
 		background-color: var(--color-bg-primary);
 		transition:
-			grid-template-columns 100ms var(--ease-out-expo),
-			grid-template-rows 100ms var(--ease-out-expo);
+			grid-template-columns var(--duration-instant) var(--ease-out-expo),
+			grid-template-rows var(--duration-instant) var(--ease-out-expo);
 	}
 
 	/* Suppress the column transition while dragging so resize feels instant */
@@ -558,9 +558,9 @@
 		width: 1px;
 		background: var(--color-border);
 		transition:
-			width 120ms ease,
-			left 120ms ease,
-			background-color 120ms ease;
+			width var(--duration-snap) var(--ease-soft),
+			left var(--duration-snap) var(--ease-soft),
+			background-color var(--duration-snap) var(--ease-soft);
 	}
 
 	.resize-handle:hover::after,
@@ -737,7 +737,7 @@
 		overflow: hidden;
 		background: var(--color-panel-bg);
 		transform: translateX(100%);
-		transition: transform 100ms var(--ease-out-expo);
+		transition: transform var(--duration-instant) var(--ease-out-expo);
 		/* Above main content, below topbar/CommandPalette. */
 		z-index: 5;
 	}
@@ -775,9 +775,9 @@
 		width: 1px;
 		background: var(--color-border-subtle);
 		transition:
-			width 120ms ease,
-			left 120ms ease,
-			background-color 120ms ease;
+			width var(--duration-snap) var(--ease-soft),
+			left var(--duration-snap) var(--ease-soft),
+			background-color var(--duration-snap) var(--ease-soft);
 	}
 
 	.right-resize-handle:hover::after,

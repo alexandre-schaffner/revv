@@ -19,7 +19,6 @@
 	getPrScrollPosition,
 	setPrScrollPosition,
 } from '$lib/stores/review.svelte';
-	import { getDiffThemeType } from '$lib/stores/theme.svelte';
 	import { api } from '$lib/api/client';
 	import ReviewLayout from '$lib/components/review/ReviewLayout.svelte';
 	import GuidedWalkthrough from '$lib/components/walkthrough/GuidedWalkthrough.svelte';
@@ -32,7 +31,6 @@
 	import { Badge } from '$lib/components/ui/badge';
 
 	const pr = $derived(getSelectedPr());
-	const themeType = $derived(getDiffThemeType());
 	const files = $derived(getReviewFiles());
 	const isLoading = $derived(getIsLoadingFiles());
 	const loadError = $derived(getFilesError());
@@ -79,12 +77,21 @@
 	// Restore AFTER the DOM update (container is now visible again).
 	// Re-runs on tab change AND on PR change — both flows need to land at
 	// the right scroll offset. `restoredFor` keys on `${prId}:${tab}` so
-	// we don't refight the user's own scrolling once they're inside a tab.
+	// repeated reactive ticks for the same active tab don't refight the
+	// user's scrolling. We MUST clear it when the user passes through the
+	// diff tab: diff hides `.review-content` via display:none, and browsers
+	// don't reliably preserve scrollTop across that toggle — the re-entry
+	// into walkthrough/request-changes needs a fresh restore, otherwise
+	// the stamp would still match and we'd land at the top.
 	let restoredFor: string | null = null;
 	$effect(() => {
 		const tab = activeTab;
 		const prId = page.params['prId'];
-		if (!scrollRootEl || tab === 'diff' || !prId) return;
+		if (!scrollRootEl || !prId) return;
+		if (tab === 'diff') {
+			restoredFor = null;
+			return;
+		}
 		const stamp = `${prId}:${tab}`;
 		if (stamp === restoredFor) return;
 		restoredFor = stamp;
@@ -246,7 +253,7 @@
 	<div class="review-page">
 		{#if activeTab === 'diff'}
 			{#if files.length > 0}
-				<ReviewLayout prId={page.params['prId'] ?? ''} {files} {themeType} />
+				<ReviewLayout prId={page.params['prId'] ?? ''} {files} />
 			{:else}
 				<div class="loading">
 					<p>No changed files in this PR</p>

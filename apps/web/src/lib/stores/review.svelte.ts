@@ -51,7 +51,6 @@ export function clearReviewFiles(): void {
 	// we deliberately don't null it here — `switchPrViewState` already loaded
 	// the new PR's saved file path (or `null` for first visits) before this
 	// runs. Wiping it would lose that restore.
-	clearRepoTree();
 	clearRepoFile();
 	clearSession();
 }
@@ -200,154 +199,6 @@ export async function loadRepoFile(prId: string, path: string): Promise<void> {
 		if (seq !== repoFileLoadSeq) return;
 		repoFileStatus = 'error';
 		repoFileError = e instanceof Error ? e.message : 'Failed to load file';
-	}
-}
-
-// --- Repo tree (full filesystem at PR head_sha) ------------------------------
-//
-// Sidebar's file-tree view shows every file in the repo at the selected PR's
-// head SHA, with PR-changed files decorated by `setGitStatus`. Source is the
-// long-lived local clone (`~/.revv/repos/{owner}/{name}`) — see
-// `apps/server/src/services/RepoClone.ts:listFilesAtSha`. The endpoint is
-// idempotent and immutable per (repo, head_sha), so a successful load doesn't
-// need to be refetched until the PR's head SHA changes.
-
-type RepoTreeStatus = 'idle' | 'loading' | 'ready' | 'cloning' | 'error';
-
-let repoTreePaths = $state<string[]>([]);
-let repoTreeStatus = $state<RepoTreeStatus>('idle');
-// The (prId, headSha) pair we last successfully loaded. Used as a cache key so
-// switching back to a PR we already fetched doesn't re-hit the network.
-let repoTreePrId = $state<string | null>(null);
-let repoTreeHeadSha = $state<string | null>(null);
-let repoTreeError = $state<string | null>(null);
-
-export function getRepoTreePaths(): string[] {
-	return repoTreePaths;
-}
-
-export function getRepoTreeStatus(): RepoTreeStatus {
-	return repoTreeStatus;
-}
-
-export function getRepoTreeHeadSha(): string | null {
-	return repoTreeHeadSha;
-}
-
-export function getRepoTreeError(): string | null {
-	return repoTreeError;
-}
-
-export function clearRepoTree(): void {
-	repoTreePaths = [];
-	repoTreeStatus = 'idle';
-	repoTreePrId = null;
-	repoTreeHeadSha = null;
-	repoTreeError = null;
-}
-
-// Coalesce concurrent requests to the same PR.
-let repoTreeLoadSeq = 0;
-
-/**
- * Fetch the repo file tree for the given PR. No-op if the (prId, headSha)
- * pair is already loaded. Status transitions:
- *
- *   idle/error → loading → ready | cloning | error
- *
- * `cloning` is a soft state — the UI shows a placeholder until the
- * `repos:clone-status` WebSocket event flips the repo to `'ready'`, at
- * which point `+layout.svelte` calls this again and we get a real tree.
- */
-export async function loadRepoTreeForPr(prId: string): Promise<void> {
-	// Look up the PR's current head SHA from the live PR list. Bail if the
-	// PR isn't in the store yet — the caller will retry once `prs:updated`
-	// merges it in.
-	const pr = getPullRequests().find((p) => p.id === prId);
-	const headSha = pr?.headSha;
-	if (!headSha) {
-		// Reset to idle for the in-flight selection so the UI doesn't keep
-		// showing a stale tree from a previously-selected PR.
-		repoTreePaths = [];
-		repoTreeStatus = 'idle';
-		repoTreePrId = prId;
-		repoTreeHeadSha = null;
-		repoTreeError = null;
-		return;
-	}
-
-	// Cache hit — same PR + same SHA, already loaded.
-	if (
-		repoTreeStatus === 'ready' &&
-		repoTreePrId === prId &&
-		repoTreeHeadSha === headSha
-	) {
-		return;
-	}
-
-	const seq = ++repoTreeLoadSeq;
-	repoTreeStatus = 'loading';
-	repoTreeError = null;
-	// Switching to a different PR must drop the previous tree's paths
-	// immediately. Otherwise SidebarFilesView keeps rendering the prior PR's
-	// (potentially different-repo) file rows under `status='loading'`, and any
-	// click during the load window calls `loadRepoFile(newPrId, oldPath)` —
-	// which 404s because that path doesn't exist in the new PR's repo. The
-	// "hold onto previous paths" optimization is only safe for same-PR refreshes
-	// (e.g. a new head SHA on the active PR), which is what the cache-hit
-	// branch above already covers; here we know the PR id changed.
-	if (repoTreePrId !== null && repoTreePrId !== prId) {
-		repoTreePaths = [];
-		repoTreeHeadSha = null;
-	}
-	repoTreePrId = prId;
-
-	try {
-		const { data, error, status } = await api.api.prs({ id: prId })['repo-tree'].get();
-
-		// Discard if a newer call started while we were waiting.
-		if (seq !== repoTreeLoadSeq) return;
-
-		if (error || !data) {
-			// 202 (cloning) lands here because Eden treats non-2xx as an
-			// error. Disambiguate via the response data.
-			const body = (error?.value ?? null) as { status?: string; message?: string } | null;
-			if (body?.status === 'cloning' || status === 202) {
-				repoTreePaths = [];
-				repoTreeStatus = 'cloning';
-				repoTreeHeadSha = null;
-				return;
-			}
-			repoTreeStatus = 'error';
-			repoTreeError = body?.message ?? 'Failed to load repo tree';
-			return;
-		}
-
-		// Type-narrow on the discriminator returned by the server.
-		const payload = data as
-			| { status: 'ready'; headSha: string; paths: string[] }
-			| { status: 'cloning' }
-			| { status: 'error'; message: string };
-
-		if (payload.status === 'cloning') {
-			repoTreePaths = [];
-			repoTreeStatus = 'cloning';
-			repoTreeHeadSha = null;
-			return;
-		}
-		if (payload.status === 'error') {
-			repoTreeStatus = 'error';
-			repoTreeError = payload.message;
-			return;
-		}
-
-		repoTreePaths = payload.paths;
-		repoTreeHeadSha = payload.headSha;
-		repoTreeStatus = 'ready';
-	} catch (e) {
-		if (seq !== repoTreeLoadSeq) return;
-		repoTreeStatus = 'error';
-		repoTreeError = e instanceof Error ? e.message : 'Failed to load repo tree';
 	}
 }
 
@@ -564,8 +415,7 @@ export type ScrollPaneKey =
 	| 'walkthrough'
 	| 'diff'
 	| 'requestChanges'
-	| 'sidebar'
-	| 'rightPanel';
+	| 'sidebar';
 
 interface PrViewState {
 	activeTab: ActiveTab;

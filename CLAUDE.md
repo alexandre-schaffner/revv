@@ -156,9 +156,22 @@ agent tomorrow). Any change that violates them is wrong by construction — push
    error the agent can recover from.
 6. **Resumption reads state via an MCP read tool**, not env vars. On every run start,
    including resumes, the agent calls `get_walkthrough_state(walkthrough_id)` first.
-7. **Walkthroughs are immutable per head SHA.** A new commit produces a new walkthrough row;
-   the old is marked `'superseded'` with a `superseded_by` back-reference. Never mutate
-   in place.
+7. **Walkthroughs are immutable per head SHA during generation.** The 4-phase generation
+   pipeline never mutates a walkthrough row for the same head SHA — a new commit produces
+   a new walkthrough row, and the old is marked `'superseded'` with a `superseded_by`
+   back-reference.
+
+   **Carve-out: chat-edit is the single authorized post-completion mutation path.** After
+   `status='complete'`, the chat agent's edit MCP tools (`update_overview`, `add_block`,
+   `update_block`, `delete_block`, `add_semantic_step`, `update_semantic_step`,
+   `delete_semantic_step`, `update_sentiment`, `update_rating`, `delete_rating`,
+   `add_issue`, `update_issue`, `delete_issue`, `add_issue_comment`,
+   `update_issue_comment`, `delete_issue_comment`) may mutate rows in place. Edits stamp
+   `lastEditedAt` / `lastEditedBy` on the parent row, never change `status` or
+   `lastCompletedPhase`, and broadcast `walkthrough:edited` envelopes via `WebSocketHub`
+   (not the generation SSE stream, which dies on `done`). GitHub-submitted issues
+   (`submittedAt!=null`) are off-limits even to the chat-edit path. The generation
+   pipeline still never mutates a completed row.
 8. **Commit first, broadcast second.** DB upsert is the commit point. SSE/WebSocket
    broadcast is best-effort. Subscribers reconnecting after a miss MUST reconcile by
    re-reading the DB.

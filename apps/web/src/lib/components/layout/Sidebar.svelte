@@ -25,7 +25,7 @@
 		setSidebarView,
 		toggleSidebar,
 	} from '$lib/stores/sidebar.svelte';
-	import { collapsibleSlide } from '$lib/motion';
+	import { slide } from 'svelte/transition';
 	import SearchFilter from '$lib/components/sidebar/SearchFilter.svelte';
 	import RepoGroup from '$lib/components/sidebar/RepoGroup.svelte';
 	import AddRepoDialog from '$lib/components/sidebar/AddRepoDialog.svelte';
@@ -432,7 +432,7 @@
 								<span class="section-count">{getArchivedPrs().length}</span>
 							</button>
 							{#if archiveExpanded}
-								<div transition:collapsibleSlide>
+								<div transition:slide={{ duration: 220 }}>
 									{#each getVisibleRepositories().filter(r => (getArchivedByRepo().get(r.id) ?? []).length > 0) as repo (repo.id)}
 										{@const archivedForRepo = getArchivedByRepo().get(repo.id) ?? []}
 										<RepoGroup repository={repo} prs={archivedForRepo} navPrefix="archive" variant="archived" />

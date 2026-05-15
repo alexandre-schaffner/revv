@@ -9,11 +9,10 @@
 
 	interface Props {
 		block: DiffBlock;
-		themeType: 'light' | 'dark' | 'system';
 		hideAnnotation?: boolean;
 	}
 
-	let { block, themeType, hideAnnotation = false }: Props = $props();
+	let { block, hideAnnotation = false }: Props = $props();
 
 	const renderedAnnotation = $derived(
 		block.annotation ? renderMarkdown(block.annotation) : null
@@ -31,15 +30,10 @@
 
 	let instance: FileDiff<never> | null = null;
 
-	$effect(() => {
-		instance?.setThemeType(themeType);
-	});
-
 	function mountDiffBlock(el: HTMLDivElement) {
 		const options: FileDiffOptions<never> = {
 			diffStyle: 'unified',
 			theme: { dark: 'pierre-dark', light: 'pierre-light' },
-			themeType,
 			overflow: 'scroll',
 			// Suppress Pierre's built-in file header — we render our own clickable
 			// header above so the user can jump to this file in the Diff tab.
@@ -190,7 +184,7 @@
 		border-radius: 0;
 		cursor: pointer;
 		text-align: left;
-		transition: background-color 120ms ease;
+		transition: background-color var(--duration-snap) var(--ease-soft);
 	}
 
 	.diff-header:hover {
@@ -214,7 +208,7 @@
 		align-items: center;
 		color: var(--revv-accent);
 		opacity: 0;
-		transition: opacity 120ms ease;
+		transition: opacity var(--duration-snap) var(--ease-soft);
 	}
 
 	.diff-body {

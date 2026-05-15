@@ -628,6 +628,16 @@ export const WalkthroughJobsLive = Layer.effect(
 														.cacheCreationInputTokens,
 											};
 
+											// Fan out an intermediate running tally so
+											// subscribers (e.g. BottomBar) update live across
+											// continuations rather than only at the final
+											// `done`. Idempotent w.r.t. the final `done`
+											// event below, which carries the same value.
+											fanOut(job, {
+												type: "usage",
+												data: { tokenUsage: accumulatedTokenUsage },
+											});
+
 											// Consult DB (not event state) for
 											// completion — the agent may have
 											// terminated without calling
@@ -791,6 +801,42 @@ export const WalkthroughJobsLive = Layer.effect(
 											);
 											fanOut(job, event);
 											return;
+										}
+
+										if (event.type === "usage") {
+											// Live mid-turn usage from the provider
+											// (opencode's `message.updated` snapshot
+											// or future Claude equivalent). Carries
+											// the *current turn's* running total —
+											// add `accumulatedTokenUsage` (past
+											// completed turns) so the broadcast
+											// reflects the running grand total
+											// across the entire walkthrough.
+											const combined = {
+												inputTokens:
+													accumulatedTokenUsage.inputTokens +
+													event.data.tokenUsage.inputTokens,
+												outputTokens:
+													accumulatedTokenUsage.outputTokens +
+													event.data.tokenUsage.outputTokens,
+												cacheReadInputTokens:
+													accumulatedTokenUsage.cacheReadInputTokens +
+													event.data.tokenUsage
+														.cacheReadInputTokens,
+												cacheCreationInputTokens:
+													accumulatedTokenUsage.cacheCreationInputTokens +
+													event.data.tokenUsage
+														.cacheCreationInputTokens,
+											};
+											logError(
+												"walkthrough-jobs",
+												`[usage-diag] fanOut usage combined=${JSON.stringify(combined)} subscribers=${job.subscribers.size}`,
+											);
+											fanOut(job, {
+												type: "usage",
+												data: { tokenUsage: combined },
+											});
+											continue;
 										}
 
 										// Every other event just fans out —

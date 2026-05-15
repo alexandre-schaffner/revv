@@ -8,6 +8,7 @@ import type {
 	WalkthroughLifecyclePhase,
 	WalkthroughPipelinePhase,
 	WalkthroughRating,
+	WalkthroughTokenUsage,
 	CloneStatus,
 } from '@revv/shared';
 import { API_BASE_URL } from '$lib/api/base-url';
@@ -75,6 +76,37 @@ interface WalkthroughEntry {
 	cloneInProgress: boolean;
 	/** The repo ID that is being cloned, when cloneInProgress is true. */
 	cloneRepoId: string | null;
+	/**
+	 * Cumulative token usage for this PR's walkthrough generation. Updated live
+	 * on each `usage` SSE event (one per agent turn / auto-continuation) and
+	 * finalized on `done`. Hydrated from the cached JSON payload on resume.
+	 * Powers the BottomBar token+context indicator.
+	 */
+	tokenUsage: WalkthroughTokenUsage;
+}
+
+const ZERO_TOKEN_USAGE: WalkthroughTokenUsage = Object.freeze({
+	inputTokens: 0,
+	outputTokens: 0,
+	cacheReadInputTokens: 0,
+	cacheCreationInputTokens: 0,
+});
+
+/**
+ * Coerce an unknown payload (e.g. `tokenUsage` from a cached walkthrough
+ * response that the server JSON-parsed from a `'{}'` placeholder) into a
+ * fully-populated WalkthroughTokenUsage with every field defaulting to 0.
+ */
+function coerceTokenUsage(raw: unknown): WalkthroughTokenUsage {
+	if (raw === null || typeof raw !== 'object') return { ...ZERO_TOKEN_USAGE };
+	const r = raw as Record<string, unknown>;
+	const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+	return {
+		inputTokens: num(r['inputTokens']),
+		outputTokens: num(r['outputTokens']),
+		cacheReadInputTokens: num(r['cacheReadInputTokens']),
+		cacheCreationInputTokens: num(r['cacheCreationInputTokens']),
+	};
 }
 
 function freshEntry(): WalkthroughEntry {
@@ -99,6 +131,7 @@ function freshEntry(): WalkthroughEntry {
 		liveGeneration: false,
 		cloneInProgress: false,
 		cloneRepoId: null,
+		tokenUsage: { ...ZERO_TOKEN_USAGE },
 	};
 }
 
@@ -239,6 +272,16 @@ export function getCanResume(): boolean {
  */
 export function getIsSuperseded(): boolean {
 	return active()?.superseded ?? false;
+}
+/**
+ * Cumulative token usage for the active (or specified) PR's walkthrough.
+ * Returns a stable zero-shape constant if no entry exists, so the BottomBar
+ * can safely derive aggregates without null checks.
+ */
+export function getTokenUsage(prId?: string): WalkthroughTokenUsage {
+	const id = prId ?? activePrId;
+	if (!id) return ZERO_TOKEN_USAGE;
+	return entries.get(id)?.tokenUsage ?? ZERO_TOKEN_USAGE;
 }
 
 // ── Clone-status polling (self-healing un-stick) ────────────────────────────
@@ -749,6 +792,11 @@ export async function hydrateFromCache(prId: string): Promise<boolean> {
 		entry.walkthroughId = wt.id;
 		entry.doneReceived = !isGenerating;
 		entry.isStreaming = isGenerating;
+		// Hydrate the BottomBar indicator from the cached row. For 'generating'
+		// rows this is typically the zero placeholder (`{}`) — coerceTokenUsage
+		// normalizes that to all-zeros, and subsequent live `usage` events fill
+		// the real counts in as continuations complete.
+		entry.tokenUsage = coerceTokenUsage(wt.tokenUsage);
 		entry.streamError = null;
 		entry.superseded = status === 'superseded';
 		entry.phase = isGenerating ? 'writing' : 'finishing';
@@ -886,25 +934,50 @@ function applyEvents(prId: string, events: WalkthroughStreamEvent[]): void {
 					}
 					break;
 				}
-				case 'block':
+				case 'block': {
+					// Upsert-by-id: replace an existing block if one matches
+					// the incoming id (covers chat-edit `update_block` and
+					// post-completion block replays). New ids append.
 					if (!newBlocks) newBlocks = [...entry.blocks];
-					if (!newBlocks.some((b) => b.id === event.data.id)) {
+					const bi = newBlocks.findIndex((b) => b.id === event.data.id);
+					if (bi >= 0) {
+						newBlocks[bi] = event.data;
+					} else {
 						newBlocks.push(event.data);
 					}
 					break;
+				}
 				case 'done':
 					entry.walkthroughId = event.data.walkthroughId;
 					entry.doneReceived = true;
 					entry.isStreaming = false;
+					// Final accumulated usage. Also covers cache replays where
+					// only `done` fires (no intermediate `usage` events).
+					entry.tokenUsage = coerceTokenUsage(event.data.tokenUsage);
+					break;
+				case 'usage':
+					// Live per-turn running tally. Server emits one after each
+					// auto-continuation accumulates, so the BottomBar updates
+					// without waiting for the terminal `done`.
+					entry.tokenUsage = coerceTokenUsage(event.data.tokenUsage);
 					break;
 				case 'exploration':
 					entry.explorationSteps = [...entry.explorationSteps, event.data];
 					break;
-				case 'issue':
-					if (!entry.issues.some((i) => i.id === event.data.id)) {
+				case 'issue': {
+					// Upsert-by-id: replace an existing issue if one matches
+					// the incoming id (covers chat-edit `update_issue` and
+					// post-completion replays). New ids append.
+					const ii = entry.issues.findIndex((i) => i.id === event.data.id);
+					if (ii >= 0) {
+						entry.issues = entry.issues.map((i, x) =>
+							x === ii ? event.data : i,
+						);
+					} else {
 						entry.issues = [...entry.issues, event.data];
 					}
 					break;
+				}
 				case 'rating': {
 					// Replace-by-axis so resume can re-emit a rating without duplicating it.
 					// The DB layer uses INSERT…ON CONFLICT; the client mirrors that semantics
@@ -963,6 +1036,33 @@ function applyEvents(prId: string, events: WalkthroughStreamEvent[]): void {
 				// No state change needed; this event exists solely to unblock
 				// the stream guard's first-event timer.
 				break;
+			// ── Chat-edit deletion events (CLAUDE.md invariant #7
+			// carve-out). Arrive only via the `walkthrough:edited` WS
+			// envelope after a walkthrough has completed; the generation
+			// SSE path never emits them.
+			case 'block:deleted':
+				if (!newBlocks) newBlocks = [...entry.blocks];
+				newBlocks = newBlocks.filter((b) => b.id !== event.data.id);
+				break;
+			case 'rating:deleted':
+				entry.ratings = entry.ratings.filter(
+					(r) => r.axis !== event.data.axis,
+				);
+				break;
+			case 'issue:deleted':
+				entry.issues = entry.issues.filter((i) => i.id !== event.data.id);
+				break;
+			case 'semantic-step:deleted': {
+				const idx = event.data.semanticStepIndex;
+				entry.semanticSteps = entry.semanticSteps.filter(
+					(s) => s.semanticStepIndex !== idx,
+				);
+				// Also drop any blocks orphaned by the chapter removal so the
+				// UI doesn't try to render headless atomic blocks.
+				if (!newBlocks) newBlocks = [...entry.blocks];
+				newBlocks = newBlocks.filter((b) => b.semanticStepIndex !== idx);
+				break;
+			}
 			}
 		}
 
@@ -1003,9 +1103,25 @@ function enforceStreamCap(): void {
 		}
 		if (victim === null) break; // only activePrId left — nothing to drop
 		abortPr(victim);
-		updateEntry(victim, (e) => {
-			e.isStreaming = false;
-		});
+		// Only set isStreaming=false if NOT actively generating. For streams
+		// mid-generation (server still running), keep isStreaming=true so the
+		// sidebar and detail view continue to show a progress indicator.
+		const victimEntry = entries.get(victim);
+		const isActivelyGenerating =
+			victimEntry !== undefined &&
+			!victimEntry.doneReceived &&
+			!victimEntry.streamError &&
+			victimEntry.summary !== null;
+		if (!isActivelyGenerating) {
+			updateEntry(victim, (e) => {
+				e.isStreaming = false;
+			});
+		}
+		// Schedule a reconciliation poll so the UI catches up even if the WS
+		// walkthrough:complete broadcast is missed (5 s timeout).
+		if (isActivelyGenerating) {
+			scheduleReconciliationPoll(victim);
+		}
 	}
 }
 
@@ -1203,33 +1319,28 @@ export function reset(): void {
 export function onWalkthroughComplete(prId: string, walkthroughId: string): void {
 	const entry = entries.get(prId);
 	if (entry) {
-		// Snapshot BEFORE mutation — updateEntry mutates in-place, so reading
-		// entry.doneReceived after the call always returns true, making the
-		// missingRatings check below permanently false.
+		// Snapshot BEFORE mutation — updateEntry mutates in-place, so the two
+		// predicates below have to read pre-mutation state. The two checks
+		// differ on purpose: the laxer one decides whether to mark the entry
+		// done locally (a non-active PR will re-hydrate on next visit anyway),
+		// the stricter one decides whether an active PR needs an immediate
+		// re-fetch from the DB cache.
 		const hadBlocks = entry.blocks.length > 0;
-		const hadRatings = entry.ratings.length > 0;
+		const hadSummary = entry.summary !== null;
+		const hadSentiment = entry.sentiment !== null;
+		const hadFullRatings = entry.ratings.length === 9;
 		const wasDone = entry.doneReceived;
-		// A complete walkthrough has all 9 rating axes (doctrine invariant
-		// #4 / Phase D). If we don't have all 9, the in-memory entry is
-		// partial — typically because the user navigated away mid-generation
-		// and `deactivate()` aborted the SSE before the trailing
-		// rating/done events landed. The server-side job ran to completion
-		// regardless, so the DB has the full row; we just haven't pulled it
-		// into memory yet.
-		const hasFullData = entry.ratings.length === 9 && hadBlocks && entry.summary !== null;
+		const canMarkDoneLocally = hadBlocks && hadSummary && hadFullRatings;
+		const isContentComplete =
+			hadBlocks && hadSummary && hadSentiment && hadFullRatings && wasDone;
 
-		if (hasFullData || activePrId === prId) {
+		if (canMarkDoneLocally || activePrId === prId) {
 			updateEntry(prId, (e) => {
 				e.isStreaming = false;
 				e.doneReceived = true;
 				e.walkthroughId = walkthroughId;
 			});
-			// Fetch the full walkthrough from cache if:
-			// 1. No blocks yet (SSE disconnected early), OR
-			// 2. Has blocks but missing ratings and never received the done event
-			//    (SSE dropped before the ratings/done phase at the end of generation)
-			const missingRatings = hadBlocks && !hadRatings && !wasDone;
-			if (activePrId === prId && (!hadBlocks || missingRatings)) {
+			if (activePrId === prId && !isContentComplete) {
 				fetchCachedWalkthrough(prId);
 			}
 		} else {
@@ -1299,6 +1410,30 @@ export function onWalkthroughError(prId: string, message: string): void {
 			e.streamError = message;
 		});
 	}
+}
+
+/**
+ * Apply a chat-driven post-completion edit broadcast (CLAUDE.md invariant #7
+ * carve-out). The route emits a `walkthrough:edited` WS envelope wrapping a
+ * single {@link WalkthroughStreamEvent}; we route it through the same
+ * reducer the generation SSE path uses so all the upsert / delete semantics
+ * stay single-sourced.
+ *
+ * Drops the event when:
+ *   - We have no entry for this PR (user hasn't loaded it yet — they'll
+ *     re-fetch on visit via `hydrateFromCache`).
+ *   - The entry's `walkthroughId` is set and doesn't match the incoming id
+ *     (stale broadcast for a superseded walkthrough).
+ */
+export function onWalkthroughEdited(
+	prId: string,
+	walkthroughId: string,
+	event: WalkthroughStreamEvent,
+): void {
+	const entry = entries.get(prId);
+	if (!entry) return;
+	if (entry.walkthroughId && entry.walkthroughId !== walkthroughId) return;
+	applyEvents(prId, [event]);
 }
 
 // ── Animated block tracking ─────────────────────────────────────────────────

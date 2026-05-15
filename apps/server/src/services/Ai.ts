@@ -66,6 +66,12 @@ export interface ChatParams {
 	 */
 	readonly onSessionId: (id: string) => Promise<void> | void;
 	readonly prId: string;
+	/**
+	 * Authenticated user id from the chat session. Stamped on
+	 * `walkthroughs.lastEditedBy` when an edit tool fires; also carried in
+	 * the opencode MCP token registry.
+	 */
+	readonly userId: string;
 	readonly abortController?: AbortController;
 	/**
 	 * Session-level interaction toggle. Both drivers honor this: Claude flips
@@ -161,6 +167,12 @@ export class AiService extends Context.Tag('AiService')<
 			 * token. Pass an empty string for paths where it doesn't matter.
 			 */
 			readonly prId: string;
+			/**
+			 * User id from the calling session. Threaded through to the MCP
+			 * server even though the conflict-resolve agent never calls the
+			 * edit tools (its allowed-tools list doesn't include them).
+			 */
+			readonly userId: string;
 		}) => Effect.Effect<ReadableStream<RawChatStreamFrame>, AiError>;
 		readonly isConfigured: () => Effect.Effect<boolean>;
 	}
@@ -332,6 +344,7 @@ export const AiServiceLive = Layer.effect(
 							model: settings.aiModel ?? undefined,
 							db,
 							prId: params.prId,
+							userId: params.userId,
 							maxTurns: settings.aiMaxTurns,
 							interactionMode: params.interactionMode,
 						});
@@ -343,8 +356,12 @@ export const AiServiceLive = Layer.effect(
 						jobStarted: () => Effect.runPromise(supervisor.jobStarted()),
 						jobEnded: () => Effect.runPromise(supervisor.jobEnded()),
 						client: () => Effect.runPromise(supervisor.client()),
-						issueChatMcpToken: (prId: string) =>
-							Effect.runPromise(chatMcpTokens.issue(prId)),
+						issueChatMcpToken: (args: {
+							prId: string;
+							userId: string;
+							actor: 'chat:opencode';
+							interactionMode: InteractionMode;
+						}) => Effect.runPromise(chatMcpTokens.issue(args)),
 						clearChatMcpToken: (token: string) =>
 							Effect.runPromise(chatMcpTokens.clear(token)),
 						hasAgent: (name: string) =>
@@ -360,6 +377,7 @@ export const AiServiceLive = Layer.effect(
 						model: settings.aiModel ?? undefined,
 						deps,
 						prId: params.prId,
+						userId: params.userId,
 						interactionMode: params.interactionMode,
 					});
 				}),
@@ -393,6 +411,7 @@ export const AiServiceLive = Layer.effect(
 							model: settings.aiModel ?? undefined,
 							db,
 							prId: params.prId,
+							userId: params.userId,
 							// Critical: no persistence — this turn must NOT
 							// land in the chat session JSONL on disk, so a
 							// future regular chat resume doesn't see the
@@ -414,8 +433,12 @@ export const AiServiceLive = Layer.effect(
 						jobStarted: () => Effect.runPromise(supervisor.jobStarted()),
 						jobEnded: () => Effect.runPromise(supervisor.jobEnded()),
 						client: () => Effect.runPromise(supervisor.client()),
-						issueChatMcpToken: (prId: string) =>
-							Effect.runPromise(chatMcpTokens.issue(prId)),
+						issueChatMcpToken: (args: {
+							prId: string;
+							userId: string;
+							actor: 'chat:opencode';
+							interactionMode: InteractionMode;
+						}) => Effect.runPromise(chatMcpTokens.issue(args)),
 						clearChatMcpToken: (token: string) =>
 							Effect.runPromise(chatMcpTokens.clear(token)),
 						hasAgent: (name: string) =>
@@ -431,6 +454,7 @@ export const AiServiceLive = Layer.effect(
 						model: settings.aiModel ?? undefined,
 						deps,
 						prId: params.prId,
+						userId: params.userId,
 					});
 				}),
 

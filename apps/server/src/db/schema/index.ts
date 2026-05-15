@@ -22,4 +22,5 @@ export { chatMessages } from './chat-messages';
 export { chatActivities } from './chat-activities';
 export { chatTasks } from './chat-tasks';
 export { chatPlans } from './chat-plans';
+export { chatQuestions } from './chat-questions';
 export { chatSubagentInvocations } from './chat-subagent-invocations';

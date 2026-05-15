@@ -24,7 +24,6 @@
 		applyCommentSuggestion,
 		editThreadMessage,
 	} from '$lib/stores/review.svelte';
-	import { getDiffThemeType } from '$lib/stores/theme.svelte';
 	import { getUser } from '$lib/stores/auth.svelte';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
@@ -50,8 +49,6 @@
 		onTokenHover,
 	}: Props = $props();
 
-	const themeType = $derived(getDiffThemeType());
-
 	function formatSize(bytes: number): string {
 		if (bytes < 1024) return `${bytes} B`;
 		if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -70,10 +67,9 @@
 
 	// ── Derived ──────────────────────────────────────────────────────────────
 
-	// Re-mount the inner component on path/theme change so Pierre's File
-	// instance always matches what we're showing — same key trick DiffViewer
-	// uses with `{#key viewKey}`.
-	const viewKey = $derived(`${path}::${themeType}`);
+	// Re-mount the inner component on path change so Pierre's File instance
+	// always matches what we're showing.
+	const viewKey = $derived(`${path}`);
 
 	const annotations = $derived.by((): LineAnnotation<ThreadMeta>[] => {
 		// Subscribe to the threads-version signal so this rebuilds on every
@@ -269,7 +265,6 @@
 			{path}
 			{content}
 			{size}
-			{themeType}
 			{annotations}
 			{threadMessages}
 			{threadById}

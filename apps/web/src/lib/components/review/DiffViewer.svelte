@@ -35,7 +35,6 @@
 
 	interface Props {
 		file: ReviewFile | null;
-		themeType?: 'light' | 'dark' | 'system';
 		onLineClick?: (info: LineClickInfo) => void;
 		onModeChange?: (mode: 'unified' | 'split') => void;
 		onTokenHover?: (info: TokenHoverInfo | null) => void;
@@ -43,7 +42,7 @@
 		commentTrigger?: { startLine: number; endLine: number; side: 'additions' | 'deletions'; seq: number } | null;
 	}
 
-	let { file, themeType = 'dark', onLineClick, onModeChange, onTokenHover, commentTrigger = null }: Props = $props();
+	let { file, onLineClick, onModeChange, onTokenHover, commentTrigger = null }: Props = $props();
 
 	// ── Interaction state ─────────────────────────────────────────────────────
 
@@ -63,8 +62,8 @@
 
 	const mode = $derived(getDiffMode());
 
-	// Key changes → Svelte destroys + recreates DiffViewerInner (full lifecycle)
-	const viewKey = $derived(file ? `${file.path}::${mode}::${themeType}` : '');
+	// Key changes → Svelte destroys + recreates DiffViewerInner (full lifecycle).
+	const viewKey = $derived(file ? `${file.path}::${mode}` : '');
 
 	// Build annotations from current thread + pending input state
 	const annotations = $derived.by((): DiffLineAnnotation<ThreadMeta>[] => {
@@ -260,7 +259,6 @@
 		<DiffViewerInner
 			{file}
 			{mode}
-			{themeType}
 			{annotations}
 			{threadMessages}
 			{threadById}

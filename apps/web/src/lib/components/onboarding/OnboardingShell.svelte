@@ -303,7 +303,7 @@
 		background: transparent;
 		color: var(--ob-text-muted);
 		cursor: pointer;
-		transition: color var(--ob-dur-quick) var(--ob-ease-out), border-color var(--ob-dur-quick) var(--ob-ease-out);
+		transition: color var(--duration-snap) var(--ease-out-expo), border-color var(--duration-snap) var(--ease-out-expo);
 	}
 
 	.theme-btn:hover {
@@ -407,7 +407,7 @@
 		flex: 1;
 		height: 2px;
 		background: var(--ob-cell-default);
-		transition: background-color var(--ob-dur-medium) var(--ob-ease);
+		transition: background-color var(--duration-snap) var(--ease-out-expo);
 	}
 
 	.cell[data-state='past'] {

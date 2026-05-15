@@ -419,7 +419,7 @@
 		border: 1px solid var(--color-glass-border, rgba(255, 255, 255, 0.1));
 		border-radius: 6px;
 		box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2), inset 0 0.5px 0 0 var(--color-glass-highlight, rgba(255, 255, 255, 0.08));
-		transition: transform var(--duration-quick, 120ms) var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1));
+		transition: transform var(--duration-quick) var(--ease-out-expo);
 		pointer-events: none;
 	}
 
@@ -435,7 +435,7 @@
 		cursor: pointer;
 		border-radius: 5px;
 		color: var(--color-text-muted);
-		transition: color var(--duration-quick, 120ms) ease;
+		transition: color var(--duration-snap) var(--ease-soft);
 		background: transparent;
 		border: none;
 		padding: 0 12px;
@@ -471,7 +471,7 @@
 		border-radius: 7px;
 		color: var(--color-text-primary);
 		box-shadow: inset 0 0.5px 0 0 var(--color-glass-highlight, rgba(255, 255, 255, 0.04));
-		transition: border-color 100ms ease, box-shadow 100ms ease;
+		transition: border-color var(--duration-instant) var(--ease-soft), box-shadow var(--duration-instant) var(--ease-soft);
 		outline: none;
 	}
 
@@ -498,7 +498,7 @@
 		border-radius: 7px;
 		color: var(--color-text-muted);
 		box-shadow: inset 0 0.5px 0 0 var(--color-glass-highlight, rgba(255, 255, 255, 0.04));
-		transition: border-color 100ms ease, color 100ms ease;
+		transition: border-color var(--duration-instant) var(--ease-soft), color var(--duration-instant) var(--ease-soft);
 	}
 
 	.icon-btn:hover:not(:disabled) {
@@ -519,7 +519,7 @@
 
 	/* Repo row */
 	.repo-item {
-		transition: background 80ms ease;
+		transition: background var(--duration-instant) var(--ease-soft);
 		border-radius: 6px;
 	}
 
@@ -544,7 +544,7 @@
 		border: 1px solid transparent;
 		border-radius: 5px;
 		color: var(--color-text-muted);
-		transition: color 100ms ease, border-color 100ms ease, background 100ms ease;
+		transition: color var(--duration-instant) var(--ease-soft), border-color var(--duration-instant) var(--ease-soft), background var(--duration-instant) var(--ease-soft);
 	}
 
 	.remove-btn:hover:not(:disabled) {
@@ -570,7 +570,7 @@
 		border: 1px solid rgba(var(--color-accent-rgb, 99, 102, 241), 0.25);
 		border-radius: 5px;
 		color: var(--color-accent);
-		transition: background 100ms ease, border-color 100ms ease;
+		transition: background var(--duration-instant) var(--ease-soft), border-color var(--duration-instant) var(--ease-soft);
 	}
 
 	.add-badge:hover {

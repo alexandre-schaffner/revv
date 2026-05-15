@@ -65,7 +65,7 @@
 <DropdownMenu.Root bind:open>
 	<DropdownMenu.Trigger>
 		<button
-			class="flex items-center gap-1 rounded px-1 py-0.5 font-mono text-[10px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-secondary"
+			class="flex cursor-pointer items-center gap-1 rounded px-1 py-0.5 font-mono text-[10px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-secondary"
 		>
 			<span class="max-w-[120px] truncate">{pr.sourceBranch}</span>
 			{#if pr.headSha}
@@ -107,7 +107,7 @@
 							{commit.message.split('\n')[0]?.slice(0, 48) ?? ''}
 						</span>
 						<!-- right label -->
-						<span class="shrink-0 text-[10px] text-text-muted">
+						<span class="shrink-0 text-[10px] tabular-nums text-text-muted">
 							{#if isLatest}
 								<span class="italic">latest</span>
 							{:else}

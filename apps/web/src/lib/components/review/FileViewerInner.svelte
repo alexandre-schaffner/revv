@@ -75,7 +75,6 @@
 		path: string;
 		content: string;
 		size: number;
-		themeType: 'light' | 'dark' | 'system';
 		annotations: LineAnnotation<ThreadMeta>[];
 		threadMessages: Record<string, ThreadMessage[]>;
 		threadById: Record<string, CommentThread>;
@@ -98,7 +97,6 @@
 		path,
 		content,
 		size,
-		themeType,
 		annotations,
 		threadMessages,
 		threadById,
@@ -216,10 +214,6 @@
 		});
 	});
 
-	$effect(() => {
-		instance?.setThemeType(themeType);
-	});
-
 	// Re-render on file swap (path or content change). Pierre's render is
 	// idempotent — passing the same payload twice no-ops via internal caching.
 	$effect(() => {
@@ -240,7 +234,6 @@
 		try {
 			const options: FileOptions<ThreadMeta> = {
 				theme: { dark: 'pierre-dark', light: 'pierre-light' },
-				themeType,
 				overflow: 'scroll',
 				lineHoverHighlight: 'both',
 				enableGutterUtility: true,

@@ -14,7 +14,6 @@
 	import AnnotationCommentInput from './AnnotationCommentInput.svelte';
 	import ProposedCommentChip from './ProposedCommentChip.svelte';
 	import { getDiffMode, setDiffMode } from '$lib/stores/review.svelte';
-	import { getDiffThemeType } from '$lib/stores/theme.svelte';
 	import {
 		addProposedComment,
 		getProposedComments,
@@ -149,7 +148,6 @@
 
 	// ── Reactive UI state ─────────────────────────────────────────────────────
 	const mode = $derived(getDiffMode());
-	const themeType = $derived(getDiffThemeType());
 	let isTreeCollapsed = $state(false);
 
 	// Pending input slots — keyed `${filePath}::${lineNumber}::${side}`. Stores
@@ -227,12 +225,10 @@
 	function buildOptions(
 		file: FileDiffMetadata,
 		diffStyle: 'unified' | 'split',
-		theme: 'light' | 'dark' | 'system',
 	): FileDiffOptions<CommentMeta> {
 		return {
 			diffStyle,
 			theme: { dark: 'pierre-dark', light: 'pierre-light' },
-			themeType: theme,
 			// Collapse unchanged regions by default so line-info separators have
 			// something to expand. With `true`, Pierre flattens the whole file
 			// inline and no separator clicks would be meaningful.
@@ -299,7 +295,7 @@
 	function mountFileDiff(idx: number, el: HTMLDivElement, diffStyle: 'unified' | 'split') {
 		const file = files[idx];
 		if (!file) return;
-		const options = buildOptions(file, diffStyle, untrack(() => themeType));
+		const options = buildOptions(file, diffStyle);
 		const instance = new PierreFileDiff<CommentMeta>(options, workerManager);
 		instance.render({
 			containerWrapper: el,
@@ -384,21 +380,6 @@
 				diffInstances[i] = null;
 			}
 			if (el) mountFileDiff(i, el, next);
-		}
-	});
-
-	// ── Reactive: theme changes — update themeType on all mounted instances ──
-	$effect(() => {
-		const nextTheme = themeType;
-		for (let i = 0; i < diffInstances.length; i++) {
-			const instance = diffInstances[i];
-			if (instance) {
-				try {
-					instance.setThemeType(nextTheme);
-				} catch {
-					// best-effort
-				}
-			}
 		}
 	});
 

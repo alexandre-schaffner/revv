@@ -10,7 +10,7 @@
 		getAvailableModels,
 		fetchModels,
 	} from '$lib/stores/settings.svelte';
-	import { getDefaultModel } from '$lib/constants/models';
+	import { getDefaultModel, getDefaultSuggestionsModel } from '$lib/constants/models';
 	import type { AiAgent } from '@revv/shared';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import Check from '@lucide/svelte/icons/check';
@@ -47,7 +47,15 @@
 		// If the cache is cold (e.g. app-start prefetch hadn't completed yet),
 		// kick a fetch so subsequent agent switches are race-free.
 		void fetchModels(value);
-		updateSettings({ aiAgent: value, aiModel: pickModelForAgent(value) });
+		// Re-pick `aiSuggestionsModel` so it stays valid for the new agent.
+		// Same rationale as `aiModel`: if the user is on opencode and switches
+		// to claude, an opencode-catalog model would silently fail in the
+		// suggestions provider.
+		updateSettings({
+			aiAgent: value,
+			aiModel: pickModelForAgent(value),
+			aiSuggestionsModel: getDefaultSuggestionsModel(value),
+		});
 		open = false;
 	}
 </script>
@@ -55,7 +63,7 @@
 <PopoverRoot bind:open>
 	<PopoverTrigger>
 		<button
-			class="flex items-center gap-1.5 rounded-md px-2 py-1 transition-colors hover:bg-bg-secondary"
+			class="flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 transition-colors hover:bg-bg-secondary"
 		>
 			<div class="h-1.5 w-1.5 rounded-full bg-accent"></div>
 			<CurrentIcon size={12} class="text-text-muted" />
@@ -66,7 +74,7 @@
 	<PopoverContent class="w-40 p-1" align="start" side="top">
 		{#each AGENT_OPTIONS as opt (opt.value)}
 			<button
-				class="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs text-text-secondary transition-colors hover:bg-bg-tertiary"
+				class="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-xs text-text-secondary transition-colors hover:bg-bg-tertiary"
 				onclick={() => select(opt.value)}
 			>
 				<opt.icon size={12} class="text-text-muted" />

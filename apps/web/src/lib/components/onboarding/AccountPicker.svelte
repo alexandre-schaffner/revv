@@ -2,7 +2,7 @@
     import { User, Loader2, ArrowRight, Sun, Moon, Monitor } from '@lucide/svelte';
     import { getLocalAccounts, switchAccount, getIsSwitching } from '$lib/stores/auth.svelte';
     import { getThemePreference, setThemePreference, type ThemePreference } from '$lib/stores/theme.svelte';
-    import { softFade } from '$lib/motion';
+    import { fade } from 'svelte/transition';
 
     interface Props {
         /** Called when user chooses "Sign in with a different account" */
@@ -37,7 +37,7 @@
     function cycleTheme() { setThemePreference(cycle[theme]); }
 </script>
 
-<div class="picker" in:softFade={{ duration: 320 }}>
+<div class="picker" in:fade={{ duration: 320 }}>
     <button class="theme-toggle" onclick={cycleTheme} aria-label={labels[theme]} title={labels[theme]}>
         {#if theme === 'light'}
             <Sun size={14} />

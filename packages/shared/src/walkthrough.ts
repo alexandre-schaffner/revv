@@ -236,6 +236,17 @@ export interface Walkthrough {
 	modelUsed: string;
 	tokenUsage: WalkthroughTokenUsage;
 	prHeadSha: string;
+	/**
+	 * ISO 8601 timestamp of the most recent chat-driven edit, or null if the
+	 * walkthrough has only ever been produced by the generation pipeline. See
+	 * CLAUDE.md invariant #7 (chat-edit carve-out).
+	 */
+	lastEditedAt?: string | null;
+	/**
+	 * Actor that performed the most recent chat-driven edit. Typically
+	 * `'chat:claude'` or `'chat:opencode'`. Null when never edited.
+	 */
+	lastEditedBy?: string | null;
 }
 
 // ── MCP read-tool response ──────────────────────────────────────────────────
@@ -327,6 +338,7 @@ export type WalkthroughStreamEvent =
 	| { type: 'semantic-step'; data: WalkthroughSemanticStep }
 	| { type: 'block'; data: WalkthroughBlock }
 	| { type: 'done'; data: { walkthroughId: string; tokenUsage: WalkthroughTokenUsage } }
+	| { type: 'usage'; data: { tokenUsage: WalkthroughTokenUsage } }
 	| { type: 'error'; data: { code: string; message: string; repoId?: string } }
 	| { type: 'exploration'; data: Activity }
 	| { type: 'issue'; data: WalkthroughIssue }
@@ -337,4 +349,18 @@ export type WalkthroughStreamEvent =
 			data: { lastCompletedPhase: WalkthroughPipelinePhase };
 	  }
 	| { type: 'in-progress'; data: { walkthroughId: string } }
-	| { type: 'thinking'; data: Record<string, never> };
+	| { type: 'thinking'; data: Record<string, never> }
+	// Chat-edit deletion events (CLAUDE.md invariant #7 carve-out). Emitted
+	// only via the chat-edit MCP tools after a walkthrough has reached
+	// `status='complete'`; never produced by the generation pipeline. Frontend
+	// reducer drops the matching item by id / index.
+	| {
+			type: 'block:deleted';
+			data: { id: string; semanticStepIndex: number; stepIndex: number };
+	  }
+	| { type: 'rating:deleted'; data: { axis: RatingAxis } }
+	| { type: 'issue:deleted'; data: { id: string } }
+	| {
+			type: 'semantic-step:deleted';
+			data: { semanticStepIndex: number };
+	  };

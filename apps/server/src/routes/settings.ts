@@ -43,6 +43,7 @@ export const settingsRoutes = new Elysia({ prefix: '/api/settings' })
 				t.Object({
 					aiProvider: t.String(),
 					aiModel: t.String(),
+					aiSuggestionsModel: t.String(),
 					aiThinkingEffort: t.Union([
 						t.Literal('ultrathink'),
 						t.Literal('max'),

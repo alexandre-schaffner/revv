@@ -39,10 +39,9 @@
 	interface Props {
 		prId: string;
 		files: ReviewFile[];
-		themeType?: 'light' | 'dark' | 'system';
 	}
 
-	let { prId, files, themeType = 'dark' }: Props = $props();
+	let { prId, files }: Props = $props();
 
 	// ── Layout state ──────────────────────────────────────────────────────────
 
@@ -431,7 +430,6 @@
 			<FileIssues filePath={activeFile.path} />
 			<DiffViewer
 				file={activeFile}
-				{themeType}
 				onModeChange={(m) => setDiffMode(m)}
 				commentTrigger={pendingCommentTrigger}
 			/>
@@ -453,7 +451,6 @@
 		{:else}
 			<DiffViewer
 				file={null}
-				{themeType}
 				onModeChange={(m) => setDiffMode(m)}
 				commentTrigger={pendingCommentTrigger}
 			/>

@@ -5,7 +5,6 @@
 	import * as Select from '$lib/components/ui/select';
 	import { Input } from '$lib/components/ui/input';
 	import { SvelteMap } from 'svelte/reactivity';
-	import { tick } from 'svelte';
 	import {
 		Monitor,
 		Sun,
@@ -14,7 +13,6 @@
 		ExternalLink,
 		Download,
 		FileText,
-		FolderTree,
 		User,
 		Cpu,
 		SlidersHorizontal,
@@ -45,6 +43,7 @@
 		agentSupportsThinkingEffort,
 		agentSupportsContextWindow,
 		getDefaultModel,
+		getDefaultSuggestionsModel,
 		THINKING_EFFORT_OPTIONS,
 		OPUS_ONLY_EFFORTS,
 	} from '$lib/constants/models';
@@ -166,6 +165,10 @@
 	let currentModel = $derived(getSettings()?.aiModel ?? '');
 	let currentModelLabel = $derived(
 		modelOptions.find((o) => o.value === currentModel)?.label ?? currentModel,
+	);
+	let currentSuggestionsModel = $derived(getSettings()?.aiSuggestionsModel ?? '');
+	let currentSuggestionsModelLabel = $derived(
+		modelOptions.find((o) => o.value === currentSuggestionsModel)?.label ?? currentSuggestionsModel,
 	);
 	let isOpus47 = $derived(currentModel === 'claude-opus-4-7');
 	let showThinkingEffort = $derived(agentSupportsThinkingEffort(aiAgent));
@@ -440,7 +443,27 @@
 					type="single"
 					value={aiAgent}
 					onValueChange={(v) => {
-						if (v) void updateSettings({ aiAgent: v as AiAgent });
+						if (!v) return;
+						const newAgent = v as AiAgent;
+						// Kick a model-list fetch so the dropdowns below
+						// populate immediately without needing a manual refresh.
+						void loadModels(newAgent);
+						// Mirror AgentSelector: cascade both model fields so
+						// they stay valid for the new agent. Without this,
+						// aiModel and aiSuggestionsModel keep the old agent's
+						// catalog IDs — triggers show raw IDs matching nothing
+						// and the server may call the wrong provider.
+						const cached = getAvailableModels(newAgent);
+						const fallback = getDefaultModel(newAgent);
+						const pickedModel =
+							cached.length > 0
+								? (cached.find((m) => m.value === fallback)?.value ?? cached[0]!.value)
+								: fallback;
+						void updateSettings({
+							aiAgent: newAgent,
+							aiModel: pickedModel,
+							aiSuggestionsModel: getDefaultSuggestionsModel(newAgent),
+						});
 					}}
 				>
 					<Select.Trigger class="w-36 text-xs">
@@ -486,6 +509,32 @@
 						<Loader2 size={12} class={modelsLoading ? 'animate-spin' : ''} />
 					</Button>
 				</div>
+			</div>
+
+			<!-- Suggestions model selector -->
+			<div class="flex items-center justify-between gap-4">
+				<div>
+					<p class="text-sm text-text-primary">Suggestions model</p>
+					<p class="text-xs text-text-muted">
+						Low-cost model used for PR-aware suggestion prompts in the right panel.
+					</p>
+				</div>
+				<Select.Root
+					type="single"
+					value={currentSuggestionsModel}
+					onValueChange={(v) => {
+						if (v) void updateSettings({ aiSuggestionsModel: v });
+					}}
+				>
+					<Select.Trigger class="w-48 text-xs truncate">
+						{currentSuggestionsModelLabel || 'Select model…'}
+					</Select.Trigger>
+					<Select.Content>
+						{#each modelOptions as opt (opt.value)}
+							<Select.Item value={opt.value} class="text-xs">{opt.label}</Select.Item>
+						{/each}
+					</Select.Content>
+				</Select.Root>
 			</div>
 
 			<!-- Thinking effort (agent-dependent) -->
@@ -594,15 +643,7 @@
 									class:bg-bg-primary={getThemePreference() === opt.value}
 									class:text-text-primary={getThemePreference() === opt.value}
 									class:text-text-muted={getThemePreference() !== opt.value}
-								onclick={async () => {
-							const scrollPos = contentEl?.scrollTop ?? 0;
-							setThemePreference(opt.value);
-							await tick();
-							if (contentEl) contentEl.scrollTop = scrollPos;
-							requestAnimationFrame(() => {
-								if (contentEl) contentEl.scrollTop = scrollPos;
-							});
-						}}
+							onclick={() => setThemePreference(opt.value)}
 								>
 									<opt.icon size={11} />
 									{opt.label}

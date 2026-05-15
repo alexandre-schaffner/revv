@@ -12,14 +12,14 @@
 		GitCommitHorizontal,
 		Upload,
 		Loader2,
-		Square,
 		GitBranch,
 		RefreshCw,
 		GitMerge,
 		Lightbulb,
+		Check,
 	} from '@lucide/svelte';
 	import { tick } from 'svelte';
-	import { fly } from 'svelte/transition';
+	import { fly, slide } from 'svelte/transition';
 	import { cubicOut, cubicIn } from 'svelte/easing';
 
 	const TOOL_CALL_ROW_H = 14; // px — match walkthrough's compact tool-call rows
@@ -50,20 +50,82 @@
 		rejectPlanAction,
 		loadAvailableAgents,
 		isPlanModeAvailable,
+		getQueuedMessages,
+		enqueueMessage,
+		removeQueuedMessage,
+		getCheckpoints,
+		restoreToCheckpoint,
+		getToolApprovals,
+		respondToToolApproval,
 	} from '$lib/stores/chat.svelte';
-	import TaskList from '$lib/components/chat/TaskList.svelte';
-	import PlanCard from '$lib/components/chat/PlanCard.svelte';
-	import SubagentInvocation from '$lib/components/chat/SubagentInvocation.svelte';
-	import { getSelectedPr } from '$lib/stores/prs.svelte';
 	import {
-		getPrScrollPosition,
-		setPrScrollPosition,
-		getLoadedHeadSha,
-	} from '$lib/stores/review.svelte';
+		Plan,
+		PlanHeader,
+		PlanTitle,
+		PlanContent,
+		PlanFooter,
+		PlanAction,
+	} from '$lib/components/ai/plan';
+	import { Question } from '$lib/components/ai/question';
+	import { Tool, ToolHeader, ToolContent } from '$lib/components/ai/tool';
+	import { Message, MessageContent, MessageResponse } from '$lib/components/ai/message';
+	import {
+		Conversation,
+		ConversationContent,
+		ConversationEmptyState,
+		ConversationScrollButton,
+	} from '$lib/components/ai/conversation';
+	import {
+		PromptInput,
+		PromptInputBody,
+		PromptInputFooter,
+		PromptInputTools,
+		PromptInputButton,
+		PromptInputTextarea,
+		PromptInputSubmit,
+		type PromptInputMessage,
+		type PromptInputStatus,
+	} from '$lib/components/ai/prompt-input';
+	import {
+		Queue,
+		QueueSection,
+		QueueSectionTrigger,
+		QueueSectionLabel,
+		QueueSectionContent,
+		QueueList,
+		QueueItem,
+		QueueItemIndicator,
+		QueueItemContent,
+		QueueItemActions,
+		QueueItemAction,
+	} from '$lib/components/ai/queue';
+	import { Checkpoint } from '$lib/components/ai/checkpoint';
+	import {
+		Confirmation,
+		ConfirmationHeader,
+		ConfirmationContent,
+		ConfirmationActions,
+	} from '$lib/components/ai/confirmation';
+	import { Suggestion, SuggestionItem } from '$lib/components/ai/suggestion';
+	import type { ToolState } from '$lib/components/ai/tool';
+	import { ToolOutput } from '$lib/components/ai/tool';
+	import {
+		CheckCircle2,
+		Circle,
+		CircleCheck,
+		CircleX,
+	} from '@lucide/svelte';
+	import { getSelectedPr } from '$lib/stores/prs.svelte';
+	import { getLoadedHeadSha } from '$lib/stores/review.svelte';
+	import {
+		FALLBACK_PROMPTS,
+		fetchSuggestions,
+		getSuggestions,
+		isSuggestionsLoading,
+	} from '$lib/stores/suggestions.svelte';
 	import { fetchProposedDiffFiles, type ProposedDiffFile } from '$lib/api/chat';
 	import { renderMarkdown } from '$lib/utils/markdown';
 	import { toast } from 'svelte-sonner';
-	import { motion } from '$lib/motion';
 	import ProposedDiffModal from '$lib/components/review/ProposedDiffModal.svelte';
 	import {
 		Root as PopoverRoot,
@@ -112,6 +174,24 @@
 	const selectedPr = $derived(getSelectedPr());
 	const interactionMode = $derived(prId ? getInteractionMode(prId) : 'default');
 	const planModeAvailable = $derived(isPlanModeAvailable());
+	const queuedMessages = $derived(prId ? getQueuedMessages(prId) : []);
+	const chatCheckpoints = $derived(prId ? getCheckpoints(prId) : []);
+	const toolApprovals = $derived(prId ? getToolApprovals(prId) : []);
+	/** Index → checkpoint lookup for interleaving in the message loop. */
+	const checkpointByAfterIndex = $derived(
+		new Map(chatCheckpoints.map((cp) => [cp.afterIndex, cp])),
+	);
+	/** Pending (un-responded) tool approvals, rendered after the last message. */
+	const pendingApprovals = $derived(toolApprovals.filter((a) => !a.responded));
+	/** Most recent task list from the agent — surfaces in the Queue dock. */
+	const activeTasks = $derived.by(() => {
+		const taskList = items.findLast(
+			(i): i is Extract<typeof i, { kind: 'task-list' }> => i.kind === 'task-list',
+		);
+		return taskList ? taskList.tasks : [];
+	});
+	/** Whether the Queue dock should be visible. */
+	const showQueueDock = $derived(queuedMessages.length > 0 || activeTasks.length > 0);
 
 	const streamingTurnId = $derived(
 		items.findLast(
@@ -130,8 +210,6 @@
 			: []
 	);
 
-	let inputValue = $state('');
-	let textareaEl: HTMLTextAreaElement | undefined = $state();
 	let messagesEl: HTMLDivElement | undefined = $state();
 	let proposedExpanded = $state(false);
 	let diffOpen = $state<{
@@ -141,6 +219,17 @@
 	} | null>(null);
 	let conflictDialog = $state<{ files: string[]; branch: string } | null>(null);
 	let pushSuccessTrigger = $state(0);
+	let pushPillEl = $state<HTMLDivElement | null>(null);
+
+	// Pulse animation on push success — toggles a CSS animation class
+	$effect(() => {
+		const _trigger = pushSuccessTrigger;
+		if (!pushPillEl || _trigger === 0) return;
+		pushPillEl.classList.remove('push-pill--pulse');
+		// Force reflow so re-adding the class restarts the animation
+		void pushPillEl.offsetWidth;
+		pushPillEl.classList.add('push-pill--pulse');
+	});
 	let pushMenuOpen = $state(false);
 	// "Push to new branch" dialog. `input` mode collects the branch name;
 	// `confirm-overwrite` is the inline confirmation shown when the remote
@@ -150,91 +239,31 @@
 	let newBranchValue = $state('');
 	let newBranchInputEl: HTMLInputElement | null = $state(null);
 
-	// Auto-grow textarea up to ~3 lines.
+	// Auto-scroll-on-new-content for chat: if the user is at the bottom, follow
+	// new messages/streaming chunks. If they've scrolled up to read earlier
+	// content, leave them alone (ConversationScrollButton surfaces a "jump to
+	// latest" affordance). On PR switch we just land at the bottom — chat
+	// history grows downward, so the newest message is the natural default.
+	let atBottom = $state(true);
+
+	// PR switch → scroll to bottom on next tick.
 	$effect(() => {
-		// Track inputValue to retrigger.
-		void inputValue;
-		if (!textareaEl) return;
-		textareaEl.style.height = 'auto';
-		const max = 96; // ~3 lines at 13px line-height
-		textareaEl.style.height = `${Math.min(textareaEl.scrollHeight, max)}px`;
-	});
-
-	// ── Per-PR scroll persistence (right pane) ──────────────────────────────
-	//
-	// Two flows share the same scroll container:
-	//
-	//   - PR switch  → restore the saved scrollTop (or land at bottom on
-	//                  first visit — chat conversations grow downward, so
-	//                  bottom is the "newest message" default).
-	//   - Content    → auto-scroll-to-bottom on new messages/chunks, but
-	//                  only if the user was already at the bottom. We don't
-	//                  want to yank them out of older content they're reading.
-	//
-	// `wasAtBottom` is updated by the user-driven scroll handler and by the
-	// programmatic restore. The content-change effect is gated on
-	// `prId === lastRestoredPrId`, so a content update that arrives in the
-	// same flush as a PR switch can't beat the restore to the punch.
-	// `suppressNextScroll` swallows the synthetic 'scroll' event emitted when
-	// we mutate scrollTop ourselves, so handleScroll doesn't immediately
-	// overwrite the value we just persisted.
-
-	const AT_BOTTOM_TOLERANCE = 4; // px — accommodates sub-pixel rounding
-
-	let suppressNextScroll = false;
-	let wasAtBottom = true;
-	let lastRestoredPrId: string | undefined;
-
-	function isAtBottom(): boolean {
-		if (!messagesEl) return true;
-		const distance =
-			messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight;
-		return distance <= AT_BOTTOM_TOLERANCE;
-	}
-
-	function handleScroll(): void {
-		if (suppressNextScroll) {
-			suppressNextScroll = false;
-			return;
-		}
-		if (!messagesEl || !prId) return;
-		setPrScrollPosition(prId, 'rightPanel', messagesEl.scrollTop);
-		wasAtBottom = isAtBottom();
-	}
-
-	// Restore on PR change.
-	$effect(() => {
-		if (!messagesEl || !prId) return;
-		if (prId === lastRestoredPrId) return;
-		const incomingPrId = prId;
-		lastRestoredPrId = incomingPrId;
-		const saved = getPrScrollPosition(incomingPrId, 'rightPanel');
+		void prId;
+		if (!messagesEl) return;
 		void tick().then(() => {
-			if (!messagesEl || lastRestoredPrId !== incomingPrId) return;
-			suppressNextScroll = true;
-			if (saved > 0) {
-				messagesEl.scrollTop = saved;
-				wasAtBottom = isAtBottom();
-			} else {
-				messagesEl.scrollTop = messagesEl.scrollHeight;
-				wasAtBottom = true;
-			}
+			if (!messagesEl) return;
+			messagesEl.scrollTop = messagesEl.scrollHeight;
 		});
 	});
 
-	// Auto-scroll on new content. Skips while a PR-switch restore is still in
-	// flight, so it can't race with (and clobber) the restore.
+	// Auto-scroll on new content, only if user is already at the bottom.
 	$effect(() => {
 		void items.length;
 		void isStreaming;
-		if (!messagesEl || !prId) return;
-		if (prId !== lastRestoredPrId) return;
-		if (!wasAtBottom) return;
+		if (!messagesEl || !atBottom) return;
 		void tick().then(() => {
-			if (!messagesEl || prId !== lastRestoredPrId) return;
-			suppressNextScroll = true;
+			if (!messagesEl) return;
 			messagesEl.scrollTop = messagesEl.scrollHeight;
-			setPrScrollPosition(prId, 'rightPanel', messagesEl.scrollTop);
 		});
 	});
 
@@ -284,20 +313,44 @@
 		);
 	}
 
-	function handleSubmit(e?: Event): void {
-		e?.preventDefault();
+	function handlePromptSubmit(message: PromptInputMessage): void {
 		if (!prId) return;
-		const value = inputValue.trim();
-		if (value.length === 0 || isStreaming) return;
-		sendChatMessage({ prId, message: value });
-		inputValue = '';
+		const value = message.text.trim();
+		if (value.length === 0) return;
+		if (isStreaming) {
+			// Agent is busy — queue the message for dispatch when it finishes.
+			enqueueMessage(prId, value);
+		} else {
+			sendChatMessage({ prId, message: value });
+		}
 	}
 
-	function handleKeydown(e: KeyboardEvent): void {
-		if (e.key === 'Enter' && !e.shiftKey) {
-			e.preventDefault();
-			handleSubmit();
-		}
+	const inputStatus = $derived<PromptInputStatus>(isStreaming ? 'streaming' : 'ready');
+
+	// Empty-state suggestions: prefer the model-generated, PR-aware list
+	// from the suggestions store; fall back to the static prompts before
+	// the first fetch lands (or on any server failure).
+	const suggestedPrompts = $derived<readonly string[]>(
+		(prId ? getSuggestions(prId) : null) ?? FALLBACK_PROMPTS,
+	);
+	const suggestionsLoading = $derived(
+		prId ? isSuggestionsLoading(prId) && getSuggestions(prId) === null : false,
+	);
+
+	// Lazily fetch PR-aware suggestions whenever the empty state would
+	// actually be visible — chat has no items yet for this PR. Skipping
+	// this when chat already has history avoids spending tokens on PRs
+	// the user has already interacted with.
+	$effect(() => {
+		if (!prId) return;
+		if (items.length > 0) return;
+		if (getSuggestions(prId) !== null) return;
+		void fetchSuggestions(prId);
+	});
+
+	function handleSuggestion(text: string): void {
+		if (!prId || isStreaming) return;
+		sendChatMessage({ prId, message: text });
 	}
 
 	async function handleClear(): Promise<void> {
@@ -439,7 +492,7 @@
 			{#if commitCount > 0}
 				<div
 					class="push-pill"
-					use:motion={{ preset: 'pulse', trigger: pushSuccessTrigger }}
+					bind:this={pushPillEl}
 				>
 					<button
 						type="button"
@@ -562,80 +615,195 @@
 	{/if}
 
 	<!-- Messages -->
-	<div class="panel-content" bind:this={messagesEl} onscroll={handleScroll}>
+	<Conversation
+		bind:scrollEl={messagesEl}
+		bind:isAtBottom={atBottom}
+		innerClass="min-h-0"
+	>
 		{#if items.length === 0 && !error}
-			<div class="empty-state">
-				<Bot size={32} class="empty-icon" />
-				<p class="empty-primary">Ask the agent about this pull request</p>
-				<p class="empty-hint">
-					The agent runs inside the PR's worktree and can read the code, propose fixes,
-					and commit them on a working branch.
-				</p>
-				<p class="empty-examples">
-					Try: <em>"What's the riskiest change here?"</em><br />
-					or <em>"Fix the SQL injection in auth.ts and commit it."</em>
-				</p>
-			</div>
+			<ConversationEmptyState
+				title="Ask the agent about this pull request"
+				description="The agent runs inside the PR's worktree and can read the code, propose fixes, and commit them on a working branch."
+			>
+				{#snippet icon()}
+					<Bot size={32} />
+				{/snippet}
+				<Suggestion class="mt-3 justify-center max-w-[320px]">
+					{#each suggestedPrompts as prompt (prompt)}
+						<SuggestionItem
+							onSelect={(text) => handleSuggestion(text)}
+							disabled={!prId || suggestionsLoading}
+						>
+							{prompt}
+						</SuggestionItem>
+					{/each}
+				</Suggestion>
+			</ConversationEmptyState>
 		{:else}
-			<ul class="messages">
-				{#each items as item (item.id)}
+			<ConversationContent class="gap-2 px-2.5 py-3">
+				{#each items as item, itemIdx (item.id)}
 				{#if item.kind === 'activity'}
 						<!-- Skip nested sub-agent tool calls — they render
 							 inside their SubagentInvocation card. Also fold
 							 active-turn tool calls into the dot-matrix
 							 indicator below. -->
 						{#if !item.subagentInvocationId && !(item.turnId && streamingTurnIds.has(item.turnId))}
-							<li class="tool-line">
-								<span class="tool-bullet">›</span>
+							<div class="tool-line">
+								<span class="tool-bullet">&rsaquo;</span>
 								<span class="tool-text">{item.summary}</span>
-							</li>
+							</div>
 						{/if}
 					{:else if item.kind === 'task-list'}
-						<li class="rich-row">
-							<TaskList tasks={item.tasks} />
-						</li>
+						<!-- Rendered exclusively in the Queue dock below. -->
 					{:else if item.kind === 'plan'}
-						<li class="rich-row">
-							<PlanCard
-								planId={item.id}
-								markdown={item.markdown}
-								status={item.status}
-								onApprove={() => handleApprovePlan(item.id)}
-								onReject={() => handleRejectPlan(item.id)}
-								disabled={isStreaming}
-							/>
-						</li>
-					{:else if item.kind === 'subagent'}
-						<li class="rich-row">
-							<SubagentInvocation
-								subagentType={item.subagentType}
-								description={item.description}
-								status={item.status}
-								result={item.result}
-								activities={nestedActivitiesFor(item.id)}
-							/>
-						</li>
-					{:else if item.role === 'user'}
-						<li class="msg msg--user">
-							<div class="bubble bubble--user">{@html messageHtml(item.content)}</div>
-						</li>
-					{:else if item.kind === 'message' && item.role === 'assistant'}
-					<li class="msg msg--assistant">
-						<div class="bubble bubble--assistant">
-								{#if item.content}
-									{@html messageHtml(item.content)}
+						<Plan
+							class={item.status === 'rejected' ? 'opacity-85 border-destructive/35' : item.status === 'approved' ? 'border-green-500/35' : ''}
+						>
+							<PlanHeader>
+								<PlanTitle>Plan</PlanTitle>
+								{#if item.status === 'approved'}
+									<span class="ml-auto inline-flex items-center gap-1 rounded-full bg-green-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-green-500">
+										<CircleCheck class="size-2.5" />
+										Approved
+									</span>
+								{:else if item.status === 'rejected'}
+									<span class="ml-auto inline-flex items-center gap-1 rounded-full bg-destructive/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-destructive">
+										<CircleX class="size-2.5" />
+										Rejected
+									</span>
+								{:else if item.status === 'superseded'}
+									<span class="ml-auto inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+										Superseded
+									</span>
 								{/if}
+							</PlanHeader>
+							<PlanContent class="text-[13px] leading-relaxed">
+								{@html messageHtml(item.markdown)}
+							</PlanContent>
+							{#if item.status === 'pending'}
+								<PlanFooter>
+									<PlanAction
+										variant="outline"
+										onclick={() => handleRejectPlan(item.id)}
+										disabled={isStreaming}
+									>
+										<X data-icon="inline-start" />
+										Reject
+									</PlanAction>
+									<PlanAction
+										onclick={() => handleApprovePlan(item.id)}
+										disabled={isStreaming}
+									>
+										<Check data-icon="inline-start" />
+										Approve & continue
+									</PlanAction>
+								</PlanFooter>
+							{/if}
+						</Plan>
+					{:else if item.kind === 'subagent'}
+						{@const toolState = (item.status === 'running' ? 'input-available' : item.status === 'errored' ? 'output-error' : 'output-available') as ToolState}
+						<Tool open={item.status === 'running'}>
+							<ToolHeader
+								toolType={item.subagentType}
+								title={item.description}
+								state={toolState}
+							/>
+							<ToolContent>
+								{#if nestedActivitiesFor(item.id).length > 0}
+									<div class="space-y-0.5">
+										{#each nestedActivitiesFor(item.id) as activity (activity.id)}
+											<div class="flex items-baseline gap-1.5 text-xs text-muted-foreground">
+												<span class="font-semibold text-muted-foreground/60">&rsaquo;</span>
+												<span class="flex-1 min-w-0 break-words">{activity.summary}</span>
+											</div>
+										{/each}
+									</div>
+								{/if}
+								{#if item.status === 'errored'}
+									<ToolOutput class="mt-2" errorText={item.result ?? 'Sub-agent errored'} />
+								{:else if item.status === 'completed' && item.result}
+									<ToolOutput class="mt-2">
+										{#snippet output()}
+											<pre class="overflow-x-auto rounded-md bg-muted p-2.5 text-xs font-mono whitespace-pre-wrap break-words">{item.result}</pre>
+										{/snippet}
+									</ToolOutput>
+								{/if}
+								{#if item.status === 'running' && nestedActivitiesFor(item.id).length === 0}
+									<p class="text-xs italic text-muted-foreground">Waiting for the sub-agent to start&hellip;</p>
+								{/if}
+							</ToolContent>
+						</Tool>
+					{:else if item.kind === 'question'}
+						<Question
+							prId={prId!}
+							itemId={item.id}
+							questions={item.questions}
+							status={item.status}
+							answers={item.answers}
+							customAnswers={item.customAnswers}
+							previewFormat={item.previewFormat}
+						/>
+				{:else if item.role === 'user'}
+					<Message from="user">
+						<MessageContent>
+							<MessageResponse content={item.content} class="rounded-[14px] rounded-br-[4px] bg-accent px-3 py-2 text-[13px] leading-relaxed text-white [&_a]:text-white [&_a]:underline [&_code]:bg-black/20 [&_code]:text-[11.5px] [&_pre]:bg-black/20" />
+						</MessageContent>
+					</Message>
+				{:else if item.kind === 'message' && item.role === 'assistant'}
+					<Message from="assistant">
+						<MessageContent>
+							{#if item.content}
+								<MessageResponse content={item.content} class="text-[13px] leading-relaxed" />
+							{/if}
 							{#if item.error}
-								<div class="inline-error" role="alert">
-									<AlertTriangle size={12} class="inline-error-icon" />
-									<span class="inline-error-text">{item.error}</span>
+								<div class="mt-2 flex items-start gap-1.5 rounded bg-muted/60 border-l-2 border-muted-foreground px-2 py-1.5 text-[11px] text-muted-foreground" role="alert">
+									<AlertTriangle size={12} class="mt-0.5 shrink-0" />
+									<span class="min-w-0 break-words">{item.error}</span>
 								</div>
 							{/if}
-						</div>
-					</li>
+						</MessageContent>
+					</Message>
+					{/if}
+
+					<!-- Checkpoint marker (if one was placed after this item) -->
+					{#if checkpointByAfterIndex.has(itemIdx)}
+						{@const cp = checkpointByAfterIndex.get(itemIdx)}
+						{#if cp}
+							<Checkpoint
+								id={cp.id}
+								label={cp.label}
+								onRestore={(id) => prId && restoreToCheckpoint(prId, id)}
+							/>
+						{/if}
 					{/if}
 				{/each}
-			</ul>
+
+				<!-- Pending tool approvals — shown at the bottom of the timeline -->
+				{#each pendingApprovals as approval (approval.id)}
+					<Confirmation
+						tool={approval.tool}
+						message={approval.message}
+						responded={approval.responded}
+						onApprove={() => prId && respondToToolApproval(prId, approval.id, 'approved')}
+						onDeny={() => prId && respondToToolApproval(prId, approval.id, 'denied')}
+					>
+						<ConfirmationHeader
+							title={approval.tool}
+							description={approval.message}
+						/>
+						{#if approval.input}
+							<ConfirmationContent>
+								<pre class="overflow-x-auto rounded bg-muted p-2 text-xs font-mono whitespace-pre-wrap break-words">{typeof approval.input === 'string' ? approval.input : JSON.stringify(approval.input, null, 2)}</pre>
+							</ConfirmationContent>
+						{/if}
+						<ConfirmationActions
+							responded={approval.responded}
+							onApprove={() => prId && respondToToolApproval(prId, approval.id, 'approved')}
+							onDeny={() => prId && respondToToolApproval(prId, approval.id, 'denied')}
+						/>
+					</Confirmation>
+				{/each}
+			</ConversationContent>
 		{/if}
 
 		{#if isStreaming}
@@ -687,7 +855,8 @@
 				{/if}
 			</div>
 		{/if}
-	</div>
+		<ConversationScrollButton />
+	</Conversation>
 
 	<!-- Proposed changes strip -->
 	{#if commitCount > 0 && proposed}
@@ -794,65 +963,140 @@
 		</div>
 	{/if}
 
-	<!-- Input -->
-	<form class="input-row" onsubmit={handleSubmit}>
-		<div class="composer" class:composer--disabled={!prId}>
-			<textarea
-				bind:this={textareaEl}
-				bind:value={inputValue}
-				class="input-textarea"
-				placeholder="Ask anything…"
-				rows="1"
-				onkeydown={handleKeydown}
-				disabled={!prId}
-			></textarea>
-			<div class="composer-actions">
-				<button
-					type="button"
-					class="composer-btn composer-btn--mode"
-					class:composer-btn--mode-active={interactionMode === 'plan'}
-					onclick={handleTogglePlanMode}
-					aria-pressed={interactionMode === 'plan'}
-					aria-label={
-						interactionMode === 'plan'
-							? 'Plan mode (on)'
-							: 'Plan mode (off)'
-					}
-					title={
-						planModeAvailable
-							? interactionMode === 'plan'
-								? 'Plan mode is on — the agent will propose a plan instead of editing. Click to disable.'
-								: 'Enable plan mode: ask the agent to propose a plan first.'
-							: 'Plan mode requires an opencode install with a `plan` agent.'
-					}
-					disabled={!prId || !planModeAvailable}
-				>
-					<Lightbulb size={11} />
-				</button>
-				{#if isStreaming}
-					<button
-						type="button"
-						class="composer-btn composer-btn--stop"
-						onclick={handleStop}
-						aria-label="Stop generation"
-						title="Stop generation"
-					>
-						<Square size={10} fill="currentColor" />
-					</button>
-				{:else}
-					<button
-						class="composer-btn composer-btn--send"
-						type="submit"
-						disabled={!prId || inputValue.trim().length === 0}
-						aria-label="Send message"
-						title="Send message"
-					>
-						<Send size={12} />
-					</button>
+	<!-- Queue dock: agent tasks + queued messages -->
+	{#if showQueueDock}
+		<div class="queue-dock" transition:slide={{ duration: 220, easing: cubicOut }}>
+			<Queue class="rounded-b-none border-b-0 shadow-none">
+				<!-- Active todo list from the agent -->
+				{#if activeTasks.length > 0}
+					{@const completed = activeTasks.filter((t) => t.status === 'completed').length}
+					{@const allDone = completed === activeTasks.length}
+					<div transition:slide={{ duration: 220, easing: cubicOut }}>
+						<QueueSection open={!allDone}>
+							<QueueSectionTrigger>
+								<QueueSectionLabel
+									label={activeTasks.length === 1 ? 'todo' : 'todos'}
+									count={activeTasks.length}
+								>
+									{#snippet icon()}
+										{#if activeTasks.some((t) => t.status === 'in_progress')}
+											<Loader2 class="size-3 text-primary motion-essential-spin animate-spin" />
+										{:else if allDone}
+											<CheckCircle2 class="size-3 text-green-500" />
+										{:else}
+											<Circle class="size-3 text-muted-foreground" />
+										{/if}
+									{/snippet}
+								</QueueSectionLabel>
+								<span class="ml-auto text-[10px] tabular-nums text-muted-foreground">
+									{completed}/{activeTasks.length}
+								</span>
+							</QueueSectionTrigger>
+							<QueueSectionContent>
+								<QueueList>
+									{#each activeTasks as task, taskIdx (task.id)}
+										<div
+											in:fly={{ y: 4, duration: 160, delay: Math.min(taskIdx, 8) * 25, easing: cubicOut }}
+											out:fly={{ y: -4, duration: 120, easing: cubicIn }}
+										>
+											<QueueItem>
+												<QueueItemIndicator completed={task.status === 'completed'} />
+												<QueueItemContent completed={task.status === 'completed'}>
+													{#if task.status === 'in_progress' && task.activeForm}
+														{task.activeForm}
+													{:else}
+														{task.content}
+													{/if}
+												</QueueItemContent>
+											</QueueItem>
+										</div>
+									{/each}
+								</QueueList>
+							</QueueSectionContent>
+						</QueueSection>
+					</div>
 				{/if}
-			</div>
+
+				<!-- Queued messages (submitted while agent is busy) -->
+				{#if queuedMessages.length > 0}
+					<div transition:slide={{ duration: 220, easing: cubicOut }}>
+						<QueueSection>
+							<QueueSectionTrigger>
+								<QueueSectionLabel
+									label={queuedMessages.length === 1 ? 'queued message' : 'queued messages'}
+									count={queuedMessages.length}
+								>
+									{#snippet icon()}
+										<Send class="size-3 text-muted-foreground" />
+									{/snippet}
+								</QueueSectionLabel>
+							</QueueSectionTrigger>
+							<QueueSectionContent>
+								<QueueList>
+									{#each queuedMessages as msg, msgIdx (msg.id)}
+										<div
+											in:fly={{ y: 4, duration: 160, delay: Math.min(msgIdx, 8) * 25, easing: cubicOut }}
+											out:fly={{ y: -4, duration: 120, easing: cubicIn }}
+										>
+											<QueueItem>
+												<QueueItemContent>{msg.text}</QueueItemContent>
+												<QueueItemActions>
+													<QueueItemAction
+														onclick={() => prId && removeQueuedMessage(prId, msg.id)}
+														aria-label="Remove queued message"
+													>
+														<X class="size-3" />
+													</QueueItemAction>
+												</QueueItemActions>
+											</QueueItem>
+										</div>
+									{/each}
+								</QueueList>
+							</QueueSectionContent>
+						</QueueSection>
+					</div>
+				{/if}
+			</Queue>
 		</div>
-	</form>
+	{/if}
+
+	<!-- Input -->
+	<div class="flex-shrink-0 border-t border-border bg-background px-2.5 pb-3 pt-2.5">
+		<PromptInput
+			onsubmit={handlePromptSubmit}
+			onstop={handleStop}
+			status={inputStatus}
+			class={'transition-[border-color,box-shadow] duration-quick ease-out-expo focus-within:border-accent/70 focus-within:shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-accent)_14%,transparent)] hover:not(:focus-within):not(:has(:disabled)):border-border-hover' + (!prId ? ' opacity-60' : '')}
+		>
+			<PromptInputBody>
+				<PromptInputTextarea
+					placeholder="Ask anything…"
+					disabled={!prId}
+					class="text-[13px] leading-relaxed"
+				/>
+			</PromptInputBody>
+			<PromptInputFooter>
+				<PromptInputTools>
+					<PromptInputButton
+						tooltip={
+							planModeAvailable
+								? interactionMode === 'plan'
+									? 'Plan mode is on — the agent will propose a plan instead of editing. Click to disable.'
+									: 'Enable plan mode: ask the agent to propose a plan first.'
+								: 'Plan mode requires an opencode install with a `plan` agent.'
+						}
+						onclick={handleTogglePlanMode}
+						disabled={!prId || !planModeAvailable}
+						aria-pressed={interactionMode === 'plan'}
+						class={interactionMode === 'plan' ? 'bg-accent/15 text-accent hover:bg-accent/25 hover:text-accent' : ''}
+					>
+						<Lightbulb class="size-3.5" />
+					</PromptInputButton>
+				</PromptInputTools>
+				<PromptInputSubmit disabled={!prId} />
+			</PromptInputFooter>
+		</PromptInput>
+	</div>
 </div>
 
 <!-- Conflict dialog (shown after a push attempt finds conflicts) -->
@@ -1146,6 +1390,15 @@
 		color: var(--color-text-primary);
 		border: 1px solid color-mix(in srgb, var(--color-text-muted) 55%, transparent);
 		transition: background-color var(--duration-snap), border-color var(--duration-snap);
+	}
+
+	.push-pill:global(.push-pill--pulse) {
+		animation: push-pill-pulse 220ms var(--ease-out-expo);
+	}
+
+	@keyframes push-pill-pulse {
+		50% { transform: scale(1.04); }
+		100% { transform: scale(1); }
 	}
 
 	.push-pill:hover:not(:has(button:disabled)) {
@@ -1541,154 +1794,6 @@
 	}
 
 	/* Content / messages */
-	.panel-content {
-		flex: 1;
-		overflow-y: auto;
-		min-height: 0;
-	}
-
-	.messages {
-		list-style: none;
-		margin: 0;
-		padding: 12px 10px;
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
-	}
-
-	.msg {
-		display: flex;
-	}
-
-	.msg--user {
-		justify-content: flex-end;
-	}
-
-	.msg--assistant {
-		align-items: flex-start;
-		gap: 8px;
-	}
-
-	/* Shared bubble base */
-	.bubble {
-		font-size: 13px;
-		line-height: 1.55;
-		word-wrap: break-word;
-	}
-
-	/* User bubble — right-aligned, accent background */
-	.bubble--user {
-		background: var(--color-accent);
-		color: #fff;
-		border-radius: 14px 14px 4px 14px;
-		padding: 8px 12px;
-		max-width: 82%;
-	}
-
-	/* Inline markdown styling inside the accent-tinted user bubble.
-	   The defaults from `renderMarkdown` lean on the assistant palette
-	   (muted tertiary backgrounds) which is invisible on accent. These
-	   overrides keep code/links/quotes legible on top of the bubble. */
-	.bubble--user :global(p) { margin: 4px 0; }
-	.bubble--user :global(p:first-child) { margin-top: 0; }
-	.bubble--user :global(p:last-child) { margin-bottom: 0; }
-	.bubble--user :global(ul),
-	.bubble--user :global(ol) { margin: 4px 0; padding-left: 18px; }
-	.bubble--user :global(li) { margin: 2px 0; }
-	.bubble--user :global(strong) { font-weight: 600; }
-	.bubble--user :global(em) { font-style: italic; }
-	.bubble--user :global(a) {
-		color: inherit;
-		text-decoration: underline;
-		text-underline-offset: 2px;
-	}
-	.bubble--user :global(code) {
-		font-family: var(--font-mono);
-		font-size: 11.5px;
-		background: rgba(0, 0, 0, 0.22);
-		border-radius: 3px;
-		padding: 1px 4px;
-	}
-	.bubble--user :global(pre) {
-		margin: 6px 0;
-		padding: 8px 10px;
-		background: rgba(0, 0, 0, 0.22);
-		border-radius: 4px;
-		overflow-x: auto;
-	}
-	.bubble--user :global(pre code) {
-		background: none;
-		padding: 0;
-		font-size: 11px;
-		line-height: 1.5;
-	}
-	.bubble--user :global(blockquote) {
-		border-left: 2px solid rgba(255, 255, 255, 0.55);
-		margin: 6px 0;
-		padding: 2px 10px;
-		color: rgba(255, 255, 255, 0.85);
-	}
-
-	/* Agent avatar dot — removed; avatar div is no longer rendered */
-
-	/* Assistant — no bubble, plain content next to the avatar */
-	.bubble--assistant {
-		flex: 1;
-		min-width: 0;
-		color: var(--color-text-primary);
-		padding-top: 2px;
-	}
-
-	.bubble--assistant :global(h2) {
-		font-size: 14px;
-		font-weight: 600;
-		margin: 12px 0 4px;
-	}
-	.bubble--assistant :global(h3) {
-		font-size: 12px;
-		font-weight: 600;
-		text-transform: uppercase;
-		letter-spacing: 0.05em;
-		color: var(--color-text-secondary);
-		margin: 10px 0 4px;
-	}
-	.bubble--assistant :global(p) { margin: 4px 0; }
-	.bubble--assistant :global(ul),
-	.bubble--assistant :global(ol) { margin: 4px 0; padding-left: 18px; }
-	.bubble--assistant :global(li) { margin: 2px 0; }
-	.bubble--assistant :global(strong) { font-weight: 600; }
-	.bubble--assistant :global(code) {
-		font-family: var(--font-mono);
-		font-size: 11.5px;
-		background: var(--color-bg-tertiary);
-		border-radius: 3px;
-		padding: 1px 4px;
-	}
-	.bubble--assistant :global(pre) {
-		margin: 6px 0;
-		padding: 8px 10px;
-		background: var(--color-diff-bg);
-		border-radius: 4px;
-		overflow-x: auto;
-	}
-	.bubble--assistant :global(pre code) {
-		background: none;
-		padding: 0;
-		font-size: 11px;
-		line-height: 1.5;
-	}
-	.bubble--assistant :global(a) {
-		color: var(--color-accent);
-		text-decoration: underline;
-		text-underline-offset: 2px;
-	}
-	.bubble--assistant :global(blockquote) {
-		border-left: 2px solid var(--color-border-subtle);
-		margin: 8px 0;
-		padding: 2px 10px;
-		color: var(--color-text-secondary);
-	}
-
 	/* Tool-use line */
 	.tool-line {
 		display: flex;
@@ -1747,66 +1852,6 @@
 		color: var(--color-text-muted);
 	}
 
-	/* Inline error chip — attached to an assistant bubble whose stream
-	   errored mid-turn. Distinct from the panel-level error-state block,
-	   which renders only when there's no bubble to attach to. */
-	.inline-error {
-		display: flex;
-		align-items: flex-start;
-		gap: 6px;
-		margin-top: 8px;
-		padding: 6px 8px;
-		border-radius: 4px;
-		background: var(--color-bg-tertiary);
-		border-left: 2px solid var(--color-text-muted);
-		font-size: 11px;
-		color: var(--color-text-muted);
-		line-height: 1.4;
-	}
-
-	:global(.inline-error-icon) {
-		flex-shrink: 0;
-		margin-top: 2px;
-	}
-
-	.inline-error-text {
-		word-wrap: break-word;
-		min-width: 0;
-	}
-
-	/* Empty state */
-	.empty-state {
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		justify-content: center;
-		min-height: 100%;
-		padding: 32px 24px;
-		text-align: center;
-		gap: 8px;
-	}
-
-	:global(.empty-icon) { color: var(--color-text-muted); margin-bottom: 4px; }
-
-	.empty-primary {
-		font-size: 13px;
-		font-weight: 500;
-		color: var(--color-text-secondary);
-		margin: 0;
-	}
-
-	.empty-hint, .empty-examples {
-		font-size: 11px;
-		color: var(--color-text-muted);
-		margin: 0;
-		line-height: 1.5;
-	}
-
-	.empty-examples em {
-		font-style: italic;
-		color: var(--color-text-secondary);
-	}
-
 	/* Error states */
 	.error-state {
 		display: flex;
@@ -1841,170 +1886,13 @@
 		text-underline-offset: 2px;
 	}
 
-	/* Input row — outer form is now just a layout/padding wrapper. The
-	   visible "input" is the .composer surface inside, which unifies the
-	   textarea and the send/stop button into a single bordered chip with
-	   a shared focus-within ring. */
-	.input-row {
-		display: flex;
-		padding: 10px 10px 12px;
-		border-top: 1px solid var(--color-border-subtle);
+	/* Queue dock — sits directly above the input row. The Queue component's
+	   bottom border/radius are stripped so it visually merges with the
+	   composer below. */
+	.queue-dock {
+		padding: 8px 10px 0;
 		background: var(--color-panel-bg);
 		flex-shrink: 0;
-	}
-
-	.composer {
-		position: relative;
-		flex: 1;
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		padding: 6px 6px 6px 14px;
-		background: var(--color-bg-elevated);
-		border: 1px solid var(--color-border-subtle);
-		border-radius: 999px;
-		box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
-		transition:
-			border-color var(--duration-quick) var(--ease-out-expo),
-			box-shadow var(--duration-quick) var(--ease-out-expo),
-			background-color var(--duration-quick) var(--ease-out-expo);
-	}
-
-	.composer:hover:not(.composer--disabled):not(:focus-within) {
-		border-color: var(--color-border);
-	}
-
-	.composer:focus-within {
-		border-color: color-mix(in srgb, var(--color-accent) 70%, transparent);
-		box-shadow:
-			0 0 0 3px color-mix(in srgb, var(--color-accent) 14%, transparent),
-			0 1px 0 rgba(0, 0, 0, 0.04);
-	}
-
-	.composer--disabled {
-		opacity: 0.6;
-	}
-
-	.input-textarea {
-		flex: 1;
-		min-width: 0;
-		min-height: 22px;
-		max-height: 96px;
-		padding: 6px 0;
-		font-size: 13px;
-		line-height: 1.45;
-		font-family: inherit;
-		color: var(--color-text-primary);
-		background: transparent;
-		border: none;
-		border-radius: 0;
-		resize: none;
-		outline: none;
-	}
-
-	.input-textarea::placeholder {
-		color: var(--color-text-muted);
-	}
-
-	.input-textarea:disabled {
-		cursor: not-allowed;
-	}
-
-	.composer-actions {
-		display: flex;
-		align-items: center;
-		gap: 4px;
-		flex-shrink: 0;
-	}
-
-	.composer-btn {
-		width: 26px;
-		height: 26px;
-		border-radius: 50%;
-		border: none;
-		cursor: pointer;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		flex-shrink: 0;
-		transition:
-			background-color var(--duration-snap),
-			color var(--duration-snap),
-			opacity var(--duration-snap),
-			transform var(--duration-snap);
-	}
-
-	.composer-btn:active:not(:disabled) {
-		transform: scale(0.94);
-	}
-
-	.composer-btn--send {
-		background: var(--color-accent);
-		color: #fff;
-	}
-
-	.composer-btn--send:hover:not(:disabled) {
-		background: var(--color-accent-hover);
-	}
-
-	.composer-btn--send:disabled {
-		background: var(--color-bg-tertiary);
-		color: var(--color-text-muted);
-		cursor: not-allowed;
-	}
-
-	.composer-btn--stop {
-		background: var(--color-bg-tertiary);
-		color: var(--color-text-secondary);
-		border: 1px solid var(--color-border-subtle);
-	}
-
-	.composer-btn--stop:hover {
-		background: var(--color-bg-primary);
-		color: var(--color-text-primary);
-		border-color: var(--color-border);
-	}
-
-	.composer-btn--mode {
-		background: transparent;
-		color: var(--color-text-muted);
-		border: 1px solid var(--color-border-subtle);
-		transition:
-			background-color var(--duration-snap),
-			color var(--duration-snap),
-			border-color var(--duration-snap);
-	}
-
-	.composer-btn--mode:hover:not(:disabled) {
-		color: var(--color-text-secondary);
-		background: var(--color-bg-tertiary);
-	}
-
-	.composer-btn--mode-active {
-		background: color-mix(in srgb, var(--color-accent) 18%, transparent);
-		color: var(--color-accent);
-		border-color: color-mix(in srgb, var(--color-accent) 55%, transparent);
-	}
-
-	.composer-btn--mode-active:hover:not(:disabled) {
-		background: color-mix(in srgb, var(--color-accent) 28%, transparent);
-		color: var(--color-accent);
-		border-color: color-mix(in srgb, var(--color-accent) 70%, transparent);
-	}
-
-	.composer-btn--mode:disabled {
-		opacity: 0.4;
-		cursor: not-allowed;
-	}
-
-	/* Rich timeline rows (plans, task lists, sub-agents). They render
-	   full-width slabs inside the messages list, so reset the <li>
-	   spacing that the other variants apply. */
-	.rich-row {
-		display: block;
-		padding: 0;
-		margin: 0;
-		list-style: none;
 	}
 
 	/* Diff overlay */

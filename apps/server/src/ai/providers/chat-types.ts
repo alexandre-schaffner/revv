@@ -10,9 +10,14 @@
 // invariant #13: agent-path parity). This file re-exports them for callers
 // that already import from `./chat-types` so the import sites don't churn.
 
-import type { Activity, ActivityKind, ChatTask } from "@revv/shared";
+import type {
+	Activity,
+	ActivityKind,
+	ChatTask,
+	NormalizedQuestion,
+} from "@revv/shared";
 
-export type { Activity, ActivityKind };
+export type { Activity, ActivityKind, NormalizedQuestion };
 export { classifyTool, normalizeToolName } from "@revv/shared";
 
 /**
@@ -58,6 +63,20 @@ export type ChatStreamFrame =
 			readonly invocationId: string;
 			readonly result: string;
 			readonly ok: boolean;
+	  }
+	| {
+			readonly kind: "user-question";
+			readonly questionId: string;
+			readonly turnId: string;
+			readonly questions: ReadonlyArray<NormalizedQuestion>;
+			readonly previewFormat: "markdown" | "html";
+			readonly status: "pending";
+	  }
+	| {
+			readonly kind: "user-question-resolved";
+			readonly questionId: string;
+			readonly status: "answered" | "rejected";
+			readonly answers?: Readonly<Record<string, ReadonlyArray<string>>>;
 	  };
 
 /**
@@ -101,4 +120,19 @@ export type RawChatStreamFrame =
 			readonly result: string;
 			readonly ok: boolean;
 			readonly source: "claude" | "opencode";
+	  }
+	| {
+			readonly kind: "user-question";
+			readonly providerRequestId: string;
+			readonly questions: ReadonlyArray<NormalizedQuestion>;
+			readonly previewFormat: "markdown" | "html";
+			readonly source: "claude" | "opencode";
+			readonly providerToolCallId?: string;
+	  }
+	| {
+			readonly kind: "user-question-resolved";
+			readonly providerRequestId: string;
+			readonly source: "opencode";
+			readonly status: "answered" | "rejected";
+			readonly answers?: Readonly<Record<string, ReadonlyArray<string>>>;
 	  };

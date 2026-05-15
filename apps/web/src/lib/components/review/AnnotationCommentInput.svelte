@@ -158,7 +158,7 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		transition: background-color 80ms, color 80ms;
+		transition: background-color var(--duration-instant) var(--ease-soft), color var(--duration-instant) var(--ease-soft);
 	}
 
 	.submit-btn--active {

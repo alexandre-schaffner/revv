@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
-	import { softFade } from '$lib/motion';
+	import { fade } from 'svelte/transition';
 	import { getIsAuthenticated, getIsOnboarded, getUser, getToken, getLocalAccounts, getAccountJustRemoved, getForceOnboardingFlow, resetForceOnboardingFlow } from '$lib/stores/auth.svelte';
 	import OnboardingFlow from './OnboardingFlow.svelte';
 	import AccountPicker from './AccountPicker.svelte';
@@ -62,13 +62,13 @@
 
 {#if ready}
 	{#if showApp}
-		<div class="root" in:softFade={{ duration: 320 }}>
+		<div class="root" in:fade={{ duration: 320 }}>
 			{@render children()}
 		</div>
 	{:else if showPicker && !pickerDismissed}
 		<AccountPicker onNewAccount={handleNewAccount} />
 	{:else}
-		<div out:softFade={{ duration: 220 }}>
+		<div out:fade={{ duration: 220 }}>
 			<OnboardingFlow onFinish={handleFinish} />
 		</div>
 	{/if}

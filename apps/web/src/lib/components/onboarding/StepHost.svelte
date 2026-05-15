@@ -114,7 +114,7 @@
 		letter-spacing: 0.14em;
 		text-transform: uppercase;
 		cursor: pointer;
-		transition: color var(--duration-quick, 240ms) var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1));
+		transition: color var(--duration-snap) var(--ease-out-expo);
 		margin-bottom: -12px;
 	}
 
@@ -123,7 +123,7 @@
 	}
 
 	.back :global(svg) {
-		transition: transform var(--duration-quick, 240ms) var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1));
+		transition: transform var(--duration-quick) var(--ease-out-expo);
 	}
 
 	.back:hover :global(svg) {
@@ -168,7 +168,7 @@
 		padding: 18px 4px;
 		border-bottom: 1px solid var(--ob-border);
 		cursor: pointer;
-		transition: background-color 320ms cubic-bezier(0.16, 1, 0.3, 1);
+		transition: background-color var(--duration-snap) var(--ease-out-expo);
 		animation: option-in 600ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
 	}
 
@@ -208,7 +208,7 @@
 		height: 14px;
 		border: 1px solid var(--ob-border-btn);
 		border-radius: 50%;
-		transition: border-color 320ms cubic-bezier(0.16, 1, 0.3, 1);
+		transition: border-color var(--duration-snap) var(--ease-out-expo);
 	}
 
 	.option[data-selected='true'] .option-mark {
@@ -304,10 +304,14 @@
 		cursor: pointer;
 		letter-spacing: 0.01em;
 		transition:
-			background-color 320ms cubic-bezier(0.16, 1, 0.3, 1),
-			border-color 320ms cubic-bezier(0.16, 1, 0.3, 1),
-			color 320ms cubic-bezier(0.16, 1, 0.3, 1),
-			transform 280ms cubic-bezier(0.16, 1, 0.3, 1);
+			background-color var(--duration-snap) var(--ease-out-expo),
+			border-color var(--duration-snap) var(--ease-out-expo),
+			color var(--duration-snap) var(--ease-out-expo),
+			transform var(--duration-smooth) var(--ease-out-expo);
+	}
+
+	.primary svg {
+		transition: transform var(--duration-smooth) var(--ease-out-expo);
 	}
 
 	.primary svg {

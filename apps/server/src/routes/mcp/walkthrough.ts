@@ -73,18 +73,31 @@ async function resolveContext(
 		};
 	}
 	const walkthroughId = resolved.walkthroughId;
+	// emitEvent runs synchronously via `runSync` rather than fire-and-forget
+	// `runPromise`. Phase events from the opencode SSE subscription reach the
+	// SSE subscriber through a fully synchronous path (opencode `/event` →
+	// provider queue → orchestrator for-await → fanOut → writer.send), while
+	// content events from MCP tool handlers used to go through an async
+	// `runPromise`. Under a burst of tool calls those queued Promises lag
+	// behind the orchestrator's sync fan-outs, so the user sees phase /
+	// progress events keep flowing while block / issue / semantic-step
+	// events stop arriving even though MCP requests are still hitting the
+	// server. `emitEvent` is a pure-sync Effect (Ref.get + sync fanOut +
+	// sync notify), so `runSync` is safe and removes the timing asymmetry.
 	const emit = (event: WalkthroughStreamEvent): void => {
-		void AppRuntime.runPromise(
-			Effect.flatMap(WalkthroughJobs, (jobs) =>
-				jobs.emitEvent(walkthroughId, event),
-			),
-		).catch((err) => {
+		try {
+			AppRuntime.runSync(
+				Effect.flatMap(WalkthroughJobs, (jobs) =>
+					jobs.emitEvent(walkthroughId, event),
+				),
+			);
+		} catch (err) {
 			logError(
 				"mcp-walkthrough-route",
 				`emitEvent failed for ${walkthroughId}:`,
 				err instanceof Error ? err.message : String(err),
 			);
-		});
+		}
 	};
 	// WebSocket broadcaster used by tools that mutate non-walkthrough tables
 	// (currently only `add_issue_comment` → `comment_threads`). Same shape as

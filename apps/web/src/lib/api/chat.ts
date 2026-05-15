@@ -12,9 +12,12 @@ import type {
 	Activity,
 	ActivityKind,
 	ChatPlan,
+	ChatQuestion,
 	ChatSubagentInvocation,
 	ChatTask,
 	InteractionMode,
+	NormalizedQuestion,
+	NormalizedQuestionOption,
 } from '@revv/shared';
 import { API_BASE_URL } from '$lib/api/base-url';
 import { authHeaders } from '$lib/utils/session-token';
@@ -22,7 +25,17 @@ import { parseSSEBuffer } from '$lib/utils/sse-parser';
 
 // Re-export the canonical activity types so existing call sites in stores
 // and components can keep importing from `$lib/api/chat`.
-export type { Activity, ActivityKind, ChatPlan, ChatSubagentInvocation, ChatTask, InteractionMode };
+export type {
+	Activity,
+	ActivityKind,
+	ChatPlan,
+	ChatQuestion,
+	ChatSubagentInvocation,
+	ChatTask,
+	InteractionMode,
+	NormalizedQuestion,
+	NormalizedQuestionOption,
+};
 
 export type ChatStreamFrame =
 	| { kind: 'text'; data: string }
@@ -48,6 +61,20 @@ export type ChatStreamFrame =
 			invocationId: string;
 			result: string;
 			ok: boolean;
+	  }
+	| {
+			kind: 'user-question';
+			questionId: string;
+			turnId: string;
+			questions: ReadonlyArray<NormalizedQuestion>;
+			previewFormat: 'markdown' | 'html';
+			status: 'pending';
+	  }
+	| {
+			kind: 'user-question-resolved';
+			questionId: string;
+			status: 'answered' | 'rejected';
+			answers?: Readonly<Record<string, ReadonlyArray<string>>>;
 	  };
 
 export interface ChatRequestParams {
@@ -76,6 +103,17 @@ export interface ChatCallbacks {
 		invocationId: string;
 		result: string;
 		ok: boolean;
+	}) => void;
+	onQuestionPosted: (params: {
+		questionId: string;
+		turnId: string;
+		questions: ReadonlyArray<NormalizedQuestion>;
+		previewFormat: 'markdown' | 'html';
+	}) => void;
+	onQuestionResolved: (params: {
+		questionId: string;
+		status: 'answered' | 'rejected';
+		answers?: Readonly<Record<string, ReadonlyArray<string>>>;
 	}) => void;
 	onDone: () => void;
 	onError: (error: { code: string; message: string; [k: string]: unknown }) => void;
@@ -232,6 +270,19 @@ export function streamChatMessage(
 							result: frame.result,
 							ok: frame.ok,
 						});
+					} else if (frame.kind === 'user-question') {
+						callbacks.onQuestionPosted({
+							questionId: frame.questionId,
+							turnId: frame.turnId,
+							questions: frame.questions,
+							previewFormat: frame.previewFormat,
+						});
+					} else if (frame.kind === 'user-question-resolved') {
+						callbacks.onQuestionResolved({
+							questionId: frame.questionId,
+							status: frame.status,
+							...(frame.answers !== undefined ? { answers: frame.answers } : {}),
+						});
 					}
 				}
 
@@ -334,6 +385,60 @@ export async function rejectPlan(prId: string, planId: string): Promise<void> {
 	}
 }
 
+export interface SubmitQuestionAnswerParams {
+	decision: 'answer' | 'reject';
+	answers?: Record<string, ReadonlyArray<string>>;
+	customAnswers?: Record<string, string>;
+}
+
+export interface SubmitQuestionAnswerResult {
+	status: 'ok';
+	resolution: 'answered' | 'rejected';
+	alreadyResolved?: boolean;
+}
+
+export interface SubmitQuestionAnswerError {
+	code: 'QUESTION_NOT_FOUND' | 'QUESTION_EXPIRED' | 'OPENCODE_UNAVAILABLE' | 'GENERIC_ERROR';
+	message: string;
+}
+
+/**
+ * Submit the user's answer (or rejection) to an open question. Server is
+ * idempotent: if the row is already resolved, the response carries
+ * `alreadyResolved: true` and the same resolution. The store treats both
+ * paths the same way (patch local item to terminal state).
+ */
+export async function submitQuestionAnswer(
+	prId: string,
+	questionId: string,
+	params: SubmitQuestionAnswerParams,
+): Promise<SubmitQuestionAnswerResult> {
+	const res = await fetch(
+		`${API_BASE_URL}/api/chat/${prId}/question/${questionId}/answer`,
+		{
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', ...authHeaders() },
+			body: JSON.stringify(params),
+		},
+	);
+	const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+	if (!res.ok) {
+		const err: SubmitQuestionAnswerError = {
+			code:
+				(body['code'] as SubmitQuestionAnswerError['code']) ??
+				'GENERIC_ERROR',
+			message:
+				(body['message'] as string | undefined) ?? `Submit failed: ${res.status}`,
+		};
+		throw err;
+	}
+	return {
+		status: 'ok',
+		resolution: body['resolution'] as 'answered' | 'rejected',
+		...(body['alreadyResolved'] === true ? { alreadyResolved: true } : {}),
+	};
+}
+
 export interface AvailableAgents {
 	agent: 'claude' | 'opencode';
 	agents: readonly string[];
@@ -417,12 +522,31 @@ export interface PersistedChatSubagent {
 	completedAt: string | null;
 }
 
+export interface PersistedChatQuestion {
+	entryKind: 'question';
+	id: string;
+	chatSessionId: string;
+	turnId: string;
+	source: 'claude' | 'opencode';
+	providerRequestId: string;
+	providerToolCallId: string | null;
+	previewFormat: 'markdown' | 'html';
+	questions: ReadonlyArray<NormalizedQuestion>;
+	status: 'pending' | 'answered' | 'rejected' | 'superseded';
+	answers: Readonly<Record<string, ReadonlyArray<string>>> | null;
+	customAnswers: Readonly<Record<string, string>> | null;
+	sequence: number;
+	createdAt: string;
+	answeredAt: string | null;
+}
+
 export type PersistedChatEntry =
 	| PersistedChatMessage
 	| PersistedChatActivity
 	| PersistedChatTaskList
 	| PersistedChatPlan
-	| PersistedChatSubagent;
+	| PersistedChatSubagent
+	| PersistedChatQuestion;
 
 export interface ChatTimeline {
 	chatSessionId: string | null;

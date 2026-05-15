@@ -16,13 +16,14 @@
 //                                       emit normalized events. Treats both
 //                                       `thinking` and `redacted_thinking`
 //                                       blocks as reasoning deltas.
-//   3. `subscribeOpencodeStream`      — subscribe to /event SSE, decode
-//                                       `message.part.updated` frames into
-//                                       normalized events. Owns per-partId
-//                                       delta-dedup state and the load-bearing
-//                                       100ms post-completion drain.
+//   3. `subscribeOpencodeStream`      — subscribe to /global/event SSE via
+//                                       the SDK, decode `message.part.updated`
+//                                       frames into normalized events. Owns
+//                                       per-partId delta-dedup state and the
+//                                       load-bearing 100ms post-completion
+//                                       drain.
 //   4. `walkOpencodeParts`            — synchronous walk over the parts array
-//                                       returned by POST /session/:id/message.
+//                                       returned by `session.prompt`.
 //   5. `decodeOpencodePart`           — pure per-Part decoder shared by (3)
 //                                       and (4). Returns the event + new
 //                                       cumulative-emitted-length so the SSE
@@ -38,9 +39,14 @@
 
 import type { ActivityKind, WalkthroughTokenUsage } from "@revv/shared";
 import { classifyTool, normalizeToolName } from "@revv/shared";
+import type { Event, Part } from "@opencode-ai/sdk";
 import { debug, logError } from "../logger";
-import type { OpencodeHttpClient } from "../services/OpencodeSupervisor";
+import type { OpencodeClient } from "../services/OpencodeSupervisor";
 import { buildExplorationDescription } from "./prompts/walkthrough";
+
+// Re-export the SDK's Part type for any other file in this package that wants
+// to talk about opencode parts without depending on the SDK directly.
+export type { Part };
 
 // ── Normalized event ────────────────────────────────────────────────────────
 
@@ -154,6 +160,44 @@ export type NormalizedAgentEvent =
 			readonly ok: boolean;
 			readonly source: "claude" | "opencode";
 	  }
+	/**
+	 * Agent has asked the user one or more questions and is paused waiting
+	 * for answers. Sources:
+	 *   - Claude: `tool_use { name: "askUserQuestion" }` intercepted by
+	 *     `canUseTool`. `providerRequestId = tool_use.id`. The driver holds
+	 *     a Promise resolved when the answer endpoint fires.
+	 *   - Opencode: `question.asked` event from `/global/event`.
+	 *     `providerRequestId = QuestionRequest.id`. The opencode daemon
+	 *     stays paused until `/question/{id}/reply` is hit out-of-band.
+	 *
+	 * The route's persistence wrapper assigns a server-side `questionId`,
+	 * writes the row, and forwards a `user-question` wire frame.
+	 */
+	| {
+			readonly kind: "user-question-asked";
+			readonly providerRequestId: string;
+			readonly source: "claude" | "opencode";
+			readonly questions: ReadonlyArray<import("@revv/shared").NormalizedQuestion>;
+			readonly previewFormat: "markdown" | "html";
+			/** Opencode `QuestionRequest.tool.callID`; absent for Claude. */
+			readonly providerToolCallId?: string;
+	  }
+	/**
+	 * Opencode-only follow-up: the daemon broadcasts `question.replied` /
+	 * `question.rejected` after our HTTP POST resolves the question. We emit
+	 * this so the persistence wrapper can flip the row's status idempotently
+	 * (the answer endpoint already wrote the DB row on the user-facing path).
+	 *
+	 * Claude doesn't emit this — its resolution lives entirely inside the
+	 * answer endpoint (resolve the in-memory deferred and update DB inline).
+	 */
+	| {
+			readonly kind: "user-question-resolved";
+			readonly providerRequestId: string;
+			readonly source: "opencode";
+			readonly status: "answered" | "rejected";
+			readonly answers?: Readonly<Record<string, ReadonlyArray<string>>>;
+	  }
 	| { readonly kind: "error"; readonly message: string };
 
 /**
@@ -212,6 +256,103 @@ export function buildActivity(
 	};
 }
 
+// ── Fluid stream chunker ────────────────────────────────────────────────────
+
+/**
+ * Target chars per emitted text/reasoning chunk before the fluid splitter
+ * kicks in. Tuned to feel like a natural typewriter cadence: small enough
+ * that a paragraph-sized delta doesn't dump in one go, large enough that
+ * we're not flooding the chat UI with single-character updates.
+ */
+const FLUID_DEFAULT_CHUNK_LEN = 12;
+
+/**
+ * Wrap an `emit` function so `text-delta` and `reasoning-delta` events
+ * longer than `targetChunkLen` are split into smaller word-boundary-aligned
+ * chunks. All other event kinds pass through untouched, and deltas already
+ * shorter than the target emit as-is (no overhead).
+ *
+ * Why this exists: provider drivers don't all stream at the same
+ * granularity. The Claude SDK without `includePartialMessages: true` hands
+ * back each content block as a single chunk — potentially several
+ * paragraphs in one event. Opencode's daemon usually paces deltas per
+ * model-token, but bursty event flushes can still pile up. Both paths
+ * route through `fluidEmit` so the chat bubble sees a uniform, typewriter-
+ * like cadence regardless of upstream behaviour.
+ *
+ * Splits prefer the next whitespace/punctuation within a 2x lookahead so
+ * words aren't sliced mid-letter. Long unbroken runs (URLs, identifier
+ * chains) hard-cut at `2 * targetChunkLen` rather than emit one long
+ * chunk. When the wrapped `emit` carries state (e.g. the chat drivers'
+ * `hasEmittedText` / `lastWasNonText` separator tracking), that state is
+ * updated by the first sub-chunk only — subsequent sub-chunks see the
+ * post-first state and skip the separator, which is exactly what we want.
+ */
+export function fluidEmit(
+	emit: (ev: NormalizedAgentEvent) => void,
+	opts?: { targetChunkLen?: number },
+): (ev: NormalizedAgentEvent) => void {
+	const targetLen = Math.max(
+		1,
+		opts?.targetChunkLen ?? FLUID_DEFAULT_CHUNK_LEN,
+	);
+	return (ev: NormalizedAgentEvent): void => {
+		if (ev.kind !== "text-delta" && ev.kind !== "reasoning-delta") {
+			emit(ev);
+			return;
+		}
+		if (ev.data.length <= targetLen) {
+			emit(ev);
+			return;
+		}
+		const partIdField =
+			ev.partId !== undefined ? { partId: ev.partId } : {};
+		for (const chunk of splitForFluidStream(ev.data, targetLen)) {
+			if (ev.kind === "text-delta") {
+				emit({ kind: "text-delta", data: chunk, ...partIdField });
+			} else {
+				emit({ kind: "reasoning-delta", data: chunk, ...partIdField });
+			}
+		}
+	};
+}
+
+/**
+ * Split `text` into chunks targeting `targetLen` chars, snapping to the
+ * next whitespace/punctuation boundary within a 2x lookahead window when
+ * one exists. Falls back to a hard cut at `2 * targetLen` for long
+ * unbroken runs (URLs, identifier chains) so a worst-case input still
+ * emits as multiple chunks. The trailing remainder is always emitted as-is.
+ */
+function splitForFluidStream(text: string, targetLen: number): string[] {
+	const out: string[] = [];
+	const boundary = /[\s.,;:!?\-—)\]}>"']/;
+	let i = 0;
+	while (i < text.length) {
+		const remaining = text.length - i;
+		if (remaining <= targetLen) {
+			out.push(text.slice(i));
+			return out;
+		}
+		let end = i + targetLen;
+		const stop = Math.min(i + targetLen * 2, text.length);
+		let foundBoundary = false;
+		for (let j = end; j < stop; j += 1) {
+			if (boundary.test(text[j]!)) {
+				// Include the boundary char so the next chunk starts on a
+				// fresh word — `"hello, "` then `"world"` reads cleanly.
+				end = j + 1;
+				foundBoundary = true;
+				break;
+			}
+		}
+		if (!foundBoundary) end = stop;
+		out.push(text.slice(i, end));
+		i = end;
+	}
+	return out;
+}
+
 // ── Claude SDK content-block walker ─────────────────────────────────────────
 
 /**
@@ -243,6 +384,48 @@ interface ClaudeMessage {
 				| string
 				| Array<{ type: string; text?: string }>;
 		}>;
+		// Cumulative token usage for THIS turn (one model inference call).
+		// Populated on `assistant` SDK messages by the Claude Agent SDK; the
+		// walker sums these across turns to produce the running session total.
+		// Field names mirror the Anthropic API shape.
+		usage?: {
+			input_tokens?: number;
+			output_tokens?: number;
+			cache_read_input_tokens?: number;
+			cache_creation_input_tokens?: number;
+		};
+	};
+	// `stream_event` shape (SDKPartialAssistantMessage). Populated only when
+	// the caller opted into partial messages via `includePartialMessages:
+	// true`. Each event is a raw Claude API stream event so the walker can
+	// emit per-token text/thinking deltas instead of waiting for the full
+	// `assistant` message at the end of each turn.
+	event?: {
+		type: string;
+		index?: number;
+		delta?: {
+			type: string;
+			text?: string;
+			thinking?: string;
+		};
+		// `message_start` events nest the initial response info under
+		// `message.usage` (full usage shape including cache reads/writes).
+		// `message_delta` events carry running counts directly on `event.usage`
+		// (typically only `output_tokens`).
+		message?: {
+			usage?: {
+				input_tokens?: number;
+				output_tokens?: number;
+				cache_read_input_tokens?: number;
+				cache_creation_input_tokens?: number;
+			};
+		};
+		usage?: {
+			input_tokens?: number;
+			output_tokens?: number;
+			cache_read_input_tokens?: number;
+			cache_creation_input_tokens?: number;
+		};
 	};
 	subtype?: string;
 	usage?: {
@@ -264,6 +447,15 @@ interface ClaudeMessage {
  *                            still surface *something* so guard heartbeats fire
  *                            and downstream UIs can render a placeholder)
  *   - `tool_use`          → `tool-call`
+ *
+ * When the caller opts into `includePartialMessages: true` on the SDK, the
+ * walker also handles `stream_event` messages: `content_block_delta` events
+ * are emitted as fine-grained `text-delta` / `reasoning-delta` chunks (the
+ * model's natural per-token cadence), and the corresponding text/thinking
+ * blocks in the trailing `assistant` message are skipped so the same content
+ * isn't emitted twice. When partial messages are NOT enabled, no
+ * `stream_event` messages arrive and the dedup tracking stays empty — the
+ * full block fires from the `assistant` message exactly as before.
  *
  * Returns the final `WalkthroughTokenUsage` parsed from the SDK's terminal
  * `result` message — `null` if the stream ended without one. Callers that
@@ -289,11 +481,53 @@ export async function walkClaudeMessages(
 	//       nested message (stack-based fallback).
 	const activeSubagentCallIds = new Set<string>();
 
+	// Content-block indices in the CURRENT in-progress assistant message
+	// that we've already emitted as deltas via `stream_event` messages.
+	// Cleared on `message_start` (new turn) and again after we process the
+	// trailing `assistant` message. When `includePartialMessages: false`,
+	// this stays empty and assistant-block emission proceeds as before.
+	const streamedContentBlockIndices = new Set<number>();
+
 	for await (const raw of iter) {
 		if (opts?.onMessage) {
 			await opts.onMessage(raw);
 		}
 		const message = raw as ClaudeMessage;
+
+		if (message.type === "stream_event") {
+			const event = message.event;
+			if (!event || typeof event.type !== "string") continue;
+			if (event.type === "message_start") {
+				// New assistant message starting — reset the dedup tracker.
+				streamedContentBlockIndices.clear();
+				continue;
+			}
+			if (
+				event.type === "content_block_delta" &&
+				typeof event.index === "number" &&
+				event.delta
+			) {
+				const delta = event.delta;
+				if (delta.type === "text_delta" && typeof delta.text === "string") {
+					if (delta.text.length > 0) {
+						emit({ kind: "text-delta", data: delta.text });
+					}
+					streamedContentBlockIndices.add(event.index);
+				} else if (
+					delta.type === "thinking_delta" &&
+					typeof delta.thinking === "string"
+				) {
+					if (delta.thinking.length > 0) {
+						emit({ kind: "reasoning-delta", data: delta.thinking });
+					}
+					streamedContentBlockIndices.add(event.index);
+				}
+				// `input_json_delta` / `citations_delta` / `signature_delta`
+				// are intentionally ignored — tool inputs are surfaced from
+				// the final `assistant` message once the JSON parses cleanly.
+			}
+			continue;
+		}
 
 		if (message.type === "assistant" && message.message?.content) {
 			// Sub-agent attribution: if this assistant message carries a
@@ -314,7 +548,21 @@ export async function walkClaudeMessages(
 					: null;
 			const attribution = parentId ?? fallbackParentId;
 
-			for (const block of message.message.content) {
+			for (let blockIdx = 0; blockIdx < message.message.content.length; blockIdx += 1) {
+				const block = message.message.content[blockIdx]!;
+				// Skip text/thinking blocks already streamed via `stream_event`
+				// deltas — re-emitting would duplicate every chunk in the
+				// assistant bubble. Tool blocks always go through (we only
+				// have their complete `input` once the assistant message
+				// arrives).
+				if (
+					streamedContentBlockIndices.has(blockIdx) &&
+					(block.type === "text" ||
+						block.type === "thinking" ||
+						block.type === "redacted_thinking")
+				) {
+					continue;
+				}
 				if (block.type === "text" && typeof block.text === "string") {
 					emit({ kind: "text-delta", data: block.text });
 				} else if (
@@ -383,6 +631,10 @@ export async function walkClaudeMessages(
 					});
 				}
 			}
+			// Done with this assistant message — clear the per-message
+			// streamed-index tracker so a follow-up assistant message in
+			// the same turn (multi-step tool use) starts fresh.
+			streamedContentBlockIndices.clear();
 		} else if (message.type === "user" && message.message?.content) {
 			// `user` messages carry tool_result blocks. When one matches an
 			// active Task, emit `subagent-end` and drop the mapping.
@@ -497,6 +749,73 @@ function claudeTodoHash(content: string, activeForm: string | null): string {
 }
 
 /**
+ * Normalize a Claude `askUserQuestion` tool input to our cross-provider
+ * `NormalizedQuestion[]`. Defensive against malformed inputs — the SDK
+ * enforces the schema, but a corrupt tool_use block shouldn't crash the
+ * driver. Returns an empty array if parsing fails.
+ *
+ * Schema (per `AskUserQuestionInput`):
+ *   { questions: Array<{
+ *       question: string;
+ *       header: string;
+ *       multiSelect: boolean;
+ *       options: Array<{ label: string; description: string; preview?: string }>;
+ *     }>
+ *   }
+ *
+ * Claude's `askUserQuestion` has no equivalent of opencode's `custom` flag,
+ * so `allowCustom` is always false.
+ */
+export function normalizeClaudeAskUserQuestionInput(
+	input: unknown,
+): ReadonlyArray<import("@revv/shared").NormalizedQuestion> {
+	if (!input || typeof input !== "object") return [];
+	const obj = input as Record<string, unknown>;
+	const raw = obj["questions"];
+	if (!Array.isArray(raw)) return [];
+	const out: import("@revv/shared").NormalizedQuestion[] = [];
+	for (const q of raw) {
+		if (!q || typeof q !== "object") continue;
+		const qo = q as Record<string, unknown>;
+		const question = typeof qo["question"] === "string" ? qo["question"] : "";
+		const header = typeof qo["header"] === "string" ? qo["header"] : "";
+		const multiSelect = qo["multiSelect"] === true;
+		const optionsRaw = qo["options"];
+		const options: Array<{
+			label: string;
+			description: string;
+			preview?: string;
+		}> = [];
+		if (Array.isArray(optionsRaw)) {
+			for (const o of optionsRaw) {
+				if (!o || typeof o !== "object") continue;
+				const oo = o as Record<string, unknown>;
+				const label = typeof oo["label"] === "string" ? oo["label"] : "";
+				const description =
+					typeof oo["description"] === "string" ? oo["description"] : "";
+				const preview =
+					typeof oo["preview"] === "string" ? oo["preview"] : undefined;
+				if (label.length === 0) continue;
+				options.push(
+					preview !== undefined
+						? { label, description, preview }
+						: { label, description },
+				);
+			}
+		}
+		if (question.length === 0 || options.length === 0) continue;
+		out.push({
+			question,
+			header,
+			multiSelect,
+			allowCustom: false,
+			options,
+		});
+	}
+	return out;
+}
+
+/**
  * `ExitPlanMode.input` per Claude SDK has a single `plan: string` field.
  * Defensive: accept other shapes too.
  */
@@ -553,36 +872,57 @@ function extractClaudeToolResultText(
 }
 
 // ── Opencode Part decoder ───────────────────────────────────────────────────
+//
+// The SDK's `Part` is a discriminated union on `type`:
+//   TextPart | (subtask variant) | ReasoningPart | FilePart | ToolPart |
+//   StepStartPart | StepFinishPart | SnapshotPart | PatchPart | AgentPart |
+//   RetryPart | CompactionPart
+//
+// We narrow on `part.type` and read each variant's typed fields directly. No
+// permissive `[k: string]: unknown` escape hatch — if a new opencode version
+// adds a part variant the SDK doesn't yet model, typecheck flags the missing
+// case at compile time. That is the load-bearing reason for taking the SDK
+// types as the source of truth: silent drift was the main maintenance cost
+// of the prior hand-rolled `Part` interface.
 
 /**
- * Minimal shape of an opencode `Part`. The SDK's `Part` is a discriminated
- * union; we accept a permissive object and narrow inside the decoder.
+ * Split a `provider/modelID` string into the wire shape opencode expects
+ * (`{ providerID, modelID }`). Returns undefined when the input doesn't
+ * parse — callers omit the `model` field in that case and the daemon
+ * picks its configured default.
  */
-export interface OpencodePart {
-	type: string;
-	id?: string;
-	text?: string;
-	tool?: string;
-	state?: { input?: unknown; status?: string; [k: string]: unknown };
-	synthetic?: boolean;
-	ignored?: boolean;
-	callID?: string;
-	/**
-	 * Upstream opencode `Part.messageID` — links this part to its containing
-	 * `UserMessage` or `AssistantMessage`. Used by callers to filter out user
-	 * parts that the daemon re-emits in its SSE stream and synchronous
-	 * response body, which would otherwise echo the user's input back as
-	 * assistant text.
-	 */
-	messageID?: string;
-	// `AgentPart` specific (type: "agent") — names the sub-agent invoked.
-	name?: string;
-	// `SubtaskPart` specific (type: "subtask") — carries the sub-agent
-	// prompt + description + agent name. opencode 1.14+.
-	prompt?: string;
-	description?: string;
-	agent?: string;
-	[k: string]: unknown;
+export function parseOpencodeModel(
+	model: string | undefined,
+): { providerID: string; modelID: string } | undefined {
+	if (model === undefined) return undefined;
+	const slash = model.indexOf("/");
+	if (slash <= 0 || slash === model.length - 1) return undefined;
+	return {
+		providerID: model.slice(0, slash),
+		modelID: model.slice(slash + 1),
+	};
+}
+
+/**
+ * Extract a human-readable message from opencode's `AssistantMessage.error`
+ * union. The daemon returns 200 even when the agent loop fails (model not
+ * found, provider auth missing), embedding the failure under
+ * `info.error`. Both opencode providers wrap the extracted message in
+ * `opencode agent error: …`.
+ */
+export function extractOpencodeErrorMessage(errObj: {
+	readonly name: string;
+	readonly data?: unknown;
+}): string {
+	if (
+		errObj.data !== null &&
+		typeof errObj.data === "object" &&
+		"message" in errObj.data &&
+		typeof (errObj.data as { message: unknown }).message === "string"
+	) {
+		return (errObj.data as { message: string }).message;
+	}
+	return errObj.name;
 }
 
 /**
@@ -600,11 +940,11 @@ export interface OpencodePart {
  * so the user-visible stream stays monotonic.
  */
 export function decodeOpencodePart(
-	part: OpencodePart,
+	part: Part,
 	deltaHint: string | undefined,
 	alreadyEmittedLen: number,
 ): { event: NormalizedAgentEvent | null; newEmittedLen: number } {
-	if (part.type === "text" && typeof part.text === "string") {
+	if (part.type === "text") {
 		if (part.synthetic === true || part.ignored === true) {
 			return { event: null, newEmittedLen: alreadyEmittedLen };
 		}
@@ -614,28 +954,30 @@ export function decodeOpencodePart(
 			event: {
 				kind: "text-delta",
 				data: chunk,
-				...(part.id ? { partId: part.id } : {}),
+				partId: part.id,
 			},
 			newEmittedLen: part.text.length,
 		};
 	}
 
-	if (part.type === "reasoning" && typeof part.text === "string") {
+	if (part.type === "reasoning") {
 		const chunk = pickChunk(part.text, deltaHint, alreadyEmittedLen);
 		if (chunk === null) return { event: null, newEmittedLen: alreadyEmittedLen };
 		return {
 			event: {
 				kind: "reasoning-delta",
 				data: chunk,
-				...(part.id ? { partId: part.id } : {}),
+				partId: part.id,
 			},
 			newEmittedLen: part.text.length,
 		};
 	}
 
-	if (part.type === "tool" && typeof part.tool === "string") {
+	if (part.type === "tool") {
 		const shape = classifyToolCallShape(part.tool);
-		const input = part.state?.input;
+		// ToolState is a union (pending/running/completed/error); every
+		// variant carries `input`, so the read is safe without narrowing.
+		const input = part.state.input;
 		// Canonicalise the tool name for the caller. Opencode emits built-in
 		// names lowercase (`read`, `grep`); `normalizeToolName` maps them to
 		// Claude-canonical form so the four callers can treat the field
@@ -646,7 +988,7 @@ export function decodeOpencodePart(
 				kind: "tool-call",
 				toolName,
 				input,
-				...(part.callID ? { callId: part.callID } : {}),
+				callId: part.callID,
 				source: shape.source,
 				...(shape.mcpServer !== undefined ? { mcpServer: shape.mcpServer } : {}),
 				bareName: shape.bareName,
@@ -655,101 +997,66 @@ export function decodeOpencodePart(
 		};
 	}
 
-	// step-start / step-finish / file / snapshot / retry / compaction — ignored.
-	// `agent` and `subtask` parts are decoded externally via decodeOpencodeAgentPart
-	// because their start/end semantics require caller-owned dedup state.
+	// step-start / step-finish / file / snapshot / patch / retry / compaction —
+	// ignored. `agent` and `subtask` parts are decoded externally via
+	// decodeOpencodeAgentPart because their dedup state is caller-owned.
 	return { event: null, newEmittedLen: alreadyEmittedLen };
 }
 
 /**
- * Decode a `type: "agent"` or `type: "subtask"` part into either a
- * `subagent-start` or `subagent-end` event. State is caller-owned because
- * opencode resends the part on state transitions and we want exactly one
- * start and one end per partId.
+ * Decode a `type: "agent"` or `type: "subtask"` part into a `subagent-start`
+ * event. Caller owns the dedup set because opencode resends the part on each
+ * `message.part.updated` resend; we want exactly one start per partId.
  *
- * Returns null when the part should be skipped (already seen in the
- * appropriate state).
+ * The SDK's `AgentPart` only exposes `name`; the inline `subtask` variant of
+ * `Part` carries `prompt`, `description`, `agent`. We treat both as start
+ * events and never emit a corresponding `subagent-end` from these parts —
+ * opencode doesn't expose a typed completion signal here (the sub-agent's
+ * end is implicit when its child message stream stops producing parts).
  */
 export function decodeOpencodeAgentPart(
-	part: OpencodePart,
+	part: Part,
 	state: {
 		seenAgentStartPartIds: Set<string>;
-		agentEndedPartIds: Set<string>;
 	},
 ): NormalizedAgentEvent | null {
-	if (part.type !== "agent" && part.type !== "subtask") return null;
-	const partId = typeof part.id === "string" ? part.id : null;
-	if (!partId) return null;
-
-	const stateStatus =
-		typeof part.state === "object" && part.state !== null
-			? typeof part.state["status"] === "string"
-				? (part.state["status"] as string)
-				: null
-			: null;
-	// `subtask` parts don't carry a `state.status` — they're emitted once
-	// with the agent name + prompt, and the actual sub-agent message stream
-	// lives on a child messageID. We treat them as "start" on first sighting
-	// and never emit an "end" (the caller pairs with the eventual sub-agent
-	// message's terminal text).
-	const isRunning =
-		stateStatus === null ||
-		stateStatus === "running" ||
-		stateStatus === "pending";
-	const isCompleted =
-		stateStatus === "completed" || stateStatus === "done";
-	const isError =
-		stateStatus === "error" ||
-		stateStatus === "errored" ||
-		stateStatus === "failed";
-
-	if (isRunning) {
-		if (state.seenAgentStartPartIds.has(partId)) return null;
-		state.seenAgentStartPartIds.add(partId);
-		const subagentType =
-			(typeof part.agent === "string" && part.agent) ||
-			(typeof part.name === "string" && part.name) ||
-			"general-purpose";
-		const description =
-			(typeof part.description === "string" && part.description) ||
-			subagentType;
-		const prompt =
-			(typeof part.prompt === "string" && part.prompt) || "";
+	if (part.type === "subtask") {
+		if (state.seenAgentStartPartIds.has(part.id)) return null;
+		state.seenAgentStartPartIds.add(part.id);
 		return {
 			kind: "subagent-start",
-			providerCallId: partId,
-			subagentType,
-			description,
-			prompt,
+			providerCallId: part.id,
+			subagentType: part.agent,
+			description: part.description,
+			prompt: part.prompt,
 			source: "opencode",
 		};
 	}
-
-	if (isCompleted || isError) {
-		if (state.agentEndedPartIds.has(partId)) return null;
-		state.agentEndedPartIds.add(partId);
-		const stateObj = part.state as Record<string, unknown> | undefined;
-		const result =
-			typeof stateObj?.["result"] === "string"
-				? (stateObj["result"] as string)
-				: typeof stateObj?.["output"] === "string"
-					? (stateObj["output"] as string)
-					: "";
+	if (part.type === "agent") {
+		if (state.seenAgentStartPartIds.has(part.id)) return null;
+		state.seenAgentStartPartIds.add(part.id);
 		return {
-			kind: "subagent-end",
-			providerCallId: partId,
-			result,
-			ok: !isError,
+			kind: "subagent-start",
+			providerCallId: part.id,
+			subagentType: part.name,
+			description: part.name,
+			prompt: "",
 			source: "opencode",
 		};
 	}
-
 	return null;
 }
 
 /**
  * Decode a `todo.updated` SSE event body. Returns the snapshot — caller is
  * responsible for content-hashing to suppress no-op resends.
+ *
+ * The opencode SDK's `Todo` type only carries `{content, status, priority}` —
+ * no stable id. We synthesize one by content-hashing (mirrors the Claude
+ * `TodoWrite` path) so the UI gets a stable key across re-emissions of the
+ * same snapshot. Two semantically distinct todos with identical content
+ * collapse into one row, which matches the daemon's own inability to
+ * distinguish them.
  */
 export function decodeOpencodeTodoUpdate(
 	properties: Record<string, unknown>,
@@ -760,11 +1067,14 @@ export function decodeOpencodeTodoUpdate(
 	for (const raw of todos) {
 		if (raw === null || typeof raw !== "object") continue;
 		const t = raw as Record<string, unknown>;
-		const id = typeof t["id"] === "string" ? (t["id"] as string) : null;
 		const content = typeof t["content"] === "string" ? (t["content"] as string) : "";
-		if (!id || content.length === 0) continue;
+		if (content.length === 0) continue;
+		const providedId =
+			typeof t["id"] === "string" && (t["id"] as string).length > 0
+				? (t["id"] as string)
+				: null;
 		out.push({
-			id,
+			id: providedId ?? opencodeTodoHash(content),
 			content,
 			activeForm: null,
 			status: normalizeTaskStatus(t["status"]),
@@ -772,6 +1082,20 @@ export function decodeOpencodeTodoUpdate(
 		});
 	}
 	return out;
+}
+
+/**
+ * Deterministic id for opencode todos (the SDK doesn't expose one). Cheap
+ * FNV-1a content hash — identical content collapses to one row, which is
+ * what we want since the daemon can't tell them apart either.
+ */
+function opencodeTodoHash(content: string): string {
+	let hash = 2166136261;
+	for (let i = 0; i < content.length; i += 1) {
+		hash ^= content.charCodeAt(i);
+		hash = Math.imul(hash, 16777619);
+	}
+	return `opencode-todo-${(hash >>> 0).toString(16).padStart(8, "0")}`;
 }
 
 function pickChunk(
@@ -796,7 +1120,7 @@ function pickChunk(
  * part is seen exactly once.
  */
 export function walkOpencodeParts(
-	parts: ReadonlyArray<OpencodePart>,
+	parts: ReadonlyArray<Part>,
 	emit: (ev: NormalizedAgentEvent) => void,
 ): void {
 	for (const part of parts) {
@@ -812,11 +1136,11 @@ export function walkOpencodeParts(
  * is a no-op here, anything SSE missed (because of subscription timing or a
  * dropped connection) gets emitted from the synchronous response body. This
  * is what unsticks chat-opencode in the "no output at all" failure mode where
- * the SSE never managed to receive the first event before `postMessage`
+ * the SSE never managed to receive the first event before `session.prompt`
  * returned with the full transcript.
  */
 export function walkOpencodePartsWithState(
-	parts: ReadonlyArray<OpencodePart>,
+	parts: ReadonlyArray<Part>,
 	state: {
 		emittedTextLen: Map<string, number>;
 		seenToolPartIds: Set<string>;
@@ -834,63 +1158,48 @@ export function walkOpencodePartsWithState(
 		 */
 		assistantMessageID?: string;
 		seenAgentStartPartIds?: Set<string>;
-		agentEndedPartIds?: Set<string>;
 		subagentMessageIdMap?: Map<string, string>;
 	},
 	emit: (ev: NormalizedAgentEvent) => void,
 ): void {
 	const seenAgentStartPartIds =
 		state.seenAgentStartPartIds ?? new Set<string>();
-	const agentEndedPartIds = state.agentEndedPartIds ?? new Set<string>();
 	const subagentMessageIdMap =
 		state.subagentMessageIdMap ?? new Map<string, string>();
 	for (const part of parts) {
+		// SDK `Part` always carries `messageID` — no optional guard needed.
 		// Allow assistant-authored parts AND child-message parts (sub-agent
 		// authored) through the assistant-id filter.
-		const childMatch =
-			part.messageID && subagentMessageIdMap.has(part.messageID);
+		const childMatch = subagentMessageIdMap.has(part.messageID);
 		if (
-			part.messageID &&
-			((state.userMessageIDs && state.userMessageIDs.has(part.messageID)) ||
-				(state.assistantMessageID !== undefined &&
-					state.assistantMessageID !== "" &&
-					part.messageID !== state.assistantMessageID &&
-					!childMatch))
+			(state.userMessageIDs && state.userMessageIDs.has(part.messageID)) ||
+			(state.assistantMessageID !== undefined &&
+				state.assistantMessageID !== "" &&
+				part.messageID !== state.assistantMessageID &&
+				!childMatch)
 		) {
 			continue;
 		}
 		if (part.type === "agent" || part.type === "subtask") {
 			const ev = decodeOpencodeAgentPart(part, {
 				seenAgentStartPartIds,
-				agentEndedPartIds,
 			});
-			if (ev) {
-				if (ev.kind === "subagent-start") {
-					const childMsgId = extractChildMessageId(part);
-					if (childMsgId)
-						subagentMessageIdMap.set(childMsgId, ev.providerCallId);
-				}
-				emit(ev);
-			}
+			if (ev) emit(ev);
 			continue;
 		}
 		if (part.type === "tool") {
-			const partId = part.id ?? "";
-			if (!partId) continue;
-			if (state.seenToolPartIds.has(partId)) continue;
-			state.seenToolPartIds.add(partId);
+			if (state.seenToolPartIds.has(part.id)) continue;
+			state.seenToolPartIds.add(part.id);
 		}
-		const partId = part.id ?? "";
-		const already = state.emittedTextLen.get(partId) ?? 0;
+		const already = state.emittedTextLen.get(part.id) ?? 0;
 		const { event, newEmittedLen } = decodeOpencodePart(part, undefined, already);
 		if (!event) continue;
 		if (event.kind === "text-delta" || event.kind === "reasoning-delta") {
-			state.emittedTextLen.set(partId, newEmittedLen);
+			state.emittedTextLen.set(part.id, newEmittedLen);
 		}
 		// Stamp sub-agent attribution for tool calls authored by a child msg.
 		if (
 			event.kind === "tool-call" &&
-			part.messageID &&
 			subagentMessageIdMap.has(part.messageID)
 		) {
 			emit({
@@ -903,12 +1212,131 @@ export function walkOpencodePartsWithState(
 	}
 }
 
+// ── Opencode question events (runtime-only, v1 SDK doesn't type them) ──────
+
+interface OpencodeQuestionInfo {
+	question: string;
+	header: string;
+	options: ReadonlyArray<{ label: string; description: string }>;
+	multiple?: boolean;
+	custom?: boolean;
+}
+
+interface OpencodeQuestionRequestPayload {
+	id: string;
+	sessionID: string;
+	questions: ReadonlyArray<OpencodeQuestionInfo>;
+	tool?: { messageID: string; callID: string };
+}
+
+interface OpencodeQuestionRepliedPayload {
+	sessionID: string;
+	requestID: string;
+	answers: ReadonlyArray<ReadonlyArray<string>>;
+}
+
+interface OpencodeQuestionRejectedPayload {
+	sessionID: string;
+	requestID: string;
+}
+
+function handleQuestionEvent(
+	type: "question.asked" | "question.replied" | "question.rejected",
+	properties: unknown,
+	sessionId: string,
+	lastQuestionsByRequestId: Map<
+		string,
+		ReadonlyArray<import("@revv/shared").NormalizedQuestion>
+	>,
+	emit: (ev: NormalizedAgentEvent) => void,
+): void {
+	if (!properties || typeof properties !== "object") return;
+	if (type === "question.asked") {
+		const req = properties as OpencodeQuestionRequestPayload;
+		if (req.sessionID !== sessionId) return;
+		const questions: import("@revv/shared").NormalizedQuestion[] = [];
+		for (const q of req.questions ?? []) {
+			const options = (q.options ?? []).map((o) => ({
+				label: o.label,
+				description: o.description,
+			}));
+			if (q.question.length === 0 || options.length === 0) continue;
+			questions.push({
+				question: q.question,
+				header: q.header,
+				// opencode `multiple` defaults to true per its schema —
+				// preserve that default if the field is absent.
+				multiSelect: q.multiple ?? true,
+				// opencode `custom` defaults to true per its schema.
+				allowCustom: q.custom ?? true,
+				options,
+			});
+		}
+		if (questions.length === 0) return;
+		lastQuestionsByRequestId.set(req.id, questions);
+		const event: NormalizedAgentEvent = {
+			kind: "user-question-asked",
+			providerRequestId: req.id,
+			source: "opencode",
+			questions,
+			previewFormat: "markdown",
+			...(req.tool?.callID
+				? { providerToolCallId: req.tool.callID }
+				: {}),
+		};
+		emit(event);
+		return;
+	}
+	if (type === "question.replied") {
+		const r = properties as OpencodeQuestionRepliedPayload;
+		if (r.sessionID !== sessionId) return;
+		// Reconstruct Record<questionText, labels[]> from the original
+		// questions list. Opencode replies with an Array<Array<string>>
+		// in the same order as the questions; merge by index.
+		const original = lastQuestionsByRequestId.get(r.requestID);
+		const answers: Record<string, ReadonlyArray<string>> = {};
+		if (original) {
+			for (let i = 0; i < original.length; i += 1) {
+				const q = original[i]!;
+				const labels = r.answers[i] ?? [];
+				answers[q.question] = labels;
+			}
+			lastQuestionsByRequestId.delete(r.requestID);
+		}
+		emit({
+			kind: "user-question-resolved",
+			providerRequestId: r.requestID,
+			source: "opencode",
+			status: "answered",
+			answers,
+		});
+		return;
+	}
+	// question.rejected
+	const r = properties as OpencodeQuestionRejectedPayload;
+	if (r.sessionID !== sessionId) return;
+	lastQuestionsByRequestId.delete(r.requestID);
+	emit({
+		kind: "user-question-resolved",
+		providerRequestId: r.requestID,
+		source: "opencode",
+		status: "rejected",
+	});
+}
+
 // ── Opencode SSE subscription ───────────────────────────────────────────────
 
 /**
- * Subscribe to /event SSE and emit normalized events as `message.part.updated`
- * frames arrive. Returns when the subscription is aborted via `signal` OR
- * when the daemon closes the stream.
+ * Subscribe to `/global/event` SSE via the SDK and emit normalized events as
+ * `message.part.updated` frames arrive. Returns when the subscription is
+ * aborted via `signal` OR when the daemon closes the stream.
+ *
+ * We use `client.global.event()` (not `client.event.subscribe()`) because
+ * historically opencode's `/event` endpoint emits a single `server.connected`
+ * frame then terminates the chunked response body, while `/global/event` is
+ * the long-lived stream that carries every `message.part.updated`,
+ * `todo.updated`, `session.error`, etc. across all sessions. We filter to
+ * the current session's events client-side.
  *
  * Owns:
  *   - The per-partId emitted-length Map used by `decodeOpencodePart` for
@@ -918,14 +1346,14 @@ export function walkOpencodePartsWithState(
  *     part on each state transition).
  *   - The load-bearing 100ms drain: SSE callers (chat-opencode) used to do
  *     `await new Promise(r => setTimeout(r, 100)); subscribeAbort.abort()`
- *     after their postMessage resolved, to let trailing
+ *     after their session.prompt resolved, to let trailing
  *     `message.part.updated` events arrive before tearing down. That drain
  *     lives here now — callers just abort and await this promise; we sleep
  *     for `drainMs` (default 100ms) before actually unhooking from the
  *     daemon's event stream.
  */
 export async function subscribeOpencodeStream(
-	client: OpencodeHttpClient,
+	client: OpencodeClient,
 	sessionId: string,
 	signal: AbortSignal,
 	emit: (ev: NormalizedAgentEvent) => void,
@@ -960,13 +1388,21 @@ export async function subscribeOpencodeStream(
 		 * synchronous response body doesn't re-emit.
 		 */
 		seenAgentStartPartIds?: Set<string>;
-		/** Same idea for `subagent-end`. */
-		agentEndedPartIds?: Set<string>;
 		/**
 		 * Last task-list snapshot hash, used to suppress no-op `todo.updated`
 		 * resends. Caller-owned so the backstop walk can share if needed.
 		 */
 		lastTodoSnapshotHash?: { value: string | null };
+		/**
+		 * Caller-owned map: opencode `QuestionRequest.id` → the original
+		 * questions list. Populated on `question.asked`, read on
+		 * `question.replied` to reconstruct a `Record<questionText, labels[]>`
+		 * shape from opencode's `Array<Array<string>>` reply order.
+		 */
+		lastQuestionsByRequestId?: Map<
+			string,
+			ReadonlyArray<import("@revv/shared").NormalizedQuestion>
+		>;
 		/**
 		 * Map from a sub-agent's child messageID to the parent invocation's
 		 * providerCallId. The SSE handler populates this when a `subtask` or
@@ -978,6 +1414,21 @@ export async function subscribeOpencodeStream(
 		 * id on the parent part. Unstamped tool parts render at top level.
 		 */
 		subagentMessageIdMap?: Map<string, string>;
+		/**
+		 * Fires whenever a `message.updated` event arrives for an assistant
+		 * message in the current session, carrying that message's running
+		 * `tokens` snapshot (input / output / reasoning / cache.{read,write}).
+		 * Callers (walkthrough provider) translate this into a `usage` event
+		 * so the BottomBar updates live mid-turn rather than only when the
+		 * full agent turn resolves. No throttling here — callers should
+		 * throttle if needed for downstream cost.
+		 */
+		onAssistantTokens?: (tokens: {
+			input: number;
+			output: number;
+			reasoning: number;
+			cache: { read: number; write: number };
+		}) => void;
 	},
 ): Promise<void> {
 	const emittedTextLen = opts?.emittedTextLen ?? new Map<string, number>();
@@ -985,16 +1436,21 @@ export async function subscribeOpencodeStream(
 	const userMessageIDs = opts?.userMessageIDs ?? new Set<string>();
 	const seenAgentStartPartIds =
 		opts?.seenAgentStartPartIds ?? new Set<string>();
-	const agentEndedPartIds = opts?.agentEndedPartIds ?? new Set<string>();
 	const lastTodoSnapshotHash = opts?.lastTodoSnapshotHash ?? {
 		value: null as string | null,
 	};
 	const subagentMessageIdMap =
 		opts?.subagentMessageIdMap ?? new Map<string, string>();
+	const lastQuestionsByRequestId =
+		opts?.lastQuestionsByRequestId ??
+		new Map<
+			string,
+			ReadonlyArray<import("@revv/shared").NormalizedQuestion>
+		>();
 	const drainMs = opts?.drainMs ?? 100;
 
 	// Compose an inner signal so we can run a final 100ms drain after the
-	// caller's abort fires. The daemon-facing fetch keeps reading until
+	// caller's abort fires. The SDK-driven SSE iterator keeps reading until
 	// `innerAbort.abort()`; the caller's `signal` triggers the drain timer
 	// instead of immediately tearing down.
 	const innerAbort = new AbortController();
@@ -1007,171 +1463,184 @@ export async function subscribeOpencodeStream(
 		signal.addEventListener("abort", onCallerAbort, { once: true });
 	}
 
-	const handleEvent = (ev: unknown): void => {
-		if (ev === null || typeof ev !== "object") return;
-		const root = ev as Record<string, unknown>;
-		const type = typeof root["type"] === "string" ? root["type"] : null;
-		const properties =
-			root["properties"] && typeof root["properties"] === "object"
-				? (root["properties"] as Record<string, unknown>)
-				: null;
-		if (!type || !properties) return;
-
-		if (type === "message.updated") {
-			// Learn which message IDs belong to user messages so we can skip
-			// their parts. Opencode creates the user message before kicking
-			// off inference, so this fires before any assistant
-			// `message.part.updated` events — race-free in practice.
-			const info = properties["info"];
-			if (info && typeof info === "object") {
-				const infoObj = info as Record<string, unknown>;
-				if (infoObj["role"] === "user" && typeof infoObj["id"] === "string") {
-					userMessageIDs.add(infoObj["id"] as string);
+	const handleEvent = (ev: Event): void => {
+		// Question events (question.asked / .replied / .rejected) live in the
+		// opencode daemon at runtime but aren't yet present in the v1 SDK's
+		// typed `Event` union (they exist in v2). We intercept them here via
+		// a runtime type check so the rest of the typed switch stays sound.
+		// When the SDK types catch up, this block can move into the switch.
+		const dynamicEv = ev as { type: string; properties: unknown };
+		if (
+			dynamicEv.type === "question.asked" ||
+			dynamicEv.type === "question.replied" ||
+			dynamicEv.type === "question.rejected"
+		) {
+			handleQuestionEvent(
+				dynamicEv.type,
+				dynamicEv.properties,
+				sessionId,
+				lastQuestionsByRequestId,
+				emit,
+			);
+			return;
+		}
+		switch (ev.type) {
+			case "message.updated": {
+				// Learn which message IDs belong to user messages so we can skip
+				// their parts. Opencode creates the user message before kicking
+				// off inference, so this fires before any assistant
+				// `message.part.updated` events — race-free in practice.
+				const info = ev.properties.info;
+				if (info.role === "user") {
+					userMessageIDs.add(info.id);
+				} else if (info.role === "assistant" && info.sessionID === sessionId) {
+					// Assistant messages carry a running `tokens` snapshot that
+					// the daemon updates as output streams. Forward it to the
+					// caller so they can broadcast a `usage` event for live
+					// BottomBar updates mid-turn (without waiting for the full
+					// session.prompt to resolve).
+					opts?.onAssistantTokens?.(info.tokens);
 				}
-			}
-			return;
-		}
-
-		if (type === "todo.updated") {
-			const tasks = decodeOpencodeTodoUpdate(properties);
-			const hash = hashTaskSnapshot(tasks);
-			if (hash !== lastTodoSnapshotHash.value) {
-				lastTodoSnapshotHash.value = hash;
-				emit({ kind: "task-list-update", tasks, source: "opencode" });
-			}
-			return;
-		}
-
-		if (type === "message.part.updated") {
-			const part = properties["part"] as OpencodePart | undefined;
-			const delta =
-				typeof properties["delta"] === "string"
-					? (properties["delta"] as string)
-					: undefined;
-			if (!part || typeof part.type !== "string") return;
-
-			// Skip parts belonging to user messages. Without this, opencode's
-			// re-emission of the user's input as a `text` part gets decoded as
-			// an assistant text-delta and echoed back into the chat bubble.
-			if (part.messageID && userMessageIDs.has(part.messageID)) {
 				return;
 			}
-
-			// Agent / subtask parts: route through the dedicated decoder
-			// that owns the start/end dedup. Also populate the
-			// messageID → providerCallId map so tool parts authored by
-			// the sub-agent's child message can be stamped.
-			if (part.type === "agent" || part.type === "subtask") {
-				const ev = decodeOpencodeAgentPart(part, {
-					seenAgentStartPartIds,
-					agentEndedPartIds,
+			case "todo.updated": {
+				if (ev.properties.sessionID !== sessionId) return;
+				const tasks = decodeOpencodeTodoUpdate({
+					todos: ev.properties.todos,
 				});
-				if (ev) {
-					if (ev.kind === "subagent-start") {
-						// Best-effort correlation: opencode sometimes carries
-						// the child message id under `state.messageID` or
-						// `messageID` on subtask parts.
-						const childMsgId = extractChildMessageId(part);
-						if (childMsgId) {
-							subagentMessageIdMap.set(childMsgId, ev.providerCallId);
-						}
-					}
-					emit(ev);
+				const hash = hashTaskSnapshot(tasks);
+				if (hash !== lastTodoSnapshotHash.value) {
+					lastTodoSnapshotHash.value = hash;
+					emit({ kind: "task-list-update", tasks, source: "opencode" });
 				}
 				return;
 			}
+			case "message.part.updated": {
+				const part = ev.properties.part;
+				if (part.sessionID !== sessionId) return;
 
-			// Tool parts fire exactly once per partId regardless of dedup
-			// state. Run that filter before invoking decodeOpencodePart so
-			// the pure decoder stays state-free.
-			if (part.type === "tool") {
-				const partId = part.id ?? "";
-				if (!partId) {
-					debug(
-						"agent-stream",
-						"tool part missing id — skipping (would break dedup)",
-						"tool:",
-						part.tool,
-					);
+				// Skip parts belonging to user messages. Without this, opencode's
+				// re-emission of the user's input as a `text` part gets decoded as
+				// an assistant text-delta and echoed back into the chat bubble.
+				if (userMessageIDs.has(part.messageID)) return;
+
+				// Step-finish parts arrive between tool calls and carry the
+				// running token total for the message so far. Surface them via
+				// onAssistantTokens — gives the BottomBar a more reliable
+				// mid-turn update cadence than `message.updated` alone, since
+				// step boundaries map one-to-one with tool calls during
+				// walkthrough generation. The dedicated decoder ignores this
+				// part type for normalized events.
+				if (part.type === "step-finish") {
+					opts?.onAssistantTokens?.(part.tokens);
 					return;
 				}
-				if (seenToolPartIds.has(partId)) return;
-				seenToolPartIds.add(partId);
-			}
 
-			const partId = part.id ?? "";
-			const already = emittedTextLen.get(partId) ?? 0;
-			const { event, newEmittedLen } = decodeOpencodePart(
-				part,
-				delta,
-				already,
-			);
-			if (event) {
-				if (event.kind === "text-delta" || event.kind === "reasoning-delta") {
-					emittedTextLen.set(partId, newEmittedLen);
-				} else if (event.kind === "tool-call") {
-					// Stamp sub-agent attribution if this tool part belongs
-					// to a known child message.
-					const stamped =
-						part.messageID &&
-						subagentMessageIdMap.has(part.messageID)
+				// Agent / subtask parts: route through the dedicated decoder
+				// that owns the start dedup.
+				if (part.type === "agent" || part.type === "subtask") {
+					const subEv = decodeOpencodeAgentPart(part, {
+						seenAgentStartPartIds,
+					});
+					if (subEv) emit(subEv);
+					return;
+				}
+
+				// Tool parts fire exactly once per partId regardless of dedup
+				// state. Run that filter before invoking decodeOpencodePart so
+				// the pure decoder stays state-free.
+				if (part.type === "tool") {
+					if (seenToolPartIds.has(part.id)) return;
+					seenToolPartIds.add(part.id);
+				}
+
+				const already = emittedTextLen.get(part.id) ?? 0;
+				const { event, newEmittedLen } = decodeOpencodePart(
+					part,
+					ev.properties.delta,
+					already,
+				);
+				if (event) {
+					if (event.kind === "text-delta" || event.kind === "reasoning-delta") {
+						emittedTextLen.set(part.id, newEmittedLen);
+					} else if (event.kind === "tool-call") {
+						const stamped = subagentMessageIdMap.has(part.messageID)
 							? {
 									...event,
 									subagentProviderCallId:
 										subagentMessageIdMap.get(part.messageID)!,
 								}
 							: event;
+						debug(
+							"agent-stream",
+							"emit tool-call:",
+							event.toolName,
+							"source:",
+							event.source,
+							"bareName:",
+							event.bareName,
+						);
+						emit(stamped);
+						return;
+					}
+					emit(event);
+				} else if (part.type === "tool") {
+					// Logged so REV_DEBUG=1 can spot tool parts we silently
+					// dropped — should be rare against the typed SDK Part
+					// since the decoder narrows on `type` exhaustively.
 					debug(
 						"agent-stream",
-						"emit tool-call:",
-						event.toolName,
-						"source:",
-						event.source,
-						"bareName:",
-						event.bareName,
+						"tool part decoded to null event",
+						"tool:",
+						part.tool,
 					);
-					emit(stamped);
+				}
+				return;
+			}
+			case "session.error": {
+				if (
+					ev.properties.sessionID !== undefined &&
+					ev.properties.sessionID !== sessionId
+				) {
 					return;
 				}
-				emit(event);
-			} else if (part.type === "tool") {
-				// Logged so REV_DEBUG=1 can spot tool parts we silently
-				// dropped — usually means the part shape didn't match
-				// (e.g. `tool` field missing, or `type` isn't "tool").
-				debug(
-					"agent-stream",
-					"tool part decoded to null event",
-					"type:",
-					part.type,
-					"tool:",
-					part.tool,
-					"keys:",
-					Object.keys(part).join(","),
-				);
+				const errObj = ev.properties.error;
+				const msg =
+					(errObj && "data" in errObj && typeof errObj.data === "object"
+						? (errObj.data as { message?: unknown }).message
+						: undefined) ??
+					(errObj && "name" in errObj && typeof errObj.name === "string"
+						? errObj.name
+						: undefined) ??
+					"Agent error";
+				emit({ kind: "error", message: String(msg) });
+				return;
 			}
-		} else if (type === "session.error") {
-			const errObj =
-				properties["error"] && typeof properties["error"] === "object"
-					? (properties["error"] as Record<string, unknown>)
-					: null;
-			const data =
-				errObj?.["data"] && typeof errObj["data"] === "object"
-					? (errObj["data"] as Record<string, unknown>)
-					: null;
-			const msg =
-				(typeof data?.["message"] === "string" ? data["message"] : null) ??
-				(typeof errObj?.["name"] === "string" ? errObj["name"] : null) ??
-				"Agent error";
-			emit({ kind: "error", message: msg });
+			default:
+				// Other event types (file.edited, session.created, lsp.*,
+				// permission.*, pty.*, tui.*, etc.) are not consumed by the
+				// chat or walkthrough drivers.
+				return;
 		}
 	};
 
 	try {
-		await client.subscribeToEvents({
-			sessionId,
+		const result = await client.global.event({
+			fetch: (req) => {
+				// Per-call `timeout: false` belt-and-suspenders for the SSE
+				// fetch — same trap as the global custom fetch, but spelled
+				// out here too so the SSE-specific failure mode (Bun killing
+				// the long-poll at 5 minutes, dropping post-300s tool calls)
+				// stays documented at the call site.
+				(req as unknown as { timeout?: boolean }).timeout = false;
+				return fetch(req);
+			},
 			signal: innerAbort.signal,
-			onEvent: handleEvent,
 		});
+		for await (const globalEvent of result.stream) {
+			if (innerAbort.signal.aborted) break;
+			handleEvent(globalEvent.payload);
+		}
 	} catch (err) {
 		if (err instanceof Error && err.name === "AbortError") return;
 		// Promote to logError so the failure is visible without REV_DEBUG=1.
@@ -1210,26 +1679,6 @@ function hashTaskSnapshot(tasks: ReadonlyArray<NormalizedTask>): string {
 	return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
-/**
- * Best-effort extraction of the sub-agent's child message id from an
- * `agent`/`subtask` part. Different opencode versions stash this in
- * different locations; we try the known ones.
- */
-function extractChildMessageId(part: OpencodePart): string | null {
-	const state = part.state as Record<string, unknown> | undefined;
-	if (state) {
-		if (typeof state["messageID"] === "string") return state["messageID"];
-		if (typeof state["childMessageID"] === "string")
-			return state["childMessageID"];
-	}
-	// Some builds put the child message id on `part` directly under
-	// `childMessageID`.
-	if (typeof (part as Record<string, unknown>)["childMessageID"] === "string") {
-		return (part as Record<string, unknown>)["childMessageID"] as string;
-	}
-	return null;
-}
-
 // ── Abort + hard-timeout harness ────────────────────────────────────────────
 
 export interface AgentTurnContext {
@@ -1252,7 +1701,7 @@ export interface WithAgentTurnOptions<T> {
 	readonly jobEnded: () => Promise<void>;
 	/**
 	 * Called once when the external abort OR the hard timeout fires. Both
-	 * opencode providers use this to call `client.abortSession(sessionId)`
+	 * opencode providers use this to call `client.session.abort({ path: { id: sessionId } })`
 	 * so the daemon stops the model. May be a no-op for callers without a
 	 * remote session to cancel.
 	 */

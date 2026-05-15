@@ -17,7 +17,6 @@
 	interface Props {
 		section: WalkthroughSemanticStep;
 		entries: BlockEntry[];
-		themeType: 'light' | 'dark' | 'system';
 		blockIssueSeverity: Map<string, Severity>;
 		selectedIssueBlockId: string | null;
 		selectedIssueSeverity: Severity | null;
@@ -37,7 +36,6 @@
 	let {
 		section,
 		entries,
-		themeType,
 		blockIssueSeverity,
 		selectedIssueBlockId,
 		selectedIssueSeverity,
@@ -158,9 +156,9 @@
 						{#if block.type === 'markdown'}
 							<WalkthroughMarkdownBlock content={block.content} />
 						{:else if block.type === 'code'}
-							<WalkthroughCodeBlock {block} {themeType} hideAnnotation />
+							<WalkthroughCodeBlock {block} hideAnnotation />
 						{:else if block.type === 'diff'}
-							<WalkthroughDiffBlock {block} {themeType} hideAnnotation />
+							<WalkthroughDiffBlock {block} hideAnnotation />
 						{/if}
 					</div>
 
@@ -209,7 +207,7 @@
 		width: 100%;
 		min-width: 0;
 		border-top: 1px solid var(--color-border);
-		transition: border-color 200ms ease;
+		transition: border-color var(--duration-snap) var(--ease-soft);
 	}
 
 	.section-header:focus-visible {
@@ -246,7 +244,7 @@
 		align-items: center;
 		justify-content: center;
 		color: var(--color-text-muted);
-		transition: transform 220ms cubic-bezier(0.22, 0.61, 0.36, 1), color 200ms ease;
+		transition: transform var(--duration-smooth) var(--ease-standard), color var(--duration-snap) var(--ease-soft);
 	}
 
 	.section-header--collapsed .section-toggle {
@@ -275,7 +273,7 @@
 		min-width: 0;
 		overflow: hidden;
 		text-overflow: ellipsis;
-		transition: color 200ms ease;
+		transition: color var(--duration-snap) var(--ease-soft);
 	}
 
 	.section-header:hover .section-title {
@@ -383,7 +381,7 @@
 		border-radius: 8px;
 		outline: 2px solid transparent;
 		outline-offset: 2px;
-		transition: outline-color 200ms ease;
+		transition: outline-color var(--duration-snap) var(--ease-soft);
 	}
 
 	.block-wrapper--selected-info {

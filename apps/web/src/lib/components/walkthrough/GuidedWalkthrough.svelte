@@ -8,7 +8,6 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Separator } from '$lib/components/ui/separator';
 	import { RefreshCw, AlertTriangle, AlertCircle, Sparkles } from '@lucide/svelte';
-	import { getDiffThemeType } from '$lib/stores/theme.svelte';
 	import { initHighlighter } from '$lib/utils/code-highlight.svelte';
 	import { renderMarkdown } from '$lib/utils/markdown';
 	import {
@@ -53,13 +52,13 @@
 		getPendingWalkthroughBlockJump,
 		clearPendingWalkthroughBlockJump,
 	} from '$lib/stores/review.svelte';
-	import { Skeleton } from '$lib/components/ui/skeleton/index.js';
 	import { groupIssuesBySeverityWithIndex } from '$lib/utils/walkthrough-issues';
 
 	import FileBadge from '$lib/components/ui/FileBadge.svelte';
 	import IssueCard from './IssueCard.svelte';
 	import WalkthroughSection from './WalkthroughSection.svelte';
 	import WalkthroughRatingsGrid from './WalkthroughRatingsGrid.svelte';
+	import { Shimmer } from '$lib/components/ai/shimmer';
 
 	interface Props {
 		prId: string;
@@ -78,7 +77,6 @@
 	const explorationSteps = $derived(getExplorationSteps());
 	const phase = $derived(getPhase());
 	const streamStartedAt = $derived(getStreamStartedAt());
-	const themeType = $derived(getDiffThemeType());
 	const issues = $derived(getIssues());
 	const issueGroups = $derived(groupIssuesBySeverityWithIndex(issues));
 	const ratings = $derived(getRatings());
@@ -840,11 +838,10 @@
 			     stepper above (`.chapter-tool-calls`); we don't duplicate
 			     them in a separate exploration section here. -->
 
-			<!-- Skeleton placeholder for the upcoming summary; shown immediately when streaming starts. -->
-			<div class="skeleton-body" aria-hidden="true">
-				<Skeleton class="h-[12px] w-[55%]" />
-				<Skeleton class="h-[12px] w-[35%]" />
-			</div>
+			<!-- Shimmer text placeholder shown immediately when streaming starts. -->
+			<Shimmer class="text-xs text-muted-foreground" duration={1.2} role="status" aria-label="Reviewing...">
+				Reviewing...
+			</Shimmer>
 
 			<!-- Empty rating grid, mounted from the start of generation so the
 			     reviewer sees the 9-axis scorecard up front and watches cells
@@ -956,7 +953,6 @@
 				id="walkthrough-overview"
 				section={overviewSection}
 				entries={overviewEntries}
-				{themeType}
 				{blockIssueSeverity}
 				{selectedIssueBlockId}
 				{selectedIssueSeverity}
@@ -968,7 +964,6 @@
 					id={sectionIdx === 0 ? 'walkthrough-diff' : undefined}
 					{section}
 					entries={blocksBySection.get(section.semanticStepIndex) ?? []}
-					{themeType}
 					{blockIssueSeverity}
 					{selectedIssueBlockId}
 					{selectedIssueSeverity}
@@ -977,20 +972,16 @@
 				/>
 			{/each}
 
-			<!-- Diff-analysis skeleton: placeholder block while Phase B is active.
-			     Stays visible from when the overview lands (Phase A done) until the
-			     agent finishes all diff steps and moves to Phase C.
-			     Shaped like a real diff step (file badge + gutter + code lines) so
-			     the user sees "something" rendering into the same slot real diff
-			     steps will land in. -->
+		<!-- Diff-analysis shimmer text: placeholder while Phase B is active.
+		     Stays visible from when the overview lands (Phase A done) until the
+		     agent finishes all diff steps and moves to Phase C. -->
 		{#if showDiffSkeleton}
 			<div class="block-group">
 				<span class="block-step-dot" aria-hidden="true"></span>
-				<div class="block-wrapper block-wrapper--no-anim diff-skeleton-step" aria-hidden="true">
-					<div class="diff-skeleton-code">
-						<Skeleton class="h-[11px] w-[80%]" />
-						<Skeleton class="h-[11px] w-[50%]" />
-					</div>
+				<div class="block-wrapper block-wrapper--no-anim">
+					<Shimmer class="text-xs text-muted-foreground" duration={1.2} aria-label="Reviewing...">
+						Reviewing...
+					</Shimmer>
 				</div>
 			</div>
 		{/if}
@@ -1269,8 +1260,8 @@
 		   becomes invisible. Border is a tier up — visible against
 		   `--color-bg-primary` in both light and dark themes. */
 		border-top: 2px solid var(--color-border);
-		transition: border-color 0.25s ease, opacity 0.25s ease,
-			transform 0.18s ease, background-color 0.18s ease;
+		transition: border-color var(--duration-smooth) var(--ease-soft), opacity var(--duration-smooth) var(--ease-soft),
+			transform var(--duration-quick) var(--ease-soft), background-color var(--duration-quick) var(--ease-soft);
 		cursor: default;
 	}
 
@@ -1343,7 +1334,7 @@
 		color: var(--color-text-muted);
 		margin-bottom: 2px;
 		white-space: nowrap;
-		transition: color 0.25s ease;
+		transition: color var(--duration-smooth) var(--ease-soft);
 	}
 
 	.chapter-cell--active .chapter-eyebrow,
@@ -1413,7 +1404,7 @@
 		display: flex;
 		gap: 6px;
 		min-width: 0;
-		transition: top 220ms cubic-bezier(0.22, 0.61, 0.36, 1);
+		transition: top var(--duration-smooth) var(--ease-standard);
 	}
 
 	.chapter-tool-call-tool {
@@ -1503,32 +1494,6 @@
 		color: var(--color-text-muted);
 		margin: 0;
 	}
-
-	/* ── Skeleton ──────────────────────────────────────────────────────── */
-
-	.skeleton-body {
-		display: flex;
-		flex-direction: column;
-		gap: 10px;
-	}
-
-	/* ── Diff-analysis skeleton block ───────────────────────────────────
-	   Shaped like a real `WalkthroughDiffBlock`: rounded card, file-badge
-	   strip on top, gutter + code-line body underneath. The shimmer is a
-	   moving highlight across each bar so the placeholder reads as
-	   "actively generating" rather than just "loading". Uses the global
-	   `shimmer` keyframe defined in app.css. */
-
-	.diff-skeleton-step {
-	}
-
-	.diff-skeleton-code {
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
-		padding: 4px 0;
-	}
-
 
 	/* ── Exploration feed (error branch only) ────────────────────────────
 	   The active generating UI surfaces tool calls inside the chapter cell
@@ -1770,7 +1735,7 @@
 		border-radius: 8px;
 		outline: 2px solid transparent;
 		outline-offset: 2px;
-		transition: outline-color 200ms ease;
+		transition: outline-color var(--duration-snap) var(--ease-soft);
 	}
 
 	@keyframes block-pulse {

@@ -1200,6 +1200,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
 					sourceBranch: ctx.pr.sourceBranch,
 					conflictFiles,
 					prId: ctx.pr.id,
+					userId: params.userId,
 				}).pipe(
 					Effect.tapError(() =>
 						Effect.gen(function* () {

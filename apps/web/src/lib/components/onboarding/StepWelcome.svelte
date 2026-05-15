@@ -81,14 +81,14 @@
 		cursor: pointer;
 		letter-spacing: 0.01em;
 		transition:
-			background-color 320ms cubic-bezier(0.16, 1, 0.3, 1),
-			border-color 320ms cubic-bezier(0.16, 1, 0.3, 1),
-			color 320ms cubic-bezier(0.16, 1, 0.3, 1),
-			transform 280ms cubic-bezier(0.16, 1, 0.3, 1);
+			background-color var(--duration-snap) var(--ease-out-expo),
+			border-color var(--duration-snap) var(--ease-out-expo),
+			color var(--duration-snap) var(--ease-out-expo),
+			transform var(--duration-smooth) var(--ease-out-expo);
 	}
 
 	.primary svg {
-		transition: transform 320ms cubic-bezier(0.16, 1, 0.3, 1);
+		transition: transform var(--duration-smooth) var(--ease-out-expo);
 	}
 
 	.primary:hover {

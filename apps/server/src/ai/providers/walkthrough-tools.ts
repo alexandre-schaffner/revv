@@ -114,7 +114,7 @@ function okResult(text: string): WalkthroughToolResult {
  * avoids false positives (legitimate prose that happens to start with `{`
  * won't satisfy both conditions).
  */
-function unwrapJsonWrappedString(value: string, expectedKey: string): string {
+export function unwrapJsonWrappedString(value: string, expectedKey: string): string {
 	const trimmed = value.trim();
 	if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return value;
 	let parsed: unknown;
@@ -750,7 +750,7 @@ function blockVariantCount(input: AddDiffStepInput): number {
 }
 
 /** Canonical block id derived from the composite identity. */
-function blockIdFor(
+export function blockIdFor(
 	walkthroughId: string,
 	semanticStepIndex: number,
 	stepIndex: number,

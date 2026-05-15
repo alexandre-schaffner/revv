@@ -1,24 +1,20 @@
 // ── chat-mcp-tools ──────────────────────────────────────────────────────────
 //
-// Read-only MCP tools for the right-pane chat agent. The agent calls these
-// to fetch the structured review context — walkthrough analysis, flagged
-// issues with their associated diff steps and inline review comments,
-// reviewer comment threads — so it can decide what to address WITHOUT having
-// to grep the worktree for it.
+// MCP tools for the right-pane chat agent. Spans two functional surfaces:
+//   - READ: `get_review_context` (this file) — structured review context fetch.
+//   - WRITE: walkthrough-edit tools (see `chat-edit-tools.ts`) — the chat
+//     agent's authorized post-completion mutation path (CLAUDE.md invariant
+//     #7 carve-out).
 //
 // Per doctrine invariant #13 (agent-path parity), handler implementations
 // are shared across both transports (in-process Claude SDK + HTTP MCP for
-// opencode). The factory below produces a Claude-SDK-shaped server; the
-// HTTP route in `routes/mcp/chat-context.ts` drives the same TOOL_SPECS.
-//
-// These are READ-ONLY tools. The walkthrough's MCP surface is write-heavy
-// because it builds the walkthrough document; this surface is purely
-// inspection — there is no schema mutation here.
+// opencode). The factory below produces a Claude-SDK-shaped server bound
+// to a single context; the HTTP route in `routes/mcp/chat-context.ts`
+// drives the same TOOL_SPECS with a per-request context.
 
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
-import type { Db } from "../../db";
 import { commentThreads } from "../../db/schema/comment-threads";
 import { pullRequests } from "../../db/schema/pull-requests";
 import { reviewSessions } from "../../db/schema/review-sessions";
@@ -26,30 +22,27 @@ import { threadMessages } from "../../db/schema/thread-messages";
 import { walkthroughBlocks } from "../../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../../db/schema/walkthrough-issues";
 import { walkthroughs } from "../../db/schema/walkthroughs";
+import { EDIT_TOOL_SPECS } from "./chat-edit-tools";
+import type {
+	ChatEditToolResult,
+	ChatWalkthroughEditContext,
+} from "./chat-edit-tool-spec";
 
 // ── Context ─────────────────────────────────────────────────────────────────
 
 /**
- * The chat-MCP context is bound to a single PR. Both transports inject this
- * before dispatching to a handler:
+ * Unified chat-MCP execution context. Carries the read-only essentials
+ * (`db`, `prId`) plus the edit-tool fields (`userId`, `actor`, `emit`,
+ * `broadcastThreadEvent`). Read-only handlers ignore the extras. Both
+ * transports inject this before dispatching:
  *
  *   - Claude SDK: bound at server-creation time via {@link createChatMcpServer}.
  *   - opencode HTTP: bound per-request after resolving the bearer token in
  *     `routes/mcp/chat-context.ts`.
  */
-export interface ChatToolContext {
-	readonly db: Db;
-	readonly prId: string;
-}
+export type ChatToolContext = ChatWalkthroughEditContext;
 
-export interface ChatToolResult {
-	content: Array<{ type: "text"; text: string }>;
-	isError?: boolean;
-	// MCP SDK's tool() signature uses an open-ended response type with a
-	// string index signature. This extra field lets our narrower type unify
-	// with that shape when the SDK wraps us; it's never populated.
-	[k: string]: unknown;
-}
+export type ChatToolResult = ChatEditToolResult;
 
 export type ChatToolHandler<TInput> = (
 	ctx: ChatToolContext,
@@ -345,6 +338,16 @@ export const CHAT_TOOL_SPECS: ReadonlyArray<ChatToolSpec<unknown>> = [
 		inputSchema: getReviewContextSchema,
 		handler: getReviewContextHandler as ChatToolHandler<unknown>,
 	},
+	// Walkthrough-edit tools (CLAUDE.md invariant #7 chat-edit carve-out).
+	// These mutate the latest completed walkthrough for the PR; they never
+	// touch status / lastCompletedPhase. See `chat-edit-tools.ts` for
+	// handler implementations.
+	...(EDIT_TOOL_SPECS.map((spec) => ({
+		name: spec.name,
+		description: spec.description,
+		inputSchema: spec.inputSchema,
+		handler: spec.handler,
+	})) as unknown as ChatToolSpec<unknown>[]),
 ];
 
 // ── Claude Agent SDK adapter ────────────────────────────────────────────────

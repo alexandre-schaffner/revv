@@ -585,6 +585,11 @@
     }
 }
 
+/* Shared shimmer keyframes. Consumers:
+   - components/ai/shimmer/Shimmer.svelte (text shimmer via background-clip)
+   - components/ui/skeleton/skeleton.svelte (block shimmer on bg-muted)
+   The legacy text-shimmer CSS (GuidedWalkthrough's data-component="text-shimmer")
+   has been removed — use <Shimmer> from $lib/components/ai/shimmer instead. */
 @keyframes shimmer {
     from {
         background-position: 200% 0;
@@ -608,6 +613,16 @@ body {
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Theme transition (View Transition API) ───────────────
+   The theme store uses document.startViewTransition() to crossfade
+   between light/dark. The default ::view-transition pseudo-elements
+   handle the fade. We set the duration here and disable for
+   reduced-motion users. */
+::view-transition-old(root),
+::view-transition-new(root) {
+    animation-duration: var(--duration-smooth);
 }
 
 /* Scrollbar */
@@ -769,6 +784,24 @@ body {
 @keyframes motion-tooltip-pop-in {
     0%   { opacity: 0; scale: 0.92; translate: 0 4px; }
     100% { opacity: 1; scale: 1;    translate: 0 0; }
+}
+
+/* ──────────────────────────────────────────────────────────
+   Pierre (code/diff) theme sync.
+   Pierre's shadow DOM sets :host { color-scheme: light dark }
+   which follows the OS, not the app. Override with `inherit`
+   so its light-dark() token colors follow <html>'s color-scheme
+   automatically — no JS needed for the common 'sync' case.
+   Explicit diff-theme overrides via data attribute on :root.
+   ────────────────────────────────────────────────────────── */
+diffs-container {
+    color-scheme: inherit;
+}
+:root[data-diff-theme="light"] diffs-container {
+    color-scheme: light;
+}
+:root[data-diff-theme="dark"] diffs-container {
+    color-scheme: dark;
 }
 
 /* ──────────────────────────────────────────────────────────

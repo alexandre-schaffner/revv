@@ -4,8 +4,21 @@
 	import ThinkingEffortSelector from './ThinkingEffortSelector.svelte';
 	import CommitsDropdown from './CommitsDropdown.svelte';
 	import { RefreshCw } from '@lucide/svelte';
+	import {
+		Context,
+		ContextTrigger,
+		ContextContent,
+		ContextContentHeader,
+		ContextContentBody,
+		ContextInputUsage,
+		ContextOutputUsage,
+		ContextCacheReadUsage,
+		ContextCacheCreationUsage,
+	} from '$lib/components/ai/context';
 	import { getSelectedPr, getSelectedPrId } from '$lib/stores/prs.svelte';
 	import { getLastSyncAt, getThreadsSyncing, getSyncError } from '$lib/stores/sync.svelte';
+	import { getTokenUsage } from '$lib/stores/walkthrough.svelte';
+	import { getSettings } from '$lib/stores/settings.svelte';
 	import { requestFullSync } from '$lib/stores/ws.svelte';
 
 	const pr = $derived(getSelectedPr());
@@ -13,6 +26,17 @@
 	const lastSyncAt = $derived(getLastSyncAt(selectedPrId));
 	const syncing = $derived(getThreadsSyncing(selectedPrId));
 	const syncError = $derived(getSyncError(selectedPrId));
+
+	const usage = $derived(getTokenUsage(selectedPrId ?? undefined));
+	const totalTokens = $derived(
+		usage.inputTokens +
+			usage.outputTokens +
+			usage.cacheReadInputTokens +
+			usage.cacheCreationInputTokens,
+	);
+	const contextWindow = $derived(getSettings()?.aiContextWindow ?? '200k');
+	const maxContext = $derived(contextWindow === '1m' ? 1_000_000 : 200_000);
+	const showUsage = $derived(selectedPrId !== null);
 
 	let tick = $state(0);
 	$effect(() => {
@@ -49,11 +73,26 @@
 		</div>
 	</div>
 
-	<!-- Right: sync indicator + branch/sha -->
+	<!-- Right: usage indicator + sync + branch/sha -->
 	<div class="flex items-center gap-2">
+		{#if showUsage}
+			<Context usedTokens={totalTokens} maxTokens={maxContext} {usage}>
+				<ContextTrigger />
+				<ContextContent>
+					<ContextContentHeader />
+					<ContextContentBody>
+						<ContextInputUsage />
+						<ContextOutputUsage />
+						<ContextCacheReadUsage />
+						<ContextCacheCreationUsage />
+					</ContextContentBody>
+				</ContextContent>
+			</Context>
+			<span class="h-3 w-px shrink-0 bg-border"></span>
+		{/if}
 		{#if selectedPrId}
 			<button
-				class="flex cursor-pointer items-center gap-1.5 text-[10px] text-text-muted rounded px-1 py-0.5 transition-colors hover:bg-bg-elevated hover:text-text-secondary disabled:cursor-default disabled:opacity-60"
+				class="flex cursor-pointer items-center gap-1.5 text-[10px] tabular-nums text-text-muted rounded px-1 py-0.5 transition-colors hover:bg-bg-elevated hover:text-text-secondary disabled:cursor-default disabled:opacity-60"
 				onclick={handleRetrySync}
 				disabled={syncing}
 				title="Sync comments for this PR"

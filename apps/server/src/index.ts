@@ -24,6 +24,7 @@ import { PollScheduler } from './services/PollScheduler';
 import { WalkthroughJobs } from './services/WalkthroughJobs';
 import { RepoCloneService } from './services/RepoClone';
 import { DbMaintenance } from './services/DbMaintenance';
+import { ChatSessionService } from './services/ChatSession';
 
 const app = new Elysia()
 	.use(
@@ -110,5 +111,27 @@ AppRuntime.runPromise(
 ).catch((err) => {
 	logError('db-maintenance', 'start failed on boot:', err);
 });
+
+// Terminal-on-crash for pending chat questions. The Claude SDK's in-memory
+// deferred is gone after a process restart and the opencode daemon may also
+// have lost question state; either way, the agent run that asked is dead.
+// Mark these rows `superseded` so the UI renders them muted and the user
+// knows to re-ask via a new message.
+AppRuntime.runPromise(
+	Effect.flatMap(ChatSessionService, (svc) =>
+		svc.supersedePendingQuestionsOnBoot(),
+	),
+)
+	.then((n) => {
+		if (n > 0) {
+			logError(
+				'chat-questions',
+				`marked ${n} pending question(s) as superseded on boot`,
+			);
+		}
+	})
+	.catch((err) => {
+		logError('chat-questions', 'supersedePendingQuestionsOnBoot failed:', err);
+	});
 
 export type App = typeof app;

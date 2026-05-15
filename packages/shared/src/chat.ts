@@ -59,3 +59,58 @@ export interface ChatSubagentInvocation {
 	readonly startedAt: string;
 	readonly completedAt: string | null;
 }
+
+/**
+ * One option in a multiple-choice question prompt. Shared by both providers
+ * (Claude `askUserQuestion`, opencode `question.asked`). `preview` carries
+ * optional markdown/HTML content the renderer can disclose under the
+ * label/description pair — Claude-only today; opencode always omits it.
+ */
+export interface NormalizedQuestionOption {
+	readonly label: string;
+	readonly description: string;
+	readonly preview?: string;
+}
+
+/**
+ * One question in a question-tool invocation. The agent may ask 1–4 such
+ * questions in a single tool call (Claude) or 1+ (opencode).
+ *
+ * `multiSelect` matches Claude's flag; opencode's `multiple` maps onto it.
+ * `allowCustom` is opencode's `custom` flag — Claude has no equivalent, so
+ * the claude path always normalizes this to `false`.
+ */
+export interface NormalizedQuestion {
+	readonly question: string;
+	readonly header: string;
+	readonly multiSelect: boolean;
+	readonly allowCustom: boolean;
+	readonly options: ReadonlyArray<NormalizedQuestionOption>;
+}
+
+/**
+ * A pending or resolved interactive question from the agent. Renders as a
+ * card with selectable options in the chat panel.
+ *
+ * Status lifecycle:
+ *   - 'pending'    — emitted by agent, awaiting user decision
+ *   - 'answered'   — user chose options (+ optional custom text)
+ *   - 'rejected'   — user dismissed the prompt
+ *   - 'superseded' — stream died before the user could answer (e.g.
+ *                    server restart); the agent will need to re-ask
+ */
+export interface ChatQuestion {
+	readonly id: string;
+	readonly turnId: string;
+	readonly providerRequestId: string;
+	readonly source: 'claude' | 'opencode';
+	readonly questions: ReadonlyArray<NormalizedQuestion>;
+	readonly status: 'pending' | 'answered' | 'rejected' | 'superseded';
+	/** Map question text → labels chosen. Null when status === 'pending'. */
+	readonly answers: Readonly<Record<string, ReadonlyArray<string>>> | null;
+	/** Map question text → user's free-text answer (opencode `allowCustom`). */
+	readonly customAnswers: Readonly<Record<string, string>> | null;
+	readonly previewFormat: 'markdown' | 'html';
+	readonly createdAt: string;
+	readonly answeredAt: string | null;
+}

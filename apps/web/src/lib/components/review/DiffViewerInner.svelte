@@ -56,7 +56,6 @@
 	interface Props {
 		file: ReviewFile;
 		mode: 'unified' | 'split';
-		themeType: 'light' | 'dark' | 'system';
 		annotations: DiffLineAnnotation<ThreadMeta>[];
 		/** Map from threadId → messages, for expanded thread rendering */
 		threadMessages: Record<string, ThreadMessage[]>;
@@ -81,7 +80,6 @@
 	let {
 		file,
 		mode,
-		themeType,
 		annotations,
 		threadMessages,
 		threadById,
@@ -319,11 +317,6 @@
 		}
 	});
 
-	// ── Theme sync ────────────────────────────────────────────────────────────
-	$effect(() => {
-		instance?.setThemeType(themeType);
-	});
-
 	// ── Instance lifecycle ────────────────────────────────────────────────────
 
 	onMount(() => {
@@ -333,7 +326,6 @@
 			const options: FileDiffOptions<ThreadMeta> = {
 				diffStyle: mode,
 				theme: { dark: 'pierre-dark', light: 'pierre-light' },
-				themeType,
 				overflow: 'scroll',
 				expansionLineCount: 20,
 				collapsedContextThreshold: 3,
@@ -588,7 +580,7 @@
 		padding: 4px 0;
 		cursor: pointer;
 		color: var(--color-text-secondary);
-		transition: background-color 100ms;
+		transition: background-color var(--duration-instant) var(--ease-soft);
 	}
 
 	:global([data-view-btn]:hover) {

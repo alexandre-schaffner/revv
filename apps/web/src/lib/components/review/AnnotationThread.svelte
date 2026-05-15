@@ -360,7 +360,7 @@
 		border-top: 1px solid color-mix(in srgb, var(--color-success) 12%, transparent);
 		cursor: pointer;
 		text-align: left;
-		transition: background-color 80ms;
+		transition: background-color var(--duration-instant) var(--ease-soft);
 	}
 
 	.apply-btn:hover {
@@ -452,7 +452,7 @@
 		border-radius: 3px;
 		margin: -2px -4px;
 		padding: 2px 4px;
-		transition: background-color 80ms;
+		transition: background-color var(--duration-instant) var(--ease-soft);
 	}
 	.msg-body--editable:hover {
 		background: var(--color-bg-tertiary);

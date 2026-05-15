@@ -297,7 +297,7 @@
 		letter-spacing: 0.14em;
 		text-transform: uppercase;
 		cursor: pointer;
-		transition: color var(--duration-quick, 240ms) var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1));
+		transition: color var(--duration-snap) var(--ease-out-expo);
 		margin-bottom: -6px;
 	}
 
@@ -306,7 +306,7 @@
 	}
 
 	.back :global(svg) {
-		transition: transform var(--duration-quick, 240ms) var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1));
+		transition: transform var(--duration-quick) var(--ease-out-expo);
 	}
 
 	.back:hover :global(svg) {
@@ -394,7 +394,7 @@
 		cursor: pointer;
 		text-decoration: underline;
 		text-underline-offset: 2px;
-		transition: color var(--duration-quick, 240ms) var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1));
+		transition: color var(--duration-snap) var(--ease-out-expo);
 	}
 
 	.retry-link:hover {
@@ -414,7 +414,7 @@
 		font-size: 17px;
 		text-align: left;
 		cursor: pointer;
-		transition: background-color 220ms cubic-bezier(0.16, 1, 0.3, 1);
+		transition: background-color var(--duration-snap) var(--ease-out-expo);
 		animation: row-in 480ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
 	}
 
@@ -473,7 +473,7 @@
 		text-transform: uppercase;
 		color: var(--ob-text-dimmed);
 		cursor: pointer;
-		transition: color var(--duration-quick, 240ms) var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1));
+		transition: color var(--duration-snap) var(--ease-out-expo);
 	}
 
 	.skip:hover {
@@ -490,7 +490,7 @@
 		text-transform: uppercase;
 		color: var(--ob-text-dimmed);
 		cursor: pointer;
-		transition: color var(--duration-quick, 240ms) var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1));
+		transition: color var(--duration-snap) var(--ease-out-expo);
 		animation: fade-in var(--duration-smooth, 400ms) var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1)) both;
 	}
 

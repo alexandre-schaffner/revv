@@ -4,7 +4,7 @@
 	import { getSelectedPrId, retryClone } from '$lib/stores/prs.svelte';
 	import { getCollapseAllSignal } from '$lib/stores/sidebar.svelte';
 	import { getFocusedId } from '$lib/stores/sidebar-nav.svelte';
-	import { collapsibleSlide, listItemEnter, STAGGER } from '$lib/motion';
+	import { slide, fly } from 'svelte/transition';
 	import CloneStatusIndicator from '$lib/components/shared/CloneStatusIndicator.svelte';
 	import PrItem from './PrItem.svelte';
 
@@ -120,13 +120,13 @@
 	{#if expanded}
 		<div
 			class="ml-2 flex flex-col gap-0.5 border-l border-border-subtle pl-2"
-			transition:collapsibleSlide
+			transition:slide={{ duration: 220 }}
 		>
 			{#if prs.length === 0}
 				<p class="px-2 py-1.5 text-xs text-text-muted">No open pull requests</p>
 			{:else}
 				{#each prs as pr, i (pr.id)}
-					<div in:listItemEnter={{ delay: Math.min(i, STAGGER_CAP) * STAGGER.tight }}>
+					<div in:fly={{ y: 6, duration: 160, delay: Math.min(i, STAGGER_CAP) * 25 }}>
 						<PrItem {pr} isSelected={selectedPrId === pr.id} {navPrefix} {variant} />
 					</div>
 				{/each}
