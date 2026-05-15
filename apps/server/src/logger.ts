@@ -31,15 +31,6 @@ export function withLogContext<T>(ctx: LogContext, fn: () => T): T {
 	return logContextStorage.run(merged, fn);
 }
 
-/**
- * Return the current ambient log context, or `undefined` if none is active.
- * Mostly useful for the logger internals; callers should prefer
- * {@link withLogContext} to establish context.
- */
-export function getLogContext(): LogContext | undefined {
-	return logContextStorage.getStore();
-}
-
 function formatContext(ctx: LogContext | undefined): string {
 	if (!ctx) return '';
 	const parts: string[] = [];

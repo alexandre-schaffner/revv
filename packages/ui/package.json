@@ -18,11 +18,9 @@
     "@radix-ui/react-slot": "^1.2.4",
     "class-variance-authority": "^0.7.1",
     "clsx": "catalog:",
-    "lucide-react": "^0.474.0",
     "react": "catalog:",
     "react-dom": "catalog:",
-    "tailwind-merge": "catalog:",
-    "tailwindcss-animate": "^1.0.7"
+    "tailwind-merge": "catalog:"
   },
   "devDependencies": {
     "@types/react": "catalog:",

@@ -12,7 +12,6 @@
 		Loader2,
 		ExternalLink,
 		Download,
-		FileText,
 		User,
 		Cpu,
 		SlidersHorizontal,
@@ -49,7 +48,7 @@
 	} from '$lib/constants/models';
 	import { authHeaders } from '$lib/utils/session-token';
 	import SignInButton from '$lib/components/auth/SignInButton.svelte';
-	import type { AiAgent, ContextWindow, FileTreeScope, ThinkingEffort } from '@revv/shared';
+	import type { AiAgent, ContextWindow, ThinkingEffort } from '@revv/shared';
 
 	interface Props {
 		open: boolean;
@@ -296,11 +295,7 @@
 		}
 	}
 
-	// ── Theme + file-tree options ─────────────────────────────────────────────
-	const fileTreeScopeOptions: { value: FileTreeScope; label: string; icon: typeof FileText }[] = [
-		{ value: 'all', label: 'Whole repo', icon: FolderTree },
-		{ value: 'changed', label: 'Changed only', icon: FileText },
-	];
+	// ── Theme options ────────────────────────────────────────────────────────
 
 	const CONTEXT_WINDOW_OPTIONS: { label: string; value: ContextWindow }[] = [
 		{ label: '200K', value: '200k' },
@@ -676,30 +671,7 @@
 				</Select.Root>
 			</div>
 
-			<!-- File tree scope -->
-			<div class="flex items-center justify-between gap-4">
-				<div>
-					<p class="text-sm text-text-primary">File tree scope</p>
-					<p class="text-xs text-text-muted">Which files appear in the review file tree.</p>
-				</div>
-				<Select.Root
-					type="single"
-					value={getSettings()?.fileTreeScope ?? 'changed'}
-					onValueChange={(v) => {
-						if (v) void updateSettings({ fileTreeScope: v as FileTreeScope });
-					}}
-				>
-					<Select.Trigger class="w-36 text-xs">
-						{fileTreeScopeOptions.find((o) => o.value === (getSettings()?.fileTreeScope ?? 'changed'))?.label ?? 'Changed only'}
-					</Select.Trigger>
-					<Select.Content>
-						{#each fileTreeScopeOptions as opt (opt.value)}
-							<Select.Item value={opt.value} class="text-xs">{opt.label}</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
 			</div>
-				</div>
 			</section>
 
 			<!-- Onboarding -->

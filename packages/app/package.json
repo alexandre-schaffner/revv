@@ -10,7 +10,6 @@
     "lint": "echo 'no linter configured'"
   },
   "dependencies": {
-    "@revv/shared": "workspace:*",
     "@revv/ui": "workspace:*",
     "@tanstack/react-router": "^1.168.0",
     "@tanstack/react-start": "^1.167.0",
@@ -19,7 +18,6 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.2.2",
-    "@tanstack/react-router-devtools": "^1.166.0",
     "@types/node": "^25.6.0",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",

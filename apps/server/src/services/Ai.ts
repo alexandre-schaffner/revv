@@ -30,7 +30,7 @@ import {
 	buildResolveConflictsPrompt,
 	buildResolveConflictsUserMessage,
 } from '../ai/prompts/chat';
-import { type ChatStreamFrame, type RawChatStreamFrame, streamChatViaClaude } from '../ai/providers/chat-claude';
+import { type RawChatStreamFrame, streamChatViaClaude } from '../ai/providers/chat-claude';
 import { streamChatViaOpencode } from '../ai/providers/chat-opencode';
 import type { InteractionMode } from '@revv/shared';
 import { WALKTHROUGH_FIRST_EVENT_TIMEOUT_OPENCODE_MS } from '../constants';

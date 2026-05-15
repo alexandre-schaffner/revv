@@ -1,6 +1,5 @@
 <script lang="ts" module>
 	import type { HTMLAttributes } from "svelte/elements";
-	import type { Snippet } from "svelte";
 
 	export type ConfirmationProps = HTMLAttributes<HTMLDivElement> & {
 		/** The tool or action being confirmed. */

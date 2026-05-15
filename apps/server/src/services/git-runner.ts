@@ -22,7 +22,7 @@ import { serverEnv } from "../config";
  * from blocking on interactive prompts — critical in the production LaunchAgent
  * where there is no TTY and a hanging credential helper would freeze the job.
  */
-export const GIT_ENV: Record<string, string> = {
+const GIT_ENV: Record<string, string> = {
 	...process.env,
 	GIT_TERMINAL_PROMPT: "0",
 	GIT_ASKPASS: "echo",

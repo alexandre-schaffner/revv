@@ -70,24 +70,24 @@ import { WebSocketHub } from "./WebSocketHub";
 // ── Constants ────────────────────────────────────────────────────────────────
 
 /** Cap on concurrent walkthrough fibers. Additional jobs queue on the semaphore. */
-export const MAX_CONCURRENT_JOBS = 5;
+const MAX_CONCURRENT_JOBS = 5;
 
 /**
  * Soft cap on how many times a single walkthrough row will be re-launched
  * across server restarts. After this many attempts the row is marked `error`
  * and no further resume fiber is spawned.
  */
-export const WALKTHROUGH_MAX_RESUME_ATTEMPTS = 3;
+const WALKTHROUGH_MAX_RESUME_ATTEMPTS = 3;
 
 /**
  * Maximum number of automatic in-flight continuations when the AI generator
  * exits without reaching Phase D (all 9 axes rated). Capped to prevent
  * infinite loops if the model persistently fails.
  */
-export const MAX_AUTO_CONTINUATIONS = 2;
+const MAX_AUTO_CONTINUATIONS = 2;
 
 /** Opaque session token TTL for the HTTP MCP route — jobs usually finish well under this. */
-export const SESSION_TOKEN_TTL_MS = 1000 * 60 * 60; // 1 hour
+const SESSION_TOKEN_TTL_MS = 1000 * 60 * 60; // 1 hour
 
 // ── Types ────────────────────────────────────────────────────────────────────
 

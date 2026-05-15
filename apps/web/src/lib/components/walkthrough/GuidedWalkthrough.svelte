@@ -4,7 +4,6 @@
 	import { cubicOut, cubicIn } from 'svelte/easing';
 
 	const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
-	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Separator } from '$lib/components/ui/separator';
 	import { RefreshCw, AlertTriangle, AlertCircle, Sparkles } from '@lucide/svelte';

@@ -99,8 +99,4 @@
 		text-align: center;
 	}
 
-	.placeholder--error .placeholder-text {
-		color: var(--color-danger);
-		font-style: normal;
-	}
 </style>

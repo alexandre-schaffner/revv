@@ -592,21 +592,6 @@ export async function fetchProposedChanges(prId: string): Promise<ProposedChange
 	return (await res.json()) as ProposedChanges;
 }
 
-/** Fetch the unified diff for a single proposed-changes commit. */
-export async function fetchProposedDiff(
-	prId: string,
-	sha: string,
-): Promise<string> {
-	const res = await fetch(
-		`${API_BASE_URL}/api/chat/${prId}/proposed-changes/${sha}/diff`,
-		{ headers: authHeaders() },
-	);
-	if (!res.ok) {
-		throw new Error(`Failed to fetch diff for ${sha}: ${res.status}`);
-	}
-	return await res.text();
-}
-
 export interface ProposedDiffFile {
 	path: string;
 	oldPath: string | null;

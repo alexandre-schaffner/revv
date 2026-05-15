@@ -1,5 +1,3 @@
-import type { Snippet } from "svelte";
-
 export type MessageRole = "user" | "assistant" | "system";
 
 export interface MessageContext {

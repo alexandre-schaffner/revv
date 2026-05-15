@@ -8,7 +8,7 @@
 #
 # Commands:
 #   revv update      Pull latest, rebuild, reinstall, reload service
-#   revv uninstall   Remove app, source, LaunchAgent, auth key, and this CLI
+#   revv uninstall   Remove ALL Revv artifacts (app, data, config, services, CLI)
 #   revv start       Load + start the server LaunchAgent
 #   revv stop        Unload + stop the server LaunchAgent
 #   revv restart     Stop + start
@@ -137,7 +137,7 @@ ${BOLD}Usage:${RESET}
 
 ${BOLD}Commands:${RESET}
   ${CYAN}update${RESET}      Pull latest code, rebuild, reinstall, reload server
-  ${CYAN}uninstall${RESET}   Remove the app, the source tree, the LaunchAgent, and this CLI
+  ${CYAN}uninstall${RESET}   Remove ALL Revv artifacts (app, data, config, services, CLI)
   ${CYAN}start${RESET}       Start the background API server
   ${CYAN}stop${RESET}        Stop the background API server
   ${CYAN}restart${RESET}     Restart the background API server
@@ -151,13 +151,32 @@ EOF
 }
 
 cmd_path() {
+  local tauri_id="com.revv.desktop"
   cat <<EOF
-Source:        $INSTALL_DIR
-App:           $(find_app || printf "(not installed)")
-LaunchAgent:   $LAUNCH_AGENT_PLIST
-Logs:          $LOG_DIR
-Auth key:      $REVV_AUTH_KEY
-CLI:           $CLI_PATH
+${BOLD}Install${RESET}
+  Source:          $INSTALL_DIR
+  App:             $(find_app || printf "(not installed)")
+  CLI:             $CLI_PATH
+  Helper lib:      $HOME/.local/share/revv/common.sh
+
+${BOLD}Data${RESET}
+  Database:        $INSTALL_DIR/revv.db
+  Git clones:      $HOME/.revv/repos/
+  Settings:        $HOME/.revv/settings.json
+  Auth key:        $REVV_AUTH_KEY
+  GitHub config:   $REVV_SUPPORT_DIR/github.conf
+
+${BOLD}Services${RESET}
+  Server agent:    $LAUNCH_AGENT_PLIST
+  Autostart agent: $HOME/Library/LaunchAgents/${tauri_id}.plist
+  Logs:            $LOG_DIR
+
+${BOLD}Tauri / WebView${RESET}
+  WebKit data:     $HOME/Library/WebKit/$tauri_id/
+  App support:     $HOME/Library/Application Support/$tauri_id/
+  Saved state:     $HOME/Library/Saved Application State/${tauri_id}.savedState/
+  Caches:          $HOME/Library/Caches/$tauri_id/
+  Preferences:     $HOME/Library/Preferences/${tauri_id}.plist
 EOF
 }
 
@@ -376,47 +395,170 @@ cmd_update() {
 
 cmd_uninstall() {
   step "Uninstall Revv"
+
+  # ── Collect all artifact paths ──────────────────────────────
+  local revv_data_dir="$HOME/.revv"
+  local tauri_id="com.revv.desktop"
+  local tauri_autostart_plist="$HOME/Library/LaunchAgents/${tauri_id}.plist"
+  local tauri_webkit_dir="$HOME/Library/WebKit/$tauri_id"
+  local tauri_app_support="$HOME/Library/Application Support/$tauri_id"
+  local tauri_saved_state="$HOME/Library/Saved Application State/${tauri_id}.savedState"
+  local tauri_caches="$HOME/Library/Caches/$tauri_id"
+  local tauri_http_caches="$HOME/Library/Caches/${tauri_id}.WebView"
+  local tauri_preferences="$HOME/Library/Preferences/${tauri_id}.plist"
+
+  # The production database lives in the server CWD (= INSTALL_DIR for prod installs).
+  local prod_db="$INSTALL_DIR/revv.db"
+  local prod_db_wal="$INSTALL_DIR/revv.db-wal"
+  local prod_db_shm="$INSTALL_DIR/revv.db-shm"
+
   cat <<EOF
-This will remove:
-  • /Applications/Revv.app (or ~/Applications/Revv.app)
-  • $INSTALL_DIR
-  • $LAUNCH_AGENT_PLIST
-  • $LOG_DIR
-  • $REVV_SUPPORT_DIR/config
-  • $REVV_AUTH_KEY
-  • $CLI_PATH
-  • $HOME/.local/share/revv/common.sh
+
+${BOLD}This will permanently remove ALL Revv artifacts:${RESET}
+
+  ${CYAN}Application${RESET}
+    • Revv.app (all copies in /Applications and ~/Applications)
+
+  ${CYAN}Background services${RESET}
+    • $LAUNCH_AGENT_PLIST  (server LaunchAgent)
+    • $tauri_autostart_plist  (desktop autostart)
+
+  ${CYAN}Data${RESET}
+    • $prod_db  (database + WAL/SHM)
+    • $revv_data_dir/  (git clones, worktrees, settings)
+
+  ${CYAN}Configuration${RESET}
+    • $REVV_SUPPORT_DIR/  (auth key, config, github.conf, source tree)
+    • $LOG_DIR/  (server logs)
+
+  ${CYAN}Tauri / WebView data${RESET}
+    • $tauri_webkit_dir/
+    • $tauri_app_support/
+    • $tauri_saved_state/
+    • $tauri_caches/
+    • $tauri_preferences
+
+  ${CYAN}CLI${RESET}
+    • $CLI_PATH
+    • $HOME/.local/share/revv/
+
+  ${CYAN}Shell config${RESET}
+    • PATH entry added by the installer (in ~/.zshrc or ~/.bashrc)
+
+  ${CYAN}OS registrations${RESET}
+    • revv:// URL scheme (Launch Services)
 EOF
+
   confirm "Proceed with uninstall?" || { info "Aborted."; return 0; }
 
-  # Stop the server and unregister the agent.
+  # ── 1. Stop services ────────────────────────────────────────
+  info "Stopping services…"
   launchctl unload -w "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
-  rm -f "$LAUNCH_AGENT_PLIST"
+  launchctl unload -w "$tauri_autostart_plist" 2>/dev/null || true
 
-  # Quit and remove the .app
+  # Quit the app (try both product names)
   osascript -e 'tell application "Revv" to quit' 2>/dev/null || true
+  osascript -e 'tell application "Revv (Alpha)" to quit' 2>/dev/null || true
   sleep 1
+
+  # ── 2. Unregister revv:// URL scheme ────────────────────────
+  # Removing the .app deletes the Info.plist that declares the scheme, but the
+  # OS Launch Services database caches it. Explicitly unregister so macOS
+  # forgets the revv:// handler immediately.
+  local lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+  if [[ -x "$lsregister" ]]; then
+    for p in "${APP_CANDIDATES[@]}"; do
+      [[ -d "$p" ]] && "$lsregister" -u "$p" 2>/dev/null || true
+    done
+    info "Unregistered revv:// URL scheme from Launch Services"
+  fi
+
+  # ── 3. Remove the .app bundle(s) ────────────────────────────
   for p in "${APP_CANDIDATES[@]}"; do
-    [[ -d "$p" ]] && rm -rf "$p"
+    if [[ -d "$p" ]]; then
+      rm -rf "$p"
+      info "Removed $p"
+    fi
   done
 
-  # Remove source, logs, auth key, installer config
-  rm -rf "$INSTALL_DIR" "$LOG_DIR"
-  rm -f "$REVV_AUTH_KEY" "$REVV_SUPPORT_DIR/config"
-  # Clean up the support dir if it's now empty.
-  rmdir "$REVV_SUPPORT_DIR" 2>/dev/null || true
+  # ── 4. Remove LaunchAgents ──────────────────────────────────
+  rm -f "$LAUNCH_AGENT_PLIST"
+  rm -f "$tauri_autostart_plist"
 
-  # Remove shared helper shipped alongside the CLI.
+  # ── 5. Remove database files ────────────────────────────────
+  # Production DB (lives in server CWD = INSTALL_DIR for prod installs)
+  for f in "$prod_db" "$prod_db_wal" "$prod_db_shm"; do
+    [[ -f "$f" ]] && rm -f "$f"
+  done
+  # Also check repo root (some installs run from there)
+  for f in "./revv.db" "./revv.db-wal" "./revv.db-shm"; do
+    [[ -f "$f" ]] && rm -f "$f"
+  done
+
+  # ── 6. Remove ~/.revv/ (repos, worktrees, settings) ────────
+  if [[ -d "$revv_data_dir" ]]; then
+    rm -rf "$revv_data_dir"
+    info "Removed $revv_data_dir (git clones, settings)"
+  fi
+
+  # ── 7. Remove ~/Library/Application Support/Revv/ ──────────
+  # Contains: auth.key, config, github.conf, src/ (source install)
+  if [[ -d "$REVV_SUPPORT_DIR" ]]; then
+    rm -rf "$REVV_SUPPORT_DIR"
+    info "Removed $REVV_SUPPORT_DIR"
+  fi
+  # Also remove source dir if it was overridden to a different location
+  if [[ -d "$INSTALL_DIR" && "$INSTALL_DIR" != "$REVV_SUPPORT_DIR"* ]]; then
+    rm -rf "$INSTALL_DIR"
+    info "Removed $INSTALL_DIR"
+  fi
+
+  # ── 8. Remove logs ──────────────────────────────────────────
+  [[ -d "$LOG_DIR" ]] && rm -rf "$LOG_DIR"
+
+  # ── 9. Remove Tauri / WebView data ─────────────────────────
+  for d in "$tauri_webkit_dir" "$tauri_app_support" "$tauri_saved_state" "$tauri_caches" "$tauri_http_caches"; do
+    [[ -d "$d" ]] && rm -rf "$d" && info "Removed $d"
+  done
+  [[ -f "$tauri_preferences" ]] && rm -f "$tauri_preferences"
+
+  # ── 10. Clean shell RC PATH entry ───────────────────────────
+  local shell_rc=""
+  case "${SHELL##*/}" in
+    zsh)  shell_rc="$HOME/.zshrc" ;;
+    bash) shell_rc="$HOME/.bashrc" ;;
+  esac
+  if [[ -n "$shell_rc" && -f "$shell_rc" ]]; then
+    # Remove the "# Added by Revv installer" comment and the PATH line that follows it.
+    # Also remove any standalone .local/bin PATH line that references the revv install.
+    local tmp_rc
+    tmp_rc="$(mktemp)"
+    # Use a state machine: skip the comment line AND the next line if it's the PATH export.
+    awk '
+      /^# Added by Revv installer/ { skip=1; next }
+      skip && /export PATH=.*\.local\/bin/ { skip=0; next }
+      { skip=0; print }
+    ' "$shell_rc" > "$tmp_rc"
+    if ! cmp -s "$shell_rc" "$tmp_rc"; then
+      mv "$tmp_rc" "$shell_rc"
+      info "Cleaned Revv PATH entry from $shell_rc"
+    else
+      rm -f "$tmp_rc"
+    fi
+  fi
+
+  # ── 11. Remove CLI + shared helper ──────────────────────────
   rm -f "$HOME/.local/share/revv/common.sh"
   rmdir "$HOME/.local/share/revv" 2>/dev/null || true
 
   # Remove self — do this last so the script can finish executing.
-  if [[ -f "$CLI_PATH" ]]; then
-    rm -f "$CLI_PATH"
-  fi
+  [[ -f "$CLI_PATH" ]] && rm -f "$CLI_PATH"
 
-  success "Revv has been uninstalled."
-  info "Note: Bun and the Rust toolchain were left installed — remove them manually if you no longer need them."
+  printf "\n"
+  success "Revv has been completely uninstalled."
+  info "Bun and the Rust toolchain were left installed — remove them manually if no longer needed."
+  info "  bun:   rm -rf ~/.bun"
+  info "  rust:  rustup self uninstall"
 }
 
 cmd_doctor() {

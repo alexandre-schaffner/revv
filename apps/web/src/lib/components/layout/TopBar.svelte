@@ -3,9 +3,7 @@
 
 	import FloatingTabs from './FloatingTabs.svelte';
 	import { getSelectedPr, getSelectedPrId, getIsLoading } from '$lib/stores/prs.svelte';
-	import { setActiveTab } from '$lib/stores/review.svelte';
 	import { getThemePreference, setThemePreference, type ThemePreference } from '$lib/stores/theme.svelte';
-	import { getActivePanel } from '$lib/stores/focus-mode.svelte';
 	import { getTopbarSubtitle } from '$lib/stores/topbar.svelte';
 	import { requestSync, requestFullSync } from '$lib/stores/ws.svelte';
 	import { getPrListSyncing } from '$lib/stores/sync.svelte';

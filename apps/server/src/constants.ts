@@ -30,17 +30,10 @@ export const WALKTHROUGH_FIRST_EVENT_TIMEOUT_OPENCODE_MS = 150_000; // 150 secon
  *  summary/block/phase progress, the model is stuck reading files — abort with an error. */
 export const WALKTHROUGH_EXPLORATION_STALL_MS = 6 * 60 * 1000; // 6 minutes
 
-/** Maximum time for an SDK-driven walkthrough (direct Anthropic API). */
-export const SDK_WALKTHROUGH_TIMEOUT_MS = 120_000; // 2 minutes
-
 /** TTL for the cached CLI agent availability check. */
 export const CLI_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 /** TTL for the in-memory GitHub repo list cache. */
 export const REPO_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
-/** How many times to poll clone status before giving up (× POLL_CLONE_INTERVAL_SECONDS). */
-export const POLL_CLONE_MAX_ATTEMPTS = 200; // 200 × 3s = 10 minutes
 
-/** Seconds between clone-status poll checks. */
-export const POLL_CLONE_INTERVAL_SECONDS = 3;

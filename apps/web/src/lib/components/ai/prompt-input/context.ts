@@ -1,5 +1,3 @@
-import type { Snippet } from "svelte";
-
 export type PromptInputStatus = "ready" | "submitted" | "streaming" | "error";
 
 export interface PromptInputMessage {

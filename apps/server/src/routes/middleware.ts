@@ -150,37 +150,6 @@ export function mapErrorToSSEResponse(raw: unknown): Response {
 	return jsonResponse({ code: 'INTERNAL_ERROR', message }, 500);
 }
 
-/**
- * Wrap a ReadableStream<string> of text chunks into an SSE-formatted
- * ReadableStream<Uint8Array>. Each chunk becomes a `data: <json>\n\n` frame,
- * followed by `data: [DONE]\n\n` on completion. Errors are emitted as
- * `event: error\ndata: <json>\n\n`.
- */
-export function textStreamToSSE(textStream: ReadableStream<string>): ReadableStream<Uint8Array> {
-	const encoder = new TextEncoder();
-	return new ReadableStream<Uint8Array>({
-		async start(controller) {
-			const reader = textStream.getReader();
-			try {
-				while (true) {
-					const { done, value } = await reader.read();
-					if (done) break;
-					controller.enqueue(encoder.encode(`data: ${JSON.stringify(value)}\n\n`));
-				}
-				controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-				controller.close();
-			} catch (err) {
-				const errMsg = JSON.stringify({
-					code: 'GENERATION_ERROR',
-					message: err instanceof Error ? err.message : 'Unknown error',
-				});
-				controller.enqueue(encoder.encode(`event: error\ndata: ${errMsg}\n\n`));
-				controller.close();
-			}
-		},
-	});
-}
-
 const CHAT_SSE_HEARTBEAT_MS = 15_000;
 
 /**

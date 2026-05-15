@@ -4,7 +4,7 @@
 	import { Search } from '@lucide/svelte';
 	import { getPullRequests, getRepositories, selectPr } from '$lib/stores/prs.svelte';
 	import { getFilteredCommands, setQuery as setCommandQuery, resetQuery, fuzzyScore } from '$lib/stores/commands.svelte';
-	import { setPaletteMode, closePalette, type PaletteMode } from '$lib/stores/shortcuts.svelte';
+	import { setPaletteMode, type PaletteMode } from '$lib/stores/shortcuts.svelte';
 	import { setSidebarView } from '$lib/stores/sidebar.svelte';
 	import type { PullRequest, Repository } from '@revv/shared';
 

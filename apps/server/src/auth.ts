@@ -19,7 +19,6 @@ import { serverEnv } from './config';
 // connections page if they want (linked from the settings UI).
 export const GITHUB_CLIENT_ID = serverEnv.githubClientId;
 export const GITHUB_CLIENT_ID_PUBLIC = serverEnv.githubClientIdPublic;
-export const GITHUB_HOST = serverEnv.githubHost;
 
 /**
  * Locate (or create) the better-auth signing secret.
