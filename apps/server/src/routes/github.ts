@@ -33,7 +33,7 @@ export const githubRoutes = new Elysia({ prefix: '/api/github' })
 						const github = yield* GitHubService;
 						const tokenProvider = yield* TokenProvider;
 
-						const token = yield* tokenProvider.getGitHubToken(ctx.session.user.id);
+						const token = yield* tokenProvider.getGitHubToken(ctx.session.user.id, host);
 						const fetched = yield* github.listUserRepos(token);
 
 						repoCache = { data: fetched, fetchedAt: Date.now(), host };
