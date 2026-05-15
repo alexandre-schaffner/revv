@@ -85,7 +85,7 @@ export const repoRoutes = new Elysia({ prefix: '/api/repos' })
 					const cloneSvc = yield* RepoCloneService;
 
 					const repo = yield* repoSvc.getRepoById(ctx.params.id);
-					const token = yield* tokenProvider.getGitHubToken(ctx.session.user.id);
+					const token = yield* tokenProvider.getGitHubToken(ctx.session.user.id, repo.githubHost);
 
 					yield* Effect.forkDaemon(
 						cloneSvc.cloneRepo(repo, token).pipe(

@@ -75,7 +75,7 @@ export const prRoutes = new Elysia({ prefix: '/api/prs' })
 					// Always the full PR diff (merge-base 3-dot, matching GitHub's
 					// "Files changed" tab). No per-commit selection anymore — the
 					// commits dropdown is read-only.
-					const token = yield* tokenProvider.getGitHubToken(ctx.session.user.id);
+					const token = yield* tokenProvider.getGitHubToken(ctx.session.user.id, repo.githubHost);
 					const files = yield* getOrFetchDiffFiles(
 						pr.id,
 						repo.fullName,
@@ -198,7 +198,7 @@ export const prRoutes = new Elysia({ prefix: '/api/prs' })
 
 					const pr = yield* prService.getPr(ctx.params.id);
 					const repo = yield* repoService.getRepoById(pr.repositoryId);
-					const token = yield* tokenProvider.getGitHubToken(ctx.session.user.id);
+					const token = yield* tokenProvider.getGitHubToken(ctx.session.user.id, repo.githubHost);
 
 					return yield* githubService.listPrCommits(repo.fullName, pr.externalId, token);
 				})

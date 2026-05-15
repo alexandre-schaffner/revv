@@ -51,7 +51,10 @@ export const userRoutes = new Elysia({ prefix: '/api/user' })
 						Effect.gen(function* () {
 							const tokenProvider = yield* TokenProvider;
 							const github = yield* GitHubService;
-							const token = yield* tokenProvider.getGitHubToken(userId);
+							const settingsService = yield* SettingsService;
+							const settings = yield* settingsService.getSettings().pipe(Effect.orElseSucceed(() => null));
+							const host = settings?.githubHost?.trim() || undefined;
+							const token = yield* tokenProvider.getGitHubToken(userId, host);
 							const gh = yield* github.getAuthenticatedUserFresh(token);
 							return gh;
 						}).pipe(Effect.orElseSucceed(() => null)),

@@ -79,7 +79,7 @@ export const PrContextServiceLive = Layer.effect(
 			Effect.gen(function* () {
 				const pr = yield* prService.getPr(prId);
 				const repo = yield* repoService.getRepoById(pr.repositoryId);
-				const token = yield* tokenProvider.getGitHubToken(userId);
+				const token = yield* tokenProvider.getGitHubToken(userId, repo.githubHost);
 				return { pr, repo, token } satisfies PrContextBasic;
 			});
 

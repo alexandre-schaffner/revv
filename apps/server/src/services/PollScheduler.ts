@@ -160,7 +160,8 @@ export const PollSchedulerLive = Layer.effect(
 			// headers, and the settings page don't render broken avatars after the
 			// signed URL rotates.
 			yield* Effect.gen(function* () {
-				const token = yield* tokenProvider.getGitHubToken('single-user').pipe(
+				const avatarHost = allRepos[0]?.githubHost;
+				const token = yield* tokenProvider.getGitHubToken('single-user', avatarHost).pipe(
 					Effect.catchAll(() => Effect.succeed('')),
 				);
 				if (!token) return;
