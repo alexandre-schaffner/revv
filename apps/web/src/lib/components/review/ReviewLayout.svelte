@@ -1,4 +1,5 @@
 <script lang="ts">
+import { isImagePath } from "@revv/shared";
 import { onDestroy, untrack } from "svelte";
 import {
   enterLineMode,
@@ -33,6 +34,7 @@ import type { ReviewFile } from "$lib/types/review";
 import DiffViewer from "./DiffViewer.svelte";
 import FileIssues from "./FileIssues.svelte";
 import FileViewer from "./FileViewer.svelte";
+import ImageDiffViewer from "./ImageDiffViewer.svelte";
 
 // ── Props ─────────────────────────────────────────────────────────────────
 
@@ -47,6 +49,16 @@ let { prId, files }: Props = $props();
 
 const activeFilePath = $derived(getActiveFilePath());
 const activeFile = $derived(files.find((f) => f.path === activeFilePath) ?? null);
+// Image files: GitHub returns no patch (it's a binary blob), so the diff
+// renderer has nothing to render. Route those through the image viewer
+// which fetches the bytes for both sides from the local clone. The check
+// is path-only — true for renames where one side is an image (the other
+// side's bytes will fail with 404 and surface as a per-pane error).
+const activeFileIsImage = $derived(
+  activeFile !== null &&
+    (isImagePath(activeFile.path) ||
+      (activeFile.oldPath !== undefined && isImagePath(activeFile.oldPath))),
+);
 // Filename for the title bar — falls back to the raw path when neither
 // `activeFile` (PR-changed) nor a tree-selection has populated something.
 // Used by both the diff path and the file-viewer path so they share one
@@ -433,11 +445,15 @@ const panel = $derived(getActivePanel());
 				<h1 class="file-title">{activeFileName}</h1>
 			</div>
 			<FileIssues filePath={activeFile.path} />
-			<DiffViewer
-				file={activeFile}
-				onModeChange={(m) => setDiffMode(m)}
-				commentTrigger={pendingCommentTrigger}
-			/>
+			{#if activeFileIsImage}
+				<ImageDiffViewer {prId} file={activeFile} />
+			{:else}
+				<DiffViewer
+					file={activeFile}
+					onModeChange={(m) => setDiffMode(m)}
+					commentTrigger={pendingCommentTrigger}
+				/>
+			{/if}
 		{:else if showFileViewer && activeFilePath}
 			<!-- Title rendered by the layout (same as the diff path) so the
 			     file viewer fills the pane edge-to-edge — no inner padding,

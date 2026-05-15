@@ -11,6 +11,14 @@ export interface ReviewFile {
   isNew?: boolean;
   isDeleted?: boolean;
   isBinary?: boolean;
+  /**
+   * Server-rendered HTML for the unified-mode diff, produced by
+   * `@pierre/diffs/ssr` (`preloadPatchFile`). When present and the current
+   * diff mode is `'unified'`, `DiffViewerInner` calls `instance.hydrate(...)`
+   * for an instant first paint. Absent on cache misses, oversized patches,
+   * and split mode — `render(...)` is the fallback in those cases.
+   */
+  prerenderedHtml?: string;
 }
 
 // ── Comment / Thread types (re-exported from @revv/shared) ────────────────────

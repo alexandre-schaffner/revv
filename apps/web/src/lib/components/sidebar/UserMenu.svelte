@@ -130,15 +130,13 @@ async function handleSignOut(): Promise<void> {
 				</span>
 			{/if}
 		</span>
-		{#if !collapsed}
-			<span class="user-text">
-				<span class="user-name">{user?.githubLogin ?? user?.name ?? 'Account'}</span>
-				{#if user?.email}
-					<span class="user-email">{user.email}</span>
-				{/if}
-			</span>
-			<ChevronDown size={12} class="user-caret" />
-		{/if}
+		<span class="user-text" class:user-text--gone={collapsed} aria-hidden={collapsed || undefined}>
+			<span class="user-name">{user?.githubLogin ?? user?.name ?? 'Account'}</span>
+			{#if user?.email}
+				<span class="user-email">{user.email}</span>
+			{/if}
+		</span>
+		<ChevronDown size={12} class="user-caret{collapsed ? ' user-caret--gone' : ''}" />
 	</PopoverTrigger>
 
 	<PopoverContent
@@ -222,7 +220,11 @@ async function handleSignOut(): Promise<void> {
 		cursor: pointer;
 		text-align: left;
 		font-size: 11px;
-		transition: background-color var(--duration-snap);
+		overflow: hidden;
+		transition:
+			background-color var(--duration-snap),
+			gap var(--duration-smooth) var(--ease-out-expo),
+			padding var(--duration-smooth) var(--ease-out-expo);
 	}
 
 	:global(.user-trigger:hover) {
@@ -234,14 +236,8 @@ async function handleSignOut(): Promise<void> {
 	}
 
 	:global(.user-trigger--collapsed) {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 26px;
-		height: 26px;
-		padding: 0;
-		margin: 0 auto;
-		border-radius: 5px;
+		padding: 0 9px; /* centers 22px avatar in 40px column */
+		gap: 0;
 	}
 
 	/* ── Trigger avatar with spinner overlay ── */
@@ -277,8 +273,7 @@ async function handleSignOut(): Promise<void> {
 	}
 
 	.user-avatar--collapsed {
-		width: 18px;
-		height: 18px;
+		/* No size change — parent shrink handles the visual effect */
 	}
 
 	.user-avatar--fallback {
@@ -296,6 +291,24 @@ async function handleSignOut(): Promise<void> {
 		gap: 1px;
 		min-width: 0;
 		flex: 1;
+		overflow: hidden;
+		max-width: 300px; /* ceiling for collapse transition */
+		transition:
+			opacity var(--duration-quick) var(--ease-out-expo) 80ms,
+			max-width var(--duration-smooth) var(--ease-out-expo) 80ms,
+			visibility 0s linear 0s;
+	}
+
+	/* Collapse direction — text fades + collapses out first, ahead of the column */
+	.user-text--gone {
+		opacity: 0;
+		visibility: hidden;
+		max-width: 0;
+		pointer-events: none;
+		transition:
+			opacity var(--duration-quick) var(--ease-soft),
+			max-width var(--duration-smooth) var(--ease-out-expo),
+			visibility 0s linear var(--duration-quick);
 	}
 
 	.user-name {
@@ -318,7 +331,22 @@ async function handleSignOut(): Promise<void> {
 	:global(.user-caret) {
 		flex-shrink: 0;
 		color: var(--color-text-muted);
-		margin-left: auto;
+		overflow: hidden;
+		max-width: 20px;
+		transition:
+			opacity var(--duration-quick) var(--ease-out-expo) 80ms,
+			max-width var(--duration-smooth) var(--ease-out-expo) 80ms,
+			visibility 0s linear 0s;
+	}
+
+	:global(.user-caret--gone) {
+		opacity: 0;
+		visibility: hidden;
+		max-width: 0;
+		transition:
+			opacity var(--duration-quick) var(--ease-soft),
+			max-width var(--duration-smooth) var(--ease-out-expo),
+			visibility 0s linear var(--duration-quick);
 	}
 
 	/* ── Account rows ── */

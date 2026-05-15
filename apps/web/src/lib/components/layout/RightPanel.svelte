@@ -626,7 +626,7 @@ function activitiesForTurn(
 				{#snippet icon()}
 					<Bot size={32} />
 				{/snippet}
-				<Suggestion class="mt-3 justify-center max-w-[320px]">
+				<Suggestion class="mt-3 justify-center">
 					{#each suggestedPrompts as prompt (prompt)}
 						<SuggestionItem
 							onSelect={(text) => handleSuggestion(text)}

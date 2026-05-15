@@ -18,6 +18,7 @@ export {
   AUTO_FETCH_DEFAULT_INTERVAL,
   THREAD_SYNC_INTERVAL_SECONDS,
 } from "./constants";
+export { guessImageContentType, isImagePath } from "./images";
 export type {
   AiAgent,
   AuthorRole,

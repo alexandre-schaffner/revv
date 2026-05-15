@@ -84,6 +84,8 @@ export type WsServerMessage =
         status: "answered" | "rejected";
         answers?: Record<string, ReadonlyArray<string>>;
         customAnswers?: Record<string, string>;
+        /** If a pending plan was auto-superseded, its id. */
+        supersededPlanId?: string;
       };
     };
 

@@ -1,23 +1,25 @@
 <script lang="ts">
-import { Loader2, Plus, RefreshCw, Search, Trash2 } from "@lucide/svelte";
+import { Folder, Plus, RefreshCw, Search, Trash2 } from "@lucide/svelte";
 import type { Repository } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import CloneStatusIndicator from "$lib/components/shared/CloneStatusIndicator.svelte";
+import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import {
   addRepo,
   deleteRepo,
   fetchAvailableRepos,
+  getAvailablePrCount,
+  getAvailablePrCountsLoaded,
   getAvailableRepos,
   getAvailableReposLoading,
+  getPullRequests,
   getRepositories,
   retryClone,
 } from "$lib/stores/prs.svelte";
 
-// Shared "Add Repository" form. Renders the Browse/Manual tab content
-// without a modal wrapper. Assumes the parent provides horizontal
-// padding equivalent to `p-5` — the list and footer use small negative
-// margins to extend visually past that padding, mirroring the original
-// dialog look in both modal and inline contexts.
+// Shared "Add Repository" form. Renders without a modal wrapper so it can
+// be embedded inline. The parent provides horizontal padding equivalent
+// to `p-5`; the list extends visually past it with small negative margins.
 let {
   onClose,
   autoFocus = true,
@@ -28,68 +30,85 @@ let {
   showTitle?: boolean;
 } = $props();
 
+const MANUAL_REPO_REGEX = /^[\w.-]+\/[\w.-]+$/;
+
 function focusOnMount(node: HTMLElement) {
-  if (autoFocus) node.focus();
+  if (autoFocus) requestAnimationFrame(() => node.focus());
 }
 
-let activeTab = $state<"browse" | "manual">("browse");
-
-// -- Browse tab state --
-let browseSearch = $state("");
+let search = $state("");
 let addingRepos = $state(new Set<string>());
 let removingRepos = $state(new Set<string>());
 let highlightedIndex = $state(-1);
 let repoListEl = $state<HTMLDivElement | null>(null);
+let isManualLoading = $state(false);
 
-// Map keyed by fullName so the trailing-icon block can read live clone
-// state for repos that were already added. `getRepositories()` is reactive
-// (server broadcasts `repos:clone-status` → store updates), so this Map
-// re-derives whenever the clone status of any tracked repo changes.
+// Reactive map of tracked repos so clone-status changes ripple through.
 let trackedByFullName = $derived(
   new Map<string, Repository>(getRepositories().map((r) => [r.fullName, r])),
 );
 
+// Open-PR count per tracked repo, surfaced as the dropdown hint.
+let openPrCountByRepoId = $derived.by(() => {
+  const m = new Map<string, number>();
+  for (const pr of getPullRequests()) {
+    m.set(pr.repositoryId, (m.get(pr.repositoryId) ?? 0) + 1);
+  }
+  return m;
+});
+
+let trimmedSearch = $derived(search.trim());
+
 let filteredAvailable = $derived(
-  browseSearch.trim() === ""
+  trimmedSearch === ""
     ? getAvailableRepos()
-    : getAvailableRepos().filter(
-        (repo) =>
-          repo.fullName.toLowerCase().includes(browseSearch.toLowerCase()) ||
-          repo.owner.toLowerCase().includes(browseSearch.toLowerCase()) ||
-          repo.name.toLowerCase().includes(browseSearch.toLowerCase()),
-      ),
+    : getAvailableRepos().filter((repo) => {
+        const q = trimmedSearch.toLowerCase();
+        return (
+          repo.fullName.toLowerCase().includes(q) ||
+          repo.owner.toLowerCase().includes(q) ||
+          repo.name.toLowerCase().includes(q)
+        );
+      }),
 );
 
 let groupedByOwner = $derived.by(() => {
   const groups = new Map<string, typeof filteredAvailable>();
   for (const repo of filteredAvailable) {
     const existing = groups.get(repo.owner);
-    if (existing) {
-      existing.push(repo);
-    } else {
-      groups.set(repo.owner, [repo]);
-    }
+    if (existing) existing.push(repo);
+    else groups.set(repo.owner, [repo]);
   }
   return groups;
 });
 
-$effect(() => {
-  browseSearch;
-  highlightedIndex = -1;
+// The manual-import row appears when the query parses as owner/name AND
+// there is no exact match in the browsable list. This unifies the old
+// Manual tab into the single search input.
+let showManualImport = $derived.by(() => {
+  if (!MANUAL_REPO_REGEX.test(trimmedSearch)) return false;
+  const lowered = trimmedSearch.toLowerCase();
+  return !filteredAvailable.some((r) => r.fullName.toLowerCase() === lowered);
 });
 
-// -- Manual tab state --
-let fullName = $state("");
-let isLoading = $state(false);
-let localError = $state("");
+// Combined selectable list for keyboard nav: manual-import row first
+// (when shown), then available repos.
+let selectableCount = $derived(filteredAvailable.length + (showManualImport ? 1 : 0));
 
+let isManualAlreadyTracked = $derived(showManualImport && trackedByFullName.has(trimmedSearch));
+
+// When the query changes, default focus on the manual-import row if it's
+// shown — that's the "primary" action when the user types an explicit slug.
 $effect(() => {
-  if (getAvailableRepos().length === 0) {
-    fetchAvailableRepos();
-  }
+  search;
+  highlightedIndex = showManualImport ? 0 : -1;
 });
 
-async function handleBrowseAdd(repoFullName: string) {
+$effect(() => {
+  if (getAvailableRepos().length === 0) fetchAvailableRepos();
+});
+
+async function handleAdd(repoFullName: string) {
   if (addingRepos.has(repoFullName) || trackedByFullName.has(repoFullName)) return;
   addingRepos = new Set([...addingRepos, repoFullName]);
   try {
@@ -103,13 +122,13 @@ async function handleBrowseAdd(repoFullName: string) {
   }
 }
 
-async function handleBrowseRemove(repoId: string) {
+async function handleRemove(repoId: string) {
   if (removingRepos.has(repoId)) return;
   removingRepos = new Set([...removingRepos, repoId]);
   try {
     await deleteRepo(repoId);
   } catch {
-    // toast already shown by deleteRepo
+    // toast handled by store
   } finally {
     const next = new Set(removingRepos);
     next.delete(repoId);
@@ -117,24 +136,25 @@ async function handleBrowseRemove(repoId: string) {
   }
 }
 
-async function handleManualAdd() {
-  const trimmed = fullName.trim();
-  if (!trimmed?.includes("/")) {
-    localError = "Enter a valid repo in owner/name format";
+async function handleManualImport() {
+  const slug = trimmedSearch;
+  if (!MANUAL_REPO_REGEX.test(slug)) {
+    toast.error("Enter a valid repository in owner/name format");
     return;
   }
-  isLoading = true;
-  localError = "";
+  if (trackedByFullName.has(slug)) {
+    toast.error("Repository is already tracked");
+    return;
+  }
+  isManualLoading = true;
   try {
-    await addRepo(trimmed);
-    fullName = "";
+    await addRepo(slug);
+    search = "";
     onClose?.();
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "Failed to add repository";
-    localError = msg;
-    toast.error(msg);
+    toast.error(e instanceof Error ? e.message : "Failed to add repository");
   } finally {
-    isLoading = false;
+    isManualLoading = false;
   }
 }
 
@@ -144,336 +164,318 @@ function scrollHighlightedIntoView() {
   el?.scrollIntoView({ block: "nearest" });
 }
 
-function handleBrowseKeydown(e: KeyboardEvent) {
+function handleKeydown(e: KeyboardEvent) {
   if (e.key === "Escape") {
     onClose?.();
   } else if (e.key === "ArrowDown") {
     e.preventDefault();
-    highlightedIndex = Math.min(highlightedIndex + 1, filteredAvailable.length - 1);
+    highlightedIndex = Math.min(highlightedIndex + 1, selectableCount - 1);
     scrollHighlightedIntoView();
   } else if (e.key === "ArrowUp") {
     e.preventDefault();
     if (highlightedIndex > 0) highlightedIndex--;
     scrollHighlightedIntoView();
-  } else if (e.key === "Enter" && highlightedIndex >= 0) {
-    const repo = filteredAvailable[highlightedIndex];
-    if (repo) handleBrowseAdd(repo.fullName);
-  } else if (e.key === "Tab" && e.shiftKey) {
+  } else if (e.key === "Enter") {
     e.preventDefault();
-    activeTab = activeTab === "browse" ? "manual" : "browse";
+    if (showManualImport && highlightedIndex === 0) {
+      void handleManualImport();
+      return;
+    }
+    const idx = showManualImport ? highlightedIndex - 1 : highlightedIndex;
+    const repo = filteredAvailable[idx];
+    if (repo) {
+      void handleAdd(repo.fullName);
+    } else if (MANUAL_REPO_REGEX.test(trimmedSearch)) {
+      void handleManualImport();
+    }
   }
 }
 
-function handleManualKeydown(e: KeyboardEvent) {
-  if (e.key === "Enter") handleManualAdd();
-  if (e.key === "Escape") onClose?.();
-  if (e.key === "Tab" && e.shiftKey) {
-    e.preventDefault();
-    activeTab = "browse";
-  }
-}
+let trackedCount = $derived(getRepositories().length);
 </script>
 
 {#if showTitle}
-	<h2 class="mb-3 flex-shrink-0 text-sm font-semibold text-text-primary">Add Repository</h2>
+	<div class="form-header">
+		<h2 class="title">Add Repository</h2>
+		{#if trackedCount > 0}
+			<span class="title-meta">{trackedCount} tracked</span>
+		{/if}
+	</div>
 {/if}
 
-<!-- Segmented control tabs -->
-<div class="tab-switcher mb-3 flex-shrink-0">
-	<div class="tab-track">
-		<div class="tab-indicator" style="transform: translateX({activeTab === 'browse' ? '0%' : '100%'})"></div>
-		<button
-			class="tab-segment {activeTab === 'browse' ? 'tab-active' : ''}"
-			onclick={() => (activeTab = 'browse')}
-		>
-			Browse
-		</button>
-		<button
-			class="tab-segment {activeTab === 'manual' ? 'tab-active' : ''}"
-			onclick={() => (activeTab = 'manual')}
-		>
-			Manual
-		</button>
+<!-- Search + refresh -->
+<div class="search-row">
+	<div class="search-input-wrap">
+		<Search size={13} class="search-icon" />
+		<input
+			class="search-input"
+			placeholder="Search or type owner/name…"
+			aria-label="Search repositories or paste owner/repository"
+			bind:value={search}
+			onkeydown={handleKeydown}
+			use:focusOnMount
+			autocomplete="off"
+			autocorrect="off"
+			autocapitalize="off"
+			spellcheck="false"
+		/>
+		{#if search}
+			<button
+				type="button"
+				class="clear-btn"
+				onclick={() => (search = '')}
+				aria-label="Clear search"
+				tabindex="-1"
+			>
+				<span aria-hidden="true">×</span>
+			</button>
+		{/if}
 	</div>
+	<button
+		class="refresh-btn"
+		onclick={() => fetchAvailableRepos(true)}
+		disabled={getAvailableReposLoading()}
+		aria-label="Refresh repositories"
+		title="Refresh repositories"
+	>
+		<RefreshCw size={13} class={getAvailableReposLoading() ? 'animate-spin' : ''} />
+	</button>
 </div>
 
-<!-- Tab content -->
-{#if activeTab === 'browse'}
-	<div class="flex min-h-0 flex-1 flex-col">
-		<!-- Search + refresh -->
-		<div class="flex items-center gap-2 pb-2">
-			<div class="search-input-wrap flex-1">
-				<Search size={12} class="search-icon" />
-				<input
-					class="search-input"
-					placeholder="Search repositories..."
-					aria-label="Search repositories"
-					bind:value={browseSearch}
-					onkeydown={handleBrowseKeydown}
-					use:focusOnMount
-				/>
+<!-- List -->
+<div class="repo-list" bind:this={repoListEl}>
+	{#if showManualImport}
+		{@const isImportHighlighted = highlightedIndex === 0}
+		<button
+			type="button"
+			class="dropdown-row dropdown-row--import"
+			class:dropdown-row--highlighted={isImportHighlighted}
+			class:dropdown-row--disabled={isManualAlreadyTracked || isManualLoading}
+			data-highlighted={isImportHighlighted ? 'true' : undefined}
+			disabled={isManualAlreadyTracked || isManualLoading}
+			onclick={() => void handleManualImport()}
+			onmouseenter={() => (highlightedIndex = 0)}
+		>
+			<span class="dropdown-icon" aria-hidden="true">
+				{#if isManualLoading}
+					<Dotmatrix variant="square-10" size="small" />
+				{:else}
+					<Plus size={12} />
+				{/if}
+			</span>
+			<div class="dropdown-body">
+				<span class="dropdown-title">{trimmedSearch}</span>
+				<span class="dropdown-hint">
+					{#if isManualAlreadyTracked}
+						Already tracked
+					{:else if isManualLoading}
+						Importing…
+					{:else}
+						Import this repository
+					{/if}
+				</span>
 			</div>
-			<button
-				class="icon-btn"
-				onclick={() => fetchAvailableRepos(true)}
-				disabled={getAvailableReposLoading()}
-				aria-label="Refresh repositories"
-			>
-				<RefreshCw size={13} class={getAvailableReposLoading() ? 'animate-spin' : ''} />
-			</button>
-		</div>
+		</button>
+	{/if}
 
-		<!-- Repo list -->
-		<div class="-mx-3 flex-1 overflow-y-auto pb-1" bind:this={repoListEl}>
-			{#if getAvailableReposLoading() && getAvailableRepos().length === 0}
-				<div class="flex items-center justify-center py-12">
-					<Loader2 size={18} class="animate-spin text-text-muted" />
-					<span class="ml-2 text-xs text-text-muted">Loading repositories...</span>
+	{#if getAvailableReposLoading() && getAvailableRepos().length === 0}
+		<div class="state-block">
+			<Dotmatrix variant="square-10" />
+			<span>Loading repositories...</span>
+		</div>
+	{:else if getAvailableRepos().length === 0}
+		<div class="state-block">
+			<span>No repositories found. Try refreshing.</span>
+		</div>
+	{:else if filteredAvailable.length === 0 && !showManualImport}
+		<div class="state-block state-block--hint">
+			<span>No repositories match <em>"{trimmedSearch}"</em>.</span>
+			<span class="state-hint">Tip: paste <span class="kbd-inline">owner/name</span> to import any repo.</span>
+		</div>
+	{:else if filteredAvailable.length > 0}
+		{#each [...groupedByOwner] as [owner, repos] (owner)}
+			<div class="owner-group">
+				<div class="owner-header">
+					{#if repos[0]?.avatarUrl}
+						<img
+							src={repos[0].avatarUrl}
+							alt=""
+							class="owner-avatar"
+							loading="lazy"
+							referrerpolicy="no-referrer"
+							onerror={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')}
+						/>
+					{/if}
+					<span class="owner-name">{owner}</span>
+					<span class="owner-count">{repos.length}</span>
 				</div>
-			{:else if getAvailableRepos().length === 0}
-				<p class="py-12 text-center text-xs text-text-muted">
-					No repositories found. Try refreshing.
-				</p>
-			{:else if filteredAvailable.length === 0}
-				<p class="py-12 text-center text-xs text-text-muted">
-					No repositories match "{browseSearch}"
-				</p>
-			{:else}
-				{#each [...groupedByOwner] as [owner, repos] (owner)}
-					<div class="mt-1">
-						<!-- Owner header -->
-						<div class="owner-header sticky top-0 z-10 flex items-center gap-2 px-3 py-1.5">
-							{#if repos[0]?.avatarUrl}
-								<img
-									src={repos[0].avatarUrl}
-									alt=""
-									class="h-4 w-4 rounded-full object-cover"
-									loading="lazy"
-									referrerpolicy="no-referrer"
-									onerror={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')}
-								/>
+
+				{#each repos as repo (repo.fullName)}
+					{@const trackedRepo = trackedByFullName.get(repo.fullName)}
+					{@const isTracked = trackedRepo !== undefined}
+					{@const isAdding = addingRepos.has(repo.fullName)}
+					{@const isRemoving = trackedRepo ? removingRepos.has(trackedRepo.id) : false}
+					{@const flatIndex = filteredAvailable.indexOf(repo)}
+					{@const navIndex = showManualImport ? flatIndex + 1 : flatIndex}
+					{@const isHighlighted = navIndex === highlightedIndex}
+					{@const prCount = trackedRepo
+						? (openPrCountByRepoId.get(trackedRepo.id) ?? 0)
+						: (getAvailablePrCount(repo.fullName) ?? (getAvailablePrCountsLoaded() ? 0 : undefined))}
+					<div
+						role="button"
+						tabindex={isTracked || isAdding ? -1 : 0}
+						aria-disabled={isTracked || isAdding ? 'true' : undefined}
+						class="dropdown-row"
+						class:dropdown-row--highlighted={isHighlighted}
+						class:dropdown-row--tracked={isTracked}
+						class:dropdown-row--actionable={!isTracked && !isAdding}
+						data-highlighted={isHighlighted ? 'true' : undefined}
+						onmouseenter={() => (highlightedIndex = navIndex)}
+						onclick={() => {
+							if (!isTracked && !isAdding) handleAdd(repo.fullName);
+						}}
+						onkeydown={(e) => {
+							if ((e.key === 'Enter' || e.key === ' ') && !isTracked && !isAdding) {
+								e.preventDefault();
+								handleAdd(repo.fullName);
+							}
+						}}
+					>
+						{#if repo.avatarUrl}
+							<img
+								class="dropdown-avatar"
+								src={repo.avatarUrl}
+								alt=""
+								loading="lazy"
+								referrerpolicy="no-referrer"
+								onerror={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')}
+							/>
+						{:else}
+							<span class="dropdown-icon dropdown-icon--repo" aria-hidden="true">
+								<Folder size={12} />
+							</span>
+						{/if}
+
+						<div class="dropdown-body">
+							<span class="dropdown-title">{repo.name}</span>
+							{#if prCount !== undefined}
+								<span class="dropdown-hint">{prCount === 0 ? 'No open PRs' : `${prCount} open PR${prCount === 1 ? '' : 's'}`}</span>
 							{/if}
-							<span class="text-xs font-semibold uppercase tracking-wider text-text-muted"
-								>{owner}</span
-							>
 						</div>
 
-						<!-- Repos in this group -->
-						{#each repos as repo (repo.fullName)}
-							{@const trackedRepo = trackedByFullName.get(repo.fullName)}
-							{@const isTracked = trackedRepo !== undefined}
-							{@const isAdding = addingRepos.has(repo.fullName)}
-							{@const isRemoving = trackedRepo ? removingRepos.has(trackedRepo.id) : false}
-							{@const flatIndex = filteredAvailable.indexOf(repo)}
-							{@const isHighlighted = flatIndex === highlightedIndex}
-							<div
-								role="button"
-								tabindex={isTracked || isAdding ? -1 : 0}
-								aria-disabled={isTracked || isAdding ? 'true' : undefined}
-								class="repo-item flex w-full items-center gap-2 px-3 py-2 text-left
-									{isHighlighted ? 'repo-item--highlighted' : ''}
-									{!isTracked && !isAdding ? 'cursor-pointer' : ''}
-									{isTracked ? 'repo-item--tracked' : ''}"
-								data-highlighted={isHighlighted ? 'true' : undefined}
-								onclick={() => {
-									if (!isTracked && !isAdding) handleBrowseAdd(repo.fullName);
-								}}
-								onkeydown={(e) => {
-									if ((e.key === 'Enter' || e.key === ' ') && !isTracked && !isAdding) {
-										e.preventDefault();
-										handleBrowseAdd(repo.fullName);
-									}
-								}}
-							>
-								<div class="min-w-0 flex-1">
-									<div class="flex items-center gap-1.5">
-										<span
-											class="truncate text-xs font-medium {isTracked
-												? 'text-text-secondary'
-												: 'text-text-primary'}">{repo.name}</span
-										>
-									</div>
-								</div>
-								<div class="flex flex-shrink-0 items-center gap-2">
-									{#if isAdding}
-										<Loader2 size={14} class="animate-spin text-text-muted" />
-									{:else if isTracked && trackedRepo.cloneStatus !== 'ready'}
-										<CloneStatusIndicator
-											status={trackedRepo.cloneStatus}
-											error={trackedRepo.cloneError}
-											onRetry={() => retryClone(trackedRepo.id)}
-											size={14}
-											showLabel
-										/>
+						<div class="repo-actions">
+							{#if isAdding}
+								<Dotmatrix variant="square-10" size="small" />
+							{:else if isTracked && trackedRepo.cloneStatus !== 'ready'}
+								<CloneStatusIndicator
+									status={trackedRepo.cloneStatus}
+									error={trackedRepo.cloneError}
+									onRetry={() => retryClone(trackedRepo.id)}
+									size={13}
+									showLabel
+								/>
+							{:else if isTracked}
+								<span class="tracked-pill">Tracked</span>
+							{/if}
+
+							{#if isTracked}
+								<button
+									type="button"
+									class="remove-btn"
+									onclick={(e) => {
+										e.stopPropagation();
+										handleRemove(trackedRepo.id);
+									}}
+									disabled={isRemoving}
+									aria-label="Remove {repo.fullName}"
+									title="Remove {repo.fullName}"
+								>
+									{#if isRemoving}
+										<Dotmatrix variant="square-10" size="small" />
+									{:else}
+										<Trash2 size={11} />
 									{/if}
-									{#if isTracked}
-										<button
-											class="remove-btn"
-											onclick={(e) => {
-												e.stopPropagation();
-												handleBrowseRemove(trackedRepo.id);
-											}}
-											disabled={isRemoving}
-											aria-label="Remove {repo.fullName}"
-										>
-											{#if isRemoving}
-												<Loader2 size={12} class="animate-spin" />
-											{:else}
-												<Trash2 size={12} />
-											{/if}
-										</button>
-									{:else if !isAdding}
-										<button
-											class="add-badge"
-											onclick={(e) => {
-												e.stopPropagation();
-												handleBrowseAdd(repo.fullName);
-											}}
-											aria-label="Add {repo.fullName}"
-										>
-											<Plus size={11} />
-										</button>
-									{/if}
-								</div>
-							</div>
-						{/each}
+								</button>
+							{/if}
+						</div>
 					</div>
 				{/each}
-			{/if}
-		</div>
-	</div>
-
-	{#if onClose}
-		<div class="-mx-5 mt-2 flex flex-shrink-0 justify-end border-t border-border px-5 pt-3">
-			<button
-				class="cursor-pointer rounded-md px-3 py-1.5 text-xs text-text-muted transition-colors hover:text-text-secondary"
-				onclick={onClose}
-			>
-				Done
-			</button>
-		</div>
+			</div>
+		{/each}
 	{/if}
-{:else}
-	<!-- Manual tab -->
-	<div class="pt-4">
-		<p class="mb-3 text-xs text-text-muted">Enter the repository in owner/name format</p>
+</div>
 
-		<input
-			class="h-9 w-full rounded-lg border border-border bg-bg-elevated px-3 text-sm text-text-primary placeholder:text-text-muted focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-3 focus-visible:outline-none"
-			placeholder="owner/repository"
-			aria-label="Repository name (owner/repository)"
-			bind:value={fullName}
-			onkeydown={handleManualKeydown}
-			disabled={isLoading}
-			use:focusOnMount
-		/>
-
-		{#if localError}
-			<p class="mt-1.5 text-xs text-danger">{localError}</p>
-		{/if}
-
-		<div class="mt-4 flex justify-end gap-2">
-			{#if onClose}
-				<button
-					class="cursor-pointer rounded-md px-3 py-1.5 text-xs text-text-muted transition-colors hover:text-text-secondary disabled:cursor-not-allowed disabled:opacity-50"
-					onclick={onClose}
-					disabled={isLoading}
-				>
-					Cancel
-				</button>
-			{/if}
-			<button
-				class="cursor-pointer rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
-				onclick={handleManualAdd}
-				disabled={isLoading || !fullName.trim()}
-			>
-				{isLoading ? 'Adding...' : 'Add'}
-			</button>
-		</div>
+{#if onClose}
+	<div class="footer">
+		<button class="done-btn" onclick={onClose}>Done</button>
 	</div>
 {/if}
 
 <style>
-	/* Segmented control tab switcher */
-	.tab-switcher {
-		padding: 2px;
-	}
-
-	.tab-track {
-		position: relative;
-		display: grid;
-		grid-template-columns: 1fr 1fr;
-		height: 28px;
-		background: var(--color-glass-bg, rgba(255, 255, 255, 0.04));
-		border: 1px solid var(--color-glass-border, rgba(255, 255, 255, 0.08));
-		border-radius: 8px;
-		padding: 2px;
-		box-shadow: inset 0 0.5px 0 0 var(--color-glass-highlight, rgba(255, 255, 255, 0.06));
-	}
-
-	.tab-indicator {
-		position: absolute;
-		top: 2px;
-		left: 2px;
-		width: calc(50% - 2px);
-		height: calc(100% - 4px);
-		background: var(--color-glass-active-bg, rgba(255, 255, 255, 0.08));
-		border: 1px solid var(--color-glass-border, rgba(255, 255, 255, 0.1));
-		border-radius: 6px;
-		box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2), inset 0 0.5px 0 0 var(--color-glass-highlight, rgba(255, 255, 255, 0.08));
-		transition: transform var(--duration-quick) var(--ease-out-expo);
-		pointer-events: none;
-	}
-
-	.tab-segment {
-		position: relative;
-		z-index: 1;
+	/* ── Header ─────────────────────────────────────────── */
+	.form-header {
 		display: flex;
-		align-items: center;
-		justify-content: center;
-		height: 100%;
-		font-size: 11px;
-		font-weight: 500;
-		cursor: pointer;
-		border-radius: 5px;
-		color: var(--color-text-muted);
-		transition: color var(--duration-snap) var(--ease-soft);
-		background: transparent;
-		border: none;
-		padding: 0 12px;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 10px;
+		margin-bottom: 12px;
+		flex-shrink: 0;
 	}
 
-	.tab-segment.tab-active {
+	.title {
+		font-size: 13.5px;
+		font-weight: 600;
 		color: var(--color-text-primary);
+		letter-spacing: -0.005em;
+		margin: 0;
 	}
 
-	/* Search input with icon */
+	.title-meta {
+		font-size: 11px;
+		color: var(--color-text-muted);
+		font-variant-numeric: tabular-nums;
+	}
+
+	/* ── Search row ─────────────────────────────────────── */
+	.search-row {
+		display: flex;
+		gap: 6px;
+		flex-shrink: 0;
+	}
+
 	.search-input-wrap {
 		position: relative;
 		display: flex;
 		align-items: center;
+		flex: 1;
 	}
 
 	.search-input-wrap :global(.search-icon) {
 		position: absolute;
-		left: 9px;
+		left: 11px;
 		color: var(--color-text-muted);
 		pointer-events: none;
 		flex-shrink: 0;
+		transition: color var(--duration-snap) var(--ease-soft);
+	}
+
+	.search-input-wrap:focus-within :global(.search-icon) {
+		color: var(--color-text-secondary);
 	}
 
 	.search-input {
 		height: 32px;
 		width: 100%;
-		padding-left: 28px;
-		padding-right: 10px;
-		font-size: 12px;
-		background: var(--color-glass-bg, rgba(255, 255, 255, 0.04));
-		border: 1px solid var(--color-glass-border, rgba(255, 255, 255, 0.08));
+		padding: 0 30px 0 30px;
+		font-size: 12.5px;
+		font-weight: 450;
+		background: var(--color-glass-bg, rgba(255, 255, 255, 0.03));
+		border: 1px solid var(--color-glass-border, rgba(255, 255, 255, 0.07));
 		border-radius: 7px;
 		color: var(--color-text-primary);
-		box-shadow: inset 0 0.5px 0 0 var(--color-glass-highlight, rgba(255, 255, 255, 0.04));
-		transition: border-color var(--duration-instant) var(--ease-soft), box-shadow var(--duration-instant) var(--ease-soft);
+		transition:
+			border-color var(--duration-instant) var(--ease-soft),
+			background var(--duration-instant) var(--ease-soft);
 		outline: none;
 	}
 
@@ -482,12 +484,34 @@ function handleManualKeydown(e: KeyboardEvent) {
 	}
 
 	.search-input:focus {
-		border-color: var(--color-accent);
-		box-shadow: 0 0 0 1px var(--color-accent), inset 0 0.5px 0 0 var(--color-glass-highlight, rgba(255, 255, 255, 0.04));
+		border-color: color-mix(in srgb, var(--color-text-primary) 22%, transparent);
+		background: var(--color-glass-active-bg, rgba(255, 255, 255, 0.05));
 	}
 
-	/* Icon button (refresh) */
-	.icon-btn {
+	.clear-btn {
+		position: absolute;
+		right: 8px;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 18px;
+		height: 18px;
+		font-size: 14px;
+		line-height: 1;
+		color: var(--color-text-muted);
+		background: transparent;
+		border: none;
+		border-radius: 4px;
+		cursor: pointer;
+		transition: color var(--duration-instant) var(--ease-soft), background var(--duration-instant) var(--ease-soft);
+	}
+
+	.clear-btn:hover {
+		color: var(--color-text-primary);
+		background: var(--color-glass-active-bg, rgba(255, 255, 255, 0.08));
+	}
+
+	.refresh-btn {
 		display: flex;
 		align-items: center;
 		justify-content: center;
@@ -495,46 +519,189 @@ function handleManualKeydown(e: KeyboardEvent) {
 		width: 32px;
 		flex-shrink: 0;
 		cursor: pointer;
-		background: var(--color-glass-bg, rgba(255, 255, 255, 0.04));
-		border: 1px solid var(--color-glass-border, rgba(255, 255, 255, 0.08));
+		background: transparent;
+		border: 1px solid var(--color-glass-border, rgba(255, 255, 255, 0.07));
 		border-radius: 7px;
 		color: var(--color-text-muted);
-		box-shadow: inset 0 0.5px 0 0 var(--color-glass-highlight, rgba(255, 255, 255, 0.04));
-		transition: border-color var(--duration-instant) var(--ease-soft), color var(--duration-instant) var(--ease-soft);
+		transition:
+			color var(--duration-instant) var(--ease-soft),
+			background var(--duration-instant) var(--ease-soft);
 	}
 
-	.icon-btn:hover:not(:disabled) {
-		border-color: var(--color-accent);
-		color: var(--color-accent);
+	.refresh-btn:hover:not(:disabled) {
+		color: var(--color-text-primary);
+		background: var(--color-glass-active-bg, rgba(255, 255, 255, 0.04));
 	}
 
-	.icon-btn:disabled {
+	.refresh-btn:disabled {
 		cursor: not-allowed;
 		opacity: 0.5;
 	}
 
-	/* Owner section header */
+	/* ── List ───────────────────────────────────────────── */
+	.repo-list {
+		flex: 1;
+		min-height: 0;
+		overflow-y: auto;
+		overflow-x: hidden;
+		margin: 0 -12px;
+		padding: 0 8px 4px;
+		scroll-padding-top: 36px;
+	}
+
+	.repo-list::-webkit-scrollbar {
+		width: 8px;
+	}
+	.repo-list::-webkit-scrollbar-track {
+		background: transparent;
+	}
+	.repo-list::-webkit-scrollbar-thumb {
+		background: var(--color-glass-border, rgba(255, 255, 255, 0.08));
+		border-radius: 4px;
+		border: 2px solid transparent;
+		background-clip: padding-box;
+	}
+	.repo-list::-webkit-scrollbar-thumb:hover {
+		background: var(--color-glass-active-bg, rgba(255, 255, 255, 0.14));
+		background-clip: padding-box;
+	}
+
+	/* ── Dropdown-style row (manual-import + repo) ──────── */
+	.dropdown-row {
+		display: flex;
+		align-items: flex-start;
+		gap: 8px;
+		width: 100%;
+		padding: 8px 10px;
+		border-radius: 8px;
+		background: transparent;
+		border: none;
+		text-align: left;
+		cursor: pointer;
+		outline: none;
+		color: var(--color-text-primary);
+		transition: background-color var(--duration-snap) var(--ease-soft);
+	}
+
+	.dropdown-row:hover:not(:disabled),
+	.dropdown-row--highlighted:not(:disabled) {
+		background: var(--color-bg-tertiary);
+	}
+
+	.dropdown-row--disabled {
+		opacity: 0.55;
+		cursor: not-allowed;
+	}
+
+	.dropdown-row--tracked:not(:hover):not(.dropdown-row--highlighted) {
+		cursor: default;
+	}
+
+	.dropdown-icon {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		flex-shrink: 0;
+		margin-top: 2px;
+		color: var(--color-accent);
+	}
+
+	.dropdown-avatar {
+		flex-shrink: 0;
+		width: 14px;
+		height: 14px;
+		margin-top: 2px;
+		border-radius: 999px;
+		object-fit: cover;
+	}
+
+	.dropdown-body {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		min-width: 0;
+		flex: 1;
+	}
+
+	.dropdown-title {
+		font-size: 12px;
+		font-weight: 500;
+		color: var(--color-text-primary);
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.dropdown-row--import .dropdown-title {
+		font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+	}
+
+	.dropdown-row--tracked .dropdown-title {
+		color: var(--color-text-secondary);
+	}
+
+	.dropdown-hint {
+		font-size: 11px;
+		color: var(--color-text-muted);
+		line-height: 1.4;
+	}
+
+	/* ── Owner groups ───────────────────────────────────── */
+	.owner-group + .owner-group {
+		margin-top: 6px;
+	}
+
 	.owner-header {
-		background: var(--color-glass-bg, rgba(255, 255, 255, 0.02));
-		backdrop-filter: blur(8px);
+		position: sticky;
+		top: 0;
+		z-index: 2;
+		display: flex;
+		align-items: center;
+		gap: 7px;
+		padding: 12px 10px 6px;
+		background: var(--color-bg-secondary);
 	}
 
-	/* Repo row */
-	.repo-item {
-		transition: background var(--duration-instant) var(--ease-soft);
-		border-radius: 6px;
+	.owner-avatar {
+		width: 13px;
+		height: 13px;
+		border-radius: 999px;
+		object-fit: cover;
+		flex-shrink: 0;
+		opacity: 0.8;
 	}
 
-	.repo-item:not(.repo-item--tracked):hover {
-		background: var(--color-glass-active-bg, rgba(255, 255, 255, 0.06));
+	.owner-name {
+		font-size: 11px;
+		font-weight: 500;
+		color: var(--color-text-secondary);
+		flex: 1;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 
-	.repo-item--highlighted {
-		background: var(--color-glass-active-bg, rgba(255, 255, 255, 0.06));
-		box-shadow: inset 0 0 0 1px rgba(var(--color-accent-rgb, 99, 102, 241), 0.35);
+	.owner-count {
+		font-size: 10.5px;
+		color: var(--color-text-muted);
+		font-variant-numeric: tabular-nums;
 	}
 
-	/* Remove button */
+	/* ── Right-side actions (status / tracked / remove) ───── */
+	.repo-actions {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		flex-shrink: 0;
+		margin-top: 1px;
+	}
+
+	.tracked-pill {
+		font-size: 10.5px;
+		color: var(--color-text-muted);
+	}
+
 	.remove-btn {
 		display: flex;
 		align-items: center;
@@ -543,16 +710,24 @@ function handleManualKeydown(e: KeyboardEvent) {
 		width: 22px;
 		cursor: pointer;
 		background: transparent;
-		border: 1px solid transparent;
+		border: none;
 		border-radius: 5px;
 		color: var(--color-text-muted);
-		transition: color var(--duration-instant) var(--ease-soft), border-color var(--duration-instant) var(--ease-soft), background var(--duration-instant) var(--ease-soft);
+		opacity: 0.6;
+		transition:
+			color var(--duration-instant) var(--ease-soft),
+			background var(--duration-instant) var(--ease-soft),
+			opacity var(--duration-instant) var(--ease-soft);
+	}
+
+	.dropdown-row:hover .remove-btn {
+		opacity: 1;
 	}
 
 	.remove-btn:hover:not(:disabled) {
 		color: var(--color-danger);
-		border-color: rgba(var(--color-danger-rgb, 239, 68, 68), 0.3);
-		background: rgba(var(--color-danger-rgb, 239, 68, 68), 0.08);
+		background: color-mix(in srgb, var(--color-danger) 10%, transparent);
+		opacity: 1;
 	}
 
 	.remove-btn:disabled {
@@ -560,23 +735,53 @@ function handleManualKeydown(e: KeyboardEvent) {
 		opacity: 0.5;
 	}
 
-	/* Add badge (Plus icon) */
-	.add-badge {
+	/* ── State blocks (empty / loading) ─────────────────── */
+	.state-block {
 		display: flex;
+		flex-direction: column;
 		align-items: center;
 		justify-content: center;
-		height: 20px;
-		width: 20px;
-		cursor: pointer;
-		background: rgba(var(--color-accent-rgb, 99, 102, 241), 0.1);
-		border: 1px solid rgba(var(--color-accent-rgb, 99, 102, 241), 0.25);
-		border-radius: 5px;
-		color: var(--color-accent);
-		transition: background var(--duration-instant) var(--ease-soft), border-color var(--duration-instant) var(--ease-soft);
+		gap: 6px;
+		padding: 36px 16px;
+		font-size: 12px;
+		color: var(--color-text-muted);
+		text-align: center;
 	}
 
-	.add-badge:hover {
-		background: rgba(var(--color-accent-rgb, 99, 102, 241), 0.2);
-		border-color: rgba(var(--color-accent-rgb, 99, 102, 241), 0.4);
+	.state-block--hint em {
+		color: var(--color-text-secondary);
+		font-style: italic;
+	}
+
+	.state-hint {
+		font-size: 11px;
+		opacity: 0.8;
+	}
+
+	/* ── Footer ─────────────────────────────────────────── */
+	.footer {
+		display: flex;
+		align-items: center;
+		justify-content: flex-end;
+		margin: 8px -20px 0;
+		padding: 10px 20px 0;
+		border-top: 1px solid var(--color-border-subtle, var(--color-glass-border, rgba(255, 255, 255, 0.06)));
+		flex-shrink: 0;
+	}
+
+	.done-btn {
+		cursor: pointer;
+		padding: 5px 14px;
+		font-size: 11.5px;
+		font-weight: 500;
+		color: var(--color-text-muted);
+		background: transparent;
+		border: none;
+		border-radius: 6px;
+		transition: color var(--duration-instant) var(--ease-soft);
+	}
+
+	.done-btn:hover {
+		color: var(--color-text-primary);
 	}
 </style>

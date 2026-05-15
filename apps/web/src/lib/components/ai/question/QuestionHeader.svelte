@@ -9,7 +9,6 @@ export type QuestionHeaderProps = HTMLAttributes<HTMLDivElement>;
 	import {
 		Check,
 		Clock,
-		MessageCircleQuestion,
 		ShieldX,
 	} from "@lucide/svelte";
 	import type { Component } from "svelte";
@@ -27,17 +26,11 @@ export type QuestionHeaderProps = HTMLAttributes<HTMLDivElement>;
 		readonly label: string;
 		readonly icon: Component;
 		readonly tone:
-			| "pending"
 			| "answered"
 			| "rejected"
 			| "superseded";
 	};
-	const config: Record<QuestionContext["status"], BadgeConfig> = {
-		pending: {
-			label: "Awaiting answer",
-			icon: MessageCircleQuestion,
-			tone: "pending",
-		},
+	const config: Record<Exclude<QuestionContext["status"], "pending">, BadgeConfig> = {
 		answered: { label: "Answered", icon: Check, tone: "answered" },
 		rejected: { label: "Skipped", icon: ShieldX, tone: "rejected" },
 		superseded: {
@@ -47,8 +40,8 @@ export type QuestionHeaderProps = HTMLAttributes<HTMLDivElement>;
 		},
 	};
 
-	const c = $derived(config[ctx.status]);
-	const Icon = $derived(c.icon);
+	const c = $derived(ctx.status !== "pending" ? config[ctx.status] : undefined);
+	const Icon = $derived(c?.icon);
 </script>
 
 <div
@@ -60,21 +53,21 @@ export type QuestionHeaderProps = HTMLAttributes<HTMLDivElement>;
 	{...restProps}
 >
 	<h4 class="text-sm font-semibold">Question</h4>
-	<span
-		class={cn(
-			"inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold uppercase tracking-wider",
-			c.tone === "pending" &&
-				"bg-accent/10 text-accent",
-		c.tone === "answered" &&
-			"bg-success/15 text-success",
-			c.tone === "rejected" &&
-				"bg-destructive/15 text-destructive",
-			c.tone === "superseded" &&
-				"bg-muted text-muted-foreground",
-		)}
-	>
-		<Icon class="size-2.5" />
-		{c.label}
-	</span>
+	{#if c && Icon}
+		<span
+			class={cn(
+				"inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold uppercase tracking-wider",
+			c.tone === "answered" &&
+				"bg-success/15 text-success",
+				c.tone === "rejected" &&
+					"bg-destructive/15 text-destructive",
+				c.tone === "superseded" &&
+					"bg-muted text-muted-foreground",
+			)}
+		>
+			<Icon class="size-2.5" />
+			{c.label}
+		</span>
+	{/if}
 	{@render children?.()}
 </div>

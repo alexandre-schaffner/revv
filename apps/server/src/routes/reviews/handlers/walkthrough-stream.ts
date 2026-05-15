@@ -1,13 +1,72 @@
-import type { WalkthroughPipelinePhase, WalkthroughStreamEvent } from "@revv/shared";
+import type {
+  CodeBlock,
+  DiffBlock,
+  WalkthroughBlock,
+  WalkthroughPipelinePhase,
+  WalkthroughStreamEvent,
+} from "@revv/shared";
 import { Effect } from "effect";
 import { debug, logError } from "../../../logger";
 import { AppRuntime } from "../../../runtime";
 import { GitHubService } from "../../../services/GitHub";
 import { PrContextService } from "../../../services/PrContext";
+import {
+  prerenderDiff,
+  prerenderFile,
+  type SsrDiffOptions,
+  type SsrFileOptions,
+} from "../../../services/PrerenderCache";
 import { WalkthroughService } from "../../../services/Walkthrough";
 import { WalkthroughJobs } from "../../../services/WalkthroughJobs";
 import { unwrapEffectError } from "../../middleware";
 import { createSseStream, sseHeaders } from "../sse";
+
+// ── SSR options ─────────────────────────────────────────────────────────────
+//
+// These structural options must match the FileDiff / File constructor
+// options on the client (WalkthroughDiffBlock.svelte / WalkthroughCodeBlock.svelte)
+// so the SSR HTML hydrates byte-for-byte cleanly. Drift here = broken hydrate.
+
+const WALKTHROUGH_DIFF_SSR_OPTIONS: SsrDiffOptions = {
+  diffStyle: "unified",
+  theme: { dark: "pierre-dark", light: "pierre-light" },
+  overflow: "scroll",
+  disableFileHeader: true,
+};
+
+const WALKTHROUGH_CODE_SSR_OPTIONS: SsrFileOptions = {
+  theme: { dark: "pierre-dark", light: "pierre-light" },
+  overflow: "scroll",
+  disableFileHeader: true,
+};
+
+/** Build the git-style patch the SSR call wants from a block's bare hunks. */
+function buildWalkthroughPatch(block: DiffBlock): string {
+  const header = [
+    `diff --git a/${block.filePath} b/${block.filePath}`,
+    `--- a/${block.filePath}`,
+    `+++ b/${block.filePath}`,
+  ].join("\n");
+  return `${header}\n${block.patch}`;
+}
+
+async function prerenderBlock(block: WalkthroughBlock): Promise<string | null> {
+  if (block.type === "diff") {
+    return prerenderDiff(buildWalkthroughPatch(block), WALKTHROUGH_DIFF_SSR_OPTIONS);
+  }
+  if (block.type === "code") {
+    return prerenderFile(
+      { name: block.filePath, contents: block.content, lang: block.language },
+      WALKTHROUGH_CODE_SSR_OPTIONS,
+    );
+  }
+  // Markdown blocks render as plain HTML on the client — no SSR.
+  return null;
+}
+
+function needsPrerender(block: WalkthroughBlock): block is DiffBlock | CodeBlock {
+  return (block.type === "diff" || block.type === "code") && block.prerenderedHtml === undefined;
+}
 
 /** Monotonic ordering for phase:advanced dedupe. */
 const PHASE_RANK: Record<WalkthroughPipelinePhase, number> = {
@@ -114,6 +173,37 @@ export function walkthroughStreamHandler(ctx: {
       }
     };
 
+    // Async queue for SSR-augmented forwarding. Block events with type
+    // 'diff' or 'code' get `prerenderedHtml` attached via the shared SSR
+    // cache before they hit the wire; everything else passes through
+    // untouched. Serialising through a tail-call promise chain preserves
+    // strict emission order — semantic-steps still arrive before their
+    // child blocks even when the SSR call yields. Prerender failures fall
+    // back to emitting the original event so a broken patch never blocks
+    // the stream.
+    let emitQueue: Promise<void> = Promise.resolve();
+    const enqueueForward = (event: WalkthroughStreamEvent): void => {
+      emitQueue = emitQueue.then(async () => {
+        if (terminated) return;
+        let toEmit: WalkthroughStreamEvent = event;
+        if (event.type === "block" && needsPrerender(event.data)) {
+          try {
+            const html = await prerenderBlock(event.data);
+            if (html !== null) {
+              toEmit = { type: "block", data: { ...event.data, prerenderedHtml: html } };
+            }
+          } catch (err) {
+            logError(
+              "walkthrough-prerender",
+              `block ${event.data.id} (${event.data.type}) prerender failed:`,
+              err,
+            );
+          }
+        }
+        forwardEvent(toEmit);
+      });
+    };
+
     try {
       // Send the first phase synchronously so the client UI unblocks
       // immediately while we do the setup dance below.
@@ -143,7 +233,7 @@ export function walkthroughStreamHandler(ctx: {
         Effect.flatMap(WalkthroughService, (s) => s.getCached(resolved.prId, resolved.headSha)),
       );
       if (cached) {
-        forwardEvent({
+        enqueueForward({
           type: "summary",
           data: { summary: cached.summary, riskLevel: cached.riskLevel },
         });
@@ -151,19 +241,29 @@ export function walkthroughStreamHandler(ctx: {
         // the client's `WalkthroughSection` parents exist by the time
         // the block events land.
         for (const section of cached.semanticSteps) {
-          forwardEvent({ type: "semantic-step", data: section });
+          enqueueForward({ type: "semantic-step", data: section });
         }
-        for (const block of cached.blocks) forwardEvent({ type: "block", data: block });
-        for (const issue of cached.issues) forwardEvent({ type: "issue", data: issue });
-        for (const rating of cached.ratings) forwardEvent({ type: "rating", data: rating });
+        for (const block of cached.blocks) enqueueForward({ type: "block", data: block });
+        for (const issue of cached.issues) enqueueForward({ type: "issue", data: issue });
+        for (const rating of cached.ratings) enqueueForward({ type: "rating", data: rating });
         // Sentiment is a first-class walkthrough field; without this
         // replay, SSE-reconnects to a cached row render the blocks +
         // ratings but lose the "Overall Sentiment" card that the JSON
         // hydration path (hydrateFromCache) correctly surfaces.
         if (cached.sentiment !== null) {
-          forwardEvent({ type: "sentiment", data: { sentiment: cached.sentiment } });
+          enqueueForward({ type: "sentiment", data: { sentiment: cached.sentiment } });
         }
-        forwardEvent({
+        // status='complete' implies lastCompletedPhase='D' (the orchestrator's
+        // validation gate). Without this replay, a client that re-streams a
+        // completed walkthrough (e.g. after a WS `walkthrough:complete` races
+        // ahead of the live `done` event and triggers fetchCachedWalkthrough)
+        // ends up with lastCompletedPhase='none', making getCanResume() return
+        // true and the floating actions render Resume instead of Regenerate.
+        enqueueForward({
+          type: "phase:advanced",
+          data: { lastCompletedPhase: cached.lastCompletedPhase },
+        });
+        enqueueForward({
           type: "done",
           data: { walkthroughId: cached.id, tokenUsage: cached.tokenUsage },
         });
@@ -193,7 +293,7 @@ export function walkthroughStreamHandler(ctx: {
       // can replay them in order after the snapshot, and THEN switch
       // to direct-forward mode.
       const sub = await AppRuntime.runPromise(
-        Effect.flatMap(WalkthroughJobs, (jobs) => jobs.subscribe(walkthroughId, forwardEvent)),
+        Effect.flatMap(WalkthroughJobs, (jobs) => jobs.subscribe(walkthroughId, enqueueForward)),
       );
 
       if (!sub.found) {
@@ -207,27 +307,27 @@ export function walkthroughStreamHandler(ctx: {
           // status='complete' from getCached implies Phase D was
           // reached, so summary / sentiment / lastCompletedPhase are
           // all guaranteed populated — no empty-string guard needed.
-          forwardEvent({
+          enqueueForward({
             type: "summary",
             data: { summary: finalState.summary, riskLevel: finalState.riskLevel },
           });
           for (const section of finalState.semanticSteps) {
-            forwardEvent({ type: "semantic-step", data: section });
+            enqueueForward({ type: "semantic-step", data: section });
           }
-          for (const block of finalState.blocks) forwardEvent({ type: "block", data: block });
-          for (const issue of finalState.issues) forwardEvent({ type: "issue", data: issue });
-          for (const rating of finalState.ratings) forwardEvent({ type: "rating", data: rating });
+          for (const block of finalState.blocks) enqueueForward({ type: "block", data: block });
+          for (const issue of finalState.issues) enqueueForward({ type: "issue", data: issue });
+          for (const rating of finalState.ratings) enqueueForward({ type: "rating", data: rating });
           if (finalState.sentiment !== null) {
-            forwardEvent({
+            enqueueForward({
               type: "sentiment",
               data: { sentiment: finalState.sentiment },
             });
           }
-          forwardEvent({
+          enqueueForward({
             type: "phase:advanced",
             data: { lastCompletedPhase: finalState.lastCompletedPhase },
           });
-          forwardEvent({
+          enqueueForward({
             type: "done",
             data: { walkthroughId: finalState.id, tokenUsage: finalState.tokenUsage },
           });
@@ -245,30 +345,30 @@ export function walkthroughStreamHandler(ctx: {
           // empty-state → error transition instead of a bogus
           // summary=''.
           if (partial.summary !== "") {
-            forwardEvent({
+            enqueueForward({
               type: "summary",
               data: { summary: partial.summary, riskLevel: partial.riskLevel },
             });
           }
           for (const section of partial.semanticSteps) {
-            forwardEvent({ type: "semantic-step", data: section });
+            enqueueForward({ type: "semantic-step", data: section });
           }
-          for (const block of partial.blocks) forwardEvent({ type: "block", data: block });
-          for (const issue of partial.issues) forwardEvent({ type: "issue", data: issue });
-          for (const rating of partial.ratings) forwardEvent({ type: "rating", data: rating });
+          for (const block of partial.blocks) enqueueForward({ type: "block", data: block });
+          for (const issue of partial.issues) enqueueForward({ type: "issue", data: issue });
+          for (const rating of partial.ratings) enqueueForward({ type: "rating", data: rating });
           if (partial.sentiment !== null) {
-            forwardEvent({
+            enqueueForward({
               type: "sentiment",
               data: { sentiment: partial.sentiment },
             });
           }
           if (partial.lastCompletedPhase !== "none") {
-            forwardEvent({
+            enqueueForward({
               type: "phase:advanced",
               data: { lastCompletedPhase: partial.lastCompletedPhase },
             });
           }
-          forwardEvent({
+          enqueueForward({
             type: "error",
             data: { code: "AiGenerationError", message: "Walkthrough generation failed" },
           });
@@ -276,7 +376,7 @@ export function walkthroughStreamHandler(ctx: {
         }
         // Nothing to replay — surface a generic error so the UI
         // doesn't hang on the phase message.
-        forwardEvent({
+        enqueueForward({
           type: "error",
           data: {
             code: "NotFound",
@@ -305,29 +405,29 @@ export function walkthroughStreamHandler(ctx: {
         // cause the flushed real event to be dropped, leaving the client
         // with a permanently-falsy summary and no content view.
         if (snapshot.summary !== "") {
-          forwardEvent({
+          enqueueForward({
             type: "summary",
             data: { summary: snapshot.summary, riskLevel: snapshot.riskLevel },
           });
         }
         for (const section of snapshot.semanticSteps) {
-          forwardEvent({ type: "semantic-step", data: section });
+          enqueueForward({ type: "semantic-step", data: section });
         }
-        for (const block of snapshot.blocks) forwardEvent({ type: "block", data: block });
-        for (const issue of snapshot.issues) forwardEvent({ type: "issue", data: issue });
-        for (const rating of snapshot.ratings) forwardEvent({ type: "rating", data: rating });
+        for (const block of snapshot.blocks) enqueueForward({ type: "block", data: block });
+        for (const issue of snapshot.issues) enqueueForward({ type: "issue", data: issue });
+        for (const rating of snapshot.ratings) enqueueForward({ type: "rating", data: rating });
         // Sentiment and pipeline phase are first-class walkthrough fields
         // that weren't previously replayed — a client reconnecting after
         // Phase C/D would never catch up. Replayed through forwardEvent
         // so the matching live events in the buffered queue dedupe.
         if (snapshot.sentiment !== null) {
-          forwardEvent({
+          enqueueForward({
             type: "sentiment",
             data: { sentiment: snapshot.sentiment },
           });
         }
         if (snapshot.lastCompletedPhase !== "none") {
-          forwardEvent({
+          enqueueForward({
             type: "phase:advanced",
             data: { lastCompletedPhase: snapshot.lastCompletedPhase },
           });
@@ -353,7 +453,7 @@ export function walkthroughStreamHandler(ctx: {
         (e as { _tag: string })._tag === "CloneInProgressError"
       ) {
         const cloneErr = e as Record<string, unknown>;
-        forwardEvent({
+        enqueueForward({
           type: "error",
           data: {
             code: "CloneInProgress",
@@ -363,7 +463,7 @@ export function walkthroughStreamHandler(ctx: {
         });
       } else {
         const message = e instanceof Error ? e.message : "Walkthrough connection failed";
-        forwardEvent({
+        enqueueForward({
           type: "error",
           data: { code: "SetupError", message },
         });

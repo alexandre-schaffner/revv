@@ -1345,15 +1345,35 @@ export function onWalkthroughComplete(prId: string, walkthroughId: string): void
     const hadSummary = entry.summary !== null;
     const hadSentiment = entry.sentiment !== null;
     const hadFullRatings = entry.ratings.length === 9;
-    const wasDone = entry.doneReceived;
     const canMarkDoneLocally = hadBlocks && hadSummary && hadFullRatings;
-    const isContentComplete = hadBlocks && hadSummary && hadSentiment && hadFullRatings && wasDone;
+    // The WS `walkthrough:complete` broadcast is itself the server's
+    // confirmation that status='complete' — which the orchestrator only
+    // transitions to after Phase D is reached and all 9 axes are rated
+    // (doctrine invariants #11/#12). So if the locally-accumulated entry
+    // already has the full content surface, we can declare it complete
+    // without waiting for the SSE `done` event to also arrive. Previously
+    // this check also required `doneReceived`, which left a race window
+    // where the WS broadcast beat the SSE `done` to the client and
+    // triggered an unnecessary fetchCachedWalkthrough — that re-fetch
+    // briefly flashed `isStreaming` back to true (Stop button reappears)
+    // and, prior to the corresponding server-side fix, lost the
+    // `phase:advanced(D)` signal in the cached replay (canResume flips
+    // back to true, Resume button shows instead of Regenerate).
+    const isContentComplete = hadBlocks && hadSummary && hadSentiment && hadFullRatings;
 
     if (canMarkDoneLocally || activePrId === prId) {
       updateEntry(prId, (e) => {
         e.isStreaming = false;
         e.doneReceived = true;
         e.walkthroughId = walkthroughId;
+        // status='complete' server-side guarantees lastCompletedPhase='D'.
+        // Reflect that locally even if the SSE `phase:advanced(D)` event
+        // hasn't been processed yet (or was lost when the in-flight stream
+        // was aborted by a re-fetch path), so getCanResume() correctly
+        // returns false and the floating actions render Regenerate.
+        if (isContentComplete) {
+          e.lastCompletedPhase = "D";
+        }
       });
       if (activePrId === prId && !isContentComplete) {
         fetchCachedWalkthrough(prId);

@@ -806,7 +806,15 @@ export async function submitQuestionAnswers(
       : item,
   );
   try {
-    await submitQuestionAnswer(prId, questionId, action);
+    const result = await submitQuestionAnswer(prId, questionId, action);
+    // If the server auto-superseded a pending plan (because the agent
+    // moved past it by asking a question), flip the plan card locally
+    // so the UI no longer shows Approve/Reject buttons for a stale plan.
+    if (result.supersededPlanId) {
+      patchItem(prId, result.supersededPlanId, (item) =>
+        item.kind === "plan" ? { ...item, status: "superseded" } : item,
+      );
+    }
   } catch (err) {
     const e = err as SubmitQuestionAnswerError;
     if (e.code === "QUESTION_EXPIRED") {
@@ -1409,6 +1417,7 @@ export function resolveQuestionFromWs(
   status: "answered" | "rejected",
   answers?: Readonly<Record<string, ReadonlyArray<string>>>,
   customAnswers?: Readonly<Record<string, string>>,
+  supersededPlanId?: string,
 ): void {
   patchItem(prId, questionId, (item) =>
     item.kind === "question"
@@ -1420,4 +1429,9 @@ export function resolveQuestionFromWs(
         }
       : item,
   );
+  if (supersededPlanId) {
+    patchItem(prId, supersededPlanId, (item) =>
+      item.kind === "plan" ? { ...item, status: "superseded" } : item,
+    );
+  }
 }

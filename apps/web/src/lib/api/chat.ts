@@ -325,6 +325,8 @@ export interface SubmitQuestionAnswerResult {
   status: "ok";
   resolution: "answered" | "rejected";
   alreadyResolved?: boolean;
+  /** If a pending plan was auto-superseded because the conversation moved past it, its id. */
+  supersededPlanId?: string;
 }
 
 export interface SubmitQuestionAnswerError {
@@ -360,6 +362,7 @@ export async function submitQuestionAnswer(
     status: "ok",
     resolution: body.resolution as "answered" | "rejected",
     ...(body.alreadyResolved === true ? { alreadyResolved: true } : {}),
+    ...(typeof body.supersededPlanId === "string" ? { supersededPlanId: body.supersededPlanId } : {}),
   };
 }
 

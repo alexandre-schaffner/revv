@@ -72,47 +72,46 @@ function select(login: string): void {
 
 <PopoverRoot bind:open>
 	<PopoverTrigger class={collapsed ? 'org-trigger org-trigger--collapsed' : 'org-trigger'}>
+		<!-- Icon/avatar: always visible -->
 		{#if isPersonalActive}
 			{#if user?.image}
 				<img src={user.image} alt="" class={collapsed ? 'org-trigger-avatar org-trigger-avatar--collapsed' : 'org-trigger-avatar'} referrerpolicy="no-referrer" />
 			{:else}
-				<User size={collapsed ? 14 : 16} class="org-trigger-icon" />
-			{/if}
-			{#if !collapsed}
-				<span class="org-trigger-label">{personalLogin}</span>
+				<User size={16} class="org-trigger-icon" />
 			{/if}
 		{:else if activeOrgRow}
 			{#if activeOrgRow.avatarUrl}
 				<img src={activeOrgRow.avatarUrl} alt="" class={collapsed ? 'org-trigger-avatar org-trigger-avatar--collapsed' : 'org-trigger-avatar'} referrerpolicy="no-referrer" />
 			{:else}
-				<Building2 size={collapsed ? 14 : 16} class="org-trigger-icon" />
-			{/if}
-			{#if !collapsed}
-				<span class="org-trigger-label">{activeOrgRow.login}</span>
+				<Building2 size={16} class="org-trigger-icon" />
 			{/if}
 		{:else if activeOrg}
-			<Globe size={collapsed ? 14 : 16} class="org-trigger-icon" />
-			{#if !collapsed}
-				<span class="org-trigger-label">{activeOrg}</span>
-			{/if}
+			<Globe size={16} class="org-trigger-icon" />
 		{:else if user}
 			{#if user.image}
 				<img src={user.image} alt="" class={collapsed ? 'org-trigger-avatar org-trigger-avatar--collapsed' : 'org-trigger-avatar'} referrerpolicy="no-referrer" />
 			{:else}
-				<User size={collapsed ? 14 : 16} class="org-trigger-icon" />
-			{/if}
-			{#if !collapsed && user.name}
-				<span class="org-trigger-label">{user.name}</span>
+				<User size={16} class="org-trigger-icon" />
 			{/if}
 		{:else}
-			<Building2 size={collapsed ? 14 : 16} class="org-trigger-icon" />
-			{#if !collapsed}
+			<Building2 size={16} class="org-trigger-icon" />
+		{/if}
+
+		<!-- Label + caret: always in DOM, collapsed via max-width+opacity -->
+		<span class="org-trigger-content" class:org-trigger-content--hidden={collapsed} aria-hidden={collapsed || undefined}>
+			{#if isPersonalActive}
+				<span class="org-trigger-label">{personalLogin}</span>
+			{:else if activeOrgRow}
+				<span class="org-trigger-label">{activeOrgRow.login}</span>
+			{:else if activeOrg}
+				<span class="org-trigger-label">{activeOrg}</span>
+			{:else if user?.name}
+				<span class="org-trigger-label">{user.name}</span>
+			{:else}
 				<span class="org-trigger-label">Revv</span>
 			{/if}
-		{/if}
-		{#if !collapsed}
 			<ChevronDown size={14} class="org-trigger-caret" />
-		{/if}
+		</span>
 	</PopoverTrigger>
 	<PopoverContent
 		class={collapsed ? 'w-60 p-1' : 'p-1'}
@@ -185,12 +184,12 @@ function select(login: string): void {
 		color: var(--color-text-primary);
 		cursor: pointer;
 		text-align: left;
+		overflow: hidden;
 		transition:
 			background-color var(--duration-snap),
-			width var(--duration-snap) var(--ease-out-expo),
-			height var(--duration-snap) var(--ease-out-expo),
-			padding var(--duration-snap) var(--ease-out-expo),
-			border-radius var(--duration-snap) var(--ease-out-expo);
+			gap var(--duration-smooth) var(--ease-out-expo),
+			padding var(--duration-smooth) var(--ease-out-expo),
+			border-radius var(--duration-smooth) var(--ease-out-expo);
 	}
 
 	:global(.org-trigger:hover) {
@@ -198,16 +197,8 @@ function select(login: string): void {
 	}
 
 	:global(.org-trigger--collapsed) {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 22px;
-		height: 22px;
 		padding: 0;
-		margin: 0 auto;
-		border-radius: 4px;
 		gap: 0;
-		flex: none;
 	}
 
 	:global(.org-trigger-avatar) {
@@ -216,16 +207,10 @@ function select(login: string): void {
 		border-radius: 5px;
 		object-fit: cover;
 		flex-shrink: 0;
-		transition:
-			width var(--duration-snap) var(--ease-out-expo),
-			height var(--duration-snap) var(--ease-out-expo),
-			border-radius var(--duration-snap) var(--ease-out-expo);
 	}
 
 	:global(.org-trigger-avatar--collapsed) {
-		width: 18px;
-		height: 18px;
-		border-radius: 4px;
+		/* No size change — parent shrink handles the visual effect */
 	}
 
 	:global(.org-trigger-icon) {
@@ -242,6 +227,34 @@ function select(login: string): void {
 		color: var(--color-text-primary);
 		font-size: 14px;
 		font-weight: 600;
+	}
+
+	/* Label + caret wrapper — expand path: fade in after column leads (80ms delay) */
+	:global(.org-trigger-content) {
+		display: flex;
+		align-items: center;
+		flex: 1;
+		min-width: 0;
+		overflow: hidden;
+		max-width: 9999px;
+		opacity: 1;
+		visibility: visible;
+		transition:
+			opacity var(--duration-quick) var(--ease-out-expo) 80ms,
+			max-width var(--duration-smooth) var(--ease-out-expo) 80ms,
+			visibility 0s linear 0s;
+	}
+
+	/* Collapse path: label+caret fade + collapse ahead of the column */
+	:global(.org-trigger-content--hidden) {
+		opacity: 0;
+		visibility: hidden;
+		max-width: 0;
+		pointer-events: none;
+		transition:
+			opacity var(--duration-quick) var(--ease-soft),
+			max-width var(--duration-smooth) var(--ease-out-expo),
+			visibility 0s linear var(--duration-quick);
 	}
 
 	:global(.org-trigger-caret) {

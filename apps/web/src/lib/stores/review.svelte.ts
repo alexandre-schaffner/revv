@@ -256,6 +256,7 @@ export async function pullLatestCommit(prId: string): Promise<void> {
       ...(f.oldPath ? { oldPath: f.oldPath } : {}),
       ...(f.isNew ? { isNew: true as const } : {}),
       ...(f.isDeleted ? { isDeleted: true as const } : {}),
+      ...(f.prerenderedHtml ? { prerenderedHtml: f.prerenderedHtml } : {}),
     }));
 
     setReviewFiles(mapped);

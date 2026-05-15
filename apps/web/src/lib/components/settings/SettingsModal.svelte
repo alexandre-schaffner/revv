@@ -332,6 +332,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 							<button
 								class="settings-nav-item"
 								class:settings-nav-item--active={activeSection === item.id}
+								class:settings-nav-item--danger={item.id === 'danger'}
 								onclick={() => scrollToSection(item.id)}
 								type="button"
 							>
@@ -785,10 +786,10 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 						</div>
 						{#if !showDeleteConfirm}
 							<Button
-								variant="outline"
+								variant="destructive"
 								size="sm"
 								onclick={() => (showDeleteConfirm = true)}
-								class="flex shrink-0 items-center gap-1.5 text-xs border-danger/30 text-danger hover:bg-danger/10 hover:border-danger"
+								class="flex shrink-0 items-center gap-1.5 text-xs"
 							>
 								<TriangleAlert size={12} />
 								Remove account
@@ -805,11 +806,11 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 									Cancel
 								</Button>
 								<Button
-									variant="outline"
+									variant="destructive"
 									size="sm"
 									onclick={handleRemoveAccount}
 									disabled={deleting}
-									class="flex items-center gap-1.5 text-xs bg-danger/10 border-danger text-danger hover:bg-danger/20"
+									class="flex items-center gap-1.5 text-xs"
 								>
 									{#if deleting}
 										<Loader2 size={12} class="animate-spin" />
@@ -944,6 +945,17 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 		color: var(--color-text-primary);
 		background: var(--color-bg-tertiary);
 		border-left-color: var(--color-accent);
+	}
+
+	.settings-nav-item--danger:hover {
+		color: var(--color-danger);
+		background: color-mix(in srgb, var(--color-danger) 8%, transparent);
+	}
+
+	.settings-nav-item--danger.settings-nav-item--active {
+		color: var(--color-danger);
+		background: color-mix(in srgb, var(--color-danger) 10%, transparent);
+		border-left-color: var(--color-danger);
 	}
 
 	.settings-sidebar-user {

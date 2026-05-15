@@ -406,6 +406,17 @@ export class GitHubService extends Context.Tag("GitHubService")<
     readonly listUserRepos: (
       token: string,
     ) => Effect.Effect<Repository[], GitHubError, SettingsService>;
+    /**
+     * Open PR count per repo, batched into a single GraphQL request with
+     * aliased fields. Repos that error out (missing access, deleted, etc.)
+     * are simply omitted from the result map — the caller treats absence as
+     * "unknown" and renders accordingly. Pass at most ~80 fullNames per
+     * call; longer lists are split internally.
+     */
+    readonly getOpenPrCounts: (
+      fullNames: readonly string[],
+      token: string,
+    ) => Effect.Effect<Map<string, number>, GitHubError, SettingsService>;
     readonly listUserOrgs: (token: string) => Effect.Effect<Org[], GitHubError, SettingsService>;
     readonly getPrMeta: (
       repoFullName: string,
@@ -428,6 +439,19 @@ export class GitHubService extends Context.Tag("GitHubService")<
       ref: string,
       token: string,
     ) => Effect.Effect<string, GitHubError, SettingsService>;
+    /**
+     * Fetch the raw bytes for a file at a specific ref. Uses the
+     * `application/vnd.github.raw` accept type, which makes GitHub stream
+     * the literal blob instead of the base64-encoded JSON envelope —
+     * required for binary files (images, fonts) where the local shallow
+     * clone may not have the head SHA's blob yet.
+     */
+    readonly getFileRawBytes: (
+      repoFullName: string,
+      path: string,
+      ref: string,
+      token: string,
+    ) => Effect.Effect<Uint8Array, GitHubError, SettingsService>;
     readonly postReview: (
       repoFullName: string,
       prNumber: number,
@@ -640,6 +664,72 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
       return (data as Record<string, unknown>[]).map((raw) => mapRepo(raw));
     }).pipe(Effect.retry(retrySchedule)),
 
+  getOpenPrCounts: (fullNames, token) =>
+    Effect.gen(function* () {
+      const apiBase = yield* resolveApiBase;
+      const result = new Map<string, number>();
+      if (fullNames.length === 0) return result;
+
+      // Batch into chunks to keep GraphQL query complexity and URL length
+      // sensible. 80 aliased fields per call sits well under GitHub's
+      // 500_000-node complexity budget for `pullRequests(states: OPEN)`.
+      const CHUNK_SIZE = 80;
+      const chunks: string[][] = [];
+      for (let i = 0; i < fullNames.length; i += CHUNK_SIZE) {
+        chunks.push(fullNames.slice(i, i + CHUNK_SIZE) as string[]);
+      }
+
+      for (const chunk of chunks) {
+        // Build aliased fields and a parallel variables block. Owner/name
+        // come from listUserRepos (trusted), but variables are still used
+        // so the wire payload stays small and GraphQL-cache-friendly.
+        const fields: string[] = [];
+        const argDefs: string[] = [];
+        const variables: Record<string, string> = {};
+        chunk.forEach((fn, i) => {
+          const slash = fn.indexOf("/");
+          if (slash <= 0 || slash === fn.length - 1) return;
+          const owner = fn.slice(0, slash);
+          const name = fn.slice(slash + 1);
+          fields.push(
+            `r${i}: repository(owner: $o${i}, name: $n${i}) { pullRequests(states: OPEN) { totalCount } }`,
+          );
+          argDefs.push(`$o${i}: String!, $n${i}: String!`);
+          variables[`o${i}`] = owner;
+          variables[`n${i}`] = name;
+        });
+        if (fields.length === 0) continue;
+
+        const query = `query OpenPrCounts(${argDefs.join(", ")}) {\n${fields.join("\n")}\n}`;
+
+        // GitHub returns partial data on per-field errors (e.g. repo
+        // renamed or revoked) — fetch directly so we can tolerate the
+        // partial-success case the shared `githubGraphql` helper rejects.
+        const response = yield* Effect.tryPromise({
+          try: async () => {
+            const res = await fetch(`${apiBase}/graphql`, {
+              method: "POST",
+              headers: { ...githubHeaders(token), "Content-Type": "application/json" },
+              body: JSON.stringify({ query, variables }),
+            });
+            assertGitHubOk(res, "/graphql");
+            return (await res.json()) as {
+              data?: Record<string, { pullRequests: { totalCount: number } } | null>;
+            };
+          },
+          catch: toGitHubError,
+        });
+
+        const data = response.data ?? {};
+        chunk.forEach((fn, i) => {
+          const node = data[`r${i}`];
+          if (node) result.set(fn, node.pullRequests.totalCount);
+        });
+      }
+
+      return result;
+    }).pipe(Effect.retry(retrySchedule)),
+
   listUserOrgs: (token) =>
     Effect.gen(function* () {
       const apiBase = yield* resolveApiBase;
@@ -779,6 +869,31 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
       }
       // Binary or unsupported encoding
       return "";
+    }).pipe(Effect.retry(retrySchedule)),
+
+  getFileRawBytes: (repoFullName, path, ref, token) =>
+    Effect.gen(function* () {
+      const apiBase = yield* resolveApiBase;
+      const { owner, repo } = yield* parseRepoFullName(repoFullName);
+      const encodedPath = path.split("/").map(encodeURIComponent).join("/");
+      const url = `${apiBase}/repos/${owner}/${repo}/contents/${encodedPath}?ref=${ref}`;
+      return yield* Effect.tryPromise({
+        try: async () => {
+          // `application/vnd.github.raw` flips the response from a base64
+          // JSON envelope to the literal blob. The other GitHub headers
+          // (Auth, API version) stay the same.
+          const res = await fetch(url, {
+            headers: {
+              ...githubHeaders(token),
+              Accept: "application/vnd.github.raw",
+            },
+          });
+          assertGitHubOk(res, `/repos/${owner}/${repo}/contents/${encodedPath}`);
+          const buf = await res.arrayBuffer();
+          return new Uint8Array(buf);
+        },
+        catch: toGitHubError,
+      });
     }).pipe(Effect.retry(retrySchedule)),
 
   postReview: (repoFullName, prNumber, review, token) =>

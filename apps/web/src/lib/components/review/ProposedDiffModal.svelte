@@ -20,6 +20,7 @@ import { FileTree, type GitStatusEntry } from "@pierre/trees";
 import { type Component, mount, onDestroy, onMount, tick, unmount, untrack } from "svelte";
 import { SvelteMap } from "svelte/reactivity";
 import type { ProposedDiffFile } from "$lib/api/chat";
+import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import {
   addProposedComment,
   cherryPickProposedCommitAction,
@@ -647,9 +648,7 @@ function portal(node: HTMLElement) {
 			<div class="card-diffs" bind:this={scrollEl}>
 				{#if fileContents === null}
 					<div class="diff-loading">
-						<span class="diff-loading-icon">
-							<Loader2 size={16} class="motion-essential-spin" />
-						</span>
+						<Dotmatrix variant="square-9" />
 						<span class="diff-loading-text">Loading diff…</span>
 					</div>
 				{:else if files.length === 0}
@@ -949,17 +948,13 @@ function portal(node: HTMLElement) {
 
 	.diff-loading {
 		display: flex;
+		flex-direction: column;
 		align-items: center;
 		justify-content: center;
-		gap: 8px;
+		gap: 12px;
 		padding: 48px 24px;
 		color: var(--color-text-muted);
 		font-size: 13px;
-	}
-
-	.diff-loading-icon {
-		flex-shrink: 0;
-		color: var(--color-accent);
 	}
 
 	/* ── Footer ──────────────────────────────────────────────────────────── */

@@ -861,10 +861,8 @@ function handleRegenerate(): void {
 			     stepper above (`.chapter-tool-calls`); we don't duplicate
 			     them in a separate exploration section here. -->
 
-			<!-- Shimmer text placeholder shown immediately when streaming starts. -->
-			<Shimmer class="text-sm" role="status" aria-label="Reviewing...">
-				Reviewing...
-			</Shimmer>
+			<!-- The "Reviewing..." shimmer is deferred to the content branch
+			     (showDiffSkeleton) so it only appears after Phase A lands. -->
 
 			<!-- Empty rating grid, mounted from the start of generation so the
 			     reviewer sees the 9-axis scorecard up front and watches cells

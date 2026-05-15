@@ -148,6 +148,7 @@ function handleMessage(msg: WsServerMessage): void {
         msg.data.status,
         msg.data.answers,
         msg.data.customAnswers,
+        msg.data.supersededPlanId,
       );
       break;
     default: {

@@ -9,6 +9,7 @@
 //     short-circuit before we mount the inner component
 import type { LineAnnotation } from "@pierre/diffs";
 import { SvelteMap, SvelteSet } from "svelte/reactivity";
+import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import { getUser } from "$lib/stores/auth.svelte";
 import {
   addThread,
@@ -228,7 +229,10 @@ async function handleEditMessage(threadId: string, messageId: string, body: stri
 	diff view.
 -->
 {#if status === 'loading'}
-	<div class="placeholder">Loading file contents…</div>
+	<div class="placeholder">
+		<Dotmatrix variant="square-9" />
+		<span class="placeholder-text">Loading file contents…</span>
+	</div>
 {:else if status === 'binary' || isBinary}
 	<div class="placeholder placeholder--info">
 		<p class="placeholder-title">Binary file</p>
@@ -281,7 +285,7 @@ async function handleEditMessage(threadId: string, messageId: string, body: stri
 		flex-direction: column;
 		align-items: center;
 		justify-content: center;
-		gap: 8px;
+		gap: 12px;
 		padding: 64px 32px;
 		text-align: center;
 	}

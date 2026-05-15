@@ -23,6 +23,7 @@ import { AppRuntime } from "./runtime";
 import { ChatSessionService } from "./services/ChatSession";
 import { DbMaintenance } from "./services/DbMaintenance";
 import { PollScheduler } from "./services/PollScheduler";
+import { ensureHighlighter } from "./services/PrerenderCache";
 import { RepoCloneService } from "./services/RepoClone";
 import { WalkthroughJobs } from "./services/WalkthroughJobs";
 
@@ -109,6 +110,14 @@ AppRuntime.runPromise(Effect.flatMap(RepoCloneService, (svc) => svc.resumePendin
 AppRuntime.runPromise(Effect.flatMap(DbMaintenance, (svc) => svc.start())).catch((err) => {
   logError("db-maintenance", "start failed on boot:", err);
 });
+
+// Warm the shared Shiki highlighter used by every @pierre/diffs/ssr call.
+// Idempotent and defensively re-awaited inside each prerender call, so a
+// slow boot doesn't block the listen() above; we just want the first real
+// walkthrough emit to hit a warm cache instead of paying Shiki's startup.
+ensureHighlighter()
+  .then(() => logError("prerender", "highlighter preloaded"))
+  .catch((err) => logError("prerender", "ensureHighlighter failed on boot:", err));
 
 // Terminal-on-crash for pending chat questions. The Claude SDK's in-memory
 // deferred is gone after a process restart and the opencode daemon may also

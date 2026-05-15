@@ -22,7 +22,7 @@ import { threadMessages } from "../../db/schema/thread-messages";
 import { walkthroughBlocks } from "../../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../../db/schema/walkthrough-issues";
 import { walkthroughs } from "../../db/schema/walkthroughs";
-import type { ChatEditToolResult, ChatWalkthroughEditContext } from "./chat-edit-tool-spec";
+import type { ChatEditToolResult, ChatWalkthroughEditContext } from "./chat-edit-tools";
 import { EDIT_TOOL_SPECS } from "./chat-edit-tools";
 
 // ── Context ─────────────────────────────────────────────────────────────────

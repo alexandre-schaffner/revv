@@ -1,6 +1,6 @@
 <script lang="ts">
 import { ArrowUpRight } from "@lucide/svelte";
-import { type FileOptions, File as PierreFile } from "@pierre/diffs";
+import { DIFFS_TAG_NAME, type FileOptions, File as PierreFile } from "@pierre/diffs";
 import type { CodeBlock } from "@revv/shared";
 import { jumpToDiffLine } from "$lib/stores/review.svelte";
 import { renderMarkdown } from "$lib/utils/markdown";
@@ -18,6 +18,9 @@ const renderedAnnotation = $derived(block.annotation ? renderMarkdown(block.anno
 let instance: PierreFile<never> | null = null;
 
 function mountCodeBlock(el: HTMLDivElement) {
+  // These options must match the SSR options in
+  // apps/server/src/routes/reviews/handlers/walkthrough-stream.ts
+  // (WALKTHROUGH_CODE_SSR_OPTIONS). Drift breaks hydration.
   const options: FileOptions<never> = {
     theme: { dark: "pierre-dark", light: "pierre-light" },
     overflow: "scroll",
@@ -26,15 +29,27 @@ function mountCodeBlock(el: HTMLDivElement) {
     disableFileHeader: true,
   };
 
+  const file = {
+    name: block.filePath,
+    contents: block.content,
+    lang: block.language,
+  };
+
   instance = new PierreFile<never>(options, workerManager);
-  instance.render({
-    containerWrapper: el,
-    file: {
-      name: block.filePath,
-      contents: block.content,
-      lang: block.language,
-    },
-  });
+  if (block.prerenderedHtml !== undefined) {
+    // Use a <diffs-container> child to match render()'s DOM structure
+    // so app.css's `diffs-container { color-scheme: inherit }` applies
+    // and Pierre's `light-dark()` token colors follow <html>'s theme.
+    const hostEl = document.createElement(DIFFS_TAG_NAME);
+    el.appendChild(hostEl);
+    instance.hydrate({
+      fileContainer: hostEl,
+      prerenderedHTML: block.prerenderedHtml,
+      file,
+    });
+  } else {
+    instance.render({ containerWrapper: el, file });
+  }
 
   return {
     destroy() {

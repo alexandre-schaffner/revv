@@ -1,3 +1,4 @@
+import { guessImageContentType } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
@@ -8,13 +9,15 @@ import {
 } from "../ai/providers/suggestions";
 import { db } from "../auth";
 import { user } from "../db/schema";
+import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
 import { resolveAgent } from "../services/Ai";
-import { DiffCacheService, getOrFetchDiffFiles } from "../services/DiffCache";
+import { type CachedDiffFile, DiffCacheService, getOrFetchDiffFiles } from "../services/DiffCache";
 import { GitHubService } from "../services/GitHub";
 import { OpencodeSupervisor } from "../services/OpencodeSupervisor";
 import { PollScheduler } from "../services/PollScheduler";
 import { PrContextService } from "../services/PrContext";
+import { prerenderDiff, type SsrDiffOptions } from "../services/PrerenderCache";
 import { PullRequestService } from "../services/PullRequest";
 import { RepoCloneService } from "../services/RepoClone";
 import { RepositoryService } from "../services/Repository";
@@ -24,6 +27,56 @@ import { TokenProvider } from "../services/TokenProvider";
 import { WalkthroughService } from "../services/Walkthrough";
 import { WebSocketHub } from "../services/WebSocketHub";
 import { handleAppError, withAuth } from "./middleware";
+
+// ── PR diff SSR options ─────────────────────────────────────────────────────
+//
+// Must match the structural options in DiffViewerInner.svelte:326-345 so the
+// hydrated DOM lines up with what the client would have rendered. Callbacks
+// and DOM-producing options stay client-side; only the layout-affecting
+// fields are mirrored here.
+
+const PR_DIFF_SSR_OPTIONS: SsrDiffOptions = {
+  diffStyle: "unified",
+  theme: { dark: "pierre-dark", light: "pierre-light" },
+  overflow: "scroll",
+  expansionLineCount: 20,
+  collapsedContextThreshold: 3,
+  diffIndicators: "bars",
+  expandUnchanged: true,
+  lineHoverHighlight: "both",
+  hunkSeparators: "line-info",
+};
+
+/** Build the full git patch the SSR call expects from a cached PR file row. */
+function buildPrFilePatch(file: CachedDiffFile): string {
+  const header = [
+    `diff --git a/${file.oldPath ?? file.path} b/${file.path}`,
+    ...(file.status === "added" ? ["new file mode 100644"] : []),
+    ...(file.status === "removed" ? ["deleted file mode 100644"] : []),
+    `--- ${file.status === "added" ? "/dev/null" : `a/${file.oldPath ?? file.path}`}`,
+    `+++ ${file.status === "removed" ? "/dev/null" : `b/${file.path}`}`,
+  ].join("\n");
+  return file.patch !== null ? `${header}\n${file.patch}` : header;
+}
+
+/**
+ * SSR a single PR file, returning the prerendered HTML or undefined if the
+ * file has no patch (binary) or rendering failed. No size cap — the user's
+ * "no wait on file switch" UX hinges on every file in the PR being
+ * prerendered. First-visit cost is paid once per PR head sha (LRU-cached);
+ * subsequent /files calls hit the cache. Failures only log — the client
+ * always has a working render-path fallback.
+ */
+async function prerenderPrFile(file: CachedDiffFile): Promise<string | undefined> {
+  if (file.patch === null) return undefined;
+  try {
+    const html = await prerenderDiff(buildPrFilePatch(file), PR_DIFF_SSR_OPTIONS);
+    return html ?? undefined;
+  } catch (err) {
+    logError("pr-files-prerender", `prerender failed for ${file.path}:`, err);
+    return undefined;
+  }
+}
 
 // ── Routes ───────────────────────────────────────────────────────────────────
 
@@ -63,7 +116,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
   })
   .get("/:id/files", async (ctx) => {
     try {
-      return await AppRuntime.runPromise(
+      const files = await AppRuntime.runPromise(
         Effect.gen(function* () {
           const prService = yield* PullRequestService;
           const repoService = yield* RepositoryService;
@@ -76,18 +129,24 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
           // "Files changed" tab). No per-commit selection anymore — the
           // commits dropdown is read-only.
           const token = yield* tokenProvider.getGitHubToken(ctx.session.user.id, repo.githubHost);
-          const files = yield* getOrFetchDiffFiles(pr.id, repo.fullName, pr.externalId, token);
-
-          return files.map((f) => ({
-            path: f.path,
-            oldPath: f.oldPath,
-            patch: f.patch,
-            additions: f.additions,
-            deletions: f.deletions,
-            isNew: f.status === "added",
-            isDeleted: f.status === "removed",
-          }));
+          return yield* getOrFetchDiffFiles(pr.id, repo.fullName, pr.externalId, token);
         }),
+      );
+
+      // SSR each file in parallel — Bun's JS thread interleaves the awaits,
+      // and Shiki's shared highlighter is already warm (preloaded at boot).
+      // Cache hits skip work entirely; misses are bounded by SSR_PATCH_BYTE_LIMIT.
+      return await Promise.all(
+        files.map(async (f) => ({
+          path: f.path,
+          oldPath: f.oldPath,
+          patch: f.patch,
+          additions: f.additions,
+          deletions: f.deletions,
+          isNew: f.status === "added",
+          isDeleted: f.status === "removed",
+          prerenderedHtml: await prerenderPrFile(f),
+        })),
       );
     } catch (e) {
       return handleAppError(e, ctx);
@@ -158,6 +217,73 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
       }
     },
     { query: t.Object({ path: t.String() }) },
+  )
+  .get(
+    "/:id/file-blob",
+    async (ctx) => {
+      try {
+        // Stream raw file bytes at the PR's base or head SHA for the
+        // image-diff viewer. The local clone is `--depth=1` against the
+        // default branch, so a PR's head SHA blob isn't guaranteed to
+        // exist locally (added files in particular). Fetching via
+        // GitHub's contents API with `Accept: application/vnd.github.raw`
+        // sidesteps that — it works for any ref + path the user can see.
+        return await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const prService = yield* PullRequestService;
+            const repoService = yield* RepositoryService;
+            const tokenProvider = yield* TokenProvider;
+            const github = yield* GitHubService;
+
+            const pr = yield* prService.getPr(ctx.params.id);
+            const side = ctx.query.side;
+            const sha = side === "base" ? pr.baseSha : pr.headSha;
+            if (!sha) {
+              return new Response("PR is missing the requested SHA", { status: 404 });
+            }
+
+            const repo = yield* repoService.getRepoById(pr.repositoryId);
+            const token = yield* tokenProvider.getGitHubToken(
+              ctx.session.user.id,
+              repo.githubHost,
+            );
+
+            const bytes = yield* github.getFileRawBytes(
+              repo.fullName,
+              ctx.query.path,
+              sha,
+              token,
+            );
+
+            const contentType = guessImageContentType(ctx.query.path);
+            // Bun typings on `bytes` are `Uint8Array<ArrayBufferLike>`,
+            // narrower than the lib.dom BlobPart signature
+            // (`ArrayBufferView<ArrayBuffer>`). The cast is safe — we
+            // allocate the underlying ArrayBuffer ourselves via
+            // `new Uint8Array(arrayBuffer)`. Wrapping in a Blob avoids
+            // the BodyInit mismatch the raw Uint8Array hits.
+            const blob = new Blob([bytes as BlobPart], { type: contentType });
+            return new Response(blob, {
+              status: 200,
+              headers: {
+                "Content-Type": contentType,
+                "Content-Length": String(bytes.byteLength),
+                // Strong cache: (sha, path) is immutable per PR row.
+                "Cache-Control": "private, max-age=31536000, immutable",
+              },
+            });
+          }),
+        );
+      } catch (e) {
+        return handleAppError(e, ctx);
+      }
+    },
+    {
+      query: t.Object({
+        path: t.String(),
+        side: t.Union([t.Literal("base"), t.Literal("head")]),
+      }),
+    },
   )
   .get("/:id/suggestions", async (ctx) => {
     try {

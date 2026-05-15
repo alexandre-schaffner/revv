@@ -1,6 +1,6 @@
 <script lang="ts">
 import { ArrowUpRight } from "@lucide/svelte";
-import { FileDiff, type FileDiffOptions, parsePatchFiles } from "@pierre/diffs";
+import { DIFFS_TAG_NAME, FileDiff, type FileDiffOptions, parsePatchFiles } from "@pierre/diffs";
 import type { DiffBlock } from "@revv/shared";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
 import { jumpToDiffLine } from "$lib/stores/review.svelte";
@@ -29,6 +29,9 @@ const targetLine = $derived.by(() => {
 let instance: FileDiff<never> | null = null;
 
 function mountDiffBlock(el: HTMLDivElement) {
+  // These options must match the SSR options in
+  // apps/server/src/routes/reviews/handlers/walkthrough-stream.ts
+  // (WALKTHROUGH_DIFF_SSR_OPTIONS). Drift breaks hydration.
   const options: FileDiffOptions<never> = {
     diffStyle: "unified",
     theme: { dark: "pierre-dark", light: "pierre-light" },
@@ -53,7 +56,23 @@ function mountDiffBlock(el: HTMLDivElement) {
     return { destroy() {} };
   }
 
-  instance.render({ containerWrapper: el, fileDiff: parsed });
+  if (block.prerenderedHtml !== undefined) {
+    // Server SSR'd this block via @pierre/diffs/ssr; hydrate against the
+    // prerendered DOM instead of paying the worker tokenize round-trip.
+    // Use a <diffs-container> child to match render()'s DOM structure —
+    // app.css's `diffs-container { color-scheme: inherit }` keeps the
+    // token colors in sync with <html>'s theme. A plain <div> would
+    // miss that rule and produce wrong-mode token colors.
+    const hostEl = document.createElement(DIFFS_TAG_NAME);
+    el.appendChild(hostEl);
+    instance.hydrate({
+      fileContainer: hostEl,
+      prerenderedHTML: block.prerenderedHtml,
+      fileDiff: parsed,
+    });
+  } else {
+    instance.render({ containerWrapper: el, fileDiff: parsed });
+  }
 
   return {
     destroy() {

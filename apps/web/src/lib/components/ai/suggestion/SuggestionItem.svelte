@@ -45,7 +45,7 @@ export type SuggestionItemProps = {
 	type="button"
 	variant="outline"
 	size="sm"
-	class={cn("cursor-pointer rounded-full px-4", className)}
+	class={cn("h-auto max-w-full cursor-pointer whitespace-normal rounded-full px-4 py-1.5 text-left", className)}
 	{disabled}
 	onclick={handleClick}
 >

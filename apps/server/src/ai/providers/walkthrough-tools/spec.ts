@@ -13,7 +13,7 @@ import type {
 } from "@revv/shared";
 import { RATING_AXES } from "@revv/shared";
 import { z } from "zod";
-import type { Db } from "../../db";
+import type { Db } from "../../../db";
 
 // ─── Doctrine & phase model ─────────────────────────────────────────────────
 //

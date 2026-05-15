@@ -13,7 +13,7 @@
 
 import type { WalkthroughStreamEvent, WsServerMessage } from "@revv/shared";
 import { z } from "zod";
-import type { Db } from "../../db";
+import type { Db } from "../../../db";
 
 // ── Handler execution context ───────────────────────────────────────────────
 

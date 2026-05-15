@@ -6,6 +6,7 @@ import AuthGuard from "$lib/components/auth/AuthGuard.svelte";
 import RequestChanges from "$lib/components/review/RequestChanges.svelte";
 import ReviewLayout from "$lib/components/review/ReviewLayout.svelte";
 import { Badge } from "$lib/components/ui/badge";
+import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import GuidedWalkthrough from "$lib/components/walkthrough/GuidedWalkthrough.svelte";
 import { markVisited as markPrVisited } from "$lib/stores/pr-visits.svelte";
 import { getSelectedPr, setSelectedPrId } from "$lib/stores/prs.svelte";
@@ -193,6 +194,7 @@ $effect(() => {
             ...(f.oldPath ? { oldPath: f.oldPath } : {}),
             ...(f.isNew ? { isNew: true as const } : {}),
             ...(f.isDeleted ? { isDeleted: true as const } : {}),
+            ...(f.prerenderedHtml ? { prerenderedHtml: f.prerenderedHtml } : {}),
           }));
           setReviewFiles(mapped);
           if (mapped.length > 0) {
@@ -245,6 +247,7 @@ onDestroy(() => {
 <AuthGuard>
 {#if isLoading}
 	<div class="loading">
+		<Dotmatrix variant="square-9" />
 		<p>Loading diff…</p>
 	</div>
 {:else if loadError}
@@ -303,6 +306,7 @@ onDestroy(() => {
 	</div>
 {:else}
 	<div class="loading">
+		<Dotmatrix variant="square-9" />
 		<p>Loading…</p>
 	</div>
 {/if}
@@ -461,9 +465,11 @@ onDestroy(() => {
 
 	.loading {
 		display: flex;
+		flex-direction: column;
 		height: 100%;
 		align-items: center;
 		justify-content: center;
+		gap: 12px;
 		font-size: 13px;
 		color: var(--color-text-muted);
 	}

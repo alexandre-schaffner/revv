@@ -1,6 +1,6 @@
 import type { Repository } from "@revv/shared";
 import { Effect } from "effect";
-import { Elysia } from "elysia";
+import { Elysia, t } from "elysia";
 import { serverEnv } from "../config";
 import { REPO_CACHE_TTL_MS } from "../constants";
 import { AppRuntime } from "../runtime";
@@ -50,4 +50,36 @@ export const githubRoutes = new Elysia({ prefix: "/api/github" })
     } catch (e) {
       return handleAppError(e, ctx);
     }
-  });
+  })
+  .post(
+    "/pr-counts",
+    async (ctx) => {
+      const { fullNames } = ctx.body;
+
+      try {
+        const counts = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const settingsService = yield* SettingsService;
+            const settings = yield* settingsService
+              .getSettings()
+              .pipe(Effect.orElseSucceed(() => null));
+            const host = settings?.githubHost?.trim() || serverEnv.githubHost;
+
+            const github = yield* GitHubService;
+            const tokenProvider = yield* TokenProvider;
+
+            const token = yield* tokenProvider.getGitHubToken(ctx.session.user.id, host);
+            return yield* github.getOpenPrCounts(fullNames, token);
+          }),
+        );
+
+        // Map → plain object for JSON serialization.
+        const out: Record<string, number> = {};
+        for (const [k, v] of counts) out[k] = v;
+        return { counts: out };
+      } catch (e) {
+        return handleAppError(e, ctx);
+      }
+    },
+    { body: t.Object({ fullNames: t.Array(t.String()) }) },
+  );

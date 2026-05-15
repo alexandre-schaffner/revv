@@ -486,6 +486,9 @@ function handleKeydown(e: KeyboardEvent) {
 		border-bottom: 1px solid var(--color-border);
 		flex-shrink: 0;
 		/* No min-width — must be happy at 40px */
+		transition:
+			height var(--duration-smooth) var(--ease-out-expo),
+			padding var(--duration-smooth) var(--ease-out-expo);
 	}
 
 	.sidebar-header--collapsed {
@@ -588,15 +591,35 @@ function handleKeydown(e: KeyboardEvent) {
 		 track (an earlier attempt that miscompiled and zeroed the visible
 		 PR list after a swipe-back). The body's overflow:hidden clips the
 		 off-screen pane. */
+	/* .sidebar-body — base (expanded / expand direction)
+	   60ms delay on content means column leads the reveal */
 	.sidebar-body {
 		flex: 1;
 		min-height: 0;
 		overflow: hidden;
 		position: relative;
+		opacity: 1;
+		visibility: visible;
+		transform: translateX(0);
+		will-change: transform, opacity;
+		transition:
+			opacity var(--duration-quick) var(--ease-out-expo) 60ms,
+			transform var(--duration-quick) var(--ease-out-expo) 60ms,
+			visibility 0s linear 0s;
 	}
 
+	/* .sidebar-body--hidden — collapse direction
+	   content fades out and slides left quickly (120ms),
+	   visibility hides after opacity reaches 0 (clears tab order) */
 	.sidebar-body--hidden {
-		display: none;
+		opacity: 0;
+		visibility: hidden;
+		transform: translateX(-12px);
+		pointer-events: none;
+		transition:
+			opacity var(--duration-quick) var(--ease-soft),
+			transform var(--duration-quick) var(--ease-soft),
+			visibility 0s linear var(--duration-quick);
 	}
 
 	/* Each pane fills the body and translates horizontally. Default state
@@ -748,17 +771,19 @@ function handleKeydown(e: KeyboardEvent) {
 	/* Footer — kept outside .sidebar-body so Settings is reachable while collapsed.
 		 margin-top:auto pins it to the bottom even when .pr-list is hidden (collapsed). */
 	.sidebar-footer {
+		display: flex;
+		align-items: center;
 		margin-top: auto;
 		border-top: 1px solid var(--color-border);
-		padding: 4px 8px;
+		padding: 6px;
 		flex-shrink: 0;
+		transition:
+			padding var(--duration-smooth) var(--ease-out-expo),
+			height var(--duration-smooth) var(--ease-out-expo);
 	}
 
 	.sidebar-footer--collapsed {
-		display: flex;
-		justify-content: center;
-		align-items: center;
-		padding: 0;
-		height: 40px; /* matches BottomBar height */
+		padding: 6px 0;
+		height: 40px; /* matches BottomBar grid row */
 	}
 </style>

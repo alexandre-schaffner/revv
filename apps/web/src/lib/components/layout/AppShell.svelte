@@ -524,9 +524,9 @@ function onRightHandleDblClick(): void {
 		/* Positioning context for the absolutely-positioned right pane. */
 		position: relative;
 		background-color: var(--color-bg-primary);
-		transition:
-			grid-template-columns var(--duration-instant) var(--ease-out-expo),
-			grid-template-rows var(--duration-instant) var(--ease-out-expo);
+	transition:
+		grid-template-columns var(--duration-smooth) var(--ease-out-expo),
+		grid-template-rows var(--duration-smooth) var(--ease-out-expo);
 	}
 
 	/* Suppress the column transition while dragging so resize feels instant */

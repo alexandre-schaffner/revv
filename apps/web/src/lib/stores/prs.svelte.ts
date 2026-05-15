@@ -13,6 +13,14 @@ let repositories = $state<Repository[]>([]);
 let availableRepos = $state<Repository[]>([]);
 let availableReposLoading = $state(false);
 let availableReposFetchFailed = $state(false);
+// Open-PR count for each browsable repo, keyed by `owner/name`. Populated
+// asynchronously after `fetchAvailableRepos` returns — the dialog renders
+// the list immediately and fills in the hint subtext when this map updates.
+let availablePrCounts = $state<Record<string, number>>({});
+// Flag flipped once the PR-count fetch has resolved (success or failure) at
+// least once. Lets the UI treat missing entries as "No open PRs" rather
+// than holding a blank hint indefinitely when a repo errors out server-side.
+let availablePrCountsLoaded = $state(false);
 let selectedPrId = $state<string | null>(null);
 let searchQuery = $state("");
 let isLoading = $state(false);
@@ -231,7 +239,12 @@ export function setSearchQuery(q: string): void {
 }
 
 export async function addRepo(fullName: string): Promise<void> {
-  await api.api.repos.post({ fullName });
+  const { error } = await api.api.repos.post({ fullName });
+  if (error) {
+    const value = error.value as { error?: string; message?: string } | undefined;
+    const msg = value?.error ?? value?.message ?? `Failed to add repository (HTTP ${error.status})`;
+    throw new Error(msg);
+  }
   await fetchRepos();
   // Trigger a sync so PRs for the new repo are fetched immediately.
   // The server-side POST handler forks a background sync, but that fiber
@@ -346,11 +359,32 @@ export async function fetchAvailableRepos(force = false): Promise<void> {
     if (data) {
       availableRepos = data as Repository[];
       availableReposFetchFailed = false;
+      // Fire-and-forget — the row hint renders as the counts arrive.
+      void fetchAvailablePrCounts(availableRepos.map((r) => r.fullName));
     }
   } catch {
     availableReposFetchFailed = true;
   } finally {
     availableReposLoading = false;
+  }
+}
+
+async function fetchAvailablePrCounts(fullNames: string[]): Promise<void> {
+  if (fullNames.length === 0) {
+    availablePrCountsLoaded = true;
+    return;
+  }
+  try {
+    const { data, error } = await api.api.github["pr-counts"].post({ fullNames });
+    if (error || !data) return;
+    availablePrCounts = {
+      ...availablePrCounts,
+      ...(data as { counts: Record<string, number> }).counts,
+    };
+  } catch {
+    // Silent — hint is best-effort, list still works without counts.
+  } finally {
+    availablePrCountsLoaded = true;
   }
 }
 
@@ -366,12 +400,22 @@ export function getAvailableReposFetchFailed(): boolean {
   return availableReposFetchFailed;
 }
 
+export function getAvailablePrCount(fullName: string): number | undefined {
+  return availablePrCounts[fullName];
+}
+
+export function getAvailablePrCountsLoaded(): boolean {
+  return availablePrCountsLoaded;
+}
+
 export function reset(): void {
   pullRequests = [];
   repositories = [];
   availableRepos = [];
   availableReposLoading = false;
   availableReposFetchFailed = false;
+  availablePrCounts = {};
+  availablePrCountsLoaded = false;
   selectedPrId = null;
   searchQuery = "";
   isLoading = false;

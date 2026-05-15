@@ -14,9 +14,13 @@ export interface ThreadMeta {
 
 <script lang="ts">
 	import {
+		DIFFS_TAG_NAME,
 		FileDiff,
+		HEADER_METADATA_SLOT_ID,
+		HEADER_PREFIX_SLOT_ID,
 		parsePatchFiles,
 		type DiffLineAnnotation,
+		type FileDiffMetadata,
 		type FileDiffOptions,
 		type DiffTokenEventBaseProps
 	} from '@pierre/diffs';
@@ -141,6 +145,31 @@ export interface ThreadMeta {
 	// ── Base shadow-DOM CSS (always injected) ─────────────────────────────────
 	const BASE_CSS = `[data-diffs-header='default'] { position: static !important; }`;
 
+	// ── Header slot population (SSR-hydrate path) ─────────────────────────────
+	// Pierre's `hydrate` doesn't run renderHeaderPrefix / renderHeaderMetadata
+	// — only `render` does. After hydrate we recreate the slot DIVs the lib
+	// would have appended (FileDiff.js:622-655) so the file-status badge and
+	// the unified/split toggle pill appear inside the SSR'd header.
+	function populateHeaderSlots(
+		hostEl: HTMLElement,
+		fileDiff: FileDiffMetadata,
+		opts: FileDiffOptions<ThreadMeta>
+	): void {
+		function appendSlot(
+			slotName: string,
+			content: string | number | Element | null | undefined
+		): void {
+			if (content == null) return;
+			const slotEl = document.createElement('div');
+			slotEl.slot = slotName;
+			if (content instanceof Element) slotEl.appendChild(content);
+			else slotEl.innerText = String(content);
+			hostEl.appendChild(slotEl);
+		}
+		appendSlot(HEADER_PREFIX_SLOT_ID, opts.renderHeaderPrefix?.(fileDiff));
+		appendSlot(HEADER_METADATA_SLOT_ID, opts.renderHeaderMetadata?.(fileDiff));
+	}
+
 	// ── Local state ───────────────────────────────────────────────────────────
 
 	let wrapperEl: HTMLDivElement | null = null;
@@ -148,6 +177,14 @@ export interface ThreadMeta {
 	let error = $state<string | null>(null);
 	/** Reference to the original options object for setOptions() merging. */
 	let initialOptions: FileDiffOptions<ThreadMeta> | null = null;
+	/**
+	 * Last annotations reference that has been applied to the FileDiff instance
+	 * — either by the initial render()/hydrate() in onMount, or by the
+	 * annotations $effect below. Used as a guard so the $effect skips its
+	 * eager initial run (which would re-render with forceRender:true and wipe
+	 * the SSR-hydrated tokens, forcing a cold worker tokenization).
+	 */
+	let appliedAnnotations: DiffLineAnnotation<ThreadMeta>[] | null = null;
 
 	// Note: $effect blocks that guard on `!instance` or `!initialOptions` rely on
 	// Svelte 5's ordering guarantee that onMount runs before $effects first execute.
@@ -222,11 +259,16 @@ export interface ThreadMeta {
 	}
 
 	// ── Reactive updates ──────────────────────────────────────────────────────
-	// Re-render when annotations change.
+	// Re-render when annotations change. The reference-equality guard skips
+	// the eager initial $effect run (Svelte 5 effects fire once on mount with
+	// no dep changes) — at that point onMount has already applied annotations
+	// via render()/hydrate(), and a forceRender:true here would wipe the
+	// SSR-hydrated DOM and trigger a cold worker re-tokenize.
 	$effect(() => {
 		if (!instance) return;
 		const currentAnnotations = annotations;
-
+		if (currentAnnotations === appliedAnnotations) return;
+		appliedAnnotations = currentAnnotations;
 		instance.render({ lineAnnotations: currentAnnotations, forceRender: true });
 	});
 
@@ -491,12 +533,45 @@ export interface ThreadMeta {
 				return;
 			}
 
-			instance.render({
-				containerWrapper: wrapperEl,
-				fileDiff: parsed,
-				lineAnnotations: annotations,
-				forceRender: true
-			});
+			// SSR-hydrate only when the server has prerendered HTML for unified
+			// mode (the server doesn't know the user's mode preference; split
+			// always falls through to render()). Hydrate skips the worker
+			// tokenize round-trip — the diff body paints synchronously and
+			// interaction managers attach to the existing DOM.
+			//
+			// Pierre's `hydrate` doesn't invoke `renderHeaderPrefix` /
+			// `renderHeaderMetadata` (only `render` does). So we manually
+			// populate the header slots after hydrate using the exported slot
+			// IDs — Pierre's shadow DOM has `<slot name="...">` placeholders
+			// that project these light-DOM children.
+			if (file.prerenderedHtml !== undefined && mode === 'unified') {
+				// Match the render() DOM structure: a <diffs-container> custom element
+				// as the shadow host inside wrapperEl. The tag name matters — app.css
+				// :900 overrides `diffs-container { color-scheme: inherit }` so Pierre's
+				// `light-dark()` token colors follow <html>'s theme instead of the OS.
+				// A plain <div> would skip that rule and produce mismatched colors
+				// (light tokens on a dark app background) for the entire SSR-visible
+				// window — until the worker re-render replaces them.
+				const hostEl = document.createElement(DIFFS_TAG_NAME);
+				wrapperEl.appendChild(hostEl);
+				instance.hydrate({
+					fileContainer: hostEl,
+					prerenderedHTML: file.prerenderedHtml,
+					fileDiff: parsed,
+					lineAnnotations: annotations,
+				});
+				populateHeaderSlots(hostEl, parsed, options);
+			} else {
+				instance.render({
+					containerWrapper: wrapperEl,
+					fileDiff: parsed,
+					lineAnnotations: annotations,
+					forceRender: true
+				});
+			}
+			// Mark these annotations as applied so the post-mount $effect
+			// (which would otherwise re-render with forceRender:true) is a no-op.
+			appliedAnnotations = annotations;
 
 			// Set total line count for keyboard cursor navigation
 			if (file.patch) {

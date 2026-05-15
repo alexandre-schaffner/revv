@@ -28,7 +28,7 @@ import { Elysia } from "elysia";
 import type {
   WalkthroughToolContext,
   WalkthroughToolResult,
-} from "../../ai/providers/walkthrough-tool-spec";
+} from "../../ai/providers/walkthrough-tools";
 import { TOOL_SPECS } from "../../ai/providers/walkthrough-tools";
 import { debug, logError } from "../../logger";
 import { AppRuntime } from "../../runtime";

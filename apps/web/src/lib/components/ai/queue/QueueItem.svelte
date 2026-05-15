@@ -17,7 +17,7 @@ export type QueueItemProps = HTMLAttributes<HTMLLIElement>;
 <li
 	data-slot="queue-item"
 	class={cn(
-		"group flex flex-col gap-1 rounded-md px-3 py-1 text-sm transition-colors duration-snap hover:bg-muted",
+		"group flex items-center gap-2 rounded-md px-3 py-1 text-sm transition-colors duration-snap hover:bg-muted",
 		className,
 	)}
 	{...restProps}
