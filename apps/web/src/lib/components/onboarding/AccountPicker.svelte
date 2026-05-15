@@ -1,40 +1,56 @@
 <script lang="ts">
-    import { User, Loader2, ArrowRight, Sun, Moon, Monitor } from '@lucide/svelte';
-    import { getLocalAccounts, switchAccount, getIsSwitching } from '$lib/stores/auth.svelte';
-    import { getThemePreference, setThemePreference, type ThemePreference } from '$lib/stores/theme.svelte';
-    import { fade } from 'svelte/transition';
+import { ArrowRight, Loader2, Monitor, Moon, Sun, User } from "@lucide/svelte";
+import { fade } from "svelte/transition";
+import { getIsSwitching, getLocalAccounts, switchAccount } from "$lib/stores/auth.svelte";
+import {
+  getThemePreference,
+  setThemePreference,
+  type ThemePreference,
+} from "$lib/stores/theme.svelte";
 
-    interface Props {
-        /** Called when user chooses "Sign in with a different account" */
-        onNewAccount: () => void;
-    }
+interface Props {
+  /** Called when user chooses "Sign in with a different account" */
+  onNewAccount: () => void;
+}
 
-    let { onNewAccount }: Props = $props();
+let { onNewAccount }: Props = $props();
 
-    const localAccounts = $derived(getLocalAccounts());
-    const isSwitching = $derived(getIsSwitching());
+const localAccounts = $derived(getLocalAccounts());
+const isSwitching = $derived(getIsSwitching());
 
-    let switchingId = $state<string | null>(null);
+let switchingId = $state<string | null>(null);
 
-    function hostLabel(host: string): string {
-        if (host === 'github.com') return 'GitHub';
-        return host;
-    }
+function hostLabel(host: string): string {
+  if (host === "github.com") return "GitHub";
+  return host;
+}
 
-    async function handlePick(userId: string, host: string): Promise<void> {
-        if (isSwitching) return;
-        switchingId = `${userId}:${host}`;
-        await switchAccount(userId, host);
-        // If switchAccount succeeds, OnboardingGate will swap to the app shell
-        // automatically (authed && onboarded becomes true). Clear local state
-        // in case it fails.
-        switchingId = null;
-    }
+async function handlePick(userId: string, host: string): Promise<void> {
+  if (isSwitching) return;
+  switchingId = `${userId}:${host}`;
+  try {
+    await switchAccount(userId, host);
+  } finally {
+    // Clear local state in case it fails. On success, OnboardingGate
+    // swaps to the app shell automatically.
+    switchingId = null;
+  }
+}
 
-    const theme = $derived(getThemePreference());
-    const cycle: Record<ThemePreference, ThemePreference> = { system: 'light', light: 'dark', dark: 'system' };
-    const labels: Record<ThemePreference, string> = { system: 'System theme', light: 'Light theme', dark: 'Dark theme' };
-    function cycleTheme() { setThemePreference(cycle[theme]); }
+const theme = $derived(getThemePreference());
+const cycle: Record<ThemePreference, ThemePreference> = {
+  system: "light",
+  light: "dark",
+  dark: "system",
+};
+const labels: Record<ThemePreference, string> = {
+  system: "System theme",
+  light: "Light theme",
+  dark: "Dark theme",
+};
+function cycleTheme() {
+  setThemePreference(cycle[theme]);
+}
 </script>
 
 <div class="picker" in:fade={{ duration: 320 }}>

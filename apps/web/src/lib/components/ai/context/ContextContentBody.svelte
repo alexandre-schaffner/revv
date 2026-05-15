@@ -1,10 +1,10 @@
 <script lang="ts" module>
-	import type { Snippet } from 'svelte';
+import type { Snippet } from "svelte";
 
-	export type ContextContentBodyProps = {
-		class?: string;
-		children?: Snippet;
-	};
+export type ContextContentBodyProps = {
+  class?: string;
+  children?: Snippet;
+};
 </script>
 
 <script lang="ts">

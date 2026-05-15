@@ -1,41 +1,46 @@
 <script lang="ts">
-	import { ChevronLeft } from '@lucide/svelte';
-	import { getGithubHost, setGithubHost } from '$lib/stores/settings.svelte';
-	import { cancelSignIn, clearToken, getIsAuthenticated, setForceOnboardingFlow } from '$lib/stores/auth.svelte';
+import { ChevronLeft } from "@lucide/svelte";
+import {
+  cancelSignIn,
+  clearToken,
+  getIsAuthenticated,
+  setForceOnboardingFlow,
+} from "$lib/stores/auth.svelte";
+import { getGithubHost, setGithubHost } from "$lib/stores/settings.svelte";
 
-	interface Props {
-		onContinue: () => void;
-		onBack?: () => void;
-	}
+interface Props {
+  onContinue: () => void;
+  onBack?: () => void;
+}
 
-	let { onContinue, onBack }: Props = $props();
+let { onContinue, onBack }: Props = $props();
 
-	const NOCTURLAB = 'nocturlab.ghe.com';
-	const PUBLIC = 'github.com';
+const NOCTURLAB = "nocturlab.ghe.com";
+const PUBLIC = "github.com";
 
-	let selected = $state<string>(getGithubHost() ?? NOCTURLAB);
-	let isSaving = $state(false);
+let selected = $state<string>(getGithubHost() ?? NOCTURLAB);
+let isSaving = $state(false);
 
-	async function handleContinue() {
-		const previousHost = getGithubHost();
-		const hostChanged = previousHost !== null && previousHost !== selected;
+async function handleContinue() {
+  const previousHost = getGithubHost();
+  const hostChanged = previousHost !== null && previousHost !== selected;
 
-		if (hostChanged && getIsAuthenticated()) {
-			// Suppress the AccountPicker — we're still inside the onboarding
-			// flow and about to re-authenticate with the new host.
-			setForceOnboardingFlow();
-			cancelSignIn();
-			clearToken();
-		}
+  if (hostChanged && getIsAuthenticated()) {
+    // Suppress the AccountPicker — we're still inside the onboarding
+    // flow and about to re-authenticate with the new host.
+    setForceOnboardingFlow();
+    cancelSignIn();
+    clearToken();
+  }
 
-		isSaving = true;
-		try {
-			await setGithubHost(selected);
-			onContinue();
-		} finally {
-			isSaving = false;
-		}
-	}
+  isSaving = true;
+  try {
+    await setGithubHost(selected);
+    onContinue();
+  } finally {
+    isSaving = false;
+  }
+}
 </script>
 
 <div class="host">

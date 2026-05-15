@@ -1,10 +1,10 @@
 <script lang="ts" module>
-	import type { HTMLAttributes } from "svelte/elements";
+import type { HTMLAttributes } from "svelte/elements";
 
-	export type ToolInputProps = HTMLAttributes<HTMLDivElement> & {
-		/** The input parameters passed to the tool (displayed as formatted JSON). */
-		input?: unknown;
-	};
+export type ToolInputProps = HTMLAttributes<HTMLDivElement> & {
+  /** The input parameters passed to the tool (displayed as formatted JSON). */
+  input?: unknown;
+};
 </script>
 
 <script lang="ts">
@@ -24,10 +24,12 @@
 {#if formatted}
 	<div
 		data-slot="tool-input"
-		class={cn("", className)}
+		class={cn("space-y-2 overflow-hidden", className)}
 		{...restProps}
 	>
-		<p class="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Input</p>
-		<pre class="overflow-x-auto rounded-md bg-muted p-3 text-xs font-mono"><code>{formatted}</code></pre>
+		<h4 class="font-medium text-muted-foreground text-xs uppercase tracking-wide">Parameters</h4>
+		<div class="rounded-md bg-muted/50">
+			<pre class="overflow-x-auto p-3 text-xs font-mono"><code>{formatted}</code></pre>
+		</div>
 	</div>
 {/if}

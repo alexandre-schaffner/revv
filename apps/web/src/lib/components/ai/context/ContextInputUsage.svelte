@@ -1,8 +1,8 @@
 <script lang="ts" module>
-	export type ContextInputUsageProps = {
-		class?: string;
-		label?: string;
-	};
+export type ContextInputUsageProps = {
+  class?: string;
+  label?: string;
+};
 </script>
 
 <script lang="ts">

@@ -1,2 +1,3 @@
-import Progress from './progress.svelte';
+import Progress from "./progress.svelte";
+
 export { Progress };

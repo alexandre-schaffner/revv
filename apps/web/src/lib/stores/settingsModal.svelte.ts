@@ -1,17 +1,17 @@
 let open = $state(false);
 
 export function getSettingsOpen(): boolean {
-	return open;
+  return open;
 }
 
 export function openSettings(): void {
-	open = true;
+  open = true;
 }
 
 export function closeSettings(): void {
-	open = false;
+  open = false;
 }
 
 export function toggleSettings(): void {
-	open = !open;
+  open = !open;
 }

@@ -1,7 +1,7 @@
 <script lang="ts" module>
-	import type { HTMLAttributes } from "svelte/elements";
+import type { HTMLAttributes } from "svelte/elements";
 
-	export type MessageToolbarProps = HTMLAttributes<HTMLDivElement>;
+export type MessageToolbarProps = HTMLAttributes<HTMLDivElement>;
 </script>
 
 <script lang="ts">

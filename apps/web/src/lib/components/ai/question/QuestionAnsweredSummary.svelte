@@ -1,13 +1,13 @@
 <script lang="ts" module>
-	import type { NormalizedQuestion } from "@revv/shared";
-	import type { QuestionStatus } from "./context.js";
+import type { NormalizedQuestion } from "@revv/shared";
+import type { QuestionStatus } from "./context.js";
 
-	export type QuestionAnsweredSummaryProps = {
-		questions: ReadonlyArray<NormalizedQuestion>;
-		status: Exclude<QuestionStatus, "pending">;
-		answers: Readonly<Record<string, ReadonlyArray<string>>>;
-		customAnswers: Readonly<Record<string, string>> | null;
-	};
+export type QuestionAnsweredSummaryProps = {
+  questions: ReadonlyArray<NormalizedQuestion>;
+  status: Exclude<QuestionStatus, "pending">;
+  answers: Readonly<Record<string, ReadonlyArray<string>>>;
+  customAnswers: Readonly<Record<string, string>> | null;
+};
 </script>
 
 <script lang="ts">
@@ -29,7 +29,7 @@
 		{@const picked = answers[q.question] ?? []}
 		{@const custom = customAnswers?.[q.question] ?? ""}
 		<div class="flex flex-col gap-1">
-			<span class="inline-flex items-center rounded bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+			<span class="inline-flex items-center rounded bg-muted px-1.5 py-0.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
 				{q.header}
 			</span>
 			<p
@@ -50,19 +50,19 @@
 				<div class="flex flex-wrap gap-1.5">
 					{#each picked as label (label)}
 						<span
-							class="inline-flex items-center rounded-full bg-accent/15 px-2 py-0.5 text-[11px] font-medium text-accent"
+							class="inline-flex items-center rounded-full bg-accent/15 px-2 py-0.5 text-xs font-medium text-accent"
 						>
 							{label}
 						</span>
 					{/each}
 					{#if picked.length === 0 && !custom}
-						<span class="text-[11px] italic text-muted-foreground"
+						<span class="text-xs italic text-muted-foreground"
 							>(no choice recorded)</span
 						>
 					{/if}
 				</div>
 				{#if custom}
-					<p class="text-[12px] text-muted-foreground">
+					<p class="text-xs text-muted-foreground">
 						<span class="font-medium">Custom:</span>
 						{custom}
 					</p>

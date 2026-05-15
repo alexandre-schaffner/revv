@@ -1,15 +1,15 @@
 <script lang="ts" module>
-	import type { HTMLAttributes } from "svelte/elements";
-	import type { Snippet } from "svelte";
+import type { Snippet } from "svelte";
+import type { HTMLAttributes } from "svelte/elements";
 
-	export type QueueSectionLabelProps = HTMLAttributes<HTMLSpanElement> & {
-		/** The label text to display. */
-		label: string;
-		/** The count to display before the label. */
-		count?: number;
-		/** An optional icon snippet to display before the count. */
-		icon?: Snippet;
-	};
+export type QueueSectionLabelProps = HTMLAttributes<HTMLSpanElement> & {
+  /** The label text to display. */
+  label: string;
+  /** The count to display before the label. */
+  count?: number;
+  /** An optional icon snippet to display before the count. */
+  icon?: Snippet;
+};
 </script>
 
 <script lang="ts">

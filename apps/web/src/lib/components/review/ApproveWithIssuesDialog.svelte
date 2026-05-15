@@ -1,62 +1,61 @@
 <script lang="ts">
-	import type { CommentThread, WalkthroughIssue } from '@revv/shared';
-	import * as Dialog from '$lib/components/ui/dialog';
-	import { Button } from '$lib/components/ui/button';
-	import { AlertTriangle, Info, MessageSquare, XOctagon } from '@lucide/svelte';
-	import FileBadge from '$lib/components/ui/FileBadge.svelte';
+import { AlertTriangle, Info, MessageSquare, XOctagon } from "@lucide/svelte";
+import type { CommentThread, WalkthroughIssue } from "@revv/shared";
+import { Button } from "$lib/components/ui/button";
+import * as Dialog from "$lib/components/ui/dialog";
+import FileBadge from "$lib/components/ui/FileBadge.svelte";
 
-	interface Props {
-		open: boolean;
-		issues: WalkthroughIssue[];
-		pendingThreads: CommentThread[];
-		getThreadMessages?: (threadId: string) => { body: string }[];
-		onfileclick?: (filePath: string, line: number) => void;
-		onconfirm: () => void;
-		oncancel: () => void;
-	}
+interface Props {
+  open: boolean;
+  issues: WalkthroughIssue[];
+  pendingThreads: CommentThread[];
+  getThreadMessages?: (threadId: string) => { body: string }[];
+  onfileclick?: (filePath: string, line: number) => void;
+  onconfirm: () => void;
+  oncancel: () => void;
+}
 
-	let {
-		open = $bindable(),
-		issues,
-		pendingThreads,
-		getThreadMessages = () => [],
-		onfileclick = undefined,
-		onconfirm,
-		oncancel,
-	}: Props = $props();
+let {
+  open = $bindable(),
+  issues,
+  pendingThreads,
+  getThreadMessages = () => [],
+  onfileclick = undefined,
+  onconfirm,
+  oncancel,
+}: Props = $props();
 
-	const criticalCount = $derived(issues.filter((i) => i.severity === 'critical').length);
-	const warningCount = $derived(issues.filter((i) => i.severity === 'warning').length);
-	const infoCount = $derived(issues.filter((i) => i.severity === 'info').length);
-	const threadCount = $derived(pendingThreads.length);
+const criticalCount = $derived(issues.filter((i) => i.severity === "critical").length);
+const warningCount = $derived(issues.filter((i) => i.severity === "warning").length);
+const infoCount = $derived(issues.filter((i) => i.severity === "info").length);
+const threadCount = $derived(pendingThreads.length);
 
-	const description = $derived.by(() => {
-		const parts: string[] = [];
-		if (issues.length > 0) {
-			parts.push(`${issues.length} walkthrough issue${issues.length === 1 ? '' : 's'}`);
-		}
-		if (threadCount > 0) {
-			parts.push(`${threadCount} unresolved comment${threadCount === 1 ? '' : 's'}`);
-		}
-		const joined =
-			parts.length === 2 ? `${parts[0]} and ${parts[1]}` : (parts[0] ?? '');
-		return `${joined} still open on this pull request. Approving will submit your approval to GitHub without resolving them.`;
-	});
+const description = $derived.by(() => {
+  const parts: string[] = [];
+  if (issues.length > 0) {
+    parts.push(`${issues.length} walkthrough issue${issues.length === 1 ? "" : "s"}`);
+  }
+  if (threadCount > 0) {
+    parts.push(`${threadCount} unresolved comment${threadCount === 1 ? "" : "s"}`);
+  }
+  const joined = parts.length === 2 ? `${parts[0]} and ${parts[1]}` : (parts[0] ?? "");
+  return `${joined} still open on this pull request. Approving will submit your approval to GitHub without resolving them.`;
+});
 
-	function handleFileClick(filePath: string, line: number): void {
-		open = false;
-		onfileclick?.(filePath, line);
-	}
+function handleFileClick(filePath: string, line: number): void {
+  open = false;
+  onfileclick?.(filePath, line);
+}
 
-	function handleConfirm(): void {
-		onconfirm();
-		open = false;
-	}
+function handleConfirm(): void {
+  onconfirm();
+  open = false;
+}
 
-	function handleCancel(): void {
-		oncancel();
-		open = false;
-	}
+function handleCancel(): void {
+  oncancel();
+  open = false;
+}
 </script>
 
 <Dialog.Root bind:open>
@@ -121,7 +120,7 @@
 								<div class="issue-location">
 									<FileBadge
 										filePath={issue.filePath}
-										onclick={issue.filePath ? () => handleFileClick(issue.filePath!, issue.startLine ?? 1) : undefined}
+										onclick={issue.filePath ? () => handleFileClick(issue.filePath as string, issue.startLine ?? 1) : undefined}
 									/>
 								</div>
 							{/if}

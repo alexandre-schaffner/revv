@@ -1,13 +1,13 @@
 <script lang="ts" module>
-	import type { NormalizedQuestionOption } from "@revv/shared";
+import type { NormalizedQuestionOption } from "@revv/shared";
 
-	export type QuestionOptionProps = {
-		option: NormalizedQuestionOption;
-		questionText: string;
-		multiSelect: boolean;
-		checked: boolean;
-		onToggle: () => void;
-	};
+export type QuestionOptionProps = {
+  option: NormalizedQuestionOption;
+  questionText: string;
+  multiSelect: boolean;
+  checked: boolean;
+  onToggle: () => void;
+};
 </script>
 
 <script lang="ts">
@@ -127,7 +127,7 @@
 				{detailsOpen ? "Hide" : "Show"} preview
 			</summary>
 			<div
-				class="mt-1.5 rounded bg-muted/60 p-2 text-[12px] leading-relaxed [&_pre]:overflow-x-auto"
+				class="mt-1.5 rounded bg-muted/60 p-2 text-xs leading-relaxed [&_pre]:overflow-x-auto"
 			>
 				{@html previewHtml}
 			</div>

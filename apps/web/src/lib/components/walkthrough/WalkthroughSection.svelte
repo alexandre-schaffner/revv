@@ -1,85 +1,81 @@
 <script lang="ts">
-	import type { WalkthroughBlock, WalkthroughSemanticStep } from '@revv/shared';
-	import { ChevronDown } from '@lucide/svelte';
-	import { renderMarkdown } from '$lib/utils/markdown';
-	import WalkthroughMarkdownBlock from './WalkthroughMarkdownBlock.svelte';
-	import WalkthroughCodeBlock from './WalkthroughCodeBlock.svelte';
-	import WalkthroughDiffBlock from './WalkthroughDiffBlock.svelte';
+import { ChevronDown } from "@lucide/svelte";
+import type { WalkthroughBlock, WalkthroughSemanticStep } from "@revv/shared";
+import { renderMarkdown } from "$lib/utils/markdown";
+import WalkthroughCodeBlock from "./WalkthroughCodeBlock.svelte";
+import WalkthroughDiffBlock from "./WalkthroughDiffBlock.svelte";
+import WalkthroughMarkdownBlock from "./WalkthroughMarkdownBlock.svelte";
 
-	type Severity = 'info' | 'warning' | 'critical';
+type Severity = "info" | "warning" | "critical";
 
-	interface BlockEntry {
-		block: WalkthroughBlock;
-		delay: number;
-		renderedAnnotation: string | null;
-	}
+interface BlockEntry {
+  block: WalkthroughBlock;
+  delay: number;
+  renderedAnnotation: string | null;
+}
 
-	interface Props {
-		section: WalkthroughSemanticStep;
-		entries: BlockEntry[];
-		blockIssueSeverity: Map<string, Severity>;
-		selectedIssueBlockId: string | null;
-		selectedIssueSeverity: Severity | null;
-		/** Index of this section (1-based) shown in the chapter eyebrow. */
-		chapterNumber: number;
-		/** Total chapter count for the "Chapter N / M" eyebrow. */
-		chapterCount: number;
-		/**
-		 * Optional DOM id placed on the section header so the chapters stepper
-		 * can jump to a specific chapter (e.g. id="walkthrough-overview" on the
-		 * virtual overview chapter, id="walkthrough-diff" on the first Phase B
-		 * chapter). When omitted, only the per-block step anchors are jump targets.
-		 */
-		id?: string | undefined;
-	}
+interface Props {
+  section: WalkthroughSemanticStep;
+  entries: BlockEntry[];
+  blockIssueSeverity: Map<string, Severity>;
+  selectedIssueBlockId: string | null;
+  selectedIssueSeverity: Severity | null;
+  /** Index of this section (1-based) shown in the chapter eyebrow. */
+  chapterNumber: number;
+  /** Total chapter count for the "Chapter N / M" eyebrow. */
+  chapterCount: number;
+  /**
+   * Optional DOM id placed on the section header so the chapters stepper
+   * can jump to a specific chapter (e.g. id="walkthrough-overview" on the
+   * virtual overview chapter, id="walkthrough-diff" on the first Phase B
+   * chapter). When omitted, only the per-block step anchors are jump targets.
+   */
+  id?: string | undefined;
+}
 
-	let {
-		section,
-		entries,
-		blockIssueSeverity,
-		selectedIssueBlockId,
-		selectedIssueSeverity,
-		chapterNumber,
-		chapterCount,
-		id = undefined,
-	}: Props = $props();
+let {
+  section,
+  entries,
+  blockIssueSeverity,
+  selectedIssueBlockId,
+  selectedIssueSeverity,
+  chapterNumber,
+  chapterCount,
+  id = undefined,
+}: Props = $props();
 
-	let collapsed = $state(false);
+let collapsed = $state(false);
 
-	// Roll up child block severities so a collapsed section can still
-	// telegraph the worst issue inside it via a colored dot.
-	const SEVERITY_RANK: Record<Severity, number> = {
-		info: 1,
-		warning: 2,
-		critical: 3,
-	};
-	const rolledSeverity = $derived.by<Severity | null>(() => {
-		let worst: Severity | null = null;
-		for (const e of entries) {
-			const s = blockIssueSeverity.get(e.block.id);
-			if (!s) continue;
-			if (!worst || SEVERITY_RANK[s] > SEVERITY_RANK[worst]) worst = s;
-		}
-		return worst;
-	});
+// Roll up child block severities so a collapsed section can still
+// telegraph the worst issue inside it via a colored dot.
+const SEVERITY_RANK: Record<Severity, number> = {
+  info: 1,
+  warning: 2,
+  critical: 3,
+};
+const rolledSeverity = $derived.by<Severity | null>(() => {
+  let worst: Severity | null = null;
+  for (const e of entries) {
+    const s = blockIssueSeverity.get(e.block.id);
+    if (!s) continue;
+    if (!worst || SEVERITY_RANK[s] > SEVERITY_RANK[worst]) worst = s;
+  }
+  return worst;
+});
 
-	const renderedSummary = $derived(
-		section.summary ? renderMarkdown(section.summary) : null,
-	);
+const renderedSummary = $derived(section.summary ? renderMarkdown(section.summary) : null);
 
-	function toggle(): void {
-		collapsed = !collapsed;
-	}
+function toggle(): void {
+  collapsed = !collapsed;
+}
 
-	// Auto-expand when an issue inside this section is selected so the
-	// reader's click on the issue card always lands on a visible block.
-	$effect(() => {
-		if (!selectedIssueBlockId) return;
-		const inside = entries.some(
-			(e) => e.block.id === selectedIssueBlockId,
-		);
-		if (inside) collapsed = false;
-	});
+// Auto-expand when an issue inside this section is selected so the
+// reader's click on the issue card always lands on a visible block.
+$effect(() => {
+  if (!selectedIssueBlockId) return;
+  const inside = entries.some((e) => e.block.id === selectedIssueBlockId);
+  if (inside) collapsed = false;
+});
 </script>
 
 <!-- `display: contents` so the section participates transparently in the

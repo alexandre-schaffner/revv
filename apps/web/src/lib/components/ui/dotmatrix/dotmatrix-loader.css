@@ -31,47 +31,47 @@
 /* ── Wrapper + dot base layout (shared by all 24 variants) ──────────────── */
 
 .dotmatrix {
-	display: inline-grid;
-	grid-template-columns: repeat(5, 5px);
-	grid-template-rows: repeat(5, 5px);
-	gap: 1px;
-	flex-shrink: 0;
-	color: var(--color-accent);
+  display: inline-grid;
+  grid-template-columns: repeat(5, 5px);
+  grid-template-rows: repeat(5, 5px);
+  gap: 1px;
+  flex-shrink: 0;
+  color: var(--color-accent);
 
-	/* Opacity tiers — keyframes interpolate between these. Override per
+  /* Opacity tiers — keyframes interpolate between these. Override per
 	   variant if a particular animation needs a different rest level. */
-	--dmx-opacity-base: 0.16;
-	--dmx-opacity-mid: 0.32;
-	--dmx-opacity-peak: 1;
-	/* Default keyframe cycle. Variants that need a different cadence set
+  --dmx-opacity-base: 0.16;
+  --dmx-opacity-mid: 0.32;
+  --dmx-opacity-peak: 1;
+  /* Default keyframe cycle. Variants that need a different cadence set
 	   their own animation-duration directly (e.g. square-9 uses 5200ms). */
-	--dmx-cycle: 1500ms;
+  --dmx-cycle: 1500ms;
 }
 
 .dotmatrix.dotmatrix--size-small {
-	grid-template-columns: repeat(5, 3px);
-	grid-template-rows: repeat(5, 3px);
+  grid-template-columns: repeat(5, 3px);
+  grid-template-rows: repeat(5, 3px);
 }
 
 .dotmatrix .dotmatrix-dot {
-	width: 5px;
-	height: 5px;
-	border-radius: 999px;
-	background: currentColor;
-	opacity: var(--dmx-opacity-base);
-	will-change: opacity;
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: var(--dmx-opacity-base);
+  will-change: opacity;
 }
 
 .dotmatrix.dotmatrix--size-small .dotmatrix-dot {
-	width: 3px;
-	height: 3px;
+  width: 3px;
+  height: 3px;
 }
 
 .dotmatrix .dotmatrix-dot.dotmatrix-dot--inactive {
-	opacity: 0 !important;
-	animation: none !important;
-	visibility: hidden;
-	pointer-events: none;
+  opacity: 0;
+  animation: none;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 /* ── Legacy variants — kept for `GuidedWalkthrough.svelte` ──────────────── */
@@ -80,37 +80,42 @@
    simplifications that don't map to any specific upstream variant. */
 
 .dotmatrix.dotmatrix--ripple .dotmatrix-dot {
-	animation: dotmatrix-legacy-pulse var(--dmx-cycle) cubic-bezier(0.42, 0, 0.58, 1) infinite;
-	animation-delay: calc(var(--dmx-manhattan, 0) * 0.18 * var(--dmx-cycle));
+  animation: dotmatrix-legacy-pulse var(--dmx-cycle) cubic-bezier(0.42, 0, 0.58, 1) infinite;
+  animation-delay: calc(var(--dmx-manhattan, 0) * 0.18 * var(--dmx-cycle));
 }
 
 .dotmatrix.dotmatrix--diagonal .dotmatrix-dot {
-	animation: dotmatrix-legacy-pulse var(--dmx-cycle) linear infinite;
-	animation-delay: calc(var(--dmx-path-order, 0) * 0.11 * var(--dmx-cycle));
+  animation: dotmatrix-legacy-pulse var(--dmx-cycle) linear infinite;
+  animation-delay: calc(var(--dmx-path-order, 0) * 0.11 * var(--dmx-cycle));
 }
 
 .dotmatrix.dotmatrix--collapse .dotmatrix-dot {
-	animation: dotmatrix-legacy-pulse var(--dmx-cycle) ease-in-out infinite;
-	animation-delay: calc(var(--dmx-collapse-order, 0) * 0.14 * var(--dmx-cycle));
+  animation: dotmatrix-legacy-pulse var(--dmx-cycle) ease-in-out infinite;
+  animation-delay: calc(var(--dmx-collapse-order, 0) * 0.14 * var(--dmx-cycle));
 }
 
 @keyframes dotmatrix-legacy-pulse {
-	0%, 100% { opacity: var(--dmx-opacity-base); }
-	50%      { opacity: var(--dmx-opacity-peak); }
+  0%,
+  100% {
+    opacity: var(--dmx-opacity-base);
+  }
+  50% {
+    opacity: var(--dmx-opacity-peak);
+  }
 }
 
 /* prism-bloom is JS frame-stepped (same as square-14). The rule just adds
    the soft crossfade between consecutive frame opacities. Base opacity is
    lowered so the unlit dots disappear into the background. */
 .dotmatrix.dotmatrix--prism-bloom {
-	--dmx-opacity-base: 0.08;
+  --dmx-opacity-base: 0.08;
 }
 .dotmatrix.dotmatrix--prism-bloom .dotmatrix-dot,
 .dotmatrix.dotmatrix--square-14 .dotmatrix-dot {
-	transition: opacity 180ms cubic-bezier(0.4, 0, 0.2, 1);
+  transition: opacity 180ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 .dotmatrix.dotmatrix--square-14 {
-	--dmx-opacity-base: 0.08;
+  --dmx-opacity-base: 0.08;
 }
 
 /* ── square-1 — Neon Drift (diagonal alt sweep, TR → BL) ─────────────────── */
@@ -119,206 +124,553 @@
    the wrapper component. Without this, the local component CSS would win
    ties and the variant animation wouldn't run. */
 .dotmatrix.dotmatrix--square-1 .dotmatrix-dot {
-	animation: dotmatrix-diagonal-alt-sweep var(--dmx-cycle) linear infinite;
-	animation-delay: calc(
-		(var(--dmx-path, 0) * 0.2 + var(--dmx-diagonal-parity, 0) * 0.5) *
-			var(--dmx-cycle)
-	);
+  animation: dotmatrix-diagonal-alt-sweep var(--dmx-cycle) linear infinite;
+  animation-delay: calc(
+    (var(--dmx-path, 0) * 0.2 + var(--dmx-diagonal-parity, 0) * 0.5) *
+    var(--dmx-cycle)
+  );
 }
 
 @keyframes dotmatrix-diagonal-alt-sweep {
-	0%, 100% { opacity: calc(0.5 * var(--dmx-opacity-base)); }
-	14%      { opacity: var(--dmx-opacity-peak); }
-	30%      { opacity: calc(0.75 * var(--dmx-opacity-base)); }
+  0%,
+  100% {
+    opacity: calc(0.5 * var(--dmx-opacity-base));
+  }
+  14% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  30% {
+    opacity: calc(0.75 * var(--dmx-opacity-base));
+  }
 }
 
 /* ── square-3 — Core Spiral ──────────────────────────────────────────────── */
 .dotmatrix.dotmatrix--square-3 .dotmatrix-dot {
-	animation: dotmatrix-spiral-snake var(--dmx-cycle) linear infinite;
-	animation-delay: calc(var(--dmx-spiral-order, 0) * 0.04 * var(--dmx-cycle));
+  animation: dotmatrix-spiral-snake var(--dmx-cycle) linear infinite;
+  animation-delay: calc(var(--dmx-spiral-order, 0) * 0.04 * var(--dmx-cycle));
 }
 
 @keyframes dotmatrix-spiral-snake {
-	0%, 100% { opacity: calc(0.5 * var(--dmx-opacity-base)); }
-	8%       { opacity: var(--dmx-opacity-peak); }
-	16%      { opacity: calc(0.5 * var(--dmx-opacity-peak) + 0.4 * var(--dmx-opacity-mid) + 0.1 * var(--dmx-opacity-base)); }
-	24%      { opacity: calc(0.25 * var(--dmx-opacity-peak) + 0.45 * var(--dmx-opacity-mid) + 0.3 * var(--dmx-opacity-base)); }
-	32%      { opacity: calc(0.5 * var(--dmx-opacity-mid) + 0.5 * var(--dmx-opacity-base)); }
-	40%      { opacity: calc(0.75 * var(--dmx-opacity-base)); }
+  0%,
+  100% {
+    opacity: calc(0.5 * var(--dmx-opacity-base));
+  }
+  8% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  16% {
+    opacity: calc(
+      0.5 *
+      var(--dmx-opacity-peak) +
+      0.4 *
+      var(--dmx-opacity-mid) +
+      0.1 *
+      var(--dmx-opacity-base)
+    );
+  }
+  24% {
+    opacity: calc(
+      0.25 *
+      var(--dmx-opacity-peak) +
+      0.45 *
+      var(--dmx-opacity-mid) +
+      0.3 *
+      var(--dmx-opacity-base)
+    );
+  }
+  32% {
+    opacity: calc(0.5 * var(--dmx-opacity-mid) + 0.5 * var(--dmx-opacity-base));
+  }
+  40% {
+    opacity: calc(0.75 * var(--dmx-opacity-base));
+  }
 }
 
 /* ── square-4 — Twin Orbit (outer CW + middle CCW) ───────────────────────── */
 .dotmatrix.dotmatrix--square-4 .dotmatrix-dot.dmx-outer-snake {
-	animation: dotmatrix-ring-snake var(--dmx-cycle) linear infinite;
-	animation-delay: calc(var(--dmx-outer-order, 0) * 0.0625 * var(--dmx-cycle));
+  animation: dotmatrix-ring-snake var(--dmx-cycle) linear infinite;
+  animation-delay: calc(var(--dmx-outer-order, 0) * 0.0625 * var(--dmx-cycle));
 }
 
 .dotmatrix.dotmatrix--square-4 .dotmatrix-dot.dmx-middle-snake {
-	animation: dotmatrix-ring-snake var(--dmx-cycle) linear infinite;
-	animation-delay: calc(var(--dmx-middle-order, 0) * 0.125 * var(--dmx-cycle));
+  animation: dotmatrix-ring-snake var(--dmx-cycle) linear infinite;
+  animation-delay: calc(var(--dmx-middle-order, 0) * 0.125 * var(--dmx-cycle));
 }
 
 @keyframes dotmatrix-ring-snake {
-	0%, 100% { opacity: calc(0.5 * var(--dmx-opacity-base)); }
-	10%      { opacity: var(--dmx-opacity-peak); }
-	20%      { opacity: calc(0.45 * var(--dmx-opacity-peak) + 0.45 * var(--dmx-opacity-mid) + 0.1 * var(--dmx-opacity-base)); }
-	30%      { opacity: calc(0.2 * var(--dmx-opacity-peak) + 0.4 * var(--dmx-opacity-mid) + 0.4 * var(--dmx-opacity-base)); }
-	40%      { opacity: calc(0.875 * var(--dmx-opacity-base)); }
+  0%,
+  100% {
+    opacity: calc(0.5 * var(--dmx-opacity-base));
+  }
+  10% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  20% {
+    opacity: calc(
+      0.45 *
+      var(--dmx-opacity-peak) +
+      0.45 *
+      var(--dmx-opacity-mid) +
+      0.1 *
+      var(--dmx-opacity-base)
+    );
+  }
+  30% {
+    opacity: calc(
+      0.2 *
+      var(--dmx-opacity-peak) +
+      0.4 *
+      var(--dmx-opacity-mid) +
+      0.4 *
+      var(--dmx-opacity-base)
+    );
+  }
+  40% {
+    opacity: calc(0.875 * var(--dmx-opacity-base));
+  }
 }
 
 /* ── square-5 — Prism Sweep (alternating diagonals) ──────────────────────── */
 .dotmatrix.dotmatrix--square-5 .dotmatrix-dot {
-	animation: dotmatrix-diagonal-snake var(--dmx-cycle) linear infinite;
-	animation-delay: calc(var(--dmx-diagonal-snake-order, 0) * 0.04 * var(--dmx-cycle));
+  animation: dotmatrix-diagonal-snake var(--dmx-cycle) linear infinite;
+  animation-delay: calc(var(--dmx-diagonal-snake-order, 0) * 0.04 * var(--dmx-cycle));
 }
 
 @keyframes dotmatrix-diagonal-snake {
-	0%, 100% { opacity: calc(0.5 * var(--dmx-opacity-base)); }
-	8%       { opacity: var(--dmx-opacity-peak); }
-	16%      { opacity: calc(0.5 * var(--dmx-opacity-peak) + 0.4 * var(--dmx-opacity-mid) + 0.1 * var(--dmx-opacity-base)); }
-	24%      { opacity: calc(0.25 * var(--dmx-opacity-peak) + 0.45 * var(--dmx-opacity-mid) + 0.3 * var(--dmx-opacity-base)); }
-	32%      { opacity: calc(0.5 * var(--dmx-opacity-mid) + 0.5 * var(--dmx-opacity-base)); }
-	40%      { opacity: calc(0.75 * var(--dmx-opacity-base)); }
+  0%,
+  100% {
+    opacity: calc(0.5 * var(--dmx-opacity-base));
+  }
+  8% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  16% {
+    opacity: calc(
+      0.5 *
+      var(--dmx-opacity-peak) +
+      0.4 *
+      var(--dmx-opacity-mid) +
+      0.1 *
+      var(--dmx-opacity-base)
+    );
+  }
+  24% {
+    opacity: calc(
+      0.25 *
+      var(--dmx-opacity-peak) +
+      0.45 *
+      var(--dmx-opacity-mid) +
+      0.3 *
+      var(--dmx-opacity-base)
+    );
+  }
+  32% {
+    opacity: calc(0.5 * var(--dmx-opacity-mid) + 0.5 * var(--dmx-opacity-base));
+  }
+  40% {
+    opacity: calc(0.75 * var(--dmx-opacity-base));
+  }
 }
 
 /* ── square-6 — Flux Columns ─────────────────────────────────────────────── */
 .dotmatrix.dotmatrix--square-6 .dotmatrix-dot {
-	animation: dotmatrix-col-snake var(--dmx-cycle) steps(5, end) infinite;
-	animation-delay: calc(var(--dmx-col-pos, 0) * 0.2 * var(--dmx-cycle));
+  animation: dotmatrix-col-snake var(--dmx-cycle) steps(5, end) infinite;
+  animation-delay: calc(var(--dmx-col-pos, 0) * 0.2 * var(--dmx-cycle));
 }
 
 @keyframes dotmatrix-col-snake {
-	0%,  20%  { opacity: calc(0.6 * var(--dmx-opacity-peak) + 0.25 * var(--dmx-opacity-mid) + 0.15 * var(--dmx-opacity-base)); }
-	20%, 40%  { opacity: calc(0.3 * var(--dmx-opacity-peak) + 0.5 * var(--dmx-opacity-mid) + 0.2 * var(--dmx-opacity-base)); }
-	40%, 60%  { opacity: calc(0.6 * var(--dmx-opacity-mid) + 0.4 * var(--dmx-opacity-base)); }
-	60%, 80%  { opacity: calc(0.2 * var(--dmx-opacity-mid) + 0.8 * var(--dmx-opacity-base)); }
-	80%, 100% { opacity: calc(0.625 * var(--dmx-opacity-base)); }
+  0%,
+  20% {
+    opacity: calc(
+      0.6 *
+      var(--dmx-opacity-peak) +
+      0.25 *
+      var(--dmx-opacity-mid) +
+      0.15 *
+      var(--dmx-opacity-base)
+    );
+  }
+  20%,
+  40% {
+    opacity: calc(
+      0.3 *
+      var(--dmx-opacity-peak) +
+      0.5 *
+      var(--dmx-opacity-mid) +
+      0.2 *
+      var(--dmx-opacity-base)
+    );
+  }
+  40%,
+  60% {
+    opacity: calc(0.6 * var(--dmx-opacity-mid) + 0.4 * var(--dmx-opacity-base));
+  }
+  60%,
+  80% {
+    opacity: calc(0.2 * var(--dmx-opacity-mid) + 0.8 * var(--dmx-opacity-base));
+  }
+  80%,
+  100% {
+    opacity: calc(0.625 * var(--dmx-opacity-base));
+  }
 }
 
 /* ── square-9 — Glyph Pulse (braille bits, 5.2s cycle, 52 steps) ─────────── */
 .dotmatrix.dotmatrix--square-9 .dotmatrix-dot.dmx-square9-bit {
-	animation-duration: 5200ms;
-	animation-timing-function: steps(52, end);
-	animation-iteration-count: infinite;
+  animation-duration: 5200ms;
+  animation-timing-function: steps(52, end);
+  animation-iteration-count: infinite;
 }
 
-.dotmatrix.dotmatrix--square-9 .dotmatrix-dot.dmx-square9-d1 { animation-name: dotmatrix-square9-d1; }
-.dotmatrix.dotmatrix--square-9 .dotmatrix-dot.dmx-square9-d2 { animation-name: dotmatrix-square9-d2; }
-.dotmatrix.dotmatrix--square-9 .dotmatrix-dot.dmx-square9-d3 { animation-name: dotmatrix-square9-d3; }
-.dotmatrix.dotmatrix--square-9 .dotmatrix-dot.dmx-square9-d4 { animation-name: dotmatrix-square9-d4; }
-.dotmatrix.dotmatrix--square-9 .dotmatrix-dot.dmx-square9-d5 { animation-name: dotmatrix-square9-d5; }
-.dotmatrix.dotmatrix--square-9 .dotmatrix-dot.dmx-square9-d6 { animation-name: dotmatrix-square9-d6; }
+.dotmatrix.dotmatrix--square-9 .dotmatrix-dot.dmx-square9-d1 {
+  animation-name: dotmatrix-square9-d1;
+}
+.dotmatrix.dotmatrix--square-9 .dotmatrix-dot.dmx-square9-d2 {
+  animation-name: dotmatrix-square9-d2;
+}
+.dotmatrix.dotmatrix--square-9 .dotmatrix-dot.dmx-square9-d3 {
+  animation-name: dotmatrix-square9-d3;
+}
+.dotmatrix.dotmatrix--square-9 .dotmatrix-dot.dmx-square9-d4 {
+  animation-name: dotmatrix-square9-d4;
+}
+.dotmatrix.dotmatrix--square-9 .dotmatrix-dot.dmx-square9-d5 {
+  animation-name: dotmatrix-square9-d5;
+}
+.dotmatrix.dotmatrix--square-9 .dotmatrix-dot.dmx-square9-d6 {
+  animation-name: dotmatrix-square9-d6;
+}
 
 @keyframes dotmatrix-square9-d1 {
-	0%, 3.846154%   { opacity: var(--dmx-opacity-base); }
-	3.846154%, 30.769231% { opacity: var(--dmx-opacity-peak); }
-	30.769231%, 46.153846% { opacity: var(--dmx-opacity-base); }
-	46.153846%, 50% { opacity: var(--dmx-opacity-peak); }
-	50%, 53.846154% { opacity: var(--dmx-opacity-base); }
-	53.846154%, 57.692308% { opacity: var(--dmx-opacity-peak); }
-	57.692308%, 65.384615% { opacity: var(--dmx-opacity-base); }
-	65.384615%, 71.153846% { opacity: var(--dmx-opacity-peak); }
-	71.153846%, 80.769231% { opacity: var(--dmx-opacity-base); }
-	80.769231%, 84.615385% { opacity: var(--dmx-opacity-peak); }
-	84.615385%, 88.461538% { opacity: var(--dmx-opacity-base); }
-	88.461538%, 92.307692% { opacity: var(--dmx-opacity-peak); }
-	92.307692%, 100% { opacity: var(--dmx-opacity-base); }
+  0%,
+  3.846154% {
+    opacity: var(--dmx-opacity-base);
+  }
+  3.846154%,
+  30.769231% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  30.769231%,
+  46.153846% {
+    opacity: var(--dmx-opacity-base);
+  }
+  46.153846%,
+  50% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  50%,
+  53.846154% {
+    opacity: var(--dmx-opacity-base);
+  }
+  53.846154%,
+  57.692308% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  57.692308%,
+  65.384615% {
+    opacity: var(--dmx-opacity-base);
+  }
+  65.384615%,
+  71.153846% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  71.153846%,
+  80.769231% {
+    opacity: var(--dmx-opacity-base);
+  }
+  80.769231%,
+  84.615385% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  84.615385%,
+  88.461538% {
+    opacity: var(--dmx-opacity-base);
+  }
+  88.461538%,
+  92.307692% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  92.307692%,
+  100% {
+    opacity: var(--dmx-opacity-base);
+  }
 }
 
 @keyframes dotmatrix-square9-d2 {
-	0%, 5.769231%   { opacity: var(--dmx-opacity-base); }
-	5.769231%, 25% { opacity: var(--dmx-opacity-peak); }
-	25%, 30.769231% { opacity: var(--dmx-opacity-base); }
-	30.769231%, 32.692308% { opacity: var(--dmx-opacity-peak); }
-	32.692308%, 50% { opacity: var(--dmx-opacity-base); }
-	50%, 53.846154% { opacity: var(--dmx-opacity-peak); }
-	53.846154%, 57.692308% { opacity: var(--dmx-opacity-base); }
-	57.692308%, 63.461538% { opacity: var(--dmx-opacity-peak); }
-	63.461538%, 75% { opacity: var(--dmx-opacity-base); }
-	75%, 80.769231% { opacity: var(--dmx-opacity-peak); }
-	80.769231%, 82.692308% { opacity: var(--dmx-opacity-base); }
-	82.692308%, 84.615385% { opacity: var(--dmx-opacity-peak); }
-	84.615385%, 100% { opacity: var(--dmx-opacity-base); }
+  0%,
+  5.769231% {
+    opacity: var(--dmx-opacity-base);
+  }
+  5.769231%,
+  25% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  25%,
+  30.769231% {
+    opacity: var(--dmx-opacity-base);
+  }
+  30.769231%,
+  32.692308% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  32.692308%,
+  50% {
+    opacity: var(--dmx-opacity-base);
+  }
+  50%,
+  53.846154% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  53.846154%,
+  57.692308% {
+    opacity: var(--dmx-opacity-base);
+  }
+  57.692308%,
+  63.461538% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  63.461538%,
+  75% {
+    opacity: var(--dmx-opacity-base);
+  }
+  75%,
+  80.769231% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  80.769231%,
+  82.692308% {
+    opacity: var(--dmx-opacity-base);
+  }
+  82.692308%,
+  84.615385% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  84.615385%,
+  100% {
+    opacity: var(--dmx-opacity-base);
+  }
 }
 
 @keyframes dotmatrix-square9-d3 {
-	0%, 7.692308%   { opacity: var(--dmx-opacity-base); }
-	7.692308%, 23.076923% { opacity: var(--dmx-opacity-peak); }
-	23.076923%, 30.769231% { opacity: var(--dmx-opacity-base); }
-	30.769231%, 34.615385% { opacity: var(--dmx-opacity-peak); }
-	34.615385%, 50% { opacity: var(--dmx-opacity-base); }
-	50%, 57.692308% { opacity: var(--dmx-opacity-peak); }
-	57.692308%, 61.538462% { opacity: var(--dmx-opacity-base); }
-	61.538462%, 65.384615% { opacity: var(--dmx-opacity-peak); }
-	65.384615%, 76.923077% { opacity: var(--dmx-opacity-base); }
-	76.923077%, 80.769231% { opacity: var(--dmx-opacity-peak); }
-	80.769231%, 86.538462% { opacity: var(--dmx-opacity-base); }
-	86.538462%, 92.307692% { opacity: var(--dmx-opacity-peak); }
-	92.307692%, 100% { opacity: var(--dmx-opacity-base); }
+  0%,
+  7.692308% {
+    opacity: var(--dmx-opacity-base);
+  }
+  7.692308%,
+  23.076923% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  23.076923%,
+  30.769231% {
+    opacity: var(--dmx-opacity-base);
+  }
+  30.769231%,
+  34.615385% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  34.615385%,
+  50% {
+    opacity: var(--dmx-opacity-base);
+  }
+  50%,
+  57.692308% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  57.692308%,
+  61.538462% {
+    opacity: var(--dmx-opacity-base);
+  }
+  61.538462%,
+  65.384615% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  65.384615%,
+  76.923077% {
+    opacity: var(--dmx-opacity-base);
+  }
+  76.923077%,
+  80.769231% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  80.769231%,
+  86.538462% {
+    opacity: var(--dmx-opacity-base);
+  }
+  86.538462%,
+  92.307692% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  92.307692%,
+  100% {
+    opacity: var(--dmx-opacity-base);
+  }
 }
 
 @keyframes dotmatrix-square9-d4 {
-	0%, 3.846154%   { opacity: var(--dmx-opacity-base); }
-	3.846154%, 30.769231% { opacity: var(--dmx-opacity-peak); }
-	30.769231%, 50% { opacity: var(--dmx-opacity-base); }
-	50%, 53.846154% { opacity: var(--dmx-opacity-peak); }
-	53.846154%, 65.384615% { opacity: var(--dmx-opacity-base); }
-	65.384615%, 71.153846% { opacity: var(--dmx-opacity-peak); }
-	71.153846%, 76.923077% { opacity: var(--dmx-opacity-base); }
-	76.923077%, 80.769231% { opacity: var(--dmx-opacity-peak); }
-	80.769231%, 88.461538% { opacity: var(--dmx-opacity-base); }
-	88.461538%, 92.307692% { opacity: var(--dmx-opacity-peak); }
-	92.307692%, 100% { opacity: var(--dmx-opacity-base); }
+  0%,
+  3.846154% {
+    opacity: var(--dmx-opacity-base);
+  }
+  3.846154%,
+  30.769231% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  30.769231%,
+  50% {
+    opacity: var(--dmx-opacity-base);
+  }
+  50%,
+  53.846154% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  53.846154%,
+  65.384615% {
+    opacity: var(--dmx-opacity-base);
+  }
+  65.384615%,
+  71.153846% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  71.153846%,
+  76.923077% {
+    opacity: var(--dmx-opacity-base);
+  }
+  76.923077%,
+  80.769231% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  80.769231%,
+  88.461538% {
+    opacity: var(--dmx-opacity-base);
+  }
+  88.461538%,
+  92.307692% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  92.307692%,
+  100% {
+    opacity: var(--dmx-opacity-base);
+  }
 }
 
 @keyframes dotmatrix-square9-d5 {
-	0%, 5.769231%   { opacity: var(--dmx-opacity-base); }
-	5.769231%, 25% { opacity: var(--dmx-opacity-peak); }
-	25%, 50%      { opacity: var(--dmx-opacity-base); }
-	50%, 57.692308% { opacity: var(--dmx-opacity-peak); }
-	57.692308%, 71.153846% { opacity: var(--dmx-opacity-base); }
-	71.153846%, 75% { opacity: var(--dmx-opacity-peak); }
-	75%, 82.692308% { opacity: var(--dmx-opacity-base); }
-	82.692308%, 86.538462% { opacity: var(--dmx-opacity-peak); }
-	86.538462%, 100% { opacity: var(--dmx-opacity-base); }
+  0%,
+  5.769231% {
+    opacity: var(--dmx-opacity-base);
+  }
+  5.769231%,
+  25% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  25%,
+  50% {
+    opacity: var(--dmx-opacity-base);
+  }
+  50%,
+  57.692308% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  57.692308%,
+  71.153846% {
+    opacity: var(--dmx-opacity-base);
+  }
+  71.153846%,
+  75% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  75%,
+  82.692308% {
+    opacity: var(--dmx-opacity-base);
+  }
+  82.692308%,
+  86.538462% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  86.538462%,
+  100% {
+    opacity: var(--dmx-opacity-base);
+  }
 }
 
 @keyframes dotmatrix-square9-d6 {
-	0%, 7.692308%   { opacity: var(--dmx-opacity-base); }
-	7.692308%, 23.076923% { opacity: var(--dmx-opacity-peak); }
-	23.076923%, 50% { opacity: var(--dmx-opacity-base); }
-	50%, 57.692308% { opacity: var(--dmx-opacity-peak); }
-	57.692308%, 76.923077% { opacity: var(--dmx-opacity-base); }
-	76.923077%, 80.769231% { opacity: var(--dmx-opacity-peak); }
-	80.769231%, 92.307692% { opacity: var(--dmx-opacity-base); }
-	92.307692%, 96.153846% { opacity: var(--dmx-opacity-peak); }
-	96.153846%, 100% { opacity: var(--dmx-opacity-base); }
+  0%,
+  7.692308% {
+    opacity: var(--dmx-opacity-base);
+  }
+  7.692308%,
+  23.076923% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  23.076923%,
+  50% {
+    opacity: var(--dmx-opacity-base);
+  }
+  50%,
+  57.692308% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  57.692308%,
+  76.923077% {
+    opacity: var(--dmx-opacity-base);
+  }
+  76.923077%,
+  80.769231% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  80.769231%,
+  92.307692% {
+    opacity: var(--dmx-opacity-base);
+  }
+  92.307692%,
+  96.153846% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  96.153846%,
+  100% {
+    opacity: var(--dmx-opacity-base);
+  }
 }
 
 /* ── square-11 — Echo Ring (concentric diamond ripple + secondary echo) ──── */
 .dotmatrix.dotmatrix--square-11 .dotmatrix-dot {
-	animation: dotmatrix-ripple-echo var(--dmx-cycle) ease-in-out infinite;
-	animation-delay: calc(
-		(var(--dmx-ripple-ring, 0) * 0.14 + var(--dmx-ripple-parity, 0) * 0.03) *
-			var(--dmx-cycle)
-	);
+  animation: dotmatrix-ripple-echo var(--dmx-cycle) ease-in-out infinite;
+  animation-delay: calc(
+    (var(--dmx-ripple-ring, 0) * 0.14 + var(--dmx-ripple-parity, 0) * 0.03) *
+    var(--dmx-cycle)
+  );
 }
 
 @keyframes dotmatrix-ripple-echo {
-	0%, 100% { opacity: calc(0.625 * var(--dmx-opacity-base)); }
-	28%      { opacity: calc(0.98 * var(--dmx-opacity-peak)); }
-	56%      { opacity: var(--dmx-opacity-mid); }
-	78%      { opacity: calc(0.68 * var(--dmx-opacity-peak) + 0.32 * var(--dmx-opacity-mid)); }
+  0%,
+  100% {
+    opacity: calc(0.625 * var(--dmx-opacity-base));
+  }
+  28% {
+    opacity: calc(0.98 * var(--dmx-opacity-peak));
+  }
+  56% {
+    opacity: var(--dmx-opacity-mid);
+  }
+  78% {
+    opacity: calc(0.68 * var(--dmx-opacity-peak) + 0.32 * var(--dmx-opacity-mid));
+  }
 }
 
 /* ── square-12 — Origin Wave (ripple from off-center cell) ───────────────── */
 .dotmatrix.dotmatrix--square-12 .dotmatrix-dot {
-	animation: dotmatrix-center-origin-ripple var(--dmx-cycle) ease-in-out infinite;
-	animation-delay: calc(var(--dmx-center-ripple-ring, 0) * 0.16 * var(--dmx-cycle));
+  animation: dotmatrix-center-origin-ripple var(--dmx-cycle) ease-in-out infinite;
+  animation-delay: calc(var(--dmx-center-ripple-ring, 0) * 0.16 * var(--dmx-cycle));
 }
 
 @keyframes dotmatrix-center-origin-ripple {
-	0%, 100% { opacity: calc(0.625 * var(--dmx-opacity-base)); }
-	34%      { opacity: var(--dmx-opacity-peak); }
-	60%      { opacity: calc(0.5 * (var(--dmx-opacity-base) + var(--dmx-opacity-mid))); }
+  0%,
+  100% {
+    opacity: calc(0.625 * var(--dmx-opacity-base));
+  }
+  34% {
+    opacity: var(--dmx-opacity-peak);
+  }
+  60% {
+    opacity: calc(0.5 * (var(--dmx-opacity-base) + var(--dmx-opacity-mid)));
+  }
 }

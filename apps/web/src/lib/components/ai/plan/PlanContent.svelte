@@ -1,7 +1,7 @@
 <script lang="ts" module>
-	import type { Collapsible as CollapsiblePrimitive } from "bits-ui";
+import type { Collapsible as CollapsiblePrimitive } from "bits-ui";
 
-	export type PlanContentProps = CollapsiblePrimitive.ContentProps;
+export type PlanContentProps = CollapsiblePrimitive.ContentProps;
 </script>
 
 <script lang="ts">

@@ -1,58 +1,61 @@
 <script lang="ts">
-	import { Sun, Moon, Monitor, PanelLeftClose, PanelLeftOpen, RefreshCw } from '@lucide/svelte';
+import { Monitor, Moon, PanelLeftClose, PanelLeftOpen, RefreshCw, Sun } from "@lucide/svelte";
+import { fetchOrgs } from "$lib/stores/orgs.svelte";
+import { getIsLoading, getSelectedPr, getSelectedPrId } from "$lib/stores/prs.svelte";
+import { getPrListSyncing } from "$lib/stores/sync.svelte";
+import {
+  getThemePreference,
+  setThemePreference,
+  type ThemePreference,
+} from "$lib/stores/theme.svelte";
+import { getTopbarSubtitle } from "$lib/stores/topbar.svelte";
+import { requestFullSync, requestSync } from "$lib/stores/ws.svelte";
+import FloatingTabs from "./FloatingTabs.svelte";
 
-	import FloatingTabs from './FloatingTabs.svelte';
-	import { getSelectedPr, getSelectedPrId, getIsLoading } from '$lib/stores/prs.svelte';
-	import { getThemePreference, setThemePreference, type ThemePreference } from '$lib/stores/theme.svelte';
-	import { getTopbarSubtitle } from '$lib/stores/topbar.svelte';
-	import { requestSync, requestFullSync } from '$lib/stores/ws.svelte';
-	import { getPrListSyncing } from '$lib/stores/sync.svelte';
-	import { fetchOrgs } from '$lib/stores/orgs.svelte';
+interface Props {
+  rightPanelOpen: boolean;
+  onTogglePanel: () => void;
+  sidebarCollapsed: boolean;
+  onToggleSidebar: () => void;
+}
 
-	interface Props {
-		rightPanelOpen: boolean;
-		onTogglePanel: () => void;
-		sidebarCollapsed: boolean;
-		onToggleSidebar: () => void;
-	}
+let { rightPanelOpen, onTogglePanel, sidebarCollapsed, onToggleSidebar }: Props = $props();
 
-	let { rightPanelOpen, onTogglePanel, sidebarCollapsed, onToggleSidebar }: Props = $props();
+const pr = $derived(getSelectedPr());
+const selectedPrId = $derived(getSelectedPrId());
+const theme = $derived(getThemePreference());
+const topbarSubtitle = $derived(getTopbarSubtitle());
 
-	const pr = $derived(getSelectedPr());
-	const selectedPrId = $derived(getSelectedPrId());
-	const theme = $derived(getThemePreference());
-	const topbarSubtitle = $derived(getTopbarSubtitle());
+// Combines direct-HTTP sync (`getIsLoading`) with WebSocket-driven
+// PR-list sync (`getPrListSyncing`) so the spinner reflects any in-flight
+// PR-list sync regardless of transport. Mirrors what Sidebar used to do.
+const isSyncing = $derived(getIsLoading() || getPrListSyncing());
 
-	// Combines direct-HTTP sync (`getIsLoading`) with WebSocket-driven
-	// PR-list sync (`getPrListSyncing`) so the spinner reflects any in-flight
-	// PR-list sync regardless of transport. Mirrors what Sidebar used to do.
-	const isSyncing = $derived(getIsLoading() || getPrListSyncing());
+function handleSyncPrs(): void {
+  if (selectedPrId) {
+    requestFullSync(selectedPrId);
+  } else {
+    requestSync();
+  }
+  // Re-pull the org list — picks up newly-joined orgs and rotates
+  // any signed avatar URLs without requiring re-auth.
+  void fetchOrgs();
+}
+const cycle: Record<ThemePreference, ThemePreference> = {
+  system: "light",
+  light: "dark",
+  dark: "system",
+};
 
-	function handleSyncPrs(): void {
-		if (selectedPrId) {
-			requestFullSync(selectedPrId);
-		} else {
-			requestSync();
-		}
-		// Re-pull the org list — picks up newly-joined orgs and rotates
-		// any signed avatar URLs without requiring re-auth.
-		void fetchOrgs();
-	}
-	const cycle: Record<ThemePreference, ThemePreference> = {
-		system: 'light',
-		light: 'dark',
-		dark: 'system',
-	};
+const labels: Record<ThemePreference, string> = {
+  system: "System theme",
+  light: "Light theme",
+  dark: "Dark theme",
+};
 
-	const labels: Record<ThemePreference, string> = {
-		system: 'System theme',
-		light: 'Light theme',
-		dark: 'Dark theme',
-	};
-
-	function cycleTheme() {
-		setThemePreference(cycle[theme]);
-	}
+function cycleTheme() {
+  setThemePreference(cycle[theme]);
+}
 </script>
 
 <div class="topbar" data-tauri-drag-region>

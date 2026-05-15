@@ -1,10 +1,10 @@
 <script lang="ts" module>
-	import type { HTMLAttributes } from "svelte/elements";
+import type { HTMLAttributes } from "svelte/elements";
 
-	export type ConfirmationHeaderProps = HTMLAttributes<HTMLDivElement> & {
-		title: string;
-		description?: string | undefined;
-	};
+export type ConfirmationHeaderProps = HTMLAttributes<HTMLDivElement> & {
+  title: string;
+  description?: string | undefined;
+};
 </script>
 
 <script lang="ts">

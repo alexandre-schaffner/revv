@@ -1,7 +1,7 @@
 <script lang="ts" module>
-	import type { Collapsible as CollapsiblePrimitive } from "bits-ui";
+import type { Collapsible as CollapsiblePrimitive } from "bits-ui";
 
-	export type ToolContentProps = CollapsiblePrimitive.ContentProps;
+export type ToolContentProps = CollapsiblePrimitive.ContentProps;
 </script>
 
 <script lang="ts">
@@ -17,10 +17,13 @@
 
 <CollapsibleContent
 	data-slot="tool-content"
-	class={cn("border-t border-border", className)}
+	class={cn(
+		"data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2",
+		"space-y-4 p-4 text-popover-foreground outline-none",
+		"data-[state=closed]:animate-out data-[state=open]:animate-in",
+		className,
+	)}
 	{...restProps}
 >
-	<div class="space-y-3 px-3 py-3">
-		{@render children?.()}
-	</div>
+	{@render children?.()}
 </CollapsibleContent>

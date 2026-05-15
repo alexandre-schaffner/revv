@@ -1,85 +1,72 @@
 <script lang="ts">
-    import { Check, AlertCircle, X, Loader2 } from "@lucide/svelte";
-    import * as Popover from "$lib/components/ui/popover";
-    import type {
-        WalkthroughRating,
-        WalkthroughBlock,
-        RatingAxis,
-    } from "@revv/shared";
-    import { RATING_AXIS_LABELS } from "@revv/shared";
-    import RatingExpandedBody from "./RatingExpandedBody.svelte";
-    import { synthesize } from "./format-synthesis";
+import { AlertCircle, Check, Loader2, X } from "@lucide/svelte";
+import type { RatingAxis, WalkthroughBlock, WalkthroughRating } from "@revv/shared";
+import { RATING_AXIS_LABELS } from "@revv/shared";
+import * as Popover from "$lib/components/ui/popover";
+import { synthesize } from "./format-synthesis";
+import RatingExpandedBody from "./RatingExpandedBody.svelte";
 
-    /** Mirrors `RowState` from RatingTestRow — the two views share the same
-     *  three lifecycle states. Duplicated as a local type alias so we don't
-     *  re-export from the list row and couple these components unnecessarily. */
-    export type CellState = "queued" | "running" | "resolved";
+/** Mirrors `RowState` from RatingTestRow — the two views share the same
+ *  three lifecycle states. Duplicated as a local type alias so we don't
+ *  re-export from the list row and couple these components unnecessarily. */
+export type CellState = "queued" | "running" | "resolved";
 
-    interface Props {
-        axis: RatingAxis;
-        rating: WalkthroughRating | null;
-        state: CellState;
-        /** Full ordered block list — forwarded to RatingExpandedBody so the
-         *  "step N" chips resolve to the block's global index. */
-        blocks: WalkthroughBlock[];
-        /** Jump-to-block handler — forwarded to RatingExpandedBody. */
-        onJump: (blockId: string) => void;
-        /** Grid-level keyboard nav binds upward so the 2-D arrow-key handler
-         *  on the orchestrator can call focus() against this trigger. */
-        triggerRef?: HTMLElement | null;
-    }
+interface Props {
+  axis: RatingAxis;
+  rating: WalkthroughRating | null;
+  state: CellState;
+  /** Full ordered block list — forwarded to RatingExpandedBody so the
+   *  "step N" chips resolve to the block's global index. */
+  blocks: WalkthroughBlock[];
+  /** Jump-to-block handler — forwarded to RatingExpandedBody. */
+  onJump: (blockId: string) => void;
+  /** Grid-level keyboard nav binds upward so the 2-D arrow-key handler
+   *  on the orchestrator can call focus() against this trigger. */
+  triggerRef?: HTMLElement | null;
+}
 
-    let {
-        axis,
-        rating,
-        state,
-        blocks,
-        onJump,
-        triggerRef = $bindable(null),
-    }: Props = $props();
+let { axis, rating, state, blocks, onJump, triggerRef = $bindable(null) }: Props = $props();
 
-    const axisLabel = $derived(RATING_AXIS_LABELS[axis]);
+const axisLabel = $derived(RATING_AXIS_LABELS[axis]);
 
-    // Verdict class — same vocabulary as RatingTestRow (`cell--pass`,
-    // `cell--concern`, `cell--blocker`, `cell--pending`) so the existing
-    // `--c-rating-*` CSS-variable pattern re-skins for free.
-    const verdictClass = $derived(
-        rating ? `cell--${rating.verdict}` : `cell--pending`,
-    );
+// Verdict class — same vocabulary as RatingTestRow (`cell--pass`,
+// `cell--concern`, `cell--blocker`, `cell--pending`) so the existing
+// `--c-rating-*` CSS-variable pattern re-skins for free.
+const verdictClass = $derived(rating ? `cell--${rating.verdict}` : `cell--pending`);
 
-    // Status row text — the verdict expressed in human-readable form. Pending
-    // states get friendlier labels than the raw lifecycle value so a queued
-    // cell reads as "Queued" rather than "queued".
-    const statusText = $derived.by(() => {
-        if (state === "queued") return "Queued";
-        if (state === "running") return "Running…";
-        if (!rating) return "—";
-        if (rating.verdict === "pass") return "Pass";
-        if (rating.verdict === "concern") return "Needs attention";
-        return "Blocker";
-    });
+// Status row text — the verdict expressed in human-readable form. Pending
+// states get friendlier labels than the raw lifecycle value so a queued
+// cell reads as "Queued" rather than "queued".
+const statusText = $derived.by(() => {
+  if (state === "queued") return "Queued";
+  if (state === "running") return "Running…";
+  if (!rating) return "—";
+  if (rating.verdict === "pass") return "Pass";
+  if (rating.verdict === "concern") return "Needs attention";
+  return "Blocker";
+});
 
-    // Smart-synthesis detail line. Empty string when there's nothing useful to
-    // say (queued/running, or a pass with no rationale) — the template checks
-    // truthiness so we don't emit an empty <div>.
-    const synthesisLine = $derived.by(() => {
-        if (!rating) return "";
-        return synthesize(rating);
-    });
+// Smart-synthesis detail line. Empty string when there's nothing useful to
+// say (queued/running, or a pass with no rationale) — the template checks
+// truthiness so we don't emit an empty <div>.
+const synthesisLine = $derived.by(() => {
+  if (!rating) return "";
+  return synthesize(rating);
+});
 
-    // Spoken semantics identical to RatingTestRow so VoiceOver / JAWS users
-    // get the same phrasing regardless of which view they land in.
-    const ariaLabel = $derived.by(() => {
-        if (state === "queued") return `${axisLabel}: queued`;
-        if (state === "running") return `${axisLabel}: running`;
-        if (!rating) return `${axisLabel}: unknown`;
-        return `${axisLabel}: ${rating.verdict} with ${rating.confidence} confidence`;
-    });
+// Spoken semantics identical to RatingTestRow so VoiceOver / JAWS users
+// get the same phrasing regardless of which view they land in.
+const ariaLabel = $derived.by(() => {
+  if (state === "queued") return `${axisLabel}: queued`;
+  if (state === "running") return `${axisLabel}: running`;
+  if (!rating) return `${axisLabel}: unknown`;
+  return `${axisLabel}: ${rating.verdict} with ${rating.confidence} confidence`;
+});
 
-    // Only resolved cells open. Queued/running triggers render as inert
-    // buttons (native `disabled` + `aria-disabled`) — clicking them does
-    // nothing and the popover never opens, matching the list-view behavior.
-    const isDisabled = $derived(state !== "resolved");
+// Only resolved cells open. Queued/running triggers render as inert
+// buttons (native `disabled` + `aria-disabled`) — clicking them does
+// nothing and the popover never opens, matching the list-view behavior.
+const isDisabled = $derived(state !== "resolved");
 </script>
 
 <div

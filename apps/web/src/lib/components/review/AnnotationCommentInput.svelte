@@ -1,73 +1,73 @@
 <script lang="ts">
-	import { onMount, onDestroy, untrack } from 'svelte';
+import { onDestroy, onMount, untrack } from "svelte";
 
-	interface Props {
-		filePath: string;
-		lineNo: number;
-		onSubmit: (body: string) => void;
-		onDismiss: () => void;
-		initialBody?: string;
-	}
+interface Props {
+  filePath: string;
+  lineNo: number;
+  onSubmit: (body: string) => void;
+  onDismiss: () => void;
+  initialBody?: string;
+}
 
-	let {
-		filePath: _filePath,
-		lineNo: _lineNo,
-		onSubmit,
-		onDismiss,
-		initialBody = '',
-	}: Props = $props();
+let {
+  filePath: _filePath,
+  lineNo: _lineNo,
+  onSubmit,
+  onDismiss,
+  initialBody = "",
+}: Props = $props();
 
-	// `initialBody` seeds the textarea on mount only — later prop changes are
-	// intentionally ignored, so capture the current value with `untrack`.
-	let body = $state(untrack(() => initialBody));
-	let focused = $state(false);
-	let textareaEl: HTMLTextAreaElement | undefined = $state();
+// `initialBody` seeds the textarea on mount only — later prop changes are
+// intentionally ignored, so capture the current value with `untrack`.
+let body = $state(untrack(() => initialBody));
+let focused = $state(false);
+let textareaEl: HTMLTextAreaElement | undefined = $state();
 
-	const hasContent = $derived(body.trim().length > 0);
+const hasContent = $derived(body.trim().length > 0);
 
-	function autoResize() {
-		if (!textareaEl) return;
-		textareaEl.style.height = 'auto';
-		const maxH = 3 * 20 + 8;
-		textareaEl.style.height = Math.min(textareaEl.scrollHeight, maxH) + 'px';
-	}
+function autoResize() {
+  if (!textareaEl) return;
+  textareaEl.style.height = "auto";
+  const maxH = 3 * 20 + 8;
+  textareaEl.style.height = `${Math.min(textareaEl.scrollHeight, maxH)}px`;
+}
 
-	function handleKeydown(e: KeyboardEvent) {
-		if (e.key === 'Escape') {
-			onDismiss();
-		} else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && hasContent) {
-			e.preventDefault();
-			onSubmit(body.trim());
-		}
-	}
+function handleKeydown(e: KeyboardEvent) {
+  if (e.key === "Escape") {
+    onDismiss();
+  } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && hasContent) {
+    e.preventDefault();
+    onSubmit(body.trim());
+  }
+}
 
-	// Global Escape handler so dismissal works even when textarea is blurred
-	function handleGlobalKeydown(e: KeyboardEvent) {
-		if (e.key === 'Escape') {
-			e.stopPropagation();
-			onDismiss();
-		}
-	}
+// Global Escape handler so dismissal works even when textarea is blurred
+function handleGlobalKeydown(e: KeyboardEvent) {
+  if (e.key === "Escape") {
+    e.stopPropagation();
+    onDismiss();
+  }
+}
 
-	function handleSubmit() {
-		if (!hasContent) return;
-		onSubmit(body.trim());
-	}
+function handleSubmit() {
+  if (!hasContent) return;
+  onSubmit(body.trim());
+}
 
-	onMount(() => {
-		textareaEl?.focus();
-		// Move caret to the end and right-size the box when an initial body is
-		// pre-filled (used for editing an existing comment).
-		if (textareaEl && body.length > 0) {
-			textareaEl.setSelectionRange(body.length, body.length);
-			autoResize();
-		}
-		window.addEventListener('keydown', handleGlobalKeydown);
-	});
+onMount(() => {
+  textareaEl?.focus();
+  // Move caret to the end and right-size the box when an initial body is
+  // pre-filled (used for editing an existing comment).
+  if (textareaEl && body.length > 0) {
+    textareaEl.setSelectionRange(body.length, body.length);
+    autoResize();
+  }
+  window.addEventListener("keydown", handleGlobalKeydown);
+});
 
-	onDestroy(() => {
-		window.removeEventListener('keydown', handleGlobalKeydown);
-	});
+onDestroy(() => {
+  window.removeEventListener("keydown", handleGlobalKeydown);
+});
 </script>
 
 <div class="comment-input" class:comment-input--focused={focused}>
@@ -76,6 +76,7 @@
 		bind:value={body}
 		class="textarea"
 		placeholder="Add a comment… (⌘↵ to submit)"
+		aria-label="Add a comment"
 		rows="1"
 		onfocus={() => (focused = true)}
 		onblur={() => (focused = false)}

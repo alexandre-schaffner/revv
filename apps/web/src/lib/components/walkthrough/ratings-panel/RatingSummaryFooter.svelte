@@ -1,26 +1,26 @@
 <script lang="ts">
-    import { RATING_AXES } from "@revv/shared";
-    import { formatDuration } from "./format-duration";
+import { RATING_AXES } from "@revv/shared";
+import { formatDuration } from "./format-duration";
 
-    interface Counts {
-        pass: number;
-        concern: number;
-        blocker: number;
-        total: number;
-        pending: number;
-    }
+interface Counts {
+  pass: number;
+  concern: number;
+  blocker: number;
+  total: number;
+  pending: number;
+}
 
-    interface Props {
-        counts: Counts;
-        /** Total elapsed across all ratings (ms), or null while streaming / for
-         *  cached replays where a 0ms reading would be misleading. */
-        totalElapsedMs: number | null;
-        /** True iff all axes resolved as pass. Drives the "all checks passed"
-         *  celebration treatment. */
-        allPassed: boolean;
-    }
+interface Props {
+  counts: Counts;
+  /** Total elapsed across all ratings (ms), or null while streaming / for
+   *  cached replays where a 0ms reading would be misleading. */
+  totalElapsedMs: number | null;
+  /** True iff all axes resolved as pass. Drives the "all checks passed"
+   *  celebration treatment. */
+  allPassed: boolean;
+}
 
-    let { counts, totalElapsedMs, allPassed }: Props = $props();
+let { counts, totalElapsedMs, allPassed }: Props = $props();
 </script>
 
 <div

@@ -1,7 +1,7 @@
 <script lang="ts" module>
-	import type { Collapsible as CollapsiblePrimitive } from "bits-ui";
+import type { Collapsible as CollapsiblePrimitive } from "bits-ui";
 
-	export type QueueSectionProps = CollapsiblePrimitive.RootProps;
+export type QueueSectionProps = CollapsiblePrimitive.RootProps;
 </script>
 
 <script lang="ts">

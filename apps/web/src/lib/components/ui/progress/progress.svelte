@@ -1,12 +1,12 @@
 <script lang="ts">
-	import { cn } from '$lib/utils.js';
+import { cn } from "$lib/utils.js";
 
-	let {
-		class: className,
-		value,
-		max = 100,
-		indeterminate = false,
-	}: { class?: string; value?: number; max?: number; indeterminate?: boolean } = $props();
+let {
+  class: className,
+  value,
+  max = 100,
+  indeterminate = false,
+}: { class?: string; value?: number; max?: number; indeterminate?: boolean } = $props();
 </script>
 
 <div

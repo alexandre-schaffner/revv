@@ -1,111 +1,111 @@
 <script lang="ts">
-	import { DownloadCloud, Loader2 } from '@lucide/svelte';
+import { DownloadCloud, Loader2 } from "@lucide/svelte";
 
-	type Tab = 'walkthrough' | 'diff' | 'request-changes';
-	type WalkthroughStatus = 'idle' | 'generating' | 'complete' | 'error';
+type Tab = "walkthrough" | "diff" | "request-changes";
+type WalkthroughStatus = "idle" | "generating" | "complete" | "error";
 
-	interface Props {
-		activeTab: Tab;
-		onTabChange: (tab: Tab) => void;
-		walkthroughStatus?: WalkthroughStatus;
-		/**
-		 * True when the PR the user is viewing has a newer headSha than the
-		 * diff currently rendered — signals "pull this commit to refresh".
-		 */
-		hasNewCommit?: boolean;
-		/** True while the pull is in-flight (refetching + regenerating). */
-		isPulling?: boolean;
-		onPullCommit?: () => void;
-	}
+interface Props {
+  activeTab: Tab;
+  onTabChange: (tab: Tab) => void;
+  walkthroughStatus?: WalkthroughStatus;
+  /**
+   * True when the PR the user is viewing has a newer headSha than the
+   * diff currently rendered — signals "pull this commit to refresh".
+   */
+  hasNewCommit?: boolean;
+  /** True while the pull is in-flight (refetching + regenerating). */
+  isPulling?: boolean;
+  onPullCommit?: () => void;
+}
 
-	let {
-		activeTab,
-		onTabChange,
-		walkthroughStatus = 'idle',
-		hasNewCommit = false,
-		isPulling = false,
-		onPullCommit,
-	}: Props = $props();
+let {
+  activeTab,
+  onTabChange,
+  walkthroughStatus = "idle",
+  hasNewCommit = false,
+  isPulling = false,
+  onPullCommit,
+}: Props = $props();
 
-	// The dot and the pull button live in the same slot to the right of the
-	// pill tabs. Only one is visible at a time — the pull affordance takes
-	// precedence because it requires user action; walkthrough status is
-	// passive info. Both elements stay in the DOM so opacity + scale
-	// transitions run on mount/unmount of visibility, producing a clean
-	// crossfade rather than a layout-shifting morph.
-	const dotVisible = $derived(!hasNewCommit && walkthroughStatus !== 'idle');
-	const buttonVisible = $derived(hasNewCommit);
-	const buttonInteractive = $derived(hasNewCommit && !isPulling);
+// The dot and the pull button live in the same slot to the right of the
+// pill tabs. Only one is visible at a time — the pull affordance takes
+// precedence because it requires user action; walkthrough status is
+// passive info. Both elements stay in the DOM so opacity + scale
+// transitions run on mount/unmount of visibility, producing a clean
+// crossfade rather than a layout-shifting morph.
+const dotVisible = $derived(!hasNewCommit && walkthroughStatus !== "idle");
+const buttonVisible = $derived(hasNewCommit);
+const buttonInteractive = $derived(hasNewCommit && !isPulling);
 
-	function handlePullClick(): void {
-		if (buttonInteractive) onPullCommit?.();
-	}
+function handlePullClick(): void {
+  if (buttonInteractive) onPullCommit?.();
+}
 
-	const tabs: { id: Tab; label: string }[] = [
-		{ id: 'walkthrough', label: 'Walkthrough' },
-		{ id: 'diff', label: 'Diff' },
-		{ id: 'request-changes', label: 'Request Changes' },
-	];
+const tabs: { id: Tab; label: string }[] = [
+  { id: "walkthrough", label: "Walkthrough" },
+  { id: "diff", label: "Diff" },
+  { id: "request-changes", label: "Request Changes" },
+];
 
-	let pillEl: HTMLDivElement | null = $state(null);
-	let segmentEls: (HTMLButtonElement | null)[] = $state(tabs.map(() => null));
-	let hoveredIndex = $state<number | null>(null);
-	let indicatorLeft = $state(0);
-	let indicatorWidth = $state(0);
-	let hasMeasured = $state(false);
+let pillEl: HTMLDivElement | null = $state(null);
+let segmentEls: (HTMLButtonElement | null)[] = $state(tabs.map(() => null));
+let hoveredIndex = $state<number | null>(null);
+let indicatorLeft = $state(0);
+let indicatorWidth = $state(0);
+let hasMeasured = $state(false);
 
-	$effect(() => {
-		const activeIndex = tabs.findIndex((t) => t.id === activeTab);
-		const index = hoveredIndex ?? activeIndex;
-		const el = segmentEls[index];
-		if (!el) return;
+$effect(() => {
+  const activeIndex = tabs.findIndex((t) => t.id === activeTab);
+  const index = hoveredIndex ?? activeIndex;
+  const el = segmentEls[index];
+  if (!el) return;
 
-		const measure = () => {
-			if (!pillEl || !el) return;
-			const pillRect = pillEl.getBoundingClientRect();
-			const segRect = el.getBoundingClientRect();
-			// .pill has border: 1px + padding: 3px. getBoundingClientRect()
-			// returns border-box coords; .pill-indicator { left: 0 } measures
-			// from the padding edge per CSS spec, so subtract border-left
-			// to keep the two reference frames aligned.
-			const borderLeft = parseFloat(getComputedStyle(pillEl).borderLeftWidth) || 0;
-			// Snap BOTH edges to integer device pixels. Fractional segment
-			// widths accumulate across flex siblings, so segment[0] has an
-			// integer left edge but fractional right edge while segment[2]
-			// has fractional values on both sides. That sub-pixel phase
-			// difference produces per-tab anti-aliasing asymmetry that reads
-			// as "padding looks different on different tabs." Rounding both
-			// edges equalizes the rendering; rounding both (vs. rounding
-			// left + width independently) preserves the segment's true
-			// center so the label stays visually centered in the indicator.
-			const rawLeft = segRect.left - pillRect.left - borderLeft;
-			const rawRight = rawLeft + segRect.width;
-			const snappedLeft = Math.round(rawLeft);
-			const snappedRight = Math.round(rawRight);
-			indicatorLeft = snappedLeft;
-			indicatorWidth = snappedRight - snappedLeft;
-			hasMeasured = true;
-		};
+  const measure = () => {
+    if (!pillEl || !el) return;
+    const pillRect = pillEl.getBoundingClientRect();
+    const segRect = el.getBoundingClientRect();
+    // .pill has border: 1px + padding: 3px. getBoundingClientRect()
+    // returns border-box coords; .pill-indicator { left: 0 } measures
+    // from the padding edge per CSS spec, so subtract border-left
+    // to keep the two reference frames aligned.
+    const borderLeft = parseFloat(getComputedStyle(pillEl).borderLeftWidth) || 0;
+    // Snap BOTH edges to integer device pixels. Fractional segment
+    // widths accumulate across flex siblings, so segment[0] has an
+    // integer left edge but fractional right edge while segment[2]
+    // has fractional values on both sides. That sub-pixel phase
+    // difference produces per-tab anti-aliasing asymmetry that reads
+    // as "padding looks different on different tabs." Rounding both
+    // edges equalizes the rendering; rounding both (vs. rounding
+    // left + width independently) preserves the segment's true
+    // center so the label stays visually centered in the indicator.
+    const rawLeft = segRect.left - pillRect.left - borderLeft;
+    const rawRight = rawLeft + segRect.width;
+    const snappedLeft = Math.round(rawLeft);
+    const snappedRight = Math.round(rawRight);
+    indicatorLeft = snappedLeft;
+    indicatorWidth = snappedRight - snappedLeft;
+    hasMeasured = true;
+  };
 
-		measure();
+  measure();
 
-		// Re-measure when any segment's size changes (e.g., web font swap
-		// from system-ui to Inter). Observing every segment catches sibling
-		// resizes that shift the active segment's position. Also observe the
-		// pill itself to catch parent-driven reflow that shifts segment origin.
-		const observer = new ResizeObserver(measure);
-		for (const s of segmentEls) {
-			if (s) observer.observe(s);
-		}
-		if (pillEl) observer.observe(pillEl);
-		return () => observer.disconnect();
-	});
+  // Re-measure when any segment's size changes (e.g., web font swap
+  // from system-ui to Inter). Observing every segment catches sibling
+  // resizes that shift the active segment's position. Also observe the
+  // pill itself to catch parent-driven reflow that shifts segment origin.
+  const observer = new ResizeObserver(measure);
+  for (const s of segmentEls) {
+    if (s) observer.observe(s);
+  }
+  if (pillEl) observer.observe(pillEl);
+  return () => observer.disconnect();
+});
 
-	function isDividerHidden(index: number): boolean {
-		const activeIndex = tabs.findIndex((t) => t.id === activeTab);
-		const highlighted = hoveredIndex ?? activeIndex;
-		return index === highlighted || index + 1 === highlighted;
-	}
+function isDividerHidden(index: number): boolean {
+  const activeIndex = tabs.findIndex((t) => t.id === activeTab);
+  const highlighted = hoveredIndex ?? activeIndex;
+  return index === highlighted || index + 1 === highlighted;
+}
 </script>
 
 <div class="tabs-wrapper">

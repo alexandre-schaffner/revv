@@ -1,99 +1,106 @@
 <script lang="ts">
-	import {
-		Root as PopoverRoot,
-		Trigger as PopoverTrigger,
-		Content as PopoverContent,
-	} from '$lib/components/ui/popover/index.js';
-	import { Check, ChevronDown, User, Settings, LogOut, Loader2 } from '@lucide/svelte';
-	import {
-		getUser,
-		getLocalAccounts,
-		signOut,
-		getIsSwitching,
-		switchAccount,
-	} from '$lib/stores/auth.svelte';
-	import { getGithubHost } from '$lib/stores/settings.svelte';
-	import { toggleSettings } from '$lib/stores/settingsModal.svelte';
+import { Check, ChevronDown, Loader2, LogOut, Settings, User } from "@lucide/svelte";
+import {
+  Content as PopoverContent,
+  Root as PopoverRoot,
+  Trigger as PopoverTrigger,
+} from "$lib/components/ui/popover/index.js";
+import {
+  getIsSwitching,
+  getLocalAccounts,
+  getUser,
+  signOut,
+  switchAccount,
+} from "$lib/stores/auth.svelte";
+import { getGithubHost } from "$lib/stores/settings.svelte";
+import { toggleSettings } from "$lib/stores/settingsModal.svelte";
 
-	interface Props {
-		collapsed?: boolean;
-	}
+interface Props {
+  collapsed?: boolean;
+}
 
-	let { collapsed = false }: Props = $props();
+let { collapsed = false }: Props = $props();
 
-	type SwitcherEntry = {
-		userId: string;
-		host: string;
-		githubLogin: string | null;
-		avatarUrl: string | null;
-		userImage: string | null;
-		userName: string;
-		userEmail: string;
-	};
+type SwitcherEntry = {
+  userId: string;
+  host: string;
+  githubLogin: string | null;
+  avatarUrl: string | null;
+  userImage: string | null;
+  userName: string;
+  userEmail: string;
+};
 
-	let open = $state(false);
-	let _lastAvatar = $state<string | null>(null);
-	let _avatarFailedForUrl = $state<string | null>(null);
-	let switchingId = $state<string | null>(null);
+let open = $state(false);
+let _lastAvatar = $state<string | null>(null);
+let _avatarFailedForUrl = $state<string | null>(null);
+let switchingId = $state<string | null>(null);
 
-	const user = $derived(getUser());
-	const localAccounts = $derived(getLocalAccounts());
-	const isSwitching = $derived(getIsSwitching());
+const user = $derived(getUser());
+const localAccounts = $derived(getLocalAccounts());
+const isSwitching = $derived(getIsSwitching());
 
-	const displayAvatar = $derived(user?.image ?? null);
+const displayAvatar = $derived(user?.image ?? null);
 
-	// avatarFailed is true only when the current URL has previously errored
-	const avatarFailed = $derived(_avatarFailedForUrl === displayAvatar && displayAvatar !== null);
+// avatarFailed is true only when the current URL has previously errored
+const avatarFailed = $derived(_avatarFailedForUrl === displayAvatar && displayAvatar !== null);
 
-	// When isSwitching drops to false, clear the per-row switching tracker
-	const _switchingActive = $derived(isSwitching ? switchingId : null);
+// When isSwitching drops to false, clear the per-row switching tracker
+const _switchingActive = $derived(isSwitching ? switchingId : null);
 
-	// Flat list of (userId, host) entries — one row per connected host per user
-	const switcherEntries = $derived(
-		localAccounts.flatMap((la) =>
-			la.accounts.map((acct) => ({
-				userId: la.id,
-				host: acct.host,
-				githubLogin: acct.githubLogin,
-				avatarUrl: acct.avatarUrl,
-				userImage: la.image,
-				userName: la.name,
-				userEmail: la.email,
-			})),
-		),
-	);
+// Flat list of (userId, host) entries — one row per connected host per user
+const switcherEntries = $derived(
+  localAccounts.flatMap((la) =>
+    la.accounts.map((acct) => ({
+      userId: la.id,
+      host: acct.host,
+      githubLogin: acct.githubLogin,
+      avatarUrl: acct.avatarUrl,
+      userImage: la.image,
+      userName: la.name,
+      userEmail: la.email,
+    })),
+  ),
+);
 
-	function hostLabel(host: string): string {
-		if (host === 'github.com') return 'GitHub';
-		return host;
-	}
+function hostLabel(host: string): string {
+  if (host === "github.com") return "GitHub";
+  return host;
+}
 
-	function isEntryActive(entry: SwitcherEntry): boolean {
-		const currentHost = getGithubHost();
-		return entry.host === currentHost && entry.githubLogin === user?.githubLogin;
-	}
+function isEntryActive(entry: SwitcherEntry): boolean {
+  const currentHost = getGithubHost();
+  return entry.host === currentHost && entry.githubLogin === user?.githubLogin;
+}
 
-	function entryKey(entry: SwitcherEntry): string {
-		return `${entry.userId}:${entry.host}`;
-	}
+function entryKey(entry: SwitcherEntry): string {
+  return `${entry.userId}:${entry.host}`;
+}
 
-	async function handleSwitchEntry(entry: SwitcherEntry): Promise<void> {
-		if (isEntryActive(entry) || isSwitching) return;
-		switchingId = entryKey(entry);
-		await switchAccount(entry.userId, entry.host);
-		switchingId = null;
-		open = false;
-	}
+async function handleSwitchEntry(entry: SwitcherEntry): Promise<void> {
+  if (isEntryActive(entry) || isSwitching) return;
+  switchingId = entryKey(entry);
+  try {
+    await switchAccount(entry.userId, entry.host);
+    open = false;
+  } finally {
+    switchingId = null;
+  }
+}
 
-	function handleSettings(): void {
-		open = false;
-		toggleSettings();
-	}
+function handleSettings(): void {
+  open = false;
+  toggleSettings();
+}
 
-	async function handleSignOut(): Promise<void> {
-		open = false;
-		await signOut();
-	}
+async function handleSignOut(): Promise<void> {
+  open = false;
+  try {
+    await signOut();
+  } catch {
+    // Best-effort — the UI will reflect auth state regardless
+  }
+}
 </script>
 
 <PopoverRoot bind:open>

@@ -6,7 +6,7 @@
 		<title>Revv</title>
 		<script>
 			// Prevent flash of wrong theme — runs synchronously before first paint
-			(function () {
+			(() => {
 				var s = localStorage.getItem('revv-theme');
 				var d =
 					s === 'dark' ||

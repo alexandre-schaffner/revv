@@ -1,1 +1,1 @@
-export { default as Checkpoint, type CheckpointProps } from "./Checkpoint.svelte";
+export { type CheckpointProps, default as Checkpoint } from "./Checkpoint.svelte";

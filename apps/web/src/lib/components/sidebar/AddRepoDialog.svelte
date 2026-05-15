@@ -1,7 +1,7 @@
 <script lang="ts">
-	import AddRepoForm from './AddRepoForm.svelte';
+import AddRepoForm from "./AddRepoForm.svelte";
 
-	let { open = false, onClose }: { open?: boolean; onClose: () => void } = $props();
+let { open = false, onClose }: { open?: boolean; onClose: () => void } = $props();
 </script>
 
 {#if open}

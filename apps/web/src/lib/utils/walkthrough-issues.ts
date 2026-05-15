@@ -1,6 +1,6 @@
-import type { WalkthroughIssue } from '@revv/shared';
+import type { WalkthroughIssue } from "@revv/shared";
 
-export type IssueSeverity = WalkthroughIssue['severity'];
+export type IssueSeverity = WalkthroughIssue["severity"];
 
 /**
  * Canonical render order for severity buckets — most severe first so the
@@ -9,18 +9,18 @@ export type IssueSeverity = WalkthroughIssue['severity'];
  * for display but preserve original order *within* each bucket so the
  * step linkage (`→ Step N`) still reads in increasing step numbers.
  */
-export const SEVERITY_ORDER: readonly IssueSeverity[] = ['critical', 'warning', 'info'] as const;
+export const SEVERITY_ORDER: readonly IssueSeverity[] = ["critical", "warning", "info"] as const;
 
 export const SEVERITY_LABELS: Record<IssueSeverity, string> = {
-	critical: 'Critical',
-	warning: 'Warning',
-	info: 'Info',
+  critical: "Critical",
+  warning: "Warning",
+  info: "Info",
 };
 
 export interface IssueGroup {
-	severity: IssueSeverity;
-	label: string;
-	issues: WalkthroughIssue[];
+  severity: IssueSeverity;
+  label: string;
+  issues: WalkthroughIssue[];
 }
 
 /**
@@ -30,12 +30,12 @@ export interface IssueGroup {
  * than restarting per-group.
  */
 export interface GroupedIssue {
-	issue: WalkthroughIssue;
-	globalIndex: number;
+  issue: WalkthroughIssue;
+  globalIndex: number;
 }
 
-export interface IssueGroupView extends Omit<IssueGroup, 'issues'> {
-	issues: GroupedIssue[];
+export interface IssueGroupView extends Omit<IssueGroup, "issues"> {
+  issues: GroupedIssue[];
 }
 
 /**
@@ -43,22 +43,22 @@ export interface IssueGroupView extends Omit<IssueGroup, 'issues'> {
  * dropped. Within each bucket original arrival order is preserved.
  */
 export function groupIssuesBySeverity(issues: readonly WalkthroughIssue[]): IssueGroup[] {
-	const buckets: Record<IssueSeverity, WalkthroughIssue[]> = {
-		critical: [],
-		warning: [],
-		info: [],
-	};
-	for (const issue of issues) {
-		const bucket = buckets[issue.severity];
-		if (bucket) bucket.push(issue);
-	}
-	const groups: IssueGroup[] = [];
-	for (const severity of SEVERITY_ORDER) {
-		const bucketIssues = buckets[severity];
-		if (bucketIssues.length === 0) continue;
-		groups.push({ severity, label: SEVERITY_LABELS[severity], issues: bucketIssues });
-	}
-	return groups;
+  const buckets: Record<IssueSeverity, WalkthroughIssue[]> = {
+    critical: [],
+    warning: [],
+    info: [],
+  };
+  for (const issue of issues) {
+    const bucket = buckets[issue.severity];
+    if (bucket) bucket.push(issue);
+  }
+  const groups: IssueGroup[] = [];
+  for (const severity of SEVERITY_ORDER) {
+    const bucketIssues = buckets[severity];
+    if (bucketIssues.length === 0) continue;
+    groups.push({ severity, label: SEVERITY_LABELS[severity], issues: bucketIssues });
+  }
+  return groups;
 }
 
 /**
@@ -67,13 +67,13 @@ export function groupIssuesBySeverity(issues: readonly WalkthroughIssue[]): Issu
  * without manually threading a counter through nested `{#each}` blocks.
  */
 export function groupIssuesBySeverityWithIndex(
-	issues: readonly WalkthroughIssue[],
+  issues: readonly WalkthroughIssue[],
 ): IssueGroupView[] {
-	const groups = groupIssuesBySeverity(issues);
-	let globalIndex = 0;
-	return groups.map((group) => ({
-		severity: group.severity,
-		label: group.label,
-		issues: group.issues.map((issue) => ({ issue, globalIndex: globalIndex++ })),
-	}));
+  const groups = groupIssuesBySeverity(issues);
+  let globalIndex = 0;
+  return groups.map((group) => ({
+    severity: group.severity,
+    label: group.label,
+    issues: group.issues.map((issue) => ({ issue, globalIndex: globalIndex++ })),
+  }));
 }

@@ -1,10 +1,10 @@
 <script lang="ts" module>
-	import type { Snippet } from 'svelte';
+import type { Snippet } from "svelte";
 
-	export type ContextContentFooterProps = {
-		class?: string;
-		children?: Snippet;
-	};
+export type ContextContentFooterProps = {
+  class?: string;
+  children?: Snippet;
+};
 </script>
 
 <script lang="ts">

@@ -1,119 +1,118 @@
 <script lang="ts">
-    /*
-     * IssueTestRow — one row in the Issues panel.
-     *
-     * Reads left-to-right like a lint diagnostic:
-     *
-     *   [✓]  E  Unhandled async error in login   description…                             ›
-     *   │    │  │                                │
-     *   │    │  │                                └ preview (single-line description)
-     *   │    │  └ title (mono 13 / 600)
-     *   │    └ severity code letter (E/W/I — like TS2345 / clippy::lint / etc)
-     *   └ selection checkbox (or green Check glyph when submitted)
-     *
-     * Wraps SpecRow; consumes it via snippets for icon/label/preview. File
-     * paths and step chips live in the expanded body's "references" section
-     * so the clickable row stays clean — no nested click targets.
-     * Selection checkbox must NOT bubble to the SpecRow trigger (otherwise
-     * checking a box would also expand the row, which feels hostile).
-     */
-    import { Check } from "@lucide/svelte";
-    import type { WalkthroughIssue, WalkthroughBlock } from "@revv/shared";
-    import SpecRow, { type SpecRowState } from "../shared/SpecRow.svelte";
-    import IssueExpandedBody from "./IssueExpandedBody.svelte";
+/*
+ * IssueTestRow — one row in the Issues panel.
+ *
+ * Reads left-to-right like a lint diagnostic:
+ *
+ *   [✓]  E  Unhandled async error in login   description…                             ›
+ *   │    │  │                                │
+ *   │    │  │                                └ preview (single-line description)
+ *   │    │  └ title (mono 13 / 600)
+ *   │    └ severity code letter (E/W/I — like TS2345 / clippy::lint / etc)
+ *   └ selection checkbox (or green Check glyph when submitted)
+ *
+ * Wraps SpecRow; consumes it via snippets for icon/label/preview. File
+ * paths and step chips live in the expanded body's "references" section
+ * so the clickable row stays clean — no nested click targets.
+ * Selection checkbox must NOT bubble to the SpecRow trigger (otherwise
+ * checking a box would also expand the row, which feels hostile).
+ */
+import { Check } from "@lucide/svelte";
+import type { WalkthroughBlock, WalkthroughIssue } from "@revv/shared";
+import SpecRow, { type SpecRowState } from "../shared/SpecRow.svelte";
+import IssueExpandedBody from "./IssueExpandedBody.svelte";
 
-    interface Props {
-        issue: WalkthroughIssue;
-        /** Is the checkbox ticked? Drives submit-review selection. */
-        selected: boolean;
-        /** Already posted to GitHub — row is dimmed, can't expand, checkbox
-         *  replaced by a green Check glyph. */
-        submitted: boolean;
-        /** Controlled expanded state. */
-        open: boolean;
-        /** Index within the current filtered list — used for cascade-entry
-         *  animation staggering. Capped at 6 in the parent so we don't
-         *  wait forever on long lists. */
-        index: number;
-        /** Fired when the user ticks/unticks the checkbox. */
-        onToggleSelect: () => void;
-        /** Fired when the user clicks the row body (expand/collapse). */
-        onToggleOpen: () => void;
-        /** Jump to diff line when the FileBadge is clicked. */
-        onFileClick?: ((filePath: string, line: number) => void) | undefined;
-        /** Called on mount with the trigger element — the parent uses this
-         *  to build a non-reactive map of refs for keyboard navigation.
-         *  Also called with `null` on unmount so the map stays clean. */
-        onTriggerRef?: ((el: HTMLElement | null) => void) | undefined;
-        /** All walkthrough blocks — used to resolve blockIds to step numbers. */
-        blocks: WalkthroughBlock[];
-        /** Jump to a walkthrough block by id. Chips are only rendered when
-         *  this callback is supplied AND the issue has blockIds. */
-        onBlockJump?: ((blockId: string) => void) | undefined;
-    }
+interface Props {
+  issue: WalkthroughIssue;
+  /** Is the checkbox ticked? Drives submit-review selection. */
+  selected: boolean;
+  /** Already posted to GitHub — row is dimmed, can't expand, checkbox
+   *  replaced by a green Check glyph. */
+  submitted: boolean;
+  /** Controlled expanded state. */
+  open: boolean;
+  /** Index within the current filtered list — used for cascade-entry
+   *  animation staggering. Capped at 6 in the parent so we don't
+   *  wait forever on long lists. */
+  index: number;
+  /** Fired when the user ticks/unticks the checkbox. */
+  onToggleSelect: () => void;
+  /** Fired when the user clicks the row body (expand/collapse). */
+  onToggleOpen: () => void;
+  /** Jump to diff line when the FileBadge is clicked. */
+  onFileClick?: ((filePath: string, line: number) => void) | undefined;
+  /** Called on mount with the trigger element — the parent uses this
+   *  to build a non-reactive map of refs for keyboard navigation.
+   *  Also called with `null` on unmount so the map stays clean. */
+  onTriggerRef?: ((el: HTMLElement | null) => void) | undefined;
+  /** All walkthrough blocks — used to resolve blockIds to step numbers. */
+  blocks: WalkthroughBlock[];
+  /** Jump to a walkthrough block by id. Chips are only rendered when
+   *  this callback is supplied AND the issue has blockIds. */
+  onBlockJump?: ((blockId: string) => void) | undefined;
+}
 
-    let {
-        issue,
-        selected,
-        submitted,
-        open,
-        index,
-        onToggleSelect,
-        onToggleOpen,
-        onFileClick,
-        onTriggerRef,
-        blocks,
-        onBlockJump,
-    }: Props = $props();
+let {
+  issue,
+  selected,
+  submitted,
+  open,
+  index,
+  onToggleSelect,
+  onToggleOpen,
+  onFileClick,
+  onTriggerRef,
+  blocks,
+  onBlockJump,
+}: Props = $props();
 
-    // Forward the trigger ref from SpecRow up to the panel parent. Using a
-    // local $state so the $effect below runs whenever SpecRow assigns it.
-    let triggerRef = $state<HTMLElement | null>(null);
+// Forward the trigger ref from SpecRow up to the panel parent. Using a
+// local $state so the $effect below runs whenever SpecRow assigns it.
+let triggerRef = $state<HTMLElement | null>(null);
 
-    $effect(() => {
-        onTriggerRef?.(triggerRef);
-        return () => onTriggerRef?.(null);
-    });
+$effect(() => {
+  onTriggerRef?.(triggerRef);
+  return () => onTriggerRef?.(null);
+});
 
-    // Two-char severity code, like a compiler error prefix. Kept tabular
-    // so rows line up vertically regardless of which severities are present.
-    const severityCode: Record<WalkthroughIssue["severity"], string> = {
-        critical: "E",
-        warning: "W",
-        info: "I",
-    };
+// Two-char severity code, like a compiler error prefix. Kept tabular
+// so rows line up vertically regardless of which severities are present.
+const severityCode: Record<WalkthroughIssue["severity"], string> = {
+  critical: "E",
+  warning: "W",
+  info: "I",
+};
 
-    const severityLabels: Record<WalkthroughIssue["severity"], string> = {
-        critical: "Critical",
-        warning: "Warning",
-        info: "Info",
-    };
+const severityLabels: Record<WalkthroughIssue["severity"], string> = {
+  critical: "Critical",
+  warning: "Warning",
+  info: "Info",
+};
 
-    const ariaLabel = $derived(
-        `${severityLabels[issue.severity]}: ${issue.title}` +
-            (submitted ? " (posted)" : ""),
-    );
+const ariaLabel = $derived(
+  `${severityLabels[issue.severity]}: ${issue.title}${submitted ? " (posted)" : ""}`,
+);
 
-    // Cascade-entry delay. Cap at 6 so long lists resolve quickly.
-    const delay = $derived(`${Math.min(index, 6) * 50}ms`);
+// Cascade-entry delay. Cap at 6 so long lists resolve quickly.
+const delay = $derived(`${Math.min(index, 6) * 50}ms`);
 
-    // SpecRow lifecycle: submitted rows render as "submitted" (dimmed, no
-    // expand); everything else is "resolved" (the normal steady state).
-    // Deliberately named `rowState` — avoid `state` which collides with
-    // the Svelte $state rune name in svelte-check's flow analysis.
-    const rowState: SpecRowState = $derived(submitted ? "submitted" : "resolved");
+// SpecRow lifecycle: submitted rows render as "submitted" (dimmed, no
+// expand); everything else is "resolved" (the normal steady state).
+// Deliberately named `rowState` — avoid `state` which collides with
+// the Svelte $state rune name in svelte-check's flow analysis.
+const rowState: SpecRowState = $derived(submitted ? "submitted" : "resolved");
 
-    function handleCheckboxChange(e: Event): void {
-        e.stopPropagation();
-        if (submitted) return;
-        onToggleSelect();
-    }
+function handleCheckboxChange(e: Event): void {
+  e.stopPropagation();
+  if (submitted) return;
+  onToggleSelect();
+}
 
-    function handleCheckboxClick(e: MouseEvent): void {
-        // Stop the click bubbling up to the SpecRow trigger — otherwise
-        // toggling selection would also expand/collapse the row.
-        e.stopPropagation();
-    }
+function handleCheckboxClick(e: MouseEvent): void {
+  // Stop the click bubbling up to the SpecRow trigger — otherwise
+  // toggling selection would also expand/collapse the row.
+  e.stopPropagation();
+}
 </script>
 
 <div

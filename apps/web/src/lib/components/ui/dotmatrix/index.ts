@@ -3,12 +3,12 @@
 // variants ported from https://dotmatrix.zzzzshawn.cloud — flow through the
 // same registry and component dispatch.
 
-export { default as Dotmatrix } from './Dotmatrix.svelte';
+export { default as Dotmatrix } from "./Dotmatrix.svelte";
+export { squareVariantForId } from "./random";
 export {
-	DOTMATRIX_VARIANTS,
-	DOTMATRIX_VARIANT_KEYS,
-	type DotmatrixVariant,
-	type VariantConfig,
-	type PerDotConfig,
-} from './variants';
-export { squareVariantForId } from './random';
+  DOTMATRIX_VARIANT_KEYS,
+  DOTMATRIX_VARIANTS,
+  type DotmatrixVariant,
+  type PerDotConfig,
+  type VariantConfig,
+} from "./variants";

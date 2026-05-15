@@ -1,243 +1,245 @@
 <script lang="ts">
-	import { page } from '$app/state';
-	import { getSelectedPr, setSelectedPrId } from '$lib/stores/prs.svelte';
-	import { markVisited as markPrVisited } from '$lib/stores/pr-visits.svelte';
-	import {
-	setActiveFilePath,
-	getActiveFilePath,
-	getReviewFiles,
-	getIsLoadingFiles,
-	getFilesError,
-	setReviewFiles,
-	setIsLoadingFiles,
-	setFilesError,
-	clearReviewFiles,
-	loadSession,
-	getActiveTab,
-	switchPrViewState,
-	setLoadedHeadSha,
-	getPrScrollPosition,
-	setPrScrollPosition,
-} from '$lib/stores/review.svelte';
-	import { api } from '$lib/api/client';
-	import ReviewLayout from '$lib/components/review/ReviewLayout.svelte';
-	import GuidedWalkthrough from '$lib/components/walkthrough/GuidedWalkthrough.svelte';
-	import RequestChanges from '$lib/components/review/RequestChanges.svelte';
-	import { deactivate as deactivateWalkthrough, getRiskLevel as getWalkthroughRiskLevel } from '$lib/stores/walkthrough.svelte';
-	import { setScrollRoot } from '$lib/stores/walkthroughNav.svelte';
-	import { requestThreadSync } from '$lib/stores/ws.svelte';
-	import { onDestroy, untrack } from 'svelte';
-	import AuthGuard from '$lib/components/auth/AuthGuard.svelte';
-	import { Badge } from '$lib/components/ui/badge';
+import { onDestroy, untrack } from "svelte";
+import { page } from "$app/state";
+import { api } from "$lib/api/client";
+import AuthGuard from "$lib/components/auth/AuthGuard.svelte";
+import RequestChanges from "$lib/components/review/RequestChanges.svelte";
+import ReviewLayout from "$lib/components/review/ReviewLayout.svelte";
+import { Badge } from "$lib/components/ui/badge";
+import GuidedWalkthrough from "$lib/components/walkthrough/GuidedWalkthrough.svelte";
+import { markVisited as markPrVisited } from "$lib/stores/pr-visits.svelte";
+import { getSelectedPr, setSelectedPrId } from "$lib/stores/prs.svelte";
+import {
+  clearReviewFiles,
+  getActiveFilePath,
+  getActiveTab,
+  getFilesError,
+  getIsLoadingFiles,
+  getPrScrollPosition,
+  getReviewFiles,
+  loadSession,
+  setActiveFilePath,
+  setFilesError,
+  setIsLoadingFiles,
+  setLoadedHeadSha,
+  setPrScrollPosition,
+  setReviewFiles,
+  switchPrViewState,
+} from "$lib/stores/review.svelte";
+import {
+  deactivate as deactivateWalkthrough,
+  getRiskLevel as getWalkthroughRiskLevel,
+} from "$lib/stores/walkthrough.svelte";
+import { setScrollRoot } from "$lib/stores/walkthroughNav.svelte";
+import { requestThreadSync } from "$lib/stores/ws.svelte";
 
-	const pr = $derived(getSelectedPr());
-	const files = $derived(getReviewFiles());
-	const isLoading = $derived(getIsLoadingFiles());
-	const loadError = $derived(getFilesError());
-	const activeTab = $derived(getActiveTab());
-	const walkthroughRiskLevel = $derived(getWalkthroughRiskLevel());
+const pr = $derived(getSelectedPr());
+const files = $derived(getReviewFiles());
+const isLoading = $derived(getIsLoadingFiles());
+const loadError = $derived(getFilesError());
+const activeTab = $derived(getActiveTab());
+const walkthroughRiskLevel = $derived(getWalkthroughRiskLevel());
 
-	const riskClasses: Record<string, string> = {
-		low: 'risk-badge risk-badge--low',
-		medium: 'risk-badge risk-badge--medium',
-		high: 'risk-badge risk-badge--high',
-	};
+const riskClasses: Record<string, string> = {
+  low: "risk-badge risk-badge--low",
+  medium: "risk-badge risk-badge--medium",
+  high: "risk-badge risk-badge--high",
+};
 
-	let scrollRootEl: HTMLDivElement | undefined = $state(undefined);
+let scrollRootEl: HTMLDivElement | undefined = $state(undefined);
 
-	// Per-PR scroll persistence for the walkthrough / request-changes tabs.
-	// (Diff tab has its own scroll container inside ReviewLayout.svelte and
-	// persists itself there.) The `prViewStates` map in `review.svelte.ts` is
-	// the single source of truth: `handleScrollRootScroll` writes on every
-	// scroll, the `$effect` below restores once per (prId, tab) change.
-	function tabScrollKey(tab: string): 'walkthrough' | 'requestChanges' | null {
-		if (tab === 'walkthrough') return 'walkthrough';
-		if (tab === 'request-changes') return 'requestChanges';
-		return null;
-	}
+// Per-PR scroll persistence for the walkthrough / request-changes tabs.
+// (Diff tab has its own scroll container inside ReviewLayout.svelte and
+// persists itself there.) The `prViewStates` map in `review.svelte.ts` is
+// the single source of truth: `handleScrollRootScroll` writes on every
+// scroll, the `$effect` below restores once per (prId, tab) change.
+function tabScrollKey(tab: string): "walkthrough" | "requestChanges" | null {
+  if (tab === "walkthrough") return "walkthrough";
+  if (tab === "request-changes") return "requestChanges";
+  return null;
+}
 
-	// Latch: the scroll handler fires immediately when we restore (because
-	// setting scrollTop emits a 'scroll' event), which would clobber the
-	// freshly-restored value with whatever the *previous* PR's scrollTop
-	// happened to be at that microtask. Suppress one event per restore.
-	let suppressNextScroll = false;
+// Latch: the scroll handler fires immediately when we restore (because
+// setting scrollTop emits a 'scroll' event), which would clobber the
+// freshly-restored value with whatever the *previous* PR's scrollTop
+// happened to be at that microtask. Suppress one event per restore.
+let suppressNextScroll = false;
 
-	function handleScrollRootScroll(): void {
-		if (suppressNextScroll) {
-			suppressNextScroll = false;
-			return;
-		}
-		const tab = activeTab;
-		const prId = page.params['prId'];
-		if (!scrollRootEl || tab === 'diff' || !prId) return;
-		const key = tabScrollKey(tab);
-		if (key) setPrScrollPosition(prId, key, scrollRootEl.scrollTop);
-	}
+function handleScrollRootScroll(): void {
+  if (suppressNextScroll) {
+    suppressNextScroll = false;
+    return;
+  }
+  const tab = activeTab;
+  const prId = page.params.prId;
+  if (!scrollRootEl || tab === "diff" || !prId) return;
+  const key = tabScrollKey(tab);
+  if (key) setPrScrollPosition(prId, key, scrollRootEl.scrollTop);
+}
 
-	// Restore AFTER the DOM update (container is now visible again).
-	// Re-runs on tab change AND on PR change — both flows need to land at
-	// the right scroll offset. `restoredFor` keys on `${prId}:${tab}` so
-	// repeated reactive ticks for the same active tab don't refight the
-	// user's scrolling. We MUST clear it when the user passes through the
-	// diff tab: diff hides `.review-content` via display:none, and browsers
-	// don't reliably preserve scrollTop across that toggle — the re-entry
-	// into walkthrough/request-changes needs a fresh restore, otherwise
-	// the stamp would still match and we'd land at the top.
-	let restoredFor: string | null = null;
-	$effect(() => {
-		const tab = activeTab;
-		const prId = page.params['prId'];
-		if (!scrollRootEl || !prId) return;
-		if (tab === 'diff') {
-			restoredFor = null;
-			return;
-		}
-		const stamp = `${prId}:${tab}`;
-		if (stamp === restoredFor) return;
-		restoredFor = stamp;
-		const key = tabScrollKey(tab);
-		const saved = key ? getPrScrollPosition(prId, key) : 0;
-		suppressNextScroll = true;
-		scrollRootEl.scrollTop = saved;
-	});
+// Restore AFTER the DOM update (container is now visible again).
+// Re-runs on tab change AND on PR change — both flows need to land at
+// the right scroll offset. `restoredFor` keys on `${prId}:${tab}` so
+// repeated reactive ticks for the same active tab don't refight the
+// user's scrolling. We MUST clear it when the user passes through the
+// diff tab: diff hides `.review-content` via display:none, and browsers
+// don't reliably preserve scrollTop across that toggle — the re-entry
+// into walkthrough/request-changes needs a fresh restore, otherwise
+// the stamp would still match and we'd land at the top.
+let restoredFor: string | null = null;
+$effect(() => {
+  const tab = activeTab;
+  const prId = page.params.prId;
+  if (!scrollRootEl || !prId) return;
+  if (tab === "diff") {
+    restoredFor = null;
+    return;
+  }
+  const stamp = `${prId}:${tab}`;
+  if (stamp === restoredFor) return;
+  restoredFor = stamp;
+  const key = tabScrollKey(tab);
+  const saved = key ? getPrScrollPosition(prId, key) : 0;
+  suppressNextScroll = true;
+  scrollRootEl.scrollTop = saved;
+});
 
-	// Register the scroll container with the walkthrough-nav store so the
-	// floating Top / Rating buttons in AppShell can scroll it without
-	// having to reach across components for the DOM ref.
-	$effect(() => {
-		setScrollRoot(scrollRootEl ?? null);
-		return () => setScrollRoot(null);
-	});
+// Register the scroll container with the walkthrough-nav store so the
+// floating Top / Rating buttons in AppShell can scroll it without
+// having to reach across components for the DOM ref.
+$effect(() => {
+  setScrollRoot(scrollRootEl ?? null);
+  return () => setScrollRoot(null);
+});
 
-	// Record the visit against the current head SHA so the sidebar dot
-	// clears now and only reappears if a new commit lands on this PR.
-	// Waits until the PR row is loaded for the route id — initial deep-link
-	// loads call setSelectedPrId() before fetchPrs() has populated the store.
-	$effect(() => {
-		const current = pr;
-		const routeId = page.params['prId'];
-		if (!current || !routeId || current.id !== routeId) return;
-		markPrVisited(current.id, current.headSha ?? null);
-	});
+// Record the visit against the current head SHA so the sidebar dot
+// clears now and only reappears if a new commit lands on this PR.
+// Waits until the PR row is loaded for the route id — initial deep-link
+// loads call setSelectedPrId() before fetchPrs() has populated the store.
+$effect(() => {
+  const current = pr;
+  const routeId = page.params.prId;
+  if (!current || !routeId || current.id !== routeId) return;
+  markPrVisited(current.id, current.headSha ?? null);
+});
 
-	let currentRequestId = 0;
+let currentRequestId = 0;
 
-	// Phase 1 stopgap: avoid refetching diff files when the user bounces back to
-	// the same PR within a minute. Replaced by queryStore in Phase 3.
-	let lastLoadedPrId: string | null = null;
-	let lastLoadedAt = 0;
-	const PR_REFETCH_WINDOW_MS = 60_000;
+// Phase 1 stopgap: avoid refetching diff files when the user bounces back to
+// the same PR within a minute. Replaced by queryStore in Phase 3.
+let lastLoadedPrId: string | null = null;
+let lastLoadedAt = 0;
+const PR_REFETCH_WINDOW_MS = 60_000;
 
-	$effect(() => {
-		const prId = page.params['prId'];
-		if (!prId) return;
+$effect(() => {
+  const prId = page.params.prId;
+  if (!prId) return;
 
-		// Everything below mutates store state. Calls like `clearReviewFiles()`
-		// invoke `clearSession()`, which does `threadsVersion++` — a read-then-
-		// write on $state. Inside an untracked block, that read doesn't subscribe
-		// the effect to threadsVersion, so the write can't re-trigger us.
-		untrack(() => {
-			// Bump request ID so any in-flight fetch for a previous PR is ignored
-			const requestId = ++currentRequestId;
+  // Everything below mutates store state. Calls like `clearReviewFiles()`
+  // invoke `clearSession()`, which does `threadsVersion++` — a read-then-
+  // write on $state. Inside an untracked block, that read doesn't subscribe
+  // the effect to threadsVersion, so the write can't re-trigger us.
+  untrack(() => {
+    // Bump request ID so any in-flight fetch for a previous PR is ignored
+    const requestId = ++currentRequestId;
 
-			setSelectedPrId(prId);
-			switchPrViewState(prId);
-			requestThreadSync(prId);
+    setSelectedPrId(prId);
+    switchPrViewState(prId);
+    requestThreadSync(prId);
 
-			// Short-circuit: same PR, recent load, files still in memory —
-			// keep rendering what's there. A WS `cache:invalidated` (Phase 3)
-			// or a hard refresh will bust this.
-			const now = Date.now();
-			const currentFiles = getReviewFiles();
-			if (
-				prId === lastLoadedPrId &&
-				now - lastLoadedAt < PR_REFETCH_WINDOW_MS &&
-				currentFiles.length > 0
-			) {
-				// Still kick off a session load so thread-counts refresh; cheap.
-				loadSession(prId).catch((e) =>
-					console.error('[review] Session load failed (non-blocking):', e),
-				);
-				return;
-			}
+    // Short-circuit: same PR, recent load, files still in memory —
+    // keep rendering what's there. A WS `cache:invalidated` (Phase 3)
+    // or a hard refresh will bust this.
+    const now = Date.now();
+    const currentFiles = getReviewFiles();
+    if (
+      prId === lastLoadedPrId &&
+      now - lastLoadedAt < PR_REFETCH_WINDOW_MS &&
+      currentFiles.length > 0
+    ) {
+      // Still kick off a session load so thread-counts refresh; cheap.
+      loadSession(prId).catch((e) =>
+        console.error("[review] Session load failed (non-blocking):", e),
+      );
+      return;
+    }
 
-			clearReviewFiles();
-			setIsLoadingFiles(true);
+    clearReviewFiles();
+    setIsLoadingFiles(true);
 
-			(async () => {
-			try {
-				// Fetch the PR's "Files changed" diff directly from GitHub via the
-				// server. The diff is always baseSha...headSha (merge-base, 3-dot),
-				// matching GitHub's "Files changed" tab. There is no per-commit
-				// selection — the dropdown is read-only.
-				const [filesResult] = await Promise.all([
-					api.api.prs({ id: prId }).files.get(),
-					loadSession(prId).catch((e) =>
-						console.error('[review] Session load failed (non-blocking):', e)
-					),
-				]);
+    (async () => {
+      try {
+        // Fetch the PR's "Files changed" diff directly from GitHub via the
+        // server. The diff is always baseSha...headSha (merge-base, 3-dot),
+        // matching GitHub's "Files changed" tab. There is no per-commit
+        // selection — the dropdown is read-only.
+        const [filesResult] = await Promise.all([
+          api.api.prs({ id: prId }).files.get(),
+          loadSession(prId).catch((e) =>
+            console.error("[review] Session load failed (non-blocking):", e),
+          ),
+        ]);
 
-				if (requestId !== currentRequestId) return;
+        if (requestId !== currentRequestId) return;
 
-				const { data, error } = filesResult;
-				if (error) throw new Error('Failed to fetch PR files');
-				if (Array.isArray(data)) {
-					const mapped = data.map((f) => ({
-						path: f.path,
-						patch: f.patch ?? null,
-						additions: f.additions,
-						deletions: f.deletions,
-						...(f.oldPath ? { oldPath: f.oldPath } : {}),
-						...(f.isNew ? { isNew: true as const } : {}),
-						...(f.isDeleted ? { isDeleted: true as const } : {}),
-					}));
-					setReviewFiles(mapped);
-					if (mapped.length > 0) {
-						// Honor the restored per-PR active file when it still exists in
-						// the new diff. First-visits (path is null) and stale paths fall
-						// back to file[0].
-						const restored = getActiveFilePath();
-						const stillExists =
-							restored !== null && mapped.some((f) => f.path === restored);
-						if (!stillExists) {
-							setActiveFilePath(mapped[0]!.path);
-						}
-					}
-					// Stamp the SHA the diff was loaded against so the FloatingTabs
-					// dot can detect when a later `prs:updated` swaps in a newer one.
-					// Reading from the store captures any `prs:updated` that merged
-					// mid-fetch — the server has already re-cached the diff against
-					// that same SHA, so they agree.
-					const currentPr = getSelectedPr();
-					if (currentPr?.id === prId && currentPr.headSha) {
-						setLoadedHeadSha(prId, currentPr.headSha);
-					}
-					lastLoadedPrId = prId;
-					lastLoadedAt = Date.now();
-				}
-			} catch (e) {
-				if (requestId !== currentRequestId) return;
-				setFilesError(e instanceof Error ? e.message : 'Failed to load diff');
-			} finally {
-				if (requestId === currentRequestId) setIsLoadingFiles(false);
-			}
-		})();
-		});
-	});
+        const { data, error } = filesResult;
+        if (error) throw new Error("Failed to fetch PR files");
+        if (Array.isArray(data)) {
+          const mapped = data.map((f) => ({
+            path: f.path,
+            patch: f.patch ?? null,
+            additions: f.additions,
+            deletions: f.deletions,
+            ...(f.oldPath ? { oldPath: f.oldPath } : {}),
+            ...(f.isNew ? { isNew: true as const } : {}),
+            ...(f.isDeleted ? { isDeleted: true as const } : {}),
+          }));
+          setReviewFiles(mapped);
+          if (mapped.length > 0) {
+            // Honor the restored per-PR active file when it still exists in
+            // the new diff. First-visits (path is null) and stale paths fall
+            // back to file[0].
+            const restored = getActiveFilePath();
+            const stillExists = restored !== null && mapped.some((f) => f.path === restored);
+            if (!stillExists) {
+              // biome-ignore lint/style/noNonNullAssertion: mapped is non-empty here
+              setActiveFilePath(mapped[0]!.path);
+            }
+          }
+          // Stamp the SHA the diff was loaded against so the FloatingTabs
+          // dot can detect when a later `prs:updated` swaps in a newer one.
+          // Reading from the store captures any `prs:updated` that merged
+          // mid-fetch — the server has already re-cached the diff against
+          // that same SHA, so they agree.
+          const currentPr = getSelectedPr();
+          if (currentPr?.id === prId && currentPr.headSha) {
+            setLoadedHeadSha(prId, currentPr.headSha);
+          }
+          lastLoadedPrId = prId;
+          lastLoadedAt = Date.now();
+        }
+      } catch (e) {
+        if (requestId !== currentRequestId) return;
+        setFilesError(e instanceof Error ? e.message : "Failed to load diff");
+      } finally {
+        if (requestId === currentRequestId) setIsLoadingFiles(false);
+      }
+    })();
+  });
+});
 
-	onDestroy(() => {
-		// Invalidate any in-flight request and clean up store state
-		currentRequestId++;
-		clearReviewFiles();
-		// Drops the SSE subscription for this PR (so the controllers map
-		// doesn't keep an orphaned, possibly-stalled handle that would block
-		// the next mount from opening a fresh stream). The server-side job
-		// keeps running — walkthrough generation is decoupled from which PR
-		// is on screen, so two concurrent walkthroughs progress in parallel
-		// even after navigating between them.
-		deactivateWalkthrough();
-	});
-
+onDestroy(() => {
+  // Invalidate any in-flight request and clean up store state
+  currentRequestId++;
+  clearReviewFiles();
+  // Drops the SSE subscription for this PR (so the controllers map
+  // doesn't keep an orphaned, possibly-stalled handle that would block
+  // the next mount from opening a fresh stream). The server-side job
+  // keeps running — walkthrough generation is decoupled from which PR
+  // is on screen, so two concurrent walkthroughs progress in parallel
+  // even after navigating between them.
+  deactivateWalkthrough();
+});
 </script>
 
 <AuthGuard>

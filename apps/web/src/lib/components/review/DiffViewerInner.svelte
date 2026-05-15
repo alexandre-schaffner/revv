@@ -1,15 +1,15 @@
 <script lang="ts" module>
-	// ── ThreadMeta ─────────────────────────────────────────────────────────────
-	// Exported so DiffViewer can import and use the same type.
-	export interface ThreadMeta {
-		threadId: string;
-		status: string;
-		messageCount: number;
-		isExpanded: boolean;
-		isInputActive: boolean;
-		isReplying: boolean;
-		isPending: boolean;
-	}
+// ── ThreadMeta ─────────────────────────────────────────────────────────────
+// Exported so DiffViewer can import and use the same type.
+export interface ThreadMeta {
+  threadId: string;
+  status: string;
+  messageCount: number;
+  isExpanded: boolean;
+  isInputActive: boolean;
+  isReplying: boolean;
+  isPending: boolean;
+}
 </script>
 
 <script lang="ts">

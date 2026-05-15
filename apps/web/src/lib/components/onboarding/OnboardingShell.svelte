@@ -1,52 +1,66 @@
 <script lang="ts">
-	import type { Snippet } from 'svelte';
-	import { Sun, Moon, Monitor } from '@lucide/svelte';
-	import { Dotmatrix, type DotmatrixVariant } from '$lib/components/ui/dotmatrix';
-	import { getThemePreference, setThemePreference, type ThemePreference } from '$lib/stores/theme.svelte';
+import { Monitor, Moon, Sun } from "@lucide/svelte";
+import type { Snippet } from "svelte";
+import { Dotmatrix, type DotmatrixVariant } from "$lib/components/ui/dotmatrix";
+import {
+  getThemePreference,
+  setThemePreference,
+  type ThemePreference,
+} from "$lib/stores/theme.svelte";
 
-	/**
-	 * Cinematic frame for the onboarding flow. Calm, dark, type-led: a
-	 * book-chapter feel rather than a SaaS welcome modal. Owns the
-	 * letterboxed canvas, a small persistent brand glyph, a chapter label,
-	 * the serif title, and a tiny dotmatrix that ticks in the corner so
-	 * the page never feels static.
-	 *
-	 * Everything below the chapter label flows from `children`; the shell
-	 * itself never pushes a card or a shadow — visual hierarchy comes from
-	 * typography and breathing room, not container chrome.
-	 */
+/**
+ * Cinematic frame for the onboarding flow. Calm, dark, type-led: a
+ * book-chapter feel rather than a SaaS welcome modal. Owns the
+ * letterboxed canvas, a small persistent brand glyph, a chapter label,
+ * the serif title, and a tiny dotmatrix that ticks in the corner so
+ * the page never feels static.
+ *
+ * Everything below the chapter label flows from `children`; the shell
+ * itself never pushes a card or a shadow — visual hierarchy comes from
+ * typography and breathing room, not container chrome.
+ */
 
-	type StepId = 'welcome' | 'host' | 'signin' | 'repo' | 'done';
+type StepId = "welcome" | "host" | "signin" | "repo" | "done";
 
-	interface Props {
-		stepId: StepId;
-		stepIndex: number;
-		totalSteps: number;
-		chapter: string;
-		title: string;
-		titleItalic?: string | undefined;
-		spinnerVariant?: DotmatrixVariant | undefined;
-		children: Snippet;
-	}
+interface Props {
+  stepId: StepId;
+  stepIndex: number;
+  totalSteps: number;
+  chapter: string;
+  title: string;
+  titleItalic?: string | undefined;
+  spinnerVariant?: DotmatrixVariant | undefined;
+  children: Snippet;
+}
 
-	let {
-		stepId,
-		stepIndex,
-		totalSteps,
-		chapter,
-		title,
-		titleItalic,
-		spinnerVariant = 'square-3',
-		children,
-	}: Props = $props();
+let {
+  stepId,
+  stepIndex,
+  totalSteps,
+  chapter,
+  title,
+  titleItalic,
+  spinnerVariant = "square-3",
+  children,
+}: Props = $props();
 
-	let pageNumber = $derived(String(stepIndex + 1).padStart(2, '0'));
-	let pageTotal = $derived(String(totalSteps).padStart(2, '0'));
+let pageNumber = $derived(String(stepIndex + 1).padStart(2, "0"));
+let pageTotal = $derived(String(totalSteps).padStart(2, "0"));
 
-	const theme = $derived(getThemePreference());
-	const cycle: Record<ThemePreference, ThemePreference> = { system: 'light', light: 'dark', dark: 'system' };
-	const labels: Record<ThemePreference, string> = { system: 'System theme', light: 'Light theme', dark: 'Dark theme' };
-	function cycleTheme() { setThemePreference(cycle[theme]); }
+const theme = $derived(getThemePreference());
+const cycle: Record<ThemePreference, ThemePreference> = {
+  system: "light",
+  light: "dark",
+  dark: "system",
+};
+const labels: Record<ThemePreference, string> = {
+  system: "System theme",
+  light: "Light theme",
+  dark: "Dark theme",
+};
+function cycleTheme() {
+  setThemePreference(cycle[theme]);
+}
 </script>
 
 <div class="onboarding-shell" data-step={stepId}>

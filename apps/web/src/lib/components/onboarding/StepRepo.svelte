@@ -1,211 +1,230 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
-	import { ChevronLeft } from '@lucide/svelte';
-	import type { Repository } from '@revv/shared';
-	import { Dotmatrix } from '$lib/components/ui/dotmatrix';
-	import {
-		addRepo,
-		getRepositories,
-		getAvailableRepos,
-		getAvailableReposLoading,
-		getAvailableReposFetchFailed,
-		fetchAvailableRepos,
-	} from '$lib/stores/prs.svelte';
+import { ChevronLeft } from "@lucide/svelte";
+import type { Repository } from "@revv/shared";
+import { toast } from "svelte-sonner";
+import { untrack } from "svelte";
+import { Dotmatrix } from "$lib/components/ui/dotmatrix";
+import {
+  addRepo,
+  fetchAvailableRepos,
+  getAvailableRepos,
+  getAvailableReposFetchFailed,
+  getAvailableReposLoading,
+  getRepositories,
+} from "$lib/stores/prs.svelte";
 
-	interface Props {
-		onContinue: () => void;
-		onBack?: () => void;
-		onSkip?: () => void;
-		isGhe?: boolean;
-	}
+interface Props {
+  onContinue: () => void;
+  onBack?: () => void;
+  onSkip?: () => void;
+  isGhe?: boolean;
+}
 
-	let { onContinue, onBack, onSkip, isGhe = false }: Props = $props();
+let { onContinue, onBack, onSkip, isGhe = false }: Props = $props();
 
-	let search = $state('');
-	let isAdding = $state(false);
-	let addingRepoName = $state<string | null>(null);
-	let waitingForClone = $state(false);
-	let highlightedIndex = $state(0);
-	let cloneTimeoutId = $state<ReturnType<typeof setTimeout> | null>(null);
-	let skipWaitingTimeoutId = $state<ReturnType<typeof setTimeout> | null>(null);
-	let showSkipWaiting = $state(false);
-	let autoRetries = $state(0);
-	const MAX_AUTO_RETRIES = 3;
-	const AUTO_RETRY_DELAY_MS = 2000;
+let search = $state("");
+let isAdding = $state(false);
+let addingRepoName = $state<string | null>(null);
+let waitingForClone = $state(false);
+let highlightedIndex = $state(0);
+let cloneTimeoutId = $state<ReturnType<typeof setTimeout> | null>(null);
+let skipWaitingTimeoutId = $state<ReturnType<typeof setTimeout> | null>(null);
+let showSkipWaiting = $state(false);
+let autoRetries = $state(0);
+const MAX_AUTO_RETRIES = 3;
+const AUTO_RETRY_DELAY_MS = 2000;
 
-	function focusOnMount(node: HTMLInputElement) {
-		// Wrapped in rAF so the focus call runs after the step animation
-		// has begun — focusing while the parent is still mid-translate can
-		// land the cursor at the wrong scroll position on some browsers.
-		requestAnimationFrame(() => node.focus());
-	}
+function focusOnMount(node: HTMLInputElement) {
+  // Wrapped in rAF so the focus call runs after the step animation
+  // has begun — focusing while the parent is still mid-translate can
+  // land the cursor at the wrong scroll position on some browsers.
+  requestAnimationFrame(() => node.focus());
+}
 
-	$effect(() => {
-		if (getAvailableRepos().length === 0 && !getAvailableReposLoading() && !getAvailableReposFetchFailed()) {
-			fetchAvailableRepos();
-		}
-	});
+$effect(() => {
+  if (
+    getAvailableRepos().length === 0 &&
+    !getAvailableReposLoading() &&
+    !getAvailableReposFetchFailed()
+  ) {
+    fetchAvailableRepos();
+  }
+});
 
-	// Auto-retry: after a fresh sign-in the GitHub token may not be fully
-	// propagated yet, or the server may briefly 401 during the race between
-	// setToken() and loadUser(). Retry a few times with a delay before
-	// falling back to the manual "Retry" button.
-	$effect(() => {
-		if (!getAvailableReposFetchFailed()) return;
-		if (autoRetries >= MAX_AUTO_RETRIES) return;
-		const timer = setTimeout(() => {
-			autoRetries++;
-			fetchAvailableRepos(true);
-		}, AUTO_RETRY_DELAY_MS);
-		return () => clearTimeout(timer);
-	});
+// Auto-retry: after a fresh sign-in the GitHub token may not be fully
+// propagated yet, or the server may briefly 401 during the race between
+// setToken() and loadUser(). Retry a few times with a delay before
+// falling back to the manual "Retry" button.
+$effect(() => {
+  if (!getAvailableReposFetchFailed()) return;
+  if (autoRetries >= MAX_AUTO_RETRIES) return;
+  const timer = setTimeout(() => {
+    autoRetries++;
+    fetchAvailableRepos(true);
+  }, AUTO_RETRY_DELAY_MS);
+  return () => clearTimeout(timer);
+});
 
-	// Pre-fill search with the most common org so the list is scoped
-	$effect(() => {
-		const repos = getAvailableRepos();
-		if (repos.length === 0 || untrack(() => search) !== '') return;
-		// Find the most common owner
-		const counts = new Map<string, number>();
-		for (const r of repos) {
-			counts.set(r.owner, (counts.get(r.owner) ?? 0) + 1);
-		}
-		let topOwner = '';
-		let topCount = 0;
-		for (const [owner, count] of counts) {
-			if (count > topCount) {
-				topOwner = owner;
-				topCount = count;
-			}
-		}
-		// Only pre-fill if the top org owns a clear majority (>50% of repos)
-		// to avoid confusing pre-selection when the user has many personal repos
-		if (topOwner && topCount > repos.length / 2) {
-			search = topOwner;
-		}
-	});
+// Pre-fill search with the most common org so the list is scoped
+$effect(() => {
+  const repos = getAvailableRepos();
+  if (repos.length === 0 || untrack(() => search) !== "") return;
+  // Find the most common owner
+  const counts = new Map<string, number>();
+  for (const r of repos) {
+    counts.set(r.owner, (counts.get(r.owner) ?? 0) + 1);
+  }
+  let topOwner = "";
+  let topCount = 0;
+  for (const [owner, count] of counts) {
+    if (count > topCount) {
+      topOwner = owner;
+      topCount = count;
+    }
+  }
+  // Only pre-fill if the top org owns a clear majority (>50% of repos)
+  // to avoid confusing pre-selection when the user has many personal repos
+  if (topOwner && topCount > repos.length / 2) {
+    search = topOwner;
+  }
+});
 
-	// Watch clone status and advance (or unblock) once the repo is ready or errored.
-	$effect(() => {
-		if (!waitingForClone || !addingRepoName) return;
-		const repos = getRepositories();
-		const added = repos.find((r) => r.fullName === addingRepoName);
-		if (!added) return;
-		const status = added.cloneStatus;
-		if (status === 'ready' || status === 'error') {
-			advanceFromClone();
-		}
-		return () => {
-			if (cloneTimeoutId !== null) clearTimeout(cloneTimeoutId);
-			if (skipWaitingTimeoutId !== null) clearTimeout(skipWaitingTimeoutId);
-		};
-	});
+// Watch clone status and advance (or unblock) once the repo is ready or errored.
+$effect(() => {
+  if (!waitingForClone || !addingRepoName) return;
+  const repos = getRepositories();
+  const added = repos.find((r) => r.fullName === addingRepoName);
+  if (!added) return;
+  const status = added.cloneStatus;
+  if (status === "ready" || status === "error") {
+    advanceFromClone();
+  }
+  return () => {
+    if (cloneTimeoutId !== null) clearTimeout(cloneTimeoutId);
+    if (skipWaitingTimeoutId !== null) clearTimeout(skipWaitingTimeoutId);
+  };
+});
 
-	function advanceFromClone() {
-		if (cloneTimeoutId !== null) {
-			clearTimeout(cloneTimeoutId);
-			cloneTimeoutId = null;
-		}
-		if (skipWaitingTimeoutId !== null) {
-			clearTimeout(skipWaitingTimeoutId);
-			skipWaitingTimeoutId = null;
-		}
-		waitingForClone = false;
-		isAdding = false;
-		addingRepoName = null;
-		showSkipWaiting = false;
-		onContinue();
-	}
+function advanceFromClone() {
+  if (cloneTimeoutId !== null) {
+    clearTimeout(cloneTimeoutId);
+    cloneTimeoutId = null;
+  }
+  if (skipWaitingTimeoutId !== null) {
+    clearTimeout(skipWaitingTimeoutId);
+    skipWaitingTimeoutId = null;
+  }
+  waitingForClone = false;
+  isAdding = false;
+  addingRepoName = null;
+  showSkipWaiting = false;
+  onContinue();
+}
 
-	function startCloneTimeouts() {
-		skipWaitingTimeoutId = setTimeout(() => {
-			showSkipWaiting = true;
-		}, 8000);
-		cloneTimeoutId = setTimeout(() => {
-			advanceFromClone();
-		}, 60000);
-	}
+function startCloneTimeouts() {
+  skipWaitingTimeoutId = setTimeout(() => {
+    showSkipWaiting = true;
+  }, 8000);
+  cloneTimeoutId = setTimeout(() => {
+    advanceFromClone();
+  }, 60000);
+}
 
-	let tracked = $derived(new Set(getRepositories().map((r) => r.fullName)));
+let tracked = $derived(new Set(getRepositories().map((r) => r.fullName)));
 
-	let filtered = $derived.by(() => {
-		const term = search.trim().toLowerCase();
-		const repos = getAvailableRepos();
-		if (!term) return repos.slice(0, 20);
-		return repos
-			.filter(
-				(r) =>
-					r.fullName.toLowerCase().includes(term) ||
-					r.owner.toLowerCase().includes(term) ||
-					r.name.toLowerCase().includes(term),
-			)
-			.slice(0, 20);
-	});
+let filtered = $derived.by(() => {
+  const term = search.trim().toLowerCase();
+  const repos = getAvailableRepos();
+  if (!term) return repos.slice(0, 20);
+  return repos
+    .filter(
+      (r) =>
+        r.fullName.toLowerCase().includes(term) ||
+        r.owner.toLowerCase().includes(term) ||
+        r.name.toLowerCase().includes(term),
+    )
+    .slice(0, 20);
+});
 
-	$effect(() => {
-		// Reset highlight when filter changes
-		search;
-		highlightedIndex = 0;
-	});
+$effect(() => {
+  // Reset highlight when filter changes
+  search;
+  highlightedIndex = 0;
+});
 
-	async function select(repo: Repository) {
-		if (isAdding) return;
-		if (tracked.has(repo.fullName)) {
-			onSkip?.();
-			return;
-		}
-		isAdding = true;
-		addingRepoName = repo.fullName;
-		waitingForClone = true;
-		startCloneTimeouts();
-		try {
-			await addRepo(repo.fullName);
-			// Don't advance here — the clone-status $effect handles it
-		} catch {
-			// If addRepo itself fails, stop waiting
-			waitingForClone = false;
-			isAdding = false;
-			addingRepoName = null;
-			if (cloneTimeoutId !== null) { clearTimeout(cloneTimeoutId); cloneTimeoutId = null; }
-			if (skipWaitingTimeoutId !== null) { clearTimeout(skipWaitingTimeoutId); skipWaitingTimeoutId = null; }
-			showSkipWaiting = false;
-		}
-	}
+async function select(repo: Repository) {
+  if (isAdding) return;
+  if (tracked.has(repo.fullName)) {
+    onSkip?.();
+    return;
+  }
+  isAdding = true;
+  addingRepoName = repo.fullName;
+  waitingForClone = true;
+  startCloneTimeouts();
+  try {
+    await addRepo(repo.fullName);
+    // Don't advance here — the clone-status $effect handles it
+  } catch (e) {
+    // If addRepo itself fails, stop waiting
+    toast.error(e instanceof Error ? e.message : "Failed to add repository");
+    waitingForClone = false;
+    isAdding = false;
+    addingRepoName = null;
+    if (cloneTimeoutId !== null) {
+      clearTimeout(cloneTimeoutId);
+      cloneTimeoutId = null;
+    }
+    if (skipWaitingTimeoutId !== null) {
+      clearTimeout(skipWaitingTimeoutId);
+      skipWaitingTimeoutId = null;
+    }
+    showSkipWaiting = false;
+  }
+}
 
-	async function submitManual(slug: string) {
-		if (isAdding) return;
-		isAdding = true;
-		addingRepoName = slug;
-		waitingForClone = true;
-		startCloneTimeouts();
-		try {
-			await addRepo(slug);
-		} catch {
-			waitingForClone = false;
-			isAdding = false;
-			addingRepoName = null;
-			if (cloneTimeoutId !== null) { clearTimeout(cloneTimeoutId); cloneTimeoutId = null; }
-			if (skipWaitingTimeoutId !== null) { clearTimeout(skipWaitingTimeoutId); skipWaitingTimeoutId = null; }
-			showSkipWaiting = false;
-		}
-	}
+async function submitManual(slug: string) {
+  if (isAdding) return;
+  isAdding = true;
+  addingRepoName = slug;
+  waitingForClone = true;
+  startCloneTimeouts();
+  try {
+    await addRepo(slug);
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : "Failed to add repository");
+    waitingForClone = false;
+    isAdding = false;
+    addingRepoName = null;
+    if (cloneTimeoutId !== null) {
+      clearTimeout(cloneTimeoutId);
+      cloneTimeoutId = null;
+    }
+    if (skipWaitingTimeoutId !== null) {
+      clearTimeout(skipWaitingTimeoutId);
+      skipWaitingTimeoutId = null;
+    }
+    showSkipWaiting = false;
+  }
+}
 
-	function handleKey(e: KeyboardEvent) {
-		if (e.key === 'ArrowDown') {
-			e.preventDefault();
-			highlightedIndex = Math.min(highlightedIndex + 1, filtered.length - 1);
-		} else if (e.key === 'ArrowUp') {
-			e.preventDefault();
-			highlightedIndex = Math.max(highlightedIndex - 1, 0);
-		} else if (e.key === 'Enter') {
-			e.preventDefault();
-			const repo = filtered[highlightedIndex];
-			if (repo) {
-				void select(repo);
-			} else if (search.includes('/') && !isGhe) {
-				void submitManual(search.trim());
-			}
-		}
-	}
+function handleKey(e: KeyboardEvent) {
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    highlightedIndex = Math.min(highlightedIndex + 1, filtered.length - 1);
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    highlightedIndex = Math.max(highlightedIndex - 1, 0);
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    const repo = filtered[highlightedIndex];
+    if (repo) {
+      void select(repo);
+    } else if (search.includes("/") && !isGhe) {
+      void submitManual(search.trim());
+    }
+  }
+}
 </script>
 
 <div class="repo">
@@ -231,6 +250,7 @@
 					class="search"
 					type="text"
 					placeholder={isGhe ? 'Search repositories…' : 'Search or enter owner/repo…'}
+					aria-label="Search repositories"
 					bind:value={search}
 					onkeydown={handleKey}
 					use:focusOnMount

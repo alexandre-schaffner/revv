@@ -1,5 +1,5 @@
-import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
-import { chatSessions } from './chat-sessions';
+import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { chatSessions } from "./chat-sessions";
 
 /**
  * Right-pane chat tool-use rows. The structured replacement for the opaque
@@ -21,34 +21,34 @@ import { chatSessions } from './chat-sessions';
  * Future work (F1: canonical ProviderRuntimeEvent) standardises this.
  */
 export const chatActivities = sqliteTable(
-	'chat_activities',
-	{
-		id: text('id').primaryKey(),
-		chatSessionId: text('chat_session_id')
-			.notNull()
-			.references(() => chatSessions.id, { onDelete: 'cascade' }),
-		turnId: text('turn_id').notNull(),
-		// Controlled vocabulary: 'tool.read' | 'tool.grep' | 'tool.glob' |
-		// 'tool.ls' | 'tool.bash' | 'tool.write' | 'tool.edit' |
-		// 'tool.todo' | 'tool.mcp' | 'tool.other'.
-		activityKind: text('activity_kind').notNull(),
-		toolName: text('tool_name'),
-		summary: text('summary').notNull(),
-		payloadJson: text('payload_json'),
-		sequence: integer('sequence').notNull(),
-		// Optional FK to chat_subagent_invocations. When set, this activity row
-		// is a tool call made *inside* a sub-agent (Claude `Task` or opencode
-		// agent part). The UI nests it under the parent SubagentInvocation card
-		// instead of rendering at top level. ON DELETE SET NULL so dropping an
-		// invocation row doesn't cascade-delete the tool history.
-		subagentInvocationId: text('subagent_invocation_id'),
-		createdAt: text('created_at').notNull(),
-	},
-	(t) => ({
-		sessionSeqUnique: uniqueIndex('chat_activities_session_seq_unique').on(
-			t.chatSessionId,
-			t.sequence,
-		),
-		sessionIdx: index('chat_activities_session_idx').on(t.chatSessionId),
-	}),
+  "chat_activities",
+  {
+    id: text("id").primaryKey(),
+    chatSessionId: text("chat_session_id")
+      .notNull()
+      .references(() => chatSessions.id, { onDelete: "cascade" }),
+    turnId: text("turn_id").notNull(),
+    // Controlled vocabulary: 'tool.read' | 'tool.grep' | 'tool.glob' |
+    // 'tool.ls' | 'tool.bash' | 'tool.write' | 'tool.edit' |
+    // 'tool.todo' | 'tool.mcp' | 'tool.other'.
+    activityKind: text("activity_kind").notNull(),
+    toolName: text("tool_name"),
+    summary: text("summary").notNull(),
+    payloadJson: text("payload_json"),
+    sequence: integer("sequence").notNull(),
+    // Optional FK to chat_subagent_invocations. When set, this activity row
+    // is a tool call made *inside* a sub-agent (Claude `Task` or opencode
+    // agent part). The UI nests it under the parent SubagentInvocation card
+    // instead of rendering at top level. ON DELETE SET NULL so dropping an
+    // invocation row doesn't cascade-delete the tool history.
+    subagentInvocationId: text("subagent_invocation_id"),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => ({
+    sessionSeqUnique: uniqueIndex("chat_activities_session_seq_unique").on(
+      t.chatSessionId,
+      t.sequence,
+    ),
+    sessionIdx: index("chat_activities_session_idx").on(t.chatSessionId),
+  }),
 );

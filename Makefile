@@ -2,7 +2,7 @@
 # Revv — Build & Development Commands
 # ──────────────────────────────────────────────────────────────
 
-.PHONY: install dev build dist clean typecheck help
+.PHONY: install dev build dist clean typecheck lint format format-check help
 
 # Default target
 help: ## Show this help
@@ -76,8 +76,14 @@ dist-debug: ## Build a debug distribution (faster, larger binary)
 typecheck: ## Run TypeScript type checking across all packages
 	bun run typecheck
 
-lint: ## Run linters across all packages
+lint: ## Run linter + format check (Biome)
 	bun run lint
+
+format: ## Auto-format all files (Biome)
+	bun run format
+
+format-check: ## Check formatting without writing (Biome)
+	bun run format:check
 
 # ── Maintenance ───────────────────────────────────────────────
 

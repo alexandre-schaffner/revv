@@ -1,13 +1,7 @@
-import { exec as rawExec } from "./shell";
 import type { ShellResult } from "./shell";
+import { exec as rawExec } from "./shell";
 
-export type CommandStatus =
-  | "pending"
-  | "approved"
-  | "denied"
-  | "running"
-  | "done"
-  | "error";
+export type CommandStatus = "pending" | "approved" | "denied" | "running" | "done" | "error";
 
 export interface CommandEntry {
   id: string;

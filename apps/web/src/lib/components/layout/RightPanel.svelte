@@ -1,487 +1,485 @@
 <script lang="ts">
-	import {
-		X,
-		Send,
-		Trash2,
-		Bot,
-		ChevronDown,
-		ChevronRight,
-		Copy,
-		AlertTriangle,
-		Settings,
-		GitCommitHorizontal,
-		Upload,
-		Loader2,
-		GitBranch,
-		RefreshCw,
-		GitMerge,
-		Lightbulb,
-		Check,
-	} from '@lucide/svelte';
-	import { tick } from 'svelte';
-	import { fly, slide } from 'svelte/transition';
-	import { cubicOut, cubicIn } from 'svelte/easing';
+import {
+  AlertTriangle,
+  Bot,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Copy,
+  GitBranch,
+  GitCommitHorizontal,
+  GitMerge,
+  Lightbulb,
+  Loader2,
+  RefreshCw,
+  Send,
+  Settings,
+  Trash2,
+  Upload,
+  X,
+} from "@lucide/svelte";
+import { tick } from "svelte";
+import { cubicIn, cubicOut } from "svelte/easing";
+import { fly, slide } from "svelte/transition";
 
-	const TOOL_CALL_ROW_H = 14; // px — match walkthrough's compact tool-call rows
-	import {
-		getChatItems,
-		getChatError,
-		isChatStreaming,
-		getProposedChanges,
-		isPushingProposed,
-		isResolvingPush,
-		loadChatHistory,
-		sendChatMessage,
-		clearChatHistory,
-		refreshProposedChanges,
-		pushProposed,
-		resolveAndPushProposed,
-		abortChatTurn,
-		getWorktreeBlocked,
-		isDiscardingCommit,
-		isRebasingProposed,
-		discardProposedCommitAction,
-		rebaseAllProposedAction,
-		isCherryPickingCommit,
-		cherryPickProposedCommitAction,
-		getInteractionMode,
-		setInteractionMode,
-		approvePlanAction,
-		rejectPlanAction,
-		loadAvailableAgents,
-		isPlanModeAvailable,
-		getQueuedMessages,
-		enqueueMessage,
-		removeQueuedMessage,
-		getCheckpoints,
-		restoreToCheckpoint,
-		getToolApprovals,
-		respondToToolApproval,
-	} from '$lib/stores/chat.svelte';
-	import {
-		Plan,
-		PlanHeader,
-		PlanTitle,
-		PlanContent,
-		PlanFooter,
-		PlanAction,
-	} from '$lib/components/ai/plan';
-	import { Question } from '$lib/components/ai/question';
-	import { Tool, ToolHeader, ToolContent } from '$lib/components/ai/tool';
-	import { Message, MessageContent, MessageResponse } from '$lib/components/ai/message';
-	import {
-		Conversation,
-		ConversationContent,
-		ConversationEmptyState,
-		ConversationScrollButton,
-	} from '$lib/components/ai/conversation';
-	import {
-		PromptInput,
-		PromptInputBody,
-		PromptInputFooter,
-		PromptInputTools,
-		PromptInputButton,
-		PromptInputTextarea,
-		PromptInputSubmit,
-		type PromptInputMessage,
-		type PromptInputStatus,
-	} from '$lib/components/ai/prompt-input';
-	import {
-		Queue,
-		QueueSection,
-		QueueSectionTrigger,
-		QueueSectionLabel,
-		QueueSectionContent,
-		QueueList,
-		QueueItem,
-		QueueItemIndicator,
-		QueueItemContent,
-		QueueItemActions,
-		QueueItemAction,
-	} from '$lib/components/ai/queue';
-	import { Checkpoint } from '$lib/components/ai/checkpoint';
-	import {
-		Confirmation,
-		ConfirmationHeader,
-		ConfirmationContent,
-		ConfirmationActions,
-	} from '$lib/components/ai/confirmation';
-	import { Suggestion, SuggestionItem } from '$lib/components/ai/suggestion';
-	import type { ToolState } from '$lib/components/ai/tool';
-	import { ToolOutput } from '$lib/components/ai/tool';
-	import {
-		CheckCircle2,
-		Circle,
-		CircleCheck,
-		CircleX,
-	} from '@lucide/svelte';
-	import { getSelectedPr } from '$lib/stores/prs.svelte';
-	import { getLoadedHeadSha } from '$lib/stores/review.svelte';
-	import {
-		FALLBACK_PROMPTS,
-		fetchSuggestions,
-		getSuggestions,
-		isSuggestionsLoading,
-	} from '$lib/stores/suggestions.svelte';
-	import { fetchProposedDiffFiles, type ProposedDiffFile } from '$lib/api/chat';
-	import { renderMarkdown } from '$lib/utils/markdown';
-	import { toast } from 'svelte-sonner';
-	import ProposedDiffModal from '$lib/components/review/ProposedDiffModal.svelte';
-	import {
-		Root as PopoverRoot,
-		Trigger as PopoverTrigger,
-		Content as PopoverContent,
-	} from '$lib/components/ui/popover/index.js';
-	import * as Dialog from '$lib/components/ui/dialog';
-	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
-	import { Dotmatrix, squareVariantForId } from '$lib/components/ui/dotmatrix/index.js';
-	import StreamingVerb from './StreamingVerb.svelte';
+const TOOL_CALL_ROW_H = 14; // px — match walkthrough's compact tool-call rows
 
-	interface Props {
-		onClose: () => void;
-		prId?: string;
-	}
+import { CheckCircle2, Circle, CircleCheck, CircleX } from "@lucide/svelte";
+import { toast } from "svelte-sonner";
+import { fetchProposedDiffFiles, type ProposedDiffFile } from "$lib/api/chat";
+import { Checkpoint } from "$lib/components/ai/checkpoint";
+import {
+  Confirmation,
+  ConfirmationActions,
+  ConfirmationContent,
+  ConfirmationHeader,
+} from "$lib/components/ai/confirmation";
+import {
+  Conversation,
+  ConversationContent,
+  ConversationEmptyState,
+  ConversationScrollButton,
+} from "$lib/components/ai/conversation";
+import { Message, MessageContent, MessageResponse } from "$lib/components/ai/message";
+import {
+  Plan,
+  PlanAction,
+  PlanContent,
+  PlanFooter,
+  PlanHeader,
+  PlanTitle,
+} from "$lib/components/ai/plan";
+import {
+  PromptInput,
+  PromptInputBody,
+  PromptInputButton,
+  PromptInputFooter,
+  type PromptInputMessage,
+  type PromptInputStatus,
+  PromptInputSubmit,
+  PromptInputTextarea,
+  PromptInputTools,
+} from "$lib/components/ai/prompt-input";
+import { Question } from "$lib/components/ai/question";
+import {
+  Queue,
+  QueueItem,
+  QueueItemAction,
+  QueueItemActions,
+  QueueItemContent,
+  QueueItemIndicator,
+  QueueList,
+  QueueSection,
+  QueueSectionContent,
+  QueueSectionLabel,
+  QueueSectionTrigger,
+} from "$lib/components/ai/queue";
+import { Suggestion, SuggestionItem } from "$lib/components/ai/suggestion";
+import type { ToolState } from "$lib/components/ai/tool";
+import { Tool, ToolContent, ToolHeader, ToolOutput } from "$lib/components/ai/tool";
+import ProposedDiffModal from "$lib/components/review/ProposedDiffModal.svelte";
+import { Button } from "$lib/components/ui/button";
+import * as Dialog from "$lib/components/ui/dialog";
+import { Dotmatrix, squareVariantForId } from "$lib/components/ui/dotmatrix/index.js";
+import { Input } from "$lib/components/ui/input";
+import {
+  Content as PopoverContent,
+  Root as PopoverRoot,
+  Trigger as PopoverTrigger,
+} from "$lib/components/ui/popover/index.js";
+import {
+  abortChatTurn,
+  approvePlanAction,
+  cherryPickProposedCommitAction,
+  clearChatHistory,
+  discardProposedCommitAction,
+  enqueueMessage,
+  getChatError,
+  getChatItems,
+  getCheckpoints,
+  getInteractionMode,
+  getProposedChanges,
+  getQueuedMessages,
+  getToolApprovals,
+  getWorktreeBlocked,
+  isChatStreaming,
+  isCherryPickingCommit,
+  isDiscardingCommit,
+  isPlanModeAvailable,
+  isPushingProposed,
+  isRebasingProposed,
+  isResolvingPush,
+  loadAvailableAgents,
+  loadChatHistory,
+  pushProposed,
+  rebaseAllProposedAction,
+  refreshProposedChanges,
+  rejectPlanAction,
+  removeQueuedMessage,
+  resolveAndPushProposed,
+  respondToToolApproval,
+  restoreToCheckpoint,
+  sendChatMessage,
+  setInteractionMode,
+} from "$lib/stores/chat.svelte";
+import { getSelectedPr } from "$lib/stores/prs.svelte";
+import { getLoadedHeadSha } from "$lib/stores/review.svelte";
+import {
+  FALLBACK_PROMPTS,
+  fetchSuggestions,
+  getSuggestions,
+  isSuggestionsLoading,
+} from "$lib/stores/suggestions.svelte";
+import { renderMarkdown } from "$lib/utils/markdown";
+import StreamingVerb from "./StreamingVerb.svelte";
 
-	let { onClose, prId }: Props = $props();
+interface Props {
+  onClose: () => void;
+  prId?: string;
+}
 
-	const items = $derived(prId ? getChatItems(prId) : []);
-	// Turn ids whose assistant bubble is still streaming. Activity rows for
-	// these turns get folded into the bubble's dot-matrix loader (walkthrough
-	// style) instead of rendering as standalone tool-lines, so the panel
-	// stays compact during generation.
-	const streamingTurnIds = $derived(
-		new Set(
-			items
-				.filter(
-					(i): i is Extract<typeof i, { kind: 'message' }> =>
-						i.kind === 'message' &&
-						i.role === 'assistant' &&
-						i.isStreaming &&
-						typeof i.turnId === 'string',
-				)
-				.map((i) => i.turnId as string),
-		),
-	);
-	const isStreaming = $derived(prId ? isChatStreaming(prId) : false);
-	const error = $derived(prId ? getChatError(prId) : null);
-	const proposed = $derived(prId ? getProposedChanges(prId) : null);
-	const commitCount = $derived(proposed?.commits.length ?? 0);
-	const isPushing = $derived(prId ? isPushingProposed(prId) : false);
-	const isResolving = $derived(prId ? isResolvingPush(prId) : false);
-	const blocked = $derived(prId ? getWorktreeBlocked(prId) : null);
-	const isRebasing = $derived(prId ? isRebasingProposed(prId) : false);
-	const selectedPr = $derived(getSelectedPr());
-	const interactionMode = $derived(prId ? getInteractionMode(prId) : 'default');
-	const planModeAvailable = $derived(isPlanModeAvailable());
-	const queuedMessages = $derived(prId ? getQueuedMessages(prId) : []);
-	const chatCheckpoints = $derived(prId ? getCheckpoints(prId) : []);
-	const toolApprovals = $derived(prId ? getToolApprovals(prId) : []);
-	/** Index → checkpoint lookup for interleaving in the message loop. */
-	const checkpointByAfterIndex = $derived(
-		new Map(chatCheckpoints.map((cp) => [cp.afterIndex, cp])),
-	);
-	/** Pending (un-responded) tool approvals, rendered after the last message. */
-	const pendingApprovals = $derived(toolApprovals.filter((a) => !a.responded));
-	/** Most recent task list from the agent — surfaces in the Queue dock. */
-	const activeTasks = $derived.by(() => {
-		const taskList = items.findLast(
-			(i): i is Extract<typeof i, { kind: 'task-list' }> => i.kind === 'task-list',
-		);
-		return taskList ? taskList.tasks : [];
-	});
-	/** Whether the Queue dock should be visible. */
-	const showQueueDock = $derived(queuedMessages.length > 0 || activeTasks.length > 0);
+let { onClose, prId }: Props = $props();
 
-	const streamingTurnId = $derived(
-		items.findLast(
-			(i): i is Extract<typeof i, { kind: 'message' }> =>
-				i.kind === 'message' && i.role === 'assistant' && i.isStreaming,
-		)?.turnId,
-	);
-	const recentToolCalls = $derived(
-		streamingTurnId
-			? items
-				.filter(
-					(i): i is Extract<typeof i, { kind: 'activity' }> =>
-						i.kind === 'activity' && i.turnId === streamingTurnId,
-				)
-				.slice(-2)
-			: []
-	);
+const items = $derived(prId ? getChatItems(prId) : []);
+// Turn ids whose assistant bubble is still streaming. Activity rows for
+// these turns get folded into the bubble's dot-matrix loader (walkthrough
+// style) instead of rendering as standalone tool-lines, so the panel
+// stays compact during generation.
+const streamingTurnIds = $derived(
+  new Set(
+    items
+      .filter(
+        (i): i is Extract<typeof i, { kind: "message" }> =>
+          i.kind === "message" &&
+          i.role === "assistant" &&
+          i.isStreaming &&
+          typeof i.turnId === "string",
+      )
+      .map((i) => i.turnId as string),
+  ),
+);
+const isStreaming = $derived(prId ? isChatStreaming(prId) : false);
+const error = $derived(prId ? getChatError(prId) : null);
+const proposed = $derived(prId ? getProposedChanges(prId) : null);
+const commitCount = $derived(proposed?.commits.length ?? 0);
+const isPushing = $derived(prId ? isPushingProposed(prId) : false);
+const isResolving = $derived(prId ? isResolvingPush(prId) : false);
+const blocked = $derived(prId ? getWorktreeBlocked(prId) : null);
+const isRebasing = $derived(prId ? isRebasingProposed(prId) : false);
+const selectedPr = $derived(getSelectedPr());
+const interactionMode = $derived(prId ? getInteractionMode(prId) : "default");
+const planModeAvailable = $derived(isPlanModeAvailable());
+const queuedMessages = $derived(prId ? getQueuedMessages(prId) : []);
+const chatCheckpoints = $derived(prId ? getCheckpoints(prId) : []);
+const toolApprovals = $derived(prId ? getToolApprovals(prId) : []);
+/** Index → checkpoint lookup for interleaving in the message loop. */
+const checkpointByAfterIndex = $derived(new Map(chatCheckpoints.map((cp) => [cp.afterIndex, cp])));
+/** Pending (un-responded) tool approvals, rendered after the last message. */
+const pendingApprovals = $derived(toolApprovals.filter((a) => !a.responded));
+/** Most recent task list from the agent — surfaces in the Queue dock. */
+const activeTasks = $derived.by(() => {
+  const taskList = items.findLast(
+    (i): i is Extract<typeof i, { kind: "task-list" }> => i.kind === "task-list",
+  );
+  return taskList ? taskList.tasks : [];
+});
+/** Whether the Queue dock should be visible. */
+const showQueueDock = $derived(queuedMessages.length > 0 || activeTasks.length > 0);
 
-	let messagesEl: HTMLDivElement | undefined = $state();
-	let proposedExpanded = $state(false);
-	let diffOpen = $state<{
-		sha: string;
-		subject: string;
-		fileContents: ProposedDiffFile[] | null;
-	} | null>(null);
-	let conflictDialog = $state<{ files: string[]; branch: string } | null>(null);
-	let pushSuccessTrigger = $state(0);
-	let pushPillEl = $state<HTMLDivElement | null>(null);
+const streamingTurnId = $derived(
+  items.findLast(
+    (i): i is Extract<typeof i, { kind: "message" }> =>
+      i.kind === "message" && i.role === "assistant" && i.isStreaming,
+  )?.turnId,
+);
+const recentToolCalls = $derived(
+  streamingTurnId
+    ? items
+        .filter(
+          (i): i is Extract<typeof i, { kind: "activity" }> =>
+            i.kind === "activity" && i.turnId === streamingTurnId,
+        )
+        .slice(-2)
+    : [],
+);
 
-	// Pulse animation on push success — toggles a CSS animation class
-	$effect(() => {
-		const _trigger = pushSuccessTrigger;
-		if (!pushPillEl || _trigger === 0) return;
-		pushPillEl.classList.remove('push-pill--pulse');
-		// Force reflow so re-adding the class restarts the animation
-		void pushPillEl.offsetWidth;
-		pushPillEl.classList.add('push-pill--pulse');
-	});
-	let pushMenuOpen = $state(false);
-	// "Push to new branch" dialog. `input` mode collects the branch name;
-	// `confirm-overwrite` is the inline confirmation shown when the remote
-	// already has that ref.
-	let newBranchDialogOpen = $state(false);
-	let newBranchDialogMode = $state<'input' | 'confirm-overwrite'>('input');
-	let newBranchValue = $state('');
-	let newBranchInputEl: HTMLInputElement | null = $state(null);
+let messagesEl: HTMLDivElement | undefined = $state();
+let proposedExpanded = $state(false);
+let diffOpen = $state<{
+  sha: string;
+  subject: string;
+  fileContents: ProposedDiffFile[] | null;
+} | null>(null);
+let conflictDialog = $state<{ files: string[]; branch: string } | null>(null);
+let pushSuccessTrigger = $state(0);
+let pushPillEl = $state<HTMLDivElement | null>(null);
 
-	// Auto-scroll-on-new-content for chat: if the user is at the bottom, follow
-	// new messages/streaming chunks. If they've scrolled up to read earlier
-	// content, leave them alone (ConversationScrollButton surfaces a "jump to
-	// latest" affordance). On PR switch we just land at the bottom — chat
-	// history grows downward, so the newest message is the natural default.
-	let atBottom = $state(true);
+// Pulse animation on push success — toggles a CSS animation class
+$effect(() => {
+  const _trigger = pushSuccessTrigger;
+  if (!pushPillEl || _trigger === 0) return;
+  pushPillEl.classList.remove("push-pill--pulse");
+  // Force reflow so re-adding the class restarts the animation
+  void pushPillEl.offsetWidth;
+  pushPillEl.classList.add("push-pill--pulse");
+});
+let pushMenuOpen = $state(false);
+// "Push to new branch" dialog. `input` mode collects the branch name;
+// `confirm-overwrite` is the inline confirmation shown when the remote
+// already has that ref.
+let newBranchDialogOpen = $state(false);
+let newBranchDialogMode = $state<"input" | "confirm-overwrite">("input");
+let newBranchValue = $state("");
+let newBranchInputEl: HTMLInputElement | null = $state(null);
 
-	// PR switch → scroll to bottom on next tick.
-	$effect(() => {
-		void prId;
-		if (!messagesEl) return;
-		void tick().then(() => {
-			if (!messagesEl) return;
-			messagesEl.scrollTop = messagesEl.scrollHeight;
-		});
-	});
+// Auto-scroll-on-new-content for chat: if the user is at the bottom, follow
+// new messages/streaming chunks. If they've scrolled up to read earlier
+// content, leave them alone (ConversationScrollButton surfaces a "jump to
+// latest" affordance). On PR switch we just land at the bottom — chat
+// history grows downward, so the newest message is the natural default.
+let atBottom = $state(true);
 
-	// Auto-scroll on new content, only if user is already at the bottom.
-	$effect(() => {
-		void items.length;
-		void isStreaming;
-		if (!messagesEl || !atBottom) return;
-		void tick().then(() => {
-			if (!messagesEl) return;
-			messagesEl.scrollTop = messagesEl.scrollHeight;
-		});
-	});
+// PR switch → scroll to bottom on next tick.
+$effect(() => {
+  void prId;
+  if (!messagesEl) return;
+  void tick().then(() => {
+    if (!messagesEl) return;
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  });
+});
 
-	// Hydrate on initial mount AND on PR switch. The panel is mounted once in
-	// AppShell and just gets a new `prId` prop on navigation, so this $effect
-	// is the only place that fires on PR switch. `loadChatHistory` is
-	// idempotent (gated by `loadedPrIds`); `refreshProposedChanges` always
-	// re-fetches so the strip reflects the freshly-selected PR's worktree.
-	$effect(() => {
-		if (prId) {
-			void refreshProposedChanges(prId);
-			void loadChatHistory(prId);
-			void loadAvailableAgents();
-		}
-	});
+// Auto-scroll on new content, only if user is already at the bottom.
+$effect(() => {
+  void items.length;
+  void isStreaming;
+  if (!messagesEl || !atBottom) return;
+  void tick().then(() => {
+    if (!messagesEl) return;
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  });
+});
 
-	// Re-fetch chat history when a pull lands and stamps a new head SHA.
-	// Gated on a non-null SHA so this doesn't fire on initial mount
-	// (the hydration effect above handles that case).
-	$effect(() => {
-		if (!prId) return;
-		const headSha = getLoadedHeadSha(prId);
-		if (headSha === null) return;
-		void loadChatHistory(prId);
-	});
+// Hydrate on initial mount AND on PR switch. The panel is mounted once in
+// AppShell and just gets a new `prId` prop on navigation, so this $effect
+// is the only place that fires on PR switch. `loadChatHistory` is
+// idempotent (gated by `loadedPrIds`); `refreshProposedChanges` always
+// re-fetches so the strip reflects the freshly-selected PR's worktree.
+$effect(() => {
+  if (prId) {
+    void refreshProposedChanges(prId);
+    void loadChatHistory(prId);
+    void loadAvailableAgents();
+  }
+});
 
-	function handleTogglePlanMode(): void {
-		if (!prId || !planModeAvailable) return;
-		const next = interactionMode === 'plan' ? 'default' : 'plan';
-		void setInteractionMode(prId, next);
-	}
+// Re-fetch chat history when a pull lands and stamps a new head SHA.
+// Gated on a non-null SHA so this doesn't fire on initial mount
+// (the hydration effect above handles that case).
+$effect(() => {
+  if (!prId) return;
+  const headSha = getLoadedHeadSha(prId);
+  if (headSha === null) return;
+  void loadChatHistory(prId);
+});
 
-	function handleApprovePlan(planId: string): void {
-		if (!prId) return;
-		void approvePlanAction(prId, planId);
-	}
+function handleTogglePlanMode(): void {
+  if (!prId || !planModeAvailable) return;
+  const next = interactionMode === "plan" ? "default" : "plan";
+  void setInteractionMode(prId, next);
+}
 
-	function handleRejectPlan(planId: string): void {
-		if (!prId) return;
-		void rejectPlanAction(prId, planId);
-	}
+function handleApprovePlan(planId: string): void {
+  if (!prId) return;
+  void approvePlanAction(prId, planId);
+}
 
-	function nestedActivitiesFor(invocationId: string) {
-		return items.filter(
-			(i): i is Extract<typeof i, { kind: 'activity' }> =>
-				i.kind === 'activity' && i.subagentInvocationId === invocationId,
-		);
-	}
+function handleRejectPlan(planId: string): void {
+  if (!prId) return;
+  void rejectPlanAction(prId, planId);
+}
 
-	function handlePromptSubmit(message: PromptInputMessage): void {
-		if (!prId) return;
-		const value = message.text.trim();
-		if (value.length === 0) return;
-		if (isStreaming) {
-			// Agent is busy — queue the message for dispatch when it finishes.
-			enqueueMessage(prId, value);
-		} else {
-			sendChatMessage({ prId, message: value });
-		}
-	}
+function nestedActivitiesFor(invocationId: string) {
+  return items.filter(
+    (i): i is Extract<typeof i, { kind: "activity" }> =>
+      i.kind === "activity" && i.subagentInvocationId === invocationId,
+  );
+}
 
-	const inputStatus = $derived<PromptInputStatus>(isStreaming ? 'streaming' : 'ready');
+function handlePromptSubmit(message: PromptInputMessage): void {
+  if (!prId) return;
+  const value = message.text.trim();
+  if (value.length === 0) return;
+  if (isStreaming) {
+    // Agent is busy — queue the message for dispatch when it finishes.
+    enqueueMessage(prId, value);
+  } else {
+    sendChatMessage({ prId, message: value });
+  }
+}
 
-	// Empty-state suggestions: prefer the model-generated, PR-aware list
-	// from the suggestions store; fall back to the static prompts before
-	// the first fetch lands (or on any server failure).
-	const suggestedPrompts = $derived<readonly string[]>(
-		(prId ? getSuggestions(prId) : null) ?? FALLBACK_PROMPTS,
-	);
-	const suggestionsLoading = $derived(
-		prId ? isSuggestionsLoading(prId) && getSuggestions(prId) === null : false,
-	);
+const inputStatus = $derived<PromptInputStatus>(isStreaming ? "streaming" : "ready");
 
-	// Lazily fetch PR-aware suggestions whenever the empty state would
-	// actually be visible — chat has no items yet for this PR. Skipping
-	// this when chat already has history avoids spending tokens on PRs
-	// the user has already interacted with.
-	$effect(() => {
-		if (!prId) return;
-		if (items.length > 0) return;
-		if (getSuggestions(prId) !== null) return;
-		void fetchSuggestions(prId);
-	});
+// Empty-state suggestions: prefer the model-generated, PR-aware list
+// from the suggestions store; fall back to the static prompts before
+// the first fetch lands (or on any server failure).
+const suggestedPrompts = $derived<readonly string[]>(
+  (prId ? getSuggestions(prId) : null) ?? FALLBACK_PROMPTS,
+);
+const suggestionsLoading = $derived(
+  prId ? isSuggestionsLoading(prId) && getSuggestions(prId) === null : false,
+);
 
-	function handleSuggestion(text: string): void {
-		if (!prId || isStreaming) return;
-		sendChatMessage({ prId, message: text });
-	}
+// Lazily fetch PR-aware suggestions whenever the empty state would
+// actually be visible — chat has no items yet for this PR. Skipping
+// this when chat already has history avoids spending tokens on PRs
+// the user has already interacted with.
+$effect(() => {
+  if (!prId) return;
+  if (items.length > 0) return;
+  if (getSuggestions(prId) !== null) return;
+  void fetchSuggestions(prId);
+});
 
-	async function handleClear(): Promise<void> {
-		if (!prId) return;
-		await clearChatHistory(prId);
-	}
+function handleSuggestion(text: string): void {
+  if (!prId || isStreaming) return;
+  sendChatMessage({ prId, message: text });
+}
 
-	async function handlePush(): Promise<void> {
-		if (!prId || isPushing || isStreaming || isResolving) return;
-		const result = await pushProposed(prId);
-		if (!result) return;
-		if (result.status === 'pushed') {
-			pushSuccessTrigger++;
-		} else if (result.status === 'conflict') {
-			conflictDialog = { files: result.files, branch: result.branch };
-		}
-		// remote-changed already toasts in the store; no extra UI here.
-	}
+async function handleClear(): Promise<void> {
+  if (!prId) return;
+  await clearChatHistory(prId);
+}
 
-	function suggestedNewBranchName(): string {
-		const base = selectedPr?.sourceBranch?.trim();
-		return base && base.length > 0 ? `${base}-agent` : 'agent-changes';
-	}
+async function handlePush(): Promise<void> {
+  if (!prId || isPushing || isStreaming || isResolving) return;
+  const result = await pushProposed(prId);
+  if (!result) return;
+  if (result.status === "pushed") {
+    pushSuccessTrigger++;
+  } else if (result.status === "conflict") {
+    conflictDialog = { files: result.files, branch: result.branch };
+  }
+  // remote-changed already toasts in the store; no extra UI here.
+}
 
-	function openNewBranchDialog(): void {
-		pushMenuOpen = false;
-		newBranchDialogMode = 'input';
-		newBranchValue = suggestedNewBranchName();
-		newBranchDialogOpen = true;
-		// Focus + select on the next tick so the dialog is in the DOM first.
-		void tick().then(() => newBranchInputEl?.select());
-	}
+function suggestedNewBranchName(): string {
+  const base = selectedPr?.sourceBranch?.trim();
+  return base && base.length > 0 ? `${base}-agent` : "agent-changes";
+}
 
-	function isValidNewBranchName(value: string): boolean {
-		const trimmed = value.trim();
-		if (trimmed.length === 0) return false;
-		if (/\s/.test(trimmed)) return false;
-		if (trimmed.startsWith('-')) return false;
-		if (trimmed.includes('..')) return false;
-		return true;
-	}
+function openNewBranchDialog(): void {
+  pushMenuOpen = false;
+  newBranchDialogMode = "input";
+  newBranchValue = suggestedNewBranchName();
+  newBranchDialogOpen = true;
+  // Focus + select on the next tick so the dialog is in the DOM first.
+  void tick().then(() => newBranchInputEl?.select());
+}
 
-	async function handleNewBranchSubmit(): Promise<void> {
-		if (!prId || newBranchDialogMode !== 'input') return;
-		const name = newBranchValue.trim();
-		if (!isValidNewBranchName(name)) return;
-		const result = await pushProposed(prId, { newBranchName: name });
-		if (!result) {
-			// Hard failure already toasted by the store.
-			newBranchDialogOpen = false;
-			return;
-		}
-		if (result.status === 'pushed') {
-			pushSuccessTrigger++;
-			newBranchDialogOpen = false;
-			return;
-		}
-		if (result.status === 'ref-exists') {
-			newBranchValue = name;
-			newBranchDialogMode = 'confirm-overwrite';
-			return;
-		}
-		// 'conflict' / 'remote-changed' don't apply to the new-branch path,
-		// but if the server ever returns one we surface it as a generic close.
-		newBranchDialogOpen = false;
-	}
+function isValidNewBranchName(value: string): boolean {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return false;
+  if (/\s/.test(trimmed)) return false;
+  if (trimmed.startsWith("-")) return false;
+  if (trimmed.includes("..")) return false;
+  return true;
+}
 
-	async function handleConfirmOverwrite(): Promise<void> {
-		if (!prId || newBranchDialogMode !== 'confirm-overwrite') return;
-		const result = await pushProposed(prId, {
-			newBranchName: newBranchValue,
-			force: true,
-		});
-		if (!result) {
-			newBranchDialogOpen = false;
-			return;
-		}
-		if (result.status === 'pushed') {
-			pushSuccessTrigger++;
-		}
-		newBranchDialogOpen = false;
-	}
+async function handleNewBranchSubmit(): Promise<void> {
+  if (!prId || newBranchDialogMode !== "input") return;
+  const name = newBranchValue.trim();
+  if (!isValidNewBranchName(name)) return;
+  const result = await pushProposed(prId, { newBranchName: name });
+  if (!result) {
+    // Hard failure already toasted by the store.
+    newBranchDialogOpen = false;
+    return;
+  }
+  if (result.status === "pushed") {
+    pushSuccessTrigger++;
+    newBranchDialogOpen = false;
+    return;
+  }
+  if (result.status === "ref-exists") {
+    newBranchValue = name;
+    newBranchDialogMode = "confirm-overwrite";
+    return;
+  }
+  // 'conflict' / 'remote-changed' don't apply to the new-branch path,
+  // but if the server ever returns one we surface it as a generic close.
+  newBranchDialogOpen = false;
+}
 
-	async function handleResolveAndPush(): Promise<void> {
-		if (!prId || isResolving) return;
-		conflictDialog = null;
-		await resolveAndPushProposed(prId);
-	}
+async function handleConfirmOverwrite(): Promise<void> {
+  if (!prId || newBranchDialogMode !== "confirm-overwrite") return;
+  const result = await pushProposed(prId, {
+    newBranchName: newBranchValue,
+    force: true,
+  });
+  if (!result) {
+    newBranchDialogOpen = false;
+    return;
+  }
+  if (result.status === "pushed") {
+    pushSuccessTrigger++;
+  }
+  newBranchDialogOpen = false;
+}
 
-	function dismissConflictDialog(): void {
-		conflictDialog = null;
-	}
+async function handleResolveAndPush(): Promise<void> {
+  if (!prId || isResolving) return;
+  conflictDialog = null;
+  await resolveAndPushProposed(prId);
+}
 
-	function handleStop(): void {
-		if (!prId) return;
-		abortChatTurn(prId);
-	}
+function dismissConflictDialog(): void {
+  conflictDialog = null;
+}
 
-	async function openDiff(commit: { sha: string; subject: string }): Promise<void> {
-		if (!prId) return;
-		// Open modal immediately — ProposedDiffModal renders a skeleton when fileContents is null
-		diffOpen = { sha: commit.sha, subject: commit.subject, fileContents: null };
-		try {
-			const fileContents = await fetchProposedDiffFiles(prId, commit.sha);
-			// Only update if the user hasn't dismissed the modal already
-			if (diffOpen) diffOpen = { sha: commit.sha, subject: commit.subject, fileContents };
-		} catch (err) {
-			diffOpen = null;
-			toast.error(err instanceof Error ? err.message : 'Failed to load diff');
-		}
-	}
+function handleStop(): void {
+  if (!prId) return;
+  abortChatTurn(prId);
+}
 
-	function copyToClipboard(text: string): void {
-		void navigator.clipboard?.writeText(text);
-	}
+async function openDiff(commit: { sha: string; subject: string }): Promise<void> {
+  if (!prId) return;
+  // Open modal immediately — ProposedDiffModal renders a skeleton when fileContents is null
+  diffOpen = { sha: commit.sha, subject: commit.subject, fileContents: null };
+  try {
+    const fileContents = await fetchProposedDiffFiles(prId, commit.sha);
+    // Only update if the user hasn't dismissed the modal already
+    if (diffOpen) diffOpen = { sha: commit.sha, subject: commit.subject, fileContents };
+  } catch (err) {
+    diffOpen = null;
+    toast.error(err instanceof Error ? err.message : "Failed to load diff");
+  }
+}
 
-	function filesSummary(files: string[]): string {
-		const basenames = files.map((f) => f.split('/').pop() ?? f);
-		if (basenames.length === 1) return basenames[0] ?? '';
-		if (basenames.length === 2) return `${basenames[0]} · ${basenames[1]}`;
-		return `${basenames[0]} · +${basenames.length - 1} more`;
-	}
+function copyToClipboard(text: string): void {
+  void navigator.clipboard?.writeText(text);
+}
 
-	function messageHtml(content: string): string {
-		return content ? renderMarkdown(content) : '';
-	}
+function filesSummary(files: string[]): string {
+  const basenames = files.map((f) => f.split("/").pop() ?? f);
+  if (basenames.length === 1) return basenames[0] ?? "";
+  if (basenames.length === 2) return `${basenames[0]} · ${basenames[1]}`;
+  return `${basenames[0]} · +${basenames.length - 1} more`;
+}
 
-	function activitiesForTurn(turnId: string | undefined): Extract<(typeof items)[number], { kind: 'activity' }>[] {
-		if (!turnId) return [];
-		return items.filter((i): i is Extract<(typeof items)[number], { kind: 'activity' }> => i.kind === 'activity' && i.turnId === turnId);
-	}
+function messageHtml(content: string): string {
+  return content ? renderMarkdown(content) : "";
+}
+
+function activitiesForTurn(
+  turnId: string | undefined,
+): Extract<(typeof items)[number], { kind: "activity" }>[] {
+  if (!turnId) return [];
+  return items.filter(
+    (i): i is Extract<(typeof items)[number], { kind: "activity" }> =>
+      i.kind === "activity" && i.turnId === turnId,
+  );
+}
 </script>
 
 <div class="panel">
@@ -657,27 +655,27 @@
 						<!-- Rendered exclusively in the Queue dock below. -->
 					{:else if item.kind === 'plan'}
 						<Plan
-							class={item.status === 'rejected' ? 'opacity-85 border-destructive/35' : item.status === 'approved' ? 'border-green-500/35' : ''}
+							class={item.status === 'rejected' ? 'opacity-85 border-destructive/35' : item.status === 'approved' ? 'border-success/35' : ''}
 						>
 							<PlanHeader>
 								<PlanTitle>Plan</PlanTitle>
 								{#if item.status === 'approved'}
-									<span class="ml-auto inline-flex items-center gap-1 rounded-full bg-green-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-green-500">
+									<span class="ml-auto inline-flex items-center gap-1 rounded-full bg-success/15 px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-success">
 										<CircleCheck class="size-2.5" />
 										Approved
 									</span>
 								{:else if item.status === 'rejected'}
-									<span class="ml-auto inline-flex items-center gap-1 rounded-full bg-destructive/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-destructive">
+									<span class="ml-auto inline-flex items-center gap-1 rounded-full bg-destructive/15 px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-destructive">
 										<CircleX class="size-2.5" />
 										Rejected
 									</span>
 								{:else if item.status === 'superseded'}
-									<span class="ml-auto inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+									<span class="ml-auto inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
 										Superseded
 									</span>
 								{/if}
 							</PlanHeader>
-							<PlanContent class="text-[13px] leading-relaxed">
+							<PlanContent class="text-sm leading-relaxed">
 								{@html messageHtml(item.markdown)}
 							</PlanContent>
 							{#if item.status === 'pending'}
@@ -735,7 +733,7 @@
 						</Tool>
 					{:else if item.kind === 'question'}
 						<Question
-							prId={prId!}
+							prId={prId ?? ""}
 							itemId={item.id}
 							questions={item.questions}
 							status={item.status}
@@ -746,17 +744,17 @@
 				{:else if item.role === 'user'}
 					<Message from="user">
 						<MessageContent>
-							<MessageResponse content={item.content} class="rounded-[14px] rounded-br-[4px] bg-accent px-3 py-2 text-[13px] leading-relaxed text-white [&_a]:text-white [&_a]:underline [&_code]:bg-black/20 [&_code]:text-[11.5px] [&_pre]:bg-black/20" />
+							<MessageResponse content={item.content} class="rounded-[14px] rounded-br-[4px] bg-accent px-3 py-2 text-sm leading-relaxed text-white [&_a]:text-white [&_a]:underline [&_code]:bg-black/20 [&_code]:text-xs [&_pre]:bg-black/20" />
 						</MessageContent>
 					</Message>
 				{:else if item.kind === 'message' && item.role === 'assistant'}
 					<Message from="assistant">
 						<MessageContent>
 							{#if item.content}
-								<MessageResponse content={item.content} class="text-[13px] leading-relaxed" />
+								<MessageResponse content={item.content} class="text-sm leading-relaxed" />
 							{/if}
 							{#if item.error}
-								<div class="mt-2 flex items-start gap-1.5 rounded bg-muted/60 border-l-2 border-muted-foreground px-2 py-1.5 text-[11px] text-muted-foreground" role="alert">
+								<div class="mt-2 flex items-start gap-1.5 rounded bg-muted/60 border-l-2 border-muted-foreground px-2 py-1.5 text-xs text-muted-foreground" role="alert">
 									<AlertTriangle size={12} class="mt-0.5 shrink-0" />
 									<span class="min-w-0 break-words">{item.error}</span>
 								</div>
@@ -982,13 +980,13 @@
 										{#if activeTasks.some((t) => t.status === 'in_progress')}
 											<Loader2 class="size-3 text-primary motion-essential-spin animate-spin" />
 										{:else if allDone}
-											<CheckCircle2 class="size-3 text-green-500" />
+											<CheckCircle2 class="size-3 text-success" />
 										{:else}
 											<Circle class="size-3 text-muted-foreground" />
 										{/if}
 									{/snippet}
 								</QueueSectionLabel>
-								<span class="ml-auto text-[10px] tabular-nums text-muted-foreground">
+								<span class="ml-auto text-xs tabular-nums text-muted-foreground">
 									{completed}/{activeTasks.length}
 								</span>
 							</QueueSectionTrigger>
@@ -1072,7 +1070,7 @@
 				<PromptInputTextarea
 					placeholder="Ask anything…"
 					disabled={!prId}
-					class="text-[13px] leading-relaxed"
+					class="text-sm leading-relaxed"
 				/>
 			</PromptInputBody>
 			<PromptInputFooter>

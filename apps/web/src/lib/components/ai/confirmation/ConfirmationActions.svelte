@@ -1,18 +1,18 @@
 <script lang="ts" module>
-	import type { HTMLAttributes } from "svelte/elements";
+import type { HTMLAttributes } from "svelte/elements";
 
-	export type ConfirmationActionsProps = HTMLAttributes<HTMLDivElement> & {
-		/** Whether the confirmation has already been responded to. */
-		responded?: boolean;
-		/** Callback when the user approves. */
-		onApprove?: () => void;
-		/** Callback when the user denies. */
-		onDeny?: () => void;
-		/** Label for the approve button. */
-		approveLabel?: string;
-		/** Label for the deny button. */
-		denyLabel?: string;
-	};
+export type ConfirmationActionsProps = HTMLAttributes<HTMLDivElement> & {
+  /** Whether the confirmation has already been responded to. */
+  responded?: boolean;
+  /** Callback when the user approves. */
+  onApprove?: () => void;
+  /** Callback when the user denies. */
+  onDeny?: () => void;
+  /** Label for the approve button. */
+  approveLabel?: string;
+  /** Label for the deny button. */
+  denyLabel?: string;
+};
 </script>
 
 <script lang="ts">

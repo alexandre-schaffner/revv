@@ -1,14 +1,14 @@
 <script lang="ts">
-	import type { ThreadMessage } from '@revv/shared';
-	import { User, Bot } from '@lucide/svelte';
+import { Bot, User } from "@lucide/svelte";
+import type { ThreadMessage } from "@revv/shared";
 
-	interface Props {
-		msg: ThreadMessage;
-	}
+interface Props {
+  msg: ThreadMessage;
+}
 
-	let { msg }: Props = $props();
+let { msg }: Props = $props();
 
-	let failed = $state(false);
+let failed = $state(false);
 </script>
 
 <div class="avatar" title={msg.authorName}>

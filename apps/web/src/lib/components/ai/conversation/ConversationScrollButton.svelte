@@ -1,7 +1,7 @@
 <script lang="ts" module>
-	import type { ButtonProps } from "$lib/components/ui/button/index.js";
+import type { ButtonProps } from "$lib/components/ui/button/index.js";
 
-	export type ConversationScrollButtonProps = ButtonProps;
+export type ConversationScrollButtonProps = ButtonProps;
 </script>
 
 <script lang="ts">

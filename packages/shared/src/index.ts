@@ -1,40 +1,50 @@
-export { API_PORT, API_BASE_URL, AUTO_FETCH_DEFAULT_INTERVAL, THREAD_SYNC_INTERVAL_SECONDS } from './constants';
+export type { Activity, ActivityKind } from "./activity";
+export { classifyTool, normalizeToolName } from "./activity";
 export type {
-	PullRequestStatus,
-	ReviewStatus,
-	CloneStatus,
-	Repository,
-	PullRequest,
-	UserSettings,
-	ThinkingEffort,
-	ContextWindow,
-	AiAgent,
-	SessionStatus,
-	ThreadStatus,
-	AuthorRole,
-	MessageType,
-	HunkDecisionType,
-	ReviewSession,
-	CommentThread,
-	ThreadMessage,
-	HunkDecision,
-	ThreadSummary,
-	UserRole,
-	UserIdentity,
-	Org,
-	SyncChangeKind,
-	SyncChange,
-} from './types';
-export type { WsServerMessage, WsClientMessage } from './ws';
-export * from './walkthrough';
-export type { Activity, ActivityKind } from './activity';
-export { classifyTool, normalizeToolName } from './activity';
+  ChatPlan,
+  ChatQuestion,
+  ChatStreamFrame,
+  ChatSubagentInvocation,
+  ChatTask,
+  InteractionMode,
+  MessageRole,
+  NormalizedQuestion,
+  NormalizedQuestionOption,
+  QuestionStatus,
+} from "./chat";
+export {
+  API_BASE_URL,
+  API_PORT,
+  AUTO_FETCH_DEFAULT_INTERVAL,
+  THREAD_SYNC_INTERVAL_SECONDS,
+} from "./constants";
 export type {
-	InteractionMode,
-	ChatTask,
-	ChatPlan,
-	ChatSubagentInvocation,
-	ChatQuestion,
-	NormalizedQuestion,
-	NormalizedQuestionOption,
-} from './chat';
+  AiAgent,
+  AuthorRole,
+  CloneStatus,
+  CommentThread,
+  ContextWindow,
+  DiffViewMode,
+  HunkDecision,
+  HunkDecisionType,
+  MessageType,
+  Org,
+  PullRequest,
+  PullRequestStatus,
+  Repository,
+  ReviewSession,
+  ReviewStatus,
+  SessionStatus,
+  SyncChange,
+  SyncChangeKind,
+  ThemePreference,
+  ThinkingEffort,
+  ThreadMessage,
+  ThreadStatus,
+  ThreadSummary,
+  UserIdentity,
+  UserRole,
+  UserSettings,
+} from "./types";
+export * from "./walkthrough";
+export type { WsClientMessage, WsServerMessage } from "./ws";

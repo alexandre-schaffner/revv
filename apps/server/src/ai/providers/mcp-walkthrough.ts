@@ -13,27 +13,24 @@
 // `WalkthroughStreamEvent`.
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { Effect } from "effect";
 import type {
-	RatingAxis,
-	UserSettings,
-	WalkthroughBlock,
-	WalkthroughStreamEvent,
-	WalkthroughTokenUsage,
-	WsServerMessage,
+  RatingAxis,
+  UserSettings,
+  WalkthroughBlock,
+  WalkthroughStreamEvent,
+  WalkthroughTokenUsage,
+  WsServerMessage,
 } from "@revv/shared";
-import { debug, logError } from "../../logger";
+import { Effect } from "effect";
 import type { Db } from "../../db";
-import type { PrFileMeta } from "../../services/GitHub";
+import { debug, logError } from "../../logger";
 import { AppRuntime } from "../../runtime";
+import type { PrFileMeta } from "../../services/GitHub";
 import { WebSocketHub } from "../../services/WebSocketHub";
-import {
-	buildWalkthroughPrompt,
-	WALKTHROUGH_MCP_SYSTEM_PROMPT,
-} from "../prompts/walkthrough";
-import { buildActivity, walkClaudeMessages, type NormalizedAgentEvent } from "../agent-stream";
-import { createWalkthroughMcpServer } from "./walkthrough-tools";
+import { buildActivity, type NormalizedAgentEvent, walkClaudeMessages } from "../agent-stream";
+import { buildWalkthroughPrompt, WALKTHROUGH_MCP_SYSTEM_PROMPT } from "../prompts/walkthrough";
 import { resolveCliBin } from "./cli-agent";
+import { createWalkthroughMcpServer } from "./walkthrough-tools";
 
 // ── Continuation context ─────────────────────────────────────────────────────
 
@@ -44,11 +41,11 @@ import { resolveCliBin } from "./cli-agent";
  * bookkeeping — e.g. opencode uses `opencodeSessionId` for `--continue`.
  */
 export interface ContinuationContext {
-	walkthroughId: string;
-	existingBlocks: WalkthroughBlock[];
-	existingIssueCount: number;
-	existingRatedAxes: RatingAxis[];
-	opencodeSessionId?: string;
+  walkthroughId: string;
+  existingBlocks: WalkthroughBlock[];
+  existingIssueCount: number;
+  existingRatedAxes: RatingAxis[];
+  opencodeSessionId?: string;
 }
 
 // ── Built-in tools the model can use for file exploration ───────────────────
@@ -65,20 +62,20 @@ const MCP_TOOL_PREFIX = `mcp__${WALKTHROUGH_MCP_SERVER}__`;
 // `add_semantic_step` is invisible), and there is no error in any log to
 // point at the gap. Keep this list in sync with TOOL_SPECS.
 const ALLOWED_TOOLS = [
-	// Built-in exploration
-	"Read",
-	"Grep",
-	"Glob",
-	// MCP walkthrough tools (A→B→C→D)
-	`${MCP_TOOL_PREFIX}get_walkthrough_state`,
-	`${MCP_TOOL_PREFIX}set_overview`,
-	`${MCP_TOOL_PREFIX}add_semantic_step`,
-	`${MCP_TOOL_PREFIX}add_diff_step`,
-	`${MCP_TOOL_PREFIX}flag_issue`,
-	`${MCP_TOOL_PREFIX}add_issue_comment`,
-	`${MCP_TOOL_PREFIX}set_sentiment`,
-	`${MCP_TOOL_PREFIX}rate_axis`,
-	`${MCP_TOOL_PREFIX}complete_walkthrough`,
+  // Built-in exploration
+  "Read",
+  "Grep",
+  "Glob",
+  // MCP walkthrough tools (A→B→C→D)
+  `${MCP_TOOL_PREFIX}get_walkthrough_state`,
+  `${MCP_TOOL_PREFIX}set_overview`,
+  `${MCP_TOOL_PREFIX}add_semantic_step`,
+  `${MCP_TOOL_PREFIX}add_diff_step`,
+  `${MCP_TOOL_PREFIX}flag_issue`,
+  `${MCP_TOOL_PREFIX}add_issue_comment`,
+  `${MCP_TOOL_PREFIX}set_sentiment`,
+  `${MCP_TOOL_PREFIX}rate_axis`,
+  `${MCP_TOOL_PREFIX}complete_walkthrough`,
 ];
 
 // ── Thinking effort → Claude Agent SDK options ───────────────────────────────
@@ -86,30 +83,28 @@ const ALLOWED_TOOLS = [
 // User-facing setting (UI) maps to a small set of SDK-level knobs. We keep
 // this mapping isolated here so changing the UI vocabulary doesn't ripple.
 
-function applyThinkingEffort(
-	effort: UserSettings["aiThinkingEffort"],
-): Record<string, unknown> {
-	// The Claude Agent SDK's `query()` accepts thinking-budget-adjacent options
-	// through its underlying Anthropic thinking API. Currently the SDK exposes
-	// `thinkingBudgetTokens` on Sonnet-family models. We translate our UI
-	// vocabulary into conservative budgets; unrecognized values fall back to
-	// the SDK default (no explicit budget).
-	switch (effort) {
-		case "ultrathink":
-			return { thinkingBudgetTokens: 32000 };
-		case "max":
-			return { thinkingBudgetTokens: 16000 };
-		case "extra-high":
-			return { thinkingBudgetTokens: 8000 };
-		case "high":
-			return { thinkingBudgetTokens: 4000 };
-		case "medium":
-			return { thinkingBudgetTokens: 2000 };
-		case "low":
-			return { thinkingBudgetTokens: 1000 };
-		default:
-			return {};
-	}
+function applyThinkingEffort(effort: UserSettings["aiThinkingEffort"]): Record<string, unknown> {
+  // The Claude Agent SDK's `query()` accepts thinking-budget-adjacent options
+  // through its underlying Anthropic thinking API. Currently the SDK exposes
+  // `thinkingBudgetTokens` on Sonnet-family models. We translate our UI
+  // vocabulary into conservative budgets; unrecognized values fall back to
+  // the SDK default (no explicit budget).
+  switch (effort) {
+    case "ultrathink":
+      return { thinkingBudgetTokens: 32000 };
+    case "max":
+      return { thinkingBudgetTokens: 16000 };
+    case "extra-high":
+      return { thinkingBudgetTokens: 8000 };
+    case "high":
+      return { thinkingBudgetTokens: 4000 };
+    case "medium":
+      return { thinkingBudgetTokens: 2000 };
+    case "low":
+      return { thinkingBudgetTokens: 1000 };
+    default:
+      return {};
+  }
 }
 
 // ── Phase state machine (walkthrough-only) ──────────────────────────────────
@@ -126,62 +121,56 @@ function applyThinkingEffort(
 // pushes ALSO drive its stream-guard heartbeat, which has slightly different
 // rules. The duplication is intentional and minor.
 
-type Phase =
-	| "connecting"
-	| "exploring"
-	| "analyzing"
-	| "writing"
-	| "rating"
-	| "finishing";
+type Phase = "connecting" | "exploring" | "analyzing" | "writing" | "rating" | "finishing";
 
 interface PhaseMachine {
-	readonly current: () => Phase;
-	readonly transition: (next: Phase, message: string) => WalkthroughStreamEvent | null;
+  readonly current: () => Phase;
+  readonly transition: (next: Phase, message: string) => WalkthroughStreamEvent | null;
 }
 
 function createPhaseMachine(): PhaseMachine {
-	let phase: Phase = "connecting";
-	return {
-		current: () => phase,
-		transition: (next, message) => {
-			if (phase === next) return null;
-			phase = next;
-			return { type: "phase", data: { phase: next, message } };
-		},
-	};
+  let phase: Phase = "connecting";
+  return {
+    current: () => phase,
+    transition: (next, message) => {
+      if (phase === next) return null;
+      phase = next;
+      return { type: "phase", data: { phase: next, message } };
+    },
+  };
 }
 
 // MCP tool bare-name → phase transition. Returns the new phase + message
 // pair, or null if the tool doesn't drive a transition.
 function phaseForMcpTool(bareName: string): { phase: Phase; message: string } | null {
-	switch (bareName) {
-		case "set_overview":
-			return { phase: "analyzing", message: "Forming assessment and risk analysis..." };
-		case "add_semantic_step":
-		case "add_diff_step":
-			return { phase: "writing", message: "Building walkthrough..." };
-		case "rate_axis":
-			return { phase: "rating", message: "Scoring the PR across 9 axes..." };
-		case "complete_walkthrough":
-			return { phase: "finishing", message: "Wrapping up..." };
-		default:
-			return null;
-	}
+  switch (bareName) {
+    case "set_overview":
+      return { phase: "analyzing", message: "Forming assessment and risk analysis..." };
+    case "add_semantic_step":
+    case "add_diff_step":
+      return { phase: "writing", message: "Building walkthrough..." };
+    case "rate_axis":
+      return { phase: "rating", message: "Scoring the PR across 9 axes..." };
+    case "complete_walkthrough":
+      return { phase: "finishing", message: "Wrapping up..." };
+    default:
+      return null;
+  }
 }
 
 // Phases follow A→B→C→D; once past "writing" we don't roll back to
 // "exploring" just because the agent re-checks a file (helper for the
 // guard).
 const PHASE_ORDER: Phase[] = [
-	"connecting",
-	"exploring",
-	"analyzing",
-	"writing",
-	"rating",
-	"finishing",
+  "connecting",
+  "exploring",
+  "analyzing",
+  "writing",
+  "rating",
+  "finishing",
 ];
 function isForward(current: Phase, next: Phase): boolean {
-	return PHASE_ORDER.indexOf(next) >= PHASE_ORDER.indexOf(current);
+  return PHASE_ORDER.indexOf(next) >= PHASE_ORDER.indexOf(current);
 }
 
 // ── Main entry point ────────────────────────────────────────────────────────
@@ -195,246 +184,234 @@ function isForward(current: Phase, next: Phase): boolean {
  * a WalkthroughStreamEvent which this generator surfaces.
  */
 export function streamWalkthroughViaMCP(
-	params: {
-		walkthroughId: string;
-		db: Db;
-		pr: {
-			title: string;
-			body: string | null;
-			sourceBranch: string;
-			targetBranch: string;
-			url: string;
-		};
-		files: PrFileMeta[];
-		worktreePath: string;
-		continuation?: ContinuationContext;
-		abortController?: AbortController;
-	},
-	model?: string,
-	settings?: UserSettings,
+  params: {
+    walkthroughId: string;
+    db: Db;
+    pr: {
+      title: string;
+      body: string | null;
+      sourceBranch: string;
+      targetBranch: string;
+      url: string;
+    };
+    files: PrFileMeta[];
+    worktreePath: string;
+    continuation?: ContinuationContext;
+    abortController?: AbortController;
+  },
+  model?: string,
+  settings?: UserSettings,
 ): AsyncGenerator<WalkthroughStreamEvent> {
-	// ── Shared event queue + waiter pattern ──────────────────────────────
-	const events: WalkthroughStreamEvent[] = [];
-	let waiter: { resolve: () => void } | null = null;
-	let queryDone = false;
+  // ── Shared event queue + waiter pattern ──────────────────────────────
+  const events: WalkthroughStreamEvent[] = [];
+  let waiter: { resolve: () => void } | null = null;
+  let queryDone = false;
 
-	function push(event: WalkthroughStreamEvent) {
-		events.push(event);
-		if (waiter) {
-			waiter.resolve();
-			waiter = null;
-		}
-	}
+  function push(event: WalkthroughStreamEvent) {
+    events.push(event);
+    if (waiter) {
+      waiter.resolve();
+      waiter = null;
+    }
+  }
 
-	// Fire-and-forget WebSocket broadcaster used by tools that mutate
-	// non-walkthrough tables (currently only `add_issue_comment` →
-	// `comment_threads`). Same shape as the HTTP MCP path so handler behavior
-	// is byte-identical across transports (doctrine invariant #13).
-	const broadcastThreadEvent = (msg: WsServerMessage): void => {
-		void AppRuntime.runPromise(
-			Effect.flatMap(WebSocketHub, (hub) => hub.broadcast(msg)),
-		).catch((err) => {
-			logError(
-				"walkthrough-mcp",
-				"broadcastThreadEvent failed:",
-				err instanceof Error ? err.message : String(err),
-			);
-		});
-	};
+  // Fire-and-forget WebSocket broadcaster used by tools that mutate
+  // non-walkthrough tables (currently only `add_issue_comment` →
+  // `comment_threads`). Same shape as the HTTP MCP path so handler behavior
+  // is byte-identical across transports (doctrine invariant #13).
+  const broadcastThreadEvent = (msg: WsServerMessage): void => {
+    void AppRuntime.runPromise(Effect.flatMap(WebSocketHub, (hub) => hub.broadcast(msg))).catch(
+      (err) => {
+        logError(
+          "walkthrough-mcp",
+          "broadcastThreadEvent failed:",
+          err instanceof Error ? err.message : String(err),
+        );
+      },
+    );
+  };
 
-	// Shared tool handlers run with this context. No mutable "state" object
-	// anymore — all state lives in the DB (doctrine invariant #1).
-	const walkthroughServer = createWalkthroughMcpServer({
-		db: params.db,
-		walkthroughId: params.walkthroughId,
-		emit: push,
-		broadcastThreadEvent,
-	});
+  // Shared tool handlers run with this context. No mutable "state" object
+  // anymore — all state lives in the DB (doctrine invariant #1).
+  const walkthroughServer = createWalkthroughMcpServer({
+    db: params.db,
+    walkthroughId: params.walkthroughId,
+    emit: push,
+    broadcastThreadEvent,
+  });
 
-	const userMessage = buildWalkthroughPrompt(
-		params,
-		undefined,
-		params.continuation,
-	);
+  const userMessage = buildWalkthroughPrompt(params, undefined, params.continuation);
 
-	let errorEmitted = false;
-	let anySummaryEmitted = false;
+  let errorEmitted = false;
+  let anySummaryEmitted = false;
 
-	const queryTask = (async (): Promise<WalkthroughTokenUsage> => {
-		debug(
-			"walkthrough-mcp",
-			"Starting MCP walkthrough in:",
-			params.worktreePath,
-			"model:",
-			model ?? "default",
-		);
+  const queryTask = (async (): Promise<WalkthroughTokenUsage> => {
+    debug(
+      "walkthrough-mcp",
+      "Starting MCP walkthrough in:",
+      params.worktreePath,
+      "model:",
+      model ?? "default",
+    );
 
-		const abortController = params.abortController ?? new AbortController();
-		const timeoutId = setTimeout(
-			() => {
-				debug(
-					"walkthrough-mcp",
-					"Aborting walkthrough — timed out after 10 minutes",
-				);
-				abortController.abort(
-					new Error("Walkthrough generation timed out after 10 minutes"),
-				);
-			},
-			10 * 60 * 1000,
-		);
+    const abortController = params.abortController ?? new AbortController();
+    const timeoutId = setTimeout(
+      () => {
+        debug("walkthrough-mcp", "Aborting walkthrough — timed out after 10 minutes");
+        abortController.abort(new Error("Walkthrough generation timed out after 10 minutes"));
+      },
+      10 * 60 * 1000,
+    );
 
-		const phaseMachine = createPhaseMachine();
+    const phaseMachine = createPhaseMachine();
 
-		try {
-			const pinnedClaude = resolveCliBin("claude");
-			const pathOption =
-				pinnedClaude !== "claude"
-					? { pathToClaudeCodeExecutable: pinnedClaude }
-					: {};
+    try {
+      const pinnedClaude = resolveCliBin("claude");
+      const pathOption =
+        pinnedClaude !== "claude" ? { pathToClaudeCodeExecutable: pinnedClaude } : {};
 
-			const thinkingOptions = settings?.aiThinkingEffort
-				? applyThinkingEffort(settings.aiThinkingEffort)
-				: {};
+      const thinkingOptions = settings?.aiThinkingEffort
+        ? applyThinkingEffort(settings.aiThinkingEffort)
+        : {};
 
-			const q = query({
-				prompt: userMessage,
-				options: {
-					systemPrompt: WALKTHROUGH_MCP_SYSTEM_PROMPT,
-					cwd: params.worktreePath,
-					tools: ["Read", "Grep", "Glob"],
-					allowedTools: ALLOWED_TOOLS,
-					mcpServers: { [WALKTHROUGH_MCP_SERVER]: walkthroughServer },
-					permissionMode: "bypassPermissions",
-					allowDangerouslySkipPermissions: true,
-					persistSession: false,
-					// 9 rate_axis calls layered on top of the N add_diff_step
-					// calls + flag_issue + set_overview + set_sentiment. The
-					// ceiling is user-configurable via `aiMaxTurns` so complex
-					// PRs don't truncate. Default 60 matches the historical
-					// hard-coded value.
-					maxTurns: settings?.aiMaxTurns ?? 60,
-					abortController,
-					...(model ? { model } : {}),
-					...pathOption,
-					...thinkingOptions,
-				},
-			});
+      const q = query({
+        prompt: userMessage,
+        options: {
+          systemPrompt: WALKTHROUGH_MCP_SYSTEM_PROMPT,
+          cwd: params.worktreePath,
+          tools: ["Read", "Grep", "Glob"],
+          allowedTools: ALLOWED_TOOLS,
+          mcpServers: { [WALKTHROUGH_MCP_SERVER]: walkthroughServer },
+          permissionMode: "bypassPermissions",
+          allowDangerouslySkipPermissions: true,
+          persistSession: false,
+          // 9 rate_axis calls layered on top of the N add_diff_step
+          // calls + flag_issue + set_overview + set_sentiment. The
+          // ceiling is user-configurable via `aiMaxTurns` so complex
+          // PRs don't truncate. Default 60 matches the historical
+          // hard-coded value.
+          maxTurns: settings?.aiMaxTurns ?? 60,
+          abortController,
+          ...(model ? { model } : {}),
+          ...pathOption,
+          ...thinkingOptions,
+        },
+      });
 
-			// Walkthrough doesn't surface text/reasoning to the UI — content
-			// flows commit-first through MCP tool handlers. Tool calls drive
-			// either an `exploration` event (built-in tools) or a phase
-			// transition (MCP walkthrough tools).
-			const emit = (ev: NormalizedAgentEvent): void => {
-				if (ev.kind !== "tool-call") return;
+      // Walkthrough doesn't surface text/reasoning to the UI — content
+      // flows commit-first through MCP tool handlers. Tool calls drive
+      // either an `exploration` event (built-in tools) or a phase
+      // transition (MCP walkthrough tools).
+      const emit = (ev: NormalizedAgentEvent): void => {
+        if (ev.kind !== "tool-call") return;
 
-				if (ev.source === "builtin" && EXPLORATION_TOOLS.has(ev.toolName)) {
-					if (phaseMachine.current() === "connecting") {
-						const transition = phaseMachine.transition(
-							"exploring",
-							"Reading files and understanding changes...",
-						);
-						if (transition) push(transition);
-					}
-					const activity = buildActivity(ev.toolName, ev.input);
-					push({ type: "exploration", data: activity });
-					return;
-				}
+        if (ev.source === "builtin" && EXPLORATION_TOOLS.has(ev.toolName)) {
+          if (phaseMachine.current() === "connecting") {
+            const transition = phaseMachine.transition(
+              "exploring",
+              "Reading files and understanding changes...",
+            );
+            if (transition) push(transition);
+          }
+          const activity = buildActivity(ev.toolName, ev.input);
+          push({ type: "exploration", data: activity });
+          return;
+        }
 
-				if (ev.source === "mcp" && ev.mcpServer === WALKTHROUGH_MCP_SERVER) {
-					if (ev.bareName === "set_overview") {
-						anySummaryEmitted = true;
-					}
-					const phaseTarget = phaseForMcpTool(ev.bareName);
-					if (phaseTarget && isForward(phaseMachine.current(), phaseTarget.phase)) {
-						const transition = phaseMachine.transition(
-							phaseTarget.phase,
-							phaseTarget.message,
-						);
-						if (transition) push(transition);
-					}
-				}
-			};
+        if (ev.source === "mcp" && ev.mcpServer === WALKTHROUGH_MCP_SERVER) {
+          if (ev.bareName === "set_overview") {
+            anySummaryEmitted = true;
+          }
+          const phaseTarget = phaseForMcpTool(ev.bareName);
+          if (phaseTarget && isForward(phaseMachine.current(), phaseTarget.phase)) {
+            const transition = phaseMachine.transition(phaseTarget.phase, phaseTarget.message);
+            if (transition) push(transition);
+          }
+        }
+      };
 
-			const tokenUsage = await walkClaudeMessages(q, emit);
+      const tokenUsage = await walkClaudeMessages(q, emit);
 
-			debug("walkthrough-mcp", "Query complete.");
-			return tokenUsage ?? {
-				inputTokens: 0,
-				outputTokens: 0,
-				cacheReadInputTokens: 0,
-				cacheCreationInputTokens: 0,
-			};
-		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
-			debug("walkthrough-mcp", "Query error/abort:", message);
-			errorEmitted = true;
-			push({
-				type: "error",
-				data: { code: "AiGenerationError", message },
-			});
-			return {
-				inputTokens: 0,
-				outputTokens: 0,
-				cacheReadInputTokens: 0,
-				cacheCreationInputTokens: 0,
-			};
-		} finally {
-			clearTimeout(timeoutId);
-		}
-	})();
+      debug("walkthrough-mcp", "Query complete.");
+      return (
+        tokenUsage ?? {
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadInputTokens: 0,
+          cacheCreationInputTokens: 0,
+        }
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      debug("walkthrough-mcp", "Query error/abort:", message);
+      errorEmitted = true;
+      push({
+        type: "error",
+        data: { code: "AiGenerationError", message },
+      });
+      return {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadInputTokens: 0,
+        cacheCreationInputTokens: 0,
+      };
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  })();
 
-	return (async function* (): AsyncGenerator<WalkthroughStreamEvent> {
-		const resultPromise = queryTask.then((usage) => {
-			queryDone = true;
-			if (waiter) {
-				waiter.resolve();
-				waiter = null;
-			}
-			return usage;
-		});
+  return (async function* (): AsyncGenerator<WalkthroughStreamEvent> {
+    const resultPromise = queryTask.then((usage) => {
+      queryDone = true;
+      if (waiter) {
+        waiter.resolve();
+        waiter = null;
+      }
+      return usage;
+    });
 
-		while (true) {
-			if (events.length > 0) {
-				const batch = events.splice(0);
-				for (const e of batch) {
-					yield e;
-				}
-			} else if (queryDone) {
-				break;
-			} else {
-				await new Promise<void>((resolve) => {
-					waiter = { resolve };
-				});
-			}
-		}
+    while (true) {
+      if (events.length > 0) {
+        const batch = events.splice(0);
+        for (const e of batch) {
+          yield e;
+        }
+      } else if (queryDone) {
+        break;
+      } else {
+        await new Promise<void>((resolve) => {
+          waiter = { resolve };
+        });
+      }
+    }
 
-		for (const e of events.splice(0)) {
-			yield e;
-		}
+    for (const e of events.splice(0)) {
+      yield e;
+    }
 
-		const tokenUsage = await resultPromise;
+    const tokenUsage = await resultPromise;
 
-		if (anySummaryEmitted) {
-			yield {
-				type: "done" as const,
-				data: {
-					walkthroughId: params.walkthroughId,
-					tokenUsage,
-				},
-			};
-		} else if (!errorEmitted) {
-			debug(
-				"walkthrough-mcp",
-				"Query completed without producing a summary — emitting fallback error",
-			);
-			yield {
-				type: "error" as const,
-				data: {
-					code: "NoSummaryGenerated",
-					message:
-						"The AI finished exploring but did not produce a walkthrough. This can happen with complex PRs. Try regenerating.",
-				},
-			};
-		}
-	})();
+    if (anySummaryEmitted) {
+      yield {
+        type: "done" as const,
+        data: {
+          walkthroughId: params.walkthroughId,
+          tokenUsage,
+        },
+      };
+    } else if (!errorEmitted) {
+      debug(
+        "walkthrough-mcp",
+        "Query completed without producing a summary — emitting fallback error",
+      );
+      yield {
+        type: "error" as const,
+        data: {
+          code: "NoSummaryGenerated",
+          message:
+            "The AI finished exploring but did not produce a walkthrough. This can happen with complex PRs. Try regenerating.",
+        },
+      };
+    }
+  })();
 }

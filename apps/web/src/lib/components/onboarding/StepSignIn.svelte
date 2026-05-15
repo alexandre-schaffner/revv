@@ -1,36 +1,40 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import { Check, Copy, ChevronLeft } from '@lucide/svelte';
-	import { Dotmatrix } from '$lib/components/ui/dotmatrix';
-	import * as auth from '$lib/stores/auth.svelte';
+import { Check, ChevronLeft, Copy } from "@lucide/svelte";
+import { onMount } from "svelte";
+import { Dotmatrix } from "$lib/components/ui/dotmatrix";
+import * as auth from "$lib/stores/auth.svelte";
 
-	interface Props {
-		onBack?: () => void;
-		githubHost?: string;
-	}
+interface Props {
+  onBack?: () => void;
+  githubHost?: string;
+}
 
-	let { onBack, githubHost = 'github.com' }: Props = $props();
+let { onBack, githubHost = "github.com" }: Props = $props();
 
-	const isGhe = $derived(githubHost !== 'github.com');
-	const hostLabel = $derived(isGhe ? githubHost : 'GitHub');
+const isGhe = $derived(githubHost !== "github.com");
+const hostLabel = $derived(isGhe ? githubHost : "GitHub");
 
-	const error = $derived(auth.getError());
-	const deviceFlow = $derived(auth.getDeviceFlow());
-	const isLoading = $derived(auth.getIsLoading());
+const error = $derived(auth.getError());
+const deviceFlow = $derived(auth.getDeviceFlow());
+const isLoading = $derived(auth.getIsLoading());
 
-	let copied = $state(false);
+let copied = $state(false);
 
-	onMount(() => {
-		auth.cancelSignIn();
-		auth.clearError();
-	});
+onMount(() => {
+  auth.cancelSignIn();
+  auth.clearError();
+});
 
-	async function copyCode() {
-		if (!deviceFlow) return;
-		await navigator.clipboard.writeText(deviceFlow.userCode);
-		copied = true;
-		setTimeout(() => (copied = false), 1800);
-	}
+async function copyCode() {
+  if (!deviceFlow) return;
+  try {
+    await navigator.clipboard.writeText(deviceFlow.userCode);
+    copied = true;
+    setTimeout(() => (copied = false), 2000);
+  } catch {
+    // Clipboard API may be unavailable in some contexts
+  }
+}
 </script>
 
 <div class="signin">

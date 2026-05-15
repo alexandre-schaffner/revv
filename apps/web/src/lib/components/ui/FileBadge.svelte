@@ -1,48 +1,64 @@
 <script lang="ts">
-  interface Props {
-    filePath: string;
-    startLine?: number | undefined;
-    endLine?: number | undefined;
-    onclick?: (() => void) | undefined;
-  }
-  let { filePath, startLine, endLine, onclick }: Props = $props();
+interface Props {
+  filePath: string;
+  startLine?: number | undefined;
+  endLine?: number | undefined;
+  onclick?: (() => void) | undefined;
+}
+let { filePath, startLine, endLine, onclick }: Props = $props();
 
-  function getLangLabel(ext: string): { abbr: string; color: string } {
-    switch (ext) {
-      case '.ts':
-      case '.tsx':  return { abbr: 'TS',  color: '#3178c6' };
-      case '.js':
-      case '.jsx':
-      case '.mjs':
-      case '.cjs':  return { abbr: 'JS',  color: '#a37f00' };
-      case '.svelte': return { abbr: 'SV', color: '#ff3e00' };
-      case '.css':
-      case '.scss':
-      case '.sass':
-      case '.less': return { abbr: 'CSS', color: '#2965f1' };
-      case '.json': return { abbr: 'JSON', color: '#6b7280' };
-      case '.yaml':
-      case '.yml':  return { abbr: 'YML', color: '#6b7280' };
-      case '.toml': return { abbr: 'TOML', color: '#6b7280' };
-      case '.md':
-      case '.mdx':  return { abbr: 'MD',  color: '#6b7280' };
-      case '.html': return { abbr: 'HTML', color: '#e34c26' };
-      case '.sh':
-      case '.bash':
-      case '.zsh':  return { abbr: 'SH',  color: '#4eaa25' };
-      case '.rs':   return { abbr: 'RS',  color: '#ce422b' };
-      case '.py':   return { abbr: 'PY',  color: '#3572a5' };
-      case '.go':   return { abbr: 'GO',  color: '#00add8' };
-      default:      return { abbr: 'FILE', color: '#6b7280' };
-    }
+function getLangLabel(ext: string): { abbr: string; color: string } {
+  switch (ext) {
+    case ".ts":
+    case ".tsx":
+      return { abbr: "TS", color: "#3178c6" };
+    case ".js":
+    case ".jsx":
+    case ".mjs":
+    case ".cjs":
+      return { abbr: "JS", color: "#a37f00" };
+    case ".svelte":
+      return { abbr: "SV", color: "#ff3e00" };
+    case ".css":
+    case ".scss":
+    case ".sass":
+    case ".less":
+      return { abbr: "CSS", color: "#2965f1" };
+    case ".json":
+      return { abbr: "JSON", color: "#6b7280" };
+    case ".yaml":
+    case ".yml":
+      return { abbr: "YML", color: "#6b7280" };
+    case ".toml":
+      return { abbr: "TOML", color: "#6b7280" };
+    case ".md":
+    case ".mdx":
+      return { abbr: "MD", color: "#6b7280" };
+    case ".html":
+      return { abbr: "HTML", color: "#e34c26" };
+    case ".sh":
+    case ".bash":
+    case ".zsh":
+      return { abbr: "SH", color: "#4eaa25" };
+    case ".rs":
+      return { abbr: "RS", color: "#ce422b" };
+    case ".py":
+      return { abbr: "PY", color: "#3572a5" };
+    case ".go":
+      return { abbr: "GO", color: "#00add8" };
+    default:
+      return { abbr: "FILE", color: "#6b7280" };
   }
+}
 
-  const fileName = $derived(filePath.split('/').at(-1) ?? filePath);
-  const ext = $derived(fileName.includes('.') ? '.' + fileName.split('.').at(-1) : '');
-  const lang = $derived(getLangLabel(ext));
-  const tooltip = $derived(startLine != null
-    ? `${filePath}:${startLine}${endLine != null && endLine !== startLine ? `-${endLine}` : ''}`
-    : filePath);
+const fileName = $derived(filePath.split("/").at(-1) ?? filePath);
+const ext = $derived(fileName.includes(".") ? `.${fileName.split(".").at(-1)}` : "");
+const lang = $derived(getLangLabel(ext));
+const tooltip = $derived(
+  startLine != null
+    ? `${filePath}:${startLine}${endLine != null && endLine !== startLine ? `-${endLine}` : ""}`
+    : filePath,
+);
 </script>
 
 {#if onclick}

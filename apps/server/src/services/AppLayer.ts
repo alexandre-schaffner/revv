@@ -1,29 +1,29 @@
-import { Layer } from 'effect';
-import { CacheStatsLive, InvalidationBusLive } from '../cache/index';
-import { AiServiceLive } from './Ai';
-import { ChatChangesPushServiceLive } from './ChatChangesPush';
-import { ChatMcpTokensLive } from './ChatMcpTokens';
-import { ChatSessionServiceLive } from './ChatSession';
-import { DbMaintenanceLive } from './DbMaintenance';
-import { DbServiceLive } from './Db';
-import { DiffCacheServiceLive } from './DiffCache';
-import { FileContentServiceLive } from './FileContent';
-import { CacheServiceLive } from './Cache';
-import { GitHubServiceLive } from './GitHub';
-import { GitHubEtagCacheLive } from './GitHubEtagCache';
-import { OpencodeSupervisorLive } from './OpencodeSupervisor';
-import { PollSchedulerLive } from './PollScheduler';
-import { PrContextServiceLive } from './PrContext';
-import { PullRequestServiceLive } from './PullRequest';
-import { RepoCloneServiceLive } from './RepoClone';
-import { RepositoryServiceLive } from './Repository';
-import { ReviewServiceLive } from './Review';
-import { SettingsServiceLive } from './Settings';
-import { SyncServiceLive } from './Sync';
-import { TokenProviderLive } from './TokenProvider';
-import { WalkthroughServiceLive } from './Walkthrough';
-import { WalkthroughJobsLive } from './WalkthroughJobs';
-import { WebSocketHubLive } from './WebSocketHub';
+import { Layer } from "effect";
+import { CacheStatsLive, InvalidationBusLive } from "../cache/index";
+import { AiServiceLive } from "./Ai";
+import { CacheServiceLive } from "./Cache";
+import { ChatChangesPushServiceLive } from "./ChatChangesPush";
+import { ChatMcpTokensLive } from "./ChatMcpTokens";
+import { ChatSessionServiceLive } from "./ChatSession";
+import { DbServiceLive } from "./Db";
+import { DbMaintenanceLive } from "./DbMaintenance";
+import { DiffCacheServiceLive } from "./DiffCache";
+import { FileContentServiceLive } from "./FileContent";
+import { GitHubServiceLive } from "./GitHub";
+import { GitHubEtagCacheLive } from "./GitHubEtagCache";
+import { OpencodeSupervisorLive } from "./OpencodeSupervisor";
+import { PollSchedulerLive } from "./PollScheduler";
+import { PrContextServiceLive } from "./PrContext";
+import { PullRequestServiceLive } from "./PullRequest";
+import { RepoCloneServiceLive } from "./RepoClone";
+import { RepositoryServiceLive } from "./Repository";
+import { ReviewServiceLive } from "./Review";
+import { SettingsServiceLive } from "./Settings";
+import { SyncServiceLive } from "./Sync";
+import { TokenProviderLive } from "./TokenProvider";
+import { WalkthroughServiceLive } from "./Walkthrough";
+import { WalkthroughJobsLive } from "./WalkthroughJobs";
+import { WebSocketHubLive } from "./WebSocketHub";
 
 // TokenProvider now needs DbService
 const TokenProviderWithDeps = TokenProviderLive.pipe(Layer.provide(DbServiceLive));
@@ -31,46 +31,44 @@ const TokenProviderWithDeps = TokenProviderLive.pipe(Layer.provide(DbServiceLive
 // GitHub service now depends on the etag cache for conditional requests,
 // and on SettingsService to resolve the API base URL dynamically.
 const GitHubServiceWithDeps = GitHubServiceLive.pipe(
-	Layer.provide(Layer.mergeAll(GitHubEtagCacheLive, SettingsServiceLive)),
+  Layer.provide(Layer.mergeAll(GitHubEtagCacheLive, SettingsServiceLive)),
 );
 
 // OpencodeSupervisor depends on DbService + SettingsService (for detecting
 // agent-changed + resolving the selected agent). It's in BaseLayers because
 // AiService needs it; AiService in turn is consumed by WalkthroughJobs.
 const OpencodeSupervisorWithDeps = OpencodeSupervisorLive.pipe(
-	Layer.provide(Layer.mergeAll(DbServiceLive, SettingsServiceLive)),
+  Layer.provide(Layer.mergeAll(DbServiceLive, SettingsServiceLive)),
 );
 
 // ChatSessionService is a thin Drizzle wrapper for the right-pane chat —
 // uses Layer.effect to grab `db` at construction, so we satisfy DbService
 // at the same boundary other DB-dependent services do.
-const ChatSessionServiceWithDeps = ChatSessionServiceLive.pipe(
-	Layer.provide(DbServiceLive),
-);
+const ChatSessionServiceWithDeps = ChatSessionServiceLive.pipe(Layer.provide(DbServiceLive));
 
 // Base layer: all services that have no deps or only depend on DbService
 const BaseLayers = Layer.mergeAll(
-	DbServiceLive,
-	TokenProviderWithDeps,
-	GitHubEtagCacheLive,
-	GitHubServiceWithDeps,
-	WebSocketHubLive,
-	RepositoryServiceLive,
-	PullRequestServiceLive,
-	ReviewServiceLive,
-	SettingsServiceLive,
-	WalkthroughServiceLive,
-	DiffCacheServiceLive,
-	FileContentServiceLive,
-	CacheServiceLive,
-	OpencodeSupervisorWithDeps,
-	ChatSessionServiceWithDeps,
-	ChatMcpTokensLive,
-	// Unified cache layer (M1 Foundations) — InvalidationBus is live with zero
-	// publishers yet; CacheStats is ready for per-namespace registrations as
-	// existing services migrate to adapters in M2.
-	CacheStatsLive,
-	InvalidationBusLive,
+  DbServiceLive,
+  TokenProviderWithDeps,
+  GitHubEtagCacheLive,
+  GitHubServiceWithDeps,
+  WebSocketHubLive,
+  RepositoryServiceLive,
+  PullRequestServiceLive,
+  ReviewServiceLive,
+  SettingsServiceLive,
+  WalkthroughServiceLive,
+  DiffCacheServiceLive,
+  FileContentServiceLive,
+  CacheServiceLive,
+  OpencodeSupervisorWithDeps,
+  ChatSessionServiceWithDeps,
+  ChatMcpTokensLive,
+  // Unified cache layer (M1 Foundations) — InvalidationBus is live with zero
+  // publishers yet; CacheStats is ready for per-namespace registrations as
+  // existing services migrate to adapters in M2.
+  CacheStatsLive,
+  InvalidationBusLive,
 );
 
 // PrContext composes PR + Repo + Token + GitHub + DiffCache — built from BaseLayers
@@ -78,7 +76,7 @@ const PrContextServiceWithDeps = PrContextServiceLive.pipe(Layer.provide(BaseLay
 
 // SyncService depends on BaseLayers + PrContext (for resolving repo/token chains)
 const SyncServiceWithDeps = SyncServiceLive.pipe(
-	Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps)),
+  Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps)),
 );
 
 // AiService depends on DbService + SettingsService (both in BaseLayers)
@@ -97,42 +95,38 @@ const DbMaintenanceWithDeps = DbMaintenanceLive.pipe(Layer.provide(DbServiceLive
 // consumers (SSE handler, regenerate handler, index.ts startup) tag it
 // directly without needing to know the full dependency graph.
 const WalkthroughJobsWithDeps = WalkthroughJobsLive.pipe(
-	Layer.provide(
-		Layer.mergeAll(
-			BaseLayers,
-			PrContextServiceWithDeps,
-			AiServiceWithDeps,
-			RepoCloneServiceWithDeps,
-		),
-	),
+  Layer.provide(
+    Layer.mergeAll(
+      BaseLayers,
+      PrContextServiceWithDeps,
+      AiServiceWithDeps,
+      RepoCloneServiceWithDeps,
+    ),
+  ),
 );
 
 // PollScheduler depends on BaseLayers + SyncService (for thread polling) +
 // WalkthroughJobs (for superseding walkthroughs when a new head SHA arrives).
 const PollSchedulerWithDeps = PollSchedulerLive.pipe(
-	Layer.provide(
-		Layer.mergeAll(BaseLayers, SyncServiceWithDeps, WalkthroughJobsWithDeps),
-	),
+  Layer.provide(Layer.mergeAll(BaseLayers, SyncServiceWithDeps, WalkthroughJobsWithDeps)),
 );
 
 // ChatChangesPush depends on PrContext (for resolving repo+token), AiService
 // (for invoking the conflict-resolution agent), and BaseLayers (db, github,
 // chat sessions, ws hub, pr service, etag cache).
 const ChatChangesPushServiceWithDeps = ChatChangesPushServiceLive.pipe(
-	Layer.provide(
-		Layer.mergeAll(BaseLayers, PrContextServiceWithDeps, AiServiceWithDeps),
-	),
+  Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps, AiServiceWithDeps)),
 );
 
 // AppLayer merges everything together so consumers get all services
 export const AppLayer = Layer.mergeAll(
-	BaseLayers,
-	PrContextServiceWithDeps,
-	SyncServiceWithDeps,
-	PollSchedulerWithDeps,
-	AiServiceWithDeps,
-	RepoCloneServiceWithDeps,
-	WalkthroughJobsWithDeps,
-	DbMaintenanceWithDeps,
-	ChatChangesPushServiceWithDeps,
+  BaseLayers,
+  PrContextServiceWithDeps,
+  SyncServiceWithDeps,
+  PollSchedulerWithDeps,
+  AiServiceWithDeps,
+  RepoCloneServiceWithDeps,
+  WalkthroughJobsWithDeps,
+  DbMaintenanceWithDeps,
+  ChatChangesPushServiceWithDeps,
 );

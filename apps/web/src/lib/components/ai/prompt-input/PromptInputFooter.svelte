@@ -1,7 +1,7 @@
 <script lang="ts" module>
-	import type { HTMLAttributes } from "svelte/elements";
+import type { HTMLAttributes } from "svelte/elements";
 
-	export type PromptInputFooterProps = HTMLAttributes<HTMLDivElement>;
+export type PromptInputFooterProps = HTMLAttributes<HTMLDivElement>;
 </script>
 
 <script lang="ts">

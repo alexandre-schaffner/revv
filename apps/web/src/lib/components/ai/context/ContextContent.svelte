@@ -1,14 +1,10 @@
 <script lang="ts" module>
-	import type { Snippet } from 'svelte';
-	import type { ComponentProps } from 'svelte';
-	import { LinkPreview } from 'bits-ui';
+import { LinkPreview } from "bits-ui";
+import type { ComponentProps, Snippet } from "svelte";
 
-	export type ContextContentProps = Omit<
-		ComponentProps<typeof LinkPreview.Content>,
-		'children'
-	> & {
-		children?: Snippet;
-	};
+export type ContextContentProps = Omit<ComponentProps<typeof LinkPreview.Content>, "children"> & {
+  children?: Snippet;
+};
 </script>
 
 <script lang="ts">

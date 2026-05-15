@@ -1,17 +1,21 @@
-import { Elysia, status } from 'elysia';
-import { Cause, Option } from 'effect';
-import { auth } from '../auth';
-import { debug } from '../logger';
+import { Cause, Option } from "effect";
+import { Elysia, status } from "elysia";
+import { auth } from "../auth";
 import {
-	AiNotConfiguredError,
-	GitHubAuthError,
-	GitHubNetworkError,
-	GitHubNotFoundError,
-	GitHubRateLimitError,
-	NotFoundError,
-	SyncError,
-	isReviewError,
-} from '../domain/errors';
+  AiNotConfiguredError,
+  CloneError,
+  CloneInProgressError,
+  CloneNotReadyError,
+  GitHubAuthError,
+  GitHubNetworkError,
+  GitHubNotFoundError,
+  GitHubRateLimitError,
+  isReviewError,
+  NotFoundError,
+  SyncError,
+  ValidationError,
+} from "../domain/errors";
+import { debug, logError } from "../logger";
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
 
@@ -20,21 +24,17 @@ import {
  * Short-circuits with 401 if no valid session is found; otherwise injects
  * `session` into typed context for downstream handlers.
  */
-export const withAuth = new Elysia({ name: 'with-auth' })
-	.derive(
-		{ as: 'scoped' },
-		async (ctx) => {
-			const session = await auth.api.getSession({ headers: ctx.request.headers });
-			if (!session) {
-				return status(401, { error: 'Unauthorized' });
-			}
-			return { session };
-		}
-	);
+export const withAuth = new Elysia({ name: "with-auth" }).derive({ as: "scoped" }, async (ctx) => {
+  const session = await auth.api.getSession({ headers: ctx.request.headers });
+  if (!session) {
+    return status(401, { error: "Unauthorized" });
+  }
+  return { session };
+});
 
 // ── Effect error unwrapping ─────────────────────────────────────────────────
 
-const FIBER_FAILURE_CAUSE = Symbol.for('effect/Runtime/FiberFailure/Cause');
+const FIBER_FAILURE_CAUSE = Symbol.for("effect/Runtime/FiberFailure/Cause");
 
 /**
  * Extract the original domain error from an Effect FiberFailure.
@@ -42,14 +42,14 @@ const FIBER_FAILURE_CAUSE = Symbol.for('effect/Runtime/FiberFailure/Cause');
  * `Cause.failureOption` to extract the underlying tagged error.
  */
 export function unwrapEffectError(e: unknown): unknown {
-	if (e !== null && typeof e === 'object' && FIBER_FAILURE_CAUSE in e) {
-		const cause = (e as Record<symbol, unknown>)[FIBER_FAILURE_CAUSE];
-		const opt = Cause.failureOption(cause as Cause.Cause<unknown>);
-		if (Option.isSome(opt)) {
-			return opt.value;
-		}
-	}
-	return e;
+  if (e !== null && typeof e === "object" && FIBER_FAILURE_CAUSE in e) {
+    const cause = (e as Record<symbol, unknown>)[FIBER_FAILURE_CAUSE];
+    const opt = Cause.failureOption(cause as Cause.Cause<unknown>);
+    if (Option.isSome(opt)) {
+      return opt.value;
+    }
+  }
+  return e;
 }
 
 // ── Error mapping ─────────────────────────────────────────────────────────────
@@ -57,69 +57,94 @@ export function unwrapEffectError(e: unknown): unknown {
 /**
  * Maps tagged Effect domain errors to HTTP responses.
  * Unwraps FiberFailure first, then checks instanceof.
- * Sets `ctx.set.status` and returns the error body, or rethrows for unknown errors.
+ * Sets `ctx.set.status` and returns the error body.
+ * Unknown errors fall back to 500 with a generic message.
  */
 export function handleAppError(
-	raw: unknown,
-	ctx: { set: { status?: number | string } }
-): { error: string } | never {
-	const e = unwrapEffectError(raw);
+  raw: unknown,
+  ctx: { set: { status?: number | string } },
+): { error: string } {
+  const e = unwrapEffectError(raw);
 
-	if (e instanceof NotFoundError) {
-		ctx.set.status = 404;
-		return { error: 'Not found' };
-	}
+  if (e instanceof NotFoundError) {
+    ctx.set.status = 404;
+    return { error: "Not found" };
+  }
 
-	if (e instanceof GitHubAuthError) {
-		ctx.set.status = 401;
-		return { error: 'GitHub token expired or invalid' };
-	}
+  if (e instanceof GitHubAuthError) {
+    ctx.set.status = 401;
+    return { error: "GitHub token expired or invalid" };
+  }
 
-	if (e instanceof GitHubNotFoundError) {
-		ctx.set.status = 404;
-		return { error: 'Not found on GitHub' };
-	}
+  if (e instanceof GitHubNotFoundError) {
+    ctx.set.status = 404;
+    return { error: "Not found on GitHub" };
+  }
 
-	if (e instanceof AiNotConfiguredError) {
-		ctx.set.status = 400;
-		return { error: 'AI CLI agent not configured — install opencode or claude' };
-	}
+  if (e instanceof AiNotConfiguredError) {
+    ctx.set.status = 400;
+    return { error: "AI CLI agent not configured — install opencode or claude" };
+  }
 
-	if (isReviewError(e)) {
-		if (e.code === 'NOT_FOUND') {
-			ctx.set.status = 404;
-			return { error: e.message };
-		}
-		ctx.set.status = 500;
-		return { error: e.message };
-	}
+  if (e instanceof ValidationError) {
+    ctx.set.status = 400;
+    return { error: e.message };
+  }
 
-	if (e instanceof SyncError) {
-		ctx.set.status = 502;
-		return { error: e.message };
-	}
+  if (isReviewError(e)) {
+    if (e.code === "NOT_FOUND") {
+      ctx.set.status = 404;
+      return { error: e.message };
+    }
+    ctx.set.status = 500;
+    return { error: e.message };
+  }
 
-	if (e instanceof GitHubNetworkError) {
-		ctx.set.status = 502;
-		return { error: `GitHub API error: ${String(e.cause)}` };
-	}
+  if (e instanceof SyncError) {
+    ctx.set.status = 502;
+    return { error: e.message };
+  }
 
-	if (e instanceof GitHubRateLimitError) {
-		ctx.set.status = 429;
-		return { error: `GitHub rate limit exceeded, resets at ${e.resetAt.toISOString()}` };
-	}
+  if (e instanceof GitHubNetworkError) {
+    ctx.set.status = 502;
+    return { error: `GitHub API error: ${String(e.cause)}` };
+  }
 
-	throw raw;
+  if (e instanceof GitHubRateLimitError) {
+    ctx.set.status = 429;
+    return { error: `GitHub rate limit exceeded, resets at ${e.resetAt.toISOString()}` };
+  }
+
+  if (e instanceof CloneNotReadyError) {
+    ctx.set.status = 409;
+    return { error: "Repository clone is not ready yet" };
+  }
+
+  if (e instanceof CloneInProgressError) {
+    ctx.set.status = 409;
+    return { error: "Repository clone is already in progress" };
+  }
+
+  if (e instanceof CloneError) {
+    ctx.set.status = 502;
+    return { error: e.message };
+  }
+
+  // Unknown error — log and return a generic 500.
+  const message = e instanceof Error ? e.message : "Internal server error";
+  logError("handleAppError", "unhandled error:", message);
+  ctx.set.status = 500;
+  return { error: message };
 }
 
 // ── Shared response helpers ─────────────────────────────────────────────────
 
 /** Build a JSON Response with the given body and status code. */
 export function jsonResponse(body: Record<string, unknown>, statusCode: number): Response {
-	return new Response(JSON.stringify(body), {
-		status: statusCode,
-		headers: { 'Content-Type': 'application/json' },
-	});
+  return new Response(JSON.stringify(body), {
+    status: statusCode,
+    headers: { "Content-Type": "application/json" },
+  });
 }
 
 /**
@@ -128,26 +153,35 @@ export function jsonResponse(body: Record<string, unknown>, statusCode: number):
  * Elysia's `ctx.set.status` convention.
  */
 export function mapErrorToSSEResponse(raw: unknown): Response {
-	const e = unwrapEffectError(raw);
+  const e = unwrapEffectError(raw);
 
-	if (e instanceof AiNotConfiguredError) {
-		return jsonResponse({ code: 'NOT_CONFIGURED', message: 'AI CLI agent not configured — install opencode or claude' }, 400);
-	}
-	if (e instanceof NotFoundError) {
-		return jsonResponse({ code: 'NOT_FOUND', message: `${e.resource} not found` }, 404);
-	}
-	if (e instanceof GitHubAuthError) {
-		return jsonResponse({ code: 'GITHUB_AUTH_ERROR', message: 'GitHub token expired or invalid' }, 401);
-	}
-	if (e instanceof GitHubRateLimitError) {
-		return jsonResponse({ code: 'GITHUB_RATE_LIMITED', message: 'GitHub API rate limited' }, 429);
-	}
-	if (isReviewError(e)) {
-		return jsonResponse({ code: 'REVIEW_ERROR', message: e.message }, 500);
-	}
+  if (e instanceof AiNotConfiguredError) {
+    return jsonResponse(
+      {
+        code: "NOT_CONFIGURED",
+        message: "AI CLI agent not configured — install opencode or claude",
+      },
+      400,
+    );
+  }
+  if (e instanceof NotFoundError) {
+    return jsonResponse({ code: "NOT_FOUND", message: `${e.resource} not found` }, 404);
+  }
+  if (e instanceof GitHubAuthError) {
+    return jsonResponse(
+      { code: "GITHUB_AUTH_ERROR", message: "GitHub token expired or invalid" },
+      401,
+    );
+  }
+  if (e instanceof GitHubRateLimitError) {
+    return jsonResponse({ code: "GITHUB_RATE_LIMITED", message: "GitHub API rate limited" }, 429);
+  }
+  if (isReviewError(e)) {
+    return jsonResponse({ code: "REVIEW_ERROR", message: e.message }, 500);
+  }
 
-	const message = e instanceof Error ? e.message : 'Internal server error';
-	return jsonResponse({ code: 'INTERNAL_ERROR', message }, 500);
+  const message = e instanceof Error ? e.message : "Internal server error";
+  return jsonResponse({ code: "INTERNAL_ERROR", message }, 500);
 }
 
 const CHAT_SSE_HEARTBEAT_MS = 15_000;
@@ -163,43 +197,43 @@ const CHAT_SSE_HEARTBEAT_MS = 15_000;
  * mid-turn.
  */
 export function chatStreamToSSE<T>(frameStream: ReadableStream<T>): ReadableStream<Uint8Array> {
-	const encoder = new TextEncoder();
-	let reader: ReadableStreamDefaultReader<T> | undefined;
-	let heartbeat: ReturnType<typeof setInterval> | undefined;
+  const encoder = new TextEncoder();
+  let reader: ReadableStreamDefaultReader<T> | undefined;
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
 
-	return new ReadableStream<Uint8Array>({
-		async start(controller) {
-			reader = frameStream.getReader();
-			heartbeat = setInterval(() => {
-				try {
-					controller.enqueue(encoder.encode(': keepalive\n\n'));
-				} catch {
-					// controller already closed — interval will be cleared in finally
-				}
-			}, CHAT_SSE_HEARTBEAT_MS);
-			try {
-				while (true) {
-					const { done, value } = await reader.read();
-					if (done) break;
-					controller.enqueue(encoder.encode(`data: ${JSON.stringify(value)}\n\n`));
-				}
-				controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-				controller.close();
-			} catch (err) {
-				const errMsg = JSON.stringify({
-					code: 'GENERATION_ERROR',
-					message: err instanceof Error ? err.message : 'Unknown error',
-				});
-				controller.enqueue(encoder.encode(`event: error\ndata: ${errMsg}\n\n`));
-				controller.close();
-			} finally {
-				clearInterval(heartbeat);
-			}
-		},
-		cancel() {
-			clearInterval(heartbeat);
-			reader?.cancel().catch(() => {});
-			debug('chat-sse', 'client disconnected mid-stream');
-		},
-	});
+  return new ReadableStream<Uint8Array>({
+    async start(controller) {
+      reader = frameStream.getReader();
+      heartbeat = setInterval(() => {
+        try {
+          controller.enqueue(encoder.encode(": keepalive\n\n"));
+        } catch {
+          // controller already closed — interval will be cleared in finally
+        }
+      }, CHAT_SSE_HEARTBEAT_MS);
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(value)}\n\n`));
+        }
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.close();
+      } catch (err) {
+        const errMsg = JSON.stringify({
+          code: "GENERATION_ERROR",
+          message: err instanceof Error ? err.message : "Unknown error",
+        });
+        controller.enqueue(encoder.encode(`event: error\ndata: ${errMsg}\n\n`));
+        controller.close();
+      } finally {
+        clearInterval(heartbeat);
+      }
+    },
+    cancel() {
+      clearInterval(heartbeat);
+      reader?.cancel().catch(() => {});
+      debug("chat-sse", "client disconnected mid-stream");
+    },
+  });
 }

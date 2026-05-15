@@ -8,7 +8,7 @@
 // Tauri IPC calls into the browser build. Same pattern as
 // `auth.svelte.ts`'s `await import('@tauri-apps/plugin-opener')`.
 
-import { isTauri } from '$lib/utils/platform';
+import { isTauri } from "$lib/utils/platform";
 
 /**
  * Normalised view of an available update, returned by {@link checkForUpdate}.
@@ -16,14 +16,14 @@ import { isTauri } from '$lib/utils/platform';
  * when the user accepts (or automatically, when `autoInstallUpdates` is on).
  */
 export type UpdateInfo = {
-	version: string;
-	notes: string | undefined;
-	/**
-	 * Downloads the update package, applies it, and relaunches the app.
-	 * Throws if any step fails — callers should `try/catch` to surface the
-	 * error in a toast.
-	 */
-	install: () => Promise<void>;
+  version: string;
+  notes: string | undefined;
+  /**
+   * Downloads the update package, applies it, and relaunches the app.
+   * Throws if any step fails — callers should `try/catch` to surface the
+   * error in a toast.
+   */
+  install: () => Promise<void>;
 };
 
 /**
@@ -32,25 +32,25 @@ export type UpdateInfo = {
  * (i.e. the browser dev build).
  */
 export async function checkForUpdate(): Promise<UpdateInfo | null> {
-	if (!isTauri()) return null;
+  if (!isTauri()) return null;
 
-	const { check } = await import('@tauri-apps/plugin-updater');
-	const update = await check();
-	if (!update) return null;
+  const { check } = await import("@tauri-apps/plugin-updater");
+  const update = await check();
+  if (!update) return null;
 
-	return {
-		version: update.version,
-		notes: update.body,
-		install: async () => {
-			await update.downloadAndInstall();
-			// On Windows/Linux the plugin's passive install mode exits the
-			// running process; on macOS we must explicitly relaunch so the
-			// user lands back in the new version immediately. Calling
-			// `relaunch()` is a no-op if the process is already exiting.
-			const { relaunch } = await import('@tauri-apps/plugin-process');
-			await relaunch();
-		},
-	};
+  return {
+    version: update.version,
+    notes: update.body,
+    install: async () => {
+      await update.downloadAndInstall();
+      // On Windows/Linux the plugin's passive install mode exits the
+      // running process; on macOS we must explicitly relaunch so the
+      // user lands back in the new version immediately. Calling
+      // `relaunch()` is a no-op if the process is already exiting.
+      const { relaunch } = await import("@tauri-apps/plugin-process");
+      await relaunch();
+    },
+  };
 }
 
 /**
@@ -65,5 +65,5 @@ export async function checkForUpdate(): Promise<UpdateInfo | null> {
  * to reach for the global directly.
  */
 export function getCommitHash(): string {
-	return __COMMIT_HASH__;
+  return __COMMIT_HASH__;
 }

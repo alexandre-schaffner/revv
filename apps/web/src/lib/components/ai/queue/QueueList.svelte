@@ -1,7 +1,7 @@
 <script lang="ts" module>
-	export type QueueListProps = {
-		class?: string;
-	};
+export type QueueListProps = {
+  class?: string;
+};
 </script>
 
 <script lang="ts">

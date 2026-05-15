@@ -1,10 +1,10 @@
 <script lang="ts" module>
-	import type { Collapsible as CollapsiblePrimitive } from "bits-ui";
+import type { Collapsible as CollapsiblePrimitive } from "bits-ui";
 
-	export type PlanProps = CollapsiblePrimitive.RootProps & {
-		/** Whether content is currently streaming. Enables shimmer animations. */
-		isStreaming?: boolean;
-	};
+export type PlanProps = CollapsiblePrimitive.RootProps & {
+  /** Whether content is currently streaming. Enables shimmer animations. */
+  isStreaming?: boolean;
+};
 </script>
 
 <script lang="ts">
@@ -30,7 +30,7 @@
 <Collapsible
 	data-slot="plan"
 	class={cn(
-		"rounded-lg border border-border bg-background shadow-xs",
+		"rounded-lg border border-border bg-background shadow-none",
 		className,
 	)}
 	bind:open

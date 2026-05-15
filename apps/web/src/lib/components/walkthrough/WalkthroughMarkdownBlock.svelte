@@ -1,19 +1,19 @@
 <script lang="ts">
-	import { renderMarkdown } from '$lib/utils/markdown';
-	import { isHighlighterReady } from '$lib/utils/code-highlight.svelte';
+import { isHighlighterReady } from "$lib/utils/code-highlight.svelte";
+import { renderMarkdown } from "$lib/utils/markdown";
 
-	interface Props {
-		content: string;
-	}
+interface Props {
+  content: string;
+}
 
-	let { content }: Props = $props();
+let { content }: Props = $props();
 
-	// Re-derive when highlighter becomes ready so code blocks get highlighted
-	const highlighterReady = $derived(isHighlighterReady());
-	const renderedContent = $derived.by(() => {
-		void highlighterReady;
-		return renderMarkdown(content);
-	});
+// Re-derive when highlighter becomes ready so code blocks get highlighted
+const highlighterReady = $derived(isHighlighterReady());
+const renderedContent = $derived.by(() => {
+  void highlighterReady;
+  return renderMarkdown(content);
+});
 </script>
 
 <div class="markdown-block">

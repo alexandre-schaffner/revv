@@ -2,9 +2,9 @@
 let subtitle = $state<string | null>(null);
 
 export function getTopbarSubtitle(): string | null {
-	return subtitle;
+  return subtitle;
 }
 
 export function setTopbarSubtitle(v: string | null): void {
-	subtitle = v;
+  subtitle = v;
 }

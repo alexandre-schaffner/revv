@@ -1,48 +1,46 @@
 <script lang="ts">
-    /*
-     * CommentExpandedBody — the content that appears when a file-level
-     * comment row is expanded. Each thread renders as a lifted card; the
-     * line-range marker + jump button live at the top of the card, then
-     * every message stacks with the same avatar + name + relative-time
-     * header used by the inline annotation thread. Replies indent with a
-     * thin left guide.
-     */
-    import type { CommentThread, ThreadMessage } from "@revv/shared";
-    import { ArrowUpRight } from "@lucide/svelte";
-    import { renderMarkdown } from "$lib/utils/markdown";
-    import { isHighlighterReady } from "$lib/utils/code-highlight.svelte";
-    import { formatRelativeTime } from "$lib/utils/format-relative-time";
-    import MessageAvatar from "../MessageAvatar.svelte";
+/*
+ * CommentExpandedBody — the content that appears when a file-level
+ * comment row is expanded. Each thread renders as a lifted card; the
+ * line-range marker + jump button live at the top of the card, then
+ * every message stacks with the same avatar + name + relative-time
+ * header used by the inline annotation thread. Replies indent with a
+ * thin left guide.
+ */
 
-    interface Props {
-        threads: readonly CommentThread[];
-        getThreadMessages: (threadId: string) => ThreadMessage[];
-        onJump?: ((filePath: string, line: number) => void) | undefined;
-    }
+import { ArrowUpRight } from "@lucide/svelte";
+import type { CommentThread, ThreadMessage } from "@revv/shared";
+import { isHighlighterReady } from "$lib/utils/code-highlight.svelte";
+import { formatRelativeTime } from "$lib/utils/format-relative-time";
+import { renderMarkdown } from "$lib/utils/markdown";
+import MessageAvatar from "../MessageAvatar.svelte";
 
-    let { threads, getThreadMessages, onJump }: Props = $props();
+interface Props {
+  threads: readonly CommentThread[];
+  getThreadMessages: (threadId: string) => ThreadMessage[];
+  onJump?: ((filePath: string, line: number) => void) | undefined;
+}
 
-    // Flatten to a render-ready shape so the template doesn't recompute on
-    // every iteration. Re-derive when the shiki highlighter becomes ready
-    // so fenced code blocks pick up syntax highlighting on second pass.
-    const highlighterReady = $derived(isHighlighterReady());
-    const renderedThreads = $derived.by(() => {
-        void highlighterReady;
-        return threads.map((thread) => {
-            const messages = getThreadMessages(thread.id);
-            return {
-                thread,
-                messages,
-                rendered: messages.map((msg) => ({
-                    id: msg.id,
-                    html:
-                        msg.body.trim().length > 0
-                            ? renderMarkdown(msg.body)
-                            : "",
-                })),
-            };
-        });
-    });
+let { threads, getThreadMessages, onJump }: Props = $props();
+
+// Flatten to a render-ready shape so the template doesn't recompute on
+// every iteration. Re-derive when the shiki highlighter becomes ready
+// so fenced code blocks pick up syntax highlighting on second pass.
+const highlighterReady = $derived(isHighlighterReady());
+const renderedThreads = $derived.by(() => {
+  void highlighterReady;
+  return threads.map((thread) => {
+    const messages = getThreadMessages(thread.id);
+    return {
+      thread,
+      messages,
+      rendered: messages.map((msg) => ({
+        id: msg.id,
+        html: msg.body.trim().length > 0 ? renderMarkdown(msg.body) : "",
+      })),
+    };
+  });
+});
 </script>
 
 <div class="expanded-body">

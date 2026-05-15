@@ -1,23 +1,23 @@
 <script lang="ts">
-	import { ScrollArea as ScrollAreaPrimitive } from "bits-ui";
-	import { Scrollbar } from "./index.js";
-	import { cn, type WithoutChild } from "$lib/utils.js";
+import { ScrollArea as ScrollAreaPrimitive } from "bits-ui";
+import { cn, type WithoutChild } from "$lib/utils.js";
+import { Scrollbar } from "./index.js";
 
-	let {
-		ref = $bindable(null),
-		viewportRef = $bindable(null),
-		class: className,
-		orientation = "vertical",
-		scrollbarXClasses = "",
-		scrollbarYClasses = "",
-		children,
-		...restProps
-	}: WithoutChild<ScrollAreaPrimitive.RootProps> & {
-		orientation?: "vertical" | "horizontal" | "both" | undefined;
-		scrollbarXClasses?: string | undefined;
-		scrollbarYClasses?: string | undefined;
-		viewportRef?: HTMLElement | null;
-	} = $props();
+let {
+  ref = $bindable(null),
+  viewportRef = $bindable(null),
+  class: className,
+  orientation = "vertical",
+  scrollbarXClasses = "",
+  scrollbarYClasses = "",
+  children,
+  ...restProps
+}: WithoutChild<ScrollAreaPrimitive.RootProps> & {
+  orientation?: "vertical" | "horizontal" | "both" | undefined;
+  scrollbarXClasses?: string | undefined;
+  scrollbarYClasses?: string | undefined;
+  viewportRef?: HTMLElement | null;
+} = $props();
 </script>
 
 <ScrollAreaPrimitive.Root
@@ -29,7 +29,7 @@
 	<ScrollAreaPrimitive.Viewport
 		bind:ref={viewportRef}
 		data-slot="scroll-area-viewport"
-		class="cn-scroll-area-viewport focus-visible:ring-ring/50 size-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:outline-1"
+		class="cn-scroll-area-viewport focus-visible:ring-ring/50 size-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-3 focus-visible:outline-1"
 	>
 		{@render children?.()}
 	</ScrollAreaPrimitive.Viewport>

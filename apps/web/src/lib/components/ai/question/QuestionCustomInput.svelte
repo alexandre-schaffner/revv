@@ -1,8 +1,8 @@
 <script lang="ts" module>
-	export type QuestionCustomInputProps = {
-		value: string;
-		onInput: (v: string) => void;
-	};
+export type QuestionCustomInputProps = {
+  value: string;
+  onInput: (v: string) => void;
+};
 </script>
 
 <script lang="ts">

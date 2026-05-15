@@ -1,46 +1,46 @@
 <script lang="ts">
-    /*
-     * IssueExpandedBody — the content that appears below an expanded issue
-     * row. Styled like a rustc / clang diagnostic: a primary-span paragraph
-     * leading with a verdict-tinted bullet.
-     *
-     * Parallels RatingExpandedBody.svelte but trimmed to what a walkthrough
-     * issue actually has (no citations, no markdown details — just the
-     * description, plus a references section listing the file and any
-     * walkthrough steps that explain this issue).
-     */
-    import { ArrowUpRight } from "@lucide/svelte";
-    import type { WalkthroughIssue, WalkthroughBlock } from "@revv/shared";
-    import FileBadge from "$lib/components/ui/FileBadge.svelte";
+/*
+ * IssueExpandedBody — the content that appears below an expanded issue
+ * row. Styled like a rustc / clang diagnostic: a primary-span paragraph
+ * leading with a verdict-tinted bullet.
+ *
+ * Parallels RatingExpandedBody.svelte but trimmed to what a walkthrough
+ * issue actually has (no citations, no markdown details — just the
+ * description, plus a references section listing the file and any
+ * walkthrough steps that explain this issue).
+ */
+import { ArrowUpRight } from "@lucide/svelte";
+import type { WalkthroughBlock, WalkthroughIssue } from "@revv/shared";
+import FileBadge from "$lib/components/ui/FileBadge.svelte";
 
-    interface Props {
-        issue: WalkthroughIssue;
-        /** Full ordered block list — used to resolve blockIds to step numbers. */
-        blocks: WalkthroughBlock[];
-        /** Jump to diff line when the FileBadge is clicked. */
-        onFileClick?: ((filePath: string, line: number) => void) | undefined;
-        /** Jump to a walkthrough block by id. Step chips are only rendered
-         *  when this callback is supplied AND the issue has blockIds. */
-        onBlockJump?: ((blockId: string) => void) | undefined;
-    }
+interface Props {
+  issue: WalkthroughIssue;
+  /** Full ordered block list — used to resolve blockIds to step numbers. */
+  blocks: WalkthroughBlock[];
+  /** Jump to diff line when the FileBadge is clicked. */
+  onFileClick?: ((filePath: string, line: number) => void) | undefined;
+  /** Jump to a walkthrough block by id. Step chips are only rendered
+   *  when this callback is supplied AND the issue has blockIds. */
+  onBlockJump?: ((blockId: string) => void) | undefined;
+}
 
-    let { issue, blocks, onFileClick, onBlockJump }: Props = $props();
+let { issue, blocks, onFileClick, onBlockJump }: Props = $props();
 
-    // Resolve blockIds to step numbers using the blocks array. Filter out ids
-    // that don't resolve — matches the gating in IssueTestRow's original
-    // trailing column and RatingExpandedBody's `resolvedBlockLinks`.
-    const resolvedBlockLinks = $derived.by(() => {
-        const out: { blockId: string; stepN: number }[] = [];
-        for (const blockId of issue.blockIds) {
-            const idx = blocks.findIndex((b) => b.id === blockId);
-            if (idx >= 0) out.push({ blockId, stepN: idx + 1 });
-        }
-        return out;
-    });
+// Resolve blockIds to step numbers using the blocks array. Filter out ids
+// that don't resolve — matches the gating in IssueTestRow's original
+// trailing column and RatingExpandedBody's `resolvedBlockLinks`.
+const resolvedBlockLinks = $derived.by(() => {
+  const out: { blockId: string; stepN: number }[] = [];
+  for (const blockId of issue.blockIds) {
+    const idx = blocks.findIndex((b) => b.id === blockId);
+    if (idx >= 0) out.push({ blockId, stepN: idx + 1 });
+  }
+  return out;
+});
 
-    const hasReferences = $derived(
-        !!issue.filePath || (resolvedBlockLinks.length > 0 && !!onBlockJump),
-    );
+const hasReferences = $derived(
+  !!issue.filePath || (resolvedBlockLinks.length > 0 && !!onBlockJump),
+);
 </script>
 
 <div class="expanded-body">
@@ -65,8 +65,8 @@
                         filePath={issue.filePath}
                         startLine={issue.startLine}
                         endLine={issue.endLine}
-                        onclick={onFileClick
-                            ? () => onFileClick(issue.filePath!, issue.startLine ?? 1)
+                        onclick={onFileClick && issue.filePath
+                            ? () => onFileClick(issue.filePath as string, issue.startLine ?? 1)
                             : undefined}
                     />
                 </li>

@@ -1,10 +1,10 @@
-import { Effect } from 'effect';
-import { AppRuntime } from '../../../runtime';
-import { NotFoundError } from '../../../domain/errors';
-import { GitHubService } from '../../../services/GitHub';
-import { PrContextService } from '../../../services/PrContext';
-import { WalkthroughJobs } from '../../../services/WalkthroughJobs';
-import { WalkthroughService } from '../../../services/Walkthrough';
+import { Effect } from "effect";
+import { NotFoundError } from "../../../domain/errors";
+import { AppRuntime } from "../../../runtime";
+import { GitHubService } from "../../../services/GitHub";
+import { PrContextService } from "../../../services/PrContext";
+import { WalkthroughService } from "../../../services/Walkthrough";
+import { WalkthroughJobs } from "../../../services/WalkthroughJobs";
 
 /**
  * GET /api/reviews/:id/walkthrough/cached — check whether a walkthrough
@@ -28,37 +28,37 @@ import { WalkthroughService } from '../../../services/Walkthrough';
  * not something the UI consumes.
  */
 export function getCachedWalkthroughHandler(prId: string, userId: string) {
-	return AppRuntime.runPromise(
-		Effect.gen(function* () {
-			const prContext = yield* PrContextService;
-			const github = yield* GitHubService;
-			const walkthroughService = yield* WalkthroughService;
+  return AppRuntime.runPromise(
+    Effect.gen(function* () {
+      const prContext = yield* PrContextService;
+      const github = yield* GitHubService;
+      const walkthroughService = yield* WalkthroughService;
 
-			const { pr, repo, token } = yield* prContext.resolveBasic(prId, userId);
-			const meta = yield* github.getPrMeta(repo.fullName, pr.externalId, token);
+      const { pr, repo, token } = yield* prContext.resolveBasic(prId, userId);
+      const meta = yield* github.getPrMeta(repo.fullName, pr.externalId, token);
 
-			const cached = yield* walkthroughService.getCached(pr.id, meta.headSha);
-			if (cached) {
-				return {
-					cached: true as const,
-					status: 'complete' as const,
-					walkthrough: cached,
-				};
-			}
+      const cached = yield* walkthroughService.getCached(pr.id, meta.headSha);
+      if (cached) {
+        return {
+          cached: true as const,
+          status: "complete" as const,
+          walkthrough: cached,
+        };
+      }
 
-			const partial = yield* walkthroughService.getPartial(pr.id, meta.headSha);
-			if (partial && partial.status === 'generating') {
-				const { opencodeSessionId: _ignored, status: _status, ...walkthrough } = partial;
-				return {
-					cached: true as const,
-					status: 'generating' as const,
-					walkthrough,
-				};
-			}
+      const partial = yield* walkthroughService.getPartial(pr.id, meta.headSha);
+      if (partial && partial.status === "generating") {
+        const { opencodeSessionId: _ignored, status: _status, ...walkthrough } = partial;
+        return {
+          cached: true as const,
+          status: "generating" as const,
+          walkthrough,
+        };
+      }
 
-			return { cached: false as const };
-		}),
-	);
+      return { cached: false as const };
+    }),
+  );
 }
 
 /**
@@ -80,9 +80,9 @@ export function getCachedWalkthroughHandler(prId: string, userId: string) {
  * polling-detected commit produce identical externally-observable state.
  */
 export function regenerateWalkthroughHandler(prId: string) {
-	return AppRuntime.runPromise(
-		Effect.flatMap(WalkthroughJobs, (jobs) => jobs.supersedeForPr(prId)),
-	);
+  return AppRuntime.runPromise(
+    Effect.flatMap(WalkthroughJobs, (jobs) => jobs.supersedeForPr(prId)),
+  );
 }
 
 /**
@@ -110,28 +110,24 @@ export function regenerateWalkthroughHandler(prId: string) {
  * 404 when no resumable row exists — the partial was superseded by a
  * head-SHA advance or never created. Regenerate is the right next action.
  */
-export function resumeWalkthroughHandler(
-	prId: string,
-): Promise<{ walkthroughId: string }> {
-	return AppRuntime.runPromise(
-		Effect.gen(function* () {
-			const jobs = yield* WalkthroughJobs;
-			const service = yield* WalkthroughService;
-			const row = yield* service.findResumable(prId);
-			if (!row) {
-				return yield* Effect.fail(
-					new NotFoundError({ resource: 'walkthrough', id: prId }),
-				);
-			}
-			if (row.status === 'error') {
-				yield* jobs.reviveFromError(row.id);
-			}
-			return yield* jobs.startJob({
-				prId,
-				userId: 'single-user',
-				trigger: 'resume',
-				walkthroughId: row.id,
-			});
-		}),
-	);
+export function resumeWalkthroughHandler(prId: string): Promise<{ walkthroughId: string }> {
+  return AppRuntime.runPromise(
+    Effect.gen(function* () {
+      const jobs = yield* WalkthroughJobs;
+      const service = yield* WalkthroughService;
+      const row = yield* service.findResumable(prId);
+      if (!row) {
+        return yield* Effect.fail(new NotFoundError({ resource: "walkthrough", id: prId }));
+      }
+      if (row.status === "error") {
+        yield* jobs.reviveFromError(row.id);
+      }
+      return yield* jobs.startJob({
+        prId,
+        userId: "single-user",
+        trigger: "resume",
+        walkthroughId: row.id,
+      });
+    }),
+  );
 }

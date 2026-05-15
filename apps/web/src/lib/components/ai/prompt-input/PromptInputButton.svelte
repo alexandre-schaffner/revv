@@ -1,10 +1,10 @@
 <script lang="ts" module>
-	import type { ButtonProps } from "$lib/components/ui/button/index.js";
+import type { ButtonProps } from "$lib/components/ui/button/index.js";
 
-	export type PromptInputButtonProps = ButtonProps & {
-		/** Optional tooltip configuration. */
-		tooltip?: string | { content: string; shortcut?: string };
-	};
+export type PromptInputButtonProps = ButtonProps & {
+  /** Optional tooltip configuration. */
+  tooltip?: string | { content: string; shortcut?: string };
+};
 </script>
 
 <script lang="ts">
@@ -44,7 +44,7 @@
 		<Tooltip.Content>
 			<span>{tooltipText}</span>
 			{#if tooltipShortcut}
-				<kbd class="ml-1.5 rounded border border-border bg-muted px-1 py-0.5 text-[10px] font-mono">
+				<kbd class="ml-1.5 rounded border border-border bg-muted px-1 py-0.5 text-xs font-mono">
 					{tooltipShortcut}
 				</kbd>
 			{/if}

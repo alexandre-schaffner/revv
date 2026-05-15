@@ -1,66 +1,66 @@
 <script lang="ts">
-	import type { WalkthroughIssue } from '@revv/shared';
-	import FileBadge from '$lib/components/ui/FileBadge.svelte';
+import type { WalkthroughIssue } from "@revv/shared";
+import FileBadge from "$lib/components/ui/FileBadge.svelte";
 
-	interface Props {
-		issue: WalkthroughIssue;
-		clickable?: boolean;
-		onclick?: () => void;
-		checkable?: boolean;
-		checked?: boolean;
-		disabled?: boolean;
-		oncheck?: (checked: boolean) => void;
-		submitted?: boolean;
-		animationDelay?: string;
-		/**
-		 * When true, suppress the entrance animation entirely. Used on tab
-		 * revisits where the card has already animated once — browsers otherwise
-		 * restart CSS animations when a subtree re-enters the render tree after
-		 * `display: none`.
-		 */
-		noAnim?: boolean;
-		onfileclick?: (filePath: string, line: number) => void;
-		stepTag?: string | null;
-		hideFileBadge?: boolean;
-	}
+interface Props {
+  issue: WalkthroughIssue;
+  clickable?: boolean;
+  onclick?: () => void;
+  checkable?: boolean;
+  checked?: boolean;
+  disabled?: boolean;
+  oncheck?: (checked: boolean) => void;
+  submitted?: boolean;
+  animationDelay?: string;
+  /**
+   * When true, suppress the entrance animation entirely. Used on tab
+   * revisits where the card has already animated once — browsers otherwise
+   * restart CSS animations when a subtree re-enters the render tree after
+   * `display: none`.
+   */
+  noAnim?: boolean;
+  onfileclick?: (filePath: string, line: number) => void;
+  stepTag?: string | null;
+  hideFileBadge?: boolean;
+}
 
-	let {
-		issue,
-		clickable = false,
-		onclick,
-		checkable = false,
-		checked = false,
-		disabled = false,
-		oncheck,
-		submitted = false,
-		animationDelay = '0ms',
-		noAnim = false,
-		onfileclick,
-		stepTag = null,
-		hideFileBadge = false,
-	}: Props = $props();
+let {
+  issue,
+  clickable = false,
+  onclick,
+  checkable = false,
+  checked = false,
+  disabled = false,
+  oncheck,
+  submitted = false,
+  animationDelay = "0ms",
+  noAnim = false,
+  onfileclick,
+  stepTag = null,
+  hideFileBadge = false,
+}: Props = $props();
 
-	const severityLabels: Record<string, string> = {
-		info: 'Info',
-		warning: 'Warning',
-		critical: 'Critical',
-	};
+const severityLabels: Record<string, string> = {
+  info: "Info",
+  warning: "Warning",
+  critical: "Critical",
+};
 
-	// Once the entrance animation completes (or if the parent tells us to skip
-	// it), lock the card into its final visual state by applying `--no-anim`.
-	// Without this, browsers restart CSS animations on elements that re-enter
-	// the render tree after `display: none` — so every tab switch back to the
-	// Walkthrough would replay the card's fade-in.
-	let animEnded = $state(false);
-	const animLocked = $derived(noAnim || animEnded);
+// Once the entrance animation completes (or if the parent tells us to skip
+// it), lock the card into its final visual state by applying `--no-anim`.
+// Without this, browsers restart CSS animations on elements that re-enter
+// the render tree after `display: none` — so every tab switch back to the
+// Walkthrough would replay the card's fade-in.
+let animEnded = $state(false);
+const animLocked = $derived(noAnim || animEnded);
 
-	function onAnimEnd(event: AnimationEvent): void {
-		// Only react to the card's own animation, not descendants bubbling up.
-		if (event.target !== event.currentTarget) return;
-		if (event.animationName === 'issue-card-enter') {
-			animEnded = true;
-		}
-	}
+function onAnimEnd(event: AnimationEvent): void {
+  // Only react to the card's own animation, not descendants bubbling up.
+  if (event.target !== event.currentTarget) return;
+  if (event.animationName === "issue-card-enter") {
+    animEnded = true;
+  }
+}
 </script>
 
 {#if clickable}
@@ -103,6 +103,7 @@
 		<input
 			type="checkbox"
 			class="issue-card-checkbox"
+			aria-label="Select issue"
 			{checked}
 			{disabled}
 			onchange={(e) => oncheck?.(e.currentTarget.checked)}
@@ -131,7 +132,7 @@
 					filePath={issue.filePath}
 					startLine={issue.startLine}
 					endLine={issue.endLine}
-					onclick={onfileclick ? () => onfileclick!(issue.filePath!, issue.startLine ?? 1) : undefined}
+					onclick={onfileclick && issue.filePath ? () => onfileclick(issue.filePath as string, issue.startLine ?? 1) : undefined}
 				/>
 			</div>
 		{/if}

@@ -1,76 +1,91 @@
 <script lang="ts">
-	import type { CommentThread, ThreadMessage } from '@revv/shared';
-	import { Clock, CornerDownLeft } from '@lucide/svelte';
-	import AnnotationCommentInput from './AnnotationCommentInput.svelte';
-	import MessageAvatar from './MessageAvatar.svelte';
-	import { renderMarkdown } from '$lib/utils/markdown';
-	import { formatRelativeTime } from '$lib/utils/format-relative-time';
+import { Clock, CornerDownLeft } from "@lucide/svelte";
+import type { CommentThread, ThreadMessage } from "@revv/shared";
+import { formatRelativeTime } from "$lib/utils/format-relative-time";
+import { renderMarkdown } from "$lib/utils/markdown";
+import AnnotationCommentInput from "./AnnotationCommentInput.svelte";
+import MessageAvatar from "./MessageAvatar.svelte";
 
-	interface Props {
-		thread: CommentThread;
-		messages: ThreadMessage[];
-		onReply?: () => void;
-		onResolve?: () => void;
-		onReopen?: () => void;
-		onDiscard?: () => void;
-		onDiscardReply?: (messageId: string) => void;
-		onCollapse?: (() => void) | undefined;
-		onApplySuggestion?: (suggestion: string) => void;
-		onEditMessage?: (messageId: string, body: string) => void;
-		isReplying?: boolean;
-		onReplySubmit?: (body: string) => void;
-		onReplyDismiss?: () => void;
-		isPending?: boolean;
-	}
+interface Props {
+  thread: CommentThread;
+  messages: ThreadMessage[];
+  onReply?: () => void;
+  onResolve?: () => void;
+  onReopen?: () => void;
+  onDiscard?: () => void;
+  onDiscardReply?: (messageId: string) => void;
+  onCollapse?: (() => void) | undefined;
+  onApplySuggestion?: (suggestion: string) => void;
+  onEditMessage?: (messageId: string, body: string) => void;
+  isReplying?: boolean;
+  onReplySubmit?: (body: string) => void;
+  onReplyDismiss?: () => void;
+  isPending?: boolean;
+}
 
-	let { thread, messages, onReply, onResolve, onReopen, onDiscard, onDiscardReply, onCollapse, onApplySuggestion, onEditMessage, isReplying = false, onReplySubmit, onReplyDismiss, isPending = false }: Props = $props();
+let {
+  thread,
+  messages,
+  onReply,
+  onResolve,
+  onReopen,
+  onDiscard,
+  onDiscardReply,
+  onCollapse,
+  onApplySuggestion,
+  onEditMessage,
+  isReplying = false,
+  onReplySubmit,
+  onReplyDismiss,
+  isPending = false,
+}: Props = $props();
 
-	const isResolved = $derived(thread.status === 'resolved' || thread.status === 'wont_fix');
+const isResolved = $derived(thread.status === "resolved" || thread.status === "wont_fix");
 
-	// ── Pending (unsynced) reply detection ────────────────────────────────────
-	// A reply is "pending" once submitted but before the sync loop has pushed it
-	// to GitHub (externalId still null). While the thread itself is pending
-	// (`isPending`), every message is trivially unsynced and the thread-level
-	// Discard handles removal, so we only care about non-first messages on a
-	// synced thread. The most recent such message is the one a Discard click
-	// should reach for (LIFO — undo the last thing the user did).
-	const pendingReply = $derived.by((): ThreadMessage | null => {
-		if (isPending) return null;
-		for (let i = messages.length - 1; i > 0; i--) {
-			const m = messages[i];
-			if (m && m.externalId === null) return m;
-		}
-		return null;
-	});
+// ── Pending (unsynced) reply detection ────────────────────────────────────
+// A reply is "pending" once submitted but before the sync loop has pushed it
+// to GitHub (externalId still null). While the thread itself is pending
+// (`isPending`), every message is trivially unsynced and the thread-level
+// Discard handles removal, so we only care about non-first messages on a
+// synced thread. The most recent such message is the one a Discard click
+// should reach for (LIFO — undo the last thing the user did).
+const pendingReply = $derived.by((): ThreadMessage | null => {
+  if (isPending) return null;
+  for (let i = messages.length - 1; i > 0; i--) {
+    const m = messages[i];
+    if (m && m.externalId === null) return m;
+  }
+  return null;
+});
 
-	// ── Inline edit state ─────────────────────────────────────────────────────
+// ── Inline edit state ─────────────────────────────────────────────────────
 
-	let editingMessageId = $state<string | null>(null);
-	let editBody = $state('');
+let editingMessageId = $state<string | null>(null);
+let editBody = $state("");
 
-	function startEdit(msg: ThreadMessage): void {
-		editingMessageId = msg.id;
-		editBody = msg.body;
-	}
+function startEdit(msg: ThreadMessage): void {
+  editingMessageId = msg.id;
+  editBody = msg.body;
+}
 
-	function saveEdit(): void {
-		if (!editingMessageId) return;
-		const trimmed = editBody.trim();
-		const original = messages.find((m) => m.id === editingMessageId)?.body ?? '';
-		if (trimmed && trimmed !== original) {
-			onEditMessage?.(editingMessageId, trimmed);
-		}
-		editingMessageId = null;
-	}
+function saveEdit(): void {
+  if (!editingMessageId) return;
+  const trimmed = editBody.trim();
+  const original = messages.find((m) => m.id === editingMessageId)?.body ?? "";
+  if (trimmed && trimmed !== original) {
+    onEditMessage?.(editingMessageId, trimmed);
+  }
+  editingMessageId = null;
+}
 
-	function cancelEdit(): void {
-		editingMessageId = null;
-	}
+function cancelEdit(): void {
+  editingMessageId = null;
+}
 
-	function focusOnMount(node: HTMLTextAreaElement) {
-		node.focus();
-		node.setSelectionRange(node.value.length, node.value.length);
-	}
+function focusOnMount(node: HTMLTextAreaElement) {
+  node.focus();
+  node.setSelectionRange(node.value.length, node.value.length);
+}
 </script>
 
 <div
@@ -102,6 +117,7 @@
 					<div class="msg-edit">
 						<textarea
 							class="edit-textarea"
+							aria-label="Edit comment"
 							bind:value={editBody}
 							onkeydown={(e) => {
 								if (e.key === 'Escape') cancelEdit();

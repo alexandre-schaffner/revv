@@ -1,44 +1,31 @@
 <script lang="ts">
-    /*
-     * CommentSummaryBar — header of the comments panel. Styled as a
-     * `git log` / `gh pr view` banner:
-     *
-     *   💬 Comments   ● 3 unresolved  ● 2 with replies  │  4 selected
-     *
-     *   [Expand all] [Only with replies] [Only unselected] [Select all / Clear]
-     */
-    import {
-        MessageSquare,
-        Circle,
-        ChevronsDownUp,
-        ChevronsUpDown,
-        Filter,
-    } from "@lucide/svelte";
+/*
+ * CommentSummaryBar — header of the comments panel. Styled as a
+ * `git log` / `gh pr view` banner:
+ *
+ *   💬 Comments   ● 3 unresolved  ● 2 with replies  │  4 selected
+ *
+ *   [Expand all] [Only with replies] [Only unselected] [Select all / Clear]
+ */
+import { ChevronsDownUp, ChevronsUpDown, Circle, Filter, MessageSquare } from "@lucide/svelte";
 
-    interface Counts {
-        unresolved: number;
-        withReplies: number;
-    }
+interface Counts {
+  unresolved: number;
+  withReplies: number;
+}
 
-    interface Props {
-        counts: Counts;
-        expandAll: boolean | null;
-        onlyWithReplies: boolean;
-        onToggleExpandAll: () => void;
-        onToggleOnlyWithReplies: () => void;
-    }
+interface Props {
+  counts: Counts;
+  expandAll: boolean | null;
+  onlyWithReplies: boolean;
+  onToggleExpandAll: () => void;
+  onToggleOnlyWithReplies: () => void;
+}
 
-    let {
-        counts,
-        expandAll,
-        onlyWithReplies,
-        onToggleExpandAll,
-        onToggleOnlyWithReplies,
-    }: Props = $props();
+let { counts, expandAll, onlyWithReplies, onToggleExpandAll, onToggleOnlyWithReplies }: Props =
+  $props();
 
-    const expandLabel = $derived(
-        expandAll === true ? "Collapse all" : "Expand all",
-    );
+const expandLabel = $derived(expandAll === true ? "Collapse all" : "Expand all");
 </script>
 
 <div class="summary-bar">

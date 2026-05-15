@@ -1,7 +1,7 @@
 <script lang="ts" module>
-	import type { HTMLAttributes } from "svelte/elements";
+import type { HTMLAttributes } from "svelte/elements";
 
-	export type ConversationContentProps = HTMLAttributes<HTMLDivElement>;
+export type ConversationContentProps = HTMLAttributes<HTMLDivElement>;
 </script>
 
 <script lang="ts">

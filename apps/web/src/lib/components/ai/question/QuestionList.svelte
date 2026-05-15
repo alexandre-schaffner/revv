@@ -1,17 +1,13 @@
 <script lang="ts" module>
-	import type { NormalizedQuestion } from "@revv/shared";
+import type { NormalizedQuestion } from "@revv/shared";
 
-	export type QuestionListProps = {
-		questions: ReadonlyArray<NormalizedQuestion>;
-		selections: Record<string, Set<string>>;
-		customText: Record<string, string>;
-		onToggleOption: (
-			questionText: string,
-			label: string,
-			multiSelect: boolean,
-		) => void;
-		onCustomTextChange: (questionText: string, value: string) => void;
-	};
+export type QuestionListProps = {
+  questions: ReadonlyArray<NormalizedQuestion>;
+  selections: Record<string, Set<string>>;
+  customText: Record<string, string>;
+  onToggleOption: (questionText: string, label: string, multiSelect: boolean) => void;
+  onCustomTextChange: (questionText: string, value: string) => void;
+};
 </script>
 
 <script lang="ts">

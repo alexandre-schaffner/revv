@@ -1,10 +1,10 @@
 <script lang="ts" module>
-	import type { HTMLAttributes } from "svelte/elements";
+import type { HTMLAttributes } from "svelte/elements";
 
-	export type PlanDescriptionProps = HTMLAttributes<HTMLParagraphElement> & {
-		/** The description text. Displays with shimmer animation when streaming. */
-		text?: string;
-	};
+export type PlanDescriptionProps = HTMLAttributes<HTMLParagraphElement> & {
+  /** The description text. Displays with shimmer animation when streaming. */
+  text?: string;
+};
 </script>
 
 <script lang="ts">
@@ -25,11 +25,11 @@
 
 <p
 	data-slot="plan-description"
-	class={cn("text-xs text-muted-foreground", className)}
+	class={cn("text-balance text-xs text-muted-foreground", className)}
 	{...restProps}
 >
 	{#if ctx.isStreaming && text}
-		<Shimmer duration={2.5}>{text}</Shimmer>
+		<Shimmer>{text}</Shimmer>
 	{:else if children}
 		{@render children()}
 	{:else if text}

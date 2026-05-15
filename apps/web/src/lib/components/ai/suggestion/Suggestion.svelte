@@ -1,11 +1,12 @@
 <script lang="ts" module>
-	import type { HTMLAttributes } from "svelte/elements";
+import type { HTMLAttributes } from "svelte/elements";
 
-	export type SuggestionProps = HTMLAttributes<HTMLDivElement>;
+export type SuggestionProps = HTMLAttributes<HTMLDivElement>;
 </script>
 
 <script lang="ts">
 	import { cn } from "$lib/utils.js";
+	import { ScrollArea, ScrollAreaScrollbar } from "$lib/components/ui/scroll-area/index.js";
 
 	let {
 		children,
@@ -16,10 +17,14 @@
 
 <div
 	data-slot="suggestion"
-	class={cn("flex flex-wrap gap-2", className)}
 	role="group"
 	aria-label="Suggestions"
 	{...restProps}
 >
-	{@render children?.()}
+	<ScrollArea class="w-full overflow-x-auto whitespace-nowrap">
+		<div class={cn("flex w-max flex-nowrap items-center gap-2", className)}>
+			{@render children?.()}
+		</div>
+		<ScrollAreaScrollbar class="hidden" orientation="horizontal" />
+	</ScrollArea>
 </div>

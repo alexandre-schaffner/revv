@@ -14,10 +14,10 @@
 // dismisses an update and then leaves the app running for a week, the next
 // launch should offer it again.
 
-import { toast } from 'svelte-sonner';
-import Download from '@lucide/svelte/icons/download';
-import { isTauri } from '$lib/utils/platform';
-import { checkForUpdate, type UpdateInfo } from './client';
+import Download from "@lucide/svelte/icons/download";
+import { toast } from "svelte-sonner";
+import { isTauri } from "$lib/utils/platform";
+import { checkForUpdate, type UpdateInfo } from "./client";
 
 const HOURLY_MS = 60 * 60 * 1000;
 
@@ -31,23 +31,23 @@ let inFlight = false;
  * Tauri. Call this from the root layout's `$effect`.
  */
 export function startUpdater(): void {
-	if (started || !isTauri()) return;
-	started = true;
-	// First check runs immediately — the caller is expected to delay this
-	// call with a setTimeout so it doesn't compete with initial PR sync.
-	void runCheck();
-	intervalId = setInterval(() => {
-		void runCheck();
-	}, HOURLY_MS);
+  if (started || !isTauri()) return;
+  started = true;
+  // First check runs immediately — the caller is expected to delay this
+  // call with a setTimeout so it doesn't compete with initial PR sync.
+  void runCheck();
+  intervalId = setInterval(() => {
+    void runCheck();
+  }, HOURLY_MS);
 }
 
 /** Stops the hourly checker. Useful for tests + hot-reload cleanup. */
 export function stopUpdater(): void {
-	if (intervalId !== null) {
-		clearInterval(intervalId);
-		intervalId = null;
-	}
-	started = false;
+  if (intervalId !== null) {
+    clearInterval(intervalId);
+    intervalId = null;
+  }
+  started = false;
 }
 
 /**
@@ -57,101 +57,101 @@ export function stopUpdater(): void {
  * instead of silent no-op.
  */
 export async function runCheck(options: { manual?: boolean } = {}): Promise<void> {
-	if (inFlight) return;
-	inFlight = true;
-	try {
-		const update = await checkForUpdate();
-		if (!update) {
-			if (options.manual) {
-				toast.success("You're up to date", {
-					description: 'No new version available.',
-				});
-			}
-			return;
-		}
-		if (!options.manual && update.version === dismissedVersion) {
-			// User already dismissed this version during this session; don't
-			// re-toast on every hourly tick. The flag resets on app restart.
-			return;
-		}
-		showUpdateToast(update);
-	} catch (err) {
-		// Background checks fail silently — the endpoint might be down, the
-		// user might be offline, etc. Surface errors only for manual checks.
-		console.error('updater check failed', err);
-		if (options.manual) {
-			toast.error('Update check failed', {
-				description: err instanceof Error ? err.message : String(err),
-			});
-		}
-	} finally {
-		inFlight = false;
-	}
+  if (inFlight) return;
+  inFlight = true;
+  try {
+    const update = await checkForUpdate();
+    if (!update) {
+      if (options.manual) {
+        toast.success("You're up to date", {
+          description: "No new version available.",
+        });
+      }
+      return;
+    }
+    if (!options.manual && update.version === dismissedVersion) {
+      // User already dismissed this version during this session; don't
+      // re-toast on every hourly tick. The flag resets on app restart.
+      return;
+    }
+    showUpdateToast(update);
+  } catch (err) {
+    // Background checks fail silently — the endpoint might be down, the
+    // user might be offline, etc. Surface errors only for manual checks.
+    console.error("updater check failed", err);
+    if (options.manual) {
+      toast.error("Update check failed", {
+        description: err instanceof Error ? err.message : String(err),
+      });
+    }
+  } finally {
+    inFlight = false;
+  }
 }
 
 function showUpdateToast(update: UpdateInfo): void {
-	// Sonner's `duration: Infinity` keeps the toast open until the user
-	// explicitly acts. The Install button triggers download+install; Dismiss
-	// records the version so we don't re-nag until the next launch.
-	toast(`Update available — v${update.version}`, {
-		description: update.notes ?? 'A new version of Revv is ready to install.',
-		duration: Number.POSITIVE_INFINITY,
-		icon: Download,
-		action: {
-			label: 'Install',
-			onClick: () => {
-				void installWithProgress(update);
-			},
-		},
-		cancel: {
-			label: 'Dismiss',
-			onClick: () => {
-				dismissedVersion = update.version;
-			},
-		},
-	});
+  // Sonner's `duration: Infinity` keeps the toast open until the user
+  // explicitly acts. The Install button triggers download+install; Dismiss
+  // records the version so we don't re-nag until the next launch.
+  toast(`Update available — v${update.version}`, {
+    description: update.notes ?? "A new version of Revv is ready to install.",
+    duration: Number.POSITIVE_INFINITY,
+    icon: Download,
+    action: {
+      label: "Install",
+      onClick: () => {
+        void installWithProgress(update);
+      },
+    },
+    cancel: {
+      label: "Dismiss",
+      onClick: () => {
+        dismissedVersion = update.version;
+      },
+    },
+  });
 }
 
 async function installWithProgress(update: UpdateInfo): Promise<void> {
-	const id = toast.loading(`Installing v${update.version}…`, {
-		description: 'Downloading and applying the update.',
-		duration: Number.POSITIVE_INFINITY,
-	});
-	try {
-		await update.install();
-		// As with auto-install: if relaunch() returned without tearing the
-		// process down, prompt the user to restart. Most of the time we
-		// never reach this branch.
-		toast.dismiss(id);
-		showRestartFallbackToast();
-	} catch (err) {
-		toast.dismiss(id);
-		toast.error('Update failed', {
-			description: err instanceof Error ? err.message : String(err),
-		});
-	}
+  const id = toast.loading(`Installing v${update.version}…`, {
+    description: "Downloading and applying the update.",
+    duration: Number.POSITIVE_INFINITY,
+  });
+  try {
+    await update.install();
+    // As with auto-install: if relaunch() returned without tearing the
+    // process down, prompt the user to restart. Most of the time we
+    // never reach this branch.
+    toast.dismiss(id);
+    showRestartFallbackToast();
+  } catch (err) {
+    toast.dismiss(id);
+    toast.error("Update failed", {
+      description: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 function showRestartFallbackToast(): void {
-	toast('Update installed', {
-		description: 'Restart Revv to finish applying the update.',
-		duration: Number.POSITIVE_INFINITY,
-		action: {
-			label: 'Restart now',
-			onClick: () => {
-				void relaunchNow();
-			},
-		},
-	});
+  toast("Update installed", {
+    description: "Restart Revv to finish applying the update.",
+    duration: Number.POSITIVE_INFINITY,
+    action: {
+      label: "Restart now",
+      onClick: () => {
+        void relaunchNow();
+      },
+    },
+  });
 }
 
 async function relaunchNow(): Promise<void> {
-	try {
-		const { relaunch } = await import('@tauri-apps/plugin-process');
-		await relaunch();
-	} catch (err) {
-		toast.error('Failed to restart', {
-			description: err instanceof Error ? err.message : String(err),
-		});
-	}
+  try {
+    const { relaunch } = await import("@tauri-apps/plugin-process");
+    await relaunch();
+  } catch (err) {
+    toast.error("Failed to restart", {
+      description: err instanceof Error ? err.message : String(err),
+    });
+  }
 }

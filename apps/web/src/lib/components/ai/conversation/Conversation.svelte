@@ -1,18 +1,18 @@
 <script lang="ts" module>
-	import type { HTMLAttributes } from "svelte/elements";
+import type { HTMLAttributes } from "svelte/elements";
 
-	export type ConversationProps = HTMLAttributes<HTMLDivElement> & {
-		/** Bind to read the inner scroll container (for imperative scroll control). */
-		scrollEl?: HTMLDivElement | undefined;
-		/**
-		 * Bind to observe whether the user is at the bottom of the scroll
-		 * container. Drives `ConversationScrollButton` visibility internally and
-		 * is exposed so parents can gate their own auto-follow logic.
-		 */
-		isAtBottom?: boolean;
-		/** Tailwind classes for the inner scroll container. The class prop styles the outer wrapper. */
-		innerClass?: string;
-	};
+export type ConversationProps = HTMLAttributes<HTMLDivElement> & {
+  /** Bind to read the inner scroll container (for imperative scroll control). */
+  scrollEl?: HTMLDivElement | undefined;
+  /**
+   * Bind to observe whether the user is at the bottom of the scroll
+   * container. Drives `ConversationScrollButton` visibility internally and
+   * is exposed so parents can gate their own auto-follow logic.
+   */
+  isAtBottom?: boolean;
+  /** Tailwind classes for the inner scroll container. The class prop styles the outer wrapper. */
+  innerClass?: string;
+};
 </script>
 
 <script lang="ts">

@@ -1,56 +1,56 @@
 <script lang="ts">
-	import type { PullRequest, Repository } from '@revv/shared';
-	import { untrack } from 'svelte';
-	import { getSelectedPrId, retryClone } from '$lib/stores/prs.svelte';
-	import { getCollapseAllSignal } from '$lib/stores/sidebar.svelte';
-	import { getFocusedId } from '$lib/stores/sidebar-nav.svelte';
-	import { slide, fly } from 'svelte/transition';
-	import CloneStatusIndicator from '$lib/components/shared/CloneStatusIndicator.svelte';
-	import PrItem from './PrItem.svelte';
+import type { PullRequest, Repository } from "@revv/shared";
+import { untrack } from "svelte";
+import { fly, slide } from "svelte/transition";
+import CloneStatusIndicator from "$lib/components/shared/CloneStatusIndicator.svelte";
+import { getSelectedPrId, retryClone } from "$lib/stores/prs.svelte";
+import { getCollapseAllSignal } from "$lib/stores/sidebar.svelte";
+import { getFocusedId } from "$lib/stores/sidebar-nav.svelte";
+import PrItem from "./PrItem.svelte";
 
-	/* Cap stagger at the first N items so a 50-PR repo doesn't pay 2s of
+/* Cap stagger at the first N items so a 50-PR repo doesn't pay 2s of
 	   ladder-in time. Beyond the cap, items render at the cap's delay
 	   (visually arriving "together" once the wrapper finishes opening). */
-	const STAGGER_CAP = 20;
+const STAGGER_CAP = 20;
 
-	let {
-		repository,
-		prs,
-		navPrefix = 'pr',
-		variant = 'open',
-	}: {
-		repository: Repository;
-		prs: PullRequest[];
-		navPrefix?: string;
-		variant?: 'open' | 'archived';
-	} = $props();
+let {
+  repository,
+  prs,
+  navPrefix = "pr",
+  variant = "open",
+}: {
+  repository: Repository;
+  prs: PullRequest[];
+  navPrefix?: string;
+  variant?: "open" | "archived";
+} = $props();
 
-	let expanded = $state(false);
-	let lastSignal = $state(0);
-	let avatarFailed = $state(false);
+let expanded = $state(false);
+let lastSignal = $state(0);
+let avatarFailed = $state(false);
 
-	// Reset failure state if the avatar URL changes
-	$effect(() => {
-		repository.avatarUrl;
-		avatarFailed = false;
-	});
+// Reset failure state if the avatar URL changes
+$effect(() => {
+  repository.avatarUrl;
+  avatarFailed = false;
+});
 
-	const selectedPrId = $derived(getSelectedPrId());
-	const navId = $derived(`${navPrefix}:repo:${repository.id}`);
-	const isFocused = $derived(getFocusedId() === navId);
+const selectedPrId = $derived(getSelectedPrId());
+const navId = $derived(`${navPrefix}:repo:${repository.id}`);
+const isFocused = $derived(getFocusedId() === navId);
 
-	// Collapse when the global collapse-all signal fires
-	$effect(() => {
-		const current = getCollapseAllSignal();
-		if (current > 0 && current !== untrack(() => lastSignal)) {
-			expanded = false;
-			lastSignal = current;
-		}
-	});
+// Collapse when the global collapse-all signal fires
+$effect(() => {
+  const current = getCollapseAllSignal();
+  if (current > 0 && current !== untrack(() => lastSignal)) {
+    expanded = false;
+    lastSignal = current;
+  }
+});
 
-	function toggle() {
-		expanded = !expanded;
-	}
+function toggle() {
+  expanded = !expanded;
+}
 </script>
 
 <div class="select-none">
@@ -111,7 +111,7 @@
 		/>
 
 		<span
-			class="shrink-0 rounded-full bg-bg-elevated px-1.5 py-0.5 text-[10px] font-medium text-text-muted"
+			class="shrink-0 rounded-full bg-bg-elevated px-1.5 py-0.5 text-xs font-medium text-text-muted"
 		>
 			{prs.length}
 		</span>

@@ -28,12 +28,7 @@ export function exec(
         resolve({
           stdout: stdout?.toString() ?? "",
           stderr: stderr?.toString() ?? "",
-          code:
-            error && "code" in error
-              ? (error.code as number)
-              : error
-                ? 1
-                : 0,
+          code: error && "code" in error ? (error.code as number) : error ? 1 : 0,
         });
       },
     );

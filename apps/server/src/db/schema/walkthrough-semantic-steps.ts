@@ -1,6 +1,5 @@
-import { integer, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
-import { sqliteTable } from 'drizzle-orm/sqlite-core';
-import { walkthroughs } from './walkthroughs';
+import { integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { walkthroughs } from "./walkthroughs";
 
 /**
  * Semantic step — the meaningful "chapter" of a walkthrough's Phase B body.
@@ -19,34 +18,35 @@ import { walkthroughs } from './walkthroughs';
  * exist before it will accept its write.
  */
 export const walkthroughSemanticSteps = sqliteTable(
-	'walkthrough_semantic_steps',
-	{
-		id: text('id').primaryKey(),
-		walkthroughId: text('walkthrough_id')
-			.notNull()
-			.references(() => walkthroughs.id, { onDelete: 'cascade' }),
-		/**
-		 * Monotonic, zero-based index for ordering semantic steps within a
-		 * walkthrough. The agent passes this explicitly so the upsert key is
-		 * deterministic across resumes.
-		 */
-		semanticStepIndex: integer('semantic_step_index').notNull(),
-		/** Short title — the chapter name shown in the UI. */
-		title: text('title').notNull(),
-		/**
-		 * Optional 1–2 sentence prelude rendered under the chapter title. Nullable
-		 * — many sections need no preface beyond their title and inner blocks.
-		 */
-		summary: text('summary'),
-		createdAt: text('created_at').notNull(),
-	},
-	(t) => ({
-		/**
-		 * One row per (walkthroughId, semanticStepIndex). `add_semantic_step` upserts
-		 * on this target so a retry of the same call after a crash replays as a no-op.
-		 */
-		semanticStepUnique: uniqueIndex(
-			'walkthrough_semantic_steps_unique',
-		).on(t.walkthroughId, t.semanticStepIndex),
-	}),
+  "walkthrough_semantic_steps",
+  {
+    id: text("id").primaryKey(),
+    walkthroughId: text("walkthrough_id")
+      .notNull()
+      .references(() => walkthroughs.id, { onDelete: "cascade" }),
+    /**
+     * Monotonic, zero-based index for ordering semantic steps within a
+     * walkthrough. The agent passes this explicitly so the upsert key is
+     * deterministic across resumes.
+     */
+    semanticStepIndex: integer("semantic_step_index").notNull(),
+    /** Short title — the chapter name shown in the UI. */
+    title: text("title").notNull(),
+    /**
+     * Optional 1–2 sentence prelude rendered under the chapter title. Nullable
+     * — many sections need no preface beyond their title and inner blocks.
+     */
+    summary: text("summary"),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => ({
+    /**
+     * One row per (walkthroughId, semanticStepIndex). `add_semantic_step` upserts
+     * on this target so a retry of the same call after a crash replays as a no-op.
+     */
+    semanticStepUnique: uniqueIndex("walkthrough_semantic_steps_unique").on(
+      t.walkthroughId,
+      t.semanticStepIndex,
+    ),
+  }),
 );

@@ -1,4 +1,13 @@
-export { default as Confirmation, type ConfirmationProps } from "./Confirmation.svelte";
-export { default as ConfirmationHeader, type ConfirmationHeaderProps } from "./ConfirmationHeader.svelte";
-export { default as ConfirmationContent, type ConfirmationContentProps } from "./ConfirmationContent.svelte";
-export { default as ConfirmationActions, type ConfirmationActionsProps } from "./ConfirmationActions.svelte";
+export { type ConfirmationProps, default as Confirmation } from "./Confirmation.svelte";
+export {
+  type ConfirmationActionsProps,
+  default as ConfirmationActions,
+} from "./ConfirmationActions.svelte";
+export {
+  type ConfirmationContentProps,
+  default as ConfirmationContent,
+} from "./ConfirmationContent.svelte";
+export {
+  type ConfirmationHeaderProps,
+  default as ConfirmationHeader,
+} from "./ConfirmationHeader.svelte";

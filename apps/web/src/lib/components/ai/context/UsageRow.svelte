@@ -1,10 +1,10 @@
 <script lang="ts" module>
-	export type UsageRowProps = {
-		label: string;
-		tokens: number;
-		cost?: number | undefined;
-		class?: string | undefined;
-	};
+export type UsageRowProps = {
+  label: string;
+  tokens: number;
+  cost?: number | undefined;
+  class?: string | undefined;
+};
 </script>
 
 <script lang="ts">

@@ -1,12 +1,12 @@
 <script lang="ts" module>
-	import type { HTMLAttributes } from "svelte/elements";
+import type { HTMLAttributes } from "svelte/elements";
 
-	export type MessageResponseProps = HTMLAttributes<HTMLDivElement> & {
-		/** The markdown content to render. */
-		content: string;
-		/** Whether to attempt fixing incomplete markdown (unclosed code blocks, etc). */
-		parseIncompleteMarkdown?: boolean;
-	};
+export type MessageResponseProps = HTMLAttributes<HTMLDivElement> & {
+  /** The markdown content to render. */
+  content: string;
+  /** Whether to attempt fixing incomplete markdown (unclosed code blocks, etc). */
+  parseIncompleteMarkdown?: boolean;
+};
 </script>
 
 <script lang="ts">

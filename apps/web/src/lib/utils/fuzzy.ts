@@ -16,28 +16,28 @@
  * inside reactive `$derived.by` blocks across hundreds of rows.
  */
 export function fuzzyScore(query: string, text: string): number {
-	if (query.length === 0) return 0;
+  if (query.length === 0) return 0;
 
-	const lq = query.toLowerCase();
-	const lt = text.toLowerCase();
+  const lq = query.toLowerCase();
+  const lt = text.toLowerCase();
 
-	// Exact substring match — best score. Boost prefix matches over mid-string.
-	const idx = lt.indexOf(lq);
-	if (idx !== -1) {
-		return 100 + (idx === 0 ? 50 : 0);
-	}
+  // Exact substring match — best score. Boost prefix matches over mid-string.
+  const idx = lt.indexOf(lq);
+  if (idx !== -1) {
+    return 100 + (idx === 0 ? 50 : 0);
+  }
 
-	// Sequential character match (fuzzy). All query chars must match, in order.
-	let qi = 0;
-	let score = 0;
-	for (let ti = 0; ti < lt.length && qi < lq.length; ti++) {
-		if (lt[ti] === lq[qi]) {
-			// Word-boundary bonus: start of string, or right after a separator.
-			if (ti === 0 || /[\s\-_/]/.test(lt[ti - 1]!)) score += 10;
-			score += 5;
-			qi++;
-		}
-	}
+  // Sequential character match (fuzzy). All query chars must match, in order.
+  let qi = 0;
+  let score = 0;
+  for (let ti = 0; ti < lt.length && qi < lq.length; ti++) {
+    if (lt[ti] === lq[qi]) {
+      // Word-boundary bonus: start of string, or right after a separator.
+      if (ti === 0 || /[\s\-_/]/.test(lt[ti - 1]!)) score += 10;
+      score += 5;
+      qi++;
+    }
+  }
 
-	return qi === lq.length ? score : -1;
+  return qi === lq.length ? score : -1;
 }

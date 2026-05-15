@@ -1,11 +1,11 @@
 <script lang="ts" module>
-	import type { HTMLAttributes } from "svelte/elements";
-	import type { MessageRole } from "./context.js";
+import type { HTMLAttributes } from "svelte/elements";
+import type { MessageRole } from "./context.js";
 
-	export type MessageProps = HTMLAttributes<HTMLDivElement> & {
-		/** The role of the message sender. */
-		from: MessageRole;
-	};
+export type MessageProps = HTMLAttributes<HTMLDivElement> & {
+  /** The role of the message sender. */
+  from: MessageRole;
+};
 </script>
 
 <script lang="ts">

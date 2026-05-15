@@ -1,69 +1,67 @@
 <script lang="ts">
-	import type { DiffBlock } from '@revv/shared';
-	import { FileDiff, parsePatchFiles, type FileDiffOptions } from '@pierre/diffs';
-	import { workerManager } from '$lib/utils/worker-pool';
-	import { renderMarkdown } from '$lib/utils/markdown';
-	import { jumpToDiffLine } from '$lib/stores/review.svelte';
-	import { ArrowUpRight } from '@lucide/svelte';
-	import FileBadge from '$lib/components/ui/FileBadge.svelte';
+import { ArrowUpRight } from "@lucide/svelte";
+import { FileDiff, type FileDiffOptions, parsePatchFiles } from "@pierre/diffs";
+import type { DiffBlock } from "@revv/shared";
+import FileBadge from "$lib/components/ui/FileBadge.svelte";
+import { jumpToDiffLine } from "$lib/stores/review.svelte";
+import { renderMarkdown } from "$lib/utils/markdown";
+import { workerManager } from "$lib/utils/worker-pool";
 
-	interface Props {
-		block: DiffBlock;
-		hideAnnotation?: boolean;
-	}
+interface Props {
+  block: DiffBlock;
+  hideAnnotation?: boolean;
+}
 
-	let { block, hideAnnotation = false }: Props = $props();
+let { block, hideAnnotation = false }: Props = $props();
 
-	const renderedAnnotation = $derived(
-		block.annotation ? renderMarkdown(block.annotation) : null
-	);
+const renderedAnnotation = $derived(block.annotation ? renderMarkdown(block.annotation) : null);
 
-	/**
-	 * First added-line number from the first hunk header, used as the jump target
-	 * when the user clicks the header to open this file in the Diff tab. Falls
-	 * back to line 1 if the patch has no parseable hunk header.
-	 */
-	const targetLine = $derived.by(() => {
-		const match = block.patch.match(/^@@[^\n]*?\+(\d+)/m);
-		return match?.[1] ? parseInt(match[1], 10) : 1;
-	});
+/**
+ * First added-line number from the first hunk header, used as the jump target
+ * when the user clicks the header to open this file in the Diff tab. Falls
+ * back to line 1 if the patch has no parseable hunk header.
+ */
+const targetLine = $derived.by(() => {
+  const match = block.patch.match(/^@@[^\n]*?\+(\d+)/m);
+  return match?.[1] ? parseInt(match[1], 10) : 1;
+});
 
-	let instance: FileDiff<never> | null = null;
+let instance: FileDiff<never> | null = null;
 
-	function mountDiffBlock(el: HTMLDivElement) {
-		const options: FileDiffOptions<never> = {
-			diffStyle: 'unified',
-			theme: { dark: 'pierre-dark', light: 'pierre-light' },
-			overflow: 'scroll',
-			// Suppress Pierre's built-in file header — we render our own clickable
-			// header above so the user can jump to this file in the Diff tab.
-			disableFileHeader: true,
-		};
+function mountDiffBlock(el: HTMLDivElement) {
+  const options: FileDiffOptions<never> = {
+    diffStyle: "unified",
+    theme: { dark: "pierre-dark", light: "pierre-light" },
+    overflow: "scroll",
+    // Suppress Pierre's built-in file header — we render our own clickable
+    // header above so the user can jump to this file in the Diff tab.
+    disableFileHeader: true,
+  };
 
-		instance = new FileDiff<never>(options, workerManager);
+  instance = new FileDiff<never>(options, workerManager);
 
-		const patchHeader = [
-			`diff --git a/${block.filePath} b/${block.filePath}`,
-			`--- a/${block.filePath}`,
-			`+++ b/${block.filePath}`,
-		].join('\n');
-		const fullPatch = `${patchHeader}\n${block.patch}`;
-		const parsed = parsePatchFiles(fullPatch)[0]?.files[0];
+  const patchHeader = [
+    `diff --git a/${block.filePath} b/${block.filePath}`,
+    `--- a/${block.filePath}`,
+    `+++ b/${block.filePath}`,
+  ].join("\n");
+  const fullPatch = `${patchHeader}\n${block.patch}`;
+  const parsed = parsePatchFiles(fullPatch)[0]?.files[0];
 
-		if (!parsed) {
-			el.textContent = 'Failed to parse diff';
-			return { destroy() {} };
-		}
+  if (!parsed) {
+    el.textContent = "Failed to parse diff";
+    return { destroy() {} };
+  }
 
-		instance.render({ containerWrapper: el, fileDiff: parsed });
+  instance.render({ containerWrapper: el, fileDiff: parsed });
 
-		return {
-			destroy() {
-				instance?.cleanUp();
-				instance = null;
-			},
-		};
-	}
+  return {
+    destroy() {
+      instance?.cleanUp();
+      instance = null;
+    },
+  };
+}
 </script>
 
 <div class="annotated-block" class:annotated-block--no-annotation={!block.annotation || hideAnnotation}>

@@ -1,9 +1,9 @@
 <script lang="ts">
-	interface Props {
-		onContinue: () => void;
-	}
+interface Props {
+  onContinue: () => void;
+}
 
-	let { onContinue }: Props = $props();
+let { onContinue }: Props = $props();
 </script>
 
 <div class="welcome">

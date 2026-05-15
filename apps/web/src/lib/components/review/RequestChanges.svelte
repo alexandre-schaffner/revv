@@ -1,280 +1,286 @@
 <script lang="ts">
-	import { getIssues, getRatings, getBlocks, markIssuesAsSubmitted } from '$lib/stores/walkthrough.svelte';
-	import {
-		getThreads,
-		getThreadMessages,
-		loadSession,
-		jumpToDiffLine,
-		jumpToWalkthroughBlock,
-	} from '$lib/stores/review.svelte';
-	import { setRightPanelOpen } from '$lib/stores/sidebar.svelte';
-	import { sendChatMessage } from '$lib/stores/chat.svelte';
-	import { buildAddressIssuesPrompt } from '$lib/utils/prompts';
-	import { api } from '$lib/api/client';
-	import { toast } from 'svelte-sonner';
-	import WalkthroughRatingsPanel from '$lib/components/walkthrough/WalkthroughRatingsPanel.svelte';
-	import IssuesPanel from './issues-panel/IssuesPanel.svelte';
-	import CommentsPanel from './comments-panel/CommentsPanel.svelte';
-	import ApproveWithIssuesDialog from './ApproveWithIssuesDialog.svelte';
-	import { setRcState, setRcHandlers, resetRcActions } from '$lib/stores/rcActions.svelte';
+import { toast } from "svelte-sonner";
+import { api } from "$lib/api/client";
+import WalkthroughRatingsPanel from "$lib/components/walkthrough/WalkthroughRatingsPanel.svelte";
+import { sendChatMessage } from "$lib/stores/chat.svelte";
+import { resetRcActions, setRcHandlers, setRcState } from "$lib/stores/rcActions.svelte";
+import {
+  getThreadMessages,
+  getThreads,
+  jumpToDiffLine,
+  jumpToWalkthroughBlock,
+  loadSession,
+} from "$lib/stores/review.svelte";
+import { setRightPanelOpen } from "$lib/stores/sidebar.svelte";
+import {
+  getBlocks,
+  getIssues,
+  getRatings,
+  markIssuesAsSubmitted,
+} from "$lib/stores/walkthrough.svelte";
+import { buildAddressIssuesPrompt } from "$lib/utils/prompts";
+import ApproveWithIssuesDialog from "./ApproveWithIssuesDialog.svelte";
+import CommentsPanel from "./comments-panel/CommentsPanel.svelte";
+import IssuesPanel from "./issues-panel/IssuesPanel.svelte";
 
-	interface Props {
-		prId: string;
-	}
-	let { prId }: Props = $props();
+interface Props {
+  prId: string;
+}
+let { prId }: Props = $props();
 
-	type Action = 'approve' | 'request_changes';
+type Action = "approve" | "request_changes";
 
-	const issues = $derived(getIssues());
-	const threads = $derived(getThreads());
-	const unresolvedThreads = $derived(threads.filter((t) => t.status !== 'resolved' && t.status !== 'wont_fix'));
-	const ratings = $derived(getRatings());
-	const blocks = $derived(getBlocks());
+const issues = $derived(getIssues());
+const threads = $derived(getThreads());
+const unresolvedThreads = $derived(
+  threads.filter((t) => t.status !== "resolved" && t.status !== "wont_fix"),
+);
+const ratings = $derived(getRatings());
+const blocks = $derived(getBlocks());
 
-	let selectedIssueIds = $state<Set<string>>(new Set());
-	// Derived from the walkthrough store — each issue carries its own
-	// `submittedAt` once persisted on the server. Deriving here (instead of
-	// caching a module-level Map) means the "already posted" treatment
-	// survives reloads, PR-switches, and app restarts: on next mount the
-	// cached walkthrough fetch hydrates `issues` with the timestamp intact.
-	const submittedIssueIds = $derived(
-		new Set(issues.filter((i) => i.submittedAt != null).map((i) => i.id)),
-	);
-	let submitting = $state<Action | null>(null);
-	let submitError = $state<string | null>(null);
-	let submitSuccess = $state<{ action: Action; htmlUrl: string } | null>(null);
-	let approveDialogOpen = $state(false);
+let selectedIssueIds = $state<Set<string>>(new Set());
+// Derived from the walkthrough store — each issue carries its own
+// `submittedAt` once persisted on the server. Deriving here (instead of
+// caching a module-level Map) means the "already posted" treatment
+// survives reloads, PR-switches, and app restarts: on next mount the
+// cached walkthrough fetch hydrates `issues` with the timestamp intact.
+const submittedIssueIds = $derived(
+  new Set(issues.filter((i) => i.submittedAt != null).map((i) => i.id)),
+);
+let submitting = $state<Action | null>(null);
+let submitError = $state<string | null>(null);
+let submitSuccess = $state<{ action: Action; htmlUrl: string } | null>(null);
+let approveDialogOpen = $state(false);
 
-	/**
-	 * Approve click handler. When the walkthrough flagged any issues OR there are
-	 * unresolved comment threads, we surface a confirmation dialog so the reviewer
-	 * has to explicitly acknowledge they're approving despite outstanding concerns.
-	 * With a clean slate we submit directly.
-	 */
-	function handleApproveClick(): void {
-		if (submitting) return;
-		if (issues.length > 0 || unresolvedThreads.length > 0) {
-			approveDialogOpen = true;
-			return;
-		}
-		void submit('approve');
-	}
+/**
+ * Approve click handler. When the walkthrough flagged any issues OR there are
+ * unresolved comment threads, we surface a confirmation dialog so the reviewer
+ * has to explicitly acknowledge they're approving despite outstanding concerns.
+ * With a clean slate we submit directly.
+ */
+function handleApproveClick(): void {
+  if (submitting) return;
+  if (issues.length > 0 || unresolvedThreads.length > 0) {
+    approveDialogOpen = true;
+    return;
+  }
+  void submit("approve");
+}
 
-	const selectedCount = $derived(selectedIssueIds.size);
-	const hasContent = $derived(selectedCount > 0);
+const selectedCount = $derived(selectedIssueIds.size);
+const hasContent = $derived(selectedCount > 0);
 
-	const approveBlockerSummary = $derived.by(() => {
-		const parts: string[] = [];
-		if (issues.length > 0) {
-			parts.push(`${issues.length} walkthrough issue${issues.length === 1 ? '' : 's'}`);
-		}
-		if (unresolvedThreads.length > 0) {
-			parts.push(
-				`${unresolvedThreads.length} unresolved comment${unresolvedThreads.length === 1 ? '' : 's'}`,
-			);
-		}
-		return parts.join(' and ');
-	});
+const approveBlockerSummary = $derived.by(() => {
+  const parts: string[] = [];
+  if (issues.length > 0) {
+    parts.push(`${issues.length} walkthrough issue${issues.length === 1 ? "" : "s"}`);
+  }
+  if (unresolvedThreads.length > 0) {
+    parts.push(
+      `${unresolvedThreads.length} unresolved comment${unresolvedThreads.length === 1 ? "" : "s"}`,
+    );
+  }
+  return parts.join(" and ");
+});
 
-	function severityTag(s: 'info' | 'warning' | 'critical'): string {
-		// Plain-text tag used inside the markdown body posted to GitHub.
-		// Keeps the comment icon-free per project UI conventions.
-		return s === 'critical' ? '`[CRITICAL]`' : s === 'warning' ? '`[WARNING]`' : '`[INFO]`';
-	}
+function severityTag(s: "info" | "warning" | "critical"): string {
+  // Plain-text tag used inside the markdown body posted to GitHub.
+  // Keeps the comment icon-free per project UI conventions.
+  return s === "critical" ? "`[CRITICAL]`" : s === "warning" ? "`[WARNING]`" : "`[INFO]`";
+}
 
-	function buildBody(): string {
-		const parts: string[] = [];
-		const selectedIssues = issues.filter((i) => selectedIssueIds.has(i.id));
-		if (selectedIssues.length > 0) {
-			parts.push('### Walkthrough issues');
-			for (const issue of selectedIssues) {
-				const loc =
-					issue.filePath && issue.startLine != null
-						? ` — \`${issue.filePath}:${issue.startLine}${issue.endLine != null && issue.endLine !== issue.startLine ? `–${issue.endLine}` : ''}\``
-						: issue.filePath
-							? ` — \`${issue.filePath}\``
-							: '';
-				parts.push(
-					`- ${severityTag(issue.severity)} **${issue.title}**${loc}\n  ${issue.description}`,
-				);
-			}
-		}
-		return parts.join('\n\n');
-	}
+function buildBody(): string {
+  const parts: string[] = [];
+  const selectedIssues = issues.filter((i) => selectedIssueIds.has(i.id));
+  if (selectedIssues.length > 0) {
+    parts.push("### Walkthrough issues");
+    for (const issue of selectedIssues) {
+      const loc =
+        issue.filePath && issue.startLine != null
+          ? ` — \`${issue.filePath}:${issue.startLine}${issue.endLine != null && issue.endLine !== issue.startLine ? `–${issue.endLine}` : ""}\``
+          : issue.filePath
+            ? ` — \`${issue.filePath}\``
+            : "";
+      parts.push(
+        `- ${severityTag(issue.severity)} **${issue.title}**${loc}\n  ${issue.description}`,
+      );
+    }
+  }
+  return parts.join("\n\n");
+}
 
-	function buildComments(): Array<{
-		path: string;
-		body: string;
-		line: number;
-		side: 'LEFT' | 'RIGHT';
-		startLine?: number;
-		threadId: string;
-	}> {
-		const out: Array<{
-			path: string;
-			body: string;
-			line: number;
-			side: 'LEFT' | 'RIGHT';
-			startLine?: number;
-			threadId: string;
-		}> = [];
+function buildComments(): Array<{
+  path: string;
+  body: string;
+  line: number;
+  side: "LEFT" | "RIGHT";
+  startLine?: number;
+  threadId: string;
+}> {
+  const out: Array<{
+    path: string;
+    body: string;
+    line: number;
+    side: "LEFT" | "RIGHT";
+    startLine?: number;
+    threadId: string;
+  }> = [];
 
-		// Collect IDs of all unresolved threads
-		for (const thread of unresolvedThreads) {
-			const messages = getThreadMessages(thread.id).filter(
-				(m) => m.authorRole === 'reviewer' && m.externalId == null
-			);
-			const body = messages.map((m) => m.body).filter((b) => b.trim().length > 0).join('\n\n');
-			if (!body) continue;
-			const comment: {
-				path: string;
-				body: string;
-				line: number;
-				side: 'LEFT' | 'RIGHT';
-				startLine?: number;
-				threadId: string;
-			} = {
-				path: thread.filePath,
-				body,
-				line: thread.endLine,
-				side: thread.diffSide === 'old' ? 'LEFT' : 'RIGHT',
-				threadId: thread.id,
-			};
-			if (thread.startLine !== thread.endLine) {
-				comment.startLine = thread.startLine;
-			}
-			out.push(comment);
-		}
-		return out;
-	}
+  // Collect IDs of all unresolved threads
+  for (const thread of unresolvedThreads) {
+    const messages = getThreadMessages(thread.id).filter(
+      (m) => m.authorRole === "reviewer" && m.externalId == null,
+    );
+    const body = messages
+      .map((m) => m.body)
+      .filter((b) => b.trim().length > 0)
+      .join("\n\n");
+    if (!body) continue;
+    const comment: {
+      path: string;
+      body: string;
+      line: number;
+      side: "LEFT" | "RIGHT";
+      startLine?: number;
+      threadId: string;
+    } = {
+      path: thread.filePath,
+      body,
+      line: thread.endLine,
+      side: thread.diffSide === "old" ? "LEFT" : "RIGHT",
+      threadId: thread.id,
+    };
+    if (thread.startLine !== thread.endLine) {
+      comment.startLine = thread.startLine;
+    }
+    out.push(comment);
+  }
+  return out;
+}
 
-	async function submit(action: Action): Promise<void> {
-		if (submitting) return;
-		submitting = action;
-		submitError = null;
-		submitSuccess = null;
+async function submit(action: Action): Promise<void> {
+  if (submitting) return;
+  submitting = action;
+  submitError = null;
+  submitSuccess = null;
 
-		try {
-			const body = buildBody();
-			const comments = buildComments();
-			const issueIdsForSubmit = Array.from(selectedIssueIds);
-			const { data, error } = await api.api
-				.reviews({ id: prId })
-				['github-submit']
-				.post({ action, body, comments, issueIds: issueIdsForSubmit });
-			if (error) {
-				const msg =
-					typeof error.value === 'object' && error.value !== null && 'error' in error.value
-						? String((error.value as { error: unknown }).error)
-						: `HTTP ${error.status}`;
-				throw new Error(msg);
-			}
+  try {
+    const body = buildBody();
+    const comments = buildComments();
+    const issueIdsForSubmit = Array.from(selectedIssueIds);
+    const { data, error } = await api.api
+      .reviews({ id: prId })
+      ["github-submit"].post({ action, body, comments, issueIds: issueIdsForSubmit });
+    if (error) {
+      const msg =
+        typeof error.value === "object" && error.value !== null && "error" in error.value
+          ? String((error.value as { error: unknown }).error)
+          : `HTTP ${error.status}`;
+      throw new Error(msg);
+    }
 
-			// Push unsynced replies: messages in synced threads that have no externalId
-			const syncedThreads = threads.filter((t) => t.externalCommentId != null);
-			const pushTasks = syncedThreads.flatMap((thread) =>
-				getThreadMessages(thread.id)
-					.filter((msg) => msg.externalId == null && msg.authorRole === 'reviewer')
-					.map((msg) =>
-						api.api
-							.threads({ id: thread.id })
-							.messages({ messageId: msg.id })
-							.push.post(),
-					),
-			);
-			await Promise.allSettled(pushTasks);
+    // Push unsynced replies: messages in synced threads that have no externalId
+    const syncedThreads = threads.filter((t) => t.externalCommentId != null);
+    const pushTasks = syncedThreads.flatMap((thread) =>
+      getThreadMessages(thread.id)
+        .filter((msg) => msg.externalId == null && msg.authorRole === "reviewer")
+        .map((msg) =>
+          api.api.threads({ id: thread.id }).messages({ messageId: msg.id }).push.post(),
+        ),
+    );
+    await Promise.allSettled(pushTasks);
 
-			// Trigger sync-threads to pull back GitHub comment IDs
-			await api.api.prs({ id: prId })['sync-threads'].post();
+    // Trigger sync-threads to pull back GitHub comment IDs
+    await api.api.prs({ id: prId })["sync-threads"].post();
 
-			// Reload session so externalCommentId fields are refreshed locally
-			await loadSession(prId);
+    // Reload session so externalCommentId fields are refreshed locally
+    await loadSession(prId);
 
-			const payload = data as {
-				htmlUrl?: string;
-				issuesSubmittedAt?: string | null;
-				submittedIssueIds?: string[];
-			} | null;
-			submitSuccess = { action, htmlUrl: payload?.htmlUrl ?? '' };
-			toast.success(actionLabel(action) + ' on GitHub');
-			// Mirror the server-side stamp onto the local walkthrough store so
-			// the "already posted" treatment renders immediately without
-			// waiting for a cache refetch. The server is the source of truth
-			// on reload; this is just an optimistic echo.
-			const stampedIds = payload?.submittedIssueIds ?? issueIdsForSubmit;
-			const stampedAt = payload?.issuesSubmittedAt ?? new Date().toISOString();
-			markIssuesAsSubmitted(prId, stampedIds, stampedAt);
-			selectedIssueIds = new Set();
-		} catch (e) {
-			const msg = e instanceof Error ? e.message : 'Failed to submit review';
-			submitError = msg;
-			toast.error(msg);
-		} finally {
-			submitting = null;
-		}
-	}
+    const payload = data as {
+      htmlUrl?: string;
+      issuesSubmittedAt?: string | null;
+      submittedIssueIds?: string[];
+    } | null;
+    submitSuccess = { action, htmlUrl: payload?.htmlUrl ?? "" };
+    toast.success(`${actionLabel(action)} on GitHub`);
+    // Mirror the server-side stamp onto the local walkthrough store so
+    // the "already posted" treatment renders immediately without
+    // waiting for a cache refetch. The server is the source of truth
+    // on reload; this is just an optimistic echo.
+    const stampedIds = payload?.submittedIssueIds ?? issueIdsForSubmit;
+    const stampedAt = payload?.issuesSubmittedAt ?? new Date().toISOString();
+    markIssuesAsSubmitted(prId, stampedIds, stampedAt);
+    selectedIssueIds = new Set();
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Failed to submit review";
+    submitError = msg;
+    toast.error(msg);
+  } finally {
+    submitting = null;
+  }
+}
 
-	/**
-	 * Hand the selected walkthrough issues to the right-pane chat agent and
-	 * ask it to address them as commits on the chat worktree's working
-	 * branch. The user can then inspect the proposed-changes strip in the
-	 * chat panel and choose which commits to keep.
-	 */
-	function generateChanges(): void {
-		const selected = issues.filter((i) => selectedIssueIds.has(i.id));
-		if (selected.length === 0) {
-			toast.error('Select at least one issue to address.');
-			return;
-		}
-		const prompt = buildAddressIssuesPrompt(selected);
-		setRightPanelOpen(true);
-		sendChatMessage({ prId, message: prompt });
-	}
+/**
+ * Hand the selected walkthrough issues to the right-pane chat agent and
+ * ask it to address them as commits on the chat worktree's working
+ * branch. The user can then inspect the proposed-changes strip in the
+ * chat panel and choose which commits to keep.
+ */
+function generateChanges(): void {
+  const selected = issues.filter((i) => selectedIssueIds.has(i.id));
+  if (selected.length === 0) {
+    toast.error("Select at least one issue to address.");
+    return;
+  }
+  const prompt = buildAddressIssuesPrompt(selected);
+  setRightPanelOpen(true);
+  sendChatMessage({ prId, message: prompt });
+}
 
-	function actionLabel(a: Action): string {
-		if (a === 'approve') return 'Approved';
-		return 'Changes requested';
-	}
+function actionLabel(a: Action): string {
+  if (a === "approve") return "Approved";
+  return "Changes requested";
+}
 
-	const allIssuesSelected = $derived(
-		issues.length > 0 && issues.every((i) => selectedIssueIds.has(i.id))
-	);
+const allIssuesSelected = $derived(
+  issues.length > 0 && issues.every((i) => selectedIssueIds.has(i.id)),
+);
 
-	function toggleIssue(id: string) {
-		if (submittedIssueIds.has(id)) return;
-		const next = new Set(selectedIssueIds);
-		if (next.has(id)) next.delete(id);
-		else next.add(id);
-		selectedIssueIds = next;
-	}
+function toggleIssue(id: string) {
+  if (submittedIssueIds.has(id)) return;
+  const next = new Set(selectedIssueIds);
+  if (next.has(id)) next.delete(id);
+  else next.add(id);
+  selectedIssueIds = next;
+}
 
-	function toggleAllIssues() {
-		if (allIssuesSelected) {
-			selectedIssueIds = new Set();
-		} else {
-			selectedIssueIds = new Set(issues.filter((i) => !submittedIssueIds.has(i.id)).map((i) => i.id));
-		}
-	}
+function toggleAllIssues() {
+  if (allIssuesSelected) {
+    selectedIssueIds = new Set();
+  } else {
+    selectedIssueIds = new Set(issues.filter((i) => !submittedIssueIds.has(i.id)).map((i) => i.id));
+  }
+}
 
-	// Register reactive state and handlers into the shared RC actions store so
-	// AppShell can render the float pill as a direct child of .app-shell.
-	$effect(() => {
-		setRcState({
-			submitting,
-			selectedCount,
-			hasContent,
-			approveBlockerSummary,
-		});
-	});
+// Register reactive state and handlers into the shared RC actions store so
+// AppShell can render the float pill as a direct child of .app-shell.
+$effect(() => {
+  setRcState({
+    submitting,
+    selectedCount,
+    hasContent,
+    approveBlockerSummary,
+  });
+});
 
-	$effect(() => {
-		setRcHandlers({
-			onGenerateChanges: generateChanges,
-			onSubmitReview: () => void submit('request_changes'),
-			onApprove: handleApproveClick,
-		});
-		return resetRcActions;
-	});
+$effect(() => {
+  setRcHandlers({
+    onGenerateChanges: generateChanges,
+    onSubmitReview: () => void submit("request_changes"),
+    onApprove: handleApproveClick,
+  });
+  return resetRcActions;
+});
 </script>
 
 <div class="request-changes">

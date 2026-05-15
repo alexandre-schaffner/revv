@@ -1,51 +1,51 @@
 <script lang="ts">
-    import {
-        Star,
-        Check,
-        AlertCircle,
-        X,
-        Loader2,
-        ChevronsDownUp,
-        ChevronsUpDown,
-        Filter,
-    } from "@lucide/svelte";
-    import { formatDuration } from "./format-duration";
+import {
+  AlertCircle,
+  Check,
+  ChevronsDownUp,
+  ChevronsUpDown,
+  Filter,
+  Loader2,
+  Star,
+  X,
+} from "@lucide/svelte";
+import { formatDuration } from "./format-duration";
 
-    interface Counts {
-        pass: number;
-        concern: number;
-        blocker: number;
-        total: number;
-        pending: number;
-    }
+interface Counts {
+  pass: number;
+  concern: number;
+  blocker: number;
+  total: number;
+  pending: number;
+}
 
-    interface Props {
-        counts: Counts;
-        /** Running count — number of axes currently in the `running` lifecycle state. */
-        runningCount: number;
-        /** Total elapsed time for all ratings combined (ms). Only shown when complete. */
-        totalElapsedMs: number | null;
-        /** When true, the expand-all toggle is active. null = per-row state. */
-        expandAll: boolean | null;
-        onlyFailing: boolean;
-        onToggleExpandAll: () => void;
-        onToggleOnlyFailing: () => void;
-    }
+interface Props {
+  counts: Counts;
+  /** Running count — number of axes currently in the `running` lifecycle state. */
+  runningCount: number;
+  /** Total elapsed time for all ratings combined (ms). Only shown when complete. */
+  totalElapsedMs: number | null;
+  /** When true, the expand-all toggle is active. null = per-row state. */
+  expandAll: boolean | null;
+  onlyFailing: boolean;
+  onToggleExpandAll: () => void;
+  onToggleOnlyFailing: () => void;
+}
 
-    let {
-        counts,
-        runningCount,
-        totalElapsedMs,
-        expandAll,
-        onlyFailing,
-        onToggleExpandAll,
-        onToggleOnlyFailing,
-    }: Props = $props();
+let {
+  counts,
+  runningCount,
+  totalElapsedMs,
+  expandAll,
+  onlyFailing,
+  onToggleExpandAll,
+  onToggleOnlyFailing,
+}: Props = $props();
 
-    // The "Expand all" button flips its label to "Collapse all" when every row
-    // is visually expanded. With tri-state logic (true/false/null) we treat any
-    // non-true value as "not expanded" so the first click expands everything.
-    const expandLabel = $derived(expandAll === true ? "Collapse all" : "Expand all");
+// The "Expand all" button flips its label to "Collapse all" when every row
+// is visually expanded. With tri-state logic (true/false/null) we treat any
+// non-true value as "not expanded" so the first click expands everything.
+const expandLabel = $derived(expandAll === true ? "Collapse all" : "Expand all");
 </script>
 
 <div class="summary-bar">

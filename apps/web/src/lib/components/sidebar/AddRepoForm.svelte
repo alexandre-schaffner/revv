@@ -1,177 +1,177 @@
 <script lang="ts">
-	import type { Repository } from '@revv/shared';
-	import { RefreshCw, Loader2, Search, Plus, Trash2 } from '@lucide/svelte';
-	import {
-		addRepo,
-		getRepositories,
-		getAvailableRepos,
-		getAvailableReposLoading,
-		fetchAvailableRepos,
-		retryClone,
-		deleteRepo,
-	} from '$lib/stores/prs.svelte';
-	import CloneStatusIndicator from '$lib/components/shared/CloneStatusIndicator.svelte';
-	import { toast } from 'svelte-sonner';
+import { Loader2, Plus, RefreshCw, Search, Trash2 } from "@lucide/svelte";
+import type { Repository } from "@revv/shared";
+import { toast } from "svelte-sonner";
+import CloneStatusIndicator from "$lib/components/shared/CloneStatusIndicator.svelte";
+import {
+  addRepo,
+  deleteRepo,
+  fetchAvailableRepos,
+  getAvailableRepos,
+  getAvailableReposLoading,
+  getRepositories,
+  retryClone,
+} from "$lib/stores/prs.svelte";
 
-	// Shared "Add Repository" form. Renders the Browse/Manual tab content
-	// without a modal wrapper. Assumes the parent provides horizontal
-	// padding equivalent to `p-5` — the list and footer use small negative
-	// margins to extend visually past that padding, mirroring the original
-	// dialog look in both modal and inline contexts.
-	let {
-		onClose,
-		autoFocus = true,
-		showTitle = true,
-	}: {
-		onClose?: () => void;
-		autoFocus?: boolean;
-		showTitle?: boolean;
-	} = $props();
+// Shared "Add Repository" form. Renders the Browse/Manual tab content
+// without a modal wrapper. Assumes the parent provides horizontal
+// padding equivalent to `p-5` — the list and footer use small negative
+// margins to extend visually past that padding, mirroring the original
+// dialog look in both modal and inline contexts.
+let {
+  onClose,
+  autoFocus = true,
+  showTitle = true,
+}: {
+  onClose?: () => void;
+  autoFocus?: boolean;
+  showTitle?: boolean;
+} = $props();
 
-	function focusOnMount(node: HTMLElement) {
-		if (autoFocus) node.focus();
-	}
+function focusOnMount(node: HTMLElement) {
+  if (autoFocus) node.focus();
+}
 
-	let activeTab = $state<'browse' | 'manual'>('browse');
+let activeTab = $state<"browse" | "manual">("browse");
 
-	// -- Browse tab state --
-	let browseSearch = $state('');
-	let addingRepos = $state(new Set<string>());
-	let removingRepos = $state(new Set<string>());
-	let highlightedIndex = $state(-1);
-	let repoListEl = $state<HTMLDivElement | null>(null);
+// -- Browse tab state --
+let browseSearch = $state("");
+let addingRepos = $state(new Set<string>());
+let removingRepos = $state(new Set<string>());
+let highlightedIndex = $state(-1);
+let repoListEl = $state<HTMLDivElement | null>(null);
 
-	// Map keyed by fullName so the trailing-icon block can read live clone
-	// state for repos that were already added. `getRepositories()` is reactive
-	// (server broadcasts `repos:clone-status` → store updates), so this Map
-	// re-derives whenever the clone status of any tracked repo changes.
-	let trackedByFullName = $derived(
-		new Map<string, Repository>(getRepositories().map((r) => [r.fullName, r])),
-	);
+// Map keyed by fullName so the trailing-icon block can read live clone
+// state for repos that were already added. `getRepositories()` is reactive
+// (server broadcasts `repos:clone-status` → store updates), so this Map
+// re-derives whenever the clone status of any tracked repo changes.
+let trackedByFullName = $derived(
+  new Map<string, Repository>(getRepositories().map((r) => [r.fullName, r])),
+);
 
-	let filteredAvailable = $derived(
-		browseSearch.trim() === ''
-			? getAvailableRepos()
-			: getAvailableRepos().filter(
-					(repo) =>
-						repo.fullName.toLowerCase().includes(browseSearch.toLowerCase()) ||
-						repo.owner.toLowerCase().includes(browseSearch.toLowerCase()) ||
-						repo.name.toLowerCase().includes(browseSearch.toLowerCase()),
-				),
-	);
+let filteredAvailable = $derived(
+  browseSearch.trim() === ""
+    ? getAvailableRepos()
+    : getAvailableRepos().filter(
+        (repo) =>
+          repo.fullName.toLowerCase().includes(browseSearch.toLowerCase()) ||
+          repo.owner.toLowerCase().includes(browseSearch.toLowerCase()) ||
+          repo.name.toLowerCase().includes(browseSearch.toLowerCase()),
+      ),
+);
 
-	let groupedByOwner = $derived.by(() => {
-		const groups = new Map<string, typeof filteredAvailable>();
-		for (const repo of filteredAvailable) {
-			const existing = groups.get(repo.owner);
-			if (existing) {
-				existing.push(repo);
-			} else {
-				groups.set(repo.owner, [repo]);
-			}
-		}
-		return groups;
-	});
+let groupedByOwner = $derived.by(() => {
+  const groups = new Map<string, typeof filteredAvailable>();
+  for (const repo of filteredAvailable) {
+    const existing = groups.get(repo.owner);
+    if (existing) {
+      existing.push(repo);
+    } else {
+      groups.set(repo.owner, [repo]);
+    }
+  }
+  return groups;
+});
 
-	$effect(() => {
-		browseSearch;
-		highlightedIndex = -1;
-	});
+$effect(() => {
+  browseSearch;
+  highlightedIndex = -1;
+});
 
-	// -- Manual tab state --
-	let fullName = $state('');
-	let isLoading = $state(false);
-	let localError = $state('');
+// -- Manual tab state --
+let fullName = $state("");
+let isLoading = $state(false);
+let localError = $state("");
 
-	$effect(() => {
-		if (getAvailableRepos().length === 0) {
-			fetchAvailableRepos();
-		}
-	});
+$effect(() => {
+  if (getAvailableRepos().length === 0) {
+    fetchAvailableRepos();
+  }
+});
 
-	async function handleBrowseAdd(repoFullName: string) {
-		if (addingRepos.has(repoFullName) || trackedByFullName.has(repoFullName)) return;
-		addingRepos = new Set([...addingRepos, repoFullName]);
-		try {
-			await addRepo(repoFullName);
-		} catch (e) {
-			toast.error(e instanceof Error ? e.message : 'Failed to add repository');
-		} finally {
-			const next = new Set(addingRepos);
-			next.delete(repoFullName);
-			addingRepos = next;
-		}
-	}
+async function handleBrowseAdd(repoFullName: string) {
+  if (addingRepos.has(repoFullName) || trackedByFullName.has(repoFullName)) return;
+  addingRepos = new Set([...addingRepos, repoFullName]);
+  try {
+    await addRepo(repoFullName);
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : "Failed to add repository");
+  } finally {
+    const next = new Set(addingRepos);
+    next.delete(repoFullName);
+    addingRepos = next;
+  }
+}
 
-	async function handleBrowseRemove(repoId: string) {
-		if (removingRepos.has(repoId)) return;
-		removingRepos = new Set([...removingRepos, repoId]);
-		try {
-			await deleteRepo(repoId);
-		} catch {
-			// toast already shown by deleteRepo
-		} finally {
-			const next = new Set(removingRepos);
-			next.delete(repoId);
-			removingRepos = next;
-		}
-	}
+async function handleBrowseRemove(repoId: string) {
+  if (removingRepos.has(repoId)) return;
+  removingRepos = new Set([...removingRepos, repoId]);
+  try {
+    await deleteRepo(repoId);
+  } catch {
+    // toast already shown by deleteRepo
+  } finally {
+    const next = new Set(removingRepos);
+    next.delete(repoId);
+    removingRepos = next;
+  }
+}
 
-	async function handleManualAdd() {
-		const trimmed = fullName.trim();
-		if (!trimmed || !trimmed.includes('/')) {
-			localError = 'Enter a valid repo in owner/name format';
-			return;
-		}
-		isLoading = true;
-		localError = '';
-		try {
-			await addRepo(trimmed);
-			fullName = '';
-			onClose?.();
-		} catch (e) {
-			const msg = e instanceof Error ? e.message : 'Failed to add repository';
-			localError = msg;
-			toast.error(msg);
-		} finally {
-			isLoading = false;
-		}
-	}
+async function handleManualAdd() {
+  const trimmed = fullName.trim();
+  if (!trimmed?.includes("/")) {
+    localError = "Enter a valid repo in owner/name format";
+    return;
+  }
+  isLoading = true;
+  localError = "";
+  try {
+    await addRepo(trimmed);
+    fullName = "";
+    onClose?.();
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Failed to add repository";
+    localError = msg;
+    toast.error(msg);
+  } finally {
+    isLoading = false;
+  }
+}
 
-	function scrollHighlightedIntoView() {
-		if (!repoListEl) return;
-		const el = repoListEl.querySelector<HTMLElement>('[data-highlighted="true"]');
-		el?.scrollIntoView({ block: 'nearest' });
-	}
+function scrollHighlightedIntoView() {
+  if (!repoListEl) return;
+  const el = repoListEl.querySelector<HTMLElement>('[data-highlighted="true"]');
+  el?.scrollIntoView({ block: "nearest" });
+}
 
-	function handleBrowseKeydown(e: KeyboardEvent) {
-		if (e.key === 'Escape') {
-			onClose?.();
-		} else if (e.key === 'ArrowDown') {
-			e.preventDefault();
-			highlightedIndex = Math.min(highlightedIndex + 1, filteredAvailable.length - 1);
-			scrollHighlightedIntoView();
-		} else if (e.key === 'ArrowUp') {
-			e.preventDefault();
-			if (highlightedIndex > 0) highlightedIndex--;
-			scrollHighlightedIntoView();
-		} else if (e.key === 'Enter' && highlightedIndex >= 0) {
-			const repo = filteredAvailable[highlightedIndex];
-			if (repo) handleBrowseAdd(repo.fullName);
-		} else if (e.key === 'Tab' && e.shiftKey) {
-			e.preventDefault();
-			activeTab = activeTab === 'browse' ? 'manual' : 'browse';
-		}
-	}
+function handleBrowseKeydown(e: KeyboardEvent) {
+  if (e.key === "Escape") {
+    onClose?.();
+  } else if (e.key === "ArrowDown") {
+    e.preventDefault();
+    highlightedIndex = Math.min(highlightedIndex + 1, filteredAvailable.length - 1);
+    scrollHighlightedIntoView();
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    if (highlightedIndex > 0) highlightedIndex--;
+    scrollHighlightedIntoView();
+  } else if (e.key === "Enter" && highlightedIndex >= 0) {
+    const repo = filteredAvailable[highlightedIndex];
+    if (repo) handleBrowseAdd(repo.fullName);
+  } else if (e.key === "Tab" && e.shiftKey) {
+    e.preventDefault();
+    activeTab = activeTab === "browse" ? "manual" : "browse";
+  }
+}
 
-	function handleManualKeydown(e: KeyboardEvent) {
-		if (e.key === 'Enter') handleManualAdd();
-		if (e.key === 'Escape') onClose?.();
-		if (e.key === 'Tab' && e.shiftKey) {
-			e.preventDefault();
-			activeTab = 'browse';
-		}
-	}
+function handleManualKeydown(e: KeyboardEvent) {
+  if (e.key === "Enter") handleManualAdd();
+  if (e.key === "Escape") onClose?.();
+  if (e.key === "Tab" && e.shiftKey) {
+    e.preventDefault();
+    activeTab = "browse";
+  }
+}
 </script>
 
 {#if showTitle}
@@ -207,6 +207,7 @@
 				<input
 					class="search-input"
 					placeholder="Search repositories..."
+					aria-label="Search repositories"
 					bind:value={browseSearch}
 					onkeydown={handleBrowseKeydown}
 					use:focusOnMount
@@ -216,7 +217,7 @@
 				class="icon-btn"
 				onclick={() => fetchAvailableRepos(true)}
 				disabled={getAvailableReposLoading()}
-				title="Refresh"
+				aria-label="Refresh repositories"
 			>
 				<RefreshCw size={13} class={getAvailableReposLoading() ? 'animate-spin' : ''} />
 			</button>
@@ -252,7 +253,7 @@
 									onerror={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')}
 								/>
 							{/if}
-							<span class="text-[10px] font-semibold uppercase tracking-wider text-text-muted"
+							<span class="text-xs font-semibold uppercase tracking-wider text-text-muted"
 								>{owner}</span
 							>
 						</div>
@@ -358,8 +359,9 @@
 		<p class="mb-3 text-xs text-text-muted">Enter the repository in owner/name format</p>
 
 		<input
-			class="h-9 w-full rounded-md border border-border bg-bg-elevated px-3 text-sm text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+			class="h-9 w-full rounded-lg border border-border bg-bg-elevated px-3 text-sm text-text-primary placeholder:text-text-muted focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-3 focus-visible:outline-none"
 			placeholder="owner/repository"
+			aria-label="Repository name (owner/repository)"
 			bind:value={fullName}
 			onkeydown={handleManualKeydown}
 			disabled={isLoading}

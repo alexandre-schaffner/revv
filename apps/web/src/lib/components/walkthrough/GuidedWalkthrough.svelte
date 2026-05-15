@@ -1,659 +1,679 @@
 <script lang="ts">
-	import { onMount, onDestroy, untrack } from 'svelte';
-	import { fly } from 'svelte/transition';
-	import { cubicOut, cubicIn } from 'svelte/easing';
+import { onDestroy, onMount, untrack } from "svelte";
+import { cubicIn, cubicOut } from "svelte/easing";
+import { fly } from "svelte/transition";
 
-	const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
-	import { Button } from '$lib/components/ui/button';
-	import { Separator } from '$lib/components/ui/separator';
-	import { RefreshCw, AlertTriangle, AlertCircle, Sparkles } from '@lucide/svelte';
-	import { initHighlighter } from '$lib/utils/code-highlight.svelte';
-	import { renderMarkdown } from '$lib/utils/markdown';
-	import {
-		getBlocks,
-		getSummary,
-		getRiskLevel,
-		getIsStreaming,
-		getStreamError,
-		getExplorationSteps,
-		getPhase,
-		getStreamStartedAt,
-		getIssues,
-		getRatings,
-	getSemanticSteps,
-	getSentiment,
-	getLastCompletedPhase,
-	getIsSuperseded,
-	getIsLiveGeneration,
-	getCloneInProgress,
-	getCloneRepoId,
-	hasBlockAnimated,
-	markBlockAnimated,
-	hasIssueAnimated,
-	markIssueAnimated,
-	hasContainerAnimated,
-	markContainerAnimated,
-	prepareEntry,
-	streamWalkthrough,
-	hydrateFromCache,
-	regenerate,
-	pollCloneUntilResolved,
-	stopClonePoll,
-} from '$lib/stores/walkthrough.svelte';
-	import { getRepositories } from '$lib/stores/prs.svelte';
-	import { API_BASE_URL } from '@revv/shared';
-	import type { WalkthroughBlock, WalkthroughSemanticStep } from '@revv/shared';
-	import { authHeaders } from '$lib/utils/session-token';
-	import { Progress } from '$lib/components/ui/progress';
-	import { Dotmatrix } from '$lib/components/ui/dotmatrix/index.js';
-	import {
-		jumpToDiffLine,
-		getPendingWalkthroughBlockJump,
-		clearPendingWalkthroughBlockJump,
-	} from '$lib/stores/review.svelte';
-	import { groupIssuesBySeverityWithIndex } from '$lib/utils/walkthrough-issues';
+const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
 
-	import FileBadge from '$lib/components/ui/FileBadge.svelte';
-	import IssueCard from './IssueCard.svelte';
-	import WalkthroughSection from './WalkthroughSection.svelte';
-	import WalkthroughRatingsGrid from './WalkthroughRatingsGrid.svelte';
-	import { Shimmer } from '$lib/components/ai/shimmer';
+import { AlertCircle, AlertTriangle, RefreshCw, Sparkles } from "@lucide/svelte";
+import type { WalkthroughBlock, WalkthroughSemanticStep } from "@revv/shared";
+import { API_BASE_URL } from "@revv/shared";
+import { Shimmer } from "$lib/components/ai/shimmer";
+import { Button } from "$lib/components/ui/button";
+import { Dotmatrix } from "$lib/components/ui/dotmatrix/index.js";
+import FileBadge from "$lib/components/ui/FileBadge.svelte";
+import { Progress } from "$lib/components/ui/progress";
+import { Separator } from "$lib/components/ui/separator";
+import { getRepositories } from "$lib/stores/prs.svelte";
+import {
+  clearPendingWalkthroughBlockJump,
+  getPendingWalkthroughBlockJump,
+  jumpToDiffLine,
+} from "$lib/stores/review.svelte";
+import {
+  getBlocks,
+  getCloneInProgress,
+  getCloneRepoId,
+  getExplorationSteps,
+  getIsLiveGeneration,
+  getIsStreaming,
+  getIsSuperseded,
+  getIssues,
+  getLastCompletedPhase,
+  getPhase,
+  getRatings,
+  getRiskLevel,
+  getSemanticSteps,
+  getSentiment,
+  getStreamError,
+  getStreamStartedAt,
+  getSummary,
+  hasBlockAnimated,
+  hasContainerAnimated,
+  hasIssueAnimated,
+  hydrateFromCache,
+  markBlockAnimated,
+  markContainerAnimated,
+  markIssueAnimated,
+  pollCloneUntilResolved,
+  prepareEntry,
+  regenerate,
+  stopClonePoll,
+  streamWalkthrough,
+} from "$lib/stores/walkthrough.svelte";
+import { initHighlighter } from "$lib/utils/code-highlight.svelte";
+import { renderMarkdown } from "$lib/utils/markdown";
+import { authHeaders } from "$lib/utils/session-token";
+import { groupIssuesBySeverityWithIndex } from "$lib/utils/walkthrough-issues";
+import IssueCard from "./IssueCard.svelte";
+import WalkthroughRatingsGrid from "./WalkthroughRatingsGrid.svelte";
+import WalkthroughSection from "./WalkthroughSection.svelte";
 
-	interface Props {
-		prId: string;
-		scrollRoot?: HTMLElement | undefined;
-		isActive?: boolean;
-	}
+interface Props {
+  prId: string;
+  scrollRoot?: HTMLElement | undefined;
+  isActive?: boolean;
+}
 
-	let { prId, scrollRoot, isActive = true }: Props = $props();
+let { prId, scrollRoot, isActive = true }: Props = $props();
 
-	const blocks = $derived(getBlocks());
-	const semanticSteps = $derived(getSemanticSteps());
-	const summary = $derived(getSummary());
-	const riskLevel = $derived(getRiskLevel());
-	const isStreaming = $derived(getIsStreaming());
-	const streamError = $derived(getStreamError());
-	const explorationSteps = $derived(getExplorationSteps());
-	const phase = $derived(getPhase());
-	const streamStartedAt = $derived(getStreamStartedAt());
-	const issues = $derived(getIssues());
-	const issueGroups = $derived(groupIssuesBySeverityWithIndex(issues));
-	const ratings = $derived(getRatings());
-	const isLiveGeneration = $derived(getIsLiveGeneration());
-	const cloneInProgress = $derived(getCloneInProgress());
-	const cloneRepoId = $derived(getCloneRepoId());
-	const repositories = $derived(getRepositories());
-	// Phase C markdown — rendered inline as its own sentiment card when set.
-	// Replaces the legacy heuristic of sniffing markdown blocks for a `##
-	// Overall Sentiment` heading.
-	const sentiment = $derived(getSentiment());
-	const renderedSentiment = $derived(sentiment ? renderMarkdown(sentiment) : '');
-	// Pointer into the A→B→C→D pipeline — drives the 4-dot header indicator.
-	const lastCompletedPhase = $derived(getLastCompletedPhase());
-	// Newer commit invalidated this walkthrough mid-render — show a banner.
-	const superseded = $derived(getIsSuperseded());
+const blocks = $derived(getBlocks());
+const semanticSteps = $derived(getSemanticSteps());
+const summary = $derived(getSummary());
+const riskLevel = $derived(getRiskLevel());
+const isStreaming = $derived(getIsStreaming());
+const streamError = $derived(getStreamError());
+const explorationSteps = $derived(getExplorationSteps());
+const phase = $derived(getPhase());
+const streamStartedAt = $derived(getStreamStartedAt());
+const issues = $derived(getIssues());
+const issueGroups = $derived(groupIssuesBySeverityWithIndex(issues));
+const ratings = $derived(getRatings());
+const isLiveGeneration = $derived(getIsLiveGeneration());
+const cloneInProgress = $derived(getCloneInProgress());
+const cloneRepoId = $derived(getCloneRepoId());
+const repositories = $derived(getRepositories());
+// Phase C markdown — rendered inline as its own sentiment card when set.
+// Replaces the legacy heuristic of sniffing markdown blocks for a `##
+// Overall Sentiment` heading.
+const sentiment = $derived(getSentiment());
+const renderedSentiment = $derived(sentiment ? renderMarkdown(sentiment) : "");
+// Pointer into the A→B→C→D pipeline — drives the 4-dot header indicator.
+const lastCompletedPhase = $derived(getLastCompletedPhase());
+// Newer commit invalidated this walkthrough mid-render — show a banner.
+const superseded = $derived(getIsSuperseded());
 
-	// ── Elapsed time ────────────────────────────────────────────────────
-	let elapsedSeconds = $state(0);
-	let elapsedTimer: ReturnType<typeof setInterval> | null = null;
-	let walkthroughDebounce: ReturnType<typeof setTimeout> | undefined;
-	let hydrating = $state(true);
+// ── Elapsed time ────────────────────────────────────────────────────
+let elapsedSeconds = $state(0);
+let elapsedTimer: ReturnType<typeof setInterval> | null = null;
+let walkthroughDebounce: ReturnType<typeof setTimeout> | undefined;
+let hydrating = $state(true);
 
-	$effect(() => {
-		if (isStreaming && streamStartedAt) {
-			elapsedSeconds = Math.floor((Date.now() - streamStartedAt) / 1000);
-			elapsedTimer = setInterval(() => {
-				if (streamStartedAt) {
-					elapsedSeconds = Math.floor((Date.now() - streamStartedAt) / 1000);
-				}
-			}, 1000);
-		} else {
-			if (elapsedTimer) {
-				clearInterval(elapsedTimer);
-				elapsedTimer = null;
-			}
-		}
-		return () => {
-			if (elapsedTimer) {
-				clearInterval(elapsedTimer);
-				elapsedTimer = null;
-			}
-		};
-	});
+$effect(() => {
+  if (isStreaming && streamStartedAt) {
+    elapsedSeconds = Math.floor((Date.now() - streamStartedAt) / 1000);
+    elapsedTimer = setInterval(() => {
+      if (streamStartedAt) {
+        elapsedSeconds = Math.floor((Date.now() - streamStartedAt) / 1000);
+      }
+    }, 1000);
+  } else {
+    if (elapsedTimer) {
+      clearInterval(elapsedTimer);
+      elapsedTimer = null;
+    }
+  }
+  return () => {
+    if (elapsedTimer) {
+      clearInterval(elapsedTimer);
+      elapsedTimer = null;
+    }
+  };
+});
 
-	function formatElapsed(seconds: number): string {
-		const m = Math.floor(seconds / 60);
-		const s = seconds % 60;
-		if (m === 0) return `${s}s`;
-		return `${m}m ${s.toString().padStart(2, '0')}s`;
-	}
+function formatElapsed(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  if (m === 0) return `${s}s`;
+  return `${m}m ${s.toString().padStart(2, "0")}s`;
+}
 
-	// analyzing happens in the same agent turn as the last exploration step;
-	// map it to exploring so the skeleton phase check works correctly.
-	function normalizePhase(p: string): string {
-		if (p === 'connecting' || p === 'analyzing') return 'exploring';
-		if (p === 'finishing') return 'writing';
-		return p;
-	}
+// analyzing happens in the same agent turn as the last exploration step;
+// map it to exploring so the skeleton phase check works correctly.
+function normalizePhase(p: string): string {
+  if (p === "connecting" || p === "analyzing") return "exploring";
+  if (p === "finishing") return "writing";
+  return p;
+}
 
-	// ── Chapters stepper (Overview → Diff → Sentiment → Rating) ─────────
-	// Active chapter is the one the agent is *currently writing*, not the
-	// one that just finished. The pipeline pointer transitions like this:
-	//
-	//   set_overview        → 'A'  (Phase A done; Phase B starts on next call)
-	//   first add_diff_step → 'B'  (Phase B *started* — more diff steps coming)
-	//   set_sentiment       → 'C'  (Phase B closed, Phase C done; Phase D next)
-	//   9th rate_axis       → 'D'  (everything done)
-	//
-	// So `'B'` does NOT mean "diff is complete" — it means "diff in progress
-	// with at least one step persisted". Mapping `'B'` to chapter 2 (Sentiment)
-	// is the off-by-one bug: diff blocks are still streaming. We map both
-	// `'A'` and `'B'` to chapter 1 (Diff). Sentiment shows briefly between
-	// sentiment landing (`'C'`, ratings still empty) and the first rating
-	// arriving — a narrow window, but the only honest place to highlight it.
-	const PHASE_TO_INDEX: Record<'none' | 'A' | 'B' | 'C' | 'D', number> = {
-		none: 0,
-		A: 1,
-		B: 1,
-		C: 3,
-		D: 3,
-	};
-	const activeChapterIndex = $derived.by(() => {
-		if (lastCompletedPhase === 'C' && ratings.length === 0) return 2;
-		return PHASE_TO_INDEX[lastCompletedPhase];
-	});
+// ── Chapters stepper (Overview → Diff → Sentiment → Rating) ─────────
+// Active chapter is the one the agent is *currently writing*, not the
+// one that just finished. The pipeline pointer transitions like this:
+//
+//   set_overview        → 'A'  (Phase A done; Phase B starts on next call)
+//   first add_diff_step → 'B'  (Phase B *started* — more diff steps coming)
+//   set_sentiment       → 'C'  (Phase B closed, Phase C done; Phase D next)
+//   9th rate_axis       → 'D'  (everything done)
+//
+// So `'B'` does NOT mean "diff is complete" — it means "diff in progress
+// with at least one step persisted". Mapping `'B'` to chapter 2 (Sentiment)
+// is the off-by-one bug: diff blocks are still streaming. We map both
+// `'A'` and `'B'` to chapter 1 (Diff). Sentiment shows briefly between
+// sentiment landing (`'C'`, ratings still empty) and the first rating
+// arriving — a narrow window, but the only honest place to highlight it.
+const PHASE_TO_INDEX: Record<"none" | "A" | "B" | "C" | "D", number> = {
+  none: 0,
+  A: 1,
+  B: 1,
+  C: 3,
+  D: 3,
+};
+const activeChapterIndex = $derived.by(() => {
+  if (lastCompletedPhase === "C" && ratings.length === 0) return 2;
+  return PHASE_TO_INDEX[lastCompletedPhase];
+});
 
-	const CHAPTERS = [
-		{ id: 'overview', label: 'Overview', blurb: 'What changed and why', activeBlurb: 'Reading the diff…', spinner: 'ripple', targetId: 'walkthrough-overview' },
-		{ id: 'diff', label: 'Diff Analysis', blurb: 'Hunk-by-hunk reasoning', activeBlurb: 'Analyzing hunks…', spinner: 'diagonal', targetId: 'walkthrough-diff' },
-		{ id: 'sentiment', label: 'Sentiment', blurb: 'Overall read on the PR', activeBlurb: 'Forming a verdict…', spinner: 'collapse', targetId: 'walkthrough-sentiment' },
-		{ id: 'rated', label: 'Rating', blurb: 'Across 9 axis', activeBlurb: 'Scoring each axis…', spinner: 'prism-bloom', targetId: 'walkthrough-rating' },
-	] as const;
+const CHAPTERS = [
+  {
+    id: "overview",
+    label: "Overview",
+    blurb: "What changed and why",
+    activeBlurb: "Reading the diff…",
+    spinner: "ripple",
+    targetId: "walkthrough-overview",
+  },
+  {
+    id: "diff",
+    label: "Diff Analysis",
+    blurb: "Hunk-by-hunk reasoning",
+    activeBlurb: "Analyzing hunks…",
+    spinner: "diagonal",
+    targetId: "walkthrough-diff",
+  },
+  {
+    id: "sentiment",
+    label: "Sentiment",
+    blurb: "Overall read on the PR",
+    activeBlurb: "Forming a verdict…",
+    spinner: "collapse",
+    targetId: "walkthrough-sentiment",
+  },
+  {
+    id: "rated",
+    label: "Rating",
+    blurb: "Across 9 axis",
+    activeBlurb: "Scoring each axis…",
+    spinner: "prism-bloom",
+    targetId: "walkthrough-rating",
+  },
+] as const;
 
-	// ── Recent tool calls under the active chapter ───────────────────────
-	// The active chapter cell renders a vertical list of the last 3 tool
-	// calls scoped to the *current* chapter. When the chapter advances we
-	// reset the floor to the count at that moment, so explorations from
-	// earlier chapters don't bleed forward into the new chapter's window.
-	//
-	// `chapterStartIndex` re-evaluates only when `activeChapterIndex`
-	// changes. Inside the body we read `explorationSteps.length` via
-	// `untrack` so the derived isn't subscribed to it (which would defeat
-	// the floor by re-snapping every time a new step arrives).
-	const TOOL_CALL_WINDOW = 3;
-	const chapterStartIndex = $derived.by(() => {
-		// Reading `activeChapterIndex` makes this derived re-run on chapter
-		// transitions; the void avoids the unused-expression warning while
-		// still establishing the dependency.
-		void activeChapterIndex;
-		return untrack(() => explorationSteps.length);
-	});
-	const recentExplorationSteps = $derived(
-		explorationSteps.slice(chapterStartIndex).slice(-TOOL_CALL_WINDOW),
-	);
+// ── Recent tool calls under the active chapter ───────────────────────
+// The active chapter cell renders a vertical list of the last 3 tool
+// calls scoped to the *current* chapter. When the chapter advances we
+// reset the floor to the count at that moment, so explorations from
+// earlier chapters don't bleed forward into the new chapter's window.
+//
+// `chapterStartIndex` re-evaluates only when `activeChapterIndex`
+// changes. Inside the body we read `explorationSteps.length` via
+// `untrack` so the derived isn't subscribed to it (which would defeat
+// the floor by re-snapping every time a new step arrives).
+const TOOL_CALL_WINDOW = 3;
+const chapterStartIndex = $derived.by(() => {
+  // Reading `activeChapterIndex` makes this derived re-run on chapter
+  // transitions; the void avoids the unused-expression warning while
+  // still establishing the dependency.
+  void activeChapterIndex;
+  return untrack(() => explorationSteps.length);
+});
+const recentExplorationSteps = $derived(
+  explorationSteps.slice(chapterStartIndex).slice(-TOOL_CALL_WINDOW),
+);
 
-	// "All phases done" needs actual evidence of completion. A fresh PR with
-	// no content shouldn't flash all checkmarks just because !isStreaming — so
-	// we require that we actually have SOMETHING to show for it.
-	const hasWalkthroughContent = $derived(
-		summary !== null || blocks.length > 0 || ratings.length > 0
-	);
+// "All phases done" needs actual evidence of completion. A fresh PR with
+// no content shouldn't flash all checkmarks just because !isStreaming — so
+// we require that we actually have SOMETHING to show for it.
+const hasWalkthroughContent = $derived(summary !== null || blocks.length > 0 || ratings.length > 0);
 
-	// ── Stepper visibility ──────────────────────────────────────────────
-	// Visible whenever we've finished hydrating — including the pre-generation
-	// state where the "Generate walkthrough" button is showing. In that initial
-	// state every cell falls through to `chapter-cell--unavailable` and renders
-	// dimmed, giving the user a preview of the chapter structure before kickoff.
-	// Hidden only during hydration so we don't flash an empty stepper before
-	// we know whether the cache has content.
-	const stepperVisible = $derived(!hydrating);
+// ── Stepper visibility ──────────────────────────────────────────────
+// Visible whenever we've finished hydrating — including the pre-generation
+// state where the "Generate walkthrough" button is showing. In that initial
+// state every cell falls through to `chapter-cell--unavailable` and renders
+// dimmed, giving the user a preview of the chapter structure before kickoff.
+// Hidden only during hydration so we don't flash an empty stepper before
+// we know whether the cache has content.
+const stepperVisible = $derived(!hydrating);
 
-	// ── Stagger tracking ────────────────────────────────────────────────
-	// Assign a per-block entrance delay the first time each block is
-	// observed. Blocks added in the same reactive tick form an "arrival
-	// batch" and cascade — so a cached walkthrough, a mid-stream tick,
-	// or an end-of-stream flush all fan out smoothly instead of slamming
-	// in as a wall of text. Delays are memoized so later re-renders
-	// don't re-trigger animations for blocks already on screen.
+// ── Stagger tracking ────────────────────────────────────────────────
+// Assign a per-block entrance delay the first time each block is
+// observed. Blocks added in the same reactive tick form an "arrival
+// batch" and cascade — so a cached walkthrough, a mid-stream tick,
+// or an end-of-stream flush all fan out smoothly instead of slamming
+// in as a wall of text. Delays are memoized so later re-renders
+// don't re-trigger animations for blocks already on screen.
 
-	const STAGGER_MS = 85;
-	const STAGGER_CAP = 10;
+const STAGGER_MS = 85;
+const STAGGER_CAP = 10;
 
-	// Legacy-row suppression: older walkthroughs (pre-Phase C field) encoded
-	// the sentiment paragraph as a markdown block starting with "## Overall
-	// Sentiment". When the new `sentiment` field is populated, we drop any
-	// such block here so rehydrated data doesn't render the paragraph twice.
-	// When `sentiment` is null we leave legacy blocks in place — they're the
-	// only copy we have.
-	const visibleBlocks = $derived.by(() => {
-		if (sentiment === null) return blocks;
-		return blocks.filter(
-			(b) =>
-				!(
-					b.type === 'markdown' &&
-					b.content.trimStart().startsWith('## Overall Sentiment')
-				),
-		);
-	});
+// Legacy-row suppression: older walkthroughs (pre-Phase C field) encoded
+// the sentiment paragraph as a markdown block starting with "## Overall
+// Sentiment". When the new `sentiment` field is populated, we drop any
+// such block here so rehydrated data doesn't render the paragraph twice.
+// When `sentiment` is null we leave legacy blocks in place — they're the
+// only copy we have.
+const visibleBlocks = $derived.by(() => {
+  if (sentiment === null) return blocks;
+  return blocks.filter(
+    (b) => !(b.type === "markdown" && b.content.trimStart().startsWith("## Overall Sentiment")),
+  );
+});
 
-	// ── Per-chapter availability ────────────────────────────────────────
-	// A chapter is "available" when its target section has been written —
-	// clicking it should land on real content, not an empty anchor. Used
-	// post-streaming to gate clickability and pick the right visual state.
-	const chapterAvailability = $derived([
-		summary !== null,
-		visibleBlocks.length > 0,
-		sentiment !== null,
-		ratings.length > 0,
-	]);
+// ── Per-chapter availability ────────────────────────────────────────
+// A chapter is "available" when its target section has been written —
+// clicking it should land on real content, not an empty anchor. Used
+// post-streaming to gate clickability and pick the right visual state.
+const chapterAvailability = $derived([
+  summary !== null,
+  visibleBlocks.length > 0,
+  sentiment !== null,
+  ratings.length > 0,
+]);
 
-	// Show a skeleton placeholder at the bottom of the diff section while
-	// Phase B is active — i.e. overview landed but diff analysis hasn't
-	// finished (more steps may still arrive).
-	const showDiffSkeleton = $derived(
-		isStreaming && (lastCompletedPhase === 'none' || lastCompletedPhase === 'A' || lastCompletedPhase === 'B')
-	);
+// Show a skeleton placeholder at the bottom of the diff section while
+// Phase B is active — i.e. overview landed but diff analysis hasn't
+// finished (more steps may still arrive).
+const showDiffSkeleton = $derived(
+  isStreaming &&
+    (lastCompletedPhase === "none" || lastCompletedPhase === "A" || lastCompletedPhase === "B"),
+);
 
-	const blocksWithDelay = $derived.by(() => {
-		let newInBatch = 0;
-		return visibleBlocks.map((block) => {
-			// Pre-render annotation markdown once per block so the template can
-			// emit the annotation as a sibling grid item without each re-render
-			// re-parsing markdown. Only code/diff blocks carry annotations.
-			const renderedAnnotation =
-				(block.type === 'code' || block.type === 'diff') && block.annotation
-					? renderMarkdown(block.annotation)
-					: null;
-			if (hasBlockAnimated(prId, block.id)) {
-				// Already animated in a previous mount — skip animation entirely
-				return { block, delay: -1, renderedAnnotation };
-			}
-			// New block — assign staggered delay and record it immediately
-			const delay = Math.min(newInBatch, STAGGER_CAP) * STAGGER_MS;
-			markBlockAnimated(prId, block.id);
-			newInBatch += 1;
-			return { block, delay, renderedAnnotation };
-		});
-	});
+const blocksWithDelay = $derived.by(() => {
+  let newInBatch = 0;
+  return visibleBlocks.map((block) => {
+    // Pre-render annotation markdown once per block so the template can
+    // emit the annotation as a sibling grid item without each re-render
+    // re-parsing markdown. Only code/diff blocks carry annotations.
+    const renderedAnnotation =
+      (block.type === "code" || block.type === "diff") && block.annotation
+        ? renderMarkdown(block.annotation)
+        : null;
+    if (hasBlockAnimated(prId, block.id)) {
+      // Already animated in a previous mount — skip animation entirely
+      return { block, delay: -1, renderedAnnotation };
+    }
+    // New block — assign staggered delay and record it immediately
+    const delay = Math.min(newInBatch, STAGGER_CAP) * STAGGER_MS;
+    markBlockAnimated(prId, block.id);
+    newInBatch += 1;
+    return { block, delay, renderedAnnotation };
+  });
+});
 
-	// Partition the per-block render entries by their parent semantic step so
-	// each chapter receives only its own atomic blocks. Falls back to a
-	// trailing "Diff analysis" bucket for any blocks that arrive before the
-	// chapter that owns them — should be impossible given the prompt's
-	// declaration order, but defensive against malformed streams.
-	const blocksBySection = $derived.by(() => {
-		const map = new Map<number, typeof blocksWithDelay>();
-		for (const entry of blocksWithDelay) {
-			const idx = entry.block.semanticStepIndex ?? -1;
-			const arr = map.get(idx) ?? [];
-			arr.push(entry);
-			map.set(idx, arr);
-		}
-		return map;
-	});
+// Partition the per-block render entries by their parent semantic step so
+// each chapter receives only its own atomic blocks. Falls back to a
+// trailing "Diff analysis" bucket for any blocks that arrive before the
+// chapter that owns them — should be impossible given the prompt's
+// declaration order, but defensive against malformed streams.
+const blocksBySection = $derived.by(() => {
+  const map = new Map<number, typeof blocksWithDelay>();
+  for (const entry of blocksWithDelay) {
+    const idx = entry.block.semanticStepIndex ?? -1;
+    const arr = map.get(idx) ?? [];
+    arr.push(entry);
+    map.set(idx, arr);
+  }
+  return map;
+});
 
-	// Hide chapters that exist in the DB but carry no atomic blocks yet. Two
-	// callers depend on this:
-	//   (a) The agent's currently-open chapter — there's a brief window after
-	//       `add_semantic_step` lands and before the first `add_diff_step` where
-	//       the section would render with just a heading. The bottom-of-feed
-	//       diff skeleton already signals "more incoming," so an empty chapter
-	//       above is noise.
-	//   (b) Defensive against a stalled agent that opened a chapter and never
-	//       filled it before the run ended. The completion gate rejects this
-	//       case server-side, but a cached partial may still have empty rows;
-	//       filtering keeps the UI honest.
-	const visibleSemanticSteps = $derived(
-		semanticSteps.filter(
-			(s) => (blocksBySection.get(s.semanticStepIndex)?.length ?? 0) > 0,
-		),
-	);
+// Hide chapters that exist in the DB but carry no atomic blocks yet. Two
+// callers depend on this:
+//   (a) The agent's currently-open chapter — there's a brief window after
+//       `add_semantic_step` lands and before the first `add_diff_step` where
+//       the section would render with just a heading. The bottom-of-feed
+//       diff skeleton already signals "more incoming," so an empty chapter
+//       above is noise.
+//   (b) Defensive against a stalled agent that opened a chapter and never
+//       filled it before the run ended. The completion gate rejects this
+//       case server-side, but a cached partial may still have empty rows;
+//       filtering keeps the UI honest.
+const visibleSemanticSteps = $derived(
+  semanticSteps.filter((s) => (blocksBySection.get(s.semanticStepIndex)?.length ?? 0) > 0),
+);
 
-	// Pre-render the overview summary as a synthetic markdown block so it slots
-	// into the same WalkthroughSection grid as the Phase B chapters below. The
-	// id is fixed (one overview per walkthrough) and the chapter index is
-	// negative so it cannot collide with a real semantic_step_index.
-	const overviewSection = $derived({
-		semanticStepIndex: -1,
-		title: 'Overview',
-		summary: null,
-	} satisfies WalkthroughSemanticStep);
-	const overviewEntries = $derived.by(() => {
-		if (summary === null) return [] as typeof blocksWithDelay;
-		const overviewBlock: WalkthroughBlock = {
-			type: 'markdown',
-			id: 'overview-block',
-			order: -1,
-			phase: 'overview',
-			semanticStepIndex: -1,
-			stepIndex: 0,
-			content: summary,
-		};
-		return [
-			{
-				block: overviewBlock,
-				delay: hasBlockAnimated(prId, overviewBlock.id) ? -1 : 0,
-				renderedAnnotation: null,
-			},
-		];
-	});
-	$effect(() => {
-		if (summary !== null) markBlockAnimated(prId, 'overview-block');
-	});
+// Pre-render the overview summary as a synthetic markdown block so it slots
+// into the same WalkthroughSection grid as the Phase B chapters below. The
+// id is fixed (one overview per walkthrough) and the chapter index is
+// negative so it cannot collide with a real semantic_step_index.
+const overviewSection = $derived({
+  semanticStepIndex: -1,
+  title: "Overview",
+  summary: null,
+} satisfies WalkthroughSemanticStep);
+const overviewEntries = $derived.by(() => {
+  if (summary === null) return [] as typeof blocksWithDelay;
+  const overviewBlock: WalkthroughBlock = {
+    type: "markdown",
+    id: "overview-block",
+    order: -1,
+    phase: "overview",
+    semanticStepIndex: -1,
+    stepIndex: 0,
+    content: summary,
+  };
+  return [
+    {
+      block: overviewBlock,
+      delay: hasBlockAnimated(prId, overviewBlock.id) ? -1 : 0,
+      renderedAnnotation: null,
+    },
+  ];
+});
+$effect(() => {
+  if (summary !== null) markBlockAnimated(prId, "overview-block");
+});
 
-	// Total chapters shown to the reader = the virtual overview chapter (when
-	// summary has arrived) + every visible Phase B chapter. Used by both the
-	// Overview chapter and the Phase B chapter loop for the "Ch N / M" eyebrow.
-	const totalChapters = $derived(
-		(summary !== null ? 1 : 0) + visibleSemanticSteps.length,
-	);
+// Total chapters shown to the reader = the virtual overview chapter (when
+// summary has arrived) + every visible Phase B chapter. Used by both the
+// Overview chapter and the Phase B chapter loop for the "Ch N / M" eyebrow.
+const totalChapters = $derived((summary !== null ? 1 : 0) + visibleSemanticSteps.length);
 
-	// Mirror the block-stagger logic for issue cards. Issue cards have their
-	// own CSS entrance animation (`issue-card-enter`), so without tracking they
-	// replay on every tab revisit the same way blocks used to.
-	const issueDelayById = $derived.by(() => {
-		const map = new Map<string, number>();
-		let newInBatch = 0;
-		for (const issue of issues) {
-			if (hasIssueAnimated(prId, issue.id)) {
-				map.set(issue.id, -1);
-				continue;
-			}
-			const delay = Math.min(newInBatch, STAGGER_CAP) * STAGGER_MS;
-			markIssueAnimated(prId, issue.id);
-			newInBatch += 1;
-			map.set(issue.id, delay);
-		}
-		return map;
-	});
+// Mirror the block-stagger logic for issue cards. Issue cards have their
+// own CSS entrance animation (`issue-card-enter`), so without tracking they
+// replay on every tab revisit the same way blocks used to.
+const issueDelayById = $derived.by(() => {
+  const map = new Map<string, number>();
+  let newInBatch = 0;
+  for (const issue of issues) {
+    if (hasIssueAnimated(prId, issue.id)) {
+      map.set(issue.id, -1);
+      continue;
+    }
+    const delay = Math.min(newInBatch, STAGGER_CAP) * STAGGER_MS;
+    markIssueAnimated(prId, issue.id);
+    newInBatch += 1;
+    map.set(issue.id, delay);
+  }
+  return map;
+});
 
-	// ── Container animation gating ──────────────────────────────────────
-	// One-shot entrance animations for the stepper, content wrapper, summary,
-	// and issues section. Each element carries a `*--no-anim` class whose value
-	// is a reactive `$state` flag; the flag flips to `true` on `animationend`.
-	// After that, the class stays applied for the life of the component — so
-	// tab-switch display toggles, which in browsers normally restart CSS
-	// animations on subtrees re-entering the render tree, find `animation:
-	// none` and do nothing.
-	//
-	// Initial values come from the store so remounting the component for a PR
-	// the user has already viewed doesn't replay the first animation either.
-	// The effect below re-syncs from the store when the content identity
-	// changes (regenerate → new `streamStartedAt`, or the component is reused
-	// for a different PR → new `prId`), because `regenerate()` clears the
-	// trackers for fresh content to animate again.
-	// Seed from the tracker — `untrack` makes it explicit that we want the
-	// one-shot value at mount time. The $effect below handles any later
-	// reactive re-sync (regenerate, or the component instance being reused
-	// for a different PR — the latter won't happen with SvelteKit's route
-	// remount semantics, but we guard for it anyway).
-	let stepperAnimated = $state(untrack(() => hasContainerAnimated(prId, 'stepper')));
-	let contentAnimated = $state(untrack(() => hasContainerAnimated(prId, 'content')));
-	let issuesSectionAnimated = $state(untrack(() => hasContainerAnimated(prId, 'issues-section')));
+// ── Container animation gating ──────────────────────────────────────
+// One-shot entrance animations for the stepper, content wrapper, summary,
+// and issues section. Each element carries a `*--no-anim` class whose value
+// is a reactive `$state` flag; the flag flips to `true` on `animationend`.
+// After that, the class stays applied for the life of the component — so
+// tab-switch display toggles, which in browsers normally restart CSS
+// animations on subtrees re-entering the render tree, find `animation:
+// none` and do nothing.
+//
+// Initial values come from the store so remounting the component for a PR
+// the user has already viewed doesn't replay the first animation either.
+// The effect below re-syncs from the store when the content identity
+// changes (regenerate → new `streamStartedAt`, or the component is reused
+// for a different PR → new `prId`), because `regenerate()` clears the
+// trackers for fresh content to animate again.
+// Seed from the tracker — `untrack` makes it explicit that we want the
+// one-shot value at mount time. The $effect below handles any later
+// reactive re-sync (regenerate, or the component instance being reused
+// for a different PR — the latter won't happen with SvelteKit's route
+// remount semantics, but we guard for it anyway).
+let stepperAnimated = $state(untrack(() => hasContainerAnimated(prId, "stepper")));
+let contentAnimated = $state(untrack(() => hasContainerAnimated(prId, "content")));
+let issuesSectionAnimated = $state(untrack(() => hasContainerAnimated(prId, "issues-section")));
 
-	let lastSyncedFor: string | null = untrack(() => `${prId}:${streamStartedAt ?? 'init'}`);
-	$effect(() => {
-		const key = `${prId}:${streamStartedAt ?? 'init'}`;
-		if (key === lastSyncedFor) return;
-		lastSyncedFor = key;
-		stepperAnimated = hasContainerAnimated(prId, 'stepper');
-		contentAnimated = hasContainerAnimated(prId, 'content');
-		issuesSectionAnimated = hasContainerAnimated(prId, 'issues-section');
-	});
+let lastSyncedFor: string | null = untrack(() => `${prId}:${streamStartedAt ?? "init"}`);
+$effect(() => {
+  const key = `${prId}:${streamStartedAt ?? "init"}`;
+  if (key === lastSyncedFor) return;
+  lastSyncedFor = key;
+  stepperAnimated = hasContainerAnimated(prId, "stepper");
+  contentAnimated = hasContainerAnimated(prId, "content");
+  issuesSectionAnimated = hasContainerAnimated(prId, "issues-section");
+});
 
-	type ContainerKey = 'stepper' | 'content' | 'issues-section';
+type ContainerKey = "stepper" | "content" | "issues-section";
 
-	function lockContainerAnimation(key: ContainerKey, event: AnimationEvent): void {
-		// Filter out bubbled events from descendants (issue-card-enter bubbles
-		// up through .issues-section, block-slide-up through .walkthrough-content).
-		if (event.target !== event.currentTarget) return;
-		markContainerAnimated(prId, key);
-		if (key === 'stepper') stepperAnimated = true;
-		else if (key === 'content') contentAnimated = true;
-		else issuesSectionAnimated = true;
-	}
+function lockContainerAnimation(key: ContainerKey, event: AnimationEvent): void {
+  // Filter out bubbled events from descendants (issue-card-enter bubbles
+  // up through .issues-section, block-slide-up through .walkthrough-content).
+  if (event.target !== event.currentTarget) return;
+  markContainerAnimated(prId, key);
+  if (key === "stepper") stepperAnimated = true;
+  else if (key === "content") contentAnimated = true;
+  else issuesSectionAnimated = true;
+}
 
-	// ── Issue → step navigation ─────────────────────────────────────────
-	// Issues carry `blockIds` — the block(s) that explain them. Clicking an
-	// issue card scrolls to the first linked block and briefly pulses it so
-	// the user visually connects the card they clicked to the block they
-	// landed on. Handled with a DOM lookup + requestAnimationFrame to avoid
-	// piping refs through every block component.
+// ── Issue → step navigation ─────────────────────────────────────────
+// Issues carry `blockIds` — the block(s) that explain them. Clicking an
+// issue card scrolls to the first linked block and briefly pulses it so
+// the user visually connects the card they clicked to the block they
+// landed on. Handled with a DOM lookup + requestAnimationFrame to avoid
+// piping refs through every block component.
 
-	function stepNumberFor(blockId: string): number | null {
-		// Use visibleBlocks so the step number matches the user-facing ordinal.
-		// A legacy "## Overall Sentiment" block, when suppressed, must not shift
-		// the numbering that the user sees in the rendered walkthrough.
-		const idx = visibleBlocks.findIndex((b) => b.id === blockId);
-		return idx >= 0 ? idx + 1 : null;
-	}
+function stepNumberFor(blockId: string): number | null {
+  // Use visibleBlocks so the step number matches the user-facing ordinal.
+  // A legacy "## Overall Sentiment" block, when suppressed, must not shift
+  // the numbering that the user sees in the rendered walkthrough.
+  const idx = visibleBlocks.findIndex((b) => b.id === blockId);
+  return idx >= 0 ? idx + 1 : null;
+}
 
-	/**
-	 * Issue card tag — "Ch N · Step M" where N is the 1-based chapter index of
-	 * the block's parent semantic step (matching the chapter eyebrow in
-	 * WalkthroughSection) and M is the 1-based atomic position within that
-	 * chapter. Falls back to a flat "Step N" when the block has no parent
-	 * recorded (legacy data; shouldn't happen post-reset).
-	 */
-	function chapterTagFor(blockId: string): string | null {
-		const block = visibleBlocks.find((b) => b.id === blockId);
-		if (!block) return null;
-		const semanticIdx = block.semanticStepIndex;
-		const stepIdx = block.stepIndex;
-		if (semanticIdx === undefined || stepIdx === undefined) {
-			const n = stepNumberFor(blockId);
-			return n !== null ? `→ Step ${n}` : null;
-		}
-		let chapterLabel: number;
-		if (semanticIdx === -1) {
-			// Virtual Overview chapter — always Ch 1
-			chapterLabel = 1;
-		} else {
-			const pos = visibleSemanticSteps.findIndex((s) => s.semanticStepIndex === semanticIdx);
-			// visibleSemanticSteps is 0-based; +1 for 1-based, +1 more to account for the Overview chapter
-			chapterLabel = pos >= 0 ? pos + 2 : semanticIdx + 2;
-		}
-		return `→ Ch ${chapterLabel} · Step ${stepIdx + 1}`;
-	}
+/**
+ * Issue card tag — "Ch N · Step M" where N is the 1-based chapter index of
+ * the block's parent semantic step (matching the chapter eyebrow in
+ * WalkthroughSection) and M is the 1-based atomic position within that
+ * chapter. Falls back to a flat "Step N" when the block has no parent
+ * recorded (legacy data; shouldn't happen post-reset).
+ */
+function chapterTagFor(blockId: string): string | null {
+  const block = visibleBlocks.find((b) => b.id === blockId);
+  if (!block) return null;
+  const semanticIdx = block.semanticStepIndex;
+  const stepIdx = block.stepIndex;
+  if (semanticIdx === undefined || stepIdx === undefined) {
+    const n = stepNumberFor(blockId);
+    return n !== null ? `→ Step ${n}` : null;
+  }
+  let chapterLabel: number;
+  if (semanticIdx === -1) {
+    // Virtual Overview chapter — always Ch 1
+    chapterLabel = 1;
+  } else {
+    const pos = visibleSemanticSteps.findIndex((s) => s.semanticStepIndex === semanticIdx);
+    // visibleSemanticSteps is 0-based; +1 for 1-based, +1 more to account for the Overview chapter
+    chapterLabel = pos >= 0 ? pos + 2 : semanticIdx + 2;
+  }
+  return `→ Ch ${chapterLabel} · Step ${stepIdx + 1}`;
+}
 
-	// ── Block → flagged-issue severity ─────────────────────────────────
-	// For each block referenced by at least one issue, pick the highest
-	// severity across all issues pointing at it. Used to render a colored dot
-	// to the left of the block so the reader can spot flagged steps while
-	// scrolling without having to cross-reference the Issues section.
-	const SEVERITY_RANK: Record<'info' | 'warning' | 'critical', number> = {
-		info: 1,
-		warning: 2,
-		critical: 3,
-	};
-	const blockIssueSeverity = $derived.by(() => {
-		const map = new Map<string, 'info' | 'warning' | 'critical'>();
-		for (const issue of issues) {
-			for (const bid of issue.blockIds) {
-				const current = map.get(bid);
-				if (!current || SEVERITY_RANK[issue.severity] > SEVERITY_RANK[current]) {
-					map.set(bid, issue.severity);
-				}
-			}
-		}
-		return map;
-	});
+// ── Block → flagged-issue severity ─────────────────────────────────
+// For each block referenced by at least one issue, pick the highest
+// severity across all issues pointing at it. Used to render a colored dot
+// to the left of the block so the reader can spot flagged steps while
+// scrolling without having to cross-reference the Issues section.
+const SEVERITY_RANK: Record<"info" | "warning" | "critical", number> = {
+  info: 1,
+  warning: 2,
+  critical: 3,
+};
+const blockIssueSeverity = $derived.by(() => {
+  const map = new Map<string, "info" | "warning" | "critical">();
+  for (const issue of issues) {
+    for (const bid of issue.blockIds) {
+      const current = map.get(bid);
+      if (!current || SEVERITY_RANK[issue.severity] > SEVERITY_RANK[current]) {
+        map.set(bid, issue.severity);
+      }
+    }
+  }
+  return map;
+});
 
-	// ── Selected issue (persistent block highlight) ─────────────────────
-	// When the reader clicks an issue card we keep a severity-colored outline
-	// on its linked block until another issue is selected. The brief
-	// `block-wrapper--highlighted` pulse used by other callers (ratings grid,
-	// cross-tab jumps) is intentionally not triggered here — the outline is
-	// the persistent signal, the scroll is the affordance.
-	let selectedIssueId = $state<string | null>(null);
-	const selectedIssue = $derived(
-		selectedIssueId ? issues.find((i) => i.id === selectedIssueId) ?? null : null,
-	);
-	const selectedIssueBlockId = $derived(selectedIssue?.blockIds?.[0] ?? null);
-	const selectedIssueSeverity = $derived(selectedIssue?.severity ?? null);
+// ── Selected issue (persistent block highlight) ─────────────────────
+// When the reader clicks an issue card we keep a severity-colored outline
+// on its linked block until another issue is selected. The brief
+// `block-wrapper--highlighted` pulse used by other callers (ratings grid,
+// cross-tab jumps) is intentionally not triggered here — the outline is
+// the persistent signal, the scroll is the affordance.
+let selectedIssueId = $state<string | null>(null);
+const selectedIssue = $derived(
+  selectedIssueId ? (issues.find((i) => i.id === selectedIssueId) ?? null) : null,
+);
+const selectedIssueBlockId = $derived(selectedIssue?.blockIds?.[0] ?? null);
+const selectedIssueSeverity = $derived(selectedIssue?.severity ?? null);
 
-	// Drop the selection when we switch PRs so a stale id doesn't paint an
-	// outline on an unrelated block in the next walkthrough.
-	$effect(() => {
-		void prId;
-		selectedIssueId = null;
-	});
+// Drop the selection when we switch PRs so a stale id doesn't paint an
+// outline on an unrelated block in the next walkthrough.
+$effect(() => {
+  void prId;
+  selectedIssueId = null;
+});
 
-	// Click-outside: any click that lands outside the selected step's block
-	// clears the highlight. Clicks inside the issue card list are exempt so
-	// the card's own onclick (which re-sets the selection) doesn't race with
-	// this listener — we'd otherwise clear and immediately re-set on every
-	// card click. Only registered while a selection is active.
-	$effect(() => {
-		if (selectedIssueId === null) return;
-		const blockId = selectedIssueBlockId;
-		function onDocumentClick(e: MouseEvent): void {
-			const target = e.target as Element | null;
-			if (!target) return;
-			if (blockId) {
-				const selectedEl = document.getElementById(`step-${blockId}`);
-				if (selectedEl && selectedEl.contains(target)) return;
-			}
-			if (target.closest('.issue-card')) return;
-			selectedIssueId = null;
-		}
-		document.addEventListener('click', onDocumentClick);
-		return () => document.removeEventListener('click', onDocumentClick);
-	});
+// Click-outside: any click that lands outside the selected step's block
+// clears the highlight. Clicks inside the issue card list are exempt so
+// the card's own onclick (which re-sets the selection) doesn't race with
+// this listener — we'd otherwise clear and immediately re-set on every
+// card click. Only registered while a selection is active.
+$effect(() => {
+  if (selectedIssueId === null) return;
+  const blockId = selectedIssueBlockId;
+  function onDocumentClick(e: MouseEvent): void {
+    const target = e.target as Element | null;
+    if (!target) return;
+    if (blockId) {
+      const selectedEl = document.getElementById(`step-${blockId}`);
+      if (selectedEl?.contains(target)) return;
+    }
+    if (target.closest(".issue-card")) return;
+    selectedIssueId = null;
+  }
+  document.addEventListener("click", onDocumentClick);
+  return () => document.removeEventListener("click", onDocumentClick);
+});
 
-	function selectIssue(issueId: string, blockId: string): void {
-		selectedIssueId = issueId;
-		// Defer scroll one frame: setting `selectedIssueId` may auto-expand a
-		// collapsed parent section (see WalkthroughSection's $effect), and the
-		// scroll math needs to read the post-expansion getBoundingClientRect to
-		// land on the right spot.
-		requestAnimationFrame(() => {
-			const el = document.getElementById(`step-${blockId}`);
-			if (!el || !scrollRoot) return;
-			const containerRect = scrollRoot.getBoundingClientRect();
-			const elRect = el.getBoundingClientRect();
-			const offset = elRect.top - containerRect.top + scrollRoot.scrollTop - 16;
-			scrollRoot.scrollTo({ top: offset, behavior: 'smooth' });
-		});
-	}
+function selectIssue(issueId: string, blockId: string): void {
+  selectedIssueId = issueId;
+  // Defer scroll one frame: setting `selectedIssueId` may auto-expand a
+  // collapsed parent section (see WalkthroughSection's $effect), and the
+  // scroll math needs to read the post-expansion getBoundingClientRect to
+  // land on the right spot.
+  requestAnimationFrame(() => {
+    const el = document.getElementById(`step-${blockId}`);
+    if (!el || !scrollRoot) return;
+    const containerRect = scrollRoot.getBoundingClientRect();
+    const elRect = el.getBoundingClientRect();
+    const offset = elRect.top - containerRect.top + scrollRoot.scrollTop - 16;
+    scrollRoot.scrollTo({ top: offset, behavior: "smooth" });
+  });
+}
 
-	function jumpToStep(blockId: string): void {
-		const el = document.getElementById(`step-${blockId}`);
-		if (!el || !scrollRoot) return;
-		// Compute offset relative to the scroll container so repeated clicks
-		// always trigger a scroll (scrollIntoView is a no-op when already in view)
-		const containerRect = scrollRoot.getBoundingClientRect();
-		const elRect = el.getBoundingClientRect();
-		const offset = elRect.top - containerRect.top + scrollRoot.scrollTop - 16;
-    scrollRoot.scrollTo({ top: offset, behavior: 'smooth' });
-    // Defer the highlight class toggle to the next animation frame so the
-    // forced reflow doesn't cancel the smooth scroll we just initiated
-    requestAnimationFrame(() => {
-        el.classList.remove('block-wrapper--highlighted');
-        void el.offsetWidth;
-        el.classList.add('block-wrapper--highlighted');
+function jumpToStep(blockId: string): void {
+  const el = document.getElementById(`step-${blockId}`);
+  if (!el || !scrollRoot) return;
+  // Compute offset relative to the scroll container so repeated clicks
+  // always trigger a scroll (scrollIntoView is a no-op when already in view)
+  const containerRect = scrollRoot.getBoundingClientRect();
+  const elRect = el.getBoundingClientRect();
+  const offset = elRect.top - containerRect.top + scrollRoot.scrollTop - 16;
+  scrollRoot.scrollTo({ top: offset, behavior: "smooth" });
+  // Defer the highlight class toggle to the next animation frame so the
+  // forced reflow doesn't cancel the smooth scroll we just initiated
+  requestAnimationFrame(() => {
+    el.classList.remove("block-wrapper--highlighted");
+    void el.offsetWidth;
+    el.classList.add("block-wrapper--highlighted");
+  });
+}
+
+// Stepper-cell click handler. Same scroll math as jumpToStep but no
+// highlight pulse — the chapter sections (overview, diff, sentiment,
+// scorecard) are large enough that a moving outline would be more
+// visual noise than signal. The 16px breathing room above the anchor
+// matches jumpToStep and the floating Top/Rating pills.
+function jumpToSection(elementId: string): void {
+  const el = document.getElementById(elementId);
+  if (!el || !scrollRoot) return;
+  const containerRect = scrollRoot.getBoundingClientRect();
+  const elRect = el.getBoundingClientRect();
+  const offset = elRect.top - containerRect.top + scrollRoot.scrollTop - 16;
+  scrollRoot.scrollTo({ top: offset, behavior: "smooth" });
+}
+
+// Cross-tab jump: when another tab (e.g. Request Changes) calls
+// jumpToWalkthroughBlock(), the store flips activeTab → 'walkthrough' and
+// stashes the blockId. We consume it here once we're active + scrollRoot is
+// bound. One rAF of slack lets the display swap (`display: none` → `display:
+// contents`) settle so getBoundingClientRect returns real geometry.
+$effect(() => {
+  const pendingBlockId = getPendingWalkthroughBlockJump();
+  if (!pendingBlockId) return;
+  if (!isActive || !scrollRoot) return;
+  requestAnimationFrame(() => {
+    jumpToStep(pendingBlockId);
+    clearPendingWalkthroughBlockJump();
+  });
+});
+
+onMount(() => {
+  initHighlighter();
+  // Seed a loading entry synchronously so the UI renders the skeleton
+  // while we check the cache. Without this, the derived state resolves
+  // to defaults (no summary, not streaming, no error) and the template
+  // briefly shows the "No walkthrough data received" empty state.
+  prepareEntry(prId);
+  // Try to hydrate instantly from the JSON cache endpoint. On a hit the
+  // walkthrough renders immediately with no SSE round-trip. On a miss
+  // we fall back to the debounced SSE stream — the debounce is intentional
+  // for uncached PRs so quickly arrowing through the PR list doesn't
+  // trigger spurious AI generations.
+  hydrateFromCache(prId).then(
+    () => { hydrating = false; },
+    () => { hydrating = false; },
+  );
+});
+
+onDestroy(() => {
+  if (elapsedTimer) clearInterval(elapsedTimer);
+  if (walkthroughDebounce) clearTimeout(walkthroughDebounce);
+  stopClonePoll(prId);
+});
+
+// ── Clone-in-progress auto-retry ────────────────────────────────────
+// When the server rejects the walkthrough because the repo is still
+// cloning, we used to rely solely on a WS-delivered `cloneStatus === 'ready'`
+// update to auto-retry. That's fragile: missed WS messages, server restarts
+// that reset clone state to 'pending', and outright clone failures would
+// leave the UI permanently stuck on "Cloning repository…". Now we start a
+// poller against `GET /api/repos/:id/clone-status` that is authoritative for
+// all terminal states (ready/error/pending) regardless of WS delivery. The
+// WS fast-path still runs: if the repositories store already reports 'ready'
+// (from a WS broadcast) we stream immediately without waiting for the next
+// poll tick.
+$effect(() => {
+  if (!cloneInProgress || !cloneRepoId) return;
+  const repo = repositories.find((r) => r.id === cloneRepoId);
+  if (repo?.cloneStatus === "ready") {
+    streamWalkthrough(prId);
+    return;
+  }
+  void pollCloneUntilResolved(prId, cloneRepoId);
+  return () => stopClonePoll(prId);
+});
+
+// ── Retry-clone button (escape hatch) ────────────────────────────────
+// Visible when the UI is stuck in the clone-in-progress state. Hits the
+// server's `/retry-clone` endpoint, which resets the repo's clone state and
+// kicks off a fresh clone, then restarts the poller so the UI un-sticks
+// regardless of whether the WS fast-path fires.
+let retryingClone = $state(false);
+async function handleRetryClone(): Promise<void> {
+  if (!cloneRepoId || retryingClone) return;
+  const repoId = cloneRepoId;
+  retryingClone = true;
+  try {
+    await fetch(`${API_BASE_URL}/api/repos/${repoId}/retry-clone`, {
+      method: "POST",
+      headers: authHeaders(),
     });
-	}
+    void pollCloneUntilResolved(prId, repoId);
+  } finally {
+    retryingClone = false;
+  }
+}
 
-	// Stepper-cell click handler. Same scroll math as jumpToStep but no
-	// highlight pulse — the chapter sections (overview, diff, sentiment,
-	// scorecard) are large enough that a moving outline would be more
-	// visual noise than signal. The 16px breathing room above the anchor
-	// matches jumpToStep and the floating Top/Rating pills.
-	function jumpToSection(elementId: string): void {
-		const el = document.getElementById(elementId);
-		if (!el || !scrollRoot) return;
-		const containerRect = scrollRoot.getBoundingClientRect();
-		const elRect = el.getBoundingClientRect();
-		const offset = elRect.top - containerRect.top + scrollRoot.scrollTop - 16;
-		scrollRoot.scrollTo({ top: offset, behavior: 'smooth' });
-	}
-
-	// Cross-tab jump: when another tab (e.g. Request Changes) calls
-	// jumpToWalkthroughBlock(), the store flips activeTab → 'walkthrough' and
-	// stashes the blockId. We consume it here once we're active + scrollRoot is
-	// bound. One rAF of slack lets the display swap (`display: none` → `display:
-	// contents`) settle so getBoundingClientRect returns real geometry.
-	$effect(() => {
-		const pendingBlockId = getPendingWalkthroughBlockJump();
-		if (!pendingBlockId) return;
-		if (!isActive || !scrollRoot) return;
-		requestAnimationFrame(() => {
-			jumpToStep(pendingBlockId);
-			clearPendingWalkthroughBlockJump();
-		});
-	});
-
-	onMount(() => {
-		initHighlighter();
-		// Seed a loading entry synchronously so the UI renders the skeleton
-		// while we check the cache. Without this, the derived state resolves
-		// to defaults (no summary, not streaming, no error) and the template
-		// briefly shows the "No walkthrough data received" empty state.
-		prepareEntry(prId);
-		// Try to hydrate instantly from the JSON cache endpoint. On a hit the
-		// walkthrough renders immediately with no SSE round-trip. On a miss
-		// we fall back to the debounced SSE stream — the debounce is intentional
-		// for uncached PRs so quickly arrowing through the PR list doesn't
-		// trigger spurious AI generations.
-		hydrateFromCache(prId).then(() => {
-			hydrating = false;
-		});
-	});
-
-	onDestroy(() => {
-		if (elapsedTimer) clearInterval(elapsedTimer);
-		if (walkthroughDebounce) clearTimeout(walkthroughDebounce);
-		stopClonePoll(prId);
-	});
-
-	// ── Clone-in-progress auto-retry ────────────────────────────────────
-	// When the server rejects the walkthrough because the repo is still
-	// cloning, we used to rely solely on a WS-delivered `cloneStatus === 'ready'`
-	// update to auto-retry. That's fragile: missed WS messages, server restarts
-	// that reset clone state to 'pending', and outright clone failures would
-	// leave the UI permanently stuck on "Cloning repository…". Now we start a
-	// poller against `GET /api/repos/:id/clone-status` that is authoritative for
-	// all terminal states (ready/error/pending) regardless of WS delivery. The
-	// WS fast-path still runs: if the repositories store already reports 'ready'
-	// (from a WS broadcast) we stream immediately without waiting for the next
-	// poll tick.
-	$effect(() => {
-		if (!cloneInProgress || !cloneRepoId) return;
-		const repo = repositories.find((r) => r.id === cloneRepoId);
-		if (repo?.cloneStatus === 'ready') {
-			streamWalkthrough(prId);
-			return;
-		}
-		void pollCloneUntilResolved(prId, cloneRepoId);
-		return () => stopClonePoll(prId);
-	});
-
-	// ── Retry-clone button (escape hatch) ────────────────────────────────
-	// Visible when the UI is stuck in the clone-in-progress state. Hits the
-	// server's `/retry-clone` endpoint, which resets the repo's clone state and
-	// kicks off a fresh clone, then restarts the poller so the UI un-sticks
-	// regardless of whether the WS fast-path fires.
-	let retryingClone = $state(false);
-	async function handleRetryClone(): Promise<void> {
-		if (!cloneRepoId || retryingClone) return;
-		const repoId = cloneRepoId;
-		retryingClone = true;
-		try {
-			await fetch(`${API_BASE_URL}/api/repos/${repoId}/retry-clone`, {
-				method: 'POST',
-				headers: authHeaders(),
-			});
-			void pollCloneUntilResolved(prId, repoId);
-		} finally {
-			retryingClone = false;
-		}
-	}
-
-	// ── Regenerate ──────────────────────────────────────────────────────
-	function handleRegenerate(): void {
-		regenerate(prId);
-	}
+// ── Regenerate ──────────────────────────────────────────────────────
+function handleRegenerate(): void {
+  regenerate(prId);
+}
 </script>
 
 <div class="walkthrough">
@@ -838,7 +858,7 @@
 			     them in a separate exploration section here. -->
 
 			<!-- Shimmer text placeholder shown immediately when streaming starts. -->
-			<Shimmer class="text-xs text-muted-foreground" duration={1.2} role="status" aria-label="Reviewing...">
+			<Shimmer class="text-sm" role="status" aria-label="Reviewing...">
 				Reviewing...
 			</Shimmer>
 
@@ -978,7 +998,7 @@
 			<div class="block-group">
 				<span class="block-step-dot" aria-hidden="true"></span>
 				<div class="block-wrapper block-wrapper--no-anim">
-					<Shimmer class="text-xs text-muted-foreground" duration={1.2} aria-label="Reviewing...">
+					<Shimmer class="text-sm" aria-label="Reviewing...">
 						Reviewing...
 					</Shimmer>
 				</div>
@@ -1183,8 +1203,9 @@
 	}
 
 	/* Each skeleton / status-bar / exploration-feed lands in col 3 (the 820
-	   content column). */
-	.walkthrough-loading > * {
+	   content column). `:global(*)` because child components (e.g. <Shimmer>)
+	   emit elements without the parent's Svelte scope hash. */
+	.walkthrough-loading > :global(*) {
 		grid-column: 3;
 	}
 
@@ -2065,7 +2086,7 @@
 			width: 100%;
 		}
 
-		.walkthrough-loading > *,
+		.walkthrough-loading > :global(*),
 		.walkthrough-stepper-header > * {
 			grid-column: auto;
 		}

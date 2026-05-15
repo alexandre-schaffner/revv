@@ -1,8 +1,8 @@
-import type { CommentThread } from '@revv/shared';
+import type { CommentThread } from "@revv/shared";
 
 export interface ThreadFileGroup {
-	filePath: string;
-	threads: CommentThread[];
+  filePath: string;
+  threads: CommentThread[];
 }
 
 /**
@@ -14,20 +14,16 @@ export interface ThreadFileGroup {
  * Mirrors the bucket-then-iterate precedent in `walkthrough-issues.ts`
  * (`groupIssuesBySeverity`). Pure function — no store reads, no side effects.
  */
-export function groupThreadsByFile(
-	threads: readonly CommentThread[],
-): ThreadFileGroup[] {
-	const buckets = new Map<string, CommentThread[]>();
-	for (const t of threads) {
-		const bucket = buckets.get(t.filePath);
-		if (bucket) bucket.push(t);
-		else buckets.set(t.filePath, [t]);
-	}
-	const sortedPaths = [...buckets.keys()].sort((a, b) => a.localeCompare(b));
-	return sortedPaths.map((filePath) => ({
-		filePath,
-		threads: (buckets.get(filePath) ?? [])
-			.slice()
-			.sort((a, b) => a.startLine - b.startLine),
-	}));
+export function groupThreadsByFile(threads: readonly CommentThread[]): ThreadFileGroup[] {
+  const buckets = new Map<string, CommentThread[]>();
+  for (const t of threads) {
+    const bucket = buckets.get(t.filePath);
+    if (bucket) bucket.push(t);
+    else buckets.set(t.filePath, [t]);
+  }
+  const sortedPaths = [...buckets.keys()].sort((a, b) => a.localeCompare(b));
+  return sortedPaths.map((filePath) => ({
+    filePath,
+    threads: (buckets.get(filePath) ?? []).slice().sort((a, b) => a.startLine - b.startLine),
+  }));
 }

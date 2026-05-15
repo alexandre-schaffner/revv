@@ -1,7 +1,7 @@
 <script lang="ts" module>
-	import type { HTMLAttributes } from "svelte/elements";
+import type { HTMLAttributes } from "svelte/elements";
 
-	export type PlanFooterProps = HTMLAttributes<HTMLDivElement>;
+export type PlanFooterProps = HTMLAttributes<HTMLDivElement>;
 </script>
 
 <script lang="ts">
@@ -16,7 +16,7 @@
 
 <div
 	data-slot="plan-footer"
-	class={cn("flex items-center justify-end gap-2 border-t border-border px-4 py-2", className)}
+	class={cn("flex items-center justify-end gap-2 px-4 py-2", className)}
 	{...restProps}
 >
 	{@render children?.()}

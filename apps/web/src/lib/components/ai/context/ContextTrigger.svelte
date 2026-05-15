@@ -1,11 +1,11 @@
 <script lang="ts" module>
-	import type { Snippet } from 'svelte';
+import type { Snippet } from "svelte";
 
-	export type ContextTriggerProps = {
-		class?: string;
-		/** Override the default trigger content (ring + percent). */
-		children?: Snippet;
-	};
+export type ContextTriggerProps = {
+  class?: string;
+  /** Override the default trigger content (ring + percent). */
+  children?: Snippet;
+};
 </script>
 
 <script lang="ts">
@@ -41,7 +41,7 @@
 			role="status"
 			aria-label="Context usage {percentLabel}"
 			class={cn(
-				'flex items-center gap-1.5 rounded px-1 py-0.5 text-[10px] tabular-nums text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-secondary',
+				'flex items-center gap-1.5 rounded px-1 py-0.5 text-xs tabular-nums text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-secondary',
 				className,
 			)}
 		>

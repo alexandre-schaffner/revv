@@ -1,8 +1,8 @@
 <script lang="ts" module>
-	export type ContextCacheReadUsageProps = {
-		class?: string;
-		label?: string;
-	};
+export type ContextCacheReadUsageProps = {
+  class?: string;
+  label?: string;
+};
 </script>
 
 <script lang="ts">

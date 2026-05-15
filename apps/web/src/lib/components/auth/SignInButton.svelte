@@ -1,18 +1,18 @@
 <script lang="ts">
-	import * as auth from '$lib/stores/auth.svelte';
+import * as auth from "$lib/stores/auth.svelte";
 
-	const error = $derived(auth.getError());
-	const deviceFlow = $derived(auth.getDeviceFlow());
-	const isLoading = $derived(auth.getIsLoading());
+const error = $derived(auth.getError());
+const deviceFlow = $derived(auth.getDeviceFlow());
+const isLoading = $derived(auth.getIsLoading());
 
-	let copied = $state(false);
+let copied = $state(false);
 
-	async function copyCode() {
-		if (!deviceFlow) return;
-		await navigator.clipboard.writeText(deviceFlow.userCode);
-		copied = true;
-		setTimeout(() => (copied = false), 2000);
-	}
+async function copyCode() {
+  if (!deviceFlow) return;
+  await navigator.clipboard.writeText(deviceFlow.userCode);
+  copied = true;
+  setTimeout(() => (copied = false), 2000);
+}
 </script>
 
 {#if deviceFlow}

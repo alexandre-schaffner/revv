@@ -1,72 +1,72 @@
 <script lang="ts">
-    /*
-     * SpecRow — local copy-adapt of ratings-panel/RatingTestRow's row primitive.
-     *
-     * The scorecard's RatingTestRow is intentionally hard-coded to its verdict
-     * palette and its trigger layout. Rather than refactor that polished file
-     * (the plan forbids touching it), we replicate the *mechanical* parts —
-     * gutter, grid trigger, Collapsible wiring, lifecycle keyframes — as a
-     * generic row usable by both the issues and comments panels.
-     *
-     * Callers drive appearance via CSS custom properties set on their own
-     * wrapper (e.g. `--c-gutter-color`, `--c-row-bg`). Slots are exposed as
-     * snippets so a caller can choose between a checkbox, an icon, or nothing
-     * for each column.
-     *
-     * Columns (grid-template):
-     *   icon (2ch) · label+preview (1fr) · trailing (auto) · chevron (16px)
-     *
-     * The row is always collapsible (unless `disabled`). There's no "no
-     * collapse" variant — panels that want click-to-jump use the scorecard's
-     * own RatingTestRow directly, not this primitive.
-     */
-    import { ChevronRight } from "@lucide/svelte";
-    import * as Collapsible from "$lib/components/ui/collapsible";
-    import type { Snippet } from "svelte";
+/*
+ * SpecRow — local copy-adapt of ratings-panel/RatingTestRow's row primitive.
+ *
+ * The scorecard's RatingTestRow is intentionally hard-coded to its verdict
+ * palette and its trigger layout. Rather than refactor that polished file
+ * (the plan forbids touching it), we replicate the *mechanical* parts —
+ * gutter, grid trigger, Collapsible wiring, lifecycle keyframes — as a
+ * generic row usable by both the issues and comments panels.
+ *
+ * Callers drive appearance via CSS custom properties set on their own
+ * wrapper (e.g. `--c-gutter-color`, `--c-row-bg`). Slots are exposed as
+ * snippets so a caller can choose between a checkbox, an icon, or nothing
+ * for each column.
+ *
+ * Columns (grid-template):
+ *   icon (2ch) · label+preview (1fr) · trailing (auto) · chevron (16px)
+ *
+ * The row is always collapsible (unless `disabled`). There's no "no
+ * collapse" variant — panels that want click-to-jump use the scorecard's
+ * own RatingTestRow directly, not this primitive.
+ */
+import { ChevronRight } from "@lucide/svelte";
+import type { Snippet } from "svelte";
+import * as Collapsible from "$lib/components/ui/collapsible";
 
-    export type SpecRowState = "queued" | "running" | "resolved" | "submitted";
+export type SpecRowState = "queued" | "running" | "resolved" | "submitted";
 
-    interface Props {
-        /** Controlled open state. */
-        open: boolean;
-        /** Fires when the user clicks the trigger (ignored while disabled). */
-        onToggle: () => void;
-        /** Lifecycle state — drives gutter animation + opacity. */
-        state?: SpecRowState;
-        /** When true, the row cannot be expanded (trigger is inert). Use for
-         *  submitted or read-only rows. */
-        disabled?: boolean;
-        /** Screen-reader label for the trigger. */
-        ariaLabel?: string;
-        /** Binds the trigger element upward so a parent can manage focus /
-         *  keyboard navigation across rows. */
-        triggerRef?: HTMLElement | null;
-        /** Optional data attribute — useful for panel-level CSS hooks. */
-        dataKind?: string;
-        /** Slots — each returns the content for one column of the trigger
-         *  grid. All are optional; a missing slot renders an empty cell. */
-        icon?: Snippet;
-        label?: Snippet;
-        preview?: Snippet;
-        trailing?: Snippet;
-        /** Expanded body, rendered inside Collapsible.Content. */
-        content?: Snippet;
-    }
+interface Props {
+  /** Controlled open state. */
+  open: boolean;
+  /** Fires when the user clicks the trigger (ignored while disabled). */
+  onToggle: () => void;
+  /** Lifecycle state — drives gutter animation + opacity. */
+  state?: SpecRowState;
+  /** When true, the row cannot be expanded (trigger is inert). Use for
+   *  submitted or read-only rows. */
+  disabled?: boolean;
+  /** Screen-reader label for the trigger. */
+  ariaLabel?: string;
+  /** Binds the trigger element upward so a parent can manage focus /
+   *  keyboard navigation across rows. */
+  triggerRef?: HTMLElement | null;
+  /** Optional data attribute — useful for panel-level CSS hooks. */
+  dataKind?: string;
+  /** Slots — each returns the content for one column of the trigger
+   *  grid. All are optional; a missing slot renders an empty cell. */
+  icon?: Snippet;
+  label?: Snippet;
+  preview?: Snippet;
+  trailing?: Snippet;
+  /** Expanded body, rendered inside Collapsible.Content. */
+  content?: Snippet;
+}
 
-    let {
-        open,
-        onToggle,
-        state = "resolved",
-        disabled = false,
-        ariaLabel,
-        triggerRef = $bindable(null),
-        dataKind,
-        icon,
-        label,
-        preview,
-        trailing,
-        content,
-    }: Props = $props();
+let {
+  open,
+  onToggle,
+  state = "resolved",
+  disabled = false,
+  ariaLabel,
+  triggerRef = $bindable(null),
+  dataKind,
+  icon,
+  label,
+  preview,
+  trailing,
+  content,
+}: Props = $props();
 </script>
 
 <li

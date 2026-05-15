@@ -19,16 +19,16 @@
  * documented on the schema column.
  */
 export type ActivityKind =
-	| 'tool.read'
-	| 'tool.grep'
-	| 'tool.glob'
-	| 'tool.ls'
-	| 'tool.bash'
-	| 'tool.write'
-	| 'tool.edit'
-	| 'tool.todo'
-	| 'tool.mcp'
-	| 'tool.other';
+  | "tool.read"
+  | "tool.grep"
+  | "tool.glob"
+  | "tool.ls"
+  | "tool.bash"
+  | "tool.write"
+  | "tool.edit"
+  | "tool.todo"
+  | "tool.mcp"
+  | "tool.other";
 
 /**
  * Structured tool-use record. Replaces the legacy `{tool, description}` pair
@@ -46,17 +46,17 @@ export type ActivityKind =
  *   approval flows without a schema change.
  */
 export interface Activity {
-	readonly activityKind: ActivityKind;
-	readonly toolName: string;
-	readonly summary: string;
-	readonly payload?: unknown;
-	/**
-	 * When set, this activity row was emitted by a sub-agent (Claude `Task`
-	 * tool, opencode `agent` part) rather than the parent agent. The UI uses
-	 * this to nest the activity inside the matching `ChatSubagentInvocation`
-	 * card. Unset for top-level tool calls.
-	 */
-	readonly subagentInvocationId?: string;
+  readonly activityKind: ActivityKind;
+  readonly toolName: string;
+  readonly summary: string;
+  readonly payload?: unknown;
+  /**
+   * When set, this activity row was emitted by a sub-agent (Claude `Task`
+   * tool, opencode `agent` part) rather than the parent agent. The UI uses
+   * this to nest the activity inside the matching `ChatSubagentInvocation`
+   * card. Unset for top-level tool calls.
+   */
+  readonly subagentInvocationId?: string;
 }
 
 /**
@@ -69,28 +69,28 @@ export interface Activity {
  * Claude / opencode split (doctrine invariant #13: agent-path parity).
  */
 export function classifyTool(toolName: string): ActivityKind {
-	switch (toolName) {
-		case 'Read':
-			return 'tool.read';
-		case 'Grep':
-			return 'tool.grep';
-		case 'Glob':
-			return 'tool.glob';
-		case 'LS':
-			return 'tool.ls';
-		case 'Bash':
-			return 'tool.bash';
-		case 'Write':
-			return 'tool.write';
-		case 'Edit':
-			return 'tool.edit';
-		case 'TodoRead':
-		case 'TodoWrite':
-			return 'tool.todo';
-		default:
-			if (toolName.startsWith('mcp__')) return 'tool.mcp';
-			return 'tool.other';
-	}
+  switch (toolName) {
+    case "Read":
+      return "tool.read";
+    case "Grep":
+      return "tool.grep";
+    case "Glob":
+      return "tool.glob";
+    case "LS":
+      return "tool.ls";
+    case "Bash":
+      return "tool.bash";
+    case "Write":
+      return "tool.write";
+    case "Edit":
+      return "tool.edit";
+    case "TodoRead":
+    case "TodoWrite":
+      return "tool.todo";
+    default:
+      if (toolName.startsWith("mcp__")) return "tool.mcp";
+      return "tool.other";
+  }
 }
 
 /**
@@ -101,15 +101,15 @@ export function classifyTool(toolName: string): ActivityKind {
  * `EXPLORATION_TOOLS` sets keep working.
  */
 const OPENCODE_TOOL_NAME_MAP: Record<string, string> = {
-	read: 'Read',
-	grep: 'Grep',
-	glob: 'Glob',
-	bash: 'Bash',
-	write: 'Write',
-	edit: 'Edit',
-	list: 'LS',
-	todoread: 'TodoRead',
-	todowrite: 'TodoWrite',
+  read: "Read",
+  grep: "Grep",
+  glob: "Glob",
+  bash: "Bash",
+  write: "Write",
+  edit: "Edit",
+  list: "LS",
+  todoread: "TodoRead",
+  todowrite: "TodoWrite",
 };
 
 /**
@@ -118,5 +118,5 @@ const OPENCODE_TOOL_NAME_MAP: Record<string, string> = {
  * are mapped via the table above.
  */
 export function normalizeToolName(raw: string): string {
-	return OPENCODE_TOOL_NAME_MAP[raw.toLowerCase()] ?? raw;
+  return OPENCODE_TOOL_NAME_MAP[raw.toLowerCase()] ?? raw;
 }

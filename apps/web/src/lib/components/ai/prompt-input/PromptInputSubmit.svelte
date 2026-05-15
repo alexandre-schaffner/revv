@@ -1,12 +1,12 @@
 <script lang="ts" module>
-	import type { ButtonProps } from "$lib/components/ui/button/index.js";
+import type { ButtonProps } from "$lib/components/ui/button/index.js";
 
-	/**
-	 * Status, value, and submit-on-empty behavior are all read from the parent
-	 * `<PromptInput>` via context. Any `disabled` prop the caller passes is
-	 * applied additively (e.g., a parent might disable while no PR is loaded).
-	 */
-	export type PromptInputSubmitProps = ButtonProps;
+/**
+ * Status, value, and submit-on-empty behavior are all read from the parent
+ * `<PromptInput>` via context. Any `disabled` prop the caller passes is
+ * applied additively (e.g., a parent might disable while no PR is loaded).
+ */
+export type PromptInputSubmitProps = ButtonProps;
 </script>
 
 <script lang="ts">

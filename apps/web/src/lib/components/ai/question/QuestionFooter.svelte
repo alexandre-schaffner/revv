@@ -1,10 +1,10 @@
 <script lang="ts" module>
-	export type QuestionFooterProps = {
-		onSubmit: () => void;
-		onSkip: () => void;
-		canSubmit: boolean;
-		submitting: boolean;
-	};
+export type QuestionFooterProps = {
+  onSubmit: () => void;
+  onSkip: () => void;
+  canSubmit: boolean;
+  submitting: boolean;
+};
 </script>
 
 <script lang="ts">

@@ -1,7 +1,7 @@
 <script lang="ts" module>
-	import type { HTMLAttributes } from "svelte/elements";
+import type { HTMLAttributes } from "svelte/elements";
 
-	export type QueueItemFileProps = HTMLAttributes<HTMLSpanElement>;
+export type QueueItemFileProps = HTMLAttributes<HTMLSpanElement>;
 </script>
 
 <script lang="ts">

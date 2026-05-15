@@ -1,46 +1,50 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import { Dotmatrix } from '$lib/components/ui/dotmatrix';
-	import { completeOnboarding, getIsOnboarded } from '$lib/stores/auth.svelte';
+import { onMount } from "svelte";
+import { Dotmatrix } from "$lib/components/ui/dotmatrix";
+import { completeOnboarding, getIsOnboarded } from "$lib/stores/auth.svelte";
 
-	interface Props {
-		onFinish: () => void;
-	}
+interface Props {
+  onFinish: () => void;
+}
 
-	let { onFinish }: Props = $props();
+let { onFinish }: Props = $props();
 
-	onMount(() => {
-		let attempts = 0;
-		const maxAttempts = 5;
+onMount(() => {
+  let attempts = 0;
+  const maxAttempts = 5;
 
-		async function tryComplete() {
-			if (typeof sessionStorage !== 'undefined') {
-				sessionStorage.removeItem('revv-onboarding-replay');
-			}
-			await completeOnboarding();
-			if (getIsOnboarded()) {
-				onFinish();
-				return;
-			}
-			// Retry if not yet onboarded (token/user may not be ready)
-			attempts++;
-			if (attempts < maxAttempts) {
-				retryTimer = setTimeout(tryComplete, 1000);
-			} else {
-				// Force finish after max retries — the gate will handle it
-				onFinish();
-			}
-		}
+  async function tryComplete() {
+    if (typeof sessionStorage !== "undefined") {
+      sessionStorage.removeItem("revv-onboarding-replay");
+    }
+    try {
+      await completeOnboarding();
+    } catch {
+      // Retry below will handle it
+    }
+    if (getIsOnboarded()) {
+      onFinish();
+      return;
+    }
+    // Retry if not yet onboarded (token/user may not be ready)
+    attempts++;
+    if (attempts < maxAttempts) {
+      retryTimer = setTimeout(tryComplete, 1000);
+    } else {
+      // Force finish after max retries — the gate will handle it
+      onFinish();
+    }
+  }
 
-		// Initial delay for the user to read the closing message
-		let retryTimer: ReturnType<typeof setTimeout> | undefined;
-		const initialTimer = setTimeout(tryComplete, 2200);
+  // Initial delay for the user to read the closing message
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
+  const initialTimer = setTimeout(tryComplete, 2200);
 
-		return () => {
-			clearTimeout(initialTimer);
-			if (retryTimer) clearTimeout(retryTimer);
-		};
-	});
+  return () => {
+    clearTimeout(initialTimer);
+    if (retryTimer) clearTimeout(retryTimer);
+  };
+});
 </script>
 
 <div class="done">

@@ -1,8 +1,8 @@
 <script lang="ts" module>
-	export type ContextCacheCreationUsageProps = {
-		class?: string;
-		label?: string;
-	};
+export type ContextCacheCreationUsageProps = {
+  class?: string;
+  label?: string;
+};
 </script>
 
 <script lang="ts">

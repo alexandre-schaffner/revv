@@ -1,10 +1,10 @@
 <script lang="ts" module>
-	import type { HTMLTextareaAttributes } from "svelte/elements";
+import type { HTMLTextareaAttributes } from "svelte/elements";
 
-	export type PromptInputTextareaProps = HTMLTextareaAttributes & {
-		/** Placeholder text. */
-		placeholder?: string;
-	};
+export type PromptInputTextareaProps = HTMLTextareaAttributes & {
+  /** Placeholder text. */
+  placeholder?: string;
+};
 </script>
 
 <script lang="ts">

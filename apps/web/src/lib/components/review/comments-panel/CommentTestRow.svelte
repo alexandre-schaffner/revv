@@ -1,86 +1,82 @@
 <script lang="ts">
-    /*
-     * CommentTestRow — one unresolved-comment row, keyed by file. Groups all
-     * threads on the same file into a single collapsible line:
-     *
-     *   💬  src/auth.ts   First thread's first message preview…   3 threads  ›
-     *   │   │             │                                       │
-     *   │   │             └ preview (sans 12 muted, truncated)    └ thread-count pill
-     *   │   └ FileBadge — the row's "headline" is the file
-     *   └ MessageSquare / MessagesSquare icon (multi-turn signal)
-     *
-     * Click expands to reveal every thread in the file, separated by the
-     * "THREADS" hairline (rendered inside CommentExpandedBody). Jumping to
-     * the diff happens either via the FileBadge (jumps to the first thread)
-     * or the per-thread `jump` chip inside the expanded body.
-     */
-    import { MessageSquare, MessagesSquare, User, Bot } from "@lucide/svelte";
-    import type { CommentThread, ThreadMessage } from "@revv/shared";
-    import FileBadge from "$lib/components/ui/FileBadge.svelte";
-    import SpecRow from "../shared/SpecRow.svelte";
-    import CommentExpandedBody from "./CommentExpandedBody.svelte";
+/*
+ * CommentTestRow — one unresolved-comment row, keyed by file. Groups all
+ * threads on the same file into a single collapsible line:
+ *
+ *   💬  src/auth.ts   First thread's first message preview…   3 threads  ›
+ *   │   │             │                                       │
+ *   │   │             └ preview (sans 12 muted, truncated)    └ thread-count pill
+ *   │   └ FileBadge — the row's "headline" is the file
+ *   └ MessageSquare / MessagesSquare icon (multi-turn signal)
+ *
+ * Click expands to reveal every thread in the file, separated by the
+ * "THREADS" hairline (rendered inside CommentExpandedBody). Jumping to
+ * the diff happens either via the FileBadge (jumps to the first thread)
+ * or the per-thread `jump` chip inside the expanded body.
+ */
+import { Bot, MessageSquare, MessagesSquare, User } from "@lucide/svelte";
+import type { CommentThread, ThreadMessage } from "@revv/shared";
+import FileBadge from "$lib/components/ui/FileBadge.svelte";
+import SpecRow from "../shared/SpecRow.svelte";
+import CommentExpandedBody from "./CommentExpandedBody.svelte";
 
-    interface Props {
-        filePath: string;
-        /** All threads for this file, ordered by startLine ascending. */
-        threads: readonly CommentThread[];
-        /** Resolver — called per thread to load its messages. */
-        getThreadMessages: (threadId: string) => ThreadMessage[];
-        open: boolean;
-        index: number;
-        onToggleOpen: () => void;
-        onJump?: ((filePath: string, line: number) => void) | undefined;
-        onTriggerRef?: ((el: HTMLElement | null) => void) | undefined;
-    }
+interface Props {
+  filePath: string;
+  /** All threads for this file, ordered by startLine ascending. */
+  threads: readonly CommentThread[];
+  /** Resolver — called per thread to load its messages. */
+  getThreadMessages: (threadId: string) => ThreadMessage[];
+  open: boolean;
+  index: number;
+  onToggleOpen: () => void;
+  onJump?: ((filePath: string, line: number) => void) | undefined;
+  onTriggerRef?: ((el: HTMLElement | null) => void) | undefined;
+}
 
-    let {
-        filePath,
-        threads,
-        getThreadMessages,
-        open,
-        index,
-        onToggleOpen,
-        onJump,
-        onTriggerRef,
-    }: Props = $props();
+let {
+  filePath,
+  threads,
+  getThreadMessages,
+  open,
+  index,
+  onToggleOpen,
+  onJump,
+  onTriggerRef,
+}: Props = $props();
 
-    let triggerRef = $state<HTMLElement | null>(null);
+let triggerRef = $state<HTMLElement | null>(null);
 
-    $effect(() => {
-        onTriggerRef?.(triggerRef);
-        return () => onTriggerRef?.(null);
-    });
+$effect(() => {
+  onTriggerRef?.(triggerRef);
+  return () => onTriggerRef?.(null);
+});
 
-    // First thread drives the preview + badge line info. Groups are
-    // guaranteed non-empty by the caller (groupThreadsByFile skips empty
-    // buckets), but guard anyway so the component degrades sensibly if
-    // that contract ever slips.
-    const firstThread = $derived(threads[0]);
-    const firstThreadMessages = $derived(
-        firstThread ? getThreadMessages(firstThread.id) : [],
-    );
-    const firstMessage = $derived(firstThreadMessages[0]);
-    const preview = $derived(firstMessage?.body.trim() ?? "");
+// First thread drives the preview + badge line info. Groups are
+// guaranteed non-empty by the caller (groupThreadsByFile skips empty
+// buckets), but guard anyway so the component degrades sensibly if
+// that contract ever slips.
+const firstThread = $derived(threads[0]);
+const firstThreadMessages = $derived(firstThread ? getThreadMessages(firstThread.id) : []);
+const firstMessage = $derived(firstThreadMessages[0]);
+const preview = $derived(firstMessage?.body.trim() ?? "");
 
-    // Total messages across all threads drives the icon choice — if the
-    // whole file has only one turn we show the single-message glyph, else
-    // the multi-turn one.
-    const totalMessages = $derived(
-        threads.reduce((sum, t) => sum + getThreadMessages(t.id).length, 0),
-    );
-    const hasMultipleMessages = $derived(totalMessages > 1);
-    const hasMultipleThreads = $derived(threads.length > 1);
+// Total messages across all threads drives the icon choice — if the
+// whole file has only one turn we show the single-message glyph, else
+// the multi-turn one.
+const totalMessages = $derived(threads.reduce((sum, t) => sum + getThreadMessages(t.id).length, 0));
+const hasMultipleMessages = $derived(totalMessages > 1);
+const hasMultipleThreads = $derived(threads.length > 1);
 
-    const delay = $derived(`${Math.min(index, 6) * 50}ms`);
+const delay = $derived(`${Math.min(index, 6) * 50}ms`);
 
-    let avatarFailed = $state(false);
+let avatarFailed = $state(false);
 
-    const ariaLabel = $derived(
-        threads.length === 1 && firstThread
-            ? `Comment on ${filePath}:${firstThread.startLine}` +
-                  (totalMessages > 1 ? `, ${totalMessages} messages` : "")
-            : `${threads.length} comment threads on ${filePath}`,
-    );
+const ariaLabel = $derived(
+  threads.length === 1 && firstThread
+    ? `Comment on ${filePath}:${firstThread.startLine}` +
+        (totalMessages > 1 ? `, ${totalMessages} messages` : "")
+    : `${threads.length} comment threads on ${filePath}`,
+);
 </script>
 
 <div

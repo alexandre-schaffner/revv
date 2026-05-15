@@ -1,83 +1,76 @@
 <script lang="ts">
-    import { ArrowUpRight } from "@lucide/svelte";
-    import type {
-        WalkthroughRating,
-        WalkthroughBlock,
-        Verdict,
-        Confidence,
-    } from "@revv/shared";
-    import { RATING_AXIS_LABELS } from "@revv/shared";
-    import FileBadge from "$lib/components/ui/FileBadge.svelte";
-    import * as Tooltip from "$lib/components/ui/tooltip";
-    import { jumpToDiffLine } from "$lib/stores/review.svelte";
-    import { renderMarkdown } from "$lib/utils/markdown";
+import { ArrowUpRight } from "@lucide/svelte";
+import type { Confidence, Verdict, WalkthroughBlock, WalkthroughRating } from "@revv/shared";
+import { RATING_AXIS_LABELS } from "@revv/shared";
+import FileBadge from "$lib/components/ui/FileBadge.svelte";
+import * as Tooltip from "$lib/components/ui/tooltip";
+import { jumpToDiffLine } from "$lib/stores/review.svelte";
+import { renderMarkdown } from "$lib/utils/markdown";
 
-    interface Props {
-        rating: WalkthroughRating;
-        /** Full ordered block list — used to resolve blockIds to step numbers. */
-        blocks: WalkthroughBlock[];
-        onJump: (blockId: string) => void;
-        /** When `true`, render the uppercase axis-name title above the Status
-         *  divider. Grid popovers set this so the header echoes the card that
-         *  opened it; the list view leaves it off because the row header
-         *  already shows the axis name one level up. Defaults to `false`. */
-        showTitle?: boolean;
-    }
+interface Props {
+  rating: WalkthroughRating;
+  /** Full ordered block list — used to resolve blockIds to step numbers. */
+  blocks: WalkthroughBlock[];
+  onJump: (blockId: string) => void;
+  /** When `true`, render the uppercase axis-name title above the Status
+   *  divider. Grid popovers set this so the header echoes the card that
+   *  opened it; the list view leaves it off because the row header
+   *  already shows the axis name one level up. Defaults to `false`. */
+  showTitle?: boolean;
+}
 
-    let { rating, blocks, onJump, showTitle = false }: Props = $props();
+let { rating, blocks, onJump, showTitle = false }: Props = $props();
 
-    // Resolve each blockId to its GLOBAL position in the walkthrough. Filter
-    // out ids that don't resolve — those would make the chip broken (no jump
-    // target exists). Matches the pattern in GuidedWalkthrough's IssueCard
-    // stepTag logic, which gates clickability on `stepNumberFor` != null.
-    const resolvedBlockLinks = $derived.by(() => {
-        const out: { blockId: string; stepN: number }[] = [];
-        for (const blockId of rating.blockIds) {
-            const idx = blocks.findIndex((b) => b.id === blockId);
-            if (idx >= 0) out.push({ blockId, stepN: idx + 1 });
-        }
-        return out;
-    });
+// Resolve each blockId to its GLOBAL position in the walkthrough. Filter
+// out ids that don't resolve — those would make the chip broken (no jump
+// target exists). Matches the pattern in GuidedWalkthrough's IssueCard
+// stepTag logic, which gates clickability on `stepNumberFor` != null.
+const resolvedBlockLinks = $derived.by(() => {
+  const out: { blockId: string; stepN: number }[] = [];
+  for (const blockId of rating.blockIds) {
+    const idx = blocks.findIndex((b) => b.id === blockId);
+    if (idx >= 0) out.push({ blockId, stepN: idx + 1 });
+  }
+  return out;
+});
 
-    // Rationale is short prose — render inline, no overflow gate needed.
-    const rationaleHtml = $derived(renderMarkdown(rating.rationale));
+// Rationale is short prose — render inline, no overflow gate needed.
+const rationaleHtml = $derived(renderMarkdown(rating.rationale));
 
-    // Details markdown is rendered async through marked + highlighter; gate with
-    // {#await} in the template so we never flash raw markdown at the user.
-    const detailsHtml = $derived(
-        rating.details && rating.details.trim().length > 0
-            ? renderMarkdown(rating.details)
-            : null,
-    );
+// Details markdown is rendered async through marked + highlighter; gate with
+// {#await} in the template so we never flash raw markdown at the user.
+const detailsHtml = $derived(
+  rating.details && rating.details.trim().length > 0 ? renderMarkdown(rating.details) : null,
+);
 
-    // Tooltips are only enabled after a short delay after expansion, matching
-    // the original Dialog pattern (lines 201–226). Without this gate, a tooltip
-    // on the citation trigger pops up instantly whenever the panel expands,
-    // which feels noisy.
-    let tooltipsEnabled = $state(false);
-    $effect(() => {
-        tooltipsEnabled = false;
-        const t = setTimeout(() => {
-            tooltipsEnabled = true;
-        }, 600);
-        return () => clearTimeout(t);
-    });
+// Tooltips are only enabled after a short delay after expansion, matching
+// the original Dialog pattern (lines 201–226). Without this gate, a tooltip
+// on the citation trigger pops up instantly whenever the panel expands,
+// which feels noisy.
+let tooltipsEnabled = $state(false);
+$effect(() => {
+  tooltipsEnabled = false;
+  const t = setTimeout(() => {
+    tooltipsEnabled = true;
+  }, 600);
+  return () => clearTimeout(t);
+});
 
-    const verdictLabels: Record<Verdict, string> = {
-        pass: "pass",
-        concern: "concern",
-        blocker: "blocker",
-    };
+const verdictLabels: Record<Verdict, string> = {
+  pass: "pass",
+  concern: "concern",
+  blocker: "blocker",
+};
 
-    const confidenceLabels: Record<Confidence, string> = {
-        low: "low confidence",
-        medium: "medium confidence",
-        high: "high confidence",
-    };
+const confidenceLabels: Record<Confidence, string> = {
+  low: "low confidence",
+  medium: "medium confidence",
+  high: "high confidence",
+};
 
-    function handleJumpToDiff(filePath: string, line: number): void {
-        jumpToDiffLine(filePath, line);
-    }
+function handleJumpToDiff(filePath: string, line: number): void {
+  jumpToDiffLine(filePath, line);
+}
 </script>
 
 <div class="expanded-body" data-verdict={rating.verdict}>

@@ -1,12 +1,12 @@
 <script lang="ts" module>
-	import type { ButtonProps } from "$lib/components/ui/button/index.js";
+import type { ButtonProps } from "$lib/components/ui/button/index.js";
 
-	export type MessageActionProps = ButtonProps & {
-		/** Accessible label for screen readers. Also used as fallback tooltip text. */
-		label: string;
-		/** Optional tooltip text shown on hover. */
-		tooltip?: string;
-	};
+export type MessageActionProps = ButtonProps & {
+  /** Accessible label for screen readers. Also used as fallback tooltip text. */
+  label: string;
+  /** Optional tooltip text shown on hover. */
+  tooltip?: string;
+};
 </script>
 
 <script lang="ts">

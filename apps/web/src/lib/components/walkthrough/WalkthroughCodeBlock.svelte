@@ -1,50 +1,48 @@
 <script lang="ts">
-	import type { CodeBlock } from '@revv/shared';
-	import { File as PierreFile, type FileOptions } from '@pierre/diffs';
-	import { workerManager } from '$lib/utils/worker-pool';
-	import { renderMarkdown } from '$lib/utils/markdown';
-	import { jumpToDiffLine } from '$lib/stores/review.svelte';
-	import { ArrowUpRight } from '@lucide/svelte';
+import { ArrowUpRight } from "@lucide/svelte";
+import { type FileOptions, File as PierreFile } from "@pierre/diffs";
+import type { CodeBlock } from "@revv/shared";
+import { jumpToDiffLine } from "$lib/stores/review.svelte";
+import { renderMarkdown } from "$lib/utils/markdown";
+import { workerManager } from "$lib/utils/worker-pool";
 
-	interface Props {
-		block: CodeBlock;
-		hideAnnotation?: boolean;
-	}
+interface Props {
+  block: CodeBlock;
+  hideAnnotation?: boolean;
+}
 
-	let { block, hideAnnotation = false }: Props = $props();
+let { block, hideAnnotation = false }: Props = $props();
 
-	const renderedAnnotation = $derived(
-		block.annotation ? renderMarkdown(block.annotation) : null
-	);
+const renderedAnnotation = $derived(block.annotation ? renderMarkdown(block.annotation) : null);
 
-	let instance: PierreFile<never> | null = null;
+let instance: PierreFile<never> | null = null;
 
-	function mountCodeBlock(el: HTMLDivElement) {
-		const options: FileOptions<never> = {
-			theme: { dark: 'pierre-dark', light: 'pierre-light' },
-			overflow: 'scroll',
-			// Suppress Pierre's built-in file header — we render our own clickable
-			// header above so the user can jump to this file in the Diff tab.
-			disableFileHeader: true,
-		};
+function mountCodeBlock(el: HTMLDivElement) {
+  const options: FileOptions<never> = {
+    theme: { dark: "pierre-dark", light: "pierre-light" },
+    overflow: "scroll",
+    // Suppress Pierre's built-in file header — we render our own clickable
+    // header above so the user can jump to this file in the Diff tab.
+    disableFileHeader: true,
+  };
 
-		instance = new PierreFile<never>(options, workerManager);
-		instance.render({
-			containerWrapper: el,
-			file: {
-				name: block.filePath,
-				contents: block.content,
-				lang: block.language,
-			},
-		});
+  instance = new PierreFile<never>(options, workerManager);
+  instance.render({
+    containerWrapper: el,
+    file: {
+      name: block.filePath,
+      contents: block.content,
+      lang: block.language,
+    },
+  });
 
-		return {
-			destroy() {
-				instance?.cleanUp();
-				instance = null;
-			},
-		};
-	}
+  return {
+    destroy() {
+      instance?.cleanUp();
+      instance = null;
+    },
+  };
+}
 </script>
 
 <div class="annotated-block" class:annotated-block--no-annotation={!block.annotation || hideAnnotation}>

@@ -1,17 +1,17 @@
 <script lang="ts" module>
-	import type { HTMLAttributes } from "svelte/elements";
-	import type { NormalizedQuestion } from "@revv/shared";
-	import type { QuestionStatus } from "./context.js";
+import type { NormalizedQuestion } from "@revv/shared";
+import type { HTMLAttributes } from "svelte/elements";
+import type { QuestionStatus } from "./context.js";
 
-	export type QuestionProps = HTMLAttributes<HTMLDivElement> & {
-		prId: string;
-		itemId: string;
-		questions: ReadonlyArray<NormalizedQuestion>;
-		status: QuestionStatus;
-		answers: Readonly<Record<string, ReadonlyArray<string>>> | null;
-		customAnswers: Readonly<Record<string, string>> | null;
-		previewFormat: "markdown" | "html";
-	};
+export type QuestionProps = HTMLAttributes<HTMLDivElement> & {
+  prId: string;
+  itemId: string;
+  questions: ReadonlyArray<NormalizedQuestion>;
+  status: QuestionStatus;
+  answers: Readonly<Record<string, ReadonlyArray<string>>> | null;
+  customAnswers: Readonly<Record<string, string>> | null;
+  previewFormat: "markdown" | "html";
+};
 </script>
 
 <script lang="ts">
@@ -151,7 +151,7 @@
 	data-slot="question"
 	class={cn(
 		"rounded-lg border border-border bg-background shadow-xs transition-colors duration-snap",
-		status === "answered" && "border-green-500/35",
+		status === "answered" && "border-success/35",
 		status === "rejected" && "border-destructive/35 opacity-90",
 		status === "superseded" && "opacity-60",
 		className,

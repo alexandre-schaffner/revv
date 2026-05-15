@@ -1,23 +1,27 @@
 <script lang="ts">
-	import type { PullRequestStatus, ReviewStatus } from '@revv/shared';
+import type { PullRequestStatus, ReviewStatus } from "@revv/shared";
 
-	let {
-		status,
-		reviewStatus = 'pending',
-		visible = true,
-	}: { status: PullRequestStatus; reviewStatus?: ReviewStatus; visible?: boolean } = $props();
+let {
+  status,
+  reviewStatus = "pending",
+  visible = true,
+}: { status: PullRequestStatus; reviewStatus?: ReviewStatus; visible?: boolean } = $props();
 
-	let dotClass = $derived(() => {
-		if (!visible) return 'bg-transparent';
-		if (status === 'closed') return 'bg-text-muted';
-		if (status === 'merged') return 'bg-text-muted';
-		switch (reviewStatus) {
-			case 'in_progress': return 'bg-warning';
-			case 'reviewed': return 'bg-success';
-			case 'changes_proposed': return 'bg-[var(--color-ai-accent)]';
-			default: return 'bg-accent';
-		}
-	});
+let dotClass = $derived(() => {
+  if (!visible) return "bg-transparent";
+  if (status === "closed") return "bg-text-muted";
+  if (status === "merged") return "bg-text-muted";
+  switch (reviewStatus) {
+    case "in_progress":
+      return "bg-warning";
+    case "reviewed":
+      return "bg-success";
+    case "changes_proposed":
+      return "bg-[var(--color-ai-accent)]";
+    default:
+      return "bg-accent";
+  }
+});
 </script>
 
 <span

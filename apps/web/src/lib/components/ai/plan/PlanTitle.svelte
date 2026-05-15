@@ -1,10 +1,10 @@
 <script lang="ts" module>
-	import type { HTMLAttributes } from "svelte/elements";
+import type { HTMLAttributes } from "svelte/elements";
 
-	export type PlanTitleProps = HTMLAttributes<HTMLHeadingElement> & {
-		/** The title text. Displays with shimmer animation when streaming. */
-		text?: string;
-	};
+export type PlanTitleProps = HTMLAttributes<HTMLHeadingElement> & {
+  /** The title text. Displays with shimmer animation when streaming. */
+  text?: string;
+};
 </script>
 
 <script lang="ts">

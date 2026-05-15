@@ -8,45 +8,42 @@
 // The system prompt is sent ONCE on session create — both the Claude Agent
 // SDK (`persistSession: true`) and the opencode daemon retain it for resumes.
 
-import { readFileSync } from 'fs';
+import { readFileSync } from "node:fs";
 
-const CHAT_SYSTEM_TEMPLATE: string = readFileSync(
-	import.meta.dir + '/chat-system.md',
-	'utf-8',
-);
+const CHAT_SYSTEM_TEMPLATE: string = readFileSync(`${import.meta.dir}/chat-system.md`, "utf-8");
 
 const CHAT_RESOLVE_CONFLICTS_TEMPLATE: string = readFileSync(
-	import.meta.dir + '/chat-resolve-conflicts.md',
-	'utf-8',
+  `${import.meta.dir}/chat-resolve-conflicts.md`,
+  "utf-8",
 );
 
 export interface ChatWalkthroughIssue {
-	readonly severity: string; // 'info' | 'warning' | 'critical'
-	readonly title: string;
-	readonly description: string;
-	readonly filePath?: string | null;
-	readonly startLine?: number | null;
-	readonly endLine?: number | null;
+  readonly severity: string; // 'info' | 'warning' | 'critical'
+  readonly title: string;
+  readonly description: string;
+  readonly filePath?: string | null;
+  readonly startLine?: number | null;
+  readonly endLine?: number | null;
 }
 
 export interface ChatWalkthroughContext {
-	readonly summary: string;
-	readonly riskLevel: string;
-	readonly sentiment: string | null;
-	readonly issues: ReadonlyArray<ChatWalkthroughIssue>;
+  readonly summary: string;
+  readonly riskLevel: string;
+  readonly sentiment: string | null;
+  readonly issues: ReadonlyArray<ChatWalkthroughIssue>;
 }
 
 export interface ChatPrContext {
-	readonly title: string;
-	readonly body: string | null;
-	readonly sourceBranch: string;
-	readonly targetBranch: string;
+  readonly title: string;
+  readonly body: string | null;
+  readonly sourceBranch: string;
+  readonly targetBranch: string;
 }
 
 export interface ChatSystemPromptParams {
-	readonly pr: ChatPrContext;
-	readonly walkthrough?: ChatWalkthroughContext | null;
-	readonly branchName: string;
+  readonly pr: ChatPrContext;
+  readonly walkthrough?: ChatWalkthroughContext | null;
+  readonly branchName: string;
 }
 
 /**
@@ -55,74 +52,73 @@ export interface ChatSystemPromptParams {
  * workflow. Sent only on session create.
  */
 export function buildChatSystemPrompt(params: ChatSystemPromptParams): string {
-	// Build PR section
-	const prLines: string[] = [];
-	prLines.push('## Pull Request');
-	prLines.push(`**Title:** ${params.pr.title}`);
-	prLines.push(
-		`**Branch:** \`${params.pr.sourceBranch}\` → \`${params.pr.targetBranch}\``,
-	);
-	if (params.pr.body?.trim()) {
-		prLines.push('');
-		prLines.push('**Description:**');
-		prLines.push(params.pr.body.trim());
-	}
-	const prSection = prLines.join('\n');
+  // Build PR section
+  const prLines: string[] = [];
+  prLines.push("## Pull Request");
+  prLines.push(`**Title:** ${params.pr.title}`);
+  prLines.push(`**Branch:** \`${params.pr.sourceBranch}\` → \`${params.pr.targetBranch}\``);
+  if (params.pr.body?.trim()) {
+    prLines.push("");
+    prLines.push("**Description:**");
+    prLines.push(params.pr.body.trim());
+  }
+  const prSection = prLines.join("\n");
 
-	// Build walkthrough section (empty string when absent)
-	let walkthroughSection = '';
-	if (params.walkthrough) {
-		const wt = params.walkthrough;
-		const wtLines: string[] = [];
-		wtLines.push('## Walkthrough Analysis');
-		wtLines.push(`**Risk Level:** ${wt.riskLevel}`);
-		if (wt.summary.trim()) {
-			wtLines.push('');
-			wtLines.push('**Summary:**');
-			wtLines.push(wt.summary.trim());
-		}
-		if (wt.sentiment?.trim()) {
-			wtLines.push('');
-			wtLines.push('**Overall Sentiment:**');
-			wtLines.push(wt.sentiment.trim());
-		}
-		if (wt.issues.length > 0) {
-			wtLines.push('');
-			wtLines.push('**Issues Found:**');
-			for (const issue of wt.issues) {
-				const where = issue.filePath
-					? issue.startLine != null
-						? ` — \`${issue.filePath}:${issue.startLine}${
-								issue.endLine != null && issue.endLine !== issue.startLine
-									? `–${issue.endLine}`
-									: ""
-							}\``
-						: ` — \`${issue.filePath}\``
-					: "";
-				wtLines.push(
-					`- [${issue.severity.toUpperCase()}]${where} **${issue.title}**: ${issue.description}`,
-				);
-			}
-		}
-		walkthroughSection = wtLines.join('\n');
-	}
+  // Build walkthrough section (empty string when absent)
+  let walkthroughSection = "";
+  if (params.walkthrough) {
+    const wt = params.walkthrough;
+    const wtLines: string[] = [];
+    wtLines.push("## Walkthrough Analysis");
+    wtLines.push(`**Risk Level:** ${wt.riskLevel}`);
+    if (wt.summary.trim()) {
+      wtLines.push("");
+      wtLines.push("**Summary:**");
+      wtLines.push(wt.summary.trim());
+    }
+    if (wt.sentiment?.trim()) {
+      wtLines.push("");
+      wtLines.push("**Overall Sentiment:**");
+      wtLines.push(wt.sentiment.trim());
+    }
+    if (wt.issues.length > 0) {
+      wtLines.push("");
+      wtLines.push("**Issues Found:**");
+      for (const issue of wt.issues) {
+        const where = issue.filePath
+          ? issue.startLine != null
+            ? ` — \`${issue.filePath}:${issue.startLine}${
+                issue.endLine != null && issue.endLine !== issue.startLine
+                  ? `–${issue.endLine}`
+                  : ""
+              }\``
+            : ` — \`${issue.filePath}\``
+          : "";
+        wtLines.push(
+          `- [${issue.severity.toUpperCase()}]${where} **${issue.title}**: ${issue.description}`,
+        );
+      }
+    }
+    walkthroughSection = wtLines.join("\n");
+  }
 
-	// Fill placeholders
-	let prompt = CHAT_SYSTEM_TEMPLATE
-		.replace('{{PR_SECTION}}', prSection)
-		.replace('{{BRANCH_NAME}}', params.branchName);
+  // Fill placeholders
+  let prompt = CHAT_SYSTEM_TEMPLATE.replace("{{PR_SECTION}}", prSection).replace(
+    "{{BRANCH_NAME}}",
+    params.branchName,
+  );
 
-	if (walkthroughSection) {
-		prompt = prompt.replace('{{WALKTHROUGH_SECTION}}', walkthroughSection);
-	} else {
-		// Remove the placeholder along with its surrounding blank lines
-		prompt = prompt.replace('\n\n{{WALKTHROUGH_SECTION}}', '');
-	}
+  if (walkthroughSection) {
+    prompt = prompt.replace("{{WALKTHROUGH_SECTION}}", walkthroughSection);
+  } else {
+    // Remove the placeholder along with its surrounding blank lines
+    prompt = prompt.replace("\n\n{{WALKTHROUGH_SECTION}}", "");
+  }
 
-	// Clean up any double-blank-lines that may result from empty sections
-	prompt = prompt.replace(/\n{3,}/g, '\n\n');
+  // Clean up any double-blank-lines that may result from empty sections
+  prompt = prompt.replace(/\n{3,}/g, "\n\n");
 
-	return prompt;
+  return prompt;
 }
 
 /**
@@ -132,62 +128,62 @@ export function buildChatSystemPrompt(params: ChatSystemPromptParams): string {
  * stays free of service-layer imports.
  */
 export type ChatHistoryEntry =
-	| {
-			readonly entryKind: 'message';
-			readonly role: 'user' | 'assistant';
-			readonly content: string;
-	  }
-	| {
-			readonly entryKind: 'activity';
-			readonly activityKind: string;
-			readonly toolName: string | null;
-			readonly summary: string;
-	  };
+  | {
+      readonly entryKind: "message";
+      readonly role: "user" | "assistant";
+      readonly content: string;
+    }
+  | {
+      readonly entryKind: "activity";
+      readonly activityKind: string;
+      readonly toolName: string | null;
+      readonly summary: string;
+    };
 
 export interface ChatUserMessageParams {
-	readonly message: string;
-	/**
-	 * Persisted timeline of the current chat session, in sequence order,
-	 * NOT including the message being sent in this turn. When non-empty,
-	 * it's serialized into a `## Conversation history` block prepended to
-	 * the user's message so the agent sees the full transcript even when
-	 * native session resume isn't available (fresh daemon, missing
-	 * session id, agent switch, etc.).
-	 */
-	readonly history?: ReadonlyArray<ChatHistoryEntry>;
+  readonly message: string;
+  /**
+   * Persisted timeline of the current chat session, in sequence order,
+   * NOT including the message being sent in this turn. When non-empty,
+   * it's serialized into a `## Conversation history` block prepended to
+   * the user's message so the agent sees the full transcript even when
+   * native session resume isn't available (fresh daemon, missing
+   * session id, agent switch, etc.).
+   */
+  readonly history?: ReadonlyArray<ChatHistoryEntry>;
 }
 
 export function buildChatUserMessage(params: ChatUserMessageParams): string {
-	const history = params.history ?? [];
-	if (history.length === 0) return params.message;
+  const history = params.history ?? [];
+  if (history.length === 0) return params.message;
 
-	const lines: string[] = ['## Conversation history', ''];
-	for (const entry of history) {
-		if (entry.entryKind === 'message') {
-			const role = entry.role === 'user' ? 'User' : 'Assistant';
-			const body = entry.content.trim();
-			if (body.length === 0) continue;
-			lines.push(`**${role}:**`);
-			lines.push(body);
-			lines.push('');
-		} else {
-			const tool = entry.toolName ? ` (${entry.toolName})` : '';
-			lines.push(`_[${entry.activityKind}${tool}]_ ${entry.summary}`);
-			lines.push('');
-		}
-	}
-	lines.push('---');
-	lines.push('');
-	lines.push('## Current message');
-	lines.push('');
-	lines.push(params.message);
-	return lines.join('\n');
+  const lines: string[] = ["## Conversation history", ""];
+  for (const entry of history) {
+    if (entry.entryKind === "message") {
+      const role = entry.role === "user" ? "User" : "Assistant";
+      const body = entry.content.trim();
+      if (body.length === 0) continue;
+      lines.push(`**${role}:**`);
+      lines.push(body);
+      lines.push("");
+    } else {
+      const tool = entry.toolName ? ` (${entry.toolName})` : "";
+      lines.push(`_[${entry.activityKind}${tool}]_ ${entry.summary}`);
+      lines.push("");
+    }
+  }
+  lines.push("---");
+  lines.push("");
+  lines.push("## Current message");
+  lines.push("");
+  lines.push(params.message);
+  return lines.join("\n");
 }
 
 export interface ResolveConflictsPromptParams {
-	readonly agentBranch: string;
-	readonly sourceBranch: string;
-	readonly conflictFiles: ReadonlyArray<string>;
+  readonly agentBranch: string;
+  readonly sourceBranch: string;
+  readonly conflictFiles: ReadonlyArray<string>;
 }
 
 /**
@@ -196,20 +192,18 @@ export interface ResolveConflictsPromptParams {
  * `chat-resolve-conflicts.md`. The resulting prompt is non-conversational and
  * is NOT persisted into the chat session — see {@link AiService.resolveMergeConflict}.
  */
-export function buildResolveConflictsPrompt(
-	params: ResolveConflictsPromptParams,
-): string {
-	const fileLines = params.conflictFiles.length === 0
-		? '_(no specific files listed — check `git status` to find them)_'
-		: params.conflictFiles.map((f) => `- \`${f}\``).join('\n');
+export function buildResolveConflictsPrompt(params: ResolveConflictsPromptParams): string {
+  const fileLines =
+    params.conflictFiles.length === 0
+      ? "_(no specific files listed — check `git status` to find them)_"
+      : params.conflictFiles.map((f) => `- \`${f}\``).join("\n");
 
-	return CHAT_RESOLVE_CONFLICTS_TEMPLATE
-		.replace('{{AGENT_BRANCH}}', params.agentBranch)
-		.replace('{{SOURCE_BRANCH}}', params.sourceBranch)
-		.replace('{{CONFLICT_FILES}}', fileLines);
+  return CHAT_RESOLVE_CONFLICTS_TEMPLATE.replace("{{AGENT_BRANCH}}", params.agentBranch)
+    .replace("{{SOURCE_BRANCH}}", params.sourceBranch)
+    .replace("{{CONFLICT_FILES}}", fileLines);
 }
 
 /** Initial user message that nudges the agent into the resolve-conflicts task. */
 export function buildResolveConflictsUserMessage(): string {
-	return 'Resolve the merge conflicts described in your system prompt, then run `git merge --continue`.';
+  return "Resolve the merge conflicts described in your system prompt, then run `git merge --continue`.";
 }

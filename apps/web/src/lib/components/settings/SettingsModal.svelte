@@ -1,312 +1,312 @@
 <script lang="ts">
-	import { Dialog as DialogPrimitive } from 'bits-ui';
-	import * as Dialog from '$lib/components/ui/dialog/index.js';
-	import { Button } from '$lib/components/ui/button/index.js';
-	import * as Select from '$lib/components/ui/select';
-	import { Input } from '$lib/components/ui/input';
-	import { SvelteMap } from 'svelte/reactivity';
-	import {
-		Monitor,
-		Sun,
-		Moon,
-		Loader2,
-		ExternalLink,
-		Download,
-		User,
-		Cpu,
-		SlidersHorizontal,
-		RotateCcw,
-		X,
-		Trash2,
-		TriangleAlert,
-	} from '@lucide/svelte';
-	import { getCommitHash } from '$lib/updater/client';
-	import { runCheck as runUpdaterCheck } from '$lib/updater/service';
-	import { isTauri } from '$lib/utils/platform';
-	import { getUser, signOut, resetOnboarding, removeAccount } from '$lib/stores/auth.svelte';
-	import { goto } from '$app/navigation';
-	import {
-		getSettings,
-		updateSettings,
-		getAvailableModels,
-		fetchModels,
-	} from '$lib/stores/settings.svelte';
-	import { getRepositories, deleteRepo } from '$lib/stores/prs.svelte';
-	import {
-		getThemePreference,
-		setThemePreference,
-		type ThemePreference,
-	} from '$lib/stores/theme.svelte';
-	import { API_BASE_URL } from '@revv/shared';
-	import {
-		agentSupportsThinkingEffort,
-		agentSupportsContextWindow,
-		getDefaultModel,
-		getDefaultSuggestionsModel,
-		THINKING_EFFORT_OPTIONS,
-		OPUS_ONLY_EFFORTS,
-	} from '$lib/constants/models';
-	import { authHeaders } from '$lib/utils/session-token';
-	import SignInButton from '$lib/components/auth/SignInButton.svelte';
-	import type { AiAgent, ContextWindow, ThinkingEffort } from '@revv/shared';
+import {
+  Cpu,
+  Download,
+  ExternalLink,
+  Loader2,
+  Monitor,
+  Moon,
+  RotateCcw,
+  SlidersHorizontal,
+  Sun,
+  Trash2,
+  TriangleAlert,
+  User,
+  X,
+} from "@lucide/svelte";
+import type { AiAgent, ContextWindow, ThinkingEffort } from "@revv/shared";
+import { API_BASE_URL } from "@revv/shared";
+import { Dialog as DialogPrimitive } from "bits-ui";
+import { SvelteMap } from "svelte/reactivity";
+import { goto } from "$app/navigation";
+import SignInButton from "$lib/components/auth/SignInButton.svelte";
+import { Button } from "$lib/components/ui/button/index.js";
+import * as Dialog from "$lib/components/ui/dialog/index.js";
+import { Input } from "$lib/components/ui/input";
+import * as Select from "$lib/components/ui/select";
+import {
+  agentSupportsContextWindow,
+  agentSupportsThinkingEffort,
+  getDefaultModel,
+  getDefaultSuggestionsModel,
+  OPUS_ONLY_EFFORTS,
+  THINKING_EFFORT_OPTIONS,
+} from "$lib/constants/models";
+import { getUser, removeAccount, resetOnboarding, signOut } from "$lib/stores/auth.svelte";
+import { deleteRepo, getRepositories } from "$lib/stores/prs.svelte";
+import {
+  fetchModels,
+  getAvailableModels,
+  getSettings,
+  updateSettings,
+} from "$lib/stores/settings.svelte";
+import {
+  getThemePreference,
+  setThemePreference,
+  type ThemePreference,
+} from "$lib/stores/theme.svelte";
+import { getCommitHash } from "$lib/updater/client";
+import { runCheck as runUpdaterCheck } from "$lib/updater/service";
+import { isTauri } from "$lib/utils/platform";
+import { authHeaders } from "$lib/utils/session-token";
 
-	interface Props {
-		open: boolean;
-		onClose: () => void;
-	}
+interface Props {
+  open: boolean;
+  onClose: () => void;
+}
 
-	let { open, onClose }: Props = $props();
+let { open, onClose }: Props = $props();
 
-	// ── Nav sections ──────────────────────────────────────────────────────────
-	type SectionId = 'account' | 'ai' | 'preferences' | 'onboarding' | 'updates' | 'danger';
+// ── Nav sections ──────────────────────────────────────────────────────────
+type SectionId = "account" | "ai" | "preferences" | "onboarding" | "updates" | "danger";
 
-	interface NavItem {
-		id: SectionId;
-		label: string;
-		icon: typeof User;
-		tauriOnly?: boolean;
-	}
+interface NavItem {
+  id: SectionId;
+  label: string;
+  icon: typeof User;
+  tauriOnly?: boolean;
+}
 
-	const navItems: NavItem[] = [
-		{ id: 'account', label: 'Account', icon: User },
-		{ id: 'ai', label: 'AI Configuration', icon: Cpu },
-		{ id: 'preferences', label: 'Preferences', icon: SlidersHorizontal },
-		{ id: 'onboarding', label: 'Onboarding', icon: RotateCcw },
-		{ id: 'updates', label: 'Updates', icon: Download, tauriOnly: true },
-		{ id: 'danger', label: 'Danger Zone', icon: TriangleAlert },
-	];
+const navItems: NavItem[] = [
+  { id: "account", label: "Account", icon: User },
+  { id: "ai", label: "AI Configuration", icon: Cpu },
+  { id: "preferences", label: "Preferences", icon: SlidersHorizontal },
+  { id: "onboarding", label: "Onboarding", icon: RotateCcw },
+  { id: "updates", label: "Updates", icon: Download, tauriOnly: true },
+  { id: "danger", label: "Danger Zone", icon: TriangleAlert },
+];
 
-	const runningInTauri = isTauri();
-	const visibleNavItems = $derived(navItems.filter((n) => !n.tauriOnly || runningInTauri));
+const runningInTauri = isTauri();
+const visibleNavItems = $derived(navItems.filter((n) => !n.tauriOnly || runningInTauri));
 
-	let activeSection = $state<SectionId>('account');
-	let contentEl = $state<HTMLElement | null>(null);
+let activeSection = $state<SectionId>("account");
+let contentEl = $state<HTMLElement | null>(null);
 
-	// ── IntersectionObserver to highlight active nav ──────────────────────────
-	$effect(() => {
-		if (!contentEl || !open) return;
+// ── IntersectionObserver to highlight active nav ──────────────────────────
+$effect(() => {
+  if (!contentEl || !open) return;
 
-		const sectionEls = visibleNavItems
-			.map((n) => contentEl!.querySelector<HTMLElement>(`#section-${n.id}`))
-			.filter((el): el is HTMLElement => el !== null);
+  const sectionEls = visibleNavItems
+    .map((n) => contentEl?.querySelector<HTMLElement>(`#section-${n.id}`))
+    .filter((el): el is HTMLElement => el !== null);
 
-		if (sectionEls.length === 0) return;
+  if (sectionEls.length === 0) return;
 
-		const ratios = new SvelteMap<string, number>();
+  const ratios = new SvelteMap<string, number>();
 
-		const observer = new IntersectionObserver(
-			(entries) => {
-				for (const entry of entries) {
-					ratios.set(entry.target.id, entry.intersectionRatio);
-				}
-				// Pick the section with the highest intersection ratio
-				let bestId: string | null = null;
-				let bestRatio = -1;
-				for (const [id, ratio] of ratios) {
-					if (ratio > bestRatio) {
-						bestRatio = ratio;
-						bestId = id;
-					}
-				}
-				if (bestId) {
-					activeSection = bestId.replace('section-', '') as SectionId;
-				}
-			},
-			{
-				root: contentEl,
-				threshold: [0, 0.1, 0.25, 0.5, 0.75, 1.0],
-			},
-		);
+  const observer = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        ratios.set(entry.target.id, entry.intersectionRatio);
+      }
+      // Pick the section with the highest intersection ratio
+      let bestId: string | null = null;
+      let bestRatio = -1;
+      for (const [id, ratio] of ratios) {
+        if (ratio > bestRatio) {
+          bestRatio = ratio;
+          bestId = id;
+        }
+      }
+      if (bestId) {
+        activeSection = bestId.replace("section-", "") as SectionId;
+      }
+    },
+    {
+      root: contentEl,
+      threshold: [0, 0.1, 0.25, 0.5, 0.75, 1.0],
+    },
+  );
 
-		for (const el of sectionEls) {
-			observer.observe(el);
-		}
+  for (const el of sectionEls) {
+    observer.observe(el);
+  }
 
-		return () => observer.disconnect();
-	});
+  return () => observer.disconnect();
+});
 
-	function scrollToSection(id: SectionId): void {
-		if (!contentEl) return;
-		const el = contentEl.querySelector<HTMLElement>(`#section-${id}`);
-		if (el) {
-			el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-		}
-	}
+function scrollToSection(id: SectionId): void {
+  if (!contentEl) return;
+  const el = contentEl.querySelector<HTMLElement>(`#section-${id}`);
+  if (el) {
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+}
 
-	// ── Avatar ────────────────────────────────────────────────────────────────
-	let userAvatarFailed = $state(false);
-	let lastAvatarUrl = $state<string | undefined>(undefined);
-	$effect(() => {
-		const current = getUser()?.image;
-		if (current !== lastAvatarUrl) {
-			lastAvatarUrl = current;
-			userAvatarFailed = false;
-		}
-	});
+// ── Avatar ────────────────────────────────────────────────────────────────
+let userAvatarFailed = $state(false);
+let lastAvatarUrl = $state<string | undefined>(undefined);
+$effect(() => {
+  const current = getUser()?.image;
+  if (current !== lastAvatarUrl) {
+    lastAvatarUrl = current;
+    userAvatarFailed = false;
+  }
+});
 
-	// ── Sync interval options ─────────────────────────────────────────────────
-	const intervalOptions = [
-		{ label: 'Disabled', value: 0 },
-		{ label: '1 minute', value: 1 },
-		{ label: '5 minutes', value: 5 },
-		{ label: '10 minutes', value: 10 },
-		{ label: '15 minutes', value: 15 },
-		{ label: '30 minutes', value: 30 },
-	];
+// ── Sync interval options ─────────────────────────────────────────────────
+const intervalOptions = [
+  { label: "Disabled", value: 0 },
+  { label: "1 minute", value: 1 },
+  { label: "5 minutes", value: 5 },
+  { label: "10 minutes", value: 10 },
+  { label: "15 minutes", value: 15 },
+  { label: "30 minutes", value: 30 },
+];
 
-	// ── AI Configuration ──────────────────────────────────────────────────────
-	let aiConfigured = $state(false);
-	let aiStatusLoading = $state(true);
-	let modelsLoading = $state(false);
-	let aiAgent = $derived((getSettings()?.aiAgent ?? 'opencode') as AiAgent);
+// ── AI Configuration ──────────────────────────────────────────────────────
+let aiConfigured = $state(false);
+let aiStatusLoading = $state(true);
+let modelsLoading = $state(false);
+let aiAgent = $derived((getSettings()?.aiAgent ?? "opencode") as AiAgent);
 
-	let modelOptions = $derived(getAvailableModels(aiAgent));
-	let currentModel = $derived(getSettings()?.aiModel ?? '');
-	let currentModelLabel = $derived(
-		modelOptions.find((o) => o.value === currentModel)?.label ?? currentModel,
-	);
-	let currentSuggestionsModel = $derived(getSettings()?.aiSuggestionsModel ?? '');
-	let currentSuggestionsModelLabel = $derived(
-		modelOptions.find((o) => o.value === currentSuggestionsModel)?.label ?? currentSuggestionsModel,
-	);
-	let isOpus47 = $derived(currentModel === 'claude-opus-4-7');
-	let showThinkingEffort = $derived(agentSupportsThinkingEffort(aiAgent));
-	let showContextWindow = $derived(agentSupportsContextWindow(aiAgent));
-	let thinkingEffortOptions = $derived(
-		isOpus47
-			? THINKING_EFFORT_OPTIONS
-			: THINKING_EFFORT_OPTIONS.filter((o) => !OPUS_ONLY_EFFORTS.has(o.value)),
-	);
+let modelOptions = $derived(getAvailableModels(aiAgent));
+let currentModel = $derived(getSettings()?.aiModel ?? "");
+let currentModelLabel = $derived(
+  modelOptions.find((o) => o.value === currentModel)?.label ?? currentModel,
+);
+let currentSuggestionsModel = $derived(getSettings()?.aiSuggestionsModel ?? "");
+let currentSuggestionsModelLabel = $derived(
+  modelOptions.find((o) => o.value === currentSuggestionsModel)?.label ?? currentSuggestionsModel,
+);
+let isOpus47 = $derived(currentModel === "claude-opus-4-7");
+let showThinkingEffort = $derived(agentSupportsThinkingEffort(aiAgent));
+let showContextWindow = $derived(agentSupportsContextWindow(aiAgent));
+let thinkingEffortOptions = $derived(
+  isOpus47
+    ? THINKING_EFFORT_OPTIONS
+    : THINKING_EFFORT_OPTIONS.filter((o) => !OPUS_ONLY_EFFORTS.has(o.value)),
+);
 
-	$effect(() => {
-		if (open) {
-			fetchAiStatus();
-		}
-	});
+$effect(() => {
+  if (open) {
+    fetchAiStatus();
+  }
+});
 
-	async function fetchAiStatus(): Promise<void> {
-		aiStatusLoading = true;
-		try {
-			const res = await fetch(`${API_BASE_URL}/api/settings/ai-status`, {
-				headers: authHeaders(),
-			});
-			if (res.ok) {
-				const data = (await res.json()) as { configured: boolean; model: string };
-				aiConfigured = data.configured;
-			}
-		} catch {
-			// Ignore — status will show as unconfigured
-		} finally {
-			aiStatusLoading = false;
-		}
-	}
+async function fetchAiStatus(): Promise<void> {
+  aiStatusLoading = true;
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/settings/ai-status`, {
+      headers: authHeaders(),
+    });
+    if (res.ok) {
+      const data = (await res.json()) as { configured: boolean; model: string };
+      aiConfigured = data.configured;
+    }
+  } catch {
+    // Ignore — status will show as unconfigured
+  } finally {
+    aiStatusLoading = false;
+  }
+}
 
-	async function loadModels(agent: AiAgent): Promise<void> {
-		modelsLoading = true;
-		try {
-			await fetchModels(agent);
-		} finally {
-			modelsLoading = false;
-		}
-	}
+async function loadModels(agent: AiAgent): Promise<void> {
+  modelsLoading = true;
+  try {
+    await fetchModels(agent);
+  } finally {
+    modelsLoading = false;
+  }
+}
 
-	// ── Max turns ─────────────────────────────────────────────────────────────
-	const MAX_TURNS_MIN = 10;
-	const MAX_TURNS_MAX = 500;
-	let maxTurnsDraft = $state<string>(String(getSettings()?.aiMaxTurns ?? 60));
-	let lastCommittedMaxTurns = $state<number | null>(getSettings()?.aiMaxTurns ?? null);
+// ── Max turns ─────────────────────────────────────────────────────────────
+const MAX_TURNS_MIN = 10;
+const MAX_TURNS_MAX = 500;
+let maxTurnsDraft = $state<string>(String(getSettings()?.aiMaxTurns ?? 60));
+let lastCommittedMaxTurns = $state<number | null>(getSettings()?.aiMaxTurns ?? null);
 
-	$effect(() => {
-		const current = getSettings()?.aiMaxTurns;
-		if (typeof current !== 'number') return;
-		if (current !== lastCommittedMaxTurns) {
-			maxTurnsDraft = String(current);
-			lastCommittedMaxTurns = current;
-		}
-	});
+$effect(() => {
+  const current = getSettings()?.aiMaxTurns;
+  if (typeof current !== "number") return;
+  if (current !== lastCommittedMaxTurns) {
+    maxTurnsDraft = String(current);
+    lastCommittedMaxTurns = current;
+  }
+});
 
-	function commitMaxTurns(): void {
-		const parsed = Number.parseInt(maxTurnsDraft, 10);
-		const current = getSettings()?.aiMaxTurns ?? 60;
-		if (!Number.isFinite(parsed)) {
-			maxTurnsDraft = String(current);
-			return;
-		}
-		const clamped = Math.min(MAX_TURNS_MAX, Math.max(MAX_TURNS_MIN, parsed));
-		maxTurnsDraft = String(clamped);
-		if (clamped === current) return;
-		lastCommittedMaxTurns = clamped;
-		void updateSettings({ aiMaxTurns: clamped });
-	}
+function commitMaxTurns(): void {
+  const parsed = Number.parseInt(maxTurnsDraft, 10);
+  const current = getSettings()?.aiMaxTurns ?? 60;
+  if (!Number.isFinite(parsed)) {
+    maxTurnsDraft = String(current);
+    return;
+  }
+  const clamped = Math.min(MAX_TURNS_MAX, Math.max(MAX_TURNS_MIN, parsed));
+  maxTurnsDraft = String(clamped);
+  if (clamped === current) return;
+  lastCommittedMaxTurns = clamped;
+  void updateSettings({ aiMaxTurns: clamped });
+}
 
-	// ── Updates ───────────────────────────────────────────────────────────────
-	let checking = $state(false);
-	const commitHash = getCommitHash();
+// ── Updates ───────────────────────────────────────────────────────────────
+let checking = $state(false);
+const commitHash = getCommitHash();
 
-	async function handleCheckNow(): Promise<void> {
-		checking = true;
-		try {
-			await runUpdaterCheck({ manual: true });
-		} finally {
-			checking = false;
-		}
-	}
+async function handleCheckNow(): Promise<void> {
+  checking = true;
+  try {
+    await runUpdaterCheck({ manual: true });
+  } finally {
+    checking = false;
+  }
+}
 
-	// ── Onboarding ────────────────────────────────────────────────────────────
-	let replaying = $state(false);
+// ── Onboarding ────────────────────────────────────────────────────────────
+let replaying = $state(false);
 
-	async function handleReplayOnboarding(): Promise<void> {
-		replaying = true;
-		try {
-			await resetOnboarding();
-			onClose();
-			await goto('/');
-		} finally {
-			replaying = false;
-		}
-	}
+async function handleReplayOnboarding(): Promise<void> {
+  replaying = true;
+  try {
+    await resetOnboarding();
+    onClose();
+    await goto("/");
+  } finally {
+    replaying = false;
+  }
+}
 
-	// ── Danger Zone ───────────────────────────────────────────────────────────
-	let showDeleteConfirm = $state(false);
-	let deleting = $state(false);
-	let deleteError = $state<string | null>(null);
+// ── Danger Zone ───────────────────────────────────────────────────────────
+let showDeleteConfirm = $state(false);
+let deleting = $state(false);
+let deleteError = $state<string | null>(null);
 
-	let removingRepoId = $state<string | null>(null);
+let removingRepoId = $state<string | null>(null);
 
-	async function handleDeleteRepo(id: string): Promise<void> {
-		removingRepoId = id;
-		try {
-			await deleteRepo(id);
-		} finally {
-			removingRepoId = null;
-		}
-	}
+async function handleDeleteRepo(id: string): Promise<void> {
+  removingRepoId = id;
+  try {
+    await deleteRepo(id);
+  } finally {
+    removingRepoId = null;
+  }
+}
 
-	async function handleRemoveAccount(): Promise<void> {
-		deleting = true;
-		deleteError = null;
-		try {
-			await removeAccount();
-			onClose();
-		} catch (e) {
-			deleteError = e instanceof Error ? e.message : 'Failed to remove account. Please try again.';
-		} finally {
-			deleting = false;
-		}
-	}
+async function handleRemoveAccount(): Promise<void> {
+  deleting = true;
+  deleteError = null;
+  try {
+    await removeAccount();
+    onClose();
+  } catch (e) {
+    deleteError = e instanceof Error ? e.message : "Failed to remove account. Please try again.";
+  } finally {
+    deleting = false;
+  }
+}
 
-	// ── Theme options ────────────────────────────────────────────────────────
+// ── Theme options ────────────────────────────────────────────────────────
 
-	const CONTEXT_WINDOW_OPTIONS: { label: string; value: ContextWindow }[] = [
-		{ label: '200K', value: '200k' },
-		{ label: '1M', value: '1m' },
-	];
+const CONTEXT_WINDOW_OPTIONS: { label: string; value: ContextWindow }[] = [
+  { label: "200K", value: "200k" },
+  { label: "1M", value: "1m" },
+];
 
-	const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[] = [
-		{ value: 'system', label: 'System', icon: Monitor },
-		{ value: 'light', label: 'Light', icon: Sun },
-		{ value: 'dark', label: 'Dark', icon: Moon },
-	];
+const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[] = [
+  { value: "system", label: "System", icon: Monitor },
+  { value: "light", label: "Light", icon: Sun },
+  { value: "dark", label: "Dark", icon: Moon },
+];
 </script>
 
 <DialogPrimitive.Root
@@ -610,10 +610,10 @@
 							<Loader2 size={12} class="animate-spin text-text-muted" />
 							<p class="text-xs text-text-muted">Checking AI status…</p>
 						{:else if aiConfigured}
-							<span class="h-2 w-2 rounded-full bg-green-500 shrink-0"></span>
-							<p class="text-xs text-text-secondary">AI is configured and ready.</p>
-						{:else}
-							<span class="h-2 w-2 rounded-full bg-yellow-500 shrink-0"></span>
+						<span class="h-2 w-2 rounded-full bg-success shrink-0"></span>
+						<p class="text-xs text-text-secondary">AI is configured and ready.</p>
+					{:else}
+						<span class="h-2 w-2 rounded-full bg-warning shrink-0"></span>
 							<p class="text-xs text-text-secondary">AI is not yet configured.</p>
 						{/if}
 					</div>

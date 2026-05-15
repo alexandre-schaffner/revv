@@ -1,23 +1,23 @@
 <script lang="ts" module>
-	// ── ThreadMeta ─────────────────────────────────────────────────────────────
-	// Forked from DiffViewerInner. Same shape so AnnotationThread /
-	// AnnotationCommentInput / mountInto can be shared verbatim.
-	export interface ThreadMeta {
-		threadId: string;
-		status: string;
-		messageCount: number;
-		isExpanded: boolean;
-		isInputActive: boolean;
-		isReplying: boolean;
-		isPending: boolean;
-	}
+// ── ThreadMeta ─────────────────────────────────────────────────────────────
+// Forked from DiffViewerInner. Same shape so AnnotationThread /
+// AnnotationCommentInput / mountInto can be shared verbatim.
+export interface ThreadMeta {
+  threadId: string;
+  status: string;
+  messageCount: number;
+  isExpanded: boolean;
+  isInputActive: boolean;
+  isReplying: boolean;
+  isPending: boolean;
+}
 
-	// ── TokenHoverInfo ─────────────────────────────────────────────────────────
-	export interface TokenHoverInfo {
-		tokenText: string;
-		lineNumber: number;
-		element: HTMLElement;
-	}
+// ── TokenHoverInfo ─────────────────────────────────────────────────────────
+export interface TokenHoverInfo {
+  tokenText: string;
+  lineNumber: number;
+  element: HTMLElement;
+}
 </script>
 
 <script lang="ts">

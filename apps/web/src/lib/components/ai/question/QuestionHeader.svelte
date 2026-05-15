@@ -1,7 +1,7 @@
 <script lang="ts" module>
-	import type { HTMLAttributes } from "svelte/elements";
+import type { HTMLAttributes } from "svelte/elements";
 
-	export type QuestionHeaderProps = HTMLAttributes<HTMLDivElement>;
+export type QuestionHeaderProps = HTMLAttributes<HTMLDivElement>;
 </script>
 
 <script lang="ts">
@@ -62,11 +62,11 @@
 	<h4 class="text-sm font-semibold">Question</h4>
 	<span
 		class={cn(
-			"inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider",
+			"inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold uppercase tracking-wider",
 			c.tone === "pending" &&
 				"bg-accent/10 text-accent",
-			c.tone === "answered" &&
-				"bg-green-500/15 text-green-500",
+		c.tone === "answered" &&
+			"bg-success/15 text-success",
 			c.tone === "rejected" &&
 				"bg-destructive/15 text-destructive",
 			c.tone === "superseded" &&

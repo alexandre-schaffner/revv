@@ -1,5 +1,5 @@
-import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
-import { chatSessions } from './chat-sessions';
+import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { chatSessions } from "./chat-sessions";
 
 /**
  * Plans the agent has presented for approval. Borrows t3code's
@@ -28,31 +28,25 @@ import { chatSessions } from './chat-sessions';
  *                    (today we keep approved/rejected plans visible in history).
  */
 export const chatPlans = sqliteTable(
-	'chat_plans',
-	{
-		id: text('id').primaryKey(),
-		chatSessionId: text('chat_session_id')
-			.notNull()
-			.references(() => chatSessions.id, { onDelete: 'cascade' }),
-		turnId: text('turn_id').notNull(),
-		planMarkdown: text('plan_markdown').notNull(),
-		// 'pending' | 'approved' | 'rejected' | 'superseded'
-		status: text('status').notNull().default('pending'),
-		// 'claude' | 'opencode'
-		source: text('source').notNull(),
-		sequence: integer('sequence').notNull(),
-		createdAt: text('created_at').notNull(),
-		decidedAt: text('decided_at'),
-	},
-	(t) => ({
-		sessionTurnUnique: uniqueIndex('chat_plans_session_turn_unique').on(
-			t.chatSessionId,
-			t.turnId,
-		),
-		sessionSeqUnique: uniqueIndex('chat_plans_session_seq_unique').on(
-			t.chatSessionId,
-			t.sequence,
-		),
-		sessionIdx: index('chat_plans_session_idx').on(t.chatSessionId),
-	}),
+  "chat_plans",
+  {
+    id: text("id").primaryKey(),
+    chatSessionId: text("chat_session_id")
+      .notNull()
+      .references(() => chatSessions.id, { onDelete: "cascade" }),
+    turnId: text("turn_id").notNull(),
+    planMarkdown: text("plan_markdown").notNull(),
+    // 'pending' | 'approved' | 'rejected' | 'superseded'
+    status: text("status").notNull().default("pending"),
+    // 'claude' | 'opencode'
+    source: text("source").notNull(),
+    sequence: integer("sequence").notNull(),
+    createdAt: text("created_at").notNull(),
+    decidedAt: text("decided_at"),
+  },
+  (t) => ({
+    sessionTurnUnique: uniqueIndex("chat_plans_session_turn_unique").on(t.chatSessionId, t.turnId),
+    sessionSeqUnique: uniqueIndex("chat_plans_session_seq_unique").on(t.chatSessionId, t.sequence),
+    sessionIdx: index("chat_plans_session_idx").on(t.chatSessionId),
+  }),
 );

@@ -1,13 +1,13 @@
 <script lang="ts">
-	import { Pencil, Trash2 } from '@lucide/svelte';
+import { Pencil, Trash2 } from "@lucide/svelte";
 
-	interface Props {
-		body: string;
-		onEdit: () => void;
-		onDelete: () => void;
-	}
+interface Props {
+  body: string;
+  onEdit: () => void;
+  onDelete: () => void;
+}
 
-	let { body, onEdit, onDelete }: Props = $props();
+let { body, onEdit, onDelete }: Props = $props();
 </script>
 
 <div class="chip">

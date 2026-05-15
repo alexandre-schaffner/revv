@@ -1,7 +1,6 @@
-import { useState, useEffect, useCallback, useRef } from "react";
-import { requestLs } from "./commands";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getCommandById } from "../../lib/commands";
-import type { CommandEntry } from "../../lib/command-log";
+import { requestLs } from "./commands";
 
 interface FileEntry {
   permissions: string;
@@ -14,7 +13,8 @@ function parseLsLine(line: string): FileEntry | null {
   const parts = line.split(/\s+/);
   if (parts.length < 9) return null;
   const permissions = parts[0]!;
-  if (!permissions.startsWith("d") && !permissions.startsWith("-") && !permissions.startsWith("l")) return null;
+  if (!permissions.startsWith("d") && !permissions.startsWith("-") && !permissions.startsWith("l"))
+    return null;
   const name = parts.slice(8).join(" ");
   if (name === "." || name === "..") return null;
   return {
@@ -74,19 +74,13 @@ export function FilesBlock() {
       </div>
       <div className="flex-1 overflow-y-auto py-1">
         {status === "pending" && (
-          <span className="px-3 py-2 text-xs text-muted-foreground block">
-            Awaiting approval…
-          </span>
+          <span className="px-3 py-2 text-xs text-muted-foreground block">Awaiting approval…</span>
         )}
         {status === "denied" && (
-          <span className="px-3 py-2 text-xs text-muted-foreground block">
-            Command denied.
-          </span>
+          <span className="px-3 py-2 text-xs text-muted-foreground block">Command denied.</span>
         )}
         {status === "done" && files.length === 0 && (
-          <span className="px-3 py-2 text-xs text-muted-foreground block">
-            Empty directory.
-          </span>
+          <span className="px-3 py-2 text-xs text-muted-foreground block">Empty directory.</span>
         )}
         {files.map((file) => (
           <div

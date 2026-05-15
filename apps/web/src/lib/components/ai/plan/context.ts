@@ -1,5 +1,5 @@
 export interface PlanContext {
-	readonly isStreaming: boolean;
+  readonly isStreaming: boolean;
 }
 
 export const PLAN_CTX_KEY = Symbol("ai-plan");

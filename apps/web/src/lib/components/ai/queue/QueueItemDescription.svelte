@@ -1,10 +1,10 @@
 <script lang="ts" module>
-	import type { HTMLAttributes } from "svelte/elements";
+import type { HTMLAttributes } from "svelte/elements";
 
-	export type QueueItemDescriptionProps = HTMLAttributes<HTMLDivElement> & {
-		/** Whether the item is completed. Affects text styling. */
-		completed?: boolean;
-	};
+export type QueueItemDescriptionProps = HTMLAttributes<HTMLDivElement> & {
+  /** Whether the item is completed. Affects text styling. */
+  completed?: boolean;
+};
 </script>
 
 <script lang="ts">

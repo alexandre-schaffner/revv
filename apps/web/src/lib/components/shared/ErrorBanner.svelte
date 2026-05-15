@@ -1,11 +1,12 @@
 <script lang="ts">
-	import * as errors from '$lib/stores/errors.svelte';
+import { X } from "@lucide/svelte";
+import * as errors from "$lib/stores/errors.svelte";
 
-	function formatCountdown(seconds: number): string {
-		const m = Math.floor(seconds / 60);
-		const s = seconds % 60;
-		return m > 0 ? `${m}m ${s}s` : `${s}s`;
-	}
+function formatCountdown(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return m > 0 ? `${m}m ${s}s` : `${s}s`;
+}
 </script>
 
 {#if errors.getError()}
@@ -23,7 +24,7 @@
 			onclick={() => errors.clearError()}
 			aria-label="Dismiss error"
 		>
-			✕
+			<X size={14} />
 		</button>
 	</div>
 {/if}

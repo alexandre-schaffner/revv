@@ -1,14 +1,14 @@
 <script lang="ts">
-	import { Select as SelectPrimitive } from "bits-ui";
-	import { cn } from "$lib/utils.js";
+import { Select as SelectPrimitive } from "bits-ui";
+import { cn } from "$lib/utils.js";
 
-	let {
-		ref = $bindable(null),
-		class: className,
-		sideOffset = 4,
-		children,
-		...restProps
-	}: SelectPrimitive.ContentProps = $props();
+let {
+  ref = $bindable(null),
+  class: className,
+  sideOffset = 4,
+  children,
+  ...restProps
+}: SelectPrimitive.ContentProps = $props();
 </script>
 
 <SelectPrimitive.Portal>

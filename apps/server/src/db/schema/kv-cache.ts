@@ -1,4 +1,4 @@
-import { sqliteTable, text, primaryKey } from 'drizzle-orm/sqlite-core';
+import { primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 /**
  * Generic key/value cache for small metadata blobs — the durable backing store
@@ -14,14 +14,14 @@ import { sqliteTable, text, primaryKey } from 'drizzle-orm/sqlite-core';
  *   `github_etag_cache` instead).
  */
 export const kvCache = sqliteTable(
-	'kv_cache',
-	{
-		ns: text('ns').notNull(),
-		key: text('key').notNull(),
-		valueJson: text('value_json').notNull(),
-		etag: text('etag'),
-		fetchedAt: text('fetched_at').notNull(),
-		expiresAt: text('expires_at'),
-	},
-	(table) => [primaryKey({ columns: [table.ns, table.key] })],
+  "kv_cache",
+  {
+    ns: text("ns").notNull(),
+    key: text("key").notNull(),
+    valueJson: text("value_json").notNull(),
+    etag: text("etag"),
+    fetchedAt: text("fetched_at").notNull(),
+    expiresAt: text("expires_at"),
+  },
+  (table) => [primaryKey({ columns: [table.ns, table.key] })],
 );

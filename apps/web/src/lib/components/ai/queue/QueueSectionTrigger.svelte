@@ -1,7 +1,7 @@
 <script lang="ts" module>
-	export type QueueSectionTriggerProps = {
-		class?: string;
-	};
+export type QueueSectionTriggerProps = {
+  class?: string;
+};
 </script>
 
 <script lang="ts">

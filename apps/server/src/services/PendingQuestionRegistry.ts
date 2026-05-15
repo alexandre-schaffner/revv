@@ -30,28 +30,26 @@
 import type { PermissionResult } from "@anthropic-ai/claude-agent-sdk";
 
 export interface PendingQuestionDeferred {
-	readonly resolve: (result: PermissionResult) => void;
-	readonly reject: (err: unknown) => void;
+  readonly resolve: (result: PermissionResult) => void;
+  readonly reject: (err: unknown) => void;
 }
 
 const registry = new Map<string, PendingQuestionDeferred>();
 
 export function registerPendingQuestion(
-	providerRequestId: string,
-	deferred: PendingQuestionDeferred,
+  providerRequestId: string,
+  deferred: PendingQuestionDeferred,
 ): void {
-	registry.set(providerRequestId, deferred);
+  registry.set(providerRequestId, deferred);
 }
 
 /**
  * Look up and remove the deferred. Returns null if the entry is gone (server
  * restarted, driver already cleaned up, or the answer was already submitted).
  */
-export function takePendingQuestion(
-	providerRequestId: string,
-): PendingQuestionDeferred | null {
-	const deferred = registry.get(providerRequestId);
-	if (!deferred) return null;
-	registry.delete(providerRequestId);
-	return deferred;
+export function takePendingQuestion(providerRequestId: string): PendingQuestionDeferred | null {
+  const deferred = registry.get(providerRequestId);
+  if (!deferred) return null;
+  registry.delete(providerRequestId);
+  return deferred;
 }

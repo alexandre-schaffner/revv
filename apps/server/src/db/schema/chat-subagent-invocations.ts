@@ -1,5 +1,5 @@
-import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
-import { chatSessions } from './chat-sessions';
+import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { chatSessions } from "./chat-sessions";
 
 /**
  * Sub-agent invocations within a chat turn. The parent agent delegates work
@@ -23,44 +23,44 @@ import { chatSessions } from './chat-sessions';
  * idempotent upsert.
  */
 export const chatSubagentInvocations = sqliteTable(
-	'chat_subagent_invocations',
-	{
-		id: text('id').primaryKey(),
-		chatSessionId: text('chat_session_id')
-			.notNull()
-			.references(() => chatSessions.id, { onDelete: 'cascade' }),
-		parentTurnId: text('parent_turn_id').notNull(),
-		providerCallId: text('provider_call_id').notNull(),
-		// 'general-purpose' for Claude built-in, or the named agent from opencode
-		// settings. Display-only — we don't gate behaviour on it.
-		subagentType: text('subagent_type').notNull(),
-		// Short human label ("Search for X across repo"). Comes from Task.input
-		// .description (Claude) or the AgentPart's description (opencode).
-		description: text('description').notNull(),
-		// Full prompt handed to the sub-agent. Kept in case the UI wants to
-		// reveal it on demand or for parity debugging.
-		prompt: text('prompt').notNull(),
-		// 'running' | 'completed' | 'errored'
-		status: text('status').notNull().default('running'),
-		// Final result text. Claude: from the matching tool_result block's
-		// `content`. Opencode: final assistant text from the sub-agent's
-		// message (best-effort). Nullable while running.
-		result: text('result'),
-		// 'claude' | 'opencode'
-		source: text('source').notNull(),
-		sequence: integer('sequence').notNull(),
-		startedAt: text('started_at').notNull(),
-		completedAt: text('completed_at'),
-	},
-	(t) => ({
-		sessionCallUnique: uniqueIndex(
-			'chat_subagent_invocations_session_call_unique',
-		).on(t.chatSessionId, t.providerCallId),
-		sessionSeqUnique: uniqueIndex(
-			'chat_subagent_invocations_session_seq_unique',
-		).on(t.chatSessionId, t.sequence),
-		sessionIdx: index('chat_subagent_invocations_session_idx').on(
-			t.chatSessionId,
-		),
-	}),
+  "chat_subagent_invocations",
+  {
+    id: text("id").primaryKey(),
+    chatSessionId: text("chat_session_id")
+      .notNull()
+      .references(() => chatSessions.id, { onDelete: "cascade" }),
+    parentTurnId: text("parent_turn_id").notNull(),
+    providerCallId: text("provider_call_id").notNull(),
+    // 'general-purpose' for Claude built-in, or the named agent from opencode
+    // settings. Display-only — we don't gate behaviour on it.
+    subagentType: text("subagent_type").notNull(),
+    // Short human label ("Search for X across repo"). Comes from Task.input
+    // .description (Claude) or the AgentPart's description (opencode).
+    description: text("description").notNull(),
+    // Full prompt handed to the sub-agent. Kept in case the UI wants to
+    // reveal it on demand or for parity debugging.
+    prompt: text("prompt").notNull(),
+    // 'running' | 'completed' | 'errored'
+    status: text("status").notNull().default("running"),
+    // Final result text. Claude: from the matching tool_result block's
+    // `content`. Opencode: final assistant text from the sub-agent's
+    // message (best-effort). Nullable while running.
+    result: text("result"),
+    // 'claude' | 'opencode'
+    source: text("source").notNull(),
+    sequence: integer("sequence").notNull(),
+    startedAt: text("started_at").notNull(),
+    completedAt: text("completed_at"),
+  },
+  (t) => ({
+    sessionCallUnique: uniqueIndex("chat_subagent_invocations_session_call_unique").on(
+      t.chatSessionId,
+      t.providerCallId,
+    ),
+    sessionSeqUnique: uniqueIndex("chat_subagent_invocations_session_seq_unique").on(
+      t.chatSessionId,
+      t.sequence,
+    ),
+    sessionIdx: index("chat_subagent_invocations_session_idx").on(t.chatSessionId),
+  }),
 );

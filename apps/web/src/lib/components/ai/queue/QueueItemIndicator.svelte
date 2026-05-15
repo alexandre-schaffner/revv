@@ -1,10 +1,10 @@
 <script lang="ts" module>
-	import type { HTMLAttributes } from "svelte/elements";
+import type { HTMLAttributes } from "svelte/elements";
 
-	export type QueueItemIndicatorProps = HTMLAttributes<HTMLSpanElement> & {
-		/** Whether the item is completed. */
-		completed?: boolean;
-	};
+export type QueueItemIndicatorProps = HTMLAttributes<HTMLSpanElement> & {
+  /** Whether the item is completed. */
+  completed?: boolean;
+};
 </script>
 
 <script lang="ts">
@@ -20,7 +20,7 @@
 <span
 	data-slot="queue-item-indicator"
 	class={cn(
-		"inline-block size-2.5 shrink-0 rounded-full border",
+		"mt-0.5 inline-block size-2.5 shrink-0 rounded-full border",
 		completed
 			? "border-muted-foreground/20 bg-muted-foreground/10"
 			: "border-muted-foreground/50",

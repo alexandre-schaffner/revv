@@ -74,17 +74,9 @@ All packages extend `tsconfig.base.json` which enables `strict`, `exactOptionalP
 
 **Always use icons, never emojis.** For any glyph in the UI — buttons, fallback avatars, placeholders, status indicators, empty states, inline hints — use an icon component (`@lucide/svelte`, or an inline SVG for brand/octicon-style marks). Do not use emoji characters (🎉, ✅, ❌, 👤, etc.) in rendered UI, toast messages, or component text. Existing Lucide imports are the preferred source; only inline SVG when no Lucide equivalent fits.
 
-**Motion: pick a token or preset, never an inline number.** Every duration and easing in the UI must come from the motion system. No raw `duration-150`, no inline `cubic-bezier(...)`, no hand-typed `220ms`. The system has three call patterns:
-
-1. **CSS keyframes / variables** — for bits-ui primitives whose animations are `[data-state]`-driven (Dialog/Popover/Tooltip/Select). Reference `var(--duration-quick) var(--ease-out-expo)` or use the shared `@keyframes motion-*-in` defined at the bottom of `apps/web/src/app.css`. Tailwind utilities like `duration-snap`, `duration-quick`, `duration-smooth`, `ease-soft`, `ease-out-expo`, `ease-standard` are auto-generated from `@theme` and are the preferred shape inside class strings.
-2. **Svelte transitions** — for app code with `transition:`. Import named factories from `$lib/motion`: `panelSlide`, `dialogSpring`, `popoverFade`, `tooltipPop`, `commandPaletteEnter`, `listItemEnter`, `softFade`. Each honors `prefers-reduced-motion` automatically.
-3. **Actions** — for state-change pulses/flashes/shakes on existing elements. Import `motion` from `$lib/motion` and use `<div use:motion={{ preset: 'pulse', trigger: someState }}>`. The `trigger` value re-fires on change.
-
-Spring presets and stagger steps live in `src/lib/motion/tokens.ts` — those are TS-only because their consumers are JS. Durations and easings live in both `app.css` and `tokens.ts` (hand-synced, comments cross-reference).
+**Motion: use Tailwind duration/easing utilities and CSS variables only.** Prefer `duration-snap`, `duration-quick`, `duration-smooth`, `ease-soft`, `ease-out-expo`, `ease-standard` from the `@theme` block in `app.css`. For bits-ui primitives use `var(--duration-quick) var(--ease-out-expo)` and the shared `@keyframes motion-*-in` in `app.css`. No `$lib/motion` module exists — do not create one. No raw `duration-150`, no inline `cubic-bezier(...)`, no hand-typed `220ms`.
 
 **Reduced-motion contract.** A global `@media (prefers-reduced-motion: reduce)` block in `app.css` collapses every transition/animation to ~1ms. Animations that *carry meaning* (e.g., the streaming-AI cursor) opt back in with the `.motion-essential-*` utility class. Don't bypass the global rule with inline `!important`; if you need an opt-back-in, name it and document why.
-
-For layout-aware transitions Svelte's built-ins can't handle (shared-element morphs, FLIP child reflow), use `src/lib/motion/layout.ts` — the only file that imports the full `motion` package. Everything else uses `motion/mini` or pure CSS.
 
 ## Environment
 

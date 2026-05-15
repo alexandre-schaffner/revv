@@ -8,7 +8,7 @@
  *   - 1s and up renders as one decimal second: "1.8s".
  */
 export function formatDuration(ms: number): string {
-	if (ms < 10) return '0ms';
-	if (ms < 1000) return `${Math.round(ms)}ms`;
-	return `${(ms / 1000).toFixed(1)}s`;
+  if (ms < 10) return "0ms";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
 }

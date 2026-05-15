@@ -23,10 +23,10 @@ import { serverEnv } from "../config";
  * where there is no TTY and a hanging credential helper would freeze the job.
  */
 const GIT_ENV: Record<string, string> = {
-	...process.env,
-	GIT_TERMINAL_PROMPT: "0",
-	GIT_ASKPASS: "echo",
-	GIT_SSH_COMMAND: "ssh -o BatchMode=yes -o StrictHostKeyChecking=no",
+  ...process.env,
+  GIT_TERMINAL_PROMPT: "0",
+  GIT_ASKPASS: "echo",
+  GIT_SSH_COMMAND: "ssh -o BatchMode=yes -o StrictHostKeyChecking=no",
 } as Record<string, string>;
 
 // ── Subprocess registry + signal handlers ────────────────────────────────────
@@ -46,30 +46,40 @@ const GIT_ENV: Record<string, string> = {
 //
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SpawnedProc = ReturnType<typeof Bun.spawn> & {
-	exited: Promise<number>;
-	pid: number;
-	kill: (sig?: number | string) => void;
+  exited: Promise<number>;
+  pid: number;
+  kill: (sig?: number | string) => void;
 };
 const activeProcs = new Set<SpawnedProc>();
 
 let signalHandlersInstalled = false;
 export function ensureSignalHandlersInstalled(): void {
-	if (signalHandlersInstalled) return;
-	signalHandlersInstalled = true;
-	const killAll = () => {
-		for (const proc of activeProcs) {
-			try { proc.kill("SIGTERM"); } catch { /* already dead */ }
-		}
-		setTimeout(() => {
-			for (const proc of activeProcs) {
-				try { proc.kill("SIGKILL"); } catch { /* already dead */ }
-			}
-		}, 2_000).unref?.();
-	};
-	process.once("SIGTERM", killAll);
-	process.once("SIGINT", killAll);
-	process.once("SIGHUP", killAll);
-	process.once("beforeExit", killAll);
+  if (signalHandlersInstalled) return;
+  signalHandlersInstalled = true;
+  const killAll = () => {
+    for (const proc of activeProcs) {
+      try {
+        proc.kill("SIGTERM");
+      } catch {
+        /* already dead */
+      }
+    }
+    // Grace period before escalating SIGTERM -> SIGKILL on process shutdown.
+    const SIGKILL_GRACE_MS = 2_000;
+    setTimeout(() => {
+      for (const proc of activeProcs) {
+        try {
+          proc.kill("SIGKILL");
+        } catch {
+          /* already dead */
+        }
+      }
+    }, SIGKILL_GRACE_MS).unref?.();
+  };
+  process.once("SIGTERM", killAll);
+  process.once("SIGINT", killAll);
+  process.once("SIGHUP", killAll);
+  process.once("beforeExit", killAll);
 }
 
 // ── Subprocess runners ───────────────────────────────────────────────────────
@@ -84,102 +94,110 @@ export function ensureSignalHandlersInstalled(): void {
  * own error messages without having to consume the streams themselves.
  */
 export async function spawnGit(
-	args: string[],
-	opts: {
-		cwd?: string;
-		timeoutMs: number;
-		captureStdout?: boolean;
-		env?: Record<string, string>;
-	},
+  args: string[],
+  opts: {
+    cwd?: string;
+    timeoutMs: number;
+    captureStdout?: boolean;
+    env?: Record<string, string>;
+  },
 ): Promise<{ exitCode: number; stdout: string; stderrTail: string; timedOut: boolean }> {
-	ensureSignalHandlersInstalled();
+  ensureSignalHandlersInstalled();
 
-	const proc = Bun.spawn(["git", ...args], {
-		...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
-		stdout: opts.captureStdout ? "pipe" : "ignore",
-		stderr: "pipe",
-		stdin: "ignore",
-		env: opts.env ?? GIT_ENV,
-	}) as unknown as SpawnedProc;
+  const proc = Bun.spawn(["git", ...args], {
+    ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
+    stdout: opts.captureStdout ? "pipe" : "ignore",
+    stderr: "pipe",
+    stdin: "ignore",
+    env: opts.env ?? GIT_ENV,
+  }) as unknown as SpawnedProc;
 
-	activeProcs.add(proc);
+  activeProcs.add(proc);
 
-	let stderrTail = "";
-	const stderrDrain = (async () => {
-		try {
-			const reader = (proc.stderr as ReadableStream<Uint8Array>).getReader();
-			const decoder = new TextDecoder();
-			while (true) {
-				const { done, value } = await reader.read();
-				if (done) break;
-				stderrTail += decoder.decode(value, { stream: true });
-				if (stderrTail.length > 16_384) {
-					stderrTail = stderrTail.slice(-16_384);
-				}
-			}
-		} catch { /* stream closed by kill — fine */ }
-	})();
+  let stderrTail = "";
+  const stderrDrain = (async () => {
+    try {
+      const reader = (proc.stderr as ReadableStream<Uint8Array>).getReader();
+      const decoder = new TextDecoder();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        stderrTail += decoder.decode(value, { stream: true });
+        if (stderrTail.length > 16_384) {
+          stderrTail = stderrTail.slice(-16_384);
+        }
+      }
+    } catch {
+      /* stream closed by kill — fine */
+    }
+  })();
 
-	let stdout = "";
-	const stdoutDrain = opts.captureStdout
-		? (async () => {
-			try {
-				const reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();
-				const decoder = new TextDecoder();
-				while (true) {
-					const { done, value } = await reader.read();
-					if (done) break;
-					stdout += decoder.decode(value, { stream: true });
-				}
-			} catch { /* stream closed by kill — fine */ }
-		})()
-		: Promise.resolve();
+  let stdout = "";
+  const stdoutDrain = opts.captureStdout
+    ? (async () => {
+        try {
+          const reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();
+          const decoder = new TextDecoder();
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            stdout += decoder.decode(value, { stream: true });
+          }
+        } catch {
+          /* stream closed by kill — fine */
+        }
+      })()
+    : Promise.resolve();
 
-	let timedOut = false;
-	let killEscalation: ReturnType<typeof setTimeout> | undefined;
-	const timer = setTimeout(() => {
-		timedOut = true;
-		try { proc.kill("SIGTERM"); } catch { /* already dead */ }
-		killEscalation = setTimeout(() => {
-			try { proc.kill("SIGKILL"); } catch { /* already dead */ }
-		}, 5_000);
-		killEscalation.unref?.();
-	}, opts.timeoutMs);
+  let timedOut = false;
+  let killEscalation: ReturnType<typeof setTimeout> | undefined;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    try {
+      proc.kill("SIGTERM");
+    } catch {
+      /* already dead */
+    }
+    killEscalation = setTimeout(() => {
+      try {
+        proc.kill("SIGKILL");
+      } catch {
+        /* already dead */
+      }
+    }, 5_000);
+    killEscalation.unref?.();
+  }, opts.timeoutMs);
 
-	try {
-		await proc.exited;
-		await Promise.allSettled([stderrDrain, stdoutDrain]);
-		return {
-			exitCode: proc.exitCode ?? -1,
-			stdout,
-			stderrTail: stderrTail.trim(),
-			timedOut,
-		};
-	} finally {
-		clearTimeout(timer);
-		if (killEscalation) clearTimeout(killEscalation);
-		activeProcs.delete(proc);
-	}
+  try {
+    await proc.exited;
+    await Promise.allSettled([stderrDrain, stdoutDrain]);
+    return {
+      exitCode: proc.exitCode ?? -1,
+      stdout,
+      stderrTail: stderrTail.trim(),
+      timedOut,
+    };
+  } finally {
+    clearTimeout(timer);
+    if (killEscalation) clearTimeout(killEscalation);
+    activeProcs.delete(proc);
+  }
 }
 
-export async function runGit(
-	args: string[],
-	cwd?: string,
-	timeoutMs = 120_000,
-): Promise<void> {
-	const result = await spawnGit(args, {
-		...(cwd !== undefined ? { cwd } : {}),
-		timeoutMs,
-	});
-	if (result.timedOut) {
-		throw new Error(
-			`git ${args[0]} timed out after ${timeoutMs / 1000}s` +
-			(result.stderrTail ? `; tail: ${result.stderrTail.slice(-512)}` : ""),
-		);
-	}
-	if (result.exitCode !== 0) {
-		throw new Error(`git ${args[0]} failed: ${result.stderrTail}`);
-	}
+export async function runGit(args: string[], cwd?: string, timeoutMs = 120_000): Promise<void> {
+  const result = await spawnGit(args, {
+    ...(cwd !== undefined ? { cwd } : {}),
+    timeoutMs,
+  });
+  if (result.timedOut) {
+    throw new Error(
+      `git ${args[0]} timed out after ${timeoutMs / 1000}s` +
+        (result.stderrTail ? `; tail: ${result.stderrTail.slice(-512)}` : ""),
+    );
+  }
+  if (result.exitCode !== 0) {
+    throw new Error(`git ${args[0]} failed: ${result.stderrTail}`);
+  }
 }
 
 /**
@@ -188,38 +206,35 @@ export async function runGit(
  * (`ls-tree`, `rev-parse`, etc.) where the output is the whole point.
  */
 export async function runGitCapture(
-	args: string[],
-	cwd: string,
-	timeoutMs = 60_000,
+  args: string[],
+  cwd: string,
+  timeoutMs = 60_000,
 ): Promise<string> {
-	const result = await spawnGit(args, { cwd, timeoutMs, captureStdout: true });
-	if (result.timedOut) {
-		throw new Error(
-			`git ${args[0]} timed out after ${timeoutMs / 1000}s` +
-			(result.stderrTail ? `; tail: ${result.stderrTail.slice(-512)}` : ""),
-		);
-	}
-	if (result.exitCode !== 0) {
-		throw new Error(`git ${args[0]} failed: ${result.stderrTail}`);
-	}
-	return result.stdout;
+  const result = await spawnGit(args, { cwd, timeoutMs, captureStdout: true });
+  if (result.timedOut) {
+    throw new Error(
+      `git ${args[0]} timed out after ${timeoutMs / 1000}s` +
+        (result.stderrTail ? `; tail: ${result.stderrTail.slice(-512)}` : ""),
+    );
+  }
+  if (result.exitCode !== 0) {
+    throw new Error(`git ${args[0]} failed: ${result.stderrTail}`);
+  }
+  return result.stdout;
 }
 
 /** Race a git clone against a timeout, killing the process if it exceeds the limit. */
-export async function runGitCloneWithTimeout(
-	args: string[],
-	timeoutMs: number,
-): Promise<void> {
-	const result = await spawnGit(args, { timeoutMs });
-	if (result.timedOut) {
-		throw new Error(
-			`git clone timed out after ${timeoutMs / 1000}s` +
-			(result.stderrTail ? `; tail: ${result.stderrTail.slice(-512)}` : ""),
-		);
-	}
-	if (result.exitCode !== 0) {
-		throw new Error(`git clone failed: ${result.stderrTail}`);
-	}
+export async function runGitCloneWithTimeout(args: string[], timeoutMs: number): Promise<void> {
+  const result = await spawnGit(args, { timeoutMs });
+  if (result.timedOut) {
+    throw new Error(
+      `git clone timed out after ${timeoutMs / 1000}s` +
+        (result.stderrTail ? `; tail: ${result.stderrTail.slice(-512)}` : ""),
+    );
+  }
+  if (result.exitCode !== 0) {
+    throw new Error(`git clone failed: ${result.stderrTail}`);
+  }
 }
 
 /**
@@ -228,16 +243,16 @@ export async function runGitCloneWithTimeout(
  * silently swallowed. Returns true if the process exited 0 within the budget.
  */
 export async function runGitBestEffort(
-	args: string[],
-	cwd: string,
-	timeoutMs = 10_000,
+  args: string[],
+  cwd: string,
+  timeoutMs = 10_000,
 ): Promise<boolean> {
-	try {
-		const result = await spawnGit(args, { cwd, timeoutMs });
-		return !result.timedOut && result.exitCode === 0;
-	} catch {
-		return false;
-	}
+  try {
+    const result = await spawnGit(args, { cwd, timeoutMs });
+    return !result.timedOut && result.exitCode === 0;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -252,23 +267,22 @@ export async function runGitBestEffort(
  * matching processes are all silently ignored.
  */
 export async function killStaleCloneProcesses(): Promise<void> {
-	try {
-		const escaped = serverEnv.cloneDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-		const proc = Bun.spawn(
-			[
-				"pkill",
-				"-TERM",
-				"-f",
-				`git (clone|fetch|index-pack|remote-https).*${escaped}`,
-			],
-			{ stdout: "ignore", stderr: "ignore", stdin: "ignore" },
-		);
-		const timer = setTimeout(() => {
-			try { proc.kill(); } catch { /* noop */ }
-		}, 5_000);
-		await proc.exited;
-		clearTimeout(timer);
-	} catch {
-		// pkill missing on this OS or otherwise unavailable — nothing we can do.
-	}
+  try {
+    const escaped = serverEnv.cloneDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const proc = Bun.spawn(
+      ["pkill", "-TERM", "-f", `git (clone|fetch|index-pack|remote-https).*${escaped}`],
+      { stdout: "ignore", stderr: "ignore", stdin: "ignore" },
+    );
+    const timer = setTimeout(() => {
+      try {
+        proc.kill();
+      } catch {
+        /* noop */
+      }
+    }, 5_000);
+    await proc.exited;
+    clearTimeout(timer);
+  } catch {
+    // pkill missing on this OS or otherwise unavailable — nothing we can do.
+  }
 }

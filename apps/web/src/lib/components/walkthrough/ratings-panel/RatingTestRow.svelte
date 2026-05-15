@@ -1,92 +1,79 @@
 <script lang="ts">
-    import {
-        Check,
-        AlertCircle,
-        X,
-        Loader2,
-        ChevronRight,
-    } from "@lucide/svelte";
-    import * as Collapsible from "$lib/components/ui/collapsible";
-    import type {
-        WalkthroughRating,
-        WalkthroughBlock,
-        RatingAxis,
-        Confidence,
-    } from "@revv/shared";
-    import { RATING_AXIS_LABELS } from "@revv/shared";
-    import RatingExpandedBody from "./RatingExpandedBody.svelte";
+import { AlertCircle, Check, ChevronRight, Loader2, X } from "@lucide/svelte";
+import type { Confidence, RatingAxis, WalkthroughBlock, WalkthroughRating } from "@revv/shared";
+import { RATING_AXIS_LABELS } from "@revv/shared";
+import * as Collapsible from "$lib/components/ui/collapsible";
+import RatingExpandedBody from "./RatingExpandedBody.svelte";
 
-    export type RowState = "queued" | "running" | "resolved";
+export type RowState = "queued" | "running" | "resolved";
 
-    interface Props {
-        axis: RatingAxis;
-        rating: WalkthroughRating | null;
-        state: RowState;
-        /** Full ordered block list — needed to resolve a blockId to a step N. */
-        blocks: WalkthroughBlock[];
-        open: boolean;
-        /** Triggered when user clicks the row header. */
-        onToggle: () => void;
-        /** Jump to walkthrough block (from block-link chips). */
-        onJump: (blockId: string) => void;
-        /** Per-row focus/navigation — the trigger element, bound upward so the
-         *  orchestrator can manage ArrowUp/ArrowDown/Home/End navigation. */
-        triggerRef?: HTMLElement | null;
-    }
+interface Props {
+  axis: RatingAxis;
+  rating: WalkthroughRating | null;
+  state: RowState;
+  /** Full ordered block list — needed to resolve a blockId to a step N. */
+  blocks: WalkthroughBlock[];
+  open: boolean;
+  /** Triggered when user clicks the row header. */
+  onToggle: () => void;
+  /** Jump to walkthrough block (from block-link chips). */
+  onJump: (blockId: string) => void;
+  /** Per-row focus/navigation — the trigger element, bound upward so the
+   *  orchestrator can manage ArrowUp/ArrowDown/Home/End navigation. */
+  triggerRef?: HTMLElement | null;
+}
 
-    let {
-        axis,
-        rating,
-        state,
-        blocks,
-        open,
-        onToggle,
-        onJump,
-        triggerRef = $bindable(null),
-    }: Props = $props();
+let {
+  axis,
+  rating,
+  state,
+  blocks,
+  open,
+  onToggle,
+  onJump,
+  triggerRef = $bindable(null),
+}: Props = $props();
 
-    // Friendly confidence shorthand used in the row chip. Falls back to "" for
-    // queued/running rows — they don't have a confidence value yet.
-    const confidenceLabels: Record<Confidence, string> = {
-        low: "LOW",
-        medium: "MED",
-        high: "HIGH",
-    };
+// Friendly confidence shorthand used in the row chip. Falls back to "" for
+// queued/running rows — they don't have a confidence value yet.
+const confidenceLabels: Record<Confidence, string> = {
+  low: "LOW",
+  medium: "MED",
+  high: "HIGH",
+};
 
-    const confidenceShort: Record<Confidence, string> = {
-        low: "L",
-        medium: "M",
-        high: "H",
-    };
+const confidenceShort: Record<Confidence, string> = {
+  low: "L",
+  medium: "M",
+  high: "H",
+};
 
-    // The row's visual "verdict class" drives both the gutter color and the
-    // flash keyframe. For queued/running we use a neutral class so the gutter
-    // reads as "not yet scored" rather than accidentally green.
-    const verdictClass = $derived(
-        rating ? `row--${rating.verdict}` : `row--pending`,
-    );
+// The row's visual "verdict class" drives both the gutter color and the
+// flash keyframe. For queued/running we use a neutral class so the gutter
+// reads as "not yet scored" rather than accidentally green.
+const verdictClass = $derived(rating ? `row--${rating.verdict}` : `row--pending`);
 
-    const axisLabel = $derived(RATING_AXIS_LABELS[axis]);
+const axisLabel = $derived(RATING_AXIS_LABELS[axis]);
 
-    // Rationale preview — "queued" / "running…" placeholders so the row has
-    // something to say before the rating resolves. Past-tense for queued, with
-    // a trailing ellipsis for running to telegraph activity.
-    const rationalePreview = $derived.by(() => {
-        if (state === "queued") return "queued";
-        if (state === "running") return "running…";
-        return rating?.rationale ?? "";
-    });
+// Rationale preview — "queued" / "running…" placeholders so the row has
+// something to say before the rating resolves. Past-tense for queued, with
+// a trailing ellipsis for running to telegraph activity.
+const rationalePreview = $derived.by(() => {
+  if (state === "queued") return "queued";
+  if (state === "running") return "running…";
+  return rating?.rationale ?? "";
+});
 
-    // Vitest-style spoken label so a screen-reader user hears e.g.
-    // "Correctness: passed with high confidence" rather than just "button".
-    const ariaLabel = $derived.by(() => {
-        if (state === "queued") return `${axisLabel}: queued`;
-        if (state === "running") return `${axisLabel}: running`;
-        if (!rating) return `${axisLabel}: unknown`;
-        return `${axisLabel}: ${rating.verdict} with ${rating.confidence} confidence`;
-    });
+// Vitest-style spoken label so a screen-reader user hears e.g.
+// "Correctness: passed with high confidence" rather than just "button".
+const ariaLabel = $derived.by(() => {
+  if (state === "queued") return `${axisLabel}: queued`;
+  if (state === "running") return `${axisLabel}: running`;
+  if (!rating) return `${axisLabel}: unknown`;
+  return `${axisLabel}: ${rating.verdict} with ${rating.confidence} confidence`;
+});
 
-    const isDisabled = $derived(state !== "resolved");
+const isDisabled = $derived(state !== "resolved");
 </script>
 
 <li

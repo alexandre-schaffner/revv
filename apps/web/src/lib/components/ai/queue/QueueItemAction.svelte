@@ -1,7 +1,7 @@
 <script lang="ts" module>
-	import type { ButtonProps } from "$lib/components/ui/button/index.js";
+import type { ButtonProps } from "$lib/components/ui/button/index.js";
 
-	export type QueueItemActionProps = Omit<ButtonProps, "variant" | "size">;
+export type QueueItemActionProps = Omit<ButtonProps, "variant" | "size">;
 </script>
 
 <script lang="ts">

@@ -1,499 +1,508 @@
 <script lang="ts">
-	import { mount, onDestroy, onMount, tick, unmount, untrack, type Component } from 'svelte';
-	import { X, PanelLeftClose, PanelLeftOpen, MessageSquare, Send, Trash2, GitMerge, Loader2 } from '@lucide/svelte';
-	import {
-		FileDiff as PierreFileDiff,
-		parseDiffFromFile,
-		type DiffLineAnnotation,
-		type FileDiffMetadata,
-		type FileDiffOptions,
-	} from '@pierre/diffs';
-	import { FileTree, type GitStatusEntry } from '@pierre/trees';
-	import { SvelteMap } from 'svelte/reactivity';
-	import { workerManager } from '$lib/utils/worker-pool';
-	import AnnotationCommentInput from './AnnotationCommentInput.svelte';
-	import ProposedCommentChip from './ProposedCommentChip.svelte';
-	import { getDiffMode, setDiffMode } from '$lib/stores/review.svelte';
-	import {
-		addProposedComment,
-		getProposedComments,
-		isChatStreaming,
-		removeProposedComment,
-		sendProposedFeedback,
-		updateProposedComment,
-		discardProposedCommitAction,
-		cherryPickProposedCommitAction,
-		isDiscardingCommit,
-		isCherryPickingCommit,
-		type ProposedComment,
-	} from '$lib/stores/chat.svelte';
-	import type { ProposedDiffFile } from '$lib/api/chat';
+import {
+  GitMerge,
+  Loader2,
+  MessageSquare,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Send,
+  Trash2,
+  X,
+} from "@lucide/svelte";
+import {
+  type DiffLineAnnotation,
+  type FileDiffMetadata,
+  type FileDiffOptions,
+  FileDiff as PierreFileDiff,
+  parseDiffFromFile,
+} from "@pierre/diffs";
+import { FileTree, type GitStatusEntry } from "@pierre/trees";
+import { type Component, mount, onDestroy, onMount, tick, unmount, untrack } from "svelte";
+import { SvelteMap } from "svelte/reactivity";
+import type { ProposedDiffFile } from "$lib/api/chat";
+import {
+  addProposedComment,
+  cherryPickProposedCommitAction,
+  discardProposedCommitAction,
+  getProposedComments,
+  isChatStreaming,
+  isCherryPickingCommit,
+  isDiscardingCommit,
+  type ProposedComment,
+  removeProposedComment,
+  sendProposedFeedback,
+  updateProposedComment,
+} from "$lib/stores/chat.svelte";
+import { getDiffMode, setDiffMode } from "$lib/stores/review.svelte";
+import { workerManager } from "$lib/utils/worker-pool";
+import AnnotationCommentInput from "./AnnotationCommentInput.svelte";
+import ProposedCommentChip from "./ProposedCommentChip.svelte";
 
-	interface Props {
-		prId: string;
-		sha: string;
-		subject: string;
-		fileContents: ProposedDiffFile[] | null;
-		onClose: () => void;
-	}
+interface Props {
+  prId: string;
+  sha: string;
+  subject: string;
+  fileContents: ProposedDiffFile[] | null;
+  onClose: () => void;
+}
 
-	let { prId, sha, subject, fileContents, onClose }: Props = $props();
+let { prId, sha, subject, fileContents, onClose }: Props = $props();
 
-	// Build non-partial FileDiffMetadata from full file pairs. `isPartial: false`
-	// is what unlocks the line-info separator's expand controls — Pierre gates
-	// `isExpandable` on `!fileDiff.isPartial` (DiffHunksRenderer.js).
-	// Binary files (server returns both contents as null) get skipped entirely.
-	const files: FileDiffMetadata[] = $derived(
-		fileContents == null
-			? []
-			: (() => {
-					const out: FileDiffMetadata[] = [];
-					for (let i = 0; i < fileContents.length; i++) {
-						const f = fileContents[i];
-						if (!f || f.binary) continue;
-						const oldName = f.oldPath ?? f.path;
-						const newName = f.path;
-						const cacheKeyBase = `chat-diff-${sha}-${i}`;
-						try {
-							const meta = parseDiffFromFile(
-								{
-									name: oldName,
-									contents: f.oldContent ?? '',
-									cacheKey: `${cacheKeyBase}-old`,
-								},
-								{
-									name: newName,
-									contents: f.newContent ?? '',
-									cacheKey: `${cacheKeyBase}-new`,
-								},
-							);
-							out.push(meta);
-						} catch {
-							// `parseDiffFromFile` throws on identical inputs ("if the files
-							// are the same maybe?"). For a rename with no content change we
-							// still want the file listed.
-						}
-					}
-					return out;
-				})()
-	);
+// Build non-partial FileDiffMetadata from full file pairs. `isPartial: false`
+// is what unlocks the line-info separator's expand controls — Pierre gates
+// `isExpandable` on `!fileDiff.isPartial` (DiffHunksRenderer.js).
+// Binary files (server returns both contents as null) get skipped entirely.
+const files: FileDiffMetadata[] = $derived(
+  fileContents == null
+    ? []
+    : (() => {
+        const out: FileDiffMetadata[] = [];
+        for (let i = 0; i < fileContents.length; i++) {
+          const f = fileContents[i];
+          if (!f || f.binary) continue;
+          const oldName = f.oldPath ?? f.path;
+          const newName = f.path;
+          const cacheKeyBase = `chat-diff-${sha}-${i}`;
+          try {
+            const meta = parseDiffFromFile(
+              {
+                name: oldName,
+                contents: f.oldContent ?? "",
+                cacheKey: `${cacheKeyBase}-old`,
+              },
+              {
+                name: newName,
+                contents: f.newContent ?? "",
+                cacheKey: `${cacheKeyBase}-new`,
+              },
+            );
+            out.push(meta);
+          } catch {
+            // `parseDiffFromFile` throws on identical inputs ("if the files
+            // are the same maybe?"). For a rename with no content change we
+            // still want the file listed.
+          }
+        }
+        return out;
+      })(),
+);
 
-	const paths = $derived(files.map((f) => f.name));
+const paths = $derived(files.map((f) => f.name));
 
-	function statusFromType(type: FileDiffMetadata['type']): GitStatusEntry['status'] {
-		if (type === 'new') return 'added';
-		if (type === 'deleted') return 'deleted';
-		if (type === 'rename-pure' || type === 'rename-changed') return 'renamed';
-		return 'modified';
-	}
+function statusFromType(type: FileDiffMetadata["type"]): GitStatusEntry["status"] {
+  if (type === "new") return "added";
+  if (type === "deleted") return "deleted";
+  if (type === "rename-pure" || type === "rename-changed") return "renamed";
+  return "modified";
+}
 
-	const gitStatus: GitStatusEntry[] = $derived(
-		files.map((f) => ({
-			path: f.name,
-			status: statusFromType(f.type),
-		}))
-	);
+const gitStatus: GitStatusEntry[] = $derived(
+  files.map((f) => ({
+    path: f.name,
+    status: statusFromType(f.type),
+  })),
+);
 
-	// ── DOM refs ──────────────────────────────────────────────────────────────
-	let treeHostEl: HTMLElement | undefined = $state();
-	let scrollEl: HTMLDivElement | undefined = $state();
-	let diffWrapperEls = $state<(HTMLDivElement | null)[]>([]);
-	let diffInstances = $state<(PierreFileDiff<CommentMeta> | null)[]>([]);
-	let tree: FileTree | null = null;
+// ── DOM refs ──────────────────────────────────────────────────────────────
+let treeHostEl: HTMLElement | undefined = $state();
+let scrollEl: HTMLDivElement | undefined = $state();
+let diffWrapperEls = $state<(HTMLDivElement | null)[]>([]);
+let diffInstances = $state<(PierreFileDiff<CommentMeta> | null)[]>([]);
+let tree: FileTree | null = null;
 
-	// Resize wrapper/instance arrays reactively when files count changes
-	$effect(() => {
-		const len = files.length;
-		if (diffWrapperEls.length !== len) {
-			diffWrapperEls = Array(len).fill(null);
-			diffInstances = Array(len).fill(null);
-		}
-	});
+// Resize wrapper/instance arrays reactively when files count changes
+$effect(() => {
+  const len = files.length;
+  if (diffWrapperEls.length !== len) {
+    diffWrapperEls = Array(len).fill(null);
+    diffInstances = Array(len).fill(null);
+  }
+});
 
-	// Scoped Svelte mount tracker for annotation hosts. Kept local so the
-	// modal can clean up its own mounts on destroy without disturbing any
-	// concurrently-rendered DiffViewer (which uses the global registry in
-	// `$lib/utils/annotation-mount`).
-	type MountedInstance = ReturnType<typeof mount>;
-	const annotationMounts = new Map<HTMLElement, MountedInstance>();
+// Scoped Svelte mount tracker for annotation hosts. Kept local so the
+// modal can clean up its own mounts on destroy without disturbing any
+// concurrently-rendered DiffViewer (which uses the global registry in
+// `$lib/utils/annotation-mount`).
+type MountedInstance = ReturnType<typeof mount>;
+const annotationMounts = new Map<HTMLElement, MountedInstance>();
 
-	function scopedMount<Props extends Record<string, unknown>>(
-		host: HTMLElement,
-		Component: Component<Props>,
-		props: Props,
-	): void {
-		const existing = annotationMounts.get(host);
-		if (existing) {
-			try {
-				unmount(existing);
-			} catch {
-				// best-effort
-			}
-			annotationMounts.delete(host);
-		}
-		const instance = mount(Component, { target: host, props });
-		annotationMounts.set(host, instance);
-	}
+function scopedMount<Props extends Record<string, unknown>>(
+  host: HTMLElement,
+  Component: Component<Props>,
+  props: Props,
+): void {
+  const existing = annotationMounts.get(host);
+  if (existing) {
+    try {
+      unmount(existing);
+    } catch {
+      // best-effort
+    }
+    annotationMounts.delete(host);
+  }
+  const instance = mount(Component, { target: host, props });
+  annotationMounts.set(host, instance);
+}
 
-	function cleanupScopedMounts(): void {
-		for (const [host, instance] of annotationMounts) {
-			try {
-				unmount(instance);
-			} catch {
-				// best-effort
-			}
-			annotationMounts.delete(host);
-		}
-	}
+function cleanupScopedMounts(): void {
+  for (const [host, instance] of annotationMounts) {
+    try {
+      unmount(instance);
+    } catch {
+      // best-effort
+    }
+    annotationMounts.delete(host);
+  }
+}
 
-	// ── Reactive UI state ─────────────────────────────────────────────────────
-	const mode = $derived(getDiffMode());
-	let isTreeCollapsed = $state(false);
+// ── Reactive UI state ─────────────────────────────────────────────────────
+const mode = $derived(getDiffMode());
+let isTreeCollapsed = $state(false);
 
-	// Pending input slots — keyed `${filePath}::${lineNumber}::${side}`. Stores
-	// the comment id when editing an existing chip, undefined when creating a
-	// new one.
-	const pendingInputs = new SvelteMap<string, { editingId: string | undefined }>();
+// Pending input slots — keyed `${filePath}::${lineNumber}::${side}`. Stores
+// the comment id when editing an existing chip, undefined when creating a
+// new one.
+const pendingInputs = new SvelteMap<string, { editingId: string | undefined }>();
 
-	const comments = $derived(getProposedComments(prId, sha));
-	const commentCount = $derived(comments.length);
-	const isStreaming = $derived(isChatStreaming(prId));
-	const canSend = $derived(commentCount > 0 && !isStreaming);
-	const isDiscarding = $derived(isDiscardingCommit(sha));
-	const isCherryPicking = $derived(isCherryPickingCommit(sha));
-	const commitActionBusy = $derived(isDiscarding || isCherryPicking);
+const comments = $derived(getProposedComments(prId, sha));
+const commentCount = $derived(comments.length);
+const isStreaming = $derived(isChatStreaming(prId));
+const canSend = $derived(commentCount > 0 && !isStreaming);
+const isDiscarding = $derived(isDiscardingCommit(sha));
+const isCherryPicking = $derived(isCherryPickingCommit(sha));
+const commitActionBusy = $derived(isDiscarding || isCherryPicking);
 
-	async function handleDiscardCommit() {
-		if (commitActionBusy) return;
-		await discardProposedCommitAction(prId, sha);
-		// Commit no longer exists — close the modal.
-		onClose();
-	}
+async function handleDiscardCommit() {
+  if (commitActionBusy) return;
+  await discardProposedCommitAction(prId, sha);
+  // Commit no longer exists — close the modal.
+  onClose();
+}
 
-	async function handleCherryPickCommit() {
-		if (commitActionBusy) return;
-		await cherryPickProposedCommitAction(prId, sha);
-		onClose();
-	}
+async function handleCherryPickCommit() {
+  if (commitActionBusy) return;
+  await cherryPickProposedCommitAction(prId, sha);
+  onClose();
+}
 
-	// ── Annotation metadata ───────────────────────────────────────────────────
-	interface CommentMeta {
-		kind: 'input' | 'chip';
-		commentId?: string;
-	}
+// ── Annotation metadata ───────────────────────────────────────────────────
+interface CommentMeta {
+  kind: "input" | "chip";
+  commentId?: string;
+}
 
-	function pendingKey(filePath: string, lineNumber: number, side: string): string {
-		return `${filePath}::${lineNumber}::${side}`;
-	}
+function pendingKey(filePath: string, lineNumber: number, side: string): string {
+  return `${filePath}::${lineNumber}::${side}`;
+}
 
-	function annotationsFor(file: FileDiffMetadata): DiffLineAnnotation<CommentMeta>[] {
-		const out: DiffLineAnnotation<CommentMeta>[] = [];
-		// Pre-compute the pending-input slots for this file. When an input is
-		// open on a line, the matching chip is suppressed — the input replaces
-		// it visually (and submit either updates or creates the comment).
-		const pendingSlots = new Set<string>();
-		for (const [key] of pendingInputs) {
-			const [filePath, lineStr, side] = key.split('::');
-			if (filePath !== file.name) continue;
-			pendingSlots.add(`${lineStr}::${side}`);
-		}
-		for (const c of comments) {
-			if (c.filePath !== file.name) continue;
-			if (pendingSlots.has(`${c.lineNumber}::${c.side}`)) continue;
-			out.push({
-				side: c.side,
-				lineNumber: c.lineNumber,
-				metadata: { kind: 'chip', commentId: c.id },
-			});
-		}
-		for (const [key] of pendingInputs) {
-			const [filePath, lineStr, side] = key.split('::');
-			if (filePath !== file.name) continue;
-			const lineNumber = Number(lineStr);
-			if (!Number.isFinite(lineNumber)) continue;
-			if (side !== 'deletions' && side !== 'additions') continue;
-			out.push({
-				side,
-				lineNumber,
-				metadata: { kind: 'input' },
-			});
-		}
-		return out;
-	}
+function annotationsFor(file: FileDiffMetadata): DiffLineAnnotation<CommentMeta>[] {
+  const out: DiffLineAnnotation<CommentMeta>[] = [];
+  // Pre-compute the pending-input slots for this file. When an input is
+  // open on a line, the matching chip is suppressed — the input replaces
+  // it visually (and submit either updates or creates the comment).
+  const pendingSlots = new Set<string>();
+  for (const [key] of pendingInputs) {
+    const [filePath, lineStr, side] = key.split("::");
+    if (filePath !== file.name) continue;
+    pendingSlots.add(`${lineStr}::${side}`);
+  }
+  for (const c of comments) {
+    if (c.filePath !== file.name) continue;
+    if (pendingSlots.has(`${c.lineNumber}::${c.side}`)) continue;
+    out.push({
+      side: c.side,
+      lineNumber: c.lineNumber,
+      metadata: { kind: "chip", commentId: c.id },
+    });
+  }
+  for (const [key] of pendingInputs) {
+    const [filePath, lineStr, side] = key.split("::");
+    if (filePath !== file.name) continue;
+    const lineNumber = Number(lineStr);
+    if (!Number.isFinite(lineNumber)) continue;
+    if (side !== "deletions" && side !== "additions") continue;
+    out.push({
+      side,
+      lineNumber,
+      metadata: { kind: "input" },
+    });
+  }
+  return out;
+}
 
-	// ── FileDiff lifecycle ────────────────────────────────────────────────────
-	function buildOptions(
-		file: FileDiffMetadata,
-		diffStyle: 'unified' | 'split',
-	): FileDiffOptions<CommentMeta> {
-		return {
-			diffStyle,
-			theme: { dark: 'pierre-dark', light: 'pierre-light' },
-			// Collapse unchanged regions by default so line-info separators have
-			// something to expand. With `true`, Pierre flattens the whole file
-			// inline and no separator clicks would be meaningful.
-			expandUnchanged: false,
-			expansionLineCount: 20,
-			collapsedContextThreshold: 3,
-			hunkSeparators: 'line-info',
-			lineHoverHighlight: 'both',
-			onLineClick(props) {
-				// Pierre treats context-line clicks as `lineType: 'context'` —
-				// allow comments on any line of the diff.
-				const side = props.annotationSide;
-				if (side !== 'deletions' && side !== 'additions') return;
-				handleLineClick(file.name, props.lineNumber, side);
-			},
-			renderAnnotation(annotation) {
-				const meta = annotation.metadata;
-				if (!meta) return undefined;
-				const host = document.createElement('div');
-				host.style.cssText = 'display:block;width:100%;';
+// ── FileDiff lifecycle ────────────────────────────────────────────────────
+function buildOptions(
+  file: FileDiffMetadata,
+  diffStyle: "unified" | "split",
+): FileDiffOptions<CommentMeta> {
+  return {
+    diffStyle,
+    theme: { dark: "pierre-dark", light: "pierre-light" },
+    // Collapse unchanged regions by default so line-info separators have
+    // something to expand. With `true`, Pierre flattens the whole file
+    // inline and no separator clicks would be meaningful.
+    expandUnchanged: false,
+    expansionLineCount: 20,
+    collapsedContextThreshold: 3,
+    hunkSeparators: "line-info",
+    lineHoverHighlight: "both",
+    onLineClick(props) {
+      // Pierre treats context-line clicks as `lineType: 'context'` —
+      // allow comments on any line of the diff.
+      const side = props.annotationSide;
+      if (side !== "deletions" && side !== "additions") return;
+      handleLineClick(file.name, props.lineNumber, side);
+    },
+    renderAnnotation(annotation) {
+      const meta = annotation.metadata;
+      if (!meta) return undefined;
+      const host = document.createElement("div");
+      host.style.cssText = "display:block;width:100%;";
 
-				if (meta.kind === 'input') {
-					const existing = comments.find(
-						(c) =>
-							c.filePath === file.name &&
-							c.lineNumber === annotation.lineNumber &&
-							c.side === annotation.side,
-					);
-					scopedMount(host, AnnotationCommentInput, {
-						filePath: file.name,
-						lineNo: annotation.lineNumber,
-						initialBody: existing?.body ?? '',
-						onSubmit: (next: string) => {
-							handleCommentSubmit(
-								file.name,
-								annotation.lineNumber,
-								annotation.side,
-								next,
-								existing?.id,
-							);
-						},
-						onDismiss: () => {
-							dismissPendingInput(file.name, annotation.lineNumber, annotation.side);
-						},
-					});
-				} else if (meta.kind === 'chip' && meta.commentId) {
-					const c = comments.find((x) => x.id === meta.commentId);
-					if (!c) return host;
-					scopedMount(host, ProposedCommentChip, {
-						body: c.body,
-						onEdit: () => {
-							openInput(c.filePath, c.lineNumber, c.side, c.id);
-						},
-						onDelete: () => {
-							removeProposedComment(prId, sha, c.id);
-						},
-					});
-				}
-				return host;
-			},
-		};
-	}
+      if (meta.kind === "input") {
+        const existing = comments.find(
+          (c) =>
+            c.filePath === file.name &&
+            c.lineNumber === annotation.lineNumber &&
+            c.side === annotation.side,
+        );
+        scopedMount(host, AnnotationCommentInput, {
+          filePath: file.name,
+          lineNo: annotation.lineNumber,
+          initialBody: existing?.body ?? "",
+          onSubmit: (next: string) => {
+            handleCommentSubmit(
+              file.name,
+              annotation.lineNumber,
+              annotation.side,
+              next,
+              existing?.id,
+            );
+          },
+          onDismiss: () => {
+            dismissPendingInput(file.name, annotation.lineNumber, annotation.side);
+          },
+        });
+      } else if (meta.kind === "chip" && meta.commentId) {
+        const c = comments.find((x) => x.id === meta.commentId);
+        if (!c) return host;
+        scopedMount(host, ProposedCommentChip, {
+          body: c.body,
+          onEdit: () => {
+            openInput(c.filePath, c.lineNumber, c.side, c.id);
+          },
+          onDelete: () => {
+            removeProposedComment(prId, sha, c.id);
+          },
+        });
+      }
+      return host;
+    },
+  };
+}
 
-	function mountFileDiff(idx: number, el: HTMLDivElement, diffStyle: 'unified' | 'split') {
-		const file = files[idx];
-		if (!file) return;
-		const options = buildOptions(file, diffStyle);
-		const instance = new PierreFileDiff<CommentMeta>(options, workerManager);
-		instance.render({
-			containerWrapper: el,
-			fileDiff: file,
-			lineAnnotations: annotationsFor(file),
-			forceRender: true,
-		});
-		diffInstances[idx] = instance;
-	}
+function mountFileDiff(idx: number, el: HTMLDivElement, diffStyle: "unified" | "split") {
+  const file = files[idx];
+  if (!file) return;
+  const options = buildOptions(file, diffStyle);
+  const instance = new PierreFileDiff<CommentMeta>(options, workerManager);
+  instance.render({
+    containerWrapper: el,
+    fileDiff: file,
+    lineAnnotations: annotationsFor(file),
+    forceRender: true,
+  });
+  diffInstances[idx] = instance;
+}
 
-	// Mount FileDiff lazily as each per-file wrapper element is captured.
-	// Using an action (rather than `bind:this` into an array) sidesteps Svelte
-	// 5's strict typing on indexed array binds and gives us a deterministic
-	// `destroy` hook for cleanup if the modal closes mid-mount.
-	function captureDiffEl(el: HTMLDivElement, index: number) {
-		diffWrapperEls[index] = el;
-		if (!diffInstances[index]) {
-			mountFileDiff(index, el, untrack(() => mode));
-		}
-		return {
-			destroy() {
-				diffWrapperEls[index] = null;
-				const instance = diffInstances[index];
-				if (instance) {
-					try {
-						instance.cleanUp();
-					} catch {
-						// best-effort
-					}
-					diffInstances[index] = null;
-				}
-			},
-		};
-	}
+// Mount FileDiff lazily as each per-file wrapper element is captured.
+// Using an action (rather than `bind:this` into an array) sidesteps Svelte
+// 5's strict typing on indexed array binds and gives us a deterministic
+// `destroy` hook for cleanup if the modal closes mid-mount.
+function captureDiffEl(el: HTMLDivElement, index: number) {
+  diffWrapperEls[index] = el;
+  if (!diffInstances[index]) {
+    mountFileDiff(
+      index,
+      el,
+      untrack(() => mode),
+    );
+  }
+  return {
+    destroy() {
+      diffWrapperEls[index] = null;
+      const instance = diffInstances[index];
+      if (instance) {
+        try {
+          instance.cleanUp();
+        } catch {
+          // best-effort
+        }
+        diffInstances[index] = null;
+      }
+    },
+  };
+}
 
-	// ── Reactive: re-render annotations when comments / pendingInputs change ──
-	let didFirstAnnotationRender = false;
-	$effect(() => {
-		// Subscribe to both signals.
-		void comments;
-		void pendingInputs.size;
-		// Skip the very first run — instances are still being constructed via
-		// the action and render() was already called with annotations there.
-		if (!didFirstAnnotationRender) {
-			didFirstAnnotationRender = true;
-			return;
-		}
-		for (let i = 0; i < files.length; i++) {
-			const inst = diffInstances[i];
-			const file = files[i];
-			if (!inst || !file) continue;
-			try {
-				inst.render({
-					lineAnnotations: annotationsFor(file),
-					forceRender: true,
-				});
-			} catch {
-				// best-effort
-			}
-		}
-	});
+// ── Reactive: re-render annotations when comments / pendingInputs change ──
+let didFirstAnnotationRender = false;
+$effect(() => {
+  // Subscribe to both signals.
+  void comments;
+  void pendingInputs.size;
+  // Skip the very first run — instances are still being constructed via
+  // the action and render() was already called with annotations there.
+  if (!didFirstAnnotationRender) {
+    didFirstAnnotationRender = true;
+    return;
+  }
+  for (let i = 0; i < files.length; i++) {
+    const inst = diffInstances[i];
+    const file = files[i];
+    if (!inst || !file) continue;
+    try {
+      inst.render({
+        lineAnnotations: annotationsFor(file),
+        forceRender: true,
+      });
+    } catch {
+      // best-effort
+    }
+  }
+});
 
-	// ── Reactive: mode changes — destroy + recreate every FileDiff ────────────
-	let lastMode = $state(untrack(() => mode));
-	$effect(() => {
-		const next = mode;
-		if (next === lastMode) return;
-		lastMode = next;
-		// All annotation hosts live inside the FileDiff DOM that's about to be
-		// destroyed — unmount them first to avoid stranded Svelte instances
-		// pointing at detached nodes.
-		cleanupScopedMounts();
-		for (let i = 0; i < files.length; i++) {
-			const el = diffWrapperEls[i];
-			const old = diffInstances[i];
-			if (old) {
-				try {
-					old.cleanUp();
-				} catch {
-					// best-effort
-				}
-				diffInstances[i] = null;
-			}
-			if (el) mountFileDiff(i, el, next);
-		}
-	});
+// ── Reactive: mode changes — destroy + recreate every FileDiff ────────────
+let lastMode = $state(untrack(() => mode));
+$effect(() => {
+  const next = mode;
+  if (next === lastMode) return;
+  lastMode = next;
+  // All annotation hosts live inside the FileDiff DOM that's about to be
+  // destroyed — unmount them first to avoid stranded Svelte instances
+  // pointing at detached nodes.
+  cleanupScopedMounts();
+  for (let i = 0; i < files.length; i++) {
+    const el = diffWrapperEls[i];
+    const old = diffInstances[i];
+    if (old) {
+      try {
+        old.cleanUp();
+      } catch {
+        // best-effort
+      }
+      diffInstances[i] = null;
+    }
+    if (el) mountFileDiff(i, el, next);
+  }
+});
 
-	// ── Comment handlers ──────────────────────────────────────────────────────
-	function openInput(
-		filePath: string,
-		lineNumber: number,
-		side: 'deletions' | 'additions',
-		editingId?: string,
-	) {
-		// Only one input open at a time keeps the UX focused.
-		pendingInputs.clear();
-		pendingInputs.set(pendingKey(filePath, lineNumber, side), { editingId });
-	}
+// ── Comment handlers ──────────────────────────────────────────────────────
+function openInput(
+  filePath: string,
+  lineNumber: number,
+  side: "deletions" | "additions",
+  editingId?: string,
+) {
+  // Only one input open at a time keeps the UX focused.
+  pendingInputs.clear();
+  pendingInputs.set(pendingKey(filePath, lineNumber, side), { editingId });
+}
 
-	function dismissPendingInput(
-		filePath: string,
-		lineNumber: number,
-		side: 'deletions' | 'additions',
-	) {
-		pendingInputs.delete(pendingKey(filePath, lineNumber, side));
-	}
+function dismissPendingInput(
+  filePath: string,
+  lineNumber: number,
+  side: "deletions" | "additions",
+) {
+  pendingInputs.delete(pendingKey(filePath, lineNumber, side));
+}
 
-	function handleLineClick(
-		filePath: string,
-		lineNumber: number,
-		side: 'deletions' | 'additions',
-	) {
-		const key = pendingKey(filePath, lineNumber, side);
-		// Toggle: clicking the same line again dismisses
-		if (pendingInputs.has(key)) {
-			pendingInputs.delete(key);
-			return;
-		}
-		// If a chip already exists, open it for edit; otherwise start fresh.
-		const existing = comments.find(
-			(c) => c.filePath === filePath && c.lineNumber === lineNumber && c.side === side,
-		);
-		openInput(filePath, lineNumber, side, existing?.id);
-	}
+function handleLineClick(filePath: string, lineNumber: number, side: "deletions" | "additions") {
+  const key = pendingKey(filePath, lineNumber, side);
+  // Toggle: clicking the same line again dismisses
+  if (pendingInputs.has(key)) {
+    pendingInputs.delete(key);
+    return;
+  }
+  // If a chip already exists, open it for edit; otherwise start fresh.
+  const existing = comments.find(
+    (c) => c.filePath === filePath && c.lineNumber === lineNumber && c.side === side,
+  );
+  openInput(filePath, lineNumber, side, existing?.id);
+}
 
-	function handleCommentSubmit(
-		filePath: string,
-		lineNumber: number,
-		side: 'deletions' | 'additions',
-		commentBody: string,
-		editingId: string | undefined,
-	) {
-		const key = pendingKey(filePath, lineNumber, side);
-		pendingInputs.delete(key);
-		if (editingId) {
-			updateProposedComment(prId, sha, editingId, commentBody);
-		} else {
-			const comment: ProposedComment = {
-				id: crypto.randomUUID(),
-				filePath,
-				lineNumber,
-				side,
-				body: commentBody,
-			};
-			addProposedComment(prId, sha, comment);
-		}
-	}
+function handleCommentSubmit(
+  filePath: string,
+  lineNumber: number,
+  side: "deletions" | "additions",
+  commentBody: string,
+  editingId: string | undefined,
+) {
+  const key = pendingKey(filePath, lineNumber, side);
+  pendingInputs.delete(key);
+  if (editingId) {
+    updateProposedComment(prId, sha, editingId, commentBody);
+  } else {
+    const comment: ProposedComment = {
+      id: crypto.randomUUID(),
+      filePath,
+      lineNumber,
+      side,
+      body: commentBody,
+    };
+    addProposedComment(prId, sha, comment);
+  }
+}
 
-	function handleSendFeedback() {
-		if (!canSend) return;
-		const ok = sendProposedFeedback({ prId, sha, subject });
-		if (ok) onClose();
-	}
+function handleSendFeedback() {
+  if (!canSend) return;
+  const ok = sendProposedFeedback({ prId, sha, subject });
+  if (ok) onClose();
+}
 
-	function toggleTree() {
-		isTreeCollapsed = !isTreeCollapsed;
-	}
+function toggleTree() {
+  isTreeCollapsed = !isTreeCollapsed;
+}
 
-	// ── File tree ─────────────────────────────────────────────────────────────
-	onMount(() => {
-		if (!treeHostEl || files.length === 0) return;
-		initTree();
-	});
+// ── File tree ─────────────────────────────────────────────────────────────
+onMount(() => {
+  if (!treeHostEl || files.length === 0) return;
+  initTree();
+});
 
-	// When fileContents arrives after mount (async load), initialize the tree.
-	$effect(() => {
-		if (!treeHostEl || files.length === 0 || tree) return;
-		// Read reactive dependencies before the untrack block
-		const currentPaths = paths;
-		const currentGitStatus = gitStatus;
-		initTree(currentPaths, currentGitStatus);
-	});
+// When fileContents arrives after mount (async load), initialize the tree.
+$effect(() => {
+  if (!treeHostEl || files.length === 0 || tree) return;
+  // Read reactive dependencies before the untrack block
+  const currentPaths = paths;
+  const currentGitStatus = gitStatus;
+  initTree(currentPaths, currentGitStatus);
+});
 
-	function initTree(treePaths = paths, treeGitStatus = gitStatus) {
-		if (!treeHostEl || treePaths.length === 0) return;
+function initTree(treePaths = paths, treeGitStatus = gitStatus) {
+  if (!treeHostEl || treePaths.length === 0) return;
 
-		const initialSelection = treePaths.length > 0 && treePaths[0] != null ? [treePaths[0]] : [];
+  const initialSelection = treePaths.length > 0 && treePaths[0] != null ? [treePaths[0]] : [];
 
-		tree = new FileTree({
-			paths: treePaths,
-			gitStatus: treeGitStatus,
-			initialExpansion: 'open',
-			initialSelectedPaths: initialSelection,
-			onSelectionChange: (selected) => {
-				const sel = selected[0];
-				if (typeof sel !== 'string') return;
-				let idx = paths.indexOf(sel);
-				if (idx < 0) {
-					// Folder click — jump to the first file under that folder.
-					const prefix = sel.endsWith('/') ? sel : `${sel}/`;
-					idx = paths.findIndex((p) => p.startsWith(prefix));
-				}
-				if (idx < 0) return;
-				const target = diffWrapperEls[idx];
-				if (!target) return;
-				target.scrollIntoView({ block: 'start', behavior: 'smooth' });
-			},
-			unsafeCSS: `
+  tree = new FileTree({
+    paths: treePaths,
+    gitStatus: treeGitStatus,
+    initialExpansion: "open",
+    initialSelectedPaths: initialSelection,
+    onSelectionChange: (selected) => {
+      const sel = selected[0];
+      if (typeof sel !== "string") return;
+      let idx = paths.indexOf(sel);
+      if (idx < 0) {
+        // Folder click — jump to the first file under that folder.
+        const prefix = sel.endsWith("/") ? sel : `${sel}/`;
+        idx = paths.findIndex((p) => p.startsWith(prefix));
+      }
+      if (idx < 0) return;
+      const target = diffWrapperEls[idx];
+      if (!target) return;
+      target.scrollIntoView({ block: "start", behavior: "smooth" });
+    },
+    unsafeCSS: `
 				button[data-type='item'][data-item-contains-git-change='true'] > [data-item-section='content'] {
 					color: var(--trees-git-modified-color);
 				}
@@ -502,37 +511,37 @@
 					padding-inline: 2px;
 				}
 			`,
-		});
-		tree.render({ containerWrapper: treeHostEl });
+  });
+  tree.render({ containerWrapper: treeHostEl });
 
-		void tick().then(() => {
-			scrollEl?.scrollTo({ top: 0 });
-		});
-	}
+  void tick().then(() => {
+    scrollEl?.scrollTo({ top: 0 });
+  });
+}
 
-	onDestroy(() => {
-		// Per-file instances are torn down by their action's `destroy` hooks,
-		// so we only need to clean up the file tree + the Svelte mounts this
-		// modal owns.
-		cleanupScopedMounts();
-		tree?.cleanUp();
-		tree = null;
-	});
+onDestroy(() => {
+  // Per-file instances are torn down by their action's `destroy` hooks,
+  // so we only need to clean up the file tree + the Svelte mounts this
+  // modal owns.
+  cleanupScopedMounts();
+  tree?.cleanUp();
+  tree = null;
+});
 
-	// Reparent to document.body so `position: fixed` is anchored to the
-	// viewport. The right panel's parent element has a `transform`, which
-	// would otherwise scope `position: fixed` to the panel rather than the
-	// screen.
-	function portal(node: HTMLElement) {
-		document.body.appendChild(node);
-		return {
-			destroy() {
-				if (node.parentNode === document.body) {
-					document.body.removeChild(node);
-				}
-			},
-		};
-	}
+// Reparent to document.body so `position: fixed` is anchored to the
+// viewport. The right panel's parent element has a `transform`, which
+// would otherwise scope `position: fixed` to the panel rather than the
+// screen.
+function portal(node: HTMLElement) {
+  document.body.appendChild(node);
+  return {
+    destroy() {
+      if (node.parentNode === document.body) {
+        document.body.removeChild(node);
+      }
+    },
+  };
+}
 </script>
 
 <div

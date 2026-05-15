@@ -1,15 +1,15 @@
 <script lang="ts" module>
-	import type { HTMLAttributes } from "svelte/elements";
-	import type { Snippet } from "svelte";
+import type { Snippet } from "svelte";
+import type { HTMLAttributes } from "svelte/elements";
 
-	export type ConversationEmptyStateProps = HTMLAttributes<HTMLDivElement> & {
-		/** Title text to display. */
-		title?: string;
-		/** Description text to display. */
-		description?: string;
-		/** Icon snippet rendered above the text. */
-		icon?: Snippet;
-	};
+export type ConversationEmptyStateProps = HTMLAttributes<HTMLDivElement> & {
+  /** Title text to display. */
+  title?: string;
+  /** Description text to display. */
+  description?: string;
+  /** Icon snippet rendered above the text. */
+  icon?: Snippet;
+};
 </script>
 
 <script lang="ts">

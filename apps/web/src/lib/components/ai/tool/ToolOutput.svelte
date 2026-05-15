@@ -1,18 +1,17 @@
 <script lang="ts" module>
-	import type { HTMLAttributes } from "svelte/elements";
-	import type { Snippet } from "svelte";
+import type { Snippet } from "svelte";
+import type { HTMLAttributes } from "svelte/elements";
 
-	export type ToolOutputProps = HTMLAttributes<HTMLDivElement> & {
-		/** The output/result snippet of the tool execution. */
-		output?: Snippet;
-		/** An error message if the tool execution failed. */
-		errorText?: string;
-	};
+export type ToolOutputProps = HTMLAttributes<HTMLDivElement> & {
+  /** The output/result snippet of the tool execution. */
+  output?: Snippet;
+  /** An error message if the tool execution failed. */
+  errorText?: string;
+};
 </script>
 
 <script lang="ts">
 	import { cn } from "$lib/utils.js";
-	import { AlertCircle } from "@lucide/svelte";
 
 	let {
 		output,
@@ -25,17 +24,25 @@
 {#if output || errorText}
 	<div
 		data-slot="tool-output"
-		class={cn("", className)}
+		class={cn("space-y-2", className)}
 		{...restProps}
 	>
-		{#if errorText}
-			<div class="flex items-start gap-2 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">
-				<AlertCircle class="mt-0.5 size-3.5 shrink-0" />
-				<span>{errorText}</span>
-			</div>
-		{:else if output}
-			<p class="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Output</p>
-			{@render output()}
-		{/if}
+		<h4 class="font-medium text-muted-foreground text-xs uppercase tracking-wide">
+			{errorText ? "Error" : "Result"}
+		</h4>
+		<div
+			class={cn(
+				"overflow-x-auto rounded-md text-xs [&_table]:w-full",
+				errorText
+					? "bg-destructive/10 text-destructive"
+					: "bg-muted/50 text-foreground",
+			)}
+		>
+			{#if errorText}
+				<div class="p-3">{errorText}</div>
+			{:else if output}
+				{@render output()}
+			{/if}
+		</div>
 	</div>
 {/if}

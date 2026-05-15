@@ -3,8 +3,9 @@
  * from @pierre/diffs renderAnnotation callbacks. Maintains a cleanup registry
  * so all mounted instances can be destroyed before instance.cleanUp() fires.
  */
-import { mount, unmount } from 'svelte';
-import type { Component } from 'svelte';
+
+import type { Component } from "svelte";
+import { mount, unmount } from "svelte";
 
 type MountedInstance = ReturnType<typeof mount>;
 
@@ -16,21 +17,21 @@ const registry = new Map<HTMLElement, MountedInstance>();
  * If the target already has a mounted component, it is unmounted first.
  */
 export function mountInto<Props extends Record<string, unknown>>(
-	target: HTMLElement,
-	Component: Component<Props>,
-	props: Props
+  target: HTMLElement,
+  Component: Component<Props>,
+  props: Props,
 ): void {
-	const existing = registry.get(target);
-	if (existing) {
-		try {
-			unmount(existing);
-		} catch {
-			// ignore unmount errors
-		}
-		registry.delete(target);
-	}
-	const instance = mount(Component, { target, props });
-	registry.set(target, instance);
+  const existing = registry.get(target);
+  if (existing) {
+    try {
+      unmount(existing);
+    } catch {
+      // ignore unmount errors
+    }
+    registry.delete(target);
+  }
+  const instance = mount(Component, { target, props });
+  registry.set(target, instance);
 }
 
 /**
@@ -38,13 +39,12 @@ export function mountInto<Props extends Record<string, unknown>>(
  * to prevent orphaned Svelte state when the diff container is destroyed.
  */
 export function cleanupAllMounted(): void {
-	for (const [target, instance] of registry) {
-		try {
-			unmount(instance);
-		} catch {
-			// ignore unmount errors
-		}
-		registry.delete(target);
-	}
+  for (const [target, instance] of registry) {
+    try {
+      unmount(instance);
+    } catch {
+      // ignore unmount errors
+    }
+    registry.delete(target);
+  }
 }
-

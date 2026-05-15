@@ -1,17 +1,17 @@
 <script lang="ts">
-	import { getIssuesForFile } from '$lib/stores/walkthrough.svelte';
-	import IssueCard from '$lib/components/walkthrough/IssueCard.svelte';
-	import { jumpToDiffLine } from '$lib/stores/review.svelte';
-	import { groupIssuesBySeverity } from '$lib/utils/walkthrough-issues';
+import IssueCard from "$lib/components/walkthrough/IssueCard.svelte";
+import { jumpToDiffLine } from "$lib/stores/review.svelte";
+import { getIssuesForFile } from "$lib/stores/walkthrough.svelte";
+import { groupIssuesBySeverity } from "$lib/utils/walkthrough-issues";
 
-	interface Props {
-		filePath: string;
-	}
+interface Props {
+  filePath: string;
+}
 
-	let { filePath }: Props = $props();
+let { filePath }: Props = $props();
 
-	const issues = $derived(getIssuesForFile(filePath));
-	const issueGroups = $derived(groupIssuesBySeverity(issues));
+const issues = $derived(getIssuesForFile(filePath));
+const issueGroups = $derived(groupIssuesBySeverity(issues));
 </script>
 
 {#if issues.length > 0}

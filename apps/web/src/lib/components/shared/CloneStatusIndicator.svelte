@@ -1,81 +1,81 @@
 <script lang="ts">
-	import type { CloneStatus } from '@revv/shared';
-	import { Clock, Loader2, Check, AlertCircle } from '@lucide/svelte';
-	import { fade } from 'svelte/transition';
+import { AlertCircle, Check, Clock, Loader2 } from "@lucide/svelte";
+import type { CloneStatus } from "@revv/shared";
+import { fade } from "svelte/transition";
 
-	let {
-		status,
-		error = null,
-		onRetry,
-		size = 12,
-		showLabel = false,
-	}: {
-		status: CloneStatus;
-		error?: string | null;
-		onRetry?: () => void;
-		size?: number;
-		showLabel?: boolean;
-	} = $props();
+let {
+  status,
+  error = null,
+  onRetry,
+  size = 12,
+  showLabel = false,
+}: {
+  status: CloneStatus;
+  error?: string | null;
+  onRetry?: () => void;
+  size?: number;
+  showLabel?: boolean;
+} = $props();
 
-	// Transient success: when we observe a transition from any non-ready state
-	// into 'ready', flash a green check for 2s then hide. Repos already in
-	// 'ready' at first render stay silent — prevStatus starts undefined and the
-	// first effect run only records the baseline.
-	let showSuccess = $state(false);
-	let prevStatus: CloneStatus | undefined;
+// Transient success: when we observe a transition from any non-ready state
+// into 'ready', flash a green check for 2s then hide. Repos already in
+// 'ready' at first render stay silent — prevStatus starts undefined and the
+// first effect run only records the baseline.
+let showSuccess = $state(false);
+let prevStatus: CloneStatus | undefined;
 
-	$effect(() => {
-		const curr = status;
-		if (prevStatus !== undefined && prevStatus !== 'ready' && curr === 'ready') {
-			showSuccess = true;
-			const t = setTimeout(() => {
-				showSuccess = false;
-			}, 2000);
-			prevStatus = curr;
-			return () => clearTimeout(t);
-		}
-		prevStatus = curr;
-	});
+$effect(() => {
+  const curr = status;
+  if (prevStatus !== undefined && prevStatus !== "ready" && curr === "ready") {
+    showSuccess = true;
+    const t = setTimeout(() => {
+      showSuccess = false;
+    }, 2000);
+    prevStatus = curr;
+    return () => clearTimeout(t);
+  }
+  prevStatus = curr;
+});
 
-	let tooltip = $derived.by(() => {
-		switch (status) {
-			case 'pending':
-				return 'Waiting to clone';
-			case 'cloning':
-				return 'Cloning repository…';
-			case 'ready':
-				return showSuccess ? 'Clone complete' : '';
-			case 'error':
-				return error && error.length > 0 ? error : 'Clone failed — click to retry';
-		}
-	});
+let tooltip = $derived.by(() => {
+  switch (status) {
+    case "pending":
+      return "Waiting to clone";
+    case "cloning":
+      return "Cloning repository…";
+    case "ready":
+      return showSuccess ? "Clone complete" : "";
+    case "error":
+      return error && error.length > 0 ? error : "Clone failed — click to retry";
+  }
+});
 
-	let label = $derived.by(() => {
-		switch (status) {
-			case 'pending':
-				return 'Pending';
-			case 'cloning':
-				return 'Cloning…';
-			case 'ready':
-				return showSuccess ? 'Ready' : '';
-			case 'error':
-				return 'Clone failed';
-		}
-	});
+let label = $derived.by(() => {
+  switch (status) {
+    case "pending":
+      return "Pending";
+    case "cloning":
+      return "Cloning…";
+    case "ready":
+      return showSuccess ? "Ready" : "";
+    case "error":
+      return "Clone failed";
+  }
+});
 
-	function handleRetry(e: MouseEvent) {
-		e.stopPropagation();
-		e.preventDefault();
-		onRetry?.();
-	}
+function handleRetry(e: MouseEvent) {
+  e.stopPropagation();
+  e.preventDefault();
+  onRetry?.();
+}
 
-	function handleRetryKey(e: KeyboardEvent) {
-		if (e.key === 'Enter' || e.key === ' ') {
-			e.stopPropagation();
-			e.preventDefault();
-			onRetry?.();
-		}
-	}
+function handleRetryKey(e: KeyboardEvent) {
+  if (e.key === "Enter" || e.key === " ") {
+    e.stopPropagation();
+    e.preventDefault();
+    onRetry?.();
+  }
+}
 </script>
 
 {#if status === 'error' && onRetry}
@@ -96,21 +96,21 @@
 	>
 		<AlertCircle {size} />
 		{#if showLabel}
-			<span class="text-[11px] font-medium">{label}</span>
+			<span class="text-xs font-medium">{label}</span>
 		{/if}
 	</span>
 {:else if status === 'error'}
 	<span class="inline-flex items-center gap-1 text-danger" title={tooltip} aria-label={tooltip}>
 		<AlertCircle {size} />
 		{#if showLabel}
-			<span class="text-[11px] font-medium">{label}</span>
+			<span class="text-xs font-medium">{label}</span>
 		{/if}
 	</span>
 {:else if status === 'cloning'}
 	<span class="inline-flex items-center gap-1 text-accent" title={tooltip} aria-label={tooltip}>
 		<Loader2 {size} class="motion-essential-spin" />
 		{#if showLabel}
-			<span class="text-[11px] font-medium">{label}</span>
+			<span class="text-xs font-medium">{label}</span>
 		{/if}
 	</span>
 {:else if status === 'pending'}
@@ -121,7 +121,7 @@
 	>
 		<Clock {size} />
 		{#if showLabel}
-			<span class="text-[11px] font-medium">{label}</span>
+			<span class="text-xs font-medium">{label}</span>
 		{/if}
 	</span>
 {:else if status === 'ready' && showSuccess}
@@ -133,7 +133,7 @@
 	>
 		<Check {size} />
 		{#if showLabel}
-			<span class="text-[11px] font-medium">{label}</span>
+			<span class="text-xs font-medium">{label}</span>
 		{/if}
 	</span>
 {/if}

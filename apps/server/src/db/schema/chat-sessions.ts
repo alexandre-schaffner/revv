@@ -1,5 +1,5 @@
-import { integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
-import { pullRequests } from './pull-requests';
+import { integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { pullRequests } from "./pull-requests";
 
 /**
  * Persistent mapping for the right-pane AI chat session.
@@ -33,32 +33,32 @@ import { pullRequests } from './pull-requests';
  * edit, which is acceptable for an in-progress AI suggestion.
  */
 export const chatSessions = sqliteTable(
-	'chat_sessions',
-	{
-		id: text('id').primaryKey(),
-		pullRequestId: text('pull_request_id')
-			.notNull()
-			.references(() => pullRequests.id, { onDelete: 'cascade' }),
-		agent: text('agent').notNull(), // 'claude' | 'opencode'
-		sessionId: text('session_id'),
-		prHeadSha: text('pr_head_sha').notNull(),
-		worktreePath: text('worktree_path').notNull(),
-		branchName: text('branch_name').notNull(),
-		nextSequence: integer('next_sequence').notNull().default(0),
-		// 'default' | 'plan' — t3code-style session-level interaction toggle.
-		// In 'plan' mode the driver flips Claude into `permissionMode: 'plan'`
-		// or routes opencode through its named `plan` agent. The flag persists
-		// across turns until the user toggles it back or auto-flip happens on
-		// plan approval.
-		interactionMode: text('interaction_mode').notNull().default('default'),
-		createdAt: text('created_at').notNull(),
-		lastActivityAt: text('last_activity_at').notNull(),
-	},
-	(t) => ({
-		prAgentShaUnique: uniqueIndex('chat_sessions_pr_agent_sha_unique').on(
-			t.pullRequestId,
-			t.agent,
-			t.prHeadSha,
-		),
-	}),
+  "chat_sessions",
+  {
+    id: text("id").primaryKey(),
+    pullRequestId: text("pull_request_id")
+      .notNull()
+      .references(() => pullRequests.id, { onDelete: "cascade" }),
+    agent: text("agent").notNull(), // 'claude' | 'opencode'
+    sessionId: text("session_id"),
+    prHeadSha: text("pr_head_sha").notNull(),
+    worktreePath: text("worktree_path").notNull(),
+    branchName: text("branch_name").notNull(),
+    nextSequence: integer("next_sequence").notNull().default(0),
+    // 'default' | 'plan' — t3code-style session-level interaction toggle.
+    // In 'plan' mode the driver flips Claude into `permissionMode: 'plan'`
+    // or routes opencode through its named `plan` agent. The flag persists
+    // across turns until the user toggles it back or auto-flip happens on
+    // plan approval.
+    interactionMode: text("interaction_mode").notNull().default("default"),
+    createdAt: text("created_at").notNull(),
+    lastActivityAt: text("last_activity_at").notNull(),
+  },
+  (t) => ({
+    prAgentShaUnique: uniqueIndex("chat_sessions_pr_agent_sha_unique").on(
+      t.pullRequestId,
+      t.agent,
+      t.prHeadSha,
+    ),
+  }),
 );

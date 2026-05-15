@@ -1,76 +1,77 @@
 <script lang="ts">
-	/**
-	 * Dev-only Cache Inspector panel.
-	 * Toggled with Cmd+Shift+C from +layout.svelte (dev builds only).
-	 * Shows KV cache namespace stats, GitHub ETag metrics, and file content cache hit rates.
-	 */
-	import { onMount } from 'svelte';
-	import { X, RefreshCw } from '@lucide/svelte';
+/**
+ * Dev-only Cache Inspector panel.
+ * Toggled with Cmd+Shift+C from +layout.svelte (dev builds only).
+ * Shows KV cache namespace stats, GitHub ETag metrics, and file content cache hit rates.
+ */
 
-	interface NamespaceStat {
-		ns: string;
-		entries: number;
-	}
+import { RefreshCw, X } from "@lucide/svelte";
+import { onMount } from "svelte";
 
-	interface KvStats {
-		hits: number;
-		misses: number;
-		inflightDedups: number;
-		namespaces: NamespaceStat[];
-	}
+interface NamespaceStat {
+  ns: string;
+  entries: number;
+}
 
-	interface GitHubStats {
-		hits304: number;
-		misses200: number;
-		bytesSaved: number;
-	}
+interface KvStats {
+  hits: number;
+  misses: number;
+  inflightDedups: number;
+  namespaces: NamespaceStat[];
+}
 
-	interface FileContentStats {
-		hits: number;
-		misses: number;
-	}
+interface GitHubStats {
+  hits304: number;
+  misses200: number;
+  bytesSaved: number;
+}
 
-	interface CacheStats {
-		kv: KvStats;
-		github: GitHubStats;
-		fileContent: FileContentStats;
-	}
+interface FileContentStats {
+  hits: number;
+  misses: number;
+}
 
-	let { onclose }: { onclose: () => void } = $props();
+interface CacheStats {
+  kv: KvStats;
+  github: GitHubStats;
+  fileContent: FileContentStats;
+}
 
-	let stats = $state<CacheStats | null>(null);
-	let loading = $state(false);
-	let error = $state<string | null>(null);
+let { onclose }: { onclose: () => void } = $props();
 
-	async function fetchStats(): Promise<void> {
-		loading = true;
-		error = null;
-		try {
-			const res = await fetch('/api/_debug/cache', { credentials: 'include' });
-			if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-			stats = (await res.json()) as CacheStats;
-		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to fetch cache stats';
-		} finally {
-			loading = false;
-		}
-	}
+let stats = $state<CacheStats | null>(null);
+let loading = $state(false);
+let error = $state<string | null>(null);
 
-	function formatBytes(bytes: number): string {
-		if (bytes < 1024) return `${bytes} B`;
-		if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-		return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-	}
+async function fetchStats(): Promise<void> {
+  loading = true;
+  error = null;
+  try {
+    const res = await fetch("/api/_debug/cache", { credentials: "include" });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    stats = (await res.json()) as CacheStats;
+  } catch (e) {
+    error = e instanceof Error ? e.message : "Failed to fetch cache stats";
+  } finally {
+    loading = false;
+  }
+}
 
-	function hitRate(hits: number, misses: number): string {
-		const total = hits + misses;
-		if (total === 0) return '—';
-		return `${((hits / total) * 100).toFixed(1)}%`;
-	}
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
-	onMount(() => {
-		void fetchStats();
-	});
+function hitRate(hits: number, misses: number): string {
+  const total = hits + misses;
+  if (total === 0) return "—";
+  return `${((hits / total) * 100).toFixed(1)}%`;
+}
+
+onMount(() => {
+  void fetchStats();
+});
 </script>
 
 <div class="inspector-overlay" role="dialog" aria-label="Cache Inspector">

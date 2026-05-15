@@ -15,59 +15,54 @@
 // A1 + C1 from the gap-analysis roadmap). The agent-side session id is
 // still tracked so follow-up turns resume the same provider context.
 
-import { Elysia, t } from 'elysia';
-import { Effect } from 'effect';
-import { and, eq, desc } from 'drizzle-orm';
-import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { rm } from 'node:fs/promises';
-import { join } from 'node:path';
-import { AppRuntime } from '../runtime';
-import { AiService, resolveAgent } from '../services/Ai';
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { rm } from "node:fs/promises";
+import { join } from "node:path";
+import type { InteractionMode } from "@revv/shared";
+import { and, desc, eq } from "drizzle-orm";
+import { Effect } from "effect";
+import { Elysia, t } from "elysia";
+import type { ChatHistoryEntry, ChatWalkthroughContext } from "../ai/prompts/chat";
+import type { ChatStreamFrame, RawChatStreamFrame } from "../ai/providers/chat-claude";
+import { AgentUnavailableError } from "../ai/providers/chat-opencode";
+import type { Db } from "../db/index";
+import { walkthroughIssues } from "../db/schema/walkthrough-issues";
+import { walkthroughs } from "../db/schema/walkthroughs";
+import { WorktreeBlockedByUnpushedCommits } from "../domain/errors";
+import { withDb } from "../effects/with-db";
+import { logError } from "../logger";
+import { AppRuntime } from "../runtime";
+import { AiService, resolveAgent } from "../services/Ai";
 import {
-	ChatChangesPushService,
-	ChatStreamingConflictError,
-	ConcurrentPushError,
-	DirtyWorktreeError,
-	InvalidBranchNameError,
-	NoChangesError,
-	NoChatSessionError,
-	PushRejectedError,
-	RefAlreadyExistsError,
-	type ResolvePushFrame,
-} from '../services/ChatChangesPush';
-import { ChatSessionService } from '../services/ChatSession';
-import { DbService } from '../services/Db';
-import { OpencodeSupervisor } from '../services/OpencodeSupervisor';
-import { withDb } from '../effects/with-db';
-import { GitHubService } from '../services/GitHub';
-import { PrContextService } from '../services/PrContext';
-import { RepoCloneService } from '../services/RepoClone';
-import { SettingsService } from '../services/Settings';
-import { walkthroughs } from '../db/schema/walkthroughs';
-import { walkthroughIssues } from '../db/schema/walkthrough-issues';
-import type { Db } from '../db/index';
+  ChatChangesPushService,
+  ChatStreamingConflictError,
+  ConcurrentPushError,
+  DirtyWorktreeError,
+  InvalidBranchNameError,
+  NoChangesError,
+  NoChatSessionError,
+  PushRejectedError,
+  RefAlreadyExistsError,
+  type ResolvePushFrame,
+} from "../services/ChatChangesPush";
+import { ChatSessionService } from "../services/ChatSession";
+import { DbService } from "../services/Db";
+import { GitHubService } from "../services/GitHub";
+import { OpencodeSupervisor } from "../services/OpencodeSupervisor";
+import { takePendingQuestion } from "../services/PendingQuestionRegistry";
+import { PrContextService } from "../services/PrContext";
+import { RepoCloneService } from "../services/RepoClone";
+import { SettingsService } from "../services/Settings";
+import { WebSocketHub } from "../services/WebSocketHub";
 import {
-	withAuth,
-	mapErrorToSSEResponse,
-	chatStreamToSSE,
-	jsonResponse,
-	handleAppError,
-	unwrapEffectError,
-} from './middleware';
-import type { ChatStreamFrame, RawChatStreamFrame } from '../ai/providers/chat-claude';
-import { AgentUnavailableError } from '../ai/providers/chat-opencode';
-import type {
-	ChatHistoryEntry,
-	ChatWalkthroughContext,
-} from '../ai/prompts/chat';
-import type { InteractionMode } from '@revv/shared';
-import { logError } from '../logger';
-import { WorktreeBlockedByUnpushedCommits } from '../domain/errors';
-import {
-	takePendingQuestion,
-} from '../services/PendingQuestionRegistry';
-import { WebSocketHub } from '../services/WebSocketHub';
+  chatStreamToSSE,
+  handleAppError,
+  jsonResponse,
+  mapErrorToSSEResponse,
+  unwrapEffectError,
+  withAuth,
+} from "./middleware";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -77,54 +72,46 @@ import { WebSocketHub } from '../services/WebSocketHub';
  * complete walkthrough exists. Used only on chat-session creation — the
  * system prompt is embedded once and the agent retains it.
  */
-function fetchWalkthroughContext(
-	db: Db,
-	prId: string,
-): ChatWalkthroughContext | null {
-	try {
-		const wtRow = db
-			.select()
-			.from(walkthroughs)
-			.where(
-				and(
-					eq(walkthroughs.pullRequestId, prId),
-					eq(walkthroughs.status, 'complete'),
-				),
-			)
-			.orderBy(desc(walkthroughs.generatedAt))
-			.limit(1)
-			.get();
-		if (!wtRow) return null;
+function fetchWalkthroughContext(db: Db, prId: string): ChatWalkthroughContext | null {
+  try {
+    const wtRow = db
+      .select()
+      .from(walkthroughs)
+      .where(and(eq(walkthroughs.pullRequestId, prId), eq(walkthroughs.status, "complete")))
+      .orderBy(desc(walkthroughs.generatedAt))
+      .limit(1)
+      .get();
+    if (!wtRow) return null;
 
-		const issues = db
-			.select()
-			.from(walkthroughIssues)
-			.where(eq(walkthroughIssues.walkthroughId, wtRow.id))
-			.orderBy(walkthroughIssues.order)
-			.limit(40)
-			.all();
+    const issues = db
+      .select()
+      .from(walkthroughIssues)
+      .where(eq(walkthroughIssues.walkthroughId, wtRow.id))
+      .orderBy(walkthroughIssues.order)
+      .limit(40)
+      .all();
 
-		return {
-			summary: wtRow.summary ?? '',
-			riskLevel: wtRow.riskLevel ?? 'low',
-			sentiment: wtRow.sentiment ?? null,
-			issues: issues.map((i) => ({
-				severity: i.severity,
-				title: i.title,
-				description: i.description,
-				filePath: i.filePath,
-				startLine: i.startLine,
-				endLine: i.endLine,
-			})),
-		};
-	} catch (err) {
-		logError(
-			'chat',
-			'walkthrough lookup failed (best-effort):',
-			err instanceof Error ? err.message : String(err),
-		);
-		return null;
-	}
+    return {
+      summary: wtRow.summary ?? "",
+      riskLevel: wtRow.riskLevel ?? "low",
+      sentiment: wtRow.sentiment ?? null,
+      issues: issues.map((i) => ({
+        severity: i.severity,
+        title: i.title,
+        description: i.description,
+        filePath: i.filePath,
+        startLine: i.startLine,
+        endLine: i.endLine,
+      })),
+    };
+  } catch (err) {
+    logError(
+      "chat",
+      "walkthrough lookup failed (best-effort):",
+      err instanceof Error ? err.message : String(err),
+    );
+    return null;
+  }
 }
 
 /**
@@ -133,37 +120,37 @@ function fetchWalkthroughContext(
  * `runGit` from RepoClone.ts because that one swallows stdout.
  */
 function gitStdout(args: string[], cwd: string, timeoutMs = 10_000): Promise<string> {
-	return new Promise((resolve, reject) => {
-		const proc = spawn('git', args, {
-			cwd,
-			stdio: ['ignore', 'pipe', 'pipe'],
-			env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
-		});
-		const chunks: Buffer[] = [];
-		const errChunks: Buffer[] = [];
-		proc.stdout?.on('data', (c: Buffer) => chunks.push(c));
-		proc.stderr?.on('data', (c: Buffer) => errChunks.push(c));
-		const timer = setTimeout(() => {
-			proc.kill();
-			reject(new Error(`git ${args[0] ?? ''} timed out`));
-		}, timeoutMs);
-		proc.on('close', (code) => {
-			clearTimeout(timer);
-			if (code === 0) {
-				resolve(Buffer.concat(chunks).toString('utf-8'));
-			} else {
-				reject(
-					new Error(
-						`git ${args[0] ?? ''} failed: ${Buffer.concat(errChunks).toString('utf-8').trim()}`,
-					),
-				);
-			}
-		});
-		proc.on('error', (err) => {
-			clearTimeout(timer);
-			reject(err);
-		});
-	});
+  return new Promise((resolve, reject) => {
+    const proc = spawn("git", args, {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    });
+    const chunks: Buffer[] = [];
+    const errChunks: Buffer[] = [];
+    proc.stdout?.on("data", (c: Buffer) => chunks.push(c));
+    proc.stderr?.on("data", (c: Buffer) => errChunks.push(c));
+    const timer = setTimeout(() => {
+      proc.kill();
+      reject(new Error(`git ${args[0] ?? ""} timed out`));
+    }, timeoutMs);
+    proc.on("close", (code) => {
+      clearTimeout(timer);
+      if (code === 0) {
+        resolve(Buffer.concat(chunks).toString("utf-8"));
+      } else {
+        reject(
+          new Error(
+            `git ${args[0] ?? ""} failed: ${Buffer.concat(errChunks).toString("utf-8").trim()}`,
+          ),
+        );
+      }
+    });
+    proc.on("error", (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+  });
 }
 
 /**
@@ -172,11 +159,11 @@ function gitStdout(args: string[], cwd: string, timeoutMs = 10_000): Promise<str
  * newly-added file at the parent commit).
  */
 async function gitShowSafe(sha: string, path: string, cwd: string): Promise<string | null> {
-	try {
-		return await gitStdout(['show', `${sha}:${path}`], cwd, 10_000);
-	} catch {
-		return null;
-	}
+  try {
+    return await gitStdout(["show", `${sha}:${path}`], cwd, 10_000);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -185,11 +172,11 @@ async function gitShowSafe(sha: string, path: string, cwd: string): Promise<stri
  * failure without risking a secondary error obscuring the first.
  */
 async function gitStdoutBestEffort(args: string[], cwd: string): Promise<void> {
-	try {
-		await gitStdout(args, cwd, 10_000);
-	} catch {
-		// Intentionally swallowed — best-effort only.
-	}
+  try {
+    await gitStdout(args, cwd, 10_000);
+  } catch {
+    // Intentionally swallowed — best-effort only.
+  }
 }
 
 /**
@@ -217,123 +204,118 @@ async function gitStdoutBestEffort(args: string[], cwd: string): Promise<void> {
  * — silent reset failures were the original bug.
  */
 async function discardAgentCommits(opts: {
-	worktreePath: string;
-	branchName: string;
-	prHeadSha: string;
+  worktreePath: string;
+  branchName: string;
+  prHeadSha: string;
 }): Promise<void> {
-	const { worktreePath, branchName, prHeadSha } = opts;
+  const { worktreePath, branchName, prHeadSha } = opts;
 
-	// 1. Clear any lock files. A leftover index.lock from an aborted agent
-	// turn is the single most common reason `reset --hard` fails on this
-	// worktree. The lockfile lives next to the worktree's gitdir, which
-	// sits inside the clone path, not the worktree itself — `git rev-parse
-	// --git-dir` resolves it.
-	let gitDir: string | null = null;
-	try {
-		gitDir = (await gitStdout(['rev-parse', '--git-dir'], worktreePath, 5_000)).trim();
-	} catch (err) {
-		logError(
-			'chat-clear',
-			'rev-parse --git-dir failed (worktree likely corrupt):',
-			err instanceof Error ? err.message : String(err),
-		);
-		return;
-	}
-	const absoluteGitDir = gitDir.startsWith('/') ? gitDir : join(worktreePath, gitDir);
-	for (const lockName of ['index.lock', 'HEAD.lock']) {
-		const lockPath = join(absoluteGitDir, lockName);
-		try {
-			if (existsSync(lockPath)) {
-				await rm(lockPath, { force: true });
-			}
-		} catch (err) {
-			logError(
-				'chat-clear',
-				`failed to clear stale ${lockName}:`,
-				err instanceof Error ? err.message : String(err),
-			);
-		}
-	}
+  // 1. Clear any lock files. A leftover index.lock from an aborted agent
+  // turn is the single most common reason `reset --hard` fails on this
+  // worktree. The lockfile lives next to the worktree's gitdir, which
+  // sits inside the clone path, not the worktree itself — `git rev-parse
+  // --git-dir` resolves it.
+  let gitDir: string | null = null;
+  try {
+    gitDir = (await gitStdout(["rev-parse", "--git-dir"], worktreePath, 5_000)).trim();
+  } catch (err) {
+    logError(
+      "chat-clear",
+      "rev-parse --git-dir failed (worktree likely corrupt):",
+      err instanceof Error ? err.message : String(err),
+    );
+    return;
+  }
+  const absoluteGitDir = gitDir.startsWith("/") ? gitDir : join(worktreePath, gitDir);
+  for (const lockName of ["index.lock", "HEAD.lock"]) {
+    const lockPath = join(absoluteGitDir, lockName);
+    try {
+      if (existsSync(lockPath)) {
+        await rm(lockPath, { force: true });
+      }
+    } catch (err) {
+      logError(
+        "chat-clear",
+        `failed to clear stale ${lockName}:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
 
-	// 2. Abort any half-finished merge/rebase. Both fail when nothing is in
-	// progress — that's fine, we're using the best-effort variant.
-	await gitStdoutBestEffort(['merge', '--abort'], worktreePath);
-	await gitStdoutBestEffort(['rebase', '--abort'], worktreePath);
-	await gitStdoutBestEffort(['cherry-pick', '--abort'], worktreePath);
+  // 2. Abort any half-finished merge/rebase. Both fail when nothing is in
+  // progress — that's fine, we're using the best-effort variant.
+  await gitStdoutBestEffort(["merge", "--abort"], worktreePath);
+  await gitStdoutBestEffort(["rebase", "--abort"], worktreePath);
+  await gitStdoutBestEffort(["cherry-pick", "--abort"], worktreePath);
 
-	// 3. Ensure HEAD points at the branch ref (not a detached commit). If
-	// HEAD is detached, `reset --hard` only moves HEAD — the branch ref
-	// keeps its old tip, so acquirePrWorktree later reattaches to the old
-	// tip via `worktree add`. Pointing HEAD at the branch first means the
-	// reset below updates both the working tree and the branch ref atomically.
-	try {
-		const headRef = (
-			await gitStdout(['symbolic-ref', '--quiet', 'HEAD'], worktreePath, 5_000).catch(
-				() => '',
-			)
-		).trim();
-		if (headRef !== `refs/heads/${branchName}`) {
-			await gitStdoutBestEffort(
-				['symbolic-ref', 'HEAD', `refs/heads/${branchName}`],
-				worktreePath,
-			);
-		}
-	} catch (err) {
-		logError(
-			'chat-clear',
-			'failed to verify/reattach HEAD:',
-			err instanceof Error ? err.message : String(err),
-		);
-	}
+  // 3. Ensure HEAD points at the branch ref (not a detached commit). If
+  // HEAD is detached, `reset --hard` only moves HEAD — the branch ref
+  // keeps its old tip, so acquirePrWorktree later reattaches to the old
+  // tip via `worktree add`. Pointing HEAD at the branch first means the
+  // reset below updates both the working tree and the branch ref atomically.
+  try {
+    const headRef = (
+      await gitStdout(["symbolic-ref", "--quiet", "HEAD"], worktreePath, 5_000).catch(() => "")
+    ).trim();
+    if (headRef !== `refs/heads/${branchName}`) {
+      await gitStdoutBestEffort(["symbolic-ref", "HEAD", `refs/heads/${branchName}`], worktreePath);
+    }
+  } catch (err) {
+    logError(
+      "chat-clear",
+      "failed to verify/reattach HEAD:",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
 
-	// 4. The reset itself. This is the load-bearing line — everything above
-	// is just clearing obstacles. We log the actual git failure so we can
-	// diagnose silent-failure regressions like the one that motivated this
-	// helper.
-	try {
-		await gitStdout(['reset', '--hard', prHeadSha], worktreePath, 30_000);
-	} catch (err) {
-		logError(
-			'chat-clear',
-			`reset --hard ${prHeadSha} failed in ${worktreePath}:`,
-			err instanceof Error ? err.message : String(err),
-		);
-		// Fall through to verification — even a failed reset may have
-		// partially worked, and we want the log to capture the final state.
-	}
+  // 4. The reset itself. This is the load-bearing line — everything above
+  // is just clearing obstacles. We log the actual git failure so we can
+  // diagnose silent-failure regressions like the one that motivated this
+  // helper.
+  try {
+    await gitStdout(["reset", "--hard", prHeadSha], worktreePath, 30_000);
+  } catch (err) {
+    logError(
+      "chat-clear",
+      `reset --hard ${prHeadSha} failed in ${worktreePath}:`,
+      err instanceof Error ? err.message : String(err),
+    );
+    // Fall through to verification — even a failed reset may have
+    // partially worked, and we want the log to capture the final state.
+  }
 
-	// 5. Drop any untracked files the agent created but never committed.
-	// Without this, the next chat session inherits ghost files in the
-	// worktree that confuse `git status` and the agent's own context.
-	await gitStdoutBestEffort(['clean', '-fd'], worktreePath);
+  // 5. Drop any untracked files the agent created but never committed.
+  // Without this, the next chat session inherits ghost files in the
+  // worktree that confuse `git status` and the agent's own context.
+  await gitStdoutBestEffort(["clean", "-fd"], worktreePath);
 
-	// 6. Verify. If HEAD didn't end up at prHeadSha the next chat turn
-	// will reproduce the original bug (same SHAs reappear) — emit a loud
-	// log so the regression is visible without strace-level debugging.
-	try {
-		const finalSha = (await gitStdout(['rev-parse', 'HEAD'], worktreePath, 5_000)).trim();
-		if (finalSha !== prHeadSha) {
-			logError(
-				'chat-clear',
-				`worktree rewind did not land at prHeadSha. ` +
-					`expected=${prHeadSha} got=${finalSha} worktree=${worktreePath}`,
-			);
-		}
-	} catch (err) {
-		logError(
-			'chat-clear',
-			'post-reset HEAD verification failed:',
-			err instanceof Error ? err.message : String(err),
-		);
-	}
+  // 6. Verify. If HEAD didn't end up at prHeadSha the next chat turn
+  // will reproduce the original bug (same SHAs reappear) — emit a loud
+  // log so the regression is visible without strace-level debugging.
+  try {
+    const finalSha = (await gitStdout(["rev-parse", "HEAD"], worktreePath, 5_000)).trim();
+    if (finalSha !== prHeadSha) {
+      logError(
+        "chat-clear",
+        `worktree rewind did not land at prHeadSha. ` +
+          `expected=${prHeadSha} got=${finalSha} worktree=${worktreePath}`,
+      );
+    }
+  } catch (err) {
+    logError(
+      "chat-clear",
+      "post-reset HEAD verification failed:",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
 }
 
 interface ProposedCommit {
-	sha: string;
-	shortSha: string;
-	subject: string;
-	committedAt: string;
-	files: string[];
+  sha: string;
+  shortSha: string;
+  subject: string;
+  committedAt: string;
+  files: string[];
 }
 
 /**
@@ -359,2021 +341,1847 @@ interface ProposedCommit {
  * about partial state without breaking the user's turn.
  */
 function wrapStreamWithPersistence(
-	source: ReadableStream<RawChatStreamFrame>,
-	ctx: { chatSessionId: string; turnId: string; agent: 'claude' | 'opencode' },
+  source: ReadableStream<RawChatStreamFrame>,
+  ctx: { chatSessionId: string; turnId: string; agent: "claude" | "opencode" },
 ): ReadableStream<ChatStreamFrame> {
-	return new ReadableStream<ChatStreamFrame>({
-		async start(controller) {
-			const reader = source.getReader();
-			let assistantMessageId: string | null = null;
-			let textStreamed = false;
-			// Provider call id → server-assigned invocation id. Activity
-			// frames stamped with subagentProviderCallId are translated to
-			// subagentInvocationId here so the wire shape uses server ids
-			// throughout.
-			const providerToInvocationId = new Map<string, string>();
-			// Provider request id → server-assigned question id. Used to map
-			// opencode's `question.replied` event back to the row created on
-			// the prior `question.asked` so the resolution frame carries the
-			// server id rather than the provider's request id.
-			const providerRequestIdToQuestionId = new Map<string, string>();
+  return new ReadableStream<ChatStreamFrame>({
+    async start(controller) {
+      const reader = source.getReader();
+      let assistantMessageId: string | null = null;
+      let textStreamed = false;
+      // Provider call id → server-assigned invocation id. Activity
+      // frames stamped with subagentProviderCallId are translated to
+      // subagentInvocationId here so the wire shape uses server ids
+      // throughout.
+      const providerToInvocationId = new Map<string, string>();
+      // Provider request id → server-assigned question id. Used to map
+      // opencode's `question.replied` event back to the row created on
+      // the prior `question.asked` so the resolution frame carries the
+      // server id rather than the provider's request id.
+      const providerRequestIdToQuestionId = new Map<string, string>();
 
-			const ensureAssistantMessage = async (): Promise<string> => {
-				if (assistantMessageId) return assistantMessageId;
-				try {
-					const { id } = await AppRuntime.runPromise(
-						Effect.flatMap(ChatSessionService, (svc) =>
-							svc.beginAssistantMessage({
-								chatSessionId: ctx.chatSessionId,
-								turnId: ctx.turnId,
-							}),
-						),
-					);
-					assistantMessageId = id;
-				} catch (err) {
-					logError(
-						'chat',
-						'beginAssistantMessage failed:',
-						err instanceof Error ? err.message : String(err),
-					);
-					// Surface a synthetic id so downstream calls don't keep
-					// trying. They'll silently no-op against a non-existent
-					// row, which we tolerate over crashing the stream.
-					assistantMessageId = '';
-				}
-				return assistantMessageId;
-			};
+      /** Best-effort log for persistence failures — never breaks the stream. */
+      const logPersistError = (op: string, err: unknown): void => {
+        logError("chat", `${op} failed:`, err instanceof Error ? err.message : String(err));
+      };
 
-			const finalize = async (errorMessage: string | null): Promise<void> => {
-				try {
-					if (!assistantMessageId && errorMessage) {
-						// Errored before any text arrived — still record an
-						// assistant row so the inline-error chip renders on
-						// reload.
-						await AppRuntime.runPromise(
-							Effect.flatMap(ChatSessionService, (svc) =>
-								svc.beginAssistantMessage({
-									chatSessionId: ctx.chatSessionId,
-									turnId: ctx.turnId,
-								}),
-							).pipe(
-								Effect.tap(({ id }) =>
-									Effect.flatMap(ChatSessionService, (svc) =>
-										svc.finalizeAssistantMessage({
-											messageId: id,
-											error: errorMessage,
-										}),
-									),
-								),
-							),
-						);
-					} else if (assistantMessageId) {
-						await AppRuntime.runPromise(
-							Effect.flatMap(ChatSessionService, (svc) =>
-								svc.finalizeAssistantMessage({
-									messageId: assistantMessageId!,
-									error: errorMessage,
-								}),
-							),
-						);
-					}
-				} catch (err) {
-					logError(
-						'chat',
-						'finalizeAssistantMessage failed:',
-						err instanceof Error ? err.message : String(err),
-					);
-				}
-			};
+      const ensureAssistantMessage = async (): Promise<string> => {
+        if (assistantMessageId) return assistantMessageId;
+        try {
+          const { id } = await AppRuntime.runPromise(
+            Effect.flatMap(ChatSessionService, (svc) =>
+              svc.beginAssistantMessage({
+                chatSessionId: ctx.chatSessionId,
+                turnId: ctx.turnId,
+              }),
+            ),
+          );
+          assistantMessageId = id;
+        } catch (err) {
+          logPersistError("beginAssistantMessage", err);
+          // Surface a synthetic id so downstream calls don't keep
+          // trying. They'll silently no-op against a non-existent
+          // row, which we tolerate over crashing the stream.
+          assistantMessageId = "";
+        }
+        return assistantMessageId;
+      };
 
-			try {
-				while (true) {
-					const { done, value } = await reader.read();
-					if (done) break;
+      const finalize = async (errorMessage: string | null): Promise<void> => {
+        try {
+          if (!assistantMessageId && errorMessage) {
+            // Errored before any text arrived — still record an
+            // assistant row so the inline-error chip renders on
+            // reload.
+            await AppRuntime.runPromise(
+              Effect.flatMap(ChatSessionService, (svc) =>
+                svc.beginAssistantMessage({
+                  chatSessionId: ctx.chatSessionId,
+                  turnId: ctx.turnId,
+                }),
+              ).pipe(
+                Effect.tap(({ id }) =>
+                  Effect.flatMap(ChatSessionService, (svc) =>
+                    svc.finalizeAssistantMessage({
+                      messageId: id,
+                      error: errorMessage,
+                    }),
+                  ),
+                ),
+              ),
+            );
+          } else if (assistantMessageId) {
+            await AppRuntime.runPromise(
+              Effect.flatMap(ChatSessionService, (svc) =>
+                svc.finalizeAssistantMessage({
+                  messageId: assistantMessageId!,
+                  error: errorMessage,
+                }),
+              ),
+            );
+          }
+        } catch (err) {
+          logPersistError("finalizeAssistantMessage", err);
+        }
+      };
 
-					if (value.kind === 'text') {
-						textStreamed = true;
-						const id = await ensureAssistantMessage();
-						if (id) {
-							try {
-								await AppRuntime.runPromise(
-									Effect.flatMap(ChatSessionService, (svc) =>
-										svc.appendAssistantContent({
-											messageId: id,
-											chunk: value.data,
-										}),
-									),
-								);
-							} catch (err) {
-								logError(
-									'chat',
-									'appendAssistantContent failed:',
-									err instanceof Error ? err.message : String(err),
-								);
-							}
-						}
-					} else if (value.kind === 'activity') {
-						const subagentInvocationId = value.subagentProviderCallId
-							? providerToInvocationId.get(value.subagentProviderCallId) ?? null
-							: null;
-						try {
-							await AppRuntime.runPromise(
-								Effect.flatMap(ChatSessionService, (svc) =>
-									svc.appendActivity({
-										chatSessionId: ctx.chatSessionId,
-										turnId: ctx.turnId,
-										activityKind: value.activityKind,
-										toolName: value.toolName,
-										summary: value.summary,
-										payload: value.payload,
-										subagentInvocationId,
-									}),
-								),
-							);
-						} catch (err) {
-							logError(
-								'chat',
-								'appendActivity failed:',
-								err instanceof Error ? err.message : String(err),
-							);
-						}
-						// Translate Raw → Wire: drop the providerCallId field,
-						// add server-side subagentInvocationId when present.
-						const { subagentProviderCallId: _unused, ...activityRest } = value;
-						void _unused;
-						const wireActivity: ChatStreamFrame = subagentInvocationId
-							? { ...activityRest, subagentInvocationId }
-							: activityRest;
-						controller.enqueue(wireActivity);
-						continue;
-					} else if (value.kind === 'task-list') {
-						try {
-							await AppRuntime.runPromise(
-								Effect.flatMap(ChatSessionService, (svc) =>
-									svc.applyTaskListSnapshot({
-										chatSessionId: ctx.chatSessionId,
-										turnId: ctx.turnId,
-										source: value.source,
-										tasks: value.tasks,
-									}),
-								),
-							);
-						} catch (err) {
-							logError(
-								'chat',
-								'applyTaskListSnapshot failed:',
-								err instanceof Error ? err.message : String(err),
-							);
-						}
-						controller.enqueue({
-							kind: 'task-list',
-							turnId: ctx.turnId,
-							tasks: value.tasks,
-						});
-						continue;
-					} else if (value.kind === 'plan-presented') {
-						let planId: string | null = null;
-						try {
-							const plan = await AppRuntime.runPromise(
-								Effect.flatMap(ChatSessionService, (svc) =>
-									svc.createPlan({
-										chatSessionId: ctx.chatSessionId,
-										turnId: ctx.turnId,
-										source: value.source,
-										markdown: value.markdown,
-									}),
-								),
-							);
-							planId = plan.id;
-						} catch (err) {
-							logError(
-								'chat',
-								'createPlan failed:',
-								err instanceof Error ? err.message : String(err),
-							);
-						}
-						if (planId) {
-							controller.enqueue({
-								kind: 'plan-presented',
-								planId,
-								turnId: ctx.turnId,
-								markdown: value.markdown,
-								status: 'pending',
-							});
-						}
-						continue;
-					} else if (value.kind === 'subagent-start') {
-						let invocationId: string | null = null;
-						try {
-							const { invocationId: id } = await AppRuntime.runPromise(
-								Effect.flatMap(ChatSessionService, (svc) =>
-									svc.startSubagentInvocation({
-										chatSessionId: ctx.chatSessionId,
-										parentTurnId: ctx.turnId,
-										source: value.source,
-										providerCallId: value.providerCallId,
-										subagentType: value.subagentType,
-										description: value.description,
-										prompt: value.prompt,
-									}),
-								),
-							);
-							invocationId = id;
-							providerToInvocationId.set(value.providerCallId, id);
-						} catch (err) {
-							logError(
-								'chat',
-								'startSubagentInvocation failed:',
-								err instanceof Error ? err.message : String(err),
-							);
-						}
-						if (invocationId) {
-							controller.enqueue({
-								kind: 'subagent-start',
-								invocationId,
-								parentTurnId: ctx.turnId,
-								subagentType: value.subagentType,
-								description: value.description,
-							});
-						}
-						continue;
-					} else if (value.kind === 'subagent-end') {
-						const invocationId = providerToInvocationId.get(
-							value.providerCallId,
-						);
-						if (invocationId) {
-							try {
-								await AppRuntime.runPromise(
-									Effect.flatMap(ChatSessionService, (svc) =>
-										svc.completeSubagentInvocation({
-											invocationId,
-											result: value.result,
-											ok: value.ok,
-										}),
-									),
-								);
-							} catch (err) {
-								logError(
-									'chat',
-									'completeSubagentInvocation failed:',
-									err instanceof Error ? err.message : String(err),
-								);
-							}
-							controller.enqueue({
-								kind: 'subagent-end',
-								invocationId,
-								result: value.result,
-								ok: value.ok,
-							});
-						}
-						continue;
-					} else if (value.kind === 'user-question') {
-						let questionId: string | null = null;
-						try {
-							const row = await AppRuntime.runPromise(
-								Effect.flatMap(ChatSessionService, (svc) =>
-									svc.createQuestion({
-										chatSessionId: ctx.chatSessionId,
-										turnId: ctx.turnId,
-										source: value.source,
-										providerRequestId: value.providerRequestId,
-										providerToolCallId:
-											value.providerToolCallId ?? null,
-										previewFormat: value.previewFormat,
-										questions: value.questions,
-									}),
-								),
-							);
-							questionId = row.id;
-							providerRequestIdToQuestionId.set(
-								value.providerRequestId,
-								row.id,
-							);
-						} catch (err) {
-							logError(
-								'chat',
-								'createQuestion failed:',
-								err instanceof Error ? err.message : String(err),
-							);
-						}
-						if (questionId) {
-							controller.enqueue({
-								kind: 'user-question',
-								questionId,
-								turnId: ctx.turnId,
-								questions: value.questions,
-								previewFormat: value.previewFormat,
-								status: 'pending',
-							});
-						}
-						continue;
-					} else if (value.kind === 'user-question-resolved') {
-						// Opencode-only: the daemon broadcasts replied/rejected
-						// AFTER our /answer endpoint has already POSTed back to
-						// it. The endpoint already wrote the DB row, so this
-						// path is idempotent — `decideQuestion` no-ops when the
-						// row is already non-pending.
-						const questionId =
-							providerRequestIdToQuestionId.get(value.providerRequestId);
-						if (questionId) {
-							try {
-								await AppRuntime.runPromise(
-									Effect.flatMap(ChatSessionService, (svc) =>
-										svc.decideQuestion({
-											questionId,
-											status: value.status,
-											...(value.answers !== undefined
-												? { answers: value.answers }
-												: {}),
-										}),
-									),
-								);
-							} catch (err) {
-								logError(
-									'chat',
-									'decideQuestion (stream-resolved) failed:',
-									err instanceof Error ? err.message : String(err),
-								);
-							}
-							controller.enqueue({
-								kind: 'user-question-resolved',
-								questionId,
-								status: value.status,
-								...(value.answers !== undefined
-									? { answers: value.answers }
-									: {}),
-							});
-						}
-						continue;
-					}
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
 
-					controller.enqueue(value as ChatStreamFrame);
-				}
+          if (value.kind === "text") {
+            textStreamed = true;
+            const id = await ensureAssistantMessage();
+            if (id) {
+              try {
+                await AppRuntime.runPromise(
+                  Effect.flatMap(ChatSessionService, (svc) =>
+                    svc.appendAssistantContent({
+                      messageId: id,
+                      chunk: value.data,
+                    }),
+                  ),
+                );
+              } catch (err) {
+                logPersistError("appendAssistantContent", err);
+              }
+            }
+          } else if (value.kind === "activity") {
+            const subagentInvocationId = value.subagentProviderCallId
+              ? (providerToInvocationId.get(value.subagentProviderCallId) ?? null)
+              : null;
+            try {
+              await AppRuntime.runPromise(
+                Effect.flatMap(ChatSessionService, (svc) =>
+                  svc.appendActivity({
+                    chatSessionId: ctx.chatSessionId,
+                    turnId: ctx.turnId,
+                    activityKind: value.activityKind,
+                    toolName: value.toolName,
+                    summary: value.summary,
+                    payload: value.payload,
+                    subagentInvocationId,
+                  }),
+                ),
+              );
+            } catch (err) {
+              logPersistError("appendActivity", err);
+            }
+            // Translate Raw → Wire: drop the providerCallId field,
+            // add server-side subagentInvocationId when present.
+            const { subagentProviderCallId: _unused, ...activityRest } = value;
+            void _unused;
+            const wireActivity: ChatStreamFrame = subagentInvocationId
+              ? { ...activityRest, subagentInvocationId }
+              : activityRest;
+            controller.enqueue(wireActivity);
+            continue;
+          } else if (value.kind === "task-list") {
+            try {
+              await AppRuntime.runPromise(
+                Effect.flatMap(ChatSessionService, (svc) =>
+                  svc.applyTaskListSnapshot({
+                    chatSessionId: ctx.chatSessionId,
+                    turnId: ctx.turnId,
+                    source: value.source,
+                    tasks: value.tasks,
+                  }),
+                ),
+              );
+            } catch (err) {
+              logPersistError("applyTaskListSnapshot", err);
+            }
+            controller.enqueue({
+              kind: "task-list",
+              turnId: ctx.turnId,
+              tasks: value.tasks,
+            });
+            continue;
+          } else if (value.kind === "plan-presented") {
+            let planId: string | null = null;
+            try {
+              const plan = await AppRuntime.runPromise(
+                Effect.flatMap(ChatSessionService, (svc) =>
+                  svc.createPlan({
+                    chatSessionId: ctx.chatSessionId,
+                    turnId: ctx.turnId,
+                    source: value.source,
+                    markdown: value.markdown,
+                  }),
+                ),
+              );
+              planId = plan.id;
+            } catch (err) {
+              logPersistError("createPlan", err);
+            }
+            if (planId) {
+              controller.enqueue({
+                kind: "plan-presented",
+                planId,
+                turnId: ctx.turnId,
+                markdown: value.markdown,
+                status: "pending",
+              });
+            }
+            continue;
+          } else if (value.kind === "subagent-start") {
+            let invocationId: string | null = null;
+            try {
+              const { invocationId: id } = await AppRuntime.runPromise(
+                Effect.flatMap(ChatSessionService, (svc) =>
+                  svc.startSubagentInvocation({
+                    chatSessionId: ctx.chatSessionId,
+                    parentTurnId: ctx.turnId,
+                    source: value.source,
+                    providerCallId: value.providerCallId,
+                    subagentType: value.subagentType,
+                    description: value.description,
+                    prompt: value.prompt,
+                  }),
+                ),
+              );
+              invocationId = id;
+              providerToInvocationId.set(value.providerCallId, id);
+            } catch (err) {
+              logPersistError("startSubagentInvocation", err);
+            }
+            if (invocationId) {
+              controller.enqueue({
+                kind: "subagent-start",
+                invocationId,
+                parentTurnId: ctx.turnId,
+                subagentType: value.subagentType,
+                description: value.description,
+              });
+            }
+            continue;
+          } else if (value.kind === "subagent-end") {
+            const invocationId = providerToInvocationId.get(value.providerCallId);
+            if (invocationId) {
+              try {
+                await AppRuntime.runPromise(
+                  Effect.flatMap(ChatSessionService, (svc) =>
+                    svc.completeSubagentInvocation({
+                      invocationId,
+                      result: value.result,
+                      ok: value.ok,
+                    }),
+                  ),
+                );
+              } catch (err) {
+                logPersistError("completeSubagentInvocation", err);
+              }
+              controller.enqueue({
+                kind: "subagent-end",
+                invocationId,
+                result: value.result,
+                ok: value.ok,
+              });
+            }
+            continue;
+          } else if (value.kind === "user-question") {
+            let questionId: string | null = null;
+            try {
+              const row = await AppRuntime.runPromise(
+                Effect.flatMap(ChatSessionService, (svc) =>
+                  svc.createQuestion({
+                    chatSessionId: ctx.chatSessionId,
+                    turnId: ctx.turnId,
+                    source: value.source,
+                    providerRequestId: value.providerRequestId,
+                    providerToolCallId: value.providerToolCallId ?? null,
+                    previewFormat: value.previewFormat,
+                    questions: value.questions,
+                  }),
+                ),
+              );
+              questionId = row.id;
+              providerRequestIdToQuestionId.set(value.providerRequestId, row.id);
+            } catch (err) {
+              logPersistError("createQuestion", err);
+            }
+            if (questionId) {
+              controller.enqueue({
+                kind: "user-question",
+                questionId,
+                turnId: ctx.turnId,
+                questions: value.questions,
+                previewFormat: value.previewFormat,
+                status: "pending",
+              });
+            }
+            continue;
+          } else if (value.kind === "user-question-resolved") {
+            // Opencode-only: the daemon broadcasts replied/rejected
+            // AFTER our /answer endpoint has already POSTed back to
+            // it. The endpoint already wrote the DB row, so this
+            // path is idempotent — `decideQuestion` no-ops when the
+            // row is already non-pending.
+            const questionId = providerRequestIdToQuestionId.get(value.providerRequestId);
+            if (questionId) {
+              try {
+                await AppRuntime.runPromise(
+                  Effect.flatMap(ChatSessionService, (svc) =>
+                    svc.decideQuestion({
+                      questionId,
+                      status: value.status,
+                      ...(value.answers !== undefined ? { answers: value.answers } : {}),
+                    }),
+                  ),
+                );
+              } catch (err) {
+                logPersistError("decideQuestion", err);
+              }
+              controller.enqueue({
+                kind: "user-question-resolved",
+                questionId,
+                status: value.status,
+                ...(value.answers !== undefined ? { answers: value.answers } : {}),
+              });
+            }
+            continue;
+          }
 
-				// Stream ended cleanly. If no text was streamed but the agent
-				// did emit activities or completed silently, still close out
-				// the turn with a placeholder row so the timeline is
-				// well-formed on reload.
-				if (!textStreamed && !assistantMessageId) {
-					await ensureAssistantMessage();
-				}
-				await finalize(null);
-				controller.close();
-			} catch (err) {
-				const msg = err instanceof Error ? err.message : 'Stream error';
-				await finalize(msg);
-				controller.error(err);
-			}
-		},
-	});
+          controller.enqueue(value as ChatStreamFrame);
+        }
+
+        // Stream ended cleanly. If no text was streamed but the agent
+        // did emit activities or completed silently, still close out
+        // the turn with a placeholder row so the timeline is
+        // well-formed on reload.
+        if (!textStreamed && !assistantMessageId) {
+          await ensureAssistantMessage();
+        }
+        await finalize(null);
+        controller.close();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Stream error";
+        await finalize(msg);
+        controller.error(err);
+      }
+    },
+  });
 }
 
 async function listProposedCommits(
-	worktreePath: string,
-	prHeadSha: string,
+  worktreePath: string,
+  prHeadSha: string,
 ): Promise<ProposedCommit[]> {
-	const range = `${prHeadSha}..HEAD`;
-	const log = await gitStdout(
-		[
-			'log',
-			range,
-			// %x09 = tab; we emit one line per commit then a blank line.
-			'--pretty=format:%H%x09%s%x09%aI',
-		],
-		worktreePath,
-	);
-	const lines = log.split('\n').filter((l) => l.length > 0);
-	if (lines.length === 0) return [];
+  const range = `${prHeadSha}..HEAD`;
+  const log = await gitStdout(
+    [
+      "log",
+      range,
+      // %x09 = tab; we emit one line per commit then a blank line.
+      "--pretty=format:%H%x09%s%x09%aI",
+    ],
+    worktreePath,
+  );
+  const lines = log.split("\n").filter((l) => l.length > 0);
+  if (lines.length === 0) return [];
 
-	const commits: ProposedCommit[] = [];
-	for (const line of lines) {
-		const parts = line.split('\t');
-		if (parts.length < 3) continue;
-		const [sha, subject, committedAt] = parts as [string, string, string];
-		const namesOut = await gitStdout(
-			['diff-tree', '--no-commit-id', '--name-only', '-r', sha],
-			worktreePath,
-		).catch(() => '');
-		const files = namesOut.split('\n').filter((f) => f.length > 0);
-		commits.push({
-			sha,
-			shortSha: sha.slice(0, 7),
-			subject,
-			committedAt,
-			files,
-		});
-	}
-	return commits;
+  const commits: ProposedCommit[] = [];
+  for (const line of lines) {
+    const parts = line.split("\t");
+    if (parts.length < 3) continue;
+    const [sha, subject, committedAt] = parts as [string, string, string];
+    const namesOut = await gitStdout(
+      ["diff-tree", "--no-commit-id", "--name-only", "-r", sha],
+      worktreePath,
+    ).catch(() => "");
+    const files = namesOut.split("\n").filter((f) => f.length > 0);
+    commits.push({
+      sha,
+      shortSha: sha.slice(0, 7),
+      subject,
+      committedAt,
+      files,
+    });
+  }
+  return commits;
 }
 
 // ── Route ──────────────────────────────────────────────────────────────────
 
 export const chatRoute = new Elysia()
-	.use(withAuth)
-	.post(
-		'/api/chat',
-		async (ctx) => {
-			try {
-				const requestedMode: InteractionMode | undefined =
-					ctx.body.interactionMode === 'plan' || ctx.body.interactionMode === 'default'
-						? ctx.body.interactionMode
-						: undefined;
-				const approvedPlanIdInput =
-					typeof ctx.body.approvedPlanId === 'string' && ctx.body.approvedPlanId.length > 0
-						? ctx.body.approvedPlanId
-						: undefined;
-				const prepared = await AppRuntime.runPromise(
-					Effect.gen(function* () {
-						const ai = yield* AiService;
-						const prCtx = yield* PrContextService;
-						const settingsService = yield* SettingsService;
-						const chatSessions = yield* ChatSessionService;
-						const repoClone = yield* RepoCloneService;
-						const github = yield* GitHubService;
-						const chatPush = yield* ChatChangesPushService;
-						const { db } = yield* DbService;
-
-						// Resolve PR + repo + token
-						const { pr, repo, token } = yield* prCtx.resolveBasic(
-							ctx.body.prId,
-							ctx.session.user.id,
-						);
-
-						// Resolve current head SHA (fall back to fetching meta)
-						let headSha = pr.headSha;
-						if (!headSha) {
-							const meta = yield* github.getPrMeta(
-								repo.fullName,
-								pr.externalId,
-								token,
-							);
-							headSha = meta.headSha;
-						}
-
-						const settings = yield* withDb(db, settingsService.getSettings()).pipe(
-							Effect.orElseSucceed(
-								() => ({ aiAgent: 'opencode' }) as { aiAgent: string | null },
-							),
-						);
-						const agent = resolveAgent(settings);
-
-						// Check for an existing session BEFORE acquiring the
-						// worktree. No row means this is a fresh start (e.g.
-						// the user just cleared chat), so after we acquire the
-						// worktree we must hard-reset it — stale agent commits
-						// may have survived the clear if the reset raced with
-						// this new message.
-						const existingSessionRow = yield* chatSessions.find(
-							pr.id,
-							agent,
-							headSha,
-						);
-						const isFreshStart = existingSessionRow === null;
-
-						// Acquire (or refresh) the per-PR worktree. Shared across
-						// walkthrough generation and every chat session for this
-						// PR. If HEAD is a descendant of `prHeadSha` — i.e. the
-						// agent has committed on top in a previous turn but not
-						// pushed — those commits are preserved (the chat-header
-						// push pill renders against them). HEAD is only reset
-						// when its base diverges from `prHeadSha`, e.g. the PR
-						// head moved on the remote.
-						const { worktreePath, branchName } = yield* repoClone.acquirePrWorktree({
-							repoId: repo.id,
-							prNumber: pr.externalId,
-							prHeadSha: headSha,
-							githubToken: token,
-						});
-
-					// Fresh start: hard-reset the worktree to `prHeadSha`
-					// so any stale agent commits that survived the clear
-					// (due to a race between discardAgentCommits and this
-					// handler) are unconditionally removed.
-					if (isFreshStart) {
-						yield* Effect.promise(() =>
-							discardAgentCommits({
-								worktreePath,
-								branchName,
-								prHeadSha: headSha,
-							}),
-						);
-					}
-
-						// Eagerly create (or look up) the chat_sessions row so
-						// chat_messages and chat_activities can FK to it BEFORE
-						// the agent emits its session id. The agent-side id
-						// arrives mid-stream via onSessionId and is patched in.
-						const chatSessionRow = yield* chatSessions.findOrCreate({
-							prId: pr.id,
-							agent,
-							prHeadSha: headSha,
-							worktreePath,
-							branchName,
-						});
-
-						// Plan-pending gate. If the most recent plan is still
-						// pending and the user didn't explicitly approve it,
-						// refuse the turn so the user has to either approve,
-						// reject, or refine instead of accidentally moving past
-						// it. Tagged return — the outer await unwraps and
-						// surfaces a 409 to the client.
-						const pendingPlan = yield* chatSessions.findPendingPlan(
-							chatSessionRow.id,
-						);
-						if (pendingPlan && pendingPlan.id !== approvedPlanIdInput) {
-							return { kind: 'plan-pending' as const, planId: pendingPlan.id };
-						}
-
-						// Question-pending gate. The previous turn left an
-						// askUserQuestion / question.asked open and the user
-						// hasn't answered it. Refusing the next prompt keeps the
-						// agent's tool-loop state consistent:
-						//   • Claude: the SDK's canUseTool is still awaiting our
-						//     in-memory deferred; starting a new turn would
-						//     leave that deferred orphaned forever.
-						//   • Opencode: the daemon won't accept a new
-						//     session.prompt while one is in-flight anyway —
-						//     surface the cleaner error instead of letting the
-						//     opencode call fail with a less helpful message.
-						const pendingQuestion =
-							yield* chatSessions.findPendingQuestion(chatSessionRow.id);
-						if (pendingQuestion) {
-							return {
-								kind: 'question-pending' as const,
-								questionId: pendingQuestion.id,
-							};
-						}
-
-						// Approval path: if the user is approving a plan, mark
-						// it approved before kicking off the execution turn.
-						// Also flip the session out of plan mode so the agent
-						// can actually mutate the worktree this turn.
-						if (approvedPlanIdInput) {
-							const decided = yield* chatSessions.decidePlan({
-								planId: approvedPlanIdInput,
-								decision: 'approved',
-							});
-							if (!decided) {
-								return { kind: 'plan-not-found' as const, planId: approvedPlanIdInput };
-							}
-							yield* chatSessions.setInteractionMode({
-								chatSessionId: chatSessionRow.id,
-								mode: 'default',
-							});
-						} else if (requestedMode !== undefined) {
-							yield* chatSessions.setInteractionMode({
-								chatSessionId: chatSessionRow.id,
-								mode: requestedMode,
-							});
-						}
-
-						// Effective mode for this turn. After approval, we run
-						// in 'default'. Otherwise: requested mode override, or
-						// fall back to the session's stored mode.
-						const effectiveMode: InteractionMode = approvedPlanIdInput
-							? 'default'
-							: requestedMode ?? chatSessionRow.interactionMode;
-
-						// "Resume" semantics: present only once the agent has
-						// emitted a session id on a previous turn. A fresh row
-						// (sessionId === null) means we're starting from scratch.
-						const resumeSessionId = chatSessionRow.sessionId ?? null;
-
-						// On new session, fetch walkthrough context for the system prompt.
-						// On resume, the agent already has it baked into its persisted session.
-						const walkthrough = resumeSessionId
-							? null
-							: fetchWalkthroughContext(db, pr.id);
-
-						// Snapshot the prior transcript BEFORE appending the new
-						// user message so the agent's history block doesn't end
-						// with a duplicate of the message it's about to receive.
-						// Plans / tasks / sub-agents aren't surfaced in the
-						// prompt's history block (they have their own dedicated
-						// surfaces) — drop them here.
-						const priorTimeline = yield* chatSessions.listTimeline(
-							chatSessionRow.id,
-						);
-						const history: ChatHistoryEntry[] = [];
-						for (const e of priorTimeline) {
-							if (e.entryKind === 'message') {
-								history.push({
-									entryKind: 'message',
-									role: e.role,
-									content: e.content,
-								});
-							} else if (e.entryKind === 'activity') {
-								history.push({
-									entryKind: 'activity',
-									activityKind: e.activityKind,
-									toolName: e.toolName,
-									summary: e.summary,
-								});
-							}
-							// task-list / plan / subagent: skipped — they're rendered
-							// from their own tables via the frontend timeline.
-						}
-
-						// Append the user message immediately so it persists even
-						// if the agent process never emits anything (timeout, crash).
-						const turnId = crypto.randomUUID();
-						yield* chatSessions.appendUserMessage({
-							chatSessionId: chatSessionRow.id,
-							turnId,
-							content: ctx.body.message,
-						});
-
-						// Synchronous-by-await: drivers must await this before
-						// streaming any user-visible content (opencode) or before
-						// closing their stream (claude). That serializes the
-						// SQLite write so a follow-up `chatSessions.find()` for
-						// the same (prId, agent, headSha) reliably sees the row,
-						// preventing the "fresh session on resend" race.
-						const onSessionId = async (sid: string): Promise<void> => {
-							try {
-								await AppRuntime.runPromise(
-									chatSessions.setAgentSessionId({
-										chatSessionId: chatSessionRow.id,
-										sessionId: sid,
-										worktreePath,
-										branchName,
-									}),
-								);
-							} catch (err) {
-								logError(
-									'chat',
-									'chatSessions.setAgentSessionId failed:',
-									err instanceof Error ? err.message : String(err),
-								);
-							}
-						};
-
-						const frameStream = yield* ai.chat({
-							pr: {
-								title: pr.title,
-								body: pr.body,
-								sourceBranch: pr.sourceBranch,
-								targetBranch: pr.targetBranch,
-							},
-							walkthrough,
-							message: ctx.body.message,
-							history,
-							cwd: worktreePath,
-							branchName,
-							resumeSessionId,
-							onSessionId,
-							prId: pr.id,
-							userId: ctx.session.user.id,
-							interactionMode: effectiveMode,
-						});
-
-						// Mark this PR as streaming so a concurrent push attempt
-						// is refused (the agent might write to the worktree at
-						// any moment, which would race with the push's
-						// `git checkout` / `git merge`).
-						chatPush.markChatStreaming(pr.id, true);
-
-						return {
-							kind: 'ok' as const,
-							frameStream,
-							chatSessionId: chatSessionRow.id,
-							turnId,
-							prId: pr.id,
-							agent,
-						};
-					}),
-				);
-
-				if (prepared.kind === 'plan-pending') {
-					ctx.set.status = 409;
-					return {
-						code: 'PLAN_PENDING',
-						planId: prepared.planId,
-						message: 'A plan is awaiting your decision. Approve or reject it before sending a new message.',
-					};
-				}
-				if (prepared.kind === 'plan-not-found') {
-					ctx.set.status = 404;
-					return {
-						code: 'PLAN_NOT_FOUND',
-						planId: prepared.planId,
-						message: 'Plan not found',
-					};
-				}
-				if (prepared.kind === 'question-pending') {
-					ctx.set.status = 409;
-					return {
-						code: 'QUESTION_PENDING',
-						questionId: prepared.questionId,
-						message: 'The agent is waiting for your answer to an open question. Answer it before sending a new message.',
-					};
-				}
-
-				const persistedStream = wrapStreamWithPersistence(
-					prepared.frameStream,
-					{
-						chatSessionId: prepared.chatSessionId,
-						turnId: prepared.turnId,
-						agent: prepared.agent,
-					},
-				);
-
-				// Wrap the persisted stream so we clear the streaming flag
-				// when the SSE consumer finishes — success, error, or client
-				// disconnect.
-				const streamingPrId = prepared.prId;
-				const flagClearingStream = new ReadableStream<ChatStreamFrame>({
-					async start(controller) {
-						const reader = persistedStream.getReader();
-						try {
-							while (true) {
-								const { done, value } = await reader.read();
-								if (done) break;
-								controller.enqueue(value);
-							}
-							controller.close();
-						} catch (err) {
-							controller.error(err);
-						} finally {
-							try {
-								await AppRuntime.runPromise(
-									Effect.flatMap(ChatChangesPushService, (svc) =>
-										Effect.sync(() =>
-											svc.markChatStreaming(streamingPrId, false),
-										),
-									),
-								);
-							} catch {
-								/* never throw from streaming-flag cleanup */
-							}
-						}
-					},
-				});
-
-			return new Response(chatStreamToSSE<ChatStreamFrame>(flagClearingStream), {
-				headers: {
-					'Content-Type': 'text/event-stream',
-					'Cache-Control': 'no-cache',
-					Connection: 'keep-alive',
-				},
-			});
-		} catch (e) {
-			// Special case: worktree is blocked by unpushed agent commits.
-			// Return a structured JSON 409 so the client can show the
-			// blocked-commits UI instead of treating it as a generic error.
-			const blockedErr = unwrapEffectError(e);
-			if (blockedErr instanceof WorktreeBlockedByUnpushedCommits) {
-				ctx.set.status = 409;
-				return {
-					code: 'WORKTREE_BLOCKED',
-					message: 'PR head advanced but worktree has unpushed agent commits',
-					worktreePath: blockedErr.worktreePath,
-					branchName: blockedErr.branchName,
-					oldHeadSha: blockedErr.oldHeadSha,
-					newHeadSha: blockedErr.newHeadSha,
-					commits: blockedErr.commits,
-				};
-			}
-			// Plan mode requested but the daemon has no `plan` agent.
-			if (blockedErr instanceof AgentUnavailableError) {
-				ctx.set.status = 422;
-				return {
-					code: 'AGENT_UNAVAILABLE',
-					agentName: blockedErr.agentName,
-					message: blockedErr.message,
-				};
-			}
-			return mapErrorToSSEResponse(e);
-		}
-		},
-		{
-			body: t.Object({
-				prId: t.String(),
-				message: t.String(),
-				interactionMode: t.Optional(
-					t.Union([t.Literal('default'), t.Literal('plan')]),
-				),
-				approvedPlanId: t.Optional(t.String()),
-			}),
-		},
-	)
-	.get(
-		'/api/chat/:prId/messages',
-		async (ctx) => {
-			try {
-				const result = await AppRuntime.runPromise(
-					Effect.gen(function* () {
-						const prCtx = yield* PrContextService;
-						const chatSessions = yield* ChatSessionService;
-						const settingsService = yield* SettingsService;
-						const { db } = yield* DbService;
-
-						const { pr } = yield* prCtx.resolveBasic(
-							ctx.params.prId,
-							ctx.session.user.id,
-						);
-
-						const settings = yield* withDb(db, settingsService.getSettings()).pipe(
-							Effect.orElseSucceed(
-								() => ({ aiAgent: 'opencode' }) as { aiAgent: string | null },
-							),
-						);
-						const agent = resolveAgent(settings);
-
-						if (!pr.headSha) return null;
-
-						// Resolve the chat session for the *current* head SHA
-						// only. Older SHAs are dormant — the user has moved on
-						// and a fresh PR commit creates a fresh session row.
-						const row = yield* chatSessions.find(pr.id, agent, pr.headSha);
-						if (!row) return null;
-
-						const timeline = yield* chatSessions.listTimeline(row.id);
-						return { row, timeline };
-					}),
-				);
-
-				if (!result) {
-					return jsonResponse(
-						{ chatSessionId: null, entries: [], interactionMode: 'default' },
-						200,
-					);
-				}
-
-				return jsonResponse(
-					{
-						chatSessionId: result.row.id,
-						entries: result.timeline,
-						interactionMode: result.row.interactionMode,
-					},
-					200,
-				);
-			} catch (e) {
-				const err = unwrapEffectError(e);
-				ctx.set.status = 500;
-				return {
-					error: err instanceof Error ? err.message : 'Internal error',
-				};
-			}
-		},
-		{
-			params: t.Object({ prId: t.String() }),
-		},
-	)
-	.delete(
-		'/api/chat/:prId',
-		async (ctx) => {
-			try {
-				const latest = await AppRuntime.runPromise(
-					Effect.gen(function* () {
-						const prCtx = yield* PrContextService;
-						const chatSessions = yield* ChatSessionService;
-						const settingsService = yield* SettingsService;
-						const { db } = yield* DbService;
-
-						const { pr } = yield* prCtx.resolveBasic(
-							ctx.params.prId,
-							ctx.session.user.id,
-						);
-
-						const settings = yield* withDb(db, settingsService.getSettings()).pipe(
-							Effect.orElseSucceed(
-								() => ({ aiAgent: 'opencode' }) as { aiAgent: string | null },
-							),
-						);
-						const agent = resolveAgent(settings);
-
-						// Capture the active worktree before dropping rows so we
-						// can rewind it to the PR head SHA below — clearing the
-						// conversation also discards any unpushed agent commits
-						// the user accumulated during this session.
-						const activeRow = yield* chatSessions.findLatestForPr(pr.id, agent);
-
-						// Drop every chat-session row for (pr, agent). The
-						// per-PR worktree itself stays put — it's shared with
-						// walkthrough generation and re-used across chat
-						// sessions, refreshed in place on the next acquire.
-						yield* chatSessions.clearAllForPr(pr.id, agent);
-
-						return activeRow;
-					}),
-				);
-
-				if (latest && existsSync(latest.worktreePath)) {
-					await discardAgentCommits({
-						worktreePath: latest.worktreePath,
-						branchName: latest.branchName,
-						prHeadSha: latest.prHeadSha,
-					});
-				}
-
-				return new Response(null, { status: 204 });
-			} catch (e) {
-				ctx.set.status = 500;
-				return handleAppError(e, ctx);
-			}
-		},
-		{
-			params: t.Object({ prId: t.String() }),
-		},
-	)
-	.get(
-		'/api/chat/:prId/proposed-changes',
-		async (ctx) => {
-			try {
-				const result = await AppRuntime.runPromise(
-					Effect.gen(function* () {
-						const prCtx = yield* PrContextService;
-						const chatSessions = yield* ChatSessionService;
-						const settingsService = yield* SettingsService;
-						const { db } = yield* DbService;
-
-						const { pr } = yield* prCtx.resolveBasic(
-							ctx.params.prId,
-							ctx.session.user.id,
-						);
-
-						const settings = yield* withDb(db, settingsService.getSettings()).pipe(
-							Effect.orElseSucceed(
-								() => ({ aiAgent: 'opencode' }) as { aiAgent: string | null },
-							),
-						);
-						const agent = resolveAgent(settings);
-
-						if (!pr.headSha) return null;
-						const row = yield* chatSessions.find(pr.id, agent, pr.headSha);
-						if (!row) return null;
-						return row;
-					}),
-				);
-
-				if (!result) {
-					return jsonResponse(
-						{ branchName: null, prHeadSha: null, commits: [] },
-						200,
-					);
-				}
-
-				const commits = await listProposedCommits(
-					result.worktreePath,
-					result.prHeadSha,
-				).catch((err) => {
-					logError(
-						'chat',
-						'listProposedCommits failed:',
-						err instanceof Error ? err.message : String(err),
-					);
-					return [] as ProposedCommit[];
-				});
-
-				return jsonResponse(
-					{
-						branchName: result.branchName,
-						prHeadSha: result.prHeadSha,
-						commits,
-					},
-					200,
-				);
-			} catch (e) {
-				const err = unwrapEffectError(e);
-				ctx.set.status = 500;
-				return {
-					error: err instanceof Error ? err.message : 'Internal error',
-				};
-			}
-		},
-		{
-			params: t.Object({ prId: t.String() }),
-		},
-	)
-	.get(
-		'/api/chat/:prId/proposed-changes/:sha/diff',
-		async (ctx) => {
-			try {
-				const result = await AppRuntime.runPromise(
-					Effect.gen(function* () {
-						const prCtx = yield* PrContextService;
-						const chatSessions = yield* ChatSessionService;
-						const settingsService = yield* SettingsService;
-						const { db } = yield* DbService;
-
-						const { pr } = yield* prCtx.resolveBasic(
-							ctx.params.prId,
-							ctx.session.user.id,
-						);
-
-						const settings = yield* withDb(db, settingsService.getSettings()).pipe(
-							Effect.orElseSucceed(
-								() => ({ aiAgent: 'opencode' }) as { aiAgent: string | null },
-							),
-						);
-						const agent = resolveAgent(settings);
-
-						if (!pr.headSha) return null;
-						return yield* chatSessions.find(pr.id, agent, pr.headSha);
-					}),
-				);
-
-				if (!result) {
-					ctx.set.status = 404;
-					return { error: 'No active chat session for this PR' };
-				}
-
-				// Validate the SHA shape — defense in depth against arg injection.
-				if (!/^[0-9a-f]{7,40}$/i.test(ctx.params.sha)) {
-					ctx.set.status = 400;
-					return { error: 'Invalid commit SHA' };
-				}
-
-				const diff = await gitStdout(
-					['show', '--patch', '--pretty=format:', ctx.params.sha],
-					result.worktreePath,
-					15_000,
-				);
-
-				return new Response(diff, {
-					headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-				});
-			} catch (e) {
-				const err = unwrapEffectError(e);
-				ctx.set.status = 500;
-				return {
-					error: err instanceof Error ? err.message : 'Internal error',
-				};
-			}
-		},
-		{
-			params: t.Object({ prId: t.String(), sha: t.String() }),
-		},
-	)
-	.get(
-		'/api/chat/:prId/proposed-changes/:sha/files',
-		async (ctx) => {
-			try {
-				const result = await AppRuntime.runPromise(
-					Effect.gen(function* () {
-						const prCtx = yield* PrContextService;
-						const chatSessions = yield* ChatSessionService;
-						const settingsService = yield* SettingsService;
-						const { db } = yield* DbService;
-
-						const { pr } = yield* prCtx.resolveBasic(
-							ctx.params.prId,
-							ctx.session.user.id,
-						);
-
-						const settings = yield* withDb(db, settingsService.getSettings()).pipe(
-							Effect.orElseSucceed(
-								() => ({ aiAgent: 'opencode' }) as { aiAgent: string | null },
-							),
-						);
-						const agent = resolveAgent(settings);
-
-						if (!pr.headSha) return null;
-						return yield* chatSessions.find(pr.id, agent, pr.headSha);
-					}),
-				);
-
-				if (!result) {
-					ctx.set.status = 404;
-					return { error: 'No active chat session for this PR' };
-				}
-
-				if (!/^[0-9a-f]{7,40}$/i.test(ctx.params.sha)) {
-					ctx.set.status = 400;
-					return { error: 'Invalid commit SHA' };
-				}
-
-				// `-z -M --name-status` outputs one record per changed file as
-				// `<status>\0<path>` (or `R<sim>\0<oldPath>\0<newPath>` for renames),
-				// records concatenated with no separator.
-				const raw = await gitStdout(
-					[
-						'diff-tree',
-						'--no-commit-id',
-						'--name-status',
-						'-r',
-						'-z',
-						'-M',
-						ctx.params.sha,
-					],
-					result.worktreePath,
-					15_000,
-				);
-
-				const tokens = raw.split('\0').filter((t) => t.length > 0);
-				const fileTasks: Array<Promise<{
-					path: string;
-					oldPath: string | null;
-					oldContent: string | null;
-					newContent: string | null;
-					status: string;
-					binary: boolean;
-				}>> = [];
-
-				for (let i = 0; i < tokens.length; ) {
-					const status = tokens[i++];
-					if (status == null) break;
-					const isRenameOrCopy = status.startsWith('R') || status.startsWith('C');
-					const oldPath = isRenameOrCopy ? tokens[i++] ?? null : null;
-					const path = tokens[i++];
-					if (path == null) break;
-
-					const isAdd = status === 'A';
-					const isDel = status === 'D';
-					const oldRef = isAdd ? null : oldPath ?? path;
-					const newRef = isDel ? null : path;
-
-					fileTasks.push(
-						(async () => {
-							const [oldRaw, newRaw] = await Promise.all([
-								oldRef
-									? gitShowSafe(`${ctx.params.sha}^`, oldRef, result.worktreePath)
-									: Promise.resolve(null),
-								newRef
-									? gitShowSafe(ctx.params.sha, newRef, result.worktreePath)
-									: Promise.resolve(null),
-							]);
-							// Cheap binary heuristic: a null byte anywhere in either
-							// version. Good enough for the typical mix of text + images
-							// the agent produces; binary files just render as a
-							// no-content placeholder on the client.
-							const binary =
-								(oldRaw != null && oldRaw.includes('\0')) ||
-								(newRaw != null && newRaw.includes('\0'));
-							return {
-								path,
-								oldPath,
-								status,
-								oldContent: binary ? null : oldRaw,
-								newContent: binary ? null : newRaw,
-								binary,
-							};
-						})(),
-					);
-				}
-
-				const files = await Promise.all(fileTasks);
-				return { files };
-			} catch (e) {
-				const err = unwrapEffectError(e);
-				ctx.set.status = 500;
-				return {
-					error: err instanceof Error ? err.message : 'Internal error',
-				};
-			}
-		},
-		{
-			params: t.Object({ prId: t.String(), sha: t.String() }),
-		},
-	)
-	.post(
-		'/api/chat/:prId/proposed-changes/merge-and-push',
-		async (ctx) => {
-			try {
-				const body = (ctx.body ?? {}) as {
-					newBranchName?: unknown;
-					force?: unknown;
-				};
-				let newBranchName: string | undefined;
-				if (body.newBranchName !== undefined) {
-					if (typeof body.newBranchName !== 'string') {
-						ctx.set.status = 400;
-						return {
-							code: 'INVALID_BRANCH_NAME',
-							message: 'newBranchName must be a string',
-						};
-					}
-					const trimmed = body.newBranchName.trim();
-					if (
-						trimmed.length === 0 ||
-						/\s/.test(trimmed) ||
-						trimmed.startsWith('-') ||
-						trimmed.includes('..')
-					) {
-						ctx.set.status = 400;
-						return {
-							code: 'INVALID_BRANCH_NAME',
-							message: 'newBranchName is empty or contains invalid characters',
-						};
-					}
-					newBranchName = trimmed;
-				}
-				const force =
-					typeof body.force === 'boolean' ? body.force : undefined;
-
-				const result = await AppRuntime.runPromise(
-					Effect.flatMap(ChatChangesPushService, (svc) =>
-						svc.attemptMergeAndPush({
-							prId: ctx.params.prId,
-							userId: ctx.session.user.id,
-							...(newBranchName !== undefined ? { newBranchName } : {}),
-							...(force !== undefined ? { force } : {}),
-						}),
-					),
-				);
-				// Conflict / remote-changed / ref-exists are expected non-error
-				// outcomes — surface 409 so the client can branch on the status
-				// code in addition to the body.
-				if (result.status === 'conflict') {
-					ctx.set.status = 409;
-					return result;
-				}
-				if (result.status === 'remote-changed') {
-					ctx.set.status = 409;
-					return result;
-				}
-				if (result.status === 'ref-exists') {
-					ctx.set.status = 409;
-					return result;
-				}
-				return result;
-			} catch (e) {
-				const err = unwrapEffectError(e);
-				if (err instanceof ConcurrentPushError) {
-					ctx.set.status = 409;
-					return { code: 'CONCURRENT_PUSH', message: 'A push is already in progress for this PR' };
-				}
-				if (err instanceof ChatStreamingConflictError) {
-					ctx.set.status = 409;
-					return {
-						code: 'CHAT_STREAMING',
-						message: 'Wait for the chat agent to finish before pushing',
-					};
-				}
-				if (err instanceof DirtyWorktreeError) {
-					ctx.set.status = 422;
-					return { code: 'DIRTY_WORKTREE', message: err.message };
-				}
-				if (err instanceof NoChangesError) {
-					ctx.set.status = 422;
-					return { code: 'NO_CHANGES', message: 'No agent commits to push' };
-				}
-				if (err instanceof NoChatSessionError) {
-					ctx.set.status = 422;
-					return {
-						code: 'NO_CHAT_SESSION',
-						message: 'No chat session for this PR — start a chat first',
-					};
-				}
-				if (err instanceof InvalidBranchNameError) {
-					ctx.set.status = 400;
-					return { code: 'INVALID_BRANCH_NAME', message: err.message };
-				}
-				if (err instanceof RefAlreadyExistsError) {
-					ctx.set.status = 409;
-					return { code: 'REF_EXISTS', message: `branch ${err.ref} already exists` };
-				}
-				if (err instanceof PushRejectedError) {
-					ctx.set.status = 502;
-					return { code: 'PUSH_REJECTED', message: err.message };
-				}
-				return handleAppError(e, ctx);
-			}
-		},
-		{
-			params: t.Object({ prId: t.String() }),
-			body: t.Optional(
-				t.Object({
-					newBranchName: t.Optional(t.String()),
-					force: t.Optional(t.Boolean()),
-				}),
-			),
-		},
-	)
-	.post(
-		'/api/chat/:prId/proposed-changes/resolve-and-push',
-		async (ctx) => {
-			try {
-				const stream = await AppRuntime.runPromise(
-					Effect.flatMap(ChatChangesPushService, (svc) =>
-						svc.resolveConflictsAndPush({
-							prId: ctx.params.prId,
-							userId: ctx.session.user.id,
-						}),
-					),
-				);
-
-				return new Response(resolvePushStreamToSSE(stream), {
-					headers: {
-						'Content-Type': 'text/event-stream',
-						'Cache-Control': 'no-cache',
-						Connection: 'keep-alive',
-					},
-				});
-			} catch (e) {
-				return mapErrorToSSEResponse(e);
-			}
-		},
-		{
-			params: t.Object({ prId: t.String() }),
-		},
-	)
-	// ── Unpushed commit management ───────────────────────────────────────────
-	// Three endpoints to handle the WorktreeBlockedByUnpushedCommits scenario:
-	//   DELETE …/:sha      — discard a single agent commit via rebase --onto
-	//   POST …/rebase-onto — rebase all agent commits onto the new PR head
-	//   POST …/advance     — advance the worktree to the new PR head (after
-	//                        all commits have been handled)
-	.post(
-		'/api/chat/:prId/proposed-changes/cherry-pick',
-		async (ctx) => {
-			const body = (ctx.body ?? {}) as { sha?: unknown };
-			if (typeof body.sha !== 'string' || !/^[0-9a-f]{7,40}$/i.test(body.sha)) {
-				ctx.set.status = 400;
-				return { error: 'sha is required and must be a valid commit hash' };
-			}
-			const { sha } = body;
-
-			try {
-				const result = await AppRuntime.runPromise(
-					Effect.flatMap(ChatChangesPushService, (svc) =>
-						svc.cherryPickAndPush({
-							prId: ctx.params.prId,
-							userId: ctx.session.user.id,
-							sha,
-						}),
-					),
-				);
-
-				if (result.status === 'pushed') {
-					return jsonResponse({ status: 'pushed', newSha: result.newSha, pushedCommits: result.pushedCommits, branch: result.branch }, 200);
-				}
-				if (result.status === 'remote-changed') {
-					ctx.set.status = 409;
-					return { status: 'remote-changed', branch: result.branch };
-				}
-				ctx.set.status = 500;
-				return { error: 'Unexpected cherry-pick result' };
-			} catch (e) {
-				const err = unwrapEffectError(e);
-				if (err instanceof ConcurrentPushError) {
-					ctx.set.status = 409;
-					return { code: 'CONCURRENT_PUSH', message: 'Another push is already in progress for this PR' };
-				}
-				if (err instanceof DirtyWorktreeError) {
-					ctx.set.status = 409;
-					return { code: 'DIRTY_WORKTREE', message: err.message };
-				}
-				if (err instanceof NoChangesError) {
-					ctx.set.status = 409;
-					return { code: 'NO_CHANGES', message: 'No proposed commits found' };
-				}
-				if (err instanceof NoChatSessionError) {
-					ctx.set.status = 404;
-					return { code: 'NO_CHAT_SESSION', message: 'No chat session found for this PR' };
-				}
-				logError('chat-cherry-pick', err instanceof Error ? err.message : String(err));
-				ctx.set.status = 500;
-				return { error: err instanceof Error ? err.message : 'Internal error' };
-			}
-		},
-		{
-			params: t.Object({ prId: t.String() }),
-		},
-	)
-	.delete(
-		'/api/chat/:prId/proposed-changes/:sha',
-		async (ctx) => {
-			// Validate SHA before doing anything expensive.
-			if (!/^[0-9a-f]{7,40}$/i.test(ctx.params.sha)) {
-				ctx.set.status = 400;
-				return { error: 'Invalid commit SHA' };
-			}
-
-			try {
-				const row = await AppRuntime.runPromise(
-					Effect.gen(function* () {
-						const prCtx = yield* PrContextService;
-						const chatSessions = yield* ChatSessionService;
-						const settingsService = yield* SettingsService;
-						const { db } = yield* DbService;
-
-						const { pr } = yield* prCtx.resolveBasic(
-							ctx.params.prId,
-							ctx.session.user.id,
-						);
-						const settings = yield* withDb(db, settingsService.getSettings()).pipe(
-							Effect.orElseSucceed(
-								() => ({ aiAgent: 'opencode' }) as { aiAgent: string | null },
-							),
-						);
-						const agent = resolveAgent(settings);
-						return yield* chatSessions.findLatestForPr(pr.id, agent);
-					}),
-				);
-
-				if (!row) {
-					ctx.set.status = 404;
-					return { error: 'No chat session found for this PR' };
-				}
-
-				const { worktreePath } = row;
-
-				// Resolve the full 40-char SHA in case a short SHA was supplied.
-				const fullSha = await gitStdout(
-					['rev-parse', ctx.params.sha],
-					worktreePath,
-					5_000,
-				).catch(() => null);
-				if (!fullSha?.trim()) {
-					ctx.set.status = 404;
-					return { error: 'Commit not found in worktree' };
-				}
-				const sha = fullSha.trim();
-
-				const parentSha = await gitStdout(
-					['rev-parse', `${sha}^`],
-					worktreePath,
-					5_000,
-				).catch(() => null);
-				if (!parentSha?.trim()) {
-					ctx.set.status = 422;
-					return { error: 'Cannot discard root commit' };
-				}
-
-				// Drop `sha` by rebasing everything above it onto its parent.
-				// git rebase --onto <parent> <sha> HEAD
-				try {
-					await gitStdout(
-						['rebase', '--onto', parentSha.trim(), sha, 'HEAD'],
-						worktreePath,
-						30_000,
-					);
-				} catch (rebaseErr) {
-					await gitStdoutBestEffort(['rebase', '--abort'], worktreePath);
-					ctx.set.status = 409;
-					return {
-						code: 'REBASE_CONFLICT',
-						message:
-							rebaseErr instanceof Error
-								? rebaseErr.message
-								: 'Rebase conflict — use the agent to resolve',
-					};
-				}
-
-				return jsonResponse({ status: 'discarded' }, 200);
-			} catch (e) {
-				const err = unwrapEffectError(e);
-				ctx.set.status = 500;
-				return { error: err instanceof Error ? err.message : 'Internal error' };
-			}
-		},
-		{
-			params: t.Object({ prId: t.String(), sha: t.String() }),
-		},
-	)
-	.post(
-		'/api/chat/:prId/proposed-changes/rebase-onto',
-		async (ctx) => {
-			const body = (ctx.body ?? {}) as { oldHeadSha?: unknown; newHeadSha?: unknown };
-			if (typeof body.oldHeadSha !== 'string' || typeof body.newHeadSha !== 'string') {
-				ctx.set.status = 400;
-				return { error: 'oldHeadSha and newHeadSha are required strings' };
-			}
-			const { oldHeadSha, newHeadSha } = body;
-
-			try {
-				const row = await AppRuntime.runPromise(
-					Effect.gen(function* () {
-						const prCtx = yield* PrContextService;
-						const chatSessions = yield* ChatSessionService;
-						const settingsService = yield* SettingsService;
-						const { db } = yield* DbService;
-
-						const { pr } = yield* prCtx.resolveBasic(
-							ctx.params.prId,
-							ctx.session.user.id,
-						);
-						const settings = yield* withDb(db, settingsService.getSettings()).pipe(
-							Effect.orElseSucceed(
-								() => ({ aiAgent: 'opencode' }) as { aiAgent: string | null },
-							),
-						);
-						const agent = resolveAgent(settings);
-						return yield* chatSessions.findLatestForPr(pr.id, agent);
-					}),
-				);
-
-				if (!row) {
-					ctx.set.status = 404;
-					return { error: 'No chat session found for this PR' };
-				}
-
-				const { worktreePath } = row;
-
-				// Ensure newHeadSha is present in the local object store.
-				await gitStdoutBestEffort(['fetch', 'origin', newHeadSha], worktreePath);
-
-				// Rebase agent commits onto the new PR head.
-				// git rebase --onto <newHeadSha> <oldHeadSha> HEAD
-				try {
-					await gitStdout(
-						['rebase', '--onto', newHeadSha, oldHeadSha, 'HEAD'],
-						worktreePath,
-						60_000,
-					);
-				} catch (rebaseErr) {
-					await gitStdoutBestEffort(['rebase', '--abort'], worktreePath);
-					ctx.set.status = 409;
-					return {
-						code: 'REBASE_CONFLICT',
-						message:
-							rebaseErr instanceof Error
-								? rebaseErr.message
-								: 'Rebase conflict — use the agent to resolve',
-					};
-				}
-
-				return jsonResponse({ status: 'rebased' }, 200);
-			} catch (e) {
-				const err = unwrapEffectError(e);
-				ctx.set.status = 500;
-				return { error: err instanceof Error ? err.message : 'Internal error' };
-			}
-		},
-		{
-			params: t.Object({ prId: t.String() }),
-		},
-	)
-	.post(
-		'/api/chat/:prId/proposed-changes/advance',
-		async (ctx) => {
-			const body = (ctx.body ?? {}) as { newHeadSha?: unknown };
-			if (typeof body.newHeadSha !== 'string') {
-				ctx.set.status = 400;
-				return { error: 'newHeadSha is required' };
-			}
-			const { newHeadSha } = body;
-
-			try {
-				await AppRuntime.runPromise(
-					Effect.gen(function* () {
-						const prCtx = yield* PrContextService;
-						const chatSessions = yield* ChatSessionService;
-						const settingsService = yield* SettingsService;
-						const repoClone = yield* RepoCloneService;
-						const { db } = yield* DbService;
-
-						const { pr, repo, token } = yield* prCtx.resolveBasic(
-							ctx.params.prId,
-							ctx.session.user.id,
-						);
-						const settings = yield* withDb(db, settingsService.getSettings()).pipe(
-							Effect.orElseSucceed(
-								() => ({ aiAgent: 'opencode' }) as { aiAgent: string | null },
-							),
-						);
-						const agent = resolveAgent(settings);
-
-						const row = yield* chatSessions.findLatestForPr(pr.id, agent);
-						if (!row) return;
-
-						// Re-acquire with the new SHA. At this point all agent
-						// commits have been handled, so this should succeed.
-						yield* repoClone.acquirePrWorktree({
-							repoId: repo.id,
-							prNumber: pr.externalId,
-							prHeadSha: newHeadSha,
-							githubToken: token,
-						});
-
-						// Keep the session row's prHeadSha in sync.
-						yield* chatSessions.updatePrHeadSha({
-							chatSessionId: row.id,
-							prHeadSha: newHeadSha,
-						});
-					}),
-				);
-
-				return jsonResponse({ status: 'advanced' }, 200);
-			} catch (e) {
-				const err = unwrapEffectError(e);
-				ctx.set.status = 500;
-				return { error: err instanceof Error ? err.message : 'Internal error' };
-			}
-		},
-		{
-			params: t.Object({ prId: t.String() }),
-		},
-	)
-	// ── Interaction mode (plan toggle) ──────────────────────────────────────
-	.patch(
-		'/api/chat/:prId/interaction-mode',
-		async (ctx) => {
-			const body = (ctx.body ?? {}) as { mode?: unknown };
-			if (body.mode !== 'plan' && body.mode !== 'default') {
-				ctx.set.status = 400;
-				return { error: "mode must be 'plan' or 'default'" };
-			}
-			const mode: InteractionMode = body.mode;
-			try {
-				await AppRuntime.runPromise(
-					Effect.gen(function* () {
-						const prCtx = yield* PrContextService;
-						const chatSessions = yield* ChatSessionService;
-						const settingsService = yield* SettingsService;
-						const { db } = yield* DbService;
-						const { pr } = yield* prCtx.resolveBasic(
-							ctx.params.prId,
-							ctx.session.user.id,
-						);
-						const settings = yield* withDb(db, settingsService.getSettings()).pipe(
-							Effect.orElseSucceed(
-								() => ({ aiAgent: 'opencode' }) as { aiAgent: string | null },
-							),
-						);
-						const agent = resolveAgent(settings);
-						if (!pr.headSha) return;
-						const row = yield* chatSessions.find(pr.id, agent, pr.headSha);
-						if (!row) return;
-						yield* chatSessions.setInteractionMode({
-							chatSessionId: row.id,
-							mode,
-						});
-					}),
-				);
-				return jsonResponse({ status: 'ok', mode }, 200);
-			} catch (e) {
-				const err = unwrapEffectError(e);
-				ctx.set.status = 500;
-				return { error: err instanceof Error ? err.message : 'Internal error' };
-			}
-		},
-		{
-			params: t.Object({ prId: t.String() }),
-			body: t.Object({
-				mode: t.Union([t.Literal('default'), t.Literal('plan')]),
-			}),
-		},
-	)
-	// ── Plan approval ───────────────────────────────────────────────────────
-	.post(
-		'/api/chat/:prId/plan/:planId/approve',
-		async (ctx) => {
-			try {
-				const result = await AppRuntime.runPromise(
-					Effect.flatMap(ChatSessionService, (svc) =>
-						svc.decidePlan({
-							planId: ctx.params.planId,
-							decision: 'approved',
-						}),
-					),
-				);
-				if (!result) {
-					ctx.set.status = 404;
-					return { code: 'PLAN_NOT_FOUND', message: 'Plan not found' };
-				}
-				return jsonResponse({ status: 'approved', plan: result }, 200);
-			} catch (e) {
-				const err = unwrapEffectError(e);
-				ctx.set.status = 500;
-				return { error: err instanceof Error ? err.message : 'Internal error' };
-			}
-		},
-		{
-			params: t.Object({ prId: t.String(), planId: t.String() }),
-		},
-	)
-	.post(
-		'/api/chat/:prId/plan/:planId/reject',
-		async (ctx) => {
-			try {
-				const result = await AppRuntime.runPromise(
-					Effect.flatMap(ChatSessionService, (svc) =>
-						svc.decidePlan({
-							planId: ctx.params.planId,
-							decision: 'rejected',
-						}),
-					),
-				);
-				if (!result) {
-					ctx.set.status = 404;
-					return { code: 'PLAN_NOT_FOUND', message: 'Plan not found' };
-				}
-				return jsonResponse({ status: 'rejected', plan: result }, 200);
-			} catch (e) {
-				const err = unwrapEffectError(e);
-				ctx.set.status = 500;
-				return { error: err instanceof Error ? err.message : 'Internal error' };
-			}
-		},
-		{
-			params: t.Object({ prId: t.String(), planId: t.String() }),
-		},
-	)
-	// ── Question answer ────────────────────────────────────────────────────
-	// One endpoint handles both providers. Branch on the row's `source`:
-	//   • claude:  resolve the in-memory deferred from PendingQuestionRegistry
-	//              with a `behavior: 'deny'` PermissionResult carrying the
-	//              user's answers JSON-stringified. The SDK delivers that
-	//              message back to the model as the tool_result; the next
-	//              assistant message resumes the turn.
-	//   • opencode: POST to the daemon's `/question/{id}/reply` (or `/reject`)
-	//              which is what actually unblocks the daemon-side agent.
-	//              The daemon then broadcasts `question.replied` on its SSE
-	//              channel; our subscribeOpencodeStream surfaces that as a
-	//              follow-up frame which calls decideQuestion idempotently.
-	.post(
-		'/api/chat/:prId/question/:questionId/answer',
-		async (ctx) => {
-			try {
-				const { prId, questionId } = ctx.params;
-				const { decision, answers, customAnswers } = ctx.body;
-
-				const row = await AppRuntime.runPromise(
-					Effect.flatMap(ChatSessionService, (svc) =>
-						svc.findQuestion(questionId),
-					),
-				);
-				if (!row) {
-					ctx.set.status = 404;
-					return { code: 'QUESTION_NOT_FOUND', message: 'Question not found' };
-				}
-				if (row.status !== 'pending') {
-					// Idempotent: surface the existing terminal state. The web
-					// client will reconcile its local item against the broadcast.
-					return jsonResponse(
-						{
-							status: 'ok' as const,
-							alreadyResolved: true,
-							resolution: row.status,
-						},
-						200,
-					);
-				}
-
-				// Persist FIRST so the DB row is authoritative even if the
-				// downstream provider call fails. If the resolve path below
-				// errors out we still leave the row marked terminal — the
-				// in-memory deferred (claude) will reject naturally on stream
-				// close, and the opencode daemon will time out on its end.
-				const finalStatus: 'answered' | 'rejected' =
-					decision === 'reject' ? 'rejected' : 'answered';
-				const decided = await AppRuntime.runPromise(
-					Effect.flatMap(ChatSessionService, (svc) =>
-						svc.decideQuestion({
-							questionId,
-							status: finalStatus,
-							...(answers !== undefined ? { answers } : {}),
-							...(customAnswers !== undefined ? { customAnswers } : {}),
-						}),
-					),
-				);
-				if (!decided) {
-					ctx.set.status = 404;
-					return { code: 'QUESTION_NOT_FOUND', message: 'Question disappeared mid-write' };
-				}
-
-				if (row.source === 'claude') {
-					const deferred = takePendingQuestion(row.providerRequestId);
-					if (!deferred) {
-						// Driver already cleaned up (stream closed, restart, etc).
-						// DB row is now marked terminal; return 410 so the web
-						// client can surface a "question expired" message and
-						// remove the pending UI.
-						ctx.set.status = 410;
-						return {
-							code: 'QUESTION_EXPIRED',
-							message:
-								'The agent run that asked this question has ended. Send a new message to continue.',
-						};
-					}
-					if (finalStatus === 'rejected') {
-						deferred.resolve({
-							behavior: 'deny',
-							message: 'User declined to answer the question.',
-							interrupt: false,
-						});
-					} else {
-						// Format the result so the model sees a complete payload.
-						// Claude's `AskUserQuestionOutput` shape uses
-						// `answers: Record<questionText, "label1, label2">` —
-						// match it. Optional free-text customAnswers appended as
-						// a parenthetical so the model can still read it even
-						// though Claude's spec doesn't include it.
-						//
-						// Elysia's `t.Record(...)` validator infers the body
-						// fields as `{}` at the type level, so we cast through
-						// the schema we already validated against (Elysia
-						// guarantees the runtime shape matches).
-						const answersMap = (answers ?? {}) as Record<
-							string,
-							ReadonlyArray<string>
-						>;
-						const customMap = (customAnswers ?? {}) as Record<
-							string,
-							string
-						>;
-						const flatAnswers: Record<string, string> = {};
-						for (const [q, labels] of Object.entries(answersMap)) {
-							const custom = customMap[q];
-							flatAnswers[q] = custom
-								? labels.length > 0
-									? `${labels.join(', ')} (custom: ${custom})`
-									: `(custom: ${custom})`
-								: labels.join(', ');
-						}
-						deferred.resolve({
-							behavior: 'deny',
-							message: JSON.stringify({
-								questions: row.questions,
-								answers: flatAnswers,
-							}),
-							interrupt: false,
-						});
-					}
-				} else {
-					// opencode: POST to the daemon. `/reject` for explicit
-					// dismissal; `/reply` with answers otherwise. The daemon's
-					// follow-up SSE event will hit subscribeOpencodeStream and
-					// fall through to the idempotent decideQuestion in the
-					// stream wrapper — no double-write because the row is
-					// already non-pending.
-					//
-					// Direct fetch instead of the SDK client because the v1
-					// `OpencodeClient` doesn't expose `.question.{reply,reject}`
-					// — those endpoints landed in the v2 SDK. The daemon itself
-					// supports them; we just talk to it via raw HTTP using the
-					// supervisor's endpoint info.
-					const endpoint = await AppRuntime.runPromise(
-						Effect.flatMap(OpencodeSupervisor, (s) => s.ensureRunning()),
-					);
-					const baseUrl = `http://${endpoint.hostname}:${endpoint.port}`;
-					const authHeader = `Basic ${btoa(`opencode:${endpoint.password}`)}`;
-					if (finalStatus === 'rejected') {
-						const res = await fetch(
-							`${baseUrl}/question/${encodeURIComponent(row.providerRequestId)}/reject`,
-							{
-								method: 'POST',
-								headers: {
-									Authorization: authHeader,
-									'Content-Type': 'application/json',
-								},
-							},
-						);
-						if (!res.ok && res.status !== 404) {
-							// 404 = the daemon already cleared the request
-							// (perhaps the agent timed out). Treat as success.
-							throw new Error(
-								`opencode reject failed: ${res.status} ${res.statusText}`,
-							);
-						}
-					} else {
-						// Reconstruct opencode's positional `Array<Array<string>>`
-						// answer order from `(question text → labels)` using the
-						// original question list as the canonical order.
-						const answersMap = (answers ?? {}) as Record<
-							string,
-							ReadonlyArray<string>
-						>;
-						const orderedAnswers: Array<Array<string>> = row.questions.map(
-							(q) => Array.from(answersMap[q.question] ?? []),
-						);
-						const res = await fetch(
-							`${baseUrl}/question/${encodeURIComponent(row.providerRequestId)}/reply`,
-							{
-								method: 'POST',
-								headers: {
-									Authorization: authHeader,
-									'Content-Type': 'application/json',
-								},
-								body: JSON.stringify({ answers: orderedAnswers }),
-							},
-						);
-						if (!res.ok && res.status !== 404) {
-							throw new Error(
-								`opencode reply failed: ${res.status} ${res.statusText}`,
-							);
-						}
-					}
-				}
-
-				// Broadcast to other connected clients so a second tab sees the
-				// card flip. Best-effort — the answering client patches its own
-				// item locally; this is for cross-tab parity.
-				try {
-					await AppRuntime.runPromise(
-						Effect.flatMap(WebSocketHub, (hub) =>
-							hub.broadcast({
-								type: 'chat:question-resolved',
-								data: {
-									prId,
-									questionId,
-									status: finalStatus,
-									...(answers !== undefined ? { answers } : {}),
-									...(customAnswers !== undefined ? { customAnswers } : {}),
-								},
-							}),
-						),
-					);
-				} catch (err) {
-					logError(
-						'chat',
-						'chat:question-resolved broadcast failed:',
-						err instanceof Error ? err.message : String(err),
-					);
-				}
-
-				return jsonResponse(
-					{
-						status: 'ok' as const,
-						resolution: finalStatus,
-						question: decided,
-					},
-					200,
-				);
-			} catch (e) {
-				const err = unwrapEffectError(e);
-				ctx.set.status = 500;
-				return { error: err instanceof Error ? err.message : 'Internal error' };
-			}
-		},
-		{
-			params: t.Object({ prId: t.String(), questionId: t.String() }),
-			body: t.Object({
-				decision: t.Union([t.Literal('answer'), t.Literal('reject')]),
-				answers: t.Optional(
-					t.Record(t.String(), t.Array(t.String())),
-				),
-				customAnswers: t.Optional(t.Record(t.String(), t.String())),
-			}),
-		},
-	)
-	// ── Agent availability ─────────────────────────────────────────────────
-	// Lightweight probe the frontend uses to decide whether to enable the
-	// composer's Plan-mode toggle for the opencode path. For Claude the
-	// toggle is always available (the SDK supplies `permissionMode: 'plan'`).
-	.get(
-		'/api/chat/agents/available',
-		async (ctx) => {
-			try {
-				const result = await AppRuntime.runPromise(
-					Effect.gen(function* () {
-						const settingsService = yield* SettingsService;
-						const { db } = yield* DbService;
-						const settings = yield* withDb(db, settingsService.getSettings()).pipe(
-							Effect.orElseSucceed(
-								() => ({ aiAgent: 'opencode' }) as { aiAgent: string | null },
-							),
-						);
-						const agent = resolveAgent(settings);
-						if (agent === 'claude') {
-							return {
-								agent: 'claude' as const,
-								agents: ['plan', 'general-purpose'] as readonly string[],
-								// Claude SDK exposes plan mode via permissionMode.
-								planAvailable: true,
-							};
-						}
-						// opencode: probe the supervisor's cached agent list.
-						const supervisor = yield* OpencodeSupervisor;
-						const agents = yield* supervisor.listAgents();
-						return {
-							agent: 'opencode' as const,
-							agents,
-							planAvailable: agents.includes('plan'),
-						};
-					}),
-				);
-				return jsonResponse(result, 200);
-			} catch (e) {
-				const err = unwrapEffectError(e);
-				ctx.set.status = 500;
-				return { error: err instanceof Error ? err.message : 'Internal error' };
-			}
-		},
-	);
+  .use(withAuth)
+  .post(
+    "/api/chat",
+    async (ctx) => {
+      try {
+        const requestedMode: InteractionMode | undefined =
+          ctx.body.interactionMode === "plan" || ctx.body.interactionMode === "default"
+            ? ctx.body.interactionMode
+            : undefined;
+        const approvedPlanIdInput =
+          typeof ctx.body.approvedPlanId === "string" && ctx.body.approvedPlanId.length > 0
+            ? ctx.body.approvedPlanId
+            : undefined;
+        const prepared = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const ai = yield* AiService;
+            const prCtx = yield* PrContextService;
+            const settingsService = yield* SettingsService;
+            const chatSessions = yield* ChatSessionService;
+            const repoClone = yield* RepoCloneService;
+            const github = yield* GitHubService;
+            const chatPush = yield* ChatChangesPushService;
+            const { db } = yield* DbService;
+
+            // Resolve PR + repo + token
+            const { pr, repo, token } = yield* prCtx.resolveBasic(
+              ctx.body.prId,
+              ctx.session.user.id,
+            );
+
+            // Resolve current head SHA (fall back to fetching meta)
+            let headSha = pr.headSha;
+            if (!headSha) {
+              const meta = yield* github.getPrMeta(repo.fullName, pr.externalId, token);
+              headSha = meta.headSha;
+            }
+
+            const settings = yield* withDb(db, settingsService.getSettings()).pipe(
+              Effect.orElseSucceed(() => ({ aiAgent: "opencode" }) as { aiAgent: string | null }),
+            );
+            const agent = resolveAgent(settings);
+
+            // Check for an existing session BEFORE acquiring the
+            // worktree. No row means this is a fresh start (e.g.
+            // the user just cleared chat), so after we acquire the
+            // worktree we must hard-reset it — stale agent commits
+            // may have survived the clear if the reset raced with
+            // this new message.
+            const existingSessionRow = yield* chatSessions.find(pr.id, agent, headSha);
+            const isFreshStart = existingSessionRow === null;
+
+            // Acquire (or refresh) the per-PR worktree. Shared across
+            // walkthrough generation and every chat session for this
+            // PR. If HEAD is a descendant of `prHeadSha` — i.e. the
+            // agent has committed on top in a previous turn but not
+            // pushed — those commits are preserved (the chat-header
+            // push pill renders against them). HEAD is only reset
+            // when its base diverges from `prHeadSha`, e.g. the PR
+            // head moved on the remote.
+            const { worktreePath, branchName } = yield* repoClone.acquirePrWorktree({
+              repoId: repo.id,
+              prNumber: pr.externalId,
+              prHeadSha: headSha,
+              githubToken: token,
+            });
+
+            // Fresh start: hard-reset the worktree to `prHeadSha`
+            // so any stale agent commits that survived the clear
+            // (due to a race between discardAgentCommits and this
+            // handler) are unconditionally removed.
+            if (isFreshStart) {
+              yield* Effect.promise(() =>
+                discardAgentCommits({
+                  worktreePath,
+                  branchName,
+                  prHeadSha: headSha,
+                }),
+              );
+            }
+
+            // Eagerly create (or look up) the chat_sessions row so
+            // chat_messages and chat_activities can FK to it BEFORE
+            // the agent emits its session id. The agent-side id
+            // arrives mid-stream via onSessionId and is patched in.
+            const chatSessionRow = yield* chatSessions.findOrCreate({
+              prId: pr.id,
+              agent,
+              prHeadSha: headSha,
+              worktreePath,
+              branchName,
+            });
+
+            // Plan-pending gate. If the most recent plan is still
+            // pending and the user didn't explicitly approve it,
+            // refuse the turn so the user has to either approve,
+            // reject, or refine instead of accidentally moving past
+            // it. Tagged return — the outer await unwraps and
+            // surfaces a 409 to the client.
+            const pendingPlan = yield* chatSessions.findPendingPlan(chatSessionRow.id);
+            if (pendingPlan && pendingPlan.id !== approvedPlanIdInput) {
+              return { kind: "plan-pending" as const, planId: pendingPlan.id };
+            }
+
+            // Question-pending gate. The previous turn left an
+            // askUserQuestion / question.asked open and the user
+            // hasn't answered it. Refusing the next prompt keeps the
+            // agent's tool-loop state consistent:
+            //   • Claude: the SDK's canUseTool is still awaiting our
+            //     in-memory deferred; starting a new turn would
+            //     leave that deferred orphaned forever.
+            //   • Opencode: the daemon won't accept a new
+            //     session.prompt while one is in-flight anyway —
+            //     surface the cleaner error instead of letting the
+            //     opencode call fail with a less helpful message.
+            const pendingQuestion = yield* chatSessions.findPendingQuestion(chatSessionRow.id);
+            if (pendingQuestion) {
+              return {
+                kind: "question-pending" as const,
+                questionId: pendingQuestion.id,
+              };
+            }
+
+            // Approval path: if the user is approving a plan, mark
+            // it approved before kicking off the execution turn.
+            // Also flip the session out of plan mode so the agent
+            // can actually mutate the worktree this turn.
+            if (approvedPlanIdInput) {
+              const decided = yield* chatSessions.decidePlan({
+                planId: approvedPlanIdInput,
+                decision: "approved",
+              });
+              if (!decided) {
+                return { kind: "plan-not-found" as const, planId: approvedPlanIdInput };
+              }
+              yield* chatSessions.setInteractionMode({
+                chatSessionId: chatSessionRow.id,
+                mode: "default",
+              });
+            } else if (requestedMode !== undefined) {
+              yield* chatSessions.setInteractionMode({
+                chatSessionId: chatSessionRow.id,
+                mode: requestedMode,
+              });
+            }
+
+            // Effective mode for this turn. After approval, we run
+            // in 'default'. Otherwise: requested mode override, or
+            // fall back to the session's stored mode.
+            const effectiveMode: InteractionMode = approvedPlanIdInput
+              ? "default"
+              : (requestedMode ?? chatSessionRow.interactionMode);
+
+            // "Resume" semantics: present only once the agent has
+            // emitted a session id on a previous turn. A fresh row
+            // (sessionId === null) means we're starting from scratch.
+            const resumeSessionId = chatSessionRow.sessionId ?? null;
+
+            // On new session, fetch walkthrough context for the system prompt.
+            // On resume, the agent already has it baked into its persisted session.
+            const walkthrough = resumeSessionId ? null : fetchWalkthroughContext(db, pr.id);
+
+            // Snapshot the prior transcript BEFORE appending the new
+            // user message so the agent's history block doesn't end
+            // with a duplicate of the message it's about to receive.
+            // Plans / tasks / sub-agents aren't surfaced in the
+            // prompt's history block (they have their own dedicated
+            // surfaces) — drop them here.
+            const priorTimeline = yield* chatSessions.listTimeline(chatSessionRow.id);
+            const history: ChatHistoryEntry[] = [];
+            for (const e of priorTimeline) {
+              if (e.entryKind === "message") {
+                history.push({
+                  entryKind: "message",
+                  role: e.role,
+                  content: e.content,
+                });
+              } else if (e.entryKind === "activity") {
+                history.push({
+                  entryKind: "activity",
+                  activityKind: e.activityKind,
+                  toolName: e.toolName,
+                  summary: e.summary,
+                });
+              }
+              // task-list / plan / subagent: skipped — they're rendered
+              // from their own tables via the frontend timeline.
+            }
+
+            // Append the user message immediately so it persists even
+            // if the agent process never emits anything (timeout, crash).
+            const turnId = crypto.randomUUID();
+            yield* chatSessions.appendUserMessage({
+              chatSessionId: chatSessionRow.id,
+              turnId,
+              content: ctx.body.message,
+            });
+
+            // Synchronous-by-await: drivers must await this before
+            // streaming any user-visible content (opencode) or before
+            // closing their stream (claude). That serializes the
+            // SQLite write so a follow-up `chatSessions.find()` for
+            // the same (prId, agent, headSha) reliably sees the row,
+            // preventing the "fresh session on resend" race.
+            const onSessionId = async (sid: string): Promise<void> => {
+              try {
+                await AppRuntime.runPromise(
+                  chatSessions.setAgentSessionId({
+                    chatSessionId: chatSessionRow.id,
+                    sessionId: sid,
+                    worktreePath,
+                    branchName,
+                  }),
+                );
+              } catch (err) {
+                logError(
+                  "chat",
+                  "chatSessions.setAgentSessionId failed:",
+                  err instanceof Error ? err.message : String(err),
+                );
+              }
+            };
+
+            const frameStream = yield* ai.chat({
+              pr: {
+                title: pr.title,
+                body: pr.body,
+                sourceBranch: pr.sourceBranch,
+                targetBranch: pr.targetBranch,
+              },
+              walkthrough,
+              message: ctx.body.message,
+              history,
+              cwd: worktreePath,
+              branchName,
+              resumeSessionId,
+              onSessionId,
+              prId: pr.id,
+              userId: ctx.session.user.id,
+              interactionMode: effectiveMode,
+            });
+
+            // Mark this PR as streaming so a concurrent push attempt
+            // is refused (the agent might write to the worktree at
+            // any moment, which would race with the push's
+            // `git checkout` / `git merge`).
+            chatPush.markChatStreaming(pr.id, true);
+
+            return {
+              kind: "ok" as const,
+              frameStream,
+              chatSessionId: chatSessionRow.id,
+              turnId,
+              prId: pr.id,
+              agent,
+            };
+          }),
+        );
+
+        if (prepared.kind === "plan-pending") {
+          ctx.set.status = 409;
+          return {
+            code: "PLAN_PENDING",
+            planId: prepared.planId,
+            message:
+              "A plan is awaiting your decision. Approve or reject it before sending a new message.",
+          };
+        }
+        if (prepared.kind === "plan-not-found") {
+          ctx.set.status = 404;
+          return {
+            code: "PLAN_NOT_FOUND",
+            planId: prepared.planId,
+            message: "Plan not found",
+          };
+        }
+        if (prepared.kind === "question-pending") {
+          ctx.set.status = 409;
+          return {
+            code: "QUESTION_PENDING",
+            questionId: prepared.questionId,
+            message:
+              "The agent is waiting for your answer to an open question. Answer it before sending a new message.",
+          };
+        }
+
+        const persistedStream = wrapStreamWithPersistence(prepared.frameStream, {
+          chatSessionId: prepared.chatSessionId,
+          turnId: prepared.turnId,
+          agent: prepared.agent,
+        });
+
+        // Wrap the persisted stream so we clear the streaming flag
+        // when the SSE consumer finishes — success, error, or client
+        // disconnect.
+        const streamingPrId = prepared.prId;
+        const flagClearingStream = new ReadableStream<ChatStreamFrame>({
+          async start(controller) {
+            const reader = persistedStream.getReader();
+            try {
+              while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                controller.enqueue(value);
+              }
+              controller.close();
+            } catch (err) {
+              controller.error(err);
+            } finally {
+              try {
+                await AppRuntime.runPromise(
+                  Effect.flatMap(ChatChangesPushService, (svc) =>
+                    Effect.sync(() => svc.markChatStreaming(streamingPrId, false)),
+                  ),
+                );
+              } catch {
+                /* never throw from streaming-flag cleanup */
+              }
+            }
+          },
+        });
+
+        return new Response(chatStreamToSSE<ChatStreamFrame>(flagClearingStream), {
+          headers: {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            Connection: "keep-alive",
+          },
+        });
+      } catch (e) {
+        // Special case: worktree is blocked by unpushed agent commits.
+        // Return a structured JSON 409 so the client can show the
+        // blocked-commits UI instead of treating it as a generic error.
+        const blockedErr = unwrapEffectError(e);
+        if (blockedErr instanceof WorktreeBlockedByUnpushedCommits) {
+          ctx.set.status = 409;
+          return {
+            code: "WORKTREE_BLOCKED",
+            message: "PR head advanced but worktree has unpushed agent commits",
+            worktreePath: blockedErr.worktreePath,
+            branchName: blockedErr.branchName,
+            oldHeadSha: blockedErr.oldHeadSha,
+            newHeadSha: blockedErr.newHeadSha,
+            commits: blockedErr.commits,
+          };
+        }
+        // Plan mode requested but the daemon has no `plan` agent.
+        if (blockedErr instanceof AgentUnavailableError) {
+          ctx.set.status = 422;
+          return {
+            code: "AGENT_UNAVAILABLE",
+            agentName: blockedErr.agentName,
+            message: blockedErr.message,
+          };
+        }
+        return mapErrorToSSEResponse(e);
+      }
+    },
+    {
+      body: t.Object({
+        prId: t.String(),
+        message: t.String(),
+        interactionMode: t.Optional(t.Union([t.Literal("default"), t.Literal("plan")])),
+        approvedPlanId: t.Optional(t.String()),
+      }),
+    },
+  )
+  .get(
+    "/api/chat/:prId/messages",
+    async (ctx) => {
+      try {
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const prCtx = yield* PrContextService;
+            const chatSessions = yield* ChatSessionService;
+            const settingsService = yield* SettingsService;
+            const { db } = yield* DbService;
+
+            const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
+
+            const settings = yield* withDb(db, settingsService.getSettings()).pipe(
+              Effect.orElseSucceed(() => ({ aiAgent: "opencode" }) as { aiAgent: string | null }),
+            );
+            const agent = resolveAgent(settings);
+
+            if (!pr.headSha) return null;
+
+            // Resolve the chat session for the *current* head SHA
+            // only. Older SHAs are dormant — the user has moved on
+            // and a fresh PR commit creates a fresh session row.
+            const row = yield* chatSessions.find(pr.id, agent, pr.headSha);
+            if (!row) return null;
+
+            const timeline = yield* chatSessions.listTimeline(row.id);
+            return { row, timeline };
+          }),
+        );
+
+        if (!result) {
+          return jsonResponse(
+            { chatSessionId: null, entries: [], interactionMode: "default" },
+            200,
+          );
+        }
+
+        return jsonResponse(
+          {
+            chatSessionId: result.row.id,
+            entries: result.timeline,
+            interactionMode: result.row.interactionMode,
+          },
+          200,
+        );
+      } catch (e) {
+        return handleAppError(e, ctx);
+      }
+    },
+    {
+      params: t.Object({ prId: t.String() }),
+    },
+  )
+  .delete(
+    "/api/chat/:prId",
+    async (ctx) => {
+      try {
+        const latest = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const prCtx = yield* PrContextService;
+            const chatSessions = yield* ChatSessionService;
+            const settingsService = yield* SettingsService;
+            const { db } = yield* DbService;
+
+            const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
+
+            const settings = yield* withDb(db, settingsService.getSettings()).pipe(
+              Effect.orElseSucceed(() => ({ aiAgent: "opencode" }) as { aiAgent: string | null }),
+            );
+            const agent = resolveAgent(settings);
+
+            // Capture the active worktree before dropping rows so we
+            // can rewind it to the PR head SHA below — clearing the
+            // conversation also discards any unpushed agent commits
+            // the user accumulated during this session.
+            const activeRow = yield* chatSessions.findLatestForPr(pr.id, agent);
+
+            // Drop every chat-session row for (pr, agent). The
+            // per-PR worktree itself stays put — it's shared with
+            // walkthrough generation and re-used across chat
+            // sessions, refreshed in place on the next acquire.
+            yield* chatSessions.clearAllForPr(pr.id, agent);
+
+            return activeRow;
+          }),
+        );
+
+        if (latest && existsSync(latest.worktreePath)) {
+          await discardAgentCommits({
+            worktreePath: latest.worktreePath,
+            branchName: latest.branchName,
+            prHeadSha: latest.prHeadSha,
+          });
+        }
+
+        return new Response(null, { status: 204 });
+      } catch (e) {
+        ctx.set.status = 500;
+        return handleAppError(e, ctx);
+      }
+    },
+    {
+      params: t.Object({ prId: t.String() }),
+    },
+  )
+  .get(
+    "/api/chat/:prId/proposed-changes",
+    async (ctx) => {
+      try {
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const prCtx = yield* PrContextService;
+            const chatSessions = yield* ChatSessionService;
+            const settingsService = yield* SettingsService;
+            const { db } = yield* DbService;
+
+            const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
+
+            const settings = yield* withDb(db, settingsService.getSettings()).pipe(
+              Effect.orElseSucceed(() => ({ aiAgent: "opencode" }) as { aiAgent: string | null }),
+            );
+            const agent = resolveAgent(settings);
+
+            if (!pr.headSha) return null;
+            const row = yield* chatSessions.find(pr.id, agent, pr.headSha);
+            if (!row) return null;
+            return row;
+          }),
+        );
+
+        if (!result) {
+          return jsonResponse({ branchName: null, prHeadSha: null, commits: [] }, 200);
+        }
+
+        const commits = await listProposedCommits(result.worktreePath, result.prHeadSha).catch(
+          (err) => {
+            logError(
+              "chat",
+              "listProposedCommits failed:",
+              err instanceof Error ? err.message : String(err),
+            );
+            return [] as ProposedCommit[];
+          },
+        );
+
+        return jsonResponse(
+          {
+            branchName: result.branchName,
+            prHeadSha: result.prHeadSha,
+            commits,
+          },
+          200,
+        );
+      } catch (e) {
+        return handleAppError(e, ctx);
+      }
+    },
+    {
+      params: t.Object({ prId: t.String() }),
+    },
+  )
+  .get(
+    "/api/chat/:prId/proposed-changes/:sha/diff",
+    async (ctx) => {
+      try {
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const prCtx = yield* PrContextService;
+            const chatSessions = yield* ChatSessionService;
+            const settingsService = yield* SettingsService;
+            const { db } = yield* DbService;
+
+            const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
+
+            const settings = yield* withDb(db, settingsService.getSettings()).pipe(
+              Effect.orElseSucceed(() => ({ aiAgent: "opencode" }) as { aiAgent: string | null }),
+            );
+            const agent = resolveAgent(settings);
+
+            if (!pr.headSha) return null;
+            return yield* chatSessions.find(pr.id, agent, pr.headSha);
+          }),
+        );
+
+        if (!result) {
+          ctx.set.status = 404;
+          return { error: "No active chat session for this PR" };
+        }
+
+        // Validate the SHA shape — defense in depth against arg injection.
+        if (!/^[0-9a-f]{7,40}$/i.test(ctx.params.sha)) {
+          ctx.set.status = 400;
+          return { error: "Invalid commit SHA" };
+        }
+
+        const diff = await gitStdout(
+          ["show", "--patch", "--pretty=format:", ctx.params.sha],
+          result.worktreePath,
+          15_000,
+        );
+
+        return new Response(diff, {
+          headers: { "Content-Type": "text/plain; charset=utf-8" },
+        });
+      } catch (e) {
+        return handleAppError(e, ctx);
+      }
+    },
+    {
+      params: t.Object({ prId: t.String(), sha: t.String() }),
+    },
+  )
+  .get(
+    "/api/chat/:prId/proposed-changes/:sha/files",
+    async (ctx) => {
+      try {
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const prCtx = yield* PrContextService;
+            const chatSessions = yield* ChatSessionService;
+            const settingsService = yield* SettingsService;
+            const { db } = yield* DbService;
+
+            const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
+
+            const settings = yield* withDb(db, settingsService.getSettings()).pipe(
+              Effect.orElseSucceed(() => ({ aiAgent: "opencode" }) as { aiAgent: string | null }),
+            );
+            const agent = resolveAgent(settings);
+
+            if (!pr.headSha) return null;
+            return yield* chatSessions.find(pr.id, agent, pr.headSha);
+          }),
+        );
+
+        if (!result) {
+          ctx.set.status = 404;
+          return { error: "No active chat session for this PR" };
+        }
+
+        if (!/^[0-9a-f]{7,40}$/i.test(ctx.params.sha)) {
+          ctx.set.status = 400;
+          return { error: "Invalid commit SHA" };
+        }
+
+        // `-z -M --name-status` outputs one record per changed file as
+        // `<status>\0<path>` (or `R<sim>\0<oldPath>\0<newPath>` for renames),
+        // records concatenated with no separator.
+        const raw = await gitStdout(
+          ["diff-tree", "--no-commit-id", "--name-status", "-r", "-z", "-M", ctx.params.sha],
+          result.worktreePath,
+          15_000,
+        );
+
+        const tokens = raw.split("\0").filter((t) => t.length > 0);
+        const fileTasks: Array<
+          Promise<{
+            path: string;
+            oldPath: string | null;
+            oldContent: string | null;
+            newContent: string | null;
+            status: string;
+            binary: boolean;
+          }>
+        > = [];
+
+        for (let i = 0; i < tokens.length; ) {
+          const status = tokens[i++];
+          if (status == null) break;
+          const isRenameOrCopy = status.startsWith("R") || status.startsWith("C");
+          const oldPath = isRenameOrCopy ? (tokens[i++] ?? null) : null;
+          const path = tokens[i++];
+          if (path == null) break;
+
+          const isAdd = status === "A";
+          const isDel = status === "D";
+          const oldRef = isAdd ? null : (oldPath ?? path);
+          const newRef = isDel ? null : path;
+
+          fileTasks.push(
+            (async () => {
+              const [oldRaw, newRaw] = await Promise.all([
+                oldRef
+                  ? gitShowSafe(`${ctx.params.sha}^`, oldRef, result.worktreePath)
+                  : Promise.resolve(null),
+                newRef
+                  ? gitShowSafe(ctx.params.sha, newRef, result.worktreePath)
+                  : Promise.resolve(null),
+              ]);
+              // Cheap binary heuristic: a null byte anywhere in either
+              // version. Good enough for the typical mix of text + images
+              // the agent produces; binary files just render as a
+              // no-content placeholder on the client.
+              const binary = !!(oldRaw?.includes("\0") || newRaw?.includes("\0"));
+              return {
+                path,
+                oldPath,
+                status,
+                oldContent: binary ? null : oldRaw,
+                newContent: binary ? null : newRaw,
+                binary,
+              };
+            })(),
+          );
+        }
+
+        const files = await Promise.all(fileTasks);
+        return { files };
+      } catch (e) {
+        return handleAppError(e, ctx);
+      }
+    },
+    {
+      params: t.Object({ prId: t.String(), sha: t.String() }),
+    },
+  )
+  .post(
+    "/api/chat/:prId/proposed-changes/merge-and-push",
+    async (ctx) => {
+      try {
+        const body = (ctx.body ?? {}) as {
+          newBranchName?: unknown;
+          force?: unknown;
+        };
+        let newBranchName: string | undefined;
+        if (body.newBranchName !== undefined) {
+          if (typeof body.newBranchName !== "string") {
+            ctx.set.status = 400;
+            return {
+              code: "INVALID_BRANCH_NAME",
+              message: "newBranchName must be a string",
+            };
+          }
+          const trimmed = body.newBranchName.trim();
+          if (
+            trimmed.length === 0 ||
+            /\s/.test(trimmed) ||
+            trimmed.startsWith("-") ||
+            trimmed.includes("..")
+          ) {
+            ctx.set.status = 400;
+            return {
+              code: "INVALID_BRANCH_NAME",
+              message: "newBranchName is empty or contains invalid characters",
+            };
+          }
+          newBranchName = trimmed;
+        }
+        const force = typeof body.force === "boolean" ? body.force : undefined;
+
+        const result = await AppRuntime.runPromise(
+          Effect.flatMap(ChatChangesPushService, (svc) =>
+            svc.attemptMergeAndPush({
+              prId: ctx.params.prId,
+              userId: ctx.session.user.id,
+              ...(newBranchName !== undefined ? { newBranchName } : {}),
+              ...(force !== undefined ? { force } : {}),
+            }),
+          ),
+        );
+        // Conflict / remote-changed / ref-exists are expected non-error
+        // outcomes — surface 409 so the client can branch on the status
+        // code in addition to the body.
+        if (result.status === "conflict") {
+          ctx.set.status = 409;
+          return result;
+        }
+        if (result.status === "remote-changed") {
+          ctx.set.status = 409;
+          return result;
+        }
+        if (result.status === "ref-exists") {
+          ctx.set.status = 409;
+          return result;
+        }
+        return result;
+      } catch (e) {
+        const err = unwrapEffectError(e);
+        if (err instanceof ConcurrentPushError) {
+          ctx.set.status = 409;
+          return { code: "CONCURRENT_PUSH", message: "A push is already in progress for this PR" };
+        }
+        if (err instanceof ChatStreamingConflictError) {
+          ctx.set.status = 409;
+          return {
+            code: "CHAT_STREAMING",
+            message: "Wait for the chat agent to finish before pushing",
+          };
+        }
+        if (err instanceof DirtyWorktreeError) {
+          ctx.set.status = 422;
+          return { code: "DIRTY_WORKTREE", message: err.message };
+        }
+        if (err instanceof NoChangesError) {
+          ctx.set.status = 422;
+          return { code: "NO_CHANGES", message: "No agent commits to push" };
+        }
+        if (err instanceof NoChatSessionError) {
+          ctx.set.status = 422;
+          return {
+            code: "NO_CHAT_SESSION",
+            message: "No chat session for this PR — start a chat first",
+          };
+        }
+        if (err instanceof InvalidBranchNameError) {
+          ctx.set.status = 400;
+          return { code: "INVALID_BRANCH_NAME", message: err.message };
+        }
+        if (err instanceof RefAlreadyExistsError) {
+          ctx.set.status = 409;
+          return { code: "REF_EXISTS", message: `branch ${err.ref} already exists` };
+        }
+        if (err instanceof PushRejectedError) {
+          ctx.set.status = 502;
+          return { code: "PUSH_REJECTED", message: err.message };
+        }
+        return handleAppError(e, ctx);
+      }
+    },
+    {
+      params: t.Object({ prId: t.String() }),
+      body: t.Optional(
+        t.Object({
+          newBranchName: t.Optional(t.String()),
+          force: t.Optional(t.Boolean()),
+        }),
+      ),
+    },
+  )
+  .post(
+    "/api/chat/:prId/proposed-changes/resolve-and-push",
+    async (ctx) => {
+      try {
+        const stream = await AppRuntime.runPromise(
+          Effect.flatMap(ChatChangesPushService, (svc) =>
+            svc.resolveConflictsAndPush({
+              prId: ctx.params.prId,
+              userId: ctx.session.user.id,
+            }),
+          ),
+        );
+
+        return new Response(resolvePushStreamToSSE(stream), {
+          headers: {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            Connection: "keep-alive",
+          },
+        });
+      } catch (e) {
+        return mapErrorToSSEResponse(e);
+      }
+    },
+    {
+      params: t.Object({ prId: t.String() }),
+    },
+  )
+  // ── Unpushed commit management ───────────────────────────────────────────
+  // Three endpoints to handle the WorktreeBlockedByUnpushedCommits scenario:
+  //   DELETE …/:sha      — discard a single agent commit via rebase --onto
+  //   POST …/rebase-onto — rebase all agent commits onto the new PR head
+  //   POST …/advance     — advance the worktree to the new PR head (after
+  //                        all commits have been handled)
+  .post(
+    "/api/chat/:prId/proposed-changes/cherry-pick",
+    async (ctx) => {
+      const body = (ctx.body ?? {}) as { sha?: unknown };
+      if (typeof body.sha !== "string" || !/^[0-9a-f]{7,40}$/i.test(body.sha)) {
+        ctx.set.status = 400;
+        return { error: "sha is required and must be a valid commit hash" };
+      }
+      const { sha } = body;
+
+      try {
+        const result = await AppRuntime.runPromise(
+          Effect.flatMap(ChatChangesPushService, (svc) =>
+            svc.cherryPickAndPush({
+              prId: ctx.params.prId,
+              userId: ctx.session.user.id,
+              sha,
+            }),
+          ),
+        );
+
+        if (result.status === "pushed") {
+          return jsonResponse(
+            {
+              status: "pushed",
+              newSha: result.newSha,
+              pushedCommits: result.pushedCommits,
+              branch: result.branch,
+            },
+            200,
+          );
+        }
+        if (result.status === "remote-changed") {
+          ctx.set.status = 409;
+          return { status: "remote-changed", branch: result.branch };
+        }
+        ctx.set.status = 500;
+        return { error: "Unexpected cherry-pick result" };
+      } catch (e) {
+        const err = unwrapEffectError(e);
+        if (err instanceof ConcurrentPushError) {
+          ctx.set.status = 409;
+          return {
+            code: "CONCURRENT_PUSH",
+            message: "Another push is already in progress for this PR",
+          };
+        }
+        if (err instanceof DirtyWorktreeError) {
+          ctx.set.status = 409;
+          return { code: "DIRTY_WORKTREE", message: err.message };
+        }
+        if (err instanceof NoChangesError) {
+          ctx.set.status = 409;
+          return { code: "NO_CHANGES", message: "No proposed commits found" };
+        }
+        if (err instanceof NoChatSessionError) {
+          ctx.set.status = 404;
+          return { code: "NO_CHAT_SESSION", message: "No chat session found for this PR" };
+        }
+        return handleAppError(e, ctx);
+      }
+    },
+    {
+      params: t.Object({ prId: t.String() }),
+    },
+  )
+  .delete(
+    "/api/chat/:prId/proposed-changes/:sha",
+    async (ctx) => {
+      // Validate SHA before doing anything expensive.
+      if (!/^[0-9a-f]{7,40}$/i.test(ctx.params.sha)) {
+        ctx.set.status = 400;
+        return { error: "Invalid commit SHA" };
+      }
+
+      try {
+        const row = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const prCtx = yield* PrContextService;
+            const chatSessions = yield* ChatSessionService;
+            const settingsService = yield* SettingsService;
+            const { db } = yield* DbService;
+
+            const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
+            const settings = yield* withDb(db, settingsService.getSettings()).pipe(
+              Effect.orElseSucceed(() => ({ aiAgent: "opencode" }) as { aiAgent: string | null }),
+            );
+            const agent = resolveAgent(settings);
+            return yield* chatSessions.findLatestForPr(pr.id, agent);
+          }),
+        );
+
+        if (!row) {
+          ctx.set.status = 404;
+          return { error: "No chat session found for this PR" };
+        }
+
+        const { worktreePath } = row;
+
+        // Resolve the full 40-char SHA in case a short SHA was supplied.
+        const fullSha = await gitStdout(["rev-parse", ctx.params.sha], worktreePath, 5_000).catch(
+          () => null,
+        );
+        if (!fullSha?.trim()) {
+          ctx.set.status = 404;
+          return { error: "Commit not found in worktree" };
+        }
+        const sha = fullSha.trim();
+
+        const parentSha = await gitStdout(["rev-parse", `${sha}^`], worktreePath, 5_000).catch(
+          () => null,
+        );
+        if (!parentSha?.trim()) {
+          ctx.set.status = 422;
+          return { error: "Cannot discard root commit" };
+        }
+
+        // Drop `sha` by rebasing everything above it onto its parent.
+        // git rebase --onto <parent> <sha> HEAD
+        try {
+          await gitStdout(
+            ["rebase", "--onto", parentSha.trim(), sha, "HEAD"],
+            worktreePath,
+            30_000,
+          );
+        } catch (rebaseErr) {
+          await gitStdoutBestEffort(["rebase", "--abort"], worktreePath);
+          ctx.set.status = 409;
+          return {
+            code: "REBASE_CONFLICT",
+            message:
+              rebaseErr instanceof Error
+                ? rebaseErr.message
+                : "Rebase conflict — use the agent to resolve",
+          };
+        }
+
+        return jsonResponse({ status: "discarded" }, 200);
+      } catch (e) {
+        return handleAppError(e, ctx);
+      }
+    },
+    {
+      params: t.Object({ prId: t.String(), sha: t.String() }),
+    },
+  )
+  .post(
+    "/api/chat/:prId/proposed-changes/rebase-onto",
+    async (ctx) => {
+      const body = (ctx.body ?? {}) as { oldHeadSha?: unknown; newHeadSha?: unknown };
+      if (typeof body.oldHeadSha !== "string" || typeof body.newHeadSha !== "string") {
+        ctx.set.status = 400;
+        return { error: "oldHeadSha and newHeadSha are required strings" };
+      }
+      const { oldHeadSha, newHeadSha } = body;
+
+      try {
+        const row = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const prCtx = yield* PrContextService;
+            const chatSessions = yield* ChatSessionService;
+            const settingsService = yield* SettingsService;
+            const { db } = yield* DbService;
+
+            const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
+            const settings = yield* withDb(db, settingsService.getSettings()).pipe(
+              Effect.orElseSucceed(() => ({ aiAgent: "opencode" }) as { aiAgent: string | null }),
+            );
+            const agent = resolveAgent(settings);
+            return yield* chatSessions.findLatestForPr(pr.id, agent);
+          }),
+        );
+
+        if (!row) {
+          ctx.set.status = 404;
+          return { error: "No chat session found for this PR" };
+        }
+
+        const { worktreePath } = row;
+
+        // Ensure newHeadSha is present in the local object store.
+        await gitStdoutBestEffort(["fetch", "origin", newHeadSha], worktreePath);
+
+        // Rebase agent commits onto the new PR head.
+        // git rebase --onto <newHeadSha> <oldHeadSha> HEAD
+        try {
+          await gitStdout(
+            ["rebase", "--onto", newHeadSha, oldHeadSha, "HEAD"],
+            worktreePath,
+            60_000,
+          );
+        } catch (rebaseErr) {
+          await gitStdoutBestEffort(["rebase", "--abort"], worktreePath);
+          ctx.set.status = 409;
+          return {
+            code: "REBASE_CONFLICT",
+            message:
+              rebaseErr instanceof Error
+                ? rebaseErr.message
+                : "Rebase conflict — use the agent to resolve",
+          };
+        }
+
+        return jsonResponse({ status: "rebased" }, 200);
+      } catch (e) {
+        return handleAppError(e, ctx);
+      }
+    },
+    {
+      params: t.Object({ prId: t.String() }),
+    },
+  )
+  .post(
+    "/api/chat/:prId/proposed-changes/advance",
+    async (ctx) => {
+      const body = (ctx.body ?? {}) as { newHeadSha?: unknown };
+      if (typeof body.newHeadSha !== "string") {
+        ctx.set.status = 400;
+        return { error: "newHeadSha is required" };
+      }
+      const { newHeadSha } = body;
+
+      try {
+        await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const prCtx = yield* PrContextService;
+            const chatSessions = yield* ChatSessionService;
+            const settingsService = yield* SettingsService;
+            const repoClone = yield* RepoCloneService;
+            const { db } = yield* DbService;
+
+            const { pr, repo, token } = yield* prCtx.resolveBasic(
+              ctx.params.prId,
+              ctx.session.user.id,
+            );
+            const settings = yield* withDb(db, settingsService.getSettings()).pipe(
+              Effect.orElseSucceed(() => ({ aiAgent: "opencode" }) as { aiAgent: string | null }),
+            );
+            const agent = resolveAgent(settings);
+
+            const row = yield* chatSessions.findLatestForPr(pr.id, agent);
+            if (!row) return;
+
+            // Re-acquire with the new SHA. At this point all agent
+            // commits have been handled, so this should succeed.
+            yield* repoClone.acquirePrWorktree({
+              repoId: repo.id,
+              prNumber: pr.externalId,
+              prHeadSha: newHeadSha,
+              githubToken: token,
+            });
+
+            // Keep the session row's prHeadSha in sync.
+            yield* chatSessions.updatePrHeadSha({
+              chatSessionId: row.id,
+              prHeadSha: newHeadSha,
+            });
+          }),
+        );
+
+        return jsonResponse({ status: "advanced" }, 200);
+      } catch (e) {
+        return handleAppError(e, ctx);
+      }
+    },
+    {
+      params: t.Object({ prId: t.String() }),
+    },
+  )
+  // ── Interaction mode (plan toggle) ──────────────────────────────────────
+  .patch(
+    "/api/chat/:prId/interaction-mode",
+    async (ctx) => {
+      const body = (ctx.body ?? {}) as { mode?: unknown };
+      if (body.mode !== "plan" && body.mode !== "default") {
+        ctx.set.status = 400;
+        return { error: "mode must be 'plan' or 'default'" };
+      }
+      const mode: InteractionMode = body.mode;
+      try {
+        await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const prCtx = yield* PrContextService;
+            const chatSessions = yield* ChatSessionService;
+            const settingsService = yield* SettingsService;
+            const { db } = yield* DbService;
+            const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
+            const settings = yield* withDb(db, settingsService.getSettings()).pipe(
+              Effect.orElseSucceed(() => ({ aiAgent: "opencode" }) as { aiAgent: string | null }),
+            );
+            const agent = resolveAgent(settings);
+            if (!pr.headSha) return;
+            const row = yield* chatSessions.find(pr.id, agent, pr.headSha);
+            if (!row) return;
+            yield* chatSessions.setInteractionMode({
+              chatSessionId: row.id,
+              mode,
+            });
+          }),
+        );
+        return jsonResponse({ status: "ok", mode }, 200);
+      } catch (e) {
+        return handleAppError(e, ctx);
+      }
+    },
+    {
+      params: t.Object({ prId: t.String() }),
+      body: t.Object({
+        mode: t.Union([t.Literal("default"), t.Literal("plan")]),
+      }),
+    },
+  )
+  // ── Plan approval ───────────────────────────────────────────────────────
+  .post(
+    "/api/chat/:prId/plan/:planId/approve",
+    async (ctx) => {
+      try {
+        const result = await AppRuntime.runPromise(
+          Effect.flatMap(ChatSessionService, (svc) =>
+            svc.decidePlan({
+              planId: ctx.params.planId,
+              decision: "approved",
+            }),
+          ),
+        );
+        if (!result) {
+          ctx.set.status = 404;
+          return { code: "PLAN_NOT_FOUND", message: "Plan not found" };
+        }
+        return jsonResponse({ status: "approved", plan: result }, 200);
+      } catch (e) {
+        return handleAppError(e, ctx);
+      }
+    },
+    {
+      params: t.Object({ prId: t.String(), planId: t.String() }),
+    },
+  )
+  .post(
+    "/api/chat/:prId/plan/:planId/reject",
+    async (ctx) => {
+      try {
+        const result = await AppRuntime.runPromise(
+          Effect.flatMap(ChatSessionService, (svc) =>
+            svc.decidePlan({
+              planId: ctx.params.planId,
+              decision: "rejected",
+            }),
+          ),
+        );
+        if (!result) {
+          ctx.set.status = 404;
+          return { code: "PLAN_NOT_FOUND", message: "Plan not found" };
+        }
+        return jsonResponse({ status: "rejected", plan: result }, 200);
+      } catch (e) {
+        return handleAppError(e, ctx);
+      }
+    },
+    {
+      params: t.Object({ prId: t.String(), planId: t.String() }),
+    },
+  )
+  // ── Question answer ────────────────────────────────────────────────────
+  // One endpoint handles both providers. Branch on the row's `source`:
+  //   • claude:  resolve the in-memory deferred from PendingQuestionRegistry
+  //              with a `behavior: 'deny'` PermissionResult carrying the
+  //              user's answers JSON-stringified. The SDK delivers that
+  //              message back to the model as the tool_result; the next
+  //              assistant message resumes the turn.
+  //   • opencode: POST to the daemon's `/question/{id}/reply` (or `/reject`)
+  //              which is what actually unblocks the daemon-side agent.
+  //              The daemon then broadcasts `question.replied` on its SSE
+  //              channel; our subscribeOpencodeStream surfaces that as a
+  //              follow-up frame which calls decideQuestion idempotently.
+  .post(
+    "/api/chat/:prId/question/:questionId/answer",
+    async (ctx) => {
+      try {
+        const { prId, questionId } = ctx.params;
+        const { decision, answers, customAnswers } = ctx.body;
+
+        const row = await AppRuntime.runPromise(
+          Effect.flatMap(ChatSessionService, (svc) => svc.findQuestion(questionId)),
+        );
+        if (!row) {
+          ctx.set.status = 404;
+          return { code: "QUESTION_NOT_FOUND", message: "Question not found" };
+        }
+        if (row.status !== "pending") {
+          // Idempotent: surface the existing terminal state. The web
+          // client will reconcile its local item against the broadcast.
+          return jsonResponse(
+            {
+              status: "ok" as const,
+              alreadyResolved: true,
+              resolution: row.status,
+            },
+            200,
+          );
+        }
+
+        // Persist FIRST so the DB row is authoritative even if the
+        // downstream provider call fails. If the resolve path below
+        // errors out we still leave the row marked terminal — the
+        // in-memory deferred (claude) will reject naturally on stream
+        // close, and the opencode daemon will time out on its end.
+        const finalStatus: "answered" | "rejected" =
+          decision === "reject" ? "rejected" : "answered";
+        const decided = await AppRuntime.runPromise(
+          Effect.flatMap(ChatSessionService, (svc) =>
+            svc.decideQuestion({
+              questionId,
+              status: finalStatus,
+              ...(answers !== undefined ? { answers } : {}),
+              ...(customAnswers !== undefined ? { customAnswers } : {}),
+            }),
+          ),
+        );
+        if (!decided) {
+          ctx.set.status = 404;
+          return { code: "QUESTION_NOT_FOUND", message: "Question disappeared mid-write" };
+        }
+
+        if (row.source === "claude") {
+          const deferred = takePendingQuestion(row.providerRequestId);
+          if (!deferred) {
+            // Driver already cleaned up (stream closed, restart, etc).
+            // DB row is now marked terminal; return 410 so the web
+            // client can surface a "question expired" message and
+            // remove the pending UI.
+            ctx.set.status = 410;
+            return {
+              code: "QUESTION_EXPIRED",
+              message:
+                "The agent run that asked this question has ended. Send a new message to continue.",
+            };
+          }
+          if (finalStatus === "rejected") {
+            deferred.resolve({
+              behavior: "deny",
+              message: "User declined to answer the question.",
+              interrupt: false,
+            });
+          } else {
+            // Format the result so the model sees a complete payload.
+            // Claude's `AskUserQuestionOutput` shape uses
+            // `answers: Record<questionText, "label1, label2">` —
+            // match it. Optional free-text customAnswers appended as
+            // a parenthetical so the model can still read it even
+            // though Claude's spec doesn't include it.
+            //
+            // Elysia's `t.Record(...)` validator infers the body
+            // fields as `{}` at the type level, so we cast through
+            // the schema we already validated against (Elysia
+            // guarantees the runtime shape matches).
+            const answersMap = (answers ?? {}) as Record<string, ReadonlyArray<string>>;
+            const customMap = (customAnswers ?? {}) as Record<string, string>;
+            const flatAnswers: Record<string, string> = {};
+            for (const [q, labels] of Object.entries(answersMap)) {
+              const custom = customMap[q];
+              flatAnswers[q] = custom
+                ? labels.length > 0
+                  ? `${labels.join(", ")} (custom: ${custom})`
+                  : `(custom: ${custom})`
+                : labels.join(", ");
+            }
+            deferred.resolve({
+              behavior: "deny",
+              message: JSON.stringify({
+                questions: row.questions,
+                answers: flatAnswers,
+              }),
+              interrupt: false,
+            });
+          }
+        } else {
+          // opencode: POST to the daemon. `/reject` for explicit
+          // dismissal; `/reply` with answers otherwise. The daemon's
+          // follow-up SSE event will hit subscribeOpencodeStream and
+          // fall through to the idempotent decideQuestion in the
+          // stream wrapper — no double-write because the row is
+          // already non-pending.
+          //
+          // Direct fetch instead of the SDK client because the v1
+          // `OpencodeClient` doesn't expose `.question.{reply,reject}`
+          // — those endpoints landed in the v2 SDK. The daemon itself
+          // supports them; we just talk to it via raw HTTP using the
+          // supervisor's endpoint info.
+          const endpoint = await AppRuntime.runPromise(
+            Effect.flatMap(OpencodeSupervisor, (s) => s.ensureRunning()),
+          );
+          const baseUrl = `http://${endpoint.hostname}:${endpoint.port}`;
+          const authHeader = `Basic ${btoa(`opencode:${endpoint.password}`)}`;
+          if (finalStatus === "rejected") {
+            const res = await fetch(
+              `${baseUrl}/question/${encodeURIComponent(row.providerRequestId)}/reject`,
+              {
+                method: "POST",
+                headers: {
+                  Authorization: authHeader,
+                  "Content-Type": "application/json",
+                },
+              },
+            );
+            if (!res.ok && res.status !== 404) {
+              // 404 = the daemon already cleared the request
+              // (perhaps the agent timed out). Treat as success.
+              throw new Error(`opencode reject failed: ${res.status} ${res.statusText}`);
+            }
+          } else {
+            // Reconstruct opencode's positional `Array<Array<string>>`
+            // answer order from `(question text → labels)` using the
+            // original question list as the canonical order.
+            const answersMap = (answers ?? {}) as Record<string, ReadonlyArray<string>>;
+            const orderedAnswers: Array<Array<string>> = row.questions.map((q) =>
+              Array.from(answersMap[q.question] ?? []),
+            );
+            const res = await fetch(
+              `${baseUrl}/question/${encodeURIComponent(row.providerRequestId)}/reply`,
+              {
+                method: "POST",
+                headers: {
+                  Authorization: authHeader,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ answers: orderedAnswers }),
+              },
+            );
+            if (!res.ok && res.status !== 404) {
+              throw new Error(`opencode reply failed: ${res.status} ${res.statusText}`);
+            }
+          }
+        }
+
+        // Broadcast to other connected clients so a second tab sees the
+        // card flip. Best-effort — the answering client patches its own
+        // item locally; this is for cross-tab parity.
+        try {
+          await AppRuntime.runPromise(
+            Effect.flatMap(WebSocketHub, (hub) =>
+              hub.broadcast({
+                type: "chat:question-resolved",
+                data: {
+                  prId,
+                  questionId,
+                  status: finalStatus,
+                  ...(answers !== undefined ? { answers } : {}),
+                  ...(customAnswers !== undefined ? { customAnswers } : {}),
+                },
+              }),
+            ),
+          );
+        } catch (err) {
+          logError(
+            "chat",
+            "chat:question-resolved broadcast failed:",
+            err instanceof Error ? err.message : String(err),
+          );
+        }
+
+        return jsonResponse(
+          {
+            status: "ok" as const,
+            resolution: finalStatus,
+            question: decided,
+          },
+          200,
+        );
+      } catch (e) {
+        return handleAppError(e, ctx);
+      }
+    },
+    {
+      params: t.Object({ prId: t.String(), questionId: t.String() }),
+      body: t.Object({
+        decision: t.Union([t.Literal("answer"), t.Literal("reject")]),
+        answers: t.Optional(t.Record(t.String(), t.Array(t.String()))),
+        customAnswers: t.Optional(t.Record(t.String(), t.String())),
+      }),
+    },
+  )
+  // ── Agent availability ─────────────────────────────────────────────────
+  // Lightweight probe the frontend uses to decide whether to enable the
+  // composer's Plan-mode toggle for the opencode path. For Claude the
+  // toggle is always available (the SDK supplies `permissionMode: 'plan'`).
+  .get("/api/chat/agents/available", async (ctx) => {
+    try {
+      const result = await AppRuntime.runPromise(
+        Effect.gen(function* () {
+          const settingsService = yield* SettingsService;
+          const { db } = yield* DbService;
+          const settings = yield* withDb(db, settingsService.getSettings()).pipe(
+            Effect.orElseSucceed(() => ({ aiAgent: "opencode" }) as { aiAgent: string | null }),
+          );
+          const agent = resolveAgent(settings);
+          if (agent === "claude") {
+            return {
+              agent: "claude" as const,
+              agents: ["plan", "general-purpose"] as readonly string[],
+              // Claude SDK exposes plan mode via permissionMode.
+              planAvailable: true,
+            };
+          }
+          // opencode: probe the supervisor's cached agent list.
+          const supervisor = yield* OpencodeSupervisor;
+          const agents = yield* supervisor.listAgents();
+          return {
+            agent: "opencode" as const,
+            agents,
+            planAvailable: agents.includes("plan"),
+          };
+        }),
+      );
+      return jsonResponse(result, 200);
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  });
 
 /**
  * Wrap a ResolvePushFrame stream into SSE bytes. Mirrors the shape of
  * `chatStreamToSSE` so the web client can reuse `parseSSEBuffer`.
  */
 function resolvePushStreamToSSE(
-	frameStream: ReadableStream<ResolvePushFrame>,
+  frameStream: ReadableStream<ResolvePushFrame>,
 ): ReadableStream<Uint8Array> {
-	const encoder = new TextEncoder();
-	return new ReadableStream<Uint8Array>({
-		async start(controller) {
-			const reader = frameStream.getReader();
-			try {
-				while (true) {
-					const { done, value } = await reader.read();
-					if (done) break;
-					controller.enqueue(
-						encoder.encode(`data: ${JSON.stringify(value)}\n\n`),
-					);
-				}
-				controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-				controller.close();
-			} catch (err) {
-				const errMsg = JSON.stringify({
-					code: 'GENERATION_ERROR',
-					message: err instanceof Error ? err.message : 'Unknown error',
-				});
-				controller.enqueue(encoder.encode(`event: error\ndata: ${errMsg}\n\n`));
-				controller.close();
-			}
-		},
-	});
+  const encoder = new TextEncoder();
+  return new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const reader = frameStream.getReader();
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(value)}\n\n`));
+        }
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.close();
+      } catch (err) {
+        const errMsg = JSON.stringify({
+          code: "GENERATION_ERROR",
+          message: err instanceof Error ? err.message : "Unknown error",
+        });
+        controller.enqueue(encoder.encode(`event: error\ndata: ${errMsg}\n\n`));
+        controller.close();
+      }
+    },
+  });
 }

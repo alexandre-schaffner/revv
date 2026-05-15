@@ -1,188 +1,191 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
-	import { fade, scale } from 'svelte/transition';
-	import { Search } from '@lucide/svelte';
-	import { getPullRequests, getRepositories, selectPr } from '$lib/stores/prs.svelte';
-	import { getFilteredCommands, setQuery as setCommandQuery, resetQuery, fuzzyScore } from '$lib/stores/commands.svelte';
-	import { setPaletteMode, type PaletteMode } from '$lib/stores/shortcuts.svelte';
-	import { setSidebarView } from '$lib/stores/sidebar.svelte';
-	import type { PullRequest, Repository } from '@revv/shared';
+import { Search } from "@lucide/svelte";
+import type { PullRequest, Repository } from "@revv/shared";
+import { untrack } from "svelte";
+import { fade, scale } from "svelte/transition";
+import {
+  fuzzyScore,
+  getFilteredCommands,
+  resetQuery,
+  setQuery as setCommandQuery,
+} from "$lib/stores/commands.svelte";
+import { getPullRequests, getRepositories, selectPr } from "$lib/stores/prs.svelte";
+import { type PaletteMode, setPaletteMode } from "$lib/stores/shortcuts.svelte";
+import { setSidebarView } from "$lib/stores/sidebar.svelte";
 
-	interface Props {
-		open: boolean;
-		mode: PaletteMode;
-		onClose: () => void;
-	}
+interface Props {
+  open: boolean;
+  mode: PaletteMode;
+  onClose: () => void;
+}
 
-	let { open, mode, onClose }: Props = $props();
+let { open, mode, onClose }: Props = $props();
 
-	let inputValue = $state('');
-	let selectedIndex = $state(0);
-	let inputEl: HTMLInputElement | undefined = $state();
-	let listEl: HTMLDivElement | undefined = $state();
+let inputValue = $state("");
+let selectedIndex = $state(0);
+let inputEl: HTMLInputElement | undefined = $state();
+let listEl: HTMLDivElement | undefined = $state();
 
-	// ── Mode switching via `>` prefix ────────────────────
+// ── Mode switching via `>` prefix ────────────────────
 
-	function handleInput(e: Event) {
-		const val = (e.target as HTMLInputElement).value;
-		inputValue = val;
+function handleInput(e: Event) {
+  const val = (e.target as HTMLInputElement).value;
+  inputValue = val;
 
-		if (mode === 'search' && val.startsWith('>')) {
-			setPaletteMode('command');
-			setCommandQuery(val.slice(1).trim());
-		} else if (mode === 'command' && !val.startsWith('>')) {
-			setPaletteMode('search');
-			setCommandQuery('');
-		} else if (mode === 'command') {
-			setCommandQuery(val.slice(1).trim());
-		}
-	}
+  if (mode === "search" && val.startsWith(">")) {
+    setPaletteMode("command");
+    setCommandQuery(val.slice(1).trim());
+  } else if (mode === "command" && !val.startsWith(">")) {
+    setPaletteMode("search");
+    setCommandQuery("");
+  } else if (mode === "command") {
+    setCommandQuery(val.slice(1).trim());
+  }
+}
 
-	// ── PR search ────────────────────────────────────────
+// ── PR search ────────────────────────────────────────
 
-	const repoMap = $derived(
-		new Map<string, Repository>(getRepositories().map((r) => [r.id, r]))
-	);
+const repoMap = $derived(new Map<string, Repository>(getRepositories().map((r) => [r.id, r])));
 
-	interface PrResult {
-		pr: PullRequest;
-		repoName: string;
-		score: number;
-	}
+interface PrResult {
+  pr: PullRequest;
+  repoName: string;
+  score: number;
+}
 
-	const prResults = $derived.by((): PrResult[] => {
-		if (mode !== 'search') return [];
+const prResults = $derived.by((): PrResult[] => {
+  if (mode !== "search") return [];
 
-		const prs = getPullRequests();
-		const q = inputValue.trim();
+  const prs = getPullRequests();
+  const q = inputValue.trim();
 
-		if (q.length === 0) {
-			return prs.map((pr) => ({
-				pr,
-				repoName: repoMap.get(pr.repositoryId)?.fullName ?? '',
-				score: 0,
-			}));
-		}
+  if (q.length === 0) {
+    return prs.map((pr) => ({
+      pr,
+      repoName: repoMap.get(pr.repositoryId)?.fullName ?? "",
+      score: 0,
+    }));
+  }
 
-		return prs
-			.map((pr) => {
-				const repo = repoMap.get(pr.repositoryId);
-				const repoName = repo?.fullName ?? '';
+  return prs
+    .map((pr) => {
+      const repo = repoMap.get(pr.repositoryId);
+      const repoName = repo?.fullName ?? "";
 
-				const titleScore = fuzzyScore(q, pr.title);
-				const branchScore = fuzzyScore(q, pr.sourceBranch);
-				const idScore = fuzzyScore(q, `#${pr.externalId}`);
-				const authorScore = fuzzyScore(q, pr.authorLogin);
-				const repoScore = fuzzyScore(q, repoName);
-				const best = Math.max(titleScore, branchScore, idScore, authorScore, repoScore);
+      const titleScore = fuzzyScore(q, pr.title);
+      const branchScore = fuzzyScore(q, pr.sourceBranch);
+      const idScore = fuzzyScore(q, `#${pr.externalId}`);
+      const authorScore = fuzzyScore(q, pr.authorLogin);
+      const repoScore = fuzzyScore(q, repoName);
+      const best = Math.max(titleScore, branchScore, idScore, authorScore, repoScore);
 
-				return { pr, repoName, score: best };
-			})
-			.filter((r) => r.score >= 0)
-			.sort((a, b) => b.score - a.score);
-	});
+      return { pr, repoName, score: best };
+    })
+    .filter((r) => r.score >= 0)
+    .sort((a, b) => b.score - a.score);
+});
 
-	// ── Unified item list ────────────────────────────────
+// ── Unified item list ────────────────────────────────
 
-	const commands = $derived(mode === 'command' ? getFilteredCommands() : []);
-	const itemCount = $derived(mode === 'search' ? prResults.length : commands.length);
+const commands = $derived(mode === "command" ? getFilteredCommands() : []);
+const itemCount = $derived(mode === "search" ? prResults.length : commands.length);
 
-	// ── Reset on open/mode change ────────────────────────
+// ── Reset on open/mode change ────────────────────────
 
-	$effect(() => {
-		if (open) {
-			selectedIndex = 0;
+$effect(() => {
+  if (open) {
+    selectedIndex = 0;
 
-			if (mode === 'command') {
-				inputValue = '>';
-				setCommandQuery('');
-			} else {
-				inputValue = '';
-				resetQuery();
-			}
+    if (mode === "command") {
+      inputValue = ">";
+      setCommandQuery("");
+    } else {
+      inputValue = "";
+      resetQuery();
+    }
 
-			// Focus input on next tick
-			requestAnimationFrame(() => inputEl?.focus());
-		}
-	});
+    // Focus input on next tick
+    requestAnimationFrame(() => inputEl?.focus());
+  }
+});
 
-	// Clamp selectedIndex when item count changes
-	$effect(() => {
-		const count = itemCount;
-		if (count > 0 && untrack(() => selectedIndex) >= count) {
-			selectedIndex = count - 1;
-		}
-	});
+// Clamp selectedIndex when item count changes
+$effect(() => {
+  const count = itemCount;
+  if (count > 0 && untrack(() => selectedIndex) >= count) {
+    selectedIndex = count - 1;
+  }
+});
 
-	// ── Keyboard navigation ──────────────────────────────
+// ── Keyboard navigation ──────────────────────────────
 
-	function handleKeydown(e: KeyboardEvent) {
-		if (e.key === 'Escape') {
-			e.preventDefault();
-			onClose();
-			return;
-		}
+function handleKeydown(e: KeyboardEvent) {
+  if (e.key === "Escape") {
+    e.preventDefault();
+    onClose();
+    return;
+  }
 
-		if (e.key === 'ArrowDown') {
-			e.preventDefault();
-			if (itemCount > 0) {
-				selectedIndex = (selectedIndex + 1) % itemCount;
-				scrollToSelected();
-			}
-			return;
-		}
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    if (itemCount > 0) {
+      selectedIndex = (selectedIndex + 1) % itemCount;
+      scrollToSelected();
+    }
+    return;
+  }
 
-		if (e.key === 'ArrowUp') {
-			e.preventDefault();
-			if (itemCount > 0) {
-				selectedIndex = (selectedIndex - 1 + itemCount) % itemCount;
-				scrollToSelected();
-			}
-			return;
-		}
+  if (e.key === "ArrowUp") {
+    e.preventDefault();
+    if (itemCount > 0) {
+      selectedIndex = (selectedIndex - 1 + itemCount) % itemCount;
+      scrollToSelected();
+    }
+    return;
+  }
 
-		if (e.key === 'Enter') {
-			e.preventDefault();
-			executeSelected();
-			return;
-		}
-	}
+  if (e.key === "Enter") {
+    e.preventDefault();
+    executeSelected();
+    return;
+  }
+}
 
-	function scrollToSelected() {
-		requestAnimationFrame(() => {
-			const item = listEl?.querySelector(`[data-index="${selectedIndex}"]`);
-			item?.scrollIntoView({ block: 'nearest' });
-		});
-	}
+function scrollToSelected() {
+  requestAnimationFrame(() => {
+    const item = listEl?.querySelector(`[data-index="${selectedIndex}"]`);
+    item?.scrollIntoView({ block: "nearest" });
+  });
+}
 
-	function executeSelected() {
-		if (mode === 'search') {
-			const result = prResults[selectedIndex];
-			if (result) {
-				onClose();
-				// Mirror `PrItem.handleClick`: navigating to a PR through the
-				// palette must also swipe the sidebar into files view, otherwise
-				// the header renders the prs-mode "PULL REQUESTS" label while
-				// the body is showing the files pane (desynced — the user sees
-				// a file tree under a "Pull Requests" header). Driving both
-				// `selectedPrId` and `sidebarView` together keeps header +
-				// body in lockstep regardless of the entry point.
-				selectPr(result.pr.id);
-				setSidebarView('files');
-			}
-		} else {
-			const cmd = commands[selectedIndex];
-			if (cmd) {
-				onClose();
-				cmd.action();
-			}
-		}
-	}
+function executeSelected() {
+  if (mode === "search") {
+    const result = prResults[selectedIndex];
+    if (result) {
+      onClose();
+      // Mirror `PrItem.handleClick`: navigating to a PR through the
+      // palette must also swipe the sidebar into files view, otherwise
+      // the header renders the prs-mode "PULL REQUESTS" label while
+      // the body is showing the files pane (desynced — the user sees
+      // a file tree under a "Pull Requests" header). Driving both
+      // `selectedPrId` and `sidebarView` together keeps header +
+      // body in lockstep regardless of the entry point.
+      selectPr(result.pr.id);
+      setSidebarView("files");
+    }
+  } else {
+    const cmd = commands[selectedIndex];
+    if (cmd) {
+      onClose();
+      cmd.action();
+    }
+  }
+}
 
-	function handleItemClick(index: number) {
-		selectedIndex = index;
-		executeSelected();
-	}
+function handleItemClick(index: number) {
+  selectedIndex = index;
+  executeSelected();
+}
 </script>
 
 {#if open}
@@ -220,6 +223,7 @@
 				class="palette-input"
 				type="text"
 				placeholder={mode === 'command' ? 'Type a command...' : 'Search pull requests...'}
+				aria-label={mode === 'command' ? 'Type a command' : 'Search pull requests'}
 				value={inputValue}
 				oninput={handleInput}
 				onkeydown={handleKeydown}

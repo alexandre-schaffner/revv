@@ -1,17 +1,17 @@
 <script lang="ts" module>
-	import type { HTMLFormAttributes } from "svelte/elements";
-	import type { PromptInputMessage, PromptInputStatus } from "./context.js";
+import type { HTMLFormAttributes } from "svelte/elements";
+import type { PromptInputMessage, PromptInputStatus } from "./context.js";
 
-	export type PromptInputProps = Omit<HTMLFormAttributes, "onsubmit"> & {
-		/** Two-way bound text value. Shared with PromptInputTextarea via bind:value on both. */
-		value?: string;
-		/** Handler called when the form is submitted with message text. */
-		onsubmit?: (message: PromptInputMessage) => void;
-		/** Current chat status. */
-		status?: PromptInputStatus;
-		/** Handler called when a stop is requested. */
-		onstop?: () => void;
-	};
+export type PromptInputProps = Omit<HTMLFormAttributes, "onsubmit"> & {
+  /** Two-way bound text value. Shared with PromptInputTextarea via bind:value on both. */
+  value?: string;
+  /** Handler called when the form is submitted with message text. */
+  onsubmit?: (message: PromptInputMessage) => void;
+  /** Current chat status. */
+  status?: PromptInputStatus;
+  /** Handler called when a stop is requested. */
+  onstop?: () => void;
+};
 </script>
 
 <script lang="ts">

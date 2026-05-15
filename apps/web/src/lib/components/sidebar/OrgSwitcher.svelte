@@ -1,74 +1,73 @@
 <script lang="ts">
-	import {
-		Root as PopoverRoot,
-		Trigger as PopoverTrigger,
-		Content as PopoverContent,
-	} from '$lib/components/ui/popover/index.js';
-	import { Building2, Check, ChevronDown, Globe, User } from '@lucide/svelte';
-	import {
-		getAvailableOrgs,
-		getActiveOrg,
-		setActiveOrg,
-	} from '$lib/stores/orgs.svelte';
-	import { getUser, getCurrentUserLogin } from '$lib/stores/auth.svelte';
-	import { getRepositories } from '$lib/stores/prs.svelte';
-	import { getGithubHost } from '$lib/stores/settings.svelte';
+import { Building2, Check, ChevronDown, Globe, User } from "@lucide/svelte";
+import {
+  Content as PopoverContent,
+  Root as PopoverRoot,
+  Trigger as PopoverTrigger,
+} from "$lib/components/ui/popover/index.js";
+import { getCurrentUserLogin, getUser } from "$lib/stores/auth.svelte";
+import { getActiveOrg, getAvailableOrgs, setActiveOrg } from "$lib/stores/orgs.svelte";
+import { getRepositories } from "$lib/stores/prs.svelte";
+import { getGithubHost } from "$lib/stores/settings.svelte";
 
-	interface Props {
-		collapsed?: boolean;
-	}
+interface Props {
+  collapsed?: boolean;
+}
 
-	let { collapsed = false }: Props = $props();
+let { collapsed = false }: Props = $props();
 
-	let open = $state(false);
+let open = $state(false);
 
-	const orgs = $derived(getAvailableOrgs());
-	const activeOrg = $derived(getActiveOrg());
-	const user = $derived(getUser());
-	const personalLogin = $derived(getCurrentUserLogin());
+const orgs = $derived(getAvailableOrgs());
+const activeOrg = $derived(getActiveOrg());
+const user = $derived(getUser());
+const personalLogin = $derived(getCurrentUserLogin());
 
-	// With no "All organizations" option, the switcher must always have a
-	// concrete selection. As soon as we know enough to pick a default
-	// (orgs loaded or a personal login surfaces), promote `activeOrg` from
-	// null to the personal login (preferred) or the first org. localStorage
-	// then persists the user's explicit choice across sessions.
-	$effect(() => {
-		if (activeOrg !== null) return;
-		const activeHost = getGithubHost();
-		const repos = getRepositories();
-		const hostRepos = activeHost ? repos.filter((r) => r.githubHost === activeHost) : repos;
-		const repoOwner = hostRepos[0]?.owner ?? null;
-		const allKnownOwners = [personalLogin, ...orgs.map((o) => o.login), ...externalOwners].filter(Boolean);
-		const repoFallback = repoOwner && allKnownOwners.includes(repoOwner) ? repoOwner : null;
-		const fallback = repoFallback ?? personalLogin ?? orgs[0]?.login ?? null;
-		if (fallback) setActiveOrg(fallback);
-	});
+// With no "All organizations" option, the switcher must always have a
+// concrete selection. As soon as we know enough to pick a default
+// (orgs loaded or a personal login surfaces), promote `activeOrg` from
+// null to the personal login (preferred) or the first org. localStorage
+// then persists the user's explicit choice across sessions.
+$effect(() => {
+  if (activeOrg !== null) return;
+  const activeHost = getGithubHost();
+  const repos = getRepositories();
+  const hostRepos = activeHost ? repos.filter((r) => r.githubHost === activeHost) : repos;
+  const repoOwner = hostRepos[0]?.owner ?? null;
+  const allKnownOwners = [personalLogin, ...orgs.map((o) => o.login), ...externalOwners].filter(
+    Boolean,
+  );
+  const repoFallback = repoOwner && allKnownOwners.includes(repoOwner) ? repoOwner : null;
+  const fallback = repoFallback ?? personalLogin ?? orgs[0]?.login ?? null;
+  if (fallback) setActiveOrg(fallback);
+});
 
-	const knownOwners = $derived(
-		new Set([personalLogin, ...orgs.map((o) => o.login)].filter((x): x is string => Boolean(x))),
-	);
-	const activeHost = $derived(getGithubHost());
-	const hostFilteredRepos = $derived(
-		activeHost ? getRepositories().filter((r) => r.githubHost === activeHost) : getRepositories(),
-	);
-	const externalOwners = $derived(
-		[...new Set(hostFilteredRepos.map((r) => r.owner).filter((o) => !knownOwners.has(o)))].sort(),
-	);
+const knownOwners = $derived(
+  new Set([personalLogin, ...orgs.map((o) => o.login)].filter((x): x is string => Boolean(x))),
+);
+const activeHost = $derived(getGithubHost());
+const hostFilteredRepos = $derived(
+  activeHost ? getRepositories().filter((r) => r.githubHost === activeHost) : getRepositories(),
+);
+const externalOwners = $derived(
+  [...new Set(hostFilteredRepos.map((r) => r.owner).filter((o) => !knownOwners.has(o)))].sort(),
+);
 
-	const activeOrgRow = $derived(
-		activeOrg ? orgs.find((o) => o.login === activeOrg) ?? null : null,
-	);
-	const isPersonalActive = $derived(
-		activeOrg !== null && personalLogin !== null && activeOrg === personalLogin,
-	);
-	const isExternalActive = $derived(
-		activeOrg !== null && !isPersonalActive && activeOrgRow === null && externalOwners.includes(activeOrg),
-	);
+const activeOrgRow = $derived(activeOrg ? (orgs.find((o) => o.login === activeOrg) ?? null) : null);
+const isPersonalActive = $derived(
+  activeOrg !== null && personalLogin !== null && activeOrg === personalLogin,
+);
+const isExternalActive = $derived(
+  activeOrg !== null &&
+    !isPersonalActive &&
+    activeOrgRow === null &&
+    externalOwners.includes(activeOrg),
+);
 
-	function select(login: string): void {
-		setActiveOrg(login);
-		open = false;
-	}
+function select(login: string): void {
+  setActiveOrg(login);
+  open = false;
+}
 </script>
 
 <PopoverRoot bind:open>

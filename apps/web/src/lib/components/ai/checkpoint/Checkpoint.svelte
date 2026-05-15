@@ -1,14 +1,14 @@
 <script lang="ts" module>
-	import type { HTMLAttributes } from "svelte/elements";
+import type { HTMLAttributes } from "svelte/elements";
 
-	export type CheckpointProps = HTMLAttributes<HTMLDivElement> & {
-		/** Unique identifier for this checkpoint. */
-		id: string;
-		/** Display label for the checkpoint. */
-		label?: string | undefined;
-		/** Callback when the user requests to restore to this checkpoint. */
-		onRestore?: (id: string) => void;
-	};
+export type CheckpointProps = HTMLAttributes<HTMLDivElement> & {
+  /** Unique identifier for this checkpoint. */
+  id: string;
+  /** Display label for the checkpoint. */
+  label?: string | undefined;
+  /** Callback when the user requests to restore to this checkpoint. */
+  onRestore?: (id: string) => void;
+};
 </script>
 
 <script lang="ts">

@@ -1,5 +1,5 @@
-import { Elysia } from 'elysia';
-import { withAuth } from './middleware';
+import { Elysia } from "elysia";
+import { withAuth } from "./middleware";
 
 /**
  * Soft sign-out endpoint for multi-account mode.
@@ -24,7 +24,7 @@ import { withAuth } from './middleware';
  * that user row.
  */
 export const signOutRoute = new Elysia()
-	.use(withAuth)
-	.post('/api/auth/revoke-and-sign-out', async () => {
-		return { revoked: false };
-	});
+  .use(withAuth)
+  .post("/api/auth/revoke-and-sign-out", async () => {
+    return { revoked: false };
+  });

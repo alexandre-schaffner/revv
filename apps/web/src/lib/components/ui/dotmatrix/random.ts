@@ -10,31 +10,31 @@
 // `square-14` shares its config with `prism-bloom` (kaleidoscope palindrome),
 // so it's excluded too. Effective pool: 19 picks.
 
-import { DOTMATRIX_VARIANT_KEYS, type DotmatrixVariant } from './variants';
+import { DOTMATRIX_VARIANT_KEYS, type DotmatrixVariant } from "./variants";
 
 const WALKTHROUGH_VARIANTS = new Set<DotmatrixVariant>([
-	'ripple',
-	'diagonal',
-	'collapse',
-	'prism-bloom',
-	'square-14', // identical to prism-bloom; exclude to avoid duplicate look
+  "ripple",
+  "diagonal",
+  "collapse",
+  "prism-bloom",
+  "square-14", // identical to prism-bloom; exclude to avoid duplicate look
 ]);
 
 const CHAT_VARIANT_POOL: readonly DotmatrixVariant[] = DOTMATRIX_VARIANT_KEYS.filter(
-	(v) => !WALKTHROUGH_VARIANTS.has(v),
+  (v) => !WALKTHROUGH_VARIANTS.has(v),
 );
 
 // FNV-1a 32-bit. Small, deterministic, more uniform than `id.length % N`.
 function fnv1a(input: string): number {
-	let h = 0x811c9dc5;
-	for (let i = 0; i < input.length; i += 1) {
-		h ^= input.charCodeAt(i);
-		h = Math.imul(h, 0x01000193);
-	}
-	return h >>> 0;
+  let h = 0x811c9dc5;
+  for (let i = 0; i < input.length; i += 1) {
+    h ^= input.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
 }
 
 export function squareVariantForId(id: string): DotmatrixVariant {
-	const idx = fnv1a(id) % CHAT_VARIANT_POOL.length;
-	return CHAT_VARIANT_POOL[idx]!;
+  const idx = fnv1a(id) % CHAT_VARIANT_POOL.length;
+  return CHAT_VARIANT_POOL[idx]!;
 }

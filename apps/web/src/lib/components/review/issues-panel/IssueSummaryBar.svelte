@@ -1,66 +1,66 @@
 <script lang="ts">
-    /*
-     * IssueSummaryBar — the header of the Issues panel. Styled as a linter
-     * summary line:
-     *
-     *   ⚠ walkthrough    ✕ 3 critical  ▲ 5 warnings  • 2 info  │  4 selected
-     *                                                          ^
-     *                                                          divider bar
-     *
-     *   [Expand all] [Only critical] [Only unselected] [Select all / Clear]
-     *
-     * Count-pills mirror the verdict-pill treatment from
-     * RatingSummaryBar.svelte but keyed to severity (critical / warning /
-     * info) and a selection pill on the right. The divider character
-     * (a literal `│`) signals the transition from "counts" to "selection".
-     */
-    import {
-        AlertTriangle,
-        X as XIcon,
-        Triangle,
-        Circle,
-        ChevronsDownUp,
-        ChevronsUpDown,
-        Filter,
-        CheckSquare,
-        Square,
-    } from "@lucide/svelte";
+/*
+ * IssueSummaryBar — the header of the Issues panel. Styled as a linter
+ * summary line:
+ *
+ *   ⚠ walkthrough    ✕ 3 critical  ▲ 5 warnings  • 2 info  │  4 selected
+ *                                                          ^
+ *                                                          divider bar
+ *
+ *   [Expand all] [Only critical] [Only unselected] [Select all / Clear]
+ *
+ * Count-pills mirror the verdict-pill treatment from
+ * RatingSummaryBar.svelte but keyed to severity (critical / warning /
+ * info) and a selection pill on the right. The divider character
+ * (a literal `│`) signals the transition from "counts" to "selection".
+ */
+import {
+  AlertTriangle,
+  CheckSquare,
+  ChevronsDownUp,
+  ChevronsUpDown,
+  Circle,
+  Filter,
+  Square,
+  Triangle,
+  X as XIcon,
+} from "@lucide/svelte";
 
-    interface Counts {
-        critical: number;
-        warning: number;
-        info: number;
-        total: number;
-        selected: number;
-        submittable: number;
-    }
+interface Counts {
+  critical: number;
+  warning: number;
+  info: number;
+  total: number;
+  selected: number;
+  submittable: number;
+}
 
-    interface Props {
-        counts: Counts;
-        expandAll: boolean | null;
-        onlyCritical: boolean;
-        onlyUnselected: boolean;
-        allSelected: boolean;
-        onToggleExpandAll: () => void;
-        onToggleOnlyCritical: () => void;
-        onToggleOnlyUnselected: () => void;
-        onToggleSelectAll: () => void;
-    }
+interface Props {
+  counts: Counts;
+  expandAll: boolean | null;
+  onlyCritical: boolean;
+  onlyUnselected: boolean;
+  allSelected: boolean;
+  onToggleExpandAll: () => void;
+  onToggleOnlyCritical: () => void;
+  onToggleOnlyUnselected: () => void;
+  onToggleSelectAll: () => void;
+}
 
-    let {
-        counts,
-        expandAll,
-        onlyCritical,
-        onlyUnselected,
-        allSelected,
-        onToggleExpandAll,
-        onToggleOnlyCritical,
-        onToggleOnlyUnselected,
-        onToggleSelectAll,
-    }: Props = $props();
+let {
+  counts,
+  expandAll,
+  onlyCritical,
+  onlyUnselected,
+  allSelected,
+  onToggleExpandAll,
+  onToggleOnlyCritical,
+  onToggleOnlyUnselected,
+  onToggleSelectAll,
+}: Props = $props();
 
-    const expandLabel = $derived(expandAll === true ? "Collapse all" : "Expand all");
-    const selectLabel = $derived(allSelected ? "Clear" : "Select all");
+const expandLabel = $derived(expandAll === true ? "Collapse all" : "Expand all");
+const selectLabel = $derived(allSelected ? "Clear" : "Select all");
 </script>
 
 <div class="summary-bar">

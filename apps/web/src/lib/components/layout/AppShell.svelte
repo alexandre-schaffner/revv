@@ -1,245 +1,250 @@
 <script lang="ts">
-	import Sidebar from './Sidebar.svelte';
-	import TopBar from './TopBar.svelte';
-	import RightPanel from './RightPanel.svelte';
-	import BottomBar from './BottomBar.svelte';
-	import CommandPalette from './CommandPalette.svelte';
-	import FloatingTabs from './FloatingTabs.svelte';
-	import {
-		getSelectedPr,
-		convertPrToDraft,
-		markPrReadyForReview,
-		closePr,
-	} from '$lib/stores/prs.svelte';
-	import { getCurrentUserLogin } from '$lib/stores/auth.svelte';
-	import {
-		getPrWalkthroughStatus,
-		getIsStreaming as getWalkthroughStreaming,
-		getSummary as getWalkthroughSummary,
-		getRatings as getWalkthroughRatings,
-		getCanResume as getWalkthroughCanResume,
-		getStreamError as getWalkthroughStreamError,
-		regenerate as regenerateWalkthrough,
-		resume as resumeWalkthrough,
-		abort as abortWalkthrough,
-	} from '$lib/stores/walkthrough.svelte';
-	import {
-		scrollToTop as scrollWalkthroughToTop,
-		scrollToBottom as scrollWalkthroughToBottom,
-		scrollToRatings as scrollWalkthroughToRatings,
-		getUserScrolledUp as getWalkthroughUserScrolledUp,
-		getHasNewContentBelow as getWalkthroughHasNewContentBelow,
-	} from '$lib/stores/walkthroughNav.svelte';
-	import { ArrowDown, ArrowUp, Check, FileEdit, Gauge, Play, RefreshCw, RotateCcw, Send, Sparkles, Square, XCircle } from '@lucide/svelte';
-	import {
-		getActiveTab,
-		setActiveTab,
-		getPanelOpenRequested,
-		consumePanelOpenRequest,
-		getLoadedHeadSha,
-		getIsPullingCommit,
-		pullLatestCommit,
-	} from '$lib/stores/review.svelte';
-	import {
-		getSidebarCollapsed,
-		toggleSidebar,
-		getRightPanelOpen,
-		setRightPanelOpen,
-		toggleRightPanel,
-		getSidebarWidth,
-		setSidebarWidth,
-		resetSidebarWidth,
-		SIDEBAR_WIDTH_MIN,
-		SIDEBAR_WIDTH_MAX,
-		getRightPanelWidth,
-		setRightPanelWidth,
-		resetRightPanelWidth,
-		RIGHT_PANEL_WIDTH_MIN,
-		RIGHT_PANEL_WIDTH_MAX,
-	} from '$lib/stores/sidebar.svelte';
-	import {
-		getPaletteOpen,
-		getPaletteMode,
-		closePalette,
-	} from '$lib/stores/shortcuts.svelte';
-	import { getSettingsOpen, closeSettings } from '$lib/stores/settingsModal.svelte';
-	import SettingsModal from '$lib/components/settings/SettingsModal.svelte';
-	import {
-		getRcSubmitting,
-		getRcSelectedCount,
-		getRcHasContent,
-		getRcApproveBlockerSummary,
-		getRcOnGenerateChanges,
-		getRcOnSubmitReview,
-		getRcOnApprove,
-	} from '$lib/stores/rcActions.svelte';
-	import { page } from '$app/state';
+import {
+  ArrowDown,
+  ArrowUp,
+  Check,
+  FileEdit,
+  Gauge,
+  Play,
+  RefreshCw,
+  RotateCcw,
+  Send,
+  Sparkles,
+  Square,
+  XCircle,
+} from "@lucide/svelte";
+import { page } from "$app/state";
+import SettingsModal from "$lib/components/settings/SettingsModal.svelte";
+import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
+import {
+  closePr,
+  convertPrToDraft,
+  getSelectedPr,
+  markPrReadyForReview,
+} from "$lib/stores/prs.svelte";
+import {
+  getRcApproveBlockerSummary,
+  getRcHasContent,
+  getRcOnApprove,
+  getRcOnGenerateChanges,
+  getRcOnSubmitReview,
+  getRcSelectedCount,
+  getRcSubmitting,
+} from "$lib/stores/rcActions.svelte";
+import {
+  consumePanelOpenRequest,
+  getActiveTab,
+  getIsPullingCommit,
+  getLoadedHeadSha,
+  getPanelOpenRequested,
+  pullLatestCommit,
+  setActiveTab,
+} from "$lib/stores/review.svelte";
+import { closeSettings, getSettingsOpen } from "$lib/stores/settingsModal.svelte";
+import { closePalette, getPaletteMode, getPaletteOpen } from "$lib/stores/shortcuts.svelte";
+import {
+  getRightPanelOpen,
+  getRightPanelWidth,
+  getSidebarCollapsed,
+  getSidebarWidth,
+  RIGHT_PANEL_WIDTH_MAX,
+  RIGHT_PANEL_WIDTH_MIN,
+  resetRightPanelWidth,
+  resetSidebarWidth,
+  SIDEBAR_WIDTH_MAX,
+  SIDEBAR_WIDTH_MIN,
+  setRightPanelOpen,
+  setRightPanelWidth,
+  setSidebarWidth,
+  toggleRightPanel,
+  toggleSidebar,
+} from "$lib/stores/sidebar.svelte";
+import {
+  abort as abortWalkthrough,
+  getPrWalkthroughStatus,
+  getCanResume as getWalkthroughCanResume,
+  getRatings as getWalkthroughRatings,
+  getStreamError as getWalkthroughStreamError,
+  getIsStreaming as getWalkthroughStreaming,
+  getSummary as getWalkthroughSummary,
+  regenerate as regenerateWalkthrough,
+  resume as resumeWalkthrough,
+} from "$lib/stores/walkthrough.svelte";
+import {
+  getHasNewContentBelow as getWalkthroughHasNewContentBelow,
+  getUserScrolledUp as getWalkthroughUserScrolledUp,
+  scrollToBottom as scrollWalkthroughToBottom,
+  scrollToRatings as scrollWalkthroughToRatings,
+  scrollToTop as scrollWalkthroughToTop,
+} from "$lib/stores/walkthroughNav.svelte";
+import BottomBar from "./BottomBar.svelte";
+import CommandPalette from "./CommandPalette.svelte";
+import FloatingTabs from "./FloatingTabs.svelte";
+import RightPanel from "./RightPanel.svelte";
+import Sidebar from "./Sidebar.svelte";
+import TopBar from "./TopBar.svelte";
 
-	let { children } = $props();
+let { children } = $props();
 
-	const sidebarCollapsed = $derived(getSidebarCollapsed());
-	const rightPanelOpen = $derived(getRightPanelOpen());
-	const paletteOpen = $derived(getPaletteOpen());
-	const paletteMode = $derived(getPaletteMode());
-	const sidebarWidth = $derived(getSidebarWidth());
-	const rightPanelWidth = $derived(getRightPanelWidth());
-	const pr = $derived(getSelectedPr());
-	const walkthroughStatus = $derived(pr ? getPrWalkthroughStatus(pr.id) : 'idle');
-	const activeTab = $derived(getActiveTab());
-	const isSettingsRoute = $derived(page.url.pathname.startsWith('/settings'));
-	const walkthroughStreaming = $derived(getWalkthroughStreaming());
-	const walkthroughSummary = $derived(getWalkthroughSummary());
-	const walkthroughCanResume = $derived(getWalkthroughCanResume());
-	const walkthroughStreamError = $derived(getWalkthroughStreamError());
-	const walkthroughHasRatings = $derived(getWalkthroughRatings().length > 0);
-	const walkthroughUserScrolledUp = $derived(getWalkthroughUserScrolledUp());
-	const walkthroughHasNewContentBelow = $derived(getWalkthroughHasNewContentBelow());
-	const walkthroughHasContent = $derived(
-		walkthroughStreaming ||
-			!!walkthroughSummary ||
-			walkthroughCanResume ||
-			walkthroughHasRatings ||
-			!!walkthroughStreamError,
-	);
-	const showFloatingActions = $derived(
-		!!pr && !isSettingsRoute && activeTab === 'walkthrough' && walkthroughHasContent,
-	);
-	const showRcActions = $derived(!!pr && !isSettingsRoute && activeTab === 'request-changes');
+const sidebarCollapsed = $derived(getSidebarCollapsed());
+const rightPanelOpen = $derived(getRightPanelOpen());
+const paletteOpen = $derived(getPaletteOpen());
+const paletteMode = $derived(getPaletteMode());
+const sidebarWidth = $derived(getSidebarWidth());
+const rightPanelWidth = $derived(getRightPanelWidth());
+const pr = $derived(getSelectedPr());
+const walkthroughStatus = $derived(pr ? getPrWalkthroughStatus(pr.id) : "idle");
+const activeTab = $derived(getActiveTab());
+const isSettingsRoute = $derived(page.url.pathname.startsWith("/settings"));
+const walkthroughStreaming = $derived(getWalkthroughStreaming());
+const walkthroughSummary = $derived(getWalkthroughSummary());
+const walkthroughCanResume = $derived(getWalkthroughCanResume());
+const walkthroughStreamError = $derived(getWalkthroughStreamError());
+const walkthroughHasRatings = $derived(getWalkthroughRatings().length > 0);
+const walkthroughUserScrolledUp = $derived(getWalkthroughUserScrolledUp());
+const walkthroughHasNewContentBelow = $derived(getWalkthroughHasNewContentBelow());
+const walkthroughHasContent = $derived(
+  walkthroughStreaming ||
+    !!walkthroughSummary ||
+    walkthroughCanResume ||
+    walkthroughHasRatings ||
+    !!walkthroughStreamError,
+);
+const showFloatingActions = $derived(
+  !!pr && !isSettingsRoute && activeTab === "walkthrough" && walkthroughHasContent,
+);
+const showRcActions = $derived(!!pr && !isSettingsRoute && activeTab === "request-changes");
 
-	const rcSubmitting = $derived(getRcSubmitting());
-	const rcSelectedCount = $derived(getRcSelectedCount());
-	const rcHasContent = $derived(getRcHasContent());
-	const rcApproveBlockerSummary = $derived(getRcApproveBlockerSummary());
+const rcSubmitting = $derived(getRcSubmitting());
+const rcSelectedCount = $derived(getRcSelectedCount());
+const rcHasContent = $derived(getRcHasContent());
+const rcApproveBlockerSummary = $derived(getRcApproveBlockerSummary());
 
-	// The reviewer-vs-coder distinction comes from the user's GitHub login
-	// matching the PR's authorLogin. When the user owns the PR, the
-	// approve / request-changes pair is replaced by owner-only mutations:
-	// toggle draft state, and close the PR. Generate Changes still applies
-	// (the agent can write code regardless of authorship), so we leave it.
-	const currentUserLogin = $derived(getCurrentUserLogin());
-	const isPrOwner = $derived(!!pr && pr.authorLogin === currentUserLogin);
+// The reviewer-vs-coder distinction comes from the user's GitHub login
+// matching the PR's authorLogin. When the user owns the PR, the
+// approve / request-changes pair is replaced by owner-only mutations:
+// toggle draft state, and close the PR. Generate Changes still applies
+// (the agent can write code regardless of authorship), so we leave it.
+const currentUserLogin = $derived(getCurrentUserLogin());
+const isPrOwner = $derived(!!pr && pr.authorLogin === currentUserLogin);
 
-	type OwnerAction = 'convert-to-draft' | 'ready-for-review' | 'close';
-	let ownerSubmitting = $state<OwnerAction | null>(null);
+type OwnerAction = "convert-to-draft" | "ready-for-review" | "close";
+let ownerSubmitting = $state<OwnerAction | null>(null);
 
-	async function runOwnerAction(action: OwnerAction): Promise<void> {
-		if (!pr || ownerSubmitting !== null) return;
-		ownerSubmitting = action;
-		try {
-			if (action === 'convert-to-draft') await convertPrToDraft(pr.id);
-			else if (action === 'ready-for-review') await markPrReadyForReview(pr.id);
-			else await closePr(pr.id);
-		} finally {
-			ownerSubmitting = null;
-		}
-	}
+async function runOwnerAction(action: OwnerAction): Promise<void> {
+  if (!pr || ownerSubmitting !== null) return;
+  ownerSubmitting = action;
+  try {
+    if (action === "convert-to-draft") await convertPrToDraft(pr.id);
+    else if (action === "ready-for-review") await markPrReadyForReview(pr.id);
+    else await closePr(pr.id);
+  } finally {
+    ownerSubmitting = null;
+  }
+}
 
-	// New-commit-available signal: the PR's current headSha differs from the
-	// SHA the diff was loaded against. `getLoadedHeadSha` returns null until the
-	// first successful fetch, suppressing the signal on fresh visits.
-	const hasNewCommit = $derived.by(() => {
-		if (!pr || !pr.headSha) return false;
-		const loaded = getLoadedHeadSha(pr.id);
-		return loaded !== null && loaded !== pr.headSha;
-	});
-	const isPulling = $derived(pr ? getIsPullingCommit(pr.id) : false);
-	function onPullCommit(): void {
-		if (pr) void pullLatestCommit(pr.id);
-	}
+// New-commit-available signal: the PR's current headSha differs from the
+// SHA the diff was loaded against. `getLoadedHeadSha` returns null until the
+// first successful fetch, suppressing the signal on fresh visits.
+const hasNewCommit = $derived.by(() => {
+  if (!pr?.headSha) return false;
+  const loaded = getLoadedHeadSha(pr.id);
+  return loaded !== null && loaded !== pr.headSha;
+});
+const isPulling = $derived(pr ? getIsPullingCommit(pr.id) : false);
+function onPullCommit(): void {
+  if (pr) void pullLatestCommit(pr.id);
+}
 
-	// Drag state — not reactive $state, just local mutable refs
-	let isDragging = $state(false);
-	let dragStartX = 0;
-	let dragStartWidth = 0;
+// Drag state — not reactive $state, just local mutable refs
+let isDragging = $state(false);
+let dragStartX = 0;
+let dragStartWidth = 0;
 
-	// Right-pane drag state — separate from sidebar so a drag on one handle
-	// can't be confused with the other and the resize-suppression class
-	// applies independently.
-	let isResizingRight = $state(false);
-	let rightDragStartX = 0;
-	let rightDragStartWidth = 0;
+// Right-pane drag state — separate from sidebar so a drag on one handle
+// can't be confused with the other and the resize-suppression class
+// applies independently.
+let isResizingRight = $state(false);
+let rightDragStartX = 0;
+let rightDragStartWidth = 0;
 
-	// Auto-open panel when explain is triggered from the review store
-	$effect(() => {
-		if (getPanelOpenRequested()) {
-			setRightPanelOpen(true);
-			consumePanelOpenRequest();
-		}
-	});
+// Auto-open panel when explain is triggered from the review store
+$effect(() => {
+  if (getPanelOpenRequested()) {
+    setRightPanelOpen(true);
+    consumePanelOpenRequest();
+  }
+});
 
-	// Inline style for the grid — drives the dynamic sidebar column width.
-	// The right pane is NOT a grid column: it's positioned absolutely on
-	// top of the main row so opening it does not shrink the main column.
-	// This is what keeps the walkthrough/page-title/Request Changes content
-	// render byte-identical when the right pane toggles — matching the
-	// user's expectation that "the right pane should behave exactly like
-	// the left pane: it does not change the main content display." See
-	// `.rightpanel-area` below for the overlay positioning rationale.
-	const gridStyle = $derived(
-		sidebarCollapsed
-			? `grid-template-columns: 40px 1fr`
-			: `grid-template-columns: ${sidebarWidth}px 1fr`,
-	);
+// Inline style for the grid — drives the dynamic sidebar column width.
+// The right pane is NOT a grid column: it's positioned absolutely on
+// top of the main row so opening it does not shrink the main column.
+// This is what keeps the walkthrough/page-title/Request Changes content
+// render byte-identical when the right pane toggles — matching the
+// user's expectation that "the right pane should behave exactly like
+// the left pane: it does not change the main content display." See
+// `.rightpanel-area` below for the overlay positioning rationale.
+const gridStyle = $derived(
+  sidebarCollapsed
+    ? `grid-template-columns: 40px 1fr`
+    : `grid-template-columns: ${sidebarWidth}px 1fr`,
+);
 
-	function onHandlePointerDown(event: PointerEvent): void {
-		if (sidebarCollapsed) return;
-		event.preventDefault();
-		isDragging = true;
-		dragStartX = event.clientX;
-		dragStartWidth = sidebarWidth;
-		(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
-	}
+function onHandlePointerDown(event: PointerEvent): void {
+  if (sidebarCollapsed) return;
+  event.preventDefault();
+  isDragging = true;
+  dragStartX = event.clientX;
+  dragStartWidth = sidebarWidth;
+  (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+}
 
-	function onHandlePointerMove(event: PointerEvent): void {
-		if (!isDragging) return;
-		const delta = event.clientX - dragStartX;
-		const newWidth = Math.max(
-			SIDEBAR_WIDTH_MIN,
-			Math.min(SIDEBAR_WIDTH_MAX, dragStartWidth + delta),
-		);
-		setSidebarWidth(newWidth);
-	}
+function onHandlePointerMove(event: PointerEvent): void {
+  if (!isDragging) return;
+  const delta = event.clientX - dragStartX;
+  const newWidth = Math.max(SIDEBAR_WIDTH_MIN, Math.min(SIDEBAR_WIDTH_MAX, dragStartWidth + delta));
+  setSidebarWidth(newWidth);
+}
 
-	function onHandlePointerUp(event: PointerEvent): void {
-		if (!isDragging) return;
-		isDragging = false;
-		(event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
-	}
+function onHandlePointerUp(event: PointerEvent): void {
+  if (!isDragging) return;
+  isDragging = false;
+  (event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
+}
 
-	function onHandleDblClick(): void {
-		resetSidebarWidth();
-	}
+function onHandleDblClick(): void {
+  resetSidebarWidth();
+}
 
-	function onRightHandlePointerDown(event: PointerEvent): void {
-		if (!rightPanelOpen) return;
-		event.preventDefault();
-		isResizingRight = true;
-		rightDragStartX = event.clientX;
-		rightDragStartWidth = rightPanelWidth;
-		(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
-	}
+function onRightHandlePointerDown(event: PointerEvent): void {
+  if (!rightPanelOpen) return;
+  event.preventDefault();
+  isResizingRight = true;
+  rightDragStartX = event.clientX;
+  rightDragStartWidth = rightPanelWidth;
+  (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+}
 
-	function onRightHandlePointerMove(event: PointerEvent): void {
-		if (!isResizingRight) return;
-		// Dragging left grows the panel, dragging right shrinks it — invert delta.
-		const delta = rightDragStartX - event.clientX;
-		const newWidth = Math.max(
-			RIGHT_PANEL_WIDTH_MIN,
-			Math.min(RIGHT_PANEL_WIDTH_MAX, rightDragStartWidth + delta),
-		);
-		setRightPanelWidth(newWidth);
-	}
+function onRightHandlePointerMove(event: PointerEvent): void {
+  if (!isResizingRight) return;
+  // Dragging left grows the panel, dragging right shrinks it — invert delta.
+  const delta = rightDragStartX - event.clientX;
+  const newWidth = Math.max(
+    RIGHT_PANEL_WIDTH_MIN,
+    Math.min(RIGHT_PANEL_WIDTH_MAX, rightDragStartWidth + delta),
+  );
+  setRightPanelWidth(newWidth);
+}
 
-	function onRightHandlePointerUp(event: PointerEvent): void {
-		if (!isResizingRight) return;
-		isResizingRight = false;
-		(event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
-	}
+function onRightHandlePointerUp(event: PointerEvent): void {
+  if (!isResizingRight) return;
+  isResizingRight = false;
+  (event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
+}
 
-	function onRightHandleDblClick(): void {
-		resetRightPanelWidth();
-	}
-
+function onRightHandleDblClick(): void {
+  resetRightPanelWidth();
+}
 </script>
 
 <div

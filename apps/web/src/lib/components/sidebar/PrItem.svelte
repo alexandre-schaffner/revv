@@ -1,41 +1,46 @@
 <script lang="ts">
-	import type { PullRequest } from '@revv/shared';
-	import { selectPr } from '$lib/stores/prs.svelte';
-	import { getFocusedId } from '$lib/stores/sidebar-nav.svelte';
-	import { setSidebarView } from '$lib/stores/sidebar.svelte';
-	import { getCurrentUserLogin } from '$lib/stores/auth.svelte';
-	import { isPrUnseen } from '$lib/stores/pr-visits.svelte';
-	import { User, GitMerge, GitPullRequestClosed } from '@lucide/svelte';
-	import StatusDot from '$lib/components/shared/StatusDot.svelte';
+import { GitMerge, GitPullRequestClosed, User } from "@lucide/svelte";
+import type { PullRequest } from "@revv/shared";
+import StatusDot from "$lib/components/shared/StatusDot.svelte";
+import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
+import { isPrUnseen } from "$lib/stores/pr-visits.svelte";
+import { selectPr } from "$lib/stores/prs.svelte";
+import { setSidebarView } from "$lib/stores/sidebar.svelte";
+import { getFocusedId } from "$lib/stores/sidebar-nav.svelte";
 
-	let { pr, isSelected = false, navPrefix = 'pr', variant = 'open' }: {
-		pr: PullRequest;
-		isSelected?: boolean;
-		navPrefix?: string;
-		variant?: 'open' | 'archived';
-	} = $props();
+let {
+  pr,
+  isSelected = false,
+  navPrefix = "pr",
+  variant = "open",
+}: {
+  pr: PullRequest;
+  isSelected?: boolean;
+  navPrefix?: string;
+  variant?: "open" | "archived";
+} = $props();
 
-	const showDot = $derived(isPrUnseen(pr, getCurrentUserLogin()));
+const showDot = $derived(isPrUnseen(pr, getCurrentUserLogin()));
 
-	let avatarFailed = $state(false);
+let avatarFailed = $state(false);
 
-	$effect(() => {
-		pr.authorAvatarUrl;
-		avatarFailed = false;
-	});
+$effect(() => {
+  pr.authorAvatarUrl;
+  avatarFailed = false;
+});
 
-	const navId = $derived(`${navPrefix}:${pr.id}`);
-	const isFocused = $derived(getFocusedId() === navId);
+const navId = $derived(`${navPrefix}:${pr.id}`);
+const isFocused = $derived(getFocusedId() === navId);
 
-	// Selecting a PR always swipes the sidebar to the file-tree view. The
-	// tree itself is fetched by +layout.svelte's URL-watcher; here we just
-	// drive navigation + view state.
-	function handleClick() {
-		if (!isSelected) {
-			selectPr(pr.id);
-		}
-		setSidebarView('files');
-	}
+// Selecting a PR always swipes the sidebar to the file-tree view. The
+// tree itself is fetched by +layout.svelte's URL-watcher; here we just
+// drive navigation + view state.
+function handleClick() {
+  if (!isSelected) {
+    selectPr(pr.id);
+  }
+  setSidebarView("files");
+}
 </script>
 
 <div class="select-none">

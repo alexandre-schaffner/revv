@@ -1,18 +1,18 @@
 <script lang="ts" module>
-	import type { HTMLAttributes } from "svelte/elements";
+import type { HTMLAttributes } from "svelte/elements";
 
-	export type ConfirmationProps = HTMLAttributes<HTMLDivElement> & {
-		/** The tool or action being confirmed. */
-		tool: string;
-		/** The confirmation message/description. */
-		message?: string | undefined;
-		/** Whether the confirmation has been responded to. */
-		responded?: boolean;
-		/** Callback when the user approves. */
-		onApprove?: () => void;
-		/** Callback when the user denies. */
-		onDeny?: () => void;
-	};
+export type ConfirmationProps = HTMLAttributes<HTMLDivElement> & {
+  /** The tool or action being confirmed. */
+  tool: string;
+  /** The confirmation message/description. */
+  message?: string | undefined;
+  /** Whether the confirmation has been responded to. */
+  responded?: boolean;
+  /** Callback when the user approves. */
+  onApprove?: () => void;
+  /** Callback when the user denies. */
+  onDeny?: () => void;
+};
 </script>
 
 <script lang="ts">

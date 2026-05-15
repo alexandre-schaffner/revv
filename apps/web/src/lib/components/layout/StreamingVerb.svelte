@@ -1,66 +1,66 @@
 <script lang="ts">
-	// ── Streaming verb ─────────────────────────────────────────────────────
-	// Rotates through a short list of present-progressive verbs while the
-	// assistant bubble is waiting for its first content token. Visually
-	// matches the walkthrough's tool-call labels (`GuidedWalkthrough.svelte`
-	// :687-697): same 14px row height, accent-colored "tool" text, fly-up
-	// in / fly-up out transition driven by a `{#key}` re-mount.
-	//
-	// Unlike the walkthrough — which animates *real* tool activity as it
-	// arrives — this list is purely placeholder rotation: we don't know
-	// what the agent is doing yet, so the verbs are generic.
+// ── Streaming verb ─────────────────────────────────────────────────────
+// Rotates through a short list of present-progressive verbs while the
+// assistant bubble is waiting for its first content token. Visually
+// matches the walkthrough's tool-call labels (`GuidedWalkthrough.svelte`
+// :687-697): same 14px row height, accent-colored "tool" text, fly-up
+// in / fly-up out transition driven by a `{#key}` re-mount.
+//
+// Unlike the walkthrough — which animates *real* tool activity as it
+// arrives — this list is purely placeholder rotation: we don't know
+// what the agent is doing yet, so the verbs are generic.
 
-	import { fly } from 'svelte/transition';
-	import { cubicIn, cubicOut } from 'svelte/easing';
+import { cubicIn, cubicOut } from "svelte/easing";
+import { fly } from "svelte/transition";
 
-	const VERBS = [
-		'Thinking',
-		'Pondering',
-		'Reading',
-		'Cogitating',
-		'Mulling',
-		'Analyzing',
-		'Noodling',
-		'Examining',
-		'Marinating',
-		'Spelunking',
-		'Inspecting',
-		'Sleuthing',
-		'Squinting',
-		'Untangling',
-		'Ruminating',
-		'Brewing',
-		'Tinkering',
-		'Wrangling',
-		'Reviewing',
-		'Considering',
-	] as const;
+const VERBS = [
+  "Thinking",
+  "Pondering",
+  "Reading",
+  "Cogitating",
+  "Mulling",
+  "Analyzing",
+  "Noodling",
+  "Examining",
+  "Marinating",
+  "Spelunking",
+  "Inspecting",
+  "Sleuthing",
+  "Squinting",
+  "Untangling",
+  "Ruminating",
+  "Brewing",
+  "Tinkering",
+  "Wrangling",
+  "Reviewing",
+  "Considering",
+] as const;
 
-	const STEP_MS = 3000;
-	const ROW_H = 14;
+const STEP_MS = 3000;
+const ROW_H = 14;
 
-	// Shuffle on mount so each session sees the verbs in a different order
-	// (no repeats within a cycle, full variety eventually).
-	function shuffled<T>(arr: readonly T[]): T[] {
-		const a = [...arr];
-		for (let i = a.length - 1; i > 0; i -= 1) {
-			const j = Math.floor(Math.random() * (i + 1));
-			[a[i], a[j]] = [a[j]!, a[i]!];
-		}
-		return a;
-	}
+// Shuffle on mount so each session sees the verbs in a different order
+// (no repeats within a cycle, full variety eventually).
+function shuffled<T>(arr: readonly T[]): T[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j]!, a[i]!];
+  }
+  return a;
+}
 
-	const order = shuffled(VERBS);
-	let idx = $state(0);
+const order = shuffled(VERBS);
+let idx = $state(0);
 
-	$effect(() => {
-		const id = setInterval(() => {
-			idx = (idx + 1) % order.length;
-		}, STEP_MS);
-		return () => clearInterval(id);
-	});
+$effect(() => {
+  const id = setInterval(() => {
+    idx = (idx + 1) % order.length;
+  }, STEP_MS);
+  return () => clearInterval(id);
+});
 
-	const verb = $derived(order[idx]!);
+const verb = $derived(order[idx]!);
 </script>
 
 <div class="streaming-verb" aria-live="polite">
