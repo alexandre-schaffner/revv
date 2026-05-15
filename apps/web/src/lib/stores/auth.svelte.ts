@@ -75,6 +75,10 @@ export function getForceOnboardingFlow(): boolean {
 export function resetForceOnboardingFlow(): void {
 	forceOnboardingFlow = false;
 }
+
+export function setForceOnboardingFlow(): void {
+	forceOnboardingFlow = true;
+}
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
 let isAuthenticated = $derived(token !== null && token.length > 0);

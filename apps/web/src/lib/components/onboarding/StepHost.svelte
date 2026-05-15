@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { ChevronLeft } from '@lucide/svelte';
 	import { getGithubHost, setGithubHost } from '$lib/stores/settings.svelte';
-	import { cancelSignIn, clearToken, getIsAuthenticated } from '$lib/stores/auth.svelte';
+	import { cancelSignIn, clearToken, getIsAuthenticated, setForceOnboardingFlow } from '$lib/stores/auth.svelte';
 
 	interface Props {
 		onContinue: () => void;
@@ -21,6 +21,9 @@
 		const hostChanged = previousHost !== null && previousHost !== selected;
 
 		if (hostChanged && getIsAuthenticated()) {
+			// Suppress the AccountPicker — we're still inside the onboarding
+			// flow and about to re-authenticate with the new host.
+			setForceOnboardingFlow();
 			cancelSignIn();
 			clearToken();
 		}

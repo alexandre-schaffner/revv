@@ -29,6 +29,9 @@
 	let cloneTimeoutId = $state<ReturnType<typeof setTimeout> | null>(null);
 	let skipWaitingTimeoutId = $state<ReturnType<typeof setTimeout> | null>(null);
 	let showSkipWaiting = $state(false);
+	let autoRetries = $state(0);
+	const MAX_AUTO_RETRIES = 3;
+	const AUTO_RETRY_DELAY_MS = 2000;
 
 	function focusOnMount(node: HTMLInputElement) {
 		// Wrapped in rAF so the focus call runs after the step animation
@@ -41,6 +44,20 @@
 		if (getAvailableRepos().length === 0 && !getAvailableReposLoading() && !getAvailableReposFetchFailed()) {
 			fetchAvailableRepos();
 		}
+	});
+
+	// Auto-retry: after a fresh sign-in the GitHub token may not be fully
+	// propagated yet, or the server may briefly 401 during the race between
+	// setToken() and loadUser(). Retry a few times with a delay before
+	// falling back to the manual "Retry" button.
+	$effect(() => {
+		if (!getAvailableReposFetchFailed()) return;
+		if (autoRetries >= MAX_AUTO_RETRIES) return;
+		const timer = setTimeout(() => {
+			autoRetries++;
+			fetchAvailableRepos(true);
+		}, AUTO_RETRY_DELAY_MS);
+		return () => clearTimeout(timer);
 	});
 
 	// Pre-fill search with the most common org so the list is scoped
@@ -226,12 +243,12 @@
 			</div>
 
 			<div class="list" role="listbox">
-				{#if getAvailableReposLoading() && filtered.length === 0}
+				{#if (getAvailableReposLoading() || (getAvailableReposFetchFailed() && autoRetries < MAX_AUTO_RETRIES)) && filtered.length === 0}
 					<p class="empty">Loading repositories…</p>
 				{:else if getAvailableReposFetchFailed() && filtered.length === 0}
 					<p class="empty error-state">
 						Could not load repositories — your GitHub session may have expired.
-						<button class="retry-link" onclick={() => fetchAvailableRepos(true)}>Retry</button>
+						<button class="retry-link" onclick={() => { autoRetries = 0; fetchAvailableRepos(true); }}>Retry</button>
 					</p>
 				{:else if filtered.length === 0}
 					<p class="empty">No repositories match "{search}"</p>
