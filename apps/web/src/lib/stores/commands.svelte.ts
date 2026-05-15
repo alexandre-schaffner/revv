@@ -144,5 +144,3 @@ export function setQuery(q: string): void {
 export function resetQuery(): void {
   query = "";
 }
-
-

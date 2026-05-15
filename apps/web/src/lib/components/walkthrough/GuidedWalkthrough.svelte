@@ -616,8 +616,12 @@ onMount(() => {
   // for uncached PRs so quickly arrowing through the PR list doesn't
   // trigger spurious AI generations.
   hydrateFromCache(prId).then(
-    () => { hydrating = false; },
-    () => { hydrating = false; },
+    () => {
+      hydrating = false;
+    },
+    () => {
+      hydrating = false;
+    },
   );
 });
 

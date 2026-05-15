@@ -23,7 +23,10 @@ import { debug } from "../../logger";
 //   - optional phase synthesis for providers that don't emit their own.
 
 const PHASE_MESSAGES = {
-  exploration: { phase: "exploring" as const, message: "Reading files and understanding changes..." },
+  exploration: {
+    phase: "exploring" as const,
+    message: "Reading files and understanding changes...",
+  },
   summary: { phase: "analyzing" as const, message: "Forming assessment and risk analysis..." },
   block: { phase: "writing" as const, message: "Building walkthrough..." },
   rating: { phase: "rating" as const, message: "Scoring the PR across 9 axes..." },

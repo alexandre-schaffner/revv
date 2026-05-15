@@ -6,6 +6,7 @@
     "noUncheckedIndexedAccess": true,
     "moduleResolution": "bundler",
     "allowJs": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "types": ["bun-types"]
   }
 }

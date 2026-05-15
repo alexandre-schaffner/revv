@@ -632,30 +632,30 @@
   opacity: 0;
 }
 
-[data-component="text-shimmer"][data-active="true"]
-  [data-slot="text-shimmer-char-shimmer"] {
+[data-component="text-shimmer"][data-active="true"] [data-slot="text-shimmer-char-shimmer"] {
   opacity: 1;
 }
 
-[data-component="text-shimmer"]
-  [data-slot="text-shimmer-char-shimmer"][data-run="true"] {
+[data-component="text-shimmer"] [data-slot="text-shimmer-char-shimmer"][data-run="true"] {
   animation-name: text-shimmer-sweep;
   animation-duration: var(--text-shimmer-duration);
   animation-iteration-count: infinite;
   animation-timing-function: linear;
   animation-fill-mode: both;
-  animation-delay: calc(
-    var(--text-shimmer-step) * var(--text-shimmer-index) * -1
-  );
+  animation-delay: calc(var(--text-shimmer-step) * var(--text-shimmer-index) * -1);
   will-change: background-position;
 }
 
 @keyframes text-shimmer-sweep {
   0% {
-    background-position: 100% 0, 0 0;
+    background-position:
+      100% 0,
+      0 0;
   }
   100% {
-    background-position: 0% 0, 0 0;
+    background-position:
+      0% 0,
+      0 0;
   }
 }
 
@@ -664,15 +664,18 @@
     color: transparent;
     -webkit-text-fill-color: transparent;
     background-image: var(--text-shimmer-sweep), var(--text-shimmer-base);
-    background-size: var(--text-shimmer-size) 100%, 100% 100%;
-    background-position: 100% 0, 0 0;
+    background-size:
+      var(--text-shimmer-size) 100%,
+      100% 100%;
+    background-position:
+      100% 0,
+      0 0;
     background-repeat: no-repeat;
     -webkit-background-clip: text;
     background-clip: text;
   }
 
-  [data-component="text-shimmer"][data-active="true"]
-    [data-slot="text-shimmer-char-base"] {
+  [data-component="text-shimmer"][data-active="true"] [data-slot="text-shimmer-char-base"] {
     opacity: 0;
   }
 }

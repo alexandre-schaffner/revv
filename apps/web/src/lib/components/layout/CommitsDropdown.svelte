@@ -1,7 +1,7 @@
 <script lang="ts">
+import AlertCircle from "@lucide/svelte/icons/alert-circle";
 import ChevronUp from "@lucide/svelte/icons/chevron-up";
 import Loader from "@lucide/svelte/icons/loader";
-import AlertCircle from "@lucide/svelte/icons/alert-circle";
 import type { PullRequest } from "@revv/shared";
 import { DropdownMenu } from "bits-ui";
 import { untrack } from "svelte";

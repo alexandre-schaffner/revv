@@ -15,7 +15,8 @@
       "!!**/target",
       "!!**/.turbo",
       "!**/migrations",
-      "!**/gen"
+      "!**/gen",
+      "!**/*.gen.ts"
     ]
   },
   "formatter": {

@@ -259,5 +259,3 @@ export function disconnect(): void {
   connected = false;
   reconnectAttempts = 0;
 }
-
-
