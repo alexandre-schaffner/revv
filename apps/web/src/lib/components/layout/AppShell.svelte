@@ -201,6 +201,16 @@ const gridStyle = $derived(
     : `grid-template-columns: ${sidebarWidth}px 1fr`,
 );
 
+// Floating action bar (walkthrough actions / Submit Review / Approve)
+// spans the visible main area between sidebar and right panel so the
+// pill sits at the centre of what the user is actually looking at, not
+// the viewport. Tracks both panes via inline `left`/`right` and animates
+// when either toggles. `--duration-smooth` matches the grid-columns
+// transition; resize handles suppress it via `.is-resizing`.
+const floatingActionsStyle = $derived(
+  `left: ${sidebarCollapsed ? 40 : sidebarWidth}px; right: ${rightPanelOpen ? rightPanelWidth : 0}px;`,
+);
+
 function onHandlePointerDown(event: PointerEvent): void {
   if (sidebarCollapsed) return;
   event.preventDefault();
@@ -290,7 +300,11 @@ function onRightHandleDblClick(): void {
 			onToggleSidebar={toggleSidebar}
 		/>
 		{#if pr && !isSettingsRoute}
-			<div class="tabs-float">
+			<div
+				class="tabs-float"
+				class:is-resizing={isDragging || isResizingRight}
+				style={floatingActionsStyle}
+			>
 				<FloatingTabs
 					{activeTab}
 					onTabChange={setActiveTab}
@@ -312,7 +326,11 @@ function onRightHandleDblClick(): void {
 	</footer>
 
 	{#if showFloatingActions && activeTab === 'walkthrough'}
-		<div class="walkthrough-actions-float">
+		<div
+			class="walkthrough-actions-float"
+			class:is-resizing={isDragging || isResizingRight}
+			style={floatingActionsStyle}
+		>
 			<div class="walkthrough-actions-row">
 				{#if walkthroughStreaming}
 					<button
@@ -411,7 +429,11 @@ function onRightHandleDblClick(): void {
 	{/if}
 
 	{#if showRcActions && activeTab === 'request-changes'}
-		<div class="walkthrough-actions-float">
+		<div
+			class="walkthrough-actions-float"
+			class:is-resizing={isDragging || isResizingRight}
+			style={floatingActionsStyle}
+		>
 			<div class="walkthrough-actions-row">
 				<button
 					type="button"
@@ -615,20 +637,29 @@ function onRightHandleDblClick(): void {
 	}
 
 	.tabs-float {
-		/* Viewport-centred. The topbar spans the full viewport (grid-area
-		   'topbar topbar'), so `left: 50%` resolves to 50vw. We deliberately
-		   do NOT offset by the sidebar width — the tabs are anchored to the
-		   viewport, not the main-area, so toggling or dragging the sidebar
-		   doesn't shift them horizontally. This matches the walkthrough
-		   content column's viewport-anchored centre (see
-		   GuidedWalkthrough.svelte, `.walkthrough-content`). */
+		/* Spans the visible main area between sidebar and right panel so
+		   the tabs sit at the centre of what the user is reading, not the
+		   viewport. The topbar spans the full viewport (grid-area
+		   'topbar topbar'), so inline `left`/`right` driven by
+		   `floatingActionsStyle` resolve in viewport coordinates and track
+		   both panes. Each edge transitions at the speed of the pane that
+		   drives it: `left` matches the grid-columns animation
+		   (`--duration-smooth`, sidebar collapse/resize); `right` matches
+		   the right pane's slide-in transform (`--duration-instant`). */
 		position: absolute;
 		top: 100%;
-		left: 50%;
-		transform: translateX(-50%);
+		display: flex;
+		justify-content: center;
 		z-index: 20;
 		pointer-events: none;
 		padding-top: 12px;
+		transition:
+			left var(--duration-smooth) var(--ease-out-expo),
+			right var(--duration-instant) var(--ease-out-expo);
+	}
+
+	.tabs-float.is-resizing {
+		transition: none;
 	}
 
 	.tabs-float :global(*) {
@@ -640,19 +671,32 @@ function onRightHandleDblClick(): void {
 		border-top: 1px solid var(--color-border);
 	}
 
-	/* Bottom-anchored mirror of `.tabs-float`. Sits 12px above the 40px
-	   bottombar, viewport-centred via `left: 50%` so a sidebar collapse/
-	   resize does not shift it horizontally. `pointer-events: none` on the
-	   wrapper prevents the invisible padding zone from swallowing clicks
-	   meant for content below. */
+	/* Bottom-anchored action bar. Spans the visible main area between the
+	   sidebar (left edge) and the right panel (right edge) so the pill is
+	   centred on the content the user is reading, not the viewport. Inline
+	   `left`/`right` are driven by `floatingActionsStyle` so the wrapper
+	   tracks panel toggles and drags. Each edge transitions at the speed
+	   of the pane that drives it: `left` matches the grid-columns
+	   animation (`--duration-smooth`); `right` matches the right pane's
+	   slide-in transform (`--duration-instant`). Suppressed during active
+	   drags via `.is-resizing`. `pointer-events: none` on the wrapper
+	   prevents the invisible padding zone from swallowing clicks meant for
+	   content below. */
 	.walkthrough-actions-float {
 		position: absolute;
 		bottom: 40px;
-		left: 50%;
-		transform: translateX(-50%);
+		display: flex;
+		justify-content: center;
 		z-index: 20;
 		pointer-events: none;
 		padding-bottom: 12px;
+		transition:
+			left var(--duration-smooth) var(--ease-out-expo),
+			right var(--duration-instant) var(--ease-out-expo);
+	}
+
+	.walkthrough-actions-float.is-resizing {
+		transition: none;
 	}
 
 	.walkthrough-actions-float :global(*) {
@@ -757,7 +801,7 @@ function onRightHandleDblClick(): void {
 		overflow: hidden;
 		background: var(--color-panel-bg);
 		transform: translateX(100%);
-		transition: transform var(--duration-instant) var(--ease-out-expo);
+		transition: transform var(--duration-smooth) var(--ease-out-expo);
 		/* Above main content, below topbar/CommandPalette. */
 		z-index: 5;
 	}

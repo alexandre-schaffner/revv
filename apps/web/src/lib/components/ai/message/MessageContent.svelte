@@ -21,7 +21,7 @@ export type MessageContentProps = HTMLAttributes<HTMLDivElement>;
 <div
 	data-slot="message-content"
 	class={cn(
-		"flex max-w-[85%] flex-col gap-1",
+		"flex min-w-0 max-w-[85%] flex-col gap-1",
 		ctx?.role === "user"
 			? "items-end"
 			: "items-start w-full max-w-none",

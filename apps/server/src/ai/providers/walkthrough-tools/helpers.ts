@@ -185,3 +185,26 @@ export function renderMissingInlineCommentError(uncommented: MissingInlineCommen
     .join("\n");
   return `Error: ${uncommented.length} flagged issue(s) at severity 'warning' or 'critical' have no inline comment. For each, you MUST also call add_issue_comment with the matching issue_id. Missing:\n${list}\n\nCall add_issue_comment for each, then retry complete_walkthrough. (Severity 'info' issues do not require an inline comment.)`;
 }
+
+// ── Journey-chapter validation ───────────────────────────────────────────────
+//
+// The required Phase B chapter at `semantic_step_index: 0` MUST narrate the
+// coder's journey to the state being reviewed (commit history arc, course
+// corrections, abandoned tracks). The user prompt seeds this with a
+// `### Commit history` section; the system prompt instructs the agent to
+// open the chapter at index 0 with a title containing one of the keywords
+// below.
+//
+// We don't have a structural flag for "this chapter is the journey" — the
+// schema is generic over chapters. Instead, we enforce via a permissive
+// regex on the title/summary text. Keywords mirror the prompt's allowed
+// titles in walkthrough-system.md so an honest agent following the prompt
+// cannot accidentally trip the gate. Keep the regex and the prompt's
+// keyword list in lockstep — any change here MUST land alongside a matching
+// change to walkthrough-system.md.
+export const JOURNEY_CHAPTER_PATTERN =
+  /(journey|history|got here|how we|evolution|explor|attempts?|origins?|trajectory|arc of|path to|came to|story of|trail)/i;
+
+export function isJourneyChapterText(title: string, summary: string | null): boolean {
+  return JOURNEY_CHAPTER_PATTERN.test(`${title}\n${summary ?? ""}`);
+}

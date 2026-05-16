@@ -4,7 +4,7 @@ import { goto } from "$app/navigation";
 import { api } from "$lib/api/client";
 import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
 import { getActiveOrg } from "$lib/stores/orgs.svelte";
-import { getGithubHost } from "$lib/stores/settings.svelte";
+
 import { setBatchSummaries } from "$lib/stores/sync.svelte";
 import { fuzzyScore } from "$lib/utils/fuzzy";
 
@@ -25,6 +25,13 @@ let selectedPrId = $state<string | null>(null);
 let searchQuery = $state("");
 let isLoading = $state(false);
 let archivedPrs = $state<PullRequest[]>([]);
+// Cursor for the next page of archived PRs. Null = exhausted or never
+// fetched. Updated by `fetchArchivedPrs` (replaces the list, sets cursor
+// from the first page) and `fetchMoreArchived` (appends, advances cursor).
+let archivedNextCursor = $state<string | null>(null);
+// True while a `fetchMoreArchived` request is in flight, so the sidebar
+// can disable the "show more" affordance and show a spinner.
+let archivedLoadingMore = $state(false);
 
 // Sidebar PR search uses the same fuzzy scorer as the Cmd+P palette so a
 // search like "auth jw" can match "Add JWT auth middleware" and a search like
@@ -67,10 +74,8 @@ let groupedByRepo = $derived(Map.groupBy(filteredPrs, (pr) => pr.repositoryId));
 let visibleRepositories = $derived.by(() => {
   const owner = getActiveOrg();
   const ownerLower = owner?.toLowerCase();
-  const activeHost = getGithubHost();
   return repositories.filter((r) => {
     if (ownerLower && r.owner.toLowerCase() !== ownerLower) return false;
-    if (activeHost && r.githubHost !== activeHost) return false;
     return true;
   });
 });
@@ -192,13 +197,91 @@ export async function fetchPrs(): Promise<void> {
 
 export async function fetchArchivedPrs(): Promise<void> {
   try {
-    const { data } = await api.api.prs.archived.get();
+    const { data } = await api.api.prs.archived.get({ query: {} });
     if (data) {
-      archivedPrs = data as PullRequest[];
+      const page = data as { prs: PullRequest[]; nextCursor: string | null };
+      archivedPrs = page.prs;
+      archivedNextCursor = page.nextCursor;
     }
   } catch {
     // best-effort
   }
+}
+
+/**
+ * Fetch the next page of archived PRs using the cursor returned from the
+ * prior request. Appends to `archivedPrs` rather than replacing — used by
+ * the sidebar's "show more" affordance. No-op if there's no cursor
+ * (already exhausted) or a fetch is already in flight.
+ */
+export async function fetchMoreArchived(): Promise<void> {
+  if (archivedNextCursor === null) return;
+  if (archivedLoadingMore) return;
+  archivedLoadingMore = true;
+  try {
+    const { data } = await api.api.prs.archived.get({
+      query: { cursor: archivedNextCursor },
+    });
+    if (data) {
+      const page = data as { prs: PullRequest[]; nextCursor: string | null };
+      // Deduplicate against existing rows in case a `pr:archived` patch
+      // landed between request and response.
+      const existingIds = new Set(archivedPrs.map((p) => p.id));
+      const fresh = page.prs.filter((p) => !existingIds.has(p.id));
+      archivedPrs = [...archivedPrs, ...fresh];
+      archivedNextCursor = page.nextCursor;
+    }
+  } catch {
+    // best-effort — leave cursor in place so the user can retry
+  } finally {
+    archivedLoadingMore = false;
+  }
+}
+
+export function getArchivedNextCursor(): string | null {
+  return archivedNextCursor;
+}
+
+export function getArchivedLoadingMore(): boolean {
+  return archivedLoadingMore;
+}
+
+/**
+ * Patch in-memory state in response to a `pr:archived` WS envelope.
+ * Removes the PR from the open list, prepends it to the archive (newest
+ * first), updates its status/closedAt fields if present. Best-effort: if
+ * the PR isn't known locally, this is a no-op and the next `prs:updated`
+ * shotgun will reconcile.
+ */
+export function onPrArchived(data: {
+  prId: string;
+  repoId: string;
+  status: "closed" | "merged";
+  closedAt: string;
+}): void {
+  // Already archived? Update in place and don't re-prepend.
+  const archIdx = archivedPrs.findIndex((p) => p.id === data.prId);
+  if (archIdx >= 0) {
+    const existing = archivedPrs[archIdx];
+    if (!existing) return;
+    archivedPrs = [
+      ...archivedPrs.slice(0, archIdx),
+      { ...existing, status: data.status, closedAt: data.closedAt },
+      ...archivedPrs.slice(archIdx + 1),
+    ];
+    pullRequests = pullRequests.filter((p) => p.id !== data.prId);
+    return;
+  }
+  // Move from open list into archive.
+  const openIdx = pullRequests.findIndex((p) => p.id === data.prId);
+  if (openIdx >= 0) {
+    const existing = pullRequests[openIdx];
+    if (!existing) return;
+    const archived = { ...existing, status: data.status, closedAt: data.closedAt };
+    pullRequests = [...pullRequests.slice(0, openIdx), ...pullRequests.slice(openIdx + 1)];
+    archivedPrs = [archived, ...archivedPrs];
+  }
+  // PR not known locally — wait for the `prs:updated` reconcile.
 }
 
 export async function fetchRepos(): Promise<void> {
@@ -417,4 +500,6 @@ export function reset(): void {
   searchQuery = "";
   isLoading = false;
   archivedPrs = [];
+  archivedNextCursor = null;
+  archivedLoadingMore = false;
 }

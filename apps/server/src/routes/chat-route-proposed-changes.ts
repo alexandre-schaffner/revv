@@ -467,6 +467,79 @@ export const chatProposedChangesRoutes = new Elysia()
       params: t.Object({ prId: t.String() }),
     },
   )
+  .post(
+    "/api/chat/:prId/proposed-changes/batch-cherry-pick",
+    async (ctx) => {
+      const body = (ctx.body ?? {}) as { shas?: unknown };
+      if (!Array.isArray(body.shas) || body.shas.length === 0) {
+        ctx.set.status = 400;
+        return { error: "shas must be a non-empty array of commit hashes" };
+      }
+      const shas: string[] = [];
+      for (const raw of body.shas) {
+        if (typeof raw !== "string" || !/^[0-9a-f]{7,40}$/i.test(raw)) {
+          ctx.set.status = 400;
+          return { error: "shas must contain valid commit hashes" };
+        }
+        shas.push(raw);
+      }
+
+      try {
+        const result = await AppRuntime.runPromise(
+          Effect.flatMap(ChatChangesPushService, (svc) =>
+            svc.batchCherryPickAndPush({
+              prId: ctx.params.prId,
+              userId: ctx.session.user.id,
+              shas,
+            }),
+          ),
+        );
+
+        if (result.status === "pushed") {
+          return jsonResponse(
+            {
+              status: "pushed",
+              newSha: result.newSha,
+              pushedCommits: result.pushedCommits,
+              branch: result.branch,
+            },
+            200,
+          );
+        }
+        if (result.status === "remote-changed") {
+          ctx.set.status = 409;
+          return { status: "remote-changed", branch: result.branch };
+        }
+        ctx.set.status = 500;
+        return { error: "Unexpected cherry-pick result" };
+      } catch (e) {
+        const err = unwrapEffectError(e);
+        if (err instanceof ConcurrentPushError) {
+          ctx.set.status = 409;
+          return {
+            code: "CONCURRENT_PUSH",
+            message: "Another push is already in progress for this PR",
+          };
+        }
+        if (err instanceof DirtyWorktreeError) {
+          ctx.set.status = 409;
+          return { code: "DIRTY_WORKTREE", message: err.message };
+        }
+        if (err instanceof NoChangesError) {
+          ctx.set.status = 409;
+          return { code: "NO_CHANGES", message: "No proposed commits found" };
+        }
+        if (err instanceof NoChatSessionError) {
+          ctx.set.status = 404;
+          return { code: "NO_CHAT_SESSION", message: "No chat session found for this PR" };
+        }
+        return handleAppError(e, ctx);
+      }
+    },
+    {
+      params: t.Object({ prId: t.String() }),
+    },
+  )
   .delete(
     "/api/chat/:prId/proposed-changes/:sha",
     async (ctx) => {
@@ -545,6 +618,154 @@ export const chatProposedChangesRoutes = new Elysia()
     },
     {
       params: t.Object({ prId: t.String(), sha: t.String() }),
+    },
+  )
+  .post(
+    "/api/chat/:prId/proposed-changes/batch-discard",
+    async (ctx) => {
+      const body = (ctx.body ?? {}) as { shas?: unknown };
+      if (!Array.isArray(body.shas) || body.shas.length === 0) {
+        ctx.set.status = 400;
+        return { error: "shas must be a non-empty array of commit hashes" };
+      }
+      const rawShas: string[] = [];
+      for (const raw of body.shas) {
+        if (typeof raw !== "string" || !/^[0-9a-f]{7,40}$/i.test(raw)) {
+          ctx.set.status = 400;
+          return { error: "shas must contain valid commit hashes" };
+        }
+        rawShas.push(raw);
+      }
+
+      try {
+        const row = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const prCtx = yield* PrContextService;
+            const chatSessions = yield* ChatSessionService;
+            const settingsService = yield* SettingsService;
+            const { db } = yield* DbService;
+
+            const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
+            const settings = yield* withDb(db, settingsService.getSettings()).pipe(
+              Effect.orElseSucceed(() => ({ aiAgent: "opencode" }) as { aiAgent: string | null }),
+            );
+            const agent = resolveAgent(settings);
+            return yield* chatSessions.findLatestForPr(pr.id, agent);
+          }),
+        );
+
+        if (!row) {
+          ctx.set.status = 404;
+          return { error: "No chat session found for this PR" };
+        }
+
+        const { worktreePath, branchName, prHeadSha } = row;
+
+        // Resolve full SHAs and build the drop set.
+        const dropSet = new Set<string>();
+        for (const raw of rawShas) {
+          const full = await gitStdout(["rev-parse", raw], worktreePath, 5_000).catch(() => null);
+          if (!full?.trim()) {
+            ctx.set.status = 404;
+            return { error: `Commit not found in worktree: ${raw}` };
+          }
+          dropSet.add(full.trim());
+        }
+
+        // List all proposed commits oldest-first.
+        const listOut = await gitStdout(
+          ["rev-list", "--reverse", `${prHeadSha}..${branchName}`],
+          worktreePath,
+          10_000,
+        ).catch(() => null);
+        if (listOut === null) {
+          ctx.set.status = 500;
+          return { error: "Failed to enumerate proposed commits" };
+        }
+        const allShas = listOut
+          .trim()
+          .split("\n")
+          .map((s) => s.trim())
+          .filter(Boolean);
+        const keepShas = allShas.filter((s) => !dropSet.has(s));
+        const matchedDropCount = allShas.length - keepShas.length;
+        if (matchedDropCount === 0) {
+          ctx.set.status = 404;
+          return { error: "None of the supplied SHAs are present in the proposed commits" };
+        }
+
+        const oldAgentTip = await gitStdout(["rev-parse", branchName], worktreePath, 5_000).catch(
+          () => null,
+        );
+        if (!oldAgentTip?.trim()) {
+          ctx.set.status = 500;
+          return { error: "Failed to resolve agent branch tip" };
+        }
+        const savedAgentTip = oldAgentTip.trim();
+
+        // Rebuild the agent branch by checking out the prHeadSha as a detached
+        // HEAD then cherry-picking each keep commit in order. On any failure
+        // we abort and restore the branch ref to its prior tip.
+        const restoreOnFailure = async (): Promise<void> => {
+          await gitStdoutBestEffort(["cherry-pick", "--abort"], worktreePath);
+          await gitStdoutBestEffort(["branch", "-f", branchName, savedAgentTip], worktreePath);
+          await gitStdoutBestEffort(["checkout", branchName], worktreePath);
+        };
+
+        try {
+          await gitStdout(["checkout", "--detach", prHeadSha], worktreePath, 15_000);
+        } catch (err) {
+          await restoreOnFailure();
+          ctx.set.status = 500;
+          return {
+            error: err instanceof Error ? err.message : "Failed to detach worktree",
+          };
+        }
+
+        if (keepShas.length > 0) {
+          for (const sha of keepShas) {
+            try {
+              await gitStdout(["cherry-pick", sha], worktreePath, 60_000);
+            } catch (cpErr) {
+              await restoreOnFailure();
+              ctx.set.status = 409;
+              return {
+                code: "REBASE_CONFLICT",
+                message:
+                  cpErr instanceof Error
+                    ? cpErr.message
+                    : "Rebase conflict — use the agent to resolve",
+              };
+            }
+          }
+        }
+
+        const newTip = await gitStdout(["rev-parse", "HEAD"], worktreePath, 5_000).catch(
+          () => null,
+        );
+        if (!newTip?.trim()) {
+          await restoreOnFailure();
+          ctx.set.status = 500;
+          return { error: "Failed to resolve new agent tip" };
+        }
+        try {
+          await gitStdout(["branch", "-f", branchName, newTip.trim()], worktreePath, 5_000);
+          await gitStdout(["checkout", branchName], worktreePath, 10_000);
+        } catch (moveErr) {
+          await restoreOnFailure();
+          ctx.set.status = 500;
+          return {
+            error: moveErr instanceof Error ? moveErr.message : "Failed to move agent branch",
+          };
+        }
+
+        return jsonResponse({ status: "discarded", discardedCount: matchedDropCount }, 200);
+      } catch (e) {
+        return handleAppError(e, ctx);
+      }
+    },
+    {
+      params: t.Object({ prId: t.String() }),
     },
   )
   .post(

@@ -46,6 +46,7 @@ import { walkthroughSemanticSteps } from "../db/schema/walkthrough-semantic-step
 import { walkthroughs } from "../db/schema/walkthroughs";
 import { ReviewError } from "../domain/errors";
 import { DbService } from "./Db";
+import type { PrCommit } from "./GitHub";
 
 // ── Row-to-domain converter ─────────────────────────────────────────────────
 
@@ -195,6 +196,16 @@ export class WalkthroughService extends Context.Tag("WalkthroughService")<
       prId: string;
       modelUsed: string;
       prHeadSha: string;
+      /**
+       * PR commit list (oldest → newest, post-reverse) captured from GitHub
+       * at job start. Persisted as JSON on the walkthrough row; the agent
+       * fetches it via `get_commit_history` MCP read tool when authoring
+       * the required "How we got here" journey chapter. Optional for
+       * callers that haven't been migrated yet; new rows without commits
+       * will surface as an empty list to the agent and trigger the
+       * single-commit edge-case path.
+       */
+      prCommits?: readonly PrCommit[];
     }) => Effect.Effect<string, ReviewError, DbService>;
 
     /**
@@ -415,6 +426,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
                 tokenUsage: "{}",
                 prHeadSha: params.prHeadSha,
                 resumeAttempts: 0,
+                prCommits: params.prCommits ? JSON.stringify(params.prCommits) : null,
               })
               .run();
             return { id: newId };
@@ -431,9 +443,19 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
   setStatus: (walkthroughId, status, options) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
+      // `completedAt` is stamped exactly when status transitions to
+      // 'complete'. This is the canonical "walkthrough finished" timestamp
+      // the recap pipeline windows on — distinct from `generatedAt`
+      // (job-start) so a walkthrough that started in period N but finished
+      // in period N+1 lands in N+1's recap. We deliberately do NOT clear
+      // it on any other transition: a row that briefly hit 'complete'
+      // then got 'superseded' retains its completedAt for audit.
+      const completedAtPatch =
+        status === "complete" ? { completedAt: new Date().toISOString() } : {};
       db.update(walkthroughs)
         .set({
           status,
+          ...completedAtPatch,
           ...(options?.tokenUsage ? { tokenUsage: JSON.stringify(options.tokenUsage) } : {}),
         })
         .where(eq(walkthroughs.id, walkthroughId))

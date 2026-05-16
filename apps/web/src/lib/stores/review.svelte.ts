@@ -13,6 +13,7 @@ import { enterSidebarMode } from "$lib/stores/focus-mode.svelte";
 import { getPullRequests } from "$lib/stores/prs.svelte";
 import { invalidateForPull } from "$lib/stores/walkthrough-stream.svelte";
 import type { ReviewFile } from "$lib/types/review";
+import { RequestState, type RequestState as RequestStateType } from "$lib/stores/_types";
 
 // --- Review files (shared between sidebar tree + review page) ---
 let reviewFiles = $state<ReviewFile[]>([]);
@@ -61,42 +62,26 @@ export function clearReviewFiles(): void {
 // PR's diff, we still want the main pane to show something useful: the file's
 // content at the PR's head SHA. The endpoint reads from the local clone via
 // `git cat-file`, so this is fast and rate-limit-free.
-//
-// Cache shape: a single (path → payload) record for the *currently viewed*
-// file. We don't try to keep a multi-file cache because (a) clicks are
-// infrequent and (b) each payload can be up to a few MB. Switching files
-// flushes the previous content.
 
-type RepoFileStatus = "idle" | "loading" | "ready" | "binary" | "too-large" | "not-found" | "error";
+type RepoFileData =
+  | { readonly status: "ready"; readonly content: string; readonly size: number }
+  | { readonly status: "binary"; readonly size: number }
+  | { readonly status: "too-large"; readonly size: number }
+  | { readonly status: "not-found"; readonly size: number };
 
-let repoFileStatus = $state<RepoFileStatus>("idle");
+let repoFile = $state<RequestStateType<RepoFileData>>(RequestState.idle());
 let repoFilePath = $state<string | null>(null);
-let repoFileContent = $state<string>("");
-let repoFileSize = $state<number>(0);
-let repoFileError = $state<string | null>(null);
 
-export function getRepoFileStatus(): RepoFileStatus {
-  return repoFileStatus;
+export function getRepoFile(): RequestStateType<RepoFileData> {
+  return repoFile;
 }
 export function getRepoFilePath(): string | null {
   return repoFilePath;
 }
-export function getRepoFileContent(): string {
-  return repoFileContent;
-}
-export function getRepoFileSize(): number {
-  return repoFileSize;
-}
-export function getRepoFileError(): string | null {
-  return repoFileError;
-}
 
 export function clearRepoFile(): void {
-  repoFileStatus = "idle";
+  repoFile = RequestState.idle();
   repoFilePath = null;
-  repoFileContent = "";
-  repoFileSize = 0;
-  repoFileError = null;
 }
 
 let repoFileLoadSeq = 0;
@@ -107,15 +92,12 @@ let repoFileLoadSeq = 0;
  * to one of the terminal states.
  */
 export async function loadRepoFile(prId: string, path: string): Promise<void> {
-  if (repoFilePath === path && repoFileStatus !== "idle" && repoFileStatus !== "error") {
+  if (repoFilePath === path && repoFile.status !== "idle" && repoFile.status !== "error") {
     return;
   }
   const seq = ++repoFileLoadSeq;
-  repoFileStatus = "loading";
+  repoFile = RequestState.loading();
   repoFilePath = path;
-  repoFileContent = "";
-  repoFileSize = 0;
-  repoFileError = null;
 
   try {
     const { data, error, status } = await api.api
@@ -131,20 +113,21 @@ export async function loadRepoFile(prId: string, path: string): Promise<void> {
         size?: number;
       } | null;
       if (body?.status === "cloning" || status === 202) {
-        repoFileStatus = "loading";
+        repoFile = RequestState.loading();
         return;
       }
       if (body?.status === "not-found" || status === 404) {
-        repoFileStatus = "not-found";
+        repoFile = RequestState.ok({ status: "not-found", size: 0 });
         return;
       }
       if (body?.status === "too-large" || status === 413) {
-        repoFileStatus = "too-large";
-        if (typeof body?.size === "number") repoFileSize = body.size;
+        repoFile = RequestState.ok({
+          status: "too-large",
+          size: typeof body?.size === "number" ? body.size : 0,
+        });
         return;
       }
-      repoFileStatus = "error";
-      repoFileError = body?.message ?? "Failed to load file";
+      repoFile = RequestState.error(body?.message ?? "Failed to load file");
       return;
     }
 
@@ -158,42 +141,36 @@ export async function loadRepoFile(prId: string, path: string): Promise<void> {
           size: number;
         }
       | { status: "cloning" }
-      | { status: "not-found" }
+      | { status: "not-found"; size: number }
       | { status: "too-large"; size: number }
       | { status: "error"; message: string };
 
     if (payload.status === "cloning") {
-      repoFileStatus = "loading";
+      repoFile = RequestState.loading();
       return;
     }
     if (payload.status === "not-found") {
-      repoFileStatus = "not-found";
+      repoFile = RequestState.ok({ status: "not-found", size: 0 });
       return;
     }
     if (payload.status === "too-large") {
-      repoFileStatus = "too-large";
-      repoFileSize = payload.size;
+      repoFile = RequestState.ok({ status: "too-large", size: payload.size });
       return;
     }
     if (payload.status === "error") {
-      repoFileStatus = "error";
-      repoFileError = payload.message;
+      repoFile = RequestState.error(payload.message);
       return;
     }
 
     // status === 'ready'
-    repoFileSize = payload.size;
     if (payload.isBinary) {
-      repoFileStatus = "binary";
-      repoFileContent = "";
+      repoFile = RequestState.ok({ status: "binary", size: payload.size });
     } else {
-      repoFileStatus = "ready";
-      repoFileContent = payload.content;
+      repoFile = RequestState.ok({ status: "ready", content: payload.content, size: payload.size });
     }
   } catch (e) {
     if (seq !== repoFileLoadSeq) return;
-    repoFileStatus = "error";
-    repoFileError = e instanceof Error ? e.message : "Failed to load file";
+    repoFile = RequestState.error(e instanceof Error ? e.message : "Failed to load file");
   }
 }
 
@@ -414,58 +391,78 @@ function emptyState(): PrViewState {
   return { activeTab: "walkthrough", activeFilePath: null, scroll: {} };
 }
 
-const prViewStates = new Map<string, PrViewState>();
-let currentPrId: string | null = null;
-
-let activeTab = $state<ActiveTab>("walkthrough");
-let activeFilePath = $state<string | null>(null);
+// Single reactive store for per-PR view state. Follows the walkthrough-store
+// idiom: entries is a Map keyed by prId; every write is followed by
+// reassignment so Svelte 5 tracks it.
+const store = $state({
+  entries: new Map<string, PrViewState>(),
+  activePrId: null as string | null,
+});
 
 function getOrCreate(prId: string): PrViewState {
-  let s = prViewStates.get(prId);
+  let s = store.entries.get(prId);
   if (!s) {
     s = emptyState();
-    prViewStates.set(prId, s);
+    store.entries.set(prId, s);
+    store.entries = new Map(store.entries);
   }
   return s;
 }
 
 export function getActiveTab(): ActiveTab {
-  return activeTab;
+  if (store.activePrId === null) return "walkthrough";
+  return store.entries.get(store.activePrId)?.activeTab ?? "walkthrough";
 }
 
 export function setActiveTab(tab: ActiveTab): void {
-  if (tab === activeTab) return;
+  const currentTab = getActiveTab();
+  if (tab === currentTab) return;
   // When leaving diff, reset focus-mode to sidebar to prevent stale state
   // when ReviewLayout is destroyed and later recreated
-  if (activeTab === "diff") {
+  if (currentTab === "diff") {
     enterSidebarMode();
   }
-  activeTab = tab;
   // Persist for the current PR
-  if (currentPrId !== null) {
-    getOrCreate(currentPrId).activeTab = tab;
+  if (store.activePrId !== null) {
+    getOrCreate(store.activePrId).activeTab = tab;
+    store.entries = new Map(store.entries);
+  }
+}
+
+export function getActiveFilePath(): string | null {
+  if (store.activePrId === null) return null;
+  return store.entries.get(store.activePrId)?.activeFilePath ?? null;
+}
+
+export function setActiveFilePath(path: string | null): void {
+  if (store.activePrId !== null) {
+    getOrCreate(store.activePrId).activeFilePath = path;
+    store.entries = new Map(store.entries);
   }
 }
 
 /** Call when navigating to a PR. Saves state for the previous PR, restores (or defaults) for the new one. */
 export function switchPrViewState(newPrId: string): void {
   // Only save current state if we're actually leaving a different PR
-  if (currentPrId !== null && currentPrId !== newPrId) {
-    const prev = getOrCreate(currentPrId);
-    prev.activeTab = activeTab;
-    prev.activeFilePath = activeFilePath;
+  const prevId = store.activePrId;
+  if (prevId !== null && prevId !== newPrId) {
+    const prev = getOrCreate(prevId);
+    prev.activeTab = getActiveTab();
+    prev.activeFilePath = getActiveFilePath();
+    store.entries = new Map(store.entries);
   }
-  currentPrId = newPrId;
+  store.activePrId = newPrId;
   // Restore saved state, or default for first visit
-  const saved = prViewStates.get(newPrId);
+  const saved = store.entries.get(newPrId);
   const restoredTab = saved?.activeTab ?? "walkthrough";
   const restoredFilePath = saved?.activeFilePath ?? null;
-  // Use direct assignment to bypass the guard in setActiveTab (no focus reset needed here)
-  if (activeTab === "diff" && restoredTab !== "diff") {
+  // Use direct entry mutation to bypass the guard in setActiveTab (no focus reset needed here)
+  if (getActiveTab() === "diff" && restoredTab !== "diff") {
     enterSidebarMode();
   }
-  activeTab = restoredTab;
-  activeFilePath = restoredFilePath;
+  getOrCreate(newPrId).activeTab = restoredTab;
+  getOrCreate(newPrId).activeFilePath = restoredFilePath;
+  store.entries = new Map(store.entries);
 }
 
 // --- Diff scroll reset signal -----------------------------------------------
@@ -492,11 +489,12 @@ export function requestDiffScrollReset(): void {
 // (rightPanel).
 
 export function getPrScrollPosition(prId: string, key: ScrollPaneKey): number {
-  return prViewStates.get(prId)?.scroll[key] ?? 0;
+  return store.entries.get(prId)?.scroll[key] ?? 0;
 }
 
 export function setPrScrollPosition(prId: string, key: ScrollPaneKey, value: number): void {
   getOrCreate(prId).scroll[key] = value;
+  store.entries = new Map(store.entries);
 }
 
 // --- Comment threads ---
@@ -873,25 +871,6 @@ export function jumpToWalkthroughBlock(blockId: string): void {
 
 export function clearPendingWalkthroughBlockJump(): void {
   pendingWalkthroughBlockJump = null;
-}
-
-// --- Active file in diff ---
-//
-// Storage lives in the per-PR `prViewStates` map (see top of file). The
-// `activeFilePath` $state declared up there is the reactive mirror for the
-// currently selected PR, kept in sync by `switchPrViewState`. Setting it here
-// also writes through to the per-PR record so a later `switchPrViewState`
-// back to this PR restores the same file.
-
-export function getActiveFilePath(): string | null {
-  return activeFilePath;
-}
-
-export function setActiveFilePath(path: string | null): void {
-  activeFilePath = path;
-  if (currentPrId !== null) {
-    getOrCreate(currentPrId).activeFilePath = path;
-  }
 }
 
 /**

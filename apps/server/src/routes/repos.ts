@@ -14,7 +14,21 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
   .use(withAuth)
   .get("/", async (ctx) => {
     try {
-      return await AppRuntime.runPromise(Effect.flatMap(RepositoryService, (s) => s.listRepos()));
+      return await AppRuntime.runPromise(
+        Effect.gen(function* () {
+          const tokenProvider = yield* TokenProvider;
+          const settingsSvc = yield* SettingsService;
+          const repoSvc = yield* RepositoryService;
+
+          const currentSettings = yield* settingsSvc
+            .getSettings()
+            .pipe(Effect.orElseSucceed(() => null));
+          const githubHost = currentSettings?.githubHost?.trim() || serverEnv.githubHost;
+
+          const { accountId } = yield* tokenProvider.resolveAccount(ctx.session.user.id, githubHost);
+          return yield* repoSvc.listRepos(accountId);
+        }),
+      );
     } catch (e) {
       return handleAppError(e, ctx);
     }
@@ -39,9 +53,12 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
               .pipe(Effect.orElseSucceed(() => null));
             const githubHost = currentSettings?.githubHost?.trim() || serverEnv.githubHost;
 
-            const token = yield* tokenProvider.getGitHubToken(ctx.session.user.id, githubHost);
+            const { accountId, accessToken: token } = yield* tokenProvider.resolveAccount(
+              ctx.session.user.id,
+              githubHost,
+            );
             const repoData = yield* github.getRepo(fullName, token);
-            const saved = yield* repoSvc.addRepo({ ...repoData, githubHost });
+            const saved = yield* repoSvc.addRepo({ ...repoData, githubHost }, accountId);
 
             // Trigger a sync in the background
             yield* Effect.forkDaemon(scheduler.syncNow());
@@ -81,9 +98,18 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
           const repoSvc = yield* RepositoryService;
           const tokenProvider = yield* TokenProvider;
           const cloneSvc = yield* RepoCloneService;
+          const settingsSvc = yield* SettingsService;
 
-          const repo = yield* repoSvc.getRepoById(ctx.params.id);
-          const token = yield* tokenProvider.getGitHubToken(ctx.session.user.id, repo.githubHost);
+          const currentSettings = yield* settingsSvc
+            .getSettings()
+            .pipe(Effect.orElseSucceed(() => null));
+          const githubHost = currentSettings?.githubHost?.trim() || serverEnv.githubHost;
+
+          const { accountId, accessToken: token } = yield* tokenProvider.resolveAccount(
+            ctx.session.user.id,
+            githubHost,
+          );
+          const repo = yield* repoSvc.getRepoById(ctx.params.id, accountId);
 
           yield* Effect.forkDaemon(
             cloneSvc.cloneRepo(repo, token).pipe(Effect.catchAll(() => Effect.void)),
@@ -102,12 +128,24 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
         Effect.gen(function* () {
           const cloneSvc = yield* RepoCloneService;
           const repoSvc = yield* RepositoryService;
+          const tokenProvider = yield* TokenProvider;
+          const settingsSvc = yield* SettingsService;
+
+          const currentSettings = yield* settingsSvc
+            .getSettings()
+            .pipe(Effect.orElseSucceed(() => null));
+          const githubHost = currentSettings?.githubHost?.trim() || serverEnv.githubHost;
+
+          const { accountId } = yield* tokenProvider.resolveAccount(
+            ctx.session.user.id,
+            githubHost,
+          );
 
           // Clean up clone dir first (best effort)
           yield* cloneSvc.deleteClone(ctx.params.id).pipe(Effect.catchAll(() => Effect.void));
 
-          // Then delete DB record
-          yield* repoSvc.deleteRepo(ctx.params.id);
+          // Then delete DB record (scoped to account)
+          yield* repoSvc.deleteRepo(ctx.params.id, accountId);
         }),
       );
     } catch (e) {

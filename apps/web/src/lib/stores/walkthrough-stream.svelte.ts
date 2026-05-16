@@ -64,6 +64,12 @@ const clonePollers = new Map<string, { cancelled: boolean }>();
 const CLONE_POLL_INTERVAL_MS = 2000;
 const CLONE_POLL_MAX_MS = 10 * 60 * 1000;
 
+// S6: Dedup in-flight reconciliation polls per prId. When multiple callers
+// (unexpected stream end, WS-complete handler, user retry) all fire
+// hydrateFromCache for the same PR concurrently, they share a single
+// Promise so only one HTTP request is in flight at a time.
+const pendingHydration = new Map<string, Promise<boolean>>();
+
 // ── Clone polling ──────────────────────────────────────────────────────────
 
 export function stopClonePoll(prId: string): void {
@@ -238,7 +244,15 @@ function scheduleReconciliationPoll(prId: string, attempt = 0): void {
       return;
     }
 
-    const hit = await hydrateFromCache(prId);
+    // S6: coalesce concurrent hydration attempts for the same prId
+    let hydrationPromise = pendingHydration.get(prId);
+    if (!hydrationPromise) {
+      hydrationPromise = hydrateFromCache(prId).finally(() => {
+        pendingHydration.delete(prId);
+      });
+      pendingHydration.set(prId, hydrationPromise);
+    }
+    const hit = await hydrationPromise;
 
     if (hit) {
       const updated = store.entries.get(prId);

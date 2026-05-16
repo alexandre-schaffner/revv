@@ -103,6 +103,46 @@ export class WorktreeBlockedByUnpushedCommits extends Data.TaggedError(
   }>;
 }> {}
 
+// ── Project Recap errors ───────────────────────────────────────────────────
+
+/**
+ * Raised when a recap row can't be found by id. Used by the manual
+ * regenerate / detail endpoints to return 404 cleanly.
+ */
+export class RecapNotFoundError extends Data.TaggedError("RecapNotFoundError")<{
+  readonly recapId: string;
+}> {}
+
+/**
+ * Raised by the recap MCP tool surface when an out-of-order or
+ * structurally-invalid call lands (e.g. `complete_recap` before
+ * `set_recap_overview`, or `set_recap_overview` with an empty markdown
+ * body). The agent receives this as a structured error result and can
+ * recover by issuing the right call.
+ */
+export class RecapPreconditionError extends Data.TaggedError("RecapPreconditionError")<{
+  readonly recapId: string;
+  readonly reason: string;
+}> {}
+
+/**
+ * Raised when a recap row exceeds `RECAP_MAX_RESUME_ATTEMPTS` across
+ * server restarts. The orchestrator flips the row to `'error'` and stops
+ * relaunching it; this error type is the audit-log marker.
+ */
+export class RecapBudgetExceededError extends Data.TaggedError("RecapBudgetExceededError")<{
+  readonly recapId: string;
+  readonly attempts: number;
+}> {}
+
+// Database errors
+export class DbError extends Data.TaggedError("DbError")<{
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
+
+export type RecapError = RecapNotFoundError | RecapPreconditionError | RecapBudgetExceededError;
+
 export type AppError =
   | GitHubError
   | AiError
@@ -113,7 +153,8 @@ export type AppError =
   | CloneError
   | CloneNotReadyError
   | CloneInProgressError
-  | WorktreeBlockedByUnpushedCommits;
+  | WorktreeBlockedByUnpushedCommits
+  | RecapError;
 
 /**
  * Type guard for ReviewError.

@@ -779,6 +779,59 @@ export async function cherryPickProposedCommit(prId: string, sha: string): Promi
   }
 }
 
+/** Cherry-pick N proposed commits onto the PR source branch and push once. */
+export async function batchCherryPickProposedCommits(
+  prId: string,
+  shas: readonly string[],
+): Promise<{ pushedCommits: number; branch: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/chat/${prId}/proposed-changes/batch-cherry-pick`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ shas }),
+  });
+  const body = (await res.json().catch(() => ({ error: "Unknown error" }))) as Record<
+    string,
+    unknown
+  >;
+  if (!res.ok) {
+    throw new Error(
+      (body.error as string | undefined) ??
+        (body.message as string | undefined) ??
+        `Failed: ${res.status}`,
+    );
+  }
+  return {
+    pushedCommits: typeof body.pushedCommits === "number" ? body.pushedCommits : shas.length,
+    branch: typeof body.branch === "string" ? body.branch : "",
+  };
+}
+
+/** Discard N proposed commits from the worktree atomically. */
+export async function batchDiscardProposedCommits(
+  prId: string,
+  shas: readonly string[],
+): Promise<{ discardedCount: number }> {
+  const res = await fetch(`${API_BASE_URL}/api/chat/${prId}/proposed-changes/batch-discard`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ shas }),
+  });
+  const body = (await res.json().catch(() => ({ error: "Unknown error" }))) as Record<
+    string,
+    unknown
+  >;
+  if (!res.ok) {
+    throw new Error(
+      (body.error as string | undefined) ??
+        (body.message as string | undefined) ??
+        `Failed: ${res.status}`,
+    );
+  }
+  return {
+    discardedCount: typeof body.discardedCount === "number" ? body.discardedCount : shas.length,
+  };
+}
+
 /**
  * Stream the conflict-resolution + push flow. The agent's progress (file
  * edits, bash commands, brief commentary) is emitted inline; the terminal

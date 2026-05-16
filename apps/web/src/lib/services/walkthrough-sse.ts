@@ -104,7 +104,9 @@ export async function runWalkthroughSse(opts: RunWalkthroughSseOptions): Promise
 
     buffer += decoder.decode(value, { stream: true });
 
-    const result = parseSSEBuffer<WalkthroughStreamEvent>(buffer);
+    const result = parseSSEBuffer<WalkthroughStreamEvent>(buffer, undefined, (raw, err) => {
+      wtTrace("sse", `parse-error: ${err instanceof Error ? err.message : String(err)} payload=${raw.slice(0, 120)}`);
+    });
     buffer = result.remaining;
 
     if (result.events.length > 0) {
@@ -114,8 +116,15 @@ export async function runWalkthroughSse(opts: RunWalkthroughSseOptions): Promise
         "sse",
         `batch parsed count=${result.events.length} types=[${types}] totalEvents=${totalEvents}`,
       );
-      const hasProgress = result.events.some((e) => e.type !== "exploration");
-      if (hasProgress) {
+      // S5: Reset the stall clock on any non-exploration event, or on an
+      // explicit phase:exploring heartbeat. Both signals indicate the agent
+      // is still active and match the server-side stream-guard semantics.
+      const hasNonExploration = result.events.some((e) => e.type !== "exploration");
+      const hasExploringHeartbeat = result.events.some((e) => {
+        if (e.type !== "phase") return false;
+        return e.data.phase === "exploring";
+      });
+      if (hasNonExploration || hasExploringHeartbeat) {
         lastProgressEventTime = Date.now();
       } else if (Date.now() - lastProgressEventTime > EXPLORATION_STALL_MS) {
         wtTrace("sse", "exploration stall — throwing");

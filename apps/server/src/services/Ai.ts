@@ -17,12 +17,12 @@ import { type ContinuationContext, streamWalkthroughViaMCP } from "../ai/provide
 import type { OpencodeProviderDeps } from "../ai/providers/mcp-walkthrough-opencode";
 import { streamWalkthroughViaOpencodeMCP } from "../ai/providers/mcp-walkthrough-opencode";
 import { guardWalkthroughStream } from "../ai/providers/stream-guard";
-import { WALKTHROUGH_FIRST_EVENT_TIMEOUT_OPENCODE_MS } from "../constants";
+import { WALKTHROUGH_FIRST_EVENT_TIMEOUT_MS } from "../constants";
 import {
   type AiError,
   AiGenerationError,
   AiNotConfiguredError,
-  type ValidationError,
+  ValidationError,
 } from "../domain/errors";
 import { withDb } from "../effects/with-db";
 import { logError } from "../logger";
@@ -83,11 +83,20 @@ export interface ChatParams {
 
 export type CliAgent = "opencode" | "claude";
 
-/** Safely resolve the configured CLI agent, falling back to 'opencode'. */
+/**
+ * Resolve the configured CLI agent.
+ * @throws {ValidationError} If the agent is not a known value. This should
+ *   never happen when settings are read through `SettingsService` (which
+ *   validates), but we assert rather than silently downgrade so bad values
+ *   surface loudly.
+ */
 export function resolveAgent(settings: { aiAgent: string | null }): CliAgent {
   const agent = settings.aiAgent ?? "opencode";
   if (agent === "opencode" || agent === "claude") return agent;
-  return "opencode";
+  throw new ValidationError({
+    message: `Unknown aiAgent '${agent}' — expected "opencode" or "claude"`,
+    field: "aiAgent",
+  });
 }
 
 // ── Service definition ───────────────────────────────────────────────────────
@@ -294,7 +303,7 @@ export const AiServiceLive = Layer.effect(
               label: "opencode-mcp",
               synthesizePhases: false,
               explorationStallMs: Infinity,
-              firstEventTimeoutMs: WALKTHROUGH_FIRST_EVENT_TIMEOUT_OPENCODE_MS,
+              firstEventTimeoutMs: WALKTHROUGH_FIRST_EVENT_TIMEOUT_MS,
             });
           }
           const raw = streamWalkthroughViaMCP(

@@ -19,6 +19,7 @@
  */
 import { Check } from "@lucide/svelte";
 import type { WalkthroughBlock, WalkthroughIssue } from "@revv/shared";
+import { Checkbox } from "$lib/components/ui/checkbox";
 import SpecRow, { type SpecRowState } from "../shared/SpecRow.svelte";
 import IssueExpandedBody from "./IssueExpandedBody.svelte";
 
@@ -102,8 +103,7 @@ const delay = $derived(`${Math.min(index, 6) * 50}ms`);
 // the Svelte $state rune name in svelte-check's flow analysis.
 const rowState: SpecRowState = $derived(submitted ? "submitted" : "resolved");
 
-function handleCheckboxChange(e: Event): void {
-  e.stopPropagation();
+function handleCheckedChange(): void {
   if (submitted) return;
   onToggleSelect();
 }
@@ -137,12 +137,11 @@ function handleCheckboxClick(e: MouseEvent): void {
                     <Check size={13} />
                 </span>
             {:else}
-                <input
-                    type="checkbox"
+                <Checkbox
                     class="issue-checkbox"
                     checked={selected}
                     aria-label="Include in submit"
-                    onchange={handleCheckboxChange}
+                    onCheckedChange={handleCheckedChange}
                     onclick={handleCheckboxClick}
                 />
             {/if}
@@ -213,14 +212,6 @@ function handleCheckboxClick(e: MouseEvent): void {
     }
 
     /* ── Checkbox / staged-check ──────────────────────────────── */
-
-    .issue-checkbox {
-        width: 13px;
-        height: 13px;
-        margin: 0;
-        accent-color: var(--color-accent);
-        cursor: pointer;
-    }
 
     .staged-check {
         display: inline-flex;

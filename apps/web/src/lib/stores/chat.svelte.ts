@@ -27,6 +27,8 @@ import {
   type AvailableAgents,
   advanceWorktree,
   approvePlan,
+  batchCherryPickProposedCommits,
+  batchDiscardProposedCommits,
   cherryPickProposedCommit,
   clearChat,
   discardProposedCommit,
@@ -165,6 +167,11 @@ let discardingCommits = $state(new Set<string>());
 let cherryPickingCommits = $state(new Set<string>());
 let rebasingPrIds = $state(new Set<string>());
 
+// Per-PR selection of proposed commits for batch cherry-pick / discard.
+// Keyed by prId; the inner Set holds full SHAs of currently-ticked commits.
+let selectedCommitShas = $state(new Map<string, Set<string>>());
+let batchOpInFlightPrIds = $state(new Set<string>());
+
 // Non-reactive — abort controllers have no UI semantics.
 const abortControllers = new Map<string, AbortController>();
 const resolveAbortControllers = new Map<string, AbortController>();
@@ -221,6 +228,22 @@ export function isCherryPickingCommit(sha: string): boolean {
 
 export function isRebasingProposed(prId: string): boolean {
   return rebasingPrIds.has(prId);
+}
+
+export function getSelectedCommitShas(prId: string): Set<string> {
+  return selectedCommitShas.get(prId) ?? new Set();
+}
+
+export function isCommitSelected(prId: string, sha: string): boolean {
+  return selectedCommitShas.get(prId)?.has(sha) ?? false;
+}
+
+export function getSelectedCommitCount(prId: string): number {
+  return selectedCommitShas.get(prId)?.size ?? 0;
+}
+
+export function isBatchOpInFlight(prId: string): boolean {
+  return batchOpInFlightPrIds.has(prId);
 }
 
 export function getInteractionMode(prId: string): InteractionMode {
@@ -299,6 +322,61 @@ function markLoaded(prId: string): void {
 function setProposedChanges(prId: string, value: ProposedChanges | null): void {
   proposedChanges.set(prId, value);
   proposedChanges = new Map(proposedChanges);
+  // GC selection: drop any selected SHAs that are no longer in the list.
+  // Necessary because the agent may rewrite history mid-session, or a batch
+  // op may have removed some of the selected commits.
+  const current = selectedCommitShas.get(prId);
+  if (current && current.size > 0) {
+    const live = new Set<string>(value?.commits.map((c) => c.sha) ?? []);
+    const filtered = new Set<string>();
+    for (const sha of current) if (live.has(sha)) filtered.add(sha);
+    if (filtered.size === 0) {
+      selectedCommitShas.delete(prId);
+    } else if (filtered.size !== current.size) {
+      selectedCommitShas.set(prId, filtered);
+    }
+    selectedCommitShas = new Map(selectedCommitShas);
+  }
+}
+
+function setBatchOpInFlight(prId: string, inFlight: boolean): void {
+  if (inFlight) {
+    batchOpInFlightPrIds.add(prId);
+  } else {
+    batchOpInFlightPrIds.delete(prId);
+  }
+  batchOpInFlightPrIds = new Set(batchOpInFlightPrIds);
+}
+
+export function toggleCommitSelection(prId: string, sha: string): void {
+  const current = selectedCommitShas.get(prId) ?? new Set<string>();
+  const next = new Set(current);
+  if (next.has(sha)) {
+    next.delete(sha);
+  } else {
+    next.add(sha);
+  }
+  if (next.size === 0) {
+    selectedCommitShas.delete(prId);
+  } else {
+    selectedCommitShas.set(prId, next);
+  }
+  selectedCommitShas = new Map(selectedCommitShas);
+}
+
+export function selectAllCommits(prId: string, shas: readonly string[]): void {
+  if (shas.length === 0) {
+    selectedCommitShas.delete(prId);
+  } else {
+    selectedCommitShas.set(prId, new Set(shas));
+  }
+  selectedCommitShas = new Map(selectedCommitShas);
+}
+
+export function clearCommitSelection(prId: string): void {
+  if (!selectedCommitShas.has(prId)) return;
+  selectedCommitShas.delete(prId);
+  selectedCommitShas = new Map(selectedCommitShas);
 }
 
 function setPushing(prId: string, pushing: boolean): void {
@@ -906,6 +984,7 @@ export async function clearChatHistory(prId: string): Promise<void> {
   setStreaming(prId, false);
   setProposedChanges(prId, null);
   setWorktreeBlocked(prId, null);
+  clearCommitSelection(prId);
   interactionModes.set(prId, "default");
   interactionModes = new Map(interactionModes);
   // Reset the loaded flag so a subsequent navigation re-pulls the
@@ -1250,6 +1329,69 @@ export async function cherryPickProposedCommitAction(prId: string, sha: string):
   } finally {
     cherryPickingCommits.delete(sha);
     cherryPickingCommits = new Set(cherryPickingCommits);
+  }
+}
+
+/**
+ * Cherry-pick every currently-selected proposed commit onto the PR's source
+ * branch as one atomic push. Clears the selection and refreshes on success.
+ */
+export async function batchCherryPickSelectedAction(prId: string): Promise<void> {
+  if (batchOpInFlightPrIds.has(prId)) return;
+  const selected = selectedCommitShas.get(prId);
+  if (!selected || selected.size === 0) return;
+  const shas = Array.from(selected);
+
+  setBatchOpInFlight(prId, true);
+  try {
+    const result = await batchCherryPickProposedCommits(prId, shas);
+    // Drop any inline-comment state for the pushed commits.
+    for (const sha of shas) {
+      const key = commentKey(prId, sha);
+      if (proposedComments.has(key)) proposedComments.delete(key);
+    }
+    proposedComments = new Map(proposedComments);
+    clearCommitSelection(prId);
+    await refreshProposedChanges(prId);
+    toast.success(
+      `Pushed ${result.pushedCommits} commit${result.pushedCommits === 1 ? "" : "s"}${
+        result.branch ? ` to ${result.branch}` : ""
+      }`,
+    );
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : "Failed to push commits");
+  } finally {
+    setBatchOpInFlight(prId, false);
+  }
+}
+
+/**
+ * Discard every currently-selected proposed commit in a single atomic
+ * rebuild of the agent branch. Clears the selection on success.
+ */
+export async function batchDiscardSelectedAction(prId: string): Promise<void> {
+  if (batchOpInFlightPrIds.has(prId)) return;
+  const selected = selectedCommitShas.get(prId);
+  if (!selected || selected.size === 0) return;
+  const shas = Array.from(selected);
+
+  setBatchOpInFlight(prId, true);
+  try {
+    const result = await batchDiscardProposedCommits(prId, shas);
+    for (const sha of shas) {
+      const key = commentKey(prId, sha);
+      if (proposedComments.has(key)) proposedComments.delete(key);
+    }
+    proposedComments = new Map(proposedComments);
+    clearCommitSelection(prId);
+    await refreshProposedChanges(prId);
+    toast.success(
+      `Discarded ${result.discardedCount} commit${result.discardedCount === 1 ? "" : "s"}`,
+    );
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : "Failed to discard commits");
+  } finally {
+    setBatchOpInFlight(prId, false);
   }
 }
 

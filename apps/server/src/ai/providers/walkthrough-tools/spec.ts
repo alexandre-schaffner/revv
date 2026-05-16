@@ -11,6 +11,7 @@ import type {
   WalkthroughStreamEvent,
   WsServerMessage,
 } from "@revv/shared";
+import { Effect } from "effect";
 import { RATING_AXES } from "@revv/shared";
 import { z } from "zod";
 import type { Db } from "../../../db";
@@ -58,6 +59,13 @@ export interface WalkthroughToolContext {
    * Event sink. The handler calls this AFTER the DB commit so subscribers
    * never see an event that doesn't have a corresponding durable row. Per
    * doctrine invariant #8: "Commit first, broadcast second."
+   *
+   * The emit implementation is provider-specific: the Claude SDK path passes
+   * a callback that routes through `WalkthroughJobs.emitEvent` (P1), while
+   * the opencode HTTP path wraps the same route via `runSync`. Both are
+   * synchronous from the handler's perspective — the handler simply calls
+   * `ctx.emit(event)` and returns the tool result; broadcast timing is
+   * handled by the provider's wrapper, not the handler.
    */
   readonly emit: (event: WalkthroughStreamEvent) => void;
   /**
@@ -96,6 +104,38 @@ export interface ToolSpec<TShape extends z.ZodRawShape> {
 // ── Tool input schemas (zod) ─────────────────────────────────────────────────
 
 const getWalkthroughStateSchema = z.object({});
+
+/**
+ * Read-only: returns recent project recaps for the repo this walkthrough
+ * belongs to. The agent calls this once during Phase A to ground its
+ * overview in recent project context (what shipped, themes, risk
+ * patterns) without re-deriving them from the diff alone. See
+ * `apps/server/src/services/ProjectRecap.ts` for the recap model.
+ *
+ * Empty inputs by design — the repoId is resolved from the walkthrough
+ * row inside the handler.
+ */
+const getRepoContextSchema = z.object({
+  /**
+   * Optional period filter. Default is "any period" — the handler returns
+   * the most recent recaps across daily and weekly so the agent sees both
+   * fresh signal (yesterday) and broader context (last week).
+   */
+  period: z.enum(["daily", "weekly"]).nullable().optional(),
+  /** Optional cap; defaults to 3. Hard maximum 10 to keep prompts bounded. */
+  limit: z.number().int().positive().max(10).nullable().optional(),
+});
+
+/**
+ * Read-only: returns the PR commit list captured at job start. The agent
+ * calls this once before opening the required journey chapter at
+ * `semantic_step_index: 0`, then narrates the arc from the response.
+ *
+ * Empty inputs by design — the walkthroughId is in the tool context.
+ * Commits are stored verbatim on the walkthrough row (`pr_commits` JSON
+ * column), so this never hits GitHub.
+ */
+const getCommitHistorySchema = z.object({});
 
 const setOverviewSchema = z.object({
   summary: z.string().describe("2-3 sentence summary of what this PR does and why"),
@@ -406,6 +446,8 @@ const completeWalkthroughSchema = z.object({});
 // ── Type exports (so handlers can be written with static input types) ────────
 
 export type GetWalkthroughStateInput = z.infer<typeof getWalkthroughStateSchema>;
+export type GetCommitHistoryInput = z.infer<typeof getCommitHistorySchema>;
+export type GetRepoContextInput = z.infer<typeof getRepoContextSchema>;
 export type SetOverviewInput = z.infer<typeof setOverviewSchema>;
 export type AddSemanticStepInput = z.infer<typeof addSemanticStepSchema>;
 export type AddDiffStepInput = z.infer<typeof addDiffStepSchema>;
@@ -423,6 +465,8 @@ export {
   addSemanticStepSchema,
   completeWalkthroughSchema,
   flagIssueSchema,
+  getCommitHistorySchema,
+  getRepoContextSchema,
   getWalkthroughStateSchema,
   rateAxisSchema,
   setOverviewSchema,

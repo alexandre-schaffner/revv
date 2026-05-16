@@ -8,7 +8,6 @@ import {
 import { getCurrentUserLogin, getUser } from "$lib/stores/auth.svelte";
 import { getActiveOrg, getAvailableOrgs, setActiveOrg } from "$lib/stores/orgs.svelte";
 import { getRepositories } from "$lib/stores/prs.svelte";
-import { getGithubHost } from "$lib/stores/settings.svelte";
 
 interface Props {
   collapsed?: boolean;
@@ -30,10 +29,8 @@ const personalLogin = $derived(getCurrentUserLogin());
 // then persists the user's explicit choice across sessions.
 $effect(() => {
   if (activeOrg !== null) return;
-  const activeHost = getGithubHost();
   const repos = getRepositories();
-  const hostRepos = activeHost ? repos.filter((r) => r.githubHost === activeHost) : repos;
-  const repoOwner = hostRepos[0]?.owner ?? null;
+  const repoOwner = repos[0]?.owner ?? null;
   const allKnownOwners = [personalLogin, ...orgs.map((o) => o.login), ...externalOwners].filter(
     Boolean,
   );
@@ -45,12 +42,8 @@ $effect(() => {
 const knownOwners = $derived(
   new Set([personalLogin, ...orgs.map((o) => o.login)].filter((x): x is string => Boolean(x))),
 );
-const activeHost = $derived(getGithubHost());
-const hostFilteredRepos = $derived(
-  activeHost ? getRepositories().filter((r) => r.githubHost === activeHost) : getRepositories(),
-);
 const externalOwners = $derived(
-  [...new Set(hostFilteredRepos.map((r) => r.owner).filter((o) => !knownOwners.has(o)))].sort(),
+  [...new Set(getRepositories().map((r) => r.owner).filter((o) => !knownOwners.has(o)))].sort(),
 );
 
 const activeOrgRow = $derived(activeOrg ? (orgs.find((o) => o.login === activeOrg) ?? null) : null);

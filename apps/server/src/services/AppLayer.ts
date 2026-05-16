@@ -14,7 +14,10 @@ import { GitHubEtagCacheLive } from "./GitHubEtagCache";
 import { OpencodeSupervisorLive } from "./OpencodeSupervisor";
 import { PollSchedulerLive } from "./PollScheduler";
 import { PrContextServiceLive } from "./PrContext";
+import { ProjectRecapServiceLive } from "./ProjectRecap";
+import { ProjectRecapJobsLive } from "./ProjectRecapJobs";
 import { PullRequestServiceLive } from "./PullRequest";
+import { RecapSchedulerLive } from "./RecapScheduler";
 import { RepoCloneServiceLive } from "./RepoClone";
 import { RepositoryServiceLive } from "./Repository";
 import { ReviewServiceLive } from "./Review";
@@ -58,6 +61,7 @@ const BaseLayers = Layer.mergeAll(
   ReviewServiceLive,
   SettingsServiceLive,
   WalkthroughServiceLive,
+  ProjectRecapServiceLive,
   DiffCacheServiceLive,
   FileContentServiceLive,
   CacheServiceLive,
@@ -111,6 +115,17 @@ const PollSchedulerWithDeps = PollSchedulerLive.pipe(
   Layer.provide(Layer.mergeAll(BaseLayers, SyncServiceWithDeps, WalkthroughJobsWithDeps)),
 );
 
+// ProjectRecapJobs is the recap orchestrator. Mirrors WalkthroughJobs but
+// simpler — no worktree / continuation. Depends on BaseLayers for repo,
+// PR, recap service, settings, and WebSocketHub.
+const ProjectRecapJobsWithDeps = ProjectRecapJobsLive.pipe(Layer.provide(BaseLayers));
+
+// RecapScheduler depends on ProjectRecapJobs (to enqueue) plus BaseLayers
+// for repo/PR/recap reads.
+const RecapSchedulerWithDeps = RecapSchedulerLive.pipe(
+  Layer.provide(Layer.mergeAll(BaseLayers, ProjectRecapJobsWithDeps)),
+);
+
 // ChatChangesPush depends on PrContext (for resolving repo+token), AiService
 // (for invoking the conflict-resolution agent), and BaseLayers (db, github,
 // chat sessions, ws hub, pr service, etag cache).
@@ -127,6 +142,8 @@ export const AppLayer = Layer.mergeAll(
   AiServiceWithDeps,
   RepoCloneServiceWithDeps,
   WalkthroughJobsWithDeps,
+  ProjectRecapJobsWithDeps,
+  RecapSchedulerWithDeps,
   DbMaintenanceWithDeps,
   ChatChangesPushServiceWithDeps,
 );

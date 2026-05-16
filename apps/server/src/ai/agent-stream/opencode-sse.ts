@@ -181,20 +181,32 @@ export async function subscribeOpencodeStream(
      */
     subagentMessageIdMap?: Map<string, string>;
     /**
-     * Fires whenever a `message.updated` event arrives for an assistant
-     * message in the current session, carrying that message's running
-     * `tokens` snapshot (input / output / reasoning / cache.{read,write}).
+     * Fires whenever a `message.updated` event (or `step-finish` part) arrives
+     * for an assistant message in the current session, carrying that message's
+     * running `tokens` snapshot (input / output / reasoning / cache.{read,write}).
+     *
+     * `messageId` is supplied so callers can aggregate per-message: opencode's
+     * `tokens` is a per-call snapshot — within a single agent turn, multiple
+     * assistant messages are produced (one per tool-call cycle) and each
+     * message's `output` is just that message's output, not the turn total.
+     * Callers that want a turn-cumulative figure must sum output across
+     * messages (keyed by `messageId`) rather than treating each callback as
+     * a fresh authoritative total.
+     *
      * Callers (walkthrough provider) translate this into a `usage` event
      * so the BottomBar updates live mid-turn rather than only when the
      * full agent turn resolves. No throttling here — callers should
      * throttle if needed for downstream cost.
      */
-    onAssistantTokens?: (tokens: {
-      input: number;
-      output: number;
-      reasoning: number;
-      cache: { read: number; write: number };
-    }) => void;
+    onAssistantTokens?: (
+      messageId: string,
+      tokens: {
+        input: number;
+        output: number;
+        reasoning: number;
+        cache: { read: number; write: number };
+      },
+    ) => void;
   },
 ): Promise<void> {
   const emittedTextLen = opts?.emittedTextLen ?? new Map<string, number>();
@@ -247,8 +259,9 @@ export async function subscribeOpencodeStream(
           // the daemon updates as output streams. Forward it to the
           // caller so they can broadcast a `usage` event for live
           // BottomBar updates mid-turn (without waiting for the full
-          // session.prompt to resolve).
-          opts?.onAssistantTokens?.(info.tokens);
+          // session.prompt to resolve). `info.id` keys per-message
+          // aggregation on the caller side.
+          opts?.onAssistantTokens?.(info.id, info.tokens);
         }
         return;
       }
@@ -281,7 +294,7 @@ export async function subscribeOpencodeStream(
         // walkthrough generation. The dedicated decoder ignores this
         // part type for normalized events.
         if (part.type === "step-finish") {
-          opts?.onAssistantTokens?.(part.tokens);
+          opts?.onAssistantTokens?.(part.messageID, part.tokens);
           return;
         }
 

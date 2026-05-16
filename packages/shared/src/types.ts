@@ -88,6 +88,17 @@ export interface UserSettings {
   diffViewMode: DiffViewMode;
   autoFetchInterval: number;
   /**
+   * Daily / weekly project-recap scheduler toggles. v1 keeps this minimal —
+   * just on/off per cadence; no custom hour-of-day. UTC throughout (see
+   * plan: cross-cutting decisions). Adding finer-grained scheduling later
+   * doesn't need a wire-format change since this is a nested object.
+   */
+  recap: {
+    enabled: boolean;
+    dailyEnabled: boolean;
+    weeklyEnabled: boolean;
+  };
+  /**
    * GitHub host the app authenticates against. `'nocturlab.ghe.com'` for
    * the bundled GHE instance (default) or `'github.com'` for public
    * GitHub. Picked during onboarding and consumed by the device-flow

@@ -15,6 +15,7 @@ export { githubEtagCache } from "./github-etag-cache";
 export { hunkDecisions } from "./hunk-decisions";
 export { kvCache } from "./kv-cache";
 export { prDiffFiles } from "./pr-diff-files";
+export { projectRecaps } from "./project-recaps";
 export { pullRequests } from "./pull-requests";
 export { repositories } from "./repositories";
 export { reviewSessions } from "./review-sessions";

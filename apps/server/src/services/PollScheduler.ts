@@ -3,6 +3,7 @@ import { AUTO_FETCH_DEFAULT_INTERVAL, THREAD_SYNC_INTERVAL_SECONDS } from "@revv
 import { eq } from "drizzle-orm";
 import { Cause, Chunk, Context, Duration, Effect, Fiber, Layer, Ref, Schedule } from "effect";
 import { user } from "../db/schema/auth";
+import { repositories } from "../db/schema";
 import { withDb as withDbHelper } from "../effects/with-db";
 import { logError } from "../logger";
 import { DbService } from "./Db";
@@ -150,7 +151,15 @@ export const PollSchedulerLive = Layer.effect(
 
         if (anyRepoChanged) {
           const refreshedRepos = yield* withDb(repoService.listRepos());
-          yield* hub.broadcast({ type: "repos:updated", data: refreshedRepos });
+          // Group by account and broadcast per-account so each connected client
+          // only receives repos for the account it is authenticated against.
+          const reposByAccount = Map.groupBy(refreshedRepos, (r) => {
+            const dbRow = db.select().from(repositories).where(eq(repositories.id, r.id)).get();
+            return dbRow?.accountId ?? "unknown";
+          });
+          for (const [accountId, accountRepos] of reposByAccount) {
+            yield* hub.broadcastToAccount(accountId, { type: "repos:updated", data: accountRepos });
+          }
         }
 
         // ── Refresh authenticated user avatar ────────────────────────────────
@@ -329,6 +338,29 @@ export const PollSchedulerLive = Layer.effect(
           yield* withDb(prService.markPrsClosed(updates)).pipe(
             Effect.orElseSucceed(() => undefined),
           );
+
+          // Targeted `pr:archived` envelopes for each transition. The full
+          // PR set still goes out via the `prs:updated` broadcast below;
+          // this gives clients a low-latency signal they can patch in
+          // place without refetching the archive list. Best-effort — if a
+          // single emit fails, the bulk update still reconciles on the
+          // next `prs:updated` arrival.
+          const closedPrMap = new Map(closedPrObjects.map((pr) => [pr.id, pr]));
+          for (const upd of updates) {
+            const pr = closedPrMap.get(upd.id);
+            if (!pr) continue;
+            yield* hub
+              .broadcast({
+                type: "pr:archived",
+                data: {
+                  prId: upd.id,
+                  repoId: pr.repositoryId,
+                  status: upd.status,
+                  closedAt: upd.closedAt,
+                },
+              })
+              .pipe(Effect.orElseSucceed(() => undefined));
+          }
         }
 
         // Detect PRs whose headSha or baseSha changed since last sync
@@ -425,7 +457,18 @@ export const PollSchedulerLive = Layer.effect(
           }
         }
 
-        yield* hub.broadcast({ type: "prs:updated", data: allPrs });
+        // Group PRs by account and broadcast per-account so each connected
+        // client only receives PRs for the account it authenticated against.
+        const repoAccountMap = new Map(
+          allRepos.map((r) => {
+            const dbRow = db.select().from(repositories).where(eq(repositories.id, r.id)).get();
+            return [r.id, dbRow?.accountId ?? "unknown"];
+          }),
+        );
+        const prsByAccount = Map.groupBy(allPrs, (pr) => repoAccountMap.get(pr.repositoryId) ?? "unknown");
+        for (const [accountId, accountPrs] of prsByAccount) {
+          yield* hub.broadcastToAccount(accountId, { type: "prs:updated", data: accountPrs });
+        }
 
         // ── Sync diff: compute what changed for notifications ────────────────
         const changes: SyncChange[] = [];
@@ -503,7 +546,17 @@ export const PollSchedulerLive = Layer.effect(
         const suppressSummary = yield* Ref.get(suppressSummaryRef);
         const hasPeriodicSyncedOnce = yield* Ref.get(hasPeriodicSyncedOnceRef);
         if (!suppressSummary && hasPeriodicSyncedOnce && changes.length > 0) {
-          yield* hub.broadcast({ type: "prs:sync-summary", data: changes });
+          // Group changes by account and broadcast per-account.
+          const changesByAccount = Map.groupBy(changes, (c) => {
+            const pr = allPrs.find((p) => p.id === c.prId);
+            return pr ? (repoAccountMap.get(pr.repositoryId) ?? "unknown") : "unknown";
+          });
+          for (const [accountId, accountChanges] of changesByAccount) {
+            yield* hub.broadcastToAccount(accountId, {
+              type: "prs:sync-summary",
+              data: accountChanges,
+            });
+          }
 
           // Auto-trigger walkthroughs for newly-requested reviews so they're
           // ready (or already streaming) by the time the user opens the PR.

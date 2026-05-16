@@ -20,6 +20,14 @@ export {
 } from "./constants";
 export { guessImageContentType, isImagePath } from "./images";
 export type {
+  ProjectRecap,
+  ProjectRecapStatus,
+  ProjectRecapSummary,
+  RecapPeriod,
+  RecapSummaryStats,
+} from "./recap";
+export { EMPTY_RECAP_STATS } from "./recap";
+export type {
   AiAgent,
   AuthorRole,
   CloneStatus,

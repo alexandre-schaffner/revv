@@ -1,6 +1,7 @@
 import type { CloneStatus } from "@revv/shared";
 import { sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import { serverEnv } from "../../config";
+import { account } from "./auth";
 
 export const repositories = sqliteTable(
   "repositories",
@@ -17,6 +18,11 @@ export const repositories = sqliteTable(
     clonePath: text("clone_path"),
     cloneError: text("clone_error"),
     githubHost: text("github_host").notNull().default(serverEnv.githubHost),
+    accountId: text("account_id")
+      .notNull()
+      .references(() => account.id, { onDelete: "cascade" }),
   },
-  (table) => [uniqueIndex("uq_repositories_full_name").on(table.fullName)],
+  (table) => [
+    uniqueIndex("uq_repositories_full_name_account").on(table.fullName, table.accountId),
+  ],
 );
