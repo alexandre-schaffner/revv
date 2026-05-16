@@ -2,7 +2,6 @@
 
 import type {
   GlobalEvent,
-  Part,
   QuestionRejected,
   QuestionReplied,
   QuestionRequest,

@@ -25,7 +25,6 @@ import {
 } from "./walkthrough-stream.svelte";
 
 let ws: WebSocket | null = null;
-let connected = $state(false);
 let reconnectAttempts = $state(0);
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingThreadSync: string | null = null;
@@ -164,7 +163,6 @@ export function connect(token: string): void {
 
   ws.addEventListener("open", () => {
     const isReconnect = reconnectAttempts > 0;
-    connected = true;
     reconnectAttempts = 0;
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
@@ -196,7 +194,6 @@ export function connect(token: string): void {
   });
 
   ws.addEventListener("close", () => {
-    connected = false;
     ws = null;
     scheduleReconnect(token);
   });
@@ -256,6 +253,5 @@ export function disconnect(): void {
   }
   ws?.close(1000, "Client disconnecting");
   ws = null;
-  connected = false;
   reconnectAttempts = 0;
 }

@@ -33,7 +33,7 @@ export function fuzzyScore(query: string, text: string): number {
   for (let ti = 0; ti < lt.length && qi < lq.length; ti++) {
     if (lt[ti] === lq[qi]) {
       // Word-boundary bonus: start of string, or right after a separator.
-      if (ti === 0 || /[\s\-_/]/.test(lt[ti - 1]!)) score += 10;
+      if (ti === 0 || /[\s\-_/]/.test(lt[ti - 1] as string)) score += 10;
       score += 5;
       qi++;
     }

@@ -24,7 +24,6 @@ let availablePrCountsLoaded = $state(false);
 let selectedPrId = $state<string | null>(null);
 let searchQuery = $state("");
 let isLoading = $state(false);
-let lastSynced = $state<Date | null>(null);
 let archivedPrs = $state<PullRequest[]>([]);
 
 // Sidebar PR search uses the same fuzzy scorer as the Cmd+P palette so a
@@ -116,7 +115,6 @@ export function getSelectedPr(): PullRequest | null {
 
 export function setPullRequests(prs: PullRequest[]): void {
   pullRequests = prs;
-  lastSynced = new Date();
 }
 
 /**
@@ -139,7 +137,6 @@ export function mergePullRequests(incoming: PullRequest[]): void {
     if (!existingIds.has(pr.id)) merged.push(pr);
   }
   pullRequests = merged;
-  lastSynced = new Date();
 }
 
 export function setRepositories(repos: Repository[]): void {
@@ -419,6 +416,5 @@ export function reset(): void {
   selectedPrId = null;
   searchQuery = "";
   isLoading = false;
-  lastSynced = null;
   archivedPrs = [];
 }

@@ -12,7 +12,7 @@ function parseLsLine(line: string): FileEntry | null {
   // ls -la output: permissions links owner group size month day time name
   const parts = line.split(/\s+/);
   if (parts.length < 9) return null;
-  const permissions = parts[0]!;
+  const permissions = parts[0] as string;
   if (!permissions.startsWith("d") && !permissions.startsWith("-") && !permissions.startsWith("l"))
     return null;
   const name = parts.slice(8).join(" ");

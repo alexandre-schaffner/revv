@@ -11,10 +11,7 @@
 import type {
   Activity,
   ActivityKind,
-  ChatPlan,
-  ChatQuestion,
   ChatStreamFrame,
-  ChatSubagentInvocation,
   ChatTask,
   InteractionMode,
   NormalizedQuestion,

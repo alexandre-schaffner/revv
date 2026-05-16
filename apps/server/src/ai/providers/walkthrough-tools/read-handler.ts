@@ -11,7 +11,6 @@ import type {
   WalkthroughState,
 } from "@revv/shared";
 import { and, asc, eq } from "drizzle-orm";
-import type { Db } from "../../../db";
 import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import { walkthroughRatings } from "../../../db/schema/walkthrough-ratings";

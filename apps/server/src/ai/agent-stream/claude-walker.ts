@@ -1,7 +1,6 @@
 // ── Claude SDK content-block walker ─────────────────────────────────────────
 
 import type { WalkthroughTokenUsage } from "@revv/shared";
-import { normalizeToolName } from "@revv/shared";
 import type { NormalizedAgentEvent, NormalizedTask } from "./normalized-events";
 import {
   classifyToolCallShape,

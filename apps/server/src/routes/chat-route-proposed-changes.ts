@@ -8,7 +8,7 @@ import { Elysia, t } from "elysia";
 import { withDb } from "../effects/with-db";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
-import { AiService, resolveAgent } from "../services/Ai";
+import { resolveAgent } from "../services/Ai";
 import {
   ChatChangesPushService,
   ChatStreamingConflictError,

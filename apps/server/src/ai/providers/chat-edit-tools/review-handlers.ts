@@ -15,7 +15,6 @@ import { threadMessages } from "../../../db/schema/thread-messages";
 import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import { walkthroughRatings } from "../../../db/schema/walkthrough-ratings";
-import { walkthroughs } from "../../../db/schema/walkthroughs";
 import { blockIdFor, computeAnchorThreadId, computeIssueId } from "../walkthrough-tools";
 import {
   assertStillComplete,

@@ -9,7 +9,7 @@ import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { and, desc, eq } from "drizzle-orm";
 import { Effect } from "effect";
-import type { ChatHistoryEntry, ChatWalkthroughContext } from "../ai/prompts/chat";
+import type { ChatWalkthroughContext } from "../ai/prompts/chat";
 import type { ChatStreamFrame, RawChatStreamFrame } from "../ai/providers/chat-claude";
 import type { Db } from "../db/index";
 import { walkthroughIssues } from "../db/schema/walkthrough-issues";
