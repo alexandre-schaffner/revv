@@ -289,22 +289,22 @@ async function generateViaOpencode(
   // Create an ephemeral session. No MCP servers are attached, so the
   // daemon has only its built-in tools — and we don't allow any
   // tools-use round trips because we never re-prompt after the first turn.
-  const created = await client.session.create({
-    body: { title: `revv-suggestions-${Date.now()}` },
-    throwOnError: true,
-  });
+  const created = await client.session.create(
+    { title: `revv-suggestions-${Date.now()}` },
+    { throwOnError: true },
+  );
   const sessionId = created.data.id;
 
   try {
-    const promptResult = await client.session.prompt({
-      path: { id: sessionId },
-      body: {
+    const promptResult = await client.session.prompt(
+      {
+        sessionID: sessionId,
         parts: [{ type: "text", text: userMessage }],
         system: SYSTEM_PROMPT,
         ...(wireModel !== undefined ? { model: wireModel } : {}),
       },
-      throwOnError: true,
-    });
+      { throwOnError: true },
+    );
 
     const response = promptResult.data;
     const errObj = response.info.error;
@@ -335,10 +335,7 @@ async function generateViaOpencode(
     // Best-effort cleanup of the throwaway session so the daemon doesn't
     // accumulate stale state across PR opens.
     try {
-      await client.session.delete({
-        path: { id: sessionId },
-        throwOnError: false,
-      });
+      await client.session.delete({ sessionID: sessionId });
     } catch {
       /* ignore */
     }

@@ -18,7 +18,9 @@ interface ClaudeMessage {
   type: string;
   // Present on both `assistant` and `user` messages — sub-agent activity
   // inside the parent stream carries this so callers can attribute it back
-  // to the Task tool_use that spawned it.
+  // to the Agent tool_use that spawned it. (`Agent` was named `Task` in
+  // pre-0.3.x SDK builds; the walker only depends on the runtime id, not
+  // the tool name, so the rename was a no-op here.)
   parent_tool_use_id?: string | null;
   message?: {
     content?: Array<{
@@ -126,12 +128,33 @@ export async function walkClaudeMessages(
 ): Promise<WalkthroughTokenUsage | null> {
   let tokenUsage: WalkthroughTokenUsage | null = null;
 
-  // Tracks active Task (sub-agent) invocations by tool_use.id so we can:
+  // Tracks active Agent (sub-agent) invocations by tool_use.id so we can:
   //   (a) emit `subagent-end` when the matching tool_result arrives, and
   //   (b) stamp nested tool calls with `subagentProviderCallId` even on
   //       SDK builds where `parent_tool_use_id` is missing from the
   //       nested message (stack-based fallback).
   const activeSubagentCallIds = new Set<string>();
+
+  // Structured-task state (TaskCreate / TaskUpdate / TaskGet / TaskList).
+  // The SDK's task surface is CRUD-style, not snapshot-style, so the
+  // walker maintains the canonical list locally and re-emits a full
+  // `task-list-update` snapshot after each mutation — the consumer
+  // shape stays identical to the TodoWrite path. `claudeTasks` is keyed
+  // by the SDK-assigned task id, learned from the `TaskCreate`
+  // tool_result body. Until that result arrives, the create params live
+  // in `pendingClaudeTaskCreates` keyed by the tool_use.id.
+  const claudeTasks = new Map<string, NormalizedTask>();
+  const pendingClaudeTaskCreates = new Map<
+    string,
+    { subject: string; activeForm: string | null }
+  >();
+  const emitClaudeTaskSnapshot = (): void => {
+    emit({
+      kind: "task-list-update",
+      tasks: Array.from(claudeTasks.values()),
+      source: "claude",
+    });
+  };
 
   // Content-block indices in the CURRENT in-progress assistant message
   // that we've already emitted as deltas via `stream_event` messages.
@@ -176,7 +199,7 @@ export async function walkClaudeMessages(
 
     if (message.type === "assistant" && message.message?.content) {
       // Sub-agent attribution: if this assistant message carries a
-      // parent_tool_use_id we know the agent emitting it is a Task
+      // parent_tool_use_id we know the agent emitting it is an Agent
       // sub-agent. Stamp every tool-call inside.
       const parentId =
         typeof message.parent_tool_use_id === "string" &&
@@ -184,8 +207,11 @@ export async function walkClaudeMessages(
           ? message.parent_tool_use_id
           : null;
       // Fallback: if SDK build doesn't surface parent_tool_use_id on
-      // nested messages, attribute to *any* known-active Task. Safe
-      // because Claude only runs one Task at a time per turn.
+      // nested messages, attribute to *any* known-active Agent. Safe
+      // for the foreground case because Claude only runs one Agent at
+      // a time per turn; if `run_in_background: true` ever lands in
+      // Revv's chat surface this stops being safe and the SDK's
+      // `parent_tool_use_id` must be relied on.
       const fallbackParentId =
         parentId === null && activeSubagentCallIds.size > 0
           ? // Pick the first (only) active one
@@ -216,9 +242,9 @@ export async function walkClaudeMessages(
             data: "[redacted thinking]",
           });
         } else if (block.type === "tool_use" && typeof block.name === "string") {
-          // Surface-specific tool routing for TodoWrite / ExitPlanMode
-          // / Task. These don't flow through the generic tool-call
-          // event — they have their own normalized shapes.
+          // Surface-specific tool routing for TodoWrite / TaskCreate-family
+          // / ExitPlanMode / Agent. These don't flow through the generic
+          // tool-call event — they have their own normalized shapes.
           if (block.name === "TodoWrite") {
             const tasks = parseClaudeTodoWriteInput(block.input);
             emit({
@@ -226,6 +252,50 @@ export async function walkClaudeMessages(
               tasks,
               source: "claude",
             });
+            continue;
+          }
+          if (block.name === "TaskCreate") {
+            // The create params land in our state now, but the SDK
+            // assigns the taskId asynchronously and returns it in the
+            // matching tool_result. We can't render the new task until
+            // we know its id (TaskUpdate references taskId), so park
+            // the params in `pendingClaudeTaskCreates` and emit the
+            // snapshot once the tool_result arrives.
+            if (typeof block.id === "string") {
+              const info = parseClaudeTaskCreateInput(block.input);
+              if (info.subject.length > 0) {
+                pendingClaudeTaskCreates.set(block.id, {
+                  subject: info.subject,
+                  activeForm: info.activeForm,
+                });
+              }
+            }
+            continue;
+          }
+          if (block.name === "TaskUpdate") {
+            const update = parseClaudeTaskUpdateInput(block.input);
+            if (update.taskId.length > 0) {
+              const existing = claudeTasks.get(update.taskId);
+              if (existing) {
+                // `deleted` is a soft delete — drop the row.
+                if (update.status === "deleted") {
+                  claudeTasks.delete(update.taskId);
+                } else {
+                  claudeTasks.set(update.taskId, {
+                    id: update.taskId,
+                    content: update.subject ?? existing.content,
+                    activeForm: update.activeForm ?? existing.activeForm,
+                    status: update.status ?? existing.status,
+                    priority: existing.priority,
+                  });
+                }
+                emitClaudeTaskSnapshot();
+              }
+            }
+            continue;
+          }
+          if (block.name === "TaskGet" || block.name === "TaskList") {
+            // Pure reads — no state change, no event.
             continue;
           }
           if (block.name === "ExitPlanMode") {
@@ -240,8 +310,8 @@ export async function walkClaudeMessages(
             }
             continue;
           }
-          if (block.name === "Task" && typeof block.id === "string") {
-            const info = parseClaudeTaskInput(block.input);
+          if (block.name === "Agent" && typeof block.id === "string") {
+            const info = parseClaudeAgentInput(block.input);
             activeSubagentCallIds.add(block.id);
             emit({
               kind: "subagent-start",
@@ -272,14 +342,16 @@ export async function walkClaudeMessages(
       // the same turn (multi-step tool use) starts fresh.
       streamedContentBlockIndices.clear();
     } else if (message.type === "user" && message.message?.content) {
-      // `user` messages carry tool_result blocks. When one matches an
-      // active Task, emit `subagent-end` and drop the mapping.
+      // `user` messages carry tool_result blocks. Two correlations
+      // happen here:
+      //   - active Agent invocation → emit `subagent-end`
+      //   - pending TaskCreate → promote the pending row into
+      //     `claudeTasks` under the SDK-assigned taskId and emit a
+      //     fresh `task-list-update` snapshot.
       for (const block of message.message.content) {
-        if (
-          block.type === "tool_result" &&
-          typeof block.tool_use_id === "string" &&
-          activeSubagentCallIds.has(block.tool_use_id)
-        ) {
+        if (block.type !== "tool_result" || typeof block.tool_use_id !== "string") continue;
+
+        if (activeSubagentCallIds.has(block.tool_use_id)) {
           const resultText = extractClaudeToolResultText(block.content);
           emit({
             kind: "subagent-end",
@@ -289,6 +361,24 @@ export async function walkClaudeMessages(
             source: "claude",
           });
           activeSubagentCallIds.delete(block.tool_use_id);
+          continue;
+        }
+
+        const pending = pendingClaudeTaskCreates.get(block.tool_use_id);
+        if (pending) {
+          pendingClaudeTaskCreates.delete(block.tool_use_id);
+          if (block.is_error === true) continue;
+          const taskId = extractClaudeTaskCreateTaskId(block.content);
+          if (taskId !== null) {
+            claudeTasks.set(taskId, {
+              id: taskId,
+              content: pending.subject,
+              activeForm: pending.activeForm,
+              status: "pending",
+              priority: null,
+            });
+            emitClaudeTaskSnapshot();
+          }
         }
       }
     } else if (message.type === "result" && message.usage) {
@@ -438,11 +528,15 @@ function extractClaudePlanMarkdown(input: unknown): string | null {
 }
 
 /**
- * `Task.input` per Claude SDK:
- *   { subagent_type: string, description: string, prompt: string }
- * Some SDK builds use `subagentType` (camelCase). Accept both.
+ * `Agent.input` per Claude SDK (renamed from `Task` in 0.3.x):
+ *   { subagent_type?: string, description: string, prompt: string,
+ *     model?, mode?, isolation?, name?, team_name?, run_in_background? }
+ * Pre-0.3.x SDKs used `subagentType` (camelCase) and the tool name `Task`.
+ * The walker normalises only the three fields that carry into the
+ * `subagent-start` event; the rest are forwarded to the SDK but not
+ * surfaced to the chat UI.
  */
-function parseClaudeTaskInput(input: unknown): {
+function parseClaudeAgentInput(input: unknown): {
   subagentType: string;
   description: string;
   prompt: string;
@@ -462,6 +556,83 @@ function parseClaudeTaskInput(input: unknown): {
     (typeof obj.description === "string" && obj.description) || fallback.description;
   const prompt = (typeof obj.prompt === "string" && obj.prompt) || fallback.prompt;
   return { subagentType, description, prompt };
+}
+
+/**
+ * `TaskCreate.input` per Claude SDK 0.3.x:
+ *   { subject: string, description: string, activeForm?: string, metadata? }
+ * Maps onto the existing `NormalizedTask` shape — `subject` becomes the
+ * task `content`. `activeForm` carries through; the SDK's separate
+ * `description` is dropped because the chat UI's task row only renders
+ * the short label.
+ */
+function parseClaudeTaskCreateInput(input: unknown): {
+  subject: string;
+  activeForm: string | null;
+} {
+  if (input === null || typeof input !== "object") return { subject: "", activeForm: null };
+  const obj = input as Record<string, unknown>;
+  const subject = typeof obj.subject === "string" ? obj.subject : "";
+  const activeForm =
+    typeof obj.activeForm === "string" && obj.activeForm.length > 0 ? obj.activeForm : null;
+  return { subject, activeForm };
+}
+
+/**
+ * `TaskUpdate.input` per Claude SDK 0.3.x. We accept the subset of
+ * fields that map onto `NormalizedTask`. `addBlocks` / `addBlockedBy` /
+ * `owner` / `metadata` are forwarded to the SDK but not surfaced.
+ *
+ * The SDK exposes a `deleted` pseudo-status for soft deletes — the
+ * walker surfaces it as `"deleted"` so the caller drops the row.
+ */
+function parseClaudeTaskUpdateInput(input: unknown): {
+  taskId: string;
+  subject?: string;
+  activeForm?: string | null;
+  status?: NormalizedTask["status"] | "deleted";
+} {
+  if (input === null || typeof input !== "object") return { taskId: "" };
+  const obj = input as Record<string, unknown>;
+  const taskId = typeof obj.taskId === "string" ? obj.taskId : "";
+  const result: ReturnType<typeof parseClaudeTaskUpdateInput> = { taskId };
+  if (typeof obj.subject === "string") result.subject = obj.subject;
+  if (typeof obj.activeForm === "string") {
+    result.activeForm = obj.activeForm.length > 0 ? obj.activeForm : null;
+  }
+  if (obj.status === "deleted") {
+    result.status = "deleted";
+  } else if (obj.status !== undefined) {
+    // Only set `status` when the SDK actually supplied one; otherwise
+    // `normalizeTaskStatus` would default to `"pending"` and clobber an
+    // in_progress/completed row on a partial update.
+    result.status = normalizeTaskStatus(obj.status);
+  }
+  return result;
+}
+
+/**
+ * Extract the SDK-assigned `task.id` from a `TaskCreate` tool_result.
+ * The SDK serializes the result body as JSON text inside the tool_result
+ * content; the walker re-parses it to learn the id so subsequent
+ * `TaskUpdate` calls (which reference the id) can be applied.
+ */
+function extractClaudeTaskCreateTaskId(
+  content: string | Array<{ type: string; text?: string }> | undefined,
+): string | null {
+  const text = extractClaudeToolResultText(content).trim();
+  if (text.length === 0) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== "object") return null;
+  const task = (parsed as Record<string, unknown>).task;
+  if (task === null || typeof task !== "object") return null;
+  const id = (task as Record<string, unknown>).id;
+  return typeof id === "string" && id.length > 0 ? id : null;
 }
 
 /**

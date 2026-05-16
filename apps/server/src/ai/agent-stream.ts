@@ -39,7 +39,7 @@
 
 // Re-export the SDK's Part type for any other file in this package that wants
 // to talk about opencode parts without depending on the SDK directly.
-export type { Part } from "@opencode-ai/sdk";
+export type { Part } from "@opencode-ai/sdk/v2";
 export * from "./agent-stream/agent-turn";
 export * from "./agent-stream/claude-walker";
 export * from "./agent-stream/fluid-chunker";

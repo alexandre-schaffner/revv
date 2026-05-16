@@ -1,6 +1,7 @@
 import type { WalkthroughStreamEvent } from "@revv/shared";
 import { authHeaders } from "$lib/utils/session-token";
 import { parseSSEBuffer } from "$lib/utils/sse-parser";
+import { wtTrace } from "$lib/utils/wt-trace";
 
 /**
  * No-bytes inactivity timeout — the stream is considered dead.
@@ -51,6 +52,7 @@ export interface RunWalkthroughSseOptions {
  *  - `AbortError` when the signal is aborted (caller must ignore this)
  */
 export async function runWalkthroughSse(opts: RunWalkthroughSseOptions): Promise<void> {
+  wtTrace("sse", `fetch start url=${opts.url}`);
   const res = await fetch(opts.url, {
     headers: authHeaders(),
     signal: opts.signal,
@@ -65,6 +67,7 @@ export async function runWalkthroughSse(opts: RunWalkthroughSseOptions): Promise
     } catch {
       /* use default */
     }
+    wtTrace("sse", `fetch failed status=${res.status} message=${message}`);
     throw new Error(message);
   }
 
@@ -75,10 +78,17 @@ export async function runWalkthroughSse(opts: RunWalkthroughSseOptions): Promise
 
   let lastEventTime = Date.now();
   let lastProgressEventTime = Date.now();
+  let totalBytes = 0;
+  let totalEvents = 0;
+  let totalReads = 0;
+  wtTrace("sse", "reader ready");
 
   while (true) {
     const { done, value } = await reader.read();
-    if (done) break;
+    if (done) {
+      wtTrace("sse", `reader done reads=${totalReads} bytes=${totalBytes} events=${totalEvents}`);
+      break;
+    }
 
     // Any bytes from the server — including `: ping` heartbeats that the SSE
     // parser strips as comments — prove the transport is alive. Reset the
@@ -88,6 +98,8 @@ export async function runWalkthroughSse(opts: RunWalkthroughSseOptions): Promise
     // structured `error` event.
     if (value && value.byteLength > 0) {
       lastEventTime = Date.now();
+      totalBytes += value.byteLength;
+      totalReads += 1;
     }
 
     buffer += decoder.decode(value, { stream: true });
@@ -96,10 +108,17 @@ export async function runWalkthroughSse(opts: RunWalkthroughSseOptions): Promise
     buffer = result.remaining;
 
     if (result.events.length > 0) {
+      totalEvents += result.events.length;
+      const types = result.events.map((e) => e.type).join(",");
+      wtTrace(
+        "sse",
+        `batch parsed count=${result.events.length} types=[${types}] totalEvents=${totalEvents}`,
+      );
       const hasProgress = result.events.some((e) => e.type !== "exploration");
       if (hasProgress) {
         lastProgressEventTime = Date.now();
       } else if (Date.now() - lastProgressEventTime > EXPLORATION_STALL_MS) {
+        wtTrace("sse", "exploration stall — throwing");
         throw new Error(
           opts.explorationStallMessage ??
             "Walkthrough stalled — the model explored files without producing output.",
@@ -110,19 +129,28 @@ export async function runWalkthroughSse(opts: RunWalkthroughSseOptions): Promise
     } else if (Date.now() - lastEventTime > INACTIVITY_TIMEOUT_MS) {
       // Reachable only if even heartbeats have stopped — the connection is
       // dead, not just the model thinking.
+      wtTrace(
+        "sse",
+        `inactivity timeout sinceLastBytes=${Date.now() - lastEventTime}ms — throwing`,
+      );
       throw new Error(
         opts.inactivityMessage ??
           "Walkthrough connection lost — no data from server for 90 seconds.",
       );
     }
 
-    if (result.done) break;
+    if (result.done) {
+      wtTrace("sse", `parser saw [DONE] — closing loop`);
+      break;
+    }
   }
 
   // Flush any trailing partial event left in the buffer on clean close.
   if (buffer.trim()) {
     const result = parseSSEBuffer<WalkthroughStreamEvent>(`${buffer}\n\n`);
     if (result.events.length > 0) {
+      const types = result.events.map((e) => e.type).join(",");
+      wtTrace("sse", `trailing flush count=${result.events.length} types=[${types}]`);
       opts.onEvents(result.events);
     }
   }

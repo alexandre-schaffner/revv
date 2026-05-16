@@ -201,10 +201,10 @@ export function streamWalkthroughViaOpencodeMCP(
           if (!sessionId) return;
           const client = await params.deps.client();
           if (!client) return;
-          // `throwOnError: false` so the 404-when-already-done race
-          // surfaces as `result.error` instead of an exception.
+          // Omitting `throwOnError` lets the 404-when-already-done
+          // race surface as `result.error` instead of an exception.
           const abortResult = await client.session.abort({
-            path: { id: sessionId },
+            sessionID: sessionId,
           });
           if (abortResult.error) {
             const status = abortResult.response.status;
@@ -240,17 +240,15 @@ export function streamWalkthroughViaOpencodeMCP(
           // not `connected` so the user sees a real error instead of
           // the keepalive's "waiting" rows with no progress.
           const mcpResult = await client.mcp.add({
-            body: {
-              name: WALKTHROUGH_MCP_SERVER,
-              config: {
-                type: "remote",
-                url: mcpUrl,
-                headers: {
-                  Authorization: `Bearer ${sessionToken}`,
-                },
+            directory: params.worktreePath,
+            name: WALKTHROUGH_MCP_SERVER,
+            config: {
+              type: "remote",
+              url: mcpUrl,
+              headers: {
+                Authorization: `Bearer ${sessionToken}`,
               },
             },
-            query: { directory: params.worktreePath },
           });
           if (mcpResult.error) {
             const detail =
@@ -276,16 +274,16 @@ export function streamWalkthroughViaOpencodeMCP(
           );
 
           // ── 2. Create opencode session ──────────────────────────
-          const created = await client.session.create({
-            body: {
+          const created = await client.session.create(
+            {
+              directory: params.worktreePath,
               title: `walkthrough-${params.walkthroughId}`,
               ...(params.continuation?.opencodeSessionId !== undefined
                 ? { parentID: params.continuation.opencodeSessionId }
                 : {}),
             },
-            query: { directory: params.worktreePath },
-            throwOnError: true,
-          });
+            { throwOnError: true },
+          );
           sessionId = created.data.id;
           debug("walkthrough-opencode-mcp", "created session:", sessionId);
           if (params.onSessionId) params.onSessionId(sessionId);
@@ -457,20 +455,22 @@ export function streamWalkthroughViaOpencodeMCP(
 
           const wireModel = parseOpencodeModel(model);
           const promptResult = await client.session
-            .prompt({
-              path: { id: sessionId },
-              body: {
+            .prompt(
+              {
+                sessionID: sessionId,
+                directory: params.worktreePath,
                 parts: [{ type: "text", text: userMessage }],
                 system: WALKTHROUGH_MCP_SYSTEM_PROMPT,
                 ...(wireModel !== undefined ? { model: wireModel } : {}),
               },
-              query: { directory: params.worktreePath },
-              // Thread the harness signal so timeout/cancel tears
-              // down the HTTP call even if the daemon `/abort`
-              // doesn't promptly close the long-poll.
-              signal: ctx.signal,
-              throwOnError: true,
-            })
+              {
+                // Thread the harness signal so timeout/cancel tears
+                // down the HTTP call even if the daemon `/abort`
+                // doesn't promptly close the long-poll.
+                signal: ctx.signal,
+                throwOnError: true,
+              },
+            )
             .finally(() => {
               ctx.signal.removeEventListener("abort", onTurnAbort);
               sseAbort.abort();

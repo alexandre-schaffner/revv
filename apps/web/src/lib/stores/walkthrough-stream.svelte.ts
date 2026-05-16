@@ -21,6 +21,7 @@ import { api } from "$lib/api/client";
 import { runWalkthroughSse } from "$lib/services/walkthrough-sse";
 import { updateRepoCloneStatus } from "$lib/stores/prs.svelte";
 import { authHeaders } from "$lib/utils/session-token";
+import { wtTrace } from "$lib/utils/wt-trace";
 import {
   applyEvents,
   clearAnimationTrackers,
@@ -169,6 +170,7 @@ export function prepareEntry(prId: string): void {
 export function abortPr(prId: string, intentional: boolean = true): void {
   const ctrl = controllers.get(prId);
   if (ctrl) {
+    wtTrace("lifecycle", `abortPr prId=${prId} intentional=${intentional}`);
     ctrl.intentional = intentional;
     ctrl.reader?.cancel().catch(() => {});
     ctrl.reader = null;
@@ -214,6 +216,10 @@ function enforceStreamCap(): void {
 function scheduleReconciliationPoll(prId: string, attempt = 0): void {
   const MAX_ATTEMPTS = 8;
   const delayMs = Math.min(1_000 * 2 ** attempt, 30_000);
+  wtTrace(
+    "lifecycle",
+    `scheduleReconciliationPoll prId=${prId} attempt=${attempt} delayMs=${delayMs}`,
+  );
 
   if (attempt === 0) {
     updateEntry(prId, (e) => {
@@ -248,6 +254,7 @@ function scheduleReconciliationPoll(prId: string, attempt = 0): void {
 // ── Core streaming ──────────────────────────────────────────────────────────
 
 export async function streamWalkthrough(prId: string): Promise<void> {
+  wtTrace("lifecycle", `streamWalkthrough enter prId=${prId}`);
   store.activePrId = prId;
   stopClonePoll(prId);
 
@@ -260,7 +267,10 @@ export async function streamWalkthrough(prId: string): Promise<void> {
     existing?.streamStartedAt != null &&
     !existing.doneReceived &&
     Date.now() - existing.streamStartedAt > STALE_STREAM_MS;
-  if (hasController && !isStale) return;
+  if (hasController && !isStale) {
+    wtTrace("lifecycle", `streamWalkthrough skip prId=${prId} reason=already-streaming`);
+    return;
+  }
 
   if (
     existing &&
@@ -268,8 +278,10 @@ export async function streamWalkthrough(prId: string): Promise<void> {
     existing.blocks.length > 0 &&
     existing.doneReceived &&
     !existing.streamError
-  )
+  ) {
+    wtTrace("lifecycle", `streamWalkthrough skip prId=${prId} reason=already-complete`);
     return;
+  }
 
   abortPr(prId);
   enforceStreamCap();
@@ -398,6 +410,7 @@ export async function prefetchWalkthrough(prId: string): Promise<void> {
 // ── Cache hydration ─────────────────────────────────────────────────────────
 
 export async function hydrateFromCache(prId: string): Promise<boolean> {
+  wtTrace("lifecycle", `hydrateFromCache enter prId=${prId}`);
   const existing = store.entries.get(prId);
   if (
     existing &&
@@ -406,6 +419,7 @@ export async function hydrateFromCache(prId: string): Promise<boolean> {
     existing.doneReceived &&
     !existing.streamError
   ) {
+    wtTrace("lifecycle", `hydrateFromCache skip prId=${prId} reason=already-complete`);
     store.activePrId = prId;
     return true;
   }
@@ -415,7 +429,10 @@ export async function hydrateFromCache(prId: string): Promise<boolean> {
       headers: authHeaders(),
       credentials: "include",
     });
-    if (!res.ok) return false;
+    if (!res.ok) {
+      wtTrace("lifecycle", `hydrateFromCache prId=${prId} httpStatus=${res.status} → false`);
+      return false;
+    }
 
     const body = (await res.json()) as
       | { cached: false }
@@ -437,11 +454,18 @@ export async function hydrateFromCache(prId: string): Promise<boolean> {
           };
         };
 
-    if (!body.cached) return false;
+    if (!body.cached) {
+      wtTrace("lifecycle", `hydrateFromCache prId=${prId} body.cached=false → false`);
+      return false;
+    }
 
     const wt = body.walkthrough;
     const status = body.status ?? "complete";
     const isGenerating = status === "generating";
+    wtTrace(
+      "lifecycle",
+      `hydrateFromCache prId=${prId} status=${status} blocks=${wt.blocks.length} issues=${wt.issues.length} ratings=${wt.ratings.length} semanticSteps=${wt.semanticSteps?.length ?? 0} hasSentiment=${wt.sentiment !== null && wt.sentiment !== undefined}`,
+    );
 
     const entry = store.entries.get(prId) ?? freshEntry();
     const hasRealSummary = wt.summary !== "";

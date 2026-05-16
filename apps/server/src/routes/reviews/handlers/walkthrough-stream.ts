@@ -122,32 +122,79 @@ export function walkthroughStreamHandler(ctx: {
     let highestEmittedPhase: WalkthroughPipelinePhase = "none";
     let terminated = false;
 
+    // Diagnostic-only event ordinal (per-connection). Pairs with the
+    // server-side `nextSeq` on ActiveJob and the client's lastSeenSeq so we
+    // can correlate three vantage points: (1) what fanOut emitted,
+    // (2) what this writer attempted, (3) what the client received.
+    let forwardOrd = 0;
+    const tracePrId = ctx.params.id;
+
     const forwardEvent = (event: WalkthroughStreamEvent): void => {
-      if (terminated) return;
+      const ord = forwardOrd++;
+      if (terminated) {
+        debug(
+          "wt-trace",
+          `forward-skip pr=${tracePrId} ord=${ord} type=${event.type} reason=terminated`,
+        );
+        return;
+      }
 
       switch (event.type) {
         case "summary":
-          if (seenSummary) return;
+          if (seenSummary) {
+            debug("wt-trace", `forward-dedupe pr=${tracePrId} ord=${ord} type=summary reason=seen`);
+            return;
+          }
           seenSummary = true;
           break;
         case "semantic-step":
-          if (seenSemanticSteps.has(event.data.semanticStepIndex)) return;
+          if (seenSemanticSteps.has(event.data.semanticStepIndex)) {
+            debug(
+              "wt-trace",
+              `forward-dedupe pr=${tracePrId} ord=${ord} type=semantic-step idx=${event.data.semanticStepIndex} reason=seen`,
+            );
+            return;
+          }
           seenSemanticSteps.add(event.data.semanticStepIndex);
           break;
         case "block":
-          if (seenBlocks.has(event.data.id)) return;
+          if (seenBlocks.has(event.data.id)) {
+            debug(
+              "wt-trace",
+              `forward-dedupe pr=${tracePrId} ord=${ord} type=block id=${event.data.id} reason=seen`,
+            );
+            return;
+          }
           seenBlocks.add(event.data.id);
           break;
         case "issue":
-          if (seenIssues.has(event.data.id)) return;
+          if (seenIssues.has(event.data.id)) {
+            debug(
+              "wt-trace",
+              `forward-dedupe pr=${tracePrId} ord=${ord} type=issue id=${event.data.id} reason=seen`,
+            );
+            return;
+          }
           seenIssues.add(event.data.id);
           break;
         case "rating":
-          if (seenRatingAxes.has(event.data.axis)) return;
+          if (seenRatingAxes.has(event.data.axis)) {
+            debug(
+              "wt-trace",
+              `forward-dedupe pr=${tracePrId} ord=${ord} type=rating axis=${event.data.axis} reason=seen`,
+            );
+            return;
+          }
           seenRatingAxes.add(event.data.axis);
           break;
         case "sentiment":
-          if (seenSentiment) return;
+          if (seenSentiment) {
+            debug(
+              "wt-trace",
+              `forward-dedupe pr=${tracePrId} ord=${ord} type=sentiment reason=seen`,
+            );
+            return;
+          }
           seenSentiment = true;
           break;
         case "phase:advanced":
@@ -155,14 +202,21 @@ export function walkthroughStreamHandler(ctx: {
           // client past what we've already told it. Guards the replay
           // window where a live phase:advanced and the snapshot's
           // lastCompletedPhase can both arrive.
-          if (PHASE_RANK[event.data.lastCompletedPhase] <= PHASE_RANK[highestEmittedPhase]) return;
+          if (PHASE_RANK[event.data.lastCompletedPhase] <= PHASE_RANK[highestEmittedPhase]) {
+            debug(
+              "wt-trace",
+              `forward-dedupe pr=${tracePrId} ord=${ord} type=phase:advanced phase=${event.data.lastCompletedPhase} highest=${highestEmittedPhase} reason=non-monotonic`,
+            );
+            return;
+          }
           highestEmittedPhase = event.data.lastCompletedPhase;
           break;
         default:
           break;
       }
 
-      writer.send(event);
+      const ok = writer.send(event);
+      debug("wt-trace", `forward-send pr=${tracePrId} ord=${ord} type=${event.type} ok=${ok}`);
 
       if (event.type === "done") {
         terminated = true;

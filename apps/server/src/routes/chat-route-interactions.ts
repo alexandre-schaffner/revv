@@ -228,38 +228,32 @@ export const chatInteractionRoutes = new Elysia()
             });
           }
         } else {
-          // opencode: POST to the daemon. `/reject` for explicit
-          // dismissal; `/reply` with answers otherwise. The daemon's
-          // follow-up SSE event will hit subscribeOpencodeStream and
-          // fall through to the idempotent decideQuestion in the
-          // stream wrapper — no double-write because the row is
-          // already non-pending.
+          // opencode: hit the daemon via `client.question.{reply,reject}`.
+          // The daemon's follow-up SSE event will hit
+          // subscribeOpencodeStream and fall through to the idempotent
+          // decideQuestion in the stream wrapper — no double-write because
+          // the row is already non-pending.
           //
-          // Direct fetch instead of the SDK client because the v1
-          // `OpencodeClient` doesn't expose `.question.{reply,reject}`
-          // — those endpoints landed in the v2 SDK. The daemon itself
-          // supports them; we just talk to it via raw HTTP using the
-          // supervisor's endpoint info.
-          const endpoint = await AppRuntime.runPromise(
-            Effect.flatMap(OpencodeSupervisor, (s) => s.ensureRunning()),
+          // 404 = the daemon already cleared the request (e.g. the agent
+          // timed out). Treat as success in both branches.
+          const client = await AppRuntime.runPromise(
+            Effect.gen(function* () {
+              const supervisor = yield* OpencodeSupervisor;
+              yield* supervisor.ensureRunning();
+              return yield* supervisor.client();
+            }),
           );
-          const baseUrl = `http://${endpoint.hostname}:${endpoint.port}`;
-          const authHeader = `Basic ${btoa(`opencode:${endpoint.password}`)}`;
+          if (!client) {
+            throw new Error("opencode daemon not running");
+          }
           if (finalStatus === "rejected") {
-            const res = await fetch(
-              `${baseUrl}/question/${encodeURIComponent(row.providerRequestId)}/reject`,
-              {
-                method: "POST",
-                headers: {
-                  Authorization: authHeader,
-                  "Content-Type": "application/json",
-                },
-              },
-            );
-            if (!res.ok && res.status !== 404) {
-              // 404 = the daemon already cleared the request
-              // (perhaps the agent timed out). Treat as success.
-              throw new Error(`opencode reject failed: ${res.status} ${res.statusText}`);
+            const result = await client.question.reject({
+              requestID: row.providerRequestId,
+            });
+            if (result.error && result.response.status !== 404) {
+              throw new Error(
+                `opencode reject failed: ${result.response.status} ${result.response.statusText}`,
+              );
             }
           } else {
             // Reconstruct opencode's positional `Array<Array<string>>`
@@ -269,19 +263,14 @@ export const chatInteractionRoutes = new Elysia()
             const orderedAnswers: Array<Array<string>> = row.questions.map((q) =>
               Array.from(answersMap[q.question] ?? []),
             );
-            const res = await fetch(
-              `${baseUrl}/question/${encodeURIComponent(row.providerRequestId)}/reply`,
-              {
-                method: "POST",
-                headers: {
-                  Authorization: authHeader,
-                  "Content-Type": "application/json",
-                },
-                body: JSON.stringify({ answers: orderedAnswers }),
-              },
-            );
-            if (!res.ok && res.status !== 404) {
-              throw new Error(`opencode reply failed: ${res.status} ${res.statusText}`);
+            const result = await client.question.reply({
+              requestID: row.providerRequestId,
+              answers: orderedAnswers,
+            });
+            if (result.error && result.response.status !== 404) {
+              throw new Error(
+                `opencode reply failed: ${result.response.status} ${result.response.statusText}`,
+              );
             }
           }
         }

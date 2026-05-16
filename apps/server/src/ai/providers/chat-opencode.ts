@@ -153,21 +153,19 @@ export function streamChatViaOpencode(
         const registrationName = `${CHAT_CONTEXT_MCP_SERVER}-${opts.prId}`;
         try {
           // `mcp.add` returns 200 with `{ [name]: McpStatus }`. We
-          // pass `throwOnError: false` so we can inspect the status —
-          // the daemon also returns 200 for failed connections, and
-          // the only structured signal is the embedded status.
+          // omit `throwOnError` so we can inspect the status — the
+          // daemon also returns 200 for failed connections, and the
+          // only structured signal is the embedded status.
           const result = await client.mcp.add({
-            body: {
-              name: registrationName,
-              config: {
-                type: "remote",
-                url: mcpUrl,
-                headers: {
-                  Authorization: `Bearer ${chatMcpToken}`,
-                },
+            directory: opts.cwd,
+            name: registrationName,
+            config: {
+              type: "remote",
+              url: mcpUrl,
+              headers: {
+                Authorization: `Bearer ${chatMcpToken}`,
               },
             },
-            query: { directory: opts.cwd },
           });
           if (result.error) {
             throw new Error(
@@ -198,11 +196,10 @@ export function streamChatViaOpencode(
         // passed to the daemon so its built-in tools (Read/Edit/Bash)
         // operate on our chat worktree.
         if (!sessionId) {
-          const created = await client.session.create({
-            body: { title: `revv-chat-${opts.prId}` },
-            query: { directory: opts.cwd },
-            throwOnError: true,
-          });
+          const created = await client.session.create(
+            { directory: opts.cwd, title: `revv-chat-${opts.prId}` },
+            { throwOnError: true },
+          );
           sessionId = created.data.id;
           // Await: this commits the SQLite row that lets the next
           // chat turn resume this session. Posting before the row
@@ -341,13 +338,13 @@ export function streamChatViaOpencode(
           abortSession: async () => {
             const c = await opts.deps.client();
             if (!c) return;
-            // `throwOnError: false` so the 404-when-already-done
-            // race surfaces as `result.error` instead of an
-            // exception we'd have to swallow. The SDK types the
-            // 404 path as NotFoundError — we ignore both branches
-            // since either way the daemon side has stopped.
+            // Omitting `throwOnError` lets the 404-when-already-done
+            // race surface as `result.error` instead of an exception
+            // we'd have to swallow. The SDK types the 404 path as
+            // NotFoundError — we ignore both branches since either
+            // way the daemon side has stopped.
             const abortResult = await c.session.abort({
-              path: { id: turnSessionId },
+              sessionID: turnSessionId,
             });
             if (abortResult.error) {
               const status = abortResult.response.status;
@@ -406,9 +403,10 @@ export function streamChatViaOpencode(
 
             const wireModel = parseOpencodeModel(opts.model);
             const promptResult = await client.session
-              .prompt({
-                path: { id: turnSessionId },
-                body: {
+              .prompt(
+                {
+                  sessionID: turnSessionId,
+                  directory: opts.cwd,
                   parts: [{ type: "text", text: opts.message }],
                   ...(opts.resumeSessionId ? {} : { system: opts.systemPrompt }),
                   ...(wireModel !== undefined ? { model: wireModel } : {}),
@@ -418,14 +416,15 @@ export function streamChatViaOpencode(
                   // failed with AgentUnavailableError.
                   ...(planMode ? { agent: "plan" } : {}),
                 },
-                query: { directory: opts.cwd },
-                // Thread the harness signal so a timeout or
-                // external cancel tears down the HTTP call even
-                // if the daemon's `/abort` endpoint doesn't
-                // promptly close the long-poll.
-                signal: ctx.signal,
-                throwOnError: true,
-              })
+                {
+                  // Thread the harness signal so a timeout or
+                  // external cancel tears down the HTTP call even
+                  // if the daemon's `/abort` endpoint doesn't
+                  // promptly close the long-poll.
+                  signal: ctx.signal,
+                  throwOnError: true,
+                },
+              )
               .finally(() => {
                 ctx.signal.removeEventListener("abort", onTurnAbort);
                 sseAbort.abort();

@@ -92,9 +92,10 @@ export interface StreamChatViaClaudeOptions {
 
 // Tool-use blocks we surface as tool entries in the chat UI. Anything not in
 // this set is silently consumed (e.g. system messages, telemetry tools).
-// Note: TodoWrite, Task, and ExitPlanMode have dedicated event paths and are
-// NOT surfaced as plain activity entries — they route through the
-// task-list / subagent-start / plan-presented frames.
+// Note: TodoWrite / TaskCreate / TaskUpdate / TaskGet / TaskList, Agent, and
+// ExitPlanMode have dedicated event paths and are NOT surfaced as plain
+// activity entries — they route through the task-list / subagent-start /
+// plan-presented frames.
 const SURFACED_TOOLS = new Set(["Read", "Grep", "Glob", "LS", "Write", "Edit", "Bash"]);
 
 const CHAT_CONTEXT_MCP_SERVER = "revv-chat-context";
@@ -183,11 +184,16 @@ export function streamChatViaClaude(
             })
           : null;
 
-        // `Task` enables sub-agent delegation; `TodoWrite` enables the
-        // agent's own task list; `ExitPlanMode` is required for the SDK
-        // to terminate plan-mode cleanly; `askUserQuestion` lets the
-        // agent surface a multiple-choice prompt that we intercept via
-        // `canUseTool` (see below) and resolve from the user's UI.
+        // `Agent` enables sub-agent delegation (renamed from `Task` in
+        // claude-agent-sdk 0.3.x — the old name no longer exists in the
+        // SDK's tool surface). `TodoWrite` AND the `TaskCreate`/`TaskGet`/
+        // `TaskUpdate`/`TaskList` family both enable the agent's own task
+        // list; the SDK exposes both, the model picks based on its system
+        // prompt, and the walker handles either surface. `ExitPlanMode`
+        // is required for the SDK to terminate plan-mode cleanly;
+        // `askUserQuestion` lets the agent surface a multiple-choice
+        // prompt that we intercept via `canUseTool` (see below) and
+        // resolve from the user's UI.
         const allowedTools = [
           "Read",
           "Grep",
@@ -195,7 +201,11 @@ export function streamChatViaClaude(
           "Write",
           "Edit",
           "Bash",
-          "Task",
+          "Agent",
+          "TaskCreate",
+          "TaskGet",
+          "TaskUpdate",
+          "TaskList",
           "TodoWrite",
           "ExitPlanMode",
           "askUserQuestion",

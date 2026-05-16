@@ -5,57 +5,58 @@
    Light theme (default)
    ────────────────────────────────────────────────────────── */
 /* ──────────────────────────────────────────────────────────
-   Light theme — "neutral surface, deep teal"
-   - Backgrounds stay nearly neutral (very faint warm tint, not bone)
-     so the canvas reads clean. The single distinctive move is the
-     deep teal accent (#0f766e) replacing the generic Tailwind blue
-     every other dashboard ships. Distinctive without being precious.
+   Light theme (default) — "warm paper, deep teal accent"
+   - Background stays warm off-white (#faf9f6) like the
+     onboarding, so the canvas reads as a page rather than
+     a screen. The distinctive move is the deep teal accent
+     (#0f766e) replacing the generic Tailwind blue every
+     other dashboard ships.
    - Severity colors deepen slightly so reds/greens read as
      considered, not stock-Tailwind-bright.
    ────────────────────────────────────────────────────────── */
 :root {
-  /* shadcn-svelte (HSL triplets — neutral bg, deep teal primary) */
-  --background: 0 0% 100%;
-  --foreground: 240 8% 10%; /* #18181c */
-  --card: 0 0% 100%;
-  --card-foreground: 240 8% 10%;
-  --popover: 240 5% 96%;
-  --popover-foreground: 240 8% 10%;
+  /* shadcn-svelte (HSL triplets — warm paper bg, deep teal primary) */
+  --background: 36 14% 98%;
+  --foreground: 28 12% 12%;
+  --card: 36 14% 98%;
+  --card-foreground: 28 12% 12%;
+  --popover: 36 10% 95%;
+  --popover-foreground: 28 12% 12%;
   --primary: 174 78% 26%; /* #0f766e teal-700 */
   --primary-foreground: 0 0% 100%;
-  --secondary: 240 5% 96%;
-  --secondary-foreground: 240 6% 12%;
-  --muted: 240 5% 96%;
-  --muted-foreground: 240 4% 44%;
-  --accent: 240 5% 96%;
-  --accent-foreground: 240 6% 12%;
+  --secondary: 36 10% 95%;
+  --secondary-foreground: 28 10% 15%;
+  --muted: 36 10% 95%;
+  --muted-foreground: 28 6% 46%;
+  --accent: 36 10% 95%;
+  --accent-foreground: 28 10% 15%;
   --destructive: 0 72% 42%; /* #b91c1c */
   --destructive-foreground: 0 0% 100%;
-  --border: 240 6% 90%;
-  --input: 240 6% 90%;
+  --border: 36 12% 88%;
+  --input: 36 12% 88%;
   --ring: 174 78% 26%;
   --radius: 0.5rem;
 
-  /* Revv palette — near-neutral surfaces, teal brand */
-  --revv-bg-primary: #ffffff;
-  --revv-bg-secondary: #fafafa; /* neutral light gray — sidebars, panels */
-  --revv-bg-tertiary: #f2f2f3; /* neutral mid gray — tracks, hover */
-  --revv-bg-elevated: #ffffff;
-  --revv-border: #e0e0e2;
-  --revv-border-subtle: #ececee;
-  --revv-text-primary: #18181c;
-  --revv-text-secondary: #55555d;
-  --revv-text-muted: #8a8a92;
+  /* Revv palette — warm paper surfaces, teal brand */
+  --revv-bg-primary: #faf9f6;
+  --revv-bg-secondary: #f4f1eb; /* warm light gray — sidebars, panels */
+  --revv-bg-tertiary: #eae6de; /* warm mid gray — tracks, hover */
+  --revv-bg-elevated: #faf9f6;
+  --revv-border: #e4e0d8;
+  --revv-border-subtle: #ece8e0;
+  --revv-text-primary: #2a2825;
+  --revv-text-secondary: #5a5650;
+  --revv-text-muted: #9a958c;
   --revv-accent: #0f766e; /* teal-700 — the one distinctive move */
   --revv-accent-hover: #115e59; /* teal-800 */
   --revv-success: #15803d; /* green-700 — slightly deeper than Tailwind 500 */
   --revv-warning: #b45309; /* amber-700 — keep */
   --revv-danger: #b91c1c; /* red-700 — slightly deeper */
 
-  /* Diff canvas — neutral with subtle bias */
-  --revv-diff-bg: #fafbfc;
-  --revv-diff-gutter-bg: #f5f5f6;
-  --revv-diff-gutter-border: #e5e5e7;
+  /* Diff canvas — warm with subtle bias */
+  --revv-diff-bg: #f4f1eb;
+  --revv-diff-gutter-bg: #edeae3;
+  --revv-diff-gutter-border: #e4e0d8;
 
   /* Addition lines — clean green, slightly deeper than stock */
   --revv-diff-add-bg: #e6f4ec;
@@ -72,7 +73,7 @@
   --revv-diff-del-text: #8e1c1c;
 
   /* Context line hover */
-  --revv-diff-ctx-bg-hover: #f2f2f3;
+  --revv-diff-ctx-bg-hover: #eae6de;
   --revv-diff-selected-bg: rgba(15, 118, 110, 0.08); /* teal selection */
 
   /* Gutter markers — open pinned to brand teal */
@@ -84,44 +85,44 @@
   --revv-marker-resolved: #a8a18d;
 
   /* Line action floating pill */
-  --revv-pill-bg: rgba(255, 255, 255, 0.97);
-  --revv-pill-border: rgba(0, 0, 0, 0.1);
-  --revv-pill-shadow: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.07);
+  --revv-pill-bg: rgba(250, 249, 246, 0.97);
+  --revv-pill-border: rgba(42, 40, 37, 0.1);
+  --revv-pill-shadow: 0 8px 24px rgba(42, 40, 37, 0.12), 0 2px 6px rgba(42, 40, 37, 0.07);
 
   /* Comment / thread */
-  --revv-thread-bg: #ffffff;
-  --revv-input-bg: #fafafa;
+  --revv-thread-bg: #faf9f6;
+  --revv-input-bg: #f4f1eb;
   --revv-input-focus-ring: rgba(15, 118, 110, 0.4);
 
   /* Context panel */
-  --revv-panel-bg: #fafafa;
-  --revv-panel-header-bg: rgba(250, 250, 250, 0.96);
+  --revv-panel-bg: #f4f1eb;
+  --revv-panel-header-bg: rgba(244, 241, 235, 0.96);
   --revv-stream-cursor: #0f766e;
 
   /* File tree */
   --revv-tree-active-bg: rgba(15, 118, 110, 0.1);
   --revv-tree-active-text: #115e59;
-  --revv-tree-hover-bg: #f2f2f3;
+  --revv-tree-hover-bg: #eae6de;
 
   /* Floating tabs */
-  --revv-tab-active-bg: #ffffff;
-  --revv-tab-track-bg: rgba(0, 0, 0, 0.06);
-  --revv-tab-inactive-text: #74747c;
+  --revv-tab-active-bg: #faf9f6;
+  --revv-tab-track-bg: rgba(42, 40, 37, 0.06);
+  --revv-tab-inactive-text: #7a756c;
 
   /* Glass pill */
-  --revv-glass-bg: rgba(252, 252, 253, 0.78);
-  --revv-glass-border: rgba(0, 0, 0, 0.09);
-  --revv-glass-highlight: rgba(255, 255, 255, 0.6);
-  --revv-glass-shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 4px 16px rgba(0, 0, 0, 0.09);
-  --revv-glass-active-bg: rgba(0, 0, 0, 0.055);
+  --revv-glass-bg: rgba(250, 249, 246, 0.78);
+  --revv-glass-border: rgba(42, 40, 37, 0.09);
+  --revv-glass-highlight: rgba(250, 249, 246, 0.6);
+  --revv-glass-shadow: 0 1px 2px rgba(42, 40, 37, 0.06), 0 4px 16px rgba(42, 40, 37, 0.09);
+  --revv-glass-active-bg: rgba(42, 40, 37, 0.055);
 
   /* Elevation shadows */
   --revv-shadow-indicator:
-    0 1px 3px rgba(0, 0, 0, 0.08), 0 2px 8px rgba(0, 0, 0, 0.06), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
-  --revv-shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.08);
-  --revv-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.1);
-  --revv-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06);
-  --revv-shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.18), 0 4px 12px rgba(0, 0, 0, 0.1);
+    0 1px 3px rgba(42, 40, 37, 0.08), 0 2px 8px rgba(42, 40, 37, 0.06), 0 0 0 0.5px rgba(42, 40, 37, 0.04);
+  --revv-shadow-sm: 0 2px 6px rgba(42, 40, 37, 0.08);
+  --revv-shadow-md: 0 4px 16px rgba(42, 40, 37, 0.1);
+  --revv-shadow-lg: 0 8px 24px rgba(42, 40, 37, 0.12), 0 2px 8px rgba(42, 40, 37, 0.06);
+  --revv-shadow-xl: 0 16px 48px rgba(42, 40, 37, 0.18), 0 4px 12px rgba(42, 40, 37, 0.1);
 
   /* Outline-style button (inverts with theme) */
   --revv-btn-outline: color-mix(in srgb, var(--revv-text-primary) 55%, transparent);
@@ -132,9 +133,9 @@
   --revv-ai-accent: #6d28d9;
 
   /* Tooltip */
-  --revv-tooltip-bg: rgba(20, 20, 24, 0.9);
-  --revv-tooltip-border: rgba(0, 0, 0, 0.12);
-  --revv-tooltip-item-bg: rgba(0, 0, 0, 0.04);
+  --revv-tooltip-bg: rgba(42, 40, 37, 0.9);
+  --revv-tooltip-border: rgba(42, 40, 37, 0.12);
+  --revv-tooltip-item-bg: rgba(42, 40, 37, 0.04);
 
   /* Scorecard — backgrounds mirror the Walkthrough IssueCard palette
        (4% tint of a themed severity color over --revv-bg-secondary) so

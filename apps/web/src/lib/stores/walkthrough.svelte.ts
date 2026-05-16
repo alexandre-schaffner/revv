@@ -17,6 +17,7 @@ import type {
   WalkthroughStreamEvent,
   WalkthroughTokenUsage,
 } from "@revv/shared";
+import { wtTrace } from "$lib/utils/wt-trace";
 
 // ── Entry shape ─────────────────────────────────────────────────────────────
 
@@ -176,7 +177,10 @@ export function deleteEntry(prId: string): void {
 
 export function updateEntry(prId: string, updater: (e: WalkthroughEntry) => void): void {
   const entry = store.entries.get(prId);
-  if (!entry) return;
+  if (!entry) {
+    wtTrace("store", `updateEntry-noop prId=${prId} reason=no-entry`);
+    return;
+  }
   const next = { ...entry };
   updater(next);
   store.entries.set(prId, next);
@@ -304,6 +308,10 @@ export function getUnresolvedStreamingPrIds(): string[] {
 // ── Event reducer ───────────────────────────────────────────────────────────
 
 export function applyEvents(prId: string, events: WalkthroughStreamEvent[]): void {
+  if (events.length > 0) {
+    const types = events.map((e) => e.type).join(",");
+    wtTrace("apply", `applyEvents prId=${prId} count=${events.length} types=[${types}]`);
+  }
   updateEntry(prId, (entry) => {
     let newBlocks: WalkthroughBlock[] | null = null;
 

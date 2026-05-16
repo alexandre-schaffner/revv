@@ -85,6 +85,8 @@ const SESSION_TOKEN_TTL_MS = 1000 * 60 * 60; // 1 hour
 type Subscriber = (event: WalkthroughStreamEvent) => void;
 
 interface SubscriberHandle {
+  /** Short opaque id for diagnostic logging — pairs with `[wt-trace]` lines. */
+  readonly id: string;
   readonly callback: Subscriber;
   /** Buffer for pre-flush events. `null` after flush (direct-forward mode). */
   buffered: WalkthroughStreamEvent[] | null;
@@ -97,9 +99,18 @@ interface ActiveJob {
   readonly userId: string;
   readonly abortController: AbortController;
   readonly subscribers: Set<SubscriberHandle>;
+  /**
+   * Diagnostic-only monotonic counter assigned to every event flowing through
+   * `fanOut`. Lets tracing correlate server log lines with client-side event
+   * arrival (see `wt-trace` on the web side). Not on the wire — purely for
+   * paired-log debugging of the stream-loss bug.
+   */
+  nextSeq: number;
   fiber: Fiber.RuntimeFiber<unknown, unknown> | null;
   cancelledByUser: boolean;
 }
+
+let nextHandleId = 1;
 
 export interface SessionTokenEntry {
   readonly walkthroughId: string;
@@ -365,17 +376,40 @@ export const WalkthroughJobsLive = Layer.effect(
     // the DB write. Broadcast failures here never roll back state — a
     // reconnecting subscriber recovers the truth from DB.
     const fanOut = (job: ActiveJob, event: WalkthroughStreamEvent): void => {
+      const seq = job.nextSeq++;
+      const subsCount = job.subscribers.size;
+      debug(
+        "wt-trace",
+        `fanOut wt=${job.walkthroughId} seq=${seq} type=${event.type} subs=${subsCount}`,
+      );
+      if (subsCount === 0) {
+        // Not necessarily a bug — the SSE handler may be mid-handoff — but
+        // pairs with the client-side `lastSeenSeq` gap check to confirm
+        // whether this seq was ever attempted to deliver.
+        debug(
+          "wt-trace",
+          `fanOut-no-subscribers wt=${job.walkthroughId} seq=${seq} type=${event.type}`,
+        );
+      }
       for (const handle of job.subscribers) {
         try {
           if (handle.buffered !== null) {
             handle.buffered.push(event);
+            debug(
+              "wt-trace",
+              `fanOut-buffered wt=${job.walkthroughId} seq=${seq} type=${event.type} handle=${handle.id} bufLen=${handle.buffered.length}`,
+            );
           } else {
             handle.callback(event);
+            debug(
+              "wt-trace",
+              `fanOut-delivered wt=${job.walkthroughId} seq=${seq} type=${event.type} handle=${handle.id}`,
+            );
           }
         } catch (err) {
           logError(
             "walkthrough-jobs",
-            "subscriber threw:",
+            `subscriber threw wt=${job.walkthroughId} seq=${seq} type=${event.type} handle=${handle.id}:`,
             err instanceof Error ? err.message : String(err),
           );
         }
@@ -1174,6 +1208,7 @@ export const WalkthroughJobsLive = Layer.effect(
           userId: params.userId,
           abortController,
           subscribers: new Set(),
+          nextSeq: 0,
           fiber: null,
           cancelledByUser: false,
         };
@@ -1207,22 +1242,40 @@ export const WalkthroughJobsLive = Layer.effect(
       Effect.gen(function* () {
         const map = yield* Ref.get(registry);
         const job = map.get(walkthroughId);
-        if (!job) return { found: false };
+        if (!job) {
+          debug("wt-trace", `subscribe-miss wt=${walkthroughId} (job not in registry)`);
+          return { found: false };
+        }
 
+        const handleId = `h${nextHandleId++}`;
         const handle: SubscriberHandle = {
+          id: handleId,
           callback: onEvent,
           buffered: [],
         };
         job.subscribers.add(handle);
+        debug(
+          "wt-trace",
+          `subscribe wt=${walkthroughId} handle=${handleId} subs=${job.subscribers.size} nextSeq=${job.nextSeq}`,
+        );
 
         return {
           found: true,
           unsubscribe: () => {
-            job.subscribers.delete(handle);
+            const removed = job.subscribers.delete(handle);
+            debug(
+              "wt-trace",
+              `unsubscribe wt=${walkthroughId} handle=${handleId} removed=${removed} subs=${job.subscribers.size}`,
+            );
           },
           flush: () => {
             const buf = handle.buffered;
             handle.buffered = null;
+            const flushed = buf?.length ?? 0;
+            debug(
+              "wt-trace",
+              `flush wt=${walkthroughId} handle=${handleId} flushedEvents=${flushed}`,
+            );
             if (buf) {
               for (const event of buf) {
                 try {
@@ -1230,7 +1283,7 @@ export const WalkthroughJobsLive = Layer.effect(
                 } catch (err) {
                   logError(
                     "walkthrough-jobs",
-                    "subscriber flush threw:",
+                    `subscriber flush threw wt=${walkthroughId} handle=${handleId} type=${event.type}:`,
                     err instanceof Error ? err.message : String(err),
                   );
                 }
@@ -1358,7 +1411,17 @@ export const WalkthroughJobsLive = Layer.effect(
       Effect.gen(function* () {
         const map = yield* Ref.get(registry);
         const job = map.get(walkthroughId);
-        if (!job) return;
+        if (!job) {
+          // Silent drop: MCP tool committed to DB but the job is no longer
+          // in the registry (race against job cleanup / supersede). Surface
+          // it so we can tell when a content event "vanished" *before*
+          // fan-out vs. *during* it.
+          debug(
+            "wt-trace",
+            `emitEvent-skip wt=${walkthroughId} type=${event.type} reason=no-job-in-registry`,
+          );
+          return;
+        }
         fanOut(job, event);
         // Fire the activity notifier so the opencode provider's stream guard
         // resets its inactivity timer. This runs even when the SSE subscription

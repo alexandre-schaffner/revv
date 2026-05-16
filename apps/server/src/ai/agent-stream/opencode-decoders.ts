@@ -12,7 +12,7 @@
 // types as the source of truth: silent drift was the main maintenance cost
 // of the prior hand-rolled `Part` interface.
 
-import type { Part } from "@opencode-ai/sdk";
+import type { Part } from "@opencode-ai/sdk/v2";
 import { normalizeToolName } from "@revv/shared";
 import type { NormalizedAgentEvent, NormalizedTask } from "./normalized-events";
 import {
@@ -69,22 +69,19 @@ export function extractOpencodeErrorMessage(errObj: {
  * `message.part.updated` events for the same part. Sync callers
  * (walkOpencodeParts) pass `alreadyEmittedLen: 0` and ignore the return.
  *
- * `deltaHint`: opencode's `message.part.updated` event carries an optional
- * `delta` field — when provided AND we've already emitted something for this
- * partId, we prefer the delta over slicing the full text. When the delta is
- * absent or the part is fresh, we fall back to `part.text.slice(already)`
- * so the user-visible stream stays monotonic.
+ * We slice `part.text` against `alreadyEmittedLen` to derive the delta the
+ * caller should emit — keeping the user-visible stream monotonic across
+ * repeated `message.part.updated` resends.
  */
 export function decodeOpencodePart(
   part: Part,
-  deltaHint: string | undefined,
   alreadyEmittedLen: number,
 ): { event: NormalizedAgentEvent | null; newEmittedLen: number } {
   if (part.type === "text") {
     if (part.synthetic === true || part.ignored === true) {
       return { event: null, newEmittedLen: alreadyEmittedLen };
     }
-    const chunk = pickChunk(part.text, deltaHint, alreadyEmittedLen);
+    const chunk = sliceChunk(part.text, alreadyEmittedLen);
     if (chunk === null) return { event: null, newEmittedLen: alreadyEmittedLen };
     return {
       event: {
@@ -97,7 +94,7 @@ export function decodeOpencodePart(
   }
 
   if (part.type === "reasoning") {
-    const chunk = pickChunk(part.text, deltaHint, alreadyEmittedLen);
+    const chunk = sliceChunk(part.text, alreadyEmittedLen);
     if (chunk === null) return { event: null, newEmittedLen: alreadyEmittedLen };
     return {
       event: {
@@ -230,14 +227,7 @@ function opencodeTodoHash(content: string): string {
   return `opencode-todo-${(hash >>> 0).toString(16).padStart(8, "0")}`;
 }
 
-export function pickChunk(
-  fullText: string,
-  deltaHint: string | undefined,
-  already: number,
-): string | null {
-  if (deltaHint && already > 0) {
-    return deltaHint.length > 0 ? deltaHint : null;
-  }
+function sliceChunk(fullText: string, already: number): string | null {
   if (fullText.length > already) {
     return fullText.slice(already);
   }
@@ -256,7 +246,7 @@ export function walkOpencodeParts(
   emit: (ev: NormalizedAgentEvent) => void,
 ): void {
   for (const part of parts) {
-    const { event } = decodeOpencodePart(part, undefined, 0);
+    const { event } = decodeOpencodePart(part, 0);
     if (event) emit(event);
   }
 }
@@ -322,7 +312,7 @@ export function walkOpencodePartsWithState(
       state.seenToolPartIds.add(part.id);
     }
     const already = state.emittedTextLen.get(part.id) ?? 0;
-    const { event, newEmittedLen } = decodeOpencodePart(part, undefined, already);
+    const { event, newEmittedLen } = decodeOpencodePart(part, already);
     if (!event) continue;
     if (event.kind === "text-delta" || event.kind === "reasoning-delta") {
       state.emittedTextLen.set(part.id, newEmittedLen);

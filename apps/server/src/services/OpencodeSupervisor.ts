@@ -24,21 +24,20 @@
 //     polling settings on each jobStarted() — Settings doesn't yet expose a
 //     change stream). The stop is a best-effort kill; credentials are wiped.
 //
-// Transport: `@opencode-ai/sdk` typed client. The supervisor builds one
+// Transport: `@opencode-ai/sdk/v2` typed client. The supervisor builds one
 // OpencodeClient per daemon spawn (with basic-auth header baked in via the
 // SDK's `headers` option) and exposes it through `client()`. Providers call
 // SDK methods directly — there is no hand-rolled HTTP wrapper. The SDK's
 // default fetch wrapper sets `req.timeout = false` for Bun, which is what
 // prevents Bun's 5-minute idle timeout from killing 10+ minute agent turns
-// (the load-bearing reason the previous SDK migration was reverted before
-// v1.14.50 — see commits 83087451 / d9c78713).
+// (the load-bearing reason the earlier SDK migration was reverted — see
+// commits 83087451 / d9c78713).
 
 import { resolve } from "node:path";
-import { createOpencodeClient, type OpencodeClient, type Part } from "@opencode-ai/sdk";
+import { createOpencodeClient, type OpencodeClient, type Part } from "@opencode-ai/sdk/v2";
 import { and, eq } from "drizzle-orm";
 import { Context, Effect, Layer, Ref } from "effect";
 import { resolveCliBin } from "../ai/providers/cli-agent";
-import { disableBunTimeout } from "../constants";
 import type { Db } from "../db/index";
 import { kvCache } from "../db/schema/index";
 import {
@@ -228,18 +227,14 @@ function basicAuthHeader(password: string): string {
 function buildSdkClient(hostname: string, port: number, password: string): OpencodeClient {
   const baseUrl = `http://${hostname}:${port}`;
   const authHeader = basicAuthHeader(password);
-  // Belt-and-suspenders custom fetch: the SDK's default already sets
-  // `req.timeout = false` for Bun, but providing our own makes the intent
-  // explicit and documents the load-bearing reason — Bun's 5-minute idle
-  // timeout otherwise kills long-running `session.prompt` calls (the agent
-  // loop runs 10+ minutes on complex PRs) and prematurely terminates the
-  // global event SSE subscription. This was the exact failure mode that
-  // caused the alpha-era SDK migration (commit 83087451) to be reverted in
-  // d9c78713 — keep it documented here so the trap isn't re-walked.
-  const customFetch: (req: Request) => ReturnType<typeof fetch> = (req) => {
-    disableBunTimeout(req);
-    return fetch(req);
-  };
+  // The v2 SDK's default fetch wrapper already sets `req.timeout = false`,
+  // which is load-bearing: Bun's 5-minute idle timeout otherwise kills
+  // long-running `session.prompt` calls (10+ minute agent loops on complex
+  // PRs) and prematurely terminates the global event SSE subscription.
+  // We rely on the SDK default rather than re-wrapping — see commits
+  // 83087451 / d9c78713 for the historical failure mode if this needs
+  // revisiting.
+  //
   // Note: `throwOnError` is intentionally NOT set at the client level.
   // Method-level type inference for each generated SDK call defaults to
   // `ThrowOnError extends false`, so setting it at construction would make
@@ -250,7 +245,6 @@ function buildSdkClient(hostname: string, port: number, password: string): Openc
   // race on abort omit it and branch on `error`.
   return createOpencodeClient({
     baseUrl,
-    fetch: customFetch,
     headers: { Authorization: authHeader },
   });
 }
@@ -368,7 +362,7 @@ export const OpencodeSupervisorLive = Layer.effect(
 
     const probeAgents = async (client: OpencodeClient): Promise<readonly string[]> => {
       try {
-        const result = await client.app.agents({ throwOnError: true });
+        const result = await client.app.agents({}, { throwOnError: true });
         const list = result.data;
         if (!Array.isArray(list)) return [];
         const names: string[] = [];

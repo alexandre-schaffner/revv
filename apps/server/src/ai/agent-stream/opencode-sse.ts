@@ -1,7 +1,13 @@
-// ── Opencode question events (runtime-only, v1 SDK doesn't type them) ──────
+// ── Opencode SSE event handling ─────────────────────────────────────────────
 
-import type { Event, Part } from "@opencode-ai/sdk";
-import { disableBunTimeout } from "../../constants";
+import type {
+  GlobalEvent,
+  Part,
+  QuestionRejected,
+  QuestionReplied,
+  QuestionRequest,
+} from "@opencode-ai/sdk/v2";
+import type { NormalizedQuestion } from "@revv/shared";
 import { debug, logError } from "../../logger";
 import type { OpencodeClient } from "../../services/OpencodeSupervisor";
 import type { NormalizedAgentEvent, NormalizedTask } from "./normalized-events";
@@ -9,103 +15,75 @@ import {
   decodeOpencodeAgentPart,
   decodeOpencodePart,
   decodeOpencodeTodoUpdate,
+  extractOpencodeErrorMessage,
 } from "./opencode-decoders";
 
-interface OpencodeQuestionInfo {
-  question: string;
-  header: string;
-  options: ReadonlyArray<{ label: string; description: string }>;
-  multiple?: boolean;
-  custom?: boolean;
-}
-
-interface OpencodeQuestionRequestPayload {
-  id: string;
-  sessionID: string;
-  questions: ReadonlyArray<OpencodeQuestionInfo>;
-  tool?: { messageID: string; callID: string };
-}
-
-interface OpencodeQuestionRepliedPayload {
-  sessionID: string;
-  requestID: string;
-  answers: ReadonlyArray<ReadonlyArray<string>>;
-}
-
-interface OpencodeQuestionRejectedPayload {
-  sessionID: string;
-  requestID: string;
-}
-
-function handleQuestionEvent(
-  type: "question.asked" | "question.replied" | "question.rejected",
-  properties: unknown,
+function handleQuestionAsked(
+  req: QuestionRequest,
   sessionId: string,
-  lastQuestionsByRequestId: Map<string, ReadonlyArray<import("@revv/shared").NormalizedQuestion>>,
+  lastQuestionsByRequestId: Map<string, ReadonlyArray<NormalizedQuestion>>,
   emit: (ev: NormalizedAgentEvent) => void,
 ): void {
-  if (!properties || typeof properties !== "object") return;
-  if (type === "question.asked") {
-    const req = properties as OpencodeQuestionRequestPayload;
-    if (req.sessionID !== sessionId) return;
-    const questions: import("@revv/shared").NormalizedQuestion[] = [];
-    for (const q of req.questions ?? []) {
-      const options = (q.options ?? []).map((o) => ({
-        label: o.label,
-        description: o.description,
-      }));
-      if (q.question.length === 0 || options.length === 0) continue;
-      questions.push({
-        question: q.question,
-        header: q.header,
-        // opencode `multiple` defaults to true per its schema —
-        // preserve that default if the field is absent.
-        multiSelect: q.multiple ?? true,
-        // opencode `custom` defaults to true per its schema.
-        allowCustom: q.custom ?? true,
-        options,
-      });
-    }
-    if (questions.length === 0) return;
-    lastQuestionsByRequestId.set(req.id, questions);
-    const event: NormalizedAgentEvent = {
-      kind: "user-question-asked",
-      providerRequestId: req.id,
-      source: "opencode",
-      questions,
-      previewFormat: "markdown",
-      ...(req.tool?.callID ? { providerToolCallId: req.tool.callID } : {}),
-    };
-    emit(event);
-    return;
-  }
-  if (type === "question.replied") {
-    const r = properties as OpencodeQuestionRepliedPayload;
-    if (r.sessionID !== sessionId) return;
-    // Reconstruct Record<questionText, labels[]> from the original
-    // questions list. Opencode replies with an Array<Array<string>>
-    // in the same order as the questions; merge by index.
-    const original = lastQuestionsByRequestId.get(r.requestID);
-    const answers: Record<string, ReadonlyArray<string>> = {};
-    if (original) {
-      for (let i = 0; i < original.length; i += 1) {
-        const q = original[i]!;
-        const labels = r.answers[i] ?? [];
-        answers[q.question] = labels;
-      }
-      lastQuestionsByRequestId.delete(r.requestID);
-    }
-    emit({
-      kind: "user-question-resolved",
-      providerRequestId: r.requestID,
-      source: "opencode",
-      status: "answered",
-      answers,
+  if (req.sessionID !== sessionId) return;
+  const questions: NormalizedQuestion[] = [];
+  for (const q of req.questions) {
+    const options = q.options.map((o) => ({ label: o.label, description: o.description }));
+    if (q.question.length === 0 || options.length === 0) continue;
+    questions.push({
+      question: q.question,
+      header: q.header,
+      // `multiple` and `custom` both default to true in opencode's schema.
+      multiSelect: q.multiple ?? true,
+      allowCustom: q.custom ?? true,
+      options,
     });
-    return;
   }
-  // question.rejected
-  const r = properties as OpencodeQuestionRejectedPayload;
+  if (questions.length === 0) return;
+  lastQuestionsByRequestId.set(req.id, questions);
+  emit({
+    kind: "user-question-asked",
+    providerRequestId: req.id,
+    source: "opencode",
+    questions,
+    previewFormat: "markdown",
+    ...(req.tool?.callID ? { providerToolCallId: req.tool.callID } : {}),
+  });
+}
+
+function handleQuestionReplied(
+  r: QuestionReplied,
+  sessionId: string,
+  lastQuestionsByRequestId: Map<string, ReadonlyArray<NormalizedQuestion>>,
+  emit: (ev: NormalizedAgentEvent) => void,
+): void {
+  if (r.sessionID !== sessionId) return;
+  // Reconstruct Record<questionText, labels[]> from the original questions
+  // list. Opencode replies with an Array<Array<string>> in the same order
+  // as the questions; merge by index.
+  const original = lastQuestionsByRequestId.get(r.requestID);
+  const answers: Record<string, ReadonlyArray<string>> = {};
+  if (original) {
+    for (let i = 0; i < original.length; i += 1) {
+      const q = original[i]!;
+      answers[q.question] = r.answers[i] ?? [];
+    }
+    lastQuestionsByRequestId.delete(r.requestID);
+  }
+  emit({
+    kind: "user-question-resolved",
+    providerRequestId: r.requestID,
+    source: "opencode",
+    status: "answered",
+    answers,
+  });
+}
+
+function handleQuestionRejected(
+  r: QuestionRejected,
+  sessionId: string,
+  lastQuestionsByRequestId: Map<string, ReadonlyArray<NormalizedQuestion>>,
+  emit: (ev: NormalizedAgentEvent) => void,
+): void {
   if (r.sessionID !== sessionId) return;
   lastQuestionsByRequestId.delete(r.requestID);
   emit({
@@ -191,10 +169,7 @@ export async function subscribeOpencodeStream(
      * `question.replied` to reconstruct a `Record<questionText, labels[]>`
      * shape from opencode's `Array<Array<string>>` reply order.
      */
-    lastQuestionsByRequestId?: Map<
-      string,
-      ReadonlyArray<import("@revv/shared").NormalizedQuestion>
-    >;
+    lastQuestionsByRequestId?: Map<string, ReadonlyArray<NormalizedQuestion>>;
     /**
      * Map from a sub-agent's child messageID to the parent invocation's
      * providerCallId. The SSE handler populates this when a `subtask` or
@@ -232,8 +207,7 @@ export async function subscribeOpencodeStream(
   };
   const subagentMessageIdMap = opts?.subagentMessageIdMap ?? new Map<string, string>();
   const lastQuestionsByRequestId =
-    opts?.lastQuestionsByRequestId ??
-    new Map<string, ReadonlyArray<import("@revv/shared").NormalizedQuestion>>();
+    opts?.lastQuestionsByRequestId ?? new Map<string, ReadonlyArray<NormalizedQuestion>>();
   const drainMs = opts?.drainMs ?? 100;
 
   // Compose an inner signal so we can run a final 100ms drain after the
@@ -250,28 +224,17 @@ export async function subscribeOpencodeStream(
     signal.addEventListener("abort", onCallerAbort, { once: true });
   }
 
-  const handleEvent = (ev: Event): void => {
-    // Question events (question.asked / .replied / .rejected) live in the
-    // opencode daemon at runtime but aren't yet present in the v1 SDK's
-    // typed `Event` union (they exist in v2). We intercept them here via
-    // a runtime type check so the rest of the typed switch stays sound.
-    // When the SDK types catch up, this block can move into the switch.
-    const dynamicEv = ev as { type: string; properties: unknown };
-    if (
-      dynamicEv.type === "question.asked" ||
-      dynamicEv.type === "question.replied" ||
-      dynamicEv.type === "question.rejected"
-    ) {
-      handleQuestionEvent(
-        dynamicEv.type,
-        dynamicEv.properties,
-        sessionId,
-        lastQuestionsByRequestId,
-        emit,
-      );
-      return;
-    }
+  const handleEvent = (ev: GlobalEvent["payload"]): void => {
     switch (ev.type) {
+      case "question.asked":
+        handleQuestionAsked(ev.properties, sessionId, lastQuestionsByRequestId, emit);
+        return;
+      case "question.replied":
+        handleQuestionReplied(ev.properties, sessionId, lastQuestionsByRequestId, emit);
+        return;
+      case "question.rejected":
+        handleQuestionRejected(ev.properties, sessionId, lastQuestionsByRequestId, emit);
+        return;
       case "message.updated": {
         // Learn which message IDs belong to user messages so we can skip
         // their parts. Opencode creates the user message before kicking
@@ -303,8 +266,8 @@ export async function subscribeOpencodeStream(
         return;
       }
       case "message.part.updated": {
+        if (ev.properties.sessionID !== sessionId) return;
         const part = ev.properties.part;
-        if (part.sessionID !== sessionId) return;
 
         // Skip parts belonging to user messages. Without this, opencode's
         // re-emission of the user's input as a `text` part gets decoded as
@@ -342,7 +305,7 @@ export async function subscribeOpencodeStream(
         }
 
         const already = emittedTextLen.get(part.id) ?? 0;
-        const { event, newEmittedLen } = decodeOpencodePart(part, ev.properties.delta, already);
+        const { event, newEmittedLen } = decodeOpencodePart(part, already);
         if (event) {
           if (event.kind === "text-delta" || event.kind === "reasoning-delta") {
             emittedTextLen.set(part.id, newEmittedLen);
@@ -377,15 +340,8 @@ export async function subscribeOpencodeStream(
           return;
         }
         const errObj = ev.properties.error;
-        const msg =
-          (errObj && "data" in errObj && typeof errObj.data === "object"
-            ? (errObj.data as { message?: unknown }).message
-            : undefined) ??
-          (errObj && "name" in errObj && typeof errObj.name === "string"
-            ? errObj.name
-            : undefined) ??
-          "Agent error";
-        emit({ kind: "error", message: String(msg) });
+        const msg = errObj ? extractOpencodeErrorMessage(errObj) : "Agent error";
+        emit({ kind: "error", message: msg });
         return;
       }
       default:
@@ -397,15 +353,10 @@ export async function subscribeOpencodeStream(
   };
 
   try {
-    const result = await client.global.event({
-      fetch: (req) => {
-        // Disable Bun's 5-minute idle timeout for the SSE long-poll.
-        // Without this, post-300s tool calls are silently dropped.
-        disableBunTimeout(req);
-        return fetch(req);
-      },
-      signal: innerAbort.signal,
-    });
+    // The supervisor's client uses the v2 SDK's default fetch wrapper which
+    // sets `req.timeout = false`, disabling Bun's 5-minute idle timeout for
+    // the SSE long-poll (otherwise post-300s tool calls get silently dropped).
+    const result = await client.global.event({ signal: innerAbort.signal });
     for await (const globalEvent of result.stream) {
       if (innerAbort.signal.aborted) break;
       handleEvent(globalEvent.payload);
