@@ -32,6 +32,7 @@ import {
   getRcSubmitting,
 } from "$lib/stores/rcActions.svelte";
 import { Shimmer } from "$lib/components/ai/shimmer";
+import { isChatStreaming } from "$lib/stores/chat.svelte";
 import {
   consumePanelOpenRequest,
   getActiveTab,
@@ -122,6 +123,13 @@ const rcSubmitting = $derived(getRcSubmitting());
 const rcSelectedCount = $derived(getRcSelectedCount());
 const rcHasContent = $derived(getRcHasContent());
 const rcApproveBlockerSummary = $derived(getRcApproveBlockerSummary());
+const chatStreaming = $derived(pr ? isChatStreaming(pr.id) : false);
+
+let rcGenerating = $state(false);
+
+$effect(() => {
+  if (!chatStreaming) rcGenerating = false;
+});
 
 // The reviewer-vs-coder distinction comes from the user's GitHub login
 // matching the PR's authorLogin. When the user owns the PR, the
@@ -408,14 +416,18 @@ function onRightHandleDblClick(): void {
 				<button
 					type="button"
 					class="walkthrough-action-btn walkthrough-action-btn--muted"
-					disabled={rcSubmitting !== null || rcSelectedCount === 0}
-					onclick={() => getRcOnGenerateChanges()()}
+					disabled={rcSubmitting !== null || rcSelectedCount === 0 || rcGenerating}
+					onclick={() => { rcGenerating = true; getRcOnGenerateChanges()(); }}
 					title={rcSelectedCount === 0
 						? 'Select at least one issue to ask the agent to address'
-						: 'Open the chat panel and ask the agent to address the selected issues as commits'}
+						: rcGenerating
+							? 'Agent is generating changes…'
+							: 'Open the chat panel and ask the agent to address the selected issues as commits'}
 				>
 					<Sparkles size={14} />
-					<Shimmer active={rcSubmitting === null && rcSelectedCount > 0}>Generate changes</Shimmer>
+					<Shimmer active={rcSubmitting === null && rcSelectedCount > 0}>
+						{rcGenerating ? 'Generating changes…' : 'Generate changes'}
+					</Shimmer>
 				</button>
 
 				{#if isPrOwner && pr}
