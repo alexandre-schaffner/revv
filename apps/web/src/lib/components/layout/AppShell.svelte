@@ -14,8 +14,10 @@ import {
   XCircle,
 } from "@lucide/svelte";
 import { page } from "$app/state";
+import { Shimmer } from "$lib/components/ai/shimmer";
 import SettingsModal from "$lib/components/settings/SettingsModal.svelte";
 import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
+import { isChatStreaming } from "$lib/stores/chat.svelte";
 import {
   closePr,
   convertPrToDraft,
@@ -31,8 +33,6 @@ import {
   getRcSelectedCount,
   getRcSubmitting,
 } from "$lib/stores/rcActions.svelte";
-import { Shimmer } from "$lib/components/ai/shimmer";
-import { isChatStreaming } from "$lib/stores/chat.svelte";
 import {
   consumePanelOpenRequest,
   getActiveTab,
