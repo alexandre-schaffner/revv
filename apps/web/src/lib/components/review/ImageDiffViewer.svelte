@@ -1,8 +1,8 @@
 <script lang="ts">
 import { ArrowLeftRight, ImageOff } from "@lucide/svelte";
 import { onDestroy } from "svelte";
-import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import { API_BASE_URL } from "$lib/api/base-url";
+import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import type { ReviewFile } from "$lib/types/review";
 import { authHeaders } from "$lib/utils/session-token";
 

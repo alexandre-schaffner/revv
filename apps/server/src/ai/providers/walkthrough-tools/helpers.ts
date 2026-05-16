@@ -22,11 +22,17 @@ export const PHASE_ORDER: Record<WalkthroughPipelinePhase, number> = {
   D: 4,
 };
 
-export function phaseAtLeast(phase: WalkthroughPipelinePhase, min: WalkthroughPipelinePhase): boolean {
+export function phaseAtLeast(
+  phase: WalkthroughPipelinePhase,
+  min: WalkthroughPipelinePhase,
+): boolean {
   return PHASE_ORDER[phase] >= PHASE_ORDER[min];
 }
 
-export function phaseAtMost(phase: WalkthroughPipelinePhase, max: WalkthroughPipelinePhase): boolean {
+export function phaseAtMost(
+  phase: WalkthroughPipelinePhase,
+  max: WalkthroughPipelinePhase,
+): boolean {
   return PHASE_ORDER[phase] <= PHASE_ORDER[max];
 }
 

@@ -188,7 +188,12 @@ function persistCrashTimestamps(db: Db, stamps: readonly number[]): void {
     }
     const now = new Date().toISOString();
     db.insert(kvCache)
-      .values({ ns: SUPERVISOR_NS, key: CRASH_LOG_KEY, valueJson: JSON.stringify(stamps), fetchedAt: now })
+      .values({
+        ns: SUPERVISOR_NS,
+        key: CRASH_LOG_KEY,
+        valueJson: JSON.stringify(stamps),
+        fetchedAt: now,
+      })
       .onConflictDoUpdate({
         target: [kvCache.ns, kvCache.key],
         set: { valueJson: JSON.stringify(stamps), fetchedAt: now },
@@ -581,9 +586,7 @@ export const OpencodeSupervisorLive = Layer.effect(
           }
 
           if (snapshot.unhealthy) {
-            return yield* Effect.fail(
-              new OpencodeUnhealthyError(),
-            );
+            return yield* Effect.fail(new OpencodeUnhealthyError());
           }
 
           if (snapshot.running) {

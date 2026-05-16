@@ -243,17 +243,9 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
             }
 
             const repo = yield* repoService.getRepoById(pr.repositoryId);
-            const token = yield* tokenProvider.getGitHubToken(
-              ctx.session.user.id,
-              repo.githubHost,
-            );
+            const token = yield* tokenProvider.getGitHubToken(ctx.session.user.id, repo.githubHost);
 
-            const bytes = yield* github.getFileRawBytes(
-              repo.fullName,
-              ctx.query.path,
-              sha,
-              token,
-            );
+            const bytes = yield* github.getFileRawBytes(repo.fullName, ctx.query.path, sha, token);
 
             const contentType = guessImageContentType(ctx.query.path);
             // Bun typings on `bytes` are `Uint8Array<ArrayBufferLike>`,

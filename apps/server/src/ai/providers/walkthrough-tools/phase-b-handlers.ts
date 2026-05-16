@@ -25,16 +25,6 @@ import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import { walkthroughSemanticSteps } from "../../../db/schema/walkthrough-semantic-steps";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
 import {
-  type AddDiffStepInput,
-  type AddIssueCommentInput,
-  type AddSemanticStepInput,
-  type FlagIssueInput,
-  computeAnchorThreadId,
-  computeIssueId,
-  type WalkthroughToolHandler,
-  type WalkthroughToolResult,
-} from "./spec";
-import {
   blockIdFor,
   errorResult,
   loadWalkthroughRow,
@@ -42,6 +32,16 @@ import {
   phaseAtLeast,
   phaseAtMost,
 } from "./helpers";
+import {
+  type AddDiffStepInput,
+  type AddIssueCommentInput,
+  type AddSemanticStepInput,
+  computeAnchorThreadId,
+  computeIssueId,
+  type FlagIssueInput,
+  type WalkthroughToolHandler,
+  type WalkthroughToolResult,
+} from "./spec";
 
 // ── Block persistence helper ─────────────────────────────────────────────────
 //
@@ -52,21 +52,27 @@ import {
 
 interface BlockVariantInput {
   readonly markdown?: { readonly content: string } | null | undefined;
-  readonly code?: {
-    readonly file_path: string;
-    readonly start_line: number;
-    readonly end_line: number;
-    readonly language: string;
-    readonly content: string;
-    readonly annotation: string | null;
-    readonly annotation_position: "left" | "right";
-  } | null | undefined;
-  readonly diff?: {
-    readonly file_path: string;
-    readonly patch: string;
-    readonly annotation: string | null;
-    readonly annotation_position: "left" | "right";
-  } | null | undefined;
+  readonly code?:
+    | {
+        readonly file_path: string;
+        readonly start_line: number;
+        readonly end_line: number;
+        readonly language: string;
+        readonly content: string;
+        readonly annotation: string | null;
+        readonly annotation_position: "left" | "right";
+      }
+    | null
+    | undefined;
+  readonly diff?:
+    | {
+        readonly file_path: string;
+        readonly patch: string;
+        readonly annotation: string | null;
+        readonly annotation_position: "left" | "right";
+      }
+    | null
+    | undefined;
 }
 
 function blockVariantCount(input: BlockVariantInput): number {

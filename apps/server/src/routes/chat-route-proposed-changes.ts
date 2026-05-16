@@ -5,6 +5,10 @@
 
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
+import { withDb } from "../effects/with-db";
+import { logError } from "../logger";
+import { AppRuntime } from "../runtime";
+import { AiService, resolveAgent } from "../services/Ai";
 import {
   ChatChangesPushService,
   ChatStreamingConflictError,
@@ -21,17 +25,13 @@ import { DbService } from "../services/Db";
 import { PrContextService } from "../services/PrContext";
 import { RepoCloneService } from "../services/RepoClone";
 import { SettingsService } from "../services/Settings";
-import { AiService, resolveAgent } from "../services/Ai";
-import { withDb } from "../effects/with-db";
-import { logError } from "../logger";
-import { AppRuntime } from "../runtime";
 import {
   gitShowSafe,
   gitStdout,
   gitStdoutBestEffort,
   listProposedCommits,
-  resolvePushStreamToSSE,
   type ProposedCommit,
+  resolvePushStreamToSSE,
 } from "./chat-helpers";
 import {
   handleAppError,

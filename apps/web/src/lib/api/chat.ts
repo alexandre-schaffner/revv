@@ -362,7 +362,9 @@ export async function submitQuestionAnswer(
     status: "ok",
     resolution: body.resolution as "answered" | "rejected",
     ...(body.alreadyResolved === true ? { alreadyResolved: true } : {}),
-    ...(typeof body.supersededPlanId === "string" ? { supersededPlanId: body.supersededPlanId } : {}),
+    ...(typeof body.supersededPlanId === "string"
+      ? { supersededPlanId: body.supersededPlanId }
+      : {}),
   };
 }
 

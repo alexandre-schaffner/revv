@@ -8,6 +8,18 @@ import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import { walkthroughSemanticSteps } from "../../../db/schema/walkthrough-semantic-steps";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
+import { blockIdFor, unwrapJsonWrappedString } from "../walkthrough-tools";
+import {
+  assertStillComplete,
+  blockContentVariantCount,
+  buildBlock,
+  decodeIssue,
+  fail,
+  findIssuesReferencingBlocks,
+  ok,
+  resolveActiveWalkthroughId,
+  stampLastEdited,
+} from "./helpers";
 import type {
   AddBlockInput,
   AddSemanticStepEditInput,
@@ -20,22 +32,13 @@ import type {
   UpdateSemanticStepInput,
   UpdateSentimentInput,
 } from "./spec";
-import {
-  assertStillComplete,
-  blockContentVariantCount,
-  buildBlock,
-  decodeIssue,
-  fail,
-  findIssuesReferencingBlocks,
-  ok,
-  resolveActiveWalkthroughId,
-  stampLastEdited,
-} from "./helpers";
-import { blockIdFor, unwrapJsonWrappedString } from "../walkthrough-tools";
 
 // ── Tool: update_overview ───────────────────────────────────────────────────
 
-export const updateOverviewHandler: ChatEditToolHandler<UpdateOverviewInput> = async (ctx, input) => {
+export const updateOverviewHandler: ChatEditToolHandler<UpdateOverviewInput> = async (
+  ctx,
+  input,
+) => {
   const summary = input.summary != null ? unwrapJsonWrappedString(input.summary, "summary") : null;
   const riskLevel = input.risk_level ?? null;
   if (summary === null && riskLevel === null) {
@@ -652,7 +655,10 @@ export const deleteBlockHandler: ChatEditToolHandler<DeleteBlockInput> = async (
 
 // ── Tool: update_sentiment ──────────────────────────────────────────────────
 
-export const updateSentimentHandler: ChatEditToolHandler<UpdateSentimentInput> = async (ctx, input) => {
+export const updateSentimentHandler: ChatEditToolHandler<UpdateSentimentInput> = async (
+  ctx,
+  input,
+) => {
   const markdown = unwrapJsonWrappedString(input.markdown, "markdown");
 
   const active = resolveActiveWalkthroughId(ctx.db, ctx.prId);

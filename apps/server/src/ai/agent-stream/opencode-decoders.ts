@@ -15,7 +15,11 @@
 import type { Part } from "@opencode-ai/sdk";
 import { normalizeToolName } from "@revv/shared";
 import type { NormalizedAgentEvent, NormalizedTask } from "./normalized-events";
-import { classifyToolCallShape, normalizeTaskStatus, normalizeTaskPriority } from "./normalized-events";
+import {
+  classifyToolCallShape,
+  normalizeTaskPriority,
+  normalizeTaskStatus,
+} from "./normalized-events";
 
 /**
  * Split a `provider/modelID` string into the wire shape opencode expects

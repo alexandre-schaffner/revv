@@ -1,8 +1,8 @@
 <script lang="ts">
-import { enterScrollMode, getActivePanel } from "$lib/stores/focus-mode.svelte";
-import { getSelectedPrId } from "$lib/stores/prs.svelte";
 import Shimmer from "$lib/components/ai/shimmer/Shimmer.svelte";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
+import { enterScrollMode, getActivePanel } from "$lib/stores/focus-mode.svelte";
+import { getSelectedPrId } from "$lib/stores/prs.svelte";
 import {
   clearRepoFile,
   getActiveFilePath,

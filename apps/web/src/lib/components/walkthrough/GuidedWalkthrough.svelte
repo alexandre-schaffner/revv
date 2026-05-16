@@ -21,14 +21,6 @@ import {
   jumpToDiffLine,
 } from "$lib/stores/review.svelte";
 import {
-  hydrateFromCache,
-  pollCloneUntilResolved,
-  prepareEntry,
-  regenerate,
-  stopClonePoll,
-  streamWalkthrough,
-} from "$lib/stores/walkthrough-stream.svelte";
-import {
   getBlocks,
   getCloneInProgress,
   getCloneRepoId,
@@ -53,6 +45,14 @@ import {
   markContainerAnimated,
   markIssueAnimated,
 } from "$lib/stores/walkthrough.svelte";
+import {
+  hydrateFromCache,
+  pollCloneUntilResolved,
+  prepareEntry,
+  regenerate,
+  stopClonePoll,
+  streamWalkthrough,
+} from "$lib/stores/walkthrough-stream.svelte";
 import { initHighlighter } from "$lib/utils/code-highlight.svelte";
 import { renderMarkdown } from "$lib/utils/markdown";
 import { authHeaders } from "$lib/utils/session-token";

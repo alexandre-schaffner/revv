@@ -17,12 +17,12 @@ import {
 } from "./review.svelte";
 import * as sync from "./sync.svelte";
 import { markThreadsSyncing } from "./sync.svelte";
+import { onWalkthroughEdited, onWalkthroughError } from "./walkthrough.svelte";
 import {
   hydrateFromCache,
   onWalkthroughComplete,
   prefetchWalkthrough,
 } from "./walkthrough-stream.svelte";
-import { onWalkthroughEdited, onWalkthroughError } from "./walkthrough.svelte";
 
 let ws: WebSocket | null = null;
 let connected = $state(false);

@@ -16,6 +16,17 @@ import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import { walkthroughRatings } from "../../../db/schema/walkthrough-ratings";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
+import { blockIdFor, computeAnchorThreadId, computeIssueId } from "../walkthrough-tools";
+import {
+  assertStillComplete,
+  decodeIssue,
+  fail,
+  ok,
+  parseBlockIds,
+  parseCitations,
+  resolveActiveWalkthroughId,
+  stampLastEdited,
+} from "./helpers";
 import type {
   AddIssueCommentEditInput,
   AddIssueEditInput,
@@ -28,17 +39,6 @@ import type {
   UpdateIssueInput,
   UpdateRatingInput,
 } from "./spec";
-import { blockIdFor, computeAnchorThreadId, computeIssueId } from "../walkthrough-tools";
-import {
-  assertStillComplete,
-  decodeIssue,
-  fail,
-  ok,
-  parseBlockIds,
-  parseCitations,
-  resolveActiveWalkthroughId,
-  stampLastEdited,
-} from "./helpers";
 
 // ── Tool: update_rating ─────────────────────────────────────────────────────
 

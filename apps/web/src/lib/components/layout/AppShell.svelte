@@ -60,11 +60,6 @@ import {
   toggleSidebar,
 } from "$lib/stores/sidebar.svelte";
 import {
-  abort as abortWalkthrough,
-  regenerate as regenerateWalkthrough,
-  resume as resumeWalkthrough,
-} from "$lib/stores/walkthrough-stream.svelte";
-import {
   getPrWalkthroughStatus,
   getCanResume as getWalkthroughCanResume,
   getRatings as getWalkthroughRatings,
@@ -72,6 +67,11 @@ import {
   getIsStreaming as getWalkthroughStreaming,
   getSummary as getWalkthroughSummary,
 } from "$lib/stores/walkthrough.svelte";
+import {
+  abort as abortWalkthrough,
+  regenerate as regenerateWalkthrough,
+  resume as resumeWalkthrough,
+} from "$lib/stores/walkthrough-stream.svelte";
 import {
   getHasNewContentBelow as getWalkthroughHasNewContentBelow,
   getUserScrolledUp as getWalkthroughUserScrolledUp,

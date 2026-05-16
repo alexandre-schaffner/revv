@@ -5,6 +5,10 @@
 
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
+import { withDb } from "../effects/with-db";
+import { logError } from "../logger";
+import { AppRuntime } from "../runtime";
+import { resolveAgent } from "../services/Ai";
 import { ChatSessionService } from "../services/ChatSession";
 import { DbService } from "../services/Db";
 import { OpencodeSupervisor } from "../services/OpencodeSupervisor";
@@ -12,10 +16,6 @@ import { takePendingQuestion } from "../services/PendingQuestionRegistry";
 import { PrContextService } from "../services/PrContext";
 import { SettingsService } from "../services/Settings";
 import { WebSocketHub } from "../services/WebSocketHub";
-import { resolveAgent } from "../services/Ai";
-import { withDb } from "../effects/with-db";
-import { logError } from "../logger";
-import { AppRuntime } from "../runtime";
 import { handleAppError, jsonResponse, withAuth } from "./middleware";
 
 export const chatInteractionRoutes = new Elysia()
@@ -295,9 +295,7 @@ export const chatInteractionRoutes = new Elysia()
         let supersededPlanId: string | null = null;
         try {
           const pending = await AppRuntime.runPromise(
-            Effect.flatMap(ChatSessionService, (svc) =>
-              svc.findPendingPlan(row.chatSessionId),
-            ),
+            Effect.flatMap(ChatSessionService, (svc) => svc.findPendingPlan(row.chatSessionId)),
           );
           if (pending) {
             await AppRuntime.runPromise(

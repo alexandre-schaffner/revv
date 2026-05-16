@@ -4,6 +4,27 @@
 // canonical EDIT_TOOL_SPECS array consumed by chat-context.ts,
 // chat-claude.ts, and chat-mcp-tools.ts.
 
+import {
+  addBlockHandler,
+  addSemanticStepEditHandler,
+  deleteBlockHandler,
+  deleteSemanticStepHandler,
+  updateBlockHandler,
+  updateOverviewHandler,
+  updateSemanticStepHandler,
+  updateSentimentHandler,
+} from "./content-handlers";
+import { getWalkthroughForEditHandler } from "./read-handler";
+import {
+  addIssueCommentEditHandler,
+  addIssueEditHandler,
+  deleteIssueCommentHandler,
+  deleteIssueHandler,
+  deleteRatingHandler,
+  updateIssueCommentHandler,
+  updateIssueHandler,
+  updateRatingHandler,
+} from "./review-handlers";
 import type { ChatEditToolSpec } from "./spec";
 import {
   addBlockSchema,
@@ -24,27 +45,6 @@ import {
   updateSemanticStepSchema,
   updateSentimentSchema,
 } from "./spec";
-import { getWalkthroughForEditHandler } from "./read-handler";
-import {
-  addBlockHandler,
-  addSemanticStepEditHandler,
-  deleteBlockHandler,
-  deleteSemanticStepHandler,
-  updateBlockHandler,
-  updateOverviewHandler,
-  updateSemanticStepHandler,
-  updateSentimentHandler,
-} from "./content-handlers";
-import {
-  addIssueCommentEditHandler,
-  addIssueEditHandler,
-  deleteIssueCommentHandler,
-  deleteIssueHandler,
-  deleteRatingHandler,
-  updateIssueCommentHandler,
-  updateIssueHandler,
-  updateRatingHandler,
-} from "./review-handlers";
 
 export { resolveActiveWalkthroughId } from "./helpers";
 export type { ChatEditToolResult, ChatWalkthroughEditContext } from "./spec";

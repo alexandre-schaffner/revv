@@ -3,7 +3,11 @@
 import type { WalkthroughTokenUsage } from "@revv/shared";
 import { normalizeToolName } from "@revv/shared";
 import type { NormalizedAgentEvent, NormalizedTask } from "./normalized-events";
-import { classifyToolCallShape, normalizeTaskStatus, normalizeTaskPriority } from "./normalized-events";
+import {
+  classifyToolCallShape,
+  normalizeTaskPriority,
+  normalizeTaskStatus,
+} from "./normalized-events";
 
 /**
  * Minimal shape of the Claude Agent SDK message stream that we care about.

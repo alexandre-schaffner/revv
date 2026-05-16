@@ -10,21 +10,14 @@ import type {
   WalkthroughPipelinePhase,
   WalkthroughState,
 } from "@revv/shared";
-import { asc, and, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import type { Db } from "../../../db";
 import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import { walkthroughRatings } from "../../../db/schema/walkthrough-ratings";
 import { walkthroughSemanticSteps } from "../../../db/schema/walkthrough-semantic-steps";
-import type {
-  GetWalkthroughStateInput,
-  WalkthroughToolHandler,
-} from "./spec";
-import {
-  errorResult,
-  findIssuesMissingInlineComment,
-  loadWalkthroughRow,
-} from "./helpers";
+import { errorResult, findIssuesMissingInlineComment, loadWalkthroughRow } from "./helpers";
+import type { GetWalkthroughStateInput, WalkthroughToolHandler } from "./spec";
 
 // ── Handler: get_walkthrough_state ───────────────────────────────────────────
 //

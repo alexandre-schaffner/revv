@@ -14,9 +14,9 @@ import type {
 } from "@revv/shared";
 import { and, desc, eq } from "drizzle-orm";
 import type { Db } from "../../../db";
-import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
+import type { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
-import { walkthroughRatings } from "../../../db/schema/walkthrough-ratings";
+import type { walkthroughRatings } from "../../../db/schema/walkthrough-ratings";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
 import type { BlockContentInput, ChatEditToolResult } from "./spec";
 

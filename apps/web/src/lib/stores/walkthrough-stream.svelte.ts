@@ -295,8 +295,7 @@ export async function streamWalkthrough(prId: string): Promise<void> {
     existing.explorationSteps.length === 0 &&
     existing.issues.length === 0 &&
     existing.ratings.length === 0;
-  const entry =
-    (reusable || isResumeFromHydratedPartial) && existing ? existing : freshEntry();
+  const entry = (reusable || isResumeFromHydratedPartial) && existing ? existing : freshEntry();
   entry.isStreaming = true;
   entry.streamStartedAt = Date.now();
   entry.cloneInProgress = false;
@@ -575,8 +574,7 @@ export function deactivate(): void {
   const activePrId = store.activePrId;
   if (activePrId) {
     const entry = store.entries.get(activePrId);
-    const isGenerating =
-      entry?.isStreaming === true && !entry?.doneReceived && !entry?.streamError;
+    const isGenerating = entry?.isStreaming === true && !entry?.doneReceived && !entry?.streamError;
     if (!isGenerating) {
       abortPr(activePrId, true);
     }

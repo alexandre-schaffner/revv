@@ -277,9 +277,7 @@ export function getTokenUsage(prId?: string): WalkthroughTokenUsage {
 
 // ── State queries ───────────────────────────────────────────────────────────
 
-export function getPrWalkthroughStatus(
-  prId: string,
-): "idle" | "generating" | "complete" | "error" {
+export function getPrWalkthroughStatus(prId: string): "idle" | "generating" | "complete" | "error" {
   const entry = store.entries.get(prId);
   if (!entry) return "idle";
   if (entry.isStreaming) return "generating";

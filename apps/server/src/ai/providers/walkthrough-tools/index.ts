@@ -32,26 +32,6 @@ import { walkthroughRatings } from "../../../db/schema/walkthrough-ratings";
 import { walkthroughSemanticSteps } from "../../../db/schema/walkthrough-semantic-steps";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
 import {
-  type CompleteWalkthroughInput,
-  completeWalkthroughSchema,
-  type RateAxisInput,
-  rateAxisSchema,
-  RATING_AXES as RATING_AXES_SPEC,
-  type SetOverviewInput,
-  setOverviewSchema,
-  type SetSentimentInput,
-  setSentimentSchema,
-  addDiffStepSchema,
-  addIssueCommentSchema,
-  addSemanticStepSchema,
-  flagIssueSchema,
-  getWalkthroughStateSchema,
-  type ToolSpec,
-  type WalkthroughToolContext,
-  type WalkthroughToolHandler,
-  type WalkthroughToolResult,
-} from "./spec";
-import {
   blockIdFor,
   errorResult,
   findIssuesMissingInlineComment,
@@ -60,30 +40,50 @@ import {
   renderMissingInlineCommentError,
   unwrapJsonWrappedString,
 } from "./helpers";
-import { getWalkthroughStateHandler } from "./read-handler";
 import {
   addDiffStepHandler,
   addIssueCommentHandler,
   addSemanticStepHandler,
   flagIssueHandler,
 } from "./phase-b-handlers";
+import { getWalkthroughStateHandler } from "./read-handler";
+import {
+  addDiffStepSchema,
+  addIssueCommentSchema,
+  addSemanticStepSchema,
+  type CompleteWalkthroughInput,
+  completeWalkthroughSchema,
+  flagIssueSchema,
+  getWalkthroughStateSchema,
+  RATING_AXES as RATING_AXES_SPEC,
+  type RateAxisInput,
+  rateAxisSchema,
+  type SetOverviewInput,
+  type SetSentimentInput,
+  setOverviewSchema,
+  setSentimentSchema,
+  type ToolSpec,
+  type WalkthroughToolContext,
+  type WalkthroughToolHandler,
+  type WalkthroughToolResult,
+} from "./spec";
 
 // ── Re-exports (preserve public API) ────────────────────────────────────────
 
+export type { MissingInlineComment } from "./helpers";
 export {
-  unwrapJsonWrappedString,
   blockIdFor,
   findIssuesMissingInlineComment,
   renderMissingInlineCommentError,
+  unwrapJsonWrappedString,
 } from "./helpers";
-export type { MissingInlineComment } from "./helpers";
-export { getWalkthroughStateHandler } from "./read-handler";
 export {
-  addSemanticStepHandler,
   addDiffStepHandler,
-  flagIssueHandler,
   addIssueCommentHandler,
+  addSemanticStepHandler,
+  flagIssueHandler,
 } from "./phase-b-handlers";
+export { getWalkthroughStateHandler } from "./read-handler";
 export { computeAnchorThreadId, computeIssueId } from "./spec";
 
 // ── Handler: set_overview (Phase A) ──────────────────────────────────────────

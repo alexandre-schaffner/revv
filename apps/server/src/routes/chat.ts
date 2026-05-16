@@ -27,15 +27,20 @@ import { withDb } from "../effects/with-db";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
 import { AiService, resolveAgent } from "../services/Ai";
-import {
-  ChatChangesPushService,
-} from "../services/ChatChangesPush";
+import { ChatChangesPushService } from "../services/ChatChangesPush";
 import { ChatSessionService } from "../services/ChatSession";
 import { DbService } from "../services/Db";
 import { GitHubService } from "../services/GitHub";
 import { PrContextService } from "../services/PrContext";
 import { RepoCloneService } from "../services/RepoClone";
 import { SettingsService } from "../services/Settings";
+import {
+  discardAgentCommits,
+  fetchWalkthroughContext,
+  wrapStreamWithPersistence,
+} from "./chat-helpers";
+import { chatInteractionRoutes } from "./chat-route-interactions";
+import { chatProposedChangesRoutes } from "./chat-route-proposed-changes";
 import {
   chatStreamToSSE,
   handleAppError,
@@ -44,14 +49,6 @@ import {
   unwrapEffectError,
   withAuth,
 } from "./middleware";
-
-import {
-  discardAgentCommits,
-  fetchWalkthroughContext,
-  wrapStreamWithPersistence,
-} from "./chat-helpers";
-import { chatProposedChangesRoutes } from "./chat-route-proposed-changes";
-import { chatInteractionRoutes } from "./chat-route-interactions";
 
 // ── Route ──────────────────────────────────────────────────────────────────
 

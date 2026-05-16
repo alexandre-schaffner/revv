@@ -5,7 +5,6 @@ import { Elysia } from "elysia";
 import { auth } from "./auth";
 import { serverEnv } from "./config";
 import { logError } from "./logger";
-import { acquireSingleInstance } from "./singleInstance";
 import { chatRoute } from "./routes/chat";
 import { debugRoutes } from "./routes/debug";
 import { deviceAuthRoutes } from "./routes/device-auth";
@@ -28,6 +27,7 @@ import { PollScheduler } from "./services/PollScheduler";
 import { ensureHighlighter } from "./services/PrerenderCache";
 import { RepoCloneService } from "./services/RepoClone";
 import { WalkthroughJobs } from "./services/WalkthroughJobs";
+import { acquireSingleInstance } from "./singleInstance";
 
 // ── Single-instance guard ────────────────────────────────────────────────────
 // Acquire a PID file keyed on the DB path so dev (revv-dev.db) and prod

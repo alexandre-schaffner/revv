@@ -10,7 +10,7 @@ import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import { walkthroughRatings } from "../../../db/schema/walkthrough-ratings";
 import { walkthroughSemanticSteps } from "../../../db/schema/walkthrough-semantic-steps";
-import type { ChatEditToolHandler, GetWalkthroughForEditInput } from "./spec";
+import { findIssuesMissingInlineComment } from "../walkthrough-tools";
 import {
   decodeBlock,
   decodeIssue,
@@ -19,7 +19,7 @@ import {
   ok,
   resolveActiveWalkthroughId,
 } from "./helpers";
-import { findIssuesMissingInlineComment } from "../walkthrough-tools";
+import type { ChatEditToolHandler, GetWalkthroughForEditInput } from "./spec";
 
 // ── Tool: get_walkthrough_for_edit ──────────────────────────────────────────
 

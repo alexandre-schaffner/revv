@@ -1,11 +1,15 @@
 // ── Opencode question events (runtime-only, v1 SDK doesn't type them) ──────
 
 import type { Event, Part } from "@opencode-ai/sdk";
+import { disableBunTimeout } from "../../constants";
 import { debug, logError } from "../../logger";
 import type { OpencodeClient } from "../../services/OpencodeSupervisor";
-import { disableBunTimeout } from "../../constants";
 import type { NormalizedAgentEvent, NormalizedTask } from "./normalized-events";
-import { decodeOpencodePart, decodeOpencodeAgentPart, decodeOpencodeTodoUpdate } from "./opencode-decoders";
+import {
+  decodeOpencodeAgentPart,
+  decodeOpencodePart,
+  decodeOpencodeTodoUpdate,
+} from "./opencode-decoders";
 
 interface OpencodeQuestionInfo {
   question: string;
