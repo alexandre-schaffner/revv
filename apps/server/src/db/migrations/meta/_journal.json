@@ -5,169 +5,29 @@
     {
       "idx": 0,
       "version": "6",
-      "when": 1776336176692,
-      "tag": "0000_init",
+      "when": 1779000000000,
+      "tag": "0000_foundation",
       "breakpoints": true
     },
     {
       "idx": 1,
       "version": "6",
-      "when": 1776595200000,
-      "tag": "0010_cache_entries",
+      "when": 1779100000000,
+      "tag": "0010_walkthroughs",
       "breakpoints": true
     },
     {
       "idx": 2,
       "version": "6",
-      "when": 1776800000000,
-      "tag": "0020_walkthroughs_resume_attempts",
+      "when": 1779200000000,
+      "tag": "0020_chat",
       "breakpoints": true
     },
     {
       "idx": 3,
       "version": "6",
-      "when": 1776900000000,
-      "tag": "0030_thread_message_avatars",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "6",
-      "when": 1777000000000,
-      "tag": "0040_auto_install_updates",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "6",
-      "when": 1777100000000,
-      "tag": "0050_walkthrough_issues_submitted_at",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "6",
-      "when": 1777200000000,
-      "tag": "0060_walkthrough_phases",
-      "breakpoints": true
-    },
-    {
-      "idx": 7,
-      "version": "6",
-      "when": 1777300000000,
-      "tag": "0070_chat_sessions",
-      "breakpoints": true
-    },
-    {
-      "idx": 8,
-      "version": "6",
-      "when": 1777400000000,
-      "tag": "0080_comment_threads_walkthrough_issue_id",
-      "breakpoints": true
-    },
-    {
-      "idx": 9,
-      "version": "6",
-      "when": 1777500000000,
-      "tag": "0090_user_settings_file_tree_scope",
-      "breakpoints": true
-    },
-    {
-      "idx": 10,
-      "version": "6",
-      "when": 1777600000000,
-      "tag": "0100_drop_user_settings",
-      "breakpoints": true
-    },
-    {
-      "idx": 11,
-      "version": "6",
-      "when": 1777700000000,
-      "tag": "0110_chat_messages_and_activities",
-      "breakpoints": true
-    },
-    {
-      "idx": 12,
-      "version": "6",
-      "when": 1777800000000,
-      "tag": "0120_walkthrough_semantic_steps",
-      "breakpoints": true
-    },
-    {
-      "idx": 13,
-      "version": "6",
-      "when": 1777900000000,
-      "tag": "0130_pull_requests_is_draft",
-      "breakpoints": true
-    },
-    {
-      "idx": 14,
-      "version": "6",
-      "when": 1778000000000,
-      "tag": "0140_user_onboarded_at",
-      "breakpoints": true
-    },
-    {
-      "idx": 15,
-      "version": "6",
-      "when": 1778100000000,
-      "tag": "0150_chat_subagents_tasks_plans",
-      "breakpoints": true
-    },
-    {
-      "idx": 16,
-      "version": "6",
-      "when": 1778200000000,
-      "tag": "0160_repositories_github_host",
-      "breakpoints": true
-    },
-    {
-      "idx": 17,
-      "version": "6",
-      "when": 1778300000000,
-      "tag": "0170_account_github_login_avatar",
-      "breakpoints": true
-    },
-    {
-      "idx": 18,
-      "version": "6",
-      "when": 1778400000000,
-      "tag": "0180_pull_requests_closed_at",
-      "breakpoints": true
-    },
-    {
-      "idx": 19,
-      "version": "6",
-      "when": 1778500000000,
-      "tag": "0190_walkthroughs_last_edited",
-      "breakpoints": true
-    },
-    {
-      "idx": 20,
-      "version": "6",
-      "when": 1778600000000,
-      "tag": "0200_chat_questions",
-      "breakpoints": true
-    },
-    {
-      "idx": 21,
-      "version": "6",
-      "when": 1778700000000,
-      "tag": "0210_walkthroughs_pr_commits",
-      "breakpoints": true
-    },
-    {
-      "idx": 22,
-      "version": "6",
-      "when": 1778800000000,
-      "tag": "0220_archive_window_foundation",
-      "breakpoints": true
-    },
-    {
-      "idx": 23,
-      "version": "6",
-      "when": 1778900000000,
-      "tag": "0230_project_recaps",
+      "when": 1779300000000,
+      "tag": "0030_recaps",
       "breakpoints": true
     }
   ]

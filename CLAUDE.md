@@ -28,6 +28,9 @@ make lint                # Linters across all packages
 make build               # Build all packages
 make dist                # Build platform installer (dmg/msi/deb)
 
+# Database
+cd apps/server && bunx drizzle-kit generate   # Generate migration from schema changes
+
 # Cleanup
 make clean               # Remove build artifacts
 make reset-db            # Delete SQLite database (apps/server/revv.db)
@@ -49,8 +52,27 @@ make reset-db            # Delete SQLite database (apps/server/revv.db)
 - **Effect system** throughout: services use `Effect.gen`, `Context.Tag`, and `Layer` for DI and structured error handling. Don't bypass Effect when modifying services.
 - **Services**: `GitHubService`, `RepositoryService`, `PullRequestService`, `PollScheduler`, `WebSocketHub`, `Settings`, `TokenProvider`
 - **Auth**: `better-auth` with GitHub OAuth. Bearer token strategy. OAuth callback URL: `http://localhost:45678/api/auth/callback/github`
-- **Database**: Drizzle ORM on SQLite (`revv.db`). Schema in `src/db/schema.ts`. No migration runner — schema is applied directly.
+- **Database**: Drizzle ORM on SQLite (`revv.db`). Schema in `src/db/schema.ts`. Migrations live in `src/db/migrations` and are auto-applied on startup via `drizzle-orm/bun-sqlite/migrator`. Generate new ones with `bunx drizzle-kit generate` (run from `apps/server`).
 - **WebSocket**: Clients authenticate via `?token=` query param. Server broadcasts `prs:updated`, `repos:updated`, etc. via `WebSocketHub`.
+
+#### Database migrations
+
+The project uses **Drizzle's code-first migration workflow**.
+
+**How it works:**
+1. **Schema is the source of truth.** All tables, indexes, and relations are defined in TypeScript under `apps/server/src/db/schema/`.
+2. **Generate a migration** after changing the schema by running `cd apps/server && bunx drizzle-kit generate`. This compares the current schema against the database state and writes a new `.sql` file + a `meta/` snapshot into `src/db/migrations/`.
+3. **Migrations are applied automatically on startup.** `src/db/index.ts` calls `migrate()` from `drizzle-orm/bun-sqlite/migrator` using the `src/db/migrations` folder. You do **not** need to run `drizzle-kit migrate` or `drizzle-kit push` manually.
+4. **Migration state is tracked** in a `__drizzle_migrations` table inside `revv.db`. Already-applied migrations are skipped on subsequent starts.
+
+**Expected agent workflow when schema changes are needed:**
+1. Edit the Drizzle schema files in `apps/server/src/db/schema/`.
+2. Generate the migration: `cd apps/server && bunx drizzle-kit generate`.
+3. Review the generated `.sql` file in `apps/server/src/db/migrations/` for correctness.
+4. Restart the server (`make dev-server` or `make dev`). The startup routine will apply the new migration automatically.
+5. If the generated migration is wrong (e.g., destructive defaults, wrong column types), **edit the generated `.sql` file before restarting** rather than trying to fix it after it has been applied.
+
+**Do not** run `drizzle-kit push` against the local SQLite file — the app relies on the migration-file workflow for reproducible schema evolution.
 
 ### Web (`apps/web`)
 
