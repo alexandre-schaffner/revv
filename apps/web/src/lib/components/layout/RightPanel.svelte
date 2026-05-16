@@ -4,7 +4,6 @@ import {
   Bot,
   Check,
   ChevronDown,
-  ChevronRight,
   Copy,
   GitBranch,
   GitCommitHorizontal,
@@ -184,7 +183,9 @@ const activeTasks = $derived.by(() => {
   return taskList ? taskList.tasks : [];
 });
 /** Whether the Queue dock should be visible. */
-const showQueueDock = $derived(queuedMessages.length > 0 || activeTasks.length > 0);
+const showQueueDock = $derived(
+  queuedMessages.length > 0 || activeTasks.length > 0 || commitCount > 0,
+);
 
 const streamingTurnId = $derived(
   items.findLast(
@@ -204,7 +205,6 @@ const recentToolCalls = $derived(
 );
 
 let messagesEl: HTMLDivElement | undefined = $state();
-let proposedExpanded = $state(false);
 let diffOpen = $state<{
   sha: string;
   subject: string;
@@ -856,115 +856,102 @@ function activitiesForTurn(
 		<ConversationScrollButton />
 	</Conversation>
 
-	<!-- Proposed changes strip -->
-	{#if commitCount > 0 && proposed}
-		<div class="proposed-strip">
-			<button
-				class="proposed-summary"
-				onclick={() => (proposedExpanded = !proposedExpanded)}
-				aria-expanded={proposedExpanded}
-			>
-				{#if proposedExpanded}
-					<ChevronDown size={12} />
-				{:else}
-					<ChevronRight size={12} />
-				{/if}
-				<GitCommitHorizontal size={12} />
-				<span class="proposed-count">
-					{commitCount} commit{commitCount === 1 ? '' : 's'} proposed
-				</span>
-				{#if proposed.branchName}
-					<span class="proposed-branch">{proposed.branchName}</span>
-				{/if}
-			</button>
-			{#if proposedExpanded}
-				<ul class="proposed-list">
-					{#each proposed.commits as commit (commit.sha)}
-						<li class="proposed-item">
-							<!-- role="button" instead of <button> so the Copy <button>
-								 inside doesn't end up as a nested <button> (invalid
-								 HTML — browsers reparent the inner button). Native
-								 keyboard activation is restored via Enter/Space. -->
-							<div
-								class="proposed-row"
-								role="button"
-								tabindex="0"
-								title="View diff"
-								onclick={() => void openDiff(commit)}
-								onkeydown={(e) => {
-									if (e.key === 'Enter' || e.key === ' ') {
-										e.preventDefault();
-										void openDiff(commit);
-									}
-								}}
-							>
-								<div class="proposed-row-main">
-									<code class="proposed-sha">{commit.shortSha}</code>
-									<span class="proposed-subject" title={commit.subject}>
-										{commit.subject}
-									</span>
-									<button
-										class="proposed-icon-btn"
-										type="button"
-										title="Copy SHA"
-										aria-label="Copy SHA"
-										onclick={(e) => {
-											e.stopPropagation();
-											copyToClipboard(commit.sha);
-										}}
-									>
-										<Copy size={11} />
-									</button>
-									<button
-										class="proposed-icon-btn proposed-icon-btn--danger"
-										type="button"
-										title="Discard commit"
-										aria-label="Discard commit"
-										disabled={isDiscardingCommit(commit.sha)}
-										onclick={(e) => {
-											e.stopPropagation();
-											if (prId) void discardProposedCommitAction(prId, commit.sha);
-										}}
-									>
-										{#if isDiscardingCommit(commit.sha)}
-											<Loader2 size={11} class="motion-essential-spin" />
-										{:else}
-											<Trash2 size={11} />
-										{/if}
-									</button>
-									<button
-										class="proposed-icon-btn proposed-icon-btn--accent"
-										type="button"
-										title="Push this commit to PR branch"
-										aria-label="Push this commit to PR branch"
-										disabled={isCherryPickingCommit(commit.sha)}
-										onclick={(e) => {
-											e.stopPropagation();
-											if (prId) void cherryPickProposedCommitAction(prId, commit.sha);
-										}}
-									>
-										{#if isCherryPickingCommit(commit.sha)}
-											<Loader2 size={11} class="motion-essential-spin" />
-										{:else}
-											<GitMerge size={11} />
-										{/if}
-									</button>
-								</div>
-								{#if commit.files.length > 0}
-									<span class="proposed-files">{filesSummary(commit.files)}</span>
-								{/if}
-							</div>
-						</li>
-					{/each}
-				</ul>
-			{/if}
-		</div>
-	{/if}
-
-	<!-- Queue dock: agent tasks + queued messages -->
+	<!-- Queue dock: proposed commits + agent tasks + queued messages -->
 	{#if showQueueDock}
 		<div class="queue-dock" transition:slide={{ duration: 220, easing: cubicOut }}>
 			<Queue class="rounded-b-none border-b-0 shadow-none">
+				<!-- Proposed commits from the agent -->
+				{#if commitCount > 0 && proposed}
+					<div transition:slide={{ duration: 220, easing: cubicOut }}>
+						<QueueSection open={true}>
+							<QueueSectionTrigger>
+								<QueueSectionLabel
+									label={commitCount === 1 ? 'proposed commit' : 'proposed commits'}
+									count={commitCount}
+								>
+									{#snippet icon()}
+										<GitCommitHorizontal class="size-3 text-accent" />
+									{/snippet}
+								</QueueSectionLabel>
+								{#if proposed.branchName}
+									<span class="ml-auto max-w-[140px] truncate font-mono text-xs text-muted-foreground">
+										{proposed.branchName}
+									</span>
+								{/if}
+							</QueueSectionTrigger>
+							<QueueSectionContent>
+								<QueueList>
+									{#each proposed.commits as commit, commitIdx (commit.sha)}
+										<div
+											in:fly={{ y: 4, duration: 160, delay: Math.min(commitIdx, 8) * 25, easing: cubicOut }}
+											out:fly={{ y: -4, duration: 120, easing: cubicIn }}
+										>
+											<QueueItem class="items-start gap-2 py-1.5">
+												<button
+													type="button"
+													class="flex min-w-0 flex-1 cursor-pointer flex-col gap-0.5 border-0 bg-transparent p-0 text-left"
+													onclick={() => void openDiff(commit)}
+													title="View diff"
+												>
+													<span class="flex min-w-0 items-center gap-2">
+														<code class="shrink-0 font-mono text-[10px] text-accent">{commit.shortSha}</code>
+														<span class="truncate text-xs text-foreground">{commit.subject}</span>
+													</span>
+													{#if commit.files.length > 0}
+														<span class="truncate font-mono text-[10px] text-muted-foreground">
+															{filesSummary(commit.files)}
+														</span>
+													{/if}
+												</button>
+												<QueueItemActions>
+													<QueueItemAction
+														class="opacity-100"
+														onclick={() => copyToClipboard(commit.sha)}
+														aria-label="Copy SHA"
+														title="Copy SHA"
+													>
+														<Copy class="size-3" />
+													</QueueItemAction>
+													<QueueItemAction
+														class="opacity-100 hover:text-destructive"
+														disabled={isDiscardingCommit(commit.sha)}
+														onclick={() => {
+															if (prId) void discardProposedCommitAction(prId, commit.sha);
+														}}
+														aria-label="Discard commit"
+														title="Discard commit"
+													>
+														{#if isDiscardingCommit(commit.sha)}
+															<Loader2 class="size-3 motion-essential-spin" />
+														{:else}
+															<Trash2 class="size-3" />
+														{/if}
+													</QueueItemAction>
+													<QueueItemAction
+														class="opacity-100 hover:text-primary"
+														disabled={isCherryPickingCommit(commit.sha)}
+														onclick={() => {
+															if (prId) void cherryPickProposedCommitAction(prId, commit.sha);
+														}}
+														aria-label="Push this commit to PR branch"
+														title="Push this commit to PR branch"
+													>
+														{#if isCherryPickingCommit(commit.sha)}
+															<Loader2 class="size-3 motion-essential-spin" />
+														{:else}
+															<GitMerge class="size-3" />
+														{/if}
+													</QueueItemAction>
+												</QueueItemActions>
+											</QueueItem>
+										</div>
+									{/each}
+								</QueueList>
+							</QueueSectionContent>
+						</QueueSection>
+					</div>
+				{/if}
+
 				<!-- Active todo list from the agent -->
 				{#if activeTasks.length > 0}
 					{@const completed = activeTasks.filter((t) => t.status === 'completed').length}
@@ -1534,144 +1521,6 @@ function activitiesForTurn(
 	@keyframes motion-essential-spin {
 		from { transform: rotate(0deg); }
 		to { transform: rotate(360deg); }
-	}
-
-	/* Proposed-changes strip */
-	.proposed-strip {
-		flex-shrink: 0;
-		border-top: 1px solid var(--color-border-subtle);
-		background: var(--color-bg-secondary);
-	}
-
-	.proposed-summary {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		width: 100%;
-		padding: 8px 12px;
-		background: transparent;
-		border: none;
-		cursor: pointer;
-		font-size: 11px;
-		color: var(--color-text-secondary);
-		text-align: left;
-	}
-
-	.proposed-summary:hover {
-		background: var(--color-bg-tertiary);
-	}
-
-	.proposed-count {
-		font-weight: 600;
-		color: var(--color-accent);
-	}
-
-	.proposed-branch {
-		font-family: var(--font-mono);
-		font-size: 10px;
-		color: var(--color-text-muted);
-		margin-left: auto;
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		max-width: 140px;
-	}
-
-	.proposed-list {
-		list-style: none;
-		margin: 0;
-		padding: 0 12px 8px;
-		max-height: 220px;
-		overflow-y: auto;
-	}
-
-	.proposed-item {
-		padding: 6px 0;
-		border-top: 1px solid var(--color-border-subtle);
-	}
-
-	.proposed-row {
-		display: flex;
-		flex-direction: column;
-		gap: 3px;
-		padding: 6px 4px;
-		margin: 0 -4px;
-		border-radius: 4px;
-		cursor: pointer;
-		transition: background-color var(--duration-snap);
-	}
-
-	.proposed-row:hover {
-		background: var(--color-bg-tertiary);
-	}
-
-	.proposed-row:focus-visible {
-		outline: none;
-		background: var(--color-bg-tertiary);
-		box-shadow: 0 0 0 1px var(--color-accent);
-	}
-
-	.proposed-row-main {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-	}
-
-	.proposed-files {
-		font-size: 10px;
-		color: var(--color-text-muted);
-		font-family: var(--font-mono);
-		padding-left: 2px;
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-	}
-
-	.proposed-sha {
-		font-family: var(--font-mono);
-		font-size: 10px;
-		color: var(--color-accent);
-		flex-shrink: 0;
-	}
-
-	.proposed-subject {
-		font-size: 11px;
-		color: var(--color-text-primary);
-		flex: 1;
-		min-width: 0;
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-	}
-
-	.proposed-icon-btn {
-		font-size: 10px;
-		font-family: var(--font-mono);
-		color: var(--color-text-muted);
-		background: transparent;
-		border: none;
-		border-radius: 3px;
-		padding: 2px 6px;
-		cursor: pointer;
-		display: flex;
-		align-items: center;
-		gap: 3px;
-		transition: background-color var(--duration-snap), color var(--duration-snap);
-	}
-
-	.proposed-icon-btn:hover {
-		background: var(--color-bg-tertiary);
-		color: var(--color-text-primary);
-	}
-
-	.proposed-icon-btn--danger:hover:not(:disabled) {
-		color: var(--color-destructive, hsl(0 72% 51%));
-		background: color-mix(in srgb, var(--color-destructive, hsl(0 72% 51%)) 12%, transparent);
-	}
-
-	.proposed-icon-btn--accent:hover:not(:disabled) {
-		color: var(--color-primary);
-		background: color-mix(in srgb, var(--color-primary) 12%, transparent);
 	}
 
 	/* Blocked-by-unpushed-commits strip */
