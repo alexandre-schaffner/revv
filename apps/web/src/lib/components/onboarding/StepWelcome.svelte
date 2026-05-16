@@ -51,7 +51,7 @@ let { onContinue }: Props = $props();
 		display: flex;
 		align-items: center;
 		gap: 18px;
-		animation: actions-in 800ms cubic-bezier(0.16, 1, 0.3, 1) 400ms backwards;
+		animation: actions-in var(--duration-ceremonial-slow) var(--ease-out-expo) 400ms backwards;
 	}
 
 	@keyframes actions-in {

@@ -177,7 +177,7 @@ async function handleContinue() {
 		border-bottom: 1px solid var(--ob-border);
 		cursor: pointer;
 		transition: background-color var(--duration-snap) var(--ease-out-expo);
-		animation: option-in 600ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+		animation: option-in var(--duration-ceremonial-medium) var(--ease-out-expo) backwards;
 	}
 
 	.option:nth-child(2) {
@@ -229,7 +229,7 @@ async function handleContinue() {
 		inset: 3px;
 		border-radius: 50%;
 		background: var(--ob-text-italic);
-		animation: mark-pop 360ms cubic-bezier(0.34, 1.56, 0.64, 1);
+		animation: mark-pop var(--duration-slow) var(--ease-out-expo);
 	}
 
 	@keyframes mark-pop {
@@ -282,7 +282,7 @@ async function handleContinue() {
 	.actions {
 		display: flex;
 		justify-content: flex-end;
-		animation: actions-in 600ms cubic-bezier(0.16, 1, 0.3, 1) 240ms backwards;
+		animation: actions-in var(--duration-ceremonial-medium) var(--ease-out-expo) 240ms backwards;
 	}
 
 	@keyframes actions-in {
@@ -323,7 +323,7 @@ async function handleContinue() {
 	}
 
 	.primary svg {
-		transition: transform 320ms cubic-bezier(0.16, 1, 0.3, 1);
+		transition: transform var(--duration-slow) var(--ease-out-expo);
 	}
 
 	.primary:hover:not(:disabled) {

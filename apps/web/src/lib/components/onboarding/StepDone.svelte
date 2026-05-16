@@ -70,7 +70,7 @@ onMount(() => {
 		flex-direction: column;
 		gap: 32px;
 		max-width: 520px;
-		animation: scene-in 800ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+		animation: scene-in var(--duration-ceremonial-slow) var(--ease-out-expo) backwards;
 	}
 
 	.ornament {
@@ -93,7 +93,7 @@ onMount(() => {
 		align-items: center;
 		gap: 14px;
 		padding-top: 16px;
-		animation: fin-in 1200ms cubic-bezier(0.16, 1, 0.3, 1) 600ms backwards;
+		animation: fin-in var(--duration-ceremonial-slow) var(--ease-out-expo) 600ms backwards;
 	}
 
 	.dash {

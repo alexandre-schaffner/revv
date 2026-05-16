@@ -239,7 +239,7 @@ onMount(() => {
 		cursor: pointer;
 		border-radius: 4px;
 		opacity: 0.6;
-		transition: opacity 120ms ease;
+		transition: opacity var(--duration-snap) var(--ease-soft);
 	}
 
 	.icon-btn:hover {

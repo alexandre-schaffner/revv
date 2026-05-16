@@ -1,10 +1,9 @@
 # PRD-04: GitHub Sync & Conversations
 
+## Status: **BACKEND SHIPPED · FRONTEND ~50%**
 ## Priority: P1 (Collaboration)
-
 ## Dependencies: PRD-01 (persisted threads, review sessions)
-
-## Estimated: 5-6 days
+## Original estimate: 5-6 days  |  Last updated: 2026-05-16
 
 ---
 
@@ -14,7 +13,98 @@ Make comments bidirectional. Threads created in Revv push to GitHub as review co
 
 ---
 
-## Current State
+## What we built
+
+### Server — `apps/server/src/services/Sync.ts`
+
+`SyncService` implements the full bidirectional contract from the original spec:
+
+- `pushThread(threadId)` — creates a GitHub review comment, captures `externalCommentId` + `externalThreadId`
+- `pushReply(messageId)` — posts a reply against a known GitHub parent comment
+- `pushThreadStatus(threadId)` — resolves / unresolves on GitHub via GraphQL
+- `pullComments(prId)` — incremental pull (uses `commentsSyncedAt` watermark); creates new threads, appends new messages, reconciles GitHub-side resolution and edits
+- `syncThreads(prId)` — orchestrates push-then-pull for a PR
+- `getThreadSummary(prId, userLogin)` — role-aware counts (`total`, `open`, `pendingYou`, `pendingThem`, `resolved`)
+
+The thread status machine (originally specced here) lives in `ReviewService.transitionStatus` (`apps/server/src/services/Review.ts`): reviewer post → `pending_coder`, coder post → `pending_reviewer`, AI post → unchanged.
+
+### GitHub integration — `apps/server/src/services/GitHub.ts`
+
+Adds `postReviewComment`, `replyToComment`, `resolveReviewThread`, `unresolveReviewThread`, `listReviewComments`, `listReviewThreads`. All resolve the GitHub host from `SettingsService` so the same code path works against `github.com` and GHE (`nocturlab.ghe.com` by default — see PRD-06).
+
+### Schema additions (`apps/server/src/db/schema/`)
+
+- `comment-threads.ts` — `externalThreadId`, `externalCommentId`, `lastSyncedAt`, `walkthroughIssueId` (the last column links AI-generated comments to walkthrough issues for cascade-delete; not in original spec)
+- `thread-messages.ts` — `externalId` (GitHub comment ID), `authorAvatarUrl` (synced from GitHub; not in original spec)
+
+### Routes (`apps/server/src/routes/prs.ts`, `apps/server/src/routes/threads.ts`)
+
+- `POST /api/prs/:id/sync-threads` — bidirectional sync
+- `GET /api/prs/:id/thread-summary` — role-aware counts (fetches current user's GitHub login from auth tables, compares against `pullRequests.authorLogin`)
+- `POST /api/threads/:id/reopen` — endpoint exists; **not yet called from any UI**
+
+### WebSocket envelopes (`packages/shared/src/ws.ts`)
+
+`threads:synced`, `threads:sync-error`, `threads:new-reply`.
+
+### Frontend (`apps/web/src/lib/`)
+
+- `stores/sync.svelte.ts` — handles `threads:synced` broadcasts, exposes per-PR sync status
+- `components/review/annotation-renderers.ts` — gutter marker colors honour the status machine (`var(--color-warning)` for pending statuses)
+- `AnnotationThread.svelte` — renders multi-message threads, including server-pulled GitHub comments with avatars
+
+---
+
+## What's still missing (active scope)
+
+### Sidebar thread-count badges
+
+- Sidebar `PrItem.svelte` should call `GET /api/prs/:id/thread-summary` (batch on PR list load, or lazy) and render counts: `🔵2 🟠1` when totals > 0
+- Use status-driven colors consistent with gutter markers (blue / orange / gray)
+
+### Status label on thread headers
+
+- `AnnotationThread.svelte` currently shows the thread but not its status: should render "Pending you" / "Waiting on coder" / "Waiting on reviewer" / "Resolved"
+- Helper: `isYourTurn(thread, userLogin, prAuthorLogin)` in a shared util
+
+### Manual "Sync now" affordance
+
+- Trigger: command palette entry + a button somewhere persistent (bottom bar?)
+- Indicator: `⟳ Synced 12s ago` / `⟳ Syncing…` / `⚠ Sync failed [retry]`
+
+### Reopen UI
+
+- The `POST /api/threads/:id/reopen` endpoint is unused — wire a "Reopen" affordance into resolved threads
+
+### GitHub rate-limit handling
+
+- Surface backoff state in the sync indicator
+- `SyncService` should respect rate-limit headers and cap retries
+
+### Sync polling
+
+- `PollScheduler` does not currently include thread sync; today it's triggered on demand by the proposed-changes/push flow and from the chat agent
+- Decide: include in the existing PR poll cycle (heavier) vs separate lighter-weight thread-only cycle
+
+---
+
+## Acceptance criteria for remaining work
+
+- [ ] Sidebar shows accurate thread-count badge per PR; badge colours match status-machine semantics
+- [ ] Resolved threads expose a Reopen affordance that calls `POST /api/threads/:id/reopen`
+- [ ] Sync indicator visible in the chrome with `last_synced_at`, in-flight, and error states
+- [ ] Backoff under rate limit: failed sync displays a friendly retry-after countdown, doesn't hammer the API
+- [ ] `make typecheck` and `make lint` pass
+
+---
+
+## Original Spec (reference)
+
+The remaining sections below capture the original PRD design narrative, retained as a reference for the frontend work still in scope. The data model, service surface, and GitHub integration table all match the shipped backend.
+
+---
+
+## Current State (original)
 
 From PRD-01 we'll have:
 

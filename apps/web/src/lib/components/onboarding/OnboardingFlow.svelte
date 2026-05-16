@@ -197,7 +197,7 @@ const meta: Record<StepId, StepMeta> = {
 
 <style>
 	.step-frame {
-		animation: step-in 760ms cubic-bezier(0.16, 1, 0.3, 1) 280ms backwards;
+		animation: step-in var(--duration-ceremonial-slow) var(--ease-out-expo) 280ms backwards;
 	}
 
 	@keyframes step-in {

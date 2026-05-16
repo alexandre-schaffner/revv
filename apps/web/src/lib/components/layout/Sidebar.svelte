@@ -634,7 +634,7 @@ function handleKeydown(e: KeyboardEvent) {
 		min-width: 0;
 		min-height: 0;
 		overflow: hidden;
-		transition: transform 250ms var(--ease-out-expo);
+		transition: transform var(--duration-smooth) var(--ease-out-expo);
 		will-change: transform;
 	}
 

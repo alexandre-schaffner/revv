@@ -1,167 +1,217 @@
 # PRD-06: Polish, Performance & Ship
 
+## Status: **PARTIAL (~50%)**
 ## Priority: P2 (Ship quality)
-
 ## Dependencies: PRD-01 through PRD-05
-
-## Estimated: 6-8 days
+## Original estimate: 6-8 days  |  Last updated: 2026-05-16
 
 ---
 
 ## Objective
 
-Make Revv production-grade: complete the keyboard-first experience, expand the command palette, optimize performance for large PRs, add offline support, build an onboarding flow, wire up system tray with notifications, and sign/notarize for macOS distribution.
+Make Revv production-grade: complete the keyboard-first experience, expand the command palette, optimize performance for large PRs, add offline support, finish onboarding, wire up system tray + notifications, and sign/notarize for distribution.
+
+This PRD inherits a number of emergent features that shipped without their own spec — onboarding, multi-account auth, GHE-default support, system tray, auto-start, auto-update infrastructure, CI. They're documented inline below, in the section they fit best. See also `07-emergent-features.md` for the cross-link index.
 
 ---
 
-## Current State
+## 1. Keyboard shortcuts
 
-Several polish items are already partially done:
+### Status: **PARTIAL**
 
-- **Command palette**: `Cmd+K` works with fuzzy search; theme, sidebar, and panel commands registered
-- **Keyboard shortcuts**: `Cmd+B` (sidebar), `Cmd+R` (panel), `Cmd+K` (palette) work
-- **Theme system**: light/dark/system with independent diff theme — fully functional
-- **`registerCommand()`**: extensible command registry exists
+### Shipped (`apps/web/src/lib/stores/shortcuts.svelte.ts`)
 
-**What's missing:** Full keyboard navigation (j/k in sidebar, n/p in diff), contextual command palette entries (PRs, files, actions), virtualized scrolling for large diffs, offline mode, onboarding, system tray, auto-update, app signing.
+| Shortcut       | Action                  |
+| -------------- | ----------------------- |
+| `Cmd+P`        | PR search (palette)     |
+| `Cmd+Shift+P`  | Command palette         |
+| `Cmd+B`        | Toggle sidebar          |
+| `Cmd+R`        | Toggle right panel      |
+| `Cmd+W`        | Close PR / view         |
+| `Cmd+,`        | Open settings           |
+| `Cmd+1/2/3`    | Switch tabs             |
+| `j` / `k`      | Sidebar navigation      |
 
----
+Focus tracking: `apps/web/src/lib/stores/focus-mode.svelte.ts` tracks the focused entity for j/k movement in the sidebar (`Sidebar.svelte`, `PierreFileTree.svelte`).
 
-## Keyboard Shortcut System
+### Remaining (original spec, still in scope)
 
-### Global
+#### Global
 
-| Shortcut      | Action                               |
-| ------------- | ------------------------------------ |
-| `Cmd+K`       | Command palette _(already works)_    |
-| `Cmd+,`       | Open settings                        |
-| `Cmd+Shift+S` | Sync PRs                             |
-| `Cmd+B`       | Toggle sidebar _(already works)_     |
-| `Cmd+R`       | Toggle right panel _(already works)_ |
-| `Escape`      | Close palette / cancel / collapse    |
-| `?`           | Show keyboard shortcut cheat sheet   |
+| Shortcut      | Action                               | Status |
+| ------------- | ------------------------------------ | ------ |
+| `Cmd+Shift+S` | Sync PRs                             | TODO   |
+| `Escape`      | Close palette / cancel / collapse    | TODO (partial — works in palette only) |
+| `?`           | Show keyboard shortcut cheat sheet   | TODO   |
 
-### Sidebar
+#### Sidebar
 
-| Shortcut  | Action                   |
-| --------- | ------------------------ |
-| `j` / `k` | Move selection down / up |
-| `Enter`   | Open selected PR         |
-| `/`       | Focus search bar         |
-| `Escape`  | Clear search, unfocus    |
+| Shortcut  | Action                   | Status |
+| --------- | ------------------------ | ------ |
+| `Enter`   | Open selected PR         | TODO   |
+| `/`       | Focus search bar         | TODO   |
+| `Escape`  | Clear search, unfocus    | TODO   |
 
-### Review — Diff Tab
+#### Review — Diff Tab
 
-| Shortcut    | Action                             |
-| ----------- | ---------------------------------- |
-| `1` / `2`   | Switch to Walkthrough / Diff tab   |
-| `n` / `p`   | Next / previous file               |
-| `j` / `k`   | Next / previous hunk (within file) |
-| `c`         | Comment on focused line            |
-| `e`         | Explain focused line               |
-| `a`         | Accept focused hunk                |
-| `x`         | Reject focused hunk                |
-| `Cmd+Enter` | Submit comment                     |
-| `Escape`    | Close comment / collapse thread    |
+| Shortcut    | Action                             | Status |
+| ----------- | ---------------------------------- | ------ |
+| `n` / `p`   | Next / previous file               | TODO   |
+| `j` / `k`   | Next / previous hunk (within file) | TODO   |
+| `c`         | Comment on focused line            | TODO   |
+| `a` / `x`   | Accept / reject focused hunk       | TODO   |
+| `Cmd+Enter` | Submit comment                     | TODO   |
+| `Escape`    | Close comment / collapse thread    | TODO   |
 
-### Review — Walkthrough Tab
+The `e` (explain) shortcut from the original spec is no longer applicable — see PRD-02 (Chat Agent); explanation is via chat.
 
-| Shortcut  | Action                        |
-| --------- | ----------------------------- |
-| `←` / `→` | Previous / next step          |
-| `1` / `2` | Switch tabs                   |
-| `c`       | Comment on focused code block |
+#### Review — Walkthrough Tab
 
-### Review — Agent
+| Shortcut  | Action                        | Status |
+| --------- | ----------------------------- | ------ |
+| `←` / `→` | Previous / next section       | TODO (handler exists in `walkthroughNav.svelte.ts`; not wired) |
+| `c`       | Comment on focused code block | TODO   |
 
-| Shortcut      | Action                    |
-| ------------- | ------------------------- |
-| `Cmd+Shift+P` | Trigger post-review agent |
+#### Review — Agent
 
-### Implementation
+The `Cmd+Shift+P` agent shortcut is **dropped** — chat is always-on (PRD-02), so there's no separate trigger.
 
-- **Centralized manager**: `lib/utils/shortcuts.svelte.ts` — already has foundation, needs context-awareness
-- **Context stack**: sidebar | review-diff | review-walkthrough | modal | palette — shortcuts only fire in their context
-- **Input guard**: shortcuts disabled when focus is in `<input>`, `<textarea>`, or `contenteditable`
-- **Cheat sheet**: `?` opens a modal overlay listing all shortcuts grouped by context
-- **Tooltips**: shortcut hints shown in button tooltips (e.g., hover "Sync" → "Sync PRs (⌘⇧S)")
+### Implementation (remaining)
+
+- **Context awareness**: shortcuts currently fire globally; need a "focus stack" (sidebar | review-diff | review-walkthrough | modal | palette) so keys only fire in their context
+- **Input guard**: disable shortcuts when focus is in `<input>`, `<textarea>`, or `contenteditable`
+- **Cheat sheet**: `?` opens an overlay listing all shortcuts grouped by context
+- **Tooltips**: button tooltips show their shortcut (e.g., hover "Sync" → "Sync PRs (⌘⇧S)")
 
 ---
 
-## Command Palette Expansion
+## 2. Command palette
 
-The palette already works with fuzzy search. Expand it:
+### Status: **SHIPPED (core) · PARTIAL (categories)**
 
-### Dynamic Command Sources
+### Shipped (`apps/web/src/lib/components/layout/CommandPalette.svelte`, `apps/web/src/lib/stores/commands.svelte.ts`)
 
-| Category       | Source                                 | When Available             |
-| -------------- | -------------------------------------- | -------------------------- |
-| PRs            | All PRs from `prs.svelte.ts` store     | Always                     |
-| Files          | Changed files in current PR            | When in review view        |
-| Actions        | Global actions (sync, settings, theme) | Always                     |
-| Review Actions | Comment, explain, accept/reject, agent | When in review view        |
-| Navigation     | Jump to walkthrough step N             | When walkthrough is loaded |
+- Fuzzy search + scoring
+- Mode-switching via `>` prefix (`search` ↔ `command`)
+- PRs and core actions (theme, sidebar, panel) registered via `registerCommand()`
 
-### Registration Pattern
+### Remaining
 
-Each view registers its commands on mount and deregisters on unmount:
+| Category       | Source                                 | When Available             | Status |
+| -------------- | -------------------------------------- | -------------------------- | ------ |
+| Files          | Changed files in current PR            | When in review view        | TODO   |
+| Review Actions | Comment, accept/reject, sync           | When in review view        | TODO   |
+| Navigation     | Jump to walkthrough section N          | When walkthrough is loaded | TODO   |
+| Recently used  | localStorage-backed                    | When palette opens empty   | TODO   |
 
-```typescript
-// In a review component
-onMount(() => {
-  const unregister = registerCommand({
-    id: "review:next-file",
-    label: "Next File",
-    category: "Review",
-    shortcut: "N",
-    action: () => goToNextFile(),
-  });
-  return unregister;
-});
-```
-
-### Recently Used
-
-Track recently selected commands in localStorage. Show them first when palette opens with empty query.
+Each view should register its commands on mount and deregister on unmount (`registerCommand({ id, label, category, shortcut, action })`).
 
 ---
 
-## Performance Optimization
+## 3. Onboarding flow
 
-### Virtualized Diff Scrolling
+### Status: **SHIPPED**
 
-Diffs with 500+ lines need virtualized rendering:
+### What we built (`apps/web/src/lib/components/onboarding/`)
 
-- Only render visible lines + a buffer zone (±50 lines)
-- Use Intersection Observer or a virtual scroll container
-- Gutter annotations and comment threads must work within virtualized list
+A 5-step wizard:
+
+1. **Welcome** — `StepWelcome.svelte`
+2. **Host** — `StepHost.svelte` — choose GHE (default: `nocturlab.ghe.com`) vs `github.com`
+3. **Sign in** — `StepSignIn.svelte` — OAuth via Better Auth, deep-link callback on `revv://auth/callback`
+4. **Repositories** — `StepRepo.svelte` — search + bulk-add
+5. **Done** — `StepDone.svelte` — "your PRs are syncing"
+
+Plus:
+
+- `OnboardingFlow.svelte` — wizard shell; auto-advances on auth state change
+- `OnboardingGate.svelte` — gates the main app until onboarding is complete
+- `OnboardingShell.svelte` — chrome around the wizard
+- `AccountPicker.svelte` — used during sign-in for multi-account selection (see section 4)
+- Replay mode — onboarding can be re-entered from settings without losing existing state
+- Resume — onboarding survives app restart at any step
+
+Server-side: `apps/server/src/routes/onboarding.ts`, `apps/server/src/routes/device-auth.ts`.
+
+### Drift from original spec
+
+- Host selection (`github.com` vs GHE) is **step 2**, not buried in settings — Revv defaults to `nocturlab.ghe.com` and treats public GitHub as opt-in
+- "AI Setup" step from the original spec is **removed** — chat agent credentials follow each agent's own conventions (Claude / opencode), not an API key entry field
+
+---
+
+## 4. Multi-account support
+
+### Status: **SHIPPED**
+
+### What we built (`apps/web/src/lib/stores/auth.svelte.ts`, `apps/server/src/routes/user.ts`)
+
+Two account kinds, both reactive:
+
+- `ConnectedAccount[]` — accounts authenticated against the server (`fetchConnectedAccounts`)
+- `LocalAccount[]` — accounts the user has signed into on this device (`fetchLocalAccounts`)
+
+`AccountPicker.svelte` lets the user switch between accounts during onboarding and from the user menu (`apps/web/src/lib/components/sidebar/UserMenu.svelte`). Org filtering (`orgs.svelte.ts`, `OrgSwitcher.svelte`) is account-scoped.
+
+### Drift from original spec
+
+Not in original PRD-06. Added during development to support reviewers who work across multiple GitHub orgs and identities.
+
+---
+
+## 5. GHE / GitHub host configuration
+
+### Status: **SHIPPED**
+
+### What we built
+
+- `apps/server/src/services/Settings.ts` — `githubHost` setting resolved at call time
+- `apps/server/src/services/GitHub.ts`, `apps/server/src/services/ChatChangesPush.ts`, `apps/server/src/services/RepoClone.ts` — all GitHub-touching code reads the host at call time, not at module load
+- Default: `nocturlab.ghe.com`. `github.com` is opt-in via onboarding step 2 or settings.
+
+### Drift from original spec
+
+Not in original PRD-06. Added because the primary deployment target is GHE; public GitHub is a secondary case.
+
+---
+
+## 6. Performance optimization
+
+### Status: **MOSTLY TODO**
+
+### Virtualized diff scrolling
+
+Diffs with 500+ lines need virtualized rendering. `PierreFileTree.svelte` has a `data-file-tree-virtualized-scroll` attribute, but no virtualization library is wired in.
+
+- Only render visible lines + a ±50-line buffer
+- Gutter annotations and comment threads must work within the virtualized list
 - Target: 60fps scroll on a 2000-line unified diff
 
-### Lazy File Loading
+### Lazy file loading
 
-- Don't fetch all file diffs on PR open — fetch on-demand when user selects a file
-- File tree shows metadata immediately (file name, +/- counts) from the PR files endpoint
-- Diff content loads when file is selected
+- Don't fetch all file diffs on PR open — fetch on-demand when the user selects a file
+- File tree shows metadata (name, +/- counts) immediately from `pr_diff_files`
+- Diff content loads when the file is selected
 - Prefetch the next file in the tree for instant switching
 
-### Async Syntax Highlighting
+### Async syntax highlighting
 
 - Shiki highlighting can block the main thread on large files
-- Run highlighting in a Web Worker or use `requestIdleCallback` to avoid jank
-- Show unhighlighted diff immediately, enhance with highlighting when ready
+- Run it in a Web Worker or via `requestIdleCallback`
+- Show the unhighlighted diff immediately, enhance when ready
 
-### Caching Strategy
+### Caching strategy (mostly shipped via existing services)
 
-| Data                | Cache Location           | Invalidation                      |
-| ------------------- | ------------------------ | --------------------------------- |
-| PR list             | Svelte store + SQLite    | On sync                           |
-| File diffs          | In-memory per session    | On file switch (LRU, keep last 5) |
-| File content        | `fileContentCache` table | On new commits (SHA check)        |
-| Walkthrough         | `walkthroughs` table     | On new commits (SHA check)        |
-| Shiki grammars      | In-memory singleton      | Never (loaded once)               |
-| Explanation history | Svelte store             | On PR switch                      |
+| Data                | Cache Location                 | Invalidation                      | Status |
+| ------------------- | ------------------------------ | --------------------------------- | ------ |
+| PR list             | Svelte store + SQLite          | On sync                           | SHIPPED |
+| File diffs          | `pr_diff_files` + in-memory    | On file switch (LRU)              | PARTIAL — table exists, LRU TODO |
+| File content        | `file_content_cache` table     | On new commits (SHA check)        | SHIPPED |
+| Walkthrough         | `walkthroughs` + cohort tables | On new commits (SHA check, supersede) | SHIPPED |
+| Shiki grammars      | In-memory singleton            | Never                             | SHIPPED |
+| Prerender HTML      | `PrerenderCache` service       | On block content change           | SHIPPED |
 
-### Performance Targets
+### Performance targets (TODO — none measured)
 
 | Metric                   | Target                 |
 | ------------------------ | ---------------------- |
@@ -169,30 +219,32 @@ Diffs with 500+ lines need virtualized rendering:
 | PR list render (100 PRs) | < 500ms                |
 | Diff render (500 lines)  | < 1 second             |
 | Diff scroll (2000 lines) | 60fps                  |
-| Walkthrough first step   | < 3 seconds (AI-bound) |
+| Walkthrough first event  | < 3 seconds (AI-bound) |
 | File switch in diff      | < 300ms                |
 
 ---
 
-## Offline Mode
+## 7. Offline mode
 
-### Behavior
+### Status: **PARTIAL (read-only works, no outbox)**
 
-All previously viewed data is already in SQLite. Offline mode extends this:
+Cached PRs, diffs, file contents, walkthroughs are all already in SQLite — offline reads work today. The remaining work is the write path.
 
-- **Detection**: `navigator.onLine` + periodic ping to localhost:45678
-- **Sidebar**: shows cached PRs with subtle "offline" indicator; sync button disabled
-- **Diff view**: works fully from cache (file diffs and content cached)
+### Behavior (target)
+
+- **Detection**: `navigator.onLine` + periodic ping to `localhost:45678`
+- **Sidebar**: cached PRs with a subtle "offline" indicator; sync button disabled
+- **Diff view**: works fully from cache (shipped)
 - **Walkthrough**: cached walkthroughs display; regenerate disabled
-- **Comments**: can be created locally (saved to SQLite immediately)
-- **Sync**: queued actions replay automatically when connection returns
+- **Comments**: created locally (saved to SQLite immediately) — needs outbox replay
+- **Chat agent**: read-only (no agent calls without network); chat history viewable
 
-### Action Queue (Outbox)
+### Action queue (outbox) — TODO
 
 ```sql
 CREATE TABLE outbox (
   id TEXT PRIMARY KEY,
-  action_type TEXT NOT NULL,        -- 'create_thread' | 'add_message' | 'resolve_thread' | 'push_to_github'
+  action_type TEXT NOT NULL,        -- create_thread | add_message | resolve_thread | push_to_github
   payload TEXT NOT NULL,            -- JSON: the full request body
   created_at TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending',  -- pending | synced | failed
@@ -202,116 +254,103 @@ CREATE TABLE outbox (
 );
 ```
 
-When online, a background job drains the outbox in order. Failed items retry with exponential backoff (max 3 retries). Conflicts: last-write-wins with user notification.
+When online, a background job drains the outbox in order. Failed items retry with exponential backoff (max 3). Conflicts: last-write-wins with user notification.
 
 ---
 
-## Onboarding Flow
+## 8. System tray
 
-First-time wizard shown when no settings are configured:
+### Status: **SHIPPED (basics)**
 
-### Steps
+### What we built (`apps/desktop/src/lib.rs`)
 
-1. **Welcome** — "Revv: AI-powered code review" + [Get Started]
-2. **Sign in with GitHub** — OAuth button → Better Auth flow → shows "Connected as @username"
-3. **Add Repositories** — search by name, select repos, bulk add
-4. **AI Setup** — Anthropic API key input with validation → shows model selector
-5. **Ready** — "Your PRs are syncing now" → [Open Revv]
+- macOS menu-bar icon with tray menu (Open / Quit)
+- Left-click brings window to front
+- Close button intercepted → window hides to tray (close-to-tray)
+- `tauri_plugin_autostart` registered with `--hidden` flag for login-triggered launches
 
-### Implementation
+### Remaining
 
-- Route: `/onboarding` — multi-step wizard component
-- After completion, redirect to main app
-- Settings page always accessible to change these later
-- Skip button on AI setup (can be configured later)
+- [ ] **Badge count** — number of PRs with threads pending the user (requires PRD-04 thread-summary plumbing per account)
+- [ ] **Native notifications** — `tauri-plugin-notification` not registered; needed for "new reply on PR #142" and "sync complete: 3 new PRs"
+- [ ] **Right-click "Sync Now"** — menu entry exists for Open/Quit; sync action TODO
 
 ---
 
-## System Tray
+## 9. Auto-update
 
-### Behavior
+### Status: **PARTIAL (plugin wired, signing TODO)**
 
-- Revv icon in macOS menu bar
-- Badge count: number of PRs with threads pending the user
-- Click: bring Revv window to front
-- Right-click menu:
-  - Open Revv
-  - Sync Now
-  - ── separator ──
-  - Quit Revv
+### What we built
 
-### Implementation
+- `tauri-plugin-updater` registered (`apps/desktop/src/lib.rs`)
+- `apps/desktop/tauri.conf.json` has the updater config
 
-- Use Tauri's tray API (`tauri-plugin-tray`)
-- Badge count updated on each sync cycle
-- Icon: monochrome Revv logo SVG (fits macOS menu bar style)
+### Remaining
 
-### Native Notifications
-
-Via Tauri notification API:
-
-- "New reply on PR #142" — when sync detects replies on pending threads
-- "Sync complete: 3 new PRs" — after background sync finds new PRs
-- Respect system notification preferences (can be disabled in settings)
+- [ ] **Updater signing** — `release.yml` has the signing step commented out (`# Uncomment when updater signing is configured`); need `TAURI_SIGNING_PRIVATE_KEY` in CI secrets
+- [ ] **Auto-update manifest JSON** — not generated by `release.yml` yet; needed for the updater plugin to find new versions
+- [ ] **Toast UI** — no "update available, restart to apply" toast wired
+- [ ] **Cadence** — original spec called for check-on-launch + every 6h; not yet enforced
 
 ---
 
-## Auto-Update
+## 10. App signing & distribution
 
-- Tauri's built-in updater plugin (`tauri-plugin-updater`)
-- Check on launch + every 6 hours
-- UI: toast notification "Update available — restart to apply"
-- Download in background, apply on next restart
-- Update manifest hosted on GitHub Releases
+### Status: **PARTIAL**
 
----
+### What we built
 
-## App Signing & Distribution
+- `.github/workflows/ci.yml` — lint, typecheck, build on every PR
+- `.github/workflows/release.yml` — cross-platform Tauri build (macOS DMG, Windows NSIS, Linux AppImage)
+- `tauri.conf.json` — bundle config for all three platforms
 
-### macOS
+### Remaining
 
-- Apple Developer certificate for code signing
-- Notarization via `notarytool` (required for Gatekeeper)
-- DMG installer with custom background image
+#### macOS
 
-### CI Pipeline (`release.yml`)
+- [ ] Apple Developer certificate for code signing
+- [ ] Notarization via `notarytool` (required for Gatekeeper)
+- [ ] DMG custom background image
+- [ ] Signing secrets: `APPLE_CERTIFICATE` (base64), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD`
 
-1. Version bump from git tag
-2. Build SvelteKit: `bun run build` in `apps/web`
-3. Bundle Elysia server: `bun build` in `apps/server`
-4. Build Tauri: Rust compile + bundle frontend + sidecar
-5. Sign + notarize
-6. Create DMG
-7. Upload to GitHub Releases
-8. Update auto-update manifest JSON
+#### Windows
 
-### Signing Secrets (GitHub Actions)
+- [ ] Authenticode signing (currently unsigned NSIS installer triggers SmartScreen warnings)
 
-- `APPLE_CERTIFICATE` (base64)
-- `APPLE_CERTIFICATE_PASSWORD`
-- `APPLE_ID` (for notarization)
-- `APPLE_TEAM_ID`
-- `APPLE_APP_PASSWORD` (app-specific password)
-- `TAURI_SIGNING_PRIVATE_KEY` (for update signature)
+#### Linux
+
+- AppImage builds today without signing — acceptable for v1
 
 ---
 
-## Acceptance Criteria
+## 11. Error handling & empty states
 
-- [ ] All keyboard shortcuts work correctly per the tables above
-- [ ] `?` opens keyboard shortcut cheat sheet overlay
-- [ ] Shortcuts are context-aware (sidebar shortcuts don't fire in review, etc.)
-- [ ] Shortcuts disabled in text inputs
-- [ ] Command palette shows PRs, files, and actions with fuzzy search
-- [ ] Recently used commands appear first in empty palette
-- [ ] 2000-line diff scrolls at 60fps (virtualized)
-- [ ] File switching in diff takes < 300ms
-- [ ] App opens and becomes interactive in < 2 seconds
-- [ ] Offline: cached PRs accessible, comments queue, sync on reconnect
-- [ ] Onboarding: first-time user sets up GitHub + AI in under 2 minutes
-- [ ] System tray shows badge count, click opens app
-- [ ] Native notifications for new thread replies
-- [ ] Auto-update detects new version and offers install
-- [ ] macOS build: signed, notarized, installs from DMG without Gatekeeper warnings
-- [ ] No unhandled errors — all error states have clear UI messages
-- [ ] `bun run typecheck` passes
+### Status: **PARTIAL**
+
+### Shipped
+
+- Empty states in Sidebar, IssuesPanel, and walkthrough (visible in components under `apps/web/src/lib/components/`)
+- Onboarding-time error handling (auth failures redirect to retry)
+- Per-flow error banners in chat / push paths
+
+### Remaining
+
+- [ ] Top-level error boundary so unhandled errors render a fallback UI instead of a blank screen
+- [ ] Consistent error toast UX across the app (rather than per-store ad-hoc handling)
+
+---
+
+## Acceptance criteria
+
+Section-scoped — the "shipped" entries are not re-tested here; this list is what's left.
+
+- [ ] All TODO shortcuts in §1 work; context-awareness prevents cross-context misfires; `?` opens a cheat-sheet overlay
+- [ ] Command palette includes Files / Review Actions / Navigation categories when in the relevant context; recently-used commands appear first on empty query
+- [ ] 2000-line diff scrolls at 60fps; file switching < 300ms
+- [ ] Offline: comments queue to outbox, replay on reconnect with backoff; conflicts surface a notification
+- [ ] Tray shows accurate badge count; native notification fires for new replies and sync-complete events
+- [ ] Auto-update finds a new release, downloads in the background, prompts a restart toast; manifest JSON is generated by `release.yml`
+- [ ] macOS build is signed + notarized; DMG opens without Gatekeeper warnings; updater signature validates
+- [ ] No unhandled error renders a blank screen; top-level boundary shows a friendly fallback
+- [ ] `make typecheck` and `make lint` pass

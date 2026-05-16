@@ -1,321 +1,155 @@
 # PRD-03: AI Guided Walkthrough
 
+## Status: **SHIPPED (~95%)**
 ## Priority: P1 (Core AI experience)
-## Dependencies: PRD-02 (AiService, Anthropic SDK, SSE pattern, markdown rendering)
-## Estimated: 5-6 days
+## Dependencies: PRD-01 (review sessions own the walkthrough)
+## Original estimate: 5-6 days  |  Actual: in flight throughout the project
+## Last updated: 2026-05-16
 
 ---
 
 ## Objective
 
-Build the AI-powered guided walkthrough (Tab 1). Claude analyzes a PR and presents it as a step-by-step guided presentation — breaking the changes into conceptual steps (not file-by-file), each with markdown explanations and embedded code blocks. The reviewer navigates steps like a presentation and can comment on any code block using the same system from PRD-01.
+Generate an AI-authored "guided tour" of a PR, anchored to its head SHA, presented as a structured sequence of conceptual chapters (each with markdown narrative + code/diff blocks), a 9-axis rating scorecard, an overall sentiment, and a set of flagged issues that can be turned into review comments. Reviewers navigate the walkthrough, comment on its blocks, edit it via the chat agent, and submit selected issues back to GitHub.
+
+This PRD was substantially rebuilt during development. The original spec described a single `walkthroughs` table with a JSON `steps` column and a one-shot SSE stream. Reality is a strict 4-phase MCP-driven pipeline with five tables, two interchangeable agent transports, an orchestrator, supersession on new commits, resume-on-boot, and a post-completion chat-edit surface.
 
 ---
 
-## Current State
+## Architecture overview
 
-The frontend already has:
-- `FloatingTabs.svelte` — pill toggle between "Walkthrough" and "Diff" tabs
-- `activeTab` state in `review.svelte.ts` (defaults to `"diff"`)
-- Empty walkthrough area when Tab 1 is selected — nothing renders
+The walkthrough subsystem is governed by the "Agent Subsystem Invariants" section in [CLAUDE.md](../../CLAUDE.md). That section is canonical — this PRD describes the implementation; the invariants describe the contract. Anything that conflicts with CLAUDE.md is a bug in this PRD.
 
-From PRD-02 we'll have:
-- `AiService` with Anthropic SDK integration
-- SSE streaming pattern for AI responses
-- Markdown rendering pipeline (marked + Shiki + DOMPurify)
-- API key management and validation
+Key invariants worth re-stating:
 
----
+- **SQLite is authoritative.** In-memory state is a reconstructible cache. Correctness survives `kill -9` at any instruction.
+- **Agent content writes go through MCP tools, only.** Orchestrator lifecycle writes stay in Elysia.
+- **Each MCP tool call is one atomic idempotent write** keyed on a deterministic identity.
+- **Content generation is a strict 4-phase pipeline: A → B → C → D.** Out-of-order calls fail fast.
+- **Walkthroughs are immutable per head SHA during generation.** A new commit supersedes (it doesn't mutate). The chat-edit path is the single authorized post-completion mutation channel.
+- **Agent-path parity.** Both Claude Agent SDK and opencode produce byte-for-byte identical externally-observable behavior; only reasoning style differs.
 
-## Data Model
+### The 4-phase pipeline
 
-### New Table
+| Phase | Purpose | Tool(s) | Writes to | Closes when |
+|---|---|---|---|---|
+| **A** | Overview + risk | `set_overview` | `walkthroughs.summary`, `walkthroughs.riskLevel` | One call lands |
+| **B** | Diff analysis | `add_semantic_step`, `add_diff_step`, `flag_issue`, `add_issue_comment` | `walkthrough_semantic_steps`, `walkthrough_blocks`, `walkthrough_issues`, optionally `comment_threads`/`thread_messages` | Implicitly, when Phase C opens |
+| **C** | Overall sentiment | `set_sentiment` | `walkthroughs.sentiment` | One call lands |
+| **D** | 9-axis rating | `rate_axis` (×9) | `walkthrough_ratings` | All 9 axes rated |
+| **Gate** | Validation | `complete_walkthrough` | Sets `status = 'complete'` | Asserts D complete, summary + sentiment non-empty, ≥1 diff step, every semantic step has ≥1 block, every blocking issue has an inline comment |
 
-```sql
-CREATE TABLE walkthroughs (
-  id TEXT PRIMARY KEY,                          -- UUID
-  review_session_id TEXT NOT NULL REFERENCES review_sessions(id) ON DELETE CASCADE,
-  pull_request_id TEXT NOT NULL REFERENCES pull_requests(id) ON DELETE CASCADE,
-  summary TEXT NOT NULL,                        -- one-paragraph PR summary
-  steps TEXT NOT NULL,                          -- JSON: WalkthroughStep[]
-  risk_level TEXT NOT NULL DEFAULT 'low',       -- low | medium | high
-  generated_at TEXT NOT NULL,
-  model_used TEXT NOT NULL,
-  token_usage TEXT NOT NULL,                    -- JSON: { input: number, output: number }
-  pr_head_sha TEXT NOT NULL                     -- cache key — invalidate when PR gets new commits
-);
-```
+A read tool (`get_walkthrough_state`) is called first on every run — including resumes — to reconstruct the agent's context from DB rather than env vars.
 
-### TypeScript Types (in `packages/shared`)
-
-```typescript
-interface WalkthroughStep {
-  id: string;
-  order: number;
-  title: string;                                // "Token Validation Changes"
-  stepType: 'overview' | 'file_analysis' | 'concern' | 'architecture';
-  content: string;                              // Markdown body
-  relatedFiles: string[];                       // file paths this step covers
-  severity: 'info' | 'warning' | 'critical' | null;
-  codeSnippets: EmbeddedSnippet[];
-}
-
-interface EmbeddedSnippet {
-  filePath: string;
-  startLine: number;
-  endLine: number;
-  language: string;
-  content: string;                              // actual code
-  annotation: string | null;                    // AI's inline note
-}
-
-interface Walkthrough {
-  id: string;
-  reviewSessionId: string;
-  pullRequestId: string;
-  summary: string;
-  steps: WalkthroughStep[];
-  riskLevel: 'low' | 'medium' | 'high';
-  generatedAt: string;
-  modelUsed: string;
-  tokenUsage: { input: number; output: number };
-  prHeadSha: string;
-}
-```
+The 9 axes (canonical render order, defined in `packages/shared/src/walkthrough.ts`):
+`correctness · scope · tests · clarity · safety · consistency · api_changes · performance · description`
 
 ---
 
-## Technical Requirements
+## Implementation
 
-### AiService Extension
+### Data model (`apps/server/src/db/schema/`)
 
-Add to the existing `AiService` from PRD-02:
+- `walkthroughs.ts` — header row: status, `lastCompletedPhase`, `prHeadSha`, supersession back-reference, resume counter, summary, sentiment, risk level, `lastEditedAt` / `lastEditedBy`, `opencodeSessionId` for continuation
+- `walkthrough-semantic-steps.ts` — chapters (Phase B); deterministically keyed on `(walkthrough_id, semantic_step_index)`
+- `walkthrough-blocks.ts` — atomic markdown / code / diff blocks; keyed on `(walkthrough_id, semantic_step_id, step_index)`
+- `walkthrough-issues.ts` — flagged issues with severity, status, optional inline comment thread, optional GitHub submission state
+- `walkthrough-ratings.ts` — 9-axis scorecard, one row per axis, keyed on `(walkthrough_id, axis)` with `onConflictDoUpdate`
 
-```typescript
-class AiService extends Context.Tag("AiService")<AiService, {
-  // From PRD-02
-  explainCode: (params: ExplainParams) => Stream<string, AiError>;
-  isConfigured: () => Effect<boolean, never>;
-  validateKey: () => Effect<void, AiError>;
+### MCP tool surface (`apps/server/src/ai/providers/walkthrough-tools/`)
 
-  // New for PRD-03
-  generateWalkthrough: (params: WalkthroughParams) => Stream<WalkthroughStreamEvent, AiError>;
-  regenerateStep: (walkthrough: Walkthrough, stepIndex: number) => Effect<WalkthroughStep, AiError>;
-}>() {}
+Phase-bound write tools (one atomic upsert per call, deterministic key, phase precondition enforced inside `db.transaction()`):
 
-interface WalkthroughParams {
-  pr: PullRequest;
-  diff: string;                               // full unified diff
-  fileContents: Array<{ path: string; content: string }>;
-}
+- `set_overview` (Phase A, one call)
+- `add_semantic_step`, `add_diff_step`, `flag_issue`, `add_issue_comment` (Phase B, many)
+- `set_sentiment` (Phase C, one call — implicitly closes Phase B)
+- `rate_axis` (Phase D, exactly 9)
+- `complete_walkthrough` (validation gate — only the orchestrator transitions status)
 
-type WalkthroughStreamEvent =
-  | { type: 'summary'; data: { summary: string; riskLevel: string; totalSteps: number } }
-  | { type: 'step'; data: WalkthroughStep }
-  | { type: 'done'; data: { tokenUsage: { input: number; output: number } } };
-```
+Read tools:
 
-### Walkthrough System Prompt
+- `get_walkthrough_state` — context reconstruction on every run/resume
 
-The prompt instructs Claude to analyze the PR holistically:
+Chat-edit tools (post-completion mutation, see `apps/server/src/ai/providers/chat-edit-tools/`):
 
-```
-You are a senior code reviewer preparing a guided walkthrough of a pull request.
+- `update_overview`, `add_block`, `update_block`, `delete_block`, `add_semantic_step`, `update_semantic_step`, `delete_semantic_step`, `update_sentiment`, `update_rating`, `delete_rating`, `add_issue`, `update_issue`, `delete_issue`, `add_issue_comment`, `update_issue_comment`, `delete_issue_comment`
 
-Analyze the PR as a whole — understand the intent, not just the individual files. Break your analysis into 3-8 conceptual steps, where each step focuses on a concept, pattern, or concern — not a single file.
+Edits stamp `lastEditedAt` / `lastEditedBy` on the parent row, never change `status` / `lastCompletedPhase`, and broadcast `walkthrough:edited` envelopes via `WebSocketHub` (not the generation SSE stream — that dies on `done`). GitHub-submitted issues (`submittedAt != null`) are off-limits even here.
 
-Rules:
-1. Step 1 is always "Overview" — summarize the PR's purpose, scope, and risk level
-2. Group related changes across files into a single step
-3. Include relevant code snippets with exact file paths and line numbers
-4. Flag risks with severity: info, warning, or critical
-5. For each code snippet, add a brief annotation explaining what the reviewer should notice
-6. Be direct — reviewers are engineers, not beginners
+### Dual agent transport
 
-Output format: JSON. Stream one step at a time.
+Tool **handlers** are shared in-process code. Tool **transport** differs:
 
-Risk level guide:
-- low: straightforward changes, good test coverage, limited blast radius
-- medium: touches critical paths, some edge cases to verify, moderate complexity
-- high: security-sensitive, breaking changes, missing tests for critical paths, concurrency concerns
+- **Claude Agent SDK path** — `apps/server/src/ai/providers/mcp-walkthrough.ts` registers handlers in-process with the SDK
+- **Opencode path** — `apps/server/src/routes/mcp/walkthrough.ts` exposes the same handlers over HTTP; the opencode subprocess connects to it using a short-lived token from `ChatMcpTokens`
 
-Example step flow:
-  Step 1: Overview — "Auth middleware refactor to support token refresh"
-  Step 2: Token Validation Changes — shows new validator code, explains the logic
-  Step 3: Middleware Integration — shows how routes now use the validator
-  Step 4: Concern: Race Condition — flags concurrent refresh with code reference
-  Step 5: Test Coverage — reviews what's tested and what's missing
-```
+Supervision via `apps/server/src/services/OpencodeSupervisor.ts`: lazy-starts the `opencode serve` subprocess when the selected agent is opencode and an active job needs it; stops it when idle or when the selected agent changes. Credentials and bound port are ephemeral.
 
-### SSE Streaming Endpoint
+### Orchestrator (`apps/server/src/services/WalkthroughJobs.ts`, `apps/server/src/services/Walkthrough.ts`)
 
-```
-GET /api/reviews/:id/walkthrough
-```
+`WalkthroughJobs` owns lifecycle: schedules jobs, enforces `MAX_CONCURRENT_JOBS = 5` via semaphore, manages per-job worktrees registered as scope finalizers, runs resume-on-boot, advances `status ∈ {generating, complete, error, superseded}` (agents never write status). Bounded retries: `WALKTHROUGH_MAX_RESUME_ATTEMPTS = 3`, `MAX_AUTO_CONTINUATIONS = 2`.
 
-**Happy path:**
-1. Check cache: if walkthrough exists and `pr_head_sha` matches current PR head → return from cache as instant SSE burst
-2. Otherwise: call Claude, stream events
-3. Events: `summary` → `step` (repeated) → `done`
-4. On completion, save to `walkthroughs` table
+On a new PR head SHA, the old walkthrough is marked `superseded` with a `superseded_by` back-reference and a fresh row begins generating — the 4-phase pipeline never mutates a row for the same head SHA.
 
-**Event format:**
-```
-event: summary
-data: { "summary": "...", "riskLevel": "medium", "totalSteps": 5 }
+### Streaming endpoint (`apps/server/src/routes/reviews/handlers/walkthrough-stream.ts`)
 
-event: step
-data: { "id": "...", "order": 1, "title": "Overview", ... }
+- `GET /api/reviews/:id/walkthrough` — SSE stream of `WalkthroughStreamEvent` envelopes (`apps/server/src/routes/reviews/sse.ts`). Serves from cache when the head SHA matches; otherwise dispatches a job and streams its events.
+- `POST /api/reviews/:id/walkthrough/regenerate` — supersede + restart
+- `POST /api/reviews/:id/walkthrough/resume` — re-attach to an in-flight job
 
-event: step
-data: { "id": "...", "order": 2, "title": "Token Validation", ... }
+Commit-first / broadcast-second: every event is emitted from a tool handler **after** the DB transaction commits, so SSE / WebSocket subscribers can always reconcile by re-reading the DB. Post-completion mutations broadcast on the separate `walkthrough:edited` WebSocket channel (the generation SSE stream dies on `done`).
 
-event: done
-data: { "tokenUsage": { "input": 12450, "output": 3200 } }
-```
+### Frontend (`apps/web/src/lib/`)
 
-### Elysia Routes
+Components (`components/walkthrough/`):
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/reviews/:id/walkthrough` | Stream walkthrough (SSE), serves from cache if valid |
-| `POST` | `/api/reviews/:id/walkthrough/regenerate` | Force-regenerate entire walkthrough |
-| `POST` | `/api/reviews/:id/walkthrough/steps/:index/regenerate` | Regenerate a single step |
-| `GET` | `/api/prs/:id/meta` | Get PR head SHA (already exists via `getPrMeta`) |
+- `GuidedWalkthrough.svelte` — top-level container; phase-aware rendering
+- `WalkthroughSection.svelte` — one semantic step (chapter)
+- `WalkthroughMarkdownBlock.svelte`, `WalkthroughCodeBlock.svelte`, `WalkthroughDiffBlock.svelte` — the three block kinds
+- `IssueCard.svelte` — Phase B issue with severity badge and inline comment thread
+- `WalkthroughRatingsGrid.svelte`, `WalkthroughRatingsPanel.svelte`, `ratings-panel/` — Phase D scorecard
+- `components/review/issues-panel/`, `comments-panel/` — sibling summary panels
 
-### Frontend Components
+Stores (`stores/`):
 
-| Component | Description |
-|-----------|-------------|
-| `GuidedWalkthrough.svelte` | Main container: manages SSE connection, step state, navigation |
-| `StepCard.svelte` | Single step: title, severity badge, rendered markdown, code blocks |
-| `StepNav.svelte` | Previous/Next buttons + step indicator dots + keyboard hint |
-| `StepProgress.svelte` | Loading state — skeleton cards shimmer while steps stream in |
-| `WalkthroughCodeBlock.svelte` | Shiki-highlighted code with file path header, line range, comment button, click-to-jump-to-diff |
+- `walkthrough.svelte.ts` — reactive walkthrough state hydrated from DB
+- `walkthrough-stream.svelte.ts` — SSE + WebSocket subscription, reconciliation on reconnect
+- `walkthroughNav.svelte.ts` — keyboard navigation between sections
 
-### Walkthrough Store State
+The PR review page (`apps/web/src/routes/review/[prId]/+page.svelte`) and `FloatingTabs.svelte` toggle between the walkthrough and the file-diff view.
 
-Add to `review.svelte.ts`:
+### WebSocket envelopes (`packages/shared/src/ws.ts`)
 
-```typescript
-let walkthrough = $state<Walkthrough | null>(null);
-let walkthroughSteps = $state<WalkthroughStep[]>([]);
-let currentStepIndex = $state(0);
-let isWalkthroughLoading = $state(false);
-let walkthroughError = $state<string | null>(null);
-let streamingStepCount = $state(0);    // how many steps received so far
-
-export function getWalkthrough(): Walkthrough | null { return walkthrough; }
-export function getWalkthroughSteps(): WalkthroughStep[] { return walkthroughSteps; }
-export function getCurrentStepIndex(): number { return currentStepIndex; }
-export function setCurrentStepIndex(idx: number): void { currentStepIndex = idx; }
-export function getIsWalkthroughLoading(): boolean { return isWalkthroughLoading; }
-// ... etc
-```
-
-### Code Block Interactions
-
-Walkthrough code blocks are interactive:
-- **Click a code block** → same popover as diff view: [Explain] / [Comment]
-- **Explain** → right panel streams AI explanation (PRD-02 system)
-- **Comment** → inline comment input below code block (PRD-01 system)
-- **File path header is clickable** → switches to Diff tab and scrolls to that file/line
+Generation events: `walkthrough:event` (proxies `WalkthroughStreamEvent` after generation SSE ends), plus per-event types defined in `packages/shared/src/walkthrough.ts`.
+Post-completion edits: `walkthrough:edited`.
 
 ---
 
-## UI Specification
+## Remaining gaps
 
-### Walkthrough View (Tab 1 selected)
-
-```
-+--+----------------------------------------------------+--------+
-|  | PR #142: Refactor auth   [Walkthrough][Diff] [>]   |        |
-|S +----------------------------------------------------+  Right |
-|I |                                                     |  Panel |
-|D |  Risk: ⚠ Medium                                    |        |
-|E |                                                     |        |
-|B |  This PR extracts JWT validation from inline        |        |
-|A |  middleware into a dedicated service, adding         |        |
-|R |  transparent token refresh for expired sessions.    |        |
-|  |                                                     |        |
-|P |  ───────────────────────────────────────            |        |
-|R |                                                     |        |
-|  |  Step 2 of 5: Token Validation Changes              |        |
-|L |                                                     |        |
-|I |  The JWT validation logic moved from inline         |        |
-|S |  middleware checks to a standalone service.          |        |
-|T |                                                     |        |
-|  |  ┌─ src/auth/validator.ts (lines 12-24) ──────┐    |        |
-|  |  │  export async function validateToken(...) { │    |        |
-|  |  │    const decoded = jwt.verify(token, SECRET)│    |        |
-|  |  │    if (isExpired(decoded)) {                │    |        |
-|  |  │      return refreshToken(decoded);          │    |        |
-|  |  │    }                                        │    |        |
-|  |  │    return decoded;                          │    |        |
-|  |  │  }                           [💬 Comment]   │    |        |
-|  |  └─────────────────────────────────────────────┘    |        |
-|  |                                                     |        |
-|  |  ⚠ The refresh logic doesn't guard against          |        |
-|  |  concurrent requests for the same session.          |        |
-|  |                                                     |        |
-|  |            [← Prev]  ● ● ★ ○ ○  [Next →]          |        |
-+--+-----------------------------------------------------+--------+
-```
-
-**No file tree in walkthrough mode** — the walkthrough content fills the entire main area.
-
-### Step Indicator Dots
-
-- `●` = completed step (clickable to jump)
-- `★` = current step
-- `○` = not yet streamed (shows as hollow during generation)
-- During streaming, dots fill in as steps arrive
-
-### Streaming Behavior
-
-1. User opens PR or clicks Walkthrough tab → SSE connection starts
-2. Summary + risk level appear first (within 2-3 seconds)
-3. Step indicator shows total steps when `summary` event arrives
-4. Steps populate one at a time — dots fill in progressively
-5. User can navigate to completed steps while later ones stream
-6. Incomplete steps show a subtle skeleton/shimmer placeholder
-
-### Step Navigation
-
-- `← Prev` / `Next →` buttons at bottom
-- Arrow keys (`←` / `→`) when walkthrough tab is focused
-- Click any completed dot to jump
-- Step number displayed: "Step 2 of 5"
-
-### Risk Level Badge
-
-Shown at the top of the walkthrough:
-- 🟢 **Low** — green badge
-- 🟡 **Medium** — yellow badge  
-- 🔴 **High** — red badge
-
-### Regeneration
-
-- **Regenerate all**: button in walkthrough header → confirms → clears cache → re-streams
-- **Regenerate step**: small refresh icon on each step card → only re-generates that step → replaces in cache
+- [ ] **Step-level regenerate.** `POST /api/reviews/:id/walkthrough/steps/:index/regenerate` exists in spirit but not as a dedicated endpoint — currently the chat agent's edit tools cover the use case at finer granularity; decide whether to formalize the older endpoint or remove it from the roadmap
+- [ ] **Click code block → jump to diff view.** Architecturally supported (block carries `file_path` + line range); the navigation hand-off has rough edges around scroll-into-view timing on large files
+- [ ] **Keyboard navigation polish.** Arrow-key navigation works inside `walkthroughNav.svelte.ts` but doesn't yet integrate with the diff-tab keymap (see PRD-06 remaining shortcuts)
+- [ ] **Empty / error states.** Generation failure surfaces an inline error but no dedicated "what now" affordance (manual resume vs supersede vs report)
+- [ ] **Token / cost surfacing.** No visible token-usage indicator at the walkthrough level (we track it server-side but don't render it)
+- [ ] **Re-running on a closed PR.** Supersession assumes there will be a future head SHA; closed PRs work but the UI doesn't make clear that no further generation will happen
 
 ---
 
-## Acceptance Criteria
+## Cross-references
 
-- [ ] Open a PR → walkthrough tab starts streaming, summary appears within 3s
-- [ ] Steps appear one by one as they stream in
-- [ ] Step navigation: Previous/Next buttons, arrow keys, dot clicks all work
-- [ ] Each step renders markdown with syntax-highlighted code blocks (Shiki)
-- [ ] Code blocks show file path + line range as clickable header
-- [ ] Clicking file path header switches to Diff tab at that file
-- [ ] Code blocks have a comment button → opens PRD-01 comment system
-- [ ] Code blocks support "Explain" action → PRD-02 right panel
-- [ ] Risk level badge shows correctly (low/medium/high with color)
-- [ ] "Regenerate" re-runs the entire walkthrough (shows loading state)
-- [ ] "Regenerate step" re-runs just one step
-- [ ] Cached walkthrough loads instantly on revisit (no AI call)
-- [ ] Cache invalidates when PR has new commits (different head SHA)
-- [ ] Large PRs (30+ files) produce coherent 5-8 step walkthroughs
-- [ ] Error states: missing API key → setup prompt, rate limit → countdown, failure → retry button
-- [ ] `bun run typecheck` passes
+- **CLAUDE.md, "Agent Subsystem Invariants"** — canonical contract
+- **PRD-02 (Chat Agent)** — shares the MCP infrastructure, opencode supervisor, and dual-transport pattern; chat-edit tools live in PRD-02's surface but write to walkthrough tables
+- **PRD-04 (GitHub Sync)** — issue submission writes back to GitHub via the sync service; `submittedAt != null` makes an issue immutable
+- **07-emergent-features.md** — index of features that emerged outside the original roadmap
+
+---
+
+## Acceptance criteria (delta only — shipped items not re-listed)
+
+- [ ] Generating a walkthrough for a PR with a new head SHA always produces a fresh row and supersedes the old; the old row's `status` is `superseded` and `superseded_by` points to the new one
+- [ ] `kill -9` of the server during Phase B leaves the DB in a recoverable state; on boot, `WalkthroughJobs.resumeOnBoot` reschedules and `get_walkthrough_state` lets the agent pick up where it left off
+- [ ] Switching agents (Claude ↔ opencode) mid-pipeline does not produce visibly different `WalkthroughStreamEvent` sequences for the same input
+- [ ] Chat-edit mutations broadcast on `walkthrough:edited` and never on the generation SSE stream
+- [ ] Submitted issues (`submittedAt != null`) reject mutation attempts from chat-edit tools
+- [ ] `make typecheck` and `make lint` pass

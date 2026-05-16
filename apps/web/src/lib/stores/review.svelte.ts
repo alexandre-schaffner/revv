@@ -11,7 +11,7 @@ import { api } from "$lib/api/client";
 import { invalidateChatHistory } from "$lib/stores/chat.svelte";
 import { enterSidebarMode } from "$lib/stores/focus-mode.svelte";
 import { getPullRequests } from "$lib/stores/prs.svelte";
-import { invalidateForPull } from "$lib/stores/walkthrough.svelte";
+import { invalidateForPull } from "$lib/stores/walkthrough-stream.svelte";
 import type { ReviewFile } from "$lib/types/review";
 
 // --- Review files (shared between sidebar tree + review page) ---
@@ -657,7 +657,7 @@ export async function reopenThread(threadId: string): Promise<void> {
 /**
  * Update a thread's status from a WebSocket message (no API call needed).
  */
-export function updateThreadStatusFromWs(threadId: string, status: ThreadStatus): void {
+export function onThreadUpdated(threadId: string, status: ThreadStatus): void {
   const isResolved = status === "resolved" || status === "wont_fix";
   threads = threads.map((t) =>
     t.id === threadId
@@ -674,7 +674,7 @@ export function updateThreadStatusFromWs(threadId: string, status: ThreadStatus)
 /**
  * Push a thread and message from a WebSocket broadcast (no API call needed).
  */
-export function addThreadFromWs(thread: CommentThread, message: ThreadMessage): void {
+export function onThreadCreated(thread: CommentThread, message: ThreadMessage): void {
   if (!threads.some((t) => t.id === thread.id)) {
     threads = [...threads, thread];
     threadsVersion++;
@@ -692,7 +692,7 @@ export function addThreadFromWs(thread: CommentThread, message: ThreadMessage): 
 /**
  * Push a message from a WebSocket broadcast (no API call needed).
  */
-export function addMessageFromWs(threadId: string, message: ThreadMessage): void {
+export function onThreadMessage(threadId: string, message: ThreadMessage): void {
   // Avoid duplicates
   const existing = threadMessages[threadId] ?? [];
   if (existing.some((m) => m.id === message.id)) return;
@@ -920,7 +920,7 @@ export async function deleteThread(threadId: string): Promise<boolean> {
 /**
  * Remove a thread from local state in response to a WebSocket broadcast.
  */
-export function removeThreadFromWs(threadId: string): void {
+export function onThreadDeleted(threadId: string): void {
   threads = threads.filter((t) => t.id !== threadId);
   const { [threadId]: _, ...rest } = threadMessages;
   threadMessages = rest;
@@ -930,7 +930,7 @@ export function removeThreadFromWs(threadId: string): void {
 /**
  * Update a message body from a WebSocket broadcast (no API call needed).
  */
-export function updateMessageFromWs(threadId: string, message: ThreadMessage): void {
+export function onThreadMessageEdited(threadId: string, message: ThreadMessage): void {
   threadMessages = {
     ...threadMessages,
     [threadId]: (threadMessages[threadId] ?? []).map((m) => (m.id === message.id ? message : m)),
@@ -940,7 +940,7 @@ export function updateMessageFromWs(threadId: string, message: ThreadMessage): v
 /**
  * Remove a message from local state in response to a WebSocket broadcast.
  */
-export function removeMessageFromWs(threadId: string, messageId: string): void {
+export function onThreadMessageDeleted(threadId: string, messageId: string): void {
   const existing = threadMessages[threadId];
   if (!existing) return;
   threadMessages = {

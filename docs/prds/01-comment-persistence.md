@@ -1,18 +1,60 @@
 # PRD-01: Comment Persistence & Review Sessions
 
+## Status: **SHIPPED (~95%)**
 ## Priority: P0 (Foundation for all review features)
-## Dependencies: None — builds on existing in-memory comment UI
-## Estimated: 3-4 days
+## Dependencies: None
+## Original estimate: 3-4 days  |  Last updated: 2026-05-16
 
 ---
 
 ## Objective
 
-Wire the existing in-memory comment system to SQLite so that review sessions, comment threads, thread messages, and hunk accept/reject decisions survive page navigation and app restarts. This is the foundation that every subsequent PRD depends on.
+Wire the in-memory comment system to SQLite so that review sessions, comment threads, thread messages, and hunk accept/reject decisions survive page navigation and app restarts. This is the foundation every subsequent PRD depends on.
 
 ---
 
-## Current State
+## What we built
+
+All four tables exist and are wired end-to-end. The frontend store calls the server on every mutation; WebSocket envelopes keep multi-window state in sync.
+
+### Database (`apps/server/src/db/schema/`)
+
+- `review-sessions.ts` — one row per PR-review sitting (`active` | `completed` | `abandoned`)
+- `comment-threads.ts` — anchored to a file + line range; status machine values stored
+- `thread-messages.ts` — markdown body, code suggestion, edit/delete timestamps, optional `externalId` for GitHub mirroring
+- `hunk-decisions.ts` — accept/reject per (session, file, hunkIndex), unique-indexed
+
+### Server (`apps/server/src/services/Review.ts`, `apps/server/src/routes/reviews.ts`, `apps/server/src/routes/threads.ts`)
+
+`ReviewService` implements every method originally specced — `getOrCreateActiveSession`, `completeSession`, `createThread`, `getThreadsForSession`, `getThreadsForFile`, `updateThreadStatus`, `addMessage`, `getMessages`, `deleteThread`, `setHunkDecision`, `clearHunkDecision`, `getHunkDecisions` — plus extras that emerged from real use: `transitionStatus` (status-machine, see PRD-04), `setThreadExternalIds`, `setMessageExternalId`, `updateMessageBody`, `editMessage`, `deleteMessage`, `findMessageByExternalId`, `setMessageAvatar`.
+
+REST surface is identical to the original spec table; see `apps/server/src/routes/reviews.ts` and `apps/server/src/routes/threads.ts`.
+
+### Frontend (`apps/web/src/lib/stores/review.svelte.ts`)
+
+Store hydrates from server on `/review/[prId]` load, calls REST for every mutation, and consumes `thread:*` WebSocket envelopes (`packages/shared/src/ws.ts`) to stay current across windows.
+
+### WebSocket envelopes (`packages/shared/src/ws.ts`)
+
+Server → client: `thread:created`, `thread:updated`, `thread:message`, `thread:deleted`, `thread:message:edited`, `thread:message:deleted`.
+
+---
+
+## Remaining gaps
+
+- [ ] No explicit `CREATE INDEX` DDL — Drizzle auto-creates a few but the four indexes named in the original spec (`idx_threads_session`, `idx_threads_file`, `idx_messages_thread`, `idx_hunks_session`) should be confirmed against runtime query plans
+- [ ] Thread-delete endpoint lacks the "first message only" guard the original spec called for
+- [ ] No automated test exercising the full refresh cycle (open PR → comment → refresh → confirm intact)
+
+---
+
+## Original Spec (reference)
+
+The remaining sections below capture the original PRD design narrative, retained for context. The text is unchanged from when this PRD was first written; reality is documented above.
+
+---
+
+## Current State (original)
 
 The frontend already has:
 - `AnnotationCommentInput.svelte` — inline comment input at a diff line

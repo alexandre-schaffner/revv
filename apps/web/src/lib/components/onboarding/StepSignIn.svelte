@@ -259,7 +259,7 @@ async function copyCode() {
 		letter-spacing: 0.04em;
 		color: var(--ob-text-heading);
 		display: inline-block;
-		animation: char-in 540ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+		animation: char-in var(--duration-ceremonial-medium) var(--ease-out-expo) backwards;
 	}
 
 	@keyframes char-in {

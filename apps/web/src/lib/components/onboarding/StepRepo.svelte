@@ -452,7 +452,7 @@ function handleKey(e: KeyboardEvent) {
 		text-align: left;
 		cursor: pointer;
 		transition: background-color var(--duration-snap) var(--ease-out-expo);
-		animation: row-in 480ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+		animation: row-in var(--duration-ceremonial-medium) var(--ease-out-expo) backwards;
 	}
 
 	@keyframes row-in {
@@ -528,7 +528,7 @@ function handleKey(e: KeyboardEvent) {
 		color: var(--ob-text-dimmed);
 		cursor: pointer;
 		transition: color var(--duration-snap) var(--ease-out-expo);
-		animation: fade-in var(--duration-smooth, 400ms) var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1)) both;
+		animation: fade-in var(--duration-smooth) var(--ease-out-expo) both;
 	}
 
 	.skip-waiting:hover {

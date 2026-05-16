@@ -81,7 +81,7 @@ let { counts, totalElapsedMs, allPassed }: Props = $props();
             transparent
         );
         color: var(--color-score-pass-label);
-        animation: footer-bounce 500ms var(--ease-out-expo) 1;
+        animation: footer-bounce var(--duration-ceremonial-medium) var(--ease-out-expo) 1;
     }
 
     .summary-footer--passed strong {

@@ -152,7 +152,7 @@ function onAnimEnd(event: AnimationEvent): void {
 		flex-direction: row;
 		align-items: flex-start;
 		gap: 10px;
-		animation: issue-card-enter 0.55s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+		animation: issue-card-enter var(--duration-ceremonial-medium) var(--ease-standard) both;
 		animation-delay: var(--issue-delay, 0ms);
 		text-align: left;
 		font: inherit;

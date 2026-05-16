@@ -21,6 +21,14 @@ import {
   jumpToDiffLine,
 } from "$lib/stores/review.svelte";
 import {
+  hydrateFromCache,
+  pollCloneUntilResolved,
+  prepareEntry,
+  regenerate,
+  stopClonePoll,
+  streamWalkthrough,
+} from "$lib/stores/walkthrough-stream.svelte";
+import {
   getBlocks,
   getCloneInProgress,
   getCloneRepoId,
@@ -41,15 +49,9 @@ import {
   hasBlockAnimated,
   hasContainerAnimated,
   hasIssueAnimated,
-  hydrateFromCache,
   markBlockAnimated,
   markContainerAnimated,
   markIssueAnimated,
-  pollCloneUntilResolved,
-  prepareEntry,
-  regenerate,
-  stopClonePoll,
-  streamWalkthrough,
 } from "$lib/stores/walkthrough.svelte";
 import { initHighlighter } from "$lib/utils/code-highlight.svelte";
 import { renderMarkdown } from "$lib/utils/markdown";
@@ -1108,7 +1110,7 @@ function handleRegenerate(): void {
 			380px
 			minmax(24px, 1fr);
 		padding: 28px 0;
-		animation: fadeIn 0.28s cubic-bezier(0.22, 0.61, 0.36, 1) 60ms both;
+		animation: fadeIn var(--duration-smooth) var(--ease-standard) 60ms both;
 	}
 
 	/* Single-column sections live in the content column (col 3). Separator,
@@ -1227,7 +1229,7 @@ function handleRegenerate(): void {
 			380px
 			minmax(24px, 1fr);
 		padding: 24px 0 4px;
-		animation: fadeIn 0.3s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+		animation: fadeIn var(--duration-smooth) var(--ease-standard) both;
 	}
 
 	.walkthrough-stepper-header > * {
@@ -1541,7 +1543,7 @@ function handleRegenerate(): void {
 		font-size: 11px;
 		font-family: var(--font-mono, monospace);
 		color: var(--color-text-muted);
-		animation: fadeIn 0.2s ease-in;
+		animation: fadeIn var(--duration-smooth) var(--ease-out-expo);
 		line-height: 1.5;
 	}
 
@@ -1577,7 +1579,7 @@ function handleRegenerate(): void {
 		display: flex;
 		flex-direction: column;
 		gap: 10px;
-		animation: content-enter 0.6s cubic-bezier(0.22, 0.61, 0.36, 1) 0.15s both;
+		animation: content-enter var(--duration-ceremonial-medium) var(--ease-standard) 0.15s both;
 	}
 
 	/* Tab-revisit override — see .walkthrough-content--no-anim for why. */
@@ -1750,7 +1752,7 @@ function handleRegenerate(): void {
 	.block-wrapper {
 		position: relative;
 		max-width: 100%;
-		animation: block-slide-up 0.65s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+		animation: block-slide-up var(--duration-ceremonial-medium) var(--ease-standard) both;
 		animation-delay: var(--enter-delay, 0ms);
 		will-change: opacity, transform, filter;
 		scroll-margin-top: 16px;
@@ -1767,7 +1769,7 @@ function handleRegenerate(): void {
 	}
 
 	.block-wrapper--highlighted {
-		animation: block-pulse 1.6s ease forwards;
+		animation: block-pulse var(--duration-ceremonial-slow) var(--ease-soft) forwards;
 	}
 
 	/* Persistent severity-colored outline on the block linked to the currently
@@ -1807,7 +1809,7 @@ function handleRegenerate(): void {
 		padding: 4px 0;
 		/* Match the block's entrance timing so rail text appears in sync
 		   with its block. Paired with the --enter-delay inline style. */
-		animation: block-slide-up 0.65s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+		animation: block-slide-up var(--duration-ceremonial-medium) var(--ease-standard) both;
 		animation-delay: var(--enter-delay, 0ms);
 	}
 

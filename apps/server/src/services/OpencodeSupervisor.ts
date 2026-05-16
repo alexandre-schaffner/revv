@@ -35,10 +35,18 @@
 
 import { resolve } from "node:path";
 import { createOpencodeClient, type OpencodeClient, type Part } from "@opencode-ai/sdk";
+import { and, eq } from "drizzle-orm";
 import { Context, Effect, Layer, Ref } from "effect";
 import { resolveCliBin } from "../ai/providers/cli-agent";
 import { disableBunTimeout } from "../constants";
-import { type AiError, AiGenerationError } from "../domain/errors";
+import type { Db } from "../db/index";
+import { kvCache } from "../db/schema/index";
+import {
+  type AiError,
+  AiGenerationError,
+  OpencodeNotSelectedError,
+  OpencodeUnhealthyError,
+} from "../domain/errors";
 import { withDb } from "../effects/with-db";
 import { debug, logError } from "../logger";
 import { DbService } from "./Db";
@@ -146,6 +154,54 @@ const INITIAL_STATE: SupervisorState = {
 const IDLE_COOLDOWN_MS = 30_000;
 const CRASH_LOOP_WINDOW_MS = 60_000;
 const CRASH_LOOP_MAX = 3;
+
+const SUPERVISOR_NS = "supervisor";
+const CRASH_LOG_KEY = "crash_log";
+
+// Load crash timestamps that were persisted before the last server restart.
+// Filters out entries older than the rolling window so stale crashes from
+// a previous server run don't incorrectly pollute the current window.
+function loadPersistedCrashTimestamps(db: Db): readonly number[] {
+  try {
+    const row = db
+      .select({ valueJson: kvCache.valueJson })
+      .from(kvCache)
+      .where(and(eq(kvCache.ns, SUPERVISOR_NS), eq(kvCache.key, CRASH_LOG_KEY)))
+      .get();
+    if (!row) return [];
+    const raw = JSON.parse(row.valueJson) as unknown;
+    if (!Array.isArray(raw)) return [];
+    const now = Date.now();
+    return (raw as number[]).filter((t) => typeof t === "number" && now - t < CRASH_LOOP_WINDOW_MS);
+  } catch {
+    return [];
+  }
+}
+
+function persistCrashTimestamps(db: Db, stamps: readonly number[]): void {
+  try {
+    if (stamps.length === 0) {
+      db.delete(kvCache)
+        .where(and(eq(kvCache.ns, SUPERVISOR_NS), eq(kvCache.key, CRASH_LOG_KEY)))
+        .run();
+      return;
+    }
+    const now = new Date().toISOString();
+    db.insert(kvCache)
+      .values({ ns: SUPERVISOR_NS, key: CRASH_LOG_KEY, valueJson: JSON.stringify(stamps), fetchedAt: now })
+      .onConflictDoUpdate({
+        target: [kvCache.ns, kvCache.key],
+        set: { valueJson: JSON.stringify(stamps), fetchedAt: now },
+      })
+      .run();
+  } catch (err) {
+    logError(
+      "opencode-supervisor",
+      "failed to persist crash log:",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
 const HEALTH_POLL_INTERVAL_MS = 250;
 const HEALTH_POLL_TIMEOUT_MS = 15_000;
 
@@ -201,7 +257,15 @@ export const OpencodeSupervisorLive = Layer.effect(
   Effect.gen(function* () {
     const { db } = yield* DbService;
     const settingsService = yield* SettingsService;
-    const stateRef = yield* Ref.make<SupervisorState>(INITIAL_STATE);
+    // Restore crash timestamps that survived the last server restart.
+    // If we're already at the crash-loop threshold, start unhealthy so
+    // a persistently broken daemon can't get 3 free attempts on every restart.
+    const restoredTimestamps = loadPersistedCrashTimestamps(db);
+    const stateRef = yield* Ref.make<SupervisorState>({
+      ...INITIAL_STATE,
+      restartTimestamps: restoredTimestamps,
+      unhealthy: restoredTimestamps.length >= CRASH_LOOP_MAX,
+    });
     // Semaphore(1) serializes ensureRunning — prevents two concurrent fibers
     // from both seeing running=null and spawning duplicate daemons.
     const startLock = yield* Effect.makeSemaphore(1);
@@ -486,6 +550,7 @@ export const OpencodeSupervisorLive = Layer.effect(
                 restartTimestamps: nextStamps,
                 unhealthy,
               }));
+              persistCrashTimestamps(db, nextStamps);
               if (unhealthy) {
                 logError(
                   "opencode-supervisor",
@@ -512,21 +577,12 @@ export const OpencodeSupervisorLive = Layer.effect(
           const agent = yield* resolveAgentName();
           if (agent !== "opencode") {
             yield* stopNow();
-            return yield* Effect.fail(
-              new AiGenerationError({
-                cause: new Error(`selected agent is '${agent}', not 'opencode'`),
-                message: `OpencodeSupervisor.ensureRunning() called while selected agent is '${agent}'`,
-              }),
-            );
+            return yield* Effect.fail(new OpencodeNotSelectedError({ selectedAgent: agent }));
           }
 
           if (snapshot.unhealthy) {
             return yield* Effect.fail(
-              new AiGenerationError({
-                cause: new Error("opencode daemon marked unhealthy (crash loop)"),
-                message:
-                  "opencode daemon is unhealthy after repeated crashes — inspect logs and restart Revv",
-              }),
+              new OpencodeUnhealthyError(),
             );
           }
 
@@ -563,6 +619,8 @@ export const OpencodeSupervisorLive = Layer.effect(
             // Reset cached agent list — probe again below.
             agentNames: null,
           }));
+          // Clear persisted crash log — daemon is healthy.
+          persistCrashTimestamps(db, []);
 
           // Probe available agents. Failures are best-effort: the
           // chat-opencode driver checks `hasAgent('plan')` before

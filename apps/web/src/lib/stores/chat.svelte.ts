@@ -1411,7 +1411,7 @@ export function clearToolApprovals(prId: string): void {
  * Mirrors the optimistic patch in `submitQuestionAnswers` so every open tab
  * sees the card flip to its terminal state without a full history reload.
  */
-export function resolveQuestionFromWs(
+export function onChatQuestionResolved(
   prId: string,
   questionId: string,
   status: "answered" | "rejected",

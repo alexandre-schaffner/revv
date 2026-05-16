@@ -370,7 +370,7 @@ $effect(() => {
 	.block-wrapper {
 		position: relative;
 		max-width: 100%;
-		animation: block-slide-up 0.65s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+		animation: block-slide-up var(--duration-ceremonial-medium) var(--ease-standard) both;
 		animation-delay: var(--enter-delay, 0ms);
 		will-change: opacity, transform, filter;
 		scroll-margin-top: 16px;
@@ -400,7 +400,7 @@ $effect(() => {
 	.block-annotation {
 		align-self: start;
 		padding: 4px 0;
-		animation: block-slide-up 0.65s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+		animation: block-slide-up var(--duration-ceremonial-medium) var(--ease-standard) both;
 		animation-delay: var(--enter-delay, 0ms);
 	}
 

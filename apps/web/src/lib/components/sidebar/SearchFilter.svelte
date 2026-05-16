@@ -124,7 +124,7 @@ function handleClear() {
 		</svg>
 		<input
 			bind:this={inputEl}
-			class="h-7 w-full rounded-lg border border-border bg-bg-elevated pl-8 pr-7 text-xs text-text-primary placeholder:text-text-muted focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-3 focus-visible:outline-none"
+			class="h-7 w-full rounded-full border border-border bg-bg-elevated pl-8 pr-7 text-xs text-text-primary placeholder:text-text-muted focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-3 focus-visible:outline-none"
 			placeholder="Search PRs..."
 			aria-label="Search pull requests"
 			value={inputValue}

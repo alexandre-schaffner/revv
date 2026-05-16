@@ -508,6 +508,9 @@
   --duration-smooth: 220ms; /* panels, sidebars, larger reveals */
   --duration-slow: 320ms; /* dialogs, sheets, big surfaces */
   --duration-page: 480ms; /* route / shared-element morphs */
+  --duration-ceremonial-quick: 280ms; /* onboarding / theatrical entrances — quick */
+  --duration-ceremonial-medium: 480ms; /* onboarding / theatrical entrances — medium */
+  --duration-ceremonial-slow: 720ms; /* onboarding / theatrical entrances — slow */
 
   /* Motion — easings
        --ease-soft     : in/out, used for exits and bidirectional state

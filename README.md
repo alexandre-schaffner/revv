@@ -1,53 +1,66 @@
 # Revv — AI-Powered Code Review
 
-An intelligent code review desktop application that brings AI-assisted analysis to your pull request workflows. Revv syncs your GitHub PRs and enables deep, conversational code review right from your desktop.
+An AI-assisted code review desktop application. Revv syncs your GitHub pull requests and enables deep, conversational code review from your desktop — including AI-generated walkthroughs, a persistent chat agent, and proposed-commit workflows.
 
 ## Features
 
-- **Synced GitHub PRs** — Automatically fetch and organize your pull requests
-- **AI Code Review** — Get intelligent analysis and suggestions on code changes
-- **Annotation & Comments** — Add detailed annotations to specific lines and participate in review threads
-- **Guided Walkthroughs** — Step-by-step guidance for understanding complex changes
-- **Dark Mode Support** — Review code comfortably in any lighting condition
+- **Synced GitHub PRs** — Automatic fetch and polling across repos, with real-time WebSocket updates
+- **AI Guided Walkthrough** — 4-phase MCP pipeline (Overview → Diff Analysis → Sentiment → 9-axis Rating) with chat-edit mutations post-completion
+- **Chat Agent** — Always-on right-panel agent with plan mode, tool-use streaming, task queue, and pending questions
+- **Chat-Driven Changes** — Proposed-commit strip with cherry-pick / discard / push (`--force-with-lease`) and AI merge-conflict resolution
+- **Comment Threads** — Persisted review threads with bidirectional GitHub sync, hunk decisions, and code-suggestion application
+- **Command Palette** — `Cmd+P` PR search, `Cmd+Shift+P` command mode with fuzzy scoring
+- **Multi-Account Auth** — GitHub Device Code flow; GHE-default with public `github.com` opt-in; multi-account management
+- **Themes** — Light / dark / system with an independent diff theme preference
 
 ## Stack
 
 - **Frontend** — Svelte 5 (SvelteKit) + Tailwind CSS v4 + shadcn-svelte
 - **Backend** — Bun + TypeScript + Elysia + Effect
-- **Database** — SQLite with Drizzle ORM
+- **Database** — SQLite with Drizzle ORM (schema applied directly, no migration runner)
 - **Desktop** — Tauri v2 (Rust)
 - **Monorepo** — Turborepo
+- **AI** — Claude Agent SDK (in-process) + opencode (HTTP MCP, subprocess); MCP tool handlers shared in-process
 
-## Install on macOS (one command)
+## Installation
 
-**GitHub Enterprise (`nocturlab.ghe.com`) — default:**
+### macOS
+
+**Recommended — one-command installer (builds from source):**
 
 ```bash
+# GitHub Enterprise (nocturlab.ghe.com) — default
 curl -fsSL https://raw.githubusercontent.com/alexandre-schaffner/revv/main/install.sh | bash
-```
 
-**Public github.com:**
-
-```bash
+# Public github.com
 curl -fsSL https://raw.githubusercontent.com/alexandre-schaffner/revv/main/install.sh | \
   REVV_GITHUB_HOST=github.com \
   REVV_GITHUB_CLIENT_ID=Ov23liI36U1MLWk3kF8l \
   bash
 ```
 
-That single command will:
+The installer will:
 
-1. Install build prerequisites if missing (Xcode CLT, Bun, Rust)
+1. Install missing prerequisites (Xcode CLT, Bun, Rust)
 2. Clone the source to `~/Library/Application Support/Revv/src`
-3. Build `Revv.app` (`make dist`) and copy it to `/Applications`
-4. Install a LaunchAgent so the API server runs in the background on login
-5. Install a `revv` CLI to `~/.local/bin` for updates and maintenance
+3. Build and install `Revv.app` to `/Applications`
+4. Register a LaunchAgent so the API server starts on login
+5. Install a `revv` management CLI to `~/.local/bin`
 
-No OAuth prompts and no `.env` file to manage — Revv ships with a bundled GitHub OAuth App, and `BETTER_AUTH_SECRET` is generated on first run and stored at `~/Library/Application Support/Revv/auth.key` (mode `0600`). Nothing sensitive ever leaves your machine.
+No `.env` file or OAuth setup required — Revv ships with a bundled GitHub OAuth App.
+`BETTER_AUTH_SECRET` is generated on first run and stored at
+`~/Library/Application Support/Revv/auth.key` (mode `0600`).
 
-### Non-interactive / customization
+**Alternative — download the DMG from [Releases](https://github.com/alexandre-schaffner/revv/releases):**
 
-The installer honors a few environment variables — everything else is baked in:
+Download the `.dmg` for your architecture (`aarch64` for Apple Silicon, `x86_64` for Intel),
+open it, drag `Revv.app` to `/Applications`, and launch. You will need to start the API
+server manually (`bun run apps/server/src/index.ts`) or use the installer script to set up
+the LaunchAgent separately.
+
+**Requires macOS 10.15 (Catalina) or later.**
+
+#### Customizing the installer
 
 ```bash
 REVV_AUTO_YES=1 \
@@ -59,17 +72,19 @@ REVV_APP_DIR=/Applications \
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `REVV_AUTO_YES` | `0` | `1` skips every confirm prompt (same as `--yes`) |
+| `REVV_AUTO_YES` | `0` | `1` skips every confirm prompt |
 | `REVV_BRANCH` | `main` | Branch to clone/update |
 | `REVV_REPO_URL` | Upstream | Git URL to clone from (fork-friendly) |
 | `REVV_INSTALL_DIR` | `~/Library/Application Support/Revv/src` | Where the source tree lives |
 | `REVV_APP_DIR` | `/Applications` | Falls back to `~/Applications` if not writable |
-| `REVV_GITHUB_HOST` | `nocturlab.ghe.com` (bundled) | Override to target a different GitHub instance (e.g. `github.com`) |
+| `REVV_GITHUB_HOST` | `nocturlab.ghe.com` (bundled) | Override for a different GitHub instance |
 | `REVV_GITHUB_CLIENT_ID` | bundled for the default host | Required when `REVV_GITHUB_HOST` is overridden |
 
-Revv bundles an OAuth App registered on `nocturlab.ghe.com` (GitHub Enterprise Cloud) plus a second one for public `github.com` (client id `Ov23liI36U1MLWk3kF8l`) — either is selected at install time via the variant commands above. To target a third instance (e.g. your own GHE Server), pass `REVV_GITHUB_HOST` + `REVV_GITHUB_CLIENT_ID` for an OAuth App that has **Device Flow enabled** (see Troubleshooting). The installer persists those values to `~/Library/Application Support/Revv/github.conf` so subsequent `revv update` runs preserve the override.
+To target a custom GHE Server, pass both `REVV_GITHUB_HOST` and `REVV_GITHUB_CLIENT_ID`
+for an OAuth App with **Device Flow enabled**. These values are persisted to
+`~/Library/Application Support/Revv/github.conf` so `revv update` preserves them.
 
-### Managing the install
+#### Managing the install
 
 ```bash
 revv status      # show install paths, versions, server state, update availability
@@ -80,7 +95,62 @@ revv open        # launch Revv.app
 revv uninstall   # remove app, source, LaunchAgent, and the CLI itself
 ```
 
-Updates are purely source-pull-and-rebuild — no signing/notarization infrastructure required.
+---
+
+### Windows
+
+Download the NSIS installer (`.exe`) from
+[Releases](https://github.com/alexandre-schaffner/revv/releases) and run it.
+Per-user and system-wide install modes are both supported.
+
+The API server is **not** automatically registered as a Windows service by the installer.
+Start it manually from a terminal in the source directory:
+
+```powershell
+bun run apps/server/src/index.ts
+```
+
+Or add it to Task Scheduler / NSSM yourself, pointing at the same command.
+
+To build from source on Windows, see [Develop from a clone](#develop-from-a-clone) below.
+
+---
+
+### Linux
+
+Download the **AppImage** or **`.deb`** package from
+[Releases](https://github.com/alexandre-schaffner/revv/releases).
+
+**AppImage (any distro):**
+
+```bash
+chmod +x Revv_*.AppImage
+./Revv_*.AppImage
+```
+
+**Debian / Ubuntu:**
+
+```bash
+sudo dpkg -i revv_*.deb
+# Or install required libs first if dpkg reports missing deps:
+sudo apt-get install -f
+```
+
+The `.deb` depends on `libwebkit2gtk-4.1-0` and `libgtk-3-0`. On Ubuntu 22.04+ these are
+available in the default repos. Older distros may need a PPA.
+
+As on Windows, the API server is not registered as a system service by the package.
+Start it manually:
+
+```bash
+bun run /path/to/revv/apps/server/src/index.ts
+```
+
+To set it up as a systemd user service, create
+`~/.config/systemd/user/revv-server.service` pointing at the same command,
+then `systemctl --user enable --now revv-server`.
+
+To build from source on Linux, see [Develop from a clone](#develop-from-a-clone) below.
 
 ---
 
@@ -88,40 +158,52 @@ Updates are purely source-pull-and-rebuild — no signing/notarization infrastru
 
 ### Prerequisites
 
-- Bun 1.3+
-- Rust (via rustup)
-- Xcode Command Line Tools
+All platforms need **Bun 1.3+** and **Rust** (via [rustup](https://rustup.rs)).
 
-### Installation
+**macOS** — also needs Xcode Command Line Tools:
+
+```bash
+xcode-select --install
+```
+
+**Linux (Ubuntu/Debian)** — also needs Tauri system libraries:
+
+```bash
+sudo apt-get update && sudo apt-get install -y \
+  build-essential curl file \
+  libssl-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
+  librsvg2-dev patchelf libayatana-appindicator3-dev
+```
+
+**Windows** — also needs the [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
+and [WebView2](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) (included in Windows 11; install the Evergreen bootstrapper on Windows 10).
+
+### Setup
 
 ```bash
 git clone https://github.com/alexandre-schaffner/revv.git
 cd revv
-./install.sh --dev    # installs toolchain + runs `bun install`, stops there
+bun install
+cp .env.example .env   # fill in GITHUB_CLIENT_ID and BETTER_AUTH_SECRET
 ```
-
-`install.sh` is a single script with two modes. Running it **from a checkout with `--dev`** only prepares the tree for `make dev` — it does not build or install `Revv.app` or the LaunchAgent. Without `--dev` it runs the full user install (same as the curl one-liner above).
 
 ### Development
 
 ```bash
-# Start all services (web @ 5173, server @ 45678, Tauri desktop)
-make dev
-
-# Or run individually
-make dev-web              # SvelteKit only
-make dev-server           # Elysia API only
+make dev             # all 3 services (web @ 5173, server @ 45678, Tauri desktop)
+make dev-web         # SvelteKit only
+make dev-server      # Elysia API only
 ```
 
-## Commands
+### Quality & Build
 
 ```bash
-make typecheck           # Type check all packages
-make lint                # Lint all packages
-make build               # Build all packages
-make dist                # Build installers (dmg/msi/deb)
-make clean               # Clean build artifacts
-make reset-db            # Reset SQLite database
+make typecheck       # tsc across all packages
+make lint            # linters across all packages
+make build           # build all packages
+make dist            # build platform installer (dmg/msi/deb)
+make clean           # remove build artifacts
+make reset-db        # delete SQLite database
 ```
 
 ## Project Structure
@@ -129,100 +211,50 @@ make reset-db            # Reset SQLite database
 ```
 revv/
 ├── apps/
-│   ├── web/            # SvelteKit frontend (served by Tauri)
-│   ├── server/         # Elysia HTTP + WebSocket API
+│   ├── web/            # SvelteKit frontend (served by Tauri, localhost:5173 in dev)
+│   ├── server/         # Elysia HTTP + WebSocket API (port 45678)
 │   └── desktop/        # Tauri v2 shell
 ├── packages/
-│   └── shared/         # Shared types & constants
-└── CLAUDE.md           # Developer guide
+│   └── shared/         # Shared types & constants (@revv/shared)
+└── docs/prds/          # Product roadmap PRDs
 ```
 
-### apps/web
-
-SvelteKit frontend with Svelte 5 runes. Accessible at `localhost:5173` in dev.
-
-- `src/lib/stores/` — State management (auth, PRs, WebSocket)
-- `src/lib/components/` — Reusable UI components
-- `src/routes/` — Page routes
-
-### apps/server
-
-Elysia API server with Effect-based services. Runs on port 45678.
-
-- `src/services/` — Core services (GitHub, Repositories, PRs)
-- `src/routes/` — API endpoints
-- `src/db/` — Database schema (Drizzle)
-
-**Features:**
-- GitHub device-code sign-in (`src/routes/device-auth.ts`), sessions via `better-auth`
-- WebSocket for real-time updates
-- Polling & syncing of PRs from GitHub
-
-### apps/desktop
-
-Tauri v2 desktop shell serving the SvelteKit build.
-
-- Deep-link handling via `revv://` scheme
-- Plugin setup for opener and deep-link support
-- Configured for localhost API calls via CSP
-
-### packages/shared
-
-Shared types and constants imported by all apps.
-
-```ts
-import { API_PORT, APP_NAME } from '@revv/shared'
-```
-
-## Architecture Highlights
+## Architecture
 
 ### Authentication
 
-GitHub **Device Code** OAuth flow. The server calls `POST https://github.com/login/device/code` with the bundled `client_id` (no client secret — device flow doesn't use one), returns a `user_code` + `verification_uri` to the desktop client, and polls GitHub until the user approves the code in their browser. On success the server mints a 30-day session token, stored client-side and passed to the API as `Authorization: Bearer`.
-
-`better-auth` is present for session/account storage plumbing, but the interactive sign-in path is the device-code endpoints in `apps/server/src/routes/device-auth.ts` — not a browser-redirect callback.
-
-### Real-Time Updates
-
-WebSocket hub broadcasts events:
-- `prs:updated` — Pull request list changed
-- `repos:updated` — Repository list changed
-
-Clients authenticate via `?token=` query param.
+GitHub **Device Code** OAuth flow. The server calls `POST https://github.com/login/device/code`, returns a `user_code` + `verification_uri` to the desktop client, and polls GitHub until the user approves. On success the server mints a 30-day session token passed to the API as `Authorization: Bearer`. Multi-account management is supported.
 
 ### Effect System
 
-Services throughout the backend use Effect for:
-- Dependency injection (`Context.Tag`, `Layer`)
-- Structured error handling
-- Composable async workflows
+All backend services use Effect for dependency injection (`Context.Tag`, `Layer`), structured error handling, and composable async workflows. Don't bypass Effect when modifying services.
 
-Don't bypass Effect when modifying services.
+### Agent Subsystem
+
+AI pipelines (walkthrough generation, chat agent) follow strict invariants documented in [`CLAUDE.md`](CLAUDE.md#agent-subsystem-invariants):
+
+- SQLite is the authoritative state store — survives `kill -9`
+- Agent content writes go through MCP only; orchestrator lifecycle writes stay in Elysia
+- Each MCP tool call is one atomic idempotent upsert on a deterministic key
+- Generation is a strict 4-phase pipeline (A → B → C → D); phases complete in order
+
+Both Claude Agent SDK (in-process) and opencode (HTTP MCP, subprocess) paths share in-process MCP tool handlers and must exhibit identical externally-observable behavior.
+
+### Real-Time Updates
+
+WebSocket hub broadcasts `prs:updated`, `repos:updated`, `walkthrough:updated`, `walkthrough:edited`, etc. Clients authenticate via `?token=` query param. Shape is `{ type, data? }` with `namespace:action` type strings — source of truth in `packages/shared/src/ws.ts`.
 
 ### Database
 
-SQLite with Drizzle ORM. Schema in `apps/server/src/db/schema.ts`; migrations in `apps/server/src/db/migrations/` (generated by `drizzle-kit` and applied by `migrate()` on server startup). The database lives at `apps/server/revv.db` by default; override with `REVV_DB_PATH`.
-
-To generate a new migration after changing `schema.ts`:
-
-```bash
-cd apps/server && bun run drizzle-kit generate
-```
-
-To reset the local DB entirely: `make reset-db`.
+SQLite via Drizzle ORM. Schema in `apps/server/src/db/schema.ts` — applied directly on startup, no migration runner. To reset: `make reset-db`.
 
 ## TypeScript
 
-All packages extend `tsconfig.base.json` with:
-- `strict` mode enabled
-- `exactOptionalPropertyTypes` enforced
-- `noUncheckedIndexedAccess` enforced
+All packages extend `tsconfig.base.json` with `strict`, `exactOptionalPropertyTypes`, and `noUncheckedIndexedAccess`. Don't suppress errors with `as` casts unless unavoidable.
 
-Avoid suppressing errors with `as` casts unless unavoidable.
+## API
 
-## API Endpoints
-
-See `apps/server/src/routes/` for full API docs. Key endpoints:
+Key endpoints (all data routes require `Authorization: Bearer <token>`):
 
 **Auth (device-code flow)**
 - `POST /api/auth/device/init` — Start device flow; returns `device_code`, `user_code`, `verification_uri`
@@ -231,46 +263,42 @@ See `apps/server/src/routes/` for full API docs. Key endpoints:
 **Data**
 - `GET /api/prs` — List pull requests
 - `GET /api/repos` — List repositories
-- `POST /api/reviews` — Create or update review
+- `POST /api/reviews` — Create or update review session
 - `GET /api/reviews/:id` — Fetch review
 
-All data endpoints require `Authorization: Bearer <session-token>`. The WebSocket at `ws://localhost:45678` authenticates via `?token=<session-token>` query param.
+WebSocket at `ws://localhost:45678` authenticates via `?token=<session-token>`.
 
 ## Troubleshooting
 
 ### `Failed to start sign-in: TypeError: Load failed`
 
-The desktop app can't reach the local API server. Check it's running:
+The desktop app can't reach the local API server.
 
 ```bash
-curl http://localhost:45678/       # expect a response (404 on `/` is fine)
-launchctl list | grep revv         # PID in column 1 means running; `-` means crashed
+curl http://localhost:45678/       # 404 on / is fine — any response means running
+launchctl list | grep revv         # PID in column 1 means running; - means crashed
 revv logs                          # tail ~/Library/Logs/Revv/server.{out,err}.log
 ```
 
-If crashed, `revv logs` will show the reason. Common cause: a stale LaunchAgent from a previous broken build — `revv restart` usually resolves it.
-
 ### `Failed to start sign-in: Error: Failed to initiate sign-in`
 
-Server is reachable but GitHub returned 502. `revv logs` will show the real cause; almost always one of:
+Server is reachable but GitHub returned an error. Common causes:
 
-- **GitHub 404 Not Found** — you're using a custom `GITHUB_CLIENT_ID` but the OAuth App does not have **Device Flow enabled**. Fix it at `github.com/settings/developers` → your app → check "Enable Device Flow" → **Update application**.
-- **Invalid `client_id`** — the env var is set to a typo or a non-existent App.
-
-### `revv status` / `revv doctor`
-
-Both ship with the `revv` CLI and print install paths, service state, and run basic health checks. Start there.
+- **Device Flow not enabled** — go to `github.com/settings/developers` → your app → enable Device Flow → Update application
+- **Invalid `client_id`** — typo or non-existent OAuth App
 
 ## Roadmap
 
-See `docs/prds/` for the product roadmap. Six sequential PRDs outline the feature pipeline:
+See [`docs/prds/`](docs/prds/) for the full product roadmap.
 
-1. Comment Persistence & Review Sessions (P0)
-2. AI Context Panel (P0)
-3. AI Guided Walkthrough (P1)
-4. GitHub Sync & Conversations (P1)
-5. Post-Review Agent (P1)
-6. Polish, Performance & Ship (P2)
+| PRD | Title | Status |
+|-----|-------|--------|
+| 01 | Comment Persistence & Review Sessions | Shipped (~95%) |
+| 02 | Chat Agent | Shipped core · polish partial |
+| 03 | AI Guided Walkthrough | Shipped (~95%) |
+| 04 | GitHub Sync & Conversations | Backend shipped · frontend ~50% |
+| 05 | Chat-Driven Changes | Shipped core · polish partial |
+| 06 | Polish, Performance & Ship | Partial (~50%) |
 
 ## Contributing
 

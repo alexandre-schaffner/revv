@@ -471,7 +471,7 @@ let trackedCount = $derived(getRepositories().length);
 		font-weight: 450;
 		background: var(--color-glass-bg, rgba(255, 255, 255, 0.03));
 		border: 1px solid var(--color-glass-border, rgba(255, 255, 255, 0.07));
-		border-radius: 7px;
+		border-radius: 9999px;
 		color: var(--color-text-primary);
 		transition:
 			border-color var(--duration-instant) var(--ease-soft),

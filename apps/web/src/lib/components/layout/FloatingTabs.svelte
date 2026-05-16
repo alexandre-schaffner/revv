@@ -218,8 +218,8 @@ function isDividerHidden(index: number): boolean {
 		pointer-events: none;
 		cursor: default;
 		transition:
-			opacity 220ms var(--ease-out-expo),
-			transform 220ms var(--ease-out-expo),
+			opacity var(--duration-smooth) var(--ease-out-expo),
+			transform var(--duration-smooth) var(--ease-out-expo),
 			background-color var(--duration-snap);
 	}
 
@@ -281,8 +281,8 @@ function isDividerHidden(index: number): boolean {
 		transform-origin: left center;
 		pointer-events: none;
 		transition:
-			opacity 220ms var(--ease-out-expo),
-			transform 220ms var(--ease-out-expo),
+			opacity var(--duration-smooth) var(--ease-out-expo),
+			transform var(--duration-smooth) var(--ease-out-expo),
 			background-color var(--duration-snap);
 		-webkit-font-smoothing: antialiased;
 	}

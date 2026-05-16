@@ -140,13 +140,6 @@ function cycleTheme() {
 		grid-template-columns: 1fr;
 		font-family: var(--font-sans, 'Inter', system-ui, sans-serif);
 
-		/* Slow-cinema tokens, longer than the rest of the app. */
-		--ob-dur-slow: 720ms;
-		--ob-dur-medium: 480ms;
-		--ob-dur-quick: 280ms;
-		--ob-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
-		--ob-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-
 		/* ── Light mode (default) ───────────────────────────────────── */
 		--ob-bg: #faf9f6;
 		--ob-text: #2a2825;
@@ -256,7 +249,7 @@ function cycleTheme() {
 		align-items: center;
 		padding: 28px 36px;
 		z-index: 2;
-		animation: fade-up var(--ob-dur-slow) var(--ob-ease-out) backwards;
+		animation: fade-up var(--duration-ceremonial-slow) var(--ease-out-expo) backwards;
 	}
 
 	.header-left {
@@ -359,7 +352,7 @@ function cycleTheme() {
 	}
 
 	.chapter-label[data-key] {
-		animation: fade-up var(--ob-dur-medium) var(--ob-ease-out) backwards;
+		animation: fade-up var(--duration-ceremonial-medium) var(--ease-out-expo) backwards;
 	}
 
 	.chapter-rule {
@@ -383,7 +376,7 @@ function cycleTheme() {
 	}
 
 	.title[data-key] .title-line {
-		animation: title-reveal var(--ob-dur-slow) var(--ob-ease-out) backwards;
+		animation: title-reveal var(--duration-ceremonial-slow) var(--ease-out-expo) backwards;
 	}
 
 	.title[data-key] .title-line:nth-child(2) {
@@ -399,7 +392,7 @@ function cycleTheme() {
 		width: 100%;
 		display: flex;
 		flex-direction: column;
-		animation: fade-up var(--ob-dur-slow) var(--ob-ease-out) 200ms backwards;
+		animation: fade-up var(--duration-ceremonial-slow) var(--ease-out-expo) 200ms backwards;
 	}
 
 	/* Footer — segmented progress bar */
@@ -407,7 +400,7 @@ function cycleTheme() {
 		grid-row: 3;
 		padding: 24px 36px 32px;
 		z-index: 2;
-		animation: fade-up var(--ob-dur-slow) var(--ob-ease-out) backwards;
+		animation: fade-up var(--duration-ceremonial-slow) var(--ease-out-expo) backwards;
 	}
 
 	.cells {

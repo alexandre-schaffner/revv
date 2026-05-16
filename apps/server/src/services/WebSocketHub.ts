@@ -33,6 +33,16 @@ export const WebSocketHubLive = Layer.effect(
           next.delete(ws);
           return next;
         }),
+      /**
+       * Best-effort fire-and-forget broadcast to all connected clients.
+       *
+       * CONTRACT: Subscribers MUST reconcile from the DB on reconnect — any
+       * message missed during a disconnect is permanently lost. Never derive
+       * authoritative display state exclusively from WS messages; the DB is
+       * always the source of truth. Every feature that introduces a new WS
+       * event type must uphold this invariant or it will silently corrupt
+       * state for clients that experience even a brief disconnect.
+       */
       broadcast: (msg) =>
         Effect.gen(function* () {
           const set = yield* Ref.get(clients);

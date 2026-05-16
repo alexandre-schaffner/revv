@@ -2,28 +2,27 @@ import type { SyncChange, WsServerMessage } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { WS_BASE_URL } from "$lib/api/base-url";
 import { applyUserUpdate } from "./auth.svelte";
-import { resolveQuestionFromWs } from "./chat.svelte";
+import { onChatQuestionResolved } from "./chat.svelte";
 import * as errors from "./errors.svelte";
 import * as prs from "./prs.svelte";
 import { fetchArchivedPrs, getSelectedPrId, mergePullRequests } from "./prs.svelte";
 import {
-  addMessageFromWs,
-  addThreadFromWs,
   loadSession,
-  removeMessageFromWs,
-  removeThreadFromWs,
-  updateMessageFromWs,
-  updateThreadStatusFromWs,
+  onThreadCreated,
+  onThreadDeleted,
+  onThreadMessage,
+  onThreadMessageDeleted,
+  onThreadMessageEdited,
+  onThreadUpdated,
 } from "./review.svelte";
 import * as sync from "./sync.svelte";
 import { markThreadsSyncing } from "./sync.svelte";
 import {
   hydrateFromCache,
   onWalkthroughComplete,
-  onWalkthroughEdited,
-  onWalkthroughError,
   prefetchWalkthrough,
-} from "./walkthrough.svelte";
+} from "./walkthrough-stream.svelte";
+import { onWalkthroughEdited, onWalkthroughError } from "./walkthrough.svelte";
 
 let ws: WebSocket | null = null;
 let connected = $state(false);
@@ -95,22 +94,22 @@ function handleMessage(msg: WsServerMessage): void {
       errors.setError(msg.data);
       break;
     case "thread:created":
-      addThreadFromWs(msg.data.thread, msg.data.message);
+      onThreadCreated(msg.data.thread, msg.data.message);
       break;
     case "thread:updated":
-      updateThreadStatusFromWs(msg.data.threadId, msg.data.status);
+      onThreadUpdated(msg.data.threadId, msg.data.status);
       break;
     case "thread:message":
-      addMessageFromWs(msg.data.threadId, msg.data.message);
+      onThreadMessage(msg.data.threadId, msg.data.message);
       break;
     case "thread:deleted":
-      removeThreadFromWs(msg.data.threadId);
+      onThreadDeleted(msg.data.threadId);
       break;
     case "thread:message:edited":
-      updateMessageFromWs(msg.data.threadId, msg.data.message);
+      onThreadMessageEdited(msg.data.threadId, msg.data.message);
       break;
     case "thread:message:deleted":
-      removeMessageFromWs(msg.data.threadId, msg.data.messageId);
+      onThreadMessageDeleted(msg.data.threadId, msg.data.messageId);
       break;
     case "threads:synced":
       sync.applySynced(msg.data.prId, msg.data.summary, msg.data.timestamp);
@@ -127,7 +126,7 @@ function handleMessage(msg: WsServerMessage): void {
       });
       break;
     case "threads:new-reply":
-      addThreadFromWs(msg.data.thread, msg.data.message);
+      onThreadCreated(msg.data.thread, msg.data.message);
       break;
     case "walkthrough:complete":
       onWalkthroughComplete(msg.data.prId, msg.data.walkthroughId);
@@ -142,7 +141,7 @@ function handleMessage(msg: WsServerMessage): void {
       notifySyncChanges(msg.data);
       break;
     case "chat:question-resolved":
-      resolveQuestionFromWs(
+      onChatQuestionResolved(
         msg.data.prId,
         msg.data.questionId,
         msg.data.status,
