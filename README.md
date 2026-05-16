@@ -99,12 +99,37 @@ revv uninstall   # remove app, source, LaunchAgent, and the CLI itself
 
 ### Windows
 
-Download the NSIS installer (`.exe`) from
-[Releases](https://github.com/alexandre-schaffner/revv/releases) and run it.
-Per-user and system-wide install modes are both supported.
+**Recommended — one-command installer (builds from source):**
 
-The API server is **not** automatically registered as a Windows service by the installer.
-Start it manually from a terminal in the source directory:
+```powershell
+# GitHub Enterprise (nocturlab.ghe.com) — default
+irm https://raw.githubusercontent.com/alexandre-schaffner/revv/main/install.ps1 | iex
+
+# Public github.com
+$env:REVV_GITHUB_HOST = 'github.com'
+$env:REVV_GITHUB_CLIENT_ID = 'Ov23liI36U1MLWk3kF8l'
+irm https://raw.githubusercontent.com/alexandre-schaffner/revv/main/install.ps1 | iex
+```
+
+The installer will:
+
+1. Install missing prerequisites (Visual Studio Build Tools, Bun, Rust, WebView2)
+2. Clone the source to `$env:APPDATA\Revv\src`
+3. Build and install `Revv.exe` to `$env:LOCALAPPDATA\Revv`
+4. Register a Task Scheduler task so the API server starts on login
+5. Install a `revv` management CLI to `$env:USERPROFILE\.local\bin`
+
+No `.env` file or OAuth setup required — Revv ships with a bundled GitHub OAuth App.
+`BETTER_AUTH_SECRET` is generated on first run and stored at
+`$env:APPDATA\Revv\auth.key`.
+
+**Alternative — download the NSIS installer (`.exe`) from [Releases](https://github.com/alexandre-schaffner/revv/releases):**
+
+Download the `.exe`, run it, and follow the wizard. Per-user and system-wide install
+modes are both supported.
+
+The API server is **not** automatically registered as a Windows service by the binary
+installer. Start it manually from a terminal in the source directory:
 
 ```powershell
 bun run apps/server/src/index.ts
@@ -112,7 +137,40 @@ bun run apps/server/src/index.ts
 
 Or add it to Task Scheduler / NSSM yourself, pointing at the same command.
 
-To build from source on Windows, see [Develop from a clone](#develop-from-a-clone) below.
+#### Customizing the installer
+
+```powershell
+$env:REVV_AUTO_YES = 1
+$env:REVV_BRANCH = 'main'
+$env:REVV_INSTALL_DIR = "$env:APPDATA\Revv\src"
+$env:REVV_APP_DIR = "$env:LOCALAPPDATA\Revv"
+irm https://raw.githubusercontent.com/alexandre-schaffner/revv/main/install.ps1 | iex
+```
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `REVV_AUTO_YES` | `0` | `1` skips every confirm prompt |
+| `REVV_BRANCH` | `main` | Branch to clone/update |
+| `REVV_REPO_URL` | Upstream | Git URL to clone from (fork-friendly) |
+| `REVV_INSTALL_DIR` | `$env:APPDATA\Revv\src` | Where the source tree lives |
+| `REVV_APP_DIR` | `$env:LOCALAPPDATA\Revv` | App install directory |
+| `REVV_GITHUB_HOST` | `nocturlab.ghe.com` (bundled) | Override for a different GitHub instance |
+| `REVV_GITHUB_CLIENT_ID` | bundled for the default host | Required when `REVV_GITHUB_HOST` is overridden |
+
+To target a custom GHE Server, pass both `REVV_GITHUB_HOST` and `REVV_GITHUB_CLIENT_ID`
+for an OAuth App with **Device Flow enabled**. These values are persisted to
+`$env:APPDATA\Revv\github.conf` so `revv update` preserves them.
+
+#### Managing the install
+
+```powershell
+revv status      # show install paths, versions, server state, update availability
+revv update      # git pull + rebuild + reinstall + reload service
+revv restart     # restart the background API server
+revv logs        # tail server logs
+revv open        # launch Revv.exe
+revv uninstall   # remove app, source, scheduled task, and the CLI itself
+```
 
 ---
 
@@ -178,6 +236,18 @@ sudo apt-get update && sudo apt-get install -y \
 **Windows** — also needs the [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
 and [WebView2](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) (included in Windows 11; install the Evergreen bootstrapper on Windows 10).
 
+The quickest way to set up the full toolchain is the one-line installer:
+
+```powershell
+irm https://raw.githubusercontent.com/alexandre-schaffner/revv/main/install.ps1 | iex
+```
+
+Or for dev-only setup (toolchain + deps, no build):
+
+```powershell
+irm https://raw.githubusercontent.com/alexandre-schaffner/revv/main/install.ps1 | iex -Args '-Dev'
+```
+
 ### Setup
 
 ```bash
@@ -189,13 +259,25 @@ cp .env.example .env   # fill in GITHUB_CLIENT_ID and BETTER_AUTH_SECRET
 
 ### Development
 
+**macOS / Linux:**
+
 ```bash
 make dev             # all 3 services (web @ 5173, server @ 45678, Tauri desktop)
 make dev-web         # SvelteKit only
 make dev-server      # Elysia API only
 ```
 
+**Windows (PowerShell):**
+
+```powershell
+bun run dev          # all 3 services
+bun run dev:web      # frontend only
+bun run dev:server   # API only
+```
+
 ### Quality & Build
+
+**macOS / Linux:**
 
 ```bash
 make typecheck       # tsc across all packages
@@ -204,6 +286,16 @@ make build           # build all packages
 make dist            # build platform installer (dmg/msi/deb)
 make clean           # remove build artifacts
 make reset-db        # delete SQLite database
+```
+
+**Windows (PowerShell):**
+
+```powershell
+bun run typecheck    # tsc across all packages
+bun run lint         # linters across all packages
+bun run build        # build all packages
+bun run dist         # build Tauri desktop bundle
+bun run clean        # remove build artifacts
 ```
 
 ## Project Structure
