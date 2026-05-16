@@ -31,6 +31,7 @@ import {
   getRcSelectedCount,
   getRcSubmitting,
 } from "$lib/stores/rcActions.svelte";
+import { Shimmer } from "$lib/components/ai/shimmer";
 import {
   consumePanelOpenRequest,
   getActiveTab,
@@ -414,7 +415,7 @@ function onRightHandleDblClick(): void {
 						: 'Open the chat panel and ask the agent to address the selected issues as commits'}
 				>
 					<Sparkles size={14} />
-					Generate changes
+					<Shimmer active={rcSubmitting === null && rcSelectedCount > 0}>Generate changes</Shimmer>
 				</button>
 
 				{#if isPrOwner && pr}
