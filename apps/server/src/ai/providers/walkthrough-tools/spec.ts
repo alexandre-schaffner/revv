@@ -129,7 +129,7 @@ const getRepoContextSchema = z.object({
 /**
  * Read-only: returns the PR commit list captured at job start. The agent
  * calls this once before opening the required journey chapter at
- * `semantic_step_index: 0`, then narrates the arc from the response.
+ * `semantic_step_index: 0`, then narrates the narrative from the response.
  *
  * Empty inputs by design — the walkthroughId is in the tool context.
  * Commits are stored verbatim on the walkthrough row (`pr_commits` JSON
