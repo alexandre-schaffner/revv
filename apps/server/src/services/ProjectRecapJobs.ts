@@ -431,8 +431,7 @@ export const ProjectRecapJobsLive = Layer.effect(
           client: () => Effect.runPromise(supervisor.client()),
         };
         const sessionDeps = {
-          issueSessionToken: (ctx: RecapToolContext) =>
-            Effect.runPromise(issueSessionToken(ctx)),
+          issueSessionToken: (ctx: RecapToolContext) => Effect.runPromise(issueSessionToken(ctx)),
           clearSessionToken: (token: string) => Effect.runPromise(clearSessionToken(token)),
         };
 

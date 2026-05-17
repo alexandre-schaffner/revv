@@ -16,12 +16,7 @@ import {
   User,
   X,
 } from "@lucide/svelte";
-import type {
-  AiAgent,
-  ContextWindow,
-  RecapAgentChoice,
-  ThinkingEffort,
-} from "@revv/shared";
+import type { AiAgent, ContextWindow, RecapAgentChoice, ThinkingEffort } from "@revv/shared";
 import { API_BASE_URL } from "@revv/shared";
 import { Dialog as DialogPrimitive } from "bits-ui";
 import { SvelteMap } from "svelte/reactivity";
@@ -64,14 +59,7 @@ interface Props {
 let { open, onClose }: Props = $props();
 
 // ── Nav sections ──────────────────────────────────────────────────────────
-type SectionId =
-  | "account"
-  | "ai"
-  | "recap"
-  | "preferences"
-  | "onboarding"
-  | "updates"
-  | "danger";
+type SectionId = "account" | "ai" | "recap" | "preferences" | "onboarding" | "updates" | "danger";
 
 interface NavItem {
   id: SectionId;

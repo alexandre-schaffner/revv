@@ -34,11 +34,7 @@
 
 import { serverEnv } from "../../config";
 import { debug, logError } from "../../logger";
-import {
-  extractOpencodeErrorMessage,
-  parseOpencodeModel,
-  withAgentTurn,
-} from "../agent-stream";
+import { extractOpencodeErrorMessage, parseOpencodeModel, withAgentTurn } from "../agent-stream";
 import { buildRecapUserMessage, RECAP_SYSTEM_PROMPT } from "../prompts/recap";
 import type { RecapToolContext } from "./recap-tools";
 import { RECAP_MCP_SERVER } from "./recap-tools";
@@ -131,9 +127,7 @@ export async function runRecapAgentViaOpencode(
         const endpoint = await params.supervisorDeps.ensureDaemon();
         const client = await params.supervisorDeps.client();
         if (!client) {
-          throw new Error(
-            "OpencodeSupervisor reports daemon-running but no HTTP client available",
-          );
+          throw new Error("OpencodeSupervisor reports daemon-running but no HTTP client available");
         }
 
         // ── 1. Issue session token + register MCP server ──────────

@@ -360,11 +360,7 @@ export function applyEvents(prId: string, events: WalkthroughStreamEvent[]): voi
           // as resumable until the next hydration. Mirrors the hydration
           // fallback in walkthrough-stream.svelte.ts (`?? "D"`) and the
           // local-mark gate in onWalkthroughComplete().
-          if (
-            entry.summary !== null &&
-            entry.blocks.length > 0 &&
-            entry.ratings.length === 9
-          ) {
+          if (entry.summary !== null && entry.blocks.length > 0 && entry.ratings.length === 9) {
             entry.lastCompletedPhase = "D";
           }
           break;

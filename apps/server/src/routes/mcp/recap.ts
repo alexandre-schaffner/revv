@@ -41,9 +41,7 @@ import {
 
 async function resolveContext(
   req: Request,
-): Promise<
-  { ok: true; ctx: RecapToolContext } | { ok: false; status: number; message: string }
-> {
+): Promise<{ ok: true; ctx: RecapToolContext } | { ok: false; status: number; message: string }> {
   const token = extractBearer(req);
   if (!token) {
     return { ok: false, status: 401, message: "Missing bearer token" };
@@ -215,10 +213,7 @@ export const mcpRecapRoute = new Elysia({ prefix: "/mcp" }).post("/recap", async
     }
   }
 
-  debug(
-    "mcp-recap-route",
-    `served ${requests.length} request(s), recapId=${resolved.ctx.recapId}`,
-  );
+  debug("mcp-recap-route", `served ${requests.length} request(s), recapId=${resolved.ctx.recapId}`);
 
   const payload = Array.isArray(body) ? responses : responses[0];
   return new Response(JSON.stringify(payload), {

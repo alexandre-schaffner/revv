@@ -28,17 +28,17 @@ import type { ProjectRecap } from "@revv/shared";
 import { buildRecapUserMessage, RECAP_SYSTEM_PROMPT } from "../ai/prompts/recap";
 import { resolveCliBin } from "../ai/providers/cli-agent";
 import {
+  type RecapOpencodeSessionDeps,
+  type RecapOpencodeSupervisorDeps,
+  runRecapAgentViaOpencode,
+} from "../ai/providers/recap-opencode";
+import {
   createRecapMcpServer,
   RECAP_ALLOWED_TOOLS,
   RECAP_MCP_SERVER,
   type RecapSourceBundle,
   type RecapToolContext,
 } from "../ai/providers/recap-tools";
-import {
-  type RecapOpencodeSessionDeps,
-  type RecapOpencodeSupervisorDeps,
-  runRecapAgentViaOpencode,
-} from "../ai/providers/recap-opencode";
 import type { Db } from "../db";
 import { debug, logError } from "../logger";
 import type { CliAgent } from "./Ai";
