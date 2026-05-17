@@ -457,7 +457,7 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
             .run(),
         catch: (e) => new ValidationError({ message: `setStatus: ${String(e)}` }),
       });
-    }).pipe(Effect.catchAll(() => Effect.void)),
+    }),
 
   supersede: (oldId, newId) =>
     Effect.gen(function* () {
