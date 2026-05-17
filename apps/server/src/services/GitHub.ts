@@ -415,6 +415,31 @@ export class GitHubService extends Context.Tag("GitHubService")<
       prNumber: number,
       token: string,
     ) => Effect.Effect<PullRequest, GitHubError, DbService | GitHubEtagCache | SettingsService>;
+    /**
+     * Find PR numbers closed (or merged) in a time window via GitHub's
+     * issue-search API. Used by the recap pipeline to discover PRs that
+     * never made it into the local mirror — e.g. closed between two poll
+     * cycles or before the user added the repo to Revv.
+     *
+     * The Search API has a hard cap of 1000 results; for typical
+     * daily/weekly windows this is more than enough. Returns the matched
+     * PR numbers + their closed/merged metadata; the caller fetches full
+     * PR data via `getPr` for any number not already in the local DB.
+     */
+    readonly searchClosedPrsInWindow: (
+      repoFullName: string,
+      sinceIso: string,
+      untilIso: string,
+      token: string,
+    ) => Effect.Effect<
+      ReadonlyArray<{
+        readonly number: number;
+        readonly closedAt: string;
+        readonly merged: boolean;
+      }>,
+      GitHubError,
+      SettingsService
+    >;
     readonly getRepo: (
       fullName: string,
       token: string,
@@ -683,6 +708,57 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
         apiBase,
       );
       return mapPr(data as Record<string, unknown>, `${owner}/${repo}`);
+    }).pipe(Effect.retry(retrySchedule)),
+
+  searchClosedPrsInWindow: (repoFullName, sinceIso, untilIso, token) =>
+    Effect.gen(function* () {
+      const apiBase = yield* resolveApiBase;
+      const { owner, repo } = yield* parseRepoFullName(repoFullName);
+      // GitHub's search query syntax: `repo:owner/name is:pr is:closed
+      // closed:since..until`. Timestamps in ISO form are accepted with
+      // colon/Z encoded. Search has a 1000-result hard cap; we page up
+      // to 10 × 100 to reach it. For typical daily/weekly windows that
+      // ceiling is far above realistic PR-close volume.
+      //
+      // Inline pagination — the shared `githubFetchPaginated` helper
+      // only handles array-shaped pages, but `/search/issues` wraps
+      // results in `{ items, total_count, incomplete_results }`.
+      const q = `repo:${owner}/${repo} is:pr is:closed closed:${sinceIso}..${untilIso}`;
+      const params = new URLSearchParams({ q, per_page: "100", sort: "updated", order: "desc" });
+      const firstPath = `/search/issues?${params.toString()}`;
+
+      const items = yield* Effect.tryPromise({
+        try: async () => {
+          const collected: Array<{ number: number; closedAt: string; merged: boolean }> = [];
+          let url: string | null = `${apiBase}${firstPath}`;
+          const MAX_PAGES = 10;
+          for (let page = 0; page < MAX_PAGES && url; page++) {
+            const res = await fetch(url, { headers: githubHeaders(token) });
+            assertGitHubOk(res, firstPath);
+            const body = (await res.json()) as { items?: unknown };
+            if (Array.isArray(body.items)) {
+              for (const raw of body.items) {
+                if (raw === null || typeof raw !== "object") continue;
+                const item = raw as Record<string, unknown>;
+                const number = item.number;
+                const closedAt = item.closed_at;
+                if (typeof number !== "number" || typeof closedAt !== "string") continue;
+                const prMeta = item.pull_request as Record<string, unknown> | null | undefined;
+                const merged = typeof prMeta?.merged_at === "string";
+                collected.push({ number, closedAt, merged });
+              }
+            }
+            url = parseLinkNext(res.headers.get("Link"));
+          }
+          return collected;
+        },
+        catch: toGitHubError,
+      });
+      return items as ReadonlyArray<{
+        readonly number: number;
+        readonly closedAt: string;
+        readonly merged: boolean;
+      }>;
     }).pipe(Effect.retry(retrySchedule)),
 
   getRepo: (fullName, token) =>

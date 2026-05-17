@@ -17,6 +17,7 @@ import {
 } from "@lucide/svelte";
 import { page } from "$app/state";
 import { Shimmer } from "$lib/components/ai/shimmer";
+import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import SettingsModal from "$lib/components/settings/SettingsModal.svelte";
 import { Popover, PopoverContent, PopoverTrigger } from "$lib/components/ui/popover";
 import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
@@ -373,30 +374,33 @@ function onRightHandleDblClick(): void {
 			style={floatingActionsStyle}
 		>
 			<div class="walkthrough-actions-row">
+				<GlassPill
+					icon
+					onclick={scrollWalkthroughToTop}
+					aria-label="Scroll to top of walkthrough"
+				>
+					<ArrowUp size={14} />
+				</GlassPill>
+
 				{#if walkthroughUiState.kind === 'streaming'}
-					<button
-						type="button"
-						class="walkthrough-action-btn walkthrough-action-btn--danger"
+					<GlassPill
+						variant="danger"
 						onclick={() => abortWalkthrough(pr.id)}
 					>
 						<Square size={14} fill="currentColor" />
 						Stop generation
-					</button>
+					</GlassPill>
 					{#if walkthroughHasNewContentBelow}
-						<button
-							type="button"
-							class="walkthrough-action-btn"
+						<GlassPill
 							onclick={scrollWalkthroughToBottom}
 							aria-label="Scroll to newest walkthrough content"
 						>
 							<ArrowDown size={14} />
 							New content
-						</button>
+						</GlassPill>
 					{/if}
 				{:else if walkthroughUiState.kind === 'resumable'}
-					<button
-						type="button"
-						class="walkthrough-action-btn"
+					<GlassPill
 						disabled={destructiveDisabled}
 						title={destructiveTitle}
 						onclick={() => resumeWalkthrough(pr.id)}
@@ -404,21 +408,17 @@ function onRightHandleDblClick(): void {
 					>
 						<Play size={14} fill="currentColor" />
 						Resume
-					</button>
-					<button
-						type="button"
-						class="walkthrough-action-btn"
+					</GlassPill>
+					<GlassPill
 						disabled={destructiveDisabled}
 						title={destructiveTitle}
 						onclick={() => regenerateWalkthrough(pr.id)}
 					>
 						<RefreshCw size={14} />
 						Regenerate
-					</button>
+					</GlassPill>
 				{:else if walkthroughUiState.kind === 'error-partial'}
-					<button
-						type="button"
-						class="walkthrough-action-btn"
+					<GlassPill
 						disabled={destructiveDisabled}
 						title={destructiveTitle}
 						onclick={() => resumeWalkthrough(pr.id)}
@@ -426,21 +426,17 @@ function onRightHandleDblClick(): void {
 					>
 						<RotateCcw size={14} />
 						Retry
-					</button>
-					<button
-						type="button"
-						class="walkthrough-action-btn"
+					</GlassPill>
+					<GlassPill
 						disabled={destructiveDisabled}
 						title={destructiveTitle}
 						onclick={() => regenerateWalkthrough(pr.id)}
 					>
 						<RefreshCw size={14} />
 						Regenerate
-					</button>
+					</GlassPill>
 				{:else if walkthroughUiState.kind === 'error-empty'}
-					<button
-						type="button"
-						class="walkthrough-action-btn"
+					<GlassPill
 						disabled={destructiveDisabled}
 						title={destructiveTitle}
 						onclick={() => regenerateWalkthrough(pr.id)}
@@ -448,22 +444,19 @@ function onRightHandleDblClick(): void {
 					>
 						<RefreshCw size={14} />
 						Retry
-					</button>
+					</GlassPill>
 				{:else if walkthroughUiState.kind === 'complete'}
-					<button
-						type="button"
-						class="walkthrough-action-btn"
+					<GlassPill
 						disabled={destructiveDisabled}
 						title={destructiveTitle}
 						onclick={() => regenerateWalkthrough(pr.id)}
 					>
 						<RefreshCw size={14} />
 						Regenerate
-					</button>
+					</GlassPill>
 				{:else if walkthroughUiState.kind === 'complete-stale'}
-					<button
-						type="button"
-						class="walkthrough-action-btn walkthrough-action-btn--accent"
+					<GlassPill
+						variant="accent"
 						disabled={destructiveDisabled}
 						title={chatStreaming
 							? 'Chat edit in progress — wait for it to finish before regenerating'
@@ -472,29 +465,17 @@ function onRightHandleDblClick(): void {
 					>
 						<RefreshCw size={14} />
 						Regenerate for latest commit
-					</button>
+					</GlassPill>
 				{/if}
 
-				<button
-					type="button"
-					class="walkthrough-action-btn"
-					onclick={scrollWalkthroughToTop}
-					aria-label="Scroll to top of walkthrough"
-				>
-					<ArrowUp size={14} />
-					Top
-				</button>
-
 				{#if walkthroughHasRatings}
-					<button
-						type="button"
-						class="walkthrough-action-btn"
+					<GlassPill
 						onclick={scrollWalkthroughToRatings}
 						aria-label="Scroll to rating panel"
 					>
 						<Gauge size={14} />
 						Rating
-					</button>
+					</GlassPill>
 				{/if}
 			</div>
 		</div>
@@ -507,9 +488,8 @@ function onRightHandleDblClick(): void {
 			style={floatingActionsStyle}
 		>
 			<div class="walkthrough-actions-row">
-				<button
-					type="button"
-					class="walkthrough-action-btn walkthrough-action-btn--muted"
+				<GlassPill
+					variant="muted"
 					disabled={rcSubmitting !== null || rcSelectedCount === 0 || rcGenerating}
 					onclick={() => { rcGenerating = true; getRcOnGenerateChanges()(); }}
 					title={rcSelectedCount === 0
@@ -522,7 +502,7 @@ function onRightHandleDblClick(): void {
 					<Shimmer active={rcSubmitting === null && rcSelectedCount > 0}>
 						{rcGenerating ? 'Generating changes…' : 'Generate changes'}
 					</Shimmer>
-				</button>
+				</GlassPill>
 
 				{#if isPrOwner && pr}
 					<!-- Owner view — the reviewer's Approve / Request Changes pair
@@ -530,32 +510,29 @@ function onRightHandleDblClick(): void {
 					     two actions a coder actually needs from this screen:
 					     toggle draft state, and close the PR. -->
 					{#if pr.isDraft}
-						<button
-							type="button"
-							class="walkthrough-action-btn walkthrough-action-btn--accent"
+						<GlassPill
+							variant="accent"
 							disabled={ownerSubmitting !== null}
 							onclick={() => runOwnerAction('ready-for-review')}
 							title="Mark this draft as ready for review"
 						>
 							<Send size={14} />
 							{ownerSubmitting === 'ready-for-review' ? 'Marking ready…' : 'Ready for review'}
-						</button>
+						</GlassPill>
 					{:else}
-						<button
-							type="button"
-							class="walkthrough-action-btn"
+						<GlassPill
 							disabled={ownerSubmitting !== null}
 							onclick={() => runOwnerAction('convert-to-draft')}
 							title="Move this PR back to draft state"
 						>
 							<FileEdit size={14} />
 							{ownerSubmitting === 'convert-to-draft' ? 'Converting…' : 'Convert to draft'}
-						</button>
+						</GlassPill>
 					{/if}
 
 					{#if mergeEligibility?.canMerge && pr.status === 'open'}
 						<div
-							class="walkthrough-action-btn walkthrough-action-btn--success merge-pill"
+							class="glass-pill glass-pill--success merge-pill"
 							class:is-disabled={ownerSubmitting !== null || mergeSubmitting !== null}
 						>
 							<button
@@ -610,20 +587,18 @@ function onRightHandleDblClick(): void {
 						</div>
 					{/if}
 
-					<button
-						type="button"
-						class="walkthrough-action-btn walkthrough-action-btn--danger"
+					<GlassPill
+						variant="danger"
 						disabled={ownerSubmitting !== null}
 						onclick={() => runOwnerAction('close')}
 						title="Close this pull request without merging"
 					>
 						<XCircle size={14} />
 						{ownerSubmitting === 'close' ? 'Closing…' : 'Close PR'}
-					</button>
+					</GlassPill>
 				{:else}
-					<button
-						type="button"
-						class="walkthrough-action-btn walkthrough-action-btn--accent"
+					<GlassPill
+						variant="accent"
 						disabled={rcSubmitting !== null || !rcHasContent}
 						onclick={() => getRcOnSubmitReview()()}
 						title={!rcHasContent
@@ -632,10 +607,9 @@ function onRightHandleDblClick(): void {
 					>
 						<ArrowUp size={14} />
 						{rcSubmitting === 'request_changes' ? 'Submitting…' : 'Submit Review'}
-					</button>
-					<button
-						type="button"
-						class="walkthrough-action-btn walkthrough-action-btn--success"
+					</GlassPill>
+					<GlassPill
+						variant="success"
 						disabled={rcSubmitting !== null}
 						onclick={() => getRcOnApprove()()}
 						title={rcApproveBlockerSummary
@@ -644,7 +618,7 @@ function onRightHandleDblClick(): void {
 					>
 						<Check size={14} />
 						{rcSubmitting === 'approve' ? 'Approving…' : 'Approve'}
-					</button>
+					</GlassPill>
 				{/if}
 			</div>
 		</div>
@@ -839,70 +813,6 @@ function onRightHandleDblClick(): void {
 		gap: 8px;
 	}
 
-	/* Glass pill — mirrors `.pill-segment` in FloatingTabs.svelte so the
-	   bottom action and the top tabs read as members of the same family. */
-	.walkthrough-action-btn {
-		display: inline-flex;
-		align-items: center;
-		gap: 8px;
-		height: 36px;
-		padding: 0 16px;
-		background: var(--color-tab-track-bg);
-		backdrop-filter: blur(16px) saturate(1.4);
-		-webkit-backdrop-filter: blur(16px) saturate(1.4);
-		border: 1px solid var(--color-glass-border);
-		border-radius: 9999px;
-		box-shadow:
-			var(--color-glass-shadow),
-			inset 0 0.5px 0 0 var(--color-glass-highlight);
-		font-family: inherit;
-		font-size: 13px;
-		font-weight: 500;
-		letter-spacing: -0.01em;
-		line-height: 1;
-		color: var(--color-text-primary);
-		cursor: pointer;
-		transition:
-			background-color var(--duration-snap),
-			color var(--duration-snap),
-			box-shadow var(--duration-snap);
-		-webkit-font-smoothing: antialiased;
-		white-space: nowrap;
-	}
-
-	.walkthrough-action-btn:hover {
-		background: color-mix(in srgb, var(--color-tab-active-bg) 80%, var(--color-tab-track-bg));
-	}
-
-	.walkthrough-action-btn:focus-visible {
-		outline: 2px solid var(--color-accent);
-		outline-offset: 2px;
-	}
-
-	.walkthrough-action-btn--danger {
-		color: var(--color-danger);
-	}
-
-	.walkthrough-action-btn--muted {
-		color: var(--color-text-secondary);
-	}
-
-	/* Submit Review — accent blue tint */
-	.walkthrough-action-btn--accent:not(:disabled) {
-		color: var(--color-accent);
-	}
-
-	/* Approve — success green tint */
-	.walkthrough-action-btn--success:not(:disabled) {
-		color: var(--color-success);
-	}
-
-	/* Disabled state for RC buttons */
-	.walkthrough-action-btn:disabled {
-		cursor: not-allowed;
-		opacity: 0.4;
-	}
-
 	/* ── Right pane (chat) ──
 	   Overlay-positioned, NOT a grid column. Toggling it open/closed must
 	   leave the main grid (sidebar + main + bottombar) byte-identical so
@@ -988,7 +898,7 @@ function onRightHandleDblClick(): void {
 	}
 
 	/* Merge split-button — single pill with transparent inner buttons so the
-	   wrapper’s `.walkthrough-action-btn` border and radius create the shape. */
+	   wrapper’s `.glass-pill` border and radius create the shape. */
 	.merge-pill {
 		padding: 0;
 		overflow: hidden;

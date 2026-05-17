@@ -1,5 +1,3 @@
-// `user_settings` table was dropped in migration 0100 — preferences now
-// live in `~/.revv/settings.json` (see apps/server/src/services/Settings.ts).
 export { account, session, user, verification } from "./auth";
 export { cacheEntries } from "./cache-entries";
 export { chatActivities } from "./chat-activities";
@@ -20,6 +18,7 @@ export { pullRequests } from "./pull-requests";
 export { repositories } from "./repositories";
 export { reviewSessions } from "./review-sessions";
 export { threadMessages } from "./thread-messages";
+export { userSettings } from "./user-settings";
 export { walkthroughBlocks } from "./walkthrough-blocks";
 export { walkthroughIssues } from "./walkthrough-issues";
 export { walkthroughRatings } from "./walkthrough-ratings";

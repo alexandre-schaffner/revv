@@ -18,7 +18,7 @@
 // `complete_recap` only validates; the orchestrator observes the agent run's
 // natural end and transitions `status` to `'complete'` then.
 
-import type { ProjectRecap, RecapPeriod, RecapSummaryStats } from "@revv/shared";
+import type { ProjectRecap, RecapPeriod, RecapStreamEvent, RecapSummaryStats } from "@revv/shared";
 import { z } from "zod";
 import type { Db } from "../../../db";
 
@@ -51,6 +51,11 @@ export interface RecapToolContext {
    * natural stream end (which may happen on errors / cancellation too).
    */
   readonly onCompleted: () => void;
+  /**
+   * Stream emitter for live recap generation. Called by handlers that
+   * produce content so the SSE endpoint can forward it to subscribers.
+   */
+  readonly emit: (event: RecapStreamEvent) => void;
 }
 
 export interface RecapToolResult {
@@ -74,12 +79,52 @@ export interface RecapToolSpec<TShape extends z.ZodRawShape> {
 
 // ── Source bundle: the structured input the agent sees ───────────────────────
 
+/**
+ * One file from a PR's diff, surfaced to the recap agent for PRs that have no
+ * walkthrough. Mirrors the shape stored in `pr_diff_files` (see
+ * `DiffCacheService`) but with patch text optionally truncated to keep the
+ * agent's context bounded.
+ */
+export interface RecapSourcePrDiffFile {
+  readonly path: string;
+  readonly oldPath: string | null;
+  /** GitHub raw: 'added' | 'removed' | 'modified' | 'renamed' | 'copied' | 'unchanged'. */
+  readonly status: string;
+  readonly additions: number;
+  readonly deletions: number;
+  /** Unified-diff patch text. Null when GitHub omitted it (binary / too large). */
+  readonly patch: string | null;
+  /** True when the patch was clipped server-side to fit the per-file char budget. */
+  readonly patchTruncated: boolean;
+}
+
+/**
+ * Compact diff payload threaded to the recap agent for PRs without
+ * walkthroughs. Bounded by the orchestrator so a 1000-file PR doesn't blow
+ * up the agent's context — see `loadDiffForRecap` in `ProjectRecapJobs`.
+ */
+export interface RecapSourcePrDiff {
+  readonly files: ReadonlyArray<RecapSourcePrDiffFile>;
+  /** Total files in the original PR diff (before any per-recap truncation). */
+  readonly totalFiles: number;
+  /** True when some files were dropped server-side to fit the bundle. */
+  readonly filesTruncated: boolean;
+  /**
+   * Where the bytes came from. 'cache' = served from `pr_diff_files`;
+   * 'github' = fetched live during recap assembly; 'unavailable' = no token
+   * or fetch failed and nothing was cached.
+   */
+  readonly source: "cache" | "github" | "unavailable";
+  /** Optional human-readable hint about truncation / missing data for the agent. */
+  readonly note: string | null;
+}
+
 export interface RecapSourcePr {
   readonly id: string;
   readonly externalId: number;
   readonly title: string;
   readonly authorLogin: string;
-  readonly status: "closed" | "merged";
+  readonly status: "closed" | "merged" | "open";
   readonly closedAt: string;
   readonly sourceBranch: string;
   readonly targetBranch: string;
@@ -105,6 +150,14 @@ export interface RecapSourcePr {
     readonly riskLevel: "low" | "medium" | "high";
     readonly completedAt: string | null;
   } | null;
+  /**
+   * Fallback diff data loaded by the orchestrator when `walkthrough` is null.
+   * Lets the agent read the actual code change instead of guessing from
+   * title + +/- counts. Null when a walkthrough exists (we trust the
+   * walkthrough's summary), or when both the diff cache and GitHub failed
+   * to produce anything for the PR.
+   */
+  readonly diff: RecapSourcePrDiff | null;
 }
 
 export interface RecapSourceBundle {
@@ -113,9 +166,21 @@ export interface RecapSourceBundle {
   readonly period: RecapPeriod;
   readonly periodStart: string;
   readonly periodEnd: string;
+  /** Archived (closed/merged) PRs in the period window. */
   readonly prs: ReadonlyArray<RecapSourcePr>;
+  /** Currently open PRs with walkthrough context, sorted by relevancy. */
+  readonly openPrs: ReadonlyArray<RecapSourcePr>;
   /** Pre-computed summary stats — same shape persisted on the recap row. */
   readonly stats: RecapSummaryStats;
+  /**
+   * Markdown overview of the prior recap row for this exact (repo, period,
+   * periodStart) tuple. Populated when the orchestrator is rerunning an
+   * existing row in place (max-1-recap-per-period rule). `null` on a fresh
+   * first-time run for the period. The agent should use this as the
+   * starting point and update it with new information rather than starting
+   * from scratch.
+   */
+  readonly previousOverview: string | null;
 }
 
 // ── Tool input schemas ───────────────────────────────────────────────────────
@@ -143,7 +208,7 @@ export const setRecapOverviewSchema = z.object({
     .array(z.string())
     .min(1)
     .describe(
-      "Ids of the PRs included in this recap. Should match the PRs from get_recap_state — the orchestrator validates this against the source bundle. Use every PR; if you intentionally excluded any, that's fine, but be explicit in the overview.",
+      "Ids of the PRs included in this recap. Must be ids returned by get_recap_state — archived (`prs`) or open (`openPrs`) are both valid. The orchestrator validates against the full bundle. When nothing shipped this period, reference the open PRs you wrote about in 'Active work'.",
     ),
   source_walkthrough_ids: z
     .array(z.string())
@@ -168,9 +233,25 @@ export const setRecapOverviewSchema = z.object({
 
 export const completeRecapSchema = z.object({});
 
+export const appendRecapChunkSchema = z.object({
+  chunk: z
+    .string()
+    .min(1)
+    .describe(
+      "A block of markdown text to stream to the UI as you compose the recap. Call 2–4 times, once per major section. Do not emit the final assembled markdown here — that belongs in set_recap_overview.",
+    ),
+  section: z
+    .enum(["shipped", "active_work", "project_state", "other"])
+    .optional()
+    .describe(
+      "Optional section hint so the UI can show a shimmer label: 'shipped' = 'What shipped…', 'active_work' = 'Active work…', 'project_state' = 'Project state…'.",
+    ),
+});
+
 // ── Type exports ─────────────────────────────────────────────────────────────
 
 export type GetRecapStateInput = z.infer<typeof getRecapStateSchema>;
 export type GetRepoContextInput = z.infer<typeof getRepoContextSchema>;
 export type SetRecapOverviewInput = z.infer<typeof setRecapOverviewSchema>;
 export type CompleteRecapInput = z.infer<typeof completeRecapSchema>;
+export type AppendRecapChunkInput = z.infer<typeof appendRecapChunkSchema>;

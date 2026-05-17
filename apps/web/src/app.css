@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "./lib/components/ui/dotmatrix/dotmatrix-loader.css";
+@import "./lib/components/ui/glass-pill/glass-pill.css";
 
 /* ──────────────────────────────────────────────────────────
    Light theme (default)

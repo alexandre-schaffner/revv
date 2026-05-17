@@ -99,7 +99,11 @@ let needsYourReviewByRepo = $derived(Map.groupBy(needsYourReview, (pr) => pr.rep
 
 let archivedByRepo = $derived(Map.groupBy(archivedPrs, (pr) => pr.repositoryId));
 
-let selectedPr = $derived(pullRequests.find((pr) => pr.id === selectedPrId) ?? null);
+let selectedPr = $derived(
+  pullRequests.find((pr) => pr.id === selectedPrId) ??
+    archivedPrs.find((pr) => pr.id === selectedPrId) ??
+    null,
+);
 
 export function getGroupedByRepo(): Map<string, PullRequest[]> {
   return groupedByRepo;

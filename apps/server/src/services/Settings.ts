@@ -1,6 +1,3 @@
-import { existsSync, mkdirSync } from "node:fs";
-import { rename, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
 import type {
   AiAgent,
   ContextWindow,
@@ -11,19 +8,17 @@ import type {
   UserSettings,
 } from "@revv/shared";
 import { AUTO_FETCH_DEFAULT_INTERVAL } from "@revv/shared";
+import { eq } from "drizzle-orm";
 import { Context, Effect, Layer, Stream, SubscriptionRef } from "effect";
-import { serverEnv } from "../config";
+import type { Db } from "../db/index";
+import { userSettings } from "../db/schema/user-settings";
 import { ValidationError } from "../domain/errors";
+import { DbService } from "./Db";
 
 // ── Storage ───────────────────────────────────────────────────────────────────
-// Settings live as JSON at `serverEnv.settingsPath` (`~/.revv/settings.json` by
-// default). Single-user, no joins, no transactions — a flat file is plenty.
-//
-// Reads tolerate a missing or partially-corrupt file by falling back to the
-// per-key default in {@link DEFAULT_SETTINGS} (deep-merged so unknown keys in
-// the file are preserved across upgrades). Writes are atomic: write to a
-// sibling `*.tmp` and rename, so a `kill -9` mid-write can never leave a
-// truncated file the next reader chokes on.
+// Settings live in the `user_settings` SQLite table (single row, id='default').
+// On first boot after this migration, existing `~/.revv/settings.json` is read
+// and upserted into the DB, then the JSON file is deleted.
 
 const DEFAULT_SETTINGS: UserSettings = {
   id: "default",
@@ -32,10 +27,6 @@ const DEFAULT_SETTINGS: UserSettings = {
   aiThinkingEffort: "medium",
   aiAgent: "opencode",
   aiContextWindow: "200k",
-  // Same default as `aiModel` for the opencode-default install; if the
-  // user is on Claude they should pick a cheaper model (Haiku) via the
-  // settings UI — the AgentSelector also re-picks this when the user
-  // switches agents.
   aiSuggestionsModel: "opencode/big-pickle",
   aiMaxTurns: 60,
   theme: "dark",
@@ -135,42 +126,98 @@ function coerceRecap(value: unknown): UserSettings["recap"] {
   };
 }
 
-async function readSettingsFile(): Promise<UserSettings> {
-  const path = serverEnv.settingsPath;
-  if (!existsSync(path)) {
-    // First run — write defaults so the file is observable for users
-    // poking around `~/.revv` and any concurrent reader gets the same
-    // canonical bytes we'd hand back from memory.
-    await writeSettingsFile(DEFAULT_SETTINGS);
-    return { ...DEFAULT_SETTINGS };
-  }
-  try {
-    const raw = await Bun.file(path).text();
-    const parsed = JSON.parse(raw);
-    return normalize(parsed);
-  } catch {
-    // Corrupt JSON, encoding glitch, partial write from a crash that
-    // somehow bypassed atomic-rename — restore defaults rather than
-    // failing the whole settings endpoint. The next write will
-    // overwrite the bad bytes.
-    const fresh = { ...DEFAULT_SETTINGS };
-    await writeSettingsFile(fresh).catch(() => undefined);
-    return fresh;
-  }
+// ── DB ↔ UserSettings mapping ────────────────────────────────────────────────
+
+function toSettings(row: typeof userSettings.$inferSelect): UserSettings {
+  return {
+    id: row.id,
+    aiProvider: row.aiProvider,
+    aiModel: row.aiModel,
+    aiThinkingEffort: row.aiThinkingEffort as ThinkingEffort,
+    aiAgent: row.aiAgent as AiAgent,
+    aiContextWindow: row.aiContextWindow as ContextWindow,
+    aiSuggestionsModel: row.aiSuggestionsModel,
+    aiMaxTurns: row.aiMaxTurns,
+    theme: row.theme as ThemePreference,
+    diffViewMode: row.diffViewMode as DiffViewMode,
+    autoFetchInterval: row.autoFetchInterval,
+    githubHost: row.githubHost,
+    recap: {
+      enabled: row.recapEnabled,
+      dailyEnabled: row.recapDailyEnabled,
+      weeklyEnabled: row.recapWeeklyEnabled,
+      agent: row.recapAgent as RecapAgentChoice,
+    },
+  };
 }
 
-async function writeSettingsFile(settings: UserSettings): Promise<void> {
-  const path = serverEnv.settingsPath;
-  const dir = dirname(path);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+function toInsert(s: UserSettings): typeof userSettings.$inferInsert {
+  return {
+    id: s.id,
+    aiProvider: s.aiProvider,
+    aiModel: s.aiModel,
+    aiThinkingEffort: s.aiThinkingEffort,
+    aiAgent: s.aiAgent,
+    aiContextWindow: s.aiContextWindow,
+    aiSuggestionsModel: s.aiSuggestionsModel,
+    aiMaxTurns: s.aiMaxTurns,
+    theme: s.theme,
+    diffViewMode: s.diffViewMode,
+    autoFetchInterval: s.autoFetchInterval,
+    githubHost: s.githubHost,
+    recapEnabled: s.recap.enabled,
+    recapDailyEnabled: s.recap.dailyEnabled,
+    recapWeeklyEnabled: s.recap.weeklyEnabled,
+    recapAgent: s.recap.agent,
+    updatedAt: new Date(),
+  };
+}
 
-  // Atomic write: tmp file + rename. If the process dies after the tmp
-  // is written but before rename, the next boot still sees the previous
-  // good file. If it dies after rename, the file is fully written. There
-  // is no window where a reader could see a half-written `settings.json`.
-  const tmp = `${path}.${process.pid}.tmp`;
-  await writeFile(tmp, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
-  await rename(tmp, path);
+// ── JSON file migration (one-time) ───────────────────────────────────────────
+
+async function migrateJsonToDb(db: Db): Promise<UserSettings> {
+  const { existsSync, readFileSync, unlinkSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { homedir } = await import("node:os");
+
+  const settingsPath = process.env.REVV_SETTINGS_PATH ?? join(homedir(), ".revv", "settings.json");
+
+  const [row] = await db.select().from(userSettings).where(eq(userSettings.id, "default")).limit(1);
+
+  if (row) {
+    return toSettings(row);
+  }
+
+  // No DB row — try reading from JSON file for backward compat
+  let settings: UserSettings;
+  if (existsSync(settingsPath)) {
+    try {
+      const raw = readFileSync(settingsPath, "utf8");
+      settings = normalize(JSON.parse(raw));
+    } catch {
+      settings = { ...DEFAULT_SETTINGS };
+    }
+  } else {
+    settings = { ...DEFAULT_SETTINGS };
+  }
+
+  // Upsert into DB
+  await db
+    .insert(userSettings)
+    .values(toInsert(settings))
+    .onConflictDoUpdate({
+      target: userSettings.id,
+      set: toInsert(settings),
+    });
+
+  // Delete JSON file after successful migration
+  try {
+    unlinkSync(settingsPath);
+  } catch {
+    // Non-fatal — JSON file may already be gone
+  }
+
+  return settings;
 }
 
 // ── Service definition ────────────────────────────────────────────────────────
@@ -192,12 +239,6 @@ export class SettingsService extends Context.Tag("SettingsService")<
   {
     getSettings: () => Effect.Effect<UserSettings, ValidationError>;
     updateSettings: (partial: SettingsUpdate) => Effect.Effect<UserSettings, ValidationError>;
-    /**
-     * Stream of settings snapshots emitted after every `updateSettings` call.
-     * P4: used by OpencodeSupervisor to stop the daemon immediately when
-     * `aiAgent` flips away from opencode, rather than waiting for the next
-     * `jobStarted()`.
-     */
     settingsChanges: () => Stream.Stream<UserSettings>;
   }
 >() {}
@@ -205,9 +246,11 @@ export class SettingsService extends Context.Tag("SettingsService")<
 export const SettingsServiceLive = Layer.effect(
   SettingsService,
   Effect.gen(function* () {
-    // Load settings once at boot; keep in a Ref so updates are observable.
+    const { db } = yield* DbService;
+
+    // Load settings from DB (migrating from JSON if needed)
     const initial = yield* Effect.tryPromise({
-      try: () => readSettingsFile(),
+      try: () => migrateJsonToDb(db),
       catch: (e) =>
         new ValidationError({
           message: e instanceof Error ? e.message : String(e),
@@ -222,10 +265,6 @@ export const SettingsServiceLive = Layer.effect(
       updateSettings: (partial) =>
         Effect.gen(function* () {
           const current = yield* settingsRef.get;
-          // Deep-merge `recap`: clients commonly patch just one nested field
-          // (e.g. `{ recap: { agent: 'opencode' } }`), and a shallow merge
-          // would wipe out the other recap fields. Other top-level fields
-          // are flat strings/numbers and merge shallowly without issue.
           const mergedRecap =
             partial.recap !== undefined ? { ...current.recap, ...partial.recap } : current.recap;
           const merged: UserSettings = {
@@ -238,18 +277,27 @@ export const SettingsServiceLive = Layer.effect(
             ...merged,
             aiMaxTurns: coerceMaxTurns(merged.aiMaxTurns),
           };
+
           yield* Effect.tryPromise({
-            try: () => writeSettingsFile(next),
+            try: () =>
+              db
+                .insert(userSettings)
+                .values(toInsert(next))
+                .onConflictDoUpdate({
+                  target: userSettings.id,
+                  set: toInsert(next),
+                }),
             catch: (e) =>
               new ValidationError({
                 message: e instanceof Error ? e.message : String(e),
               }),
           });
+
           yield* SubscriptionRef.set(settingsRef, next);
           return next;
         }),
 
-      settingsChanges: () => settingsRef.changes.pipe(Stream.drop(1)), // skip initial value
+      settingsChanges: () => settingsRef.changes.pipe(Stream.drop(1)),
     };
   }),
 );
