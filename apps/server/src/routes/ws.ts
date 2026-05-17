@@ -4,7 +4,11 @@ import { Elysia } from "elysia";
 import { auth } from "../auth";
 import { AppRuntime } from "../runtime";
 import { PollScheduler } from "../services/PollScheduler";
+import { TokenProvider } from "../services/TokenProvider";
 import { WebSocketHub } from "../services/WebSocketHub";
+
+/** Server-side ping interval (30s) for dead-connection detection (W1). */
+const WS_PING_INTERVAL_MS = 30_000;
 
 export const wsRoute = new Elysia().ws("/ws", {
   async open(ws) {
@@ -23,7 +27,45 @@ export const wsRoute = new Elysia().ws("/ws", {
       return;
     }
 
-    await AppRuntime.runPromise(Effect.flatMap(WebSocketHub, (hub) => hub.register(ws.raw)));
+    // Resolve the active account from the host the frontend is targeting.
+    const host = (ws.data.query?.host as string | undefined) || undefined;
+    let accountId: string;
+    try {
+      const resolved = await AppRuntime.runPromise(
+        Effect.gen(function* () {
+          const tokenProvider = yield* TokenProvider;
+          return yield* tokenProvider.resolveAccount(session.user.id, host);
+        }),
+      );
+      accountId = resolved.accountId;
+    } catch {
+      // If we can't resolve an account (e.g. token expired), still allow the
+      // connection but mark it as unassociated. It won't receive scoped broadcasts.
+      accountId = "unresolved";
+    }
+
+    await AppRuntime.runPromise(
+      Effect.flatMap(WebSocketHub, (hub) => hub.register(ws.raw, accountId)),
+    );
+
+    // Server-driven ping every 30s so proxies / NAT / OS sleep don't leave
+    // the client on a dead socket. Bun's ws.ping() sends a Ping frame; the
+    // browser auto-responds with Pong, so this costs one tiny frame per 30s.
+    // No client-side handling needed — the browser maintains the TCP keepalive
+    // semantics for us.
+    const pingInterval = setInterval(() => {
+      try {
+        ws.ping();
+      } catch {
+        /* socket already dead — clearInterval below handles cleanup */
+        clearInterval(pingInterval);
+      }
+    }, WS_PING_INTERVAL_MS);
+
+    // Clean up on close so the interval doesn't fire on a dead socket.
+    // The close handler is async but we need to clear before the browser
+    // delivers the close frame, so we store the interval id on ws.data.
+    (ws.data as Record<string, unknown>).pingInterval = pingInterval;
 
     // PollScheduler is started on server boot (see `index.ts`) so that
     // background sync runs even when the Tauri window is closed to the
@@ -31,6 +73,12 @@ export const wsRoute = new Elysia().ws("/ws", {
   },
 
   async close(ws) {
+    // Clear the ping interval before unregistering so no stale timers fire.
+    const data = ws.data as Record<string, unknown>;
+    if (data.pingInterval) {
+      clearInterval(data.pingInterval as ReturnType<typeof setInterval>);
+      data.pingInterval = null;
+    }
     await AppRuntime.runPromise(Effect.flatMap(WebSocketHub, (hub) => hub.unregister(ws.raw)));
   },
 

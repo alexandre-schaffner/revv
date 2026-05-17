@@ -1,10 +1,12 @@
 import type { PullRequest, Repository } from "@revv/shared";
+import { eq } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
-import type { GitHubAuthError, GitHubError, NotFoundError } from "../domain/errors";
+import { repositories } from "../db/schema";
+import { GitHubAuthError, type GitHubError, type NotFoundError } from "../domain/errors";
 import { withDb } from "../effects/with-db";
 import { DbService } from "./Db";
 import { type CachedDiffFile, DiffCacheService } from "./DiffCache";
-import { GitHubService, type PrMeta } from "./GitHub";
+import { GitHubService, type PrCommit, type PrMeta } from "./GitHub";
 import type { GitHubEtagCache } from "./GitHubEtagCache";
 import { PullRequestService } from "./PullRequest";
 import { RepositoryService } from "./Repository";
@@ -23,7 +25,9 @@ export interface PrContextBasic {
 
 /**
  * Full PR context for AI / walkthrough flows — extends {@link PrContextBasic}
- * with freshly-resolved GitHub metadata and the cached diff file list.
+ * with freshly-resolved GitHub metadata, the cached diff file list, and the
+ * PR commit list (used to seed the agent's required "How we got here"
+ * journey chapter).
  */
 export interface PrContextWithDiff extends PrContextBasic {
   readonly meta: PrMeta;
@@ -35,6 +39,7 @@ export interface PrContextWithDiff extends PrContextBasic {
     readonly deletions: number;
     readonly patch: string | null;
   }>;
+  readonly commits: readonly PrCommit[];
 }
 
 type PrContextError = NotFoundError | GitHubAuthError | GitHubError;
@@ -79,7 +84,27 @@ export const PrContextServiceLive = Layer.effect(
       Effect.gen(function* () {
         const pr = yield* prService.getPr(prId);
         const repo = yield* repoService.getRepoById(pr.repositoryId);
-        const token = yield* tokenProvider.getGitHubToken(userId, repo.githubHost);
+        // Look up the repo's owning OAuth account directly. The legacy
+        // `getGitHubToken(userId, host)` path falls back to "first user, first
+        // matching providerId" which silently picks the wrong identity once
+        // multiple users or multiple accounts per host coexist on the machine.
+        const { db } = yield* DbService;
+        const repoRow = db
+          .select({ accountId: repositories.accountId })
+          .from(repositories)
+          .where(eq(repositories.id, repo.id))
+          .get();
+        const token = repoRow
+          ? yield* tokenProvider.getTokenByAccountId(repoRow.accountId)
+          : yield* tokenProvider.getGitHubToken(userId, repo.githubHost).pipe(
+              Effect.catchAll(() =>
+                Effect.fail(
+                  new GitHubAuthError({
+                    message: `No account_id on repo ${repo.id} and no fallback token available`,
+                  }),
+                ),
+              ),
+            );
         return { pr, repo, token } satisfies PrContextBasic;
       });
 
@@ -129,7 +154,18 @@ export const PrContextServiceLive = Layer.effect(
           deletions: f.deletions,
           patch: f.patch,
         }));
-        return { ...basic, meta, files } satisfies PrContextWithDiff;
+        // Commit list seeds the agent's journey chapter. Best-effort: if
+        // GitHub fails on this endpoint we'd rather still ship the
+        // walkthrough than block on it, so a failure here would propagate;
+        // any callers that can't tolerate the failure should add their own
+        // fallback. Today the only caller is the walkthrough start path
+        // which already mapErrors GitHub failures, so propagation is safe.
+        const commits = yield* github.listPrCommits(
+          basic.repo.fullName,
+          basic.pr.externalId,
+          basic.token,
+        );
+        return { ...basic, meta, files, commits } satisfies PrContextWithDiff;
       });
 
     return { resolveBasic, resolveWithDiff };

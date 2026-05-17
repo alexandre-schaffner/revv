@@ -63,20 +63,17 @@ import {
 } from "$lib/stores/sidebar.svelte";
 import {
   getPrWalkthroughStatus,
-  getCanResume as getWalkthroughCanResume,
   getRatings as getWalkthroughRatings,
-  getStreamError as getWalkthroughStreamError,
-  getIsStreaming as getWalkthroughStreaming,
-  getSummary as getWalkthroughSummary,
 } from "$lib/stores/walkthrough.svelte";
 import {
   abort as abortWalkthrough,
+  getPendingAction as getWalkthroughPendingAction,
   regenerate as regenerateWalkthrough,
   resume as resumeWalkthrough,
 } from "$lib/stores/walkthrough-stream.svelte";
+import { getWalkthroughUiState } from "$lib/stores/walkthrough-ui-state.svelte";
 import {
   getHasNewContentBelow as getWalkthroughHasNewContentBelow,
-  getUserScrolledUp as getWalkthroughUserScrolledUp,
   scrollToBottom as scrollWalkthroughToBottom,
   scrollToRatings as scrollWalkthroughToRatings,
   scrollToTop as scrollWalkthroughToTop,
@@ -100,22 +97,20 @@ const pr = $derived(getSelectedPr());
 const walkthroughStatus = $derived(pr ? getPrWalkthroughStatus(pr.id) : "idle");
 const activeTab = $derived(getActiveTab());
 const isSettingsRoute = $derived(page.url.pathname.startsWith("/settings"));
-const walkthroughStreaming = $derived(getWalkthroughStreaming());
-const walkthroughSummary = $derived(getWalkthroughSummary());
-const walkthroughCanResume = $derived(getWalkthroughCanResume());
-const walkthroughStreamError = $derived(getWalkthroughStreamError());
+const walkthroughUiState = $derived(getWalkthroughUiState());
+const walkthroughPendingAction = $derived(pr ? getWalkthroughPendingAction(pr.id) : null);
 const walkthroughHasRatings = $derived(getWalkthroughRatings().length > 0);
-const walkthroughUserScrolledUp = $derived(getWalkthroughUserScrolledUp());
 const walkthroughHasNewContentBelow = $derived(getWalkthroughHasNewContentBelow());
-const walkthroughHasContent = $derived(
-  walkthroughStreaming ||
-    !!walkthroughSummary ||
-    walkthroughCanResume ||
-    walkthroughHasRatings ||
-    !!walkthroughStreamError,
+// Bar is hidden in absent/idle/cloning — those are handled by GuidedWalkthrough's
+// inline UI (empty state, clone-in-progress skeleton). The bar only carries
+// post-start actions: stop, resume, retry, regenerate, navigation.
+const walkthroughBarHasActions = $derived(
+  walkthroughUiState.kind !== "absent" &&
+    walkthroughUiState.kind !== "idle" &&
+    walkthroughUiState.kind !== "cloning",
 );
 const showFloatingActions = $derived(
-  !!pr && !isSettingsRoute && activeTab === "walkthrough" && walkthroughHasContent,
+  !!pr && !isSettingsRoute && activeTab === "walkthrough" && walkthroughBarHasActions,
 );
 const showRcActions = $derived(!!pr && !isSettingsRoute && activeTab === "request-changes");
 
@@ -199,6 +194,16 @@ const gridStyle = $derived(
   sidebarCollapsed
     ? `grid-template-columns: 40px 1fr`
     : `grid-template-columns: ${sidebarWidth}px 1fr`,
+);
+
+// Floating action bar (walkthrough actions / Submit Review / Approve)
+// spans the visible main area between sidebar and right panel so the
+// pill sits at the centre of what the user is actually looking at, not
+// the viewport. Tracks both panes via inline `left`/`right` and animates
+// when either toggles. `--duration-smooth` matches the grid-columns
+// transition; resize handles suppress it via `.is-resizing`.
+const floatingActionsStyle = $derived(
+  `left: ${sidebarCollapsed ? 40 : sidebarWidth}px; right: ${rightPanelOpen ? rightPanelWidth : 0}px;`,
 );
 
 function onHandlePointerDown(event: PointerEvent): void {
@@ -290,7 +295,11 @@ function onRightHandleDblClick(): void {
 			onToggleSidebar={toggleSidebar}
 		/>
 		{#if pr && !isSettingsRoute}
-			<div class="tabs-float">
+			<div
+				class="tabs-float"
+				class:is-resizing={isDragging || isResizingRight}
+				style={floatingActionsStyle}
+			>
 				<FloatingTabs
 					{activeTab}
 					onTabChange={setActiveTab}
@@ -311,14 +320,32 @@ function onRightHandleDblClick(): void {
 		<BottomBar />
 	</footer>
 
-	{#if showFloatingActions && activeTab === 'walkthrough'}
-		<div class="walkthrough-actions-float">
+	{#if showFloatingActions && activeTab === 'walkthrough' && pr}
+		<!-- Floating actions for the walkthrough tab. Branches on a single
+		     discriminated UiState (see walkthrough-ui-state.svelte.ts) so the
+		     bar can't fall into two mutually-exclusive branches at once.
+		     Destructive actions are disabled while a regenerate/resume is
+		     in-flight or while a chat-edit stream is mutating the same
+		     walkthrough — Stop intentionally stays enabled. -->
+		{@const destructiveDisabled = walkthroughPendingAction !== null || chatStreaming}
+		{@const destructiveTitle = chatStreaming
+			? 'Chat edit in progress — wait for it to finish before regenerating'
+			: walkthroughPendingAction === 'regenerate'
+				? 'Regenerating…'
+				: walkthroughPendingAction === 'resume'
+					? 'Resuming…'
+					: undefined}
+		<div
+			class="walkthrough-actions-float"
+			class:is-resizing={isDragging || isResizingRight}
+			style={floatingActionsStyle}
+		>
 			<div class="walkthrough-actions-row">
-				{#if walkthroughStreaming}
+				{#if walkthroughUiState.kind === 'streaming'}
 					<button
 						type="button"
 						class="walkthrough-action-btn walkthrough-action-btn--danger"
-						onclick={abortWalkthrough}
+						onclick={() => abortWalkthrough(pr.id)}
 					>
 						<Square size={14} fill="currentColor" />
 						Stop generation
@@ -334,54 +361,85 @@ function onRightHandleDblClick(): void {
 							New content
 						</button>
 					{/if}
-				{:else if walkthroughCanResume && pr}
-					<!-- Partial data exists — offer Resume as the primary action.
-					     Applies to both user-stopped and errored states; the server
-					     revives error rows on resume. Regenerate stays available as
-					     a "throw it all away and start over" escape hatch. -->
+				{:else if walkthroughUiState.kind === 'resumable'}
 					<button
 						type="button"
 						class="walkthrough-action-btn"
+						disabled={destructiveDisabled}
+						title={destructiveTitle}
 						onclick={() => resumeWalkthrough(pr.id)}
-						aria-label={walkthroughStreamError
-							? 'Retry walkthrough from where it failed'
-							: 'Resume walkthrough from where it stopped'}
+						aria-label="Resume walkthrough from where it stopped"
 					>
-						{#if walkthroughStreamError}
-							<RotateCcw size={14} />
-							Retry
-						{:else}
-							<Play size={14} fill="currentColor" />
-							Resume
-						{/if}
+						<Play size={14} fill="currentColor" />
+						Resume
 					</button>
 					<button
 						type="button"
 						class="walkthrough-action-btn"
+						disabled={destructiveDisabled}
+						title={destructiveTitle}
 						onclick={() => regenerateWalkthrough(pr.id)}
 					>
 						<RefreshCw size={14} />
 						Regenerate
 					</button>
-				{:else if walkthroughStreamError && pr}
-					<!-- Errored before any partial content landed — only path forward is a fresh run. -->
+				{:else if walkthroughUiState.kind === 'error-partial'}
 					<button
 						type="button"
 						class="walkthrough-action-btn"
+						disabled={destructiveDisabled}
+						title={destructiveTitle}
+						onclick={() => resumeWalkthrough(pr.id)}
+						aria-label="Retry walkthrough from where it failed"
+					>
+						<RotateCcw size={14} />
+						Retry
+					</button>
+					<button
+						type="button"
+						class="walkthrough-action-btn"
+						disabled={destructiveDisabled}
+						title={destructiveTitle}
+						onclick={() => regenerateWalkthrough(pr.id)}
+					>
+						<RefreshCw size={14} />
+						Regenerate
+					</button>
+				{:else if walkthroughUiState.kind === 'error-empty'}
+					<button
+						type="button"
+						class="walkthrough-action-btn"
+						disabled={destructiveDisabled}
+						title={destructiveTitle}
 						onclick={() => regenerateWalkthrough(pr.id)}
 						aria-label="Retry walkthrough generation after error"
 					>
 						<RefreshCw size={14} />
 						Retry
 					</button>
-				{:else if walkthroughSummary && pr}
+				{:else if walkthroughUiState.kind === 'complete'}
 					<button
 						type="button"
 						class="walkthrough-action-btn"
+						disabled={destructiveDisabled}
+						title={destructiveTitle}
 						onclick={() => regenerateWalkthrough(pr.id)}
 					>
 						<RefreshCw size={14} />
 						Regenerate
+					</button>
+				{:else if walkthroughUiState.kind === 'complete-stale'}
+					<button
+						type="button"
+						class="walkthrough-action-btn walkthrough-action-btn--accent"
+						disabled={destructiveDisabled}
+						title={chatStreaming
+							? 'Chat edit in progress — wait for it to finish before regenerating'
+							: 'A newer commit landed — this walkthrough is for an older SHA. Regenerate against the latest.'}
+						onclick={() => regenerateWalkthrough(pr.id)}
+					>
+						<RefreshCw size={14} />
+						Regenerate for latest commit
 					</button>
 				{/if}
 
@@ -411,7 +469,11 @@ function onRightHandleDblClick(): void {
 	{/if}
 
 	{#if showRcActions && activeTab === 'request-changes'}
-		<div class="walkthrough-actions-float">
+		<div
+			class="walkthrough-actions-float"
+			class:is-resizing={isDragging || isResizingRight}
+			style={floatingActionsStyle}
+		>
 			<div class="walkthrough-actions-row">
 				<button
 					type="button"
@@ -615,20 +677,29 @@ function onRightHandleDblClick(): void {
 	}
 
 	.tabs-float {
-		/* Viewport-centred. The topbar spans the full viewport (grid-area
-		   'topbar topbar'), so `left: 50%` resolves to 50vw. We deliberately
-		   do NOT offset by the sidebar width — the tabs are anchored to the
-		   viewport, not the main-area, so toggling or dragging the sidebar
-		   doesn't shift them horizontally. This matches the walkthrough
-		   content column's viewport-anchored centre (see
-		   GuidedWalkthrough.svelte, `.walkthrough-content`). */
+		/* Spans the visible main area between sidebar and right panel so
+		   the tabs sit at the centre of what the user is reading, not the
+		   viewport. The topbar spans the full viewport (grid-area
+		   'topbar topbar'), so inline `left`/`right` driven by
+		   `floatingActionsStyle` resolve in viewport coordinates and track
+		   both panes. Each edge transitions at the speed of the pane that
+		   drives it: `left` matches the grid-columns animation
+		   (`--duration-smooth`, sidebar collapse/resize); `right` matches
+		   the right pane's slide-in transform (`--duration-instant`). */
 		position: absolute;
 		top: 100%;
-		left: 50%;
-		transform: translateX(-50%);
+		display: flex;
+		justify-content: center;
 		z-index: 20;
 		pointer-events: none;
 		padding-top: 12px;
+		transition:
+			left var(--duration-smooth) var(--ease-out-expo),
+			right var(--duration-instant) var(--ease-out-expo);
+	}
+
+	.tabs-float.is-resizing {
+		transition: none;
 	}
 
 	.tabs-float :global(*) {
@@ -640,19 +711,32 @@ function onRightHandleDblClick(): void {
 		border-top: 1px solid var(--color-border);
 	}
 
-	/* Bottom-anchored mirror of `.tabs-float`. Sits 12px above the 40px
-	   bottombar, viewport-centred via `left: 50%` so a sidebar collapse/
-	   resize does not shift it horizontally. `pointer-events: none` on the
-	   wrapper prevents the invisible padding zone from swallowing clicks
-	   meant for content below. */
+	/* Bottom-anchored action bar. Spans the visible main area between the
+	   sidebar (left edge) and the right panel (right edge) so the pill is
+	   centred on the content the user is reading, not the viewport. Inline
+	   `left`/`right` are driven by `floatingActionsStyle` so the wrapper
+	   tracks panel toggles and drags. Each edge transitions at the speed
+	   of the pane that drives it: `left` matches the grid-columns
+	   animation (`--duration-smooth`); `right` matches the right pane's
+	   slide-in transform (`--duration-instant`). Suppressed during active
+	   drags via `.is-resizing`. `pointer-events: none` on the wrapper
+	   prevents the invisible padding zone from swallowing clicks meant for
+	   content below. */
 	.walkthrough-actions-float {
 		position: absolute;
 		bottom: 40px;
-		left: 50%;
-		transform: translateX(-50%);
+		display: flex;
+		justify-content: center;
 		z-index: 20;
 		pointer-events: none;
 		padding-bottom: 12px;
+		transition:
+			left var(--duration-smooth) var(--ease-out-expo),
+			right var(--duration-instant) var(--ease-out-expo);
+	}
+
+	.walkthrough-actions-float.is-resizing {
+		transition: none;
 	}
 
 	.walkthrough-actions-float :global(*) {
@@ -757,7 +841,7 @@ function onRightHandleDblClick(): void {
 		overflow: hidden;
 		background: var(--color-panel-bg);
 		transform: translateX(100%);
-		transition: transform var(--duration-instant) var(--ease-out-expo);
+		transition: transform var(--duration-smooth) var(--ease-out-expo);
 		/* Above main content, below topbar/CommandPalette. */
 		z-index: 5;
 	}

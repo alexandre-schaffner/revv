@@ -1,9 +1,9 @@
 import type { Org, UserIdentity, UserRole } from "@revv/shared";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { db } from "../auth";
-import { repositories, user } from "../db/schema";
+import { account, repositories, user } from "../db/schema";
 import { AppRuntime } from "../runtime";
 import { GitHubService } from "../services/GitHub";
 import { PullRequestService } from "../services/PullRequest";
@@ -124,11 +124,20 @@ export const userRoutes = new Elysia({ prefix: "/api/user" })
   .delete("/account", async (ctx) => {
     try {
       const userId = ctx.session.user.id;
-      // Delete all repositories first — pull_requests cascade from repositories,
-      // and review_sessions, walkthroughs, chat_sessions cascade from pull_requests.
-      // This is a single-user local app so all repos belong to the current user.
-      await db.delete(repositories);
+      // Delete only the repositories linked to this user's accounts.
+      // pull_requests cascade from repositories, and review_sessions,
+      // walkthroughs, chat_sessions cascade from pull_requests.
+      const userAccounts = await db
+        .select({ id: account.id })
+        .from(account)
+        .where(eq(account.userId, userId));
+      const accountIds = userAccounts.map((a) => a.id);
+      if (accountIds.length > 0) {
+        await db.delete(repositories).where(inArray(repositories.accountId, accountIds));
+      }
       // Deleting the user row cascades to session and account rows via FK onDelete: 'cascade'.
+      // Repositories also cascade from account via FK onDelete: 'cascade',
+      // so the explicit delete above is belt-and-suspenders.
       await db.delete(user).where(eq(user.id, userId));
       return { deleted: true };
     } catch (e) {

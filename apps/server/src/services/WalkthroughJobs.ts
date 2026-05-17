@@ -35,6 +35,7 @@ import type {
 } from "@revv/shared";
 import { Cause, Context, Effect, Fiber, Layer, Option, Ref, type Scope } from "effect";
 import { findIssuesMissingInlineComment } from "../ai/providers/walkthrough-tools";
+import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../constants";
 import {
   type AiError,
   AiGenerationError,
@@ -47,7 +48,7 @@ import {
   type ValidationError,
 } from "../domain/errors";
 import { withDb } from "../effects/with-db";
-import { debug, type LogContext, logError, withLogContext } from "../logger";
+import { debug, logError } from "../logger";
 import { AiService, type ContinuationContext, resolveAgent } from "./Ai";
 import { DbService } from "./Db";
 import { GitHubEtagCache } from "./GitHubEtagCache";
@@ -77,12 +78,22 @@ const WALKTHROUGH_MAX_RESUME_ATTEMPTS = 3;
  */
 const MAX_AUTO_CONTINUATIONS = 2;
 
-/** Opaque session token TTL for the HTTP MCP route — jobs usually finish well under this. */
-const SESSION_TOKEN_TTL_MS = 1000 * 60 * 60; // 1 hour
+/**
+ * Opaque session token TTL for the HTTP MCP route.
+ * Derived from the CLI timeout budget so a token never expires mid-run:
+ *   CLI_WALKTHROUGH_TIMEOUT_MS × (1 + MAX_AUTO_CONTINUATIONS) + 5 min margin.
+ * This ensures the token outlives even the longest allowed generation session.
+ */
+const SESSION_TOKEN_TTL_MS = CLI_WALKTHROUGH_TIMEOUT_MS * (1 + MAX_AUTO_CONTINUATIONS) + 5 * 60_000;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
 type Subscriber = (event: WalkthroughStreamEvent) => void;
+
+/** Result of an emit attempt — used by callers to observe delivery fate. */
+export type EmitResult =
+  | { readonly kind: "delivered"; readonly seq: number }
+  | { readonly kind: "skipped-no-job"; readonly walkthroughId: string };
 
 interface SubscriberHandle {
   /** Short opaque id for diagnostic logging — pairs with `[wt-trace]` lines. */
@@ -90,6 +101,12 @@ interface SubscriberHandle {
   readonly callback: Subscriber;
   /** Buffer for pre-flush events. `null` after flush (direct-forward mode). */
   buffered: WalkthroughStreamEvent[] | null;
+  /**
+   * Consecutive failure counter for the per-subscriber error budget (S2).
+   * Incremented on every throw from the callback; reset to 0 on each
+   * successful invocation. Subscriber is dropped after 3 consecutive throws.
+   */
+  consecutiveFailures: number;
 }
 
 interface ActiveJob {
@@ -108,6 +125,11 @@ interface ActiveJob {
   nextSeq: number;
   fiber: Fiber.RuntimeFiber<unknown, unknown> | null;
   cancelledByUser: boolean;
+  /**
+   * Number of block-prerender attempts that fell back (threw or returned null).
+   * Observability only — answers "is the SSR cache earning its keep?" (S10).
+   */
+  prerenderFailures: number;
 }
 
 let nextHandleId = 1;
@@ -210,11 +232,16 @@ export class WalkthroughJobs extends Context.Tag("WalkthroughJobs")<
      * is the HTTP MCP route — when opencode makes a tool call against
      * `/mcp/walkthrough`, the handler commits to DB then invokes this to
      * broadcast the resulting event. No-op if no active job.
+     *
+     * Returns `Effect<EmitResult>` so callers can observe whether the event
+     * was delivered or silently dropped (S1). The `EmitResult` discriminant
+     * (`kind: "delivered" | "skipped-no-job`) lets the MCP tool handler
+     * decide whether to log a skip with full context.
      */
     readonly emitEvent: (
       walkthroughId: string,
       event: WalkthroughStreamEvent,
-    ) => Effect.Effect<void>;
+    ) => Effect.Effect<EmitResult>;
 
     /**
      * Issue an opaque session token for the HTTP MCP route. Tokens resolve
@@ -237,18 +264,10 @@ export class WalkthroughJobs extends Context.Tag("WalkthroughJobs")<
     readonly clearSessionToken: (token: string) => Effect.Effect<void>;
 
     /**
-     * Register a callback that fires whenever emitEvent is called for the given
-     * walkthroughId. Used by the opencode provider to keep the stream guard's
-     * inactivity timer alive during MCP tool calls. Pure side-effect — never
-     * throws, no-op if already registered (last writer wins).
+     * Increment the per-job prerender-failure counter (S10). Pure
+     * observability — no correctness impact.
      */
-    readonly registerActivityNotifier: (
-      walkthroughId: string,
-      callback: (event: WalkthroughStreamEvent) => void,
-    ) => Effect.Effect<void>;
-
-    /** Remove the activity notifier for a walkthroughId. No-op if not present. */
-    readonly unregisterActivityNotifier: (walkthroughId: string) => Effect.Effect<void>;
+    readonly incrementPrerenderFailures: (walkthroughId: string) => Effect.Effect<void>;
   }
 >() {}
 
@@ -375,7 +394,7 @@ export const WalkthroughJobsLive = Layer.effect(
     // the orchestrator itself (for lifecycle events) has already committed
     // the DB write. Broadcast failures here never roll back state — a
     // reconnecting subscriber recovers the truth from DB.
-    const fanOut = (job: ActiveJob, event: WalkthroughStreamEvent): void => {
+    const fanOut = (job: ActiveJob, event: WalkthroughStreamEvent): number => {
       const seq = job.nextSeq++;
       const subsCount = job.subscribers.size;
       debug(
@@ -383,14 +402,13 @@ export const WalkthroughJobsLive = Layer.effect(
         `fanOut wt=${job.walkthroughId} seq=${seq} type=${event.type} subs=${subsCount}`,
       );
       if (subsCount === 0) {
-        // Not necessarily a bug — the SSE handler may be mid-handoff — but
-        // pairs with the client-side `lastSeenSeq` gap check to confirm
-        // whether this seq was ever attempted to deliver.
         debug(
           "wt-trace",
           `fanOut-no-subscribers wt=${job.walkthroughId} seq=${seq} type=${event.type}`,
         );
       }
+      // Collect subscribers to drop (can't modify Set while iterating)
+      const toDrop: SubscriberHandle[] = [];
       for (const handle of job.subscribers) {
         try {
           if (handle.buffered !== null) {
@@ -406,14 +424,29 @@ export const WalkthroughJobsLive = Layer.effect(
               `fanOut-delivered wt=${job.walkthroughId} seq=${seq} type=${event.type} handle=${handle.id}`,
             );
           }
+          handle.consecutiveFailures = 0;
         } catch (err) {
-          logError(
-            "walkthrough-jobs",
-            `subscriber threw wt=${job.walkthroughId} seq=${seq} type=${event.type} handle=${handle.id}:`,
-            err instanceof Error ? err.message : String(err),
-          );
+          handle.consecutiveFailures += 1;
+          if (handle.consecutiveFailures >= 3) {
+            toDrop.push(handle);
+            logError(
+              "walkthrough-jobs",
+              `subscriber dropped after 3 consecutive failures wt=${job.walkthroughId} seq=${seq} handle=${handle.id}:`,
+              err instanceof Error ? err.message : String(err),
+            );
+          } else {
+            logError(
+              "walkthrough-jobs",
+              `subscriber threw (${handle.consecutiveFailures}/3) wt=${job.walkthroughId} seq=${seq} type=${event.type} handle=${handle.id}:`,
+              err instanceof Error ? err.message : String(err),
+            );
+          }
         }
       }
+      for (const handle of toDrop) {
+        job.subscribers.delete(handle);
+      }
+      return seq;
     };
 
     const removeJob = (walkthroughId: string) =>
@@ -462,6 +495,19 @@ export const WalkthroughJobsLive = Layer.effect(
       readonly reviewSessionId: string;
       readonly modelUsed: string;
     };
+
+    interface LoopState {
+      accumulatedTokenUsage: WalkthroughTokenUsage;
+      autoContinuations: number;
+      currentGenerator: AsyncGenerator<WalkthroughStreamEvent>;
+      capturedOpencodeSessionId: string | undefined;
+    }
+
+    type ProcessResult =
+      | { readonly _tag: "continue" }
+      | { readonly _tag: "breakToContinuation" }
+      | { readonly _tag: "returnDone"; readonly tokenUsage: WalkthroughTokenUsage }
+      | { readonly _tag: "returnError"; readonly code: string; readonly message: string };
 
     const buildJobBody = (
       job: ActiveJob,
@@ -523,15 +569,19 @@ export const WalkthroughJobsLive = Layer.effect(
           ...(overrideContinuation ? { continuation: overrideContinuation } : {}),
           onSessionId: (id: string) => {
             capturedOpencodeSessionId = id;
-            Effect.runPromise(
-              provideDb(walkthroughService.setOpencodeSessionId(job.walkthroughId, id)).pipe(
-                Effect.catchAll(() => Effect.void),
-              ),
-            ).catch(() => {
-              /* ignore */
-            });
           },
           abortController: job.abortController,
+          // Route MCP tool handler events through WalkthroughJobs.emitEvent
+          // so both Claude and opencode converge at a single emit site (P1).
+          // The callback is synchronous (runSync) to match the HTTP MCP route
+          // behavior - see apps/server/src/routes/mcp/walkthrough.ts:70-93.
+          emitEvent: (event: WalkthroughStreamEvent) => {
+            try {
+              Effect.runSync(emitEvent(job.walkthroughId, event));
+            } catch {
+              /* emitEvent logs its own failures */
+            }
+          },
           // Supply opencode-path session-token callbacks. Ignored by
           // the Claude SDK path. WalkthroughJobs owns the
           // `sessionTokens` ref (see Ref.make below) — passing these
@@ -571,336 +621,289 @@ export const WalkthroughJobsLive = Layer.effect(
         //   - Tracks orchestrator-level state (token usage, phase
         //     progress) for auto-continuation + completion.
         //   - Reacts to the terminal `done` / `error` events.
-        const logCtx: LogContext = {
-          walkthroughId: job.walkthroughId,
-          prId: ctx.pr.id,
-        };
 
-        let autoContinuations = 0;
-        let accumulatedTokenUsage = {
-          inputTokens: 0,
-          outputTokens: 0,
-          cacheReadInputTokens: 0,
-          cacheCreationInputTokens: 0,
-        };
-        let currentGenerator = generator;
+        const processEvent = (
+          state: LoopState,
+          event: WalkthroughStreamEvent,
+        ): Effect.Effect<ProcessResult, never, never> =>
+          Effect.gen(function* () {
+            if (event.type === "done") {
+              state.accumulatedTokenUsage = {
+                inputTokens:
+                  state.accumulatedTokenUsage.inputTokens + event.data.tokenUsage.inputTokens,
+                outputTokens:
+                  state.accumulatedTokenUsage.outputTokens + event.data.tokenUsage.outputTokens,
+                cacheReadInputTokens:
+                  state.accumulatedTokenUsage.cacheReadInputTokens +
+                  event.data.tokenUsage.cacheReadInputTokens,
+                cacheCreationInputTokens:
+                  state.accumulatedTokenUsage.cacheCreationInputTokens +
+                  event.data.tokenUsage.cacheCreationInputTokens,
+              };
 
-        yield* Effect.tryPromise({
-          try: () =>
-            withLogContext(logCtx, async () => {
-              while (true) {
-                try {
-                  for await (const event of currentGenerator) {
-                    debug("walkthrough-jobs", "event:", event.type);
+              fanOut(job, {
+                type: "usage",
+                data: { tokenUsage: state.accumulatedTokenUsage },
+              });
 
-                    if (event.type === "done") {
-                      // Accumulate token usage across any
-                      // intermediate auto-continuations.
-                      accumulatedTokenUsage = {
-                        inputTokens:
-                          accumulatedTokenUsage.inputTokens + event.data.tokenUsage.inputTokens,
-                        outputTokens:
-                          accumulatedTokenUsage.outputTokens + event.data.tokenUsage.outputTokens,
-                        cacheReadInputTokens:
-                          accumulatedTokenUsage.cacheReadInputTokens +
-                          event.data.tokenUsage.cacheReadInputTokens,
-                        cacheCreationInputTokens:
-                          accumulatedTokenUsage.cacheCreationInputTokens +
-                          event.data.tokenUsage.cacheCreationInputTokens,
-                      };
+              const dbState = yield* provideDb(
+                walkthroughService.getPartial(ctx.pr.id, ctx.prHeadSha),
+              ).pipe(Effect.catchAll(() => Effect.succeed(null)));
 
-                      // Fan out an intermediate running tally so
-                      // subscribers (e.g. BottomBar) update live across
-                      // continuations rather than only at the final
-                      // `done`. Idempotent w.r.t. the final `done`
-                      // event below, which carries the same value.
-                      fanOut(job, {
-                        type: "usage",
-                        data: { tokenUsage: accumulatedTokenUsage },
-                      });
-
-                      // Consult DB (not event state) for
-                      // completion — the agent may have
-                      // terminated without calling
-                      // complete_walkthrough.
-                      const dbState = await Effect.runPromise(
-                        provideDb(walkthroughService.getPartial(ctx.pr.id, ctx.prHeadSha)).pipe(
-                          Effect.catchAll(() => Effect.succeed(null)),
-                        ),
-                      );
-
-                      if (dbState?.lastCompletedPhase === "D") {
-                        // Phase D reached — but Phase D is a
-                        // NECESSARY, not SUFFICIENT, condition
-                        // for `complete`. The comment-pairing
-                        // invariant (warning/critical
-                        // line-anchored issues must each have
-                        // ≥1 inline comment, doctrine #12)
-                        // also has to hold — otherwise the
-                        // agent could finish all 9 axes and
-                        // silently leave the coder with no
-                        // inline review comments at the spots
-                        // that matter.
-                        //
-                        // Same query `complete_walkthrough`
-                        // runs at the tool surface — kept in
-                        // the shared utility so both gates
-                        // can never drift apart.
-                        const missingComments = findIssuesMissingInlineComment(
-                          db,
-                          job.walkthroughId,
-                        );
-                        if (missingComments.length === 0) {
-                          await Effect.runPromise(
-                            setStatus(job.walkthroughId, "complete", {
-                              tokenUsage: accumulatedTokenUsage,
-                            }),
-                          );
-                          await Effect.runPromise(
-                            hub
-                              .broadcast({
-                                type: "walkthrough:complete",
-                                data: {
-                                  prId: ctx.pr.id,
-                                  walkthroughId: job.walkthroughId,
-                                },
-                              })
-                              .pipe(
-                                Effect.timeout("5 seconds"),
-                                Effect.catchAll(() => Effect.void),
-                              ),
-                          );
-                          fanOut(job, {
-                            type: "done",
-                            data: {
-                              walkthroughId: job.walkthroughId,
-                              tokenUsage: accumulatedTokenUsage,
-                            },
-                          });
-                          return;
-                        }
-                        debug(
-                          "walkthrough-jobs",
-                          `phase=D but ${missingComments.length} warning/critical issue(s) missing inline comment(s) — falling through to auto-continuation:`,
-                          missingComments
-                            .map((i) => `${i.id}[${i.severity}]@${i.filePath}:${i.startLine}`)
-                            .join(", "),
-                        );
-                        // Fall through into auto-continuation
-                        // just as if Phase D had not been
-                        // reached — same budget, same
-                        // re-prompt path. The agent's first
-                        // call on resume is
-                        // get_walkthrough_state, which
-                        // surfaces `issuesNeedingInlineComment`
-                        // explicitly so the model knows what
-                        // to fix.
-                        break;
-                      }
-
-                      // Phase < D — need to continue if we
-                      // have budget.
-                      break;
-                    }
-
-                    if (event.type === "error") {
-                      // Suppress error surfacing when the abort
-                      // came from us (user-clicked Pull /
-                      // Regenerate, scope close, shutdown). The
-                      // Claude SDK's catch path emits the
-                      // generic "Claude Code process aborted by
-                      // user" string, and a global WS broadcast
-                      // of that message races with the next SSE
-                      // the user opens — stamping a misleading
-                      // error onto the freshly-created
-                      // walkthrough entry. supersedeForPr is
-                      // already in flight to mark the row
-                      // 'superseded', so we deliberately skip
-                      // both the setStatus('error') and the WS
-                      // broadcast here. Local fanOut still runs
-                      // so any live SSE subscriber tears down
-                      // cleanly. Mirrors the opencode path,
-                      // which gates its push() on
-                      // `cancelledByCaller` (doctrine #13:
-                      // agent-path parity).
-                      if (job.abortController.signal.aborted) {
-                        debug(
-                          "walkthrough-jobs",
-                          "suppressing error broadcast — abort initiated locally:",
-                          event.data.message,
-                        );
-                        fanOut(job, event);
-                        return;
-                      }
-                      await Effect.runPromise(setStatus(job.walkthroughId, "error"));
-                      await Effect.runPromise(
-                        hub
-                          .broadcast({
-                            type: "walkthrough:error",
-                            data: {
-                              prId: ctx.pr.id,
-                              message: event.data.message,
-                            },
-                          })
-                          .pipe(
-                            Effect.timeout("5 seconds"),
-                            Effect.catchAll(() => Effect.void),
-                          ),
-                      );
-                      fanOut(job, event);
-                      return;
-                    }
-
-                    if (event.type === "usage") {
-                      // Live mid-turn usage from the provider
-                      // (opencode's `message.updated` snapshot
-                      // or future Claude equivalent). Carries
-                      // the *current turn's* running total —
-                      // add `accumulatedTokenUsage` (past
-                      // completed turns) so the broadcast
-                      // reflects the running grand total
-                      // across the entire walkthrough.
-                      const combined = {
-                        inputTokens:
-                          accumulatedTokenUsage.inputTokens + event.data.tokenUsage.inputTokens,
-                        outputTokens:
-                          accumulatedTokenUsage.outputTokens + event.data.tokenUsage.outputTokens,
-                        cacheReadInputTokens:
-                          accumulatedTokenUsage.cacheReadInputTokens +
-                          event.data.tokenUsage.cacheReadInputTokens,
-                        cacheCreationInputTokens:
-                          accumulatedTokenUsage.cacheCreationInputTokens +
-                          event.data.tokenUsage.cacheCreationInputTokens,
-                      };
-                      logError(
-                        "walkthrough-jobs",
-                        `[usage-diag] fanOut usage combined=${JSON.stringify(combined)} subscribers=${job.subscribers.size}`,
-                      );
-                      fanOut(job, {
-                        type: "usage",
-                        data: { tokenUsage: combined },
-                      });
-                      continue;
-                    }
-
-                    // Every other event just fans out —
-                    // content persistence already happened
-                    // in the tool handler.
-                    fanOut(job, event);
-                  }
-                } finally {
-                  if (capturedOpencodeSessionId !== undefined) {
-                    await Effect.runPromise(
-                      provideDb(
-                        walkthroughService.setOpencodeSessionId(
-                          job.walkthroughId,
-                          capturedOpencodeSessionId,
-                        ),
-                      ).pipe(Effect.catchAll(() => Effect.void)),
+              if (dbState?.lastCompletedPhase === "D") {
+                const missingComments = findIssuesMissingInlineComment(db, job.walkthroughId);
+                if (missingComments.length === 0) {
+                  yield* setStatus(job.walkthroughId, "complete", {
+                    tokenUsage: state.accumulatedTokenUsage,
+                  });
+                  yield* hub
+                    .broadcast({
+                      type: "walkthrough:complete",
+                      data: {
+                        prId: ctx.pr.id,
+                        walkthroughId: job.walkthroughId,
+                      },
+                    })
+                    .pipe(
+                      Effect.timeout("5 seconds"),
+                      Effect.catchAll(() => Effect.void),
                     );
-                  }
-                }
-
-                // ── Auto-continuation check ────────────────
-                if (
-                  autoContinuations >= MAX_AUTO_CONTINUATIONS ||
-                  job.abortController.signal.aborted
-                ) {
-                  debug(
-                    "walkthrough-jobs",
-                    "skipping auto-continuation:",
-                    autoContinuations >= MAX_AUTO_CONTINUATIONS
-                      ? "max continuations reached"
-                      : "aborted",
-                  );
-                  // Mark error if either:
-                  //   (a) we never reached Phase D, OR
-                  //   (b) we reached Phase D but the
-                  //       comment-pairing invariant (doctrine
-                  //       #12) is still violated.
-                  // Otherwise the row would stay in
-                  // `generating` forever (case a) or land in
-                  // `complete` despite missing inline
-                  // comments (case b).
-                  const finalState = await Effect.runPromise(
-                    provideDb(walkthroughService.getPartial(ctx.pr.id, ctx.prHeadSha)).pipe(
-                      Effect.catchAll(() => Effect.succeed(null)),
-                    ),
-                  );
-                  const phaseD = finalState?.lastCompletedPhase === "D";
-                  const missingCommentsAtExhaustion = phaseD
-                    ? findIssuesMissingInlineComment(db, job.walkthroughId)
-                    : [];
-                  if (!phaseD || missingCommentsAtExhaustion.length > 0) {
-                    if (phaseD && missingCommentsAtExhaustion.length > 0) {
-                      debug(
-                        "walkthrough-jobs",
-                        `exhausted auto-continuations with ${missingCommentsAtExhaustion.length} warning/critical issue(s) still missing inline comment(s) — marking error`,
-                      );
-                    }
-                    await Effect.runPromise(setStatus(job.walkthroughId, "error"));
-                  }
                   fanOut(job, {
                     type: "done",
                     data: {
                       walkthroughId: job.walkthroughId,
-                      tokenUsage: accumulatedTokenUsage,
+                      tokenUsage: state.accumulatedTokenUsage,
                     },
                   });
-                  return;
+                  return { _tag: "returnDone", tokenUsage: state.accumulatedTokenUsage } as const;
                 }
-
-                const partialForContinuation = await Effect.runPromise(
-                  provideDb(walkthroughService.getPartial(ctx.pr.id, ctx.prHeadSha)).pipe(
-                    Effect.catchAll(() => Effect.succeed(null)),
-                  ),
-                );
-
-                if (!partialForContinuation) {
-                  debug("walkthrough-jobs", "auto-continuation: no partial — accepting incomplete");
-                  fanOut(job, {
-                    type: "done",
-                    data: {
-                      walkthroughId: job.walkthroughId,
-                      tokenUsage: accumulatedTokenUsage,
-                    },
-                  });
-                  return;
-                }
-
-                autoContinuations++;
                 debug(
                   "walkthrough-jobs",
-                  `auto-continuation ${autoContinuations}/${MAX_AUTO_CONTINUATIONS}: lastCompletedPhase=${partialForContinuation.lastCompletedPhase}`,
-                );
-
-                fanOut(job, {
-                  type: "phase",
-                  data: {
-                    phase: "rating",
-                    message: `Finishing walkthrough (phase ${partialForContinuation.lastCompletedPhase})...`,
-                  },
-                });
-
-                const continuationCtx: ContinuationContext = {
-                  walkthroughId: partialForContinuation.id,
-                  existingBlocks: partialForContinuation.blocks,
-                  existingIssueCount: partialForContinuation.issues.length,
-                  existingRatedAxes: partialForContinuation.ratings.map((r) => r.axis),
-                  ...(partialForContinuation.opencodeSessionId
-                    ? {
-                        opencodeSessionId: partialForContinuation.opencodeSessionId,
-                      }
-                    : {}),
-                };
-
-                currentGenerator = await Effect.runPromise(
-                  ai.streamWalkthrough(buildStreamParams(continuationCtx)),
+                  `phase=D but ${missingComments.length} warning/critical issue(s) missing inline comment(s) — falling through to auto-continuation:`,
+                  missingComments
+                    .map((i) => `${i.id}[${i.severity}]@${i.filePath}:${i.startLine}`)
+                    .join(", "),
                 );
               }
-            }),
-          catch: (err) => new AiGenerationError({ cause: err }),
-        });
+              return { _tag: "breakToContinuation" } as const;
+            }
+
+            if (event.type === "error") {
+              if (job.abortController.signal.aborted) {
+                debug(
+                  "walkthrough-jobs",
+                  "suppressing error broadcast — abort initiated locally:",
+                  event.data.message,
+                );
+                fanOut(job, event);
+                return { _tag: "returnDone", tokenUsage: state.accumulatedTokenUsage } as const;
+              }
+              yield* setStatus(job.walkthroughId, "error");
+              yield* hub
+                .broadcast({
+                  type: "walkthrough:error",
+                  data: {
+                    prId: ctx.pr.id,
+                    message: event.data.message,
+                  },
+                })
+                .pipe(
+                  Effect.timeout("5 seconds"),
+                  Effect.catchAll(() => Effect.void),
+                );
+              fanOut(job, event);
+              return {
+                _tag: "returnError",
+                code: "AiGenerationError",
+                message: event.data.message,
+              } as const;
+            }
+
+            if (event.type === "usage") {
+              const combined = {
+                inputTokens:
+                  state.accumulatedTokenUsage.inputTokens + event.data.tokenUsage.inputTokens,
+                outputTokens:
+                  state.accumulatedTokenUsage.outputTokens + event.data.tokenUsage.outputTokens,
+                cacheReadInputTokens:
+                  state.accumulatedTokenUsage.cacheReadInputTokens +
+                  event.data.tokenUsage.cacheReadInputTokens,
+                cacheCreationInputTokens:
+                  state.accumulatedTokenUsage.cacheCreationInputTokens +
+                  event.data.tokenUsage.cacheCreationInputTokens,
+              };
+              logError(
+                "walkthrough-jobs",
+                `[usage-diag] fanOut usage combined=${JSON.stringify(combined)} subscribers=${job.subscribers.size}`,
+              );
+              fanOut(job, {
+                type: "usage",
+                data: { tokenUsage: combined },
+              });
+              return { _tag: "continue" } as const;
+            }
+
+            fanOut(job, event);
+            return { _tag: "continue" } as const;
+          });
+
+        const buildContinuationEffect = (): Effect.Effect<
+          | { readonly _tag: "none" }
+          | {
+              readonly _tag: "next";
+              readonly generator: AsyncGenerator<WalkthroughStreamEvent>;
+              readonly partial: PartialSnapshot;
+            },
+          AiError
+        > =>
+          Effect.gen(function* () {
+            const partialForContinuation = yield* provideDb(
+              walkthroughService.getPartial(ctx.pr.id, ctx.prHeadSha),
+            ).pipe(Effect.catchAll(() => Effect.succeed(null)));
+
+            if (!partialForContinuation) {
+              debug("walkthrough-jobs", "auto-continuation: no partial — accepting incomplete");
+              return { _tag: "none" } as const;
+            }
+
+            const continuationCtx: ContinuationContext = {
+              walkthroughId: partialForContinuation.id,
+              existingBlocks: partialForContinuation.blocks,
+              existingIssueCount: partialForContinuation.issues.length,
+              existingRatedAxes: partialForContinuation.ratings.map((r) => r.axis),
+              ...(partialForContinuation.opencodeSessionId
+                ? { opencodeSessionId: partialForContinuation.opencodeSessionId }
+                : {}),
+            };
+
+            const nextGenerator = yield* ai.streamWalkthrough(buildStreamParams(continuationCtx));
+            return {
+              _tag: "next",
+              generator: nextGenerator,
+              partial: partialForContinuation,
+            } as const;
+          });
+
+        const consumeGenerator = (state: LoopState): Effect.Effect<ProcessResult, AiError> =>
+          Effect.gen(function* () {
+            const next = yield* Effect.tryPromise({
+              try: () => state.currentGenerator.next(),
+              catch: (err) => new AiGenerationError({ cause: err }),
+            });
+            if (next.done) {
+              return { _tag: "breakToContinuation" } as const;
+            }
+            const result = yield* processEvent(state, next.value);
+            if (result._tag === "continue") {
+              return yield* consumeGenerator(state);
+            }
+            return result;
+          });
+
+        const runWithAutoContinuation = (state: LoopState): Effect.Effect<void, AiError> =>
+          Effect.gen(function* () {
+            const result = yield* consumeGenerator(state);
+            if (result._tag === "returnDone") {
+              return;
+            }
+            if (result._tag === "returnError") {
+              return;
+            }
+
+            // breakToContinuation — check budget
+            if (
+              state.autoContinuations >= MAX_AUTO_CONTINUATIONS ||
+              job.abortController.signal.aborted
+            ) {
+              debug(
+                "walkthrough-jobs",
+                "skipping auto-continuation:",
+                state.autoContinuations >= MAX_AUTO_CONTINUATIONS
+                  ? "max continuations reached"
+                  : "aborted",
+              );
+              const finalState = yield* provideDb(
+                walkthroughService.getPartial(ctx.pr.id, ctx.prHeadSha),
+              ).pipe(Effect.catchAll(() => Effect.succeed(null)));
+              const phaseD = finalState?.lastCompletedPhase === "D";
+              const missingCommentsAtExhaustion = phaseD
+                ? findIssuesMissingInlineComment(db, job.walkthroughId)
+                : [];
+              if (!phaseD || missingCommentsAtExhaustion.length > 0) {
+                if (phaseD && missingCommentsAtExhaustion.length > 0) {
+                  debug(
+                    "walkthrough-jobs",
+                    `exhausted auto-continuations with ${missingCommentsAtExhaustion.length} warning/critical issue(s) still missing inline comment(s) — marking error`,
+                  );
+                }
+                yield* setStatus(job.walkthroughId, "error");
+              }
+              fanOut(job, {
+                type: "done",
+                data: {
+                  walkthroughId: job.walkthroughId,
+                  tokenUsage: state.accumulatedTokenUsage,
+                },
+              });
+              return;
+            }
+
+            const continuation = yield* buildContinuationEffect();
+            if (continuation._tag === "none") {
+              fanOut(job, {
+                type: "done",
+                data: {
+                  walkthroughId: job.walkthroughId,
+                  tokenUsage: state.accumulatedTokenUsage,
+                },
+              });
+              return;
+            }
+
+            state.autoContinuations++;
+            debug(
+              "walkthrough-jobs",
+              `auto-continuation ${state.autoContinuations}/${MAX_AUTO_CONTINUATIONS}: lastCompletedPhase=${continuation.partial.lastCompletedPhase}`,
+            );
+
+            fanOut(job, {
+              type: "phase",
+              data: {
+                phase: "rating",
+                message: `Finishing walkthrough (phase ${continuation.partial.lastCompletedPhase})...`,
+              },
+            });
+
+            state.currentGenerator = continuation.generator;
+            return yield* runWithAutoContinuation(state);
+          });
+
+        const initialState: LoopState = {
+          accumulatedTokenUsage: {
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+          },
+          autoContinuations: 0,
+          currentGenerator: generator,
+          capturedOpencodeSessionId: undefined,
+        };
+
+        yield* Effect.gen(function* () {
+          yield* runWithAutoContinuation(initialState);
+        }).pipe(
+          Effect.ensuring(
+            capturedOpencodeSessionId !== undefined
+              ? provideDb(
+                  walkthroughService.setOpencodeSessionId(
+                    job.walkthroughId,
+                    capturedOpencodeSessionId,
+                  ),
+                ).pipe(Effect.catchAll(() => Effect.void))
+              : Effect.void,
+          ),
+        );
       });
 
     const launchJob = (job: ActiveJob, ctx: ResolvedContext) =>
@@ -1104,7 +1107,7 @@ export const WalkthroughJobsLive = Layer.effect(
         const resolved = yield* provideInfra(
           prContextService.resolveWithDiff(params.prId, params.userId),
         );
-        const { pr, repo, token, meta, files } = resolved;
+        const { pr, repo, token, meta, files, commits } = resolved;
 
         // SHA-aware dedup against the in-flight job (if any). The original
         // fast-path here returned the existing walkthroughId regardless of
@@ -1174,15 +1177,20 @@ export const WalkthroughJobsLive = Layer.effect(
         // Idempotent row creation (upsert on the new unique index).
         // This is the sole "make a walkthrough row exist" call in the
         // codebase — MCP tool handlers never insert, they only update.
+        // We also persist the PR commit list here so the agent's
+        // `get_commit_history` MCP tool can read it back when authoring
+        // the journey chapter (chapter 0). On the "keep existing row"
+        // path inside createPartial, the commits are not overwritten —
+        // the row already has them from the original insert.
+        const idCandidate = partial?.id ?? params.walkthroughId;
         const walkthroughId = yield* provideDb(
           walkthroughService.createPartial({
-            ...((partial?.id ?? params.walkthroughId)
-              ? { id: partial?.id ?? params.walkthroughId! }
-              : {}),
+            ...(idCandidate ? { id: idCandidate } : {}),
             reviewSessionId,
             prId: pr.id,
             modelUsed,
             prHeadSha: meta.headSha,
+            prCommits: commits,
           }),
         ).pipe(
           Effect.mapError(
@@ -1211,6 +1219,7 @@ export const WalkthroughJobsLive = Layer.effect(
           nextSeq: 0,
           fiber: null,
           cancelledByUser: false,
+          prerenderFailures: 0,
         };
 
         yield* launchJob(job, {
@@ -1252,6 +1261,7 @@ export const WalkthroughJobsLive = Layer.effect(
           id: handleId,
           callback: onEvent,
           buffered: [],
+          consecutiveFailures: 0,
         };
         job.subscribers.add(handle);
         debug(
@@ -1407,39 +1417,36 @@ export const WalkthroughJobsLive = Layer.effect(
         yield* provideDb(walkthroughService.supersedeAllForPr(prId, exceptHeadSha));
       });
 
-    const emitEvent = (walkthroughId: string, event: WalkthroughStreamEvent) =>
-      Effect.gen(function* () {
-        const map = yield* Ref.get(registry);
-        const job = map.get(walkthroughId);
-        if (!job) {
-          // Silent drop: MCP tool committed to DB but the job is no longer
-          // in the registry (race against job cleanup / supersede). Surface
-          // it so we can tell when a content event "vanished" *before*
-          // fan-out vs. *during* it.
-          debug(
-            "wt-trace",
-            `emitEvent-skip wt=${walkthroughId} type=${event.type} reason=no-job-in-registry`,
-          );
-          return;
-        }
-        fanOut(job, event);
-        // Fire the activity notifier so the opencode provider's stream guard
-        // resets its inactivity timer. This runs even when the SSE subscription
-        // from the daemon doesn't surface the tool-call event.
-        const notifiers = yield* Ref.get(activityNotifiers);
-        const notify = notifiers.get(walkthroughId);
-        if (notify) {
-          // Push a thinking heartbeat to reset the stream guard's inactivity timer.
-          // Content events already reach the frontend via fanOut — don't re-emit them.
-          // Using "thinking" (a no-op on the client) rather than a "phase" event so
-          // the heartbeat never rolls back the provider's phase machine (invariant #13).
-          try {
-            notify({ type: "thinking", data: {} });
-          } catch {
-            /* notifier threw — ignore */
-          }
-        }
-      });
+    const emitEvent = (
+      walkthroughId: string,
+      event: WalkthroughStreamEvent,
+    ): Effect.Effect<EmitResult> =>
+      Effect.succeed(
+        Effect.runSync(
+          Effect.gen(function* () {
+            const map = yield* Ref.get(registry);
+            const job = map.get(walkthroughId);
+            if (!job) {
+              debug(
+                "wt-trace",
+                `emitEvent-skip wt=${walkthroughId} type=${event.type} reason=no-job-in-registry`,
+              );
+              return { kind: "skipped-no-job" as const, walkthroughId };
+            }
+            const seq = fanOut(job, event);
+            const notifiers = yield* Ref.get(activityNotifiers);
+            const notify = notifiers.get(walkthroughId);
+            if (notify) {
+              try {
+                notify({ type: "thinking", data: {} });
+              } catch {
+                /* notifier threw — ignore */
+              }
+            }
+            return { kind: "delivered" as const, seq };
+          }),
+        ),
+      );
 
     const issueSessionToken = (walkthroughId: string) =>
       Effect.gen(function* () {
@@ -1480,6 +1487,19 @@ export const WalkthroughJobsLive = Layer.effect(
         return next;
       });
 
+    const incrementPrerenderFailures = (walkthroughId: string) =>
+      Effect.gen(function* () {
+        const map = yield* Ref.get(registry);
+        const job = map.get(walkthroughId);
+        if (job) {
+          job.prerenderFailures += 1;
+          debug(
+            "walkthrough-jobs",
+            `prerender-failure-count wt=${walkthroughId} total=${job.prerenderFailures}`,
+          );
+        }
+      });
+
     return {
       startJob,
       subscribe,
@@ -1493,6 +1513,7 @@ export const WalkthroughJobsLive = Layer.effect(
       issueSessionToken,
       resolveSessionToken,
       clearSessionToken,
+      incrementPrerenderFailures,
       registerActivityNotifier,
       unregisterActivityNotifier,
     };

@@ -68,6 +68,18 @@ export const walkthroughs = sqliteTable(
       onDelete: "set null",
     }),
     generatedAt: text("generated_at").notNull(),
+    /**
+     * ISO 8601 timestamp set when {@link WalkthroughJobs.setStatus} transitions
+     * this row to `status='complete'`. Distinct from `generatedAt` (which is
+     * the job-start timestamp): the recap pipeline windows on *finish* time so
+     * a walkthrough that started in period N but finished in period N+1 lands
+     * in N+1's recap, not N's. Nullable for rows that haven't completed yet.
+     *
+     * Backfill on migration 0220: existing `status='complete'` rows get
+     * `completedAt = generatedAt` so historical walkthroughs are visible to
+     * the first recap run.
+     */
+    completedAt: text("completed_at"),
     modelUsed: text("model_used").notNull(),
     tokenUsage: text("token_usage").notNull().default("{}"),
     prHeadSha: text("pr_head_sha").notNull(),
@@ -88,6 +100,18 @@ export const walkthroughs = sqliteTable(
      * `'chat:claude'` or `'chat:opencode'`. Pairs with `lastEditedAt`.
      */
     lastEditedBy: text("last_edited_by"),
+    /**
+     * PR commit list (JSON of `PrCommit[]`) captured from GitHub at job
+     * start. Surfaced to the agent on demand via the `get_commit_history`
+     * MCP read tool — never inlined in the prompt, since long PRs would
+     * otherwise pay ~4.5K tokens up front on every run + resume.
+     *
+     * Nullable: rows created before migration 0210 read as `null`, which
+     * the read tool surfaces as an empty array — the agent's single-commit
+     * edge-case path then renders a one-paragraph journey chapter and
+     * moves on.
+     */
+    prCommits: text("pr_commits"),
   },
   (t) => ({
     /**

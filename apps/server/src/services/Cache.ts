@@ -1,6 +1,7 @@
 import { and, eq, lt } from "drizzle-orm";
 import { Context, Effect, Layer, Runtime } from "effect";
 import { kvCache } from "../db/schema/index";
+import { DbError } from "../domain/errors";
 import { DbService } from "./Db";
 
 /**
@@ -51,21 +52,21 @@ export interface CacheStatsSnapshot {
 export class CacheService extends Context.Tag("CacheService")<
   CacheService,
   {
-    readonly get: <T>(ns: string, key: string) => Effect.Effect<T | null, never, DbService>;
+    readonly get: <T>(ns: string, key: string) => Effect.Effect<T | null, DbError, DbService>;
     readonly set: <T>(
       ns: string,
       key: string,
       value: T,
       opts?: CacheSetOptions,
-    ) => Effect.Effect<void, never, DbService>;
-    readonly invalidate: (ns: string, key?: string) => Effect.Effect<void, never, DbService>;
+    ) => Effect.Effect<void, DbError, DbService>;
+    readonly invalidate: (ns: string, key?: string) => Effect.Effect<void, DbError, DbService>;
     readonly getOrFetch: <T, E, R>(
       ns: string,
       key: string,
       fetcher: () => Effect.Effect<T, E, R>,
       opts?: CacheSetOptions,
-    ) => Effect.Effect<T, E, R | DbService>;
-    readonly stats: () => Effect.Effect<CacheStatsSnapshot, never, DbService>;
+    ) => Effect.Effect<T, E | DbError, R | DbService>;
+    readonly stats: () => Effect.Effect<CacheStatsSnapshot, DbError, DbService>;
   }
 >() {}
 
@@ -116,14 +117,18 @@ export const CacheServiceLive = Layer.sync(CacheService, () => {
       }
 
       const { db } = yield* DbService;
-      const row = db
-        .select({
-          valueJson: kvCache.valueJson,
-          expiresAt: kvCache.expiresAt,
-        })
-        .from(kvCache)
-        .where(and(eq(kvCache.ns, ns), eq(kvCache.key, key)))
-        .get();
+      const row = yield* Effect.try({
+        try: () =>
+          db
+            .select({
+              valueJson: kvCache.valueJson,
+              expiresAt: kvCache.expiresAt,
+            })
+            .from(kvCache)
+            .where(and(eq(kvCache.ns, ns), eq(kvCache.key, key)))
+            .get(),
+        catch: (e) => new DbError({ message: `cache.get(${ns}, ${key}) failed`, cause: e }),
+      });
 
       if (!row) {
         misses++;
@@ -133,9 +138,15 @@ export const CacheServiceLive = Layer.sync(CacheService, () => {
       const expiresAt = parseIso(row.expiresAt);
       if (isExpired(expiresAt)) {
         // Lazy eviction: row is stale, drop it + register a miss.
-        db.delete(kvCache)
-          .where(and(eq(kvCache.ns, ns), eq(kvCache.key, key)))
-          .run();
+        yield* Effect.try({
+          try: () =>
+            db
+              .delete(kvCache)
+              .where(and(eq(kvCache.ns, ns), eq(kvCache.key, key)))
+              .run(),
+          catch: (e) =>
+            new DbError({ message: `cache.get expired delete(${ns}, ${key}) failed`, cause: e }),
+        });
         misses++;
         return null;
       }
@@ -167,19 +178,24 @@ export const CacheServiceLive = Layer.sync(CacheService, () => {
       const valueJson = JSON.stringify(value);
       const fetchedAt = new Date(now).toISOString();
 
-      db.insert(kvCache)
-        .values({
-          ns,
-          key,
-          valueJson,
-          fetchedAt,
-          expiresAt,
-        })
-        .onConflictDoUpdate({
-          target: [kvCache.ns, kvCache.key],
-          set: { valueJson, fetchedAt, expiresAt },
-        })
-        .run();
+      yield* Effect.try({
+        try: () =>
+          db
+            .insert(kvCache)
+            .values({
+              ns,
+              key,
+              valueJson,
+              fetchedAt,
+              expiresAt,
+            })
+            .onConflictDoUpdate({
+              target: [kvCache.ns, kvCache.key],
+              set: { valueJson, fetchedAt, expiresAt },
+            })
+            .run(),
+        catch: (e) => new DbError({ message: `cache.set(${ns}, ${key}) failed`, cause: e }),
+      });
 
       writeMemory(ns, key, value, expiresAtMs);
     });
@@ -188,16 +204,25 @@ export const CacheServiceLive = Layer.sync(CacheService, () => {
     Effect.gen(function* () {
       const { db } = yield* DbService;
       if (key === undefined) {
-        db.delete(kvCache).where(eq(kvCache.ns, ns)).run();
+        yield* Effect.try({
+          try: () => db.delete(kvCache).where(eq(kvCache.ns, ns)).run(),
+          catch: (e) => new DbError({ message: `cache.invalidate(${ns}) failed`, cause: e }),
+        });
         // Drop every matching in-memory entry too.
         const prefix = `${ns}\0`;
         for (const k of memory.keys()) {
           if (k.startsWith(prefix)) memory.delete(k);
         }
       } else {
-        db.delete(kvCache)
-          .where(and(eq(kvCache.ns, ns), eq(kvCache.key, key)))
-          .run();
+        yield* Effect.try({
+          try: () =>
+            db
+              .delete(kvCache)
+              .where(and(eq(kvCache.ns, ns), eq(kvCache.key, key)))
+              .run(),
+          catch: (e) =>
+            new DbError({ message: `cache.invalidate(${ns}, ${key}) failed`, cause: e }),
+        });
         memory.delete(cacheKey(ns, key));
       }
     });
@@ -207,7 +232,7 @@ export const CacheServiceLive = Layer.sync(CacheService, () => {
     key: string,
     fetcher: () => Effect.Effect<T, E, R>,
     opts?: CacheSetOptions,
-  ): Effect.Effect<T, E, R | DbService> =>
+  ): Effect.Effect<T, E | DbError, R | DbService> =>
     Effect.gen(function* () {
       const existing = yield* get<T>(ns, key);
       if (existing !== null) return existing;
@@ -254,9 +279,15 @@ export const CacheServiceLive = Layer.sync(CacheService, () => {
       // Sweep expired rows opportunistically — keeps `entries` count honest
       // and prevents the table from accumulating dead TTL rows forever.
       const nowIso = new Date().toISOString();
-      db.delete(kvCache).where(lt(kvCache.expiresAt, nowIso)).run();
+      yield* Effect.try({
+        try: () => db.delete(kvCache).where(lt(kvCache.expiresAt, nowIso)).run(),
+        catch: (e) => new DbError({ message: "cache.stats sweep failed", cause: e }),
+      });
 
-      const rows = db.select({ ns: kvCache.ns }).from(kvCache).all();
+      const rows = yield* Effect.try({
+        try: () => db.select({ ns: kvCache.ns }).from(kvCache).all(),
+        catch: (e) => new DbError({ message: "cache.stats scan failed", cause: e }),
+      });
       const counts = new Map<string, number>();
       for (const row of rows) {
         counts.set(row.ns, (counts.get(row.ns) ?? 0) + 1);

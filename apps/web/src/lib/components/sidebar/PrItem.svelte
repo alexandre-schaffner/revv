@@ -1,5 +1,5 @@
 <script lang="ts">
-import { GitMerge, GitPullRequestClosed, User } from "@lucide/svelte";
+import { GitMerge, GitPullRequestArrow, GitPullRequestClosed, User } from "@lucide/svelte";
 import type { PullRequest } from "@revv/shared";
 import StatusDot from "$lib/components/shared/StatusDot.svelte";
 import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
@@ -13,11 +13,13 @@ let {
   isSelected = false,
   navPrefix = "pr",
   variant = "open",
+  pinned = false,
 }: {
   pr: PullRequest;
   isSelected?: boolean;
   navPrefix?: string;
   variant?: "open" | "archived";
+  pinned?: boolean;
 } = $props();
 
 const showDot = $derived(isPrUnseen(pr, getCurrentUserLogin()));
@@ -56,10 +58,12 @@ function handleClick() {
 	>
 		{#if variant === 'archived'}
 			{#if pr.status === 'merged'}
-				<GitMerge size={11} class="shrink-0 text-[var(--color-accent-muted,#8b5cf6)]" aria-hidden="true" />
+				<GitMerge size={11} class="shrink-0 text-accent-muted" aria-hidden="true" />
 			{:else}
 				<GitPullRequestClosed size={11} class="shrink-0 text-text-muted" aria-hidden="true" />
 			{/if}
+		{:else if pinned}
+			<GitPullRequestArrow size={11} class="shrink-0 text-accent" aria-hidden="true" />
 		{:else}
 			<StatusDot status={pr.status} reviewStatus={pr.reviewStatus} visible={showDot} />
 		{/if}

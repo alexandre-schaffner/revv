@@ -78,6 +78,7 @@ import type { ToolState } from "$lib/components/ai/tool";
 import { Tool, ToolContent, ToolHeader, ToolOutput } from "$lib/components/ai/tool";
 import ProposedDiffModal from "$lib/components/review/ProposedDiffModal.svelte";
 import { Button } from "$lib/components/ui/button";
+import { Checkbox } from "$lib/components/ui/checkbox";
 import * as Dialog from "$lib/components/ui/dialog";
 import { Dotmatrix, squareVariantForId } from "$lib/components/ui/dotmatrix/index.js";
 import { Input } from "$lib/components/ui/input";
@@ -89,8 +90,11 @@ import {
 import {
   abortChatTurn,
   approvePlanAction,
+  batchCherryPickSelectedAction,
+  batchDiscardSelectedAction,
   cherryPickProposedCommitAction,
   clearChatHistory,
+  clearCommitSelection,
   discardProposedCommitAction,
   enqueueMessage,
   getChatError,
@@ -99,10 +103,14 @@ import {
   getInteractionMode,
   getProposedChanges,
   getQueuedMessages,
+  getSelectedCommitCount,
+  getSelectedCommitShas,
   getToolApprovals,
   getWorktreeBlocked,
+  isBatchOpInFlight,
   isChatStreaming,
   isCherryPickingCommit,
+  isCommitSelected,
   isDiscardingCommit,
   isPlanModeAvailable,
   isPushingProposed,
@@ -118,8 +126,10 @@ import {
   resolveAndPushProposed,
   respondToToolApproval,
   restoreToCheckpoint,
+  selectAllCommits,
   sendChatMessage,
   setInteractionMode,
+  toggleCommitSelection,
 } from "$lib/stores/chat.svelte";
 import { getSelectedPr } from "$lib/stores/prs.svelte";
 import { getLoadedHeadSha } from "$lib/stores/review.svelte";
@@ -165,6 +175,12 @@ const isPushing = $derived(prId ? isPushingProposed(prId) : false);
 const isResolving = $derived(prId ? isResolvingPush(prId) : false);
 const blocked = $derived(prId ? getWorktreeBlocked(prId) : null);
 const isRebasing = $derived(prId ? isRebasingProposed(prId) : false);
+const selectedShas = $derived(
+  prId ? getSelectedCommitShas(prId) : (new Set<string>() as Set<string>),
+);
+const selectedCount = $derived(selectedShas.size);
+const allSelected = $derived(commitCount > 0 && selectedCount === commitCount);
+const batchInFlight = $derived(prId ? isBatchOpInFlight(prId) : false);
 const selectedPr = $derived(getSelectedPr());
 const interactionMode = $derived(prId ? getInteractionMode(prId) : "default");
 const planModeAvailable = $derived(isPlanModeAvailable());
@@ -882,11 +898,22 @@ function activitiesForTurn(
 							<QueueSectionContent>
 								<QueueList>
 									{#each proposed.commits as commit, commitIdx (commit.sha)}
+										{@const checked = prId ? isCommitSelected(prId, commit.sha) : false}
 										<div
 											in:fly={{ y: 4, duration: 160, delay: Math.min(commitIdx, 8) * 25, easing: cubicOut }}
 											out:fly={{ y: -4, duration: 120, easing: cubicIn }}
 										>
 											<QueueItem class="items-start gap-2 py-1.5">
+												<Checkbox
+													class="mt-0.5"
+													{checked}
+													disabled={batchInFlight}
+													aria-label="Select commit {commit.shortSha} for batch action"
+													onclick={(e) => e.stopPropagation()}
+													onCheckedChange={() => {
+														if (prId) toggleCommitSelection(prId, commit.sha);
+													}}
+												/>
 												<button
 													type="button"
 													class="flex min-w-0 flex-1 cursor-pointer flex-col gap-0.5 border-0 bg-transparent p-0 text-left"
@@ -903,50 +930,121 @@ function activitiesForTurn(
 														</span>
 													{/if}
 												</button>
-												<QueueItemActions>
-													<QueueItemAction
-														class="opacity-100"
-														onclick={() => copyToClipboard(commit.sha)}
-														aria-label="Copy SHA"
-														title="Copy SHA"
-													>
-														<Copy class="size-3" />
-													</QueueItemAction>
-													<QueueItemAction
-														class="opacity-100 hover:text-destructive"
-														disabled={isDiscardingCommit(commit.sha)}
-														onclick={() => {
-															if (prId) void discardProposedCommitAction(prId, commit.sha);
-														}}
-														aria-label="Discard commit"
-														title="Discard commit"
-													>
-														{#if isDiscardingCommit(commit.sha)}
-															<Loader2 class="size-3 motion-essential-spin" />
-														{:else}
-															<Trash2 class="size-3" />
-														{/if}
-													</QueueItemAction>
-													<QueueItemAction
-														class="opacity-100 hover:text-primary"
-														disabled={isCherryPickingCommit(commit.sha)}
-														onclick={() => {
-															if (prId) void cherryPickProposedCommitAction(prId, commit.sha);
-														}}
-														aria-label="Push this commit to PR branch"
-														title="Push this commit to PR branch"
-													>
-														{#if isCherryPickingCommit(commit.sha)}
-															<Loader2 class="size-3 motion-essential-spin" />
-														{:else}
-															<GitMerge class="size-3" />
-														{/if}
-													</QueueItemAction>
-												</QueueItemActions>
+												{#if selectedCount === 0}
+													<QueueItemActions>
+														<QueueItemAction
+															class="opacity-100"
+															onclick={() => copyToClipboard(commit.sha)}
+															aria-label="Copy SHA"
+															title="Copy SHA"
+														>
+															<Copy class="size-3" />
+														</QueueItemAction>
+														<QueueItemAction
+															class="opacity-100 hover:text-destructive"
+															disabled={isDiscardingCommit(commit.sha)}
+															onclick={() => {
+																if (prId) void discardProposedCommitAction(prId, commit.sha);
+															}}
+															aria-label="Discard commit"
+															title="Discard commit"
+														>
+															{#if isDiscardingCommit(commit.sha)}
+																<Loader2 class="size-3 motion-essential-spin" />
+															{:else}
+																<Trash2 class="size-3" />
+															{/if}
+														</QueueItemAction>
+														<QueueItemAction
+															class="opacity-100 hover:text-primary"
+															disabled={isCherryPickingCommit(commit.sha)}
+															onclick={() => {
+																if (prId) void cherryPickProposedCommitAction(prId, commit.sha);
+															}}
+															aria-label="Push this commit to PR branch"
+															title="Push this commit to PR branch"
+														>
+															{#if isCherryPickingCommit(commit.sha)}
+																<Loader2 class="size-3 motion-essential-spin" />
+															{:else}
+																<GitMerge class="size-3" />
+															{/if}
+														</QueueItemAction>
+													</QueueItemActions>
+												{/if}
 											</QueueItem>
 										</div>
 									{/each}
 								</QueueList>
+								{#if selectedCount > 0}
+									<div
+										class="proposed-batch-footer"
+										transition:slide={{ duration: 160, easing: cubicOut }}
+									>
+										<div class="proposed-batch-footer__info">
+											<span class="text-xs text-muted-foreground tabular-nums">
+												{selectedCount} of {commitCount} selected
+											</span>
+											{#if !allSelected}
+												<button
+													type="button"
+													class="proposed-batch-footer__link"
+													disabled={batchInFlight}
+													onclick={() => {
+														if (prId)
+															selectAllCommits(prId, proposed.commits.map((c) => c.sha));
+													}}
+												>
+													Select all
+												</button>
+											{/if}
+											<button
+												type="button"
+												class="proposed-batch-footer__link"
+												disabled={batchInFlight}
+												onclick={() => {
+													if (prId) clearCommitSelection(prId);
+												}}
+											>
+												Clear
+											</button>
+										</div>
+										<div class="proposed-batch-footer__actions">
+											<Button
+												variant="ghost"
+												size="sm"
+												class="h-7 gap-1.5 px-2 text-xs hover:text-destructive"
+												disabled={batchInFlight}
+												onclick={() => {
+													if (prId) void batchDiscardSelectedAction(prId);
+												}}
+											>
+												{#if batchInFlight}
+													<Loader2 class="size-3 motion-essential-spin" />
+												{:else}
+													<Trash2 class="size-3" />
+												{/if}
+												Discard {selectedCount}
+											</Button>
+											<Button
+												variant="ghost"
+												size="sm"
+												class="h-7 gap-1.5 px-2 text-xs hover:text-primary"
+												disabled={batchInFlight}
+												onclick={() => {
+													if (prId) void batchCherryPickSelectedAction(prId);
+												}}
+											>
+												{#if batchInFlight}
+													<Loader2 class="size-3 motion-essential-spin" />
+												{:else}
+													<GitMerge class="size-3" />
+												{/if}
+												Push {selectedCount} to PR branch
+											</Button>
+										</div>
+									</div>
+								{/if}
 							</QueueSectionContent>
 						</QueueSection>
 					</div>
@@ -1526,8 +1624,8 @@ function activitiesForTurn(
 	/* Blocked-by-unpushed-commits strip */
 	.blocked-strip {
 		flex-shrink: 0;
-		background: color-mix(in srgb, var(--color-warning, #f59e0b) 8%, transparent);
-		border-bottom: 1px solid color-mix(in srgb, var(--color-warning, #f59e0b) 25%, transparent);
+		background: color-mix(in srgb, var(--color-warning) 8%, transparent);
+		border-bottom: 1px solid color-mix(in srgb, var(--color-warning) 25%, transparent);
 		padding: 8px 12px;
 		display: flex;
 		flex-direction: column;
@@ -1541,7 +1639,7 @@ function activitiesForTurn(
 	}
 
 	:global(.blocked-icon) {
-		color: var(--color-warning, #f59e0b);
+		color: var(--color-warning);
 		flex-shrink: 0;
 	}
 
@@ -1625,8 +1723,8 @@ function activitiesForTurn(
 	}
 
 	.blocked-discard-btn:hover:not(:disabled) {
-		color: var(--color-danger, #ef4444);
-		background: color-mix(in srgb, var(--color-danger, #ef4444) 10%, transparent);
+		color: var(--color-danger);
+		background: color-mix(in srgb, var(--color-danger) 10%, transparent);
 	}
 
 	.blocked-discard-btn:disabled {
@@ -1903,7 +2001,7 @@ function activitiesForTurn(
 	}
 
 	:global(.new-branch-title-warn) {
-		color: var(--color-warning, #d97706);
+		color: var(--color-warning);
 	}
 
 	.new-branch-field {
@@ -1929,7 +2027,7 @@ function activitiesForTurn(
 	}
 
 	.new-branch-hint--error {
-		color: var(--color-danger, #d93b3b);
+		color: var(--color-danger);
 	}
 
 	.new-branch-hint code {
@@ -1938,5 +2036,51 @@ function activitiesForTurn(
 		background: var(--color-bg-tertiary);
 		border-radius: 3px;
 		padding: 1px 4px;
+	}
+
+	/* ── Proposed-commits batch selection ───────────────────────── */
+
+	.proposed-batch-footer {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+		padding: 6px 12px 8px;
+		border-top: 1px solid var(--color-border-subtle);
+	}
+
+	.proposed-batch-footer__info {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		min-width: 0;
+	}
+
+	.proposed-batch-footer__actions {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+	}
+
+	.proposed-batch-footer__link {
+		background: transparent;
+		border: none;
+		padding: 0;
+		font-size: 11px;
+		color: var(--color-text-muted);
+		cursor: pointer;
+		text-decoration: underline;
+		text-decoration-color: color-mix(in srgb, var(--color-text-muted) 40%, transparent);
+		text-underline-offset: 2px;
+	}
+
+	.proposed-batch-footer__link:hover:not(:disabled) {
+		color: var(--color-text-secondary);
+		text-decoration-color: currentColor;
+	}
+
+	.proposed-batch-footer__link:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
 	}
 </style>

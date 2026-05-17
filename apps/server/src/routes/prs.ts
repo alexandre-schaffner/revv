@@ -28,6 +28,23 @@ import { WalkthroughService } from "../services/Walkthrough";
 import { WebSocketHub } from "../services/WebSocketHub";
 import { handleAppError, withAuth } from "./middleware";
 
+// ── Active-account helper ────────────────────────────────────────────────────
+//
+// Every PR-scoped route needs to resolve the caller's active GitHub account
+// from their session + the active host in settings. This helper centralises
+// the pattern so route handlers can destructure `{ accountId, accessToken }`
+// in one line.
+
+function resolveActiveAccount(userId: string) {
+  return Effect.gen(function* () {
+    const tokenProvider = yield* TokenProvider;
+    const settingsSvc = yield* SettingsService;
+    const settings = yield* settingsSvc.getSettings().pipe(Effect.orElseSucceed(() => null));
+    const host = settings?.githubHost?.trim() || undefined;
+    return yield* tokenProvider.resolveAccount(userId, host);
+  });
+}
+
 // ── PR diff SSR options ─────────────────────────────────────────────────────
 //
 // Must match the structural options in DiffViewerInner.svelte:326-345 so the
@@ -88,7 +105,11 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
       try {
         const repoId = ctx.query.repo;
         return await AppRuntime.runPromise(
-          Effect.flatMap(PullRequestService, (s) => s.listPrs(repoId)),
+          Effect.gen(function* () {
+            const prService = yield* PullRequestService;
+            const { accountId } = yield* resolveActiveAccount(ctx.session.user.id);
+            return yield* prService.listPrs(accountId, repoId);
+          }),
         );
       } catch (e) {
         return handleAppError(e, ctx);
@@ -96,19 +117,54 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
     },
     { query: t.Object({ repo: t.Optional(t.String()) }) },
   )
-  .get("/archived", async (ctx) => {
-    try {
-      return await AppRuntime.runPromise(
-        Effect.flatMap(PullRequestService, (s) => s.listArchivedPrs()),
-      );
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
+  .get(
+    "/archived",
+    async (ctx) => {
+      try {
+        const params: {
+          repoId?: string;
+          since?: string;
+          until?: string;
+          cursor?: string;
+          limit?: number;
+        } = {};
+        if (ctx.query.repo !== undefined) params.repoId = ctx.query.repo;
+        if (ctx.query.since !== undefined) params.since = ctx.query.since;
+        if (ctx.query.until !== undefined) params.until = ctx.query.until;
+        if (ctx.query.cursor !== undefined) params.cursor = ctx.query.cursor;
+        if (ctx.query.limit !== undefined) {
+          const n = Number(ctx.query.limit);
+          if (Number.isFinite(n) && n > 0) params.limit = Math.floor(n);
+        }
+        return await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const prService = yield* PullRequestService;
+            const { accountId } = yield* resolveActiveAccount(ctx.session.user.id);
+            return yield* prService.listArchivedPrs(accountId, params);
+          }),
+        );
+      } catch (e) {
+        return handleAppError(e, ctx);
+      }
+    },
+    {
+      query: t.Object({
+        repo: t.Optional(t.String()),
+        since: t.Optional(t.String()),
+        until: t.Optional(t.String()),
+        cursor: t.Optional(t.String()),
+        limit: t.Optional(t.String()),
+      }),
+    },
+  )
   .get("/:id", async (ctx) => {
     try {
       return await AppRuntime.runPromise(
-        Effect.flatMap(PullRequestService, (s) => s.getPr(ctx.params.id)),
+        Effect.gen(function* () {
+          const prService = yield* PullRequestService;
+          const { accountId } = yield* resolveActiveAccount(ctx.session.user.id);
+          return yield* prService.getPr(ctx.params.id, accountId);
+        }),
       );
     } catch (e) {
       return handleAppError(e, ctx);
@@ -120,15 +176,16 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
         Effect.gen(function* () {
           const prService = yield* PullRequestService;
           const repoService = yield* RepositoryService;
-          const tokenProvider = yield* TokenProvider;
+          const { accountId, accessToken: token } = yield* resolveActiveAccount(
+            ctx.session.user.id,
+          );
 
-          const pr = yield* prService.getPr(ctx.params.id);
-          const repo = yield* repoService.getRepoById(pr.repositoryId);
+          const pr = yield* prService.getPr(ctx.params.id, accountId);
+          const repo = yield* repoService.getRepoById(pr.repositoryId, accountId);
 
           // Always the full PR diff (merge-base 3-dot, matching GitHub's
           // "Files changed" tab). No per-commit selection anymore — the
           // commits dropdown is read-only.
-          const token = yield* tokenProvider.getGitHubToken(ctx.session.user.id, repo.githubHost);
           return yield* getOrFetchDiffFiles(pr.id, repo.fullName, pr.externalId, token);
         }),
       );
@@ -160,8 +217,9 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
           Effect.gen(function* () {
             const prService = yield* PullRequestService;
             const repoCloneService = yield* RepoCloneService;
+            const { accountId } = yield* resolveActiveAccount(ctx.session.user.id);
 
-            const pr = yield* prService.getPr(ctx.params.id);
+            const pr = yield* prService.getPr(ctx.params.id, accountId);
             if (!pr.headSha) {
               ctx.set.status = 404;
               return {
@@ -232,18 +290,19 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
           Effect.gen(function* () {
             const prService = yield* PullRequestService;
             const repoService = yield* RepositoryService;
-            const tokenProvider = yield* TokenProvider;
+            const { accountId, accessToken: token } = yield* resolveActiveAccount(
+              ctx.session.user.id,
+            );
             const github = yield* GitHubService;
 
-            const pr = yield* prService.getPr(ctx.params.id);
+            const pr = yield* prService.getPr(ctx.params.id, accountId);
             const side = ctx.query.side;
             const sha = side === "base" ? pr.baseSha : pr.headSha;
             if (!sha) {
               return new Response("PR is missing the requested SHA", { status: 404 });
             }
 
-            const repo = yield* repoService.getRepoById(pr.repositoryId);
-            const token = yield* tokenProvider.getGitHubToken(ctx.session.user.id, repo.githubHost);
+            const repo = yield* repoService.getRepoById(pr.repositoryId, accountId);
 
             const bytes = yield* github.getFileRawBytes(repo.fullName, ctx.query.path, sha, token);
 
@@ -279,7 +338,12 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
   )
   .get("/:id/suggestions", async (ctx) => {
     try {
-      const suggestions = await AppRuntime.runPromise(resolveSuggestionsForPr(ctx.params.id));
+      const suggestions = await AppRuntime.runPromise(
+        Effect.gen(function* () {
+          const { accountId } = yield* resolveActiveAccount(ctx.session.user.id);
+          return yield* resolveSuggestionsForPr(ctx.params.id, accountId);
+        }),
+      );
       return { suggestions };
     } catch (e) {
       return handleAppError(e, ctx);
@@ -302,12 +366,13 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
         Effect.gen(function* () {
           const prService = yield* PullRequestService;
           const repoService = yield* RepositoryService;
-          const tokenProvider = yield* TokenProvider;
+          const { accountId, accessToken: token } = yield* resolveActiveAccount(
+            ctx.session.user.id,
+          );
           const githubService = yield* GitHubService;
 
-          const pr = yield* prService.getPr(ctx.params.id);
-          const repo = yield* repoService.getRepoById(pr.repositoryId);
-          const token = yield* tokenProvider.getGitHubToken(ctx.session.user.id, repo.githubHost);
+          const pr = yield* prService.getPr(ctx.params.id, accountId);
+          const repo = yield* repoService.getRepoById(pr.repositoryId, accountId);
 
           return yield* githubService.listPrCommits(repo.fullName, pr.externalId, token);
         }),
@@ -352,7 +417,12 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
   // waiting for the next poll cycle.
   .post("/:id/convert-to-draft", async (ctx) => {
     try {
-      await AppRuntime.runPromise(mutatePr(ctx.params.id, ctx.session.user.id, "convert-to-draft"));
+      await AppRuntime.runPromise(
+        Effect.gen(function* () {
+          const { accountId } = yield* resolveActiveAccount(ctx.session.user.id);
+          yield* mutatePr(ctx.params.id, ctx.session.user.id, accountId, "convert-to-draft");
+        }),
+      );
       return { success: true };
     } catch (e) {
       return handleAppError(e, ctx);
@@ -360,7 +430,12 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
   })
   .post("/:id/ready-for-review", async (ctx) => {
     try {
-      await AppRuntime.runPromise(mutatePr(ctx.params.id, ctx.session.user.id, "ready-for-review"));
+      await AppRuntime.runPromise(
+        Effect.gen(function* () {
+          const { accountId } = yield* resolveActiveAccount(ctx.session.user.id);
+          yield* mutatePr(ctx.params.id, ctx.session.user.id, accountId, "ready-for-review");
+        }),
+      );
       return { success: true };
     } catch (e) {
       return handleAppError(e, ctx);
@@ -368,7 +443,12 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
   })
   .post("/:id/close", async (ctx) => {
     try {
-      await AppRuntime.runPromise(mutatePr(ctx.params.id, ctx.session.user.id, "close"));
+      await AppRuntime.runPromise(
+        Effect.gen(function* () {
+          const { accountId } = yield* resolveActiveAccount(ctx.session.user.id);
+          yield* mutatePr(ctx.params.id, ctx.session.user.id, accountId, "close");
+        }),
+      );
       return { success: true };
     } catch (e) {
       return handleAppError(e, ctx);
@@ -427,7 +507,7 @@ function writeSuggestionsCache(key: string, suggestions: string[]): void {
   });
 }
 
-function resolveSuggestionsForPr(prId: string) {
+function resolveSuggestionsForPr(prId: string, accountId: string) {
   return Effect.gen(function* () {
     const settingsSvc = yield* SettingsService;
     const prService = yield* PullRequestService;
@@ -442,7 +522,7 @@ function resolveSuggestionsForPr(prId: string) {
       return [...FALLBACK_PROMPTS];
     }
 
-    const pr = yield* prService.getPr(prId);
+    const pr = yield* prService.getPr(prId, accountId);
     const headSha = pr.headSha ?? "no-head";
 
     // Cache check before any DB / model work.
@@ -525,7 +605,7 @@ type PrMutationAction = "convert-to-draft" | "ready-for-review" | "close";
  * resolve → mutate → refresh-row → broadcast scaffolding is identical and
  * lifted here.
  */
-function mutatePr(prId: string, userId: string, action: PrMutationAction) {
+function mutatePr(prId: string, userId: string, accountId: string, action: PrMutationAction) {
   return Effect.gen(function* () {
     const prContext = yield* PrContextService;
     const github = yield* GitHubService;
@@ -551,7 +631,7 @@ function mutatePr(prId: string, userId: string, action: PrMutationAction) {
       .pipe(Effect.map((p) => ({ ...p, id: pr.id, repositoryId: pr.repositoryId })));
     yield* prService.upsertPrs([refreshed]);
 
-    const all = yield* prService.listPrs();
-    yield* hub.broadcast({ type: "prs:updated", data: all });
+    const all = yield* prService.listPrs(accountId);
+    yield* hub.broadcastToAccount(accountId, { type: "prs:updated", data: all });
   });
 }

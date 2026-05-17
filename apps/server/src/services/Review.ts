@@ -16,7 +16,7 @@ import { reviewSessions } from "../db/schema/review-sessions";
 import { threadMessages } from "../db/schema/thread-messages";
 import { ReviewError } from "../domain/errors";
 import { tryDb } from "../effects/db-try";
-import { DbService } from "./Db";
+import type { DbService } from "./Db";
 
 // ── Row-to-domain converters ─────────────────────────────────────────────────
 
@@ -217,13 +217,13 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 
   getOrCreateActiveSession: (prId) =>
     Effect.gen(function* () {
-      const { db } = yield* DbService;
-
-      const existing = db
-        .select()
-        .from(reviewSessions)
-        .where(and(eq(reviewSessions.pullRequestId, prId), eq(reviewSessions.status, "active")))
-        .get();
+      const existing = yield* tryDb("find active session", (db) =>
+        db
+          .select()
+          .from(reviewSessions)
+          .where(and(eq(reviewSessions.pullRequestId, prId), eq(reviewSessions.status, "active")))
+          .get(),
+      );
 
       if (existing) return rowToSession(existing);
 
@@ -248,9 +248,9 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 
   completeSession: (id, status) =>
     Effect.gen(function* () {
-      const { db } = yield* DbService;
-
-      const existing = db.select().from(reviewSessions).where(eq(reviewSessions.id, id)).get();
+      const existing = yield* tryDb("find session", (db) =>
+        db.select().from(reviewSessions).where(eq(reviewSessions.id, id)).get(),
+      );
 
       if (!existing) {
         return yield* Effect.fail(
@@ -308,8 +308,9 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 
   getThread: (threadId) =>
     Effect.gen(function* () {
-      const { db } = yield* DbService;
-      const row = db.select().from(commentThreads).where(eq(commentThreads.id, threadId)).get();
+      const row = yield* tryDb("find thread", (db) =>
+        db.select().from(commentThreads).where(eq(commentThreads.id, threadId)).get(),
+      );
       if (!row) {
         return yield* Effect.fail(
           new ReviewError({ message: "Thread not found", code: "NOT_FOUND" }),
@@ -320,17 +321,18 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 
   getThreadByExternalCommentId: (sessionId, externalCommentId) =>
     Effect.gen(function* () {
-      const { db } = yield* DbService;
-      const row = db
-        .select()
-        .from(commentThreads)
-        .where(
-          and(
-            eq(commentThreads.reviewSessionId, sessionId),
-            eq(commentThreads.externalCommentId, externalCommentId),
-          ),
-        )
-        .get();
+      const row = yield* tryDb("find thread by external comment", (db) =>
+        db
+          .select()
+          .from(commentThreads)
+          .where(
+            and(
+              eq(commentThreads.reviewSessionId, sessionId),
+              eq(commentThreads.externalCommentId, externalCommentId),
+            ),
+          )
+          .get(),
+      );
       return row ? rowToThread(row) : null;
     }),
 
@@ -348,12 +350,9 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 
   transitionStatus: (threadId, authorRole) =>
     Effect.gen(function* () {
-      const { db } = yield* DbService;
-      const existing = db
-        .select()
-        .from(commentThreads)
-        .where(eq(commentThreads.id, threadId))
-        .get();
+      const existing = yield* tryDb("find thread for status", (db) =>
+        db.select().from(commentThreads).where(eq(commentThreads.id, threadId)).get(),
+      );
       if (!existing) {
         return yield* Effect.fail(
           new ReviewError({ message: "Thread not found", code: "NOT_FOUND" }),
@@ -380,12 +379,9 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 
   getThreadsForSession: (sessionId) =>
     Effect.gen(function* () {
-      const { db } = yield* DbService;
-      const rows = db
-        .select()
-        .from(commentThreads)
-        .where(eq(commentThreads.reviewSessionId, sessionId))
-        .all();
+      const rows = yield* tryDb("list threads for session", (db) =>
+        db.select().from(commentThreads).where(eq(commentThreads.reviewSessionId, sessionId)).all(),
+      );
       return rows.map(rowToThread);
     }),
 
@@ -398,26 +394,26 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 
   getThreadsForFile: (sessionId, filePath) =>
     Effect.gen(function* () {
-      const { db } = yield* DbService;
-      const rows = db
-        .select()
-        .from(commentThreads)
-        .where(
-          and(eq(commentThreads.reviewSessionId, sessionId), eq(commentThreads.filePath, filePath)),
-        )
-        .all();
+      const rows = yield* tryDb("list threads for file", (db) =>
+        db
+          .select()
+          .from(commentThreads)
+          .where(
+            and(
+              eq(commentThreads.reviewSessionId, sessionId),
+              eq(commentThreads.filePath, filePath),
+            ),
+          )
+          .all(),
+      );
       return rows.map(rowToThread);
     }),
 
   updateThreadStatus: (threadId, status) =>
     Effect.gen(function* () {
-      const { db } = yield* DbService;
-
-      const existing = db
-        .select()
-        .from(commentThreads)
-        .where(eq(commentThreads.id, threadId))
-        .get();
+      const existing = yield* tryDb("find thread for update", (db) =>
+        db.select().from(commentThreads).where(eq(commentThreads.id, threadId)).get(),
+      );
 
       if (!existing) {
         return yield* Effect.fail(
@@ -436,7 +432,9 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
         db.update(commentThreads).set(setObj).where(eq(commentThreads.id, threadId)).run();
       });
 
-      const updated = db.select().from(commentThreads).where(eq(commentThreads.id, threadId)).get();
+      const updated = yield* tryDb("read updated thread", (db) =>
+        db.select().from(commentThreads).where(eq(commentThreads.id, threadId)).get(),
+      );
 
       if (!updated) {
         return yield* Effect.fail(
@@ -489,20 +487,22 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 
   getMessages: (threadId) =>
     Effect.gen(function* () {
-      const { db } = yield* DbService;
-      const rows = db
-        .select()
-        .from(threadMessages)
-        .where(eq(threadMessages.threadId, threadId))
-        .orderBy(threadMessages.createdAt)
-        .all();
+      const rows = yield* tryDb("list messages", (db) =>
+        db
+          .select()
+          .from(threadMessages)
+          .where(eq(threadMessages.threadId, threadId))
+          .orderBy(threadMessages.createdAt)
+          .all(),
+      );
       return rows.map(rowToMessage);
     }),
 
   getMessage: (messageId) =>
     Effect.gen(function* () {
-      const { db } = yield* DbService;
-      const row = db.select().from(threadMessages).where(eq(threadMessages.id, messageId)).get();
+      const row = yield* tryDb("find message", (db) =>
+        db.select().from(threadMessages).where(eq(threadMessages.id, messageId)).get(),
+      );
       if (!row) {
         return yield* Effect.fail(
           new ReviewError({ message: "Message not found", code: "NOT_FOUND" }),
@@ -536,9 +536,9 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 
   editMessage: (messageId, body) =>
     Effect.gen(function* () {
-      const { db } = yield* DbService;
-
-      const msgRow = db.select().from(threadMessages).where(eq(threadMessages.id, messageId)).get();
+      const msgRow = yield* tryDb("find message for edit", (db) =>
+        db.select().from(threadMessages).where(eq(threadMessages.id, messageId)).get(),
+      );
 
       if (!msgRow) {
         return yield* Effect.fail(
@@ -546,11 +546,9 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
         );
       }
 
-      const threadRow = db
-        .select()
-        .from(commentThreads)
-        .where(eq(commentThreads.id, msgRow.threadId))
-        .get();
+      const threadRow = yield* tryDb("find thread for edit", (db) =>
+        db.select().from(commentThreads).where(eq(commentThreads.id, msgRow.threadId)).get(),
+      );
 
       if (!threadRow) {
         return yield* Effect.fail(
@@ -582,9 +580,9 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 
   deleteMessage: (messageId) =>
     Effect.gen(function* () {
-      const { db } = yield* DbService;
-
-      const msgRow = db.select().from(threadMessages).where(eq(threadMessages.id, messageId)).get();
+      const msgRow = yield* tryDb("find message for delete", (db) =>
+        db.select().from(threadMessages).where(eq(threadMessages.id, messageId)).get(),
+      );
 
       if (!msgRow) {
         return yield* Effect.fail(
@@ -603,13 +601,15 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 
       // Prevent deleting the thread's first message via this endpoint — those
       // carry the thread-level content and should be removed by deleteThread.
-      const first = db
-        .select({ id: threadMessages.id })
-        .from(threadMessages)
-        .where(eq(threadMessages.threadId, msgRow.threadId))
-        .orderBy(threadMessages.createdAt)
-        .limit(1)
-        .get();
+      const first = yield* tryDb("find first message", (db) =>
+        db
+          .select({ id: threadMessages.id })
+          .from(threadMessages)
+          .where(eq(threadMessages.threadId, msgRow.threadId))
+          .orderBy(threadMessages.createdAt)
+          .limit(1)
+          .get(),
+      );
 
       if (first?.id === messageId) {
         return yield* Effect.fail(
@@ -629,12 +629,9 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 
   findMessageByExternalId: (externalId) =>
     Effect.gen(function* () {
-      const { db } = yield* DbService;
-      const row = db
-        .select()
-        .from(threadMessages)
-        .where(eq(threadMessages.externalId, externalId))
-        .get();
+      const row = yield* tryDb("find message by externalId", (db) =>
+        db.select().from(threadMessages).where(eq(threadMessages.externalId, externalId)).get(),
+      );
       return row ? rowToMessage(row) : null;
     }),
 
@@ -671,12 +668,9 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 
   getHunkDecisions: (sessionId) =>
     Effect.gen(function* () {
-      const { db } = yield* DbService;
-      const rows = db
-        .select()
-        .from(hunkDecisions)
-        .where(eq(hunkDecisions.reviewSessionId, sessionId))
-        .all();
+      const rows = yield* tryDb("list hunk decisions", (db) =>
+        db.select().from(hunkDecisions).where(eq(hunkDecisions.reviewSessionId, sessionId)).all(),
+      );
       return rows.map(rowToHunkDecision);
     }),
 });

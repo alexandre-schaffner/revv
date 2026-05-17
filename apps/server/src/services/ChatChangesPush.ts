@@ -43,7 +43,7 @@
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { Context, Data, Effect, Layer } from "effect";
+import { Context, Data, Effect, Layer, Queue } from "effect";
 import { serverEnv } from "../config";
 import {
   type AiError,
@@ -54,9 +54,9 @@ import {
 import { logError } from "../logger";
 import { AiService } from "./Ai";
 import { ChatSessionService } from "./ChatSession";
-import { DbService } from "./Db";
+import type { DbService } from "./Db";
 import { GitHubService } from "./GitHub";
-import { GitHubEtagCache } from "./GitHubEtagCache";
+import type { GitHubEtagCache } from "./GitHubEtagCache";
 import { runGit, runGitBestEffort, runGitCapture, spawnGit } from "./git-runner";
 import { PrContextService } from "./PrContext";
 import { PullRequestService } from "./PullRequest";
@@ -219,6 +219,16 @@ export class ChatChangesPushService extends Context.Tag("ChatChangesPushService"
       DbService | GitHubEtagCache | SettingsService
     >;
 
+    readonly batchCherryPickAndPush: (params: {
+      readonly prId: string;
+      readonly userId: string;
+      readonly shas: readonly string[];
+    }) => Effect.Effect<
+      AttemptPushResult,
+      ChatPushError,
+      DbService | GitHubEtagCache | SettingsService
+    >;
+
     readonly isPushing: (prId: string) => boolean;
     readonly markChatStreaming: (prId: string, streaming: boolean) => void;
     readonly isChatStreaming: (prId: string) => boolean;
@@ -356,26 +366,6 @@ export const ChatChangesPushServiceLive = Layer.effect(
     const github = yield* GitHubService;
     const prService = yield* PullRequestService;
     const ai = yield* AiService;
-    const { db } = yield* DbService;
-    const etagCache = yield* GitHubEtagCache;
-    const settingsService = yield* SettingsService;
-
-    /**
-     * Provide both layer-level services to an Effect so it can be
-     * `runPromise`-d from imperative async code (the SSE stream's
-     * start callback). We need both because PR meta refresh hits
-     * `getPrMeta`, which depends on `GitHubEtagCache` AND `DbService`.
-     */
-    const runWithDeps = <A, E>(
-      eff: Effect.Effect<A, E, DbService | GitHubEtagCache | SettingsService>,
-    ): Promise<A> =>
-      Effect.runPromise(
-        eff.pipe(
-          Effect.provideService(DbService, { db }),
-          Effect.provideService(GitHubEtagCache, etagCache),
-          Effect.provideService(SettingsService, settingsService),
-        ),
-      );
 
     // Per-PR push lock — refuses overlap.
     const inFlight = new Set<string>();
@@ -1138,160 +1128,170 @@ export const ChatChangesPushServiceLive = Layer.effect(
             ),
           );
 
-        // Build the SSE stream. The push step at the end runs an
-        // inner Effect.runPromise; we provide the layer services
-        // captured at construction time. We need to handle errors
-        // imperatively here because we're crossing the Effect/Promise
-        // boundary.
-        const ctxRef = ctx;
-        const stream = new ReadableStream<ResolvePushFrame>({
-          start: async (controller) => {
-            const finalize = () => {
-              inFlight.delete(params.prId);
-            };
+        const queue = yield* Queue.unbounded<ResolvePushFrame>();
 
-            const failAndClose = async (msg: string) => {
-              try {
-                await runGitBestEffort(["merge", "--abort"], ctxRef.session.worktreePath, 15_000);
-              } catch {
-                /* swallow — we're already in failure handling */
+        yield* Effect.forkDaemon(
+          Effect.gen(function* () {
+            yield* Queue.offer(queue, {
+              kind: "status",
+              message: `Re-running merge into ${ctx.pr.sourceBranch}...`,
+            });
+            yield* Queue.offer(queue, { kind: "conflict-files", files: conflictFiles });
+            yield* Queue.offer(queue, {
+              kind: "status",
+              message: "Asking the agent to resolve conflicts and run git merge --continue.",
+            });
+
+            const reader = agentStream.getReader();
+
+            const readNext = (): Effect.Effect<
+              { done: false; value: unknown } | { done: true },
+              never
+            > =>
+              Effect.tryPromise({
+                try: () =>
+                  reader.read() as Promise<{ done: false; value: unknown } | { done: true }>,
+                catch: () => ({ done: true }) as { done: true },
+              }).pipe(Effect.orElseSucceed(() => ({ done: true }) as { done: true }));
+
+            let chunk = yield* readNext();
+            while (!chunk.done) {
+              const value = chunk.value as { kind: string; [key: string]: unknown };
+              if (value.kind === "text") {
+                yield* Queue.offer(queue, { kind: "agent-text", data: value.data as string });
+              } else if (value.kind === "activity") {
+                yield* Queue.offer(queue, {
+                  kind: "agent-activity",
+                  activityKind: value.activityKind as string,
+                  toolName: (value.toolName ?? null) as string | null,
+                  summary: value.summary as string,
+                  ...(value.payload !== undefined ? { payload: value.payload } : {}),
+                });
               }
-              try {
-                await Effect.runPromise(
-                  restoreToAgentBranch({
-                    worktreePath: ctxRef.session.worktreePath,
-                    branchName: ctxRef.session.branchName,
-                  }),
-                );
-              } catch {
-                /* same */
-              }
-              controller.enqueue({
+              chunk = yield* readNext();
+            }
+
+            if (isMergeInProgress(ctx.session.worktreePath)) {
+              yield* Effect.promise(() =>
+                runGitBestEffort(["merge", "--abort"], ctx.session.worktreePath, 15_000).then(
+                  () => undefined,
+                ),
+              );
+              yield* restoreToAgentBranch({
+                worktreePath: ctx.session.worktreePath,
+                branchName: ctx.session.branchName,
+              });
+              yield* Queue.offer(queue, {
                 kind: "result",
                 status: "failed",
-                message: msg,
+                message: "Agent finished but the merge is still in conflict. Aborting.",
               });
-              controller.close();
-              finalize();
-            };
+              return;
+            }
 
+            const cleanCheck = yield* Effect.tryPromise({
+              try: () => workingTreeIsClean(ctx.session.worktreePath),
+              catch: (err) => ({ clean: false, output: String(err) }),
+            });
+            if (!cleanCheck.clean) {
+              yield* Effect.promise(() =>
+                runGitBestEffort(["merge", "--abort"], ctx.session.worktreePath, 15_000).then(
+                  () => undefined,
+                ),
+              );
+              yield* restoreToAgentBranch({
+                worktreePath: ctx.session.worktreePath,
+                branchName: ctx.session.branchName,
+              });
+              yield* Queue.offer(queue, {
+                kind: "result",
+                status: "failed",
+                message: `Worktree has uncommitted changes after agent run:\n${cleanCheck.output}`,
+              });
+              return;
+            }
+
+            yield* Queue.offer(queue, { kind: "status", message: "Merge resolved. Pushing..." });
+
+            const pushed = yield* completePush({
+              pr: {
+                id: ctx.pr.id,
+                externalId: ctx.pr.externalId,
+                sourceBranch: ctx.pr.sourceBranch,
+              },
+              repo: { fullName: ctx.repo.fullName },
+              token: ctx.token,
+              session: {
+                id: ctx.session.id,
+                worktreePath: ctx.session.worktreePath,
+                branchName: ctx.session.branchName,
+              },
+              authedUrl,
+              expectedRemoteSha,
+              aheadCount: ctx.aheadCount,
+            });
+
+            if (pushed.status === "pushed") {
+              yield* Queue.offer(queue, {
+                kind: "result",
+                status: "pushed",
+                newSha: pushed.newSha,
+                pushedCommits: pushed.pushedCommits,
+                branch: pushed.branch,
+              });
+            } else if (pushed.status === "remote-changed") {
+              yield* Queue.offer(queue, {
+                kind: "result",
+                status: "remote-changed",
+                branch: pushed.branch,
+              });
+            } else {
+              yield* Queue.offer(queue, {
+                kind: "result",
+                status: "failed",
+                message: "Unexpected push outcome.",
+              });
+            }
+          }).pipe(
+            Effect.catchAll((err) =>
+              Effect.gen(function* () {
+                yield* Effect.promise(() =>
+                  runGitBestEffort(["merge", "--abort"], ctx.session.worktreePath, 15_000).then(
+                    () => undefined,
+                  ),
+                );
+                yield* restoreToAgentBranch({
+                  worktreePath: ctx.session.worktreePath,
+                  branchName: ctx.session.branchName,
+                });
+                yield* Queue.offer(queue, {
+                  kind: "result",
+                  status: "failed",
+                  message: String(err),
+                });
+              }),
+            ),
+            Effect.ensuring(
+              Effect.gen(function* () {
+                yield* Queue.shutdown(queue).pipe(Effect.catchAll(() => Effect.void));
+                yield* releasePush(params.prId);
+              }),
+            ),
+          ),
+        );
+
+        return new ReadableStream<ResolvePushFrame>({
+          async start(controller) {
             try {
-              controller.enqueue({
-                kind: "status",
-                message: `Re-running merge into ${ctxRef.pr.sourceBranch}...`,
-              });
-              controller.enqueue({
-                kind: "conflict-files",
-                files: conflictFiles,
-              });
-              controller.enqueue({
-                kind: "status",
-                message: "Asking the agent to resolve conflicts and run git merge --continue.",
-              });
-
-              const reader = agentStream.getReader();
               while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                if (value.kind === "text") {
-                  controller.enqueue({
-                    kind: "agent-text",
-                    data: value.data,
-                  });
-                } else if (value.kind === "activity") {
-                  const frame: ResolvePushFrame = {
-                    kind: "agent-activity",
-                    activityKind: value.activityKind,
-                    toolName: value.toolName,
-                    summary: value.summary,
-                    ...(value.payload !== undefined ? { payload: value.payload } : {}),
-                  };
-                  controller.enqueue(frame);
-                }
+                const frame = await Effect.runPromise(Queue.take(queue));
+                controller.enqueue(frame);
               }
-
-              if (isMergeInProgress(ctxRef.session.worktreePath)) {
-                await failAndClose("Agent finished but the merge is still in conflict. Aborting.");
-                return;
-              }
-              const cleanCheck = await workingTreeIsClean(ctxRef.session.worktreePath);
-              if (!cleanCheck.clean) {
-                await failAndClose(
-                  `Worktree has uncommitted changes after agent run:\n${cleanCheck.output}`,
-                );
-                return;
-              }
-
-              controller.enqueue({
-                kind: "status",
-                message: "Merge resolved. Pushing...",
-              });
-
-              // Inner push. Errors throw out of runPromise; we
-              // handle them as failed-result frames.
-              const pushed = await runWithDeps(
-                completePush({
-                  pr: {
-                    id: ctxRef.pr.id,
-                    externalId: ctxRef.pr.externalId,
-                    sourceBranch: ctxRef.pr.sourceBranch,
-                  },
-                  repo: { fullName: ctxRef.repo.fullName },
-                  token: ctxRef.token,
-                  session: {
-                    id: ctxRef.session.id,
-                    worktreePath: ctxRef.session.worktreePath,
-                    branchName: ctxRef.session.branchName,
-                  },
-                  authedUrl,
-                  expectedRemoteSha,
-                  aheadCount: ctxRef.aheadCount,
-                }),
-              ).catch((err: unknown) => {
-                logError(
-                  "chat-push",
-                  "completePush failed:",
-                  err instanceof Error ? err.message : String(err),
-                );
-                return null;
-              });
-
-              if (pushed === null) {
-                controller.enqueue({
-                  kind: "result",
-                  status: "failed",
-                  message: "Push failed. See server logs.",
-                });
-              } else if (pushed.status === "pushed") {
-                controller.enqueue({
-                  kind: "result",
-                  status: "pushed",
-                  newSha: pushed.newSha,
-                  pushedCommits: pushed.pushedCommits,
-                  branch: pushed.branch,
-                });
-              } else if (pushed.status === "remote-changed") {
-                controller.enqueue({
-                  kind: "result",
-                  status: "remote-changed",
-                  branch: pushed.branch,
-                });
-              } else {
-                controller.enqueue({
-                  kind: "result",
-                  status: "failed",
-                  message: "Unexpected push outcome.",
-                });
-              }
+            } catch {
               controller.close();
-              finalize();
-            } catch (err) {
-              await failAndClose(err instanceof Error ? err.message : String(err));
             }
           },
         });
-
-        return stream;
       });
 
     const cherryPickAndPush = (params: {
@@ -1421,10 +1421,314 @@ export const ChatChangesPushServiceLive = Layer.effect(
         }).pipe(Effect.ensuring(releasePush(params.prId)));
       });
 
+    // After cherry-picking N commits, rebuild the agent branch on top of the
+    // new source-branch tip. Using `prHeadSha` (the session baseline) as the
+    // rebase upstream replays every agent commit; git skips the cherry-picked
+    // ones automatically via patch-id detection.
+    const rebaseAgentBranchAfterBatchCherryPick = (params: {
+      worktreePath: string;
+      branchName: string;
+      newTip: string;
+      prHeadSha: string;
+      oldAgentTip: string;
+    }) =>
+      Effect.promise(async () => {
+        const result = await spawnGit(
+          ["rebase", "--onto", params.newTip, params.prHeadSha, params.oldAgentTip],
+          { cwd: params.worktreePath, timeoutMs: 60_000, captureStdout: false },
+        );
+
+        if (result.timedOut || result.exitCode !== 0) {
+          await runGitBestEffort(["rebase", "--abort"], params.worktreePath, 15_000);
+          await runGitBestEffort(
+            ["branch", "-f", params.branchName, params.oldAgentTip],
+            params.worktreePath,
+            5_000,
+          );
+          await runGitBestEffort(["checkout", params.branchName], params.worktreePath, 10_000);
+          logError(
+            "batch-cherry-pick",
+            "rebase of remaining agent commits failed; restored agent branch to pre-cherry-pick tip",
+          );
+          return;
+        }
+
+        const rebasedTipOut = await runGitCapture(
+          ["rev-parse", "HEAD"],
+          params.worktreePath,
+          5_000,
+        ).catch(() => null);
+        const rebasedTip = rebasedTipOut?.trim();
+        if (!rebasedTip || !isValidSha(rebasedTip)) {
+          await runGitBestEffort(
+            ["branch", "-f", params.branchName, params.oldAgentTip],
+            params.worktreePath,
+            5_000,
+          );
+          await runGitBestEffort(["checkout", params.branchName], params.worktreePath, 10_000);
+          logError(
+            "batch-cherry-pick",
+            "could not resolve HEAD after rebase; restored agent branch to pre-cherry-pick tip",
+          );
+          return;
+        }
+
+        await runGit(["branch", "-f", params.branchName, rebasedTip], params.worktreePath);
+        await runGit(["checkout", params.branchName], params.worktreePath);
+      });
+
+    const batchCherryPickAndPush = (params: {
+      readonly prId: string;
+      readonly userId: string;
+      readonly shas: readonly string[];
+    }): Effect.Effect<
+      AttemptPushResult,
+      ChatPushError,
+      DbService | GitHubEtagCache | SettingsService
+    > =>
+      Effect.gen(function* () {
+        if (params.shas.length === 0) {
+          return yield* Effect.fail(new NoChangesError({ prId: params.prId }));
+        }
+        for (const sha of params.shas) {
+          if (!isValidSha(sha)) {
+            return yield* Effect.fail(new GitOperationError({ message: `Invalid SHA: ${sha}` }));
+          }
+        }
+
+        yield* beginPush(params.prId);
+        return yield* Effect.gen(function* () {
+          const ctx = yield* preflight(params);
+          const gitHost = yield* resolveGitHost;
+          const authedUrl = `https://x-access-token:${ctx.token}@${gitHost}/${ctx.repo.fullName}.git`;
+
+          // Resolve and order the SHAs chronologically (oldest first) so the
+          // cherry-pick sequence matches the natural commit order on the
+          // agent branch.
+          const orderedListOut = yield* Effect.tryPromise({
+            try: () =>
+              runGitCapture(
+                ["rev-list", "--reverse", `${ctx.session.prHeadSha}..${ctx.session.branchName}`],
+                ctx.session.worktreePath,
+                10_000,
+              ),
+            catch: (err) =>
+              new GitOperationError({
+                message: err instanceof Error ? err.message : String(err),
+                cause: err,
+              }),
+          });
+          const orderedAll = orderedListOut
+            .trim()
+            .split("\n")
+            .map((s) => s.trim())
+            .filter(Boolean);
+
+          // Map requested SHAs (possibly abbreviated) to full SHAs and
+          // intersect with the ordered list to preserve chronological order.
+          const requestedFullShas = new Set<string>();
+          for (const sha of params.shas) {
+            const full = yield* Effect.tryPromise({
+              try: () => runGitCapture(["rev-parse", sha], ctx.session.worktreePath, 5_000),
+              catch: (err) =>
+                new GitOperationError({
+                  message: err instanceof Error ? err.message : String(err),
+                  cause: err,
+                }),
+            });
+            const trimmed = full.trim();
+            if (!isValidSha(trimmed)) {
+              return yield* Effect.fail(
+                new GitOperationError({ message: `Cannot resolve SHA: ${sha}` }),
+              );
+            }
+            requestedFullShas.add(trimmed);
+          }
+          const orderedSelected = orderedAll.filter((s) => requestedFullShas.has(s));
+          if (orderedSelected.length === 0) {
+            return yield* Effect.fail(new NoChangesError({ prId: params.prId }));
+          }
+
+          const expectedRemoteSha = yield* Effect.tryPromise({
+            try: () => lsRemoteHead(ctx.session.worktreePath, authedUrl, ctx.pr.sourceBranch),
+            catch: (err) =>
+              new GitOperationError({
+                message: err instanceof Error ? err.message : String(err),
+                cause: err,
+              }),
+          });
+
+          yield* fetchSourceBranch({
+            worktreePath: ctx.session.worktreePath,
+            authedUrl,
+            sourceBranch: ctx.pr.sourceBranch,
+          });
+
+          const savedAgentTipOut = yield* Effect.tryPromise({
+            try: () =>
+              runGitCapture(["rev-parse", ctx.session.branchName], ctx.session.worktreePath, 5_000),
+            catch: (err) =>
+              new GitOperationError({
+                message: err instanceof Error ? err.message : String(err),
+                cause: err,
+              }),
+          });
+          const savedAgentTip = savedAgentTipOut.trim();
+
+          // Checkout source branch locally so cherry-picks land on it.
+          yield* Effect.tryPromise({
+            try: () =>
+              runGit(
+                [
+                  "checkout",
+                  "-B",
+                  ctx.pr.sourceBranch,
+                  `refs/remotes/origin/${ctx.pr.sourceBranch}`,
+                ],
+                ctx.session.worktreePath,
+              ),
+            catch: (err) =>
+              new GitOperationError({
+                message: err instanceof Error ? err.message : String(err),
+                cause: err,
+              }),
+          });
+
+          // Cherry-pick each selected commit in chronological order.
+          for (const sha of orderedSelected) {
+            const cpResult = yield* Effect.tryPromise({
+              try: () =>
+                spawnGit(["cherry-pick", sha], {
+                  cwd: ctx.session.worktreePath,
+                  timeoutMs: 60_000,
+                  captureStdout: false,
+                }),
+              catch: (err) =>
+                new GitOperationError({
+                  message: err instanceof Error ? err.message : String(err),
+                  cause: err,
+                }),
+            });
+            if (cpResult.timedOut || cpResult.exitCode !== 0) {
+              yield* Effect.promise(() =>
+                runGitBestEffort(["cherry-pick", "--abort"], ctx.session.worktreePath, 15_000),
+              );
+              yield* restoreToAgentBranch({
+                worktreePath: ctx.session.worktreePath,
+                branchName: ctx.session.branchName,
+              });
+              return yield* Effect.fail(
+                new GitOperationError({
+                  message: `Cherry-pick failed on ${sha.slice(0, 8)}: ${cpResult.stderrTail}`,
+                }),
+              );
+            }
+          }
+
+          // Push the source branch (now containing the cherry-picked commits)
+          // and rebuild the agent branch on top of the new tip, dropping the
+          // cherry-picked commits via git's patch-id skip.
+          const pushResult = yield* Effect.tryPromise({
+            try: () =>
+              expectedRemoteSha
+                ? pushWithLease(
+                    ctx.session.worktreePath,
+                    authedUrl,
+                    "HEAD",
+                    ctx.pr.sourceBranch,
+                    expectedRemoteSha,
+                  )
+                : pushFastForward(ctx.session.worktreePath, authedUrl, "HEAD", ctx.pr.sourceBranch),
+            catch: (err) =>
+              new GitOperationError({
+                message: err instanceof Error ? err.message : String(err),
+                cause: err,
+              }),
+          });
+
+          if (!pushResult.ok) {
+            const stderr = pushResult.stderr.toLowerCase();
+            yield* restoreToAgentBranch({
+              worktreePath: ctx.session.worktreePath,
+              branchName: ctx.session.branchName,
+            });
+            if (
+              stderr.includes("stale info") ||
+              stderr.includes("non-fast-forward") ||
+              stderr.includes("rejected") ||
+              stderr.includes("fetch first")
+            ) {
+              return {
+                status: "remote-changed" as const,
+                branch: ctx.pr.sourceBranch,
+              };
+            }
+            if (
+              stderr.includes("authentication") ||
+              stderr.includes("403") ||
+              stderr.includes("401")
+            ) {
+              return yield* Effect.fail(
+                new GitHubAuthError({
+                  message: "git push rejected: token expired or insufficient scope",
+                }),
+              );
+            }
+            return yield* Effect.fail(
+              new PushRejectedError({
+                message: pushResult.stderr || "git push failed",
+              }),
+            );
+          }
+
+          const newTipOut = yield* Effect.tryPromise({
+            try: () => runGitCapture(["rev-parse", "HEAD"], ctx.session.worktreePath, 10_000),
+            catch: (err) =>
+              new GitOperationError({
+                message: err instanceof Error ? err.message : String(err),
+                cause: err,
+              }),
+          });
+          const newTip = newTipOut.trim();
+          if (!isValidSha(newTip)) {
+            return yield* Effect.fail(
+              new GitOperationError({
+                message: `invalid new tip from rev-parse: ${newTip}`,
+              }),
+            );
+          }
+
+          yield* rebaseAgentBranchAfterBatchCherryPick({
+            worktreePath: ctx.session.worktreePath,
+            branchName: ctx.session.branchName,
+            newTip,
+            prHeadSha: ctx.session.prHeadSha,
+            oldAgentTip: savedAgentTip,
+          });
+
+          yield* finalizeStateAfterPush({
+            pr: { id: ctx.pr.id },
+            repo: { fullName: ctx.repo.fullName },
+            prExternalId: ctx.pr.externalId,
+            token: ctx.token,
+            sessionId: ctx.session.id,
+            newTip,
+          });
+
+          return {
+            status: "pushed" as const,
+            newSha: newTip,
+            pushedCommits: orderedSelected.length,
+            branch: ctx.pr.sourceBranch,
+          };
+        }).pipe(Effect.ensuring(releasePush(params.prId)));
+      });
+
     return {
       attemptMergeAndPush,
       resolveConflictsAndPush,
       cherryPickAndPush,
+      batchCherryPickAndPush,
       isPushing: (prId: string) => inFlight.has(prId),
       markChatStreaming: (prId: string, streaming: boolean) => {
         if (streaming) streamingChats.add(prId);

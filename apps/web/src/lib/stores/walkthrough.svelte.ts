@@ -189,6 +189,17 @@ export function updateEntry(prId: string, updater: (e: WalkthroughEntry) => void
 
 // ── Getters ─────────────────────────────────────────────────────────────────
 
+/**
+ * Resolve the active PR's walkthrough entry, or undefined if no entry exists.
+ * Reads through the `_active` $derived signal so cross-module callers
+ * (notably walkthrough-ui-state.svelte.ts) inherit the same reactive
+ * dependency tree as in-module getters. See the comment on `_active` above
+ * for why a plain function wrapper would break reactivity.
+ */
+export function getActiveEntry(): WalkthroughEntry | undefined {
+  return _active;
+}
+
 export function getBlocks(): WalkthroughBlock[] {
   return _active?.blocks ?? [];
 }
@@ -252,17 +263,6 @@ export function getSentiment(): string | null {
 /** Current pointer into the A→B→C→D content pipeline. */
 export function getLastCompletedPhase(): WalkthroughPipelinePhase {
   return _active?.lastCompletedPhase ?? "none";
-}
-/**
- * True when the active PR has a walkthrough the server can resume from where
- * it left off. Gates the Resume floating button.
- */
-export function getCanResume(): boolean {
-  const e = _active;
-  if (!e) return false;
-  if (e.isStreaming) return false;
-  if (e.lastCompletedPhase === "D") return false;
-  return e.summary !== null || e.blocks.length > 0;
 }
 /**
  * True when this walkthrough was marked `superseded` by the server.
@@ -352,6 +352,17 @@ export function applyEvents(prId: string, events: WalkthroughStreamEvent[]): voi
           entry.doneReceived = true;
           entry.isStreaming = false;
           entry.tokenUsage = coerceTokenUsage(event.data.tokenUsage);
+          // Promote to phase D when the content shows full pipeline completion.
+          // The phase-tracking events stop at C in the common case (the final
+          // rate_axis call closes Phase D server-side but the agent often
+          // doesn't emit a trailing phase:advanced before `done`). Without
+          // this, getWalkthroughUiState() would classify a complete stream
+          // as resumable until the next hydration. Mirrors the hydration
+          // fallback in walkthrough-stream.svelte.ts (`?? "D"`) and the
+          // local-mark gate in onWalkthroughComplete().
+          if (entry.summary !== null && entry.blocks.length > 0 && entry.ratings.length === 9) {
+            entry.lastCompletedPhase = "D";
+          }
           break;
         case "usage":
           entry.tokenUsage = coerceTokenUsage(event.data.tokenUsage);
@@ -437,6 +448,13 @@ export function applyEvents(prId: string, events: WalkthroughStreamEvent[]): voi
     }
 
     if (newBlocks) {
+      // Sort by canonical `order` (semanticStepIndex*10000 + stepIndex) so a
+      // chat-edit `add_block` with an explicit middle `step_index` lands in
+      // its true position rather than at the end of the array. Live
+      // generation already emits in order, so this is a no-op for streams —
+      // it only matters for the post-completion chat-edit carve-out
+      // (invariant #7), where blocks can arrive out of step_index order.
+      newBlocks.sort((a, b) => a.order - b.order);
       entry.blocks = newBlocks;
     }
   });

@@ -1,7 +1,11 @@
-import type { AiAgent, UserSettings } from "@revv/shared";
+import type { AgentAvailability, AiAgent, UserSettings } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { api } from "$lib/api/client";
-import type { ModelOption } from "$lib/constants/models";
+import {
+  getDefaultModel,
+  getDefaultSuggestionsModel,
+  type ModelOption,
+} from "$lib/constants/models";
 import { invalidateSuggestions } from "$lib/stores/suggestions.svelte";
 import { authHeaders } from "$lib/utils/session-token";
 
@@ -97,6 +101,7 @@ export function reset(): void {
   modelsByAgent = { opencode: [], claude: [] };
   modelsLoadedByAgent = { opencode: false, claude: false };
   modelsInFlight = {};
+  agentAvailability = null;
 }
 
 /**
@@ -135,4 +140,59 @@ export async function fetchModels(agent: AiAgent): Promise<ModelOption[]> {
  */
 export async function fetchAllModels(): Promise<void> {
   await Promise.all([fetchModels("opencode"), fetchModels("claude")]);
+}
+
+/**
+ * Build the three-field settings partial used when the agent flips:
+ * `aiAgent` + `aiModel` (re-picked against the new agent's catalog) +
+ * `aiSuggestionsModel` (low-cost default for the new agent).
+ *
+ * Centralises the cascade logic that lived in AgentSelector and
+ * SettingsModal so the onboarding agent step doesn't have to copy it a
+ * third time. Side-effect free — callers pass the result to
+ * `updateSettings()`.
+ */
+export function cascadeAgentChange(agent: AiAgent): {
+  aiAgent: AiAgent;
+  aiModel: string;
+  aiSuggestionsModel: string;
+} {
+  const cached = getAvailableModels(agent);
+  const fallback = getDefaultModel(agent);
+  const picked =
+    cached.length === 0
+      ? fallback
+      : // biome-ignore lint/style/noNonNullAssertion: length > 0 guarantees [0] exists
+        (cached.find((m) => m.value === fallback)?.value ?? cached[0]!.value);
+  return {
+    aiAgent: agent,
+    aiModel: picked,
+    aiSuggestionsModel: getDefaultSuggestionsModel(agent),
+  };
+}
+
+// ── Agent availability ──────────────────────────────────────────────────────
+// Cached snapshot of which CLI agents are installed locally. Used by the
+// onboarding agent step to decide between the picker and the install
+// prompt. Stays null until `fetchAgentAvailability()` runs, since first
+// render has nothing useful to show.
+
+let agentAvailability = $state<AgentAvailability | null>(null);
+
+export function getAgentAvailability(): AgentAvailability | null {
+  return agentAvailability;
+}
+
+export async function fetchAgentAvailability(): Promise<AgentAvailability | null> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/onboarding/agent-availability`, {
+      headers: authHeaders(),
+    });
+    if (!res.ok) return agentAvailability;
+    const data = (await res.json()) as AgentAvailability;
+    agentAvailability = data;
+    return data;
+  } catch {
+    return agentAvailability;
+  }
 }

@@ -1,20 +1,23 @@
+import type { InstallEvent } from "@revv/shared";
 import { eq } from "drizzle-orm";
+import { Effect } from "effect";
 import { Elysia } from "elysia";
 import { db } from "../auth";
 import { user } from "../db/schema";
+import { AppRuntime } from "../runtime";
+import { OnboardingService } from "../services/Onboarding";
 import { handleAppError, withAuth } from "./middleware";
+import { createSseStream, sseHeaders } from "./reviews/sse";
 
 /**
- * Onboarding gate endpoint.
+ * Onboarding routes.
  *
- * The frontend's `OnboardingGate` shows the multi-step welcome flow whenever
- * the authenticated user has no `onboardedAt` timestamp. The `complete`
- * action sets it to the current time and returns the updated value so the
- * gate can flip into the app shell without waiting for a session refetch.
- *
- * Idempotent: re-calling on an already-onboarded user is a no-op (returns
- * the existing timestamp). Onboarding never "un-completes" — to re-run the
- * flow during development, clear the column directly in SQLite.
+ * - `/complete` and `/reset` are the gate flips for the `onboardedAt`
+ *   column the SvelteKit `OnboardingGate` reads.
+ * - `/agent-availability` / `/install-opencode` are the agent-step plumbing:
+ *   detect which CLI agents are installed and (if neither is) run the
+ *   official opencode installer with a streamed log so the user can see
+ *   progress without leaving the onboarding wizard.
  */
 export const onboardingRoutes = new Elysia({ prefix: "/api/onboarding" })
   .use(withAuth)
@@ -58,4 +61,75 @@ export const onboardingRoutes = new Elysia({ prefix: "/api/onboarding" })
     } catch (e) {
       return handleAppError(e, ctx);
     }
+  })
+  /**
+   * Snapshot of which CLI agents are present on PATH (or pinned via the
+   * LaunchAgent env vars). Used by the agent-selection onboarding step to
+   * decide between the picker and the install-opencode prompt.
+   */
+  .get("/agent-availability", async (ctx) => {
+    try {
+      return await AppRuntime.runPromise(
+        Effect.flatMap(OnboardingService, (s) => s.detectAgents()),
+      );
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  })
+  /**
+   * Kick off (or join) the opencode install job. Idempotent at the
+   * process-lifetime level — concurrent requests get the same `jobId`.
+   */
+  .post("/install-opencode", async (ctx) => {
+    try {
+      return await AppRuntime.runPromise(
+        Effect.flatMap(OnboardingService, (s) => s.startInstallOpencode()),
+      );
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  })
+  /**
+   * SSE stream of `InstallEvent`s. Replays the log captured up to the
+   * subscription point and then forwards live events until `done`. Closes
+   * the stream after `done` (success or failure).
+   */
+  .get("/install-opencode/stream", async (ctx) => {
+    const jobId = ctx.query?.jobId;
+    if (typeof jobId !== "string" || jobId.length === 0) {
+      ctx.set.status = 400;
+      return { error: "Missing jobId" };
+    }
+
+    const { stream, writer, stopHeartbeat, onCancel } = createSseStream();
+    onCancel(() => stopHeartbeat());
+
+    const send = (event: InstallEvent): void => {
+      writer.send(event);
+      if (event.type === "done") writer.sendDone();
+    };
+
+    try {
+      const sub = await AppRuntime.runPromise(
+        Effect.flatMap(OnboardingService, (s) => s.subscribe(jobId, send)),
+      );
+
+      if (!sub.found) {
+        writer.send({
+          type: "done",
+          success: false,
+          error: "Unknown install job",
+        } satisfies InstallEvent);
+        writer.sendDone();
+        return new Response(stream, { headers: sseHeaders });
+      }
+
+      onCancel(sub.unsubscribe);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Subscription failed";
+      writer.send({ type: "done", success: false, error: message } satisfies InstallEvent);
+      writer.sendDone();
+    }
+
+    return new Response(stream, { headers: sseHeaders });
   });

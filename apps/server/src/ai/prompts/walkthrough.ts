@@ -74,6 +74,13 @@ export function buildWalkthroughPrompt(
   if (params.pr.body) {
     lines.push("", "### Description", params.pr.body);
   }
+  // Commit history is intentionally NOT inlined here. The orchestrator
+  // persists it on the walkthrough row at job start; the agent fetches it
+  // lazily via the `get_commit_history` MCP read tool when it's about to
+  // open the required "How we got here" journey chapter (chapter 0). This
+  // keeps the prompt token-bounded on long PRs (up to 300 commits) and
+  // resume reruns of the prompt cheap.
+
   lines.push("", "### Changed Files (diff — you can read full file contents with your tools)", "");
 
   let approxTokens = 0;
@@ -94,9 +101,10 @@ export function buildWalkthroughPrompt(
 
   lines.push(
     "",
-    "## First action",
+    "## First actions",
     "",
-    "Call `get_walkthrough_state` before any other tool. The response will tell you whether this is a fresh run or a resume, and exactly which phase + steps are persisted. Use it to decide where to pick up. Never assume you are starting from scratch.",
+    "1. Call `get_walkthrough_state` before any other tool. The response will tell you whether this is a fresh run or a resume, and exactly which phase + steps are persisted. Use it to decide where to pick up. Never assume you are starting from scratch.",
+    "2. Call `get_repo_context` once during Phase A. It returns recent daily/weekly project recaps for this repository, which let you ground your overview in what shipped recently, recurring themes, and risk patterns. Empty list = no prior context, proceed without. Do not cite recap themes unless directly relevant to this PR — no padding.",
   );
 
   if (continuation) {

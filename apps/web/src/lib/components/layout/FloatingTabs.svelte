@@ -267,7 +267,7 @@ function isDividerHidden(index: number): boolean {
 		border: none;
 		border-radius: 9999px;
 		background: var(--color-warning);
-		color: #fff;
+		color: var(--color-warning-fg);
 		font-family: inherit;
 		font-size: 11px;
 		font-weight: 500;

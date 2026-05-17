@@ -20,11 +20,8 @@ import {
   getActiveFilePath,
   getDiffScrollResetSeq,
   getPrScrollPosition,
-  getRepoFileContent,
-  getRepoFileError,
+  getRepoFile,
   getRepoFilePath,
-  getRepoFileSize,
-  getRepoFileStatus,
   setActiveFilePath,
   setDiffMode,
   setPrScrollPosition,
@@ -73,15 +70,12 @@ const activeFileName = $derived.by((): string => {
 // the PR diff, so DiffViewer has nothing to render. We mirror the path
 // the loader is fetching so the viewer doesn't flash stale content while
 // a new request is in flight.
-const repoFileStatus = $derived(getRepoFileStatus());
+const repoFile = $derived(getRepoFile());
 const repoFilePath = $derived(getRepoFilePath());
-const repoFileContent = $derived(getRepoFileContent());
-const repoFileSize = $derived(getRepoFileSize());
-const repoFileError = $derived(getRepoFileError());
 const showFileViewer = $derived(
   activeFilePath !== null &&
     activeFile === null &&
-    (repoFilePath === activeFilePath || repoFileStatus === "loading"),
+    (repoFilePath === activeFilePath || repoFile.status === "loading"),
 );
 
 // ── Token hover state ────────────────────────────────────────────────────
@@ -463,11 +457,11 @@ const panel = $derived(getActivePanel());
 			</div>
 			<FileViewer
 				path={activeFilePath}
-				content={repoFileContent}
-				isBinary={repoFileStatus === 'binary'}
-				size={repoFileSize}
-				status={repoFileStatus}
-				errorMessage={repoFileError}
+				content={repoFile.status === "ok" && repoFile.data.status === "ready" ? repoFile.data.content : ""}
+				isBinary={repoFile.status === "ok" && repoFile.data.status === "binary"}
+				size={repoFile.status === "ok" ? ("size" in repoFile.data ? repoFile.data.size : 0) : 0}
+				status={repoFile.status === "ok" ? repoFile.data.status : repoFile.status}
+				errorMessage={repoFile.status === "error" ? repoFile.error : null}
 			/>
 		{:else}
 			<DiffViewer

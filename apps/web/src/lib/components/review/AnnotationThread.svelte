@@ -418,7 +418,7 @@ function focusOnMount(node: HTMLTextAreaElement) {
 	}
 
 	.footer-link--danger {
-		color: var(--color-danger, #ef4444);
+		color: var(--color-danger);
 	}
 
 	.footer-link--active {

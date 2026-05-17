@@ -57,6 +57,16 @@ export function checkCliAvailability(agent: CliAgent): boolean {
   return available;
 }
 
+/**
+ * Drop the cached availability result so the next `checkCliAvailability`
+ * call hits the filesystem again. Called by the install-opencode flow
+ * after a successful install — without this the TTL would mask the
+ * newly-present binary until the cache naturally expired.
+ */
+export function invalidateCliAgentCache(): void {
+  cachedCliAuth = null;
+}
+
 // ── Dynamic model listing ─────────────────────────────────────────────────────
 
 export type CliModelOption = { label: string; value: string };

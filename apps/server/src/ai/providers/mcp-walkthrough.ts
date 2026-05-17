@@ -22,6 +22,7 @@ import type {
   WsServerMessage,
 } from "@revv/shared";
 import { Effect } from "effect";
+import { WALKTHROUGH_HEARTBEAT_MS } from "../../constants";
 import type { Db } from "../../db";
 import { debug, logError } from "../../logger";
 import { AppRuntime } from "../../runtime";
@@ -30,7 +31,7 @@ import { WebSocketHub } from "../../services/WebSocketHub";
 import { buildActivity, type NormalizedAgentEvent, walkClaudeMessages } from "../agent-stream";
 import { buildWalkthroughPrompt, WALKTHROUGH_MCP_SYSTEM_PROMPT } from "../prompts/walkthrough";
 import { resolveCliBin } from "./cli-agent";
-import { createWalkthroughMcpServer } from "./walkthrough-tools";
+import { createWalkthroughMcpServer, TOOL_SPECS } from "./walkthrough-tools";
 
 // ── Continuation context ─────────────────────────────────────────────────────
 
@@ -55,28 +56,30 @@ const EXPLORATION_TOOLS = new Set(["Read", "Grep", "Glob", "Bash"]);
 const WALKTHROUGH_MCP_SERVER = "revv-walkthrough";
 const MCP_TOOL_PREFIX = `mcp__${WALKTHROUGH_MCP_SERVER}__`;
 
-// New phase-bound tool set. See walkthrough-tools.ts TOOL_SPECS for the
-// canonical list; the names here must match the handler registrations.
-// Forgetting an entry here is silent — the SDK refuses to surface the tool
-// to the model, the agent stalls (e.g. cannot leave Phase A because
-// `add_semantic_step` is invisible), and there is no error in any log to
-// point at the gap. Keep this list in sync with TOOL_SPECS.
-const ALLOWED_TOOLS = [
+// ── Allowed tools (derived from TOOL_SPECS) ─────────────────────────────────
+//
+// Derived from TOOL_SPECS so new tool additions are always reflected here.
+// A runtime assertion checks the count — a new spec that slips in without
+// being added here will cause a clear error at startup rather than silently
+// stalling the agent (the old hazard this list had).
+
+const ALLOWED_TOOLS: readonly string[] = [
   // Built-in exploration
   "Read",
   "Grep",
   "Glob",
-  // MCP walkthrough tools (A→B→C→D)
-  `${MCP_TOOL_PREFIX}get_walkthrough_state`,
-  `${MCP_TOOL_PREFIX}set_overview`,
-  `${MCP_TOOL_PREFIX}add_semantic_step`,
-  `${MCP_TOOL_PREFIX}add_diff_step`,
-  `${MCP_TOOL_PREFIX}flag_issue`,
-  `${MCP_TOOL_PREFIX}add_issue_comment`,
-  `${MCP_TOOL_PREFIX}set_sentiment`,
-  `${MCP_TOOL_PREFIX}rate_axis`,
-  `${MCP_TOOL_PREFIX}complete_walkthrough`,
-];
+  // MCP tools — derived from TOOL_SPECS (11 specs → 11 entries)
+  ...TOOL_SPECS.map((s) => `${MCP_TOOL_PREFIX}${s.name}`),
+] as const;
+
+// Verify we have exactly 14 entries (3 built-ins + 11 MCP tools).
+// If this fails, a new TOOL_SPECS entry was added without updating ALLOWED_TOOLS.
+if (ALLOWED_TOOLS.length !== 14) {
+  throw new Error(
+    `ALLOWED_TOOLS has ${ALLOWED_TOOLS.length} entries, expected 14. ` +
+      "A new TOOL_SPECS entry was added without updating ALLOWED_TOOLS.",
+  );
+}
 
 // ── Thinking effort → Claude Agent SDK options ───────────────────────────────
 //
@@ -125,17 +128,25 @@ type Phase = "connecting" | "exploring" | "analyzing" | "writing" | "rating" | "
 
 interface PhaseMachine {
   readonly current: () => Phase;
+  /** Most recent message paired with `current()`. Used by the periodic
+   *  heartbeat (WALKTHROUGH_HEARTBEAT_MS) to re-emit a stable phase event
+   *  without UI churn. Returns a generic placeholder until the first
+   *  transition fires. */
+  readonly currentMessage: () => string;
   readonly transition: (next: Phase, message: string) => WalkthroughStreamEvent | null;
 }
 
 function createPhaseMachine(): PhaseMachine {
   let phase: Phase = "connecting";
+  let message = "Starting up...";
   return {
     current: () => phase,
-    transition: (next, message) => {
+    currentMessage: () => message,
+    transition: (next, msg) => {
       if (phase === next) return null;
       phase = next;
-      return { type: "phase", data: { phase: next, message } };
+      message = msg;
+      return { type: "phase", data: { phase: next, message: msg } };
     },
   };
 }
@@ -198,6 +209,8 @@ export function streamWalkthroughViaMCP(
     worktreePath: string;
     continuation?: ContinuationContext;
     abortController?: AbortController;
+    /** Route MCP tool events through WalkthroughJobs.emitEvent (P1). Falls back to local push if not provided. */
+    emitEvent?: (event: WalkthroughStreamEvent) => void;
   },
   model?: string,
   settings?: UserSettings,
@@ -231,12 +244,17 @@ export function streamWalkthroughViaMCP(
     );
   };
 
+  // Route MCP tool handler events through WalkthroughJobs.emitEvent when
+  // provided (P1). This makes both Claude and opencode emit from the same
+  // site. Fall back to local push for standalone/test usage.
+  const emitFn = params.emitEvent ?? push;
+
   // Shared tool handlers run with this context. No mutable "state" object
   // anymore — all state lives in the DB (doctrine invariant #1).
   const walkthroughServer = createWalkthroughMcpServer({
     db: params.db,
     walkthroughId: params.walkthroughId,
-    emit: push,
+    emit: emitFn,
     broadcastThreadEvent,
   });
 
@@ -265,6 +283,19 @@ export function streamWalkthroughViaMCP(
 
     const phaseMachine = createPhaseMachine();
 
+    // Periodic phase heartbeat — guarantees the stream guard sees an event
+    // every WALKTHROUGH_HEARTBEAT_MS while the Claude SDK query is in flight,
+    // even when the model is thinking deeply between tool calls (extended
+    // thinking can be quiet for >2 min). Re-emits the current phase + last
+    // message so the UI stays stable.
+    const heartbeatInterval = setInterval(() => {
+      if (queryDone || errorEmitted) return;
+      push({
+        type: "phase",
+        data: { phase: phaseMachine.current(), message: phaseMachine.currentMessage() },
+      });
+    }, WALKTHROUGH_HEARTBEAT_MS);
+
     try {
       const pinnedClaude = resolveCliBin("claude");
       const pathOption =
@@ -280,7 +311,7 @@ export function streamWalkthroughViaMCP(
           systemPrompt: WALKTHROUGH_MCP_SYSTEM_PROMPT,
           cwd: params.worktreePath,
           tools: ["Read", "Grep", "Glob"],
-          allowedTools: ALLOWED_TOOLS,
+          allowedTools: [...ALLOWED_TOOLS] as string[],
           mcpServers: { [WALKTHROUGH_MCP_SERVER]: walkthroughServer },
           permissionMode: "bypassPermissions",
           allowDangerouslySkipPermissions: true,
@@ -357,6 +388,7 @@ export function streamWalkthroughViaMCP(
       };
     } finally {
       clearTimeout(timeoutId);
+      clearInterval(heartbeatInterval);
     }
   })();
 

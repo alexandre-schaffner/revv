@@ -86,7 +86,7 @@ PRD-01 (Comment Persistence)         ────► foundation for everything
                    └──► PRD-06 (Polish & Ship) ──► keyboard, virtualization, offline, signing
 ```
 
-PRDs 02 and 05 were substantially reshaped during development; the originals lived as "AI Context Panel" and "Post-Review Agent" respectively. The original `02-ai-context-panel.md` and `05-post-review-agent.md` files were removed when the new direction shipped — `git log -- docs/prds/` recovers the originals if needed.
+PRDs 02 and 05 were substantially reshaped during development; the originals lived as "AI Context Panel" and "Post-Review Agent" respectively. The current files (`02-chat-agent.md`, `05-chat-driven-changes.md`) reflect what actually shipped. See `git log -- docs/prds/` for the original direction if needed.
 
 ---
 

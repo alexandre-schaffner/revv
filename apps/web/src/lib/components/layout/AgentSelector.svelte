@@ -9,10 +9,9 @@ import {
   Root as PopoverRoot,
   Trigger as PopoverTrigger,
 } from "$lib/components/ui/popover/index.js";
-import { getDefaultModel, getDefaultSuggestionsModel } from "$lib/constants/models";
 import {
+  cascadeAgentChange,
   fetchModels,
-  getAvailableModels,
   getSettings,
   updateSettings,
 } from "$lib/stores/settings.svelte";
@@ -32,35 +31,14 @@ let CurrentIcon = $derived(
   AGENT_OPTIONS.find((a) => a.value === currentAgent)?.icon ?? OpenCodeIcon,
 );
 
-/**
- * Pick a valid model for the new agent from the cached list, falling back
- * to the hardcoded default if the cache is empty. This guarantees the
- * model dropdown is in a consistent state the moment the agent changes,
- * rather than briefly showing a model name that doesn't exist in the
- * new agent's catalog.
- */
-function pickModelForAgent(value: AiAgent): string {
-  const cached = getAvailableModels(value);
-  const fallback = getDefaultModel(value);
-  if (cached.length === 0) return fallback;
-  // Prefer the default if it's in the list; otherwise the first entry.
-  // biome-ignore lint/style/noNonNullAssertion: length > 0 guarantees [0] exists
-  return cached.find((m) => m.value === fallback)?.value ?? cached[0]!.value;
-}
-
 function select(value: AiAgent) {
   // If the cache is cold (e.g. app-start prefetch hadn't completed yet),
   // kick a fetch so subsequent agent switches are race-free.
   void fetchModels(value);
-  // Re-pick `aiSuggestionsModel` so it stays valid for the new agent.
-  // Same rationale as `aiModel`: if the user is on opencode and switches
-  // to claude, an opencode-catalog model would silently fail in the
-  // suggestions provider.
-  updateSettings({
-    aiAgent: value,
-    aiModel: pickModelForAgent(value),
-    aiSuggestionsModel: getDefaultSuggestionsModel(value),
-  });
+  // `cascadeAgentChange` re-picks `aiModel` against the new agent's
+  // catalog and resets `aiSuggestionsModel` to the cheap default — same
+  // logic the onboarding agent step and settings modal share.
+  updateSettings(cascadeAgentChange(value));
   open = false;
 }
 </script>

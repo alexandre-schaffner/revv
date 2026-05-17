@@ -8,19 +8,19 @@ import { debug } from "../../logger";
 
 // ── Phase synthesis messages ────────────────────────────────────────────────
 //
-// Under the new architecture (opencode serve + HTTP MCP route), content
-// events (summary/block/issue/rating/sentiment) NO LONGER flow through the
-// provider's generator — they come from WalkthroughJobs.emitEvent fed by the
-// /mcp/walkthrough route's handlers. The opencode provider's generator now
-// mostly emits {exploration, error, done}. The Claude SDK path still emits
-// content events through the same generator because its tool handlers run
-// in-process and push into the same queue the provider drains.
-//
-// The guard's job therefore shrinks to cross-agent normalization:
+// Cross-agent normalization layer wrapping each provider's generator:
 //   - inactivity + first-event + exploration-stall timeouts,
-//   - synthesizing a terminal `done` / `error` if the inner generator ends
+//   - synthesizes a terminal `done` / `error` if the inner generator ends
 //     without one,
 //   - optional phase synthesis for providers that don't emit their own.
+//
+// On the opencode path, MCP-tool content (set_overview / add_diff_step / …)
+// runs through the HTTP MCP route and writes commit-first via
+// `WalkthroughJobs.emitEvent`, which ALSO fires a `thinking` event into the
+// provider's activity-notifier (see `WalkthroughJobs.ts:emitEvent`). That
+// notifier pushes into the same queue the guard drains, so non-exploration
+// progress IS visible to the guard — keeping the exploration-stall timer
+// honest without needing a per-path override.
 
 const PHASE_MESSAGES = {
   exploration: {

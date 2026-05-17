@@ -20,10 +20,13 @@ export interface SSEParseResult<T> {
  *
  * @param buffer - The accumulated text buffer (may contain partial frames).
  * @param parse  - Optional custom parser; defaults to JSON.parse. Return null to skip an event.
+ * @param onParseError - Optional callback fired when a `data:` line fails to parse.
+ *   Receives the raw payload string and the parse error. Defaults to silent skip.
  */
 export function parseSSEBuffer<T>(
   buffer: string,
   parse: (raw: string) => T | null = (r) => JSON.parse(r) as T,
+  onParseError?: (raw: string, err: unknown) => void,
 ): SSEParseResult<T> {
   const parts = buffer.split("\n\n");
   // Last element is an incomplete frame — keep it in the buffer
@@ -63,8 +66,8 @@ export function parseSSEBuffer<T>(
       try {
         const parsed = parse(payload);
         if (parsed !== null) events.push(parsed);
-      } catch {
-        // Skip malformed data lines
+      } catch (err) {
+        onParseError?.(payload, err);
       }
     }
   }

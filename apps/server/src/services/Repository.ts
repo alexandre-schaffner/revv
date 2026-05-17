@@ -27,31 +27,42 @@ function rowToRepo(row: typeof repositories.$inferSelect): Repository {
 export class RepositoryService extends Context.Tag("RepositoryService")<
   RepositoryService,
   {
-    readonly listRepos: () => Effect.Effect<Repository[], never, DbService>;
+    readonly listRepos: (accountId?: string) => Effect.Effect<Repository[], never, DbService>;
     readonly addRepo: (
       data: Omit<Repository, "id" | "addedAt" | "cloneStatus" | "clonePath" | "cloneError">,
+      accountId: string,
     ) => Effect.Effect<Repository, ValidationError, DbService>;
-    readonly deleteRepo: (id: string) => Effect.Effect<void, NotFoundError, DbService>;
-    readonly getRepoById: (id: string) => Effect.Effect<Repository, NotFoundError, DbService>;
+    readonly deleteRepo: (
+      id: string,
+      accountId: string,
+    ) => Effect.Effect<void, NotFoundError, DbService>;
+    readonly getRepoById: (
+      id: string,
+      accountId?: string,
+    ) => Effect.Effect<Repository, NotFoundError, DbService>;
     readonly getRepoByFullName: (
       fullName: string,
+      accountId: string,
     ) => Effect.Effect<Repository | null, never, DbService>;
     readonly updateRepoMetadata: (
       id: string,
       data: { readonly avatarUrl?: string | null; readonly defaultBranch?: string },
+      accountId?: string,
     ) => Effect.Effect<Repository, NotFoundError, DbService>;
   }
 >() {}
 
 export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
-  listRepos: () =>
+  listRepos: (accountId) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
-      const rows = db.select().from(repositories).all();
+      const rows = accountId
+        ? db.select().from(repositories).where(eq(repositories.accountId, accountId)).all()
+        : db.select().from(repositories).all();
       return rows.map(rowToRepo);
     }),
 
-  addRepo: (data) =>
+  addRepo: (data, accountId) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
       const id = crypto.randomUUID();
@@ -66,6 +77,7 @@ export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
         ...(data.avatarUrl !== null ? { avatarUrl: data.avatarUrl } : {}),
         addedAt,
         githubHost: data.githubHost,
+        accountId,
       } satisfies typeof repositories.$inferInsert;
       yield* Effect.tryPromise({
         try: () => Promise.resolve(db.insert(repositories).values(row).run()),
@@ -84,14 +96,15 @@ export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
         clonePath: null,
         cloneError: null,
         githubHost: data.githubHost,
+        accountId,
       });
     }),
 
-  deleteRepo: (id) =>
+  deleteRepo: (id, accountId) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
       const existing = db.select().from(repositories).where(eq(repositories.id, id)).get();
-      if (!existing) {
+      if (!existing || existing.accountId !== accountId) {
         return yield* Effect.fail(new NotFoundError({ resource: "repository", id }));
       }
       // Use orDie so DB errors become defects, keeping the error channel as NotFoundError
@@ -101,28 +114,35 @@ export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
       }).pipe(Effect.orDie);
     }),
 
-  getRepoById: (id) =>
+  getRepoById: (id, accountId) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
       const row = db.select().from(repositories).where(eq(repositories.id, id)).get();
       if (!row) {
         return yield* Effect.fail(new NotFoundError({ resource: "repository", id }));
       }
+      if (accountId && row.accountId !== accountId) {
+        return yield* Effect.fail(new NotFoundError({ resource: "repository", id }));
+      }
       return rowToRepo(row);
     }),
 
-  getRepoByFullName: (fullName) =>
+  getRepoByFullName: (fullName, accountId) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
       const row = db.select().from(repositories).where(eq(repositories.fullName, fullName)).get();
-      return row ? rowToRepo(row) : null;
+      if (!row || row.accountId !== accountId) return null;
+      return rowToRepo(row);
     }),
 
-  updateRepoMetadata: (id, data) =>
+  updateRepoMetadata: (id, data, accountId) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
       const existing = db.select().from(repositories).where(eq(repositories.id, id)).get();
       if (!existing) {
+        return yield* Effect.fail(new NotFoundError({ resource: "repository", id }));
+      }
+      if (accountId && existing.accountId !== accountId) {
         return yield* Effect.fail(new NotFoundError({ resource: "repository", id }));
       }
       const updates: Partial<typeof repositories.$inferInsert> = {};

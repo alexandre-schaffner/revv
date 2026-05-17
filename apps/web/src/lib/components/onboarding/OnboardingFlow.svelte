@@ -5,13 +5,14 @@ import { getIsAuthenticated, loadUser } from "$lib/stores/auth.svelte";
 import { fetchRepos } from "$lib/stores/prs.svelte";
 import { fetchSettings, getGithubHost, getSettings } from "$lib/stores/settings.svelte";
 import OnboardingShell from "./OnboardingShell.svelte";
+import StepAgent from "./StepAgent.svelte";
 import StepDone from "./StepDone.svelte";
 import StepHost from "./StepHost.svelte";
 import StepRepo from "./StepRepo.svelte";
 import StepSignIn from "./StepSignIn.svelte";
 import StepWelcome from "./StepWelcome.svelte";
 
-type StepId = "welcome" | "host" | "signin" | "repo" | "done";
+type StepId = "welcome" | "host" | "signin" | "repo" | "agent" | "done";
 
 interface Props {
   /** Called once the user has fully completed onboarding. */
@@ -28,7 +29,7 @@ const signinMeta = $derived<StepMeta>({
   spinnerVariant: "square-2",
 });
 
-const ORDER: StepId[] = ["welcome", "host", "signin", "repo", "done"];
+const ORDER: StepId[] = ["welcome", "host", "signin", "repo", "agent", "done"];
 
 // Replay-mode flag set by `resetOnboarding()` in the auth store. When
 // present, we ignore the usual resume logic and force a start from
@@ -157,6 +158,12 @@ const meta: Record<StepId, StepMeta> = {
     titleItalic: "repository to read.",
     spinnerVariant: "square-19",
   },
+  agent: {
+    chapter: "Chapter IV · Agent",
+    title: "Choose your",
+    titleItalic: "reviewer.",
+    spinnerVariant: "square-7",
+  },
   done: {
     chapter: "Fin",
     title: "And now,",
@@ -187,6 +194,8 @@ const meta: Record<StepId, StepMeta> = {
 					<StepSignIn onBack={goBack} githubHost={getGithubHost() ?? 'github.com'} />
 				{:else if current === 'repo'}
 					<StepRepo onContinue={advance} onBack={goBack} onSkip={advance} isGhe={isGhe} />
+				{:else if current === 'agent'}
+					<StepAgent onContinue={advance} onBack={goBack} onSkip={advance} />
 				{:else if current === 'done'}
 					<StepDone onFinish={onFinish} />
 				{/if}

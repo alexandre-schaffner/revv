@@ -468,7 +468,7 @@ async function handleSignOut(): Promise<void> {
 	}
 
 	:global(.menu-row--danger:hover) {
-		color: var(--color-danger, #e05252);
+		color: var(--color-danger);
 	}
 
 	:global(.menu-row:hover .menu-row-icon) {

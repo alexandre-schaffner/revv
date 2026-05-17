@@ -5,12 +5,13 @@ import type {
   AiAgent,
   ContextWindow,
   DiffViewMode,
+  RecapAgentChoice,
   ThemePreference,
   ThinkingEffort,
   UserSettings,
 } from "@revv/shared";
 import { AUTO_FETCH_DEFAULT_INTERVAL } from "@revv/shared";
-import { Context, Effect, Layer } from "effect";
+import { Context, Effect, Layer, Stream, SubscriptionRef } from "effect";
 import { serverEnv } from "../config";
 import { ValidationError } from "../domain/errors";
 
@@ -41,7 +42,15 @@ const DEFAULT_SETTINGS: UserSettings = {
   diffViewMode: "unified",
   autoFetchInterval: AUTO_FETCH_DEFAULT_INTERVAL,
   githubHost: "github.com",
+  recap: {
+    enabled: true,
+    dailyEnabled: true,
+    weeklyEnabled: true,
+    agent: "auto",
+  },
 };
+
+const VALID_RECAP_AGENTS: ReadonlySet<RecapAgentChoice> = new Set(["auto", "opencode", "claude"]);
 
 const MIN_MAX_TURNS = 10;
 const MAX_MAX_TURNS = 500;
@@ -83,7 +92,8 @@ function normalize(raw: unknown): UserSettings {
       typeof r.aiThinkingEffort === "string"
         ? (r.aiThinkingEffort as ThinkingEffort)
         : DEFAULT_SETTINGS.aiThinkingEffort,
-    aiAgent: typeof r.aiAgent === "string" ? (r.aiAgent as AiAgent) : DEFAULT_SETTINGS.aiAgent,
+    aiAgent:
+      r.aiAgent === "opencode" || r.aiAgent === "claude" ? r.aiAgent : DEFAULT_SETTINGS.aiAgent,
     aiContextWindow:
       typeof r.aiContextWindow === "string"
         ? (r.aiContextWindow as ContextWindow)
@@ -106,6 +116,22 @@ function normalize(raw: unknown): UserSettings {
       typeof r.githubHost === "string" && (r.githubHost as string).length > 0
         ? (r.githubHost as string)
         : DEFAULT_SETTINGS.githubHost,
+    recap: coerceRecap(r.recap),
+  };
+}
+
+function coerceRecap(value: unknown): UserSettings["recap"] {
+  if (value === null || typeof value !== "object") return { ...DEFAULT_SETTINGS.recap };
+  const r = value as Record<string, unknown>;
+  const agent =
+    typeof r.agent === "string" && VALID_RECAP_AGENTS.has(r.agent as RecapAgentChoice)
+      ? (r.agent as RecapAgentChoice)
+      : DEFAULT_SETTINGS.recap.agent;
+  return {
+    enabled: r.enabled === false ? false : DEFAULT_SETTINGS.recap.enabled,
+    dailyEnabled: r.dailyEnabled === false ? false : DEFAULT_SETTINGS.recap.dailyEnabled,
+    weeklyEnabled: r.weeklyEnabled === false ? false : DEFAULT_SETTINGS.recap.weeklyEnabled,
+    agent,
   };
 }
 
@@ -149,48 +175,81 @@ async function writeSettingsFile(settings: UserSettings): Promise<void> {
 
 // ── Service definition ────────────────────────────────────────────────────────
 
+/**
+ * Shape accepted by `updateSettings`. Top-level fields are individually
+ * optional (standard `Partial`), but `recap` is recursively partial so
+ * callers can patch a single nested field (e.g. `{ recap: { agent: 'opencode' } }`)
+ * without spreading the whole sub-object. {@link Settings.ts}'s
+ * `updateSettings` deep-merges `recap` against the current value to honour
+ * this contract.
+ */
+export type SettingsUpdate = Partial<Omit<UserSettings, "id" | "recap">> & {
+  recap?: Partial<UserSettings["recap"]>;
+};
+
 export class SettingsService extends Context.Tag("SettingsService")<
   SettingsService,
   {
-    readonly getSettings: () => Effect.Effect<UserSettings, ValidationError>;
-    readonly updateSettings: (
-      partial: Partial<Omit<UserSettings, "id">>,
-    ) => Effect.Effect<UserSettings, ValidationError>;
+    getSettings: () => Effect.Effect<UserSettings, ValidationError>;
+    updateSettings: (partial: SettingsUpdate) => Effect.Effect<UserSettings, ValidationError>;
+    /**
+     * Stream of settings snapshots emitted after every `updateSettings` call.
+     * P4: used by OpencodeSupervisor to stop the daemon immediately when
+     * `aiAgent` flips away from opencode, rather than waiting for the next
+     * `jobStarted()`.
+     */
+    settingsChanges: () => Stream.Stream<UserSettings>;
   }
 >() {}
 
-export const SettingsServiceLive = Layer.succeed(SettingsService, {
-  getSettings: () =>
-    Effect.tryPromise({
+export const SettingsServiceLive = Layer.effect(
+  SettingsService,
+  Effect.gen(function* () {
+    // Load settings once at boot; keep in a Ref so updates are observable.
+    const initial = yield* Effect.tryPromise({
       try: () => readSettingsFile(),
       catch: (e) =>
         new ValidationError({
           message: e instanceof Error ? e.message : String(e),
         }),
-    }),
+    });
+    const settingsRef = yield* SubscriptionRef.make(initial);
 
-  updateSettings: (partial) =>
-    Effect.tryPromise({
-      try: async () => {
-        // Read-modify-write under the assumption that mutations are
-        // rare and uncoordinated. Settings is single-user; the only
-        // way concurrent writes happen is the user clicking two
-        // toggles in the same RAF, in which case last-write-wins is
-        // the expected outcome anyway.
-        const current = await readSettingsFile();
-        const merged: UserSettings = { ...current, ...partial, id: "default" };
-        // Clamp aiMaxTurns at the write boundary so a future read can
-        // trust the value without re-normalising.
-        const next: UserSettings = {
-          ...merged,
-          aiMaxTurns: coerceMaxTurns(merged.aiMaxTurns),
-        };
-        await writeSettingsFile(next);
-        return next;
-      },
-      catch: (e) =>
-        new ValidationError({
-          message: e instanceof Error ? e.message : String(e),
+    return {
+      getSettings: () =>
+        settingsRef.get.pipe(Effect.mapError((e) => new ValidationError({ message: String(e) }))),
+
+      updateSettings: (partial) =>
+        Effect.gen(function* () {
+          const current = yield* settingsRef.get;
+          // Deep-merge `recap`: clients commonly patch just one nested field
+          // (e.g. `{ recap: { agent: 'opencode' } }`), and a shallow merge
+          // would wipe out the other recap fields. Other top-level fields
+          // are flat strings/numbers and merge shallowly without issue.
+          const mergedRecap =
+            partial.recap !== undefined ? { ...current.recap, ...partial.recap } : current.recap;
+          const merged: UserSettings = {
+            ...current,
+            ...partial,
+            recap: mergedRecap,
+            id: "default",
+          };
+          const next: UserSettings = {
+            ...merged,
+            aiMaxTurns: coerceMaxTurns(merged.aiMaxTurns),
+          };
+          yield* Effect.tryPromise({
+            try: () => writeSettingsFile(next),
+            catch: (e) =>
+              new ValidationError({
+                message: e instanceof Error ? e.message : String(e),
+              }),
+          });
+          yield* SubscriptionRef.set(settingsRef, next);
+          return next;
         }),
-    }),
-});
+
+      settingsChanges: () => settingsRef.changes.pipe(Stream.drop(1)), // skip initial value
+    };
+  }),
+);

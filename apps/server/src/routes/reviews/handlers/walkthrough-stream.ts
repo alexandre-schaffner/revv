@@ -129,6 +129,10 @@ export function walkthroughStreamHandler(ctx: {
     let forwardOrd = 0;
     const tracePrId = ctx.params.id;
 
+    // Set after startJob / subscribe so the prerender failure handler can
+    // increment the per-job counter (S10).
+    let currentWalkthroughId: string | undefined;
+
     const forwardEvent = (event: WalkthroughStreamEvent): void => {
       const ord = forwardOrd++;
       if (terminated) {
@@ -252,6 +256,12 @@ export function walkthroughStreamHandler(ctx: {
               `block ${event.data.id} (${event.data.type}) prerender failed:`,
               err,
             );
+            const wtId = currentWalkthroughId;
+            if (wtId) {
+              void AppRuntime.runPromise(
+                Effect.flatMap(WalkthroughJobs, (jobs) => jobs.incrementPrerenderFailures(wtId)),
+              );
+            }
           }
         }
         forwardEvent(toEmit);
@@ -311,12 +321,51 @@ export function walkthroughStreamHandler(ctx: {
         // validation gate). Without this replay, a client that re-streams a
         // completed walkthrough (e.g. after a WS `walkthrough:complete` races
         // ahead of the live `done` event and triggers fetchCachedWalkthrough)
-        // ends up with lastCompletedPhase='none', making getCanResume() return
-        // true and the floating actions render Resume instead of Regenerate.
+        // ends up with lastCompletedPhase='none', leaving the floating-bar
+        // UI state stuck in 'resumable' (Resume + Regenerate) instead of
+        // 'complete' (Regenerate only). See walkthrough-ui-state.svelte.ts.
         enqueueForward({
           type: "phase:advanced",
           data: { lastCompletedPhase: cached.lastCompletedPhase },
         });
+        // ── Defense-in-depth: re-validate invariant #12 before emitting `done`.
+        // The orchestrator is supposed to gate `status='complete'` on these checks,
+        // but if a corrupt / partially-written row somehow got through, we catch it
+        // here so the client doesn't receive a `done` on incomplete data.
+        const invariantFailures: string[] = [];
+        if (cached.lastCompletedPhase !== "D") {
+          invariantFailures.push(
+            `lastCompletedPhase='${cached.lastCompletedPhase}' (expected 'D')`,
+          );
+        }
+        if (!cached.summary || cached.summary.trim().length === 0) {
+          invariantFailures.push("summary empty");
+        }
+        if (!cached.sentiment || cached.sentiment.trim().length === 0) {
+          invariantFailures.push("sentiment empty");
+        }
+        if (cached.semanticSteps.length === 0) {
+          invariantFailures.push("no semantic steps");
+        }
+        if (cached.ratings.length !== 9) {
+          invariantFailures.push(`ratings=${cached.ratings.length} (expected 9)`);
+        }
+        if (invariantFailures.length > 0) {
+          logError(
+            "wt-trace",
+            `cached-replay invariant #12 failed walkthrough=${cached.id}:`,
+            invariantFailures.join("; "),
+          );
+          enqueueForward({
+            type: "error",
+            data: {
+              code: "INVARIANT_VIOLATION",
+              message: `Walkthrough data incomplete: ${invariantFailures.join(", ")}.`,
+            },
+          });
+          // Still emit done so the client stream terminates, but the preceding
+          // error event tells the UI to show a failure state.
+        }
         enqueueForward({
           type: "done",
           data: { walkthroughId: cached.id, tokenUsage: cached.tokenUsage },
@@ -341,6 +390,7 @@ export function walkthroughStreamHandler(ctx: {
           });
         }),
       );
+      currentWalkthroughId = walkthroughId;
 
       // ── Step 4: Subscribe in buffering mode BEFORE the DB read. ──
       // The buffer captures events arriving during steps 4–6 so we

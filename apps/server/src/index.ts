@@ -10,9 +10,11 @@ import { debugRoutes } from "./routes/debug";
 import { deviceAuthRoutes } from "./routes/device-auth";
 import { githubRoutes } from "./routes/github";
 import { mcpChatContextRoute } from "./routes/mcp/chat-context";
+import { mcpRecapRoute } from "./routes/mcp/recap";
 import { mcpWalkthroughRoute } from "./routes/mcp/walkthrough";
 import { onboardingRoutes } from "./routes/onboarding";
 import { prRoutes } from "./routes/prs";
+import { recapRoutes } from "./routes/recaps";
 import { repoRoutes } from "./routes/repos";
 import { reviewRoutes } from "./routes/reviews";
 import { settingsRoutes } from "./routes/settings";
@@ -25,6 +27,8 @@ import { ChatSessionService } from "./services/ChatSession";
 import { DbMaintenance } from "./services/DbMaintenance";
 import { PollScheduler } from "./services/PollScheduler";
 import { ensureHighlighter } from "./services/PrerenderCache";
+import { ProjectRecapJobs } from "./services/ProjectRecapJobs";
+import { RecapScheduler } from "./services/RecapScheduler";
 import { RepoCloneService } from "./services/RepoClone";
 import { WalkthroughJobs } from "./services/WalkthroughJobs";
 import { acquireSingleInstance } from "./singleInstance";
@@ -52,6 +56,7 @@ const app = new Elysia()
   .use(repoRoutes)
   .use(githubRoutes)
   .use(prRoutes)
+  .use(recapRoutes)
   .use(reviewRoutes)
   .use(threadRoutes)
   .use(settingsRoutes)
@@ -62,6 +67,7 @@ const app = new Elysia()
   .use(wsRoute)
   .use(debugRoutes)
   .use(mcpWalkthroughRoute)
+  .use(mcpRecapRoute)
   .use(mcpChatContextRoute)
   .get("/api/health", () => ({
     status: "ok" as const,
@@ -146,6 +152,21 @@ AppRuntime.runPromise(Effect.flatMap(WalkthroughJobs, (jobs) => jobs.resumePendi
 AppRuntime.runPromise(Effect.flatMap(PollScheduler, (s) => s.start())).catch((err) => {
   logError("poll-scheduler", "start failed on boot:", err);
 });
+
+// Resume pending recap jobs, then start the recap scheduler. Order matters:
+// `resumePending` must run before the scheduler kicks off its first sweep
+// so a crashed-mid-generation recap finishes (or fails terminally) before
+// the scheduler is allowed to consider that period "already covered" or
+// re-enqueue a duplicate. See plan: cross-cutting decisions.
+AppRuntime.runPromise(Effect.flatMap(ProjectRecapJobs, (jobs) => jobs.resumePending()))
+  .then(() =>
+    AppRuntime.runPromise(Effect.flatMap(RecapScheduler, (s) => s.start())).catch((err) => {
+      logError("recap-scheduler", "start failed on boot:", err);
+    }),
+  )
+  .catch((err) => {
+    logError("recap-jobs", "resumePending failed on boot:", err);
+  });
 
 // Resume any repos with cloneStatus 'pending' or 'error' on boot so that
 // repos that failed to clone (e.g. due to a server restart mid-clone) are

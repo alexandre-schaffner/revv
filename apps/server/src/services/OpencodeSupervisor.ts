@@ -5,24 +5,29 @@
 // MCP server" model with a single long-lived daemon that Revv reuses across
 // jobs. Per doctrine invariant #14 (agent-daemon lifecycle):
 //
-//   • Lazy-start: we only spin up `opencode serve` when the active agent is
-//     'opencode' AND at least one job needs it (jobStarted() / jobEnded()
-//     drive this). If the user is on Claude, the daemon never runs.
-//   • Idle cooldown: after the last job ends, a 30s timer fires stopIfIdle()
-//     to shed the process. If a new job arrives in the cooldown window the
-//     timer cancels and the process stays up.
+//   • Eager-start while needed: the daemon comes up on boot when opencode
+//     is the selected agent, and on any settings change that flips opencode
+//     into scope (global `aiAgent` or per-feature `recap.agent`). Pre-warming
+//     this way means the first walkthrough doesn't pay the cold-start tax.
+//     If neither `aiAgent` nor `recap.agent` resolves to opencode, the
+//     daemon never runs.
+//   • Settings-driven stop: the daemon stays warm for as long as opencode is
+//     needed. The settings stream calls `stopNow()` immediately when opencode
+//     falls out of scope (P4); we do NOT idle-time the daemon out while the
+//     user still has opencode selected — review → switch-context → review
+//     should not pay cold-start twice.
+//   • Race fallback: `jobEnded()` schedules an idle stop only when it
+//     observes opencode is no longer needed by current settings — a
+//     defensive cover for the narrow window between a settings flip and the
+//     last in-flight job releasing.
 //   • Ephemeral credentials: OPENCODE_SERVER_PASSWORD is regenerated on every
 //     start and lives only in this process's memory. The daemon binds to a
 //     fresh OS-assigned port (--port 0) that we parse from its stdout. Never
 //     persisted anywhere.
 //   • Crash-loop cap: auto-restart up to 3 times inside a 60s window. After
 //     that the service enters `unhealthy=true` and refuses to spawn again
-//     until a successful manual `ensureRunning()` call (which resets the
-//     counter).
-//   • Settings-change stop: subscribes to SettingsService changes so moving
-//     away from 'opencode' hard-stops the daemon (we observe the change by
-//     polling settings on each jobStarted() — Settings doesn't yet expose a
-//     change stream). The stop is a best-effort kill; credentials are wiped.
+//     until either a successful manual `ensureRunning()` call or an
+//     extended-idle auto-reset (5min) restores the counter.
 //
 // Transport: `@opencode-ai/sdk/v2` typed client. The supervisor builds one
 // OpencodeClient per daemon spawn (with basic-auth header baked in via the
@@ -35,8 +40,9 @@
 
 import { resolve } from "node:path";
 import { createOpencodeClient, type OpencodeClient, type Part } from "@opencode-ai/sdk/v2";
+import type { UserSettings } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
-import { Context, Effect, Layer, Ref } from "effect";
+import { Cause, Context, Effect, Fiber, Layer, Ref, type Runtime, Stream } from "effect";
 import { resolveCliBin } from "../ai/providers/cli-agent";
 import type { Db } from "../db/index";
 import { kvCache } from "../db/schema/index";
@@ -129,9 +135,11 @@ interface RunningState {
 interface SupervisorState {
   readonly running: RunningState | null;
   readonly activeJobCount: number;
-  readonly idleTimer: ReturnType<typeof setTimeout> | null;
+  readonly idleTimer: Fiber.RuntimeFiber<void, never> | null;
   readonly restartTimestamps: readonly number[];
   readonly unhealthy: boolean;
+  /** Timestamp when unhealthy was last set; used for auto-reset after extended idle (T4). */
+  readonly lastUnhealthyAt: number | null;
   readonly lastSelectedAgent: string | null;
   /**
    * Names of agents the running daemon exposes via `GET /agent`. Probed
@@ -146,6 +154,7 @@ const INITIAL_STATE: SupervisorState = {
   idleTimer: null,
   restartTimestamps: [],
   unhealthy: false,
+  lastUnhealthyAt: null,
   lastSelectedAgent: null,
   agentNames: null,
 };
@@ -153,6 +162,8 @@ const INITIAL_STATE: SupervisorState = {
 const IDLE_COOLDOWN_MS = 30_000;
 const CRASH_LOOP_WINDOW_MS = 60_000;
 const CRASH_LOOP_MAX = 3;
+/** After this much idle time, auto-reset the unhealthy flag so the next job can retry. */
+const UNHEALTHY_AUTO_RESET_MS = 5 * 60_000; // 5 minutes
 
 const SUPERVISOR_NS = "supervisor";
 const CRASH_LOG_KEY = "crash_log";
@@ -220,6 +231,23 @@ function randomPassword(): string {
 
 function basicAuthHeader(password: string): string {
   return `Basic ${btoa(`opencode:${password}`)}`;
+}
+
+/**
+ * Is the opencode daemon required by the user's current settings?
+ *
+ * True when either the global `aiAgent` is opencode, or the per-feature
+ * `recap.agent` explicitly pins to opencode. (The `auto` recap choice
+ * follows `aiAgent` and is already covered by the first clause.)
+ *
+ * Used both by the settings-change stream — to decide between
+ * `ensureRunning()` and `stopNow()` — and by `jobEnded()`, to decide
+ * whether to schedule an idle stop after the last in-flight job releases.
+ */
+function isOpencodeNeeded(settings: UserSettings): boolean {
+  if (settings.aiAgent === "opencode") return true;
+  const recapChoice = settings.recap?.agent ?? "auto";
+  return recapChoice === "opencode";
 }
 
 // ── SDK client construction ──────────────────────────────────────────────────
@@ -296,11 +324,7 @@ export const OpencodeSupervisorLive = Layer.effect(
     const clearIdleTimer = (): Effect.Effect<void> =>
       Ref.update(stateRef, (s) => {
         if (s.idleTimer !== null) {
-          try {
-            clearTimeout(s.idleTimer);
-          } catch {
-            /* ignore */
-          }
+          void Effect.runFork(Fiber.interrupt(s.idleTimer));
         }
         return { ...s, idleTimer: null };
       });
@@ -513,21 +537,30 @@ export const OpencodeSupervisorLive = Layer.effect(
       const client = buildSdkClient(hostname, port, password);
       const running: RunningState = { hostname, port, password, proc, client };
 
-      // Wire exit handler so we know when the daemon dies unexpectedly and
-      // can update state (and consider auto-restart).
-      void proc.exited.then((code) => {
-        // Fire registered exit handlers eagerly — every daemon death
-        // (crash, idle stop, explicit stop, settings change) leaves
-        // any cached session ids referring to a process that's gone.
-        // Consumers (AiService → ChatSessionService) invalidate stored
-        // state here. Fires exactly once per spawn since proc.exited
-        // resolves once. Outside the `s.running !== running` guard on
-        // purpose: the guard exists to skip duplicate ref-clears when
-        // `stopNow()`/`stopIfIdle()` already cleared state, but exit
-        // handlers must still run in those paths.
-        fireExitHandlers();
-        void Effect.runPromise(
+      return running;
+    };
+
+    // Observe a daemon process exit and update supervisor state.
+    // Forked as a daemon fiber from ensureRunning so it's supervised
+    // and cancels when the supervisor scope closes.
+    const observeExit = (running: RunningState): Effect.Effect<void> =>
+      Effect.tryPromise({
+        try: (signal) => running.proc.exited,
+        catch: (err) => err,
+      }).pipe(
+        Effect.flatMap((code) =>
           Effect.gen(function* () {
+            // Fire registered exit handlers eagerly — every daemon death
+            // (crash, idle stop, explicit stop, settings change) leaves
+            // any cached session ids referring to a process that's gone.
+            // Consumers (AiService → ChatSessionService) invalidate stored
+            // state here. Fires exactly once per spawn since proc.exited
+            // resolves once. Outside the `s.running !== running` guard on
+            // purpose: the guard exists to skip duplicate ref-clears when
+            // `stopNow()`/`stopIfIdle()` already cleared state, but exit
+            // handlers must still run in those paths.
+            yield* Effect.sync(() => fireExitHandlers());
+
             const s = yield* Ref.get(stateRef);
             if (s.running !== running) return; // already replaced
             debug("opencode-supervisor", `daemon exited (code=${code}) — clearing running state`);
@@ -548,6 +581,7 @@ export const OpencodeSupervisorLive = Layer.effect(
                 ...st,
                 restartTimestamps: nextStamps,
                 unhealthy,
+                lastUnhealthyAt: unhealthy ? now : st.lastUnhealthyAt,
               }));
               persistCrashTimestamps(db, nextStamps);
               if (unhealthy) {
@@ -558,11 +592,17 @@ export const OpencodeSupervisorLive = Layer.effect(
               }
             }
           }),
-        );
-      });
-
-      return running;
-    };
+        ),
+        Effect.catchAll((err) =>
+          Effect.sync(() =>
+            debug(
+              "opencode-supervisor",
+              "observeExit error:",
+              err instanceof Error ? err.message : String(err),
+            ),
+          ),
+        ),
+      );
 
     const ensureRunning = (): Effect.Effect<OpencodeEndpoint, OpencodeError> =>
       startLock.withPermits(1)(
@@ -580,7 +620,25 @@ export const OpencodeSupervisorLive = Layer.effect(
           }
 
           if (snapshot.unhealthy) {
-            return yield* Effect.fail(new OpencodeUnhealthyError());
+            const now = Date.now();
+            if (
+              snapshot.lastUnhealthyAt !== null &&
+              now - snapshot.lastUnhealthyAt >= UNHEALTHY_AUTO_RESET_MS
+            ) {
+              debug(
+                "opencode-supervisor",
+                `auto-resetting unhealthy flag after ${UNHEALTHY_AUTO_RESET_MS}ms idle`,
+              );
+              yield* Ref.update(stateRef, (st) => ({
+                ...st,
+                unhealthy: false,
+                lastUnhealthyAt: null,
+                restartTimestamps: [],
+              }));
+              persistCrashTimestamps(db, []);
+            } else {
+              return yield* Effect.fail(new OpencodeUnhealthyError());
+            }
           }
 
           if (snapshot.running) {
@@ -618,6 +676,10 @@ export const OpencodeSupervisorLive = Layer.effect(
           }));
           // Clear persisted crash log — daemon is healthy.
           persistCrashTimestamps(db, []);
+
+          // Fork a supervised fiber to observe the daemon's exit.
+          // This replaces the old proc.exited.then(Effect.runPromise) pattern.
+          yield* Effect.forkDaemon(observeExit(running));
 
           // Probe available agents. Failures are best-effort: the
           // chat-opencode driver checks `hasAgent('plan')` before
@@ -660,18 +722,84 @@ export const OpencodeSupervisorLive = Layer.effect(
         }));
       });
 
-    const scheduleIdleStop = (): Effect.Effect<void> =>
-      Effect.sync(() => {
-        void Effect.runPromise(
-          Effect.gen(function* () {
-            const s = yield* Ref.get(stateRef);
-            if (s.idleTimer !== null) return;
-            const timer = setTimeout(() => {
-              void Effect.runPromise(stopIfIdle());
-            }, IDLE_COOLDOWN_MS);
-            yield* Ref.update(stateRef, (st) => ({ ...st, idleTimer: timer }));
+    // P4: Watch settings changes and react immediately:
+    //   • away from opencode → stop daemon (no longer waiting for jobStarted)
+    //   • to opencode       → eagerly start daemon so cold-start is done before
+    //                         the first walkthrough job begins
+    //
+    // The daemon must stay alive when EITHER the global `aiAgent` is opencode
+    // OR the per-feature `recap.agent` resolves to opencode. Otherwise a user
+    // running Claude globally + opencode for background recaps would have the
+    // daemon killed mid-recap on every settings flip.
+    yield* settingsService.settingsChanges().pipe(
+      Stream.tap((settings) => {
+        const recapChoice = settings.recap?.agent ?? "auto";
+        if (!isOpencodeNeeded(settings)) {
+          debug(
+            "opencode-supervisor",
+            `settings change: aiAgent='${settings.aiAgent}' recap.agent='${recapChoice}' — stopping daemon`,
+          );
+          return stopNow();
+        }
+        // Eager start when opencode is needed — pre-warms the daemon
+        // so the first job doesn't pay the cold-start tax.
+        debug(
+          "opencode-supervisor",
+          `settings change: opencode required (aiAgent='${settings.aiAgent}', recap.agent='${recapChoice}') — eagerly starting daemon`,
+        );
+        return ensureRunning().pipe(
+          Effect.matchEffect({
+            onSuccess: () => Effect.succeed(undefined),
+            onFailure: (err) => {
+              logError(
+                "opencode-supervisor",
+                "eager start failed:",
+                err instanceof Error ? err.message : String(err),
+              );
+              return Effect.succeed(undefined);
+            },
           }),
         );
+      }),
+      Stream.runDrain,
+      Effect.fork,
+    );
+
+    // Eager-start on boot: if opencode is already the selected agent,
+    // warm the daemon immediately so the first job doesn't pay cold-start.
+    yield* resolveAgentName().pipe(
+      Effect.flatMap((agent) => {
+        if (agent === "opencode") {
+          debug("opencode-supervisor", "boot: opencode already selected — eagerly starting daemon");
+          return ensureRunning().pipe(
+            Effect.matchEffect({
+              onSuccess: () => Effect.succeed(undefined),
+              onFailure: (err) => {
+                logError(
+                  "opencode-supervisor",
+                  "boot eager start failed:",
+                  err instanceof Error ? err.message : String(err),
+                );
+                return Effect.succeed(undefined);
+              },
+            }),
+          );
+        }
+        return Effect.succeed(undefined);
+      }),
+    );
+
+    const scheduleIdleStop = (): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        const s = yield* Ref.get(stateRef);
+        if (s.idleTimer !== null) return; // already scheduled
+        const fiber = yield* Effect.fork(
+          Effect.sleep(IDLE_COOLDOWN_MS).pipe(Effect.andThen(stopIfIdle)),
+        );
+        yield* Ref.update(stateRef, (st) => ({
+          ...st,
+          idleTimer: fiber as Fiber.RuntimeFiber<void, never>,
+        }));
       });
 
     const stopIfIdle = (): Effect.Effect<void> =>
@@ -724,7 +852,7 @@ export const OpencodeSupervisorLive = Layer.effect(
         // by the time the job calls ensureRunning(). Relies on ensureRunning's
         // own startPromise coalescing to safely handle concurrent calls.
         if (agent === "opencode") {
-          void Effect.runPromise(ensureRunning().pipe(Effect.catchAll(() => Effect.void)));
+          yield* Effect.forkDaemon(ensureRunning().pipe(Effect.catchAll(() => Effect.void)));
         }
       });
 
@@ -736,7 +864,20 @@ export const OpencodeSupervisorLive = Layer.effect(
         }));
         const s = yield* Ref.get(stateRef);
         if (s.activeJobCount === 0 && s.running) {
-          yield* scheduleIdleStop();
+          // The daemon stays warm for as long as opencode is the selected
+          // agent (or a per-feature override). Idle stop is only a
+          // defensive fallback for the race between a settings flip and
+          // the last in-flight job releasing — under normal flow the
+          // settings stream's stopNow() has already torn things down by
+          // the time we get here. On a settings read failure, err toward
+          // keeping the daemon warm rather than churning it.
+          const stillNeeded = yield* withDb(db, settingsService.getSettings()).pipe(
+            Effect.map(isOpencodeNeeded),
+            Effect.catchAll(() => Effect.succeed(true)),
+          );
+          if (!stillNeeded) {
+            yield* scheduleIdleStop();
+          }
         }
       });
 

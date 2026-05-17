@@ -1,5 +1,6 @@
 <script lang="ts">
 import type { WalkthroughIssue } from "@revv/shared";
+import { Checkbox } from "$lib/components/ui/checkbox";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
 
 interface Props {
@@ -76,6 +77,10 @@ function onAnimEnd(event: AnimationEvent): void {
 		{@render cardContent()}
 	</button>
 {:else if checkable}
+	<!-- The Checkbox inside is the real interactive control (keyboard-accessible);
+	     this label is just a wider click target. -->
+	<!-- svelte-ignore a11y_click_events_have_key_events -->
+	<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 	<label
 		class="issue-card issue-card--{issue.severity}"
 		class:issue-card--submitted={submitted}
@@ -83,6 +88,16 @@ function onAnimEnd(event: AnimationEvent): void {
 		class:issue-card--no-anim={animLocked}
 		style:--issue-delay={animationDelay}
 		onanimationend={onAnimEnd}
+		onclick={(e) => {
+			// The bits-ui Checkbox is a button, not an input, so the native
+			// label→input forward we used to rely on no longer fires. Forward
+			// here, but skip clicks that already hit the checkbox itself so
+			// we don't toggle twice.
+			if (submitted || disabled) return;
+			const target = e.target as HTMLElement | null;
+			if (target?.closest('[data-slot="checkbox"]')) return;
+			oncheck?.(!checked);
+		}}
 	>
 		{@render cardContent()}
 	</label>
@@ -100,13 +115,12 @@ function onAnimEnd(event: AnimationEvent): void {
 
 {#snippet cardContent()}
 	{#if checkable}
-		<input
-			type="checkbox"
+		<Checkbox
 			class="issue-card-checkbox"
 			aria-label="Select issue"
 			{checked}
 			{disabled}
-			onchange={(e) => oncheck?.(e.currentTarget.checked)}
+			onCheckedChange={(v) => oncheck?.(v === true)}
 		/>
 	{/if}
 	<div class="issue-card-body">
@@ -250,18 +264,9 @@ function onAnimEnd(event: AnimationEvent): void {
 		opacity: 0.55;
 	}
 
-	.issue-card--submitted .issue-card-checkbox {
-		cursor: not-allowed;
-	}
-
 	/* ── Checkbox ────────────────────────────────────────────────────── */
-	.issue-card-checkbox {
+	:global(.issue-card-checkbox) {
 		margin-top: 2px;
-		width: 14px;
-		height: 14px;
-		accent-color: var(--color-accent);
-		cursor: pointer;
-		flex-shrink: 0;
 	}
 
 	/* ── Body ────────────────────────────────────────────────────────── */

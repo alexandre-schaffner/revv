@@ -29,7 +29,7 @@ import type {
   WalkthroughTokenUsage,
 } from "@revv/shared";
 import { serverEnv } from "../../config";
-import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../../constants";
+import { CLI_WALKTHROUGH_TIMEOUT_MS, WALKTHROUGH_HEARTBEAT_MS } from "../../constants";
 import type { Db } from "../../db";
 import { debug, logError } from "../../logger";
 import type { PrFileMeta } from "../../services/GitHub";
@@ -45,6 +45,7 @@ import {
 } from "../agent-stream";
 import { buildWalkthroughPrompt, WALKTHROUGH_MCP_SYSTEM_PROMPT } from "../prompts/walkthrough";
 import type { ContinuationContext } from "./mcp-walkthrough";
+import { TOOL_SPECS } from "./walkthrough-tools";
 
 // ── Built-in exploration tool surface ───────────────────────────────────────
 //
@@ -148,6 +149,10 @@ export function streamWalkthroughViaOpencodeMCP(
   // same phase lifecycle (invariant #13). We key off MCP tool-call bare
   // names since that's what the agent actually does.
   let currentPhase: WalkthroughLifecyclePhase = "connecting";
+  // Last message paired with `currentPhase`. Re-emitted by the periodic
+  // heartbeat (see WALKTHROUGH_HEARTBEAT_MS) so the UI doesn't churn while
+  // we keep the stream guard's inactivity timer alive.
+  let lastPhaseMessage = "Starting up...";
   let lastReasoningPush = 0;
   // Mirrors the Claude SDK path (invariant #13 agent-path parity).
   const PHASE_ORDER: WalkthroughLifecyclePhase[] = [
@@ -164,6 +169,7 @@ export function streamWalkthroughViaOpencodeMCP(
     // override a "writing" phase with "exploring"). Matches the Claude SDK path.
     if (PHASE_ORDER.indexOf(next) < PHASE_ORDER.indexOf(currentPhase)) return;
     currentPhase = next;
+    lastPhaseMessage = message;
     push({ type: "phase", data: { phase: next, message } });
   };
 
@@ -183,6 +189,19 @@ export function streamWalkthroughViaOpencodeMCP(
         push(event);
       }
     });
+
+    // Periodic phase heartbeat — guarantees the stream guard sees an event
+    // every WALKTHROUGH_HEARTBEAT_MS while the prompt is in flight, even when
+    // SSE reasoning-delta events are temporarily silent (e.g. between turns
+    // or before the first reasoning burst in extended-thinking mode). Re-emits
+    // the current phase + last meaningful message so the UI stays stable.
+    const heartbeatInterval = setInterval(() => {
+      if (queryDone || errorEmitted || cancelled) return;
+      push({
+        type: "phase",
+        data: { phase: currentPhase, message: lastPhaseMessage },
+      });
+    }, WALKTHROUGH_HEARTBEAT_MS);
 
     try {
       return await withAgentTurn({
@@ -291,9 +310,10 @@ export function streamWalkthroughViaOpencodeMCP(
           // Immediately push a phase event so the stream guard's first-event
           // timer resets — the model may take minutes to produce its first
           // tool call (extended thinking), but the session is alive.
+          lastPhaseMessage = "Waiting for model response...";
           push({
             type: "phase",
-            data: { phase: "connecting", message: "Waiting for model response..." },
+            data: { phase: "connecting", message: lastPhaseMessage },
           });
 
           // ── 3. Post the user message and process response parts ──
@@ -363,8 +383,20 @@ export function streamWalkthroughViaOpencodeMCP(
             // `classifyToolCallShape` puts the full name in
             // `bareName` when there's no `mcp__` prefix, so we
             // match against the trailing suffix.
-            const matchSuffix = (s: string): boolean =>
-              ev.bareName === s || ev.bareName.endsWith(`_${s}`);
+            //
+            // Constrain to the TOOL_SPECS allowlist (P6) so a rogue
+            // or hallucinated tool name can't drive bogus phase transitions.
+            const ALLOWED_PHASE_SUFFIXES = new Set(TOOL_SPECS.map((s) => s.name));
+            const matchSuffix = (s: string): boolean => {
+              if (!ALLOWED_PHASE_SUFFIXES.has(s)) {
+                debug(
+                  "opencode-phase",
+                  `matchSuffix rejected unknown tool '${s}' — not in TOOL_SPECS`,
+                );
+                return false;
+              }
+              return ev.bareName === s || ev.bareName.endsWith(`_${s}`);
+            };
 
             if (matchSuffix("set_overview")) {
               anySummaryEmitted = true;
@@ -404,6 +436,72 @@ export function streamWalkthroughViaOpencodeMCP(
           // normalized-event pipeline as assistant text.
           const userMessageIDs = new Set<string>();
           const sseAbort = new AbortController();
+          // Per-message latest tokens snapshot, keyed by assistant
+          // messageId. Opencode's `info.tokens` (and step-finish
+          // `part.tokens`) is per-CALL: within one agent turn the daemon
+          // produces multiple assistant messages (one per tool-call
+          // cycle), and each message's `output` only covers that single
+          // LLM call. Treating the LATEST snapshot as the turn total
+          // (the previous behavior) under-counted output by ~99% on
+          // multi-step turns — the final "I'm done" message has ~50
+          // output tokens while the actual turn produced thousands of
+          // tool-argument bytes across many calls.
+          //
+          // Aggregation rules:
+          //   - `output` / `reasoning` / `cache.write`: SUM across
+          //     messages — each call produces new tokens of these.
+          //   - `input` / `cache.read`: take the LATEST message's value
+          //     — both grow monotonically with conversation history, so
+          //     the latest call's prompt size is the meaningful "context
+          //     window usage" figure (summing would double-count history).
+          type MsgSnap = {
+            input: number;
+            output: number;
+            reasoning: number;
+            cacheRead: number;
+            cacheWrite: number;
+          };
+          const perMessageSnap = new Map<string, MsgSnap>();
+          const messageOrder: string[] = [];
+
+          const updateMsgSnap = (
+            messageId: string,
+            tokens: {
+              input: number;
+              output: number;
+              reasoning: number;
+              cache: { read: number; write: number };
+            },
+          ): void => {
+            if (!perMessageSnap.has(messageId)) {
+              messageOrder.push(messageId);
+            }
+            perMessageSnap.set(messageId, {
+              input: tokens.input,
+              output: tokens.output,
+              reasoning: tokens.reasoning,
+              cacheRead: tokens.cache.read,
+              cacheWrite: tokens.cache.write,
+            });
+          };
+
+          const computeAggregateTokens = (): WalkthroughTokenUsage => {
+            let outputSum = 0;
+            let cacheWriteSum = 0;
+            for (const m of perMessageSnap.values()) {
+              outputSum += m.output + m.reasoning;
+              cacheWriteSum += m.cacheWrite;
+            }
+            const latestId = messageOrder[messageOrder.length - 1];
+            const latest = latestId !== undefined ? perMessageSnap.get(latestId) : undefined;
+            return {
+              inputTokens: latest?.input ?? 0,
+              outputTokens: outputSum,
+              cacheReadInputTokens: latest?.cacheRead ?? 0,
+              cacheCreationInputTokens: cacheWriteSum,
+            };
+          };
+
           // Dedupe by *value*, not time. Opencode resends
           // `message.updated` (and step-finish parts) verbatim across
           // state transitions, so a time-throttle would either
@@ -412,34 +510,28 @@ export function streamWalkthroughViaOpencodeMCP(
           // while collapsing no-op resends.
           let lastUsageKey = "";
           let tokenCallbackHits = 0;
-          const onAssistantTokens = (tokens: {
-            input: number;
-            output: number;
-            reasoning: number;
-            cache: { read: number; write: number };
-          }): void => {
+          const onAssistantTokens = (
+            messageId: string,
+            tokens: {
+              input: number;
+              output: number;
+              reasoning: number;
+              cache: { read: number; write: number };
+            },
+          ): void => {
             tokenCallbackHits += 1;
-            const inputTokens = tokens.input;
-            const outputTokens = tokens.output + tokens.reasoning;
-            const cacheReadInputTokens = tokens.cache.read;
-            const cacheCreationInputTokens = tokens.cache.write;
-            const key = `${inputTokens}|${outputTokens}|${cacheReadInputTokens}|${cacheCreationInputTokens}`;
+            updateMsgSnap(messageId, tokens);
+            const aggregate = computeAggregateTokens();
+            const key = `${aggregate.inputTokens}|${aggregate.outputTokens}|${aggregate.cacheReadInputTokens}|${aggregate.cacheCreationInputTokens}`;
             logError(
               "walkthrough-opencode-mcp",
-              `[usage-diag] onAssistantTokens hit=${tokenCallbackHits} key=${key} skip=${key === lastUsageKey}`,
+              `[usage-diag] onAssistantTokens hit=${tokenCallbackHits} msg=${messageId} key=${key} skip=${key === lastUsageKey}`,
             );
             if (key === lastUsageKey) return;
             lastUsageKey = key;
             push({
               type: "usage",
-              data: {
-                tokenUsage: {
-                  inputTokens,
-                  outputTokens,
-                  cacheReadInputTokens,
-                  cacheCreationInputTokens,
-                },
-              },
+              data: { tokenUsage: aggregate },
             });
           };
           const sseDone = subscribeOpencodeStream(client, sessionId, sseAbort.signal, emit, {
@@ -537,17 +629,28 @@ export function streamWalkthroughViaOpencodeMCP(
 
           // Surface token usage from the opencode response (parity with
           // the Claude path, doctrine #13). The SDK reports input,
-          // output, reasoning, and cache.{read,write} per turn. We
-          // fold `reasoning` into `outputTokens` because Claude's
+          // output, reasoning, and cache.{read,write} PER CALL — and
+          // a turn contains multiple LLM calls (one per tool-use
+          // cycle), each producing its own assistant message. We fold
+          // `reasoning` into `outputTokens` because Claude's
           // `output_tokens` already includes its reasoning tokens —
           // keeping the four-field shape stable across agents.
-          const t = response.info.tokens;
-          return {
-            inputTokens: t.input,
-            outputTokens: t.output + t.reasoning,
-            cacheReadInputTokens: t.cache.read,
-            cacheCreationInputTokens: t.cache.write,
-          };
+          //
+          // Backstop the per-message map from `response.parts` for any
+          // step-finish parts SSE may have missed (drain race, dropped
+          // frames). Then return the aggregate so the turn total
+          // reflects ALL messages, not just the final closing one.
+          for (const part of response.parts) {
+            if (part.type === "step-finish") {
+              updateMsgSnap(part.messageID, part.tokens);
+            }
+          }
+          // Final-message backstop. `response.info` is the last
+          // assistant message; its `tokens` is the most-recent snapshot
+          // for that message and supersedes any earlier step-finish
+          // value for the same messageID.
+          updateMsgSnap(response.info.id, response.info.tokens);
+          return computeAggregateTokens();
         },
       });
     } catch (err) {
@@ -567,6 +670,7 @@ export function streamWalkthroughViaOpencodeMCP(
         cacheCreationInputTokens: 0,
       };
     } finally {
+      clearInterval(heartbeatInterval);
       await params.deps.unregisterActivityNotifier(params.walkthroughId).catch(() => {
         /* ignore */
       });

@@ -5,7 +5,8 @@ import { applyUserUpdate } from "./auth.svelte";
 import { onChatQuestionResolved } from "./chat.svelte";
 import * as errors from "./errors.svelte";
 import * as prs from "./prs.svelte";
-import { fetchArchivedPrs, getSelectedPrId, mergePullRequests } from "./prs.svelte";
+import { getSelectedPrId, mergePullRequests, onPrArchived } from "./prs.svelte";
+import { onRecapAdded, onRecapStatusChanged } from "./recaps.svelte";
 import {
   loadSession,
   onThreadCreated,
@@ -15,6 +16,7 @@ import {
   onThreadMessageEdited,
   onThreadUpdated,
 } from "./review.svelte";
+import { getGithubHost } from "./settings.svelte";
 import * as sync from "./sync.svelte";
 import { markThreadsSyncing } from "./sync.svelte";
 import { onWalkthroughEdited, onWalkthroughError } from "./walkthrough.svelte";
@@ -27,9 +29,29 @@ import {
 let ws: WebSocket | null = null;
 let reconnectAttempts = $state(0);
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-let pendingThreadSync: string | null = null;
+
+/** W2: queue multiple pending thread-sync requests instead of overwriting. */
+let pendingThreadSync: Set<string> = new Set();
 
 const MAX_RECONNECT_DELAY_MS = 30_000;
+
+/** W1: dead-connection detection — close the socket if >60s passes without any
+ * server-to-client message (ping frames don't count; they exist below the WS
+ * message layer). The server pings every ~30s, so 60s of silence means the
+ * TCP connection is genuinely dead (proxy/NAT timeout, OS sleep, etc.) and the
+ * close handler will schedule a reconnect. */
+const DEAD_CONNECTION_THRESHOLD_MS = 60_000;
+const KEEPALIVE_CHECK_INTERVAL_MS = 30_000;
+let lastMessageTime = 0;
+let keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+
+/** W4: stored listener references so disconnect() can remove them explicitly. */
+let wsListeners: {
+  open: () => void;
+  close: () => void;
+  error: () => void;
+  message: (event: MessageEvent) => void;
+} | null = null;
 
 function getReconnectDelay(): number {
   return Math.min(1000 * 2 ** reconnectAttempts, MAX_RECONNECT_DELAY_MS);
@@ -67,7 +89,13 @@ function handleMessage(msg: WsServerMessage): void {
   switch (msg.type) {
     case "prs:updated":
       mergePullRequests(msg.data);
-      void fetchArchivedPrs();
+      // No longer blindly refetching the archive list on every prs:updated:
+      // the targeted `pr:archived` envelope below patches archive state in
+      // place, and the initial archive fetch happens on app boot. Refetching
+      // here would re-pull dozens of rows for every poll cycle.
+      break;
+    case "pr:archived":
+      onPrArchived(msg.data);
       break;
     case "prs:sync-started":
       sync.setPrListSyncing(true);
@@ -149,6 +177,12 @@ function handleMessage(msg: WsServerMessage): void {
         msg.data.supersededPlanId,
       );
       break;
+    case "recap:status-changed":
+      onRecapStatusChanged(msg.data);
+      break;
+    case "recap:added":
+      onRecapAdded(msg.data);
+      break;
     default: {
       const _exhaustive: never = msg;
       console.warn("[ws] unhandled message type", (_exhaustive as { type: string }).type);
@@ -156,22 +190,51 @@ function handleMessage(msg: WsServerMessage): void {
   }
 }
 
-export function connect(token: string): void {
+/**
+ * Active host override for the current WS session. Set by `connect(token, host)`
+ * when the caller knows the right host (e.g. account-switch, where the local
+ * settings store has just been reset to null and `getGithubHost()` would
+ * otherwise return null — making the server fall back to the wrong account
+ * for users whose only account is on a non-default GHE host). Survives
+ * reconnects so the auto-reconnect path uses the same host as the original
+ * connect, not whatever happens to be in the settings store at reconnect time.
+ */
+let activeHostOverride: string | null = null;
+
+export function connect(token: string, hostOverride?: string): void {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
 
-  ws = new WebSocket(`${WS_BASE_URL}/ws?token=${encodeURIComponent(token)}`);
+  if (hostOverride !== undefined) activeHostOverride = hostOverride;
+  const host = activeHostOverride ?? getGithubHost();
+  const hostParam = host ? `&host=${encodeURIComponent(host)}` : "";
+  ws = new WebSocket(`${WS_BASE_URL}/ws?token=${encodeURIComponent(token)}${hostParam}`);
 
-  ws.addEventListener("open", () => {
+  // W4: capture listener references so disconnect() can remove them explicitly.
+  const onOpen = (): void => {
     const isReconnect = reconnectAttempts > 0;
     reconnectAttempts = 0;
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
     }
-    // Flush any pending thread sync requested before connection was ready
-    if (pendingThreadSync) {
-      const prId = pendingThreadSync;
-      pendingThreadSync = null;
+    // W1: reset last-message time and start the keepalive check interval.
+    lastMessageTime = Date.now();
+    keepaliveTimer = setInterval(() => {
+      if (
+        ws &&
+        ws.readyState === WebSocket.OPEN &&
+        Date.now() - lastMessageTime > DEAD_CONNECTION_THRESHOLD_MS
+      ) {
+        // Server is ping-ponging every 30s; if we haven't received any app-level
+        // message in 60s, the TCP connection is dead (proxy/NAT timeout, OS sleep).
+        // Close it so the close handler fires and reconnect kicks in.
+        ws.close(4000, "Dead connection detected");
+      }
+    }, KEEPALIVE_CHECK_INTERVAL_MS);
+    // W2: drain all queued thread-sync requests (was a single string slot; now a Set).
+    const toFlush = Array.from(pendingThreadSync);
+    pendingThreadSync.clear();
+    for (const prId of toFlush) {
       markThreadsSyncing(prId);
       ws?.send(JSON.stringify({ type: "threads:request-sync", data: { prId } }));
     }
@@ -191,25 +254,38 @@ export function connect(token: string): void {
     if (selectedPrId) {
       void hydrateFromCache(selectedPrId);
     }
-  });
+  };
 
-  ws.addEventListener("close", () => {
+  const onClose = (): void => {
+    if (keepaliveTimer) {
+      clearInterval(keepaliveTimer);
+      keepaliveTimer = null;
+    }
     ws = null;
+    wsListeners = null;
     scheduleReconnect(token);
-  });
+  };
 
-  ws.addEventListener("error", () => {
+  const onError = (): void => {
     // close event will fire next, which handles reconnect
-  });
+  };
 
-  ws.addEventListener("message", (event) => {
+  const onMessage = (event: MessageEvent): void => {
+    lastMessageTime = Date.now();
     try {
       const msg = JSON.parse(event.data as string) as WsServerMessage;
       handleMessage(msg);
     } catch {
-      // ignore malformed messages
+      const raw = typeof event.data === "string" ? event.data.slice(0, 200) : "[binary]";
+      console.warn("[ws] malformed message:", raw);
     }
-  });
+  };
+
+  wsListeners = { open: onOpen, close: onClose, error: onError, message: onMessage };
+  ws.addEventListener("open", onOpen);
+  ws.addEventListener("close", onClose);
+  ws.addEventListener("error", onError);
+  ws.addEventListener("message", onMessage);
 }
 
 function scheduleReconnect(token: string): void {
@@ -232,7 +308,7 @@ export function requestThreadSync(prId: string): void {
     ws.send(JSON.stringify({ type: "threads:request-sync", data: { prId } }));
   } else {
     // WS not ready yet — queue it to be sent on connect
-    pendingThreadSync = prId;
+    pendingThreadSync.add(prId);
   }
 }
 
@@ -242,7 +318,7 @@ export function requestFullSync(prId: string): void {
     ws.send(JSON.stringify({ type: "prs:request-sync" }));
     ws.send(JSON.stringify({ type: "threads:request-sync", data: { prId } }));
   } else {
-    pendingThreadSync = prId;
+    pendingThreadSync.add(prId);
   }
 }
 
@@ -251,7 +327,21 @@ export function disconnect(): void {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
+  if (keepaliveTimer) {
+    clearInterval(keepaliveTimer);
+    keepaliveTimer = null;
+  }
+  // W4: remove explicit listeners before nulling the socket so any retained
+  // reference to the old WS object (e.g. in a closure) doesn't keep firing.
+  if (ws && wsListeners) {
+    ws.removeEventListener("open", wsListeners.open);
+    ws.removeEventListener("close", wsListeners.close);
+    ws.removeEventListener("error", wsListeners.error);
+    ws.removeEventListener("message", wsListeners.message);
+    wsListeners = null;
+  }
   ws?.close(1000, "Client disconnecting");
   ws = null;
   reconnectAttempts = 0;
+  activeHostOverride = null;
 }
