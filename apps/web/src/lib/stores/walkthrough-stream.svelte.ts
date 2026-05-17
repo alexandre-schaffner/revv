@@ -70,6 +70,38 @@ const CLONE_POLL_MAX_MS = 10 * 60 * 1000;
 // Promise so only one HTTP request is in flight at a time.
 const pendingHydration = new Map<string, Promise<boolean>>();
 
+// In-flight user-initiated actions keyed by prId. Drives the `disabled`
+// state on Regenerate / Resume floating buttons so a double-click can't
+// fire two concurrent destructive actions during the async
+// POST → delete-entry → stream-start dance. Reactive `$state` so reads
+// from `$derived` consumers stay reactive; mutations follow the
+// Map-reassignment idiom enforced elsewhere in this codebase.
+export type PendingAction = "regenerate" | "resume";
+
+const pendingActions = $state({
+  map: new Map<string, PendingAction>(),
+});
+
+function setPending(prId: string, action: PendingAction): void {
+  pendingActions.map.set(prId, action);
+  pendingActions.map = new Map(pendingActions.map);
+}
+
+function clearPending(prId: string): void {
+  if (!pendingActions.map.has(prId)) return;
+  pendingActions.map.delete(prId);
+  pendingActions.map = new Map(pendingActions.map);
+}
+
+/**
+ * In-flight destructive action for the given PR's walkthrough, or null.
+ * Consumed by the floating-bar derivation to disable Regenerate / Resume
+ * during the async dance after the user clicks one.
+ */
+export function getPendingAction(prId: string): PendingAction | null {
+  return pendingActions.map.get(prId) ?? null;
+}
+
 // ── Clone polling ──────────────────────────────────────────────────────────
 
 export function stopClonePoll(prId: string): void {
@@ -518,17 +550,14 @@ export async function hydrateFromCache(prId: string): Promise<boolean> {
 
 // ── Abort / reset ────────────────────────────────────────────────────────────
 
-export function abort(): void {
-  let prId = store.activePrId;
-  if (!prId) {
-    for (const [id, entry] of store.entries) {
-      if (entry.isStreaming) {
-        prId = id;
-        break;
-      }
-    }
-  }
-  if (!prId) return;
+/**
+ * Stop the SSE stream for `prId` and clear its streaming flag. Caller must
+ * supply the explicit prId — earlier versions fell back to `store.activePrId`
+ * or scanned for any streaming entry, which silently targeted the wrong PR
+ * when the PRs-store selection and the walkthrough-store's `activePrId`
+ * had drifted (manifested as a dead Stop button).
+ */
+export function abort(prId: string): void {
   abortPr(prId);
   updateEntry(prId, (e) => {
     e.isStreaming = false;
@@ -537,42 +566,54 @@ export function abort(): void {
 }
 
 export async function regenerate(prId: string): Promise<void> {
-  clearAnimationTrackers(prId);
-  abortPr(prId);
-  deleteEntry(prId);
-  store.activePrId = prId;
-
-  const entry = freshEntry();
-  entry.phaseMessage = "Regenerating...";
-  setEntry(prId, entry);
-
+  if (pendingActions.map.has(prId)) return;
+  setPending(prId, "regenerate");
   try {
-    await fetch(`${API_BASE_URL}/api/reviews/${prId}/walkthrough/regenerate`, {
-      method: "POST",
-      headers: authHeaders(),
-    });
-  } catch {
-    // Non-fatal — streamWalkthrough will attempt a fresh generation anyway.
-  }
+    clearAnimationTrackers(prId);
+    abortPr(prId);
+    deleteEntry(prId);
+    store.activePrId = prId;
 
-  deleteEntry(prId);
-  await streamWalkthrough(prId);
+    const entry = freshEntry();
+    entry.phaseMessage = "Regenerating...";
+    setEntry(prId, entry);
+
+    try {
+      await fetch(`${API_BASE_URL}/api/reviews/${prId}/walkthrough/regenerate`, {
+        method: "POST",
+        headers: authHeaders(),
+      });
+    } catch {
+      // Non-fatal — streamWalkthrough will attempt a fresh generation anyway.
+    }
+
+    deleteEntry(prId);
+    await streamWalkthrough(prId);
+  } finally {
+    clearPending(prId);
+  }
 }
 
 export async function resume(prId: string): Promise<void> {
-  updateEntry(prId, (e) => {
-    e.streamError = null;
-  });
+  if (pendingActions.map.has(prId)) return;
+  setPending(prId, "resume");
   try {
-    const res = await fetch(`${API_BASE_URL}/api/reviews/${prId}/walkthrough/resume`, {
-      method: "POST",
-      headers: authHeaders(),
+    updateEntry(prId, (e) => {
+      e.streamError = null;
     });
-    if (!res.ok) return;
-  } catch {
-    return;
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/reviews/${prId}/walkthrough/resume`, {
+        method: "POST",
+        headers: authHeaders(),
+      });
+      if (!res.ok) return;
+    } catch {
+      return;
+    }
+    await streamWalkthrough(prId);
+  } finally {
+    clearPending(prId);
   }
-  await streamWalkthrough(prId);
 }
 
 export async function invalidateForPull(prId: string): Promise<void> {
@@ -637,14 +678,17 @@ export function reset(): void {
 export function onWalkthroughComplete(prId: string, walkthroughId: string): void {
   const entry = store.entries.get(prId);
   if (entry) {
+    // Same content predicate as the SSE `done` handler and the hydration
+    // fallback — keeps phase-D promotion consistent across all three paths.
+    // Sentiment is checked because invariant #12 requires it for a valid
+    // `complete` walkthrough; if it's missing locally we re-hydrate below.
     const hadBlocks = entry.blocks.length > 0;
     const hadSummary = entry.summary !== null;
     const hadSentiment = entry.sentiment !== null;
     const hadFullRatings = entry.ratings.length === 9;
-    const canMarkDoneLocally = hadBlocks && hadSummary && hadFullRatings;
     const isContentComplete = hadBlocks && hadSummary && hadSentiment && hadFullRatings;
 
-    if (canMarkDoneLocally || store.activePrId === prId) {
+    if (isContentComplete || store.activePrId === prId) {
       updateEntry(prId, (e) => {
         e.isStreaming = false;
         e.doneReceived = true;

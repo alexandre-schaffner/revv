@@ -80,9 +80,7 @@ export async function fetchRecapsForRepo(repoId: string): Promise<void> {
   if (loadingByRepo.get(repoId)) return;
   loadingByRepo = setEntry(loadingByRepo, repoId, true);
   try {
-    const { data } = await api.api
-      .repos({ id: repoId })
-      .recaps.get({ query: {} });
+    const { data } = await api.api.repos({ id: repoId }).recaps.get({ query: {} });
     if (data) {
       const page = data as {
         recaps: ProjectRecapSummary[];
@@ -104,9 +102,7 @@ export async function fetchMoreRecapsForRepo(repoId: string): Promise<void> {
   if (loadingByRepo.get(repoId)) return;
   loadingByRepo = setEntry(loadingByRepo, repoId, true);
   try {
-    const { data } = await api.api
-      .repos({ id: repoId })
-      .recaps.get({ query: { cursor } });
+    const { data } = await api.api.repos({ id: repoId }).recaps.get({ query: { cursor } });
     if (data) {
       const page = data as {
         recaps: ProjectRecapSummary[];

@@ -1,7 +1,7 @@
 <script lang="ts">
+import { Calendar, CircleAlert, Loader2, Sparkles } from "@lucide/svelte";
 import type { ProjectRecapSummary, RecapPeriod } from "@revv/shared";
 import { goto } from "$app/navigation";
-import { Calendar, CircleAlert, Loader2, Sparkles } from "@lucide/svelte";
 import RecapStats from "./RecapStats.svelte";
 
 interface Props {

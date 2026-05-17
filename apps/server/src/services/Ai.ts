@@ -1,4 +1,4 @@
-import type { InteractionMode, WalkthroughStreamEvent } from "@revv/shared";
+import type { InteractionMode, UserSettings, WalkthroughStreamEvent } from "@revv/shared";
 import { Context, Effect, Layer } from "effect";
 import {
   buildChatSystemPrompt,
@@ -17,7 +17,6 @@ import { type ContinuationContext, streamWalkthroughViaMCP } from "../ai/provide
 import type { OpencodeProviderDeps } from "../ai/providers/mcp-walkthrough-opencode";
 import { streamWalkthroughViaOpencodeMCP } from "../ai/providers/mcp-walkthrough-opencode";
 import { guardWalkthroughStream } from "../ai/providers/stream-guard";
-import { WALKTHROUGH_FIRST_EVENT_TIMEOUT_MS } from "../constants";
 import {
   type AiError,
   AiGenerationError,
@@ -96,6 +95,22 @@ export function resolveAgent(settings: { aiAgent: string | null }): CliAgent {
   throw new ValidationError({
     message: `Unknown aiAgent '${agent}' — expected "opencode" or "claude"`,
     field: "aiAgent",
+  });
+}
+
+/**
+ * Resolve the agent that should generate project recaps. `recap.agent` is a
+ * per-feature override: `'auto'` (default) inherits {@link resolveAgent};
+ * `'opencode'` / `'claude'` pin recap generation regardless of the global
+ * choice. Mirrors {@link resolveAgent}'s error semantics for unknown values.
+ */
+export function resolveRecapAgent(settings: UserSettings): CliAgent {
+  const choice = settings.recap?.agent ?? "auto";
+  if (choice === "opencode" || choice === "claude") return choice;
+  if (choice === "auto") return resolveAgent(settings);
+  throw new ValidationError({
+    message: `Unknown recap.agent '${choice}' — expected "auto", "opencode", or "claude"`,
+    field: "recap.agent",
   });
 }
 
@@ -302,8 +317,6 @@ export const AiServiceLive = Layer.effect(
             return guardWalkthroughStream(raw, {
               label: "opencode-mcp",
               synthesizePhases: false,
-              explorationStallMs: Infinity,
-              firstEventTimeoutMs: WALKTHROUGH_FIRST_EVENT_TIMEOUT_MS,
             });
           }
           const raw = streamWalkthroughViaMCP(

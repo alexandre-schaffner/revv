@@ -10,6 +10,7 @@ import { TooltipProvider } from "$lib/components/ui/tooltip";
 import * as sync from "$lib/services/sync";
 import * as auth from "$lib/stores/auth.svelte";
 import * as prs from "$lib/stores/prs.svelte";
+import * as recaps from "$lib/stores/recaps.svelte";
 import * as settings from "$lib/stores/settings.svelte";
 import { initShortcuts } from "$lib/stores/shortcuts.svelte";
 import { setSidebarView } from "$lib/stores/sidebar.svelte";
@@ -35,13 +36,30 @@ $effect(() => {
   prs.setSelectedPrId(match?.[1] ?? null);
 });
 
-// Reset sidebar to the PR list when leaving a PR route so a hard reload
-// at `/` doesn't strand the user on an empty tree view.
+// Same single-source-of-truth pattern for the selected recap. The
+// sidebar's Recaps sub-section highlights the active recap row by
+// comparing `href` against `page.url.pathname`; this effect keeps the
+// store in lock-step so any component reading `getSelectedRecapId()`
+// (e.g. the future detail pane) sees the same value.
+$effect(() => {
+  const match = page.url.pathname.match(/^\/repo\/[^/]+\/recaps\/([^/]+)/);
+  recaps.setSelectedRecapId(match?.[1] ?? null);
+});
+
+// Keep the sidebar view in lockstep with the URL in both directions.
+// PrItem.handleClick and CommandPalette already pair selectPr() with
+// setSidebarView('files') so the click-driven path is in sync. This
+// effect covers every URL-driven path that doesn't go through those
+// handlers — deep link, browser back/forward, refresh, WS-driven nav,
+// settings-link round-trip — and was previously one-sided (only reset
+// to 'prs' when the route left a PR), which let the header (OrgSwitcher)
+// and the body (file tree, because selectedPrId was set) desync.
+// Re-runs only when selectedPrId changes, so a manual swipe-back to the
+// PR list while staying on /review/[prId] (Esc / 'h' / breadcrumb) is
+// not clobbered.
 $effect(() => {
   const id = prs.getSelectedPrId();
-  if (!id) {
-    setSidebarView("prs");
-  }
+  setSidebarView(id ? "files" : "prs");
 });
 
 $effect(() => {

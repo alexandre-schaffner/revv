@@ -43,7 +43,13 @@ const knownOwners = $derived(
   new Set([personalLogin, ...orgs.map((o) => o.login)].filter((x): x is string => Boolean(x))),
 );
 const externalOwners = $derived(
-  [...new Set(getRepositories().map((r) => r.owner).filter((o) => !knownOwners.has(o)))].sort(),
+  [
+    ...new Set(
+      getRepositories()
+        .map((r) => r.owner)
+        .filter((o) => !knownOwners.has(o)),
+    ),
+  ].sort(),
 );
 
 const activeOrgRow = $derived(activeOrg ? (orgs.find((o) => o.login === activeOrg) ?? null) : null);

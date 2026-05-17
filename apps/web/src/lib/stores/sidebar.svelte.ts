@@ -142,7 +142,7 @@ export function openAddRepoDialog(): void {
 }
 
 // ── Collapse-all signal ──────────────────────────────────
-// A monotonically incrementing counter. RepoGroup components
+// A monotonically incrementing counter. RepoSection components
 // watch this in a $effect and collapse when it changes.
 
 export function getCollapseAllSignal(): number {

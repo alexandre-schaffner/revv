@@ -18,11 +18,17 @@
 
 import type { ProjectRecap, RecapPeriod, RecapSummaryStats } from "@revv/shared";
 import { Cause, Context, Effect, Fiber, Layer, Ref } from "effect";
-import type { RecapSourceBundle, RecapSourcePr } from "../ai/providers/recap-tools";
+import type {
+  RecapSourceBundle,
+  RecapSourcePr,
+  RecapToolContext,
+} from "../ai/providers/recap-tools";
 import { type RecapError, ValidationError } from "../domain/errors";
 import { withDb } from "../effects/with-db";
 import { debug, logError } from "../logger";
+import { resolveRecapAgent } from "./Ai";
 import { DbService } from "./Db";
+import { OpencodeSupervisor } from "./OpencodeSupervisor";
 import { ProjectRecapService } from "./ProjectRecap";
 import { type ArchivedPrWithWalkthrough, PullRequestService } from "./PullRequest";
 import { RepositoryService } from "./Repository";
@@ -37,6 +43,14 @@ export const MAX_CONCURRENT_RECAP_JOBS = 2;
 
 /** Resume-on-boot retry budget. After this many attempts the row goes to 'error'. */
 export const RECAP_MAX_RESUME_ATTEMPTS = 3;
+
+/**
+ * TTL for opencode HTTP-MCP session tokens. Covers the runner's 10-minute
+ * soft cap plus slack for slow daemon startups and retries. Tokens are
+ * cleared automatically on job end via `Effect.ensuring`; this TTL is a
+ * defensive ceiling so a leaked token can't outlive the job indefinitely.
+ */
+const RECAP_SESSION_TOKEN_TTL_MS = 15 * 60_000;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -96,6 +110,24 @@ export class ProjectRecapJobs extends Context.Tag("ProjectRecapJobs")<
 
     /** Re-launch any rows left in `status='generating'` by a prior process. */
     readonly resumePending: () => Effect.Effect<void>;
+
+    /**
+     * Issue an opaque session token bound to a prepared {@link RecapToolContext}.
+     * The HTTP MCP route at `/mcp/recap` authenticates opencode tool calls
+     * against this map and resolves them to the per-job context (recapId +
+     * sourceBundle + priorRecaps + onCompleted hook). Mirrors the
+     * walkthrough session-token pattern.
+     */
+    readonly issueSessionToken: (ctx: RecapToolContext) => Effect.Effect<string>;
+
+    /**
+     * Resolve a session token. Returns null when the token is unknown or
+     * its TTL has elapsed.
+     */
+    readonly resolveSessionToken: (token: string) => Effect.Effect<RecapToolContext | null>;
+
+    /** Invalidate a session token early (job end / cancel). */
+    readonly clearSessionToken: (token: string) => Effect.Effect<void>;
   }
 >() {}
 
@@ -110,10 +142,60 @@ export const ProjectRecapJobsLive = Layer.effect(
     const prService = yield* PullRequestService;
     const repoService = yield* RepositoryService;
     const settingsService = yield* SettingsService;
+    const supervisor = yield* OpencodeSupervisor;
 
     const registry = yield* Ref.make(new Map<string, ActiveRecapJob>());
     const semaphore = yield* Effect.makeSemaphore(MAX_CONCURRENT_RECAP_JOBS);
     const startJobMutexes = yield* Ref.make(new Map<string, Effect.Semaphore>());
+
+    // ── Session-token registry (opencode HTTP-MCP) ────────────────────────
+    // Holds prepared RecapToolContexts keyed by an opaque bearer token. The
+    // `/mcp/recap` route resolves the token → context per JSON-RPC call.
+    // Per CLAUDE.md invariant #1, this is ephemeral coordination: a server
+    // restart wipes the map; the orchestrator's resume path rebuilds it on
+    // the next run.
+    interface SessionEntry {
+      readonly ctx: RecapToolContext;
+      readonly expiresAt: number;
+    }
+    const sessionTokens = yield* Ref.make(new Map<string, SessionEntry>());
+
+    const issueSessionToken = (ctx: RecapToolContext): Effect.Effect<string> =>
+      Effect.gen(function* () {
+        const token = crypto.randomUUID();
+        const expiresAt = Date.now() + RECAP_SESSION_TOKEN_TTL_MS;
+        yield* Ref.update(sessionTokens, (map) => {
+          const next = new Map(map);
+          next.set(token, { ctx, expiresAt });
+          return next;
+        });
+        return token;
+      });
+
+    const resolveSessionToken = (token: string): Effect.Effect<RecapToolContext | null> =>
+      Effect.gen(function* () {
+        const map = yield* Ref.get(sessionTokens);
+        const entry = map.get(token);
+        if (!entry) return null;
+        if (entry.expiresAt <= Date.now()) {
+          yield* Ref.update(sessionTokens, (m) => {
+            if (!m.has(token)) return m;
+            const next = new Map(m);
+            next.delete(token);
+            return next;
+          });
+          return null;
+        }
+        return entry.ctx;
+      });
+
+    const clearSessionToken = (token: string): Effect.Effect<void> =>
+      Ref.update(sessionTokens, (map) => {
+        if (!map.has(token)) return map;
+        const next = new Map(map);
+        next.delete(token);
+        return next;
+      });
 
     const provideDb = <A, E>(eff: Effect.Effect<A, E, DbService>): Effect.Effect<A, E> =>
       withDb(db, eff);
@@ -320,6 +402,40 @@ export const ProjectRecapJobsLive = Layer.effect(
           Effect.catchAll(() => Effect.succeed(null)),
         );
 
+        // Resolve the effective agent. Per-feature `recap.agent` setting
+        // (CLAUDE.md note: this lets users run Claude for interactive work
+        // and opencode for background recaps, or vice versa). Defaults to
+        // `'auto'` which inherits the global `aiAgent`.
+        const effectiveAgent = settings
+          ? (() => {
+              try {
+                return resolveRecapAgent(settings);
+              } catch (e) {
+                logError(
+                  "recap-jobs",
+                  `resolveRecapAgent failed; falling back to 'claude':`,
+                  e instanceof Error ? e.message : String(e),
+                );
+                return "claude" as const;
+              }
+            })()
+          : ("claude" as const);
+
+        // Supervisor + session-token deps. Threaded through as callbacks so
+        // `recap-agent-runner.ts` stays decoupled from the Effect runtime
+        // (and avoids a layer cycle with this service).
+        const supervisorDeps = {
+          ensureDaemon: () => Effect.runPromise(supervisor.ensureRunning()),
+          jobStarted: () => Effect.runPromise(supervisor.jobStarted()),
+          jobEnded: () => Effect.runPromise(supervisor.jobEnded()),
+          client: () => Effect.runPromise(supervisor.client()),
+        };
+        const sessionDeps = {
+          issueSessionToken: (ctx: RecapToolContext) =>
+            Effect.runPromise(issueSessionToken(ctx)),
+          clearSessionToken: (token: string) => Effect.runPromise(clearSessionToken(token)),
+        };
+
         // Run the agent. The runner returns whether the agent reached the
         // validation gate (complete_recap returned success). On any error
         // we transition to 'error'; on success we transition to 'complete'.
@@ -332,8 +448,11 @@ export const ProjectRecapJobsLive = Layer.effect(
               priorRecaps,
               abortController: job.abortController,
               modelUsed: settings?.aiModel ?? "claude-opus-4-5",
-              aiAgent: settings?.aiAgent ?? "claude",
+              effectiveAgent,
               aiMaxTurns: settings?.aiMaxTurns ?? 12,
+              repoWorkingDir: repo.clonePath ?? process.cwd(),
+              supervisorDeps,
+              sessionDeps,
               onCompleted: () => {
                 job.validatedComplete = true;
               },
@@ -592,6 +711,9 @@ export const ProjectRecapJobsLive = Layer.effect(
       regenerateForPeriod,
       cancel,
       resumePending,
+      issueSessionToken,
+      resolveSessionToken,
+      clearSessionToken,
     };
   }),
 );

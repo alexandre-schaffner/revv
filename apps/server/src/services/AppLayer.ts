@@ -11,6 +11,7 @@ import { DiffCacheServiceLive } from "./DiffCache";
 import { FileContentServiceLive } from "./FileContent";
 import { GitHubServiceLive } from "./GitHub";
 import { GitHubEtagCacheLive } from "./GitHubEtagCache";
+import { OnboardingServiceLive } from "./Onboarding";
 import { OpencodeSupervisorLive } from "./OpencodeSupervisor";
 import { PollSchedulerLive } from "./PollScheduler";
 import { PrContextServiceLive } from "./PrContext";
@@ -65,6 +66,7 @@ const BaseLayers = Layer.mergeAll(
   DiffCacheServiceLive,
   FileContentServiceLive,
   CacheServiceLive,
+  OnboardingServiceLive,
   OpencodeSupervisorWithDeps,
   ChatSessionServiceWithDeps,
   ChatMcpTokensLive,

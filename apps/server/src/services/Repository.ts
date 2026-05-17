@@ -27,9 +27,7 @@ function rowToRepo(row: typeof repositories.$inferSelect): Repository {
 export class RepositoryService extends Context.Tag("RepositoryService")<
   RepositoryService,
   {
-    readonly listRepos: (
-      accountId?: string,
-    ) => Effect.Effect<Repository[], never, DbService>;
+    readonly listRepos: (accountId?: string) => Effect.Effect<Repository[], never, DbService>;
     readonly addRepo: (
       data: Omit<Repository, "id" | "addedAt" | "cloneStatus" | "clonePath" | "cloneError">,
       accountId: string,
@@ -59,11 +57,7 @@ export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
     Effect.gen(function* () {
       const { db } = yield* DbService;
       const rows = accountId
-        ? db
-            .select()
-            .from(repositories)
-            .where(eq(repositories.accountId, accountId))
-            .all()
+        ? db.select().from(repositories).where(eq(repositories.accountId, accountId)).all()
         : db.select().from(repositories).all();
       return rows.map(rowToRepo);
     }),
@@ -109,21 +103,13 @@ export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
   deleteRepo: (id, accountId) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
-      const existing = db
-        .select()
-        .from(repositories)
-        .where(eq(repositories.id, id))
-        .get();
+      const existing = db.select().from(repositories).where(eq(repositories.id, id)).get();
       if (!existing || existing.accountId !== accountId) {
         return yield* Effect.fail(new NotFoundError({ resource: "repository", id }));
       }
       // Use orDie so DB errors become defects, keeping the error channel as NotFoundError
       yield* Effect.try({
-        try: () =>
-          db
-            .delete(repositories)
-            .where(eq(repositories.id, id))
-            .run(),
+        try: () => db.delete(repositories).where(eq(repositories.id, id)).run(),
         catch: (e) => new Error(String(e)),
       }).pipe(Effect.orDie);
     }),
@@ -131,11 +117,7 @@ export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
   getRepoById: (id, accountId) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
-      const row = db
-        .select()
-        .from(repositories)
-        .where(eq(repositories.id, id))
-        .get();
+      const row = db.select().from(repositories).where(eq(repositories.id, id)).get();
       if (!row) {
         return yield* Effect.fail(new NotFoundError({ resource: "repository", id }));
       }
@@ -148,11 +130,7 @@ export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
   getRepoByFullName: (fullName, accountId) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
-      const row = db
-        .select()
-        .from(repositories)
-        .where(eq(repositories.fullName, fullName))
-        .get();
+      const row = db.select().from(repositories).where(eq(repositories.fullName, fullName)).get();
       if (!row || row.accountId !== accountId) return null;
       return rowToRepo(row);
     }),
@@ -160,11 +138,7 @@ export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
   updateRepoMetadata: (id, data, accountId) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
-      const existing = db
-        .select()
-        .from(repositories)
-        .where(eq(repositories.id, id))
-        .get();
+      const existing = db.select().from(repositories).where(eq(repositories.id, id)).get();
       if (!existing) {
         return yield* Effect.fail(new NotFoundError({ resource: "repository", id }));
       }
@@ -178,19 +152,10 @@ export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
         return rowToRepo(existing);
       }
       yield* Effect.try({
-        try: () =>
-          db
-            .update(repositories)
-            .set(updates)
-            .where(eq(repositories.id, id))
-            .run(),
+        try: () => db.update(repositories).set(updates).where(eq(repositories.id, id)).run(),
         catch: (e) => new Error(String(e)),
       }).pipe(Effect.orDie);
-      const updated = db
-        .select()
-        .from(repositories)
-        .where(eq(repositories.id, id))
-        .get();
+      const updated = db.select().from(repositories).where(eq(repositories.id, id)).get();
       if (!updated) {
         return yield* Effect.fail(new NotFoundError({ resource: "repository", id }));
       }

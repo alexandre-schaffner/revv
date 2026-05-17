@@ -17,7 +17,6 @@
 // add_diff_step before set_overview, this module returns a structured error
 // the agent can recover from — the DB row is never touched.
 
-import { Effect } from "effect";
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import type {
   RatingCitation,
@@ -26,6 +25,7 @@ import type {
   WalkthroughRating,
 } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
+import { Effect } from "effect";
 import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
 import { walkthroughRatings } from "../../../db/schema/walkthrough-ratings";
 import { walkthroughSemanticSteps } from "../../../db/schema/walkthrough-semantic-steps";

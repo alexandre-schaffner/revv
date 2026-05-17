@@ -217,9 +217,14 @@ agent tomorrow). Any change that violates them is wrong by construction — push
     byte-for-byte identical externally-observable behavior during a review. Divergence in
     the model's reasoning style is allowed; divergence in events, lifecycle, phase
     transitions, retry, or resume semantics is a bug.
-14. **Agent-daemon lifecycle.** Agent daemons (e.g., `opencode serve`) are lazy-started
-    only when the selected agent requires them and an active job needs them; they are
-    stopped when idle or when the selected agent changes. Their credentials and bound
+14. **Agent-daemon lifecycle.** Agent daemons (e.g., `opencode serve`) are eagerly
+    started whenever the selected agent or a per-feature override (e.g. `recap.agent`)
+    requires them — including at server boot and on settings-change-toward-opencode —
+    so the first job never pays the cold-start tax. They stay warm for as long as
+    they are needed; they are stopped on settings-change-away-from-opencode, on
+    crash-loop cap exhaustion, or on process exit. Idle-stop is a defensive fallback
+    only — invoked when `jobEnded()` observes the daemon is no longer needed and the
+    settings-change handler hasn't already torn it down. Their credentials and bound
     port are ephemeral and never persisted.
 
 ### Implications for new agent features (e.g., PRD-05)

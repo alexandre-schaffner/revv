@@ -25,7 +25,10 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
             .pipe(Effect.orElseSucceed(() => null));
           const githubHost = currentSettings?.githubHost?.trim() || serverEnv.githubHost;
 
-          const { accountId } = yield* tokenProvider.resolveAccount(ctx.session.user.id, githubHost);
+          const { accountId } = yield* tokenProvider.resolveAccount(
+            ctx.session.user.id,
+            githubHost,
+          );
           return yield* repoSvc.listRepos(accountId);
         }),
       );

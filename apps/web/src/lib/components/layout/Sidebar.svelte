@@ -1,25 +1,13 @@
 <script lang="ts">
-import {
-  Archive,
-  ChevronLeft,
-  GitPullRequest,
-  GitPullRequestArrow,
-  PanelLeftOpen,
-} from "@lucide/svelte";
-import { slide } from "svelte/transition";
+import { ChevronLeft, PanelLeftOpen } from "@lucide/svelte";
 import AddRepoDialog from "$lib/components/sidebar/AddRepoDialog.svelte";
 import OrgSwitcher from "$lib/components/sidebar/OrgSwitcher.svelte";
-import RepoGroup from "$lib/components/sidebar/RepoGroup.svelte";
+import RepoSection from "$lib/components/sidebar/RepoSection.svelte";
 import SearchFilter from "$lib/components/sidebar/SearchFilter.svelte";
 import SidebarFilesView from "$lib/components/sidebar/SidebarFilesView.svelte";
 import UserMenu from "$lib/components/sidebar/UserMenu.svelte";
 import { enterScrollMode, getActivePanel } from "$lib/stores/focus-mode.svelte";
 import {
-  getArchivedByRepo,
-  getArchivedPrs,
-  getGroupedByRepo,
-  getNeedsYourReview,
-  getNeedsYourReviewByRepo,
   getRepositories,
   getSelectedPr,
   getSelectedPrId,
@@ -45,18 +33,6 @@ interface Props {
 }
 
 let { collapsed = false }: Props = $props();
-
-let archiveExpanded = $state(
-  typeof localStorage !== "undefined"
-    ? localStorage.getItem("sidebar-archive-expanded") !== "false"
-    : false,
-);
-function toggleArchive() {
-  archiveExpanded = !archiveExpanded;
-  if (typeof localStorage !== "undefined") {
-    localStorage.setItem("sidebar-archive-expanded", String(archiveExpanded));
-  }
-}
 
 let addRepoOpen = $derived(getAddRepoDialogOpen());
 const selectedPrId = $derived(getSelectedPrId());
@@ -362,84 +338,30 @@ function handleKeydown(e: KeyboardEvent) {
 				<SearchFilter onAddRepo={() => setAddRepoDialogOpen(true)} />
 
 				<div class="pr-list" bind:this={prListEl} onscroll={handlePrListScroll}>
-					{#if getNeedsYourReview().length > 0}
-						<div class="needs-review-section">
-							<div class="section-header">
-								<GitPullRequestArrow size={11} />
-								<span>Needs Your Review</span>
-								<span class="section-count">{getNeedsYourReview().length}</span>
-							</div>
-							<div class="section-items">
-								{#each getVisibleRepositories().filter(r => (getNeedsYourReviewByRepo().get(r.id) ?? []).length > 0) as repo (repo.id)}
-									{@const prs = getNeedsYourReviewByRepo().get(repo.id) ?? []}
-									<RepoGroup repository={repo} {prs} navPrefix="review" />
-								{/each}
-							</div>
-						</div>
-					{/if}
-				{#if getRepositories().length === 0}
-					<div class="empty-state">
-						<svg class="empty-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-							<path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/>
-							<path d="M9 18c-4.51 2-5-2-7-2"/>
-						</svg>
-						<p class="empty-text">No repositories added</p>
-						<button class="add-link" onclick={() => setAddRepoDialogOpen(true)}>
-							Add a repository
-						</button>
-					</div>
-				{:else if getVisibleRepositories().length === 0}
-					<div class="empty-state">
-						<svg class="empty-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-							<path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/>
-							<path d="M9 18c-4.51 2-5-2-7-2"/>
-						</svg>
-						<p class="empty-text">No repositories in this workspace</p>
-					</div>
-				{:else}
-						{@const allOpenPrsCount = getVisibleRepositories().reduce((sum, repo) => {
-							const reviewIds = new Set((getNeedsYourReviewByRepo().get(repo.id) ?? []).map(p => p.id));
-							return sum + (getGroupedByRepo().get(repo.id) ?? []).filter(p => !reviewIds.has(p.id)).length;
-						}, 0)}
-						<div class="section-header">
-							<GitPullRequest size={11} />
-							<span>All Open PRs</span>
-							<span class="section-count">{allOpenPrsCount}</span>
-						</div>
-					{#each getVisibleRepositories() as repo (repo.id)}
-						{@const reviewIds = new Set((getNeedsYourReviewByRepo().get(repo.id) ?? []).map(p => p.id))}
-						{@const prs = (getGroupedByRepo().get(repo.id) ?? []).filter(p => !reviewIds.has(p.id))}
-						<RepoGroup repository={repo} {prs} />
-					{/each}
-
-					{#if getArchivedPrs().length > 0}
-						<div class="archive-section">
-							<button class="archive-header" onclick={toggleArchive} aria-expanded={archiveExpanded}>
-								<svg
-									class="h-3 w-3 shrink-0 text-text-muted transition-transform duration-snap ease-out-expo {archiveExpanded ? 'rotate-90' : ''}"
-									xmlns="http://www.w3.org/2000/svg"
-									viewBox="0 0 24 24"
-									fill="none"
-									stroke="currentColor"
-									stroke-width="2"
-								>
-									<path d="m9 18 6-6-6-6" />
-								</svg>
-								<Archive size={11} class="text-text-muted" />
-								<span>Archive</span>
-								<span class="section-count">{getArchivedPrs().length}</span>
+					{#if getRepositories().length === 0}
+						<div class="empty-state">
+							<svg class="empty-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+								<path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/>
+								<path d="M9 18c-4.51 2-5-2-7-2"/>
+							</svg>
+							<p class="empty-text">No repositories added</p>
+							<button class="add-link" onclick={() => setAddRepoDialogOpen(true)}>
+								Add a repository
 							</button>
-							{#if archiveExpanded}
-								<div transition:slide={{ duration: 220 }}>
-									{#each getVisibleRepositories().filter(r => (getArchivedByRepo().get(r.id) ?? []).length > 0) as repo (repo.id)}
-										{@const archivedForRepo = getArchivedByRepo().get(repo.id) ?? []}
-										<RepoGroup repository={repo} prs={archivedForRepo} navPrefix="archive" variant="archived" />
-									{/each}
-								</div>
-							{/if}
 						</div>
+					{:else if getVisibleRepositories().length === 0}
+						<div class="empty-state">
+							<svg class="empty-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+								<path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/>
+								<path d="M9 18c-4.51 2-5-2-7-2"/>
+							</svg>
+							<p class="empty-text">No repositories in this workspace</p>
+						</div>
+					{:else}
+						{#each getVisibleRepositories() as repo (repo.id)}
+							<RepoSection repository={repo} />
+						{/each}
 					{/if}
-				{/if}
 				</div>
 		</div>
 
@@ -670,41 +592,6 @@ function handleKeydown(e: KeyboardEvent) {
 		padding: 4px 0;
 	}
 
-	.needs-review-section {
-		border-bottom: 1px solid var(--color-border);
-		padding-bottom: 4px;
-		margin-bottom: 4px;
-	}
-
-	.section-header {
-		display: flex;
-		align-items: center;
-		gap: 5px;
-		padding: 6px 12px 4px;
-		font-size: 9px;
-		font-weight: 600;
-		letter-spacing: 0.07em;
-		text-transform: uppercase;
-		color: var(--color-text-muted);
-	}
-
-	.section-count {
-		margin-left: auto;
-		border-radius: 9999px;
-		background: var(--color-bg-elevated);
-		padding: 0 6px;
-		font-size: 10px;
-		font-weight: 500;
-		letter-spacing: 0;
-		text-transform: none;
-	}
-
-	.section-items {
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-	}
-
 	/* Empty state */
 	.empty-state {
 		display: flex;
@@ -739,33 +626,6 @@ function handleKeydown(e: KeyboardEvent) {
 
 	.add-link:hover {
 		text-decoration: underline;
-	}
-
-	.archive-section {
-		border-top: 1px solid var(--color-border);
-		padding-top: 4px;
-		margin-top: 4px;
-	}
-
-	.archive-header {
-		display: flex;
-		align-items: center;
-		gap: 5px;
-		width: 100%;
-		padding: 6px 12px 4px;
-		font-size: 9px;
-		font-weight: 600;
-		letter-spacing: 0.07em;
-		text-transform: uppercase;
-		color: var(--color-text-muted);
-		background: none;
-		border: none;
-		cursor: pointer;
-		text-align: left;
-	}
-
-	.archive-header:hover {
-		color: var(--color-text-secondary);
 	}
 
 	/* Footer — kept outside .sidebar-body so Settings is reachable while collapsed.

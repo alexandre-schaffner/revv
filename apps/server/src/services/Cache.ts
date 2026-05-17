@@ -140,8 +140,12 @@ export const CacheServiceLive = Layer.sync(CacheService, () => {
         // Lazy eviction: row is stale, drop it + register a miss.
         yield* Effect.try({
           try: () =>
-            db.delete(kvCache).where(and(eq(kvCache.ns, ns), eq(kvCache.key, key))).run(),
-          catch: (e) => new DbError({ message: `cache.get expired delete(${ns}, ${key}) failed`, cause: e }),
+            db
+              .delete(kvCache)
+              .where(and(eq(kvCache.ns, ns), eq(kvCache.key, key)))
+              .run(),
+          catch: (e) =>
+            new DbError({ message: `cache.get expired delete(${ns}, ${key}) failed`, cause: e }),
         });
         misses++;
         return null;
@@ -176,7 +180,8 @@ export const CacheServiceLive = Layer.sync(CacheService, () => {
 
       yield* Effect.try({
         try: () =>
-          db.insert(kvCache)
+          db
+            .insert(kvCache)
             .values({
               ns,
               key,
@@ -211,8 +216,12 @@ export const CacheServiceLive = Layer.sync(CacheService, () => {
       } else {
         yield* Effect.try({
           try: () =>
-            db.delete(kvCache).where(and(eq(kvCache.ns, ns), eq(kvCache.key, key))).run(),
-          catch: (e) => new DbError({ message: `cache.invalidate(${ns}, ${key}) failed`, cause: e }),
+            db
+              .delete(kvCache)
+              .where(and(eq(kvCache.ns, ns), eq(kvCache.key, key)))
+              .run(),
+          catch: (e) =>
+            new DbError({ message: `cache.invalidate(${ns}, ${key}) failed`, cause: e }),
         });
         memory.delete(cacheKey(ns, key));
       }

@@ -22,6 +22,7 @@ import type {
   WsServerMessage,
 } from "@revv/shared";
 import { Effect } from "effect";
+import { WALKTHROUGH_HEARTBEAT_MS } from "../../constants";
 import type { Db } from "../../db";
 import { debug, logError } from "../../logger";
 import { AppRuntime } from "../../runtime";
@@ -127,17 +128,25 @@ type Phase = "connecting" | "exploring" | "analyzing" | "writing" | "rating" | "
 
 interface PhaseMachine {
   readonly current: () => Phase;
+  /** Most recent message paired with `current()`. Used by the periodic
+   *  heartbeat (WALKTHROUGH_HEARTBEAT_MS) to re-emit a stable phase event
+   *  without UI churn. Returns a generic placeholder until the first
+   *  transition fires. */
+  readonly currentMessage: () => string;
   readonly transition: (next: Phase, message: string) => WalkthroughStreamEvent | null;
 }
 
 function createPhaseMachine(): PhaseMachine {
   let phase: Phase = "connecting";
+  let message = "Starting up...";
   return {
     current: () => phase,
-    transition: (next, message) => {
+    currentMessage: () => message,
+    transition: (next, msg) => {
       if (phase === next) return null;
       phase = next;
-      return { type: "phase", data: { phase: next, message } };
+      message = msg;
+      return { type: "phase", data: { phase: next, message: msg } };
     },
   };
 }
@@ -274,6 +283,19 @@ export function streamWalkthroughViaMCP(
 
     const phaseMachine = createPhaseMachine();
 
+    // Periodic phase heartbeat — guarantees the stream guard sees an event
+    // every WALKTHROUGH_HEARTBEAT_MS while the Claude SDK query is in flight,
+    // even when the model is thinking deeply between tool calls (extended
+    // thinking can be quiet for >2 min). Re-emits the current phase + last
+    // message so the UI stays stable.
+    const heartbeatInterval = setInterval(() => {
+      if (queryDone || errorEmitted) return;
+      push({
+        type: "phase",
+        data: { phase: phaseMachine.current(), message: phaseMachine.currentMessage() },
+      });
+    }, WALKTHROUGH_HEARTBEAT_MS);
+
     try {
       const pinnedClaude = resolveCliBin("claude");
       const pathOption =
@@ -366,6 +388,7 @@ export function streamWalkthroughViaMCP(
       };
     } finally {
       clearTimeout(timeoutId);
+      clearInterval(heartbeatInterval);
     }
   })();
 

@@ -29,7 +29,7 @@ import type {
   WalkthroughTokenUsage,
 } from "@revv/shared";
 import { serverEnv } from "../../config";
-import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../../constants";
+import { CLI_WALKTHROUGH_TIMEOUT_MS, WALKTHROUGH_HEARTBEAT_MS } from "../../constants";
 import type { Db } from "../../db";
 import { debug, logError } from "../../logger";
 import type { PrFileMeta } from "../../services/GitHub";
@@ -44,8 +44,8 @@ import {
   withAgentTurn,
 } from "../agent-stream";
 import { buildWalkthroughPrompt, WALKTHROUGH_MCP_SYSTEM_PROMPT } from "../prompts/walkthrough";
-import { TOOL_SPECS } from "./walkthrough-tools";
 import type { ContinuationContext } from "./mcp-walkthrough";
+import { TOOL_SPECS } from "./walkthrough-tools";
 
 // ── Built-in exploration tool surface ───────────────────────────────────────
 //
@@ -149,6 +149,10 @@ export function streamWalkthroughViaOpencodeMCP(
   // same phase lifecycle (invariant #13). We key off MCP tool-call bare
   // names since that's what the agent actually does.
   let currentPhase: WalkthroughLifecyclePhase = "connecting";
+  // Last message paired with `currentPhase`. Re-emitted by the periodic
+  // heartbeat (see WALKTHROUGH_HEARTBEAT_MS) so the UI doesn't churn while
+  // we keep the stream guard's inactivity timer alive.
+  let lastPhaseMessage = "Starting up...";
   let lastReasoningPush = 0;
   // Mirrors the Claude SDK path (invariant #13 agent-path parity).
   const PHASE_ORDER: WalkthroughLifecyclePhase[] = [
@@ -165,6 +169,7 @@ export function streamWalkthroughViaOpencodeMCP(
     // override a "writing" phase with "exploring"). Matches the Claude SDK path.
     if (PHASE_ORDER.indexOf(next) < PHASE_ORDER.indexOf(currentPhase)) return;
     currentPhase = next;
+    lastPhaseMessage = message;
     push({ type: "phase", data: { phase: next, message } });
   };
 
@@ -184,6 +189,19 @@ export function streamWalkthroughViaOpencodeMCP(
         push(event);
       }
     });
+
+    // Periodic phase heartbeat — guarantees the stream guard sees an event
+    // every WALKTHROUGH_HEARTBEAT_MS while the prompt is in flight, even when
+    // SSE reasoning-delta events are temporarily silent (e.g. between turns
+    // or before the first reasoning burst in extended-thinking mode). Re-emits
+    // the current phase + last meaningful message so the UI stays stable.
+    const heartbeatInterval = setInterval(() => {
+      if (queryDone || errorEmitted || cancelled) return;
+      push({
+        type: "phase",
+        data: { phase: currentPhase, message: lastPhaseMessage },
+      });
+    }, WALKTHROUGH_HEARTBEAT_MS);
 
     try {
       return await withAgentTurn({
@@ -292,9 +310,10 @@ export function streamWalkthroughViaOpencodeMCP(
           // Immediately push a phase event so the stream guard's first-event
           // timer resets — the model may take minutes to produce its first
           // tool call (extended thinking), but the session is alive.
+          lastPhaseMessage = "Waiting for model response...";
           push({
             type: "phase",
-            data: { phase: "connecting", message: "Waiting for model response..." },
+            data: { phase: "connecting", message: lastPhaseMessage },
           });
 
           // ── 3. Post the user message and process response parts ──
@@ -651,6 +670,7 @@ export function streamWalkthroughViaOpencodeMCP(
         cacheCreationInputTokens: 0,
       };
     } finally {
+      clearInterval(heartbeatInterval);
       await params.deps.unregisterActivityNotifier(params.walkthroughId).catch(() => {
         /* ignore */
       });

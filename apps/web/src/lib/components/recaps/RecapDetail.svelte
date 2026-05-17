@@ -1,6 +1,6 @@
 <script lang="ts">
-import type { ProjectRecap } from "@revv/shared";
 import { ArrowLeft, CircleAlert, Loader2, RefreshCw } from "@lucide/svelte";
+import type { ProjectRecap } from "@revv/shared";
 import { renderMarkdown } from "$lib/utils/markdown";
 import RecapStats from "./RecapStats.svelte";
 

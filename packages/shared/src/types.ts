@@ -57,6 +57,34 @@ export type ContextWindow = "200k" | "1m";
 
 export type AiAgent = "opencode" | "claude";
 
+/**
+ * Per-feature override for which agent generates project recaps.
+ * `'auto'` (default) inherits the global `aiAgent`; explicit values pin
+ * recap generation to that agent regardless of the global choice. Lets a
+ * user run Claude for interactive walkthroughs but keep background recaps
+ * on opencode (cheaper, unattended), or vice versa.
+ */
+export type RecapAgentChoice = "auto" | "opencode" | "claude";
+
+/**
+ * Which CLI agents are detected on PATH (or pinned via the LaunchAgent
+ * `REVV_*_BIN` env vars). Surfaced during onboarding so we can offer to
+ * install opencode when neither provider is present.
+ */
+export interface AgentAvailability {
+  opencode: boolean;
+  claude: boolean;
+}
+
+/**
+ * Event frames emitted over SSE while the server runs the opencode install
+ * script (`curl … | bash` on macOS/Linux, `irm … | iex` on Windows). The
+ * stream closes after `done`; on failure the message lives in `error`.
+ */
+export type InstallEvent =
+  | { type: "log"; line: string }
+  | { type: "done"; success: boolean; error?: string };
+
 export type ThemePreference = "system" | "light" | "dark";
 
 export type DiffViewMode = "unified" | "split";
@@ -97,6 +125,12 @@ export interface UserSettings {
     enabled: boolean;
     dailyEnabled: boolean;
     weeklyEnabled: boolean;
+    /**
+     * Per-feature agent override. `'auto'` (default) follows the global
+     * `aiAgent`; `'opencode'` / `'claude'` pin recap generation to that
+     * agent regardless of the global choice.
+     */
+    agent: RecapAgentChoice;
   };
   /**
    * GitHub host the app authenticates against. `'nocturlab.ghe.com'` for

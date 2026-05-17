@@ -5,6 +5,7 @@ import type {
   AiAgent,
   ContextWindow,
   DiffViewMode,
+  RecapAgentChoice,
   ThemePreference,
   ThinkingEffort,
   UserSettings,
@@ -45,8 +46,11 @@ const DEFAULT_SETTINGS: UserSettings = {
     enabled: true,
     dailyEnabled: true,
     weeklyEnabled: true,
+    agent: "auto",
   },
 };
+
+const VALID_RECAP_AGENTS: ReadonlySet<RecapAgentChoice> = new Set(["auto", "opencode", "claude"]);
 
 const MIN_MAX_TURNS = 10;
 const MAX_MAX_TURNS = 500;
@@ -89,9 +93,7 @@ function normalize(raw: unknown): UserSettings {
         ? (r.aiThinkingEffort as ThinkingEffort)
         : DEFAULT_SETTINGS.aiThinkingEffort,
     aiAgent:
-      r.aiAgent === "opencode" || r.aiAgent === "claude"
-        ? r.aiAgent
-        : DEFAULT_SETTINGS.aiAgent,
+      r.aiAgent === "opencode" || r.aiAgent === "claude" ? r.aiAgent : DEFAULT_SETTINGS.aiAgent,
     aiContextWindow:
       typeof r.aiContextWindow === "string"
         ? (r.aiContextWindow as ContextWindow)
@@ -121,10 +123,15 @@ function normalize(raw: unknown): UserSettings {
 function coerceRecap(value: unknown): UserSettings["recap"] {
   if (value === null || typeof value !== "object") return { ...DEFAULT_SETTINGS.recap };
   const r = value as Record<string, unknown>;
+  const agent =
+    typeof r.agent === "string" && VALID_RECAP_AGENTS.has(r.agent as RecapAgentChoice)
+      ? (r.agent as RecapAgentChoice)
+      : DEFAULT_SETTINGS.recap.agent;
   return {
     enabled: r.enabled === false ? false : DEFAULT_SETTINGS.recap.enabled,
     dailyEnabled: r.dailyEnabled === false ? false : DEFAULT_SETTINGS.recap.dailyEnabled,
     weeklyEnabled: r.weeklyEnabled === false ? false : DEFAULT_SETTINGS.recap.weeklyEnabled,
+    agent,
   };
 }
 
@@ -168,13 +175,23 @@ async function writeSettingsFile(settings: UserSettings): Promise<void> {
 
 // ── Service definition ────────────────────────────────────────────────────────
 
+/**
+ * Shape accepted by `updateSettings`. Top-level fields are individually
+ * optional (standard `Partial`), but `recap` is recursively partial so
+ * callers can patch a single nested field (e.g. `{ recap: { agent: 'opencode' } }`)
+ * without spreading the whole sub-object. {@link Settings.ts}'s
+ * `updateSettings` deep-merges `recap` against the current value to honour
+ * this contract.
+ */
+export type SettingsUpdate = Partial<Omit<UserSettings, "id" | "recap">> & {
+  recap?: Partial<UserSettings["recap"]>;
+};
+
 export class SettingsService extends Context.Tag("SettingsService")<
   SettingsService,
   {
     getSettings: () => Effect.Effect<UserSettings, ValidationError>;
-    updateSettings: (
-      partial: Partial<Omit<UserSettings, "id">>,
-    ) => Effect.Effect<UserSettings, ValidationError>;
+    updateSettings: (partial: SettingsUpdate) => Effect.Effect<UserSettings, ValidationError>;
     /**
      * Stream of settings snapshots emitted after every `updateSettings` call.
      * P4: used by OpencodeSupervisor to stop the daemon immediately when
@@ -200,14 +217,23 @@ export const SettingsServiceLive = Layer.effect(
 
     return {
       getSettings: () =>
-        settingsRef.get.pipe(
-          Effect.mapError((e) => new ValidationError({ message: String(e) })),
-        ),
+        settingsRef.get.pipe(Effect.mapError((e) => new ValidationError({ message: String(e) }))),
 
       updateSettings: (partial) =>
         Effect.gen(function* () {
           const current = yield* settingsRef.get;
-          const merged: UserSettings = { ...current, ...partial, id: "default" };
+          // Deep-merge `recap`: clients commonly patch just one nested field
+          // (e.g. `{ recap: { agent: 'opencode' } }`), and a shallow merge
+          // would wipe out the other recap fields. Other top-level fields
+          // are flat strings/numbers and merge shallowly without issue.
+          const mergedRecap =
+            partial.recap !== undefined ? { ...current.recap, ...partial.recap } : current.recap;
+          const merged: UserSettings = {
+            ...current,
+            ...partial,
+            recap: mergedRecap,
+            id: "default",
+          };
           const next: UserSettings = {
             ...merged,
             aiMaxTurns: coerceMaxTurns(merged.aiMaxTurns),
@@ -223,8 +249,7 @@ export const SettingsServiceLive = Layer.effect(
           return next;
         }),
 
-      settingsChanges: () =>
-        settingsRef.changes.pipe(Stream.drop(1)), // skip initial value
+      settingsChanges: () => settingsRef.changes.pipe(Stream.drop(1)), // skip initial value
     };
   }),
 );

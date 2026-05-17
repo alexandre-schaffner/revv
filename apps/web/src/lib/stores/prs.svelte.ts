@@ -106,6 +106,21 @@ export function getNeedsYourReviewByRepo(): Map<string, PullRequest[]> {
   return needsYourReviewByRepo;
 }
 
+/**
+ * Open PRs for one repo with needs-your-review PRs sorted to the top.
+ * Used by the per-repo PRs sub-section in the sidebar so the pinned rows
+ * (with a visible marker) appear above the rest of the open PRs without
+ * re-implementing the dedupe loop at every call site.
+ */
+export function getOpenPrsByRepoOrdered(repoId: string): PullRequest[] {
+  const review = needsYourReviewByRepo.get(repoId) ?? [];
+  const all = groupedByRepo.get(repoId) ?? [];
+  if (review.length === 0) return all;
+  const reviewIds = new Set(review.map((p) => p.id));
+  const rest = all.filter((p) => !reviewIds.has(p.id));
+  return [...review, ...rest];
+}
+
 export function getArchivedPrs(): PullRequest[] {
   return archivedPrs;
 }

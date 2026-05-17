@@ -494,17 +494,38 @@ export async function switchAccount(userId: string, host?: string): Promise<void
     settings.reset();
     orgs.reset();
     clearReviewFiles();
-    // Reconnect WebSocket with the new session token so the server sends
-    // updates scoped to the switched-to account.
-    ws.disconnect();
-    ws.connect(data.token);
-    await loadUser();
-    // Apply the target host after loadUser so settings.reset() doesn't
-    // clobber the value we're about to set.
+    // Persist the target host on the server FIRST so any handler resolving
+    // the active account from settings (e.g. `/api/prs`, `/api/repos`) sees
+    // the right host immediately. We hit the endpoint directly because the
+    // local settings store is null right now (just reset) and the optimistic
+    // merge in `updateSettings` would no-op.
     if (host) {
-      const { setGithubHost } = await import("$lib/stores/settings.svelte");
-      await setGithubHost(host);
+      try {
+        await fetch(`${API_BASE_URL}/api/settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.token}` },
+          body: JSON.stringify({ githubHost: host }),
+        });
+      } catch {
+        // best-effort — the WS host override below is the load-bearing path;
+        // the persisted setting only affects post-switch REST handlers and a
+        // missed PUT will self-heal once the user updates settings explicitly.
+      }
     }
+    // Reconnect WebSocket with the new session token AND explicit host so
+    // the server binds the WS to the target user's correct account on the
+    // first attempt, even though the local settings store is still null.
+    // Without the explicit host, the server falls back to
+    // `findAccount(userId, undefined)`, picks the wrong (or no) account,
+    // and the user never receives `prs:updated` broadcasts.
+    ws.disconnect();
+    ws.connect(data.token, host);
+    await loadUser();
+    // Pull settings into the local store so getGithubHost() returns the
+    // new host (e.g. for WS auto-reconnects and OrgSwitcher highlighting)
+    // and re-hydrate the PR / repo lists under the switched-to account.
+    await settings.fetchSettings();
+    await Promise.all([prs.fetchPrs(), prs.fetchRepos()]);
   } catch (e) {
     error = `Failed to switch account: ${e}`;
   } finally {

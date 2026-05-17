@@ -22,7 +22,5 @@ export const repositories = sqliteTable(
       .notNull()
       .references(() => account.id, { onDelete: "cascade" }),
   },
-  (table) => [
-    uniqueIndex("uq_repositories_full_name_account").on(table.fullName, table.accountId),
-  ],
+  (table) => [uniqueIndex("uq_repositories_full_name_account").on(table.fullName, table.accountId)],
 );

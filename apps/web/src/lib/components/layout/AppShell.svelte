@@ -63,20 +63,17 @@ import {
 } from "$lib/stores/sidebar.svelte";
 import {
   getPrWalkthroughStatus,
-  getCanResume as getWalkthroughCanResume,
   getRatings as getWalkthroughRatings,
-  getStreamError as getWalkthroughStreamError,
-  getIsStreaming as getWalkthroughStreaming,
-  getSummary as getWalkthroughSummary,
 } from "$lib/stores/walkthrough.svelte";
 import {
   abort as abortWalkthrough,
+  getPendingAction as getWalkthroughPendingAction,
   regenerate as regenerateWalkthrough,
   resume as resumeWalkthrough,
 } from "$lib/stores/walkthrough-stream.svelte";
+import { getWalkthroughUiState } from "$lib/stores/walkthrough-ui-state.svelte";
 import {
   getHasNewContentBelow as getWalkthroughHasNewContentBelow,
-  getUserScrolledUp as getWalkthroughUserScrolledUp,
   scrollToBottom as scrollWalkthroughToBottom,
   scrollToRatings as scrollWalkthroughToRatings,
   scrollToTop as scrollWalkthroughToTop,
@@ -100,22 +97,20 @@ const pr = $derived(getSelectedPr());
 const walkthroughStatus = $derived(pr ? getPrWalkthroughStatus(pr.id) : "idle");
 const activeTab = $derived(getActiveTab());
 const isSettingsRoute = $derived(page.url.pathname.startsWith("/settings"));
-const walkthroughStreaming = $derived(getWalkthroughStreaming());
-const walkthroughSummary = $derived(getWalkthroughSummary());
-const walkthroughCanResume = $derived(getWalkthroughCanResume());
-const walkthroughStreamError = $derived(getWalkthroughStreamError());
+const walkthroughUiState = $derived(getWalkthroughUiState());
+const walkthroughPendingAction = $derived(pr ? getWalkthroughPendingAction(pr.id) : null);
 const walkthroughHasRatings = $derived(getWalkthroughRatings().length > 0);
-const walkthroughUserScrolledUp = $derived(getWalkthroughUserScrolledUp());
 const walkthroughHasNewContentBelow = $derived(getWalkthroughHasNewContentBelow());
-const walkthroughHasContent = $derived(
-  walkthroughStreaming ||
-    !!walkthroughSummary ||
-    walkthroughCanResume ||
-    walkthroughHasRatings ||
-    !!walkthroughStreamError,
+// Bar is hidden in absent/idle/cloning — those are handled by GuidedWalkthrough's
+// inline UI (empty state, clone-in-progress skeleton). The bar only carries
+// post-start actions: stop, resume, retry, regenerate, navigation.
+const walkthroughBarHasActions = $derived(
+  walkthroughUiState.kind !== "absent" &&
+    walkthroughUiState.kind !== "idle" &&
+    walkthroughUiState.kind !== "cloning",
 );
 const showFloatingActions = $derived(
-  !!pr && !isSettingsRoute && activeTab === "walkthrough" && walkthroughHasContent,
+  !!pr && !isSettingsRoute && activeTab === "walkthrough" && walkthroughBarHasActions,
 );
 const showRcActions = $derived(!!pr && !isSettingsRoute && activeTab === "request-changes");
 
@@ -325,18 +320,32 @@ function onRightHandleDblClick(): void {
 		<BottomBar />
 	</footer>
 
-	{#if showFloatingActions && activeTab === 'walkthrough'}
+	{#if showFloatingActions && activeTab === 'walkthrough' && pr}
+		<!-- Floating actions for the walkthrough tab. Branches on a single
+		     discriminated UiState (see walkthrough-ui-state.svelte.ts) so the
+		     bar can't fall into two mutually-exclusive branches at once.
+		     Destructive actions are disabled while a regenerate/resume is
+		     in-flight or while a chat-edit stream is mutating the same
+		     walkthrough — Stop intentionally stays enabled. -->
+		{@const destructiveDisabled = walkthroughPendingAction !== null || chatStreaming}
+		{@const destructiveTitle = chatStreaming
+			? 'Chat edit in progress — wait for it to finish before regenerating'
+			: walkthroughPendingAction === 'regenerate'
+				? 'Regenerating…'
+				: walkthroughPendingAction === 'resume'
+					? 'Resuming…'
+					: undefined}
 		<div
 			class="walkthrough-actions-float"
 			class:is-resizing={isDragging || isResizingRight}
 			style={floatingActionsStyle}
 		>
 			<div class="walkthrough-actions-row">
-				{#if walkthroughStreaming}
+				{#if walkthroughUiState.kind === 'streaming'}
 					<button
 						type="button"
 						class="walkthrough-action-btn walkthrough-action-btn--danger"
-						onclick={abortWalkthrough}
+						onclick={() => abortWalkthrough(pr.id)}
 					>
 						<Square size={14} fill="currentColor" />
 						Stop generation
@@ -352,54 +361,85 @@ function onRightHandleDblClick(): void {
 							New content
 						</button>
 					{/if}
-				{:else if walkthroughCanResume && pr}
-					<!-- Partial data exists — offer Resume as the primary action.
-					     Applies to both user-stopped and errored states; the server
-					     revives error rows on resume. Regenerate stays available as
-					     a "throw it all away and start over" escape hatch. -->
+				{:else if walkthroughUiState.kind === 'resumable'}
 					<button
 						type="button"
 						class="walkthrough-action-btn"
+						disabled={destructiveDisabled}
+						title={destructiveTitle}
 						onclick={() => resumeWalkthrough(pr.id)}
-						aria-label={walkthroughStreamError
-							? 'Retry walkthrough from where it failed'
-							: 'Resume walkthrough from where it stopped'}
+						aria-label="Resume walkthrough from where it stopped"
 					>
-						{#if walkthroughStreamError}
-							<RotateCcw size={14} />
-							Retry
-						{:else}
-							<Play size={14} fill="currentColor" />
-							Resume
-						{/if}
+						<Play size={14} fill="currentColor" />
+						Resume
 					</button>
 					<button
 						type="button"
 						class="walkthrough-action-btn"
+						disabled={destructiveDisabled}
+						title={destructiveTitle}
 						onclick={() => regenerateWalkthrough(pr.id)}
 					>
 						<RefreshCw size={14} />
 						Regenerate
 					</button>
-				{:else if walkthroughStreamError && pr}
-					<!-- Errored before any partial content landed — only path forward is a fresh run. -->
+				{:else if walkthroughUiState.kind === 'error-partial'}
 					<button
 						type="button"
 						class="walkthrough-action-btn"
+						disabled={destructiveDisabled}
+						title={destructiveTitle}
+						onclick={() => resumeWalkthrough(pr.id)}
+						aria-label="Retry walkthrough from where it failed"
+					>
+						<RotateCcw size={14} />
+						Retry
+					</button>
+					<button
+						type="button"
+						class="walkthrough-action-btn"
+						disabled={destructiveDisabled}
+						title={destructiveTitle}
+						onclick={() => regenerateWalkthrough(pr.id)}
+					>
+						<RefreshCw size={14} />
+						Regenerate
+					</button>
+				{:else if walkthroughUiState.kind === 'error-empty'}
+					<button
+						type="button"
+						class="walkthrough-action-btn"
+						disabled={destructiveDisabled}
+						title={destructiveTitle}
 						onclick={() => regenerateWalkthrough(pr.id)}
 						aria-label="Retry walkthrough generation after error"
 					>
 						<RefreshCw size={14} />
 						Retry
 					</button>
-				{:else if walkthroughSummary && pr}
+				{:else if walkthroughUiState.kind === 'complete'}
 					<button
 						type="button"
 						class="walkthrough-action-btn"
+						disabled={destructiveDisabled}
+						title={destructiveTitle}
 						onclick={() => regenerateWalkthrough(pr.id)}
 					>
 						<RefreshCw size={14} />
 						Regenerate
+					</button>
+				{:else if walkthroughUiState.kind === 'complete-stale'}
+					<button
+						type="button"
+						class="walkthrough-action-btn walkthrough-action-btn--accent"
+						disabled={destructiveDisabled}
+						title={chatStreaming
+							? 'Chat edit in progress — wait for it to finish before regenerating'
+							: 'A newer commit landed — this walkthrough is for an older SHA. Regenerate against the latest.'}
+						onclick={() => regenerateWalkthrough(pr.id)}
+					>
+						<RefreshCw size={14} />
+						Regenerate for latest commit
 					</button>
 				{/if}
 

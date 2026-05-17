@@ -34,6 +34,15 @@ export class TokenProvider extends Context.Tag("TokenProvider")<
       { accountId: string; accessToken: string; providerId: string },
       GitHubAuthError
     >;
+    /**
+     * Look up an account's access token by its primary key. Used by
+     * background jobs (e.g. PollScheduler) that already know which account
+     * owns a given resource and must avoid the "first user / first matching
+     * providerId" fallback path — that path is correct for interactive
+     * single-user contexts but wrong as soon as multiple users or multiple
+     * accounts per host are present on the machine.
+     */
+    readonly getTokenByAccountId: (accountId: string) => Effect.Effect<string, GitHubAuthError>;
   }
 >() {}
 
@@ -42,9 +51,10 @@ export const TokenProviderLive = Layer.effect(
   Effect.gen(function* () {
     const { db } = yield* DbService;
 
-    async function findAccount(userId: string, host?: string): Promise<
-      { id: string; accessToken: string; providerId: string }
-    > {
+    async function findAccount(
+      userId: string,
+      host?: string,
+    ): Promise<{ id: string; accessToken: string; providerId: string }> {
       // 'single-user' is a placeholder — resolve to the actual user ID
       let resolvedId = userId;
       if (userId === "single-user" || !userId) {
@@ -76,6 +86,23 @@ export const TokenProviderLive = Layer.effect(
         }
       }
 
+      // Fallback: the priority list above is keyed on host=github.com, the
+      // configured GHE host, and the legacy 'github' provider. A user who
+      // signed in only against a *different* GHE host (e.g. nocturlab.ghe.com)
+      // and whose WS opens without a `host=` query param — which happens
+      // during account-switch, since settings.githubHost is reset to null
+      // before the WS reconnect — would miss every entry above and we'd
+      // hand back accountId='unresolved'. The WS then binds to no account
+      // and never receives the `broadcastToAccount(...)` PR updates the
+      // PollScheduler emits. Falling back to any account this user actually
+      // owns keeps single-account users always correct and gives multi-
+      // account users a deterministic-but-arbitrary pick that an explicit
+      // host param still overrides.
+      const anyAccount = rows.find((r) => r.accessToken);
+      if (anyAccount) {
+        return anyAccount as { id: string; accessToken: string; providerId: string };
+      }
+
       throw new Error("No access token found");
     }
 
@@ -98,6 +125,22 @@ export const TokenProviderLive = Layer.effect(
               accessToken: match.accessToken,
               providerId: match.providerId,
             };
+          },
+          catch: (e) => new GitHubAuthError({ message: String(e) }),
+        }),
+
+      getTokenByAccountId: (accountId: string) =>
+        Effect.tryPromise({
+          try: async () => {
+            const row = await db
+              .select({ accessToken: account.accessToken })
+              .from(account)
+              .where(eq(account.id, accountId))
+              .then((r) => r[0] ?? null);
+            if (!row?.accessToken) {
+              throw new Error(`No access token for account ${accountId}`);
+            }
+            return row.accessToken;
           },
           catch: (e) => new GitHubAuthError({ message: String(e) }),
         }),

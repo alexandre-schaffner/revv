@@ -1,11 +1,13 @@
 <script lang="ts">
 import {
+  CalendarClock,
   Cpu,
   Download,
   ExternalLink,
   Loader2,
   Monitor,
   Moon,
+  RefreshCw,
   RotateCcw,
   SlidersHorizontal,
   Sun,
@@ -14,7 +16,12 @@ import {
   User,
   X,
 } from "@lucide/svelte";
-import type { AiAgent, ContextWindow, ThinkingEffort } from "@revv/shared";
+import type {
+  AiAgent,
+  ContextWindow,
+  RecapAgentChoice,
+  ThinkingEffort,
+} from "@revv/shared";
 import { API_BASE_URL } from "@revv/shared";
 import { Dialog as DialogPrimitive } from "bits-ui";
 import { SvelteMap } from "svelte/reactivity";
@@ -27,14 +34,13 @@ import * as Select from "$lib/components/ui/select";
 import {
   agentSupportsContextWindow,
   agentSupportsThinkingEffort,
-  getDefaultModel,
-  getDefaultSuggestionsModel,
   OPUS_ONLY_EFFORTS,
   THINKING_EFFORT_OPTIONS,
 } from "$lib/constants/models";
 import { getUser, removeAccount, resetOnboarding, signOut } from "$lib/stores/auth.svelte";
 import { deleteRepo, getRepositories } from "$lib/stores/prs.svelte";
 import {
+  cascadeAgentChange,
   fetchModels,
   getAvailableModels,
   getSettings,
@@ -58,7 +64,14 @@ interface Props {
 let { open, onClose }: Props = $props();
 
 // ── Nav sections ──────────────────────────────────────────────────────────
-type SectionId = "account" | "ai" | "preferences" | "onboarding" | "updates" | "danger";
+type SectionId =
+  | "account"
+  | "ai"
+  | "recap"
+  | "preferences"
+  | "onboarding"
+  | "updates"
+  | "danger";
 
 interface NavItem {
   id: SectionId;
@@ -70,10 +83,18 @@ interface NavItem {
 const navItems: NavItem[] = [
   { id: "account", label: "Account", icon: User },
   { id: "ai", label: "AI Configuration", icon: Cpu },
+  { id: "recap", label: "Project Recap", icon: CalendarClock },
   { id: "preferences", label: "Preferences", icon: SlidersHorizontal },
   { id: "onboarding", label: "Onboarding", icon: RotateCcw },
   { id: "updates", label: "Updates", icon: Download, tauriOnly: true },
   { id: "danger", label: "Danger Zone", icon: TriangleAlert },
+];
+
+// ── Recap agent selector options ──────────────────────────────────────────
+const recapAgentOptions: { value: RecapAgentChoice; label: string }[] = [
+  { value: "auto", label: "Auto (follow main agent)" },
+  { value: "opencode", label: "OpenCode" },
+  { value: "claude", label: "Claude SDK" },
 ];
 
 const runningInTauri = isTauri();
@@ -444,22 +465,10 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 						// Kick a model-list fetch so the dropdowns below
 						// populate immediately without needing a manual refresh.
 						void loadModels(newAgent);
-						// Mirror AgentSelector: cascade both model fields so
-						// they stay valid for the new agent. Without this,
-						// aiModel and aiSuggestionsModel keep the old agent's
-						// catalog IDs — triggers show raw IDs matching nothing
-						// and the server may call the wrong provider.
-						const cached = getAvailableModels(newAgent);
-						const fallback = getDefaultModel(newAgent);
-						const pickedModel =
-							cached.length > 0
-								? (cached.find((m) => m.value === fallback)?.value ?? cached[0]!.value)
-								: fallback;
-						void updateSettings({
-							aiAgent: newAgent,
-							aiModel: pickedModel,
-							aiSuggestionsModel: getDefaultSuggestionsModel(newAgent),
-						});
+						// Cascade aiAgent + aiModel + aiSuggestionsModel atomically
+						// so the dependent dropdowns never show a catalog-mismatched
+						// id mid-flip. Shared with AgentSelector + StepAgent.
+						void updateSettings(cascadeAgentChange(newAgent));
 					}}
 				>
 					<Select.Trigger class="w-36 text-xs">
@@ -479,6 +488,15 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 					<p class="text-xs text-text-muted">The model used for generating reviews.</p>
 				</div>
 				<div class="flex items-center gap-2">
+					<Button
+						variant="ghost"
+						size="icon-sm"
+						onclick={() => loadModels(aiAgent)}
+						disabled={modelsLoading}
+						aria-label="Refresh models"
+					>
+						<RefreshCw size={12} class={modelsLoading ? 'animate-spin' : ''} />
+					</Button>
 					<Select.Root
 						type="single"
 						value={currentModel}
@@ -495,15 +513,6 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 							{/each}
 						</Select.Content>
 					</Select.Root>
-					<Button
-						variant="ghost"
-						size="icon-sm"
-						onclick={() => loadModels(aiAgent)}
-						disabled={modelsLoading}
-						aria-label="Refresh models"
-					>
-						<Loader2 size={12} class={modelsLoading ? 'animate-spin' : ''} />
-					</Button>
 				</div>
 			</div>
 
@@ -617,6 +626,48 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 						<span class="h-2 w-2 rounded-full bg-warning shrink-0"></span>
 							<p class="text-xs text-text-secondary">AI is not yet configured.</p>
 						{/if}
+					</div>
+				</div>
+			</section>
+
+			<!-- Project Recap -->
+			<section id="section-recap" class="settings-section">
+				<h2 class="settings-section-heading">Project Recap</h2>
+				<div class="space-y-5">
+					<!-- Recap agent selector -->
+					<div class="flex items-center justify-between gap-4">
+						<div class="min-w-0 flex-1">
+							<p class="text-sm text-text-primary">Recap agent</p>
+							<p class="text-xs text-text-muted">
+								Which agent generates daily and weekly project recaps. Auto follows your main agent.
+							</p>
+						</div>
+						<Select.Root
+							type="single"
+							value={getSettings()?.recap?.agent ?? 'auto'}
+							onValueChange={(v) => {
+								if (!v) return;
+								const next = v as RecapAgentChoice;
+								const currentRecap = getSettings()?.recap;
+								void updateSettings({
+									recap: {
+										enabled: currentRecap?.enabled ?? true,
+										dailyEnabled: currentRecap?.dailyEnabled ?? true,
+										weeklyEnabled: currentRecap?.weeklyEnabled ?? true,
+										agent: next,
+									},
+								});
+							}}
+						>
+							<Select.Trigger class="w-40 shrink-0 truncate text-xs">
+								{recapAgentOptions.find((o) => o.value === (getSettings()?.recap?.agent ?? 'auto'))?.label ?? 'Auto'}
+							</Select.Trigger>
+							<Select.Content>
+								{#each recapAgentOptions as opt (opt.value)}
+									<Select.Item value={opt.value} class="text-xs">{opt.label}</Select.Item>
+								{/each}
+							</Select.Content>
+						</Select.Root>
 					</div>
 				</div>
 			</section>

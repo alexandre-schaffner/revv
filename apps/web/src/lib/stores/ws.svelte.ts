@@ -16,10 +16,10 @@ import {
   onThreadMessageEdited,
   onThreadUpdated,
 } from "./review.svelte";
+import { getGithubHost } from "./settings.svelte";
 import * as sync from "./sync.svelte";
 import { markThreadsSyncing } from "./sync.svelte";
 import { onWalkthroughEdited, onWalkthroughError } from "./walkthrough.svelte";
-import { getGithubHost } from "./settings.svelte";
 import {
   hydrateFromCache,
   onWalkthroughComplete,
@@ -190,10 +190,22 @@ function handleMessage(msg: WsServerMessage): void {
   }
 }
 
-export function connect(token: string): void {
+/**
+ * Active host override for the current WS session. Set by `connect(token, host)`
+ * when the caller knows the right host (e.g. account-switch, where the local
+ * settings store has just been reset to null and `getGithubHost()` would
+ * otherwise return null — making the server fall back to the wrong account
+ * for users whose only account is on a non-default GHE host). Survives
+ * reconnects so the auto-reconnect path uses the same host as the original
+ * connect, not whatever happens to be in the settings store at reconnect time.
+ */
+let activeHostOverride: string | null = null;
+
+export function connect(token: string, hostOverride?: string): void {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
 
-  const host = getGithubHost();
+  if (hostOverride !== undefined) activeHostOverride = hostOverride;
+  const host = activeHostOverride ?? getGithubHost();
   const hostParam = host ? `&host=${encodeURIComponent(host)}` : "";
   ws = new WebSocket(`${WS_BASE_URL}/ws?token=${encodeURIComponent(token)}${hostParam}`);
 
@@ -208,7 +220,11 @@ export function connect(token: string): void {
     // W1: reset last-message time and start the keepalive check interval.
     lastMessageTime = Date.now();
     keepaliveTimer = setInterval(() => {
-      if (ws && ws.readyState === WebSocket.OPEN && Date.now() - lastMessageTime > DEAD_CONNECTION_THRESHOLD_MS) {
+      if (
+        ws &&
+        ws.readyState === WebSocket.OPEN &&
+        Date.now() - lastMessageTime > DEAD_CONNECTION_THRESHOLD_MS
+      ) {
         // Server is ping-ponging every 30s; if we haven't received any app-level
         // message in 60s, the TCP connection is dead (proxy/NAT timeout, OS sleep).
         // Close it so the close handler fires and reconnect kicks in.
@@ -327,4 +343,5 @@ export function disconnect(): void {
   ws?.close(1000, "Client disconnecting");
   ws = null;
   reconnectAttempts = 0;
+  activeHostOverride = null;
 }

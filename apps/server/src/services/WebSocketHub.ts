@@ -14,18 +14,12 @@ type AccountConnection = {
 export class WebSocketHub extends Context.Tag("WebSocketHub")<
   WebSocketHub,
   {
-    readonly register: (
-      ws: BunServerWebSocket,
-      accountId: string,
-    ) => Effect.Effect<void>;
+    readonly register: (ws: BunServerWebSocket, accountId: string) => Effect.Effect<void>;
     readonly unregister: (ws: BunServerWebSocket) => Effect.Effect<void>;
     /** Best-effort broadcast to every connected client (used for global events). */
     readonly broadcast: (msg: WsServerMessage) => Effect.Effect<void>;
     /** Best-effort broadcast only to clients connected for the given account. */
-    readonly broadcastToAccount: (
-      accountId: string,
-      msg: WsServerMessage,
-    ) => Effect.Effect<void>;
+    readonly broadcastToAccount: (accountId: string, msg: WsServerMessage) => Effect.Effect<void>;
     readonly clientCount: Effect.Effect<number>;
   }
 >() {}

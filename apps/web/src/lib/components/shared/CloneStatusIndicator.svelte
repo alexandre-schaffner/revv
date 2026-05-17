@@ -81,7 +81,7 @@ function handleRetryKey(e: KeyboardEvent) {
 {#if status === 'error' && onRetry}
 	<!--
 		Rendered as a role="button" span instead of a real <button> because
-		callers (RepoGroup, AddRepoForm) wrap their rows in a <button>, and
+		callers (RepoSection, AddRepoForm) wrap their rows in a <button>, and
 		HTML disallows nested interactive elements. stopPropagation prevents
 		the row toggle/add from firing.
 	-->

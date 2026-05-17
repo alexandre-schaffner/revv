@@ -410,7 +410,7 @@ export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> = asyn
     return errorResult("Internal error: add_diff_step reached emit without a block variant.");
   }
 
-ctx.emit({ type: "block", data: block });
+  ctx.emit({ type: "block", data: block });
   return okResult(
     `Atomic block persisted at chapter ${input.semantic_step_index}, step ${input.step_index}. Continue with more blocks in this chapter, open the next chapter with add_semantic_step, or call set_sentiment when Phase B is done.`,
   );

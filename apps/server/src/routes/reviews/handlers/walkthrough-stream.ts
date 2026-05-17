@@ -131,7 +131,7 @@ export function walkthroughStreamHandler(ctx: {
 
     // Set after startJob / subscribe so the prerender failure handler can
     // increment the per-job counter (S10).
-    let currentWalkthroughId: string | undefined = undefined;
+    let currentWalkthroughId: string | undefined;
 
     const forwardEvent = (event: WalkthroughStreamEvent): void => {
       const ord = forwardOrd++;
@@ -259,9 +259,7 @@ export function walkthroughStreamHandler(ctx: {
             const wtId = currentWalkthroughId;
             if (wtId) {
               void AppRuntime.runPromise(
-                Effect.flatMap(WalkthroughJobs, (jobs) =>
-                  jobs.incrementPrerenderFailures(wtId),
-                ),
+                Effect.flatMap(WalkthroughJobs, (jobs) => jobs.incrementPrerenderFailures(wtId)),
               );
             }
           }
@@ -323,8 +321,9 @@ export function walkthroughStreamHandler(ctx: {
         // validation gate). Without this replay, a client that re-streams a
         // completed walkthrough (e.g. after a WS `walkthrough:complete` races
         // ahead of the live `done` event and triggers fetchCachedWalkthrough)
-        // ends up with lastCompletedPhase='none', making getCanResume() return
-        // true and the floating actions render Resume instead of Regenerate.
+        // ends up with lastCompletedPhase='none', leaving the floating-bar
+        // UI state stuck in 'resumable' (Resume + Regenerate) instead of
+        // 'complete' (Regenerate only). See walkthrough-ui-state.svelte.ts.
         enqueueForward({
           type: "phase:advanced",
           data: { lastCompletedPhase: cached.lastCompletedPhase },
@@ -335,7 +334,9 @@ export function walkthroughStreamHandler(ctx: {
         // here so the client doesn't receive a `done` on incomplete data.
         const invariantFailures: string[] = [];
         if (cached.lastCompletedPhase !== "D") {
-          invariantFailures.push(`lastCompletedPhase='${cached.lastCompletedPhase}' (expected 'D')`);
+          invariantFailures.push(
+            `lastCompletedPhase='${cached.lastCompletedPhase}' (expected 'D')`,
+          );
         }
         if (!cached.summary || cached.summary.trim().length === 0) {
           invariantFailures.push("summary empty");

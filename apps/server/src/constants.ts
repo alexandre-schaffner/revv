@@ -17,8 +17,18 @@ export const CLI_WALKTHROUGH_TIMEOUT_MS = 600_000; // 10 minutes
  */
 export const CLI_CHAT_TURN_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
-/** Inactivity timeout for walkthrough stream guard (no events for this long = abort). */
-export const WALKTHROUGH_INACTIVITY_TIMEOUT_MS = 120_000; // 120 seconds -- 2 min
+/** Inactivity timeout for walkthrough stream guard (no events for this long = abort).
+ *  Providers emit a periodic phase heartbeat every WALKTHROUGH_HEARTBEAT_MS, so this
+ *  needs to comfortably exceed that interval. 4× heartbeat margin tolerates a missed
+ *  beat without killing a still-running agent; the 10-min withAgentTurn hard wall
+ *  remains the real backstop for a genuinely dead daemon. */
+export const WALKTHROUGH_INACTIVITY_TIMEOUT_MS = 180_000; // 180 seconds -- 3 min
+
+/** Cadence at which each provider pushes a `phase` heartbeat into its event queue
+ *  while the prompt is in flight. Keeps the stream guard's inactivity timer reset
+ *  even when the model is thinking deeply between tool calls or SSE reasoning-delta
+ *  events are temporarily silent. */
+export const WALKTHROUGH_HEARTBEAT_MS = 45_000; // 45 seconds
 
 /** Timeout for the first event from the AI provider — shorter since healthy providers emit immediately. */
 export const WALKTHROUGH_FIRST_EVENT_TIMEOUT_MS = 90_000; // 90 seconds

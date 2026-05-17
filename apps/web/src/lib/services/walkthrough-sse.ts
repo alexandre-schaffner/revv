@@ -105,7 +105,10 @@ export async function runWalkthroughSse(opts: RunWalkthroughSseOptions): Promise
     buffer += decoder.decode(value, { stream: true });
 
     const result = parseSSEBuffer<WalkthroughStreamEvent>(buffer, undefined, (raw, err) => {
-      wtTrace("sse", `parse-error: ${err instanceof Error ? err.message : String(err)} payload=${raw.slice(0, 120)}`);
+      wtTrace(
+        "sse",
+        `parse-error: ${err instanceof Error ? err.message : String(err)} payload=${raw.slice(0, 120)}`,
+      );
     });
     buffer = result.remaining;
 

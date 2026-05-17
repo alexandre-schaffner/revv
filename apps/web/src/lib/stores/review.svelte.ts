@@ -8,12 +8,12 @@ import type {
 } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
+import { RequestState, type RequestState as RequestStateType } from "$lib/stores/_types";
 import { invalidateChatHistory } from "$lib/stores/chat.svelte";
 import { enterSidebarMode } from "$lib/stores/focus-mode.svelte";
 import { getPullRequests } from "$lib/stores/prs.svelte";
 import { invalidateForPull } from "$lib/stores/walkthrough-stream.svelte";
 import type { ReviewFile } from "$lib/types/review";
-import { RequestState, type RequestState as RequestStateType } from "$lib/stores/_types";
 
 // --- Review files (shared between sidebar tree + review page) ---
 let reviewFiles = $state<ReviewFile[]>([]);

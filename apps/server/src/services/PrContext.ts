@@ -1,6 +1,8 @@
 import type { PullRequest, Repository } from "@revv/shared";
+import { eq } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
-import type { GitHubAuthError, GitHubError, NotFoundError } from "../domain/errors";
+import { repositories } from "../db/schema";
+import { GitHubAuthError, type GitHubError, type NotFoundError } from "../domain/errors";
 import { withDb } from "../effects/with-db";
 import { DbService } from "./Db";
 import { type CachedDiffFile, DiffCacheService } from "./DiffCache";
@@ -82,7 +84,27 @@ export const PrContextServiceLive = Layer.effect(
       Effect.gen(function* () {
         const pr = yield* prService.getPr(prId);
         const repo = yield* repoService.getRepoById(pr.repositoryId);
-        const token = yield* tokenProvider.getGitHubToken(userId, repo.githubHost);
+        // Look up the repo's owning OAuth account directly. The legacy
+        // `getGitHubToken(userId, host)` path falls back to "first user, first
+        // matching providerId" which silently picks the wrong identity once
+        // multiple users or multiple accounts per host coexist on the machine.
+        const { db } = yield* DbService;
+        const repoRow = db
+          .select({ accountId: repositories.accountId })
+          .from(repositories)
+          .where(eq(repositories.id, repo.id))
+          .get();
+        const token = repoRow
+          ? yield* tokenProvider.getTokenByAccountId(repoRow.accountId)
+          : yield* tokenProvider.getGitHubToken(userId, repo.githubHost).pipe(
+              Effect.catchAll(() =>
+                Effect.fail(
+                  new GitHubAuthError({
+                    message: `No account_id on repo ${repo.id} and no fallback token available`,
+                  }),
+                ),
+              ),
+            );
         return { pr, repo, token } satisfies PrContextBasic;
       });
 

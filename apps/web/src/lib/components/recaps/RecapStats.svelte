@@ -1,6 +1,6 @@
 <script lang="ts">
-import type { RecapSummaryStats } from "@revv/shared";
 import { AlertTriangle, GitMerge, GitPullRequestClosed, Users } from "@lucide/svelte";
+import type { RecapSummaryStats } from "@revv/shared";
 
 interface Props {
   stats: RecapSummaryStats;
@@ -8,9 +8,7 @@ interface Props {
 
 let { stats }: Props = $props();
 
-let hasRisk = $derived(
-  stats.riskBreakdown.medium + stats.riskBreakdown.high > 0,
-);
+let hasRisk = $derived(stats.riskBreakdown.medium + stats.riskBreakdown.high > 0);
 </script>
 
 <div class="recap-stats">

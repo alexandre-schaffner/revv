@@ -161,7 +161,13 @@ const PHASE_TO_INDEX: Record<"none" | "A" | "B" | "C" | "D", number> = {
   D: 3,
 };
 const activeChapterIndex = $derived.by(() => {
-  if (lastCompletedPhase === "C" && ratings.length === 0) return 2;
+  // Prefer the strongest content signal we have: a rating landing means
+  // we're in Phase D, sentiment landing means we're in Phase C. Falling
+  // back to `lastCompletedPhase` only when no later content is visible
+  // means a missed `phase:advanced` envelope can't strand the stepper on
+  // Diff Analysis while Sentiment / Rating cards render below.
+  if (ratings.length > 0) return 3;
+  if (sentiment !== null) return 2;
   return PHASE_TO_INDEX[lastCompletedPhase];
 });
 
@@ -273,9 +279,16 @@ const chapterAvailability = $derived([
 
 // Show a skeleton placeholder at the bottom of the diff section while
 // Phase B is active — i.e. overview landed but diff analysis hasn't
-// finished (more steps may still arrive).
+// finished (more steps may still arrive). Defensively gate on
+// `sentiment === null` and `ratings.length === 0` too: if any Phase C/D
+// content has landed the agent has moved past Phase B, even if the
+// `phase:advanced` envelope hasn't reached us yet (replay races, dropped
+// frames, etc.). Without that guard the shimmer stays visible underneath
+// the Overall Sentiment card.
 const showDiffSkeleton = $derived(
   isStreaming &&
+    sentiment === null &&
+    ratings.length === 0 &&
     (lastCompletedPhase === "none" || lastCompletedPhase === "A" || lastCompletedPhase === "B"),
 );
 

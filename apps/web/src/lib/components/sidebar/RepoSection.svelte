@@ -1,43 +1,29 @@
 <script lang="ts">
-import type { PullRequest, Repository } from "@revv/shared";
+import type { Repository } from "@revv/shared";
 import { untrack } from "svelte";
-import { fly, slide } from "svelte/transition";
+import { slide } from "svelte/transition";
 import CloneStatusIndicator from "$lib/components/shared/CloneStatusIndicator.svelte";
-import { getSelectedPrId, retryClone } from "$lib/stores/prs.svelte";
+import { getArchivedByRepo, getGroupedByRepo, retryClone } from "$lib/stores/prs.svelte";
 import { getCollapseAllSignal } from "$lib/stores/sidebar.svelte";
 import { getFocusedId } from "$lib/stores/sidebar-nav.svelte";
-import PrItem from "./PrItem.svelte";
+import RepoArchiveSubsection from "./RepoArchiveSubsection.svelte";
+import RepoPrsSubsection from "./RepoPrsSubsection.svelte";
+import RepoRecapsSubsection from "./RepoRecapsSubsection.svelte";
 
-/* Cap stagger at the first N items so a 50-PR repo doesn't pay 2s of
-	   ladder-in time. Beyond the cap, items render at the cap's delay
-	   (visually arriving "together" once the wrapper finishes opening). */
-const STAGGER_CAP = 20;
-
-let {
-  repository,
-  prs,
-  navPrefix = "pr",
-  variant = "open",
-}: {
+interface Props {
   repository: Repository;
-  prs: PullRequest[];
-  navPrefix?: string;
-  variant?: "open" | "archived";
-} = $props();
+}
+
+let { repository }: Props = $props();
 
 let expanded = $state(false);
 let lastSignal = $state(0);
 let avatarFailed = $state(false);
 
-// Reset failure state if the avatar URL changes
 $effect(() => {
   repository.avatarUrl;
   avatarFailed = false;
 });
-
-const selectedPrId = $derived(getSelectedPrId());
-const navId = $derived(`${navPrefix}:repo:${repository.id}`);
-const isFocused = $derived(getFocusedId() === navId);
 
 // Collapse when the global collapse-all signal fires
 $effect(() => {
@@ -48,9 +34,15 @@ $effect(() => {
   }
 });
 
-function toggle() {
+function toggle(): void {
   expanded = !expanded;
 }
+
+const openCount = $derived((getGroupedByRepo().get(repository.id) ?? []).length);
+const archiveCount = $derived((getArchivedByRepo().get(repository.id) ?? []).length);
+const totalCount = $derived(openCount + archiveCount);
+const navId = $derived(`repo:${repository.id}`);
+const isFocused = $derived(getFocusedId() === navId);
 </script>
 
 <div class="select-none">
@@ -110,32 +102,34 @@ function toggle() {
 			size={12}
 		/>
 
-		<span
-			class="shrink-0 rounded-full bg-bg-elevated px-1.5 py-0.5 text-xs font-medium text-text-muted"
-		>
-			{prs.length}
-		</span>
+		{#if totalCount > 0}
+			<span
+				class="shrink-0 rounded-full bg-bg-elevated px-1.5 py-0.5 text-xs font-medium text-text-muted"
+			>
+				{totalCount}
+			</span>
+		{/if}
 	</button>
 
 	{#if expanded}
-		<div
-			class="ml-2 flex flex-col gap-0.5 border-l border-border-subtle pl-2"
-			transition:slide={{ duration: 220 }}
-		>
-			{#if prs.length === 0}
-				<p class="px-2 py-1.5 text-xs text-text-muted">No open pull requests</p>
-			{:else}
-				{#each prs as pr, i (pr.id)}
-					<div in:fly={{ y: 6, duration: 160, delay: Math.min(i, STAGGER_CAP) * 25 }}>
-						<PrItem {pr} isSelected={selectedPrId === pr.id} {navPrefix} {variant} />
-					</div>
-				{/each}
+		<div class="subsections" transition:slide={{ duration: 220 }}>
+			<RepoRecapsSubsection repoId={repository.id} navParent={navId} />
+			<RepoPrsSubsection repoId={repository.id} navParent={navId} />
+			{#if archiveCount > 0}
+				<RepoArchiveSubsection repoId={repository.id} navParent={navId} />
 			{/if}
 		</div>
 	{/if}
 </div>
 
 <style>
+	.subsections {
+		display: flex;
+		flex-direction: column;
+		gap: 0;
+		padding-top: 2px;
+		padding-bottom: 4px;
+	}
 	:global(.sidebar-nav-focused) {
 		background: var(--color-bg-tertiary) !important;
 		box-shadow: inset 2px 0 0 var(--color-accent);

@@ -23,7 +23,7 @@ This audit measures the pipeline against the invariants codified in [`CLAUDE.md`
 11. Status transitions are orchestrator-only.
 12. `complete_walkthrough` is a validation gate.
 13. Agent-path parity: byte-for-byte identical externally-observable behavior.
-14. Agent-daemon lifecycle: lazy-start, idle-stop, ephemeral credentials.
+14. Agent-daemon lifecycle: eager-start while needed, settings-driven stop, ephemeral credentials.
 
 Each finding row carries two ratings:
 

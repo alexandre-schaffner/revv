@@ -20,7 +20,7 @@ import {
  * typography and breathing room, not container chrome.
  */
 
-type StepId = "welcome" | "host" | "signin" | "repo" | "done";
+type StepId = "welcome" | "host" | "signin" | "repo" | "agent" | "done";
 
 interface Props {
   stepId: StepId;

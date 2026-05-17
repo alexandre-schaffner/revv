@@ -28,6 +28,7 @@ export type {
 } from "./recap";
 export { EMPTY_RECAP_STATS } from "./recap";
 export type {
+  AgentAvailability,
   AiAgent,
   AuthorRole,
   CloneStatus,
@@ -36,10 +37,12 @@ export type {
   DiffViewMode,
   HunkDecision,
   HunkDecisionType,
+  InstallEvent,
   MessageType,
   Org,
   PullRequest,
   PullRequestStatus,
+  RecapAgentChoice,
   Repository,
   ReviewSession,
   ReviewStatus,

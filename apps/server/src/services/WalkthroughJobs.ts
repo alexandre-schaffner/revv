@@ -35,6 +35,7 @@ import type {
 } from "@revv/shared";
 import { Cause, Context, Effect, Fiber, Layer, Option, Ref, type Scope } from "effect";
 import { findIssuesMissingInlineComment } from "../ai/providers/walkthrough-tools";
+import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../constants";
 import {
   type AiError,
   AiGenerationError,
@@ -48,7 +49,6 @@ import {
 } from "../domain/errors";
 import { withDb } from "../effects/with-db";
 import { debug, logError } from "../logger";
-import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../constants";
 import { AiService, type ContinuationContext, resolveAgent } from "./Ai";
 import { DbService } from "./Db";
 import { GitHubEtagCache } from "./GitHubEtagCache";
@@ -84,8 +84,7 @@ const MAX_AUTO_CONTINUATIONS = 2;
  *   CLI_WALKTHROUGH_TIMEOUT_MS × (1 + MAX_AUTO_CONTINUATIONS) + 5 min margin.
  * This ensures the token outlives even the longest allowed generation session.
  */
-const SESSION_TOKEN_TTL_MS =
-  CLI_WALKTHROUGH_TIMEOUT_MS * (1 + MAX_AUTO_CONTINUATIONS) + 5 * 60_000;
+const SESSION_TOKEN_TTL_MS = CLI_WALKTHROUGH_TIMEOUT_MS * (1 + MAX_AUTO_CONTINUATIONS) + 5 * 60_000;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 

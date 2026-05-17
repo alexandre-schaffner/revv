@@ -192,13 +192,19 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
       const row = yield* Effect.try({
         try: () => db.select().from(pullRequests).where(eq(pullRequests.id, id)).get(),
         catch: (e) => new ValidationError({ message: String(e) }),
-      }).pipe(Effect.catchAll(() => Effect.succeed(null as (typeof pullRequests.$inferSelect) | null)));
+      }).pipe(
+        Effect.catchAll(() => Effect.succeed(null as typeof pullRequests.$inferSelect | null)),
+      );
       if (!row) {
         return yield* Effect.fail(new NotFoundError({ resource: "pull_request", id }));
       }
       // When accountId is supplied (API routes), verify ownership through the repository.
       if (accountId) {
-        const repo = db.select().from(repositories).where(eq(repositories.id, row.repositoryId)).get();
+        const repo = db
+          .select()
+          .from(repositories)
+          .where(eq(repositories.id, row.repositoryId))
+          .get();
         if (!repo || repo.accountId !== accountId) {
           return yield* Effect.fail(new NotFoundError({ resource: "pull_request", id }));
         }
@@ -315,9 +321,13 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
 
       return yield* Effect.try({
         try: () => {
-          const conditions: (ReturnType<typeof eq> | ReturnType<typeof ne> | ReturnType<typeof gte> | ReturnType<typeof lt> | ReturnType<typeof inArray>)[] = [
-            ne(pullRequests.status, "open"),
-          ];
+          const conditions: (
+            | ReturnType<typeof eq>
+            | ReturnType<typeof ne>
+            | ReturnType<typeof gte>
+            | ReturnType<typeof lt>
+            | ReturnType<typeof inArray>
+          )[] = [ne(pullRequests.status, "open")];
           if (repoIds && repoIds.length > 0) {
             conditions.push(inArray(pullRequests.repositoryId, repoIds));
           }
