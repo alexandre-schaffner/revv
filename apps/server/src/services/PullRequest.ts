@@ -168,18 +168,18 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
 
       const rows = yield* Effect.try({
         try: () => {
-          const conditions: (ReturnType<typeof eq> | ReturnType<typeof inArray>)[] = [];
+          const conditions: (ReturnType<typeof eq> | ReturnType<typeof inArray>)[] = [
+            eq(pullRequests.status, "open"),
+          ];
           if (repoIds && repoIds.length > 0) {
             conditions.push(inArray(pullRequests.repositoryId, repoIds));
           }
           if (repoId) conditions.push(eq(pullRequests.repositoryId, repoId));
-          return conditions.length > 0
-            ? db
-                .select()
-                .from(pullRequests)
-                .where(and(...conditions))
-                .all()
-            : db.select().from(pullRequests).all();
+          return db
+            .select()
+            .from(pullRequests)
+            .where(and(...conditions))
+            .all();
         },
         catch: (e) => new ValidationError({ message: String(e) }),
       }).pipe(Effect.orElseSucceed(() => [] as (typeof pullRequests.$inferSelect)[]));
