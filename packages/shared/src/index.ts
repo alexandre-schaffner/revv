@@ -38,6 +38,8 @@ export type {
   HunkDecision,
   HunkDecisionType,
   InstallEvent,
+  MergeEligibility,
+  MergeMethod,
   MessageType,
   Org,
   PullRequest,

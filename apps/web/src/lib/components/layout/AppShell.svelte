@@ -3,8 +3,10 @@ import {
   ArrowDown,
   ArrowUp,
   Check,
+  ChevronDown,
   FileEdit,
   Gauge,
+  GitMerge,
   Play,
   RefreshCw,
   RotateCcw,
@@ -16,13 +18,16 @@ import {
 import { page } from "$app/state";
 import { Shimmer } from "$lib/components/ai/shimmer";
 import SettingsModal from "$lib/components/settings/SettingsModal.svelte";
+import { Popover, PopoverContent, PopoverTrigger } from "$lib/components/ui/popover";
 import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
 import { isChatStreaming } from "$lib/stores/chat.svelte";
 import {
   closePr,
   convertPrToDraft,
+  getMergeEligibility,
   getSelectedPr,
   markPrReadyForReview,
+  mergePr,
 } from "$lib/stores/prs.svelte";
 import {
   getRcApproveBlockerSummary,
@@ -146,6 +151,33 @@ async function runOwnerAction(action: OwnerAction): Promise<void> {
     else await closePr(pr.id);
   } finally {
     ownerSubmitting = null;
+  }
+}
+
+let mergeEligibility = $state<import("@revv/shared").MergeEligibility | null>(null);
+let mergeSubmitting = $state<string | null>(null);
+let mergeMenuOpen = $state(false);
+
+$effect(() => {
+  const prId = pr?.id;
+  const owner = isPrOwner;
+  if (!prId || !owner) {
+    mergeEligibility = null;
+    return;
+  }
+  getMergeEligibility(prId).then((el) => {
+    mergeEligibility = el;
+  });
+});
+
+async function runMerge(method: import("@revv/shared").MergeMethod): Promise<void> {
+  if (!pr || mergeSubmitting !== null) return;
+  mergeSubmitting = method;
+  mergeMenuOpen = false;
+  try {
+    await mergePr(pr.id, method);
+  } finally {
+    mergeSubmitting = null;
   }
 }
 
@@ -520,6 +552,63 @@ function onRightHandleDblClick(): void {
 							{ownerSubmitting === 'convert-to-draft' ? 'Converting…' : 'Convert to draft'}
 						</button>
 					{/if}
+
+					{#if mergeEligibility?.canMerge && pr.status === 'open'}
+						<div style="display: flex; gap: 0;">
+							<button
+								type="button"
+								class="walkthrough-action-btn walkthrough-action-btn--success"
+								style="border-radius: var(--radius-lg) 0 0 var(--radius-lg);"
+								disabled={ownerSubmitting !== null || mergeSubmitting !== null}
+								onclick={() => runMerge('merge')}
+								title="Merge this pull request"
+							>
+								<GitMerge size={14} />
+								{mergeSubmitting === 'merge' ? 'Merging…' : 'Merge'}
+							</button>
+							<Popover bind:open={mergeMenuOpen}>
+								<PopoverTrigger>
+									<button
+										type="button"
+										class="walkthrough-action-btn walkthrough-action-btn--success"
+										style="border-radius: 0 var(--radius-lg) var(--radius-lg) 0; padding-inline: 6px;"
+										disabled={ownerSubmitting !== null || mergeSubmitting !== null}
+										aria-label="Merge options"
+										title="Choose merge strategy"
+									>
+										<ChevronDown size={14} />
+									</button>
+								</PopoverTrigger>
+								<PopoverContent class="w-56 p-1" align="end" side="top">
+									<button
+										type="button"
+										class="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-bg-tertiary"
+										onclick={() => runMerge('merge')}
+									>
+										<GitMerge size={12} />
+										Create a merge commit
+									</button>
+									<button
+										type="button"
+										class="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-bg-tertiary"
+										onclick={() => runMerge('squash')}
+									>
+										<GitMerge size={12} />
+										Squash and merge
+									</button>
+									<button
+										type="button"
+										class="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-bg-tertiary"
+										onclick={() => runMerge('rebase')}
+									>
+										<GitMerge size={12} />
+										Rebase and merge
+									</button>
+								</PopoverContent>
+							</Popover>
+						</div>
+					{/if}
+
 					<button
 						type="button"
 						class="walkthrough-action-btn walkthrough-action-btn--danger"

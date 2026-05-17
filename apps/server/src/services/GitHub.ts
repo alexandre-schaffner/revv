@@ -1,4 +1,4 @@
-import type { Org, PullRequest, Repository } from "@revv/shared";
+import type { MergeEligibility, MergeMethod, Org, PullRequest, Repository } from "@revv/shared";
 import { Context, Effect, Layer, Schedule } from "effect";
 import { serverEnv } from "../config";
 import {
@@ -213,6 +213,34 @@ function githubPatch(
         headers: { ...githubHeaders(token), "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
+      if (res.status === 422) {
+        const text = await res.text().catch(() => "");
+        throw new GitHubNetworkError({ cause: `422 Unprocessable Entity: ${text}` });
+      }
+      assertGitHubOk(res, path);
+      return res.json();
+    },
+    catch: toGitHubError,
+  });
+}
+
+function githubPut(
+  path: string,
+  token: string,
+  body: Record<string, unknown>,
+  apiBase: string,
+): Effect.Effect<unknown, GitHubError> {
+  return Effect.tryPromise({
+    try: async () => {
+      const res = await fetch(`${apiBase}${path}`, {
+        method: "PUT",
+        headers: { ...githubHeaders(token), "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (res.status === 405) {
+        const text = await res.text().catch(() => "");
+        throw new GitHubNetworkError({ cause: `HTTP 405 Method Not Allowed: ${text}` });
+      }
       if (res.status === 422) {
         const text = await res.text().catch(() => "");
         throw new GitHubNetworkError({ cause: `422 Unprocessable Entity: ${text}` });
@@ -564,6 +592,27 @@ export class GitHubService extends Context.Tag("GitHubService")<
     readonly closePullRequest: (
       repoFullName: string,
       prNumber: number,
+      token: string,
+    ) => Effect.Effect<void, GitHubError, SettingsService>;
+    /**
+     * Check whether the authenticated viewer can merge this PR, and whether
+     * the PR is actually mergeable (no conflicts, required checks passing, etc.).
+     * Uses a lightweight GraphQL query so branch-protection rules are respected.
+     */
+    readonly getMergeEligibility: (
+      repoFullName: string,
+      prNumber: number,
+      token: string,
+    ) => Effect.Effect<MergeEligibility, GitHubError, SettingsService>;
+    /**
+     * Merge a pull request via the REST API. GitHub returns 405 when the PR
+     * is not mergeable (conflicts, failing checks, or not approved); 422 when
+     * the merge method is not enabled for the repo.
+     */
+    readonly mergePullRequest: (
+      repoFullName: string,
+      prNumber: number,
+      mergeMethod: MergeMethod,
       token: string,
     ) => Effect.Effect<void, GitHubError, SettingsService>;
     /**
@@ -1170,6 +1219,64 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
         `/repos/${owner}/${repo}/pulls/${prNumber}`,
         token,
         { state: "closed" },
+        apiBase,
+      );
+    }),
+
+  getMergeEligibility: (repoFullName, prNumber, token) =>
+    Effect.gen(function* () {
+      const apiBase = yield* resolveApiBase;
+      const { owner, repo } = yield* parseRepoFullName(repoFullName);
+      const query = `
+        query($owner: String!, $repo: String!, $number: Int!) {
+          repository(owner: $owner, name: $repo) {
+            pullRequest(number: $number) {
+              viewerCanMergeAsAdmin
+              mergeable
+              mergeStateStatus
+            }
+          }
+        }
+      `;
+      interface Resp {
+        repository: {
+          pullRequest: {
+            viewerCanMergeAsAdmin: boolean;
+            mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN" | null;
+            mergeStateStatus: string | null;
+          } | null;
+        } | null;
+      }
+      const data = yield* githubGraphql<Resp>(
+        query,
+        { owner, repo, number: prNumber },
+        token,
+        apiBase,
+      );
+      const pr = data.repository?.pullRequest;
+      if (!pr) {
+        return yield* Effect.fail(
+          new GitHubNotFoundError({
+            resource: "pull_request",
+            id: `${owner}/${repo}#${prNumber}`,
+          }),
+        );
+      }
+      return {
+        canMerge: pr.viewerCanMergeAsAdmin ?? false,
+        mergeable: pr.mergeable === "MERGEABLE",
+        mergeStateStatus: pr.mergeStateStatus ?? "unknown",
+      };
+    }),
+
+  mergePullRequest: (repoFullName, prNumber, mergeMethod, token) =>
+    Effect.gen(function* () {
+      const apiBase = yield* resolveApiBase;
+      const { owner, repo } = yield* parseRepoFullName(repoFullName);
+      yield* githubPut(
+        `/repos/${owner}/${repo}/pulls/${prNumber}/merge`,
+        token,
+        { merge_method: mergeMethod },
         apiBase,
       );
     }),

@@ -1,4 +1,11 @@
-import type { CloneStatus, PullRequest, Repository, ThreadSummary } from "@revv/shared";
+import type {
+  CloneStatus,
+  MergeEligibility,
+  MergeMethod,
+  PullRequest,
+  Repository,
+  ThreadSummary,
+} from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { goto } from "$app/navigation";
 import { api } from "$lib/api/client";
@@ -395,6 +402,28 @@ export async function closePr(prId: string): Promise<void> {
     if (error) throw new Error(`HTTP ${error.status}`);
   } catch (e) {
     toast.error(e instanceof Error ? e.message : "Failed to close PR");
+    throw e;
+  }
+}
+
+export async function getMergeEligibility(prId: string): Promise<MergeEligibility | null> {
+  try {
+    const { data, error } = await api.api.prs({ id: prId })["merge-eligibility"].get();
+    if (error || !data) return null;
+    return data as MergeEligibility;
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : "Failed to check merge eligibility");
+    return null;
+  }
+}
+
+export async function mergePr(prId: string, mergeMethod: MergeMethod): Promise<void> {
+  try {
+    const { error } = await api.api.prs({ id: prId }).merge.post({ mergeMethod });
+    if (error) throw new Error(`HTTP ${error.status}`);
+    toast.success("Pull request merged successfully");
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : "Failed to merge pull request");
     throw e;
   }
 }

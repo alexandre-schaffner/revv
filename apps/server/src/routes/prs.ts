@@ -453,7 +453,65 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
     } catch (e) {
       return handleAppError(e, ctx);
     }
-  });
+  })
+
+  .get("/:id/merge-eligibility", async (ctx) => {
+    try {
+      const eligibility = await AppRuntime.runPromise(
+        Effect.gen(function* () {
+          const { accountId } = yield* resolveActiveAccount(ctx.session.user.id);
+          const prContext = yield* PrContextService;
+          const github = yield* GitHubService;
+          const { pr, repo, token } = yield* prContext.resolveBasic(
+            ctx.params.id,
+            ctx.session.user.id,
+          );
+          return yield* github.getMergeEligibility(repo.fullName, pr.externalId, token);
+        }),
+      );
+      return eligibility;
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  })
+
+  .post(
+    "/:id/merge",
+    async (ctx) => {
+      try {
+        await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const { accountId } = yield* resolveActiveAccount(ctx.session.user.id);
+            const prContext = yield* PrContextService;
+            const github = yield* GitHubService;
+            const prService = yield* PullRequestService;
+            const hub = yield* WebSocketHub;
+            const { pr, repo, token } = yield* prContext.resolveBasic(
+              ctx.params.id,
+              ctx.session.user.id,
+            );
+            const mergeMethod = (ctx.body?.mergeMethod ??
+              "merge") as import("@revv/shared").MergeMethod;
+            yield* github.mergePullRequest(repo.fullName, pr.externalId, mergeMethod, token);
+            const refreshed = yield* github
+              .getPr(repo.fullName, pr.externalId, token)
+              .pipe(Effect.map((p) => ({ ...p, id: pr.id, repositoryId: pr.repositoryId })));
+            yield* prService.upsertPrs([refreshed]);
+            const all = yield* prService.listPrs(accountId);
+            yield* hub.broadcastToAccount(accountId, { type: "prs:updated", data: all });
+          }),
+        );
+        return { success: true };
+      } catch (e) {
+        return handleAppError(e, ctx);
+      }
+    },
+    {
+      body: t.Object({
+        mergeMethod: t.Union([t.Literal("merge"), t.Literal("squash"), t.Literal("rebase")]),
+      }),
+    },
+  );
 
 // ── Suggestions cache + resolver ─────────────────────────────────────────────
 //
