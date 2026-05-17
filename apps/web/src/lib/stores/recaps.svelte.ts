@@ -15,24 +15,16 @@ import { api } from "$lib/api/client";
  * isn't carried here — it's fetched on demand via `loadRecap`.
  */
 let recapsByRepo = $state<Map<string, ProjectRecapSummary[]>>(new Map());
-let nextCursorByRepo = $state<Map<string, string | null>>(new Map());
 let loadingByRepo = $state<Map<string, boolean>>(new Map());
 
 /** Full recap (markdown + provenance + stats), keyed by `recapId`. */
 let recapDetailById = $state<Map<string, ProjectRecap>>(new Map());
 let loadingDetailById = $state<Map<string, boolean>>(new Map());
 
-/** Selected recap, used by the detail view. */
-let selectedRecapId = $state<string | null>(null);
-
 // ── Getters ──────────────────────────────────────────────────────────────────
 
 export function getRecapsForRepo(repoId: string): ProjectRecapSummary[] {
   return recapsByRepo.get(repoId) ?? [];
-}
-
-export function getRecapNextCursor(repoId: string): string | null {
-  return nextCursorByRepo.get(repoId) ?? null;
 }
 
 export function getRecapLoading(repoId: string): boolean {
@@ -45,14 +37,6 @@ export function getRecapDetail(recapId: string): ProjectRecap | null {
 
 export function getRecapDetailLoading(recapId: string): boolean {
   return loadingDetailById.get(recapId) ?? false;
-}
-
-export function getSelectedRecapId(): string | null {
-  return selectedRecapId;
-}
-
-export function setSelectedRecapId(id: string | null): void {
-  selectedRecapId = id;
 }
 
 // ── Map-write helpers (per §4 conventions — reassign after Map.set) ─────────
@@ -87,35 +71,9 @@ export async function fetchRecapsForRepo(repoId: string): Promise<void> {
         nextCursor: string | null;
       };
       recapsByRepo = setEntry(recapsByRepo, repoId, page.recaps);
-      nextCursorByRepo = setEntry(nextCursorByRepo, repoId, page.nextCursor);
     }
   } catch (e) {
     toast.error(e instanceof Error ? e.message : "Failed to load recaps");
-  } finally {
-    loadingByRepo = setEntry(loadingByRepo, repoId, false);
-  }
-}
-
-export async function fetchMoreRecapsForRepo(repoId: string): Promise<void> {
-  const cursor = nextCursorByRepo.get(repoId);
-  if (!cursor) return;
-  if (loadingByRepo.get(repoId)) return;
-  loadingByRepo = setEntry(loadingByRepo, repoId, true);
-  try {
-    const { data } = await api.api.repos({ id: repoId }).recaps.get({ query: { cursor } });
-    if (data) {
-      const page = data as {
-        recaps: ProjectRecapSummary[];
-        nextCursor: string | null;
-      };
-      const existing = recapsByRepo.get(repoId) ?? [];
-      const existingIds = new Set(existing.map((r) => r.id));
-      const fresh = page.recaps.filter((r) => !existingIds.has(r.id));
-      recapsByRepo = setEntry(recapsByRepo, repoId, [...existing, ...fresh]);
-      nextCursorByRepo = setEntry(nextCursorByRepo, repoId, page.nextCursor);
-    }
-  } catch (e) {
-    toast.error(e instanceof Error ? e.message : "Failed to load more recaps");
   } finally {
     loadingByRepo = setEntry(loadingByRepo, repoId, false);
   }
@@ -189,7 +147,8 @@ export function onRecapStatusChanged(data: {
   repoId: string;
   period: RecapPeriod;
   status: ProjectRecapStatus;
-  completedAt?: string;
+  completedAt?: string | null;
+  errorMessage?: string | null;
 }): void {
   // List: in-place patch the status column.
   recapsByRepo = updateEntry(recapsByRepo, data.repoId, (current) => {
@@ -202,6 +161,7 @@ export function onRecapStatusChanged(data: {
       ...row,
       status: data.status,
       ...(data.completedAt !== undefined ? { completedAt: data.completedAt } : {}),
+      ...(data.errorMessage !== undefined ? { errorMessage: data.errorMessage } : {}),
     };
     return [...list.slice(0, idx), patched, ...list.slice(idx + 1)];
   });
@@ -213,6 +173,7 @@ export function onRecapStatusChanged(data: {
       ...existing,
       status: data.status,
       ...(data.completedAt !== undefined ? { completedAt: data.completedAt } : {}),
+      ...(data.errorMessage !== undefined ? { errorMessage: data.errorMessage } : {}),
     };
     recapDetailById = setEntry(recapDetailById, data.recapId, patched);
   }
@@ -244,6 +205,7 @@ export function onRecapAdded(data: { recap: ProjectRecap }): void {
     completedAt: recap.completedAt,
     sourcePrCount: recap.sourcePrIds.length,
     summaryStats: recap.summaryStats,
+    errorMessage: recap.errorMessage,
   };
   const idx = list.findIndex((r) => r.id === recap.id);
   if (idx >= 0) {
@@ -261,13 +223,4 @@ export function onRecapAdded(data: { recap: ProjectRecap }): void {
     if (insertAt < 0) return [...list, summary];
     return [...list.slice(0, insertAt), summary, ...list.slice(insertAt)];
   });
-}
-
-export function reset(): void {
-  recapsByRepo = new Map();
-  nextCursorByRepo = new Map();
-  loadingByRepo = new Map();
-  recapDetailById = new Map();
-  loadingDetailById = new Map();
-  selectedRecapId = null;
 }

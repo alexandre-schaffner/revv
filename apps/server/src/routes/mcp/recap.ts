@@ -21,6 +21,7 @@
 // callback, no `broadcastThreadEvent`. Status broadcasts happen at
 // orchestrator completion only.
 
+import type { RecapStreamEvent } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia } from "elysia";
 import type { RecapToolContext, RecapToolResult } from "../../ai/providers/recap-tools";
@@ -46,16 +47,34 @@ async function resolveContext(
   if (!token) {
     return { ok: false, status: 401, message: "Missing bearer token" };
   }
-  const ctx = await AppRuntime.runPromise(
+  const baseCtx = await AppRuntime.runPromise(
     Effect.flatMap(ProjectRecapJobs, (jobs) => jobs.resolveSessionToken(token)),
   );
-  if (!ctx) {
+  if (!baseCtx) {
     return {
       ok: false,
       status: 403,
       message: "Session token not recognized, expired, or job no longer running",
     };
   }
+
+  // Sync emit path: tool handlers fire events synchronously so they don't
+  // lag behind lifecycle events in the SSE subscriber buffer.
+  const emit = (event: RecapStreamEvent): void => {
+    try {
+      AppRuntime.runSync(
+        Effect.flatMap(ProjectRecapJobs, (jobs) => jobs.emitEvent(baseCtx.recapId, event)),
+      );
+    } catch (err) {
+      logError(
+        "mcp-recap-route",
+        `emitEvent failed for ${baseCtx.recapId}:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  };
+
+  const ctx: RecapToolContext = { ...baseCtx, emit };
   return { ok: true, ctx };
 }
 

@@ -1,55 +1,108 @@
 <script lang="ts">
 import { ArrowLeft, CircleAlert, Loader2, RefreshCw } from "@lucide/svelte";
 import type { ProjectRecap } from "@revv/shared";
+import { Shimmer } from "$lib/components/ai/shimmer";
+import { Button } from "$lib/components/ui/button";
+import type { RecapStreamEntry } from "$lib/stores/recap-stream.svelte";
 import { renderMarkdown } from "$lib/utils/markdown";
 import RecapStats from "./RecapStats.svelte";
 
 interface Props {
   recap: ProjectRecap | null;
   loading: boolean;
-  onBack: () => void;
+  /** When omitted, the back button is hidden — used on the period landing pages. */
+  onBack?: (() => void) | undefined;
   onRegenerate: () => void;
   regenerating?: boolean;
+  /** Live stream state when the recap is generating. */
+  stream?: RecapStreamEntry | null | undefined;
+  /**
+   * Inline style for the floating Regenerate pill. Passed in by the parent
+   * (RecapPeriodView or [recapId] route) so the bar tracks sidebar /
+   * right-panel state without this component reading the sidebar store.
+   * Defaults to a viewport-centred placement when no parent supplies it.
+   */
+  floatingActionsStyle?: string;
 }
 
-let { recap, loading, onBack, onRegenerate, regenerating = false }: Props = $props();
+let {
+  recap,
+  loading,
+  onBack = undefined,
+  onRegenerate,
+  regenerating = false,
+  stream = null,
+  floatingActionsStyle = "left: 0; right: 0;",
+}: Props = $props();
 
-let html = $derived(recap?.overview ? renderMarkdown(recap.overview) : "");
+let html = $derived(
+  stream?.overview
+    ? renderMarkdown(stream.overview)
+    : recap?.overview
+      ? renderMarkdown(recap.overview)
+      : "",
+);
 
-function formatPeriod(r: ProjectRecap): string {
+const DAY_MONTH_YEAR = new Intl.DateTimeFormat("en-GB", {
+  weekday: "short",
+  day: "2-digit",
+  month: "short",
+  year: "numeric",
+  timeZone: "UTC",
+});
+const DAY_MONTH = new Intl.DateTimeFormat("en-GB", {
+  day: "2-digit",
+  month: "short",
+  timeZone: "UTC",
+});
+
+function periodCadenceLabel(r: ProjectRecap): string {
+  return r.period === "daily" ? "Daily recap" : "Weekly recap";
+}
+
+function periodWindowLabel(r: ProjectRecap): string {
   const start = new Date(r.periodStart);
-  const end = new Date(r.periodEnd);
   if (r.period === "daily") {
-    return `Daily · ${start.toUTCString().slice(0, 16)} UTC`;
+    return `${DAY_MONTH_YEAR.format(start)} · UTC`;
   }
-  const startStr = start.toUTCString().slice(8, 16);
-  const endStr = end.toUTCString().slice(8, 16);
-  return `Weekly · ${startStr} → ${endStr} UTC`;
+  const lastDay = new Date(new Date(r.periodEnd).getTime() - 1);
+  return `${DAY_MONTH.format(start)} → ${DAY_MONTH.format(lastDay)} · UTC`;
 }
+
+function phaseMessage(phase: string): string {
+  const labels: Record<string, string> = {
+    analyzing: "Analyzing pull requests…",
+    shipped: "Writing: What shipped…",
+    active_work: "Writing: Active work…",
+    project_state: "Writing: Project state…",
+    finalizing: "Finalizing recap…",
+    connecting: "Connecting…",
+  };
+  return labels[phase] ?? "Generating recap…";
+}
+
+// Show the floating Regenerate pill only when there's something to
+// regenerate — a complete (or errored) recap that's not currently being
+// rewritten. During `generating`, the streamer owns the screen and a
+// regenerate would just restart it.
+const showRegenerateFab = $derived(
+  !!recap && (recap.status === "complete" || recap.status === "error"),
+);
 </script>
 
 <div class="recap-detail">
 	<header class="recap-detail-header">
-		<button type="button" class="back-btn" onclick={onBack}>
-			<ArrowLeft size={14} />
-			<span>Recaps</span>
-		</button>
+		{#if onBack}
+			<Button variant="ghost" size="sm" onclick={onBack}>
+				<ArrowLeft />
+				Back
+			</Button>
+		{/if}
 		{#if recap}
-			<div class="period">{formatPeriod(recap)}</div>
-			<button
-				type="button"
-				class="regen-btn"
-				onclick={onRegenerate}
-				disabled={regenerating || recap.status === "generating"}
-				title="Generate a fresh recap for this period (the current one becomes superseded)"
-			>
-				{#if regenerating}
-					<Loader2 size={12} class="animate-spin" />
-				{:else}
-					<RefreshCw size={12} />
-				{/if}
-				<span>Regenerate</span>
-			</button>
+			<div class="period-block">
+				<span class="period-eyebrow">{periodCadenceLabel(recap)}</span>
+				<h1 class="period-title">{periodWindowLabel(recap)}</h1>
+			</div>
 		{/if}
 	</header>
 
@@ -69,25 +122,39 @@ function formatPeriod(r: ProjectRecap): string {
 		</div>
 
 		{#if recap.status === "generating"}
-			<div class="recap-pending">
-				<Loader2 size={18} class="animate-spin" aria-hidden="true" />
-				<div>
-					<p>Generating…</p>
-					<p class="hint">
-						This page will update automatically when the recap finishes. You can
-						leave and come back.
-					</p>
+			{#if stream && (stream.isStreaming || stream.overview)}
+				<article class="recap-prose">
+					{@html html}
+				</article>
+				{#if stream.isStreaming && !stream.doneReceived && !stream.streamError}
+					<div class="phase-shimmer">
+						<Loader2 size={16} class="animate-spin" aria-hidden="true" />
+						<span>{phaseMessage(stream.phase)}</span>
+					</div>
+				{/if}
+			{:else}
+				<div class="recap-pending">
+					<Loader2 size={18} class="animate-spin" aria-hidden="true" />
+					<div>
+						<p>Generating…</p>
+						<p class="hint">
+							This page will update automatically when the recap finishes. You
+							can leave and come back.
+						</p>
+					</div>
 				</div>
-			</div>
+			{/if}
 		{:else if recap.status === "error"}
 			<div class="recap-pending recap-pending--error">
 				<CircleAlert size={18} aria-hidden="true" />
 				<div>
 					<p>Generation failed.</p>
 					<p class="hint">
-						Click "Regenerate" to try again. If this happens repeatedly, check
-						that the Claude agent is selected in Settings — recap generation
-						currently requires Claude.
+						{#if recap.errorMessage}
+							{recap.errorMessage}
+						{:else}
+							Click "Regenerate" to try again.
+						{/if}
 					</p>
 				</div>
 			</div>
@@ -105,83 +172,84 @@ function formatPeriod(r: ProjectRecap): string {
 			</article>
 		{/if}
 
-		{#if recap.completedAt}
+		{#if recap.completedAt && recap.status === "complete"}
 			<footer class="recap-detail-footer">
 				<span>
 					Generated by {recap.modelUsed ?? "claude"} ·
-					{recap.sourcePrIds.length} source PR{recap.sourcePrIds.length === 1 ? '' : 's'} ·
-					completed {new Date(recap.completedAt).toUTCString()}
+					{recap.sourcePrIds.length} source PR{recap.sourcePrIds.length === 1
+						? ""
+						: "s"} · completed {new Date(recap.completedAt).toUTCString()}
 				</span>
 			</footer>
 		{/if}
 	{/if}
 </div>
 
+{#if showRegenerateFab && recap}
+	<div class="recap-actions-float" style={floatingActionsStyle}>
+		<div class="recap-actions-row">
+			<button
+				type="button"
+				class="recap-action-btn"
+				onclick={onRegenerate}
+				disabled={regenerating}
+				title="Generate a fresh recap for this period (the current one becomes superseded)"
+			>
+				{#if regenerating}
+					<Loader2 size={14} class="animate-spin" aria-hidden="true" />
+				{:else}
+					<RefreshCw size={14} aria-hidden="true" />
+				{/if}
+				<Shimmer active={!regenerating}>
+					{regenerating ? "Regenerating…" : "Regenerate recap"}
+				</Shimmer>
+			</button>
+		</div>
+	</div>
+{/if}
+
 <style>
 	.recap-detail {
 		display: flex;
 		flex-direction: column;
 		gap: 1rem;
-		padding: 1rem 1.25rem 2rem;
-		max-width: 56rem;
-		margin: 0 auto;
 		width: 100%;
 	}
 
 	.recap-detail-header {
 		display: flex;
-		align-items: center;
+		align-items: flex-start;
 		gap: 0.75rem;
-		padding-bottom: 0.5rem;
+		padding-bottom: 1rem;
 		border-bottom: 1px solid var(--color-border-subtle);
 	}
 
-	.back-btn {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.25rem;
-		padding: 0.25rem 0.5rem;
-		font-size: 0.8125rem;
-		color: var(--color-text-secondary);
-		background: transparent;
-		border: none;
-		border-radius: 0.25rem;
-		cursor: pointer;
-		transition: background var(--duration-snap) var(--ease-out-expo);
-	}
-
-	.back-btn:hover {
-		background: var(--color-bg-secondary);
-		color: var(--color-text-primary);
-	}
-
-	.period {
+	/* Editorial period title — cadence eyebrow in mono, window date in
+	   display weight. Mirrors the empty-state hero in RecapPeriodView. */
+	.period-block {
+		display: flex;
+		flex-direction: column;
+		gap: 0.35rem;
 		flex: 1;
-		font-size: 0.9375rem;
+		min-width: 0;
+	}
+
+	.period-eyebrow {
+		font-family: var(--font-mono);
+		font-size: 0.6875rem;
+		font-weight: 500;
+		text-transform: uppercase;
+		letter-spacing: 0.18em;
+		color: var(--color-text-muted);
+	}
+
+	.period-title {
+		margin: 0;
+		font-size: clamp(1.5rem, 2.6vw, 2rem);
+		font-weight: 500;
+		letter-spacing: -0.025em;
+		line-height: 1.1;
 		color: var(--color-text-primary);
-	}
-
-	.regen-btn {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.375rem;
-		padding: 0.25rem 0.625rem;
-		font-size: 0.75rem;
-		color: var(--color-text-primary);
-		background: var(--color-bg-secondary);
-		border: 1px solid var(--color-border-subtle);
-		border-radius: 0.25rem;
-		cursor: pointer;
-		transition: background var(--duration-quick) var(--ease-out-expo);
-	}
-
-	.regen-btn:hover:not(:disabled) {
-		background: var(--color-bg-hover, var(--color-bg-secondary));
-	}
-
-	.regen-btn:disabled {
-		opacity: 0.6;
-		cursor: not-allowed;
 	}
 
 	.recap-stats-row {
@@ -204,8 +272,7 @@ function formatPeriod(r: ProjectRecap): string {
 		margin: 0;
 	}
 
-	.recap-pending .hint,
-	.recap-empty p + p {
+	.recap-pending .hint {
 		margin-top: 0.25rem;
 		font-size: 0.8125rem;
 		color: var(--color-text-muted);
@@ -226,6 +293,15 @@ function formatPeriod(r: ProjectRecap): string {
 	.recap-prose :global(h3) {
 		margin: 1.5em 0 0.5em;
 		font-weight: 600;
+		letter-spacing: -0.015em;
+	}
+
+	.recap-prose :global(h1) {
+		font-size: 1.5em;
+	}
+
+	.recap-prose :global(h2) {
+		font-size: 1.2em;
 	}
 
 	.recap-prose :global(p) {
@@ -250,10 +326,103 @@ function formatPeriod(r: ProjectRecap): string {
 		border-radius: 0.25em;
 	}
 
+	.phase-shimmer {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		padding: 0.75rem 1rem;
+		margin-top: 0.5rem;
+		background: var(--color-bg-secondary);
+		border-radius: 0.5rem;
+		font-size: 0.875rem;
+		color: var(--color-text-secondary);
+	}
+
 	.recap-detail-footer {
 		padding-top: 0.5rem;
 		border-top: 1px solid var(--color-border-subtle);
 		font-size: 0.75rem;
 		color: var(--color-text-muted);
+		font-family: var(--font-mono);
+		letter-spacing: 0.01em;
+	}
+
+	/* Floating action pill — mirrors `.walkthrough-actions-float` in
+	   AppShell. Fixed positioning because this component renders inside
+	   `.main-area`, which has `overflow: hidden` and no positioning
+	   context of its own. Inline `left/right` is supplied by the parent
+	   so the pill tracks sidebar / right-panel state from one place. */
+	.recap-actions-float {
+		position: fixed;
+		bottom: 40px;
+		display: flex;
+		justify-content: center;
+		z-index: 20;
+		pointer-events: none;
+		padding-bottom: 12px;
+		transition:
+			left var(--duration-smooth) var(--ease-out-expo),
+			right var(--duration-instant) var(--ease-out-expo);
+	}
+
+	.recap-actions-float :global(*) {
+		pointer-events: auto;
+	}
+
+	.recap-actions-row {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+	}
+
+	.recap-action-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+		height: 36px;
+		padding: 0 16px;
+		background: var(--color-tab-track-bg);
+		backdrop-filter: blur(16px) saturate(1.4);
+		-webkit-backdrop-filter: blur(16px) saturate(1.4);
+		border: 1px solid var(--color-glass-border);
+		border-radius: 9999px;
+		box-shadow:
+			var(--color-glass-shadow),
+			inset 0 0.5px 0 0 var(--color-glass-highlight);
+		font-family: inherit;
+		font-size: 13px;
+		font-weight: 500;
+		letter-spacing: -0.01em;
+		line-height: 1.2;
+		color: var(--color-text-primary);
+		cursor: pointer;
+		transition:
+			background-color var(--duration-snap),
+			color var(--duration-snap),
+			box-shadow var(--duration-snap);
+		-webkit-font-smoothing: antialiased;
+		white-space: nowrap;
+	}
+
+	.recap-action-btn:hover {
+		background: color-mix(
+			in srgb,
+			var(--color-tab-active-bg) 80%,
+			var(--color-tab-track-bg)
+		);
+	}
+
+	.recap-action-btn:focus-visible {
+		outline: 2px solid var(--color-accent);
+		outline-offset: 2px;
+	}
+
+	.recap-action-btn--accent:not(:disabled) {
+		color: var(--color-accent);
+	}
+
+	.recap-action-btn:disabled {
+		cursor: not-allowed;
+		opacity: 0.55;
 	}
 </style>

@@ -279,7 +279,7 @@ function scheduleReconciliationPoll(prId: string, attempt = 0): void {
     // S6: coalesce concurrent hydration attempts for the same prId
     let hydrationPromise = pendingHydration.get(prId);
     if (!hydrationPromise) {
-      hydrationPromise = hydrateFromCache(prId).finally(() => {
+      hydrationPromise = hydrateFromCache(prId, { activate: false }).finally(() => {
         pendingHydration.delete(prId);
       });
       pendingHydration.set(prId, hydrationPromise);
@@ -299,9 +299,14 @@ function scheduleReconciliationPoll(prId: string, attempt = 0): void {
 
 // ── Core streaming ──────────────────────────────────────────────────────────
 
-export async function streamWalkthrough(prId: string): Promise<void> {
+export async function streamWalkthrough(
+  prId: string,
+  options?: { activate?: boolean },
+): Promise<void> {
   wtTrace("lifecycle", `streamWalkthrough enter prId=${prId}`);
-  store.activePrId = prId;
+  if (options?.activate !== false) {
+    store.activePrId = prId;
+  }
   stopClonePoll(prId);
 
   const existing = store.entries.get(prId);
@@ -455,7 +460,10 @@ export async function prefetchWalkthrough(prId: string): Promise<void> {
 
 // ── Cache hydration ─────────────────────────────────────────────────────────
 
-export async function hydrateFromCache(prId: string): Promise<boolean> {
+export async function hydrateFromCache(
+  prId: string,
+  options?: { activate?: boolean },
+): Promise<boolean> {
   wtTrace("lifecycle", `hydrateFromCache enter prId=${prId}`);
   const existing = store.entries.get(prId);
   if (
@@ -466,7 +474,9 @@ export async function hydrateFromCache(prId: string): Promise<boolean> {
     !existing.streamError
   ) {
     wtTrace("lifecycle", `hydrateFromCache skip prId=${prId} reason=already-complete`);
-    store.activePrId = prId;
+    if (options?.activate !== false) {
+      store.activePrId = prId;
+    }
     return true;
   }
 
@@ -536,10 +546,14 @@ export async function hydrateFromCache(prId: string): Promise<boolean> {
     entry.liveGeneration = isGenerating;
     if (isGenerating) entry.streamStartedAt = Date.now();
     setEntry(prId, entry);
-    store.activePrId = prId;
+    if (options?.activate !== false) {
+      store.activePrId = prId;
+    }
 
     if (isGenerating) {
-      void streamWalkthrough(prId);
+      const streamOpts =
+        options?.activate !== undefined ? { activate: options.activate } : undefined;
+      void streamWalkthrough(prId, streamOpts);
     }
 
     return true;
@@ -717,8 +731,7 @@ export function onWalkthroughComplete(prId: string, walkthroughId: string): void
 }
 
 function fetchCachedWalkthrough(prId: string): void {
-  store.activePrId = prId;
   abortPr(prId);
   deleteEntry(prId);
-  void streamWalkthrough(prId);
+  void streamWalkthrough(prId, { activate: false });
 }

@@ -79,6 +79,7 @@ function rowToRecap(row: typeof projectRecaps.$inferSelect): ProjectRecap {
     sourcePrIds: parseStringArray(row.sourcePrIds),
     sourceWalkthroughIds: parseStringArray(row.sourceWalkthroughIds),
     summaryStats: parseStats(row.summaryStats),
+    errorMessage: row.errorMessage ?? null,
   };
 }
 
@@ -95,6 +96,7 @@ function rowToSummary(row: typeof projectRecaps.$inferSelect): ProjectRecapSumma
     completedAt: row.completedAt ?? null,
     sourcePrCount: sourcePrIds.length,
     summaryStats: parseStats(row.summaryStats),
+    errorMessage: row.errorMessage ?? null,
   };
 }
 
@@ -195,11 +197,37 @@ export class ProjectRecapService extends Context.Tag("ProjectRecapService")<
     readonly setStatus: (
       recapId: string,
       status: ProjectRecapStatus,
-      options?: { tokenUsage?: Record<string, number>; modelUsed?: string },
+      options?: { tokenUsage?: Record<string, number>; modelUsed?: string; errorMessage?: string },
     ) => Effect.Effect<void, never, DbService>;
 
     /** Mark `oldId` superseded with `supersededBy = newId`. */
     readonly supersede: (oldId: string, newId: string) => Effect.Effect<void, never, DbService>;
+
+    /**
+     * Reset an existing row for an in-place rerun. Captures and returns the
+     * current overview (so the caller can hand it to the agent as prior
+     * context), then clears all content / lifecycle fields back to a fresh
+     * `'generating'` state:
+     *
+     *   • overview      → ""
+     *   • status        → 'generating'
+     *   • completedAt   → null
+     *   • errorMessage  → null
+     *   • resumeAttempts → 0
+     *   • generatedAt   → now (so the UI shows the row as freshly started)
+     *   • sourcePrIds / sourceWalkthroughIds / summaryStats → reset
+     *
+     * Used by the orchestrator's `regenerateForPeriod` to update a recap
+     * in place (per CLAUDE.md invariant #7's chat-edit carve-out shape,
+     * but adapted for the recap "max 1 per period" rule).
+     */
+    readonly resetForRerun: (
+      recapId: string,
+    ) => Effect.Effect<
+      { readonly previousOverview: string },
+      RecapNotFoundError | ValidationError,
+      DbService
+    >;
 
     /**
      * Enumerate rows still in `status='generating'` for boot-time resume.
@@ -409,22 +437,27 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
   setStatus: (recapId, status, options) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
+      // `complete` stamps a fresh completedAt; any other terminal/non-terminal
+      // status (generating/error/superseded) clears it so a previously-complete
+      // row can't ship a stale timestamp to the client after regenerate.
       const completedAtPatch =
-        status === "complete" ? { completedAt: new Date().toISOString() } : {};
+        status === "complete" ? { completedAt: new Date().toISOString() } : { completedAt: null };
       const tokenPatch = options?.tokenUsage
         ? { tokenUsage: JSON.stringify(options.tokenUsage) }
         : {};
       const modelPatch = options?.modelUsed !== undefined ? { modelUsed: options.modelUsed } : {};
+      const errorPatch =
+        options?.errorMessage !== undefined ? { errorMessage: options.errorMessage } : {};
       yield* Effect.try({
         try: () =>
           db
             .update(projectRecaps)
-            .set({ status, ...completedAtPatch, ...tokenPatch, ...modelPatch })
+            .set({ status, ...completedAtPatch, ...tokenPatch, ...modelPatch, ...errorPatch })
             .where(eq(projectRecaps.id, recapId))
             .run(),
         catch: (e) => new ValidationError({ message: `setStatus: ${String(e)}` }),
       });
-    }).pipe(Effect.catchAll(() => Effect.void)),
+    }),
 
   supersede: (oldId, newId) =>
     Effect.gen(function* () {
@@ -439,6 +472,47 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
         catch: (e) => new ValidationError({ message: `supersede: ${String(e)}` }),
       });
     }).pipe(Effect.catchAll(() => Effect.void)),
+
+  resetForRerun: (recapId) =>
+    Effect.gen(function* () {
+      const { db } = yield* DbService;
+      return yield* Effect.try({
+        try: () => {
+          const row = db
+            .select({ overview: projectRecaps.overview })
+            .from(projectRecaps)
+            .where(eq(projectRecaps.id, recapId))
+            .get();
+          if (!row) {
+            throw new Error(`recap ${recapId} not found`);
+          }
+          const previousOverview = row.overview ?? "";
+          db.update(projectRecaps)
+            .set({
+              overview: "",
+              status: "generating",
+              completedAt: null,
+              errorMessage: null,
+              resumeAttempts: 0,
+              generatedAt: new Date().toISOString(),
+              sourcePrIds: "[]",
+              sourceWalkthroughIds: "[]",
+              summaryStats: "{}",
+              tokenUsage: "{}",
+            })
+            .where(eq(projectRecaps.id, recapId))
+            .run();
+          return { previousOverview };
+        },
+        catch: (e) => {
+          const msg = String(e);
+          if (msg.includes("not found")) {
+            return new RecapNotFoundError({ recapId });
+          }
+          return new ValidationError({ message: `resetForRerun: ${msg}` });
+        },
+      });
+    }),
 
   listGenerating: () =>
     Effect.gen(function* () {

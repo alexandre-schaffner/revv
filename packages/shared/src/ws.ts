@@ -138,7 +138,10 @@ export type WsServerMessage =
         repoId: string;
         period: RecapPeriod;
         status: ProjectRecapStatus;
-        completedAt?: string;
+        /** ISO timestamp when status transitioned to `complete`. `null` clears a previously-set value (e.g. on regenerate). Omitted means "no change". */
+        completedAt?: string | null;
+        /** Human-readable failure reason when `status='error'`. `null` clears it; omitted means "no change". */
+        errorMessage?: string | null;
       };
     }
   /** full-state — New recap row (insert or regenerate). Replace/add in list. */

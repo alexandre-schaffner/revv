@@ -14,8 +14,9 @@ import { Elysia, t } from "elysia";
 import { AppRuntime } from "../runtime";
 import { ProjectRecapService } from "../services/ProjectRecap";
 import { ProjectRecapJobs } from "../services/ProjectRecapJobs";
-import { currentPeriodBoundaries } from "../services/RecapScheduler";
+import { manualDailyBoundaries, manualWeeklyBoundaries } from "../services/RecapScheduler";
 import { handleAppError, withAuth } from "./middleware";
+import { recapStreamHandler } from "./recaps/stream";
 
 function parsePeriod(value: string | undefined): "daily" | "weekly" | undefined {
   if (value === "daily" || value === "weekly") return value;
@@ -85,9 +86,15 @@ export const recapRoutes = new Elysia({ prefix: "/api" })
           ctx.set.status = 400;
           return { error: "period must be 'daily' or 'weekly'" };
         }
-        const defaults = currentPeriodBoundaries(period);
-        const periodStart = body.periodStart ?? defaults.periodStart;
-        const periodEnd = body.periodEnd ?? defaults.periodEnd;
+
+        // Manual daily/weekly default to a rolling "current period so far"
+        // window (today/this-week 00:00 UTC → now) rather than the fixed
+        // most-recently-closed window the scheduler uses. The caller can
+        // override by supplying an explicit periodStart/periodEnd.
+        const usingRollingWindow = body.periodStart === undefined;
+        const rolling = period === "daily" ? manualDailyBoundaries() : manualWeeklyBoundaries();
+        const periodStart = body.periodStart ?? rolling.periodStart;
+        const periodEnd = body.periodEnd ?? rolling.periodEnd;
 
         const regenerate = ctx.query.regenerate === "true";
 
@@ -104,13 +111,30 @@ export const recapRoutes = new Elysia({ prefix: "/api" })
           );
         }
 
-        // Idempotent: if a non-superseded row already exists for this
-        // period, hand back its id instead of forking a duplicate job.
         const existing = await AppRuntime.runPromise(
           Effect.flatMap(ProjectRecapService, (s) =>
             s.findActiveForPeriod(ctx.params.id, period, periodStart),
           ),
         );
+
+        // Rolling-window manual triggers are non-idempotent: if a recap
+        // for the current rolling window already exists, supersede it so
+        // the user always gets the freshest snapshot. Explicit-period
+        // requests stay idempotent — the caller pinned the boundaries
+        // and re-running would produce the same recap.
+        if (existing && usingRollingWindow) {
+          return await AppRuntime.runPromise(
+            Effect.flatMap(ProjectRecapJobs, (jobs) =>
+              jobs.regenerateForPeriod({
+                repoId: ctx.params.id,
+                period,
+                periodStart,
+                periodEnd,
+              }),
+            ),
+          );
+        }
+
         if (existing) {
           return { recapId: existing.id };
         }
@@ -163,4 +187,8 @@ export const recapRoutes = new Elysia({ prefix: "/api" })
     } catch (e) {
       return handleAppError(e, ctx);
     }
-  });
+  })
+  // ─── GET /api/recaps/:id/stream ────────────────────────────────────────
+  // SSE endpoint for live recap generation. Returns markdown chunks as
+  // the AI composes them, plus phase shimmer events.
+  .get("/recaps/:id/stream", recapStreamHandler);

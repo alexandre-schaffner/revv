@@ -10,12 +10,14 @@
 
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import {
+  appendRecapChunkHandler,
   completeRecapHandler,
   getRecapStateHandler,
   getRepoContextHandler,
   setRecapOverviewHandler,
 } from "./handlers";
 import {
+  appendRecapChunkSchema,
   completeRecapSchema,
   getRecapStateSchema,
   getRepoContextSchema,
@@ -30,6 +32,8 @@ export type {
   GetRepoContextInput,
   RecapSourceBundle,
   RecapSourcePr,
+  RecapSourcePrDiff,
+  RecapSourcePrDiffFile,
   RecapToolContext,
   RecapToolHandler,
   RecapToolResult,
@@ -60,9 +64,16 @@ export const RECAP_TOOL_SPECS: Array<RecapToolSpec<any>> = [
     handler: getRepoContextHandler,
   },
   {
+    name: "append_recap_chunk",
+    description:
+      "Stream a markdown chunk to the UI while composing the recap. Call 2–4 times, once per major section ('What shipped', 'Active work', 'Project state'). Provide the `section` hint so the UI shows a shimmer label. Do NOT emit the final assembled markdown here — that belongs in set_recap_overview.",
+    inputSchema: appendRecapChunkSchema,
+    handler: appendRecapChunkHandler,
+  },
+  {
     name: "set_recap_overview",
     description:
-      "Atomic content write. Call ONCE after reading the source. Persists the recap overview (markdown), the provenance arrays (source_pr_ids + source_walkthrough_ids), and the pre-aggregated stats. Idempotent — a retry with the same recapId replaces the prior content.",
+      "Atomic content write. Call ONCE after reading the source and streaming all chunks. Persists the recap overview (markdown), the provenance arrays (source_pr_ids + source_walkthrough_ids), and the pre-aggregated stats. Idempotent — a retry with the same recapId replaces the prior content.",
     inputSchema: setRecapOverviewSchema,
     handler: setRecapOverviewHandler,
   },

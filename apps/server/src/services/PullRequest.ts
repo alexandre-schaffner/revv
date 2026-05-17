@@ -120,6 +120,16 @@ export class PullRequestService extends Context.Tag("PullRequestService")<
       until: string,
       accountId?: string,
     ) => Effect.Effect<ReadonlyArray<ArchivedPrWithWalkthrough>, ValidationError, DbService>;
+    /**
+     * Currently open PRs for a repo, joined to their latest non-superseded
+     * complete walkthrough (if any). Used by the recap agent to surface
+     * "who is working on what" context. Sorted by walkthrough presence then
+     * updatedAt DESC. Capped at 20 rows to keep the context window bounded.
+     */
+    readonly listOpenPrsWithWalkthroughs: (
+      repoId: string,
+      accountId?: string,
+    ) => Effect.Effect<ReadonlyArray<ArchivedPrWithWalkthrough>, ValidationError, DbService>;
     readonly markPrsClosed: (
       updates: Array<{ id: string; status: "closed" | "merged"; closedAt: string }>,
     ) => Effect.Effect<void, ValidationError, DbService>;
@@ -442,6 +452,88 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
           }
 
           return prRows.map((pr): ArchivedPrWithWalkthrough => {
+            const w = latestByPr.get(pr.id);
+            return {
+              pr: rowToPr(pr),
+              walkthrough: w
+                ? {
+                    id: w.id,
+                    summary: w.summary,
+                    sentiment: w.sentiment ?? null,
+                    riskLevel: w.riskLevel,
+                    completedAt: w.completedAt ?? null,
+                  }
+                : null,
+            };
+          });
+        },
+        catch: (e) => new ValidationError({ message: String(e) }),
+      });
+    }),
+
+  listOpenPrsWithWalkthroughs: (repoId, accountId) =>
+    Effect.gen(function* () {
+      const { db } = yield* DbService;
+      if (accountId) {
+        const repo = db.select().from(repositories).where(eq(repositories.id, repoId)).get();
+        if (!repo || repo.accountId !== accountId) {
+          return [] as ReadonlyArray<ArchivedPrWithWalkthrough>;
+        }
+      }
+      return yield* Effect.try({
+        try: () => {
+          const prRows = db
+            .select()
+            .from(pullRequests)
+            .where(and(eq(pullRequests.repositoryId, repoId), eq(pullRequests.status, "open")))
+            .orderBy(desc(pullRequests.updatedAt))
+            .limit(20)
+            .all();
+
+          if (prRows.length === 0) {
+            return [] as ReadonlyArray<ArchivedPrWithWalkthrough>;
+          }
+
+          const prIds = prRows.map((r) => r.id);
+
+          const wtRows = db
+            .select({
+              id: walkthroughs.id,
+              pullRequestId: walkthroughs.pullRequestId,
+              summary: walkthroughs.summary,
+              sentiment: walkthroughs.sentiment,
+              riskLevel: walkthroughs.riskLevel,
+              completedAt: walkthroughs.completedAt,
+              generatedAt: walkthroughs.generatedAt,
+            })
+            .from(walkthroughs)
+            .where(
+              and(
+                inArray(walkthroughs.pullRequestId, prIds),
+                eq(walkthroughs.status, "complete"),
+                isNull(walkthroughs.supersededBy),
+              ),
+            )
+            .all();
+
+          const latestByPr = new Map<string, (typeof wtRows)[number]>();
+          for (const w of wtRows) {
+            const current = latestByPr.get(w.pullRequestId);
+            if (!current) {
+              latestByPr.set(w.pullRequestId, w);
+              continue;
+            }
+            const curTs = current.completedAt ?? current.generatedAt;
+            const newTs = w.completedAt ?? w.generatedAt;
+            if (newTs > curTs) latestByPr.set(w.pullRequestId, w);
+          }
+
+          // Sort: PRs with walkthroughs first, then by updatedAt DESC
+          const withWt = prRows.filter((pr) => latestByPr.has(pr.id));
+          const withoutWt = prRows.filter((pr) => !latestByPr.has(pr.id));
+          const sorted = [...withWt, ...withoutWt];
+
+          return sorted.map((pr): ArchivedPrWithWalkthrough => {
             const w = latestByPr.get(pr.id);
             return {
               pr: rowToPr(pr),

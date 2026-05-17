@@ -87,6 +87,12 @@ export const projectRecaps = sqliteTable(
      * relaunching them.
      */
     resumeAttempts: integer("resume_attempts").notNull().default(0),
+    /**
+     * Human-readable failure reason when `status='error'`. Written by the
+     * orchestrator (single-writer per CLAUDE.md invariant #11) so the UI can
+     * show a specific message instead of a generic "Generation failed."
+     */
+    errorMessage: text("error_message"),
   },
   (t) => ({
     /**

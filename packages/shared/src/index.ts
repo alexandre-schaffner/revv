@@ -24,6 +24,8 @@ export type {
   ProjectRecapStatus,
   ProjectRecapSummary,
   RecapPeriod,
+  RecapStreamEvent,
+  RecapStreamPhase,
   RecapSummaryStats,
 } from "./recap";
 export { EMPTY_RECAP_STATS } from "./recap";

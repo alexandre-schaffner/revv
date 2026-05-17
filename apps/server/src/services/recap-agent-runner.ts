@@ -24,7 +24,7 @@
 // `RecapToolContext` it passes in.
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import type { ProjectRecap } from "@revv/shared";
+import type { ProjectRecap, RecapStreamEvent } from "@revv/shared";
 import { buildRecapUserMessage, RECAP_SYSTEM_PROMPT } from "../ai/prompts/recap";
 import { resolveCliBin } from "../ai/providers/cli-agent";
 import {
@@ -48,6 +48,8 @@ export interface RecapAgentResult {
   readonly validatedComplete: boolean;
   readonly modelUsed: string;
   readonly tokenUsage?: Record<string, number>;
+  /** Error message from the agent runner (e.g. model doesn't support tools). */
+  readonly errorMessage?: string;
 }
 
 export interface RunRecapAgentParams {
@@ -84,6 +86,11 @@ export interface RunRecapAgentParams {
    */
   readonly sessionDeps?: RecapOpencodeSessionDeps;
   readonly onCompleted: () => void;
+  /**
+   * Stream emitter for live recap generation. Called by MCP tool handlers
+   * so the SSE endpoint can forward chunks to subscribers.
+   */
+  readonly emitEvent: (event: RecapStreamEvent) => void;
 }
 
 /**
@@ -106,27 +113,27 @@ export async function runRecapAgent(params: RunRecapAgentParams): Promise<RecapA
     sourceBundle: params.sourceBundle,
     priorRecaps: params.priorRecaps,
     onCompleted: onCompletedWrapper,
+    emit: params.emitEvent,
   };
 
-  if (params.effectiveAgent === "opencode") {
-    return runViaOpencode(params, ctx).then((r) => ({
-      validatedComplete,
-      modelUsed: params.modelUsed,
-      ...(r.tokenUsage ? { tokenUsage: r.tokenUsage } : {}),
-    }));
-  }
+  const outcome =
+    params.effectiveAgent === "opencode"
+      ? await runViaOpencode(params, ctx)
+      : await runViaClaude(params, ctx);
 
-  return runViaClaude(params, ctx).then((r) => ({
+  return {
     validatedComplete,
     modelUsed: params.modelUsed,
-    ...(r.tokenUsage ? { tokenUsage: r.tokenUsage } : {}),
-  }));
+    ...(outcome.tokenUsage ? { tokenUsage: outcome.tokenUsage } : {}),
+    ...(outcome.error ? { errorMessage: outcome.error } : {}),
+  };
 }
 
 // ── Claude SDK path ──────────────────────────────────────────────────────────
 
 interface RunOutcome {
   readonly tokenUsage?: Record<string, number>;
+  readonly error?: string;
 }
 
 async function runViaClaude(
@@ -222,6 +229,7 @@ async function runViaOpencode(
 
   if (result.error) {
     logError("recap-agent-runner", `opencode recap ${params.recapId} failed:`, result.error);
+    return { error: result.error };
   }
 
   return result.tokenUsage ? { tokenUsage: result.tokenUsage } : {};

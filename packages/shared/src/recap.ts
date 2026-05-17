@@ -50,6 +50,8 @@ export interface ProjectRecap {
   readonly sourcePrIds: ReadonlyArray<string>;
   readonly sourceWalkthroughIds: ReadonlyArray<string>;
   readonly summaryStats: RecapSummaryStats;
+  /** Human-readable failure reason when `status='error'`. Null otherwise. */
+  readonly errorMessage: string | null;
 }
 
 /**
@@ -68,6 +70,8 @@ export interface ProjectRecapSummary {
   readonly completedAt: string | null;
   readonly sourcePrCount: number;
   readonly summaryStats: RecapSummaryStats;
+  /** Human-readable failure reason when `status='error'`. Null otherwise. */
+  readonly errorMessage: string | null;
 }
 
 /** Default stats object when the agent hasn't written any yet. */
@@ -79,3 +83,24 @@ export const EMPTY_RECAP_STATS: RecapSummaryStats = {
   riskBreakdown: { low: 0, medium: 0, high: 0 },
   walkthroughsMissingCount: 0,
 };
+
+// ── SSE stream events ───────────────────────────────────────────────────────
+
+/**
+ * UI-lifecycle phase label for recap streaming.
+ */
+export type RecapStreamPhase =
+  | "analyzing"
+  | "shipped"
+  | "active_work"
+  | "project_state"
+  | "finalizing"
+  | "connecting"
+  | "other";
+
+export type RecapStreamEvent =
+  | { type: "chunk"; data: { text: string; section?: RecapStreamPhase } }
+  | { type: "phase"; data: { phase: RecapStreamPhase; message: string } }
+  | { type: "overview"; data: { overview: string } }
+  | { type: "done"; data: { recapId: string } }
+  | { type: "error"; data: { code: string; message: string } };

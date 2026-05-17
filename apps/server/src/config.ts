@@ -48,13 +48,6 @@ export const ServerConfig = Config.all({
   cloneDir: Config.string("REVV_CLONE_DIR").pipe(
     Config.withDefault(join(homedir(), ".revv", "repos")),
   ),
-  // User-preferences JSON file. Lives next to the clones under `~/.revv` so
-  // power users get one tidy directory to back up / clear. Replaces the
-  // `user_settings` SQLite table — preferences are single-user, never joined
-  // against, and adding a new key shouldn't require a schema migration.
-  settingsPath: Config.string("REVV_SETTINGS_PATH").pipe(
-    Config.withDefault(join(homedir(), ".revv", "settings.json")),
-  ),
 });
 
 export type ServerConfig = Config.Config.Success<typeof ServerConfig>;

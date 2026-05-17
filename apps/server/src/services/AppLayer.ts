@@ -32,17 +32,20 @@ import { WebSocketHubLive } from "./WebSocketHub";
 // TokenProvider now needs DbService
 const TokenProviderWithDeps = TokenProviderLive.pipe(Layer.provide(DbServiceLive));
 
-// GitHub service now depends on the etag cache for conditional requests,
+// SettingsService now reads/writes via DbService instead of JSON file
+const SettingsServiceWithDeps = SettingsServiceLive.pipe(Layer.provide(DbServiceLive));
+
+// GitHub service depends on the etag cache for conditional requests,
 // and on SettingsService to resolve the API base URL dynamically.
 const GitHubServiceWithDeps = GitHubServiceLive.pipe(
-  Layer.provide(Layer.mergeAll(GitHubEtagCacheLive, SettingsServiceLive)),
+  Layer.provide(Layer.mergeAll(GitHubEtagCacheLive, SettingsServiceWithDeps)),
 );
 
 // OpencodeSupervisor depends on DbService + SettingsService (for detecting
 // agent-changed + resolving the selected agent). It's in BaseLayers because
 // AiService needs it; AiService in turn is consumed by WalkthroughJobs.
 const OpencodeSupervisorWithDeps = OpencodeSupervisorLive.pipe(
-  Layer.provide(Layer.mergeAll(DbServiceLive, SettingsServiceLive)),
+  Layer.provide(Layer.mergeAll(DbServiceLive, SettingsServiceWithDeps)),
 );
 
 // ChatSessionService is a thin Drizzle wrapper for the right-pane chat —
@@ -60,7 +63,7 @@ const BaseLayers = Layer.mergeAll(
   RepositoryServiceLive,
   PullRequestServiceLive,
   ReviewServiceLive,
-  SettingsServiceLive,
+  SettingsServiceWithDeps,
   WalkthroughServiceLive,
   ProjectRecapServiceLive,
   DiffCacheServiceLive,

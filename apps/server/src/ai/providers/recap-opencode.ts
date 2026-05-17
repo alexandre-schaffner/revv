@@ -32,6 +32,7 @@
 // `withAgentTurn` wires the abort + 10-min hard timeout into the daemon's
 // `client.session.abort` so a cancel/timeout tears down the model run.
 
+import type { Part } from "@opencode-ai/sdk/v2";
 import { serverEnv } from "../../config";
 import { debug, logError } from "../../logger";
 import { extractOpencodeErrorMessage, parseOpencodeModel, withAgentTurn } from "../agent-stream";
@@ -202,7 +203,35 @@ export async function runRecapAgentViaOpencode(
           return { error: `opencode agent error: ${extractOpencodeErrorMessage(errObj)}` };
         }
 
-        // ── 4. Aggregate token usage ──────────────────────────────
+        // ── 4. Inspect response.parts for tool calls ──────────────
+        //
+        // If the model returned text/reasoning but zero tool parts, it
+        // does not support tool calling (or the provider isn't configured
+        // for it). Fail fast so the orchestrator can mark the job error
+        // and the UI doesn't hang on "analyzing".
+        const textParts = response.parts.filter((p: Part) => p.type === "text");
+        const reasoningParts = response.parts.filter((p: Part) => p.type === "reasoning");
+        const toolParts = response.parts.filter((p: Part) => p.type === "tool");
+        debug(
+          "recap-opencode",
+          `response.parts: total=${response.parts.length} text=${textParts.length} reasoning=${reasoningParts.length} tool=${toolParts.length}`,
+        );
+
+        if (toolParts.length === 0) {
+          const preview = textParts
+            .map((p: Part) => (p.type === "text" ? p.text : ""))
+            .join("")
+            .slice(0, 400);
+          const msg =
+            `The model finished without calling any tools (${textParts.length} text + ${reasoningParts.length} reasoning part(s)). ` +
+            `This usually means the selected model (${params.modelUsed}) does not support tool calling through the opencode daemon, ` +
+            `or the provider is not configured for it. Preview: "${preview}"`;
+          logError("recap-opencode", msg);
+          params.ctx.emit({ type: "error", data: { code: "NoToolCalls", message: msg } });
+          return { error: msg };
+        }
+
+        // ── 5. Aggregate token usage ──────────────────────────────
         //
         // opencode reports `info.tokens` per CALL, not per turn. A recap
         // typically uses 2–4 calls (read, read, write, complete). Sum

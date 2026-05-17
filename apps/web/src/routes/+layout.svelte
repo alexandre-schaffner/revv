@@ -10,7 +10,6 @@ import { TooltipProvider } from "$lib/components/ui/tooltip";
 import * as sync from "$lib/services/sync";
 import * as auth from "$lib/stores/auth.svelte";
 import * as prs from "$lib/stores/prs.svelte";
-import * as recaps from "$lib/stores/recaps.svelte";
 import * as settings from "$lib/stores/settings.svelte";
 import { initShortcuts } from "$lib/stores/shortcuts.svelte";
 import { setSidebarView } from "$lib/stores/sidebar.svelte";
@@ -34,16 +33,6 @@ let cacheInspectorOpen = $state(false);
 $effect(() => {
   const match = page.url.pathname.match(/^\/review\/([^/]+)/);
   prs.setSelectedPrId(match?.[1] ?? null);
-});
-
-// Same single-source-of-truth pattern for the selected recap. The
-// sidebar's Recaps sub-section highlights the active recap row by
-// comparing `href` against `page.url.pathname`; this effect keeps the
-// store in lock-step so any component reading `getSelectedRecapId()`
-// (e.g. the future detail pane) sees the same value.
-$effect(() => {
-  const match = page.url.pathname.match(/^\/repo\/[^/]+\/recaps\/([^/]+)/);
-  recaps.setSelectedRecapId(match?.[1] ?? null);
 });
 
 // Keep the sidebar view in lockstep with the URL in both directions.

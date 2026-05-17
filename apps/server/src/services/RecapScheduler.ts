@@ -175,18 +175,64 @@ export const RecapSchedulerLive = Layer.effect(
 
         for (const repo of repos) {
           for (const window of candidates) {
-            // Skip if a non-superseded row already exists for this period.
             const existing = yield* provideDb(
               recapService.findActiveForPeriod(repo.id, period, window.periodStart),
             ).pipe(Effect.catchAll(() => Effect.succeed(null)));
+
+            // ── Daily stale-check ────────────────────────────────────────
+            // If a daily recap for this window was generated today, it's
+            // fresh — skip. If it was generated before today, it's stale
+            // (new PRs may have merged since) — regenerate.
+            if (existing && period === "daily") {
+              const generatedAt = new Date(existing.generatedAt);
+              const todayStart = startOfUtcDay(now);
+              if (generatedAt.getTime() >= todayStart.getTime()) {
+                debug(
+                  "recap-scheduler",
+                  `skip fresh daily recap for ${repo.fullName} ${window.periodStart}`,
+                );
+                continue;
+              }
+              debug(
+                "recap-scheduler",
+                `regenerate stale daily recap for ${repo.fullName} ${window.periodStart}`,
+              );
+              yield* recapJobs
+                .regenerateForPeriod({
+                  repoId: repo.id,
+                  period,
+                  periodStart: window.periodStart,
+                  periodEnd: window.periodEnd,
+                })
+                .pipe(
+                  Effect.catchAllCause((cause) =>
+                    Effect.sync(() => {
+                      logError(
+                        "recap-scheduler",
+                        `regenerateForPeriod failed for ${repo.fullName} ${period} ${window.periodStart}:`,
+                        Cause.pretty(cause),
+                      );
+                    }),
+                  ),
+                );
+              continue;
+            }
+
+            // Weekly: skip if a non-superseded row already exists.
             if (existing) continue;
 
-            // Skip if the window has zero archived PRs (empty windows
-            // produce no recap row, per plan cross-cutting decision).
+            // Skip only when the window has zero archived PRs AND no open
+            // PRs. With open PRs alone we can still produce an "active
+            // work" recap; only a completely silent repo earns the gap.
             const windowed = yield* provideDb(
               prService.listArchivedPrsForWindow(repo.id, window.periodStart, window.periodEnd),
             ).pipe(Effect.catchAll(() => Effect.succeed([] as never[])));
-            if (windowed.length === 0) continue;
+            if (windowed.length === 0) {
+              const openPrs = yield* provideDb(
+                prService.listOpenPrsWithWalkthroughs(repo.id),
+              ).pipe(Effect.catchAll(() => Effect.succeed([] as never[])));
+              if (openPrs.length === 0) continue;
+            }
 
             debug(
               "recap-scheduler",
@@ -294,15 +340,35 @@ function recapEnabled(settings: unknown): {
 
 // ── Period helpers exported for the routes ───────────────────────────────────
 
-/** Compute the period that ENDS at the most-recently-closed boundary. */
-export function currentPeriodBoundaries(
-  period: RecapPeriod,
-  now: Date = new Date(),
-): { periodStart: string; periodEnd: string } {
-  if (period === "daily") {
-    const candidates = enumerateDailyPeriods(now, 1);
-    return candidates[0] ?? { periodStart: now.toISOString(), periodEnd: now.toISOString() };
-  }
-  const candidates = enumerateWeeklyPeriods(now, 1);
-  return candidates[0] ?? { periodStart: now.toISOString(), periodEnd: now.toISOString() };
+/**
+ * Rolling daily window for manual generation: `[today 00:00 UTC, now]`.
+ * This captures "what happened today so far" rather than the fixed
+ * yesterday→today window the scheduler uses.
+ */
+export function manualDailyBoundaries(now: Date = new Date()): {
+  periodStart: string;
+  periodEnd: string;
+} {
+  const start = startOfUtcDay(now);
+  return {
+    periodStart: start.toISOString(),
+    periodEnd: now.toISOString(),
+  };
+}
+
+/**
+ * Rolling weekly window for manual generation: `[start-of-current-ISO-week
+ * 00:00 UTC, now]`. Captures "what's shipped this week so far" rather
+ * than the fixed last-closed-week window the scheduler uses. ISO weeks
+ * start on Monday.
+ */
+export function manualWeeklyBoundaries(now: Date = new Date()): {
+  periodStart: string;
+  periodEnd: string;
+} {
+  const start = startOfUtcIsoWeek(now);
+  return {
+    periodStart: start.toISOString(),
+    periodEnd: now.toISOString(),
+  };
 }
