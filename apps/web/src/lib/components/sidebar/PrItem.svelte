@@ -58,7 +58,7 @@ function handleClick() {
 	>
 		{#if variant === 'archived'}
 			{#if pr.status === 'merged'}
-				<GitMerge size={11} class="shrink-0 text-[var(--color-accent-muted,#8b5cf6)]" aria-hidden="true" />
+				<GitMerge size={11} class="shrink-0 text-accent-muted" aria-hidden="true" />
 			{:else}
 				<GitPullRequestClosed size={11} class="shrink-0 text-text-muted" aria-hidden="true" />
 			{/if}

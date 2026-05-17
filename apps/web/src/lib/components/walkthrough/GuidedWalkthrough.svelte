@@ -1899,7 +1899,7 @@ function handleRegenerate(): void {
 		max-width: 480px;
 		width: 100%;
 		background: color-mix(in srgb, var(--color-danger) 8%, transparent);
-		border: 1px solid color-mix(in srgb, var(--color-danger, #ef4444) 25%, transparent);
+		border: 1px solid color-mix(in srgb, var(--color-danger) 25%, transparent);
 		border-radius: 6px;
 		padding: 10px 12px;
 		margin: 0;
@@ -1914,7 +1914,7 @@ function handleRegenerate(): void {
 
 	.error-inline {
 		font-size: 12px;
-		color: var(--color-danger, #ef4444);
+		color: var(--color-danger);
 		margin-top: 8px;
 	}
 

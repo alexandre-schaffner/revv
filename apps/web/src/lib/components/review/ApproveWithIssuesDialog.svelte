@@ -176,7 +176,7 @@ function handleCancel(): void {
 		display: inline-flex;
 		align-items: center;
 		gap: 8px;
-		color: var(--color-warning, #d97706);
+		color: var(--color-warning);
 	}
 
 	.issue-summary {
@@ -202,16 +202,16 @@ function handleCancel(): void {
 	}
 
 	.count-critical {
-		--pill-color: var(--color-danger, #dc2626);
+		--pill-color: var(--color-danger);
 	}
 	.count-warning {
-		--pill-color: #d97706;
+		--pill-color: var(--color-warning);
 	}
 	.count-info {
 		--pill-color: var(--color-text-muted);
 	}
 	.count-thread {
-		--pill-color: var(--color-accent, #2563eb);
+		--pill-color: var(--color-accent);
 	}
 
 	.section {
@@ -260,7 +260,7 @@ function handleCancel(): void {
 	}
 
 	.severity-thread {
-		color: var(--color-accent, #2563eb);
+		color: var(--color-accent);
 	}
 
 	.issue-text {
@@ -297,9 +297,9 @@ function handleCancel(): void {
 		margin-top: 4px;
 	}
 
-	.severity-critical { color: var(--color-danger, #dc2626); }
-	.severity-warning { color: #d97706; }
-	.severity-info { color: var(--color-accent, #2563eb); }
+	.severity-critical { color: var(--color-danger); }
+	.severity-warning { color: var(--color-warning); }
+	.severity-info { color: var(--color-accent); }
 
 	.issue-title {
 		font-size: 12px;

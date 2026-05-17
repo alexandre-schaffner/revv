@@ -1624,8 +1624,8 @@ function activitiesForTurn(
 	/* Blocked-by-unpushed-commits strip */
 	.blocked-strip {
 		flex-shrink: 0;
-		background: color-mix(in srgb, var(--color-warning, #f59e0b) 8%, transparent);
-		border-bottom: 1px solid color-mix(in srgb, var(--color-warning, #f59e0b) 25%, transparent);
+		background: color-mix(in srgb, var(--color-warning) 8%, transparent);
+		border-bottom: 1px solid color-mix(in srgb, var(--color-warning) 25%, transparent);
 		padding: 8px 12px;
 		display: flex;
 		flex-direction: column;
@@ -1639,7 +1639,7 @@ function activitiesForTurn(
 	}
 
 	:global(.blocked-icon) {
-		color: var(--color-warning, #f59e0b);
+		color: var(--color-warning);
 		flex-shrink: 0;
 	}
 
@@ -1723,8 +1723,8 @@ function activitiesForTurn(
 	}
 
 	.blocked-discard-btn:hover:not(:disabled) {
-		color: var(--color-danger, #ef4444);
-		background: color-mix(in srgb, var(--color-danger, #ef4444) 10%, transparent);
+		color: var(--color-danger);
+		background: color-mix(in srgb, var(--color-danger) 10%, transparent);
 	}
 
 	.blocked-discard-btn:disabled {
@@ -2001,7 +2001,7 @@ function activitiesForTurn(
 	}
 
 	:global(.new-branch-title-warn) {
-		color: var(--color-warning, #d97706);
+		color: var(--color-warning);
 	}
 
 	.new-branch-field {
@@ -2027,7 +2027,7 @@ function activitiesForTurn(
 	}
 
 	.new-branch-hint--error {
-		color: var(--color-danger, #d93b3b);
+		color: var(--color-danger);
 	}
 
 	.new-branch-hint code {

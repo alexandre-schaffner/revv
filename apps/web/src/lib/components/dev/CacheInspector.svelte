@@ -208,10 +208,10 @@ onMount(() => {
 		align-items: center;
 		justify-content: space-between;
 		padding: 8px 12px;
-		border-bottom: 1px solid var(--color-border, #333);
+		border-bottom: 1px solid var(--color-border);
 		position: sticky;
 		top: 0;
-		background: var(--color-surface-1, #1a1a1a);
+		background: var(--color-bg-elevated);
 	}
 
 	.inspector-title {
@@ -244,7 +244,7 @@ onMount(() => {
 
 	.icon-btn:hover {
 		opacity: 1;
-		background: var(--color-surface-2, #2a2a2a);
+		background: var(--color-bg-tertiary);
 	}
 
 	.inspector-loading,
@@ -255,13 +255,13 @@ onMount(() => {
 	}
 
 	.inspector-error {
-		color: var(--color-danger, #ef4444);
+		color: var(--color-danger);
 		opacity: 1;
 	}
 
 	.inspector-section {
 		padding: 10px 12px;
-		border-bottom: 1px solid var(--color-border, #222);
+		border-bottom: 1px solid var(--color-border);
 	}
 
 	.inspector-section:last-child {
@@ -296,7 +296,7 @@ onMount(() => {
 	}
 
 	.stat-label {
-		color: var(--color-text-muted, #888);
+		color: var(--color-text-muted);
 		min-width: 120px;
 	}
 

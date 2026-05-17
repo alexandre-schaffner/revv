@@ -49,8 +49,10 @@
   --revv-text-muted: #9a958c;
   --revv-accent: #0f766e; /* teal-700 — the one distinctive move */
   --revv-accent-hover: #115e59; /* teal-800 */
+  --revv-accent-muted: #0d9488; /* teal-600 — muted variant for archival states */
   --revv-success: #15803d; /* green-700 — slightly deeper than Tailwind 500 */
   --revv-warning: #b45309; /* amber-700 — keep */
+  --revv-warning-fg: #ffffff; /* text on warning surfaces */
   --revv-danger: #b91c1c; /* red-700 — slightly deeper */
 
   /* Diff canvas — warm with subtle bias */
@@ -146,7 +148,7 @@
   --revv-score-pass-icon: #15803d;
   --revv-score-pass-label: #14532d;
   --revv-score-pass-axis: #46464d;
-  --revv-score-pass-conf-bg: color-mix(in srgb, #15803d 12%, transparent);
+  --revv-score-pass-conf-bg: color-mix(in srgb, var(--revv-score-pass-icon) 12%, transparent);
   --revv-score-pass-conf: #15803d;
 
   --revv-score-concern-bg: color-mix(in srgb, var(--revv-warning) 4%, var(--revv-bg-secondary));
@@ -154,7 +156,7 @@
   --revv-score-concern-icon: #b45309;
   --revv-score-concern-label: #7c2d12;
   --revv-score-concern-axis: #46464d;
-  --revv-score-concern-conf-bg: color-mix(in srgb, #b45309 12%, transparent);
+  --revv-score-concern-conf-bg: color-mix(in srgb, var(--revv-score-concern-icon) 12%, transparent);
   --revv-score-concern-conf: #b45309;
 
   --revv-score-blocker-bg: color-mix(in srgb, var(--revv-danger) 4%, var(--revv-bg-secondary));
@@ -162,7 +164,7 @@
   --revv-score-blocker-icon: #b91c1c;
   --revv-score-blocker-label: #7c1d1d;
   --revv-score-blocker-axis: #46464d;
-  --revv-score-blocker-conf-bg: color-mix(in srgb, #b91c1c 12%, transparent);
+  --revv-score-blocker-conf-bg: color-mix(in srgb, var(--revv-score-blocker-icon) 12%, transparent);
   --revv-score-blocker-conf: #b91c1c;
 
   /* Info — accent-derived palette. With the brand teal accent, info
@@ -171,7 +173,7 @@
   --revv-score-info-border: #0f766e;
   --revv-score-info-icon: #115e59;
   --revv-score-info-label: #134e4a;
-  --revv-score-info-conf-bg: color-mix(in srgb, #0f766e 12%, transparent);
+  --revv-score-info-conf-bg: color-mix(in srgb, var(--revv-score-info-icon) 12%, transparent);
   --revv-score-info-conf: #115e59;
 }
 
@@ -212,8 +214,10 @@
   --revv-text-muted: #52525b;
   --revv-accent: #3b82f6;
   --revv-accent-hover: #2563eb;
+  --revv-accent-muted: #60a5fa;
   --revv-success: #22c55e;
   --revv-warning: #f59e0b;
+  --revv-warning-fg: #ffffff;
   --revv-danger: #ef4444;
 
   /* Diff canvas */
@@ -309,7 +313,7 @@
   --revv-score-pass-icon: #34d399;
   --revv-score-pass-label: #6ee7b7;
   --revv-score-pass-axis: #6ee7b7;
-  --revv-score-pass-conf-bg: color-mix(in srgb, #10b981 25%, transparent);
+  --revv-score-pass-conf-bg: color-mix(in srgb, var(--revv-score-pass-icon) 25%, transparent);
   --revv-score-pass-conf: #34d399;
 
   --revv-score-concern-bg: color-mix(in srgb, var(--revv-warning) 4%, var(--revv-bg-secondary));
@@ -317,7 +321,7 @@
   --revv-score-concern-icon: #fbbf24;
   --revv-score-concern-label: #fcd34d;
   --revv-score-concern-axis: #fcd34d;
-  --revv-score-concern-conf-bg: color-mix(in srgb, #f59e0b 25%, transparent);
+  --revv-score-concern-conf-bg: color-mix(in srgb, var(--revv-score-concern-icon) 25%, transparent);
   --revv-score-concern-conf: #fbbf24;
 
   --revv-score-blocker-bg: color-mix(in srgb, var(--revv-danger) 4%, var(--revv-bg-secondary));
@@ -325,7 +329,7 @@
   --revv-score-blocker-icon: #f87171;
   --revv-score-blocker-label: #fca5a5;
   --revv-score-blocker-axis: #fca5a5;
-  --revv-score-blocker-conf-bg: color-mix(in srgb, #ef4444 25%, transparent);
+  --revv-score-blocker-conf-bg: color-mix(in srgb, var(--revv-score-blocker-icon) 25%, transparent);
   --revv-score-blocker-conf: #f87171;
 
   /* Info — accent-derived palette (dark variant). Blues brightened to
@@ -334,7 +338,7 @@
   --revv-score-info-border: #3b82f6;
   --revv-score-info-icon: #60a5fa;
   --revv-score-info-label: #93c5fd;
-  --revv-score-info-conf-bg: color-mix(in srgb, #3b82f6 25%, transparent);
+  --revv-score-info-conf-bg: color-mix(in srgb, var(--revv-score-info-icon) 25%, transparent);
   --revv-score-info-conf: #60a5fa;
 }
 
@@ -375,8 +379,10 @@
   --color-text-muted: var(--revv-text-muted);
   --color-accent: var(--revv-accent);
   --color-accent-hover: var(--revv-accent-hover);
+  --color-accent-muted: var(--revv-accent-muted);
   --color-success: var(--revv-success);
   --color-warning: var(--revv-warning);
+  --color-warning-fg: var(--revv-warning-fg);
   --color-danger: var(--revv-danger);
   --font-sans: "Inter", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", "Fira Code", monospace;
