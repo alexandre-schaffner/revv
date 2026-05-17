@@ -114,13 +114,36 @@ function insertData(freshDb: ReturnType<typeof drizzle>, d: Recovered) {
     "user_id",
   ]);
 
-  // repositories — account_id is new, backfill with first recovered account
-  const accountId = d.accounts[0]?.id as string | undefined;
-  if (accountId) {
+  // repositories — account_id is new, backfill per owner→github_login match
+  const accountByLogin = new Map<string, string>();
+  for (const a of d.accounts) {
+    const login = a.github_login as string | undefined;
+    const id = a.id as string | undefined;
+    if (login && id) accountByLogin.set(login, id);
+  }
+
+  const fallbackAccountId = d.accounts[0]?.id as string | undefined;
+
+  // Group repos by matching account owner
+  const reposByAccount = new Map<string, Array<Record<string, unknown>>>();
+  const unmatchedRepos: Array<Record<string, unknown>> = [];
+  for (const repo of d.repos) {
+    const owner = repo.owner as string | undefined;
+    const matchedId = owner ? accountByLogin.get(owner) : undefined;
+    if (matchedId) {
+      const list = reposByAccount.get(matchedId) ?? [];
+      list.push(repo);
+      reposByAccount.set(matchedId, list);
+    } else {
+      unmatchedRepos.push(repo);
+    }
+  }
+
+  for (const [accId, repoList] of reposByAccount) {
     insertRows(
       sqlite,
       "repositories",
-      d.repos,
+      repoList,
       [
         "id",
         "provider",
@@ -135,7 +158,30 @@ function insertData(freshDb: ReturnType<typeof drizzle>, d: Recovered) {
         "clone_error",
         "github_host",
       ],
-      { account_id: accountId },
+      { account_id: accId },
+    );
+  }
+
+  if (unmatchedRepos.length > 0 && fallbackAccountId) {
+    insertRows(
+      sqlite,
+      "repositories",
+      unmatchedRepos,
+      [
+        "id",
+        "provider",
+        "owner",
+        "name",
+        "full_name",
+        "default_branch",
+        "avatar_url",
+        "added_at",
+        "clone_status",
+        "clone_path",
+        "clone_error",
+        "github_host",
+      ],
+      { account_id: fallbackAccountId },
     );
   }
 
