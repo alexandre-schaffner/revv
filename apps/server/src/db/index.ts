@@ -122,20 +122,22 @@ function insertData(freshDb: ReturnType<typeof drizzle>, d: Recovered) {
     if (login && id) accountByLogin.set(login, id);
   }
 
-  const fallbackAccountId = d.accounts[0]?.id as string | undefined;
-
-  // Group repos by matching account owner
+  // Group repos by matching account owner. Repos without a certain account match
+  // are left behind in the backup DB instead of being guessed onto an account.
   const reposByAccount = new Map<string, Array<Record<string, unknown>>>();
-  const unmatchedRepos: Array<Record<string, unknown>> = [];
+  const recoveredRepoIds = new Set<string>();
+  const skippedRepos: Array<Record<string, unknown>> = [];
   for (const repo of d.repos) {
     const owner = repo.owner as string | undefined;
+    const repoId = repo.id as string | undefined;
     const matchedId = owner ? accountByLogin.get(owner) : undefined;
-    if (matchedId) {
+    if (matchedId && repoId) {
       const list = reposByAccount.get(matchedId) ?? [];
       list.push(repo);
       reposByAccount.set(matchedId, list);
+      recoveredRepoIds.add(repoId);
     } else {
-      unmatchedRepos.push(repo);
+      skippedRepos.push(repo);
     }
   }
 
@@ -162,32 +164,26 @@ function insertData(freshDb: ReturnType<typeof drizzle>, d: Recovered) {
     );
   }
 
-  if (unmatchedRepos.length > 0 && fallbackAccountId) {
-    insertRows(
-      sqlite,
-      "repositories",
-      unmatchedRepos,
-      [
-        "id",
-        "provider",
-        "owner",
-        "name",
-        "full_name",
-        "default_branch",
-        "avatar_url",
-        "added_at",
-        "clone_status",
-        "clone_path",
-        "clone_error",
-        "github_host",
-      ],
-      { account_id: fallbackAccountId },
+  if (skippedRepos.length > 0) {
+    console.warn(
+      `[db] Skipped ${skippedRepos.length} repositories during pre-squash recovery because their owners could not be linked to an account github_login. The original rows remain in the backup DB.`,
     );
   }
 
   // pull_requests — new cols (requested_reviewers, comments_synced_at,
   // threads_fingerprint) have defaults or are nullable; insert old 22 cols
-  insertRows(sqlite, "pull_requests", d.prs, [
+  const recoverablePrs = d.prs.filter((pr) => {
+    const repositoryId = pr.repository_id as string | undefined;
+    return repositoryId ? recoveredRepoIds.has(repositoryId) : false;
+  });
+  const skippedPrCount = d.prs.length - recoverablePrs.length;
+  if (skippedPrCount > 0) {
+    console.warn(
+      `[db] Skipped ${skippedPrCount} pull requests during pre-squash recovery because their repositories were not recovered. The original rows remain in the backup DB.`,
+    );
+  }
+
+  insertRows(sqlite, "pull_requests", recoverablePrs, [
     "id",
     "external_id",
     "repository_id",
