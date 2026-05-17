@@ -231,7 +231,7 @@ export const getCommitHistoryHandler: WalkthroughToolHandler<GetCommitHistoryInp
         ? "No commit history persisted for this walkthrough. Open chapter 0 with a single markdown block explaining 'Single commit — no journey to trace' (or 'Commit history unavailable' if the row is legacy), then move on to chapter 1."
         : commits.length === 1
           ? "Single commit. Open chapter 0 with a one-paragraph markdown block stating that there's no journey to narrate, then move on."
-          : `${commits.length} commits, oldest → newest. Open chapter 0 (semantic_step_index: 0) with a journey narrative — the arc, course corrections, abandoned tracks — NOT a commit-by-commit log. See the system prompt's 'How we got here' section.`,
+          : `${commits.length} commits, oldest → newest. Open chapter 0 (semantic_step_index: 0) with a journey narrative — the narrative, course corrections, abandoned tracks — NOT a commit-by-commit log. See the system prompt's 'How we got here' section.`,
   };
 
   return {

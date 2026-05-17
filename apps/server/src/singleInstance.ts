@@ -21,7 +21,7 @@ export function acquireSingleInstance(pidFile: string): () => void {
     const raw = readFileSync(pidFile, "utf8").trim();
     const existingPid = parseInt(raw, 10);
 
-    if (!isNaN(existingPid) && existingPid !== process.pid) {
+    if (!Number.isNaN(existingPid) && existingPid !== process.pid) {
       // signal(0) is a no-op that throws ESRCH when the process is gone
       let alive = false;
       try {

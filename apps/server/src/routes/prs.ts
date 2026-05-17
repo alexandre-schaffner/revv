@@ -493,9 +493,18 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
             const mergeMethod = (ctx.body?.mergeMethod ??
               "merge") as import("@revv/shared").MergeMethod;
             yield* github.mergePullRequest(repo.fullName, pr.externalId, mergeMethod, token);
-            const refreshed = yield* github
-              .getPr(repo.fullName, pr.externalId, token)
-              .pipe(Effect.map((p) => ({ ...p, id: pr.id, repositoryId: pr.repositoryId })));
+            // The merge succeeded, so we know the PR is merged. Do not trust
+            // github.getPr here — it goes through the ETag cache and can return
+            // the stale pre-merge body because the merge PUT and the PR GET are
+            // different cache keys. Construct the updated row locally instead.
+            const now = new Date().toISOString();
+            const refreshed = {
+              ...pr,
+              status: "merged" as const,
+              closedAt: now,
+              updatedAt: now,
+              fetchedAt: now,
+            };
             yield* prService.upsertPrs([refreshed]);
             const all = yield* prService.listPrs(accountId);
             yield* hub.broadcastToAccount(accountId, { type: "prs:updated", data: all });
