@@ -89,6 +89,14 @@ export type ThemePreference = "system" | "light" | "dark";
 
 export type DiffViewMode = "unified" | "split";
 
+export type MergeMethod = "merge" | "squash" | "rebase";
+
+export interface MergeEligibility {
+  canMerge: boolean;
+  mergeable: boolean;
+  mergeStateStatus: string;
+}
+
 export interface UserSettings {
   id: string;
   aiProvider: string;
