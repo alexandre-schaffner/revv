@@ -1,5 +1,4 @@
 <script lang="ts">
-import Shimmer from "$lib/components/ai/shimmer/Shimmer.svelte";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import { enterScrollMode, getActivePanel } from "$lib/stores/focus-mode.svelte";
 import { getSelectedPrId } from "$lib/stores/prs.svelte";
@@ -57,7 +56,6 @@ function handleSelect(path: string): void {
 	{#if status === 'loading' && repoPaths.length === 0}
 		<div class="placeholder">
 			<Dotmatrix variant="square-9" size="small" />
-			<Shimmer><span class="placeholder-text">Loading files…</span></Shimmer>
 		</div>
 	{:else}
 		<PierreFileTree
@@ -90,12 +88,6 @@ function handleSelect(path: string): void {
 		justify-content: center;
 		gap: 8px;
 		padding: 16px;
-	}
-
-	.placeholder-text {
-		font-size: 11px;
-		color: var(--color-text-muted);
-		font-style: italic;
 	}
 
 </style>
