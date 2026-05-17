@@ -1231,20 +1231,20 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
         query($owner: String!, $repo: String!, $number: Int!) {
           repository(owner: $owner, name: $repo) {
             pullRequest(number: $number) {
-              viewerCanMergeAsAdmin
               mergeable
               mergeStateStatus
             }
+            viewerPermission
           }
         }
       `;
       interface Resp {
         repository: {
           pullRequest: {
-            viewerCanMergeAsAdmin: boolean;
             mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN" | null;
             mergeStateStatus: string | null;
           } | null;
+          viewerPermission: "ADMIN" | "MAINTAIN" | "WRITE" | "READ" | "NONE" | null;
         } | null;
       }
       const data = yield* githubGraphql<Resp>(
@@ -1262,8 +1262,10 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
           }),
         );
       }
+      const perm = data.repository?.viewerPermission;
+      const canMerge = perm === "ADMIN" || perm === "MAINTAIN" || perm === "WRITE";
       return {
-        canMerge: pr.viewerCanMergeAsAdmin ?? false,
+        canMerge,
         mergeable: pr.mergeable === "MERGEABLE",
         mergeStateStatus: pr.mergeStateStatus ?? "unknown",
       };

@@ -554,11 +554,13 @@ function onRightHandleDblClick(): void {
 					{/if}
 
 					{#if mergeEligibility?.canMerge && pr.status === 'open'}
-						<div style="display: flex; gap: 0;">
+						<div
+							class="walkthrough-action-btn walkthrough-action-btn--success merge-pill"
+							class:is-disabled={ownerSubmitting !== null || mergeSubmitting !== null}
+						>
 							<button
 								type="button"
-								class="walkthrough-action-btn walkthrough-action-btn--success"
-								style="border-radius: var(--radius-lg) 0 0 var(--radius-lg);"
+								class="merge-pill-main"
 								disabled={ownerSubmitting !== null || mergeSubmitting !== null}
 								onclick={() => runMerge('merge')}
 								title="Merge this pull request"
@@ -570,8 +572,7 @@ function onRightHandleDblClick(): void {
 								<PopoverTrigger>
 									<button
 										type="button"
-										class="walkthrough-action-btn walkthrough-action-btn--success"
-										style="border-radius: 0 var(--radius-lg) var(--radius-lg) 0; padding-inline: 6px;"
+										class="merge-pill-chevron"
 										disabled={ownerSubmitting !== null || mergeSubmitting !== null}
 										aria-label="Merge options"
 										title="Choose merge strategy"
@@ -984,5 +985,53 @@ function onRightHandleDblClick(): void {
 	   lower to clear the traffic lights. Mirrors `.topbar-area` height. */
 	:global(html.tauri) .rightpanel-area {
 		top: calc(22px + 6px);
+	}
+
+	/* Merge split-button — single pill with transparent inner buttons so the
+	   wrapper’s `.walkthrough-action-btn` border and radius create the shape. */
+	.merge-pill {
+		padding: 0;
+		overflow: hidden;
+	}
+
+	.merge-pill.is-disabled {
+		opacity: 0.4;
+		cursor: not-allowed;
+	}
+
+	.merge-pill-main,
+	.merge-pill-chevron {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+		height: 100%;
+		padding: 0 12px;
+		background: transparent;
+		border: none;
+		font-family: inherit;
+		font-size: 13px;
+		font-weight: 500;
+		letter-spacing: -0.01em;
+		color: inherit;
+		cursor: pointer;
+		white-space: nowrap;
+		transition: background-color var(--duration-snap);
+		-webkit-font-smoothing: antialiased;
+	}
+
+	.merge-pill-chevron {
+		padding: 0 10px 0 2px;
+		border-left: 1px solid var(--color-glass-border);
+	}
+
+	.merge-pill-main:hover:not(:disabled),
+	.merge-pill-chevron:hover:not(:disabled) {
+		background: color-mix(in srgb, var(--color-tab-active-bg) 80%, var(--color-tab-track-bg));
+	}
+
+	.merge-pill-main:disabled,
+	.merge-pill-chevron:disabled {
+		cursor: not-allowed;
+		opacity: 0.4;
 	}
 </style>
