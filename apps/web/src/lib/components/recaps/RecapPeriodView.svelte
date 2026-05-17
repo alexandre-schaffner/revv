@@ -23,10 +23,13 @@ import {
   getRightPanelOpen,
   getRightPanelWidth,
   getSidebarCollapsed,
+  getSidebarPeekHovering,
   getSidebarWidth,
 } from "$lib/stores/sidebar.svelte";
 import PreviousRecaps from "./PreviousRecaps.svelte";
 import RecapDetail from "./RecapDetail.svelte";
+
+const RAIL_WIDTH = 64;
 
 interface Props {
   repoId: string;
@@ -92,15 +95,17 @@ $effect(() => {
   };
 });
 
-// Mirror AppShell.floatingActionsStyle so the recap pill is centred over
-// the visible main area between the sidebar and (optional) right panel
+// Mirror AppShell.floatingActionsStyle exactly so the recap pill is centred
+// over the visible main area between the sidebar and (optional) right panel
 // rather than the full viewport.
 const sidebarCollapsed = $derived(getSidebarCollapsed());
+const sidebarPeekHovering = $derived(getSidebarPeekHovering());
+const sidebarEffectiveCollapsed = $derived(sidebarCollapsed && !sidebarPeekHovering);
 const sidebarWidth = $derived(getSidebarWidth());
 const rightPanelOpen = $derived(getRightPanelOpen());
 const rightPanelWidth = $derived(getRightPanelWidth());
 const floatingActionsStyle = $derived(
-  `left: ${sidebarCollapsed ? 40 : sidebarWidth}px; right: ${
+  `left: ${RAIL_WIDTH + (sidebarEffectiveCollapsed ? 0 : sidebarWidth)}px; right: ${
     rightPanelOpen ? rightPanelWidth : 0
   }px;`,
 );

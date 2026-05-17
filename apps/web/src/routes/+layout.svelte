@@ -35,6 +35,26 @@ $effect(() => {
   prs.setSelectedPrId(match?.[1] ?? null);
 });
 
+// URL → selectedRepoId. The rail's active highlight and the project
+// column's content both read from this store. Resolution order:
+//   1. /repo/{id}/... — repoId is explicit in the path.
+//   2. /review/{prId} — derive from the active PR's repositoryId.
+//   3. Everything else (/, /settings, …) — null.
+//
+// Same single-source-of-truth pattern as selectedPrId. Re-runs whenever
+// the URL changes or when the active PR resolves (the latter matters on
+// cold-load of /review/{prId} when prs haven't been hydrated yet).
+$effect(() => {
+  const path = page.url.pathname;
+  const repoMatch = path.match(/^\/repo\/([^/]+)/);
+  if (repoMatch?.[1]) {
+    prs.setSelectedRepoId(repoMatch[1]);
+    return;
+  }
+  const selectedPr = prs.getSelectedPr();
+  prs.setSelectedRepoId(selectedPr?.repositoryId ?? null);
+});
+
 // Keep the sidebar view in lockstep with the URL in both directions.
 // PrItem.handleClick and CommandPalette already pair selectPr() with
 // setSidebarView('files') so the click-driven path is in sync. This
@@ -46,9 +66,13 @@ $effect(() => {
 // Re-runs only when selectedPrId changes, so a manual swipe-back to the
 // PR list while staying on /review/[prId] (Esc / 'h' / breadcrumb) is
 // not clobbered.
+//
+// New-PR chat sessions also live in files-mode: the left pane shows the
+// worktree file tree while the main pane hosts the agent chat.
 $effect(() => {
   const id = prs.getSelectedPrId();
-  setSidebarView(id ? "files" : "prs");
+  const onNewPr = /^\/repo\/[^/]+\/new-pr\/[^/]+/.test(page.url.pathname);
+  setSidebarView(id || onNewPr ? "files" : "prs");
 });
 
 $effect(() => {

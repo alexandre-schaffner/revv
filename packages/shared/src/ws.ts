@@ -1,3 +1,10 @@
+import type {
+  NewPrCommit,
+  NewPrMessage,
+  NewPrSession,
+  NewPrSessionSnapshot,
+  NewPrSessionStatus,
+} from "./new-pr-session";
 import type { ProjectRecap, ProjectRecapStatus, RecapPeriod } from "./recap";
 import type {
   CloneStatus,
@@ -145,7 +152,104 @@ export type WsServerMessage =
       };
     }
   /** full-state — New recap row (insert or regenerate). Replace/add in list. */
-  | { type: "recap:added"; data: { recap: ProjectRecap } };
+  | { type: "recap:added"; data: { recap: ProjectRecap } }
+  // ── New-PR chat sessions ───────────────────────────────────────────────
+  //
+  // Long-running, user-driven agent conversations that terminate with an
+  // explicit Open-PR action. Status writes are orchestrator-only; content
+  // writes (messages, commits, metadata) go through the MCP tool surface
+  // and re-broadcast via these envelopes. See
+  // `packages/shared/src/new-pr-session.ts` for shape definitions and
+  // `apps/server/src/services/NewPrSession.ts` for the orchestrator.
+  //
+  /** full-state — Session created. `snapshot` carries the row + initial
+   *  (empty) transcript/commit list so the client can hydrate without a
+   *  follow-up fetch. */
+  | { type: "new-pr-session:created"; data: { snapshot: NewPrSessionSnapshot } }
+  /** delta — A new user or assistant message landed. Append in place. */
+  | {
+      type: "new-pr-session:message-appended";
+      data: { sessionId: string; message: NewPrMessage };
+    }
+  /** signal — A user-triggered agent turn started. Flip "thinking" UI. */
+  | {
+      type: "new-pr-session:agent-turn-started";
+      data: { sessionId: string; turnId: string };
+    }
+  /** signal — Agent turn finished. `status` discriminates clean finish vs
+   *  user-interrupted vs error. */
+  | {
+      type: "new-pr-session:agent-turn-ended";
+      data: {
+        sessionId: string;
+        turnId: string;
+        status: "completed" | "interrupted" | "error";
+        errorMessage?: string;
+      };
+    }
+  /** delta — `commit_changes` MCP tool succeeded. Append the new
+   *  commit to the session commit list. */
+  | {
+      type: "new-pr-session:commit-recorded";
+      data: { sessionId: string; commit: NewPrCommit };
+    }
+  /** delta — Agent updated session title/body via `set_pr_metadata`. Only
+   *  the fields that changed are present; null clears a previously-set
+   *  value, omitted means "no change". */
+  | {
+      type: "new-pr-session:metadata-updated";
+      data: {
+        sessionId: string;
+        title?: string | null;
+        body?: string | null;
+      };
+    }
+  /** signal — Worktree files changed on disk (agent file edit, commit,
+   *  rebase, …). UI refreshes the worktree file tree. `changedPaths` is
+   *  best-effort — empty list means "any path may have changed; refetch
+   *  the whole tree". */
+  | {
+      type: "new-pr-session:worktree-changed";
+      data: { sessionId: string; changedPaths: ReadonlyArray<string> };
+    }
+  /** signal — "Sync with main" action succeeded. New baseSha is stamped
+   *  on the session row. */
+  | {
+      type: "new-pr-session:synced";
+      data: { sessionId: string; newBaseSha: string };
+    }
+  /** signal — Rebase against origin/main hit conflicts. Session stays in
+   *  `chatting`; worktree is left in conflicted state for the agent's
+   *  next turn (or the user) to resolve. */
+  | {
+      type: "new-pr-session:sync-conflicted";
+      data: { sessionId: string; conflictedPaths: ReadonlyArray<string> };
+    }
+  /** delta — Session status transitioned (e.g. chatting → opening →
+   *  complete). UI flips action-bar state without polling. */
+  | {
+      type: "new-pr-session:status-changed";
+      data: {
+        sessionId: string;
+        status: NewPrSessionStatus;
+        errorMessage?: string;
+      };
+    }
+  /** signal — PR successfully opened on GitHub. Frontend handler
+   *  navigates to `/review/{prId}`. */
+  | {
+      type: "new-pr-session:pr-opened";
+      data: {
+        sessionId: string;
+        prId: string;
+        externalId: number;
+        url: string;
+      };
+    }
+  /** full-state — Replace one session row in place (status field
+   *  reconcile after WS reconnect, etc.). Replaces the `session` field
+   *  of the local cache without touching messages/commits. */
+  | { type: "new-pr-session:updated"; data: { session: NewPrSession } };
 
 export type WsClientMessage =
   | { type: "prs:request-sync" }

@@ -8,7 +8,8 @@ import {
   setFocusedId,
 } from "$lib/stores/sidebar-nav.svelte";
 
-let { onAddRepo }: { onAddRepo: () => void } = $props();
+// No props — the rail owns the "Add repository" affordance now.
+
 
 let inputEl: HTMLInputElement;
 let inputValue = $state("");
@@ -143,14 +144,4 @@ function handleClear() {
 			</button>
 		{/if}
 	</div>
-	<button
-		class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border text-text-muted transition-colors hover:border-accent hover:text-accent"
-		onclick={onAddRepo}
-		title="Add repository"
-		aria-label="Add repository"
-	>
-		<svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-			<path d="M12 5v14M5 12h14"/>
-		</svg>
-	</button>
 </div>

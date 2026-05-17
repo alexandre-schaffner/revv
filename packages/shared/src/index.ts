@@ -20,6 +20,13 @@ export {
 } from "./constants";
 export { guessImageContentType, isImagePath } from "./images";
 export type {
+  NewPrCommit,
+  NewPrMessage,
+  NewPrSession,
+  NewPrSessionSnapshot,
+  NewPrSessionStatus,
+} from "./new-pr-session";
+export type {
   ProjectRecap,
   ProjectRecapStatus,
   ProjectRecapSummary,

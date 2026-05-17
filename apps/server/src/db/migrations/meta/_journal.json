@@ -43,6 +43,13 @@
       "when": 1779500000000,
       "tag": "0050_yielding_argent",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1779050224358,
+      "tag": "0006_aromatic_unus",
+      "breakpoints": true
     }
   ]
 }

@@ -10,7 +10,6 @@ import { toast } from "svelte-sonner";
 import { goto } from "$app/navigation";
 import { api } from "$lib/api/client";
 import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
-import { getActiveOrg } from "$lib/stores/orgs.svelte";
 
 import { setBatchSummaries } from "$lib/stores/sync.svelte";
 import { fuzzyScore } from "$lib/utils/fuzzy";
@@ -29,6 +28,11 @@ let availablePrCounts = $state<Record<string, number>>({});
 // than holding a blank hint indefinitely when a repo errors out server-side.
 let availablePrCountsLoaded = $state(false);
 let selectedPrId = $state<string | null>(null);
+// URL-driven: set by the +layout effect that reads /repo/[repoId] (or
+// derives from the active PR's repositoryId). Mirrors the selectedPrId
+// pattern — no localStorage, the URL is canonical so deep-links and
+// browser back/forward behave naturally.
+let selectedRepoId = $state<string | null>(null);
 let searchQuery = $state("");
 let isLoading = $state(false);
 let archivedPrs = $state<PullRequest[]>([]);
@@ -74,19 +78,6 @@ let filteredPrs = $derived.by((): PullRequest[] => {
 
 let groupedByRepo = $derived(Map.groupBy(filteredPrs, (pr) => pr.repositoryId));
 
-// Repos visible in the sidebar after the active-org filter is applied. The
-// underlying `repositories` array is left untouched so background sync,
-// polling, and selection lookups continue to resolve every repo regardless
-// of the org filter — only the rendered list narrows.
-let visibleRepositories = $derived.by(() => {
-  const owner = getActiveOrg();
-  const ownerLower = owner?.toLowerCase();
-  return repositories.filter((r) => {
-    if (ownerLower && r.owner.toLowerCase() !== ownerLower) return false;
-    return true;
-  });
-});
-
 let needsYourReview = $derived(
   (() => {
     const login = getCurrentUserLogin();
@@ -103,6 +94,10 @@ let selectedPr = $derived(
   pullRequests.find((pr) => pr.id === selectedPrId) ??
     archivedPrs.find((pr) => pr.id === selectedPrId) ??
     null,
+);
+
+let selectedRepo = $derived(
+  selectedRepoId ? (repositories.find((r) => r.id === selectedRepoId) ?? null) : null,
 );
 
 export function getGroupedByRepo(): Map<string, PullRequest[]> {
@@ -457,12 +452,20 @@ export function getRepositories(): Repository[] {
   return repositories;
 }
 
-export function getVisibleRepositories(): Repository[] {
-  return visibleRepositories;
-}
-
 export function getSelectedPrId(): string | null {
   return selectedPrId;
+}
+
+export function getSelectedRepoId(): string | null {
+  return selectedRepoId;
+}
+
+export function getSelectedRepo(): Repository | null {
+  return selectedRepo;
+}
+
+export function setSelectedRepoId(id: string | null): void {
+  selectedRepoId = id;
 }
 
 export function getSearchQuery(): string {
@@ -545,6 +548,7 @@ export function reset(): void {
   availablePrCounts = {};
   availablePrCountsLoaded = false;
   selectedPrId = null;
+  selectedRepoId = null;
   searchQuery = "";
   isLoading = false;
   archivedPrs = [];

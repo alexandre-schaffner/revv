@@ -306,9 +306,8 @@ const blocksWithDelay = $derived.by(() => {
       // Already animated in a previous mount — skip animation entirely
       return { block, delay: -1, renderedAnnotation };
     }
-    // New block — assign staggered delay and record it immediately
+    // New block — assign staggered delay
     const delay = Math.min(newInBatch, STAGGER_CAP) * STAGGER_MS;
-    markBlockAnimated(prId, block.id);
     newInBatch += 1;
     return { block, delay, renderedAnnotation };
   });
@@ -323,9 +322,12 @@ const blocksBySection = $derived.by(() => {
   const map = new Map<number, typeof blocksWithDelay>();
   for (const entry of blocksWithDelay) {
     const idx = entry.block.semanticStepIndex ?? -1;
-    const arr = map.get(idx) ?? [];
-    arr.push(entry);
-    map.set(idx, arr);
+    const arr = map.get(idx);
+    if (arr) {
+      map.set(idx, [...arr, entry]);
+    } else {
+      map.set(idx, [entry]);
+    }
   }
   return map;
 });
@@ -394,11 +396,29 @@ const issueDelayById = $derived.by(() => {
       continue;
     }
     const delay = Math.min(newInBatch, STAGGER_CAP) * STAGGER_MS;
-    markIssueAnimated(prId, issue.id);
     newInBatch += 1;
     map.set(issue.id, delay);
   }
   return map;
+});
+
+// Side-effect animation tracking belongs in $effect, not inside $derived.by.
+// Svelte 5 deriveds must be pure; impure deriveds can break reactive
+// invalidation, which manifested as new walkthrough blocks / chapters
+// failing to render after the first chapter until a click forced re-eval.
+$effect(() => {
+  for (const entry of blocksWithDelay) {
+    if (entry.delay >= 0) {
+      markBlockAnimated(prId, entry.block.id);
+    }
+  }
+});
+$effect(() => {
+  for (const [issueId, delay] of issueDelayById) {
+    if (delay >= 0) {
+      markIssueAnimated(prId, issueId);
+    }
+  }
 });
 
 // ── Container animation gating ──────────────────────────────────────

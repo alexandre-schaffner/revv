@@ -4,6 +4,8 @@ import type { Repository } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import CloneStatusIndicator from "$lib/components/shared/CloneStatusIndicator.svelte";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
+import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte";
+import { repoGradientDataUrl } from "$lib/repoGradient";
 import {
   addRepo,
   deleteRepo,
@@ -296,16 +298,12 @@ let trackedCount = $derived(getRepositories().length);
 		{#each [...groupedByOwner] as [owner, repos] (owner)}
 			<div class="owner-group">
 				<div class="owner-header">
-					{#if repos[0]?.avatarUrl}
-						<img
-							src={repos[0].avatarUrl}
-							alt=""
-							class="owner-avatar"
-							loading="lazy"
-							referrerpolicy="no-referrer"
-							onerror={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')}
-						/>
-					{/if}
+					<img
+						src={repoGradientDataUrl(owner)}
+						alt=""
+						class="owner-avatar"
+						loading="lazy"
+					/>
 					<span class="owner-name">{owner}</span>
 					<span class="owner-count">{repos.length}</span>
 				</div>
@@ -341,20 +339,12 @@ let trackedCount = $derived(getRepositories().length);
 							}
 						}}
 					>
-						{#if repo.avatarUrl}
-							<img
-								class="dropdown-avatar"
-								src={repo.avatarUrl}
-								alt=""
-								loading="lazy"
-								referrerpolicy="no-referrer"
-								onerror={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')}
-							/>
-						{:else}
-							<span class="dropdown-icon dropdown-icon--repo" aria-hidden="true">
-								<Folder size={12} />
-							</span>
-						{/if}
+					<RepoGradientAvatar
+						fullName={repo.fullName}
+						size={14}
+						radius={999}
+						class="dropdown-avatar"
+					/>
 
 						<div class="dropdown-body">
 							<span class="dropdown-title">{repo.name}</span>
@@ -608,11 +598,7 @@ let trackedCount = $derived(getRepositories().length);
 
 	.dropdown-avatar {
 		flex-shrink: 0;
-		width: 14px;
-		height: 14px;
 		margin-top: 2px;
-		border-radius: 999px;
-		object-fit: cover;
 	}
 
 	.dropdown-body {

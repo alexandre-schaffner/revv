@@ -24,8 +24,11 @@ import {
   getRightPanelOpen,
   getRightPanelWidth,
   getSidebarCollapsed,
+  getSidebarPeekHovering,
   getSidebarWidth,
 } from "$lib/stores/sidebar.svelte";
+
+const RAIL_WIDTH = 64;
 
 const repoId = $derived(page.params.repoId ?? "");
 const recapId = $derived(page.params.recapId ?? "");
@@ -36,11 +39,13 @@ let regenerating = $state(false);
 // centres over the visible main area (between sidebar and any right
 // panel), not the full viewport.
 const sidebarCollapsed = $derived(getSidebarCollapsed());
+const sidebarPeekHovering = $derived(getSidebarPeekHovering());
+const sidebarEffectiveCollapsed = $derived(sidebarCollapsed && !sidebarPeekHovering);
 const sidebarWidth = $derived(getSidebarWidth());
 const rightPanelOpen = $derived(getRightPanelOpen());
 const rightPanelWidth = $derived(getRightPanelWidth());
 const floatingActionsStyle = $derived(
-  `left: ${sidebarCollapsed ? 40 : sidebarWidth}px; right: ${
+  `left: ${RAIL_WIDTH + (sidebarEffectiveCollapsed ? 0 : sidebarWidth)}px; right: ${
     rightPanelOpen ? rightPanelWidth : 0
   }px;`,
 );

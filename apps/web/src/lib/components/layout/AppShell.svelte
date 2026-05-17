@@ -54,6 +54,7 @@ import {
   getRightPanelOpen,
   getRightPanelWidth,
   getSidebarCollapsed,
+  getSidebarPeekHovering,
   getSidebarWidth,
   RIGHT_PANEL_WIDTH_MAX,
   RIGHT_PANEL_WIDTH_MIN,
@@ -87,13 +88,28 @@ import {
 import BottomBar from "./BottomBar.svelte";
 import CommandPalette from "./CommandPalette.svelte";
 import FloatingTabs from "./FloatingTabs.svelte";
+import ProjectRail from "./ProjectRail.svelte";
 import RightPanel from "./RightPanel.svelte";
 import Sidebar from "./Sidebar.svelte";
 import TopBar from "./TopBar.svelte";
 
+// Width of the always-visible project rail. The rail hosts repo
+// avatars, add-repo, settings, and the user menu, and stays on screen
+// even when the project column is collapsed and during /review/[prId]
+// (file-tree mode). See ProjectRail.svelte.
+const RAIL_WIDTH = 64;
+
 let { children } = $props();
 
 const sidebarCollapsed = $derived(getSidebarCollapsed());
+// Effective collapsed state: false when the user is hovering a project
+// avatar (or the sidebar itself) so the column expands as a peek without
+// flipping the persistent toggle. Used for layout (grid columns, floating
+// action bar alignment, Sidebar contents). The TopBar toggle and the
+// resize handle stay bound to the real `sidebarCollapsed` so peek is
+// purely visual and never repositions controls.
+const sidebarPeekHovering = $derived(getSidebarPeekHovering());
+const sidebarEffectiveCollapsed = $derived(sidebarCollapsed && !sidebarPeekHovering);
 const rightPanelOpen = $derived(getRightPanelOpen());
 const paletteOpen = $derived(getPaletteOpen());
 const paletteMode = $derived(getPaletteMode());
@@ -224,9 +240,9 @@ $effect(() => {
 // the left pane: it does not change the main content display." See
 // `.rightpanel-area` below for the overlay positioning rationale.
 const gridStyle = $derived(
-  sidebarCollapsed
-    ? `grid-template-columns: 40px 1fr`
-    : `grid-template-columns: ${sidebarWidth}px 1fr`,
+  sidebarEffectiveCollapsed
+    ? `grid-template-columns: ${RAIL_WIDTH}px 0 1fr`
+    : `grid-template-columns: ${RAIL_WIDTH}px ${sidebarWidth}px 1fr`,
 );
 
 // Floating action bar (walkthrough actions / Submit Review / Approve)
@@ -236,7 +252,7 @@ const gridStyle = $derived(
 // when either toggles. `--duration-smooth` matches the grid-columns
 // transition; resize handles suppress it via `.is-resizing`.
 const floatingActionsStyle = $derived(
-  `left: ${sidebarCollapsed ? 40 : sidebarWidth}px; right: ${rightPanelOpen ? rightPanelWidth : 0}px;`,
+  `left: ${RAIL_WIDTH + (sidebarEffectiveCollapsed ? 0 : sidebarWidth)}px; right: ${rightPanelOpen ? rightPanelWidth : 0}px;`,
 );
 
 function onHandlePointerDown(event: PointerEvent): void {
@@ -298,12 +314,16 @@ function onRightHandleDblClick(): void {
 
 <div
 	class="app-shell"
-	class:sidebar-collapsed={sidebarCollapsed}
+	class:sidebar-collapsed={sidebarEffectiveCollapsed}
 	class:is-resizing={isDragging}
 	style={gridStyle}
 >
+	<aside class="rail-area">
+		<ProjectRail />
+	</aside>
+
 	<aside class="sidebar-area">
-		<Sidebar collapsed={sidebarCollapsed} />
+		<Sidebar collapsed={sidebarEffectiveCollapsed} />
 
 		{#if !sidebarCollapsed}
 			<div
@@ -656,9 +676,9 @@ function onRightHandleDblClick(): void {
 		display: grid;
 		grid-template-rows: auto 1fr 40px;
 		grid-template-areas:
-			'topbar  topbar'
-			'sidebar main'
-			'sidebar bottombar';
+			'topbar  topbar  topbar'
+			'rail    sidebar main'
+			'rail    sidebar bottombar';
 		height: 100vh;
 		width: 100vw;
 		overflow: hidden;
@@ -673,6 +693,14 @@ function onRightHandleDblClick(): void {
 	/* Suppress the column transition while dragging so resize feels instant */
 	.app-shell.is-resizing {
 		transition: none;
+	}
+
+	/* ── Rail (always-visible project switcher) ── */
+	.rail-area {
+		grid-area: rail;
+		position: relative;
+		border-right: 1px solid var(--color-border);
+		overflow: hidden;
 	}
 
 	/* ── Sidebar area ── */

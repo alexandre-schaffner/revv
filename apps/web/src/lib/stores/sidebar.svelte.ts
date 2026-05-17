@@ -8,6 +8,8 @@ const RIGHT_PANEL_WIDTH_DEFAULT = 340;
 const RIGHT_PANEL_WIDTH_MIN = 280;
 const RIGHT_PANEL_WIDTH_MAX = 720;
 
+const RAIL_COLLAPSED_OWNERS_KEY = "revv:rail-collapsed-owners";
+
 function clampWidth(w: number): number {
   return Math.max(SIDEBAR_WIDTH_MIN, Math.min(SIDEBAR_WIDTH_MAX, w));
 }
@@ -34,12 +36,45 @@ function loadPersistedRightPanelWidth(): number {
   return clampRightPanelWidth(parsed);
 }
 
+function loadCollapsedOwners(): Set<string> {
+  if (typeof localStorage === "undefined") return new Set();
+  const raw = localStorage.getItem(RAIL_COLLAPSED_OWNERS_KEY);
+  if (raw === null) return new Set();
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter((x): x is string => typeof x === "string"));
+  } catch {
+    return new Set();
+  }
+}
+
 let sidebarCollapsed = $state(false);
 let rightPanelOpen = $state(false);
 let addRepoDialogOpen = $state(false);
 let collapseAllSignal = $state(0);
 let sidebarWidth = $state(loadPersistedWidth());
 let rightPanelWidth = $state(loadPersistedRightPanelWidth());
+
+// Collapsed owner-folders in the project rail. Owners are stored
+// lowercase. Default: every owner is expanded — owners only land here
+// after the user explicitly collapses their folder. Persisted so the
+// expand/collapse pattern survives reloads.
+let collapsedOwners = $state<Set<string>>(loadCollapsedOwners());
+
+// Transient "peek" state: true while the cursor is over a project avatar in
+// the rail or anywhere inside the sidebar. Used to reveal the sidebar while
+// `sidebarCollapsed` is true without changing the persistent toggle. A short
+// close delay covers the gap when the cursor transits between the avatar
+// and the sidebar, or between two avatars.
+//
+// `sidebarPeekRepoId` tracks which repo is currently being previewed — set
+// by the avatar's mouseenter and held across transit into the sidebar so
+// the panel shows that repo's PRs (not the URL-selected one) until the
+// peek closes.
+let sidebarPeekHovering = $state(false);
+let sidebarPeekRepoId = $state<string | null>(null);
+let peekCloseTimer: ReturnType<typeof setTimeout> | undefined;
 
 // Two-view drawer: 'prs' (the PR list) ⇄ 'files' (full repo tree at the
 // selected PR's head SHA). Transient — not persisted across reloads. Resets to
@@ -59,6 +94,9 @@ $effect.root(() => {
   });
   $effect(() => {
     localStorage.setItem(RIGHT_PANEL_WIDTH_KEY, String(rightPanelWidth));
+  });
+  $effect(() => {
+    localStorage.setItem(RAIL_COLLAPSED_OWNERS_KEY, JSON.stringify([...collapsedOwners]));
   });
 });
 
@@ -83,6 +121,36 @@ export function setSidebarCollapsed(v: boolean): void {
 
 export function toggleSidebar(): void {
   sidebarCollapsed = !sidebarCollapsed;
+}
+
+// ── Sidebar peek (hover-to-reveal) ──────────────────────
+
+export function getSidebarPeekHovering(): boolean {
+  return sidebarPeekHovering;
+}
+
+export function setSidebarPeekHovering(v: boolean): void {
+  if (peekCloseTimer !== undefined) {
+    clearTimeout(peekCloseTimer);
+    peekCloseTimer = undefined;
+  }
+  if (v) {
+    sidebarPeekHovering = true;
+  } else {
+    peekCloseTimer = setTimeout(() => {
+      sidebarPeekHovering = false;
+      sidebarPeekRepoId = null;
+      peekCloseTimer = undefined;
+    }, 200);
+  }
+}
+
+export function getSidebarPeekRepoId(): string | null {
+  return sidebarPeekRepoId;
+}
+
+export function setSidebarPeekRepoId(id: string | null): void {
+  sidebarPeekRepoId = id;
 }
 
 // ── Sidebar width ────────────────────────────────────────
@@ -179,4 +247,18 @@ export function getFileSearchQuery(): string {
 
 export function setFileSearchQuery(v: string): void {
   fileSearchQuery = v;
+}
+
+// ── Rail owner-folder collapse state ────────────────────
+
+export function isOwnerCollapsed(owner: string): boolean {
+  return collapsedOwners.has(owner.toLowerCase());
+}
+
+export function toggleOwnerCollapsed(owner: string): void {
+  const key = owner.toLowerCase();
+  const next = new Set(collapsedOwners);
+  if (next.has(key)) next.delete(key);
+  else next.add(key);
+  collapsedOwners = next;
 }
