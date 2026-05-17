@@ -2,11 +2,7 @@
 import { Calendar, Loader2 } from "@lucide/svelte";
 import { page } from "$app/state";
 import { Button } from "$lib/components/ui/button";
-import {
-  fetchRecapsForRepo,
-  getRecapLoading,
-  getRecapsForRepo,
-} from "$lib/stores/recaps.svelte";
+import { fetchRecapsForRepo, getRecapLoading, getRecapsForRepo } from "$lib/stores/recaps.svelte";
 import { getFocusedId } from "$lib/stores/sidebar-nav.svelte";
 
 interface Props {
@@ -46,7 +42,9 @@ function formatPeriodWindow(r: (typeof recaps)[number]): string {
 const navId = $derived(`recaps:repo:${repoId}`);
 const href = $derived(`/repo/${repoId}/recaps`);
 const currentPath = $derived(page.url.pathname);
-const isActive = $derived(currentPath === href || currentPath.startsWith(`/repo/${repoId}/recaps/`));
+const isActive = $derived(
+  currentPath === href || currentPath.startsWith(`/repo/${repoId}/recaps/`),
+);
 
 function rowFocused(id: string): boolean {
   return getFocusedId() === id;

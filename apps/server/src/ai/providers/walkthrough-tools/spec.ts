@@ -12,7 +12,6 @@ import type {
   WsServerMessage,
 } from "@revv/shared";
 import { RATING_AXES } from "@revv/shared";
-import { Effect } from "effect";
 import { z } from "zod";
 import type { Db } from "../../../db";
 

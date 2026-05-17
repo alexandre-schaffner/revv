@@ -1,9 +1,9 @@
 <script lang="ts">
+import type { RecapPeriod } from "@revv/shared";
 import { page } from "$app/state";
 import AuthGuard from "$lib/components/auth/AuthGuard.svelte";
 import PillTabs from "$lib/components/layout/PillTabs.svelte";
 import RecapPeriodView from "$lib/components/recaps/RecapPeriodView.svelte";
-import type { RecapPeriod } from "@revv/shared";
 import {
   getRightPanelOpen,
   getRightPanelWidth,

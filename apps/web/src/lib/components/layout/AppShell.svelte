@@ -17,8 +17,8 @@ import {
 } from "@lucide/svelte";
 import { page } from "$app/state";
 import { Shimmer } from "$lib/components/ai/shimmer";
-import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import SettingsModal from "$lib/components/settings/SettingsModal.svelte";
+import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import { Popover, PopoverContent, PopoverTrigger } from "$lib/components/ui/popover";
 import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
 import { isChatStreaming } from "$lib/stores/chat.svelte";

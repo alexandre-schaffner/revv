@@ -25,7 +25,6 @@ import type {
   WalkthroughRating,
 } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
-import { Effect } from "effect";
 import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
 import { walkthroughRatings } from "../../../db/schema/walkthrough-ratings";
 import { walkthroughSemanticSteps } from "../../../db/schema/walkthrough-semantic-steps";
