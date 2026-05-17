@@ -189,7 +189,7 @@ export function renderMissingInlineCommentError(uncommented: MissingInlineCommen
 // ── Journey-chapter validation ───────────────────────────────────────────────
 //
 // The required Phase B chapter at `semantic_step_index: 0` MUST narrate the
-// coder's journey to the state being reviewed (commit history arc, course
+// coder's journey to the state being reviewed (commit history narrative, course
 // corrections, abandoned tracks). The user prompt seeds this with a
 // `### Commit history` section; the system prompt instructs the agent to
 // open the chapter at index 0 with a title containing one of the keywords
@@ -203,7 +203,7 @@ export function renderMissingInlineCommentError(uncommented: MissingInlineCommen
 // keyword list in lockstep — any change here MUST land alongside a matching
 // change to walkthrough-system.md.
 export const JOURNEY_CHAPTER_PATTERN =
-  /(journey|history|got here|how we|evolution|explor|attempts?|origins?|trajectory|arc of|path to|came to|story of|trail)/i;
+  /(journey|history|got here|how we|evolution|explor|attempts?|origins?|trajectory|path to|came to|story of|trail)/i;
 
 export function isJourneyChapterText(title: string, summary: string | null): boolean {
   return JOURNEY_CHAPTER_PATTERN.test(`${title}\n${summary ?? ""}`);

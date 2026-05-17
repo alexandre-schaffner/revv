@@ -228,9 +228,9 @@ export const RecapSchedulerLive = Layer.effect(
               prService.listArchivedPrsForWindow(repo.id, window.periodStart, window.periodEnd),
             ).pipe(Effect.catchAll(() => Effect.succeed([] as never[])));
             if (windowed.length === 0) {
-              const openPrs = yield* provideDb(
-                prService.listOpenPrsWithWalkthroughs(repo.id),
-              ).pipe(Effect.catchAll(() => Effect.succeed([] as never[])));
+              const openPrs = yield* provideDb(prService.listOpenPrsWithWalkthroughs(repo.id)).pipe(
+                Effect.catchAll(() => Effect.succeed([] as never[])),
+              );
               if (openPrs.length === 0) continue;
             }
 

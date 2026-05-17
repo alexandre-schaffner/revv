@@ -740,6 +740,10 @@ body {
    ────────────────────────────────────────────────────────── */
 :root.dark .shiki,
 :root.dark .shiki span {
+  /* !important is required because Shiki v3's dual-theme output writes
+     inline `style="background-color:var(--shiki-light-bg);..."` which has
+     higher specificity (1,0,0,0) than any CSS rule. Without !important the
+     dark-mode swap is silently ignored and code blocks stay light-themed. */
   color: var(--shiki-dark) !important;
   background-color: var(--shiki-dark-bg) !important;
   font-style: var(--shiki-dark-font-style) !important;

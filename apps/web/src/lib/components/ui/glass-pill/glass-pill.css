@@ -1,64 +1,64 @@
 .glass-pill {
-	display: inline-flex;
-	align-items: center;
-	gap: 8px;
-	height: 36px;
-	padding: 0 16px;
-	background: var(--color-tab-track-bg);
-	backdrop-filter: blur(16px) saturate(1.4);
-	-webkit-backdrop-filter: blur(16px) saturate(1.4);
-	border: 1px solid var(--color-glass-border);
-	border-radius: 9999px;
-	box-shadow:
-		var(--color-glass-shadow),
-		inset 0 0.5px 0 0 var(--color-glass-highlight);
-	font-family: inherit;
-	font-size: 13px;
-	font-weight: 500;
-	letter-spacing: -0.01em;
-	line-height: 1;
-	color: var(--color-text-primary);
-	cursor: pointer;
-	transition:
-		background-color var(--duration-snap),
-		color var(--duration-snap),
-		box-shadow var(--duration-snap);
-	-webkit-font-smoothing: antialiased;
-	white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 16px;
+  background: var(--color-tab-track-bg);
+  backdrop-filter: blur(16px) saturate(1.4);
+  -webkit-backdrop-filter: blur(16px) saturate(1.4);
+  border: 1px solid var(--color-glass-border);
+  border-radius: 9999px;
+  box-shadow:
+    var(--color-glass-shadow),
+    inset 0 0.5px 0 0 var(--color-glass-highlight);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  line-height: 1;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  transition:
+    background-color var(--duration-snap),
+    color var(--duration-snap),
+    box-shadow var(--duration-snap);
+  -webkit-font-smoothing: antialiased;
+  white-space: nowrap;
 }
 
 .glass-pill:hover {
-	background: color-mix(in srgb, var(--color-tab-active-bg) 80%, var(--color-tab-track-bg));
+  background: color-mix(in srgb, var(--color-tab-active-bg) 80%, var(--color-tab-track-bg));
 }
 
 .glass-pill:focus-visible {
-	outline: 2px solid var(--color-accent);
-	outline-offset: 2px;
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
 }
 
 .glass-pill--danger {
-	color: var(--color-danger);
+  color: var(--color-danger);
 }
 
 .glass-pill--muted {
-	color: var(--color-text-secondary);
+  color: var(--color-text-secondary);
 }
 
 .glass-pill--accent:not(:disabled) {
-	color: var(--color-accent);
+  color: var(--color-accent);
 }
 
 .glass-pill--success:not(:disabled) {
-	color: var(--color-success);
+  color: var(--color-success);
 }
 
 .glass-pill--icon {
-	justify-content: center;
-	width: 36px;
-	padding: 0;
+  justify-content: center;
+  width: 36px;
+  padding: 0;
 }
 
 .glass-pill:disabled {
-	cursor: not-allowed;
-	opacity: 0.4;
+  cursor: not-allowed;
+  opacity: 0.4;
 }

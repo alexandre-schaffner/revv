@@ -116,8 +116,9 @@ function cycleTheme() {
 			class="panel-btn"
 			class:panel-btn--open={rightPanelOpen}
 			onclick={onTogglePanel}
-			aria-label="Toggle context panel (⌘\)"
-			title="Toggle context panel (⌘\)"
+			aria-label={pr ? 'Toggle context panel (⌘R)' : 'Chat panel is only available when reviewing a PR'}
+			title={pr ? 'Toggle context panel (⌘R)' : 'Chat panel is only available when reviewing a PR'}
+			disabled={!pr}
 		>
 			<svg
 				xmlns="http://www.w3.org/2000/svg"
@@ -298,6 +299,16 @@ function cycleTheme() {
 	.panel-btn--open:hover {
 		background: var(--color-tree-active-bg);
 		color: var(--color-tree-active-text);
+	}
+
+	.panel-btn:disabled {
+		opacity: 0.5;
+		cursor: default;
+	}
+
+	.panel-btn:disabled:hover {
+		background: transparent;
+		color: var(--color-text-muted);
 	}
 
 	.title-separator {

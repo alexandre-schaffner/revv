@@ -25,7 +25,6 @@ import type {
   WalkthroughRating,
 } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
-import { Effect } from "effect";
 import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
 import { walkthroughRatings } from "../../../db/schema/walkthrough-ratings";
 import { walkthroughSemanticSteps } from "../../../db/schema/walkthrough-semantic-steps";
@@ -428,7 +427,7 @@ export const completeWalkthroughHandler: WalkthroughToolHandler<CompleteWalkthro
   }
   if (!isJourneyChapterText(firstChapter.title, firstChapter.summary)) {
     return errorResult(
-      `Error: the chapter at semantic_step_index 0 is required to be the 'How we got here' journey chapter, but its title ('${firstChapter.title}') and summary do not name the journey. Re-call add_semantic_step with semantic_step_index 0 and a title (or summary) that includes one of: 'journey', 'history', 'got here', 'how we', 'evolution', 'explored', 'attempts', 'origins', 'trajectory', 'arc of', 'path to', 'came to', 'story of', 'trail'. The chapter should narrate the commit-history arc surfaced in the user prompt's Commit history section — not commit-by-commit, but the shape of the work.`,
+      `Error: the chapter at semantic_step_index 0 is required to be the 'How we got here' journey chapter, but its title ('${firstChapter.title}') and summary do not name the journey. Re-call add_semantic_step with semantic_step_index 0 and a title (or summary) that includes one of: 'journey', 'history', 'got here', 'how we', 'evolution', 'explored', 'attempts', 'origins', 'trajectory', 'path to', 'came to', 'story of', 'trail'. The chapter should narrate the commit-history narrative surfaced in the user prompt's Commit history section — not commit-by-commit, but the shape of the work.`,
     );
   }
   const knownSections = new Set(semanticRows.map((r) => r.semanticStepIndex));
@@ -511,7 +510,7 @@ export const TOOL_SPECS: Array<ToolSpec<any>> = [
   {
     name: "get_commit_history",
     description:
-      "Read-only. Returns the PR commit list (sha, first-line message, author, date) in oldest → newest order. Call this once before opening chapter 0 ('How we got here' journey chapter) so you can narrate the arc of the work, course corrections, and abandoned tracks. The response also includes guidance for the single-commit / empty-history edge cases.",
+      "Read-only. Returns the PR commit list (sha, first-line message, author, date) in oldest → newest order. Call this once before opening chapter 0 ('How we got here' journey chapter) so you can narrate the narrative of the work, course corrections, and abandoned tracks. The response also includes guidance for the single-commit / empty-history edge cases.",
     inputSchema: getCommitHistorySchema,
     handler: getCommitHistoryHandler,
   },

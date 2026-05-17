@@ -42,7 +42,7 @@ import { resolve } from "node:path";
 import { createOpencodeClient, type OpencodeClient, type Part } from "@opencode-ai/sdk/v2";
 import type { UserSettings } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
-import { Cause, Context, Effect, Fiber, Layer, Ref, type Runtime, Stream } from "effect";
+import { Context, Effect, Fiber, Layer, Ref, Stream } from "effect";
 import { resolveCliBin } from "../ai/providers/cli-agent";
 import type { Db } from "../db/index";
 import { kvCache } from "../db/schema/index";
@@ -545,7 +545,7 @@ export const OpencodeSupervisorLive = Layer.effect(
     // and cancels when the supervisor scope closes.
     const observeExit = (running: RunningState): Effect.Effect<void> =>
       Effect.tryPromise({
-        try: (signal) => running.proc.exited,
+        try: (_signal) => running.proc.exited,
         catch: (err) => err,
       }).pipe(
         Effect.flatMap((code) =>

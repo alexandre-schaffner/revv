@@ -112,7 +112,7 @@ function applyThinkingEffort(effort: UserSettings["aiThinkingEffort"]): Record<s
 
 // ── Phase state machine (walkthrough-only) ──────────────────────────────────
 //
-// The walkthrough UI tracks a 5-step progress arc (`connecting → exploring →
+// The walkthrough UI tracks a 5-step progress flow (`connecting → exploring →
 // analyzing → writing → rating → finishing`). Phase transitions are driven
 // by MCP tool names: `set_overview` → analyzing, `add_diff_step` → writing,
 // `rate_axis` → rating, `complete_walkthrough` → finishing. Once a phase is
