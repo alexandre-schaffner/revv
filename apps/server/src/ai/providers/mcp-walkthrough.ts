@@ -21,9 +21,11 @@ import type {
   WalkthroughTokenUsage,
   WsServerMessage,
 } from "@revv/shared";
+import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { WALKTHROUGH_HEARTBEAT_MS } from "../../constants";
 import type { Db } from "../../db";
+import { walkthroughs as walkthroughsTable } from "../../db/schema/walkthroughs";
 import { debug, logError } from "../../logger";
 import { AppRuntime } from "../../runtime";
 import type { PrFileMeta } from "../../services/GitHub";
@@ -423,7 +425,32 @@ export function streamWalkthroughViaMCP(
 
     const tokenUsage = await resultPromise;
 
-    if (anySummaryEmitted) {
+    // `anySummaryEmitted` only flips when the agent calls `set_overview`
+    // *during this run*. On a resume past Phase A, the agent correctly
+    // skips `set_overview` (it would clobber a completed phase), so the
+    // flag stays false even though the walkthrough is fully populated.
+    // DB is authoritative (invariant #1): if a prior run already
+    // persisted a summary, treat the run as success regardless of the
+    // in-memory flag.
+    let summaryPersisted = anySummaryEmitted;
+    if (!summaryPersisted) {
+      try {
+        const row = params.db
+          .select({ summary: walkthroughsTable.summary })
+          .from(walkthroughsTable)
+          .where(eq(walkthroughsTable.id, params.walkthroughId))
+          .get();
+        summaryPersisted = (row?.summary ?? "").length > 0;
+      } catch (cause) {
+        debug(
+          "walkthrough-mcp",
+          "summary-persisted DB check failed:",
+          cause instanceof Error ? cause.message : String(cause),
+        );
+      }
+    }
+
+    if (summaryPersisted) {
       yield {
         type: "done" as const,
         data: {

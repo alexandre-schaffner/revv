@@ -29,7 +29,9 @@ import { type BlobRecord, BlobStore, type BlobStoreStatus } from "./BlobStore";
 
 interface GcsFile {
   exists(): Promise<[boolean]>;
-  download(): Promise<[Buffer]>;
+  // `validation: false` disables the SDK's MD5/CRC32c check on download.
+  // Safe because RemoteWalkthroughCache cross-checks contentSha256 itself.
+  download(opts?: { validation?: boolean }): Promise<[Buffer]>;
   getMetadata(): Promise<[{ metadata?: Record<string, string> }]>;
   save(
     body: Buffer,
@@ -177,6 +179,12 @@ export const GcsBlobStoreLive = Layer.scoped(
         if (emulatorHost && emulatorHost.length > 0) {
           opts.apiEndpoint = emulatorHost;
           opts.projectId = opts.projectId ?? "revv-cache-emulator";
+          // With valid SA credentials, the SDK fetches a real OAuth token and
+          // uses an authenticated download path (`/storage/v1/...?alt=media`)
+          // that fake-gcs-server returns 0 bytes for. Disabling auth with the
+          // custom endpoint forces the unauthenticated path
+          // (`/download/storage/v1/...`) which the emulator serves correctly.
+          opts.useAuthWithCustomEndpoint = false;
         }
         const storage = new mod.Storage(opts);
         const bucket = storage.bucket(live.cache.bucket.trim());
@@ -209,7 +217,7 @@ export const GcsBlobStoreLive = Layer.scoped(
           if (!existsResult[0]) return Option.none<BlobRecord>();
 
           const downloadResult = yield* Effect.tryPromise({
-            try: () => file.download(),
+            try: () => file.download({ validation: false }),
             catch: (cause) => gcsErr(`download(${key})`, cause),
           });
           const body = downloadResult[0];
@@ -230,10 +238,13 @@ export const GcsBlobStoreLive = Layer.scoped(
             try: () =>
               file.save(body, {
                 resumable: false,
-                contentType: "application/json",
+                // Store as application/gzip without a Content-Encoding header.
+                // Setting Content-Encoding: gzip causes GCS (and emulators) to
+                // serve the body transparently decompressed, which breaks our
+                // own gunzip + SHA256 pipeline in RemoteWalkthroughCache.
+                contentType: "application/gzip",
                 metadata: {
-                  contentType: "application/json",
-                  contentEncoding: "gzip",
+                  contentType: "application/gzip",
                   metadata,
                 },
               }),

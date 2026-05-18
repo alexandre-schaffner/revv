@@ -178,6 +178,22 @@ export class WalkthroughJobs extends Context.Tag("WalkthroughJobs")<
       readonly walkthroughId?: string;
     }) => Effect.Effect<{ readonly walkthroughId: string }, StartJobError>;
 
+    /**
+     * Probe the remote team cache for `(prId, headSha)` and, on a hit,
+     * import + flip the row to `'complete'` — without starting the agent.
+     * Returns `true` when a walkthrough was hydrated, `false` on miss or
+     * any failure (failures are logged; never propagated to the caller).
+     *
+     * Meant for the `/cached` route handler so the first page-load
+     * immediately hydrates from the team cache rather than showing the
+     * Generate button.
+     */
+    readonly tryHydrateFromRemoteCache: (
+      prId: string,
+      headSha: string,
+      repoFullName: string,
+    ) => Effect.Effect<boolean>;
+
     readonly subscribe: (
       walkthroughId: string,
       onEvent: Subscriber,
@@ -1615,6 +1631,66 @@ export const WalkthroughJobsLive = Layer.effect(
         }
       });
 
+    const tryHydrateFromRemoteCache = (
+      prId: string,
+      headSha: string,
+      repoFullName: string,
+    ): Effect.Effect<boolean> =>
+      Effect.gen(function* () {
+        const settings = yield* settingsService.getSettings().pipe(
+          Effect.catchAll(() => Effect.succeed(null)),
+        );
+        if (!settings?.cache.enabled || !settings.cache.downloadsEnabled) return false;
+
+        const snapshotOpt = yield* remoteCache.fetch(repoFullName, headSha);
+        if (Option.isNone(snapshotOpt)) return false;
+
+        const snapshot = snapshotOpt.value;
+
+        const reviewSession = yield* provideDb(reviewService.getOrCreateActiveSession(prId));
+        const walkthroughId = yield* provideDb(
+          walkthroughService.createPartial({
+            reviewSessionId: reviewSession.id,
+            prId,
+            modelUsed: snapshot.modelUsed,
+            prHeadSha: headSha,
+            generatedBy: snapshot.generatedBy,
+            providerConfig: snapshot.providerConfig,
+          }),
+        );
+
+        const importResult = yield* provideDb(
+          snapshotImporter.import({ walkthroughId, snapshot }),
+        ).pipe(Effect.either);
+
+        if (importResult._tag === "Left") {
+          logError(
+            "walkthrough-jobs",
+            `tryHydrateFromRemoteCache import failed pr=${prId}: ${importResult.left.reason}`,
+          );
+          return false;
+        }
+
+        yield* setStatus(walkthroughId, "complete");
+        yield* hub
+          .broadcast({ type: "walkthrough:cache-hit", data: { prId, walkthroughId, source: "remote" } })
+          .pipe(Effect.timeout("5 seconds"), Effect.catchAll(() => Effect.void));
+        yield* hub
+          .broadcast({ type: "walkthrough:complete", data: { prId, walkthroughId } })
+          .pipe(Effect.timeout("5 seconds"), Effect.catchAll(() => Effect.void));
+
+        debug("walkthrough-jobs", `tryHydrateFromRemoteCache hit wt=${walkthroughId} pr=${prId} sha=${headSha}`);
+        return true;
+      }).pipe(
+        Effect.catchAll((e) => {
+          logError(
+            "walkthrough-jobs",
+            `tryHydrateFromRemoteCache failed pr=${prId}: ${e instanceof Error ? e.message : String(e)}`,
+          );
+          return Effect.succeed(false);
+        }),
+      );
+
     return {
       startJob,
       subscribe,
@@ -1631,6 +1707,7 @@ export const WalkthroughJobsLive = Layer.effect(
       incrementPrerenderFailures,
       registerActivityNotifier,
       unregisterActivityNotifier,
+      tryHydrateFromRemoteCache,
     };
   }),
 );

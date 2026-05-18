@@ -28,9 +28,11 @@ import type {
   WalkthroughStreamEvent,
   WalkthroughTokenUsage,
 } from "@revv/shared";
+import { eq } from "drizzle-orm";
 import { serverEnv } from "../../config";
 import { CLI_WALKTHROUGH_TIMEOUT_MS, WALKTHROUGH_HEARTBEAT_MS } from "../../constants";
 import type { Db } from "../../db";
+import { walkthroughs as walkthroughsTable } from "../../db/schema/walkthroughs";
 import { debug, logError } from "../../logger";
 import type { PrFileMeta } from "../../services/GitHub";
 import type { OpencodeClient, OpencodeEndpoint } from "../../services/OpencodeSupervisor";
@@ -715,7 +717,32 @@ export function streamWalkthroughViaOpencodeMCP(
 
     const tokenUsage = await resultPromise;
 
-    if (anySummaryEmitted) {
+    // Parity with Claude path: a resumed run past Phase A skips
+    // `set_overview` to avoid clobbering completed phases. The
+    // in-memory flag stays false in that case even though the row is
+    // fully populated. DB is authoritative (invariant #1) — fall back
+    // to checking the persisted summary before emitting the fallback
+    // error. Skip the fallback when the run was cancelled or timed out
+    // — those have explicit semantics owned by `withAgentTurn`.
+    let summaryPersisted = anySummaryEmitted;
+    if (!summaryPersisted && !cancelled) {
+      try {
+        const row = params.db
+          .select({ summary: walkthroughsTable.summary })
+          .from(walkthroughsTable)
+          .where(eq(walkthroughsTable.id, params.walkthroughId))
+          .get();
+        summaryPersisted = (row?.summary ?? "").length > 0;
+      } catch (cause) {
+        debug(
+          "walkthrough-opencode-mcp",
+          "summary-persisted DB check failed:",
+          cause instanceof Error ? cause.message : String(cause),
+        );
+      }
+    }
+
+    if (summaryPersisted) {
       yield {
         type: "done" as const,
         data: {
