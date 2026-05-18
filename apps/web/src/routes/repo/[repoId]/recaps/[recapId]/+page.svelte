@@ -27,8 +27,7 @@ import {
   getSidebarPeekHovering,
   getSidebarWidth,
 } from "$lib/stores/sidebar.svelte";
-
-const RAIL_WIDTH = 64;
+import { RAIL_WIDTH } from "$lib/constants";
 
 const repoId = $derived(page.params.repoId ?? "");
 const recapId = $derived(page.params.recapId ?? "");
