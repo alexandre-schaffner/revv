@@ -3,6 +3,7 @@ import { Loader2, Sparkles } from "@lucide/svelte";
 import type { ProjectRecap, ProjectRecapSummary, RecapPeriod } from "@revv/shared";
 import { untrack } from "svelte";
 import { Shimmer } from "$lib/components/ai/shimmer";
+import { RAIL_WIDTH } from "$lib/constants";
 import {
   abortRecapStream,
   getRecapStreamEntry,
@@ -28,7 +29,6 @@ import {
 } from "$lib/stores/sidebar.svelte";
 import PreviousRecaps from "./PreviousRecaps.svelte";
 import RecapDetail from "./RecapDetail.svelte";
-import { RAIL_WIDTH } from "$lib/constants";
 
 interface Props {
   repoId: string;

@@ -4,6 +4,7 @@ import { page } from "$app/state";
 import AuthGuard from "$lib/components/auth/AuthGuard.svelte";
 import PillTabs from "$lib/components/layout/PillTabs.svelte";
 import RecapPeriodView from "$lib/components/recaps/RecapPeriodView.svelte";
+import { RAIL_WIDTH } from "$lib/constants";
 import {
   getRightPanelOpen,
   getRightPanelWidth,
@@ -11,7 +12,6 @@ import {
   getSidebarPeekHovering,
   getSidebarWidth,
 } from "$lib/stores/sidebar.svelte";
-import { RAIL_WIDTH } from "$lib/constants";
 
 const repoId = $derived(page.params.repoId ?? "");
 

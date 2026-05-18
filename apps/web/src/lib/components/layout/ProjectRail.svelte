@@ -1,9 +1,9 @@
 <script lang="ts">
-import type { Repository } from "@revv/shared";
 import { Plus } from "@lucide/svelte";
-import * as Collapsible from "$lib/components/ui/collapsible";
+import type { Repository } from "@revv/shared";
 import RepoAvatarButton from "$lib/components/sidebar/RepoAvatarButton.svelte";
 import UserMenu from "$lib/components/sidebar/UserMenu.svelte";
+import * as Collapsible from "$lib/components/ui/collapsible";
 import * as Tooltip from "$lib/components/ui/tooltip/index.js";
 import { getRepositories, getSelectedRepoId } from "$lib/stores/prs.svelte";
 import {

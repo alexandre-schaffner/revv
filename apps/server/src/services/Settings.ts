@@ -39,6 +39,14 @@ const DEFAULT_SETTINGS: UserSettings = {
     weeklyEnabled: true,
     agent: "auto",
   },
+  cache: {
+    enabled: false,
+    bucket: "",
+    credentialsJson: "",
+    credentialsPath: "",
+    uploadsEnabled: true,
+    downloadsEnabled: true,
+  },
 };
 
 const VALID_RECAP_AGENTS: ReadonlySet<RecapAgentChoice> = new Set(["auto", "opencode", "claude"]);
@@ -108,6 +116,27 @@ function normalize(raw: unknown): UserSettings {
         ? (r.githubHost as string)
         : DEFAULT_SETTINGS.githubHost,
     recap: coerceRecap(r.recap),
+    cache: coerceCache(r.cache),
+  };
+}
+
+function coerceCache(value: unknown): UserSettings["cache"] {
+  if (value === null || typeof value !== "object") return { ...DEFAULT_SETTINGS.cache };
+  const r = value as Record<string, unknown>;
+  return {
+    enabled: r.enabled === true,
+    bucket: typeof r.bucket === "string" ? r.bucket : DEFAULT_SETTINGS.cache.bucket,
+    credentialsJson:
+      typeof r.credentialsJson === "string"
+        ? r.credentialsJson
+        : DEFAULT_SETTINGS.cache.credentialsJson,
+    credentialsPath:
+      typeof r.credentialsPath === "string"
+        ? r.credentialsPath
+        : DEFAULT_SETTINGS.cache.credentialsPath,
+    uploadsEnabled: r.uploadsEnabled === false ? false : DEFAULT_SETTINGS.cache.uploadsEnabled,
+    downloadsEnabled:
+      r.downloadsEnabled === false ? false : DEFAULT_SETTINGS.cache.downloadsEnabled,
   };
 }
 
@@ -148,6 +177,14 @@ function toSettings(row: typeof userSettings.$inferSelect): UserSettings {
       weeklyEnabled: row.recapWeeklyEnabled,
       agent: row.recapAgent as RecapAgentChoice,
     },
+    cache: {
+      enabled: row.cacheEnabled,
+      bucket: row.cacheBucket,
+      credentialsJson: row.cacheCredentialsJson,
+      credentialsPath: row.cacheCredentialsPath,
+      uploadsEnabled: row.cacheUploadsEnabled,
+      downloadsEnabled: row.cacheDownloadsEnabled,
+    },
   };
 }
 
@@ -169,6 +206,12 @@ function toInsert(s: UserSettings): typeof userSettings.$inferInsert {
     recapDailyEnabled: s.recap.dailyEnabled,
     recapWeeklyEnabled: s.recap.weeklyEnabled,
     recapAgent: s.recap.agent,
+    cacheEnabled: s.cache.enabled,
+    cacheBucket: s.cache.bucket,
+    cacheCredentialsJson: s.cache.credentialsJson,
+    cacheCredentialsPath: s.cache.credentialsPath,
+    cacheUploadsEnabled: s.cache.uploadsEnabled,
+    cacheDownloadsEnabled: s.cache.downloadsEnabled,
     updatedAt: new Date(),
   };
 }
@@ -224,14 +267,15 @@ async function migrateJsonToDb(db: Db): Promise<UserSettings> {
 
 /**
  * Shape accepted by `updateSettings`. Top-level fields are individually
- * optional (standard `Partial`), but `recap` is recursively partial so
- * callers can patch a single nested field (e.g. `{ recap: { agent: 'opencode' } }`)
- * without spreading the whole sub-object. {@link Settings.ts}'s
- * `updateSettings` deep-merges `recap` against the current value to honour
- * this contract.
+ * optional (standard `Partial`), but `recap` and `cache` are recursively
+ * partial so callers can patch a single nested field (e.g.
+ * `{ recap: { agent: 'opencode' } }`) without spreading the whole
+ * sub-object. {@link Settings.ts}'s `updateSettings` deep-merges them
+ * against the current value to honour this contract.
  */
-export type SettingsUpdate = Partial<Omit<UserSettings, "id" | "recap">> & {
+export type SettingsUpdate = Partial<Omit<UserSettings, "id" | "recap" | "cache">> & {
   recap?: Partial<UserSettings["recap"]>;
+  cache?: Partial<UserSettings["cache"]>;
 };
 
 export class SettingsService extends Context.Tag("SettingsService")<
@@ -267,10 +311,13 @@ export const SettingsServiceLive = Layer.effect(
           const current = yield* settingsRef.get;
           const mergedRecap =
             partial.recap !== undefined ? { ...current.recap, ...partial.recap } : current.recap;
+          const mergedCache =
+            partial.cache !== undefined ? { ...current.cache, ...partial.cache } : current.cache;
           const merged: UserSettings = {
             ...current,
             ...partial,
             recap: mergedRecap,
+            cache: mergedCache,
             id: "default",
           };
           const next: UserSettings = {

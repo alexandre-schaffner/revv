@@ -57,7 +57,6 @@ import { ChatSessionService } from "./ChatSession";
 import type { DbService } from "./Db";
 import { GitHubService } from "./GitHub";
 import type { GitHubEtagCache } from "./GitHubEtagCache";
-import { runGit, runGitBestEffort, runGitCapture, spawnGit } from "./git-runner";
 import {
   assertNotFlagLike,
   GitOperationError,
@@ -68,8 +67,9 @@ import {
   pushFastForward,
   pushNewBranch,
   pushWithLease,
-  RefAlreadyExistsError,
+  type RefAlreadyExistsError,
 } from "./GitOps";
+import { runGit, runGitBestEffort, runGitCapture, spawnGit } from "./git-runner";
 import { PrContextService } from "./PrContext";
 import { PullRequestService } from "./PullRequest";
 import { SettingsService } from "./Settings";

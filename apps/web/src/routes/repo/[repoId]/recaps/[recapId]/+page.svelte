@@ -5,6 +5,7 @@ import { page } from "$app/state";
 import AuthGuard from "$lib/components/auth/AuthGuard.svelte";
 import PreviousRecaps from "$lib/components/recaps/PreviousRecaps.svelte";
 import RecapDetail from "$lib/components/recaps/RecapDetail.svelte";
+import { RAIL_WIDTH } from "$lib/constants";
 import {
   abortRecapStream,
   getRecapStreamEntry,
@@ -27,7 +28,6 @@ import {
   getSidebarPeekHovering,
   getSidebarWidth,
 } from "$lib/stores/sidebar.svelte";
-import { RAIL_WIDTH } from "$lib/constants";
 
 const repoId = $derived(page.params.repoId ?? "");
 const recapId = $derived(page.params.recapId ?? "");

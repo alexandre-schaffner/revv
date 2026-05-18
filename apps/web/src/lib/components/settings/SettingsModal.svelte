@@ -1,6 +1,7 @@
 <script lang="ts">
 import {
   CalendarClock,
+  Cloud,
   Cpu,
   Download,
   ExternalLink,
@@ -59,7 +60,15 @@ interface Props {
 let { open, onClose }: Props = $props();
 
 // ── Nav sections ──────────────────────────────────────────────────────────
-type SectionId = "account" | "ai" | "recap" | "preferences" | "onboarding" | "updates" | "danger";
+type SectionId =
+  | "account"
+  | "ai"
+  | "recap"
+  | "cache"
+  | "preferences"
+  | "onboarding"
+  | "updates"
+  | "danger";
 
 interface NavItem {
   id: SectionId;
@@ -72,11 +81,37 @@ const navItems: NavItem[] = [
   { id: "account", label: "Account", icon: User },
   { id: "ai", label: "AI Configuration", icon: Cpu },
   { id: "recap", label: "Project Recap", icon: CalendarClock },
+  { id: "cache", label: "Team Cache", icon: Cloud },
   { id: "preferences", label: "Preferences", icon: SlidersHorizontal },
   { id: "onboarding", label: "Onboarding", icon: RotateCcw },
   { id: "updates", label: "Updates", icon: Download, tauriOnly: true },
   { id: "danger", label: "Danger Zone", icon: TriangleAlert },
 ];
+
+// ── Team-cache "Test connection" state ────────────────────────────────────
+let cacheTestState = $state<{ healthy: boolean; detail: string } | null>(null);
+let cacheTestRunning = $state(false);
+async function testCacheConnection(): Promise<void> {
+  if (cacheTestRunning) return;
+  cacheTestRunning = true;
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/settings/cache/status`, {
+      headers: await authHeaders(),
+    });
+    if (!res.ok) {
+      cacheTestState = { healthy: false, detail: `HTTP ${res.status}` };
+      return;
+    }
+    cacheTestState = (await res.json()) as { healthy: boolean; detail: string };
+  } catch (e) {
+    cacheTestState = {
+      healthy: false,
+      detail: e instanceof Error ? e.message : String(e),
+    };
+  } finally {
+    cacheTestRunning = false;
+  }
+}
 
 // ── Recap agent selector options ──────────────────────────────────────────
 const recapAgentOptions: { value: RecapAgentChoice; label: string }[] = [
@@ -656,6 +691,149 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 								{/each}
 							</Select.Content>
 						</Select.Root>
+					</div>
+				</div>
+			</section>
+
+			<!-- Team Cache -->
+			<section id="section-cache" class="settings-section">
+				<h2 class="settings-section-heading">Team Cache</h2>
+				<div class="space-y-5">
+					<p class="text-xs text-text-muted">
+						Share walkthrough results with your team via a Google Cloud Storage bucket.
+						When enabled, teammates who open a PR you've already reviewed hydrate instantly
+						instead of re-running the agent.
+					</p>
+
+					<div class="flex items-center justify-between gap-4">
+						<div class="min-w-0 flex-1">
+							<p class="text-sm text-text-primary">Enable remote cache</p>
+							<p class="text-xs text-text-muted">
+								Off by default. Master switch — when disabled, no probes, uploads, or
+								downloads happen.
+							</p>
+						</div>
+						<input
+							type="checkbox"
+							checked={getSettings()?.cache?.enabled ?? false}
+							onchange={(e) => {
+								void updateSettings({
+									cache: { enabled: (e.target as HTMLInputElement).checked },
+								});
+							}}
+						/>
+					</div>
+
+					<div class="space-y-2">
+						<label class="text-sm text-text-primary" for="cache-bucket">GCS bucket name</label>
+						<Input
+							id="cache-bucket"
+							type="text"
+							placeholder="my-team-revv-cache"
+							value={getSettings()?.cache?.bucket ?? ''}
+							oninput={(e) => {
+								void updateSettings({
+									cache: { bucket: (e.target as HTMLInputElement).value },
+								});
+							}}
+						/>
+					</div>
+
+					<div class="space-y-2">
+						<label class="text-sm text-text-primary" for="cache-creds-json">
+							Service-account JSON
+						</label>
+						<textarea
+							id="cache-creds-json"
+							class="w-full rounded border border-border-subtle bg-bg-elevated p-2 font-mono text-xs"
+							rows={4}
+							placeholder={`{"type":"service_account",...}`}
+							value={getSettings()?.cache?.credentialsJson ?? ''}
+							onchange={(e) => {
+								void updateSettings({
+									cache: { credentialsJson: (e.target as HTMLTextAreaElement).value },
+								});
+							}}
+						></textarea>
+						<p class="text-xs text-text-muted">
+							Stored in plaintext locally. Alternatively set a filesystem path below.
+						</p>
+					</div>
+
+					<div class="space-y-2">
+						<label class="text-sm text-text-primary" for="cache-creds-path">
+							Service-account JSON path (optional)
+						</label>
+						<Input
+							id="cache-creds-path"
+							type="text"
+							placeholder="/Users/me/.config/revv/cache-sa.json"
+							value={getSettings()?.cache?.credentialsPath ?? ''}
+							oninput={(e) => {
+								void updateSettings({
+									cache: { credentialsPath: (e.target as HTMLInputElement).value },
+								});
+							}}
+						/>
+					</div>
+
+					<div class="flex items-center justify-between gap-4">
+						<div class="min-w-0 flex-1">
+							<p class="text-sm text-text-primary">Upload completed walkthroughs</p>
+							<p class="text-xs text-text-muted">
+								Push your generations to the bucket so teammates can hydrate from them.
+							</p>
+						</div>
+						<input
+							type="checkbox"
+							checked={getSettings()?.cache?.uploadsEnabled ?? true}
+							onchange={(e) => {
+								void updateSettings({
+									cache: { uploadsEnabled: (e.target as HTMLInputElement).checked },
+								});
+							}}
+						/>
+					</div>
+
+					<div class="flex items-center justify-between gap-4">
+						<div class="min-w-0 flex-1">
+							<p class="text-sm text-text-primary">Hydrate from team cache</p>
+							<p class="text-xs text-text-muted">
+								On a cache hit, skip the agent and load the teammate's snapshot.
+							</p>
+						</div>
+						<input
+							type="checkbox"
+							checked={getSettings()?.cache?.downloadsEnabled ?? true}
+							onchange={(e) => {
+								void updateSettings({
+									cache: { downloadsEnabled: (e.target as HTMLInputElement).checked },
+								});
+							}}
+						/>
+					</div>
+
+					<div class="flex items-center gap-3">
+						<Button
+							variant="outline"
+							size="sm"
+							onclick={testCacheConnection}
+							disabled={cacheTestRunning}
+						>
+							{#if cacheTestRunning}
+								<Loader2 size={14} class="animate-spin" />
+							{/if}
+							Test connection
+						</Button>
+						{#if cacheTestState}
+							<span
+								class="text-xs"
+								class:text-green-500={cacheTestState.healthy}
+								class:text-red-500={!cacheTestState.healthy}
+							>
+								{cacheTestState.detail}
+							</span>
+						{/if}
 					</div>
 				</div>
 			</section>

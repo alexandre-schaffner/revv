@@ -10,25 +10,24 @@
 
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import {
-  appendRecapChunkHandler,
+  commitRecapOverviewHandler,
   completeRecapHandler,
   getRecapStateHandler,
   getRepoContextHandler,
   listOpenPrsHandler,
-  setRecapOverviewHandler,
 } from "./handlers";
 import {
-  appendRecapChunkSchema,
+  commitRecapOverviewSchema,
   completeRecapSchema,
   getRecapStateSchema,
   getRepoContextSchema,
   listOpenPrsSchema,
   type RecapToolContext,
   type RecapToolSpec,
-  setRecapOverviewSchema,
 } from "./spec";
 
 export type {
+  CommitRecapOverviewInput,
   CompleteRecapInput,
   GetRecapStateInput,
   GetRepoContextInput,
@@ -41,14 +40,13 @@ export type {
   RecapToolHandler,
   RecapToolResult,
   RecapToolSpec,
-  SetRecapOverviewInput,
 } from "./spec";
 export {
+  commitRecapOverviewHandler,
   completeRecapHandler,
   getRecapStateHandler,
   getRepoContextHandler,
   listOpenPrsHandler,
-  setRecapOverviewHandler,
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -75,18 +73,11 @@ export const RECAP_TOOL_SPECS: Array<RecapToolSpec<any>> = [
     handler: getRepoContextHandler,
   },
   {
-    name: "append_recap_chunk",
+    name: "commit_recap_overview",
     description:
-      "Stream a markdown chunk to the UI while composing the recap. Call 2–4 times, once per major section ('What shipped', 'Active work', 'Project state'). Provide the `section` hint so the UI shows a shimmer label. Do NOT emit the final assembled markdown here — that belongs in set_recap_overview.",
-    inputSchema: appendRecapChunkSchema,
-    handler: appendRecapChunkHandler,
-  },
-  {
-    name: "set_recap_overview",
-    description:
-      "Atomic content write. Call ONCE after reading the source and streaming all chunks. Persists the recap overview (markdown), the provenance arrays (source_pr_ids + source_walkthrough_ids), and the pre-aggregated stats. Idempotent — a retry with the same recapId replaces the prior content.",
-    inputSchema: setRecapOverviewSchema,
-    handler: setRecapOverviewHandler,
+      "Atomic content write. Call ONCE after writing the complete recap as your visible assistant response. The server reads the markdown you just typed from the streaming buffer and persists it together with the provenance arrays (source_pr_ids + source_walkthrough_ids) and the pre-aggregated stats — you pass ONLY the metadata as arguments. Do not re-serialise the markdown here; if the buffer is empty you'll get an error pointing you back at composition. Idempotent — a retry with the same recapId replaces the prior content.",
+    inputSchema: commitRecapOverviewSchema,
+    handler: commitRecapOverviewHandler,
   },
   {
     name: "complete_recap",

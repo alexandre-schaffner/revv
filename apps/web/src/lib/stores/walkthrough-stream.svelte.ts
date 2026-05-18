@@ -537,6 +537,19 @@ async function doHydrateFromCache(
             ratings: WalkthroughRating[];
             tokenUsage: unknown;
             reviewSessionId: string;
+            generatedBy?: {
+              githubUserId: number | null;
+              githubLogin: string | null;
+              displayName: string | null;
+              avatarUrl: string | null;
+            } | null;
+            providerConfig?: {
+              provider: string;
+              model: string;
+              thinkingEffort: string | null;
+              contextWindow: string | null;
+              maxTurns: number;
+            } | null;
           };
         };
 
@@ -553,7 +566,8 @@ async function doHydrateFromCache(
       `hydrateFromCache prId=${prId} status=${status} blocks=${wt.blocks.length} issues=${wt.issues.length} ratings=${wt.ratings.length} semanticSteps=${wt.semanticSteps?.length ?? 0} hasSentiment=${wt.sentiment !== null && wt.sentiment !== undefined}`,
     );
 
-    const entry = store.entries.get(prId) ?? freshEntry();
+    const previous = store.entries.get(prId);
+    const entry = previous ?? freshEntry();
     const hasRealSummary = wt.summary !== "";
     entry.summary = hasRealSummary ? wt.summary : null;
     entry.riskLevel = hasRealSummary ? wt.riskLevel : null;
@@ -574,6 +588,13 @@ async function doHydrateFromCache(
     entry.phase = isGenerating ? "writing" : "finishing";
     entry.phaseMessage = isGenerating ? "Resuming walkthrough…" : "Complete";
     entry.liveGeneration = isGenerating;
+    // Attribution: prefer the server's payload; fall back to whatever the
+    // previous entry held (set by `onWalkthroughCacheHit`). Preserves the
+    // "Loaded from team cache" badge across the immediate cache→complete
+    // refetch cycle.
+    entry.generatedBy = wt.generatedBy ?? entry.generatedBy ?? null;
+    entry.providerConfig = wt.providerConfig ?? entry.providerConfig ?? null;
+    if (previous?.source === "remote") entry.source = "remote";
     if (isGenerating) entry.streamStartedAt = Date.now();
     setEntry(prId, entry);
     if (options?.activate !== false) {

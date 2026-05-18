@@ -1,6 +1,5 @@
 export { account, session, user, verification } from "./auth";
 export { cacheEntries } from "./cache-entries";
-export { pinnedPullRequests } from "./pinned-prs";
 export { chatActivities } from "./chat-activities";
 export { chatMessages } from "./chat-messages";
 export { chatPlans } from "./chat-plans";
@@ -17,6 +16,7 @@ export { newPrActivities } from "./new-pr-activities";
 export { newPrCommits } from "./new-pr-commits";
 export { newPrMessages } from "./new-pr-messages";
 export { newPrSessions } from "./new-pr-sessions";
+export { pinnedPullRequests } from "./pinned-prs";
 export { prDiffFiles } from "./pr-diff-files";
 export { projectRecaps } from "./project-recaps";
 export { pullRequests } from "./pull-requests";

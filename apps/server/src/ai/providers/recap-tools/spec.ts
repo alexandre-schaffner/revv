@@ -8,10 +8,17 @@
 //     • get_recap_state  → period boundaries, source PR + walkthrough roll-up
 //     • get_repo_context → prior recaps for this repo (rolling context)
 //
-//   Phase 2 — Write the recap (single atomic call):
-//     • set_recap_overview → overview markdown + provenance + summary stats
+//   Phase 2 — Compose the recap as visible assistant text:
+//     • Agent writes the markdown body as its assistant response. The
+//       orchestrator's stream consumer fans every text-delta out as a
+//       `chunk` SSE event AND appends to `ctx.textBuffer.current`.
 //
-//   Phase 3 — Finalize:
+//   Phase 3 — Commit (single atomic call):
+//     • commit_recap_overview → reads `ctx.textBuffer.current` for the
+//       markdown body, persists with provenance + stats. No `overview`
+//       arg — the model only emits the markdown once (as text).
+//
+//   Phase 4 — Finalize:
 //     • complete_recap → validation gate; orchestrator transitions status
 //
 // Per CLAUDE.md invariants #2 + #11: agents never write `status` directly.
@@ -56,6 +63,19 @@ export interface RecapToolContext {
    * produce content so the SSE endpoint can forward it to subscribers.
    */
   readonly emit: (event: RecapStreamEvent) => void;
+  /**
+   * Mutable closure cell holding the agent's currently-buffered visible
+   * assistant text. The orchestrator's stream consumer (Claude SDK walker
+   * or opencode SSE subscriber) appends every `text-delta` event to
+   * `.current` and resets it on each non-commit tool-call boundary.
+   * `commit_recap_overview`'s handler reads `.current` to obtain the
+   * markdown body — the model never re-serialises it as a tool argument.
+   *
+   * Reconstructible cache (CLAUDE.md invariant #1): on `kill -9` the
+   * buffer is lost; the orchestrator's resume path re-runs the agent
+   * from scratch and a fresh buffer accumulates.
+   */
+  readonly textBuffer: { current: string };
 }
 
 export interface RecapToolResult {
@@ -217,13 +237,7 @@ export const getRepoContextSchema = z.object({
   limit: z.number().int().positive().max(10).nullable().optional(),
 });
 
-export const setRecapOverviewSchema = z.object({
-  overview: z
-    .string()
-    .min(1)
-    .describe(
-      "GitHub-flavored markdown body of the recap. Cover: what shipped, by whom, themes / risk hotspots, and any signal worth carrying into next week's review work. Headings, bullet lists, and `inline code` are encouraged. Keep paragraphs tight — this is consumed by humans and by the walkthrough agent in subsequent runs.",
-    ),
+export const commitRecapOverviewSchema = z.object({
   source_pr_ids: z
     .array(z.string())
     .min(1)
@@ -253,26 +267,10 @@ export const setRecapOverviewSchema = z.object({
 
 export const completeRecapSchema = z.object({});
 
-export const appendRecapChunkSchema = z.object({
-  chunk: z
-    .string()
-    .min(1)
-    .describe(
-      "A block of markdown text to stream to the UI as you compose the recap. Call 2–4 times, once per major section. Do not emit the final assembled markdown here — that belongs in set_recap_overview.",
-    ),
-  section: z
-    .enum(["shipped", "active_work", "project_state", "other"])
-    .optional()
-    .describe(
-      "Optional section hint so the UI can show a shimmer label: 'shipped' = 'What shipped…', 'active_work' = 'Active work…', 'project_state' = 'Project state…'.",
-    ),
-});
-
 // ── Type exports ─────────────────────────────────────────────────────────────
 
 export type GetRecapStateInput = z.infer<typeof getRecapStateSchema>;
 export type ListOpenPrsInput = z.infer<typeof listOpenPrsSchema>;
 export type GetRepoContextInput = z.infer<typeof getRepoContextSchema>;
-export type SetRecapOverviewInput = z.infer<typeof setRecapOverviewSchema>;
+export type CommitRecapOverviewInput = z.infer<typeof commitRecapOverviewSchema>;
 export type CompleteRecapInput = z.infer<typeof completeRecapSchema>;
-export type AppendRecapChunkInput = z.infer<typeof appendRecapChunkSchema>;

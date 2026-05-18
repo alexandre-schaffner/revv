@@ -13,22 +13,22 @@ function hashString(str: string): number {
 const PALETTES = [
   ["hsl(270, 60%, 50%)", "hsl(340, 80%, 65%)"], // purple → pink
   ["hsl(200, 70%, 50%)", "hsl(160, 60%, 55%)"], // blue → teal
-  ["hsl(350, 80%, 60%)", "hsl(45, 90%, 60%)"],  // red → gold
-  ["hsl(260, 50%, 50%)", "hsl(25, 90%, 65%)"],  // purple → orange
+  ["hsl(350, 80%, 60%)", "hsl(45, 90%, 60%)"], // red → gold
+  ["hsl(260, 50%, 50%)", "hsl(25, 90%, 65%)"], // purple → orange
   ["hsl(170, 70%, 40%)", "hsl(190, 50%, 50%)"], // teal → cyan
   ["hsl(220, 70%, 50%)", "hsl(200, 80%, 55%)"], // blue → sky
-  ["hsl(15, 90%, 65%)", "hsl(40, 90%, 60%)"],   // coral → gold
+  ["hsl(15, 90%, 65%)", "hsl(40, 90%, 60%)"], // coral → gold
   ["hsl(280, 50%, 50%)", "hsl(320, 70%, 55%)"], // purple → magenta
   ["hsl(160, 70%, 50%)", "hsl(150, 30%, 45%)"], // mint → sage
-  ["hsl(340, 80%, 65%)", "hsl(15, 90%, 65%)"],  // rose → coral
+  ["hsl(340, 80%, 65%)", "hsl(15, 90%, 65%)"], // rose → coral
   ["hsl(220, 70%, 50%)", "hsl(270, 50%, 50%)"], // blue → purple
-  ["hsl(55, 90%, 60%)", "hsl(40, 90%, 60%)"],   // lemon → gold
+  ["hsl(55, 90%, 60%)", "hsl(40, 90%, 60%)"], // lemon → gold
   ["hsl(190, 80%, 40%)", "hsl(170, 70%, 40%)"], // cyan → teal
   ["hsl(320, 60%, 55%)", "hsl(340, 80%, 65%)"], // magenta → rose
   ["hsl(150, 30%, 45%)", "hsl(160, 40%, 45%)"], // sage → seafoam
-  ["hsl(15, 90%, 65%)", "hsl(55, 90%, 60%)"],   // coral → lemon
+  ["hsl(15, 90%, 65%)", "hsl(55, 90%, 60%)"], // coral → lemon
   ["hsl(270, 50%, 50%)", "hsl(220, 70%, 50%)"], // purple → blue
-  ["hsl(40, 90%, 60%)", "hsl(15, 90%, 65%)"],   // gold → coral
+  ["hsl(40, 90%, 60%)", "hsl(15, 90%, 65%)"], // gold → coral
   ["hsl(160, 70%, 50%)", "hsl(190, 80%, 40%)"], // mint → cyan
   ["hsl(340, 80%, 65%)", "hsl(320, 60%, 55%)"], // rose → magenta
 ] as const;
@@ -57,8 +57,8 @@ export function repoGradientDataUrl(seed: string): string {
   const color2 = palette[1];
   const angle = h % 360;
   const turbulenceSeed = 1 + (h % 999);
-  const baseFreqX = 0.001 + ((h % 7) * 0.001);
-  const baseFreqY = 0.001 + (((h >> 4) % 7) * 0.001);
+  const baseFreqX = 0.001 + (h % 7) * 0.001;
+  const baseFreqY = 0.001 + ((h >> 4) % 7) * 0.001;
   const numOctaves = 1 + (h % 2);
   const blurX = 15 + (h % 30);
   const blurY = 0 + ((h >> 8) % 20);

@@ -12,14 +12,13 @@ import type { ProjectRecap, RecapSummaryStats } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { projectRecaps } from "../../../db/schema/index";
 import type {
-  AppendRecapChunkInput,
+  CommitRecapOverviewInput,
   CompleteRecapInput,
   GetRecapStateInput,
   GetRepoContextInput,
   ListOpenPrsInput,
   RecapToolHandler,
   RecapToolResult,
-  SetRecapOverviewInput,
 } from "./spec";
 
 /** Default page size for `list_open_prs`. Small enough that 20 PRs split into
@@ -61,7 +60,7 @@ export const getRecapStateHandler: RecapToolHandler<GetRecapStateInput> = async 
     openPrsPageSize: OPEN_PRS_DEFAULT_PAGE_SIZE,
     previousOverview,
     instructions:
-      `Read the archived PRs above (the \`prs\` array). Each row has author, branches, +/- stats, a body excerpt, and (when available) a walkthrough summary + sentiment + risk + 9-axis context. For PRs where \`walkthrough\` is null, a \`diff\` object is provided with the actual file changes — read those \`files[].patch\` blocks (status, additions, deletions, unified diff) to describe what the change does. The \`diff.source\` field tells you where the bytes came from (\`'cache'\`, \`'github'\`, or \`'unavailable'\`); when it's \`'unavailable'\`, fall back to title + body + +/- counts. Honor any \`diff.note\` (truncation hints) and don't claim to have read more than you did. Open PRs are NOT inlined here to keep this payload small — there are ${openPrsTotal} of them, capped at the 20 most recently updated. Fetch them via list_open_prs (start with offset=0, default page size ${OPEN_PRS_DEFAULT_PAGE_SIZE}) and keep paging while \`nextOffset\` is non-null. Use those rows to write the 'Active work' section after 'What shipped'. As you compose each section, call append_recap_chunk to stream it live. Then call set_recap_overview ONCE with the complete markdown body, the PR ids you included, the walkthrough ids you incorporated, and the pre-aggregated stats. Finally call complete_recap.` +
+      `Read the archived PRs above (the \`prs\` array). Each row has author, branches, +/- stats, a body excerpt, and (when available) a walkthrough summary + sentiment + risk + 9-axis context. For PRs where \`walkthrough\` is null, a \`diff\` object is provided with the actual file changes — read those \`files[].patch\` blocks (status, additions, deletions, unified diff) to describe what the change does. The \`diff.source\` field tells you where the bytes came from (\`'cache'\`, \`'github'\`, or \`'unavailable'\`); when it's \`'unavailable'\`, fall back to title + body + +/- counts. Honor any \`diff.note\` (truncation hints) and don't claim to have read more than you did. Open PRs are NOT inlined here to keep this payload small — there are ${openPrsTotal} of them, capped at the 20 most recently updated. Fetch them via list_open_prs (start with offset=0, default page size ${OPEN_PRS_DEFAULT_PAGE_SIZE}) and keep paging while \`nextOffset\` is non-null. Use those rows to write the 'Active work' section after 'What shipped'. WRITE THE COMPLETE RECAP AS YOUR VISIBLE ASSISTANT RESPONSE — the user watches it stream in live as you type, and the server reads what you wrote when you commit. No preamble, no "Here is the recap" framing, no inter-tool commentary — start with the first heading and go. If you call ANY tool while composing, the buffered text resets, so finish your reads first. When the markdown is complete, call commit_recap_overview ONCE with just the metadata (the PR ids you included, the walkthrough ids you incorporated, and the pre-aggregated stats). Finally call complete_recap.` +
       rerunInstructions,
   };
   return ok(JSON.stringify(payload));
@@ -144,71 +143,25 @@ export const getRepoContextHandler: RecapToolHandler<GetRepoContextInput> = asyn
   );
 };
 
-// ── Streaming write tool ─────────────────────────────────────────────────────
+// ── Atomic commit tool ───────────────────────────────────────────────────────
 
-export const appendRecapChunkHandler: RecapToolHandler<AppendRecapChunkInput> = async (
+export const commitRecapOverviewHandler: RecapToolHandler<CommitRecapOverviewInput> = async (
   ctx,
   input,
 ) => {
-  // Append the streamed chunk to the overview column so it survives
-  // client reconnects. The final set_recap_overview will overwrite
-  // with the authoritative assembled markdown + metadata.
-  const row = ctx.db
-    .select({ overview: projectRecaps.overview })
-    .from(projectRecaps)
-    .where(eq(projectRecaps.id, ctx.recapId))
-    .get();
-  if (!row) {
-    return err(`Error: recap ${ctx.recapId} not found.`);
-  }
-
-  const nextOverview = (row.overview ?? "") + input.chunk;
-  try {
-    ctx.db
-      .update(projectRecaps)
-      .set({ overview: nextOverview })
-      .where(eq(projectRecaps.id, ctx.recapId))
-      .run();
-  } catch (e) {
+  // Read the markdown body from the in-memory buffer the orchestrator's
+  // stream consumer has been appending text-deltas into. The agent's
+  // visible response IS the recap — the model never re-serialises it
+  // here as a tool argument. (CLAUDE.md invariant #2: the DB write
+  // still happens inside an MCP handler; the buffer is just a side
+  // channel from the streaming consumer.)
+  const overview = ctx.textBuffer.current.trim();
+  if (overview.length === 0) {
     return err(
-      `Error: failed to append recap chunk: ${e instanceof Error ? e.message : String(e)}`,
+      "Error: no recap text has been buffered. Write the recap markdown as your visible assistant response BEFORE calling commit_recap_overview — the server reads what you typed. If you called a tool while composing, the buffer was reset; re-write the recap as one continuous response then call this tool again.",
     );
   }
 
-  // Map the agent's section hint to a RecapStreamPhase.
-  const sectionMap: Record<string, "shipped" | "active_work" | "project_state" | "other"> = {
-    shipped: "shipped",
-    active_work: "active_work",
-    project_state: "project_state",
-    other: "other",
-  };
-  const section = input.section ? (sectionMap[input.section] ?? "other") : undefined;
-
-  ctx.emit({ type: "chunk", data: { text: input.chunk, ...(section ? { section } : {}) } });
-  if (section) {
-    const phaseMessages: Record<string, string> = {
-      shipped: "Writing: What shipped…",
-      active_work: "Writing: Active work…",
-      project_state: "Writing: Project state…",
-      other: "Writing recap…",
-    };
-    ctx.emit({
-      type: "phase",
-      data: { phase: section, message: phaseMessages[section] ?? "Writing recap…" },
-    });
-  }
-
-  return ok(
-    "Chunk appended. Continue streaming or call set_recap_overview with the final markdown.",
-  );
-};
-
-// ── Atomic write tool ────────────────────────────────────────────────────────
-
-export const setRecapOverviewHandler: RecapToolHandler<SetRecapOverviewInput> = async (
-  ctx,
-  input,
-) => {
   // Validate that the source_pr_ids referenced are real members of the
   // bundle. The orchestrator generated the bundle from the DB query; any
   // id outside it is the agent hallucinating, so we reject loudly. Both
@@ -252,7 +205,7 @@ export const setRecapOverviewHandler: RecapToolHandler<SetRecapOverviewInput> = 
     ctx.db
       .update(projectRecaps)
       .set({
-        overview: input.overview,
+        overview,
         sourcePrIds: JSON.stringify(input.source_pr_ids),
         sourceWalkthroughIds: JSON.stringify(input.source_walkthrough_ids),
         summaryStats: JSON.stringify(stats),
@@ -264,7 +217,7 @@ export const setRecapOverviewHandler: RecapToolHandler<SetRecapOverviewInput> = 
       `Error: failed to persist recap overview: ${e instanceof Error ? e.message : String(e)}`,
     );
   }
-  ctx.emit({ type: "overview", data: { overview: input.overview } });
+  ctx.emit({ type: "overview", data: { overview } });
   ctx.emit({ type: "phase", data: { phase: "finalizing", message: "Finalizing recap…" } });
   return ok(
     "Overview persisted. Call complete_recap now to signal you're done — the orchestrator will mark the recap complete.",
@@ -274,7 +227,7 @@ export const setRecapOverviewHandler: RecapToolHandler<SetRecapOverviewInput> = 
 // ── Validation gate ──────────────────────────────────────────────────────────
 
 export const completeRecapHandler: RecapToolHandler<CompleteRecapInput> = async (ctx) => {
-  // Re-read to confirm the agent did call set_recap_overview before this.
+  // Re-read to confirm the agent did call commit_recap_overview before this.
   const row = ctx.db
     .select({
       overview: projectRecaps.overview,
@@ -288,7 +241,7 @@ export const completeRecapHandler: RecapToolHandler<CompleteRecapInput> = async 
   }
   if (!row.overview || row.overview.trim().length === 0) {
     return err(
-      "Error: overview is empty. Call set_recap_overview first with a non-empty markdown body, then complete_recap.",
+      "Error: overview is empty. Call commit_recap_overview first — and before that, write the recap markdown as your visible assistant response so the server has text to persist.",
     );
   }
   let sourcePrIds: unknown;

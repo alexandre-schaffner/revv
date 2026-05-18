@@ -55,10 +55,7 @@ export async function initHighlighter(): Promise<void> {
     // Deep-clone frozen Pierre theme objects so Shiki's mutable ThemeInput
     // type accepts them (removes Readonly<> wrappers at every level).
     initPromise = createHighlighter({
-      themes: [
-        JSON.parse(JSON.stringify(pierreDark)),
-        JSON.parse(JSON.stringify(pierreLight)),
-      ],
+      themes: [JSON.parse(JSON.stringify(pierreDark)), JSON.parse(JSON.stringify(pierreLight))],
       langs: PRELOAD_LANGS,
     });
   }

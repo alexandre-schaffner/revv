@@ -15,8 +15,8 @@ import {
   Settings,
   Trash2,
   Upload,
-  X,
   Wand,
+  X,
 } from "@lucide/svelte";
 import { tick } from "svelte";
 import { cubicIn, cubicOut } from "svelte/easing";

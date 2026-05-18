@@ -147,6 +147,23 @@ export interface UserSettings {
    * routes to build per-host OAuth and API URLs.
    */
   githubHost: string;
+  /**
+   * Team-shared walkthrough cache settings. Backed by a single GCS
+   * bucket — IAM grants are the team boundary. When `enabled` is off,
+   * the entire feature short-circuits (no probe, no upload, no
+   * download). The two direction toggles let a teammate participate
+   * read-only or write-only.
+   */
+  cache: {
+    enabled: boolean;
+    bucket: string;
+    /** Service-account JSON. V1 stores plaintext in DB. */
+    credentialsJson: string;
+    /** Alternative: filesystem path to SA JSON file. */
+    credentialsPath: string;
+    uploadsEnabled: boolean;
+    downloadsEnabled: boolean;
+  };
 }
 
 // ── Review domain types ──────────────────────────────────────────────────────

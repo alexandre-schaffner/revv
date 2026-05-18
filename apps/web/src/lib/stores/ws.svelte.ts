@@ -19,7 +19,11 @@ import {
 import { getGithubHost } from "./settings.svelte";
 import * as sync from "./sync.svelte";
 import { markThreadsSyncing } from "./sync.svelte";
-import { onWalkthroughEdited, onWalkthroughError } from "./walkthrough.svelte";
+import {
+  onWalkthroughCacheHit,
+  onWalkthroughEdited,
+  onWalkthroughError,
+} from "./walkthrough.svelte";
 import {
   hydrateFromCache,
   onWalkthroughComplete,
@@ -157,6 +161,9 @@ function handleMessage(msg: WsServerMessage): void {
       break;
     case "walkthrough:complete":
       onWalkthroughComplete(msg.data.prId, msg.data.walkthroughId);
+      break;
+    case "walkthrough:cache-hit":
+      onWalkthroughCacheHit(msg.data.prId, msg.data.walkthroughId, msg.data.source);
       break;
     case "walkthrough:edited":
       onWalkthroughEdited(msg.data.prId, msg.data.walkthroughId, msg.data.event);

@@ -35,13 +35,11 @@ let {
   floatingActionsStyle = "left: 0; right: 0;",
 }: Props = $props();
 
-let html = $derived(
-  stream?.overview
-    ? renderMarkdown(stream.overview)
-    : recap?.overview
-      ? renderMarkdown(recap.overview)
-      : "",
-);
+let html = $derived.by(() => {
+  if (stream?.overview) return renderMarkdown(stream.overview);
+  if (recap?.overview) return renderMarkdown(recap.overview);
+  return "";
+});
 
 const DAY_MONTH_YEAR = new Intl.DateTimeFormat("en-GB", {
   weekday: "short",

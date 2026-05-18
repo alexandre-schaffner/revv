@@ -17,14 +17,23 @@
 // Pipeline shape on either path:
 //
 //   ≈ 4 tool calls total: get_recap_state → get_repo_context →
-//     set_recap_overview → complete_recap.
+//     commit_recap_overview → complete_recap. The model emits the recap
+//     markdown ONCE — as visible assistant text. The orchestrator's
+//     stream consumer (Claude SDK walker / opencode SSE subscriber)
+//     fans every `text-delta` out to UI subscribers as a `chunk` event
+//     AND appends to `ctx.textBuffer.current`; `commit_recap_overview`'s
+//     handler reads the buffer for the markdown body. Single emission,
+//     dual consumption — see plan
+//     /Users/alex/.claude/plans/i-want-the-recap-wild-kite.md.
 //
-// No streaming UI — content writes commit via MCP handlers; the
-// orchestrator observes `complete_recap` via the `onCompleted` hook on the
-// `RecapToolContext` it passes in.
+// Live UI streaming via best-effort `chunk` events; durability via the
+// atomic `commit_recap_overview` MCP write. The orchestrator observes
+// `complete_recap` via the `onCompleted` hook on the `RecapToolContext`
+// it passes in.
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { ProjectRecap, RecapStreamEvent } from "@revv/shared";
+import { walkClaudeMessages } from "../ai/agent-stream";
 import { buildRecapUserMessage, RECAP_SYSTEM_PROMPT } from "../ai/prompts/recap";
 import { resolveCliBin } from "../ai/providers/cli-agent";
 import {
@@ -88,9 +97,20 @@ export interface RunRecapAgentParams {
   readonly onCompleted: () => void;
   /**
    * Stream emitter for live recap generation. Called by MCP tool handlers
-   * so the SSE endpoint can forward chunks to subscribers.
+   * so the SSE endpoint can forward chunks to subscribers, and by this
+   * runner's own stream consumer to forward every `text-delta` as a
+   * `chunk` event.
    */
   readonly emitEvent: (event: RecapStreamEvent) => void;
+  /**
+   * Mutable closure cell the orchestrator hands in so it can later read
+   * the agent's currently-buffered visible text (used by the SSE route's
+   * reconnect snapshot). The runner appends text-deltas to `.current`
+   * and resets on each non-commit tool-call boundary; the
+   * `commit_recap_overview` MCP handler reads `.current` for the durable
+   * markdown body.
+   */
+  readonly textBuffer: { current: string };
 }
 
 /**
@@ -114,6 +134,7 @@ export async function runRecapAgent(params: RunRecapAgentParams): Promise<RecapA
     priorRecaps: params.priorRecaps,
     onCompleted: onCompletedWrapper,
     emit: params.emitEvent,
+    textBuffer: params.textBuffer,
   };
 
   const outcome =
@@ -177,15 +198,48 @@ async function runViaClaude(
         maxTurns: params.aiMaxTurns,
         abortController: params.abortController,
         model: params.modelUsed,
+        // Surface `stream_event` messages so the walker emits per-token
+        // `text-delta` events. The recap composition lives in those
+        // deltas — we accumulate them into `ctx.textBuffer.current`
+        // (the durable source for `commit_recap_overview`) and fan
+        // each one out as a `chunk` SSE event to UI subscribers.
+        includePartialMessages: true,
         ...pathOption,
       },
     });
 
-    for await (const msg of iter) {
-      const m = msg as { type?: string; usage?: Record<string, number> };
-      if (m.type === "result" && m.usage) {
-        tokenUsage = m.usage;
+    // Walk the SDK message stream. Two side effects per text-delta:
+    //   1. ctx.emit({type:"chunk", data:{text}})  → live UI
+    //   2. ctx.textBuffer.current += text         → durable source
+    //
+    // Reset the buffer on every tool-call EXCEPT `commit_recap_overview`:
+    // commit's handler reads the buffer immediately after the SDK
+    // surfaces its tool-call event, so resetting first would clobber
+    // the markdown we just composed. Read tools (`get_recap_state`,
+    // `list_open_prs`, `get_repo_context`) reset the buffer to drop
+    // any pre-composition prelude — that's the intended behaviour.
+    const usage = await walkClaudeMessages(iter, (ev) => {
+      if (ev.kind === "text-delta") {
+        if (ev.data.length === 0) return;
+        ctx.textBuffer.current += ev.data;
+        ctx.emit({ type: "chunk", data: { text: ev.data } });
+        return;
       }
+      if (ev.kind === "tool-call") {
+        if (ev.bareName !== "commit_recap_overview") {
+          ctx.textBuffer.current = "";
+        }
+        return;
+      }
+      // reasoning-delta / task-list-update / subagent-* / error / etc. → ignored
+    });
+    if (usage) {
+      tokenUsage = {
+        input_tokens: usage.inputTokens,
+        output_tokens: usage.outputTokens,
+        cache_read_input_tokens: usage.cacheReadInputTokens,
+        cache_creation_input_tokens: usage.cacheCreationInputTokens,
+      };
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

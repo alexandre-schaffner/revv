@@ -1,6 +1,16 @@
 export type { Activity, ActivityKind } from "./activity";
 export { classifyTool, normalizeToolName } from "./activity";
 export type {
+  GeneratedBy,
+  GenerationProviderConfig,
+  WalkthroughSnapshotBlock,
+  WalkthroughSnapshotIssue,
+  WalkthroughSnapshotRating,
+  WalkthroughSnapshotSemanticStep,
+  WalkthroughSnapshotV1,
+} from "./cache";
+export { CACHE_METADATA_KEYS, CACHE_SCHEMA_VERSION, cacheObjectKey } from "./cache";
+export type {
   ChatPlan,
   ChatQuestion,
   ChatStreamFrame,

@@ -1,11 +1,11 @@
 <script lang="ts">
 import { ChevronLeft, GitPullRequestCreateArrow, Plus } from "@lucide/svelte";
+import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte";
 import AddRepoDialog from "$lib/components/sidebar/AddRepoDialog.svelte";
 import ProjectArchiveList from "$lib/components/sidebar/ProjectArchiveList.svelte";
 import ProjectDraftsList from "$lib/components/sidebar/ProjectDraftsList.svelte";
 import ProjectHeader from "$lib/components/sidebar/ProjectHeader.svelte";
 import ProjectPrList from "$lib/components/sidebar/ProjectPrList.svelte";
-import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte";
 import SearchFilter from "$lib/components/sidebar/SearchFilter.svelte";
 import SidebarFilesView from "$lib/components/sidebar/SidebarFilesView.svelte";
 import { enterScrollMode, getActivePanel } from "$lib/stores/focus-mode.svelte";

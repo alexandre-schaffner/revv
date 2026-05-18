@@ -1,6 +1,7 @@
 import { Layer } from "effect";
 import { CacheStatsLive, InvalidationBusLive } from "../cache/index";
 import { AiServiceLive } from "./Ai";
+import { GcsBlobStoreLive } from "./blob/GcsBlobStore";
 import { CacheServiceLive } from "./Cache";
 import { ChatChangesPushServiceLive } from "./ChatChangesPush";
 import { ChatMcpTokensLive } from "./ChatMcpTokens";
@@ -19,6 +20,7 @@ import { ProjectRecapServiceLive } from "./ProjectRecap";
 import { ProjectRecapJobsLive } from "./ProjectRecapJobs";
 import { PullRequestServiceLive } from "./PullRequest";
 import { RecapSchedulerLive } from "./RecapScheduler";
+import { RemoteWalkthroughCacheLive } from "./RemoteWalkthroughCache";
 import { RepoCloneServiceLive } from "./RepoClone";
 import { RepositoryServiceLive } from "./Repository";
 import { ReviewServiceLive } from "./Review";
@@ -27,6 +29,7 @@ import { SyncServiceLive } from "./Sync";
 import { TokenProviderLive } from "./TokenProvider";
 import { WalkthroughServiceLive } from "./Walkthrough";
 import { WalkthroughJobsLive } from "./WalkthroughJobs";
+import { WalkthroughSnapshotImporterLive } from "./WalkthroughSnapshotImporter";
 import { WebSocketHubLive } from "./WebSocketHub";
 
 // TokenProvider now needs DbService
@@ -97,6 +100,16 @@ const RepoCloneServiceWithDeps = RepoCloneServiceLive.pipe(Layer.provide(BaseLay
 // DbMaintenance only needs DbService (already in BaseLayers)
 const DbMaintenanceWithDeps = DbMaintenanceLive.pipe(Layer.provide(DbServiceLive));
 
+// Team remote walkthrough cache — opt-in GCS-backed snapshot store.
+// GcsBlobStore depends on SettingsService (to read bucket + credentials);
+// RemoteWalkthroughCache stacks on top of BlobStore + Settings + Db. The
+// importer is a thin Drizzle wrapper, no external deps beyond DbService.
+const GcsBlobStoreWithDeps = GcsBlobStoreLive.pipe(Layer.provide(SettingsServiceWithDeps));
+const RemoteWalkthroughCacheWithDeps = RemoteWalkthroughCacheLive.pipe(
+  Layer.provide(Layer.mergeAll(BaseLayers, GcsBlobStoreWithDeps)),
+);
+const WalkthroughSnapshotImporterWithDeps = WalkthroughSnapshotImporterLive;
+
 // WalkthroughJobs is the central orchestrator for walkthrough generation —
 // it depends on PrContext (to resolve PR metadata), RepoClone (for scoped
 // worktrees), Ai (to run the actual generator), Review (for session ids),
@@ -110,6 +123,8 @@ const WalkthroughJobsWithDeps = WalkthroughJobsLive.pipe(
       PrContextServiceWithDeps,
       AiServiceWithDeps,
       RepoCloneServiceWithDeps,
+      RemoteWalkthroughCacheWithDeps,
+      WalkthroughSnapshotImporterWithDeps,
     ),
   ),
 );
@@ -151,4 +166,9 @@ export const AppLayer = Layer.mergeAll(
   RecapSchedulerWithDeps,
   DbMaintenanceWithDeps,
   ChatChangesPushServiceWithDeps,
+  // Surface the remote-cache + blob primitives in the runtime so HTTP
+  // routes (e.g. GET /api/settings/cache/status) can resolve them directly.
+  GcsBlobStoreWithDeps,
+  RemoteWalkthroughCacheWithDeps,
+  WalkthroughSnapshotImporterWithDeps,
 );

@@ -3,6 +3,7 @@ import { Elysia, t } from "elysia";
 import { listCliModels } from "../ai/providers/cli-agent";
 import { AppRuntime } from "../runtime";
 import { AiService, resolveAgent } from "../services/Ai";
+import { BlobStore } from "../services/blob/BlobStore";
 import { PollScheduler } from "../services/PollScheduler";
 import { SettingsService } from "../services/Settings";
 import { handleAppError } from "./middleware";
@@ -67,10 +68,32 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
               agent: t.Union([t.Literal("auto"), t.Literal("opencode"), t.Literal("claude")]),
             }),
           ),
+          cache: t.Partial(
+            t.Object({
+              enabled: t.Boolean(),
+              bucket: t.String(),
+              credentialsJson: t.String(),
+              credentialsPath: t.String(),
+              uploadsEnabled: t.Boolean(),
+              downloadsEnabled: t.Boolean(),
+            }),
+          ),
         }),
       ),
     },
   )
+  .get("/cache/status", async (ctx) => {
+    try {
+      return await AppRuntime.runPromise(
+        Effect.gen(function* () {
+          const blob = yield* BlobStore;
+          return yield* blob.status();
+        }),
+      );
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  })
   .get("/ai-status", async (ctx) => {
     try {
       return await AppRuntime.runPromise(

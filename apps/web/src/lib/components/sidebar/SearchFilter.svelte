@@ -10,7 +10,6 @@ import {
 
 // No props — the rail owns the "Add repository" affordance now.
 
-
 let inputEl: HTMLInputElement;
 let inputValue = $state("");
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;

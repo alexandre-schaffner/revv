@@ -10,7 +10,7 @@ export type ProjectRecapStatus = "generating" | "complete" | "error" | "supersed
 
 /**
  * Pre-aggregated summary stats for the recap, computed alongside the
- * overview by the agent's `set_recap_overview` MCP tool. The UI uses these
+ * overview by the agent's `commit_recap_overview` MCP tool. The UI uses these
  * to render the recap list-item header without re-aggregating; the agent
  * also embeds them in the overview markdown for narrative purposes.
  */

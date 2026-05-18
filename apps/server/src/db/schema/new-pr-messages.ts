@@ -38,10 +38,7 @@ export const newPrMessages = sqliteTable(
     finalizedAt: text("finalized_at"),
   },
   (t) => ({
-    sessionSeqUnique: uniqueIndex("new_pr_messages_session_seq_unique").on(
-      t.sessionId,
-      t.sequence,
-    ),
+    sessionSeqUnique: uniqueIndex("new_pr_messages_session_seq_unique").on(t.sessionId, t.sequence),
     sessionIdx: index("new_pr_messages_session_idx").on(t.sessionId),
   }),
 );
