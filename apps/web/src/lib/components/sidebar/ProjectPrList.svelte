@@ -1,9 +1,6 @@
 <script lang="ts">
 import { fly } from "svelte/transition";
-import {
-  getOpenPrsByRepoOrdered,
-  getSelectedPrId,
-} from "$lib/stores/prs.svelte";
+import { getOpenPrsByRepoOrdered, getSelectedPrId } from "$lib/stores/prs.svelte";
 import PrItem from "./PrItem.svelte";
 
 interface Props {

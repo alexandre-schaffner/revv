@@ -238,7 +238,7 @@ let html = $derived(latestDetail?.overview ? renderMarkdown(latestDetail.overvie
 		box-shadow:
 			0 1px 2px rgba(0, 0, 0, 0.04),
 			0 1px 3px rgba(0, 0, 0, 0.06);
-		max-height: 480px;
+		max-height: 640px;
 		overflow-y: auto;
 	}
 

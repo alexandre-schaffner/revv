@@ -151,11 +151,27 @@ export function recapStreamHandler(ctx: { params: { id: string } }): Response {
         Effect.flatMap(ProjectRecapService, (s) => s.getById(ctx.params.id)),
       ).catch(() => row);
 
-      // Replay DB snapshot as an `overview` event (replaces client state)
+      // Pre-commit fallback: the recap pipeline buffers the agent's
+      // streamed text in memory and only writes to DB on
+      // `commit_recap_overview`. If the DB overview is still empty
+      // (agent is mid-composition), grab the live in-memory buffer
+      // from the running job so the reconnecting client sees the
+      // partial composition rather than blank text until commit fires.
+      const liveBuffer =
+        snapshot.overview && snapshot.overview.length > 0
+          ? null
+          : await AppRuntime.runPromise(
+              Effect.flatMap(ProjectRecapJobs, (jobs) => jobs.getCurrentBuffer(ctx.params.id)),
+            ).catch(() => null);
+
+      const snapshotOverview =
+        snapshot.overview && snapshot.overview.length > 0 ? snapshot.overview : liveBuffer;
+
+      // Replay snapshot as an `overview` event (replaces client state)
       // rather than `chunk` (which appends). On reconnect with surviving
       // client state, appending duplicates the overview text.
-      if (snapshot.overview && snapshot.overview.length > 0) {
-        writer.send({ type: "overview", data: { overview: snapshot.overview } });
+      if (snapshotOverview && snapshotOverview.length > 0) {
+        writer.send({ type: "overview", data: { overview: snapshotOverview } });
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

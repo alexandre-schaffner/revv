@@ -5,6 +5,7 @@ import { page } from "$app/state";
 import AuthGuard from "$lib/components/auth/AuthGuard.svelte";
 import PreviousRecaps from "$lib/components/recaps/PreviousRecaps.svelte";
 import RecapDetail from "$lib/components/recaps/RecapDetail.svelte";
+import { RAIL_WIDTH } from "$lib/constants";
 import {
   abortRecapStream,
   getRecapStreamEntry,
@@ -16,9 +17,11 @@ import {
   getRecapDetail,
   getRecapDetailLoading,
   getRecapLoading,
+  getRecapPendingAction,
   getRecapsForRepo,
   loadRecap,
   regenerateRecap,
+  stopRecap,
 } from "$lib/stores/recaps.svelte";
 import {
   getRightPanelOpen,
@@ -27,12 +30,9 @@ import {
   getSidebarPeekHovering,
   getSidebarWidth,
 } from "$lib/stores/sidebar.svelte";
-import { RAIL_WIDTH } from "$lib/constants";
 
 const repoId = $derived(page.params.repoId ?? "");
 const recapId = $derived(page.params.recapId ?? "");
-
-let regenerating = $state(false);
 
 // Mirror AppShell.floatingActionsStyle so RecapDetail's Regenerate pill
 // centres over the visible main area (between sidebar and any right
@@ -90,23 +90,22 @@ const loading = $derived(getRecapDetailLoading(recapId));
 const stream = $derived(getRecapStreamEntry(recapId));
 const recaps = $derived(getRecapsForRepo(repoId));
 const listLoading = $derived(getRecapLoading(repoId));
+const pendingAction = $derived(getRecapPendingAction(recapId));
 
 function onBack(): void {
   void goto(`/repo/${repoId}/recaps`);
 }
 
 async function onRegenerate(): Promise<void> {
-  if (regenerating) return;
-  regenerating = true;
-  try {
-    resetRecapStream(recapId);
-    const result = await regenerateRecap(recapId);
-    if (result?.recapId && result.recapId !== recapId) {
-      void goto(`/repo/${repoId}/recaps/${result.recapId}`);
-    }
-  } finally {
-    regenerating = false;
+  resetRecapStream(recapId);
+  const result = await regenerateRecap(recapId);
+  if (result?.recapId && result.recapId !== recapId) {
+    void goto(`/repo/${repoId}/recaps/${result.recapId}`);
   }
+}
+
+async function onStop(): Promise<void> {
+  await stopRecap(recapId);
 }
 </script>
 
@@ -118,7 +117,8 @@ async function onRegenerate(): Promise<void> {
 				{loading}
 				{onBack}
 				{onRegenerate}
-				{regenerating}
+				{onStop}
+				{pendingAction}
 				{stream}
 				{floatingActionsStyle}
 			/>

@@ -181,7 +181,7 @@ export class ProjectRecapService extends Context.Tag("ProjectRecapService")<
 
     /**
      * Single content write performed by the recap agent via the MCP
-     * `set_recap_overview` tool. Stamps the overview + provenance + stats
+     * `commit_recap_overview` tool. Stamps the overview + provenance + stats
      * in one transaction. Idempotent on `recapId` — replays update the
      * same row.
      */

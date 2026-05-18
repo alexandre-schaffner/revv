@@ -23,6 +23,7 @@
 
 import type {
   Confidence,
+  GenerationProviderConfig,
   RatingAxis,
   RatingCitation,
   RiskLevel,
@@ -139,6 +140,32 @@ function rowToWalkthrough(
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
     .map(rowToRating);
 
+  let providerConfig: Walkthrough["providerConfig"] = null;
+  if (row.providerConfig) {
+    try {
+      const parsed = JSON.parse(row.providerConfig) as Record<string, unknown>;
+      providerConfig = {
+        provider: typeof parsed.provider === "string" ? parsed.provider : row.modelUsed,
+        model: typeof parsed.model === "string" ? parsed.model : row.modelUsed,
+        thinkingEffort: typeof parsed.thinkingEffort === "string" ? parsed.thinkingEffort : null,
+        contextWindow: typeof parsed.contextWindow === "string" ? parsed.contextWindow : null,
+        maxTurns: typeof parsed.maxTurns === "number" ? parsed.maxTurns : 0,
+      };
+    } catch {
+      providerConfig = null;
+    }
+  }
+
+  const generatedBy: Walkthrough["generatedBy"] =
+    row.generatedByGithubLogin || row.generatedByGithubUserId
+      ? {
+          githubUserId: row.generatedByGithubUserId ?? null,
+          githubLogin: row.generatedByGithubLogin ?? null,
+          displayName: row.generatedByDisplayName ?? null,
+          avatarUrl: row.generatedByAvatarUrl ?? null,
+        }
+      : null;
+
   return {
     id: row.id,
     reviewSessionId: row.reviewSessionId,
@@ -155,6 +182,8 @@ function rowToWalkthrough(
     modelUsed: row.modelUsed,
     tokenUsage: JSON.parse(row.tokenUsage) as WalkthroughTokenUsage,
     prHeadSha: row.prHeadSha,
+    generatedBy,
+    providerConfig,
   };
 }
 
@@ -206,6 +235,25 @@ export class WalkthroughService extends Context.Tag("WalkthroughService")<
        * single-commit edge-case path.
        */
       prCommits?: readonly PrCommit[];
+      /**
+       * GitHub identity of the account that triggered this generation job.
+       * Stamped on the row at creation and carried along when the
+       * snapshot is exported to the remote cache. Optional so callers that
+       * predate the attribution columns continue to compile — the columns
+       * are nullable and the UI degrades gracefully.
+       */
+      generatedBy?: {
+        readonly githubUserId: number;
+        readonly githubLogin: string;
+        readonly displayName: string | null;
+        readonly avatarUrl: string | null;
+      };
+      /**
+       * Snapshot of the AI provider config in effect at job start. Stored
+       * as JSON on `provider_config`. Pairs with `modelUsed` — the
+       * column survives a mid-job settings change.
+       */
+      providerConfig?: GenerationProviderConfig;
     }) => Effect.Effect<string, ReviewError, DbService>;
 
     /**
@@ -427,6 +475,13 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
                 prHeadSha: params.prHeadSha,
                 resumeAttempts: 0,
                 prCommits: params.prCommits ? JSON.stringify(params.prCommits) : null,
+                generatedByGithubUserId: params.generatedBy?.githubUserId ?? null,
+                generatedByGithubLogin: params.generatedBy?.githubLogin ?? null,
+                generatedByDisplayName: params.generatedBy?.displayName ?? null,
+                generatedByAvatarUrl: params.generatedBy?.avatarUrl ?? null,
+                providerConfig: params.providerConfig
+                  ? JSON.stringify(params.providerConfig)
+                  : null,
               })
               .run();
             return { id: newId };

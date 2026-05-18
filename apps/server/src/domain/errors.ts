@@ -116,8 +116,8 @@ export class RecapNotFoundError extends Data.TaggedError("RecapNotFoundError")<{
 /**
  * Raised by the recap MCP tool surface when an out-of-order or
  * structurally-invalid call lands (e.g. `complete_recap` before
- * `set_recap_overview`, or `set_recap_overview` with an empty markdown
- * body). The agent receives this as a structured error result and can
+ * `commit_recap_overview`, or `commit_recap_overview` with an empty text
+ * buffer). The agent receives this as a structured error result and can
  * recover by issuing the right call.
  */
 export class RecapPreconditionError extends Data.TaggedError("RecapPreconditionError")<{
@@ -138,6 +138,75 @@ export class RecapBudgetExceededError extends Data.TaggedError("RecapBudgetExcee
 // Database errors
 export class DbError extends Data.TaggedError("DbError")<{
   readonly message: string;
+  readonly cause?: unknown;
+}> {}
+
+// ── Remote walkthrough cache errors ────────────────────────────────────────
+//
+// `BlobStore*` errors describe failures at the storage-backend layer
+// (GCS/S3/etc.). `Cache*` errors describe failures at the snapshot-level
+// service that sits on top. The orchestrator treats every cache error as
+// "miss + fall back to running the agent" — no error escapes to the user
+// modulo settings-page health checks.
+
+/**
+ * The configured blob store is unreachable, misconfigured, or rejected
+ * the request (network error, bucket 404, IAM 403). Surfaced from
+ * `BlobStore` ops and bubbled up by `RemoteWalkthroughCache` as
+ * `CacheUnavailable`.
+ */
+export class BlobStoreUnavailable extends Data.TaggedError("BlobStoreUnavailable")<{
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
+
+/**
+ * The blob exists but its metadata or body is unusable (missing
+ * `schemaVersion`, `contentSha256` mismatch, gunzip failure). Cache hit
+ * is downgraded to a miss; no row mutation.
+ */
+export class BlobCorrupt extends Data.TaggedError("BlobCorrupt")<{
+  readonly key: string;
+  readonly reason: string;
+}> {}
+
+/**
+ * `RemoteWalkthroughCache` operation hit an unreachable backend. The
+ * orchestrator treats this as "cache miss" and runs the agent.
+ */
+export class CacheUnavailable extends Data.TaggedError("CacheUnavailable")<{
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
+
+/**
+ * `RemoteWalkthroughCache.fetch` parsed a snapshot whose shape or
+ * integrity check failed. Treated identically to `CacheUnavailable` by
+ * callers — agent runs locally.
+ */
+export class CacheCorrupt extends Data.TaggedError("CacheCorrupt")<{
+  readonly key: string;
+  readonly reason: string;
+}> {}
+
+/**
+ * Failure while building the gzipped payload during `push`. Pure
+ * marshalling error — never blocks job completion (push is fire-and-
+ * forget; the fiber logs and continues).
+ */
+export class CacheSerialization extends Data.TaggedError("CacheSerialization")<{
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
+
+/**
+ * `WalkthroughSnapshotImporter.import` rejected the candidate snapshot
+ * (validation gate failed, transaction couldn't land). Caller (the
+ * orchestrator) falls back to running the agent.
+ */
+export class ImportError extends Data.TaggedError("ImportError")<{
+  readonly walkthroughId: string;
+  readonly reason: string;
   readonly cause?: unknown;
 }> {}
 

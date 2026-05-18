@@ -13,12 +13,7 @@ interface Props {
   variant?: "open" | "archived";
 }
 
-let {
-  pr,
-  isSelected = false,
-  navPrefix = "pr",
-  variant = "open",
-}: Props = $props();
+let { pr, isSelected = false, navPrefix = "pr", variant = "open" }: Props = $props();
 
 let avatarFailed = $state(false);
 

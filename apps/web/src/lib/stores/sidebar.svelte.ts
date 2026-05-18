@@ -209,8 +209,6 @@ export function openAddRepoDialog(): void {
   addRepoDialogOpen = true;
 }
 
-
-
 export function collapseAllRepoGroups(): void {
   collapseAllSignal++;
 }

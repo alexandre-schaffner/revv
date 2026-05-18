@@ -95,6 +95,17 @@ export type WsServerMessage =
   /** signal — Walkthrough generation failed terminally. Show error UI. */
   | { type: "walkthrough:error"; data: { prId: string; message: string } }
   /**
+   * signal — A row was hydrated from the team remote cache rather than
+   * generated locally. Source `"remote"` distinguishes the GCS-backed
+   * cache; reserved for future variants (`"hosted"`, etc.). Purely
+   * cosmetic — the actual completion still fires via
+   * `walkthrough:complete` once the importer transaction lands.
+   */
+  | {
+      type: "walkthrough:cache-hit";
+      data: { prId: string; walkthroughId: string; source: "remote" };
+    }
+  /**
    * delta — Chat-driven post-completion edit broadcast. Wraps the same
    * `WalkthroughStreamEvent` shape the SSE generation path uses so the
    * frontend reducer can apply edits with the same code paths. The

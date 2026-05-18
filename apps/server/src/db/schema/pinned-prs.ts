@@ -1,6 +1,6 @@
 import { integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
-import { pullRequests } from "./pull-requests";
 import { user } from "./auth";
+import { pullRequests } from "./pull-requests";
 
 /**
  * User-pinned pull requests. Each row is a (user, PR) pair with a creation

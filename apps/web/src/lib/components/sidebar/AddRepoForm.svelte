@@ -3,8 +3,8 @@ import { Folder, Plus, RefreshCw, Search, Trash2 } from "@lucide/svelte";
 import type { Repository } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import CloneStatusIndicator from "$lib/components/shared/CloneStatusIndicator.svelte";
-import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte";
+import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import { repoGradientDataUrl } from "$lib/repoGradient";
 import {
   addRepo,

@@ -1,6 +1,7 @@
 <script lang="ts">
 import {
   CalendarClock,
+  Cloud,
   Cpu,
   Download,
   ExternalLink,
@@ -17,15 +18,16 @@ import {
   X,
 } from "@lucide/svelte";
 import type { AiAgent, ContextWindow, RecapAgentChoice, ThinkingEffort } from "@revv/shared";
-import { API_BASE_URL } from "@revv/shared";
 import { Dialog as DialogPrimitive } from "bits-ui";
 import { SvelteMap } from "svelte/reactivity";
 import { goto } from "$app/navigation";
+import { API_BASE_URL } from "$lib/api/base-url";
 import SignInButton from "$lib/components/auth/SignInButton.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import * as Dialog from "$lib/components/ui/dialog/index.js";
 import { Input } from "$lib/components/ui/input";
 import * as Select from "$lib/components/ui/select";
+import { Switch } from "$lib/components/ui/switch";
 import {
   agentSupportsContextWindow,
   agentSupportsThinkingEffort,
@@ -59,7 +61,15 @@ interface Props {
 let { open, onClose }: Props = $props();
 
 // ── Nav sections ──────────────────────────────────────────────────────────
-type SectionId = "account" | "ai" | "recap" | "preferences" | "onboarding" | "updates" | "danger";
+type SectionId =
+  | "account"
+  | "ai"
+  | "recap"
+  | "cache"
+  | "preferences"
+  | "onboarding"
+  | "updates"
+  | "danger";
 
 interface NavItem {
   id: SectionId;
@@ -72,11 +82,37 @@ const navItems: NavItem[] = [
   { id: "account", label: "Account", icon: User },
   { id: "ai", label: "AI Configuration", icon: Cpu },
   { id: "recap", label: "Project Recap", icon: CalendarClock },
+  { id: "cache", label: "Team Cache", icon: Cloud },
   { id: "preferences", label: "Preferences", icon: SlidersHorizontal },
   { id: "onboarding", label: "Onboarding", icon: RotateCcw },
   { id: "updates", label: "Updates", icon: Download, tauriOnly: true },
   { id: "danger", label: "Danger Zone", icon: TriangleAlert },
 ];
+
+// ── Team-cache "Test connection" state ────────────────────────────────────
+let cacheTestState = $state<{ healthy: boolean; detail: string } | null>(null);
+let cacheTestRunning = $state(false);
+async function testCacheConnection(): Promise<void> {
+  if (cacheTestRunning) return;
+  cacheTestRunning = true;
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/settings/cache/status`, {
+      headers: await authHeaders(),
+    });
+    if (!res.ok) {
+      cacheTestState = { healthy: false, detail: `HTTP ${res.status}` };
+      return;
+    }
+    cacheTestState = (await res.json()) as { healthy: boolean; detail: string };
+  } catch (e) {
+    cacheTestState = {
+      healthy: false,
+      detail: e instanceof Error ? e.message : String(e),
+    };
+  } finally {
+    cacheTestRunning = false;
+  }
+}
 
 // ── Recap agent selector options ──────────────────────────────────────────
 const recapAgentOptions: { value: RecapAgentChoice; label: string }[] = [
@@ -345,8 +381,8 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 								onclick={() => scrollToSection(item.id)}
 								type="button"
 							>
-								<item.icon size={13} />
-								{item.label}
+								<item.icon size={13} class="settings-nav-icon" />
+								<span class="settings-nav-label">{item.label}</span>
 							</button>
 						</li>
 					{/each}
@@ -387,7 +423,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 
 				<!-- Account -->
 				<section id="section-account" class="settings-section">
-					<h2 class="settings-section-heading">Account</h2>
+					<h2 class="section-head-title">Account</h2>
 					{#if getUser()}
 						<div class="flex items-center justify-between">
 							<div class="flex items-center gap-3">
@@ -436,183 +472,188 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 
 			<!-- AI Configuration -->
 			<section id="section-ai" class="settings-section">
-				<h2 class="settings-section-heading">AI Configuration</h2>
-				<div class="space-y-5">
-			<!-- Agent selector -->
-			<div class="flex items-center justify-between gap-4">
-				<div>
-					<p class="text-sm text-text-primary">Agent</p>
-					<p class="text-xs text-text-muted">Which AI agent powers code reviews.</p>
-				</div>
-				<Select.Root
-					type="single"
-					value={aiAgent}
-					onValueChange={(v) => {
-						if (!v) return;
-						const newAgent = v as AiAgent;
-						// Kick a model-list fetch so the dropdowns below
-						// populate immediately without needing a manual refresh.
-						void loadModels(newAgent);
-						// Cascade aiAgent + aiModel + aiSuggestionsModel atomically
-						// so the dependent dropdowns never show a catalog-mismatched
-						// id mid-flip. Shared with AgentSelector + StepAgent.
-						void updateSettings(cascadeAgentChange(newAgent));
-					}}
-				>
-					<Select.Trigger class="w-36 text-xs">
-						{aiAgent === 'opencode' ? 'opencode' : 'Claude SDK'}
-					</Select.Trigger>
-					<Select.Content>
-						<Select.Item value="opencode" class="text-xs">opencode</Select.Item>
-						<Select.Item value="claude" class="text-xs">Claude SDK</Select.Item>
-					</Select.Content>
-				</Select.Root>
-			</div>
+				<h2 class="section-head-title">AI Configuration</h2>
 
-			<!-- Model selector -->
-			<div class="flex items-center justify-between gap-4">
-				<div>
-					<p class="text-sm text-text-primary">Model</p>
-					<p class="text-xs text-text-muted">The model used for generating reviews.</p>
-				</div>
-				<div class="flex items-center gap-2">
-					<Button
-						variant="ghost"
-						size="icon-sm"
-						onclick={() => loadModels(aiAgent)}
-						disabled={modelsLoading}
-						aria-label="Refresh models"
-					>
-						<RefreshCw size={12} class={modelsLoading ? 'animate-spin' : ''} />
-					</Button>
-					<Select.Root
-						type="single"
-						value={currentModel}
-						onValueChange={(v) => {
-							if (v) void updateSettings({ aiModel: v });
-						}}
-					>
-						<Select.Trigger class="w-48 text-xs truncate">
-							{currentModelLabel || 'Select model…'}
-						</Select.Trigger>
-						<Select.Content>
-							{#each modelOptions as opt (opt.value)}
-								<Select.Item value={opt.value} class="text-xs">{opt.label}</Select.Item>
-							{/each}
-						</Select.Content>
-					</Select.Root>
-				</div>
-			</div>
+				<!-- Agent + Model selection -->
+				<div class="settings-subgroup">
+					<h3 class="settings-subgroup-heading">Agent & models</h3>
 
-			<!-- Suggestions model selector -->
-			<div class="flex items-center justify-between gap-4">
-				<div>
-					<p class="text-sm text-text-primary">Suggestions model</p>
-					<p class="text-xs text-text-muted">
-						Low-cost model used for PR-aware suggestion prompts in the right panel.
-					</p>
-				</div>
-				<Select.Root
-					type="single"
-					value={currentSuggestionsModel}
-					onValueChange={(v) => {
-						if (v) void updateSettings({ aiSuggestionsModel: v });
-					}}
-				>
-					<Select.Trigger class="w-48 text-xs truncate">
-						{currentSuggestionsModelLabel || 'Select model…'}
-					</Select.Trigger>
-					<Select.Content>
-						{#each modelOptions as opt (opt.value)}
-							<Select.Item value={opt.value} class="text-xs">{opt.label}</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
-			</div>
-
-			<!-- Thinking effort (agent-dependent) -->
-			{#if showThinkingEffort}
-				<div class="flex items-center justify-between gap-4">
-					<div>
-						<p class="text-sm text-text-primary">Thinking effort</p>
-						<p class="text-xs text-text-muted">How much reasoning budget the model uses.</p>
+					<div class="settings-row">
+						<div class="settings-row-info">
+							<p class="settings-row-label">Agent</p>
+							<p class="settings-row-hint">Which AI agent powers code reviews.</p>
+						</div>
+						<Select.Root
+							type="single"
+							value={aiAgent}
+							onValueChange={(v) => {
+								if (!v) return;
+								const newAgent = v as AiAgent;
+								void loadModels(newAgent);
+								void updateSettings(cascadeAgentChange(newAgent));
+							}}
+						>
+							<Select.Trigger class="w-40 text-xs">
+								{aiAgent === 'opencode' ? 'opencode' : 'Claude SDK'}
+							</Select.Trigger>
+							<Select.Content>
+								<Select.Item value="opencode" class="text-xs">opencode</Select.Item>
+								<Select.Item value="claude" class="text-xs">Claude SDK</Select.Item>
+							</Select.Content>
+						</Select.Root>
 					</div>
-					<Select.Root
-						type="single"
-						value={getSettings()?.aiThinkingEffort ?? 'auto'}
-						onValueChange={(v) => {
-							if (v) void updateSettings({ aiThinkingEffort: v as ThinkingEffort });
-						}}
-					>
-						<Select.Trigger class="w-36 text-xs">
-							{thinkingEffortOptions.find((o) => o.value === (getSettings()?.aiThinkingEffort ?? 'auto'))?.label ?? 'Auto'}
-						</Select.Trigger>
-						<Select.Content>
-							{#each thinkingEffortOptions as opt (opt.value)}
-								<Select.Item value={opt.value} class="text-xs">{opt.label}</Select.Item>
-							{/each}
-						</Select.Content>
-					</Select.Root>
-				</div>
-			{/if}
 
-			<!-- Context window (agent-dependent) -->
-			{#if showContextWindow}
-				<div class="flex items-center justify-between gap-4">
-					<div>
-						<p class="text-sm text-text-primary">Context window</p>
-						<p class="text-xs text-text-muted">Maximum context fed to the model per review.</p>
+					<div class="settings-row">
+						<div class="settings-row-info">
+							<p class="settings-row-label">Review model</p>
+							<p class="settings-row-hint">The model used for generating reviews.</p>
+						</div>
+						<div class="flex items-center gap-2">
+							<Button
+								variant="ghost"
+								size="icon-sm"
+								onclick={() => loadModels(aiAgent)}
+								disabled={modelsLoading}
+								aria-label="Refresh models"
+							>
+								<RefreshCw size={12} class={modelsLoading ? 'animate-spin' : ''} />
+							</Button>
+							<Select.Root
+								type="single"
+								value={currentModel}
+								onValueChange={(v) => {
+									if (v) void updateSettings({ aiModel: v });
+								}}
+							>
+								<Select.Trigger class="w-52 text-xs truncate">
+									{currentModelLabel || 'Select model…'}
+								</Select.Trigger>
+								<Select.Content>
+									{#each modelOptions as opt (opt.value)}
+										<Select.Item value={opt.value} class="text-xs">{opt.label}</Select.Item>
+									{/each}
+								</Select.Content>
+							</Select.Root>
+						</div>
 					</div>
-					<Select.Root
-						type="single"
-						value={getSettings()?.aiContextWindow ?? '200k'}
-						onValueChange={(v) => {
-							if (v) void updateSettings({ aiContextWindow: v as ContextWindow });
-						}}
-					>
-						<Select.Trigger class="w-28 text-xs">
-							{CONTEXT_WINDOW_OPTIONS.find((o) => o.value === (getSettings()?.aiContextWindow ?? '200k'))?.label ?? '200K'}
-						</Select.Trigger>
-						<Select.Content>
-							{#each CONTEXT_WINDOW_OPTIONS as opt (opt.value)}
-								<Select.Item value={opt.value} class="text-xs">{opt.label}</Select.Item>
-							{/each}
-						</Select.Content>
-					</Select.Root>
-				</div>
-			{/if}
 
-			<!-- Max turns -->
-			<div class="flex items-center justify-between gap-4">
-				<div>
-					<p class="text-sm text-text-primary">Max turns</p>
-					<p class="text-xs text-text-muted">
-						Maximum agent turns per review ({MAX_TURNS_MIN}–{MAX_TURNS_MAX}).
-					</p>
+					<div class="settings-row">
+						<div class="settings-row-info">
+							<p class="settings-row-label">Suggestions model</p>
+							<p class="settings-row-hint">
+								Low-cost model used for PR-aware suggestion prompts in the right panel.
+							</p>
+						</div>
+						<Select.Root
+							type="single"
+							value={currentSuggestionsModel}
+							onValueChange={(v) => {
+								if (v) void updateSettings({ aiSuggestionsModel: v });
+							}}
+						>
+							<Select.Trigger class="w-52 text-xs truncate">
+								{currentSuggestionsModelLabel || 'Select model…'}
+							</Select.Trigger>
+							<Select.Content>
+								{#each modelOptions as opt (opt.value)}
+									<Select.Item value={opt.value} class="text-xs">{opt.label}</Select.Item>
+								{/each}
+							</Select.Content>
+						</Select.Root>
+					</div>
 				</div>
-				<Input
-					type="number"
-					min={MAX_TURNS_MIN}
-					max={MAX_TURNS_MAX}
-					class="w-28 text-xs"
-					value={maxTurnsDraft}
-					oninput={(e) => (maxTurnsDraft = (e.currentTarget as HTMLInputElement).value)}
-					onblur={commitMaxTurns}
-					onkeydown={(e) => { if (e.key === 'Enter') commitMaxTurns(); }}
-				/>
-			</div>
+
+				<!-- Generation tuning -->
+				{#if showThinkingEffort || showContextWindow}
+					<div class="settings-subgroup">
+						<h3 class="settings-subgroup-heading">Generation</h3>
+
+						{#if showThinkingEffort}
+							<div class="settings-row">
+								<div class="settings-row-info">
+									<p class="settings-row-label">Thinking effort</p>
+									<p class="settings-row-hint">How much reasoning budget the model uses.</p>
+								</div>
+								<Select.Root
+									type="single"
+									value={getSettings()?.aiThinkingEffort ?? 'auto'}
+									onValueChange={(v) => {
+										if (v) void updateSettings({ aiThinkingEffort: v as ThinkingEffort });
+									}}
+								>
+									<Select.Trigger class="w-40 text-xs">
+										{thinkingEffortOptions.find((o) => o.value === (getSettings()?.aiThinkingEffort ?? 'auto'))?.label ?? 'Auto'}
+									</Select.Trigger>
+									<Select.Content>
+										{#each thinkingEffortOptions as opt (opt.value)}
+											<Select.Item value={opt.value} class="text-xs">{opt.label}</Select.Item>
+										{/each}
+									</Select.Content>
+								</Select.Root>
+							</div>
+						{/if}
+
+						{#if showContextWindow}
+							<div class="settings-row">
+								<div class="settings-row-info">
+									<p class="settings-row-label">Context window</p>
+									<p class="settings-row-hint">Maximum context fed to the model per review.</p>
+								</div>
+								<Select.Root
+									type="single"
+									value={getSettings()?.aiContextWindow ?? '200k'}
+									onValueChange={(v) => {
+										if (v) void updateSettings({ aiContextWindow: v as ContextWindow });
+									}}
+								>
+									<Select.Trigger class="w-28 text-xs">
+										{CONTEXT_WINDOW_OPTIONS.find((o) => o.value === (getSettings()?.aiContextWindow ?? '200k'))?.label ?? '200K'}
+									</Select.Trigger>
+									<Select.Content>
+										{#each CONTEXT_WINDOW_OPTIONS as opt (opt.value)}
+											<Select.Item value={opt.value} class="text-xs">{opt.label}</Select.Item>
+										{/each}
+									</Select.Content>
+								</Select.Root>
+							</div>
+						{/if}
+					</div>
+				{/if}
+
+				<!-- Limits -->
+				<div class="settings-subgroup">
+					<h3 class="settings-subgroup-heading">Limits</h3>
+
+					<div class="settings-row">
+						<div class="settings-row-info">
+							<p class="settings-row-label">Max turns</p>
+							<p class="settings-row-hint">
+								Maximum agent turns per review ({MAX_TURNS_MIN}–{MAX_TURNS_MAX}).
+							</p>
+						</div>
+						<Input
+							type="number"
+							min={MAX_TURNS_MIN}
+							max={MAX_TURNS_MAX}
+							class="w-28 text-xs"
+							value={maxTurnsDraft}
+							oninput={(e) => (maxTurnsDraft = (e.currentTarget as HTMLInputElement).value)}
+							onblur={commitMaxTurns}
+							onkeydown={(e) => { if (e.key === 'Enter') commitMaxTurns(); }}
+						/>
+					</div>
 
 					<!-- AI status indicator -->
-					<div class="flex items-center gap-2 rounded-md border border-border-subtle bg-bg-elevated px-3 py-2">
+					<div class="status-line">
 						{#if aiStatusLoading}
-							<Loader2 size={12} class="animate-spin text-text-muted" />
-							<p class="text-xs text-text-muted">Checking AI status…</p>
+							<Loader2 size={11} class="animate-spin text-text-muted" />
+							<span class="status-line-text">Checking status…</span>
 						{:else if aiConfigured}
-						<span class="h-2 w-2 rounded-full bg-success shrink-0"></span>
-						<p class="text-xs text-text-secondary">AI is configured and ready.</p>
-					{:else}
-						<span class="h-2 w-2 rounded-full bg-warning shrink-0"></span>
-							<p class="text-xs text-text-secondary">AI is not yet configured.</p>
+							<span class="status-line-dot status-line-dot--success" aria-hidden="true"></span>
+							<span class="status-line-text">AI configured and ready</span>
+						{:else}
+							<span class="status-line-dot status-line-dot--warning" aria-hidden="true"></span>
+							<span class="status-line-text">AI not configured</span>
 						{/if}
 					</div>
 				</div>
@@ -620,13 +661,13 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 
 			<!-- Project Recap -->
 			<section id="section-recap" class="settings-section">
-				<h2 class="settings-section-heading">Project Recap</h2>
-				<div class="space-y-5">
-					<!-- Recap agent selector -->
-					<div class="flex items-center justify-between gap-4">
-						<div class="min-w-0 flex-1">
-							<p class="text-sm text-text-primary">Recap agent</p>
-							<p class="text-xs text-text-muted">
+				<h2 class="section-head-title">Project Recap</h2>
+
+				<div class="settings-subgroup">
+					<div class="settings-row">
+						<div class="settings-row-info">
+							<p class="settings-row-label">Recap agent</p>
+							<p class="settings-row-hint">
 								Which agent generates daily and weekly project recaps. Auto follows your main agent.
 							</p>
 						</div>
@@ -647,7 +688,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 								});
 							}}
 						>
-							<Select.Trigger class="w-40 shrink-0 truncate text-xs">
+							<Select.Trigger class="w-44 shrink-0 truncate text-xs">
 								{recapAgentOptions.find((o) => o.value === (getSettings()?.recap?.agent ?? 'auto'))?.label ?? 'Auto'}
 							</Select.Trigger>
 							<Select.Content>
@@ -660,17 +701,168 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 				</div>
 			</section>
 
+			<!-- Team Cache -->
+			<section id="section-cache" class="settings-section">
+				<h2 class="section-head-title">Team Cache</h2>
+
+				<p class="section-blurb">
+					Share walkthrough results with your team via a Google Cloud Storage bucket.
+					When enabled, teammates who open a PR you've already reviewed hydrate instantly
+					instead of re-running the agent.
+				</p>
+
+				<!-- Master switch -->
+				<div class="settings-subgroup">
+					<div class="settings-row">
+						<div class="settings-row-info">
+							<p class="settings-row-label">Enable remote cache</p>
+							<p class="settings-row-hint">
+								Off by default. Master switch — when disabled, no probes, uploads, or
+								downloads happen.
+							</p>
+						</div>
+						<Switch
+							checked={getSettings()?.cache?.enabled ?? false}
+							onCheckedChange={(v) => {
+								void updateSettings({ cache: { enabled: v } });
+							}}
+							aria-label="Enable remote cache"
+						/>
+					</div>
+				</div>
+
+				<!-- Connection details -->
+				<div class="settings-subgroup">
+					<h3 class="settings-subgroup-heading">Connection</h3>
+
+					<div class="settings-field">
+						<label class="settings-field-label" for="cache-bucket">GCS bucket name</label>
+						<Input
+							id="cache-bucket"
+							type="text"
+							placeholder="my-team-revv-cache"
+							value={getSettings()?.cache?.bucket ?? ''}
+							oninput={(e) => {
+								void updateSettings({
+									cache: { bucket: (e.target as HTMLInputElement).value },
+								});
+							}}
+						/>
+					</div>
+
+					<div class="settings-field">
+						<label class="settings-field-label" for="cache-creds-json">
+							Service-account JSON
+						</label>
+						<textarea
+							id="cache-creds-json"
+							class="settings-textarea"
+							rows={5}
+							placeholder={`{"type":"service_account",...}`}
+							value={getSettings()?.cache?.credentialsJson ?? ''}
+							onchange={(e) => {
+								void updateSettings({
+									cache: { credentialsJson: (e.target as HTMLTextAreaElement).value },
+								});
+							}}
+						></textarea>
+						<p class="settings-field-hint">
+							Stored in plaintext locally. Alternatively set a filesystem path below.
+						</p>
+					</div>
+
+					<div class="settings-field">
+						<label class="settings-field-label" for="cache-creds-path">
+							Service-account JSON path (optional)
+						</label>
+						<Input
+							id="cache-creds-path"
+							type="text"
+							placeholder="/Users/me/.config/revv/cache-sa.json"
+							value={getSettings()?.cache?.credentialsPath ?? ''}
+							oninput={(e) => {
+								void updateSettings({
+									cache: { credentialsPath: (e.target as HTMLInputElement).value },
+								});
+							}}
+						/>
+					</div>
+
+					<div class="flex items-center gap-3 pt-1">
+						<Button
+							variant="outline"
+							size="sm"
+							onclick={testCacheConnection}
+							disabled={cacheTestRunning}
+						>
+							{#if cacheTestRunning}
+								<Loader2 size={14} class="animate-spin" />
+							{/if}
+							Test connection
+						</Button>
+						{#if cacheTestState}
+							<span
+								class="probe-result"
+								class:probe-result--ok={cacheTestState.healthy}
+								class:probe-result--err={!cacheTestState.healthy}
+							>
+								{cacheTestState.detail}
+							</span>
+						{/if}
+					</div>
+				</div>
+
+				<!-- Behavior -->
+				<div class="settings-subgroup">
+					<h3 class="settings-subgroup-heading">Behavior</h3>
+
+					<div class="settings-row">
+						<div class="settings-row-info">
+							<p class="settings-row-label">Upload completed walkthroughs</p>
+							<p class="settings-row-hint">
+								Push your generations to the bucket so teammates can hydrate from them.
+							</p>
+						</div>
+						<Switch
+							checked={getSettings()?.cache?.uploadsEnabled ?? true}
+							onCheckedChange={(v) => {
+								void updateSettings({ cache: { uploadsEnabled: v } });
+							}}
+							aria-label="Upload completed walkthroughs"
+						/>
+					</div>
+
+					<div class="settings-row">
+						<div class="settings-row-info">
+							<p class="settings-row-label">Hydrate from team cache</p>
+							<p class="settings-row-hint">
+								On a cache hit, skip the agent and load the teammate's snapshot.
+							</p>
+						</div>
+						<Switch
+							checked={getSettings()?.cache?.downloadsEnabled ?? true}
+							onCheckedChange={(v) => {
+								void updateSettings({ cache: { downloadsEnabled: v } });
+							}}
+							aria-label="Hydrate from team cache"
+						/>
+					</div>
+				</div>
+			</section>
+
 			<!-- Preferences -->
 			<section id="section-preferences" class="settings-section">
-				<h2 class="settings-section-heading">Preferences</h2>
-				<div class="space-y-5">
-			<!-- Theme -->
-			<div class="flex items-center justify-between gap-4">
-				<div>
-					<p class="text-sm text-text-primary">Theme</p>
-					<p class="text-xs text-text-muted">Light, dark, or follow system preference.</p>
-				</div>
-					<div class="flex items-center gap-1 rounded-md border border-border-subtle bg-bg-elevated p-0.5 w-fit">
+				<h2 class="section-head-title">Preferences</h2>
+
+				<div class="settings-subgroup">
+					<h3 class="settings-subgroup-heading">Appearance</h3>
+
+					<div class="settings-row">
+						<div class="settings-row-info">
+							<p class="settings-row-label">Theme</p>
+							<p class="settings-row-hint">Light, dark, or follow system preference.</p>
+						</div>
+						<div class="flex items-center gap-1 rounded-md border border-border-subtle bg-bg-elevated p-0.5 w-fit">
 							{#each themeOptions as opt (opt.value)}
 								<button
 									type="button"
@@ -678,7 +870,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 									class:bg-bg-primary={getThemePreference() === opt.value}
 									class:text-text-primary={getThemePreference() === opt.value}
 									class:text-text-muted={getThemePreference() !== opt.value}
-							onclick={() => setThemePreference(opt.value)}
+									onclick={() => setThemePreference(opt.value)}
 								>
 									<opt.icon size={11} />
 									{opt.label}
@@ -686,186 +878,197 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 							{/each}
 						</div>
 					</div>
-
-			<!-- Sync interval -->
-			<div class="flex items-center justify-between gap-4">
-				<div>
-					<p class="text-sm text-text-primary">Sync interval</p>
-					<p class="text-xs text-text-muted">How often Revv polls GitHub for new PRs.</p>
 				</div>
-				<Select.Root
-					type="single"
-					value={String(getSettings()?.autoFetchInterval ?? 5)}
-					onValueChange={(v) => {
-						if (v) void updateSettings({ autoFetchInterval: Number(v) });
-					}}
-				>
-					<Select.Trigger class="w-36 text-xs">
-						{intervalOptions.find((o) => o.value === (getSettings()?.autoFetchInterval ?? 5))?.label ?? '5 minutes'}
-					</Select.Trigger>
-					<Select.Content>
-						{#each intervalOptions as opt (opt.value)}
-							<Select.Item value={String(opt.value)} class="text-xs">{opt.label}</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
-			</div>
 
-			</div>
+				<div class="settings-subgroup">
+					<h3 class="settings-subgroup-heading">Sync</h3>
+
+					<div class="settings-row">
+						<div class="settings-row-info">
+							<p class="settings-row-label">Sync interval</p>
+							<p class="settings-row-hint">How often Revv polls GitHub for new PRs.</p>
+						</div>
+						<Select.Root
+							type="single"
+							value={String(getSettings()?.autoFetchInterval ?? 5)}
+							onValueChange={(v) => {
+								if (v) void updateSettings({ autoFetchInterval: Number(v) });
+							}}
+						>
+							<Select.Trigger class="w-40 text-xs">
+								{intervalOptions.find((o) => o.value === (getSettings()?.autoFetchInterval ?? 5))?.label ?? '5 minutes'}
+							</Select.Trigger>
+							<Select.Content>
+								{#each intervalOptions as opt (opt.value)}
+									<Select.Item value={String(opt.value)} class="text-xs">{opt.label}</Select.Item>
+								{/each}
+							</Select.Content>
+						</Select.Root>
+					</div>
+				</div>
 			</section>
 
 			<!-- Onboarding -->
 			<section id="section-onboarding" class="settings-section">
-				<h2 class="settings-section-heading">Onboarding</h2>
-				<div class="flex items-center justify-between gap-4">
-					<div>
-						<p class="text-sm text-text-primary">Replay onboarding</p>
-						<p class="text-xs text-text-muted">Walk through the setup flow again from the beginning.</p>
+				<h2 class="section-head-title">Onboarding</h2>
+
+				<div class="settings-subgroup">
+					<div class="settings-row">
+						<div class="settings-row-info">
+							<p class="settings-row-label">Replay onboarding</p>
+							<p class="settings-row-hint">Walk through the setup flow again from the beginning.</p>
+						</div>
+						<Button
+							variant="outline"
+							size="sm"
+							onclick={handleReplayOnboarding}
+							disabled={replaying}
+							class="flex shrink-0 items-center gap-1.5 text-xs"
+						>
+							{#if replaying}
+								<Loader2 size={12} class="animate-spin" />
+								Starting…
+							{:else}
+								<RotateCcw size={12} />
+								Replay
+							{/if}
+						</Button>
 					</div>
-					<Button
-						variant="outline"
-						size="sm"
-						onclick={handleReplayOnboarding}
-						disabled={replaying}
-						class="flex shrink-0 items-center gap-1.5 text-xs"
-					>
-						{#if replaying}
-							<Loader2 size={12} class="animate-spin" />
-							Starting…
-						{:else}
-							<RotateCcw size={12} />
-							Replay
-						{/if}
-					</Button>
 				</div>
 			</section>
 
 			<!-- Updates (Tauri only) -->
-				{#if runningInTauri}
-					<section id="section-updates" class="settings-section">
-						<h2 class="settings-section-heading">Updates</h2>
-						<div class="space-y-4">
-							<div class="flex items-center justify-between">
-								<div>
-									<p class="text-sm text-text-primary">Current build</p>
-									<p class="text-xs text-text-muted">Git commit snapshotted when this build was produced.</p>
-								</div>
-								<span class="font-mono text-sm text-text-secondary">{commitHash}</span>
+			{#if runningInTauri}
+				<section id="section-updates" class="settings-section">
+					<h2 class="section-head-title">Updates</h2>
+
+					<div class="settings-subgroup">
+						<div class="settings-row">
+							<div class="settings-row-info">
+								<p class="settings-row-label">Current build</p>
+								<p class="settings-row-hint">Git commit snapshotted when this build was produced.</p>
 							</div>
-							<div class="border-t border-border-subtle"></div>
-							<div class="flex items-center justify-between">
-								<div>
-									<p class="text-sm text-text-primary">Check for updates now</p>
-									<p class="text-xs text-text-muted">Revv checks automatically every hour.</p>
-								</div>
-								<Button
-									variant="outline"
-									size="sm"
-									onclick={handleCheckNow}
-									disabled={checking}
-									class="flex items-center gap-1.5 text-xs hover:border-accent hover:text-text-primary"
-								>
-									{#if checking}
-										<Loader2 size={12} class="animate-spin" />
-										Checking…
-									{:else}
-										<Download size={12} />
-										Check now
-									{/if}
-								</Button>
-							</div>
+							<span class="font-mono text-xs text-text-secondary">{commitHash}</span>
 						</div>
-					</section>
-				{/if}
+
+						<div class="settings-row">
+							<div class="settings-row-info">
+								<p class="settings-row-label">Check for updates now</p>
+								<p class="settings-row-hint">Revv checks automatically every hour.</p>
+							</div>
+							<Button
+								variant="outline"
+								size="sm"
+								onclick={handleCheckNow}
+								disabled={checking}
+								class="flex items-center gap-1.5 text-xs hover:border-accent hover:text-text-primary"
+							>
+								{#if checking}
+									<Loader2 size={12} class="animate-spin" />
+									Checking…
+								{:else}
+									<Download size={12} />
+									Check now
+								{/if}
+							</Button>
+						</div>
+					</div>
+				</section>
+			{/if}
 
 		<!-- Danger Zone -->
 		{#if getUser()}
 				<section id="section-danger" class="settings-section danger-section">
-					<h2 class="settings-section-heading danger-heading">
-						<TriangleAlert size={11} />
+					<h2 class="section-head-title section-head-title--danger">
+						<TriangleAlert size={14} />
 						Danger Zone
 					</h2>
 
 					<!-- Tracked repositories -->
-					{#if getRepositories().length === 0}
-						<p class="text-xs text-text-muted">No repositories tracked yet.</p>
-					{:else}
-						<ul class="repo-list" role="list">
-							{#each getRepositories() as repo (repo.id)}
-								<li class="repo-list-item">
-									<span class="text-sm text-text-primary">{repo.fullName}</span>
-									<button
-										type="button"
-										class="repo-delete-btn"
-										disabled={removingRepoId === repo.id}
-										onclick={() => handleDeleteRepo(repo.id)}
-										aria-label="Remove {repo.fullName}"
-									>
-										{#if removingRepoId === repo.id}
-											<Loader2 size={12} class="animate-spin" />
-										{:else}
-											<Trash2 size={12} />
-										{/if}
-									</button>
-								</li>
-							{/each}
-						</ul>
-					{/if}
+					<div class="settings-subgroup">
+						<h3 class="settings-subgroup-heading">Tracked repositories</h3>
 
-					<!-- Separator -->
-					<div class="border-t border-border-subtle mt-4 pt-4"></div>
-
-					<!-- Remove account -->
-					<div class="flex items-center justify-between gap-4">
-						<div>
-							<p class="text-sm text-text-primary">Remove account</p>
-							<p class="text-xs text-text-muted mt-0.5">
-								Permanently deletes your account and all local data. This cannot be undone.
-							</p>
-						</div>
-						{#if !showDeleteConfirm}
-							<Button
-								variant="destructive"
-								size="sm"
-								onclick={() => (showDeleteConfirm = true)}
-								class="flex shrink-0 items-center gap-1.5 text-xs"
-							>
-								<TriangleAlert size={12} />
-								Remove account
-							</Button>
+						{#if getRepositories().length === 0}
+							<p class="text-xs text-text-muted">No repositories tracked yet.</p>
 						{:else}
-							<div class="flex items-center gap-2">
-								<Button
-									variant="ghost"
-									size="sm"
-									onclick={() => (showDeleteConfirm = false)}
-									disabled={deleting}
-									class="text-xs text-text-muted"
-								>
-									Cancel
-								</Button>
+							<ul class="repo-list" role="list">
+								{#each getRepositories() as repo (repo.id)}
+									<li class="repo-list-item">
+										<span class="text-sm text-text-primary">{repo.fullName}</span>
+										<button
+											type="button"
+											class="repo-delete-btn"
+											disabled={removingRepoId === repo.id}
+											onclick={() => handleDeleteRepo(repo.id)}
+											aria-label="Remove {repo.fullName}"
+										>
+											{#if removingRepoId === repo.id}
+												<Loader2 size={12} class="animate-spin" />
+											{:else}
+												<Trash2 size={12} />
+											{/if}
+										</button>
+									</li>
+								{/each}
+							</ul>
+						{/if}
+					</div>
+
+					<!-- Account removal -->
+					<div class="settings-subgroup">
+						<h3 class="settings-subgroup-heading">Account</h3>
+
+						<div class="settings-row">
+							<div class="settings-row-info">
+								<p class="settings-row-label">Remove account</p>
+								<p class="settings-row-hint">
+									Permanently deletes your account and all local data. This cannot be undone.
+								</p>
+							</div>
+							{#if !showDeleteConfirm}
 								<Button
 									variant="destructive"
 									size="sm"
-									onclick={handleRemoveAccount}
-									disabled={deleting}
-									class="flex items-center gap-1.5 text-xs"
+									onclick={() => (showDeleteConfirm = true)}
+									class="flex shrink-0 items-center gap-1.5 text-xs"
 								>
-									{#if deleting}
-										<Loader2 size={12} class="animate-spin" />
-										Removing…
-									{:else}
-										<TriangleAlert size={12} />
-										Confirm remove
-									{/if}
+									<TriangleAlert size={12} />
+									Remove account
 								</Button>
-							</div>
+							{:else}
+								<div class="flex items-center gap-2">
+									<Button
+										variant="ghost"
+										size="sm"
+										onclick={() => (showDeleteConfirm = false)}
+										disabled={deleting}
+										class="text-xs text-text-muted"
+									>
+										Cancel
+									</Button>
+									<Button
+										variant="destructive"
+										size="sm"
+										onclick={handleRemoveAccount}
+										disabled={deleting}
+										class="flex items-center gap-1.5 text-xs"
+									>
+										{#if deleting}
+											<Loader2 size={12} class="animate-spin" />
+											Removing…
+										{:else}
+											<TriangleAlert size={12} />
+											Confirm remove
+										{/if}
+									</Button>
+								</div>
+							{/if}
+						</div>
+
+						{#if deleteError}
+							<p class="mt-2 text-xs text-danger">{deleteError}</p>
 						{/if}
 					</div>
-					{#if deleteError}
-						<p class="mt-2 text-xs text-danger">{deleteError}</p>
-					{/if}
-
 				</section>
 			{/if}
 				<!-- Spacer so the last section can scroll fully to the top -->
@@ -898,20 +1101,21 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 		display: flex;
 		flex-direction: row;
 		width: 100%;
-		max-width: 920px;
-		height: 640px;
-		max-height: 85vh;
-		border-radius: 14px;
+		max-width: 1080px;
+		height: 760px;
+		max-height: 90vh;
+		border-radius: 16px;
 		overflow: hidden;
 		outline: none;
 		background: var(--color-bg-primary);
-		backdrop-filter: blur(16px) saturate(1.4);
-		-webkit-backdrop-filter: blur(16px) saturate(1.4);
+		backdrop-filter: blur(20px) saturate(1.4);
+		-webkit-backdrop-filter: blur(20px) saturate(1.4);
 		border: 1px solid var(--color-glass-border);
 		box-shadow:
-			0 24px 64px rgba(0, 0, 0, 0.35),
-			0 4px 16px rgba(0, 0, 0, 0.2),
-			inset 0 0.5px 0 0 rgba(255, 255, 255, 0.06);
+			0 32px 80px rgba(0, 0, 0, 0.4),
+			0 8px 24px rgba(0, 0, 0, 0.18),
+			0 0 0 1px rgba(255, 255, 255, 0.02),
+			inset 0 0.5px 0 0 rgba(255, 255, 255, 0.08);
 	}
 
 	:global(.settings-modal[data-state='open']) {
@@ -922,7 +1126,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 	.settings-sidebar {
 		display: flex;
 		flex-direction: column;
-		width: 192px;
+		width: 220px;
 		flex-shrink: 0;
 		border-right: 1px solid var(--color-border-subtle);
 		background: var(--color-bg-primary);
@@ -931,25 +1135,29 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 	}
 
 	.settings-sidebar-header {
-		padding: 20px 16px 12px;
+		display: flex;
+		align-items: center;
+		padding: 22px 20px;
 		border-bottom: 1px solid var(--color-border-subtle);
 	}
 
 	.settings-title {
-		font-size: 14px;
-		font-weight: 600;
+		font-family: "Newsreader", Georgia, serif;
+		font-size: 22px;
+		font-weight: 500;
+		letter-spacing: -0.015em;
+		line-height: 1;
 		color: var(--color-text-primary);
-		letter-spacing: -0.01em;
 	}
 
 	.settings-nav {
 		flex: 1;
 		list-style: none;
 		margin: 0;
-		padding: 10px 8px;
+		padding: 14px 8px;
 		display: flex;
 		flex-direction: column;
-		gap: 2px;
+		gap: 1px;
 		overflow-y: auto;
 	}
 
@@ -958,10 +1166,9 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 		align-items: center;
 		gap: 10px;
 		width: 100%;
-		padding: 8px 10px;
+		padding: 8px 12px;
 		border: none;
-		border-left: 2px solid transparent;
-		border-radius: 0 6px 6px 0;
+		border-radius: 6px;
 		background: transparent;
 		color: var(--color-text-muted);
 		cursor: pointer;
@@ -969,10 +1176,32 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 		font-size: 13px;
 		font-weight: 500;
 		text-align: left;
+		position: relative;
 		transition:
 			color var(--duration-quick) var(--ease-out-expo),
-			background-color var(--duration-quick) var(--ease-out-expo),
-			border-color var(--duration-quick) var(--ease-out-expo);
+			background-color var(--duration-quick) var(--ease-out-expo);
+	}
+
+	.settings-nav-item::before {
+		content: "";
+		position: absolute;
+		left: -8px;
+		top: 50%;
+		transform: translateY(-50%) scaleY(0);
+		width: 2px;
+		height: 18px;
+		background: var(--color-accent);
+		border-radius: 0 2px 2px 0;
+		transition: transform var(--duration-quick) var(--ease-out-expo);
+	}
+
+	:global(.settings-nav-icon) {
+		flex-shrink: 0;
+		opacity: 0.85;
+	}
+
+	.settings-nav-label {
+		font-size: 13px;
 	}
 
 	.settings-nav-item:hover {
@@ -983,7 +1212,10 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 	.settings-nav-item--active {
 		color: var(--color-text-primary);
 		background: var(--color-bg-tertiary);
-		border-left-color: var(--color-accent);
+	}
+
+	.settings-nav-item--active::before {
+		transform: translateY(-50%) scaleY(1);
 	}
 
 	.settings-nav-item--danger:hover {
@@ -994,20 +1226,23 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 	.settings-nav-item--danger.settings-nav-item--active {
 		color: var(--color-danger);
 		background: color-mix(in srgb, var(--color-danger) 10%, transparent);
-		border-left-color: var(--color-danger);
+	}
+
+	.settings-nav-item--danger.settings-nav-item--active::before {
+		background: var(--color-danger);
 	}
 
 	.settings-sidebar-user {
 		display: flex;
 		align-items: center;
-		gap: 8px;
-		padding: 12px 16px;
+		gap: 10px;
+		padding: 14px 20px;
 		border-top: 1px solid var(--color-border-subtle);
 	}
 
 	.settings-sidebar-avatar {
-		width: 20px;
-		height: 20px;
+		width: 22px;
+		height: 22px;
 		border-radius: 50%;
 		object-fit: cover;
 		flex-shrink: 0;
@@ -1022,11 +1257,12 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 	}
 
 	.settings-sidebar-username {
-		font-size: 11px;
-		color: var(--color-text-muted);
+		font-size: 12px;
+		color: var(--color-text-secondary);
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+		min-width: 0;
 	}
 
 	/* ── Right content area ── */
@@ -1038,18 +1274,142 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 		scroll-behavior: smooth;
 		background: var(--color-bg-secondary);
 	}
+
 	.settings-section {
-		padding: 24px 28px;
+		padding: 32px 36px 28px;
 		border-bottom: 1px solid var(--color-border-subtle);
 	}
 
-	.settings-section-heading {
-		font-size: 10px;
+	.section-head-title {
+		font-family: "Newsreader", Georgia, serif;
+		font-size: 20px;
+		font-weight: 500;
+		letter-spacing: -0.01em;
+		line-height: 1;
+		color: var(--color-text-primary);
+		margin-bottom: 22px;
+	}
+
+	.section-head-title--danger {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		color: var(--color-danger);
+	}
+
+	/* Sub-group inside a section (e.g. "Connection", "Behavior") */
+	.settings-subgroup {
+		display: flex;
+		flex-direction: column;
+		gap: 14px;
+		padding-top: 18px;
+		margin-top: 18px;
+		border-top: 1px solid var(--color-border-subtle);
+	}
+
+	.settings-subgroup:first-of-type {
+		padding-top: 0;
+		margin-top: 0;
+		border-top: none;
+	}
+
+	.settings-subgroup-heading {
+		font-size: 11px;
 		font-weight: 600;
-		text-transform: uppercase;
-		letter-spacing: 0.07em;
+		color: var(--color-text-secondary);
+		letter-spacing: -0.005em;
+	}
+
+	/* Free-floating descriptive paragraph under a section heading */
+	.section-blurb {
+		font-size: 12px;
+		line-height: 1.5;
 		color: var(--color-text-muted);
-		margin-bottom: 16px;
+		max-width: 64ch;
+		margin-bottom: 4px;
+	}
+
+	/* Row: label/description on the left, control on the right */
+	.settings-row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 16px;
+	}
+
+	.settings-row-info {
+		min-width: 0;
+		flex: 1;
+	}
+
+	.settings-row-label {
+		font-size: 13px;
+		color: var(--color-text-primary);
+	}
+
+	.settings-row-hint {
+		font-size: 11px;
+		color: var(--color-text-muted);
+		margin-top: 2px;
+		line-height: 1.45;
+	}
+
+	/* Stacked field: label above, input below (full width) */
+	.settings-field {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
+
+	.settings-field-label {
+		font-size: 12px;
+		font-weight: 500;
+		color: var(--color-text-secondary);
+	}
+
+	.settings-field-hint {
+		font-size: 11px;
+		color: var(--color-text-muted);
+		line-height: 1.45;
+	}
+
+	/* ── Status line (AI status indicator) ── */
+	.status-line {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+		font-size: 12px;
+		color: var(--color-text-secondary);
+	}
+
+	.status-line-dot {
+		display: inline-block;
+		width: 6px;
+		height: 6px;
+		border-radius: 50%;
+		flex-shrink: 0;
+	}
+
+	.status-line-dot--success {
+		background: var(--color-success);
+	}
+
+	.status-line-dot--warning {
+		background: var(--color-warning);
+	}
+
+	/* ── Probe result (test connection feedback) ── */
+	.probe-result {
+		font-size: 12px;
+		color: var(--color-text-muted);
+	}
+
+	.probe-result--ok {
+		color: var(--color-success);
+	}
+
+	.probe-result--err {
+		color: var(--color-danger);
 	}
 
 	/* ── Settings-scoped input refinements ── */
@@ -1078,16 +1438,15 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 		box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 15%, transparent);
 	}
 
-	/* Number input: match the select style */
+	/* Inputs: match the select style */
 	:global(.settings-modal [data-slot="input"]) {
-		border: 1px solid transparent;
+		border: 1px solid var(--color-border-subtle);
 		background: var(--color-bg-primary);
 		font-size: 13px;
 		height: 34px;
 		border-radius: 8px;
 		box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-		text-align: center;
-		font-variant-numeric: tabular-nums;
+		text-align: left;
 		transition:
 			background-color var(--duration-quick) var(--ease-out-expo),
 			border-color var(--duration-quick) var(--ease-out-expo),
@@ -1095,7 +1454,6 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 	}
 
 	:global(.settings-modal [data-slot="input"]:hover) {
-		background: var(--color-bg-elevated);
 		border-color: var(--color-border);
 	}
 
@@ -1103,6 +1461,44 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 		border-color: var(--color-accent);
 		box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 15%, transparent);
 		background: var(--color-bg-primary);
+	}
+
+	/* Number inputs get centered, tabular numerals (Max turns, etc.) */
+	:global(.settings-modal [data-slot="input"][type="number"]) {
+		text-align: center;
+		font-variant-numeric: tabular-nums;
+	}
+
+	/* Textarea: match input visuals */
+	:global(.settings-modal textarea.settings-textarea) {
+		width: 100%;
+		border: 1px solid var(--color-border-subtle);
+		background: var(--color-bg-primary);
+		font-size: 12px;
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		padding: 10px 12px;
+		border-radius: 8px;
+		box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+		color: var(--color-text-primary);
+		resize: vertical;
+		transition:
+			background-color var(--duration-quick) var(--ease-out-expo),
+			border-color var(--duration-quick) var(--ease-out-expo),
+			box-shadow var(--duration-quick) var(--ease-out-expo);
+	}
+
+	:global(.settings-modal textarea.settings-textarea:hover) {
+		border-color: var(--color-border);
+	}
+
+	:global(.settings-modal textarea.settings-textarea:focus) {
+		border-color: var(--color-accent);
+		box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 15%, transparent);
+		outline: none;
+	}
+
+	:global(.settings-modal textarea.settings-textarea::placeholder) {
+		color: var(--color-text-muted);
 	}
 
 	/* Hide number input spinners for a cleaner look */
@@ -1120,13 +1516,6 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 	/* ── Danger Zone ── */
 	.danger-section {
 		border-bottom: none;
-	}
-
-	.danger-heading {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		color: var(--color-danger);
 	}
 
 	.repo-list {

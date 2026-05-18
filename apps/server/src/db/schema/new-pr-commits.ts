@@ -31,10 +31,7 @@ export const newPrCommits = sqliteTable(
     createdAt: text("created_at").notNull(),
   },
   (t) => ({
-    sessionShaUnique: uniqueIndex("new_pr_commits_session_sha_unique").on(
-      t.sessionId,
-      t.commitSha,
-    ),
+    sessionShaUnique: uniqueIndex("new_pr_commits_session_sha_unique").on(t.sessionId, t.commitSha),
     sessionIdx: index("new_pr_commits_session_idx").on(t.sessionId),
   }),
 );

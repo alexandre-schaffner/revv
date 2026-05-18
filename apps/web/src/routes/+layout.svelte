@@ -128,7 +128,12 @@ $effect(() => {
 
 async function hydrate() {
   // Load cached data first (instant UI)
-  await Promise.all([prs.fetchPrs(), prs.fetchRepos(), prs.fetchPinnedPrs(), settings.fetchSettings()]);
+  await Promise.all([
+    prs.fetchPrs(),
+    prs.fetchRepos(),
+    prs.fetchPinnedPrs(),
+    settings.fetchSettings(),
+  ]);
 
   // Then kick off a live sync from GitHub
   const token = auth.getToken();

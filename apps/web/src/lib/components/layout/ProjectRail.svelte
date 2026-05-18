@@ -1,9 +1,9 @@
 <script lang="ts">
-import type { Repository } from "@revv/shared";
 import { Plus } from "@lucide/svelte";
-import * as Collapsible from "$lib/components/ui/collapsible";
+import type { Repository } from "@revv/shared";
 import RepoAvatarButton from "$lib/components/sidebar/RepoAvatarButton.svelte";
 import UserMenu from "$lib/components/sidebar/UserMenu.svelte";
+import * as Collapsible from "$lib/components/ui/collapsible";
 import * as Tooltip from "$lib/components/ui/tooltip/index.js";
 import { getRepositories, getSelectedRepoId } from "$lib/stores/prs.svelte";
 import {
@@ -52,6 +52,7 @@ function handleAddRepo(): void {
 		{#each ownerGroups as group (group.owner)}
 			{@const collapsed = isOwnerCollapsed(group.owner)}
 			{@const hasActiveChild = group.repos.some((r) => r.id === activeRepoId)}
+			{@const isMulti = group.repos.length > 1}
 			<!-- Collapsible drives ARIA (aria-expanded/controls), keyboard,
 			     and the data-state attributes that power the open/close
 			     height animation below. We control `open` via our own
@@ -63,6 +64,7 @@ function handleAddRepo(): void {
 				<div
 					class="folder-pill"
 					class:folder-pill--active={collapsed && hasActiveChild}
+					class:folder-pill--grouped={!collapsed}
 					role="group"
 					aria-label={group.owner}
 				>
@@ -90,9 +92,11 @@ function handleAddRepo(): void {
 													{group.owner.slice(0, 1).toUpperCase()}
 												</span>
 											{/if}
-											<span class="folder-pill-count" aria-hidden="true">
-												{group.repos.length}
-											</span>
+											{#if isMulti}
+												<span class="folder-pill-count" aria-hidden="true">
+													{group.repos.length}
+												</span>
+											{/if}
 										</span>
 									{:else}
 										{#if group.avatarUrl}
@@ -112,7 +116,7 @@ function handleAddRepo(): void {
 							{/snippet}
 						</Tooltip.Trigger>
 						<Tooltip.Content side="right" sideOffset={8}>
-							{group.owner} · {group.repos.length} repos
+							{group.owner} · {group.repos.length} {group.repos.length === 1 ? 'repo' : 'repos'}
 						</Tooltip.Content>
 					</Tooltip.Root>
 
@@ -167,7 +171,7 @@ function handleAddRepo(): void {
 		display: flex;
 		flex-direction: column;
 		align-items: center;
-		gap: 4px;
+		gap: 6px;
 		flex: 1;
 		min-height: 0;
 		overflow-y: auto;
@@ -186,12 +190,15 @@ function handleAddRepo(): void {
 	}
 
 	/* The folder pill: a single container holding the trigger header
-	   above the (animated) Collapsible.Content. The pill itself has
-	   constant width, bg, radius, and padding in both states — only the
-	   Content's height animates. Keeping every other property static
-	   eliminates the layered-transition jitter that comes from
-	   transitioning padding/radius/trigger-size at the same time as the
-	   bits-ui height keyframes. */
+	   above the (animated) Collapsible.Content. Width / radius stay
+	   constant in both states — only the Content's height and the
+	   pill's background animate. Default is transparent so a single
+	   avatar simply floats on the rail; the bg-tertiary panel only
+	   shows when the pill is doing real grouping work (expanded,
+	   multi-repo). Radii are tuned on a concentric scale:
+	     avatar 8 → trigger 10 → grouped panel 12
+	   so the three rounded shapes stay visually in sync at every
+	   nesting level. */
 	.folder-pill {
 		position: relative;
 		display: flex;
@@ -199,9 +206,20 @@ function handleAddRepo(): void {
 		align-items: center;
 		width: 40px;
 		padding: 0;
+		background: transparent;
+		border-radius: 12px;
+		transition: background-color var(--duration-quick) var(--ease-out-expo),
+			box-shadow var(--duration-quick) var(--ease-out-expo);
+	}
+
+	/* Expanded group framing — applied uniformly whether the group
+	   wraps one repo or many, so single-owner and multi-owner pills
+	   read as the same visual primitive. The soft bg-tertiary fill +
+	   1 px inset hairline reads as a carved compartment, not a
+	   stamped card. Collapsed groups skip this entirely. */
+	.folder-pill--grouped {
 		background: var(--color-bg-tertiary);
-		border-radius: 14px;
-		margin: 2px 0;
+		box-shadow: inset 0 0 0 1px var(--color-border-subtle);
 	}
 
 	/* Active-bar indicator when the selected repo lives inside a
@@ -222,7 +240,8 @@ function handleAddRepo(): void {
 	   in both states so the gradient avatar (with or without the count chip)
 	   doesn't cause the pill above it to jump. Only background-color
 	   transitions on hover; nothing about the trigger itself animates
-	   during open/close. */
+	   during open/close. Radius 10 pairs concentrically with the 8 px
+	   avatar inside and the 12 px grouped panel that may wrap it. */
 	:global(.folder-pill-trigger) {
 		display: inline-flex;
 		align-items: center;
@@ -231,7 +250,7 @@ function handleAddRepo(): void {
 		height: 40px;
 		padding: 0;
 		border: none;
-		border-radius: 9px;
+		border-radius: 10px;
 		background: transparent;
 		color: var(--color-accent);
 		cursor: pointer;
@@ -247,9 +266,7 @@ function handleAddRepo(): void {
 		outline-offset: -2px;
 	}
 
-	/* Collapsed-trigger inner: 28×28 avatar with the count chip. The
-	   chip's outer border matches the pill bg so it visually punches
-	   through the avatar's corner. */
+	/* Collapsed-trigger inner: 28×28 avatar with the count chip. */
 	.folder-pill-header {
 		position: relative;
 		display: inline-flex;
@@ -257,14 +274,14 @@ function handleAddRepo(): void {
 		justify-content: center;
 		width: 28px;
 		height: 28px;
-		border-radius: 7px;
+		border-radius: 8px;
 		background: var(--color-bg-secondary);
 	}
 
 	.folder-pill-avatar {
 		width: 28px;
 		height: 28px;
-		border-radius: 7px;
+		border-radius: 8px;
 		object-fit: cover;
 		display: block;
 	}
@@ -287,22 +304,47 @@ function handleAddRepo(): void {
 		background: var(--color-bg-secondary);
 	}
 
+	/* Count chip — a raised badge that sits on the avatar's bottom-right
+	   corner, signaling "N repos hide behind this owner." A 2 px ring
+	   in the rail bg colour gives the chip its own perimeter, then a
+	   1 px hairline + subtle shadow lifts it off the gradient avatar
+	   without competing for attention. Flexbox centering avoids the
+	   line-height-vs-height baseline drift that pushed the glyph
+	   off-center inside the box. */
 	.folder-pill-count {
 		position: absolute;
-		right: -4px;
-		bottom: -4px;
+		right: -5px;
+		bottom: -5px;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
 		min-width: 16px;
-		height: 14px;
+		height: 16px;
 		padding: 0 4px;
 		border-radius: 8px;
-		background: var(--color-bg-secondary);
-		border: 1.5px solid var(--color-bg-tertiary);
+		background: var(--color-bg-elevated);
+		box-shadow: 0 0 0 2px var(--color-bg-secondary),
+			inset 0 0 0 1px var(--color-border-subtle),
+			0 1px 2px rgba(42, 40, 37, 0.06);
 		color: var(--color-text-secondary);
 		font-size: 9px;
 		font-weight: 600;
 		font-variant-numeric: tabular-nums;
-		line-height: 11px;
-		text-align: center;
+		line-height: 1;
+	}
+
+	/* When the active repo lives inside this collapsed folder, hint at
+	   it by tinting the chip toward the accent. Keeps the rail's
+	   "where am I?" answer scannable without resorting to colour-on
+	   every pill. Foreground uses --primary-foreground (white in both
+	   themes) rather than --color-bg-primary, which inverts in dark
+	   mode and would render black text on the accent. */
+	.folder-pill--active .folder-pill-count {
+		background: var(--color-accent);
+		color: var(--color-primary-foreground);
+		box-shadow: 0 0 0 2px var(--color-bg-secondary),
+			inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 70%, #000),
+			0 1px 2px rgba(15, 118, 110, 0.18);
 	}
 
 	/* Collapsible.Content animation. bits-ui injects the natural content
@@ -348,8 +390,8 @@ function handleAddRepo(): void {
 		display: flex;
 		flex-direction: column;
 		align-items: center;
-		gap: 4px;
-		padding: 6px 0;
+		gap: 2px;
+		padding: 4px 0;
 	}
 
 	/* In-pill active ring: the default RepoAvatarButton ring is a
@@ -383,13 +425,14 @@ function handleAddRepo(): void {
 		height: 40px;
 		padding: 0;
 		border: none;
-		border-radius: 9px;
+		border-radius: 10px;
 		background: transparent;
 		color: var(--color-text-muted);
 		cursor: pointer;
 		transition:
 			background-color var(--duration-snap),
-			color var(--duration-snap);
+			color var(--duration-snap),
+			border-color var(--duration-snap);
 	}
 
 	.rail-action:hover {
@@ -398,13 +441,14 @@ function handleAddRepo(): void {
 	}
 
 	.rail-action--add {
-		margin-top: 8px;
+		margin-top: 4px;
 		border: 1px dashed var(--color-border);
 	}
 
 	.rail-action--add:hover {
-		border-color: var(--color-border-focus, var(--color-accent));
-		color: var(--color-accent, var(--color-text-primary));
+		border-color: var(--color-accent);
+		background: color-mix(in srgb, var(--color-accent) 6%, transparent);
+		color: var(--color-accent);
 	}
 
 	.user-slot {

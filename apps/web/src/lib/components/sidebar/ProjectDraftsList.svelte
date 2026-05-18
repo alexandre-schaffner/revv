@@ -16,10 +16,12 @@ let { repoId }: Props = $props();
 // sessions. The `repoId` prop is read in the void below so the param
 // isn't flagged as unused; once the store lands, this is replaced by
 // a per-repo derived against new-pr-sessions.svelte.ts.
-const sessions = $derived<{ id: string; title: string }[]>((() => {
-  void repoId;
-  return [];
-})());
+const sessions = $derived<{ id: string; title: string }[]>(
+  (() => {
+    void repoId;
+    return [];
+  })(),
+);
 </script>
 
 {#if sessions.length > 0}

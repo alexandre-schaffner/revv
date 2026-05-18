@@ -15,8 +15,8 @@ import {
   Settings,
   Trash2,
   Upload,
-  X,
   Wand,
+  X,
 } from "@lucide/svelte";
 import { tick } from "svelte";
 import { cubicIn, cubicOut } from "svelte/easing";
@@ -221,7 +221,6 @@ const recentToolCalls = $derived(
     : [],
 );
 
-let messagesEl: HTMLDivElement | undefined = $state();
 let diffOpen = $state<{
   sha: string;
   subject: string;
@@ -248,34 +247,6 @@ let newBranchDialogOpen = $state(false);
 let newBranchDialogMode = $state<"input" | "confirm-overwrite">("input");
 let newBranchValue = $state("");
 let newBranchInputEl: HTMLInputElement | null = $state(null);
-
-// Auto-scroll-on-new-content for chat: if the user is at the bottom, follow
-// new messages/streaming chunks. If they've scrolled up to read earlier
-// content, leave them alone (ConversationScrollButton surfaces a "jump to
-// latest" affordance). On PR switch we just land at the bottom — chat
-// history grows downward, so the newest message is the natural default.
-let atBottom = $state(true);
-
-// PR switch → scroll to bottom on next tick.
-$effect(() => {
-  void prId;
-  if (!messagesEl) return;
-  void tick().then(() => {
-    if (!messagesEl) return;
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-  });
-});
-
-// Auto-scroll on new content, only if user is already at the bottom.
-$effect(() => {
-  void items.length;
-  void isStreaming;
-  if (!messagesEl || !atBottom) return;
-  void tick().then(() => {
-    if (!messagesEl) return;
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-  });
-});
 
 // Hydrate on initial mount AND on PR switch. The panel is mounted once in
 // AppShell and just gets a new `prId` prop on navigation, so this $effect
@@ -631,8 +602,7 @@ function activitiesForTurn(
 
 	<!-- Messages -->
 	<Conversation
-		bind:scrollEl={messagesEl}
-		bind:isAtBottom={atBottom}
+		resetKey={prId}
 		innerClass="min-h-0"
 	>
 		{#if items.length === 0 && !error}

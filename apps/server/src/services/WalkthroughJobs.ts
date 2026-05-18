@@ -28,14 +28,18 @@
 // here anymore (doctrine invariant #2).
 
 import type {
+  GenerationProviderConfig,
   Walkthrough,
   WalkthroughStatus,
   WalkthroughStreamEvent,
   WalkthroughTokenUsage,
 } from "@revv/shared";
+import { eq } from "drizzle-orm";
 import { Cause, Context, Effect, Fiber, Layer, Option, Ref, type Scope } from "effect";
 import { findIssuesMissingInlineComment } from "../ai/providers/walkthrough-tools";
 import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../constants";
+import { account } from "../db/schema/auth";
+import { repositories } from "../db/schema/repositories";
 import {
   type AiError,
   AiGenerationError,
@@ -53,10 +57,12 @@ import { AiService, type ContinuationContext, resolveAgent } from "./Ai";
 import { DbService } from "./Db";
 import { GitHubEtagCache } from "./GitHubEtagCache";
 import { PrContextService } from "./PrContext";
+import { RemoteWalkthroughCache } from "./RemoteWalkthroughCache";
 import { RepoCloneService } from "./RepoClone";
 import { ReviewService } from "./Review";
 import { SettingsService } from "./Settings";
 import { WalkthroughService } from "./Walkthrough";
+import { WalkthroughSnapshotImporter } from "./WalkthroughSnapshotImporter";
 import { WebSocketHub } from "./WebSocketHub";
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -292,6 +298,8 @@ export const WalkthroughJobsLive = Layer.effect(
     const reviewService = yield* ReviewService;
     const settingsService = yield* SettingsService;
     const walkthroughService = yield* WalkthroughService;
+    const remoteCache = yield* RemoteWalkthroughCache;
+    const snapshotImporter = yield* WalkthroughSnapshotImporter;
     const hub = yield* WebSocketHub;
 
     const registry = yield* Ref.make(new Map<string, ActiveJob>());
@@ -668,6 +676,13 @@ export const WalkthroughJobsLive = Layer.effect(
                       Effect.timeout("5 seconds"),
                       Effect.catchAll(() => Effect.void),
                     );
+                  // Fire-and-forget push to the team cache. Failures log
+                  // inside the service and never block job completion
+                  // (invariant #8 — commit first, broadcast second; the
+                  // cache push is broadcast-equivalent).
+                  yield* Effect.forkDaemon(
+                    remoteCache.push(job.walkthroughId).pipe(Effect.catchAll(() => Effect.void)),
+                  );
                   fanOut(job, {
                     type: "done",
                     data: {
@@ -1174,6 +1189,50 @@ export const WalkthroughJobsLive = Layer.effect(
               ? partial.modelUsed
               : freshModelUsed;
 
+        // Snapshot the AI provider config at job start. We persist this
+        // alongside `modelUsed` so a mid-job settings change cannot
+        // corrupt the recorded config — the row reflects what was
+        // actually running, and the same JSON gets exported to the
+        // remote cache as `providerConfig`.
+        const providerConfigForJob: GenerationProviderConfig = {
+          provider: agent === "opencode" ? "opencode" : "claude-agent-sdk",
+          model: modelUsed,
+          thinkingEffort: settings.aiThinkingEffort ?? null,
+          contextWindow: settings.aiContextWindow ?? null,
+          maxTurns: settings.aiMaxTurns,
+        };
+
+        // Resolve `GeneratedBy` from the OAuth account that owns the
+        // repo. Best-effort — if the account/user rows are missing we
+        // skip attribution rather than fail the job. The local
+        // walkthrough still works without these fields; the only
+        // downside is a "Unknown generator" badge in the UI.
+        const generatedBy = (() => {
+          const repoRow = db
+            .select({ accountId: repositories.accountId })
+            .from(repositories)
+            .where(eq(repositories.id, repo.id))
+            .get();
+          if (!repoRow) return undefined;
+          const acc = db
+            .select({
+              accountId: account.accountId,
+              githubLogin: account.githubLogin,
+              avatarUrl: account.avatarUrl,
+            })
+            .from(account)
+            .where(eq(account.id, repoRow.accountId))
+            .get();
+          if (!acc || !acc.githubLogin) return undefined;
+          const githubUserId = Number(acc.accountId);
+          return {
+            githubUserId: Number.isFinite(githubUserId) ? githubUserId : 0,
+            githubLogin: acc.githubLogin,
+            displayName: null,
+            avatarUrl: acc.avatarUrl ?? null,
+          };
+        })();
+
         // Idempotent row creation (upsert on the new unique index).
         // This is the sole "make a walkthrough row exist" call in the
         // codebase — MCP tool handlers never insert, they only update.
@@ -1191,6 +1250,8 @@ export const WalkthroughJobsLive = Layer.effect(
             modelUsed,
             prHeadSha: meta.headSha,
             prCommits: commits,
+            ...(generatedBy ? { generatedBy } : {}),
+            providerConfig: providerConfigForJob,
           }),
         ).pipe(
           Effect.mapError(
@@ -1201,6 +1262,60 @@ export const WalkthroughJobsLive = Layer.effect(
               }),
           ),
         );
+
+        // ── Remote cache probe ────────────────────────────────────────
+        // After the row exists (so subscribers see a consistent target)
+        // we ask the team cache whether a snapshot for this `(repo,
+        // headSha)` is available. On hit, we import + flip status to
+        // 'complete' and skip the agent fiber entirely. On miss / any
+        // failure, fall through to the usual generation path. This is
+        // safe for `partial !== null` paths too — the importer wipes
+        // any leftover partial children inside its transaction.
+        if (settings.cache.enabled && settings.cache.downloadsEnabled && partial === null) {
+          const snapshotOpt = yield* remoteCache.fetch(repo.fullName, meta.headSha);
+          if (Option.isSome(snapshotOpt)) {
+            const importResult = yield* provideDb(
+              snapshotImporter.import({
+                walkthroughId,
+                snapshot: snapshotOpt.value,
+              }),
+            ).pipe(Effect.either);
+            if (importResult._tag === "Right") {
+              yield* setStatus(walkthroughId, "complete");
+              yield* hub
+                .broadcast({
+                  type: "walkthrough:cache-hit",
+                  data: {
+                    prId: pr.id,
+                    walkthroughId,
+                    source: "remote",
+                  },
+                })
+                .pipe(
+                  Effect.timeout("5 seconds"),
+                  Effect.catchAll(() => Effect.void),
+                );
+              yield* hub
+                .broadcast({
+                  type: "walkthrough:complete",
+                  data: { prId: pr.id, walkthroughId },
+                })
+                .pipe(
+                  Effect.timeout("5 seconds"),
+                  Effect.catchAll(() => Effect.void),
+                );
+              debug(
+                "walkthrough-jobs",
+                `cache hit wt=${walkthroughId} pr=${pr.id} sha=${meta.headSha} — skipping agent`,
+              );
+              return { walkthroughId };
+            }
+            logError(
+              "walkthrough-jobs",
+              `cache import failed wt=${walkthroughId} — falling through to agent: ${importResult.left.reason}`,
+            );
+          }
+        }
 
         // On user-triggered resume, sync the stored modelUsed to current settings
         // so the DB reflects which agent is actually running this continuation.

@@ -20,6 +20,7 @@ import { Shimmer } from "$lib/components/ai/shimmer";
 import SettingsModal from "$lib/components/settings/SettingsModal.svelte";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import { Popover, PopoverContent, PopoverTrigger } from "$lib/components/ui/popover";
+import { RAIL_WIDTH } from "$lib/constants";
 import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
 import { isChatStreaming } from "$lib/stores/chat.svelte";
 import {
@@ -92,7 +93,6 @@ import ProjectRail from "./ProjectRail.svelte";
 import RightPanel from "./RightPanel.svelte";
 import Sidebar from "./Sidebar.svelte";
 import TopBar from "./TopBar.svelte";
-import { RAIL_WIDTH } from "$lib/constants";
 
 let { children } = $props();
 

@@ -1429,12 +1429,7 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
         base: params.base,
       };
       if (params.draft !== undefined) body.draft = params.draft;
-      const data = yield* githubPost(
-        `/repos/${owner}/${repo}/pulls`,
-        token,
-        body,
-        apiBase,
-      );
+      const data = yield* githubPost(`/repos/${owner}/${repo}/pulls`, token, body, apiBase);
       const raw = data as Record<string, unknown>;
       const head = (raw.head as Record<string, unknown> | undefined) ?? {};
       const base = (raw.base as Record<string, unknown> | undefined) ?? {};
