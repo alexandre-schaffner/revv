@@ -33,6 +33,7 @@ export function getCachedWalkthroughHandler(prId: string, userId: string) {
       const prContext = yield* PrContextService;
       const github = yield* GitHubService;
       const walkthroughService = yield* WalkthroughService;
+      const jobs = yield* WalkthroughJobs;
 
       const { pr, repo, token } = yield* prContext.resolveBasic(prId, userId);
       const meta = yield* github.getPrMeta(repo.fullName, pr.externalId, token);
@@ -54,6 +55,21 @@ export function getCachedWalkthroughHandler(prId: string, userId: string) {
           status: "generating" as const,
           walkthrough,
         };
+      }
+
+      // No local row — probe the team cache. On a hit, import + complete
+      // the row in one shot so the client renders immediately without
+      // needing a Generate click or an SSE round-trip.
+      const hydrated = yield* jobs.tryHydrateFromRemoteCache(pr.id, meta.headSha, repo.fullName);
+      if (hydrated) {
+        const fromCache = yield* walkthroughService.getCached(pr.id, meta.headSha);
+        if (fromCache) {
+          return {
+            cached: true as const,
+            status: "complete" as const,
+            walkthrough: fromCache,
+          };
+        }
       }
 
       return { cached: false as const };
