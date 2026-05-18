@@ -92,12 +92,7 @@ import ProjectRail from "./ProjectRail.svelte";
 import RightPanel from "./RightPanel.svelte";
 import Sidebar from "./Sidebar.svelte";
 import TopBar from "./TopBar.svelte";
-
-// Width of the always-visible project rail. The rail hosts repo
-// avatars, add-repo, settings, and the user menu, and stays on screen
-// even when the project column is collapsed and during /review/[prId]
-// (file-tree mode). See ProjectRail.svelte.
-const RAIL_WIDTH = 64;
+import { RAIL_WIDTH } from "$lib/constants";
 
 let { children } = $props();
 

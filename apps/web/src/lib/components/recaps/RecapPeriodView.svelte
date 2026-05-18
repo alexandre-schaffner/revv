@@ -28,8 +28,7 @@ import {
 } from "$lib/stores/sidebar.svelte";
 import PreviousRecaps from "./PreviousRecaps.svelte";
 import RecapDetail from "./RecapDetail.svelte";
-
-const RAIL_WIDTH = 64;
+import { RAIL_WIDTH } from "$lib/constants";
 
 interface Props {
   repoId: string;
