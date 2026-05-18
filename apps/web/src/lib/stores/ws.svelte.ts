@@ -262,7 +262,7 @@ export function connect(token: string, hostOverride?: string): void {
     }
     // On reconnect, reconcile missed prs:updated / repos:updated broadcasts.
     if (isReconnect) {
-      void Promise.all([prs.fetchRepos(), prs.fetchPrs()]);
+      void Promise.all([prs.fetchRepos(), prs.fetchPrs(), prs.fetchPinnedPrs()]);
     }
     // Recover from any `walkthrough:complete` broadcasts the client missed
     // while WS was unconnected — the canonical case is `resumePending`

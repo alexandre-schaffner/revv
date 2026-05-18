@@ -525,7 +525,7 @@ export async function switchAccount(userId: string, host?: string): Promise<void
     // new host (e.g. for WS auto-reconnects and OrgSwitcher highlighting)
     // and re-hydrate the PR / repo lists under the switched-to account.
     await settings.fetchSettings();
-    await Promise.all([prs.fetchPrs(), prs.fetchRepos()]);
+    await Promise.all([prs.fetchPrs(), prs.fetchRepos(), prs.fetchPinnedPrs()]);
   } catch (e) {
     error = `Failed to switch account: ${e}`;
   } finally {

@@ -43,6 +43,13 @@ let archivedNextCursor = $state<string | null>(null);
 // True while a `fetchMoreArchived` request is in flight, so the sidebar
 // can disable the "show more" affordance and show a spinner.
 let archivedLoadingMore = $state(false);
+// Tagged PRs per repo (requested reviewer, @-mentioned, or authored by the
+// current user). Populated by `fetchTaggedPrs` — used by the repo homepage.
+let taggedPrsByRepo = $state<Map<string, PullRequest[]>>(new Map());
+let taggedPrsLoadingByRepo = $state<Map<string, boolean>>(new Map());
+// Set of PR ids pinned by the current user. Fetched once at login and
+// kept in sync via local optimistic updates.
+let pinnedPrIds = $state<Set<string>>(new Set());
 
 // Sidebar PR search uses the same fuzzy scorer as the Cmd+P palette so a
 // search like "auth jw" can match "Add JWT auth middleware" and a search like
@@ -113,18 +120,16 @@ export function getNeedsYourReviewByRepo(): Map<string, PullRequest[]> {
 }
 
 /**
- * Open PRs for one repo with needs-your-review PRs sorted to the top.
- * Used by the per-repo PRs sub-section in the sidebar so the pinned rows
- * (with a visible marker) appear above the rest of the open PRs without
- * re-implementing the dedupe loop at every call site.
+ * Open PRs for one repo with pinned PRs sorted to the very top, then
+ * needs-your-review PRs, then the rest.
  */
 export function getOpenPrsByRepoOrdered(repoId: string): PullRequest[] {
-  const review = needsYourReviewByRepo.get(repoId) ?? [];
   const all = groupedByRepo.get(repoId) ?? [];
-  if (review.length === 0) return all;
-  const reviewIds = new Set(review.map((p) => p.id));
-  const rest = all.filter((p) => !reviewIds.has(p.id));
-  return [...review, ...rest];
+  const pinned = all.filter((p) => pinnedPrIds.has(p.id));
+  const review = (needsYourReviewByRepo.get(repoId) ?? []).filter((p) => !pinnedPrIds.has(p.id));
+  const skipIds = new Set([...pinned.map((p) => p.id), ...review.map((p) => p.id)]);
+  const rest = all.filter((p) => !skipIds.has(p.id));
+  return [...pinned, ...review, ...rest];
 }
 
 export function getArchivedPrs(): PullRequest[] {
@@ -137,6 +142,29 @@ export function getArchivedByRepo(): Map<string, PullRequest[]> {
 
 export function getSelectedPr(): PullRequest | null {
   return selectedPr;
+}
+
+export function getTaggedPrs(repoId: string): PullRequest[] {
+  return taggedPrsByRepo.get(repoId) ?? [];
+}
+
+export function getTaggedPrsLoading(repoId: string): boolean {
+  return taggedPrsLoadingByRepo.get(repoId) ?? false;
+}
+
+export async function fetchTaggedPrs(repoId: string): Promise<void> {
+  if (taggedPrsLoadingByRepo.get(repoId)) return;
+  taggedPrsLoadingByRepo = new Map(taggedPrsLoadingByRepo).set(repoId, true);
+  try {
+    const { data } = await api.api.prs.tagged.get({ query: { repo: repoId } });
+    if (data) {
+      taggedPrsByRepo = new Map(taggedPrsByRepo).set(repoId, data as PullRequest[]);
+    }
+  } catch {
+    // best-effort
+  } finally {
+    taggedPrsLoadingByRepo = new Map(taggedPrsLoadingByRepo).set(repoId, false);
+  }
 }
 
 export function setPullRequests(prs: PullRequest[]): void {
@@ -265,6 +293,51 @@ export function getArchivedNextCursor(): string | null {
 
 export function getArchivedLoadingMore(): boolean {
   return archivedLoadingMore;
+}
+
+export function getPinnedPrIds(): Set<string> {
+  return pinnedPrIds;
+}
+
+export function isPrPinned(prId: string): boolean {
+  return pinnedPrIds.has(prId);
+}
+
+export async function fetchPinnedPrs(): Promise<void> {
+  try {
+    const { data } = await api.api.prs.pinned.get();
+    if (Array.isArray(data)) {
+      pinnedPrIds = new Set(data as string[]);
+    }
+  } catch {
+    // best-effort
+  }
+}
+
+export async function pinPr(prId: string): Promise<void> {
+  if (pinnedPrIds.has(prId)) return;
+  pinnedPrIds = new Set(pinnedPrIds).add(prId);
+  try {
+    await api.api.prs.pinned.post({ prId });
+  } catch {
+    // Rollback on failure
+    const next = new Set(pinnedPrIds);
+    next.delete(prId);
+    pinnedPrIds = next;
+  }
+}
+
+export async function unpinPr(prId: string): Promise<void> {
+  if (!pinnedPrIds.has(prId)) return;
+  const next = new Set(pinnedPrIds);
+  next.delete(prId);
+  pinnedPrIds = next;
+  try {
+    await api.api.prs.pinned({ prId }).delete();
+  } catch {
+    // Rollback on failure
+    pinnedPrIds = new Set(pinnedPrIds).add(prId);
+  }
 }
 
 /**
@@ -554,4 +627,5 @@ export function reset(): void {
   archivedPrs = [];
   archivedNextCursor = null;
   archivedLoadingMore = false;
+  pinnedPrIds = new Set();
 }

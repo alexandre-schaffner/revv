@@ -8,7 +8,7 @@ export function startPolling(intervalSeconds: number, token: string): void {
   ws.connect(token);
 
   // Fetch initial data
-  Promise.all([prs.fetchPrs(), prs.fetchRepos()]).catch(() => {
+  Promise.all([prs.fetchPrs(), prs.fetchRepos(), prs.fetchPinnedPrs()]).catch(() => {
     // errors handled by stores
   });
 

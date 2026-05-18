@@ -16,6 +16,7 @@ import {
   Trash2,
   Upload,
   X,
+  Wand,
 } from "@lucide/svelte";
 import { tick } from "svelte";
 import { cubicIn, cubicOut } from "svelte/easing";
@@ -569,7 +570,7 @@ function activitiesForTurn(
 						: 'Clear conversation'}
 					disabled={isPushing || isResolving}
 				>
-					<Trash2 size={13} />
+					<Wand size={13} />
 				</button>
 			{/if}
 			<button class="icon-btn" onclick={onClose} aria-label="Close panel">

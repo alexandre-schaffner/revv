@@ -43,6 +43,13 @@ export const pullRequests = sqliteTable(
      * migrations don't need to change again).
      */
     threadsFingerprint: text("threads_fingerprint"),
+    /**
+     * JSON array of GitHub logins mentioned via @-mention in the PR body
+     * or review comments. Populated incrementally during sync — append-only,
+     * never pruned. Used by the repo homepage to surface PRs the user is
+     * "tagged on" even when not a requested reviewer.
+     */
+    mentionedUsers: text("mentioned_users").notNull().default("[]"),
   },
   (t) => ({
     /**

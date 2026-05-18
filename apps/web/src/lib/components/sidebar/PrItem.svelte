@@ -1,10 +1,7 @@
 <script lang="ts">
-import { GitMerge, GitPullRequestArrow, GitPullRequestClosed, User } from "@lucide/svelte";
+import { Pin, User } from "@lucide/svelte";
 import type { PullRequest } from "@revv/shared";
-import StatusDot from "$lib/components/shared/StatusDot.svelte";
-import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
-import { isPrUnseen } from "$lib/stores/pr-visits.svelte";
-import { selectPr } from "$lib/stores/prs.svelte";
+import { isPrPinned, pinPr, selectPr, unpinPr } from "$lib/stores/prs.svelte";
 import { setSidebarView } from "$lib/stores/sidebar.svelte";
 import { getFocusedId } from "$lib/stores/sidebar-nav.svelte";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
@@ -14,7 +11,6 @@ interface Props {
   isSelected?: boolean;
   navPrefix?: string;
   variant?: "open" | "archived";
-  pinned?: boolean;
 }
 
 let {
@@ -22,10 +18,7 @@ let {
   isSelected = false,
   navPrefix = "pr",
   variant = "open",
-  pinned = false,
 }: Props = $props();
-
-const showDot = $derived(isPrUnseen(pr, getCurrentUserLogin()));
 
 let avatarFailed = $state(false);
 
@@ -47,28 +40,32 @@ function handleClick() {
 
 <div class="select-none">
 	<button
-		class="flex w-full cursor-pointer items-start gap-2 rounded-md px-3 py-2 text-left transition-colors hover:bg-bg-tertiary {isSelected
+		class="group flex w-full cursor-pointer items-start gap-2 rounded-md px-3 py-2 text-left transition-colors hover:bg-bg-tertiary {isSelected
 			? 'bg-bg-elevated'
 			: ''} {isFocused ? 'sidebar-nav-focused' : ''} {variant === 'archived' ? 'opacity-70' : ''}"
-		onclick={handleClick}
+			onclick={handleClick}
 		aria-label="PR #{pr.externalId}: {pr.title}"
 		data-sidebar-nav={navId}
 		data-nav-type="pr"
 		data-nav-parent="repo:{pr.repositoryId}"
 	>
-		<div class="mt-0.5 flex w-3.5 shrink-0 items-center justify-center">
-			{#if variant === 'archived'}
-				{#if pr.status === 'merged'}
-					<GitMerge size={11} class="shrink-0 text-accent-muted" aria-hidden="true" />
-				{:else}
-					<GitPullRequestClosed size={11} class="shrink-0 text-text-muted" aria-hidden="true" />
-				{/if}
-			{:else if pinned}
-				<GitPullRequestArrow size={11} class="shrink-0 text-accent" aria-hidden="true" />
-			{:else}
-				<StatusDot status={pr.status} reviewStatus={pr.reviewStatus} visible={showDot} />
-			{/if}
-		</div>
+		{#if pr.authorAvatarUrl && !avatarFailed}
+			<img
+				src={pr.authorAvatarUrl}
+				alt={pr.authorLogin}
+				class="mt-0.5 h-4 w-4 shrink-0 rounded-full object-cover"
+				loading="lazy"
+				referrerpolicy="no-referrer"
+				onerror={() => (avatarFailed = true)}
+			/>
+		{:else}
+			<span
+				class="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-bg-elevated text-text-muted"
+				title={pr.authorLogin}
+			>
+				<User size={10} aria-hidden="true" />
+			</span>
+		{/if}
 
 		<div class="flex min-w-0 flex-1 flex-col gap-0.5">
 			<span
@@ -87,22 +84,23 @@ function handleClick() {
 			</div>
 		</div>
 
-		{#if pr.authorAvatarUrl && !avatarFailed}
-			<img
-				src={pr.authorAvatarUrl}
-				alt={pr.authorLogin}
-				class="mt-0.5 h-4 w-4 shrink-0 rounded-full object-cover"
-				loading="lazy"
-				referrerpolicy="no-referrer"
-				onerror={() => (avatarFailed = true)}
-			/>
-		{:else}
-			<span
-				class="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-bg-elevated text-text-muted"
-				title={pr.authorLogin}
+		{#if variant !== 'archived'}
+			{@const pinned = isPrPinned(pr.id)}
+			<button
+				type="button"
+				class="mt-0.5 shrink-0 opacity-0 transition-opacity duration-quick group-hover:opacity-100 {pinned
+					? 'opacity-100 text-accent'
+					: 'text-text-muted hover:text-text-secondary'}"
+				onclick={(e) => {
+					e.stopPropagation();
+					if (pinned) unpinPr(pr.id);
+					else pinPr(pr.id);
+				}}
+				aria-label={pinned ? 'Unpin PR' : 'Pin PR'}
+				title={pinned ? 'Unpin' : 'Pin'}
 			>
-				<User size={10} aria-hidden="true" />
-			</span>
+				<Pin size={11} aria-hidden="true" class={pinned ? 'fill-current' : ''} />
+			</button>
 		{/if}
 	</button>
 </div>

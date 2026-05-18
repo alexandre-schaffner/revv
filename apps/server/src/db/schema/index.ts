@@ -1,5 +1,6 @@
 export { account, session, user, verification } from "./auth";
 export { cacheEntries } from "./cache-entries";
+export { pinnedPullRequests } from "./pinned-prs";
 export { chatActivities } from "./chat-activities";
 export { chatMessages } from "./chat-messages";
 export { chatPlans } from "./chat-plans";

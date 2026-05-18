@@ -2,11 +2,13 @@
 import { GitPullRequest, Sparkles } from "@lucide/svelte";
 import { page } from "$app/state";
 import AuthGuard from "$lib/components/auth/AuthGuard.svelte";
+import RepoRecapCard from "$lib/components/repo/RepoRecapCard.svelte";
+import RepoTaggedPrs from "$lib/components/repo/RepoTaggedPrs.svelte";
 import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte";
 import { getSelectedRepo } from "$lib/stores/prs.svelte";
 
 const repo = $derived(getSelectedRepo());
-const repoIdFromUrl = $derived(page.params["repoId"] ?? "");
+const repoIdFromUrl = $derived(page.params.repoId ?? "");
 </script>
 
 <AuthGuard>
@@ -42,6 +44,9 @@ const repoIdFromUrl = $derived(page.params["repoId"] ?? "");
 					</div>
 				</a>
 			</div>
+
+			<RepoTaggedPrs repoId={repo.id} />
+			<RepoRecapCard repoId={repo.id} />
 		{:else}
 			<div class="missing">
 				<h1 class="missing-title">Repository not found</h1>

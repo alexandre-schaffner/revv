@@ -1,7 +1,6 @@
 <script lang="ts">
 import { fly } from "svelte/transition";
 import {
-  getNeedsYourReviewByRepo,
   getOpenPrsByRepoOrdered,
   getSelectedPrId,
 } from "$lib/stores/prs.svelte";
@@ -16,9 +15,6 @@ let { repoId }: Props = $props();
 const STAGGER_CAP = 20;
 
 const prs = $derived(getOpenPrsByRepoOrdered(repoId));
-const reviewIds = $derived(
-  new Set((getNeedsYourReviewByRepo().get(repoId) ?? []).map((p) => p.id)),
-);
 const selectedPrId = $derived(getSelectedPrId());
 </script>
 
@@ -31,7 +27,6 @@ const selectedPrId = $derived(getSelectedPrId());
 				<PrItem
 					{pr}
 					isSelected={selectedPrId === pr.id}
-					pinned={reviewIds.has(pr.id)}
 					navPrefix="pr"
 				/>
 			</div>

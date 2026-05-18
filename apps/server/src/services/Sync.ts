@@ -11,6 +11,13 @@ import { ReviewService } from "./Review";
 import type { SettingsService } from "./Settings";
 import { WebSocketHub } from "./WebSocketHub";
 
+/** Extract GitHub @-mentions from a block of text. */
+function extractMentions(body: string): string[] {
+  const matches = body.match(/@([a-zA-Z0-9-]+)/g);
+  if (!matches) return [];
+  return [...new Set(matches.map((m) => m.slice(1)))];
+}
+
 export interface PullResult {
   readonly newThreads: number;
   readonly newMessages: number;
@@ -368,6 +375,15 @@ export const SyncServiceLive = Layer.effect(
             type: "threads:new-reply",
             data: { prId: pr.id, thread, message: msg },
           });
+        }
+
+        // Extract @-mentions from newly-synced review comments and append
+        // them to the PR's `mentionedUsers` array.
+        const commentMentions = comments.flatMap((c) => extractMentions(c.body));
+        if (commentMentions.length > 0) {
+          yield* prService
+            .appendMentionedUsers(pr.id, commentMentions)
+            .pipe(Effect.catchAll(() => Effect.void));
         }
 
         // Reconcile resolution status via GraphQL.
