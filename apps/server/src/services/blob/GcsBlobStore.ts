@@ -164,6 +164,20 @@ export const GcsBlobStoreLive = Layer.scoped(
             return yield* Effect.fail(gcsErr("cache.credentialsJson is not valid JSON", cause));
           }
         }
+        // Emulator override (REVV_CACHE_API_ENDPOINT). We deliberately
+        // do NOT use the SDK's own `STORAGE_EMULATOR_HOST`: with that
+        // env var set, `@google-cloud/storage` v7 forces bare-bucket
+        // URL routing (`/b/<name>`) regardless of any `apiEndpoint`
+        // constructor option, and fake-gcs-server only serves the JSON
+        // API at `/storage/v1/b/<name>`. Using our own var lets us
+        // pick the JSON-API path via `apiEndpoint` while keeping
+        // STORAGE_EMULATOR_HOST out of the SDK's environment entirely.
+        // Real-GCS unaffected when the env var is unset.
+        const emulatorHost = process.env.REVV_CACHE_API_ENDPOINT?.trim();
+        if (emulatorHost && emulatorHost.length > 0) {
+          opts.apiEndpoint = emulatorHost;
+          opts.projectId = opts.projectId ?? "revv-cache-emulator";
+        }
         const storage = new mod.Storage(opts);
         const bucket = storage.bucket(live.cache.bucket.trim());
         const next: ResolvedClient = { bucket, bucketName: live.cache.bucket.trim() };

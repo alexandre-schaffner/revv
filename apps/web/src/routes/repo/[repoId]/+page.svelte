@@ -12,6 +12,7 @@ const repoIdFromUrl = $derived(page.params.repoId ?? "");
 </script>
 
 <AuthGuard>
+	<div class="repo-scroll">
 	<div class="repo-landing">
 		{#if repo}
 			<div class="hero">
@@ -55,14 +56,24 @@ const repoIdFromUrl = $derived(page.params.repoId ?? "");
 			</div>
 		{/if}
 	</div>
+	</div>
 </AuthGuard>
 
 <style>
+	.repo-scroll {
+		height: 100%;
+		overflow-y: auto;
+		scrollbar-width: none;
+	}
+
+	.repo-scroll::-webkit-scrollbar {
+		display: none;
+	}
+
 	.repo-landing {
 		display: flex;
 		flex-direction: column;
 		gap: 32px;
-		height: 100%;
 		padding: 64px 48px 48px;
 		max-width: 760px;
 		margin: 0 auto;

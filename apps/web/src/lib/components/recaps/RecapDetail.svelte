@@ -1,10 +1,20 @@
 <script lang="ts">
-import { ArrowLeft, CircleAlert, Loader2, RefreshCw } from "@lucide/svelte";
+import {
+  ArrowLeft,
+  CircleAlert,
+  Loader2,
+  Play,
+  RefreshCw,
+  RotateCcw,
+  Square,
+} from "@lucide/svelte";
 import type { ProjectRecap } from "@revv/shared";
 import { Shimmer } from "$lib/components/ai/shimmer";
 import { Button } from "$lib/components/ui/button";
+import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import type { RecapStreamEntry } from "$lib/stores/recap-stream.svelte";
-import { renderMarkdown } from "$lib/utils/markdown";
+import type { RecapPendingAction } from "$lib/stores/recaps.svelte";
+import { createStreamingBlockRenderer, renderMarkdown } from "$lib/utils/markdown";
 import RecapStats from "./RecapStats.svelte";
 
 interface Props {
@@ -12,12 +22,26 @@ interface Props {
   loading: boolean;
   /** When omitted, the back button is hidden — used on the period landing pages. */
   onBack?: (() => void) | undefined;
+  /**
+   * Handler for Resume / Retry / Regenerate. All three buttons hit the
+   * same /api/recaps/:id/regenerate endpoint — the label varies by
+   * context (cancelled vs. failed vs. complete) so the user sees the
+   * same floating-bar grammar as the walkthrough.
+   */
   onRegenerate: () => void;
-  regenerating?: boolean;
+  /** Handler for Stop while a recap is generating. */
+  onStop?: (() => void) | undefined;
+  /**
+   * In-flight destructive action sourced from the store-level pending
+   * tracker. Drives the `disabled` state on every floating pill so a
+   * double-click can't fire two concurrent actions during the async
+   * POST → stream-restart dance.
+   */
+  pendingAction?: RecapPendingAction | null | undefined;
   /** Live stream state when the recap is generating. */
   stream?: RecapStreamEntry | null | undefined;
   /**
-   * Inline style for the floating Regenerate pill. Passed in by the parent
+   * Inline style for the floating action pill. Passed in by the parent
    * (RecapPeriodView or [recapId] route) so the bar tracks sidebar /
    * right-panel state without this component reading the sidebar store.
    * Defaults to a viewport-centred placement when no parent supplies it.
@@ -30,16 +54,23 @@ let {
   loading,
   onBack = undefined,
   onRegenerate,
-  regenerating = false,
+  onStop = undefined,
+  pendingAction = null,
   stream = null,
   floatingActionsStyle = "left: 0; right: 0;",
 }: Props = $props();
 
-let html = $derived.by(() => {
-  if (stream?.overview) return renderMarkdown(stream.overview);
+let completedHtml = $derived.by(() => {
   if (recap?.overview) return renderMarkdown(recap.overview);
   return "";
 });
+
+// Stateful renderer — holds per-block prev-length so the active block's
+// already-shown words don't re-animate when innerHTML is replaced.
+const renderStreamingBlocks = createStreamingBlockRenderer();
+let streamingBlocks = $derived.by(() =>
+  stream?.overview ? renderStreamingBlocks(stream.overview) : [],
+);
 
 const DAY_MONTH_YEAR = new Intl.DateTimeFormat("en-GB", {
   weekday: "short",
@@ -79,12 +110,41 @@ function phaseMessage(phase: string): string {
   return labels[phase] ?? "Generating recap…";
 }
 
-// Show the floating Regenerate pill only when there's something to
-// regenerate — a complete (or errored) recap that's not currently being
-// rewritten. During `generating`, the streamer owns the screen and a
-// regenerate would just restart it.
-const showRegenerateFab = $derived(
-  !!recap && (recap.status === "complete" || recap.status === "error"),
+// Single discriminated UI kind for the floating action bar. Mirrors the
+// `WalkthroughUiState` projection so the bar branches on one signal,
+// never on a cascade of booleans:
+//
+//   • generating  → Stop button (cancels the agent server-side).
+//   • stopped     → Resume + Regenerate (status='error' from a user
+//                   Cancel — semantically "I halted this, want to keep
+//                   going"). Distinguished from a real failure by the
+//                   errorMessage marker the server stamps.
+//   • error       → Retry + Regenerate (status='error' from a real
+//                   agent failure). Same backend call as Resume —
+//                   recap's single-atomic-write pipeline doesn't
+//                   preserve partial state, but the label conveys user
+//                   intent honestly.
+//   • complete    → Regenerate (rewrite a finished recap).
+//   • hidden      → no bar (superseded rows, or no recap loaded).
+type RecapUiKind = "generating" | "stopped" | "error" | "complete" | "hidden";
+
+const recapUiKind: RecapUiKind = $derived.by(() => {
+  if (!recap) return "hidden";
+  if (recap.status === "generating") return "generating";
+  if (recap.status === "error") {
+    return recap.errorMessage === "Cancelled by user" ? "stopped" : "error";
+  }
+  if (recap.status === "complete") return "complete";
+  return "hidden";
+});
+
+const destructiveDisabled = $derived(pendingAction !== null);
+const destructiveTitle = $derived(
+  pendingAction === "regenerate"
+    ? "Regenerating…"
+    : pendingAction === "stop"
+      ? "Stopping…"
+      : undefined,
 );
 </script>
 
@@ -121,37 +181,45 @@ const showRegenerateFab = $derived(
 
 		{#if recap.status === "generating"}
 			{#if stream && (stream.isStreaming || stream.overview)}
-				<article class="recap-prose">
-					{@html html}
+				<article class="recap-prose recap-prose--streaming">
+					{#each streamingBlocks as block (block.id)}
+						<div class="recap-block" data-sd-block>{@html block.html}</div>
+					{/each}
 				</article>
 				{#if stream.isStreaming && !stream.doneReceived && !stream.streamError}
 					<div class="phase-shimmer">
-						<Loader2 size={16} class="animate-spin" aria-hidden="true" />
-						<span>{phaseMessage(stream.phase)}</span>
+						<Shimmer class="text-sm" aria-label={phaseMessage(stream.phase)}>
+							{phaseMessage(stream.phase)}
+						</Shimmer>
 					</div>
 				{/if}
 			{:else}
-				<div class="recap-pending">
-					<Loader2 size={18} class="animate-spin" aria-hidden="true" />
-					<div>
-						<p>Generating…</p>
-						<p class="hint">
-							This page will update automatically when the recap finishes. You
-							can leave and come back.
-						</p>
+				<div class="recap-starting">
+					<div class="phase-shimmer">
+						<Shimmer class="text-sm" aria-label="Starting recap">Starting recap…</Shimmer>
 					</div>
+					<p class="recap-hint">
+						This page will update automatically when the recap finishes. You can
+						leave and come back.
+					</p>
 				</div>
 			{/if}
 		{:else if recap.status === "error"}
-			<div class="recap-pending recap-pending--error">
-				<CircleAlert size={18} aria-hidden="true" />
+			<div class="recap-error">
+				<CircleAlert size={16} aria-hidden="true" />
 				<div>
-					<p>Generation failed.</p>
-					<p class="hint">
-						{#if recap.errorMessage}
+					<p class="recap-error-title">
+						{recap.errorMessage === "Cancelled by user"
+							? "Generation stopped."
+							: "Generation failed."}
+					</p>
+					<p class="recap-error-hint">
+						{#if recap.errorMessage && recap.errorMessage !== "Cancelled by user"}
 							{recap.errorMessage}
+						{:else if recap.errorMessage === "Cancelled by user"}
+							Click "Resume" to keep going, or "Regenerate" to start fresh.
 						{:else}
-							Click "Regenerate" to try again.
+							Click "Retry" to try again.
 						{/if}
 					</p>
 				</div>
@@ -166,7 +234,7 @@ const showRegenerateFab = $derived(
 			</div>
 		{:else}
 			<article class="recap-prose">
-				{@html html}
+				{@html completedHtml}
 			</article>
 		{/if}
 
@@ -183,25 +251,65 @@ const showRegenerateFab = $derived(
 	{/if}
 </div>
 
-{#if showRegenerateFab && recap}
+{#if recapUiKind !== "hidden"}
 	<div class="recap-actions-float" style={floatingActionsStyle}>
 		<div class="recap-actions-row">
-			<button
-				type="button"
-				class="recap-action-btn"
-				onclick={onRegenerate}
-				disabled={regenerating}
-				title="Generate a fresh recap for this period (the current one becomes superseded)"
-			>
-				{#if regenerating}
-					<Loader2 size={14} class="animate-spin" aria-hidden="true" />
-				{:else}
-					<RefreshCw size={14} aria-hidden="true" />
-				{/if}
-				<Shimmer active={!regenerating}>
-					{regenerating ? "Regenerating…" : "Regenerate recap"}
-				</Shimmer>
-			</button>
+			{#if recapUiKind === "generating"}
+				<GlassPill
+					variant="danger"
+					onclick={onStop}
+					disabled={pendingAction === "stop"}
+					title={pendingAction === "stop" ? "Stopping…" : "Stop this recap generation"}
+				>
+					<Square size={14} fill="currentColor" />
+					{pendingAction === "stop" ? "Stopping…" : "Stop generation"}
+				</GlassPill>
+			{:else if recapUiKind === "stopped"}
+				<GlassPill
+					disabled={destructiveDisabled}
+					title={destructiveTitle ?? "Resume generation from where it was stopped"}
+					onclick={onRegenerate}
+					aria-label="Resume recap generation"
+				>
+					<Play size={14} fill="currentColor" />
+					Resume
+				</GlassPill>
+				<GlassPill
+					disabled={destructiveDisabled}
+					title={destructiveTitle ?? "Generate a fresh recap (the current draft will be replaced)"}
+					onclick={onRegenerate}
+				>
+					<RefreshCw size={14} />
+					Regenerate
+				</GlassPill>
+			{:else if recapUiKind === "error"}
+				<GlassPill
+					disabled={destructiveDisabled}
+					title={destructiveTitle ?? "Retry recap generation after error"}
+					onclick={onRegenerate}
+					aria-label="Retry recap generation"
+				>
+					<RotateCcw size={14} />
+					Retry
+				</GlassPill>
+				<GlassPill
+					disabled={destructiveDisabled}
+					title={destructiveTitle ?? "Generate a fresh recap (the current draft will be replaced)"}
+					onclick={onRegenerate}
+				>
+					<RefreshCw size={14} />
+					Regenerate
+				</GlassPill>
+			{:else if recapUiKind === "complete"}
+				<GlassPill
+					disabled={destructiveDisabled}
+					title={destructiveTitle ?? "Generate a fresh recap for this period (the current one becomes superseded)"}
+					onclick={onRegenerate}
+				>
+					<RefreshCw size={14} />
+					Regenerate recap
+				</GlassPill>
+			{/if}
 		</div>
 	</div>
 {/if}
@@ -270,14 +378,51 @@ const showRegenerateFab = $derived(
 		margin: 0;
 	}
 
-	.recap-pending .hint {
-		margin-top: 0.25rem;
+	/* Pre-stream "Starting recap…" state — drops the heavy callout in favor of
+	   the same Shimmer-text treatment used by phase-shimmer below. Vertical
+	   stack puts the shimmer at the same baseline as content that will follow. */
+	.recap-starting {
+		display: flex;
+		flex-direction: column;
+		gap: 0.375rem;
+		padding: 0.25rem 0;
+	}
+
+	.recap-hint {
+		margin: 0;
 		font-size: 0.8125rem;
 		color: var(--color-text-muted);
 	}
 
-	.recap-pending--error {
+	/* Error state — borrows the walkthrough's danger-tinted treatment so an
+	   error is visually distinguishable from a passive loading callout. */
+	.recap-error {
+		display: flex;
+		gap: 0.625rem;
+		align-items: flex-start;
+		padding: 0.875rem 1rem;
+		background: color-mix(in srgb, var(--color-danger) 8%, transparent);
+		border: 1px solid color-mix(in srgb, var(--color-danger) 25%, transparent);
+		border-radius: 0.5rem;
 		color: var(--color-text-primary);
+	}
+
+	.recap-error :global(svg) {
+		color: var(--color-danger);
+		flex-shrink: 0;
+		margin-top: 0.15rem;
+	}
+
+	.recap-error-title {
+		margin: 0;
+		font-size: 0.875rem;
+		font-weight: 500;
+	}
+
+	.recap-error-hint {
+		margin: 0.25rem 0 0;
+		font-size: 0.8125rem;
+		color: var(--color-text-muted);
 	}
 
 	.recap-prose {
@@ -324,16 +469,11 @@ const showRegenerateFab = $derived(
 		border-radius: 0.25em;
 	}
 
+	/* `.sd-word-new` animation lives in app.css (global) — the spans are
+	   injected via `{@html}` and have no component scope. */
+
 	.phase-shimmer {
-		display: flex;
-		align-items: center;
-		gap: 0.5rem;
-		padding: 0.75rem 1rem;
-		margin-top: 0.5rem;
-		background: var(--color-bg-secondary);
-		border-radius: 0.5rem;
-		font-size: 0.875rem;
-		color: var(--color-text-secondary);
+		margin-top: 0.75rem;
 	}
 
 	.recap-detail-footer {
@@ -371,56 +511,5 @@ const showRegenerateFab = $derived(
 		display: inline-flex;
 		align-items: center;
 		gap: 8px;
-	}
-
-	.recap-action-btn {
-		display: inline-flex;
-		align-items: center;
-		gap: 8px;
-		height: 36px;
-		padding: 0 16px;
-		background: var(--color-tab-track-bg);
-		backdrop-filter: blur(16px) saturate(1.4);
-		-webkit-backdrop-filter: blur(16px) saturate(1.4);
-		border: 1px solid var(--color-glass-border);
-		border-radius: 9999px;
-		box-shadow:
-			var(--color-glass-shadow),
-			inset 0 0.5px 0 0 var(--color-glass-highlight);
-		font-family: inherit;
-		font-size: 13px;
-		font-weight: 500;
-		letter-spacing: -0.01em;
-		line-height: 1.2;
-		color: var(--color-text-primary);
-		cursor: pointer;
-		transition:
-			background-color var(--duration-snap),
-			color var(--duration-snap),
-			box-shadow var(--duration-snap);
-		-webkit-font-smoothing: antialiased;
-		white-space: nowrap;
-	}
-
-	.recap-action-btn:hover {
-		background: color-mix(
-			in srgb,
-			var(--color-tab-active-bg) 80%,
-			var(--color-tab-track-bg)
-		);
-	}
-
-	.recap-action-btn:focus-visible {
-		outline: 2px solid var(--color-accent);
-		outline-offset: 2px;
-	}
-
-	.recap-action-btn--accent:not(:disabled) {
-		color: var(--color-accent);
-	}
-
-	.recap-action-btn:disabled {
-		cursor: not-allowed;
-		opacity: 0.55;
 	}
 </style>

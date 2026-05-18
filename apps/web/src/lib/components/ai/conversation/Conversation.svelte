@@ -12,11 +12,17 @@ export type ConversationProps = HTMLAttributes<HTMLDivElement> & {
   isAtBottom?: boolean;
   /** Tailwind classes for the inner scroll container. The class prop styles the outer wrapper. */
   innerClass?: string;
+  /**
+   * When this value changes the scroll container snaps to the bottom
+   * (e.g. pass the current PR/thread id so switching context lands at
+   * the newest message).
+   */
+  resetKey?: unknown;
 };
 </script>
 
 <script lang="ts">
-	import { setContext } from "svelte";
+	import { setContext, tick } from "svelte";
 	import { cn } from "$lib/utils.js";
 	import { CONVERSATION_CTX_KEY, type ConversationContext } from "./context.js";
 
@@ -26,6 +32,7 @@ export type ConversationProps = HTMLAttributes<HTMLDivElement> & {
 		scrollEl = $bindable(undefined),
 		isAtBottom = $bindable(true),
 		innerClass,
+		resetKey,
 		...restProps
 	}: ConversationProps = $props();
 
@@ -41,6 +48,29 @@ export type ConversationProps = HTMLAttributes<HTMLDivElement> & {
 		const { scrollTop, scrollHeight, clientHeight } = scrollEl;
 		isAtBottom = scrollHeight - scrollTop - clientHeight < 40;
 	}
+
+	// Snap to bottom when key changes (e.g. PR switch).
+	$effect(() => {
+		void resetKey;
+		void tick().then(() => {
+			if (!scrollEl) return;
+			scrollEl.scrollTop = scrollEl.scrollHeight;
+			isAtBottom = true;
+		});
+	});
+
+	// Auto-follow new content when user is at the bottom.
+	$effect(() => {
+		const el = scrollEl;
+		if (!el) return;
+		const contentEl = el.firstElementChild;
+		if (!contentEl) return;
+		const observer = new ResizeObserver(() => {
+			if (isAtBottom) el.scrollTop = el.scrollHeight;
+		});
+		observer.observe(contentEl);
+		return () => observer.disconnect();
+	});
 
 	const ctx: ConversationContext = {
 		get isAtBottom() {

@@ -1110,7 +1110,32 @@ export const ProjectRecapJobsLive = Layer.effect(
           Effect.catchAllCause((cause) =>
             Effect.gen(function* () {
               const interruptedOnly = Cause.isInterruptedOnly(cause);
-              if (interruptedOnly) return;
+              if (interruptedOnly) {
+                // If the interrupt was a user-driven Stop and the body
+                // didn't reach its own cancelled-branch (e.g. interrupted
+                // during DB read / bundle prep, before the agent's
+                // AbortController could catch), transition the row to
+                // 'error' here so the UI doesn't get stuck on
+                // 'generating'. Process-shutdown interrupts leave the row
+                // alone so resume-on-boot can pick it up.
+                if (job.cancelledByUser) {
+                  const msg = "Cancelled by user";
+                  fanOut(job, {
+                    type: "error",
+                    data: { code: "RecapGenerationError", message: msg },
+                  });
+                  yield* setStatus(
+                    {
+                      id: job.recapId,
+                      repositoryId: job.repoId,
+                      period: job.period,
+                    },
+                    "error",
+                    { errorMessage: msg },
+                  );
+                }
+                return;
+              }
               const msg = `Generation failed unexpectedly: ${Cause.pretty(cause).slice(0, 200)}`;
               logError("recap-jobs", `job ${job.recapId} failed:`, Cause.pretty(cause));
               fanOut(job, {
@@ -1141,17 +1166,49 @@ export const ProjectRecapJobsLive = Layer.effect(
       Effect.gen(function* () {
         const map = yield* Ref.get(registry);
         const job = map.get(recapId);
-        if (!job) return;
-        job.cancelledByUser = true;
-        try {
-          if (!job.abortController.signal.aborted) {
-            job.abortController.abort(new Error("Recap cancelled"));
+
+        if (job) {
+          job.cancelledByUser = true;
+          try {
+            if (!job.abortController.signal.aborted) {
+              job.abortController.abort(new Error("Recap cancelled"));
+            }
+          } catch {
+            /* already aborted */
           }
-        } catch {
-          /* already aborted */
+          if (job.fiber) {
+            yield* Fiber.interrupt(job.fiber);
+          }
         }
-        if (job.fiber) {
-          yield* Fiber.interrupt(job.fiber);
+
+        // Post-interrupt safety net. Two cases land here:
+        //
+        //   (a) No live job in the registry — phantom row left in
+        //       'generating' by a prior server crash / restart, before
+        //       resumePending re-attached. cancel above was a no-op.
+        //   (b) Live job whose abort signal didn't propagate cleanly
+        //       through the agent SDK in time, so neither the body's
+        //       cancelledByUser branch nor the launchJob catchAllCause
+        //       managed to setStatus before Fiber.interrupt resolved.
+        //
+        // Either way, read the row's current status and force the
+        // 'generating' → 'error' transition via the chokepoint here
+        // (idempotent — UPDATE with the same status is harmless). This
+        // is what guarantees the UI's WS reducer flips the floating bar
+        // out of the Stop state after the user clicks Stop.
+        const row = yield* provideDb(recapService.getById(recapId)).pipe(
+          Effect.catchAll(() => Effect.succeed(null)),
+        );
+        if (row && row.status === "generating") {
+          yield* setStatus(
+            {
+              id: row.id,
+              repositoryId: row.repositoryId,
+              period: row.period,
+            },
+            "error",
+            { errorMessage: "Cancelled by user" },
+          );
         }
       });
 

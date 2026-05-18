@@ -218,6 +218,12 @@ async function runViaClaude(
     // the markdown we just composed. Read tools (`get_recap_state`,
     // `list_open_prs`, `get_repo_context`) reset the buffer to drop
     // any pre-composition prelude — that's the intended behaviour.
+    //
+    // The buffer reset is mirrored on the wire via an
+    // `overview: ""` event so the client wipes the prelude text it
+    // accumulated from earlier `chunk` events. Without this, the UI
+    // shows the agent's "let me check state first" narration even
+    // though the server has discarded it.
     const usage = await walkClaudeMessages(iter, (ev) => {
       if (ev.kind === "text-delta") {
         if (ev.data.length === 0) return;
@@ -228,6 +234,7 @@ async function runViaClaude(
       if (ev.kind === "tool-call") {
         if (ev.bareName !== "commit_recap_overview") {
           ctx.textBuffer.current = "";
+          ctx.emit({ type: "overview", data: { overview: "" } });
         }
         return;
       }

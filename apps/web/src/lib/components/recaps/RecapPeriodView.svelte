@@ -16,9 +16,11 @@ import {
   getRecapDetail,
   getRecapDetailLoading,
   getRecapLoading,
+  getRecapPendingAction,
   getRecapsForRepo,
   loadRecap,
   regenerateRecap,
+  stopRecap,
 } from "$lib/stores/recaps.svelte";
 import {
   getRightPanelOpen,
@@ -38,7 +40,6 @@ interface Props {
 let { repoId, period }: Props = $props();
 
 let generating = $state(false);
-let regenerating = $state(false);
 
 const periodLabel = $derived(period === "daily" ? "Daily" : "Weekly");
 const periodLabelLower = $derived(period === "daily" ? "daily" : "weekly");
@@ -74,6 +75,7 @@ $effect(() => {
 const latestDetail = $derived<ProjectRecap | null>(latestId ? getRecapDetail(latestId) : null);
 const detailLoading = $derived(latestId ? getRecapDetailLoading(latestId) : false);
 const stream = $derived(latestId ? getRecapStreamEntry(latestId) : null);
+const pendingAction = $derived(latestId ? getRecapPendingAction(latestId) : null);
 
 // Auto-stream when the latest recap is still generating.
 $effect(() => {
@@ -153,14 +155,15 @@ async function onGenerate(): Promise<void> {
 
 async function onRegenerate(): Promise<void> {
   const id = latestId;
-  if (!id || regenerating) return;
-  regenerating = true;
-  try {
-    resetRecapStream(id);
-    await regenerateRecap(id);
-  } finally {
-    regenerating = false;
-  }
+  if (!id) return;
+  resetRecapStream(id);
+  await regenerateRecap(id);
+}
+
+async function onStop(): Promise<void> {
+  const id = latestId;
+  if (!id) return;
+  await stopRecap(id);
 }
 </script>
 
@@ -170,7 +173,8 @@ async function onRegenerate(): Promise<void> {
 			recap={latestDetail}
 			loading={detailLoading}
 			{onRegenerate}
-			{regenerating}
+			{onStop}
+			{pendingAction}
 			{stream}
 			{floatingActionsStyle}
 		/>

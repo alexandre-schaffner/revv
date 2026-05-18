@@ -6,6 +6,7 @@ import type {
 } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
+import { abortRecapStream } from "$lib/stores/recap-stream.svelte";
 
 // ── State ────────────────────────────────────────────────────────────────────
 
@@ -20,6 +21,37 @@ let loadingByRepo = $state<Map<string, boolean>>(new Map());
 /** Full recap (markdown + provenance + stats), keyed by `recapId`. */
 let recapDetailById = $state<Map<string, ProjectRecap>>(new Map());
 let loadingDetailById = $state<Map<string, boolean>>(new Map());
+
+// In-flight destructive actions keyed by recapId. Drives the `disabled`
+// state on the floating Stop / Resume / Retry / Regenerate buttons so a
+// double-click can't fire two concurrent actions during the async
+// POST → stream-restart dance. Same shape as walkthrough's pending-action
+// map; mutations follow the Map-reassignment idiom enforced elsewhere.
+export type RecapPendingAction = "stop" | "regenerate";
+
+const pendingActions = $state({
+  map: new Map<string, RecapPendingAction>(),
+});
+
+function setPending(recapId: string, action: RecapPendingAction): void {
+  pendingActions.map.set(recapId, action);
+  pendingActions.map = new Map(pendingActions.map);
+}
+
+function clearPending(recapId: string): void {
+  if (!pendingActions.map.has(recapId)) return;
+  pendingActions.map.delete(recapId);
+  pendingActions.map = new Map(pendingActions.map);
+}
+
+/**
+ * In-flight destructive action for the given recap, or null. Consumed by
+ * the RecapDetail floating bar to disable buttons during the async dance
+ * after the user clicks one.
+ */
+export function getRecapPendingAction(recapId: string): RecapPendingAction | null {
+  return pendingActions.map.get(recapId) ?? null;
+}
 
 // ── Getters ──────────────────────────────────────────────────────────────────
 
@@ -125,6 +157,8 @@ export async function generateRecap(
 }
 
 export async function regenerateRecap(recapId: string): Promise<{ recapId: string } | null> {
+  if (pendingActions.map.has(recapId)) return null;
+  setPending(recapId, "regenerate");
   try {
     const { data, error } = await api.api.recaps({ id: recapId }).regenerate.post();
     if (error) throw new Error(`HTTP ${error.status}`);
@@ -132,6 +166,32 @@ export async function regenerateRecap(recapId: string): Promise<{ recapId: strin
   } catch (e) {
     toast.error(e instanceof Error ? e.message : "Failed to regenerate recap");
     return null;
+  } finally {
+    clearPending(recapId);
+  }
+}
+
+/**
+ * Stop an in-flight recap generation. Aborts the client SSE immediately
+ * (so the UI stops painting) and hits the server cancel endpoint so the
+ * agent stops burning tokens. The server transitions the row to
+ * `status='error'` with `errorMessage="Cancelled by user"`, broadcasts
+ * the change via WS, and the reducer here patches the cached detail/list
+ * state on receipt. Returns true on success.
+ */
+export async function stopRecap(recapId: string): Promise<boolean> {
+  if (pendingActions.map.has(recapId)) return false;
+  setPending(recapId, "stop");
+  try {
+    abortRecapStream(recapId);
+    const { error } = await api.api.recaps({ id: recapId }).stop.post();
+    if (error) throw new Error(`HTTP ${error.status}`);
+    return true;
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : "Failed to stop recap");
+    return false;
+  } finally {
+    clearPending(recapId);
   }
 }
 

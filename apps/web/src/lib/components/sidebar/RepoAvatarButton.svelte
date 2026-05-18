@@ -46,7 +46,7 @@ const showCloneIndicator = $derived(
 				<RepoGradientAvatar
 					fullName={repository.fullName}
 					size={30}
-					radius={7}
+					radius={8}
 					class="avatar"
 				/>
 				{#if showCloneIndicator}
@@ -75,7 +75,7 @@ const showCloneIndicator = $derived(
 		height: 40px;
 		padding: 0;
 		border: none;
-		border-radius: 9px;
+		border-radius: 10px;
 		background: transparent;
 		cursor: pointer;
 		color: var(--color-text-muted);

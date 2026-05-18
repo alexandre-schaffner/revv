@@ -2,7 +2,7 @@
 # Revv — Build & Development Commands
 # ──────────────────────────────────────────────────────────────
 
-.PHONY: install dev build dist clean typecheck lint format format-check help
+.PHONY: install dev build dist clean typecheck lint format format-check help cache-emulator-up cache-emulator-down dev-cache-emulator dev-desktop-cache-emulator
 
 # Default target
 help: ## Show this help
@@ -48,6 +48,56 @@ kill-server: ## Kill any stale dev server processes (uses PID files; safe to run
 	  fi; \
 	  rm -f apps/server/revv-dev.db.pid; \
 	fi
+
+# ── Team Cache Emulator (fake-gcs-server) ─────────────────────
+
+# fake-gcs-server stand-in for GCS. The @google-cloud/storage SDK honors
+# STORAGE_EMULATOR_HOST, so pointing the server at a local container is
+# enough to exercise upload + hydrate without touching a real bucket.
+CACHE_EMULATOR_CONTAINER = revv-gcs-emulator
+CACHE_EMULATOR_PORT      = 4443
+CACHE_EMULATOR_BUCKET    = revv-cache-test
+
+cache-emulator-up: ## Start fake-gcs-server in Docker and create the test bucket
+	@if docker ps --format '{{.Names}}' | grep -q '^$(CACHE_EMULATOR_CONTAINER)$$'; then \
+	  printf "[cache-emulator] already running on :$(CACHE_EMULATOR_PORT)\n"; \
+	else \
+	  if docker ps -a --format '{{.Names}}' | grep -q '^$(CACHE_EMULATOR_CONTAINER)$$'; then \
+	    docker rm -f $(CACHE_EMULATOR_CONTAINER) >/dev/null; \
+	  fi; \
+	  printf "[cache-emulator] starting fake-gcs-server on :$(CACHE_EMULATOR_PORT)…\n"; \
+	  docker run -d --name $(CACHE_EMULATOR_CONTAINER) \
+	    -p $(CACHE_EMULATOR_PORT):4443 \
+	    fsouza/fake-gcs-server \
+	    -scheme http -public-host localhost:$(CACHE_EMULATOR_PORT) >/dev/null; \
+	fi
+	@printf "[cache-emulator] waiting for HTTP readiness…\n"
+	@for i in 1 2 3 4 5 6 7 8 9 10; do \
+	  if curl -sf "http://localhost:$(CACHE_EMULATOR_PORT)/storage/v1/b" >/dev/null 2>&1; then break; fi; \
+	  sleep 1; \
+	done
+	@printf "[cache-emulator] ensuring bucket \"$(CACHE_EMULATOR_BUCKET)\" exists…\n"
+	@curl -s -o /dev/null -w "  POST /b → %{http_code}\n" \
+	  -X POST "http://localhost:$(CACHE_EMULATOR_PORT)/storage/v1/b" \
+	  -H "Content-Type: application/json" \
+	  -d '{"name":"$(CACHE_EMULATOR_BUCKET)"}'
+	@printf "[cache-emulator] ready. Configure Settings → Team Cache with:\n"
+	@printf "  bucket:      $(CACHE_EMULATOR_BUCKET)\n"
+	@printf "  credentials: any structurally-valid SA JSON (emulator ignores auth)\n"
+
+cache-emulator-down: ## Stop and remove the fake-gcs-server container
+	@if docker ps -a --format '{{.Names}}' | grep -q '^$(CACHE_EMULATOR_CONTAINER)$$'; then \
+	  docker rm -f $(CACHE_EMULATOR_CONTAINER) >/dev/null; \
+	  printf "[cache-emulator] stopped.\n"; \
+	else \
+	  printf "[cache-emulator] not running.\n"; \
+	fi
+
+dev-cache-emulator: cache-emulator-up kill-server ## Start the dev server pointed at the local fake-gcs-server
+	REVV_CACHE_API_ENDPOINT=http://localhost:$(CACHE_EMULATOR_PORT) $(DEV_ENV) bun run dev:server
+
+dev-desktop-cache-emulator: cache-emulator-up kill-server ## Start the Tauri desktop app pointed at the local fake-gcs-server
+	REVV_CACHE_API_ENDPOINT=http://localhost:$(CACHE_EMULATOR_PORT) $(DEV_ENV) bun run dev:desktop
 
 # ── Build ─────────────────────────────────────────────────────
 

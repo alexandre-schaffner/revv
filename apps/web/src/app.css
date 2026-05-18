@@ -932,6 +932,42 @@ diffs-container {
    Add new exceptions sparingly. Each one needs a comment
    explaining why losing the animation would harm meaning.
    ────────────────────────────────────────────────────────── */
+/* Per-character fade-in for streamed markdown tokens (recap generation).
+   Mirrors Luxe's `TextGenerativeEffect`
+   (https://animation-svelte.vercel.app/luxe/text-generate-effect):
+     duration: 0.3s
+     ease:     easeOut
+     initial:  opacity 0, filter blur(4px), rotateX 90deg, translateY 5px
+     animate:  opacity 1, filter blur(0),   rotateX 0,     translateY 0
+     stagger:  delay = index * 15ms (set inline per-span by the renderer)
+
+   The renderer in `lib/utils/markdown.ts` wraps only characters past the
+   previously-rendered plain-text length, so already-shown characters
+   render as plain text and don't re-animate when `{@html}` replaces the
+   block's inner HTML. The keyframe ends at the same visual state as
+   plain text so the swap from animated span to plain text is seamless.
+
+   Defined globally so it's not affected by per-component CSS scoping —
+   the spans are injected via `{@html}` and have no component scope. */
+.sd-char-new {
+  display: inline-block;
+  white-space: pre;
+  animation: sd-char-in 300ms cubic-bezier(0, 0, 0.58, 1) both;
+}
+
+@keyframes sd-char-in {
+  from {
+    opacity: 0;
+    filter: blur(4px);
+    transform: perspective(800px) rotateX(90deg) translateY(5px);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+    transform: perspective(800px) rotateX(0) translateY(0);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

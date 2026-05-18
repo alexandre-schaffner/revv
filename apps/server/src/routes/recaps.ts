@@ -188,6 +188,23 @@ export const recapRoutes = new Elysia({ prefix: "/api" })
       return handleAppError(e, ctx);
     }
   })
+  // ─── POST /api/recaps/:id/stop ─────────────────────────────────────────
+  // Cancel an in-flight recap generation. Sets `cancelledByUser=true`,
+  // aborts the agent's AbortController, and interrupts the fiber. The
+  // `buildJobBody` cancellation branch then transitions status to
+  // 'error' with message "Cancelled by user", and broadcasts the change
+  // via WS so other clients update. No-op if no live job is registered
+  // for this recapId (e.g. it already finished or was never started).
+  .post("/recaps/:id/stop", async (ctx) => {
+    try {
+      await AppRuntime.runPromise(
+        Effect.flatMap(ProjectRecapJobs, (jobs) => jobs.cancel(ctx.params.id)),
+      );
+      return { success: true };
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  })
   // ─── GET /api/recaps/:id/stream ────────────────────────────────────────
   // SSE endpoint for live recap generation. Returns markdown chunks as
   // the AI composes them, plus phase shimmer events.

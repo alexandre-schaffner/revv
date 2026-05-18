@@ -232,7 +232,12 @@ export async function runRecapAgentViaOpencode(
             }
             if (ev.kind === "tool-call") {
               if (ev.bareName !== "commit_recap_overview") {
+                // Mirror the server-side buffer reset on the wire so the
+                // UI drops the agent's pre-composition narration. See
+                // recap-agent-runner.ts for the matching reset in the
+                // Claude SDK path.
                 params.ctx.textBuffer.current = "";
+                fanOutEvent({ type: "overview", data: { overview: "" } });
               }
               return;
             }
@@ -303,6 +308,7 @@ export async function runRecapAgentViaOpencode(
             if (ev.kind === "tool-call") {
               if (ev.bareName !== "commit_recap_overview") {
                 params.ctx.textBuffer.current = "";
+                fanOutEvent({ type: "overview", data: { overview: "" } });
               }
               return;
             }
