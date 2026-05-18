@@ -34,7 +34,7 @@ export async function fetchOrgs(): Promise<void> {
   }
 }
 
-export function setActiveOrg(login: string | null): void {
+function setActiveOrg(login: string | null): void {
   activeOrg = login;
   if (typeof localStorage !== "undefined") {
     if (login) localStorage.setItem(storageKey(), login);
@@ -42,11 +42,11 @@ export function setActiveOrg(login: string | null): void {
   }
 }
 
-export function getAvailableOrgs(): Org[] {
+function getAvailableOrgs(): Org[] {
   return availableOrgs;
 }
 
-export function getActiveOrg(): string | null {
+function getActiveOrg(): string | null {
   return activeOrg;
 }
 
