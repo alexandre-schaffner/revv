@@ -64,10 +64,11 @@ const clonePollers = new Map<string, { cancelled: boolean }>();
 const CLONE_POLL_INTERVAL_MS = 2000;
 const CLONE_POLL_MAX_MS = 10 * 60 * 1000;
 
-// S6: Dedup in-flight reconciliation polls per prId. When multiple callers
-// (unexpected stream end, WS-complete handler, user retry) all fire
-// hydrateFromCache for the same PR concurrently, they share a single
-// Promise so only one HTTP request is in flight at a time.
+// S6: Dedup in-flight hydration requests per prId. Multiple callers
+// (mount-effect, WS reconnect, reconciliation poll) can race to hydrate
+// the same PR. They share a single in-flight Promise so only one HTTP
+// request goes out. Encapsulated inside hydrateFromCache — callers do
+// not touch this map directly.
 const pendingHydration = new Map<string, Promise<boolean>>();
 
 // In-flight user-initiated actions keyed by prId. Drives the `disabled`
@@ -276,15 +277,7 @@ function scheduleReconciliationPoll(prId: string, attempt = 0): void {
       return;
     }
 
-    // S6: coalesce concurrent hydration attempts for the same prId
-    let hydrationPromise = pendingHydration.get(prId);
-    if (!hydrationPromise) {
-      hydrationPromise = hydrateFromCache(prId, { activate: false }).finally(() => {
-        pendingHydration.delete(prId);
-      });
-      pendingHydration.set(prId, hydrationPromise);
-    }
-    const hit = await hydrationPromise;
+    const hit = await hydrateFromCache(prId, { activate: false });
 
     if (hit) {
       const updated = store.entries.get(prId);
@@ -460,7 +453,44 @@ export async function prefetchWalkthrough(prId: string): Promise<void> {
 
 // ── Cache hydration ─────────────────────────────────────────────────────────
 
+/**
+ * Read current walkthrough state for `prId` and reconcile it into the
+ * reactive store. The only client path that returns walkthrough content
+ * without potentially triggering generation. Called from three places:
+ *   - `GuidedWalkthrough.onMount` — instant render on cache hit
+ *   - `ws.svelte.ts onOpen` — recover missed `walkthrough:complete` for
+ *     the active PR after a reconnect
+ *   - `scheduleReconciliationPoll` — converge after SSE closes without
+ *     a terminal event
+ *
+ * Concurrent calls for the same `prId` share a single in-flight request
+ * via `pendingHydration`; the activate side-effect fires once, under
+ * whichever caller's options won the race.
+ *
+ * @param options.activate — When not `false`, sets `store.activePrId =
+ *   prId` on a cache hit. Reconciliation poll passes `false` so
+ *   background recovery doesn't steal the user's focus.
+ */
 export async function hydrateFromCache(
+  prId: string,
+  options?: { activate?: boolean },
+): Promise<boolean> {
+  const inflight = pendingHydration.get(prId);
+  if (inflight) {
+    wtTrace("lifecycle", `hydrateFromCache deduped prId=${prId}`);
+    return inflight;
+  }
+
+  const promise = doHydrateFromCache(prId, options);
+  pendingHydration.set(prId, promise);
+  try {
+    return await promise;
+  } finally {
+    pendingHydration.delete(prId);
+  }
+}
+
+async function doHydrateFromCache(
   prId: string,
   options?: { activate?: boolean },
 ): Promise<boolean> {
@@ -557,7 +587,11 @@ export async function hydrateFromCache(
     }
 
     return true;
-  } catch {
+  } catch (e) {
+    wtTrace(
+      "lifecycle",
+      `hydrateFromCache prId=${prId} error=${e instanceof Error ? e.message : String(e)}`,
+    );
     return false;
   }
 }

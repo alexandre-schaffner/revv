@@ -8,8 +8,10 @@ import {
   getRightPanelOpen,
   getRightPanelWidth,
   getSidebarCollapsed,
+  getSidebarPeekHovering,
   getSidebarWidth,
 } from "$lib/stores/sidebar.svelte";
+import { RAIL_WIDTH } from "$lib/constants";
 
 const repoId = $derived(page.params.repoId ?? "");
 
@@ -21,14 +23,16 @@ const tabs = [
 ];
 
 const sidebarCollapsed = $derived(getSidebarCollapsed());
+const sidebarPeekHovering = $derived(getSidebarPeekHovering());
+const sidebarEffectiveCollapsed = $derived(sidebarCollapsed && !sidebarPeekHovering);
 const sidebarWidth = $derived(getSidebarWidth());
 const rightPanelOpen = $derived(getRightPanelOpen());
 const rightPanelWidth = $derived(getRightPanelWidth());
 
 // Center the floating tabs over the visible main area, mirroring
-// AppShell's `.tabs-float` math.
+// AppShell's `.tabs-float` math exactly.
 const floatingTabsStyle = $derived(
-  `left: ${sidebarCollapsed ? 40 : sidebarWidth}px; right: ${
+  `left: ${RAIL_WIDTH + (sidebarEffectiveCollapsed ? 0 : sidebarWidth)}px; right: ${
     rightPanelOpen ? rightPanelWidth : 0
   }px;`,
 );

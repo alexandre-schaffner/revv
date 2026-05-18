@@ -58,10 +58,31 @@ import type { DbService } from "./Db";
 import { GitHubService } from "./GitHub";
 import type { GitHubEtagCache } from "./GitHubEtagCache";
 import { runGit, runGitBestEffort, runGitCapture, spawnGit } from "./git-runner";
+import {
+  assertNotFlagLike,
+  GitOperationError,
+  InvalidBranchNameError,
+  isValidSha,
+  lsRemoteHead,
+  PushRejectedError,
+  pushFastForward,
+  pushNewBranch,
+  pushWithLease,
+  RefAlreadyExistsError,
+} from "./GitOps";
 import { PrContextService } from "./PrContext";
 import { PullRequestService } from "./PullRequest";
 import { SettingsService } from "./Settings";
 import { WebSocketHub } from "./WebSocketHub";
+
+// Re-export the GitOps errors so existing callers that destructured them
+// from this module keep working without import churn.
+export {
+  GitOperationError,
+  InvalidBranchNameError,
+  PushRejectedError,
+  RefAlreadyExistsError,
+} from "./GitOps";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -98,22 +119,8 @@ export class NoChatSessionError extends Data.TaggedError("NoChatSessionError")<{
   readonly prId: string;
 }> {}
 
-export class PushRejectedError extends Data.TaggedError("PushRejectedError")<{
-  readonly message: string;
-}> {}
-
-export class GitOperationError extends Data.TaggedError("GitOperationError")<{
-  readonly message: string;
-  readonly cause?: unknown;
-}> {}
-
-export class RefAlreadyExistsError extends Data.TaggedError("RefAlreadyExistsError")<{
-  readonly ref: string;
-}> {}
-
-export class InvalidBranchNameError extends Data.TaggedError("InvalidBranchNameError")<{
-  readonly message: string;
-}> {}
+// GitOperationError, PushRejectedError, RefAlreadyExistsError, and
+// InvalidBranchNameError are defined in `./GitOps` and re-exported above.
 
 export type ChatPushError =
   | DirtyWorktreeError
@@ -236,16 +243,10 @@ export class ChatChangesPushService extends Context.Tag("ChatChangesPushService"
 >() {}
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
-
-function isValidSha(sha: string): boolean {
-  return /^[0-9a-f]{7,40}$/.test(sha);
-}
-
-function assertNotFlagLike(value: string, label: string): void {
-  if (value.startsWith("-")) {
-    throw new Error(`refusing to use ${label} that looks like a flag: ${value}`);
-  }
-}
+//
+// `isValidSha`, `assertNotFlagLike`, `lsRemoteHead`, `pushWithLease`,
+// `pushFastForward`, and `pushNewBranch` live in `./GitOps` and are
+// imported at the top of this module.
 
 // Block the push on any uncommitted *tracked* change — modifications,
 // deletions, staged work, or unmerged conflict state — but ignore untracked
@@ -275,84 +276,6 @@ async function listConflictFiles(worktreePath: string): Promise<string[]> {
 
 function isMergeInProgress(worktreePath: string): boolean {
   return existsSync(join(worktreePath, ".git", "MERGE_HEAD"));
-}
-
-async function lsRemoteHead(
-  clonePath: string,
-  authedUrl: string,
-  branch: string,
-): Promise<string | null> {
-  const out = await runGitCapture(
-    ["ls-remote", authedUrl, `refs/heads/${branch}`],
-    clonePath,
-    30_000,
-  );
-  const line = out.trim().split("\n")[0];
-  if (!line) return null;
-  const tab = line.indexOf("\t");
-  if (tab < 0) return null;
-  const sha = line.slice(0, tab).trim();
-  return isValidSha(sha) ? sha : null;
-}
-
-async function pushWithLease(
-  worktreePath: string,
-  authedUrl: string,
-  localRef: string,
-  remoteBranch: string,
-  expectedRemoteSha: string,
-): Promise<{ ok: boolean; stderr: string }> {
-  const result = await spawnGit(
-    [
-      "push",
-      `--force-with-lease=refs/heads/${remoteBranch}:${expectedRemoteSha}`,
-      authedUrl,
-      `${localRef}:refs/heads/${remoteBranch}`,
-    ],
-    { cwd: worktreePath, timeoutMs: 120_000, captureStdout: false },
-  );
-  return {
-    ok: !result.timedOut && result.exitCode === 0,
-    stderr: result.stderrTail,
-  };
-}
-
-async function pushFastForward(
-  worktreePath: string,
-  authedUrl: string,
-  localRef: string,
-  remoteBranch: string,
-): Promise<{ ok: boolean; stderr: string }> {
-  const result = await spawnGit(["push", authedUrl, `${localRef}:refs/heads/${remoteBranch}`], {
-    cwd: worktreePath,
-    timeoutMs: 120_000,
-    captureStdout: false,
-  });
-  return {
-    ok: !result.timedOut && result.exitCode === 0,
-    stderr: result.stderrTail,
-  };
-}
-
-async function pushNewBranch(
-  worktreePath: string,
-  authedUrl: string,
-  localRef: string,
-  remoteBranch: string,
-  force: boolean,
-): Promise<{ ok: boolean; stderr: string }> {
-  const args = ["push"];
-  if (force) args.push("--force");
-  args.push(authedUrl, `${localRef}:refs/heads/${remoteBranch}`);
-  const result = await spawnGit(args, {
-    cwd: worktreePath,
-    timeoutMs: 120_000,
-    captureStdout: false,
-  });
-  return {
-    ok: !result.timedOut && result.exitCode === 0,
-    stderr: result.stderrTail,
-  };
 }
 
 // ── Live ────────────────────────────────────────────────────────────────────

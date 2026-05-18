@@ -183,6 +183,28 @@ function handleMessage(msg: WsServerMessage): void {
     case "recap:added":
       onRecapAdded(msg.data);
       break;
+    // ── New-PR session envelopes — stubs until the frontend chat
+    //    surface lands. The backend isn't broadcasting these yet either,
+    //    so the cases exist to keep the exhaustive-switch valid; the
+    //    payloads will be routed to a new-pr-sessions store in a
+    //    follow-up. Logged in DEV so test runs surface unexpected
+    //    deliveries during the feature roll-out.
+    case "new-pr-session:created":
+    case "new-pr-session:message-appended":
+    case "new-pr-session:agent-turn-started":
+    case "new-pr-session:agent-turn-ended":
+    case "new-pr-session:commit-recorded":
+    case "new-pr-session:metadata-updated":
+    case "new-pr-session:worktree-changed":
+    case "new-pr-session:synced":
+    case "new-pr-session:sync-conflicted":
+    case "new-pr-session:status-changed":
+    case "new-pr-session:pr-opened":
+    case "new-pr-session:updated":
+      if (import.meta.env.DEV) {
+        console.debug("[ws] new-pr-session envelope received", msg.type, msg.data);
+      }
+      break;
     default: {
       const _exhaustive: never = msg;
       console.warn("[ws] unhandled message type", (_exhaustive as { type: string }).type);
@@ -240,7 +262,7 @@ export function connect(token: string, hostOverride?: string): void {
     }
     // On reconnect, reconcile missed prs:updated / repos:updated broadcasts.
     if (isReconnect) {
-      void Promise.all([prs.fetchRepos(), prs.fetchPrs()]);
+      void Promise.all([prs.fetchRepos(), prs.fetchPrs(), prs.fetchPinnedPrs()]);
     }
     // Recover from any `walkthrough:complete` broadcasts the client missed
     // while WS was unconnected — the canonical case is `resumePending`

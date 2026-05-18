@@ -16,10 +16,17 @@ import type {
   CompleteRecapInput,
   GetRecapStateInput,
   GetRepoContextInput,
+  ListOpenPrsInput,
   RecapToolHandler,
   RecapToolResult,
   SetRecapOverviewInput,
 } from "./spec";
+
+/** Default page size for `list_open_prs`. Small enough that 20 PRs split into
+ *  ≤4 pages, each well under the MCP response budget. */
+const OPEN_PRS_DEFAULT_PAGE_SIZE = 5;
+/** Hard cap on a single `list_open_prs` page — matches the schema. */
+const OPEN_PRS_MAX_PAGE_SIZE = 20;
 
 function ok(text: string): RecapToolResult {
   return { content: [{ type: "text" as const, text }] };
@@ -40,6 +47,7 @@ export const getRecapStateHandler: RecapToolHandler<GetRecapStateInput> = async 
   const rerunInstructions = previousOverview
     ? " A `previousOverview` is included — it's the recap you wrote earlier for this same window. The window has since rolled forward (new PRs closed, walkthroughs landed). Update that overview in place: keep what's still accurate, refresh the stats, fold in new PRs, and adjust narrative where the picture changed. Do NOT restart from scratch and do NOT mention that you're updating — the reader sees only the final overview."
     : "";
+  const openPrsTotal = ctx.sourceBundle.openPrs.length;
   const payload = {
     recapId: ctx.recapId,
     repoId: ctx.sourceBundle.repoId,
@@ -49,13 +57,58 @@ export const getRecapStateHandler: RecapToolHandler<GetRecapStateInput> = async 
     periodEnd: ctx.sourceBundle.periodEnd,
     stats: ctx.sourceBundle.stats,
     prs: ctx.sourceBundle.prs,
-    openPrs: ctx.sourceBundle.openPrs,
+    openPrsTotal,
+    openPrsPageSize: OPEN_PRS_DEFAULT_PAGE_SIZE,
     previousOverview,
     instructions:
-      "Read the archived PRs above (the `prs` array). Each row has author, branches, +/- stats, a body excerpt, and (when available) a walkthrough summary + sentiment + risk + 9-axis context. For PRs where `walkthrough` is null, a `diff` object is provided with the actual file changes — read those `files[].patch` blocks (status, additions, deletions, unified diff) to describe what the change does. The `diff.source` field tells you where the bytes came from (`'cache'`, `'github'`, or `'unavailable'`); when it's `'unavailable'`, fall back to title + body + +/- counts. Honor any `diff.note` (truncation hints) and don't claim to have read more than you did. Also review the `openPrs` array for currently open PRs — use these to write an 'Active work' section after 'What shipped'. As you compose each section, call append_recap_chunk to stream it live. Then call set_recap_overview ONCE with the complete markdown body, the PR ids you included, the walkthrough ids you incorporated, and the pre-aggregated stats. Finally call complete_recap." +
+      `Read the archived PRs above (the \`prs\` array). Each row has author, branches, +/- stats, a body excerpt, and (when available) a walkthrough summary + sentiment + risk + 9-axis context. For PRs where \`walkthrough\` is null, a \`diff\` object is provided with the actual file changes — read those \`files[].patch\` blocks (status, additions, deletions, unified diff) to describe what the change does. The \`diff.source\` field tells you where the bytes came from (\`'cache'\`, \`'github'\`, or \`'unavailable'\`); when it's \`'unavailable'\`, fall back to title + body + +/- counts. Honor any \`diff.note\` (truncation hints) and don't claim to have read more than you did. Open PRs are NOT inlined here to keep this payload small — there are ${openPrsTotal} of them, capped at the 20 most recently updated. Fetch them via list_open_prs (start with offset=0, default page size ${OPEN_PRS_DEFAULT_PAGE_SIZE}) and keep paging while \`nextOffset\` is non-null. Use those rows to write the 'Active work' section after 'What shipped'. As you compose each section, call append_recap_chunk to stream it live. Then call set_recap_overview ONCE with the complete markdown body, the PR ids you included, the walkthrough ids you incorporated, and the pre-aggregated stats. Finally call complete_recap.` +
       rerunInstructions,
   };
   return ok(JSON.stringify(payload));
+};
+
+export const listOpenPrsHandler: RecapToolHandler<ListOpenPrsInput> = async (ctx, input) => {
+  // Slice the in-memory bundle — the orchestrator already capped the list at
+  // 20 most-recently-updated rows when it built the bundle, so we never page
+  // beyond what was loaded at job start.
+  const all = ctx.sourceBundle.openPrs;
+  const total = all.length;
+  const offset = Math.max(0, input.offset ?? 0);
+  const limit = Math.min(
+    OPEN_PRS_MAX_PAGE_SIZE,
+    Math.max(1, input.limit ?? OPEN_PRS_DEFAULT_PAGE_SIZE),
+  );
+  if (offset >= total) {
+    return ok(
+      JSON.stringify({
+        prs: [],
+        total,
+        offset,
+        limit,
+        nextOffset: null,
+        instructions:
+          total === 0
+            ? "No open PRs in this repo. Skip the 'Active work' section entirely."
+            : "You've already read every page. Stop calling list_open_prs and move on to composing the recap.",
+      }),
+    );
+  }
+  const end = Math.min(offset + limit, total);
+  const slice = all.slice(offset, end);
+  const nextOffset = end < total ? end : null;
+  return ok(
+    JSON.stringify({
+      prs: slice,
+      total,
+      offset,
+      limit,
+      nextOffset,
+      instructions:
+        nextOffset === null
+          ? `Final page: rows ${offset}..${end - 1} of ${total}. You've now seen every open PR; do not call list_open_prs again. Reference these ids in the 'Active work' section.`
+          : `Rows ${offset}..${end - 1} of ${total}. Call list_open_prs again with offset=${nextOffset} to get the next page, then continue.`,
+    }),
+  );
 };
 
 export const getRepoContextHandler: RecapToolHandler<GetRepoContextInput> = async (ctx, input) => {

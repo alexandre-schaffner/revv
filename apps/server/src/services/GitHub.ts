@@ -654,6 +654,65 @@ export class GitHubService extends Context.Tag("GitHubService")<
       GitHubError,
       SettingsService
     >;
+    /**
+     * Create a new pull request via REST `POST /repos/{owner}/{repo}/pulls`.
+     * `head` is the branch name (no `owner:` prefix needed for same-repo
+     * PRs). `base` defaults to the repo's default branch — pass it
+     * explicitly when the caller wants a different target.
+     *
+     * Used by the new-PR session flow's Open-PR step (orchestrator-only).
+     * The handler is idempotent at the orchestrator layer: callers should
+     * first run {@link findPrByHead} and short-circuit if a PR for `head`
+     * already exists, since GitHub will reject a duplicate-PR POST with
+     * 422.
+     */
+    readonly createPullRequest: (
+      repoFullName: string,
+      params: {
+        readonly title: string;
+        readonly body: string;
+        readonly head: string;
+        readonly base: string;
+        readonly draft?: boolean;
+      },
+      token: string,
+    ) => Effect.Effect<
+      {
+        readonly id: number;
+        readonly nodeId: string;
+        readonly number: number;
+        readonly htmlUrl: string;
+        readonly headSha: string;
+        readonly baseSha: string;
+      },
+      GitHubError,
+      SettingsService
+    >;
+    /**
+     * Find an existing PR (open or closed) whose head branch matches
+     * `headBranch` in the same repo. Returns null when none exists.
+     *
+     * The primary use-case is idempotency on the new-PR session
+     * Open-PR step: on resume-after-crash, the orchestrator looks up
+     * the branch we already pushed and, if a PR was already opened,
+     * short-circuits to `complete` without calling `createPullRequest`
+     * again.
+     */
+    readonly findPrByHead: (
+      repoFullName: string,
+      headBranch: string,
+      token: string,
+    ) => Effect.Effect<
+      {
+        readonly number: number;
+        readonly nodeId: string;
+        readonly htmlUrl: string;
+        readonly headSha: string;
+        readonly baseSha: string;
+      } | null,
+      GitHubError,
+      SettingsService
+    >;
   }
 >() {}
 
@@ -1357,6 +1416,61 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
         { merge_method: mergeMethod },
         apiBase,
       );
+    }),
+
+  createPullRequest: (repoFullName, params, token) =>
+    Effect.gen(function* () {
+      const apiBase = yield* resolveApiBase;
+      const { owner, repo } = yield* parseRepoFullName(repoFullName);
+      const body: Record<string, unknown> = {
+        title: params.title,
+        body: params.body,
+        head: params.head,
+        base: params.base,
+      };
+      if (params.draft !== undefined) body.draft = params.draft;
+      const data = yield* githubPost(
+        `/repos/${owner}/${repo}/pulls`,
+        token,
+        body,
+        apiBase,
+      );
+      const raw = data as Record<string, unknown>;
+      const head = (raw.head as Record<string, unknown> | undefined) ?? {};
+      const base = (raw.base as Record<string, unknown> | undefined) ?? {};
+      return {
+        id: raw.id as number,
+        nodeId: (raw.node_id as string | undefined) ?? "",
+        number: raw.number as number,
+        htmlUrl: (raw.html_url as string | undefined) ?? "",
+        headSha: (head.sha as string | undefined) ?? "",
+        baseSha: (base.sha as string | undefined) ?? "",
+      };
+    }),
+
+  findPrByHead: (repoFullName, headBranch, token) =>
+    Effect.gen(function* () {
+      const apiBase = yield* resolveApiBase;
+      const { owner, repo } = yield* parseRepoFullName(repoFullName);
+      // GitHub expects head as `owner:branch` to disambiguate forks.
+      const headQuery = encodeURIComponent(`${owner}:${headBranch}`);
+      const data = yield* githubFetch(
+        `/repos/${owner}/${repo}/pulls?state=all&head=${headQuery}&per_page=1`,
+        token,
+        apiBase,
+      );
+      const list = data as Array<Record<string, unknown>>;
+      const first = list[0];
+      if (!first) return null;
+      const head = (first.head as Record<string, unknown> | undefined) ?? {};
+      const base = (first.base as Record<string, unknown> | undefined) ?? {};
+      return {
+        number: first.number as number,
+        nodeId: (first.node_id as string | undefined) ?? "",
+        htmlUrl: (first.html_url as string | undefined) ?? "",
+        headSha: (head.sha as string | undefined) ?? "",
+        baseSha: (base.sha as string | undefined) ?? "",
+      };
     }),
 });
 

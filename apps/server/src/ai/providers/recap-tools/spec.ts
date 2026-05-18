@@ -187,6 +187,26 @@ export interface RecapSourceBundle {
 
 export const getRecapStateSchema = z.object({});
 
+export const listOpenPrsSchema = z.object({
+  offset: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe(
+      "Zero-based offset into the open-PR list. Defaults to 0. Use the `nextOffset` returned by the previous call to walk through pages — when it's null, you've reached the end.",
+    ),
+  limit: z
+    .number()
+    .int()
+    .positive()
+    .max(20)
+    .optional()
+    .describe(
+      "Maximum number of open PRs to return in this page. Defaults to 5 and is hard-capped at 20 to keep each tool response small. Stick with the default unless you have a reason to read more at once.",
+    ),
+});
+
 export const getRepoContextSchema = z.object({
   /**
    * Optional period filter for the prior-recap lookup. Defaults to "any
@@ -251,6 +271,7 @@ export const appendRecapChunkSchema = z.object({
 // ── Type exports ─────────────────────────────────────────────────────────────
 
 export type GetRecapStateInput = z.infer<typeof getRecapStateSchema>;
+export type ListOpenPrsInput = z.infer<typeof listOpenPrsSchema>;
 export type GetRepoContextInput = z.infer<typeof getRepoContextSchema>;
 export type SetRecapOverviewInput = z.infer<typeof setRecapOverviewSchema>;
 export type CompleteRecapInput = z.infer<typeof completeRecapSchema>;

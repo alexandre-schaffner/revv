@@ -14,6 +14,7 @@ import {
   completeRecapHandler,
   getRecapStateHandler,
   getRepoContextHandler,
+  listOpenPrsHandler,
   setRecapOverviewHandler,
 } from "./handlers";
 import {
@@ -21,6 +22,7 @@ import {
   completeRecapSchema,
   getRecapStateSchema,
   getRepoContextSchema,
+  listOpenPrsSchema,
   type RecapToolContext,
   type RecapToolSpec,
   setRecapOverviewSchema,
@@ -30,6 +32,7 @@ export type {
   CompleteRecapInput,
   GetRecapStateInput,
   GetRepoContextInput,
+  ListOpenPrsInput,
   RecapSourceBundle,
   RecapSourcePr,
   RecapSourcePrDiff,
@@ -44,6 +47,7 @@ export {
   completeRecapHandler,
   getRecapStateHandler,
   getRepoContextHandler,
+  listOpenPrsHandler,
   setRecapOverviewHandler,
 };
 
@@ -52,9 +56,16 @@ export const RECAP_TOOL_SPECS: Array<RecapToolSpec<any>> = [
   {
     name: "get_recap_state",
     description:
-      "Read-only. Call FIRST on every run, including resumes. Returns the period boundaries, the list of archived PRs in this window (with author, branches, +/-, body excerpt), and each PR's latest complete walkthrough (summary, sentiment, risk level) when available. Use this as the source of truth for the recap — do not invent PRs or walkthroughs.",
+      "Read-only. Call FIRST on every run, including resumes. Returns the period boundaries, the list of archived PRs in this window (with author, branches, +/-, body excerpt), and each PR's latest complete walkthrough (summary, sentiment, risk level) when available. Open PRs are NOT inlined — only their count is — fetch them via list_open_prs to keep this payload small. Use this as the source of truth for the recap — do not invent PRs or walkthroughs.",
     inputSchema: getRecapStateSchema,
     handler: getRecapStateHandler,
+  },
+  {
+    name: "list_open_prs",
+    description:
+      "Read-only. Paginated fetch over the currently open PRs that get_recap_state reported (already capped server-side at the 20 most recently updated). Start with offset=0; the response includes `nextOffset` — keep paging while it's non-null, then stop. Default page size is 5; raise it only if you have a reason. Each row carries author, branches, +/- stats, a body excerpt, and the latest complete walkthrough when one exists. Use these rows to write the 'Active work' section.",
+    inputSchema: listOpenPrsSchema,
+    handler: listOpenPrsHandler,
   },
   {
     name: "get_repo_context",

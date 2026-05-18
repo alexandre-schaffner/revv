@@ -1,5 +1,5 @@
 import { guessImageContentType } from "@revv/shared";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import {
@@ -8,7 +8,7 @@ import {
   type SuggestionsWalkthroughContext,
 } from "../ai/providers/suggestions";
 import { db } from "../auth";
-import { user } from "../db/schema";
+import { pinnedPullRequests, user } from "../db/schema";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
 import { resolveAgent } from "../services/Ai";
@@ -170,6 +170,37 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
       return handleAppError(e, ctx);
     }
   })
+  .get(
+    "/tagged",
+    async (ctx) => {
+      try {
+        const repoId = ctx.query.repo;
+        if (!repoId) {
+          ctx.set.status = 400;
+          return { error: "repo query parameter is required" };
+        }
+        // Look up the current user's GitHub login.
+        const rows = await db
+          .select({ githubLogin: user.githubLogin })
+          .from(user)
+          .where(eq(user.id, ctx.session.user.id));
+        const login = rows[0]?.githubLogin;
+        if (!login) {
+          return [];
+        }
+        return await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const prService = yield* PullRequestService;
+            const { accountId } = yield* resolveActiveAccount(ctx.session.user.id);
+            return yield* prService.listTaggedPrs(repoId, login, accountId);
+          }),
+        );
+      } catch (e) {
+        return handleAppError(e, ctx);
+      }
+    },
+    { query: t.Object({ repo: t.String() }) },
+  )
   .get("/:id/files", async (ctx) => {
     try {
       const files = await AppRuntime.runPromise(
@@ -520,7 +551,52 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
         mergeMethod: t.Union([t.Literal("merge"), t.Literal("squash"), t.Literal("rebase")]),
       }),
     },
-  );
+  )
+
+  .get("/pinned", async (ctx) => {
+    try {
+      const rows = await db
+        .select({ prId: pinnedPullRequests.prId })
+        .from(pinnedPullRequests)
+        .where(eq(pinnedPullRequests.userId, ctx.session.user.id))
+        .orderBy(pinnedPullRequests.createdAt);
+      return rows.map((r) => r.prId);
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  })
+
+  .post(
+    "/pinned",
+    async (ctx) => {
+      try {
+        await db.insert(pinnedPullRequests).values({
+          userId: ctx.session.user.id,
+          prId: ctx.body.prId,
+        });
+        return { success: true };
+      } catch (e) {
+        return handleAppError(e, ctx);
+      }
+    },
+    { body: t.Object({ prId: t.String() }) },
+  )
+
+  .delete("/pinned/:prId", async (ctx) => {
+    try {
+      await db
+        .delete(pinnedPullRequests)
+        .where(
+          and(
+            eq(pinnedPullRequests.userId, ctx.session.user.id),
+            eq(pinnedPullRequests.prId, ctx.params.prId),
+          ),
+        );
+      return { success: true };
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  });
 
 // ── Suggestions cache + resolver ─────────────────────────────────────────────
 //

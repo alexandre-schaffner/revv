@@ -1,3 +1,5 @@
+import pierreDark from "@pierre/theme/pierre-dark";
+import pierreLight from "@pierre/theme/pierre-light";
 import { createHighlighter, type Highlighter } from "shiki";
 
 let highlighter: Highlighter | null = null;
@@ -50,8 +52,13 @@ export function isHighlighterReady(): boolean {
 export async function initHighlighter(): Promise<void> {
   if (highlighter) return;
   if (!initPromise) {
+    // Deep-clone frozen Pierre theme objects so Shiki's mutable ThemeInput
+    // type accepts them (removes Readonly<> wrappers at every level).
     initPromise = createHighlighter({
-      themes: ["github-dark", "github-light"],
+      themes: [
+        JSON.parse(JSON.stringify(pierreDark)),
+        JSON.parse(JSON.stringify(pierreLight)),
+      ],
       langs: PRELOAD_LANGS,
     });
   }
@@ -70,8 +77,8 @@ export function highlightCode(code: string, lang: string): string | null {
     return highlighter.codeToHtml(code, {
       lang: normalized,
       themes: {
-        light: "github-light",
-        dark: "github-dark",
+        light: "pierre-light",
+        dark: "pierre-dark",
       },
     });
   } catch {

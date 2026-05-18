@@ -5,6 +5,13 @@ import { pullRequests, repositories, walkthroughs } from "../db/schema/index";
 import { NotFoundError, ValidationError } from "../domain/errors";
 import { DbService } from "./Db";
 
+/** Extract GitHub @-mentions from a block of text. */
+function extractMentions(body: string): string[] {
+  const matches = body.match(/@([a-zA-Z0-9-]+)/g);
+  if (!matches) return [];
+  return [...new Set(matches.map((m) => m.slice(1)))];
+}
+
 function rowToPr(row: typeof pullRequests.$inferSelect): PullRequest {
   return {
     id: row.id,
@@ -157,6 +164,26 @@ export class PullRequestService extends Context.Tag("PullRequestService")<
       prId: string,
       fingerprint: string,
     ) => Effect.Effect<void, never, DbService>;
+    /**
+     * Append GitHub logins to a PR's `mentionedUsers` JSON array.
+     * Idempotent: merges new logins into the existing set, skipping
+     * duplicates. Used by the comment sync pipeline to accumulate
+     * @-mentions from review comments.
+     */
+    readonly appendMentionedUsers: (
+      prId: string,
+      logins: string[],
+    ) => Effect.Effect<void, ValidationError, DbService>;
+    /**
+     * Open PRs for one repo where the given user is the author, a requested
+     * reviewer, or mentioned in the body/comments. Used by the repo homepage
+     * "PRs tagged on" section.
+     */
+    readonly listTaggedPrs: (
+      repoId: string,
+      userLogin: string,
+      accountId?: string,
+    ) => Effect.Effect<PullRequest[], ValidationError, DbService>;
   }
 >() {}
 
@@ -229,6 +256,8 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
       yield* Effect.tryPromise({
         try: () => {
           const values = prs.map((pr) => {
+            // Extract @-mentions from the PR body.
+            const bodyMentions = pr.body ? extractMentions(pr.body) : [];
             const base: typeof pullRequests.$inferInsert = {
               id: pr.id,
               externalId: pr.externalId,
@@ -248,6 +277,7 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
               updatedAt: pr.updatedAt,
               fetchedAt: pr.fetchedAt,
               requestedReviewers: JSON.stringify(pr.requestedReviewers ?? []),
+              mentionedUsers: JSON.stringify(bodyMentions),
             };
             // Only set optional fields when non-null to satisfy exactOptionalPropertyTypes
             if (pr.body !== null) base.body = pr.body;
@@ -288,6 +318,7 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
                   fetchedAt: sql`excluded.fetched_at`,
                   requestedReviewers: sql`excluded.requested_reviewers`,
                   closedAt: sql`excluded.closed_at`,
+                  mentionedUsers: sql`excluded.mentioned_users`,
                 },
               })
               .run(),
@@ -635,4 +666,75 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
         catch: (e) => new ValidationError({ message: String(e) }),
       });
     }).pipe(Effect.catchAll(() => Effect.void)),
+
+  appendMentionedUsers: (prId, logins) =>
+    Effect.gen(function* () {
+      if (logins.length === 0) return;
+      const { db } = yield* DbService;
+      yield* Effect.try({
+        try: () => {
+          // Read existing mentioned users, merge with new logins, write back.
+          const row = db
+            .select({ mentionedUsers: pullRequests.mentionedUsers })
+            .from(pullRequests)
+            .where(eq(pullRequests.id, prId))
+            .get();
+          if (!row) return;
+          const existing = JSON.parse(row.mentionedUsers ?? "[]") as string[];
+          const merged = [...new Set([...existing, ...logins])];
+          db.update(pullRequests)
+            .set({ mentionedUsers: JSON.stringify(merged) })
+            .where(eq(pullRequests.id, prId))
+            .run();
+        },
+        catch: (e) => new ValidationError({ message: String(e) }),
+      });
+    }),
+
+  listTaggedPrs: (repoId, userLogin, accountId) =>
+    Effect.gen(function* () {
+      const { db } = yield* DbService;
+
+      const repoIds = accountId
+        ? db
+            .select({ id: repositories.id })
+            .from(repositories)
+            .where(eq(repositories.accountId, accountId))
+            .all()
+            .map((r) => r.id)
+        : null;
+
+      if (accountId && repoIds !== null && repoIds.length === 0) return [];
+
+      const rows = yield* Effect.try({
+        try: () => {
+          const conditions: (ReturnType<typeof eq> | ReturnType<typeof inArray>)[] = [
+            eq(pullRequests.status, "open"),
+            eq(pullRequests.repositoryId, repoId),
+          ];
+          if (repoIds && repoIds.length > 0) {
+            conditions.push(inArray(pullRequests.repositoryId, repoIds));
+          }
+          // Query all open PRs for the repo, then filter in JS for the
+          // JSON-array membership checks (requestedReviewers, mentionedUsers).
+          // SQLite JSON containment would work but is clunkier in Drizzle.
+          return db
+            .select()
+            .from(pullRequests)
+            .where(and(...conditions))
+            .all();
+        },
+        catch: (e) => new ValidationError({ message: String(e) }),
+      }).pipe(Effect.orElseSucceed(() => [] as (typeof pullRequests.$inferSelect)[]));
+
+      const tagged = rows.filter((row) => {
+        if (row.authorLogin === userLogin) return true;
+        const reviewers = JSON.parse(row.requestedReviewers ?? "[]") as string[];
+        if (reviewers.includes(userLogin)) return true;
+        const mentioned = JSON.parse(row.mentionedUsers ?? "[]") as string[];
+        if (mentioned.includes(userLogin)) return true;
+        return false;
+      });
+      return tagged.map(rowToPr);
+    }),
 });

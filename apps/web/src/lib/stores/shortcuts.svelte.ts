@@ -104,8 +104,10 @@ function handleKeydown(e: KeyboardEvent): void {
     return;
   }
 
-  // Cmd+R → toggle right panel
+  // Cmd+R → toggle right panel (chat) — only when actively reviewing a PR
   if (!e.shiftKey && e.key.toLowerCase() === "r") {
+    const onPrPage = window.location.pathname.startsWith("/review/");
+    if (!onPrPage) return;
     e.preventDefault();
     e.stopPropagation();
     toggleRightPanel();
