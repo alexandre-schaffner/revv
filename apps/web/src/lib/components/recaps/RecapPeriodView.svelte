@@ -140,6 +140,7 @@ function localMondayKey(d: Date): string {
 
 const isOutOfDate = $derived.by(() => {
   if (latest === null || latest.status !== "complete") return false;
+  if (typeof latest.periodStart !== "string") return false;
   if (period === "daily") {
     return utcDayKey(latest.periodStart) !== dayKey(new Date());
   }

@@ -896,12 +896,6 @@ function onRightHandleDblClick(): void {
 		box-shadow: none;
 	}
 
-	/* Suppress the slide transition while dragging — width changes are
-	   reactive and we don't want a 100ms ease lagging behind the cursor. */
-	.rightpanel-area--resizing {
-		transition: none;
-	}
-
 	/* Left-edge resize handle — mirrors `.resize-handle` on the sidebar but
 	   anchored to the panel's *left* edge (toward the main pane). 5px hit
 	   area, 1px visible line, expands to 3px on hover/active using the

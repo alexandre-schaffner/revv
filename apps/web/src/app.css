@@ -90,7 +90,8 @@
   /* Line action floating pill */
   --revv-pill-bg: rgba(250, 249, 246, 0.97);
   --revv-pill-border: rgba(42, 40, 37, 0.1);
-  --revv-pill-shadow: 0 8px 24px rgba(42, 40, 37, 0.12), 0 2px 6px rgba(42, 40, 37, 0.07);
+  --revv-pill-shadow:
+    0 8px 24px rgba(42, 40, 37, 0.12), 0 2px 6px rgba(42, 40, 37, 0.07);
 
   /* Comment / thread */
   --revv-thread-bg: #faf9f6;
@@ -116,7 +117,8 @@
   --revv-glass-bg: rgba(250, 249, 246, 0.78);
   --revv-glass-border: rgba(42, 40, 37, 0.09);
   --revv-glass-highlight: rgba(250, 249, 246, 0.6);
-  --revv-glass-shadow: 0 1px 2px rgba(42, 40, 37, 0.06), 0 4px 16px rgba(42, 40, 37, 0.09);
+  --revv-glass-shadow:
+    0 1px 2px rgba(42, 40, 37, 0.06), 0 4px 16px rgba(42, 40, 37, 0.09);
   --revv-glass-active-bg: rgba(42, 40, 37, 0.055);
 
   /* Elevation shadows */
@@ -125,11 +127,17 @@
     0 0 0 0.5px rgba(42, 40, 37, 0.04);
   --revv-shadow-sm: 0 2px 6px rgba(42, 40, 37, 0.08);
   --revv-shadow-md: 0 4px 16px rgba(42, 40, 37, 0.1);
-  --revv-shadow-lg: 0 8px 24px rgba(42, 40, 37, 0.12), 0 2px 8px rgba(42, 40, 37, 0.06);
-  --revv-shadow-xl: 0 16px 48px rgba(42, 40, 37, 0.18), 0 4px 12px rgba(42, 40, 37, 0.1);
+  --revv-shadow-lg:
+    0 8px 24px rgba(42, 40, 37, 0.12), 0 2px 8px rgba(42, 40, 37, 0.06);
+  --revv-shadow-xl:
+    0 16px 48px rgba(42, 40, 37, 0.18), 0 4px 12px rgba(42, 40, 37, 0.1);
 
   /* Outline-style button (inverts with theme) */
-  --revv-btn-outline: color-mix(in srgb, var(--revv-text-primary) 55%, transparent);
+  --revv-btn-outline: color-mix(
+    in srgb,
+    var(--revv-text-primary) 55%,
+    transparent
+  );
   --revv-btn-outline-fill: var(--revv-text-primary);
   --revv-btn-outline-fg: var(--revv-bg-primary);
 
@@ -144,37 +152,69 @@
   /* Scorecard — backgrounds mirror the Walkthrough IssueCard palette
        (4% tint of a themed severity color over --revv-bg-secondary) so
        score cards and issue cards read as the same visual family. */
-  --revv-score-pass-bg: color-mix(in srgb, var(--revv-success) 4%, var(--revv-bg-secondary));
+  --revv-score-pass-bg: color-mix(
+    in srgb,
+    var(--revv-success) 4%,
+    var(--revv-bg-secondary)
+  );
   --revv-score-pass-border: #15803d;
   --revv-score-pass-icon: #15803d;
   --revv-score-pass-label: #14532d;
   --revv-score-pass-axis: #46464d;
-  --revv-score-pass-conf-bg: color-mix(in srgb, var(--revv-score-pass-icon) 12%, transparent);
+  --revv-score-pass-conf-bg: color-mix(
+    in srgb,
+    var(--revv-score-pass-icon) 12%,
+    transparent
+  );
   --revv-score-pass-conf: #15803d;
 
-  --revv-score-concern-bg: color-mix(in srgb, var(--revv-warning) 4%, var(--revv-bg-secondary));
+  --revv-score-concern-bg: color-mix(
+    in srgb,
+    var(--revv-warning) 4%,
+    var(--revv-bg-secondary)
+  );
   --revv-score-concern-border: #b45309;
   --revv-score-concern-icon: #b45309;
   --revv-score-concern-label: #7c2d12;
   --revv-score-concern-axis: #46464d;
-  --revv-score-concern-conf-bg: color-mix(in srgb, var(--revv-score-concern-icon) 12%, transparent);
+  --revv-score-concern-conf-bg: color-mix(
+    in srgb,
+    var(--revv-score-concern-icon) 12%,
+    transparent
+  );
   --revv-score-concern-conf: #b45309;
 
-  --revv-score-blocker-bg: color-mix(in srgb, var(--revv-danger) 4%, var(--revv-bg-secondary));
+  --revv-score-blocker-bg: color-mix(
+    in srgb,
+    var(--revv-danger) 4%,
+    var(--revv-bg-secondary)
+  );
   --revv-score-blocker-border: #b91c1c;
   --revv-score-blocker-icon: #b91c1c;
   --revv-score-blocker-label: #7c1d1d;
   --revv-score-blocker-axis: #46464d;
-  --revv-score-blocker-conf-bg: color-mix(in srgb, var(--revv-score-blocker-icon) 12%, transparent);
+  --revv-score-blocker-conf-bg: color-mix(
+    in srgb,
+    var(--revv-score-blocker-icon) 12%,
+    transparent
+  );
   --revv-score-blocker-conf: #b91c1c;
 
   /* Info — accent-derived palette. With the brand teal accent, info
        reads as a calm "FYI" rather than the old "click here" blue. */
-  --revv-score-info-bg: color-mix(in srgb, var(--revv-accent) 4%, var(--revv-bg-secondary));
+  --revv-score-info-bg: color-mix(
+    in srgb,
+    var(--revv-accent) 4%,
+    var(--revv-bg-secondary)
+  );
   --revv-score-info-border: #0f766e;
   --revv-score-info-icon: #115e59;
   --revv-score-info-label: #134e4a;
-  --revv-score-info-conf-bg: color-mix(in srgb, var(--revv-score-info-icon) 12%, transparent);
+  --revv-score-info-conf-bg: color-mix(
+    in srgb,
+    var(--revv-score-info-icon) 12%,
+    transparent
+  );
   --revv-score-info-conf: #115e59;
 }
 
@@ -255,7 +295,8 @@
   /* Line action floating pill */
   --revv-pill-bg: rgba(26, 26, 26, 0.92);
   --revv-pill-border: rgba(255, 255, 255, 0.07);
-  --revv-pill-shadow: 0 8px 24px rgba(0, 0, 0, 0.6), 0 2px 6px rgba(0, 0, 0, 0.4);
+  --revv-pill-shadow:
+    0 8px 24px rgba(0, 0, 0, 0.6), 0 2px 6px rgba(0, 0, 0, 0.4);
 
   /* Comment / thread */
   --revv-thread-bg: #111111;
@@ -281,7 +322,8 @@
   --revv-glass-bg: rgba(30, 30, 30, 0.65);
   --revv-glass-border: rgba(255, 255, 255, 0.1);
   --revv-glass-highlight: rgba(255, 255, 255, 0.05);
-  --revv-glass-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 4px 16px rgba(0, 0, 0, 0.25);
+  --revv-glass-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.2), 0 4px 16px rgba(0, 0, 0, 0.25);
   --revv-glass-active-bg: rgba(255, 255, 255, 0.1);
 
   /* Elevation shadows (theme-aware) */
@@ -290,8 +332,10 @@
     inset 0 0.5px 0 0 rgba(255, 255, 255, 0.08);
   --revv-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.35);
   --revv-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.45);
-  --revv-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.35);
-  --revv-shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.65), 0 4px 12px rgba(0, 0, 0, 0.45);
+  --revv-shadow-lg:
+    0 8px 24px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.35);
+  --revv-shadow-xl:
+    0 16px 48px rgba(0, 0, 0, 0.65), 0 4px 12px rgba(0, 0, 0, 0.45);
 
   /* Outline-style button (inverts with theme) */
   --revv-btn-outline: rgba(255, 255, 255, 0.7);
@@ -309,37 +353,69 @@
   /* Scorecard — backgrounds mirror the Walkthrough IssueCard palette
        (4% tint of a themed severity color over --revv-bg-secondary) so
        score cards and issue cards read as the same visual family. */
-  --revv-score-pass-bg: color-mix(in srgb, var(--revv-success) 4%, var(--revv-bg-secondary));
+  --revv-score-pass-bg: color-mix(
+    in srgb,
+    var(--revv-success) 4%,
+    var(--revv-bg-secondary)
+  );
   --revv-score-pass-border: #10b981;
   --revv-score-pass-icon: #34d399;
   --revv-score-pass-label: #6ee7b7;
   --revv-score-pass-axis: #6ee7b7;
-  --revv-score-pass-conf-bg: color-mix(in srgb, var(--revv-score-pass-icon) 25%, transparent);
+  --revv-score-pass-conf-bg: color-mix(
+    in srgb,
+    var(--revv-score-pass-icon) 25%,
+    transparent
+  );
   --revv-score-pass-conf: #34d399;
 
-  --revv-score-concern-bg: color-mix(in srgb, var(--revv-warning) 4%, var(--revv-bg-secondary));
+  --revv-score-concern-bg: color-mix(
+    in srgb,
+    var(--revv-warning) 4%,
+    var(--revv-bg-secondary)
+  );
   --revv-score-concern-border: #f59e0b;
   --revv-score-concern-icon: #fbbf24;
   --revv-score-concern-label: #fcd34d;
   --revv-score-concern-axis: #fcd34d;
-  --revv-score-concern-conf-bg: color-mix(in srgb, var(--revv-score-concern-icon) 25%, transparent);
+  --revv-score-concern-conf-bg: color-mix(
+    in srgb,
+    var(--revv-score-concern-icon) 25%,
+    transparent
+  );
   --revv-score-concern-conf: #fbbf24;
 
-  --revv-score-blocker-bg: color-mix(in srgb, var(--revv-danger) 4%, var(--revv-bg-secondary));
+  --revv-score-blocker-bg: color-mix(
+    in srgb,
+    var(--revv-danger) 4%,
+    var(--revv-bg-secondary)
+  );
   --revv-score-blocker-border: #ef4444;
   --revv-score-blocker-icon: #f87171;
   --revv-score-blocker-label: #fca5a5;
   --revv-score-blocker-axis: #fca5a5;
-  --revv-score-blocker-conf-bg: color-mix(in srgb, var(--revv-score-blocker-icon) 25%, transparent);
+  --revv-score-blocker-conf-bg: color-mix(
+    in srgb,
+    var(--revv-score-blocker-icon) 25%,
+    transparent
+  );
   --revv-score-blocker-conf: #f87171;
 
   /* Info — accent-derived palette (dark variant). Blues brightened to
        read against dark bg without losing distinction from pass-green. */
-  --revv-score-info-bg: color-mix(in srgb, var(--revv-accent) 4%, var(--revv-bg-secondary));
+  --revv-score-info-bg: color-mix(
+    in srgb,
+    var(--revv-accent) 4%,
+    var(--revv-bg-secondary)
+  );
   --revv-score-info-border: #3b82f6;
   --revv-score-info-icon: #60a5fa;
   --revv-score-info-label: #93c5fd;
-  --revv-score-info-conf-bg: color-mix(in srgb, var(--revv-score-info-icon) 25%, transparent);
+  --revv-score-info-conf-bg: color-mix(
+    in srgb,
+    var(--revv-score-info-icon) 25%,
+    transparent
+  );
   --revv-score-info-conf: #60a5fa;
 }
 
@@ -511,14 +587,14 @@
   --radius-island: 12px;
 
   /* Layout — spacing scale (all derived from the island gap) */
-  --spacing-island-half: 4px;   /* tight insets, chip padding, icon-to-text gaps */
-  --spacing-island: 8px;        /* chrome ↔ island gap (also used inline) */
-  --spacing-island-2x: 16px;    /* content inset, bottombar padding */
-  --spacing-inset: 12px;        /* inside-panel horizontal gutters */
+  --spacing-island-half: 4px; /* tight insets, chip padding, icon-to-text gaps */
+  --spacing-island: 8px; /* chrome ↔ island gap (also used inline) */
+  --spacing-island-2x: 16px; /* content inset, bottombar padding */
+  --spacing-inset: 12px; /* inside-panel horizontal gutters */
 
   /* Layout — chrome bar heights */
-  --topbar-height: 28px;        /* non-Tauri chrome topbar strip */
-  --bottombar-height: 40px;
+  --topbar-height: 28px; /* non-Tauri chrome topbar strip */
+  --bottombar-height: 28px;
 
   /* Motion — durations
        Mirrored verbatim in src/lib/motion/tokens.ts. Edit both. */
@@ -655,17 +731,21 @@
   opacity: 0;
 }
 
-[data-component="text-shimmer"][data-active="true"] [data-slot="text-shimmer-char-shimmer"] {
+[data-component="text-shimmer"][data-active="true"]
+  [data-slot="text-shimmer-char-shimmer"] {
   opacity: 1;
 }
 
-[data-component="text-shimmer"] [data-slot="text-shimmer-char-shimmer"][data-run="true"] {
+[data-component="text-shimmer"]
+  [data-slot="text-shimmer-char-shimmer"][data-run="true"] {
   animation-name: text-shimmer-sweep;
   animation-duration: var(--text-shimmer-duration);
   animation-iteration-count: infinite;
   animation-timing-function: linear;
   animation-fill-mode: both;
-  animation-delay: calc(var(--text-shimmer-step) * var(--text-shimmer-index) * -1);
+  animation-delay: calc(
+    var(--text-shimmer-step) * var(--text-shimmer-index) * -1
+  );
   will-change: background-position;
 }
 
@@ -698,7 +778,8 @@
     background-clip: text;
   }
 
-  [data-component="text-shimmer"][data-active="true"] [data-slot="text-shimmer-char-base"] {
+  [data-component="text-shimmer"][data-active="true"]
+    [data-slot="text-shimmer-char-base"] {
     opacity: 0;
   }
 }
