@@ -218,7 +218,6 @@ async function handleSignOut(): Promise<void> {
 		gap: var(--spacing-island);
 		width: 100%;
 		padding: var(--spacing-island-half) var(--spacing-island);
-		margin-bottom: var(--spacing-island-half);
 		border: none;
 		border-radius: 6px;
 		background: transparent;
@@ -228,8 +227,8 @@ async function handleSignOut(): Promise<void> {
 		font-size: 11px;
 		overflow: hidden;
 		transition:
-			gap var(--duration-smooth) var(--ease-out-expo),
-			padding var(--duration-smooth) var(--ease-out-expo);
+			gap var(--duration-quick) var(--ease-out-expo),
+			padding var(--duration-quick) var(--ease-out-expo);
 	}
 
 	:global(.user-trigger[data-state='open']) {
@@ -303,8 +302,8 @@ async function handleSignOut(): Promise<void> {
 		overflow: hidden;
 		max-width: 300px; /* ceiling for collapse transition */
 		transition:
-			opacity var(--duration-quick) var(--ease-out-expo) 80ms,
-			max-width var(--duration-smooth) var(--ease-out-expo) 80ms,
+			opacity var(--duration-quick) var(--ease-out-expo) 60ms,
+			max-width var(--duration-quick) var(--ease-out-expo) 60ms,
 			visibility 0s linear 0s;
 	}
 
@@ -316,7 +315,7 @@ async function handleSignOut(): Promise<void> {
 		pointer-events: none;
 		transition:
 			opacity var(--duration-quick) var(--ease-soft),
-			max-width var(--duration-smooth) var(--ease-out-expo),
+			max-width var(--duration-quick) var(--ease-soft),
 			visibility 0s linear var(--duration-quick);
 	}
 
@@ -343,8 +342,8 @@ async function handleSignOut(): Promise<void> {
 		overflow: hidden;
 		max-width: 20px;
 		transition:
-			opacity var(--duration-quick) var(--ease-out-expo) 80ms,
-			max-width var(--duration-smooth) var(--ease-out-expo) 80ms,
+			opacity var(--duration-quick) var(--ease-out-expo) 60ms,
+			max-width var(--duration-quick) var(--ease-out-expo) 60ms,
 			visibility 0s linear 0s;
 	}
 
@@ -354,7 +353,7 @@ async function handleSignOut(): Promise<void> {
 		max-width: 0;
 		transition:
 			opacity var(--duration-quick) var(--ease-soft),
-			max-width var(--duration-smooth) var(--ease-out-expo),
+			max-width var(--duration-quick) var(--ease-soft),
 			visibility 0s linear var(--duration-quick);
 	}
 

@@ -443,13 +443,28 @@ function handleKeydown(e: KeyboardEvent) {
 		align-items: stretch;
 		min-height: 48px;
 		flex-shrink: 0;
+		opacity: 1;
+		transform: translateX(0);
+		visibility: visible;
 		/* No min-width — must be happy at 0 when collapsed */
-		transition: min-height var(--duration-smooth) var(--ease-out-expo);
+		transition:
+			opacity var(--duration-quick) var(--ease-out-expo) 60ms,
+			transform var(--duration-quick) var(--ease-out-expo) 60ms,
+			min-height var(--duration-quick) var(--ease-out-expo) 60ms,
+			visibility 0s linear 0s;
 	}
 
 	.sidebar-header--hidden {
 		min-height: 0;
 		overflow: hidden;
+		opacity: 0;
+		transform: translateX(-12px);
+		visibility: hidden;
+		transition:
+			opacity var(--duration-quick) var(--ease-soft),
+			transform var(--duration-quick) var(--ease-soft),
+			min-height var(--duration-quick) var(--ease-soft),
+			visibility 0s linear var(--duration-quick);
 	}
 
 	/* In PR-list mode the header is owned by ProjectHeader (its own padding).
