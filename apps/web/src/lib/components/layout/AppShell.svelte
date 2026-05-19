@@ -631,7 +631,6 @@ function onRightHandleDblClick(): void {
 		class="rightpanel-area"
 		class:rightpanel-area--open={rightPanelOpen}
 		aria-hidden={!rightPanelOpen}
-		style="width: {rightPanelWidth}px"
 	>
 		{#if rightPanelOpen}
 			<div
@@ -819,6 +818,7 @@ function onRightHandleDblClick(): void {
 
 	.bottombar-area {
 		grid-area: bottombar;
+		padding-bottom: var(--spacing-island);
 	}
 
 	/* Bottom-anchored action bar. Floats over the main pane content,

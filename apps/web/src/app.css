@@ -943,6 +943,30 @@ body {
   margin: 0;
 }
 
+/* ──────────────────────────────────────────────────────────
+   Prose link styles — applied globally so every markdown-
+   rendering surface (recap, walkthrough, chat) gets consistent
+   link appearance. Components use :global(a) inside their own
+   prose containers; this rule covers any surface that uses the
+   `.prose` class directly on a parent.
+   ────────────────────────────────────────────────────────── */
+.prose a {
+  color: var(--color-accent);
+  text-decoration-line: underline;
+  text-decoration-color: color-mix(in srgb, var(--color-accent) 35%, transparent);
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+  cursor: pointer;
+  transition:
+    color var(--duration-snap) var(--ease-soft),
+    text-decoration-color var(--duration-snap) var(--ease-soft);
+}
+
+.prose a:hover {
+  color: var(--color-accent-hover);
+  text-decoration-color: var(--color-accent-hover);
+}
+
 /* ── Progress bar indeterminate animation ───────────────── */
 @keyframes indeterminate-progress {
   0% {

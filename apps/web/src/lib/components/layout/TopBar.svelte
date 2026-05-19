@@ -239,6 +239,12 @@ function cycleTheme() {
 		height: 22px;
 	}
 
+	:global(html.tauri) .theme-btn,
+	:global(html.tauri) .panel-btn {
+		height: 22px;
+		width: 22px;
+	}
+
 	.theme-btn {
 		display: flex;
 		align-items: center;

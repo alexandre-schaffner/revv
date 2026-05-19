@@ -147,6 +147,47 @@ export const getRepoContextHandler: RecapToolHandler<GetRepoContextInput> = asyn
 
 // ── Atomic commit tool ───────────────────────────────────────────────────────
 
+/**
+ * Strip agent meta-commentary from the buffered recap text before persisting.
+ *
+ * Two patterns to remove:
+ *  1. Leading preamble before the first markdown heading — model sometimes
+ *     writes "Now I'll write the complete recap…" before the first `## `.
+ *  2. Trailing narration after the last recap content — model sometimes
+ *     writes "Now I'll commit the recap with metadata:" right before calling
+ *     this tool. These lines are plaintext and don't belong in the stored
+ *     overview.
+ */
+function sanitizeRecapOverview(raw: string): string {
+  const text = raw.trim();
+
+  // Strip leading content before the first markdown heading.
+  const headingIdx = text.search(/^#+\s/m);
+  const withoutPreamble = headingIdx > 0 ? text.slice(headingIdx) : text;
+
+  // Strip trailing agent-narration lines (e.g., "Now I'll commit…").
+  const lines = withoutPreamble.trimEnd().split("\n");
+  let end = lines.length;
+  while (end > 0) {
+    const line = lines[end - 1]!.trim();
+    if (line === "") {
+      end--;
+      continue;
+    }
+    if (
+      /^(now i'?ll|i'?ll now|i will now|now i will|i'?m going to|let me now|i'?ll commit|now,?\s+i'?ll commit|this completes)/i.test(
+        line,
+      )
+    ) {
+      end--;
+      continue;
+    }
+    break;
+  }
+
+  return lines.slice(0, end).join("\n").trim();
+}
+
 export const commitRecapOverviewHandler: RecapToolHandler<CommitRecapOverviewInput> = async (
   ctx,
   input,
@@ -157,7 +198,7 @@ export const commitRecapOverviewHandler: RecapToolHandler<CommitRecapOverviewInp
   // here as a tool argument. (CLAUDE.md invariant #2: the DB write
   // still happens inside an MCP handler; the buffer is just a side
   // channel from the streaming consumer.)
-  const overview = ctx.textBuffer.current.trim();
+  const overview = sanitizeRecapOverview(ctx.textBuffer.current);
   if (overview.length === 0) {
     return err(
       "Error: no recap text has been buffered. Write the recap markdown as your visible assistant response BEFORE calling commit_recap_overview — the server reads what you typed. If you called a tool while composing, the buffer was reset; re-write the recap as one continuous response then call this tool again.",
@@ -219,6 +260,13 @@ export const commitRecapOverviewHandler: RecapToolHandler<CommitRecapOverviewInp
       `Error: failed to persist recap overview: ${e instanceof Error ? e.message : String(e)}`,
     );
   }
+
+  // Clear the buffer after a successful write. Any text the model generates
+  // after this point (e.g., a second recap pass) will start a fresh buffer,
+  // so a second commit_recap_overview call only persists the new content —
+  // not the doubled [first-pass + second-pass] string.
+  ctx.textBuffer.current = "";
+
   ctx.emit({ type: "overview", data: { overview } });
   ctx.emit({ type: "phase", data: { phase: "finalizing", message: "Finalizing recap…" } });
   return ok(

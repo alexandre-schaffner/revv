@@ -5,6 +5,7 @@ import { Shimmer } from "$lib/components/ai/shimmer";
 import { Button } from "$lib/components/ui/button";
 import type { RecapStreamEntry } from "$lib/stores/recap-stream.svelte";
 import { createStreamingBlockRenderer, renderMarkdown } from "$lib/utils/markdown";
+import { handleMarkdownLinkClick } from "$lib/utils/links";
 import RecapStats from "./RecapStats.svelte";
 
 interface Props {
@@ -108,7 +109,7 @@ function phaseMessage(phase: string): string {
 
 		{#if recap.status === "generating"}
 			{#if stream && (stream.isStreaming || stream.overview)}
-				<article class="recap-prose recap-prose--streaming">
+				<article class="recap-prose recap-prose--streaming" onclick={handleMarkdownLinkClick}>
 					{#each streamingBlocks as block (block.id)}
 						<div class="recap-block" data-sd-block>{@html block.html}</div>
 					{/each}
@@ -160,7 +161,7 @@ function phaseMessage(phase: string): string {
 				<p>No overview content was written by the agent.</p>
 			</div>
 		{:else}
-			<article class="recap-prose">
+			<article class="recap-prose" onclick={handleMarkdownLinkClick}>
 				{@html completedHtml}
 			</article>
 		{/if}
@@ -331,6 +332,23 @@ function phaseMessage(phase: string): string {
 		padding: 0.125em 0.375em;
 		background: var(--color-bg-secondary);
 		border-radius: 0.25em;
+	}
+
+	.recap-prose :global(a) {
+		color: var(--color-accent);
+		text-decoration-line: underline;
+		text-decoration-color: color-mix(in srgb, var(--color-accent) 35%, transparent);
+		text-underline-offset: 2px;
+		text-decoration-thickness: 1px;
+		cursor: pointer;
+		transition:
+			color var(--duration-snap) var(--ease-soft),
+			text-decoration-color var(--duration-snap) var(--ease-soft);
+	}
+
+	.recap-prose :global(a:hover) {
+		color: var(--color-accent-hover);
+		text-decoration-color: var(--color-accent-hover);
 	}
 
 	/* `.sd-word-new` animation lives in app.css (global) — the spans are
