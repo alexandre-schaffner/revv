@@ -508,6 +508,17 @@
 
   /* Radii */
   --radius-card: 8px;
+  --radius-island: 12px;
+
+  /* Layout — spacing scale (all derived from the island gap) */
+  --spacing-island-half: 4px;   /* tight insets, chip padding, icon-to-text gaps */
+  --spacing-island: 8px;        /* chrome ↔ island gap (also used inline) */
+  --spacing-island-2x: 16px;    /* content inset, bottombar padding */
+  --spacing-inset: 12px;        /* inside-panel horizontal gutters */
+
+  /* Layout — chrome bar heights */
+  --topbar-height: 28px;        /* non-Tauri chrome topbar strip */
+  --bottombar-height: 40px;
 
   /* Motion — durations
        Mirrored verbatim in src/lib/motion/tokens.ts. Edit both. */

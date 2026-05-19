@@ -12,11 +12,19 @@ const DIFF_THEME_KEY = "revv-diff-theme";
 
 let preference = $state<ThemePreference>(readStored(THEME_KEY, "system"));
 let diffPreference = $state<DiffThemePreference>(readStored(DIFF_THEME_KEY, "sync"));
+let resolved = $state<"light" | "dark">(resolve(preference));
 
 function readStored<T extends string>(key: string, fallback: T): T {
   if (typeof window === "undefined") return fallback;
   const v = localStorage.getItem(key);
   return v === "light" || v === "dark" ? (v as T) : fallback;
+}
+
+function resolve(pref: ThemePreference): "light" | "dark" {
+  if (pref === "dark") return "dark";
+  if (pref === "light") return "light";
+  if (typeof window === "undefined") return "light";
+  return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
 // ── DOM ──────────────────────────────────────────────────────────────────────
@@ -32,6 +40,7 @@ function apply(pref: ThemePreference): void {
     pref === "dark" || (pref === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
   document.documentElement.classList.toggle("dark", isDark);
   document.documentElement.style.colorScheme = isDark ? "dark" : "light";
+  resolved = isDark ? "dark" : "light";
 }
 
 /** Sync the data-diff-theme attribute on <html> so the CSS rules in app.css
@@ -67,6 +76,10 @@ export function initTheme(): () => void {
 
 export function getThemePreference(): ThemePreference {
   return preference;
+}
+
+export function getActiveTheme(): "light" | "dark" {
+  return resolved;
 }
 
 export function setThemePreference(pref: ThemePreference): void {

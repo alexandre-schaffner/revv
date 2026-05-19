@@ -52,6 +52,13 @@ export interface RecapToolContext {
    */
   readonly priorRecaps: ReadonlyArray<ProjectRecap>;
   /**
+   * Lazy diff loader called by the `get_pr_diff` MCP handler. The
+   * orchestrator wires this to `loadDiffForPr` at job-start time.
+   * Returns null when the prId is not in the source bundle or when
+   * both diff cache and GitHub are unavailable.
+   */
+  readonly getPrDiff: (prId: string) => Promise<RecapSourcePrDiff | null>;
+  /**
    * Hook fired the moment the agent calls `complete_recap` and validation
    * passes. The orchestrator subscribes here so it knows the agent
    * reached the validation gate cleanly — distinct from the agent's
@@ -170,14 +177,6 @@ export interface RecapSourcePr {
     readonly riskLevel: "low" | "medium" | "high";
     readonly completedAt: string | null;
   } | null;
-  /**
-   * Fallback diff data loaded by the orchestrator when `walkthrough` is null.
-   * Lets the agent read the actual code change instead of guessing from
-   * title + +/- counts. Null when a walkthrough exists (we trust the
-   * walkthrough's summary), or when both the diff cache and GitHub failed
-   * to produce anything for the PR.
-   */
-  readonly diff: RecapSourcePrDiff | null;
 }
 
 export interface RecapSourceBundle {
@@ -267,6 +266,14 @@ export const commitRecapOverviewSchema = z.object({
 
 export const completeRecapSchema = z.object({});
 
+export const getPrDiffSchema = z.object({
+  pr_id: z
+    .string()
+    .describe(
+      "The `id` of the PR to fetch the diff for, as returned in the `prs` array by get_recap_state. Use this for archived PRs where `walkthrough` is null to get per-file status, +/- counts, and unified patch text before composing the recap.",
+    ),
+});
+
 // ── Type exports ─────────────────────────────────────────────────────────────
 
 export type GetRecapStateInput = z.infer<typeof getRecapStateSchema>;
@@ -274,3 +281,4 @@ export type ListOpenPrsInput = z.infer<typeof listOpenPrsSchema>;
 export type GetRepoContextInput = z.infer<typeof getRepoContextSchema>;
 export type CommitRecapOverviewInput = z.infer<typeof commitRecapOverviewSchema>;
 export type CompleteRecapInput = z.infer<typeof completeRecapSchema>;
+export type GetPrDiffInput = z.infer<typeof getPrDiffSchema>;

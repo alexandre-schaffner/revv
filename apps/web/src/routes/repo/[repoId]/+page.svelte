@@ -18,6 +18,7 @@ const repoIdFromUrl = $derived(page.params.repoId ?? "");
 			<div class="hero">
 				<RepoGradientAvatar
 					fullName={repo.fullName}
+					ownerAvatarUrl={repo.avatarUrl}
 					size={48}
 					radius={10}
 					class="hero-avatar"

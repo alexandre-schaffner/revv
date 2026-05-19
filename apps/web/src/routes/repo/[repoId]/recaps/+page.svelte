@@ -39,7 +39,7 @@ const floatingTabsStyle = $derived(
 </script>
 
 <AuthGuard>
-	<div class="page">
+	<div class="period-page">
 		<div class="tabs-float" style={floatingTabsStyle}>
 			<PillTabs
 				{tabs}
@@ -47,24 +47,36 @@ const floatingTabsStyle = $derived(
 				onTabChange={(tab) => (activePeriod = tab as RecapPeriod)}
 			/>
 		</div>
-		<div class="content">
-			<RecapPeriodView {repoId} period={activePeriod} />
+		<div class="page">
+			<div class="content">
+				<RecapPeriodView {repoId} period={activePeriod} />
+			</div>
 		</div>
 	</div>
 </AuthGuard>
 
 <style>
+	/* Positioning context for RecapPeriodView's floating actions, outside
+	   the scroll container so `position: absolute; bottom: 0` pins to
+	   the viewport bottom of the island rather than the scroll content. */
+	.period-page {
+		position: relative;
+		height: 100%;
+		overflow: hidden;
+	}
+
 	.page {
 		height: 100%;
 		overflow-y: auto;
-		position: relative;
 	}
 
 	/* Floating tabs bar at the top of the main area, centred between sidebar
-	   and optional right panel. Mirrors `.tabs-float` in AppShell. */
+	   and optional right panel. Mirrors `.main-tab-bar` in AppShell:
+	   top = topbar height + island margin + pill padding-top (10px).
+	   Non-Tauri: 28 + 8 + 10 = 46px.  Tauri: 30 + 8 + 10 = 48px. */
 	.tabs-float {
 		position: fixed;
-		top: calc(20px + 12px);
+		top: calc(var(--topbar-height) + var(--spacing-island) + 10px);
 		display: flex;
 		justify-content: center;
 		z-index: 20;
@@ -78,9 +90,10 @@ const floatingTabsStyle = $derived(
 		pointer-events: auto;
 	}
 
-	/* Tauri overlay title bar — traffic light clearance */
+	/* Tauri title bar is calc(22px + --spacing-island) tall — not reflected
+	   in --topbar-height, so override with the same arithmetic. */
 	:global(html.tauri) .tabs-float {
-		top: calc(22px + 6px + 12px);
+		top: calc(22px + var(--spacing-island) * 2 + 10px);
 	}
 
 	.content {

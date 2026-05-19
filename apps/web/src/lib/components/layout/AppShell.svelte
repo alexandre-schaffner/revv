@@ -86,6 +86,7 @@ import {
   scrollToRatings as scrollWalkthroughToRatings,
   scrollToTop as scrollWalkthroughToTop,
 } from "$lib/stores/walkthroughNav.svelte";
+import UserMenu from "$lib/components/sidebar/UserMenu.svelte";
 import BottomBar from "./BottomBar.svelte";
 import CommandPalette from "./CommandPalette.svelte";
 import FloatingTabs from "./FloatingTabs.svelte";
@@ -114,6 +115,7 @@ const pr = $derived(getSelectedPr());
 const walkthroughStatus = $derived(pr ? getPrWalkthroughStatus(pr.id) : "idle");
 const activeTab = $derived(getActiveTab());
 const isSettingsRoute = $derived(page.url.pathname.startsWith("/settings"));
+const isReviewRoute = $derived(page.url.pathname.startsWith("/review/"));
 const walkthroughUiState = $derived(getWalkthroughUiState());
 const walkthroughPendingAction = $derived(pr ? getWalkthroughPendingAction(pr.id) : null);
 const walkthroughHasRatings = $derived(getWalkthroughRatings().length > 0);
@@ -127,9 +129,9 @@ const walkthroughBarHasActions = $derived(
     walkthroughUiState.kind !== "cloning",
 );
 const showFloatingActions = $derived(
-  !!pr && !isSettingsRoute && activeTab === "walkthrough" && walkthroughBarHasActions,
+  !!pr && isReviewRoute && !isSettingsRoute && activeTab === "walkthrough" && walkthroughBarHasActions,
 );
-const showRcActions = $derived(!!pr && !isSettingsRoute && activeTab === "request-changes");
+const showRcActions = $derived(!!pr && isReviewRoute && !isSettingsRoute && activeTab === "request-changes");
 
 const rcSubmitting = $derived(getRcSubmitting());
 const rcSelectedCount = $derived(getRcSelectedCount());
@@ -233,28 +235,13 @@ $effect(() => {
   }
 });
 
-// Inline style for the grid — drives the dynamic sidebar column width.
-// The right pane is NOT a grid column: it's positioned absolutely on
-// top of the main row so opening it does not shrink the main column.
-// This is what keeps the walkthrough/page-title/Request Changes content
-// render byte-identical when the right pane toggles — matching the
-// user's expectation that "the right pane should behave exactly like
-// the left pane: it does not change the main content display." See
-// `.rightpanel-area` below for the overlay positioning rationale.
+// Inline style for the grid — drives the dynamic sidebar AND right-panel
+// column widths. The right pane is a real grid column whose width
+// collapses to 0 when closed; opening it shrinks the main column rather
+// than overlaying on top of it. Animation comes from the
+// grid-template-columns transition on .app-shell.
 const gridStyle = $derived(
-  sidebarEffectiveCollapsed
-    ? `grid-template-columns: ${RAIL_WIDTH}px 0 1fr`
-    : `grid-template-columns: ${RAIL_WIDTH}px ${sidebarWidth}px 1fr`,
-);
-
-// Floating action bar (walkthrough actions / Submit Review / Approve)
-// spans the visible main area between sidebar and right panel so the
-// pill sits at the centre of what the user is actually looking at, not
-// the viewport. Tracks both panes via inline `left`/`right` and animates
-// when either toggles. `--duration-smooth` matches the grid-columns
-// transition; resize handles suppress it via `.is-resizing`.
-const floatingActionsStyle = $derived(
-  `left: ${RAIL_WIDTH + (sidebarEffectiveCollapsed ? 0 : sidebarWidth)}px; right: ${rightPanelOpen ? rightPanelWidth : 0}px;`,
+  `grid-template-columns: ${RAIL_WIDTH}px ${sidebarEffectiveCollapsed ? '0' : `${sidebarWidth}px`} 1fr ${rightPanelOpen ? `${rightPanelWidth}px` : '0'}`,
 );
 
 function onHandlePointerDown(event: PointerEvent): void {
@@ -317,7 +304,7 @@ function onRightHandleDblClick(): void {
 <div
 	class="app-shell"
 	class:sidebar-collapsed={sidebarEffectiveCollapsed}
-	class:is-resizing={isDragging}
+	class:is-resizing={isDragging || isResizingRight}
 	style={gridStyle}
 >
 	<aside class="rail-area">
@@ -349,12 +336,11 @@ function onRightHandleDblClick(): void {
 			{sidebarCollapsed}
 			onToggleSidebar={toggleSidebar}
 		/>
-		{#if pr && !isSettingsRoute}
-			<div
-				class="tabs-float"
-				class:is-resizing={isDragging || isResizingRight}
-				style={floatingActionsStyle}
-			>
+	</header>
+
+	<main class="main-area">
+		{#if pr && isReviewRoute && !isSettingsRoute}
+			<div class="main-tab-bar">
 				<FloatingTabs
 					{activeTab}
 					onTabChange={setActiveTab}
@@ -365,17 +351,11 @@ function onRightHandleDblClick(): void {
 				/>
 			</div>
 		{/if}
-	</header>
+		<div class="main-content">
+			{@render children()}
+		</div>
 
-	<main class="main-area">
-		{@render children()}
-	</main>
-
-	<footer class="bottombar-area">
-		<BottomBar />
-	</footer>
-
-	{#if showFloatingActions && activeTab === 'walkthrough' && pr}
+		{#if showFloatingActions && activeTab === 'walkthrough' && pr}
 		<!-- Floating actions for the walkthrough tab. Branches on a single
 		     discriminated UiState (see walkthrough-ui-state.svelte.ts) so the
 		     bar can't fall into two mutually-exclusive branches at once.
@@ -390,11 +370,7 @@ function onRightHandleDblClick(): void {
 				: walkthroughPendingAction === 'resume'
 					? 'Resuming…'
 					: undefined}
-		<div
-			class="walkthrough-actions-float"
-			class:is-resizing={isDragging || isResizingRight}
-			style={floatingActionsStyle}
-		>
+		<div class="walkthrough-actions-float">
 			<div class="walkthrough-actions-row">
 				<GlassPill
 					icon
@@ -504,11 +480,7 @@ function onRightHandleDblClick(): void {
 	{/if}
 
 	{#if showRcActions && activeTab === 'request-changes'}
-		<div
-			class="walkthrough-actions-float"
-			class:is-resizing={isDragging || isResizingRight}
-			style={floatingActionsStyle}
-		>
+		<div class="walkthrough-actions-float">
 			<div class="walkthrough-actions-row">
 				<GlassPill
 					variant="muted"
@@ -645,11 +617,19 @@ function onRightHandleDblClick(): void {
 			</div>
 		</div>
 	{/if}
+	</main>
+
+	<aside class="userbar-area">
+		<UserMenu collapsed={sidebarEffectiveCollapsed} />
+	</aside>
+
+	<footer class="bottombar-area">
+		<BottomBar />
+	</footer>
 
 	<aside
 		class="rightpanel-area"
 		class:rightpanel-area--open={rightPanelOpen}
-		class:rightpanel-area--resizing={isResizingRight}
 		aria-hidden={!rightPanelOpen}
 		style="width: {rightPanelWidth}px"
 	>
@@ -676,17 +656,17 @@ function onRightHandleDblClick(): void {
 <style>
 	.app-shell {
 		display: grid;
-		grid-template-rows: auto 1fr 40px;
+		grid-template-rows: auto 1fr calc(var(--bottombar-height) + var(--spacing-island));
 		grid-template-areas:
-			'topbar  topbar  topbar'
-			'rail    sidebar main'
-			'rail    sidebar bottombar';
+			'topbar  topbar  topbar    topbar'
+			'rail    sidebar main      rightpanel'
+			'userbar userbar bottombar bottombar';
 		height: 100vh;
 		width: 100vw;
 		overflow: hidden;
 		/* Positioning context for the absolutely-positioned right pane. */
 		position: relative;
-		background-color: var(--color-bg-primary);
+		background-color: var(--color-bg-secondary);
 	transition:
 		grid-template-columns var(--duration-smooth) var(--ease-out-expo),
 		grid-template-rows var(--duration-smooth) var(--ease-out-expo);
@@ -701,15 +681,17 @@ function onRightHandleDblClick(): void {
 	.rail-area {
 		grid-area: rail;
 		position: relative;
-		border-right: 1px solid var(--color-border);
 		overflow: hidden;
+		/* Match the chrome gap on the rail's right (which comes from main's
+		   margin) so the rail's icons read as visually centered between
+		   viewport edge and main pane when the sidebar is collapsed. */
+		padding-left: var(--spacing-island);
 	}
 
 	/* ── Sidebar area ── */
 	.sidebar-area {
 		grid-area: sidebar;
 		position: relative;
-		border-right: 1px solid var(--color-border);
 		overflow: hidden;
 	}
 
@@ -725,14 +707,15 @@ function onRightHandleDblClick(): void {
 		background: transparent;
 	}
 
-	/* The visible 1px line — centered in the 5px hit area */
+	/* Visible only on hover/active — transparent at rest so the handle
+	   doesn't print a hairline into the chrome gap. */
 	.resize-handle::after {
 		content: '';
 		position: absolute;
 		inset: 0;
 		left: 2px;
 		width: 1px;
-		background: var(--color-border);
+		background: transparent;
 		transition:
 			width var(--duration-snap) var(--ease-soft),
 			left var(--duration-snap) var(--ease-soft),
@@ -751,86 +734,106 @@ function onRightHandleDblClick(): void {
 		grid-area: topbar;
 		position: relative;
 		z-index: 10;
-		height: 20px;
-		background: var(--color-bg-primary);
-		border-bottom: 1px solid color-mix(in srgb, var(--color-border) 40%, transparent);
+		height: var(--topbar-height);
+		background: var(--color-bg-secondary);
 	}
 
 	/* Tauri overlay title bar — traffic light clearance */
 	:global(html.tauri) .topbar-area {
-		height: calc(22px + 6px);
+		height: calc(22px + var(--spacing-island));
 		padding-top: 22px;
 	}
 
 	/* ── Main area ── */
 	.main-area {
 		grid-area: main;
+		position: relative;
+		display: flex;
+		flex-direction: column;
 		overflow: hidden;
 		min-height: 0;
 		min-width: 0;
+		background: var(--color-bg-primary);
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-island);
+		margin: var(--spacing-island);
+		/* Layered shadow: tight contact + soft ambient.
+		   Inset top highlight catches light off the warm canvas. */
+		box-shadow:
+			inset 0 1px 0 0 color-mix(in srgb, white 60%, transparent),
+			0 1px 2px -1px color-mix(in srgb, black 6%, transparent),
+			0 8px 24px -12px color-mix(in srgb, black 10%, transparent);
 	}
 
-	.tabs-float {
-		/* Spans the visible main area between sidebar and right panel so
-		   the tabs sit at the centre of what the user is reading, not the
-		   viewport. The topbar spans the full viewport (grid-area
-		   'topbar topbar'), so inline `left`/`right` driven by
-		   `floatingActionsStyle` resolve in viewport coordinates and track
-		   both panes. Each edge transitions at the speed of the pane that
-		   drives it: `left` matches the grid-columns animation
-		   (`--duration-smooth`, sidebar collapse/resize); `right` matches
-		   the right pane's slide-in transform (`--duration-instant`). */
+	/* Tabs float over content — no background, no flex space reservation.
+	   The pill already has backdrop-filter so content scrolling beneath
+	   shows through naturally. pointer-events passthrough on the wrapper
+	   so clicks reach content in the transparent zone around the pill. */
+	.main-tab-bar {
 		position: absolute;
-		top: 100%;
+		top: 0;
+		left: 0;
+		right: 0;
+		z-index: 10;
 		display: flex;
 		justify-content: center;
-		z-index: 20;
+		padding: 10px 0 8px;
 		pointer-events: none;
-		padding-top: 12px;
-		transition:
-			left var(--duration-smooth) var(--ease-out-expo),
-			right var(--duration-instant) var(--ease-out-expo);
 	}
 
-	.tabs-float.is-resizing {
-		transition: none;
-	}
-
-	.tabs-float :global(*) {
+	.main-tab-bar :global(*) {
 		pointer-events: auto;
+	}
+
+	.main-content {
+		flex: 1;
+		min-height: 0;
+		overflow: hidden;
+	}
+
+	:global(:root.dark) .main-area {
+		box-shadow:
+			inset 0 1px 0 0 color-mix(in srgb, white 4%, transparent),
+			0 1px 2px -1px color-mix(in srgb, black 40%, transparent),
+			0 8px 24px -12px color-mix(in srgb, black 50%, transparent);
+	}
+
+	/* ── Userbar (bottom-left chrome strip holding the user menu) ──
+	   Spans the rail + sidebar columns in row 3, sharing the row with the
+	   bottombar to its right. Together they form one continuous chrome band
+	   across the bottom of the viewport — same bg, same height, no divider.
+	   Separation from the scrolling PR list (and the rail's avatar column)
+	   above is handled by an in-pane fade overlay at the bottom of each
+	   column (.sidebar-fade, .rail-fade) so content dissolves into the
+	   chrome instead of hitting a hard edge. */
+	.userbar-area {
+		grid-area: userbar;
+		background: var(--color-bg-secondary);
+		padding-left: var(--spacing-island);
+		padding-bottom: var(--spacing-island);
+		display: flex;
+		align-items: center;
+		overflow: hidden;
+		min-width: 0;
 	}
 
 	.bottombar-area {
 		grid-area: bottombar;
-		border-top: 1px solid var(--color-border);
 	}
 
-	/* Bottom-anchored action bar. Spans the visible main area between the
-	   sidebar (left edge) and the right panel (right edge) so the pill is
-	   centred on the content the user is reading, not the viewport. Inline
-	   `left`/`right` are driven by `floatingActionsStyle` so the wrapper
-	   tracks panel toggles and drags. Each edge transitions at the speed
-	   of the pane that drives it: `left` matches the grid-columns
-	   animation (`--duration-smooth`); `right` matches the right pane's
-	   slide-in transform (`--duration-instant`). Suppressed during active
-	   drags via `.is-resizing`. `pointer-events: none` on the wrapper
-	   prevents the invisible padding zone from swallowing clicks meant for
-	   content below. */
+	/* Bottom-anchored action bar. Floats over the main pane content,
+	   mirroring the tab bar at the top. pointer-events: none on the
+	   wrapper lets clicks reach content in the transparent zone. */
 	.walkthrough-actions-float {
 		position: absolute;
-		bottom: 40px;
+		bottom: 0;
+		left: 0;
+		right: 0;
 		display: flex;
 		justify-content: center;
-		z-index: 20;
+		padding: 8px 0 10px;
+		z-index: 10;
 		pointer-events: none;
-		padding-bottom: 12px;
-		transition:
-			left var(--duration-smooth) var(--ease-out-expo),
-			right var(--duration-instant) var(--ease-out-expo);
-	}
-
-	.walkthrough-actions-float.is-resizing {
-		transition: none;
 	}
 
 	.walkthrough-actions-float :global(*) {
@@ -840,44 +843,57 @@ function onRightHandleDblClick(): void {
 	.walkthrough-actions-row {
 		display: inline-flex;
 		align-items: center;
-		gap: 8px;
+		gap: var(--spacing-island);
 	}
 
 	/* ── Right pane (chat) ──
-	   Overlay-positioned, NOT a grid column. Toggling it open/closed must
-	   leave the main grid (sidebar + main + bottombar) byte-identical so
-	   the walkthrough/page-title/Request Changes content does not shift,
-	   reflow, or rewrap. The user's spec was "behave exactly like the left
-	   pane: do not change the main content display"; the left pane achieves
-	   non-disruption via viewport-anchored math inside the inner grids,
-	   but the right pane sits to the right of the 380px annotation rail
-	   where that math cannot absorb a 340px column without squeezing the
-	   820px content track. Overlay sidesteps the geometric impossibility:
-	   main-area width is independent of right-pane state.
+	   A real grid column. Width is 0 when closed, rightPanelWidth when
+	   open; toggling shrinks the main column rather than overlaying. The
+	   open/close animation comes from the grid-template-columns transition
+	   on .app-shell.
 
-	   Position: top below the 20px topbar (28px in Tauri to clear the
-	   traffic-light row), right at viewport edge, bottom above the 40px
-	   bottombar. Slides in/out via translateX so the panel can keep its
-	   chat state mounted across toggles. */
+	   Margin pattern mirrors .main-area's island (top / bottom / right =
+	   spacing-island) but margin-left is 0 — main's own margin-right
+	   already produces the chrome gap between the two islands, so adding
+	   margin-left here would double it. */
 	.rightpanel-area {
-		position: absolute;
-		top: 20px;
-		right: 0;
-		bottom: 40px;
-		/* width is driven inline by `getRightPanelWidth()` so the user-resized
-		   value applies on every render. The store clamps to
-		   [RIGHT_PANEL_WIDTH_MIN, RIGHT_PANEL_WIDTH_MAX]. */
-		border-left: 1px solid var(--color-border-subtle);
+		grid-area: rightpanel;
+		position: relative;
 		overflow: hidden;
-		background: var(--color-panel-bg);
-		transform: translateX(100%);
-		transition: transform var(--duration-smooth) var(--ease-out-expo);
-		/* Above main content, below topbar/CommandPalette. */
-		z-index: 5;
+		background: var(--color-bg-primary);
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-island);
+		margin: var(--spacing-island) var(--spacing-island) var(--spacing-island) 0;
+		/* Mirrors .main-area's island elevation so both panes float
+		   identically inside the chrome. */
+		box-shadow:
+			inset 0 1px 0 0 color-mix(in srgb, white 60%, transparent),
+			0 1px 2px -1px color-mix(in srgb, black 6%, transparent),
+			0 8px 24px -12px color-mix(in srgb, black 10%, transparent);
+		/* min-width: 0 lets the grid track shrink to 0 even though the
+		   border-box would otherwise contribute its own min-content. */
+		min-width: 0;
+		/* Border + shadow fade in sync with the grid-column open/close
+		   animation so the chrome doesn't flash a borderless panel
+		   mid-transition. */
+		transition:
+			border-color var(--duration-smooth) var(--ease-out-expo),
+			box-shadow var(--duration-smooth) var(--ease-out-expo);
 	}
 
-	.rightpanel-area--open {
-		transform: translateX(0);
+	:global(:root.dark) .rightpanel-area {
+		box-shadow:
+			inset 0 1px 0 0 color-mix(in srgb, white 4%, transparent),
+			0 1px 2px -1px color-mix(in srgb, black 40%, transparent),
+			0 8px 24px -12px color-mix(in srgb, black 50%, transparent);
+	}
+
+	/* When closed, the grid column collapses to 0 and the cell has no
+	   visible width; hide the border + shadow that would otherwise
+	   render as a sliver against the chrome's right edge. */
+	.rightpanel-area:not(.rightpanel-area--open) {
+		border-color: transparent;
+		box-shadow: none;
 	}
 
 	/* Suppress the slide transition while dragging — width changes are
@@ -907,7 +923,7 @@ function onRightHandleDblClick(): void {
 		inset: 0;
 		left: 2px;
 		width: 1px;
-		background: var(--color-border-subtle);
+		background: transparent;
 		transition:
 			width var(--duration-snap) var(--ease-soft),
 			left var(--duration-snap) var(--ease-soft),
@@ -921,13 +937,7 @@ function onRightHandleDblClick(): void {
 		background: var(--color-border-focus, var(--color-accent));
 	}
 
-	/* Tauri overlay title bar — topbar is taller, so the right pane starts
-	   lower to clear the traffic lights. Mirrors `.topbar-area` height. */
-	:global(html.tauri) .rightpanel-area {
-		top: calc(22px + 6px);
-	}
-
-	/* Merge split-button — single pill with transparent inner buttons so the
+/* Merge split-button — single pill with transparent inner buttons so the
 	   wrapper’s `.glass-pill` border and radius create the shape. */
 	.merge-pill {
 		padding: 0;
@@ -943,9 +953,9 @@ function onRightHandleDblClick(): void {
 	.merge-pill-chevron {
 		display: inline-flex;
 		align-items: center;
-		gap: 8px;
+		gap: var(--spacing-island);
 		height: 100%;
-		padding: 0 12px;
+		padding: 0 var(--spacing-inset);
 		background: transparent;
 		border: none;
 		font-family: inherit;

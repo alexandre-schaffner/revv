@@ -12,6 +12,7 @@ import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import {
   commitRecapOverviewHandler,
   completeRecapHandler,
+  getPrDiffHandler,
   getRecapStateHandler,
   getRepoContextHandler,
   listOpenPrsHandler,
@@ -19,6 +20,7 @@ import {
 import {
   commitRecapOverviewSchema,
   completeRecapSchema,
+  getPrDiffSchema,
   getRecapStateSchema,
   getRepoContextSchema,
   listOpenPrsSchema,
@@ -29,6 +31,7 @@ import {
 export type {
   CommitRecapOverviewInput,
   CompleteRecapInput,
+  GetPrDiffInput,
   GetRecapStateInput,
   GetRepoContextInput,
   ListOpenPrsInput,
@@ -44,6 +47,7 @@ export type {
 export {
   commitRecapOverviewHandler,
   completeRecapHandler,
+  getPrDiffHandler,
   getRecapStateHandler,
   getRepoContextHandler,
   listOpenPrsHandler,
@@ -54,9 +58,16 @@ export const RECAP_TOOL_SPECS: Array<RecapToolSpec<any>> = [
   {
     name: "get_recap_state",
     description:
-      "Read-only. Call FIRST on every run, including resumes. Returns the period boundaries, the list of archived PRs in this window (with author, branches, +/-, body excerpt), and each PR's latest complete walkthrough (summary, sentiment, risk level) when available. Open PRs are NOT inlined — only their count is — fetch them via list_open_prs to keep this payload small. Use this as the source of truth for the recap — do not invent PRs or walkthroughs.",
+      "Read-only. Call FIRST on every run, including resumes. Returns the period boundaries, the list of archived PRs in this window (with author, branches, +/-, body excerpt), and each PR's latest complete walkthrough (summary, sentiment, risk level) when available. Diffs are NOT inlined — call get_pr_diff for individual PRs where walkthrough is null. Open PRs are also NOT inlined — only their count is — fetch them via list_open_prs. Use this as the source of truth for the recap — do not invent PRs or walkthroughs.",
     inputSchema: getRecapStateSchema,
     handler: getRecapStateHandler,
+  },
+  {
+    name: "get_pr_diff",
+    description:
+      "Read-only. Fetch the file-level diff for a single archived PR by its `id`. Call this for PRs where `walkthrough` is null to get per-file status, +/- counts, and unified patch text. Each call returns one PR's diff — call it once per PR you want to inspect, BEFORE starting to write the markdown (a tool call mid-composition resets the buffer). Returns an error when the id is not in the source bundle or when diff data is unavailable.",
+    inputSchema: getPrDiffSchema,
+    handler: getPrDiffHandler,
   },
   {
     name: "list_open_prs",

@@ -380,14 +380,22 @@ onDestroy(() => {
 		/* Collapse the grid below the 1336-px geometric minimum of the
 		   viewport-anchored layout — same breakpoint as the walkthrough's
 		   own fallback (GuidedWalkthrough.svelte), so the title-section and
-		   the content below always collapse together. Falls back to a simple
-		   centered 860-max box with 32px padding. */
+		   the content below always collapse together.
+
+		   Pinned to col_3's leftmost position (col_1 floor 24 + col_2 48 =
+		   72px from container left) and width-capped at the col_3 max (820)
+		   plus right padding (32). At the breakpoint M=1335 this places the
+		   title text at exactly 72–892 from the container's left — the same
+		   span col_3 occupies at M=1336 in grid mode — so the right-pane
+		   animation crossing the threshold no longer teleports the title.
+		   Below 924px container width the box shrinks naturally with the
+		   container; content reads narrower but never jumps. */
 		.page-title-section--narrow {
 			display: block;
-			max-width: 860px;
-			padding-left: 32px;
+			max-width: calc(72px + 820px + 32px);
+			padding-left: 72px;
 			padding-right: 32px;
-			margin-inline: auto;
+			margin-inline: 0;
 			box-sizing: border-box;
 		}
 

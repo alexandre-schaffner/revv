@@ -618,41 +618,6 @@ export const ProjectRecapJobsLive = Layer.effect(
         );
       });
 
-    /**
-     * Resolve diffs for the subset of PRs missing a walkthrough. Returns a
-     * map keyed by `pr.id`. Walkthroughed PRs are skipped because their
-     * narrative already contains everything the recap needs.
-     */
-    const loadDiffsForRecap = (
-      repoId: string,
-      repoFullName: string,
-      windowed: ReadonlyArray<ArchivedPrWithWalkthrough>,
-    ): Effect.Effect<Map<string, RecapSourcePrDiff>> =>
-      Effect.gen(function* () {
-        const missing = windowed.filter((row) => row.walkthrough === null);
-        if (missing.length === 0) return new Map<string, RecapSourcePrDiff>();
-
-        const token = yield* resolveRepoToken(repoId);
-
-        // Bounded concurrency: 3 in flight at once balances GitHub
-        // rate-limit friendliness against recap latency for a typical
-        // weekly window (≤ ~15 PRs).
-        const entries = yield* Effect.forEach(
-          missing,
-          (row) =>
-            loadDiffForPr(row.pr, repoFullName, token).pipe(
-              Effect.map((diff) => [row.pr.id, diff] as const),
-            ),
-          { concurrency: 3 },
-        );
-
-        const map = new Map<string, RecapSourcePrDiff>();
-        for (const [prId, diff] of entries) {
-          if (diff !== null) map.set(prId, diff);
-        }
-        return map;
-      });
-
     // ── GitHub backfill for missing closed PRs ──────────────────────────
     //
     // The local mirror is populated by the poll scheduler, which only
@@ -780,7 +745,6 @@ export const ProjectRecapJobsLive = Layer.effect(
       },
       windowed: ReadonlyArray<ArchivedPrWithWalkthrough>,
       openPrs: ReadonlyArray<ArchivedPrWithWalkthrough>,
-      diffsByPrId: ReadonlyMap<string, RecapSourcePrDiff>,
     ): RecapSourceBundle => {
       const toRecapPr = (
         row: ArchivedPrWithWalkthrough,
@@ -815,11 +779,6 @@ export const ProjectRecapJobsLive = Layer.effect(
                 completedAt: row.walkthrough.completedAt ?? null,
               }
             : null,
-          // Only carry a diff for archived PRs that have no walkthrough —
-          // when a walkthrough exists, its narrative is the canonical
-          // summary. Open PRs are surfaced for "active work" context only
-          // and don't need diffs in the recap.
-          diff: row.walkthrough === null ? (diffsByPrId.get(pr.id) ?? null) : null,
         };
       };
 
@@ -959,15 +918,21 @@ export const ProjectRecapJobsLive = Layer.effect(
           return;
         }
 
-        // For PRs without a walkthrough, pull the diff so the agent can
-        // describe the change directly instead of guessing from title /
-        // +/- counts. Cache-then-GitHub with hard per-PR caps; failures
-        // degrade silently to metadata-only for the affected PR.
-        const diffsByPrId = yield* loadDiffsForRecap(job.repoId, repo.fullName, windowed).pipe(
-          Effect.catchAll(() => Effect.sync(() => new Map<string, RecapSourcePrDiff>())),
-        );
+        const bundle = buildSourceBundle(repo.fullName, job, windowed, openPrs);
 
-        const bundle = buildSourceBundle(repo.fullName, job, windowed, openPrs, diffsByPrId);
+        // Lazy diff loader — the agent calls get_pr_diff per PR on demand
+        // instead of receiving every diff upfront. Resolves the GitHub token
+        // once (cached) so repeated calls don't re-hit the token store.
+        let cachedToken: string | null | undefined = undefined;
+        const getPrDiff = async (prId: string): Promise<RecapSourcePrDiff | null> => {
+          if (cachedToken === undefined) {
+            cachedToken = await Effect.runPromise(resolveRepoToken(job.repoId));
+          }
+          const allRows = [...windowed, ...openPrs];
+          const row = allRows.find((r) => r.pr.id === prId);
+          if (!row) return null;
+          return Effect.runPromise(loadDiffForPr(row.pr, repo.fullName, cachedToken));
+        };
 
         // Prior recaps for rolling context. Cheap query — at most a handful.
         const priorRecaps: ReadonlyArray<ProjectRecap> = yield* provideDb(
@@ -1034,6 +999,7 @@ export const ProjectRecapJobsLive = Layer.effect(
               onCompleted: () => {
                 job.validatedComplete = true;
               },
+              getPrDiff,
               emitEvent: emit,
               textBuffer: job.textBuffer,
             });

@@ -14,9 +14,11 @@ import { projectRecaps } from "../../../db/schema/index";
 import type {
   CommitRecapOverviewInput,
   CompleteRecapInput,
+  GetPrDiffInput,
   GetRecapStateInput,
   GetRepoContextInput,
   ListOpenPrsInput,
+  RecapSourcePrDiff,
   RecapToolHandler,
   RecapToolResult,
 } from "./spec";
@@ -60,7 +62,7 @@ export const getRecapStateHandler: RecapToolHandler<GetRecapStateInput> = async 
     openPrsPageSize: OPEN_PRS_DEFAULT_PAGE_SIZE,
     previousOverview,
     instructions:
-      `Read the archived PRs above (the \`prs\` array). Each row has author, branches, +/- stats, a body excerpt, and (when available) a walkthrough summary + sentiment + risk + 9-axis context. For PRs where \`walkthrough\` is null, a \`diff\` object is provided with the actual file changes — read those \`files[].patch\` blocks (status, additions, deletions, unified diff) to describe what the change does. The \`diff.source\` field tells you where the bytes came from (\`'cache'\`, \`'github'\`, or \`'unavailable'\`); when it's \`'unavailable'\`, fall back to title + body + +/- counts. Honor any \`diff.note\` (truncation hints) and don't claim to have read more than you did. Open PRs are NOT inlined here to keep this payload small — there are ${openPrsTotal} of them, capped at the 20 most recently updated. Fetch them via list_open_prs (start with offset=0, default page size ${OPEN_PRS_DEFAULT_PAGE_SIZE}) and keep paging while \`nextOffset\` is non-null. Use those rows to write the 'Active work' section after 'What shipped'. WRITE THE COMPLETE RECAP AS YOUR VISIBLE ASSISTANT RESPONSE — the user watches it stream in live as you type, and the server reads what you wrote when you commit. No preamble, no "Here is the recap" framing, no inter-tool commentary — start with the first heading and go. If you call ANY tool while composing, the buffered text resets, so finish your reads first. When the markdown is complete, call commit_recap_overview ONCE with just the metadata (the PR ids you included, the walkthrough ids you incorporated, and the pre-aggregated stats). Finally call complete_recap.` +
+      `Read the archived PRs above (the \`prs\` array). Each row has author, branches, +/- stats, a body excerpt, and (when available) a walkthrough summary + sentiment + risk + 9-axis context. For PRs where \`walkthrough\` is null, call get_pr_diff with the PR's \`id\` to fetch the actual file changes (per-file status, additions, deletions, unified patch text) — do this for each PR you want to describe in detail before you start composing. Open PRs are NOT inlined here to keep this payload small — there are ${openPrsTotal} of them, capped at the 20 most recently updated. Fetch them via list_open_prs (start with offset=0, default page size ${OPEN_PRS_DEFAULT_PAGE_SIZE}) and keep paging while \`nextOffset\` is non-null. Use those rows to write the 'Active work' section after 'What shipped'. WRITE THE COMPLETE RECAP AS YOUR VISIBLE ASSISTANT RESPONSE — the user watches it stream in live as you type, and the server reads what you wrote when you commit. No preamble, no "Here is the recap" framing, no inter-tool commentary — start with the first heading and go. If you call ANY tool while composing, the buffered text resets, so finish your reads first. When the markdown is complete, call commit_recap_overview ONCE with just the metadata (the PR ids you included, the walkthrough ids you incorporated, and the pre-aggregated stats). Finally call complete_recap.` +
       rerunInstructions,
   };
   return ok(JSON.stringify(payload));
@@ -261,4 +263,40 @@ export const completeRecapHandler: RecapToolHandler<CompleteRecapInput> = async 
   ctx.onCompleted();
   ctx.emit({ type: "done", data: { recapId: ctx.recapId } });
   return ok("Recap complete. The orchestrator will transition status. You may stop.");
+};
+
+// ── Lazy diff tool ───────────────────────────────────────────────────────────
+
+export const getPrDiffHandler: RecapToolHandler<GetPrDiffInput> = async (ctx, input) => {
+  const allPrs = [...ctx.sourceBundle.prs, ...ctx.sourceBundle.openPrs];
+  const pr = allPrs.find((p) => p.id === input.pr_id);
+  if (!pr) {
+    return err(
+      `PR id "${input.pr_id}" is not in this recap's source bundle. Use only ids from the \`prs\` array returned by get_recap_state.`,
+    );
+  }
+
+  let diff: RecapSourcePrDiff | null;
+  try {
+    diff = await ctx.getPrDiff(input.pr_id);
+  } catch (e) {
+    return err(
+      `Diff fetch failed for ${input.pr_id}: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+
+  if (diff === null) {
+    return err(
+      `Diff unavailable for PR "${input.pr_id}". Fall back to describing it from title, body, and +/- counts.`,
+    );
+  }
+
+  return ok(
+    JSON.stringify({
+      pr_id: input.pr_id,
+      diff,
+      instructions:
+        "Diff loaded. Read the `files[].patch` blocks (status, additions, deletions, unified diff) to describe what the change does. Honor any `diff.note` (truncation hints) — don't claim coverage of files you weren't shown. When `diff.source` is `'unavailable'`, fall back to title + body + +/- counts and say so.",
+    }),
+  );
 };

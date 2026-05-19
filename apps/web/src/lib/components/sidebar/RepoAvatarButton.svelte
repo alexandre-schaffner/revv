@@ -38,13 +38,16 @@ const showCloneIndicator = $derived(
 				setSidebarPeekRepoId(repository.id);
 				setSidebarPeekHovering(true);
 			}}
-			onmouseleave={() => setSidebarPeekHovering(false)}
+			onmouseleave={() => {
+				setSidebarPeekHovering(false);
+			}}
 			aria-label={repository.fullName}
 			aria-current={isActive ? 'page' : undefined}
 		>
 			<span class="avatar-wrap">
 				<RepoGradientAvatar
 					fullName={repository.fullName}
+					ownerAvatarUrl={repository.avatarUrl}
 					size={30}
 					radius={8}
 					class="avatar"

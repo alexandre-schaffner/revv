@@ -2,7 +2,6 @@
 import { Plus } from "@lucide/svelte";
 import type { Repository } from "@revv/shared";
 import RepoAvatarButton from "$lib/components/sidebar/RepoAvatarButton.svelte";
-import UserMenu from "$lib/components/sidebar/UserMenu.svelte";
 import * as Collapsible from "$lib/components/ui/collapsible";
 import * as Tooltip from "$lib/components/ui/tooltip/index.js";
 import { getRepositories, getSelectedRepoId } from "$lib/stores/prs.svelte";
@@ -149,24 +148,37 @@ function handleAddRepo(): void {
 		</Tooltip.Root>
 	</div>
 
-	<div class="rail-bottom">
-		<div class="user-slot">
-			<UserMenu collapsed />
-		</div>
-	</div>
+	<!-- Bottom-edge fade: mirrors .sidebar-fade so the rail's scrollable
+	     avatar column dissolves into the userbar's bg-secondary, keeping
+	     the bottom chrome strip seamless even when the rail overflows. -->
+	<div class="rail-fade" aria-hidden="true"></div>
 </aside>
 
 <style>
 	.rail {
+		position: relative; /* anchor for .rail-fade */
 		display: flex;
 		flex-direction: column;
 		height: 100%;
 		width: 100%;
-		padding: 10px 0 0;
+		padding: var(--spacing-island) 0 0;
 		background: var(--color-bg-secondary);
 		overflow: hidden;
 	}
 
+	.rail-fade {
+		position: absolute;
+		left: 0;
+		right: 0;
+		bottom: 0;
+		height: var(--bottombar-height);
+		background: linear-gradient(to bottom, transparent, var(--color-bg-secondary));
+		pointer-events: none;
+		z-index: 5;
+	}
+
+	/* Bottom padding equals .rail-fade height so the last avatar can scroll
+	   past the fade region instead of sitting half-covered behind it. */
 	.rail-top {
 		display: flex;
 		flex-direction: column;
@@ -176,7 +188,7 @@ function handleAddRepo(): void {
 		min-height: 0;
 		overflow-y: auto;
 		overflow-x: hidden;
-		padding: 0 12px 8px;
+		padding: 0 var(--spacing-inset) var(--bottombar-height);
 		scrollbar-width: thin;
 		scrollbar-color: var(--color-border) transparent;
 	}
@@ -391,7 +403,7 @@ function handleAddRepo(): void {
 		flex-direction: column;
 		align-items: center;
 		gap: 2px;
-		padding: 4px 0;
+		padding: var(--spacing-island-half) 0;
 	}
 
 	/* In-pill active ring: the default RepoAvatarButton ring is a
@@ -403,18 +415,6 @@ function handleAddRepo(): void {
 	   so the centering reads cleanly. */
 	:global(.folder-pill-content .repo-button--active .avatar) {
 		box-shadow: 0 0 0 2px var(--color-accent, var(--color-text-primary));
-	}
-
-	.rail-bottom {
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		justify-content: center;
-		gap: 2px;
-		height: 40px;
-		flex-shrink: 0;
-		padding: 0 12px;
-		border-top: 1px solid var(--color-border);
 	}
 
 	.rail-action {
@@ -449,12 +449,5 @@ function handleAddRepo(): void {
 		border-color: var(--color-accent);
 		background: color-mix(in srgb, var(--color-accent) 6%, transparent);
 		color: var(--color-accent);
-	}
-
-	.user-slot {
-		width: 40px;
-		display: flex;
-		align-items: center;
-		justify-content: center;
 	}
 </style>

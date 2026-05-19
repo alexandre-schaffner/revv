@@ -121,12 +121,12 @@ async function handleSignOut(): Promise<void> {
 						: 'user-avatar user-avatar--fallback'}
 					aria-hidden="true"
 				>
-					<User size={collapsed ? 12 : 14} />
+					<User size={collapsed ? 14 : 16} />
 				</span>
 			{/if}
 			{#if isSwitching}
 				<span class="user-avatar-spinner" aria-hidden="true">
-					<Loader2 size={collapsed ? 10 : 12} class="spin-icon" />
+					<Loader2 size={collapsed ? 12 : 14} class="spin-icon" />
 				</span>
 			{/if}
 		</span>
@@ -206,13 +206,18 @@ async function handleSignOut(): Promise<void> {
 </PopoverRoot>
 
 <style>
-	/* ── Trigger ── */
+	/* ── Trigger ──
+	   Lives inside the userbar chrome strip (AppShell .userbar-area). The
+	   trigger fills the bar width; padding/gap come from island tokens so
+	   the chip-on-chrome rhythm matches .acct-row / .menu-row below. The
+	   collapsed variant centers the 28px avatar inside the rail's
+	   effective width (RAIL_WIDTH − userbar's chrome-gap padding-left). */
 	:global(.user-trigger) {
 		display: flex;
 		align-items: center;
-		gap: 8px;
+		gap: var(--spacing-island);
 		width: 100%;
-		padding: 6px 8px;
+		padding: var(--spacing-island-half) var(--spacing-island);
 		border: none;
 		border-radius: 6px;
 		background: transparent;
@@ -235,8 +240,16 @@ async function handleSignOut(): Promise<void> {
 		background: var(--color-bg-elevated);
 	}
 
+	/* Collapsed: only the rail column is visible. Centering the avatar via
+	   padding-left rather than justify-content keeps the motion continuous
+	   when toggling — justify-content can't be transitioned, so swapping
+	   it caused the avatar to jump sideways at the start of the expand
+	   animation before easing back. padding-left is part of the trigger's
+	   transition list, so it animates with the rest of the geometry.
+	   Value = (RAIL_WIDTH − userbar padding-left − avatar size) / 2
+	         = (64 − 8 − 28) / 2 = 14px. */
 	:global(.user-trigger--collapsed) {
-		padding: 0 9px; /* centers 22px avatar in 40px column */
+		padding: 0 14px;
 		gap: 0;
 	}
 
@@ -265,8 +278,8 @@ async function handleSignOut(): Promise<void> {
 	}
 
 	.user-avatar {
-		width: 22px;
-		height: 22px;
+		width: 28px;
+		height: 28px;
 		border-radius: 50%;
 		object-fit: cover;
 		flex-shrink: 0;

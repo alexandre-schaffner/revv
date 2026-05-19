@@ -234,6 +234,7 @@ $effect(() => {
 						[data-file-tree-virtualized-scroll='true'] {
 							scrollbar-gutter: auto;
 							padding-inline: 2px;
+							padding-block-end: var(--bottombar-height);
 						}
 						/* Reserve a fixed slot for the LOC badge on the right edge of
 						 * the row. Pierre's default decoration cell is \`flex: 1 1 0\`

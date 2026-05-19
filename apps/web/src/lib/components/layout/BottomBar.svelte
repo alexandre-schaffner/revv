@@ -68,9 +68,9 @@ function handleRetrySync() {
 }
 </script>
 
-<div class="flex h-full items-center justify-between bg-bg-primary px-4">
+<div class="bottombar-row">
 	<!-- Left: model info -->
-	<div class="flex items-center gap-3">
+	<div class="bottombar-left">
 		<div class="flex items-center gap-0.5">
 			<AgentSelector />
 			<ModelSelector />
@@ -79,7 +79,7 @@ function handleRetrySync() {
 	</div>
 
 	<!-- Right: usage indicator + sync + branch/sha -->
-	<div class="flex items-center gap-2">
+	<div class="bottombar-right">
 		{#if showUsage}
 			<Context usedTokens={totalTokens} maxTokens={maxContext} {usage}>
 				<ContextTrigger />
@@ -123,3 +123,26 @@ function handleRetrySync() {
 		{/if}
 	</div>
 </div>
+
+<style>
+	.bottombar-row {
+		display: flex;
+		height: 100%;
+		align-items: center;
+		justify-content: space-between;
+		background: var(--color-bg-secondary);
+		padding: 0 var(--spacing-island-2x);
+	}
+
+	.bottombar-left {
+		display: flex;
+		align-items: center;
+		gap: var(--spacing-inset);
+	}
+
+	.bottombar-right {
+		display: flex;
+		align-items: center;
+		gap: var(--spacing-island);
+	}
+</style>

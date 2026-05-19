@@ -46,6 +46,7 @@ import {
   RECAP_ALLOWED_TOOLS,
   RECAP_MCP_SERVER,
   type RecapSourceBundle,
+  type RecapSourcePrDiff,
   type RecapToolContext,
 } from "../ai/providers/recap-tools";
 import type { Db } from "../db";
@@ -96,6 +97,11 @@ export interface RunRecapAgentParams {
   readonly sessionDeps?: RecapOpencodeSessionDeps;
   readonly onCompleted: () => void;
   /**
+   * Lazy diff loader wired by the orchestrator. Called by the `get_pr_diff`
+   * MCP handler to fetch a single PR's diff on demand.
+   */
+  readonly getPrDiff: (prId: string) => Promise<RecapSourcePrDiff | null>;
+  /**
    * Stream emitter for live recap generation. Called by MCP tool handlers
    * so the SSE endpoint can forward chunks to subscribers, and by this
    * runner's own stream consumer to forward every `text-delta` as a
@@ -133,6 +139,7 @@ export async function runRecapAgent(params: RunRecapAgentParams): Promise<RecapA
     sourceBundle: params.sourceBundle,
     priorRecaps: params.priorRecaps,
     onCompleted: onCompletedWrapper,
+    getPrDiff: params.getPrDiff,
     emit: params.emitEvent,
     textBuffer: params.textBuffer,
   };

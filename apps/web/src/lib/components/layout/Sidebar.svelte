@@ -339,6 +339,7 @@ function handleKeydown(e: KeyboardEvent) {
 				{#if filesViewRepo}
 					<RepoGradientAvatar
 						fullName={filesViewRepo.fullName}
+						ownerAvatarUrl={filesViewRepo.avatarUrl}
 						size={14}
 						radius={3}
 						class="crumb-repo-avatar"
@@ -404,12 +405,19 @@ function handleKeydown(e: KeyboardEvent) {
 			{/if}
 		</div>
 	</div>
+
+	<!-- Bottom-edge fade: dissolves the PR list / file tree into the
+	     userbar's bg-secondary so the bottom chrome strip reads as one
+	     continuous band, with no hard clip between scrolling content and
+	     the user menu below. -->
+	<div class="sidebar-fade" aria-hidden="true"></div>
 </div>
 
 <AddRepoDialog open={addRepoOpen} onClose={() => setAddRepoDialogOpen(false)} />
 
 <style>
 	.sidebar {
+		position: relative; /* anchor for .sidebar-fade */
 		display: flex;
 		flex-direction: column;
 		height: 100%;
@@ -418,12 +426,22 @@ function handleKeydown(e: KeyboardEvent) {
 		overflow: hidden;
 	}
 
+	.sidebar-fade {
+		position: absolute;
+		left: 0;
+		right: 0;
+		bottom: 0;
+		height: var(--bottombar-height);
+		background: linear-gradient(to bottom, transparent, var(--color-bg-secondary));
+		pointer-events: none;
+		z-index: 5;
+	}
+
 	/* Header */
 	.sidebar-header {
 		display: flex;
 		align-items: stretch;
 		min-height: 48px;
-		border-bottom: 1px solid var(--color-border);
 		flex-shrink: 0;
 		/* No min-width — must be happy at 0 when collapsed */
 		transition: min-height var(--duration-smooth) var(--ease-out-expo);
@@ -432,7 +450,6 @@ function handleKeydown(e: KeyboardEvent) {
 	.sidebar-header--hidden {
 		min-height: 0;
 		overflow: hidden;
-		border-bottom-color: transparent;
 	}
 
 	/* In PR-list mode the header is owned by ProjectHeader (its own padding).
@@ -557,11 +574,13 @@ function handleKeydown(e: KeyboardEvent) {
 		pointer-events: none;
 	}
 
-	/* PR list */
+	/* PR list — bottom padding equals .sidebar-fade height so the last row
+	   can scroll past the fade region; without it the fade would always
+	   half-cover the last PR. */
 	.pr-list {
 		flex: 1;
 		overflow-y: auto;
-		padding: 4px 0 0;
+		padding: var(--spacing-island-half) 0 var(--bottombar-height);
 	}
 
 	/* Empty state */
