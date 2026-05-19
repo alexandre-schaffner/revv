@@ -78,8 +78,8 @@ function handleNewPr(): void {
 	.project-header {
 		display: flex;
 		flex-direction: column;
-		gap: 8px;
-		padding: 10px 10px 8px;
+		gap: var(--spacing-island);
+		padding: var(--spacing-inset) var(--spacing-inset) var(--spacing-island);
 		border-bottom: 1px solid var(--color-border);
 		flex-shrink: 0;
 	}
@@ -141,8 +141,8 @@ function handleNewPr(): void {
 	.header-link {
 		display: inline-flex;
 		align-items: center;
-		gap: 4px;
-		padding: 4px 8px;
+		gap: var(--spacing-island-half);
+		padding: var(--spacing-island-half) var(--spacing-island);
 		border-radius: 6px;
 		background: transparent;
 		color: var(--color-text-secondary);
@@ -163,7 +163,7 @@ function handleNewPr(): void {
 	.new-pr-button {
 		display: inline-flex;
 		align-items: center;
-		gap: 4px;
+		gap: var(--spacing-island-half);
 		margin-left: auto;
 		padding: 4px 10px;
 		border: none;

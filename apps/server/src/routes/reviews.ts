@@ -12,6 +12,7 @@ import {
   regenerateWalkthroughHandler,
   resumeWalkthroughHandler,
 } from "./reviews/handlers/walkthrough-cache";
+import { getCurrentWalkthroughHandler } from "./reviews/handlers/walkthrough-current";
 import { walkthroughStreamHandler } from "./reviews/handlers/walkthrough-stream";
 
 /**
@@ -222,7 +223,24 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
   })
 
   // ── Walkthrough ────────────────────────────────────────────────────────
-  .get("/:id/walkthrough", (ctx) => walkthroughStreamHandler(ctx))
+  .get(
+    "/:id/walkthrough",
+    (ctx) => walkthroughStreamHandler(ctx),
+    {
+      query: t.Object({
+        snapshotAt: t.Optional(t.String()),
+        lastPhase: t.Optional(t.String()),
+      }),
+    },
+  )
+
+  .get("/:id/walkthrough/current", async (ctx) => {
+    try {
+      return await getCurrentWalkthroughHandler(ctx.params.id, ctx.session.user.id);
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  })
 
   .get("/:id/walkthrough/cached", async (ctx) => {
     try {

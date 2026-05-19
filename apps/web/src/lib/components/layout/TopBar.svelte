@@ -144,7 +144,7 @@ function cycleTheme() {
 		align-items: center;
 		justify-content: space-between;
 		height: 100%;
-		padding: 0 8px;
+		padding: 0 var(--spacing-island);
 		position: relative;
 	}
 
@@ -175,13 +175,13 @@ function cycleTheme() {
 	.pr-number {
 		color: var(--color-text-muted);
 		font-weight: 500;
-		margin-right: 4px;
+		margin-right: var(--spacing-island-half);
 	}
 
 	.panel-toggle-wrap {
 		display: flex;
 		align-items: center;
-		gap: 4px;
+		gap: var(--spacing-island-half);
 		flex: 1;
 		justify-content: flex-end;
 	}
@@ -193,15 +193,15 @@ function cycleTheme() {
 
 	:global(html.tauri) .panel-toggle-wrap {
 		position: absolute;
-		top: 4px;
-		right: 8px;
+		top: var(--spacing-island-half);
+		right: var(--spacing-island);
 		height: 22px;
 		flex: none;
 	}
 
 	:global(html.tauri) .title-block {
 		position: absolute;
-		top: 4px;
+		top: var(--spacing-island-half);
 		left: 110px;
 		right: 80px;
 		height: 22px;
@@ -234,9 +234,15 @@ function cycleTheme() {
 
 	:global(html.tauri) .left-toggle-btn {
 		position: absolute;
-		top: 4px;
+		top: var(--spacing-island-half);
 		left: 78px;
 		height: 22px;
+	}
+
+	:global(html.tauri) .theme-btn,
+	:global(html.tauri) .panel-btn {
+		height: 22px;
+		width: 22px;
 	}
 
 	.theme-btn {
@@ -314,7 +320,7 @@ function cycleTheme() {
 	.title-separator {
 		color: var(--color-text-muted);
 		opacity: 0.5;
-		margin: 0 4px;
+		margin: 0 var(--spacing-island-half);
 	}
 
 	.title-subtitle {

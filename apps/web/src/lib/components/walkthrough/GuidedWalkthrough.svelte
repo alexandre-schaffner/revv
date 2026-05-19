@@ -2107,17 +2107,28 @@ function handleRegenerate(): void {
 
 	/* ── Narrow-viewport fallback ────────────────────────────────────────
 	   Below the 1336px geometric minimum (24 left + 48 + 820 + 40 + 380 +
-	   24 right) the side-by-side grid physically can't fit. Collapse to a
-	   single centered 860-max column and stack the annotation card directly
-	   below its block. Matches at `max-width: 1335px` (inclusive), so V=1336
-	   is the first width at which side-by-side activates. */
+	   24 right) the side-by-side grid physically can't fit. Stack the
+	   annotation card directly below its block but keep the content column
+	   pinned at col_3's leftmost position (col_1 floor 24 + col_2 48 = 72
+	   from container left, 820 wide). At the breakpoint M=1335 this places
+	   content at exactly 72–892 — the same span col_3 occupies at M=1336
+	   in grid mode — so the right-pane animation crossing this threshold
+	   no longer teleports the content. Expresses the "shift left until
+	   it can't shift further, then drop annotations below" semantic:
+	   left edge stays anchored at 72, annotations stack rather than
+	   recentering the content.
+
+	   Matches at `max-width: 1335px` (inclusive), so V=1336 is the first
+	   width at which side-by-side activates. */
 	@container (max-width: 1335px) {
-		/* Collapse the grid: revert to a single centered 860-max column. */
+		/* Pin content to col_3's leftmost x-position; cap width at col_3
+		   max (820) plus right padding (32). Below 924px container width
+		   the box shrinks with the container — left edge stays at 72. */
 		.walkthrough-content {
 			display: block;
-			padding: 28px 32px;
-			max-width: 860px;
-			margin-inline: auto;
+			padding: 28px 32px 28px 72px;
+			max-width: calc(72px + 820px + 32px);
+			margin-inline: 0;
 		}
 
 		/* Children no longer need explicit column placement. */
@@ -2127,18 +2138,19 @@ function handleRegenerate(): void {
 			grid-column: auto;
 		}
 
-		/* Collapse the loading / stepper / banner grids to a simple centered
-		   860-max box at narrow viewport. Children stop spanning a specific
-		   grid column and just flow normally. */
+		/* Inner sections inherit .walkthrough-content's content area (820
+		   wide, left-aligned at 72px from container). No re-centering or
+		   extra horizontal padding — that would shift them inward of the
+		   parent's content edges and break alignment with .blocks below. */
 		.walkthrough-loading,
 		.walkthrough-stepper-header,
 		.walkthrough-banner {
 			display: block;
 			width: 100%;
-			max-width: 860px;
-			padding-left: 32px;
+			max-width: calc(72px + 820px + 32px);
+			padding-left: 72px;
 			padding-right: 32px;
-			margin-inline: auto;
+			margin-inline: 0;
 			box-sizing: border-box;
 		}
 

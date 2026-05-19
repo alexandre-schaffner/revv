@@ -1,20 +1,11 @@
 <script lang="ts">
-import {
-  ArrowLeft,
-  CircleAlert,
-  Loader2,
-  Play,
-  RefreshCw,
-  RotateCcw,
-  Square,
-} from "@lucide/svelte";
+import { ArrowLeft, CircleAlert, Loader2 } from "@lucide/svelte";
 import type { ProjectRecap } from "@revv/shared";
 import { Shimmer } from "$lib/components/ai/shimmer";
 import { Button } from "$lib/components/ui/button";
-import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import type { RecapStreamEntry } from "$lib/stores/recap-stream.svelte";
-import type { RecapPendingAction } from "$lib/stores/recaps.svelte";
 import { createStreamingBlockRenderer, renderMarkdown } from "$lib/utils/markdown";
+import { handleMarkdownLinkClick } from "$lib/utils/links";
 import RecapStats from "./RecapStats.svelte";
 
 interface Props {
@@ -22,42 +13,15 @@ interface Props {
   loading: boolean;
   /** When omitted, the back button is hidden — used on the period landing pages. */
   onBack?: (() => void) | undefined;
-  /**
-   * Handler for Resume / Retry / Regenerate. All three buttons hit the
-   * same /api/recaps/:id/regenerate endpoint — the label varies by
-   * context (cancelled vs. failed vs. complete) so the user sees the
-   * same floating-bar grammar as the walkthrough.
-   */
-  onRegenerate: () => void;
-  /** Handler for Stop while a recap is generating. */
-  onStop?: (() => void) | undefined;
-  /**
-   * In-flight destructive action sourced from the store-level pending
-   * tracker. Drives the `disabled` state on every floating pill so a
-   * double-click can't fire two concurrent actions during the async
-   * POST → stream-restart dance.
-   */
-  pendingAction?: RecapPendingAction | null | undefined;
   /** Live stream state when the recap is generating. */
   stream?: RecapStreamEntry | null | undefined;
-  /**
-   * Inline style for the floating action pill. Passed in by the parent
-   * (RecapPeriodView or [recapId] route) so the bar tracks sidebar /
-   * right-panel state without this component reading the sidebar store.
-   * Defaults to a viewport-centred placement when no parent supplies it.
-   */
-  floatingActionsStyle?: string;
 }
 
 let {
   recap,
   loading,
   onBack = undefined,
-  onRegenerate,
-  onStop = undefined,
-  pendingAction = null,
   stream = null,
-  floatingActionsStyle = "left: 0; right: 0;",
 }: Props = $props();
 
 let completedHtml = $derived.by(() => {
@@ -110,42 +74,6 @@ function phaseMessage(phase: string): string {
   return labels[phase] ?? "Generating recap…";
 }
 
-// Single discriminated UI kind for the floating action bar. Mirrors the
-// `WalkthroughUiState` projection so the bar branches on one signal,
-// never on a cascade of booleans:
-//
-//   • generating  → Stop button (cancels the agent server-side).
-//   • stopped     → Resume + Regenerate (status='error' from a user
-//                   Cancel — semantically "I halted this, want to keep
-//                   going"). Distinguished from a real failure by the
-//                   errorMessage marker the server stamps.
-//   • error       → Retry + Regenerate (status='error' from a real
-//                   agent failure). Same backend call as Resume —
-//                   recap's single-atomic-write pipeline doesn't
-//                   preserve partial state, but the label conveys user
-//                   intent honestly.
-//   • complete    → Regenerate (rewrite a finished recap).
-//   • hidden      → no bar (superseded rows, or no recap loaded).
-type RecapUiKind = "generating" | "stopped" | "error" | "complete" | "hidden";
-
-const recapUiKind: RecapUiKind = $derived.by(() => {
-  if (!recap) return "hidden";
-  if (recap.status === "generating") return "generating";
-  if (recap.status === "error") {
-    return recap.errorMessage === "Cancelled by user" ? "stopped" : "error";
-  }
-  if (recap.status === "complete") return "complete";
-  return "hidden";
-});
-
-const destructiveDisabled = $derived(pendingAction !== null);
-const destructiveTitle = $derived(
-  pendingAction === "regenerate"
-    ? "Regenerating…"
-    : pendingAction === "stop"
-      ? "Stopping…"
-      : undefined,
-);
 </script>
 
 <div class="recap-detail">
@@ -181,7 +109,7 @@ const destructiveTitle = $derived(
 
 		{#if recap.status === "generating"}
 			{#if stream && (stream.isStreaming || stream.overview)}
-				<article class="recap-prose recap-prose--streaming">
+				<article class="recap-prose recap-prose--streaming" onclick={handleMarkdownLinkClick}>
 					{#each streamingBlocks as block (block.id)}
 						<div class="recap-block" data-sd-block>{@html block.html}</div>
 					{/each}
@@ -233,7 +161,7 @@ const destructiveTitle = $derived(
 				<p>No overview content was written by the agent.</p>
 			</div>
 		{:else}
-			<article class="recap-prose">
+			<article class="recap-prose" onclick={handleMarkdownLinkClick}>
 				{@html completedHtml}
 			</article>
 		{/if}
@@ -250,69 +178,6 @@ const destructiveTitle = $derived(
 		{/if}
 	{/if}
 </div>
-
-{#if recapUiKind !== "hidden"}
-	<div class="recap-actions-float" style={floatingActionsStyle}>
-		<div class="recap-actions-row">
-			{#if recapUiKind === "generating"}
-				<GlassPill
-					variant="danger"
-					onclick={onStop}
-					disabled={pendingAction === "stop"}
-					title={pendingAction === "stop" ? "Stopping…" : "Stop this recap generation"}
-				>
-					<Square size={14} fill="currentColor" />
-					{pendingAction === "stop" ? "Stopping…" : "Stop generation"}
-				</GlassPill>
-			{:else if recapUiKind === "stopped"}
-				<GlassPill
-					disabled={destructiveDisabled}
-					title={destructiveTitle ?? "Resume generation from where it was stopped"}
-					onclick={onRegenerate}
-					aria-label="Resume recap generation"
-				>
-					<Play size={14} fill="currentColor" />
-					Resume
-				</GlassPill>
-				<GlassPill
-					disabled={destructiveDisabled}
-					title={destructiveTitle ?? "Generate a fresh recap (the current draft will be replaced)"}
-					onclick={onRegenerate}
-				>
-					<RefreshCw size={14} />
-					Regenerate
-				</GlassPill>
-			{:else if recapUiKind === "error"}
-				<GlassPill
-					disabled={destructiveDisabled}
-					title={destructiveTitle ?? "Retry recap generation after error"}
-					onclick={onRegenerate}
-					aria-label="Retry recap generation"
-				>
-					<RotateCcw size={14} />
-					Retry
-				</GlassPill>
-				<GlassPill
-					disabled={destructiveDisabled}
-					title={destructiveTitle ?? "Generate a fresh recap (the current draft will be replaced)"}
-					onclick={onRegenerate}
-				>
-					<RefreshCw size={14} />
-					Regenerate
-				</GlassPill>
-			{:else if recapUiKind === "complete"}
-				<GlassPill
-					disabled={destructiveDisabled}
-					title={destructiveTitle ?? "Generate a fresh recap for this period (the current one becomes superseded)"}
-					onclick={onRegenerate}
-				>
-					<RefreshCw size={14} />
-					Regenerate recap
-				</GlassPill>
-			{/if}
-		</div>
-	</div>
-{/if}
 
 <style>
 	.recap-detail {
@@ -469,6 +334,23 @@ const destructiveTitle = $derived(
 		border-radius: 0.25em;
 	}
 
+	.recap-prose :global(a) {
+		color: var(--color-accent);
+		text-decoration-line: underline;
+		text-decoration-color: color-mix(in srgb, var(--color-accent) 35%, transparent);
+		text-underline-offset: 2px;
+		text-decoration-thickness: 1px;
+		cursor: pointer;
+		transition:
+			color var(--duration-snap) var(--ease-soft),
+			text-decoration-color var(--duration-snap) var(--ease-soft);
+	}
+
+	.recap-prose :global(a:hover) {
+		color: var(--color-accent-hover);
+		text-decoration-color: var(--color-accent-hover);
+	}
+
 	/* `.sd-word-new` animation lives in app.css (global) — the spans are
 	   injected via `{@html}` and have no component scope. */
 
@@ -485,31 +367,4 @@ const destructiveTitle = $derived(
 		letter-spacing: 0.01em;
 	}
 
-	/* Floating action pill — mirrors `.walkthrough-actions-float` in
-	   AppShell. Fixed positioning because this component renders inside
-	   `.main-area`, which has `overflow: hidden` and no positioning
-	   context of its own. Inline `left/right` is supplied by the parent
-	   so the pill tracks sidebar / right-panel state from one place. */
-	.recap-actions-float {
-		position: fixed;
-		bottom: 40px;
-		display: flex;
-		justify-content: center;
-		z-index: 20;
-		pointer-events: none;
-		padding-bottom: 12px;
-		transition:
-			left var(--duration-smooth) var(--ease-out-expo),
-			right var(--duration-instant) var(--ease-out-expo);
-	}
-
-	.recap-actions-float :global(*) {
-		pointer-events: auto;
-	}
-
-	.recap-actions-row {
-		display: inline-flex;
-		align-items: center;
-		gap: 8px;
-	}
 </style>

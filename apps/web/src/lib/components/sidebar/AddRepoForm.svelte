@@ -5,7 +5,6 @@ import { toast } from "svelte-sonner";
 import CloneStatusIndicator from "$lib/components/shared/CloneStatusIndicator.svelte";
 import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
-import { repoGradientDataUrl } from "$lib/repoGradient";
 import {
   addRepo,
   deleteRepo,
@@ -298,11 +297,12 @@ let trackedCount = $derived(getRepositories().length);
 		{#each [...groupedByOwner] as [owner, repos] (owner)}
 			<div class="owner-group">
 				<div class="owner-header">
-					<img
-						src={repoGradientDataUrl(owner)}
-						alt=""
+					<RepoGradientAvatar
+						fullName={owner}
+						ownerAvatarUrl={repos[0]?.avatarUrl ?? null}
+						size={13}
+						radius={999}
 						class="owner-avatar"
-						loading="lazy"
 					/>
 					<span class="owner-name">{owner}</span>
 					<span class="owner-count">{repos.length}</span>
@@ -341,6 +341,7 @@ let trackedCount = $derived(getRepositories().length);
 					>
 					<RepoGradientAvatar
 						fullName={repo.fullName}
+						ownerAvatarUrl={repo.avatarUrl}
 						size={14}
 						radius={999}
 						class="dropdown-avatar"
@@ -649,10 +650,6 @@ let trackedCount = $derived(getRepositories().length);
 	}
 
 	.owner-avatar {
-		width: 13px;
-		height: 13px;
-		border-radius: 999px;
-		object-fit: cover;
 		flex-shrink: 0;
 		opacity: 0.8;
 	}

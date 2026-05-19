@@ -19,8 +19,16 @@ let { repoId, period, recaps, loading, excludeRecapId = null }: Props = $props()
 
 const periodLabel = $derived(period === "daily" ? "daily" : "weekly");
 
+const currentRecap = $derived(recaps.find((r) => r.id === excludeRecapId));
+
 const previous = $derived(
-  recaps.filter((r) => r.period === period && r.id !== excludeRecapId && r.status !== "superseded"),
+  recaps.filter(
+    (r) =>
+      r.period === period &&
+      r.id !== excludeRecapId &&
+      r.status !== "superseded" &&
+      (!currentRecap || r.periodStart < currentRecap.periodStart),
+  ),
 );
 
 // Stay invisible until there's history to show. Avoids a redundant

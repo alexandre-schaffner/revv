@@ -46,6 +46,7 @@ import {
   RECAP_ALLOWED_TOOLS,
   RECAP_MCP_SERVER,
   type RecapSourceBundle,
+  type RecapSourcePrDiff,
   type RecapToolContext,
 } from "../ai/providers/recap-tools";
 import type { Db } from "../db";
@@ -96,6 +97,11 @@ export interface RunRecapAgentParams {
   readonly sessionDeps?: RecapOpencodeSessionDeps;
   readonly onCompleted: () => void;
   /**
+   * Lazy diff loader wired by the orchestrator. Called by the `get_pr_diff`
+   * MCP handler to fetch a single PR's diff on demand.
+   */
+  readonly getPrDiff: (prId: string) => Promise<RecapSourcePrDiff | null>;
+  /**
    * Stream emitter for live recap generation. Called by MCP tool handlers
    * so the SSE endpoint can forward chunks to subscribers, and by this
    * runner's own stream consumer to forward every `text-delta` as a
@@ -133,6 +139,7 @@ export async function runRecapAgent(params: RunRecapAgentParams): Promise<RecapA
     sourceBundle: params.sourceBundle,
     priorRecaps: params.priorRecaps,
     onCompleted: onCompletedWrapper,
+    getPrDiff: params.getPrDiff,
     emit: params.emitEvent,
     textBuffer: params.textBuffer,
   };
@@ -209,30 +216,47 @@ async function runViaClaude(
     });
 
     // Walk the SDK message stream. Two side effects per text-delta:
-    //   1. ctx.emit({type:"chunk", data:{text}})  → live UI
-    //   2. ctx.textBuffer.current += text         → durable source
+    //   1. ctx.emit({type:"chunk", data:{text}})  → live UI (pre-commit only)
+    //   2. ctx.textBuffer.current += text         → durable source for commit handler
     //
-    // Reset the buffer on every tool-call EXCEPT `commit_recap_overview`:
-    // commit's handler reads the buffer immediately after the SDK
-    // surfaces its tool-call event, so resetting first would clobber
-    // the markdown we just composed. Read tools (`get_recap_state`,
-    // `list_open_prs`, `get_repo_context`) reset the buffer to drop
-    // any pre-composition prelude — that's the intended behaviour.
-    //
-    // The buffer reset is mirrored on the wire via an
-    // `overview: ""` event so the client wipes the prelude text it
-    // accumulated from earlier `chunk` events. Without this, the UI
-    // shows the agent's "let me check state first" narration even
-    // though the server has discarded it.
+    // Buffer lifecycle:
+    //   • Read tools (get_recap_state, list_open_prs, get_repo_context) reset
+    //     the buffer so pre-composition prelude is discarded before the model
+    //     starts writing the real recap. The reset is mirrored as `overview: ""`
+    //     to the client so it wipes any streamed prelude text.
+    //   • commit_recap_overview's handler reads the buffer, sanitizes it
+    //     (strips preamble/suffix narration), writes to DB, then clears the
+    //     buffer itself — so a second commit call only persists the new content.
+    //   • After commit fires, chunk emission stops (`committed` flag). Any text
+    //     the model generates in a second pass goes to the buffer (for a
+    //     potential second commit) but is NOT streamed to the client, preventing
+    //     the doubled-content visual in the streaming view.
+    //   • complete_recap must not reset — it fires after composition and any
+    //     reset here would blank the streaming view before the WS event arrives.
+    let committed = false;
     const usage = await walkClaudeMessages(iter, (ev) => {
       if (ev.kind === "text-delta") {
         if (ev.data.length === 0) return;
         ctx.textBuffer.current += ev.data;
-        ctx.emit({ type: "chunk", data: { text: ev.data } });
+        // Stop streaming chunks after the first commit. The model sometimes
+        // generates the recap a second time; without this guard those chunks
+        // would append onto the clean committed content in the streaming view.
+        if (!committed) {
+          ctx.emit({ type: "chunk", data: { text: ev.data } });
+        }
         return;
       }
       if (ev.kind === "tool-call") {
-        if (ev.bareName !== "commit_recap_overview") {
+        if (ev.bareName === "commit_recap_overview") {
+          committed = true;
+          return;
+        }
+        if (ev.bareName === "complete_recap") {
+          return;
+        }
+        // Only reset on pre-commit read/prelude tools. After commit, a stray
+        // read tool must not wipe the committed content from the client view.
+        if (!committed) {
           ctx.textBuffer.current = "";
           ctx.emit({ type: "overview", data: { overview: "" } });
         }

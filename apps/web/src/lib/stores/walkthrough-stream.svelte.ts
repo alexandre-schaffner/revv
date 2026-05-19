@@ -294,7 +294,7 @@ function scheduleReconciliationPoll(prId: string, attempt = 0): void {
 
 export async function streamWalkthrough(
   prId: string,
-  options?: { activate?: boolean },
+  options?: { activate?: boolean; snapshotAt?: string; lastPhase?: string },
 ): Promise<void> {
   wtTrace("lifecycle", `streamWalkthrough enter prId=${prId}`);
   if (options?.activate !== false) {
@@ -364,8 +364,13 @@ export async function streamWalkthrough(
   controllers.set(prId, ctrlEntry);
 
   try {
+    const sseParams = new URLSearchParams();
+    if (options?.snapshotAt) sseParams.set("snapshotAt", options.snapshotAt);
+    if (options?.lastPhase) sseParams.set("lastPhase", options.lastPhase);
+    const sseQs = sseParams.toString();
+    const sseUrl = `${API_BASE_URL}/api/reviews/${prId}/walkthrough${sseQs ? `?${sseQs}` : ""}`;
     await runWalkthroughSse({
-      url: `${API_BASE_URL}/api/reviews/${prId}/walkthrough`,
+      url: sseUrl,
       signal: abortCtrl.signal,
       onReaderReady: (reader) => {
         const ctrl = controllers.get(prId);
@@ -511,7 +516,7 @@ async function doHydrateFromCache(
   }
 
   try {
-    const res = await fetch(`${API_BASE_URL}/api/reviews/${prId}/walkthrough/cached`, {
+    const res = await fetch(`${API_BASE_URL}/api/reviews/${prId}/walkthrough/current`, {
       headers: authHeaders(),
       credentials: "include",
     });
@@ -520,47 +525,50 @@ async function doHydrateFromCache(
       return false;
     }
 
+    type WalkthroughPayload = {
+      id: string;
+      summary: string;
+      riskLevel: RiskLevel;
+      sentiment?: string | null;
+      lastCompletedPhase?: WalkthroughPipelinePhase;
+      semanticSteps?: WalkthroughSemanticStep[];
+      blocks: WalkthroughBlock[];
+      issues: WalkthroughIssue[];
+      ratings: WalkthroughRating[];
+      tokenUsage: unknown;
+      reviewSessionId: string;
+      generatedBy?: {
+        githubUserId: number | null;
+        githubLogin: string | null;
+        displayName: string | null;
+        avatarUrl: string | null;
+      } | null;
+      providerConfig?: {
+        provider: string;
+        model: string;
+        thinkingEffort: string | null;
+        contextWindow: string | null;
+        maxTurns: number;
+      } | null;
+    };
+
     const body = (await res.json()) as
-      | { cached: false }
+      | { status: "not_found" }
       | {
-          cached: true;
-          status?: "complete" | "generating" | "superseded";
-          walkthrough: {
-            id: string;
-            summary: string;
-            riskLevel: RiskLevel;
-            sentiment?: string | null;
-            lastCompletedPhase?: WalkthroughPipelinePhase;
-            semanticSteps?: WalkthroughSemanticStep[];
-            blocks: WalkthroughBlock[];
-            issues: WalkthroughIssue[];
-            ratings: WalkthroughRating[];
-            tokenUsage: unknown;
-            reviewSessionId: string;
-            generatedBy?: {
-              githubUserId: number | null;
-              githubLogin: string | null;
-              displayName: string | null;
-              avatarUrl: string | null;
-            } | null;
-            providerConfig?: {
-              provider: string;
-              model: string;
-              thinkingEffort: string | null;
-              contextWindow: string | null;
-              maxTurns: number;
-            } | null;
-          };
+          status: "complete" | "generating" | "error";
+          walkthrough: WalkthroughPayload;
+          snapshotAt: string;
         };
 
-    if (!body.cached) {
-      wtTrace("lifecycle", `hydrateFromCache prId=${prId} body.cached=false → false`);
+    if (body.status === "not_found") {
+      wtTrace("lifecycle", `hydrateFromCache prId=${prId} status=not_found → false`);
       return false;
     }
 
     const wt = body.walkthrough;
-    const status = body.status ?? "complete";
+    const { status, snapshotAt } = body;
     const isGenerating = status === "generating";
+    const isError = status === "error";
     wtTrace(
       "lifecycle",
       `hydrateFromCache prId=${prId} status=${status} blocks=${wt.blocks.length} issues=${wt.issues.length} ratings=${wt.ratings.length} semanticSteps=${wt.semanticSteps?.length ?? 0} hasSentiment=${wt.sentiment !== null && wt.sentiment !== undefined}`,
@@ -580,11 +588,11 @@ async function doHydrateFromCache(
     entry.issues = wt.issues;
     entry.ratings = wt.ratings;
     entry.walkthroughId = wt.id;
-    entry.doneReceived = !isGenerating;
+    entry.doneReceived = !isGenerating && !isError;
     entry.isStreaming = isGenerating;
     entry.tokenUsage = coerceTokenUsage(wt.tokenUsage);
-    entry.streamError = null;
-    entry.superseded = status === "superseded";
+    entry.streamError = isError ? "Walkthrough generation failed. Resume or regenerate to retry." : null;
+    entry.superseded = false;
     entry.phase = isGenerating ? "writing" : "finishing";
     entry.phaseMessage = isGenerating ? "Resuming walkthrough…" : "Complete";
     entry.liveGeneration = isGenerating;
@@ -602,9 +610,12 @@ async function doHydrateFromCache(
     }
 
     if (isGenerating) {
-      const streamOpts =
-        options?.activate !== undefined ? { activate: options.activate } : undefined;
-      void streamWalkthrough(prId, streamOpts);
+      const cursorOpts = {
+        snapshotAt,
+        lastPhase: wt.lastCompletedPhase ?? "none",
+        ...(options?.activate !== undefined ? { activate: options.activate } : {}),
+      };
+      void streamWalkthrough(prId, cursorOpts);
     }
 
     return true;

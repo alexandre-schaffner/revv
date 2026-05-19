@@ -104,7 +104,7 @@ function handleTabChange(tabId: string) {
 	 */
 	.status-slot {
 		position: absolute;
-		left: calc(100% + 8px);
+		left: calc(100% + var(--spacing-island));
 		top: 50%;
 		/* Height matches the tallest child (the 18 px button) so the
 		 * slot's center line — which both children align to — stays fixed
@@ -173,7 +173,7 @@ function handleTabChange(tabId: string) {
 		top: 0;
 		display: inline-flex;
 		align-items: center;
-		gap: 4px;
+		gap: var(--spacing-island-half);
 		height: 18px;
 		padding: 0 10px 0 8px;
 		border: none;

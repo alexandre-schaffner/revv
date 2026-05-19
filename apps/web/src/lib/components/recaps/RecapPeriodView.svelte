@@ -1,9 +1,8 @@
 <script lang="ts">
-import { Loader2, Sparkles } from "@lucide/svelte";
+import { Loader2, Play, RefreshCw, RotateCcw, Sparkles, Square } from "@lucide/svelte";
 import type { ProjectRecap, ProjectRecapSummary, RecapPeriod } from "@revv/shared";
 import { untrack } from "svelte";
 import { Shimmer } from "$lib/components/ai/shimmer";
-import { RAIL_WIDTH } from "$lib/constants";
 import {
   abortRecapStream,
   getRecapStreamEntry,
@@ -22,13 +21,7 @@ import {
   regenerateRecap,
   stopRecap,
 } from "$lib/stores/recaps.svelte";
-import {
-  getRightPanelOpen,
-  getRightPanelWidth,
-  getSidebarCollapsed,
-  getSidebarPeekHovering,
-  getSidebarWidth,
-} from "$lib/stores/sidebar.svelte";
+import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import PreviousRecaps from "./PreviousRecaps.svelte";
 import RecapDetail from "./RecapDetail.svelte";
 
@@ -43,6 +36,9 @@ let generating = $state(false);
 
 const periodLabel = $derived(period === "daily" ? "Daily" : "Weekly");
 const periodLabelLower = $derived(period === "daily" ? "daily" : "weekly");
+// Label used in the "out of date" CTA so it reads as a fresh recap for the
+// user's current period, not a regeneration of the displayed one.
+const currentPeriodLabel = $derived(period === "daily" ? "today's" : "this week's");
 
 // Fetch the recap list for this repo. The list reducer hydrates from WS
 // envelopes so navigating between periods doesn't re-hit the network.
@@ -96,21 +92,6 @@ $effect(() => {
   };
 });
 
-// Mirror AppShell.floatingActionsStyle exactly so the recap pill is centred
-// over the visible main area between the sidebar and (optional) right panel
-// rather than the full viewport.
-const sidebarCollapsed = $derived(getSidebarCollapsed());
-const sidebarPeekHovering = $derived(getSidebarPeekHovering());
-const sidebarEffectiveCollapsed = $derived(sidebarCollapsed && !sidebarPeekHovering);
-const sidebarWidth = $derived(getSidebarWidth());
-const rightPanelOpen = $derived(getRightPanelOpen());
-const rightPanelWidth = $derived(getRightPanelWidth());
-const floatingActionsStyle = $derived(
-  `left: ${RAIL_WIDTH + (sidebarEffectiveCollapsed ? 0 : sidebarWidth)}px; right: ${
-    rightPanelOpen ? rightPanelWidth : 0
-  }px;`,
-);
-
 // Editorial mono eyebrow — current period in UTC. ISO week (Mon → now)
 // for weekly, today's UTC date for daily. Matches the server's
 // `manualWeeklyBoundaries` window.
@@ -138,9 +119,59 @@ const periodEyebrow = $derived.by(() => {
   return `${DAY_SHORT_FMT.format(start)} → ${DAY_SHORT_FMT.format(now)} · UTC`;
 });
 
-// Show the floating Generate pill on the empty/loading states. Once a
-// recap is in view, RecapDetail owns its own Regenerate pill, so we
-// stand down to avoid stacking two bars.
+// "Out of date" is computed against the user's LOCAL calendar, not UTC. The
+// server windows are UTC-aligned, but from the user's perspective a recap
+// labelled "Mon, 18 May · UTC" is stale once their wall clock reads May 19,
+// even if UTC hasn't rolled over yet. Clicking Generate will let the server
+// produce whatever the current UTC window dictates.
+function dayKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function utcDayKey(iso: string): string {
+  return iso.slice(0, 10);
+}
+
+function localMondayKey(d: Date): string {
+  const daysFromMonday = (d.getDay() + 6) % 7;
+  const monday = new Date(d.getFullYear(), d.getMonth(), d.getDate() - daysFromMonday);
+  return dayKey(monday);
+}
+
+const isOutOfDate = $derived.by(() => {
+  if (latest === null || latest.status !== "complete") return false;
+  if (typeof latest.periodStart !== "string") return false;
+  if (period === "daily") {
+    return utcDayKey(latest.periodStart) !== dayKey(new Date());
+  }
+  // Weekly: a recap's periodStart is the Monday of its UTC week. Compare
+  // that to the Monday of the user's current local week.
+  return utcDayKey(latest.periodStart) !== localMondayKey(new Date());
+});
+
+type RecapUiKind = "generating" | "stopped" | "error" | "complete" | "outdated" | "hidden";
+
+const recapUiKind: RecapUiKind = $derived.by(() => {
+  if (!latestDetail) return "hidden";
+  if (latestDetail.status === "generating") return "generating";
+  if (latestDetail.status === "error") {
+    return latestDetail.errorMessage === "Cancelled by user" ? "stopped" : "error";
+  }
+  if (latestDetail.status === "complete") return isOutOfDate ? "outdated" : "complete";
+  return "hidden";
+});
+
+const destructiveDisabled = $derived(pendingAction !== null);
+const destructiveTitle = $derived(
+  pendingAction === "regenerate"
+    ? "Regenerating…"
+    : pendingAction === "stop"
+      ? "Stopping…"
+      : undefined,
+);
+
+// Show the floating Generate pill when there's no recap yet.
+// When a recap exists, show the Regenerate/Stop/Resume bar instead.
 const showGenerateFab = $derived(!latestDetail);
 
 async function onGenerate(): Promise<void> {
@@ -172,11 +203,7 @@ async function onStop(): Promise<void> {
 		<RecapDetail
 			recap={latestDetail}
 			loading={detailLoading}
-			{onRegenerate}
-			{onStop}
-			{pendingAction}
 			{stream}
-			{floatingActionsStyle}
 		/>
 	{:else if latest && detailLoading}
 		<div class="period-loading">
@@ -213,27 +240,107 @@ async function onStop(): Promise<void> {
 	/>
 </div>
 
-{#if showGenerateFab}
-	<div class="recap-actions-float" style={floatingActionsStyle}>
+{#if showGenerateFab || recapUiKind !== 'hidden'}
+	<div class="recap-actions-float">
 		<div class="recap-actions-row">
-			<button
-				type="button"
-				class="recap-action-btn recap-action-btn--accent"
-				onclick={onGenerate}
-				disabled={generating}
-				title="Have the agent write a fresh {periodLabelLower} recap"
-			>
-				{#if generating}
-					<Loader2 size={14} class="animate-spin" aria-hidden="true" />
-				{:else}
-					<Sparkles size={14} aria-hidden="true" />
-				{/if}
-				<Shimmer active={!generating}>
-					{generating
-						? `Generating ${periodLabelLower} recap…`
-						: `Generate ${periodLabelLower} recap`}
-				</Shimmer>
-			</button>
+			{#if showGenerateFab}
+				<GlassPill
+					variant="accent"
+					onclick={onGenerate}
+					disabled={generating}
+					title="Have the agent write a fresh {periodLabelLower} recap"
+				>
+					{#if generating}
+						<Loader2 size={14} class="animate-spin" aria-hidden="true" />
+					{:else}
+						<Sparkles size={14} aria-hidden="true" />
+					{/if}
+					<Shimmer active={!generating}>
+						{generating
+							? `Generating ${periodLabelLower} recap…`
+							: `Generate ${periodLabelLower} recap`}
+					</Shimmer>
+				</GlassPill>
+			{:else if recapUiKind === 'generating'}
+				<GlassPill
+					variant="danger"
+					onclick={onStop}
+					disabled={pendingAction === 'stop'}
+					title={pendingAction === 'stop' ? 'Stopping…' : 'Stop this recap generation'}
+				>
+					<Square size={14} fill="currentColor" />
+					{pendingAction === 'stop' ? 'Stopping…' : 'Stop generation'}
+				</GlassPill>
+			{:else if recapUiKind === 'stopped'}
+				<GlassPill
+					disabled={destructiveDisabled}
+					title={destructiveTitle ?? 'Resume generation from where it was stopped'}
+					onclick={onRegenerate}
+					aria-label="Resume recap generation"
+				>
+					<Play size={14} fill="currentColor" />
+					Resume
+				</GlassPill>
+				<GlassPill
+					disabled={destructiveDisabled}
+					title={destructiveTitle ?? 'Generate a fresh recap (the current draft will be replaced)'}
+					onclick={onRegenerate}
+				>
+					<RefreshCw size={14} />
+					Regenerate
+				</GlassPill>
+			{:else if recapUiKind === 'error'}
+				<GlassPill
+					disabled={destructiveDisabled}
+					title={destructiveTitle ?? 'Retry recap generation after error'}
+					onclick={onRegenerate}
+					aria-label="Retry recap generation"
+				>
+					<RotateCcw size={14} />
+					Retry
+				</GlassPill>
+				<GlassPill
+					disabled={destructiveDisabled}
+					title={destructiveTitle ?? 'Generate a fresh recap (the current draft will be replaced)'}
+					onclick={onRegenerate}
+				>
+					<RefreshCw size={14} />
+					Regenerate
+				</GlassPill>
+			{:else if recapUiKind === 'outdated'}
+				<GlassPill
+					variant="accent"
+					onclick={onGenerate}
+					disabled={generating}
+					title="Write a brand-new recap for {currentPeriodLabel} {periodLabelLower} window. The recap below stays as-is."
+				>
+					{#if generating}
+						<Loader2 size={14} class="animate-spin" aria-hidden="true" />
+					{:else}
+						<Sparkles size={14} aria-hidden="true" />
+					{/if}
+					<Shimmer active={!generating}>
+						{generating ? `Generating ${currentPeriodLabel} recap…` : `Generate ${currentPeriodLabel} recap`}
+					</Shimmer>
+				</GlassPill>
+				<GlassPill
+					disabled={destructiveDisabled}
+					title={destructiveTitle ?? 'Replace this recap with a fresh run over the same past window (old version becomes superseded)'}
+					onclick={onRegenerate}
+				>
+					<RefreshCw size={14} />
+					Rerun this recap
+				</GlassPill>
+			{:else if recapUiKind === 'complete'}
+				<GlassPill
+					disabled={destructiveDisabled}
+					title={destructiveTitle ?? 'Generate a fresh recap for this period (the current one becomes superseded)'}
+					onclick={onRegenerate}
+				>
+					<RefreshCw size={14} />
+					Regenerate recap
+				</GlassPill>
+			{/if}
 		</div>
 	</div>
 {/if}
@@ -245,7 +352,7 @@ async function onStop(): Promise<void> {
 		max-width: 56rem;
 		margin: 0 auto;
 		width: 100%;
-		padding: 1rem 1.25rem 7rem;
+		padding: 1rem 1.25rem 4rem;
 	}
 
 	.period-loading {
@@ -297,25 +404,20 @@ async function onStop(): Promise<void> {
 		max-width: 34rem;
 	}
 
-	/* Floating action pill — mirrors `.walkthrough-actions-float` in
-	   AppShell so the recap CTA reads as a member of the same family
-	   as the walkthrough / request-changes bars. Fixed (not absolute)
-	   because this component renders inside `.main-area`, which has
-	   `overflow: hidden` and no positioning context of its own. The
-	   inline `left/right` derived from sidebar + right-panel state
-	   centres the pill over the visible main column, same as the
-	   walkthrough/RC bars upstairs. */
+	/* Bottom-anchored action bar — same structure and values as
+	   .walkthrough-actions-float in AppShell. Positioned relative to the
+	   nearest ancestor with `position: relative` — the page wrapper that
+	   each route provides outside the scroll container. */
 	.recap-actions-float {
-		position: fixed;
-		bottom: 40px;
+		position: absolute;
+		bottom: 0;
+		left: 0;
+		right: 0;
 		display: flex;
 		justify-content: center;
-		z-index: 20;
+		padding: 8px 0 10px;
+		z-index: 10;
 		pointer-events: none;
-		padding-bottom: 12px;
-		transition:
-			left var(--duration-smooth) var(--ease-out-expo),
-			right var(--duration-instant) var(--ease-out-expo);
 	}
 
 	.recap-actions-float :global(*) {
@@ -325,58 +427,6 @@ async function onStop(): Promise<void> {
 	.recap-actions-row {
 		display: inline-flex;
 		align-items: center;
-		gap: 8px;
-	}
-
-	/* Glass pill — same recipe as `.walkthrough-action-btn`. */
-	.recap-action-btn {
-		display: inline-flex;
-		align-items: center;
-		gap: 8px;
-		height: 36px;
-		padding: 0 16px;
-		background: var(--color-tab-track-bg);
-		backdrop-filter: blur(16px) saturate(1.4);
-		-webkit-backdrop-filter: blur(16px) saturate(1.4);
-		border: 1px solid var(--color-glass-border);
-		border-radius: 9999px;
-		box-shadow:
-			var(--color-glass-shadow),
-			inset 0 0.5px 0 0 var(--color-glass-highlight);
-		font-family: inherit;
-		font-size: 13px;
-		font-weight: 500;
-		letter-spacing: -0.01em;
-		line-height: 1;
-		color: var(--color-text-primary);
-		cursor: pointer;
-		transition:
-			background-color var(--duration-snap),
-			color var(--duration-snap),
-			box-shadow var(--duration-snap);
-		-webkit-font-smoothing: antialiased;
-		white-space: nowrap;
-	}
-
-	.recap-action-btn:hover {
-		background: color-mix(
-			in srgb,
-			var(--color-tab-active-bg) 80%,
-			var(--color-tab-track-bg)
-		);
-	}
-
-	.recap-action-btn:focus-visible {
-		outline: 2px solid var(--color-accent);
-		outline-offset: 2px;
-	}
-
-	.recap-action-btn--accent:not(:disabled) {
-		color: var(--color-accent);
-	}
-
-	.recap-action-btn:disabled {
-		cursor: not-allowed;
-		opacity: 0.55;
+		gap: var(--spacing-island);
 	}
 </style>
