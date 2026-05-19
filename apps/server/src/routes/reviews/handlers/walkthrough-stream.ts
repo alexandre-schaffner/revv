@@ -87,6 +87,13 @@ const PHASE_RANK: Record<WalkthroughPipelinePhase, number> = {
  *   3. Finds or starts the active job for the PR.
  *   4. Subscribes (in buffering mode) to the job's live event stream.
  *   5. Replays the DB snapshot through the same dedupe-aware forwarder.
+ *      When `snapshotAt` + `lastPhase` cursor params are present (client
+ *      already hydrated from `/current`), replay is cursor-filtered:
+ *        - Top-level events (summary, sentiment, phase:advanced) are
+ *          skipped based on `lastPhase` rank.
+ *        - Child-table rows are queried with `createdAt > snapshotAt` so
+ *          only race-window rows (created between the REST call and the SSE
+ *          subscription) arrive over the wire.
  *   6. Flushes the subscriber's buffer — any events that arrived during
  *      the DB read now drain in order, then future events forward directly.
  *   7. Stays open until `done` / `error` closes the writer, or the client
@@ -103,6 +110,7 @@ const PHASE_RANK: Record<WalkthroughPipelinePhase, number> = {
 export function walkthroughStreamHandler(ctx: {
   params: { id: string };
   session: { user: { id: string } };
+  query: { snapshotAt?: string; lastPhase?: string };
 }): Response {
   const { stream, writer, stopHeartbeat, onCancel } = createSseStream();
 
@@ -111,15 +119,29 @@ export function walkthroughStreamHandler(ctx: {
   // onCancel(), so one registration covers everything.
   onCancel(() => stopHeartbeat());
 
+  // Cursor params from a prior /current REST call. When both are present
+  // the snapshot replay is cursor-filtered: top-level events are skipped
+  // based on phase rank, and child rows are filtered to createdAt > snapshotAt.
+  const cursorSnapshotAt = ctx.query.snapshotAt || undefined;
+  const rawLastPhase = ctx.query.lastPhase;
+  const validPhases: WalkthroughPipelinePhase[] = ["none", "A", "B", "C", "D"];
+  const cursorLastPhase: WalkthroughPipelinePhase | undefined =
+    rawLastPhase !== undefined && validPhases.includes(rawLastPhase as WalkthroughPipelinePhase)
+      ? (rawLastPhase as WalkthroughPipelinePhase)
+      : undefined;
+  const hasCursor = cursorSnapshotAt !== undefined && cursorLastPhase !== undefined;
+
   void (async () => {
     // Dedupe state for the subscribe-then-replay handoff.
-    let seenSummary = false;
+    // When cursor params are present, pre-seed the seen-sets so forwardEvent
+    // skips top-level events the client already received from /current.
+    let seenSummary = hasCursor && PHASE_RANK[cursorLastPhase!] >= PHASE_RANK["A"];
     const seenSemanticSteps = new Set<number>();
     const seenBlocks = new Set<string>();
     const seenIssues = new Set<string>();
     const seenRatingAxes = new Set<string>();
-    let seenSentiment = false;
-    let highestEmittedPhase: WalkthroughPipelinePhase = "none";
+    let seenSentiment = hasCursor && PHASE_RANK[cursorLastPhase!] >= PHASE_RANK["C"];
+    let highestEmittedPhase: WalkthroughPipelinePhase = hasCursor ? cursorLastPhase! : "none";
     let terminated = false;
 
     // Diagnostic-only event ordinal (per-connection). Pairs with the
@@ -495,46 +517,64 @@ export function walkthroughStreamHandler(ctx: {
       onCancel(sub.unsubscribe);
 
       // ── Step 5: Replay the DB snapshot through forwardEvent ──────
-      // This also passes through the dedupe so events captured by
-      // the buffered subscriber (between subscribe and snapshot)
-      // don't get sent twice.
-      const snapshot = await AppRuntime.runPromise(
-        Effect.flatMap(WalkthroughService, (s) => s.getPartial(resolved.prId, resolved.headSha)),
-      );
-      if (snapshot) {
-        // Guard against replaying the placeholder summary written at
-        // `createPartial` (empty string, riskLevel='low'). If Phase A
-        // hasn't committed yet, the real summary event is still in the
-        // buffered queue — replaying '' here would mark seenSummary and
-        // cause the flushed real event to be dropped, leaving the client
-        // with a permanently-falsy summary and no content view.
-        if (snapshot.summary !== "") {
-          enqueueForward({
-            type: "summary",
-            data: { summary: snapshot.summary, riskLevel: snapshot.riskLevel },
-          });
-        }
-        for (const section of snapshot.semanticSteps) {
+      // When cursor params are present (client already hydrated from
+      // /current), we do a cursor-filtered replay: skip top-level events
+      // whose phase is already covered by cursorLastPhase (handled by the
+      // pre-seeded seen-sets above), and query only child rows created after
+      // cursorSnapshotAt so the race window gets bridged without resending
+      // the full snapshot. When no cursor, full replay as before.
+      if (hasCursor) {
+        // Child rows created in the race window between /current and now.
+        const newRows = await AppRuntime.runPromise(
+          Effect.flatMap(WalkthroughService, (s) =>
+            s.getChildRowsSince(currentWalkthroughId!, cursorSnapshotAt!),
+          ),
+        );
+        for (const section of newRows.semanticSteps) {
           enqueueForward({ type: "semantic-step", data: section });
         }
-        for (const block of snapshot.blocks) enqueueForward({ type: "block", data: block });
-        for (const issue of snapshot.issues) enqueueForward({ type: "issue", data: issue });
-        for (const rating of snapshot.ratings) enqueueForward({ type: "rating", data: rating });
-        // Sentiment and pipeline phase are first-class walkthrough fields
-        // that weren't previously replayed — a client reconnecting after
-        // Phase C/D would never catch up. Replayed through forwardEvent
-        // so the matching live events in the buffered queue dedupe.
-        if (snapshot.sentiment !== null) {
-          enqueueForward({
-            type: "sentiment",
-            data: { sentiment: snapshot.sentiment },
-          });
-        }
-        if (snapshot.lastCompletedPhase !== "none") {
-          enqueueForward({
-            type: "phase:advanced",
-            data: { lastCompletedPhase: snapshot.lastCompletedPhase },
-          });
+        for (const block of newRows.blocks) enqueueForward({ type: "block", data: block });
+        for (const issue of newRows.issues) enqueueForward({ type: "issue", data: issue });
+        for (const rating of newRows.ratings) enqueueForward({ type: "rating", data: rating });
+      } else {
+        const snapshot = await AppRuntime.runPromise(
+          Effect.flatMap(WalkthroughService, (s) => s.getPartial(resolved.prId, resolved.headSha)),
+        );
+        if (snapshot) {
+          // Guard against replaying the placeholder summary written at
+          // `createPartial` (empty string, riskLevel='low'). If Phase A
+          // hasn't committed yet, the real summary event is still in the
+          // buffered queue — replaying '' here would mark seenSummary and
+          // cause the flushed real event to be dropped, leaving the client
+          // with a permanently-falsy summary and no content view.
+          if (snapshot.summary !== "") {
+            enqueueForward({
+              type: "summary",
+              data: { summary: snapshot.summary, riskLevel: snapshot.riskLevel },
+            });
+          }
+          for (const section of snapshot.semanticSteps) {
+            enqueueForward({ type: "semantic-step", data: section });
+          }
+          for (const block of snapshot.blocks) enqueueForward({ type: "block", data: block });
+          for (const issue of snapshot.issues) enqueueForward({ type: "issue", data: issue });
+          for (const rating of snapshot.ratings) enqueueForward({ type: "rating", data: rating });
+          // Sentiment and pipeline phase are first-class walkthrough fields
+          // that weren't previously replayed — a client reconnecting after
+          // Phase C/D would never catch up. Replayed through forwardEvent
+          // so the matching live events in the buffered queue dedupe.
+          if (snapshot.sentiment !== null) {
+            enqueueForward({
+              type: "sentiment",
+              data: { sentiment: snapshot.sentiment },
+            });
+          }
+          if (snapshot.lastCompletedPhase !== "none") {
+            enqueueForward({
+              type: "phase:advanced",
+              data: { lastCompletedPhase: snapshot.lastCompletedPhase },
+            });
+          }
         }
       }
 

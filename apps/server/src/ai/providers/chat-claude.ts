@@ -23,6 +23,7 @@ import {
   registerPendingQuestion,
   takePendingQuestion,
 } from "../../services/PendingQuestionRegistry";
+import { RemoteWalkthroughCache } from "../../services/RemoteWalkthroughCache";
 import { WebSocketHub } from "../../services/WebSocketHub";
 import {
   buildActivity,
@@ -157,6 +158,17 @@ export function streamChatViaClaude(
             logError(
               "chat-claude",
               "walkthrough:edited broadcast failed:",
+              err instanceof Error ? err.message : String(err),
+            );
+          });
+          void AppRuntime.runPromise(
+            Effect.flatMap(RemoteWalkthroughCache, (cache) =>
+              cache.push(walkthroughId).pipe(Effect.catchAll(() => Effect.void)),
+            ),
+          ).catch((err) => {
+            logError(
+              "chat-claude",
+              "remote cache push after edit failed:",
               err instanceof Error ? err.message : String(err),
             );
           });

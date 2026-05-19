@@ -36,6 +36,9 @@ let generating = $state(false);
 
 const periodLabel = $derived(period === "daily" ? "Daily" : "Weekly");
 const periodLabelLower = $derived(period === "daily" ? "daily" : "weekly");
+// Label used in the "out of date" CTA so it reads as a fresh recap for the
+// user's current period, not a regeneration of the displayed one.
+const currentPeriodLabel = $derived(period === "daily" ? "today's" : "this week's");
 
 // Fetch the recap list for this repo. The list reducer hydrates from WS
 // envelopes so navigating between periods doesn't re-hit the network.
@@ -116,7 +119,36 @@ const periodEyebrow = $derived.by(() => {
   return `${DAY_SHORT_FMT.format(start)} → ${DAY_SHORT_FMT.format(now)} · UTC`;
 });
 
-type RecapUiKind = "generating" | "stopped" | "error" | "complete" | "hidden";
+// "Out of date" is computed against the user's LOCAL calendar, not UTC. The
+// server windows are UTC-aligned, but from the user's perspective a recap
+// labelled "Mon, 18 May · UTC" is stale once their wall clock reads May 19,
+// even if UTC hasn't rolled over yet. Clicking Generate will let the server
+// produce whatever the current UTC window dictates.
+function dayKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function utcDayKey(iso: string): string {
+  return iso.slice(0, 10);
+}
+
+function localMondayKey(d: Date): string {
+  const daysFromMonday = (d.getDay() + 6) % 7;
+  const monday = new Date(d.getFullYear(), d.getMonth(), d.getDate() - daysFromMonday);
+  return dayKey(monday);
+}
+
+const isOutOfDate = $derived.by(() => {
+  if (latest === null || latest.status !== "complete") return false;
+  if (period === "daily") {
+    return utcDayKey(latest.periodStart) !== dayKey(new Date());
+  }
+  // Weekly: a recap's periodStart is the Monday of its UTC week. Compare
+  // that to the Monday of the user's current local week.
+  return utcDayKey(latest.periodStart) !== localMondayKey(new Date());
+});
+
+type RecapUiKind = "generating" | "stopped" | "error" | "complete" | "outdated" | "hidden";
 
 const recapUiKind: RecapUiKind = $derived.by(() => {
   if (!latestDetail) return "hidden";
@@ -124,7 +156,7 @@ const recapUiKind: RecapUiKind = $derived.by(() => {
   if (latestDetail.status === "error") {
     return latestDetail.errorMessage === "Cancelled by user" ? "stopped" : "error";
   }
-  if (latestDetail.status === "complete") return "complete";
+  if (latestDetail.status === "complete") return isOutOfDate ? "outdated" : "complete";
   return "hidden";
 });
 
@@ -273,6 +305,30 @@ async function onStop(): Promise<void> {
 				>
 					<RefreshCw size={14} />
 					Regenerate
+				</GlassPill>
+			{:else if recapUiKind === 'outdated'}
+				<GlassPill
+					variant="accent"
+					onclick={onGenerate}
+					disabled={generating}
+					title="Write a brand-new recap for {currentPeriodLabel} {periodLabelLower} window. The recap below stays as-is."
+				>
+					{#if generating}
+						<Loader2 size={14} class="animate-spin" aria-hidden="true" />
+					{:else}
+						<Sparkles size={14} aria-hidden="true" />
+					{/if}
+					<Shimmer active={!generating}>
+						{generating ? `Generating ${currentPeriodLabel} recap…` : `Generate ${currentPeriodLabel} recap`}
+					</Shimmer>
+				</GlassPill>
+				<GlassPill
+					disabled={destructiveDisabled}
+					title={destructiveTitle ?? 'Replace this recap with a fresh run over the same past window (old version becomes superseded)'}
+					onclick={onRegenerate}
+				>
+					<RefreshCw size={14} />
+					Rerun this recap
 				</GlassPill>
 			{:else if recapUiKind === 'complete'}
 				<GlassPill

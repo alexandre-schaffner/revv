@@ -37,7 +37,7 @@ import type {
   WalkthroughStatus,
   WalkthroughTokenUsage,
 } from "@revv/shared";
-import { and, asc, desc, eq, inArray, ne } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, ne } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { commentThreads } from "../db/schema/comment-threads";
 import { walkthroughBlocks } from "../db/schema/walkthrough-blocks";
@@ -313,6 +313,27 @@ export class WalkthroughService extends Context.Tag("WalkthroughService")<
           opencodeSessionId: string | null;
         })
       | null,
+      never,
+      DbService
+    >;
+
+    /**
+     * Return only the child rows (semanticSteps, blocks, issues, ratings) for
+     * a given walkthrough that were created AFTER `since` (ISO 8601). Used by
+     * the SSE cursor-filtered replay: the client already has everything up to
+     * `since` from a prior `/current` REST call; this query returns only rows
+     * that landed in the race window between that call and the SSE subscription.
+     */
+    readonly getChildRowsSince: (
+      walkthroughId: string,
+      since: string,
+    ) => Effect.Effect<
+      {
+        semanticSteps: WalkthroughSemanticStep[];
+        blocks: WalkthroughBlock[];
+        issues: WalkthroughIssue[];
+        ratings: WalkthroughRating[];
+      },
       never,
       DbService
     >;
@@ -789,4 +810,97 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         .run();
       return submittedAt;
     }).pipe(Effect.catchAll(() => Effect.succeed(new Date().toISOString()))),
+
+  getChildRowsSince: (walkthroughId, since) =>
+    Effect.gen(function* () {
+      const { db } = yield* DbService;
+
+      const semanticStepRows = db
+        .select()
+        .from(walkthroughSemanticSteps)
+        .where(
+          and(
+            eq(walkthroughSemanticSteps.walkthroughId, walkthroughId),
+            gt(walkthroughSemanticSteps.createdAt, since),
+          ),
+        )
+        .orderBy(asc(walkthroughSemanticSteps.semanticStepIndex))
+        .all();
+
+      const blockRows = db
+        .select()
+        .from(walkthroughBlocks)
+        .where(
+          and(
+            eq(walkthroughBlocks.walkthroughId, walkthroughId),
+            gt(walkthroughBlocks.createdAt, since),
+          ),
+        )
+        .all();
+
+      const issueRows = db
+        .select()
+        .from(walkthroughIssues)
+        .where(
+          and(
+            eq(walkthroughIssues.walkthroughId, walkthroughId),
+            gt(walkthroughIssues.createdAt, since),
+          ),
+        )
+        .all();
+
+      const ratingRows = db
+        .select()
+        .from(walkthroughRatings)
+        .where(
+          and(
+            eq(walkthroughRatings.walkthroughId, walkthroughId),
+            gt(walkthroughRatings.createdAt, since),
+          ),
+        )
+        .all();
+
+      const semanticSteps: WalkthroughSemanticStep[] = semanticStepRows.map((s) => ({
+        semanticStepIndex: s.semanticStepIndex,
+        title: s.title,
+        summary: s.summary ?? null,
+      }));
+
+      const blocks = [...blockRows]
+        .sort((a, b) => a.semanticStepIndex - b.semanticStepIndex || a.stepIndex - b.stepIndex)
+        .map((b) => JSON.parse(b.data) as WalkthroughBlock);
+
+      const issues = [...issueRows].sort((a, b) => a.order - b.order).map((i): WalkthroughIssue => {
+        let blockIds: string[] = [];
+        try {
+          const parsed: unknown = JSON.parse(i.blockIds);
+          if (Array.isArray(parsed)) {
+            blockIds = parsed.filter((v): v is string => typeof v === "string");
+          }
+        } catch {
+          // corrupt JSON — fall back to empty
+        }
+        return {
+          id: i.id,
+          severity: i.severity as WalkthroughIssue["severity"],
+          title: i.title,
+          description: i.description,
+          blockIds,
+          ...(i.filePath !== null ? { filePath: i.filePath } : {}),
+          ...(i.startLine !== null ? { startLine: i.startLine } : {}),
+          ...(i.endLine !== null ? { endLine: i.endLine } : {}),
+          ...(i.submittedAt !== null ? { submittedAt: i.submittedAt } : {}),
+        };
+      });
+
+      const ratings = [...ratingRows]
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+        .map(rowToRating);
+
+      return { semanticSteps, blocks, issues, ratings };
+    }).pipe(
+      Effect.catchAll(() =>
+        Effect.succeed({ semanticSteps: [], blocks: [], issues: [], ratings: [] }),
+      ),
+    ),
 });

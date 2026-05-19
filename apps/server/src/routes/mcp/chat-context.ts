@@ -27,6 +27,7 @@ import { debug, logError } from "../../logger";
 import { AppRuntime } from "../../runtime";
 import { ChatMcpTokens, type ChatTokenResolved } from "../../services/ChatMcpTokens";
 import { DbService } from "../../services/Db";
+import { RemoteWalkthroughCache } from "../../services/RemoteWalkthroughCache";
 import { WebSocketHub } from "../../services/WebSocketHub";
 import {
   extractBearer,
@@ -66,9 +67,11 @@ async function resolveContext(
   }
 
   // emit: wraps a WalkthroughStreamEvent into the WS envelope and
-  // broadcasts via WebSocketHub. Fire-and-forget — broadcast is
-  // best-effort (doctrine invariant #8: commit first, broadcast second;
-  // subscribers reconcile via DB re-read on reconnect).
+  // broadcasts via WebSocketHub, then pushes an updated snapshot to the
+  // team cache. Both are fire-and-forget — broadcast is best-effort
+  // (doctrine invariant #8: commit first, broadcast second; the cache
+  // push is broadcast-equivalent; subscribers reconcile via DB re-read
+  // on reconnect).
   const emit = (walkthroughId: string, event: WalkthroughStreamEvent): void => {
     void AppRuntime.runPromise(
       Effect.flatMap(WebSocketHub, (hub) =>
@@ -81,6 +84,17 @@ async function resolveContext(
       logError(
         "mcp-chat-context",
         "walkthrough:edited broadcast failed:",
+        err instanceof Error ? err.message : String(err),
+      );
+    });
+    void AppRuntime.runPromise(
+      Effect.flatMap(RemoteWalkthroughCache, (cache) =>
+        cache.push(walkthroughId).pipe(Effect.catchAll(() => Effect.void)),
+      ),
+    ).catch((err) => {
+      logError(
+        "mcp-chat-context",
+        "remote cache push after edit failed:",
         err instanceof Error ? err.message : String(err),
       );
     });
