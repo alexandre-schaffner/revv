@@ -171,8 +171,8 @@ function handleAddRepo(): void {
 		left: 0;
 		right: 0;
 		bottom: 0;
-		height: var(--bottombar-height);
-		background: linear-gradient(to bottom, transparent, var(--color-bg-secondary));
+		height: 48px;
+		background: linear-gradient(to bottom, transparent 0%, color-mix(in srgb, var(--color-bg-secondary) 90%, transparent) 80%, var(--color-bg-secondary) 100%);
 		pointer-events: none;
 		z-index: 5;
 	}
@@ -188,7 +188,7 @@ function handleAddRepo(): void {
 		min-height: 0;
 		overflow-y: auto;
 		overflow-x: hidden;
-		padding: 0 var(--spacing-inset) var(--bottombar-height);
+		padding: 0 var(--spacing-inset) 48px;
 		scrollbar-width: thin;
 		scrollbar-color: var(--color-border) transparent;
 	}

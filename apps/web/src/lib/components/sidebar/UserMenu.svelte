@@ -218,6 +218,7 @@ async function handleSignOut(): Promise<void> {
 		gap: var(--spacing-island);
 		width: 100%;
 		padding: var(--spacing-island-half) var(--spacing-island);
+		margin-bottom: var(--spacing-island-half);
 		border: none;
 		border-radius: 6px;
 		background: transparent;
@@ -227,13 +228,8 @@ async function handleSignOut(): Promise<void> {
 		font-size: 11px;
 		overflow: hidden;
 		transition:
-			background-color var(--duration-snap),
 			gap var(--duration-smooth) var(--ease-out-expo),
 			padding var(--duration-smooth) var(--ease-out-expo);
-	}
-
-	:global(.user-trigger:hover) {
-		background: var(--color-bg-tertiary);
 	}
 
 	:global(.user-trigger[data-state='open']) {

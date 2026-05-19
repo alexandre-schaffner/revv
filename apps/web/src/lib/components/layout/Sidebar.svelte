@@ -431,8 +431,8 @@ function handleKeydown(e: KeyboardEvent) {
 		left: 0;
 		right: 0;
 		bottom: 0;
-		height: var(--bottombar-height);
-		background: linear-gradient(to bottom, transparent, var(--color-bg-secondary));
+		height: 48px;
+		background: linear-gradient(to bottom, transparent 0%, color-mix(in srgb, var(--color-bg-secondary) 90%, transparent) 80%, var(--color-bg-secondary) 100%);
 		pointer-events: none;
 		z-index: 5;
 	}
@@ -580,7 +580,7 @@ function handleKeydown(e: KeyboardEvent) {
 	.pr-list {
 		flex: 1;
 		overflow-y: auto;
-		padding: var(--spacing-island-half) 0 var(--bottombar-height);
+		padding: var(--spacing-island-half) 0 48px;
 	}
 
 	/* Empty state */

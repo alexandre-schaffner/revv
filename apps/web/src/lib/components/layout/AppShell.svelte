@@ -812,7 +812,9 @@ function onRightHandleDblClick(): void {
 		padding-bottom: var(--spacing-island);
 		display: flex;
 		align-items: center;
-		overflow: hidden;
+		overflow: visible;
+		position: relative;
+		z-index: 10;
 		min-width: 0;
 	}
 
