@@ -65,7 +65,10 @@ function deriveColors(ownerHue: number, repoSeed: number): DerivedColors {
 
   return {
     background: [hsl(ownerHue, sat1, light1), hsl(hue2, sat2, light2)],
-    text: [hsl(ownerHue, 80, 88), hsl(hue2, 85, 83)],
+    text: [
+      `hsla(${Math.round(ownerHue % 360)}, 60%, 90%, 0.8)`,
+      `hsla(${Math.round(ownerHue % 360)}, 70%, 60%, 0.8)`,
+    ],
   };
 }
 
@@ -118,8 +121,7 @@ export function repoGradientDataUrl(repoFullName: string, ownerHue: number): Rep
   <path fill="url(#g)" filter="url(#f)" d="M0 0h700v700H0z"/>
 </svg>`;
 
-  const textAngle = (angle + 150) % 360;
-  const textGradient = `linear-gradient(${textAngle}deg, ${text1}, ${text2})`;
+  const textGradient = `linear-gradient(to bottom, ${text1}, ${text2})`;
 
   return {
     url: `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`,
