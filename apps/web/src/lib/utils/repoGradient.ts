@@ -66,8 +66,8 @@ function deriveColors(ownerHue: number, repoSeed: number): DerivedColors {
   return {
     background: [hsl(ownerHue, sat1, light1), hsl(hue2, sat2, light2)],
     text: [
-      `hsla(${Math.round(ownerHue % 360)}, 60%, 90%, 0.8)`,
-      `hsla(${Math.round(ownerHue % 360)}, 70%, 60%, 0.8)`,
+      `hsl(${Math.round(ownerHue % 360)}, 60%, 90%)`,
+      `hsl(${Math.round(ownerHue % 360)}, 70%, 60%)`,
     ],
   };
 }
