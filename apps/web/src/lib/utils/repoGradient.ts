@@ -14,15 +14,16 @@ function hsl(h: number, s: number, l: number): string {
   return `hsl(${Math.round(h % 360)}, ${Math.round(s)}%, ${Math.round(l)}%)`;
 }
 
+interface DerivedColors {
+  background: [string, string];
+  text: [string, string];
+}
+
 /**
- * Derive two harmonious colors from an owner hue and a repo seed.
- *
- * The second color is chosen from a variety of harmonic relationships
- * (analogous, triadic, complementary, split-complementary, warm/cool shifts,
- * and near-complementary) so each repo from the same owner gets a recognisably
- * different but still harmonious pair.
+ * Derive two harmonious background colors and two light text-tint colors
+ * from an owner hue and a repo seed.
  */
-function deriveColors(ownerHue: number, repoSeed: number): [string, string] {
+function deriveColors(ownerHue: number, repoSeed: number): DerivedColors {
   const r = repoSeed;
 
   // 10 different harmonic relationships
@@ -41,7 +42,13 @@ function deriveColors(ownerHue: number, repoSeed: number): [string, string] {
 
   const idx = r % relationships.length;
   const relFn = relationships[idx];
-  if (!relFn) return [hsl(ownerHue, 50, 45), hsl(ownerHue, 50, 55)];
+  if (!relFn) {
+    const fallback = hsl(ownerHue, 50, 50);
+    return {
+      background: [fallback, fallback],
+      text: [hsl(ownerHue, 10, 95), hsl(ownerHue, 15, 90)],
+    };
+  }
   const hue2 = relFn(ownerHue);
 
   // Saturation jitter: both stops share a base, with a small differential
@@ -56,12 +63,20 @@ function deriveColors(ownerHue: number, repoSeed: number): [string, string] {
   const light1 = lBase - lDiff;
   const light2 = lBase + lDiff;
 
-  return [hsl(ownerHue, sat1, light1), hsl(hue2, sat2, light2)];
+  return {
+    background: [hsl(ownerHue, sat1, light1), hsl(hue2, sat2, light2)],
+    text: [hsl(ownerHue, 10, 95), hsl(hue2, 15, 90)],
+  };
+}
+
+export interface RepoGradient {
+  url: string;
+  textGradient: string;
 }
 
 /**
  * Generate a deterministic ffflux-style fluid SVG gradient data URL
- * for a given repository.
+ * for a given repository, plus a CSS text gradient that echoes the palette.
  *
  * The `ownerHue` (extracted from the owner's GitHub avatar, or a
  * fallback hash) drives the color palette.  The `repoFullName` seed
@@ -71,10 +86,13 @@ function deriveColors(ownerHue: number, repoSeed: number): [string, string] {
  * The same inputs always produce the same gradient so avatars are
  * stable across renders and sessions.
  */
-export function repoGradientDataUrl(repoFullName: string, ownerHue: number): string {
+export function repoGradientDataUrl(repoFullName: string, ownerHue: number): RepoGradient {
   const h = hashString(repoFullName);
 
-  const [color1, color2] = deriveColors(ownerHue, h);
+  const {
+    background: [color1, color2],
+    text: [text1, text2],
+  } = deriveColors(ownerHue, h);
 
   const angle = h % 360;
   const turbulenceSeed = 1 + (h % 999);
@@ -100,5 +118,11 @@ export function repoGradientDataUrl(repoFullName: string, ownerHue: number): str
   <path fill="url(#g)" filter="url(#f)" d="M0 0h700v700H0z"/>
 </svg>`;
 
-  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+  const textAngle = (angle + 150) % 360;
+  const textGradient = `linear-gradient(${textAngle}deg, ${text1}, ${text2})`;
+
+  return {
+    url: `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`,
+    textGradient,
+  };
 }

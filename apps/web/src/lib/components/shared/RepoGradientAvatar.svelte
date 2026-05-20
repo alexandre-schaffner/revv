@@ -37,7 +37,7 @@ $effect(() => {
   };
 });
 
-const url = $derived(repoGradientDataUrl(fullName, ownerHue));
+const grad = $derived(repoGradientDataUrl(fullName, ownerHue));
 const letter = $derived((fullName.split("/")[1] ?? fullName).slice(0, 1).toUpperCase());
 </script>
 
@@ -49,8 +49,9 @@ const letter = $derived((fullName.split("/")[1] ?? fullName).slice(0, 1).toUpper
   style:height="{size}px"
   style:border-radius="{radius}px"
   style:--rga-size="{size}px"
+  style:--rga-text-grad={grad.textGradient}
 >
-  <img src={url} alt="" class="repo-gradient-avatar-bg" />
+  <img src={grad.url} alt="" class="repo-gradient-avatar-bg" />
   <span class="repo-gradient-avatar-letter" aria-hidden="true">{letter}</span>
 </span>
 
@@ -78,8 +79,11 @@ const letter = $derived((fullName.split("/")[1] ?? fullName).slice(0, 1).toUpper
     z-index: 1;
     font-size: max(7px, calc(var(--rga-size) * 0.48));
     font-weight: 700;
-    color: rgba(255, 255, 255, 0.95);
-    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+    background: var(--rga-text-grad);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4));
     text-transform: uppercase;
     line-height: 1;
     pointer-events: none;
