@@ -8,7 +8,7 @@ export type ConversationScrollButtonProps = ButtonProps;
 	import { getContext } from "svelte";
 	import { cn } from "$lib/utils.js";
 	import { Button } from "$lib/components/ui/button/index.js";
-	import { ArrowDown } from "@lucide/svelte";
+	import ArrowDown from "phosphor-svelte/lib/ArrowDown";
 	import { CONVERSATION_CTX_KEY, type ConversationContext } from "./context.js";
 
 	let {

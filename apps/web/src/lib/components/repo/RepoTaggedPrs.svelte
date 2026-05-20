@@ -1,5 +1,7 @@
 <script lang="ts">
-import { GitPullRequest, Loader2, User } from "@lucide/svelte";
+import GitPullRequest from "phosphor-svelte/lib/GitPullRequest";
+import Loader2 from "phosphor-svelte/lib/Spinner";
+import User from "phosphor-svelte/lib/User";
 import { untrack } from "svelte";
 import {
   fetchTaggedPrs,

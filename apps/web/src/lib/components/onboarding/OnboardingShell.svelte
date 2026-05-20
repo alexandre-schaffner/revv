@@ -1,5 +1,7 @@
 <script lang="ts">
-import { Monitor, Moon, Sun } from "@lucide/svelte";
+import Monitor from "phosphor-svelte/lib/Desktop";
+import Moon from "phosphor-svelte/lib/Moon";
+import Sun from "phosphor-svelte/lib/Sun";
 import type { Snippet } from "svelte";
 import { Dotmatrix, type DotmatrixVariant } from "$lib/components/ui/dotmatrix";
 import {

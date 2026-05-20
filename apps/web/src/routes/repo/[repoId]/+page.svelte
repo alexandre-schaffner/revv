@@ -1,5 +1,6 @@
 <script lang="ts">
-import { GitPullRequest, Sparkles } from "@lucide/svelte";
+import GitPullRequest from "phosphor-svelte/lib/GitPullRequest";
+import Sparkles from "phosphor-svelte/lib/Sparkle";
 import { page } from "$app/state";
 import AuthGuard from "$lib/components/auth/AuthGuard.svelte";
 import RepoRecapCard from "$lib/components/repo/RepoRecapCard.svelte";

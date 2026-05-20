@@ -1,5 +1,8 @@
 <script lang="ts">
-import { AlertTriangle, GitMerge, GitPullRequestClosed, Users } from "@lucide/svelte";
+import AlertTriangle from "phosphor-svelte/lib/Warning";
+import GitMerge from "phosphor-svelte/lib/GitMerge";
+import GitPullRequestClosed from "phosphor-svelte/lib/GitPullRequest";
+import Users from "phosphor-svelte/lib/Users";
 import type { RecapSummaryStats } from "@revv/shared";
 
 interface Props {

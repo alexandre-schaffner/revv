@@ -1,14 +1,12 @@
 <script lang="ts">
-import {
-  GitMerge,
-  Loader2,
-  MessageSquare,
-  PanelLeftClose,
-  PanelLeftOpen,
-  Send,
-  Trash2,
-  X,
-} from "@lucide/svelte";
+import GitMerge from "phosphor-svelte/lib/GitMerge";
+import Loader2 from "phosphor-svelte/lib/Spinner";
+import MessageSquare from "phosphor-svelte/lib/Chat";
+import PanelLeftClose from "phosphor-svelte/lib/SidebarSimple";
+import PanelLeftOpen from "phosphor-svelte/lib/SidebarSimple";
+import Send from "phosphor-svelte/lib/PaperPlaneRight";
+import Trash2 from "phosphor-svelte/lib/Trash";
+import X from "phosphor-svelte/lib/X";
 import {
   type DiffLineAnnotation,
   type FileDiffMetadata,

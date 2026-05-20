@@ -1,22 +1,20 @@
 <script lang="ts">
-import {
-  CalendarClock,
-  Cloud,
-  Cpu,
-  Download,
-  ExternalLink,
-  Loader2,
-  Monitor,
-  Moon,
-  RefreshCw,
-  RotateCcw,
-  SlidersHorizontal,
-  Sun,
-  Trash2,
-  TriangleAlert,
-  User,
-  X,
-} from "@lucide/svelte";
+import CalendarClock from "phosphor-svelte/lib/CalendarCheck";
+import Cloud from "phosphor-svelte/lib/Cloud";
+import Cpu from "phosphor-svelte/lib/Cpu";
+import Download from "phosphor-svelte/lib/Download";
+import ExternalLink from "phosphor-svelte/lib/ArrowSquareOut";
+import Loader2 from "phosphor-svelte/lib/Spinner";
+import Monitor from "phosphor-svelte/lib/Desktop";
+import Moon from "phosphor-svelte/lib/Moon";
+import RefreshCw from "phosphor-svelte/lib/ArrowsClockwise";
+import RotateCcw from "phosphor-svelte/lib/ArrowCounterClockwise";
+import SlidersHorizontal from "phosphor-svelte/lib/SlidersHorizontal";
+import Sun from "phosphor-svelte/lib/Sun";
+import Trash2 from "phosphor-svelte/lib/Trash";
+import TriangleAlert from "phosphor-svelte/lib/Warning";
+import User from "phosphor-svelte/lib/User";
+import X from "phosphor-svelte/lib/X";
 import type { AiAgent, ContextWindow, RecapAgentChoice, ThinkingEffort } from "@revv/shared";
 import { Dialog as DialogPrimitive } from "bits-ui";
 import { SvelteMap } from "svelte/reactivity";

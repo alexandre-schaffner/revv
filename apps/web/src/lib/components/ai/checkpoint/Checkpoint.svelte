@@ -14,7 +14,8 @@ export type CheckpointProps = HTMLAttributes<HTMLDivElement> & {
 <script lang="ts">
 	import { cn } from "$lib/utils.js";
 	import { Button } from "$lib/components/ui/button/index.js";
-	import { RotateCcw, Flag } from "@lucide/svelte";
+	import RotateCcw from "phosphor-svelte/lib/ArrowCounterClockwise";
+import Flag from "phosphor-svelte/lib/Flag";
 
 	let {
 		id: checkpointId,

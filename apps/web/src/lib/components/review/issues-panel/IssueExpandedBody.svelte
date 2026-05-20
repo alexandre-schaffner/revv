@@ -9,7 +9,7 @@
  * description, plus a references section listing the file and any
  * walkthrough steps that explain this issue).
  */
-import { ArrowUpRight } from "@lucide/svelte";
+import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
 import type { WalkthroughBlock, WalkthroughIssue } from "@revv/shared";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
 

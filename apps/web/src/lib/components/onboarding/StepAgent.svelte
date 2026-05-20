@@ -1,5 +1,5 @@
 <script lang="ts">
-import { ChevronLeft } from "@lucide/svelte";
+import ChevronLeft from "phosphor-svelte/lib/CaretLeft";
 import type { AgentAvailability, AiAgent, InstallEvent } from "@revv/shared";
 import { onDestroy, onMount } from "svelte";
 import { API_BASE_URL } from "$lib/api/base-url";

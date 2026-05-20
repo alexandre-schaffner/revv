@@ -1,5 +1,6 @@
 <script lang="ts">
-import { GitPullRequestCreateArrow, Sparkles } from "@lucide/svelte";
+import GitPullRequestCreateArrow from "phosphor-svelte/lib/GitPullRequest";
+import Sparkles from "phosphor-svelte/lib/Sparkle";
 import type { Repository } from "@revv/shared";
 import * as Tooltip from "$lib/components/ui/tooltip/index.js";
 

@@ -1,5 +1,6 @@
 <script lang="ts">
-import { CircleAlert, Loader2 } from "@lucide/svelte";
+import CircleAlert from "phosphor-svelte/lib/WarningCircle";
+import Loader2 from "phosphor-svelte/lib/Spinner";
 import type { ProjectRecapSummary, RecapPeriod } from "@revv/shared";
 import { goto } from "$app/navigation";
 import { Badge } from "$lib/components/ui/badge";

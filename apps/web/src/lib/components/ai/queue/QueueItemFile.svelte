@@ -6,7 +6,7 @@ export type QueueItemFileProps = HTMLAttributes<HTMLSpanElement>;
 
 <script lang="ts">
 	import { cn } from "$lib/utils.js";
-	import { Paperclip } from "@lucide/svelte";
+	import Paperclip from "phosphor-svelte/lib/Paperclip";
 
 	let {
 		children,

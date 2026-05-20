@@ -2,7 +2,10 @@
 import { untrack } from "svelte";
 import { goto } from "$app/navigation";
 import { page } from "$app/state";
-import { Play, RefreshCw, RotateCcw, Square } from "@lucide/svelte";
+import Play from "phosphor-svelte/lib/Play";
+import RefreshCw from "phosphor-svelte/lib/ArrowsClockwise";
+import RotateCcw from "phosphor-svelte/lib/ArrowCounterClockwise";
+import Square from "phosphor-svelte/lib/Square";
 import AuthGuard from "$lib/components/auth/AuthGuard.svelte";
 import PreviousRecaps from "$lib/components/recaps/PreviousRecaps.svelte";
 import RecapDetail from "$lib/components/recaps/RecapDetail.svelte";

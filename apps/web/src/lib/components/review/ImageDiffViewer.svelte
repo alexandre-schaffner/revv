@@ -1,5 +1,6 @@
 <script lang="ts">
-import { ArrowLeftRight, ImageOff } from "@lucide/svelte";
+import ArrowLeftRight from "phosphor-svelte/lib/ArrowsHorizontal";
+import ImageOff from "phosphor-svelte/lib/ImageBroken";
 import { onDestroy } from "svelte";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";

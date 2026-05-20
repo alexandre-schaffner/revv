@@ -1,5 +1,6 @@
 <script lang="ts">
-import { Calendar, Loader2 } from "@lucide/svelte";
+import Calendar from "phosphor-svelte/lib/Calendar";
+import Loader2 from "phosphor-svelte/lib/Spinner";
 import { page } from "$app/state";
 import { Button } from "$lib/components/ui/button";
 import { fetchRecapsForRepo, getRecapLoading, getRecapsForRepo } from "$lib/stores/recaps.svelte";

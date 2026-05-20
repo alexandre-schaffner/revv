@@ -20,7 +20,7 @@
  * collapse" variant — panels that want click-to-jump use the scorecard's
  * own RatingTestRow directly, not this primitive.
  */
-import { ChevronRight } from "@lucide/svelte";
+import ChevronRight from "phosphor-svelte/lib/CaretRight";
 import type { Snippet } from "svelte";
 import * as Collapsible from "$lib/components/ui/collapsible";
 

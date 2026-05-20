@@ -5,7 +5,10 @@ import { fly } from "svelte/transition";
 
 const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
 
-import { AlertCircle, AlertTriangle, RefreshCw, Sparkles } from "@lucide/svelte";
+import AlertCircle from "phosphor-svelte/lib/WarningCircle";
+import AlertTriangle from "phosphor-svelte/lib/Warning";
+import RefreshCw from "phosphor-svelte/lib/ArrowsClockwise";
+import Sparkles from "phosphor-svelte/lib/Sparkle";
 import type { WalkthroughBlock, WalkthroughSemanticStep } from "@revv/shared";
 import { API_BASE_URL } from "@revv/shared";
 import { Shimmer } from "$lib/components/ai/shimmer";

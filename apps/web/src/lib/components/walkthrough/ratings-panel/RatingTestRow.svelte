@@ -1,5 +1,9 @@
 <script lang="ts">
-import { AlertCircle, Check, ChevronRight, Loader2, X } from "@lucide/svelte";
+import AlertCircle from "phosphor-svelte/lib/WarningCircle";
+import Check from "phosphor-svelte/lib/Check";
+import ChevronRight from "phosphor-svelte/lib/CaretRight";
+import Loader2 from "phosphor-svelte/lib/Spinner";
+import X from "phosphor-svelte/lib/X";
 import type { Confidence, RatingAxis, WalkthroughBlock, WalkthroughRating } from "@revv/shared";
 import { RATING_AXIS_LABELS } from "@revv/shared";
 import * as Collapsible from "$lib/components/ui/collapsible";

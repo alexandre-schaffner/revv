@@ -1,9 +1,9 @@
 <script lang="ts">
-import Check from "@lucide/svelte/icons/check";
-import ChevronDown from "@lucide/svelte/icons/chevron-down";
+import Check from "phosphor-svelte/lib/Check";
 import type { AiAgent } from "@revv/shared";
 import AnthropicIcon from "$lib/components/icons/AnthropicIcon.svelte";
 import OpenCodeIcon from "$lib/components/icons/OpenCodeIcon.svelte";
+import SelectTrigger from "./SelectTrigger.svelte";
 import {
   Content as PopoverContent,
   Root as PopoverRoot,
@@ -45,14 +45,12 @@ function select(value: AiAgent) {
 
 <PopoverRoot bind:open>
 	<PopoverTrigger>
-		<button
-			class="flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 transition-colors hover:bg-bg-secondary"
-		>
-			<div class="h-1.5 w-1.5 rounded-full bg-accent"></div>
-			<CurrentIcon size={12} class="text-text-muted" />
-			<span class="text-xs text-text-secondary">{currentLabel}</span>
-			<ChevronDown size={10} class="text-text-muted" />
-		</button>
+		<SelectTrigger label={currentLabel}>
+			{#snippet icon()}
+				<div class="h-1.5 w-1.5 rounded-full bg-accent"></div>
+				<CurrentIcon size={12} class="text-text-muted" />
+			{/snippet}
+		</SelectTrigger>
 	</PopoverTrigger>
 	<PopoverContent class="w-40 p-1" align="start" side="top">
 		{#each AGENT_OPTIONS as opt (opt.value)}

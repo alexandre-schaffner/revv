@@ -1,5 +1,7 @@
 <script lang="ts">
-import { Check, ChevronLeft, Copy } from "@lucide/svelte";
+import Check from "phosphor-svelte/lib/Check";
+import ChevronLeft from "phosphor-svelte/lib/CaretLeft";
+import Copy from "phosphor-svelte/lib/Copy";
 import { onMount } from "svelte";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import * as auth from "$lib/stores/auth.svelte";

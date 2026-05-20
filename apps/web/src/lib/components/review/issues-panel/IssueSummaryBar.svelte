@@ -14,17 +14,15 @@
  * info) and a selection pill on the right. The divider character
  * (a literal `│`) signals the transition from "counts" to "selection".
  */
-import {
-  AlertTriangle,
-  CheckSquare,
-  ChevronsDownUp,
-  ChevronsUpDown,
-  Circle,
-  Filter,
-  Square,
-  Triangle,
-  X as XIcon,
-} from "@lucide/svelte";
+import AlertTriangle from "phosphor-svelte/lib/Warning";
+import CheckSquare from "phosphor-svelte/lib/CheckSquare";
+import ChevronsDownUp from "phosphor-svelte/lib/ArrowsInLineVertical";
+import ChevronsUpDown from "phosphor-svelte/lib/ArrowsOutLineVertical";
+import Circle from "phosphor-svelte/lib/Circle";
+import Filter from "phosphor-svelte/lib/Funnel";
+import Square from "phosphor-svelte/lib/Square";
+import Triangle from "phosphor-svelte/lib/Triangle";
+import XIcon from "phosphor-svelte/lib/X";
 
 interface Counts {
   critical: number;

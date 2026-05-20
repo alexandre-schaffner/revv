@@ -1,5 +1,5 @@
 <script lang="ts">
-import { ArrowUpRight } from "@lucide/svelte";
+import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
 import { DIFFS_TAG_NAME, type FileOptions, File as PierreFile } from "@pierre/diffs";
 import type { CodeBlock } from "@revv/shared";
 import { jumpToDiffLine } from "$lib/stores/review.svelte";

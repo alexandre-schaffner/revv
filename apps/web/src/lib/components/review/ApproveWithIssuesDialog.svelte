@@ -1,5 +1,8 @@
 <script lang="ts">
-import { AlertTriangle, Info, MessageSquare, XOctagon } from "@lucide/svelte";
+import AlertTriangle from "phosphor-svelte/lib/Warning";
+import Info from "phosphor-svelte/lib/Info";
+import MessageSquare from "phosphor-svelte/lib/Chat";
+import XOctagon from "phosphor-svelte/lib/Octagon";
 import type { CommentThread, WalkthroughIssue } from "@revv/shared";
 import { Button } from "$lib/components/ui/button";
 import * as Dialog from "$lib/components/ui/dialog";

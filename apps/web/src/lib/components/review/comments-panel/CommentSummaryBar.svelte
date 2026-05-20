@@ -7,7 +7,11 @@
  *
  *   [Expand all] [Only with replies] [Only unselected] [Select all / Clear]
  */
-import { ChevronsDownUp, ChevronsUpDown, Circle, Filter, MessageSquare } from "@lucide/svelte";
+import ChevronsDownUp from "phosphor-svelte/lib/ArrowsInLineVertical";
+import ChevronsUpDown from "phosphor-svelte/lib/ArrowsOutLineVertical";
+import Circle from "phosphor-svelte/lib/Circle";
+import Filter from "phosphor-svelte/lib/Funnel";
+import MessageSquare from "phosphor-svelte/lib/Chat";
 
 interface Counts {
   unresolved: number;

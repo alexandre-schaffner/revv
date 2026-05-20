@@ -1,5 +1,5 @@
 <script lang="ts">
-import { Search } from "@lucide/svelte";
+import Search from "phosphor-svelte/lib/MagnifyingGlass";
 import type { PullRequest, Repository } from "@revv/shared";
 import { untrack } from "svelte";
 import { fade, scale } from "svelte/transition";

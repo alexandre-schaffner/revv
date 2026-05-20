@@ -1,5 +1,6 @@
 <script lang="ts">
-import { Pencil, Trash2 } from "@lucide/svelte";
+import Pencil from "phosphor-svelte/lib/Pencil";
+import Trash2 from "phosphor-svelte/lib/Trash";
 
 interface Props {
   body: string;

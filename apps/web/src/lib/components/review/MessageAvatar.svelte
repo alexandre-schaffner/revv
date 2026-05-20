@@ -1,5 +1,6 @@
 <script lang="ts">
-import { Bot, User } from "@lucide/svelte";
+import Bot from "phosphor-svelte/lib/Robot";
+import User from "phosphor-svelte/lib/User";
 import type { ThreadMessage } from "@revv/shared";
 
 interface Props {

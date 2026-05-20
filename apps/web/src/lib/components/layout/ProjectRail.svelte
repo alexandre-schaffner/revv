@@ -1,5 +1,5 @@
 <script lang="ts">
-import { Plus } from "@lucide/svelte";
+import Plus from "phosphor-svelte/lib/Plus";
 import type { Repository } from "@revv/shared";
 import RepoAvatarButton from "$lib/components/sidebar/RepoAvatarButton.svelte";
 import * as Collapsible from "$lib/components/ui/collapsible";

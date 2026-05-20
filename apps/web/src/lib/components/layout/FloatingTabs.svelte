@@ -1,5 +1,6 @@
 <script lang="ts">
-import { DownloadCloud, Loader2 } from "@lucide/svelte";
+import DownloadCloud from "phosphor-svelte/lib/CloudArrowDown";
+import Loader2 from "phosphor-svelte/lib/Spinner";
 import PillTabs from "./PillTabs.svelte";
 
 type Tab = "walkthrough" | "diff" | "request-changes";

@@ -1,5 +1,7 @@
 <script lang="ts">
-import { Archive, ChevronDown, ChevronRight } from "@lucide/svelte";
+import Archive from "phosphor-svelte/lib/Archive";
+import ChevronDown from "phosphor-svelte/lib/CaretDown";
+import ChevronRight from "phosphor-svelte/lib/CaretRight";
 import { fly, slide } from "svelte/transition";
 import {
   fetchMoreArchived,

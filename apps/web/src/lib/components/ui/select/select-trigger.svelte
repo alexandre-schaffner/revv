@@ -1,5 +1,5 @@
 <script lang="ts">
-import ChevronDown from "@lucide/svelte/icons/chevron-down";
+import ChevronDown from "phosphor-svelte/lib/CaretDown";
 import { Select as SelectPrimitive } from "bits-ui";
 import { cn } from "$lib/utils.js";
 

@@ -1,45 +1,8 @@
 <script lang="ts">
-import {
-  ArrowDown,
-  ArrowUp,
-  Check,
-  ChevronDown,
-  FileEdit,
-  Gauge,
-  GitMerge,
-  Play,
-  RefreshCw,
-  RotateCcw,
-  Send,
-  Sparkles,
-  Square,
-  XCircle,
-} from "@lucide/svelte";
 import { page } from "$app/state";
-import { Shimmer } from "$lib/components/ai/shimmer";
 import SettingsModal from "$lib/components/settings/SettingsModal.svelte";
-import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
-import { Popover, PopoverContent, PopoverTrigger } from "$lib/components/ui/popover";
 import { RAIL_WIDTH } from "$lib/constants";
-import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
-import { isChatStreaming } from "$lib/stores/chat.svelte";
-import {
-  closePr,
-  convertPrToDraft,
-  getMergeEligibility,
-  getSelectedPr,
-  markPrReadyForReview,
-  mergePr,
-} from "$lib/stores/prs.svelte";
-import {
-  getRcApproveBlockerSummary,
-  getRcHasContent,
-  getRcOnApprove,
-  getRcOnGenerateChanges,
-  getRcOnSubmitReview,
-  getRcSelectedCount,
-  getRcSubmitting,
-} from "$lib/stores/rcActions.svelte";
+import { getSelectedPr } from "$lib/stores/prs.svelte";
 import {
   consumePanelOpenRequest,
   getActiveTab,
@@ -69,24 +32,10 @@ import {
   toggleRightPanel,
   toggleSidebar,
 } from "$lib/stores/sidebar.svelte";
-import {
-  getPrWalkthroughStatus,
-  getRatings as getWalkthroughRatings,
-} from "$lib/stores/walkthrough.svelte";
-import {
-  abort as abortWalkthrough,
-  getPendingAction as getWalkthroughPendingAction,
-  regenerate as regenerateWalkthrough,
-  resume as resumeWalkthrough,
-} from "$lib/stores/walkthrough-stream.svelte";
-import { getWalkthroughUiState } from "$lib/stores/walkthrough-ui-state.svelte";
-import {
-  getHasNewContentBelow as getWalkthroughHasNewContentBelow,
-  scrollToBottom as scrollWalkthroughToBottom,
-  scrollToRatings as scrollWalkthroughToRatings,
-  scrollToTop as scrollWalkthroughToTop,
-} from "$lib/stores/walkthroughNav.svelte";
+import { getPrWalkthroughStatus } from "$lib/stores/walkthrough.svelte";
 import UserMenu from "$lib/components/sidebar/UserMenu.svelte";
+import RequestChangesActionBar from "./RequestChangesActionBar.svelte";
+import WalkthroughActionBar from "./WalkthroughActionBar.svelte";
 import BottomBar from "./BottomBar.svelte";
 import CommandPalette from "./CommandPalette.svelte";
 import FloatingTabs from "./FloatingTabs.svelte";
@@ -116,84 +65,10 @@ const walkthroughStatus = $derived(pr ? getPrWalkthroughStatus(pr.id) : "idle");
 const activeTab = $derived(getActiveTab());
 const isSettingsRoute = $derived(page.url.pathname.startsWith("/settings"));
 const isReviewRoute = $derived(page.url.pathname.startsWith("/review/"));
-const walkthroughUiState = $derived(getWalkthroughUiState());
-const walkthroughPendingAction = $derived(pr ? getWalkthroughPendingAction(pr.id) : null);
-const walkthroughHasRatings = $derived(getWalkthroughRatings().length > 0);
-const walkthroughHasNewContentBelow = $derived(getWalkthroughHasNewContentBelow());
-// Bar is hidden in absent/idle/cloning — those are handled by GuidedWalkthrough's
-// inline UI (empty state, clone-in-progress skeleton). The bar only carries
-// post-start actions: stop, resume, retry, regenerate, navigation.
-const walkthroughBarHasActions = $derived(
-  walkthroughUiState.kind !== "absent" &&
-    walkthroughUiState.kind !== "idle" &&
-    walkthroughUiState.kind !== "cloning",
-);
 const showFloatingActions = $derived(
-  !!pr && isReviewRoute && !isSettingsRoute && activeTab === "walkthrough" && walkthroughBarHasActions,
+  !!pr && isReviewRoute && !isSettingsRoute && activeTab === "walkthrough",
 );
 const showRcActions = $derived(!!pr && isReviewRoute && !isSettingsRoute && activeTab === "request-changes");
-
-const rcSubmitting = $derived(getRcSubmitting());
-const rcSelectedCount = $derived(getRcSelectedCount());
-const rcHasContent = $derived(getRcHasContent());
-const rcApproveBlockerSummary = $derived(getRcApproveBlockerSummary());
-const chatStreaming = $derived(pr ? isChatStreaming(pr.id) : false);
-
-let rcGenerating = $state(false);
-
-$effect(() => {
-  if (!chatStreaming) rcGenerating = false;
-});
-
-// The reviewer-vs-coder distinction comes from the user's GitHub login
-// matching the PR's authorLogin. When the user owns the PR, the
-// approve / request-changes pair is replaced by owner-only mutations:
-// toggle draft state, and close the PR. Generate Changes still applies
-// (the agent can write code regardless of authorship), so we leave it.
-const currentUserLogin = $derived(getCurrentUserLogin());
-const isPrOwner = $derived(!!pr && pr.authorLogin === currentUserLogin);
-
-type OwnerAction = "convert-to-draft" | "ready-for-review" | "close";
-let ownerSubmitting = $state<OwnerAction | null>(null);
-
-async function runOwnerAction(action: OwnerAction): Promise<void> {
-  if (!pr || ownerSubmitting !== null) return;
-  ownerSubmitting = action;
-  try {
-    if (action === "convert-to-draft") await convertPrToDraft(pr.id);
-    else if (action === "ready-for-review") await markPrReadyForReview(pr.id);
-    else await closePr(pr.id);
-  } finally {
-    ownerSubmitting = null;
-  }
-}
-
-let mergeEligibility = $state<import("@revv/shared").MergeEligibility | null>(null);
-let mergeSubmitting = $state<string | null>(null);
-let mergeMenuOpen = $state(false);
-
-$effect(() => {
-  const prId = pr?.id;
-  const owner = isPrOwner;
-  if (!prId || !owner) {
-    mergeEligibility = null;
-    return;
-  }
-  getMergeEligibility(prId).then((el) => {
-    mergeEligibility = el;
-  });
-});
-
-async function runMerge(method: import("@revv/shared").MergeMethod): Promise<void> {
-  if (!pr || mergeSubmitting !== null) return;
-  mergeSubmitting = method;
-  mergeMenuOpen = false;
-  try {
-    await mergePr(pr.id, method);
-  } finally {
-    mergeSubmitting = null;
-  }
-}
 
 // New-commit-available signal: the PR's current headSha differs from the
 // SHA the diff was loaded against. `getLoadedHeadSha` returns null until the
@@ -355,268 +230,13 @@ function onRightHandleDblClick(): void {
 			{@render children()}
 		</div>
 
-		{#if showFloatingActions && activeTab === 'walkthrough' && pr}
-		<!-- Floating actions for the walkthrough tab. Branches on a single
-		     discriminated UiState (see walkthrough-ui-state.svelte.ts) so the
-		     bar can't fall into two mutually-exclusive branches at once.
-		     Destructive actions are disabled while a regenerate/resume is
-		     in-flight or while a chat-edit stream is mutating the same
-		     walkthrough — Stop intentionally stays enabled. -->
-		{@const destructiveDisabled = walkthroughPendingAction !== null || chatStreaming}
-		{@const destructiveTitle = chatStreaming
-			? 'Chat edit in progress — wait for it to finish before regenerating'
-			: walkthroughPendingAction === 'regenerate'
-				? 'Regenerating…'
-				: walkthroughPendingAction === 'resume'
-					? 'Resuming…'
-					: undefined}
-		<div class="walkthrough-actions-float">
-			<div class="walkthrough-actions-row">
-				<GlassPill
-					icon
-					onclick={scrollWalkthroughToTop}
-					aria-label="Scroll to top of walkthrough"
-				>
-					<ArrowUp size={14} />
-				</GlassPill>
+		{#if showFloatingActions && pr}
+			<WalkthroughActionBar prId={pr.id} />
+		{/if}
 
-				{#if walkthroughUiState.kind === 'streaming'}
-					<GlassPill
-						variant="danger"
-						onclick={() => abortWalkthrough(pr.id)}
-					>
-						<Square size={14} fill="currentColor" />
-						Stop generation
-					</GlassPill>
-					{#if walkthroughHasNewContentBelow}
-						<GlassPill
-							onclick={scrollWalkthroughToBottom}
-							aria-label="Scroll to newest walkthrough content"
-						>
-							<ArrowDown size={14} />
-							New content
-						</GlassPill>
-					{/if}
-				{:else if walkthroughUiState.kind === 'resumable'}
-					<GlassPill
-						disabled={destructiveDisabled}
-						title={destructiveTitle}
-						onclick={() => resumeWalkthrough(pr.id)}
-						aria-label="Resume walkthrough from where it stopped"
-					>
-						<Play size={14} fill="currentColor" />
-						Resume
-					</GlassPill>
-					<GlassPill
-						disabled={destructiveDisabled}
-						title={destructiveTitle}
-						onclick={() => regenerateWalkthrough(pr.id)}
-					>
-						<RefreshCw size={14} />
-						Regenerate
-					</GlassPill>
-				{:else if walkthroughUiState.kind === 'error-partial'}
-					<GlassPill
-						disabled={destructiveDisabled}
-						title={destructiveTitle}
-						onclick={() => resumeWalkthrough(pr.id)}
-						aria-label="Retry walkthrough from where it failed"
-					>
-						<RotateCcw size={14} />
-						Retry
-					</GlassPill>
-					<GlassPill
-						disabled={destructiveDisabled}
-						title={destructiveTitle}
-						onclick={() => regenerateWalkthrough(pr.id)}
-					>
-						<RefreshCw size={14} />
-						Regenerate
-					</GlassPill>
-				{:else if walkthroughUiState.kind === 'error-empty'}
-					<GlassPill
-						disabled={destructiveDisabled}
-						title={destructiveTitle}
-						onclick={() => regenerateWalkthrough(pr.id)}
-						aria-label="Retry walkthrough generation after error"
-					>
-						<RefreshCw size={14} />
-						Retry
-					</GlassPill>
-				{:else if walkthroughUiState.kind === 'complete'}
-					<GlassPill
-						disabled={destructiveDisabled}
-						title={destructiveTitle}
-						onclick={() => regenerateWalkthrough(pr.id)}
-					>
-						<RefreshCw size={14} />
-						Regenerate
-					</GlassPill>
-				{:else if walkthroughUiState.kind === 'complete-stale'}
-					<GlassPill
-						variant="accent"
-						disabled={destructiveDisabled}
-						title={chatStreaming
-							? 'Chat edit in progress — wait for it to finish before regenerating'
-							: 'A newer commit landed — this walkthrough is for an older SHA. Regenerate against the latest.'}
-						onclick={() => regenerateWalkthrough(pr.id)}
-					>
-						<RefreshCw size={14} />
-						Regenerate for latest commit
-					</GlassPill>
-				{/if}
-
-				{#if walkthroughHasRatings}
-					<GlassPill
-						onclick={scrollWalkthroughToRatings}
-						aria-label="Scroll to rating panel"
-					>
-						<Gauge size={14} />
-						Rating
-					</GlassPill>
-				{/if}
-			</div>
-		</div>
-	{/if}
-
-	{#if showRcActions && activeTab === 'request-changes'}
-		<div class="walkthrough-actions-float">
-			<div class="walkthrough-actions-row">
-				<GlassPill
-					variant="muted"
-					disabled={rcSubmitting !== null || rcSelectedCount === 0 || rcGenerating}
-					onclick={() => { rcGenerating = true; getRcOnGenerateChanges()(); }}
-					title={rcSelectedCount === 0
-						? 'Select at least one issue to ask the agent to address'
-						: rcGenerating
-							? 'Agent is generating changes…'
-							: 'Open the chat panel and ask the agent to address the selected issues as commits'}
-				>
-					<Sparkles size={14} />
-					<Shimmer active={rcSubmitting === null && rcSelectedCount > 0}>
-						{rcGenerating ? 'Generating changes…' : 'Generate changes'}
-					</Shimmer>
-				</GlassPill>
-
-				{#if isPrOwner && pr}
-					<!-- Owner view — the reviewer's Approve / Request Changes pair
-					     doesn't apply when you authored the PR, so we surface the
-					     two actions a coder actually needs from this screen:
-					     toggle draft state, and close the PR. -->
-					{#if pr.isDraft}
-						<GlassPill
-							variant="accent"
-							disabled={ownerSubmitting !== null}
-							onclick={() => runOwnerAction('ready-for-review')}
-							title="Mark this draft as ready for review"
-						>
-							<Send size={14} />
-							{ownerSubmitting === 'ready-for-review' ? 'Marking ready…' : 'Ready for review'}
-						</GlassPill>
-					{:else}
-						<GlassPill
-							disabled={ownerSubmitting !== null}
-							onclick={() => runOwnerAction('convert-to-draft')}
-							title="Move this PR back to draft state"
-						>
-							<FileEdit size={14} />
-							{ownerSubmitting === 'convert-to-draft' ? 'Converting…' : 'Convert to draft'}
-						</GlassPill>
-					{/if}
-
-					{#if mergeEligibility?.canMerge && pr.status === 'open'}
-						<div
-							class="glass-pill glass-pill--success merge-pill"
-							class:is-disabled={ownerSubmitting !== null || mergeSubmitting !== null}
-						>
-							<button
-								type="button"
-								class="merge-pill-main"
-								disabled={ownerSubmitting !== null || mergeSubmitting !== null}
-								onclick={() => runMerge('merge')}
-								title="Merge this pull request"
-							>
-								<GitMerge size={14} />
-								{mergeSubmitting === 'merge' ? 'Merging…' : 'Merge'}
-							</button>
-							<Popover bind:open={mergeMenuOpen}>
-								<PopoverTrigger>
-									<button
-										type="button"
-										class="merge-pill-chevron"
-										disabled={ownerSubmitting !== null || mergeSubmitting !== null}
-										aria-label="Merge options"
-										title="Choose merge strategy"
-									>
-										<ChevronDown size={14} />
-									</button>
-								</PopoverTrigger>
-								<PopoverContent class="w-56 p-1" align="end" side="top">
-									<button
-										type="button"
-										class="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-bg-tertiary"
-										onclick={() => runMerge('merge')}
-									>
-										<GitMerge size={12} />
-										Create a merge commit
-									</button>
-									<button
-										type="button"
-										class="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-bg-tertiary"
-										onclick={() => runMerge('squash')}
-									>
-										<GitMerge size={12} />
-										Squash and merge
-									</button>
-									<button
-										type="button"
-										class="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-bg-tertiary"
-										onclick={() => runMerge('rebase')}
-									>
-										<GitMerge size={12} />
-										Rebase and merge
-									</button>
-								</PopoverContent>
-							</Popover>
-						</div>
-					{/if}
-
-					<GlassPill
-						variant="danger"
-						disabled={ownerSubmitting !== null}
-						onclick={() => runOwnerAction('close')}
-						title="Close this pull request without merging"
-					>
-						<XCircle size={14} />
-						{ownerSubmitting === 'close' ? 'Closing…' : 'Close PR'}
-					</GlassPill>
-				{:else}
-					<GlassPill
-						variant="accent"
-						disabled={rcSubmitting !== null || !rcHasContent}
-						onclick={() => getRcOnSubmitReview()()}
-						title={!rcHasContent
-							? 'Add comments or select walkthrough issues first'
-							: 'Request changes on this pull request'}
-					>
-						<ArrowUp size={14} />
-						{rcSubmitting === 'request_changes' ? 'Submitting…' : 'Submit Review'}
-					</GlassPill>
-					<GlassPill
-						variant="success"
-						disabled={rcSubmitting !== null}
-						onclick={() => getRcOnApprove()()}
-						title={rcApproveBlockerSummary
-							? `Approve this pull request — ${rcApproveBlockerSummary} still open`
-							: 'Approve this pull request on GitHub'}
-					>
-						<Check size={14} />
-						{rcSubmitting === 'approve' ? 'Approving…' : 'Approve'}
-					</GlassPill>
-				{/if}
-			</div>
-		</div>
-	{/if}
+		{#if showRcActions}
+			<RequestChangesActionBar />
+		{/if}
 	</main>
 
 	<aside class="userbar-area">
@@ -823,31 +443,6 @@ function onRightHandleDblClick(): void {
 		padding-bottom: var(--spacing-island);
 	}
 
-	/* Bottom-anchored action bar. Floats over the main pane content,
-	   mirroring the tab bar at the top. pointer-events: none on the
-	   wrapper lets clicks reach content in the transparent zone. */
-	.walkthrough-actions-float {
-		position: absolute;
-		bottom: 0;
-		left: 0;
-		right: 0;
-		display: flex;
-		justify-content: center;
-		padding: 8px 0 10px;
-		z-index: 10;
-		pointer-events: none;
-	}
-
-	.walkthrough-actions-float :global(*) {
-		pointer-events: auto;
-	}
-
-	.walkthrough-actions-row {
-		display: inline-flex;
-		align-items: center;
-		gap: var(--spacing-island);
-	}
-
 	/* ── Right pane (chat) ──
 	   A real grid column. Width is 0 when closed, rightPanelWidth when
 	   open; toggling shrinks the main column rather than overlaying. The
@@ -931,53 +526,5 @@ function onRightHandleDblClick(): void {
 		left: 1px;
 		width: 3px;
 		background: var(--color-border-focus, var(--color-accent));
-	}
-
-/* Merge split-button — single pill with transparent inner buttons so the
-	   wrapper’s `.glass-pill` border and radius create the shape. */
-	.merge-pill {
-		padding: 0;
-		overflow: hidden;
-	}
-
-	.merge-pill.is-disabled {
-		opacity: 0.4;
-		cursor: not-allowed;
-	}
-
-	.merge-pill-main,
-	.merge-pill-chevron {
-		display: inline-flex;
-		align-items: center;
-		gap: var(--spacing-island);
-		height: 100%;
-		padding: 0 var(--spacing-inset);
-		background: transparent;
-		border: none;
-		font-family: inherit;
-		font-size: 13px;
-		font-weight: 500;
-		letter-spacing: -0.01em;
-		color: inherit;
-		cursor: pointer;
-		white-space: nowrap;
-		transition: background-color var(--duration-snap);
-		-webkit-font-smoothing: antialiased;
-	}
-
-	.merge-pill-chevron {
-		padding: 0 10px 0 2px;
-		border-left: 1px solid var(--color-glass-border);
-	}
-
-	.merge-pill-main:hover:not(:disabled),
-	.merge-pill-chevron:hover:not(:disabled) {
-		background: color-mix(in srgb, var(--color-tab-active-bg) 80%, var(--color-tab-track-bg));
-	}
-
-	.merge-pill-main:disabled,
-	.merge-pill-chevron:disabled {
-		cursor: not-allowed;
-		opacity: 0.4;
 	}
 </style>

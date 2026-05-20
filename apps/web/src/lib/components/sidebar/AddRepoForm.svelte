@@ -1,5 +1,9 @@
 <script lang="ts">
-import { Folder, Plus, RefreshCw, Search, Trash2 } from "@lucide/svelte";
+import Folder from "phosphor-svelte/lib/Folder";
+import Plus from "phosphor-svelte/lib/Plus";
+import RefreshCw from "phosphor-svelte/lib/ArrowsClockwise";
+import Search from "phosphor-svelte/lib/MagnifyingGlass";
+import Trash2 from "phosphor-svelte/lib/Trash";
 import type { Repository } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import CloneStatusIndicator from "$lib/components/shared/CloneStatusIndicator.svelte";

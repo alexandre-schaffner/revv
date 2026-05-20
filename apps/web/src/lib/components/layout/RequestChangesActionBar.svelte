@@ -1,0 +1,299 @@
+<script lang="ts">
+import ArrowUp from "phosphor-svelte/lib/ArrowUp";
+import Check from "phosphor-svelte/lib/Check";
+import ChevronDown from "phosphor-svelte/lib/CaretDown";
+import FileEdit from "phosphor-svelte/lib/PencilSimple";
+import GitMerge from "phosphor-svelte/lib/GitMerge";
+import Send from "phosphor-svelte/lib/PaperPlaneRight";
+import Sparkles from "phosphor-svelte/lib/Sparkle";
+import XCircle from "phosphor-svelte/lib/XCircle";
+import { Shimmer } from "$lib/components/ai/shimmer";
+import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
+import { Popover, PopoverContent, PopoverTrigger } from "$lib/components/ui/popover";
+import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
+import { isChatStreaming } from "$lib/stores/chat.svelte";
+import {
+  closePr,
+  convertPrToDraft,
+  getMergeEligibility,
+  getSelectedPr,
+  markPrReadyForReview,
+  mergePr,
+} from "$lib/stores/prs.svelte";
+import {
+  getRcApproveBlockerSummary,
+  getRcHasContent,
+  getRcOnApprove,
+  getRcOnGenerateChanges,
+  getRcOnSubmitReview,
+  getRcSelectedCount,
+  getRcSubmitting,
+} from "$lib/stores/rcActions.svelte";
+
+const pr = $derived(getSelectedPr());
+const rcSubmitting = $derived(getRcSubmitting());
+const rcSelectedCount = $derived(getRcSelectedCount());
+const rcHasContent = $derived(getRcHasContent());
+const rcApproveBlockerSummary = $derived(getRcApproveBlockerSummary());
+const chatStreaming = $derived(pr ? isChatStreaming(pr.id) : false);
+
+let rcGenerating = $state(false);
+
+$effect(() => {
+  if (!chatStreaming) rcGenerating = false;
+});
+
+const currentUserLogin = $derived(getCurrentUserLogin());
+const isPrOwner = $derived(!!pr && pr.authorLogin === currentUserLogin);
+
+type OwnerAction = "convert-to-draft" | "ready-for-review" | "close";
+let ownerSubmitting = $state<OwnerAction | null>(null);
+
+async function runOwnerAction(action: OwnerAction): Promise<void> {
+  if (!pr || ownerSubmitting !== null) return;
+  ownerSubmitting = action;
+  try {
+    if (action === "convert-to-draft") await convertPrToDraft(pr.id);
+    else if (action === "ready-for-review") await markPrReadyForReview(pr.id);
+    else await closePr(pr.id);
+  } finally {
+    ownerSubmitting = null;
+  }
+}
+
+let mergeEligibility = $state<import("@revv/shared").MergeEligibility | null>(null);
+let mergeSubmitting = $state<string | null>(null);
+let mergeMenuOpen = $state(false);
+
+$effect(() => {
+  const prId = pr?.id;
+  const owner = isPrOwner;
+  if (!prId || !owner) {
+    mergeEligibility = null;
+    return;
+  }
+  getMergeEligibility(prId).then((el) => {
+    mergeEligibility = el;
+  });
+});
+
+async function runMerge(method: import("@revv/shared").MergeMethod): Promise<void> {
+  if (!pr || mergeSubmitting !== null) return;
+  mergeSubmitting = method;
+  mergeMenuOpen = false;
+  try {
+    await mergePr(pr.id, method);
+  } finally {
+    mergeSubmitting = null;
+  }
+}
+</script>
+
+<div class="walkthrough-actions-float">
+  <div class="walkthrough-actions-row">
+    <GlassPill
+      variant="muted"
+      disabled={rcSubmitting !== null || rcSelectedCount === 0 || rcGenerating}
+      onclick={() => { rcGenerating = true; getRcOnGenerateChanges()(); }}
+      title={rcSelectedCount === 0
+        ? "Select at least one issue to ask the agent to address"
+        : rcGenerating
+          ? "Agent is generating changes…"
+          : "Open the chat panel and ask the agent to address the selected issues as commits"}
+    >
+      <Sparkles size={14} />
+      <Shimmer active={rcSubmitting === null && rcSelectedCount > 0}>
+        {rcGenerating ? "Generating changes…" : "Generate changes"}
+      </Shimmer>
+    </GlassPill>
+
+    {#if isPrOwner && pr}
+      <!-- Owner view — the reviewer's Approve / Request Changes pair
+           doesn't apply when you authored the PR, so we surface the
+           two actions a coder actually needs from this screen:
+           toggle draft state, and close the PR. -->
+      {#if pr.isDraft}
+        <GlassPill
+          variant="accent"
+          disabled={ownerSubmitting !== null}
+          onclick={() => runOwnerAction("ready-for-review")}
+          title="Mark this draft as ready for review"
+        >
+          <Send size={14} />
+          {ownerSubmitting === "ready-for-review" ? "Marking ready…" : "Ready for review"}
+        </GlassPill>
+      {:else}
+        <GlassPill
+          disabled={ownerSubmitting !== null}
+          onclick={() => runOwnerAction("convert-to-draft")}
+          title="Move this PR back to draft state"
+        >
+          <FileEdit size={14} />
+          {ownerSubmitting === "convert-to-draft" ? "Converting…" : "Convert to draft"}
+        </GlassPill>
+      {/if}
+
+      {#if mergeEligibility?.canMerge && pr.status === "open"}
+        <div
+          class="glass-pill glass-pill--success merge-pill"
+          class:is-disabled={ownerSubmitting !== null || mergeSubmitting !== null}
+        >
+          <button
+            type="button"
+            class="merge-pill-main"
+            disabled={ownerSubmitting !== null || mergeSubmitting !== null}
+            onclick={() => runMerge("merge")}
+            title="Merge this pull request"
+          >
+            <GitMerge size={14} />
+            {mergeSubmitting === "merge" ? "Merging…" : "Merge"}
+          </button>
+          <Popover bind:open={mergeMenuOpen}>
+            <PopoverTrigger>
+              <button
+                type="button"
+                class="merge-pill-chevron"
+                disabled={ownerSubmitting !== null || mergeSubmitting !== null}
+                aria-label="Merge options"
+                title="Choose merge strategy"
+              >
+                <ChevronDown size={14} />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent class="w-56 p-1" align="end" side="top">
+              <button
+                type="button"
+                class="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-bg-tertiary"
+                onclick={() => runMerge("merge")}
+              >
+                <GitMerge size={12} />
+                Create a merge commit
+              </button>
+              <button
+                type="button"
+                class="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-bg-tertiary"
+                onclick={() => runMerge("squash")}
+              >
+                <GitMerge size={12} />
+                Squash and merge
+              </button>
+              <button
+                type="button"
+                class="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-bg-tertiary"
+                onclick={() => runMerge("rebase")}
+              >
+                <GitMerge size={12} />
+                Rebase and merge
+              </button>
+            </PopoverContent>
+          </Popover>
+        </div>
+      {/if}
+
+      <GlassPill
+        variant="danger"
+        disabled={ownerSubmitting !== null}
+        onclick={() => runOwnerAction("close")}
+        title="Close this pull request without merging"
+      >
+        <XCircle size={14} />
+        {ownerSubmitting === "close" ? "Closing…" : "Close PR"}
+      </GlassPill>
+    {:else}
+      <GlassPill
+        variant="accent"
+        disabled={rcSubmitting !== null || !rcHasContent}
+        onclick={() => getRcOnSubmitReview()()}
+        title={!rcHasContent
+          ? "Add comments or select walkthrough issues first"
+          : "Request changes on this pull request"}
+      >
+        <ArrowUp size={14} />
+        {rcSubmitting === "request_changes" ? "Submitting…" : "Submit Review"}
+      </GlassPill>
+      <GlassPill
+        variant="success"
+        disabled={rcSubmitting !== null}
+        onclick={() => getRcOnApprove()()}
+        title={rcApproveBlockerSummary
+          ? `Approve this pull request — ${rcApproveBlockerSummary} still open`
+          : "Approve this pull request on GitHub"}
+      >
+        <Check size={14} />
+        {rcSubmitting === "approve" ? "Approving…" : "Approve"}
+      </GlassPill>
+    {/if}
+  </div>
+</div>
+
+<style>
+  .walkthrough-actions-float {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    justify-content: center;
+    padding: 8px 0 10px;
+    z-index: 10;
+    pointer-events: none;
+  }
+
+  .walkthrough-actions-float :global(*) {
+    pointer-events: auto;
+  }
+
+  .walkthrough-actions-row {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-island);
+  }
+
+  /* Merge split-button — single pill with transparent inner buttons so the
+     wrapper's `.glass-pill` border and radius create the shape. */
+  .merge-pill {
+    padding: 0;
+    overflow: hidden;
+  }
+
+  .merge-pill.is-disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .merge-pill-main,
+  .merge-pill-chevron {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-island);
+    height: 100%;
+    padding: 0 var(--spacing-inset);
+    background: transparent;
+    border: none;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    color: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background-color var(--duration-snap);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .merge-pill-chevron {
+    padding: 0 10px 0 2px;
+    border-left: 1px solid var(--color-glass-border);
+  }
+
+  .merge-pill-main:hover:not(:disabled),
+  .merge-pill-chevron:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--color-tab-active-bg) 80%, var(--color-tab-track-bg));
+  }
+
+  .merge-pill-main:disabled,
+  .merge-pill-chevron:disabled {
+    cursor: not-allowed;
+    opacity: 0.4;
+  }
+</style>

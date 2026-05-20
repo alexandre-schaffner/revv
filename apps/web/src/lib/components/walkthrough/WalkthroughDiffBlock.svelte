@@ -1,5 +1,5 @@
 <script lang="ts">
-import { ArrowUpRight } from "@lucide/svelte";
+import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
 import { DIFFS_TAG_NAME, FileDiff, type FileDiffOptions, parsePatchFiles } from "@pierre/diffs";
 import type { DiffBlock } from "@revv/shared";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";

@@ -8,7 +8,7 @@
  * thin left guide.
  */
 
-import { ArrowUpRight } from "@lucide/svelte";
+import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
 import type { CommentThread, ThreadMessage } from "@revv/shared";
 import { isHighlighterReady } from "$lib/utils/code-highlight.svelte";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";

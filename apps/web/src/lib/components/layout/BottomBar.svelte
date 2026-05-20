@@ -1,5 +1,5 @@
 <script lang="ts">
-import { RefreshCw } from "@lucide/svelte";
+import RefreshCw from "phosphor-svelte/lib/ArrowsClockwise";
 import {
   Context,
   ContextCacheCreationUsage,

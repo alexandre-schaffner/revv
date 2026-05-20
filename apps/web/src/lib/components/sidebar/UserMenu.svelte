@@ -1,5 +1,10 @@
 <script lang="ts">
-import { Check, ChevronDown, Loader2, LogOut, Settings, User } from "@lucide/svelte";
+import Check from "phosphor-svelte/lib/Check";
+import ChevronDown from "phosphor-svelte/lib/CaretDown";
+import Loader2 from "phosphor-svelte/lib/Spinner";
+import LogOut from "phosphor-svelte/lib/SignOut";
+import Settings from "phosphor-svelte/lib/Gear";
+import User from "phosphor-svelte/lib/User";
 import {
   Content as PopoverContent,
   Root as PopoverRoot,

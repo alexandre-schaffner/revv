@@ -1,5 +1,8 @@
 <script lang="ts">
-import { AlertCircle, Check, Loader2, X } from "@lucide/svelte";
+import AlertCircle from "phosphor-svelte/lib/WarningCircle";
+import Check from "phosphor-svelte/lib/Check";
+import Loader2 from "phosphor-svelte/lib/Spinner";
+import X from "phosphor-svelte/lib/X";
 import type { RatingAxis, WalkthroughBlock, WalkthroughRating } from "@revv/shared";
 import { RATING_AXIS_LABELS } from "@revv/shared";
 import * as Popover from "$lib/components/ui/popover";

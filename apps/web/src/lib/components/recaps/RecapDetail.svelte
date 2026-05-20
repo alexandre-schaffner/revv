@@ -1,5 +1,7 @@
 <script lang="ts">
-import { ArrowLeft, CircleAlert, Loader2 } from "@lucide/svelte";
+import ArrowLeft from "phosphor-svelte/lib/ArrowLeft";
+import CircleAlert from "phosphor-svelte/lib/WarningCircle";
+import Loader2 from "phosphor-svelte/lib/Spinner";
 import type { ProjectRecap } from "@revv/shared";
 import { Shimmer } from "$lib/components/ai/shimmer";
 import { Button } from "$lib/components/ui/button";

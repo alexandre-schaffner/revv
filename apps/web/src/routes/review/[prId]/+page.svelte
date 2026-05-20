@@ -268,9 +268,9 @@ onDestroy(() => {
 		     across diff-tab switches so the walkthrough never unmounts. -->
 		<div
 			class="review-content"
+			class:review-content--hidden={activeTab === 'diff'}
 			bind:this={scrollRootEl}
 			onscroll={handleScrollRootScroll}
-			style={activeTab === 'diff' ? 'display: none' : ''}
 		>
 			<div
 				class="page-title-section"
@@ -289,7 +289,7 @@ onDestroy(() => {
 
 			<!-- Walkthrough: always mounted to avoid re-render freeze on tab switch.
 			     Heavy blocks (PierreFile, FileDiff, markdown) stay alive in DOM. -->
-			<div style={activeTab === 'walkthrough' ? 'display: contents' : 'display: none'}>
+			<div class="tab-wrapper" class:tab-wrapper--hidden={activeTab !== 'walkthrough'}>
 				<GuidedWalkthrough
 					prId={page.params['prId'] ?? ''}
 					scrollRoot={scrollRootEl}
@@ -297,7 +297,7 @@ onDestroy(() => {
 				/>
 			</div>
 
-			<div style={activeTab === 'request-changes' ? 'display: contents' : 'display: none'}>
+			<div class="tab-wrapper" class:tab-wrapper--hidden={activeTab !== 'request-changes'}>
 				<RequestChanges prId={page.params['prId'] ?? ''} />
 			</div>
 		</div>
@@ -334,6 +334,20 @@ onDestroy(() => {
 		overflow-y: scroll;
 		scrollbar-gutter: stable;
 		container-type: inline-size;
+	}
+
+	.review-content--hidden {
+		display: none;
+	}
+
+	/* Tab wrappers: display:contents when active so children participate in
+	   the parent's layout directly; display:none when inactive. */
+	.tab-wrapper {
+		display: contents;
+	}
+
+	.tab-wrapper--hidden {
+		display: none;
 	}
 
 	/* ── Title section (scrolls away naturally with content) ─────────── */

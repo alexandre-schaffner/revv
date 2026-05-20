@@ -1,5 +1,5 @@
 <script lang="ts">
-import { X } from "@lucide/svelte";
+import X from "phosphor-svelte/lib/X";
 import * as errors from "$lib/stores/errors.svelte";
 
 function formatCountdown(seconds: number): string {

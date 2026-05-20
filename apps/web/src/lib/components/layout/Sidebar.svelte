@@ -1,5 +1,7 @@
 <script lang="ts">
-import { ChevronLeft, GitPullRequestCreateArrow, Plus } from "@lucide/svelte";
+import ChevronLeft from "phosphor-svelte/lib/CaretLeft";
+import GitPullRequestCreateArrow from "phosphor-svelte/lib/GitPullRequest";
+import Plus from "phosphor-svelte/lib/Plus";
 import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte";
 import AddRepoDialog from "$lib/components/sidebar/AddRepoDialog.svelte";
 import ProjectArchiveList from "$lib/components/sidebar/ProjectArchiveList.svelte";

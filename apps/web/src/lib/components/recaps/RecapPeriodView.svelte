@@ -1,5 +1,10 @@
 <script lang="ts">
-import { Loader2, Play, RefreshCw, RotateCcw, Sparkles, Square } from "@lucide/svelte";
+import Loader2 from "phosphor-svelte/lib/Spinner";
+import Play from "phosphor-svelte/lib/Play";
+import RefreshCw from "phosphor-svelte/lib/ArrowsClockwise";
+import RotateCcw from "phosphor-svelte/lib/ArrowCounterClockwise";
+import Sparkles from "phosphor-svelte/lib/Sparkle";
+import Square from "phosphor-svelte/lib/Square";
 import type { ProjectRecap, ProjectRecapSummary, RecapPeriod } from "@revv/shared";
 import { untrack } from "svelte";
 import { Shimmer } from "$lib/components/ai/shimmer";

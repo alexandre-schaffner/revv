@@ -4,14 +4,7 @@ import { page } from "$app/state";
 import AuthGuard from "$lib/components/auth/AuthGuard.svelte";
 import PillTabs from "$lib/components/layout/PillTabs.svelte";
 import RecapPeriodView from "$lib/components/recaps/RecapPeriodView.svelte";
-import { RAIL_WIDTH } from "$lib/constants";
-import {
-  getRightPanelOpen,
-  getRightPanelWidth,
-  getSidebarCollapsed,
-  getSidebarPeekHovering,
-  getSidebarWidth,
-} from "$lib/stores/sidebar.svelte";
+import { getMainAreaBounds } from "$lib/stores/sidebar.svelte";
 
 const repoId = $derived(page.params.repoId ?? "");
 
@@ -22,19 +15,11 @@ const tabs = [
   { id: "weekly" as RecapPeriod, label: "Weekly" },
 ];
 
-const sidebarCollapsed = $derived(getSidebarCollapsed());
-const sidebarPeekHovering = $derived(getSidebarPeekHovering());
-const sidebarEffectiveCollapsed = $derived(sidebarCollapsed && !sidebarPeekHovering);
-const sidebarWidth = $derived(getSidebarWidth());
-const rightPanelOpen = $derived(getRightPanelOpen());
-const rightPanelWidth = $derived(getRightPanelWidth());
-
 // Center the floating tabs over the visible main area, mirroring
 // AppShell's `.tabs-float` math exactly.
+const bounds = $derived(getMainAreaBounds());
 const floatingTabsStyle = $derived(
-  `left: ${RAIL_WIDTH + (sidebarEffectiveCollapsed ? 0 : sidebarWidth)}px; right: ${
-    rightPanelOpen ? rightPanelWidth : 0
-  }px;`,
+  `left: ${bounds.left}px; right: ${bounds.right}px;`,
 );
 </script>
 

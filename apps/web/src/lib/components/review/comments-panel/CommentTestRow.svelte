@@ -14,7 +14,10 @@
  * the diff happens either via the FileBadge (jumps to the first thread)
  * or the per-thread `jump` chip inside the expanded body.
  */
-import { Bot, MessageSquare, MessagesSquare, User } from "@lucide/svelte";
+import Bot from "phosphor-svelte/lib/Robot";
+import MessageSquare from "phosphor-svelte/lib/Chat";
+import MessagesSquare from "phosphor-svelte/lib/Chats";
+import User from "phosphor-svelte/lib/User";
 import type { CommentThread, ThreadMessage } from "@revv/shared";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
 import SpecRow from "../shared/SpecRow.svelte";
