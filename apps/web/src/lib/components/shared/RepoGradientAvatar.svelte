@@ -83,7 +83,7 @@ const letter = $derived((fullName.split("/")[1] ?? fullName).slice(0, 1).toUpper
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
-    filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.55));
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
     text-transform: uppercase;
     line-height: 1;
     pointer-events: none;
