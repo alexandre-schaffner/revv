@@ -77,9 +77,9 @@ const letter = $derived((fullName.split("/")[1] ?? fullName).slice(0, 1).toUpper
   .repo-gradient-avatar-letter {
     position: relative;
     z-index: 1;
-    font-family: 'Newsreader', Georgia, serif;
+    font-family: var(--font-mono);
     font-size: max(7px, calc(var(--rga-size) * 0.48));
-    font-weight: 500;
+    font-weight: 600;
     background: var(--rga-text-grad);
     -webkit-background-clip: text;
     background-clip: text;
