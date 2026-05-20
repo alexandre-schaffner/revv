@@ -65,7 +65,7 @@ function deriveColors(ownerHue: number, repoSeed: number): DerivedColors {
 
   return {
     background: [hsl(ownerHue, sat1, light1), hsl(hue2, sat2, light2)],
-    text: [hsl(ownerHue, 10, 95), hsl(hue2, 15, 90)],
+    text: [hsl(ownerHue, 50, 85), hsl(hue2, 55, 80)],
   };
 }
 
