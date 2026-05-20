@@ -1,4 +1,4 @@
-// Per-owner, per-repo gradient avatar palette.
+// Owner hue extraction from GitHub avatars.
 //
 // Owner GitHub avatars are fetched once, stored as data URLs in localStorage,
 // and loaded from there on every subsequent visit — no network request needed.
@@ -8,22 +8,6 @@
 // Hue extraction runs on-demand from the cached image via the Canvas API.
 // A session-level cache (Map) deduplicates within-session extractions so
 // 20 avatars from the same owner only ever process one image per page load.
-//
-// Per-repo variation: hue stays close to the owner anchor (each stop within
-// ±18°, the pair 15–30° apart) so the owner's color family is preserved.
-// Lightness and chroma vary per repo via a *coupled* shift: both stops move
-// together, with a smaller differential between them. That lets overall
-// brightness and saturation swing meaningfully between repos while the
-// dark→light contrast inside any single gradient stays intact.
-//
-// Colors use OKLCH — perceptually uniform, so the chosen L/C ranges stay
-// rich-but-not-garish across the full hue wheel.
-
-export interface RepoGradient {
-  background: string;
-  textGradient: string;
-  seed: number;
-}
 
 // ── Hash (fallback) ───────────────────────────────────────────────────────────
 
@@ -207,52 +191,4 @@ export function ownerHueFromAvatar(avatarUrl: string): Promise<number> {
   pendingLoads.set(avatarUrl, promise);
   promise.finally(() => pendingLoads.delete(avatarUrl));
   return promise;
-}
-
-// ── Per-repo gradient ─────────────────────────────────────────────────────────
-
-export function repoGradient(
-  repoFullName: string,
-  ownerHue: number,
-  theme: "light" | "dark",
-): RepoGradient {
-  const r = hashString(repoFullName);
-  // Independent hash so tonal variation doesn't track the hue picks above.
-  const r2 = hashString(`${repoFullName}#tone`);
-
-  const jitter = ((r & 0xff) % 37) - 18; // -18..+18
-  const hueA = (ownerHue + jitter + 360) % 360;
-
-  const spread = 15 + ((r >> 8) & 0x0f); // 15..30°
-  const direction = ((r >> 12) & 1) === 1 ? 1 : -1;
-  const hueB = (hueA + direction * spread + 360) % 360;
-
-  const isDark = theme === "dark";
-  // Coupled shift: both stops move together (lShift, cShift), with a smaller
-  // differential (lDiff, cDiff) varying the L/C span between them. The shift
-  // is what makes two repos read as visibly different; the small differential
-  // adds extra character without ever collapsing intra-gradient contrast.
-  //   L2 - L1 = 0.17 - 2·lDiff  ∈ [0.13, 0.21]  → contrast always preserved
-  //   C1 - C2 = 0.08 - 2·cDiff  ∈ [0.05, 0.11]
-  const lShift = (((r2 & 0x1f) / 31) - 0.5) * 0.18; // ±0.09
-  const lDiff = ((((r2 >> 5) & 0x0f) / 15) - 0.5) * 0.04; // ±0.02
-  const cShift = ((((r2 >> 9) & 0x1f) / 31) - 0.5) * 0.12; // ±0.06
-  const cDiff = ((((r2 >> 14) & 0x0f) / 15) - 0.5) * 0.03; // ±0.015
-
-  const L1 = (isDark ? 0.55 : 0.42) + lShift + lDiff;
-  const C1 = 0.19 + cShift + cDiff;
-  const L2 = (isDark ? 0.72 : 0.63) + lShift - lDiff;
-  const C2 = 0.11 + cShift - cDiff;
-
-  const angle = (r >> 18) % 360;
-  const colorA = `oklch(${L1.toFixed(3)} ${C1.toFixed(3)} ${Math.round(hueA)})`;
-  const colorB = `oklch(${L2.toFixed(3)} ${C2.toFixed(3)} ${Math.round(hueB)})`;
-  const background = `linear-gradient(${angle}deg in oklch, ${colorA}, ${colorB})`;
-
-  const textAngle = (angle + 150) % 360;
-  const textA = `oklch(0.97 0.04 ${Math.round(hueA)})`;
-  const textB = `oklch(0.90 0.08 ${Math.round(hueB)})`;
-  const textGradient = `linear-gradient(${textAngle}deg in oklch, ${textA}, ${textB})`;
-
-  return { background, textGradient, seed: r };
 }
