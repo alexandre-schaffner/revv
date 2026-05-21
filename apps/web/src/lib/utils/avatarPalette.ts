@@ -21,10 +21,25 @@ export function fallbackOwnerHue(repoFullName: string): number {
   return hashString(owner) % 360;
 }
 
+export type OwnerPalette =
+  | { kind: "color"; hue: number }
+  | { kind: "neutral"; lightness: number };
+
+export function fallbackOwnerPalette(repoFullName: string): OwnerPalette {
+  return { kind: "color", hue: fallbackOwnerHue(repoFullName) };
+}
+
 /** Return the already-resolved hue for an avatar source, or undefined. */
 export function peekOwnerHue(src: string): number | undefined {
   if (typeof document === "undefined") return undefined;
-  return sessionHueCache.get(src);
+  const palette = sessionPaletteCache.get(src);
+  return palette?.kind === "color" ? palette.hue : undefined;
+}
+
+/** Return the already-resolved palette for an avatar source, or undefined. */
+export function peekOwnerPalette(src: string): OwnerPalette | undefined {
+  if (typeof document === "undefined") return undefined;
+  return sessionPaletteCache.get(src);
 }
 
 /** Warm the session hue cache for every unique avatar in the repo list. */
@@ -33,11 +48,11 @@ export async function preloadOwnerHues(
 ): Promise<void> {
   if (typeof document === "undefined") return;
   const seen = new Set<string>();
-  const loads: Promise<number>[] = [];
+  const loads: Promise<OwnerPalette>[] = [];
   for (const repo of repos) {
     if (repo.avatarUrl && !seen.has(repo.avatarUrl)) {
       seen.add(repo.avatarUrl);
-      loads.push(ownerHueFromAvatar(repo.avatarUrl, fallbackOwnerHue(repo.fullName)));
+      loads.push(ownerPaletteFromAvatar(repo.avatarUrl, fallbackOwnerPalette(repo.fullName)));
     }
   }
   await Promise.all(loads);
@@ -100,68 +115,107 @@ function circularMedian(sorted: number[]): number {
   return ((median % 360) + 360) % 360;
 }
 
-function hueFromImg(img: HTMLImageElement, fallbackHue: number): number {
+function paletteFromImg(img: HTMLImageElement, fallbackPalette: OwnerPalette): OwnerPalette {
   const SIZE = 16;
   const canvas = document.createElement("canvas");
   canvas.width = SIZE;
   canvas.height = SIZE;
   const ctx = canvas.getContext("2d");
-  if (!ctx) return fallbackHue;
+  if (!ctx) return fallbackPalette;
   ctx.drawImage(img, 0, 0, SIZE, SIZE);
   const { data } = ctx.getImageData(0, 0, SIZE, SIZE);
 
   const weighted: number[] = [];
+  let neutralLightness = 0;
+  let neutralCount = 0;
   for (let i = 0; i < data.length; i += 4) {
     const a = data[i + 3] ?? 0;
     if (a < 128) continue;
     const [h, s, l] = rgbToHsl(data[i] ?? 0, data[i + 1] ?? 0, data[i + 2] ?? 0);
-    if (s < 0.15 || l < 0.1 || l > 0.92) continue;
+    if (s < 0.15) {
+      if (l >= 0.08 && l <= 0.95) {
+        neutralLightness += l;
+        neutralCount++;
+      }
+      continue;
+    }
+    if (l < 0.1 || l > 0.92) continue;
     const weight = Math.round(s * 4) + 1;
     for (let w = 0; w < weight; w++) weighted.push(h);
   }
 
-  if (weighted.length === 0) return fallbackHue;
+  if (weighted.length === 0) {
+    if (neutralCount === 0) return fallbackPalette;
+    return { kind: "neutral", lightness: neutralLightness / neutralCount };
+  }
   weighted.sort((a, b) => a - b);
-  return circularMedian(weighted);
+  return { kind: "color", hue: circularMedian(weighted) };
 }
 
-function hueFromSrc(src: string, fallbackHue: number): Promise<number> {
+function paletteFromSrc(src: string, fallbackPalette: OwnerPalette): Promise<OwnerPalette> {
   return new Promise((resolve) => {
     const img = new Image();
-    const timeout = window.setTimeout(() => resolve(fallbackHue), 1500);
-    const finish = (hue: number): void => {
+    const timeout = window.setTimeout(() => resolve(fallbackPalette), 1500);
+    const finish = (palette: OwnerPalette): void => {
       window.clearTimeout(timeout);
-      resolve(hue);
+      resolve(palette);
     };
     img.crossOrigin = "anonymous";
     img.onload = () => {
       try {
-        finish(hueFromImg(img, fallbackHue));
+        finish(paletteFromImg(img, fallbackPalette));
       } catch {
-        finish(fallbackHue);
+        finish(fallbackPalette);
       }
     };
-    img.onerror = () => finish(fallbackHue);
+    img.onerror = () => finish(fallbackPalette);
     img.src = src;
   });
 }
 
 // ── Session dedup + pending map ───────────────────────────────────────────────
 //
-// sessionHueCache is capped at SESSION_HUE_MAX entries. When the cap is hit the
+// sessionPaletteCache is capped at SESSION_HUE_MAX entries. When the cap is hit the
 // oldest entries (insertion-order, courtesy of Map iteration) are evicted first.
 
 const SESSION_HUE_MAX = 200;
-const sessionHueCache = new Map<string, number>();
-const pendingLoads = new Map<string, Promise<number>>();
+const sessionPaletteCache = new Map<string, OwnerPalette>();
+const pendingLoads = new Map<string, Promise<OwnerPalette>>();
 
-function setSessionHue(src: string, hue: number): void {
+function setSessionPalette(src: string, palette: OwnerPalette): void {
   // Evict oldest entries if at cap (Map iterates insertion-order).
-  if (sessionHueCache.size >= SESSION_HUE_MAX) {
-    const oldest = sessionHueCache.keys().next().value;
-    if (oldest !== undefined) sessionHueCache.delete(oldest);
+  if (sessionPaletteCache.size >= SESSION_HUE_MAX) {
+    const oldest = sessionPaletteCache.keys().next().value;
+    if (oldest !== undefined) sessionPaletteCache.delete(oldest);
   }
-  sessionHueCache.set(src, hue);
+  sessionPaletteCache.set(src, palette);
+}
+
+export function ownerPaletteFromAvatar(src: string): Promise<OwnerPalette>;
+export function ownerPaletteFromAvatar(
+  src: string,
+  fallbackPalette: OwnerPalette,
+): Promise<OwnerPalette>;
+export function ownerPaletteFromAvatar(
+  src: string,
+  fallbackPalette: OwnerPalette = { kind: "color", hue: hashString(src) % 360 },
+): Promise<OwnerPalette> {
+  if (typeof document === "undefined") return Promise.resolve(fallbackPalette);
+
+  const session = sessionPaletteCache.get(src);
+  if (session !== undefined) return Promise.resolve(session);
+
+  const pending = pendingLoads.get(src);
+  if (pending) return pending;
+
+  const promise = paletteFromSrc(src, fallbackPalette).then((palette) => {
+    setSessionPalette(src, palette);
+    return palette;
+  });
+
+  pendingLoads.set(src, promise);
+  promise.finally(() => pendingLoads.delete(src));
+  return promise;
 }
 
 export function ownerHueFromAvatar(src: string): Promise<number>;
@@ -170,27 +224,12 @@ export function ownerHueFromAvatar(
   src: string,
   fallbackHue = hashString(src) % 360,
 ): Promise<number> {
-  if (typeof document === "undefined") {
-    return Promise.resolve(fallbackHue);
-  }
-
-  const session = sessionHueCache.get(src);
-  if (session !== undefined) return Promise.resolve(session);
-
-  const pending = pendingLoads.get(src);
-  if (pending) return pending;
-
-  const promise = hueFromSrc(src, fallbackHue).then((hue) => {
-    setSessionHue(src, hue);
-    return hue;
-  });
-
-  pendingLoads.set(src, promise);
-  promise.finally(() => pendingLoads.delete(src));
-  return promise;
+  return ownerPaletteFromAvatar(src, { kind: "color", hue: fallbackHue }).then((palette) =>
+    palette.kind === "color" ? palette.hue : fallbackHue,
+  );
 }
 
 export function clearOwnerHueCache(): void {
-  sessionHueCache.clear();
+  sessionPaletteCache.clear();
   pendingLoads.clear();
 }

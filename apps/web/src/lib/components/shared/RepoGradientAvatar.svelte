@@ -1,5 +1,10 @@
 <script lang="ts">
-import { fallbackOwnerHue, ownerHueFromAvatar, peekOwnerHue } from "$lib/utils/avatarPalette";
+import {
+  fallbackOwnerPalette,
+  ownerPaletteFromAvatar,
+  peekOwnerPalette,
+  type OwnerPalette,
+} from "$lib/utils/avatarPalette";
 import { repoGradientDataUrl } from "$lib/utils/repoGradient";
 
 interface Props {
@@ -20,26 +25,26 @@ let {
   label,
 }: Props = $props();
 
-let resolvedOwnerHue = $state<number | undefined>(undefined);
+let resolvedOwnerPalette = $state<OwnerPalette | undefined>(undefined);
 let hueRequestKey = "";
 
-const fallbackHue = $derived(fallbackOwnerHue(fullName));
-const ownerHue = $derived(resolvedOwnerHue ?? fallbackHue);
+const fallbackPalette = $derived(fallbackOwnerPalette(fullName));
+const ownerPalette = $derived(resolvedOwnerPalette ?? fallbackPalette);
 
 $effect(() => {
-  const cachedHue = ownerAvatarUrl ? peekOwnerHue(ownerAvatarUrl) : undefined;
-  resolvedOwnerHue = cachedHue;
+  const cachedPalette = ownerAvatarUrl ? peekOwnerPalette(ownerAvatarUrl) : undefined;
+  resolvedOwnerPalette = cachedPalette;
 
-  if (!ownerAvatarUrl || cachedHue !== undefined) return;
+  if (!ownerAvatarUrl || cachedPalette !== undefined) return;
 
-  const requestKey = `${ownerAvatarUrl}:${fallbackHue}`;
+  const requestKey = `${ownerAvatarUrl}:${fullName}`;
   hueRequestKey = requestKey;
-  void ownerHueFromAvatar(ownerAvatarUrl, fallbackHue).then((resolvedHue) => {
-    if (hueRequestKey === requestKey) resolvedOwnerHue = resolvedHue;
+  void ownerPaletteFromAvatar(ownerAvatarUrl, fallbackPalette).then((palette) => {
+    if (hueRequestKey === requestKey) resolvedOwnerPalette = palette;
   });
 });
 
-const grad = $derived(repoGradientDataUrl(fullName, ownerHue));
+const grad = $derived(repoGradientDataUrl(fullName, ownerPalette));
 const letter = $derived((fullName.split("/")[1] ?? fullName).slice(0, 1).toUpperCase());
 </script>
 

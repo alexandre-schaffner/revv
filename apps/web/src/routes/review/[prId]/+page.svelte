@@ -378,6 +378,7 @@ onDestroy(() => {
 			minmax(24px, 1fr);
 		padding-left: 0;
 		padding-right: 0;
+		transition: grid-template-columns var(--duration-smooth) var(--ease-out-expo);
 	}
 
 	/* `:global(*)` is required here because the Badge rendered by this section
@@ -391,30 +392,20 @@ onDestroy(() => {
 	}
 
 	@container (max-width: 1335px) {
-		/* Collapse the grid below the 1336-px geometric minimum of the
-		   viewport-anchored layout — same breakpoint as the walkthrough's
-		   own fallback (GuidedWalkthrough.svelte), so the title-section and
-		   the content below always collapse together.
-
-		   Pinned to col_3's leftmost position (col_1 floor 24 + col_2 48 =
-		   72px from container left) and width-capped at the col_3 max (820)
-		   plus right padding (32). At the breakpoint M=1335 this places the
-		   title text at exactly 72–892 from the container's left — the same
-		   span col_3 occupies at M=1336 in grid mode — so the right-pane
-		   animation crossing the threshold no longer teleports the title.
-		   Below 924px container width the box shrinks naturally with the
-		   container; content reads narrower but never jumps. */
+		/* Collapse the annotation-rail tracks below the 1336-px geometric
+		   minimum while keeping the same 6-track grid shape. Matching track
+		   counts lets the right-pane resize animate through this breakpoint
+		   instead of snapping from grid layout to block layout. Col_3 still
+		   starts at 72px (the base grid's 24 + 48), so the title text remains
+		   aligned with the walkthrough content at the threshold. */
 		.page-title-section--narrow {
-			display: block;
-			max-width: calc(72px + 820px + 32px);
-			padding-left: 72px;
-			padding-right: 32px;
-			margin-inline: 0;
-			box-sizing: border-box;
-		}
-
-		.page-title-section--narrow > :global(*) {
-			grid-column: auto;
+			grid-template-columns:
+				72px
+				0
+				minmax(0, 820px)
+				0
+				0
+				minmax(32px, 1fr);
 		}
 	}
 

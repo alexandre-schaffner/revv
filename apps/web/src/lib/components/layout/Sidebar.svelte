@@ -533,6 +533,7 @@ function handleKeydown(e: KeyboardEvent) {
 		min-height: 0;
 		overflow: hidden;
 		position: relative;
+		contain: layout paint;
 		opacity: 1;
 		visibility: visible;
 		transform: translateX(0);
@@ -562,6 +563,7 @@ function handleKeydown(e: KeyboardEvent) {
 		min-width: 0;
 		min-height: 0;
 		overflow: hidden;
+		contain: layout paint;
 		transition: transform var(--duration-smooth) var(--ease-out-expo);
 		will-change: transform;
 	}

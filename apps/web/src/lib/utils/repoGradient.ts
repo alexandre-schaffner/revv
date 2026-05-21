@@ -1,4 +1,4 @@
-import { hashString } from "./avatarPalette";
+import { hashString, type OwnerPalette } from "./avatarPalette";
 
 const BLEND_MODES = [
   "color-dodge",
@@ -23,8 +23,18 @@ interface DerivedColors {
  * Derive two harmonious background colors and two light text-tint colors
  * from an owner hue and a repo seed.
  */
-function deriveColors(ownerHue: number, repoSeed: number): DerivedColors {
+function deriveColors(ownerPalette: OwnerPalette, repoSeed: number): DerivedColors {
   const r = repoSeed;
+
+  if (ownerPalette.kind === "neutral") {
+    const shade = Math.round(34 + Math.min(Math.max(ownerPalette.lightness, 0), 1) * 22);
+    return {
+      background: [hsl(0, 0, Math.max(24, shade - 12)), hsl(0, 0, Math.min(74, shade + 16))],
+      text: [hsl(0, 0, 99), hsl(0, 0, 88)],
+    };
+  }
+
+  const ownerHue = ownerPalette.hue;
 
   // 10 different harmonic relationships
   const relationships = [
@@ -89,13 +99,18 @@ export interface RepoGradient {
  * The same inputs always produce the same gradient so avatars are
  * stable across renders and sessions.
  */
-export function repoGradientDataUrl(repoFullName: string, ownerHue: number): RepoGradient {
+export function repoGradientDataUrl(
+  repoFullName: string,
+  ownerPalette: OwnerPalette | number,
+): RepoGradient {
   const h = hashString(repoFullName);
+  const palette =
+    typeof ownerPalette === "number" ? { kind: "color" as const, hue: ownerPalette } : ownerPalette;
 
   const {
     background: [color1, color2],
     text: [text1, text2],
-  } = deriveColors(ownerHue, h);
+  } = deriveColors(palette, h);
 
   const angle = h % 360;
   const turbulenceSeed = 1 + (h % 999);

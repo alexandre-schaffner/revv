@@ -1,6 +1,7 @@
 <script lang="ts">
 import { page } from "$app/state";
 import SettingsModal from "$lib/components/settings/SettingsModal.svelte";
+import UserMenu from "$lib/components/sidebar/UserMenu.svelte";
 import { RAIL_WIDTH } from "$lib/constants";
 import { getSelectedPr } from "$lib/stores/prs.svelte";
 import {
@@ -9,6 +10,7 @@ import {
   getIsPullingCommit,
   getLoadedHeadSha,
   getPanelOpenRequested,
+  getReviewFiles,
   pullLatestCommit,
   setActiveTab,
 } from "$lib/stores/review.svelte";
@@ -19,6 +21,7 @@ import {
   getRightPanelWidth,
   getSidebarCollapsed,
   getSidebarPeekHovering,
+  getSidebarView,
   getSidebarWidth,
   RIGHT_PANEL_WIDTH_MAX,
   RIGHT_PANEL_WIDTH_MIN,
@@ -33,18 +36,19 @@ import {
   toggleSidebar,
 } from "$lib/stores/sidebar.svelte";
 import { getPrWalkthroughStatus } from "$lib/stores/walkthrough.svelte";
-import UserMenu from "$lib/components/sidebar/UserMenu.svelte";
-import RequestChangesActionBar from "./RequestChangesActionBar.svelte";
-import WalkthroughActionBar from "./WalkthroughActionBar.svelte";
 import BottomBar from "./BottomBar.svelte";
 import CommandPalette from "./CommandPalette.svelte";
 import FloatingTabs from "./FloatingTabs.svelte";
 import ProjectRail from "./ProjectRail.svelte";
+import RequestChangesActionBar from "./RequestChangesActionBar.svelte";
 import RightPanel from "./RightPanel.svelte";
 import Sidebar from "./Sidebar.svelte";
 import TopBar from "./TopBar.svelte";
+import WalkthroughActionBar from "./WalkthroughActionBar.svelte";
 
 let { children } = $props();
+
+const LARGE_FILE_TREE_ANIMATION_THRESHOLD = 120;
 
 const sidebarCollapsed = $derived(getSidebarCollapsed());
 // Effective collapsed state: false when the user is hovering a project
@@ -60,15 +64,22 @@ const paletteOpen = $derived(getPaletteOpen());
 const paletteMode = $derived(getPaletteMode());
 const sidebarWidth = $derived(getSidebarWidth());
 const rightPanelWidth = $derived(getRightPanelWidth());
+const sidebarView = $derived(getSidebarView());
+const reviewFiles = $derived(getReviewFiles());
 const pr = $derived(getSelectedPr());
 const walkthroughStatus = $derived(pr ? getPrWalkthroughStatus(pr.id) : "idle");
 const activeTab = $derived(getActiveTab());
 const isSettingsRoute = $derived(page.url.pathname.startsWith("/settings"));
 const isReviewRoute = $derived(page.url.pathname.startsWith("/review/"));
+const shouldSnapSidebarLayout = $derived(
+  sidebarView === "files" && reviewFiles.length >= LARGE_FILE_TREE_ANIMATION_THRESHOLD,
+);
 const showFloatingActions = $derived(
   !!pr && isReviewRoute && !isSettingsRoute && activeTab === "walkthrough",
 );
-const showRcActions = $derived(!!pr && isReviewRoute && !isSettingsRoute && activeTab === "request-changes");
+const showRcActions = $derived(
+  !!pr && isReviewRoute && !isSettingsRoute && activeTab === "request-changes",
+);
 
 // New-commit-available signal: the PR's current headSha differs from the
 // SHA the diff was loaded against. `getLoadedHeadSha` returns null until the
@@ -116,7 +127,7 @@ $effect(() => {
 // than overlaying on top of it. Animation comes from the
 // grid-template-columns transition on .app-shell.
 const gridStyle = $derived(
-  `grid-template-columns: ${RAIL_WIDTH}px ${sidebarEffectiveCollapsed ? '0' : `${sidebarWidth}px`} 1fr ${rightPanelOpen ? `${rightPanelWidth}px` : '0'}`,
+  `grid-template-columns: ${RAIL_WIDTH}px ${sidebarEffectiveCollapsed ? "0" : `${sidebarWidth}px`} 1fr ${rightPanelOpen ? `${rightPanelWidth}px` : "0"}`,
 );
 
 function onHandlePointerDown(event: PointerEvent): void {
@@ -180,6 +191,7 @@ function onRightHandleDblClick(): void {
 	class="app-shell"
 	class:sidebar-collapsed={sidebarEffectiveCollapsed}
 	class:is-resizing={isDragging || isResizingRight}
+	class:snap-sidebar-layout={shouldSnapSidebarLayout}
 	style={gridStyle}
 >
 	<aside class="rail-area">
@@ -296,6 +308,14 @@ function onRightHandleDblClick(): void {
 		transition: none;
 	}
 
+	/* Large file trees are already virtualized, but animating the grid column
+	   still forces layout through the tree's shadow DOM every frame. Snap the
+	   outer layout in that case; the inner sidebar drawer keeps its transform
+	   transition for normal view switches. */
+	.app-shell.snap-sidebar-layout {
+		transition: none;
+	}
+
 	/* ── Rail (always-visible project switcher) ── */
 	.rail-area {
 		grid-area: rail;
@@ -312,6 +332,7 @@ function onRightHandleDblClick(): void {
 		grid-area: sidebar;
 		position: relative;
 		overflow: hidden;
+		contain: layout paint;
 	}
 
 	/* ── Resize handle ── */

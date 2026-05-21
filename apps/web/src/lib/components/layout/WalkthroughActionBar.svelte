@@ -11,6 +11,7 @@ import {
   getPendingAction as getWalkthroughPendingAction,
   regenerate as regenerateWalkthrough,
   resume as resumeWalkthrough,
+  streamWalkthrough,
 } from "$lib/stores/walkthrough-stream.svelte";
 import { getWalkthroughUiState } from "$lib/stores/walkthrough-ui-state.svelte";
 import {
@@ -35,6 +36,9 @@ const chatStreaming = $derived(isChatStreaming(prId));
 /** Map walkthrough-specific state to the normalised GenActionState. */
 const genActionState = $derived.by((): GenActionState | null => {
   switch (walkthroughUiState.kind) {
+    case "absent":
+    case "idle":
+      return { kind: "empty", label: "Generate walkthrough" };
     case "streaming":
       return { kind: "streaming" };
     case "resumable":
@@ -76,6 +80,7 @@ const combinedDisabledTitle = $derived(
         disabledTitle={combinedDisabledTitle}
         onStop={() => abortWalkthrough(prId)}
         onResume={() => resumeWalkthrough(prId)}
+        onGenerate={() => streamWalkthrough(prId)}
         onRegenerate={() => regenerateWalkthrough(prId)}
       />
 

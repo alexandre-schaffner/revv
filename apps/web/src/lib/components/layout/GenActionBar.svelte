@@ -2,12 +2,14 @@
 import RotateCcw from "phosphor-svelte/lib/ArrowCounterClockwise";
 import RefreshCw from "phosphor-svelte/lib/ArrowsClockwise";
 import Play from "phosphor-svelte/lib/Play";
+import Sparkle from "phosphor-svelte/lib/Sparkle";
 import StopCircle from "phosphor-svelte/lib/StopCircle";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 
 /** Normalised lifecycle state for any generation pipeline
  *  (walkthrough, recap, etc.). */
 export type GenActionState =
+  | { kind: "empty"; label?: string }
   | { kind: "streaming" }
   | { kind: "resumable" }
   | { kind: "error" }
@@ -23,10 +25,12 @@ interface Props {
   disabledTitle?: string | undefined;
   onStop?: () => void;
   onResume?: () => void;
+  onGenerate?: () => void;
   onRegenerate: () => void;
 }
 
-let { uiState, pendingAction, disabledTitle, onStop, onResume, onRegenerate }: Props = $props();
+let { uiState, pendingAction, disabledTitle, onStop, onResume, onGenerate, onRegenerate }: Props =
+  $props();
 
 const destructiveDisabled = $derived(pendingAction !== null);
 const destructiveTitle = $derived(
@@ -41,7 +45,16 @@ const destructiveTitle = $derived(
 );
 </script>
 
-{#if uiState.kind === "streaming"}
+{#if uiState.kind === "empty"}
+  <GlassPill
+    disabled={destructiveDisabled}
+    title={destructiveTitle ?? "Generate walkthrough"}
+    onclick={onGenerate ?? onRegenerate}
+  >
+    <Sparkle size={16} weight="fill" />
+    {uiState.label ?? "Generate walkthrough"}
+  </GlassPill>
+{:else if uiState.kind === "streaming"}
   <GlassPill
     variant="danger"
     onclick={onStop}
