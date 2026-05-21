@@ -10,7 +10,7 @@ default sort.
 |---|---|---|
 | Server (Effect) | 0 | — |
 | Web stores | 0 | — |
-| UI / motion | 0 | — |
+| UI / motion | 14 | all fixed |
 | **Total** | **0** | |
 
 All outstanding convention violations are closed.
@@ -42,3 +42,17 @@ All outstanding convention violations are closed.
 - M-012 — StepSignIn: `540ms` → `var(--duration-ceremonial-medium)`
 - M-013 — StepHost: 4 literal values migrated; overshoot curve replaced with `--ease-out-expo`
 - M-014 — OnboardingFlow: `760ms` → `var(--duration-ceremonial-slow)`
+- M-015 — dialog-overlay: `duration-100` → `duration-instant`
+- M-016 — switch: `duration-200` → `duration-quick`; stripped `var()` fallback literals
+- M-017 — RightPanel: `220ms` literals (×2) → `var(--duration-smooth)`; `cubic-bezier(...)` → `var(--ease-standard)`
+- M-018 — ChatTimeline: `220ms cubic-bezier(...)` → `var(--duration-smooth) var(--ease-standard)`
+- M-019 — ContextTrigger: `240ms` → `var(--duration-smooth)`; stripped `var()` fallback
+- M-020 — RatingTestRow: `180ms` (×2) → `var(--duration-quick)`; `220ms ease-out` → `var(--duration-smooth) var(--ease-out-expo)`; `1.2s ease-in-out` → `var(--duration-pulse) var(--ease-soft)`
+- M-021 — RatingGridCell: `180ms` → `var(--duration-quick)`; `1.4s ease-in-out` → `var(--duration-pulse) var(--ease-soft)`
+- M-022 — SpecRow: `180ms` → `var(--duration-quick)`; `1.2s ease-in-out` → `var(--duration-pulse) var(--ease-soft)`
+- M-023 — IssueTestRow: `0.5s` → `var(--duration-ceremonial-medium)`
+- M-024 — CommentTestRow: `0.5s` → `var(--duration-ceremonial-medium)`
+- M-025 — FloatingTabs: `1.4s ease-in-out` → `var(--duration-pulse) var(--ease-soft)`
+- M-026 — app.css: `ease-out` → `var(--ease-out-expo)`; `1.5s ease-in-out` → `var(--duration-pulse) var(--ease-soft)`; `300ms cubic-bezier(...)` → `var(--duration-ceremonial-quick) var(--ease-soft)`
+- M-027 — dotmatrix-loader: `cubic-bezier(0.42, 0, 0.58, 1)` → `var(--ease-soft)`; `ease-in-out` (×3) → `var(--ease-soft)`; `180ms cubic-bezier(...)` → `var(--duration-quick) var(--ease-soft)`
+- M-028 — Added `--duration-pulse: 1400ms` to app.css `@theme` block

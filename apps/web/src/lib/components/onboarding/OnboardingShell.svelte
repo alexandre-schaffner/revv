@@ -85,11 +85,11 @@ function cycleTheme() {
 			</span>
 			<button class="theme-btn" onclick={cycleTheme} aria-label={labels[theme]} title={labels[theme]}>
 				{#if theme === 'light'}
-					<Sun size={13} />
+					<Sun size={13} weight="fill" />
 				{:else if theme === 'dark'}
-					<Moon size={13} />
+					<Moon size={13} weight="fill" />
 				{:else}
-					<Monitor size={13} />
+					<Monitor size={13} weight="fill" />
 				{/if}
 			</button>
 		</div>

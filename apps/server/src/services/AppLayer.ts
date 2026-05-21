@@ -21,6 +21,7 @@ import { ProjectRecapJobsLive } from "./ProjectRecapJobs";
 import { PullRequestServiceLive } from "./PullRequest";
 import { RecapSchedulerLive } from "./RecapScheduler";
 import { RemoteWalkthroughCacheLive } from "./RemoteWalkthroughCache";
+import { RemoteUserServiceLive } from "./RemoteUser";
 import { RepoCloneServiceLive } from "./RepoClone";
 import { RepositoryServiceLive } from "./Repository";
 import { ReviewServiceLive } from "./Review";
@@ -56,6 +57,8 @@ const OpencodeSupervisorWithDeps = OpencodeSupervisorLive.pipe(
 // at the same boundary other DB-dependent services do.
 const ChatSessionServiceWithDeps = ChatSessionServiceLive.pipe(Layer.provide(DbServiceLive));
 
+const RemoteUserServiceWithDeps = RemoteUserServiceLive.pipe(Layer.provide(DbServiceLive));
+
 // Base layer: all services that have no deps or only depend on DbService
 const BaseLayers = Layer.mergeAll(
   DbServiceLive,
@@ -66,6 +69,7 @@ const BaseLayers = Layer.mergeAll(
   RepositoryServiceLive,
   PullRequestServiceLive,
   ReviewServiceLive,
+  RemoteUserServiceWithDeps,
   SettingsServiceWithDeps,
   WalkthroughServiceLive,
   ProjectRecapServiceLive,

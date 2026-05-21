@@ -24,7 +24,7 @@ function formatCountdown(seconds: number): string {
 			onclick={() => errors.clearError()}
 			aria-label="Dismiss error"
 		>
-			<X size={14} />
+			<X size={14} weight="fill" />
 		</button>
 	</div>
 {/if}

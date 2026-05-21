@@ -8,7 +8,6 @@ import {
   GitHubNotFoundError,
   GitHubRateLimitError,
 } from "../domain/errors";
-import { logError } from "../logger";
 import type { DbService } from "./Db";
 import { buildCacheKey, GitHubEtagCache } from "./GitHubEtagCache";
 import { SettingsService } from "./Settings";
@@ -340,6 +339,7 @@ function mapPr(raw: Record<string, unknown>, repositoryId: string): PullRequest 
     title: raw.title as string,
     body: (raw.body as string | null) ?? null,
     authorLogin: user.login as string,
+    authorAvatarContent: null,
     authorAvatarUrl: (user.avatar_url as string | null) ?? null,
     requestedReviewers,
     status: raw.state === "closed" ? (raw.merged_at ? "merged" : "closed") : "open",
@@ -742,18 +742,12 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
     Effect.gen(function* () {
       const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
-      const data = yield* conditionalFetch(
-        `/repos/${owner}/${repo}/pulls?state=open&per_page=100`,
+      const data = yield* githubFetchPaginated(
+        `/repos/${owner}/${repo}/pulls?state=open&sort=updated&direction=desc&per_page=100`,
         token,
+        10,
         apiBase,
       );
-      if (data == null) {
-        logError(
-          "GitHub",
-          `listPrs: conditionalFetch returned ${String(data)} for ${repoFullName} — treating as empty list`,
-        );
-        return [] as ReturnType<typeof mapPr>[];
-      }
       return (data as Record<string, unknown>[]).map((pr) => mapPr(pr, repositoryId));
     }).pipe(Effect.retry(retrySchedule)),
 

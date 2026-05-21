@@ -1,5 +1,6 @@
 <script lang="ts">
 import Plus from "phosphor-svelte/lib/Plus";
+import User from "phosphor-svelte/lib/User";
 import type { Repository } from "@revv/shared";
 import RepoAvatarButton from "$lib/components/sidebar/RepoAvatarButton.svelte";
 import * as Collapsible from "$lib/components/ui/collapsible";
@@ -86,11 +87,11 @@ function handleAddRepo(): void {
 													class="folder-pill-avatar"
 													referrerpolicy="no-referrer"
 												/>
-											{:else}
-												<span class="folder-pill-avatar folder-pill-avatar--fallback" aria-hidden="true">
-													{group.owner.slice(0, 1).toUpperCase()}
-												</span>
-											{/if}
+										{:else}
+											<span class="folder-pill-avatar folder-pill-avatar--fallback" aria-hidden="true">
+												<User size={14} weight="regular" />
+											</span>
+										{/if}
 											{#if isMulti}
 												<span class="folder-pill-count" aria-hidden="true">
 													{group.repos.length}
@@ -107,7 +108,7 @@ function handleAddRepo(): void {
 											/>
 										{:else}
 											<span class="folder-pill-fallback" aria-hidden="true">
-												{group.owner.slice(0, 1).toUpperCase()}
+												<User size={14} weight="regular" />
 											</span>
 										{/if}
 									{/if}

@@ -61,7 +61,7 @@ function select(value: AiAgent) {
 				<opt.icon size={12} class="text-text-muted" />
 				<span class="flex-1 text-left">{opt.label}</span>
 				{#if currentAgent === opt.value}
-					<Check size={12} class="text-accent" />
+					<Check size={12} weight="regular" class="text-accent" />
 				{/if}
 			</button>
 		{/each}

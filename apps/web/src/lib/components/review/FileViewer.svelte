@@ -158,11 +158,11 @@ async function handleReplySubmit(threadId: string, body: string) {
   replyingThreadId = null;
   const u = getUser();
   const authorName = u?.githubLogin ?? u?.name ?? "You";
-  const authorAvatarUrl = u?.image ?? null;
+  const authorLogin = u?.githubLogin ?? null;
   await addThreadMessage(threadId, {
     authorRole: "reviewer",
     authorName,
-    authorAvatarUrl,
+    authorLogin,
     body,
     messageType: "reply",
   });
@@ -174,7 +174,7 @@ async function handleCommentSubmit(filePath: string, lineNo: number, body: strin
 
   const u = getUser();
   const authorName = u?.githubLogin ?? u?.name ?? "You";
-  const authorAvatarUrl = u?.image ?? null;
+  const authorLogin = u?.githubLogin ?? null;
 
   const result = await addThread({
     filePath,
@@ -184,7 +184,7 @@ async function handleCommentSubmit(filePath: string, lineNo: number, body: strin
     message: {
       authorRole: "reviewer",
       authorName,
-      authorAvatarUrl,
+      authorLogin,
       body,
       messageType: "comment",
     },

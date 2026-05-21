@@ -101,7 +101,7 @@ async function runMerge(method: import("@revv/shared").MergeMethod): Promise<voi
           ? "Agent is generating changes…"
           : "Open the chat panel and ask the agent to address the selected issues as commits"}
     >
-      <Sparkles size={14} />
+      <Sparkles size={16} weight="fill" />
       <Shimmer active={rcSubmitting === null && rcSelectedCount > 0}>
         {rcGenerating ? "Generating changes…" : "Generate changes"}
       </Shimmer>
@@ -119,7 +119,7 @@ async function runMerge(method: import("@revv/shared").MergeMethod): Promise<voi
           onclick={() => runOwnerAction("ready-for-review")}
           title="Mark this draft as ready for review"
         >
-          <Send size={14} />
+          <Send size={16} weight="fill" />
           {ownerSubmitting === "ready-for-review" ? "Marking ready…" : "Ready for review"}
         </GlassPill>
       {:else}
@@ -128,7 +128,7 @@ async function runMerge(method: import("@revv/shared").MergeMethod): Promise<voi
           onclick={() => runOwnerAction("convert-to-draft")}
           title="Move this PR back to draft state"
         >
-          <FileEdit size={14} />
+          <FileEdit size={16} weight="fill" />
           {ownerSubmitting === "convert-to-draft" ? "Converting…" : "Convert to draft"}
         </GlassPill>
       {/if}
@@ -145,7 +145,7 @@ async function runMerge(method: import("@revv/shared").MergeMethod): Promise<voi
             onclick={() => runMerge("merge")}
             title="Merge this pull request"
           >
-            <GitMerge size={14} />
+            <GitMerge size={16} weight="fill" />
             {mergeSubmitting === "merge" ? "Merging…" : "Merge"}
           </button>
           <Popover bind:open={mergeMenuOpen}>
@@ -157,7 +157,7 @@ async function runMerge(method: import("@revv/shared").MergeMethod): Promise<voi
                 aria-label="Merge options"
                 title="Choose merge strategy"
               >
-                <ChevronDown size={14} />
+                <ChevronDown size={16} />
               </button>
             </PopoverTrigger>
             <PopoverContent class="w-56 p-1" align="end" side="top">
@@ -166,7 +166,7 @@ async function runMerge(method: import("@revv/shared").MergeMethod): Promise<voi
                 class="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-bg-tertiary"
                 onclick={() => runMerge("merge")}
               >
-                <GitMerge size={12} />
+                <GitMerge size={12} weight="fill" />
                 Create a merge commit
               </button>
               <button
@@ -174,7 +174,7 @@ async function runMerge(method: import("@revv/shared").MergeMethod): Promise<voi
                 class="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-bg-tertiary"
                 onclick={() => runMerge("squash")}
               >
-                <GitMerge size={12} />
+                <GitMerge size={12} weight="fill" />
                 Squash and merge
               </button>
               <button
@@ -182,7 +182,7 @@ async function runMerge(method: import("@revv/shared").MergeMethod): Promise<voi
                 class="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-bg-tertiary"
                 onclick={() => runMerge("rebase")}
               >
-                <GitMerge size={12} />
+                <GitMerge size={12} weight="fill" />
                 Rebase and merge
               </button>
             </PopoverContent>
@@ -196,7 +196,7 @@ async function runMerge(method: import("@revv/shared").MergeMethod): Promise<voi
         onclick={() => runOwnerAction("close")}
         title="Close this pull request without merging"
       >
-        <XCircle size={14} />
+        <XCircle size={16} weight="fill" />
         {ownerSubmitting === "close" ? "Closing…" : "Close PR"}
       </GlassPill>
     {:else}
@@ -208,7 +208,7 @@ async function runMerge(method: import("@revv/shared").MergeMethod): Promise<voi
           ? "Add comments or select walkthrough issues first"
           : "Request changes on this pull request"}
       >
-        <ArrowUp size={14} />
+        <ArrowUp size={16} weight="regular" />
         {rcSubmitting === "request_changes" ? "Submitting…" : "Submit Review"}
       </GlassPill>
       <GlassPill
@@ -219,7 +219,7 @@ async function runMerge(method: import("@revv/shared").MergeMethod): Promise<voi
           ? `Approve this pull request — ${rcApproveBlockerSummary} still open`
           : "Approve this pull request on GitHub"}
       >
-        <Check size={14} />
+        <Check size={16} weight="regular" />
         {rcSubmitting === "approve" ? "Approving…" : "Approve"}
       </GlassPill>
     {/if}

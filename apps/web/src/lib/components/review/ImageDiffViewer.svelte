@@ -171,7 +171,7 @@ function onImgLoad(event: Event, side: "base" | "head"): void {
 			</div>
 
 			<div class="arrow">
-				<ArrowLeftRight size={16} />
+				<ArrowLeftRight size={16} weight="fill" />
 			</div>
 
 			<div class="pane">

@@ -13,7 +13,10 @@ export type PromptInputSubmitProps = ButtonProps;
 	import { cn } from "$lib/utils.js";
 	import { getContext } from "svelte";
 	import { Button } from "$lib/components/ui/button/index.js";
-	import { ArrowUp, Square, Loader2, AlertCircle } from "@lucide/svelte";
+	import ArrowUp from "phosphor-svelte/lib/ArrowUp";
+	import Stop from "phosphor-svelte/lib/Stop";
+	import Spinner from "phosphor-svelte/lib/Spinner";
+	import WarningCircle from "phosphor-svelte/lib/WarningCircle";
 	import { PROMPT_INPUT_CTX_KEY, type PromptInputContext } from "./context.js";
 
 	let {
@@ -44,11 +47,11 @@ export type PromptInputSubmitProps = ButtonProps;
 	{...restProps}
 >
 	{#if status === "error"}
-		<AlertCircle class="size-3.5" />
+		<WarningCircle class="size-3.5" />
 	{:else if status === "submitted"}
-		<Loader2 class="size-3.5 motion-essential-spin animate-spin" />
+		<Spinner class="size-3.5 motion-essential-spin animate-spin" />
 	{:else if status === "streaming"}
-		<Square class="size-3" />
+		<Stop class="size-3" />
 	{:else}
 		<ArrowUp class="size-3.5" />
 	{/if}

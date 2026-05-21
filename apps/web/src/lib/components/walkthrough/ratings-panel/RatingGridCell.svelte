@@ -92,23 +92,23 @@ const isDisabled = $derived(state !== "resolved");
                 <span class="cell-status-icon" aria-hidden="true">
                     {#if state === "queued"}
                         <span class="icon-queued">
-                            <Loader2 size={13} />
+                            <Loader2 size={13} weight="regular" />
                         </span>
                     {:else if state === "running"}
                         <span class="icon-running">
-                            <Loader2 size={13} class="animate-spin" />
+                            <Loader2 size={13} weight="regular" class="animate-spin" />
                         </span>
                     {:else if rating?.verdict === "pass"}
                         <span class="icon-resolved">
-                            <Check size={13} />
+                            <Check size={13} weight="regular" />
                         </span>
                     {:else if rating?.verdict === "concern"}
                         <span class="icon-resolved">
-                            <AlertCircle size={13} />
+                            <AlertCircle size={13} weight="fill" />
                         </span>
                     {:else if rating?.verdict === "blocker"}
                         <span class="icon-resolved">
-                            <X size={13} />
+                            <X size={13} weight="fill" />
                         </span>
                     {/if}
                 </span>
@@ -294,7 +294,7 @@ const isDisabled = $derived(state !== "resolved");
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        animation: icon-in 180ms var(--ease-out-expo) 1;
+        animation: icon-in var(--duration-quick) var(--ease-out-expo) 1;
     }
 
     .icon-resolved :global(svg) {
@@ -336,7 +336,7 @@ const isDisabled = $derived(state !== "resolved");
         opacity: 0.85;
         /* Subtle background pulse so the eye can pick the running cell out
            of the grid without having to interpret the spinner. */
-        animation: cell-pulse 1.4s ease-in-out infinite;
+        animation: cell-pulse var(--duration-pulse) var(--ease-soft) infinite;
     }
 
     .cell[data-state="resolved"] :global(.cell-trigger) {

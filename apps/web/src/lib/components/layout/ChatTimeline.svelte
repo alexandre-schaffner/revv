@@ -35,9 +35,10 @@ import {
   PlanTitle,
 } from "$lib/components/ai/plan";
 import { Question } from "$lib/components/ai/question";
+import { Shimmer } from "$lib/components/ai/shimmer";
 import { Suggestion, SuggestionItem } from "$lib/components/ai/suggestion";
 import type { ToolState } from "$lib/components/ai/tool";
-import { Tool, ToolContent, ToolHeader, ToolOutput } from "$lib/components/ai/tool";
+import { Tool, ToolActivityGroup, ToolActivityReveal, ToolContent, ToolHeader, ToolOutput } from "$lib/components/ai/tool";
 import { Dotmatrix, squareVariantForId } from "$lib/components/ui/dotmatrix/index.js";
 import StreamingVerb from "$lib/components/layout/StreamingVerb.svelte";
 import {
@@ -60,6 +61,13 @@ import {
   isSuggestionsLoading,
 } from "$lib/stores/suggestions.svelte";
 import { renderMarkdown } from "$lib/utils/markdown";
+import {
+  activityGroupSummary,
+  groupActivityRuns,
+  isActivityGroup,
+  isExplorationActivity,
+  type ActivityGroupRange,
+} from "$lib/utils/activity-groups";
 
 const TOOL_CALL_ROW_H = 14; // px — match walkthrough's compact tool-call rows
 
@@ -95,22 +103,38 @@ const toolApprovals = $derived(prId ? getToolApprovals(prId) : []);
 const checkpointByAfterIndex = $derived(new Map(chatCheckpoints.map((cp) => [cp.afterIndex, cp])));
 /** Pending (un-responded) tool approvals, rendered after the last message. */
 const pendingApprovals = $derived(toolApprovals.filter((a) => !a.responded));
+const topLevelActivityGroupRanges = $derived.by(() =>
+  visibleActivityGroupRanges(items, streamingTurnIds),
+);
+const topLevelActivityGroupByStart = $derived(
+  new Map(topLevelActivityGroupRanges.map((range) => [range.start, range])),
+);
+const topLevelActivityGroupMemberIndices = $derived.by(() => {
+  const indices = new Set<number>();
+  for (const range of topLevelActivityGroupRanges) {
+    for (let i = range.start + 1; i < range.end; i++) indices.add(i);
+  }
+  return indices;
+});
 
 const streamingTurnId = $derived(
   items.findLast(
     (i): i is Extract<typeof i, { kind: "message" }> =>
       i.kind === "message" && i.role === "assistant" && i.isStreaming,
-  )?.turnId,
+    )?.turnId,
 );
-const recentToolCalls = $derived(
+const streamingActivities = $derived(
   streamingTurnId
-    ? items
-        .filter(
-          (i): i is Extract<typeof i, { kind: "activity" }> =>
-            i.kind === "activity" && i.turnId === streamingTurnId,
-        )
-        .slice(-2)
+    ? items.filter(
+        (i): i is Extract<typeof i, { kind: "activity" }> =>
+          i.kind === "activity" && i.turnId === streamingTurnId && !i.subagentInvocationId,
+      )
     : [],
+);
+const streamingActivityEntries = $derived(groupActivityRuns(streamingActivities));
+const latestStreamingActivityEntry = $derived(streamingActivityEntries.at(-1));
+const recentToolCalls = $derived(
+  streamingActivities.slice(-2),
 );
 
 // Empty-state suggestions: prefer the model-generated, PR-aware list
@@ -153,6 +177,50 @@ function nestedActivitiesFor(invocationId: string) {
   );
 }
 
+function groupedNestedActivitiesFor(invocationId: string) {
+  return groupActivityRuns(nestedActivitiesFor(invocationId));
+}
+
+type ActivityItem = Extract<(typeof items)[number], { kind: "activity" }>;
+
+function visibleActivityGroupRanges(
+  sourceItems: typeof items,
+  activeTurnIds: Set<string>,
+): ActivityGroupRange<ActivityItem>[] {
+  const ranges: ActivityGroupRange<ActivityItem>[] = [];
+  let start = -1;
+  let current: ActivityItem[] = [];
+
+  const flush = (end: number): void => {
+    if (start < 0 || current.length === 0) return;
+    ranges.push({
+      start,
+      end,
+      group: { category: "exploring", items: current },
+    });
+    start = -1;
+    current = [];
+  };
+
+  sourceItems.forEach((item, index) => {
+    if (
+      item.kind === "activity" &&
+      !item.subagentInvocationId &&
+      !(item.turnId && activeTurnIds.has(item.turnId)) &&
+      isExplorationActivity(item)
+    ) {
+      if (start < 0) start = index;
+      current.push(item);
+      return;
+    }
+
+    flush(index);
+  });
+
+  flush(sourceItems.length);
+  return ranges;
+}
+
 function handleSuggestion(text: string): void {
   if (!prId || isStreaming) return;
   sendChatMessage({ prId, message: text });
@@ -179,7 +247,7 @@ function handleRejectPlan(planId: string): void {
       description="The agent runs inside the PR's worktree and can read the code, propose fixes, and commit them on a working branch."
     >
       {#snippet icon()}
-        <Robot size={32} />
+        <Robot size={32} weight="fill" />
       {/snippet}
       <Suggestion class="mt-3 justify-center">
         {#each suggestedPrompts as prompt (prompt)}
@@ -195,7 +263,14 @@ function handleRejectPlan(planId: string): void {
   {:else}
     <ConversationContent class="gap-2 px-2.5 py-3">
       {#each items as item, itemIdx (item.id)}
-        {#if item.kind === 'activity'}
+        {#if topLevelActivityGroupMemberIndices.has(itemIdx)}
+          <!-- Rendered by the grouped activity row at this run's start. -->
+        {:else if topLevelActivityGroupByStart.has(itemIdx)}
+          {@const range = topLevelActivityGroupByStart.get(itemIdx)}
+          {#if range}
+            <ToolActivityGroup items={range.group.items} />
+          {/if}
+        {:else if item.kind === 'activity'}
           <!-- Skip nested sub-agent tool calls — they render
                inside their SubagentInvocation card. Also fold
                active-turn tool calls into the dot-matrix
@@ -203,7 +278,9 @@ function handleRejectPlan(planId: string): void {
           {#if !item.subagentInvocationId && !(item.turnId && streamingTurnIds.has(item.turnId))}
             <div class="tool-line">
               <span class="tool-bullet">&rsaquo;</span>
-              <span class="tool-text">{item.summary}</span>
+              {#key item.summary}
+                <ToolActivityReveal class="tool-text">{item.summary}</ToolActivityReveal>
+              {/key}
             </div>
           {/if}
         {:else if item.kind === 'task-list'}
@@ -264,11 +341,22 @@ function handleRejectPlan(planId: string): void {
             <ToolContent>
               {#if nestedActivitiesFor(item.id).length > 0}
                 <div class="space-y-0.5">
-                  {#each nestedActivitiesFor(item.id) as activity (activity.id)}
-                    <div class="flex items-baseline gap-1.5 text-xs text-muted-foreground">
-                      <span class="font-semibold text-muted-foreground/60">&rsaquo;</span>
-                      <span class="flex-1 min-w-0 break-words">{activity.summary}</span>
-                    </div>
+                  {#each groupedNestedActivitiesFor(item.id) as entry, entryIdx (isActivityGroup(entry) ? `group-${entry.items[0]?.id ?? entryIdx}` : entry.id)}
+                    {#if isActivityGroup(entry)}
+                      <ToolActivityGroup
+                        items={entry.items}
+                        active={item.status === 'running'}
+                        defaultOpen={false}
+                        class="mb-1"
+                      />
+                    {:else}
+                      <div class="flex items-baseline gap-1.5 text-xs text-muted-foreground">
+                        <span class="font-semibold text-muted-foreground/60">&rsaquo;</span>
+                        {#key entry.summary}
+                          <ToolActivityReveal class="flex-1 min-w-0 break-words">{entry.summary}</ToolActivityReveal>
+                        {/key}
+                      </div>
+                    {/if}
                   {/each}
                 </div>
               {/if}
@@ -310,7 +398,7 @@ function handleRejectPlan(planId: string): void {
               {/if}
               {#if item.error}
                 <div class="mt-2 flex items-start gap-1.5 rounded bg-muted/60 border-l-2 border-muted-foreground px-2 py-1.5 text-xs text-muted-foreground" role="alert">
-                  <Warning size={12} class="mt-0.5 shrink-0" />
+                  <Warning size={12} weight="fill" class="mt-0.5 shrink-0" />
                   <span class="min-w-0 break-words">{item.error}</span>
                 </div>
               {/if}
@@ -367,7 +455,16 @@ function handleRejectPlan(planId: string): void {
           size="small"
         />
       {/if}
-      {#if recentToolCalls.length > 0}
+      {#if latestStreamingActivityEntry && isActivityGroup(latestStreamingActivityEntry)}
+        <div class="chat-tool-calls">
+          <div class="chat-tool-call" style="top: 0px">
+            <span class="chat-tool-call-tool">
+              <Shimmer active={true}>Exploring</Shimmer>
+            </span>
+            <span class="chat-tool-call-desc">{activityGroupSummary(latestStreamingActivityEntry.items)}</span>
+          </div>
+        </div>
+      {:else if recentToolCalls.length > 0}
         <div class="chat-tool-calls">
           {#each recentToolCalls as step, i (step.id)}
             <div
@@ -390,7 +487,7 @@ function handleRejectPlan(planId: string): void {
   {#if error && !isStreaming}
     <div class="error-state">
       {#if error.code === 'NOT_CONFIGURED'}
-        <Gear size={24} class="error-icon" />
+        <Gear size={24} weight="fill" class="error-icon" />
         <p class="error-primary">AI not configured</p>
         <p class="error-hint">
           Install <a href="https://opencode.ai" class="error-link">opencode</a>
@@ -398,11 +495,11 @@ function handleRejectPlan(planId: string): void {
           and authenticate, then select your CLI agent in <a href="/settings" class="error-link">Settings</a>.
         </p>
       {:else if error.code === 'RATE_LIMITED'}
-        <Warning size={24} class="error-icon" />
+        <Warning size={24} weight="fill" class="error-icon" />
         <p class="error-primary">Rate limited</p>
         <p class="error-hint">{error.message}</p>
       {:else}
-        <Warning size={24} class="error-icon" />
+        <Warning size={24} weight="fill" class="error-icon" />
         <p class="error-primary">Chat failed</p>
         <p class="error-hint">{error.message}</p>
       {/if}
@@ -436,10 +533,11 @@ function handleRejectPlan(planId: string): void {
     color: var(--color-accent);
   }
 
-  .tool-text {
+  :global(.tool-text) {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    color: color-mix(in srgb, var(--color-text-muted) 72%, transparent);
   }
 
   /* Streaming tool-call stack: shown in the panel header during a
@@ -463,7 +561,7 @@ function handleRejectPlan(planId: string): void {
     min-width: 0;
     font-size: 10px;
     line-height: 14px;
-    transition: top 220ms cubic-bezier(0.22, 0.61, 0.36, 1);
+    transition: top var(--duration-smooth) var(--ease-standard);
   }
 
   .chat-tool-call-tool {

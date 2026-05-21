@@ -186,7 +186,7 @@ function handleJumpToDiff(filePath: string, line: number): void {
                         class="block-link-chip"
                         onclick={() => onJump(blockId)}
                     >
-                        <ArrowUpRight size={11} aria-hidden="true" />
+                        <ArrowUpRight size={11} weight="fill" aria-hidden="true" />
                         step {stepN}
                     </button>
                 </li>

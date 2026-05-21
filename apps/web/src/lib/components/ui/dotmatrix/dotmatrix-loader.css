@@ -80,7 +80,7 @@
    simplifications that don't map to any specific upstream variant. */
 
 .dotmatrix.dotmatrix--ripple .dotmatrix-dot {
-  animation: dotmatrix-legacy-pulse var(--dmx-cycle) cubic-bezier(0.42, 0, 0.58, 1) infinite;
+  animation: dotmatrix-legacy-pulse var(--dmx-cycle) var(--ease-soft) infinite;
   animation-delay: calc(var(--dmx-manhattan, 0) * 0.18 * var(--dmx-cycle));
 }
 
@@ -90,7 +90,7 @@
 }
 
 .dotmatrix.dotmatrix--collapse .dotmatrix-dot {
-  animation: dotmatrix-legacy-pulse var(--dmx-cycle) ease-in-out infinite;
+  animation: dotmatrix-legacy-pulse var(--dmx-cycle) var(--ease-soft) infinite;
   animation-delay: calc(var(--dmx-collapse-order, 0) * 0.14 * var(--dmx-cycle));
 }
 
@@ -112,7 +112,7 @@
 }
 .dotmatrix.dotmatrix--prism-bloom .dotmatrix-dot,
 .dotmatrix.dotmatrix--square-14 .dotmatrix-dot {
-  transition: opacity 180ms cubic-bezier(0.4, 0, 0.2, 1);
+  transition: opacity var(--duration-quick) var(--ease-soft);
 }
 .dotmatrix.dotmatrix--square-14 {
   --dmx-opacity-base: 0.08;
@@ -633,7 +633,7 @@
 
 /* ── square-11 — Echo Ring (concentric diamond ripple + secondary echo) ──── */
 .dotmatrix.dotmatrix--square-11 .dotmatrix-dot {
-  animation: dotmatrix-ripple-echo var(--dmx-cycle) ease-in-out infinite;
+  animation: dotmatrix-ripple-echo var(--dmx-cycle) var(--ease-soft) infinite;
   animation-delay: calc(
     (var(--dmx-ripple-ring, 0) * 0.14 + var(--dmx-ripple-parity, 0) * 0.03) *
     var(--dmx-cycle)
@@ -658,7 +658,7 @@
 
 /* ── square-12 — Origin Wave (ripple from off-center cell) ───────────────── */
 .dotmatrix.dotmatrix--square-12 .dotmatrix-dot {
-  animation: dotmatrix-center-origin-ripple var(--dmx-cycle) ease-in-out infinite;
+  animation: dotmatrix-center-origin-ripple var(--dmx-cycle) var(--ease-soft) infinite;
   animation-delay: calc(var(--dmx-center-ripple-ring, 0) * 0.16 * var(--dmx-cycle));
 }
 

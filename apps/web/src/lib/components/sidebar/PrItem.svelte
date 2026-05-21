@@ -19,7 +19,7 @@ let { pr, isSelected = false, navPrefix = "pr", variant = "open" }: Props = $pro
 let avatarFailed = $state(false);
 
 $effect(() => {
-  pr.authorAvatarUrl;
+  pr.authorAvatarContent;
   avatarFailed = false;
 });
 
@@ -45,9 +45,9 @@ function handleClick() {
 		data-nav-type="pr"
 		data-nav-parent="repo:{pr.repositoryId}"
 	>
-		{#if pr.authorAvatarUrl && !avatarFailed}
-			<img
-				src={pr.authorAvatarUrl}
+	{#if pr.authorAvatarContent && !avatarFailed}
+		<img
+			src={pr.authorAvatarContent}
 				alt={pr.authorLogin}
 				class="mt-0.5 h-4 w-4 shrink-0 rounded-full object-cover"
 				loading="lazy"
@@ -59,7 +59,7 @@ function handleClick() {
 				class="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-bg-elevated text-text-muted"
 				title={pr.authorLogin}
 			>
-				<User size={10} aria-hidden="true" />
+				<User size={10} weight="regular" aria-hidden="true" />
 			</span>
 		{/if}
 

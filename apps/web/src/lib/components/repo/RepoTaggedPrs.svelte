@@ -37,7 +37,7 @@ function handleClick(prId: string) {
 
 <section class="tagged-section">
 	<header class="tagged-header">
-		<GitPullRequest size={14} class="tagged-icon" />
+		<GitPullRequest size={14} weight="fill" class="tagged-icon" />
 		<h2 class="tagged-title">
 			{#if loading && prs.length === 0}
 				Loading pull requests…
@@ -51,12 +51,12 @@ function handleClick(prId: string) {
 
 	{#if loading && prs.length === 0}
 		<div class="tagged-loading">
-			<Loader2 size={16} class="animate-spin" aria-hidden="true" />
+			<Loader2 size={16} weight="regular" class="animate-spin" aria-hidden="true" />
 			<span>Loading…</span>
 		</div>
 	{:else if prs.length === 0}
 		<div class="tagged-empty">
-			<User size={16} aria-hidden="true" />
+			<User size={16} weight="regular" aria-hidden="true" />
 			<p>No pull requests need your attention — you're all caught up!</p>
 		</div>
 	{:else}

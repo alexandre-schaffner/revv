@@ -81,10 +81,10 @@ onMount(() => {
 			<span class="inspector-title">Cache Inspector</span>
 			<div class="inspector-actions">
 				<button class="icon-btn" onclick={fetchStats} title="Refresh stats" aria-label="Refresh">
-					<RefreshCw size={14} />
+					<RefreshCw size={14} weight="fill" />
 				</button>
 				<button class="icon-btn" onclick={onclose} title="Close" aria-label="Close">
-					<X size={14} />
+					<X size={14} weight="fill" />
 				</button>
 			</div>
 		</div>

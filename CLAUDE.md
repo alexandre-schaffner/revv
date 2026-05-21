@@ -94,7 +94,7 @@ All packages extend `tsconfig.base.json` which enables `strict`, `exactOptionalP
 
 ## UI Conventions
 
-**Always use icons, never emojis.** For any glyph in the UI — buttons, fallback avatars, placeholders, status indicators, empty states, inline hints — use an icon component (`@lucide/svelte`, or an inline SVG for brand/octicon-style marks). Do not use emoji characters (🎉, ✅, ❌, 👤, etc.) in rendered UI, toast messages, or component text. Existing Lucide imports are the preferred source; only inline SVG when no Lucide equivalent fits.
+**Always use icons, never emojis.** For any glyph in the UI — buttons, fallback avatars, placeholders, status indicators, empty states, inline hints — use a phosphor-svelte icon component or an inline SVG for brand/octicon-style marks. Do not use emoji characters (🎉, ✅, ❌, 👤, etc.) in rendered UI, toast messages, or component text. `phosphor-svelte` is the standard icon library; only inline SVG when no phosphor equivalent fits.
 
 **Motion: use Tailwind duration/easing utilities and CSS variables only.** Prefer `duration-snap`, `duration-quick`, `duration-smooth`, `ease-soft`, `ease-out-expo`, `ease-standard` from the `@theme` block in `app.css`. For bits-ui primitives use `var(--duration-quick) var(--ease-out-expo)` and the shared `@keyframes motion-*-in` in `app.css`. No `$lib/motion` module exists — do not create one. No raw `duration-150`, no inline `cubic-bezier(...)`, no hand-typed `220ms`.
 

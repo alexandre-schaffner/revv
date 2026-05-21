@@ -73,7 +73,7 @@ function navigate(recapId: string): void {
 
 	{#if loading && previous.length === 0}
 		<div class="previous-empty">
-			<Loader2 size={16} class="animate-spin" aria-hidden="true" />
+			<Loader2 size={16} weight="regular" class="animate-spin" aria-hidden="true" />
 			<span>Loading previous recaps…</span>
 		</div>
 	{:else}

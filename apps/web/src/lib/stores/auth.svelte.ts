@@ -304,7 +304,7 @@ export async function loadUser(): Promise<void> {
         if (res.ok) {
           const data = (await res.json()) as {
             login: string | null;
-            avatarUrl?: string | null;
+            avatarContent?: string | null;
             onboardedAt?: string | null;
           };
           if (user) {
@@ -313,9 +313,9 @@ export async function loadUser(): Promise<void> {
               githubLogin: data.login,
               onboardedAt: data.onboardedAt ?? null,
             };
-            // Prefer the server's freshly-refreshed avatar URL when available.
-            if (data.avatarUrl != null) {
-              next.image = data.avatarUrl;
+            // Prefer the server's freshly-refreshed avatar content when available.
+            if (data.avatarContent != null) {
+              next.image = data.avatarContent;
             }
             user = next;
             accountJustRemoved = false;

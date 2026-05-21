@@ -68,7 +68,7 @@ function handleCancel(): void {
 			<Dialog.Header>
 				<Dialog.Title>
 					<span class="title-with-icon">
-						<AlertTriangle size={18} />
+						<AlertTriangle size={18} weight="fill" />
 						Approve with unresolved items?
 					</span>
 				</Dialog.Title>
@@ -84,7 +84,7 @@ function handleCancel(): void {
 			{/if}
 			{#if warningCount > 0}
 				<span class="count-pill count-warning">
-					<AlertTriangle size={12} />
+					<AlertTriangle size={12} weight="fill" />
 					{warningCount} warning{warningCount !== 1 ? 's' : ''}
 				</span>
 			{/if}
@@ -96,7 +96,7 @@ function handleCancel(): void {
 			{/if}
 			{#if threadCount > 0}
 				<span class="count-pill count-thread">
-					<MessageSquare size={12} />
+					<MessageSquare size={12} weight="fill" />
 					{threadCount} comment{threadCount !== 1 ? 's' : ''}
 				</span>
 			{/if}
@@ -112,7 +112,7 @@ function handleCancel(): void {
 								{#if issue.severity === 'critical'}
 									<XOctagon size={13} />
 								{:else if issue.severity === 'warning'}
-									<AlertTriangle size={13} />
+									<AlertTriangle size={13} weight="fill" />
 								{:else}
 									<Info size={13} />
 								{/if}
@@ -142,7 +142,7 @@ function handleCancel(): void {
 						{@const firstMessage = getThreadMessages(thread.id)[0]}
 						<li class="issue-row">
 							<span class="severity-icon severity-thread">
-								<MessageSquare size={13} />
+								<MessageSquare size={13} weight="fill" />
 							</span>
                 <span class="issue-text">
                     <div class="issue-location">

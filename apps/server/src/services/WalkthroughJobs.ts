@@ -39,6 +39,7 @@ import { Cause, Context, Effect, Fiber, Layer, Option, Ref, type Scope } from "e
 import { findIssuesMissingInlineComment } from "../ai/providers/walkthrough-tools";
 import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../constants";
 import { account } from "../db/schema/auth";
+import { remoteUsers } from "../db/schema/remote-users";
 import { repositories } from "../db/schema/repositories";
 import {
   type AiError,
@@ -1241,11 +1242,19 @@ export const WalkthroughJobsLive = Layer.effect(
             .get();
           if (!acc || !acc.githubLogin) return undefined;
           const githubUserId = Number(acc.accountId);
+
+          // Resolve avatar content from remote_users.
+          const avatarContent = db
+            .select({ avatarContent: remoteUsers.avatarContent })
+            .from(remoteUsers)
+            .where(eq(remoteUsers.login, acc.githubLogin))
+            .get()?.avatarContent ?? null;
+
           return {
             githubUserId: Number.isFinite(githubUserId) ? githubUserId : 0,
             githubLogin: acc.githubLogin,
             displayName: null,
-            avatarUrl: acc.avatarUrl ?? null,
+            avatarContent,
           };
         })();
 

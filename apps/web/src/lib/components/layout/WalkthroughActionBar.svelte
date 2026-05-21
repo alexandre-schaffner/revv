@@ -1,13 +1,11 @@
 <script lang="ts">
 import ArrowDown from "phosphor-svelte/lib/ArrowDown";
 import ArrowUp from "phosphor-svelte/lib/ArrowUp";
-import Gauge from "phosphor-svelte/lib/Gauge";
-import Play from "phosphor-svelte/lib/Play";
-import RefreshCw from "phosphor-svelte/lib/ArrowsClockwise";
-import RotateCcw from "phosphor-svelte/lib/ArrowCounterClockwise";
-import Square from "phosphor-svelte/lib/Square";
+import Star from "phosphor-svelte/lib/Star";
+import GenActionBar, { type GenActionState } from "$lib/components/layout/GenActionBar.svelte";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import { isChatStreaming } from "$lib/stores/chat.svelte";
+import { getRatings as getWalkthroughRatings } from "$lib/stores/walkthrough.svelte";
 import {
   abort as abortWalkthrough,
   getPendingAction as getWalkthroughPendingAction,
@@ -15,7 +13,6 @@ import {
   resume as resumeWalkthrough,
 } from "$lib/stores/walkthrough-stream.svelte";
 import { getWalkthroughUiState } from "$lib/stores/walkthrough-ui-state.svelte";
-import { getRatings as getWalkthroughRatings } from "$lib/stores/walkthrough.svelte";
 import {
   getHasNewContentBelow as getWalkthroughHasNewContentBelow,
   scrollToBottom as scrollWalkthroughToBottom,
@@ -35,146 +32,72 @@ const walkthroughHasRatings = $derived(getWalkthroughRatings().length > 0);
 const walkthroughHasNewContentBelow = $derived(getWalkthroughHasNewContentBelow());
 const chatStreaming = $derived(isChatStreaming(prId));
 
-const destructiveDisabled = $derived(walkthroughPendingAction !== null || chatStreaming);
-const destructiveTitle = $derived(
-  chatStreaming
-    ? "Chat edit in progress — wait for it to finish before regenerating"
-    : walkthroughPendingAction === "regenerate"
-      ? "Regenerating…"
-      : walkthroughPendingAction === "resume"
-        ? "Resuming…"
-        : undefined,
+/** Map walkthrough-specific state to the normalised GenActionState. */
+const genActionState = $derived.by((): GenActionState | null => {
+  switch (walkthroughUiState.kind) {
+    case "streaming":
+      return { kind: "streaming" };
+    case "resumable":
+      return { kind: "resumable" };
+    case "error-partial":
+    case "error-empty":
+      return { kind: "error" };
+    case "complete":
+      return { kind: "complete" };
+    case "complete-stale":
+      return { kind: "stale", label: "Regenerate for latest commit" };
+    default:
+      return null;
+  }
+});
+
+/** When chat is streaming, treat it as an in-flight action so the
+ *  destructive buttons are disabled with a contextual tooltip. */
+const combinedPendingAction = $derived(chatStreaming ? "chat" : walkthroughPendingAction);
+const combinedDisabledTitle = $derived(
+  chatStreaming ? "Chat edit in progress — wait for it to finish before regenerating" : undefined,
 );
 </script>
 
-<div class="walkthrough-actions-float">
-  <div class="walkthrough-actions-row">
-    <GlassPill
-      icon
-      onclick={scrollWalkthroughToTop}
-      aria-label="Scroll to top of walkthrough"
-    >
-      <ArrowUp size={14} />
-    </GlassPill>
-
-    {#if walkthroughUiState.kind === "streaming"}
+{#if genActionState}
+  <div class="actions-float">
+    <div class="actions-row">
       <GlassPill
-        variant="danger"
-        onclick={() => abortWalkthrough(prId)}
+        icon
+        onclick={scrollWalkthroughToTop}
+        aria-label="Scroll to top of walkthrough"
       >
-        <Square size={14} fill="currentColor" />
-        Stop generation
+        <ArrowUp size={16} weight="regular" />
       </GlassPill>
-      {#if walkthroughHasNewContentBelow}
+
+      <GenActionBar
+        uiState={genActionState}
+        pendingAction={combinedPendingAction}
+        disabledTitle={combinedDisabledTitle}
+        onStop={() => abortWalkthrough(prId)}
+        onResume={() => resumeWalkthrough(prId)}
+        onRegenerate={() => regenerateWalkthrough(prId)}
+      />
+
+      {#if walkthroughUiState.kind === "streaming" && walkthroughHasNewContentBelow}
         <GlassPill
           onclick={scrollWalkthroughToBottom}
           aria-label="Scroll to newest walkthrough content"
         >
-          <ArrowDown size={14} />
+          <ArrowDown size={16} weight="fill" />
           New content
         </GlassPill>
       {/if}
-    {:else if walkthroughUiState.kind === "resumable"}
-      <GlassPill
-        disabled={destructiveDisabled}
-        title={destructiveTitle}
-        onclick={() => resumeWalkthrough(prId)}
-        aria-label="Resume walkthrough from where it stopped"
-      >
-        <Play size={14} fill="currentColor" />
-        Resume
-      </GlassPill>
-      <GlassPill
-        disabled={destructiveDisabled}
-        title={destructiveTitle}
-        onclick={() => regenerateWalkthrough(prId)}
-      >
-        <RefreshCw size={14} />
-        Regenerate
-      </GlassPill>
-    {:else if walkthroughUiState.kind === "error-partial"}
-      <GlassPill
-        disabled={destructiveDisabled}
-        title={destructiveTitle}
-        onclick={() => resumeWalkthrough(prId)}
-        aria-label="Retry walkthrough from where it failed"
-      >
-        <RotateCcw size={14} />
-        Retry
-      </GlassPill>
-      <GlassPill
-        disabled={destructiveDisabled}
-        title={destructiveTitle}
-        onclick={() => regenerateWalkthrough(prId)}
-      >
-        <RefreshCw size={14} />
-        Regenerate
-      </GlassPill>
-    {:else if walkthroughUiState.kind === "error-empty"}
-      <GlassPill
-        disabled={destructiveDisabled}
-        title={destructiveTitle}
-        onclick={() => regenerateWalkthrough(prId)}
-        aria-label="Retry walkthrough generation after error"
-      >
-        <RefreshCw size={14} />
-        Retry
-      </GlassPill>
-    {:else if walkthroughUiState.kind === "complete"}
-      <GlassPill
-        disabled={destructiveDisabled}
-        title={destructiveTitle}
-        onclick={() => regenerateWalkthrough(prId)}
-      >
-        <RefreshCw size={14} />
-        Regenerate
-      </GlassPill>
-    {:else if walkthroughUiState.kind === "complete-stale"}
-      <GlassPill
-        variant="accent"
-        disabled={destructiveDisabled}
-        title={chatStreaming
-          ? "Chat edit in progress — wait for it to finish before regenerating"
-          : "A newer commit landed — this walkthrough is for an older SHA. Regenerate against the latest."}
-        onclick={() => regenerateWalkthrough(prId)}
-      >
-        <RefreshCw size={14} />
-        Regenerate for latest commit
-      </GlassPill>
-    {/if}
 
-    {#if walkthroughHasRatings}
-      <GlassPill
-        onclick={scrollWalkthroughToRatings}
-        aria-label="Scroll to rating panel"
-      >
-        <Gauge size={14} />
-        Rating
-      </GlassPill>
-    {/if}
+      {#if walkthroughHasRatings}
+        <GlassPill
+          onclick={scrollWalkthroughToRatings}
+          aria-label="Scroll to rating panel"
+        >
+          <Star size={16} weight="fill" />
+          Rating
+        </GlassPill>
+      {/if}
+    </div>
   </div>
-</div>
-
-<style>
-  .walkthrough-actions-float {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    display: flex;
-    justify-content: center;
-    padding: 8px 0 10px;
-    z-index: 10;
-    pointer-events: none;
-  }
-
-  .walkthrough-actions-float :global(*) {
-    pointer-events: auto;
-  }
-
-  .walkthrough-actions-row {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--spacing-island);
-  }
-</style>
+{/if}

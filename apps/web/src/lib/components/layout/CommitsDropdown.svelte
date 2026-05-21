@@ -88,7 +88,7 @@ $effect(() => {
 				</div>
 			{:else if fetchError}
 				<div class="flex items-center justify-center gap-2 px-3 py-3 text-xs text-danger">
-					<AlertCircle size={12} />
+					<AlertCircle size={12} weight="fill" />
 					<span>Failed to load commits</span>
 				</div>
 			{:else if commits !== null}

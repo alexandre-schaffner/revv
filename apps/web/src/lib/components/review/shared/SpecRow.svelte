@@ -112,7 +112,7 @@ let {
                 class:spec-row-chevron--hidden={disabled}
                 aria-hidden="true"
             >
-                <ChevronRight size={14} />
+                <ChevronRight size={14} weight="fill" />
             </span>
         </Collapsible.Trigger>
 
@@ -194,7 +194,7 @@ let {
     }
 
     .spec-row[data-state="running"] .spec-row-gutter {
-        animation: spec-row-pulse-gutter 1.2s ease-in-out infinite;
+        animation: spec-row-pulse-gutter var(--duration-pulse) var(--ease-soft) infinite;
     }
 
     .spec-row[data-state="resolved"] .spec-row-gutter {
@@ -300,7 +300,7 @@ let {
     }
 
     .spec-row[data-state="resolved"] :global(.spec-row-trigger) {
-        animation: spec-row-resolve 180ms var(--ease-out-expo) 1;
+        animation: spec-row-resolve var(--duration-quick) var(--ease-out-expo) 1;
     }
 
     .spec-row[data-state="submitted"] :global(.spec-row-trigger) {

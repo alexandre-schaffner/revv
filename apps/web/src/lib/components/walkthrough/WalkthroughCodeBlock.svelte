@@ -74,7 +74,7 @@ function mountCodeBlock(el: HTMLDivElement) {
 			<span class="code-file-path">{block.filePath}</span>
 			<span class="code-header-right">
 				<span class="code-line-range">:{block.startLine}-{block.endLine}</span>
-				<span class="code-jump-icon"><ArrowUpRight size={11} /></span>
+				<span class="code-jump-icon"><ArrowUpRight size={11} weight="fill" /></span>
 			</span>
 		</button>
 		<div class="code-body" use:mountCodeBlock></div>

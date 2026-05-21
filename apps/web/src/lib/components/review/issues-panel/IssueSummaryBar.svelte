@@ -64,7 +64,7 @@ const selectLabel = $derived(allSelected ? "Clear" : "Select all");
 <div class="summary-bar">
     <div class="summary-left">
         <span class="spec-icon" aria-hidden="true">
-            <AlertTriangle size={14} />
+            <AlertTriangle size={14} weight="fill" />
         </span>
         <span class="spec-title">Issues</span>
 
@@ -94,7 +94,7 @@ const selectLabel = $derived(allSelected ? "Clear" : "Select all");
                 class:count-pill--zero={counts.info === 0}
                 title="{counts.info} info"
             >
-                <Circle size={11} aria-hidden="true" />
+                <Circle size={11} weight="fill" aria-hidden="true" />
                 <span class="count-num">{counts.info}</span>
                 <span class="count-label">info</span>
             </span>
@@ -123,9 +123,9 @@ const selectLabel = $derived(allSelected ? "Clear" : "Select all");
         >
             <span class="ctrl-icon" aria-hidden="true">
                 {#if expandAll === true}
-                    <ChevronsDownUp size={12} />
+                    <ChevronsDownUp size={12} weight="fill" />
                 {:else}
-                    <ChevronsUpDown size={12} />
+                    <ChevronsUpDown size={12} weight="fill" />
                 {/if}
             </span>
             <span class="ctrl-label">{expandLabel}</span>
@@ -167,7 +167,7 @@ const selectLabel = $derived(allSelected ? "Clear" : "Select all");
                     {#if allSelected}
                         <Square size={12} />
                     {:else}
-                        <CheckSquare size={12} />
+                        <CheckSquare size={12} weight="fill" />
                     {/if}
                 </span>
                 <span class="ctrl-label">{selectLabel}</span>

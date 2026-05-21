@@ -39,6 +39,7 @@ type SwitcherEntry = {
 let open = $state(false);
 let _lastAvatar = $state<string | null>(null);
 let _avatarFailedForUrl = $state<string | null>(null);
+let _acctAvatarFailedUrls = $state(new Set<string>());
 let switchingId = $state<string | null>(null);
 
 const user = $derived(getUser());
@@ -126,12 +127,12 @@ async function handleSignOut(): Promise<void> {
 						: 'user-avatar user-avatar--fallback'}
 					aria-hidden="true"
 				>
-					<User size={collapsed ? 14 : 16} />
+					<User size={collapsed ? 14 : 16} weight="regular" />
 				</span>
 			{/if}
 			{#if isSwitching}
 				<span class="user-avatar-spinner" aria-hidden="true">
-					<Loader2 size={collapsed ? 12 : 14} class="spin-icon" />
+					<Loader2 size={collapsed ? 12 : 14} weight="regular" class="spin-icon" />
 				</span>
 			{/if}
 		</span>
@@ -165,15 +166,16 @@ async function handleSignOut(): Promise<void> {
 			>
 				<!-- Avatar -->
 				<span class="acct-avatar-wrap">
-					{#if avatar}
+					{#if avatar && !_acctAvatarFailedUrls.has(avatar)}
 						<img
 							src={avatar}
 							alt=""
 							class="acct-avatar"
 							referrerpolicy="no-referrer"
+							onerror={() => { _acctAvatarFailedUrls = new Set([..._acctAvatarFailedUrls, avatar]); }}
 						/>
 					{:else}
-						<User size={13} class="acct-icon" />
+						<User size={13} weight="regular" class="acct-icon" />
 					{/if}
 				</span>
 
@@ -186,9 +188,9 @@ async function handleSignOut(): Promise<void> {
 				<!-- Status indicator -->
 				<span class="acct-status-slot">
 					{#if switching}
-						<Loader2 size={12} class="acct-spinner" />
+						<Loader2 size={12} weight="regular" class="acct-spinner" />
 					{:else if active}
-						<Check size={12} class="acct-check" />
+						<Check size={12} weight="regular" class="acct-check" />
 					{/if}
 				</span>
 			</button>
@@ -198,7 +200,7 @@ async function handleSignOut(): Promise<void> {
 
 		<!-- Settings -->
 		<button class="menu-row" onclick={handleSettings}>
-			<Settings size={13} class="menu-row-icon" />
+			<Settings size={13} weight="fill" class="menu-row-icon" />
 			<span class="menu-row-label">Settings</span>
 		</button>
 

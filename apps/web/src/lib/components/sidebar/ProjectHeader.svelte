@@ -39,7 +39,7 @@ function handleNewPr(): void {
 						href="/repo/{repo.id}/recaps"
 						aria-label="Recaps for {repo.fullName}"
 					>
-						<Sparkles size={13} />
+						<Sparkles size={13} weight="fill" />
 						<span class="header-link-label">Recaps</span>
 					</a>
 				</Tooltip.Trigger>

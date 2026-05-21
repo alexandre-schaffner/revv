@@ -30,7 +30,7 @@ let { body, onEdit, onDelete }: Props = $props();
 			title="Delete comment"
 			aria-label="Delete comment"
 		>
-			<Trash2 size={11} />
+			<Trash2 size={11} weight="fill" />
 		</button>
 	</div>
 </div>

@@ -20,7 +20,7 @@ The 2026-05-20 security audit uncovered 2 critical vulnerabilities, 7 high-sever
 
 **Acceptance Criteria:**
 
-- [ ] `apps/server/src/index.ts` CORS `origin` is an explicit array: `["http://localhost:5173", "http://localhost:45678", "tauri://localhost"]`.
+- [ ] `apps/server/src/index.ts` CORS `origin` is an explicit array covering all legitimate app origins: `["http://localhost:5173", "http://127.0.0.1:5173", "http://[::1]:5173", "http://localhost:45678", "http://localhost:45679", "tauri://localhost", "https://tauri.localhost"]`.
 - [ ] Regex `/localhost/` is removed entirely.
 - [ ] Credentials are still allowed for the listed origins.
 - [ ] `make typecheck` passes.

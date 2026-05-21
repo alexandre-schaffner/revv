@@ -61,10 +61,10 @@ async function copyCode() {
 				</div>
 				<button class="copy-btn" onclick={copyCode} aria-label="Copy code">
 					{#if copied}
-						<Check size={13} />
+						<Check size={13} weight="regular" />
 						<span>Copied</span>
 					{:else}
-						<Copy size={13} />
+						<Copy size={13} weight="fill" />
 						<span>Copy</span>
 					{/if}
 				</button>

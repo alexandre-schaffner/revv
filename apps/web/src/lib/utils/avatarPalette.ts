@@ -1,11 +1,8 @@
-// Owner hue extraction from GitHub avatars.
+// Owner hue extraction from avatar images.
 //
-// Owner GitHub avatars are fetched once, stored as data URLs in localStorage,
-// and loaded from there on every subsequent visit — no network request needed.
-// On each mount a background refresh re-fetches from GitHub and silently
-// updates the cache so stale avatars self-correct over time.
-//
-// Hue extraction runs on-demand from the cached image via the Canvas API.
+// Avatars are now served as base64 data URLs from the server (cached in
+// remote_users), so no network fetch or localStorage caching is needed.
+// Hue extraction runs on-demand from the data URL via the Canvas API.
 // A session-level cache (Map) deduplicates within-session extractions so
 // 20 avatars from the same owner only ever process one image per page load.
 
@@ -24,53 +21,24 @@ export function fallbackOwnerHue(repoFullName: string): number {
   return hashString(owner) % 360;
 }
 
-// ── Image cache (localStorage) ────────────────────────────────────────────────
-
-const LS_PREFIX = "revv:avatar-img:";
-
-function readImageCache(url: string): string | null {
-  try {
-    return localStorage.getItem(LS_PREFIX + url);
-  } catch {
-    return null;
-  }
+/** Return the already-resolved hue for an avatar source, or undefined. */
+export function peekOwnerHue(src: string): number | undefined {
+  if (typeof document === "undefined") return undefined;
+  return sessionHueCache.get(src);
 }
 
-function writeImageCache(url: string, dataUrl: string): void {
-  try {
-    localStorage.setItem(LS_PREFIX + url, dataUrl);
-  } catch {
-    // Storage full or unavailable — silently ignore.
+/** Warm the session hue cache for every unique avatar in the repo list.
+ *  Fire-and-forget: later avatar renders can use the cache without each
+ *  component doing its own async extraction. */
+export function preloadOwnerHues(repos: { avatarUrl: string | null }[]): void {
+  if (typeof document === "undefined") return;
+  const seen = new Set<string>();
+  for (const repo of repos) {
+    if (repo.avatarUrl && !seen.has(repo.avatarUrl)) {
+      seen.add(repo.avatarUrl);
+      void ownerHueFromAvatar(repo.avatarUrl);
+    }
   }
-}
-
-// Fetch the avatar from the network, draw it to a 32×32 canvas, and return
-// a PNG data URL. The ?s=32 param requests a small image and ensures a URL
-// distinct from the display <img> (which may be cached without CORS headers).
-function fetchToDataUrl(avatarUrl: string): Promise<string> {
-  const src = avatarUrl.includes("?") ? `${avatarUrl}&s=32` : `${avatarUrl}?s=32`;
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = () => {
-      try {
-        const canvas = document.createElement("canvas");
-        canvas.width = 32;
-        canvas.height = 32;
-        const ctx = canvas.getContext("2d");
-        if (!ctx) {
-          reject(new Error("no 2d ctx"));
-          return;
-        }
-        ctx.drawImage(img, 0, 0, 32, 32);
-        resolve(canvas.toDataURL("image/png"));
-      } catch (e) {
-        reject(e);
-      }
-    };
-    img.onerror = () => reject(new Error("image load failed"));
-    img.src = src;
-  });
 }
 
 // ── Hue extraction ────────────────────────────────────────────────────────────
@@ -90,6 +58,44 @@ function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
   else if (max === gN) h = ((bN - rN) / d + 2) / 6;
   else h = ((rN - gN) / d + 4) / 6;
   return [h * 360, s, l];
+}
+
+// Compute the circular median of a sorted array of hue values (0–360).
+// A naive linear median fails for hues near the 0/360 wrap boundary (e.g.
+// reds at 350° and 5° would average to ~177° teal). We detect a large gap
+// in the sorted distribution, rotate the array so the gap falls at the
+// boundary, compute the median, then unwrap back to 0–360.
+function circularMedian(sorted: number[]): number {
+  const n = sorted.length;
+  if (n === 0) return 0;
+  if (n === 1) return sorted[0] ?? 0;
+
+  // Find the largest gap between consecutive values (including the wrap gap).
+  let maxGap = 0;
+  let gapAfterIdx = n - 1; // index after which the largest gap occurs
+  for (let i = 0; i < n - 1; i++) {
+    const gap = (sorted[i + 1] ?? 0) - (sorted[i] ?? 0);
+    if (gap > maxGap) {
+      maxGap = gap;
+      gapAfterIdx = i;
+    }
+  }
+  // Check the wrap-around gap: from sorted[n-1] back to sorted[0] + 360
+  const wrapGap = (sorted[0] ?? 0) + 360 - (sorted[n - 1] ?? 0);
+  if (wrapGap > maxGap) {
+    // The wrap boundary is already the largest gap — no rotation needed.
+    const mid = sorted[Math.floor(n / 2)] ?? 0;
+    return mid % 360;
+  }
+
+  // Rotate: values after the gap are shifted by -360 so they become negative,
+  // placing the gap at the new boundary. Then compute the linear median.
+  const rotated: number[] = [];
+  for (let i = gapAfterIdx + 1; i < n; i++) rotated.push((sorted[i] ?? 0) - 360);
+  for (let i = 0; i <= gapAfterIdx; i++) rotated.push(sorted[i] ?? 0);
+
+  const median = rotated[Math.floor(n / 2)] ?? 0;
+  return ((median % 360) + 360) % 360;
 }
 
 function hueFromImg(img: HTMLImageElement): number {
@@ -114,81 +120,60 @@ function hueFromImg(img: HTMLImageElement): number {
 
   if (weighted.length === 0) return hashString(img.src) % 360;
   weighted.sort((a, b) => a - b);
-  return weighted[Math.floor(weighted.length / 2)] ?? 0;
+  return circularMedian(weighted);
 }
 
-function hueFromDataUrl(dataUrl: string): Promise<number> {
+function hueFromSrc(src: string): Promise<number> {
   return new Promise((resolve) => {
     const img = new Image();
+    img.crossOrigin = "anonymous";
     img.onload = () => {
       try {
         resolve(hueFromImg(img));
       } catch {
-        resolve(hashString(dataUrl) % 360);
+        resolve(hashString(src) % 360);
       }
     };
-    img.onerror = () => resolve(hashString(dataUrl) % 360);
-    img.src = dataUrl;
+    img.onerror = () => resolve(hashString(src) % 360);
+    img.src = src;
   });
 }
 
 // ── Session dedup + pending map ───────────────────────────────────────────────
+//
+// sessionHueCache is capped at SESSION_HUE_MAX entries. When the cap is hit the
+// oldest entries (insertion-order, courtesy of Map iteration) are evicted first.
 
+const SESSION_HUE_MAX = 200;
 const sessionHueCache = new Map<string, number>();
 const pendingLoads = new Map<string, Promise<number>>();
-const refreshed = new Set<string>(); // prevents duplicate background refreshes
 
-function backgroundRefresh(avatarUrl: string): void {
-  if (refreshed.has(avatarUrl)) return;
-  refreshed.add(avatarUrl);
-  fetchToDataUrl(avatarUrl)
-    .then((dataUrl) => {
-      writeImageCache(avatarUrl, dataUrl);
-      return hueFromDataUrl(dataUrl);
-    })
-    .then((hue) => {
-      sessionHueCache.set(avatarUrl, hue);
-    })
-    .catch(() => {
-      // Network failure — cached image stays as-is.
-    });
+function setSessionHue(src: string, hue: number): void {
+  // Evict oldest entries if at cap (Map iterates insertion-order).
+  if (sessionHueCache.size >= SESSION_HUE_MAX) {
+    const oldest = sessionHueCache.keys().next().value;
+    if (oldest !== undefined) sessionHueCache.delete(oldest);
+  }
+  sessionHueCache.set(src, hue);
 }
 
-export function ownerHueFromAvatar(avatarUrl: string): Promise<number> {
+export function ownerHueFromAvatar(src: string): Promise<number> {
   if (typeof document === "undefined") {
-    return Promise.resolve(hashString(avatarUrl) % 360);
+    return Promise.resolve(hashString(src) % 360);
   }
 
-  const session = sessionHueCache.get(avatarUrl);
+  const session = sessionHueCache.get(src);
   if (session !== undefined) return Promise.resolve(session);
 
-  const pending = pendingLoads.get(avatarUrl);
+  const pending = pendingLoads.get(src);
   if (pending) return pending;
 
-  const promise = (async () => {
-    const cached = readImageCache(avatarUrl);
-    if (cached) {
-      const hue = await hueFromDataUrl(cached);
-      sessionHueCache.set(avatarUrl, hue);
-      backgroundRefresh(avatarUrl); // keep cache fresh, non-blocking
-      return hue;
-    }
+  const promise = hueFromSrc(src).then((hue) => {
+    setSessionHue(src, hue);
+    return hue;
+  });
 
-    // First visit: fetch from network, store, extract.
-    try {
-      const dataUrl = await fetchToDataUrl(avatarUrl);
-      writeImageCache(avatarUrl, dataUrl);
-      const hue = await hueFromDataUrl(dataUrl);
-      sessionHueCache.set(avatarUrl, hue);
-      return hue;
-    } catch {
-      const h = hashString(avatarUrl) % 360;
-      sessionHueCache.set(avatarUrl, h);
-      return h;
-    }
-  })();
-
-  pendingLoads.set(avatarUrl, promise);
-  promise.finally(() => pendingLoads.delete(avatarUrl));
+  pendingLoads.set(src, promise);
+  promise.finally(() => pendingLoads.delete(src));
   return promise;
 }

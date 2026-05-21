@@ -17,16 +17,17 @@
 // handlers in `ai/providers/recap-tools/`.
 
 import type { ProjectRecap, RecapPeriod, RecapStreamEvent, RecapSummaryStats } from "@revv/shared";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { Cause, Context, Effect, Fiber, Layer, Ref } from "effect";
 import type {
   RecapSourceBundle,
   RecapSourcePr,
   RecapSourcePrDiff,
   RecapSourcePrDiffFile,
+  RecapSourcePrDigest,
   RecapToolContext,
 } from "../ai/providers/recap-tools";
-import { repositories } from "../db/schema/index";
+import { recapPrDigests, repositories } from "../db/schema/index";
 import { type RecapError, ValidationError } from "../domain/errors";
 import { withDb } from "../effects/with-db";
 import { debug, logError } from "../logger";
@@ -779,6 +780,7 @@ export const ProjectRecapJobsLive = Layer.effect(
                 completedAt: row.walkthrough.completedAt ?? null,
               }
             : null,
+          diffDigest: null,
         };
       };
 
@@ -918,12 +920,12 @@ export const ProjectRecapJobsLive = Layer.effect(
           return;
         }
 
-        const bundle = buildSourceBundle(repo.fullName, job, windowed, openPrs);
-
-        // Lazy diff loader — the agent calls get_pr_diff per PR on demand
-        // instead of receiving every diff upfront. Resolves the GitHub token
-        // once (cached) so repeated calls don't re-hit the token store.
-        let cachedToken: string | null | undefined = undefined;
+        // Diff ingestion runs before the final recap agent. Raw patches are
+        // compacted into durable per-PR digests so the final agent session can
+        // scale with many PRs without retaining every raw diff in context.
+        // `getPrDiff` remains as a fallback tool for parity/old prompts, but
+        // the normal path reads `diffDigest` from get_recap_state.
+        let cachedToken: string | null | undefined;
         const getPrDiff = async (prId: string): Promise<RecapSourcePrDiff | null> => {
           if (cachedToken === undefined) {
             cachedToken = await Effect.runPromise(resolveRepoToken(job.repoId));
@@ -933,6 +935,65 @@ export const ProjectRecapJobsLive = Layer.effect(
           if (!row) return null;
           return Effect.runPromise(loadDiffForPr(row.pr, repo.fullName, cachedToken));
         };
+
+        const digestEntries = yield* Effect.forEach(
+          windowed.filter((row) => row.walkthrough === null),
+          (row) =>
+            Effect.gen(function* () {
+              if (cachedToken === undefined) {
+                cachedToken = yield* resolveRepoToken(job.repoId);
+              }
+              const diff = yield* loadDiffForPr(row.pr, repo.fullName, cachedToken).pipe(
+                Effect.catchAll(() => Effect.succeed(null)),
+              );
+              const digest = buildDigestForRecapPr(row.pr, diff);
+              yield* Effect.try({
+                try: () => {
+                  db.insert(recapPrDigests)
+                    .values({
+                      id: `${job.recapId}:${row.pr.id}`,
+                      recapId: job.recapId,
+                      prId: row.pr.id,
+                      source: digest.source,
+                      digest: digest.digest,
+                      files: JSON.stringify(digest.files),
+                      note: digest.note,
+                      generatedAt: new Date().toISOString(),
+                    })
+                    .onConflictDoUpdate({
+                      target: [recapPrDigests.recapId, recapPrDigests.prId],
+                      set: {
+                        source: sql`excluded.source`,
+                        digest: sql`excluded.digest`,
+                        files: sql`excluded.files`,
+                        note: sql`excluded.note`,
+                        generatedAt: sql`excluded.generated_at`,
+                      },
+                    })
+                    .run();
+                },
+                catch: (e) => new ValidationError({ message: String(e) }),
+              }).pipe(
+                Effect.catchAll((err) =>
+                  Effect.sync(() => {
+                    logError(
+                      "recap-jobs",
+                      `failed to persist recap digest for ${row.pr.id}:`,
+                      err instanceof Error ? err.message : String(err),
+                    );
+                  }),
+                ),
+              );
+              return [row.pr.id, digest] as const;
+            }),
+          { concurrency: 3 },
+        );
+
+        const digestByPrId = new Map<string, RecapSourcePrDigest>(digestEntries);
+        const bundle = attachRecapDigests(
+          buildSourceBundle(repo.fullName, job, windowed, openPrs),
+          digestByPrId,
+        );
 
         // Prior recaps for rolling context. Cheap query — at most a handful.
         const priorRecaps: ReadonlyArray<ProjectRecap> = yield* provideDb(
@@ -1043,6 +1104,7 @@ export const ProjectRecapJobsLive = Layer.effect(
             "complete",
             completeOptions,
           );
+          emit({ type: "done", data: { recapId: job.recapId } });
           return;
         }
 
@@ -1334,7 +1396,12 @@ export const ProjectRecapJobsLive = Layer.effect(
           // and clobber the cleared fields.
           yield* cancel(existing.id);
 
-          const { previousOverview } = yield* provideDb(recapService.resetForRerun(existing.id));
+          const { previousOverview } = yield* provideDb(
+            recapService.resetForRerun(existing.id, {
+              periodStart: params.periodStart,
+              periodEnd: params.periodEnd,
+            }),
+          );
 
           // Re-broadcast the row so the UI swaps it back to the
           // "generating" state. The reducer matches on id and replaces
@@ -1444,6 +1511,90 @@ export const ProjectRecapJobsLive = Layer.effect(
 );
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+function attachRecapDigests(
+  bundle: RecapSourceBundle,
+  digests: ReadonlyMap<string, RecapSourcePrDigest>,
+): RecapSourceBundle {
+  return {
+    ...bundle,
+    prs: bundle.prs.map((pr) => ({
+      ...pr,
+      diffDigest: pr.walkthrough ? null : (digests.get(pr.id) ?? pr.diffDigest),
+    })),
+  };
+}
+
+function buildDigestForRecapPr(
+  pr: ArchivedPrWithWalkthrough["pr"],
+  diff: RecapSourcePrDiff | null,
+): RecapSourcePrDigest {
+  if (diff === null || diff.source === "unavailable") {
+    return {
+      source: "unavailable",
+      digest:
+        "Raw diff was unavailable during recap ingestion. Describe this PR from title, body, branch names, and +/- counts only; state the limitation if detail matters.",
+      files: [],
+      note: diff?.note ?? "No diff bytes were available for this PR.",
+    };
+  }
+
+  const files = diff.files.slice(0, 12).map((file) => ({
+    path: file.path,
+    status: file.status,
+    additions: file.additions,
+    deletions: file.deletions,
+    patchAvailable: file.patch !== null,
+    patchTruncated: file.patchTruncated,
+  }));
+  const primaryFiles = files
+    .slice(0, 8)
+    .map((file) => `${file.status} ${file.path} (+${file.additions}/-${file.deletions})`)
+    .join("; ");
+  const patchHints = diff.files
+    .flatMap((file) => extractPatchHints(file))
+    .slice(0, 18)
+    .join("; ");
+  const extraNotes: string[] = [];
+  if (diff.filesTruncated) {
+    extraNotes.push(`file list truncated from ${diff.totalFiles} files`);
+  }
+  if (diff.note) extraNotes.push(diff.note);
+  const note = extraNotes.length > 0 ? extraNotes.join(" ") : null;
+  const digest = [
+    `PR #${pr.externalId} "${pr.title}" diff digest.`,
+    primaryFiles ? `Primary files: ${primaryFiles}.` : "No file-level rows were available.",
+    patchHints
+      ? `Patch signals: ${patchHints}.`
+      : "Patch text was absent or too small to extract semantic hints.",
+    note ? `Limitations: ${note}` : "",
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .slice(0, 1600);
+
+  return {
+    source: diff.source,
+    digest,
+    files,
+    note,
+  };
+}
+
+function extractPatchHints(file: RecapSourcePrDiffFile): string[] {
+  if (!file.patch) return [];
+  const hints: string[] = [];
+  for (const rawLine of file.patch.split("\n")) {
+    if (hints.length >= 4) break;
+    if (rawLine.startsWith("+++") || rawLine.startsWith("---")) continue;
+    if (!rawLine.startsWith("+") && !rawLine.startsWith("-")) continue;
+    const line = rawLine.slice(1).trim();
+    if (line.length < 8) continue;
+    if (/^[{}()[\],.;]+$/.test(line)) continue;
+    hints.push(`${file.path}: ${rawLine[0]} ${line.slice(0, 120)}`);
+  }
+  return hints;
+}
 
 /** Trim PR body to ~2KB so the bundle stays bounded. */
 function truncateBody(body: string): string {

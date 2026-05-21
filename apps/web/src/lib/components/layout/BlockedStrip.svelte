@@ -21,7 +21,7 @@ const isRebasing = $derived(prId ? isRebasingProposed(prId) : false);
 {#if blocked}
   <div class="blocked-strip">
     <div class="blocked-header">
-      <Warning size={12} class="blocked-icon" />
+      <Warning size={12} weight="fill" class="blocked-icon" />
       <span class="blocked-title">
         PR head advanced — {blocked.commits.length} unpushed commit{blocked.commits.length === 1 ? '' : 's'}
       </span>
@@ -33,10 +33,10 @@ const isRebasing = $derived(prId ? isRebasingProposed(prId) : false);
         title="Rebase all commits onto new PR head"
       >
         {#if isRebasing}
-          <Spinner size={11} class="motion-essential-spin" />
+          <Spinner size={11} weight="fill" class="motion-essential-spin" />
           <span>Rebasing…</span>
         {:else}
-          <ArrowsClockwise size={11} />
+          <ArrowsClockwise size={11} weight="fill" />
           <span>Rebase all</span>
         {/if}
       </button>
@@ -55,9 +55,9 @@ const isRebasing = $derived(prId ? isRebasingProposed(prId) : false);
             aria-label="Discard commit {commit.shortSha}"
           >
             {#if isDiscardingCommit(commit.sha)}
-              <Spinner size={10} class="motion-essential-spin" />
+              <Spinner size={10} weight="fill" class="motion-essential-spin" />
             {:else}
-              <Trash size={10} />
+              <Trash size={10} weight="fill" />
             {/if}
           </button>
         </li>

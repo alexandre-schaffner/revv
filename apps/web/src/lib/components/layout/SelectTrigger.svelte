@@ -24,6 +24,6 @@ let { label, icon, trailing, chevron = true }: Props = $props();
     {@render trailing()}
   {/if}
   {#if chevron}
-    <CaretDown size={10} class="text-text-muted" />
+    <CaretDown size={10} weight="fill" class="text-text-muted" />
   {/if}
 </button>

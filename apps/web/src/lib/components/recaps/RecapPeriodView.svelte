@@ -1,13 +1,11 @@
 <script lang="ts">
-import Loader2 from "phosphor-svelte/lib/Spinner";
-import Play from "phosphor-svelte/lib/Play";
-import RefreshCw from "phosphor-svelte/lib/ArrowsClockwise";
-import RotateCcw from "phosphor-svelte/lib/ArrowCounterClockwise";
-import Sparkles from "phosphor-svelte/lib/Sparkle";
-import Square from "phosphor-svelte/lib/Square";
 import type { ProjectRecap, ProjectRecapSummary, RecapPeriod } from "@revv/shared";
+import Sparkles from "phosphor-svelte/lib/Sparkle";
+import Loader2 from "phosphor-svelte/lib/Spinner";
 import { untrack } from "svelte";
 import { Shimmer } from "$lib/components/ai/shimmer";
+import GenActionBar, { type GenActionState } from "$lib/components/layout/GenActionBar.svelte";
+import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import {
   abortRecapStream,
   getRecapStreamEntry,
@@ -26,7 +24,6 @@ import {
   regenerateRecap,
   stopRecap,
 } from "$lib/stores/recaps.svelte";
-import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import PreviousRecaps from "./PreviousRecaps.svelte";
 import RecapDetail from "./RecapDetail.svelte";
 
@@ -38,6 +35,7 @@ interface Props {
 let { repoId, period }: Props = $props();
 
 let generating = $state(false);
+const refreshedCompletedStreamIds: Record<string, true> = {};
 
 const periodLabel = $derived(period === "daily" ? "Daily" : "Weekly");
 const periodLabelLower = $derived(period === "daily" ? "daily" : "weekly");
@@ -87,6 +85,20 @@ $effect(() => {
   }
 });
 
+// SSE `done` should reveal the final persisted markdown even if the WS
+// completion broadcast arrives late or was missed while reconnecting.
+$effect(() => {
+  const id = latestId;
+  if (!id || !stream?.doneReceived || refreshedCompletedStreamIds[id]) return;
+  refreshedCompletedStreamIds[id] = true;
+  void untrack(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await loadRecap(id);
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await loadRecap(id);
+  });
+});
+
 // Cleanup any stream we started when navigating away or switching ids.
 $effect(() => {
   const id = latestId;
@@ -124,35 +136,39 @@ const periodEyebrow = $derived.by(() => {
   return `${DAY_SHORT_FMT.format(start)} → ${DAY_SHORT_FMT.format(now)} · UTC`;
 });
 
-// "Out of date" is computed against the user's LOCAL calendar, not UTC. The
-// server windows are UTC-aligned, but from the user's perspective a recap
-// labelled "Mon, 18 May · UTC" is stale once their wall clock reads May 19,
-// even if UTC hasn't rolled over yet. Clicking Generate will let the server
-// produce whatever the current UTC window dictates.
-function dayKey(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+function utcDayKey(iso: string | Date): string {
+  const s = typeof iso === 'string' ? iso : iso.toISOString();
+  return s.slice(0, 10);
 }
 
-function utcDayKey(iso: string): string {
-  return iso.slice(0, 10);
+function utcDateKey(d: Date): string {
+  return d.toISOString().slice(0, 10);
 }
 
-function localMondayKey(d: Date): string {
-  const daysFromMonday = (d.getDay() + 6) % 7;
-  const monday = new Date(d.getFullYear(), d.getMonth(), d.getDate() - daysFromMonday);
-  return dayKey(monday);
+function utcMondayKey(d: Date): string {
+  const daysFromMonday = (d.getUTCDay() + 6) % 7;
+  const mondayMs = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - daysFromMonday);
+  return new Date(mondayMs).toISOString().slice(0, 10);
 }
 
-const isOutOfDate = $derived.by(() => {
-  if (latest === null || latest.status !== "complete") return false;
-  if (typeof latest.periodStart !== "string") return false;
-  if (period === "daily") {
-    return utcDayKey(latest.periodStart) !== dayKey(new Date());
+function isClosedFullPeriod(r: ProjectRecap): boolean {
+  const start = new Date(r.periodStart).getTime();
+  const end = new Date(r.periodEnd).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
+  const duration = r.period === "daily" ? 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
+  return end - start === duration;
+}
+
+function recapIsOutOfDate(r: ProjectRecap): boolean {
+  if (r.status !== "complete") return false;
+  if (isClosedFullPeriod(r)) return true;
+  if (r.period === "daily") {
+    return utcDayKey(r.periodStart) !== utcDateKey(new Date());
   }
-  // Weekly: a recap's periodStart is the Monday of its UTC week. Compare
-  // that to the Monday of the user's current local week.
-  return utcDayKey(latest.periodStart) !== localMondayKey(new Date());
-});
+  // Weekly windows are labelled and generated in UTC, so compare against
+  // the current UTC week's Monday.
+  return utcDayKey(r.periodStart) !== utcMondayKey(new Date());
+}
 
 type RecapUiKind = "generating" | "stopped" | "error" | "complete" | "outdated" | "hidden";
 
@@ -162,18 +178,27 @@ const recapUiKind: RecapUiKind = $derived.by(() => {
   if (latestDetail.status === "error") {
     return latestDetail.errorMessage === "Cancelled by user" ? "stopped" : "error";
   }
-  if (latestDetail.status === "complete") return isOutOfDate ? "outdated" : "complete";
+  if (latestDetail.status === "complete") return recapIsOutOfDate(latestDetail) ? "outdated" : "complete";
   return "hidden";
 });
 
-const destructiveDisabled = $derived(pendingAction !== null);
-const destructiveTitle = $derived(
-  pendingAction === "regenerate"
-    ? "Regenerating…"
-    : pendingAction === "stop"
-      ? "Stopping…"
-      : undefined,
-);
+/** Map recap-specific state to the normalised GenActionState. */
+const genActionState = $derived.by((): GenActionState | null => {
+  switch (recapUiKind) {
+    case "generating":
+      return { kind: "streaming" };
+    case "stopped":
+      return { kind: "resumable" };
+    case "error":
+      return { kind: "error" };
+    case "complete":
+      return { kind: "complete" };
+    case "outdated":
+      return { kind: "stale", label: "Rerun this recap" };
+    default:
+      return null;
+  }
+});
 
 // Show the floating Generate pill when there's no recap yet.
 // When a recap exists, show the Regenerate/Stop/Resume bar instead.
@@ -212,12 +237,12 @@ async function onStop(): Promise<void> {
 		/>
 	{:else if latest && detailLoading}
 		<div class="period-loading">
-			<Loader2 size={20} class="animate-spin" aria-hidden="true" />
+			<Loader2 size={20} weight="regular" class="animate-spin" aria-hidden="true" />
 			<p>Loading {periodLabelLower} recap…</p>
 		</div>
 	{:else if listLoading && recaps.length === 0}
 		<div class="period-loading">
-			<Loader2 size={20} class="animate-spin" aria-hidden="true" />
+			<Loader2 size={20} weight="regular" class="animate-spin" aria-hidden="true" />
 			<p>Loading recaps…</p>
 		</div>
 	{:else}
@@ -245,9 +270,9 @@ async function onStop(): Promise<void> {
 	/>
 </div>
 
-{#if showGenerateFab || recapUiKind !== 'hidden'}
-	<div class="recap-actions-float">
-		<div class="recap-actions-row">
+{#if showGenerateFab || genActionState}
+	<div class="actions-float">
+		<div class="actions-row">
 			{#if showGenerateFab}
 				<GlassPill
 					variant="accent"
@@ -256,9 +281,9 @@ async function onStop(): Promise<void> {
 					title="Have the agent write a fresh {periodLabelLower} recap"
 				>
 					{#if generating}
-						<Loader2 size={14} class="animate-spin" aria-hidden="true" />
+						<Loader2 size={14} weight="regular" class="animate-spin" aria-hidden="true" />
 					{:else}
-						<Sparkles size={14} aria-hidden="true" />
+						<Sparkles size={16} weight="fill" aria-hidden="true" />
 					{/if}
 					<Shimmer active={!generating}>
 						{generating
@@ -266,53 +291,9 @@ async function onStop(): Promise<void> {
 							: `Generate ${periodLabelLower} recap`}
 					</Shimmer>
 				</GlassPill>
-			{:else if recapUiKind === 'generating'}
-				<GlassPill
-					variant="danger"
-					onclick={onStop}
-					disabled={pendingAction === 'stop'}
-					title={pendingAction === 'stop' ? 'Stopping…' : 'Stop this recap generation'}
-				>
-					<Square size={14} fill="currentColor" />
-					{pendingAction === 'stop' ? 'Stopping…' : 'Stop generation'}
-				</GlassPill>
-			{:else if recapUiKind === 'stopped'}
-				<GlassPill
-					disabled={destructiveDisabled}
-					title={destructiveTitle ?? 'Resume generation from where it was stopped'}
-					onclick={onRegenerate}
-					aria-label="Resume recap generation"
-				>
-					<Play size={14} fill="currentColor" />
-					Resume
-				</GlassPill>
-				<GlassPill
-					disabled={destructiveDisabled}
-					title={destructiveTitle ?? 'Generate a fresh recap (the current draft will be replaced)'}
-					onclick={onRegenerate}
-				>
-					<RefreshCw size={14} />
-					Regenerate
-				</GlassPill>
-			{:else if recapUiKind === 'error'}
-				<GlassPill
-					disabled={destructiveDisabled}
-					title={destructiveTitle ?? 'Retry recap generation after error'}
-					onclick={onRegenerate}
-					aria-label="Retry recap generation"
-				>
-					<RotateCcw size={14} />
-					Retry
-				</GlassPill>
-				<GlassPill
-					disabled={destructiveDisabled}
-					title={destructiveTitle ?? 'Generate a fresh recap (the current draft will be replaced)'}
-					onclick={onRegenerate}
-				>
-					<RefreshCw size={14} />
-					Regenerate
-				</GlassPill>
-			{:else if recapUiKind === 'outdated'}
+			{/if}
+
+			{#if recapUiKind === 'outdated'}
 				<GlassPill
 					variant="accent"
 					onclick={onGenerate}
@@ -320,31 +301,26 @@ async function onStop(): Promise<void> {
 					title="Write a brand-new recap for {currentPeriodLabel} {periodLabelLower} window. The recap below stays as-is."
 				>
 					{#if generating}
-						<Loader2 size={14} class="animate-spin" aria-hidden="true" />
+						<Loader2 size={14} weight="regular" class="animate-spin" aria-hidden="true" />
 					{:else}
-						<Sparkles size={14} aria-hidden="true" />
+						<Sparkles size={16} weight="fill" aria-hidden="true" />
 					{/if}
 					<Shimmer active={!generating}>
-						{generating ? `Generating ${currentPeriodLabel} recap…` : `Generate ${currentPeriodLabel} recap`}
+						{generating
+							? `Generating ${currentPeriodLabel} recap…`
+							: `Generate ${currentPeriodLabel} recap`}
 					</Shimmer>
 				</GlassPill>
-				<GlassPill
-					disabled={destructiveDisabled}
-					title={destructiveTitle ?? 'Replace this recap with a fresh run over the same past window (old version becomes superseded)'}
-					onclick={onRegenerate}
-				>
-					<RefreshCw size={14} />
-					Rerun this recap
-				</GlassPill>
-			{:else if recapUiKind === 'complete'}
-				<GlassPill
-					disabled={destructiveDisabled}
-					title={destructiveTitle ?? 'Generate a fresh recap for this period (the current one becomes superseded)'}
-					onclick={onRegenerate}
-				>
-					<RefreshCw size={14} />
-					Regenerate recap
-				</GlassPill>
+			{/if}
+
+			{#if genActionState}
+				<GenActionBar
+					uiState={genActionState}
+					pendingAction={pendingAction}
+					{onStop}
+					onResume={onRegenerate}
+					onRegenerate={onRegenerate}
+				/>
 			{/if}
 		</div>
 	</div>
@@ -407,31 +383,5 @@ async function onStop(): Promise<void> {
 		line-height: 1.55;
 		color: var(--color-text-secondary);
 		max-width: 34rem;
-	}
-
-	/* Bottom-anchored action bar — same structure and values as
-	   .walkthrough-actions-float in AppShell. Positioned relative to the
-	   nearest ancestor with `position: relative` — the page wrapper that
-	   each route provides outside the scroll container. */
-	.recap-actions-float {
-		position: absolute;
-		bottom: 0;
-		left: 0;
-		right: 0;
-		display: flex;
-		justify-content: center;
-		padding: 8px 0 10px;
-		z-index: 10;
-		pointer-events: none;
-	}
-
-	.recap-actions-float :global(*) {
-		pointer-events: auto;
-	}
-
-	.recap-actions-row {
-		display: inline-flex;
-		align-items: center;
-		gap: var(--spacing-island);
 	}
 </style>

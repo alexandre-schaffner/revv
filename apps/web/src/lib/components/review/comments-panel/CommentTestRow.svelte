@@ -98,9 +98,9 @@ const ariaLabel = $derived(
         {#snippet icon()}
             <span class="comment-icon" aria-hidden="true">
                 {#if hasMultipleMessages || hasMultipleThreads}
-                    <MessagesSquare size={13} />
+                    <MessagesSquare size={13} weight="fill" />
                 {:else}
-                    <MessageSquare size={13} />
+                    <MessageSquare size={13} weight="fill" />
                 {/if}
             </span>
         {/snippet}
@@ -131,10 +131,10 @@ const ariaLabel = $derived(
             <span class="preview-wrap">
                 <span class="preview-avatar" title={firstMessage?.authorName ?? ""}>
                     {#if firstMessage?.authorRole === 'ai_agent'}
-                        <Bot size={11} aria-hidden="true" />
-                    {:else if firstMessage?.authorAvatarUrl && !avatarFailed}
+                        <Bot size={11} weight="fill" aria-hidden="true" />
+                    {:else if firstMessage?.authorAvatarContent && !avatarFailed}
                         <img
-                            src={firstMessage.authorAvatarUrl}
+                            src={firstMessage.authorAvatarContent}
                             alt={firstMessage.authorName}
                             class="preview-avatar-img"
                             loading="lazy"
@@ -142,7 +142,7 @@ const ariaLabel = $derived(
                             onerror={() => (avatarFailed = true)}
                         />
                     {:else}
-                        <User size={11} aria-hidden="true" />
+                        <User size={11} weight="regular" aria-hidden="true" />
                     {/if}
                 </span>
                 <span class="comment-preview">{preview}</span>
@@ -176,7 +176,7 @@ const ariaLabel = $derived(
         --c-row-bg: var(--color-bg-elevated);
         --c-gutter-flash: var(--color-accent);
 
-        animation: comment-row-enter 0.5s var(--ease-out-expo) both;
+        animation: comment-row-enter var(--duration-ceremonial-medium) var(--ease-out-expo) both;
         animation-delay: var(--issue-delay, 0ms);
     }
 

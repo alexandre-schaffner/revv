@@ -16,11 +16,9 @@ const tabs = [
 ];
 
 // Center the floating tabs over the visible main area, mirroring
-// AppShell's `.tabs-float` math exactly.
+// AppShell's `.main-tab-bar` math exactly.
 const bounds = $derived(getMainAreaBounds());
-const floatingTabsStyle = $derived(
-  `left: ${bounds.left}px; right: ${bounds.right}px;`,
-);
+const floatingTabsStyle = $derived(`left: ${bounds.left}px; right: ${bounds.right}px;`);
 </script>
 
 <AuthGuard>
@@ -53,32 +51,6 @@ const floatingTabsStyle = $derived(
 	.page {
 		height: 100%;
 		overflow-y: auto;
-	}
-
-	/* Floating tabs bar at the top of the main area, centred between sidebar
-	   and optional right panel. Mirrors `.main-tab-bar` in AppShell:
-	   top = topbar height + island margin + pill padding-top (10px).
-	   Non-Tauri: 28 + 8 + 10 = 46px.  Tauri: 30 + 8 + 10 = 48px. */
-	.tabs-float {
-		position: fixed;
-		top: calc(var(--topbar-height) + var(--spacing-island) + 10px);
-		display: flex;
-		justify-content: center;
-		z-index: 20;
-		pointer-events: none;
-		transition:
-			left var(--duration-smooth) var(--ease-out-expo),
-			right var(--duration-instant) var(--ease-out-expo);
-	}
-
-	.tabs-float :global(*) {
-		pointer-events: auto;
-	}
-
-	/* Tauri title bar is calc(22px + --spacing-island) tall — not reflected
-	   in --topbar-height, so override with the same arithmetic. */
-	:global(html.tauri) .tabs-float {
-		top: calc(22px + var(--spacing-island) * 2 + 10px);
 	}
 
 	.content {

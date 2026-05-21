@@ -81,7 +81,7 @@ const hasReferences = $derived(
                             class="step-chip"
                             onclick={() => onBlockJump?.(blockId)}
                         >
-                            <ArrowUpRight size={10} aria-hidden="true" />
+                            <ArrowUpRight size={10} weight="fill" aria-hidden="true" />
                             step {stepN}
                         </button>
                     </li>

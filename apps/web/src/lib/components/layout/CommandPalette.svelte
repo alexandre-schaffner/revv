@@ -246,9 +246,9 @@ function handleItemClick(index: number) {
 						onmouseenter={() => (selectedIndex = i)}
 					>
 						<div class="pr-row-top">
-							{#if result.pr.authorAvatarUrl}
+							{#if result.pr.authorAvatarContent}
 								<img
-									src={result.pr.authorAvatarUrl}
+									src={result.pr.authorAvatarContent}
 									alt=""
 									class="pr-avatar"
 									loading="lazy"

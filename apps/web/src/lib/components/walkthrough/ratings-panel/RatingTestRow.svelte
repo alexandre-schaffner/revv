@@ -110,23 +110,23 @@ const isDisabled = $derived(state !== "resolved");
             <span class="row-icon" aria-hidden="true">
                 {#if state === "queued"}
                     <span class="icon-queued">
-                        <Loader2 size={14} />
+                        <Loader2 size={14} weight="regular" />
                     </span>
                 {:else if state === "running"}
                     <span class="icon-running">
-                        <Loader2 size={14} class="animate-spin" />
+                        <Loader2 size={14} weight="regular" class="animate-spin" />
                     </span>
                 {:else if rating?.verdict === "pass"}
                     <span class="icon-resolved">
-                        <Check size={14} />
+                        <Check size={14} weight="regular" />
                     </span>
                 {:else if rating?.verdict === "concern"}
                     <span class="icon-resolved">
-                        <AlertCircle size={14} />
+                        <AlertCircle size={14} weight="fill" />
                     </span>
                 {:else if rating?.verdict === "blocker"}
                     <span class="icon-resolved">
-                        <X size={14} />
+                        <X size={14} weight="fill" />
                     </span>
                 {/if}
             </span>
@@ -159,7 +159,7 @@ const isDisabled = $derived(state !== "resolved");
                 class:row-chevron--open={open}
                 aria-hidden="true"
             >
-                <ChevronRight size={14} />
+                <ChevronRight size={14} weight="fill" />
             </span>
         </Collapsible.Trigger>
 
@@ -332,7 +332,7 @@ const isDisabled = $derived(state !== "resolved");
     }
 
     .row[data-state="running"] .row-gutter {
-        animation: pulse-gutter 1.2s ease-in-out infinite;
+        animation: pulse-gutter var(--duration-pulse) var(--ease-soft) infinite;
     }
 
     /* When the row transitions to resolved, flash the gutter briefly with a
@@ -384,7 +384,7 @@ const isDisabled = $derived(state !== "resolved");
 
     .icon-resolved {
         display: inline-flex;
-        animation: icon-in 180ms var(--ease-out-expo) 1;
+        animation: icon-in var(--duration-quick) var(--ease-out-expo) 1;
     }
 
     @keyframes icon-in {
@@ -436,7 +436,7 @@ const isDisabled = $derived(state !== "resolved");
 
     /* Theatrical pulse when resolving — make the rationale text "land". */
     .row[data-state="resolved"] .row-rationale {
-        animation: rationale-pulse 220ms ease-out 1;
+        animation: rationale-pulse var(--duration-smooth) var(--ease-out-expo) 1;
     }
 
     @keyframes rationale-pulse {
@@ -498,7 +498,7 @@ const isDisabled = $derived(state !== "resolved");
     }
 
     .row[data-state="resolved"] :global(.row-trigger) {
-        animation: row-resolve 180ms var(--ease-out-expo) 1;
+        animation: row-resolve var(--duration-quick) var(--ease-out-expo) 1;
     }
 
     @keyframes row-resolve {

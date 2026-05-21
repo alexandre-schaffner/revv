@@ -58,7 +58,7 @@ function select(value: ThinkingEffort) {
                 >
                     {opt.label}
                     {#if currentEffort === opt.value}
-                        <Check size={12} class="text-accent" />
+                        <Check size={12} weight="regular" class="text-accent" />
                     {/if}
                 </button>
             {/each}

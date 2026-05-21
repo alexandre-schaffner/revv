@@ -62,7 +62,7 @@ const visible = $derived(archivedPrs.length > 0 || nextCursor !== null);
 			{#if expanded}
 				<ChevronDown size={12} aria-hidden="true" />
 			{:else}
-				<ChevronRight size={12} aria-hidden="true" />
+				<ChevronRight size={12} weight="fill" aria-hidden="true" />
 			{/if}
 			<Archive size={12} aria-hidden="true" />
 			<span class="archive-label">Show closed</span>

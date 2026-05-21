@@ -14,10 +14,10 @@ let failed = $state(false);
 
 <div class="avatar" title={msg.authorName}>
 	{#if msg.authorRole === 'ai_agent'}
-		<Bot size={14} aria-hidden="true" />
-	{:else if msg.authorAvatarUrl && !failed}
+		<Bot size={14} weight="fill" aria-hidden="true" />
+	{:else if msg.authorAvatarContent && !failed}
 		<img
-			src={msg.authorAvatarUrl}
+			src={msg.authorAvatarContent}
 			alt={msg.authorName}
 			class="avatar-img"
 			loading="lazy"
@@ -25,7 +25,7 @@ let failed = $state(false);
 			onerror={() => { failed = true; }}
 		/>
 	{:else}
-		<User size={14} aria-hidden="true" />
+		<User size={14} weight="regular" aria-hidden="true" />
 	{/if}
 </div>
 

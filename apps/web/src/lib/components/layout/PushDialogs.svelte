@@ -132,14 +132,14 @@ async function handleConfirmOverwrite(): Promise<void> {
     ></button>
     <div class="conflict-card" role="document">
       <div class="conflict-card-header">
-        <Warning size={14} class="conflict-card-icon" />
+        <Warning size={14} weight="fill" class="conflict-card-icon" />
         <span class="conflict-card-title">Push conflicts</span>
         <button
           class="icon-btn"
           onclick={onDismissConflict}
           aria-label="Close conflict dialog"
         >
-          <X size={14} />
+          <X size={14} weight="fill" />
         </button>
       </div>
       <div class="conflict-card-body">
@@ -184,10 +184,10 @@ async function handleConfirmOverwrite(): Promise<void> {
         <Dialog.Title>
           <span class="new-branch-title">
             {#if newBranchDialogMode === 'input'}
-              <GitBranch size={16} />
+              <GitBranch size={16} weight="fill" />
               Push to a new branch
             {:else}
-              <Warning size={16} class="new-branch-title-warn" />
+              <Warning size={16} weight="fill" class="new-branch-title-warn" />
               Branch already exists
             {/if}
           </span>
@@ -258,7 +258,7 @@ async function handleConfirmOverwrite(): Promise<void> {
             disabled={isPushing || !isValidNewBranchName(newBranchValue)}
           >
             {#if isPushing}
-              <Spinner size={12} class="motion-essential-spin" />
+              <Spinner size={12} weight="fill" class="motion-essential-spin" />
               Pushing…
             {:else}
               Push
@@ -272,7 +272,7 @@ async function handleConfirmOverwrite(): Promise<void> {
             disabled={isPushing}
           >
             {#if isPushing}
-              <Spinner size={12} class="motion-essential-spin" />
+              <Spinner size={12} weight="fill" class="motion-essential-spin" />
               Overwriting…
             {:else}
               Overwrite

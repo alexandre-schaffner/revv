@@ -177,15 +177,12 @@ function scrollToSection(id: SectionId): void {
 }
 
 // ── Avatar ────────────────────────────────────────────────────────────────
-let userAvatarFailed = $state(false);
-let lastAvatarUrl = $state<string | undefined>(undefined);
-$effect(() => {
-  const current = getUser()?.image;
-  if (current !== lastAvatarUrl) {
-    lastAvatarUrl = current;
-    userAvatarFailed = false;
-  }
-});
+// URL-keyed: failed state is only true while the current URL is the one that
+// errored. If the URL rotates (e.g. after re-login), the new URL is retried.
+let _userAvatarFailedForUrl = $state<string | null>(null);
+const userAvatarFailed = $derived(
+  _userAvatarFailedForUrl !== null && _userAvatarFailedForUrl === (getUser()?.image ?? null),
+);
 
 // ── Sync interval options ─────────────────────────────────────────────────
 const intervalOptions = [
@@ -394,11 +391,11 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 								alt=""
 								class="settings-sidebar-avatar"
 								referrerpolicy="no-referrer"
-								onerror={() => (userAvatarFailed = true)}
+								onerror={() => (_userAvatarFailedForUrl = getUser()?.image ?? null)}
 							/>
 						{:else}
 							<span class="settings-sidebar-avatar settings-sidebar-avatar--fallback" aria-hidden="true">
-								<User size={11} />
+								<User size={11} weight="regular" />
 							</span>
 						{/if}
 						<span class="settings-sidebar-username">{getUser()?.githubLogin ?? getUser()?.name ?? 'Account'}</span>
@@ -416,7 +413,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 				onclick={onClose}
 				aria-label="Close settings"
 			>
-					<X size={14} />
+					<X size={14} weight="fill" />
 				</Button>
 
 				<!-- Account -->
@@ -431,11 +428,11 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 										alt={getUser()?.name}
 										class="h-9 w-9 rounded-full"
 										referrerpolicy="no-referrer"
-										onerror={() => (userAvatarFailed = true)}
+										onerror={() => (_userAvatarFailedForUrl = getUser()?.image ?? null)}
 									/>
 								{:else}
-									<div class="flex h-9 w-9 items-center justify-center rounded-full bg-bg-elevated text-sm font-medium text-text-secondary">
-										{getUser()?.name[0]?.toUpperCase() ?? '?'}
+									<div class="flex h-9 w-9 items-center justify-center rounded-full bg-bg-elevated text-text-muted">
+										<User size={18} weight="regular" aria-hidden="true" />
 									</div>
 								{/if}
 								<div>
@@ -457,7 +454,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 								class="inline-flex items-center gap-1 text-accent underline underline-offset-2 hover:text-accent-hover"
 							>
 								your authorized applications
-								<ExternalLink size={10} />
+								<ExternalLink size={10} weight="fill" />
 							</a>.
 						</p>
 					{:else}
@@ -514,7 +511,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 								disabled={modelsLoading}
 								aria-label="Refresh models"
 							>
-								<RefreshCw size={12} class={modelsLoading ? 'animate-spin' : ''} />
+								<RefreshCw size={12} weight="fill" class={modelsLoading ? 'animate-spin' : ''} />
 							</Button>
 							<Select.Root
 								type="single"
@@ -644,7 +641,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 					<!-- AI status indicator -->
 					<div class="status-line">
 						{#if aiStatusLoading}
-							<Loader2 size={11} class="animate-spin text-text-muted" />
+							<Loader2 size={11} weight="regular" class="animate-spin text-text-muted" />
 							<span class="status-line-text">Checking status…</span>
 						{:else if aiConfigured}
 							<span class="status-line-dot status-line-dot--success" aria-hidden="true"></span>
@@ -794,7 +791,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 							disabled={cacheTestRunning}
 						>
 							{#if cacheTestRunning}
-								<Loader2 size={14} class="animate-spin" />
+								<Loader2 size={14} weight="regular" class="animate-spin" />
 							{/if}
 							Test connection
 						</Button>
@@ -924,10 +921,10 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 							class="flex shrink-0 items-center gap-1.5 text-xs"
 						>
 							{#if replaying}
-								<Loader2 size={12} class="animate-spin" />
+								<Loader2 size={12} weight="regular" class="animate-spin" />
 								Starting…
 							{:else}
-								<RotateCcw size={12} />
+								<RotateCcw size={12} weight="fill" />
 								Replay
 							{/if}
 						</Button>
@@ -962,10 +959,10 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 								class="flex items-center gap-1.5 text-xs hover:border-accent hover:text-text-primary"
 							>
 								{#if checking}
-									<Loader2 size={12} class="animate-spin" />
+									<Loader2 size={12} weight="regular" class="animate-spin" />
 									Checking…
 								{:else}
-									<Download size={12} />
+									<Download size={12} weight="fill" />
 									Check now
 								{/if}
 							</Button>
@@ -978,7 +975,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 		{#if getUser()}
 				<section id="section-danger" class="settings-section danger-section">
 					<h2 class="section-head-title section-head-title--danger">
-						<TriangleAlert size={14} />
+						<TriangleAlert size={14} weight="fill" />
 						Danger Zone
 					</h2>
 
@@ -1001,9 +998,9 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 											aria-label="Remove {repo.fullName}"
 										>
 											{#if removingRepoId === repo.id}
-												<Loader2 size={12} class="animate-spin" />
+												<Loader2 size={12} weight="regular" class="animate-spin" />
 											{:else}
-												<Trash2 size={12} />
+												<Trash2 size={12} weight="fill" />
 											{/if}
 										</button>
 									</li>
@@ -1030,7 +1027,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 									onclick={() => (showDeleteConfirm = true)}
 									class="flex shrink-0 items-center gap-1.5 text-xs"
 								>
-									<TriangleAlert size={12} />
+									<TriangleAlert size={12} weight="fill" />
 									Remove account
 								</Button>
 							{:else}
@@ -1052,10 +1049,10 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 										class="flex items-center gap-1.5 text-xs"
 									>
 										{#if deleting}
-											<Loader2 size={12} class="animate-spin" />
+											<Loader2 size={12} weight="regular" class="animate-spin" />
 											Removing…
 										{:else}
-											<TriangleAlert size={12} />
+											<TriangleAlert size={12} weight="fill" />
 											Confirm remove
 										{/if}
 									</Button>

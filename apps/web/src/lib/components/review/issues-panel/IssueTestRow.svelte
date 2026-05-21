@@ -134,7 +134,7 @@ function handleCheckboxClick(e: MouseEvent): void {
         {#snippet icon()}
             {#if submitted}
                 <span class="staged-check" aria-hidden="true">
-                    <Check size={13} />
+                    <Check size={13} weight="regular" />
                 </span>
             {:else}
                 <Checkbox
@@ -173,7 +173,7 @@ function handleCheckboxClick(e: MouseEvent): void {
         --c-gutter-color: var(--color-border);
         --c-row-bg: var(--color-bg-elevated);
         --c-gutter-flash: var(--c-gutter-color);
-        animation: issue-row-enter 0.5s var(--ease-out-expo) both;
+        animation: issue-row-enter var(--duration-ceremonial-medium) var(--ease-out-expo) both;
         animation-delay: var(--issue-delay, 0ms);
     }
 

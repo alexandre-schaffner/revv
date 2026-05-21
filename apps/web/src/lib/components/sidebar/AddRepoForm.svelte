@@ -243,7 +243,7 @@ let trackedCount = $derived(getRepositories().length);
 		aria-label="Refresh repositories"
 		title="Refresh repositories"
 	>
-		<RefreshCw size={13} class={getAvailableReposLoading() ? 'animate-spin' : ''} />
+		<RefreshCw size={13} weight="fill" class={getAvailableReposLoading() ? 'animate-spin' : ''} />
 	</button>
 </div>
 
@@ -388,7 +388,7 @@ let trackedCount = $derived(getRepositories().length);
 									{#if isRemoving}
 										<Dotmatrix variant="square-10" size="small" />
 									{:else}
-										<Trash2 size={11} />
+										<Trash2 size={11} weight="fill" />
 									{/if}
 								</button>
 							{/if}

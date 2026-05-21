@@ -11,6 +11,7 @@ import { DiffCacheService } from "./DiffCache";
 import { GitHubService } from "./GitHub";
 import { GitHubEtagCache } from "./GitHubEtagCache";
 import { PullRequestService } from "./PullRequest";
+import { RemoteUserService } from "./RemoteUser";
 import { RepositoryService } from "./Repository";
 import { SettingsService } from "./Settings";
 import { SyncService } from "./Sync";
@@ -43,6 +44,7 @@ export const PollSchedulerLive = Layer.effect(
     const hub = yield* WebSocketHub;
     const github = yield* GitHubService;
     const prService = yield* PullRequestService;
+    const remoteUserService = yield* RemoteUserService;
     const diffCache = yield* DiffCacheService;
     const repoService = yield* RepositoryService;
     const settingsService = yield* SettingsService;
@@ -326,6 +328,16 @@ export const PollSchedulerLive = Layer.effect(
               // listPrs failed — leave existing DB rows untouched for this repo
               if (prs === null) return null;
 
+              // Upsert PR authors into remote_users so their avatars are cached.
+              for (const pr of prs) {
+                yield* remoteUserService.upsert({
+                  provider: "github",
+                  providerUserId: "", // Numeric ID not available from listPrs
+                  login: pr.authorLogin,
+                  avatarUrl: pr.authorAvatarUrl,
+                });
+              }
+
               yield* withDb(prService.upsertPrs(prs)).pipe(
                 Effect.tapError((err) =>
                   Effect.sync(() => {
@@ -429,8 +441,10 @@ export const PollSchedulerLive = Layer.effect(
           for (const upd of updates) {
             const pr = closedPrMap.get(upd.id);
             if (!pr) continue;
+            const accountId = repoToAccountId.get(pr.repositoryId);
+            if (!accountId) continue;
             yield* hub
-              .broadcast({
+              .broadcastToAccount(accountId, {
                 type: "pr:archived",
                 data: {
                   prId: upd.id,
@@ -531,22 +545,19 @@ export const PollSchedulerLive = Layer.effect(
           }
         }
 
-        // Group PRs by account and broadcast per-account so each connected
-        // client only receives PRs for the account it authenticated against.
-        const prsByAccount = Map.groupBy(
-          allPrs,
-          (pr) => repoToAccountId.get(pr.repositoryId) ?? "unknown",
-        );
-        for (const [accountId, accountPrs] of prsByAccount) {
+        // Broadcast the canonical open-PR DB state per account. This includes
+        // repos whose GitHub fetch failed this cycle, so clients can safely
+        // treat `prs:updated` as full-state instead of a merge patch.
+        for (const accountId of accountIdSet) {
+          const accountPrs = yield* withDb(prService.listPrs(accountId));
           yield* hub.broadcastToAccount(accountId, { type: "prs:updated", data: accountPrs });
         }
 
         // ── Sync diff: compute what changed for notifications ────────────────
         const changes: SyncChange[] = [];
+        const existingMap = new Map(existingPrs.map((pr) => [pr.id, pr]));
 
         if (existingPrs.length > 0) {
-          const existingMap = new Map(existingPrs.map((pr) => [pr.id, pr]));
-
           for (const pr of allPrs) {
             const repoFullName =
               allRepos.find((r) => r.id === pr.repositoryId)?.fullName ?? pr.repositoryId;
@@ -620,11 +631,25 @@ export const PollSchedulerLive = Layer.effect(
         const suppressSummary = yield* Ref.get(suppressSummaryRef);
         const hasPeriodicSyncedOnce = yield* Ref.get(hasPeriodicSyncedOnceRef);
         if (!suppressSummary && hasPeriodicSyncedOnce && changes.length > 0) {
-          // Group changes by account and broadcast per-account.
-          const changesByAccount = Map.groupBy(changes, (c) => {
-            const pr = allPrs.find((p) => p.id === c.prId);
-            return pr ? (repoToAccountId.get(pr.repositoryId) ?? "unknown") : "unknown";
-          });
+          // Group changes by account and broadcast per-account. Closed PRs are
+          // no longer present in `allPrs`, so resolve their account from the
+          // pre-sync row instead of dropping them into an `unknown` bucket.
+          const changeAccountByPrId = new Map<string, string>();
+          for (const pr of allPrs) {
+            const accountId = repoToAccountId.get(pr.repositoryId);
+            if (accountId) changeAccountByPrId.set(pr.id, accountId);
+          }
+          for (const prId of closedPrIds) {
+            const pr = existingMap.get(prId);
+            if (!pr) continue;
+            const accountId = repoToAccountId.get(pr.repositoryId);
+            if (accountId) changeAccountByPrId.set(prId, accountId);
+          }
+
+          const changesByAccount = Map.groupBy(
+            changes,
+            (c) => changeAccountByPrId.get(c.prId) ?? "unknown",
+          );
           for (const [accountId, accountChanges] of changesByAccount) {
             yield* hub.broadcastToAccount(accountId, {
               type: "prs:sync-summary",

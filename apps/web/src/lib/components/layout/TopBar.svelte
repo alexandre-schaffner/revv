@@ -77,9 +77,9 @@ function cycleTheme() {
 		title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
 	>
 		{#if sidebarCollapsed}
-			<PanelLeftOpen size={14} />
+			<PanelLeftOpen size={14} weight="fill" />
 		{:else}
-			<PanelLeftClose size={14} />
+			<PanelLeftClose size={14} weight="fill" />
 		{/if}
 	</button>
 
@@ -103,7 +103,7 @@ function cycleTheme() {
 			aria-label="Sync pull requests"
 			title="Sync pull requests"
 		>
-			<RefreshCw size={14} class={isSyncing ? 'animate-spin' : ''} />
+			<RefreshCw size={14} weight="fill" class={isSyncing ? 'animate-spin' : ''} />
 		</button>
 		<button
 			class="theme-btn"
@@ -112,11 +112,11 @@ function cycleTheme() {
 			title={labels[theme]}
 		>
 			{#if theme === 'light'}
-				<Sun size={14} />
+				<Sun size={14} weight="fill" />
 			{:else if theme === 'dark'}
-				<Moon size={14} />
+				<Moon size={14} weight="fill" />
 			{:else}
-				<Monitor size={14} />
+				<Monitor size={14} weight="fill" />
 			{/if}
 		</button>
 

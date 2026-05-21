@@ -1,5 +1,5 @@
 <script lang="ts">
-import { fallbackOwnerHue, ownerHueFromAvatar } from "$lib/utils/avatarPalette";
+import { fallbackOwnerHue, peekOwnerHue } from "$lib/utils/avatarPalette";
 import { repoGradientDataUrl } from "$lib/utils/repoGradient";
 
 interface Props {
@@ -20,23 +20,9 @@ let {
   label,
 }: Props = $props();
 
-// Hash-based fallback renders immediately; $effect resolves the real hue
-// from the locally-cached image (fast) or fetches from the network (first visit).
-let ownerHue = $state(fallbackOwnerHue(fullName));
-
-$effect(() => {
-  ownerHue = fallbackOwnerHue(fullName);
-  if (!ownerAvatarUrl) return;
-
-  let stale = false;
-  ownerHueFromAvatar(ownerAvatarUrl).then((hue) => {
-    if (!stale) ownerHue = hue;
-  });
-  return () => {
-    stale = true;
-  };
-});
-
+const ownerHue = $derived(
+  (ownerAvatarUrl ? peekOwnerHue(ownerAvatarUrl) : undefined) ?? fallbackOwnerHue(fullName),
+);
 const grad = $derived(repoGradientDataUrl(fullName, ownerHue));
 const letter = $derived((fullName.split("/")[1] ?? fullName).slice(0, 1).toUpperCase());
 </script>

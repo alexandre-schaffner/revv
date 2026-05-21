@@ -13,6 +13,7 @@ import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
 
 import { setBatchSummaries } from "$lib/stores/sync.svelte";
 import { fuzzyScore } from "$lib/utils/fuzzy";
+import { preloadOwnerHues } from "$lib/utils/avatarPalette";
 
 let pullRequests = $state<PullRequest[]>([]);
 let repositories = $state<Repository[]>([]);
@@ -172,29 +173,21 @@ export function setPullRequests(prs: PullRequest[]): void {
 }
 
 /**
- * Merge-patch the in-memory PR list from a WebSocket `prs:updated` event.
- * Updates existing PRs by id in place, appends genuinely new ones.
- * Preserves existing order and derived state.
+ * Apply the full open-PR state from a WebSocket `prs:updated` event.
+ * The server sends the canonical DB list for the active account, so replacing
+ * avoids stale closed/reopened rows and preserves server ordering.
  */
-export function mergePullRequests(incoming: PullRequest[]): void {
-  const map = new Map(pullRequests.map((pr) => [pr.id, pr]));
-  for (const pr of incoming) {
-    map.set(pr.id, pr);
-  }
-  const existingIds = new Set(pullRequests.map((pr) => pr.id));
-  const merged: PullRequest[] = [];
-  for (const pr of pullRequests) {
-    const updated = map.get(pr.id);
-    if (updated) merged.push(updated);
-  }
-  for (const pr of incoming) {
-    if (!existingIds.has(pr.id)) merged.push(pr);
-  }
-  pullRequests = merged;
+export function replacePullRequests(incoming: PullRequest[]): void {
+  pullRequests = incoming;
+  if (incoming.length === 0 || archivedPrs.length === 0) return;
+
+  const openIds = new Set(incoming.map((pr) => pr.id));
+  archivedPrs = archivedPrs.filter((pr) => !openIds.has(pr.id));
 }
 
 export function setRepositories(repos: Repository[]): void {
   repositories = repos;
+  preloadOwnerHues(repos);
 }
 
 export function updateRepoCloneStatus(repoId: string, status: CloneStatus, error?: string): void {
@@ -381,7 +374,7 @@ export function onPrArchived(data: {
 export async function fetchRepos(): Promise<void> {
   try {
     const { data } = await api.api.repos.get();
-    if (data) repositories = data as Repository[];
+    if (data) setRepositories(data as Repository[]);
   } catch {
     // error handled by caller
   }

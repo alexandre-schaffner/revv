@@ -1,7 +1,7 @@
 import type { PullRequest } from "@revv/shared";
 import { and, desc, eq, gte, inArray, isNull, lt, ne, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
-import { pullRequests, repositories, walkthroughs } from "../db/schema/index";
+import { pullRequests, remoteUsers, repositories, walkthroughs } from "../db/schema/index";
 import { NotFoundError, ValidationError } from "../domain/errors";
 import { DbService } from "./Db";
 
@@ -12,7 +12,10 @@ function extractMentions(body: string): string[] {
   return [...new Set(matches.map((m) => m.slice(1)))];
 }
 
-function rowToPr(row: typeof pullRequests.$inferSelect): PullRequest {
+function rowToPr(
+  row: typeof pullRequests.$inferSelect,
+  avatarContent: string | null = null,
+): PullRequest {
   return {
     id: row.id,
     externalId: row.externalId,
@@ -20,7 +23,8 @@ function rowToPr(row: typeof pullRequests.$inferSelect): PullRequest {
     title: row.title,
     body: row.body ?? null,
     authorLogin: row.authorLogin,
-    authorAvatarUrl: row.authorAvatarUrl ?? null,
+    authorAvatarContent: avatarContent,
+    authorAvatarUrl: null,
     requestedReviewers: JSON.parse(row.requestedReviewers ?? "[]") as string[],
     status: row.status as PullRequest["status"],
     reviewStatus: row.reviewStatus as PullRequest["reviewStatus"],
@@ -213,24 +217,53 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
           }
           if (repoId) conditions.push(eq(pullRequests.repositoryId, repoId));
           return db
-            .select()
+            .select({
+              pr: pullRequests,
+              avatarContent: remoteUsers.avatarContent,
+            })
             .from(pullRequests)
+            .leftJoin(remoteUsers, eq(remoteUsers.login, pullRequests.authorLogin))
             .where(and(...conditions))
+            .orderBy(desc(pullRequests.updatedAt))
             .all();
         },
         catch: (e) => new ValidationError({ message: String(e) }),
-      }).pipe(Effect.orElseSucceed(() => [] as (typeof pullRequests.$inferSelect)[]));
-      return rows.map(rowToPr);
+      }).pipe(
+        Effect.orElseSucceed(
+          () =>
+            [] as {
+              pr: typeof pullRequests.$inferSelect;
+              avatarContent: string | null;
+            }[],
+        ),
+      );
+      return rows.map((r) => rowToPr(r.pr, r.avatarContent));
     }),
 
   getPr: (id, accountId) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
       const row = yield* Effect.try({
-        try: () => db.select().from(pullRequests).where(eq(pullRequests.id, id)).get(),
+        try: () =>
+          db
+            .select({
+              pr: pullRequests,
+              avatarContent: remoteUsers.avatarContent,
+            })
+            .from(pullRequests)
+            .leftJoin(remoteUsers, eq(remoteUsers.login, pullRequests.authorLogin))
+            .where(eq(pullRequests.id, id))
+            .get(),
         catch: (e) => new ValidationError({ message: String(e) }),
       }).pipe(
-        Effect.catchAll(() => Effect.succeed(null as typeof pullRequests.$inferSelect | null)),
+        Effect.catchAll(() =>
+          Effect.succeed(
+            null as {
+              pr: typeof pullRequests.$inferSelect;
+              avatarContent: string | null;
+            } | null,
+          ),
+        ),
       );
       if (!row) {
         return yield* Effect.fail(new NotFoundError({ resource: "pull_request", id }));
@@ -240,13 +273,13 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
         const repo = db
           .select()
           .from(repositories)
-          .where(eq(repositories.id, row.repositoryId))
+          .where(eq(repositories.id, row.pr.repositoryId))
           .get();
         if (!repo || repo.accountId !== accountId) {
           return yield* Effect.fail(new NotFoundError({ resource: "pull_request", id }));
         }
       }
-      return rowToPr(row);
+      return rowToPr(row.pr, row.avatarContent);
     }),
 
   upsertPrs: (prs) =>
@@ -281,7 +314,6 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
             };
             // Only set optional fields when non-null to satisfy exactOptionalPropertyTypes
             if (pr.body !== null) base.body = pr.body;
-            if (pr.authorAvatarUrl !== null) base.authorAvatarUrl = pr.authorAvatarUrl;
             if (pr.headSha !== null) base.headSha = pr.headSha;
             if (pr.baseSha !== null) base.baseSha = pr.baseSha;
             if (pr.closedAt !== null) base.closedAt = pr.closedAt;
@@ -390,8 +422,12 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
           // Probe with limit + 1 so we can detect whether more rows exist
           // without a separate COUNT query.
           const rows = db
-            .select()
+            .select({
+              pr: pullRequests,
+              avatarContent: remoteUsers.avatarContent,
+            })
             .from(pullRequests)
+            .leftJoin(remoteUsers, eq(remoteUsers.login, pullRequests.authorLogin))
             .where(and(...conditions))
             .orderBy(desc(pullRequests.closedAt))
             .limit(limit + 1)
@@ -400,10 +436,10 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
           const hasMore = rows.length > limit;
           const trimmed = hasMore ? rows.slice(0, limit) : rows;
           const lastRow = trimmed[trimmed.length - 1];
-          const nextCursor = hasMore && lastRow ? (lastRow.closedAt ?? null) : null;
+          const nextCursor = hasMore && lastRow ? (lastRow.pr.closedAt ?? null) : null;
 
           return {
-            prs: trimmed.map(rowToPr),
+            prs: trimmed.map((r) => rowToPr(r.pr, r.avatarContent)),
             nextCursor,
           };
         },
@@ -424,8 +460,12 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
       return yield* Effect.try({
         try: () => {
           const prRows = db
-            .select()
+            .select({
+              pr: pullRequests,
+              avatarContent: remoteUsers.avatarContent,
+            })
             .from(pullRequests)
+            .leftJoin(remoteUsers, eq(remoteUsers.login, pullRequests.authorLogin))
             .where(
               and(
                 eq(pullRequests.repositoryId, repoId),
@@ -441,7 +481,7 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
             return [] as ReadonlyArray<ArchivedPrWithWalkthrough>;
           }
 
-          const prIds = prRows.map((r) => r.id);
+          const prIds = prRows.map((r) => r.pr.id);
 
           // Latest non-superseded complete walkthrough per PR. We pull all
           // candidates and pick the freshest in JS — SQLite's window
@@ -483,9 +523,9 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
           }
 
           return prRows.map((pr): ArchivedPrWithWalkthrough => {
-            const w = latestByPr.get(pr.id);
+            const w = latestByPr.get(pr.pr.id);
             return {
-              pr: rowToPr(pr),
+              pr: rowToPr(pr.pr, pr.avatarContent),
               walkthrough: w
                 ? {
                     id: w.id,
@@ -514,8 +554,12 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
       return yield* Effect.try({
         try: () => {
           const prRows = db
-            .select()
+            .select({
+              pr: pullRequests,
+              avatarContent: remoteUsers.avatarContent,
+            })
             .from(pullRequests)
+            .leftJoin(remoteUsers, eq(remoteUsers.login, pullRequests.authorLogin))
             .where(and(eq(pullRequests.repositoryId, repoId), eq(pullRequests.status, "open")))
             .orderBy(desc(pullRequests.updatedAt))
             .limit(20)
@@ -525,7 +569,7 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
             return [] as ReadonlyArray<ArchivedPrWithWalkthrough>;
           }
 
-          const prIds = prRows.map((r) => r.id);
+          const prIds = prRows.map((r) => r.pr.id);
 
           const wtRows = db
             .select({
@@ -560,14 +604,14 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
           }
 
           // Sort: PRs with walkthroughs first, then by updatedAt DESC
-          const withWt = prRows.filter((pr) => latestByPr.has(pr.id));
-          const withoutWt = prRows.filter((pr) => !latestByPr.has(pr.id));
+          const withWt = prRows.filter((r) => latestByPr.has(r.pr.id));
+          const withoutWt = prRows.filter((r) => !latestByPr.has(r.pr.id));
           const sorted = [...withWt, ...withoutWt];
 
-          return sorted.map((pr): ArchivedPrWithWalkthrough => {
-            const w = latestByPr.get(pr.id);
+          return sorted.map((r): ArchivedPrWithWalkthrough => {
+            const w = latestByPr.get(r.pr.id);
             return {
-              pr: rowToPr(pr),
+              pr: rowToPr(r.pr, r.avatarContent),
               walkthrough: w
                 ? {
                     id: w.id,
@@ -719,15 +763,28 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
           // JSON-array membership checks (requestedReviewers, mentionedUsers).
           // SQLite JSON containment would work but is clunkier in Drizzle.
           return db
-            .select()
+            .select({
+              pr: pullRequests,
+              avatarContent: remoteUsers.avatarContent,
+            })
             .from(pullRequests)
+            .leftJoin(remoteUsers, eq(remoteUsers.login, pullRequests.authorLogin))
             .where(and(...conditions))
             .all();
         },
         catch: (e) => new ValidationError({ message: String(e) }),
-      }).pipe(Effect.orElseSucceed(() => [] as (typeof pullRequests.$inferSelect)[]));
+      }).pipe(
+        Effect.orElseSucceed(
+          () =>
+            [] as {
+              pr: typeof pullRequests.$inferSelect;
+              avatarContent: string | null;
+            }[],
+        ),
+      );
 
-      const tagged = rows.filter((row) => {
+      const tagged = rows.filter((r) => {
+        const row = r.pr;
         if (row.authorLogin === userLogin) return true;
         const reviewers = JSON.parse(row.requestedReviewers ?? "[]") as string[];
         if (reviewers.includes(userLogin)) return true;
@@ -735,6 +792,6 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
         if (mentioned.includes(userLogin)) return true;
         return false;
       });
-      return tagged.map(rowToPr);
+      return tagged.map((r) => rowToPr(r.pr, r.avatarContent));
     }),
 });
