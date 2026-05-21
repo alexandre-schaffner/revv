@@ -108,7 +108,7 @@ function handleMessage(msg: WsServerMessage): void {
       sync.setPrListSyncing(false);
       break;
     case "repos:updated":
-      prs.setRepositories(msg.data);
+      void prs.setRepositories(msg.data);
       break;
     case "repos:clone-status":
       prs.updateRepoCloneStatus(msg.data.repoId, msg.data.status, msg.data.error);

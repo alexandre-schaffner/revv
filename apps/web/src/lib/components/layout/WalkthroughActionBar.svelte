@@ -84,7 +84,7 @@ const combinedDisabledTitle = $derived(
           onclick={scrollWalkthroughToBottom}
           aria-label="Scroll to newest walkthrough content"
         >
-          <ArrowDown size={16} weight="fill" />
+          <ArrowDown size={16} weight="regular" />
           New content
         </GlassPill>
       {/if}

@@ -27,18 +27,20 @@ export function peekOwnerHue(src: string): number | undefined {
   return sessionHueCache.get(src);
 }
 
-/** Warm the session hue cache for every unique avatar in the repo list.
- *  Fire-and-forget: later avatar renders can use the cache without each
- *  component doing its own async extraction. */
-export function preloadOwnerHues(repos: { avatarUrl: string | null }[]): void {
+/** Warm the session hue cache for every unique avatar in the repo list. */
+export async function preloadOwnerHues(
+  repos: { avatarUrl: string | null; fullName: string }[],
+): Promise<void> {
   if (typeof document === "undefined") return;
   const seen = new Set<string>();
+  const loads: Promise<number>[] = [];
   for (const repo of repos) {
     if (repo.avatarUrl && !seen.has(repo.avatarUrl)) {
       seen.add(repo.avatarUrl);
-      void ownerHueFromAvatar(repo.avatarUrl);
+      loads.push(ownerHueFromAvatar(repo.avatarUrl, fallbackOwnerHue(repo.fullName)));
     }
   }
+  await Promise.all(loads);
 }
 
 // ── Hue extraction ────────────────────────────────────────────────────────────
@@ -98,13 +100,13 @@ function circularMedian(sorted: number[]): number {
   return ((median % 360) + 360) % 360;
 }
 
-function hueFromImg(img: HTMLImageElement): number {
+function hueFromImg(img: HTMLImageElement, fallbackHue: number): number {
   const SIZE = 16;
   const canvas = document.createElement("canvas");
   canvas.width = SIZE;
   canvas.height = SIZE;
   const ctx = canvas.getContext("2d");
-  if (!ctx) return hashString(img.src) % 360;
+  if (!ctx) return fallbackHue;
   ctx.drawImage(img, 0, 0, SIZE, SIZE);
   const { data } = ctx.getImageData(0, 0, SIZE, SIZE);
 
@@ -118,23 +120,28 @@ function hueFromImg(img: HTMLImageElement): number {
     for (let w = 0; w < weight; w++) weighted.push(h);
   }
 
-  if (weighted.length === 0) return hashString(img.src) % 360;
+  if (weighted.length === 0) return fallbackHue;
   weighted.sort((a, b) => a - b);
   return circularMedian(weighted);
 }
 
-function hueFromSrc(src: string): Promise<number> {
+function hueFromSrc(src: string, fallbackHue: number): Promise<number> {
   return new Promise((resolve) => {
     const img = new Image();
+    const timeout = window.setTimeout(() => resolve(fallbackHue), 1500);
+    const finish = (hue: number): void => {
+      window.clearTimeout(timeout);
+      resolve(hue);
+    };
     img.crossOrigin = "anonymous";
     img.onload = () => {
       try {
-        resolve(hueFromImg(img));
+        finish(hueFromImg(img, fallbackHue));
       } catch {
-        resolve(hashString(src) % 360);
+        finish(fallbackHue);
       }
     };
-    img.onerror = () => resolve(hashString(src) % 360);
+    img.onerror = () => finish(fallbackHue);
     img.src = src;
   });
 }
@@ -157,9 +164,14 @@ function setSessionHue(src: string, hue: number): void {
   sessionHueCache.set(src, hue);
 }
 
-export function ownerHueFromAvatar(src: string): Promise<number> {
+export function ownerHueFromAvatar(src: string): Promise<number>;
+export function ownerHueFromAvatar(src: string, fallbackHue: number): Promise<number>;
+export function ownerHueFromAvatar(
+  src: string,
+  fallbackHue = hashString(src) % 360,
+): Promise<number> {
   if (typeof document === "undefined") {
-    return Promise.resolve(hashString(src) % 360);
+    return Promise.resolve(fallbackHue);
   }
 
   const session = sessionHueCache.get(src);
@@ -168,7 +180,7 @@ export function ownerHueFromAvatar(src: string): Promise<number> {
   const pending = pendingLoads.get(src);
   if (pending) return pending;
 
-  const promise = hueFromSrc(src).then((hue) => {
+  const promise = hueFromSrc(src, fallbackHue).then((hue) => {
     setSessionHue(src, hue);
     return hue;
   });
@@ -176,4 +188,9 @@ export function ownerHueFromAvatar(src: string): Promise<number> {
   pendingLoads.set(src, promise);
   promise.finally(() => pendingLoads.delete(src));
   return promise;
+}
+
+export function clearOwnerHueCache(): void {
+  sessionHueCache.clear();
+  pendingLoads.clear();
 }

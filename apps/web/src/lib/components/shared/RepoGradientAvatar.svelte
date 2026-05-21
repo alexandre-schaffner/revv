@@ -1,5 +1,5 @@
 <script lang="ts">
-import { fallbackOwnerHue, peekOwnerHue } from "$lib/utils/avatarPalette";
+import { fallbackOwnerHue, ownerHueFromAvatar, peekOwnerHue } from "$lib/utils/avatarPalette";
 import { repoGradientDataUrl } from "$lib/utils/repoGradient";
 
 interface Props {
@@ -20,9 +20,25 @@ let {
   label,
 }: Props = $props();
 
-const ownerHue = $derived(
-  (ownerAvatarUrl ? peekOwnerHue(ownerAvatarUrl) : undefined) ?? fallbackOwnerHue(fullName),
-);
+let resolvedOwnerHue = $state<number | undefined>(undefined);
+let hueRequestKey = "";
+
+const fallbackHue = $derived(fallbackOwnerHue(fullName));
+const ownerHue = $derived(resolvedOwnerHue ?? fallbackHue);
+
+$effect(() => {
+  const cachedHue = ownerAvatarUrl ? peekOwnerHue(ownerAvatarUrl) : undefined;
+  resolvedOwnerHue = cachedHue;
+
+  if (!ownerAvatarUrl || cachedHue !== undefined) return;
+
+  const requestKey = `${ownerAvatarUrl}:${fallbackHue}`;
+  hueRequestKey = requestKey;
+  void ownerHueFromAvatar(ownerAvatarUrl, fallbackHue).then((resolvedHue) => {
+    if (hueRequestKey === requestKey) resolvedOwnerHue = resolvedHue;
+  });
+});
+
 const grad = $derived(repoGradientDataUrl(fullName, ownerHue));
 const letter = $derived((fullName.split("/")[1] ?? fullName).slice(0, 1).toUpperCase());
 </script>

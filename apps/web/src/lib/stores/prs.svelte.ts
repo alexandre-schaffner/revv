@@ -13,7 +13,7 @@ import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
 
 import { setBatchSummaries } from "$lib/stores/sync.svelte";
 import { fuzzyScore } from "$lib/utils/fuzzy";
-import { preloadOwnerHues } from "$lib/utils/avatarPalette";
+import { clearOwnerHueCache, preloadOwnerHues } from "$lib/utils/avatarPalette";
 
 let pullRequests = $state<PullRequest[]>([]);
 let repositories = $state<Repository[]>([]);
@@ -51,6 +51,14 @@ let taggedPrsLoadingByRepo = $state<Map<string, boolean>>(new Map());
 // Set of PR ids pinned by the current user. Fetched once at login and
 // kept in sync via local optimistic updates.
 let pinnedPrIds = $state<Set<string>>(new Set());
+
+interface RepoDeleteSnapshot {
+  readonly repositories: Repository[];
+  readonly pullRequests: PullRequest[];
+  readonly archivedPrs: PullRequest[];
+  readonly taggedPrsByRepo: Map<string, PullRequest[]>;
+  readonly pinnedPrIds: Set<string>;
+}
 
 // Sidebar PR search uses the same fuzzy scorer as the Cmd+P palette so a
 // search like "auth jw" can match "Add JWT auth middleware" and a search like
@@ -185,9 +193,49 @@ export function replacePullRequests(incoming: PullRequest[]): void {
   archivedPrs = archivedPrs.filter((pr) => !openIds.has(pr.id));
 }
 
-export function setRepositories(repos: Repository[]): void {
-  repositories = repos;
-  preloadOwnerHues(repos);
+let repositoryLoadSeq = 0;
+
+export async function setRepositories(repos: Repository[]): Promise<void> {
+  const seq = ++repositoryLoadSeq;
+  await preloadOwnerHues(repos);
+  if (seq === repositoryLoadSeq) repositories = repos;
+}
+
+function snapshotRepoState(): RepoDeleteSnapshot {
+  return {
+    repositories,
+    pullRequests,
+    archivedPrs,
+    taggedPrsByRepo,
+    pinnedPrIds,
+  };
+}
+
+function restoreRepoState(snapshot: RepoDeleteSnapshot): void {
+  repositories = snapshot.repositories;
+  void preloadOwnerHues(repositories);
+  pullRequests = snapshot.pullRequests;
+  archivedPrs = snapshot.archivedPrs;
+  taggedPrsByRepo = snapshot.taggedPrsByRepo;
+  pinnedPrIds = snapshot.pinnedPrIds;
+}
+
+function removeRepoLocally(repoId: string): void {
+  const removedPrIds = new Set(
+    [...pullRequests, ...archivedPrs].filter((pr) => pr.repositoryId === repoId).map((pr) => pr.id),
+  );
+
+  repositories = repositories.filter((repo) => repo.id !== repoId);
+  pullRequests = pullRequests.filter((pr) => pr.repositoryId !== repoId);
+  archivedPrs = archivedPrs.filter((pr) => pr.repositoryId !== repoId);
+
+  const nextTagged = new Map(taggedPrsByRepo);
+  nextTagged.delete(repoId);
+  taggedPrsByRepo = nextTagged;
+
+  if (removedPrIds.size > 0) {
+    pinnedPrIds = new Set([...pinnedPrIds].filter((prId) => !removedPrIds.has(prId)));
+  }
 }
 
 export function updateRepoCloneStatus(repoId: string, status: CloneStatus, error?: string): void {
@@ -374,7 +422,7 @@ export function onPrArchived(data: {
 export async function fetchRepos(): Promise<void> {
   try {
     const { data } = await api.api.repos.get();
-    if (data) setRepositories(data as Repository[]);
+    if (data) await setRepositories(data as Repository[]);
   } catch {
     // error handled by caller
   }
@@ -424,15 +472,38 @@ export async function addRepo(fullName: string): Promise<void> {
   await fetchPrs();
 }
 
-export async function deleteRepo(id: string): Promise<void> {
-  try {
-    await api.api.repos({ id }).delete();
-    await fetchRepos();
-    await fetchPrs();
-  } catch (e) {
-    toast.error(e instanceof Error ? e.message : "Failed to remove repository");
-    throw e;
-  }
+export function deleteRepo(id: string): Promise<void> {
+  const snapshot = snapshotRepoState();
+  const repo = repositories.find((r) => r.id === id);
+  const toastOptions = repo ? { description: repo.fullName } : undefined;
+  const toastId = toast.loading("Removing repository...", toastOptions);
+
+  removeRepoLocally(id);
+
+  void api.api
+    .repos({ id })
+    .delete()
+    .then(({ error }) => {
+      toast.dismiss(toastId);
+      if (error) {
+        restoreRepoState(snapshot);
+        const value = error.value as { error?: string; message?: string } | undefined;
+        toast.error(
+          value?.error ?? value?.message ?? `Failed to remove repository (HTTP ${error.status})`,
+        );
+        return;
+      }
+
+      toast.success("Repository removed", toastOptions);
+      void Promise.all([fetchRepos(), fetchPrs()]);
+    })
+    .catch((e) => {
+      toast.dismiss(toastId);
+      restoreRepoState(snapshot);
+      toast.error(e instanceof Error ? e.message : "Failed to remove repository");
+    });
+
+  return Promise.resolve();
 }
 
 /**
@@ -554,7 +625,9 @@ export async function fetchAvailableRepos(force = false): Promise<void> {
       return;
     }
     if (data) {
-      availableRepos = data as Repository[];
+      const repos = data as Repository[];
+      await preloadOwnerHues(repos);
+      availableRepos = repos;
       availableReposFetchFailed = false;
       // Fire-and-forget — the row hint renders as the counts arrive.
       void fetchAvailablePrCounts(availableRepos.map((r) => r.fullName));
@@ -606,6 +679,8 @@ export function getAvailablePrCountsLoaded(): boolean {
 }
 
 export function reset(): void {
+  repositoryLoadSeq++;
+  clearOwnerHueCache();
   pullRequests = [];
   repositories = [];
   availableRepos = [];

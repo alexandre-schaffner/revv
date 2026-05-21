@@ -494,6 +494,9 @@ export async function switchAccount(userId: string, host?: string): Promise<void
     settings.reset();
     orgs.reset();
     clearReviewFiles();
+    if (typeof window !== "undefined" && /^\/(repo|review)(\/|$)/.test(window.location.pathname)) {
+      await goto("/", { replaceState: true });
+    }
     // Persist the target host on the server FIRST so any handler resolving
     // the active account from settings (e.g. `/api/prs`, `/api/repos`) sees
     // the right host immediately. We hit the endpoint directly because the

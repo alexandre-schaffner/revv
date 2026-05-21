@@ -291,6 +291,19 @@ export const ProjectRecapJobsLive = Layer.effect(
         return next;
       });
 
+    const clearTokensForRecap = (recapId: string): Effect.Effect<void> =>
+      Ref.update(sessionTokens, (map) => {
+        let changed = false;
+        const next = new Map(map);
+        for (const [token, entry] of next) {
+          if (entry.ctx.recapId === recapId) {
+            next.delete(token);
+            changed = true;
+          }
+        }
+        return changed ? next : map;
+      });
+
     const provideDb = <A, E>(eff: Effect.Effect<A, E, DbService>): Effect.Effect<A, E> =>
       withDb(db, eff);
 
@@ -369,11 +382,11 @@ export const ProjectRecapJobsLive = Layer.effect(
         }
       });
 
-    const removeJob = (recapId: string) =>
+    const removeJob = (job: ActiveRecapJob) =>
       Ref.update(registry, (map) => {
-        if (!map.has(recapId)) return map;
+        if (map.get(job.recapId) !== job) return map;
         const next = new Map(map);
-        next.delete(recapId);
+        next.delete(job.recapId);
         return next;
       });
 
@@ -1181,7 +1194,7 @@ export const ProjectRecapJobsLive = Layer.effect(
               );
             }),
           ),
-          Effect.ensuring(removeJob(job.recapId)),
+          Effect.ensuring(removeJob(job)),
         );
 
         const fiber = yield* Effect.forkDaemon(scopedBody);
@@ -1204,12 +1217,18 @@ export const ProjectRecapJobsLive = Layer.effect(
           } catch {
             /* already aborted */
           }
+          // Don't wait for the fiber to finish interrupting — during
+          // opencode "thinking" the remote session.abort() / prompt
+          // shutdown can hang, and Fiber.interrupt would block the HTTP
+          // stop request indefinitely. Fire-and-forget; the safety net
+          // below transitions the row immediately.
           if (job.fiber) {
-            yield* Fiber.interrupt(job.fiber);
+            yield* Fiber.interruptFork(job.fiber);
           }
+          yield* clearTokensForRecap(recapId);
         }
 
-        // Post-interrupt safety net. Two cases land here:
+        // Immediate safety net. Two cases land here:
         //
         //   (a) No live job in the registry — phantom row left in
         //       'generating' by a prior server crash / restart, before
@@ -1275,9 +1294,16 @@ export const ProjectRecapJobsLive = Layer.effect(
                 );
             }
 
-            // Already running? Reuse.
+            // Already running? Reuse, unless the old job was cancelled
+            // or aborted and hasn't cleaned up from the registry yet.
             const existing = (yield* Ref.get(registry)).get(recapId);
-            if (existing) return { recapId };
+            if (existing) {
+              if (existing.cancelledByUser || existing.abortController.signal.aborted) {
+                yield* removeJob(existing);
+              } else {
+                return { recapId };
+              }
+            }
 
             const job: ActiveRecapJob = {
               recapId,

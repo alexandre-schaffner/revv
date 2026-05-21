@@ -194,6 +194,20 @@ export const commitRecapOverviewHandler: RecapToolHandler<CommitRecapOverviewInp
   ctx,
   input,
 ) => {
+  // Guard: refuse to write if the recap was stopped, superseded, or
+  // otherwise no longer generating. Prevents a late tool call from a
+  // cancelled agent from clobbering a newer run or a stopped row.
+  const currentRow = ctx.db
+    .select({ status: projectRecaps.status })
+    .from(projectRecaps)
+    .where(eq(projectRecaps.id, ctx.recapId))
+    .get();
+  if (currentRow?.status !== "generating") {
+    return err(
+      `Recap is no longer generating (status=${currentRow?.status ?? "unknown"}). Aborting commit.`,
+    );
+  }
+
   // Read the markdown body from the in-memory buffer the orchestrator's
   // stream consumer has been appending text-deltas into. The agent's
   // visible response IS the recap — the model never re-serialises it
@@ -279,6 +293,18 @@ export const commitRecapOverviewHandler: RecapToolHandler<CommitRecapOverviewInp
 // ── Validation gate ──────────────────────────────────────────────────────────
 
 export const completeRecapHandler: RecapToolHandler<CompleteRecapInput> = async (ctx) => {
+  // Guard: refuse to complete if the recap was stopped or superseded.
+  const statusRow = ctx.db
+    .select({ status: projectRecaps.status })
+    .from(projectRecaps)
+    .where(eq(projectRecaps.id, ctx.recapId))
+    .get();
+  if (statusRow?.status !== "generating") {
+    return err(
+      `Recap is no longer generating (status=${statusRow?.status ?? "unknown"}). Aborting completion.`,
+    );
+  }
+
   // Re-read to confirm the agent did call commit_recap_overview before this.
   const row = ctx.db
     .select({
