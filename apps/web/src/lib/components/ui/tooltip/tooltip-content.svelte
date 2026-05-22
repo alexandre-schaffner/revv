@@ -8,14 +8,12 @@ import TooltipPortal from "./tooltip-portal.svelte";
 let {
   ref = $bindable(null),
   class: className,
-  sideOffset = 10,
+  sideOffset = 8,
   side = "top",
   children,
-  arrowClasses,
   portalProps,
   ...restProps
 }: TooltipPrimitive.ContentProps & {
-  arrowClasses?: string;
   portalProps?: WithoutChildrenOrChild<ComponentProps<typeof TooltipPortal>>;
 } = $props();
 </script>
@@ -33,11 +31,6 @@ let {
 		{...restProps}
 	>
 		{@render children?.()}
-		<TooltipPrimitive.Arrow>
-			{#snippet child({ props })}
-				<div class="tooltip-arrow" {...props}></div>
-			{/snippet}
-		</TooltipPrimitive.Arrow>
 	</TooltipPrimitive.Content>
 </TooltipPortal>
 
@@ -48,35 +41,6 @@ let {
 		-webkit-backdrop-filter: blur(16px) saturate(1.4);
 		border: 1px solid var(--color-glass-border);
 		box-shadow: var(--color-shadow-md);
-	}
-
-	:global(.tooltip-arrow) {
-		width: 10px;
-		height: 6px;
-		background: var(--color-glass-bg);
-		filter: drop-shadow(0 0 0.5px var(--color-glass-border));
-	}
-
-	/* Arrow shape per side — clip-path draws a triangle pointing toward the trigger */
-	:global([data-side="top"] .tooltip-arrow) {
-		clip-path: polygon(0 0, 100% 0, 50% 100%); /* points down */
-		width: 10px;
-		height: 6px;
-	}
-	:global([data-side="bottom"] .tooltip-arrow) {
-		clip-path: polygon(50% 0, 100% 100%, 0 100%); /* points up */
-		width: 10px;
-		height: 6px;
-	}
-	:global([data-side="left"] .tooltip-arrow) {
-		clip-path: polygon(0 0, 0 100%, 100% 50%); /* points right */
-		width: 6px;
-		height: 10px;
-	}
-	:global([data-side="right"] .tooltip-arrow) {
-		clip-path: polygon(100% 0, 100% 100%, 0 50%); /* points left */
-		width: 6px;
-		height: 10px;
 	}
 
 	@keyframes -global-tooltip-in-right  { from { opacity: 0; scale: 0.95; translate: -4px 0   } to { opacity: 1; scale: 1; translate: 0 0 } }
