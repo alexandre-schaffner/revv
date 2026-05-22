@@ -9,7 +9,7 @@ export type PromptInputTextareaProps = HTMLTextareaAttributes & {
 
 <script lang="ts">
 	import { cn } from "$lib/utils.js";
-	import { getContext } from "svelte";
+	import { getContext, tick } from "svelte";
 	import { PROMPT_INPUT_CTX_KEY, type PromptInputContext } from "./context.js";
 
 	let {
@@ -36,8 +36,11 @@ export type PromptInputTextareaProps = HTMLTextareaAttributes & {
 
 	$effect(() => {
 		// Track context value so autoResize fires on programmatic clear/fill.
+		// Defer to a microtask so scrollHeight is read after the browser has
+		// reflected the new value — without this, the initial measurement
+		// happens before layout commit and the textarea sticks oversized.
 		void ctx.value;
-		autoResize();
+		void tick().then(autoResize);
 	});
 </script>
 
@@ -50,7 +53,7 @@ export type PromptInputTextareaProps = HTMLTextareaAttributes & {
 	}}
 	data-slot="prompt-input-textarea"
 	class={cn(
-		"w-full resize-none bg-transparent px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none",
+		"block w-full min-h-[2.75rem] resize-none bg-transparent px-4 py-3 text-sm leading-relaxed text-foreground placeholder:text-muted-foreground focus:outline-none",
 		className,
 	)}
 	{placeholder}
