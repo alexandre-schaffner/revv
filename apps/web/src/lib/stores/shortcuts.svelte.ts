@@ -6,7 +6,9 @@ import { toggleRightPanel, toggleSidebar } from "./sidebar.svelte";
 export type PaletteMode = "search" | "command";
 
 let cmdHeld = $state(false);
-export function getCmdHeld(): boolean { return cmdHeld; }
+export function getCmdHeld(): boolean {
+  return cmdHeld;
+}
 
 let paletteOpen = $state(false);
 let paletteMode = $state<PaletteMode>("search");
@@ -155,7 +157,9 @@ function handleKeyup(e: KeyboardEvent): void {
   if (e.key === "Meta") cmdHeld = false;
 }
 
-function handleBlur(): void { cmdHeld = false; }
+function handleBlur(): void {
+  cmdHeld = false;
+}
 
 /** Attach global keyboard listener. Returns cleanup function. */
 export function initShortcuts(): () => void {
