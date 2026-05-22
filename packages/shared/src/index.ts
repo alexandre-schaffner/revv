@@ -9,7 +9,7 @@ export type {
   WalkthroughSnapshotSemanticStep,
   WalkthroughSnapshotV1,
 } from "./cache";
-export { CACHE_METADATA_KEYS, CACHE_SCHEMA_VERSION, cacheObjectKey } from "./cache";
+export { CACHE_METADATA_KEYS, CACHE_SCHEMA_VERSION, MAX_CACHE_BODY_BYTES, cacheObjectKey } from "./cache";
 export type {
   ChatPlan,
   ChatQuestion,
