@@ -15,7 +15,7 @@
 // `Option.none` and logs. From a behavior standpoint it's identical to a
 // real miss — the orchestrator falls back to running the agent.
 
-import { createHash, createHmac } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { gunzipSync, gzipSync } from "node:zlib";
 import type { WalkthroughSnapshotV1 } from "@revv/shared";
 import {
@@ -191,18 +191,23 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
               const expectedHmac = createHmac("sha256", signingSecret)
                 .update(key)
                 .update(body)
-                .digest("hex");
-              if (expectedHmac !== advertisedHmac) {
+                .digest();
+              const advertisedHmacBuf = Buffer.from(advertisedHmac, "hex");
+              if (
+                advertisedHmacBuf.length !== expectedHmac.length ||
+                !timingSafeEqual(expectedHmac, advertisedHmacBuf)
+              ) {
                 logError("remote-cache", `contentHmac mismatch key=${key} — rejecting`);
                 return Option.none<WalkthroughSnapshotV1>();
               }
             } else {
-              // Object predates HMAC signing — allow but warn so operators
-              // know the entry is unverified.
+              // signingSecret is set but the object has no HMAC — reject so
+              // that omitting the metadata field cannot bypass verification.
               logError(
                 "remote-cache",
-                `contentHmac absent key=${key} — accepting legacy entry (signingSecret is set)`,
+                `contentHmac absent key=${key} — rejecting (signingSecret is set)`,
               );
+              return Option.none<WalkthroughSnapshotV1>();
             }
           }
 
