@@ -4,7 +4,7 @@
 // The agent's job: read source PRs and prior recaps via MCP, write the recap
 // in one atomic call, then validate.
 
-import type { ProjectRecap, RecapPeriod } from "@revv/shared";
+import type { ProjectRecap } from "@revv/shared";
 import type { RecapSourceBundle } from "../providers/recap-tools";
 import { loadSkills } from "../skills/registry";
 
@@ -107,11 +107,4 @@ export function buildRecapUserMessage(
     "",
     `Begin by calling get_recap_state. Use the diffDigest fields for archived PRs without walkthroughs; raw diffs were already ingested before this final recap run. Then (when openPrsTotal > 0) walk every page of list_open_prs until nextOffset is null. Then get_repo_context. After all reads complete, write the COMPLETE recap markdown as your visible assistant response in one continuous block — no further tool calls until you finish, because a tool call resets the streaming buffer. Then commit_recap_overview with metadata only (no \`overview\` argument — the server reads what you typed). Finally call complete_recap.`,
   ].join("\n");
-}
-
-/** Maximum word budget for the response — the SDK respects this loosely. */
-export const RECAP_MAX_RESPONSE_WORDS_HINT = 600;
-
-export function recapPeriodLabel(period: RecapPeriod): string {
-  return period === "daily" ? "daily" : "weekly";
 }

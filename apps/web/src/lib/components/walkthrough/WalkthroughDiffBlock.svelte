@@ -29,9 +29,6 @@ const targetLine = $derived.by(() => {
 let instance: FileDiff<never> | null = null;
 
 function mountDiffBlock(el: HTMLDivElement) {
-  // These options must match the SSR options in
-  // apps/server/src/routes/reviews/handlers/walkthrough-stream.ts
-  // (WALKTHROUGH_DIFF_SSR_OPTIONS). Drift breaks hydration.
   const options: FileDiffOptions<never> = {
     diffStyle: "unified",
     theme: { dark: "pierre-dark", light: "pierre-light" },

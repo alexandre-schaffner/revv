@@ -25,10 +25,6 @@ export function getSettings(): UserSettings | null {
   return settings;
 }
 
-export function getIsLoading(): boolean {
-  return isLoading;
-}
-
 /**
  * GitHub host the app authenticates against. Returns `null` until the
  * settings file has been fetched at least once. The onboarding flow reads

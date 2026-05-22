@@ -40,7 +40,9 @@ import type {
 import { and, asc, desc, eq, gt, inArray, ne } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { commentThreads } from "../db/schema/comment-threads";
+import { pullRequests } from "../db/schema/pull-requests";
 import { remoteUsers } from "../db/schema/remote-users";
+import { repositories } from "../db/schema/repositories";
 import { walkthroughBlocks } from "../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../db/schema/walkthrough-issues";
 import { walkthroughRatings } from "../db/schema/walkthrough-ratings";
@@ -425,6 +427,46 @@ export class WalkthroughService extends Context.Tag("WalkthroughService")<
     readonly markIssuesSubmitted: (
       issueIds: readonly string[],
     ) => Effect.Effect<string, never, DbService>;
+
+    /**
+     * Atomically increment `walkthroughs.next_seq` and return the value that
+     * was current before the increment. The returned value is the `seq` to
+     * stamp onto the outgoing `walkthrough:event` envelope; the post-bump
+     * value is what will be returned on the *next* call.
+     *
+     * Sequence starts at 0 for a freshly-created walkthrough row. Survives
+     * `kill -9` and resume — invariant #1 (SQLite is authoritative). Chat-
+     * edit writes after `status='complete'` continue to use the same
+     * counter so it strictly grows for the lifetime of the row.
+     */
+    readonly bumpSeq: (walkthroughId: string) => Effect.Effect<number, never, DbService>;
+
+    /**
+     * List in-flight (`status='generating'`) walkthroughs owned by the
+     * given account, returning the cursor (`seqAt = next_seq - 1`) the
+     * client uses to drop any in-flight events that arrived on the SSE
+     * before the snapshot. The client calls this once on SSE open to seed
+     * sidebar spinners and `lastSeenSeq` cursors for jobs the user isn't
+     * currently viewing.
+     */
+    readonly listActiveForAccount: (accountId: string) => Effect.Effect<
+      Array<{
+        readonly prId: string;
+        readonly walkthroughId: string;
+        readonly prHeadSha: string;
+        readonly seqAt: number;
+      }>,
+      never,
+      DbService
+    >;
+
+    /**
+     * Read the current `seqAt = next_seq - 1` cursor for a single walkthrough.
+     * Used by `GET /walkthrough/current` so the client can seed its
+     * `lastSeenSeq[walkthroughId]` cursor at hydration time and drop
+     * envelopes already covered by the REST snapshot.
+     */
+    readonly getSeqAt: (walkthroughId: string) => Effect.Effect<number, never, DbService>;
   }
 >() {}
 
@@ -830,6 +872,58 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         .run();
       return submittedAt;
     }).pipe(Effect.catchAll(() => Effect.succeed(new Date().toISOString()))),
+
+  bumpSeq: (walkthroughId) =>
+    Effect.gen(function* () {
+      const { db } = yield* DbService;
+      return db.transaction((tx): number => {
+        const row = tx
+          .select({ nextSeq: walkthroughs.nextSeq })
+          .from(walkthroughs)
+          .where(eq(walkthroughs.id, walkthroughId))
+          .get();
+        const seq = row?.nextSeq ?? 0;
+        tx.update(walkthroughs)
+          .set({ nextSeq: seq + 1 })
+          .where(eq(walkthroughs.id, walkthroughId))
+          .run();
+        return seq;
+      });
+    }).pipe(Effect.catchAll(() => Effect.succeed(0))),
+
+  listActiveForAccount: (accountId) =>
+    Effect.gen(function* () {
+      const { db } = yield* DbService;
+      const rows = db
+        .select({
+          walkthroughId: walkthroughs.id,
+          prId: walkthroughs.pullRequestId,
+          prHeadSha: walkthroughs.prHeadSha,
+          nextSeq: walkthroughs.nextSeq,
+        })
+        .from(walkthroughs)
+        .innerJoin(pullRequests, eq(pullRequests.id, walkthroughs.pullRequestId))
+        .innerJoin(repositories, eq(repositories.id, pullRequests.repositoryId))
+        .where(and(eq(walkthroughs.status, "generating"), eq(repositories.accountId, accountId)))
+        .all();
+      return rows.map((r) => ({
+        prId: r.prId,
+        walkthroughId: r.walkthroughId,
+        prHeadSha: r.prHeadSha,
+        seqAt: Math.max(0, r.nextSeq - 1),
+      }));
+    }).pipe(Effect.catchAll(() => Effect.succeed([]))),
+
+  getSeqAt: (walkthroughId) =>
+    Effect.gen(function* () {
+      const { db } = yield* DbService;
+      const row = db
+        .select({ nextSeq: walkthroughs.nextSeq })
+        .from(walkthroughs)
+        .where(eq(walkthroughs.id, walkthroughId))
+        .get();
+      return Math.max(0, (row?.nextSeq ?? 1) - 1);
+    }).pipe(Effect.catchAll(() => Effect.succeed(0))),
 
   getChildRowsSince: (walkthroughId, since) =>
     Effect.gen(function* () {

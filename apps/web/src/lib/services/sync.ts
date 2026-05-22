@@ -1,21 +1,32 @@
-import * as prs from "$lib/stores/prs.svelte";
-import * as ws from "$lib/stores/ws.svelte";
+import {
+  connect as connectEvents,
+  disconnect as disconnectEvents,
+} from "$lib/stores/events.svelte";
+import { fetchPinnedPrs, fetchPrs, fetchRepos, syncPrs } from "$lib/stores/prs.svelte";
+import { connect, disconnect } from "$lib/stores/ws.svelte";
 
 let pollingInterval: ReturnType<typeof setInterval> | null = null;
 
 export function startPolling(intervalSeconds: number, token: string): void {
-  // Connect WebSocket for real-time updates
-  ws.connect(token);
+  // Connect WebSocket for real-time updates (PR/repo/chat envelopes)
+  connect(token);
+  // Connect the global SSE stream for walkthrough events. Without this the
+  // browser never opens `/api/events`, so `EventBus.broadcastToAccount`
+  // fan-outs land in an empty registration set and the UI sees zero progress
+  // (and falls back to rendering the persisted error state from DB).
+  // Account-switch in auth.svelte.ts reconnects this same channel; here is
+  // the missing first-time-on-app-boot symmetric call.
+  connectEvents(token);
 
   // Fetch initial data
-  Promise.all([prs.fetchPrs(), prs.fetchRepos(), prs.fetchPinnedPrs()]).catch(() => {
+  Promise.all([fetchPrs(), fetchRepos(), fetchPinnedPrs()]).catch(() => {
     // errors handled by stores
   });
 
   // Set up polling
   if (pollingInterval) clearInterval(pollingInterval);
   pollingInterval = setInterval(() => {
-    prs.syncPrs().catch(() => {
+    syncPrs().catch(() => {
       // errors arrive via WebSocket
     });
   }, intervalSeconds * 1000);
@@ -26,5 +37,6 @@ export function stopPolling(): void {
     clearInterval(pollingInterval);
     pollingInterval = null;
   }
-  ws.disconnect();
+  disconnect();
+  disconnectEvents();
 }

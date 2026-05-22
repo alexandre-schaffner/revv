@@ -1,7 +1,6 @@
 import type {
   AuthorRole,
   CommentThread,
-  HunkDecision,
   MessageType,
   ThreadMessage,
   ThreadStatus,
@@ -12,7 +11,7 @@ import { RequestState, type RequestState as RequestStateType } from "$lib/stores
 import { invalidateChatHistory } from "$lib/stores/chat.svelte";
 import { enterSidebarMode } from "$lib/stores/focus-mode.svelte";
 import { getPullRequests } from "$lib/stores/prs.svelte";
-import { invalidateForPull } from "$lib/stores/walkthrough-stream.svelte";
+import { invalidateForPull } from "$lib/stores/walkthrough.svelte";
 import type { ReviewFile } from "$lib/types/review";
 
 // --- Review files (shared between sidebar tree + review page) ---
@@ -82,96 +81,6 @@ export function getRepoFilePath(): string | null {
 export function clearRepoFile(): void {
   repoFile = RequestState.idle();
   repoFilePath = null;
-}
-
-let repoFileLoadSeq = 0;
-
-/**
- * Fetch the contents of a single file at the PR's head SHA. Skip-noop if
- * the same path was just loaded; otherwise transitions through 'loading'
- * to one of the terminal states.
- */
-export async function loadRepoFile(prId: string, path: string): Promise<void> {
-  if (repoFilePath === path && repoFile.status !== "idle" && repoFile.status !== "error") {
-    return;
-  }
-  const seq = ++repoFileLoadSeq;
-  repoFile = RequestState.loading();
-  repoFilePath = path;
-
-  try {
-    const { data, error, status } = await api.api
-      .prs({ id: prId })
-      ["repo-file"].get({ query: { path } });
-
-    if (seq !== repoFileLoadSeq) return;
-
-    if (error || !data) {
-      const body = (error?.value ?? null) as {
-        status?: string;
-        message?: string;
-        size?: number;
-      } | null;
-      if (body?.status === "cloning" || status === 202) {
-        repoFile = RequestState.loading();
-        return;
-      }
-      if (body?.status === "not-found" || status === 404) {
-        repoFile = RequestState.ok({ status: "not-found", size: 0 });
-        return;
-      }
-      if (body?.status === "too-large" || status === 413) {
-        repoFile = RequestState.ok({
-          status: "too-large",
-          size: typeof body?.size === "number" ? body.size : 0,
-        });
-        return;
-      }
-      repoFile = RequestState.error(body?.message ?? "Failed to load file");
-      return;
-    }
-
-    const payload = data as
-      | {
-          status: "ready";
-          headSha: string;
-          path: string;
-          content: string;
-          isBinary: boolean;
-          size: number;
-        }
-      | { status: "cloning" }
-      | { status: "not-found"; size: number }
-      | { status: "too-large"; size: number }
-      | { status: "error"; message: string };
-
-    if (payload.status === "cloning") {
-      repoFile = RequestState.loading();
-      return;
-    }
-    if (payload.status === "not-found") {
-      repoFile = RequestState.ok({ status: "not-found", size: 0 });
-      return;
-    }
-    if (payload.status === "too-large") {
-      repoFile = RequestState.ok({ status: "too-large", size: payload.size });
-      return;
-    }
-    if (payload.status === "error") {
-      repoFile = RequestState.error(payload.message);
-      return;
-    }
-
-    // status === 'ready'
-    if (payload.isBinary) {
-      repoFile = RequestState.ok({ status: "binary", size: payload.size });
-    } else {
-      repoFile = RequestState.ok({ status: "ready", content: payload.content, size: payload.size });
-    }
-  } catch (e) {
-    if (seq !== repoFileLoadSeq) return;
-    repoFile = RequestState.error(e instanceof Error ? e.message : "Failed to load file");
-  }
 }
 
 // --- New-commit-available detection ------------------------------------------
@@ -271,20 +180,10 @@ export async function pullLatestCommit(prId: string): Promise<void> {
 let sessionId = $state<string | null>(null);
 let sessionLoading = $state(false);
 
-export function getSessionId(): string | null {
-  return sessionId;
-}
-
-export function getSessionLoading(): boolean {
-  return sessionLoading;
-}
-
 function clearSession(): void {
   sessionId = null;
   threads = [];
   threadMessages = {};
-  acceptedHunks = new Map();
-  rejectedHunks = new Map();
   threadsVersion++;
   // Reset the short-circuit window too — an explicit clear means callers
   // want a fresh hydration on the next `loadSession` call.
@@ -331,7 +230,6 @@ export async function loadSession(prId: string): Promise<void> {
       session: { id: string };
       threads: CommentThread[];
       messages: Record<string, ThreadMessage[]>;
-      hunkDecisions: HunkDecision[];
     };
 
     sessionId = payload.session.id;
@@ -344,17 +242,6 @@ export async function loadSession(prId: string): Promise<void> {
     }
     threadMessages = msgs;
 
-    // Rebuild hunk decision Maps
-    const accepted = new Map<string, Set<number>>();
-    const rejected = new Map<string, Set<number>>();
-    for (const hd of payload.hunkDecisions) {
-      const map = hd.decision === "accepted" ? accepted : rejected;
-      const set = map.get(hd.filePath) ?? new Set<number>();
-      set.add(hd.hunkIndex);
-      map.set(hd.filePath, set);
-    }
-    acceptedHunks = accepted;
-    rejectedHunks = rejected;
     threadsVersion++;
     lastSessionPrId = prId;
     lastSessionAt = Date.now();
@@ -728,120 +615,6 @@ export function getDiffMode(): DiffMode {
 
 export function setDiffMode(mode: DiffMode): void {
   diffMode = mode;
-}
-
-// --- Panel open request (cross-component signal) ---
-let panelOpenRequested = $state(false);
-
-export function requestPanelOpen(): void {
-  panelOpenRequested = true;
-}
-
-export function getPanelOpenRequested(): boolean {
-  return panelOpenRequested;
-}
-
-export function consumePanelOpenRequest(): void {
-  panelOpenRequested = false;
-}
-
-// --- Hunk accept/reject ---
-// Tracks reviewer's accept/reject decisions per file.
-// Accepted hunks are approved; rejected hunks are flagged for the coder.
-let acceptedHunks = $state<Map<string, Set<number>>>(new Map());
-let rejectedHunks = $state<Map<string, Set<number>>>(new Map());
-
-export function getAcceptedHunks(filePath: string): Set<number> {
-  const existing = acceptedHunks.get(filePath);
-  return existing ?? new Set();
-}
-
-export function getRejectedHunks(filePath: string): Set<number> {
-  const existing = rejectedHunks.get(filePath);
-  return existing ?? new Set();
-}
-
-async function setHunkDecision(
-  filePath: string,
-  hunkIndex: number,
-  decision: "accepted" | "rejected",
-): Promise<void> {
-  // Optimistic update
-  const prevAccepted = new Map(acceptedHunks);
-  const prevRejected = new Map(rejectedHunks);
-
-  const opposite = decision === "accepted" ? rejectedHunks : acceptedHunks;
-  const own = decision === "accepted" ? acceptedHunks : rejectedHunks;
-
-  // Remove from the opposite map if present
-  const oppSet = new Set(opposite.get(filePath) ?? []);
-  if (oppSet.delete(hunkIndex)) {
-    const next = new Map(opposite);
-    next.set(filePath, oppSet);
-    if (decision === "accepted") rejectedHunks = next;
-    else acceptedHunks = next;
-  }
-
-  // Add to own map
-  const ownNext = new Map(own);
-  const ownSet = new Set(ownNext.get(filePath) ?? []);
-  ownSet.add(hunkIndex);
-  ownNext.set(filePath, ownSet);
-  if (decision === "accepted") acceptedHunks = ownNext;
-  else rejectedHunks = ownNext;
-
-  // Persist
-  if (sessionId) {
-    const { error } = await api.api.reviews({ id: sessionId }).hunks.put({
-      filePath,
-      hunkIndex,
-      decision,
-    });
-    if (error) {
-      console.error(`[review] Failed to persist hunk ${decision}, reverting:`, error);
-      acceptedHunks = prevAccepted;
-      rejectedHunks = prevRejected;
-      toast.error("Failed to save hunk decision");
-    }
-  }
-}
-
-export async function acceptHunk(filePath: string, hunkIndex: number): Promise<void> {
-  return setHunkDecision(filePath, hunkIndex, "accepted");
-}
-
-export async function rejectHunk(filePath: string, hunkIndex: number): Promise<void> {
-  return setHunkDecision(filePath, hunkIndex, "rejected");
-}
-
-export async function undoHunkAction(filePath: string, hunkIndex: number): Promise<void> {
-  // Optimistic update
-  const prevAccepted = new Map(acceptedHunks);
-  const prevRejected = new Map(rejectedHunks);
-
-  const nextA = new Map(acceptedHunks);
-  const nextR = new Map(rejectedHunks);
-  const aSet = new Set(nextA.get(filePath) ?? []);
-  const rSet = new Set(nextR.get(filePath) ?? []);
-  aSet.delete(hunkIndex);
-  rSet.delete(hunkIndex);
-  nextA.set(filePath, aSet);
-  nextR.set(filePath, rSet);
-  acceptedHunks = nextA;
-  rejectedHunks = nextR;
-
-  // Persist
-  if (sessionId) {
-    const { error } = await api.api
-      .reviews({ id: sessionId })
-      .hunks({ filePath: encodeURIComponent(filePath) })({ hunkIndex: String(hunkIndex) })
-      .delete();
-    if (error) {
-      console.error("[review] Failed to persist hunk undo, reverting:", error);
-      acceptedHunks = prevAccepted;
-      rejectedHunks = prevRejected;
-    }
-  }
 }
 
 // --- Pending diff jump ---
