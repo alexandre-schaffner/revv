@@ -770,7 +770,7 @@ async function doHydrateFromCache(
         githubUserId: number | null;
         githubLogin: string | null;
         displayName: string | null;
-        avatarUrl: string | null;
+        avatarContent: string | null;
       } | null;
       providerConfig?: {
         provider: string;

@@ -867,7 +867,7 @@ function handleRegenerate(): void {
 	{:else if cloneInProgress && !summary && blocks.length === 0}
 		<!-- Clone-in-progress state: show indeterminate progress bar + Retry
 		     escape hatch. The poller set up in the $effect above drives this
-		     view to a terminal state (streamWalkthrough on 'ready', or a
+		     view to a terminal state (startWalkthrough on 'ready', or a
 		     streamError branch on 'error'/'pending'), but a stuck server or
 		     network partition can still happen — the Retry button gives the
 		     user an explicit way out. When cloneRepoId is somehow null (SSE

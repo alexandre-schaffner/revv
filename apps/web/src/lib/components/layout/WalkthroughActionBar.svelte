@@ -5,15 +5,15 @@ import Star from "phosphor-svelte/lib/Star";
 import GenActionBar, { type GenActionState } from "$lib/components/layout/GenActionBar.svelte";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import { isChatStreaming } from "$lib/stores/chat.svelte";
-import { getRatings as getWalkthroughRatings } from "$lib/stores/walkthrough.svelte";
 import {
   abort as abortWalkthrough,
   getPendingAction as getWalkthroughPendingAction,
+  getRatings as getWalkthroughRatings,
+  getWalkthroughUiState,
   regenerate as regenerateWalkthrough,
   resume as resumeWalkthrough,
-  streamWalkthrough,
-} from "$lib/stores/walkthrough-stream.svelte";
-import { getWalkthroughUiState } from "$lib/stores/walkthrough.svelte";
+  startWalkthrough,
+} from "$lib/stores/walkthrough.svelte";
 import {
   getHasNewContentBelow as getWalkthroughHasNewContentBelow,
   scrollToBottom as scrollWalkthroughToBottom,
@@ -80,7 +80,7 @@ const combinedDisabledTitle = $derived(
         disabledTitle={combinedDisabledTitle}
         onStop={() => abortWalkthrough(prId)}
         onResume={() => resumeWalkthrough(prId)}
-        onGenerate={() => streamWalkthrough(prId)}
+        onGenerate={() => startWalkthrough(prId)}
         onRegenerate={() => regenerateWalkthrough(prId)}
       />
 
