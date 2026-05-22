@@ -762,6 +762,17 @@ export const WalkthroughJobsLive = Layer.effect(
               return { _tag: "continue" } as const;
             }
 
+            // `thinking` events are the activity-notifier heartbeat — they enter
+            // the provider's events queue solely to reset the stream guard's
+            // inactivity timer when an MCP tool handler fires emitEvent.
+            // Re-emitting them through emitEvent would call notify(thinking)
+            // again, pushing another thinking event into the queue and producing
+            // an unbounded loop (one observed run hit 200k+ seqs/sec). Drop on
+            // the consumer side — clients no-op on this type anyway.
+            if (event.type === "thinking") {
+              return { _tag: "continue" } as const;
+            }
+
             yield* emitEvent(job.walkthroughId, event).pipe(Effect.catchAll(() => Effect.void));
             return { _tag: "continue" } as const;
           });
@@ -1680,13 +1691,19 @@ export const WalkthroughJobsLive = Layer.effect(
         }
 
         // 5. Refresh opencode stream-guard inactivity timer (unchanged).
-        const notifiers = yield* Ref.get(activityNotifiers);
-        const notify = notifiers.get(walkthroughId);
-        if (notify) {
-          try {
-            notify({ type: "thinking", data: {} });
-          } catch {
-            /* notifier threw — ignore */
+        //    Skip when the event being emitted is itself `thinking` — that's
+        //    already the heartbeat shape. Self-notifying would amplify into an
+        //    infinite loop via the consumer at processEvent (defense-in-depth
+        //    with the early-return on `thinking` there).
+        if (event.type !== "thinking") {
+          const notifiers = yield* Ref.get(activityNotifiers);
+          const notify = notifiers.get(walkthroughId);
+          if (notify) {
+            try {
+              notify({ type: "thinking", data: {} });
+            } catch {
+              /* notifier threw — ignore */
+            }
           }
         }
 
