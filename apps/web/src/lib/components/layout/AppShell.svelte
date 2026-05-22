@@ -407,8 +407,6 @@ function onRightHandleDblClick(): void {
 		bottom: 0;
 		width: calc(var(--spacing-island) * 4);
 		background: linear-gradient(to right, transparent, var(--color-bg-primary));
-		border-top-right-radius: var(--radius-island);
-		border-bottom-right-radius: var(--radius-island);
 		opacity: 0;
 		pointer-events: none;
 		z-index: 2;
