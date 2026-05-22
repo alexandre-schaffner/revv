@@ -40,6 +40,7 @@ import { findIssuesMissingInlineComment } from "../ai/providers/walkthrough-tool
 import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../constants";
 import { account } from "../db/schema/auth";
 import { pullRequests } from "../db/schema/pull-requests";
+import { remoteUsers } from "../db/schema/remote-users";
 import { repositories } from "../db/schema/repositories";
 import { walkthroughs } from "../db/schema/walkthroughs";
 import {
@@ -1253,13 +1254,21 @@ export const WalkthroughJobsLive = Layer.effect(
             return { accountId: repoRow.accountId, generatedBy: undefined };
           }
           const githubUserId = Number(acc.accountId);
+
+          // Resolve avatar content from remote_users.
+          const avatarContent = db
+            .select({ avatarContent: remoteUsers.avatarContent })
+            .from(remoteUsers)
+            .where(eq(remoteUsers.login, acc.githubLogin))
+            .get()?.avatarContent ?? null;
+
           return {
             accountId: repoRow.accountId,
             generatedBy: {
               githubUserId: Number.isFinite(githubUserId) ? githubUserId : 0,
               githubLogin: acc.githubLogin,
               displayName: null,
-              avatarUrl: acc.avatarUrl ?? null,
+              avatarContent,
             },
           };
         })();

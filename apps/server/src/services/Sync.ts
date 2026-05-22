@@ -7,6 +7,7 @@ import { DbService } from "./Db";
 import { type GhReviewComment, GitHubService } from "./GitHub";
 import { PrContextService } from "./PrContext";
 import { PullRequestService } from "./PullRequest";
+import { RemoteUserService } from "./RemoteUser";
 import { ReviewService } from "./Review";
 import type { SettingsService } from "./Settings";
 import { WebSocketHub } from "./WebSocketHub";
@@ -88,6 +89,7 @@ export const SyncServiceLive = Layer.effect(
     const prService = yield* PullRequestService;
     const prContext = yield* PrContextService;
     const reviewService = yield* ReviewService;
+    const remoteUserService = yield* RemoteUserService;
     const hub = yield* WebSocketHub;
 
     // Background-worker PR context — always uses the 'single-user' token.
@@ -295,13 +297,6 @@ export const SyncServiceLive = Layer.effect(
           const existingMsg = yield* reviewService.findMessageByExternalId(String(c.id));
 
           if (existingMsg) {
-            // Backfill avatar URL for rows synced before this field existed,
-            // or if GitHub rotated the user's avatar. Avatar URLs are
-            // idempotent and cheap to overwrite — do it unconditionally
-            // when the stored value drifts from the remote one.
-            if (existingMsg.authorAvatarUrl !== c.authorAvatarUrl) {
-              yield* reviewService.setMessageAvatar(existingMsg.id, c.authorAvatarUrl);
-            }
             if (
               c.updatedAt > (existingMsg.editedAt ?? existingMsg.createdAt) &&
               c.body !== existingMsg.body
@@ -317,6 +312,14 @@ export const SyncServiceLive = Layer.effect(
             continue;
           }
 
+          // Upsert the comment author into remote_users.
+          yield* remoteUserService.upsert({
+            provider: "github",
+            providerUserId: "", // We don't have the numeric ID from GraphQL comments
+            login: c.authorLogin,
+            avatarUrl: c.authorAvatarUrl,
+          });
+
           const authorRole: "reviewer" | "coder" | "ai_agent" =
             c.authorLogin === pr.authorLogin ? "coder" : "reviewer";
 
@@ -331,7 +334,7 @@ export const SyncServiceLive = Layer.effect(
             const msg = yield* reviewService.addMessage(thread.id, {
               authorRole,
               authorName: c.authorLogin,
-              authorAvatarUrl: c.authorAvatarUrl,
+              authorLogin: c.authorLogin,
               body: c.body,
               messageType: "reply",
               externalId: String(c.id),
@@ -361,7 +364,7 @@ export const SyncServiceLive = Layer.effect(
           const msg = yield* reviewService.addMessage(thread.id, {
             authorRole,
             authorName: c.authorLogin,
-            authorAvatarUrl: c.authorAvatarUrl,
+            authorLogin: c.authorLogin,
             body: c.body,
             messageType: "comment",
             externalId: String(c.id),

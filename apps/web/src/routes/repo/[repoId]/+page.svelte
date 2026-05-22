@@ -1,5 +1,6 @@
 <script lang="ts">
-import { GitPullRequest, Sparkles } from "@lucide/svelte";
+import GitPullRequest from "phosphor-svelte/lib/GitPullRequest";
+import StarFour from "phosphor-svelte/lib/StarFour";
 import { page } from "$app/state";
 import AuthGuard from "$lib/components/auth/AuthGuard.svelte";
 import RepoRecapCard from "$lib/components/repo/RepoRecapCard.svelte";
@@ -30,16 +31,16 @@ const repoIdFromUrl = $derived(page.params.repoId ?? "");
 			</div>
 
 			<div class="hint-row">
-				<div class="hint-card">
-					<GitPullRequest size={16} class="hint-icon" />
+				<div class="hint-card hint-card--review">
+					<GitPullRequest size={16} weight="fill" class="hint-icon" />
 					<div class="hint-body">
 						<p class="hint-title">Pick a pull request</p>
 						<p class="hint-detail">Choose one from the column on the left to start reviewing.</p>
 					</div>
 				</div>
 
-				<a class="hint-card hint-card--link" href="/repo/{repo.id}/recaps">
-					<Sparkles size={16} class="hint-icon" />
+				<a class="hint-card hint-card--link hint-card--recaps" href="/repo/{repo.id}/recaps">
+					<StarFour size={16} weight="fill" class="hint-icon" />
 					<div class="hint-body">
 						<p class="hint-title">Recaps</p>
 						<p class="hint-detail">Daily and weekly summaries of merged work for this repo.</p>
@@ -133,6 +134,14 @@ const repoIdFromUrl = $derived(page.params.repoId ?? "");
 	.hint-card--link:hover {
 		border-color: var(--color-border-focus, var(--color-accent));
 		background: var(--color-bg-elevated);
+	}
+
+	.hint-card--recaps :global(.hint-icon) {
+		color: var(--color-warning);
+	}
+
+	.hint-card--review :global(.hint-icon) {
+		color: var(--revv-accent);
 	}
 
 	:global(.hint-icon) {

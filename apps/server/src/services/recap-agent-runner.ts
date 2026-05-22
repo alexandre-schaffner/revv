@@ -36,12 +36,15 @@ import type { ProjectRecap, RecapStreamEvent } from "@revv/shared";
 import { walkClaudeMessages } from "../ai/agent-stream";
 import { buildRecapUserMessage, RECAP_SYSTEM_PROMPT } from "../ai/prompts/recap";
 import { resolveCliBin } from "../ai/providers/cli-agent";
+import { buildRecapActivity, normalizeRecapToolName } from "../ai/providers/recap-activity";
 import {
   type RecapOpencodeSessionDeps,
   type RecapOpencodeSupervisorDeps,
   runRecapAgentViaOpencode,
 } from "../ai/providers/recap-opencode";
 import {
+  commitRecapOverviewHandler,
+  completeRecapHandler,
   createRecapMcpServer,
   RECAP_ALLOWED_TOOLS,
   RECAP_MCP_SERVER,
@@ -128,9 +131,13 @@ export interface RunRecapAgentParams {
  */
 export async function runRecapAgent(params: RunRecapAgentParams): Promise<RecapAgentResult> {
   let validatedComplete = false;
+  const toolCalls = new Set<string>();
   const onCompletedWrapper = (): void => {
     validatedComplete = true;
     params.onCompleted();
+    if (!params.abortController.signal.aborted) {
+      params.abortController.abort(new Error("Recap completed"));
+    }
   };
 
   const ctx: RecapToolContext = {
@@ -142,19 +149,94 @@ export async function runRecapAgent(params: RunRecapAgentParams): Promise<RecapA
     getPrDiff: params.getPrDiff,
     emit: params.emitEvent,
     textBuffer: params.textBuffer,
+    toolCalls,
   };
 
   const outcome =
     params.effectiveAgent === "opencode"
       ? await runViaOpencode(params, ctx)
       : await runViaClaude(params, ctx);
+  let errorMessage = outcome.error;
+
+  if (!validatedComplete) {
+    const recovered = await recoverMissedFinalToolCall(ctx, outcome.error);
+    if (recovered.recovered) {
+      validatedComplete = true;
+    } else if (recovered.error && !outcome.error) {
+      errorMessage = recovered.error;
+    }
+  }
 
   return {
     validatedComplete,
     modelUsed: params.modelUsed,
     ...(outcome.tokenUsage ? { tokenUsage: outcome.tokenUsage } : {}),
-    ...(outcome.error ? { errorMessage: outcome.error } : {}),
+    ...(errorMessage ? { errorMessage } : {}),
   };
+}
+
+interface RecoveryResult {
+  readonly recovered: boolean;
+  readonly error?: string;
+}
+
+async function recoverMissedFinalToolCall(
+  ctx: RecapToolContext,
+  existingError: string | undefined,
+): Promise<RecoveryResult> {
+  if (!ctx.toolCalls?.has("get_recap_state")) {
+    return { recovered: false };
+  }
+
+  const buffered = ctx.textBuffer.current.trim();
+  if (buffered.length > 0) {
+    debug(
+      "recap-agent-runner",
+      `recovering recap ${ctx.recapId}: agent wrote markdown but missed or failed commit_recap_overview`,
+    );
+    const commit = await commitRecapOverviewHandler(ctx, buildFallbackCommitInput(ctx));
+    if (commit.isError) {
+      const error = firstToolText(commit) ?? existingError;
+      return error ? { recovered: false, error } : { recovered: false };
+    }
+  }
+
+  debug(
+    "recap-agent-runner",
+    `recovering recap ${ctx.recapId}: validating after missed complete_recap`,
+  );
+  const complete = await completeRecapHandler(ctx, {});
+  if (complete.isError) {
+    const error = firstToolText(complete) ?? existingError;
+    return error ? { recovered: false, error } : { recovered: false };
+  }
+  return { recovered: true };
+}
+
+function buildFallbackCommitInput(
+  ctx: RecapToolContext,
+): Parameters<typeof commitRecapOverviewHandler>[1] {
+  const allPrs = [...ctx.sourceBundle.prs, ...ctx.sourceBundle.openPrs];
+  return {
+    source_pr_ids: allPrs.map((pr) => pr.id),
+    source_walkthrough_ids: allPrs.flatMap((pr) => (pr.walkthrough ? [pr.walkthrough.id] : [])),
+    stats: {
+      pr_count: ctx.sourceBundle.stats.prCount,
+      merged_count: ctx.sourceBundle.stats.mergedCount,
+      closed_count: ctx.sourceBundle.stats.closedCount,
+      author_count: ctx.sourceBundle.stats.authorCount,
+      risk_low: ctx.sourceBundle.stats.riskBreakdown.low,
+      risk_medium: ctx.sourceBundle.stats.riskBreakdown.medium,
+      risk_high: ctx.sourceBundle.stats.riskBreakdown.high,
+      walkthroughs_missing_count: ctx.sourceBundle.stats.walkthroughsMissingCount,
+    },
+  };
+}
+
+function firstToolText(result: {
+  content: Array<{ type: "text"; text: string }>;
+}): string | undefined {
+  return result.content[0]?.text;
 }
 
 // ── Claude SDK path ──────────────────────────────────────────────────────────
@@ -246,12 +328,19 @@ async function runViaClaude(
         }
         return;
       }
+      if (ev.kind === "reasoning-delta") {
+        if (ev.data.length === 0) return;
+        ctx.emit({ type: "thought", data: { text: ev.data } });
+        return;
+      }
       if (ev.kind === "tool-call") {
-        if (ev.bareName === "commit_recap_overview") {
+        const toolName = normalizeRecapToolName(ev.bareName);
+        ctx.emit({ type: "activity", data: buildRecapActivity(toolName, ev.input) });
+        if (toolName === "commit_recap_overview") {
           committed = true;
           return;
         }
-        if (ev.bareName === "complete_recap") {
+        if (toolName === "complete_recap") {
           return;
         }
         // Only reset on pre-commit read/prelude tools. After commit, a stray

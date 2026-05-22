@@ -185,6 +185,19 @@ export interface ThreadMeta {
 	 * the SSR-hydrated tokens, forcing a cold worker tokenization).
 	 */
 	let appliedAnnotations: DiffLineAnnotation<ThreadMeta>[] | null = null;
+	let appliedThreadById: Record<string, CommentThread> | null = null;
+	let appliedThreadMessages: Record<string, ThreadMessage[]> | null = null;
+
+	/**
+	 * Mutable reference that renderAnnotation reads from. This avoids the
+	 * stale-closure problem: the callback is defined once in onMount but
+	 * needs to see the latest threadById / threadMessages when threads load
+	 * asynchronously after the initial render.
+	 */
+	const threadDataRef = {
+		threadById: {} as Record<string, CommentThread>,
+		threadMessages: {} as Record<string, ThreadMessage[]>,
+	};
 
 	// Note: $effect blocks that guard on `!instance` or `!initialOptions` rely on
 	// Svelte 5's ordering guarantee that onMount runs before $effects first execute.
@@ -258,17 +271,47 @@ export interface ThreadMeta {
 		return bestIdx;
 	}
 
-	// ── Reactive updates ──────────────────────────────────────────────────────
-	// Re-render when annotations change. The reference-equality guard skips
-	// the eager initial $effect run (Svelte 5 effects fire once on mount with
-	// no dep changes) — at that point onMount has already applied annotations
-	// via render()/hydrate(), and a forceRender:true here would wipe the
-	// SSR-hydrated DOM and trigger a cold worker re-tokenize.
+	// ─ Reactive updates ──────────────────────────────────────────────────────
+	// Re-render when thread data changes. The reference-equality guard skips
+	// the eager initial $effect run — at that point onMount has already rendered
+	// via render()/hydrate(). When threads load asynchronously, threadById,
+	// threadMessages, and annotations all get new references, triggering this
+	// effect. We update the mutable ref (so renderAnnotation sees fresh data),
+	// clear stale caches, and re-render with the new annotations.
 	$effect(() => {
 		if (!instance) return;
 		const currentAnnotations = annotations;
-		if (currentAnnotations === appliedAnnotations) return;
+		const currentThreadById = threadById;
+		const currentThreadMessages = threadMessages;
+		if (
+			currentAnnotations === appliedAnnotations &&
+			currentThreadById === appliedThreadById &&
+			currentThreadMessages === appliedThreadMessages
+		) return;
 		appliedAnnotations = currentAnnotations;
+		appliedThreadById = currentThreadById;
+		appliedThreadMessages = currentThreadMessages;
+
+		// Update mutable ref so renderAnnotation callback (defined once in
+		// onMount) reads fresh thread data.
+		threadDataRef.threadById = currentThreadById;
+		threadDataRef.threadMessages = currentThreadMessages;
+
+		// Clear annotation cache — the library caches DOM elements by annotation
+		// object reference. Without clearing, stale elements with empty thread
+		// data persist even after threadDataRef is updated.
+		// @ts-expect-error annotationCache is protected
+		instance.annotationCache?.clear();
+
+		// Clear header slots before re-render to prevent badge duplication.
+		// The library's applyHeaderToDOM reuses slot elements by reference; if
+		// the header HTML is regenerated (forceRender), old slot refs point to
+		// removed DOM nodes, causing new slots to be created alongside them.
+		// @ts-expect-error clearHeaderSlots is protected
+		instance.clearHeaderSlots?.();
+
+		// Re-render with new annotations. Must pass lineAnnotations so the
+		// library updates its internal state and creates annotation rows.
 		instance.render({ lineAnnotations: currentAnnotations, forceRender: true });
 	});
 
@@ -471,8 +514,10 @@ export interface ThreadMeta {
 							}
 						});
 					} else if (meta.isExpanded) {
-						const thread = threadById[meta.threadId];
-						const messages = threadMessages[meta.threadId] ?? [];
+						// Read from mutable ref so we always see latest thread data
+						// even though this callback was defined once in onMount.
+						const thread = threadDataRef.threadById[meta.threadId];
+						const messages = threadDataRef.threadMessages[meta.threadId] ?? [];
 						if (!thread) return host;
 
 						mountAnnotationThread(host, {
@@ -512,6 +557,11 @@ export interface ThreadMeta {
 			instance = new FileDiff<ThreadMeta>(options, workerManager);
 			// Store reference for setOptions() merging
 			initialOptions = options;
+
+			// Update threadDataRef BEFORE render/hydrate so renderAnnotation
+			// callback sees current thread data on the initial render.
+			threadDataRef.threadById = threadById;
+			threadDataRef.threadMessages = threadMessages;
 
 			// Parse the git patch string directly — this preserves the exact
 			// additions/deletions counts from GitHub's diff, so the library's
@@ -569,9 +619,11 @@ export interface ThreadMeta {
 					forceRender: true
 				});
 			}
-			// Mark these annotations as applied so the post-mount $effect
+			// Mark initial state as applied so the post-mount $effect
 			// (which would otherwise re-render with forceRender:true) is a no-op.
 			appliedAnnotations = annotations;
+			appliedThreadById = threadById;
+			appliedThreadMessages = threadMessages;
 
 			// Set total line count for keyboard cursor navigation
 			if (file.patch) {

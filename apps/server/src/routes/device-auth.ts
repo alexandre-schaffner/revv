@@ -4,8 +4,10 @@ import { Elysia, t } from "elysia";
 import { db, GITHUB_CLIENT_ID, GITHUB_CLIENT_ID_PUBLIC } from "../auth";
 import { serverEnv } from "../config";
 import { account, session, user } from "../db/schema";
+import { remoteUsers } from "../db/schema/remote-users";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
+import { RemoteUserService } from "../services/RemoteUser";
 import { SettingsService } from "../services/Settings";
 import { withAuth } from "./middleware";
 
@@ -181,6 +183,32 @@ async function upsertUserAndSession(
   const existingUsers = await db.select().from(user).where(eq(user.email, email));
   const existingUser = existingUsers[0];
 
+  // Upsert the authenticated user into remote_users so their avatar is cached.
+  await AppRuntime.runPromise(
+    Effect.gen(function* () {
+      const remoteUserService = yield* RemoteUserService;
+      yield* remoteUserService.upsert({
+        provider: "github",
+        providerUserId: String(githubUser.id),
+        login: githubUser.login,
+        ...(githubUser.name ? { displayName: githubUser.name } : {}),
+        avatarUrl: githubUser.avatar_url,
+      });
+    }).pipe(Effect.orElseSucceed(() => undefined)),
+  );
+
+  // Look up the remote_users row we just upserted.
+  const remoteUser = await db
+    .select({ id: remoteUsers.id })
+    .from(remoteUsers)
+    .where(
+      and(
+        eq(remoteUsers.provider, "github"),
+        eq(remoteUsers.providerUserId, String(githubUser.id)),
+      ),
+    )
+    .get();
+
   let userId: string;
   if (existingUser) {
     userId = existingUser.id;
@@ -190,6 +218,7 @@ async function upsertUserAndSession(
         name: githubUser.name ?? githubUser.login,
         image: githubUser.avatar_url,
         githubLogin: githubUser.login,
+        identityId: remoteUser?.id ?? existingUser.identityId,
         updatedAt: now,
       })
       .where(eq(user.id, userId));
@@ -202,6 +231,7 @@ async function upsertUserAndSession(
       emailVerified: true,
       image: githubUser.avatar_url,
       githubLogin: githubUser.login,
+      identityId: remoteUser?.id ?? null,
       createdAt: now,
       updatedAt: now,
     });

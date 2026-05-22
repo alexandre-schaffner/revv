@@ -12,7 +12,6 @@ export const pullRequests = sqliteTable(
     title: text("title").notNull(),
     body: text("body"),
     authorLogin: text("author_login").notNull(),
-    authorAvatarUrl: text("author_avatar_url"),
     requestedReviewers: text("requested_reviewers").notNull().default("[]"),
     status: text("status").notNull().default("open"),
     reviewStatus: text("review_status").notNull().default("pending"),

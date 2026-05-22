@@ -16,7 +16,15 @@ export type ToolHeaderProps = Omit<CollapsiblePrimitive.TriggerProps, "type"> & 
 	import { cn } from "$lib/utils.js";
 	import { CollapsibleTrigger } from "$lib/components/ui/collapsible/index.js";
 	import { Badge } from "$lib/components/ui/badge/index.js";
-	import { ChevronDown, Wrench, Loader2, Check, AlertCircle, Clock, ShieldQuestion, ShieldCheck, ShieldX } from "@lucide/svelte";
+	import ChevronDown from "phosphor-svelte/lib/CaretDown";
+import Wrench from "phosphor-svelte/lib/Wrench";
+import Loader2 from "phosphor-svelte/lib/Spinner";
+import Check from "phosphor-svelte/lib/Check";
+import AlertCircle from "phosphor-svelte/lib/WarningCircle";
+import Clock from "phosphor-svelte/lib/Clock";
+import ShieldQuestion from "phosphor-svelte/lib/Shield";
+import ShieldCheck from "phosphor-svelte/lib/ShieldCheck";
+import ShieldX from "phosphor-svelte/lib/ShieldWarning";
 	import type { Component } from "svelte";
 
 	let {

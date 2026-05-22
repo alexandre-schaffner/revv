@@ -1,14 +1,12 @@
 <script lang="ts">
-import {
-  AlertCircle,
-  Check,
-  ChevronsDownUp,
-  ChevronsUpDown,
-  Filter,
-  Loader2,
-  Star,
-  X,
-} from "@lucide/svelte";
+import AlertCircle from "phosphor-svelte/lib/WarningCircle";
+import Check from "phosphor-svelte/lib/Check";
+import ChevronsDownUp from "phosphor-svelte/lib/ArrowsInLineVertical";
+import ChevronsUpDown from "phosphor-svelte/lib/ArrowsOutLineVertical";
+import Filter from "phosphor-svelte/lib/Funnel";
+import Loader2 from "phosphor-svelte/lib/Spinner";
+import Star from "phosphor-svelte/lib/Star";
+import X from "phosphor-svelte/lib/X";
 import { formatDuration } from "./format-duration";
 
 interface Counts {
@@ -51,7 +49,7 @@ const expandLabel = $derived(expandAll === true ? "Collapse all" : "Expand all")
 <div class="summary-bar">
     <div class="summary-left">
         <span class="spec-icon" aria-hidden="true">
-            <Star size={14} />
+            <Star size={14} weight="fill" />
         </span>
         <span class="spec-title">Scores</span>
 
@@ -61,7 +59,7 @@ const expandLabel = $derived(expandAll === true ? "Collapse all" : "Expand all")
                 class:count-pill--zero={counts.pass === 0}
                 title="{counts.pass} passed"
             >
-                <Check size={11} aria-hidden="true" />
+                <Check size={11} weight="regular" aria-hidden="true" />
                 <span class="count-num">{counts.pass}</span>
                 <span class="count-label">passed</span>
             </span>
@@ -70,7 +68,7 @@ const expandLabel = $derived(expandAll === true ? "Collapse all" : "Expand all")
                 class:count-pill--zero={counts.concern === 0}
                 title="{counts.concern} concern{counts.concern === 1 ? '' : 's'}"
             >
-                <AlertCircle size={11} aria-hidden="true" />
+                <AlertCircle size={11} weight="fill" aria-hidden="true" />
                 <span class="count-num">{counts.concern}</span>
                 <span class="count-label"
                     >{counts.concern === 1 ? "concern" : "concerns"}</span
@@ -81,7 +79,7 @@ const expandLabel = $derived(expandAll === true ? "Collapse all" : "Expand all")
                 class:count-pill--zero={counts.blocker === 0}
                 title="{counts.blocker} blocker{counts.blocker === 1 ? '' : 's'}"
             >
-                <X size={11} aria-hidden="true" />
+                <X size={11} weight="fill" aria-hidden="true" />
                 <span class="count-num">{counts.blocker}</span>
                 <span class="count-label"
                     >{counts.blocker === 1 ? "blocker" : "blockers"}</span
@@ -90,7 +88,7 @@ const expandLabel = $derived(expandAll === true ? "Collapse all" : "Expand all")
 
             {#if runningCount > 0}
                 <span class="count-pill count-pill--running" title="{runningCount} running">
-                    <Loader2 size={11} class="animate-spin" aria-hidden="true" />
+                    <Loader2 size={11} weight="regular" class="animate-spin" aria-hidden="true" />
                     <span class="count-label">{runningCount} running</span>
                 </span>
             {/if}
@@ -112,9 +110,9 @@ const expandLabel = $derived(expandAll === true ? "Collapse all" : "Expand all")
         >
             <span class="ctrl-icon" aria-hidden="true">
                 {#if expandAll === true}
-                    <ChevronsDownUp size={12} />
+                    <ChevronsDownUp size={12} weight="fill" />
                 {:else}
-                    <ChevronsUpDown size={12} />
+                    <ChevronsUpDown size={12} weight="fill" />
                 {/if}
             </span>
             <span class="ctrl-label">{expandLabel}</span>

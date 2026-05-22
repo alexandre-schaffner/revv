@@ -18,7 +18,8 @@ export type ConfirmationActionsProps = HTMLAttributes<HTMLDivElement> & {
 <script lang="ts">
 	import { cn } from "$lib/utils.js";
 	import { Button } from "$lib/components/ui/button/index.js";
-	import { Check, X } from "@lucide/svelte";
+	import Check from "phosphor-svelte/lib/Check";
+import X from "phosphor-svelte/lib/X";
 
 	let {
 		responded = false,

@@ -525,7 +525,7 @@ export interface AddThreadParams {
   message: {
     authorRole: AuthorRole;
     authorName: string;
-    authorAvatarUrl?: string | null;
+    authorLogin?: string | null;
     body: string;
     messageType: MessageType;
     codeSuggestion?: string;
@@ -550,7 +550,14 @@ export async function addThread(
     startLine: params.startLine,
     endLine: params.endLine,
     diffSide: params.diffSide,
-    message: params.message,
+    message: {
+      authorRole: params.message.authorRole,
+      authorName: params.message.authorName,
+      body: params.message.body,
+      messageType: params.message.messageType,
+      ...(params.message.authorLogin ? { authorLogin: params.message.authorLogin } : {}),
+      ...(params.message.codeSuggestion ? { codeSuggestion: params.message.codeSuggestion } : {}),
+    },
   });
 
   if (error || !data) {
@@ -582,13 +589,20 @@ export async function addThreadMessage(
   params: {
     authorRole: AuthorRole;
     authorName: string;
-    authorAvatarUrl?: string | null;
+    authorLogin?: string | null;
     body: string;
     messageType: MessageType;
     codeSuggestion?: string;
   },
 ): Promise<ThreadMessage | null> {
-  const { data, error } = await api.api.threads({ id: threadId }).messages.post(params);
+  const { data, error } = await api.api.threads({ id: threadId }).messages.post({
+    authorRole: params.authorRole,
+    authorName: params.authorName,
+    body: params.body,
+    messageType: params.messageType,
+    ...(params.authorLogin ? { authorLogin: params.authorLogin } : {}),
+    ...(params.codeSuggestion ? { codeSuggestion: params.codeSuggestion } : {}),
+  });
 
   if (error || !data) {
     console.error("[review] Failed to add message:", error);

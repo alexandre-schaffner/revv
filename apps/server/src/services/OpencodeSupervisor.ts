@@ -315,12 +315,6 @@ export const OpencodeSupervisorLive = Layer.effect(
       }
     };
 
-    const resolveAgentName = (): Effect.Effect<string> =>
-      withDb(db, settingsService.getSettings()).pipe(
-        Effect.map((s) => s.aiAgent ?? "opencode"),
-        Effect.catchAll(() => Effect.succeed("opencode")),
-      );
-
     const clearIdleTimer = (): Effect.Effect<void> =>
       Ref.update(stateRef, (s) => {
         if (s.idleTimer !== null) {
@@ -612,9 +606,12 @@ export const OpencodeSupervisorLive = Layer.effect(
 
           const snapshot = yield* Ref.get(stateRef);
 
-          // Detect agent-change and stop if we're no longer 'opencode'.
-          const agent = yield* resolveAgentName();
-          if (agent !== "opencode") {
+          // Detect agent-change and stop if no feature needs opencode.
+          const settings = yield* withDb(db, settingsService.getSettings()).pipe(
+            Effect.orElseSucceed(() => null),
+          );
+          if (settings && !isOpencodeNeeded(settings)) {
+            const agent = settings.aiAgent ?? "opencode";
             yield* stopNow();
             return yield* Effect.fail(new OpencodeNotSelectedError({ selectedAgent: agent }));
           }
@@ -667,7 +664,7 @@ export const OpencodeSupervisorLive = Layer.effect(
           yield* Ref.update(stateRef, (s) => ({
             ...s,
             running,
-            lastSelectedAgent: agent,
+            lastSelectedAgent: settings?.aiAgent ?? "opencode",
             // Successful start resets the crash-loop counter.
             restartTimestamps: [],
             unhealthy: false,
@@ -765,29 +762,27 @@ export const OpencodeSupervisorLive = Layer.effect(
       Effect.fork,
     );
 
-    // Eager-start on boot: if opencode is already the selected agent,
+    // Eager-start on boot: if opencode is needed by any feature,
     // warm the daemon immediately so the first job doesn't pay cold-start.
-    yield* resolveAgentName().pipe(
-      Effect.flatMap((agent) => {
-        if (agent === "opencode") {
-          debug("opencode-supervisor", "boot: opencode already selected — eagerly starting daemon");
-          return ensureRunning().pipe(
-            Effect.matchEffect({
-              onSuccess: () => Effect.succeed(undefined),
-              onFailure: (err) => {
-                logError(
-                  "opencode-supervisor",
-                  "boot eager start failed:",
-                  err instanceof Error ? err.message : String(err),
-                );
-                return Effect.succeed(undefined);
-              },
-            }),
-          );
-        }
-        return Effect.succeed(undefined);
-      }),
+    const bootSettings = yield* withDb(db, settingsService.getSettings()).pipe(
+      Effect.orElseSucceed(() => null),
     );
+    if (!bootSettings || isOpencodeNeeded(bootSettings)) {
+      debug("opencode-supervisor", "boot: opencode needed — eagerly starting daemon");
+      yield* ensureRunning().pipe(
+        Effect.matchEffect({
+          onSuccess: () => Effect.succeed(undefined),
+          onFailure: (err) => {
+            logError(
+              "opencode-supervisor",
+              "boot eager start failed:",
+              err instanceof Error ? err.message : String(err),
+            );
+            return Effect.succeed(undefined);
+          },
+        }),
+      );
+    }
 
     const scheduleIdleStop = (): Effect.Effect<void> =>
       Effect.gen(function* () {
@@ -834,24 +829,25 @@ export const OpencodeSupervisorLive = Layer.effect(
 
     const jobStarted = (): Effect.Effect<void> =>
       Effect.gen(function* () {
-        // Detect settings-change: if the selected agent moved away from
-        // opencode while a running daemon exists, kill it.
-        const agent = yield* resolveAgentName();
+        // Detect settings-change: if no feature needs opencode while a
+        // running daemon exists, kill it.
+        const settings = yield* withDb(db, settingsService.getSettings()).pipe(
+          Effect.orElseSucceed(() => null),
+        );
         const s0 = yield* Ref.get(stateRef);
-        if (agent !== "opencode" && s0.running) {
-          debug("opencode-supervisor", `selected agent changed to '${agent}' — stopping daemon`);
+        if (settings && !isOpencodeNeeded(settings) && s0.running) {
+          debug("opencode-supervisor", `opencode no longer needed by any feature — stopping daemon`);
           yield* stopNow();
         }
         yield* clearIdleTimer();
+        const agent = settings?.aiAgent ?? "opencode";
         yield* Ref.update(stateRef, (s) => ({
           ...s,
           activeJobCount: s.activeJobCount + 1,
           lastSelectedAgent: agent,
         }));
-        // Pre-warm: kick off daemon spawn in the background so it's ready
-        // by the time the job calls ensureRunning(). Relies on ensureRunning's
-        // own startPromise coalescing to safely handle concurrent calls.
-        if (agent === "opencode") {
+        // Pre-warm when opencode might be needed (global or per-feature override)
+        if (!settings || isOpencodeNeeded(settings)) {
           yield* Effect.forkDaemon(ensureRunning().pipe(Effect.catchAll(() => Effect.void)));
         }
       });

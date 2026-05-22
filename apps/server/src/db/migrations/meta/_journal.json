@@ -82,8 +82,36 @@
     {
       "idx": 11,
       "version": "6",
+      "when": 1779295000000,
+      "tag": "0090_recap_pr_digests",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1779400000001,
+      "tag": "0100_remote_users",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1779400000002,
+      "tag": "0110_remote_users_login_idx",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1779400000003,
+      "tag": "0120_drop_remote_users_provider_id_idx",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "6",
       "when": 1779110000000,
-      "tag": "0090_walkthrough_next_seq",
+      "tag": "0130_walkthrough_next_seq",
       "breakpoints": true
     }
   ]

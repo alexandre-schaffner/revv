@@ -1,14 +1,12 @@
 <script lang="ts">
-import {
-  GitMerge,
-  Loader2,
-  MessageSquare,
-  PanelLeftClose,
-  PanelLeftOpen,
-  Send,
-  Trash2,
-  X,
-} from "@lucide/svelte";
+import GitMerge from "phosphor-svelte/lib/GitMerge";
+import Loader2 from "phosphor-svelte/lib/Spinner";
+import MessageSquare from "phosphor-svelte/lib/Chat";
+import PanelLeftClose from "phosphor-svelte/lib/SidebarSimple";
+import PanelLeftOpen from "phosphor-svelte/lib/SidebarSimple";
+import Send from "phosphor-svelte/lib/PaperPlaneRight";
+import Trash2 from "phosphor-svelte/lib/Trash";
+import X from "phosphor-svelte/lib/X";
 import {
   type DiffLineAnnotation,
   type FileDiffMetadata,
@@ -567,9 +565,9 @@ function portal(node: HTMLElement) {
 				title={isTreeCollapsed ? 'Show file tree' : 'Hide file tree'}
 			>
 				{#if isTreeCollapsed}
-					<PanelLeftOpen size={14} />
+					<PanelLeftOpen size={14} weight="fill" />
 				{:else}
-					<PanelLeftClose size={14} />
+					<PanelLeftClose size={14} weight="fill" />
 				{/if}
 			</button>
 			<code class="card-sha">{sha.slice(0, 12)}</code>
@@ -617,9 +615,9 @@ function portal(node: HTMLElement) {
 					aria-label="Discard commit"
 				>
 					{#if isDiscarding}
-						<Loader2 size={12} class="motion-essential-spin" />
+						<Loader2 size={12} weight="regular" class="motion-essential-spin" />
 					{:else}
-						<Trash2 size={12} />
+						<Trash2 size={12} weight="fill" />
 					{/if}
 					<span>Discard</span>
 				</button>
@@ -632,15 +630,15 @@ function portal(node: HTMLElement) {
 					aria-label="Cherry-pick commit to PR branch"
 				>
 					{#if isCherryPicking}
-						<Loader2 size={12} class="motion-essential-spin" />
+						<Loader2 size={12} weight="regular" class="motion-essential-spin" />
 					{:else}
-						<GitMerge size={12} />
+						<GitMerge size={12} weight="fill" />
 					{/if}
 					<span>Cherry-pick</span>
 				</button>
 			</div>
 			<button class="icon-btn" onclick={onClose} aria-label="Close diff">
-				<X size={14} />
+				<X size={14} weight="fill" />
 			</button>
 		</header>
 		<div class="card-body" class:card-body--tree-collapsed={isTreeCollapsed}>
@@ -662,7 +660,7 @@ function portal(node: HTMLElement) {
 		</div>
 		<footer class="card-footer">
 			<div class="footer-summary">
-				<MessageSquare size={12} />
+				<MessageSquare size={12} weight="fill" />
 				{#if commentCount === 0}
 					<span class="footer-hint">Click a line to leave feedback for the agent.</span>
 				{:else}
@@ -684,7 +682,7 @@ function portal(node: HTMLElement) {
 					? 'Wait for the current turn to finish'
 					: 'Send all comments to the agent'}
 			>
-				<Send size={12} />
+				<Send size={12} weight="fill" />
 				<span>Send to agent</span>
 			</button>
 		</footer>

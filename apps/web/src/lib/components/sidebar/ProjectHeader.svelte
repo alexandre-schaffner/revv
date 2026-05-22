@@ -1,5 +1,6 @@
 <script lang="ts">
-import { GitPullRequestCreateArrow, Sparkles } from "@lucide/svelte";
+import GitPullRequestCreateArrow from "phosphor-svelte/lib/GitPullRequest";
+import Sparkles from "phosphor-svelte/lib/Sparkle";
 import type { Repository } from "@revv/shared";
 import * as Tooltip from "$lib/components/ui/tooltip/index.js";
 
@@ -38,7 +39,7 @@ function handleNewPr(): void {
 						href="/repo/{repo.id}/recaps"
 						aria-label="Recaps for {repo.fullName}"
 					>
-						<Sparkles size={13} />
+						<Sparkles size={13} weight="fill" />
 						<span class="header-link-label">Recaps</span>
 					</a>
 				</Tooltip.Trigger>

@@ -1,5 +1,5 @@
 <script lang="ts">
-import { RefreshCw } from "@lucide/svelte";
+import RefreshCw from "phosphor-svelte/lib/ArrowsClockwise";
 import {
   Context,
   ContextCacheCreationUsage,
@@ -103,16 +103,16 @@ function handleRetrySync() {
 				title="Sync comments for this PR"
 			>
 				{#if syncing}
-					<span class="flex items-center animate-spin"><RefreshCw size={11} /></span>
+					<span class="flex items-center animate-spin"><RefreshCw size={11} weight="fill" /></span>
 					<span class="whitespace-nowrap">Syncing…</span>
 				{:else if syncError}
-					<RefreshCw size={11} />
+					<RefreshCw size={11} weight="fill" />
 					<span class="whitespace-nowrap text-danger">Sync failed</span>
 				{:else if lastSyncAt}
-					<RefreshCw size={11} />
+					<RefreshCw size={11} weight="fill" />
 					<span class="whitespace-nowrap">Synced {syncLabel}</span>
 				{:else}
-					<RefreshCw size={11} />
+					<RefreshCw size={11} weight="fill" />
 					<span class="whitespace-nowrap">Sync now</span>
 				{/if}
 			</button>

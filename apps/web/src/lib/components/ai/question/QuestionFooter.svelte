@@ -8,7 +8,9 @@ export type QuestionFooterProps = {
 </script>
 
 <script lang="ts">
-	import { Check, Loader2, X } from "@lucide/svelte";
+	import Check from "phosphor-svelte/lib/Check";
+import Loader2 from "phosphor-svelte/lib/Spinner";
+import X from "phosphor-svelte/lib/X";
 	import { Button } from "$lib/components/ui/button/index.js";
 
 	let { onSubmit, onSkip, canSubmit, submitting }: QuestionFooterProps =

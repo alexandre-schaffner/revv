@@ -126,6 +126,7 @@ async function handleToolsCall(
 
   let result: RecapToolResult;
   try {
+    ctx.toolCalls?.add(name);
     result = await spec.handler(ctx, parsed.data);
   } catch (err) {
     logError(

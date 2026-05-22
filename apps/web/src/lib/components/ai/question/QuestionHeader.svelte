@@ -6,11 +6,9 @@ export type QuestionHeaderProps = HTMLAttributes<HTMLDivElement>;
 
 <script lang="ts">
 	import { getContext } from "svelte";
-	import {
-		Check,
-		Clock,
-		ShieldX,
-	} from "@lucide/svelte";
+	import Check from "phosphor-svelte/lib/Check";
+import Clock from "phosphor-svelte/lib/Clock";
+import ShieldX from "phosphor-svelte/lib/ShieldWarning";
 	import type { Component } from "svelte";
 	import { cn } from "$lib/utils.js";
 	import { QUESTION_CTX_KEY, type QuestionContext } from "./context.js";

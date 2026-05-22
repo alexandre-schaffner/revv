@@ -305,7 +305,7 @@ export async function loadUser(): Promise<void> {
         if (res.ok) {
           const data = (await res.json()) as {
             login: string | null;
-            avatarUrl?: string | null;
+            avatarContent?: string | null;
             onboardedAt?: string | null;
           };
           if (user) {
@@ -314,9 +314,9 @@ export async function loadUser(): Promise<void> {
               githubLogin: data.login,
               onboardedAt: data.onboardedAt ?? null,
             };
-            // Prefer the server's freshly-refreshed avatar URL when available.
-            if (data.avatarUrl != null) {
-              next.image = data.avatarUrl;
+            // Prefer the server's freshly-refreshed avatar content when available.
+            if (data.avatarContent != null) {
+              next.image = data.avatarContent;
             }
             user = next;
             accountJustRemoved = false;
@@ -495,6 +495,9 @@ export async function switchAccount(userId: string, host?: string): Promise<void
     settings.reset();
     orgs.reset();
     clearReviewFiles();
+    if (typeof window !== "undefined" && /^\/(repo|review)(\/|$)/.test(window.location.pathname)) {
+      await goto("/", { replaceState: true });
+    }
     // Persist the target host on the server FIRST so any handler resolving
     // the active account from settings (e.g. `/api/prs`, `/api/repos`) sees
     // the right host immediately. We hit the endpoint directly because the

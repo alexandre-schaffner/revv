@@ -278,7 +278,7 @@ export function exportWalkthroughSnapshot(db: Db, params: ExportParams): Walkthr
     githubUserId: row.generatedByGithubUserId ?? 0,
     githubLogin: row.generatedByGithubLogin ?? "",
     displayName: row.generatedByDisplayName ?? null,
-    avatarUrl: row.generatedByAvatarUrl ?? null,
+    avatarContent: row.generatedByAvatarUrl ?? null,
   };
 
   return {

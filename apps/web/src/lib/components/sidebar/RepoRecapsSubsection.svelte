@@ -1,5 +1,6 @@
 <script lang="ts">
-import { Calendar, Loader2 } from "@lucide/svelte";
+import Calendar from "phosphor-svelte/lib/Calendar";
+import Loader2 from "phosphor-svelte/lib/Spinner";
 import { page } from "$app/state";
 import { Button } from "$lib/components/ui/button";
 import { fetchRecapsForRepo, getRecapLoading, getRecapsForRepo } from "$lib/stores/recaps.svelte";
@@ -66,7 +67,7 @@ function rowFocused(id: string): boolean {
 		<Calendar size={11} class="shrink-0 text-accent" />
 		<span class="min-w-0 flex-1 truncate text-left text-xs text-text-secondary">Recaps</span>
 		{#if loading && recaps.length === 0}
-			<Loader2 size={11} class="animate-spin text-text-muted" />
+			<Loader2 size={11} weight="regular" class="animate-spin text-text-muted" />
 		{:else if mostRecent}
 			<span class="shrink-0 text-xs text-text-muted">{formatPeriodWindow(mostRecent)}</span>
 		{:else}

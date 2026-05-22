@@ -1,4 +1,5 @@
-import { guessImageContentType } from "@revv/shared";
+import type { DiffLineAnnotation } from "@pierre/diffs";
+import { type CommentThread, guessImageContentType } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
@@ -21,6 +22,7 @@ import { prerenderDiff, type SsrDiffOptions } from "../services/PrerenderCache";
 import { PullRequestService } from "../services/PullRequest";
 import { RepoCloneService } from "../services/RepoClone";
 import { RepositoryService } from "../services/Repository";
+import { ReviewService } from "../services/Review";
 import { SettingsService } from "../services/Settings";
 import { SyncService } from "../services/Sync";
 import { TokenProvider } from "../services/TokenProvider";
@@ -84,10 +86,27 @@ function buildPrFilePatch(file: CachedDiffFile): string {
  * subsequent /files calls hit the cache. Failures only log — the client
  * always has a working render-path fallback.
  */
-async function prerenderPrFile(file: CachedDiffFile): Promise<string | undefined> {
+function annotationsForFile(
+  filePath: string,
+  threads: CommentThread[],
+): DiffLineAnnotation<unknown>[] {
+  return threads
+    .filter((thread) => thread.filePath === filePath)
+    .map((thread) => ({
+      side: thread.diffSide === "old" ? "deletions" : "additions",
+      lineNumber: thread.startLine,
+      metadata: null,
+    }));
+}
+
+async function prerenderPrFile(
+  file: CachedDiffFile,
+  threads: CommentThread[],
+): Promise<string | undefined> {
   if (file.patch === null) return undefined;
   try {
-    const html = await prerenderDiff(buildPrFilePatch(file), PR_DIFF_SSR_OPTIONS);
+    const annotations = annotationsForFile(file.path, threads);
+    const html = await prerenderDiff(buildPrFilePatch(file), PR_DIFF_SSR_OPTIONS, annotations);
     return html ?? undefined;
   } catch (err) {
     logError("pr-files-prerender", `prerender failed for ${file.path}:`, err);
@@ -203,10 +222,11 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
   )
   .get("/:id/files", async (ctx) => {
     try {
-      const files = await AppRuntime.runPromise(
+      const { files, threads } = await AppRuntime.runPromise(
         Effect.gen(function* () {
           const prService = yield* PullRequestService;
           const repoService = yield* RepositoryService;
+          const reviewService = yield* ReviewService;
           const { accountId, accessToken: token } = yield* resolveActiveAccount(
             ctx.session.user.id,
           );
@@ -217,7 +237,10 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
           // Always the full PR diff (merge-base 3-dot, matching GitHub's
           // "Files changed" tab). No per-commit selection anymore — the
           // commits dropdown is read-only.
-          return yield* getOrFetchDiffFiles(pr.id, repo.fullName, pr.externalId, token);
+          const files = yield* getOrFetchDiffFiles(pr.id, repo.fullName, pr.externalId, token);
+          const session = yield* reviewService.getActiveSession(pr.id);
+          const threads = session ? yield* reviewService.getThreadsForSession(session.id) : [];
+          return { files, threads };
         }),
       );
 
@@ -233,7 +256,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
           deletions: f.deletions,
           isNew: f.status === "added",
           isDeleted: f.status === "removed",
-          prerenderedHtml: await prerenderPrFile(f),
+          prerenderedHtml: await prerenderPrFile(f, threads),
         })),
       );
     } catch (e) {

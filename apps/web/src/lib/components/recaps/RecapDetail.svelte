@@ -1,12 +1,24 @@
 <script lang="ts">
-import { ArrowLeft, CircleAlert, Loader2 } from "@lucide/svelte";
 import type { ProjectRecap } from "@revv/shared";
+import ArrowLeft from "phosphor-svelte/lib/ArrowLeft";
+import CaretDown from "phosphor-svelte/lib/CaretDown";
+import Loader2 from "phosphor-svelte/lib/Spinner";
+import CircleAlert from "phosphor-svelte/lib/WarningCircle";
+import { onMount, tick } from "svelte";
 import { Shimmer } from "$lib/components/ai/shimmer";
+import { ToolActivityGroup, ToolActivityReveal } from "$lib/components/ai/tool";
 import { Button } from "$lib/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "$lib/components/ui/collapsible";
 import type { RecapStreamEntry } from "$lib/stores/recap-stream.svelte";
+import { activityToolLabel, groupActivityRuns, isActivityGroup } from "$lib/utils/activity-groups";
 import { handleMarkdownLinkClick } from "$lib/utils/links";
 import { createStreamingBlockRenderer, renderMarkdown } from "$lib/utils/markdown";
 import RecapStats from "./RecapStats.svelte";
+import ShellActivity from "./ShellActivity.svelte";
 
 interface Props {
   recap: ProjectRecap | null;
@@ -19,17 +31,30 @@ interface Props {
 
 let { recap, loading, onBack = undefined, stream = null }: Props = $props();
 
+let thoughtsOpen = $state(false);
+let mounted = $state(false);
+let recapProseElement = $state<HTMLElement | null>(null);
+let thoughtStreamElement = $state<HTMLElement | null>(null);
+let lastRevealKey = "";
+let lastThoughtScrollLength = 0;
+const renderThoughtBlocks = createStreamingBlockRenderer();
+
 let completedHtml = $derived.by(() => {
   if (recap?.overview) return renderMarkdown(recap.overview);
   return "";
 });
 
-// Stateful renderer — holds per-block prev-length so the active block's
-// already-shown words don't re-animate when innerHTML is replaced.
-const renderStreamingBlocks = createStreamingBlockRenderer();
-let streamingBlocks = $derived.by(() =>
-  stream?.overview ? renderStreamingBlocks(stream.overview) : [],
+let recapActivityEntries = $derived.by(() =>
+  stream?.activities ? groupActivityRuns(stream.activities) : [],
 );
+let thoughtText = $derived(stream?.thoughts ?? "");
+let hasThoughtText = $derived(thoughtText.trim().length > 0);
+let thoughtBlocks = $derived.by(() => renderThoughtBlocks(thoughtText));
+let phaseLabel = $derived(
+  stream ? stream.phaseMessage || phaseMessage(stream.phase) : "Starting recap…",
+);
+
+const RECAP_REVEAL_SELECTOR = "h1, h2, h3, p, li, pre, blockquote, .prose-table";
 
 const DAY_MONTH_YEAR = new Intl.DateTimeFormat("en-GB", {
   weekday: "short",
@@ -68,6 +93,88 @@ function phaseMessage(phase: string): string {
   };
   return labels[phase] ?? "Generating recap…";
 }
+
+function activityGroupIsLatest(entry: { items: readonly { id: string }[] }): boolean {
+  if (!stream?.isStreaming) return false;
+  const lastActivity = stream.activities.at(-1);
+  const lastGroupItem = entry.items.at(-1);
+  return !!lastActivity && !!lastGroupItem && lastActivity.id === lastGroupItem.id;
+}
+
+function isBashActivity(entry: { activityKind: string; payload?: unknown }): boolean {
+  return entry.activityKind === "tool.bash";
+}
+
+function extractCommand(entry: { payload?: unknown }): string {
+  const obj =
+    entry.payload && typeof entry.payload === "object" && !Array.isArray(entry.payload)
+      ? (entry.payload as Record<string, unknown>)
+      : {};
+  return typeof obj.command === "string" ? obj.command : "";
+}
+
+function revealCommittedRecap(root: HTMLElement): void {
+  root.classList.remove("recap-prose-reveal-ready");
+  root.classList.add("recap-prose-reveal-preparing");
+
+  root.querySelectorAll<HTMLElement>(".recap-reveal-line").forEach((el) => {
+    el.classList.remove("recap-reveal-line");
+    el.style.removeProperty("--recap-line-index");
+  });
+
+  const targets = Array.from(root.querySelectorAll<HTMLElement>(RECAP_REVEAL_SELECTOR)).filter(
+    (el) => {
+      if (!el.textContent?.trim()) return false;
+      if (el.closest(".prose-table") && !el.classList.contains("prose-table")) return false;
+      return !el.parentElement?.closest(RECAP_REVEAL_SELECTOR);
+    },
+  );
+
+  targets.forEach((el, index) => {
+    el.style.setProperty("--recap-line-index", String(index));
+    el.classList.add("recap-reveal-line");
+  });
+
+  requestAnimationFrame(() => {
+    root.classList.add("recap-prose-reveal-ready");
+    root.classList.remove("recap-prose-reveal-preparing");
+  });
+}
+
+onMount(() => {
+  mounted = true;
+  return () => {
+    mounted = false;
+  };
+});
+
+$effect(() => {
+  const revealKey =
+    recap?.status === "complete" && recap.overview
+      ? `${recap.id}:${recap.completedAt ?? "pending"}:${recap.overview.length}`
+      : "";
+  if (!mounted || !revealKey || revealKey === lastRevealKey) return;
+
+  lastRevealKey = revealKey;
+  void tick().then(() => {
+    if (lastRevealKey === revealKey && recapProseElement) {
+      revealCommittedRecap(recapProseElement);
+    }
+  });
+});
+
+$effect(() => {
+  const length = thoughtText.length;
+  if (!mounted || !thoughtsOpen || !thoughtStreamElement || length === lastThoughtScrollLength)
+    return;
+
+  lastThoughtScrollLength = length;
+  void tick().then(() => {
+    if (thoughtStreamElement && thoughtsOpen) {
+      thoughtStreamElement.scrollTop = thoughtStreamElement.scrollHeight;
+    }
+  });
+});
 </script>
 
 <div class="recap-detail">
@@ -88,12 +195,12 @@ function phaseMessage(phase: string): string {
 
 	{#if loading && !recap}
 		<div class="recap-loading">
-			<Loader2 size={24} class="animate-spin" aria-hidden="true" />
+			<Loader2 size={24} weight="regular" class="animate-spin" aria-hidden="true" />
 			<p>Loading recap…</p>
 		</div>
 	{:else if !recap}
 		<div class="recap-empty">
-			<CircleAlert size={24} aria-hidden="true" />
+			<CircleAlert size={24} weight="fill" aria-hidden="true" />
 			<p>Recap not found.</p>
 		</div>
 	{:else}
@@ -102,17 +209,69 @@ function phaseMessage(phase: string): string {
 		</div>
 
 		{#if recap.status === "generating"}
-			{#if stream && (stream.isStreaming || stream.overview)}
-				<article class="recap-prose recap-prose--streaming" onclick={handleMarkdownLinkClick}>
-					{#each streamingBlocks as block (block.id)}
-						<div class="recap-block" data-sd-block>{@html block.html}</div>
-					{/each}
-				</article>
-				{#if stream.isStreaming && !stream.doneReceived && !stream.streamError}
-					<div class="phase-shimmer">
-						<Shimmer class="text-sm" aria-label={phaseMessage(stream.phase)}>
-							{phaseMessage(stream.phase)}
-						</Shimmer>
+			{#if stream && (stream.isStreaming || stream.overview || stream.thoughts || stream.activities.length > 0)}
+				<div class="recap-generating">
+					<Collapsible bind:open={thoughtsOpen}>
+						<CollapsibleTrigger class="phase-trigger" aria-label="{phaseLabel}. Toggle streamed thoughts">
+							<Shimmer class="text-sm" aria-label={phaseLabel}>
+								{phaseLabel}
+							</Shimmer>
+							<div class="phase-trigger-meta">
+								<span>{hasThoughtText ? 'Thoughts' : 'Waiting for thoughts'}</span>
+								<span class="phase-trigger-chevron-wrap" data-state={thoughtsOpen ? 'open' : 'closed'}>
+									<CaretDown class="phase-trigger-chevron" aria-hidden="true" />
+								</span>
+							</div>
+						</CollapsibleTrigger>
+
+						<CollapsibleContent class="thought-content">
+							{#if hasThoughtText}
+								<div
+									bind:this={thoughtStreamElement}
+									class="thought-stream thought-markdown"
+								>
+									{#each thoughtBlocks as block (block.id)}
+										<div class="thought-markdown-block">
+											{@html block.html}
+										</div>
+									{/each}
+								</div>
+							{:else}
+								<p class="thought-empty">No streamed thoughts yet. Tool calls below show current progress.</p>
+							{/if}
+						</CollapsibleContent>
+					</Collapsible>
+
+					<p class="recap-hint">
+						The recap text will appear once the agent saves the final version.
+					</p>
+				</div>
+				{#if recapActivityEntries.length > 0}
+					<div class="recap-activity-stack">
+						{#each recapActivityEntries as entry, entryIdx (isActivityGroup(entry) ? `group-${entry.items[0]?.id ?? entryIdx}` : entry.id)}
+							{#if isActivityGroup(entry)}
+								<ToolActivityGroup
+									items={entry.items}
+									active={activityGroupIsLatest(entry)}
+									defaultOpen={false}
+								/>
+							{:else if isBashActivity(entry)}
+								<ShellActivity
+									command={extractCommand(entry)}
+									summary={entry.summary}
+									active={stream?.isStreaming && entry.id === stream.activities.at(-1)?.id}
+								/>
+							{:else}
+								<div class="recap-activity-line">
+									<span class="recap-activity-tool">{activityToolLabel(entry)}</span>
+									{#key entry.summary}
+										<ToolActivityReveal class="recap-activity-summary">
+											{entry.summary}
+										</ToolActivityReveal>
+									{/key}
+								</div>
+							{/if}
+						{/each}
 					</div>
 				{/if}
 			{:else}
@@ -128,7 +287,7 @@ function phaseMessage(phase: string): string {
 			{/if}
 		{:else if recap.status === "error"}
 			<div class="recap-error">
-				<CircleAlert size={16} aria-hidden="true" />
+				<CircleAlert size={16} weight="fill" aria-hidden="true" />
 				<div>
 					<p class="recap-error-title">
 						{recap.errorMessage === "Cancelled by user"
@@ -155,7 +314,7 @@ function phaseMessage(phase: string): string {
 				<p>No overview content was written by the agent.</p>
 			</div>
 		{:else}
-			<article class="recap-prose" onclick={handleMarkdownLinkClick}>
+			<article bind:this={recapProseElement} class="recap-prose" onclick={handleMarkdownLinkClick}>
 				{@html completedHtml}
 			</article>
 		{/if}
@@ -253,6 +412,131 @@ function phaseMessage(phase: string): string {
 		color: var(--color-text-muted);
 	}
 
+	.recap-generating {
+		display: flex;
+		flex-direction: column;
+		gap: 0.375rem;
+		max-width: 42rem;
+		padding: 0.25rem 0;
+	}
+
+	.recap-generating :global(.phase-trigger) {
+		display: flex;
+		width: 100%;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.75rem;
+		padding: 0.125rem 0;
+		text-align: left;
+	}
+
+	.phase-trigger-meta {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.35rem;
+		flex-shrink: 0;
+		font-size: 0.75rem;
+		color: var(--color-text-muted);
+	}
+
+	.phase-trigger-chevron-wrap {
+		display: inline-grid;
+		place-items: center;
+		transition: transform var(--duration-snap) var(--ease-out-expo);
+	}
+
+	.phase-trigger-chevron-wrap[data-state="open"] {
+		transform: rotate(180deg);
+	}
+
+	.phase-trigger-chevron-wrap :global(.phase-trigger-chevron) {
+		width: 0.75rem;
+		height: 0.75rem;
+	}
+
+	.recap-generating :global(.thought-content) {
+		overflow: hidden;
+	}
+
+	.thought-stream,
+	.thought-empty {
+		margin: 0.375rem 0 0;
+		color: var(--color-text-muted);
+	}
+
+	.thought-stream {
+		font-size: 0.875rem;
+		line-height: 1.6;
+	}
+
+	.thought-markdown {
+		word-break: break-word;
+	}
+
+	.thought-markdown-block + .thought-markdown-block {
+		margin-top: 0.625rem;
+	}
+
+	.thought-markdown :global(p),
+	.thought-markdown :global(ul),
+	.thought-markdown :global(ol),
+	.thought-markdown :global(pre),
+	.thought-markdown :global(blockquote) {
+		margin: 0 0 0.625rem;
+	}
+
+	.thought-markdown-block :global(:last-child) {
+		margin-bottom: 0;
+	}
+
+	.thought-markdown :global(ul),
+	.thought-markdown :global(ol) {
+		padding-left: 1.25rem;
+	}
+
+	.thought-markdown :global(li) {
+		margin: 0.15rem 0;
+	}
+
+	.thought-markdown :global(code) {
+		font-family: var(--font-mono);
+		font-size: 0.92em;
+		padding: 0.08em 0.3em;
+		border-radius: 0.25rem;
+		background: color-mix(in srgb, var(--color-bg-tertiary) 70%, transparent);
+		color: var(--color-text-secondary);
+	}
+
+	.thought-markdown :global(pre) {
+		overflow-x: auto;
+		padding: 0.625rem;
+		border-radius: 0.375rem;
+		background: var(--color-bg-tertiary);
+	}
+
+	.thought-markdown :global(pre code) {
+		padding: 0;
+		background: transparent;
+		font-size: inherit;
+	}
+
+	.thought-markdown :global(blockquote) {
+		padding-left: 0.75rem;
+		border-left: 2px solid color-mix(in srgb, var(--color-accent) 45%, transparent);
+		color: var(--color-text-secondary);
+	}
+
+	.thought-markdown :global(a) {
+		color: var(--color-accent);
+		text-decoration-line: underline;
+		text-decoration-color: color-mix(in srgb, var(--color-accent) 35%, transparent);
+		text-underline-offset: 2px;
+	}
+
+	.thought-empty {
+		font-size: 0.8125rem;
+	}
+
 	/* Error state — borrows the walkthrough's danger-tinted treatment so an
 	   error is visually distinguishable from a passive loading callout. */
 	.recap-error {
@@ -290,6 +574,33 @@ function phaseMessage(phase: string): string {
 		color: var(--color-text-primary);
 	}
 
+	:global(.recap-prose.recap-prose-reveal-preparing) {
+		opacity: 0;
+	}
+
+	:global(.recap-prose.recap-prose-reveal-ready) {
+		opacity: 1;
+	}
+
+	:global(.recap-prose.recap-prose-reveal-ready .recap-reveal-line) {
+		transform-origin: left top;
+		animation: recap-reveal-line-in var(--duration-ceremonial-slow) var(--ease-out-expo) both;
+		animation-delay: calc(var(--recap-line-index, 0) * var(--stagger-loose) * 1.25);
+		will-change: transform, opacity;
+	}
+
+	@keyframes -global-recap-reveal-line-in {
+		from {
+			opacity: 0;
+			transform: translateY(0.85em);
+		}
+
+		to {
+			opacity: 1;
+			transform: translateY(0);
+		}
+	}
+
 	.recap-prose :global(h1),
 	.recap-prose :global(h2),
 	.recap-prose :global(h3) {
@@ -308,6 +619,8 @@ function phaseMessage(phase: string): string {
 
 	.recap-prose :global(p) {
 		margin: 0.75em 0;
+		text-align: justify;
+		text-align-last: left;
 	}
 
 	.recap-prose :global(ul),
@@ -345,11 +658,43 @@ function phaseMessage(phase: string): string {
 		text-decoration-color: var(--color-accent-hover);
 	}
 
-	/* `.sd-word-new` animation lives in app.css (global) — the spans are
+	/* `.sd-char-new` animation lives in app.css (global) — the spans are
 	   injected via `{@html}` and have no component scope. */
 
 	.phase-shimmer {
 		margin-top: 0.75rem;
+	}
+
+	.recap-activity-stack {
+		display: flex;
+		flex-direction: column;
+		gap: 0.375rem;
+		max-width: 42rem;
+		margin-top: 0.75rem;
+	}
+
+	.recap-activity-line {
+		display: flex;
+		min-width: 0;
+		align-items: baseline;
+		gap: 0.45rem;
+		padding: 0.125rem 0;
+		font-size: 0.875rem;
+		color: var(--color-text-muted);
+	}
+
+	.recap-activity-tool {
+		flex-shrink: 0;
+		font-weight: 500;
+		color: var(--color-text-primary);
+	}
+
+	:global(.recap-activity-summary) {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		color: color-mix(in srgb, var(--color-text-muted) 72%, transparent);
 	}
 
 	.recap-detail-footer {

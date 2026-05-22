@@ -103,8 +103,6 @@ function openComment(startLine: number, endLine: number, side: "additions" | "de
   pendingCommentTrigger = { startLine, endLine, side, seq: Date.now() };
 }
 
-// ── Timer cleanup ────────────────────────────────────────────────────────
-
 // ── Topbar subtitle (show full path when file title scrolls out) ─────────
 let fileTitleObserver: IntersectionObserver | null = null;
 
@@ -143,20 +141,46 @@ $effect(() => {
   if (fileTitleObserver) setupFileTitleObserver();
 });
 
-onDestroy(() => {
-  if (gTimer !== undefined) clearTimeout(gTimer);
-  if (fileTitleObserver) fileTitleObserver.disconnect();
-  setTopbarSubtitle(null);
-});
-
 // ── Keyboard navigation ──────────────────────────────────────────────────
 
 /** Scroll amount per j/k press (in pixels). */
 const SCROLL_STEP = 80;
 
-/** State for the `gg` / `G` two-key sequence. */
-let pendingG = false;
-let gTimer: ReturnType<typeof setTimeout> | undefined;
+/** Encapsulates the pendingG / gTimer state for the gg two-key chord. */
+class PendingGState {
+  flag = false;
+  timer: ReturnType<typeof setTimeout> | undefined;
+
+  arm(onExpire?: () => void) {
+    this.flag = true;
+    this.timer = setTimeout(() => {
+      this.flag = false;
+      onExpire?.();
+    }, 300);
+  }
+
+  disarm() {
+    this.flag = false;
+    if (this.timer !== undefined) clearTimeout(this.timer);
+    this.timer = undefined;
+  }
+
+  reset() {
+    this.disarm();
+  }
+
+  destroy() {
+    this.disarm();
+  }
+}
+
+const pendingG = new PendingGState();
+
+onDestroy(() => {
+  pendingG.destroy();
+  if (fileTitleObserver) fileTitleObserver.disconnect();
+  setTopbarSubtitle(null);
+});
 
 // ── Diff-pane scroll persistence ─────────────────────────────────────────
 //
@@ -209,13 +233,18 @@ function navigateFile(direction: 1 | -1) {
   }
 }
 
+// ── Command-map keyboard dispatch ────────────────────────────────────────
+//
+// Two-level map: panel → key → handler. The pendingG state machine for the
+// `gg` chord is encapsulated in PendingGState above.
+
 function handleGlobalKeydown(e: KeyboardEvent) {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 
   const panel = getActivePanel();
 
-  // ── Space: toggle sidebar ↔ diff-scroll ───────────────────────────────
+  // ── Global bindings (all panels) ──────────────────────────────────────
   if (e.key === " ") {
     e.preventDefault();
     if (isInDiffMode()) {
@@ -226,187 +255,17 @@ function handleGlobalKeydown(e: KeyboardEvent) {
     return;
   }
 
-  // ── h / t: always return to tree/sidebar from any diff mode ──────────
   if ((e.key === "h" || e.key === "t") && panel !== "sidebar") {
     e.preventDefault();
     enterSidebarMode();
     return;
   }
 
-  // ── diff-visual ────────────────────────────────────────────────────────
-  if (panel === "diff-visual") {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      enterSidebarMode();
-      return;
-    }
-    if (e.key === "v") {
-      e.preventDefault();
-      exitVisualMode();
-      return;
-    }
-    if (e.key === "j" || e.key === "ArrowDown") {
-      e.preventDefault();
-      moveCursor(1);
-      return;
-    }
-    if (e.key === "k" || e.key === "ArrowUp") {
-      e.preventDefault();
-      moveCursor(-1);
-      return;
-    }
-    if (e.key === "c") {
-      e.preventDefault();
-      const cursor = getCursorLineIndex();
-      const anchor = getAnchorLineIndex() ?? cursor;
-      const side = getCursorSide() ?? "additions";
-      const startLine = Math.min(anchor, cursor);
-      const endLine = Math.max(anchor, cursor);
-      openComment(startLine, endLine, side);
-      return;
-    }
-    return;
-  }
+  // ── Panel-specific bindings ───────────────────────────────────────────
+  const handled = dispatchKey(panel, e.key, e);
+  if (handled) return;
 
-  // ── diff-line ──────────────────────────────────────────────────────────
-  if (panel === "diff-line") {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      enterSidebarMode();
-      return;
-    }
-    if (e.key === "v") {
-      e.preventDefault();
-      enterVisualMode();
-      return;
-    }
-    if (e.key === "j" || e.key === "ArrowDown") {
-      e.preventDefault();
-      moveCursor(1);
-      return;
-    }
-    if (e.key === "k" || e.key === "ArrowUp") {
-      e.preventDefault();
-      moveCursor(-1);
-      return;
-    }
-    if (e.key === "d") {
-      e.preventDefault();
-      jumpCursor("half-down");
-      return;
-    }
-    if (e.key === "u") {
-      e.preventDefault();
-      jumpCursor("half-up");
-      return;
-    }
-    if (e.key === "G") {
-      e.preventDefault();
-      pendingG = false;
-      if (gTimer !== undefined) clearTimeout(gTimer);
-      jumpCursor("bottom");
-      return;
-    }
-    if (e.key === "g" && !e.shiftKey) {
-      if (pendingG) {
-        e.preventDefault();
-        pendingG = false;
-        if (gTimer !== undefined) clearTimeout(gTimer);
-        jumpCursor("top");
-        return;
-      }
-      pendingG = true;
-      gTimer = setTimeout(() => {
-        pendingG = false;
-      }, 300);
-      e.preventDefault();
-      return;
-    }
-    if (e.key === "c") {
-      e.preventDefault();
-      const lineIdx = getCursorLineIndex();
-      const side = getCursorSide() ?? "additions";
-      openComment(lineIdx, lineIdx, side);
-      return;
-    }
-    if (pendingG) {
-      pendingG = false;
-      if (gTimer !== undefined) clearTimeout(gTimer);
-    }
-    return;
-  }
-
-  // ── diff-scroll ────────────────────────────────────────────────────────
-  if (panel === "diff-scroll") {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      enterSidebarMode();
-      return;
-    }
-    if (e.key === "v") {
-      e.preventDefault();
-      enterLineMode(getTotalLineCount());
-      return;
-    }
-    if (e.key === "j" || e.key === "ArrowDown") {
-      e.preventDefault();
-      getDiffScroll()?.scrollBy({ top: SCROLL_STEP, behavior: "instant" });
-      return;
-    }
-    if (e.key === "k" || e.key === "ArrowUp") {
-      e.preventDefault();
-      getDiffScroll()?.scrollBy({ top: -SCROLL_STEP, behavior: "instant" });
-      return;
-    }
-    if (e.key === "d") {
-      e.preventDefault();
-      const el = getDiffScroll();
-      if (el) el.scrollBy({ top: el.clientHeight / 2, behavior: "instant" });
-      return;
-    }
-    if (e.key === "u") {
-      e.preventDefault();
-      const el = getDiffScroll();
-      if (el) el.scrollBy({ top: -el.clientHeight / 2, behavior: "instant" });
-      return;
-    }
-    if (e.key === "G") {
-      e.preventDefault();
-      pendingG = false;
-      if (gTimer !== undefined) clearTimeout(gTimer);
-      const el = getDiffScroll();
-      if (el) el.scrollTo({ top: el.scrollHeight, behavior: "instant" });
-      return;
-    }
-    if (e.key === "g" && !e.shiftKey) {
-      if (pendingG) {
-        e.preventDefault();
-        pendingG = false;
-        if (gTimer !== undefined) clearTimeout(gTimer);
-        const el = getDiffScroll();
-        if (el) el.scrollTo({ top: 0, behavior: "instant" });
-        return;
-      }
-      pendingG = true;
-      gTimer = setTimeout(() => {
-        pendingG = false;
-      }, 300);
-      e.preventDefault();
-      return;
-    }
-    if (pendingG) {
-      pendingG = false;
-      if (gTimer !== undefined) clearTimeout(gTimer);
-    }
-    return;
-  }
-
-  // ── sidebar (shared bindings) ──────────────────────────────────────────
-  if (e.key === "v") {
-    e.preventDefault();
-    enterLineMode(getTotalLineCount());
-    return;
-  }
+  // ── Fallback: sidebar bindings (n/p file navigation) ──────────────────
   if (e.key === "n") {
     e.preventDefault();
     navigateFile(1);
@@ -414,6 +273,193 @@ function handleGlobalKeydown(e: KeyboardEvent) {
     e.preventDefault();
     navigateFile(-1);
   }
+}
+
+type KeyHandler = (e: KeyboardEvent) => boolean;
+
+const DIFF_VISUAL_KEYS: Record<string, KeyHandler> = {
+  Escape: (e) => {
+    e.preventDefault();
+    enterSidebarMode();
+    return true;
+  },
+  v: (e) => {
+    e.preventDefault();
+    exitVisualMode();
+    return true;
+  },
+  j: (e) => {
+    e.preventDefault();
+    moveCursor(1);
+    return true;
+  },
+  ArrowDown: (e) => {
+    e.preventDefault();
+    moveCursor(1);
+    return true;
+  },
+  k: (e) => {
+    e.preventDefault();
+    moveCursor(-1);
+    return true;
+  },
+  ArrowUp: (e) => {
+    e.preventDefault();
+    moveCursor(-1);
+    return true;
+  },
+  c: (e) => {
+    e.preventDefault();
+    const cursor = getCursorLineIndex();
+    const anchor = getAnchorLineIndex() ?? cursor;
+    const side = getCursorSide() ?? "additions";
+    openComment(Math.min(anchor, cursor), Math.max(anchor, cursor), side);
+    return true;
+  },
+};
+
+const DIFF_LINE_KEYS: Record<string, KeyHandler> = {
+  Escape: (e) => {
+    e.preventDefault();
+    enterSidebarMode();
+    return true;
+  },
+  v: (e) => {
+    e.preventDefault();
+    enterVisualMode();
+    return true;
+  },
+  j: (e) => {
+    e.preventDefault();
+    moveCursor(1);
+    return true;
+  },
+  ArrowDown: (e) => {
+    e.preventDefault();
+    moveCursor(1);
+    return true;
+  },
+  k: (e) => {
+    e.preventDefault();
+    moveCursor(-1);
+    return true;
+  },
+  ArrowUp: (e) => {
+    e.preventDefault();
+    moveCursor(-1);
+    return true;
+  },
+  d: (e) => {
+    e.preventDefault();
+    jumpCursor("half-down");
+    return true;
+  },
+  u: (e) => {
+    e.preventDefault();
+    jumpCursor("half-up");
+    return true;
+  },
+  G: (e) => {
+    e.preventDefault();
+    pendingG.disarm();
+    jumpCursor("bottom");
+    return true;
+  },
+  c: (e) => {
+    e.preventDefault();
+    const lineIdx = getCursorLineIndex();
+    const side = getCursorSide() ?? "additions";
+    openComment(lineIdx, lineIdx, side);
+    return true;
+  },
+};
+
+const DIFF_SCROLL_KEYS: Record<string, KeyHandler> = {
+  Escape: (e) => {
+    e.preventDefault();
+    enterSidebarMode();
+    return true;
+  },
+  v: (e) => {
+    e.preventDefault();
+    enterLineMode(getTotalLineCount());
+    return true;
+  },
+  j: (e) => {
+    e.preventDefault();
+    getDiffScroll()?.scrollBy({ top: SCROLL_STEP, behavior: "instant" });
+    return true;
+  },
+  ArrowDown: (e) => {
+    e.preventDefault();
+    getDiffScroll()?.scrollBy({ top: SCROLL_STEP, behavior: "instant" });
+    return true;
+  },
+  k: (e) => {
+    e.preventDefault();
+    getDiffScroll()?.scrollBy({ top: -SCROLL_STEP, behavior: "instant" });
+    return true;
+  },
+  ArrowUp: (e) => {
+    e.preventDefault();
+    getDiffScroll()?.scrollBy({ top: -SCROLL_STEP, behavior: "instant" });
+    return true;
+  },
+  d: (e) => {
+    e.preventDefault();
+    const el = getDiffScroll();
+    if (el) el.scrollBy({ top: el.clientHeight / 2, behavior: "instant" });
+    return true;
+  },
+  u: (e) => {
+    e.preventDefault();
+    const el = getDiffScroll();
+    if (el) el.scrollBy({ top: -el.clientHeight / 2, behavior: "instant" });
+    return true;
+  },
+  G: (e) => {
+    e.preventDefault();
+    pendingG.disarm();
+    const el = getDiffScroll();
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: "instant" });
+    return true;
+  },
+};
+
+const PANEL_KEY_MAP: Record<string, Record<string, KeyHandler>> = {
+  "diff-visual": DIFF_VISUAL_KEYS,
+  "diff-line": DIFF_LINE_KEYS,
+  "diff-scroll": DIFF_SCROLL_KEYS,
+};
+
+function dispatchKey(panel: string, key: string, e: KeyboardEvent): boolean {
+  const keyMap = PANEL_KEY_MAP[panel];
+  if (!keyMap) return false;
+
+  // Handle the gg two-key chord for diff-line and diff-scroll panels
+  if (panel === "diff-line" || panel === "diff-scroll") {
+    if (key === "g" && !e.shiftKey) {
+      e.preventDefault();
+      if (pendingG.flag) {
+        pendingG.disarm();
+        if (panel === "diff-line") {
+          jumpCursor("top");
+        } else {
+          const el = getDiffScroll();
+          if (el) el.scrollTo({ top: 0, behavior: "instant" });
+        }
+        return true;
+      }
+      pendingG.arm();
+      return true;
+    }
+    // Any other key cancels pendingG
+    if (pendingG.flag) pendingG.reset();
+  }
+
+  const handler = keyMap[key];
+  if (handler) return handler(e);
+  return false;
 }
 
 // ── Mode indicator derived state ─────────────────────────────────────────

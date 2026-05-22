@@ -39,8 +39,8 @@ const DAILY_BACKFILL_DAYS = 7;
 /** Backfill window for weekly recaps on boot. */
 const WEEKLY_BACKFILL_WEEKS = 4;
 
-const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-const ONE_WEEK_MS = 7 * ONE_DAY_MS;
+export const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+export const ONE_WEEK_MS = 7 * ONE_DAY_MS;
 
 // ── Period boundary math (UTC) ───────────────────────────────────────────────
 
@@ -49,7 +49,7 @@ const ONE_WEEK_MS = 7 * ONE_DAY_MS;
  * fresh Date object so callers can compare or format without mutating the
  * input.
  */
-function startOfUtcDay(d: Date): Date {
+export function startOfUtcDay(d: Date): Date {
   const out = new Date(d.getTime());
   out.setUTCHours(0, 0, 0, 0);
   return out;
@@ -59,11 +59,41 @@ function startOfUtcDay(d: Date): Date {
  * Start of the ISO week (Monday) in UTC for the given Date. ISO weeks
  * begin Monday — Sunday is treated as part of the previous week.
  */
-function startOfUtcIsoWeek(d: Date): Date {
+export function startOfUtcIsoWeek(d: Date): Date {
   const day = startOfUtcDay(d);
   const dow = day.getUTCDay(); // 0=Sun, 1=Mon, ..., 6=Sat
   const daysFromMonday = (dow + 6) % 7; // Sun -> 6, Mon -> 0, ..., Sat -> 5
   return new Date(day.getTime() - daysFromMonday * ONE_DAY_MS);
+}
+
+/**
+ * Compute the correct period boundaries when regenerating a recap.
+ * If the recap's periodStart matches the current rolling window (today /
+ * this week), return a rolling window ending at `now`. Otherwise return
+ * the canonical full-period boundaries for the historical start.
+ */
+export function canonicalRecapBoundaries(
+  period: RecapPeriod,
+  periodStart: string,
+  now: Date = new Date(),
+): { periodStart: string; periodEnd: string } {
+  const start = new Date(periodStart);
+  if (period === "daily") {
+    const canonicalStart = startOfUtcDay(start);
+    const todayStart = startOfUtcDay(now);
+    if (canonicalStart.getTime() === todayStart.getTime()) {
+      return { periodStart: canonicalStart.toISOString(), periodEnd: now.toISOString() };
+    }
+    const end = new Date(canonicalStart.getTime() + ONE_DAY_MS);
+    return { periodStart: canonicalStart.toISOString(), periodEnd: end.toISOString() };
+  }
+  const canonicalStart = startOfUtcIsoWeek(start);
+  const thisWeekStart = startOfUtcIsoWeek(now);
+  if (canonicalStart.getTime() === thisWeekStart.getTime()) {
+    return { periodStart: canonicalStart.toISOString(), periodEnd: now.toISOString() };
+  }
+  const end = new Date(canonicalStart.getTime() + ONE_WEEK_MS);
+  return { periodStart: canonicalStart.toISOString(), periodEnd: end.toISOString() };
 }
 
 /**

@@ -5,7 +5,7 @@ import { applyUserUpdate } from "./auth.svelte";
 import { onChatQuestionResolved } from "./chat.svelte";
 import * as errors from "./errors.svelte";
 import * as prs from "./prs.svelte";
-import { getSelectedPrId, mergePullRequests, onPrArchived } from "./prs.svelte";
+import { getSelectedPrId, onPrArchived, replacePullRequests } from "./prs.svelte";
 import { onRecapAdded, onRecapStatusChanged } from "./recaps.svelte";
 import {
   loadSession,
@@ -83,7 +83,7 @@ function notifySyncChanges(changes: SyncChange[]): void {
 function handleMessage(msg: WsServerMessage): void {
   switch (msg.type) {
     case "prs:updated":
-      mergePullRequests(msg.data);
+      replacePullRequests(msg.data);
       // No longer blindly refetching the archive list on every prs:updated:
       // the targeted `pr:archived` envelope below patches archive state in
       // place, and the initial archive fetch happens on app boot. Refetching
@@ -99,7 +99,7 @@ function handleMessage(msg: WsServerMessage): void {
       sync.setPrListSyncing(false);
       break;
     case "repos:updated":
-      prs.setRepositories(msg.data);
+      void prs.setRepositories(msg.data);
       break;
     case "repos:clone-status":
       prs.updateRepoCloneStatus(msg.data.repoId, msg.data.status, msg.data.error);

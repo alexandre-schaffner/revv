@@ -14,7 +14,7 @@ export type QueueSectionLabelProps = HTMLAttributes<HTMLSpanElement> & {
 
 <script lang="ts">
 	import { cn } from "$lib/utils.js";
-	import { ChevronDown } from "@lucide/svelte";
+	import ChevronDown from "phosphor-svelte/lib/CaretDown";
 
 	let {
 		label,

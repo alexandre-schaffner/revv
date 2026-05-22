@@ -532,6 +532,9 @@
   --duration-ceremonial-medium: 480ms; /* onboarding / theatrical entrances — medium */
   --duration-ceremonial-slow: 720ms; /* onboarding / theatrical entrances — slow */
 
+  /* Motion — pulse duration (decorative infinite-loop animations) */
+  --duration-pulse: 1400ms;
+
   /* Motion — easings
        --ease-soft     : in/out, used for exits and bidirectional state
        --ease-out-expo : enter, slight overshoot, default for "appearance"
@@ -593,6 +596,23 @@
   }
 }
 
+/* Spin animation for loading indicators (Loader2, etc.).
+   The .motion-essential-* class opts back in under
+   prefers-reduced-motion so reduced-motion users still
+   see the loading affordance. */
+@keyframes motion-essential-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.motion-essential-spin {
+  animation: motion-essential-spin 1s linear infinite;
+}
+
 /* ── Text shimmer (ported from OpenCode UI) ──────────────────────────────
    Two-layer stacked grid: a base text layer and a shimmer layer with a
    moving gradient clipped to text glyphs. The 360% background-size gives
@@ -639,7 +659,7 @@
 [data-component="text-shimmer"] [data-slot="text-shimmer-char-shimmer"] {
   grid-area: 1 / 1;
   white-space: pre;
-  transition: opacity var(--text-shimmer-swap) ease-out;
+  transition: opacity var(--text-shimmer-swap) var(--ease-out-expo);
   font: inherit;
   letter-spacing: inherit;
   line-height: inherit;
@@ -776,9 +796,9 @@ body {
 .prose-table {
   width: 100%;
   overflow-x: auto;
-  margin: 0 0 12px;
+  margin: 0 0 var(--spacing-inset);
   border: 1px solid var(--color-border-subtle);
-  border-radius: 6px;
+  border-radius: var(--radius-card);
   background: var(--color-bg-primary);
   /* Allow keyboard users to focus and scroll the region. */
   outline: none;
@@ -808,7 +828,7 @@ body {
 }
 
 .prose-table thead th {
-  padding: 8px 12px;
+  padding: var(--spacing-island) var(--spacing-inset);
   text-align: left;
   font-weight: 600;
   color: var(--color-text-primary);
@@ -817,7 +837,7 @@ body {
 }
 
 .prose-table tbody td {
-  padding: 8px 12px;
+  padding: var(--spacing-island) var(--spacing-inset);
   color: var(--color-text-secondary);
   border-top: 1px solid var(--color-border-subtle);
   vertical-align: top;
@@ -896,7 +916,7 @@ body {
   }
 }
 .animate-indeterminate-progress {
-  animation: indeterminate-progress 1.5s ease-in-out infinite;
+  animation: indeterminate-progress var(--duration-pulse) var(--ease-soft) infinite;
 }
 
 /* ──────────────────────────────────────────────────────────
@@ -987,7 +1007,7 @@ diffs-container {
 .sd-char-new {
   display: inline-block;
   white-space: pre;
-  animation: sd-char-in 300ms cubic-bezier(0, 0, 0.58, 1) both;
+  animation: sd-char-in var(--duration-ceremonial-quick) var(--ease-soft) both;
 }
 
 @keyframes sd-char-in {
@@ -1012,4 +1032,55 @@ diffs-container {
     transition-duration: 1ms;
     scroll-behavior: auto;
   }
+}
+
+/* ──────────────────────────────────────────────────────────
+   Floating action bar — bottom-anchored row of GlassPill buttons.
+   Shared by walkthrough and recap lifecycle controls.
+   The wrapper is pointer-events:none so clicks pass through the
+   transparent padding around the pill row; all descendants regain
+   interactivity automatically.
+   ────────────────────────────────────────────────────────── */
+.actions-float {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  padding: 8px 0 10px;
+  z-index: 10;
+  pointer-events: none;
+}
+.actions-float * {
+  pointer-events: auto;
+}
+.actions-row {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-island);
+}
+
+/* ──────────────────────────────────────────────────────────
+   Floating tabs bar — top-anchored, centred between sidebar
+   and optional right panel.
+   top = topbar height + island margin + pill padding-top (10px).
+   Non-Tauri: 28 + 8 + 10 = 46px.  Tauri: 30 + 8 + 10 = 48px.
+   ────────────────────────────────────────────────────────── */
+.tabs-float {
+  position: fixed;
+  top: calc(var(--topbar-height) + var(--spacing-island) + 10px);
+  display: flex;
+  justify-content: center;
+  z-index: 20;
+  pointer-events: none;
+  transition:
+    left var(--duration-smooth) var(--ease-out-expo),
+    right var(--duration-instant) var(--ease-out-expo);
+}
+.tabs-float * {
+  pointer-events: auto;
+}
+html.tauri .tabs-float {
+  top: calc(22px + var(--spacing-island) * 2 + 10px);
 }

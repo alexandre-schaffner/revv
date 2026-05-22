@@ -1,5 +1,6 @@
 <script lang="ts">
-import { Clock, CornerDownLeft } from "@lucide/svelte";
+import Clock from "phosphor-svelte/lib/Clock";
+import CornerDownLeft from "phosphor-svelte/lib/ArrowElbowDownLeft";
 import type { CommentThread, ThreadMessage } from "@revv/shared";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
 import { renderMarkdown } from "$lib/utils/markdown";

@@ -83,6 +83,13 @@ export interface RecapToolContext {
    * from scratch and a fresh buffer accumulates.
    */
   readonly textBuffer: { current: string };
+
+  /**
+   * Tool names that actually reached a handler during this run. Used by the
+   * runner for narrow recovery when the model writes valid recap text but
+   * misses the final commit/complete call. Ephemeral, reconstructible state.
+   */
+  readonly toolCalls?: Set<string>;
 }
 
 export interface RecapToolResult {
@@ -146,6 +153,20 @@ export interface RecapSourcePrDiff {
   readonly note: string | null;
 }
 
+export interface RecapSourcePrDigest {
+  readonly source: "cache" | "github" | "unavailable";
+  readonly digest: string;
+  readonly files: ReadonlyArray<{
+    readonly path: string;
+    readonly status: string;
+    readonly additions: number;
+    readonly deletions: number;
+    readonly patchAvailable: boolean;
+    readonly patchTruncated: boolean;
+  }>;
+  readonly note: string | null;
+}
+
 export interface RecapSourcePr {
   readonly id: string;
   readonly externalId: number;
@@ -177,6 +198,8 @@ export interface RecapSourcePr {
     readonly riskLevel: "low" | "medium" | "high";
     readonly completedAt: string | null;
   } | null;
+  /** Compact pre-ingested diff context for PRs without walkthroughs. */
+  readonly diffDigest: RecapSourcePrDigest | null;
 }
 
 export interface RecapSourceBundle {

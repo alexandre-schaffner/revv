@@ -216,11 +216,11 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
             const msg = yield* reviewService.addMessage(ctx.params.id, {
               authorRole: ctx.body.authorRole,
               authorName: ctx.body.authorName,
+              ...(ctx.body.authorLogin !== undefined
+                ? { authorLogin: ctx.body.authorLogin }
+                : {}),
               body: ctx.body.body,
               messageType: ctx.body.messageType,
-              ...(ctx.body.authorAvatarUrl !== undefined
-                ? { authorAvatarUrl: ctx.body.authorAvatarUrl }
-                : {}),
               ...(ctx.body.codeSuggestion !== undefined
                 ? { codeSuggestion: ctx.body.codeSuggestion }
                 : {}),
@@ -256,7 +256,7 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
       body: t.Object({
         authorRole: t.Union([t.Literal("reviewer"), t.Literal("coder"), t.Literal("ai_agent")]),
         authorName: t.String(),
-        authorAvatarUrl: t.Optional(t.Union([t.String(), t.Null()])),
+        authorLogin: t.Optional(t.String()),
         body: t.String(),
         messageType: t.Union([
           t.Literal("comment"),

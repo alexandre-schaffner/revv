@@ -39,9 +39,8 @@ export const wsRoute = new Elysia().ws("/ws", {
       );
       accountId = resolved.accountId;
     } catch {
-      // If we can't resolve an account (e.g. token expired), still allow the
-      // connection but mark it as unassociated. It won't receive scoped broadcasts.
-      accountId = "unresolved";
+      ws.close(4001, "Unauthorized");
+      return;
     }
 
     await AppRuntime.runPromise(

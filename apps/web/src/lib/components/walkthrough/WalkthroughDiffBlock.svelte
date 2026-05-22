@@ -1,5 +1,5 @@
 <script lang="ts">
-import { ArrowUpRight } from "@lucide/svelte";
+import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
 import { DIFFS_TAG_NAME, FileDiff, type FileDiffOptions, parsePatchFiles } from "@pierre/diffs";
 import type { DiffBlock } from "@revv/shared";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
@@ -96,7 +96,7 @@ function mountDiffBlock(el: HTMLDivElement) {
 		<button class="diff-header" onclick={() => jumpToDiffLine(block.filePath, targetLine)}>
 			<FileBadge filePath={block.filePath} />
 			<span class="diff-header-right">
-				<span class="diff-jump-icon"><ArrowUpRight size={11} /></span>
+				<span class="diff-jump-icon"><ArrowUpRight size={11} weight="fill" /></span>
 			</span>
 		</button>
 		<div class="diff-body" use:mountDiffBlock></div>

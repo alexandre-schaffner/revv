@@ -1,5 +1,9 @@
 <script lang="ts">
-import { Folder, Plus, RefreshCw, Search, Trash2 } from "@lucide/svelte";
+import Folder from "phosphor-svelte/lib/Folder";
+import Plus from "phosphor-svelte/lib/Plus";
+import RefreshCw from "phosphor-svelte/lib/ArrowsClockwise";
+import Search from "phosphor-svelte/lib/MagnifyingGlass";
+import Trash2 from "phosphor-svelte/lib/Trash";
 import type { Repository } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import CloneStatusIndicator from "$lib/components/shared/CloneStatusIndicator.svelte";
@@ -239,7 +243,7 @@ let trackedCount = $derived(getRepositories().length);
 		aria-label="Refresh repositories"
 		title="Refresh repositories"
 	>
-		<RefreshCw size={13} class={getAvailableReposLoading() ? 'animate-spin' : ''} />
+		<RefreshCw size={13} weight="fill" class={getAvailableReposLoading() ? 'animate-spin' : ''} />
 	</button>
 </div>
 
@@ -384,7 +388,7 @@ let trackedCount = $derived(getRepositories().length);
 									{#if isRemoving}
 										<Dotmatrix variant="square-10" size="small" />
 									{:else}
-										<Trash2 size={11} />
+										<Trash2 size={11} weight="fill" />
 									{/if}
 								</button>
 							{/if}

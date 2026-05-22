@@ -9,7 +9,7 @@ export type ConfirmationHeaderProps = HTMLAttributes<HTMLDivElement> & {
 
 <script lang="ts">
 	import { cn } from "$lib/utils.js";
-	import { ShieldQuestion } from "@lucide/svelte";
+	import ShieldQuestion from "phosphor-svelte/lib/Shield";
 
 	let {
 		title,

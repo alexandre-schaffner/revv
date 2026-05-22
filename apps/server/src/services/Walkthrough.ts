@@ -41,6 +41,7 @@ import { and, asc, desc, eq, gt, inArray, ne } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { commentThreads } from "../db/schema/comment-threads";
 import { pullRequests } from "../db/schema/pull-requests";
+import { remoteUsers } from "../db/schema/remote-users";
 import { repositories } from "../db/schema/repositories";
 import { walkthroughBlocks } from "../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../db/schema/walkthrough-issues";
@@ -98,6 +99,7 @@ function rowToWalkthrough(
   blocks: Array<typeof walkthroughBlocks.$inferSelect>,
   issues: Array<typeof walkthroughIssues.$inferSelect>,
   ratings: Array<typeof walkthroughRatings.$inferSelect>,
+  avatarContent: string | null = null,
 ): Walkthrough {
   const sortedSemanticSteps: WalkthroughSemanticStep[] = [...semanticSteps]
     .sort((a, b) => a.semanticStepIndex - b.semanticStepIndex)
@@ -164,7 +166,7 @@ function rowToWalkthrough(
           githubUserId: row.generatedByGithubUserId ?? null,
           githubLogin: row.generatedByGithubLogin ?? null,
           displayName: row.generatedByDisplayName ?? null,
-          avatarUrl: row.generatedByAvatarUrl ?? null,
+          avatarContent,
         }
       : null;
 
@@ -244,12 +246,12 @@ export class WalkthroughService extends Context.Tag("WalkthroughService")<
        * predate the attribution columns continue to compile — the columns
        * are nullable and the UI degrades gracefully.
        */
-      generatedBy?: {
-        readonly githubUserId: number;
-        readonly githubLogin: string;
-        readonly displayName: string | null;
-        readonly avatarUrl: string | null;
-      };
+       generatedBy?: {
+         readonly githubUserId: number;
+         readonly githubLogin: string;
+         readonly displayName: string | null;
+         readonly avatarContent: string | null;
+       };
       /**
        * Snapshot of the AI provider config in effect at job start. Stored
        * as JSON on `provider_config`. Pairs with `modelUsed` — the
@@ -541,7 +543,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
                 generatedByGithubUserId: params.generatedBy?.githubUserId ?? null,
                 generatedByGithubLogin: params.generatedBy?.githubLogin ?? null,
                 generatedByDisplayName: params.generatedBy?.displayName ?? null,
-                generatedByAvatarUrl: params.generatedBy?.avatarUrl ?? null,
+                generatedByAvatarUrl: params.generatedBy?.avatarContent ?? null,
                 providerConfig: params.providerConfig
                   ? JSON.stringify(params.providerConfig)
                   : null,
@@ -654,9 +656,10 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
     Effect.gen(function* () {
       const { db } = yield* DbService;
 
-      const row = db
-        .select()
+      const result = db
+        .select({ wt: walkthroughs, avatarContent: remoteUsers.avatarContent })
         .from(walkthroughs)
+        .leftJoin(remoteUsers, and(eq(remoteUsers.provider, "github"), eq(remoteUsers.login, walkthroughs.generatedByGithubLogin)))
         .where(
           and(
             eq(walkthroughs.pullRequestId, prId),
@@ -666,7 +669,9 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         )
         .get();
 
-      if (!row) return null;
+      if (!result) return null;
+
+      const { wt: row, avatarContent } = result;
 
       const semanticSteps = db
         .select()
@@ -693,7 +698,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         .where(eq(walkthroughRatings.walkthroughId, row.id))
         .all();
 
-      return rowToWalkthrough(row, semanticSteps, blocks, issues, ratings);
+      return rowToWalkthrough(row, semanticSteps, blocks, issues, ratings, avatarContent);
     }),
 
   getPartial: (prId, headSha) =>
@@ -703,9 +708,10 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
       // "Partial" = not yet 'complete' and not 'superseded'. Superseded
       // rows are terminal from a resume perspective — their head_sha is
       // stale and their supersededBy target is the active one.
-      const row = db
-        .select()
+      const result = db
+        .select({ wt: walkthroughs, avatarContent: remoteUsers.avatarContent })
         .from(walkthroughs)
+        .leftJoin(remoteUsers, and(eq(remoteUsers.provider, "github"), eq(remoteUsers.login, walkthroughs.generatedByGithubLogin)))
         .where(
           and(
             eq(walkthroughs.pullRequestId, prId),
@@ -716,7 +722,9 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         )
         .get();
 
-      if (!row) return null;
+      if (!result) return null;
+
+      const { wt: row, avatarContent } = result;
 
       const semanticSteps = db
         .select()
@@ -744,7 +752,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         .all();
 
       return {
-        ...rowToWalkthrough(row, semanticSteps, blocks, issues, ratings),
+        ...rowToWalkthrough(row, semanticSteps, blocks, issues, ratings, avatarContent),
         status: row.status as "generating" | "error",
         opencodeSessionId: row.opencodeSessionId ?? null,
       };

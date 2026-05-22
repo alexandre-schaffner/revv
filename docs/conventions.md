@@ -457,7 +457,7 @@ Hand-typed durations that match no token, in the same file as 1200ms which also 
 ### 5.3 Icon-only policy (cross-reference)
 
 The "always use icons, never emojis" rule lives in CLAUDE.md and is fully honored — zero
-violations in the codebase. Use `@lucide/svelte` components or inline SVG for brand/octicon
+violations in the codebase. Use `phosphor-svelte` components or inline SVG for brand/octicon
 marks; no emoji glyphs in rendered UI, toasts, or component text.
 
 **Backlog.** None.

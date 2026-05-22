@@ -47,7 +47,15 @@ logError("server", `starting on port ${port}`);
 const app = new Elysia()
   .use(
     cors({
-      origin: /localhost/,
+      origin: [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://[::1]:5173",
+        "http://localhost:45678",
+        "http://localhost:45679",
+        "tauri://localhost",
+        "https://tauri.localhost",
+      ],
       credentials: true,
       allowedHeaders: ["Content-Type", "Authorization"],
       methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],

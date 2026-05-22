@@ -1,6 +1,7 @@
 import { execSync } from "node:child_process";
 import { sveltekit } from "@sveltejs/kit/vite";
 import tailwindcss from "@tailwindcss/vite";
+import { sveltePhosphorOptimize } from "phosphor-svelte/vite";
 import { defineConfig } from "vite";
 
 // Short commit hash snapshotted at build time. We display this in
@@ -19,7 +20,7 @@ const commitHash = (() => {
 })();
 
 export default defineConfig({
-  plugins: [tailwindcss(), sveltekit()],
+  plugins: [tailwindcss(), sveltekit(), sveltePhosphorOptimize()],
   envPrefix: ["VITE_", "TAURI_"],
   define: {
     __COMMIT_HASH__: JSON.stringify(commitHash),

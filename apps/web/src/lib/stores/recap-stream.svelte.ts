@@ -1,4 +1,4 @@
-import type { RecapStreamEvent } from "@revv/shared";
+import type { Activity, RecapStreamEvent } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { runRecapSse } from "$lib/services/recap-sse";
 
@@ -6,8 +6,10 @@ import { runRecapSse } from "$lib/services/recap-sse";
 
 export interface RecapStreamEntry {
   overview: string;
+  thoughts: string;
   phase: string;
   phaseMessage: string;
+  activities: Array<Activity & { id: string }>;
   isStreaming: boolean;
   doneReceived: boolean;
   streamError: string | null;
@@ -16,8 +18,10 @@ export interface RecapStreamEntry {
 export function freshEntry(): RecapStreamEntry {
   return {
     overview: "",
+    thoughts: "",
     phase: "analyzing",
     phaseMessage: "Analyzing pull requests…",
+    activities: [],
     isStreaming: false,
     doneReceived: false,
     streamError: null,
@@ -63,9 +67,18 @@ function applyEvents(recapId: string, evs: RecapStreamEvent[]): void {
       case "chunk":
         entry.overview += event.data.text;
         break;
+      case "thought":
+        entry.thoughts += event.data.text;
+        break;
       case "phase":
         entry.phase = event.data.phase;
         entry.phaseMessage = event.data.message;
+        break;
+      case "activity":
+        entry.activities = [
+          ...entry.activities,
+          { ...normalizeRecapActivity(event.data), id: crypto.randomUUID() },
+        ];
         break;
       case "overview":
         entry.overview = event.data.overview;
@@ -82,6 +95,65 @@ function applyEvents(recapId: string, evs: RecapStreamEvent[]): void {
   }
 
   setEntry(recapId, entry);
+}
+
+function normalizeRecapActivity(activity: Activity): Activity {
+  const toolName = normalizeRecapToolName(activity.toolName);
+  if (toolName === activity.toolName && !activity.summary.startsWith("Using ")) return activity;
+  return {
+    ...activity,
+    toolName,
+    activityKind: recapActivityKind(toolName) ?? activity.activityKind,
+    summary: recapActivitySummary(toolName) ?? activity.summary,
+  };
+}
+
+function normalizeRecapToolName(toolName: string): string {
+  const known = [
+    "get_recap_state",
+    "get_pr_diff",
+    "list_open_prs",
+    "get_repo_context",
+    "commit_recap_overview",
+    "complete_recap",
+    "Bash",
+  ];
+  return known.find((name) => toolName === name || toolName.endsWith(`_${name}`)) ?? toolName;
+}
+
+function recapActivityKind(toolName: string): Activity["activityKind"] | null {
+  if (
+    toolName === "get_recap_state" ||
+    toolName === "get_pr_diff" ||
+    toolName === "get_repo_context"
+  ) {
+    return "tool.read";
+  }
+  if (toolName === "list_open_prs") return "tool.ls";
+  if (toolName === "commit_recap_overview") return "tool.write";
+  if (toolName === "Bash") return "tool.bash";
+  return null;
+}
+
+function recapActivitySummary(toolName: string): string | null {
+  switch (toolName) {
+    case "get_recap_state":
+      return "Reading recap state";
+    case "get_pr_diff":
+      return "Reading PR diff";
+    case "list_open_prs":
+      return "Listing open pull requests";
+    case "get_repo_context":
+      return "Reading prior recaps";
+    case "commit_recap_overview":
+      return "Saving recap";
+    case "complete_recap":
+      return "Finalizing recap";
+    case "Bash":
+      return null;
+    default:
+      return null;
+  }
 }
 
 // ── Stream lifecycle ─────────────────────────────────────────────────────────
