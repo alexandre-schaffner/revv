@@ -9,7 +9,7 @@ export type PromptInputTextareaProps = HTMLTextareaAttributes & {
 
 <script lang="ts">
 	import { cn } from "$lib/utils.js";
-	import { getContext, tick } from "svelte";
+	import { getContext } from "svelte";
 	import { PROMPT_INPUT_CTX_KEY, type PromptInputContext } from "./context.js";
 
 	let {
@@ -30,17 +30,20 @@ export type PromptInputTextareaProps = HTMLTextareaAttributes & {
 
 	function autoResize() {
 		if (!textareaEl) return;
+		// Empty: defer to CSS min-height. Measuring scrollHeight during the
+		// first layout pass of the floating composer can latch oversized.
+		if (!ctx.value) {
+			textareaEl.style.height = "";
+			return;
+		}
 		textareaEl.style.height = "auto";
 		textareaEl.style.height = Math.min(textareaEl.scrollHeight, 160) + "px";
 	}
 
 	$effect(() => {
-		// Track context value so autoResize fires on programmatic clear/fill.
-		// Defer to a microtask so scrollHeight is read after the browser has
-		// reflected the new value — without this, the initial measurement
-		// happens before layout commit and the textarea sticks oversized.
+		// Track ctx.value so autoResize fires on programmatic clear/fill.
 		void ctx.value;
-		void tick().then(autoResize);
+		autoResize();
 	});
 </script>
 
