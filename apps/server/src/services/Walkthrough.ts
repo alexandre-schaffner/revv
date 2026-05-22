@@ -614,9 +614,10 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
     Effect.gen(function* () {
       const { db } = yield* DbService;
 
-      const row = db
-        .select()
+      const result = db
+        .select({ wt: walkthroughs, avatarContent: remoteUsers.avatarContent })
         .from(walkthroughs)
+        .leftJoin(remoteUsers, eq(remoteUsers.login, walkthroughs.generatedByGithubLogin))
         .where(
           and(
             eq(walkthroughs.pullRequestId, prId),
@@ -626,15 +627,9 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         )
         .get();
 
-      if (!row) return null;
+      if (!result) return null;
 
-      const avatarContent = row.generatedByGithubLogin
-        ? (db
-            .select({ avatarContent: remoteUsers.avatarContent })
-            .from(remoteUsers)
-            .where(eq(remoteUsers.login, row.generatedByGithubLogin))
-            .get()?.avatarContent ?? null)
-        : null;
+      const { wt: row, avatarContent } = result;
 
       const semanticSteps = db
         .select()
@@ -671,9 +666,10 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
       // "Partial" = not yet 'complete' and not 'superseded'. Superseded
       // rows are terminal from a resume perspective — their head_sha is
       // stale and their supersededBy target is the active one.
-      const row = db
-        .select()
+      const result = db
+        .select({ wt: walkthroughs, avatarContent: remoteUsers.avatarContent })
         .from(walkthroughs)
+        .leftJoin(remoteUsers, eq(remoteUsers.login, walkthroughs.generatedByGithubLogin))
         .where(
           and(
             eq(walkthroughs.pullRequestId, prId),
@@ -684,15 +680,9 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         )
         .get();
 
-      if (!row) return null;
+      if (!result) return null;
 
-      const avatarContent = row.generatedByGithubLogin
-        ? (db
-            .select({ avatarContent: remoteUsers.avatarContent })
-            .from(remoteUsers)
-            .where(eq(remoteUsers.login, row.generatedByGithubLogin))
-            .get()?.avatarContent ?? null)
-        : null;
+      const { wt: row, avatarContent } = result;
 
       const semanticSteps = db
         .select()
