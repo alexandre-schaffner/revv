@@ -78,17 +78,27 @@ export const userRoutes = new Elysia({ prefix: "/api/user" })
         }
 
         // Ensure the user has a remote_users row and link it.
+        // The upsert may trigger a live CDN fetch (when the 24-hour TTL has
+        // elapsed) — fork it into a background fiber so the /identity endpoint
+        // never blocks on a slow external request. The frontend will receive the
+        // freshly-fetched avatar on its next poll once the fiber completes.
         let avatarContent: string | null = null;
         if (login) {
           const resolved = await AppRuntime.runPromise(
             Effect.gen(function* () {
               const remoteUserService = yield* RemoteUserService;
-              yield* remoteUserService.upsert({
-                provider: "github",
-                providerUserId: "", // Will be filled when we have the numeric ID
-                login,
-                avatarUrl,
-              });
+              // Fire-and-forget: run in a daemon fiber so it outlives this
+              // request scope but doesn't block the response.
+              yield* Effect.forkDaemon(
+                remoteUserService.upsert({
+                  provider: "github",
+                  providerUserId: "", // Numeric ID not available here; CASE guard in upsert keeps existing value
+                  login,
+                  avatarUrl,
+                }),
+              );
+              // Return whatever is already cached — callers get the refreshed
+              // avatar on the next /identity call after the daemon completes.
               return yield* remoteUserService.getAvatarContent(login);
             }).pipe(Effect.orElseSucceed(() => null)),
           );
