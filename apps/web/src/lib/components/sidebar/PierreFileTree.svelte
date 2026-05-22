@@ -484,6 +484,7 @@ onDestroy(() => {
 		overflow: hidden;
 		display: flex;
 		flex-direction: column;
+		contain: layout paint;
 		/* Force the tree into dark-mode rendering regardless of the user's
 		   system preference. The tree's CSS uses `light-dark()` and reads
 		   `color-scheme` from the host element, so we have to set it on the

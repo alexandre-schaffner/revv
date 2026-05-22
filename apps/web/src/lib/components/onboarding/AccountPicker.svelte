@@ -1,5 +1,10 @@
 <script lang="ts">
-import { ArrowRight, Loader2, Monitor, Moon, Sun, User } from "@lucide/svelte";
+import ArrowRight from "phosphor-svelte/lib/ArrowRight";
+import Loader2 from "phosphor-svelte/lib/Spinner";
+import Monitor from "phosphor-svelte/lib/Desktop";
+import Moon from "phosphor-svelte/lib/Moon";
+import Sun from "phosphor-svelte/lib/Sun";
+import User from "phosphor-svelte/lib/User";
 import { fade } from "svelte/transition";
 import { getIsSwitching, getLocalAccounts, switchAccount } from "$lib/stores/auth.svelte";
 import {
@@ -56,11 +61,11 @@ function cycleTheme() {
 <div class="picker" in:fade={{ duration: 320 }}>
     <button class="theme-toggle" onclick={cycleTheme} aria-label={labels[theme]} title={labels[theme]}>
         {#if theme === 'light'}
-            <Sun size={14} />
+            <Sun size={14} weight="fill" />
         {:else if theme === 'dark'}
-            <Moon size={14} />
+            <Moon size={14} weight="fill" />
         {:else}
-            <Monitor size={14} />
+            <Monitor size={14} weight="fill" />
         {/if}
     </button>
     <div class="picker-header">
@@ -87,7 +92,7 @@ function cycleTheme() {
                                 referrerpolicy="no-referrer"
                             />
                         {:else}
-                            <User size={18} class="picker-card-icon" />
+                            <User size={18} weight="regular" class="picker-card-icon" />
                         {/if}
                     </span>
                     <span class="picker-card-body">
@@ -96,7 +101,7 @@ function cycleTheme() {
                     </span>
                     <span class="picker-card-action">
                         {#if switching}
-                            <Loader2 size={14} class="picker-spinner" />
+                            <Loader2 size={14} weight="regular" class="picker-spinner" />
                         {:else}
                             <ArrowRight size={14} class="picker-arrow" />
                         {/if}

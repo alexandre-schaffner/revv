@@ -1,5 +1,6 @@
 <script lang="ts">
-import { Pencil, Trash2 } from "@lucide/svelte";
+import Pencil from "phosphor-svelte/lib/Pencil";
+import Trash2 from "phosphor-svelte/lib/Trash";
 
 interface Props {
   body: string;
@@ -29,7 +30,7 @@ let { body, onEdit, onDelete }: Props = $props();
 			title="Delete comment"
 			aria-label="Delete comment"
 		>
-			<Trash2 size={11} />
+			<Trash2 size={11} weight="fill" />
 		</button>
 	</div>
 </div>

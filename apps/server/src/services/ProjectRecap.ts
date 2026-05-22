@@ -223,6 +223,7 @@ export class ProjectRecapService extends Context.Tag("ProjectRecapService")<
      */
     readonly resetForRerun: (
       recapId: string,
+      newBoundaries?: { readonly periodStart?: string; readonly periodEnd?: string },
     ) => Effect.Effect<
       { readonly previousOverview: string },
       RecapNotFoundError | ValidationError,
@@ -473,7 +474,7 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
       });
     }).pipe(Effect.catchAll(() => Effect.void)),
 
-  resetForRerun: (recapId) =>
+  resetForRerun: (recapId, newBoundaries) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
       return yield* Effect.try({
@@ -487,21 +488,25 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
             throw new Error(`recap ${recapId} not found`);
           }
           const previousOverview = row.overview ?? "";
-          db.update(projectRecaps)
-            .set({
-              overview: "",
-              status: "generating",
-              completedAt: null,
-              errorMessage: null,
-              resumeAttempts: 0,
-              generatedAt: new Date().toISOString(),
-              sourcePrIds: "[]",
-              sourceWalkthroughIds: "[]",
-              summaryStats: "{}",
-              tokenUsage: "{}",
-            })
-            .where(eq(projectRecaps.id, recapId))
-            .run();
+          const patch: Record<string, unknown> = {
+            overview: "",
+            status: "generating",
+            completedAt: null,
+            errorMessage: null,
+            resumeAttempts: 0,
+            generatedAt: new Date().toISOString(),
+            sourcePrIds: "[]",
+            sourceWalkthroughIds: "[]",
+            summaryStats: "{}",
+            tokenUsage: "{}",
+          };
+          if (newBoundaries?.periodStart !== undefined) {
+            patch.periodStart = newBoundaries.periodStart;
+          }
+          if (newBoundaries?.periodEnd !== undefined) {
+            patch.periodEnd = newBoundaries.periodEnd;
+          }
+          db.update(projectRecaps).set(patch).where(eq(projectRecaps.id, recapId)).run();
           return { previousOverview };
         },
         catch: (e) => {

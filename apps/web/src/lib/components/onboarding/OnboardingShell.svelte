@@ -1,5 +1,7 @@
 <script lang="ts">
-import { Monitor, Moon, Sun } from "@lucide/svelte";
+import Monitor from "phosphor-svelte/lib/Desktop";
+import Moon from "phosphor-svelte/lib/Moon";
+import Sun from "phosphor-svelte/lib/Sun";
 import type { Snippet } from "svelte";
 import { Dotmatrix, type DotmatrixVariant } from "$lib/components/ui/dotmatrix";
 import {
@@ -83,11 +85,11 @@ function cycleTheme() {
 			</span>
 			<button class="theme-btn" onclick={cycleTheme} aria-label={labels[theme]} title={labels[theme]}>
 				{#if theme === 'light'}
-					<Sun size={13} />
+					<Sun size={13} weight="fill" />
 				{:else if theme === 'dark'}
-					<Moon size={13} />
+					<Moon size={13} weight="fill" />
 				{:else}
-					<Monitor size={13} />
+					<Monitor size={13} weight="fill" />
 				{/if}
 			</button>
 		</div>

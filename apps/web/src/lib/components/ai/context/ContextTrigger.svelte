@@ -74,7 +74,7 @@ export type ContextTriggerProps = {
 						stroke-linecap="round"
 						stroke-dasharray={CIRCUMFERENCE}
 						stroke-dashoffset={dashOffset}
-						style="transform: rotate(-90deg); transform-origin: center; transition: stroke-dashoffset 240ms var(--ease-out-expo, ease-out);"
+						style="transform: rotate(-90deg); transform-origin: center; transition: stroke-dashoffset var(--duration-smooth) var(--ease-out-expo);"
 					/>
 				</svg>
 				<span class="whitespace-nowrap">{percentLabel}</span>

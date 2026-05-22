@@ -12,6 +12,7 @@ import { and, eq } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { commentThreads } from "../db/schema/comment-threads";
 import { hunkDecisions } from "../db/schema/hunk-decisions";
+import { remoteUsers } from "../db/schema/remote-users";
 import { reviewSessions } from "../db/schema/review-sessions";
 import { threadMessages } from "../db/schema/thread-messages";
 import { ReviewError } from "../domain/errors";
@@ -47,13 +48,17 @@ function rowToThread(row: typeof commentThreads.$inferSelect): CommentThread {
   };
 }
 
-function rowToMessage(row: typeof threadMessages.$inferSelect): ThreadMessage {
+function rowToMessage(
+  row: typeof threadMessages.$inferSelect,
+  avatarContent: string | null = null,
+): ThreadMessage {
   return {
     id: row.id,
     threadId: row.threadId,
     authorRole: row.authorRole as ThreadMessage["authorRole"],
     authorName: row.authorName,
-    authorAvatarUrl: row.authorAvatarUrl ?? null,
+    authorLogin: row.authorLogin ?? null,
+    authorAvatarContent: avatarContent,
     body: row.body,
     messageType: row.messageType as ThreadMessage["messageType"],
     codeSuggestion: row.codeSuggestion ?? null,
@@ -89,7 +94,7 @@ export interface CreateThreadParams {
 export interface CreateMessageParams {
   authorRole: AuthorRole;
   authorName: string;
-  authorAvatarUrl?: string | null;
+  authorLogin?: string;
   body: string;
   messageType: MessageType;
   codeSuggestion?: string;
@@ -106,6 +111,9 @@ export class ReviewService extends Context.Tag("ReviewService")<
     readonly getOrCreateActiveSession: (
       prId: string,
     ) => Effect.Effect<ReviewSession, ReviewError, DbService>;
+    readonly getActiveSession: (
+      prId: string,
+    ) => Effect.Effect<ReviewSession | null, ReviewError, DbService>;
     readonly completeSession: (
       id: string,
       status: "completed" | "abandoned",
@@ -162,10 +170,6 @@ export class ReviewService extends Context.Tag("ReviewService")<
     readonly setMessageExternalId: (
       messageId: string,
       externalId: string,
-    ) => Effect.Effect<void, ReviewError, DbService>;
-    readonly setMessageAvatar: (
-      messageId: string,
-      authorAvatarUrl: string | null,
     ) => Effect.Effect<void, ReviewError, DbService>;
     readonly updateMessageBody: (
       messageId: string,
@@ -244,6 +248,18 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
         completedAt: null,
         status: "active" as const,
       };
+    }),
+
+  getActiveSession: (prId) =>
+    Effect.gen(function* () {
+      const row = yield* tryDb("find active session", (db) =>
+        db
+          .select()
+          .from(reviewSessions)
+          .where(and(eq(reviewSessions.pullRequestId, prId), eq(reviewSessions.status, "active")))
+          .get(),
+      );
+      return row ? rowToSession(row) : null;
     }),
 
   completeSession: (id, status) =>
@@ -464,7 +480,7 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
         messageType: params.messageType,
         createdAt,
       };
-      if (params.authorAvatarUrl !== undefined) row.authorAvatarUrl = params.authorAvatarUrl;
+      if (params.authorLogin !== undefined) row.authorLogin = params.authorLogin;
       if (params.codeSuggestion !== undefined) row.codeSuggestion = params.codeSuggestion;
       if (params.externalId !== undefined) row.externalId = params.externalId;
 
@@ -475,7 +491,8 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
         threadId,
         authorRole: params.authorRole as ThreadMessage["authorRole"],
         authorName: params.authorName,
-        authorAvatarUrl: params.authorAvatarUrl ?? null,
+        authorLogin: params.authorLogin ?? null,
+        authorAvatarContent: null,
         body: params.body,
         messageType: params.messageType as ThreadMessage["messageType"],
         codeSuggestion: params.codeSuggestion ?? null,
@@ -489,40 +506,43 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
     Effect.gen(function* () {
       const rows = yield* tryDb("list messages", (db) =>
         db
-          .select()
+          .select({
+            msg: threadMessages,
+            avatarContent: remoteUsers.avatarContent,
+          })
           .from(threadMessages)
+          .leftJoin(remoteUsers, and(eq(remoteUsers.provider, "github"), eq(remoteUsers.login, threadMessages.authorLogin)))
           .where(eq(threadMessages.threadId, threadId))
           .orderBy(threadMessages.createdAt)
           .all(),
       );
-      return rows.map(rowToMessage);
+      return rows.map((r) => rowToMessage(r.msg, r.avatarContent));
     }),
 
   getMessage: (messageId) =>
     Effect.gen(function* () {
       const row = yield* tryDb("find message", (db) =>
-        db.select().from(threadMessages).where(eq(threadMessages.id, messageId)).get(),
+        db
+          .select({
+            msg: threadMessages,
+            avatarContent: remoteUsers.avatarContent,
+          })
+          .from(threadMessages)
+          .leftJoin(remoteUsers, and(eq(remoteUsers.provider, "github"), eq(remoteUsers.login, threadMessages.authorLogin)))
+          .where(eq(threadMessages.id, messageId))
+          .get(),
       );
       if (!row) {
         return yield* Effect.fail(
           new ReviewError({ message: "Message not found", code: "NOT_FOUND" }),
         );
       }
-      return rowToMessage(row);
+      return rowToMessage(row.msg, row.avatarContent);
     }),
 
   setMessageExternalId: (messageId, externalId) =>
     tryDb("set message externalId", (db) =>
       db.update(threadMessages).set({ externalId }).where(eq(threadMessages.id, messageId)).run(),
-    ).pipe(Effect.asVoid),
-
-  setMessageAvatar: (messageId, authorAvatarUrl) =>
-    tryDb("set message avatar", (db) =>
-      db
-        .update(threadMessages)
-        .set({ authorAvatarUrl })
-        .where(eq(threadMessages.id, messageId))
-        .run(),
     ).pipe(Effect.asVoid),
 
   updateMessageBody: (messageId, body, editedAt) =>

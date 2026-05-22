@@ -1,3 +1,5 @@
+import { RAIL_WIDTH } from "$lib/constants";
+
 const SIDEBAR_WIDTH_KEY = "revv:sidebar-width";
 const SIDEBAR_WIDTH_DEFAULT = 280;
 const SIDEBAR_WIDTH_MIN = 180;
@@ -253,4 +255,17 @@ export function toggleOwnerCollapsed(owner: string): void {
   if (next.has(key)) next.delete(key);
   else next.add(key);
   collapsedOwners = next;
+}
+
+// ── Main-area bounds for fixed-position floating chrome ───
+
+/** Returns the left/right inset (in px) that fixed-position floating elements
+    (e.g. pill tabs) should use to stay aligned with the visible main area.
+    Mirrors the grid math in AppShell.svelte. */
+export function getMainAreaBounds(): { left: number; right: number } {
+  const effectiveCollapsed = sidebarCollapsed && !sidebarPeekHovering;
+  return {
+    left: RAIL_WIDTH + (effectiveCollapsed ? 0 : sidebarWidth),
+    right: rightPanelOpen ? rightPanelWidth : 0,
+  };
 }

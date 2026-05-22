@@ -1,6 +1,11 @@
 <script lang="ts">
-import { getActiveTheme } from "$lib/stores/theme.svelte";
-import { fallbackOwnerHue, ownerHueFromAvatar, repoGradient } from "$lib/utils/avatarPalette";
+import {
+  fallbackOwnerPalette,
+  ownerPaletteFromAvatar,
+  peekOwnerPalette,
+  type OwnerPalette,
+} from "$lib/utils/avatarPalette";
+import { repoGradientDataUrl } from "$lib/utils/repoGradient";
 
 interface Props {
   fullName: string;
@@ -20,94 +25,75 @@ let {
   label,
 }: Props = $props();
 
-const theme = $derived(getActiveTheme());
+let resolvedOwnerPalette = $state<OwnerPalette | undefined>(undefined);
+let hueRequestKey = "";
 
-// Hash-based fallback renders immediately; $effect resolves the real hue
-// from the locally-cached image (fast) or fetches from the network (first visit).
-let ownerHue = $state(fallbackOwnerHue(fullName));
+const fallbackPalette = $derived(fallbackOwnerPalette(fullName));
+const ownerPalette = $derived(resolvedOwnerPalette ?? fallbackPalette);
 
 $effect(() => {
-  ownerHue = fallbackOwnerHue(fullName);
-  if (!ownerAvatarUrl) return;
+  const cachedPalette = ownerAvatarUrl ? peekOwnerPalette(ownerAvatarUrl) : undefined;
+  resolvedOwnerPalette = cachedPalette;
 
-  let stale = false;
-  ownerHueFromAvatar(ownerAvatarUrl).then((hue) => {
-    if (!stale) ownerHue = hue;
+  if (!ownerAvatarUrl || cachedPalette !== undefined) return;
+
+  const requestKey = `${ownerAvatarUrl}:${fullName}`;
+  hueRequestKey = requestKey;
+  void ownerPaletteFromAvatar(ownerAvatarUrl, fallbackPalette).then((palette) => {
+    if (hueRequestKey === requestKey) resolvedOwnerPalette = palette;
   });
-  return () => {
-    stale = true;
-  };
 });
 
-const gradient = $derived(repoGradient(fullName, ownerHue, theme));
-const letters = $derived(deriveLetters(fullName, size));
-
-function deriveLetters(name: string, sz: number): string {
-  const source = name.split("/")[1] ?? name;
-  const stripped = source.replace(/^[^\p{L}\p{N}]+/u, "");
-  if (stripped.length === 0) return "?";
-  const chars = [...stripped];
-  const first = chars[0] ?? "";
-  const second = chars[1];
-  if (sz < 22 || second === undefined) {
-    return first.toLocaleUpperCase();
-  }
-  return first.toLocaleUpperCase() + second.toLocaleLowerCase();
-}
+const grad = $derived(repoGradientDataUrl(fullName, ownerPalette));
+const letter = $derived((fullName.split("/")[1] ?? fullName).slice(0, 1).toUpperCase());
 </script>
 
 <span
-	class="rga {className}"
-	role="img"
-	aria-label={label ?? fullName}
-	style:width="{size}px"
-	style:height="{size}px"
-	style:border-radius="{radius}px"
-	style:background={gradient.background}
-	style:--rga-size="{size}px"
-	style:--rga-text-grad={gradient.textGradient}
+  class="repo-gradient-avatar {className}"
+  role="img"
+  aria-label={label ?? fullName}
+  style:width="{size}px"
+  style:height="{size}px"
+  style:border-radius="{radius}px"
+  style:--rga-size="{size}px"
+  style:--rga-text-grad={grad.textGradient}
 >
-	<span class="rga-letters" aria-hidden="true">{letters}</span>
+  <img src={grad.url} alt="" class="repo-gradient-avatar-bg" />
+  <span class="repo-gradient-avatar-letter" aria-hidden="true">{letter}</span>
 </span>
 
 <style>
-	.rga {
-		position: relative;
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		overflow: hidden;
-		flex-shrink: 0;
-	}
+  .repo-gradient-avatar {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    flex-shrink: 0;
+    background: var(--color-bg-elevated);
+  }
 
-	.rga-letters {
-		font-family: var(--font-sans);
-		font-weight: 650;
-		font-size: clamp(8px, calc(var(--rga-size) * 0.44), 28px);
-		letter-spacing: -0.035em;
-		font-feature-settings: "case", "ss01", "calt";
-		line-height: 1;
-		background: var(--rga-text-grad);
-		-webkit-background-clip: text;
-		background-clip: text;
-		color: transparent;
-		filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4));
-		user-select: none;
-		position: relative;
-		z-index: 1;
-	}
+  .repo-gradient-avatar-bg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
 
-	@media (forced-colors: active) {
-		.rga {
-			background: Canvas !important;
-			box-shadow: inset 0 0 0 1px CanvasText;
-		}
-		.rga-letters {
-			background: none;
-			-webkit-background-clip: unset;
-			background-clip: unset;
-			color: CanvasText;
-			filter: none;
-		}
-	}
+  .repo-gradient-avatar-letter {
+    position: relative;
+    z-index: 1;
+    font-family: var(--font-sans);
+    font-size: max(7px, calc(var(--rga-size) * 0.48));
+    font-weight: 600;
+    background: var(--rga-text-grad);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    text-transform: uppercase;
+    line-height: 1;
+    pointer-events: none;
+    user-select: none;
+  }
 </style>

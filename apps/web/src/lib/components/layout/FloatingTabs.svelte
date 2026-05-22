@@ -1,5 +1,6 @@
 <script lang="ts">
-import { DownloadCloud, Loader2 } from "@lucide/svelte";
+import DownloadCloud from "phosphor-svelte/lib/CloudArrowDown";
+import Loader2 from "phosphor-svelte/lib/Spinner";
 import PillTabs from "./PillTabs.svelte";
 
 type Tab = "walkthrough" | "diff" | "request-changes";
@@ -80,9 +81,9 @@ function handleTabChange(tabId: string) {
 					: 'New commit available. Click to pull the latest changes.'}
 			>
 				{#if isPulling}
-					<Loader2 size={12} class="animate-spin" />
+					<Loader2 size={12} weight="regular" class="animate-spin" />
 				{:else}
-					<DownloadCloud size={12} />
+					<DownloadCloud size={12} weight="fill" />
 				{/if}
 				<span class="pull-btn-label">Pull</span>
 			</button>
@@ -145,7 +146,7 @@ function handleTabChange(tabId: string) {
 	}
 
 	.status-dot--visible.status-dot--generating {
-		animation: status-dot-pulse 1.4s ease-in-out infinite;
+		animation: status-dot-pulse var(--duration-pulse) var(--ease-soft) infinite;
 	}
 
 	.status-dot--complete {

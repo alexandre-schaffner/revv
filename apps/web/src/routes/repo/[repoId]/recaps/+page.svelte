@@ -4,14 +4,7 @@ import { page } from "$app/state";
 import AuthGuard from "$lib/components/auth/AuthGuard.svelte";
 import PillTabs from "$lib/components/layout/PillTabs.svelte";
 import RecapPeriodView from "$lib/components/recaps/RecapPeriodView.svelte";
-import { RAIL_WIDTH } from "$lib/constants";
-import {
-  getRightPanelOpen,
-  getRightPanelWidth,
-  getSidebarCollapsed,
-  getSidebarPeekHovering,
-  getSidebarWidth,
-} from "$lib/stores/sidebar.svelte";
+import { getMainAreaBounds } from "$lib/stores/sidebar.svelte";
 
 const repoId = $derived(page.params.repoId ?? "");
 
@@ -22,20 +15,10 @@ const tabs = [
   { id: "weekly" as RecapPeriod, label: "Weekly" },
 ];
 
-const sidebarCollapsed = $derived(getSidebarCollapsed());
-const sidebarPeekHovering = $derived(getSidebarPeekHovering());
-const sidebarEffectiveCollapsed = $derived(sidebarCollapsed && !sidebarPeekHovering);
-const sidebarWidth = $derived(getSidebarWidth());
-const rightPanelOpen = $derived(getRightPanelOpen());
-const rightPanelWidth = $derived(getRightPanelWidth());
-
 // Center the floating tabs over the visible main area, mirroring
-// AppShell's `.tabs-float` math exactly.
-const floatingTabsStyle = $derived(
-  `left: ${RAIL_WIDTH + (sidebarEffectiveCollapsed ? 0 : sidebarWidth)}px; right: ${
-    rightPanelOpen ? rightPanelWidth : 0
-  }px;`,
-);
+// AppShell's `.main-tab-bar` math exactly.
+const bounds = $derived(getMainAreaBounds());
+const floatingTabsStyle = $derived(`left: ${bounds.left}px; right: ${bounds.right}px;`);
 </script>
 
 <AuthGuard>
@@ -68,32 +51,6 @@ const floatingTabsStyle = $derived(
 	.page {
 		height: 100%;
 		overflow-y: auto;
-	}
-
-	/* Floating tabs bar at the top of the main area, centred between sidebar
-	   and optional right panel. Mirrors `.main-tab-bar` in AppShell:
-	   top = topbar height + island margin + pill padding-top (10px).
-	   Non-Tauri: 28 + 8 + 10 = 46px.  Tauri: 30 + 8 + 10 = 48px. */
-	.tabs-float {
-		position: fixed;
-		top: calc(var(--topbar-height) + var(--spacing-island) + 10px);
-		display: flex;
-		justify-content: center;
-		z-index: 20;
-		pointer-events: none;
-		transition:
-			left var(--duration-smooth) var(--ease-out-expo),
-			right var(--duration-instant) var(--ease-out-expo);
-	}
-
-	.tabs-float :global(*) {
-		pointer-events: auto;
-	}
-
-	/* Tauri title bar is calc(22px + --spacing-island) tall — not reflected
-	   in --topbar-height, so override with the same arithmetic. */
-	:global(html.tauri) .tabs-float {
-		top: calc(22px + var(--spacing-island) * 2 + 10px);
 	}
 
 	.content {

@@ -14,7 +14,11 @@ import { Elysia, t } from "elysia";
 import { AppRuntime } from "../runtime";
 import { ProjectRecapService } from "../services/ProjectRecap";
 import { ProjectRecapJobs } from "../services/ProjectRecapJobs";
-import { manualDailyBoundaries, manualWeeklyBoundaries } from "../services/RecapScheduler";
+import {
+  canonicalRecapBoundaries,
+  manualDailyBoundaries,
+  manualWeeklyBoundaries,
+} from "../services/RecapScheduler";
 import { handleAppError, withAuth } from "./middleware";
 import { recapStreamHandler } from "./recaps/stream";
 
@@ -166,21 +170,23 @@ export const recapRoutes = new Elysia({ prefix: "/api" })
     },
   )
   // ─── POST /api/recaps/:id/regenerate ───────────────────────────────────
-  // Convenience endpoint that supersedes the existing row at the same
-  // period boundaries and queues a fresh job. Equivalent to calling
-  // /repos/:id/recaps/generate?regenerate=true with the same boundaries.
+  // Regenerate the recap using the correct window for its period.
+  // If the recap belongs to the current rolling window (today / this week),
+  // the end boundary advances to `now` so new PRs are included. For
+  // historical recaps the canonical full-period boundaries are used.
   .post("/recaps/:id/regenerate", async (ctx) => {
     try {
       const existing = await AppRuntime.runPromise(
         Effect.flatMap(ProjectRecapService, (s) => s.getById(ctx.params.id)),
       );
+      const boundaries = canonicalRecapBoundaries(existing.period, existing.periodStart);
       return await AppRuntime.runPromise(
         Effect.flatMap(ProjectRecapJobs, (jobs) =>
           jobs.regenerateForPeriod({
             repoId: existing.repositoryId,
             period: existing.period,
-            periodStart: existing.periodStart,
-            periodEnd: existing.periodEnd,
+            periodStart: boundaries.periodStart,
+            periodEnd: boundaries.periodEnd,
           }),
         ),
       );

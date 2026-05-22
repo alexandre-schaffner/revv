@@ -90,8 +90,7 @@
   /* Line action floating pill */
   --revv-pill-bg: rgba(250, 249, 246, 0.97);
   --revv-pill-border: rgba(42, 40, 37, 0.1);
-  --revv-pill-shadow:
-    0 8px 24px rgba(42, 40, 37, 0.12), 0 2px 6px rgba(42, 40, 37, 0.07);
+  --revv-pill-shadow: 0 8px 24px rgba(42, 40, 37, 0.12), 0 2px 6px rgba(42, 40, 37, 0.07);
 
   /* Comment / thread */
   --revv-thread-bg: #faf9f6;
@@ -117,8 +116,7 @@
   --revv-glass-bg: rgba(250, 249, 246, 0.78);
   --revv-glass-border: rgba(42, 40, 37, 0.09);
   --revv-glass-highlight: rgba(250, 249, 246, 0.6);
-  --revv-glass-shadow:
-    0 1px 2px rgba(42, 40, 37, 0.06), 0 4px 16px rgba(42, 40, 37, 0.09);
+  --revv-glass-shadow: 0 1px 2px rgba(42, 40, 37, 0.06), 0 4px 16px rgba(42, 40, 37, 0.09);
   --revv-glass-active-bg: rgba(42, 40, 37, 0.055);
 
   /* Elevation shadows */
@@ -127,17 +125,11 @@
     0 0 0 0.5px rgba(42, 40, 37, 0.04);
   --revv-shadow-sm: 0 2px 6px rgba(42, 40, 37, 0.08);
   --revv-shadow-md: 0 4px 16px rgba(42, 40, 37, 0.1);
-  --revv-shadow-lg:
-    0 8px 24px rgba(42, 40, 37, 0.12), 0 2px 8px rgba(42, 40, 37, 0.06);
-  --revv-shadow-xl:
-    0 16px 48px rgba(42, 40, 37, 0.18), 0 4px 12px rgba(42, 40, 37, 0.1);
+  --revv-shadow-lg: 0 8px 24px rgba(42, 40, 37, 0.12), 0 2px 8px rgba(42, 40, 37, 0.06);
+  --revv-shadow-xl: 0 16px 48px rgba(42, 40, 37, 0.18), 0 4px 12px rgba(42, 40, 37, 0.1);
 
   /* Outline-style button (inverts with theme) */
-  --revv-btn-outline: color-mix(
-    in srgb,
-    var(--revv-text-primary) 55%,
-    transparent
-  );
+  --revv-btn-outline: color-mix(in srgb, var(--revv-text-primary) 55%, transparent);
   --revv-btn-outline-fill: var(--revv-text-primary);
   --revv-btn-outline-fg: var(--revv-bg-primary);
 
@@ -152,69 +144,37 @@
   /* Scorecard — backgrounds mirror the Walkthrough IssueCard palette
        (4% tint of a themed severity color over --revv-bg-secondary) so
        score cards and issue cards read as the same visual family. */
-  --revv-score-pass-bg: color-mix(
-    in srgb,
-    var(--revv-success) 4%,
-    var(--revv-bg-secondary)
-  );
+  --revv-score-pass-bg: color-mix(in srgb, var(--revv-success) 4%, var(--revv-bg-secondary));
   --revv-score-pass-border: #15803d;
   --revv-score-pass-icon: #15803d;
   --revv-score-pass-label: #14532d;
   --revv-score-pass-axis: #46464d;
-  --revv-score-pass-conf-bg: color-mix(
-    in srgb,
-    var(--revv-score-pass-icon) 12%,
-    transparent
-  );
+  --revv-score-pass-conf-bg: color-mix(in srgb, var(--revv-score-pass-icon) 12%, transparent);
   --revv-score-pass-conf: #15803d;
 
-  --revv-score-concern-bg: color-mix(
-    in srgb,
-    var(--revv-warning) 4%,
-    var(--revv-bg-secondary)
-  );
+  --revv-score-concern-bg: color-mix(in srgb, var(--revv-warning) 4%, var(--revv-bg-secondary));
   --revv-score-concern-border: #b45309;
   --revv-score-concern-icon: #b45309;
   --revv-score-concern-label: #7c2d12;
   --revv-score-concern-axis: #46464d;
-  --revv-score-concern-conf-bg: color-mix(
-    in srgb,
-    var(--revv-score-concern-icon) 12%,
-    transparent
-  );
+  --revv-score-concern-conf-bg: color-mix(in srgb, var(--revv-score-concern-icon) 12%, transparent);
   --revv-score-concern-conf: #b45309;
 
-  --revv-score-blocker-bg: color-mix(
-    in srgb,
-    var(--revv-danger) 4%,
-    var(--revv-bg-secondary)
-  );
+  --revv-score-blocker-bg: color-mix(in srgb, var(--revv-danger) 4%, var(--revv-bg-secondary));
   --revv-score-blocker-border: #b91c1c;
   --revv-score-blocker-icon: #b91c1c;
   --revv-score-blocker-label: #7c1d1d;
   --revv-score-blocker-axis: #46464d;
-  --revv-score-blocker-conf-bg: color-mix(
-    in srgb,
-    var(--revv-score-blocker-icon) 12%,
-    transparent
-  );
+  --revv-score-blocker-conf-bg: color-mix(in srgb, var(--revv-score-blocker-icon) 12%, transparent);
   --revv-score-blocker-conf: #b91c1c;
 
   /* Info — accent-derived palette. With the brand teal accent, info
        reads as a calm "FYI" rather than the old "click here" blue. */
-  --revv-score-info-bg: color-mix(
-    in srgb,
-    var(--revv-accent) 4%,
-    var(--revv-bg-secondary)
-  );
+  --revv-score-info-bg: color-mix(in srgb, var(--revv-accent) 4%, var(--revv-bg-secondary));
   --revv-score-info-border: #0f766e;
   --revv-score-info-icon: #115e59;
   --revv-score-info-label: #134e4a;
-  --revv-score-info-conf-bg: color-mix(
-    in srgb,
-    var(--revv-score-info-icon) 12%,
-    transparent
-  );
+  --revv-score-info-conf-bg: color-mix(in srgb, var(--revv-score-info-icon) 12%, transparent);
   --revv-score-info-conf: #115e59;
 }
 
@@ -295,8 +255,7 @@
   /* Line action floating pill */
   --revv-pill-bg: rgba(26, 26, 26, 0.92);
   --revv-pill-border: rgba(255, 255, 255, 0.07);
-  --revv-pill-shadow:
-    0 8px 24px rgba(0, 0, 0, 0.6), 0 2px 6px rgba(0, 0, 0, 0.4);
+  --revv-pill-shadow: 0 8px 24px rgba(0, 0, 0, 0.6), 0 2px 6px rgba(0, 0, 0, 0.4);
 
   /* Comment / thread */
   --revv-thread-bg: #111111;
@@ -322,8 +281,7 @@
   --revv-glass-bg: rgba(30, 30, 30, 0.65);
   --revv-glass-border: rgba(255, 255, 255, 0.1);
   --revv-glass-highlight: rgba(255, 255, 255, 0.05);
-  --revv-glass-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.2), 0 4px 16px rgba(0, 0, 0, 0.25);
+  --revv-glass-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 4px 16px rgba(0, 0, 0, 0.25);
   --revv-glass-active-bg: rgba(255, 255, 255, 0.1);
 
   /* Elevation shadows (theme-aware) */
@@ -332,10 +290,8 @@
     inset 0 0.5px 0 0 rgba(255, 255, 255, 0.08);
   --revv-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.35);
   --revv-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.45);
-  --revv-shadow-lg:
-    0 8px 24px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.35);
-  --revv-shadow-xl:
-    0 16px 48px rgba(0, 0, 0, 0.65), 0 4px 12px rgba(0, 0, 0, 0.45);
+  --revv-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.35);
+  --revv-shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.65), 0 4px 12px rgba(0, 0, 0, 0.45);
 
   /* Outline-style button (inverts with theme) */
   --revv-btn-outline: rgba(255, 255, 255, 0.7);
@@ -353,69 +309,37 @@
   /* Scorecard — backgrounds mirror the Walkthrough IssueCard palette
        (4% tint of a themed severity color over --revv-bg-secondary) so
        score cards and issue cards read as the same visual family. */
-  --revv-score-pass-bg: color-mix(
-    in srgb,
-    var(--revv-success) 4%,
-    var(--revv-bg-secondary)
-  );
+  --revv-score-pass-bg: color-mix(in srgb, var(--revv-success) 4%, var(--revv-bg-secondary));
   --revv-score-pass-border: #10b981;
   --revv-score-pass-icon: #34d399;
   --revv-score-pass-label: #6ee7b7;
   --revv-score-pass-axis: #6ee7b7;
-  --revv-score-pass-conf-bg: color-mix(
-    in srgb,
-    var(--revv-score-pass-icon) 25%,
-    transparent
-  );
+  --revv-score-pass-conf-bg: color-mix(in srgb, var(--revv-score-pass-icon) 25%, transparent);
   --revv-score-pass-conf: #34d399;
 
-  --revv-score-concern-bg: color-mix(
-    in srgb,
-    var(--revv-warning) 4%,
-    var(--revv-bg-secondary)
-  );
+  --revv-score-concern-bg: color-mix(in srgb, var(--revv-warning) 4%, var(--revv-bg-secondary));
   --revv-score-concern-border: #f59e0b;
   --revv-score-concern-icon: #fbbf24;
   --revv-score-concern-label: #fcd34d;
   --revv-score-concern-axis: #fcd34d;
-  --revv-score-concern-conf-bg: color-mix(
-    in srgb,
-    var(--revv-score-concern-icon) 25%,
-    transparent
-  );
+  --revv-score-concern-conf-bg: color-mix(in srgb, var(--revv-score-concern-icon) 25%, transparent);
   --revv-score-concern-conf: #fbbf24;
 
-  --revv-score-blocker-bg: color-mix(
-    in srgb,
-    var(--revv-danger) 4%,
-    var(--revv-bg-secondary)
-  );
+  --revv-score-blocker-bg: color-mix(in srgb, var(--revv-danger) 4%, var(--revv-bg-secondary));
   --revv-score-blocker-border: #ef4444;
   --revv-score-blocker-icon: #f87171;
   --revv-score-blocker-label: #fca5a5;
   --revv-score-blocker-axis: #fca5a5;
-  --revv-score-blocker-conf-bg: color-mix(
-    in srgb,
-    var(--revv-score-blocker-icon) 25%,
-    transparent
-  );
+  --revv-score-blocker-conf-bg: color-mix(in srgb, var(--revv-score-blocker-icon) 25%, transparent);
   --revv-score-blocker-conf: #f87171;
 
   /* Info — accent-derived palette (dark variant). Blues brightened to
        read against dark bg without losing distinction from pass-green. */
-  --revv-score-info-bg: color-mix(
-    in srgb,
-    var(--revv-accent) 4%,
-    var(--revv-bg-secondary)
-  );
+  --revv-score-info-bg: color-mix(in srgb, var(--revv-accent) 4%, var(--revv-bg-secondary));
   --revv-score-info-border: #3b82f6;
   --revv-score-info-icon: #60a5fa;
   --revv-score-info-label: #93c5fd;
-  --revv-score-info-conf-bg: color-mix(
-    in srgb,
-    var(--revv-score-info-icon) 25%,
-    transparent
-  );
+  --revv-score-info-conf-bg: color-mix(in srgb, var(--revv-score-info-icon) 25%, transparent);
   --revv-score-info-conf: #60a5fa;
 }
 
@@ -608,6 +532,9 @@
   --duration-ceremonial-medium: 480ms; /* onboarding / theatrical entrances — medium */
   --duration-ceremonial-slow: 720ms; /* onboarding / theatrical entrances — slow */
 
+  /* Motion — pulse duration (decorative infinite-loop animations) */
+  --duration-pulse: 1400ms;
+
   /* Motion — easings
        --ease-soft     : in/out, used for exits and bidirectional state
        --ease-out-expo : enter, slight overshoot, default for "appearance"
@@ -669,6 +596,23 @@
   }
 }
 
+/* Spin animation for loading indicators (Loader2, etc.).
+   The .motion-essential-* class opts back in under
+   prefers-reduced-motion so reduced-motion users still
+   see the loading affordance. */
+@keyframes motion-essential-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.motion-essential-spin {
+  animation: motion-essential-spin 1s linear infinite;
+}
+
 /* ── Text shimmer (ported from OpenCode UI) ──────────────────────────────
    Two-layer stacked grid: a base text layer and a shimmer layer with a
    moving gradient clipped to text glyphs. The 360% background-size gives
@@ -715,7 +659,7 @@
 [data-component="text-shimmer"] [data-slot="text-shimmer-char-shimmer"] {
   grid-area: 1 / 1;
   white-space: pre;
-  transition: opacity var(--text-shimmer-swap) ease-out;
+  transition: opacity var(--text-shimmer-swap) var(--ease-out-expo);
   font: inherit;
   letter-spacing: inherit;
   line-height: inherit;
@@ -731,21 +675,17 @@
   opacity: 0;
 }
 
-[data-component="text-shimmer"][data-active="true"]
-  [data-slot="text-shimmer-char-shimmer"] {
+[data-component="text-shimmer"][data-active="true"] [data-slot="text-shimmer-char-shimmer"] {
   opacity: 1;
 }
 
-[data-component="text-shimmer"]
-  [data-slot="text-shimmer-char-shimmer"][data-run="true"] {
+[data-component="text-shimmer"] [data-slot="text-shimmer-char-shimmer"][data-run="true"] {
   animation-name: text-shimmer-sweep;
   animation-duration: var(--text-shimmer-duration);
   animation-iteration-count: infinite;
   animation-timing-function: linear;
   animation-fill-mode: both;
-  animation-delay: calc(
-    var(--text-shimmer-step) * var(--text-shimmer-index) * -1
-  );
+  animation-delay: calc(var(--text-shimmer-step) * var(--text-shimmer-index) * -1);
   will-change: background-position;
 }
 
@@ -778,8 +718,7 @@
     background-clip: text;
   }
 
-  [data-component="text-shimmer"][data-active="true"]
-    [data-slot="text-shimmer-char-base"] {
+  [data-component="text-shimmer"][data-active="true"] [data-slot="text-shimmer-char-base"] {
     opacity: 0;
   }
 }
@@ -857,9 +796,9 @@ body {
 .prose-table {
   width: 100%;
   overflow-x: auto;
-  margin: 0 0 12px;
+  margin: 0 0 var(--spacing-inset);
   border: 1px solid var(--color-border-subtle);
-  border-radius: 6px;
+  border-radius: var(--radius-card);
   background: var(--color-bg-primary);
   /* Allow keyboard users to focus and scroll the region. */
   outline: none;
@@ -889,7 +828,7 @@ body {
 }
 
 .prose-table thead th {
-  padding: 8px 12px;
+  padding: var(--spacing-island) var(--spacing-inset);
   text-align: left;
   font-weight: 600;
   color: var(--color-text-primary);
@@ -898,7 +837,7 @@ body {
 }
 
 .prose-table tbody td {
-  padding: 8px 12px;
+  padding: var(--spacing-island) var(--spacing-inset);
   color: var(--color-text-secondary);
   border-top: 1px solid var(--color-border-subtle);
   vertical-align: top;
@@ -977,7 +916,7 @@ body {
   }
 }
 .animate-indeterminate-progress {
-  animation: indeterminate-progress 1.5s ease-in-out infinite;
+  animation: indeterminate-progress var(--duration-pulse) var(--ease-soft) infinite;
 }
 
 /* ──────────────────────────────────────────────────────────
@@ -1068,7 +1007,7 @@ diffs-container {
 .sd-char-new {
   display: inline-block;
   white-space: pre;
-  animation: sd-char-in 300ms cubic-bezier(0, 0, 0.58, 1) both;
+  animation: sd-char-in var(--duration-ceremonial-quick) var(--ease-soft) both;
 }
 
 @keyframes sd-char-in {
@@ -1093,4 +1032,55 @@ diffs-container {
     transition-duration: 1ms;
     scroll-behavior: auto;
   }
+}
+
+/* ──────────────────────────────────────────────────────────
+   Floating action bar — bottom-anchored row of GlassPill buttons.
+   Shared by walkthrough and recap lifecycle controls.
+   The wrapper is pointer-events:none so clicks pass through the
+   transparent padding around the pill row; all descendants regain
+   interactivity automatically.
+   ────────────────────────────────────────────────────────── */
+.actions-float {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  padding: 8px 0 10px;
+  z-index: 10;
+  pointer-events: none;
+}
+.actions-float * {
+  pointer-events: auto;
+}
+.actions-row {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-island);
+}
+
+/* ──────────────────────────────────────────────────────────
+   Floating tabs bar — top-anchored, centred between sidebar
+   and optional right panel.
+   top = topbar height + island margin + pill padding-top (10px).
+   Non-Tauri: 28 + 8 + 10 = 46px.  Tauri: 30 + 8 + 10 = 48px.
+   ────────────────────────────────────────────────────────── */
+.tabs-float {
+  position: fixed;
+  top: calc(var(--topbar-height) + var(--spacing-island) + 10px);
+  display: flex;
+  justify-content: center;
+  z-index: 20;
+  pointer-events: none;
+  transition:
+    left var(--duration-smooth) var(--ease-out-expo),
+    right var(--duration-instant) var(--ease-out-expo);
+}
+.tabs-float * {
+  pointer-events: auto;
+}
+html.tauri .tabs-float {
+  top: calc(22px + var(--spacing-island) * 2 + 10px);
 }

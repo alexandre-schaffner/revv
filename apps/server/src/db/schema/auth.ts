@@ -1,4 +1,5 @@
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { remoteUsers } from "./remote-users";
 
 // Better Auth managed tables — do not modify manually
 // Generated equivalent of `bunx @better-auth/cli generate`
@@ -16,6 +17,8 @@ export const user = sqliteTable("user", {
   // 5-step onboarding (welcome → host → sign-in → connect repo → done)
   // completes. Surviving across reinstalls — see OnboardingGate.
   onboardedAt: integer("onboarded_at", { mode: "timestamp" }),
+  /** FK into remote_users — the authenticated user's canonical profile. */
+  identityId: text("identity_id").references(() => remoteUsers.id),
 });
 
 export const session = sqliteTable("session", {

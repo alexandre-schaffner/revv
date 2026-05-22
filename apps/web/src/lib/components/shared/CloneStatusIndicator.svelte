@@ -1,5 +1,8 @@
 <script lang="ts">
-import { AlertCircle, Check, Clock, Loader2 } from "@lucide/svelte";
+import AlertCircle from "phosphor-svelte/lib/WarningCircle";
+import Check from "phosphor-svelte/lib/Check";
+import Clock from "phosphor-svelte/lib/Clock";
+import Loader2 from "phosphor-svelte/lib/Spinner";
 import type { CloneStatus } from "@revv/shared";
 import { fade } from "svelte/transition";
 

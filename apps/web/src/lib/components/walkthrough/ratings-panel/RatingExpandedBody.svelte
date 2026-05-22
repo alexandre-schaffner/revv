@@ -1,5 +1,5 @@
 <script lang="ts">
-import { ArrowUpRight } from "@lucide/svelte";
+import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
 import type { Confidence, Verdict, WalkthroughBlock, WalkthroughRating } from "@revv/shared";
 import { RATING_AXIS_LABELS } from "@revv/shared";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
@@ -186,7 +186,7 @@ function handleJumpToDiff(filePath: string, line: number): void {
                         class="block-link-chip"
                         onclick={() => onJump(blockId)}
                     >
-                        <ArrowUpRight size={11} aria-hidden="true" />
+                        <ArrowUpRight size={11} weight="fill" aria-hidden="true" />
                         step {stepN}
                     </button>
                 </li>

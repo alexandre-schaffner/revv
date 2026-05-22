@@ -1,5 +1,7 @@
 <script lang="ts">
-import { ChevronLeft, GitPullRequestCreateArrow, Plus } from "@lucide/svelte";
+import ChevronLeft from "phosphor-svelte/lib/CaretLeft";
+import GitPullRequestCreateArrow from "phosphor-svelte/lib/GitPullRequest";
+import Plus from "phosphor-svelte/lib/Plus";
 import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte";
 import AddRepoDialog from "$lib/components/sidebar/AddRepoDialog.svelte";
 import ProjectArchiveList from "$lib/components/sidebar/ProjectArchiveList.svelte";
@@ -531,6 +533,7 @@ function handleKeydown(e: KeyboardEvent) {
 		min-height: 0;
 		overflow: hidden;
 		position: relative;
+		contain: layout paint;
 		opacity: 1;
 		visibility: visible;
 		transform: translateX(0);
@@ -560,6 +563,7 @@ function handleKeydown(e: KeyboardEvent) {
 		min-width: 0;
 		min-height: 0;
 		overflow: hidden;
+		contain: layout paint;
 		transition: transform var(--duration-smooth) var(--ease-out-expo);
 		will-change: transform;
 	}

@@ -6,6 +6,7 @@
 
 import type { ProjectRecap, RecapPeriod } from "@revv/shared";
 import type { RecapSourceBundle } from "../providers/recap-tools";
+import { loadSkills } from "../skills/registry";
 
 export const RECAP_SYSTEM_PROMPT = `You are a project historian and review companion. Your job is to write a concise, useful recap of recently-archived (closed or merged) pull requests in a single repository, then provide context that helps the next review agent understand the project's recent trajectory.
 
@@ -18,7 +19,7 @@ CRITICAL — SILENCE DURING READS: Do NOT write any visible text before step 5. 
 
 Workflow on EVERY run:
 1. Call get_recap_state FIRST. It returns the period boundaries, the source PRs with metadata, an \`openPrsTotal\` count for the "Active work" section (open PRs themselves are paginated, see step 3), and (when available) each PR's walkthrough — summary, sentiment, risk level, and 9-axis verdict context. Treat this as the only source of truth — do not invent PRs.
-2. For each archived PR where \`walkthrough\` is null and you want to describe the change in detail: call get_pr_diff with the PR's \`id\`. Each call returns that PR's file-level diff (per-file status, +/-, unified patch text). Call one PR at a time; call all the diffs you need BEFORE step 3 — tool calls reset the composition buffer. Skip for PRs you can describe adequately from title + body alone.
+2. For each archived PR where \`walkthrough\` is null, use its \`diffDigest\` field. The server has already ingested raw diffs into compact durable digests before this final recap run, so do not load raw patches into this session.
 3. Call list_open_prs to fetch the open PRs for the "Active work" section. Start with \`offset=0\` and the default page size (5). Each response returns a slice plus a \`nextOffset\` — keep calling list_open_prs with that offset while it's non-null, then stop. The server already caps the underlying list at the 20 most recently updated open PRs, so you'll page through ≤20 rows total. Skip this step entirely when \`openPrsTotal\` is 0.
 4. Call get_repo_context to fetch prior recaps for the repo. Use them for rolling continuity: build on themes that persist, follow up on issues flagged previously, note shifts in direction. Don't restate prior recaps.
 5. Write the complete recap as your visible assistant response — start with the first heading and keep going to the end of "Project state". No preamble, no "Here is the recap:" framing, no inter-tool commentary. ONE continuous response, no tool calls in the middle.
@@ -31,7 +32,7 @@ Quality bar for the markdown body:
 - Add an "Active work" section listing currently open PRs by author, target branch, title, and any walkthrough summary/risk level available. Sort by relevance: PRs with walkthroughs first, then recently updated. Close the section with a brief italic note that the list is limited to the 20 most recently updated open PRs and may not be exhaustive. Page through every open PR via list_open_prs BEFORE you start writing the markdown — once you start, you can't make read calls without resetting the buffer.
 - Close with a "Project state" paragraph: pace, hot zones of activity, anything the next reviewer should keep in mind.
 - If nothing shipped (zero archived PRs) but open PRs exist, drop the "What shipped" section entirely, open with one sentence naming that nothing landed this period, then go straight to "Active work" and "Project state". Reference the open PR ids in \`source_pr_ids\` since they are the recap's actual subject.
-- For PRs without a walkthrough: call get_pr_diff before composing to fetch the file-level diff, then describe what the change actually does (which files changed, what kind of change — feature / fix / refactor / config — and any user- or developer-visible effect you can infer from the patch). When the diff is large, lean on the file list + statuses rather than line-by-line text. When get_pr_diff returns \`'unavailable'\`, fall back to title + body + +/- counts and say so plainly rather than fabricating intent. Honor any \`diff.note\` (truncation hints) — never claim coverage of files you weren't shown.
+- For PRs without a walkthrough: use \`diffDigest\` to describe what the change does. When the digest source is \`'unavailable'\`, fall back to title + body + +/- counts and say so plainly rather than fabricating intent. Honor any digest note (truncation hints) — never claim coverage of files you weren't shown.
 - Author names: use the github login from the source. Don't anonymize.
 - Use rich GitHub-flavored markdown throughout: \`## \` top-level headings, \`### \` sub-headings where useful, **bold** for PR titles and key terms, \`inline code\` for branch names/identifiers/file paths, bullet lists for multiple items, and \`[PR title](url)\` links. A dense, well-formatted recap is far more useful than a wall of plain prose.
 - Length budget: 250–600 words. A daily recap with one PR can be shorter; a weekly with 15 should still be tight.
@@ -56,7 +57,7 @@ Stats payload contract:
 Tool-use rules (critical):
 - Call tools in this exact order:
   1. get_recap_state
-  2. get_pr_diff (zero or more times — call for each archived PR where walkthrough is null and you want diff-level detail; each call is one PR)
+  2. Read \`diffDigest\` fields in the get_recap_state response for PRs without walkthroughs. Do not call get_pr_diff unless a digest is unexpectedly missing.
   3. list_open_prs (skip when openPrsTotal is 0; otherwise call repeatedly until nextOffset is null)
   4. get_repo_context
   5. Write the recap markdown as your visible assistant response (no tool call — just type).
@@ -65,9 +66,11 @@ Tool-use rules (critical):
 - The visible-text composition step (5) is REQUIRED. If you skip straight from reads to commit_recap_overview, the buffer will be empty and the commit will reject with an error pointing you back at composition.
 
 Constraints:
-- Do not write file paths or line numbers unless they appear verbatim in walkthrough sentiment / summary, or in a diff you fetched via get_pr_diff.
+- Do not write file paths or line numbers unless they appear verbatim in walkthrough sentiment / summary, or in a \`diffDigest\`.
 - Do not fabricate walkthrough text. Quote sparingly and only when it carries real signal.
-- Do not fabricate diff content. If get_pr_diff returns unavailable, describe the PR from its metadata and say so — don't invent file changes.`;
+- Do not fabricate diff content. If get_pr_diff returns unavailable, describe the PR from its metadata and say so — don't invent file changes.
+
+${loadSkills(["beautiful-markdown"])}`;
 
 export function buildRecapUserMessage(
   bundle: RecapSourceBundle,
@@ -94,7 +97,7 @@ export function buildRecapUserMessage(
     `# ${periodLabel} recap for ${bundle.repoFullName}`,
     "",
     `Window: ${window} (UTC)`,
-    `Source PRs in window: ${bundle.prs.length} (${bundle.stats.mergedCount} merged, ${bundle.stats.closedCount} closed, ${bundle.stats.walkthroughsMissingCount} without walkthroughs — use get_pr_diff to inspect those individually)`,
+    `Source PRs in window: ${bundle.prs.length} (${bundle.stats.mergedCount} merged, ${bundle.stats.closedCount} closed, ${bundle.stats.walkthroughsMissingCount} without walkthroughs — use each row's diffDigest for those)`,
     `Open PRs: ${bundle.openPrs.length}`,
     "",
     priorHint,
@@ -102,7 +105,7 @@ export function buildRecapUserMessage(
     ...(nothingShippedHint ? ["", nothingShippedHint] : []),
     ...(rerunHint ? ["", rerunHint] : []),
     "",
-    `Begin by calling get_recap_state. Then call get_pr_diff for any archived PRs without walkthroughs whose diffs you want to read. Then (when openPrsTotal > 0) walk every page of list_open_prs until nextOffset is null. Then get_repo_context. After all reads complete, write the COMPLETE recap markdown as your visible assistant response in one continuous block — no further tool calls until you finish, because a tool call resets the streaming buffer. Then commit_recap_overview with metadata only (no \`overview\` argument — the server reads what you typed). Finally call complete_recap.`,
+    `Begin by calling get_recap_state. Use the diffDigest fields for archived PRs without walkthroughs; raw diffs were already ingested before this final recap run. Then (when openPrsTotal > 0) walk every page of list_open_prs until nextOffset is null. Then get_repo_context. After all reads complete, write the COMPLETE recap markdown as your visible assistant response in one continuous block — no further tool calls until you finish, because a tool call resets the streaming buffer. Then commit_recap_overview with metadata only (no \`overview\` argument — the server reads what you typed). Finally call complete_recap.`,
   ].join("\n");
 }
 

@@ -1,5 +1,5 @@
 <script lang="ts">
-import { ChevronLeft } from "@lucide/svelte";
+import ChevronLeft from "phosphor-svelte/lib/CaretLeft";
 import type { Repository } from "@revv/shared";
 import { untrack } from "svelte";
 import { toast } from "svelte-sonner";

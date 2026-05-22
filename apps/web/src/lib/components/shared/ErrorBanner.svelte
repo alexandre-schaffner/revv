@@ -1,5 +1,5 @@
 <script lang="ts">
-import { X } from "@lucide/svelte";
+import X from "phosphor-svelte/lib/X";
 import * as errors from "$lib/stores/errors.svelte";
 
 function formatCountdown(seconds: number): string {
@@ -24,7 +24,7 @@ function formatCountdown(seconds: number): string {
 			onclick={() => errors.clearError()}
 			aria-label="Dismiss error"
 		>
-			<X size={14} />
+			<X size={14} weight="fill" />
 		</button>
 	</div>
 {/if}

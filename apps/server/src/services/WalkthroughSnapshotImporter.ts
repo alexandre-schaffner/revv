@@ -129,7 +129,7 @@ export const WalkthroughSnapshotImporterLive = Layer.succeed(WalkthroughSnapshot
                 generatedByGithubUserId: snapshot.generatedBy.githubUserId,
                 generatedByGithubLogin: snapshot.generatedBy.githubLogin,
                 generatedByDisplayName: snapshot.generatedBy.displayName,
-                generatedByAvatarUrl: snapshot.generatedBy.avatarUrl,
+                generatedByAvatarUrl: snapshot.generatedBy.avatarContent,
                 providerConfig: JSON.stringify(snapshot.providerConfig),
               })
               .where(eq(walkthroughs.id, walkthroughId))

@@ -7,7 +7,11 @@
  *
  *   [Expand all] [Only with replies] [Only unselected] [Select all / Clear]
  */
-import { ChevronsDownUp, ChevronsUpDown, Circle, Filter, MessageSquare } from "@lucide/svelte";
+import ChevronsDownUp from "phosphor-svelte/lib/ArrowsInLineVertical";
+import ChevronsUpDown from "phosphor-svelte/lib/ArrowsOutLineVertical";
+import Circle from "phosphor-svelte/lib/Circle";
+import Filter from "phosphor-svelte/lib/Funnel";
+import MessageSquare from "phosphor-svelte/lib/Chat";
 
 interface Counts {
   unresolved: number;
@@ -31,7 +35,7 @@ const expandLabel = $derived(expandAll === true ? "Collapse all" : "Expand all")
 <div class="summary-bar">
     <div class="summary-left">
         <span class="spec-icon" aria-hidden="true">
-            <MessageSquare size={14} />
+            <MessageSquare size={14} weight="fill" />
         </span>
         <span class="spec-title">Comments</span>
 
@@ -41,7 +45,7 @@ const expandLabel = $derived(expandAll === true ? "Collapse all" : "Expand all")
                 class:count-pill--zero={counts.unresolved === 0}
                 title="{counts.unresolved} unresolved"
             >
-                <Circle size={11} aria-hidden="true" />
+                <Circle size={11} weight="fill" aria-hidden="true" />
                 <span class="count-num">{counts.unresolved}</span>
                 <span class="count-label">unresolved</span>
             </span>
@@ -50,7 +54,7 @@ const expandLabel = $derived(expandAll === true ? "Collapse all" : "Expand all")
                 class:count-pill--zero={counts.withReplies === 0}
                 title="{counts.withReplies} with replies"
             >
-                <Circle size={11} aria-hidden="true" />
+                <Circle size={11} weight="fill" aria-hidden="true" />
                 <span class="count-num">{counts.withReplies}</span>
                 <span class="count-label">with replies</span>
             </span>
@@ -67,9 +71,9 @@ const expandLabel = $derived(expandAll === true ? "Collapse all" : "Expand all")
         >
             <span class="ctrl-icon" aria-hidden="true">
                 {#if expandAll === true}
-                    <ChevronsDownUp size={12} />
+                    <ChevronsDownUp size={12} weight="fill" />
                 {:else}
-                    <ChevronsUpDown size={12} />
+                    <ChevronsUpDown size={12} weight="fill" />
                 {/if}
             </span>
             <span class="ctrl-label">{expandLabel}</span>
