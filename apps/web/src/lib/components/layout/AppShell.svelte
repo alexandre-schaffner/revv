@@ -18,6 +18,7 @@ import {
 import { page } from "$app/state";
 import { Shimmer } from "$lib/components/ai/shimmer";
 import SettingsModal from "$lib/components/settings/SettingsModal.svelte";
+import UserMenu from "$lib/components/sidebar/UserMenu.svelte";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import { Popover, PopoverContent, PopoverTrigger } from "$lib/components/ui/popover";
 import { RAIL_WIDTH } from "$lib/constants";
@@ -86,7 +87,6 @@ import {
   scrollToRatings as scrollWalkthroughToRatings,
   scrollToTop as scrollWalkthroughToTop,
 } from "$lib/stores/walkthroughNav.svelte";
-import UserMenu from "$lib/components/sidebar/UserMenu.svelte";
 import BottomBar from "./BottomBar.svelte";
 import CommandPalette from "./CommandPalette.svelte";
 import FloatingTabs from "./FloatingTabs.svelte";
@@ -129,9 +129,15 @@ const walkthroughBarHasActions = $derived(
     walkthroughUiState.kind !== "cloning",
 );
 const showFloatingActions = $derived(
-  !!pr && isReviewRoute && !isSettingsRoute && activeTab === "walkthrough" && walkthroughBarHasActions,
+  !!pr &&
+    isReviewRoute &&
+    !isSettingsRoute &&
+    activeTab === "walkthrough" &&
+    walkthroughBarHasActions,
 );
-const showRcActions = $derived(!!pr && isReviewRoute && !isSettingsRoute && activeTab === "request-changes");
+const showRcActions = $derived(
+  !!pr && isReviewRoute && !isSettingsRoute && activeTab === "request-changes",
+);
 
 const rcSubmitting = $derived(getRcSubmitting());
 const rcSelectedCount = $derived(getRcSelectedCount());
@@ -241,7 +247,7 @@ $effect(() => {
 // than overlaying on top of it. Animation comes from the
 // grid-template-columns transition on .app-shell.
 const gridStyle = $derived(
-  `grid-template-columns: ${RAIL_WIDTH}px ${sidebarEffectiveCollapsed ? '0' : `${sidebarWidth}px`} 1fr ${rightPanelOpen ? `${rightPanelWidth}px` : '0'}`,
+  `grid-template-columns: ${RAIL_WIDTH}px ${sidebarEffectiveCollapsed ? "0" : `${sidebarWidth}px`} 1fr ${rightPanelOpen ? `${rightPanelWidth}px` : "0"}`,
 );
 
 function onHandlePointerDown(event: PointerEvent): void {

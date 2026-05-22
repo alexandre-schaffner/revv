@@ -19,7 +19,7 @@ export interface Command {
   action: () => void;
 }
 
-let commands = $state<Command[]>([
+const commands = $state<Command[]>([
   {
     id: "theme:light",
     label: "Theme: Light",
@@ -116,7 +116,7 @@ function scoreCommand(cmd: Command, q: string): number {
   return best;
 }
 
-let filteredCommands = $derived.by(() => {
+const filteredCommands = $derived.by(() => {
   const q = query.trim();
   if (q.length === 0) return commands;
 

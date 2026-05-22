@@ -1637,9 +1637,9 @@ export const WalkthroughJobsLive = Layer.effect(
       repoFullName: string,
     ): Effect.Effect<boolean> =>
       Effect.gen(function* () {
-        const settings = yield* settingsService.getSettings().pipe(
-          Effect.catchAll(() => Effect.succeed(null)),
-        );
+        const settings = yield* settingsService
+          .getSettings()
+          .pipe(Effect.catchAll(() => Effect.succeed(null)));
         if (!settings?.cache.enabled || !settings.cache.downloadsEnabled) return false;
 
         const snapshotOpt = yield* remoteCache.fetch(repoFullName, headSha);
@@ -1673,13 +1673,23 @@ export const WalkthroughJobsLive = Layer.effect(
 
         yield* setStatus(walkthroughId, "complete");
         yield* hub
-          .broadcast({ type: "walkthrough:cache-hit", data: { prId, walkthroughId, source: "remote" } })
-          .pipe(Effect.timeout("5 seconds"), Effect.catchAll(() => Effect.void));
-        yield* hub
-          .broadcast({ type: "walkthrough:complete", data: { prId, walkthroughId } })
-          .pipe(Effect.timeout("5 seconds"), Effect.catchAll(() => Effect.void));
+          .broadcast({
+            type: "walkthrough:cache-hit",
+            data: { prId, walkthroughId, source: "remote" },
+          })
+          .pipe(
+            Effect.timeout("5 seconds"),
+            Effect.catchAll(() => Effect.void),
+          );
+        yield* hub.broadcast({ type: "walkthrough:complete", data: { prId, walkthroughId } }).pipe(
+          Effect.timeout("5 seconds"),
+          Effect.catchAll(() => Effect.void),
+        );
 
-        debug("walkthrough-jobs", `tryHydrateFromRemoteCache hit wt=${walkthroughId} pr=${prId} sha=${headSha}`);
+        debug(
+          "walkthrough-jobs",
+          `tryHydrateFromRemoteCache hit wt=${walkthroughId} pr=${prId} sha=${headSha}`,
+        );
         return true;
       }).pipe(
         Effect.catchAll((e) => {

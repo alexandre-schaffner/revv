@@ -139,9 +139,7 @@ function coerceCache(value: unknown): UserSettings["cache"] {
     downloadsEnabled:
       r.downloadsEnabled === false ? false : DEFAULT_SETTINGS.cache.downloadsEnabled,
     signingSecret:
-      typeof r.signingSecret === "string"
-        ? r.signingSecret
-        : DEFAULT_SETTINGS.cache.signingSecret,
+      typeof r.signingSecret === "string" ? r.signingSecret : DEFAULT_SETTINGS.cache.signingSecret,
   };
 }
 

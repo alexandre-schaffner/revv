@@ -870,28 +870,30 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         .sort((a, b) => a.semanticStepIndex - b.semanticStepIndex || a.stepIndex - b.stepIndex)
         .map((b) => JSON.parse(b.data) as WalkthroughBlock);
 
-      const issues = [...issueRows].sort((a, b) => a.order - b.order).map((i): WalkthroughIssue => {
-        let blockIds: string[] = [];
-        try {
-          const parsed: unknown = JSON.parse(i.blockIds);
-          if (Array.isArray(parsed)) {
-            blockIds = parsed.filter((v): v is string => typeof v === "string");
+      const issues = [...issueRows]
+        .sort((a, b) => a.order - b.order)
+        .map((i): WalkthroughIssue => {
+          let blockIds: string[] = [];
+          try {
+            const parsed: unknown = JSON.parse(i.blockIds);
+            if (Array.isArray(parsed)) {
+              blockIds = parsed.filter((v): v is string => typeof v === "string");
+            }
+          } catch {
+            // corrupt JSON — fall back to empty
           }
-        } catch {
-          // corrupt JSON — fall back to empty
-        }
-        return {
-          id: i.id,
-          severity: i.severity as WalkthroughIssue["severity"],
-          title: i.title,
-          description: i.description,
-          blockIds,
-          ...(i.filePath !== null ? { filePath: i.filePath } : {}),
-          ...(i.startLine !== null ? { startLine: i.startLine } : {}),
-          ...(i.endLine !== null ? { endLine: i.endLine } : {}),
-          ...(i.submittedAt !== null ? { submittedAt: i.submittedAt } : {}),
-        };
-      });
+          return {
+            id: i.id,
+            severity: i.severity as WalkthroughIssue["severity"],
+            title: i.title,
+            description: i.description,
+            blockIds,
+            ...(i.filePath !== null ? { filePath: i.filePath } : {}),
+            ...(i.startLine !== null ? { startLine: i.startLine } : {}),
+            ...(i.endLine !== null ? { endLine: i.endLine } : {}),
+            ...(i.submittedAt !== null ? { submittedAt: i.submittedAt } : {}),
+          };
+        });
 
       const ratings = [...ratingRows]
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt))

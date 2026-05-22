@@ -923,7 +923,7 @@ export const ProjectRecapJobsLive = Layer.effect(
         // Lazy diff loader — the agent calls get_pr_diff per PR on demand
         // instead of receiving every diff upfront. Resolves the GitHub token
         // once (cached) so repeated calls don't re-hit the token store.
-        let cachedToken: string | null | undefined = undefined;
+        let cachedToken: string | null | undefined;
         const getPrDiff = async (prId: string): Promise<RecapSourcePrDiff | null> => {
           if (cachedToken === undefined) {
             cachedToken = await Effect.runPromise(resolveRepoToken(job.repoId));

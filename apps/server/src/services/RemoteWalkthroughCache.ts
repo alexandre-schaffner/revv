@@ -21,8 +21,8 @@ import type { WalkthroughSnapshotV1 } from "@revv/shared";
 import {
   CACHE_METADATA_KEYS,
   CACHE_SCHEMA_VERSION,
-  MAX_CACHE_BODY_BYTES,
   cacheObjectKey,
+  MAX_CACHE_BODY_BYTES,
 } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Context, Effect, Layer, Option } from "effect";

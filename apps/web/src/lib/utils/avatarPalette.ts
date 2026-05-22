@@ -234,10 +234,10 @@ export function repoGradient(
   // adds extra character without ever collapsing intra-gradient contrast.
   //   L2 - L1 = 0.17 - 2·lDiff  ∈ [0.13, 0.21]  → contrast always preserved
   //   C1 - C2 = 0.08 - 2·cDiff  ∈ [0.05, 0.11]
-  const lShift = (((r2 & 0x1f) / 31) - 0.5) * 0.18; // ±0.09
-  const lDiff = ((((r2 >> 5) & 0x0f) / 15) - 0.5) * 0.04; // ±0.02
-  const cShift = ((((r2 >> 9) & 0x1f) / 31) - 0.5) * 0.12; // ±0.06
-  const cDiff = ((((r2 >> 14) & 0x0f) / 15) - 0.5) * 0.03; // ±0.015
+  const lShift = ((r2 & 0x1f) / 31 - 0.5) * 0.18; // ±0.09
+  const lDiff = (((r2 >> 5) & 0x0f) / 15 - 0.5) * 0.04; // ±0.02
+  const cShift = (((r2 >> 9) & 0x1f) / 31 - 0.5) * 0.12; // ±0.06
+  const cDiff = (((r2 >> 14) & 0x0f) / 15 - 0.5) * 0.03; // ±0.015
 
   const L1 = (isDark ? 0.55 : 0.42) + lShift + lDiff;
   const C1 = 0.19 + cShift + cDiff;
