@@ -615,7 +615,8 @@ export async function hydrateActiveWalkthroughs(): Promise<void> {
         stub.phaseMessage = "Generating walkthrough…";
         setEntry(row.prId, stub);
       }
-      store.lastSeenSeq.set(row.walkthroughId, row.seqAt);
+      const existingSeq = store.lastSeenSeq.get(row.walkthroughId) ?? -1;
+      store.lastSeenSeq.set(row.walkthroughId, Math.max(existingSeq, row.seqAt));
     }
     store.lastSeenSeq = new Map(store.lastSeenSeq);
   } catch (e) {
@@ -795,16 +796,52 @@ async function doHydrateFromCache(
     const previous = store.entries.get(prId);
     const entry = previous ?? freshEntry();
     const hasRealSummary = wt.summary !== "";
-    entry.summary = hasRealSummary ? wt.summary : null;
-    entry.riskLevel = hasRealSummary ? wt.riskLevel : null;
-    entry.sentiment = wt.sentiment ?? null;
-    entry.lastCompletedPhase = wt.lastCompletedPhase ?? (isGenerating ? "none" : "D");
-    entry.semanticSteps = (wt.semanticSteps ?? [])
-      .slice()
-      .sort((a, b) => a.semanticStepIndex - b.semanticStepIndex);
-    entry.blocks = wt.blocks;
-    entry.issues = wt.issues;
-    entry.ratings = wt.ratings;
+
+    // Scalars: prefer the more-informative value between what SSE already applied
+    // (entry) and what the snapshot carries (wt). Entry wins when non-null/non-empty
+    // because it may have been advanced by SSE events that arrived during the fetch.
+    entry.summary = entry.summary ?? (hasRealSummary ? wt.summary : null);
+    entry.riskLevel = entry.riskLevel ?? (hasRealSummary ? wt.riskLevel : null);
+    entry.sentiment = entry.sentiment ?? wt.sentiment ?? null;
+
+    const PHASE_RANK: Record<WalkthroughPipelinePhase, number> = {
+      none: 0,
+      A: 1,
+      B: 2,
+      C: 3,
+      D: 4,
+    };
+    const snapshotPhase = wt.lastCompletedPhase ?? (isGenerating ? "none" : "D");
+    const entryPhase = entry.lastCompletedPhase ?? "none";
+    entry.lastCompletedPhase =
+      PHASE_RANK[entryPhase] >= PHASE_RANK[snapshotPhase] ? entryPhase : snapshotPhase;
+
+    // Collections: union snapshot + entry, with entry taking priority for
+    // duplicates. Entry items were applied via SSE and may be newer than the
+    // snapshot (which was read at T1, before the REST response arrived).
+    // Items only in the entry arrived after T1 and must not be discarded.
+    const ssMap = new Map<number, WalkthroughSemanticStep>();
+    for (const s of wt.semanticSteps ?? []) ssMap.set(s.semanticStepIndex, s);
+    for (const s of entry.semanticSteps) ssMap.set(s.semanticStepIndex, s);
+    entry.semanticSteps = Array.from(ssMap.values()).sort(
+      (a, b) => a.semanticStepIndex - b.semanticStepIndex,
+    );
+
+    const blockMap = new Map<string, WalkthroughBlock>();
+    for (const b of wt.blocks) blockMap.set(b.id, b);
+    for (const b of entry.blocks) blockMap.set(b.id, b);
+    entry.blocks = Array.from(blockMap.values()).sort((a, b) => a.order - b.order);
+
+    const issueMap = new Map<string, WalkthroughIssue>();
+    for (const i of wt.issues) issueMap.set(i.id, i);
+    for (const i of entry.issues) issueMap.set(i.id, i);
+    entry.issues = Array.from(issueMap.values());
+
+    const ratingMap = new Map<string, WalkthroughRating>();
+    for (const r of wt.ratings) ratingMap.set(r.axis, r);
+    for (const r of entry.ratings) ratingMap.set(r.axis, r);
+    entry.ratings = Array.from(ratingMap.values());
+
     entry.walkthroughId = wt.id;
     entry.doneReceived = !isGenerating && !isError;
     entry.isStreaming = isGenerating;
@@ -822,12 +859,12 @@ async function doHydrateFromCache(
     if (isGenerating) entry.streamStartedAt = Date.now();
     setEntry(prId, entry);
 
-    // Seed the seq cursor so subsequent SSE envelopes covered by this snapshot
-    // are dropped as defensive duplicates. `seqAt` is the most recent seq the
-    // server stamped before composing the snapshot; future envelopes have
-    // higher seqs and apply normally.
+    // Advance the seq cursor to max(current, snapshot). Using Math.max ensures
+    // we never regress a cursor that SSE already advanced past the snapshot's
+    // seqAt during the fetch window.
     if (typeof body.seqAt === "number") {
-      store.lastSeenSeq.set(wt.id, body.seqAt);
+      const existingSeq = store.lastSeenSeq.get(wt.id) ?? -1;
+      store.lastSeenSeq.set(wt.id, Math.max(existingSeq, body.seqAt));
       store.lastSeenSeq = new Map(store.lastSeenSeq);
     }
 
