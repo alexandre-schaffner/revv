@@ -32,6 +32,7 @@ import type {
   WalkthroughTokenUsage,
 } from "@revv/shared";
 import { toast } from "svelte-sonner";
+import { SvelteMap } from "svelte/reactivity";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { api } from "$lib/api/client";
 import { updateRepoCloneStatus } from "$lib/stores/prs.svelte";
@@ -139,7 +140,13 @@ export function freshEntry(): WalkthroughEntry {
 // ── Reactive state ──────────────────────────────────────────────────────────
 
 export const store = $state({
-  entries: new Map<string, WalkthroughEntry>(),
+  // Reactive Map: SvelteMap tracks `.set`/`.delete`/`.clear` natively, so
+  // mutations propagate to readers without the manual `entries = new Map(...)`
+  // reassignment dance. Plain `Map` inside `$state` does NOT trigger
+  // reactivity on mutating methods — the old workaround was unreliable and
+  // manifested as "store has 6 chapters, UI shows 3" when consumer derivations
+  // missed the update.
+  entries: new SvelteMap<string, WalkthroughEntry>(),
   activePrId: null as string | null,
   /**
    * Per-walkthroughId monotonic seq cursor. Set by `hydrateFromCache`
@@ -149,7 +156,7 @@ export const store = $state({
    * re-delivery during EventSource reconnect or content already covered
    * by a more recent REST snapshot.
    */
-  lastSeenSeq: new Map<string, number>(),
+  lastSeenSeq: new SvelteMap<string, number>(),
 });
 
 // `_active` is the single reactive derivation that resolves the current PR's
@@ -167,12 +174,10 @@ const _active: WalkthroughEntry | undefined = $derived.by(() => {
 
 export function setEntry(prId: string, entry: WalkthroughEntry): void {
   store.entries.set(prId, entry);
-  store.entries = new Map(store.entries);
 }
 
 export function deleteEntry(prId: string): void {
   store.entries.delete(prId);
-  store.entries = new Map(store.entries);
 }
 
 export function updateEntry(prId: string, updater: (e: WalkthroughEntry) => void): void {
@@ -184,7 +189,6 @@ export function updateEntry(prId: string, updater: (e: WalkthroughEntry) => void
   const next = { ...entry };
   updater(next);
   store.entries.set(prId, next);
-  store.entries = new Map(store.entries);
 }
 
 // ── Getters ─────────────────────────────────────────────────────────────────
@@ -320,18 +324,16 @@ export function getWalkthroughUiState(): WalkthroughUiState {
 export type PendingAction = "regenerate" | "resume";
 
 const pendingActions = $state({
-  map: new Map<string, PendingAction>(),
+  map: new SvelteMap<string, PendingAction>(),
 });
 
 function setPending(prId: string, action: PendingAction): void {
   pendingActions.map.set(prId, action);
-  pendingActions.map = new Map(pendingActions.map);
 }
 
 function clearPending(prId: string): void {
   if (!pendingActions.map.has(prId)) return;
   pendingActions.map.delete(prId);
-  pendingActions.map = new Map(pendingActions.map);
 }
 
 export function getPendingAction(prId: string): PendingAction | null {
@@ -572,7 +574,6 @@ export function onWalkthroughEvent(
 
   applyEvents(prId, [event]);
   store.lastSeenSeq.set(walkthroughId, seq);
-  store.lastSeenSeq = new Map(store.lastSeenSeq);
 
   // Background-completion toast: only if the completion event landed on a
   // PR the user isn't actively viewing.
@@ -618,7 +619,6 @@ export async function hydrateActiveWalkthroughs(): Promise<void> {
       const existingSeq = store.lastSeenSeq.get(row.walkthroughId) ?? -1;
       store.lastSeenSeq.set(row.walkthroughId, Math.max(existingSeq, row.seqAt));
     }
-    store.lastSeenSeq = new Map(store.lastSeenSeq);
   } catch (e) {
     wtTrace(
       "lifecycle",
@@ -865,7 +865,6 @@ async function doHydrateFromCache(
     if (typeof body.seqAt === "number") {
       const existingSeq = store.lastSeenSeq.get(wt.id) ?? -1;
       store.lastSeenSeq.set(wt.id, Math.max(existingSeq, body.seqAt));
-      store.lastSeenSeq = new Map(store.lastSeenSeq);
     }
 
     if (options?.activate !== false) {
