@@ -609,6 +609,7 @@ function activitiesForTurn(
 			<ConversationEmptyState
 				title="Ask the agent about this pull request"
 				description="The agent runs inside the PR's worktree and can read the code, propose fixes, and commit them on a working branch."
+				class="pb-32"
 			>
 				{#snippet icon()}
 					<Robot size={32} weight="fill" />
@@ -625,7 +626,7 @@ function activitiesForTurn(
 				</Suggestion>
 			</ConversationEmptyState>
 		{:else}
-			<ConversationContent class="gap-2 px-2.5 py-3">
+			<ConversationContent class="gap-2 px-2.5 pt-3 pb-32">
 				{#each items as item, itemIdx (item.id)}
 				{#if item.kind === 'activity'}
 						<!-- Skip nested sub-agent tool calls — they render
@@ -843,10 +844,13 @@ function activitiesForTurn(
 		<ConversationScrollButton />
 	</Conversation>
 
+	<!-- Floating composer: queue dock + chat input sit on top of the
+		 conversation surface so messages scroll underneath them. -->
+	<div class="composer-float">
 	<!-- Queue dock: proposed commits + agent tasks + queued messages -->
 	{#if showQueueDock}
 		<div class="queue-dock" transition:slide={{ duration: 220, easing: cubicOut }}>
-			<Queue class="rounded-b-none border-b-0 shadow-none">
+			<Queue class="shadow-sm">
 				<!-- Proposed commits from the agent -->
 				{#if commitCount > 0 && proposed}
 					<div transition:slide={{ duration: 220, easing: cubicOut }}>
@@ -1115,12 +1119,12 @@ function activitiesForTurn(
 	{/if}
 
 	<!-- Input -->
-	<div class="flex-shrink-0 border-t border-border bg-background px-2.5 pb-3 pt-2.5">
+	<div>
 		<PromptInput
 			onsubmit={handlePromptSubmit}
 			onstop={handleStop}
 			status={inputStatus}
-			class={'transition-[border-color,box-shadow] duration-quick ease-out-expo focus-within:border-accent/70 focus-within:shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-accent)_14%,transparent)] hover:not(:focus-within):not(:has(:disabled)):border-border-hover' + (!prId ? ' opacity-60' : '')}
+			class={'bg-background/85 shadow-md backdrop-blur-md transition-[border-color,box-shadow] duration-quick ease-out-expo focus-within:border-accent/70 focus-within:shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-accent)_14%,transparent)] hover:not(:focus-within):not(:has(:disabled)):border-border-hover' + (!prId ? ' opacity-60' : '')}
 		>
 			<PromptInputBody>
 				<PromptInputTextarea
@@ -1150,6 +1154,7 @@ function activitiesForTurn(
 				<PromptInputSubmit disabled={!prId} />
 			</PromptInputFooter>
 		</PromptInput>
+	</div>
 	</div>
 </div>
 
@@ -1349,11 +1354,31 @@ function activitiesForTurn(
 
 <style>
 	.panel {
+		position: relative;
 		display: flex;
 		flex-direction: column;
 		height: 100%;
 		background: var(--color-panel-bg);
 		overflow: hidden;
+	}
+
+	/* Floating composer: queue dock + chat input float above the
+	   conversation. Anchored to the bottom of the panel; messages
+	   scroll underneath them. */
+	.composer-float {
+		position: absolute;
+		left: 10px;
+		right: 10px;
+		bottom: 10px;
+		z-index: 4;
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+		pointer-events: none;
+	}
+
+	.composer-float > :global(*) {
+		pointer-events: auto;
 	}
 
 	/* Header */
@@ -1802,13 +1827,11 @@ function activitiesForTurn(
 		text-underline-offset: 2px;
 	}
 
-	/* Queue dock — sits directly above the input row. The Queue component's
-	   bottom border/radius are stripped so it visually merges with the
-	   composer below. */
+	/* Queue dock — floats above the composer inside the floating composer
+	   group. The Queue component supplies its own border + background. */
 	.queue-dock {
-		padding: 8px 10px 0;
-		background: var(--color-panel-bg);
-		flex-shrink: 0;
+		display: flex;
+		flex-direction: column;
 	}
 
 	/* Diff overlay */
