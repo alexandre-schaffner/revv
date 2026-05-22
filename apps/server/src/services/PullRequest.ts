@@ -222,7 +222,13 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
               avatarContent: remoteUsers.avatarContent,
             })
             .from(pullRequests)
-            .leftJoin(remoteUsers, and(eq(remoteUsers.provider, "github"), eq(remoteUsers.login, pullRequests.authorLogin)))
+            .leftJoin(
+              remoteUsers,
+              and(
+                eq(remoteUsers.provider, "github"),
+                eq(remoteUsers.login, pullRequests.authorLogin),
+              ),
+            )
             .where(and(...conditions))
             .orderBy(desc(pullRequests.updatedAt))
             .all();
@@ -251,7 +257,13 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
               avatarContent: remoteUsers.avatarContent,
             })
             .from(pullRequests)
-            .leftJoin(remoteUsers, and(eq(remoteUsers.provider, "github"), eq(remoteUsers.login, pullRequests.authorLogin)))
+            .leftJoin(
+              remoteUsers,
+              and(
+                eq(remoteUsers.provider, "github"),
+                eq(remoteUsers.login, pullRequests.authorLogin),
+              ),
+            )
             .where(eq(pullRequests.id, id))
             .get(),
         catch: (e) => new ValidationError({ message: String(e) }),
@@ -427,7 +439,13 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
               avatarContent: remoteUsers.avatarContent,
             })
             .from(pullRequests)
-            .leftJoin(remoteUsers, and(eq(remoteUsers.provider, "github"), eq(remoteUsers.login, pullRequests.authorLogin)))
+            .leftJoin(
+              remoteUsers,
+              and(
+                eq(remoteUsers.provider, "github"),
+                eq(remoteUsers.login, pullRequests.authorLogin),
+              ),
+            )
             .where(and(...conditions))
             .orderBy(desc(pullRequests.closedAt))
             .limit(limit + 1)
@@ -465,7 +483,13 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
               avatarContent: remoteUsers.avatarContent,
             })
             .from(pullRequests)
-            .leftJoin(remoteUsers, and(eq(remoteUsers.provider, "github"), eq(remoteUsers.login, pullRequests.authorLogin)))
+            .leftJoin(
+              remoteUsers,
+              and(
+                eq(remoteUsers.provider, "github"),
+                eq(remoteUsers.login, pullRequests.authorLogin),
+              ),
+            )
             .where(
               and(
                 eq(pullRequests.repositoryId, repoId),
@@ -559,7 +583,13 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
               avatarContent: remoteUsers.avatarContent,
             })
             .from(pullRequests)
-            .leftJoin(remoteUsers, and(eq(remoteUsers.provider, "github"), eq(remoteUsers.login, pullRequests.authorLogin)))
+            .leftJoin(
+              remoteUsers,
+              and(
+                eq(remoteUsers.provider, "github"),
+                eq(remoteUsers.login, pullRequests.authorLogin),
+              ),
+            )
             .where(and(eq(pullRequests.repositoryId, repoId), eq(pullRequests.status, "open")))
             .orderBy(desc(pullRequests.updatedAt))
             .limit(20)
@@ -768,7 +798,13 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
               avatarContent: remoteUsers.avatarContent,
             })
             .from(pullRequests)
-            .leftJoin(remoteUsers, and(eq(remoteUsers.provider, "github"), eq(remoteUsers.login, pullRequests.authorLogin)))
+            .leftJoin(
+              remoteUsers,
+              and(
+                eq(remoteUsers.provider, "github"),
+                eq(remoteUsers.login, pullRequests.authorLogin),
+              ),
+            )
             .where(and(...conditions))
             .all();
         },

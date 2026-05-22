@@ -30,4 +30,3 @@ export {
   default as QueueSectionTrigger,
   type QueueSectionTriggerProps,
 } from "./QueueSectionTrigger.svelte";
-export type { QueueMessage, QueueMessagePart, QueueTodo } from "./types.js";

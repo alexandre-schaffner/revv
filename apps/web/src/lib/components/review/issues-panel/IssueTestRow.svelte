@@ -17,8 +17,9 @@
  * Selection checkbox must NOT bubble to the SpecRow trigger (otherwise
  * checking a box would also expand the row, which feels hostile).
  */
-import Check from "phosphor-svelte/lib/Check";
+
 import type { WalkthroughBlock, WalkthroughIssue } from "@revv/shared";
+import Check from "phosphor-svelte/lib/Check";
 import { Checkbox } from "$lib/components/ui/checkbox";
 import SpecRow, { type SpecRowState } from "../shared/SpecRow.svelte";
 import IssueExpandedBody from "./IssueExpandedBody.svelte";

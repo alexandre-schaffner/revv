@@ -1,10 +1,10 @@
 <script lang="ts">
-import Folder from "phosphor-svelte/lib/Folder";
-import Plus from "phosphor-svelte/lib/Plus";
-import RefreshCw from "phosphor-svelte/lib/ArrowsClockwise";
-import Search from "phosphor-svelte/lib/MagnifyingGlass";
-import Trash2 from "phosphor-svelte/lib/Trash";
 import type { Repository } from "@revv/shared";
+import RefreshCw from "phosphor-svelte/lib/ArrowsClockwise";
+import Folder from "phosphor-svelte/lib/Folder";
+import Search from "phosphor-svelte/lib/MagnifyingGlass";
+import Plus from "phosphor-svelte/lib/Plus";
+import Trash2 from "phosphor-svelte/lib/Trash";
 import { toast } from "svelte-sonner";
 import CloneStatusIndicator from "$lib/components/shared/CloneStatusIndicator.svelte";
 import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte";

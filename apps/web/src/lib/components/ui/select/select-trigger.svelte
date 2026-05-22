@@ -1,6 +1,6 @@
 <script lang="ts">
-import ChevronDown from "phosphor-svelte/lib/CaretDown";
 import { Select as SelectPrimitive } from "bits-ui";
+import ChevronDown from "phosphor-svelte/lib/CaretDown";
 import { cn } from "$lib/utils.js";
 
 let {

@@ -1,7 +1,7 @@
 <script lang="ts">
-import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
 import { DIFFS_TAG_NAME, type FileOptions, File as PierreFile } from "@pierre/diffs";
 import type { CodeBlock } from "@revv/shared";
+import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
 import { jumpToDiffLine } from "$lib/stores/review.svelte";
 import { renderMarkdown } from "$lib/utils/markdown";
 import { workerManager } from "$lib/utils/worker-pool";
@@ -18,9 +18,6 @@ const renderedAnnotation = $derived(block.annotation ? renderMarkdown(block.anno
 let instance: PierreFile<never> | null = null;
 
 function mountCodeBlock(el: HTMLDivElement) {
-  // These options must match the SSR options in
-  // apps/server/src/routes/reviews/handlers/walkthrough-stream.ts
-  // (WALKTHROUGH_CODE_SSR_OPTIONS). Drift breaks hydration.
   const options: FileOptions<never> = {
     theme: { dark: "pierre-dark", light: "pierre-light" },
     overflow: "scroll",

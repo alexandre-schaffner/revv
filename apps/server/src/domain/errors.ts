@@ -180,16 +180,6 @@ export class CacheUnavailable extends Data.TaggedError("CacheUnavailable")<{
 }> {}
 
 /**
- * `RemoteWalkthroughCache.fetch` parsed a snapshot whose shape or
- * integrity check failed. Treated identically to `CacheUnavailable` by
- * callers — agent runs locally.
- */
-export class CacheCorrupt extends Data.TaggedError("CacheCorrupt")<{
-  readonly key: string;
-  readonly reason: string;
-}> {}
-
-/**
  * Failure while building the gzipped payload during `push`. Pure
  * marshalling error — never blocks job completion (push is fire-and-
  * forget; the fiber logs and continues).
@@ -211,19 +201,6 @@ export class ImportError extends Data.TaggedError("ImportError")<{
 }> {}
 
 export type RecapError = RecapNotFoundError | RecapPreconditionError | RecapBudgetExceededError;
-
-export type AppError =
-  | GitHubError
-  | AiError
-  | NotFoundError
-  | ValidationError
-  | ReviewError
-  | SyncError
-  | CloneError
-  | CloneNotReadyError
-  | CloneInProgressError
-  | WorktreeBlockedByUnpushedCommits
-  | RecapError;
 
 /**
  * Type guard for ReviewError.

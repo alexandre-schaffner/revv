@@ -22,8 +22,11 @@
 //                                       per-partId delta-dedup state and the
 //                                       load-bearing 100ms post-completion
 //                                       drain.
-//   4. `walkOpencodeParts`            — synchronous walk over the parts array
-//                                       returned by `session.prompt`.
+//   4. `walkOpencodePartsWithState`   — synchronous walk over the parts array
+//                                       returned by `session.prompt`, threading
+//                                       the SSE subscription's dedup state so
+//                                       it acts as a backstop for missed
+//                                       events.
 //   5. `decodeOpencodePart`           — pure per-Part decoder shared by (3)
 //                                       and (4). Returns the event + new
 //                                       cumulative-emitted-length so the SSE

@@ -24,6 +24,7 @@ import {
   takePendingQuestion,
 } from "../../services/PendingQuestionRegistry";
 import { RemoteWalkthroughCache } from "../../services/RemoteWalkthroughCache";
+import { WalkthroughJobs } from "../../services/WalkthroughJobs";
 import { WebSocketHub } from "../../services/WebSocketHub";
 import {
   buildActivity,
@@ -137,27 +138,29 @@ export function streamChatViaClaude(
         const enableMcp = opts.enableReviewContextMcp ?? true;
         const planMode = opts.interactionMode === "plan";
 
-        // emit + broadcastThreadEvent are wired to the WebSocketHub so
-        // chat-edit tool handlers can publish `walkthrough:edited`
-        // envelopes (CLAUDE.md invariant #7 carve-out) and `thread:*`
-        // events to any connected frontend client. Fire-and-forget —
+        // emit + broadcastThreadEvent publish chat-edit walkthrough events
+        // through `WalkthroughJobs.emitEvent` (CLAUDE.md invariant #7
+        // carve-out, routed onto the global SSE bus) and `thread:*` events
+        // through the WebSocketHub. Both are fire-and-forget —
         // broadcast is best-effort per invariant #8.
-        const prIdForEmit = opts.prId;
         const emitWalkthroughEvent = (
           walkthroughId: string,
           event: WalkthroughStreamEvent,
         ): void => {
           void AppRuntime.runPromise(
-            Effect.flatMap(WebSocketHub, (hub) =>
-              hub.broadcast({
-                type: "walkthrough:edited",
-                data: { prId: prIdForEmit, walkthroughId, event },
+            Effect.flatMap(WalkthroughJobs, (jobs) =>
+              Effect.gen(function* () {
+                yield* jobs.emitEvent(walkthroughId, {
+                  type: "lifecycle:edited",
+                  data: { walkthroughId, editedAt: new Date().toISOString() },
+                });
+                yield* jobs.emitEvent(walkthroughId, event);
               }),
             ),
           ).catch((err) => {
             logError(
               "chat-claude",
-              "walkthrough:edited broadcast failed:",
+              "walkthrough:event emit failed:",
               err instanceof Error ? err.message : String(err),
             );
           });

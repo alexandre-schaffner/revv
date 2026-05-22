@@ -135,6 +135,21 @@ export const walkthroughs = sqliteTable(
      * start). Captured atomically alongside `modelUsed` and never mutated.
      */
     providerConfig: text("provider_config"),
+    /**
+     * Monotonic per-walkthrough event counter. Incremented atomically by
+     * `Walkthrough.bumpSeq()` inside the same SQLite transaction that
+     * commits the content row, so the returned `seq` is durable and
+     * survives `kill -9`. Stamped onto every `walkthrough:event` envelope
+     * broadcast over the global SSE stream — the client uses
+     * `lastSeenSeq[walkthroughId]` to defensively dedupe events that
+     * arrived in flight during a reconnect (which the REST snapshot
+     * already includes).
+     *
+     * Chat-edit writes after `status='complete'` continue to increment
+     * this counter (invariant #7 carve-out), so `seq` strictly grows for
+     * the lifetime of the row.
+     */
+    nextSeq: integer("next_seq").notNull().default(0),
   },
   (t) => ({
     /**

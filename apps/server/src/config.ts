@@ -76,5 +76,3 @@ export const serverEnv = {
   ...resolved,
   githubApiBase,
 } as const;
-
-export type ServerEnv = typeof serverEnv;

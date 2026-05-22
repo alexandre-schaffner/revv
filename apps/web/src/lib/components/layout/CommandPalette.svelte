@@ -1,6 +1,6 @@
 <script lang="ts">
-import Search from "phosphor-svelte/lib/MagnifyingGlass";
 import type { PullRequest, Repository } from "@revv/shared";
+import Search from "phosphor-svelte/lib/MagnifyingGlass";
 import { untrack } from "svelte";
 import { fade, scale } from "svelte/transition";
 import {
@@ -9,12 +9,7 @@ import {
   resetQuery,
   setQuery as setCommandQuery,
 } from "$lib/stores/commands.svelte";
-import {
-	getArchivedPrs,
-	getPullRequests,
-	getRepositories,
-	selectPr,
-} from "$lib/stores/prs.svelte";
+import { getArchivedPrs, getPullRequests, getRepositories, selectPr } from "$lib/stores/prs.svelte";
 import { type PaletteMode, setPaletteMode } from "$lib/stores/shortcuts.svelte";
 import { setSidebarView } from "$lib/stores/sidebar.svelte";
 
@@ -53,71 +48,79 @@ function handleInput(e: Event) {
 const repoMap = $derived(new Map<string, Repository>(getRepositories().map((r) => [r.id, r])));
 
 interface PrResult {
-	pr: PullRequest;
-	repoName: string;
-	score: number;
+  pr: PullRequest;
+  repoName: string;
+  score: number;
 }
 
 function scorePr(pr: PullRequest, q: string): number {
-	const repoName = repoMap.get(pr.repositoryId)?.fullName ?? "";
-	return Math.max(
-		fuzzyScore(q, pr.title),
-		fuzzyScore(q, pr.sourceBranch),
-		fuzzyScore(q, `#${pr.externalId}`),
-		fuzzyScore(q, pr.authorLogin),
-		fuzzyScore(q, repoName),
-	);
+  const repoName = repoMap.get(pr.repositoryId)?.fullName ?? "";
+  return Math.max(
+    fuzzyScore(q, pr.title),
+    fuzzyScore(q, pr.sourceBranch),
+    fuzzyScore(q, `#${pr.externalId}`),
+    fuzzyScore(q, pr.authorLogin),
+    fuzzyScore(q, repoName),
+  );
 }
 
 const openResults = $derived.by((): PrResult[] => {
-	if (mode !== "search") return [];
-	const prs = getPullRequests();
-	const q = inputValue.trim();
-	if (q.length === 0) {
-		return prs.map((pr) => ({
-			pr,
-			repoName: repoMap.get(pr.repositoryId)?.fullName ?? "",
-			score: 0,
-		}));
-	}
-	return prs
-		.map((pr) => ({ pr, repoName: repoMap.get(pr.repositoryId)?.fullName ?? "", score: scorePr(pr, q) }))
-		.filter((r) => r.score >= 0)
-		.sort((a, b) => b.score - a.score);
+  if (mode !== "search") return [];
+  const prs = getPullRequests();
+  const q = inputValue.trim();
+  if (q.length === 0) {
+    return prs.map((pr) => ({
+      pr,
+      repoName: repoMap.get(pr.repositoryId)?.fullName ?? "",
+      score: 0,
+    }));
+  }
+  return prs
+    .map((pr) => ({
+      pr,
+      repoName: repoMap.get(pr.repositoryId)?.fullName ?? "",
+      score: scorePr(pr, q),
+    }))
+    .filter((r) => r.score >= 0)
+    .sort((a, b) => b.score - a.score);
 });
 
 const archivedResults = $derived.by((): PrResult[] => {
-	if (mode !== "search") return [];
-	const prs = getArchivedPrs();
-	const q = inputValue.trim();
-	if (q.length === 0) {
-		return prs.map((pr) => ({
-			pr,
-			repoName: repoMap.get(pr.repositoryId)?.fullName ?? "",
-			score: 0,
-		}));
-	}
-	return prs
-		.map((pr) => ({ pr, repoName: repoMap.get(pr.repositoryId)?.fullName ?? "", score: scorePr(pr, q) }))
-		.filter((r) => r.score >= 0)
-		.sort((a, b) => b.score - a.score);
+  if (mode !== "search") return [];
+  const prs = getArchivedPrs();
+  const q = inputValue.trim();
+  if (q.length === 0) {
+    return prs.map((pr) => ({
+      pr,
+      repoName: repoMap.get(pr.repositoryId)?.fullName ?? "",
+      score: 0,
+    }));
+  }
+  return prs
+    .map((pr) => ({
+      pr,
+      repoName: repoMap.get(pr.repositoryId)?.fullName ?? "",
+      score: scorePr(pr, q),
+    }))
+    .filter((r) => r.score >= 0)
+    .sort((a, b) => b.score - a.score);
 });
 
 type FlatItem =
-	| { kind: "header"; label: string }
-	| { kind: "pr"; result: PrResult; section: "open" | "archived" };
+  | { kind: "header"; label: string }
+  | { kind: "pr"; result: PrResult; section: "open" | "archived" };
 
 const flatItems = $derived.by((): FlatItem[] => {
-	const items: FlatItem[] = [];
-	if (openResults.length > 0) {
-		items.push({ kind: "header", label: "Open pull requests" });
-		for (const r of openResults) items.push({ kind: "pr", result: r, section: "open" });
-	}
-	if (archivedResults.length > 0) {
-		items.push({ kind: "header", label: "Archived pull requests" });
-		for (const r of archivedResults) items.push({ kind: "pr", result: r, section: "archived" });
-	}
-	return items;
+  const items: FlatItem[] = [];
+  if (openResults.length > 0) {
+    items.push({ kind: "header", label: "Open pull requests" });
+    for (const r of openResults) items.push({ kind: "pr", result: r, section: "open" });
+  }
+  if (archivedResults.length > 0) {
+    items.push({ kind: "header", label: "Archived pull requests" });
+    for (const r of archivedResults) items.push({ kind: "pr", result: r, section: "archived" });
+  }
+  return items;
 });
 
 const commands = $derived(mode === "command" ? getFilteredCommands() : []);
@@ -125,120 +128,120 @@ const commands = $derived(mode === "command" ? getFilteredCommands() : []);
 // ── Selection helpers ────────────────────────────────
 
 function nextSelectable(start: number, direction: 1 | -1): number {
-	const items = flatItems;
-	if (items.length === 0) return 0;
-	let i = start;
-	let loops = 0;
-	while (loops < items.length) {
-		i = (i + direction + items.length) % items.length;
-		if (items[i]?.kind === "pr") return i;
-		loops++;
-	}
-	return start;
+  const items = flatItems;
+  if (items.length === 0) return 0;
+  let i = start;
+  let loops = 0;
+  while (loops < items.length) {
+    i = (i + direction + items.length) % items.length;
+    if (items[i]?.kind === "pr") return i;
+    loops++;
+  }
+  return start;
 }
 
 // ── Reset on open/mode change ────────────────────────
 
 $effect(() => {
-	if (open) {
-		if (mode === "command") {
-			inputValue = ">";
-			setCommandQuery("");
-		} else {
-			inputValue = "";
-			resetQuery();
-		}
+  if (open) {
+    if (mode === "command") {
+      inputValue = ">";
+      setCommandQuery("");
+    } else {
+      inputValue = "";
+      resetQuery();
+    }
 
-		// Focus input on next tick
-		requestAnimationFrame(() => inputEl?.focus());
+    // Focus input on next tick
+    requestAnimationFrame(() => inputEl?.focus());
 
-		// Land selection on first selectable PR row
-		selectedFlatIndex = untrack(() => (flatItems.length > 0 ? nextSelectable(0, 1) : 0));
-	}
+    // Land selection on first selectable PR row
+    selectedFlatIndex = untrack(() => (flatItems.length > 0 ? nextSelectable(0, 1) : 0));
+  }
 });
 
 // Clamp selection when the flat list shrinks
 $effect(() => {
-	const items = flatItems;
-	if (items.length > 0 && items[selectedFlatIndex]?.kind !== "pr") {
-		selectedFlatIndex = nextSelectable(selectedFlatIndex, -1);
-	}
+  const items = flatItems;
+  if (items.length > 0 && items[selectedFlatIndex]?.kind !== "pr") {
+    selectedFlatIndex = nextSelectable(selectedFlatIndex, -1);
+  }
 });
 
 // ── Keyboard navigation ──────────────────────────────
 
 function handleKeydown(e: KeyboardEvent) {
-	if (e.key === "Escape") {
-		e.preventDefault();
-		onClose();
-		return;
-	}
+  if (e.key === "Escape") {
+    e.preventDefault();
+    onClose();
+    return;
+  }
 
-	if (e.key === "ArrowDown") {
-		e.preventDefault();
-		if (mode === "search" && flatItems.length > 0) {
-			selectedFlatIndex = nextSelectable(selectedFlatIndex, 1);
-			scrollToSelected();
-		} else if (mode === "command" && commands.length > 0) {
-			selectedFlatIndex = (selectedFlatIndex + 1) % commands.length;
-			scrollToSelected();
-		}
-		return;
-	}
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    if (mode === "search" && flatItems.length > 0) {
+      selectedFlatIndex = nextSelectable(selectedFlatIndex, 1);
+      scrollToSelected();
+    } else if (mode === "command" && commands.length > 0) {
+      selectedFlatIndex = (selectedFlatIndex + 1) % commands.length;
+      scrollToSelected();
+    }
+    return;
+  }
 
-	if (e.key === "ArrowUp") {
-		e.preventDefault();
-		if (mode === "search" && flatItems.length > 0) {
-			selectedFlatIndex = nextSelectable(selectedFlatIndex, -1);
-			scrollToSelected();
-		} else if (mode === "command" && commands.length > 0) {
-			selectedFlatIndex = (selectedFlatIndex - 1 + commands.length) % commands.length;
-			scrollToSelected();
-		}
-		return;
-	}
+  if (e.key === "ArrowUp") {
+    e.preventDefault();
+    if (mode === "search" && flatItems.length > 0) {
+      selectedFlatIndex = nextSelectable(selectedFlatIndex, -1);
+      scrollToSelected();
+    } else if (mode === "command" && commands.length > 0) {
+      selectedFlatIndex = (selectedFlatIndex - 1 + commands.length) % commands.length;
+      scrollToSelected();
+    }
+    return;
+  }
 
-	if (e.key === "Enter") {
-		e.preventDefault();
-		executeSelected();
-		return;
-	}
+  if (e.key === "Enter") {
+    e.preventDefault();
+    executeSelected();
+    return;
+  }
 }
 
 function scrollToSelected() {
-	requestAnimationFrame(() => {
-		const item = listEl?.querySelector(`[data-flat-index="${selectedFlatIndex}"]`);
-		item?.scrollIntoView({ block: "nearest" });
-	});
+  requestAnimationFrame(() => {
+    const item = listEl?.querySelector(`[data-flat-index="${selectedFlatIndex}"]`);
+    item?.scrollIntoView({ block: "nearest" });
+  });
 }
 
 function executeSelected() {
-	if (mode === "search") {
-		const item = flatItems[selectedFlatIndex];
-		if (item?.kind === "pr") {
-			onClose();
-			// Mirror `PrItem.handleClick`: navigating to a PR through the
-			// palette must also swipe the sidebar into files view, otherwise
-			// the header renders the prs-mode "PULL REQUESTS" label while
-			// the body is showing the files pane (desynced — the user sees
-			// a file tree under a "Pull Requests" header). Driving both
-			// `selectedPrId` and `sidebarView` together keeps header +
-			// body in lockstep regardless of the entry point.
-			selectPr(item.result.pr.id);
-			setSidebarView("files");
-		}
-	} else {
-		const cmd = commands[selectedFlatIndex];
-		if (cmd) {
-			onClose();
-			cmd.action();
-		}
-	}
+  if (mode === "search") {
+    const item = flatItems[selectedFlatIndex];
+    if (item?.kind === "pr") {
+      onClose();
+      // Mirror `PrItem.handleClick`: navigating to a PR through the
+      // palette must also swipe the sidebar into files view, otherwise
+      // the header renders the prs-mode "PULL REQUESTS" label while
+      // the body is showing the files pane (desynced — the user sees
+      // a file tree under a "Pull Requests" header). Driving both
+      // `selectedPrId` and `sidebarView` together keeps header +
+      // body in lockstep regardless of the entry point.
+      selectPr(item.result.pr.id);
+      setSidebarView("files");
+    }
+  } else {
+    const cmd = commands[selectedFlatIndex];
+    if (cmd) {
+      onClose();
+      cmd.action();
+    }
+  }
 }
 
 function handleItemClick(flatIndex: number) {
-	selectedFlatIndex = flatIndex;
-	executeSelected();
+  selectedFlatIndex = flatIndex;
+  executeSelected();
 }
 </script>
 

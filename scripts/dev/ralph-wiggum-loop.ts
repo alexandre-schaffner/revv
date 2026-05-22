@@ -118,16 +118,15 @@ const CONFIRMERS: Record<string, (content: string) => boolean> = {
     (src.includes("api.${host}") || src.includes("githubHost")),
 
   // US-004: path validation in RepoClone
-  "US-004": (src) =>
-    src.includes("runGitCapture") && !src.includes("assertSafePath"),
+  "US-004": (src) => src.includes("runGitCapture") && !src.includes("assertSafePath"),
 
   // US-005: WS unresolved account
   "US-005": (src) => src.includes('accountId = "unresolved"'),
 
   // US-006: Error sanitization
   "US-006": (src) =>
-    src.includes('return { error: message }') &&
-    src.includes('const message = e instanceof Error ? e.message'),
+    src.includes("return { error: message }") &&
+    src.includes("const message = e instanceof Error ? e.message"),
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -181,7 +180,7 @@ const FIXERS: Record<string, (src: string) => string | null> = {
 
   // US-006: Sanitize unknown error responses
   "US-006": (src) => {
-    if (!src.includes('return { error: message }')) return null;
+    if (!src.includes("return { error: message }")) return null;
     return src.replace(
       /\/\/ Unknown error.*?logError\("handleAppError", "unhandled error:", message\);[\s\S]*?return \{ error: message \};/,
       `// Unknown error — log full details server-side, return generic message to client.
@@ -224,7 +223,9 @@ async function verifyTypecheckOnFile(filePath: string): Promise<boolean> {
 
   // If tsc exited non-zero but not due to our file, that's a pre-existing issue — warn but don't fail
   if (proc.exitCode !== 0) {
-    console.log(`  ⚠️  Typecheck exited non-zero, but no errors in ${filePath} (pre-existing issues in other files).`);
+    console.log(
+      `  ⚠️  Typecheck exited non-zero, but no errors in ${filePath} (pre-existing issues in other files).`,
+    );
   }
   return true;
 }
@@ -306,7 +307,12 @@ async function main() {
     }
 
     const diff = computeDiff(original, modified);
-    console.log(`  📝 Diff preview:\n${diff.split("\n").map((l) => "     " + l).join("\n")}\n`);
+    console.log(
+      `  📝 Diff preview:\n${diff
+        .split("\n")
+        .map((l) => "     " + l)
+        .join("\n")}\n`,
+    );
 
     await writeSrcFile(targetFile, modified);
     modifiedFiles.add(targetFile);

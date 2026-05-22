@@ -1,7 +1,7 @@
 <script lang="ts">
-import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
 import { DIFFS_TAG_NAME, FileDiff, type FileDiffOptions, parsePatchFiles } from "@pierre/diffs";
 import type { DiffBlock } from "@revv/shared";
+import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
 import { jumpToDiffLine } from "$lib/stores/review.svelte";
 import { renderMarkdown } from "$lib/utils/markdown";
@@ -29,9 +29,6 @@ const targetLine = $derived.by(() => {
 let instance: FileDiff<never> | null = null;
 
 function mountDiffBlock(el: HTMLDivElement) {
-  // These options must match the SSR options in
-  // apps/server/src/routes/reviews/handlers/walkthrough-stream.ts
-  // (WALKTHROUGH_DIFF_SSR_OPTIONS). Drift breaks hydration.
   const options: FileDiffOptions<never> = {
     diffStyle: "unified",
     theme: { dark: "pierre-dark", light: "pierre-light" },

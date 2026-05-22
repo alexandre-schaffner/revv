@@ -1,9 +1,9 @@
 <script lang="ts">
-import Check from "phosphor-svelte/lib/Check";
 import ChevronDown from "phosphor-svelte/lib/CaretDown";
-import Loader2 from "phosphor-svelte/lib/Spinner";
-import LogOut from "phosphor-svelte/lib/SignOut";
+import Check from "phosphor-svelte/lib/Check";
 import Settings from "phosphor-svelte/lib/Gear";
+import LogOut from "phosphor-svelte/lib/SignOut";
+import Loader2 from "phosphor-svelte/lib/Spinner";
 import User from "phosphor-svelte/lib/User";
 import {
   Content as PopoverContent,

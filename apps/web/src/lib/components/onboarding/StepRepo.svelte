@@ -1,6 +1,6 @@
 <script lang="ts">
-import ChevronLeft from "phosphor-svelte/lib/CaretLeft";
 import type { Repository } from "@revv/shared";
+import ChevronLeft from "phosphor-svelte/lib/CaretLeft";
 import { untrack } from "svelte";
 import { toast } from "svelte-sonner";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";

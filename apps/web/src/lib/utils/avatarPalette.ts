@@ -21,19 +21,10 @@ export function fallbackOwnerHue(repoFullName: string): number {
   return hashString(owner) % 360;
 }
 
-export type OwnerPalette =
-  | { kind: "color"; hue: number }
-  | { kind: "neutral"; lightness: number };
+export type OwnerPalette = { kind: "color"; hue: number } | { kind: "neutral"; lightness: number };
 
 export function fallbackOwnerPalette(repoFullName: string): OwnerPalette {
   return { kind: "color", hue: fallbackOwnerHue(repoFullName) };
-}
-
-/** Return the already-resolved hue for an avatar source, or undefined. */
-export function peekOwnerHue(src: string): number | undefined {
-  if (typeof document === "undefined") return undefined;
-  const palette = sessionPaletteCache.get(src);
-  return palette?.kind === "color" ? palette.hue : undefined;
 }
 
 /** Return the already-resolved palette for an avatar source, or undefined. */
@@ -216,17 +207,6 @@ export function ownerPaletteFromAvatar(
   pendingLoads.set(src, promise);
   promise.finally(() => pendingLoads.delete(src));
   return promise;
-}
-
-export function ownerHueFromAvatar(src: string): Promise<number>;
-export function ownerHueFromAvatar(src: string, fallbackHue: number): Promise<number>;
-export function ownerHueFromAvatar(
-  src: string,
-  fallbackHue = hashString(src) % 360,
-): Promise<number> {
-  return ownerPaletteFromAvatar(src, { kind: "color", hue: fallbackHue }).then((palette) =>
-    palette.kind === "color" ? palette.hue : fallbackHue,
-  );
 }
 
 export function clearOwnerHueCache(): void {

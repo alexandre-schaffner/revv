@@ -34,17 +34,3 @@ export function exec(
     );
   });
 }
-
-/** Run a command, return stdout lines (trimmed, empty lines filtered). */
-export async function execLines(
-  cmd: string,
-  args: string[] = [],
-  options?: { cwd?: string; timeout?: number },
-): Promise<string[]> {
-  const result = await exec(cmd, args, options);
-  if (result.code !== 0) return [];
-  return result.stdout
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean);
-}

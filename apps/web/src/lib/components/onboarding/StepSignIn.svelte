@@ -1,10 +1,17 @@
 <script lang="ts">
-import Check from "phosphor-svelte/lib/Check";
 import ChevronLeft from "phosphor-svelte/lib/CaretLeft";
+import Check from "phosphor-svelte/lib/Check";
 import Copy from "phosphor-svelte/lib/Copy";
 import { onMount } from "svelte";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
-import * as auth from "$lib/stores/auth.svelte";
+import {
+  cancelSignIn,
+  clearError,
+  getDeviceFlow,
+  getError,
+  getIsLoading,
+  signIn,
+} from "$lib/stores/auth.svelte";
 
 interface Props {
   onBack?: () => void;
@@ -16,15 +23,15 @@ let { onBack, githubHost = "github.com" }: Props = $props();
 const isGhe = $derived(githubHost !== "github.com");
 const hostLabel = $derived(isGhe ? githubHost : "GitHub");
 
-const error = $derived(auth.getError());
-const deviceFlow = $derived(auth.getDeviceFlow());
-const isLoading = $derived(auth.getIsLoading());
+const error = $derived(getError());
+const deviceFlow = $derived(getDeviceFlow());
+const isLoading = $derived(getIsLoading());
 
 let copied = $state(false);
 
 onMount(() => {
-  auth.cancelSignIn();
-  auth.clearError();
+  cancelSignIn();
+  clearError();
 });
 
 async function copyCode() {
@@ -82,7 +89,7 @@ async function copyCode() {
 			<div class="waiting">
 				<Dotmatrix variant="square-13" size="small" />
 				<span class="waiting-text">Awaiting authorization</span>
-				<button class="cancel" onclick={auth.cancelSignIn}>Cancel</button>
+				<button class="cancel" onclick={cancelSignIn}>Cancel</button>
 			</div>
 		</div>
 	{:else}
@@ -97,7 +104,7 @@ async function copyCode() {
 			</p>
 
 			<div class="actions">
-				<button class="primary" onclick={() => auth.signIn(isGhe ? githubHost : undefined)} disabled={isLoading}>
+				<button class="primary" onclick={() => signIn(isGhe ? githubHost : undefined)} disabled={isLoading}>
 					<span>{isLoading ? `Opening ${hostLabel}…` : `Sign in with ${hostLabel}`}</span>
 					{#if !isLoading}
 						<svg

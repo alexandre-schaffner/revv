@@ -69,10 +69,6 @@ export function getAnchorLineIndex(): number | null {
   return anchorLineIndex;
 }
 
-export function getAnchorSide(): "additions" | "deletions" | null {
-  return anchorSide;
-}
-
 export function getTotalLineCount(): number {
   return totalLineCount;
 }

@@ -5,11 +5,9 @@ import UserMenu from "$lib/components/sidebar/UserMenu.svelte";
 import { RAIL_WIDTH } from "$lib/constants";
 import { getSelectedPr } from "$lib/stores/prs.svelte";
 import {
-  consumePanelOpenRequest,
   getActiveTab,
   getIsPullingCommit,
   getLoadedHeadSha,
-  getPanelOpenRequested,
   getReviewFiles,
   pullLatestCommit,
   setActiveTab,
@@ -105,14 +103,6 @@ let dragStartWidth = 0;
 let isResizingRight = $state(false);
 let rightDragStartX = 0;
 let rightDragStartWidth = 0;
-
-// Auto-open panel when explain is triggered from the review store
-$effect(() => {
-  if (getPanelOpenRequested()) {
-    setRightPanelOpen(true);
-    consumePanelOpenRequest();
-  }
-});
 
 // Close the chat panel when navigating away from a PR page
 $effect(() => {

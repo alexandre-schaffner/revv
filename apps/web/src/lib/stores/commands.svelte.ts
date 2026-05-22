@@ -133,10 +133,6 @@ export function getFilteredCommands(): Command[] {
   return filteredCommands;
 }
 
-export function getQuery(): string {
-  return query;
-}
-
 export function setQuery(q: string): void {
   query = q;
 }

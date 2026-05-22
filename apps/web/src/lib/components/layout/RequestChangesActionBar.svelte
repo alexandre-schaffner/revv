@@ -1,10 +1,10 @@
 <script lang="ts">
 import ArrowUp from "phosphor-svelte/lib/ArrowUp";
-import Check from "phosphor-svelte/lib/Check";
 import ChevronDown from "phosphor-svelte/lib/CaretDown";
-import FileEdit from "phosphor-svelte/lib/PencilSimple";
+import Check from "phosphor-svelte/lib/Check";
 import GitMerge from "phosphor-svelte/lib/GitMerge";
 import Send from "phosphor-svelte/lib/PaperPlaneRight";
+import FileEdit from "phosphor-svelte/lib/PencilSimple";
 import Sparkles from "phosphor-svelte/lib/Sparkle";
 import XCircle from "phosphor-svelte/lib/XCircle";
 import { Shimmer } from "$lib/components/ai/shimmer";

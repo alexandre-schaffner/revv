@@ -39,7 +39,7 @@
 // commits 83087451 / d9c78713).
 
 import { resolve } from "node:path";
-import { createOpencodeClient, type OpencodeClient, type Part } from "@opencode-ai/sdk/v2";
+import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk/v2";
 import type { UserSettings } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
 import { Context, Effect, Fiber, Layer, Ref, Stream } from "effect";
@@ -67,9 +67,7 @@ export interface OpencodeEndpoint {
 
 export type OpencodeError = AiError;
 
-// Re-export the SDK's typed Part union so the rest of the codebase can import
-// it from one place without depending on the SDK's deep subpaths directly.
-export type { OpencodeClient, Part };
+export type { OpencodeClient };
 
 // ── Service tag ──────────────────────────────────────────────────────────────
 
@@ -836,7 +834,10 @@ export const OpencodeSupervisorLive = Layer.effect(
         );
         const s0 = yield* Ref.get(stateRef);
         if (settings && !isOpencodeNeeded(settings) && s0.running) {
-          debug("opencode-supervisor", `opencode no longer needed by any feature — stopping daemon`);
+          debug(
+            "opencode-supervisor",
+            `opencode no longer needed by any feature — stopping daemon`,
+          );
           yield* stopNow();
         }
         yield* clearIdleTimer();

@@ -1,6 +1,6 @@
 <script lang="ts">
-import ChevronDown from "phosphor-svelte/lib/CaretDown";
 import type { WalkthroughBlock, WalkthroughSemanticStep } from "@revv/shared";
+import ChevronDown from "phosphor-svelte/lib/CaretDown";
 import { renderMarkdown } from "$lib/utils/markdown";
 import WalkthroughCodeBlock from "./WalkthroughCodeBlock.svelte";
 import WalkthroughDiffBlock from "./WalkthroughDiffBlock.svelte";
