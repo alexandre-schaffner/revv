@@ -1,16 +1,17 @@
 <script lang="ts">
 import type { Snippet } from "svelte";
 
-export type TabConfig = { id: string; label: string };
+export type TabConfig = { id: string; label: string; shortcut?: string };
 
 interface Props {
   tabs: TabConfig[];
   activeTab: string;
   onTabChange: (tab: string) => void;
   trailing?: Snippet;
+  cmdHeld?: boolean;
 }
 
-let { tabs, activeTab, onTabChange, trailing }: Props = $props();
+let { tabs, activeTab, onTabChange, trailing, cmdHeld = false }: Props = $props();
 
 let pillEl: HTMLDivElement | null = $state(null);
 let segmentEls = $state<(HTMLButtonElement | null)[]>([]);
@@ -83,7 +84,7 @@ function isDividerHidden(index: number): boolean {
 				onpointerleave={() => {
 					if (hoveredIndex === i) hoveredIndex = null;
 				}}
-			>{tab.label}</button>
+>{#if tab.shortcut}<span class="seg-shortcut" class:seg-shortcut--visible={cmdHeld}>⌘{tab.shortcut}</span>{/if}<span class="seg-label">{tab.label}</span></button>
 			{#if i < tabs.length - 1}
 				<span
 					class="pill-divider"
@@ -203,6 +204,27 @@ function isDividerHidden(index: number): boolean {
 
 	.pill-divider--hidden {
 		opacity: 0;
+	}
+
+	.seg-shortcut {
+		display: inline-block;
+		font-size: 11px;
+		font-weight: 400;
+		font-variant-numeric: tabular-nums;
+		color: var(--color-tab-inactive-text);
+		opacity: 0;
+		max-width: 0;
+		overflow: hidden;
+		transition:
+			opacity var(--duration-snap),
+			max-width var(--duration-snap),
+			margin-left var(--duration-snap);
+	}
+
+	.seg-shortcut--visible {
+		opacity: 0.45;
+		max-width: 22px;
+		margin-right: 5px;
 	}
 
 	@media (prefers-reduced-motion: reduce) {
