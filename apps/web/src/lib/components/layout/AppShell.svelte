@@ -117,7 +117,7 @@ $effect(() => {
 // than overlaying on top of it. Animation comes from the
 // grid-template-columns transition on .app-shell.
 const gridStyle = $derived(
-  `grid-template-columns: ${RAIL_WIDTH}px ${sidebarEffectiveCollapsed ? "0" : `${sidebarWidth}px`} 1fr ${rightPanelOpen ? `${rightPanelWidth}px` : "0"}`,
+  `grid-template-columns: ${RAIL_WIDTH}px ${sidebarEffectiveCollapsed ? "0" : `${sidebarWidth}px`} 1fr ${rightPanelOpen ? `${rightPanelWidth}px` : "0"}; --right-panel-width: ${rightPanelWidth}px`,
 );
 
 function onHandlePointerDown(event: PointerEvent): void {
@@ -182,6 +182,7 @@ function onRightHandleDblClick(): void {
 	class:sidebar-collapsed={sidebarEffectiveCollapsed}
 	class:is-resizing={isDragging || isResizingRight}
 	class:snap-sidebar-layout={shouldSnapSidebarLayout}
+	class:rightpanel-open={rightPanelOpen}
 	style={gridStyle}
 >
 	<aside class="rail-area">
@@ -395,6 +396,27 @@ function onRightHandleDblClick(): void {
 			0 8px 24px -12px color-mix(in srgb, black 10%, transparent);
 	}
 
+	/* Right-edge vignette that fades in when the panel opens, softening the
+	   hard clip as the main area loses width to the panel. GPU-composited
+	   (opacity only), so it doesn't affect layout or cause reflow. */
+	.main-area::after {
+		content: '';
+		position: absolute;
+		top: 0;
+		right: 0;
+		bottom: 0;
+		width: calc(var(--spacing-island) * 4);
+		background: linear-gradient(to right, transparent, var(--color-bg-primary));
+		opacity: 0;
+		pointer-events: none;
+		z-index: 2;
+		transition: opacity var(--duration-smooth) var(--ease-out-expo);
+	}
+
+	.rightpanel-open .main-area::after {
+		opacity: 0.65;
+	}
+
 	/* Tabs float over content — no background, no flex space reservation.
 	   The pill already has backdrop-filter so content scrolling beneath
 	   shows through naturally. pointer-events passthrough on the wrapper
@@ -481,10 +503,12 @@ function onRightHandleDblClick(): void {
 		/* min-width: 0 lets the grid track shrink to 0 even though the
 		   border-box would otherwise contribute its own min-content. */
 		min-width: 0;
-		/* Border + shadow fade in sync with the grid-column open/close
-		   animation so the chrome doesn't flash a borderless panel
-		   mid-transition. */
+		/* Slide in/out from the right rather than growing in place. The
+		   translateX is keyed to --right-panel-width so it always moves
+		   the full panel width regardless of the current grid column value. */
+		transform: translateX(0);
 		transition:
+			transform var(--duration-smooth) var(--ease-out-expo),
 			border-color var(--duration-smooth) var(--ease-out-expo),
 			box-shadow var(--duration-smooth) var(--ease-out-expo);
 	}
@@ -496,10 +520,12 @@ function onRightHandleDblClick(): void {
 			0 8px 24px -12px color-mix(in srgb, black 50%, transparent);
 	}
 
-	/* When closed, the grid column collapses to 0 and the cell has no
-	   visible width; hide the border + shadow that would otherwise
-	   render as a sliver against the chrome's right edge. */
+	/* When closed: slide the panel off to the right so it enters/exits
+	   from outside the viewport rather than growing in place. The
+	   --right-panel-width CSS var (set via inline style on .app-shell)
+	   provides the fixed pixel offset regardless of column width. */
 	.rightpanel-area:not(.rightpanel-area--open) {
+		transform: translateX(var(--right-panel-width));
 		border-color: transparent;
 		box-shadow: none;
 	}
