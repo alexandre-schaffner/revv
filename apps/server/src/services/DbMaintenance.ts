@@ -1,10 +1,11 @@
-import { lt, sql } from "drizzle-orm";
+import { and, inArray, isNotNull, lt, sql } from "drizzle-orm";
 import { Context, Duration, Effect, Fiber, Layer, Ref, Schedule } from "effect";
-import { cacheEntries, kvCache } from "../db/schema/index";
+import { cacheEntries, kvCache, pullRequests } from "../db/schema/index";
 import { logError } from "../logger";
 import { DbService } from "./Db";
 
 const SWEEP_INTERVAL_HOURS = 6;
+const PR_RETENTION_DAYS = 7;
 
 type DbMaintenanceService = {
   readonly start: () => Effect.Effect<void>;
@@ -24,6 +25,9 @@ export const DbMaintenanceLive = Layer.effect(
 
     const runMaintenance: Effect.Effect<void> = Effect.sync(() => {
       const nowIso = new Date().toISOString();
+      const prCutoffIso = new Date(
+        Date.now() - PR_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+      ).toISOString();
 
       // 1. Sweep expired cache_entries rows
       const expiredCacheEntries = db
@@ -47,14 +51,32 @@ export const DbMaintenanceLive = Layer.effect(
         db.delete(kvCache).where(lt(kvCache.expiresAt, nowIso)).run();
       }
 
-      // 3. Checkpoint WAL to reclaim disk space from the WAL file
+      // 3. Sweep archived PRs older than the retention window. Cascades clean
+      // walkthroughs, review sessions, chat sessions, diff files, and pinned
+      // rows via the schema's onDelete: "cascade" declarations.
+      const expiredPrsPredicate = and(
+        inArray(pullRequests.status, ["closed", "merged"]),
+        isNotNull(pullRequests.closedAt),
+        lt(pullRequests.closedAt, prCutoffIso),
+      );
+      const expiredPrs = db
+        .select({ n: sql<number>`COUNT(*)` })
+        .from(pullRequests)
+        .where(expiredPrsPredicate)
+        .get();
+      const prsSwept = expiredPrs?.n ?? 0;
+      if (prsSwept > 0) {
+        db.delete(pullRequests).where(expiredPrsPredicate).run();
+      }
+
+      // 4. Checkpoint WAL to reclaim disk space from the WAL file
       db.run(sql`PRAGMA wal_checkpoint(TRUNCATE)`);
 
-      const total = cacheEntriesSwept + kvSwept;
+      const total = cacheEntriesSwept + kvSwept + prsSwept;
       if (total > 0) {
         logError(
           "DbMaintenance",
-          `sweep complete — cache_entries: ${cacheEntriesSwept} rows, kv_cache: ${kvSwept} rows, WAL checkpointed`,
+          `sweep complete — cache_entries: ${cacheEntriesSwept} rows, kv_cache: ${kvSwept} rows, pull_requests: ${prsSwept} rows, WAL checkpointed`,
         );
       }
     }).pipe(
