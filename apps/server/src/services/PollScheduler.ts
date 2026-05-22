@@ -457,6 +457,108 @@ export const PollSchedulerLive = Layer.effect(
           }
         }
 
+        // ── Archive backfill ─────────────────────────────────────────────────
+        // Catch closed/merged PRs that never made it into the local mirror —
+        // e.g. closed before the user added the repo to Revv, or while the
+        // server was offline for longer than one poll interval. Bounded to
+        // the same 7-day window the DbMaintenance sweep uses for retention,
+        // so the local archive converges on "last week of activity" from
+        // GitHub. Per-repo fetch cap defends against bursty repos. Failures
+        // are non-fatal — we degrade silently to whatever the local mirror
+        // already has.
+        const ARCHIVE_BACKFILL_DAYS = 7;
+        const ARCHIVE_BACKFILL_MAX_FETCHES_PER_REPO = 25;
+        const backfillSinceIso = new Date(
+          Date.now() - ARCHIVE_BACKFILL_DAYS * 24 * 60 * 60 * 1000,
+        ).toISOString();
+        const backfillUntilIso = new Date().toISOString();
+
+        const existingExternalIdsByRepo = new Map<string, Set<number>>();
+        for (const pr of existingPrs) {
+          let set = existingExternalIdsByRepo.get(pr.repositoryId);
+          if (!set) {
+            set = new Set<number>();
+            existingExternalIdsByRepo.set(pr.repositoryId, set);
+          }
+          set.add(pr.externalId);
+        }
+
+        yield* Effect.forEach(
+          allRepos,
+          (repo) =>
+            Effect.gen(function* () {
+              const acc = accountForRepo(repo.id);
+              const token = acc?.accessToken ?? "";
+              if (!token) return;
+
+              const searched = yield* github
+                .searchClosedPrsInWindow(repo.fullName, backfillSinceIso, backfillUntilIso, token)
+                .pipe(
+                  Effect.tapError((err) =>
+                    Effect.sync(() => {
+                      logError(
+                        "PollScheduler",
+                        `archive backfill search failed for ${repo.fullName}:`,
+                        err,
+                      );
+                    }),
+                  ),
+                  Effect.catchAll(() =>
+                    Effect.succeed(
+                      [] as ReadonlyArray<{
+                        readonly number: number;
+                        readonly closedAt: string;
+                        readonly merged: boolean;
+                      }>,
+                    ),
+                  ),
+                );
+              if (searched.length === 0) return;
+
+              const known = existingExternalIdsByRepo.get(repo.id) ?? new Set<number>();
+              const missing = searched
+                .filter((s) => !known.has(s.number))
+                .slice(0, ARCHIVE_BACKFILL_MAX_FETCHES_PER_REPO);
+              if (missing.length === 0) return;
+
+              const fetched = yield* Effect.forEach(
+                missing,
+                (m) =>
+                  github
+                    .getPr(repo.fullName, m.number, token)
+                    .pipe(Effect.catchAll(() => Effect.succeed(null))),
+                { concurrency: 3 },
+              );
+
+              // Repoint every fetched row at our local repo id — `getPr`
+              // derives `id` and `repositoryId` from `${owner}/${repo}` because
+              // it doesn't know the local row id. Matches the recap-jobs
+              // backfill (see ProjectRecapJobs.backfillMissingPrs).
+              const upsertable = fetched
+                .filter((pr): pr is NonNullable<typeof pr> => pr !== null)
+                .map((pr) => ({
+                  ...pr,
+                  id: `${repo.id}:${pr.externalId}`,
+                  repositoryId: repo.id,
+                }));
+              if (upsertable.length === 0) return;
+
+              yield* withDb(prService.upsertPrs(upsertable)).pipe(
+                Effect.tapError((err) =>
+                  Effect.sync(() => {
+                    logError(
+                      "PollScheduler",
+                      `archive backfill upsert failed for ${repo.fullName}:`,
+                      err,
+                    );
+                  }),
+                ),
+                Effect.orElseSucceed(() => undefined),
+              );
+            }).pipe(Effect.orElseSucceed(() => undefined)),
+          { concurrency: 3 },
+        );
+
         // Detect PRs whose headSha or baseSha changed since last sync
         const changedPrIds = allPrs
           .filter((pr) => {
