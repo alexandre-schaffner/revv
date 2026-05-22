@@ -3,6 +3,51 @@ import { marked } from "marked";
 import remend from "remend";
 import { highlightCode } from "./code-highlight.svelte";
 
+// Block CSS resource-loading functions in inline style attributes.
+//
+// DOMPurify allows style attributes through with valid CSS intact, including
+// url() and related functions that can exfiltrate data via network requests
+// (e.g. `background: url(https://attacker.com/pixel)`).
+//
+// Two layers:
+//   1. Normalize through the browser CSS OM so that CSS unicode escapes
+//      (\75rl → url) are decoded before we test — bypasses the regex bypass.
+//   2. Drop any semicolon-delimited declaration whose value contains a
+//      resource-loading function. Filtering at declaration granularity avoids
+//      leaving broken CSS when only one declaration is dangerous.
+//
+// Shiki inline styles are color/background-color hex values only — unaffected.
+// The streaming animation writes animation-delay:Nms only — unaffected.
+const _CSS_RESOURCE_FN_RE =
+  /(?:url|image(?:-set)?|-webkit-image-set|cross-fade|-webkit-cross-fade|element|paint)\s*\(/i;
+
+DOMPurify.addHook("uponSanitizeAttribute", (_node, data) => {
+  if (data.attrName !== "style" || !data.attrValue) return;
+
+  // Fast path: shiki emits only hex color values (color:#abb2bf), and our
+  // streaming animation emits only animation-delay:Nms. Neither contains "("
+  // or "\". No CSS function call is possible without one of these characters,
+  // so we can skip the expensive DOM normalization for ~100% of real traffic.
+  //
+  // We must still normalize when "\" is present because CSS unicode escapes
+  // can encode "(" as \28, bypassing a naive includes("(") check.
+  if (!data.attrValue.includes("(") && !data.attrValue.includes("\\")) return;
+
+  // Normalize through the CSS OM so unicode escapes (\75rl\28…\29 → url(…))
+  // are decoded before we test. Falls back to the raw string outside a browser.
+  let value = data.attrValue;
+  if (typeof document !== "undefined") {
+    const tmp = document.createElement("div");
+    tmp.setAttribute("style", value);
+    value = tmp.style.cssText;
+  }
+
+  data.attrValue = value
+    .split(";")
+    .filter((decl) => !_CSS_RESOURCE_FN_RE.test(decl))
+    .join(";");
+});
+
 marked.setOptions({
   breaks: true,
   gfm: true,

@@ -78,6 +78,13 @@
       "when": 1779100000001,
       "tag": "0080_cache_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1779110000000,
+      "tag": "0090_cache_signing_secret",
+      "breakpoints": true
     }
   ]
 }

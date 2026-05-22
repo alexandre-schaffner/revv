@@ -46,6 +46,7 @@ const DEFAULT_SETTINGS: UserSettings = {
     credentialsPath: "",
     uploadsEnabled: true,
     downloadsEnabled: true,
+    signingSecret: "",
   },
 };
 
@@ -137,6 +138,10 @@ function coerceCache(value: unknown): UserSettings["cache"] {
     uploadsEnabled: r.uploadsEnabled === false ? false : DEFAULT_SETTINGS.cache.uploadsEnabled,
     downloadsEnabled:
       r.downloadsEnabled === false ? false : DEFAULT_SETTINGS.cache.downloadsEnabled,
+    signingSecret:
+      typeof r.signingSecret === "string"
+        ? r.signingSecret
+        : DEFAULT_SETTINGS.cache.signingSecret,
   };
 }
 
@@ -184,6 +189,7 @@ function toSettings(row: typeof userSettings.$inferSelect): UserSettings {
       credentialsPath: row.cacheCredentialsPath,
       uploadsEnabled: row.cacheUploadsEnabled,
       downloadsEnabled: row.cacheDownloadsEnabled,
+      signingSecret: row.cacheSigningSecret,
     },
   };
 }
@@ -212,6 +218,7 @@ function toInsert(s: UserSettings): typeof userSettings.$inferInsert {
     cacheCredentialsPath: s.cache.credentialsPath,
     cacheUploadsEnabled: s.cache.uploadsEnabled,
     cacheDownloadsEnabled: s.cache.downloadsEnabled,
+    cacheSigningSecret: s.cache.signingSecret,
     updatedAt: new Date(),
   };
 }

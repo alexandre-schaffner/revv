@@ -304,15 +304,35 @@ export function exportWalkthroughSnapshot(db: Db, params: ExportParams): Walkthr
  * Validate that a candidate snapshot satisfies every phase-output
  * contract. Used by the importer as a pre-commit gate (mirrors
  * `complete_walkthrough` from the MCP tool surface — same checks).
+ *
+ * Pass `expected` to bind the payload identity to the cache key: the
+ * snapshot's `repoFullName` and `prHeadSha` must match the key the
+ * caller used to fetch it, preventing a valid object at one key from
+ * being accepted at a different key.
  */
 export function validateSnapshot(
   s: WalkthroughSnapshotV1,
+  expected?: { repoFullName: string; prHeadSha: string },
 ): { ok: true } | { ok: false; reason: string } {
   if (s.schemaVersion !== CACHE_SCHEMA_VERSION) {
     return {
       ok: false,
       reason: `schemaVersion=${s.schemaVersion}, expected ${CACHE_SCHEMA_VERSION}`,
     };
+  }
+  if (expected !== undefined) {
+    if (s.repoFullName !== expected.repoFullName) {
+      return {
+        ok: false,
+        reason: `repoFullName mismatch: payload=${s.repoFullName} expected=${expected.repoFullName}`,
+      };
+    }
+    if (s.prHeadSha !== expected.prHeadSha) {
+      return {
+        ok: false,
+        reason: `prHeadSha mismatch: payload=${s.prHeadSha} expected=${expected.prHeadSha}`,
+      };
+    }
   }
   if (!s.summary.trim()) return { ok: false, reason: "summary empty" };
   if (!s.sentiment?.trim()) return { ok: false, reason: "sentiment empty" };

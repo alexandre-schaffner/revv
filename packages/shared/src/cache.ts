@@ -163,4 +163,14 @@ export const CACHE_METADATA_KEYS = {
   uploadedByUserId: "uploadedByUserId",
   /** Hex SHA-256 of the gzipped body. Crosschecked on download. */
   contentSha256: "contentSha256",
+  /**
+   * HMAC-SHA256(key=signingSecret, data=objectKey+gzippedBody).
+   * Binds the signature to both the GCS key and the content so that a
+   * valid object cannot be replayed at a different key. Present only
+   * when the uploader had `cache.signingSecret` configured.
+   */
+  contentHmac: "contentHmac",
 } as const;
+
+/** Maximum compressed body size accepted on fetch (50 MiB). */
+export const MAX_CACHE_BODY_BYTES = 50 * 1024 * 1024;

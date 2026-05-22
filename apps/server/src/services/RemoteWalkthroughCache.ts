@@ -15,10 +15,15 @@
 // `Option.none` and logs. From a behavior standpoint it's identical to a
 // real miss — the orchestrator falls back to running the agent.
 
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { gunzipSync, gzipSync } from "node:zlib";
 import type { WalkthroughSnapshotV1 } from "@revv/shared";
-import { CACHE_METADATA_KEYS, CACHE_SCHEMA_VERSION, cacheObjectKey } from "@revv/shared";
+import {
+  CACHE_METADATA_KEYS,
+  CACHE_SCHEMA_VERSION,
+  MAX_CACHE_BODY_BYTES,
+  cacheObjectKey,
+} from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Context, Effect, Layer, Option } from "effect";
 import type { Db } from "../db/index";
@@ -141,6 +146,15 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
 
           const { body, metadata } = record.value;
 
+          // Reject oversized bodies before decompression.
+          if (body.length > MAX_CACHE_BODY_BYTES) {
+            logError(
+              "remote-cache",
+              `body too large key=${key} bytes=${body.length} limit=${MAX_CACHE_BODY_BYTES}`,
+            );
+            return Option.none<WalkthroughSnapshotV1>();
+          }
+
           // Cross-check schemaVersion metadata before paying for gunzip.
           const advertisedVersion = metadata[CACHE_METADATA_KEYS.schemaVersion];
           if (advertisedVersion && Number(advertisedVersion) !== CACHE_SCHEMA_VERSION) {
@@ -151,7 +165,7 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
             return Option.none<WalkthroughSnapshotV1>();
           }
 
-          // contentSha256 cross-check — defensive against silent corruption.
+          // contentSha256 cross-check — detects accidental corruption.
           const advertisedSha = metadata[CACHE_METADATA_KEYS.contentSha256];
           if (advertisedSha) {
             const actualSha = createHash("sha256").update(body).digest("hex");
@@ -161,6 +175,34 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
                 `contentSha256 mismatch key=${key} advertised=${advertisedSha} actual=${actualSha}`,
               );
               return Option.none<WalkthroughSnapshotV1>();
+            }
+          }
+
+          // HMAC verification — detects intentional tampering when a signing
+          // secret is configured. The HMAC covers both the object key and the
+          // body, so a valid signature cannot be replayed at a different key.
+          const live = yield* settings
+            .getSettings()
+            .pipe(Effect.catchAll(() => Effect.succeed(null)));
+          const signingSecret = live?.cache.signingSecret ?? "";
+          const advertisedHmac = metadata[CACHE_METADATA_KEYS.contentHmac];
+          if (signingSecret) {
+            if (advertisedHmac) {
+              const expectedHmac = createHmac("sha256", signingSecret)
+                .update(key)
+                .update(body)
+                .digest("hex");
+              if (expectedHmac !== advertisedHmac) {
+                logError("remote-cache", `contentHmac mismatch key=${key} — rejecting`);
+                return Option.none<WalkthroughSnapshotV1>();
+              }
+            } else {
+              // Object predates HMAC signing — allow but warn so operators
+              // know the entry is unverified.
+              logError(
+                "remote-cache",
+                `contentHmac absent key=${key} — accepting legacy entry (signingSecret is set)`,
+              );
             }
           }
 
@@ -176,7 +218,9 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
             return Option.none<WalkthroughSnapshotV1>();
           }
 
-          const v = validateSnapshot(parsed);
+          // Bind payload identity to the cache key — prevents a valid signed
+          // object from being accepted at a different key.
+          const v = validateSnapshot(parsed, { repoFullName, prHeadSha: headSha });
           if (!v.ok) {
             logError("remote-cache", `validation failed key=${key}: ${v.reason}`);
             return Option.none<WalkthroughSnapshotV1>();
@@ -249,13 +293,29 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
             .pipe(Effect.mapError((e) => new CacheUnavailable({ message: e.message })));
 
           const key = cacheObjectKey(repoFullName, snapshot.prHeadSha);
+
+          const uploadMeta: Record<string, string> = {
+            [CACHE_METADATA_KEYS.schemaVersion]: String(CACHE_SCHEMA_VERSION),
+            [CACHE_METADATA_KEYS.modelUsed]: snapshot.modelUsed,
+            [CACHE_METADATA_KEYS.uploadedByUserId]: live.id,
+            [CACHE_METADATA_KEYS.contentSha256]: contentSha256,
+          };
+
+          // Sign when a secret is configured. The HMAC covers the object key
+          // and the body, binding the signature to both so it can't be
+          // replayed at a different bucket path.
+          if (live.cache.signingSecret) {
+            uploadMeta[CACHE_METADATA_KEYS.contentHmac] = createHmac(
+              "sha256",
+              live.cache.signingSecret,
+            )
+              .update(key)
+              .update(gz)
+              .digest("hex");
+          }
+
           yield* blob
-            .put(key, gz, {
-              [CACHE_METADATA_KEYS.schemaVersion]: String(CACHE_SCHEMA_VERSION),
-              [CACHE_METADATA_KEYS.modelUsed]: snapshot.modelUsed,
-              [CACHE_METADATA_KEYS.uploadedByUserId]: live.id,
-              [CACHE_METADATA_KEYS.contentSha256]: contentSha256,
-            })
+            .put(key, gz, uploadMeta)
             .pipe(Effect.mapError((e) => new CacheUnavailable({ message: e.message, cause: e })));
 
           debug("remote-cache", `push ok key=${key} bytes=${gz.length} sha=${contentSha256}`);

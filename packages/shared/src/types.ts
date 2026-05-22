@@ -163,6 +163,14 @@ export interface UserSettings {
     credentialsPath: string;
     uploadsEnabled: boolean;
     downloadsEnabled: boolean;
+    /**
+     * Optional HMAC-SHA256 signing secret. When set, every push signs the
+     * gzipped body + object key and stores the hex digest in `contentHmac`
+     * metadata. On fetch, a present `contentHmac` is always verified; a
+     * missing one triggers a warning (allows migrating existing cache
+     * entries without invalidating them). Empty string = feature off.
+     */
+    signingSecret: string;
   };
 }
 

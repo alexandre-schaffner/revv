@@ -47,5 +47,10 @@ export const userSettings = sqliteTable("user_settings", {
   cacheDownloadsEnabled: integer("cache_downloads_enabled", { mode: "boolean" })
     .notNull()
     .default(true),
+  /**
+   * Optional HMAC-SHA256 signing secret. Empty string disables signing.
+   * Shared out-of-band with teammates — never written to the bucket.
+   */
+  cacheSigningSecret: text("cache_signing_secret").notNull().default(""),
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
 });
