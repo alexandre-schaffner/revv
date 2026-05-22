@@ -1,7 +1,7 @@
 <script lang="ts">
-import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
 import type { Confidence, Verdict, WalkthroughBlock, WalkthroughRating } from "@revv/shared";
 import { RATING_AXIS_LABELS } from "@revv/shared";
+import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
 import * as Tooltip from "$lib/components/ui/tooltip";
 import { jumpToDiffLine } from "$lib/stores/review.svelte";

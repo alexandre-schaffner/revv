@@ -1,6 +1,6 @@
 <script lang="ts">
-import ChevronLeft from "phosphor-svelte/lib/CaretLeft";
 import type { AgentAvailability, AiAgent, InstallEvent } from "@revv/shared";
+import ChevronLeft from "phosphor-svelte/lib/CaretLeft";
 import { onDestroy, onMount } from "svelte";
 import { API_BASE_URL } from "$lib/api/base-url";
 import AnthropicIcon from "$lib/components/icons/AnthropicIcon.svelte";

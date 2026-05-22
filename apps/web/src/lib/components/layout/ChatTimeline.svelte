@@ -38,9 +38,16 @@ import { Question } from "$lib/components/ai/question";
 import { Shimmer } from "$lib/components/ai/shimmer";
 import { Suggestion, SuggestionItem } from "$lib/components/ai/suggestion";
 import type { ToolState } from "$lib/components/ai/tool";
-import { Tool, ToolActivityGroup, ToolActivityReveal, ToolContent, ToolHeader, ToolOutput } from "$lib/components/ai/tool";
-import { Dotmatrix, squareVariantForId } from "$lib/components/ui/dotmatrix/index.js";
+import {
+  Tool,
+  ToolActivityGroup,
+  ToolActivityReveal,
+  ToolContent,
+  ToolHeader,
+  ToolOutput,
+} from "$lib/components/ai/tool";
 import StreamingVerb from "$lib/components/layout/StreamingVerb.svelte";
+import { Dotmatrix, squareVariantForId } from "$lib/components/ui/dotmatrix/index.js";
 import {
   approvePlanAction,
   enqueueMessage,
@@ -60,14 +67,14 @@ import {
   getSuggestions,
   isSuggestionsLoading,
 } from "$lib/stores/suggestions.svelte";
-import { renderMarkdown } from "$lib/utils/markdown";
 import {
+  type ActivityGroupRange,
   activityGroupSummary,
   groupActivityRuns,
   isActivityGroup,
   isExplorationActivity,
-  type ActivityGroupRange,
 } from "$lib/utils/activity-groups";
+import { renderMarkdown } from "$lib/utils/markdown";
 
 const TOOL_CALL_ROW_H = 14; // px — match walkthrough's compact tool-call rows
 
@@ -121,7 +128,7 @@ const streamingTurnId = $derived(
   items.findLast(
     (i): i is Extract<typeof i, { kind: "message" }> =>
       i.kind === "message" && i.role === "assistant" && i.isStreaming,
-    )?.turnId,
+  )?.turnId,
 );
 const streamingActivities = $derived(
   streamingTurnId
@@ -133,9 +140,7 @@ const streamingActivities = $derived(
 );
 const streamingActivityEntries = $derived(groupActivityRuns(streamingActivities));
 const latestStreamingActivityEntry = $derived(streamingActivityEntries.at(-1));
-const recentToolCalls = $derived(
-  streamingActivities.slice(-2),
-);
+const recentToolCalls = $derived(streamingActivities.slice(-2));
 
 // Empty-state suggestions: prefer the model-generated, PR-aware list
 // from the suggestions store; fall back to the static prompts before

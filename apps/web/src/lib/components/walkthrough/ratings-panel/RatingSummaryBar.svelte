@@ -1,11 +1,11 @@
 <script lang="ts">
-import AlertCircle from "phosphor-svelte/lib/WarningCircle";
-import Check from "phosphor-svelte/lib/Check";
 import ChevronsDownUp from "phosphor-svelte/lib/ArrowsInLineVertical";
 import ChevronsUpDown from "phosphor-svelte/lib/ArrowsOutLineVertical";
+import Check from "phosphor-svelte/lib/Check";
 import Filter from "phosphor-svelte/lib/Funnel";
 import Loader2 from "phosphor-svelte/lib/Spinner";
 import Star from "phosphor-svelte/lib/Star";
+import AlertCircle from "phosphor-svelte/lib/WarningCircle";
 import X from "phosphor-svelte/lib/X";
 import { formatDuration } from "./format-duration";
 

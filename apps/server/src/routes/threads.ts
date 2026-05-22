@@ -216,9 +216,7 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
             const msg = yield* reviewService.addMessage(ctx.params.id, {
               authorRole: ctx.body.authorRole,
               authorName: ctx.body.authorName,
-              ...(ctx.body.authorLogin !== undefined
-                ? { authorLogin: ctx.body.authorLogin }
-                : {}),
+              ...(ctx.body.authorLogin !== undefined ? { authorLogin: ctx.body.authorLogin } : {}),
               body: ctx.body.body,
               messageType: ctx.body.messageType,
               ...(ctx.body.codeSuggestion !== undefined

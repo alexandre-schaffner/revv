@@ -1,9 +1,9 @@
 <script lang="ts">
+import RefreshCw from "phosphor-svelte/lib/ArrowsClockwise";
 import Monitor from "phosphor-svelte/lib/Desktop";
 import Moon from "phosphor-svelte/lib/Moon";
 import PanelLeftClose from "phosphor-svelte/lib/SidebarSimple";
 import PanelLeftOpen from "phosphor-svelte/lib/SidebarSimple";
-import RefreshCw from "phosphor-svelte/lib/ArrowsClockwise";
 import Sun from "phosphor-svelte/lib/Sun";
 import { fetchOrgs } from "$lib/stores/orgs.svelte";
 import { getIsLoading, getSelectedPr, getSelectedPrId } from "$lib/stores/prs.svelte";

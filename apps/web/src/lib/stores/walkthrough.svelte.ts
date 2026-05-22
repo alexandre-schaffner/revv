@@ -68,12 +68,12 @@ export interface WalkthroughEntry {
    * regardless of `source` so the badge renders on both local and cache-
    * hit paths. `null` when the row predates the attribution migration.
    */
-   generatedBy: {
-     githubUserId: number | null;
-     githubLogin: string | null;
-     displayName: string | null;
-     avatarContent: string | null;
-   } | null;
+  generatedBy: {
+    githubUserId: number | null;
+    githubLogin: string | null;
+    displayName: string | null;
+    avatarContent: string | null;
+  } | null;
   /**
    * Snapshot of the AI provider config in effect when this walkthrough
    * was originally generated (locally or by a teammate). Shown as

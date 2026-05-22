@@ -246,12 +246,12 @@ export class WalkthroughService extends Context.Tag("WalkthroughService")<
        * predate the attribution columns continue to compile — the columns
        * are nullable and the UI degrades gracefully.
        */
-       generatedBy?: {
-         readonly githubUserId: number;
-         readonly githubLogin: string;
-         readonly displayName: string | null;
-         readonly avatarContent: string | null;
-       };
+      generatedBy?: {
+        readonly githubUserId: number;
+        readonly githubLogin: string;
+        readonly displayName: string | null;
+        readonly avatarContent: string | null;
+      };
       /**
        * Snapshot of the AI provider config in effect at job start. Stored
        * as JSON on `provider_config`. Pairs with `modelUsed` — the
@@ -659,7 +659,13 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
       const result = db
         .select({ wt: walkthroughs, avatarContent: remoteUsers.avatarContent })
         .from(walkthroughs)
-        .leftJoin(remoteUsers, and(eq(remoteUsers.provider, "github"), eq(remoteUsers.login, walkthroughs.generatedByGithubLogin)))
+        .leftJoin(
+          remoteUsers,
+          and(
+            eq(remoteUsers.provider, "github"),
+            eq(remoteUsers.login, walkthroughs.generatedByGithubLogin),
+          ),
+        )
         .where(
           and(
             eq(walkthroughs.pullRequestId, prId),
@@ -711,7 +717,13 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
       const result = db
         .select({ wt: walkthroughs, avatarContent: remoteUsers.avatarContent })
         .from(walkthroughs)
-        .leftJoin(remoteUsers, and(eq(remoteUsers.provider, "github"), eq(remoteUsers.login, walkthroughs.generatedByGithubLogin)))
+        .leftJoin(
+          remoteUsers,
+          and(
+            eq(remoteUsers.provider, "github"),
+            eq(remoteUsers.login, walkthroughs.generatedByGithubLogin),
+          ),
+        )
         .where(
           and(
             eq(walkthroughs.pullRequestId, prId),

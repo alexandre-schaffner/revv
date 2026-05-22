@@ -1,9 +1,9 @@
 <script lang="ts">
-import AlertCircle from "phosphor-svelte/lib/WarningCircle";
-import ChevronUp from "phosphor-svelte/lib/CaretUp";
-import Loader from "phosphor-svelte/lib/Spinner";
 import type { PullRequest } from "@revv/shared";
 import { DropdownMenu } from "bits-ui";
+import ChevronUp from "phosphor-svelte/lib/CaretUp";
+import Loader from "phosphor-svelte/lib/Spinner";
+import AlertCircle from "phosphor-svelte/lib/WarningCircle";
 import { untrack } from "svelte";
 import { api } from "$lib/api/client";
 

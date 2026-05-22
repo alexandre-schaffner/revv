@@ -1,11 +1,35 @@
 <script lang="ts">
-import { CheckCircle, Circle, Copy, GitCommit, GitMerge, PaperPlaneRight, Spinner, Trash, X } from "phosphor-svelte";
+import type { ChatTask } from "@revv/shared";
+import {
+  CheckCircle,
+  Circle,
+  Copy,
+  GitCommit,
+  GitMerge,
+  PaperPlaneRight,
+  Spinner,
+  Trash,
+  X,
+} from "phosphor-svelte";
 import { cubicIn, cubicOut } from "svelte/easing";
 import { fly, slide } from "svelte/transition";
 import { fetchProposedDiffFiles, type ProposedDiffFile } from "$lib/api/chat";
+import {
+  Queue,
+  QueueItem,
+  QueueItemAction,
+  QueueItemActions,
+  QueueItemContent,
+  QueueItemIndicator,
+  QueueList,
+  QueueSection,
+  QueueSectionContent,
+  QueueSectionLabel,
+  QueueSectionTrigger,
+} from "$lib/components/ai/queue";
+import ProposedDiffModal from "$lib/components/review/ProposedDiffModal.svelte";
 import { Button } from "$lib/components/ui/button";
 import { Checkbox } from "$lib/components/ui/checkbox";
-import ProposedDiffModal from "$lib/components/review/ProposedDiffModal.svelte";
 import {
   batchCherryPickSelectedAction,
   batchDiscardSelectedAction,
@@ -25,20 +49,6 @@ import {
   selectAllCommits,
   toggleCommitSelection,
 } from "$lib/stores/chat.svelte";
-import {
-  Queue,
-  QueueItem,
-  QueueItemAction,
-  QueueItemActions,
-  QueueItemContent,
-  QueueItemIndicator,
-  QueueList,
-  QueueSection,
-  QueueSectionContent,
-  QueueSectionLabel,
-  QueueSectionTrigger,
-} from "$lib/components/ai/queue";
-import type { ChatTask } from "@revv/shared";
 
 interface Props {
   prId: string | undefined;
@@ -101,6 +111,7 @@ function filesSummary(files: string[]): string {
 // Reconstruct activeTasks from chat history items. We import getChatItems
 // here so this component can remain self-contained.
 import { getChatItems } from "$lib/stores/chat.svelte";
+
 const items = $derived(prId ? getChatItems(prId) : []);
 const activeTasksReal = $derived.by(() => {
   const taskList = items.findLast(

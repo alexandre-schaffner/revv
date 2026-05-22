@@ -1,8 +1,8 @@
 <script lang="ts">
-import ChevronRight from "phosphor-svelte/lib/CaretRight";
-import Loader2 from "phosphor-svelte/lib/Spinner";
-import Sparkles from "phosphor-svelte/lib/Sparkle";
 import type { ProjectRecap, ProjectRecapSummary } from "@revv/shared";
+import ChevronRight from "phosphor-svelte/lib/CaretRight";
+import Sparkles from "phosphor-svelte/lib/Sparkle";
+import Loader2 from "phosphor-svelte/lib/Spinner";
 import { untrack } from "svelte";
 import RecapStats from "$lib/components/recaps/RecapStats.svelte";
 import {

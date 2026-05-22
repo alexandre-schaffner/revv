@@ -1,8 +1,7 @@
 <script lang="ts">
+import type { AiAgent, ThinkingEffort } from "@revv/shared";
 import Brain from "phosphor-svelte/lib/Brain";
 import Check from "phosphor-svelte/lib/Check";
-import type { AiAgent, ThinkingEffort } from "@revv/shared";
-import SelectTrigger from "./SelectTrigger.svelte";
 import {
   Content as PopoverContent,
   Root as PopoverRoot,
@@ -14,6 +13,7 @@ import {
   THINKING_EFFORT_OPTIONS,
 } from "$lib/constants/models";
 import { getSettings, updateSettings } from "$lib/stores/settings.svelte";
+import SelectTrigger from "./SelectTrigger.svelte";
 
 let open = $state(false);
 let currentAgent = $derived((getSettings()?.aiAgent ?? "opencode") as AiAgent);

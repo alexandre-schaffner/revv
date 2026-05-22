@@ -12,8 +12,8 @@ import { api } from "$lib/api/client";
 import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
 
 import { setBatchSummaries } from "$lib/stores/sync.svelte";
-import { fuzzyScore } from "$lib/utils/fuzzy";
 import { clearOwnerHueCache, preloadOwnerHues } from "$lib/utils/avatarPalette";
+import { fuzzyScore } from "$lib/utils/fuzzy";
 
 let pullRequests = $state<PullRequest[]>([]);
 let repositories = $state<Repository[]>([]);

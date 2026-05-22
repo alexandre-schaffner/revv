@@ -1256,11 +1256,12 @@ export const WalkthroughJobsLive = Layer.effect(
           const githubUserId = Number(acc.accountId);
 
           // Resolve avatar content from remote_users.
-          const avatarContent = db
-            .select({ avatarContent: remoteUsers.avatarContent })
-            .from(remoteUsers)
-            .where(eq(remoteUsers.login, acc.githubLogin))
-            .get()?.avatarContent ?? null;
+          const avatarContent =
+            db
+              .select({ avatarContent: remoteUsers.avatarContent })
+              .from(remoteUsers)
+              .where(eq(remoteUsers.login, acc.githubLogin))
+              .get()?.avatarContent ?? null;
 
           return {
             accountId: repoRow.accountId,

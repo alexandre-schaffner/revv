@@ -1,7 +1,7 @@
 <script lang="ts">
+import type { Repository } from "@revv/shared";
 import GitPullRequestCreateArrow from "phosphor-svelte/lib/GitPullRequest";
 import Sparkles from "phosphor-svelte/lib/Sparkle";
-import type { Repository } from "@revv/shared";
 import * as Tooltip from "$lib/components/ui/tooltip/index.js";
 
 interface Props {

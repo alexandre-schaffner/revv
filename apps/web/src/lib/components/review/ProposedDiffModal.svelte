@@ -1,12 +1,4 @@
 <script lang="ts">
-import GitMerge from "phosphor-svelte/lib/GitMerge";
-import Loader2 from "phosphor-svelte/lib/Spinner";
-import MessageSquare from "phosphor-svelte/lib/Chat";
-import PanelLeftClose from "phosphor-svelte/lib/SidebarSimple";
-import PanelLeftOpen from "phosphor-svelte/lib/SidebarSimple";
-import Send from "phosphor-svelte/lib/PaperPlaneRight";
-import Trash2 from "phosphor-svelte/lib/Trash";
-import X from "phosphor-svelte/lib/X";
 import {
   type DiffLineAnnotation,
   type FileDiffMetadata,
@@ -15,6 +7,14 @@ import {
   parseDiffFromFile,
 } from "@pierre/diffs";
 import { FileTree, type GitStatusEntry } from "@pierre/trees";
+import MessageSquare from "phosphor-svelte/lib/Chat";
+import GitMerge from "phosphor-svelte/lib/GitMerge";
+import Send from "phosphor-svelte/lib/PaperPlaneRight";
+import PanelLeftClose from "phosphor-svelte/lib/SidebarSimple";
+import PanelLeftOpen from "phosphor-svelte/lib/SidebarSimple";
+import Loader2 from "phosphor-svelte/lib/Spinner";
+import Trash2 from "phosphor-svelte/lib/Trash";
+import X from "phosphor-svelte/lib/X";
 import { type Component, mount, onDestroy, onMount, tick, unmount, untrack } from "svelte";
 import { SvelteMap } from "svelte/reactivity";
 import type { ProposedDiffFile } from "$lib/api/chat";
