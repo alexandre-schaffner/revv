@@ -1,8 +1,8 @@
 <script lang="ts">
 import DownloadCloud from "phosphor-svelte/lib/CloudArrowDown";
 import Loader2 from "phosphor-svelte/lib/Spinner";
-import PillTabs from "./PillTabs.svelte";
 import { getCmdHeld } from "$lib/stores/shortcuts.svelte";
+import PillTabs from "./PillTabs.svelte";
 
 type Tab = "walkthrough" | "diff" | "request-changes";
 type WalkthroughStatus = "idle" | "generating" | "complete" | "error";
