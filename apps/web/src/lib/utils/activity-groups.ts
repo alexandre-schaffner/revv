@@ -22,12 +22,6 @@ export function isActivityGroup<T extends GroupableActivity>(
   return "category" in value && value.category === "exploring" && Array.isArray(value.items);
 }
 
-export interface ActivityGroupRange<T extends GroupableActivity = GroupableActivity> {
-  readonly start: number;
-  readonly end: number;
-  readonly group: ActivityGroup<T>;
-}
-
 export interface ActivityGroupCounts {
   readonly reads: number;
   readonly searches: number;
@@ -130,36 +124,4 @@ export function groupActivityRuns<T extends GroupableActivity>(
 
   flush();
   return result;
-}
-
-export function activityGroupRanges<T extends GroupableActivity>(
-  items: readonly T[],
-): ActivityGroupRange<T>[] {
-  const ranges: ActivityGroupRange<T>[] = [];
-  let start = -1;
-  let current: T[] = [];
-
-  const flush = (end: number): void => {
-    if (start < 0 || current.length === 0) return;
-    ranges.push({
-      start,
-      end,
-      group: { category: "exploring", items: current },
-    });
-    start = -1;
-    current = [];
-  };
-
-  items.forEach((item, index) => {
-    if (isExplorationActivity(item)) {
-      if (start < 0) start = index;
-      current.push(item);
-      return;
-    }
-
-    flush(index);
-  });
-
-  flush(items.length);
-  return ranges;
 }

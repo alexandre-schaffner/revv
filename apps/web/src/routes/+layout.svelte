@@ -7,10 +7,18 @@ import OnboardingGate from "$lib/components/onboarding/OnboardingGate.svelte";
 import ErrorBanner from "$lib/components/shared/ErrorBanner.svelte";
 import { Toaster } from "$lib/components/ui/sonner";
 import { TooltipProvider } from "$lib/components/ui/tooltip";
-import * as sync from "$lib/services/sync";
-import * as auth from "$lib/stores/auth.svelte";
-import * as prs from "$lib/stores/prs.svelte";
-import * as settings from "$lib/stores/settings.svelte";
+import { startPolling, stopPolling } from "$lib/services/sync";
+import { getToken, getUser, loadUser } from "$lib/stores/auth.svelte";
+import {
+  fetchPinnedPrs,
+  fetchPrs,
+  fetchRepos,
+  getSelectedPr,
+  getSelectedPrId,
+  setSelectedPrId,
+  setSelectedRepoId,
+} from "$lib/stores/prs.svelte";
+import { fetchAllModels, fetchSettings, getSettings } from "$lib/stores/settings.svelte";
 import { initShortcuts } from "$lib/stores/shortcuts.svelte";
 import { setSidebarView } from "$lib/stores/sidebar.svelte";
 import { initTheme } from "$lib/stores/theme.svelte";
@@ -32,7 +40,7 @@ let cacheInspectorOpen = $state(false);
 // settings link, logout, mouse back, deep link, WS-driven nav, …).
 $effect(() => {
   const match = page.url.pathname.match(/^\/review\/([^/]+)/);
-  prs.setSelectedPrId(match?.[1] ?? null);
+  setSelectedPrId(match?.[1] ?? null);
 });
 
 // URL → selectedRepoId. The rail's active highlight and the project
@@ -48,11 +56,11 @@ $effect(() => {
   const path = page.url.pathname;
   const repoMatch = path.match(/^\/repo\/([^/]+)/);
   if (repoMatch?.[1]) {
-    prs.setSelectedRepoId(repoMatch[1]);
+    setSelectedRepoId(repoMatch[1]);
     return;
   }
-  const selectedPr = prs.getSelectedPr();
-  prs.setSelectedRepoId(selectedPr?.repositoryId ?? null);
+  const selectedPr = getSelectedPr();
+  setSelectedRepoId(selectedPr?.repositoryId ?? null);
 });
 
 // Keep the sidebar view in lockstep with the URL in both directions.
@@ -70,7 +78,7 @@ $effect(() => {
 // New-PR chat sessions also live in files-mode: the left pane shows the
 // worktree file tree while the main pane hosts the agent chat.
 $effect(() => {
-  const id = prs.getSelectedPrId();
+  const id = getSelectedPrId();
   const onNewPr = /^\/repo\/[^/]+\/new-pr\/[^/]+/.test(page.url.pathname);
   setSidebarView(id || onNewPr ? "files" : "prs");
 });
@@ -88,7 +96,7 @@ $effect(() => {
 
 // When user becomes authenticated, hydrate app data.
 $effect(() => {
-  const user = auth.getUser();
+  const user = getUser();
   if (user && !hydrated) {
     hydrated = true;
     hydrate();
@@ -105,11 +113,11 @@ $effect(() => {
   // On mount: try to restore auth from localStorage.
   // If the token is valid, loadUser() sets the user, which triggers
   // the hydration effect above.
-  auth.loadUser();
+  loadUser();
   // Fetch settings before arming the updater check loop.
   // Model prefetch doesn't block anything, so it starts in parallel.
-  void settings.fetchAllModels();
-  void settings.fetchSettings().then(() => {
+  void fetchAllModels();
+  void fetchSettings().then(() => {
     // 5s delay so the first update check doesn't compete with
     // initial PR sync for network. After that the service runs on
     // its own hourly timer. Tauri-only — the service no-ops in dev.
@@ -121,27 +129,22 @@ $effect(() => {
   return () => {
     cleanupTheme();
     cleanupShortcuts();
-    sync.stopPolling();
+    stopPolling();
     stopUpdater();
   };
 });
 
 async function hydrate() {
   // Load cached data first (instant UI)
-  await Promise.all([
-    prs.fetchPrs(),
-    prs.fetchRepos(),
-    prs.fetchPinnedPrs(),
-    settings.fetchSettings(),
-  ]);
+  await Promise.all([fetchPrs(), fetchRepos(), fetchPinnedPrs(), fetchSettings()]);
 
   // Then kick off a live sync from GitHub
-  const token = auth.getToken();
+  const token = getToken();
   if (!token) return;
 
-  const s = settings.getSettings();
+  const s = getSettings();
   const interval = s?.autoFetchInterval ?? 5;
-  sync.startPolling(interval, token);
+  startPolling(interval, token);
 }
 </script>
 

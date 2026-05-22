@@ -14,6 +14,7 @@ import {
   blockContentVariantCount,
   buildBlock,
   decodeIssue,
+  emptyBlockContentError,
   fail,
   findIssuesReferencingBlocks,
   ok,
@@ -94,6 +95,8 @@ export const addSemanticStepEditHandler: ChatEditToolHandler<AddSemanticStepEdit
       "Error: add_semantic_step.initial_block requires exactly one of { markdown, code, diff }.",
     );
   }
+  const initialBlockErr = emptyBlockContentError(input.initial_block);
+  if (initialBlockErr) return fail(initialBlockErr);
   const title = input.title.trim();
   if (title.length === 0) {
     return fail("Error: add_semantic_step requires a non-empty title.");
@@ -395,6 +398,8 @@ export const addBlockHandler: ChatEditToolHandler<AddBlockInput> = async (ctx, i
   if (blockContentVariantCount(input.content) !== 1) {
     return fail("Error: add_block.content requires exactly one of { markdown, code, diff }.");
   }
+  const emptyErr = emptyBlockContentError(input.content);
+  if (emptyErr) return fail(emptyErr);
 
   const active = resolveActiveWalkthroughId(ctx.db, ctx.prId);
   if (!active) return fail("No complete walkthrough exists for this PR yet.");
@@ -504,6 +509,8 @@ export const updateBlockHandler: ChatEditToolHandler<UpdateBlockInput> = async (
   if (blockContentVariantCount(input.content) !== 1) {
     return fail("Error: update_block.content requires exactly one of { markdown, code, diff }.");
   }
+  const emptyErr = emptyBlockContentError(input.content);
+  if (emptyErr) return fail(emptyErr);
 
   const active = resolveActiveWalkthroughId(ctx.db, ctx.prId);
   if (!active) return fail("No complete walkthrough exists for this PR yet.");

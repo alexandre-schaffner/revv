@@ -111,7 +111,21 @@
       "idx": 15,
       "version": "6",
       "when": 1779110000000,
-      "tag": "0130_cache_signing_secret",
+      "tag": "0130_walkthrough_next_seq",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1779600000000,
+      "tag": "0140_backfill_remote_users_alters",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1779700000000,
+      "tag": "0150_cache_signing_secret",
       "breakpoints": true
     }
   ]

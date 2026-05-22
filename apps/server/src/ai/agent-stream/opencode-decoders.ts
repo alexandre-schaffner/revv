@@ -67,7 +67,7 @@ export function extractOpencodeErrorMessage(errObj: {
  *
  * The cumulative length is how SSE callers deduplicate repeated
  * `message.part.updated` events for the same part. Sync callers
- * (walkOpencodeParts) pass `alreadyEmittedLen: 0` and ignore the return.
+ * (walkOpencodePartsWithState) thread the same state to act as a backstop.
  *
  * We slice `part.text` against `alreadyEmittedLen` to derive the delta the
  * caller should emit — keeping the user-visible stream monotonic across
@@ -237,22 +237,8 @@ function sliceChunk(fullText: string, already: number): string | null {
 // ── Opencode synchronous parts walker ───────────────────────────────────────
 
 /**
- * Iterate a fully-realised parts array (the return value of POST
- * /session/:id/message) and emit normalized events. No dedup state — each
- * part is seen exactly once.
- */
-export function walkOpencodeParts(
-  parts: ReadonlyArray<Part>,
-  emit: (ev: NormalizedAgentEvent) => void,
-): void {
-  for (const part of parts) {
-    const { event } = decodeOpencodePart(part, 0);
-    if (event) emit(event);
-  }
-}
-
-/**
- * Same as `walkOpencodeParts` but threads the SSE subscription's dedup state
+ * Walks a fully-realised parts array (the return value of POST
+ * /session/:id/message) and threads the SSE subscription's dedup state
  * (per-partId `emittedTextLen` Map + `seenToolPartIds` Set), so this walk
  * acts as a *backstop* after the SSE drain: anything the SSE already streamed
  * is a no-op here, anything SSE missed (because of subscription timing or a

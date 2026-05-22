@@ -20,10 +20,6 @@ let syncErrorByPr = $state<Map<string, string>>(new Map());
 // specific PR and does not affect the bottom bar's per-PR label.
 let prListSyncing = $state(false);
 
-export function getSummary(prId: string): ThreadSummary | null {
-  return summaries.get(prId) ?? null;
-}
-
 export function getLastSyncAt(prId: string | null): string | null {
   if (!prId) return null;
   return lastSyncAtByPr.get(prId) ?? null;
@@ -99,12 +95,4 @@ export function setBatchSummaries(entries: Array<{ prId: string; summary: Thread
   const next = new Map(summaries);
   for (const { prId, summary } of entries) next.set(prId, summary);
   summaries = next;
-}
-
-export function reset(): void {
-  summaries = new Map();
-  lastSyncAtByPr = new Map();
-  threadsSyncingByPr = new Set();
-  syncErrorByPr = new Map();
-  prListSyncing = false;
 }

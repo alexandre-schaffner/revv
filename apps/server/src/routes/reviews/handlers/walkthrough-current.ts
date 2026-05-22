@@ -43,10 +43,12 @@ export function getCurrentWalkthroughHandler(prId: string, userId: string) {
       // 1. Complete walkthrough — best case, no SSE needed.
       const complete = yield* walkthroughService.getCached(pr.id, meta.headSha);
       if (complete) {
+        const seqAt = yield* walkthroughService.getSeqAt(complete.id);
         return {
           status: "complete" as const,
           walkthrough: complete,
           snapshotAt: new Date().toISOString(),
+          seqAt,
         };
       }
 
@@ -54,10 +56,12 @@ export function getCurrentWalkthroughHandler(prId: string, userId: string) {
       const partial = yield* walkthroughService.getPartial(pr.id, meta.headSha);
       if (partial) {
         const { opencodeSessionId: _ignored, ...walkthrough } = partial;
+        const seqAt = yield* walkthroughService.getSeqAt(walkthrough.id);
         return {
           status: partial.status as "generating" | "error",
           walkthrough,
           snapshotAt: new Date().toISOString(),
+          seqAt,
         };
       }
 
@@ -67,10 +71,12 @@ export function getCurrentWalkthroughHandler(prId: string, userId: string) {
       if (hydrated) {
         const fromCache = yield* walkthroughService.getCached(pr.id, meta.headSha);
         if (fromCache) {
+          const seqAt = yield* walkthroughService.getSeqAt(fromCache.id);
           return {
             status: "complete" as const,
             walkthrough: fromCache,
             snapshotAt: new Date().toISOString(),
+            seqAt,
           };
         }
       }

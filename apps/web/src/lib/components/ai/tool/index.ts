@@ -1,4 +1,4 @@
-export { TOOL_CTX_KEY, type ToolState } from "./context.js";
+export type { ToolState } from "./context.js";
 export { default as Tool, type ToolProps } from "./Tool.svelte";
 export {
   default as ToolActivityCountSummary,

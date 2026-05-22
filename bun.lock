@@ -94,7 +94,6 @@
         "@types/react": "catalog:",
         "@types/react-dom": "catalog:",
         "@vitejs/plugin-react": "^4.4.0",
-        "tailwindcss": "catalog:",
         "typescript": "catalog:",
         "vite": "catalog:",
         "vite-tsconfig-paths": "^4.3.0",

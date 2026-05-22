@@ -8,6 +8,7 @@ import { logError } from "./logger";
 import { chatRoute } from "./routes/chat";
 import { debugRoutes } from "./routes/debug";
 import { deviceAuthRoutes } from "./routes/device-auth";
+import { eventsRoute } from "./routes/events";
 import { githubRoutes } from "./routes/github";
 import { mcpChatContextRoute } from "./routes/mcp/chat-context";
 import { mcpRecapRoute } from "./routes/mcp/recap";
@@ -21,6 +22,7 @@ import { settingsRoutes } from "./routes/settings";
 import { signOutRoute } from "./routes/sign-out";
 import { threadRoutes } from "./routes/threads";
 import { userRoutes } from "./routes/user";
+import { walkthroughsRoute } from "./routes/walkthroughs";
 import { wsRoute } from "./routes/ws";
 import { AppRuntime } from "./runtime";
 import { ChatSessionService } from "./services/ChatSession";
@@ -72,7 +74,9 @@ const app = new Elysia()
   .use(deviceAuthRoutes)
   .use(onboardingRoutes)
   .use(userRoutes)
+  .use(walkthroughsRoute)
   .use(wsRoute)
+  .use(eventsRoute)
   .use(debugRoutes)
   .use(mcpWalkthroughRoute)
   .use(mcpRecapRoute)

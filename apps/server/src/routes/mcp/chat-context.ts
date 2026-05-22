@@ -28,6 +28,7 @@ import { AppRuntime } from "../../runtime";
 import { ChatMcpTokens, type ChatTokenResolved } from "../../services/ChatMcpTokens";
 import { DbService } from "../../services/Db";
 import { RemoteWalkthroughCache } from "../../services/RemoteWalkthroughCache";
+import { WalkthroughJobs } from "../../services/WalkthroughJobs";
 import { WebSocketHub } from "../../services/WebSocketHub";
 import {
   extractBearer,
@@ -66,24 +67,30 @@ async function resolveContext(
     };
   }
 
-  // emit: wraps a WalkthroughStreamEvent into the WS envelope and
-  // broadcasts via WebSocketHub, then pushes an updated snapshot to the
-  // team cache. Both are fire-and-forget — broadcast is best-effort
-  // (doctrine invariant #8: commit first, broadcast second; the cache
-  // push is broadcast-equivalent; subscribers reconcile via DB re-read
-  // on reconnect).
+  // emit: broadcasts a WalkthroughStreamEvent over the global SSE bus
+  // and pushes an updated snapshot to the team cache. Both are fire-
+  // and-forget — broadcast is best-effort (doctrine invariant #8:
+  // commit first, broadcast second; the cache push is broadcast-
+  // equivalent; subscribers reconcile via DB re-read on reconnect).
+  //
+  // The event reaches the SSE bus via `WalkthroughJobs.emitEvent` so it
+  // gets a stable seq from `walkthroughs.next_seq`, preceded by a
+  // `lifecycle:edited` marker stamping the edit time.
   const emit = (walkthroughId: string, event: WalkthroughStreamEvent): void => {
     void AppRuntime.runPromise(
-      Effect.flatMap(WebSocketHub, (hub) =>
-        hub.broadcast({
-          type: "walkthrough:edited",
-          data: { prId: resolved.prId, walkthroughId, event },
+      Effect.flatMap(WalkthroughJobs, (jobs) =>
+        Effect.gen(function* () {
+          yield* jobs.emitEvent(walkthroughId, {
+            type: "lifecycle:edited",
+            data: { walkthroughId, editedAt: new Date().toISOString() },
+          });
+          yield* jobs.emitEvent(walkthroughId, event);
         }),
       ),
     ).catch((err) => {
       logError(
         "mcp-chat-context",
-        "walkthrough:edited broadcast failed:",
+        "walkthrough:event emit failed:",
         err instanceof Error ? err.message : String(err),
       );
     });

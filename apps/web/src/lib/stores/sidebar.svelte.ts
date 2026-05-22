@@ -117,10 +117,6 @@ export function getSidebarCollapsed(): boolean {
   return sidebarCollapsed;
 }
 
-export function setSidebarCollapsed(v: boolean): void {
-  sidebarCollapsed = v;
-}
-
 export function toggleSidebar(): void {
   sidebarCollapsed = !sidebarCollapsed;
 }

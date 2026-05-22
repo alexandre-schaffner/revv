@@ -46,18 +46,16 @@ import {
   hasBlockAnimated,
   hasContainerAnimated,
   hasIssueAnimated,
+  hydrateFromCache,
   markBlockAnimated,
   markContainerAnimated,
   markIssueAnimated,
-} from "$lib/stores/walkthrough.svelte";
-import {
-  hydrateFromCache,
   pollCloneUntilResolved,
   prepareEntry,
   regenerate,
+  startWalkthrough,
   stopClonePoll,
-  streamWalkthrough,
-} from "$lib/stores/walkthrough-stream.svelte";
+} from "$lib/stores/walkthrough.svelte";
 import { initHighlighter } from "$lib/utils/code-highlight.svelte";
 import { renderMarkdown } from "$lib/utils/markdown";
 import { authHeaders } from "$lib/utils/session-token";
@@ -253,9 +251,15 @@ const chapterStartIndex = $derived.by(() => {
   void activeChapterIndex;
   return untrack(() => explorationSteps.length);
 });
-const recentExplorationSteps = $derived(
-  explorationSteps.slice(chapterStartIndex).slice(-TOOL_CALL_WINDOW),
-);
+// Pair each step with its absolute index so the keyed `{#each}` can
+// use a collision-proof identity. Two consecutive `add_diff_step` calls
+// share the same toolName + summary and crashed Svelte with
+// `each_key_duplicate`, which freezes the whole component — that's the
+// crash that made later chapters / ratings appear missing.
+const recentExplorationSteps = $derived.by(() => {
+  const start = Math.max(chapterStartIndex, explorationSteps.length - TOOL_CALL_WINDOW);
+  return explorationSteps.slice(start).map((step, i) => ({ step, ordinal: start + i }));
+});
 
 // "All phases done" needs actual evidence of completion. A fresh PR with
 // no content shouldn't flash all checkmarks just because !isStreaming — so
@@ -709,7 +713,7 @@ $effect(() => {
   if (!cloneInProgress || !cloneRepoId) return;
   const repo = repositories.find((r) => r.id === cloneRepoId);
   if (repo?.cloneStatus === "ready") {
-    streamWalkthrough(prId);
+    void startWalkthrough(prId);
     return;
   }
   void pollCloneUntilResolved(prId, cloneRepoId);
@@ -817,7 +821,7 @@ function handleRegenerate(): void {
 							<Dotmatrix variant={chapter.spinner} active={active} />
 									{#if recentExplorationSteps.length > 0}
 										<div class="chapter-tool-calls">
-											{#each recentExplorationSteps.slice(-2) as step, i (step.toolName + step.summary)}
+											{#each recentExplorationSteps.slice(-2) as { step, ordinal }, i (ordinal)}
 												<div
 													class="chapter-tool-call"
 													style="top: {i * TOOL_CALL_ROW_H}px"
@@ -869,7 +873,7 @@ function handleRegenerate(): void {
 	{:else if cloneInProgress && !summary && blocks.length === 0}
 		<!-- Clone-in-progress state: show indeterminate progress bar + Retry
 		     escape hatch. The poller set up in the $effect above drives this
-		     view to a terminal state (streamWalkthrough on 'ready', or a
+		     view to a terminal state (startWalkthrough on 'ready', or a
 		     streamError branch on 'error'/'pending'), but a stuck server or
 		     network partition can still happen — the Retry button gives the
 		     user an explicit way out. When cloneRepoId is somehow null (SSE

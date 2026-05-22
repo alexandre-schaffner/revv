@@ -84,6 +84,24 @@ function blockVariantCount(input: BlockVariantInput): number {
 }
 
 /**
+ * Reject blocks whose payload would render as an empty box. An annotation on
+ * a code/diff block reads as commentary *about* code that isn't there — use
+ * a markdown block for prose-only content instead.
+ */
+function emptyBlockError(input: BlockVariantInput): string | null {
+  if (input.markdown && input.markdown.content.trim().length === 0) {
+    return "Error: markdown block requires non-empty content. Either fill it in or omit the block.";
+  }
+  if (input.code && input.code.content.trim().length === 0) {
+    return "Error: code block requires non-empty content. Use a markdown block if you only want to write prose; an annotation without code reads as commentary about nothing.";
+  }
+  if (input.diff && input.diff.patch.trim().length === 0) {
+    return "Error: diff block requires a non-empty patch. Use a markdown block for prose-only content.";
+  }
+  return null;
+}
+
+/**
  * Construct a typed WalkthroughBlock from one of the three variant inputs and
  * upsert it into walkthroughBlocks. Returns the constructed block, or null if
  * no variant was provided (caller must validate beforehand).
@@ -212,6 +230,8 @@ export const addSemanticStepHandler: WalkthroughToolHandler<AddSemanticStepInput
       "Error: add_semantic_step.initial_block requires exactly one of { markdown, code, diff } — not zero, not two. A chapter cannot be opened without its first block.",
     );
   }
+  const initialBlockErr = emptyBlockError(input.initial_block);
+  if (initialBlockErr) return errorResult(initialBlockErr);
 
   let result: WalkthroughToolResult | null = null;
   let isFirstStep = false;
@@ -354,6 +374,8 @@ export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> = asyn
       "Error: add_diff_step requires exactly one of { markdown, code, diff } — not zero, not two. Pick the shape that matches the step's intent.",
     );
   }
+  const emptyErr = emptyBlockError(input);
+  if (emptyErr) return errorResult(emptyErr);
 
   let result: WalkthroughToolResult | null = null;
   let block: WalkthroughBlock | null = null;

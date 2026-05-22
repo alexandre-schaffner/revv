@@ -6,5 +6,3 @@ export type ToolState =
   | "output-available"
   | "output-error"
   | "output-denied";
-
-export const TOOL_CTX_KEY = Symbol("ai-tool");

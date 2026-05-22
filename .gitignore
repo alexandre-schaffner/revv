@@ -24,6 +24,7 @@ packages/app/dist/
 *.db-journal
 *.db-wal
 *.db-shm
+*.db.pid
 
 # Turbo
 .turbo/

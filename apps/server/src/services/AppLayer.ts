@@ -9,6 +9,7 @@ import { ChatSessionServiceLive } from "./ChatSession";
 import { DbServiceLive } from "./Db";
 import { DbMaintenanceLive } from "./DbMaintenance";
 import { DiffCacheServiceLive } from "./DiffCache";
+import { EventBusLive } from "./EventBus";
 import { FileContentServiceLive } from "./FileContent";
 import { GitHubServiceLive } from "./GitHub";
 import { GitHubEtagCacheLive } from "./GitHubEtagCache";
@@ -66,6 +67,7 @@ const BaseLayers = Layer.mergeAll(
   GitHubEtagCacheLive,
   GitHubServiceWithDeps,
   WebSocketHubLive,
+  EventBusLive,
   RepositoryServiceLive,
   PullRequestServiceLive,
   ReviewServiceLive,

@@ -78,10 +78,6 @@ export function getThemePreference(): ThemePreference {
   return preference;
 }
 
-export function getActiveTheme(): "light" | "dark" {
-  return resolved;
-}
-
 export function setThemePreference(pref: ThemePreference): void {
   preference = pref;
   localStorage.setItem(THEME_KEY, pref);

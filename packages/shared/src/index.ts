@@ -33,6 +33,7 @@ export {
   AUTO_FETCH_DEFAULT_INTERVAL,
   THREAD_SYNC_INTERVAL_SECONDS,
 } from "./constants";
+export type { ServerEventMessage, WalkthroughEventEnvelope } from "./events";
 export { guessImageContentType, isImagePath } from "./images";
 export type {
   NewPrCommit,
