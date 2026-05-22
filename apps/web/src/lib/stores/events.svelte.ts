@@ -17,10 +17,21 @@
 
 import type { ServerEventMessage } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
-import { hydrateActiveWalkthroughs, onWalkthroughEvent } from "./walkthrough.svelte";
+import {
+  hydrateActiveWalkthroughs,
+  hydrateFromCache,
+  onWalkthroughEvent,
+  store as walkthroughStore,
+} from "./walkthrough.svelte";
 
 let source: EventSource | null = null;
 let activeHostOverride: string | null = null;
+// Tracks whether the current `EventSource` has already fired `open` once.
+// EventSource fires `open` on both first-connect and every auto-reconnect;
+// we use this to distinguish them so reconnects can refetch the
+// currently-viewed PR's full snapshot (recovering events that were
+// broadcast during the disconnect gap and lost forever to this client).
+let openCount = 0;
 
 /**
  * Open the global SSE stream for the given bearer token. Closes any
@@ -42,12 +53,30 @@ export function connect(token: string, hostOverride?: string): void {
   const url = `${API_BASE_URL}/api/events?token=${encodeURIComponent(token)}${hostParam}`;
   const es = new EventSource(url);
   source = es;
+  openCount = 0;
 
   es.addEventListener("open", () => {
+    openCount += 1;
     // On (re)connect: seed sidebar + lastSeenSeq cursors for any
     // in-flight walkthroughs the user wasn't watching. Best-effort —
     // failures here mean the sidebar spinner shows up late, not data loss.
     void hydrateActiveWalkthroughs();
+
+    // After a RECONNECT (not the first open), refetch the snapshot for the
+    // currently-viewed PR. EventSource doesn't replay missed events, and
+    // the server doesn't buffer them, so any walkthrough event broadcast
+    // during the disconnect gap was dispatched to zero writers and is
+    // lost from this client's reducer forever. hydrateFromCache merges
+    // the authoritative DB snapshot back into the entry, recovering the
+    // missed chapters/blocks/ratings/issues. Background PRs catch up on
+    // demand when the user navigates to them (their component mount
+    // already runs the same hydration path).
+    if (openCount > 1) {
+      const activePrId = walkthroughStore.activePrId;
+      if (activePrId) {
+        void hydrateFromCache(activePrId, { activate: false });
+      }
+    }
   });
 
   es.addEventListener("error", () => {
