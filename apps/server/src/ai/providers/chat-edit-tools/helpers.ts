@@ -91,6 +91,25 @@ export function blockContentVariantCount(content: BlockContentInput): number {
   return n;
 }
 
+/**
+ * Reject blocks whose payload would render as an empty box. An annotation on
+ * a code/diff block reads as commentary about code that isn't there — use a
+ * markdown block for prose-only content instead. Mirrors `emptyBlockError`
+ * in `walkthrough-tools/phase-b-handlers.ts` for the generation path.
+ */
+export function emptyBlockContentError(content: BlockContentInput): string | null {
+  if (content.markdown && content.markdown.content.trim().length === 0) {
+    return "Error: markdown block requires non-empty content. Either fill it in or omit the block.";
+  }
+  if (content.code && content.code.content.trim().length === 0) {
+    return "Error: code block requires non-empty content. Use a markdown block if you only want to write prose; an annotation without code reads as commentary about nothing.";
+  }
+  if (content.diff && content.diff.patch.trim().length === 0) {
+    return "Error: diff block requires a non-empty patch. Use a markdown block for prose-only content.";
+  }
+  return null;
+}
+
 export interface BuiltBlock {
   readonly block: WalkthroughBlock;
   readonly type: "markdown" | "code" | "diff";
