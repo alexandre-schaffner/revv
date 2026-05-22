@@ -3,9 +3,9 @@ import { existsSync, mkdirSync, renameSync } from "node:fs";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { drizzle } from "drizzle-orm/bun-sqlite";
+import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import { serverEnv } from "../config";
 import * as schema from "./schema";
-import { customMigrate } from "./migrator";
 
 // ── Pre-squash recovery ─────────────────────────────────────
 // TODO(2026-05-17): Revv squashed 21 incremental migrations into 4.
@@ -244,15 +244,15 @@ export function createDb(path?: string) {
     fresh.run("PRAGMA journal_mode = WAL");
     fresh.run("PRAGMA foreign_keys = ON");
     fresh.run("PRAGMA busy_timeout = 5000");
-    customMigrate(fresh, fileURLToPath(new URL("./migrations", import.meta.url)));
     const db = drizzle(fresh, { schema });
+    migrate(db, { migrationsFolder: fileURLToPath(new URL("./migrations", import.meta.url)) });
     insertData(db, data);
     return db;
   }
 
   // ── Normal path ──────────────────────────────────────────
-  customMigrate(sqlite, fileURLToPath(new URL("./migrations", import.meta.url)));
   const db = drizzle(sqlite, { schema });
+  migrate(db, { migrationsFolder: fileURLToPath(new URL("./migrations", import.meta.url)) });
   return db;
 }
 
