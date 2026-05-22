@@ -31,8 +31,8 @@ import type {
   WalkthroughStreamEvent,
   WalkthroughTokenUsage,
 } from "@revv/shared";
-import { toast } from "svelte-sonner";
 import { SvelteMap } from "svelte/reactivity";
+import { toast } from "svelte-sonner";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { api } from "$lib/api/client";
 import { updateRepoCloneStatus } from "$lib/stores/prs.svelte";
