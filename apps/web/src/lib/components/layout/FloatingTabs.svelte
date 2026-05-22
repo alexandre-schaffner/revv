@@ -1,6 +1,7 @@
 <script lang="ts">
 import DownloadCloud from "phosphor-svelte/lib/CloudArrowDown";
 import Loader2 from "phosphor-svelte/lib/Spinner";
+import { getCmdHeld } from "$lib/stores/shortcuts.svelte";
 import PillTabs from "./PillTabs.svelte";
 
 type Tab = "walkthrough" | "diff" | "request-changes";
@@ -43,10 +44,12 @@ function handlePullClick(): void {
   if (buttonInteractive) onPullCommit?.();
 }
 
+const cmdHeld = $derived(getCmdHeld());
+
 const tabs = [
-  { id: "walkthrough" as Tab, label: "Walkthrough" },
-  { id: "diff" as Tab, label: "Diff" },
-  { id: "request-changes" as Tab, label: "Request Changes" },
+  { id: "walkthrough" as Tab, label: "Walkthrough", shortcut: "1" },
+  { id: "diff" as Tab, label: "Diff", shortcut: "2" },
+  { id: "request-changes" as Tab, label: "Request Changes", shortcut: "3" },
 ];
 
 function handleTabChange(tabId: string) {
@@ -54,7 +57,7 @@ function handleTabChange(tabId: string) {
 }
 </script>
 
-<PillTabs {tabs} {activeTab} onTabChange={handleTabChange}>
+<PillTabs {tabs} {activeTab} onTabChange={handleTabChange} {cmdHeld}>
 	{#snippet trailing()}
 		<div class="status-slot" aria-hidden={!dotVisible && !buttonVisible}>
 			<span
