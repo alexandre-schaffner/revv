@@ -3,6 +3,7 @@ import { Loader2, Play, RefreshCw, RotateCcw, Sparkles, Square } from "@lucide/s
 import type { ProjectRecap, ProjectRecapSummary, RecapPeriod } from "@revv/shared";
 import { untrack } from "svelte";
 import { Shimmer } from "$lib/components/ai/shimmer";
+import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import {
   abortRecapStream,
   getRecapStreamEntry,
@@ -21,7 +22,6 @@ import {
   regenerateRecap,
   stopRecap,
 } from "$lib/stores/recaps.svelte";
-import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import PreviousRecaps from "./PreviousRecaps.svelte";
 import RecapDetail from "./RecapDetail.svelte";
 

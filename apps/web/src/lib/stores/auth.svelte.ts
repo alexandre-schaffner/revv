@@ -2,6 +2,7 @@ import { goto } from "$app/navigation";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { authClient } from "$lib/auth-client";
 import * as sync from "$lib/services/sync";
+import * as events from "$lib/stores/events.svelte";
 import * as orgs from "$lib/stores/orgs.svelte";
 import * as prs from "$lib/stores/prs.svelte";
 import { clearReviewFiles } from "$lib/stores/review.svelte";
@@ -519,7 +520,9 @@ export async function switchAccount(userId: string, host?: string): Promise<void
     // `findAccount(userId, undefined)`, picks the wrong (or no) account,
     // and the user never receives `prs:updated` broadcasts.
     ws.disconnect();
+    events.disconnect();
     ws.connect(data.token, host);
+    events.connect(data.token, host);
     await loadUser();
     // Pull settings into the local store so getGithubHost() returns the
     // new host (e.g. for WS auto-reconnects and OrgSwitcher highlighting)
@@ -547,6 +550,7 @@ export async function removeAccount(): Promise<void> {
   // Server confirmed deletion — now clean up local state
   accountJustRemoved = true;
   ws.disconnect();
+  events.disconnect();
   clearToken();
   prs.reset();
   settings.reset();

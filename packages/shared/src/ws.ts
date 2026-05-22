@@ -16,7 +16,6 @@ import type {
   ThreadStatus,
   ThreadSummary,
 } from "./types";
-import type { WalkthroughStreamEvent } from "./walkthrough";
 
 /** Server → client WebSocket envelope union. Each member carries a JSDoc
  * label: `signal` (notification only), `full-state` (replace client state),
@@ -89,37 +88,6 @@ export type WsServerMessage =
   | {
       type: "threads:new-reply";
       data: { prId: string; thread: CommentThread; message: ThreadMessage };
-    }
-  /** signal — Walkthrough generation finished. Triggers `hydrateFromCache`. */
-  | { type: "walkthrough:complete"; data: { prId: string; walkthroughId: string } }
-  /** signal — Walkthrough generation failed terminally. Show error UI. */
-  | { type: "walkthrough:error"; data: { prId: string; message: string } }
-  /**
-   * signal — A row was hydrated from the team remote cache rather than
-   * generated locally. Source `"remote"` distinguishes the GCS-backed
-   * cache; reserved for future variants (`"hosted"`, etc.). Purely
-   * cosmetic — the actual completion still fires via
-   * `walkthrough:complete` once the importer transaction lands.
-   */
-  | {
-      type: "walkthrough:cache-hit";
-      data: { prId: string; walkthroughId: string; source: "remote" };
-    }
-  /**
-   * delta — Chat-driven post-completion edit broadcast. Wraps the same
-   * `WalkthroughStreamEvent` shape the SSE generation path uses so the
-   * frontend reducer can apply edits with the same code paths. The
-   * generation SSE stream dies on `done`; this envelope rides the
-   * long-lived WS channel so completed walkthroughs stay live-updatable.
-   * See CLAUDE.md invariant #7 (chat-edit carve-out).
-   */
-  | {
-      type: "walkthrough:edited";
-      data: {
-        prId: string;
-        walkthroughId: string;
-        event: WalkthroughStreamEvent;
-      };
     }
   /** delta — Highlights of PR changes since last sync. Patch in place. */
   | { type: "prs:sync-summary"; data: SyncChange[] }

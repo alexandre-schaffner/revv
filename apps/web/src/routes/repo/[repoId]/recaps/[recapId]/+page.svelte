@@ -1,8 +1,8 @@
 <script lang="ts">
+import { Play, RefreshCw, RotateCcw, Square } from "@lucide/svelte";
 import { untrack } from "svelte";
 import { goto } from "$app/navigation";
 import { page } from "$app/state";
-import { Play, RefreshCw, RotateCcw, Square } from "@lucide/svelte";
 import AuthGuard from "$lib/components/auth/AuthGuard.svelte";
 import PreviousRecaps from "$lib/components/recaps/PreviousRecaps.svelte";
 import RecapDetail from "$lib/components/recaps/RecapDetail.svelte";
@@ -24,6 +24,7 @@ import {
   regenerateRecap,
   stopRecap,
 } from "$lib/stores/recaps.svelte";
+
 const repoId = $derived(page.params.repoId ?? "");
 const recapId = $derived(page.params.recapId ?? "");
 

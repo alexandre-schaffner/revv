@@ -44,18 +44,16 @@ import {
   hasBlockAnimated,
   hasContainerAnimated,
   hasIssueAnimated,
+  hydrateFromCache,
   markBlockAnimated,
   markContainerAnimated,
   markIssueAnimated,
-} from "$lib/stores/walkthrough.svelte";
-import {
-  hydrateFromCache,
   pollCloneUntilResolved,
   prepareEntry,
   regenerate,
+  startWalkthrough,
   stopClonePoll,
-  streamWalkthrough,
-} from "$lib/stores/walkthrough-stream.svelte";
+} from "$lib/stores/walkthrough.svelte";
 import { initHighlighter } from "$lib/utils/code-highlight.svelte";
 import { renderMarkdown } from "$lib/utils/markdown";
 import { authHeaders } from "$lib/utils/session-token";
@@ -707,7 +705,7 @@ $effect(() => {
   if (!cloneInProgress || !cloneRepoId) return;
   const repo = repositories.find((r) => r.id === cloneRepoId);
   if (repo?.cloneStatus === "ready") {
-    streamWalkthrough(prId);
+    void startWalkthrough(prId);
     return;
   }
   void pollCloneUntilResolved(prId, cloneRepoId);
@@ -904,7 +902,7 @@ function handleRegenerate(): void {
 	{:else if !isStreaming && !summary && blocks.length === 0 && !streamError && !cloneInProgress && !hydrating}
 		<div class="walkthrough-empty">
 			<p class="loading-text">No walkthrough generated yet for this PR.</p>
-			<Button variant="outline" size="lg" style="cursor: pointer;" onclick={() => streamWalkthrough(prId)}>
+			<Button variant="outline" size="lg" style="cursor: pointer;" onclick={() => startWalkthrough(prId)}>
 				<Sparkles size={14} />
 				Generate walkthrough
 			</Button>

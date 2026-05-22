@@ -8,8 +8,8 @@ import { preloadFile, preloadPatchFile } from "@pierre/diffs/ssr";
  * and memoizes the rendered HTML in an LRU.
  *
  * No DB, no Effect service — these are plain async functions consumed by
- * the walkthrough-stream handler and the PR files endpoint. State is
- * reconstructible: every miss re-renders from the inputs.
+ * the PR files endpoint. State is reconstructible: every miss re-renders
+ * from the inputs.
  */
 
 // ── Defaults ────────────────────────────────────────────────────────────────

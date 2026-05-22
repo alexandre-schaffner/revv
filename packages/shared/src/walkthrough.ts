@@ -364,6 +364,14 @@ export type WalkthroughLifecyclePhase =
   | "rating"
   | "finishing";
 
+/**
+ * Why a job started — surfaced on `lifecycle:started` for telemetry and to
+ * let the UI tweak its spinner copy. Mirrors the server's `StartJobTrigger`
+ * plus `cache-import` for the snapshot-replay fast path. Treat as an open
+ * string union; new variants don't break existing clients.
+ */
+export type WalkthroughStartTrigger = "user" | "resume" | "review_requested" | "cache-import";
+
 export type WalkthroughStreamEvent =
   | { type: "summary"; data: { summary: string; riskLevel: RiskLevel } }
   | { type: "sentiment"; data: { sentiment: string } }
@@ -382,6 +390,69 @@ export type WalkthroughStreamEvent =
     }
   | { type: "in-progress"; data: { walkthroughId: string } }
   | { type: "thinking"; data: Record<string, never> }
+  // ── Lifecycle events (formerly carried as standalone WS envelopes) ───────
+  //
+  // After the SSE-unification refactor these are folded into the same event
+  // stream as content events so the client has one reducer and one cursor
+  // per walkthrough. The legacy `walkthrough:complete`, `walkthrough:error`,
+  // `walkthrough:cache-hit`, and `walkthrough:edited` WS envelopes are
+  // replaced by `lifecycle:*` variants here.
+  //
+  /**
+   * A new generation job started (or an existing one was claimed for
+   * resumption). Always the first event emitted for a walkthroughId.
+   * `status: "cloning"` indicates the repo is mid-clone — the orchestrator
+   * will re-emit a fresh `lifecycle:started` (with `status` omitted) when
+   * the clone finishes.
+   */
+  | {
+      type: "lifecycle:started";
+      data: {
+        walkthroughId: string;
+        prHeadSha: string;
+        trigger: WalkthroughStartTrigger;
+        status?: "cloning";
+        repoId?: string;
+      };
+    }
+  /**
+   * Generation finished — Phase D validated, `status='complete'`. Replaces
+   * the legacy `done` event and the `walkthrough:complete` WS envelope.
+   */
+  | {
+      type: "lifecycle:complete";
+      data: { walkthroughId: string; tokenUsage: WalkthroughTokenUsage };
+    }
+  /**
+   * Terminal failure. `code === "CloneInProgress"` is handled specially —
+   * the orchestrator will re-emit `lifecycle:started` when the repo clone
+   * finishes; no client retry needed.
+   */
+  | { type: "lifecycle:error"; data: { code: string; message: string; repoId?: string } }
+  /**
+   * The walkthrough was imported from the team's remote cache rather than
+   * generated locally. Purely cosmetic — the actual content events that
+   * follow are produced by the importer enumerating the freshly-inserted
+   * rows and replaying them as if they had just been written.
+   */
+  | { type: "lifecycle:cache-hit"; data: { walkthroughId: string; source: "remote" } }
+  /**
+   * A chat-driven edit landed on a completed walkthrough (CLAUDE.md
+   * invariant #7 carve-out). Stamps `lastEditedAt` on the entry; the
+   * inner content event that effected the mutation arrives in the
+   * same event stream with a subsequent seq.
+   */
+  | { type: "lifecycle:edited"; data: { walkthroughId: string; editedAt: string } }
+  /**
+   * This walkthrough was marked `status='superseded'` because a newer
+   * one replaced it (typically a fresh PR commit, or a user-driven
+   * regenerate that targets the same head SHA via the recycle path).
+   * `supersededBy` is the id of the replacement row, when known.
+   */
+  | {
+      type: "lifecycle:superseded";
+      data: { walkthroughId: string; supersededBy: string | null };
+    }
   // Chat-edit deletion events (CLAUDE.md invariant #7 carve-out). Emitted
   // only via the chat-edit MCP tools after a walkthrough has reached
   // `status='complete'`; never produced by the generation pipeline. Frontend

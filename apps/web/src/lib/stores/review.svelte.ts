@@ -12,7 +12,7 @@ import { RequestState, type RequestState as RequestStateType } from "$lib/stores
 import { invalidateChatHistory } from "$lib/stores/chat.svelte";
 import { enterSidebarMode } from "$lib/stores/focus-mode.svelte";
 import { getPullRequests } from "$lib/stores/prs.svelte";
-import { invalidateForPull } from "$lib/stores/walkthrough-stream.svelte";
+import { invalidateForPull } from "$lib/stores/walkthrough.svelte";
 import type { ReviewFile } from "$lib/types/review";
 
 // --- Review files (shared between sidebar tree + review page) ---

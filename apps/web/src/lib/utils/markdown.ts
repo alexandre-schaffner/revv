@@ -134,7 +134,10 @@ function wrapTextNode(node: Text, ctx: WrapCtx): void {
   parent.replaceChild(frag, node);
 }
 
-function wrapNewWordsInHtml(html: string, prevPlainLen: number): { html: string; plainLen: number } {
+function wrapNewWordsInHtml(
+  html: string,
+  prevPlainLen: number,
+): { html: string; plainLen: number } {
   if (typeof DOMParser === "undefined") return { html, plainLen: 0 };
   const doc = new DOMParser().parseFromString(`<div id="__sd_root">${html}</div>`, "text/html");
   const root = doc.getElementById("__sd_root");

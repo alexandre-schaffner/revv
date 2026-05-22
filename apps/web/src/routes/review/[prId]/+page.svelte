@@ -27,8 +27,10 @@ import {
   setReviewFiles,
   switchPrViewState,
 } from "$lib/stores/review.svelte";
-import { getRiskLevel as getWalkthroughRiskLevel } from "$lib/stores/walkthrough.svelte";
-import { deactivate as deactivateWalkthrough } from "$lib/stores/walkthrough-stream.svelte";
+import {
+  deactivate as deactivateWalkthrough,
+  getRiskLevel as getWalkthroughRiskLevel,
+} from "$lib/stores/walkthrough.svelte";
 import { setScrollRoot } from "$lib/stores/walkthroughNav.svelte";
 import { requestThreadSync } from "$lib/stores/ws.svelte";
 

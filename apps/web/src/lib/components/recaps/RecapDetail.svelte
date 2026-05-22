@@ -4,8 +4,8 @@ import type { ProjectRecap } from "@revv/shared";
 import { Shimmer } from "$lib/components/ai/shimmer";
 import { Button } from "$lib/components/ui/button";
 import type { RecapStreamEntry } from "$lib/stores/recap-stream.svelte";
-import { createStreamingBlockRenderer, renderMarkdown } from "$lib/utils/markdown";
 import { handleMarkdownLinkClick } from "$lib/utils/links";
+import { createStreamingBlockRenderer, renderMarkdown } from "$lib/utils/markdown";
 import RecapStats from "./RecapStats.svelte";
 
 interface Props {
@@ -17,12 +17,7 @@ interface Props {
   stream?: RecapStreamEntry | null | undefined;
 }
 
-let {
-  recap,
-  loading,
-  onBack = undefined,
-  stream = null,
-}: Props = $props();
+let { recap, loading, onBack = undefined, stream = null }: Props = $props();
 
 let completedHtml = $derived.by(() => {
   if (recap?.overview) return renderMarkdown(recap.overview);
@@ -73,7 +68,6 @@ function phaseMessage(phase: string): string {
   };
   return labels[phase] ?? "Generating recap…";
 }
-
 </script>
 
 <div class="recap-detail">

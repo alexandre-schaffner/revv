@@ -19,16 +19,7 @@ import {
 import { getGithubHost } from "./settings.svelte";
 import * as sync from "./sync.svelte";
 import { markThreadsSyncing } from "./sync.svelte";
-import {
-  onWalkthroughCacheHit,
-  onWalkthroughEdited,
-  onWalkthroughError,
-} from "./walkthrough.svelte";
-import {
-  hydrateFromCache,
-  onWalkthroughComplete,
-  prefetchWalkthrough,
-} from "./walkthrough-stream.svelte";
+import { hydrateFromCache } from "./walkthrough.svelte";
 
 let ws: WebSocket | null = null;
 let reconnectAttempts = $state(0);
@@ -65,16 +56,16 @@ function notifySyncChanges(changes: SyncChange[]): void {
   if (changes.length === 0) return;
   if (changes.length > 3) {
     toast.info(`${changes.length} pull request updates`);
-    // Skip per-PR prefetching when many changes arrive at once to avoid
-    // saturating the SSE connection pool (capped at MAX_CONCURRENT_STREAMS).
     return;
   }
   for (const change of changes) {
     const description = `${change.repoFullName} #${change.prNumber}: ${change.prTitle}`;
     switch (change.kind) {
       case "review_requested":
+        // Walkthrough auto-starts server-side via PollScheduler; the
+        // resulting `lifecycle:started` arrives over the global SSE bus
+        // and seeds the sidebar spinner without a client-side trigger.
         toast.info("Review requested", { description });
-        void prefetchWalkthrough(change.prId);
         break;
       case "pr_updated":
         toast.info("PR updated", { description });
@@ -158,18 +149,6 @@ function handleMessage(msg: WsServerMessage): void {
       break;
     case "threads:new-reply":
       onThreadCreated(msg.data.thread, msg.data.message);
-      break;
-    case "walkthrough:complete":
-      onWalkthroughComplete(msg.data.prId, msg.data.walkthroughId);
-      break;
-    case "walkthrough:cache-hit":
-      onWalkthroughCacheHit(msg.data.prId, msg.data.walkthroughId, msg.data.source);
-      break;
-    case "walkthrough:edited":
-      onWalkthroughEdited(msg.data.prId, msg.data.walkthroughId, msg.data.event);
-      break;
-    case "walkthrough:error":
-      onWalkthroughError(msg.data.prId, msg.data.message);
       break;
     case "prs:sync-summary":
       notifySyncChanges(msg.data);

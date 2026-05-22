@@ -3,6 +3,7 @@ import { Elysia, t } from "elysia";
 import { AppRuntime } from "../runtime";
 import { ReviewService } from "../services/Review";
 import { SyncService } from "../services/Sync";
+import { WalkthroughJobs } from "../services/WalkthroughJobs";
 import { WebSocketHub } from "../services/WebSocketHub";
 import { handleAppError, withAuth } from "./middleware";
 import { activeSessionHandler } from "./reviews/handlers/active-session";
@@ -13,7 +14,6 @@ import {
   resumeWalkthroughHandler,
 } from "./reviews/handlers/walkthrough-cache";
 import { getCurrentWalkthroughHandler } from "./reviews/handlers/walkthrough-current";
-import { walkthroughStreamHandler } from "./reviews/handlers/walkthrough-stream";
 
 /**
  * Review routes — thin Elysia router. Handler bodies live in
@@ -223,16 +223,32 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
   })
 
   // ── Walkthrough ────────────────────────────────────────────────────────
-  .get(
-    "/:id/walkthrough",
-    (ctx) => walkthroughStreamHandler(ctx),
-    {
-      query: t.Object({
-        snapshotAt: t.Optional(t.String()),
-        lastPhase: t.Optional(t.String()),
-      }),
-    },
-  )
+  //
+  // Generation events stream over the global SSE bus at `/api/events`;
+  // these REST endpoints handle the trigger/hydrate/lifecycle side. The
+  // legacy per-PR SSE (`GET /:id/walkthrough`) was deleted when walkthrough
+  // events moved to the unified bus.
+  .post("/:id/walkthrough/start", async (ctx) => {
+    try {
+      const result = await AppRuntime.runPromise(
+        Effect.gen(function* () {
+          const jobs = yield* WalkthroughJobs;
+          const existing = yield* jobs.findActiveByPr(ctx.params.id);
+          if (existing !== null) {
+            return { walkthroughId: existing.walkthroughId };
+          }
+          return yield* jobs.startJob({
+            prId: ctx.params.id,
+            userId: ctx.session.user.id,
+            trigger: "user",
+          });
+        }),
+      );
+      return { success: true, walkthroughId: result.walkthroughId };
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  })
 
   .get("/:id/walkthrough/current", async (ctx) => {
     try {
