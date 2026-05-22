@@ -26,11 +26,8 @@ import {
 
 let source: EventSource | null = null;
 let activeHostOverride: string | null = null;
-// Tracks whether the current `EventSource` has already fired `open` once.
-// EventSource fires `open` on both first-connect and every auto-reconnect;
-// we use this to distinguish them so reconnects can refetch the
-// currently-viewed PR's full snapshot (recovering events that were
-// broadcast during the disconnect gap and lost forever to this client).
+// EventSource fires `open` on the first connect AND on every auto-reconnect;
+// we use this counter to distinguish them (see the `open` handler below).
 let openCount = 0;
 
 /**
@@ -62,20 +59,12 @@ export function connect(token: string, hostOverride?: string): void {
     // failures here mean the sidebar spinner shows up late, not data loss.
     void hydrateActiveWalkthroughs();
 
-    // After a RECONNECT (not the first open), refetch the snapshot for the
-    // currently-viewed PR. EventSource doesn't replay missed events, and
-    // the server doesn't buffer them, so any walkthrough event broadcast
-    // during the disconnect gap was dispatched to zero writers and is
-    // lost from this client's reducer forever. hydrateFromCache merges
-    // the authoritative DB snapshot back into the entry, recovering the
-    // missed chapters/blocks/ratings/issues. Background PRs catch up on
-    // demand when the user navigates to them (their component mount
-    // already runs the same hydration path).
-    if (openCount > 1) {
-      const activePrId = walkthroughStore.activePrId;
-      if (activePrId) {
-        void hydrateFromCache(activePrId, { activate: false });
-      }
+    // On RECONNECT only, refetch the active PR's snapshot. Events broadcast
+    // during the disconnect gap hit zero writers and are gone from this
+    // client; hydrateFromCache merges the DB snapshot back into the entry.
+    // Background PRs catch up via the component-mount hydration path.
+    if (openCount > 1 && walkthroughStore.activePrId) {
+      void hydrateFromCache(walkthroughStore.activePrId, { activate: false });
     }
   });
 

@@ -140,12 +140,9 @@ export function freshEntry(): WalkthroughEntry {
 // ── Reactive state ──────────────────────────────────────────────────────────
 
 export const store = $state({
-  // Reactive Map: SvelteMap tracks `.set`/`.delete`/`.clear` natively, so
-  // mutations propagate to readers without the manual `entries = new Map(...)`
-  // reassignment dance. Plain `Map` inside `$state` does NOT trigger
-  // reactivity on mutating methods — the old workaround was unreliable and
-  // manifested as "store has 6 chapters, UI shows 3" when consumer derivations
-  // missed the update.
+  // SvelteMap (not plain `Map`): plain `Map` mutations don't trigger Svelte
+  // reactivity, and the previous `entries = new Map(entries)` workaround
+  // was unreliable across module boundaries.
   entries: new SvelteMap<string, WalkthroughEntry>(),
   activePrId: null as string | null,
   /**
@@ -158,6 +155,14 @@ export const store = $state({
    */
   lastSeenSeq: new SvelteMap<string, number>(),
 });
+
+const PHASE_RANK: Record<WalkthroughPipelinePhase, number> = {
+  none: 0,
+  A: 1,
+  B: 2,
+  C: 3,
+  D: 4,
+};
 
 // `_active` is the single reactive derivation that resolves the current PR's
 // walkthrough entry. Do NOT "simplify" this back to a plain function — Svelte
@@ -797,29 +802,20 @@ async function doHydrateFromCache(
     const entry = previous ?? freshEntry();
     const hasRealSummary = wt.summary !== "";
 
-    // Scalars: prefer the more-informative value between what SSE already applied
-    // (entry) and what the snapshot carries (wt). Entry wins when non-null/non-empty
-    // because it may have been advanced by SSE events that arrived during the fetch.
+    // Entry-wins merge: SSE events applied to `entry` during the REST fetch
+    // are newer than the snapshot in `wt`, so prefer entry's non-null values
+    // for scalars and overlay entry items on top of snapshot items for
+    // collections. Without this, the snapshot's stale view would clobber
+    // chapters the SSE had already delivered.
     entry.summary = entry.summary ?? (hasRealSummary ? wt.summary : null);
     entry.riskLevel = entry.riskLevel ?? (hasRealSummary ? wt.riskLevel : null);
     entry.sentiment = entry.sentiment ?? wt.sentiment ?? null;
 
-    const PHASE_RANK: Record<WalkthroughPipelinePhase, number> = {
-      none: 0,
-      A: 1,
-      B: 2,
-      C: 3,
-      D: 4,
-    };
     const snapshotPhase = wt.lastCompletedPhase ?? (isGenerating ? "none" : "D");
     const entryPhase = entry.lastCompletedPhase ?? "none";
     entry.lastCompletedPhase =
       PHASE_RANK[entryPhase] >= PHASE_RANK[snapshotPhase] ? entryPhase : snapshotPhase;
 
-    // Collections: union snapshot + entry, with entry taking priority for
-    // duplicates. Entry items were applied via SSE and may be newer than the
-    // snapshot (which was read at T1, before the REST response arrived).
-    // Items only in the entry arrived after T1 and must not be discarded.
     const ssMap = new Map<number, WalkthroughSemanticStep>();
     for (const s of wt.semanticSteps ?? []) ssMap.set(s.semanticStepIndex, s);
     for (const s of entry.semanticSteps) ssMap.set(s.semanticStepIndex, s);
@@ -859,9 +855,8 @@ async function doHydrateFromCache(
     if (isGenerating) entry.streamStartedAt = Date.now();
     setEntry(prId, entry);
 
-    // Advance the seq cursor to max(current, snapshot). Using Math.max ensures
-    // we never regress a cursor that SSE already advanced past the snapshot's
-    // seqAt during the fetch window.
+    // Math.max so SSE can't regress the cursor below what it already advanced
+    // past during the fetch window.
     if (typeof body.seqAt === "number") {
       const existingSeq = store.lastSeenSeq.get(wt.id) ?? -1;
       store.lastSeenSeq.set(wt.id, Math.max(existingSeq, body.seqAt));

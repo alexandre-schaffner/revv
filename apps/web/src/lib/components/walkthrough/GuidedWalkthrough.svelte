@@ -251,23 +251,14 @@ const chapterStartIndex = $derived.by(() => {
   void activeChapterIndex;
   return untrack(() => explorationSteps.length);
 });
-// Pair each step with its absolute index in `explorationSteps` so the
-// keyed `{#each}` below can use a stable, collision-proof key. Two
-// consecutive `add_diff_step` calls share the same toolName + summary
-// ("Writing walkthrough step…"), which used to crash Svelte with
-// `each_key_duplicate` — and a Svelte each-key crash freezes the entire
-// component, which is what was causing later chapters / ratings / blocks
-// to never render even though the store had them.
+// Pair each step with its absolute index so the keyed `{#each}` can
+// use a collision-proof identity. Two consecutive `add_diff_step` calls
+// share the same toolName + summary and crashed Svelte with
+// `each_key_duplicate`, which freezes the whole component — that's the
+// crash that made later chapters / ratings appear missing.
 const recentExplorationSteps = $derived.by(() => {
-  const start = chapterStartIndex;
-  const all = explorationSteps;
-  const sliceStart = Math.max(start, all.length - TOOL_CALL_WINDOW);
-  const out: { step: (typeof all)[number]; ordinal: number }[] = [];
-  for (let i = sliceStart; i < all.length; i += 1) {
-    const step = all[i];
-    if (step !== undefined) out.push({ step, ordinal: i });
-  }
-  return out;
+  const start = Math.max(chapterStartIndex, explorationSteps.length - TOOL_CALL_WINDOW);
+  return explorationSteps.slice(start).map((step, i) => ({ step, ordinal: start + i }));
 });
 
 // "All phases done" needs actual evidence of completion. A fresh PR with
