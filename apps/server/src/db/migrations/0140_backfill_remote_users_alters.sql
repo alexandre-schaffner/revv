@@ -1,17 +1,15 @@
--- Backfill the ALTER statements that were silently skipped by 0100_remote_users.sql.
--- The original migration grouped four statements under a single statement chunk
--- (missing `--> statement-breakpoint` separators), and Bun's SQLite driver only
--- executes the first statement of a multi-statement chunk via `db.run`. As a
--- result, `user.identity_id`, `thread_messages.author_login`, and the
--- `pull_requests.author_avatar_url` drop never landed on dev databases even
--- though 0100 is recorded as applied.
+-- No-op as of the custom hash-based migrator (apps/server/src/db/migrator.ts).
 --
--- This migration is safe to run on fresh installs too: on a fresh DB, 0100 will
--- still only apply its first chunk and the `CREATE UNIQUE INDEX` from the
--- second chunk, then 0140 here finishes the job.
-
-ALTER TABLE `user` ADD `identity_id` text REFERENCES `remote_users`(`id`);
---> statement-breakpoint
-ALTER TABLE `thread_messages` ADD `author_login` text;
---> statement-breakpoint
-ALTER TABLE `pull_requests` DROP COLUMN `author_avatar_url`;
+-- This migration originally backfilled the three ALTER statements from
+-- 0100_remote_users.sql that were silently dropped by drizzle's bun-sqlite
+-- migrator: that migrator runs each chunk via db.run(), which under Bun's
+-- SQLite driver only executes the first statement of a multi-statement
+-- string. 0100 packs four statements into its second chunk, so the three
+-- ALTERs after the CREATE UNIQUE INDEX never landed.
+--
+-- The replacement migrator runs each chunk via sqlite.exec(), which
+-- executes every statement in the buffer, so 0100 now applies in full on
+-- fresh installs and this backfill is redundant. The file is retained as a
+-- no-op so the journal entry remains valid and existing installs that
+-- already have this migration recorded in __drizzle_migrations continue to
+-- match by hash on subsequent boots.
