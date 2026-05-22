@@ -46,6 +46,7 @@ import {
   withAgentTurn,
 } from "../agent-stream";
 import { buildRecapUserMessage, RECAP_SYSTEM_PROMPT } from "../prompts/recap";
+import { buildRecapActivity, normalizeRecapToolName } from "./recap-activity";
 import type { RecapToolContext } from "./recap-tools";
 import { RECAP_MCP_SERVER } from "./recap-tools";
 
@@ -109,6 +110,7 @@ export async function runRecapAgentViaOpencode(
 ): Promise<RecapOpencodeResult> {
   let sessionToken: string | null = null;
   let sessionId: string | null = null;
+  let validatedCompleteSeen = false;
 
   const userMessage = buildRecapUserMessage(params.ctx.sourceBundle, params.ctx.priorRecaps);
 
@@ -140,18 +142,56 @@ export async function runRecapAgentViaOpencode(
           throw new Error("OpencodeSupervisor reports daemon-running but no HTTP client available");
         }
 
+        let resolveValidatedComplete: (() => void) | null = null;
+        const validatedComplete = new Promise<void>((resolve) => {
+          resolveValidatedComplete = resolve;
+        });
+
+        let completionAbortTimer: ReturnType<typeof setTimeout> | null = null;
+        const abortAfterValidatedComplete = (): void => {
+          if (completionAbortTimer !== null) return;
+          completionAbortTimer = setTimeout(() => {
+            if (!sessionId) return;
+            void client.session
+              .abort({ sessionID: sessionId })
+              .then((result: { error?: unknown; response?: { status?: number } }) => {
+                if (result.error && result.response?.status !== 404) {
+                  logError("recap-opencode", "abort-after-complete non-ok");
+                }
+              })
+              .catch((err: unknown) => {
+                logError(
+                  "recap-opencode",
+                  "abort-after-complete failed:",
+                  err instanceof Error ? err.message : String(err),
+                );
+              });
+          }, 0);
+        };
+
+        const toolCtx: RecapToolContext = {
+          ...params.ctx,
+          onCompleted: () => {
+            validatedCompleteSeen = true;
+            params.ctx.onCompleted();
+            resolveValidatedComplete?.();
+            abortAfterValidatedComplete();
+          },
+        };
+
         // ── 1. Issue session token + register MCP server ──────────
-        sessionToken = await params.sessionDeps.issueSessionToken(params.ctx);
+        sessionToken = await params.sessionDeps.issueSessionToken(toolCtx);
         const mcpUrl = `http://127.0.0.1:${serverEnv.port}/mcp/recap`;
+        const mcpServerName = `${RECAP_MCP_SERVER}-${params.ctx.recapId}`;
         debug(
           "recap-opencode",
-          `registering MCP ${RECAP_MCP_SERVER} → ${mcpUrl}`,
+          `registering MCP ${mcpServerName} → ${mcpUrl}`,
           "endpoint:",
           `${endpoint.hostname}:${endpoint.port}`,
         );
         const mcpResult = await client.mcp.add({
           directory: params.workingDir,
-          name: RECAP_MCP_SERVER,
+          name: mcpServerName,
           config: {
             type: "remote",
             url: mcpUrl,
@@ -163,13 +203,13 @@ export async function runRecapAgentViaOpencode(
             (mcpResult.error as { data?: { message?: string } }).data?.message ?? "unknown error";
           throw new Error(`opencode mcp.add failed: ${detail}`);
         }
-        const mcpEntry = mcpResult.data?.[RECAP_MCP_SERVER];
+        const mcpEntry = mcpResult.data?.[mcpServerName];
         if (!mcpEntry) {
-          throw new Error(`opencode mcp.add returned no status for '${RECAP_MCP_SERVER}'`);
+          throw new Error(`opencode mcp.add returned no status for '${mcpServerName}'`);
         }
         if (mcpEntry.status !== "connected") {
           throw new Error(
-            `opencode mcp.add: '${RECAP_MCP_SERVER}' status=${mcpEntry.status}${
+            `opencode mcp.add: '${mcpServerName}' status=${mcpEntry.status}${
               "error" in mcpEntry && typeof mcpEntry.error === "string"
                 ? ` — ${mcpEntry.error}`
                 : ""
@@ -198,10 +238,10 @@ export async function runRecapAgentViaOpencode(
         // `ctx.emit({type:"chunk", ...})` for the UI AND append to
         // `ctx.textBuffer.current` so `commit_recap_overview`'s handler
         // can read the markdown body when its HTTP-MCP call lands.
-        // Tool-call events reset the buffer to drop any pre-composition
-        // prelude, EXCEPT for `commit_recap_overview` itself — its
-        // handler reads the buffer immediately and a reset here would
-        // race the HTTP-MCP invocation.
+        // Pre-commit read tool calls reset the buffer to drop any
+        // pre-composition prelude. `commit_recap_overview` and
+        // `complete_recap` must not reset: commit reads the buffer, and
+        // complete fires after the committed overview has reached the UI.
         const sseAbort = new AbortController();
         // Shared dedup state with the backstop walk below — anything
         // SSE already streamed is skipped when we walk response.parts.
@@ -209,6 +249,7 @@ export async function runRecapAgentViaOpencode(
         const seenToolPartIds = new Set<string>();
         const userMessageIDs = new Set<string>();
         const fanOutEvent = (event: RecapStreamEvent): void => {
+          if (validatedCompleteSeen) return;
           try {
             params.ctx.emit(event);
           } catch (err) {
@@ -219,6 +260,10 @@ export async function runRecapAgentViaOpencode(
             );
           }
         };
+        // Throttle reasoning-delta phase events so the UI doesn't
+        // spam "Model is thinking…" on every token.
+        let lastReasoningPush = 0;
+        let committed = false;
         const sseDone = subscribeOpencodeStream(
           client,
           turnSessionId,
@@ -227,11 +272,38 @@ export async function runRecapAgentViaOpencode(
             if (ev.kind === "text-delta") {
               if (ev.data.length === 0) return;
               params.ctx.textBuffer.current += ev.data;
-              fanOutEvent({ type: "chunk", data: { text: ev.data } });
+              if (!committed) {
+                fanOutEvent({ type: "chunk", data: { text: ev.data } });
+              }
+              return;
+            }
+            if (ev.kind === "reasoning-delta") {
+              if (ev.data.length > 0) {
+                fanOutEvent({ type: "thought", data: { text: ev.data } });
+              }
+              // Extended thinking — log so operators can see why the
+              // stream is silent for minutes at a time, AND push a
+              // phase heartbeat so the UI doesn't look hung. DeepSeek
+              // models can reason for 5–10 minutes before emitting
+              // any text-delta; without this the 10-minute timeout
+              // fires while the model is legitimately thinking.
+              const now = Date.now();
+              if (now - lastReasoningPush >= 30_000) {
+                lastReasoningPush = now;
+                fanOutEvent({
+                  type: "phase",
+                  data: { phase: "analyzing", message: "Model is thinking…" },
+                });
+              }
+              debug("recap-opencode", `reasoning-delta (${ev.data.length} chars)`);
               return;
             }
             if (ev.kind === "tool-call") {
-              if (ev.bareName !== "commit_recap_overview") {
+              const toolName = normalizeRecapToolName(ev.bareName);
+              fanOutEvent({ type: "activity", data: buildRecapActivity(toolName, ev.input) });
+              if (toolName === "commit_recap_overview") {
+                committed = true;
+              } else if (toolName !== "complete_recap" && !committed) {
                 // Mirror the server-side buffer reset on the wire so the
                 // UI drops the agent's pre-composition narration. See
                 // recap-agent-runner.ts for the matching reset in the
@@ -239,9 +311,24 @@ export async function runRecapAgentViaOpencode(
                 params.ctx.textBuffer.current = "";
                 fanOutEvent({ type: "overview", data: { overview: "" } });
               }
+              debug("recap-opencode", `tool-call: ${toolName} (source=${ev.source})`);
               return;
             }
-            // reasoning-delta / task-list-update / subagent-* / error → ignored
+            if (ev.kind === "user-question-asked") {
+              // If opencode blocks on a permission/question, we need to
+              // know — the daemon will wait forever for an answer.
+              logError(
+                "recap-opencode",
+                `session ${turnSessionId} asked a question — this will block until answered/rejected.`,
+                JSON.stringify(ev.questions),
+              );
+              return;
+            }
+            if (ev.kind === "error") {
+              logError("recap-opencode", `session.error: ${ev.message}`);
+              return;
+            }
+            // task-list-update / subagent-* → ignored
           },
           {
             emittedTextLen,
@@ -256,7 +343,20 @@ export async function runRecapAgentViaOpencode(
 
         // ── 4. Post the prompt and drain ──────────────────────────
         const wireModel = parseOpencodeModel(params.modelUsed);
-        const promptResult = await client.session
+        debug(
+          "recap-opencode",
+          `posting prompt to session ${turnSessionId}`,
+          "model:",
+          params.modelUsed,
+          "wire:",
+          wireModel ?? "(default)",
+        );
+        const promptAbort = new AbortController();
+        const onPromptAbort = (): void => promptAbort.abort(ctx.signal.reason);
+        if (ctx.signal.aborted) onPromptAbort();
+        else ctx.signal.addEventListener("abort", onPromptAbort, { once: true });
+
+        const promptPromise = client.session
           .prompt(
             {
               sessionID: turnSessionId,
@@ -265,13 +365,47 @@ export async function runRecapAgentViaOpencode(
               system: RECAP_SYSTEM_PROMPT,
               ...(wireModel !== undefined ? { model: wireModel } : {}),
             },
-            { signal: ctx.signal, throwOnError: true },
+            { signal: promptAbort.signal, throwOnError: true },
           )
           .finally(() => {
+            ctx.signal.removeEventListener("abort", onPromptAbort);
             ctx.signal.removeEventListener("abort", onTurnAbort);
             sseAbort.abort();
           });
-        await sseDone;
+
+        const promptResult = await Promise.race([
+          promptPromise,
+          validatedComplete.then(() => {
+            promptAbort.abort(new Error("Recap completed"));
+            sseAbort.abort();
+            return null;
+          }),
+        ]);
+        if (promptResult === null) {
+          promptPromise.catch(() => {
+            /* prompt was intentionally aborted after complete_recap */
+          });
+          debug(
+            "recap-opencode",
+            `validated complete for session ${turnSessionId}; returning early`,
+          );
+          return {};
+        }
+        debug("recap-opencode", `prompt returned for session ${turnSessionId}`);
+
+        // Safety: if the SSE subscription is still alive (idle-stream
+        // abort-guard bug in some daemon versions), force-close it so
+        // `await sseDone` can't hold the turn past the hard timeout.
+        const sseClose = new Promise<void>((resolve, reject) => {
+          sseDone.then(resolve, reject);
+          // After 5s the drain window has elapsed; if it's still open,
+          // something is wrong — resolve so we don't hang.
+          setTimeout(() => {
+            if (!sseAbort.signal.aborted) sseAbort.abort();
+            resolve();
+          }, 5_000);
+        });
+        await sseClose;
 
         const response = promptResult.data;
 
@@ -280,6 +414,9 @@ export async function runRecapAgentViaOpencode(
         // callers see a real failure instead of silent empty content.
         const errObj = response.info.error;
         if (errObj) {
+          if (validatedCompleteSeen) {
+            return {};
+          }
           return { error: `opencode agent error: ${extractOpencodeErrorMessage(errObj)}` };
         }
 
@@ -302,14 +439,31 @@ export async function runRecapAgentViaOpencode(
             if (ev.kind === "text-delta") {
               if (ev.data.length === 0) return;
               params.ctx.textBuffer.current += ev.data;
-              fanOutEvent({ type: "chunk", data: { text: ev.data } });
+              if (!committed) {
+                fanOutEvent({ type: "chunk", data: { text: ev.data } });
+              }
+              return;
+            }
+            if (ev.kind === "reasoning-delta") {
+              if (ev.data.length > 0) {
+                fanOutEvent({ type: "thought", data: { text: ev.data } });
+              }
+              debug("recap-opencode", `backstop reasoning-delta (${ev.data.length} chars)`);
               return;
             }
             if (ev.kind === "tool-call") {
-              if (ev.bareName !== "commit_recap_overview") {
+              const toolName = normalizeRecapToolName(ev.bareName);
+              fanOutEvent({ type: "activity", data: buildRecapActivity(toolName, ev.input) });
+              if (toolName === "commit_recap_overview") {
+                committed = true;
+              } else if (toolName !== "complete_recap" && !committed) {
                 params.ctx.textBuffer.current = "";
                 fanOutEvent({ type: "overview", data: { overview: "" } });
               }
+              return;
+            }
+            if (ev.kind === "error") {
+              logError("recap-opencode", `backstop error: ${ev.message}`);
               return;
             }
           },
@@ -412,6 +566,11 @@ export async function runRecapAgentViaOpencode(
       },
     });
   } catch (err) {
+    if (validatedCompleteSeen) {
+      // If `complete_recap` validated, we intentionally abort the remote
+      // session to stop opencode from continuing into another loop.
+      return {};
+    }
     const message = err instanceof Error ? err.message : String(err);
     logError("recap-opencode", `run failed:`, message);
     return { error: message };

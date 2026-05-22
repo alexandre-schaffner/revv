@@ -1,9 +1,9 @@
 <script lang="ts">
-import AlertCircle from "@lucide/svelte/icons/alert-circle";
-import ChevronUp from "@lucide/svelte/icons/chevron-up";
-import Loader from "@lucide/svelte/icons/loader";
 import type { PullRequest } from "@revv/shared";
 import { DropdownMenu } from "bits-ui";
+import ChevronUp from "phosphor-svelte/lib/CaretUp";
+import Loader from "phosphor-svelte/lib/Spinner";
+import AlertCircle from "phosphor-svelte/lib/WarningCircle";
 import { untrack } from "svelte";
 import { api } from "$lib/api/client";
 
@@ -88,7 +88,7 @@ $effect(() => {
 				</div>
 			{:else if fetchError}
 				<div class="flex items-center justify-center gap-2 px-3 py-3 text-xs text-danger">
-					<AlertCircle size={12} />
+					<AlertCircle size={12} weight="fill" />
 					<span>Failed to load commits</span>
 				</div>
 			{:else if commits !== null}

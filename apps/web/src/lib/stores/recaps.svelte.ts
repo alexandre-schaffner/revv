@@ -186,6 +186,32 @@ export async function stopRecap(recapId: string): Promise<boolean> {
     abortRecapStream(recapId);
     const { error } = await api.api.recaps({ id: recapId }).stop.post();
     if (error) throw new Error(`HTTP ${error.status}`);
+    // Optimistically patch local state so the UI flips out of
+    // "generating" immediately instead of waiting for the WS broadcast.
+    const existing = recapDetailById.get(recapId);
+    if (existing) {
+      const patched: ProjectRecap = {
+        ...existing,
+        status: "error",
+        errorMessage: "Cancelled by user",
+        completedAt: null,
+      };
+      recapDetailById = setEntry(recapDetailById, recapId, patched);
+    }
+    recapsByRepo = updateEntry(recapsByRepo, existing?.repositoryId ?? "", (current) => {
+      const list = current ?? [];
+      const idx = list.findIndex((r) => r.id === recapId);
+      if (idx < 0) return list;
+      const row = list[idx];
+      if (!row) return list;
+      const patched: ProjectRecapSummary = {
+        ...row,
+        status: "error",
+        errorMessage: "Cancelled by user",
+        completedAt: null,
+      };
+      return [...list.slice(0, idx), patched, ...list.slice(idx + 1)];
+    });
     return true;
   } catch (e) {
     toast.error(e instanceof Error ? e.message : "Failed to stop recap");

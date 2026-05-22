@@ -1,6 +1,8 @@
 <script lang="ts">
-import { ChevronRight, Loader2, Sparkles } from "@lucide/svelte";
 import type { ProjectRecap, ProjectRecapSummary } from "@revv/shared";
+import ChevronRight from "phosphor-svelte/lib/CaretRight";
+import Sparkles from "phosphor-svelte/lib/Sparkle";
+import Loader2 from "phosphor-svelte/lib/Spinner";
 import { untrack } from "svelte";
 import RecapStats from "$lib/components/recaps/RecapStats.svelte";
 import {
@@ -78,29 +80,29 @@ let html = $derived(latestDetail?.overview ? renderMarkdown(latestDetail.overvie
 
 <section class="recap-card-section">
 	<header class="recap-card-header">
-		<Sparkles size={14} class="recap-card-icon" />
+		<Sparkles size={14} weight="fill" class="recap-card-icon" />
 		<h2 class="recap-card-title">Latest recap</h2>
 	</header>
 
 	{#if listLoading && recaps.length === 0}
 		<div class="recap-card-loading">
-			<Loader2 size={16} class="animate-spin" aria-hidden="true" />
+			<Loader2 size={16} weight="regular" class="animate-spin" aria-hidden="true" />
 			<span>Loading recaps…</span>
 		</div>
 	{:else if !latest}
 		<div class="recap-card-empty">
-			<Sparkles size={16} aria-hidden="true" />
+			<Sparkles size={16} weight="fill" aria-hidden="true" />
 			<div class="recap-card-empty-body">
 				<p>No recaps yet for this repo.</p>
 				<a href="/repo/{repoId}/recaps" class="recap-card-empty-link">
 					Generate a recap
-					<ChevronRight size={12} />
+					<ChevronRight size={12} weight="fill" />
 				</a>
 			</div>
 		</div>
 	{:else if detailLoading && !latestDetail}
 		<div class="recap-card-loading">
-			<Loader2 size={16} class="animate-spin" aria-hidden="true" />
+			<Loader2 size={16} weight="regular" class="animate-spin" aria-hidden="true" />
 			<span>Loading recap…</span>
 		</div>
 	{:else if latestDetail && latestDetail.status === "generating"}
@@ -110,7 +112,7 @@ let html = $derived(latestDetail?.overview ? renderMarkdown(latestDetail.overvie
 				<span class="recap-card-window">{periodWindow(latest)}</span>
 			</header>
 			<div class="recap-card-generating">
-				<Loader2 size={16} class="animate-spin" aria-hidden="true" />
+				<Loader2 size={16} weight="regular" class="animate-spin" aria-hidden="true" />
 				<p>Generating recap…</p>
 				<p class="hint">This page will update when the recap finishes.</p>
 			</div>
@@ -133,7 +135,7 @@ let html = $derived(latestDetail?.overview ? renderMarkdown(latestDetail.overvie
 			<footer class="recap-card-paper-footer">
 				<a href="/repo/{repoId}/recaps" class="recap-card-view-all">
 					View all recaps
-					<ChevronRight size={12} />
+					<ChevronRight size={12} weight="fill" />
 				</a>
 			</footer>
 		</div>
@@ -147,7 +149,7 @@ let html = $derived(latestDetail?.overview ? renderMarkdown(latestDetail.overvie
 			<footer class="recap-card-paper-footer">
 				<a href="/repo/{repoId}/recaps" class="recap-card-view-all">
 					View all recaps
-					<ChevronRight size={12} />
+					<ChevronRight size={12} weight="fill" />
 				</a>
 			</footer>
 		</div>

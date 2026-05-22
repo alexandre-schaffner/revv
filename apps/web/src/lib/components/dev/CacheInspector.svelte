@@ -5,7 +5,8 @@
  * Shows KV cache namespace stats, GitHub ETag metrics, and file content cache hit rates.
  */
 
-import { RefreshCw, X } from "@lucide/svelte";
+import RefreshCw from "phosphor-svelte/lib/ArrowsClockwise";
+import X from "phosphor-svelte/lib/X";
 import { onMount } from "svelte";
 
 interface NamespaceStat {
@@ -80,10 +81,10 @@ onMount(() => {
 			<span class="inspector-title">Cache Inspector</span>
 			<div class="inspector-actions">
 				<button class="icon-btn" onclick={fetchStats} title="Refresh stats" aria-label="Refresh">
-					<RefreshCw size={14} />
+					<RefreshCw size={14} weight="fill" />
 				</button>
 				<button class="icon-btn" onclick={onclose} title="Close" aria-label="Close">
-					<X size={14} />
+					<X size={14} weight="fill" />
 				</button>
 			</div>
 		</div>

@@ -62,7 +62,7 @@ export const getRecapStateHandler: RecapToolHandler<GetRecapStateInput> = async 
     openPrsPageSize: OPEN_PRS_DEFAULT_PAGE_SIZE,
     previousOverview,
     instructions:
-      `Read the archived PRs above (the \`prs\` array). Each row has author, branches, +/- stats, a body excerpt, and (when available) a walkthrough summary + sentiment + risk + 9-axis context. For PRs where \`walkthrough\` is null, call get_pr_diff with the PR's \`id\` to fetch the actual file changes (per-file status, additions, deletions, unified patch text) — do this for each PR you want to describe in detail before you start composing. Open PRs are NOT inlined here to keep this payload small — there are ${openPrsTotal} of them, capped at the 20 most recently updated. Fetch them via list_open_prs (start with offset=0, default page size ${OPEN_PRS_DEFAULT_PAGE_SIZE}) and keep paging while \`nextOffset\` is non-null. Use those rows to write the 'Active work' section after 'What shipped'. WRITE THE COMPLETE RECAP AS YOUR VISIBLE ASSISTANT RESPONSE — the user watches it stream in live as you type, and the server reads what you wrote when you commit. No preamble, no "Here is the recap" framing, no inter-tool commentary — start with the first heading and go. If you call ANY tool while composing, the buffered text resets, so finish your reads first. When the markdown is complete, call commit_recap_overview ONCE with just the metadata (the PR ids you included, the walkthrough ids you incorporated, and the pre-aggregated stats). Finally call complete_recap.` +
+      `Read the archived PRs above (the \`prs\` array). Each row has author, branches, +/- stats, a body excerpt, and (when available) a walkthrough summary + sentiment + risk + 9-axis context. For PRs where \`walkthrough\` is null, use the row's \`diffDigest\` compact summary; the server already ingested the raw diff before this run so you do not need to load raw patches into this session. Open PRs are NOT inlined here to keep this payload small — there are ${openPrsTotal} of them, capped at the 20 most recently updated. Fetch them via list_open_prs (start with offset=0, default page size ${OPEN_PRS_DEFAULT_PAGE_SIZE}) and keep paging while \`nextOffset\` is non-null. Use those rows to write the 'Active work' section after 'What shipped'. WRITE THE COMPLETE RECAP AS YOUR VISIBLE ASSISTANT RESPONSE — the user watches it stream in live as you type, and the server reads what you wrote when you commit. No preamble, no "Here is the recap" framing, no inter-tool commentary — start with the first heading and go. If you call ANY tool while composing, the buffered text resets, so finish your reads first. When the markdown is complete, call commit_recap_overview ONCE with just the metadata (the PR ids you included, the walkthrough ids you incorporated, and the pre-aggregated stats). Finally call complete_recap.` +
       rerunInstructions,
   };
   return ok(JSON.stringify(payload));
@@ -169,7 +169,9 @@ function sanitizeRecapOverview(raw: string): string {
   const lines = withoutPreamble.trimEnd().split("\n");
   let end = lines.length;
   while (end > 0) {
-    const line = lines[end - 1]!.trim();
+    const current = lines[end - 1];
+    if (current === undefined) break;
+    const line = current.trim();
     if (line === "") {
       end--;
       continue;
@@ -192,6 +194,20 @@ export const commitRecapOverviewHandler: RecapToolHandler<CommitRecapOverviewInp
   ctx,
   input,
 ) => {
+  // Guard: refuse to write if the recap was stopped, superseded, or
+  // otherwise no longer generating. Prevents a late tool call from a
+  // cancelled agent from clobbering a newer run or a stopped row.
+  const currentRow = ctx.db
+    .select({ status: projectRecaps.status })
+    .from(projectRecaps)
+    .where(eq(projectRecaps.id, ctx.recapId))
+    .get();
+  if (currentRow?.status !== "generating") {
+    return err(
+      `Recap is no longer generating (status=${currentRow?.status ?? "unknown"}). Aborting commit.`,
+    );
+  }
+
   // Read the markdown body from the in-memory buffer the orchestrator's
   // stream consumer has been appending text-deltas into. The agent's
   // visible response IS the recap — the model never re-serialises it
@@ -277,6 +293,18 @@ export const commitRecapOverviewHandler: RecapToolHandler<CommitRecapOverviewInp
 // ── Validation gate ──────────────────────────────────────────────────────────
 
 export const completeRecapHandler: RecapToolHandler<CompleteRecapInput> = async (ctx) => {
+  // Guard: refuse to complete if the recap was stopped or superseded.
+  const statusRow = ctx.db
+    .select({ status: projectRecaps.status })
+    .from(projectRecaps)
+    .where(eq(projectRecaps.id, ctx.recapId))
+    .get();
+  if (statusRow?.status !== "generating") {
+    return err(
+      `Recap is no longer generating (status=${statusRow?.status ?? "unknown"}). Aborting completion.`,
+    );
+  }
+
   // Re-read to confirm the agent did call commit_recap_overview before this.
   const row = ctx.db
     .select({
@@ -309,7 +337,6 @@ export const completeRecapHandler: RecapToolHandler<CompleteRecapInput> = async 
   // status transition is performed by the orchestrator, not here — agent
   // never writes status (CLAUDE.md invariant #11).
   ctx.onCompleted();
-  ctx.emit({ type: "done", data: { recapId: ctx.recapId } });
   return ok("Recap complete. The orchestrator will transition status. You may stop.");
 };
 
@@ -321,6 +348,17 @@ export const getPrDiffHandler: RecapToolHandler<GetPrDiffInput> = async (ctx, in
   if (!pr) {
     return err(
       `PR id "${input.pr_id}" is not in this recap's source bundle. Use only ids from the \`prs\` array returned by get_recap_state.`,
+    );
+  }
+
+  if (pr.diffDigest) {
+    return ok(
+      JSON.stringify({
+        pr_id: input.pr_id,
+        digest: pr.diffDigest,
+        instructions:
+          "Use this compact pre-ingested digest instead of asking for raw diff text. Do not call get_pr_diff again for this PR.",
+      }),
     );
   }
 

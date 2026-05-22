@@ -8,8 +8,8 @@
  * thin left guide.
  */
 
-import { ArrowUpRight } from "@lucide/svelte";
 import type { CommentThread, ThreadMessage } from "@revv/shared";
+import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
 import { isHighlighterReady } from "$lib/utils/code-highlight.svelte";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
 import { renderMarkdown } from "$lib/utils/markdown";
@@ -58,7 +58,7 @@ const renderedThreads = $derived.by(() => {
                         title="Jump to diff line {entry.thread.startLine}"
                     >
                         <span class="thread-jump-label">jump</span>
-                        <ArrowUpRight size={11} aria-hidden="true" />
+                        <ArrowUpRight size={11} weight="fill" aria-hidden="true" />
                     </button>
                 {/if}
             </div>

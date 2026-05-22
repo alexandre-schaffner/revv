@@ -92,7 +92,7 @@ export interface WalkthroughEntry {
     githubUserId: number | null;
     githubLogin: string | null;
     displayName: string | null;
-    avatarUrl: string | null;
+    avatarContent: string | null;
   } | null;
   /**
    * Snapshot of the AI provider config in effect when this walkthrough

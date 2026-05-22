@@ -1,0 +1,49 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "workspaces": {
+    ".": {
+      "entry": ["scripts/**/*.ts"],
+      "ignoreDependencies": ["@tauri-apps/cli", "concurrently"]
+    },
+    "apps/web": {
+      "entry": [
+        "src/routes/**/+{page,layout,server,error,page.load,layout.load}.svelte",
+        "src/routes/**/+{page,layout}.ts",
+        "src/app.html",
+        "src/app.d.ts",
+        "src/hooks.server.ts",
+        "src/hooks.client.ts",
+        "svelte.config.js",
+        "vite.config.ts",
+        "static/**"
+      ],
+      "ignoreDependencies": [
+        "@sveltejs/adapter-static",
+        "@sveltejs/kit",
+        "@sveltejs/vite-plugin-svelte",
+        "@tailwindcss/vite",
+        "svelte-check",
+        "mode-watcher",
+        "svelte-sonner",
+        "bun-types"
+      ]
+    },
+    "apps/server": {
+      "entry": ["src/index.ts"],
+      "ignoreDependencies": ["bun-types", "drizzle-kit"]
+    },
+    "packages/shared": {
+      "entry": ["src/index.ts"]
+    },
+    "packages/ui": {
+      "entry": ["src/**/*.{ts,tsx}"],
+      "ignoreDependencies": ["@radix-ui/react-popover", "class-variance-authority"]
+    },
+    "packages/app": {
+      "entry": ["src/root.tsx", "src/routes/**/*.{ts,tsx}", "vite.config.ts", "app.config.ts"]
+    }
+  },
+  "ignore": [],
+  "ignoreExportsUsedInFile": true,
+  "ignoreDependencies": ["biome", "turbo", "knip"]
+}

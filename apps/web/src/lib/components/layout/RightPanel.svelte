@@ -1,30 +1,30 @@
 <script lang="ts">
-import {
-  AlertTriangle,
-  Bot,
-  Check,
-  ChevronDown,
-  Copy,
-  GitBranch,
-  GitCommitHorizontal,
-  GitMerge,
-  Lightbulb,
-  Loader2,
-  RefreshCw,
-  Send,
-  Settings,
-  Trash2,
-  Upload,
-  Wand,
-  X,
-} from "@lucide/svelte";
+import ArrowCounterClockwise from "phosphor-svelte/lib/ArrowCounterClockwise";
+import CaretDown from "phosphor-svelte/lib/CaretDown";
+import Check from "phosphor-svelte/lib/Check";
+import CheckCircle from "phosphor-svelte/lib/CheckCircle";
+import Circle from "phosphor-svelte/lib/Circle";
+import Copy from "phosphor-svelte/lib/Copy";
+import Gear from "phosphor-svelte/lib/Gear";
+import GitBranch from "phosphor-svelte/lib/GitBranch";
+import GitCommit from "phosphor-svelte/lib/GitCommit";
+import GitMerge from "phosphor-svelte/lib/GitMerge";
+import Lightbulb from "phosphor-svelte/lib/Lightbulb";
+import MagicWand from "phosphor-svelte/lib/MagicWand";
+import PaperPlaneTilt from "phosphor-svelte/lib/PaperPlaneTilt";
+import Robot from "phosphor-svelte/lib/Robot";
+import Spinner from "phosphor-svelte/lib/Spinner";
+import Trash from "phosphor-svelte/lib/Trash";
+import UploadSimple from "phosphor-svelte/lib/UploadSimple";
+import Warning from "phosphor-svelte/lib/Warning";
+import X from "phosphor-svelte/lib/X";
+import XCircle from "phosphor-svelte/lib/XCircle";
 import { tick } from "svelte";
 import { cubicIn, cubicOut } from "svelte/easing";
 import { fly, slide } from "svelte/transition";
 
 const TOOL_CALL_ROW_H = 14; // px — match walkthrough's compact tool-call rows
 
-import { CheckCircle2, Circle, CircleCheck, CircleX } from "@lucide/svelte";
 import { toast } from "svelte-sonner";
 import { fetchProposedDiffFiles, type ProposedDiffFile } from "$lib/api/chat";
 import { Checkpoint } from "$lib/components/ai/checkpoint";
@@ -489,10 +489,10 @@ function activitiesForTurn(
 						disabled={isPushing || isStreaming || isResolving}
 					>
 						{#if isPushing}
-							<Loader2 size={12} class="motion-essential-spin" />
+							<Spinner size={12} weight="fill" class="motion-essential-spin" />
 							<span class="push-pill-label">Pushing…</span>
 						{:else}
-							<Upload size={12} />
+							<UploadSimple size={12} weight="fill" />
 							<span class="push-pill-label">
 								Push
 								<span class="push-pill-count">{commitCount}</span>
@@ -508,7 +508,7 @@ function activitiesForTurn(
 								title="Push options"
 								disabled={isPushing || isStreaming || isResolving}
 							>
-								<ChevronDown size={11} />
+								<CaretDown size={11} weight="fill" />
 							</button>
 						</PopoverTrigger>
 						<PopoverContent class="w-72 p-1" align="end" side="bottom">
@@ -517,7 +517,7 @@ function activitiesForTurn(
 								class="push-menu-item"
 								onclick={openNewBranchDialog}
 							>
-								<GitBranch size={12} class="push-menu-item-icon" />
+								<GitBranch size={12} weight="fill" class="push-menu-item-icon" />
 								<div class="push-menu-item-body">
 									<span class="push-menu-item-title">Push to new branch…</span>
 									<span class="push-menu-item-hint">
@@ -541,11 +541,11 @@ function activitiesForTurn(
 						: 'Clear conversation'}
 					disabled={isPushing || isResolving}
 				>
-					<Wand size={13} />
+					<MagicWand size={13} weight="fill" />
 				</button>
 			{/if}
 			<button class="icon-btn" onclick={onClose} aria-label="Close panel">
-				<X size={14} />
+				<X size={14} weight="fill" />
 			</button>
 		</div>
 	</div>
@@ -554,7 +554,7 @@ function activitiesForTurn(
 	{#if blocked}
 		<div class="blocked-strip">
 			<div class="blocked-header">
-				<AlertTriangle size={12} class="blocked-icon" />
+				<Warning size={12} weight="fill" class="blocked-icon" />
 				<span class="blocked-title">
 					PR head advanced — {blocked.commits.length} unpushed commit{blocked.commits.length === 1 ? '' : 's'}
 				</span>
@@ -566,10 +566,10 @@ function activitiesForTurn(
 					title="Rebase all commits onto new PR head"
 				>
 					{#if isRebasing}
-						<Loader2 size={11} class="motion-essential-spin" />
+						<Spinner size={11} weight="fill" class="motion-essential-spin" />
 						<span>Rebasing…</span>
 					{:else}
-						<RefreshCw size={11} />
+						<ArrowCounterClockwise size={11} weight="fill" />
 						<span>Rebase all</span>
 					{/if}
 				</button>
@@ -588,9 +588,9 @@ function activitiesForTurn(
 							aria-label="Discard commit {commit.shortSha}"
 						>
 							{#if isDiscardingCommit(commit.sha)}
-								<Loader2 size={10} class="motion-essential-spin" />
+								<Spinner size={10} weight="fill" class="motion-essential-spin" />
 							{:else}
-								<Trash2 size={10} />
+								<Trash size={10} weight="fill" />
 							{/if}
 						</button>
 					</li>
@@ -611,7 +611,7 @@ function activitiesForTurn(
 				description="The agent runs inside the PR's worktree and can read the code, propose fixes, and commit them on a working branch."
 			>
 				{#snippet icon()}
-					<Bot size={32} />
+					<Robot size={32} weight="fill" />
 				{/snippet}
 				<Suggestion class="mt-3 justify-center">
 					{#each suggestedPrompts as prompt (prompt)}
@@ -648,12 +648,12 @@ function activitiesForTurn(
 								<PlanTitle>Plan</PlanTitle>
 								{#if item.status === 'approved'}
 									<span class="ml-auto inline-flex items-center gap-1 rounded-full bg-success/15 px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-success">
-										<CircleCheck class="size-2.5" />
+										<CheckCircle class="size-2.5" />
 										Approved
 									</span>
 								{:else if item.status === 'rejected'}
 									<span class="ml-auto inline-flex items-center gap-1 rounded-full bg-destructive/15 px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-destructive">
-										<CircleX class="size-2.5" />
+										<XCircle class="size-2.5" />
 										Rejected
 									</span>
 								{:else if item.status === 'superseded'}
@@ -742,7 +742,7 @@ function activitiesForTurn(
 							{/if}
 							{#if item.error}
 								<div class="mt-2 flex items-start gap-1.5 rounded bg-muted/60 border-l-2 border-muted-foreground px-2 py-1.5 text-xs text-muted-foreground" role="alert">
-									<AlertTriangle size={12} class="mt-0.5 shrink-0" />
+									<Warning size={12} weight="fill" class="mt-0.5 shrink-0" />
 									<span class="min-w-0 break-words">{item.error}</span>
 								</div>
 							{/if}
@@ -822,19 +822,19 @@ function activitiesForTurn(
 		{#if error && !isStreaming}
 			<div class="error-state">
 				{#if error.code === 'NOT_CONFIGURED'}
-					<Settings size={24} class="error-icon" />
+					<Gear size={24} weight="fill" class="error-icon" />
 					<p class="error-primary">AI not configured</p>
 					<p class="error-hint">
 						Install <a href="https://opencode.ai" class="error-link">opencode</a>
 						or <a href="https://claude.ai/code" class="error-link">Claude Code</a>
-						and authenticate, then select your CLI agent in <a href="/settings" class="error-link">Settings</a>.
+						and authenticate, then select your CLI agent in <a href="/settings" class="error-link">Gear</a>.
 					</p>
 				{:else if error.code === 'RATE_LIMITED'}
-					<AlertTriangle size={24} class="error-icon" />
+					<Warning size={24} weight="fill" class="error-icon" />
 					<p class="error-primary">Rate limited</p>
 					<p class="error-hint">{error.message}</p>
 				{:else}
-					<AlertTriangle size={24} class="error-icon" />
+					<Warning size={24} weight="fill" class="error-icon" />
 					<p class="error-primary">Chat failed</p>
 					<p class="error-hint">{error.message}</p>
 				{/if}
@@ -857,7 +857,7 @@ function activitiesForTurn(
 									count={commitCount}
 								>
 									{#snippet icon()}
-										<GitCommitHorizontal class="size-3 text-accent" />
+										<GitCommit class="size-3 text-accent" />
 									{/snippet}
 								</QueueSectionLabel>
 								{#if proposed.branchName}
@@ -921,9 +921,9 @@ function activitiesForTurn(
 															title="Discard commit"
 														>
 															{#if isDiscardingCommit(commit.sha)}
-																<Loader2 class="size-3 motion-essential-spin" />
+																<Spinner class="size-3 motion-essential-spin" />
 															{:else}
-																<Trash2 class="size-3" />
+																<Trash class="size-3" />
 															{/if}
 														</QueueItemAction>
 														<QueueItemAction
@@ -936,7 +936,7 @@ function activitiesForTurn(
 															title="Push this commit to PR branch"
 														>
 															{#if isCherryPickingCommit(commit.sha)}
-																<Loader2 class="size-3 motion-essential-spin" />
+																<Spinner class="size-3 motion-essential-spin" />
 															{:else}
 																<GitMerge class="size-3" />
 															{/if}
@@ -991,9 +991,9 @@ function activitiesForTurn(
 												}}
 											>
 												{#if batchInFlight}
-													<Loader2 class="size-3 motion-essential-spin" />
+													<Spinner class="size-3 motion-essential-spin" />
 												{:else}
-													<Trash2 class="size-3" />
+													<Trash class="size-3" />
 												{/if}
 												Discard {selectedCount}
 											</Button>
@@ -1007,7 +1007,7 @@ function activitiesForTurn(
 												}}
 											>
 												{#if batchInFlight}
-													<Loader2 class="size-3 motion-essential-spin" />
+													<Spinner class="size-3 motion-essential-spin" />
 												{:else}
 													<GitMerge class="size-3" />
 												{/if}
@@ -1034,9 +1034,9 @@ function activitiesForTurn(
 								>
 									{#snippet icon()}
 										{#if activeTasks.some((t) => t.status === 'in_progress')}
-											<Loader2 class="size-3 text-primary motion-essential-spin animate-spin" />
+											<Spinner class="size-3 text-primary motion-essential-spin animate-spin" />
 										{:else if allDone}
-											<CheckCircle2 class="size-3 text-success" />
+											<CheckCircle class="size-3 text-success" />
 										{:else}
 											<Circle class="size-3 text-muted-foreground" />
 										{/if}
@@ -1081,7 +1081,7 @@ function activitiesForTurn(
 									count={queuedMessages.length}
 								>
 									{#snippet icon()}
-										<Send class="size-3 text-muted-foreground" />
+										<PaperPlaneTilt class="size-3 text-muted-foreground" />
 									{/snippet}
 								</QueueSectionLabel>
 							</QueueSectionTrigger>
@@ -1169,14 +1169,14 @@ function activitiesForTurn(
 		></button>
 		<div class="conflict-card" role="document">
 			<div class="conflict-card-header">
-				<AlertTriangle size={14} class="conflict-card-icon" />
+				<Warning size={14} weight="fill" class="conflict-card-icon" />
 				<span class="conflict-card-title">Push conflicts</span>
 				<button
 					class="icon-btn"
 					onclick={dismissConflictDialog}
 					aria-label="Close conflict dialog"
 				>
-					<X size={14} />
+					<X size={14} weight="fill" />
 				</button>
 			</div>
 			<div class="conflict-card-body">
@@ -1224,10 +1224,10 @@ function activitiesForTurn(
 				<Dialog.Title>
 					<span class="new-branch-title">
 						{#if newBranchDialogMode === 'input'}
-							<GitBranch size={16} />
+							<GitBranch size={16} weight="fill" />
 							Push to a new branch
 						{:else}
-							<AlertTriangle size={16} class="new-branch-title-warn" />
+							<Warning size={16} weight="fill" class="new-branch-title-warn" />
 							Branch already exists
 						{/if}
 					</span>
@@ -1298,7 +1298,7 @@ function activitiesForTurn(
 						disabled={isPushing || !isValidNewBranchName(newBranchValue)}
 					>
 						{#if isPushing}
-							<Loader2 size={12} class="motion-essential-spin" />
+							<Spinner size={12} weight="fill" class="motion-essential-spin" />
 							Pushing…
 						{:else}
 							Push
@@ -1312,7 +1312,7 @@ function activitiesForTurn(
 						disabled={isPushing}
 					>
 						{#if isPushing}
-							<Loader2 size={12} class="motion-essential-spin" />
+							<Spinner size={12} weight="fill" class="motion-essential-spin" />
 							Overwriting…
 						{:else}
 							Overwrite
@@ -1431,7 +1431,7 @@ function activitiesForTurn(
 
 	   Style: a neutral elevated chip. The accent comes through only in
 	   the upload icon + count badge so the button reads as primary
-	   without flooding the panel header with color. Both halves are
+	   without flooding the panel header with color. Roboth halves are
 	   transparent and inherit the wrapper background, so the surface
 	   is uniform across the divider. */
 	.push-pill {
@@ -1447,7 +1447,7 @@ function activitiesForTurn(
 	}
 
 	.push-pill:global(.push-pill--pulse) {
-		animation: push-pill-pulse 220ms var(--ease-out-expo);
+		animation: push-pill-pulse var(--duration-smooth) var(--ease-out-expo);
 	}
 
 	@keyframes push-pill-pulse {
@@ -1578,7 +1578,7 @@ function activitiesForTurn(
 		line-height: 1.4;
 	}
 
-	/* The Loader2 icon needs to spin during a push. The .motion-essential-*
+	/* The Spinner icon needs to spin during a push. The .motion-essential-*
 	   pattern opts back into animation under prefers-reduced-motion (per
 	   project convention) so users with reduced-motion still see the
 	   loading affordance. Without this they'd see a static icon and have
@@ -1751,7 +1751,7 @@ function activitiesForTurn(
 		min-width: 0;
 		font-size: 10px;
 		line-height: 14px;
-		transition: top 220ms cubic-bezier(0.22, 0.61, 0.36, 1);
+		transition: top var(--duration-smooth) var(--ease-standard);
 	}
 
 	.chat-tool-call-tool {

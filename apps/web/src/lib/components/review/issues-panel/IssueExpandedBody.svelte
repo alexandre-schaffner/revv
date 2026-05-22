@@ -9,8 +9,9 @@
  * description, plus a references section listing the file and any
  * walkthrough steps that explain this issue).
  */
-import { ArrowUpRight } from "@lucide/svelte";
+
 import type { WalkthroughBlock, WalkthroughIssue } from "@revv/shared";
+import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
 
 interface Props {
@@ -81,7 +82,7 @@ const hasReferences = $derived(
                             class="step-chip"
                             onclick={() => onBlockJump?.(blockId)}
                         >
-                            <ArrowUpRight size={10} aria-hidden="true" />
+                            <ArrowUpRight size={10} weight="fill" aria-hidden="true" />
                             step {stepN}
                         </button>
                     </li>

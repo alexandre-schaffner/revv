@@ -1,8 +1,7 @@
 <script lang="ts">
-import Brain from "@lucide/svelte/icons/brain";
-import Check from "@lucide/svelte/icons/check";
-import ChevronDown from "@lucide/svelte/icons/chevron-down";
 import type { AiAgent, ThinkingEffort } from "@revv/shared";
+import Brain from "phosphor-svelte/lib/Brain";
+import Check from "phosphor-svelte/lib/Check";
 import {
   Content as PopoverContent,
   Root as PopoverRoot,
@@ -14,6 +13,7 @@ import {
   THINKING_EFFORT_OPTIONS,
 } from "$lib/constants/models";
 import { getSettings, updateSettings } from "$lib/stores/settings.svelte";
+import SelectTrigger from "./SelectTrigger.svelte";
 
 let open = $state(false);
 let currentAgent = $derived((getSettings()?.aiAgent ?? "opencode") as AiAgent);
@@ -44,13 +44,11 @@ function select(value: ThinkingEffort) {
 {#if visible}
     <PopoverRoot bind:open>
         <PopoverTrigger>
-            <button
-                class="flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 transition-colors hover:bg-bg-secondary"
-            >
-                <Brain size={12} class="text-text-muted" />
-                <span class="text-xs text-text-secondary">{currentLabel}</span>
-                <ChevronDown size={10} class="text-text-muted" />
-            </button>
+            <SelectTrigger label={currentLabel}>
+                {#snippet icon()}
+                    <Brain size={12} class="text-text-muted" />
+                {/snippet}
+            </SelectTrigger>
         </PopoverTrigger>
         <PopoverContent class="w-40 p-1" align="start" side="top">
             {#each options as opt (opt.value)}
@@ -60,7 +58,7 @@ function select(value: ThinkingEffort) {
                 >
                     {opt.label}
                     {#if currentEffort === opt.value}
-                        <Check size={12} class="text-accent" />
+                        <Check size={12} weight="regular" class="text-accent" />
                     {/if}
                 </button>
             {/each}

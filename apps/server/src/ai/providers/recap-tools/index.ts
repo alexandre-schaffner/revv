@@ -39,6 +39,7 @@ export type {
   RecapSourcePr,
   RecapSourcePrDiff,
   RecapSourcePrDiffFile,
+  RecapSourcePrDigest,
   RecapToolContext,
   RecapToolHandler,
   RecapToolResult,
@@ -58,14 +59,14 @@ export const RECAP_TOOL_SPECS: Array<RecapToolSpec<any>> = [
   {
     name: "get_recap_state",
     description:
-      "Read-only. Call FIRST on every run, including resumes. Returns the period boundaries, the list of archived PRs in this window (with author, branches, +/-, body excerpt), and each PR's latest complete walkthrough (summary, sentiment, risk level) when available. Diffs are NOT inlined — call get_pr_diff for individual PRs where walkthrough is null. Open PRs are also NOT inlined — only their count is — fetch them via list_open_prs. Use this as the source of truth for the recap — do not invent PRs or walkthroughs.",
+      "Read-only. Call FIRST on every run, including resumes. Returns the period boundaries, the list of archived PRs in this window (with author, branches, +/-, body excerpt), and each PR's latest complete walkthrough (summary, sentiment, risk level) when available. For PRs without walkthroughs, use the compact diffDigest already ingested by the server. Open PRs are NOT inlined — only their count is — fetch them via list_open_prs. Use this as the source of truth for the recap — do not invent PRs or walkthroughs.",
     inputSchema: getRecapStateSchema,
     handler: getRecapStateHandler,
   },
   {
     name: "get_pr_diff",
     description:
-      "Read-only. Fetch the file-level diff for a single archived PR by its `id`. Call this for PRs where `walkthrough` is null to get per-file status, +/- counts, and unified patch text. Each call returns one PR's diff — call it once per PR you want to inspect, BEFORE starting to write the markdown (a tool call mid-composition resets the buffer). Returns an error when the id is not in the source bundle or when diff data is unavailable.",
+      "Read-only fallback. Returns the compact pre-ingested diffDigest for a PR when available; raw diff loading is only a compatibility fallback when a digest is unexpectedly missing. Prefer get_recap_state.diffDigest and do not call this in the normal recap flow.",
     inputSchema: getPrDiffSchema,
     handler: getPrDiffHandler,
   },
@@ -114,7 +115,10 @@ export function createRecapMcpServer(ctx: RecapToolContext): ReturnType<typeof c
         spec.description,
         spec.inputSchema.shape,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        async (args: any) => spec.handler(ctx, args),
+        async (args: any) => {
+          ctx.toolCalls?.add(spec.name);
+          return spec.handler(ctx, args);
+        },
       ),
     ),
   });

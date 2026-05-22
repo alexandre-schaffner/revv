@@ -5,9 +5,11 @@ import { fly } from "svelte/transition";
 
 const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
 
-import { AlertCircle, AlertTriangle, RefreshCw, Sparkles } from "@lucide/svelte";
 import type { WalkthroughBlock, WalkthroughSemanticStep } from "@revv/shared";
 import { API_BASE_URL } from "@revv/shared";
+import RefreshCw from "phosphor-svelte/lib/ArrowsClockwise";
+import AlertTriangle from "phosphor-svelte/lib/Warning";
+import AlertCircle from "phosphor-svelte/lib/WarningCircle";
 import { Shimmer } from "$lib/components/ai/shimmer";
 import { Button } from "$lib/components/ui/button";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix/index.js";
@@ -750,7 +752,7 @@ function handleRegenerate(): void {
 		<div class="walkthrough-banner" role="status">
 			<div class="walkthrough-banner-row walkthrough-banner-row--superseded">
 				<div class="walkthrough-banner-icon">
-					<AlertCircle size={16} />
+					<AlertCircle size={16} weight="fill" />
 				</div>
 				<div class="walkthrough-banner-body">
 					<p class="walkthrough-banner-title">This walkthrough is outdated</p>
@@ -759,7 +761,7 @@ function handleRegenerate(): void {
 					</p>
 				</div>
 				<Button variant="outline" size="sm" style="cursor: pointer;" onclick={handleRegenerate}>
-					<RefreshCw size={14} />
+					<RefreshCw size={14} weight="fill" />
 					Regenerate
 				</Button>
 			</div>
@@ -863,7 +865,7 @@ function handleRegenerate(): void {
 			{#if streamError.includes('not configured') || streamError.includes('API key')}
 				<p class="error-hint">Add your Anthropic API key in Settings to enable walkthroughs.</p>
 			{/if}
-	</div>
+		</div>
 	{:else if cloneInProgress && !summary && blocks.length === 0}
 		<!-- Clone-in-progress state: show indeterminate progress bar + Retry
 		     escape hatch. The poller set up in the $effect above drives this
@@ -878,7 +880,7 @@ function handleRegenerate(): void {
 		{@const repoError = repo?.cloneError ?? null}
 		<div class="walkthrough-empty">
 			{#if !cloneRepoId}
-			<AlertTriangle size={20} />
+			<AlertTriangle size={20} weight="fill" />
 			<p class="loading-text">Couldn't identify the repository that was cloning.</p>
 		{:else}
 				<div class="clone-progress-container">
@@ -895,7 +897,7 @@ function handleRegenerate(): void {
                     disabled={retryingClone}
                     onclick={handleRetryClone}
                 >
-                    <RefreshCw size={16} />
+                    <RefreshCw size={16} weight="fill" />
                     Retry clone
                 </Button>
 				</div>
@@ -904,10 +906,6 @@ function handleRegenerate(): void {
 	{:else if !isStreaming && !summary && blocks.length === 0 && !streamError && !cloneInProgress && !hydrating}
 		<div class="walkthrough-empty">
 			<p class="loading-text">No walkthrough generated yet for this PR.</p>
-			<Button variant="outline" size="lg" style="cursor: pointer;" onclick={() => streamWalkthrough(prId)}>
-				<Sparkles size={14} />
-				Generate walkthrough
-			</Button>
 		</div>
 	{:else if !summary && blocks.length === 0 && sentiment === null && ratings.length === 0 && isStreaming}
 		<!-- Loading state: skeleton + exploration feed. Only shown before the
@@ -968,7 +966,7 @@ function handleRegenerate(): void {
 					onanimationend={(e) => lockContainerAnimation('issues-section', e)}
 				>
 					<div class="issues-header">
-						<AlertTriangle size={13} />
+						<AlertTriangle size={13} weight="fill" />
 						<span>{issues.length} issue{issues.length !== 1 ? 's' : ''} flagged</span>
 					</div>
 					<div class="issues-groups">

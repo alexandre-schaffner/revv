@@ -1,6 +1,9 @@
 <script lang="ts">
-import { AlertTriangle, GitMerge, GitPullRequestClosed, Users } from "@lucide/svelte";
 import type { RecapSummaryStats } from "@revv/shared";
+import GitMerge from "phosphor-svelte/lib/GitMerge";
+import GitPullRequestClosed from "phosphor-svelte/lib/GitPullRequest";
+import Users from "phosphor-svelte/lib/Users";
+import AlertTriangle from "phosphor-svelte/lib/Warning";
 
 interface Props {
   stats: RecapSummaryStats;
@@ -13,7 +16,7 @@ let hasRisk = $derived(stats.riskBreakdown.medium + stats.riskBreakdown.high > 0
 
 <div class="recap-stats">
 	<span class="stat" title="PRs in this period">
-		<GitMerge size={11} aria-hidden="true" />
+		<GitMerge size={11} weight="fill" aria-hidden="true" />
 		<span>{stats.mergedCount} merged</span>
 	</span>
 	{#if stats.closedCount > 0}
@@ -28,7 +31,7 @@ let hasRisk = $derived(stats.riskBreakdown.medium + stats.riskBreakdown.high > 0
 	</span>
 	{#if hasRisk}
 		<span class="stat stat--risk" title="Walkthroughs flagged with medium/high risk">
-			<AlertTriangle size={11} aria-hidden="true" />
+			<AlertTriangle size={11} weight="fill" aria-hidden="true" />
 			<span>
 				{stats.riskBreakdown.high > 0 ? `${stats.riskBreakdown.high}H` : ''}
 				{stats.riskBreakdown.medium > 0 ? `${stats.riskBreakdown.medium}M` : ''}

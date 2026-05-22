@@ -1,6 +1,6 @@
 <script lang="ts">
-import { Search } from "@lucide/svelte";
 import type { PullRequest, Repository } from "@revv/shared";
+import Search from "phosphor-svelte/lib/MagnifyingGlass";
 import { untrack } from "svelte";
 import { fade, scale } from "svelte/transition";
 import {
@@ -9,7 +9,7 @@ import {
   resetQuery,
   setQuery as setCommandQuery,
 } from "$lib/stores/commands.svelte";
-import { getPullRequests, getRepositories, selectPr } from "$lib/stores/prs.svelte";
+import { getArchivedPrs, getPullRequests, getRepositories, selectPr } from "$lib/stores/prs.svelte";
 import { type PaletteMode, setPaletteMode } from "$lib/stores/shortcuts.svelte";
 import { setSidebarView } from "$lib/stores/sidebar.svelte";
 
@@ -22,7 +22,7 @@ interface Props {
 let { open, mode, onClose }: Props = $props();
 
 let inputValue = $state("");
-let selectedIndex = $state(0);
+let selectedFlatIndex = $state(0);
 let inputEl: HTMLInputElement | undefined = $state();
 let listEl: HTMLDivElement | undefined = $state();
 
@@ -53,12 +53,21 @@ interface PrResult {
   score: number;
 }
 
-const prResults = $derived.by((): PrResult[] => {
-  if (mode !== "search") return [];
+function scorePr(pr: PullRequest, q: string): number {
+  const repoName = repoMap.get(pr.repositoryId)?.fullName ?? "";
+  return Math.max(
+    fuzzyScore(q, pr.title),
+    fuzzyScore(q, pr.sourceBranch),
+    fuzzyScore(q, `#${pr.externalId}`),
+    fuzzyScore(q, pr.authorLogin),
+    fuzzyScore(q, repoName),
+  );
+}
 
+const openResults = $derived.by((): PrResult[] => {
+  if (mode !== "search") return [];
   const prs = getPullRequests();
   const q = inputValue.trim();
-
   if (q.length === 0) {
     return prs.map((pr) => ({
       pr,
@@ -66,36 +75,75 @@ const prResults = $derived.by((): PrResult[] => {
       score: 0,
     }));
   }
-
   return prs
-    .map((pr) => {
-      const repo = repoMap.get(pr.repositoryId);
-      const repoName = repo?.fullName ?? "";
-
-      const titleScore = fuzzyScore(q, pr.title);
-      const branchScore = fuzzyScore(q, pr.sourceBranch);
-      const idScore = fuzzyScore(q, `#${pr.externalId}`);
-      const authorScore = fuzzyScore(q, pr.authorLogin);
-      const repoScore = fuzzyScore(q, repoName);
-      const best = Math.max(titleScore, branchScore, idScore, authorScore, repoScore);
-
-      return { pr, repoName, score: best };
-    })
+    .map((pr) => ({
+      pr,
+      repoName: repoMap.get(pr.repositoryId)?.fullName ?? "",
+      score: scorePr(pr, q),
+    }))
     .filter((r) => r.score >= 0)
     .sort((a, b) => b.score - a.score);
 });
 
-// ── Unified item list ────────────────────────────────
+const archivedResults = $derived.by((): PrResult[] => {
+  if (mode !== "search") return [];
+  const prs = getArchivedPrs();
+  const q = inputValue.trim();
+  if (q.length === 0) {
+    return prs.map((pr) => ({
+      pr,
+      repoName: repoMap.get(pr.repositoryId)?.fullName ?? "",
+      score: 0,
+    }));
+  }
+  return prs
+    .map((pr) => ({
+      pr,
+      repoName: repoMap.get(pr.repositoryId)?.fullName ?? "",
+      score: scorePr(pr, q),
+    }))
+    .filter((r) => r.score >= 0)
+    .sort((a, b) => b.score - a.score);
+});
+
+type FlatItem =
+  | { kind: "header"; label: string }
+  | { kind: "pr"; result: PrResult; section: "open" | "archived" };
+
+const flatItems = $derived.by((): FlatItem[] => {
+  const items: FlatItem[] = [];
+  if (openResults.length > 0) {
+    items.push({ kind: "header", label: "Open pull requests" });
+    for (const r of openResults) items.push({ kind: "pr", result: r, section: "open" });
+  }
+  if (archivedResults.length > 0) {
+    items.push({ kind: "header", label: "Archived pull requests" });
+    for (const r of archivedResults) items.push({ kind: "pr", result: r, section: "archived" });
+  }
+  return items;
+});
 
 const commands = $derived(mode === "command" ? getFilteredCommands() : []);
-const itemCount = $derived(mode === "search" ? prResults.length : commands.length);
+
+// ── Selection helpers ────────────────────────────────
+
+function nextSelectable(start: number, direction: 1 | -1): number {
+  const items = flatItems;
+  if (items.length === 0) return 0;
+  let i = start;
+  let loops = 0;
+  while (loops < items.length) {
+    i = (i + direction + items.length) % items.length;
+    if (items[i]?.kind === "pr") return i;
+    loops++;
+  }
+  return start;
+}
 
 // ── Reset on open/mode change ────────────────────────
 
 $effect(() => {
   if (open) {
-    selectedIndex = 0;
-
     if (mode === "command") {
       inputValue = ">";
       setCommandQuery("");
@@ -106,14 +154,17 @@ $effect(() => {
 
     // Focus input on next tick
     requestAnimationFrame(() => inputEl?.focus());
+
+    // Land selection on first selectable PR row
+    selectedFlatIndex = untrack(() => (flatItems.length > 0 ? nextSelectable(0, 1) : 0));
   }
 });
 
-// Clamp selectedIndex when item count changes
+// Clamp selection when the flat list shrinks
 $effect(() => {
-  const count = itemCount;
-  if (count > 0 && untrack(() => selectedIndex) >= count) {
-    selectedIndex = count - 1;
+  const items = flatItems;
+  if (items.length > 0 && items[selectedFlatIndex]?.kind !== "pr") {
+    selectedFlatIndex = nextSelectable(selectedFlatIndex, -1);
   }
 });
 
@@ -128,8 +179,11 @@ function handleKeydown(e: KeyboardEvent) {
 
   if (e.key === "ArrowDown") {
     e.preventDefault();
-    if (itemCount > 0) {
-      selectedIndex = (selectedIndex + 1) % itemCount;
+    if (mode === "search" && flatItems.length > 0) {
+      selectedFlatIndex = nextSelectable(selectedFlatIndex, 1);
+      scrollToSelected();
+    } else if (mode === "command" && commands.length > 0) {
+      selectedFlatIndex = (selectedFlatIndex + 1) % commands.length;
       scrollToSelected();
     }
     return;
@@ -137,8 +191,11 @@ function handleKeydown(e: KeyboardEvent) {
 
   if (e.key === "ArrowUp") {
     e.preventDefault();
-    if (itemCount > 0) {
-      selectedIndex = (selectedIndex - 1 + itemCount) % itemCount;
+    if (mode === "search" && flatItems.length > 0) {
+      selectedFlatIndex = nextSelectable(selectedFlatIndex, -1);
+      scrollToSelected();
+    } else if (mode === "command" && commands.length > 0) {
+      selectedFlatIndex = (selectedFlatIndex - 1 + commands.length) % commands.length;
       scrollToSelected();
     }
     return;
@@ -153,15 +210,15 @@ function handleKeydown(e: KeyboardEvent) {
 
 function scrollToSelected() {
   requestAnimationFrame(() => {
-    const item = listEl?.querySelector(`[data-index="${selectedIndex}"]`);
+    const item = listEl?.querySelector(`[data-flat-index="${selectedFlatIndex}"]`);
     item?.scrollIntoView({ block: "nearest" });
   });
 }
 
 function executeSelected() {
   if (mode === "search") {
-    const result = prResults[selectedIndex];
-    if (result) {
+    const item = flatItems[selectedFlatIndex];
+    if (item?.kind === "pr") {
       onClose();
       // Mirror `PrItem.handleClick`: navigating to a PR through the
       // palette must also swipe the sidebar into files view, otherwise
@@ -170,11 +227,11 @@ function executeSelected() {
       // a file tree under a "Pull Requests" header). Driving both
       // `selectedPrId` and `sidebarView` together keeps header +
       // body in lockstep regardless of the entry point.
-      selectPr(result.pr.id);
+      selectPr(item.result.pr.id);
       setSidebarView("files");
     }
   } else {
-    const cmd = commands[selectedIndex];
+    const cmd = commands[selectedFlatIndex];
     if (cmd) {
       onClose();
       cmd.action();
@@ -182,8 +239,8 @@ function executeSelected() {
   }
 }
 
-function handleItemClick(index: number) {
-  selectedIndex = index;
+function handleItemClick(flatIndex: number) {
+  selectedFlatIndex = flatIndex;
   executeSelected();
 }
 </script>
@@ -235,52 +292,61 @@ function handleItemClick(index: number) {
 		<!-- Results list -->
 		<div class="palette-list" role="listbox" bind:this={listEl}>
 			{#if mode === 'search'}
-				{#each prResults as result, i (result.pr.id)}
-					<button
-						class="palette-item palette-item--pr"
-						class:palette-item--active={i === selectedIndex}
-						role="option"
-						aria-selected={i === selectedIndex}
-						data-index={i}
-						onclick={() => handleItemClick(i)}
-						onmouseenter={() => (selectedIndex = i)}
-					>
-						<div class="pr-row-top">
-							{#if result.pr.authorAvatarUrl}
-								<img
-									src={result.pr.authorAvatarUrl}
-									alt=""
-									class="pr-avatar"
-									loading="lazy"
-									referrerpolicy="no-referrer"
-									onerror={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')}
-								/>
-							{/if}
-							<span class="pr-title">{result.pr.title}</span>
-							<span class="pr-meta">
-								{result.repoName}
-								<span class="pr-number">#{result.pr.externalId}</span>
-							</span>
-						</div>
-						<div class="pr-row-bottom">
-							<span class="pr-branch">{result.pr.sourceBranch}</span>
-						</div>
-					</button>
+				{#each flatItems as item, flatIndex (item.kind === 'pr' ? item.result.pr.id : `header-${item.label}`)}
+					{#if item.kind === 'header'}
+						<div class="palette-section-header">{item.label}</div>
+					{:else}
+						{@const result = item.result}
+						<button
+							class="palette-item palette-item--pr"
+							class:palette-item--archived={item.section === 'archived'}
+							class:palette-item--active={flatIndex === selectedFlatIndex}
+							role="option"
+							aria-selected={flatIndex === selectedFlatIndex}
+							data-flat-index={flatIndex}
+							onclick={() => handleItemClick(flatIndex)}
+							onmouseenter={() => (selectedFlatIndex = flatIndex)}
+						>
+							<div class="pr-row-top">
+								{#if result.pr.authorAvatarContent}
+									<img
+										src={result.pr.authorAvatarContent}
+										alt=""
+										class="pr-avatar"
+										loading="lazy"
+										referrerpolicy="no-referrer"
+										onerror={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')}
+									/>
+								{/if}
+								<span class="pr-title">{result.pr.title}</span>
+								{#if item.section === 'archived'}
+									<span class="pr-status-badge">{result.pr.status}</span>
+								{/if}
+								<span class="pr-meta">
+									{result.repoName}
+									<span class="pr-number">#{result.pr.externalId}</span>
+								</span>
+							</div>
+							<div class="pr-row-bottom">
+								<span class="pr-branch">{result.pr.sourceBranch}</span>
+							</div>
+						</button>
+					{/if}
 				{/each}
 
-				{#if prResults.length === 0}
+				{#if flatItems.length === 0}
 					<div class="palette-empty">No matching pull requests</div>
 				{/if}
 			{:else}
 				{#each commands as cmd, i (cmd.id)}
 					<button
 						class="palette-item palette-item--cmd"
-						class:palette-item--active={i === selectedIndex}
+						class:palette-item--active={i === selectedFlatIndex}
 						role="option"
-						aria-selected={i === selectedIndex}
-						data-index={i}
+						aria-selected={i === selectedFlatIndex}
+						data-flat-index={i}
 						onclick={() => handleItemClick(i)}
-						onmouseenter={() => (selectedIndex = i)}
+						onmouseenter={() => (selectedFlatIndex = i)}
 					>
 						<span class="cmd-label">{cmd.label}</span>
 						{#if cmd.shortcut}
@@ -402,10 +468,42 @@ function handleItemClick(index: number) {
 		flex-shrink: 0;
 	}
 
+	/* ── Section header ──────────────────────────────────── */
+	.palette-section-header {
+		padding: 6px 16px 2px;
+		font-size: 10px;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		color: var(--color-text-muted);
+		user-select: none;
+		margin-top: 4px;
+	}
+
 	/* ── PR item ───────────────────────────────────────── */
 	.palette-item--pr {
 		flex-direction: column;
 		gap: 2px;
+	}
+
+	.palette-item--archived .pr-title {
+		color: var(--color-text-secondary);
+	}
+
+	.palette-item--archived.palette-item--active .pr-title {
+		color: var(--color-tree-active-text);
+	}
+
+	.pr-status-badge {
+		font-size: 9px;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		padding: 1px 5px;
+		border-radius: 4px;
+		background: var(--color-bg-tertiary);
+		color: var(--color-text-muted);
+		flex-shrink: 0;
 	}
 
 	.pr-row-top {

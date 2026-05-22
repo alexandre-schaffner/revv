@@ -1,6 +1,6 @@
-import type { FileDiffOptions, FileOptions } from "@pierre/diffs";
+import type { DiffLineAnnotation, FileDiffOptions, FileOptions } from "@pierre/diffs";
 import { preloadHighlighter } from "@pierre/diffs";
-import { preloadFile, preloadPatchFile } from "@pierre/diffs/ssr";
+import { preloadFile, preloadPatchDiff, preloadPatchFile } from "@pierre/diffs/ssr";
 
 /**
  * Server-side SSR cache for `@pierre/diffs`. Calls `preloadPatchFile` /
@@ -102,7 +102,7 @@ function stableOptionsKey(options: object): string {
  * and DOM-producing fields stay client-side where they belong.
  */
 export type SsrDiffOptions = Pick<
-  FileDiffOptions<never>,
+  FileDiffOptions<unknown>,
   | "diffStyle"
   | "theme"
   | "disableFileHeader"
@@ -128,16 +128,20 @@ export type SsrFileOptions = Pick<FileOptions<never>, "theme" | "disableFileHead
 export async function prerenderDiff(
   patch: string,
   options: SsrDiffOptions,
+  annotations?: DiffLineAnnotation<unknown>[],
 ): Promise<string | null> {
   await ensureHighlighter();
 
   const optionsKey = stableOptionsKey(options);
-  const key = cacheKey(patch, optionsKey);
+  const annotationKey = annotations && annotations.length > 0 ? JSON.stringify(annotations) : "";
+  const key = cacheKey(`${patch}\0${annotationKey}`, optionsKey);
   const cached = diffCache.get(key);
   if (cached !== undefined) return cached;
 
-  const results = await preloadPatchFile({ patch, options });
-  const html = results[0]?.prerenderedHTML;
+  const html =
+    annotations && annotations.length > 0
+      ? (await preloadPatchDiff({ patch, options, annotations })).prerenderedHTML
+      : (await preloadPatchFile({ patch, options }))[0]?.prerenderedHTML;
   if (html === undefined) return null;
 
   diffCache.set(key, html);

@@ -1,10 +1,10 @@
 <script lang="ts">
-import CircleCheckIcon from "@lucide/svelte/icons/circle-check";
-import InfoIcon from "@lucide/svelte/icons/info";
-import Loader2Icon from "@lucide/svelte/icons/loader-2";
-import OctagonXIcon from "@lucide/svelte/icons/octagon-x";
-import TriangleAlertIcon from "@lucide/svelte/icons/triangle-alert";
 import { mode } from "mode-watcher";
+import CircleCheckIcon from "phosphor-svelte/lib/CheckCircle";
+import InfoIcon from "phosphor-svelte/lib/Info";
+import Loader2Icon from "phosphor-svelte/lib/Spinner";
+import TriangleAlertIcon from "phosphor-svelte/lib/Warning";
+import OctagonXIcon from "phosphor-svelte/lib/X";
 import { Toaster as Sonner, type ToasterProps as SonnerProps } from "svelte-sonner";
 
 let { ...restProps }: SonnerProps = $props();

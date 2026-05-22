@@ -1,6 +1,7 @@
 <script lang="ts">
-import { CircleAlert, Loader2 } from "@lucide/svelte";
 import type { ProjectRecapSummary, RecapPeriod } from "@revv/shared";
+import Loader2 from "phosphor-svelte/lib/Spinner";
+import CircleAlert from "phosphor-svelte/lib/WarningCircle";
 import { goto } from "$app/navigation";
 import { Badge } from "$lib/components/ui/badge";
 import RecapStats from "./RecapStats.svelte";
@@ -72,7 +73,7 @@ function navigate(recapId: string): void {
 
 	{#if loading && previous.length === 0}
 		<div class="previous-empty">
-			<Loader2 size={16} class="animate-spin" aria-hidden="true" />
+			<Loader2 size={16} weight="regular" class="animate-spin" aria-hidden="true" />
 			<span>Loading previous recaps…</span>
 		</div>
 	{:else}

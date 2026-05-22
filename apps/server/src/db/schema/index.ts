@@ -20,6 +20,8 @@ export { pinnedPullRequests } from "./pinned-prs";
 export { prDiffFiles } from "./pr-diff-files";
 export { projectRecaps } from "./project-recaps";
 export { pullRequests } from "./pull-requests";
+export { recapPrDigests } from "./recap-pr-digests";
+export { remoteUsers } from "./remote-users";
 export { repositories } from "./repositories";
 export { reviewSessions } from "./review-sessions";
 export { threadMessages } from "./thread-messages";

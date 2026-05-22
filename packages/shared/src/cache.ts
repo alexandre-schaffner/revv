@@ -51,8 +51,8 @@ export interface GeneratedBy {
   githubLogin: string;
   /** Optional GitHub display name. */
   displayName: string | null;
-  /** Avatar URL for the cache-hit badge. */
-  avatarUrl: string | null;
+  /** Avatar data URL for the cache-hit badge. */
+  avatarContent: string | null;
 }
 
 /**

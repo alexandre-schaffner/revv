@@ -17,8 +17,9 @@
  * Selection checkbox must NOT bubble to the SpecRow trigger (otherwise
  * checking a box would also expand the row, which feels hostile).
  */
-import { Check } from "@lucide/svelte";
+
 import type { WalkthroughBlock, WalkthroughIssue } from "@revv/shared";
+import Check from "phosphor-svelte/lib/Check";
 import { Checkbox } from "$lib/components/ui/checkbox";
 import SpecRow, { type SpecRowState } from "../shared/SpecRow.svelte";
 import IssueExpandedBody from "./IssueExpandedBody.svelte";
@@ -134,7 +135,7 @@ function handleCheckboxClick(e: MouseEvent): void {
         {#snippet icon()}
             {#if submitted}
                 <span class="staged-check" aria-hidden="true">
-                    <Check size={13} />
+                    <Check size={13} weight="regular" />
                 </span>
             {:else}
                 <Checkbox
@@ -173,7 +174,7 @@ function handleCheckboxClick(e: MouseEvent): void {
         --c-gutter-color: var(--color-border);
         --c-row-bg: var(--color-bg-elevated);
         --c-gutter-flash: var(--c-gutter-color);
-        animation: issue-row-enter 0.5s var(--ease-out-expo) both;
+        animation: issue-row-enter var(--duration-ceremonial-medium) var(--ease-out-expo) both;
         animation-delay: var(--issue-delay, 0ms);
     }
 

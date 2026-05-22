@@ -31,6 +31,9 @@ export interface PullRequest {
   title: string;
   body: string | null;
   authorLogin: string;
+  /** Base64 data URL of the author's avatar (e.g. "data:image/png;base64,..."). */
+  authorAvatarContent: string | null;
+  /** Raw avatar URL from the provider — used internally during sync to populate remote_users. */
   authorAvatarUrl: string | null;
   requestedReviewers: string[];
   status: PullRequestStatus;
@@ -223,11 +226,11 @@ export interface UserIdentity {
   login: string | null;
   role: UserRole;
   /**
-   * The user's GitHub avatar URL. Refreshed server-side by the poll scheduler
-   * so that expired GitHub Enterprise signed URLs get rotated without
-   * requiring the user to sign out and back in.
+   * Base64 data URL of the user's avatar (e.g. "data:image/png;base64,...").
+   * Resolved from the remote_users table so expired GitHub Enterprise signed
+   * URLs never cause 404s.
    */
-  avatarUrl: string | null;
+  avatarContent: string | null;
 }
 
 export interface Org {
@@ -240,7 +243,9 @@ export interface ThreadMessage {
   threadId: string;
   authorRole: AuthorRole;
   authorName: string;
-  authorAvatarUrl: string | null;
+  authorLogin: string | null;
+  /** Base64 data URL of the author's avatar (e.g. "data:image/png;base64,..."). */
+  authorAvatarContent: string | null;
   body: string;
   messageType: MessageType;
   codeSuggestion: string | null;

@@ -8,7 +8,7 @@ export type PlanTriggerProps = CollapsiblePrimitive.TriggerProps;
 	import { cn } from "$lib/utils.js";
 	import { CollapsibleTrigger } from "$lib/components/ui/collapsible/index.js";
 	import { Button } from "$lib/components/ui/button/index.js";
-	import { ChevronsUpDown } from "@lucide/svelte";
+	import ChevronsUpDown from "phosphor-svelte/lib/ArrowsOutLineVertical";
 
 	let {
 		children,

@@ -14,7 +14,7 @@
 // dismisses an update and then leaves the app running for a week, the next
 // launch should offer it again.
 
-import Download from "@lucide/svelte/icons/download";
+import Download from "phosphor-svelte/lib/Download";
 import { toast } from "svelte-sonner";
 import { isTauri } from "$lib/utils/platform";
 import { checkForUpdate, type UpdateInfo } from "./client";

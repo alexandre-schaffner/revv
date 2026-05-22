@@ -1,5 +1,7 @@
 <script lang="ts">
-import { Check, ChevronLeft, Copy } from "@lucide/svelte";
+import ChevronLeft from "phosphor-svelte/lib/CaretLeft";
+import Check from "phosphor-svelte/lib/Check";
+import Copy from "phosphor-svelte/lib/Copy";
 import { onMount } from "svelte";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import * as auth from "$lib/stores/auth.svelte";
@@ -59,10 +61,10 @@ async function copyCode() {
 				</div>
 				<button class="copy-btn" onclick={copyCode} aria-label="Copy code">
 					{#if copied}
-						<Check size={13} />
+						<Check size={13} weight="regular" />
 						<span>Copied</span>
 					{:else}
-						<Copy size={13} />
+						<Copy size={13} weight="fill" />
 						<span>Copy</span>
 					{/if}
 				</button>

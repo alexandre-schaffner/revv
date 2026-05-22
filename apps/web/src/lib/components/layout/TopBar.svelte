@@ -1,5 +1,10 @@
 <script lang="ts">
-import { Monitor, Moon, PanelLeftClose, PanelLeftOpen, RefreshCw, Sun } from "@lucide/svelte";
+import RefreshCw from "phosphor-svelte/lib/ArrowsClockwise";
+import Monitor from "phosphor-svelte/lib/Desktop";
+import Moon from "phosphor-svelte/lib/Moon";
+import PanelLeftClose from "phosphor-svelte/lib/SidebarSimple";
+import PanelLeftOpen from "phosphor-svelte/lib/SidebarSimple";
+import Sun from "phosphor-svelte/lib/Sun";
 import { fetchOrgs } from "$lib/stores/orgs.svelte";
 import { getIsLoading, getSelectedPr, getSelectedPrId } from "$lib/stores/prs.svelte";
 import { getPrListSyncing } from "$lib/stores/sync.svelte";
@@ -58,7 +63,10 @@ function cycleTheme() {
 }
 </script>
 
-<div class="topbar" data-tauri-drag-region>
+<div class="topbar">
+	<!-- Dedicated drag layer — sits behind interactive elements via z-index -->
+	<div class="drag-layer" data-tauri-drag-region></div>
+
 	<!-- Sidebar collapse toggle. In Tauri, absolutely positioned in the
 		 traffic-light overlay row immediately to the right of the macOS
 		 buttons. In browser mode, lives flush-left in the topbar's flex row. -->
@@ -69,25 +77,25 @@ function cycleTheme() {
 		title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
 	>
 		{#if sidebarCollapsed}
-			<PanelLeftOpen size={14} />
+			<PanelLeftOpen size={14} weight="fill" />
 		{:else}
-			<PanelLeftClose size={14} />
+			<PanelLeftClose size={14} weight="fill" />
 		{/if}
 	</button>
 
 	<!-- Left: app name / inline PR title when scrolled -->
-	<div class="title-block" data-tauri-drag-region>
+	<div class="title-block">
 		{#if pr}
-			<span class="inline-title" data-tauri-drag-region>
-				<span class="pr-number" data-tauri-drag-region>#{pr.externalId}</span>{pr.title}{#if topbarSubtitle}<span class="title-separator" data-tauri-drag-region> / </span><span class="title-subtitle" data-tauri-drag-region>{topbarSubtitle}</span>{/if}
+			<span class="inline-title">
+				<span class="pr-number">#{pr.externalId}</span>{pr.title}{#if topbarSubtitle}<span class="title-separator"> / </span><span class="title-subtitle">{topbarSubtitle}</span>{/if}
 			</span>
 		{:else}
-			<span class="app-name" data-tauri-drag-region>Revv</span>
+			<span class="app-name">Revv</span>
 		{/if}
 	</div>
 
 	<!-- Right: sync PRs + theme toggle + panel toggle -->
-	<div class="panel-toggle-wrap" data-tauri-drag-region>
+	<div class="panel-toggle-wrap">
 		<button
 			class="theme-btn"
 			onclick={handleSyncPrs}
@@ -95,7 +103,7 @@ function cycleTheme() {
 			aria-label="Sync pull requests"
 			title="Sync pull requests"
 		>
-			<RefreshCw size={14} class={isSyncing ? 'animate-spin' : ''} />
+			<RefreshCw size={14} weight="fill" class={isSyncing ? 'animate-spin' : ''} />
 		</button>
 		<button
 			class="theme-btn"
@@ -104,11 +112,11 @@ function cycleTheme() {
 			title={labels[theme]}
 		>
 			{#if theme === 'light'}
-				<Sun size={14} />
+				<Sun size={14} weight="fill" />
 			{:else if theme === 'dark'}
-				<Moon size={14} />
+				<Moon size={14} weight="fill" />
 			{:else}
-				<Monitor size={14} />
+				<Monitor size={14} weight="fill" />
 			{/if}
 		</button>
 
@@ -146,6 +154,12 @@ function cycleTheme() {
 		height: 100%;
 		padding: 0 var(--spacing-island);
 		position: relative;
+	}
+
+	.drag-layer {
+		position: absolute;
+		inset: 0;
+		z-index: 1;
 	}
 
 	.title-block {
@@ -222,6 +236,8 @@ function cycleTheme() {
 		color: var(--color-text-muted);
 		cursor: pointer;
 		flex-shrink: 0;
+		position: relative;
+		z-index: 2;
 		transition:
 			background-color var(--duration-snap),
 			color var(--duration-snap);
@@ -256,6 +272,8 @@ function cycleTheme() {
 		background: transparent;
 		color: var(--color-text-muted);
 		cursor: pointer;
+		position: relative;
+		z-index: 2;
 		transition:
 			background-color var(--duration-snap),
 			color var(--duration-snap);
@@ -287,6 +305,8 @@ function cycleTheme() {
 		background: transparent;
 		color: var(--color-text-muted);
 		cursor: pointer;
+		position: relative;
+		z-index: 2;
 		transition:
 			background-color var(--duration-snap),
 			color var(--duration-snap);

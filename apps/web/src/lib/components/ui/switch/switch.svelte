@@ -23,7 +23,7 @@ let {
 	<SwitchPrimitive.Thumb
 		data-slot="switch-thumb"
 		class={cn(
-			"revv-switch-thumb pointer-events-none block size-[18px] rounded-full bg-white ring-0 transition-transform duration-200 data-[state=checked]:translate-x-[19px] data-[state=unchecked]:translate-x-0.5",
+			"revv-switch-thumb pointer-events-none block size-[18px] rounded-full bg-white ring-0 transition-transform duration-quick data-[state=checked]:translate-x-[19px] data-[state=unchecked]:translate-x-0.5",
 		)}
 	/>
 </SwitchPrimitive.Root>
@@ -43,7 +43,6 @@ let {
 		box-shadow:
 			0 1px 2px rgba(0, 0, 0, 0.2),
 			0 0 0 0.5px rgba(0, 0, 0, 0.05);
-		transition:
-			transform var(--duration-quick, 200ms) var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1));
+		transition: transform var(--duration-quick) var(--ease-out-expo);
 	}
 </style>

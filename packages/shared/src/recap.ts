@@ -1,3 +1,5 @@
+import type { Activity } from "./activity";
+
 // ── Project Recap shared types ───────────────────────────────────────────────
 //
 // Daily / weekly recap of recently-archived PRs in a repository. Wire shape
@@ -100,7 +102,9 @@ export type RecapStreamPhase =
 
 export type RecapStreamEvent =
   | { type: "chunk"; data: { text: string; section?: RecapStreamPhase } }
+  | { type: "thought"; data: { text: string } }
   | { type: "phase"; data: { phase: RecapStreamPhase; message: string } }
+  | { type: "activity"; data: Activity }
   | { type: "overview"; data: { overview: string } }
   | { type: "done"; data: { recapId: string } }
   | { type: "error"; data: { code: string; message: string } };
