@@ -1,5 +1,4 @@
 <script lang="ts">
-import { Play, RefreshCw, RotateCcw, Square } from "@lucide/svelte";
 import { untrack } from "svelte";
 import { goto } from "$app/navigation";
 import { page } from "$app/state";
