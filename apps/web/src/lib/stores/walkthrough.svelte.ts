@@ -189,10 +189,6 @@ export function updateEntry(prId: string, updater: (e: WalkthroughEntry) => void
 
 // ── Getters ─────────────────────────────────────────────────────────────────
 
-export function getActiveEntry(): WalkthroughEntry | undefined {
-  return _active;
-}
-
 export function getBlocks(): WalkthroughBlock[] {
   return _active?.blocks ?? [];
 }
@@ -211,9 +207,6 @@ export function getIsStreaming(): boolean {
 export function getStreamError(): string | null {
   return _active?.streamError ?? null;
 }
-export function getWalkthroughId(): string | null {
-  return _active?.walkthroughId ?? null;
-}
 export function getExplorationSteps(): Activity[] {
   return _active?.explorationSteps ?? [];
 }
@@ -229,9 +222,6 @@ export function getRatings(): WalkthroughRating[] {
 }
 export function getPhase(): WalkthroughLifecyclePhase {
   return _active?.phase ?? "connecting";
-}
-export function getPhaseMessage(): string {
-  return _active?.phaseMessage ?? "Connecting...";
 }
 export function getStreamStartedAt(): number | null {
   return _active?.streamStartedAt ?? null;
@@ -684,14 +674,6 @@ export function prepareEntry(prId: string): void {
  */
 export function deactivate(): void {
   store.activePrId = null;
-}
-
-export function reset(): void {
-  const activePrId = store.activePrId;
-  if (activePrId) {
-    deleteEntry(activePrId);
-    store.activePrId = null;
-  }
 }
 
 // ── Cache hydration ─────────────────────────────────────────────────────────

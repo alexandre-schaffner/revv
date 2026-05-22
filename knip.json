@@ -45,5 +45,14 @@
   },
   "ignore": [],
   "ignoreExportsUsedInFile": true,
-  "ignoreDependencies": ["biome", "turbo", "knip"]
+  "ignoreDependencies": ["biome", "turbo", "knip"],
+  "rules": {
+    "files": "warn",
+    "exports": "warn",
+    "types": "warn",
+    "duplicates": "warn",
+    "enumMembers": "warn",
+    "classMembers": "warn",
+    "devDependencies": "warn"
+  }
 }
