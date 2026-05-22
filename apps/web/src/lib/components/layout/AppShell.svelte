@@ -182,6 +182,7 @@ function onRightHandleDblClick(): void {
 	class:sidebar-collapsed={sidebarEffectiveCollapsed}
 	class:is-resizing={isDragging || isResizingRight}
 	class:snap-sidebar-layout={shouldSnapSidebarLayout}
+	class:rightpanel-open={rightPanelOpen}
 	style={gridStyle}
 >
 	<aside class="rail-area">
@@ -393,6 +394,29 @@ function onRightHandleDblClick(): void {
 			inset 0 1px 0 0 color-mix(in srgb, white 60%, transparent),
 			0 1px 2px -1px color-mix(in srgb, black 6%, transparent),
 			0 8px 24px -12px color-mix(in srgb, black 10%, transparent);
+	}
+
+	/* Right-edge vignette that fades in when the panel opens, softening the
+	   hard clip as the main area loses width to the panel. GPU-composited
+	   (opacity only), so it doesn't affect layout or cause reflow. */
+	.main-area::after {
+		content: '';
+		position: absolute;
+		top: 0;
+		right: 0;
+		bottom: 0;
+		width: calc(var(--spacing-island) * 4);
+		background: linear-gradient(to right, transparent, var(--color-bg-primary));
+		border-top-right-radius: var(--radius-island);
+		border-bottom-right-radius: var(--radius-island);
+		opacity: 0;
+		pointer-events: none;
+		z-index: 2;
+		transition: opacity var(--duration-smooth) var(--ease-out-expo);
+	}
+
+	.rightpanel-open .main-area::after {
+		opacity: 0.65;
 	}
 
 	/* Tabs float over content — no background, no flex space reservation.
