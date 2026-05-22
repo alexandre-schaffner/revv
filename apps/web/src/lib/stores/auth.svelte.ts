@@ -1,13 +1,16 @@
 import { goto } from "$app/navigation";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { authClient } from "$lib/auth-client";
-import * as sync from "$lib/services/sync";
-import * as events from "$lib/stores/events.svelte";
-import * as orgs from "$lib/stores/orgs.svelte";
-import * as prs from "$lib/stores/prs.svelte";
+import { stopPolling } from "$lib/services/sync";
+import {
+  connect as connectEvents,
+  disconnect as disconnectEvents,
+} from "$lib/stores/events.svelte";
+import { fetchOrgs, initForUser, reset as resetOrgs } from "$lib/stores/orgs.svelte";
+import { fetchPinnedPrs, fetchPrs, fetchRepos, reset as resetPrs } from "$lib/stores/prs.svelte";
 import { clearReviewFiles } from "$lib/stores/review.svelte";
-import * as settings from "$lib/stores/settings.svelte";
-import * as ws from "$lib/stores/ws.svelte";
+import { fetchSettings, reset as resetSettings } from "$lib/stores/settings.svelte";
+import { connect as connectWs, disconnect as disconnectWs } from "$lib/stores/ws.svelte";
 
 const storedToken =
   typeof localStorage !== "undefined" ? localStorage.getItem("rev_session_token") : null;
@@ -56,10 +59,6 @@ export type LocalAccount = {
 let connectedAccounts = $state<ConnectedAccount[]>([]);
 let localAccounts = $state<LocalAccount[]>([]);
 let accountJustRemoved = $state(false);
-
-export function getConnectedAccounts(): ConnectedAccount[] {
-  return connectedAccounts;
-}
 
 export function getLocalAccounts(): LocalAccount[] {
   return localAccounts;
@@ -113,10 +112,6 @@ export function getError(): string | null {
 
 export function getDeviceFlow(): typeof deviceFlow {
   return deviceFlow;
-}
-
-export function getIsPolling(): boolean {
-  return isPolling;
 }
 
 export function setToken(newToken: string): void {
@@ -326,10 +321,10 @@ export async function loadUser(): Promise<void> {
         // best-effort
       }
       // Init per-user org selection before fetching orgs
-      orgs.initForUser(u.id);
+      initForUser(u.id);
       // Fire-and-forget org list fetch so the sidebar switcher has
       // data ready when the user opens it. Failures degrade silently.
-      void orgs.fetchOrgs();
+      void fetchOrgs();
       void fetchConnectedAccounts();
       void fetchLocalAccounts();
     } else {
@@ -449,34 +444,6 @@ if (typeof localStorage !== "undefined") {
   void fetchLocalAccounts();
 }
 
-export async function disconnectHost(host: string): Promise<void> {
-  if (!token) return;
-  try {
-    await fetch(`${API_BASE_URL}/api/auth/accounts/disconnect`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ host }),
-    });
-  } catch {
-    // best-effort — proceed with local state update
-  }
-
-  const remaining = connectedAccounts.filter((a) => a.host !== host && a.connected);
-  if (remaining.length === 0) {
-    await signOut();
-    return;
-  }
-
-  const { getGithubHost, setGithubHost } = await import("$lib/stores/settings.svelte");
-  const activeHost = getGithubHost();
-  if (activeHost === host) {
-    const fallback = remaining[0]?.host;
-    if (fallback) await setGithubHost(fallback);
-  }
-
-  await fetchConnectedAccounts();
-}
-
 export async function switchAccount(userId: string, host?: string): Promise<void> {
   isSwitching = true;
   isLoading = true;
@@ -491,9 +458,9 @@ export async function switchAccount(userId: string, host?: string): Promise<void
     if (!res.ok) throw new Error("Switch failed");
     const data = (await res.json()) as { token: string };
     setToken(data.token);
-    prs.reset();
-    settings.reset();
-    orgs.reset();
+    resetPrs();
+    resetSettings();
+    resetOrgs();
     clearReviewFiles();
     if (typeof window !== "undefined" && /^\/(repo|review)(\/|$)/.test(window.location.pathname)) {
       await goto("/", { replaceState: true });
@@ -522,16 +489,16 @@ export async function switchAccount(userId: string, host?: string): Promise<void
     // Without the explicit host, the server falls back to
     // `findAccount(userId, undefined)`, picks the wrong (or no) account,
     // and the user never receives `prs:updated` broadcasts.
-    ws.disconnect();
-    events.disconnect();
-    ws.connect(data.token, host);
-    events.connect(data.token, host);
+    disconnectWs();
+    disconnectEvents();
+    connectWs(data.token, host);
+    connectEvents(data.token, host);
     await loadUser();
     // Pull settings into the local store so getGithubHost() returns the
     // new host (e.g. for WS auto-reconnects and OrgSwitcher highlighting)
     // and re-hydrate the PR / repo lists under the switched-to account.
-    await settings.fetchSettings();
-    await Promise.all([prs.fetchPrs(), prs.fetchRepos(), prs.fetchPinnedPrs()]);
+    await fetchSettings();
+    await Promise.all([fetchPrs(), fetchRepos(), fetchPinnedPrs()]);
   } catch (e) {
     error = `Failed to switch account: ${e}`;
   } finally {
@@ -542,7 +509,7 @@ export async function switchAccount(userId: string, host?: string): Promise<void
 
 export async function removeAccount(): Promise<void> {
   if (!token) return;
-  sync.stopPolling();
+  stopPolling();
   const res = await fetch(`${API_BASE_URL}/api/user/account`, {
     method: "DELETE",
     headers: { Authorization: `Bearer ${token}` },
@@ -552,12 +519,12 @@ export async function removeAccount(): Promise<void> {
   }
   // Server confirmed deletion — now clean up local state
   accountJustRemoved = true;
-  ws.disconnect();
-  events.disconnect();
+  disconnectWs();
+  disconnectEvents();
   clearToken();
-  prs.reset();
-  settings.reset();
-  orgs.reset();
+  resetPrs();
+  resetSettings();
+  resetOrgs();
   clearReviewFiles();
   await fetchLocalAccounts();
   forceOnboardingFlow = true;
@@ -565,7 +532,7 @@ export async function removeAccount(): Promise<void> {
 }
 
 export async function signOut(): Promise<void> {
-  sync.stopPolling();
+  stopPolling();
 
   // Soft sign-out: tell server (no-op), then clear local state
   try {
@@ -578,9 +545,9 @@ export async function signOut(): Promise<void> {
   }
 
   clearToken();
-  prs.reset();
-  settings.reset();
-  orgs.reset();
+  resetPrs();
+  resetSettings();
+  resetOrgs();
 
   await goto("/");
 }
@@ -602,18 +569,6 @@ export function getUser(): {
 /** Current user's GitHub login, or null if not yet loaded or missing. */
 export function getCurrentUserLogin(): string | null {
   return user?.githubLogin ?? null;
-}
-
-/**
- * Role of the current user relative to a PR's author.
- * 'coder' when the PR author matches; 'reviewer' otherwise; 'unknown' if either side is missing.
- */
-export function getUserRoleForPr(
-  prAuthorLogin: string | null | undefined,
-): "reviewer" | "coder" | "unknown" {
-  const me = user?.githubLogin;
-  if (!me || !prAuthorLogin) return "unknown";
-  return me === prAuthorLogin ? "coder" : "reviewer";
 }
 
 export function getIsLoading(): boolean {

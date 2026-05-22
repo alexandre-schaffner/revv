@@ -190,10 +190,6 @@ export function isChatStreaming(prId: string): boolean {
   return streamingPrIds.has(prId);
 }
 
-export function isChatHistoryLoaded(prId: string): boolean {
-  return loadedPrIds.has(prId);
-}
-
 export function getProposedChanges(prId: string): ProposedChanges | null {
   return proposedChanges.get(prId) ?? null;
 }

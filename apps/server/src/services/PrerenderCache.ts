@@ -1,6 +1,6 @@
-import type { DiffLineAnnotation, FileDiffOptions, FileOptions } from "@pierre/diffs";
+import type { DiffLineAnnotation, FileDiffOptions } from "@pierre/diffs";
 import { preloadHighlighter } from "@pierre/diffs";
-import { preloadFile, preloadPatchDiff, preloadPatchFile } from "@pierre/diffs/ssr";
+import { preloadPatchDiff, preloadPatchFile } from "@pierre/diffs/ssr";
 
 /**
  * Server-side SSR cache for `@pierre/diffs`. Calls `preloadPatchFile` /
@@ -84,7 +84,6 @@ class LruCache<V> {
 
 const CACHE_MAX_ENTRIES = 1000;
 const diffCache = new LruCache<string>(CACHE_MAX_ENTRIES);
-const fileCache = new LruCache<string>(CACHE_MAX_ENTRIES);
 
 function cacheKey(content: string, optionsKey: string): string {
   return `${Bun.hash(content).toString(36)}:${optionsKey}`;
@@ -115,8 +114,6 @@ export type SsrDiffOptions = Pick<
   | "overflow"
 >;
 
-export type SsrFileOptions = Pick<FileOptions<never>, "theme" | "disableFileHeader" | "overflow">;
-
 /**
  * Render a unified diff patch to HTML via `preloadPatchFile`. Returns the
  * prerendered HTML for the first file in the patch (walkthrough blocks and
@@ -145,28 +142,5 @@ export async function prerenderDiff(
   if (html === undefined) return null;
 
   diffCache.set(key, html);
-  return html;
-}
-
-/**
- * Render a single code file (no diff) to HTML via `preloadFile`. Used for
- * walkthrough `CodeBlock`s.
- */
-export async function prerenderFile(
-  file: { name: string; contents: string; lang: string },
-  options: SsrFileOptions,
-): Promise<string | null> {
-  await ensureHighlighter();
-
-  const optionsKey = stableOptionsKey(options);
-  const key = cacheKey(`${file.lang}\0${file.name}\0${file.contents}`, optionsKey);
-  const cached = fileCache.get(key);
-  if (cached !== undefined) return cached;
-
-  const result = await preloadFile({ file, options });
-  const html = result.prerenderedHTML;
-  if (html === undefined) return null;
-
-  fileCache.set(key, html);
   return html;
 }

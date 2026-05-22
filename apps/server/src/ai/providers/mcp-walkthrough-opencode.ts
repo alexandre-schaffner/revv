@@ -19,8 +19,9 @@
 //   5. Wires the caller's AbortController into `client.session.abort` via
 //      the shared `withAgentTurn` harness.
 //
-// Streaming decode (`walkOpencodeParts` / `subscribeOpencodeStream`) and the
-// abort + hard-timeout envelope (`withAgentTurn`) live in `../agent-stream.ts`.
+// Streaming decode (`walkOpencodePartsWithState` / `subscribeOpencodeStream`)
+// and the abort + hard-timeout envelope (`withAgentTurn`) live in
+// `../agent-stream.ts`.
 
 import type {
   UserSettings,

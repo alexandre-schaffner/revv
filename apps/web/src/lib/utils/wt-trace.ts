@@ -18,8 +18,6 @@ const ENABLED: boolean = (() => {
   }
 })();
 
-export const wtTraceEnabled = ENABLED;
-
 export function wtTrace(scope: string, ...args: unknown[]): void {
   if (!ENABLED) return;
   // eslint-disable-next-line no-console

@@ -43,16 +43,12 @@
       "entry": ["src/root.tsx", "src/routes/**/*.{ts,tsx}", "vite.config.ts", "app.config.ts"]
     }
   },
-  "ignore": [],
+  "ignore": [
+    "apps/server/src/cache/CacheLayer.ts",
+    "apps/server/src/cache/Key.ts",
+    "apps/server/src/cache/backends/**",
+    "apps/server/src/cache/policies/**"
+  ],
   "ignoreExportsUsedInFile": true,
-  "ignoreDependencies": ["biome", "turbo", "knip"],
-  "rules": {
-    "files": "warn",
-    "exports": "warn",
-    "types": "warn",
-    "duplicates": "warn",
-    "enumMembers": "warn",
-    "classMembers": "warn",
-    "devDependencies": "warn"
-  }
+  "ignoreDependencies": ["biome", "turbo", "knip"]
 }

@@ -39,10 +39,6 @@ export function setScrollRoot(el: HTMLElement | null): void {
   detachListener = () => el.removeEventListener("scroll", onScroll);
 }
 
-export function getUserScrolledUp(): boolean {
-  return userScrolledUp;
-}
-
 export function getHasNewContentBelow(): boolean {
   return userScrolledUp && currentScrollHeight > scrollHeightWhenLeft;
 }

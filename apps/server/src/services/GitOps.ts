@@ -167,26 +167,3 @@ export async function pushFastForward(
     stderr: result.stderrTail,
   };
 }
-
-// ── Branch name validation ────────────────────────────────────────────────
-
-/**
- * Validate a branch name before passing it to git. Reject whitespace,
- * dotdot ranges, empty strings, and flag-like values. Returns the
- * trimmed name on success; throws `InvalidBranchNameError` otherwise so
- * callers can surface a structured error to the UI.
- */
-export function validateBranchName(name: string): string {
-  const trimmed = name.trim();
-  if (trimmed.length === 0 || /\s/.test(trimmed) || trimmed.includes("..")) {
-    throw new InvalidBranchNameError({ message: `invalid branch name: ${name}` });
-  }
-  try {
-    assertNotFlagLike(trimmed, "branchName");
-  } catch (err) {
-    throw new InvalidBranchNameError({
-      message: err instanceof Error ? err.message : String(err),
-    });
-  }
-  return trimmed;
-}

@@ -1,9 +1,15 @@
 <script lang="ts">
-import * as auth from "$lib/stores/auth.svelte";
+import {
+  cancelSignIn,
+  getDeviceFlow,
+  getError,
+  getIsLoading,
+  signIn,
+} from "$lib/stores/auth.svelte";
 
-const error = $derived(auth.getError());
-const deviceFlow = $derived(auth.getDeviceFlow());
-const isLoading = $derived(auth.getIsLoading());
+const error = $derived(getError());
+const deviceFlow = $derived(getDeviceFlow());
+const isLoading = $derived(getIsLoading());
 
 let copied = $state(false);
 
@@ -68,7 +74,7 @@ async function copyCode() {
 		<p class="text-xs text-text-muted">Waiting for authorization…</p>
 		<button
 			class="cursor-pointer text-xs text-text-muted underline hover:text-text-secondary"
-			onclick={auth.cancelSignIn}
+			onclick={cancelSignIn}
 		>
 			Cancel
 		</button>
@@ -80,7 +86,7 @@ async function copyCode() {
 		{/if}
 		<button
 			class="flex cursor-pointer items-center gap-2 rounded-lg border border-border bg-bg-elevated px-4 py-2.5 text-sm font-medium text-text-primary transition-colors hover:bg-bg-tertiary disabled:cursor-not-allowed disabled:opacity-50"
-			onclick={() => auth.signIn()}
+			onclick={() => signIn()}
 			disabled={isLoading}
 		>
 			{#if isLoading}

@@ -94,7 +94,3 @@ export function invalidateSuggestions(prId?: string): void {
   loadingByPr = {};
   inFlight.clear();
 }
-
-export function reset(): void {
-  invalidateSuggestions();
-}

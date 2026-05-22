@@ -213,10 +213,3 @@ export function resetRecapStream(recapId: string): void {
   abortRecapStream(recapId);
   deleteEntry(recapId);
 }
-
-export function resetAllRecapStreams(): void {
-  for (const [recapId] of controllers) {
-    abortRecapStream(recapId);
-  }
-  entries = new Map();
-}

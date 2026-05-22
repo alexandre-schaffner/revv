@@ -42,17 +42,3 @@ export const CLI_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 /** TTL for the in-memory GitHub repo list cache. */
 export const REPO_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-
-// ── Bun-specific workarounds ────────────────────────────────────────────────
-
-/**
- * Disable Bun's default 5-minute request timeout on a `fetch` Request.
- * Without this, long-running SSE subscriptions and agent-loop HTTP calls
- * are silently aborted by the runtime. Ignored on non-Bun runtimes.
- *
- * See: https://bun.sh/docs/api/fetch — `timeout` is a Bun RequestInit
- * extension not present in the TS lib types, hence the cast.
- */
-export function disableBunTimeout(req: Request): void {
-  (req as unknown as { timeout?: boolean }).timeout = false;
-}

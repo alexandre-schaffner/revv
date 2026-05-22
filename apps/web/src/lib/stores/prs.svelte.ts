@@ -116,18 +116,6 @@ let selectedRepo = $derived(
   selectedRepoId ? (repositories.find((r) => r.id === selectedRepoId) ?? null) : null,
 );
 
-export function getGroupedByRepo(): Map<string, PullRequest[]> {
-  return groupedByRepo;
-}
-
-export function getNeedsYourReview(): PullRequest[] {
-  return needsYourReview;
-}
-
-export function getNeedsYourReviewByRepo(): Map<string, PullRequest[]> {
-  return needsYourReviewByRepo;
-}
-
 /**
  * Open PRs for one repo with pinned PRs sorted to the very top, then
  * needs-your-review PRs, then the rest.
@@ -174,10 +162,6 @@ export async function fetchTaggedPrs(repoId: string): Promise<void> {
   } finally {
     taggedPrsLoadingByRepo = new Map(taggedPrsLoadingByRepo).set(repoId, false);
   }
-}
-
-export function setPullRequests(prs: PullRequest[]): void {
-  pullRequests = prs;
 }
 
 /**
@@ -334,10 +318,6 @@ export function getArchivedNextCursor(): string | null {
 
 export function getArchivedLoadingMore(): boolean {
   return archivedLoadingMore;
-}
-
-export function getPinnedPrIds(): Set<string> {
-  return pinnedPrIds;
 }
 
 export function isPrPinned(prId: string): boolean {
@@ -603,10 +583,6 @@ export function getSelectedRepo(): Repository | null {
 
 export function setSelectedRepoId(id: string | null): void {
   selectedRepoId = id;
-}
-
-export function getSearchQuery(): string {
-  return searchQuery;
 }
 
 export function getIsLoading(): boolean {

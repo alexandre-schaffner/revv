@@ -3,9 +3,17 @@ import { toast } from "svelte-sonner";
 import { WS_BASE_URL } from "$lib/api/base-url";
 import { applyUserUpdate } from "./auth.svelte";
 import { onChatQuestionResolved } from "./chat.svelte";
-import * as errors from "./errors.svelte";
-import * as prs from "./prs.svelte";
-import { getSelectedPrId, onPrArchived, replacePullRequests } from "./prs.svelte";
+import { setError } from "./errors.svelte";
+import {
+  fetchPinnedPrs,
+  fetchPrs,
+  fetchRepos,
+  getSelectedPrId,
+  onPrArchived,
+  replacePullRequests,
+  setRepositories,
+  updateRepoCloneStatus,
+} from "./prs.svelte";
 import { onRecapAdded, onRecapStatusChanged } from "./recaps.svelte";
 import {
   loadSession,
@@ -17,8 +25,7 @@ import {
   onThreadUpdated,
 } from "./review.svelte";
 import { getGithubHost } from "./settings.svelte";
-import * as sync from "./sync.svelte";
-import { markThreadsSyncing } from "./sync.svelte";
+import { applySyncError, applySynced, markThreadsSyncing, setPrListSyncing } from "./sync.svelte";
 import { hydrateFromCache } from "./walkthrough.svelte";
 
 let ws: WebSocket | null = null;
@@ -93,16 +100,16 @@ function handleMessage(msg: WsServerMessage): void {
       onPrArchived(msg.data);
       break;
     case "prs:sync-started":
-      sync.setPrListSyncing(true);
+      setPrListSyncing(true);
       break;
     case "prs:sync-complete":
-      sync.setPrListSyncing(false);
+      setPrListSyncing(false);
       break;
     case "repos:updated":
-      void prs.setRepositories(msg.data);
+      void setRepositories(msg.data);
       break;
     case "repos:clone-status":
-      prs.updateRepoCloneStatus(msg.data.repoId, msg.data.status, msg.data.error);
+      updateRepoCloneStatus(msg.data.repoId, msg.data.status, msg.data.error);
       break;
     case "user:updated":
       applyUserUpdate({
@@ -113,7 +120,7 @@ function handleMessage(msg: WsServerMessage): void {
       });
       break;
     case "error":
-      errors.setError(msg.data);
+      setError(msg.data);
       break;
     case "thread:created":
       onThreadCreated(msg.data.thread, msg.data.message);
@@ -134,14 +141,14 @@ function handleMessage(msg: WsServerMessage): void {
       onThreadMessageDeleted(msg.data.threadId, msg.data.messageId);
       break;
     case "threads:synced":
-      sync.applySynced(msg.data.prId, msg.data.summary, msg.data.timestamp);
+      applySynced(msg.data.prId, msg.data.summary, msg.data.timestamp);
       if (msg.data.prId === getSelectedPrId()) {
         void loadSession(msg.data.prId);
       }
       break;
     case "threads:sync-error":
       console.error("[ws] Thread sync error for PR", msg.data.prId, msg.data.message);
-      sync.applySyncError(msg.data.prId, msg.data.message);
+      applySyncError(msg.data.prId, msg.data.message);
       toast.error("Failed to sync comments from GitHub", {
         description: "Check your connection or try re-authenticating.",
         duration: 6000,
@@ -248,7 +255,7 @@ export function connect(token: string, hostOverride?: string): void {
     }
     // On reconnect, reconcile missed prs:updated / repos:updated broadcasts.
     if (isReconnect) {
-      void Promise.all([prs.fetchRepos(), prs.fetchPrs(), prs.fetchPinnedPrs()]);
+      void Promise.all([fetchRepos(), fetchPrs(), fetchPinnedPrs()]);
     }
     // Recover from any `walkthrough:complete` broadcasts the client missed
     // while WS was unconnected — the canonical case is `resumePending`
