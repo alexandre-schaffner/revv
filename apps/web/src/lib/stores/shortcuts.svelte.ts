@@ -5,6 +5,11 @@ import { toggleRightPanel, toggleSidebar } from "./sidebar.svelte";
 
 export type PaletteMode = "search" | "command";
 
+let cmdHeld = $state(false);
+export function getCmdHeld(): boolean {
+  return cmdHeld;
+}
+
 let paletteOpen = $state(false);
 let paletteMode = $state<PaletteMode>("search");
 
@@ -34,6 +39,7 @@ export function closePalette(): void {
 // ── Global keydown listener ──────────────────────────────
 
 function handleKeydown(e: KeyboardEvent): void {
+  if (e.metaKey && !cmdHeld) cmdHeld = true;
   // Only handle meta-key combos globally (these should work even in inputs)
   if (!e.metaKey) return;
 
@@ -147,8 +153,22 @@ function handleKeydown(e: KeyboardEvent): void {
   }
 }
 
+function handleKeyup(e: KeyboardEvent): void {
+  if (e.key === "Meta") cmdHeld = false;
+}
+
+function handleBlur(): void {
+  cmdHeld = false;
+}
+
 /** Attach global keyboard listener. Returns cleanup function. */
 export function initShortcuts(): () => void {
   window.addEventListener("keydown", handleKeydown, { capture: true });
-  return () => window.removeEventListener("keydown", handleKeydown, { capture: true });
+  window.addEventListener("keyup", handleKeyup, { capture: true });
+  window.addEventListener("blur", handleBlur);
+  return () => {
+    window.removeEventListener("keydown", handleKeydown, { capture: true });
+    window.removeEventListener("keyup", handleKeyup, { capture: true });
+    window.removeEventListener("blur", handleBlur);
+  };
 }
