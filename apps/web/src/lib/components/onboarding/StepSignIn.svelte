@@ -1,6 +1,6 @@
 <script lang="ts">
-import Check from "phosphor-svelte/lib/Check";
 import ChevronLeft from "phosphor-svelte/lib/CaretLeft";
+import Check from "phosphor-svelte/lib/Check";
 import Copy from "phosphor-svelte/lib/Copy";
 import { onMount } from "svelte";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";

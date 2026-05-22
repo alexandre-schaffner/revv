@@ -1,9 +1,9 @@
 <script lang="ts">
-import AlertTriangle from "phosphor-svelte/lib/Warning";
+import type { RecapSummaryStats } from "@revv/shared";
 import GitMerge from "phosphor-svelte/lib/GitMerge";
 import GitPullRequestClosed from "phosphor-svelte/lib/GitPullRequest";
 import Users from "phosphor-svelte/lib/Users";
-import type { RecapSummaryStats } from "@revv/shared";
+import AlertTriangle from "phosphor-svelte/lib/Warning";
 
 interface Props {
   stats: RecapSummaryStats;

@@ -244,12 +244,12 @@ export class WalkthroughService extends Context.Tag("WalkthroughService")<
        * predate the attribution columns continue to compile — the columns
        * are nullable and the UI degrades gracefully.
        */
-       generatedBy?: {
-         readonly githubUserId: number;
-         readonly githubLogin: string;
-         readonly displayName: string | null;
-         readonly avatarContent: string | null;
-       };
+      generatedBy?: {
+        readonly githubUserId: number;
+        readonly githubLogin: string;
+        readonly displayName: string | null;
+        readonly avatarContent: string | null;
+      };
       /**
        * Snapshot of the AI provider config in effect at job start. Stored
        * as JSON on `provider_config`. Pairs with `modelUsed` — the
@@ -617,7 +617,13 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
       const result = db
         .select({ wt: walkthroughs, avatarContent: remoteUsers.avatarContent })
         .from(walkthroughs)
-        .leftJoin(remoteUsers, and(eq(remoteUsers.provider, "github"), eq(remoteUsers.login, walkthroughs.generatedByGithubLogin)))
+        .leftJoin(
+          remoteUsers,
+          and(
+            eq(remoteUsers.provider, "github"),
+            eq(remoteUsers.login, walkthroughs.generatedByGithubLogin),
+          ),
+        )
         .where(
           and(
             eq(walkthroughs.pullRequestId, prId),
@@ -669,7 +675,13 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
       const result = db
         .select({ wt: walkthroughs, avatarContent: remoteUsers.avatarContent })
         .from(walkthroughs)
-        .leftJoin(remoteUsers, and(eq(remoteUsers.provider, "github"), eq(remoteUsers.login, walkthroughs.generatedByGithubLogin)))
+        .leftJoin(
+          remoteUsers,
+          and(
+            eq(remoteUsers.provider, "github"),
+            eq(remoteUsers.login, walkthroughs.generatedByGithubLogin),
+          ),
+        )
         .where(
           and(
             eq(walkthroughs.pullRequestId, prId),
@@ -878,28 +890,30 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         .sort((a, b) => a.semanticStepIndex - b.semanticStepIndex || a.stepIndex - b.stepIndex)
         .map((b) => JSON.parse(b.data) as WalkthroughBlock);
 
-      const issues = [...issueRows].sort((a, b) => a.order - b.order).map((i): WalkthroughIssue => {
-        let blockIds: string[] = [];
-        try {
-          const parsed: unknown = JSON.parse(i.blockIds);
-          if (Array.isArray(parsed)) {
-            blockIds = parsed.filter((v): v is string => typeof v === "string");
+      const issues = [...issueRows]
+        .sort((a, b) => a.order - b.order)
+        .map((i): WalkthroughIssue => {
+          let blockIds: string[] = [];
+          try {
+            const parsed: unknown = JSON.parse(i.blockIds);
+            if (Array.isArray(parsed)) {
+              blockIds = parsed.filter((v): v is string => typeof v === "string");
+            }
+          } catch {
+            // corrupt JSON — fall back to empty
           }
-        } catch {
-          // corrupt JSON — fall back to empty
-        }
-        return {
-          id: i.id,
-          severity: i.severity as WalkthroughIssue["severity"],
-          title: i.title,
-          description: i.description,
-          blockIds,
-          ...(i.filePath !== null ? { filePath: i.filePath } : {}),
-          ...(i.startLine !== null ? { startLine: i.startLine } : {}),
-          ...(i.endLine !== null ? { endLine: i.endLine } : {}),
-          ...(i.submittedAt !== null ? { submittedAt: i.submittedAt } : {}),
-        };
-      });
+          return {
+            id: i.id,
+            severity: i.severity as WalkthroughIssue["severity"],
+            title: i.title,
+            description: i.description,
+            blockIds,
+            ...(i.filePath !== null ? { filePath: i.filePath } : {}),
+            ...(i.startLine !== null ? { startLine: i.startLine } : {}),
+            ...(i.endLine !== null ? { endLine: i.endLine } : {}),
+            ...(i.submittedAt !== null ? { submittedAt: i.submittedAt } : {}),
+          };
+        });
 
       const ratings = [...ratingRows]
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt))

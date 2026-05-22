@@ -223,16 +223,12 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
   })
 
   // ── Walkthrough ────────────────────────────────────────────────────────
-  .get(
-    "/:id/walkthrough",
-    (ctx) => walkthroughStreamHandler(ctx),
-    {
-      query: t.Object({
-        snapshotAt: t.Optional(t.String()),
-        lastPhase: t.Optional(t.String()),
-      }),
-    },
-  )
+  .get("/:id/walkthrough", (ctx) => walkthroughStreamHandler(ctx), {
+    query: t.Object({
+      snapshotAt: t.Optional(t.String()),
+      lastPhase: t.Optional(t.String()),
+    }),
+  })
 
   .get("/:id/walkthrough/current", async (ctx) => {
     try {

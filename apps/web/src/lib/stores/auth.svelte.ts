@@ -81,7 +81,7 @@ export function setForceOnboardingFlow(): void {
 }
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
-let isAuthenticated = $derived(token !== null && token.length > 0);
+const isAuthenticated = $derived(token !== null && token.length > 0);
 let forceOnboardingFlow = $state(false);
 
 export function getIsAuthenticated(): boolean {

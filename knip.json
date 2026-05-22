@@ -40,19 +40,10 @@
       "ignoreDependencies": ["@radix-ui/react-popover", "class-variance-authority"]
     },
     "packages/app": {
-      "entry": [
-        "src/root.tsx",
-        "src/routes/**/*.{ts,tsx}",
-        "vite.config.ts",
-        "app.config.ts"
-      ]
+      "entry": ["src/root.tsx", "src/routes/**/*.{ts,tsx}", "vite.config.ts", "app.config.ts"]
     }
   },
   "ignore": [],
   "ignoreExportsUsedInFile": true,
-  "ignoreDependencies": [
-    "biome",
-    "turbo",
-    "knip"
-  ]
+  "ignoreDependencies": ["biome", "turbo", "knip"]
 }

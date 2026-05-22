@@ -137,7 +137,7 @@ const periodEyebrow = $derived.by(() => {
 });
 
 function utcDayKey(iso: string | Date): string {
-  const s = typeof iso === 'string' ? iso : iso.toISOString();
+  const s = typeof iso === "string" ? iso : iso.toISOString();
   return s.slice(0, 10);
 }
 
@@ -178,7 +178,8 @@ const recapUiKind: RecapUiKind = $derived.by(() => {
   if (latestDetail.status === "error") {
     return latestDetail.errorMessage === "Cancelled by user" ? "stopped" : "error";
   }
-  if (latestDetail.status === "complete") return recapIsOutOfDate(latestDetail) ? "outdated" : "complete";
+  if (latestDetail.status === "complete")
+    return recapIsOutOfDate(latestDetail) ? "outdated" : "complete";
   return "hidden";
 });
 

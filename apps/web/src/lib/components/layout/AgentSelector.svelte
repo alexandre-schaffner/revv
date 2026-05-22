@@ -1,9 +1,8 @@
 <script lang="ts">
-import Check from "phosphor-svelte/lib/Check";
 import type { AiAgent } from "@revv/shared";
+import Check from "phosphor-svelte/lib/Check";
 import AnthropicIcon from "$lib/components/icons/AnthropicIcon.svelte";
 import OpenCodeIcon from "$lib/components/icons/OpenCodeIcon.svelte";
-import SelectTrigger from "./SelectTrigger.svelte";
 import {
   Content as PopoverContent,
   Root as PopoverRoot,
@@ -15,6 +14,7 @@ import {
   getSettings,
   updateSettings,
 } from "$lib/stores/settings.svelte";
+import SelectTrigger from "./SelectTrigger.svelte";
 
 const AGENT_OPTIONS = [
   { label: "OpenCode", value: "opencode" as AiAgent, icon: OpenCodeIcon },

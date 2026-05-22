@@ -1,8 +1,8 @@
 <script lang="ts">
 import ArrowRight from "phosphor-svelte/lib/ArrowRight";
-import Loader2 from "phosphor-svelte/lib/Spinner";
 import Monitor from "phosphor-svelte/lib/Desktop";
 import Moon from "phosphor-svelte/lib/Moon";
+import Loader2 from "phosphor-svelte/lib/Spinner";
 import Sun from "phosphor-svelte/lib/Sun";
 import User from "phosphor-svelte/lib/User";
 import { fade } from "svelte/transition";

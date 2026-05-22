@@ -1,7 +1,7 @@
 <script lang="ts">
+import type { Repository } from "@revv/shared";
 import Plus from "phosphor-svelte/lib/Plus";
 import User from "phosphor-svelte/lib/User";
-import type { Repository } from "@revv/shared";
 import RepoAvatarButton from "$lib/components/sidebar/RepoAvatarButton.svelte";
 import * as Collapsible from "$lib/components/ui/collapsible";
 import * as Tooltip from "$lib/components/ui/tooltip/index.js";

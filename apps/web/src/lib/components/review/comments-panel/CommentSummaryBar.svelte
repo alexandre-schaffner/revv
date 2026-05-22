@@ -9,9 +9,9 @@
  */
 import ChevronsDownUp from "phosphor-svelte/lib/ArrowsInLineVertical";
 import ChevronsUpDown from "phosphor-svelte/lib/ArrowsOutLineVertical";
+import MessageSquare from "phosphor-svelte/lib/Chat";
 import Circle from "phosphor-svelte/lib/Circle";
 import Filter from "phosphor-svelte/lib/Funnel";
-import MessageSquare from "phosphor-svelte/lib/Chat";
 
 interface Counts {
   unresolved: number;

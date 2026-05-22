@@ -836,7 +836,10 @@ export const OpencodeSupervisorLive = Layer.effect(
         );
         const s0 = yield* Ref.get(stateRef);
         if (settings && !isOpencodeNeeded(settings) && s0.running) {
-          debug("opencode-supervisor", `opencode no longer needed by any feature — stopping daemon`);
+          debug(
+            "opencode-supervisor",
+            `opencode no longer needed by any feature — stopping daemon`,
+          );
           yield* stopNow();
         }
         yield* clearIdleTimer();

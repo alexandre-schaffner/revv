@@ -1,16 +1,13 @@
 <script lang="ts">
 import { ArrowsClockwise, GitBranch, Spinner, Warning, X } from "phosphor-svelte";
 import { tick } from "svelte";
+import { toast } from "svelte-sonner";
+import { type MergePushResult, pushProposedChanges } from "$lib/api/chat";
 import { Button } from "$lib/components/ui/button";
 import * as Dialog from "$lib/components/ui/dialog";
 import { Input } from "$lib/components/ui/input";
-import {
-  getProposedChanges,
-  isPushingProposed,
-} from "$lib/stores/chat.svelte";
+import { getProposedChanges, isPushingProposed } from "$lib/stores/chat.svelte";
 import { getSelectedPr } from "$lib/stores/prs.svelte";
-import { pushProposedChanges, type MergePushResult } from "$lib/api/chat";
-import { toast } from "svelte-sonner";
 
 interface Props {
   prId: string | undefined;
@@ -38,9 +35,7 @@ let newBranchInputEl = $state<HTMLInputElement | null>(null);
 let localPushing = $state(false);
 
 const isPushing = $derived(prId ? isPushingProposed(prId) || localPushing : false);
-const commitCount = $derived(
-  prId ? (getProposedChanges(prId)?.commits.length ?? 0) : 0,
-);
+const commitCount = $derived(prId ? (getProposedChanges(prId)?.commits.length ?? 0) : 0);
 
 $effect(() => {
   if (newBranchDialogOpen) {

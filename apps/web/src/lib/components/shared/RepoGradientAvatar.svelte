@@ -1,9 +1,9 @@
 <script lang="ts">
 import {
   fallbackOwnerPalette,
+  type OwnerPalette,
   ownerPaletteFromAvatar,
   peekOwnerPalette,
-  type OwnerPalette,
 } from "$lib/utils/avatarPalette";
 import { repoGradientDataUrl } from "$lib/utils/repoGradient";
 

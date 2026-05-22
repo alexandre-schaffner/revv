@@ -1,4 +1,6 @@
 <script lang="ts">
+import Sparkles from "phosphor-svelte/lib/Sparkle";
+import Loader2 from "phosphor-svelte/lib/Spinner";
 import { untrack } from "svelte";
 import { goto } from "$app/navigation";
 import { page } from "$app/state";
@@ -8,8 +10,6 @@ import GenActionBar, { type GenActionState } from "$lib/components/layout/GenAct
 import PreviousRecaps from "$lib/components/recaps/PreviousRecaps.svelte";
 import RecapDetail from "$lib/components/recaps/RecapDetail.svelte";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
-import Sparkles from "phosphor-svelte/lib/Sparkle";
-import Loader2 from "phosphor-svelte/lib/Spinner";
 import {
   abortRecapStream,
   getRecapStreamEntry,
@@ -81,7 +81,7 @@ const periodLabelLower = $derived(recap?.period === "weekly" ? "weekly" : "daily
 const currentPeriodLabel = $derived(recap?.period === "weekly" ? "this week's" : "today's");
 
 function utcDayKey(iso: string | Date): string {
-  const s = typeof iso === 'string' ? iso : iso.toISOString();
+  const s = typeof iso === "string" ? iso : iso.toISOString();
   return s.slice(0, 10);
 }
 

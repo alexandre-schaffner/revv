@@ -1,7 +1,7 @@
 <script lang="ts">
+import type { PullRequest } from "@revv/shared";
 import Pin from "phosphor-svelte/lib/PushPin";
 import User from "phosphor-svelte/lib/User";
-import type { PullRequest } from "@revv/shared";
 import { isPrPinned, pinPr, selectPr, unpinPr } from "$lib/stores/prs.svelte";
 import { setSidebarView } from "$lib/stores/sidebar.svelte";
 import { getFocusedId } from "$lib/stores/sidebar-nav.svelte";

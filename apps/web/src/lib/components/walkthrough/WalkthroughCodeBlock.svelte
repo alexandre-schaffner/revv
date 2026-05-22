@@ -1,7 +1,7 @@
 <script lang="ts">
-import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
 import { DIFFS_TAG_NAME, type FileOptions, File as PierreFile } from "@pierre/diffs";
 import type { CodeBlock } from "@revv/shared";
+import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
 import { jumpToDiffLine } from "$lib/stores/review.svelte";
 import { renderMarkdown } from "$lib/utils/markdown";
 import { workerManager } from "$lib/utils/worker-pool";

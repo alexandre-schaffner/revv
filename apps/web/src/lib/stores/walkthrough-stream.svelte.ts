@@ -591,7 +591,9 @@ async function doHydrateFromCache(
     entry.doneReceived = !isGenerating && !isError;
     entry.isStreaming = isGenerating;
     entry.tokenUsage = coerceTokenUsage(wt.tokenUsage);
-    entry.streamError = isError ? "Walkthrough generation failed. Resume or regenerate to retry." : null;
+    entry.streamError = isError
+      ? "Walkthrough generation failed. Resume or regenerate to retry."
+      : null;
     entry.superseded = false;
     entry.phase = isGenerating ? "writing" : "finishing";
     entry.phaseMessage = isGenerating ? "Resuming walkthrough…" : "Complete";

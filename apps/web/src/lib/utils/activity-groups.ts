@@ -16,7 +16,9 @@ export interface ActivityGroup<T extends GroupableActivity = GroupableActivity> 
   readonly items: readonly T[];
 }
 
-export function isActivityGroup<T extends GroupableActivity>(value: ActivityGroup<T> | T): value is ActivityGroup<T> {
+export function isActivityGroup<T extends GroupableActivity>(
+  value: ActivityGroup<T> | T,
+): value is ActivityGroup<T> {
   return "category" in value && value.category === "exploring" && Array.isArray(value.items);
 }
 
@@ -32,18 +34,15 @@ export interface ActivityGroupCounts {
   readonly lists: number;
 }
 
-const EXPLORATION_KINDS = new Set<ActivityKind>([
-  "tool.read",
-  "tool.grep",
-  "tool.glob",
-  "tool.ls",
-]);
+const EXPLORATION_KINDS = new Set<ActivityKind>(["tool.read", "tool.grep", "tool.glob", "tool.ls"]);
 
 export function isExplorationActivity(activity: Pick<GroupableActivity, "activityKind">): boolean {
   return EXPLORATION_KINDS.has(activity.activityKind);
 }
 
-export function activityGroupSummary(items: readonly Pick<GroupableActivity, "activityKind">[]): string {
+export function activityGroupSummary(
+  items: readonly Pick<GroupableActivity, "activityKind">[],
+): string {
   const { reads, searches, lists } = activityGroupCounts(items);
 
   return [
@@ -55,10 +54,14 @@ export function activityGroupSummary(items: readonly Pick<GroupableActivity, "ac
     .join(", ");
 }
 
-export function activityGroupCounts(items: readonly Pick<GroupableActivity, "activityKind">[]): ActivityGroupCounts {
+export function activityGroupCounts(
+  items: readonly Pick<GroupableActivity, "activityKind">[],
+): ActivityGroupCounts {
   return {
     reads: items.filter((item) => item.activityKind === "tool.read").length,
-    searches: items.filter((item) => item.activityKind === "tool.grep" || item.activityKind === "tool.glob").length,
+    searches: items.filter(
+      (item) => item.activityKind === "tool.grep" || item.activityKind === "tool.glob",
+    ).length,
     lists: items.filter((item) => item.activityKind === "tool.ls").length,
   };
 }
@@ -73,14 +76,22 @@ export function robustActivityGroupCounts(
   for (const item of items) {
     const label = activityToolLabel(item).toLowerCase();
     if (item.activityKind === "tool.read" || label === "read") reads++;
-    else if (item.activityKind === "tool.grep" || item.activityKind === "tool.glob" || label === "grep" || label === "glob") searches++;
+    else if (
+      item.activityKind === "tool.grep" ||
+      item.activityKind === "tool.glob" ||
+      label === "grep" ||
+      label === "glob"
+    )
+      searches++;
     else if (item.activityKind === "tool.ls" || label === "list") lists++;
   }
 
   return { reads, searches, lists };
 }
 
-export function activityToolLabel(item: Pick<GroupableActivity, "activityKind" | "toolName">): string {
+export function activityToolLabel(
+  item: Pick<GroupableActivity, "activityKind" | "toolName">,
+): string {
   if (item.activityKind === "tool.read") return "Read";
   if (item.activityKind === "tool.grep") return "Grep";
   if (item.activityKind === "tool.glob") return "Glob";
@@ -96,7 +107,9 @@ function countLabel(count: number, one: string, other: string): string | null {
   return `${count} ${count === 1 ? one : other}`;
 }
 
-export function groupActivityRuns<T extends GroupableActivity>(items: readonly T[]): Array<ActivityGroup<T> | T> {
+export function groupActivityRuns<T extends GroupableActivity>(
+  items: readonly T[],
+): Array<ActivityGroup<T> | T> {
   const result: Array<ActivityGroup<T> | T> = [];
   let current: T[] = [];
 

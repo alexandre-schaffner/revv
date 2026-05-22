@@ -21,9 +21,7 @@ export function fallbackOwnerHue(repoFullName: string): number {
   return hashString(owner) % 360;
 }
 
-export type OwnerPalette =
-  | { kind: "color"; hue: number }
-  | { kind: "neutral"; lightness: number };
+export type OwnerPalette = { kind: "color"; hue: number } | { kind: "neutral"; lightness: number };
 
 export function fallbackOwnerPalette(repoFullName: string): OwnerPalette {
   return { kind: "color", hue: fallbackOwnerHue(repoFullName) };
