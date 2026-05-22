@@ -116,7 +116,10 @@ export const RemoteUserServiceLive = Layer.effect(
             .onConflictDoUpdate({
               target: [remoteUsers.provider, remoteUsers.login],
               set: {
-                providerUserId: sql`excluded.provider_user_id`,
+                // Only overwrite the stored numeric ID when the caller actually
+                // has it — poll/sync callers pass "" and must not erase the ID
+                // that was persisted during OAuth.
+                providerUserId: sql`CASE WHEN excluded.provider_user_id != '' THEN excluded.provider_user_id ELSE ${remoteUsers.providerUserId} END`,
                 login: sql`excluded.login`,
                 displayName: sql`excluded.display_name`,
                 avatarContent:
