@@ -41,6 +41,7 @@ export type PromptInputTextareaProps = HTMLTextareaAttributes & {
 	}
 
 	$effect(() => {
+		// Track ctx.value so autoResize fires on programmatic clear/fill.
 		void ctx.value;
 		autoResize();
 	});
