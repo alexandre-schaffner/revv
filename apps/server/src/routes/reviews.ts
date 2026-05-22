@@ -284,6 +284,30 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
     }
   })
 
+  // Cancel the in-flight walkthrough for this PR (the Stop button). No-op
+  // when no live job is registered (already finished / never started). The
+  // orchestrator's failure handler picks up the `cancelledByUser` flag and
+  // transitions the row to `status='error'` with code `'Cancelled'`, then
+  // broadcasts `lifecycle:error` — that's what the UI consumes to flip out
+  // of the streaming state. We do NOT supersede the row: a partial
+  // walkthrough should remain resumable via the Resume button.
+  .post("/:id/walkthrough/abort", async (ctx) => {
+    try {
+      await AppRuntime.runPromise(
+        Effect.gen(function* () {
+          const jobs = yield* WalkthroughJobs;
+          const existing = yield* jobs.findActiveByPr(ctx.params.id);
+          if (existing !== null) {
+            yield* jobs.cancel(existing.walkthroughId);
+          }
+        }),
+      );
+      return { success: true };
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  })
+
   // ── GitHub submission ──────────────────────────────────────────────────
   .post(
     "/:id/github-submit",

@@ -501,6 +501,12 @@ export function applyEvents(prId: string, events: WalkthroughStreamEvent[]): voi
             entry.cloneInProgress = true;
             entry.cloneRepoId = event.data.repoId;
             entry.isStreaming = false;
+          } else if (event.data.code === "Cancelled") {
+            // User-initiated stop — not a failure. Suppress the error
+            // banner so the UI falls through to the "resumable" / "idle"
+            // state based on whether partial content exists.
+            entry.streamError = null;
+            entry.isStreaming = false;
           } else {
             entry.streamError = event.data.message;
             entry.isStreaming = false;
@@ -935,12 +941,13 @@ export async function startWalkthrough(prId: string): Promise<void> {
 }
 
 /**
- * Local-only stop. With the global SSE bus there is no per-PR
- * subscription to cancel and no server-side stop endpoint — we mark
- * the entry as no-longer-streaming. Server-side generation continues
- * in the background; any subsequent content events still apply via the
- * reducer but won't flip `isStreaming` back on (only `lifecycle:started`
- * does, which is what we want for explicit resumes).
+ * Stop the in-flight walkthrough. Flips local UI state immediately for
+ * snappy feedback, then fires-and-forgets a `POST /walkthrough/abort` so
+ * the server actually interrupts the fiber. Without the server call the
+ * Stop button only relabeled the UI while the agent kept burning tokens
+ * in the background. The server's interrupt path emits `lifecycle:error`
+ * with code `'Cancelled'`, which the reducer turns into the post-stop
+ * state (Resume/Regenerate buttons).
  */
 export function abort(prId: string): void {
   updateEntry(prId, (e) => {
@@ -948,6 +955,15 @@ export function abort(prId: string): void {
     e.streamError = null;
   });
   stopClonePoll(prId);
+  // Fire-and-forget. Failures are best-effort: if the request fails the
+  // server-side fiber keeps running, but the local UI has already moved
+  // on, and the next pull/regenerate will catch the leak.
+  fetch(`${API_BASE_URL}/api/reviews/${prId}/walkthrough/abort`, {
+    method: "POST",
+    headers: authHeaders(),
+  }).catch(() => {
+    /* best-effort */
+  });
 }
 
 export async function regenerate(prId: string): Promise<void> {
