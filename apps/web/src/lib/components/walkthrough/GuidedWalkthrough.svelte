@@ -251,9 +251,24 @@ const chapterStartIndex = $derived.by(() => {
   void activeChapterIndex;
   return untrack(() => explorationSteps.length);
 });
-const recentExplorationSteps = $derived(
-  explorationSteps.slice(chapterStartIndex).slice(-TOOL_CALL_WINDOW),
-);
+// Pair each step with its absolute index in `explorationSteps` so the
+// keyed `{#each}` below can use a stable, collision-proof key. Two
+// consecutive `add_diff_step` calls share the same toolName + summary
+// ("Writing walkthrough step…"), which used to crash Svelte with
+// `each_key_duplicate` — and a Svelte each-key crash freezes the entire
+// component, which is what was causing later chapters / ratings / blocks
+// to never render even though the store had them.
+const recentExplorationSteps = $derived.by(() => {
+  const start = chapterStartIndex;
+  const all = explorationSteps;
+  const sliceStart = Math.max(start, all.length - TOOL_CALL_WINDOW);
+  const out: { step: (typeof all)[number]; ordinal: number }[] = [];
+  for (let i = sliceStart; i < all.length; i += 1) {
+    const step = all[i];
+    if (step !== undefined) out.push({ step, ordinal: i });
+  }
+  return out;
+});
 
 // "All phases done" needs actual evidence of completion. A fresh PR with
 // no content shouldn't flash all checkmarks just because !isStreaming — so
@@ -815,7 +830,7 @@ function handleRegenerate(): void {
 							<Dotmatrix variant={chapter.spinner} active={active} />
 									{#if recentExplorationSteps.length > 0}
 										<div class="chapter-tool-calls">
-											{#each recentExplorationSteps.slice(-2) as step, i (step.toolName + step.summary)}
+											{#each recentExplorationSteps.slice(-2) as { step, ordinal }, i (ordinal)}
 												<div
 													class="chapter-tool-call"
 													style="top: {i * TOOL_CALL_ROW_H}px"

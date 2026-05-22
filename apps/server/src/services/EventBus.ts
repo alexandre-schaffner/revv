@@ -110,20 +110,10 @@ export const EventBusLive = Layer.effect(
       broadcastToAccount: (accountId, msg) =>
         Effect.gen(function* () {
           const set = yield* Ref.get(registrations);
-          let matched = 0;
-          let dispatched = 0;
           for (const reg of set) {
             if (reg.accountId !== accountId) continue;
-            matched += 1;
-            if (!reg.writer.isClosed()) dispatched += 1;
             dispatch(reg, msg);
           }
-          // Diagnostic: caller can correlate with `fanOut wt=... seq=...` lines.
-          const tag =
-            msg.type === "walkthrough:event" ? `${msg.data.walkthroughId}#${msg.data.seq}` : "?";
-          console.log(
-            `[event-bus] broadcastToAccount account=${accountId} tag=${tag} matched=${matched} dispatched=${dispatched} totalRegs=${set.size}`,
-          );
         }),
 
       broadcast: (msg) =>
