@@ -511,7 +511,7 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
             avatarContent: remoteUsers.avatarContent,
           })
           .from(threadMessages)
-          .leftJoin(remoteUsers, eq(remoteUsers.login, threadMessages.authorLogin))
+          .leftJoin(remoteUsers, and(eq(remoteUsers.provider, "github"), eq(remoteUsers.login, threadMessages.authorLogin)))
           .where(eq(threadMessages.threadId, threadId))
           .orderBy(threadMessages.createdAt)
           .all(),
@@ -528,7 +528,7 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
             avatarContent: remoteUsers.avatarContent,
           })
           .from(threadMessages)
-          .leftJoin(remoteUsers, eq(remoteUsers.login, threadMessages.authorLogin))
+          .leftJoin(remoteUsers, and(eq(remoteUsers.provider, "github"), eq(remoteUsers.login, threadMessages.authorLogin)))
           .where(eq(threadMessages.id, messageId))
           .get(),
       );

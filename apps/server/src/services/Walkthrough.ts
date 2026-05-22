@@ -617,7 +617,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
       const result = db
         .select({ wt: walkthroughs, avatarContent: remoteUsers.avatarContent })
         .from(walkthroughs)
-        .leftJoin(remoteUsers, eq(remoteUsers.login, walkthroughs.generatedByGithubLogin))
+        .leftJoin(remoteUsers, and(eq(remoteUsers.provider, "github"), eq(remoteUsers.login, walkthroughs.generatedByGithubLogin)))
         .where(
           and(
             eq(walkthroughs.pullRequestId, prId),
@@ -669,7 +669,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
       const result = db
         .select({ wt: walkthroughs, avatarContent: remoteUsers.avatarContent })
         .from(walkthroughs)
-        .leftJoin(remoteUsers, eq(remoteUsers.login, walkthroughs.generatedByGithubLogin))
+        .leftJoin(remoteUsers, and(eq(remoteUsers.provider, "github"), eq(remoteUsers.login, walkthroughs.generatedByGithubLogin)))
         .where(
           and(
             eq(walkthroughs.pullRequestId, prId),
