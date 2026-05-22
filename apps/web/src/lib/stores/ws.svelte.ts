@@ -33,7 +33,7 @@ let reconnectAttempts = $state(0);
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** W2: queue multiple pending thread-sync requests instead of overwriting. */
-let pendingThreadSync: Set<string> = new Set();
+const pendingThreadSync: Set<string> = new Set();
 
 const MAX_RECONNECT_DELAY_MS = 30_000;
 

@@ -69,7 +69,7 @@ interface RepoDeleteSnapshot {
 // Result ordering: when there's an active query we sort by score (descending)
 // so the strongest matches surface first within each repo group; with no
 // query we preserve the server-provided order.
-let filteredPrs = $derived.by((): PullRequest[] => {
+const filteredPrs = $derived.by((): PullRequest[] => {
   const q = searchQuery.trim();
   if (q === "") return pullRequests;
 
@@ -92,9 +92,9 @@ let filteredPrs = $derived.by((): PullRequest[] => {
     .map((r) => r.pr);
 });
 
-let groupedByRepo = $derived(Map.groupBy(filteredPrs, (pr) => pr.repositoryId));
+const groupedByRepo = $derived(Map.groupBy(filteredPrs, (pr) => pr.repositoryId));
 
-let needsYourReview = $derived(
+const needsYourReview = $derived(
   (() => {
     const login = getCurrentUserLogin();
     if (!login) return [] as PullRequest[];
@@ -102,17 +102,17 @@ let needsYourReview = $derived(
   })(),
 );
 
-let needsYourReviewByRepo = $derived(Map.groupBy(needsYourReview, (pr) => pr.repositoryId));
+const needsYourReviewByRepo = $derived(Map.groupBy(needsYourReview, (pr) => pr.repositoryId));
 
-let archivedByRepo = $derived(Map.groupBy(archivedPrs, (pr) => pr.repositoryId));
+const archivedByRepo = $derived(Map.groupBy(archivedPrs, (pr) => pr.repositoryId));
 
-let selectedPr = $derived(
+const selectedPr = $derived(
   pullRequests.find((pr) => pr.id === selectedPrId) ??
     archivedPrs.find((pr) => pr.id === selectedPrId) ??
     null,
 );
 
-let selectedRepo = $derived(
+const selectedRepo = $derived(
   selectedRepoId ? (repositories.find((r) => r.id === selectedRepoId) ?? null) : null,
 );
 
