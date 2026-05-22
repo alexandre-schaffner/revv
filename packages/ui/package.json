@@ -5,7 +5,6 @@
   "type": "module",
   "exports": {
     "./components/*": "./src/components/*.tsx",
-    "./hooks/*": "./src/hooks/*.tsx",
     "./lib/*": "./src/lib/*.ts",
     "./styles/*": "./src/styles/*"
   },

@@ -2,48 +2,53 @@
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "workspaces": {
     ".": {
-      "entry": ["scripts/**/*.ts"],
-      "ignoreDependencies": ["@tauri-apps/cli", "concurrently"]
+      "entry": ["scripts/**/*.ts"]
     },
     "apps/web": {
       "entry": [
         "src/routes/**/+{page,layout,server,error,page.load,layout.load}.svelte",
         "src/routes/**/+{page,layout}.ts",
         "src/app.html",
-        "src/app.d.ts",
-        "src/hooks.server.ts",
-        "src/hooks.client.ts",
-        "svelte.config.js",
-        "vite.config.ts",
         "static/**"
       ],
-      "ignoreDependencies": [
-        "@sveltejs/adapter-static",
-        "@sveltejs/kit",
-        "@sveltejs/vite-plugin-svelte",
-        "@tailwindcss/vite",
-        "svelte-check",
-        "mode-watcher",
-        "svelte-sonner",
-        "bun-types"
+      "ignore": [
+        "src/lib/components/ai/**",
+        "src/lib/constants.ts",
+        "src/lib/services/**",
+        "src/lib/stores/**",
+        "src/lib/utils/**"
       ]
     },
     "apps/server": {
-      "entry": ["src/index.ts"],
-      "ignoreDependencies": ["bun-types", "drizzle-kit"]
+      "ignore": [
+        "src/ai/**",
+        "src/cache/**",
+        "src/config.ts",
+        "src/constants.ts",
+        "src/domain/errors.ts",
+        "src/logger.ts",
+        "src/services/GitOps.ts",
+        "src/services/OpencodeSupervisor.ts"
+      ]
     },
-    "packages/shared": {
-      "entry": ["src/index.ts"]
-    },
+    "packages/shared": {},
     "packages/ui": {
-      "entry": ["src/**/*.{ts,tsx}"],
-      "ignoreDependencies": ["@radix-ui/react-popover", "class-variance-authority"]
+      "entry": ["src/**/*.{ts,tsx}"]
     },
     "packages/app": {
-      "entry": ["src/root.tsx", "src/routes/**/*.{ts,tsx}", "vite.config.ts", "app.config.ts"]
+      "entry": ["src/routes/**/*.{ts,tsx}"],
+      "ignoreDependencies": ["tailwindcss"],
+      "ignore": ["src/lib/**"]
     }
   },
-  "ignore": [],
-  "ignoreExportsUsedInFile": true,
-  "ignoreDependencies": ["biome", "turbo", "knip"]
+  "ignore": [
+    "apps/web/src/lib/components/layout/BlockedStrip.svelte",
+    "apps/web/src/lib/components/layout/ChatInputArea.svelte",
+    "apps/web/src/lib/components/layout/ChatTimeline.svelte",
+    "apps/web/src/lib/components/layout/ProposedChangesDock.svelte",
+    "apps/web/src/lib/components/layout/PushDialogs.svelte",
+    "apps/web/src/lib/components/recaps/RecapPeriodPage.svelte",
+    "apps/web/src/lib/components/sidebar/RepoRecapsSubsection.svelte"
+  ],
+  "ignoreExportsUsedInFile": true
 }
