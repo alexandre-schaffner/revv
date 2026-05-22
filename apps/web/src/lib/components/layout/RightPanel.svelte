@@ -844,13 +844,13 @@ function activitiesForTurn(
 		<ConversationScrollButton />
 	</Conversation>
 
-	<!-- Floating composer: queue dock + chat input sit on top of the
-		 conversation surface so messages scroll underneath them. -->
+	<!-- Floating composer: queue dock + chat input share one glass surface
+		 anchored to the panel bottom; messages scroll underneath them. -->
 	<div class="composer-float">
 	<!-- Queue dock: proposed commits + agent tasks + queued messages -->
 	{#if showQueueDock}
 		<div class="queue-dock" transition:slide={{ duration: 220, easing: cubicOut }}>
-			<Queue class="shadow-sm">
+			<Queue class="composer-glass rounded-t-xl rounded-b-none border-b-0 shadow-none">
 				<!-- Proposed commits from the agent -->
 				{#if commitCount > 0 && proposed}
 					<div transition:slide={{ duration: 220, easing: cubicOut }}>
@@ -1124,7 +1124,7 @@ function activitiesForTurn(
 			onsubmit={handlePromptSubmit}
 			onstop={handleStop}
 			status={inputStatus}
-			class={'bg-background/85 shadow-md backdrop-blur-md transition-[border-color,box-shadow] duration-quick ease-out-expo focus-within:border-accent/70 focus-within:shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-accent)_14%,transparent)] hover:not(:focus-within):not(:has(:disabled)):border-border-hover' + (!prId ? ' opacity-60' : '')}
+			class={'composer-glass composer-glass-input transition-[border-color,box-shadow] duration-quick ease-out-expo' + (showQueueDock ? ' composer-glass--attached rounded-t-none border-t-0' : '') + (!prId ? ' opacity-60' : '')}
 		>
 			<PromptInputBody>
 				<PromptInputTextarea
@@ -1363,8 +1363,7 @@ function activitiesForTurn(
 	}
 
 	/* Floating composer: queue dock + chat input float above the
-	   conversation. Anchored to the bottom of the panel; messages
-	   scroll underneath them. */
+	   conversation, flush with each other so they read as one panel. */
 	.composer-float {
 		position: absolute;
 		left: 10px;
@@ -1373,12 +1372,47 @@ function activitiesForTurn(
 		z-index: 4;
 		display: flex;
 		flex-direction: column;
-		gap: 6px;
 		pointer-events: none;
 	}
 
 	.composer-float > :global(*) {
 		pointer-events: auto;
+	}
+
+	/* Shared glass surface — blur + saturate like PillTabs. */
+	:global(.composer-glass) {
+		background: color-mix(in srgb, var(--color-panel-bg) 88%, transparent);
+		backdrop-filter: blur(16px) saturate(1.4);
+		-webkit-backdrop-filter: blur(16px) saturate(1.4);
+		border-color: var(--color-glass-border);
+		box-shadow:
+			var(--color-glass-shadow),
+			inset 0 0.5px 0 0 var(--color-glass-highlight);
+	}
+
+	/* Focus ring layered on top of the glass shadow, not replacing it. */
+	:global(.composer-glass-input:focus-within) {
+		border-color: color-mix(in srgb, var(--color-accent) 70%, transparent);
+		box-shadow:
+			0 0 0 3px color-mix(in srgb, var(--color-accent) 14%, transparent),
+			var(--color-glass-shadow),
+			inset 0 0.5px 0 0 var(--color-glass-highlight);
+	}
+
+	:global(.composer-glass-input:hover:not(:focus-within):not(:has(:disabled))) {
+		border-color: var(--color-border-hover);
+	}
+
+	/* Input attached under the queue: drop the inset top-highlight so the
+	   seam reads as one panel. */
+	:global(.composer-glass--attached) {
+		box-shadow: var(--color-glass-shadow);
+	}
+
+	:global(.composer-glass--attached.composer-glass-input:focus-within) {
+		box-shadow:
+			0 0 0 3px color-mix(in srgb, var(--color-accent) 14%, transparent),
+			var(--color-glass-shadow);
 	}
 
 	/* Header */
