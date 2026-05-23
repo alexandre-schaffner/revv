@@ -8,8 +8,8 @@
 import type { Action } from "svelte/action";
 
 import { gsap } from "./gsap";
-import { prefersReducedMotion } from "./reduced-motion";
 import type { PresetFn } from "./presets";
+import { prefersReducedMotion } from "./reduced-motion";
 
 /* ───────────────────────── gsapPress ───────────────────────── */
 
@@ -19,10 +19,7 @@ interface GsapPressParams {
   disabled?: boolean;
 }
 
-export const gsapPress: Action<HTMLElement, GsapPressParams | undefined> = (
-  node,
-  params,
-) => {
+export const gsapPress: Action<HTMLElement, GsapPressParams | undefined> = (node, params) => {
   let current: GsapPressParams | undefined = params;
   let activeTween: gsap.core.Tween | null = null;
 
@@ -104,10 +101,7 @@ const PRESENCE_PROP = "--gsap-presence-frame";
 function presencePlaceholder(node: HTMLElement, durationSec: number): Animation | null {
   if (typeof node.animate !== "function") return null;
   return node.animate(
-    [
-      { [PRESENCE_PROP]: 0 } as unknown as Keyframe,
-      { [PRESENCE_PROP]: 1 } as unknown as Keyframe,
-    ],
+    [{ [PRESENCE_PROP]: 0 } as unknown as Keyframe, { [PRESENCE_PROP]: 1 } as unknown as Keyframe],
     { duration: Math.max(0, durationSec * 1000), fill: "forwards" },
   );
 }
@@ -120,9 +114,7 @@ export const bitsAnim: Action<HTMLElement, BitsAnimParams> = (node, params) => {
   const readSide = (): Side | undefined => {
     if (!current?.directionAware) return undefined;
     const raw = node.getAttribute("data-side");
-    return raw === "top" || raw === "right" || raw === "bottom" || raw === "left"
-      ? raw
-      : undefined;
+    return raw === "top" || raw === "right" || raw === "bottom" || raw === "left" ? raw : undefined;
   };
 
   const stop = () => {

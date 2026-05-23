@@ -86,9 +86,12 @@ $effect(() => {
   const hints = pillEl.querySelectorAll<HTMLElement>(".seg-shortcut");
   if (hints.length === 0) return;
   if (prefersReducedMotion()) {
-    gsap.set(hints, cmdHeld
-      ? { autoAlpha: 0.55, width: "auto", marginRight: 5 }
-      : { autoAlpha: 0, width: 0, marginRight: 0 });
+    gsap.set(
+      hints,
+      cmdHeld
+        ? { autoAlpha: 0.55, width: "auto", marginRight: 5 }
+        : { autoAlpha: 0, width: 0, marginRight: 0 },
+    );
     return;
   }
   gsap.to(hints, {

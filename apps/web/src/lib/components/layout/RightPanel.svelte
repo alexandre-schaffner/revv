@@ -24,7 +24,6 @@ import { tick } from "svelte";
 const TOOL_CALL_ROW_H = 14; // px — match walkthrough's compact tool-call rows
 
 import { toast } from "svelte-sonner";
-import { gsapFadeY, gsapSlide, tokens } from "$lib/motion";
 import { fetchProposedDiffFiles, type ProposedDiffFile } from "$lib/api/chat";
 import { Checkpoint } from "$lib/components/ai/checkpoint";
 import {
@@ -87,6 +86,7 @@ import {
   Root as PopoverRoot,
   Trigger as PopoverTrigger,
 } from "$lib/components/ui/popover/index.js";
+import { gsapFadeY, gsapSlide, tokens } from "$lib/motion";
 import {
   abortChatTurn,
   approvePlanAction,

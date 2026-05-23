@@ -13,12 +13,10 @@ import { prefersReducedMotion } from "./reduced-motion";
 import { tokens } from "./tokens";
 
 // cubic-bezier(0.16, 1, 0.3, 1)
-const easeOutExpo = (t: number): number =>
-  t === 1 ? 1 : 1 - Math.pow(2, -10 * t);
+const easeOutExpo = (t: number): number => (t === 1 ? 1 : 1 - 2 ** (-10 * t));
 
 // cubic-bezier(0.4, 0, 0.2, 1)
-const easeSoft = (t: number): number =>
-  t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+const easeSoft = (t: number): number => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
 
 interface TransformParams {
   duration?: number;
@@ -32,7 +30,7 @@ interface TransformParams {
 }
 
 function transform(node: Element, params: TransformParams = {}): TransitionConfig {
-  const durationSec = prefersReducedMotion() ? 0 : params.duration ?? tokens.quick;
+  const durationSec = prefersReducedMotion() ? 0 : (params.duration ?? tokens.quick);
   const el = node as HTMLElement;
   const startOpacity = params.opacity ?? 0;
   const yPx = params.y ?? 0;
@@ -73,7 +71,7 @@ export function gsapSlide(
   node: Element,
   params: { duration?: number; delay?: number; axis?: "y" | "x" } = {},
 ): TransitionConfig {
-  const durationSec = prefersReducedMotion() ? 0 : params.duration ?? tokens.smooth;
+  const durationSec = prefersReducedMotion() ? 0 : (params.duration ?? tokens.smooth);
   const el = node as HTMLElement;
   const axis = params.axis ?? "y";
   const dim = axis === "y" ? "height" : "width";

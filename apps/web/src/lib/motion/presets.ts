@@ -7,10 +7,7 @@
 import { gsap } from "./gsap";
 import { tokens } from "./tokens";
 
-export type PresetFn<TOptions = void> = (
-  el: Element,
-  opts?: TOptions,
-) => gsap.core.Timeline;
+export type PresetFn<TOptions = void> = (el: Element, opts?: TOptions) => gsap.core.Timeline;
 
 type Side = "top" | "right" | "bottom" | "left";
 
@@ -19,11 +16,7 @@ type Side = "top" | "right" | "bottom" | "left";
  * trigger by starting offset along its anchor axis: a top-side popover (trigger
  * BELOW) starts a few pixels lower and slides up; mirror on all four sides.
  */
-function popInFromSide(
-  el: Element,
-  side: Side,
-  fromScale: number,
-): gsap.core.Timeline {
+function popInFromSide(el: Element, side: Side, fromScale: number): gsap.core.Timeline {
   const axis = side === "left" || side === "right" ? "x" : "y";
   const offset = side === "top" || side === "left" ? 4 : -4;
   return gsap.timeline().fromTo(
@@ -40,11 +33,13 @@ function popInFromSide(
 }
 
 export const dialogSpringIn: PresetFn = (el) =>
-  gsap.timeline().fromTo(
-    el,
-    { autoAlpha: 0, scale: 0.96, y: 12 },
-    { autoAlpha: 1, scale: 1, y: 0, duration: tokens.smooth, ease: tokens.easeOutExpo },
-  );
+  gsap
+    .timeline()
+    .fromTo(
+      el,
+      { autoAlpha: 0, scale: 0.96, y: 12 },
+      { autoAlpha: 1, scale: 1, y: 0, duration: tokens.smooth, ease: tokens.easeOutExpo },
+    );
 
 export const dialogSpringOut: PresetFn = (el) =>
   gsap.timeline().to(el, {

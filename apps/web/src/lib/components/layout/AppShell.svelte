@@ -4,12 +4,7 @@ import { page } from "$app/state";
 import SettingsModal from "$lib/components/settings/SettingsModal.svelte";
 import UserMenu from "$lib/components/sidebar/UserMenu.svelte";
 import { RAIL_WIDTH } from "$lib/constants";
-import {
-  gsapFade,
-  tokens,
-  tweenGridTrack,
-  useRightPanelChoreography,
-} from "$lib/motion";
+import { gsapFade, tokens, tweenGridTrack, useRightPanelChoreography } from "$lib/motion";
 import { getSelectedPr } from "$lib/stores/prs.svelte";
 import {
   getActiveTab,
@@ -119,12 +114,8 @@ let mainEl: HTMLElement | null = $state(null);
 // $lib/motion/grid-choreography; the $derived `gridStyle` reads them.
 // `untrack` so initial values stay at the resting state without becoming a
 // derived expression.
-let sidebarTrackPx = $state(
-  untrack(() => (sidebarEffectiveCollapsed ? 0 : sidebarWidth)),
-);
-let rightPanelTrackPx = $state(
-  untrack(() => (rightPanelOpen ? rightPanelWidth : 0)),
-);
+let sidebarTrackPx = $state(untrack(() => (sidebarEffectiveCollapsed ? 0 : sidebarWidth)));
+let rightPanelTrackPx = $state(untrack(() => (rightPanelOpen ? rightPanelWidth : 0)));
 
 // First-mount snap: don't play an open/close animation on initial paint.
 let panelChoreographed = false;
