@@ -61,10 +61,10 @@ import {
   stopClonePoll,
 } from "$lib/stores/walkthrough.svelte";
 import {
+  type GroupableActivity,
   groupActivityRuns,
   isActivityGroup,
   isExplorationActivity,
-  type GroupableActivity,
 } from "$lib/utils/activity-groups";
 import { initHighlighter } from "$lib/utils/code-highlight.svelte";
 import { renderMarkdown } from "$lib/utils/markdown";
