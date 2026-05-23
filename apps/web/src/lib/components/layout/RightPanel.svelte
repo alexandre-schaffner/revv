@@ -520,7 +520,7 @@ function activitiesForTurn(
 								<div class="push-menu-item-body">
 									<span class="push-menu-item-title">Push to new branch…</span>
 									<span class="push-menu-item-hint">
-										Don't change the PR — push the agent's commits to a new ref.
+										Don't change the PR. Push the agent's commits to a new ref.
 									</span>
 								</div>
 							</button>
@@ -741,7 +741,7 @@ function activitiesForTurn(
 								<MessageResponse content={item.content} class="text-sm leading-relaxed" />
 							{/if}
 							{#if item.error}
-								<div class="mt-2 flex items-start gap-1.5 rounded bg-muted/60 border-l-2 border-muted-foreground px-2 py-1.5 text-xs text-muted-foreground" role="alert">
+								<div class="mt-2 flex items-start gap-1.5 rounded border border-border bg-muted/60 px-2 py-1.5 text-xs text-muted-foreground" role="alert">
 									<Warning size={12} weight="fill" class="mt-0.5 shrink-0" />
 									<span class="min-w-0 break-words">{item.error}</span>
 								</div>
@@ -1138,7 +1138,7 @@ function activitiesForTurn(
 						tooltip={
 							planModeAvailable
 								? interactionMode === 'plan'
-									? 'Plan mode is on — the agent will propose a plan instead of editing. Click to disable.'
+									? 'Plan mode is on. The agent will propose a plan instead of editing. Click to disable.'
 									: 'Enable plan mode: ask the agent to propose a plan first.'
 								: 'Plan mode requires an opencode install with a `plan` agent.'
 						}
@@ -1381,11 +1381,13 @@ function activitiesForTurn(
 		pointer-events: auto;
 	}
 
-	/* Shared glass surface — blur + saturate like PillTabs. */
+	/* Shared glass surface — blur + saturate like PillTabs.
+	   10px blur is the standing-chrome cap; reserve 16px for short-lived
+	   overlays (dialogs, popovers, command palette). */
 	:global(.composer-glass) {
 		background: color-mix(in srgb, var(--color-panel-bg) 88%, transparent);
-		backdrop-filter: blur(16px) saturate(1.4);
-		-webkit-backdrop-filter: blur(16px) saturate(1.4);
+		backdrop-filter: blur(10px) saturate(1.4);
+		-webkit-backdrop-filter: blur(10px) saturate(1.4);
 		border-color: var(--color-glass-border);
 		box-shadow:
 			var(--color-glass-shadow),
@@ -1812,6 +1814,10 @@ function activitiesForTurn(
 		min-width: 0;
 		font-size: 10px;
 		line-height: 14px;
+		/* `top` is deliberate over `transform: translateY`: Svelte's `fly` enter
+		   transition writes inline `transform`, and a base-class transform would
+		   compose unpredictably with it. The animated property is bounded to
+		   ±14px so the layout cost is trivial. */
 		transition: top var(--duration-smooth) var(--ease-standard);
 	}
 

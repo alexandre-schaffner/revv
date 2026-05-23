@@ -49,7 +49,7 @@ let tooltip = $derived.by(() => {
     case "ready":
       return showSuccess ? "Clone complete" : "";
     case "error":
-      return error && error.length > 0 ? error : "Clone failed — click to retry";
+      return error && error.length > 0 ? error : "Clone failed. Click to retry.";
   }
 });
 

@@ -1495,6 +1495,10 @@ function handleRegenerate(): void {
 		display: flex;
 		gap: 6px;
 		min-width: 0;
+		/* `top` is deliberate over `transform: translateY`: Svelte's `fly` enter
+		   transition (used inline) writes inline `transform`, and a base-class
+		   transform would compose unpredictably with it. The animated property
+		   is bounded to ±14px so the layout cost is trivial. */
 		transition: top var(--duration-smooth) var(--ease-standard);
 	}
 

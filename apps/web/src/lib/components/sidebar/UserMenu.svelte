@@ -132,7 +132,7 @@ async function handleSignOut(): Promise<void> {
 			{/if}
 			{#if isSwitching}
 				<span class="user-avatar-spinner" aria-hidden="true">
-					<Loader2 size={collapsed ? 12 : 14} weight="regular" class="spin-icon" />
+					<Loader2 size={collapsed ? 12 : 14} weight="regular" class="spin-icon motion-essential-spin" />
 				</span>
 			{/if}
 		</span>
@@ -188,7 +188,7 @@ async function handleSignOut(): Promise<void> {
 				<!-- Status indicator -->
 				<span class="acct-status-slot">
 					{#if switching}
-						<Loader2 size={12} weight="regular" class="acct-spinner" />
+						<Loader2 size={12} weight="regular" class="acct-spinner motion-essential-spin" />
 					{:else if active}
 						<Check size={12} weight="regular" class="acct-check" />
 					{/if}
@@ -276,7 +276,6 @@ async function handleSignOut(): Promise<void> {
 
 	:global(.spin-icon) {
 		color: var(--color-text-muted);
-		animation: spin 1s linear infinite;
 	}
 
 	.user-avatar {
@@ -450,7 +449,6 @@ async function handleSignOut(): Promise<void> {
 
 	:global(.acct-spinner) {
 		color: var(--color-text-muted);
-		animation: spin 1s linear infinite;
 	}
 
 	/* ── Divider ── */
@@ -500,7 +498,4 @@ async function handleSignOut(): Promise<void> {
 		flex: 1;
 	}
 
-	@keyframes spin {
-		to { transform: rotate(360deg); }
-	}
 </style>

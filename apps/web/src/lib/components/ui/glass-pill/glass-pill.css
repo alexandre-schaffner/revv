@@ -5,8 +5,10 @@
   height: 36px;
   padding: 0 16px;
   background: var(--color-tab-track-bg);
-  backdrop-filter: blur(16px) saturate(1.4);
-  -webkit-backdrop-filter: blur(16px) saturate(1.4);
+  /* 10px is the standing-chrome blur cap. Floating chrome stays light;
+     short-lived overlays (dialogs, popovers, command palette) keep 16px. */
+  backdrop-filter: blur(10px) saturate(1.4);
+  -webkit-backdrop-filter: blur(10px) saturate(1.4);
   border: 1px solid var(--color-glass-border);
   border-radius: 9999px;
   box-shadow:
@@ -22,13 +24,18 @@
   transition:
     background-color var(--duration-snap),
     color var(--duration-snap),
-    box-shadow var(--duration-snap);
+    box-shadow var(--duration-snap),
+    transform var(--duration-instant);
   -webkit-font-smoothing: antialiased;
   white-space: nowrap;
 }
 
 .glass-pill:hover {
   background: color-mix(in srgb, var(--color-tab-active-bg) 80%, var(--color-tab-track-bg));
+}
+
+.glass-pill:active:not(:disabled) {
+  transform: scale(0.97);
 }
 
 .glass-pill:focus-visible {

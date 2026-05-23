@@ -6,24 +6,24 @@
    Light theme (default)
    ────────────────────────────────────────────────────────── */
 /* ──────────────────────────────────────────────────────────
-   Light theme (default) — "warm paper, deep teal accent"
+   Light theme (default) — "warm paper, deep naval accent"
    - Background stays warm off-white (#faf9f6) like the
      onboarding, so the canvas reads as a page rather than
-     a screen. The distinctive move is the deep teal accent
-     (#0f766e) replacing the generic Tailwind blue every
-     other dashboard ships.
+     a screen. The distinctive move is the deep naval accent
+     (oklch(46% 0.11 225)) replacing the generic Tailwind blue
+     every other dashboard ships.
    - Severity colors deepen slightly so reds/greens read as
      considered, not stock-Tailwind-bright.
    ────────────────────────────────────────────────────────── */
 :root {
-  /* shadcn-svelte (HSL triplets — warm paper bg, deep teal primary) */
+  /* shadcn-svelte (HSL triplets — warm paper bg, deep naval primary) */
   --background: 36 14% 98%;
   --foreground: 28 12% 12%;
   --card: 36 14% 98%;
   --card-foreground: 28 12% 12%;
   --popover: 36 10% 95%;
   --popover-foreground: 28 12% 12%;
-  --primary: 174 78% 26%; /* #0f766e teal-700 */
+  --primary: 218 35% 43%; /* oklch(46% 0.11 225) deep naval */
   --primary-foreground: 0 0% 100%;
   --secondary: 36 10% 95%;
   --secondary-foreground: 28 10% 15%;
@@ -35,10 +35,10 @@
   --destructive-foreground: 0 0% 100%;
   --border: 36 12% 88%;
   --input: 36 12% 88%;
-  --ring: 174 78% 26%;
+  --ring: 218 35% 43%;
   --radius: 0.5rem;
 
-  /* Revv palette — warm paper surfaces, teal brand */
+  /* Revv palette — warm paper surfaces, deep naval accent */
   --revv-bg-primary: #faf9f6;
   --revv-bg-secondary: #f4f1eb; /* warm light gray — sidebars, panels */
   --revv-bg-tertiary: #eae6de; /* warm mid gray — tracks, hover */
@@ -48,9 +48,9 @@
   --revv-text-primary: #2a2825;
   --revv-text-secondary: #5a5650;
   --revv-text-muted: #9a958c;
-  --revv-accent: #0f766e; /* teal-700 — the one distinctive move */
-  --revv-accent-hover: #115e59; /* teal-800 */
-  --revv-accent-muted: #0d9488; /* teal-600 — muted variant for archival states */
+  --revv-accent: oklch(46% 0.11 225); /* deep naval — the one distinctive move */
+  --revv-accent-hover: oklch(40% 0.1 225); /* deepened */
+  --revv-accent-muted: oklch(58% 0.09 225); /* muted variant for archival states */
   --revv-success: #15803d; /* green-700 — slightly deeper than Tailwind 500 */
   --revv-warning: #b45309; /* amber-700 — keep */
   --revv-warning-fg: #ffffff; /* text on warning surfaces */
@@ -77,11 +77,11 @@
 
   /* Context line hover */
   --revv-diff-ctx-bg-hover: #eae6de;
-  --revv-diff-selected-bg: rgba(15, 118, 110, 0.08); /* teal selection */
+  --revv-diff-selected-bg: color-mix(in srgb, var(--revv-accent) 8%, transparent);
 
-  /* Gutter markers — open pinned to brand teal */
-  --revv-marker-open: #0f766e;
-  --revv-marker-open-glow: rgba(15, 118, 110, 0.25);
+  /* Gutter markers — open pinned to brand accent */
+  --revv-marker-open: oklch(46% 0.11 225);
+  --revv-marker-open-glow: color-mix(in srgb, var(--revv-accent) 25%, transparent);
   --revv-marker-pending: #b45309;
   --revv-marker-pending-glow: rgba(180, 83, 9, 0.25);
   --revv-marker-your-turn: #c2410c; /* warm orange-700 — "demands attention" */
@@ -95,16 +95,16 @@
   /* Comment / thread */
   --revv-thread-bg: #faf9f6;
   --revv-input-bg: #f4f1eb;
-  --revv-input-focus-ring: rgba(15, 118, 110, 0.4);
+  --revv-input-focus-ring: color-mix(in srgb, var(--revv-accent) 40%, transparent);
 
   /* Context panel */
   --revv-panel-bg: #f4f1eb;
   --revv-panel-header-bg: rgba(244, 241, 235, 0.96);
-  --revv-stream-cursor: #0f766e;
+  --revv-stream-cursor: oklch(46% 0.11 225);
 
   /* File tree */
-  --revv-tree-active-bg: rgba(15, 118, 110, 0.1);
-  --revv-tree-active-text: #115e59;
+  --revv-tree-active-bg: color-mix(in srgb, var(--revv-accent) 10%, transparent);
+  --revv-tree-active-text: oklch(40% 0.1 225);
   --revv-tree-hover-bg: #eae6de;
 
   /* Floating tabs */
@@ -168,14 +168,15 @@
   --revv-score-blocker-conf-bg: color-mix(in srgb, var(--revv-score-blocker-icon) 12%, transparent);
   --revv-score-blocker-conf: #b91c1c;
 
-  /* Info — accent-derived palette. With the brand teal accent, info
-       reads as a calm "FYI" rather than the old "click here" blue. */
+  /* Info — accent-derived palette. Deep naval keeps "info" in the
+       brand family. Darker and less saturated than pass-green so the two
+       remain visually distinct in the scorecard context. */
   --revv-score-info-bg: color-mix(in srgb, var(--revv-accent) 4%, var(--revv-bg-secondary));
-  --revv-score-info-border: #0f766e;
-  --revv-score-info-icon: #115e59;
-  --revv-score-info-label: #134e4a;
+  --revv-score-info-border: oklch(46% 0.11 225);
+  --revv-score-info-icon: oklch(40% 0.1 225);
+  --revv-score-info-label: oklch(34% 0.09 225);
   --revv-score-info-conf-bg: color-mix(in srgb, var(--revv-score-info-icon) 12%, transparent);
-  --revv-score-info-conf: #115e59;
+  --revv-score-info-conf: oklch(40% 0.1 225);
 }
 
 /* ──────────────────────────────────────────────────────────
@@ -189,8 +190,8 @@
   --card-foreground: 240 5% 91%;
   --popover: 0 0% 13%;
   --popover-foreground: 240 5% 91%;
-  --primary: 217 91% 60%;
-  --primary-foreground: 0 0% 100%;
+  --primary: 218 52% 67%; /* oklch(71% 0.14 225) phosphor naval, luminous dark accent */
+  --primary-foreground: 0 0% 8%; /* near-black ink on bright accent fill */
   --secondary: 0 0% 13%;
   --secondary-foreground: 240 5% 91%;
   --muted: 0 0% 13%;
@@ -201,9 +202,14 @@
   --destructive-foreground: 0 0% 100%;
   --border: 0 0% 15%;
   --input: 0 0% 15%;
-  --ring: 217 91% 60%;
+  --ring: 218 52% 67%;
 
-  /* Revv palette */
+  /* Revv palette — Phosphor Naval accent.
+     The dark theme keeps the deep-naval lineage (light: oklch(46% 0.11 225))
+     and lifts it into a luminous oklch(71% 0.14 225) that reads against
+     #0a0a0a without becoming the stock-Tailwind-blue every other dashboard
+     ships. The two themes share a story: deep naval is the one distinctive
+     move; only the luminance shifts to suit the canvas. */
   --revv-bg-primary: #0a0a0a;
   --revv-bg-secondary: #111111;
   --revv-bg-tertiary: #1a1a1a;
@@ -213,9 +219,9 @@
   --revv-text-primary: #e4e4e7;
   --revv-text-secondary: #a1a1aa;
   --revv-text-muted: #52525b;
-  --revv-accent: #3b82f6;
-  --revv-accent-hover: #2563eb;
-  --revv-accent-muted: #60a5fa;
+  --revv-accent: oklch(71% 0.14 225); /* phosphor naval — luminous dark accent */
+  --revv-accent-hover: oklch(65% 0.14 225); /* deepened press */
+  --revv-accent-muted: oklch(80% 0.11 225); /* muted icon variant */
   --revv-success: #22c55e;
   --revv-warning: #f59e0b;
   --revv-warning-fg: #ffffff;
@@ -242,11 +248,11 @@
 
   /* Context line hover */
   --revv-diff-ctx-bg-hover: #131313;
-  --revv-diff-selected-bg: rgba(59, 130, 246, 0.08);
+  --revv-diff-selected-bg: color-mix(in srgb, var(--revv-accent) 10%, transparent);
 
   /* Gutter markers */
-  --revv-marker-open: #3b82f6;
-  --revv-marker-open-glow: rgba(59, 130, 246, 0.35);
+  --revv-marker-open: oklch(71% 0.14 225);
+  --revv-marker-open-glow: color-mix(in srgb, var(--revv-accent) 35%, transparent);
   --revv-marker-pending: #f59e0b;
   --revv-marker-pending-glow: rgba(245, 158, 11, 0.35);
   --revv-marker-your-turn: #fb923c;
@@ -260,16 +266,16 @@
   /* Comment / thread */
   --revv-thread-bg: #111111;
   --revv-input-bg: #161616;
-  --revv-input-focus-ring: rgba(59, 130, 246, 0.4);
+  --revv-input-focus-ring: color-mix(in srgb, var(--revv-accent) 40%, transparent);
 
   /* Context panel */
   --revv-panel-bg: #0e0e0e;
   --revv-panel-header-bg: rgba(17, 17, 17, 0.95);
-  --revv-stream-cursor: #3b82f6;
+  --revv-stream-cursor: oklch(71% 0.14 225);
 
   /* File tree */
-  --revv-tree-active-bg: rgba(59, 130, 246, 0.1);
-  --revv-tree-active-text: #93c5fd;
+  --revv-tree-active-bg: color-mix(in srgb, var(--revv-accent) 12%, transparent);
+  --revv-tree-active-text: oklch(86% 0.08 225);
   --revv-tree-hover-bg: #141414;
 
   /* Floating tabs */
@@ -293,10 +299,12 @@
   --revv-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.35);
   --revv-shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.65), 0 4px 12px rgba(0, 0, 0, 0.45);
 
-  /* Outline-style button (inverts with theme) */
-  --revv-btn-outline: rgba(255, 255, 255, 0.7);
-  --revv-btn-outline-fill: #ffffff;
-  --revv-btn-outline-fg: #000000;
+  /* Outline-style button (inverts with theme). Fill and fg are tinted
+     toward the canvas hue so the inverted button stays in the system
+     instead of reading as raw black/white. */
+  --revv-btn-outline: rgba(228, 228, 231, 0.7);
+  --revv-btn-outline-fill: #f4f4f5; /* zinc-100 */
+  --revv-btn-outline-fg: #0a0a0a; /* matches --revv-bg-primary */
 
   /* AI accent */
   --revv-ai-accent: #7c6af7;
@@ -333,14 +341,15 @@
   --revv-score-blocker-conf-bg: color-mix(in srgb, var(--revv-score-blocker-icon) 25%, transparent);
   --revv-score-blocker-conf: #f87171;
 
-  /* Info — accent-derived palette (dark variant). Blues brightened to
-       read against dark bg without losing distinction from pass-green. */
+  /* Info — accent-derived palette (dark variant). Phosphor Naval at varying
+       luminance keeps "info" in the brand family while staying clearly
+       distinct from pass-green (yellower) and concern-amber (warmer). */
   --revv-score-info-bg: color-mix(in srgb, var(--revv-accent) 4%, var(--revv-bg-secondary));
-  --revv-score-info-border: #3b82f6;
-  --revv-score-info-icon: #60a5fa;
-  --revv-score-info-label: #93c5fd;
+  --revv-score-info-border: oklch(71% 0.14 225);
+  --revv-score-info-icon: oklch(80% 0.11 225);
+  --revv-score-info-label: oklch(86% 0.08 225);
   --revv-score-info-conf-bg: color-mix(in srgb, var(--revv-score-info-icon) 25%, transparent);
-  --revv-score-info-conf: #60a5fa;
+  --revv-score-info-conf: oklch(80% 0.11 225);
 }
 
 /* ──────────────────────────────────────────────────────────
@@ -735,14 +744,18 @@ body {
    ────────────────────────────────────────────────────────── */
 :root.dark .shiki,
 :root.dark .shiki span {
-  /* !important is required because Shiki v3's dual-theme output writes
-     inline `style="background-color:var(--shiki-light-bg);..."` which has
-     higher specificity (1,0,0,0) than any CSS rule. Without !important the
-     dark-mode swap is silently ignored and code blocks stay light-themed. */
+  /* Shiki v3 dual-theme output writes inline style="..." with specificity
+     (1,0,0,0) — higher than any selector rule. !important is the only way
+     to make dark-mode theme swaps take effect. biome-ignore per-property. */
+  /* biome-ignore lint/complexity/noImportantStyles: shiki inline-style override */
   color: var(--shiki-dark) !important;
+  /* biome-ignore lint/complexity/noImportantStyles: shiki inline-style override */
   background-color: var(--shiki-dark-bg) !important;
+  /* biome-ignore lint/complexity/noImportantStyles: shiki inline-style override */
   font-style: var(--shiki-dark-font-style) !important;
+  /* biome-ignore lint/complexity/noImportantStyles: shiki inline-style override */
   font-weight: var(--shiki-dark-font-weight) !important;
+  /* biome-ignore lint/complexity/noImportantStyles: shiki inline-style override */
   text-decoration: var(--shiki-dark-text-decoration) !important;
 }
 
@@ -764,8 +777,14 @@ body {
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-card);
   background: var(--color-bg-primary);
-  /* Allow keyboard users to focus and scroll the region. */
+  /* Allow keyboard users to focus and scroll the region. The default browser
+     outline is suppressed only on focus (not focus-visible), so keyboard
+     focus still shows the accent ring; mouse-focus stays clean. */
   outline: none;
+  transition: box-shadow var(--duration-quick) var(--ease-out-expo);
+}
+.prose-table:focus-visible {
+  box-shadow: 0 0 0 3px var(--color-input-focus-ring);
 }
 
 .prose-table:focus-visible {

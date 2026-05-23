@@ -18,6 +18,11 @@ The same surface should respect all of these. Don't dumb down for the PM. Don't 
 
 Job-to-be-done: review proposed code changes (own pre-push, or teammates') and interact with an AI agent on the review itself — ask it to rewrite chapters, address issues, propose commits, push on a new branch, and create the PR. The user never tabs to GitHub.com to finish the job.
 
+Context of use: two modes, often back-to-back, on the same surface.
+
+- **Watchtower mode.** A glance across one or several repos to understand the state of ongoing work. Which PRs are stuck, what's been merged since yesterday, what still needs a decision. Morning coffee, end-of-day sweep, the "what did the team ship this week" check before standup. The desktop client and persistent WebSocket make this viable in a way a browser tab can't.
+- **Review mode.** Deep, focused review of a specific PR. Walkthrough first, diff second, chat to clarify, comments to record, proposed commits to push fixes back.
+
 ## Product Purpose
 
 A desktop-native code review tool where the AI does the legwork (walkthrough, issue surfacing, fix proposals) while the human stays in control. Replace the GitHub web UI for review: faster, denser, calmer, with an always-on agent that can rewrite the review or push commits on the user's behalf.
@@ -44,6 +49,7 @@ What Revv should explicitly NOT look or feel like:
 - **GitHub.com.** Bloated chrome, slow, gray-on-gray, hostile to actual review work. The thing we're replacing.
 - **VS Code.** Heavy chrome, gutter-heavy IDE feel, dated panels-and-tabs aesthetic. Code review is not coding; don't borrow the IDE's furniture.
 - **Notion.** "Everything is a card" SaaS-cream emptiness, friendly empty states, drag-handle decorations, page-as-document framing.
+- **Heavy enterprise review tools.** Jira, Bitbucket, classic Crucible. Gray-on-gray density, form-heavy modals, modal-as-first-thought.
 - **Generic AI products of 2024-26.** Lavender accents, glass cards, sparkle icons, "AI-shaped" gradients, chatbot-first framing.
 
 Adjacent references (peers, not copies): **Linear** (dense product UI craft), **Conductor** (native Mac feel, parallel-work shell), **Family** (micro-interaction discipline, restrained delight).
@@ -65,4 +71,5 @@ Adjacent references (peers, not copies): **Linear** (dense product UI craft), **
 - **macOS-first**, cross-platform supported where Tauri makes it cheap (Windows installer exists; Linux DEB on the roadmap).
 - **OS-default accessibility minimum**: keyboard reachable, focus states visible, contrast meets WCAG AA in light and dark themes.
 - **Reduced motion is a hard requirement.** `prefersReducedMotion()` is the single arbiter across the app; every motion path respects it. The global `@media (prefers-reduced-motion: reduce)` block in `app.css` covers the surviving CSS animations.
+- **Severity is never communicated by color alone.** Diff status, marker state, walkthrough scorecard, and queue indicators all pair color with shape, icon, or label.
 - No explicit WCAG audit program; defer to OS conventions and review on a case-by-case basis for specific user needs that surface from early users.

@@ -216,7 +216,7 @@ async function runMerge(method: import("@revv/shared").MergeMethod): Promise<voi
         disabled={rcSubmitting !== null}
         onclick={() => getRcOnApprove()()}
         title={rcApproveBlockerSummary
-          ? `Approve this pull request — ${rcApproveBlockerSummary} still open`
+          ? `Approve this pull request (${rcApproveBlockerSummary} still open)`
           : "Approve this pull request on GitHub"}
       >
         <Check size={16} weight="regular" />

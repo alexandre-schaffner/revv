@@ -93,12 +93,12 @@ const renderedContent = $derived.by(() => {
 	}
 
 	.prose :global(blockquote) {
-		border-left: 3px solid var(--color-accent);
-		padding: 4px 12px;
+		border: 1px solid color-mix(in srgb, var(--color-accent) 30%, var(--color-border));
+		padding: 8px 12px;
 		margin: 0 0 12px;
 		color: var(--color-text-secondary);
 		background: color-mix(in srgb, var(--color-accent) 5%, transparent);
-		border-radius: 0 4px 4px 0;
+		border-radius: 6px;
 	}
 
 	.prose :global(hr) {

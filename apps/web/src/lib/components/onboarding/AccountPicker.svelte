@@ -101,7 +101,7 @@ function cycleTheme() {
                     </span>
                     <span class="picker-card-action">
                         {#if switching}
-                            <Loader2 size={14} weight="regular" class="picker-spinner" />
+                            <Loader2 size={14} weight="regular" class="picker-spinner motion-essential-spin" />
                         {:else}
                             <ArrowRight size={14} class="picker-arrow" />
                         {/if}
@@ -272,11 +272,6 @@ function cycleTheme() {
 
     :global(.picker-spinner) {
         color: var(--color-text-muted);
-        animation: spin 1s linear infinite;
-    }
-
-    @keyframes spin {
-        to { transform: rotate(360deg); }
     }
 
     .picker-footer {
