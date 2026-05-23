@@ -1,10 +1,9 @@
 <script lang="ts">
-import { untrack } from "svelte";
 import { page } from "$app/state";
 import SettingsModal from "$lib/components/settings/SettingsModal.svelte";
 import UserMenu from "$lib/components/sidebar/UserMenu.svelte";
 import { RAIL_WIDTH } from "$lib/constants";
-import { gsapFade, tokens, tweenGridTrack, useRightPanelChoreography } from "$lib/motion";
+import { gsapFade, tokens, useRightPanelChoreography } from "$lib/motion";
 import { getSelectedPr } from "$lib/stores/prs.svelte";
 import {
   getActiveTab,
@@ -110,13 +109,6 @@ let rightDragStartWidth = 0;
 let panelEl: HTMLElement | null = $state(null);
 let mainEl: HTMLElement | null = $state(null);
 
-// Animated grid-column widths. GSAP writes these via the helpers in
-// $lib/motion/grid-choreography; the $derived `gridStyle` reads them.
-// `untrack` so initial values stay at the resting state without becoming a
-// derived expression.
-let sidebarTrackPx = $state(untrack(() => (sidebarEffectiveCollapsed ? 0 : sidebarWidth)));
-let rightPanelTrackPx = $state(untrack(() => (rightPanelOpen ? rightPanelWidth : 0)));
-
 // First-mount snap: don't play an open/close animation on initial paint.
 let panelChoreographed = false;
 
@@ -127,20 +119,10 @@ $effect(() => {
   }
 });
 
-// `untrack` the current trackPx read: GSAP's onUpdate writes back to the
-// same $state, which would otherwise mark this effect dirty mid-tween and
-// kill+restart the tween every frame.
-$effect(() =>
-  tweenGridTrack(
-    untrack(() => sidebarTrackPx),
-    sidebarEffectiveCollapsed ? 0 : sidebarWidth,
-    (v) => (sidebarTrackPx = v),
-    // Snap during drag (don't trail the cursor) and for large virtualized
-    // file trees (animating the column re-runs layout every frame).
-    { snap: isDragging || shouldSnapSidebarLayout },
-  ),
-);
-
+// Panel slide + vignette. Grid-column widths interpolate via the CSS
+// `transition: grid-template-columns` on `.app-shell` — animating that via
+// JS state writes thrashes Svelte reactivity and forces a relayout every
+// frame.
 $effect(() => {
   const snap = isResizingRight || !panelChoreographed;
   if (!panelChoreographed && panelEl !== null) panelChoreographed = true;
@@ -149,14 +131,12 @@ $effect(() => {
     mainEl,
     open: rightPanelOpen,
     panelWidth: rightPanelWidth,
-    trackPx: untrack(() => rightPanelTrackPx),
-    setTrackPx: (v) => (rightPanelTrackPx = v),
     snap,
   });
 });
 
 const gridStyle = $derived(
-  `grid-template-columns: ${RAIL_WIDTH}px ${sidebarTrackPx}px 1fr ${rightPanelTrackPx}px; --right-panel-width: ${rightPanelWidth}px`,
+  `grid-template-columns: ${RAIL_WIDTH}px ${sidebarEffectiveCollapsed ? 0 : sidebarWidth}px 1fr ${rightPanelOpen ? rightPanelWidth : 0}px; --right-panel-width: ${rightPanelWidth}px`,
 );
 
 function onHandlePointerDown(event: PointerEvent): void {
@@ -333,9 +313,6 @@ function onRightHandleDblClick(): void {
 <SettingsModal open={getSettingsOpen()} onClose={closeSettings} />
 
 <style>
-	/* grid-template-columns is driven by GSAP-animated numeric proxies in
-	   the script ($effect blocks). The previous CSS transition is removed —
-	   GSAP is the single source of truth for column-width interpolation. */
 	.app-shell {
 		display: grid;
 		grid-template-rows: auto 1fr calc(var(--bottombar-height) + var(--spacing-island));
@@ -349,6 +326,18 @@ function onRightHandleDblClick(): void {
 		/* Positioning context for the absolutely-positioned right pane. */
 		position: relative;
 		background-color: var(--color-bg-secondary);
+		/* Browser-driven track interpolation. Cheaper than animating the
+		   grid-template-columns string from JS — Svelte reactivity + style
+		   diffing on every frame causes visible lag. */
+		transition: grid-template-columns var(--duration-smooth) var(--ease-out-expo);
+	}
+
+	/* Snap (no tween) during a live drag, and when the sidebar is showing a
+	   large virtualized tree where animating the column would relayout it
+	   on every frame. */
+	.app-shell.is-resizing,
+	.app-shell.snap-sidebar-layout {
+		transition: none;
 	}
 
 	/* ── Rail (always-visible project switcher) ── */

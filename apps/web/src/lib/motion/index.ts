@@ -3,7 +3,7 @@
  */
 
 export * from "./actions";
-export { tweenGridTrack, useRightPanelChoreography } from "./grid-choreography";
+export { useRightPanelChoreography } from "./grid-choreography";
 export { gsap, initGsap } from "./gsap";
 export * from "./presets";
 export { prefersReducedMotion } from "./reduced-motion";

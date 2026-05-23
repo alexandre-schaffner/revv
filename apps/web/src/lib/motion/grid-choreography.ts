@@ -1,61 +1,23 @@
 /**
- * GSAP helpers for the AppShell grid: the sidebar/right-panel column tracks
- * and the right-panel's coordinated slide + vignette crossfade.
+ * Right-panel open/close timeline. Owns translateX on the panel and the
+ * vignette opacity on the main area — coordinated via a single GSAP
+ * timeline so they never desync.
  *
- * These functions take refs and return imperative tween handles so the
- * caller (`AppShell.svelte`) can stay declarative and concise.
+ * The grid-template-columns interpolation is left to a CSS `transition:`
+ * on `.app-shell`; animating it via JS state writes thrashes Svelte's
+ * reactivity on every frame and forces a full grid relayout. CSS handles
+ * that cheaper.
  */
 import { gsap } from "./gsap";
 import { prefersReducedMotion } from "./reduced-motion";
 import { tokens } from "./tokens";
 
-interface TrackTweenOptions {
-  duration?: number;
-  ease?: string;
-}
-
-/**
- * Tween a numeric "track px" proxy toward `target`. The caller owns the
- * reactive state cell — this function writes to it on every frame via the
- * `setPx` callback. Returns a kill function suitable for `$effect` teardown.
- *
- * Snap (no tween) when:
- *   - `snap` returns true (live drag, virtualized tree, etc.)
- *   - reduced motion is active
- */
-export function tweenGridTrack(
-  currentPx: number,
-  target: number,
-  setPx: (next: number) => void,
-  opts: { snap?: boolean } & TrackTweenOptions = {},
-): () => void {
-  if (opts.snap || prefersReducedMotion()) {
-    setPx(target);
-    return () => {};
-  }
-  const proxy = { v: currentPx };
-  const tween = gsap.to(proxy, {
-    v: target,
-    duration: opts.duration ?? tokens.smooth,
-    ease: opts.ease ?? tokens.easeOutExpo,
-    onUpdate() {
-      setPx(proxy.v);
-    },
-  });
-  return () => tween.kill();
-}
-
 interface PanelChoreographyArgs {
   panelEl: HTMLElement | null;
   mainEl: HTMLElement | null;
-  /** Panel open state. Triggers all three sub-tweens. */
   open: boolean;
   /** Panel width at rest, in px. */
   panelWidth: number;
-  /** Current track-px value (the proxy state cell the caller owns). */
-  trackPx: number;
-  /** Setter for the track-px state cell. */
-  setTrackPx: (next: number) => void;
   /** Snap (no tween): live drag, first paint. */
   snap: boolean;
 }
@@ -71,45 +33,24 @@ function readVignette(mainEl: HTMLElement | null): number {
 }
 
 /**
- * Coordinated tween for the right-panel open/close: grid-column track,
- * panel translateX, and the main-area's vignette opacity, all on one
- * timeline so they never desync.
- *
  * Returns a kill function. Safe to call when refs are null; snaps to the
  * resting state without animating.
  */
 export function useRightPanelChoreography(args: PanelChoreographyArgs): () => void {
-  const { panelEl, mainEl, open, panelWidth, trackPx, setTrackPx, snap } = args;
-  const targetTrack = open ? panelWidth : 0;
+  const { panelEl, mainEl, open, panelWidth, snap } = args;
   const targetTranslateX = open ? 0 : panelWidth;
   const targetVignette = open ? VIGNETTE_OPEN : 0;
 
   if (snap || prefersReducedMotion()) {
-    setTrackPx(targetTrack);
     if (panelEl) gsap.set(panelEl, { x: targetTranslateX });
     if (mainEl) mainEl.style.setProperty(VIGNETTE_PROP, String(targetVignette));
     return () => {};
   }
 
-  // Asymmetric timing: open ~smooth so the panel lands deliberately; close at
-  // ~quick because the user already decided to dismiss. ~73% ratio.
-  const duration = open ? tokens.smooth : tokens.quick;
-  const ease = open ? tokens.easeOutExpo : tokens.easeSoft;
-  const trackProxy = { v: trackPx };
+  const duration = tokens.smooth;
+  const ease = tokens.easeOutExpo;
   const vignetteProxy = { v: readVignette(mainEl) };
   const t = gsap.timeline();
-  t.to(
-    trackProxy,
-    {
-      v: targetTrack,
-      duration,
-      ease,
-      onUpdate() {
-        setTrackPx(trackProxy.v);
-      },
-    },
-    0,
-  );
   if (panelEl) {
     t.to(panelEl, { x: targetTranslateX, duration, ease }, 0);
   }
