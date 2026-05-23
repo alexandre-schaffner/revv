@@ -1,6 +1,7 @@
 <script lang="ts">
 import DownloadCloud from "phosphor-svelte/lib/CloudArrowDown";
 import Loader2 from "phosphor-svelte/lib/Spinner";
+import { gsap, prefersReducedMotion, tokens } from "$lib/motion";
 import { getCmdHeld } from "$lib/stores/shortcuts.svelte";
 import PillTabs from "./PillTabs.svelte";
 
@@ -55,14 +56,75 @@ const tabs = [
 function handleTabChange(tabId: string) {
   onTabChange(tabId as Tab);
 }
+
+let dotEl: HTMLSpanElement | null = $state(null);
+let pullBtnEl: HTMLButtonElement | null = $state(null);
+let pulseTl: gsap.core.Timeline | null = null;
+
+// Status-dot visibility (autoAlpha + scale crossfade). Replaces the CSS
+// transitions on `.status-dot { transition: opacity, transform, ... }`.
+$effect(() => {
+  if (!dotEl) return;
+  if (prefersReducedMotion()) {
+    gsap.set(dotEl, dotVisible ? { autoAlpha: 1, scale: 1 } : { autoAlpha: 0, scale: 0.6 });
+    return;
+  }
+  gsap.to(dotEl, {
+    autoAlpha: dotVisible ? 1 : 0,
+    scale: dotVisible ? 1 : 0.6,
+    duration: tokens.smooth,
+    ease: tokens.easeOutExpo,
+    overwrite: "auto",
+  });
+});
+
+// Status-dot pulse loop while the walkthrough is generating. Replaces the
+// `@keyframes status-dot-pulse` driven by `.status-dot--generating.status-dot--visible`.
+// Marked essential so the pulse continues under prefers-reduced-motion:
+// it's the only liveness signal that work is happening.
+$effect(() => {
+  if (!dotEl) return;
+  const shouldPulse = dotVisible && walkthroughStatus === "generating";
+  pulseTl?.kill();
+  pulseTl = null;
+  if (!shouldPulse) {
+    gsap.set(dotEl, { opacity: 1 });
+    return;
+  }
+  pulseTl = gsap.timeline({ repeat: -1, yoyo: true }).to(dotEl, {
+    opacity: 0.45,
+    duration: tokens.pulse / 2,
+    ease: tokens.easeSoft,
+  });
+  return () => {
+    pulseTl?.kill();
+    pulseTl = null;
+  };
+});
+
+// Pull-button crossfade. Replaces the CSS transitions on `.pull-btn`.
+$effect(() => {
+  if (!pullBtnEl) return;
+  if (prefersReducedMotion()) {
+    gsap.set(pullBtnEl, buttonVisible ? { autoAlpha: 1, scale: 1 } : { autoAlpha: 0, scale: 0.85 });
+    return;
+  }
+  gsap.to(pullBtnEl, {
+    autoAlpha: buttonVisible ? 1 : 0,
+    scale: buttonVisible ? 1 : 0.85,
+    duration: tokens.smooth,
+    ease: tokens.easeOutExpo,
+    overwrite: "auto",
+  });
+});
 </script>
 
 <PillTabs {tabs} {activeTab} onTabChange={handleTabChange} {cmdHeld}>
 	{#snippet trailing()}
 		<div class="status-slot" aria-hidden={!dotVisible && !buttonVisible}>
 			<span
+				bind:this={dotEl}
 				class="status-dot"
-				class:status-dot--visible={dotVisible}
 				class:status-dot--generating={walkthroughStatus === 'generating'}
 				class:status-dot--complete={walkthroughStatus === 'complete'}
 				class:status-dot--error={walkthroughStatus === 'error'}
@@ -70,6 +132,7 @@ function handleTabChange(tabId: string) {
 			></span>
 
 			<button
+				bind:this={pullBtnEl}
 				type="button"
 				class="pull-btn"
 				class:pull-btn--visible={buttonVisible}
@@ -118,38 +181,31 @@ function handleTabChange(tabId: string) {
 		pointer-events: none;
 	}
 
-	/* ── Walkthrough status dot (6 × 6, centered in the slot) ── */
+	/* ── Walkthrough status dot (6 × 6, centered in the slot) ──
+	   Visibility, scale, and the generating-pulse loop are all driven by GSAP
+	   from the $effect blocks above. CSS only sets layout + background-color
+	   keyed to status. autoAlpha (used by GSAP) sets `visibility: hidden`
+	   automatically when opacity is 0, which provides pointer-events safety. */
 	.status-dot {
 		position: absolute;
 		left: 0;
-		top: 50%;
+		top: calc(50% - 3px);
 		width: 6px;
 		height: 6px;
 		border-radius: 50%;
 		background: transparent;
 		opacity: 0;
-		transform: translateY(-50%) scale(0.6);
+		visibility: hidden;
 		transform-origin: left center;
-		/* Decorative only — never interactive, even when visible. */
 		pointer-events: none;
 		cursor: default;
-		transition:
-			opacity var(--duration-smooth) var(--ease-out-expo),
-			transform var(--duration-smooth) var(--ease-out-expo),
-			background-color var(--duration-snap);
-	}
-
-	.status-dot--visible {
-		opacity: 1;
-		transform: translateY(-50%) scale(1);
+		/* Background-color crossfade between status states is a paint property
+		   and stays on CSS — see the same reasoning in PillTabs.svelte. */
+		transition: background-color var(--duration-snap) var(--ease-soft);
 	}
 
 	.status-dot--generating {
 		background: var(--color-accent);
-	}
-
-	.status-dot--visible.status-dot--generating {
-		animation: status-dot-pulse var(--duration-pulse) var(--ease-soft) infinite;
 	}
 
 	.status-dot--complete {
@@ -160,17 +216,14 @@ function handleTabChange(tabId: string) {
 		background: var(--color-danger);
 	}
 
-	@keyframes status-dot-pulse {
-		0%, 100% { opacity: 1; }
-		50%      { opacity: 0.45; }
-	}
-
 	/* ── Pull button (amber pill, 18 px tall, auto width) ──
 	 * Invisible state: pointer-events: none AND cursor: default. The cursor
 	 * declaration is important — `pointer-events: none` alone prevents clicks
 	 * but some browsers still reflect the button's native cursor on hover,
 	 * which would wrongly flip the cursor to pointer over the dot's bounds
 	 * (the invisible button sits right on top of the visible dot). */
+	/* Crossfade in/out is driven by GSAP from the $effect above. Background
+	   color crossfade on hover stays as CSS (paint property). */
 	.pull-btn {
 		position: absolute;
 		left: 0;
@@ -193,19 +246,14 @@ function handleTabChange(tabId: string) {
 		cursor: default;
 		box-shadow: 0 1px 2px color-mix(in srgb, var(--color-warning) 40%, transparent);
 		opacity: 0;
-		transform: scale(0.85);
+		visibility: hidden;
 		transform-origin: left center;
 		pointer-events: none;
-		transition:
-			opacity var(--duration-smooth) var(--ease-out-expo),
-			transform var(--duration-smooth) var(--ease-out-expo),
-			background-color var(--duration-snap);
+		transition: background-color var(--duration-snap) var(--ease-soft);
 		-webkit-font-smoothing: antialiased;
 	}
 
 	.pull-btn--visible {
-		opacity: 1;
-		transform: scale(1);
 		pointer-events: auto;
 		cursor: pointer;
 	}
@@ -227,13 +275,4 @@ function handleTabChange(tabId: string) {
 		line-height: 1;
 	}
 
-	@media (prefers-reduced-motion: reduce) {
-		.status-dot,
-		.pull-btn {
-			transition-duration: 0ms;
-		}
-		.status-dot--visible.status-dot--generating {
-			animation: none;
-		}
-	}
 </style>
