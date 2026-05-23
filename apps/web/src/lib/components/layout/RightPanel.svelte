@@ -20,12 +20,11 @@ import Warning from "phosphor-svelte/lib/Warning";
 import X from "phosphor-svelte/lib/X";
 import XCircle from "phosphor-svelte/lib/XCircle";
 import { tick } from "svelte";
-import { cubicIn, cubicOut } from "svelte/easing";
-import { fly, slide } from "svelte/transition";
 
 const TOOL_CALL_ROW_H = 14; // px — match walkthrough's compact tool-call rows
 
 import { toast } from "svelte-sonner";
+import { gsapFadeY, gsapSlide, tokens } from "$lib/motion";
 import { fetchProposedDiffFiles, type ProposedDiffFile } from "$lib/api/chat";
 import { Checkpoint } from "$lib/components/ai/checkpoint";
 import {
@@ -806,8 +805,8 @@ function activitiesForTurn(
 							<div
 								class="chat-tool-call"
 								style="top: {i * TOOL_CALL_ROW_H}px"
-								in:fly={{ y: TOOL_CALL_ROW_H, duration: 220, easing: cubicOut }}
-								out:fly={{ y: -TOOL_CALL_ROW_H, duration: 160, easing: cubicIn }}
+								in:gsapFadeY={{ y: TOOL_CALL_ROW_H, duration: tokens.smooth }}
+								out:gsapFadeY={{ y: -TOOL_CALL_ROW_H, duration: tokens.quick }}
 							>
 								<span class="chat-tool-call-tool">{step.toolName}</span>
 								<span class="chat-tool-call-desc">{step.summary}</span>
@@ -849,11 +848,11 @@ function activitiesForTurn(
 	<div class="composer-float">
 	<!-- Queue dock: proposed commits + agent tasks + queued messages -->
 	{#if showQueueDock}
-		<div class="queue-dock" transition:slide={{ duration: 220, easing: cubicOut }}>
+		<div class="queue-dock" transition:gsapSlide={{ duration: tokens.smooth }}>
 			<Queue class="composer-glass rounded-t-xl rounded-b-none border-b-0 shadow-none">
 				<!-- Proposed commits from the agent -->
 				{#if commitCount > 0 && proposed}
-					<div transition:slide={{ duration: 220, easing: cubicOut }}>
+					<div transition:gsapSlide={{ duration: tokens.smooth }}>
 						<QueueSection open={true}>
 							<QueueSectionTrigger>
 								<QueueSectionLabel
@@ -875,8 +874,8 @@ function activitiesForTurn(
 									{#each proposed.commits as commit, commitIdx (commit.sha)}
 										{@const checked = prId ? isCommitSelected(prId, commit.sha) : false}
 										<div
-											in:fly={{ y: 4, duration: 160, delay: Math.min(commitIdx, 8) * 25, easing: cubicOut }}
-											out:fly={{ y: -4, duration: 120, easing: cubicIn }}
+											in:gsapFadeY={{ y: 4, duration: tokens.quick, delay: Math.min(commitIdx, 8) * tokens.stagger.tight }}
+											out:gsapFadeY={{ y: -4, duration: tokens.snap }}
 										>
 											<QueueItem class="items-start gap-2 py-1.5">
 												<Checkbox
@@ -954,7 +953,7 @@ function activitiesForTurn(
 								{#if selectedCount > 0}
 									<div
 										class="proposed-batch-footer"
-										transition:slide={{ duration: 160, easing: cubicOut }}
+										transition:gsapSlide={{ duration: tokens.quick }}
 									>
 										<div class="proposed-batch-footer__info">
 											<span class="text-xs text-muted-foreground tabular-nums">
@@ -1029,7 +1028,7 @@ function activitiesForTurn(
 				{#if activeTasks.length > 0}
 					{@const completed = activeTasks.filter((t) => t.status === 'completed').length}
 					{@const allDone = completed === activeTasks.length}
-					<div transition:slide={{ duration: 220, easing: cubicOut }}>
+					<div transition:gsapSlide={{ duration: tokens.smooth }}>
 						<QueueSection open={!allDone}>
 							<QueueSectionTrigger>
 								<QueueSectionLabel
@@ -1054,8 +1053,8 @@ function activitiesForTurn(
 								<QueueList>
 									{#each activeTasks as task, taskIdx (task.id)}
 										<div
-											in:fly={{ y: 4, duration: 160, delay: Math.min(taskIdx, 8) * 25, easing: cubicOut }}
-											out:fly={{ y: -4, duration: 120, easing: cubicIn }}
+											in:gsapFadeY={{ y: 4, duration: tokens.quick, delay: Math.min(taskIdx, 8) * tokens.stagger.tight }}
+											out:gsapFadeY={{ y: -4, duration: tokens.snap }}
 										>
 											<QueueItem>
 												<QueueItemIndicator completed={task.status === 'completed'} />
@@ -1077,7 +1076,7 @@ function activitiesForTurn(
 
 				<!-- Queued messages (submitted while agent is busy) -->
 				{#if queuedMessages.length > 0}
-					<div transition:slide={{ duration: 220, easing: cubicOut }}>
+					<div transition:gsapSlide={{ duration: tokens.smooth }}>
 						<QueueSection>
 							<QueueSectionTrigger>
 								<QueueSectionLabel
@@ -1093,8 +1092,8 @@ function activitiesForTurn(
 								<QueueList>
 									{#each queuedMessages as msg, msgIdx (msg.id)}
 										<div
-											in:fly={{ y: 4, duration: 160, delay: Math.min(msgIdx, 8) * 25, easing: cubicOut }}
-											out:fly={{ y: -4, duration: 120, easing: cubicIn }}
+											in:gsapFadeY={{ y: 4, duration: tokens.quick, delay: Math.min(msgIdx, 8) * tokens.stagger.tight }}
+											out:gsapFadeY={{ y: -4, duration: tokens.snap }}
 										>
 											<QueueItem>
 												<QueueItemContent>{msg.text}</QueueItemContent>

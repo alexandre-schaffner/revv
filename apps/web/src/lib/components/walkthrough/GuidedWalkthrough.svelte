@@ -1,7 +1,5 @@
 <script lang="ts">
 import { onDestroy, onMount, untrack } from "svelte";
-import { cubicIn, cubicOut } from "svelte/easing";
-import { fly } from "svelte/transition";
 
 const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
 
@@ -16,6 +14,7 @@ import { Dotmatrix } from "$lib/components/ui/dotmatrix/index.js";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
 import { Progress } from "$lib/components/ui/progress";
 import { Separator } from "$lib/components/ui/separator";
+import { gsapFadeY, tokens } from "$lib/motion";
 import { getRepositories } from "$lib/stores/prs.svelte";
 import {
   clearPendingWalkthroughBlockJump,
@@ -825,8 +824,8 @@ function handleRegenerate(): void {
 												<div
 													class="chapter-tool-call"
 													style="top: {i * TOOL_CALL_ROW_H}px"
-													in:fly={{ y: TOOL_CALL_ROW_H, duration: 220, easing: cubicOut }}
-													out:fly={{ y: -TOOL_CALL_ROW_H, duration: 160, easing: cubicIn }}
+													in:gsapFadeY={{ y: TOOL_CALL_ROW_H, duration: tokens.smooth }}
+													out:gsapFadeY={{ y: -TOOL_CALL_ROW_H, duration: tokens.quick }}
 												>
 													<span class="chapter-tool-call-tool">{step.toolName}</span>
 													<span class="chapter-tool-call-desc">{step.summary}</span>
