@@ -21,22 +21,32 @@ let {
 
 <PopoverPortal {...portalProps}>
 	<PopoverPrimitive.Content {sideOffset} {align} {...restProps}>
-		{#snippet child({ props })}
-			<div
-				bind:this={ref}
-				{...props}
-				data-slot="popover-content"
-				class={cn(
-					"text-text-primary flex flex-col gap-2.5 rounded-xl p-3 text-sm z-50 w-72 origin-(--transform-origin) outline-hidden",
-					className
-				)}
-				use:bitsAnim={{
-					inPreset: popoverPopIn,
-					outPreset: popoverPopOut,
-					directionAware: true,
-				}}
-			>
-				{@render children?.()}
+		{#snippet child({ props, wrapperProps })}
+			<!--
+				bits-ui renders popovers as a positioning WRAPPER + inner content.
+				wrapperProps holds the floating-ui transform that puts the popover
+				next to its trigger; props holds data-state / data-side / content
+				attributes. We must apply BOTH or the popover loses positioning
+				and falls into normal DOM flow. GSAP attaches to the inner div so
+				its tweens don't fight the positioning transform on the wrapper.
+			-->
+			<div {...wrapperProps}>
+				<div
+					bind:this={ref}
+					{...props}
+					data-slot="popover-content"
+					class={cn(
+						"text-text-primary flex flex-col gap-2.5 rounded-xl p-3 text-sm z-50 w-72 origin-(--transform-origin) outline-hidden",
+						className
+					)}
+					use:bitsAnim={{
+						inPreset: popoverPopIn,
+						outPreset: popoverPopOut,
+						directionAware: true,
+					}}
+				>
+					{@render children?.()}
+				</div>
 			</div>
 		{/snippet}
 	</PopoverPrimitive.Content>

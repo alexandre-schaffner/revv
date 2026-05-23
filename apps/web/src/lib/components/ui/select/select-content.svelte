@@ -18,24 +18,27 @@ let {
 
 <SelectPrimitive.Portal>
 	<SelectPrimitive.Content {sideOffset} {...restProps}>
-		{#snippet child({ props })}
-			<div
-				bind:this={ref}
-				{...props}
-				data-slot="select-content"
-				class={cn(
-					"relative z-50 min-w-[8rem] overflow-hidden rounded-md border border-border shadow-md",
-					className
-				)}
-				use:bitsAnim={{
-					inPreset: popoverPopIn,
-					outPreset: popoverPopOut,
-					directionAware: true,
-				}}
-			>
-				<SelectPrimitive.Viewport class="p-1">
-					{@render children?.()}
-				</SelectPrimitive.Viewport>
+		{#snippet child({ props, wrapperProps })}
+			<!-- See popover-content.svelte for why wrapperProps + props are both required. -->
+			<div {...wrapperProps}>
+				<div
+					bind:this={ref}
+					{...props}
+					data-slot="select-content"
+					class={cn(
+						"relative z-50 min-w-[8rem] overflow-hidden rounded-md border border-border shadow-md",
+						className
+					)}
+					use:bitsAnim={{
+						inPreset: popoverPopIn,
+						outPreset: popoverPopOut,
+						directionAware: true,
+					}}
+				>
+					<SelectPrimitive.Viewport class="p-1">
+						{@render children?.()}
+					</SelectPrimitive.Viewport>
+				</div>
 			</div>
 		{/snippet}
 	</SelectPrimitive.Content>
