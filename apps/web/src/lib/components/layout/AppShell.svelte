@@ -3,7 +3,7 @@ import { page } from "$app/state";
 import SettingsModal from "$lib/components/settings/SettingsModal.svelte";
 import UserMenu from "$lib/components/sidebar/UserMenu.svelte";
 import { RAIL_WIDTH } from "$lib/constants";
-import { gsapFade, tokens, useRightPanelChoreography } from "$lib/motion";
+import { gsapFade, tokens } from "$lib/motion";
 import { getSelectedPr } from "$lib/stores/prs.svelte";
 import {
   getActiveTab,
@@ -105,34 +105,11 @@ let isResizingRight = $state(false);
 let rightDragStartX = 0;
 let rightDragStartWidth = 0;
 
-// Element refs for the right-panel choreography (slide + vignette).
-let panelEl: HTMLElement | null = $state(null);
-let mainEl: HTMLElement | null = $state(null);
-
-// First-mount snap: don't play an open/close animation on initial paint.
-let panelChoreographed = false;
-
 // Close the chat panel when navigating away from a PR page
 $effect(() => {
   if (!pr && rightPanelOpen) {
     setRightPanelOpen(false);
   }
-});
-
-// Panel slide + vignette. Grid-column widths interpolate via the CSS
-// `transition: grid-template-columns` on `.app-shell` — animating that via
-// JS state writes thrashes Svelte reactivity and forces a relayout every
-// frame.
-$effect(() => {
-  const snap = isResizingRight || !panelChoreographed;
-  if (!panelChoreographed && panelEl !== null) panelChoreographed = true;
-  return useRightPanelChoreography({
-    panelEl,
-    mainEl,
-    open: rightPanelOpen,
-    panelWidth: rightPanelWidth,
-    snap,
-  });
 });
 
 const gridStyle = $derived(
@@ -235,7 +212,7 @@ function onRightHandleDblClick(): void {
 		/>
 	</header>
 
-	<main class="main-area" bind:this={mainEl}>
+	<main class="main-area">
 		{#if pr && isReviewRoute && !isSettingsRoute}
 			<div class="main-tab-bar">
 				<FloatingTabs
@@ -281,7 +258,6 @@ function onRightHandleDblClick(): void {
 	</footer>
 
 	<aside
-		bind:this={panelEl}
 		class="rightpanel-area"
 		class:rightpanel-area--open={rightPanelOpen}
 		aria-hidden={!rightPanelOpen}
@@ -430,9 +406,8 @@ function onRightHandleDblClick(): void {
 	}
 
 	/* Right-edge vignette that fades in when the panel opens, softening the
-	   hard clip as the main area loses width to the panel. Opacity is animated
-	   by GSAP through the `--vignette-opacity` custom property set on the
-	   .main-area element (see the right-panel $effect in the script). */
+	   hard clip as the main area loses width to the panel. Opacity-only
+	   crossfade — compositor handles it. */
 	.main-area::after {
 		content: '';
 		position: absolute;
@@ -441,9 +416,14 @@ function onRightHandleDblClick(): void {
 		bottom: 0;
 		width: calc(var(--spacing-island) * 4);
 		background: linear-gradient(to right, transparent, var(--color-bg-primary));
-		opacity: var(--vignette-opacity, 0);
+		opacity: 0;
 		pointer-events: none;
 		z-index: 2;
+		transition: opacity var(--duration-smooth) var(--ease-out-expo);
+	}
+
+	.app-shell.rightpanel-open .main-area::after {
+		opacity: 0.65;
 	}
 
 	/* Tabs float over content — no background, no flex space reservation.
@@ -541,11 +521,8 @@ function onRightHandleDblClick(): void {
 		/* min-width: 0 lets the grid track shrink to 0 even though the
 		   border-box would otherwise contribute its own min-content. */
 		min-width: 0;
-		/* translateX is driven by GSAP from the right-panel $effect in the
-		   script. The CSS rule below provides a first-paint fallback for the
-		   resting closed state so the panel doesn't flash onto the viewport
-		   between component mount and the first $effect run. Once GSAP starts
-		   writing inline `transform`, it takes precedence (inline > class). */
+		transform: translateX(0);
+		transition: transform var(--duration-smooth) var(--ease-out-expo);
 	}
 
 	.rightpanel-area:not(.rightpanel-area--open) {

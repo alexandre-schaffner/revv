@@ -3,7 +3,6 @@
  */
 
 export * from "./actions";
-export { useRightPanelChoreography } from "./grid-choreography";
 export { gsap, initGsap } from "./gsap";
 export * from "./presets";
 export { prefersReducedMotion } from "./reduced-motion";
