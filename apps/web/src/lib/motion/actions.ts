@@ -199,26 +199,59 @@ export const gsapPrHoverAction: Action<HTMLElement> = (node) => {
 
 /**
  * Watches `data-state` on a bits-ui content element. Plays `inPreset` when
- * state becomes "open", `outPreset` when it becomes "closed". The "closed"
- * state usually disappears from the DOM almost immediately after the
- * attribute change; bits-ui's Presence primitive keeps the node mounted
- * long enough for the out-tween to run, but only when the element opts in
- * via `forceMount` and a presence prop. For elements that don't, the
- * out-tween is effectively a no-op (DOM removal happens first) — that's
- * fine for popover/tooltip where exits are imperceptible anyway.
+ * state becomes "open", `outPreset` when it becomes "closed".
+ *
+ * bits-ui v2's Presence layer uses `node.getAnimations()` + the Web Animations
+ * API `animation.finished` promise to know when an exit is over and the node
+ * can be unmounted. GSAP tweens are driven by requestAnimationFrame and do
+ * NOT show up in `getAnimations()` — so a GSAP-only exit would race the
+ * unmount and the user would see the element vanish without animation.
+ *
+ * The fix: while the GSAP exit runs, register a WAAPI placeholder animation
+ * of equal duration that animates a no-op CSS custom property
+ * (`--gsap-presence-frame`). bits-ui's `getAnimations()` sees it; its
+ * `animation.finished` resolves when GSAP's `onComplete` fires `finish()`.
+ * Visuals are 100% GSAP; the placeholder is purely a presence signal.
  */
+type BitsSide = "top" | "right" | "bottom" | "left";
+
+// Presets passed to bitsAnim may or may not be direction-aware. We allow
+// either shape; direction-blind presets simply ignore the `side` opts the
+// action passes them.
+type BitsPreset = PresetFn<{ side?: BitsSide }> | PresetFn<void>;
+
 interface BitsAnimParams {
-  inPreset: PresetFn<{ side?: "top" | "right" | "bottom" | "left" }>;
-  outPreset?: PresetFn<{ side?: "top" | "right" | "bottom" | "left" }>;
+  inPreset: BitsPreset;
+  outPreset?: BitsPreset;
   /** Read `data-side` and pass it to the preset for direction awareness. */
   directionAware?: boolean;
+  /** Override the placeholder WAAPI duration (seconds). Defaults to the
+   *  preset's resolved timeline duration. */
+  exitDuration?: number;
+}
+
+const PRESENCE_PROP = "--gsap-presence-frame";
+
+function presencePlaceholder(node: HTMLElement, durationSec: number): Animation | null {
+  if (typeof node.animate !== "function") return null;
+  // Animate a custom property nothing else reads so we don't fight GSAP for
+  // any visual property. fill:"forwards" so the animation stays "finished"
+  // until we manually .cancel() or it's garbage-collected.
+  return node.animate(
+    [
+      { [PRESENCE_PROP]: 0 } as unknown as Keyframe,
+      { [PRESENCE_PROP]: 1 } as unknown as Keyframe,
+    ],
+    { duration: Math.max(0, durationSec * 1000), fill: "forwards" },
+  );
 }
 
 export const bitsAnim: Action<HTMLElement, BitsAnimParams> = (node, params) => {
   let current = params;
   let active: gsap.core.Timeline | null = null;
+  let placeholder: Animation | null = null;
 
-  const readSide = (): "top" | "right" | "bottom" | "left" | undefined => {
+  const readSide = (): BitsSide | undefined => {
     if (!current?.directionAware) return undefined;
     const raw = node.getAttribute("data-side");
     if (raw === "top" || raw === "right" || raw === "bottom" || raw === "left")
@@ -226,21 +259,50 @@ export const bitsAnim: Action<HTMLElement, BitsAnimParams> = (node, params) => {
     return undefined;
   };
 
+  const reduceMotion = (): boolean =>
+    typeof window !== "undefined" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  const killActive = () => {
+    active?.kill();
+    active = null;
+    placeholder?.cancel();
+    placeholder = null;
+  };
+
   const play = (state: string | null) => {
     if (!current) return;
-    if (
-      typeof window !== "undefined" &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches
-    ) {
-      return;
-    }
-    active?.kill();
+    killActive();
     const side = readSide();
     const opts = side ? { side } : {};
-    if (state === "open") {
-      active = current.inPreset(node, opts);
-    } else if (state === "closed" && current.outPreset) {
-      active = current.outPreset(node, opts);
+
+    if (state === "open" || state === "delayed-open" || state === "instant-open") {
+      if (reduceMotion()) {
+        // Apply end-state without tweening; bits-ui's getAnimations()-based
+        // wait is a no-op when there are no animations.
+        const tl = (current.inPreset as PresetFn<unknown>)(node, opts);
+        tl.progress(1).pause();
+        active = tl;
+        return;
+      }
+      active = (current.inPreset as PresetFn<unknown>)(node, opts);
+      return;
+    }
+
+    if (state === "closed" && current.outPreset) {
+      if (reduceMotion()) {
+        const tl = (current.outPreset as PresetFn<unknown>)(node, opts);
+        tl.progress(1).pause();
+        active = tl;
+        return;
+      }
+      active = (current.outPreset as PresetFn<unknown>)(node, opts);
+      const dur = current.exitDuration ?? active.duration();
+      placeholder = presencePlaceholder(node, dur);
+      active.eventCallback("onComplete", () => {
+        placeholder?.finish();
+      });
+      return;
     }
   };
 
@@ -265,7 +327,7 @@ export const bitsAnim: Action<HTMLElement, BitsAnimParams> = (node, params) => {
     },
     destroy() {
       observer.disconnect();
-      active?.kill();
+      killActive();
     },
   };
 };
