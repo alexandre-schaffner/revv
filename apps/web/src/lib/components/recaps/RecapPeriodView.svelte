@@ -24,7 +24,6 @@ import {
   regenerateRecap,
   stopRecap,
 } from "$lib/stores/recaps.svelte";
-import { getMainAreaBounds } from "$lib/stores/sidebar.svelte";
 import DotMatrixLoader from "./DotMatrixLoader.svelte";
 import PreviousRecaps from "./PreviousRecaps.svelte";
 import RecapDetail from "./RecapDetail.svelte";
@@ -229,15 +228,6 @@ async function onStop(): Promise<void> {
   if (!id) return;
   await stopRecap(id);
 }
-
-// Pin the floating action bar to the same horizontal span as the floating
-// tabs above (which also use getMainAreaBounds), so both feel anchored to
-// the same midline regardless of sidebar / right-panel state.
-const bounds = $derived(getMainAreaBounds());
-const actionsFloatStyle = $derived(
-  `position: fixed; left: ${bounds.left}px; right: ${bounds.right}px; ` +
-    `bottom: calc(var(--bottombar-height) + 2 * var(--spacing-island));`,
-);
 </script>
 
 <div class="period-view">
@@ -283,7 +273,7 @@ const actionsFloatStyle = $derived(
 </div>
 
 {#if showGenerateFab || genActionState}
-	<div class="actions-float" style={actionsFloatStyle}>
+	<div class="actions-float">
 		<div class="actions-row">
 			{#if showGenerateFab}
 				<GlassPill

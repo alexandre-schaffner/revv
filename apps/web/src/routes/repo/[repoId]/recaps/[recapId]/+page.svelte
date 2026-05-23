@@ -28,7 +28,6 @@ import {
   regenerateRecap,
   stopRecap,
 } from "$lib/stores/recaps.svelte";
-import { getMainAreaBounds } from "$lib/stores/sidebar.svelte";
 
 const repoId = $derived(page.params.repoId ?? "");
 const recapId = $derived(page.params.recapId ?? "");
@@ -159,16 +158,6 @@ async function onStop(): Promise<void> {
   await stopRecap(recapId);
 }
 
-// Pin the floating action bar to the same horizontal span as the floating
-// tabs on the recaps list page, using the shared bounds API. Position-fixed
-// so the math is identical and never drifts during right-panel transitions.
-// Bottom = bottombar row (height + island) + main-area's own bottom margin.
-const bounds = $derived(getMainAreaBounds());
-const actionsFloatStyle = $derived(
-  `position: fixed; left: ${bounds.left}px; right: ${bounds.right}px; ` +
-    `bottom: calc(var(--bottombar-height) + 2 * var(--spacing-island));`,
-);
-
 async function onGenerate(): Promise<void> {
   if (generating || !recap) return;
   generating = true;
@@ -206,7 +195,7 @@ async function onGenerate(): Promise<void> {
 		</div>
 
 		{#if genActionState}
-			<div class="actions-float" style={actionsFloatStyle}>
+			<div class="actions-float">
 				<div class="actions-row">
 					{#if recapUiKind === "outdated"}
 						<GlassPill
