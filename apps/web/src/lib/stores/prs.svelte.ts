@@ -487,36 +487,94 @@ export function deleteRepo(id: string): Promise<void> {
 }
 
 /**
- * Owner-only PR mutations. The server runs the GitHub mutation, refreshes
- * the local row from a fresh GET, and broadcasts `prs:updated` — we only
- * surface the loading state and toast on failure here. The list refresh
- * arrives over the WebSocket; no local mutation is required.
+ * Owner-only PR mutations. Optimistic with entity-scoped rollback per
+ * conventions §4.6: flip the affected fields locally before awaiting the
+ * server, restore them on throw. The successful round-trip's `prs:updated`
+ * broadcast reconciles the canonical list as the source of truth — our
+ * optimistic write is only for the in-flight window.
  */
+function flipPrDraftLocally(prId: string, isDraft: boolean): void {
+  pullRequests = pullRequests.map((p) => (p.id === prId ? { ...p, isDraft } : p));
+}
+
 export async function convertPrToDraft(prId: string): Promise<void> {
+  const pr = pullRequests.find((p) => p.id === prId);
+  if (!pr || pr.isDraft) return;
+  const prevIsDraft = pr.isDraft;
+
+  flipPrDraftLocally(prId, true);
+
   try {
     const { error } = await api.api.prs({ id: prId })["convert-to-draft"].post();
     if (error) throw new Error(`HTTP ${error.status}`);
   } catch (e) {
+    flipPrDraftLocally(prId, prevIsDraft);
     toast.error(e instanceof Error ? e.message : "Failed to convert to draft");
     throw e;
   }
 }
 
 export async function markPrReadyForReview(prId: string): Promise<void> {
+  const pr = pullRequests.find((p) => p.id === prId);
+  if (!pr?.isDraft) return;
+  const prevIsDraft = pr.isDraft;
+
+  flipPrDraftLocally(prId, false);
+
   try {
     const { error } = await api.api.prs({ id: prId })["ready-for-review"].post();
     if (error) throw new Error(`HTTP ${error.status}`);
   } catch (e) {
+    flipPrDraftLocally(prId, prevIsDraft);
     toast.error(e instanceof Error ? e.message : "Failed to mark ready for review");
     throw e;
   }
 }
 
+/**
+ * Restore a PR from the archive back into the open list with prior status
+ * and closedAt. Used by the `closePr` / `mergePr` rollback path — the
+ * reverse of `onPrArchived`'s forward move. Touches only the one PR so
+ * concurrent `prs:updated` reshuffles of other entries are preserved.
+ */
+function restorePrFromArchive(
+  prId: string,
+  prevStatus: PullRequest["status"],
+  prevClosedAt: string | null,
+): void {
+  const archived = archivedPrs.find((p) => p.id === prId);
+  if (!archived) return;
+  archivedPrs = archivedPrs.filter((p) => p.id !== prId);
+  pullRequests = [{ ...archived, status: prevStatus, closedAt: prevClosedAt }, ...pullRequests];
+}
+
 export async function closePr(prId: string): Promise<void> {
+  const pr = pullRequests.find((p) => p.id === prId);
+  if (!pr) {
+    // PR not known locally — fall back to pessimistic. WS reconciles.
+    const { error } = await api.api.prs({ id: prId }).close.post();
+    if (error) {
+      toast.error(`Failed to close PR (HTTP ${error.status})`);
+      throw new Error(`HTTP ${error.status}`);
+    }
+    return;
+  }
+
+  const prevStatus = pr.status;
+  const prevClosedAt = pr.closedAt;
+
+  onPrArchived({
+    prId,
+    repoId: pr.repositoryId,
+    status: "closed",
+    closedAt: new Date().toISOString(),
+  });
+
   try {
     const { error } = await api.api.prs({ id: prId }).close.post();
     if (error) throw new Error(`HTTP ${error.status}`);
   } catch (e) {
+    restorePrFromArchive(prId, prevStatus, prevClosedAt);
     toast.error(e instanceof Error ? e.message : "Failed to close PR");
     throw e;
   }
@@ -534,11 +592,34 @@ export async function getMergeEligibility(prId: string): Promise<MergeEligibilit
 }
 
 export async function mergePr(prId: string, mergeMethod: MergeMethod): Promise<void> {
+  const pr = pullRequests.find((p) => p.id === prId);
+  if (!pr) {
+    // PR not known locally — fall back to pessimistic. WS reconciles.
+    const { error } = await api.api.prs({ id: prId }).merge.post({ mergeMethod });
+    if (error) {
+      toast.error(`Failed to merge pull request (HTTP ${error.status})`);
+      throw new Error(`HTTP ${error.status}`);
+    }
+    toast.success("Pull request merged successfully");
+    return;
+  }
+
+  const prevStatus = pr.status;
+  const prevClosedAt = pr.closedAt;
+
+  onPrArchived({
+    prId,
+    repoId: pr.repositoryId,
+    status: "merged",
+    closedAt: new Date().toISOString(),
+  });
+
   try {
     const { error } = await api.api.prs({ id: prId }).merge.post({ mergeMethod });
     if (error) throw new Error(`HTTP ${error.status}`);
     toast.success("Pull request merged successfully");
   } catch (e) {
+    restorePrFromArchive(prId, prevStatus, prevClosedAt);
     toast.error(e instanceof Error ? e.message : "Failed to merge pull request");
     throw e;
   }

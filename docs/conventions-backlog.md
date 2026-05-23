@@ -9,11 +9,39 @@ default sort.
 | Domain | Open | Severity mix |
 |---|---|---|
 | Server (Effect) | 0 | — |
-| Web stores | 0 | — |
+| Web stores | 1 | low |
 | UI / motion | 14 | all fixed |
-| **Total** | **0** | |
+| **Total** | **1** | |
 
-All outstanding convention violations are closed.
+---
+
+## Open
+
+<a id="s-005"></a>
+### S-005 — `deleteRepo` uses list-snapshot rollback instead of entity-scoped
+
+**Rule violated:** [§4.6 — Client-initiated mutations are optimistic with entity-scoped rollback](./conventions.md#stores-optimistic).
+
+**Where:** `apps/web/src/lib/stores/prs.svelte.ts:455-487` (`deleteRepo`), with helpers
+`snapshotRepoState` (`:188-196`) and `restoreRepoState` (`:198-205`).
+
+**Why it's a violation.** On error, `restoreRepoState` reassigns `repositories`,
+`pullRequests`, `archivedPrs`, `taggedPrsByRepo`, and `pinnedPrIds` to the pre-mutation
+snapshot. Any `prs:updated` / `repos:updated` / `pr:archived` broadcast that landed during
+the in-flight POST is silently dropped — including entirely unrelated entities the server
+added or removed for reasons that have nothing to do with this delete.
+
+**Fix shape.** Capture the *removed* state, not the *prior* state: which repo row was
+removed, which open PR ids and archived PR ids were removed, which pinned ids were removed.
+On rollback, re-insert each. Concurrent broadcasts that touched other entities survive
+untouched.
+
+**Severity:** Low — the failure mode is "concurrent unrelated broadcast lost during a
+rollback that itself is rare." Not actively biting in production. Tracked because
+`deleteRepo` is the canonical anti-pattern §4.6 was added to prevent and leaving it as-is
+implicitly endorses the shape.
+
+**Sizing:** ~30 lines. One PR. Worth pairing with any other touch to the repo-delete flow.
 
 ---
 
