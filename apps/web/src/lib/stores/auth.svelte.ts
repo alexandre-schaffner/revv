@@ -1,7 +1,7 @@
 import { goto } from "$app/navigation";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { authClient } from "$lib/auth-client";
-import { stopPolling } from "$lib/services/sync";
+import { pauseSyncTimer, resumeSyncTimer, stopPolling } from "$lib/services/sync";
 import {
   connect as connectEvents,
   disconnect as disconnectEvents,
@@ -9,7 +9,7 @@ import {
 import { fetchOrgs, initForUser, reset as resetOrgs } from "$lib/stores/orgs.svelte";
 import { fetchPinnedPrs, fetchPrs, fetchRepos, reset as resetPrs } from "$lib/stores/prs.svelte";
 import { clearReviewFiles } from "$lib/stores/review.svelte";
-import { fetchSettings, reset as resetSettings } from "$lib/stores/settings.svelte";
+import { fetchSettings, getSettings, reset as resetSettings } from "$lib/stores/settings.svelte";
 import { connect as connectWs, disconnect as disconnectWs } from "$lib/stores/ws.svelte";
 
 const storedToken =
@@ -447,6 +447,10 @@ if (typeof localStorage !== "undefined") {
 export async function switchAccount(userId: string, host?: string): Promise<void> {
   isSwitching = true;
   isLoading = true;
+  // Pause the background sync timer so an in-flight `syncPrs()` (which hits
+  // `POST /api/prs/sync` → `PollScheduler.syncNow()` and holds SQLite writes)
+  // can't race with the new account's hydration and make the switch hang.
+  pauseSyncTimer();
   try {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (token) headers.Authorization = `Bearer ${token}`;
@@ -462,26 +466,12 @@ export async function switchAccount(userId: string, host?: string): Promise<void
     resetSettings();
     resetOrgs();
     clearReviewFiles();
+    // Fire-and-forget navigation. Awaiting `goto` blocks on SvelteKit's
+    // load/render cycle which can sit behind any number of in-flight
+    // route effects — and the data hydration below works regardless of
+    // which route we end up on.
     if (typeof window !== "undefined" && /^\/(repo|review)(\/|$)/.test(window.location.pathname)) {
-      await goto("/", { replaceState: true });
-    }
-    // Persist the target host on the server FIRST so any handler resolving
-    // the active account from settings (e.g. `/api/prs`, `/api/repos`) sees
-    // the right host immediately. We hit the endpoint directly because the
-    // local settings store is null right now (just reset) and the optimistic
-    // merge in `updateSettings` would no-op.
-    if (host) {
-      try {
-        await fetch(`${API_BASE_URL}/api/settings`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.token}` },
-          body: JSON.stringify({ githubHost: host }),
-        });
-      } catch {
-        // best-effort — the WS host override below is the load-bearing path;
-        // the persisted setting only affects post-switch REST handlers and a
-        // missed PUT will self-heal once the user updates settings explicitly.
-      }
+      void goto("/", { replaceState: true });
     }
     // Reconnect WebSocket with the new session token AND explicit host so
     // the server binds the WS to the target user's correct account on the
@@ -493,17 +483,48 @@ export async function switchAccount(userId: string, host?: string): Promise<void
     disconnectEvents();
     connectWs(data.token, host);
     connectEvents(data.token, host);
+    // Persist the host in settings in parallel with everything else — the
+    // load-bearing path is the WS host override above, which the server uses
+    // to bind the connection to the right account. The settings PUT only
+    // affects post-switch REST handlers that read `settings.githubHost`,
+    // and any handler that fires before this resolves either uses the
+    // default host or is a `prs:updated`/`repos:updated` broadcast we'll
+    // refetch via the WS reconcile path anyway.
+    const persistHost = host
+      ? fetch(`${API_BASE_URL}/api/settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.token}` },
+          body: JSON.stringify({ githubHost: host }),
+        }).catch(() => {
+          // best-effort — a missed PUT self-heals once the user updates
+          // settings explicitly.
+        })
+      : Promise.resolve();
+    // Block the switch UX only on the identity round-trip. Everything else
+    // (PRs, repos, pinned, settings) is hydrated in the background; the
+    // sidebar paints when its data arrives and the WS pushes `prs:updated`
+    // anyway. Awaiting the full payload here turned every slow `/api/prs`
+    // (e.g. behind a contending poll-scheduler write) into a multi-second
+    // freeze that looked like the switch had hung.
     await loadUser();
-    // Pull settings into the local store so getGithubHost() returns the
-    // new host (e.g. for WS auto-reconnects and OrgSwitcher highlighting)
-    // and re-hydrate the PR / repo lists under the switched-to account.
-    await fetchSettings();
-    await Promise.all([fetchPrs(), fetchRepos(), fetchPinnedPrs()]);
+    isSwitching = false;
+    void Promise.allSettled([
+      persistHost,
+      fetchSettings(),
+      fetchPrs(),
+      fetchRepos(),
+      fetchPinnedPrs(),
+    ]);
   } catch (e) {
     error = `Failed to switch account: ${e}`;
   } finally {
     isLoading = false;
     isSwitching = false;
+    // Restart the sync timer at whatever interval the new account's
+    // settings prefer (default 5s if settings haven't loaded yet — the
+    // background `fetchSettings()` will reconcile shortly).
+    const interval = getSettings()?.autoFetchInterval ?? 5;
+    resumeSyncTimer(interval);
   }
 }
 

@@ -21,6 +21,8 @@ export { prDiffFiles } from "./pr-diff-files";
 export { projectRecaps } from "./project-recaps";
 export { pullRequests } from "./pull-requests";
 export { recapPrDigests } from "./recap-pr-digests";
+export { recapPrEntries } from "./recap-pr-entries";
+export { recapThemeSummaries } from "./recap-theme-summaries";
 export { remoteUsers } from "./remote-users";
 export { repositories } from "./repositories";
 export { reviewSessions } from "./review-sessions";

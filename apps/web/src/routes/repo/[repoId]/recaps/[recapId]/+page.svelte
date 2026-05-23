@@ -16,6 +16,7 @@ import {
   resetRecapStream,
   streamRecap,
 } from "$lib/stores/recap-stream.svelte";
+import { getMainAreaBounds } from "$lib/stores/sidebar.svelte";
 import {
   fetchRecapsForRepo,
   generateRecap,
@@ -158,6 +159,16 @@ async function onStop(): Promise<void> {
   await stopRecap(recapId);
 }
 
+// Pin the floating action bar to the same horizontal span as the floating
+// tabs on the recaps list page, using the shared bounds API. Position-fixed
+// so the math is identical and never drifts during right-panel transitions.
+// Bottom = bottombar row (height + island) + main-area's own bottom margin.
+const bounds = $derived(getMainAreaBounds());
+const actionsFloatStyle = $derived(
+  `position: fixed; left: ${bounds.left}px; right: ${bounds.right}px; ` +
+    `bottom: calc(var(--bottombar-height) + 2 * var(--spacing-island));`,
+);
+
 async function onGenerate(): Promise<void> {
   if (generating || !recap) return;
   generating = true;
@@ -175,27 +186,27 @@ async function onGenerate(): Promise<void> {
 <AuthGuard>
 	<div class="recap-page">
 		<div class="page">
-			<div class="container">
-				<RecapDetail
-					{recap}
-					{loading}
-					{onBack}
-					{stream}
-				/>
-				{#if recap}
+			<RecapDetail
+				{recap}
+				{loading}
+				period={recap?.period}
+				{onBack}
+				{stream}
+			/>
+			{#if recap}
+				<div class="aux">
 					<PreviousRecaps
 						{repoId}
 						period={recap.period}
 						{recaps}
-						loading={listLoading}
 						excludeRecapId={recapId}
 					/>
-				{/if}
-			</div>
+				</div>
+			{/if}
 		</div>
 
 		{#if genActionState}
-			<div class="actions-float">
+			<div class="actions-float" style={actionsFloatStyle}>
 				<div class="actions-row">
 					{#if recapUiKind === "outdated"}
 						<GlassPill
@@ -245,12 +256,9 @@ async function onGenerate(): Promise<void> {
 		overflow-y: auto;
 	}
 
-	.container {
-		display: flex;
-		flex-direction: column;
-		max-width: 56rem;
+	.aux {
+		max-width: 1280px;
 		margin: 0 auto;
-		width: 100%;
-		padding: 1rem 1.25rem 4rem;
+		padding: 0 2rem 4rem;
 	}
 </style>

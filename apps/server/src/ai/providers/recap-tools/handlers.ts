@@ -8,19 +8,29 @@
 // Effect runtime inside the agent's call path. Each handler is one atomic
 // transaction; replays are idempotent.
 
-import type { ProjectRecap, RecapSummaryStats } from "@revv/shared";
-import { eq } from "drizzle-orm";
-import { projectRecaps } from "../../../db/schema/index";
+import { randomUUID } from "node:crypto";
+import type { ProjectRecap, RecapPrEntry, RecapThemeSummary } from "@revv/shared";
+import { and, eq, sql } from "drizzle-orm";
+import {
+  projectRecaps,
+  pullRequests,
+  recapPrEntries,
+  recapThemeSummaries,
+  remoteUsers,
+} from "../../../db/schema/index";
 import type {
-  CommitRecapOverviewInput,
+  AddPrEntryInput,
   CompleteRecapInput,
   GetPrDiffInput,
   GetRecapStateInput,
   GetRepoContextInput,
   ListOpenPrsInput,
   RecapSourcePrDiff,
+  RecapToolContext,
   RecapToolHandler,
   RecapToolResult,
+  SetLedeInput,
+  SetThemeSummaryInput,
 } from "./spec";
 
 /** Default page size for `list_open_prs`. Small enough that 20 PRs split into
@@ -44,10 +54,40 @@ export const getRecapStateHandler: RecapToolHandler<GetRecapStateInput> = async 
   // started; we just hand it to the agent. This shape is the structured
   // counterpart to "here are all the PRs you need to recap." Agents read
   // this first, every run, including resumes.
-  const previousOverview = ctx.sourceBundle.previousOverview;
-  const rerunInstructions = previousOverview
-    ? " A `previousOverview` is included — it's the recap you wrote earlier for this same window. The window has since rolled forward (new PRs closed, walkthroughs landed). Update that overview in place: keep what's still accurate, refresh the stats, fold in new PRs, and adjust narrative where the picture changed. Do NOT restart from scratch and do NOT mention that you're updating — the reader sees only the final overview."
-    : "";
+  // Surface entries written in a prior partial run so the agent can pick up
+  // where it left off rather than start over. Idempotent upserts on
+  // (recap_id, pr_id) mean re-adding existing entries is safe, but skipping
+  // already-covered PRs keeps the run cheaper.
+  const priorEntries = ctx.db
+    .select({
+      prId: recapPrEntries.prId,
+      theme: recapPrEntries.theme,
+      verb: recapPrEntries.verb,
+      position: recapPrEntries.position,
+    })
+    .from(recapPrEntries)
+    .where(eq(recapPrEntries.recapId, ctx.recapId))
+    .all();
+  const priorThemeSummaries = ctx.db
+    .select({
+      theme: recapThemeSummaries.theme,
+      summary: recapThemeSummaries.summary,
+    })
+    .from(recapThemeSummaries)
+    .where(eq(recapThemeSummaries.recapId, ctx.recapId))
+    .all();
+  const priorLedeRow = ctx.db
+    .select({ lede: projectRecaps.lede })
+    .from(projectRecaps)
+    .where(eq(projectRecaps.id, ctx.recapId))
+    .get();
+
+  const priorLede = priorLedeRow?.lede?.trim() ?? "";
+  const rerunInstructions =
+    priorEntries.length > 0 || priorLede.length > 0 || priorThemeSummaries.length > 0
+      ? ` A prior partial run wrote ${priorEntries.length} entries${priorLede ? " and a lede" : ""}${priorThemeSummaries.length > 0 ? ` and ${priorThemeSummaries.length} theme summaries` : ""}. Treat that as a draft: keep what's still accurate (re-call add_pr_entry / set_theme_summary with the same key only if you want to change the row), and fill in the gaps. You don't need to mention you're resuming.`
+      : "";
+
   const openPrsTotal = ctx.sourceBundle.openPrs.length;
   const payload = {
     recapId: ctx.recapId,
@@ -60,9 +100,21 @@ export const getRecapStateHandler: RecapToolHandler<GetRecapStateInput> = async 
     prs: ctx.sourceBundle.prs,
     openPrsTotal,
     openPrsPageSize: OPEN_PRS_DEFAULT_PAGE_SIZE,
-    previousOverview,
+    priorEntries,
+    priorThemeSummaries,
+    priorLede: priorLede || null,
     instructions:
-      `Read the archived PRs above (the \`prs\` array). Each row has author, branches, +/- stats, a body excerpt, and (when available) a walkthrough summary + sentiment + risk + 9-axis context. For PRs where \`walkthrough\` is null, use the row's \`diffDigest\` compact summary; the server already ingested the raw diff before this run so you do not need to load raw patches into this session. Open PRs are NOT inlined here to keep this payload small — there are ${openPrsTotal} of them, capped at the 20 most recently updated. Fetch them via list_open_prs (start with offset=0, default page size ${OPEN_PRS_DEFAULT_PAGE_SIZE}) and keep paging while \`nextOffset\` is non-null. Use those rows to write the 'Active work' section after 'What shipped'. WRITE THE COMPLETE RECAP AS YOUR VISIBLE ASSISTANT RESPONSE — the user watches it stream in live as you type, and the server reads what you wrote when you commit. No preamble, no "Here is the recap" framing, no inter-tool commentary — start with the first heading and go. If you call ANY tool while composing, the buffered text resets, so finish your reads first. When the markdown is complete, call commit_recap_overview ONCE with just the metadata (the PR ids you included, the walkthrough ids you incorporated, and the pre-aggregated stats). Finally call complete_recap.` +
+      `Read the archived PRs above (the \`prs\` array). Each row has author, title, branches, +/- stats, body excerpt, and (when available) a walkthrough summary + sentiment + risk. For PRs without a walkthrough, use \`diffDigest\` — raw patches are not needed. The open-PR list (via list_open_prs) follows the same shape, including \`diffDigest\` for open PRs that lack walkthroughs. Workflow:
+
+      1. Call get_repo_context to see prior recaps for this repo.
+      2. Call set_lede ONCE with a tight 1–3 sentence editorial summary of the period (covers shipped headline first, in-flight tail second). Plain text plus optional <strong>/<em>. No markdown.
+      3. For each ARCHIVED PR worth including, call add_pr_entry once. Shipped work is the recap's primary record — if the period had archived PRs, you MUST write at least one merged entry per dominant theme. When many archived PRs are similar (e.g. a repeated migration), surface 5–10 representative entries spanning the variety; do NOT skip the cluster. "Skip pure chores" is for typo fixes and version bumps only.
+      4. Call list_open_prs and, for each OPEN PR worth surfacing as active work, call add_pr_entry. Reuse the same theme labels as shipped entries when relevant — the UI renders open entries as an "In progress" subgroup inside the matching theme chapter.
+      5. add_pr_entry arguments: pr_id, position (your render order, starting at 0, archived entries first), theme (short reusable lowercase noun), verb (past tense for shipped, present tense for open), description (one sentence in matching tense, may use \`backticks\` for code/file paths, NO other markdown), lines_added, lines_removed. The server records whether the PR was archived or open from the source bundle — you don't pass that.
+      6. After all add_pr_entry calls, call set_theme_summary ONCE per distinct theme you used — a 1–2 sentence chapter lede that frames what landed in that area. Reuse the same lowercase theme label you passed to add_pr_entry. Keep summaries short (≤ ~35 words) and human; backtick-wrapped code spans are allowed but no other markdown.
+      7. Call complete_recap to finalize. The orchestrator stamps summary_stats, source_pr_ids, totals from your entries and transitions status.
+
+      Do NOT emit visible prose between tool calls — there is no streaming text buffer in this pipeline. All content flows through tool arguments.` +
       rerunInstructions,
   };
   return ok(JSON.stringify(payload));
@@ -89,7 +141,7 @@ export const listOpenPrsHandler: RecapToolHandler<ListOpenPrsInput> = async (ctx
         nextOffset: null,
         instructions:
           total === 0
-            ? "No open PRs in this repo. Skip the 'Active work' section entirely."
+            ? "No open PRs in this repo. There is no active work to include — proceed with shipped entries only."
             : "You've already read every page. Stop calling list_open_prs and move on to composing the recap.",
       }),
     );
@@ -106,7 +158,7 @@ export const listOpenPrsHandler: RecapToolHandler<ListOpenPrsInput> = async (ctx
       nextOffset,
       instructions:
         nextOffset === null
-          ? `Final page: rows ${offset}..${end - 1} of ${total}. You've now seen every open PR; do not call list_open_prs again. Reference these ids in the 'Active work' section.`
+          ? `Final page: rows ${offset}..${end - 1} of ${total}. You've now seen every open PR. Use add_pr_entry for the ones worth including as active work — reuse themes from shipped PRs when relevant.`
           : `Rows ${offset}..${end - 1} of ${total}. Call list_open_prs again with offset=${nextOffset} to get the next page, then continue.`,
     }),
   );
@@ -136,7 +188,8 @@ export const getRepoContextHandler: RecapToolHandler<GetRepoContextInput> = asyn
         periodStart: r.periodStart,
         periodEnd: r.periodEnd,
         completedAt: r.completedAt,
-        overview: r.overview,
+        lede: r.lede,
+        themes: Array.from(new Set(r.entries.map((e) => e.theme))),
         stats: r.summaryStats,
       })),
       instructions:
@@ -145,194 +198,327 @@ export const getRepoContextHandler: RecapToolHandler<GetRepoContextInput> = asyn
   );
 };
 
-// ── Atomic commit tool ───────────────────────────────────────────────────────
+// ── Atomic content writes ────────────────────────────────────────────────────
 
 /**
- * Strip agent meta-commentary from the buffered recap text before persisting.
- *
- * Two patterns to remove:
- *  1. Leading preamble before the first markdown heading — model sometimes
- *     writes "Now I'll write the complete recap…" before the first `## `.
- *  2. Trailing narration after the last recap content — model sometimes
- *     writes "Now I'll commit the recap with metadata:" right before calling
- *     this tool. These lines are plaintext and don't belong in the stored
- *     overview.
+ * `<strong>` / `<em>` are the only HTML tags allowed in the lede; the UI
+ * applies the same allowlist at render time. The handler scrubs everything
+ * else here so a non-conforming model emission never reaches storage.
  */
-function sanitizeRecapOverview(raw: string): string {
-  const text = raw.trim();
-
-  // Strip leading content before the first markdown heading.
-  const headingIdx = text.search(/^#+\s/m);
-  const withoutPreamble = headingIdx > 0 ? text.slice(headingIdx) : text;
-
-  // Strip trailing agent-narration lines (e.g., "Now I'll commit…").
-  const lines = withoutPreamble.trimEnd().split("\n");
-  let end = lines.length;
-  while (end > 0) {
-    const current = lines[end - 1];
-    if (current === undefined) break;
-    const line = current.trim();
-    if (line === "") {
-      end--;
-      continue;
-    }
-    if (
-      /^(now i'?ll|i'?ll now|i will now|now i will|i'?m going to|let me now|i'?ll commit|now,?\s+i'?ll commit|this completes)/i.test(
-        line,
-      )
-    ) {
-      end--;
-      continue;
-    }
-    break;
-  }
-
-  return lines.slice(0, end).join("\n").trim();
+function sanitizeLede(raw: string): string {
+  return raw
+    .trim()
+    .replace(/<(?!\/?(?:strong|em)\b)[^>]*>/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-export const commitRecapOverviewHandler: RecapToolHandler<CommitRecapOverviewInput> = async (
-  ctx,
-  input,
-) => {
-  // Guard: refuse to write if the recap was stopped, superseded, or
-  // otherwise no longer generating. Prevents a late tool call from a
-  // cancelled agent from clobbering a newer run or a stopped row.
-  const currentRow = ctx.db
+/**
+ * Refuse the call if the recap row is no longer `generating` (stopped,
+ * superseded, completed, etc). Returns an `err()` result on rejection, or
+ * `null` to proceed.
+ */
+function requireGenerating(ctx: RecapToolContext, action: string): RecapToolResult | null {
+  const row = ctx.db
     .select({ status: projectRecaps.status })
     .from(projectRecaps)
     .where(eq(projectRecaps.id, ctx.recapId))
     .get();
-  if (currentRow?.status !== "generating") {
+  if (row?.status !== "generating") {
     return err(
-      `Recap is no longer generating (status=${currentRow?.status ?? "unknown"}). Aborting commit.`,
+      `Recap is no longer generating (status=${row?.status ?? "unknown"}). Aborting ${action}.`,
     );
   }
+  return null;
+}
 
-  // Read the markdown body from the in-memory buffer the orchestrator's
-  // stream consumer has been appending text-deltas into. The agent's
-  // visible response IS the recap — the model never re-serialises it
-  // here as a tool argument. (CLAUDE.md invariant #2: the DB write
-  // still happens inside an MCP handler; the buffer is just a side
-  // channel from the streaming consumer.)
-  const overview = sanitizeRecapOverview(ctx.textBuffer.current);
-  if (overview.length === 0) {
+export const setLedeHandler: RecapToolHandler<SetLedeInput> = async (ctx, input) => {
+  const guard = requireGenerating(ctx, "set_lede");
+  if (guard) return guard;
+
+  const lede = sanitizeLede(input.lede);
+  if (lede.length === 0) {
     return err(
-      "Error: no recap text has been buffered. Write the recap markdown as your visible assistant response BEFORE calling commit_recap_overview — the server reads what you typed. If you called a tool while composing, the buffer was reset; re-write the recap as one continuous response then call this tool again.",
+      "Error: lede was empty after sanitization. Submit 1–3 sentences of plain text; only <strong>/<em> are allowed as inline tags.",
     );
   }
-
-  // Validate that the source_pr_ids referenced are real members of the
-  // bundle. The orchestrator generated the bundle from the DB query; any
-  // id outside it is the agent hallucinating, so we reject loudly. Both
-  // archived and open PRs are valid sources — a "nothing shipped, only
-  // active work" recap legitimately references open PR ids.
-  const allBundlePrs = [...ctx.sourceBundle.prs, ...ctx.sourceBundle.openPrs];
-  const knownPrIds = new Set(allBundlePrs.map((p) => p.id));
-  const badPrIds = input.source_pr_ids.filter((id) => !knownPrIds.has(id));
-  if (badPrIds.length > 0) {
-    return err(
-      `Error: source_pr_ids includes ids that aren't in this period: ${badPrIds.join(", ")}. Use only ids from get_recap_state.`,
-    );
-  }
-
-  // Same for walkthroughs.
-  const knownWtIds = new Set(
-    allBundlePrs.flatMap((p) => (p.walkthrough ? [p.walkthrough.id] : [])),
-  );
-  const badWtIds = input.source_walkthrough_ids.filter((id) => !knownWtIds.has(id));
-  if (badWtIds.length > 0) {
-    return err(
-      `Error: source_walkthrough_ids includes ids not in this period: ${badWtIds.join(", ")}. Use only ids from get_recap_state.`,
-    );
-  }
-
-  // Map the agent's flat stats object into our nested RecapSummaryStats shape.
-  const stats: RecapSummaryStats = {
-    prCount: input.stats.pr_count,
-    mergedCount: input.stats.merged_count,
-    closedCount: input.stats.closed_count,
-    authorCount: input.stats.author_count,
-    riskBreakdown: {
-      low: input.stats.risk_low,
-      medium: input.stats.risk_medium,
-      high: input.stats.risk_high,
-    },
-    walkthroughsMissingCount: input.stats.walkthroughs_missing_count,
-  };
 
   try {
+    ctx.db.update(projectRecaps).set({ lede }).where(eq(projectRecaps.id, ctx.recapId)).run();
+  } catch (e) {
+    return err(`Error: failed to persist lede: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  ctx.emit({ type: "lede", data: { lede } });
+  ctx.emit({
+    type: "phase",
+    data: { phase: "categorizing", message: "Categorizing pull requests…" },
+  });
+  return ok(
+    "Lede persisted. Now call add_pr_entry once per PR you want in the recap (skip pure chores).",
+  );
+};
+
+export const addPrEntryHandler: RecapToolHandler<AddPrEntryInput> = async (ctx, input) => {
+  const guard = requireGenerating(ctx, "add_pr_entry");
+  if (guard) return guard;
+
+  // Validate prId is in the source bundle. Archived PRs are recorded as
+  // `pr_state='merged'`, open PRs as `pr_state='open'` — server-derived from
+  // which list the id came from. The agent never passes prState directly;
+  // this mirrors the "orchestrator owns lifecycle, agents own content"
+  // invariant. The UI groups open entries as "In progress" inside the
+  // theme chapter, alongside the merged entries.
+  const archivedIds = new Set(ctx.sourceBundle.prs.map((p) => p.id));
+  const openIds = new Set(ctx.sourceBundle.openPrs.map((p) => p.id));
+  if (!archivedIds.has(input.pr_id) && !openIds.has(input.pr_id)) {
+    return err(
+      `Error: pr_id "${input.pr_id}" is not in this period's source bundle. Use only ids from get_recap_state.prs (archived) or list_open_prs (open).`,
+    );
+  }
+  const prState: "merged" | "open" = archivedIds.has(input.pr_id) ? "merged" : "open";
+
+  // Normalize theme: lowercase, trim, collapse internal whitespace to single
+  // space. Keeps the (theme1) === (Theme 1) === ("THEME 1 ") grouping
+  // consistent across calls in the same run.
+  const theme = input.theme.trim().toLowerCase().replace(/\s+/g, " ");
+  const verb = input.verb.trim().toLowerCase();
+
+  // Snapshot PR title/number/author so the recap survives PR pruning. Look
+  // up by id rather than relying on the source bundle (the bundle's PR
+  // shape doesn't carry the GitHub `externalId` as a primary key).
+  const prRow = ctx.db
+    .select({
+      title: pullRequests.title,
+      externalId: pullRequests.externalId,
+      authorLogin: pullRequests.authorLogin,
+    })
+    .from(pullRequests)
+    .where(eq(pullRequests.id, input.pr_id))
+    .get();
+
+  // Upsert on (recap_id, pr_id). Idempotent — a re-call with the same prId
+  // overwrites position/theme/verb/description; a fresh prId inserts a new
+  // row with a freshly-minted id.
+  const id = randomUUID();
+  try {
     ctx.db
-      .update(projectRecaps)
-      .set({
-        overview,
-        sourcePrIds: JSON.stringify(input.source_pr_ids),
-        sourceWalkthroughIds: JSON.stringify(input.source_walkthrough_ids),
-        summaryStats: JSON.stringify(stats),
+      .insert(recapPrEntries)
+      .values({
+        id,
+        recapId: ctx.recapId,
+        prId: input.pr_id,
+        position: input.position,
+        theme,
+        verb,
+        prTitle: prRow?.title ?? "",
+        prExternalId: prRow?.externalId ?? 0,
+        prAuthorLogin: prRow?.authorLogin ?? "",
+        description: input.description.trim(),
+        linesAdded: input.lines_added,
+        linesRemoved: input.lines_removed,
+        prState,
       })
-      .where(eq(projectRecaps.id, ctx.recapId))
+      .onConflictDoUpdate({
+        target: [recapPrEntries.recapId, recapPrEntries.prId],
+        set: {
+          position: sql`excluded.position`,
+          theme: sql`excluded.theme`,
+          verb: sql`excluded.verb`,
+          prTitle: sql`excluded.pr_title`,
+          prExternalId: sql`excluded.pr_external_id`,
+          prAuthorLogin: sql`excluded.pr_author_login`,
+          description: sql`excluded.description`,
+          linesAdded: sql`excluded.lines_added`,
+          linesRemoved: sql`excluded.lines_removed`,
+          prState: sql`excluded.pr_state`,
+        },
+      })
       .run();
   } catch (e) {
     return err(
-      `Error: failed to persist recap overview: ${e instanceof Error ? e.message : String(e)}`,
+      `Error: failed to persist entry for PR ${input.pr_id}: ${e instanceof Error ? e.message : String(e)}`,
     );
   }
 
-  // Clear the buffer after a successful write. Any text the model generates
-  // after this point (e.g., a second recap pass) will start a fresh buffer,
-  // so a second commit_recap_overview call only persists the new content —
-  // not the doubled [first-pass + second-pass] string.
-  ctx.textBuffer.current = "";
+  // Re-read the (possibly newly upserted) row so the broadcast carries the
+  // canonical id rather than the one we generated above (the existing row's
+  // id is preserved on conflict).
+  const persisted = ctx.db
+    .select()
+    .from(recapPrEntries)
+    .where(and(eq(recapPrEntries.recapId, ctx.recapId), eq(recapPrEntries.prId, input.pr_id)))
+    .get();
 
-  ctx.emit({ type: "overview", data: { overview } });
-  ctx.emit({ type: "phase", data: { phase: "finalizing", message: "Finalizing recap…" } });
-  return ok(
-    "Overview persisted. Call complete_recap now to signal you're done — the orchestrator will mark the recap complete.",
-  );
+  if (persisted) {
+    const avatarRow = persisted.prAuthorLogin
+      ? ctx.db
+          .select({ avatarContent: remoteUsers.avatarContent })
+          .from(remoteUsers)
+          .where(
+            and(eq(remoteUsers.provider, "github"), eq(remoteUsers.login, persisted.prAuthorLogin)),
+          )
+          .get()
+      : null;
+    const entry: RecapPrEntry = {
+      id: persisted.id,
+      recapId: persisted.recapId,
+      prId: persisted.prId,
+      position: persisted.position,
+      theme: persisted.theme,
+      verb: persisted.verb,
+      prTitle: persisted.prTitle,
+      prExternalId: persisted.prExternalId,
+      prAuthorLogin: persisted.prAuthorLogin,
+      prAuthorAvatar: avatarRow?.avatarContent ?? null,
+      description: persisted.description,
+      linesAdded: persisted.linesAdded,
+      linesRemoved: persisted.linesRemoved,
+      prState: persisted.prState,
+    };
+    ctx.emit({ type: "entry", data: { entry } });
+  }
+
+  const role = prState === "open" ? "active work" : "shipped";
+  return ok(`Entry stored for PR ${input.pr_id} as ${role} under theme "${theme}".`);
+};
+
+export const setThemeSummaryHandler: RecapToolHandler<SetThemeSummaryInput> = async (
+  ctx,
+  input,
+) => {
+  const guard = requireGenerating(ctx, "set_theme_summary");
+  if (guard) return guard;
+
+  // Mirror the theme normalization in add_pr_entry so the (recap, theme)
+  // key joins cleanly across the two writes regardless of casing/spacing.
+  const theme = input.theme.trim().toLowerCase().replace(/\s+/g, " ");
+  if (theme.length === 0) {
+    return err("Error: theme was empty after normalization. Pass the same lowercase noun you used for add_pr_entry.");
+  }
+
+  const summary = input.summary.trim().replace(/\s+/g, " ");
+  if (summary.length === 0) {
+    return err(
+      "Error: summary was empty after trim. Submit 1–2 sentences of plain prose; backtick code spans are the only inline markup allowed.",
+    );
+  }
+
+  const id = randomUUID();
+  try {
+    ctx.db
+      .insert(recapThemeSummaries)
+      .values({
+        id,
+        recapId: ctx.recapId,
+        theme,
+        summary,
+      })
+      .onConflictDoUpdate({
+        target: [recapThemeSummaries.recapId, recapThemeSummaries.theme],
+        set: {
+          summary: sql`excluded.summary`,
+        },
+      })
+      .run();
+  } catch (e) {
+    return err(
+      `Error: failed to persist theme summary for "${theme}": ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+
+  // Re-read so the broadcast carries the canonical row id (on upsert,
+  // the existing row's id is preserved — mirrors add_pr_entry).
+  const persisted = ctx.db
+    .select()
+    .from(recapThemeSummaries)
+    .where(
+      and(eq(recapThemeSummaries.recapId, ctx.recapId), eq(recapThemeSummaries.theme, theme)),
+    )
+    .get();
+
+  if (persisted) {
+    const event: RecapThemeSummary = {
+      id: persisted.id,
+      recapId: persisted.recapId,
+      theme: persisted.theme,
+      summary: persisted.summary,
+    };
+    ctx.emit({ type: "theme_summary", data: { summary: event } });
+  }
+
+  return ok(`Theme summary stored for "${theme}".`);
 };
 
 // ── Validation gate ──────────────────────────────────────────────────────────
 
 export const completeRecapHandler: RecapToolHandler<CompleteRecapInput> = async (ctx) => {
-  // Guard: refuse to complete if the recap was stopped or superseded.
-  const statusRow = ctx.db
-    .select({ status: projectRecaps.status })
+  const guard = requireGenerating(ctx, "complete_recap");
+  if (guard) return guard;
+
+  const ledeRow = ctx.db
+    .select({ lede: projectRecaps.lede })
     .from(projectRecaps)
     .where(eq(projectRecaps.id, ctx.recapId))
     .get();
-  if (statusRow?.status !== "generating") {
+  if (!ledeRow?.lede || ledeRow.lede.trim().length === 0) {
     return err(
-      `Recap is no longer generating (status=${statusRow?.status ?? "unknown"}). Aborting completion.`,
+      "Error: lede is empty. Call set_lede before complete_recap with a 1–3 sentence editorial summary.",
     );
   }
 
-  // Re-read to confirm the agent did call commit_recap_overview before this.
-  const row = ctx.db
+  const entries = ctx.db
     .select({
-      overview: projectRecaps.overview,
-      sourcePrIds: projectRecaps.sourcePrIds,
+      prId: recapPrEntries.prId,
+      linesAdded: recapPrEntries.linesAdded,
+      linesRemoved: recapPrEntries.linesRemoved,
     })
-    .from(projectRecaps)
-    .where(eq(projectRecaps.id, ctx.recapId))
-    .get();
-  if (!row) {
-    return err(`Error: recap ${ctx.recapId} not found.`);
-  }
-  if (!row.overview || row.overview.trim().length === 0) {
+    .from(recapPrEntries)
+    .where(eq(recapPrEntries.recapId, ctx.recapId))
+    .all();
+
+  if (entries.length === 0) {
     return err(
-      "Error: overview is empty. Call commit_recap_overview first — and before that, write the recap markdown as your visible assistant response so the server has text to persist.",
+      "Error: no PR entries have been added. Call add_pr_entry once per PR you want in the recap before complete_recap.",
     );
   }
-  let sourcePrIds: unknown;
+
+  // Stamp derived fields from the entries + source bundle. The orchestrator
+  // owns status transitions (CLAUDE.md invariant #11), but content writes
+  // that are deterministic from the entries are fine to land here so the
+  // row is fully consistent before the status flip.
+  const totalLinesAdded = entries.reduce((sum, e) => sum + e.linesAdded, 0);
+  const totalLinesRemoved = entries.reduce((sum, e) => sum + e.linesRemoved, 0);
+  const sourcePrIds = entries.map((e) => e.prId);
+
+  // Best-effort walkthrough provenance: any walkthrough attached to the
+  // entry PRs in the source bundle counts as "incorporated". Audit only —
+  // not used for correctness.
+  const allBundlePrs = [...ctx.sourceBundle.prs, ...ctx.sourceBundle.openPrs];
+  const sourceWalkthroughIds = allBundlePrs
+    .filter((p) => sourcePrIds.includes(p.id) && p.walkthrough)
+    .map((p) => p.walkthrough!.id);
+
   try {
-    sourcePrIds = JSON.parse(row.sourcePrIds);
-  } catch {
-    sourcePrIds = [];
-  }
-  if (!Array.isArray(sourcePrIds) || sourcePrIds.length === 0) {
+    ctx.db
+      .update(projectRecaps)
+      .set({
+        summaryStats: JSON.stringify(ctx.sourceBundle.stats),
+        sourcePrIds: JSON.stringify(sourcePrIds),
+        sourceWalkthroughIds: JSON.stringify(sourceWalkthroughIds),
+        totalLinesAdded,
+        totalLinesRemoved,
+      })
+      .where(eq(projectRecaps.id, ctx.recapId))
+      .run();
+  } catch (e) {
     return err(
-      "Error: source_pr_ids must include at least one PR. When nothing shipped, reference the open PRs you wrote about in the 'Active work' section.",
+      `Error: failed to stamp derived fields: ${e instanceof Error ? e.message : String(e)}`,
     );
   }
+
+  ctx.emit({ type: "phase", data: { phase: "finalizing", message: "Finalizing recap…" } });
+
   // Notify the orchestrator that the validation gate passed. The actual
   // status transition is performed by the orchestrator, not here — agent
   // never writes status (CLAUDE.md invariant #11).

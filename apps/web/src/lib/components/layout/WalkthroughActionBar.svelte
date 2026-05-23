@@ -7,12 +7,12 @@ import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import { isChatStreaming } from "$lib/stores/chat.svelte";
 import {
   abort as abortWalkthrough,
+  generateWalkthrough,
   getPendingAction as getWalkthroughPendingAction,
   getRatings as getWalkthroughRatings,
   getWalkthroughUiState,
   regenerate as regenerateWalkthrough,
   resume as resumeWalkthrough,
-  startWalkthrough,
 } from "$lib/stores/walkthrough.svelte";
 import {
   getHasNewContentBelow as getWalkthroughHasNewContentBelow,
@@ -80,7 +80,7 @@ const combinedDisabledTitle = $derived(
         disabledTitle={combinedDisabledTitle}
         onStop={() => abortWalkthrough(prId)}
         onResume={() => resumeWalkthrough(prId)}
-        onGenerate={() => startWalkthrough(prId)}
+        onGenerate={() => generateWalkthrough(prId)}
         onRegenerate={() => regenerateWalkthrough(prId)}
       />
 

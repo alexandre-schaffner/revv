@@ -11,12 +11,11 @@ interface Props {
   period: RecapPeriod;
   /** All recaps for the repo (any period). The component filters internally. */
   recaps: ProjectRecapSummary[];
-  loading: boolean;
   /** When set, this recap is excluded from the list (it's the one shown above). */
   excludeRecapId?: string | null;
 }
 
-let { repoId, period, recaps, loading, excludeRecapId = null }: Props = $props();
+let { repoId, period, recaps, excludeRecapId = null }: Props = $props();
 
 const periodLabel = $derived(period === "daily" ? "daily" : "weekly");
 
@@ -34,8 +33,9 @@ const previous = $derived(
 
 // Stay invisible until there's history to show. Avoids a redundant
 // "No previous recaps yet" panel sitting under the page's own primary
-// empty state on brand-new repos.
-const visible = $derived(loading || previous.length > 0);
+// empty state on brand-new repos. Also stays hidden while loading so we
+// don't render an out-of-vibe placeholder pill.
+const visible = $derived(previous.length > 0);
 
 const DAY_MONTH_YEAR = new Intl.DateTimeFormat("en-GB", {
   weekday: "short",
@@ -71,42 +71,35 @@ function navigate(recapId: string): void {
 		<h2>Previous {periodLabel} recaps</h2>
 	</header>
 
-	{#if loading && previous.length === 0}
-		<div class="previous-empty">
-			<Loader2 size={16} weight="regular" class="animate-spin" aria-hidden="true" />
-			<span>Loading previous recaps…</span>
-		</div>
-	{:else}
-		<ul class="previous-rows">
-			{#each previous as recap (recap.id)}
-				<li>
-					<button
-						type="button"
-						class="previous-row"
-						class:previous-row--generating={recap.status === "generating"}
-						class:previous-row--error={recap.status === "error"}
-						onclick={() => navigate(recap.id)}
-					>
-						<div class="previous-row-head">
-							<span class="period-window">{formatPeriod(recap)}</span>
-							{#if recap.status === "generating"}
-								<Badge variant="secondary">
-									<Loader2 class="animate-spin" />
-									generating
-								</Badge>
-							{:else if recap.status === "error"}
-								<Badge variant="destructive" title={recap.errorMessage ?? undefined}>
-									<CircleAlert />
-									{recap.errorMessage ? "failed" : "error"}
-								</Badge>
-							{/if}
-						</div>
-						<RecapStats stats={recap.summaryStats} />
-					</button>
-				</li>
-			{/each}
-		</ul>
-	{/if}
+	<ul class="previous-rows">
+		{#each previous as recap (recap.id)}
+			<li>
+				<button
+					type="button"
+					class="previous-row"
+					class:previous-row--generating={recap.status === "generating"}
+					class:previous-row--error={recap.status === "error"}
+					onclick={() => navigate(recap.id)}
+				>
+					<div class="previous-row-head">
+						<span class="period-window">{formatPeriod(recap)}</span>
+						{#if recap.status === "generating"}
+							<Badge variant="secondary">
+								<Loader2 class="animate-spin" />
+								generating
+							</Badge>
+						{:else if recap.status === "error"}
+							<Badge variant="destructive" title={recap.errorMessage ?? undefined}>
+								<CircleAlert />
+								{recap.errorMessage ? "failed" : "error"}
+							</Badge>
+						{/if}
+					</div>
+					<RecapStats stats={recap.summaryStats} />
+				</button>
+			</li>
+		{/each}
+	</ul>
 </section>
 {/if}
 
@@ -167,7 +160,7 @@ function navigate(recapId: string): void {
 	}
 
 	.previous-row:hover {
-		background: var(--color-bg-hover, var(--color-bg-tertiary, var(--color-bg-secondary)));
+		background: var(--color-bg-tertiary);
 	}
 
 	.previous-row--generating {
@@ -193,14 +186,4 @@ function navigate(recapId: string): void {
 		letter-spacing: 0.005em;
 	}
 
-	.previous-empty {
-		display: flex;
-		align-items: center;
-		gap: 0.5rem;
-		padding: 0.875rem 1rem;
-		background: var(--color-bg-secondary);
-		border-radius: 0.5rem;
-		font-size: 0.8125rem;
-		color: var(--color-text-secondary);
-	}
 </style>

@@ -4,10 +4,13 @@
 //
 // Thin subscriber around {@link ProjectRecapJobs}. Mirrors the walkthrough
 // SSE handler pattern but radically simpler:
-//   • No SSR pre-render (recap is plain markdown).
+//   • No SSR pre-render.
 //   • No clone polling.
-//   • Reconnect reads the current DB overview as a single chunk, then
-//     attaches to live events if the job is still running.
+//   • Reconnect emits the current `lede` + each `entry` snapshot from the
+//     DB, then attaches to live events if the job is still running.
+//   • Legacy fallback: when there's no structured data but `overview`
+//     markdown is present (pre-rewrite recap), an `overview` event is
+//     emitted so the legacy markdown renderer still works.
 
 import type { ProjectRecapStatus } from "@revv/shared";
 import { Effect } from "effect";
@@ -16,17 +19,21 @@ import { ProjectRecapService } from "../../services/ProjectRecap";
 import { ProjectRecapJobs } from "../../services/ProjectRecapJobs";
 import { createSseStream, sseHeaders } from "../reviews/sse";
 
-/**
- * GET /api/recaps/:id/stream — SSE streaming recap.
- *
- * Handler pattern:
- *   1. Read the recap row.
- *   2. If complete → emit overview + done, close.
- *   3. If error    → emit error, close.
- *   4. If generating → ensure job is running, subscribe (buffered),
- *      emit current overview as initial chunk if non-empty,
- *      flush buffer, forward live events until done/error/close.
- */
+function emitSnapshot(
+  writer: { send: (event: import("@revv/shared").RecapStreamEvent) => void },
+  row: import("@revv/shared").ProjectRecap,
+): void {
+  if (row.lede) {
+    writer.send({ type: "lede", data: { lede: row.lede } });
+  }
+  for (const entry of row.entries) {
+    writer.send({ type: "entry", data: { entry } });
+  }
+  for (const summary of row.themeSummaries) {
+    writer.send({ type: "theme_summary", data: { summary } });
+  }
+}
+
 export function recapStreamHandler(ctx: { params: { id: string } }): Response {
   const { stream, writer, stopHeartbeat, onCancel } = createSseStream();
   onCancel(() => stopHeartbeat());
@@ -42,9 +49,7 @@ export function recapStreamHandler(ctx: { params: { id: string } }): Response {
 
       // Terminal: complete.
       if (status === "complete") {
-        if (row.overview) {
-          writer.send({ type: "overview", data: { overview: row.overview } });
-        }
+        emitSnapshot(writer, row);
         writer.send({ type: "done", data: { recapId: row.id } });
         writer.sendDone();
         return;
@@ -117,8 +122,9 @@ export function recapStreamHandler(ctx: { params: { id: string } }): Response {
         const finalRow = await AppRuntime.runPromise(
           Effect.flatMap(ProjectRecapService, (s) => s.getById(ctx.params.id)),
         );
-        if (finalRow.status === "complete" && finalRow.overview) {
-          writer.send({ type: "overview", data: { overview: finalRow.overview } });
+        if (finalRow.status === "complete") {
+          emitSnapshot(writer, finalRow);
+          writer.send({ type: "done", data: { recapId: finalRow.id } });
         } else if (finalRow.status === "error") {
           writer.send({
             type: "error",
@@ -128,51 +134,23 @@ export function recapStreamHandler(ctx: { params: { id: string } }): Response {
             },
           });
         }
-        if (finalRow.status === "complete") {
-          writer.send({ type: "done", data: { recapId: finalRow.id } });
-        }
         writer.close();
         return;
       }
 
       onCancel(sub.unsubscribe);
 
-      // Flush the buffer (drains pre-subscribe events through the callback,
-      // then switches to direct-forward mode) BEFORE reading the snapshot.
-      // This way any chunk emitted during the snapshot read fires
-      // synchronously to the wire, and the snapshot is sent as a single
-      // authoritative `overview` event that replaces client state — no
-      // duplication regardless of inter-leaving.
+      // Flush buffered events (delivered through the subscriber callback
+      // in arrival order) BEFORE reading the snapshot. Then re-read the
+      // row so any writes committed between phase 1 and now are reflected
+      // in the replay snapshot.
       sub.flush();
 
-      // Re-read the row after subscribing/flushing so any chunks committed
-      // between phase 1 and now are reflected in the snapshot.
       const snapshot = await AppRuntime.runPromise(
         Effect.flatMap(ProjectRecapService, (s) => s.getById(ctx.params.id)),
       ).catch(() => row);
 
-      // Pre-commit fallback: the recap pipeline buffers the agent's
-      // streamed text in memory and only writes to DB on
-      // `commit_recap_overview`. If the DB overview is still empty
-      // (agent is mid-composition), grab the live in-memory buffer
-      // from the running job so the reconnecting client sees the
-      // partial composition rather than blank text until commit fires.
-      const liveBuffer =
-        snapshot.overview && snapshot.overview.length > 0
-          ? null
-          : await AppRuntime.runPromise(
-              Effect.flatMap(ProjectRecapJobs, (jobs) => jobs.getCurrentBuffer(ctx.params.id)),
-            ).catch(() => null);
-
-      const snapshotOverview =
-        snapshot.overview && snapshot.overview.length > 0 ? snapshot.overview : liveBuffer;
-
-      // Replay snapshot as an `overview` event (replaces client state)
-      // rather than `chunk` (which appends). On reconnect with surviving
-      // client state, appending duplicates the overview text.
-      if (snapshotOverview && snapshotOverview.length > 0) {
-        writer.send({ type: "overview", data: { overview: snapshotOverview } });
-      }
+      emitSnapshot(writer, snapshot);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       writer.send({ type: "error", data: { code: "SetupError", message } });

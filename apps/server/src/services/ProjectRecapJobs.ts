@@ -104,16 +104,6 @@ interface ActiveRecapJob {
    * row.
    */
   readonly previousOverview: string | null;
-  /**
-   * Mutable closure cell holding the agent's currently-buffered visible
-   * assistant text. The runner's stream consumer appends text-deltas
-   * here (and resets on each non-commit tool-call). The SSE route reads
-   * `.current` on reconnect to hand a pre-commit snapshot to a fresh
-   * subscriber. The same reference is also threaded into the
-   * `RecapToolContext` so `commit_recap_overview`'s handler reads from
-   * the same buffer.
-   */
-  readonly textBuffer: { current: string };
 }
 
 export type StartRecapJobTrigger = "scheduler" | "manual" | "resume";
@@ -191,15 +181,6 @@ export class ProjectRecapJobs extends Context.Tag("ProjectRecapJobs")<
      * Fan an event out to a running job's subscribers. No-op if no active job.
      */
     readonly emitEvent: (recapId: string, event: RecapStreamEvent) => Effect.Effect<EmitResult>;
-
-    /**
-     * Snapshot the in-memory text buffer for a generating recap. Used by
-     * the SSE route on reconnect: when the DB overview is still empty
-     * (the agent hasn't called `commit_recap_overview` yet), the buffer
-     * carries the partial composition the agent has streamed so far.
-     * Returns null when no live job exists or the buffer is empty.
-     */
-    readonly getCurrentBuffer: (recapId: string) => Effect.Effect<string | null>;
 
     /**
      * Issue an opaque session token bound to a prepared {@link RecapToolContext}.
@@ -949,8 +930,15 @@ export const ProjectRecapJobsLive = Layer.effect(
           return Effect.runPromise(loadDiffForPr(row.pr, repo.fullName, cachedToken));
         };
 
+        // Compact diffs into per-PR digests for every PR (archived OR open)
+        // that lacks a completed walkthrough. Open PRs follow the same
+        // protocol as archived no-walkthrough PRs: the agent reads
+        // `diffDigest` from the source bundle when writing each
+        // `add_pr_entry` description. Without this open PRs would only carry
+        // a body excerpt, and active-work entries would read very differently
+        // from shipped entries.
         const digestEntries = yield* Effect.forEach(
-          windowed.filter((row) => row.walkthrough === null),
+          [...windowed, ...openPrs].filter((row) => row.walkthrough === null),
           (row) =>
             Effect.gen(function* () {
               if (cachedToken === undefined) {
@@ -1075,7 +1063,6 @@ export const ProjectRecapJobsLive = Layer.effect(
               },
               getPrDiff,
               emitEvent: emit,
-              textBuffer: job.textBuffer,
             });
           },
           catch: (e) => new ValidationError({ message: String(e) }),
@@ -1318,7 +1305,6 @@ export const ProjectRecapJobsLive = Layer.effect(
               subscribers: new Set<SubscriberHandle>(),
               nextSeq: 0,
               previousOverview: params.previousOverview ?? null,
-              textBuffer: { current: "" },
             };
             yield* launchJob(job);
             return { recapId };
@@ -1389,15 +1375,6 @@ export const ProjectRecapJobsLive = Layer.effect(
         }
         const seq = fanOut(job, event);
         return { kind: "delivered", seq };
-      });
-
-    const getCurrentBuffer = (recapId: string): Effect.Effect<string | null> =>
-      Effect.gen(function* () {
-        const map = yield* Ref.get(registry);
-        const job = map.get(recapId);
-        if (!job) return null;
-        const text = job.textBuffer.current;
-        return text.length > 0 ? text : null;
       });
 
     const regenerateForPeriod = (params: {
@@ -1528,7 +1505,6 @@ export const ProjectRecapJobsLive = Layer.effect(
       resumePending,
       subscribe,
       emitEvent,
-      getCurrentBuffer,
       issueSessionToken,
       resolveSessionToken,
       clearSessionToken,
@@ -1542,12 +1518,14 @@ function attachRecapDigests(
   bundle: RecapSourceBundle,
   digests: ReadonlyMap<string, RecapSourcePrDigest>,
 ): RecapSourceBundle {
+  const attach = (pr: RecapSourcePr): RecapSourcePr => ({
+    ...pr,
+    diffDigest: pr.walkthrough ? null : (digests.get(pr.id) ?? pr.diffDigest),
+  });
   return {
     ...bundle,
-    prs: bundle.prs.map((pr) => ({
-      ...pr,
-      diffDigest: pr.walkthrough ? null : (digests.get(pr.id) ?? pr.diffDigest),
-    })),
+    prs: bundle.prs.map(attach),
+    openPrs: bundle.openPrs.map(attach),
   };
 }
 

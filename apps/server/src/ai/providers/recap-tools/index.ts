@@ -10,15 +10,17 @@
 
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import {
-  commitRecapOverviewHandler,
+  addPrEntryHandler,
   completeRecapHandler,
   getPrDiffHandler,
   getRecapStateHandler,
   getRepoContextHandler,
   listOpenPrsHandler,
+  setLedeHandler,
+  setThemeSummaryHandler,
 } from "./handlers";
 import {
-  commitRecapOverviewSchema,
+  addPrEntrySchema,
   completeRecapSchema,
   getPrDiffSchema,
   getRecapStateSchema,
@@ -26,10 +28,12 @@ import {
   listOpenPrsSchema,
   type RecapToolContext,
   type RecapToolSpec,
+  setLedeSchema,
+  setThemeSummarySchema,
 } from "./spec";
 
 export type {
-  CommitRecapOverviewInput,
+  AddPrEntryInput,
   CompleteRecapInput,
   GetPrDiffInput,
   GetRecapStateInput,
@@ -44,14 +48,18 @@ export type {
   RecapToolHandler,
   RecapToolResult,
   RecapToolSpec,
+  SetLedeInput,
+  SetThemeSummaryInput,
 } from "./spec";
 export {
-  commitRecapOverviewHandler,
+  addPrEntryHandler,
   completeRecapHandler,
   getPrDiffHandler,
   getRecapStateHandler,
   getRepoContextHandler,
   listOpenPrsHandler,
+  setLedeHandler,
+  setThemeSummaryHandler,
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -73,7 +81,7 @@ export const RECAP_TOOL_SPECS: Array<RecapToolSpec<any>> = [
   {
     name: "list_open_prs",
     description:
-      "Read-only. Paginated fetch over the currently open PRs that get_recap_state reported (already capped server-side at the 20 most recently updated). Start with offset=0; the response includes `nextOffset` — keep paging while it's non-null, then stop. Default page size is 5; raise it only if you have a reason. Each row carries author, branches, +/- stats, a body excerpt, and the latest complete walkthrough when one exists. Use these rows to write the 'Active work' section.",
+      "Read-only. Paginated fetch over currently open PRs (capped server-side at 20 most recently updated). Open PRs are FIRST-CLASS recap entries — call add_pr_entry for the worthwhile ones (present-tense verb/description). The UI renders open entries as an 'In progress' subgroup inside each theme chapter, alongside the shipped entries. Default page size 5; pass `nextOffset` from the response to walk pages.",
     inputSchema: listOpenPrsSchema,
     handler: listOpenPrsHandler,
   },
@@ -85,16 +93,30 @@ export const RECAP_TOOL_SPECS: Array<RecapToolSpec<any>> = [
     handler: getRepoContextHandler,
   },
   {
-    name: "commit_recap_overview",
+    name: "set_lede",
     description:
-      "Atomic content write. Call ONCE after writing the complete recap as your visible assistant response. The server reads the markdown you just typed from the streaming buffer and persists it together with the provenance arrays (source_pr_ids + source_walkthrough_ids) and the pre-aggregated stats — you pass ONLY the metadata as arguments. Do not re-serialise the markdown here; if the buffer is empty you'll get an error pointing you back at composition. Idempotent — a retry with the same recapId replaces the prior content.",
-    inputSchema: commitRecapOverviewSchema,
-    handler: commitRecapOverviewHandler,
+      "Atomic write. Call ONCE before adding entries. Persists a 1–3 sentence editorial lede summarizing the period. Plain text + optional `<strong>` / `<em>` only; everything else is stripped. Idempotent — calling again overwrites the prior lede.",
+    inputSchema: setLedeSchema,
+    handler: setLedeHandler,
+  },
+  {
+    name: "add_pr_entry",
+    description:
+      "Atomic idempotent write. Call ONCE per PR you want in the recap. Upserts on (recap_id, pr_id) — re-calling with the same pr_id replaces the row in place. Pick a SHORT, REUSABLE theme label (lowercase noun) that groups this PR with related work — the UI chapters by theme. Skip pure chores/typo fixes at your editorial discretion.",
+    inputSchema: addPrEntrySchema,
+    handler: addPrEntryHandler,
+  },
+  {
+    name: "set_theme_summary",
+    description:
+      "Atomic idempotent write. Call ONCE per distinct theme you used in add_pr_entry, AFTER all add_pr_entry calls. Persists a 1–2 sentence editorial summary that the UI renders as a small lede paragraph below the theme heading. Upserts on (recap_id, theme) — re-calling with the same theme overwrites in place. Use the same lowercase label you passed to add_pr_entry; server normalizes (lowercase + trim + collapse whitespace) before keying. Optional but strongly encouraged — chapters read much better with a sentence framing what landed.",
+    inputSchema: setThemeSummarySchema,
+    handler: setThemeSummaryHandler,
   },
   {
     name: "complete_recap",
     description:
-      "Validation gate. Call LAST. Asserts the overview is non-empty and at least one source PR was included. Signals the orchestrator to flip status='complete'. After this call returns success, you may stop emitting tool calls.",
+      "Validation gate. Call LAST. Asserts the lede is non-empty AND at least one PR entry exists. Stamps the recap's derived fields (summary_stats from the source bundle, source_pr_ids + source_walkthrough_ids from the entries, total_lines_added/removed) and signals the orchestrator to flip status='complete'. After this returns success, you may stop emitting tool calls.",
     inputSchema: completeRecapSchema,
     handler: completeRecapHandler,
   },

@@ -17,12 +17,19 @@ import type {
   ProjectRecapStatus,
   ProjectRecapSummary,
   RecapPeriod,
+  RecapPrEntry,
   RecapSummaryStats,
+  RecapThemeSummary,
 } from "@revv/shared";
 import { EMPTY_RECAP_STATS } from "@revv/shared";
-import { and, desc, eq, isNull, lt } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lt } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
-import { projectRecaps } from "../db/schema/index";
+import {
+  projectRecaps,
+  recapPrEntries,
+  recapThemeSummaries,
+  remoteUsers,
+} from "../db/schema/index";
 import { RecapNotFoundError, ValidationError } from "../domain/errors";
 import { DbService } from "./Db";
 
@@ -63,14 +70,22 @@ function parseStringArray(json: string): string[] {
   }
 }
 
-function rowToRecap(row: typeof projectRecaps.$inferSelect): ProjectRecap {
+function rowToRecap(
+  row: typeof projectRecaps.$inferSelect,
+  entries: ReadonlyArray<RecapPrEntry> = [],
+  themeSummaries: ReadonlyArray<RecapThemeSummary> = [],
+): ProjectRecap {
   return {
     id: row.id,
     repositoryId: row.repositoryId,
     period: row.period as RecapPeriod,
     periodStart: row.periodStart,
     periodEnd: row.periodEnd,
-    overview: row.overview,
+    lede: row.lede,
+    totalLinesAdded: row.totalLinesAdded,
+    totalLinesRemoved: row.totalLinesRemoved,
+    entries,
+    themeSummaries,
     status: row.status as ProjectRecapStatus,
     supersededBy: row.supersededBy ?? null,
     generatedAt: row.generatedAt,
@@ -80,6 +95,39 @@ function rowToRecap(row: typeof projectRecaps.$inferSelect): ProjectRecap {
     sourceWalkthroughIds: parseStringArray(row.sourceWalkthroughIds),
     summaryStats: parseStats(row.summaryStats),
     errorMessage: row.errorMessage ?? null,
+  };
+}
+
+function themeSummaryRowToSummary(
+  row: typeof recapThemeSummaries.$inferSelect,
+): RecapThemeSummary {
+  return {
+    id: row.id,
+    recapId: row.recapId,
+    theme: row.theme,
+    summary: row.summary,
+  };
+}
+
+function entryRowToEntry(
+  row: typeof recapPrEntries.$inferSelect,
+  avatar: string | null = null,
+): RecapPrEntry {
+  return {
+    id: row.id,
+    recapId: row.recapId,
+    prId: row.prId,
+    position: row.position,
+    theme: row.theme,
+    verb: row.verb,
+    prTitle: row.prTitle,
+    prExternalId: row.prExternalId,
+    prAuthorLogin: row.prAuthorLogin,
+    prAuthorAvatar: avatar,
+    description: row.description,
+    linesAdded: row.linesAdded,
+    linesRemoved: row.linesRemoved,
+    prState: row.prState,
   };
 }
 
@@ -298,7 +346,43 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
       if (!row) {
         return yield* Effect.fail(new RecapNotFoundError({ recapId: id }));
       }
-      return rowToRecap(row);
+      const entryRows = yield* Effect.try({
+        try: () =>
+          db
+            .select()
+            .from(recapPrEntries)
+            .where(eq(recapPrEntries.recapId, id))
+            .orderBy(asc(recapPrEntries.position))
+            .all(),
+        catch: (e) => new ValidationError({ message: `getById entries: ${String(e)}` }),
+      });
+      const logins = Array.from(new Set(entryRows.map((r) => r.prAuthorLogin).filter(Boolean)));
+      const avatarsByLogin = yield* Effect.try({
+        try: () => {
+          if (logins.length === 0) return new Map<string, string | null>();
+          const rows = db
+            .select({ login: remoteUsers.login, avatarContent: remoteUsers.avatarContent })
+            .from(remoteUsers)
+            .where(and(eq(remoteUsers.provider, "github"), inArray(remoteUsers.login, logins)))
+            .all();
+          return new Map(rows.map((r) => [r.login, r.avatarContent ?? null]));
+        },
+        catch: (e) => new ValidationError({ message: `getById avatars: ${String(e)}` }),
+      });
+      const themeSummaryRows = yield* Effect.try({
+        try: () =>
+          db
+            .select()
+            .from(recapThemeSummaries)
+            .where(eq(recapThemeSummaries.recapId, id))
+            .all(),
+        catch: (e) => new ValidationError({ message: `getById theme summaries: ${String(e)}` }),
+      });
+      return rowToRecap(
+        row,
+        entryRows.map((r) => entryRowToEntry(r, avatarsByLogin.get(r.prAuthorLogin) ?? null)),
+        themeSummaryRows.map(themeSummaryRowToSummary),
+      );
     }),
 
   findActiveForPeriod: (repoId, period, periodStart) =>
@@ -394,7 +478,10 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
             .orderBy(desc(projectRecaps.completedAt))
             .limit(limit)
             .all();
-          return rows.map(rowToRecap);
+          // `.map(rowToRecap)` would invoke with (row, index) and the index
+          // would conflict with our optional `entries` second arg. Use an
+          // explicit arrow to drop the index.
+          return rows.map((r) => rowToRecap(r));
         },
         catch: (e) => new ValidationError({ message: `getLatestForRepo: ${String(e)}` }),
       });
@@ -490,6 +577,9 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
           const previousOverview = row.overview ?? "";
           const patch: Record<string, unknown> = {
             overview: "",
+            lede: "",
+            totalLinesAdded: 0,
+            totalLinesRemoved: 0,
             status: "generating",
             completedAt: null,
             errorMessage: null,
@@ -507,6 +597,14 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
             patch.periodEnd = newBoundaries.periodEnd;
           }
           db.update(projectRecaps).set(patch).where(eq(projectRecaps.id, recapId)).run();
+          // Clear structured entries and theme summaries from the prior run;
+          // the agent will re-add via add_pr_entry / set_theme_summary.
+          // Cascades from recap_id are not enough since the recap row itself
+          // stays put.
+          db.delete(recapPrEntries).where(eq(recapPrEntries.recapId, recapId)).run();
+          db.delete(recapThemeSummaries)
+            .where(eq(recapThemeSummaries.recapId, recapId))
+            .run();
           return { previousOverview };
         },
         catch: (e) => {

@@ -115,10 +115,10 @@ export class RecapNotFoundError extends Data.TaggedError("RecapNotFoundError")<{
 
 /**
  * Raised by the recap MCP tool surface when an out-of-order or
- * structurally-invalid call lands (e.g. `complete_recap` before
- * `commit_recap_overview`, or `commit_recap_overview` with an empty text
- * buffer). The agent receives this as a structured error result and can
- * recover by issuing the right call.
+ * structurally-invalid call lands (e.g. `complete_recap` before `set_lede`,
+ * or `add_pr_entry` with a pr_id not in the source bundle). The agent
+ * receives this as a structured error result and can recover by issuing
+ * the right call.
  */
 export class RecapPreconditionError extends Data.TaggedError("RecapPreconditionError")<{
   readonly recapId: string;

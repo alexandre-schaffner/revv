@@ -326,7 +326,7 @@ export function getWalkthroughUiState(): WalkthroughUiState {
 // double-click can't fire two concurrent destructive actions during the async
 // POST → reset-entry → SSE-event dance.
 
-export type PendingAction = "regenerate" | "resume";
+export type PendingAction = "regenerate" | "resume" | "start";
 
 const pendingActions = $state({
   map: new SvelteMap<string, PendingAction>(),
@@ -953,9 +953,14 @@ export async function pollCloneUntilResolved(prId: string, repoId: string): Prom
 // ── User-driven actions (REST → server broadcasts via SSE bus) ──────────────
 
 /**
- * Trigger fresh walkthrough generation for `prId`. The server is
- * idempotent — if a job is already running for this PR's head SHA it
- * returns the existing walkthroughId instead of starting a new one.
+ * Thin POST that asks the server to start a walkthrough. Server-side is
+ * idempotent — if a job is already running for this PR's head SHA the
+ * existing walkthroughId is returned. Used by `regenerate()` (which has
+ * already cleared its own entry) and by the after-clone callers
+ * (GuidedWalkthrough effect, `pollCloneUntilResolved`), both of which
+ * keep their own UI state and just need the server-side job kicked off.
+ * UI-facing button clicks should use {@link generateWalkthrough} instead,
+ * which adds the pending-action + optimistic-seed feedback.
  */
 export async function startWalkthrough(prId: string): Promise<void> {
   try {
@@ -968,6 +973,49 @@ export async function startWalkthrough(prId: string): Promise<void> {
       "lifecycle",
       `startWalkthrough prId=${prId} error=${e instanceof Error ? e.message : String(e)}`,
     );
+  }
+}
+
+/**
+ * User-action wrapper for the "Generate walkthrough" button. Sets a pending
+ * action so the button stays disabled across the round-trip and
+ * optimistically seeds a streaming entry so the action bar flips to "Stop
+ * generation" immediately — without this the server can spend seconds on
+ * resolveWithDiff + agent daemon boot before emitting `lifecycle:started`,
+ * and the click looks like a no-op. The button is template-gated on the
+ * UI state being `absent` or `idle`, so the seed is always safe here.
+ */
+export async function generateWalkthrough(prId: string): Promise<void> {
+  if (pendingActions.map.has(prId)) return;
+  setPending(prId, "start");
+
+  const seed = freshEntry();
+  seed.phaseMessage = "Starting walkthrough…";
+  setEntry(prId, seed);
+  store.activePrId = prId;
+
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/reviews/${prId}/walkthrough/start`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    if (!res.ok) {
+      updateEntry(prId, (e) => {
+        e.isStreaming = false;
+        e.streamError = `Failed to start walkthrough (HTTP ${res.status}).`;
+      });
+    }
+  } catch (e) {
+    wtTrace(
+      "lifecycle",
+      `generateWalkthrough prId=${prId} error=${e instanceof Error ? e.message : String(e)}`,
+    );
+    updateEntry(prId, (entry) => {
+      entry.isStreaming = false;
+      entry.streamError = e instanceof Error ? e.message : "Failed to start walkthrough";
+    });
+  } finally {
+    clearPending(prId);
   }
 }
 

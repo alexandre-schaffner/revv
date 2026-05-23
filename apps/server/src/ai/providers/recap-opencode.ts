@@ -3,14 +3,12 @@
 // Opencode driver for project-recap generation. Mirrors the walkthrough's
 // `mcp-walkthrough-opencode.ts` but smaller:
 //
-//   • Single-phase pipeline (compose-as-text → `commit_recap_overview` →
-//     `complete_recap`), so no phase machine and no real-time stream guard.
-//   • SSE subscriber (`subscribeOpencodeStream`) fans every `text-delta`
-//     out as a `chunk` event to UI subscribers AND appends to
-//     `ctx.textBuffer.current` so `commit_recap_overview`'s handler can
-//     read the markdown body. Tool-call events reset the buffer (except
-//     for `commit_recap_overview` itself, whose handler reads the buffer
-//     immediately after the SSE event surfaces).
+//   • Structured pipeline (`set_lede` + `add_pr_entry × N` + `complete_recap`)
+//     with no text buffer — all content flows through tool args.
+//   • SSE subscriber (`subscribeOpencodeStream`) forwards reasoning deltas
+//     as `thought` events and tool calls as `activity` events. Visible
+//     assistant text is discarded because the agent isn't supposed to emit
+//     any between tool calls in this pipeline.
 //   • Per CLAUDE.md invariant #13, the MCP tool handlers invoked by the
 //     daemon run through the SAME shared handlers the Claude SDK path
 //     uses (`apps/server/src/ai/providers/recap-tools/handlers.ts`).
@@ -21,7 +19,7 @@
 //   1. Ask the OpencodeSupervisor for a running daemon (lazy-started).
 //   2. Issue a session token in `ProjectRecapJobs` bound to the prepared
 //      `RecapToolContext` (recapId + sourceBundle + priorRecaps +
-//      onCompleted hook + textBuffer).
+//      onCompleted hook).
 //   3. Register `/mcp/recap` as a remote MCP server on the daemon via
 //      `client.mcp.add` with the bearer token in the connection headers.
 //   4. Create an opencode session, subscribe to `/global/event` SSE, and
@@ -230,18 +228,13 @@ export async function runRecapAgentViaOpencode(
         sessionId = turnSessionId;
         debug("recap-opencode", "created session:", turnSessionId);
 
-        // ── 3. Subscribe to /global/event SSE for live text-deltas ──
+        // ── 3. Subscribe to /global/event SSE for live tool calls ──
         //
-        // The agent writes the recap markdown as visible assistant
-        // text — those text-deltas land on `/global/event` as
-        // `message.part.updated` frames. Forward each delta to
-        // `ctx.emit({type:"chunk", ...})` for the UI AND append to
-        // `ctx.textBuffer.current` so `commit_recap_overview`'s handler
-        // can read the markdown body when its HTTP-MCP call lands.
-        // Pre-commit read tool calls reset the buffer to drop any
-        // pre-composition prelude. `commit_recap_overview` and
-        // `complete_recap` must not reset: commit reads the buffer, and
-        // complete fires after the committed overview has reached the UI.
+        // All recap content flows through tool args under the structured
+        // pipeline; visible assistant text is discarded. Per CLAUDE.md
+        // invariant #13, both transports exhibit identical externally-
+        // observable behavior — see `recap-agent-runner.ts` for the
+        // matching Claude SDK path.
         const sseAbort = new AbortController();
         // Shared dedup state with the backstop walk below — anything
         // SSE already streamed is skipped when we walk response.parts.
@@ -263,18 +256,13 @@ export async function runRecapAgentViaOpencode(
         // Throttle reasoning-delta phase events so the UI doesn't
         // spam "Model is thinking…" on every token.
         let lastReasoningPush = 0;
-        let committed = false;
         const sseDone = subscribeOpencodeStream(
           client,
           turnSessionId,
           sseAbort.signal,
           (ev) => {
             if (ev.kind === "text-delta") {
-              if (ev.data.length === 0) return;
-              params.ctx.textBuffer.current += ev.data;
-              if (!committed) {
-                fanOutEvent({ type: "chunk", data: { text: ev.data } });
-              }
+              // Discard visible text — content flows through tool args.
               return;
             }
             if (ev.kind === "reasoning-delta") {
@@ -301,16 +289,6 @@ export async function runRecapAgentViaOpencode(
             if (ev.kind === "tool-call") {
               const toolName = normalizeRecapToolName(ev.bareName);
               fanOutEvent({ type: "activity", data: buildRecapActivity(toolName, ev.input) });
-              if (toolName === "commit_recap_overview") {
-                committed = true;
-              } else if (toolName !== "complete_recap" && !committed) {
-                // Mirror the server-side buffer reset on the wire so the
-                // UI drops the agent's pre-composition narration. See
-                // recap-agent-runner.ts for the matching reset in the
-                // Claude SDK path.
-                params.ctx.textBuffer.current = "";
-                fanOutEvent({ type: "overview", data: { overview: "" } });
-              }
               debug("recap-opencode", `tool-call: ${toolName} (source=${ev.source})`);
               return;
             }
@@ -422,11 +400,8 @@ export async function runRecapAgentViaOpencode(
 
         // Backstop walk: emit anything SSE missed via the synchronous
         // response body. Shared dedup state makes this a no-op for
-        // anything SSE already streamed (the common case). Only the
-        // recap's `commit_recap_overview` cares about the textBuffer,
-        // and its HTTP-MCP handler has already read it by now — any
-        // late-arriving text-deltas here are appended to the buffer
-        // but never consumed, which is harmless.
+        // anything SSE already streamed (the common case). Visible text
+        // is discarded; tool calls become `activity` events.
         walkOpencodePartsWithState(
           response.parts,
           {
@@ -437,11 +412,6 @@ export async function runRecapAgentViaOpencode(
           },
           (ev) => {
             if (ev.kind === "text-delta") {
-              if (ev.data.length === 0) return;
-              params.ctx.textBuffer.current += ev.data;
-              if (!committed) {
-                fanOutEvent({ type: "chunk", data: { text: ev.data } });
-              }
               return;
             }
             if (ev.kind === "reasoning-delta") {
@@ -454,12 +424,6 @@ export async function runRecapAgentViaOpencode(
             if (ev.kind === "tool-call") {
               const toolName = normalizeRecapToolName(ev.bareName);
               fanOutEvent({ type: "activity", data: buildRecapActivity(toolName, ev.input) });
-              if (toolName === "commit_recap_overview") {
-                committed = true;
-              } else if (toolName !== "complete_recap" && !committed) {
-                params.ctx.textBuffer.current = "";
-                fanOutEvent({ type: "overview", data: { overview: "" } });
-              }
               return;
             }
             if (ev.kind === "error") {

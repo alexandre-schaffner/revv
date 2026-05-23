@@ -24,6 +24,8 @@ import {
   regenerateRecap,
   stopRecap,
 } from "$lib/stores/recaps.svelte";
+import { getMainAreaBounds } from "$lib/stores/sidebar.svelte";
+import DotMatrixLoader from "./DotMatrixLoader.svelte";
 import PreviousRecaps from "./PreviousRecaps.svelte";
 import RecapDetail from "./RecapDetail.svelte";
 
@@ -227,6 +229,15 @@ async function onStop(): Promise<void> {
   if (!id) return;
   await stopRecap(id);
 }
+
+// Pin the floating action bar to the same horizontal span as the floating
+// tabs above (which also use getMainAreaBounds), so both feel anchored to
+// the same midline regardless of sidebar / right-panel state.
+const bounds = $derived(getMainAreaBounds());
+const actionsFloatStyle = $derived(
+  `position: fixed; left: ${bounds.left}px; right: ${bounds.right}px; ` +
+    `bottom: calc(var(--bottombar-height) + 2 * var(--spacing-island));`,
+);
 </script>
 
 <div class="period-view">
@@ -234,17 +245,16 @@ async function onStop(): Promise<void> {
 		<RecapDetail
 			recap={latestDetail}
 			loading={detailLoading}
+			{period}
 			{stream}
 		/>
 	{:else if latest && detailLoading}
-		<div class="period-loading">
-			<Loader2 size={20} weight="regular" class="animate-spin" aria-hidden="true" />
-			<p>Loading {periodLabelLower} recap…</p>
+		<div class="loader-fullscreen">
+			<DotMatrixLoader label="Loading {periodLabelLower} recap" />
 		</div>
 	{:else if listLoading && recaps.length === 0}
-		<div class="period-loading">
-			<Loader2 size={20} weight="regular" class="animate-spin" aria-hidden="true" />
-			<p>Loading recaps…</p>
+		<div class="loader-fullscreen">
+			<DotMatrixLoader label="Loading recaps" />
 		</div>
 	{:else}
 		<header class="period-hero">
@@ -262,17 +272,18 @@ async function onStop(): Promise<void> {
 		</header>
 	{/if}
 
-	<PreviousRecaps
-		{repoId}
-		{period}
-		{recaps}
-		loading={listLoading}
-		excludeRecapId={latestId}
-	/>
+	<div class="aux">
+		<PreviousRecaps
+			{repoId}
+			{period}
+			{recaps}
+			excludeRecapId={latestId}
+		/>
+	</div>
 </div>
 
 {#if showGenerateFab || genActionState}
-	<div class="actions-float">
+	<div class="actions-float" style={actionsFloatStyle}>
 		<div class="actions-row">
 			{#if showGenerateFab}
 				<GlassPill
@@ -331,24 +342,25 @@ async function onStop(): Promise<void> {
 	.period-view {
 		display: flex;
 		flex-direction: column;
-		max-width: 56rem;
+		width: 100%;
+	}
+
+	/* Center the loader vertically + horizontally in the available viewport
+	   while the recap (or the recap list) is loading. Approximate viewport
+	   height by subtracting the app shell chrome so the loader sits in the
+	   visual middle of the page area, not the middle of the document. */
+	.loader-fullscreen {
+		display: grid;
+		place-items: center;
+		min-height: calc(100vh - 8rem);
+		width: 100%;
+	}
+
+	.aux {
+		max-width: 1280px;
 		margin: 0 auto;
 		width: 100%;
-		padding: 1rem 1.25rem 4rem;
-	}
-
-	.period-loading {
-		display: flex;
-		gap: 0.625rem;
-		align-items: center;
-		padding: 1rem 1.25rem;
-		background: var(--color-bg-secondary);
-		border-radius: 0.5rem;
-		color: var(--color-text-secondary);
-	}
-
-	.period-loading p {
-		margin: 0;
+		padding: 0 2rem 4rem;
 	}
 
 	/* Editorial empty state. Mono eyebrow → display heading → lede.
@@ -357,7 +369,10 @@ async function onStop(): Promise<void> {
 		display: flex;
 		flex-direction: column;
 		gap: 0.75rem;
-		padding: 3.5rem 0.25rem 1.5rem;
+		max-width: 56rem;
+		margin: 0 auto;
+		width: 100%;
+		padding: 3.5rem 2rem 1.5rem;
 	}
 
 	.period-eyebrow {

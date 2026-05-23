@@ -1051,6 +1051,12 @@ diffs-container {
   padding: 8px 0 10px;
   z-index: 10;
   pointer-events: none;
+  /* Matches `.tabs-float`: left tracks sidebar resize (smooth), right snaps
+     with the right-panel slide (instant) so the action bar always feels
+     anchored to the same midline as the floating tabs above it. */
+  transition:
+    left var(--duration-smooth) var(--ease-out-expo),
+    right var(--duration-instant) var(--ease-out-expo);
 }
 .actions-float * {
   pointer-events: auto;

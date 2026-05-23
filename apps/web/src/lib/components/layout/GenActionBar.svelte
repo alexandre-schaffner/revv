@@ -41,7 +41,9 @@ const destructiveTitle = $derived(
         ? "Resuming…"
         : pendingAction === "stop"
           ? "Stopping…"
-          : undefined),
+          : pendingAction === "start"
+            ? "Starting…"
+            : undefined),
 );
 </script>
 
