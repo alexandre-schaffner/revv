@@ -149,6 +149,31 @@ export const PollSchedulerLive = Layer.effect(
           return accountById.get(accId) ?? null;
         };
 
+        // Per-cycle short-circuit: when an account's token returns 401 on the
+        // first GitHub call we attempt, stop trying it for the remainder of
+        // this tick. Without this gate, every repo bound to that account
+        // produces its own 401 + error log — a single signed-out user with
+        // ten repos used to spew ten "search failed" messages and burn ten
+        // round-trips. The next tick re-reads `account.accessToken`, so a
+        // freshly-signed-in user resumes automatically on the following
+        // poll interval.
+        const invalidAccountIds = new Set<string>();
+        const isAuthErr = (e: unknown): boolean =>
+          typeof e === "object" &&
+          e !== null &&
+          (e as { _tag?: string })._tag === "GitHubAuthError";
+        const markAuthFailure = (acc: AccountCtx, where: string): Effect.Effect<void> =>
+          Effect.sync(() => {
+            if (invalidAccountIds.has(acc.id)) return;
+            invalidAccountIds.add(acc.id);
+            logError(
+              "PollScheduler",
+              `GitHub token rejected for account ${acc.id} (${acc.githubLogin ?? "?"}) during ${where}; skipping remaining work for this account this cycle. Next tick will retry with the latest token.`,
+            );
+          });
+        const skipInvalid = (acc: AccountCtx | null): boolean =>
+          acc !== null && invalidAccountIds.has(acc.id);
+
         // Capture existing SHAs before sync for change detection
         const existingPrs = yield* withDb(prService.listPrs());
         const existingShaMap = new Map(
@@ -168,11 +193,16 @@ export const PollSchedulerLive = Layer.effect(
             Effect.gen(function* () {
               const acc = accountForRepo(repo.id);
               const token = acc?.accessToken ?? "";
-              if (!token) return;
+              if (!token || skipInvalid(acc)) return;
               const repoApiBase = hostToApiBase(repo.githubHost);
-              const fresh = yield* github
-                .getRepoFresh(repo.fullName, token, repoApiBase)
-                .pipe(Effect.catchAll(() => Effect.succeed(null)));
+              const fresh = yield* github.getRepoFresh(repo.fullName, token, repoApiBase).pipe(
+                Effect.tapError((err) =>
+                  isAuthErr(err) && acc
+                    ? markAuthFailure(acc, "repo metadata refresh")
+                    : Effect.void,
+                ),
+                Effect.catchAll(() => Effect.succeed(null)),
+              );
               if (!fresh) return;
               if (
                 fresh.avatarUrl !== repo.avatarUrl ||
@@ -220,10 +250,13 @@ export const PollSchedulerLive = Layer.effect(
           accountRows,
           (acc) =>
             Effect.gen(function* () {
-              if (!acc.accessToken) return;
-              const fresh = yield* github
-                .getAuthenticatedUserFresh(acc.accessToken)
-                .pipe(Effect.catchAll(() => Effect.succeed(null)));
+              if (!acc.accessToken || invalidAccountIds.has(acc.id)) return;
+              const fresh = yield* github.getAuthenticatedUserFresh(acc.accessToken).pipe(
+                Effect.tapError((err) =>
+                  isAuthErr(err) ? markAuthFailure(acc, "account avatar refresh") : Effect.void,
+                ),
+                Effect.catchAll(() => Effect.succeed(null)),
+              );
               if (!fresh) return;
 
               const avatarChanged = acc.avatarUrl !== fresh.avatarUrl;
@@ -313,12 +346,17 @@ export const PollSchedulerLive = Layer.effect(
                 );
                 return null;
               }
+              if (skipInvalid(acc)) return null;
 
               const repoApiBase = hostToApiBase(repo.githubHost);
               const prs = yield* github.listPrs(repo.fullName, repo.id, token, repoApiBase).pipe(
                 Effect.tapError((err) =>
+                  isAuthErr(err) && acc ? markAuthFailure(acc, "PR sync") : Effect.void,
+                ),
+                Effect.tapError((err) =>
                   Effect.sync(() => {
-                    logError("PollScheduler", `listPrs error for ${repo.fullName}:`, err);
+                    if (!isAuthErr(err))
+                      logError("PollScheduler", `listPrs error for ${repo.fullName}:`, err);
                   }),
                 ),
                 Effect.map((fetched) => fetched as PullRequest[] | null),
@@ -402,17 +440,21 @@ export const PollSchedulerLive = Layer.effect(
                       closedAt: new Date().toISOString(),
                     };
                   }
-                  const token = accountForRepo(repo.id)?.accessToken ?? "";
-                  if (!token) {
+                  const acc = accountForRepo(repo.id);
+                  const token = acc?.accessToken ?? "";
+                  if (!token || skipInvalid(acc)) {
                     return {
                       id: pr.id,
                       status: "closed" as const,
                       closedAt: new Date().toISOString(),
                     };
                   }
-                  const fetched = yield* github
-                    .getPr(repo.fullName, pr.externalId, token)
-                    .pipe(Effect.catchAll(() => Effect.succeed(null)));
+                  const fetched = yield* github.getPr(repo.fullName, pr.externalId, token).pipe(
+                    Effect.tapError((err) =>
+                      isAuthErr(err) && acc ? markAuthFailure(acc, "closed-PR fetch") : Effect.void,
+                    ),
+                    Effect.catchAll(() => Effect.succeed(null)),
+                  );
                   if (!fetched) {
                     return {
                       id: pr.id,
@@ -489,18 +531,24 @@ export const PollSchedulerLive = Layer.effect(
             Effect.gen(function* () {
               const acc = accountForRepo(repo.id);
               const token = acc?.accessToken ?? "";
-              if (!token) return;
+              if (!token || skipInvalid(acc)) return;
 
               const searched = yield* github
                 .searchClosedPrsInWindow(repo.fullName, backfillSinceIso, backfillUntilIso, token)
                 .pipe(
                   Effect.tapError((err) =>
+                    isAuthErr(err) && acc
+                      ? markAuthFailure(acc, "archive backfill search")
+                      : Effect.void,
+                  ),
+                  Effect.tapError((err) =>
                     Effect.sync(() => {
-                      logError(
-                        "PollScheduler",
-                        `archive backfill search failed for ${repo.fullName}:`,
-                        err,
-                      );
+                      if (!isAuthErr(err))
+                        logError(
+                          "PollScheduler",
+                          `archive backfill search failed for ${repo.fullName}:`,
+                          err,
+                        );
                     }),
                   ),
                   Effect.catchAll(() =>
@@ -524,9 +572,14 @@ export const PollSchedulerLive = Layer.effect(
               const fetched = yield* Effect.forEach(
                 missing,
                 (m) =>
-                  github
-                    .getPr(repo.fullName, m.number, token)
-                    .pipe(Effect.catchAll(() => Effect.succeed(null))),
+                  github.getPr(repo.fullName, m.number, token).pipe(
+                    Effect.tapError((err) =>
+                      isAuthErr(err) && acc
+                        ? markAuthFailure(acc, "archive backfill fetch")
+                        : Effect.void,
+                    ),
+                    Effect.catchAll(() => Effect.succeed(null)),
+                  ),
                 { concurrency: 3 },
               );
 
@@ -615,7 +668,8 @@ export const PollSchedulerLive = Layer.effect(
                   const repo = allRepos.find((r) => r.id === pr.repositoryId);
                   if (!repo) return;
 
-                  const token = accountForRepo(repo.id)?.accessToken ?? "";
+                  const acc = accountForRepo(repo.id);
+                  const token = acc?.accessToken ?? "";
                   if (!token) {
                     logError(
                       "PollScheduler",
@@ -623,10 +677,16 @@ export const PollSchedulerLive = Layer.effect(
                     );
                     return;
                   }
+                  if (skipInvalid(acc)) return;
 
                   const fileList = yield* github
                     .getPrFiles(repo.fullName, pr.externalId, token)
-                    .pipe(Effect.orElseSucceed(() => []));
+                    .pipe(
+                      Effect.tapError((err) =>
+                        isAuthErr(err) && acc ? markAuthFailure(acc, "diff refresh") : Effect.void,
+                      ),
+                      Effect.orElseSucceed(() => []),
+                    );
 
                   const files = fileList.map((f) => ({
                     path: f.filename,
