@@ -366,7 +366,7 @@ function onRightHandleDblClick(): void {
 				/>
 			</div>
 		{/if}
-		<div class="main-content">
+		<div class="main-content" data-page-root>
 			{@render children()}
 		</div>
 

@@ -283,14 +283,18 @@ export const pinIconReveal: PresetFn<{ visible?: boolean }> = (el, opts) =>
 
 /* ───────────────────────── Decorative / page-transition primitives ───────────────────────── */
 
+// Page-root enter — used by the default crossfade between routes. The element
+// this runs on is the persistent main-content wrapper, so a y-translate would
+// shift everything underneath (including chrome that shouldn't move). Keep it
+// to autoAlpha only; the subjective "crossfade" comes from the brief
+// opacity:0 frame between navigation and the tween completing.
 export const pageEnter: PresetFn = (el) =>
   tl().fromTo(
     el,
-    { autoAlpha: 0, y: 8 },
+    { autoAlpha: 0 },
     {
       autoAlpha: 1,
-      y: 0,
-      duration: tokens.smooth,
+      duration: tokens.quick,
       ease: tokens.easeOutExpo,
     },
   );

@@ -7,7 +7,7 @@ import OnboardingGate from "$lib/components/onboarding/OnboardingGate.svelte";
 import ErrorBanner from "$lib/components/shared/ErrorBanner.svelte";
 import { Toaster } from "$lib/components/ui/sonner";
 import { TooltipProvider } from "$lib/components/ui/tooltip";
-import { initGsap } from "$lib/motion";
+import { initGsap, setupPageTransitions } from "$lib/motion";
 import { startPolling, stopPolling } from "$lib/services/sync";
 import { getToken, getUser, loadUser } from "$lib/stores/auth.svelte";
 import {
@@ -109,6 +109,10 @@ $effect(() => {
 
 $effect(() => {
   initGsap();
+  // Registers beforeNavigate/afterNavigate listeners. SvelteKit unregisters
+  // them automatically when this layout component is destroyed (effectively
+  // never, but the contract is correct under HMR).
+  setupPageTransitions();
   const cleanupTheme = initTheme();
   const cleanupShortcuts = initShortcuts();
 
