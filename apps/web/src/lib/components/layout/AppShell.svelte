@@ -4,7 +4,7 @@ import { page } from "$app/state";
 import SettingsModal from "$lib/components/settings/SettingsModal.svelte";
 import UserMenu from "$lib/components/sidebar/UserMenu.svelte";
 import { RAIL_WIDTH } from "$lib/constants";
-import { gsap, prefersReducedMotion, tokens } from "$lib/motion";
+import { gsap, gsapFade, prefersReducedMotion, tokens } from "$lib/motion";
 import { getSelectedPr } from "$lib/stores/prs.svelte";
 import {
   getActiveTab,
@@ -198,6 +198,12 @@ $effect(() => {
     return;
   }
 
+  // Asymmetric timing: open ~smooth (220ms) so the panel lands deliberately
+  // and the eye has time to track the new content; close at ~quick (160ms)
+  // because the user already decided to dismiss and a slow exit reads as lag.
+  // 160/220 ≈ 73%, matching the animate.md exit-vs-enter ratio.
+  const duration = open ? tokens.smooth : tokens.quick;
+  const ease = open ? tokens.easeOutExpo : tokens.easeSoft;
   const trackProxy = { v: animatedRightPanelTrackPx };
   const vignetteProxy = { v: getCurrentVignette() };
   const t = gsap.timeline();
@@ -205,8 +211,8 @@ $effect(() => {
     trackProxy,
     {
       v: targetTrack,
-      duration: tokens.smooth,
-      ease: tokens.easeOutExpo,
+      duration,
+      ease,
       onUpdate() {
         animatedRightPanelTrackPx = trackProxy.v;
       },
@@ -218,8 +224,8 @@ $effect(() => {
       panelEl,
       {
         x: targetTranslateX,
-        duration: tokens.smooth,
-        ease: tokens.easeOutExpo,
+        duration,
+        ease,
       },
       0,
     );
@@ -229,8 +235,8 @@ $effect(() => {
       vignetteProxy,
       {
         v: targetVignette,
-        duration: tokens.smooth,
-        ease: tokens.easeOutExpo,
+        duration,
+        ease,
         onUpdate() {
           mainEl?.style.setProperty("--vignette-opacity", String(vignetteProxy.v));
         },
@@ -366,8 +372,19 @@ function onRightHandleDblClick(): void {
 				/>
 			</div>
 		{/if}
-		<div class="main-content" data-page-root>
-			{@render children()}
+		<div class="main-content">
+			<!--
+				Keyed inner wrapper: re-mounts on every navigation so a Svelte
+				transition fires cleanly without touching the persistent
+				.main-content (which would briefly hide every fixed chrome child
+				underneath). Tagged data-page-root so page-transitions.ts can find
+				it for Flip morphs; the default crossfade is the transition below.
+			-->
+			{#key page.url.pathname}
+				<div class="page-slot" data-page-root in:gsapFade={{ duration: tokens.quick }}>
+					{@render children()}
+				</div>
+			{/key}
 		</div>
 
 		{#if showFloatingActions && pr}
@@ -562,6 +579,15 @@ function onRightHandleDblClick(): void {
 		flex: 1;
 		min-height: 0;
 		overflow: hidden;
+		display: flex;
+	}
+
+	.page-slot {
+		flex: 1;
+		min-height: 0;
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
 	}
 
 	:global(:root.dark) .main-area {

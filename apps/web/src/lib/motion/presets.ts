@@ -55,7 +55,11 @@ export const popoverPopIn: PresetFn<{ side?: "top" | "right" | "bottom" | "left"
 ) => {
   const side = opts?.side ?? "bottom";
   const axis = side === "left" || side === "right" ? "x" : "y";
-  const offset = side === "top" || side === "left" ? -4 : 4;
+  // The popover should appear to "grow out of" its trigger. The trigger sits
+  // on the OPPOSITE side of the popover's data-side: a top-side popover has
+  // its trigger BELOW it, so the popover starts a few pixels lower (closer to
+  // the trigger) and slides up into place. Mirror this on all four axes.
+  const offset = side === "top" || side === "left" ? 4 : -4;
   return tl().fromTo(
     el,
     { autoAlpha: 0, scale: 0.96, [axis]: offset },
@@ -83,7 +87,8 @@ export const tooltipPopIn: PresetFn<{ side?: "top" | "right" | "bottom" | "left"
 ) => {
   const side = opts?.side ?? "top";
   const axis = side === "left" || side === "right" ? "x" : "y";
-  const offset = side === "top" || side === "left" ? -4 : 4;
+  // Same growth-from-trigger logic as popoverPopIn (see comment there).
+  const offset = side === "top" || side === "left" ? 4 : -4;
   return tl().fromTo(
     el,
     { autoAlpha: 0, scale: 0.92, [axis]: offset },
@@ -133,10 +138,13 @@ export const panelSlideOut: PresetFn<{ to?: "right" | "left"; distance?: number 
   const to = opts?.to ?? "right";
   const distance = opts?.distance ?? 100;
   const sign = to === "right" ? 1 : -1;
+  // Exit runs at ~73% of the entrance (quick / smooth). Animate.md: users
+  // dismissing a panel want it gone — slow exits feel laggy. Keeping the
+  // soft ease so the close still feels considered rather than ripped.
   return tl().to(el, {
     xPercent: sign * distance,
     autoAlpha: 0,
-    duration: tokens.smooth,
+    duration: tokens.quick,
     ease: tokens.easeSoft,
   });
 };
@@ -262,7 +270,9 @@ export const ratingCellSelect: PresetFn = (el) =>
     {
       scale: 1,
       duration: tokens.snap,
-      ease: "back.out(1.7)",
+      // Snap-back on rating select; smooth deceleration, no overshoot —
+      // overshoot on a precision-input affordance reads as imprecision.
+      ease: tokens.easeOutExpo,
     },
   );
 
@@ -281,28 +291,3 @@ export const pinIconReveal: PresetFn<{ visible?: boolean }> = (el, opts) =>
     ease: tokens.easeSoft,
   });
 
-/* ───────────────────────── Decorative / page-transition primitives ───────────────────────── */
-
-// Page-root enter — used by the default crossfade between routes. The element
-// this runs on is the persistent main-content wrapper, so a y-translate would
-// shift everything underneath (including chrome that shouldn't move). Keep it
-// to autoAlpha only; the subjective "crossfade" comes from the brief
-// opacity:0 frame between navigation and the tween completing.
-export const pageEnter: PresetFn = (el) =>
-  tl().fromTo(
-    el,
-    { autoAlpha: 0 },
-    {
-      autoAlpha: 1,
-      duration: tokens.quick,
-      ease: tokens.easeOutExpo,
-    },
-  );
-
-export const pageExit: PresetFn = (el) =>
-  tl().to(el, {
-    autoAlpha: 0,
-    y: -4,
-    duration: tokens.quick,
-    ease: tokens.easeSoft,
-  });

@@ -10,6 +10,7 @@
  * twice with the same plugin is a no-op.
  */
 import { gsap } from "gsap";
+import { CustomEase } from "gsap/CustomEase";
 import { Draggable } from "gsap/Draggable";
 import { Flip } from "gsap/Flip";
 import { Observer } from "gsap/Observer";
@@ -23,7 +24,12 @@ export function initGsap(): void {
   if (initialized) return;
   initialized = true;
 
-  gsap.registerPlugin(Flip, Observer, Draggable, ScrollTrigger);
+  // CustomEase is free in GSAP v3. We register it because the motion tokens
+  // store eases as bare cubic-bezier control points (e.g. "0.16, 1, 0.3, 1")
+  // and GSAP's _configEaseFromString defers any string starting with a digit
+  // or dot to CustomEase — without it, those tokens would silently fall back
+  // to the global default and every animation would use power1.out.
+  gsap.registerPlugin(CustomEase, Flip, Observer, Draggable, ScrollTrigger);
 
   // Project-wide defaults. Individual tweens / timelines can override.
   // `overwrite: "auto"` lets a fresh tween cleanly cancel any active tween
@@ -37,4 +43,4 @@ export function initGsap(): void {
   });
 }
 
-export { gsap, Flip, Observer, Draggable, ScrollTrigger };
+export { gsap, CustomEase, Flip, Observer, Draggable, ScrollTrigger };

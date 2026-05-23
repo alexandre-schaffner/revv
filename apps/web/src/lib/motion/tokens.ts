@@ -55,12 +55,23 @@ const FALLBACK_DURATIONS: DurationTokens = {
   pulse: 1.4,
 };
 
+// GSAP's CustomEase parses strings that start with a digit/dot/dash (regex
+// `/^[\d.\-M][\d.\-,\s]/`) as cubic-bezier control points. The
+// `cubic-bezier(...)` wrapper would fail that test, so the eases are stored
+// as bare control-point lists — same numerics as the `--ease-*` CSS variables
+// in app.css, just without the surrounding `cubic-bezier()`.
 const FALLBACK_EASES: EaseTokens = {
-  soft: "cubic-bezier(0.4, 0, 0.2, 1)",
-  outExpo: "cubic-bezier(0.16, 1, 0.3, 1)",
-  standard: "cubic-bezier(0.22, 0.61, 0.36, 1)",
-  anticipate: "cubic-bezier(0.68, -0.55, 0.27, 1.55)",
+  soft: "0.4, 0, 0.2, 1",
+  outExpo: "0.16, 1, 0.3, 1",
+  standard: "0.22, 0.61, 0.36, 1",
+  anticipate: "0.68, -0.55, 0.27, 1.55",
 };
+
+function stripCubicBezier(raw: string): string {
+  const trimmed = raw.trim();
+  const match = trimmed.match(/^cubic-bezier\((.+)\)$/);
+  return match?.[1]?.trim() ?? trimmed;
+}
 
 const FALLBACK_STAGGER: StaggerTokens = {
   tight: 0.025,
@@ -127,7 +138,7 @@ function resolveFromDom(): void {
     [keyof EaseTokens, string]
   >) {
     const raw = readVar(styles, cssName);
-    if (raw) eases[key] = raw;
+    if (raw) eases[key] = stripCubicBezier(raw);
   }
 
   const sMap: Record<keyof StaggerTokens, string> = {

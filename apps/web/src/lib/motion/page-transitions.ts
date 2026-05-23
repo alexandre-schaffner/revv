@@ -1,27 +1,24 @@
 /**
  * Route-change choreography.
  *
- * Two layers:
+ * This module only handles the Flip hero morphs. The default crossfade
+ * runs in AppShell.svelte via a `{#key page.url.pathname}` wrapper +
+ * `transition:gsapFade`, which lets only the routed content fade without
+ * touching the persistent chrome.
  *
- * 1. Default crossfade — any route change fades out the previous main slot
- *    and fades in the next one (subtle, ~180ms). Persistent chrome (rail,
- *    sidebar, tabs, right panel) is untouched because those live above the
- *    page slot in the layout tree.
- *
- * 2. Flip hero morphs — for specific route pairs, we capture state of a
- *    shared element (matched by `data-flip-id`) before navigation, then run
- *    `Flip.from(...)` once the new page has mounted. The persistent element
- *    "morphs" from its old position/size to the new one.
+ * Flip layer: for specific route pairs, we capture state of a shared
+ * element (matched by `data-flip-id`) before navigation, then run
+ * `Flip.from(...)` once the new page has mounted. The persistent element
+ * "morphs" from its old position/size to the new one.
  *
  * Wiring: import `setupPageTransitions()` from +layout.svelte inside an
- * $effect. It registers SvelteKit's beforeNavigate/afterNavigate hooks and
- * returns a disposer.
+ * $effect. SvelteKit unregisters the listeners when the layout is
+ * destroyed.
  */
 import { afterNavigate, beforeNavigate } from "$app/navigation";
 
-import { Flip, gsap } from "./gsap";
+import { Flip } from "./gsap";
 import { prefersReducedMotion } from "./match-media";
-import { pageEnter } from "./presets";
 import { tokens } from "./tokens";
 
 interface PendingFlip {
@@ -55,15 +52,6 @@ function findRule(from: string, to: string): { selector: string } | null {
   return null;
 }
 
-function findPageRoot(): HTMLElement | null {
-  // Pages render inside <main data-page-root> declared in AppShell.
-  // Fall back to <main> if the marker is absent (e.g., tests).
-  return (
-    (document.querySelector("[data-page-root]") as HTMLElement | null) ??
-    (document.querySelector("main") as HTMLElement | null)
-  );
-}
-
 /**
  * Register navigation hooks. Must be called during component initialization
  * (e.g., from within `$effect` in +layout.svelte). SvelteKit automatically
@@ -94,7 +82,10 @@ export function setupPageTransitions(): void {
     }
 
     // Run the Flip on the next microtask so the new page has had a chance to
-    // mount its data-flip-id targets.
+    // mount its data-flip-id targets. The default crossfade is NOT handled
+    // here — the keyed {#key page.url.pathname} wrapper in AppShell.svelte
+    // owns it via a Svelte transition, so the persistent main-content chrome
+    // never flickers between routes.
     queueMicrotask(() => {
       if (pending) {
         const targets = document.querySelectorAll(pending.matcher);
@@ -108,14 +99,6 @@ export function setupPageTransitions(): void {
           });
         }
         pending = null;
-      } else {
-        // Default crossfade-up on the page root.
-        const root = findPageRoot();
-        if (root) {
-          // Cancel any in-flight tween on the root before starting a new one.
-          gsap.killTweensOf(root);
-          pageEnter(root);
-        }
       }
     });
   });

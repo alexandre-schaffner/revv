@@ -108,10 +108,13 @@ export const gsapPress: Action<HTMLElement, GsapPressParams | undefined> = (
   const up = () => {
     if (shouldSkip()) return;
     activeTween?.kill();
+    // Smooth deceleration on release — the press-down already gave the
+    // tactile cue. back.out / elastic.out here adds a wobble that reads as
+    // dated SaaS-product polish, which animate.md rules out.
     activeTween = gsap.to(node, {
       scale: 1,
       duration: 0.14,
-      ease: "back.out(2)",
+      ease: "power3.out",
     });
   };
 
