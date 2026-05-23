@@ -1,0 +1,418 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-05-23T00:00:00Z",
+  "title": "Design System: Revv",
+  "extensions": {
+    "colorMeta": {
+      "coastal-teal": {
+        "role": "primary",
+        "displayName": "Coastal Teal",
+        "canonical": "oklch(46% 0.075 180)",
+        "tonalRamp": [
+          "oklch(15% 0.04 180)",
+          "oklch(25% 0.06 180)",
+          "oklch(35% 0.072 180)",
+          "oklch(46% 0.075 180)",
+          "oklch(55% 0.082 180)",
+          "oklch(65% 0.088 180)",
+          "oklch(78% 0.06 180)",
+          "oklch(95% 0.012 180)"
+        ]
+      },
+      "warm-paper": {
+        "role": "neutral",
+        "displayName": "Warm Paper",
+        "canonical": "oklch(98% 0.005 80)",
+        "tonalRamp": [
+          "oklch(15% 0.005 80)",
+          "oklch(28% 0.005 80)",
+          "oklch(46% 0.005 80)",
+          "oklch(64% 0.005 80)",
+          "oklch(78% 0.005 80)",
+          "oklch(88% 0.006 80)",
+          "oklch(94% 0.006 80)",
+          "oklch(98% 0.005 80)"
+        ]
+      },
+      "warm-stone": {
+        "role": "neutral",
+        "displayName": "Warm Stone",
+        "canonical": "oklch(95% 0.008 80)",
+        "tonalRamp": [
+          "oklch(18% 0.008 80)",
+          "oklch(30% 0.009 80)",
+          "oklch(48% 0.010 80)",
+          "oklch(66% 0.010 80)",
+          "oklch(80% 0.010 80)",
+          "oklch(88% 0.010 80)",
+          "oklch(92% 0.009 80)",
+          "oklch(95% 0.008 80)"
+        ]
+      },
+      "ink-primary": {
+        "role": "neutral",
+        "displayName": "Ink Primary",
+        "canonical": "oklch(22% 0.008 60)",
+        "tonalRamp": [
+          "oklch(15% 0.008 60)",
+          "oklch(22% 0.008 60)",
+          "oklch(34% 0.010 60)",
+          "oklch(46% 0.010 60)",
+          "oklch(58% 0.010 60)",
+          "oklch(70% 0.010 60)",
+          "oklch(82% 0.008 60)",
+          "oklch(94% 0.006 60)"
+        ]
+      },
+      "considered-violet": {
+        "role": "tertiary",
+        "displayName": "Considered Violet",
+        "canonical": "oklch(45% 0.20 290)",
+        "tonalRamp": [
+          "oklch(18% 0.10 290)",
+          "oklch(28% 0.14 290)",
+          "oklch(36% 0.18 290)",
+          "oklch(45% 0.20 290)",
+          "oklch(56% 0.21 290)",
+          "oklch(68% 0.18 290)",
+          "oklch(80% 0.12 290)",
+          "oklch(94% 0.04 290)"
+        ]
+      },
+      "considered-red": {
+        "role": "secondary",
+        "displayName": "Considered Red",
+        "canonical": "oklch(48% 0.19 25)",
+        "tonalRamp": [
+          "oklch(18% 0.09 25)",
+          "oklch(28% 0.13 25)",
+          "oklch(38% 0.17 25)",
+          "oklch(48% 0.19 25)",
+          "oklch(58% 0.19 25)",
+          "oklch(70% 0.16 25)",
+          "oklch(82% 0.10 25)",
+          "oklch(94% 0.03 25)"
+        ]
+      },
+      "considered-green": {
+        "role": "secondary",
+        "displayName": "Considered Green",
+        "canonical": "oklch(50% 0.15 145)",
+        "tonalRamp": [
+          "oklch(18% 0.08 145)",
+          "oklch(30% 0.12 145)",
+          "oklch(40% 0.14 145)",
+          "oklch(50% 0.15 145)",
+          "oklch(62% 0.15 145)",
+          "oklch(74% 0.13 145)",
+          "oklch(86% 0.08 145)",
+          "oklch(95% 0.03 145)"
+        ]
+      },
+      "workshop-amber": {
+        "role": "secondary",
+        "displayName": "Workshop Amber",
+        "canonical": "oklch(54% 0.15 65)",
+        "tonalRamp": [
+          "oklch(20% 0.07 65)",
+          "oklch(32% 0.11 65)",
+          "oklch(44% 0.13 65)",
+          "oklch(54% 0.15 65)",
+          "oklch(66% 0.16 65)",
+          "oklch(78% 0.13 65)",
+          "oklch(88% 0.08 65)",
+          "oklch(96% 0.03 65)"
+        ]
+      },
+      "demands-attention": {
+        "role": "tertiary",
+        "displayName": "Demands Attention (Warm Orange-700)",
+        "canonical": "oklch(53% 0.18 45)",
+        "tonalRamp": [
+          "oklch(20% 0.09 45)",
+          "oklch(32% 0.13 45)",
+          "oklch(42% 0.16 45)",
+          "oklch(53% 0.18 45)",
+          "oklch(65% 0.18 45)",
+          "oklch(76% 0.15 45)",
+          "oklch(86% 0.09 45)",
+          "oklch(95% 0.03 45)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Rare; reserved for page-level titles when one exists. Most surfaces skip this and start at Headline."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Panel headers, walkthrough section titles."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Card titles, PR titles in the watchtower list."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "All running text. Walkthrough markdown, recap content, chat messages. Caps at 70ch in prose contexts."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Inline labels, metadata, tab text. Sentence case; uppercase is prohibited as decoration."
+      },
+      "mono": {
+        "displayName": "Mono",
+        "purpose": "Code in diffs, identifiers in prose, filenames in the file tree."
+      }
+    },
+    "shadows": [
+      {
+        "name": "indicator",
+        "value": "0 1px 3px rgba(42, 40, 37, 0.08), 0 2px 8px rgba(42, 40, 37, 0.06), 0 0 0 0.5px rgba(42, 40, 37, 0.04)",
+        "purpose": "Soft ambient ring under the smallest floating elements (marker glows, status dots, active tab)."
+      },
+      {
+        "name": "sm",
+        "value": "0 2px 6px rgba(42, 40, 37, 0.08)",
+        "purpose": "Glass pills at rest, chip stacks."
+      },
+      {
+        "name": "md",
+        "value": "0 4px 16px rgba(42, 40, 37, 0.10)",
+        "purpose": "Popovers, tooltips, the line-action floating pill above a diff line."
+      },
+      {
+        "name": "lg",
+        "value": "0 8px 24px rgba(42, 40, 37, 0.12), 0 2px 8px rgba(42, 40, 37, 0.06)",
+        "purpose": "Sheets, the chat panel when it floats above the diff."
+      },
+      {
+        "name": "xl",
+        "value": "0 16px 48px rgba(42, 40, 37, 0.18), 0 4px 12px rgba(42, 40, 37, 0.10)",
+        "purpose": "Dialogs, modals, the command palette."
+      }
+    ],
+    "motion": [
+      {
+        "name": "duration-instant",
+        "value": "80ms",
+        "purpose": "Hover, focus rings, micro-state."
+      },
+      { "name": "duration-snap", "value": "120ms", "purpose": "Small surfaces, chevrons, badges." },
+      { "name": "duration-quick", "value": "160ms", "purpose": "Default UI motion." },
+      {
+        "name": "duration-smooth",
+        "value": "220ms",
+        "purpose": "Panels, sidebars, larger reveals."
+      },
+      { "name": "duration-slow", "value": "320ms", "purpose": "Dialogs, sheets, big surfaces." },
+      {
+        "name": "duration-page",
+        "value": "480ms",
+        "purpose": "Route morphs, shared-element transitions."
+      },
+      {
+        "name": "duration-ceremonial-quick",
+        "value": "280ms",
+        "purpose": "Onboarding-only theatrical entrance, quick variant."
+      },
+      {
+        "name": "duration-ceremonial-medium",
+        "value": "480ms",
+        "purpose": "Onboarding-only theatrical entrance, medium variant."
+      },
+      {
+        "name": "duration-ceremonial-slow",
+        "value": "720ms",
+        "purpose": "Onboarding-only theatrical entrance, slow variant."
+      },
+      {
+        "name": "ease-soft",
+        "value": "cubic-bezier(0.4, 0, 0.2, 1)",
+        "purpose": "Default in/out for exits and bidirectional state."
+      },
+      {
+        "name": "ease-out-expo",
+        "value": "cubic-bezier(0.16, 1, 0.3, 1)",
+        "purpose": "Default for appearance / enter. Slight overshoot."
+      },
+      {
+        "name": "ease-standard",
+        "value": "cubic-bezier(0.22, 0.61, 0.36, 1)",
+        "purpose": "Walkthrough chapter morphs, content reveals."
+      },
+      {
+        "name": "ease-anticipate",
+        "value": "cubic-bezier(0.68, -0.55, 0.27, 1.55)",
+        "purpose": "Reserved for delight moments. Use sparingly."
+      }
+    ],
+    "breakpoints": []
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Coastal Teal fill on warm-paper canvas. 1px tactile press on :active. The default brand CTA.",
+      "html": "<button class=\"ds-btn-primary\">Approve and merge</button>",
+      "css": ".ds-btn-primary { display: inline-flex; align-items: center; justify-content: center; height: 32px; padding: 0 10px; background: #0f766e; color: #ffffff; border: 1px solid transparent; border-radius: 8px; font-family: Inter, system-ui, sans-serif; font-size: 0.875rem; font-weight: 500; line-height: 1; letter-spacing: 0; cursor: pointer; transition: background 120ms cubic-bezier(0.16, 1, 0.3, 1), transform 120ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-btn-primary:hover { background: #115e59; } .ds-btn-primary:active { transform: translateY(1px); } .ds-btn-primary:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.4); }"
+    },
+    {
+      "name": "Outline Button",
+      "kind": "button",
+      "refersTo": "button-outline",
+      "description": "Warm-paper background with a paper-edge hairline border. The default chrome action.",
+      "html": "<button class=\"ds-btn-outline\">View diff</button>",
+      "css": ".ds-btn-outline { display: inline-flex; align-items: center; justify-content: center; height: 32px; padding: 0 10px; background: #faf9f6; color: #2a2825; border: 1px solid #e4e0d8; border-radius: 8px; font-family: Inter, system-ui, sans-serif; font-size: 0.875rem; font-weight: 500; line-height: 1; cursor: pointer; transition: background 120ms cubic-bezier(0.16, 1, 0.3, 1), transform 120ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-btn-outline:hover { background: #f4f1eb; } .ds-btn-outline:active { transform: translateY(1px); } .ds-btn-outline:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.4); }"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Transparent at rest, lifts to warm-stone on hover. The most common button variant for chrome actions.",
+      "html": "<button class=\"ds-btn-ghost\">Cancel</button>",
+      "css": ".ds-btn-ghost { display: inline-flex; align-items: center; justify-content: center; height: 32px; padding: 0 10px; background: transparent; color: #5a5650; border: 1px solid transparent; border-radius: 8px; font-family: Inter, system-ui, sans-serif; font-size: 0.875rem; font-weight: 500; line-height: 1; cursor: pointer; transition: background 120ms cubic-bezier(0.16, 1, 0.3, 1), color 120ms cubic-bezier(0.16, 1, 0.3, 1), transform 120ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-btn-ghost:hover { background: #f4f1eb; color: #2a2825; } .ds-btn-ghost:active { transform: translateY(1px); } .ds-btn-ghost:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.4); }"
+    },
+    {
+      "name": "Destructive Button",
+      "kind": "button",
+      "refersTo": "button-destructive",
+      "description": "Considered Red at 10% alpha with Considered Red text. Never a solid red fill; the warning is in the color, not the volume.",
+      "html": "<button class=\"ds-btn-destructive\">Discard changes</button>",
+      "css": ".ds-btn-destructive { display: inline-flex; align-items: center; justify-content: center; height: 32px; padding: 0 10px; background: rgba(185, 28, 28, 0.10); color: #b91c1c; border: 1px solid transparent; border-radius: 8px; font-family: Inter, system-ui, sans-serif; font-size: 0.875rem; font-weight: 500; line-height: 1; cursor: pointer; transition: background 120ms cubic-bezier(0.16, 1, 0.3, 1), transform 120ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-btn-destructive:hover { background: rgba(185, 28, 28, 0.20); } .ds-btn-destructive:active { transform: translateY(1px); } .ds-btn-destructive:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(185, 28, 28, 0.30); }"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": "input-default",
+      "description": "Warm-stone fill with hairline border; focus glow rather than border-color change.",
+      "html": "<input class=\"ds-input\" type=\"text\" placeholder=\"Search repos and PRs\" />",
+      "css": ".ds-input { display: block; width: 100%; height: 32px; padding: 8px 12px; background: #f4f1eb; color: #2a2825; border: 1px solid #e4e0d8; border-radius: 8px; font-family: Inter, system-ui, sans-serif; font-size: 0.875rem; line-height: 1; outline: none; transition: box-shadow 160ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-input::placeholder { color: #9a958c; } .ds-input:focus-visible { box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.4); }"
+    },
+    {
+      "name": "Active Tab",
+      "kind": "nav",
+      "refersTo": "tab-active",
+      "description": "The active PR tab in the floating-tab track. Warm-paper fill against a stone-tone track; Indicator shadow lifts it.",
+      "html": "<div class=\"ds-tab-track\"><button class=\"ds-tab ds-tab--active\">user-auth.ts</button><button class=\"ds-tab\">middleware.ts</button></div>",
+      "css": ".ds-tab-track { display: inline-flex; gap: 4px; padding: 4px; background: rgba(42, 40, 37, 0.06); border-radius: 12px; } .ds-tab { display: inline-flex; align-items: center; height: 28px; padding: 0 12px; background: transparent; color: #7a756c; border: none; border-radius: 8px; font-family: Inter, system-ui, sans-serif; font-size: 0.8125rem; font-weight: 500; cursor: pointer; transition: background 120ms cubic-bezier(0.16, 1, 0.3, 1), color 120ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-tab:hover { background: #eae6de; color: #2a2825; } .ds-tab--active { background: #faf9f6; color: #2a2825; box-shadow: 0 1px 3px rgba(42, 40, 37, 0.08), 0 2px 8px rgba(42, 40, 37, 0.06), 0 0 0 0.5px rgba(42, 40, 37, 0.04); }"
+    },
+    {
+      "name": "Glass Pill",
+      "kind": "custom",
+      "refersTo": "glass-pill",
+      "description": "Floating chrome above the canvas. Warm-paper at 78% alpha with backdrop-blur. Used for the line-action pill, mode toggles, ambient status. Glass is a role, not a default.",
+      "html": "<div class=\"ds-glass-pill\"><span>2 of 12 files</span><span class=\"ds-glass-pill__sep\"></span><span>review session</span></div>",
+      "css": ".ds-glass-pill { display: inline-flex; align-items: center; gap: 8px; height: 28px; padding: 0 12px; background: rgba(250, 249, 246, 0.78); color: #2a2825; border: 1px solid rgba(42, 40, 37, 0.09); border-radius: 999px; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); box-shadow: 0 2px 6px rgba(42, 40, 37, 0.08); font-family: Inter, system-ui, sans-serif; font-size: 0.75rem; font-weight: 500; letter-spacing: 0.01em; } .ds-glass-pill__sep { display: inline-block; width: 1px; height: 12px; background: rgba(42, 40, 37, 0.15); }"
+    },
+    {
+      "name": "File Tree Row (Active)",
+      "kind": "nav",
+      "refersTo": "file-tree-row",
+      "description": "A row in the file tree sidebar. Active state uses Coastal Teal *tinted* into the background (10% alpha), not the solid accent. The row whispers the brand.",
+      "html": "<div class=\"ds-tree\"><div class=\"ds-tree__row\">apps/web/<wbr>routes/<wbr>+page.svelte</div><div class=\"ds-tree__row ds-tree__row--active\">apps/web/<wbr>routes/<wbr>review/<wbr>+page.svelte</div><div class=\"ds-tree__row\">apps/server/<wbr>src/<wbr>index.ts</div></div>",
+      "css": ".ds-tree { display: flex; flex-direction: column; gap: 1px; padding: 4px; background: #f4f1eb; border-radius: 8px; } .ds-tree__row { padding: 6px 10px; border-radius: 6px; color: #5a5650; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.8125rem; line-height: 1.4; cursor: pointer; transition: background 120ms cubic-bezier(0.16, 1, 0.3, 1), color 120ms cubic-bezier(0.16, 1, 0.3, 1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .ds-tree__row:hover { background: #eae6de; color: #2a2825; } .ds-tree__row--active { background: rgba(15, 118, 110, 0.10); color: #115e59; }"
+    },
+    {
+      "name": "Diff Line (Addition)",
+      "kind": "custom",
+      "refersTo": "diff-add-line",
+      "description": "A single addition line in the diff canvas. Warm-stone canvas, deepened green tint, JetBrains Mono code at 0.8125rem. The full diff vocabulary lives in app.css.",
+      "html": "<div class=\"ds-diff\"><div class=\"ds-diff__row ds-diff__row--add\"><span class=\"ds-diff__gutter\">+12</span><span class=\"ds-diff__code\">  const session = await auth.verify(token);</span></div><div class=\"ds-diff__row\"><span class=\"ds-diff__gutter\">13</span><span class=\"ds-diff__code\">  if (!session) return new Response(null, { status: 401 });</span></div></div>",
+      "css": ".ds-diff { background: #f4f1eb; border: 1px solid #e4e0d8; border-radius: 8px; overflow: hidden; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.8125rem; line-height: 1.5; } .ds-diff__row { display: grid; grid-template-columns: 48px 1fr; align-items: baseline; transition: background 80ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-diff__row:hover { background: #eae6de; } .ds-diff__gutter { padding: 1px 12px 1px 0; color: #9a958c; text-align: right; border-right: 1px solid #e4e0d8; background: #edeae3; user-select: none; font-size: 0.75rem; } .ds-diff__code { padding: 1px 12px; color: #2a2825; white-space: pre; } .ds-diff__row--add { background: #e6f4ec; } .ds-diff__row--add:hover { background: #d0ebd9; } .ds-diff__row--add .ds-diff__gutter { background: #ddf0e3; color: #14532d; } .ds-diff__row--add .ds-diff__code { color: #14532d; }"
+    },
+    {
+      "name": "AI Stream Cursor",
+      "kind": "custom",
+      "refersTo": "stream-cursor",
+      "description": "The 1ch-wide blinking cursor that appears while AI is producing tokens. Opt-back-in to motion under prefers-reduced-motion via .motion-essential-blink so the user can always tell the system is alive.",
+      "html": "<p class=\"ds-stream\">This change extracts the auth middleware into a reusable Effect layer<span class=\"ds-stream__cursor motion-essential-blink\"></span></p>",
+      "css": ".ds-stream { font-family: Inter, system-ui, sans-serif; font-size: 0.875rem; line-height: 1.5; color: #2a2825; } .ds-stream__cursor { display: inline-block; width: 1ch; height: 1em; margin-left: 2px; vertical-align: -2px; background: #0f766e; border-radius: 1px; box-shadow: 0 0 8px rgba(15, 118, 110, 0.35); } @keyframes ds-stream-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } } .motion-essential-blink { animation: ds-stream-blink 1s steps(2, end) infinite; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Reading Room",
+    "overview": "Revv is the reading room of code review: warm paper underfoot, considered ink, expert silence, and exactly one accent worth lifting your eyes for. The canvas reads as a page, not a screen. Reviewers come here to think, not to be sold to or coached. Chrome recedes; code and conversation are the foreground.\n\nThe system rejects the noisy SaaS dashboard, the GitHub web UI's marketing chrome, and the neon-on-black AI-tool aesthetic in equal measure. Where other code-review tools ship stock Tailwind blue, Revv ships Coastal Teal at low frequency. Where others stack shadows for 'depth,' Revv layers warm tones and reserves shadows for things that genuinely float. Where others make AI feel magical with sparkles and gradients, Revv makes it feel collaborative with a single streaming character: the cursor.",
+    "keyCharacteristics": [
+      "Warm-paper background, never neutral gray, never #fff.",
+      "One brand accent (Coastal Teal #0f766e), used on ≤10% of any given screen.",
+      "Hybrid elevation: tonal layering for chrome, soft shadows only for floating UI.",
+      "Refined and restrained components: quiet at rest, precise on interaction.",
+      "Icons-only iconography (phosphor-svelte); emoji prohibited.",
+      "Reduced-motion is a contract, not a courtesy."
+    ],
+    "rules": [
+      {
+        "name": "The One Voice Rule",
+        "body": "The brand accent (Coastal Teal in light, Signal Blue in dark) is used on ≤10% of any given screen. Its rarity is the point. If three teal elements are competing on one surface, two are wrong.",
+        "section": "colors"
+      },
+      {
+        "name": "The No-Pure-Black Rule",
+        "body": "#000 is prohibited in light theme, and the dark theme canvas stops at #0a0a0a. Every neutral is tinted toward warm-paper or midnight-paper; no element ever sits on pure black or pure white.",
+        "section": "colors"
+      },
+      {
+        "name": "The Deepened Severity Rule",
+        "body": "Reds, greens, ambers in this system are one step deeper than the Tailwind defaults (red-700, green-700, amber-700 rather than 500). The intent is 'considered' rather than 'alarming.' Stock-bright severity reads as a prototype.",
+        "section": "colors"
+      },
+      {
+        "name": "The Single-Family Rule",
+        "body": "Inter is the only sans in the system; JetBrains Mono is the only mono. No display serif, no condensed sans, no second body family. Variety comes from weight (400/500/600) and scale, not from font-mixing.",
+        "section": "typography"
+      },
+      {
+        "name": "The Earned-Uppercase Rule",
+        "body": "Uppercase is prohibited as a decorative style. Use sentence case for everything except technical identifiers that are uppercase by convention.",
+        "section": "typography"
+      },
+      {
+        "name": "The 65–75ch Rule",
+        "body": "Body prose in walkthrough markdown, recap content, and chat messages caps at 70ch (max-w-prose in Tailwind). The diff is exempt; code wraps to the panel width.",
+        "section": "typography"
+      },
+      {
+        "name": "The Hybrid Rule",
+        "body": "Chrome layers via warm tones (paper → stone → ash). Floating UI layers via shadows. The two languages do not cross: a sidebar never gets a drop shadow, and a tooltip never relies on a tone step to read as 'above.'",
+        "section": "elevation"
+      },
+      {
+        "name": "The No-Heavy-Shadows Rule",
+        "body": "Shadow alpha caps at 0.18 (XL) in light theme. If a shadow needs to be heavier than XL to read, the elevation language is wrong: either the underlying surface contrast is off or the element should not be floating at all.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Tactile Press",
+        "body": "All buttons translate down 1px on :active (excluding popover triggers). The 1px press is deliberate; it makes interaction feel tangible against the paper canvas.",
+        "section": "components"
+      }
+    ],
+    "dos": [
+      "Do use Coastal Teal sparingly. ≤10% of any given screen. The streaming cursor, the active file row, the primary CTA, the focus ring. Not all four at once on the same surface.",
+      "Do use warm-paper as the canvas in light theme and warm-stone as the secondary surface. Tone steps carry chrome elevation.",
+      "Do use phosphor-svelte for every icon. Inline SVG only when no phosphor equivalent fits.",
+      "Do deepen severity colors one step from stock Tailwind (700 weight rather than 500) so reds and greens read as considered, not bright.",
+      "Do translate buttons 1px down on :active. The press is tactile and on purpose.",
+      "Do cap body prose at 70ch (Tailwind's max-w-prose). The diff is exempt.",
+      "Do honor prefers-reduced-motion as a contract. Opt back in only for motion that carries meaning, using .motion-essential-* classes.",
+      "Do use motion tokens from the @theme block: duration-snap, duration-quick, duration-smooth, ease-out-expo, ease-soft. No hand-typed durations."
+    ],
+    "donts": [
+      "Don't use emoji in rendered UI, ever. Not in buttons, not in fallback avatars, not in toast messages, not in placeholders. Use a phosphor icon or nothing.",
+      "Don't use stock Tailwind blue (blue-500, #3b82f6) as a brand accent in light theme. That is the color every other dashboard ships. Coastal Teal is the move.",
+      "Don't use side-stripe borders (border-left > 1px as a colored accent on cards, list items, callouts). Use a full hairline border, a background tint, or a leading icon instead.",
+      "Don't use gradient text (background-clip: text on a gradient). Decorative always, meaningful never. Emphasis comes from weight and size.",
+      "Don't use glassmorphism as a default surface style. The Glass Pill is the exception, not the rule.",
+      "Don't ship the hero-metric template (big number, small label, supporting stats, gradient accent). Watchtower mode does not need a SaaS-dashboard pastiche.",
+      "Don't stack identical card grids. If three cards in a row do not differ in weight or content, the grid is the lazy answer.",
+      "Don't reach for a modal as the first thought. Inline expansion, progressive disclosure, and side panels exhaust before a modal is justified.",
+      "Don't animate CSS layout properties. Translate, scale, opacity, and color only.",
+      "Don't use heavy purple gradients or neon accents to signal 'AI.' Revv's AI surfaces are warm paper with a single Considered Violet accent and a streaming cursor; that is the entire AI vocabulary.",
+      "Don't use #000 or #fff. Every neutral is tinted: warm-paper toward 36° in light, midnight-paper toward neutral in dark. Pure values read as 'untouched default.'",
+      "Don't use bright stock severity colors. red-500, green-500, amber-500 all read as prototype-bright. Use the deepened 700-weight equivalents already in the palette."
+    ]
+  }
+}

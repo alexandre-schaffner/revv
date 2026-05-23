@@ -326,8 +326,10 @@ function focusOnMount(node: HTMLTextAreaElement) {
 	}
 	.msg-body :global(blockquote) {
 		margin: 4px 0;
-		padding-left: 10px;
-		border-left: 2px solid var(--color-border);
+		padding: 6px 10px;
+		border: 1px solid var(--color-border);
+		background: color-mix(in srgb, var(--color-text-muted) 4%, transparent);
+		border-radius: 6px;
 		color: var(--color-text-muted);
 	}
 	.msg-body :global(a) {
@@ -483,7 +485,7 @@ function focusOnMount(node: HTMLTextAreaElement) {
 		width: 100%;
 		min-height: 60px;
 		background: var(--color-input-bg);
-		border: 1px solid var(--color-accent);
+		border: 1px solid var(--color-border);
 		border-radius: 4px;
 		padding: 6px 8px;
 		font-family: var(--font-sans);
@@ -493,6 +495,10 @@ function focusOnMount(node: HTMLTextAreaElement) {
 		resize: vertical;
 		outline: none;
 		box-sizing: border-box;
+		transition: box-shadow var(--duration-quick) var(--ease-out-expo);
+	}
+	.edit-textarea:focus-visible {
+		box-shadow: 0 0 0 3px var(--color-input-focus-ring);
 	}
 	.edit-actions {
 		display: flex;

@@ -500,7 +500,6 @@ function flipPrDraftLocally(prId: string, isDraft: boolean): void {
 export async function convertPrToDraft(prId: string): Promise<void> {
   const pr = pullRequests.find((p) => p.id === prId);
   if (!pr || pr.isDraft) return;
-  const prevIsDraft = pr.isDraft;
 
   flipPrDraftLocally(prId, true);
 
@@ -508,7 +507,7 @@ export async function convertPrToDraft(prId: string): Promise<void> {
     const { error } = await api.api.prs({ id: prId })["convert-to-draft"].post();
     if (error) throw new Error(`HTTP ${error.status}`);
   } catch (e) {
-    flipPrDraftLocally(prId, prevIsDraft);
+    flipPrDraftLocally(prId, false);
     toast.error(e instanceof Error ? e.message : "Failed to convert to draft");
     throw e;
   }
@@ -517,7 +516,6 @@ export async function convertPrToDraft(prId: string): Promise<void> {
 export async function markPrReadyForReview(prId: string): Promise<void> {
   const pr = pullRequests.find((p) => p.id === prId);
   if (!pr?.isDraft) return;
-  const prevIsDraft = pr.isDraft;
 
   flipPrDraftLocally(prId, false);
 
@@ -525,16 +523,14 @@ export async function markPrReadyForReview(prId: string): Promise<void> {
     const { error } = await api.api.prs({ id: prId })["ready-for-review"].post();
     if (error) throw new Error(`HTTP ${error.status}`);
   } catch (e) {
-    flipPrDraftLocally(prId, prevIsDraft);
+    flipPrDraftLocally(prId, true);
     toast.error(e instanceof Error ? e.message : "Failed to mark ready for review");
     throw e;
   }
 }
 
 /**
- * Restore a PR from the archive back into the open list with prior status
- * and closedAt. Used by the `closePr` / `mergePr` rollback path — the
- * reverse of `onPrArchived`'s forward move. Touches only the one PR so
+ * Reverse of `onPrArchived`'s forward move. Touches only the one PR so
  * concurrent `prs:updated` reshuffles of other entries are preserved.
  */
 function restorePrFromArchive(

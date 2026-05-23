@@ -59,7 +59,7 @@ const genActionState = $derived.by((): GenActionState | null => {
  *  destructive buttons are disabled with a contextual tooltip. */
 const combinedPendingAction = $derived(chatStreaming ? "chat" : walkthroughPendingAction);
 const combinedDisabledTitle = $derived(
-  chatStreaming ? "Chat edit in progress — wait for it to finish before regenerating" : undefined,
+  chatStreaming ? "Chat edit in progress. Wait for it to finish before regenerating." : undefined,
 );
 </script>
 

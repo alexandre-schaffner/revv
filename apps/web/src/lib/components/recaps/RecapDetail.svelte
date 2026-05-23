@@ -521,8 +521,11 @@ $effect(() => {
 	}
 
 	.thought-markdown :global(blockquote) {
-		padding-left: 0.75rem;
-		border-left: 2px solid color-mix(in srgb, var(--color-accent) 45%, transparent);
+		padding: 8px 12px;
+		margin: 0 0 12px;
+		border: 1px solid color-mix(in srgb, var(--color-accent) 30%, var(--color-border));
+		background: color-mix(in srgb, var(--color-accent) 5%, transparent);
+		border-radius: 6px;
 		color: var(--color-text-secondary);
 	}
 

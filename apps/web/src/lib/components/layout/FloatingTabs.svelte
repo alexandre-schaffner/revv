@@ -78,7 +78,7 @@ function handleTabChange(tabId: string) {
 				tabindex={buttonVisible && !isPulling ? 0 : -1}
 				aria-hidden={!buttonVisible}
 				onclick={handlePullClick}
-				title={isPulling ? 'Pulling new commit…' : 'New commit — click to pull'}
+				title={isPulling ? 'Pulling new commit…' : 'New commit. Click to pull.'}
 				aria-label={isPulling
 					? 'Pulling new commit'
 					: 'New commit available. Click to pull the latest changes.'}

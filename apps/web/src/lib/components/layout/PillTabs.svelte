@@ -123,8 +123,8 @@ function isDividerHidden(index: number): boolean {
 		display: flex;
 		align-items: center;
 		background: var(--color-tab-track-bg);
-		backdrop-filter: blur(16px) saturate(1.4);
-		-webkit-backdrop-filter: blur(16px) saturate(1.4);
+		backdrop-filter: blur(10px) saturate(1.4);
+		-webkit-backdrop-filter: blur(10px) saturate(1.4);
 		border: 1px solid var(--color-glass-border);
 		border-radius: 9999px;
 		padding: 3px;
