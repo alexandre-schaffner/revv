@@ -8,9 +8,11 @@ const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
 import type { WalkthroughBlock, WalkthroughSemanticStep } from "@revv/shared";
 import { API_BASE_URL } from "@revv/shared";
 import RefreshCw from "phosphor-svelte/lib/ArrowsClockwise";
+import CaretDown from "phosphor-svelte/lib/CaretDown";
 import AlertTriangle from "phosphor-svelte/lib/Warning";
 import AlertCircle from "phosphor-svelte/lib/WarningCircle";
 import { Shimmer } from "$lib/components/ai/shimmer";
+import { ToolActivityGroup } from "$lib/components/ai/tool";
 import { Button } from "$lib/components/ui/button";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix/index.js";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
@@ -43,6 +45,8 @@ import {
   getStreamError,
   getStreamStartedAt,
   getSummary,
+  getThoughts,
+  getTimeline,
   hasBlockAnimated,
   hasContainerAnimated,
   hasIssueAnimated,
@@ -56,6 +60,12 @@ import {
   startWalkthrough,
   stopClonePoll,
 } from "$lib/stores/walkthrough.svelte";
+import {
+  groupActivityRuns,
+  isActivityGroup,
+  isExplorationActivity,
+  type GroupableActivity,
+} from "$lib/utils/activity-groups";
 import { initHighlighter } from "$lib/utils/code-highlight.svelte";
 import { renderMarkdown } from "$lib/utils/markdown";
 import { authHeaders } from "$lib/utils/session-token";
@@ -79,6 +89,8 @@ const riskLevel = $derived(getRiskLevel());
 const isStreaming = $derived(getIsStreaming());
 const streamError = $derived(getStreamError());
 const explorationSteps = $derived(getExplorationSteps());
+const thoughts = $derived(getThoughts());
+const timeline = $derived(getTimeline());
 const phase = $derived(getPhase());
 const streamStartedAt = $derived(getStreamStartedAt());
 const issues = $derived(getIssues());
@@ -323,6 +335,58 @@ const showDiffSkeleton = $derived(
     ratings.length === 0 &&
     (lastCompletedPhase === "none" || lastCompletedPhase === "A" || lastCompletedPhase === "B"),
 );
+
+// Below-chapter activity feed: mirrors the recap pattern
+// (`RecapDetail.svelte`). We only surface *exploration* tool calls
+// (Read/Grep/Glob/LS) here — MCP content-write calls like
+// `add_diff_step`, `set_overview`, `rate_axis`, etc. are deliberately
+// hidden because their output already lands as visible blocks/ratings
+// in the walkthrough itself. `groupActivityRuns` then collapses the
+// consecutive exploration calls into a single shimmer-labeled group
+// with odometer counts. We synthesize a stable `id` from the absolute
+// index because `Activity` doesn't carry one.
+const groupableExplorationSteps = $derived.by<readonly GroupableActivity[]>(() =>
+  explorationSteps
+    .map((step, i): GroupableActivity => ({ ...step, id: `step-${i}` }))
+    .filter((step) => isExplorationActivity(step)),
+);
+const walkthroughActivityEntries = $derived(groupActivityRuns(groupableExplorationSteps));
+
+// Interleaved view: walks the chronological `timeline` (mixed thoughts
+// + exploration tool calls) and emits a render list where consecutive
+// exploration calls between thoughts collapse into a single group (so
+// the "Exploring · N reads, M searches" shimmer/odometer still works
+// inside each chronological segment). MCP write tools are filtered
+// out for the same reason as above. Thoughts are emitted as discrete
+// markdown blocks; each entry keeps its `timeline` id so streaming
+// re-renders are stable.
+type InterleavedRenderEntry =
+  | { readonly kind: "thought"; readonly id: string; readonly text: string }
+  | {
+      readonly kind: "explorations";
+      readonly id: string;
+      readonly items: readonly GroupableActivity[];
+    };
+const interleavedEntries = $derived.by<readonly InterleavedRenderEntry[]>(() => {
+  const out: InterleavedRenderEntry[] = [];
+  for (const entry of timeline) {
+    if (entry.kind === "thought") {
+      out.push({ kind: "thought", id: entry.id, text: entry.text });
+      continue;
+    }
+    if (!isExplorationActivity(entry.activity)) continue;
+    const item: GroupableActivity = { ...entry.activity, id: entry.id };
+    const last = out.at(-1);
+    if (last && last.kind === "explorations") {
+      out[out.length - 1] = { ...last, items: [...last.items, item] };
+    } else {
+      out.push({ kind: "explorations", id: `group-${entry.id}`, items: [item] });
+    }
+  }
+  return out;
+});
+const hasThoughtText = $derived(thoughts.trim().length > 0);
+let thoughtsOpen = $state(false);
 
 const blocksWithDelay = $derived.by(() => {
   let newInBatch = 0;
@@ -1056,16 +1120,72 @@ function handleRegenerate(): void {
 				/>
 			{/each}
 
-		<!-- Diff-analysis shimmer text: placeholder while Phase B is active.
-		     Stays visible from when the overview lands (Phase A done) until the
-		     agent finishes all diff steps and moves to Phase C. -->
+		<!-- Diff-analysis skeleton: visible from Phase A→C. Mirrors the recap
+		     pattern (RecapDetail.svelte): the "Reviewing…" shimmer is a
+		     Collapsible trigger gating the model's reasoning text. When the
+		     toggle is closed, the activity stack below shows only the
+		     consolidated exploration groups (shimmer + odometer counts). When
+		     open, the stack switches to a chronological view that interleaves
+		     thought blocks with the same grouped tool calls — reads as a
+		     timeline. MCP write tools are filtered at the derived layer. -->
 		{#if showDiffSkeleton}
 			<div class="block-group">
 				<span class="block-step-dot" aria-hidden="true"></span>
-				<div class="block-wrapper block-wrapper--no-anim">
-					<Shimmer class="text-sm" aria-label="Reviewing...">
-						Reviewing...
-					</Shimmer>
+				<div class="block-wrapper block-wrapper--no-anim walkthrough-skeleton">
+					<button
+						type="button"
+						class="walkthrough-skeleton-trigger"
+						aria-label="Reviewing. Toggle streamed thoughts."
+						aria-expanded={thoughtsOpen}
+						onclick={() => { thoughtsOpen = !thoughtsOpen; }}
+					>
+						<Shimmer class="text-sm" aria-label="Reviewing">Reviewing...</Shimmer>
+						<span class="walkthrough-skeleton-meta">
+							<span>{hasThoughtText ? 'Thoughts' : 'Waiting for thoughts'}</span>
+							<span
+								class="walkthrough-skeleton-chevron-wrap"
+								data-state={thoughtsOpen ? 'open' : 'closed'}
+							>
+								<CaretDown class="walkthrough-skeleton-chevron" aria-hidden="true" />
+							</span>
+						</span>
+					</button>
+
+					{#if thoughtsOpen}
+						{#if interleavedEntries.length > 0}
+							<div class="walkthrough-activity-stack">
+								{#each interleavedEntries as entry, entryIdx (entry.id)}
+									{#if entry.kind === 'thought'}
+										<div class="walkthrough-inline-thought">
+											{@html renderMarkdown(entry.text)}
+										</div>
+									{:else}
+										<ToolActivityGroup
+											items={entry.items}
+											active={entryIdx === interleavedEntries.length - 1}
+											defaultOpen={false}
+										/>
+									{/if}
+								{/each}
+							</div>
+						{:else}
+							<p class="walkthrough-thought-empty">
+								No streamed thoughts yet. Tool calls will appear here as they happen.
+							</p>
+						{/if}
+					{:else if walkthroughActivityEntries.length > 0}
+						<div class="walkthrough-activity-stack">
+							{#each walkthroughActivityEntries as entry, entryIdx (isActivityGroup(entry) ? `group-${entry.items[0]?.id ?? entryIdx}` : entry.id)}
+								{#if isActivityGroup(entry)}
+									<ToolActivityGroup
+										items={entry.items}
+										active={entryIdx === walkthroughActivityEntries.length - 1}
+										defaultOpen={false}
+									/>
+								{/if}
+							{/each}
+						</div>
+					{/if}
 				</div>
 			</div>
 		{/if}
@@ -1861,6 +1981,133 @@ function handleRegenerate(): void {
 		opacity: 1;
 		transform: none;
 		filter: none;
+	}
+
+	/* ── Skeleton tool-call feed (mirrors recap-activity-stack) ──────────
+	   Renders below the "Reviewing…" shimmer in the Phase-A/B skeleton.
+	   `ToolActivityGroup` brings its own shimmer + odometer; when the
+	   thoughts toggle is open, the same stack interleaves inline thought
+	   markdown blocks chronologically between the groups. */
+	.walkthrough-skeleton {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+
+	.walkthrough-skeleton-trigger {
+		display: flex;
+		width: 100%;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.75rem;
+		padding: 0.125rem 0;
+		text-align: left;
+		background: transparent;
+		border: 0;
+		color: inherit;
+		cursor: pointer;
+		font: inherit;
+	}
+
+	.walkthrough-skeleton-meta {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.35rem;
+		flex-shrink: 0;
+		font-size: 0.75rem;
+		color: var(--color-text-muted);
+	}
+
+	.walkthrough-skeleton-chevron-wrap {
+		display: inline-grid;
+		place-items: center;
+		transition: transform var(--duration-snap) var(--ease-out-expo);
+	}
+
+	.walkthrough-skeleton-chevron-wrap[data-state="open"] {
+		transform: rotate(180deg);
+	}
+
+	.walkthrough-skeleton-chevron-wrap :global(.walkthrough-skeleton-chevron) {
+		width: 0.75rem;
+		height: 0.75rem;
+	}
+
+	.walkthrough-activity-stack {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+		max-width: 42rem;
+		margin-top: 0.25rem;
+	}
+
+	.walkthrough-thought-empty {
+		margin: 0.375rem 0 0;
+		font-size: 0.8125rem;
+		color: var(--color-text-muted);
+	}
+
+	.walkthrough-inline-thought {
+		font-size: 0.875rem;
+		line-height: 1.6;
+		color: var(--color-text-muted);
+		word-break: break-word;
+	}
+
+	.walkthrough-inline-thought :global(p),
+	.walkthrough-inline-thought :global(ul),
+	.walkthrough-inline-thought :global(ol),
+	.walkthrough-inline-thought :global(pre),
+	.walkthrough-inline-thought :global(blockquote) {
+		margin: 0 0 0.5rem;
+	}
+
+	.walkthrough-inline-thought :global(:last-child) {
+		margin-bottom: 0;
+	}
+
+	.walkthrough-inline-thought :global(ul),
+	.walkthrough-inline-thought :global(ol) {
+		padding-left: 1.25rem;
+	}
+
+	.walkthrough-inline-thought :global(li) {
+		margin: 0.15rem 0;
+	}
+
+	.walkthrough-inline-thought :global(code) {
+		font-family: var(--font-mono);
+		font-size: 0.92em;
+		padding: 0.08em 0.3em;
+		border-radius: 0.25rem;
+		background: color-mix(in srgb, var(--color-bg-tertiary) 70%, transparent);
+		color: var(--color-text-secondary);
+	}
+
+	.walkthrough-inline-thought :global(pre) {
+		overflow-x: auto;
+		padding: 0.625rem;
+		border-radius: 0.375rem;
+		background: var(--color-bg-tertiary);
+	}
+
+	.walkthrough-inline-thought :global(pre code) {
+		padding: 0;
+		background: transparent;
+		font-size: inherit;
+	}
+
+	.walkthrough-inline-thought :global(blockquote) {
+		padding-left: 0.75rem;
+		border-left: 2px solid color-mix(in srgb, var(--color-accent) 45%, transparent);
+		color: var(--color-text-secondary);
+	}
+
+	.walkthrough-inline-thought :global(a) {
+		color: var(--color-accent);
+		text-decoration-line: underline;
+		text-decoration-color: color-mix(in srgb, var(--color-accent) 35%, transparent);
+		text-underline-offset: 2px;
 	}
 
 	/* ── Annotation rail ─────────────────────────────────────────────────
