@@ -18,49 +18,33 @@ const easeOutExpo = (t: number): number => (t === 1 ? 1 : 1 - 2 ** (-10 * t));
 // cubic-bezier(0.4, 0, 0.2, 1)
 const easeSoft = (t: number): number => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
 
-interface TransformParams {
+interface FadeParams {
   duration?: number;
   delay?: number;
-  /** Initial y-offset in px; element settles to y:0. */
+  /** Initial y-offset in px; element settles to y:0. Default 0 (no translate). */
   y?: number;
-  /** Initial scale; element settles to scale:1. */
-  start?: number;
-  /** Initial opacity; element settles to opacity:1. Defaults to 0. */
-  opacity?: number;
 }
 
-function transform(node: Element, params: TransformParams = {}): TransitionConfig {
+function fadeTransform(node: Element, params: FadeParams = {}): TransitionConfig {
   const durationSec = prefersReducedMotion() ? 0 : (params.duration ?? tokens.quick);
   const el = node as HTMLElement;
-  const startOpacity = params.opacity ?? 0;
   const yPx = params.y ?? 0;
-  const startScale = params.start ?? 1;
   return {
     duration: durationSec * 1000,
     delay: (params.delay ?? 0) * 1000,
     easing: easeOutExpo,
     tick: (t, u) => {
-      el.style.opacity = String(startOpacity + (1 - startOpacity) * t);
-      const transforms: string[] = [];
-      if (yPx) transforms.push(`translateY(${u * yPx}px)`);
-      if (startScale !== 1) transforms.push(`scale(${1 - u * (1 - startScale)})`);
-      el.style.transform = transforms.join(" ");
+      el.style.opacity = String(t);
+      if (yPx) el.style.transform = `translateY(${u * yPx}px)`;
     },
   };
 }
 
 export const gsapFade = (node: Element, params: { duration?: number; delay?: number } = {}) =>
-  transform(node, params);
+  fadeTransform(node, params);
 
-export const gsapFadeY = (
-  node: Element,
-  params: { duration?: number; delay?: number; y?: number } = {},
-) => transform(node, { ...params, y: params.y ?? 4 });
-
-export const gsapScale = (
-  node: Element,
-  params: { duration?: number; delay?: number; start?: number; opacity?: number } = {},
-) => transform(node, { ...params, start: params.start ?? 0.96 });
+export const gsapFadeY = (node: Element, params: FadeParams = {}) =>
+  fadeTransform(node, { ...params, y: params.y ?? 4 });
 
 /**
  * Height/width-collapsing slide (drop-in for svelte/transition's `slide`).

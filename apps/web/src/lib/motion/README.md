@@ -19,7 +19,7 @@ timelines (right-panel slide + vignette crossfade).
 | `reduced-motion.ts` | `prefersReducedMotion()` — the single arbiter. |
 | `presets.ts` | Timelines for bits-ui content (`dialogSpringIn`, `popoverPopIn`, `tooltipPopIn`, …). |
 | `actions.ts` | `gsapPress` (button feedback) and `bitsAnim` (drives bits-ui content from `data-state`). |
-| `transitions.ts` | Svelte custom transitions (`gsapFade`, `gsapFadeY`, `gsapSlide`, `gsapScale`). |
+| `transitions.ts` | Svelte custom transitions (`gsapFade`, `gsapFadeY`, `gsapSlide`). |
 | `grid-choreography.ts` | `tweenGridTrack` and `useRightPanelChoreography` for the AppShell. |
 | `index.ts` | Public surface — `from "$lib/motion"`. |
 

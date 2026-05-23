@@ -23,5 +23,3 @@ export const tokens = {
     tight: 0.025,
   },
 } as const;
-
-export type MotionTokens = typeof tokens;
