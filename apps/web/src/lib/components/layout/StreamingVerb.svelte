@@ -10,8 +10,7 @@
 // arrives — this list is purely placeholder rotation: we don't know
 // what the agent is doing yet, so the verbs are generic.
 
-import { cubicIn, cubicOut } from "svelte/easing";
-import { fly } from "svelte/transition";
+import { gsapFadeY, tokens } from "$lib/motion";
 
 const VERBS = [
   "Thinking",
@@ -67,8 +66,8 @@ const verb = $derived(order[idx]!);
 	{#key verb}
 		<span
 			class="streaming-verb-text"
-			in:fly={{ y: ROW_H, duration: 220, easing: cubicOut }}
-			out:fly={{ y: -ROW_H, duration: 160, easing: cubicIn }}
+			in:gsapFadeY={{ y: ROW_H, duration: tokens.smooth }}
+			out:gsapFadeY={{ y: -ROW_H, duration: tokens.quick }}
 		>
 			{verb}…
 		</span>

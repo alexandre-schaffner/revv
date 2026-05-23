@@ -16,8 +16,7 @@ export type QuestionProps = HTMLAttributes<HTMLDivElement> & {
 
 <script lang="ts">
 	import { setContext } from "svelte";
-	import { fly } from "svelte/transition";
-	import { cubicOut } from "svelte/easing";
+	import { gsapFadeY, tokens } from "$lib/motion";
 	import { cn } from "$lib/utils.js";
 	import {
 		isSubmittingQuestion,
@@ -156,7 +155,7 @@ export type QuestionProps = HTMLAttributes<HTMLDivElement> & {
 		status === "superseded" && "opacity-60",
 		className,
 	)}
-	in:fly={{ y: 8, duration: 220, easing: cubicOut }}
+	in:gsapFadeY={{ y: 8, duration: tokens.smooth }}
 	{...restProps}
 >
 	<QuestionHeader />

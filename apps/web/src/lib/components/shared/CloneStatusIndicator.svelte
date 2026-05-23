@@ -4,7 +4,7 @@ import Check from "phosphor-svelte/lib/Check";
 import Clock from "phosphor-svelte/lib/Clock";
 import Loader2 from "phosphor-svelte/lib/Spinner";
 import AlertCircle from "phosphor-svelte/lib/WarningCircle";
-import { fade } from "svelte/transition";
+import { gsapFade } from "$lib/motion";
 
 let {
   status,
@@ -132,7 +132,7 @@ function handleRetryKey(e: KeyboardEvent) {
 		class="inline-flex items-center gap-1 text-success"
 		title={tooltip}
 		aria-label={tooltip}
-		transition:fade
+		transition:gsapFade
 	>
 		<Check {size} />
 		{#if showLabel}

@@ -2,7 +2,7 @@
 import type { PullRequest, Repository } from "@revv/shared";
 import Search from "phosphor-svelte/lib/MagnifyingGlass";
 import { untrack } from "svelte";
-import { fade, scale } from "svelte/transition";
+import { gsapFade, gsapScale, tokens } from "$lib/motion";
 import {
   fuzzyScore,
   getFilteredCommands,
@@ -257,7 +257,7 @@ function handleItemClick(flatIndex: number) {
 		class="fixed inset-0 z-40 bg-black/30"
 		role="presentation"
 		onclick={onClose}
-		in:fade
+		in:gsapFade
 	></div>
 
 	<!-- Palette.
@@ -270,7 +270,7 @@ function handleItemClick(flatIndex: number) {
 		role="dialog"
 		aria-modal="true"
 		aria-label={mode === 'command' ? 'Command palette' : 'Search pull requests'}
-		in:scale={{ start: 0.97, duration: 160 }}
+		in:gsapScale={{ start: 0.97, duration: tokens.quick }}
 	>
 		<!-- Search input -->
 		<div class="palette-input-wrap">
