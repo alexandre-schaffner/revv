@@ -1328,25 +1328,28 @@ function activitiesForTurn(
 	</Dialog.Portal>
 </Dialog.Root>
 
-<!-- Diff overlay (Pierre-rendered, portaled to body so it centres on the
-	 viewport — the right panel's parent has a transform that would
-	 otherwise scope `position: fixed` to the panel rather than the screen). -->
+<!-- Diff overlay (shadcn Dialog handles portaling + focus trap; bits-ui
+	 anchors the portal to `document.body`, so the right panel's transform
+	 doesn't scope `position: fixed` to the panel). -->
 {#if diffOpen && prId}
 	<ProposedDiffModal
 		prId={prId}
 		sha={diffOpen.sha}
 		subject={diffOpen.subject}
 		fileContents={diffOpen.fileContents}
-		onClose={() => (diffOpen = null)}
+		open={true}
+		onOpenChange={(v) => {
+			if (!v) diffOpen = null;
+		}}
 	/>
 {/if}
 
 <svelte:window
 	onkeydown={(e) => {
 		if (e.key === 'Escape') {
-			if (diffOpen) diffOpen = null;
-			else if (conflictDialog) conflictDialog = null;
-			// `newBranchDialogOpen` is handled by the shadcn Dialog primitive.
+			if (conflictDialog) conflictDialog = null;
+			// `diffOpen` and `newBranchDialogOpen` are handled by the shadcn
+			// Dialog primitive — bits-ui owns Escape there.
 		}
 	}}
 />

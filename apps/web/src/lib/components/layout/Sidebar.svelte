@@ -415,7 +415,7 @@ function handleKeydown(e: KeyboardEvent) {
 	<div class="sidebar-fade" aria-hidden="true"></div>
 </div>
 
-<AddRepoDialog open={addRepoOpen} onClose={() => setAddRepoDialogOpen(false)} />
+<AddRepoDialog open={addRepoOpen} onOpenChange={setAddRepoDialogOpen} />
 
 <style>
 	.sidebar {

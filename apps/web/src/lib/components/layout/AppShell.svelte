@@ -4,7 +4,12 @@ import { page } from "$app/state";
 import SettingsModal from "$lib/components/settings/SettingsModal.svelte";
 import UserMenu from "$lib/components/sidebar/UserMenu.svelte";
 import { RAIL_WIDTH } from "$lib/constants";
-import { gsap, gsapFade, prefersReducedMotion, tokens } from "$lib/motion";
+import {
+  gsapFade,
+  tokens,
+  tweenGridTrack,
+  useRightPanelChoreography,
+} from "$lib/motion";
 import { getSelectedPr } from "$lib/stores/prs.svelte";
 import {
   getActiveTab,
@@ -106,26 +111,22 @@ let isResizingRight = $state(false);
 let rightDragStartX = 0;
 let rightDragStartWidth = 0;
 
-// Element refs for GSAP-driven choreography (right panel slide, vignette).
+// Element refs for the right-panel choreography (slide + vignette).
 let panelEl: HTMLElement | null = $state(null);
 let mainEl: HTMLElement | null = $state(null);
 
-// GSAP-animated proxies for the grid track widths. Reading these into the
-// grid-template-columns string lets a single tween smoothly interpolate the
-// numeric value across both the sidebar collapse and the right-panel open/
-// close transitions. Initial values match the resting state of the layout;
-// `untrack` prevents Svelte from treating the initializer as a derived
-// (the values change later via the $effect blocks, not via re-init).
-let animatedSidebarTrackPx = $state(
+// Animated grid-column widths. GSAP writes these via the helpers in
+// $lib/motion/grid-choreography; the $derived `gridStyle` reads them.
+// `untrack` so initial values stay at the resting state without becoming a
+// derived expression.
+let sidebarTrackPx = $state(
   untrack(() => (sidebarEffectiveCollapsed ? 0 : sidebarWidth)),
 );
-let animatedRightPanelTrackPx = $state(
+let rightPanelTrackPx = $state(
   untrack(() => (rightPanelOpen ? rightPanelWidth : 0)),
 );
 
-// First-mount flag — on first run we snap rather than tween, so the panel
-// appears at its resting position without playing an open/close animation
-// on initial paint.
+// First-mount snap: don't play an open/close animation on initial paint.
 let panelChoreographed = false;
 
 // Close the chat panel when navigating away from a PR page
@@ -135,132 +136,36 @@ $effect(() => {
   }
 });
 
-// Sidebar column width tween. Triggered by collapse-state changes and by
-// width changes that aren't driven by a live drag. Dragging snaps instantly
-// to avoid trailing the cursor.
+// `untrack` the current trackPx read: GSAP's onUpdate writes back to the
+// same $state, which would otherwise mark this effect dirty mid-tween and
+// kill+restart the tween every frame.
+$effect(() =>
+  tweenGridTrack(
+    untrack(() => sidebarTrackPx),
+    sidebarEffectiveCollapsed ? 0 : sidebarWidth,
+    (v) => (sidebarTrackPx = v),
+    // Snap during drag (don't trail the cursor) and for large virtualized
+    // file trees (animating the column re-runs layout every frame).
+    { snap: isDragging || shouldSnapSidebarLayout },
+  ),
+);
+
 $effect(() => {
-  const target = sidebarEffectiveCollapsed ? 0 : sidebarWidth;
-  // Live drag: snap. Reduced-motion: snap. Large file trees: snap, because
-  // animating the grid column re-runs layout through a virtualized tree on
-  // every frame and produces visible jank — the previous CSS had the same
-  // carve-out via the `.snap-sidebar-layout` class.
-  if (isDragging || shouldSnapSidebarLayout || prefersReducedMotion()) {
-    animatedSidebarTrackPx = target;
-    return;
-  }
-  const proxy = { v: animatedSidebarTrackPx };
-  const t = gsap.to(proxy, {
-    v: target,
-    duration: tokens.smooth,
-    ease: tokens.easeOutExpo,
-    overwrite: "auto",
-    onUpdate() {
-      animatedSidebarTrackPx = proxy.v;
-    },
+  const snap = isResizingRight || !panelChoreographed;
+  if (!panelChoreographed && panelEl !== null) panelChoreographed = true;
+  return useRightPanelChoreography({
+    panelEl,
+    mainEl,
+    open: rightPanelOpen,
+    panelWidth: rightPanelWidth,
+    trackPx: untrack(() => rightPanelTrackPx),
+    setTrackPx: (v) => (rightPanelTrackPx = v),
+    snap,
   });
-  return () => {
-    t.kill();
-  };
 });
 
-// Right-panel choreography: a single timeline drives both the grid column
-// width and the panel's translateX so they never desync. The vignette on
-// the main area's right edge is animated via a CSS custom property so the
-// pseudo-element can pick it up without a separate element.
-$effect(() => {
-  const open = rightPanelOpen;
-  const targetTrack = open ? rightPanelWidth : 0;
-  const targetTranslateX = open ? 0 : rightPanelWidth;
-  const targetVignette = open ? 0.65 : 0;
-
-  // First-mount snap — avoids playing an open/close animation on initial
-  // paint when the panel is just settling into its resting position.
-  const firstRun = !panelChoreographed && panelEl !== null;
-  if (firstRun) {
-    panelChoreographed = true;
-    animatedRightPanelTrackPx = targetTrack;
-    if (panelEl) gsap.set(panelEl, { x: targetTranslateX });
-    if (mainEl) mainEl.style.setProperty("--vignette-opacity", String(targetVignette));
-    return;
-  }
-
-  if (isResizingRight) {
-    // Live resize: jump to the new width on every drag move.
-    animatedRightPanelTrackPx = targetTrack;
-    if (panelEl) gsap.set(panelEl, { x: 0 });
-    return;
-  }
-
-  if (prefersReducedMotion()) {
-    animatedRightPanelTrackPx = targetTrack;
-    if (panelEl) gsap.set(panelEl, { x: targetTranslateX });
-    if (mainEl) mainEl.style.setProperty("--vignette-opacity", String(targetVignette));
-    return;
-  }
-
-  // Asymmetric timing: open ~smooth (220ms) so the panel lands deliberately
-  // and the eye has time to track the new content; close at ~quick (160ms)
-  // because the user already decided to dismiss and a slow exit reads as lag.
-  // 160/220 ≈ 73%, matching the animate.md exit-vs-enter ratio.
-  const duration = open ? tokens.smooth : tokens.quick;
-  const ease = open ? tokens.easeOutExpo : tokens.easeSoft;
-  const trackProxy = { v: animatedRightPanelTrackPx };
-  const vignetteProxy = { v: getCurrentVignette() };
-  const t = gsap.timeline();
-  t.to(
-    trackProxy,
-    {
-      v: targetTrack,
-      duration,
-      ease,
-      onUpdate() {
-        animatedRightPanelTrackPx = trackProxy.v;
-      },
-    },
-    0,
-  );
-  if (panelEl) {
-    t.to(
-      panelEl,
-      {
-        x: targetTranslateX,
-        duration,
-        ease,
-      },
-      0,
-    );
-  }
-  if (mainEl) {
-    t.to(
-      vignetteProxy,
-      {
-        v: targetVignette,
-        duration,
-        ease,
-        onUpdate() {
-          mainEl?.style.setProperty("--vignette-opacity", String(vignetteProxy.v));
-        },
-      },
-      0,
-    );
-  }
-  return () => {
-    t.kill();
-  };
-});
-
-function getCurrentVignette(): number {
-  if (!mainEl) return 0;
-  const raw = mainEl.style.getPropertyValue("--vignette-opacity");
-  const parsed = parseFloat(raw);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-// Inline style for the grid — drives the dynamic sidebar AND right-panel
-// column widths. Both proxy values are tweened by GSAP above; the
-// derived string just composes them into the grid-template-columns CSS.
 const gridStyle = $derived(
-  `grid-template-columns: ${RAIL_WIDTH}px ${animatedSidebarTrackPx}px 1fr ${animatedRightPanelTrackPx}px; --right-panel-width: ${rightPanelWidth}px`,
+  `grid-template-columns: ${RAIL_WIDTH}px ${sidebarTrackPx}px 1fr ${rightPanelTrackPx}px; --right-panel-width: ${rightPanelWidth}px`,
 );
 
 function onHandlePointerDown(event: PointerEvent): void {
@@ -427,7 +332,13 @@ function onRightHandleDblClick(): void {
 	</aside>
 </div>
 
-<CommandPalette open={paletteOpen} mode={paletteMode} onClose={closePalette} />
+<CommandPalette
+	open={paletteOpen}
+	mode={paletteMode}
+	onOpenChange={(v) => {
+		if (!v) closePalette();
+	}}
+/>
 <SettingsModal open={getSettingsOpen()} onClose={closeSettings} />
 
 <style>

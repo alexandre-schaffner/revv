@@ -904,8 +904,8 @@ diffs-container {
 /* ──────────────────────────────────────────────────────────
    Reduced-motion contract.
 
-   GSAP-driven motion is gated by gsap.matchMedia() in
-   $lib/motion/match-media.ts — that is the SOLE arbiter for
+   GSAP-driven motion is gated by prefersReducedMotion() in
+   $lib/motion/reduced-motion.ts — that is the SOLE arbiter for
    every animation the migration ported onto GSAP.
 
    The block below is defensive coverage for the CSS animations

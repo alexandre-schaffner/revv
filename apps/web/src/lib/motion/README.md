@@ -1,127 +1,85 @@
 # `$lib/motion` — GSAP-backed animation system
 
-Single home for every animation in Revv. **Nothing else in the app imports `gsap`
+Single home for app animation. **Nothing else in the app imports `gsap`
 directly** — call into `$lib/motion` instead.
 
 ## Why GSAP
 
 We migrated off mixed CSS transitions + Svelte transitions + ad-hoc keyframes
 because they couldn't be choreographed together. GSAP unifies the timing
-model, gives us one easing source, and unlocks Flip-based layout morphs we
-couldn't write in CSS.
+model, gives us one easing source, and lets us run coordinated multi-target
+timelines (right-panel slide + vignette crossfade).
 
-## What lives here
+## Files
 
 | File | Role |
 | --- | --- |
-| `gsap.ts` | Plugin registration + project-wide defaults. Imported once from `+layout.svelte`. |
-| `tokens.ts` | Typed mirror of the `@theme` motion variables in `app.css`. Reads `getComputedStyle` lazily; ships static fallbacks. |
-| `match-media.ts` | Singleton `gsap.matchMedia()` that gates motion on `prefers-reduced-motion`. `withMotion(fn, { essential })`. |
-| `presets.ts` | Named recipes (`dialogSpringIn`, `panelSlideIn`, `walkthroughBlockReveal`, …). Each returns a `gsap.timeline()`. |
-| `actions.ts` | Svelte `use:` directives (`gsapIn`, `gsapPress`, `gsapHover`, `bitsAnim`). |
-| `transitions.ts` | Drop-in replacements for `svelte/transition` (`gsapFade`, `gsapFadeY`, `gsapSlide`, `gsapScale`). |
-| `page-transitions.ts` | `setupPageTransitions()` — registers `beforeNavigate`/`afterNavigate` for crossfade + Flip morphs. |
-| `index.ts` | Public re-exports. Prefer `from "$lib/motion"`. |
+| `gsap.ts` | GSAP + `CustomEase` registration; `overwrite:auto` default. |
+| `tokens.ts` | Flat const mirror of the `@theme` motion variables in `app.css`. |
+| `reduced-motion.ts` | `prefersReducedMotion()` — the single arbiter. |
+| `presets.ts` | Timelines for bits-ui content (`dialogSpringIn`, `popoverPopIn`, `tooltipPopIn`, …). |
+| `actions.ts` | `gsapPress` (button feedback) and `bitsAnim` (drives bits-ui content from `data-state`). |
+| `transitions.ts` | Svelte custom transitions (`gsapFade`, `gsapFadeY`, `gsapSlide`, `gsapScale`). |
+| `grid-choreography.ts` | `tweenGridTrack` and `useRightPanelChoreography` for the AppShell. |
+| `index.ts` | Public surface — `from "$lib/motion"`. |
 
-## How to add an animation
+## How to use
 
 ```svelte
-<script lang="ts">
-  import { gsapIn, walkthroughBlockReveal } from "$lib/motion";
+<script>
+  import { gsapPress, gsapFadeY, tokens } from "$lib/motion";
 </script>
 
-<div use:gsapIn={{ preset: walkthroughBlockReveal }}>
+<button use:gsapPress>Save</button>
+
+<div in:gsapFadeY={{ y: 8, duration: tokens.smooth }}>
   …
 </div>
 ```
 
-For state-driven (bits-ui) primitives:
+For a bits-ui content surface:
 
 ```svelte
-<script lang="ts">
+<script>
   import { bitsAnim, dialogSpringIn, dialogSpringOut } from "$lib/motion";
 </script>
 
-<bits-dialog-content
-  use:bitsAnim={{
-    inPreset: dialogSpringIn,
-    outPreset: dialogSpringOut,
-  }}
->
+<div data-state="open" use:bitsAnim={{ inPreset: dialogSpringIn, outPreset: dialogSpringOut }}>
   …
-</bits-dialog-content>
+</div>
 ```
 
-For an imperative timeline (e.g., the walkthrough phase A→D choreography):
+## Tokens
 
-```ts
-import { gsap, walkthroughBlockReveal, phaseDotLight, withMotion } from "$lib/motion";
+`tokens.ts` is a flat const object. **If you change a duration or ease, edit
+both `tokens.ts` and the `@theme` block in `app.css`.**
 
-withMotion(({ reduceMotion }) => {
-  if (reduceMotion) return;
-  const t = gsap.timeline()
-    .add(walkthroughBlockReveal(blockEl))
-    .add(phaseDotLight(dotEl), ">-0.1");
-  return () => t.kill();
-});
-```
-
-## Token bridge
-
-`tokens.ts` mirrors the values in `app.css:523-552`. **If you change a
-duration or easing, change both.** A comment in `app.css` points here as a
-reminder.
-
-GSAP wants durations in seconds; CSS uses ms. `tokens.snap` etc. are
-already in seconds. Easings are passed to GSAP as the raw
-`cubic-bezier(...)` string, which it accepts via CSSPlugin / parser.
-
-## Bundle cost
-
-`gsap` core + `Flip` + `Observer` + `Draggable` + `ScrollTrigger` weighs
-~50–60 KB gzipped. Code-split by route via Vite default. None of the Club
-GSAP plugins are used (SplitText, MorphSVG, DrawSVG, ScrollSmoother,
-CustomBounce all stay out).
-
-## Surviving CSS animations (intentional exceptions)
-
-The migration left a small set of CSS-driven animations in place by
-design. Adding new ones to this list requires a justification on
-the same axis: would moving to GSAP be a regression?
-
-- **`@keyframes motion-essential-spin`** + `.motion-essential-spin` —
-  the global loader spin used by every `phosphor-svelte/Spinner` icon.
-  Kept on the compositor because it runs simultaneously on many
-  surfaces; opt-in under reduced motion so users still see liveness.
-- **`@keyframes text-shimmer-sweep`** (Shimmer.svelte) — continuous
-  `background-position` sweep on streamed AI text. Compositor-only
-  paint; a per-glyph GSAP tween would not be cheaper.
-- **`@keyframes indeterminate-progress`** — the progress bar's
-  marching-ants loop. Single element, low cost, runs only while
-  active.
-- **`@keyframes sd-char-in`** + `.sd-char-new` — per-character fade
-  on markdown injected via `{@html}`. The DOM is generated by
-  `lib/utils/markdown.ts` and has no Svelte handle, so a `use:`
-  action can't attach. The keyframe is the right tool here.
-- **Dotmatrix variant system** — three animation kinds (`'css'`,
-  `'stepped'`, `'phase'`) keyed off a per-variant config. Variants
-  already have their own reduced-motion handling. Migration would
-  rewrite ~24 variants for no visible improvement.
-- **`transition: background-color` / `color` on hover states** —
-  paint-only crossfades on dozens of list items (PrItem, button
-  variants, sidebar rows, etc.). Compositor handles these for free;
-  per-element GSAP `gsapHover` would create tween churn on every
-  pointer-enter.
-
-Every other CSS `@keyframes`, `transition:`, or `animate-` Tailwind
-utility is forbidden for motion. Phase 7 of the migration removed
-the keyframes the bits-ui primitives, Svelte transitions, and
-hand-rolled Tailwind animate-* utilities were carrying.
+GSAP wants seconds; CSS uses ms. The eases are stored as bare cubic-bezier
+control points because `CustomEase` parses any string starting with a digit.
 
 ## Reduced motion
 
-`gsap.matchMedia()` (via `withMotion`) is the **single** arbiter for
-GSAP-driven motion. The global `@media (prefers-reduced-motion: reduce)`
-block in `app.css` is the second-line defense for the CSS exceptions
-listed above — those need the global sledgehammer because they aren't
-gated by `gsap.matchMedia`. `.motion-essential-spin` opts back in.
+`prefersReducedMotion()` is the **single arbiter**. Every action, preset
+call site, and motion `$effect` reads through it. There is no `gsap.matchMedia`
+wrapper — the synchronous check is enough for every case we have.
+
+The defensive `@media (prefers-reduced-motion: reduce)` block in `app.css`
+covers the CSS animations that intentionally stayed off GSAP — see the
+"Surviving CSS animations" section below.
+
+## Surviving CSS animations
+
+Kept off GSAP by design — moving them would be a regression:
+
+- **`motion-essential-spin`** — loader spinner. Compositor-only paint, runs on
+  many surfaces simultaneously; a GSAP infinite tween would burn rAF for an
+  indicator that exists on ~7 places at once.
+- **`text-shimmer-sweep`** — continuous `background-position` sweep on streamed
+  AI text. Per-glyph GSAP would not be cheaper.
+- **`indeterminate-progress`** — single element, low cost, runs only when active.
+- **`sd-char-in` / `.sd-char-new`** — per-character fade on markdown injected
+  via `{@html}`. No Svelte handle for `use:`, so a keyframe is the right tool.
+- **Dotmatrix variants** — three animation kinds with their own reduced-motion
+  handling; ~24 variants, no visible improvement from migration.
+- **`transition: background-color` / `color`** on hover states — compositor
+  paint crossfades on dozens of list items.

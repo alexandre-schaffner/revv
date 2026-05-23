@@ -1,47 +1,53 @@
 /**
- * Named, parameterized motion recipes used across the app.
+ * Named GSAP timeline recipes for bits-ui content surfaces. Each returns a
+ * Timeline so `bitsAnim` can drive it from `data-state` changes.
  *
- * Each preset returns a gsap.core.Timeline so callers can chain, attach
- * callbacks, or kill it on cleanup. Presets are pure with respect to the
- * element they receive — no shared mutable state.
- *
- * Reduced-motion handling is done at the action / call-site layer via
- * `withMotion`, not inside the preset, so a preset can also be used outside
- * a matchMedia context (e.g., manually driven from a test).
- *
- * `essential` flag on a preset is metadata only; consumers query it to
- * decide whether to opt the preset back in under reduced motion.
+ * If a new preset is needed, add it here — but only once a real callsite needs it.
  */
 import { gsap } from "./gsap";
 import { tokens } from "./tokens";
 
-type Timeline = gsap.core.Timeline;
-type TimelineVars = gsap.TimelineVars;
-
-export interface PresetMeta {
-  essential?: boolean;
-}
-
-export type PresetFn<TOptions = void> = ((
+export type PresetFn<TOptions = void> = (
   el: Element,
   opts?: TOptions,
-) => Timeline) & PresetMeta;
+) => gsap.core.Timeline;
 
-function tl(vars?: TimelineVars): Timeline {
-  return gsap.timeline(vars);
+type Side = "top" | "right" | "bottom" | "left";
+
+/**
+ * Pop-in for a surface anchored to a trigger. The surface "grows out of" the
+ * trigger by starting offset along its anchor axis: a top-side popover (trigger
+ * BELOW) starts a few pixels lower and slides up; mirror on all four sides.
+ */
+function popInFromSide(
+  el: Element,
+  side: Side,
+  fromScale: number,
+): gsap.core.Timeline {
+  const axis = side === "left" || side === "right" ? "x" : "y";
+  const offset = side === "top" || side === "left" ? 4 : -4;
+  return gsap.timeline().fromTo(
+    el,
+    { autoAlpha: 0, scale: fromScale, [axis]: offset },
+    {
+      autoAlpha: 1,
+      scale: 1,
+      [axis]: 0,
+      duration: tokens.snap,
+      ease: tokens.easeOutExpo,
+    },
+  );
 }
 
-/* ───────────────────────── Entrances ───────────────────────── */
-
 export const dialogSpringIn: PresetFn = (el) =>
-  tl().fromTo(
+  gsap.timeline().fromTo(
     el,
     { autoAlpha: 0, scale: 0.96, y: 12 },
     { autoAlpha: 1, scale: 1, y: 0, duration: tokens.smooth, ease: tokens.easeOutExpo },
   );
 
 export const dialogSpringOut: PresetFn = (el) =>
-  tl().to(el, {
+  gsap.timeline().to(el, {
     autoAlpha: 0,
     scale: 0.98,
     y: 4,
@@ -49,245 +55,24 @@ export const dialogSpringOut: PresetFn = (el) =>
     ease: tokens.easeSoft,
   });
 
-export const popoverPopIn: PresetFn<{ side?: "top" | "right" | "bottom" | "left" }> = (
-  el,
-  opts,
-) => {
-  const side = opts?.side ?? "bottom";
-  const axis = side === "left" || side === "right" ? "x" : "y";
-  // The popover should appear to "grow out of" its trigger. The trigger sits
-  // on the OPPOSITE side of the popover's data-side: a top-side popover has
-  // its trigger BELOW it, so the popover starts a few pixels lower (closer to
-  // the trigger) and slides up into place. Mirror this on all four axes.
-  const offset = side === "top" || side === "left" ? 4 : -4;
-  return tl().fromTo(
-    el,
-    { autoAlpha: 0, scale: 0.96, [axis]: offset },
-    {
-      autoAlpha: 1,
-      scale: 1,
-      [axis]: 0,
-      duration: tokens.snap,
-      ease: tokens.easeOutExpo,
-    },
-  );
-};
+export const popoverPopIn: PresetFn<{ side?: Side }> = (el, opts) =>
+  popInFromSide(el, opts?.side ?? "bottom", 0.96);
 
 export const popoverPopOut: PresetFn = (el) =>
-  tl().to(el, {
+  gsap.timeline().to(el, {
     autoAlpha: 0,
     scale: 0.98,
     duration: tokens.instant,
     ease: tokens.easeSoft,
   });
 
-export const tooltipPopIn: PresetFn<{ side?: "top" | "right" | "bottom" | "left" }> = (
-  el,
-  opts,
-) => {
-  const side = opts?.side ?? "top";
-  const axis = side === "left" || side === "right" ? "x" : "y";
-  // Same growth-from-trigger logic as popoverPopIn (see comment there).
-  const offset = side === "top" || side === "left" ? 4 : -4;
-  return tl().fromTo(
-    el,
-    { autoAlpha: 0, scale: 0.92, [axis]: offset },
-    {
-      autoAlpha: 1,
-      scale: 1,
-      [axis]: 0,
-      duration: tokens.snap,
-      ease: tokens.easeOutExpo,
-    },
-  );
-};
+export const tooltipPopIn: PresetFn<{ side?: Side }> = (el, opts) =>
+  popInFromSide(el, opts?.side ?? "top", 0.92);
 
 export const tooltipPopOut: PresetFn = (el) =>
-  tl().to(el, {
+  gsap.timeline().to(el, {
     autoAlpha: 0,
     scale: 0.96,
     duration: tokens.instant,
     ease: tokens.easeSoft,
   });
-
-/* ───────────────────────── Layout / panels ───────────────────────── */
-
-export const panelSlideIn: PresetFn<{ from?: "right" | "left"; distance?: number }> = (
-  el,
-  opts,
-) => {
-  const from = opts?.from ?? "right";
-  const distance = opts?.distance ?? 100;
-  const sign = from === "right" ? 1 : -1;
-  return tl().fromTo(
-    el,
-    { xPercent: sign * distance, autoAlpha: 0 },
-    {
-      xPercent: 0,
-      autoAlpha: 1,
-      duration: tokens.smooth,
-      ease: tokens.easeOutExpo,
-    },
-  );
-};
-
-export const panelSlideOut: PresetFn<{ to?: "right" | "left"; distance?: number }> = (
-  el,
-  opts,
-) => {
-  const to = opts?.to ?? "right";
-  const distance = opts?.distance ?? 100;
-  const sign = to === "right" ? 1 : -1;
-  // Exit runs at ~73% of the entrance (quick / smooth). Animate.md: users
-  // dismissing a panel want it gone — slow exits feel laggy. Keeping the
-  // soft ease so the close still feels considered rather than ripped.
-  return tl().to(el, {
-    xPercent: sign * distance,
-    autoAlpha: 0,
-    duration: tokens.quick,
-    ease: tokens.easeSoft,
-  });
-};
-
-/* ───────────────────────── Lists / staggers ───────────────────────── */
-
-export const queueItemStream: PresetFn<{ children?: string }> = (el, opts) => {
-  const targets = opts?.children
-    ? (el as HTMLElement).querySelectorAll(opts.children)
-    : (el as HTMLElement).children;
-  return tl().fromTo(
-    targets,
-    { autoAlpha: 0, y: 6 },
-    {
-      autoAlpha: 1,
-      y: 0,
-      duration: tokens.quick,
-      ease: tokens.easeOutExpo,
-      stagger: tokens.stagger.default,
-    },
-  );
-};
-
-export const walkthroughBlockReveal: PresetFn = (el) =>
-  tl().fromTo(
-    el,
-    { autoAlpha: 0, y: 8, scale: 0.99 },
-    {
-      autoAlpha: 1,
-      y: 0,
-      scale: 1,
-      duration: tokens.smooth,
-      ease: tokens.easeOutExpo,
-    },
-  );
-
-export const phaseDotLight: PresetFn = (el) =>
-  tl()
-    .fromTo(
-      el,
-      { scale: 0.6, autoAlpha: 0.4 },
-      {
-        scale: 1,
-        autoAlpha: 1,
-        duration: tokens.quick,
-        ease: tokens.easeOutExpo,
-      },
-    )
-    .to(
-      el,
-      {
-        scale: 1.15,
-        duration: tokens.snap,
-        ease: tokens.easeOutExpo,
-        yoyo: true,
-        repeat: 1,
-      },
-      ">-0.05",
-    );
-
-/* ───────────────────────── Indicators (looped) ───────────────────────── */
-
-export const streamCursorBlink: PresetFn = (el) =>
-  tl({ repeat: -1, yoyo: true }).to(el, {
-    autoAlpha: 0,
-    duration: tokens.smooth,
-    ease: "none",
-  });
-streamCursorBlink.essential = true;
-
-export const pulseMarker: PresetFn = (el) =>
-  tl({ repeat: -1 }).fromTo(
-    el,
-    { boxShadow: "0 0 0 0 var(--color-marker-open-glow)" },
-    {
-      boxShadow: "0 0 0 4px transparent",
-      duration: tokens.pulse,
-      ease: tokens.easeSoft,
-    },
-  );
-
-export const statusDotBreath: PresetFn = (el) =>
-  tl({ repeat: -1, yoyo: true }).fromTo(
-    el,
-    { scale: 0.9, autoAlpha: 0.7 },
-    {
-      scale: 1.05,
-      autoAlpha: 1,
-      duration: tokens.pulse / 2,
-      ease: tokens.easeSoft,
-    },
-  );
-
-export const syncSpin: PresetFn = (el) =>
-  tl({ repeat: -1 }).to(el, {
-    rotation: 360,
-    duration: 1,
-    ease: "none",
-    transformOrigin: "50% 50%",
-  });
-syncSpin.essential = true;
-
-/* ───────────────────────── Micro-interactions ───────────────────────── */
-
-export const cmdHintReveal: PresetFn = (el) =>
-  tl().fromTo(
-    (el as HTMLElement).querySelectorAll("[data-cmd-hint]"),
-    { autoAlpha: 0, scale: 0.85, width: 0 },
-    {
-      autoAlpha: 0.55,
-      scale: 1,
-      width: "auto",
-      duration: tokens.snap,
-      ease: tokens.easeOutExpo,
-      stagger: tokens.stagger.tight,
-    },
-  );
-
-export const ratingCellSelect: PresetFn = (el) =>
-  tl().fromTo(
-    el,
-    { scale: 0.94 },
-    {
-      scale: 1,
-      duration: tokens.snap,
-      // Snap-back on rating select; smooth deceleration, no overshoot —
-      // overshoot on a precision-input affordance reads as imprecision.
-      ease: tokens.easeOutExpo,
-    },
-  );
-
-export const prItemHover: PresetFn<{ enter?: boolean }> = (el, opts) =>
-  tl().to(el, {
-    backgroundColor:
-      opts?.enter !== false ? "var(--color-bg-tertiary)" : "transparent",
-    duration: tokens.snap,
-    ease: tokens.easeSoft,
-  });
-
-export const pinIconReveal: PresetFn<{ visible?: boolean }> = (el, opts) =>
-  tl().to(el, {
-    autoAlpha: opts?.visible ? 1 : 0,
-    duration: tokens.snap,
-    ease: tokens.easeSoft,
-  });
-
