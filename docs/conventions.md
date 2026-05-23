@@ -367,6 +367,43 @@ in `apps/web/src/lib/stores/chat.svelte.ts` (`resolveQuestionFromWs`).
 
 **Backlog.** [`S-004`](./conventions-backlog.md#s-004).
 
+<a id="stores-optimistic"></a>
+### 4.6 Client-initiated mutations are optimistic with entity-scoped rollback
+
+**Rule.** A store function that wraps a server mutation flips local state immediately, awaits
+the API call, and on error restores the same entity's prior fields. Rollback captures *the
+specific fields being mutated on the specific entities involved* — never a list snapshot. If
+the calling component branches on the throw (loading spinners, inline errors), the function
+rethrows after the toast; otherwise it may swallow.
+
+**Why.** Two reasons. (1) **UI lag.** Waiting for the server round-trip plus the WS
+rebroadcast before reflecting the user's action is the laggy-feel symptom this rule
+eliminates — closing a PR, flipping draft state, merging, pinning should feel
+instantaneous because the outcome is rarely in doubt. (2) **Concurrency.** A `prs:updated`
+arriving during the optimistic window can legitimately add or remove *other* entities.
+List-snapshot rollback (`pullRequests = openSnapshot`) would clobber those updates and
+re-introduce entities the server has since removed. Restoring only the fields you changed
+on the entity you touched is resilient to whatever else arrives over the wire.
+
+**Canonical example.** `apps/web/src/lib/stores/prs.svelte.ts:338-362` — `pinPr` and
+`unpinPr` capture the single field they mutate (`pinnedPrIds` membership), apply,
+and restore on throw. The four owner-only PR mutations (`convertPrToDraft`,
+`markPrReadyForReview`, `closePr`, `mergePr`) in the same file follow the same shape
+with more fields involved: draft flip uses a single-field local helper; close/merge reuse
+the existing `onPrArchived` for the forward open→archived move and `restorePrFromArchive`
+for the reverse rollback. Both helpers touch exactly one PR per call so concurrent
+`prs:updated` broadcasts that reshuffle the rest of the list survive intact.
+
+**Anti-pattern.** `apps/web/src/lib/stores/prs.svelte.ts:455-487` — `deleteRepo` snapshots
+`repositories`, `pullRequests`, `archivedPrs`, `taggedPrsByRepo`, and `pinnedPrIds` whole
+via `snapshotRepoState()`, restores them whole on error via `restoreRepoState()`. The
+shape works for the rare single-entity-delete case it lives in, but it does not generalize:
+any concurrent WS broadcast between snapshot and rollback is silently dropped. The fix is
+entity-scoped removal — capture the removed repo, the removed PR ids, and the removed
+pinned ids — and inverse them on rollback rather than restoring the whole world.
+
+**Backlog.** [`S-005`](./conventions-backlog.md#s-005).
+
 ---
 
 <a id="ui-motion"></a>
