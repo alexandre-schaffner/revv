@@ -98,9 +98,7 @@ function rowToRecap(
   };
 }
 
-function themeSummaryRowToSummary(
-  row: typeof recapThemeSummaries.$inferSelect,
-): RecapThemeSummary {
+function themeSummaryRowToSummary(row: typeof recapThemeSummaries.$inferSelect): RecapThemeSummary {
   return {
     id: row.id,
     recapId: row.recapId,
@@ -371,11 +369,7 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
       });
       const themeSummaryRows = yield* Effect.try({
         try: () =>
-          db
-            .select()
-            .from(recapThemeSummaries)
-            .where(eq(recapThemeSummaries.recapId, id))
-            .all(),
+          db.select().from(recapThemeSummaries).where(eq(recapThemeSummaries.recapId, id)).all(),
         catch: (e) => new ValidationError({ message: `getById theme summaries: ${String(e)}` }),
       });
       return rowToRecap(
@@ -602,9 +596,7 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
           // Cascades from recap_id are not enough since the recap row itself
           // stays put.
           db.delete(recapPrEntries).where(eq(recapPrEntries.recapId, recapId)).run();
-          db.delete(recapThemeSummaries)
-            .where(eq(recapThemeSummaries.recapId, recapId))
-            .run();
+          db.delete(recapThemeSummaries).where(eq(recapThemeSummaries.recapId, recapId)).run();
           return { previousOverview };
         },
         catch: (e) => {

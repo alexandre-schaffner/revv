@@ -16,7 +16,6 @@ import {
   resetRecapStream,
   streamRecap,
 } from "$lib/stores/recap-stream.svelte";
-import { getMainAreaBounds } from "$lib/stores/sidebar.svelte";
 import {
   fetchRecapsForRepo,
   generateRecap,
@@ -29,6 +28,7 @@ import {
   regenerateRecap,
   stopRecap,
 } from "$lib/stores/recaps.svelte";
+import { getMainAreaBounds } from "$lib/stores/sidebar.svelte";
 
 const repoId = $derived(page.params.repoId ?? "");
 const recapId = $derived(page.params.recapId ?? "");

@@ -581,29 +581,29 @@ export const PollSchedulerLive = Layer.effect(
                   token,
                 ),
               ).pipe(
-                  Effect.tapError((err) =>
-                    Effect.sync(() => {
-                      // `guardAuth` has already marked the token bad and
-                      // logged the actionable "needs re-auth" line; the
-                      // bare `GitHubAuthError` doesn't add anything.
-                      if (err instanceof GitHubAuthError) return;
-                      logError(
-                        "PollScheduler",
-                        `archive backfill search failed for ${repo.fullName}:`,
-                        err,
-                      );
-                    }),
+                Effect.tapError((err) =>
+                  Effect.sync(() => {
+                    // `guardAuth` has already marked the token bad and
+                    // logged the actionable "needs re-auth" line; the
+                    // bare `GitHubAuthError` doesn't add anything.
+                    if (err instanceof GitHubAuthError) return;
+                    logError(
+                      "PollScheduler",
+                      `archive backfill search failed for ${repo.fullName}:`,
+                      err,
+                    );
+                  }),
+                ),
+                Effect.catchAll(() =>
+                  Effect.succeed(
+                    [] as ReadonlyArray<{
+                      readonly number: number;
+                      readonly closedAt: string;
+                      readonly merged: boolean;
+                    }>,
                   ),
-                  Effect.catchAll(() =>
-                    Effect.succeed(
-                      [] as ReadonlyArray<{
-                        readonly number: number;
-                        readonly closedAt: string;
-                        readonly merged: boolean;
-                      }>,
-                    ),
-                  ),
-                );
+                ),
+              );
               if (searched.length === 0) return;
 
               const known = existingExternalIdsByRepo.get(repo.id) ?? new Set<number>();

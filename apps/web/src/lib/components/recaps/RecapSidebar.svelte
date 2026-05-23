@@ -73,8 +73,7 @@ function scrollToTheme(theme: string): void {
   const el = document.getElementById(themeSlug(theme));
   if (!el) return;
   const reduced =
-    typeof window !== "undefined" &&
-    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   el.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
 }
 </script>

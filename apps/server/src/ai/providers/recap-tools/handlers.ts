@@ -394,7 +394,9 @@ export const setThemeSummaryHandler: RecapToolHandler<SetThemeSummaryInput> = as
   // key joins cleanly across the two writes regardless of casing/spacing.
   const theme = input.theme.trim().toLowerCase().replace(/\s+/g, " ");
   if (theme.length === 0) {
-    return err("Error: theme was empty after normalization. Pass the same lowercase noun you used for add_pr_entry.");
+    return err(
+      "Error: theme was empty after normalization. Pass the same lowercase noun you used for add_pr_entry.",
+    );
   }
 
   const summary = input.summary.trim().replace(/\s+/g, " ");
@@ -432,9 +434,7 @@ export const setThemeSummaryHandler: RecapToolHandler<SetThemeSummaryInput> = as
   const persisted = ctx.db
     .select()
     .from(recapThemeSummaries)
-    .where(
-      and(eq(recapThemeSummaries.recapId, ctx.recapId), eq(recapThemeSummaries.theme, theme)),
-    )
+    .where(and(eq(recapThemeSummaries.recapId, ctx.recapId), eq(recapThemeSummaries.theme, theme)))
     .get();
 
   if (persisted) {
