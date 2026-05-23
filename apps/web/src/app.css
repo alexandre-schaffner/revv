@@ -553,53 +553,17 @@
 
 /* ──────────────────────────────────────────────────────────
    Animations
+   GSAP (via $lib/motion) owns all entrance / exit / interaction
+   motion. The keyframes that remain in this section are the
+   documented exceptions — see the comment on each one for why.
    ────────────────────────────────────────────────────────── */
-@keyframes pulse-marker {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 var(--color-marker-open-glow);
-  }
-  50% {
-    box-shadow: 0 0 0 4px transparent;
-  }
-}
-
-@keyframes stream-cursor-blink {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0;
-  }
-}
-
-@keyframes fade-in-up {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes fade-in-scale {
-  from {
-    opacity: 0;
-    transform: scale(0.96);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
 
 /* Spin animation for loading indicators (Loader2, etc.).
    The .motion-essential-* class opts back in under
    prefers-reduced-motion so reduced-motion users still
-   see the loading affordance. */
+   see the loading affordance. CSS-driven so it stays on the
+   compositor — a GSAP infinite tween would burn RAF for an
+   indicator that exists on ~7 surfaces simultaneously. */
 @keyframes motion-essential-spin {
   from {
     transform: rotate(0deg);
@@ -920,47 +884,6 @@ body {
 }
 
 /* ──────────────────────────────────────────────────────────
-   Motion preset keyframes (used by bits-ui primitives whose
-   transitions are CSS-data-state-driven, not Svelte transitions).
-   Pair with the named JS presets in src/lib/motion/transitions.ts —
-   keep numerics aligned by hand (small price for the duplication).
-   ────────────────────────────────────────────────────────── */
-@keyframes motion-dialog-spring-in {
-  0% {
-    opacity: 0;
-    scale: 0.96;
-    translate: 0 12px;
-  }
-  100% {
-    opacity: 1;
-    scale: 1;
-    translate: 0 0;
-  }
-}
-@keyframes motion-popover-pop-in {
-  0% {
-    opacity: 0;
-    scale: 0.96;
-  }
-  100% {
-    opacity: 1;
-    scale: 1;
-  }
-}
-@keyframes motion-tooltip-pop-in {
-  0% {
-    opacity: 0;
-    scale: 0.92;
-    translate: 0 4px;
-  }
-  100% {
-    opacity: 1;
-    scale: 1;
-    translate: 0 0;
-  }
-}
-
-/* ──────────────────────────────────────────────────────────
    Pierre (code/diff) theme sync.
    Pierre's shadow DOM sets :host { color-scheme: light dark }
    which follows the OS, not the app. Override with `inherit`
@@ -980,9 +903,19 @@ diffs-container {
 
 /* ──────────────────────────────────────────────────────────
    Reduced-motion contract.
-   Sledgehammer all transitions/animations to ~instant; opt
-   semantically-essential animations (state-meaning indicators)
-   back in via the .motion-essential-* utility classes.
+
+   GSAP-driven motion is gated by gsap.matchMedia() in
+   $lib/motion/match-media.ts — that is the SOLE arbiter for
+   every animation the migration ported onto GSAP.
+
+   The block below is defensive coverage for the CSS animations
+   that intentionally stayed off GSAP (see motion/README.md for
+   the list and the per-case justification): the loader spin,
+   the text-shimmer sweep, the per-character markdown reveal,
+   the indeterminate progress bar, and the Dotmatrix variants.
+   Each is either semantically essential (kept running via the
+   .motion-essential-* utility) or a compositor-only paint loop
+   that explicitly opts out via the @media query below.
 
    Add new exceptions sparingly. Each one needs a comment
    explaining why losing the animation would harm meaning.
