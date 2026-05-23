@@ -82,13 +82,22 @@ export const gsapPress: Action<HTMLElement, GsapPressParams | undefined> = (
   let current: GsapPressParams | undefined = params;
   let activeTween: gsap.core.Tween | null = null;
 
-  const down = () => {
-    if (current?.disabled) return;
+  const shouldSkip = (): boolean => {
+    if (current?.disabled) return true;
+    // Mirror the existing CSS convention: buttons that open popovers /
+    // menus / dialogs don't get press feedback — the opening surface IS
+    // the feedback, and a competing scale animation reads as jitter.
+    if (node.hasAttribute("aria-haspopup")) return true;
     if (
       typeof window !== "undefined" &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches
     )
-      return;
+      return true;
+    return false;
+  };
+
+  const down = () => {
+    if (shouldSkip()) return;
     activeTween?.kill();
     activeTween = gsap.to(node, {
       scale: current?.scale ?? 0.97,
@@ -97,7 +106,7 @@ export const gsapPress: Action<HTMLElement, GsapPressParams | undefined> = (
     });
   };
   const up = () => {
-    if (current?.disabled) return;
+    if (shouldSkip()) return;
     activeTween?.kill();
     activeTween = gsap.to(node, {
       scale: 1,
