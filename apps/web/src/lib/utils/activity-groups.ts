@@ -9,29 +9,10 @@ export interface GroupableActivity {
   readonly subagentInvocationId?: string;
 }
 
-export type ActivityGroupCategory = "exploring";
-
-export interface ActivityGroup<T extends GroupableActivity = GroupableActivity> {
-  readonly category: ActivityGroupCategory;
-  readonly items: readonly T[];
-}
-
-export function isActivityGroup<T extends GroupableActivity>(
-  value: ActivityGroup<T> | T,
-): value is ActivityGroup<T> {
-  return "category" in value && value.category === "exploring" && Array.isArray(value.items);
-}
-
 export interface ActivityGroupCounts {
   readonly reads: number;
   readonly searches: number;
   readonly lists: number;
-}
-
-const EXPLORATION_KINDS = new Set<ActivityKind>(["tool.read", "tool.grep", "tool.glob", "tool.ls"]);
-
-export function isExplorationActivity(activity: Pick<GroupableActivity, "activityKind">): boolean {
-  return EXPLORATION_KINDS.has(activity.activityKind);
 }
 
 export function activityGroupSummary(
@@ -99,29 +80,4 @@ export function activityToolLabel(
 function countLabel(count: number, one: string, other: string): string | null {
   if (count <= 0) return null;
   return `${count} ${count === 1 ? one : other}`;
-}
-
-export function groupActivityRuns<T extends GroupableActivity>(
-  items: readonly T[],
-): Array<ActivityGroup<T> | T> {
-  const result: Array<ActivityGroup<T> | T> = [];
-  let current: T[] = [];
-
-  const flush = (): void => {
-    if (current.length === 0) return;
-    result.push({ category: "exploring", items: current });
-    current = [];
-  };
-
-  for (const item of items) {
-    if (isExplorationActivity(item)) {
-      current.push(item);
-      continue;
-    }
-    flush();
-    result.push(item);
-  }
-
-  flush();
-  return result;
 }
