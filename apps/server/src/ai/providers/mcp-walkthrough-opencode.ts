@@ -346,12 +346,15 @@ export function streamWalkthroughViaOpencodeMCP(
             }
 
             if (ev.kind === "reasoning-delta") {
-              // Extended reasoning — keep stream guard alive
-              // (throttled to once per 30s). The opencode driver
-              // owns this heartbeat because the agent-side
-              // reasoning may run for 60+ s without producing a
-              // tool call, which would otherwise look like a
-              // stalled stream to the guard.
+              // Forward reasoning text so the client can interleave it
+              // chronologically with tool calls in the "Reviewing…"
+              // feed. Empty deltas are dropped (no signal).
+              if (ev.data.length > 0) {
+                push({ type: "thought", data: { text: ev.data } });
+              }
+              // Throttled phase heartbeat — keeps the stream guard
+              // alive when reasoning runs for 60+ s without producing
+              // a tool call.
               const now = Date.now();
               if (now - lastReasoningPush >= 30_000) {
                 lastReasoningPush = now;

@@ -83,7 +83,7 @@ $effect(() => {
 		>
 			{#if loading}
 				<div class="flex items-center justify-center gap-2 px-3 py-3 text-xs text-text-muted">
-					<span class="animate-spin"><Loader size={12} /></span>
+					<span class="motion-essential-spin"><Loader size={12} /></span>
 					<span>Loading commits…</span>
 				</div>
 			{:else if fetchError}

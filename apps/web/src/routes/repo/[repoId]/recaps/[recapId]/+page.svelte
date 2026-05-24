@@ -10,6 +10,7 @@ import GenActionBar, { type GenActionState } from "$lib/components/layout/GenAct
 import PreviousRecaps from "$lib/components/recaps/PreviousRecaps.svelte";
 import RecapDetail from "$lib/components/recaps/RecapDetail.svelte";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
+import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
 import {
   abortRecapStream,
   getRecapStreamEntry,
@@ -195,8 +196,12 @@ async function onGenerate(): Promise<void> {
 		</div>
 
 		{#if genActionState}
-			<div class="actions-float">
-				<div class="actions-row">
+			<div
+				class="actions-float"
+				in:gsapFadeY={{ duration: tokens.quick, y: 8 }}
+				out:gsapFade={{ duration: tokens.snap }}
+			>
+				<div class="actions-row" role="toolbar" aria-label="Recap actions">
 					{#if recapUiKind === "outdated"}
 						<GlassPill
 							variant="accent"
@@ -205,7 +210,7 @@ async function onGenerate(): Promise<void> {
 							title="Write a brand-new recap for {currentPeriodLabel} {periodLabelLower} window. The recap below stays as-is."
 						>
 							{#if generating}
-								<Loader2 size={14} weight="regular" class="animate-spin" aria-hidden="true" />
+								<Loader2 size={14} weight="regular" class="motion-essential-spin" aria-hidden="true" />
 							{:else}
 								<Sparkles size={16} weight="fill" aria-hidden="true" />
 							{/if}

@@ -159,9 +159,8 @@ function onAnimEnd(event: AnimationEvent): void {
 	.issue-card {
 		padding: 10px 14px;
 		border-radius: 8px;
-		background: var(--color-bg-secondary);
-		border: 1px solid var(--color-border);
-		border-left: 3px solid var(--severity-color, var(--color-border));
+		background: color-mix(in srgb, var(--severity-color, transparent) 5%, var(--color-bg-secondary));
+		border: 1px solid color-mix(in srgb, var(--severity-color, transparent) 35%, var(--color-border));
 		display: flex;
 		flex-direction: row;
 		align-items: flex-start;
@@ -216,6 +215,11 @@ function onAnimEnd(event: AnimationEvent): void {
 
 	button.issue-card:hover .issue-step-tag {
 		color: var(--severity-color, var(--color-accent));
+	}
+
+	button.issue-card:active {
+		transform: translateY(0);
+		box-shadow: none;
 	}
 
 	button.issue-card:focus-visible {

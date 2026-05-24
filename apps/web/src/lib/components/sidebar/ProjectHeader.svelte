@@ -62,8 +62,8 @@ function handleNewPr(): void {
 				</Tooltip.Trigger>
 				<Tooltip.Content side="bottom" sideOffset={6} align="end">
 					{newPrEnabled
-						? 'Start a new PR — chat with the agent in a worktree'
-						: 'Coming soon — agent-driven PR creation'}
+						? 'Start a new PR. Chat with the agent in a worktree.'
+						: 'Coming soon: agent-driven PR creation.'}
 				</Tooltip.Content>
 			</Tooltip.Root>
 		</div>
@@ -157,6 +157,11 @@ function handleNewPr(): void {
 		color: var(--color-text-primary);
 	}
 
+	.header-link:focus-visible {
+		outline: 2px solid var(--color-accent);
+		outline-offset: 2px;
+	}
+
 	.header-link-label {
 		font-weight: 500;
 	}
@@ -179,6 +184,11 @@ function handleNewPr(): void {
 
 	.new-pr-button:hover:not(:disabled) {
 		filter: brightness(1.08);
+	}
+
+	.new-pr-button:focus-visible {
+		outline: 2px solid var(--color-accent);
+		outline-offset: 2px;
 	}
 
 	.new-pr-button--disabled {

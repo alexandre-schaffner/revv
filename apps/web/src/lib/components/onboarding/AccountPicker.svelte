@@ -5,7 +5,7 @@ import Moon from "phosphor-svelte/lib/Moon";
 import Loader2 from "phosphor-svelte/lib/Spinner";
 import Sun from "phosphor-svelte/lib/Sun";
 import User from "phosphor-svelte/lib/User";
-import { fade } from "svelte/transition";
+import { gsapFade, tokens } from "$lib/motion";
 import { getIsSwitching, getLocalAccounts, switchAccount } from "$lib/stores/auth.svelte";
 import {
   getThemePreference,
@@ -58,7 +58,7 @@ function cycleTheme() {
 }
 </script>
 
-<div class="picker" in:fade={{ duration: 320 }}>
+<div class="picker" in:gsapFade={{ duration: tokens.slow }}>
     <button class="theme-toggle" onclick={cycleTheme} aria-label={labels[theme]} title={labels[theme]}>
         {#if theme === 'light'}
             <Sun size={14} weight="fill" />
@@ -101,7 +101,7 @@ function cycleTheme() {
                     </span>
                     <span class="picker-card-action">
                         {#if switching}
-                            <Loader2 size={14} weight="regular" class="picker-spinner" />
+                            <Loader2 size={14} weight="regular" class="picker-spinner motion-essential-spin" />
                         {:else}
                             <ArrowRight size={14} class="picker-arrow" />
                         {/if}
@@ -272,11 +272,6 @@ function cycleTheme() {
 
     :global(.picker-spinner) {
         color: var(--color-text-muted);
-        animation: spin 1s linear infinite;
-    }
-
-    @keyframes spin {
-        to { transform: rotate(360deg); }
     }
 
     .picker-footer {

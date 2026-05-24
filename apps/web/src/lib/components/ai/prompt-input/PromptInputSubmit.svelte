@@ -49,7 +49,7 @@ export type PromptInputSubmitProps = ButtonProps;
 	{#if status === "error"}
 		<WarningCircle class="size-3.5" />
 	{:else if status === "submitted"}
-		<Spinner class="size-3.5 motion-essential-spin animate-spin" />
+		<Spinner class="size-3.5 motion-essential-spin" />
 	{:else if status === "streaming"}
 		<Stop class="size-3" />
 	{:else}

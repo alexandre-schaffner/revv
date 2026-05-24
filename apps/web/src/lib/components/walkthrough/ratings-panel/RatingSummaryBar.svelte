@@ -88,7 +88,7 @@ const expandLabel = $derived(expandAll === true ? "Collapse all" : "Expand all")
 
             {#if runningCount > 0}
                 <span class="count-pill count-pill--running" title="{runningCount} running">
-                    <Loader2 size={11} weight="regular" class="animate-spin" aria-hidden="true" />
+                    <Loader2 size={11} weight="regular" class="motion-essential-spin" aria-hidden="true" />
                     <span class="count-label">{runningCount} running</span>
                 </span>
             {/if}

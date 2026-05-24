@@ -10,6 +10,7 @@ import XCircle from "phosphor-svelte/lib/XCircle";
 import { Shimmer } from "$lib/components/ai/shimmer";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import { Popover, PopoverContent, PopoverTrigger } from "$lib/components/ui/popover";
+import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
 import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
 import { isChatStreaming } from "$lib/stores/chat.svelte";
 import {
@@ -89,8 +90,12 @@ async function runMerge(method: import("@revv/shared").MergeMethod): Promise<voi
 }
 </script>
 
-<div class="walkthrough-actions-float">
-  <div class="walkthrough-actions-row">
+<div
+  class="actions-float"
+  in:gsapFadeY={{ duration: tokens.quick, y: 8 }}
+  out:gsapFade={{ duration: tokens.snap }}
+>
+  <div class="actions-row" role="toolbar" aria-label="Review actions">
     <GlassPill
       variant="muted"
       disabled={rcSubmitting !== null || rcSelectedCount === 0 || rcGenerating}
@@ -134,6 +139,13 @@ async function runMerge(method: import("@revv/shared").MergeMethod): Promise<voi
       {/if}
 
       {#if mergeEligibility?.canMerge && pr.status === "open"}
+        <!-- Eligibility resolves asynchronously, so the merge pill lands a
+             beat after the rest of the bar. Fade it in instead of popping. -->
+        <span
+          class="pill-wrap"
+          in:gsapFadeY={{ duration: tokens.quick, y: 4 }}
+          out:gsapFade={{ duration: tokens.snap }}
+        >
         <div
           class="glass-pill glass-pill--success merge-pill"
           class:is-disabled={ownerSubmitting !== null || mergeSubmitting !== null}
@@ -188,6 +200,7 @@ async function runMerge(method: import("@revv/shared").MergeMethod): Promise<voi
             </PopoverContent>
           </Popover>
         </div>
+        </span>
       {/if}
 
       <GlassPill
@@ -216,7 +229,7 @@ async function runMerge(method: import("@revv/shared").MergeMethod): Promise<voi
         disabled={rcSubmitting !== null}
         onclick={() => getRcOnApprove()()}
         title={rcApproveBlockerSummary
-          ? `Approve this pull request — ${rcApproveBlockerSummary} still open`
+          ? `Approve this pull request (${rcApproveBlockerSummary} still open)`
           : "Approve this pull request on GitHub"}
       >
         <Check size={16} weight="regular" />
@@ -227,33 +240,27 @@ async function runMerge(method: import("@revv/shared").MergeMethod): Promise<voi
 </div>
 
 <style>
-  .walkthrough-actions-float {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    display: flex;
-    justify-content: center;
-    padding: 8px 0 10px;
-    z-index: 10;
-    pointer-events: none;
-  }
-
-  .walkthrough-actions-float :global(*) {
-    pointer-events: auto;
-  }
-
-  .walkthrough-actions-row {
+  /* The bar wrapper now uses the shared `.actions-float` / `.actions-row`
+     primitives from `app.css`. Only locally-scoped pieces (the merge split-
+     button shape, the async-eligibility fade wrapper) remain here. */
+  .pill-wrap {
     display: inline-flex;
     align-items: center;
-    gap: var(--spacing-island);
   }
 
-  /* Merge split-button — single pill with transparent inner buttons so the
+  /* Merge split-button: single pill shell with transparent inner buttons so the
      wrapper's `.glass-pill` border and radius create the shape. */
   .merge-pill {
     padding: 0;
     overflow: hidden;
+  }
+
+  /* Tactile press parity with every other GlassPill. The wrapper's own
+     `:active` rule can't fire because the inner buttons are what the user
+     clicks. `:has()` is supported in the Tauri WebKit baseline. */
+  .merge-pill:has(.merge-pill-main:active:not(:disabled)),
+  .merge-pill:has(.merge-pill-chevron:active:not(:disabled)) {
+    transform: scale(0.97);
   }
 
   .merge-pill.is-disabled {

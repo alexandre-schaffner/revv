@@ -34,10 +34,12 @@ $effect(() => {
   return () => window.removeEventListener("keydown", handleKeydown, { capture: true });
 });
 
-// Center the floating tabs over the visible main area, mirroring
-// AppShell's `.main-tab-bar` math exactly.
+// Centre the floating tabs over the visible main area. The container is
+// full-width and `justify-content: center`s its child; we shift the centre
+// by half the difference between the left and right insets, animating
+// `transform` (compositor-only) instead of `left`/`right` (paint).
 const bounds = $derived(getMainAreaBounds());
-const floatingTabsStyle = $derived(`left: ${bounds.left}px; right: ${bounds.right}px;`);
+const floatingTabsStyle = $derived(`transform: translateX(${(bounds.left - bounds.right) / 2}px);`);
 </script>
 
 <AuthGuard>

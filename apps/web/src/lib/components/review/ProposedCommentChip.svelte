@@ -40,9 +40,8 @@ let { body, onEdit, onDelete }: Props = $props();
 		display: flex;
 		align-items: flex-start;
 		gap: 8px;
-		background: var(--color-input-bg);
-		border-top: 1px solid var(--color-border);
-		border-left: 2px solid var(--color-accent);
+		background: color-mix(in srgb, var(--color-accent) 5%, var(--color-input-bg));
+		border-top: 1px solid color-mix(in srgb, var(--color-accent) 25%, var(--color-border));
 		padding: 6px 10px;
 	}
 
@@ -84,5 +83,15 @@ let { body, onEdit, onDelete }: Props = $props();
 	.chip-btn:hover {
 		background: var(--color-bg-tertiary);
 		color: var(--color-text-secondary);
+	}
+
+	.chip-btn:active {
+		background: var(--color-bg-tertiary);
+		opacity: 0.7;
+	}
+
+	.chip-btn:focus-visible {
+		outline: 2px solid var(--color-accent);
+		outline-offset: 1px;
 	}
 </style>

@@ -49,6 +49,8 @@ export type ButtonProps = WithElementRef<HTMLButtonAttributes> &
 </script>
 
 <script lang="ts">
+	import { gsapPress } from "$lib/motion";
+
 	let {
 		class: className,
 		variant = "default",
@@ -71,6 +73,7 @@ export type ButtonProps = WithElementRef<HTMLButtonAttributes> &
 		aria-disabled={disabled}
 		role={disabled ? "link" : undefined}
 		tabindex={disabled ? -1 : undefined}
+		use:gsapPress={{ disabled: !!disabled }}
 		{...restProps}
 	>
 		{@render children?.()}
@@ -82,6 +85,7 @@ export type ButtonProps = WithElementRef<HTMLButtonAttributes> &
 		class={cn(buttonVariants({ variant, size }), className)}
 		{type}
 		{disabled}
+		use:gsapPress={{ disabled: !!disabled }}
 		{...restProps}
 	>
 		{@render children?.()}

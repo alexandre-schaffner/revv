@@ -18,6 +18,7 @@ import X from "phosphor-svelte/lib/X";
 import { type Component, mount, onDestroy, onMount, tick, unmount, untrack } from "svelte";
 import { SvelteMap } from "svelte/reactivity";
 import type { ProposedDiffFile } from "$lib/api/chat";
+import * as Dialog from "$lib/components/ui/dialog/index.js";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import {
   addProposedComment,
@@ -42,10 +43,15 @@ interface Props {
   sha: string;
   subject: string;
   fileContents: ProposedDiffFile[] | null;
-  onClose: () => void;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
 }
 
-let { prId, sha, subject, fileContents, onClose }: Props = $props();
+let { prId, sha, subject, fileContents, open, onOpenChange }: Props = $props();
+
+function requestClose() {
+  onOpenChange(false);
+}
 
 // Build non-partial FileDiffMetadata from full file pairs. `isPartial: false`
 // is what unlocks the line-info separator's expand controls — Pierre gates
@@ -175,13 +181,13 @@ async function handleDiscardCommit() {
   if (commitActionBusy) return;
   await discardProposedCommitAction(prId, sha);
   // Commit no longer exists — close the modal.
-  onClose();
+  requestClose();
 }
 
 async function handleCherryPickCommit() {
   if (commitActionBusy) return;
   await cherryPickProposedCommitAction(prId, sha);
-  onClose();
+  requestClose();
 }
 
 // ── Annotation metadata ───────────────────────────────────────────────────
@@ -455,7 +461,7 @@ function handleCommentSubmit(
 function handleSendFeedback() {
   if (!canSend) return;
   const ok = sendProposedFeedback({ prId, sha, subject });
-  if (ok) onClose();
+  if (ok) requestClose();
 }
 
 function toggleTree() {
@@ -526,194 +532,188 @@ onDestroy(() => {
   tree?.cleanUp();
   tree = null;
 });
-
-// Reparent to document.body so `position: fixed` is anchored to the
-// viewport. The right panel's parent element has a `transform`, which
-// would otherwise scope `position: fixed` to the panel rather than the
-// screen.
-function portal(node: HTMLElement) {
-  document.body.appendChild(node);
-  return {
-    destroy() {
-      if (node.parentNode === document.body) {
-        document.body.removeChild(node);
-      }
-    },
-  };
-}
 </script>
 
-<div
-	class="overlay"
-	use:portal
-	role="dialog"
-	aria-modal="true"
-	aria-label="Proposed commit diff"
->
-	<button
-		type="button"
-		class="backdrop"
-		aria-label="Close diff"
-		onclick={onClose}
-	></button>
-	<div class="card" role="document">
-		<header class="card-header">
-			<button
-				class="icon-btn"
-				onclick={toggleTree}
-				aria-label={isTreeCollapsed ? 'Show file tree' : 'Hide file tree'}
-				title={isTreeCollapsed ? 'Show file tree' : 'Hide file tree'}
-			>
-				{#if isTreeCollapsed}
-					<PanelLeftOpen size={14} weight="fill" />
-				{:else}
-					<PanelLeftClose size={14} weight="fill" />
-				{/if}
-			</button>
-			<code class="card-sha">{sha.slice(0, 12)}</code>
-			<span class="card-subject" title={subject}>{subject}</span>
-			<span class="card-files">{fileContents === null ? '…' : `${files.length} file${files.length === 1 ? '' : 's'}`}</span>
-			<div class="view-pill" role="group" aria-label="Diff view mode">
+<Dialog.Root {open} {onOpenChange}>
+	<Dialog.Content
+		showCloseButton={false}
+		class="proposed-diff-dialog !p-0 !gap-0 !top-1/2 !-translate-y-1/2 sm:!max-w-none !w-[min(1100px,92vw)] !h-[min(80vh,800px)] !rounded-none !border-0 !shadow-none !text-foreground"
+	>
+		<Dialog.Header class="sr-only">
+			<Dialog.Title>Proposed commit diff — {subject}</Dialog.Title>
+			<Dialog.Description>
+				Review proposed changes and leave inline comments for the agent.
+			</Dialog.Description>
+		</Dialog.Header>
+		<div class="card" role="document">
+			<header class="card-header">
 				<button
-					type="button"
-					class="view-btn"
-					class:view-btn--active={mode === 'unified'}
-					onclick={() => setDiffMode('unified')}
-					aria-pressed={mode === 'unified'}
-					title="Unified view"
-					aria-label="Unified view"
+					class="icon-btn"
+					onclick={toggleTree}
+					aria-label={isTreeCollapsed ? 'Show file tree' : 'Hide file tree'}
+					title={isTreeCollapsed ? 'Show file tree' : 'Hide file tree'}
 				>
-					<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-						<line x1="3.5" y1="4.5" x2="12.5" y2="4.5" />
-						<line x1="3.5" y1="8" x2="12.5" y2="8" />
-						<line x1="3.5" y1="11.5" x2="12.5" y2="11.5" />
-					</svg>
-				</button>
-				<div class="view-sep"></div>
-				<button
-					type="button"
-					class="view-btn"
-					class:view-btn--active={mode === 'split'}
-					onclick={() => setDiffMode('split')}
-					aria-pressed={mode === 'split'}
-					title="Split view"
-					aria-label="Split view"
-				>
-					<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-						<rect x="2" y="2.5" width="12" height="11" rx="1.5" />
-						<line x1="8" y1="2.5" x2="8" y2="13.5" />
-					</svg>
-				</button>
-			</div>
-			<div class="commit-actions" role="group" aria-label="Commit actions">
-				<button
-					type="button"
-					class="commit-action-btn commit-action-btn--danger"
-					onclick={handleDiscardCommit}
-					disabled={commitActionBusy}
-					title="Discard this commit"
-					aria-label="Discard commit"
-				>
-					{#if isDiscarding}
-						<Loader2 size={12} weight="regular" class="motion-essential-spin" />
+					{#if isTreeCollapsed}
+						<PanelLeftOpen size={14} weight="fill" />
 					{:else}
-						<Trash2 size={12} weight="fill" />
+						<PanelLeftClose size={14} weight="fill" />
 					{/if}
-					<span>Discard</span>
 				</button>
+				<code class="card-sha">{sha.slice(0, 12)}</code>
+				<span class="card-subject" title={subject}>{subject}</span>
+				<span class="card-files"
+					>{fileContents === null
+						? '…'
+						: `${files.length} file${files.length === 1 ? '' : 's'}`}</span
+				>
+				<div class="view-pill" role="group" aria-label="Diff view mode">
+					<button
+						type="button"
+						class="view-btn"
+						class:view-btn--active={mode === 'unified'}
+						onclick={() => setDiffMode('unified')}
+						aria-pressed={mode === 'unified'}
+						title="Unified view"
+						aria-label="Unified view"
+					>
+						<svg
+							width="14"
+							height="14"
+							viewBox="0 0 16 16"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="1.5"
+							stroke-linecap="round"
+						>
+							<line x1="3.5" y1="4.5" x2="12.5" y2="4.5" />
+							<line x1="3.5" y1="8" x2="12.5" y2="8" />
+							<line x1="3.5" y1="11.5" x2="12.5" y2="11.5" />
+						</svg>
+					</button>
+					<div class="view-sep"></div>
+					<button
+						type="button"
+						class="view-btn"
+						class:view-btn--active={mode === 'split'}
+						onclick={() => setDiffMode('split')}
+						aria-pressed={mode === 'split'}
+						title="Split view"
+						aria-label="Split view"
+					>
+						<svg
+							width="14"
+							height="14"
+							viewBox="0 0 16 16"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="1.5"
+							stroke-linecap="round"
+						>
+							<rect x="2" y="2.5" width="12" height="11" rx="1.5" />
+							<line x1="8" y1="2.5" x2="8" y2="13.5" />
+						</svg>
+					</button>
+				</div>
+				<div class="commit-actions" role="group" aria-label="Commit actions">
+					<button
+						type="button"
+						class="commit-action-btn commit-action-btn--danger"
+						onclick={handleDiscardCommit}
+						disabled={commitActionBusy}
+						title="Discard this commit"
+						aria-label="Discard commit"
+					>
+						{#if isDiscarding}
+							<Loader2 size={12} weight="regular" class="motion-essential-spin" />
+						{:else}
+							<Trash2 size={12} weight="fill" />
+						{/if}
+						<span>Discard</span>
+					</button>
+					<button
+						type="button"
+						class="commit-action-btn commit-action-btn--accent"
+						onclick={handleCherryPickCommit}
+						disabled={commitActionBusy}
+						title="Cherry-pick this commit onto the PR branch"
+						aria-label="Cherry-pick commit to PR branch"
+					>
+						{#if isCherryPicking}
+							<Loader2 size={12} weight="regular" class="motion-essential-spin" />
+						{:else}
+							<GitMerge size={12} weight="fill" />
+						{/if}
+						<span>Cherry-pick</span>
+					</button>
+				</div>
+				<button class="icon-btn" onclick={requestClose} aria-label="Close diff">
+					<X size={14} weight="fill" />
+				</button>
+			</header>
+			<div class="card-body" class:card-body--tree-collapsed={isTreeCollapsed}>
+				<aside class="card-tree" bind:this={treeHostEl}></aside>
+				<div class="card-diffs" bind:this={scrollEl}>
+					{#if fileContents === null}
+						<div class="diff-loading">
+							<Dotmatrix variant="square-9" />
+							<span class="diff-loading-text">Loading diff…</span>
+						</div>
+					{:else if files.length === 0}
+						<div class="empty">No file changes in this commit.</div>
+					{:else}
+						{#each files as file, i (file.name)}
+							<div class="diff-block" use:captureDiffEl={i}></div>
+						{/each}
+					{/if}
+				</div>
+			</div>
+			<footer class="card-footer">
+				<div class="footer-summary">
+					<MessageSquare size={12} weight="fill" />
+					{#if commentCount === 0}
+						<span class="footer-hint">Click a line to leave feedback for the agent.</span>
+					{:else}
+						<span>
+							{commentCount} comment{commentCount === 1 ? '' : 's'}
+						</span>
+						{#if isStreaming}
+							<span class="footer-hint">Agent is responding…</span>
+						{/if}
+					{/if}
+				</div>
 				<button
 					type="button"
-					class="commit-action-btn commit-action-btn--accent"
-					onclick={handleCherryPickCommit}
-					disabled={commitActionBusy}
-					title="Cherry-pick this commit onto the PR branch"
-					aria-label="Cherry-pick commit to PR branch"
+					class="send-btn"
+					class:send-btn--active={canSend}
+					disabled={!canSend}
+					onclick={handleSendFeedback}
+					title={isStreaming
+						? 'Wait for the current turn to finish'
+						: 'Send all comments to the agent'}
 				>
-					{#if isCherryPicking}
-						<Loader2 size={12} weight="regular" class="motion-essential-spin" />
-					{:else}
-						<GitMerge size={12} weight="fill" />
-					{/if}
-					<span>Cherry-pick</span>
+					<Send size={12} weight="fill" />
+					<span>Send to agent</span>
 				</button>
-			</div>
-			<button class="icon-btn" onclick={onClose} aria-label="Close diff">
-				<X size={14} weight="fill" />
-			</button>
-		</header>
-		<div class="card-body" class:card-body--tree-collapsed={isTreeCollapsed}>
-			<aside class="card-tree" bind:this={treeHostEl}></aside>
-			<div class="card-diffs" bind:this={scrollEl}>
-				{#if fileContents === null}
-					<div class="diff-loading">
-						<Dotmatrix variant="square-9" />
-						<span class="diff-loading-text">Loading diff…</span>
-					</div>
-				{:else if files.length === 0}
-					<div class="empty">No file changes in this commit.</div>
-				{:else}
-					{#each files as file, i (file.name)}
-						<div class="diff-block" use:captureDiffEl={i}></div>
-					{/each}
-				{/if}
-			</div>
+			</footer>
 		</div>
-		<footer class="card-footer">
-			<div class="footer-summary">
-				<MessageSquare size={12} weight="fill" />
-				{#if commentCount === 0}
-					<span class="footer-hint">Click a line to leave feedback for the agent.</span>
-				{:else}
-					<span>
-						{commentCount} comment{commentCount === 1 ? '' : 's'}
-					</span>
-					{#if isStreaming}
-						<span class="footer-hint">Agent is responding…</span>
-					{/if}
-				{/if}
-			</div>
-			<button
-				type="button"
-				class="send-btn"
-				class:send-btn--active={canSend}
-				disabled={!canSend}
-				onclick={handleSendFeedback}
-				title={isStreaming
-					? 'Wait for the current turn to finish'
-					: 'Send all comments to the agent'}
-			>
-				<Send size={12} weight="fill" />
-				<span>Send to agent</span>
-			</button>
-		</footer>
-	</div>
-</div>
+	</Dialog.Content>
+</Dialog.Root>
 
 <style>
-	.overlay {
-		position: fixed;
-		inset: 0;
-		z-index: 1000;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		padding: 32px;
-	}
-
-	.backdrop {
-		position: absolute;
-		inset: 0;
-		border: none;
-		background: rgba(0, 0, 0, 0.55);
-		cursor: default;
-		padding: 0;
-		margin: 0;
+	/* The shared shadcn dialog content applies glass-bg + blur via
+	   `:global([data-slot="dialog-content"])`. The diff modal owns its own
+	   opaque chrome (`.card`), so we strip the inherited surface here. */
+	:global([data-slot='dialog-content'].proposed-diff-dialog) {
+		background: transparent !important;
+		backdrop-filter: none !important;
+		-webkit-backdrop-filter: none !important;
+		border: 0 !important;
 	}
 
 	.card {
 		position: relative;
-		width: min(1100px, 92vw);
-		height: min(80vh, 800px);
+		width: 100%;
+		height: 100%;
 		background: var(--color-panel-bg);
 		border: 1px solid var(--color-border);
 		border-radius: 8px;
@@ -768,7 +768,9 @@ function portal(node: HTMLElement) {
 		align-items: center;
 		justify-content: center;
 		flex-shrink: 0;
-		transition: background-color var(--duration-snap), color var(--duration-snap);
+		transition:
+			background-color var(--duration-snap),
+			color var(--duration-snap);
 	}
 
 	.icon-btn:hover {
@@ -797,7 +799,9 @@ function portal(node: HTMLElement) {
 		color: var(--color-text-muted);
 		background: transparent;
 		border: none;
-		transition: background-color var(--duration-snap), color var(--duration-snap);
+		transition:
+			background-color var(--duration-snap),
+			color var(--duration-snap);
 	}
 
 	.view-btn:hover {

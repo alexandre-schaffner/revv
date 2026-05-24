@@ -86,7 +86,7 @@ let html = $derived(latestDetail?.overview ? renderMarkdown(latestDetail.overvie
 
 	{#if listLoading && recaps.length === 0}
 		<div class="recap-card-loading">
-			<Loader2 size={16} weight="regular" class="animate-spin" aria-hidden="true" />
+			<Loader2 size={16} weight="regular" class="motion-essential-spin" aria-hidden="true" />
 			<span>Loading recaps…</span>
 		</div>
 	{:else if !latest}
@@ -102,7 +102,7 @@ let html = $derived(latestDetail?.overview ? renderMarkdown(latestDetail.overvie
 		</div>
 	{:else if detailLoading && !latestDetail}
 		<div class="recap-card-loading">
-			<Loader2 size={16} weight="regular" class="animate-spin" aria-hidden="true" />
+			<Loader2 size={16} weight="regular" class="motion-essential-spin" aria-hidden="true" />
 			<span>Loading recap…</span>
 		</div>
 	{:else if latestDetail && latestDetail.status === "generating"}
@@ -112,7 +112,7 @@ let html = $derived(latestDetail?.overview ? renderMarkdown(latestDetail.overvie
 				<span class="recap-card-window">{periodWindow(latest)}</span>
 			</header>
 			<div class="recap-card-generating">
-				<Loader2 size={16} weight="regular" class="animate-spin" aria-hidden="true" />
+				<Loader2 size={16} weight="regular" class="motion-essential-spin" aria-hidden="true" />
 				<p>Generating recap…</p>
 				<p class="hint">This page will update when the recap finishes.</p>
 			</div>

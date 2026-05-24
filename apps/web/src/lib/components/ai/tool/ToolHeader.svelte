@@ -70,7 +70,7 @@ import ShieldX from "phosphor-svelte/lib/ShieldWarning";
 		<Wrench class="size-4 text-muted-foreground" />
 		<span class="font-medium text-sm">{displayName}</span>
 		<Badge variant="secondary" class="gap-1.5 rounded-full text-xs">
-			<StatusIcon class={cn("size-4", state === "input-available" && "motion-essential-spin animate-spin")} />
+			<StatusIcon class={cn("size-4", state === "input-available" && "motion-essential-spin")} />
 			{config.label}
 		</Badge>
 	</div>
