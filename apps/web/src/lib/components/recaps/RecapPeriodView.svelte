@@ -24,6 +24,7 @@ import {
   regenerateRecap,
   stopRecap,
 } from "$lib/stores/recaps.svelte";
+import { getMainAreaBounds } from "$lib/stores/sidebar.svelte";
 import DotMatrixLoader from "./DotMatrixLoader.svelte";
 import PreviousRecaps from "./PreviousRecaps.svelte";
 import RecapDetail from "./RecapDetail.svelte";
@@ -228,6 +229,12 @@ async function onStop(): Promise<void> {
   if (!id) return;
   await stopRecap(id);
 }
+
+const bounds = $derived(getMainAreaBounds());
+const actionsFloatStyle = $derived(
+  `position: fixed; left: ${bounds.left}px; right: ${bounds.right}px; ` +
+    `bottom: calc(var(--bottombar-height) + 2 * var(--spacing-island));`,
+);
 </script>
 
 <div class="period-view">
@@ -273,7 +280,7 @@ async function onStop(): Promise<void> {
 </div>
 
 {#if showGenerateFab || genActionState}
-	<div class="actions-float">
+	<div class="actions-float" style={actionsFloatStyle}>
 		<div class="actions-row">
 			{#if showGenerateFab}
 				<GlassPill

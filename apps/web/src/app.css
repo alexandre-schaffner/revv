@@ -1051,10 +1051,9 @@ diffs-container {
   padding: 8px 0 10px;
   z-index: 10;
   pointer-events: none;
-  /* No JS-bound left/right transition here. The action bar is `position:
-     absolute` inside `.main-area`, so the grid-template-columns animation
-     on `.app-shell` naturally carries it as part of the same layout pass —
-     no second animation racing the first. */
+  transition:
+    left var(--duration-smooth) var(--ease-out-expo),
+    right var(--duration-instant) var(--ease-out-expo);
 }
 .actions-float * {
   pointer-events: auto;
