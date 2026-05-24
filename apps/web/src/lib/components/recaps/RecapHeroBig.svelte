@@ -1,6 +1,6 @@
 <script lang="ts">
 import type { ProjectRecap, RecapPeriod } from "@revv/shared";
-import { buildRecapHeader, formatLines, paletteLookup, scrollToTheme } from "./themes";
+import { buildRecapHeader, formatLines, formatTheme, paletteLookup, scrollToTheme } from "./themes";
 
 interface Props {
   recap: ProjectRecap | null;
@@ -14,7 +14,10 @@ const header = $derived(buildRecapHeader(recap, period));
 
 <header class="hero-big">
   <div class="hero-text">
-    <span class="eyebrow">{header.eyebrow}</span>
+    <span class="eyebrow">
+      <span class="ai-mark" aria-hidden="true"></span>
+      <span>{header.eyebrow}</span>
+    </span>
     <h1 class="date">{header.title}</h1>
     {#if header.syncedRelative}
       <span class="time-cap">UTC · synced {header.syncedRelative}</span>
@@ -63,7 +66,7 @@ const header = $derived(buildRecapHeader(recap, period));
               aria-label="Jump to {t.theme} chapter"
             >
               <span class="dot" style="--swatch: {paletteLookup(header.palette, t.theme)}" aria-hidden="true"></span>
-              <span class="theme-label">{t.theme}</span>
+              <span class="theme-label">{formatTheme(t.theme)}</span>
               <span class="theme-count">{t.count}</span>
             </button>
           </li>
@@ -88,6 +91,9 @@ const header = $derived(buildRecapHeader(recap, period));
 }
 
 .eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
   font-family: var(--font-mono);
   font-size: 0.6875rem;
   font-weight: 500;
@@ -96,20 +102,34 @@ const header = $derived(buildRecapHeader(recap, period));
   color: var(--color-text-muted);
 }
 
+.ai-mark {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-ai-accent);
+  flex-shrink: 0;
+}
+
 .date {
   margin: 0;
   font-family: "Newsreader", Georgia, serif;
-  font-size: clamp(2.25rem, 3.4vw, 3rem);
+  font-size: 2.75rem;
   font-weight: 500;
-  letter-spacing: -0.025em;
+  letter-spacing: -0.02em;
   line-height: 1.05;
   color: var(--color-text-primary);
   text-wrap: balance;
 }
 
+@media (max-width: 960px) {
+  .date {
+    font-size: 2.25rem;
+  }
+}
+
 .time-cap {
   font-family: var(--font-mono);
-  font-size: 0.6rem;
+  font-size: 0.6875rem;
   letter-spacing: 0.04em;
   color: var(--color-text-muted);
 }
@@ -131,7 +151,7 @@ const header = $derived(buildRecapHeader(recap, period));
 
 .stat dt {
   font-family: var(--font-mono);
-  font-size: 0.6rem;
+  font-size: 0.6875rem;
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.12em;
@@ -141,7 +161,7 @@ const header = $derived(buildRecapHeader(recap, period));
 .stat dd {
   margin: 0;
   font-family: var(--font-mono);
-  font-size: 0.78rem;
+  font-size: 0.8125rem;
   font-weight: 500;
   color: var(--color-text-primary);
   letter-spacing: -0.005em;
@@ -187,13 +207,13 @@ const header = $derived(buildRecapHeader(recap, period));
 .theme-row {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
-  padding: 0.25rem 0.55rem;
+  gap: 0.45rem;
+  padding: 0.45rem 0.75rem;
   background: color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent);
   border: 0;
   border-radius: 999px;
   font: inherit;
-  font-size: 0.78rem;
+  font-size: 0.8125rem;
   color: var(--color-text-primary);
   cursor: pointer;
   transition: background var(--duration-snap) var(--ease-out-expo);
@@ -216,13 +236,10 @@ const header = $derived(buildRecapHeader(recap, period));
   flex-shrink: 0;
 }
 
-.theme-label {
-  text-transform: capitalize;
-}
 
 .theme-count {
   font-family: var(--font-mono);
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   color: var(--color-text-muted);
 }
 </style>

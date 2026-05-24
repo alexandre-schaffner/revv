@@ -46,6 +46,15 @@ export function formatLines(n: number): string {
   return n.toLocaleString("en-US");
 }
 
+/** Themes arrive lowercase from the agent (`auth`, `payments`, `open source`).
+ *  Render-time sentence-case keeps reading-room voice without breaking the
+ *  stored value used for slugs, palette lookup, and equality joins. */
+export function formatTheme(theme: string): string {
+  const head = theme.charAt(0);
+  if (head === "") return theme;
+  return head.toUpperCase() + theme.slice(1);
+}
+
 export function scrollToTheme(theme: string): void {
   if (typeof document === "undefined") return;
   const el = document.getElementById(themeSlug(theme));
@@ -108,14 +117,20 @@ export function buildThemePalette(themes: ReadonlyArray<string>): Map<string, st
   const step = 360 / unique.length;
   unique.forEach((theme, i) => {
     const hue = (offset + i * step) % 360;
-    const l = i % 2 === 0 ? 54 : 46;
-    palette.set(theme, `hsl(${hue.toFixed(1)} 64% ${l}%)`);
+    // Two lightness levels alternated so adjacent themes get a second axis
+    // of perceptual separation when N is large. Chroma fixed at 0.12 —
+    // OKLCH keeps lightness perceptually constant across the hue wheel
+    // (HSL doesn't, which is why yellows used to outshine blues).
+    const l = i % 2 === 0 ? 56 : 48;
+    palette.set(theme, `oklch(${l}% 0.12 ${hue.toFixed(1)})`);
   });
   return palette;
 }
 
+const NEUTRAL_SWATCH = "oklch(60% 0 0)";
+
 export function paletteLookup(palette: Map<string, string>, theme: string): string {
-  return palette.get(theme.toLowerCase()) ?? "hsl(0 0% 60%)";
+  return palette.get(theme.toLowerCase()) ?? NEUTRAL_SWATCH;
 }
 
 /**

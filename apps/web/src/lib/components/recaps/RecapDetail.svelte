@@ -1,21 +1,17 @@
 <script lang="ts">
 import type { ProjectRecap, RecapPeriod, RecapPrEntry, RecapThemeSummary } from "@revv/shared";
 import ArrowLeft from "phosphor-svelte/lib/ArrowLeft";
-import CaretDown from "phosphor-svelte/lib/CaretDown";
 import Loader2 from "phosphor-svelte/lib/Spinner";
 import CircleAlert from "phosphor-svelte/lib/WarningCircle";
 import { Button } from "$lib/components/ui/button";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "$lib/components/ui/collapsible";
+import { heroMorph } from "$lib/motion";
 import type { RecapStreamEntry } from "$lib/stores/recap-stream.svelte";
 import { createStreamingBlockRenderer } from "$lib/utils/markdown";
 import DotMatrixLoader from "./DotMatrixLoader.svelte";
 import RecapBody from "./RecapBody.svelte";
 import RecapHeroBig from "./RecapHeroBig.svelte";
 import RecapSidebar from "./RecapSidebar.svelte";
+import ThoughtsReveal from "./ThoughtsReveal.svelte";
 
 interface Props {
   recap: ProjectRecap | null;
@@ -29,104 +25,6 @@ let { recap, loading, period, onBack = undefined, stream = null }: Props = $prop
 
 let thoughtsOpen = $state(false);
 const renderThoughtBlocks = createStreamingBlockRenderer();
-
-// Scroll-driven crossfade between the body-column big hero (RecapHeroBig)
-// and the sidebar's small hero. `--shrink` (0..1) goes from 0 at the top
-// to 1 once the user has scrolled past the big hero. Big hero opacity =
-// 1 - shrink; small hero opacity = shrink. Below 960px the big hero is
-// hidden and the small hero takes over immediately (locked to 1).
-let recapPageEl = $state<HTMLElement | null>(null);
-
-// Don't start the sidebar's fade-in until the big hero has scrolled
-// noticeably off screen. SHRINK_START_PX is the dead zone above which
-// scroll progress begins counting; SHRINK_RANGE_PX is the distance over
-// which it ramps from 0 to 1.
-const SHRINK_START_PX = 160;
-const SHRINK_RANGE_PX = 120;
-const MIN_MORPH_WIDTH_PX = 960;
-
-function findScrollContainer(el: HTMLElement): HTMLElement | Window {
-  let cur: HTMLElement | null = el.parentElement;
-  while (cur) {
-    const oy = getComputedStyle(cur).overflowY;
-    if (oy === "auto" || oy === "scroll") return cur;
-    cur = cur.parentElement;
-  }
-  return window;
-}
-
-$effect(() => {
-  if (!recapPageEl) return;
-  const root = recapPageEl;
-  const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const wide = matchMedia(`(min-width: ${MIN_MORPH_WIDTH_PX}px)`);
-
-  const lock = (): void => {
-    root.style.setProperty("--shrink", "1");
-    const sidebar = root.querySelector<HTMLElement>(".side");
-    if (sidebar) sidebar.removeAttribute("inert");
-  };
-
-  if (reducedMotion) {
-    lock();
-    return;
-  }
-
-  let container: HTMLElement | Window | null = null;
-  let onScroll: (() => void) | null = null;
-
-  const attach = (): void => {
-    container = findScrollContainer(root);
-    const target = container;
-    // Cache the sidebar element once instead of querying on every scroll
-    // tick. `null` when the recap hasn't loaded yet — the next onScroll
-    // call after hydration will pick it up via the fallback lookup.
-    let sidebar = root.querySelector<HTMLElement>(".side");
-    let lastInert: boolean | null = null;
-    onScroll = () => {
-      const top = target instanceof Window ? window.scrollY : target.scrollTop;
-      const next = Math.min(1, Math.max(0, (top - SHRINK_START_PX) / SHRINK_RANGE_PX));
-      root.style.setProperty("--shrink", String(next));
-      // Keep the sidebar out of the tab order and a11y tree while it's
-      // visually hidden. Without this, screen reader users encounter
-      // duplicate hero/stats/themes content (body hero + sidebar) that
-      // sighted users only see one of at a time.
-      if (!sidebar) sidebar = root.querySelector<HTMLElement>(".side");
-      if (sidebar) {
-        const shouldInert = next < 0.1;
-        if (shouldInert !== lastInert) {
-          sidebar.toggleAttribute("inert", shouldInert);
-          lastInert = shouldInert;
-        }
-      }
-    };
-    onScroll();
-    target.addEventListener("scroll", onScroll, { passive: true });
-  };
-
-  const detach = (): void => {
-    if (container && onScroll) container.removeEventListener("scroll", onScroll);
-    container = null;
-    onScroll = null;
-  };
-
-  const onWideChange = (e: MediaQueryListEvent): void => {
-    if (e.matches) attach();
-    else {
-      detach();
-      lock();
-    }
-  };
-
-  if (wide.matches) attach();
-  else lock();
-  wide.addEventListener("change", onWideChange);
-
-  return () => {
-    detach();
-    wide.removeEventListener("change", onWideChange);
-  };
-});
 
 const effectivePeriod = $derived<RecapPeriod>(period ?? recap?.period ?? "daily");
 
@@ -212,7 +110,7 @@ function formatCompletedAt(iso: string): string {
 }
 </script>
 
-<div class="recap-page" bind:this={recapPageEl}>
+<div class="recap-page" use:heroMorph>
   {#if onBack}
     <div class="back-row">
       <Button variant="ghost" size="sm" onclick={onBack}>
@@ -255,28 +153,18 @@ function formatCompletedAt(iso: string): string {
           <RecapBody recap={liveRecap} />
           <div class="generating-footer">
             {#if hasThoughtText}
-              <Collapsible bind:open={thoughtsOpen}>
-                <CollapsibleTrigger class="phase-trigger" aria-label="{phaseLabel}. Toggle streamed thoughts">
-                  <span class="phase-label">{phaseLabel}</span>
-                  <div class="phase-trigger-meta">
-                    <span>Thoughts</span>
-                    <span class="phase-trigger-chevron-wrap" data-state={thoughtsOpen ? 'open' : 'closed'}>
-                      <CaretDown class="phase-trigger-chevron" aria-hidden="true" />
-                    </span>
-                  </div>
-                </CollapsibleTrigger>
-                <CollapsibleContent class="thought-content">
-                  <div class="thought-stream thought-markdown">
-                    {#each thoughtBlocks as block (block.id)}
-                      <div class="thought-markdown-block">
-                        {@html block.html}
-                      </div>
-                    {/each}
-                  </div>
-                </CollapsibleContent>
-              </Collapsible>
+              <ThoughtsReveal
+                bind:open={thoughtsOpen}
+                blocks={thoughtBlocks}
+                triggerClass="phase-trigger"
+                ariaLabel="{phaseLabel}. Toggle streamed thoughts"
+              >
+                {#snippet prefix()}
+                  <span class="phase-label" aria-live="polite" aria-atomic="true">{phaseLabel}</span>
+                {/snippet}
+              </ThoughtsReveal>
             {:else}
-              <span class="phase-label">{phaseLabel}</span>
+              <span class="phase-label" aria-live="polite" aria-atomic="true">{phaseLabel}</span>
             {/if}
           </div>
         </div>
@@ -334,25 +222,14 @@ function formatCompletedAt(iso: string): string {
     {#if isGenerating && !hasAnyContent}
       <div class="generating-empty">
         <DotMatrixLoader label={phaseLabel} />
-        <p class="phase-caption">{phaseLabel}</p>
+        <p class="phase-caption" aria-live="polite" aria-atomic="true">{phaseLabel}</p>
         {#if hasThoughtText}
-          <Collapsible bind:open={thoughtsOpen}>
-            <CollapsibleTrigger class="thoughts-trigger" aria-label="Toggle streamed thoughts">
-              <span>Thoughts</span>
-              <span class="phase-trigger-chevron-wrap" data-state={thoughtsOpen ? 'open' : 'closed'}>
-                <CaretDown class="phase-trigger-chevron" aria-hidden="true" />
-              </span>
-            </CollapsibleTrigger>
-            <CollapsibleContent class="thought-content">
-              <div class="thought-stream thought-markdown">
-                {#each thoughtBlocks as block (block.id)}
-                  <div class="thought-markdown-block">
-                    {@html block.html}
-                  </div>
-                {/each}
-              </div>
-            </CollapsibleContent>
-          </Collapsible>
+          <ThoughtsReveal
+            bind:open={thoughtsOpen}
+            blocks={thoughtBlocks}
+            triggerClass="thoughts-trigger"
+            ariaLabel="Toggle streamed thoughts"
+          />
         {/if}
       </div>
     {/if}
@@ -557,70 +434,9 @@ function formatCompletedAt(iso: string): string {
   color: var(--color-text-secondary);
 }
 
-.phase-trigger-meta {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  flex-shrink: 0;
-  font-size: 0.75rem;
-  color: var(--color-text-muted);
-}
-
-.phase-trigger-chevron-wrap {
-  display: inline-grid;
-  place-items: center;
-  transition: transform var(--duration-snap) var(--ease-out-expo);
-}
-
-.phase-trigger-chevron-wrap[data-state="open"] {
-  transform: rotate(180deg);
-}
-
-.phase-trigger-chevron-wrap :global(.phase-trigger-chevron) {
-  width: 0.75rem;
-  height: 0.75rem;
-}
-
 .generating-footer :global(.thought-content),
 .generating-empty :global(.thought-content) {
   overflow: hidden;
-}
-
-.thought-markdown :global(blockquote) {
-  padding: 8px 12px;
-  margin: 0 0 12px;
-  border: 1px solid color-mix(in srgb, var(--color-accent) 30%, var(--color-border));
-  background: color-mix(in srgb, var(--color-accent) 5%, transparent);
-  border-radius: 6px;
-  color: var(--color-text-secondary);
-}
-
-.thought-stream {
-  margin: 0.375rem 0 0;
-  color: var(--color-text-muted);
-  font-size: 0.875rem;
-  line-height: 1.6;
-}
-
-.thought-markdown-block + .thought-markdown-block {
-  margin-top: 0.625rem;
-}
-
-.thought-markdown :global(p),
-.thought-markdown :global(ul),
-.thought-markdown :global(ol),
-.thought-markdown :global(pre),
-.thought-markdown :global(blockquote) {
-  margin: 0 0 0.625rem;
-}
-
-.thought-markdown :global(code) {
-  font-family: var(--font-mono);
-  font-size: 0.92em;
-  padding: 0.08em 0.3em;
-  border-radius: 0.25rem;
-  background: color-mix(in srgb, var(--color-bg-tertiary) 70%, transparent);
-  color: var(--color-text-secondary);
 }
 
 .footer {

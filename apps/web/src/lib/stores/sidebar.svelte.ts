@@ -265,3 +265,14 @@ export function getMainAreaBounds(): { left: number; right: number } {
     right: rightPanelOpen ? rightPanelWidth : 0,
   };
 }
+
+/** Inline `style=` string for a floating action bar pinned to the bottom of
+    the visible main area. Sits above the BottomBar with one island of breathing
+    room. Reads `getMainAreaBounds()` so it tracks sidebar/right-panel state. */
+export function getActionsFloatStyle(): string {
+  const bounds = getMainAreaBounds();
+  return (
+    `position: fixed; left: ${bounds.left}px; right: ${bounds.right}px; ` +
+    `bottom: calc(var(--bottombar-height) + 2 * var(--spacing-island));`
+  );
+}

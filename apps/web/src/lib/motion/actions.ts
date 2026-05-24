@@ -1,9 +1,11 @@
 /**
- * Svelte 5 use-directives. Two actions, both GSAP-driven:
+ * Svelte 5 use-directives.
  *
  *   <button use:gsapPress>           — press-down scale feedback
  *   <div use:bitsAnim={{ inPreset }}> — drives a bits-ui content surface from
  *                                       its data-state attribute
+ *   <div use:heroMorph>              — scroll-driven big-hero → sidebar-hero
+ *                                       crossfade for the recap detail layout
  */
 import type { Action } from "svelte/action";
 
@@ -162,6 +164,105 @@ export const bitsAnim: Action<HTMLElement, BitsAnimParams> = (node, params) => {
     destroy() {
       observer.disconnect();
       stop();
+    },
+  };
+};
+
+/* ───────────────────────── heroMorph ───────────────────────── */
+
+interface HeroMorphParams {
+  /** Selector for the sidebar element whose `inert` attribute mirrors visibility. */
+  sidebarSelector?: string;
+  /** Scroll distance (px) before the morph starts ramping. */
+  startPx?: number;
+  /** Scroll distance (px) over which `--shrink` ramps 0 → 1. */
+  rangePx?: number;
+  /** Below this viewport width the big hero is hidden; lock `--shrink` to 1. */
+  minWidthPx?: number;
+}
+
+const HERO_MORPH_DEFAULTS = {
+  sidebarSelector: ".side",
+  startPx: 160,
+  rangePx: 120,
+  minWidthPx: 960,
+} as const;
+
+function findScrollContainer(el: HTMLElement): HTMLElement | Window {
+  let cur: HTMLElement | null = el.parentElement;
+  while (cur) {
+    const oy = getComputedStyle(cur).overflowY;
+    if (oy === "auto" || oy === "scroll") return cur;
+    cur = cur.parentElement;
+  }
+  return window;
+}
+
+export const heroMorph: Action<HTMLElement, HeroMorphParams | undefined> = (node, params) => {
+  const cfg = { ...HERO_MORPH_DEFAULTS, ...params };
+  const wide = matchMedia(`(min-width: ${cfg.minWidthPx}px)`);
+
+  let container: HTMLElement | Window | null = null;
+  let onScroll: (() => void) | null = null;
+
+  const lock = (): void => {
+    node.style.setProperty("--shrink", "1");
+    node.querySelector<HTMLElement>(cfg.sidebarSelector)?.removeAttribute("inert");
+  };
+
+  const detach = (): void => {
+    if (container && onScroll) container.removeEventListener("scroll", onScroll);
+    container = null;
+    onScroll = null;
+  };
+
+  const attach = (): void => {
+    const target = findScrollContainer(node);
+    container = target;
+    // Cache the sidebar reference; `null` until the recap hydrates, the
+    // fallback inside onScroll picks it up on the next tick.
+    let sidebar = node.querySelector<HTMLElement>(cfg.sidebarSelector);
+    let lastInert: boolean | null = null;
+    onScroll = () => {
+      const top = target instanceof Window ? window.scrollY : target.scrollTop;
+      const next = Math.min(1, Math.max(0, (top - cfg.startPx) / cfg.rangePx));
+      node.style.setProperty("--shrink", String(next));
+      // Keep the sidebar out of the tab order / a11y tree while it's
+      // visually hidden, so screen readers don't see duplicate hero content.
+      if (!sidebar) sidebar = node.querySelector<HTMLElement>(cfg.sidebarSelector);
+      if (sidebar) {
+        const shouldInert = next < 0.1;
+        if (shouldInert !== lastInert) {
+          sidebar.toggleAttribute("inert", shouldInert);
+          lastInert = shouldInert;
+        }
+      }
+    };
+    onScroll();
+    container.addEventListener("scroll", onScroll, { passive: true });
+  };
+
+  const onWideChange = (e: MediaQueryListEvent): void => {
+    if (e.matches) attach();
+    else {
+      detach();
+      lock();
+    }
+  };
+
+  if (prefersReducedMotion()) {
+    lock();
+  } else if (wide.matches) {
+    attach();
+  } else {
+    lock();
+  }
+  wide.addEventListener("change", onWideChange);
+
+  return {
+    destroy() {
+      detach();
+      wide.removeEventListener("change", onWideChange);
     },
   };
 };

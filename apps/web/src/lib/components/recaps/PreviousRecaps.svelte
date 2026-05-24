@@ -163,6 +163,11 @@ function navigate(recapId: string): void {
 		background: var(--color-bg-tertiary);
 	}
 
+	.previous-row:focus-visible {
+		outline: 2px solid var(--color-accent);
+		outline-offset: 2px;
+	}
+
 	.previous-row--generating {
 		opacity: 0.85;
 	}

@@ -28,7 +28,7 @@ import {
   regenerateRecap,
   stopRecap,
 } from "$lib/stores/recaps.svelte";
-import { getMainAreaBounds } from "$lib/stores/sidebar.svelte";
+import { getActionsFloatStyle } from "$lib/stores/sidebar.svelte";
 
 const repoId = $derived(page.params.repoId ?? "");
 const recapId = $derived(page.params.recapId ?? "");
@@ -78,11 +78,7 @@ const recaps = $derived(getRecapsForRepo(repoId));
 const listLoading = $derived(getRecapLoading(repoId));
 const pendingAction = $derived(getRecapPendingAction(recapId));
 
-const bounds = $derived(getMainAreaBounds());
-const actionsFloatStyle = $derived(
-  `position: fixed; left: ${bounds.left}px; right: ${bounds.right}px; ` +
-    `bottom: calc(var(--bottombar-height) + 2 * var(--spacing-island));`,
-);
+const actionsFloatStyle = $derived(getActionsFloatStyle());
 
 const periodLabelLower = $derived(recap?.period === "weekly" ? "weekly" : "daily");
 const currentPeriodLabel = $derived(recap?.period === "weekly" ? "this week's" : "today's");

@@ -1,11 +1,5 @@
 import type { Activity } from "./activity";
 
-// ── Project Recap shared types ───────────────────────────────────────────────
-//
-// Daily / weekly recap of recently-archived PRs in a repository. Wire shape
-// matches the server's `project_recaps` row (see db/schema/project-recaps.ts).
-// See plan: /Users/alex/.claude/plans/let-s-review-the-archive-logical-eagle.md
-
 export type RecapPeriod = "daily" | "weekly";
 
 export type ProjectRecapStatus = "generating" | "complete" | "error" | "superseded";

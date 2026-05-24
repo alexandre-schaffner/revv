@@ -9,7 +9,7 @@ import {
 import Avatar from "./Avatar.svelte";
 import InlineText from "./InlineText.svelte";
 import PrRow from "./PrRow.svelte";
-import { themeSlug } from "./themes";
+import { formatTheme, themeSlug } from "./themes";
 
 interface Props {
   theme: string;
@@ -23,12 +23,6 @@ let { theme, entries, swatch, summary = undefined }: Props = $props();
 let open = $state(true);
 const sectionId = $derived(themeSlug(theme));
 
-// Split entries by lifecycle state. The recap agent writes a single
-// `add_pr_entry` call per PR with theme + verb + description; the server
-// stamps `prState` based on whether the PR was archived or still open at
-// recap time. Inside the chapter we render shipped entries first, then a
-// thin "In progress" subhead and the active ones — keeping the editorial
-// narrative ordered "what landed → what's coming".
 const mergedEntries = $derived(entries.filter((e) => e.prState !== "open"));
 const openEntries = $derived(entries.filter((e) => e.prState === "open"));
 
@@ -47,13 +41,9 @@ interface AuthorGroup {
   readonly handle: string;
   readonly avatar: string | null;
   readonly entries: RecapPrEntry[];
-  readonly firstPosition: number;
+  firstPosition: number;
 }
 
-// Group entries by author within a subgroup. Author groups are ordered by
-// the smallest `position` among their entries, so the agent's render order
-// is preserved at the group level. Within a group, entries keep their
-// original position order.
 function groupByAuthor(items: ReadonlyArray<RecapPrEntry>): AuthorGroup[] {
   const map = new Map<string, AuthorGroup>();
   for (const e of items) {
@@ -61,9 +51,7 @@ function groupByAuthor(items: ReadonlyArray<RecapPrEntry>): AuthorGroup[] {
     const existing = map.get(key);
     if (existing) {
       existing.entries.push(e);
-      if (e.position < existing.firstPosition) {
-        (existing as { firstPosition: number }).firstPosition = e.position;
-      }
+      if (e.position < existing.firstPosition) existing.firstPosition = e.position;
     } else {
       map.set(key, {
         handle: key,
@@ -88,7 +76,7 @@ const openGroups = $derived(groupByAuthor(openEntries));
     <CollapsibleTrigger class="chapter-header" aria-label="Toggle {theme} chapter">
       <div class="chapter-title">
         <span class="dot" style="--swatch: {swatch}" aria-hidden="true"></span>
-        <h2>{theme}</h2>
+        <h2>{formatTheme(theme)}</h2>
       </div>
       <span class="chapter-meta">
         <span class="chapter-count">{countLabel}</span>
@@ -173,6 +161,12 @@ const openGroups = $derived(groupByAuthor(openEntries));
   color: var(--color-text-secondary);
 }
 
+.chapter :global(.chapter-header:focus-visible) {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+
 .chapter-meta {
   display: inline-flex;
   align-items: center;
@@ -208,7 +202,6 @@ const openGroups = $derived(groupByAuthor(openEntries));
   font-weight: 600;
   letter-spacing: -0.015em;
   color: var(--color-text-primary);
-  text-transform: capitalize;
   text-wrap: balance;
 }
 
@@ -271,9 +264,8 @@ const openGroups = $derived(groupByAuthor(openEntries));
 
 .author-count {
   font-family: var(--font-mono);
-  font-size: 0.65rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.005em;
   color: var(--color-text-muted);
   margin-left: auto;
 }

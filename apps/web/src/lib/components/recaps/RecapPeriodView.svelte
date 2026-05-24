@@ -24,7 +24,7 @@ import {
   regenerateRecap,
   stopRecap,
 } from "$lib/stores/recaps.svelte";
-import { getMainAreaBounds } from "$lib/stores/sidebar.svelte";
+import { getActionsFloatStyle } from "$lib/stores/sidebar.svelte";
 import DotMatrixLoader from "./DotMatrixLoader.svelte";
 import PreviousRecaps from "./PreviousRecaps.svelte";
 import RecapDetail from "./RecapDetail.svelte";
@@ -230,11 +230,7 @@ async function onStop(): Promise<void> {
   await stopRecap(id);
 }
 
-const bounds = $derived(getMainAreaBounds());
-const actionsFloatStyle = $derived(
-  `position: fixed; left: ${bounds.left}px; right: ${bounds.right}px; ` +
-    `bottom: calc(var(--bottombar-height) + 2 * var(--spacing-island));`,
-);
+const actionsFloatStyle = $derived(getActionsFloatStyle());
 </script>
 
 <div class="period-view">
@@ -260,9 +256,9 @@ const actionsFloatStyle = $derived(
 			<p class="period-lede">
 				{#if period === "daily"}
 					A snapshot of every pull request that opened, moved, or shipped
-					today — written by the agent, ready in a minute.
+					today, written by the agent and ready in a minute.
 				{:else}
-					A week of pull-request activity distilled into one read — what
+					A week of pull-request activity distilled into one read: what
 					shipped, what's still in flight, where the risk sits.
 				{/if}
 			</p>
@@ -383,11 +379,17 @@ const actionsFloatStyle = $derived(
 
 	.period-title {
 		margin: 0;
-		font-size: clamp(2rem, 4vw, 2.75rem);
+		font-size: 2.5rem;
 		font-weight: 500;
-		letter-spacing: -0.035em;
+		letter-spacing: -0.02em;
 		line-height: 1.02;
 		color: var(--color-text-primary);
+	}
+
+	@media (max-width: 720px) {
+		.period-title {
+			font-size: 2rem;
+		}
 	}
 
 	.period-lede {
