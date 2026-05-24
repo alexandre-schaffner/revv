@@ -77,16 +77,50 @@ if [[ "$__revv_lib_loaded" -eq 0 ]]; then
   else
     RED=""; GREEN=""; YELLOW=""; BLUE=""; CYAN=""; BOLD=""; DIM=""; RESET=""
   fi
-  info()    { printf "%s[info]%s  %s\n" "$BLUE" "$RESET" "$*"; }
-  success() { printf "%s[  ok]%s  %s\n" "$GREEN" "$RESET" "$*"; }
-  warn()    { printf "%s[warn]%s  %s\n" "$YELLOW" "$RESET" "$*"; }
-  fail()    { printf "%s[FAIL]%s  %s\n" "$RED" "$RESET" "$*" >&2; exit 1; }
-  step()    { printf "\n%s%s▸ %s%s\n" "$BOLD" "$CYAN" "$*" "$RESET"; }
+  info()    { printf "  %s·%s  %s\n"     "$CYAN"   "$RESET" "$*"; }
+  success() { printf "  %s✓%s  %s\n"     "$GREEN"  "$RESET" "$*"; }
+  warn()    { printf "  %s⚠%s  %s\n"     "$YELLOW" "$RESET" "$*"; }
+  fail()    { printf "\n  %s✗%s  %s\n\n" "$RED"    "$RESET" "$*" >&2; exit 1; }
+  step()    { printf "\n  %s%s▸%s  %s\n\n" "$BOLD" "$CYAN" "$RESET" "$*"; }
   confirm() {
+    if [[ "${REVV_AUTO_YES:-0}" == "1" ]]; then return 0; fi
     local reply
-    printf "%s  → %s [y/N] %s" "$YELLOW" "$1" "$RESET"
-    read -r reply
+    printf "  %s→%s  %s [y/N] " "$YELLOW" "$RESET" "$1"
+    read -r reply </dev/tty || read -r reply
     [[ "$reply" =~ ^[Yy] ]]
+  }
+  _REVV_SP_FRAMES='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+  _REVV_SP_MSG=''; _REVV_SP_PID=''
+  spin_start() {
+    _REVV_SP_MSG="$1"
+    if [[ ! -t 1 ]]; then printf "  ···  %s\n" "$_REVV_SP_MSG"; return; fi
+    printf '\033[?25l'
+    ( local i=0
+      while true; do
+        printf "\r  %s%s%s  %s  " "$CYAN" "${_REVV_SP_FRAMES:$((i%10)):1}" "$RESET" "$_REVV_SP_MSG"
+        i=$((i+1)); sleep 0.07
+      done ) &
+    _REVV_SP_PID=$!; disown "$_REVV_SP_PID" 2>/dev/null
+  }
+  spin_stop() {
+    local ok="${1:-1}"
+    if [[ -n "$_REVV_SP_PID" ]]; then
+      kill "$_REVV_SP_PID" 2>/dev/null; wait "$_REVV_SP_PID" 2>/dev/null; _REVV_SP_PID=''
+    fi
+    if [[ ! -t 1 ]]; then return; fi
+    printf '\033[?25h'
+    if [[ "$ok" -eq 1 ]]; then printf "\r  %s✓%s  %-50s\n" "$GREEN" "$RESET" "$_REVV_SP_MSG"
+    else                        printf "\r  %s✗%s  %-50s\n" "$RED"   "$RESET" "$_REVV_SP_MSG"; fi
+  }
+  banner() {
+    printf "\n"
+    printf "  %s%s██████╗ ███████╗██╗   ██╗██╗   ██╗%s\n" "$CYAN" "$BOLD" "$RESET"
+    printf "  %s%s██╔══██╗██╔════╝██║   ██║██║   ██║%s\n" "$CYAN" "$BOLD" "$RESET"
+    printf "  %s%s██████╔╝█████╗  ██║   ██║██║   ██║%s\n" "$CYAN" "$BOLD" "$RESET"
+    printf "  %s%s██╔══██╗██╔══╝  ╚██╗ ██╔╝╚██╗ ██╔╝%s\n" "$CYAN" "$BOLD" "$RESET"
+    printf "  %s%s██║  ██║███████╗ ╚████╔╝  ╚████╔╝ %s\n"  "$CYAN" "$BOLD" "$RESET"
+    printf "  %s%s╚═╝  ╚═╝╚══════╝  ╚═══╝    ╚═══╝  %s\n" "$CYAN" "$BOLD" "$RESET"
+    printf "\n  %sAI-powered code review%s\n\n" "$DIM" "$RESET"
   }
 fi
 
@@ -265,15 +299,18 @@ cmd_open() {
 cmd_update() {
   ensure_install_dir
   load_bun_path
-  step "Updating Revv"
+  banner
+  printf "  %s──────────────────────────────────────────────────────%s\n\n" "$DIM" "$RESET"
 
-  info "Fetching from origin"
-  git -C "$INSTALL_DIR" fetch --all --prune
+  # ── Fetch ─────────────────────────────────────────────────
+  spin_start "Fetching latest from origin…"
+  git -C "$INSTALL_DIR" fetch --all --prune >/dev/null 2>&1 || true
+  spin_stop 1
 
   local before after branch
   branch="$(git -C "$INSTALL_DIR" rev-parse --abbrev-ref HEAD)"
   before="$(git -C "$INSTALL_DIR" rev-parse HEAD)"
-  git -C "$INSTALL_DIR" reset --hard "origin/$branch"
+  git -C "$INSTALL_DIR" reset --hard "origin/$branch" >/dev/null 2>&1
   after="$(git -C "$INSTALL_DIR" rev-parse HEAD)"
 
   if [[ "$before" == "$after" ]]; then
@@ -283,20 +320,26 @@ cmd_update() {
       return 0
     fi
   else
-    info "Updated $before → $after"
-    info "Changes:"
-    git -C "$INSTALL_DIR" --no-pager log --oneline "$before..$after" | sed 's/^/    /'
+    local short_before short_after
+    short_before="$(git -C "$INSTALL_DIR" rev-parse --short "$before")"
+    short_after="$(git -C "$INSTALL_DIR" rev-parse --short "$after")"
+    info "Updated ${short_before} → ${short_after}"
+    git -C "$INSTALL_DIR" --no-pager log --oneline "$before..$after" | \
+      while IFS= read -r line; do
+        printf "    %s%s%s\n" "$DIM" "$line" "$RESET"
+      done
+    printf "\n"
   fi
 
-  info "Installing dependencies"
+  # ── Dependencies ──────────────────────────────────────────
+  step "Dependencies"
   (cd "$INSTALL_DIR" && bun install)
 
-  info "Building (make dist)"
+  # ── Build ─────────────────────────────────────────────────
+  step "Build"
   (cd "$INSTALL_DIR" && make dist)
 
-  # Find the newly built .app. Use a wildcard (*.app) so productName changes
-  # — e.g. "Revv" vs "Revv (Alpha).app" — don't break the lookup. install.sh
-  # uses the same pattern.
+  # Find the newly built .app.
   local bundle_app app_name
   bundle_app="$(find "$INSTALL_DIR/apps/desktop/target/release/bundle/macos" -maxdepth 1 -type d -name '*.app' 2>/dev/null | head -1)"
   if [[ -z "$bundle_app" ]]; then
@@ -305,7 +348,7 @@ cmd_update() {
   [[ -d "$bundle_app" ]] || fail "Build finished but no .app bundle was produced."
   app_name="$(basename "$bundle_app")"
 
-  # Replace the installed .app (prefer the same location it was at).
+  # Determine install destination.
   local dest_app dest_dir old_app
   old_app="$(find_app)" || old_app=""
   if [[ -n "$old_app" ]]; then
@@ -320,42 +363,39 @@ cmd_update() {
   fi
   dest_app="$dest_dir/$app_name"
 
-  # If the productName changed (old "Revv.app" -> new "Revv (Alpha).app"), the
-  # old bundle still sits there at its original path. Remove it so we don't
-  # leave two copies in /Applications.
   if [[ -n "$old_app" && "$old_app" != "$dest_app" && -d "$old_app" ]]; then
     info "Product name changed — removing stale $old_app"
     rm -rf "$old_app"
   fi
 
-  info "Quitting Revv if it's running"
+  # ── Install ───────────────────────────────────────────────
+  printf "\n"
+  spin_start "Quitting Revv…"
   osascript -e 'tell application "Revv" to quit' 2>/dev/null || true
   osascript -e 'tell application "Revv (Alpha)" to quit' 2>/dev/null || true
   sleep 1
+  spin_stop 1
 
-  info "Replacing $dest_app"
+  spin_start "Installing ${app_name}…"
   rm -rf "$dest_app"
   cp -R "$bundle_app" "$dest_app"
   xattr -cr "$dest_app" 2>/dev/null || true
+  spin_stop 1
 
   # Re-source common.sh from the freshly-pulled tree so we pick up any new
-  # helpers (e.g. write_launch_agent_plist) that didn't exist in the version
-  # this revv CLI started with. Unset the double-source guard first.
+  # helpers that didn't exist in the version this revv CLI started with.
   if [[ -f "$INSTALL_DIR/scripts/lib/common.sh" ]]; then
     unset __REVV_COMMON_LOADED__
     # shellcheck disable=SC1091
     source "$INSTALL_DIR/scripts/lib/common.sh"
   fi
 
-  info "Refreshing LaunchAgent (picks up new PATH + detected CLI binary locations)"
+  # ── LaunchAgent ───────────────────────────────────────────
   local bun_for_plist
   bun_for_plist="$(command -v bun || true)"
   [[ -x "$bun_for_plist" ]] || fail "Cannot locate bun for the LaunchAgent."
 
   if declare -F write_launch_agent_plist >/dev/null 2>&1; then
-    # Restore GitHub Enterprise config from the persisted conf file so the
-    # refreshed plist keeps the correct host/client-id without re-prompting.
-    # Priority: existing env var > github.conf > empty (defaults to github.com).
     local _github_conf="${REVV_SUPPORT_DIR}/github.conf"
     if [[ -z "${REVV_GITHUB_HOST:-}" ]] && declare -F _revv_dotenv_get >/dev/null 2>&1; then
       REVV_GITHUB_HOST="$(_revv_dotenv_get GITHUB_HOST "$_github_conf")"
@@ -365,18 +405,22 @@ cmd_update() {
     fi
     export REVV_GITHUB_HOST="${REVV_GITHUB_HOST:-}"
     export REVV_GITHUB_CLIENT_ID="${REVV_GITHUB_CLIENT_ID:-}"
+    spin_start "Refreshing LaunchAgent…"
     launchctl unload "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
+    # write_launch_agent_plist calls info/success — redirect to suppress mid-spinner noise
     write_launch_agent_plist \
       "$LAUNCH_AGENT_PLIST" \
       "$bun_for_plist" \
       "$INSTALL_DIR" \
-      "$LOG_DIR"
+      "$LOG_DIR" >/dev/null 2>&1
     launchctl load -w "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
+    spin_stop 1
   else
-    # Older common.sh without the helper — just reload the existing plist.
     warn "write_launch_agent_plist not found in common.sh; keeping existing plist"
+    spin_start "Reloading server…"
     launchctl unload "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
     launchctl load -w "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
+    spin_stop 1
   fi
 
   # Refresh the CLI itself + helper lib in case they changed upstream.
@@ -389,7 +433,13 @@ cmd_update() {
     cp "$INSTALL_DIR/scripts/lib/common.sh" "$HOME/.local/share/revv/common.sh"
   fi
 
-  success "Updated to $(git -C "$INSTALL_DIR" rev-parse --short HEAD)"
+  local short_head
+  short_head="$(git -C "$INSTALL_DIR" rev-parse --short HEAD)"
+  printf "\n"
+  printf "  %s──────────────────────────────────────────────────────%s\n\n" "$DIM" "$RESET"
+  printf "  %s%s✓  Revv is up to date!%s\n\n" "$GREEN" "$BOLD" "$RESET"
+  printf "  %s▸%s  Version  %s%s%s\n\n" "$DIM" "$RESET" "$BOLD" "$short_head" "$RESET"
+  printf "  %s──────────────────────────────────────────────────────%s\n\n" "$DIM" "$RESET"
   open "$dest_app" || true
 }
 
