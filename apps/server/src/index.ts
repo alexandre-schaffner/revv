@@ -21,6 +21,7 @@ import { reviewRoutes } from "./routes/reviews";
 import { settingsRoutes } from "./routes/settings";
 import { signOutRoute } from "./routes/sign-out";
 import { threadRoutes } from "./routes/threads";
+import { updateManifestRoute } from "./routes/update-manifest";
 import { userRoutes } from "./routes/user";
 import { walkthroughsRoute } from "./routes/walkthroughs";
 import { wsRoute } from "./routes/ws";
@@ -69,6 +70,7 @@ const app = new Elysia()
   .use(recapRoutes)
   .use(reviewRoutes)
   .use(threadRoutes)
+  .use(updateManifestRoute)
   .use(settingsRoutes)
   .use(signOutRoute)
   .use(deviceAuthRoutes)

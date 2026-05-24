@@ -8,6 +8,7 @@ import { SshSigner } from "../services/cache-signing/index";
 import { PollScheduler } from "../services/PollScheduler";
 import { SettingsService } from "../services/Settings";
 import { handleAppError } from "./middleware";
+import { updateChannelSchema } from "./schemas";
 
 export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
   .get("/", async (ctx) => {
@@ -86,6 +87,7 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
               ),
             }),
           ),
+          updateChannel: updateChannelSchema.optional,
         }),
       ),
     },

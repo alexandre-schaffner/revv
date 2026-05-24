@@ -118,6 +118,13 @@
       "idx": 16,
       "version": "6",
       "when": 1779555000000,
+      "tag": "0140_update_channel",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1779560000000,
       "tag": "0140_cache_signing",
       "breakpoints": true
     }

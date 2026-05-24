@@ -47,6 +47,13 @@ export const userSettings = sqliteTable("user_settings", {
   cacheDownloadsEnabled: integer("cache_downloads_enabled", { mode: "boolean" })
     .notNull()
     .default(true),
+  /**
+   * Release channel followed by the in-app updater and the `revv update` CLI.
+   * `'stable'` tracks the latest release-please `vX.Y.Z` tag; `'nightly'` tracks
+   * the moving `nightly` tag built on every push to `main`. Nightly users skip
+   * the 48-hour stable cooldown.
+   */
+  updateChannel: text("update_channel").notNull().default("stable"),
   // ── SSH cache signing ─────────────────────────────────────────────────────
   /** `'off' | 'permissive' | 'strict'`. Default `'strict'` (on by default). */
   cacheSigningMode: text("cache_signing_mode").notNull().default("strict"),

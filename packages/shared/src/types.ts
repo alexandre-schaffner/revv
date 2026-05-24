@@ -1,3 +1,5 @@
+import type { UpdateChannel } from "./constants";
+
 export type PullRequestStatus = "open" | "closed" | "merged";
 
 export type ReviewStatus =
@@ -180,6 +182,14 @@ export interface UserSettings {
       trustedSignerHosts: string[];
     };
   };
+  /**
+   * Release channel the in-app updater (and `revv update` CLI) reads from.
+   * `'stable'` (default) tracks the latest `vX.Y.Z` tag published by
+   * release-please. `'nightly'` tracks the moving `nightly` tag — built from
+   * every push to `main`. Nightly users skip the 48-hour stable cooldown so
+   * they're notified of new builds instantly.
+   */
+  updateChannel: UpdateChannel;
 }
 
 // ── Review domain types ──────────────────────────────────────────────────────
@@ -236,6 +246,12 @@ export interface UserIdentity {
    * URLs never cause 404s.
    */
   avatarContent: string | null;
+  /**
+   * `true` when the signed-in user's GitHub login is on the project
+   * maintainer allowlist (`MAINTAINER_LOGINS`). Maintainers see new updates
+   * the moment CI publishes them — the 48h stable cooldown is bypassed.
+   */
+  isMaintainer: boolean;
 }
 
 export interface Org {

@@ -5,9 +5,10 @@ import type {
   RecapAgentChoice,
   ThemePreference,
   ThinkingEffort,
+  UpdateChannel,
   UserSettings,
 } from "@revv/shared";
-import { AUTO_FETCH_DEFAULT_INTERVAL } from "@revv/shared";
+import { AUTO_FETCH_DEFAULT_INTERVAL, DEFAULT_UPDATE_CHANNEL, UPDATE_CHANNELS } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Context, Effect, Layer, Stream, SubscriptionRef } from "effect";
 import type { Db } from "../db/index";
@@ -52,7 +53,15 @@ const DEFAULT_SETTINGS: UserSettings = {
       trustedSignerHosts: [],
     },
   },
+  updateChannel: DEFAULT_UPDATE_CHANNEL,
 };
+
+const VALID_UPDATE_CHANNELS: ReadonlySet<UpdateChannel> = new Set(UPDATE_CHANNELS);
+function coerceUpdateChannel(value: unknown): UpdateChannel {
+  return typeof value === "string" && VALID_UPDATE_CHANNELS.has(value as UpdateChannel)
+    ? (value as UpdateChannel)
+    : DEFAULT_SETTINGS.updateChannel;
+}
 
 const VALID_RECAP_AGENTS: ReadonlySet<RecapAgentChoice> = new Set(["auto", "opencode", "claude"]);
 
@@ -122,6 +131,7 @@ function normalize(raw: unknown): UserSettings {
         : DEFAULT_SETTINGS.githubHost,
     recap: coerceRecap(r.recap),
     cache: coerceCache(r.cache),
+    updateChannel: coerceUpdateChannel(r.updateChannel),
   };
 }
 
@@ -224,6 +234,7 @@ function toSettings(row: typeof userSettings.$inferSelect): UserSettings {
         })(),
       ),
     },
+    updateChannel: coerceUpdateChannel(row.updateChannel),
   };
 }
 
@@ -251,6 +262,7 @@ function toInsert(s: UserSettings): typeof userSettings.$inferInsert {
     cacheCredentialsPath: s.cache.credentialsPath,
     cacheUploadsEnabled: s.cache.uploadsEnabled,
     cacheDownloadsEnabled: s.cache.downloadsEnabled,
+    updateChannel: s.updateChannel,
     cacheSigningMode: s.cache.signing.mode,
     cacheSigningKeyPath: s.cache.signing.keyPath,
     cacheTrustedSignerHosts: JSON.stringify(s.cache.signing.trustedSignerHosts),
@@ -376,6 +388,7 @@ export const SettingsServiceLive = Layer.effect(
           const next: UserSettings = {
             ...merged,
             aiMaxTurns: coerceMaxTurns(merged.aiMaxTurns),
+            updateChannel: coerceUpdateChannel(merged.updateChannel),
           };
 
           yield* Effect.tryPromise({
