@@ -6,7 +6,7 @@ import { untrack } from "svelte";
 import { Shimmer } from "$lib/components/ai/shimmer";
 import GenActionBar, { type GenActionState } from "$lib/components/layout/GenActionBar.svelte";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
-import { gsapFade, gsapFadeY, setupFlipOnChange, tokens } from "$lib/motion";
+import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
 import {
   abortRecapStream,
   getRecapStreamEntry,
@@ -206,15 +206,6 @@ const genActionState = $derived.by((): GenActionState | null => {
 // When a recap exists, show the Regenerate/Stop/Resume bar instead.
 const showGenerateFab = $derived(!latestDetail);
 
-// Flip ride for the GenActionBar swap: when the central pill changes width
-// (Stop → Regenerate, etc.), the surviving siblings (the outdated-CTA pill)
-// slide to their new positions instead of jumping.
-let actionsRowEl = $state<HTMLDivElement | null>(null);
-setupFlipOnChange(
-  () => actionsRowEl,
-  () => genActionState?.kind,
-);
-
 async function onGenerate(): Promise<void> {
   if (generating) return;
   generating = true;
@@ -287,12 +278,7 @@ async function onStop(): Promise<void> {
 		in:gsapFadeY={{ duration: tokens.quick, y: 8 }}
 		out:gsapFade={{ duration: tokens.snap }}
 	>
-		<div
-			bind:this={actionsRowEl}
-			class="actions-row"
-			role="toolbar"
-			aria-label="Recap actions"
-		>
+		<div class="actions-row" role="toolbar" aria-label="Recap actions">
 			{#if showGenerateFab}
 				<GlassPill
 					variant="accent"

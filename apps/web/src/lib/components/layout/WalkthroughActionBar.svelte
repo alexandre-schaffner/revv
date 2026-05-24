@@ -4,7 +4,7 @@ import ArrowUp from "phosphor-svelte/lib/ArrowUp";
 import Star from "phosphor-svelte/lib/Star";
 import GenActionBar, { type GenActionState } from "$lib/components/layout/GenActionBar.svelte";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
-import { gsapFade, gsapFadeY, setupFlipOnChange, tokens } from "$lib/motion";
+import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
 import { isChatStreaming } from "$lib/stores/chat.svelte";
 import {
   abort as abortWalkthrough,
@@ -62,15 +62,6 @@ const combinedPendingAction = $derived(chatStreaming ? "chat" : walkthroughPendi
 const combinedDisabledTitle = $derived(
   chatStreaming ? "Chat edit in progress. Wait for it to finish before regenerating." : undefined,
 );
-
-// Flip ride for the GenActionBar swap: when the central pill changes width
-// (e.g. `Stop generation` → `Regenerate`), the surviving siblings (scroll-
-// top, New content, Rating) slide to their new positions instead of jumping.
-let actionsRowEl = $state<HTMLDivElement | null>(null);
-setupFlipOnChange(
-  () => actionsRowEl,
-  () => genActionState?.kind,
-);
 </script>
 
 {#if genActionState}
@@ -79,12 +70,7 @@ setupFlipOnChange(
     in:gsapFadeY={{ duration: tokens.quick, y: 8 }}
     out:gsapFade={{ duration: tokens.snap }}
   >
-    <div
-      bind:this={actionsRowEl}
-      class="actions-row"
-      role="toolbar"
-      aria-label="Walkthrough actions"
-    >
+    <div class="actions-row" role="toolbar" aria-label="Walkthrough actions">
       <GlassPill
         icon
         onclick={scrollWalkthroughToTop}
