@@ -4,8 +4,8 @@
 #
 # One script, two audiences:
 #
-#   Curl-piped (end user):
-#     irm https://raw.githubusercontent.com/alexandre-schaffner/revv/main/install.ps1 | iex
+#   Curl-piped (end user) — use the signed release installer instead:
+#     irm https://github.com/alexandre-schaffner/revv/releases/latest/download/install.ps1 | iex
 #
 #   From a checkout (developer):
 #     .\install.ps1 -Dev       # toolchain + bun install, stop there
@@ -41,7 +41,7 @@ if ($Help) {
 Revv — Unified Installer (Windows)
 
 Usage:
-  irm https://raw.githubusercontent.com/alexandre-schaffner/revv/main/install.ps1 | iex
+  irm https://github.com/alexandre-schaffner/revv/releases/latest/download/install.ps1 | iex
 
   .\install.ps1 -Dev       # toolchain + deps only
   .\install.ps1            # full install

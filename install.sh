@@ -4,8 +4,8 @@
 #
 # One script, two audiences:
 #
-#   Curl-piped (end user):
-#     curl -fsSL https://raw.githubusercontent.com/alexandre-schaffner/revv/main/install.sh | bash
+#   Curl-piped (end user) — use the signed release installer instead:
+#     curl -fsSL https://github.com/alexandre-schaffner/revv/releases/latest/download/install.sh | bash
 #
 #   From a checkout (developer):
 #     ./install.sh --dev       # toolchain + bun install, stop there

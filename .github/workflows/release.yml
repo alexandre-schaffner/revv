@@ -2,10 +2,8 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
-
-permissions:
-  contents: write
+    branches:
+      - main
 
 jobs:
   # ── Quality gates (fast, single runner) ───────────────────────
@@ -34,10 +32,38 @@ jobs:
       - name: Build
         run: bun run build
 
-  # ── Cross-platform Tauri builds ───────────────────────────────
-  build-release:
-    name: Build (${{ matrix.label }})
+  # ── release-please: opens/updates release PR; tags on merge ───
+  release-please:
+    name: Release Please
+    runs-on: ubuntu-latest
     needs: check
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+      upload_url: ${{ steps.release.outputs.upload_url }}
+
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          bootstrap-sha: d0b10912
+
+  # ── Cross-platform Tauri builds ───────────────────────────────
+  build-tauri:
+    name: Build (${{ matrix.label }})
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
 
     strategy:
       fail-fast: false
@@ -64,6 +90,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
 
       - name: Install system dependencies (Linux)
         if: matrix.platform == 'ubuntu-22.04'
@@ -98,10 +126,80 @@ jobs:
         with:
           projectPath: ./apps/desktop
           tauriScript: bunx tauri
-          tagName: ${{ github.ref_name }}
-          releaseName: "Revv ${{ github.ref_name }}"
+          tagName: ${{ needs.release-please.outputs.tag_name }}
+          releaseName: "Revv ${{ needs.release-please.outputs.version }}"
           releaseBody: "See assets below for platform-specific downloads."
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
           updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            apps/desktop/src-tauri/target/**/bundle/**/*.dmg
+            apps/desktop/src-tauri/target/**/bundle/**/*.msi
+            apps/desktop/src-tauri/target/**/bundle/**/*.deb
+            apps/desktop/src-tauri/target/**/bundle/**/*.AppImage
+
+  # ── Package and attest the signed installers ──────────────────
+  package-installer:
+    name: Package installer
+    needs: [release-please, build-tauri]
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      - name: Build installer artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
+          REVV_VERSION: ${{ needs.release-please.outputs.version }}
+        run: bash scripts/release/build-installer.sh
+
+      - name: Attest install.sh
+        id: attest-sh
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/install.sh
+
+      - name: Attest install.ps1
+        id: attest-ps1
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/install.ps1
+
+      - name: Attest SHA256SUMS
+        id: attest-sums
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/SHA256SUMS
+
+      - name: Stage attestation bundles
+        run: |
+          cp "${{ steps.attest-sh.outputs.bundle-path }}"   dist/install.sh.sigstore
+          cp "${{ steps.attest-ps1.outputs.bundle-path }}"  dist/install.ps1.sigstore
+          cp "${{ steps.attest-sums.outputs.bundle-path }}" dist/SHA256SUMS.sigstore
+
+      - name: Upload installer artifacts to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          gh release upload "$RELEASE_TAG" \
+            dist/install.sh \
+            dist/install.ps1 \
+            dist/SHA256SUMS \
+            dist/install.sh.sigstore \
+            dist/install.ps1.sigstore \
+            dist/SHA256SUMS.sigstore \
+            --clobber

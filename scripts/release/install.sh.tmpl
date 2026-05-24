@@ -1,0 +1,309 @@
+#!/usr/bin/env bash
+# ──────────────────────────────────────────────────────────────
+# Revv @@REVV_VERSION@@ — Release Installer
+#
+# Downloads and installs the pre-built Revv bundle for your
+# platform. This script was generated for release @@RELEASE_TAG@@.
+#
+# Usage:
+#   # Recommended — verify before running:
+#   curl -fsSL https://github.com/alexandre-schaffner/revv/releases/latest/download/install.sh -o install.sh
+#   gh attestation verify install.sh --repo alexandre-schaffner/revv
+#   bash install.sh
+#
+#   # Pinned to this release:
+#   curl -fsSL https://github.com/alexandre-schaffner/revv/releases/download/@@RELEASE_TAG@@/install.sh | bash
+#
+#   # Dev mode (build from source; requires full toolchain):
+#   bash install.sh --dev
+#
+# Flags:
+#   --dev            Build from source instead of downloading a bundle.
+#   --yes, -y        Non-interactive: auto-approve every prompt.
+#   --skip-verify    Skip attestation check (also requires REVV_SKIP_VERIFY=1).
+#   --help, -h       This message.
+#
+# Verification (manual):
+#   gh attestation verify install.sh --repo alexandre-schaffner/revv
+# ──────────────────────────────────────────────────────────────
+set -euo pipefail
+
+REVV_VERSION="@@REVV_VERSION@@"
+RELEASE_TAG="@@RELEASE_TAG@@"
+REPO="alexandre-schaffner/revv"
+
+# Embedded SHA256 checksums for this release
+SHA_DMG_ARM64="@@SHA_DMG_ARM64@@"
+SHA_DMG_X64="@@SHA_DMG_X64@@"
+SHA_DEB="@@SHA_DEB@@"
+SHA_APPIMAGE="@@SHA_APPIMAGE@@"
+SHA_MSI="@@SHA_MSI@@"
+
+# Download URLs for this release
+URL_DMG_ARM64="@@URL_DMG_ARM64@@"
+URL_DMG_X64="@@URL_DMG_X64@@"
+URL_DEB="@@URL_DEB@@"
+URL_APPIMAGE="@@URL_APPIMAGE@@"
+URL_MSI="@@URL_MSI@@"
+
+REVV_AUTO_YES="${REVV_AUTO_YES:-0}"
+REVV_SKIP_VERIFY="${REVV_SKIP_VERIFY:-0}"
+REVV_APP_DIR="${REVV_APP_DIR:-/Applications}"
+MODE="user"
+SKIP_VERIFY_FLAG=0
+
+for arg in "$@"; do
+  case "$arg" in
+    --dev)          MODE="dev" ;;
+    --yes|-y)       REVV_AUTO_YES=1 ;;
+    --skip-verify)  SKIP_VERIFY_FLAG=1 ;;
+    --help|-h)
+      sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'
+      exit 0
+      ;;
+    *)
+      printf '[FAIL]  Unknown argument: %s\n' "$arg" >&2
+      exit 2
+      ;;
+  esac
+done
+export REVV_AUTO_YES
+
+# ── Inline helpers ────────────────────────────────────────────
+_tty_colors() { command -v tput >/dev/null 2>&1 && [[ -t 2 ]]; }
+if _tty_colors; then
+  _BOLD=$(tput bold); _RESET=$(tput sgr0)
+  _GREEN=$(tput setaf 2); _YELLOW=$(tput setaf 3); _RED=$(tput setaf 1); _CYAN=$(tput setaf 6)
+else
+  _BOLD=''; _RESET=''; _GREEN=''; _YELLOW=''; _RED=''; _CYAN=''
+fi
+info()    { printf "${_CYAN}[INFO]${_RESET}  %s\n" "$*"; }
+success() { printf "${_GREEN}[OK]${_RESET}    %s\n" "$*"; }
+warn()    { printf "${_YELLOW}[WARN]${_RESET}  %s\n" "$*" >&2; }
+fail()    { printf "${_RED}[FAIL]${_RESET}  %s\n" "$*" >&2; exit 1; }
+step()    { printf "\n${_BOLD}==> %s${_RESET}\n" "$*"; }
+
+# ── Platform detection ────────────────────────────────────────
+detect_platform() {
+  local os arch
+  os="$(uname -s)"
+  arch="$(uname -m)"
+  case "$os" in
+    Darwin)
+      PLATFORM="macos"
+      case "$arch" in
+        arm64)  ARCH="arm64" ;;
+        x86_64) ARCH="x64"   ;;
+        *)      fail "Unsupported macOS architecture: $arch" ;;
+      esac
+      ;;
+    Linux)
+      PLATFORM="linux"
+      ARCH="amd64"
+      ;;
+    *)
+      fail "Unsupported platform: $os. For Windows use install.ps1."
+      ;;
+  esac
+}
+
+# ── SHA256 check ──────────────────────────────────────────────
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d' ' -f1
+  else
+    shasum -a 256 "$1" | cut -d' ' -f1
+  fi
+}
+
+verify_sha() {
+  local file="$1" expected="$2"
+  local actual
+  actual="$(sha256_of "$file")"
+  if [[ "$actual" != "$expected" ]]; then
+    fail "SHA256 mismatch for $(basename "$file").\n  Expected: $expected\n  Got:      $actual\nThe asset may be corrupt or tampered."
+  fi
+  success "Checksum OK."
+}
+
+# ── Attestation verification ──────────────────────────────────
+verify_attestation() {
+  local script_path="$1"
+
+  if [[ "$SKIP_VERIFY_FLAG" == "1" ]] && [[ "$REVV_SKIP_VERIFY" == "1" ]]; then
+    warn "Skipping attestation verification (--skip-verify + REVV_SKIP_VERIFY=1)."
+    return 0
+  fi
+
+  local bundle_path
+  bundle_path="$(mktemp)"
+  info "Downloading attestation bundle..."
+  if ! curl -fsSL \
+    "https://github.com/${REPO}/releases/download/${RELEASE_TAG}/install.sh.sigstore" \
+    -o "$bundle_path" 2>/dev/null; then
+    warn "Attestation bundle unavailable; skipping verification."
+    rm -f "$bundle_path"
+    return 0
+  fi
+
+  if command -v gh >/dev/null 2>&1; then
+    step "Verifying installer attestation via GitHub CLI"
+    gh attestation verify "$script_path" \
+      --repo "$REPO" \
+      --bundle "$bundle_path" \
+      || fail "Attestation verification failed. Aborting."
+    success "Installer attestation verified."
+    rm -f "$bundle_path"
+    return 0
+  fi
+
+  # Fall back to bootstrapping cosign
+  step "Bootstrapping cosign for attestation verification"
+  local cosign_dir cosign_bin cosign_ver cosign_url cosign_sha_url cosign_sha_expected cosign_sha_actual
+  cosign_dir="$(mktemp -d)"
+  cosign_bin="${cosign_dir}/cosign"
+  cosign_ver="v2.4.3"
+
+  case "$(uname -s)-$(uname -m)" in
+    Linux-x86_64)
+      cosign_url="https://github.com/sigstore/cosign/releases/download/${cosign_ver}/cosign-linux-amd64"
+      cosign_sha_url="https://github.com/sigstore/cosign/releases/download/${cosign_ver}/cosign-linux-amd64.sha256"
+      ;;
+    Darwin-arm64)
+      cosign_url="https://github.com/sigstore/cosign/releases/download/${cosign_ver}/cosign-darwin-arm64"
+      cosign_sha_url="https://github.com/sigstore/cosign/releases/download/${cosign_ver}/cosign-darwin-arm64.sha256"
+      ;;
+    Darwin-x86_64)
+      cosign_url="https://github.com/sigstore/cosign/releases/download/${cosign_ver}/cosign-darwin-amd64"
+      cosign_sha_url="https://github.com/sigstore/cosign/releases/download/${cosign_ver}/cosign-darwin-amd64.sha256"
+      ;;
+    *)
+      warn "Cannot bootstrap cosign on this platform; skipping attestation check."
+      rm -f "$bundle_path"
+      return 0
+      ;;
+  esac
+
+  info "Downloading cosign ${cosign_ver}..."
+  curl -fsSL "$cosign_url" -o "$cosign_bin" --progress-bar
+  chmod +x "$cosign_bin"
+
+  cosign_sha_expected="$(curl -fsSL "$cosign_sha_url" | cut -d' ' -f1)"
+  cosign_sha_actual="$(sha256_of "$cosign_bin")"
+  [[ "$cosign_sha_actual" == "$cosign_sha_expected" ]] \
+    || fail "cosign binary SHA256 mismatch — cannot proceed safely."
+
+  "$cosign_bin" verify-blob \
+    --bundle "$bundle_path" \
+    --certificate-identity-regexp "^https://github.com/${REPO}/" \
+    --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+    "$script_path" \
+    || fail "Attestation verification failed. Aborting."
+  success "Installer attestation verified."
+
+  rm -rf "$cosign_dir"
+  rm -f "$bundle_path"
+}
+
+# ── Dev mode: delegate to from-source installer ───────────────
+if [[ "$MODE" == "dev" ]]; then
+  # When in a checkout, use the root install.sh
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+  ROOT_INSTALLER="${SCRIPT_DIR}/../../install.sh"
+  if [[ -f "$ROOT_INSTALLER" ]]; then
+    exec bash "$ROOT_INSTALLER" --dev
+  fi
+  # When piped from curl, clone then run
+  REVV_REPO_URL="${REVV_REPO_URL:-https://github.com/alexandre-schaffner/revv.git}"
+  REVV_BRANCH="${REVV_BRANCH:-main}"
+  REVV_INSTALL_DIR="${REVV_INSTALL_DIR:-$HOME/Library/Application Support/Revv/src}"
+  step "Dev mode: cloning Revv source"
+  git clone --depth=1 --branch "$REVV_BRANCH" "$REVV_REPO_URL" "$REVV_INSTALL_DIR"
+  exec bash "$REVV_INSTALL_DIR/install.sh" --dev
+fi
+
+# ── Self-verification ─────────────────────────────────────────
+SELF_PATH=""
+if [[ -n "${BASH_SOURCE[0]:-}" ]] && [[ "${BASH_SOURCE[0]:-}" != "bash" ]] \
+   && [[ "${BASH_SOURCE[0]:-}" != "/bin/bash" ]] && [[ -f "${BASH_SOURCE[0]:-}" ]]; then
+  SELF_PATH="$(realpath "${BASH_SOURCE[0]}")"
+fi
+
+if [[ -n "$SELF_PATH" ]]; then
+  verify_attestation "$SELF_PATH"
+else
+  info "Script is being piped — downloading a copy for attestation check..."
+  SELF_TMP="$(mktemp)"
+  if curl -fsSL \
+    "https://github.com/${REPO}/releases/download/${RELEASE_TAG}/install.sh" \
+    -o "$SELF_TMP" 2>/dev/null; then
+    verify_attestation "$SELF_TMP"
+    rm -f "$SELF_TMP"
+  else
+    warn "Could not fetch script for attestation; skipping verification."
+    warn "To verify manually: gh attestation verify install.sh --repo ${REPO}"
+  fi
+fi
+
+# ── Main: download + verify + install ────────────────────────
+detect_platform
+
+TMPDIR_BUNDLE="$(mktemp -d)"
+cleanup() { rm -rf "$TMPDIR_BUNDLE"; }
+trap cleanup EXIT
+
+case "$PLATFORM" in
+  macos)
+    if [[ "$ARCH" == "arm64" ]]; then
+      BUNDLE_URL="$URL_DMG_ARM64"
+      BUNDLE_SHA="$SHA_DMG_ARM64"
+      BUNDLE_FILE="${TMPDIR_BUNDLE}/revv-arm64.dmg"
+    else
+      BUNDLE_URL="$URL_DMG_X64"
+      BUNDLE_SHA="$SHA_DMG_X64"
+      BUNDLE_FILE="${TMPDIR_BUNDLE}/revv-x64.dmg"
+    fi
+
+    step "Downloading Revv ${REVV_VERSION} for macOS ${ARCH}"
+    curl -fsSL "$BUNDLE_URL" -o "$BUNDLE_FILE" --progress-bar
+    verify_sha "$BUNDLE_FILE" "$BUNDLE_SHA"
+
+    step "Installing Revv.app"
+    MOUNT_POINT="$(mktemp -d)"
+    hdiutil attach -quiet -nobrowse -mountpoint "$MOUNT_POINT" "$BUNDLE_FILE"
+    INSTALL_DIR="$REVV_APP_DIR"
+    [[ -w "$INSTALL_DIR" ]] || INSTALL_DIR="$HOME/Applications"
+    mkdir -p "$INSTALL_DIR"
+    cp -R "$MOUNT_POINT"/*.app "$INSTALL_DIR/"
+    hdiutil detach -quiet "$MOUNT_POINT"
+    rm -rf "$MOUNT_POINT"
+    success "Installed to ${INSTALL_DIR}"
+    warn "Gatekeeper will show a warning until Apple Developer ID signing is complete."
+    info "To open: right-click Revv.app → Open, then click Open in the dialog."
+    ;;
+
+  linux)
+    BUNDLE_URL="$URL_DEB"
+    BUNDLE_SHA="$SHA_DEB"
+    BUNDLE_FILE="${TMPDIR_BUNDLE}/revv.deb"
+
+    step "Downloading Revv ${REVV_VERSION} for Linux"
+    curl -fsSL "$BUNDLE_URL" -o "$BUNDLE_FILE" --progress-bar
+    verify_sha "$BUNDLE_FILE" "$BUNDLE_SHA"
+
+    step "Installing revv.deb"
+    if command -v dpkg >/dev/null 2>&1; then
+      sudo dpkg -i "$BUNDLE_FILE"
+    else
+      fail "dpkg not found. Install manually: dpkg -i ${BUNDLE_FILE}"
+    fi
+    success "Installed Revv ${REVV_VERSION}"
+    ;;
+
+  *)
+    fail "Unsupported platform: $PLATFORM"
+    ;;
+esac
+
+success "Revv ${REVV_VERSION} installed successfully."
+info "For other formats (AppImage, MSI), see: https://github.com/${REPO}/releases/tag/${RELEASE_TAG}"

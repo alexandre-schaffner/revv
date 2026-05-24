@@ -1,0 +1,168 @@
+#Requires -Version 5.1
+# ──────────────────────────────────────────────────────────────
+# Revv @@REVV_VERSION@@ — Release Installer (Windows)
+#
+# Downloads and installs the pre-built Revv MSI for Windows.
+# This script was generated for release @@RELEASE_TAG@@.
+#
+# Usage:
+#   # Recommended — verify before running:
+#   Invoke-WebRequest -Uri https://github.com/alexandre-schaffner/revv/releases/latest/download/install.ps1 -OutFile install.ps1
+#   gh attestation verify install.ps1 --repo alexandre-schaffner/revv
+#   .\install.ps1
+#
+#   # Pinned to this release:
+#   irm https://github.com/alexandre-schaffner/revv/releases/download/@@RELEASE_TAG@@/install.ps1 | iex
+#
+#   # Dev mode (build from source; requires full toolchain):
+#   .\install.ps1 -Dev
+#
+# Parameters:
+#   -Dev            Build from source instead of downloading a bundle.
+#   -Yes            Non-interactive: auto-approve every prompt.
+#   -SkipVerify     Skip attestation check (also requires $env:REVV_SKIP_VERIFY=1).
+#   -Help           This message.
+#
+# Verification (manual):
+#   gh attestation verify install.ps1 --repo alexandre-schaffner/revv
+# ──────────────────────────────────────────────────────────────
+
+param(
+    [switch]$Dev,
+    [Alias('y')][switch]$Yes,
+    [switch]$SkipVerify,
+    [switch]$Help
+)
+
+if ($Help) {
+    @'
+Revv @@REVV_VERSION@@ — Release Installer (Windows)
+
+Usage:
+  irm https://github.com/alexandre-schaffner/revv/releases/latest/download/install.ps1 | iex
+  irm https://github.com/alexandre-schaffner/revv/releases/download/@@RELEASE_TAG@@/install.ps1 | iex
+
+Flags:
+  -Dev          Build from source (requires toolchain)
+  -Yes, -y      Non-interactive
+  -SkipVerify   Skip attestation (also requires $env:REVV_SKIP_VERIFY=1)
+  -Help         This message
+'@
+    exit 0
+}
+
+$ErrorActionPreference = 'Stop'
+
+$RevvVersion = "@@REVV_VERSION@@"
+$ReleaseTag  = "@@RELEASE_TAG@@"
+$Repo        = "alexandre-schaffner/revv"
+$UrlMsi      = "@@URL_MSI@@"
+$ShaMsi      = "@@SHA_MSI@@"
+
+$AutoYes          = $Yes.IsPresent -or ($env:REVV_AUTO_YES -eq '1')
+$SkipVerifyActive = $SkipVerify.IsPresent -and ($env:REVV_SKIP_VERIFY -eq '1')
+
+# ── Helpers ───────────────────────────────────────────────────
+function Write-Step { param($msg) Write-Host "`n==> $msg" -ForegroundColor Cyan }
+function Write-Info { param($msg) Write-Host "[INFO]  $msg" }
+function Write-Ok   { param($msg) Write-Host "[OK]    $msg" -ForegroundColor Green }
+function Write-Warn { param($msg) Write-Host "[WARN]  $msg" -ForegroundColor Yellow }
+function Write-Fail { param($msg) Write-Host "[FAIL]  $msg" -ForegroundColor Red; exit 1 }
+
+function Get-Sha256 {
+    param($Path)
+    (Get-FileHash -Path $Path -Algorithm SHA256).Hash.ToLower()
+}
+
+function Verify-Sha256 {
+    param($Path, $Expected)
+    $actual = Get-Sha256 $Path
+    if ($actual -ne $Expected.ToLower()) {
+        Write-Fail "SHA256 mismatch for $(Split-Path $Path -Leaf).`n  Expected: $Expected`n  Got:      $actual`nThe asset may be corrupt or tampered."
+    }
+    Write-Ok "Checksum verified."
+}
+
+# ── Attestation verification ──────────────────────────────────
+function Invoke-AttestationVerify {
+    param($ScriptPath)
+
+    if ($SkipVerifyActive) {
+        Write-Warn "Skipping attestation (-SkipVerify + REVV_SKIP_VERIFY=1)."
+        return
+    }
+
+    $bundlePath = [System.IO.Path]::GetTempFileName()
+    $bundleUrl  = "https://github.com/$Repo/releases/download/$ReleaseTag/install.ps1.sigstore"
+
+    try {
+        Invoke-WebRequest -Uri $bundleUrl -OutFile $bundlePath -UseBasicParsing -ErrorAction Stop
+    }
+    catch {
+        Write-Warn "Attestation bundle unavailable; skipping verification."
+        Remove-Item $bundlePath -Force -ErrorAction SilentlyContinue
+        return
+    }
+
+    if (Get-Command gh -ErrorAction SilentlyContinue) {
+        Write-Step "Verifying installer attestation via GitHub CLI"
+        $result = & gh attestation verify $ScriptPath --repo $Repo --bundle $bundlePath 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Fail "Attestation verification failed: $result"
+        }
+        Write-Ok "Installer attestation verified."
+    }
+    else {
+        Write-Warn "gh CLI not found; skipping attestation verification."
+        Write-Info "Install GitHub CLI and run: gh attestation verify install.ps1 --repo $Repo"
+    }
+
+    Remove-Item $bundlePath -Force -ErrorAction SilentlyContinue
+}
+
+# ── Dev mode ──────────────────────────────────────────────────
+if ($Dev) {
+    $scriptDir    = Split-Path -Parent $MyInvocation.MyCommand.Path
+    $rootInstaller = Join-Path $scriptDir "..\..\install.ps1"
+    if (Test-Path $rootInstaller) {
+        & $rootInstaller -Dev
+        exit $LASTEXITCODE
+    }
+    $repoUrl    = if ($env:REVV_REPO_URL)    { $env:REVV_REPO_URL    } else { "https://github.com/alexandre-schaffner/revv.git" }
+    $branch     = if ($env:REVV_BRANCH)      { $env:REVV_BRANCH      } else { "main" }
+    $installDir = if ($env:REVV_INSTALL_DIR) { $env:REVV_INSTALL_DIR } else { "$env:APPDATA\Revv\src" }
+    Write-Step "Dev mode: cloning Revv source"
+    git clone --depth=1 --branch $branch $repoUrl $installDir
+    & "$installDir\install.ps1" -Dev
+    exit $LASTEXITCODE
+}
+
+# ── Self-verification ─────────────────────────────────────────
+$selfPath = $MyInvocation.MyCommand.Path
+if ($selfPath -and (Test-Path $selfPath)) {
+    Invoke-AttestationVerify $selfPath
+}
+else {
+    Write-Info "Script is being piped — skipping file-based attestation."
+    Write-Info "To verify: download install.ps1 and run: gh attestation verify install.ps1 --repo $Repo"
+}
+
+# ── Download + verify + install MSI ───────────────────────────
+$tmpDir  = [System.IO.Path]::GetTempPath()
+$msiPath = Join-Path $tmpDir "revv-$RevvVersion.msi"
+
+Write-Step "Downloading Revv $RevvVersion for Windows"
+Invoke-WebRequest -Uri $UrlMsi -OutFile $msiPath -UseBasicParsing
+Verify-Sha256 $msiPath $ShaMsi
+
+Write-Step "Installing Revv $RevvVersion"
+$msiArgs = if ($AutoYes) { @('/i', $msiPath, '/qn') } else { @('/i', $msiPath) }
+$proc = Start-Process msiexec.exe -ArgumentList $msiArgs -Wait -PassThru
+if ($proc.ExitCode -ne 0) {
+    Write-Fail "MSI installation failed (exit code $($proc.ExitCode))."
+}
+
+Remove-Item $msiPath -Force -ErrorAction SilentlyContinue
+Write-Ok "Revv $RevvVersion installed successfully."
+Write-Warn "Windows SmartScreen may show a warning until Authenticode signing is complete."
+Write-Info "For other formats, see: https://github.com/$Repo/releases/tag/$ReleaseTag"
