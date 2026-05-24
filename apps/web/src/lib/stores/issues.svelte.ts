@@ -17,11 +17,6 @@ export function getOpenIssuesState(repoId: string): RequestState<Issue[]> {
   return openIssuesByRepo.get(repoId) ?? RequestState.idle<Issue[]>();
 }
 
-export function getOpenIssues(repoId: string): Issue[] {
-  const entry = openIssuesByRepo.get(repoId);
-  return entry?.status === "ok" ? entry.data : [];
-}
-
 export async function fetchOpenIssues(repoId: string): Promise<void> {
   const current = openIssuesByRepo.get(repoId);
   if (current?.status === "loading") return;
@@ -41,8 +36,4 @@ export async function fetchOpenIssues(repoId: string): Promise<void> {
     const message = e instanceof Error ? e.message : "Failed to load issues";
     setEntry(repoId, RequestState.error<Issue[]>(message));
   }
-}
-
-export function reset(): void {
-  openIssuesByRepo = new Map();
 }
