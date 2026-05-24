@@ -1,5 +1,7 @@
 import type { Activity, RecapPrEntry, RecapStreamEvent, RecapThemeSummary } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
+import { recordHistogram, traced } from "$lib/observability";
+import { recordSpan } from "$lib/observability/tracer";
 import { runRecapSse } from "$lib/services/recap-sse";
 
 // ── Entry shape ─────────────────────────────────────────────────────────────
@@ -71,51 +73,57 @@ function deleteEntry(recapId: string): void {
 // ── Event reducer ───────────────────────────────────────────────────────────
 
 function applyEvents(recapId: string, evs: RecapStreamEvent[]): void {
-  const current = entries.get(recapId);
-  const entry: RecapStreamEntry = current
-    ? {
-        ...current,
-        entries: new Map(current.entries),
-        themeSummaries: new Map(current.themeSummaries),
+  traced("recap.applyEvents", { count: evs.length }, () => {
+    const current = entries.get(recapId);
+    const entry: RecapStreamEntry = current
+      ? {
+          ...current,
+          entries: new Map(current.entries),
+          themeSummaries: new Map(current.themeSummaries),
+        }
+      : freshEntry();
+
+    for (const event of evs) {
+      const evStart = performance.now();
+      switch (event.type) {
+        case "lede":
+          entry.lede = event.data.lede;
+          break;
+        case "entry":
+          entry.entries.set(event.data.entry.prId, event.data.entry);
+          break;
+        case "theme_summary":
+          entry.themeSummaries.set(event.data.summary.theme, event.data.summary);
+          break;
+        case "thought":
+          entry.thoughts += event.data.text;
+          break;
+        case "phase":
+          entry.phase = event.data.phase;
+          entry.phaseMessage = event.data.message;
+          break;
+        case "activity":
+          entry.activities = [
+            ...entry.activities,
+            { ...normalizeRecapActivity(event.data), id: crypto.randomUUID() },
+          ];
+          break;
+        case "done":
+          entry.doneReceived = true;
+          entry.isStreaming = false;
+          break;
+        case "error":
+          entry.streamError = event.data.message;
+          entry.isStreaming = false;
+          break;
       }
-    : freshEntry();
-
-  for (const event of evs) {
-    switch (event.type) {
-      case "lede":
-        entry.lede = event.data.lede;
-        break;
-      case "entry":
-        entry.entries.set(event.data.entry.prId, event.data.entry);
-        break;
-      case "theme_summary":
-        entry.themeSummaries.set(event.data.summary.theme, event.data.summary);
-        break;
-      case "thought":
-        entry.thoughts += event.data.text;
-        break;
-      case "phase":
-        entry.phase = event.data.phase;
-        entry.phaseMessage = event.data.message;
-        break;
-      case "activity":
-        entry.activities = [
-          ...entry.activities,
-          { ...normalizeRecapActivity(event.data), id: crypto.randomUUID() },
-        ];
-        break;
-      case "done":
-        entry.doneReceived = true;
-        entry.isStreaming = false;
-        break;
-      case "error":
-        entry.streamError = event.data.message;
-        entry.isStreaming = false;
-        break;
+      const evDur = performance.now() - evStart;
+      recordSpan("recap.event", evStart, evDur, { type: event.type }, null);
+      recordHistogram("recap.event.duration", { type: event.type }, evDur);
     }
-  }
 
-  setEntry(recapId, entry);
+    setEntry(recapId, entry);
+  });
 }
 
 function normalizeRecapActivity(activity: Activity): Activity {

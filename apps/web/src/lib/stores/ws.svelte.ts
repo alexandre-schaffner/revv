@@ -1,6 +1,7 @@
 import type { SyncChange, WsServerMessage } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { WS_BASE_URL } from "$lib/api/base-url";
+import { recordCounter, traced } from "$lib/observability";
 import { applyUserUpdate } from "./auth.svelte";
 import { onChatQuestionResolved } from "./chat.svelte";
 import { setError } from "./errors.svelte";
@@ -88,6 +89,10 @@ function notifySyncChanges(changes: SyncChange[]): void {
 }
 
 function handleMessage(msg: WsServerMessage): void {
+  traced("ws.handle", { type: msg.type }, () => dispatchMessage(msg));
+}
+
+function dispatchMessage(msg: WsServerMessage): void {
   switch (msg.type) {
     case "prs:updated":
       replacePullRequests(msg.data);
@@ -278,6 +283,7 @@ export function connect(token: string, hostOverride?: string): void {
     }
     ws = null;
     wsListeners = null;
+    recordCounter("ws.disconnects", undefined);
     scheduleReconnect(token);
   };
 

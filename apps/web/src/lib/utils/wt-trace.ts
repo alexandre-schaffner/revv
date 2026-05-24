@@ -1,13 +1,15 @@
 // Diagnostic-only walkthrough trace logger.
 //
-// Pairs with `debug("wt-trace", ...)` calls on the server side. Off by default
-// to keep the DevTools console quiet. Enable in any browser session by running
-// `localStorage.setItem("revv:wt-trace", "1")` and reloading; disable with
-// `localStorage.removeItem("revv:wt-trace")`.
+// Backed by the observability logger (`$lib/observability`). Off by default
+// to keep the DevTools console quiet. Enable in any browser session by
+// running `localStorage.setItem("revv:wt-trace", "1")` and reloading;
+// disable with `localStorage.removeItem("revv:wt-trace")`.
 //
-// Used to debug the "sometimes the app loses new steps/chapters/ratings"
-// streaming-loss bug. When investigating, also enable `REV_DEBUG=1` on the
-// server so the matched `[wt-trace]` lines surface in both vantage points.
+// Pairs with `debug("wt-trace", ...)` calls on the server side. When
+// investigating, also enable `REV_DEBUG=1` on the server so the matched
+// `[wt-trace]` lines surface in both vantage points.
+
+import { logger } from "$lib/observability";
 
 const ENABLED: boolean = (() => {
   if (typeof window === "undefined") return false;
@@ -18,8 +20,12 @@ const ENABLED: boolean = (() => {
   }
 })();
 
+const wtLogger = logger.scoped("wt-trace");
+
 export function wtTrace(scope: string, ...args: unknown[]): void {
   if (!ENABLED) return;
-  // eslint-disable-next-line no-console
-  console.debug(`[wt-trace:${scope}]`, ...args);
+  const msg = args
+    .map((a) => (typeof a === "string" ? a : JSON.stringify(a)))
+    .join(" ");
+  wtLogger.debug(`[${scope}] ${msg}`);
 }

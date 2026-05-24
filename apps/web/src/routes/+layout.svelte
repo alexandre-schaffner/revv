@@ -8,6 +8,8 @@ import ErrorBanner from "$lib/components/shared/ErrorBanner.svelte";
 import { Toaster } from "$lib/components/ui/sonner";
 import { TooltipProvider } from "$lib/components/ui/tooltip";
 import { initGsap } from "$lib/motion";
+import { initObservability } from "$lib/observability";
+import ObsPanel from "$lib/observability/Panel.svelte";
 import { startPolling, stopPolling } from "$lib/services/sync";
 import { getToken, getUser, loadUser } from "$lib/stores/auth.svelte";
 import {
@@ -28,6 +30,7 @@ import { startUpdater, stopUpdater } from "$lib/updater/service";
 let { children } = $props();
 let hydrated = false;
 let cacheInspectorOpen = $state(false);
+let obsPanelOpen = $state(false);
 
 // Keep `selectedPrId` in sync with the URL.
 //
@@ -90,6 +93,14 @@ $effect(() => {
       e.preventDefault();
       cacheInspectorOpen = !cacheInspectorOpen;
     }
+    // Ctrl+Shift+O — toggle the observability inspector. Dev-only so the
+    // bundle doesn't ship the panel binding in production. The panel
+    // component itself is statically imported but tree-shakes from prod
+    // builds via the `import.meta.env.DEV` guard on the render below.
+    if (import.meta.env.DEV && e.ctrlKey && e.shiftKey && (e.key === "O" || e.key === "o")) {
+      e.preventDefault();
+      obsPanelOpen = !obsPanelOpen;
+    }
   }
   window.addEventListener("keydown", handleKeydown);
   return () => window.removeEventListener("keydown", handleKeydown);
@@ -108,6 +119,7 @@ $effect(() => {
 });
 
 $effect(() => {
+  initObservability();
   initGsap();
   const cleanupTheme = initTheme();
   const cleanupShortcuts = initShortcuts();
@@ -160,5 +172,8 @@ async function hydrate() {
 	<Toaster />
 	{#if import.meta.env.DEV && cacheInspectorOpen}
 		<CacheInspector onclose={() => { cacheInspectorOpen = false; }} />
+	{/if}
+	{#if import.meta.env.DEV && obsPanelOpen}
+		<ObsPanel onclose={() => { obsPanelOpen = false; }} />
 	{/if}
 </TooltipProvider>

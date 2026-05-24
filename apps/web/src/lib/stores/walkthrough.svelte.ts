@@ -35,6 +35,8 @@ import { SvelteMap } from "svelte/reactivity";
 import { toast } from "svelte-sonner";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { api } from "$lib/api/client";
+import { recordHistogram, traced } from "$lib/observability";
+import { recordSpan } from "$lib/observability/tracer";
 import { updateRepoCloneStatus } from "$lib/stores/prs.svelte";
 import { authHeaders } from "$lib/utils/session-token";
 import { wtTrace } from "$lib/utils/wt-trace";
@@ -381,10 +383,15 @@ export function applyEvents(prId: string, events: WalkthroughStreamEvent[]): voi
     const types = events.map((e) => e.type).join(",");
     wtTrace("apply", `applyEvents prId=${prId} count=${events.length} types=[${types}]`);
   }
+  traced("walkthrough.applyEvents", { count: events.length }, () => {
   updateEntry(prId, (entry) => {
     let newBlocks: WalkthroughBlock[] | null = null;
 
     for (const event of events) {
+      // Direct recordSpan instead of `traced()` so the closure boundary
+      // doesn't break TS narrowing of `newBlocks` for the `if (newBlocks)`
+      // sort below.
+      const evStart = performance.now();
       switch (event.type) {
         case "summary":
           entry.summary = event.data.summary;
@@ -595,12 +602,16 @@ export function applyEvents(prId: string, events: WalkthroughStreamEvent[]): voi
           entry.isStreaming = false;
           break;
       }
+      const evDur = performance.now() - evStart;
+      recordSpan("walkthrough.event", evStart, evDur, { type: event.type }, null);
+      recordHistogram("walkthrough.event.duration", { type: event.type }, evDur);
     }
 
     if (newBlocks) {
       newBlocks.sort((a, b) => a.order - b.order);
       entry.blocks = newBlocks;
     }
+  });
   });
 }
 
@@ -1095,6 +1106,11 @@ export function abort(prId: string): void {
     e.isStreaming = false;
     e.streamError = null;
   });
+  // Stop is the user's explicit "walk away" signal — drop any in-flight
+  // pending action so the Generate / Regenerate / Resume button re-enables
+  // immediately. Without this, a hung `start` / `regenerate` fetch keeps
+  // pendingAction set until its `finally` runs, which may be never.
+  clearPending(prId);
   stopClonePoll(prId);
   // Fire-and-forget. Failures are best-effort: if the request fails the
   // server-side fiber keeps running, but the local UI has already moved

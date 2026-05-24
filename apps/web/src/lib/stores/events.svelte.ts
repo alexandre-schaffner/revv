@@ -17,6 +17,7 @@
 
 import type { ServerEventMessage } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
+import { recordCounter, traced } from "$lib/observability";
 import {
   hydrateActiveWalkthroughs,
   hydrateFromCache,
@@ -54,6 +55,7 @@ export function connect(token: string, hostOverride?: string): void {
 
   es.addEventListener("open", () => {
     openCount += 1;
+    if (openCount > 1) recordCounter("sse.reconnects", undefined);
     // On (re)connect: seed sidebar + lastSeenSeq cursors for any
     // in-flight walkthroughs the user wasn't watching. Best-effort —
     // failures here mean the sidebar spinner shows up late, not data loss.
@@ -88,13 +90,15 @@ export function connect(token: string, hostOverride?: string): void {
 }
 
 function dispatch(msg: ServerEventMessage): void {
-  if (msg.type === "walkthrough:event") {
-    onWalkthroughEvent(msg.data.prId, msg.data.walkthroughId, msg.data.seq, msg.data.event);
-    return;
-  }
-  // `ServerEventMessage` currently has a single variant; once more
-  // subsystems migrate off the WS this becomes an exhaustive switch.
-  console.warn("[events] unhandled message", (msg as { type: string }).type);
+  traced("sse.dispatch", { type: msg.type }, () => {
+    if (msg.type === "walkthrough:event") {
+      onWalkthroughEvent(msg.data.prId, msg.data.walkthroughId, msg.data.seq, msg.data.event);
+      return;
+    }
+    // `ServerEventMessage` currently has a single variant; once more
+    // subsystems migrate off the WS this becomes an exhaustive switch.
+    console.warn("[events] unhandled message", (msg as { type: string }).type);
+  });
 }
 
 export function disconnect(): void {
