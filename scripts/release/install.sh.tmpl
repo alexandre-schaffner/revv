@@ -28,24 +28,24 @@
 # ──────────────────────────────────────────────────────────────
 set -euo pipefail
 
+# ── Template variables ────────────────────────────────────────
 REVV_VERSION="@@REVV_VERSION@@"
 RELEASE_TAG="@@RELEASE_TAG@@"
 REPO="alexandre-schaffner/revv"
 
-# Embedded SHA256 checksums for this release
 SHA_DMG_ARM64="@@SHA_DMG_ARM64@@"
 SHA_DMG_X64="@@SHA_DMG_X64@@"
 SHA_DEB="@@SHA_DEB@@"
 SHA_APPIMAGE="@@SHA_APPIMAGE@@"
 SHA_MSI="@@SHA_MSI@@"
 
-# Download URLs for this release
 URL_DMG_ARM64="@@URL_DMG_ARM64@@"
 URL_DMG_X64="@@URL_DMG_X64@@"
 URL_DEB="@@URL_DEB@@"
 URL_APPIMAGE="@@URL_APPIMAGE@@"
 URL_MSI="@@URL_MSI@@"
 
+# ── Defaults ──────────────────────────────────────────────────
 REVV_AUTO_YES="${REVV_AUTO_YES:-0}"
 REVV_SKIP_VERIFY="${REVV_SKIP_VERIFY:-0}"
 REVV_APP_DIR="${REVV_APP_DIR:-/Applications}"
@@ -58,171 +58,304 @@ for arg in "$@"; do
     --yes|-y)       REVV_AUTO_YES=1 ;;
     --skip-verify)  SKIP_VERIFY_FLAG=1 ;;
     --help|-h)
-      sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
-      printf '[FAIL]  Unknown argument: %s\n' "$arg" >&2
+      printf 'Unknown argument: %s\n' "$arg" >&2
       exit 2
       ;;
   esac
 done
 export REVV_AUTO_YES
 
-# ── Inline helpers ────────────────────────────────────────────
-_tty_colors() { command -v tput >/dev/null 2>&1 && [[ -t 2 ]]; }
-if _tty_colors; then
-  _BOLD=$(tput bold); _RESET=$(tput sgr0)
-  _GREEN=$(tput setaf 2); _YELLOW=$(tput setaf 3); _RED=$(tput setaf 1); _CYAN=$(tput setaf 6)
-else
-  _BOLD=''; _RESET=''; _GREEN=''; _YELLOW=''; _RED=''; _CYAN=''
+# ── TTY & color setup ─────────────────────────────────────────
+IS_TTY=0; [[ -t 1 ]] && IS_TTY=1
+
+R='' B='' D='' G='' Y='' RE='' C='' W=''  # color vars
+if [[ "$IS_TTY" == "1" ]]; then
+  R='\033[0m'     # reset
+  B='\033[1m'     # bold
+  D='\033[2m'     # dim
+  G='\033[32m'    # green
+  Y='\033[33m'    # yellow
+  RE='\033[31m'   # red
+  C='\033[36m'    # cyan
+  W='\033[37m'    # white
 fi
-info()    { printf "${_CYAN}[INFO]${_RESET}  %s\n" "$*"; }
-success() { printf "${_GREEN}[OK]${_RESET}    %s\n" "$*"; }
-warn()    { printf "${_YELLOW}[WARN]${_RESET}  %s\n" "$*" >&2; }
-fail()    { printf "${_RED}[FAIL]${_RESET}  %s\n" "$*" >&2; exit 1; }
-step()    { printf "\n${_BOLD}==> %s${_RESET}\n" "$*"; }
+
+# ── Logging ───────────────────────────────────────────────────
+_ok()   { printf "  ${G}✓${R}  %s\n" "$*"; }
+_info() { printf "  ${C}·${R}  %s\n" "$*"; }
+_warn() { printf "  ${Y}⚠${R}  %s\n" "$*" >&2; }
+_fail() { printf "\n  ${RE}✗${R}  %s\n\n" "$*" >&2; exit 1; }
+
+# ── Banner ────────────────────────────────────────────────────
+_banner() {
+  printf "\n"
+  printf "  ${C}${B}██████╗ ███████╗██╗   ██╗██╗   ██╗${R}\n"
+  printf "  ${C}${B}██╔══██╗██╔════╝██║   ██║██║   ██║${R}\n"
+  printf "  ${C}${B}██████╔╝█████╗  ██║   ██║██║   ██║${R}\n"
+  printf "  ${C}${B}██╔══██╗██╔══╝  ╚██╗ ██╔╝╚██╗ ██╔╝${R}\n"
+  printf "  ${C}${B}██║  ██║███████╗ ╚████╔╝  ╚████╔╝ ${R}\n"
+  printf "  ${C}${B}╚═╝  ╚═╝╚══════╝  ╚═══╝    ╚═══╝  ${R}\n"
+  printf "\n"
+  printf "  ${D}AI-powered code review${R}  ${B}v${REVV_VERSION}${R}\n"
+  printf "\n"
+}
+
+_hr() {
+  printf "  ${D}"
+  printf '─%.0s' {1..54}
+  printf "${R}\n"
+}
+
+# ── Spinner ───────────────────────────────────────────────────
+_SP_PID=""
+_SP_MSG=""
+_SP_FRAMES='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+
+_spin_start() {
+  _SP_MSG="$1"
+  [[ "$IS_TTY" != "1" ]] && { printf "  ···  %s\n" "$_SP_MSG"; return; }
+  printf '\033[?25l'  # hide cursor
+  (
+    local i=0
+    while true; do
+      printf "\r  ${C}%s${R}  %s  " "${_SP_FRAMES:$((i % 10)):1}" "$_SP_MSG"
+      i=$((i + 1)); sleep 0.07
+    done
+  ) &
+  _SP_PID=$!
+  disown "$_SP_PID" 2>/dev/null
+}
+
+_spin_stop() {
+  local ok="${1:-ok}"
+  if [[ -n "$_SP_PID" ]]; then
+    kill "$_SP_PID" 2>/dev/null || true
+    wait "$_SP_PID" 2>/dev/null || true
+    _SP_PID=""
+    printf '\033[?25h'  # show cursor
+  fi
+  [[ "$IS_TTY" != "1" ]] && return
+  if [[ "$ok" == "ok" ]]; then
+    printf "\r  ${G}✓${R}  %s\n" "$_SP_MSG"
+  else
+    printf "\r  ${RE}✗${R}  %s\n" "$_SP_MSG"
+  fi
+}
+
+# ── Progress bar ──────────────────────────────────────────────
+_BAR_W=34
+
+_fmt_bytes() {
+  awk -v b="$1" 'BEGIN {
+    if      (b >= 1073741824) printf "%.1f GB", b/1073741824
+    else if (b >= 1048576)    printf "%.1f MB", b/1048576
+    else if (b >= 1024)       printf "%.0f KB", b/1024
+    else                      printf "%d B",    b
+  }'
+}
+
+_fsize() { stat -c%s "$1" 2>/dev/null || stat -f%z "$1" 2>/dev/null || echo 0; }
+
+_draw_bar() {
+  local pct=$1 filled empty bar="" i
+  filled=$(( pct * _BAR_W / 100 ))
+  empty=$(( _BAR_W - filled ))
+  for ((i=0; i<filled; i++)); do bar+="█"; done
+  for ((i=0; i<empty;  i++)); do bar+="░"; done
+  printf "%s" "$bar"
+}
+
+download_with_progress() {
+  local url="$1" dest="$2" label="$3"
+
+  # Probe size with a HEAD request
+  local size=0
+  size="$(curl -fsSI "$url" 2>/dev/null \
+    | grep -i '^content-length:' | tail -1 \
+    | tr -d '\r' | awk '{print $2}')"
+  [[ "$size" =~ ^[0-9]+$ ]] || size=0
+
+  local t0; t0="$(date +%s)"
+
+  if [[ "$IS_TTY" == "1" && "$size" -gt 0 ]]; then
+    printf '\033[?25l'
+    curl -fsSL "$url" -o "$dest" &
+    local pid=$! downloaded=0 pct=0
+
+    while kill -0 "$pid" 2>/dev/null; do
+      [[ -f "$dest" ]] && downloaded="$(_fsize "$dest")" || downloaded=0
+      pct=$(( downloaded * 100 / size ))
+      printf "\r  ${C}↓${R}  %-26s  ${C}[%s]${R}  ${B}%3d%%${R}  %s " \
+        "$label" "$(_draw_bar "$pct")" "$pct" "$(_fmt_bytes "$downloaded")"
+      sleep 0.08
+    done
+
+    wait "$pid"; local rc=$?
+    printf '\033[?25h'
+
+    if [[ $rc -eq 0 ]]; then
+      local elapsed=$(( $(date +%s) - t0 ))
+      # One final full-bar pass
+      printf "\r  ${G}✓${R}  %-26s  ${G}[%s]${R}  ${B}100%%${R}  %s ${D}· %ds${R}%-10s\n" \
+        "$label" "$(_draw_bar 100)" "$(_fmt_bytes "$size")" "$elapsed" ""
+    else
+      printf "\r  ${RE}✗${R}  %s — download failed\n" "$label"
+      return 1
+    fi
+  else
+    # No TTY or unknown size: spinner fallback
+    _spin_start "Downloading ${label}..."
+    curl -fsSL "$url" -o "$dest"; local rc=$?
+    _spin_stop "$([[ $rc -eq 0 ]] && echo ok || echo fail)"
+    [[ $rc -eq 0 ]] || return 1
+  fi
+}
 
 # ── Platform detection ────────────────────────────────────────
 detect_platform() {
   local os arch
-  os="$(uname -s)"
-  arch="$(uname -m)"
+  os="$(uname -s)"; arch="$(uname -m)"
   case "$os" in
     Darwin)
       PLATFORM="macos"
       case "$arch" in
-        arm64)  ARCH="arm64" ;;
-        x86_64) ARCH="x64"   ;;
-        *)      fail "Unsupported macOS architecture: $arch" ;;
+        arm64)  ARCH="arm64"; ARCH_LABEL="Apple Silicon" ;;
+        x86_64) ARCH="x64";   ARCH_LABEL="Intel"         ;;
+        *)      _fail "Unsupported macOS architecture: $arch" ;;
       esac
       ;;
-    Linux)
-      PLATFORM="linux"
-      ARCH="amd64"
-      ;;
-    *)
-      fail "Unsupported platform: $os. For Windows use install.ps1."
-      ;;
+    Linux)  PLATFORM="linux"; ARCH="amd64"; ARCH_LABEL="x86_64" ;;
+    *)      _fail "Unsupported platform: $os. For Windows use install.ps1." ;;
   esac
 }
 
-# ── SHA256 check ──────────────────────────────────────────────
+# ── SHA256 verification ───────────────────────────────────────
 sha256_of() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | cut -d' ' -f1
-  else
-    shasum -a 256 "$1" | cut -d' ' -f1
-  fi
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
+  else shasum -a 256 "$1" | cut -d' ' -f1; fi
 }
 
 verify_sha() {
   local file="$1" expected="$2"
-  local actual
-  actual="$(sha256_of "$file")"
+  _spin_start "Verifying checksum..."
+  local actual; actual="$(sha256_of "$file")"
   if [[ "$actual" != "$expected" ]]; then
-    fail "SHA256 mismatch for $(basename "$file").\n  Expected: $expected\n  Got:      $actual\nThe asset may be corrupt or tampered."
+    _spin_stop "fail"
+    _fail "SHA256 mismatch!\n     Expected: $expected\n     Got:      $actual"
   fi
-  success "Checksum OK."
+  _spin_stop "ok"
 }
 
 # ── Attestation verification ──────────────────────────────────
 verify_attestation() {
   local script_path="$1"
 
-  if [[ "$SKIP_VERIFY_FLAG" == "1" ]] && [[ "$REVV_SKIP_VERIFY" == "1" ]]; then
-    warn "Skipping attestation verification (--skip-verify + REVV_SKIP_VERIFY=1)."
+  if [[ "$SKIP_VERIFY_FLAG" == "1" && "$REVV_SKIP_VERIFY" == "1" ]]; then
+    _warn "Attestation skipped (--skip-verify + REVV_SKIP_VERIFY=1)."
     return 0
   fi
 
-  local bundle_path
-  bundle_path="$(mktemp)"
-  info "Downloading attestation bundle..."
+  local bundle; bundle="$(mktemp)"
+  _spin_start "Fetching attestation bundle..."
   if ! curl -fsSL \
     "https://github.com/${REPO}/releases/download/${RELEASE_TAG}/install.sh.sigstore" \
-    -o "$bundle_path" 2>/dev/null; then
-    warn "Attestation bundle unavailable; skipping verification."
-    rm -f "$bundle_path"
-    return 0
+    -o "$bundle" 2>/dev/null; then
+    _spin_stop "fail"
+    _warn "Attestation bundle unavailable — skipping."
+    rm -f "$bundle"; return 0
   fi
+  _spin_stop "ok"
 
   if command -v gh >/dev/null 2>&1; then
-    step "Verifying installer attestation via GitHub CLI"
-    gh attestation verify "$script_path" \
-      --repo "$REPO" \
-      --bundle "$bundle_path" \
-      || fail "Attestation verification failed. Aborting."
-    success "Installer attestation verified."
-    rm -f "$bundle_path"
-    return 0
+    _spin_start "Verifying attestation (gh CLI)..."
+    if gh attestation verify "$script_path" \
+       --repo "$REPO" --bundle "$bundle" >/dev/null 2>&1; then
+      _spin_stop "ok"
+    else
+      _spin_stop "fail"
+      _fail "Attestation verification failed. Aborting."
+    fi
+    rm -f "$bundle"; return 0
   fi
 
-  # Fall back to bootstrapping cosign
-  step "Bootstrapping cosign for attestation verification"
-  local cosign_dir cosign_bin cosign_ver cosign_url cosign_sha_url cosign_sha_expected cosign_sha_actual
-  cosign_dir="$(mktemp -d)"
-  cosign_bin="${cosign_dir}/cosign"
-  cosign_ver="v2.4.3"
+  # Bootstrap cosign
+  _info "gh CLI not found — bootstrapping cosign..."
+  local cosign_dir cosign_bin cosign_ver cosign_url cosign_sha_url
+  cosign_dir="$(mktemp -d)"; cosign_bin="${cosign_dir}/cosign"; cosign_ver="v2.4.3"
 
   case "$(uname -s)-$(uname -m)" in
     Linux-x86_64)
       cosign_url="https://github.com/sigstore/cosign/releases/download/${cosign_ver}/cosign-linux-amd64"
-      cosign_sha_url="https://github.com/sigstore/cosign/releases/download/${cosign_ver}/cosign-linux-amd64.sha256"
-      ;;
+      cosign_sha_url="https://github.com/sigstore/cosign/releases/download/${cosign_ver}/cosign-linux-amd64.sha256" ;;
     Darwin-arm64)
       cosign_url="https://github.com/sigstore/cosign/releases/download/${cosign_ver}/cosign-darwin-arm64"
-      cosign_sha_url="https://github.com/sigstore/cosign/releases/download/${cosign_ver}/cosign-darwin-arm64.sha256"
-      ;;
+      cosign_sha_url="https://github.com/sigstore/cosign/releases/download/${cosign_ver}/cosign-darwin-arm64.sha256" ;;
     Darwin-x86_64)
       cosign_url="https://github.com/sigstore/cosign/releases/download/${cosign_ver}/cosign-darwin-amd64"
-      cosign_sha_url="https://github.com/sigstore/cosign/releases/download/${cosign_ver}/cosign-darwin-amd64.sha256"
-      ;;
+      cosign_sha_url="https://github.com/sigstore/cosign/releases/download/${cosign_ver}/cosign-darwin-amd64.sha256" ;;
     *)
-      warn "Cannot bootstrap cosign on this platform; skipping attestation check."
-      rm -f "$bundle_path"
-      return 0
-      ;;
+      _warn "Cannot bootstrap cosign here — skipping attestation."
+      rm -f "$bundle"; return 0 ;;
   esac
 
-  info "Downloading cosign ${cosign_ver}..."
-  curl -fsSL "$cosign_url" -o "$cosign_bin" --progress-bar
+  download_with_progress "$cosign_url" "$cosign_bin" "cosign ${cosign_ver}"
   chmod +x "$cosign_bin"
 
-  cosign_sha_expected="$(curl -fsSL "$cosign_sha_url" | cut -d' ' -f1)"
-  cosign_sha_actual="$(sha256_of "$cosign_bin")"
-  [[ "$cosign_sha_actual" == "$cosign_sha_expected" ]] \
-    || fail "cosign binary SHA256 mismatch — cannot proceed safely."
+  local sha_exp sha_got
+  sha_exp="$(curl -fsSL "$cosign_sha_url" | cut -d' ' -f1)"
+  sha_got="$(sha256_of "$cosign_bin")"
+  [[ "$sha_got" == "$sha_exp" ]] || _fail "cosign binary SHA256 mismatch — cannot proceed."
 
-  "$cosign_bin" verify-blob \
-    --bundle "$bundle_path" \
-    --certificate-identity-regexp "^https://github.com/${REPO}/" \
-    --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-    "$script_path" \
-    || fail "Attestation verification failed. Aborting."
-  success "Installer attestation verified."
-
-  rm -rf "$cosign_dir"
-  rm -f "$bundle_path"
+  _spin_start "Verifying attestation (cosign)..."
+  if "$cosign_bin" verify-blob \
+     --bundle "$bundle" \
+     --certificate-identity-regexp "^https://github.com/${REPO}/" \
+     --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+     "$script_path" >/dev/null 2>&1; then
+    _spin_stop "ok"
+  else
+    _spin_stop "fail"
+    _fail "Attestation verification failed. Aborting."
+  fi
+  rm -rf "$cosign_dir"; rm -f "$bundle"
 }
 
-# ── Dev mode: delegate to from-source installer ───────────────
+# ── Dev mode ──────────────────────────────────────────────────
 if [[ "$MODE" == "dev" ]]; then
-  # When in a checkout, use the root install.sh
+  _banner
+  _hr
+  printf "  ${Y}dev mode${R} · building from source\n"
+  _hr; printf "\n"
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
   ROOT_INSTALLER="${SCRIPT_DIR}/../../install.sh"
-  if [[ -f "$ROOT_INSTALLER" ]]; then
-    exec bash "$ROOT_INSTALLER" --dev
-  fi
-  # When piped from curl, clone then run
+  [[ -f "$ROOT_INSTALLER" ]] && exec bash "$ROOT_INSTALLER" --dev
   REVV_REPO_URL="${REVV_REPO_URL:-https://github.com/alexandre-schaffner/revv.git}"
   REVV_BRANCH="${REVV_BRANCH:-main}"
   REVV_INSTALL_DIR="${REVV_INSTALL_DIR:-$HOME/Library/Application Support/Revv/src}"
-  step "Dev mode: cloning Revv source"
-  git clone --depth=1 --branch "$REVV_BRANCH" "$REVV_REPO_URL" "$REVV_INSTALL_DIR"
+  _spin_start "Cloning Revv source..."
+  git clone --depth=1 --branch "$REVV_BRANCH" "$REVV_REPO_URL" "$REVV_INSTALL_DIR" >/dev/null 2>&1
+  _spin_stop "ok"
   exec bash "$REVV_INSTALL_DIR/install.sh" --dev
 fi
 
-# ── Self-verification ─────────────────────────────────────────
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Main install flow
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+detect_platform
+
+_banner
+_hr
+printf "  ${D}Platform${R}  ${B}%s %s${R}\n" "${PLATFORM^}" "$ARCH_LABEL"
+printf "  ${D}Release${R}   ${B}${RELEASE_TAG}${R}\n"
+_hr
+printf "\n"
+
+# Self-verification
 SELF_PATH=""
 if [[ -n "${BASH_SOURCE[0]:-}" ]] && [[ "${BASH_SOURCE[0]:-}" != "bash" ]] \
    && [[ "${BASH_SOURCE[0]:-}" != "/bin/bash" ]] && [[ -f "${BASH_SOURCE[0]:-}" ]]; then
@@ -232,21 +365,19 @@ fi
 if [[ -n "$SELF_PATH" ]]; then
   verify_attestation "$SELF_PATH"
 else
-  info "Script is being piped — downloading a copy for attestation check..."
+  _info "Piped install — fetching script copy for attestation..."
   SELF_TMP="$(mktemp)"
   if curl -fsSL \
-    "https://github.com/${REPO}/releases/download/${RELEASE_TAG}/install.sh" \
-    -o "$SELF_TMP" 2>/dev/null; then
-    verify_attestation "$SELF_TMP"
-    rm -f "$SELF_TMP"
+     "https://github.com/${REPO}/releases/download/${RELEASE_TAG}/install.sh" \
+     -o "$SELF_TMP" 2>/dev/null; then
+    verify_attestation "$SELF_TMP"; rm -f "$SELF_TMP"
   else
-    warn "Could not fetch script for attestation; skipping verification."
-    warn "To verify manually: gh attestation verify install.sh --repo ${REPO}"
+    _warn "Could not fetch script for attestation — skipping."
+    _warn "Verify manually: gh attestation verify install.sh --repo ${REPO}"
   fi
 fi
 
-# ── Main: download + verify + install ────────────────────────
-detect_platform
+printf "\n"
 
 TMPDIR_BUNDLE="$(mktemp -d)"
 cleanup() { rm -rf "$TMPDIR_BUNDLE"; }
@@ -255,20 +386,17 @@ trap cleanup EXIT
 case "$PLATFORM" in
   macos)
     if [[ "$ARCH" == "arm64" ]]; then
-      BUNDLE_URL="$URL_DMG_ARM64"
-      BUNDLE_SHA="$SHA_DMG_ARM64"
-      BUNDLE_FILE="${TMPDIR_BUNDLE}/revv-arm64.dmg"
+      BUNDLE_URL="$URL_DMG_ARM64"; BUNDLE_SHA="$SHA_DMG_ARM64"
+      BUNDLE_FILE="${TMPDIR_BUNDLE}/revv-arm64.dmg"; BUNDLE_LABEL="Revv.app (arm64)"
     else
-      BUNDLE_URL="$URL_DMG_X64"
-      BUNDLE_SHA="$SHA_DMG_X64"
-      BUNDLE_FILE="${TMPDIR_BUNDLE}/revv-x64.dmg"
+      BUNDLE_URL="$URL_DMG_X64"; BUNDLE_SHA="$SHA_DMG_X64"
+      BUNDLE_FILE="${TMPDIR_BUNDLE}/revv-x64.dmg"; BUNDLE_LABEL="Revv.app (x64)"
     fi
 
-    step "Downloading Revv ${REVV_VERSION} for macOS ${ARCH}"
-    curl -fsSL "$BUNDLE_URL" -o "$BUNDLE_FILE" --progress-bar
+    download_with_progress "$BUNDLE_URL" "$BUNDLE_FILE" "$BUNDLE_LABEL"
     verify_sha "$BUNDLE_FILE" "$BUNDLE_SHA"
 
-    step "Installing Revv.app"
+    _spin_start "Installing Revv.app..."
     MOUNT_POINT="$(mktemp -d)"
     hdiutil attach -quiet -nobrowse -mountpoint "$MOUNT_POINT" "$BUNDLE_FILE"
     INSTALL_DIR="$REVV_APP_DIR"
@@ -277,33 +405,47 @@ case "$PLATFORM" in
     cp -R "$MOUNT_POINT"/*.app "$INSTALL_DIR/"
     hdiutil detach -quiet "$MOUNT_POINT"
     rm -rf "$MOUNT_POINT"
-    success "Installed to ${INSTALL_DIR}"
-    warn "Gatekeeper will show a warning until Apple Developer ID signing is complete."
-    info "To open: right-click Revv.app → Open, then click Open in the dialog."
+    _spin_stop "ok"
     ;;
 
   linux)
-    BUNDLE_URL="$URL_DEB"
-    BUNDLE_SHA="$SHA_DEB"
-    BUNDLE_FILE="${TMPDIR_BUNDLE}/revv.deb"
+    BUNDLE_URL="$URL_DEB"; BUNDLE_SHA="$SHA_DEB"
+    BUNDLE_FILE="${TMPDIR_BUNDLE}/revv.deb"; BUNDLE_LABEL="revv (amd64 .deb)"
 
-    step "Downloading Revv ${REVV_VERSION} for Linux"
-    curl -fsSL "$BUNDLE_URL" -o "$BUNDLE_FILE" --progress-bar
+    download_with_progress "$BUNDLE_URL" "$BUNDLE_FILE" "$BUNDLE_LABEL"
     verify_sha "$BUNDLE_FILE" "$BUNDLE_SHA"
 
-    step "Installing revv.deb"
-    if command -v dpkg >/dev/null 2>&1; then
-      sudo dpkg -i "$BUNDLE_FILE"
-    else
-      fail "dpkg not found. Install manually: dpkg -i ${BUNDLE_FILE}"
-    fi
-    success "Installed Revv ${REVV_VERSION}"
+    _spin_start "Installing revv.deb..."
+    command -v dpkg >/dev/null 2>&1 || _fail "dpkg not found."
+    sudo dpkg -i "$BUNDLE_FILE" >/dev/null 2>&1
+    _spin_stop "ok"
     ;;
 
-  *)
-    fail "Unsupported platform: $PLATFORM"
-    ;;
+  *) _fail "Unsupported platform: $PLATFORM" ;;
 esac
 
-success "Revv ${REVV_VERSION} installed successfully."
-info "For other formats (AppImage, MSI), see: https://github.com/${REPO}/releases/tag/${RELEASE_TAG}"
+# ── Success summary ───────────────────────────────────────────
+printf "\n"
+_hr
+printf "\n"
+printf "  ${G}${B}✓  Revv ${REVV_VERSION} is installed!${R}\n"
+printf "\n"
+
+if [[ "$PLATFORM" == "macos" ]]; then
+  printf "  ${D}▸${R}  Open      ${B}open \"${INSTALL_DIR}\"${R}\n"
+  printf "\n"
+  printf "  ${D}▸${R}  Verify    ${D}gh attestation verify install.sh \\${R}\n"
+  printf "               ${D}  --repo %s${R}\n" "$REPO"
+  printf "\n"
+  printf "  ${Y}⚠${R}  Gatekeeper warning expected until Apple Developer ID\n"
+  printf "     signing lands. Right-click → Open to bypass.\n"
+else
+  printf "  ${D}▸${R}  Launch    ${B}revv${R}  (or search your app launcher)\n"
+  printf "\n"
+  printf "  ${D}▸${R}  Verify    ${D}gh attestation verify install.sh \\${R}\n"
+  printf "               ${D}  --repo %s${R}\n" "$REPO"
+fi
+
+printf "\n"
+_hr
+printf "\n"
