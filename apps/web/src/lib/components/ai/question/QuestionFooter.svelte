@@ -32,7 +32,7 @@ import X from "phosphor-svelte/lib/X";
 	</Button>
 	<Button size="sm" onclick={onSubmit} disabled={!canSubmit}>
 		{#if submitting}
-			<Loader2 data-icon="inline-start" class="motion-essential-spin animate-spin" />
+			<Loader2 data-icon="inline-start" class="motion-essential-spin" />
 			Submitting…
 		{:else}
 			<Check data-icon="inline-start" />

@@ -1037,7 +1037,7 @@ function activitiesForTurn(
 								>
 									{#snippet icon()}
 										{#if activeTasks.some((t) => t.status === 'in_progress')}
-											<Spinner class="size-3 text-primary motion-essential-spin animate-spin" />
+											<Spinner class="size-3 text-primary motion-essential-spin" />
 										{:else if allDone}
 											<CheckCircle class="size-3 text-success" />
 										{:else}

@@ -238,12 +238,12 @@ async function onStop(): Promise<void> {
 		/>
 	{:else if latest && detailLoading}
 		<div class="period-loading">
-			<Loader2 size={20} weight="regular" class="animate-spin" aria-hidden="true" />
+			<Loader2 size={20} weight="regular" class="motion-essential-spin" aria-hidden="true" />
 			<p>Loading {periodLabelLower} recap…</p>
 		</div>
 	{:else if listLoading && recaps.length === 0}
 		<div class="period-loading">
-			<Loader2 size={20} weight="regular" class="animate-spin" aria-hidden="true" />
+			<Loader2 size={20} weight="regular" class="motion-essential-spin" aria-hidden="true" />
 			<p>Loading recaps…</p>
 		</div>
 	{:else}
@@ -282,7 +282,7 @@ async function onStop(): Promise<void> {
 					title="Have the agent write a fresh {periodLabelLower} recap"
 				>
 					{#if generating}
-						<Loader2 size={14} weight="regular" class="animate-spin" aria-hidden="true" />
+						<Loader2 size={14} weight="regular" class="motion-essential-spin" aria-hidden="true" />
 					{:else}
 						<Sparkles size={16} weight="fill" aria-hidden="true" />
 					{/if}
@@ -302,7 +302,7 @@ async function onStop(): Promise<void> {
 					title="Write a brand-new recap for {currentPeriodLabel} {periodLabelLower} window. The recap below stays as-is."
 				>
 					{#if generating}
-						<Loader2 size={14} weight="regular" class="animate-spin" aria-hidden="true" />
+						<Loader2 size={14} weight="regular" class="motion-essential-spin" aria-hidden="true" />
 					{:else}
 						<Sparkles size={16} weight="fill" aria-hidden="true" />
 					{/if}

@@ -146,8 +146,7 @@ async function handleSignOut(): Promise<void> {
 	</PopoverTrigger>
 
 	<PopoverContent
-		class={collapsed ? 'w-64 p-1' : 'p-1'}
-		style={collapsed ? undefined : 'width: var(--bits-popover-anchor-width)'}
+		class="w-64 p-1"
 		align="start"
 		side="top"
 	>

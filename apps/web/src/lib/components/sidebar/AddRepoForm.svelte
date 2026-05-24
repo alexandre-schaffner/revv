@@ -243,7 +243,7 @@ let trackedCount = $derived(getRepositories().length);
 		aria-label="Refresh repositories"
 		title="Refresh repositories"
 	>
-		<RefreshCw size={13} weight="fill" class={getAvailableReposLoading() ? 'animate-spin' : ''} />
+		<RefreshCw size={13} weight="fill" class={getAvailableReposLoading() ? 'motion-essential-spin' : ''} />
 	</button>
 </div>
 

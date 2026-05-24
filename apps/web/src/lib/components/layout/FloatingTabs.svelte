@@ -147,7 +147,7 @@ $effect(() => {
 					: 'New commit available. Click to pull the latest changes.'}
 			>
 				{#if isPulling}
-					<Loader2 size={12} weight="regular" class="animate-spin" />
+					<Loader2 size={12} weight="regular" class="motion-essential-spin" />
 				{:else}
 					<DownloadCloud size={12} weight="fill" />
 				{/if}

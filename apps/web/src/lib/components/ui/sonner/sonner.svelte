@@ -18,7 +18,7 @@ let { ...restProps }: SonnerProps = $props();
 	{...restProps}
 >
 	{#snippet loadingIcon()}
-		<Loader2Icon class="size-4 animate-spin" />
+		<Loader2Icon class="size-4 motion-essential-spin" />
 	{/snippet}
 	{#snippet successIcon()}
 		<CircleCheckIcon class="size-4" />

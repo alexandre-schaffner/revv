@@ -195,7 +195,7 @@ $effect(() => {
 
 	{#if loading && !recap}
 		<div class="recap-loading">
-			<Loader2 size={24} weight="regular" class="animate-spin" aria-hidden="true" />
+			<Loader2 size={24} weight="regular" class="motion-essential-spin" aria-hidden="true" />
 			<p>Loading recap…</p>
 		</div>
 	{:else if !recap}

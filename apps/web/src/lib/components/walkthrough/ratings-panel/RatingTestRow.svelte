@@ -114,7 +114,7 @@ const isDisabled = $derived(state !== "resolved");
                     </span>
                 {:else if state === "running"}
                     <span class="icon-running">
-                        <Loader2 size={14} weight="regular" class="animate-spin" />
+                        <Loader2 size={14} weight="regular" class="motion-essential-spin" />
                     </span>
                 {:else if rating?.verdict === "pass"}
                     <span class="icon-resolved">
