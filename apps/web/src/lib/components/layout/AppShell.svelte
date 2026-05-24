@@ -3,7 +3,7 @@ import { page } from "$app/state";
 import SettingsModal from "$lib/components/settings/SettingsModal.svelte";
 import UserMenu from "$lib/components/sidebar/UserMenu.svelte";
 import { RAIL_WIDTH } from "$lib/constants";
-import { gsapFade, tokens } from "$lib/motion";
+import { gsap, gsapFade, prefersReducedMotion, tokens } from "$lib/motion";
 import { getSelectedPr } from "$lib/stores/prs.svelte";
 import {
   getActiveTab,
@@ -112,6 +112,48 @@ $effect(() => {
   }
 });
 
+// Right-panel slide + main-area vignette. Grid-track interpolation stays
+// on a CSS transition; JS-driving it forces a Svelte reactivity flush per
+// frame (de65e4c9). Snap on first paint and during a live drag.
+let panelEl = $state<HTMLElement | null>(null);
+let mainEl = $state<HTMLElement | null>(null);
+let panelSlide: gsap.QuickToFunc | null = null;
+let vignetteSetter: gsap.QuickToFunc | null = null;
+const vignetteProxy = { v: 0 };
+let firstChoreography = true;
+
+$effect(() => {
+  const open = rightPanelOpen;
+  const width = rightPanelWidth;
+  const resizing = isResizingRight;
+  if (!panelEl || !mainEl) return;
+
+  const targetX = open ? 0 : width;
+  const targetV = open ? 0.65 : 0;
+
+  if (firstChoreography || resizing || prefersReducedMotion()) {
+    gsap.set(panelEl, { x: targetX });
+    mainEl.style.setProperty("--vignette-opacity", String(targetV));
+    firstChoreography = false;
+    return;
+  }
+
+  const ease = `cubic-bezier(${tokens.easeOutExpo})`;
+  if (!panelSlide) {
+    panelSlide = gsap.quickTo(panelEl, "x", { duration: tokens.smooth, ease });
+  }
+  if (!vignetteSetter) {
+    const el = mainEl;
+    vignetteSetter = gsap.quickTo(vignetteProxy, "v", {
+      duration: tokens.smooth,
+      ease,
+      onUpdate: () => el.style.setProperty("--vignette-opacity", String(vignetteProxy.v)),
+    });
+  }
+  panelSlide(targetX);
+  vignetteSetter(targetV);
+});
+
 const gridStyle = $derived(
   `grid-template-columns: ${RAIL_WIDTH}px ${sidebarEffectiveCollapsed ? 0 : sidebarWidth}px 1fr ${rightPanelOpen ? rightPanelWidth : 0}px; --right-panel-width: ${rightPanelWidth}px`,
 );
@@ -212,7 +254,7 @@ function onRightHandleDblClick(): void {
 		/>
 	</header>
 
-	<main class="main-area">
+	<main class="main-area" bind:this={mainEl}>
 		{#if pr && isReviewRoute && !isSettingsRoute}
 			<div class="main-tab-bar">
 				<FloatingTabs
@@ -258,6 +300,7 @@ function onRightHandleDblClick(): void {
 	</footer>
 
 	<aside
+		bind:this={panelEl}
 		class="rightpanel-area"
 		class:rightpanel-area--open={rightPanelOpen}
 		aria-hidden={!rightPanelOpen}
@@ -406,8 +449,9 @@ function onRightHandleDblClick(): void {
 	}
 
 	/* Right-edge vignette that fades in when the panel opens, softening the
-	   hard clip as the main area loses width to the panel. Opacity-only
-	   crossfade — compositor handles it. */
+	   hard clip as the main area loses width to the panel. Opacity is driven
+	   by GSAP through `--vignette-opacity` (see panel-choreography.ts) so
+	   the slide + fade share a single tween and stay in sync. */
 	.main-area::after {
 		content: '';
 		position: absolute;
@@ -416,14 +460,9 @@ function onRightHandleDblClick(): void {
 		bottom: 0;
 		width: calc(var(--spacing-island) * 4);
 		background: linear-gradient(to right, transparent, var(--color-bg-primary));
-		opacity: 0;
+		opacity: var(--vignette-opacity, 0);
 		pointer-events: none;
 		z-index: 2;
-		transition: opacity var(--duration-smooth) var(--ease-out-expo);
-	}
-
-	.app-shell.rightpanel-open .main-area::after {
-		opacity: 0.65;
 	}
 
 	/* Tabs float over content — no background, no flex space reservation.
@@ -521,12 +560,17 @@ function onRightHandleDblClick(): void {
 		/* min-width: 0 lets the grid track shrink to 0 even though the
 		   border-box would otherwise contribute its own min-content. */
 		min-width: 0;
-		transform: translateX(0);
-		transition: transform var(--duration-smooth) var(--ease-out-expo);
+		/* First-paint transform for the closed state. The GSAP choreography
+		   (panel-choreography.ts) takes over once the first effect runs,
+		   writing the transform inline (which beats this rule on
+		   specificity). Keeping the static CSS means an open-on-reload
+		   panel renders at its correct resting position without a
+		   one-frame flash before JS attaches. */
+		transform: translateX(var(--right-panel-width));
 	}
 
-	.rightpanel-area:not(.rightpanel-area--open) {
-		transform: translateX(var(--right-panel-width));
+	.rightpanel-area.rightpanel-area--open {
+		transform: translateX(0);
 	}
 
 	:global(:root.dark) .rightpanel-area {

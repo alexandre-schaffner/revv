@@ -37,18 +37,10 @@ $effect(() => {
 
 function handleInputChange(val: string) {
   inputValue = val;
-  if (mode === "search" && val.startsWith(">")) {
-    setPaletteMode("command");
-    setCommandQuery(val.slice(1).trim());
-  } else if (mode === "command" && !val.startsWith(">")) {
-    setPaletteMode("search");
-    setCommandQuery("");
-  } else if (mode === "command") {
-    setCommandQuery(val.slice(1).trim());
-  }
+  const wantsCommand = val.startsWith(">");
+  setPaletteMode(wantsCommand ? "command" : "search");
+  setCommandQuery(wantsCommand ? val.slice(1).trim() : "");
 }
-
-// ── PR scoring ───────────────────────────────────────
 
 const repoMap = $derived(new Map<string, Repository>(getRepositories().map((r) => [r.id, r])));
 
@@ -58,58 +50,29 @@ interface PrResult {
   score: number;
 }
 
-function scorePr(pr: PullRequest, q: string): number {
-  const repoName = repoMap.get(pr.repositoryId)?.fullName ?? "";
-  return Math.max(
-    fuzzyScore(q, pr.title),
-    fuzzyScore(q, pr.sourceBranch),
-    fuzzyScore(q, `#${pr.externalId}`),
-    fuzzyScore(q, pr.authorLogin),
-    fuzzyScore(q, repoName),
-  );
-}
-
 const searchQuery = $derived(inputValue.trim());
 
-const openResults = $derived.by((): PrResult[] => {
-  if (mode !== "search") return [];
-  const prs = getPullRequests();
-  if (searchQuery.length === 0) {
-    return prs.map((pr) => ({
-      pr,
-      repoName: repoMap.get(pr.repositoryId)?.fullName ?? "",
-      score: 0,
-    }));
-  }
+function scoreList(prs: PullRequest[], q: string): PrResult[] {
+  const repoNameOf = (pr: PullRequest) => repoMap.get(pr.repositoryId)?.fullName ?? "";
+  if (q.length === 0) return prs.map((pr) => ({ pr, repoName: repoNameOf(pr), score: 0 }));
   return prs
-    .map((pr) => ({
-      pr,
-      repoName: repoMap.get(pr.repositoryId)?.fullName ?? "",
-      score: scorePr(pr, searchQuery),
-    }))
+    .map((pr) => {
+      const repoName = repoNameOf(pr);
+      const score = Math.max(
+        fuzzyScore(q, pr.title),
+        fuzzyScore(q, pr.sourceBranch),
+        fuzzyScore(q, `#${pr.externalId}`),
+        fuzzyScore(q, pr.authorLogin),
+        fuzzyScore(q, repoName),
+      );
+      return { pr, repoName, score };
+    })
     .filter((r) => r.score >= 0)
     .sort((a, b) => b.score - a.score);
-});
+}
 
-const archivedResults = $derived.by((): PrResult[] => {
-  if (mode !== "search") return [];
-  const prs = getArchivedPrs();
-  if (searchQuery.length === 0) {
-    return prs.map((pr) => ({
-      pr,
-      repoName: repoMap.get(pr.repositoryId)?.fullName ?? "",
-      score: 0,
-    }));
-  }
-  return prs
-    .map((pr) => ({
-      pr,
-      repoName: repoMap.get(pr.repositoryId)?.fullName ?? "",
-      score: scorePr(pr, searchQuery),
-    }))
-    .filter((r) => r.score >= 0)
-    .sort((a, b) => b.score - a.score);
-});
+const openResults = $derived(mode === "search" ? scoreList(getPullRequests(), searchQuery) : []);
+const archivedResults = $derived(mode === "search" ? scoreList(getArchivedPrs(), searchQuery) : []);
 
 const commands = $derived(mode === "command" ? getFilteredCommands() : []);
 const hasResults = $derived(
@@ -128,7 +91,49 @@ function handleCommandSelect(action: () => void) {
   onOpenChange(false);
   action();
 }
+
+function hideBrokenImg(e: Event): void {
+  (e.currentTarget as HTMLImageElement).style.display = "none";
+}
 </script>
+
+<!--
+  Styling note. The shadcn primitives carry their own Tailwind defaults
+  (px-2/py-1.5 items, text-xs muted heading, rounded-sm hover). We keep the
+  primitives and override the visual rhythm via `:global()` rules below,
+  targeting the bits-ui `data-command-*` attributes so the selectors stay
+  stable against shadcn class drift.
+-->
+{#snippet prRow(result: PrResult, kind: "open" | "archived")}
+  <Command.Item
+    value={`${kind}-${result.pr.id}`}
+    onSelect={() => handlePrSelect(result.pr)}
+    class={kind === "archived" ? "palette-pr-item palette-pr-item--archived" : "palette-pr-item"}
+  >
+    <div class="pr-row-top">
+      {#if result.pr.authorAvatarContent}
+        <img
+          src={result.pr.authorAvatarContent}
+          alt=""
+          class="pr-avatar"
+          loading="lazy"
+          referrerpolicy="no-referrer"
+          onerror={hideBrokenImg}
+        />
+      {/if}
+      <span class="pr-title">{result.pr.title}</span>
+      {#if kind === "archived"}
+        <span class="pr-status-badge">{result.pr.status}</span>
+      {/if}
+      <span class="pr-meta">
+        {result.repoName}<span class="pr-number">#{result.pr.externalId}</span>
+      </span>
+    </div>
+    <div class="pr-row-bottom">
+      <span class="pr-branch">{result.pr.sourceBranch}</span>
+    </div>
+  </Command.Item>
+{/snippet}
 
 <Command.Dialog
   {open}
@@ -136,6 +141,7 @@ function handleCommandSelect(action: () => void) {
   shouldFilter={false}
   title={mode === "command" ? "Command palette" : "Search pull requests"}
   description={mode === "command" ? "Run a command" : "Search and open pull requests"}
+  contentClass="palette-shell sm:max-w-[520px]"
 >
   <Command.Input
     value={inputValue}
@@ -147,79 +153,14 @@ function handleCommandSelect(action: () => void) {
       {#if openResults.length > 0}
         <Command.Group heading="Open pull requests">
           {#each openResults as result (result.pr.id)}
-            <Command.Item
-              value={`open-${result.pr.id}`}
-              onSelect={() => handlePrSelect(result.pr)}
-              class="flex-col items-stretch gap-0.5 py-2"
-            >
-              <div class="flex w-full min-w-0 items-center gap-2">
-                {#if result.pr.authorAvatarContent}
-                  <img
-                    src={result.pr.authorAvatarContent}
-                    alt=""
-                    class="size-4 shrink-0 rounded"
-                    loading="lazy"
-                    referrerpolicy="no-referrer"
-                    onerror={(e) =>
-                      ((e.currentTarget as HTMLImageElement).style.display = "none")}
-                  />
-                {/if}
-                <span
-                  class="text-foreground min-w-0 flex-1 truncate text-[13px] font-medium"
-                >
-                  {result.pr.title}
-                </span>
-                <span class="text-muted-foreground shrink-0 text-[11px]">
-                  {result.repoName}
-                  <span class="ms-1 font-mono">#{result.pr.externalId}</span>
-                </span>
-              </div>
-              <div class="text-muted-foreground truncate ps-6 font-mono text-[11px]">
-                {result.pr.sourceBranch}
-              </div>
-            </Command.Item>
+            {@render prRow(result, "open")}
           {/each}
         </Command.Group>
       {/if}
       {#if archivedResults.length > 0}
         <Command.Group heading="Archived pull requests">
           {#each archivedResults as result (result.pr.id)}
-            <Command.Item
-              value={`archived-${result.pr.id}`}
-              onSelect={() => handlePrSelect(result.pr)}
-              class="flex-col items-stretch gap-0.5 py-2"
-            >
-              <div class="flex w-full min-w-0 items-center gap-2">
-                {#if result.pr.authorAvatarContent}
-                  <img
-                    src={result.pr.authorAvatarContent}
-                    alt=""
-                    class="size-4 shrink-0 rounded"
-                    loading="lazy"
-                    referrerpolicy="no-referrer"
-                    onerror={(e) =>
-                      ((e.currentTarget as HTMLImageElement).style.display = "none")}
-                  />
-                {/if}
-                <span
-                  class="text-muted-foreground min-w-0 flex-1 truncate text-[13px] font-medium"
-                >
-                  {result.pr.title}
-                </span>
-                <span
-                  class="bg-muted text-muted-foreground shrink-0 rounded px-1.5 py-px text-[9px] font-semibold tracking-wider uppercase"
-                >
-                  {result.pr.status}
-                </span>
-                <span class="text-muted-foreground shrink-0 text-[11px]">
-                  {result.repoName}
-                  <span class="ms-1 font-mono">#{result.pr.externalId}</span>
-                </span>
-              </div>
-              <div class="text-muted-foreground truncate ps-6 font-mono text-[11px]">
-                {result.pr.sourceBranch}
-              </div>
-            </Command.Item>
+            {@render prRow(result, "archived")}
           {/each}
         </Command.Group>
       {/if}
@@ -228,10 +169,14 @@ function handleCommandSelect(action: () => void) {
       {/if}
     {:else}
       {#each commands as cmd (cmd.id)}
-        <Command.Item value={cmd.id} onSelect={() => handleCommandSelect(cmd.action)}>
-          <span class="text-foreground text-[13px]">{cmd.label}</span>
+        <Command.Item
+          value={cmd.id}
+          onSelect={() => handleCommandSelect(cmd.action)}
+          class="palette-cmd-item"
+        >
+          <span class="cmd-label">{cmd.label}</span>
           {#if cmd.shortcut}
-            <Command.Shortcut>{cmd.shortcut}</Command.Shortcut>
+            <kbd class="cmd-shortcut">{cmd.shortcut}</kbd>
           {/if}
         </Command.Item>
       {/each}
@@ -241,3 +186,172 @@ function handleCommandSelect(action: () => void) {
     {/if}
   </Command.List>
 </Command.Dialog>
+
+<style>
+  /* Palette overrides restore the previous visual rhythm on top of the
+     shadcn `Command.*` wrappers. Selectors mostly hit bits-ui's
+     `data-command-*` attributes (stable across shadcn class drift); the
+     input wrapper lives one level up in our own shadcn shell and uses
+     `data-slot` instead. `:global` is required because the dialog
+     content portals out of this component's scope. */
+  :global(.palette-shell) {
+    & [data-slot="command-input-wrapper"] {
+      margin: 0;
+      padding: 0 16px;
+      gap: 10px;
+      height: 44px;
+      border: none;
+      border-bottom: 1px solid var(--color-border-subtle);
+      border-radius: 0;
+      background: transparent;
+
+      & svg {
+        width: 14px;
+        height: 14px;
+        opacity: 1;
+        color: var(--color-text-muted);
+      }
+    }
+
+    & [data-command-input] {
+      height: 100%;
+      padding: 0;
+      font-size: 14px;
+    }
+
+    & [data-command-list] {
+      padding: 4px 0;
+    }
+
+    & [data-command-group] {
+      padding: 0;
+    }
+    & [data-command-group-heading] {
+      padding: 6px 16px 2px;
+      margin-top: 4px;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--color-text-muted);
+      user-select: none;
+    }
+
+    & [data-command-item] {
+      padding: 8px 16px;
+      border-radius: 0;
+      gap: 12px;
+      transition: background-color var(--duration-snap);
+
+      &[data-selected],
+      &[aria-selected="true"] {
+        background: var(--color-tree-active-bg);
+        color: var(--color-tree-active-text);
+      }
+    }
+
+    & [data-command-empty] {
+      padding: 24px 16px;
+      font-size: 12px;
+      color: var(--color-text-muted);
+    }
+
+    /* Command rows: label left, kbd shortcut right. */
+    & .palette-cmd-item {
+      align-items: center;
+      justify-content: space-between;
+
+      & .cmd-label {
+        font-size: 13px;
+        color: var(--color-text-secondary);
+      }
+      &[data-selected] .cmd-label,
+      &[aria-selected="true"] .cmd-label {
+        color: var(--color-tree-active-text);
+      }
+      & .cmd-shortcut {
+        margin-inline-start: auto;
+        font-family: var(--font-mono);
+        font-size: 10px;
+        padding: 2px 6px;
+        border-radius: 4px;
+        background: var(--color-bg-tertiary);
+        border: 1px solid var(--color-border-subtle);
+        color: var(--color-text-muted);
+        flex-shrink: 0;
+      }
+    }
+
+    /* PR rows: avatar + title + meta on top, branch on bottom indented
+       past the avatar so it aligns under the title. */
+    & .palette-pr-item {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 2px;
+
+      & .pr-row-top {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        min-width: 0;
+      }
+      & .pr-avatar {
+        width: 16px;
+        height: 16px;
+        border-radius: 4px;
+        flex-shrink: 0;
+      }
+      & .pr-title {
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--color-text-primary);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        flex: 1;
+        min-width: 0;
+      }
+      &[data-selected] .pr-title,
+      &[aria-selected="true"] .pr-title {
+        color: var(--color-tree-active-text);
+      }
+      & .pr-status-badge {
+        font-size: 9px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        padding: 1px 5px;
+        border-radius: 4px;
+        background: var(--color-bg-tertiary);
+        color: var(--color-text-muted);
+        flex-shrink: 0;
+      }
+      & .pr-meta {
+        font-size: 11px;
+        color: var(--color-text-muted);
+        white-space: nowrap;
+        flex-shrink: 0;
+      }
+      & .pr-number {
+        font-family: var(--font-mono);
+        margin-inline-start: 4px;
+      }
+      & .pr-row-bottom {
+        padding-inline-start: 24px;
+      }
+      & .pr-branch {
+        font-size: 11px;
+        font-family: var(--font-mono);
+        color: var(--color-text-muted);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+    }
+
+    & .palette-pr-item--archived .pr-title {
+      color: var(--color-text-secondary);
+    }
+  }
+</style>
