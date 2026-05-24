@@ -9,7 +9,7 @@
 //     can't fork duplicate fibers.
 //   • Bounded retries via `resume_attempts`. Boot resume re-runs the agent
 //     from scratch — recap is single-phase so partial state is just the
-//     row at `status='generating'` with empty overview, which is
+//     row at `status='generating'` with empty content, which is
 //     recoverable by re-running.
 //
 // Per CLAUDE.md invariants #2 and #11: agents never write `status`. This
@@ -98,12 +98,6 @@ interface ActiveRecapJob {
   readonly subscribers: Set<SubscriberHandle>;
   /** Monotonic seq for tracing. */
   nextSeq: number;
-  /**
-   * In-memory previous overview to thread into the source bundle. Set by
-   * `regenerateForPeriod` when reusing an existing row; null on a fresh
-   * row.
-   */
-  readonly previousOverview: string | null;
 }
 
 export type StartRecapJobTrigger = "scheduler" | "manual" | "resume";
@@ -116,15 +110,6 @@ export interface StartRecapJobParams {
   readonly trigger: StartRecapJobTrigger;
   /** Caller-provided id when resuming an existing row. */
   readonly recapId?: string;
-  /**
-   * Markdown overview from the prior recap row for this same window.
-   * Threaded into the source bundle so the agent treats this run as an
-   * in-place update rather than a fresh write. Only set by
-   * `regenerateForPeriod` on the rerun path. Lives in memory only —
-   * a crash + resume loses this context; the agent rebuilds from the
-   * current bundle (which is acceptable degradation for a rare path).
-   */
-  readonly previousOverview?: string;
 }
 
 export type StartRecapJobError = ValidationError | RecapError;
@@ -736,7 +721,6 @@ export const ProjectRecapJobsLive = Layer.effect(
         period: RecapPeriod;
         periodStart: string;
         periodEnd: string;
-        previousOverview: string | null;
       },
       windowed: ReadonlyArray<ArchivedPrWithWalkthrough>,
       openPrs: ReadonlyArray<ArchivedPrWithWalkthrough>,
@@ -820,7 +804,6 @@ export const ProjectRecapJobsLive = Layer.effect(
         prs,
         openPrs: openPrList,
         stats,
-        previousOverview: params.previousOverview,
       };
     };
 
@@ -1304,7 +1287,6 @@ export const ProjectRecapJobsLive = Layer.effect(
               validatedComplete: false,
               subscribers: new Set<SubscriberHandle>(),
               nextSeq: 0,
-              previousOverview: params.previousOverview ?? null,
             };
             yield* launchJob(job);
             return { recapId };
@@ -1385,10 +1367,8 @@ export const ProjectRecapJobsLive = Layer.effect(
     }): Effect.Effect<{ readonly recapId: string }, StartRecapJobError> =>
       Effect.gen(function* () {
         // "Max 1 active recap per (repo, period, periodStart)" rule:
-        // if a row already exists for this window, update it in place
-        // instead of creating a new one + superseding the old. The agent
-        // receives the prior overview as context and writes the next
-        // version on top of it.
+        // if a row already exists for this window, reset it in place
+        // instead of creating a new one + superseding the old.
         const existing = yield* provideDb(
           recapService.findActiveForPeriod(params.repoId, params.period, params.periodStart),
         ).pipe(Effect.catchAll(() => Effect.succeed(null)));
@@ -1399,7 +1379,7 @@ export const ProjectRecapJobsLive = Layer.effect(
           // and clobber the cleared fields.
           yield* cancel(existing.id);
 
-          const { previousOverview } = yield* provideDb(
+          yield* provideDb(
             recapService.resetForRerun(existing.id, {
               periodStart: params.periodStart,
               periodEnd: params.periodEnd,
@@ -1428,7 +1408,6 @@ export const ProjectRecapJobsLive = Layer.effect(
             periodStart: params.periodStart,
             periodEnd: params.periodEnd,
             trigger: "manual",
-            previousOverview,
           });
         }
 

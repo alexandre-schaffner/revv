@@ -1,6 +1,6 @@
 <script lang="ts">
 import type { ProjectRecap, RecapPeriod } from "@revv/shared";
-import { buildThemePalette, orderThemes, paletteLookup, themeSlug } from "./themes";
+import { buildRecapHeader, formatLines, paletteLookup, scrollToTheme } from "./themes";
 
 interface Props {
   recap: ProjectRecap | null;
@@ -10,122 +10,57 @@ interface Props {
 
 let { recap, period, skeleton = false }: Props = $props();
 
-const DAY_MONTH_YEAR = new Intl.DateTimeFormat("en-GB", {
-  weekday: "short",
-  day: "2-digit",
-  month: "short",
-  year: "numeric",
-  timeZone: "UTC",
-});
-const DAY_MONTH = new Intl.DateTimeFormat("en-GB", {
-  day: "2-digit",
-  month: "short",
-  timeZone: "UTC",
-});
-
-function dateTitle(r: ProjectRecap): string {
-  const start = new Date(r.periodStart);
-  if (r.period === "daily") {
-    return DAY_MONTH_YEAR.format(start);
-  }
-  const lastDay = new Date(new Date(r.periodEnd).getTime() - 1);
-  return `Week of ${DAY_MONTH.format(start)} – ${DAY_MONTH.format(lastDay)}`;
-}
-
-function fallbackDateTitle(p: RecapPeriod): string {
-  const now = new Date();
-  if (p === "daily") return DAY_MONTH_YEAR.format(now);
-  const dow = now.getUTCDay();
-  const daysFromMonday = (dow + 6) % 7;
-  const start = new Date(now.getTime() - daysFromMonday * 24 * 60 * 60 * 1000);
-  return `Week of ${DAY_MONTH.format(start)} – ${DAY_MONTH.format(now)}`;
-}
-
-function relativeFromNow(iso: string): string {
-  const t = new Date(iso).getTime();
-  if (!Number.isFinite(t)) return "—";
-  const seconds = Math.max(0, Math.round((Date.now() - t) / 1000));
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.round(hours / 24);
-  return `${days}d ago`;
-}
-
-const eyebrow = $derived(period === "daily" ? "Daily recap" : "Weekly recap");
-const title = $derived(recap ? dateTitle(recap) : fallbackDateTitle(period));
-const syncedRelative = $derived(recap ? relativeFromNow(recap.generatedAt) : null);
-
-const stats = $derived(recap?.summaryStats ?? null);
-const totalAdded = $derived(recap?.totalLinesAdded ?? 0);
-const totalRemoved = $derived(recap?.totalLinesRemoved ?? 0);
-
-const themes = $derived(recap ? orderThemes(recap.entries) : []);
-const palette = $derived(buildThemePalette(themes.map((t) => t.theme)));
-
-function formatLines(n: number): string {
-  return n.toLocaleString("en-US");
-}
-
-function scrollToTheme(theme: string): void {
-  const el = document.getElementById(themeSlug(theme));
-  if (!el) return;
-  const reduced =
-    typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  el.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
-}
+const header = $derived(buildRecapHeader(recap, period));
 </script>
 
 <aside class="side">
   <div class="hero">
-    <span class="eyebrow">{eyebrow}</span>
-    <h1 class="date">{title}</h1>
-    {#if syncedRelative}
-      <span class="time-cap">UTC · synced {syncedRelative}</span>
+    <span class="eyebrow">{header.eyebrow}</span>
+    <h1 class="date">{header.title}</h1>
+    {#if header.syncedRelative}
+      <span class="time-cap">UTC · synced {header.syncedRelative}</span>
     {:else}
       <span class="time-cap">UTC</span>
     {/if}
   </div>
 
   <div class="stats">
-    {#if skeleton || !stats}
+    {#if skeleton || !header.stats}
       {#each [0, 1, 2, 3] as i (i)}
         <div class="stat skel"><span class="k">—</span><span class="v">—</span></div>
       {/each}
     {:else}
       <div class="stat">
         <span class="k">PRs merged</span>
-        <span class="v">{stats.mergedCount}</span>
+        <span class="v">{header.stats.mergedCount}</span>
       </div>
       <div class="stat">
         <span class="k">Authors</span>
-        <span class="v">{stats.authorCount}</span>
+        <span class="v">{header.stats.authorCount}</span>
       </div>
       <div class="stat">
         <span class="k">Without walkthrough</span>
         <span
           class="v"
-          data-warn={stats.walkthroughsMissingCount > 0 ? "true" : "false"}
-        >{stats.walkthroughsMissingCount}</span>
+          data-warn={header.stats.walkthroughsMissingCount > 0 ? "true" : "false"}
+        >{header.stats.walkthroughsMissingCount}</span>
       </div>
       <div class="stat">
         <span class="k">Lines changed</span>
         <span class="v lines">
-          <span class="plus">+{formatLines(totalAdded)}</span>
+          <span class="plus">+{formatLines(header.totalAdded)}</span>
           <span class="slash">/</span>
-          <span class="minus">−{formatLines(totalRemoved)}</span>
+          <span class="minus">−{formatLines(header.totalRemoved)}</span>
         </span>
       </div>
     {/if}
   </div>
 
-  {#if !skeleton && themes.length > 0}
+  {#if !skeleton && header.themes.length > 0}
     <div class="themes">
       <span class="eyebrow themes-eyebrow">Themes</span>
       <ul class="themes-list">
-        {#each themes as t (t.theme)}
+        {#each header.themes as t (t.theme)}
           <li>
             <button
               type="button"
@@ -133,7 +68,7 @@ function scrollToTheme(theme: string): void {
               onclick={() => scrollToTheme(t.theme)}
               aria-label="Jump to {t.theme} chapter"
             >
-              <span class="dot" style="--swatch: {paletteLookup(palette, t.theme)}" aria-hidden="true"></span>
+              <span class="dot" style="--swatch: {paletteLookup(header.palette, t.theme)}" aria-hidden="true"></span>
               <span class="theme-label">{t.theme}</span>
               <span class="theme-count">{t.count}</span>
             </button>

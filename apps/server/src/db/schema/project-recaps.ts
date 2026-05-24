@@ -9,9 +9,7 @@ import { repositories } from "./repositories";
  * `recap_pr_entries` row per included PR via `add_pr_entry` (idempotent upsert
  * keyed on `(recap_id, pr_id)`), then (3) `complete_recap` to finalize. The
  * orchestrator transitions `status` to `'complete'` only after `complete_recap`
- * validates non-empty lede + ≥1 entry row. The legacy `overview` markdown
- * column is preserved for historical rows produced by the prior single-blob
- * pipeline; new rows leave it empty.
+ * validates non-empty lede + ≥1 entry row.
  *
  * Immutability: a recap is keyed on `(repositoryId, period, periodStart)`. On
  * regenerate, the existing row is marked `'superseded'` (with
@@ -43,28 +41,12 @@ export const projectRecaps = sqliteTable(
     /** Exclusive upper bound on the period window (ISO 8601 UTC). */
     periodEnd: text("period_end").notNull(),
     /**
-     * Legacy markdown body of the recap. Pre-structured-recap rows have this
-     * populated by the old `commit_recap_overview` pipeline; new rows leave it
-     * empty and use `lede` + `recap_pr_entries` instead. Kept on the schema so
-     * historical recaps still render in a degraded fallback view.
-     */
-    overview: text("overview").notNull().default(""),
-    /**
      * Short (1–3 sentences) model-written lede for the structured recap. May
      * contain `<strong>` / `<em>` tags only; everything else is stripped at
      * render time. Written atomically by the `set_lede` MCP tool. Validation
      * gate (`complete_recap`) requires non-empty before transitioning status.
      */
     lede: text("lede").notNull().default(""),
-    /**
-     * Sum of `recap_pr_entries.lines_added` across all included entries.
-     * Recomputed and stamped by `complete_recap` so the sidebar stats are
-     * consistent with the entry rows. Surfaced separately from
-     * `summary_stats` JSON for ergonomic access.
-     */
-    totalLinesAdded: integer("total_lines_added").notNull().default(0),
-    /** Sum of `recap_pr_entries.lines_removed`. See `totalLinesAdded`. */
-    totalLinesRemoved: integer("total_lines_removed").notNull().default(0),
     /**
      * Job lifecycle status — owned exclusively by
      * `ProjectRecapJobs.setStatus` (single-writer per CLAUDE.md

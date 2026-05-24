@@ -6,11 +6,9 @@
 // SSE handler pattern but radically simpler:
 //   • No SSR pre-render.
 //   • No clone polling.
-//   • Reconnect emits the current `lede` + each `entry` snapshot from the
-//     DB, then attaches to live events if the job is still running.
-//   • Legacy fallback: when there's no structured data but `overview`
-//     markdown is present (pre-rewrite recap), an `overview` event is
-//     emitted so the legacy markdown renderer still works.
+//   • Reconnect emits the current `lede` + each `entry` / theme_summary
+//     snapshot from the DB, then attaches to live events if the job is
+//     still running.
 
 import type { ProjectRecapStatus } from "@revv/shared";
 import { Effect } from "effect";

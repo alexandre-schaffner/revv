@@ -134,6 +134,13 @@
       "when": 1779565000000,
       "tag": "0160_recap_theme_summaries",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1779570000000,
+      "tag": "0170_drop_recap_stranded_columns",
+      "breakpoints": true
     }
   ]
 }

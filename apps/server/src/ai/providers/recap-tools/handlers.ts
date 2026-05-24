@@ -33,6 +33,12 @@ import type {
   SetThemeSummaryInput,
 } from "./spec";
 
+/** Lowercase the theme, trim, collapse internal whitespace. Single source of
+ *  truth so `add_pr_entry` and `set_theme_summary` join on the same key. */
+function normalizeTheme(raw: string): string {
+  return raw.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
 /** Default page size for `list_open_prs`. Small enough that 20 PRs split into
  *  ≤4 pages, each well under the MCP response budget. */
 const OPEN_PRS_DEFAULT_PAGE_SIZE = 5;
@@ -213,11 +219,7 @@ function sanitizeLede(raw: string): string {
     .trim();
 }
 
-/**
- * Refuse the call if the recap row is no longer `generating` (stopped,
- * superseded, completed, etc). Returns an `err()` result on rejection, or
- * `null` to proceed.
- */
+// Fail the call if the recap is no longer `generating` (stopped, superseded, completed).
 function requireGenerating(ctx: RecapToolContext, action: string): RecapToolResult | null {
   const row = ctx.db
     .select({ status: projectRecaps.status })
@@ -243,11 +245,7 @@ export const setLedeHandler: RecapToolHandler<SetLedeInput> = async (ctx, input)
     );
   }
 
-  try {
-    ctx.db.update(projectRecaps).set({ lede }).where(eq(projectRecaps.id, ctx.recapId)).run();
-  } catch (e) {
-    return err(`Error: failed to persist lede: ${e instanceof Error ? e.message : String(e)}`);
-  }
+  ctx.db.update(projectRecaps).set({ lede }).where(eq(projectRecaps.id, ctx.recapId)).run();
 
   ctx.emit({ type: "lede", data: { lede } });
   ctx.emit({
@@ -278,15 +276,9 @@ export const addPrEntryHandler: RecapToolHandler<AddPrEntryInput> = async (ctx, 
   }
   const prState: "merged" | "open" = archivedIds.has(input.pr_id) ? "merged" : "open";
 
-  // Normalize theme: lowercase, trim, collapse internal whitespace to single
-  // space. Keeps the (theme1) === (Theme 1) === ("THEME 1 ") grouping
-  // consistent across calls in the same run.
-  const theme = input.theme.trim().toLowerCase().replace(/\s+/g, " ");
+  const theme = normalizeTheme(input.theme);
   const verb = input.verb.trim().toLowerCase();
 
-  // Snapshot PR title/number/author so the recap survives PR pruning. Look
-  // up by id rather than relying on the source bundle (the bundle's PR
-  // shape doesn't carry the GitHub `externalId` as a primary key).
   const prRow = ctx.db
     .select({
       title: pullRequests.title,
@@ -297,58 +289,43 @@ export const addPrEntryHandler: RecapToolHandler<AddPrEntryInput> = async (ctx, 
     .where(eq(pullRequests.id, input.pr_id))
     .get();
 
-  // Upsert on (recap_id, pr_id). Idempotent — a re-call with the same prId
-  // overwrites position/theme/verb/description; a fresh prId inserts a new
-  // row with a freshly-minted id.
-  const id = randomUUID();
-  try {
-    ctx.db
-      .insert(recapPrEntries)
-      .values({
-        id,
-        recapId: ctx.recapId,
-        prId: input.pr_id,
-        position: input.position,
-        theme,
-        verb,
-        prTitle: prRow?.title ?? "",
-        prExternalId: prRow?.externalId ?? 0,
-        prAuthorLogin: prRow?.authorLogin ?? "",
-        description: input.description.trim(),
-        linesAdded: input.lines_added,
-        linesRemoved: input.lines_removed,
-        prState,
-      })
-      .onConflictDoUpdate({
-        target: [recapPrEntries.recapId, recapPrEntries.prId],
-        set: {
-          position: sql`excluded.position`,
-          theme: sql`excluded.theme`,
-          verb: sql`excluded.verb`,
-          prTitle: sql`excluded.pr_title`,
-          prExternalId: sql`excluded.pr_external_id`,
-          prAuthorLogin: sql`excluded.pr_author_login`,
-          description: sql`excluded.description`,
-          linesAdded: sql`excluded.lines_added`,
-          linesRemoved: sql`excluded.lines_removed`,
-          prState: sql`excluded.pr_state`,
-        },
-      })
-      .run();
-  } catch (e) {
-    return err(
-      `Error: failed to persist entry for PR ${input.pr_id}: ${e instanceof Error ? e.message : String(e)}`,
-    );
-  }
-
-  // Re-read the (possibly newly upserted) row so the broadcast carries the
-  // canonical id rather than the one we generated above (the existing row's
-  // id is preserved on conflict).
-  const persisted = ctx.db
-    .select()
-    .from(recapPrEntries)
-    .where(and(eq(recapPrEntries.recapId, ctx.recapId), eq(recapPrEntries.prId, input.pr_id)))
-    .get();
+  // Upsert on (recap_id, pr_id), returning the canonical row in one round-trip.
+  // The original `id` is preserved on conflict; the generated one is only used
+  // when this is a fresh insert.
+  const [persisted] = ctx.db
+    .insert(recapPrEntries)
+    .values({
+      id: randomUUID(),
+      recapId: ctx.recapId,
+      prId: input.pr_id,
+      position: input.position,
+      theme,
+      verb,
+      prTitle: prRow?.title ?? "",
+      prExternalId: prRow?.externalId ?? 0,
+      prAuthorLogin: prRow?.authorLogin ?? "",
+      description: input.description.trim(),
+      linesAdded: input.lines_added,
+      linesRemoved: input.lines_removed,
+      prState,
+    })
+    .onConflictDoUpdate({
+      target: [recapPrEntries.recapId, recapPrEntries.prId],
+      set: {
+        position: sql`excluded.position`,
+        theme: sql`excluded.theme`,
+        verb: sql`excluded.verb`,
+        prTitle: sql`excluded.pr_title`,
+        prExternalId: sql`excluded.pr_external_id`,
+        prAuthorLogin: sql`excluded.pr_author_login`,
+        description: sql`excluded.description`,
+        linesAdded: sql`excluded.lines_added`,
+        linesRemoved: sql`excluded.lines_removed`,
+        prState: sql`excluded.pr_state`,
+      },
+    })
+    .returning()
+    .all();
 
   if (persisted) {
     const avatarRow = persisted.prAuthorLogin
@@ -390,9 +367,7 @@ export const setThemeSummaryHandler: RecapToolHandler<SetThemeSummaryInput> = as
   const guard = requireGenerating(ctx, "set_theme_summary");
   if (guard) return guard;
 
-  // Mirror the theme normalization in add_pr_entry so the (recap, theme)
-  // key joins cleanly across the two writes regardless of casing/spacing.
-  const theme = input.theme.trim().toLowerCase().replace(/\s+/g, " ");
+  const theme = normalizeTheme(input.theme);
   if (theme.length === 0) {
     return err(
       "Error: theme was empty after normalization. Pass the same lowercase noun you used for add_pr_entry.",
@@ -406,36 +381,22 @@ export const setThemeSummaryHandler: RecapToolHandler<SetThemeSummaryInput> = as
     );
   }
 
-  const id = randomUUID();
-  try {
-    ctx.db
-      .insert(recapThemeSummaries)
-      .values({
-        id,
-        recapId: ctx.recapId,
-        theme,
-        summary,
-      })
-      .onConflictDoUpdate({
-        target: [recapThemeSummaries.recapId, recapThemeSummaries.theme],
-        set: {
-          summary: sql`excluded.summary`,
-        },
-      })
-      .run();
-  } catch (e) {
-    return err(
-      `Error: failed to persist theme summary for "${theme}": ${e instanceof Error ? e.message : String(e)}`,
-    );
-  }
-
-  // Re-read so the broadcast carries the canonical row id (on upsert,
-  // the existing row's id is preserved — mirrors add_pr_entry).
-  const persisted = ctx.db
-    .select()
-    .from(recapThemeSummaries)
-    .where(and(eq(recapThemeSummaries.recapId, ctx.recapId), eq(recapThemeSummaries.theme, theme)))
-    .get();
+  const [persisted] = ctx.db
+    .insert(recapThemeSummaries)
+    .values({
+      id: randomUUID(),
+      recapId: ctx.recapId,
+      theme,
+      summary,
+    })
+    .onConflictDoUpdate({
+      target: [recapThemeSummaries.recapId, recapThemeSummaries.theme],
+      set: {
+        summary: sql`excluded.summary`,
+      },
+    })
+    .returning()
+    .all();
 
   if (persisted) {
     const event: RecapThemeSummary = {
@@ -468,11 +429,7 @@ export const completeRecapHandler: RecapToolHandler<CompleteRecapInput> = async 
   }
 
   const entries = ctx.db
-    .select({
-      prId: recapPrEntries.prId,
-      linesAdded: recapPrEntries.linesAdded,
-      linesRemoved: recapPrEntries.linesRemoved,
-    })
+    .select({ prId: recapPrEntries.prId })
     .from(recapPrEntries)
     .where(eq(recapPrEntries.recapId, ctx.recapId))
     .all();
@@ -483,12 +440,6 @@ export const completeRecapHandler: RecapToolHandler<CompleteRecapInput> = async 
     );
   }
 
-  // Stamp derived fields from the entries + source bundle. The orchestrator
-  // owns status transitions (CLAUDE.md invariant #11), but content writes
-  // that are deterministic from the entries are fine to land here so the
-  // row is fully consistent before the status flip.
-  const totalLinesAdded = entries.reduce((sum, e) => sum + e.linesAdded, 0);
-  const totalLinesRemoved = entries.reduce((sum, e) => sum + e.linesRemoved, 0);
   const sourcePrIds = entries.map((e) => e.prId);
 
   // Best-effort walkthrough provenance: any walkthrough attached to the
@@ -499,23 +450,15 @@ export const completeRecapHandler: RecapToolHandler<CompleteRecapInput> = async 
     .filter((p) => sourcePrIds.includes(p.id) && p.walkthrough)
     .map((p) => p.walkthrough!.id);
 
-  try {
-    ctx.db
-      .update(projectRecaps)
-      .set({
-        summaryStats: JSON.stringify(ctx.sourceBundle.stats),
-        sourcePrIds: JSON.stringify(sourcePrIds),
-        sourceWalkthroughIds: JSON.stringify(sourceWalkthroughIds),
-        totalLinesAdded,
-        totalLinesRemoved,
-      })
-      .where(eq(projectRecaps.id, ctx.recapId))
-      .run();
-  } catch (e) {
-    return err(
-      `Error: failed to stamp derived fields: ${e instanceof Error ? e.message : String(e)}`,
-    );
-  }
+  ctx.db
+    .update(projectRecaps)
+    .set({
+      summaryStats: JSON.stringify(ctx.sourceBundle.stats),
+      sourcePrIds: JSON.stringify(sourcePrIds),
+      sourceWalkthroughIds: JSON.stringify(sourceWalkthroughIds),
+    })
+    .where(eq(projectRecaps.id, ctx.recapId))
+    .run();
 
   ctx.emit({ type: "phase", data: { phase: "finalizing", message: "Finalizing recap…" } });
 

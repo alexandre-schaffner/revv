@@ -19,9 +19,8 @@
 //
 //   Phase 4 — Finalize:
 //     • complete_recap → validation gate. Requires non-empty lede + ≥1 entry.
-//       Also stamps `summary_stats` from the source bundle, derives
-//       `source_pr_ids` from the entries, and recomputes
-//       `total_lines_added` / `total_lines_removed`.
+//       Also stamps `summary_stats` from the source bundle and derives
+//       `source_pr_ids` / `source_walkthrough_ids` from the entries.
 //
 // Per CLAUDE.md invariants #2 + #11: agents never write `status` directly.
 // `complete_recap` only validates; the orchestrator observes the run's natural
@@ -203,15 +202,6 @@ export interface RecapSourceBundle {
   readonly openPrs: ReadonlyArray<RecapSourcePr>;
   /** Pre-computed summary stats — same shape persisted on the recap row. */
   readonly stats: RecapSummaryStats;
-  /**
-   * Markdown overview of the prior recap row for this exact (repo, period,
-   * periodStart) tuple. Populated when the orchestrator is rerunning an
-   * existing row in place (max-1-recap-per-period rule). `null` on a fresh
-   * first-time run for the period. The agent should use this as the
-   * starting point and update it with new information rather than starting
-   * from scratch.
-   */
-  readonly previousOverview: string | null;
 }
 
 // ── Tool input schemas ───────────────────────────────────────────────────────

@@ -27,7 +27,10 @@ import { eq } from "drizzle-orm";
 import { walkClaudeMessages } from "../ai/agent-stream";
 import { buildRecapUserMessage, RECAP_SYSTEM_PROMPT } from "../ai/prompts/recap";
 import { resolveCliBin } from "../ai/providers/cli-agent";
-import { buildRecapActivity, normalizeRecapToolName } from "../ai/providers/recap-activity";
+import {
+  createRecapDispatchState,
+  dispatchRecapStreamEvent,
+} from "../ai/providers/recap-event-dispatch";
 import {
   type RecapOpencodeSessionDeps,
   type RecapOpencodeSupervisorDeps,
@@ -263,23 +266,12 @@ async function runViaClaude(
       },
     });
 
-    // Walk the SDK message stream. Content flows through tool args; the
-    // runner forwards each tool call as an `activity` event and discards
-    // visible assistant text (the system prompt instructs the model not to
-    // emit any between tool calls). Reasoning deltas surface as `thought`
-    // events for debug visibility — the UI shows them in a collapsible.
+    // Walk the SDK message stream through the shared recap dispatcher so
+    // both transports apply the same discard / activity / heartbeat rules
+    // (CLAUDE.md invariant #13).
+    const dispatchState = createRecapDispatchState();
     const usage = await walkClaudeMessages(iter, (ev) => {
-      if (ev.kind === "reasoning-delta") {
-        if (ev.data.length === 0) return;
-        ctx.emit({ type: "thought", data: { text: ev.data } });
-        return;
-      }
-      if (ev.kind === "tool-call") {
-        const toolName = normalizeRecapToolName(ev.bareName);
-        ctx.emit({ type: "activity", data: buildRecapActivity(toolName, ev.input) });
-        return;
-      }
-      // text-delta / task-list-update / subagent-* / error / etc. → ignored
+      dispatchRecapStreamEvent(ev, dispatchState, ctx.emit);
     });
     if (usage) {
       tokenUsage = {

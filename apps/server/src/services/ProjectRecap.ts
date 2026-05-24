@@ -7,7 +7,6 @@
 //     incrementResumeAttempts, listGenerating).
 //   • Read-side (getById, listForRepo, getLatestForRepo,
 //     findActiveForPeriod).
-//   • Content writes that come from MCP tool handlers (setOverview).
 //
 // Per CLAUDE.md invariants #2 and #11: only `ProjectRecapJobs` calls
 // `setStatus`. Agents reach the DB only via the recap MCP tool surface.
@@ -75,6 +74,12 @@ function rowToRecap(
   entries: ReadonlyArray<RecapPrEntry> = [],
   themeSummaries: ReadonlyArray<RecapThemeSummary> = [],
 ): ProjectRecap {
+  let totalLinesAdded = 0;
+  let totalLinesRemoved = 0;
+  for (const entry of entries) {
+    totalLinesAdded += entry.linesAdded;
+    totalLinesRemoved += entry.linesRemoved;
+  }
   return {
     id: row.id,
     repositoryId: row.repositoryId,
@@ -82,8 +87,8 @@ function rowToRecap(
     periodStart: row.periodStart,
     periodEnd: row.periodEnd,
     lede: row.lede,
-    totalLinesAdded: row.totalLinesAdded,
-    totalLinesRemoved: row.totalLinesRemoved,
+    totalLinesAdded,
+    totalLinesRemoved,
     entries,
     themeSummaries,
     status: row.status as ProjectRecapStatus,
@@ -157,16 +162,6 @@ export interface CreatePartialRecapParams {
   readonly modelUsed?: string;
 }
 
-export interface SetRecapOverviewParams {
-  readonly recapId: string;
-  readonly overview: string;
-  readonly sourcePrIds: ReadonlyArray<string>;
-  readonly sourceWalkthroughIds: ReadonlyArray<string>;
-  readonly stats: RecapSummaryStats;
-  readonly modelUsed?: string;
-  readonly tokenUsage?: Record<string, number>;
-}
-
 export interface ListForRepoParams {
   readonly period?: RecapPeriod;
   /** Cursor: the generatedAt of the last row from the previous page. */
@@ -226,16 +221,6 @@ export class ProjectRecapService extends Context.Tag("ProjectRecapService")<
     ) => Effect.Effect<ReadonlyArray<ProjectRecap>, ValidationError, DbService>;
 
     /**
-     * Single content write performed by the recap agent via the MCP
-     * `commit_recap_overview` tool. Stamps the overview + provenance + stats
-     * in one transaction. Idempotent on `recapId` — replays update the
-     * same row.
-     */
-    readonly setOverview: (
-      params: SetRecapOverviewParams,
-    ) => Effect.Effect<void, RecapNotFoundError | ValidationError, DbService>;
-
-    /**
      * Orchestrator-only status transition. Stamps `completedAt = now()`
      * on the `'complete'` transition (single-writer per invariant #11,
      * mirrors the walkthrough pattern).
@@ -250,31 +235,17 @@ export class ProjectRecapService extends Context.Tag("ProjectRecapService")<
     readonly supersede: (oldId: string, newId: string) => Effect.Effect<void, never, DbService>;
 
     /**
-     * Reset an existing row for an in-place rerun. Captures and returns the
-     * current overview (so the caller can hand it to the agent as prior
-     * context), then clears all content / lifecycle fields back to a fresh
-     * `'generating'` state:
-     *
-     *   • overview      → ""
-     *   • status        → 'generating'
-     *   • completedAt   → null
-     *   • errorMessage  → null
-     *   • resumeAttempts → 0
-     *   • generatedAt   → now (so the UI shows the row as freshly started)
-     *   • sourcePrIds / sourceWalkthroughIds / summaryStats → reset
-     *
-     * Used by the orchestrator's `regenerateForPeriod` to update a recap
-     * in place (per CLAUDE.md invariant #7's chat-edit carve-out shape,
-     * but adapted for the recap "max 1 per period" rule).
+     * Reset an existing row for an in-place rerun. Clears all content /
+     * lifecycle fields back to a fresh `'generating'` state (lede → "",
+     * entries → deleted, theme summaries → deleted, status → 'generating',
+     * completedAt → null, errorMessage → null, resumeAttempts → 0,
+     * generatedAt → now). Used by the orchestrator's `regenerateForPeriod`
+     * to update a recap in place (per the recap "max 1 per period" rule).
      */
     readonly resetForRerun: (
       recapId: string,
       newBoundaries?: { readonly periodStart?: string; readonly periodEnd?: string },
-    ) => Effect.Effect<
-      { readonly previousOverview: string },
-      RecapNotFoundError | ValidationError,
-      DbService
-    >;
+    ) => Effect.Effect<void, RecapNotFoundError | ValidationError, DbService>;
 
     /**
      * Enumerate rows still in `status='generating'` for boot-time resume.
@@ -311,7 +282,6 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
             period: params.period,
             periodStart: params.periodStart,
             periodEnd: params.periodEnd,
-            overview: "",
             status: "generating",
             generatedAt,
             tokenUsage: "{}",
@@ -481,41 +451,6 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
       });
     }),
 
-  setOverview: (params) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      yield* Effect.try({
-        try: () => {
-          const exists = db
-            .select({ id: projectRecaps.id })
-            .from(projectRecaps)
-            .where(eq(projectRecaps.id, params.recapId))
-            .get();
-          if (!exists) {
-            throw new Error(`recap ${params.recapId} not found`);
-          }
-          const patch: Partial<typeof projectRecaps.$inferInsert> = {
-            overview: params.overview,
-            sourcePrIds: JSON.stringify(params.sourcePrIds),
-            sourceWalkthroughIds: JSON.stringify(params.sourceWalkthroughIds),
-            summaryStats: JSON.stringify(params.stats),
-          };
-          if (params.modelUsed !== undefined) patch.modelUsed = params.modelUsed;
-          if (params.tokenUsage !== undefined) {
-            patch.tokenUsage = JSON.stringify(params.tokenUsage);
-          }
-          db.update(projectRecaps).set(patch).where(eq(projectRecaps.id, params.recapId)).run();
-        },
-        catch: (e) => {
-          const msg = String(e);
-          if (msg.includes("not found")) {
-            return new RecapNotFoundError({ recapId: params.recapId });
-          }
-          return new ValidationError({ message: `setOverview: ${msg}` });
-        },
-      });
-    }),
-
   setStatus: (recapId, status, options) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
@@ -558,22 +493,18 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
   resetForRerun: (recapId, newBoundaries) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
-      return yield* Effect.try({
+      yield* Effect.try({
         try: () => {
-          const row = db
-            .select({ overview: projectRecaps.overview })
+          const exists = db
+            .select({ id: projectRecaps.id })
             .from(projectRecaps)
             .where(eq(projectRecaps.id, recapId))
             .get();
-          if (!row) {
+          if (!exists) {
             throw new Error(`recap ${recapId} not found`);
           }
-          const previousOverview = row.overview ?? "";
           const patch: Record<string, unknown> = {
-            overview: "",
             lede: "",
-            totalLinesAdded: 0,
-            totalLinesRemoved: 0,
             status: "generating",
             completedAt: null,
             errorMessage: null,
@@ -591,13 +522,11 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
             patch.periodEnd = newBoundaries.periodEnd;
           }
           db.update(projectRecaps).set(patch).where(eq(projectRecaps.id, recapId)).run();
-          // Clear structured entries and theme summaries from the prior run;
-          // the agent will re-add via add_pr_entry / set_theme_summary.
-          // Cascades from recap_id are not enough since the recap row itself
-          // stays put.
+          // Cascade-on-recap_id deletion isn't enough because the recap row
+          // stays put — drop entries and theme summaries explicitly so the
+          // agent restarts from a clean slate.
           db.delete(recapPrEntries).where(eq(recapPrEntries.recapId, recapId)).run();
           db.delete(recapThemeSummaries).where(eq(recapThemeSummaries.recapId, recapId)).run();
-          return { previousOverview };
         },
         catch: (e) => {
           const msg = String(e);

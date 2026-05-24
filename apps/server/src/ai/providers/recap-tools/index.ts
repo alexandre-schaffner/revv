@@ -116,7 +116,7 @@ export const RECAP_TOOL_SPECS: Array<RecapToolSpec<any>> = [
   {
     name: "complete_recap",
     description:
-      "Validation gate. Call LAST. Asserts the lede is non-empty AND at least one PR entry exists. Stamps the recap's derived fields (summary_stats from the source bundle, source_pr_ids + source_walkthrough_ids from the entries, total_lines_added/removed) and signals the orchestrator to flip status='complete'. After this returns success, you may stop emitting tool calls.",
+      "Validation gate. Call LAST. Asserts the lede is non-empty AND at least one PR entry exists. Stamps the recap's derived fields (summary_stats from the source bundle, source_pr_ids + source_walkthrough_ids from the entries) and signals the orchestrator to flip status='complete'. After this returns success, you may stop emitting tool calls.",
     inputSchema: completeRecapSchema,
     handler: completeRecapHandler,
   },

@@ -44,7 +44,7 @@ import {
   withAgentTurn,
 } from "../agent-stream";
 import { buildRecapUserMessage, RECAP_SYSTEM_PROMPT } from "../prompts/recap";
-import { buildRecapActivity, normalizeRecapToolName } from "./recap-activity";
+import { createRecapDispatchState, dispatchRecapStreamEvent } from "./recap-event-dispatch";
 import type { RecapToolContext } from "./recap-tools";
 import { RECAP_MCP_SERVER } from "./recap-tools";
 
@@ -253,48 +253,17 @@ export async function runRecapAgentViaOpencode(
             );
           }
         };
-        // Throttle reasoning-delta phase events so the UI doesn't
-        // spam "Model is thinking…" on every token.
-        let lastReasoningPush = 0;
+        const dispatchState = createRecapDispatchState();
         const sseDone = subscribeOpencodeStream(
           client,
           turnSessionId,
           sseAbort.signal,
           (ev) => {
-            if (ev.kind === "text-delta") {
-              // Discard visible text — content flows through tool args.
-              return;
-            }
-            if (ev.kind === "reasoning-delta") {
-              if (ev.data.length > 0) {
-                fanOutEvent({ type: "thought", data: { text: ev.data } });
-              }
-              // Extended thinking — log so operators can see why the
-              // stream is silent for minutes at a time, AND push a
-              // phase heartbeat so the UI doesn't look hung. DeepSeek
-              // models can reason for 5–10 minutes before emitting
-              // any text-delta; without this the 10-minute timeout
-              // fires while the model is legitimately thinking.
-              const now = Date.now();
-              if (now - lastReasoningPush >= 30_000) {
-                lastReasoningPush = now;
-                fanOutEvent({
-                  type: "phase",
-                  data: { phase: "analyzing", message: "Model is thinking…" },
-                });
-              }
-              debug("recap-opencode", `reasoning-delta (${ev.data.length} chars)`);
-              return;
-            }
-            if (ev.kind === "tool-call") {
-              const toolName = normalizeRecapToolName(ev.bareName);
-              fanOutEvent({ type: "activity", data: buildRecapActivity(toolName, ev.input) });
-              debug("recap-opencode", `tool-call: ${toolName} (source=${ev.source})`);
-              return;
-            }
+            // The opencode transport additionally surfaces user-question /
+            // error frames it wants to log; everything else routes through
+            // the shared recap dispatcher to stay byte-identical with the
+            // Claude SDK path.
             if (ev.kind === "user-question-asked") {
-              // If opencode blocks on a permission/question, we need to
-              // know — the daemon will wait forever for an answer.
               logError(
                 "recap-opencode",
                 `session ${turnSessionId} asked a question — this will block until answered/rejected.`,
@@ -306,7 +275,7 @@ export async function runRecapAgentViaOpencode(
               logError("recap-opencode", `session.error: ${ev.message}`);
               return;
             }
-            // task-list-update / subagent-* → ignored
+            dispatchRecapStreamEvent(ev, dispatchState, fanOutEvent);
           },
           {
             emittedTextLen,
@@ -411,25 +380,11 @@ export async function runRecapAgentViaOpencode(
             assistantMessageID: response.info.id,
           },
           (ev) => {
-            if (ev.kind === "text-delta") {
-              return;
-            }
-            if (ev.kind === "reasoning-delta") {
-              if (ev.data.length > 0) {
-                fanOutEvent({ type: "thought", data: { text: ev.data } });
-              }
-              debug("recap-opencode", `backstop reasoning-delta (${ev.data.length} chars)`);
-              return;
-            }
-            if (ev.kind === "tool-call") {
-              const toolName = normalizeRecapToolName(ev.bareName);
-              fanOutEvent({ type: "activity", data: buildRecapActivity(toolName, ev.input) });
-              return;
-            }
             if (ev.kind === "error") {
               logError("recap-opencode", `backstop error: ${ev.message}`);
               return;
             }
+            dispatchRecapStreamEvent(ev, dispatchState, fanOutEvent);
           },
         );
 

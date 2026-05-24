@@ -3,6 +3,7 @@ import {
   disconnect as disconnectEvents,
 } from "$lib/stores/events.svelte";
 import { fetchPinnedPrs, fetchPrs, fetchRepos, syncPrs } from "$lib/stores/prs.svelte";
+import { getSettings } from "$lib/stores/settings.svelte";
 import { connect, disconnect } from "$lib/stores/ws.svelte";
 
 let pollingInterval: ReturnType<typeof setInterval> | null = null;
@@ -41,27 +42,32 @@ export function stopPolling(): void {
   disconnectEvents();
 }
 
-/**
- * Pause only the periodic `syncPrs()` timer without tearing down WebSocket or
- * SSE. Used by account-switch so an in-flight `syncNow()` can't race with the
- * new account's hydration. WS reconnect is handled by the caller.
- */
-export function pauseSyncTimer(): void {
+function pauseSyncTimer(): void {
   if (pollingInterval) {
     clearInterval(pollingInterval);
     pollingInterval = null;
   }
 }
 
-/**
- * Restart the periodic `syncPrs()` timer. Idempotent — clears any existing
- * interval first.
- */
-export function resumeSyncTimer(intervalSeconds: number): void {
+function resumeSyncTimer(intervalSeconds: number): void {
   if (pollingInterval) clearInterval(pollingInterval);
   pollingInterval = setInterval(() => {
     syncPrs().catch(() => {
       // errors arrive via WebSocket
     });
   }, intervalSeconds * 1000);
+}
+
+/**
+ * Run `fn` with the background sync timer suspended, then resume it at the
+ * cadence the current settings prefer. Used by account switch so an in-flight
+ * `syncPrs()` can't race with the new account's hydration.
+ */
+export async function withSyncSuspended<T>(fn: () => Promise<T>): Promise<T> {
+  pauseSyncTimer();
+  try {
+    return await fn();
+  } finally {
+    resumeSyncTimer(getSettings()?.autoFetchInterval ?? 5);
+  }
 }
