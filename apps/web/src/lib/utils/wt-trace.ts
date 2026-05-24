@@ -24,8 +24,6 @@ const wtLogger = logger.scoped("wt-trace");
 
 export function wtTrace(scope: string, ...args: unknown[]): void {
   if (!ENABLED) return;
-  const msg = args
-    .map((a) => (typeof a === "string" ? a : JSON.stringify(a)))
-    .join(" ");
+  const msg = args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ");
   wtLogger.debug(`[${scope}] ${msg}`);
 }

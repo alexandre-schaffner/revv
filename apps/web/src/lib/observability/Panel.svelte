@@ -6,13 +6,15 @@
 
 import { onDestroy, onMount } from "svelte";
 import { snapshot } from "./metrics";
-import { isVerbose, setVerbose, summarizeSpans, type SpanSummary } from "./tracer";
+import { isVerbose, type SpanSummary, setVerbose, summarizeSpans } from "./tracer";
 
 let { onclose }: { onclose: () => void } = $props();
 
 let rows = $state<Array<{ name: string } & SpanSummary>>([]);
 let counters = $state<Array<{ key: string; count: number }>>([]);
-let histograms = $state<Array<{ key: string; p50: number; p95: number; max: number; count: number }>>([]);
+let histograms = $state<
+  Array<{ key: string; p50: number; p95: number; max: number; count: number }>
+>([]);
 let verbose = $state(isVerbose());
 
 let refreshTimer: ReturnType<typeof setInterval> | null = null;

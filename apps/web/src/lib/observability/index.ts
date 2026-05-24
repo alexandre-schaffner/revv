@@ -6,9 +6,9 @@ export { traced, tracedAsync } from "./perf";
 export { initObservability } from "./runtime";
 export {
   type CompletedSpan,
-  type SpanSummary,
   isVerbose,
   readSpans,
+  type SpanSummary,
   setVerbose,
   summarizeSpans,
 } from "./tracer";

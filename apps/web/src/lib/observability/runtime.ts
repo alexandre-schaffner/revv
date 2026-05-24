@@ -7,13 +7,13 @@
 import { getMinimumLogLevel, logger, setMinimumLogLevel } from "./logger";
 import { clearMetrics, snapshot } from "./metrics";
 import {
+  type CompletedSpan,
   clearSpans,
   isVerbose,
   readSpans,
+  type SpanSummary,
   setVerbose,
   summarizeSpans,
-  type CompletedSpan,
-  type SpanSummary,
 } from "./tracer";
 
 interface RevvObsGlobal {
@@ -114,8 +114,7 @@ function maybeArmDumper(): void {
     if (dumperInterval) return;
     dumperInterval = setInterval(() => {
       const s = snapshot();
-      const hasData =
-        Object.keys(s.counters).length > 0 || Object.keys(s.histograms).length > 0;
+      const hasData = Object.keys(s.counters).length > 0 || Object.keys(s.histograms).length > 0;
       if (!hasData) return;
       console.groupCollapsed("[obs] periodic snapshot");
       if (Object.keys(s.counters).length > 0) console.table(s.counters);

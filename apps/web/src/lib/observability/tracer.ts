@@ -163,7 +163,8 @@ export function isVerbose(): boolean {
 }
 
 function emitVerboseLine(span: CompletedSpan): void {
-  const dur = span.durationMs < 1 ? `${span.durationMs.toFixed(2)}ms` : `${Math.round(span.durationMs)}ms`;
+  const dur =
+    span.durationMs < 1 ? `${span.durationMs.toFixed(2)}ms` : `${Math.round(span.durationMs)}ms`;
   const attrSummary = Object.entries(span.attrs)
     .map(([k, v]) => `${k}=${formatAttrValue(v)}`)
     .join(" ");

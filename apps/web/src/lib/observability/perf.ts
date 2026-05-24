@@ -21,11 +21,7 @@ const now: () => number =
     : () => Date.now();
 
 /** Synchronous span. Returns `fn`'s value, re-throws on error after recording. */
-export function traced<T>(
-  name: string,
-  attrs: Record<string, unknown>,
-  fn: () => T,
-): T {
+export function traced<T>(name: string, attrs: Record<string, unknown>, fn: () => T): T {
   const start = now();
   let error: unknown = null;
   try {
@@ -62,5 +58,5 @@ export async function tracedAsync<T>(
   }
 }
 
-export { recordCounter, recordHistogram } from "./metrics";
 export { logger } from "./logger";
+export { recordCounter, recordHistogram } from "./metrics";
