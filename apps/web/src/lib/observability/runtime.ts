@@ -5,7 +5,7 @@
 // mode is on. Idempotent — multiple imports are no-ops past the first.
 
 import { getMinimumLogLevel, logger, setMinimumLogLevel } from "./logger";
-import { clearMetrics, snapshot } from "./metrics";
+import { clearMetrics, recordCounter, recordHistogram, snapshot } from "./metrics";
 import {
   type CompletedSpan,
   clearSpans,
@@ -100,11 +100,53 @@ export function initObservability(): void {
   (window as unknown as { __revv?: RevvObsGlobal }).__revv = api;
 
   maybeArmDumper();
+  installLongtaskObserver();
 
   logger.info("observability initialised", {
     verbose: isVerbose(),
     logLevel: getMinimumLogLevel(),
   });
+}
+
+// ── Longtask attribution ────────────────────────────────────────────────────
+//
+// A "longtask" is a main-thread block > 50 ms — i.e. a dropped frame. The
+// browser dispatches one PerformanceEntry per occurrence. We cross-reference
+// each entry against the span ring buffer and emit a single console.warn
+// listing the spans that completed within the longtask window, so jank is
+// directly attributable to the work that caused it. No console noise when
+// nothing's wrong.
+
+function installLongtaskObserver(): void {
+  if (typeof PerformanceObserver === "undefined") return;
+  // Chromium-only API; feature-detect by trying to observe.
+  try {
+    const observer = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        const start = entry.startTime;
+        const end = start + entry.duration;
+        const spansInWindow = readSpans().filter(
+          (s) => s.startMs <= end && s.startMs + s.durationMs >= start,
+        );
+        recordCounter("longtask", undefined);
+        recordHistogram("longtask.duration", undefined, entry.duration);
+        // Verbose console emit even when global verbose is off — jank is
+        // worth a single line either way.
+        const culprits = spansInWindow
+          .map((s) => `${s.name}(${Math.round(s.durationMs)}ms)`)
+          .slice(0, 8)
+          .join(", ");
+        console.warn(
+          `[obs:longtask] ${Math.round(entry.duration)}ms — ${spansInWindow.length} spans in window${
+            culprits ? `: ${culprits}` : ""
+          }`,
+        );
+      }
+    });
+    observer.observe({ type: "longtask", buffered: false });
+  } catch {
+    /* not supported (Safari, Firefox) — silent no-op */
+  }
 }
 
 /** When verbose is on, dump a compact metrics summary every 30s. */

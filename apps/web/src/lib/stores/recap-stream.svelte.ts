@@ -1,7 +1,6 @@
 import type { Activity, RecapPrEntry, RecapStreamEvent, RecapThemeSummary } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
-import { recordHistogram, traced } from "$lib/observability";
-import { recordSpan } from "$lib/observability/tracer";
+import { startSpan, traced } from "$lib/observability";
 import { runRecapSse } from "$lib/services/recap-sse";
 
 // ── Entry shape ─────────────────────────────────────────────────────────────
@@ -73,7 +72,7 @@ function deleteEntry(recapId: string): void {
 // ── Event reducer ───────────────────────────────────────────────────────────
 
 function applyEvents(recapId: string, evs: RecapStreamEvent[]): void {
-  traced("recap.applyEvents", { count: evs.length }, () => {
+  traced("recap.applyEvents", { recapId, count: evs.length }, () => {
     const current = entries.get(recapId);
     const entry: RecapStreamEntry = current
       ? {
@@ -84,7 +83,7 @@ function applyEvents(recapId: string, evs: RecapStreamEvent[]): void {
       : freshEntry();
 
     for (const event of evs) {
-      const evStart = performance.now();
+      const span = startSpan("recap.event", { type: event.type, recapId });
       switch (event.type) {
         case "lede":
           entry.lede = event.data.lede;
@@ -117,9 +116,7 @@ function applyEvents(recapId: string, evs: RecapStreamEvent[]): void {
           entry.isStreaming = false;
           break;
       }
-      const evDur = performance.now() - evStart;
-      recordSpan("recap.event", evStart, evDur, { type: event.type }, null);
-      recordHistogram("recap.event.duration", { type: event.type }, evDur);
+      span.end();
     }
 
     setEntry(recapId, entry);

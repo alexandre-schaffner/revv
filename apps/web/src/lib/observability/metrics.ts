@@ -13,9 +13,20 @@ export interface CounterValue {
 const counters = new Map<string, { count: number }>();
 const histograms = new Map<
   string,
-  { count: number; sum: number; min: number; max: number; samples: number[] }
+  {
+    count: number;
+    sum: number;
+    min: number;
+    max: number;
+    /** Recency-weighted FIFO ring of the last `HISTOGRAM_SAMPLE_CAP` samples. */
+    samples: number[];
+    ringIdx: number;
+  }
 >();
 
+// FIFO over reservoir for perf debugging: a current slowdown should show up
+// in p50/p95 *now*, not be diluted by hours of history. Recent N samples is
+// directly meaningful — "what's the p95 of the last 256 reducer events?".
 const HISTOGRAM_SAMPLE_CAP = 256;
 
 function key(name: string, tags?: Record<string, unknown>): string {
@@ -50,7 +61,7 @@ export function recordHistogram(
   const k = key(name, tags);
   let h = histograms.get(k);
   if (!h) {
-    h = { count: 0, sum: 0, min: value, max: value, samples: [] };
+    h = { count: 0, sum: 0, min: value, max: value, samples: [], ringIdx: 0 };
     histograms.set(k, h);
   }
   h.count += 1;
@@ -60,9 +71,8 @@ export function recordHistogram(
   if (h.samples.length < HISTOGRAM_SAMPLE_CAP) {
     h.samples.push(value);
   } else {
-    // Reservoir sampling so older samples don't dominate forever.
-    const idx = Math.floor(Math.random() * h.count);
-    if (idx < HISTOGRAM_SAMPLE_CAP) h.samples[idx] = value;
+    h.samples[h.ringIdx] = value;
+    h.ringIdx = (h.ringIdx + 1) % HISTOGRAM_SAMPLE_CAP;
   }
 }
 

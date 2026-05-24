@@ -41,8 +41,7 @@ export function getMinimumLogLevel(): string {
 }
 
 const consoleLogger = Logger.make((options) => {
-  if (LogLevel.lessThan(options.logLevel, minLevel)) return;
-
+  // Level filtering is owned by `runLog`'s early-out — no duplicate check here.
   const scope = HashMap.get(options.annotations, "scope");
   const tag = HashMap.get(options.annotations, "tag");
   const scopeStr = scope._tag === "Some" ? String(scope.value) : null;
@@ -80,35 +79,33 @@ const LoggerLayer = Logger.replace(Logger.defaultLogger, consoleLogger);
  */
 export const obsRuntime = ManagedRuntime.make(Layer.mergeAll(LoggerLayer));
 
+type LogFn = (msg: string, extras?: Record<string, unknown>) => void;
+
+function bind(level: LogLevel.LogLevel, scope?: string): LogFn {
+  return (msg, extras) => runLog(level, msg, scope ? { ...extras, scope } : extras);
+}
+
+interface LoggerSurface {
+  debug: LogFn;
+  info: LogFn;
+  warn: LogFn;
+  error: LogFn;
+  scoped: (scope: string) => Omit<LoggerSurface, "scoped">;
+}
+
 /** Thin Effect-backed logger surface for plain TS/Svelte code. */
-export const logger = {
-  debug(msg: string, extras?: Record<string, unknown>): void {
-    runLog(LogLevel.Debug, msg, extras);
-  },
-  info(msg: string, extras?: Record<string, unknown>): void {
-    runLog(LogLevel.Info, msg, extras);
-  },
-  warn(msg: string, extras?: Record<string, unknown>): void {
-    runLog(LogLevel.Warning, msg, extras);
-  },
-  error(msg: string, extras?: Record<string, unknown>): void {
-    runLog(LogLevel.Error, msg, extras);
-  },
-  /** Returns a child logger that auto-annotates every record with `scope=…`. */
-  scoped(scope: string): {
-    debug: (msg: string, extras?: Record<string, unknown>) => void;
-    info: (msg: string, extras?: Record<string, unknown>) => void;
-    warn: (msg: string, extras?: Record<string, unknown>) => void;
-    error: (msg: string, extras?: Record<string, unknown>) => void;
-  } {
-    return {
-      debug: (msg, extras) => runLog(LogLevel.Debug, msg, { ...extras, scope }),
-      info: (msg, extras) => runLog(LogLevel.Info, msg, { ...extras, scope }),
-      warn: (msg, extras) => runLog(LogLevel.Warning, msg, { ...extras, scope }),
-      error: (msg, extras) => runLog(LogLevel.Error, msg, { ...extras, scope }),
-    };
-  },
-} as const;
+export const logger: LoggerSurface = {
+  debug: bind(LogLevel.Debug),
+  info: bind(LogLevel.Info),
+  warn: bind(LogLevel.Warning),
+  error: bind(LogLevel.Error),
+  scoped: (scope) => ({
+    debug: bind(LogLevel.Debug, scope),
+    info: bind(LogLevel.Info, scope),
+    warn: bind(LogLevel.Warning, scope),
+    error: bind(LogLevel.Error, scope),
+  }),
+};
 
 function runLog(
   level: LogLevel.LogLevel,

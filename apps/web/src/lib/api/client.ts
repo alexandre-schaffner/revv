@@ -1,16 +1,15 @@
 import { treaty } from "@elysiajs/eden";
 import type { App } from "@revv/server";
 import { API_BASE_URL } from "$lib/api/base-url";
-import { recordSpan } from "$lib/observability/tracer";
+import { tracedAsyncWith } from "$lib/observability";
 import { authHeaders } from "$lib/utils/session-token";
 
 // ── Instrumented fetch wrapper ──────────────────────────────────────────────
 //
-// Wrap the global `fetch` with a timing span so every Eden request is
-// recorded in the observability ring buffer + `api.request.duration`
-// histogram. Path is reduced to a coarse template (host + first 3 path
-// segments) so we don't blow up the histogram cardinality with per-prId
-// or per-walkthroughId variants.
+// Wrap the global `fetch` with an `api.request` span. Path is reduced to a
+// coarse template (host + first 3 segments) so per-id variants don't blow up
+// the histogram cardinality. Status + status class are stamped on the span
+// at completion via `tracedAsyncWith` so the recorder sees them.
 
 function pathTemplate(input: RequestInfo | URL): string {
   try {
@@ -20,8 +19,6 @@ function pathTemplate(input: RequestInfo | URL): string {
         : input instanceof URL
           ? input
           : new URL(input.url);
-    // Keep the first three segments — enough to identify the endpoint
-    // group without leaking ids.
     const segments = url.pathname.split("/").filter(Boolean).slice(0, 4);
     return `${url.host}/${segments.join("/")}`;
   } catch {
@@ -32,24 +29,13 @@ function pathTemplate(input: RequestInfo | URL): string {
 const instrumentedFetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   const method = (init?.method ?? "GET").toUpperCase();
   const path = pathTemplate(input);
-  const start = performance.now();
-  return fetch(input, init)
-    .then((res) => {
-      const dur = performance.now() - start;
-      recordSpan(
-        "api.request",
-        start,
-        dur,
-        { method, path, status: res.status, statusClass: `${Math.floor(res.status / 100)}xx` },
-        res.ok ? null : new Error(`HTTP ${res.status}`),
-      );
-      return res;
-    })
-    .catch((err: unknown) => {
-      const dur = performance.now() - start;
-      recordSpan("api.request", start, dur, { method, path, status: 0, statusClass: "err" }, err);
-      throw err;
-    });
+  return tracedAsyncWith("api.request", { method, path }, async () => {
+    const res = await fetch(input, init);
+    return {
+      value: res,
+      attrs: { status: res.status, statusClass: `${Math.floor(res.status / 100)}xx` },
+    };
+  });
 };
 
 export const api = treaty<App>(API_BASE_URL, {

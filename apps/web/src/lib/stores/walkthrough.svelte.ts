@@ -35,8 +35,7 @@ import { SvelteMap } from "svelte/reactivity";
 import { toast } from "svelte-sonner";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { api } from "$lib/api/client";
-import { recordHistogram, traced } from "$lib/observability";
-import { recordSpan } from "$lib/observability/tracer";
+import { recordCounter, startSpan, traced, tracedDerived } from "$lib/observability";
 import { updateRepoCloneStatus } from "$lib/stores/prs.svelte";
 import { authHeaders } from "$lib/utils/session-token";
 import { wtTrace } from "$lib/utils/wt-trace";
@@ -195,10 +194,12 @@ const PHASE_RANK: Record<WalkthroughPipelinePhase, number> = {
 // boundaries silently kept a stale cached result, manifesting as floating
 // action buttons stuck on "Stop" until a tab switch forced the $derived to
 // re-evaluate.
-const _active: WalkthroughEntry | undefined = $derived.by(() => {
-  if (!store.activePrId) return undefined;
-  return store.entries.get(store.activePrId);
-});
+const _active: WalkthroughEntry | undefined = $derived.by(() =>
+  tracedDerived("walkthrough.active", () => {
+    if (!store.activePrId) return undefined;
+    return store.entries.get(store.activePrId);
+  }),
+);
 
 // ── Mutation helpers ────────────────────────────────────────────────────────
 
@@ -218,6 +219,23 @@ export function updateEntry(prId: string, updater: (e: WalkthroughEntry) => void
   }
   const next = { ...entry };
   updater(next);
+  // Shallow-equal fast path: if no top-level field reference changed, skip
+  // the SvelteMap write so we don't trigger the `_active` → `_uiState` →
+  // consumer cascade for a noop. Visible via the `walkthrough.entry.write-
+  // elided` counter — a high elision rate is itself a smell (callers
+  // doing redundant work).
+  let changed = false;
+  for (const k in next) {
+    if (next[k as keyof WalkthroughEntry] !== entry[k as keyof WalkthroughEntry]) {
+      changed = true;
+      break;
+    }
+  }
+  if (!changed) {
+    recordCounter("walkthrough.entry.write-elided", { prId });
+    return;
+  }
+  recordCounter("walkthrough.entry.write", { prId });
   store.entries.set(prId, next);
 }
 
@@ -323,29 +341,31 @@ export type WalkthroughUiState =
   | { kind: "error-empty"; message: string }
   | { kind: "error-partial"; message: string; lastPhase: WalkthroughPipelinePhase };
 
-const _uiState: WalkthroughUiState = $derived.by(() => {
-  const e = _active;
-  if (!e) return { kind: "absent" };
-  if (e.cloneInProgress && e.cloneRepoId) {
-    return { kind: "cloning", repoId: e.cloneRepoId };
-  }
-  if (e.isStreaming) return { kind: "streaming", phase: e.phase };
+const _uiState: WalkthroughUiState = $derived.by(() =>
+  tracedDerived("walkthrough.uiState", (): WalkthroughUiState => {
+    const e = _active;
+    if (!e) return { kind: "absent" };
+    if (e.cloneInProgress && e.cloneRepoId) {
+      return { kind: "cloning", repoId: e.cloneRepoId };
+    }
+    if (e.isStreaming) return { kind: "streaming", phase: e.phase };
 
-  const hasPartial = e.summary !== null || e.blocks.length > 0;
+    const hasPartial = e.summary !== null || e.blocks.length > 0;
 
-  if (e.streamError) {
-    return hasPartial
-      ? { kind: "error-partial", message: e.streamError, lastPhase: e.lastCompletedPhase }
-      : { kind: "error-empty", message: e.streamError };
-  }
-  if (e.doneReceived && e.lastCompletedPhase === "D") {
-    return e.superseded ? { kind: "complete-stale" } : { kind: "complete" };
-  }
-  if (hasPartial) {
-    return { kind: "resumable", lastPhase: e.lastCompletedPhase };
-  }
-  return { kind: "idle" };
-});
+    if (e.streamError) {
+      return hasPartial
+        ? { kind: "error-partial", message: e.streamError, lastPhase: e.lastCompletedPhase }
+        : { kind: "error-empty", message: e.streamError };
+    }
+    if (e.doneReceived && e.lastCompletedPhase === "D") {
+      return e.superseded ? { kind: "complete-stale" } : { kind: "complete" };
+    }
+    if (hasPartial) {
+      return { kind: "resumable", lastPhase: e.lastCompletedPhase };
+    }
+    return { kind: "idle" };
+  }),
+);
 
 export function getWalkthroughUiState(): WalkthroughUiState {
   return _uiState;
@@ -383,15 +403,22 @@ export function applyEvents(prId: string, events: WalkthroughStreamEvent[]): voi
     const types = events.map((e) => e.type).join(",");
     wtTrace("apply", `applyEvents prId=${prId} count=${events.length} types=[${types}]`);
   }
-  traced("walkthrough.applyEvents", { count: events.length }, () => {
+  traced("walkthrough.applyEvents", { prId, count: events.length }, () => {
     updateEntry(prId, (entry) => {
+      const walkthroughId = entry.walkthroughId ?? "none";
       let newBlocks: WalkthroughBlock[] | null = null;
 
       for (const event of events) {
-        // Direct recordSpan instead of `traced()` so the closure boundary
-        // doesn't break TS narrowing of `newBlocks` for the `if (newBlocks)`
-        // sort below.
-        const evStart = performance.now();
+        // `startSpan` rather than `traced(() => ...)`: the inner switch
+        // mutates `newBlocks` (case "block"), and TS can't narrow that
+        // mutation across an arrow-function closure boundary. Scope-handle
+        // form keeps the mutation inline so the `if (newBlocks)` check
+        // below stays well-typed.
+        const span = startSpan("walkthrough.event", {
+          type: event.type,
+          prId,
+          walkthroughId,
+        });
         switch (event.type) {
           case "summary":
             entry.summary = event.data.summary;
@@ -602,9 +629,7 @@ export function applyEvents(prId: string, events: WalkthroughStreamEvent[]): voi
             entry.isStreaming = false;
             break;
         }
-        const evDur = performance.now() - evStart;
-        recordSpan("walkthrough.event", evStart, evDur, { type: event.type }, null);
-        recordHistogram("walkthrough.event.duration", { type: event.type }, evDur);
+        span.end();
       }
 
       if (newBlocks) {
