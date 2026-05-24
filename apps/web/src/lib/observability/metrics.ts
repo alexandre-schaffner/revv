@@ -10,15 +10,6 @@ export interface CounterValue {
   readonly count: number;
 }
 
-export interface HistogramValue {
-  readonly count: number;
-  readonly sum: number;
-  readonly min: number;
-  readonly max: number;
-  /** Reservoir of recent samples (capped at 256) so p50/p95 stay representative. */
-  readonly samples: number[];
-}
-
 const counters = new Map<string, { count: number }>();
 const histograms = new Map<
   string,

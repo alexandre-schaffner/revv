@@ -1,7 +1,6 @@
 import { treaty } from "@elysiajs/eden";
 import type { App } from "@revv/server";
 import { API_BASE_URL } from "$lib/api/base-url";
-import { tracedAsync } from "$lib/observability";
 import { recordSpan } from "$lib/observability/tracer";
 import { authHeaders } from "$lib/utils/session-token";
 
@@ -63,21 +62,3 @@ export const api = treaty<App>(API_BASE_URL, {
   fetcher: instrumentedFetch as unknown as typeof fetch,
   headers: () => authHeaders(),
 });
-
-/**
- * Convenience wrapper for ad-hoc `fetch` calls outside Eden. The store layer
- * uses plenty of these (walkthrough start/abort, hydrateFromCache, etc.).
- * Captures the same `api.request` span shape.
- */
-export function tracedFetch(
-  input: RequestInfo | URL,
-  init?: RequestInit,
-  attrs?: Record<string, unknown>,
-): Promise<Response> {
-  const method = (init?.method ?? "GET").toUpperCase();
-  const path = pathTemplate(input);
-  return tracedAsync("api.request", { method, path, ...attrs }, async () => {
-    const res = await fetch(input, init);
-    return res;
-  });
-}
