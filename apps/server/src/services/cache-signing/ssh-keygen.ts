@@ -1,11 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  SshKeygenMissing,
-  SshSignatureInvalid,
-  SshSigningUnavailable,
-} from "../../domain/errors";
+import { SshKeygenMissing, SshSignatureInvalid, SshSigningUnavailable } from "../../domain/errors";
 
 const TIMEOUT_MS = 5000;
 

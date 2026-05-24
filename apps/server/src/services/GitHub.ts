@@ -732,10 +732,7 @@ export class GitHubService extends Context.Tag("GitHubService")<
       owner: string,
       repo: string,
       username: string,
-    ) => Effect.Effect<
-      "admin" | "maintain" | "write" | "triage" | "read" | "none",
-      GitHubError
-    >;
+    ) => Effect.Effect<"admin" | "maintain" | "write" | "triage" | "read" | "none", GitHubError>;
   }
 >() {}
 
@@ -1495,7 +1492,8 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
         );
         if (res.status === 404) return "none" as const;
         if (res.status === 401) throw new GitHubAuthError({ message: "Invalid or expired token" });
-        if (res.status === 403) throw new GitHubNetworkError({ cause: `HTTP 403 on ${owner}/${repo}` });
+        if (res.status === 403)
+          throw new GitHubNetworkError({ cause: `HTTP 403 on ${owner}/${repo}` });
         if (!res.ok) throw new GitHubNetworkError({ cause: `HTTP ${res.status}` });
         const body = (await res.json()) as { role_name?: string };
         const roleName = body.role_name ?? "none";

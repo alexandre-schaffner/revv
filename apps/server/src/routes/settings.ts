@@ -109,12 +109,7 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
         Effect.gen(function* () {
           const signerSvc = yield* SshSigner;
           const signed = yield* signerSvc.sign(probe);
-          yield* signerSvc.verify(
-            probe,
-            signed.signature,
-            signed.signerHost,
-            signed.signerLogin,
-          );
+          yield* signerSvc.verify(probe, signed.signature, signed.signerHost, signed.signerLogin);
           return {
             ok: true as const,
             signerLogin: signed.signerLogin,

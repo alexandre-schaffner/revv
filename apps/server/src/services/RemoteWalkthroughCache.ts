@@ -211,11 +211,14 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
 
               const verifyResult = yield* signer
                 .verify(sigMsg, signature, signerHost, signerLogin)
-                .pipe(Effect.map(() => "ok" as const), Effect.catchAll((e) => {
-                  const tag = (e as { _tag?: string })._tag ?? "unknown";
-                  const msg = (e as { message?: string }).message ?? String(e);
-                  return Effect.succeed(`fail:${tag}:${msg}` as const);
-                }));
+                .pipe(
+                  Effect.map(() => "ok" as const),
+                  Effect.catchAll((e) => {
+                    const tag = (e as { _tag?: string })._tag ?? "unknown";
+                    const msg = (e as { message?: string }).message ?? String(e);
+                    return Effect.succeed(`fail:${tag}:${msg}` as const);
+                  }),
+                );
 
               if (typeof verifyResult === "string" && verifyResult.startsWith("fail:")) {
                 const detail = verifyResult.slice(5);
