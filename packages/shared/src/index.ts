@@ -58,6 +58,8 @@ export type {
   HunkDecision,
   HunkDecisionType,
   InstallEvent,
+  Issue,
+  IssueState,
   MergeEligibility,
   MergeMethod,
   MessageType,
