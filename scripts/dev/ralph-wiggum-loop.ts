@@ -115,6 +115,7 @@ const CONFIRMERS: Record<string, (content: string) => boolean> = {
   // US-003: githubHost validation
   "US-003": (src) =>
     !src.includes("InvalidGitHubHostError") &&
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: intentional literal — searching for this exact text in source code
     (src.includes("api.${host}") || src.includes("githubHost")),
 
   // US-004: path validation in RepoClone
