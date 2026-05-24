@@ -9,7 +9,13 @@ export type {
   WalkthroughSnapshotSemanticStep,
   WalkthroughSnapshotV1,
 } from "./cache";
-export { CACHE_METADATA_KEYS, CACHE_SCHEMA_VERSION, cacheObjectKey } from "./cache";
+export {
+  CACHE_METADATA_KEYS,
+  CACHE_SCHEMA_VERSION,
+  cacheObjectKey,
+  cacheSigningMessage,
+} from "./cache";
+export type { CacheSigningMode } from "./cache";
 export type {
   ChatPlan,
   ChatQuestion,

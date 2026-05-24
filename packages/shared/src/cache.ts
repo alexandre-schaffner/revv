@@ -163,4 +163,37 @@ export const CACHE_METADATA_KEYS = {
   uploadedByUserId: "uploadedByUserId",
   /** Hex SHA-256 of the gzipped body. Crosschecked on download. */
   contentSha256: "contentSha256",
+  /** SSHSIG armored block produced by the uploader's private key. */
+  signature: "signature",
+  /** GitHub host of the signing account, e.g. `github.com`. */
+  signerHost: "signerHost",
+  /** GitHub login of the signer, e.g. `alice`. */
+  signerLogin: "signerLogin",
+  /** Stable numeric GitHub user id of the signer. Advisory. */
+  signerGithubUserId: "signerGithubUserId",
+  /** SSHSIG namespace — `revv-cache@<signerHost>`. */
+  signatureNamespace: "signatureNamespace",
 } as const;
+
+/**
+ * Signing mode for the team cache. Controls whether blobs must be signed
+ * (`'strict'`), accepted with a warning when signature is missing/invalid
+ * (`'permissive'`), or have signing bypassed entirely (`'off'`).
+ *
+ * Default is `'strict'` — new installs get protection out of the box.
+ */
+export type CacheSigningMode = "off" | "permissive" | "strict";
+
+/**
+ * Build the canonical signing message that is signed on push and
+ * verified on fetch. Binds the signature to the object's identity
+ * (repo + head SHA + content hash) without streaming MB through a child
+ * process — `contentSha256` already covers the body bytes.
+ */
+export function cacheSigningMessage(
+  repoFullName: string,
+  prHeadSha: string,
+  contentSha256: string,
+): string {
+  return `revv-cache:v1\n${repoFullName}\n${prHeadSha}\n${contentSha256}`;
+}

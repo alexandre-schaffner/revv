@@ -18,7 +18,12 @@
 import { createHash } from "node:crypto";
 import { gunzipSync, gzipSync } from "node:zlib";
 import type { WalkthroughSnapshotV1 } from "@revv/shared";
-import { CACHE_METADATA_KEYS, CACHE_SCHEMA_VERSION, cacheObjectKey } from "@revv/shared";
+import {
+  CACHE_METADATA_KEYS,
+  CACHE_SCHEMA_VERSION,
+  cacheObjectKey,
+  cacheSigningMessage,
+} from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Context, Effect, Layer, Option } from "effect";
 import type { Db } from "../db/index";
@@ -28,6 +33,8 @@ import { walkthroughs as walkthroughsTable } from "../db/schema/walkthroughs";
 import { CacheSerialization, CacheUnavailable } from "../domain/errors";
 import { debug, logError } from "../logger";
 import { BlobStore } from "./blob/BlobStore";
+import { CacheEligibility } from "./cache-eligibility";
+import { SshSigner } from "./cache-signing/index";
 import { DbService } from "./Db";
 import { SettingsService } from "./Settings";
 import { exportWalkthroughSnapshot, validateSnapshot } from "./walkthrough-snapshot";
@@ -92,6 +99,8 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
     const blob = yield* BlobStore;
     const settings = yield* SettingsService;
     const { db } = yield* DbService;
+    const signer = yield* SshSigner;
+    const eligibility = yield* CacheEligibility;
 
     const isDownloadEnabled = (): Effect.Effect<boolean> =>
       settings.getSettings().pipe(
@@ -123,6 +132,12 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
         Effect.gen(function* () {
           const ok = yield* isDownloadEnabled();
           if (!ok) return Option.none<WalkthroughSnapshotV1>();
+
+          const live = yield* settings
+            .getSettings()
+            .pipe(Effect.catchAll(() => Effect.succeed(null)));
+          const signingMode = live?.cache.signing.mode ?? "strict";
+          const trustedHosts = new Set(live?.cache.signing.trustedSignerHosts ?? []);
 
           const key = cacheObjectKey(repoFullName, headSha);
           const record = yield* blob.get(key).pipe(
@@ -161,6 +176,85 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
                 `contentSha256 mismatch key=${key} advertised=${advertisedSha} actual=${actualSha}`,
               );
               return Option.none<WalkthroughSnapshotV1>();
+            }
+          }
+
+          // ── Signature verification (when mode != 'off') ──────────────────
+          if (signingMode !== "off") {
+            const signerHost = metadata[CACHE_METADATA_KEYS.signerHost];
+            const signerLogin = metadata[CACHE_METADATA_KEYS.signerLogin];
+            const signature = metadata[CACHE_METADATA_KEYS.signature];
+
+            if (!signature || !signerHost || !signerLogin) {
+              // Legacy unsigned blob.
+              if (signingMode === "strict") {
+                logError(
+                  "remote-cache",
+                  `unsigned blob in strict mode — treating as miss key=${key}`,
+                );
+                return Option.none<WalkthroughSnapshotV1>();
+              }
+              // permissive: log and continue
+              logError("remote-cache", `unsigned blob accepted in permissive mode key=${key}`);
+            } else {
+              // Verify trusted host first (cheap check before hitting the network).
+              if (!trustedHosts.has(signerHost)) {
+                logError(
+                  "remote-cache",
+                  `signerHost=${signerHost} not in trusted hosts — treating as miss key=${key}`,
+                );
+                return Option.none<WalkthroughSnapshotV1>();
+              }
+
+              const contentSha = advertisedSha ?? createHash("sha256").update(body).digest("hex");
+              const sigMsg = cacheSigningMessage(repoFullName, headSha, contentSha);
+
+              const verifyResult = yield* signer
+                .verify(sigMsg, signature, signerHost, signerLogin)
+                .pipe(Effect.map(() => "ok" as const), Effect.catchAll((e) => {
+                  const tag = (e as { _tag?: string })._tag ?? "unknown";
+                  const msg = (e as { message?: string }).message ?? String(e);
+                  return Effect.succeed(`fail:${tag}:${msg}` as const);
+                }));
+
+              if (typeof verifyResult === "string" && verifyResult.startsWith("fail:")) {
+                const detail = verifyResult.slice(5);
+                if (signingMode === "strict") {
+                  logError(
+                    "remote-cache",
+                    `signature verification failed in strict mode key=${key}: ${detail}`,
+                  );
+                  return Option.none<WalkthroughSnapshotV1>();
+                }
+                logError(
+                  "remote-cache",
+                  `signature verification failed in permissive mode key=${key}: ${detail} — accepting anyway`,
+                );
+              } else {
+                // Signature valid — now check signer eligibility.
+                const eligible = yield* eligibility
+                  .isSignerEligible(repoFullName, signerHost, signerLogin)
+                  .pipe(Effect.catchAll(() => Effect.succeed(false)));
+
+                if (!eligible) {
+                  if (signingMode === "strict") {
+                    logError(
+                      "remote-cache",
+                      `signer ${signerLogin}@${signerHost} lacks write permission on ${repoFullName} — treating as miss key=${key}`,
+                    );
+                    return Option.none<WalkthroughSnapshotV1>();
+                  }
+                  logError(
+                    "remote-cache",
+                    `signer ${signerLogin}@${signerHost} lacks write permission on ${repoFullName} — accepting in permissive mode key=${key}`,
+                  );
+                } else {
+                  debug(
+                    "remote-cache",
+                    `signature OK signer=${signerLogin}@${signerHost} key=${key}`,
+                  );
+                }
+              }
             }
           }
 
@@ -222,6 +316,18 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
             );
           }
 
+          // ── Eligibility gate ────────────────────────────────────────────
+          const canPush = yield* eligibility
+            .canPush(repoFullName)
+            .pipe(Effect.catchAll(() => Effect.succeed(false)));
+          if (!canPush) {
+            debug(
+              "remote-cache",
+              `push skipped: local user lacks write permission on ${repoFullName}`,
+            );
+            return;
+          }
+
           const snapshot = yield* Effect.try({
             try: () => exportWalkthroughSnapshot(db, { walkthroughId, repoFullName }),
             catch: (cause) =>
@@ -248,6 +354,34 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
             .getSettings()
             .pipe(Effect.mapError((e) => new CacheUnavailable({ message: e.message })));
 
+          // ── Signing (when mode != 'off') ─────────────────────────────────
+          const signingMode = live.cache.signing.mode;
+          let signingMeta: Record<string, string> = {};
+
+          if (signingMode !== "off") {
+            const sigMsg = cacheSigningMessage(repoFullName, snapshot.prHeadSha, contentSha256);
+            const signResult = yield* signer.sign(sigMsg).pipe(
+              Effect.mapError(
+                (e) =>
+                  new CacheSerialization({
+                    message: `signing failed: ${e.message}`,
+                    cause: e,
+                  }),
+              ),
+            );
+            signingMeta = {
+              [CACHE_METADATA_KEYS.signature]: signResult.signature,
+              [CACHE_METADATA_KEYS.signerHost]: signResult.signerHost,
+              [CACHE_METADATA_KEYS.signerLogin]: signResult.signerLogin,
+              [CACHE_METADATA_KEYS.signerGithubUserId]: signResult.signerGithubUserId,
+              [CACHE_METADATA_KEYS.signatureNamespace]: signResult.signatureNamespace,
+            };
+            debug(
+              "remote-cache",
+              `signed as ${signResult.signerLogin}@${signResult.signerHost} namespace=${signResult.signatureNamespace}`,
+            );
+          }
+
           const key = cacheObjectKey(repoFullName, snapshot.prHeadSha);
           yield* blob
             .put(key, gz, {
@@ -255,6 +389,7 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
               [CACHE_METADATA_KEYS.modelUsed]: snapshot.modelUsed,
               [CACHE_METADATA_KEYS.uploadedByUserId]: live.id,
               [CACHE_METADATA_KEYS.contentSha256]: contentSha256,
+              ...signingMeta,
             })
             .pipe(Effect.mapError((e) => new CacheUnavailable({ message: e.message, cause: e })));
 

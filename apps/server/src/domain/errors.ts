@@ -202,6 +202,35 @@ export class ImportError extends Data.TaggedError("ImportError")<{
 
 export type RecapError = RecapNotFoundError | RecapPreconditionError | RecapBudgetExceededError;
 
+// ── SSH cache-signing errors ────────────────────────────────────────────────
+
+/** `ssh-keygen` binary is absent from PATH or the configured path. */
+export class SshKeygenMissing extends Data.TaggedError("SshKeygenMissing")<{
+  readonly message: string;
+}> {}
+
+/**
+ * The local machine cannot sign right now — key not found, auto-detect
+ * failed, or ssh-keygen returned an unexpected error. Push fails loudly
+ * (fire-and-forget contract unchanged); the walkthrough still completes.
+ */
+export class SshSigningUnavailable extends Data.TaggedError("SshSigningUnavailable")<{
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
+
+/** Signature verification failed — tampered message, wrong key, wrong namespace. */
+export class SshSignatureInvalid extends Data.TaggedError("SshSignatureInvalid")<{
+  readonly message: string;
+}> {}
+
+/** Public-key fetch from `https://<host>/<login>.keys` failed. */
+export class SshKeysFetchFailed extends Data.TaggedError("SshKeysFetchFailed")<{
+  readonly host: string;
+  readonly login: string;
+  readonly cause?: unknown;
+}> {}
+
 /**
  * Type guard for ReviewError.
  * Checks both instanceof (for directly thrown errors) and _tag (defensive for
