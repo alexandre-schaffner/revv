@@ -78,29 +78,25 @@ function isDividerHidden(index: number): boolean {
 }
 
 // Cmd-hold shortcut hint reveal. Animates the ⌘N labels next to each tab
-// label when the user holds Cmd. CSS would have to tween opacity + max-width
-// + margin together, which is awkward; one tween with stagger is clearer
-// and lets us share `tokens.stagger.tight` for the per-segment offset.
+// label when the user holds Cmd. Reveal/hide are simultaneous across all
+// segments and symmetric in easing: a modifier-key hint should feel like
+// instant feedback, not a ripple. Width is animated to a fixed 22px (not
+// `auto`) so GSAP doesn't have to force a layout measurement before tweening.
 $effect(() => {
   if (!pillEl) return;
   const hints = pillEl.querySelectorAll<HTMLElement>(".seg-shortcut");
   if (hints.length === 0) return;
+  const target = cmdHeld
+    ? { opacity: 0.55, width: 22, marginRight: 5 }
+    : { opacity: 0, width: 0, marginRight: 0 };
   if (prefersReducedMotion()) {
-    gsap.set(
-      hints,
-      cmdHeld
-        ? { autoAlpha: 0.55, width: "auto", marginRight: 5 }
-        : { autoAlpha: 0, width: 0, marginRight: 0 },
-    );
+    gsap.set(hints, target);
     return;
   }
   gsap.to(hints, {
-    autoAlpha: cmdHeld ? 0.55 : 0,
-    width: cmdHeld ? "auto" : 0,
-    marginRight: cmdHeld ? 5 : 0,
+    ...target,
     duration: tokens.snap,
-    ease: cmdHeld ? tokens.easeOutExpo : tokens.easeSoft,
-    stagger: cmdHeld ? tokens.stagger.tight : 0,
+    ease: tokens.easeSoft,
     overwrite: "auto",
   });
 });
@@ -244,7 +240,9 @@ $effect(() => {
 	}
 
 	/* Reveal opacity, width, and margin are driven by GSAP from the cmdHeld
-	   $effect above. CSS only sets the rest state and the inherited type props. */
+	   $effect above. CSS only sets the rest state and the inherited type props.
+	   No `visibility: hidden` — that adds a frame of opacity → visibility
+	   sequencing that makes the modifier-key reveal feel laggy. */
 	.seg-shortcut {
 		display: inline-block;
 		font-size: 11px;
@@ -254,6 +252,6 @@ $effect(() => {
 		opacity: 0;
 		width: 0;
 		overflow: hidden;
-		visibility: hidden;
+		pointer-events: none;
 	}
 </style>
