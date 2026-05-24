@@ -2,7 +2,7 @@
 import Archive from "phosphor-svelte/lib/Archive";
 import ChevronDown from "phosphor-svelte/lib/CaretDown";
 import ChevronRight from "phosphor-svelte/lib/CaretRight";
-import { fly, slide } from "svelte/transition";
+import { gsapFadeY, gsapSlide, tokens } from "$lib/motion";
 import {
   fetchMoreArchived,
   getArchivedByRepo,
@@ -72,12 +72,18 @@ const visible = $derived(archivedPrs.length > 0 || nextCursor !== null);
 		</button>
 
 		{#if expanded}
-			<div class="archive-body" transition:slide={{ duration: 200 }}>
+			<div class="archive-body" transition:gsapSlide={{ duration: tokens.smooth }}>
 				{#if archivedPrs.length === 0}
 					<p class="empty">No closed pull requests</p>
 				{:else}
 					{#each archivedPrs as pr, i (pr.id)}
-						<div in:fly={{ y: 6, duration: 160, delay: Math.min(i, STAGGER_CAP) * 25 }}>
+						<div
+							in:gsapFadeY={{
+								y: 6,
+								duration: tokens.quick,
+								delay: Math.min(i, STAGGER_CAP) * tokens.stagger.tight,
+							}}
+						>
 							<PrItem
 								{pr}
 								isSelected={selectedPrId === pr.id}

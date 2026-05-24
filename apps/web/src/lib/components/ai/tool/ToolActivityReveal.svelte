@@ -63,6 +63,9 @@ function handleTransitionEnd(event: TransitionEvent): void {
     min-width: 0;
     overflow: hidden;
     vertical-align: baseline;
+    /* Width transition is deliberate: inline text reveals need to grow to a
+       content-measured target, then snap to `width: auto` once settled. The
+       perf cost is negligible because the element is small and bounded. */
     transition: width var(--duration-smooth) var(--ease-out-expo);
   }
 

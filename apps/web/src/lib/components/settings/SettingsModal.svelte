@@ -511,7 +511,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 								disabled={modelsLoading}
 								aria-label="Refresh models"
 							>
-								<RefreshCw size={12} weight="fill" class={modelsLoading ? 'animate-spin' : ''} />
+								<RefreshCw size={12} weight="fill" class={modelsLoading ? 'motion-essential-spin' : ''} />
 							</Button>
 							<Select.Root
 								type="single"
@@ -641,7 +641,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 					<!-- AI status indicator -->
 					<div class="status-line">
 						{#if aiStatusLoading}
-							<Loader2 size={11} weight="regular" class="animate-spin text-text-muted" />
+							<Loader2 size={11} weight="regular" class="motion-essential-spin text-text-muted" />
 							<span class="status-line-text">Checking status…</span>
 						{:else if aiConfigured}
 							<span class="status-line-dot status-line-dot--success" aria-hidden="true"></span>
@@ -791,7 +791,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 							disabled={cacheTestRunning}
 						>
 							{#if cacheTestRunning}
-								<Loader2 size={14} weight="regular" class="animate-spin" />
+								<Loader2 size={14} weight="regular" class="motion-essential-spin" />
 							{/if}
 							Test connection
 						</Button>
@@ -921,7 +921,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 							class="flex shrink-0 items-center gap-1.5 text-xs"
 						>
 							{#if replaying}
-								<Loader2 size={12} weight="regular" class="animate-spin" />
+								<Loader2 size={12} weight="regular" class="motion-essential-spin" />
 								Starting…
 							{:else}
 								<RotateCcw size={12} weight="fill" />
@@ -959,7 +959,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 								class="flex items-center gap-1.5 text-xs hover:border-accent hover:text-text-primary"
 							>
 								{#if checking}
-									<Loader2 size={12} weight="regular" class="animate-spin" />
+									<Loader2 size={12} weight="regular" class="motion-essential-spin" />
 									Checking…
 								{:else}
 									<Download size={12} weight="fill" />
@@ -998,7 +998,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 											aria-label="Remove {repo.fullName}"
 										>
 											{#if removingRepoId === repo.id}
-												<Loader2 size={12} weight="regular" class="animate-spin" />
+												<Loader2 size={12} weight="regular" class="motion-essential-spin" />
 											{:else}
 												<Trash2 size={12} weight="fill" />
 											{/if}
@@ -1049,7 +1049,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 										class="flex items-center gap-1.5 text-xs"
 									>
 										{#if deleting}
-											<Loader2 size={12} weight="regular" class="animate-spin" />
+											<Loader2 size={12} weight="regular" class="motion-essential-spin" />
 											Removing…
 										{:else}
 											<TriangleAlert size={12} weight="fill" />

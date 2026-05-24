@@ -129,18 +129,18 @@ function mountDiffBlock(el: HTMLDivElement) {
 		display: flex;
 		align-items: flex-start;
 		padding: 16px 20px;
-		background: var(--revv-bg-secondary);
+		background: color-mix(in srgb, var(--revv-accent) 4%, var(--revv-bg-secondary));
 		font-size: 14px;
 		line-height: 1.6;
 		color: var(--revv-text-secondary);
 	}
 
 	.annotation--left {
-		border-right: 2px solid var(--revv-accent);
+		border-right: 1px solid color-mix(in srgb, var(--revv-accent) 35%, var(--revv-border));
 	}
 
 	.annotation--right {
-		border-left: 2px solid var(--revv-accent);
+		border-left: 1px solid color-mix(in srgb, var(--revv-accent) 35%, var(--revv-border));
 	}
 
 	.annotation-content {

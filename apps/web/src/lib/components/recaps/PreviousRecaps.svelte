@@ -73,7 +73,7 @@ function navigate(recapId: string): void {
 
 	{#if loading && previous.length === 0}
 		<div class="previous-empty">
-			<Loader2 size={16} weight="regular" class="animate-spin" aria-hidden="true" />
+			<Loader2 size={16} weight="regular" class="motion-essential-spin" aria-hidden="true" />
 			<span>Loading previous recaps…</span>
 		</div>
 	{:else}
@@ -91,7 +91,7 @@ function navigate(recapId: string): void {
 							<span class="period-window">{formatPeriod(recap)}</span>
 							{#if recap.status === "generating"}
 								<Badge variant="secondary">
-									<Loader2 class="animate-spin" />
+									<Loader2 class="motion-essential-spin" />
 									generating
 								</Badge>
 							{:else if recap.status === "error"}

@@ -97,9 +97,9 @@ function buildBody(): string {
     for (const issue of selectedIssues) {
       const loc =
         issue.filePath && issue.startLine != null
-          ? ` — \`${issue.filePath}:${issue.startLine}${issue.endLine != null && issue.endLine !== issue.startLine ? `–${issue.endLine}` : ""}\``
+          ? ` (\`${issue.filePath}:${issue.startLine}${issue.endLine != null && issue.endLine !== issue.startLine ? `–${issue.endLine}` : ""}\`)`
           : issue.filePath
-            ? ` — \`${issue.filePath}\``
+            ? ` (\`${issue.filePath}\`)`
             : "";
       parts.push(
         `- ${severityTag(issue.severity)} **${issue.title}**${loc}\n  ${issue.description}`,

@@ -1,5 +1,5 @@
 <script lang="ts">
-import { fly } from "svelte/transition";
+import { gsapFadeY, tokens } from "$lib/motion";
 import { getOpenPrsByRepoOrdered, getSelectedPrId } from "$lib/stores/prs.svelte";
 import PrItem from "./PrItem.svelte";
 
@@ -20,7 +20,13 @@ const selectedPrId = $derived(getSelectedPrId());
 		<p class="empty">No open pull requests</p>
 	{:else}
 		{#each prs as pr, i (pr.id)}
-			<div in:fly={{ y: 6, duration: 160, delay: Math.min(i, STAGGER_CAP) * 25 }}>
+			<div
+				in:gsapFadeY={{
+					y: 6,
+					duration: tokens.quick,
+					delay: Math.min(i, STAGGER_CAP) * tokens.stagger.tight,
+				}}
+			>
 				<PrItem
 					{pr}
 					isSelected={selectedPrId === pr.id}

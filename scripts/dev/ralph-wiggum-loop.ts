@@ -217,7 +217,7 @@ async function verifyTypecheckOnFile(filePath: string): Promise<boolean> {
   if (hasErrorInFile) {
     console.log(`  ⚠️  Type error in ${filePath}:`);
     const errorLines = output.split("\n").filter((l) => l.includes(filePath));
-    console.log(errorLines.map((l) => "     " + l).join("\n"));
+    console.log(errorLines.map((l) => `     ${l}`).join("\n"));
     return false;
   }
 
@@ -310,7 +310,7 @@ async function main() {
     console.log(
       `  📝 Diff preview:\n${diff
         .split("\n")
-        .map((l) => "     " + l)
+        .map((l) => `     ${l}`)
         .join("\n")}\n`,
     );
 

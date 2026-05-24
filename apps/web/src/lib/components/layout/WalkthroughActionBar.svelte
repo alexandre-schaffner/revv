@@ -4,6 +4,7 @@ import ArrowUp from "phosphor-svelte/lib/ArrowUp";
 import Star from "phosphor-svelte/lib/Star";
 import GenActionBar, { type GenActionState } from "$lib/components/layout/GenActionBar.svelte";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
+import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
 import { isChatStreaming } from "$lib/stores/chat.svelte";
 import {
   abort as abortWalkthrough,
@@ -59,13 +60,17 @@ const genActionState = $derived.by((): GenActionState | null => {
  *  destructive buttons are disabled with a contextual tooltip. */
 const combinedPendingAction = $derived(chatStreaming ? "chat" : walkthroughPendingAction);
 const combinedDisabledTitle = $derived(
-  chatStreaming ? "Chat edit in progress — wait for it to finish before regenerating" : undefined,
+  chatStreaming ? "Chat edit in progress. Wait for it to finish before regenerating." : undefined,
 );
 </script>
 
 {#if genActionState}
-  <div class="actions-float">
-    <div class="actions-row">
+  <div
+    class="actions-float"
+    in:gsapFadeY={{ duration: tokens.quick, y: 8 }}
+    out:gsapFade={{ duration: tokens.snap }}
+  >
+    <div class="actions-row" role="toolbar" aria-label="Walkthrough actions">
       <GlassPill
         icon
         onclick={scrollWalkthroughToTop}
@@ -85,24 +90,48 @@ const combinedDisabledTitle = $derived(
       />
 
       {#if walkthroughUiState.kind === "streaming" && walkthroughHasNewContentBelow}
-        <GlassPill
-          onclick={scrollWalkthroughToBottom}
-          aria-label="Scroll to newest walkthrough content"
+        <!-- Inline-flex wrapper so the Svelte transition has a real box.
+             80ms in-delay damps flicker if the user scrolls past the
+             threshold and immediately back. -->
+        <span
+          class="pill-wrap"
+          in:gsapFadeY={{ duration: tokens.quick, y: 4, delay: 0.08 }}
+          out:gsapFade={{ duration: tokens.snap }}
         >
-          <ArrowDown size={16} weight="regular" />
-          New content
-        </GlassPill>
+          <GlassPill
+            onclick={scrollWalkthroughToBottom}
+            aria-label="Scroll to newest walkthrough content"
+          >
+            <ArrowDown size={16} weight="regular" />
+            New content
+          </GlassPill>
+        </span>
       {/if}
 
       {#if walkthroughHasRatings}
-        <GlassPill
-          onclick={scrollWalkthroughToRatings}
-          aria-label="Scroll to rating panel"
+        <span
+          class="pill-wrap"
+          in:gsapFadeY={{ duration: tokens.quick, y: 4 }}
+          out:gsapFade={{ duration: tokens.snap }}
         >
-          <Star size={16} weight="fill" />
-          Rating
-        </GlassPill>
+          <GlassPill
+            onclick={scrollWalkthroughToRatings}
+            aria-label="Scroll to rating panel"
+          >
+            <Star size={16} weight="fill" />
+            Rating
+          </GlassPill>
+        </span>
       {/if}
     </div>
   </div>
 {/if}
+
+<style>
+  /* Transition-only wrapper. `inline-flex` keeps it a flex item of
+     `.actions-row` so the gap rule continues to work. */
+  .pill-wrap {
+    display: inline-flex;
+    align-items: center;
+  }
+</style>
