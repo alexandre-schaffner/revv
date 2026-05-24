@@ -10,6 +10,7 @@ import GenActionBar, { type GenActionState } from "$lib/components/layout/GenAct
 import PreviousRecaps from "$lib/components/recaps/PreviousRecaps.svelte";
 import RecapDetail from "$lib/components/recaps/RecapDetail.svelte";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
+import { gsapFade, gsapFadeY, setupFlipOnChange, tokens } from "$lib/motion";
 import {
   abortRecapStream,
   getRecapStreamEntry,
@@ -142,6 +143,15 @@ const genActionState = $derived.by((): GenActionState | null => {
   }
 });
 
+// Flip ride for the GenActionBar swap: when the central pill changes width
+// (e.g. Stop → Regenerate), the surviving siblings (the outdated-CTA pill)
+// slide to their new positions instead of jumping.
+let actionsRowEl = $state<HTMLDivElement | null>(null);
+setupFlipOnChange(
+  () => actionsRowEl,
+  () => genActionState?.kind,
+);
+
 function onBack(): void {
   void goto(`/repo/${repoId}/recaps`);
 }
@@ -195,8 +205,17 @@ async function onGenerate(): Promise<void> {
 		</div>
 
 		{#if genActionState}
-			<div class="actions-float">
-				<div class="actions-row">
+			<div
+				class="actions-float"
+				in:gsapFadeY={{ duration: tokens.quick, y: 8 }}
+				out:gsapFade={{ duration: tokens.snap }}
+			>
+				<div
+					bind:this={actionsRowEl}
+					class="actions-row"
+					role="toolbar"
+					aria-label="Recap actions"
+				>
 					{#if recapUiKind === "outdated"}
 						<GlassPill
 							variant="accent"

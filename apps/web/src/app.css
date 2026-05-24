@@ -1019,13 +1019,18 @@ diffs-container {
 .tabs-float {
   position: fixed;
   top: calc(var(--topbar-height) + var(--spacing-island) + 10px);
+  left: 0;
+  right: 0;
   display: flex;
   justify-content: center;
   z-index: 20;
   pointer-events: none;
-  transition:
-    left var(--duration-smooth) var(--ease-out-expo),
-    right var(--duration-instant) var(--ease-out-expo);
+  /* GPU-composited slide. The inline `transform: translateX(...)` from the
+     route shifts the centre of the pill row to match the visible main area
+     as the sidebar / right panel toggle. Animating `left`/`right` here would
+     force per-frame paint instead. */
+  transition: transform var(--duration-smooth) var(--ease-out-expo);
+  will-change: transform;
 }
 .tabs-float * {
   pointer-events: auto;
