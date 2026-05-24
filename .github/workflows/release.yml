@@ -56,92 +56,16 @@ jobs:
           bootstrap-sha: d0b10912
 
   # ── Cross-platform Tauri builds ───────────────────────────────
+  # Shared matrix lives in `_build-tauri.yml` and is reused by `nightly.yml`.
   build-tauri:
-    name: Build (${{ matrix.label }})
     needs: release-please
     if: needs.release-please.outputs.release_created == 'true'
-    permissions:
-      contents: write
-      id-token: write
-      attestations: write
-
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - label: macOS (Apple Silicon)
-            platform: macos-latest
-            args: "--target aarch64-apple-darwin"
-            rust-targets: "aarch64-apple-darwin,x86_64-apple-darwin"
-          - label: macOS (Intel)
-            platform: macos-latest
-            args: "--target x86_64-apple-darwin"
-            rust-targets: "aarch64-apple-darwin,x86_64-apple-darwin"
-          - label: Linux
-            platform: ubuntu-22.04
-            args: ""
-            rust-targets: ""
-          - label: Windows
-            platform: windows-latest
-            args: ""
-            rust-targets: ""
-
-    runs-on: ${{ matrix.platform }}
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.release-please.outputs.tag_name }}
-
-      - name: Install system dependencies (Linux)
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.rust-targets }}
-
-      - uses: swatinem/rust-cache@v2
-        with:
-          workspaces: "apps/desktop/src-tauri -> target"
-
-      - run: bun install --frozen-lockfile
-
-      - name: Build frontend & server
-        run: bun run build
-
-      - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Uncomment when updater signing is configured:
-          # TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          # TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        with:
-          projectPath: ./apps/desktop
-          tauriScript: bunx tauri
-          tagName: ${{ needs.release-please.outputs.tag_name }}
-          releaseName: "Revv ${{ needs.release-please.outputs.version }}"
-          releaseBody: "See assets below for platform-specific downloads."
-          releaseDraft: false
-          prerelease: false
-          updaterJsonPreferNsis: true
-          args: ${{ matrix.args }}
-
-      - name: Attest build provenance
-        uses: actions/attest-build-provenance@v2
-        with:
-          subject-path: |
-            apps/desktop/src-tauri/target/**/bundle/**/*.dmg
-            apps/desktop/src-tauri/target/**/bundle/**/*.msi
-            apps/desktop/src-tauri/target/**/bundle/**/*.deb
-            apps/desktop/src-tauri/target/**/bundle/**/*.AppImage
+    uses: ./.github/workflows/_build-tauri.yml
+    with:
+      tag_name: ${{ needs.release-please.outputs.tag_name }}
+      release_name: "Revv ${{ needs.release-please.outputs.version }}"
+      prerelease: false
+    secrets: inherit
 
   # ── Package and attest the signed installers ──────────────────
   package-installer:

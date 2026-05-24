@@ -87,7 +87,7 @@
     },
     "updater": {
       "active": true,
-      "endpoints": ["https://github.com/alexmerkl/revv/releases/latest/download/latest.json"],
+      "endpoints": ["http://localhost:45678/api/update-manifest"],
       "dialog": false,
       "pubkey": "REPLACE_WITH_MINISIGN_PUBLIC_KEY",
       "windows": {
