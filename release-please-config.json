@@ -1,0 +1,43 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "simple",
+  "package-name": "revv",
+  "include-component-in-tag": false,
+  "bump-minor-pre-major": true,
+  "extra-files": [
+    {
+      "type": "json",
+      "path": "apps/server/package.json",
+      "jsonpath": "$.version"
+    },
+    {
+      "type": "json",
+      "path": "apps/web/package.json",
+      "jsonpath": "$.version"
+    },
+    {
+      "type": "json",
+      "path": "apps/desktop/tauri.conf.json",
+      "jsonpath": "$.version"
+    },
+    {
+      "type": "generic",
+      "path": "apps/desktop/Cargo.toml"
+    },
+    {
+      "type": "json",
+      "path": "packages/shared/package.json",
+      "jsonpath": "$.version"
+    },
+    {
+      "type": "json",
+      "path": "packages/ui/package.json",
+      "jsonpath": "$.version"
+    },
+    {
+      "type": "json",
+      "path": "packages/app/package.json",
+      "jsonpath": "$.version"
+    }
+  ]
+}

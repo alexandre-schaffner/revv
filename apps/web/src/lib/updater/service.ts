@@ -14,8 +14,11 @@
 // dismisses an update and then leaves the app running for a week, the next
 // launch should offer it again.
 
+import { UPDATE_STABLE_COOLDOWN_MS } from "@revv/shared";
 import Download from "phosphor-svelte/lib/Download";
 import { toast } from "svelte-sonner";
+import { getIsMaintainer } from "$lib/stores/auth.svelte";
+import { getSettings } from "$lib/stores/settings.svelte";
 import { isTauri } from "$lib/utils/platform";
 import { checkForUpdate, type UpdateInfo } from "./client";
 
@@ -74,6 +77,12 @@ export async function runCheck(options: { manual?: boolean } = {}): Promise<void
       // re-toast on every hourly tick. The flag resets on app restart.
       return;
     }
+    if (!shouldNotify(update, options.manual ?? false)) {
+      // Stable channel + non-maintainer + release < 48h old: stay silent
+      // on this passive tick. The next hourly check re-evaluates; once the
+      // release crosses 48h the gate flips and the toast appears.
+      return;
+    }
     showUpdateToast(update);
   } catch (err) {
     // Background checks fail silently — the endpoint might be down, the
@@ -87,6 +96,28 @@ export async function runCheck(options: { manual?: boolean } = {}): Promise<void
   } finally {
     inFlight = false;
   }
+}
+
+/**
+ * The 48-hour stable-channel cooldown lives entirely in the client. Manual
+ * checks, maintainers, and nightly users all bypass it — the gate exists to
+ * delay *passive* notifications for regular users so maintainers can spot
+ * fatal regressions in the first two days before the rest of the userbase is
+ * pulled along.
+ */
+function shouldNotify(update: UpdateInfo, manual: boolean): boolean {
+  if (manual) return true;
+  if (getIsMaintainer()) return true;
+  if (getSettings()?.updateChannel === "nightly") return true;
+  if (!update.publishedAt) {
+    // No pub_date in the manifest — fail open and notify. Better to nag a
+    // little early than to indefinitely suppress an update because the CI
+    // pipeline forgot to stamp the field.
+    return true;
+  }
+  const publishedMs = Date.parse(update.publishedAt);
+  if (Number.isNaN(publishedMs)) return true;
+  return Date.now() - publishedMs >= UPDATE_STABLE_COOLDOWN_MS;
 }
 
 function showUpdateToast(update: UpdateInfo): void {

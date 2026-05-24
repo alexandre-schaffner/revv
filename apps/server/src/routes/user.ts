@@ -1,4 +1,5 @@
 import type { Org, UserIdentity, UserRole } from "@revv/shared";
+import { isMaintainerLogin } from "@revv/shared";
 import { eq, inArray } from "drizzle-orm";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
@@ -129,7 +130,12 @@ export const userRoutes = new Elysia({ prefix: "/api/user" })
           if (pr) role = pr.authorLogin === login ? "coder" : "reviewer";
         }
 
-        const identity: UserIdentity = { login, role, avatarContent };
+        const identity: UserIdentity = {
+          login,
+          role,
+          avatarContent,
+          isMaintainer: isMaintainerLogin(login),
+        };
         return {
           ...identity,
           onboardedAt: onboardedAt ? onboardedAt.toISOString() : null,

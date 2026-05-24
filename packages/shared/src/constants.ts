@@ -2,3 +2,15 @@ export const API_PORT = 45678;
 export const API_BASE_URL = `http://localhost:${API_PORT}`;
 export const AUTO_FETCH_DEFAULT_INTERVAL = 5; // minutes
 export const THREAD_SYNC_INTERVAL_SECONDS = 30;
+
+// Stable-channel cooldown: how long after a release is published before
+// non-maintainer users on the stable channel see the in-app update toast.
+// The buffer lets maintainers and nightly users catch fatal regressions
+// before they propagate to everyone. Explicit user actions (CLI `revv update`,
+// Settings "Check for updates now") bypass this — it only gates the
+// passive hourly check.
+export const UPDATE_STABLE_COOLDOWN_MS = 2 * 24 * 60 * 60 * 1000;
+
+export type UpdateChannel = "stable" | "nightly";
+export const UPDATE_CHANNELS: readonly UpdateChannel[] = ["stable", "nightly"];
+export const DEFAULT_UPDATE_CHANNEL: UpdateChannel = "stable";

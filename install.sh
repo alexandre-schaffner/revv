@@ -4,8 +4,8 @@
 #
 # One script, two audiences:
 #
-#   Curl-piped (end user):
-#     curl -fsSL https://raw.githubusercontent.com/alexandre-schaffner/revv/main/install.sh | bash
+#   Curl-piped (end user) — use the signed release installer instead:
+#     curl -fsSL https://github.com/alexandre-schaffner/revv/releases/latest/download/install.sh | bash
 #
 #   From a checkout (developer):
 #     ./install.sh --dev       # toolchain + bun install, stop there
@@ -62,32 +62,38 @@ export REVV_AUTO_YES
 # curl-pipe where the file isn't on disk. Define just enough to clone the
 # repo, then re-exec under the on-disk installer which *can* source the lib.
 if [[ -t 1 ]]; then
-  _RED=$'\033[0;31m'; _GREEN=$'\033[0;32m'; _YELLOW=$'\033[1;33m'
-  _BLUE=$'\033[0;34m'; _CYAN=$'\033[0;36m'; _BOLD=$'\033[1m'; _RESET=$'\033[0m'
+  _R=$'\033[0m'; _B=$'\033[1m'; _D=$'\033[2m'
+  _RED=$'\033[31m'; _GREEN=$'\033[32m'; _YELLOW=$'\033[33m'
+  _CYAN=$'\033[36m'
 else
-  _RED="" _GREEN="" _YELLOW="" _BLUE="" _CYAN="" _BOLD="" _RESET=""
+  _R="" _B="" _D="" _RED="" _GREEN="" _YELLOW="" _CYAN=""
 fi
-_info()    { printf '%s[info]%s  %s\n' "$_BLUE"   "$_RESET" "$*"; }
-_success() { printf '%s[  ok]%s  %s\n' "$_GREEN"  "$_RESET" "$*"; }
-_warn()    { printf '%s[warn]%s  %s\n' "$_YELLOW" "$_RESET" "$*"; }
-_fail()    { printf '%s[FAIL]%s  %s\n' "$_RED"    "$_RESET" "$*" >&2; exit 1; }
-_step()    { printf '\n%s%s▸ %s%s\n'  "$_BOLD" "$_CYAN" "$*" "$_RESET"; }
+_info()    { printf "  ${_CYAN}·${_R}  %s\n"  "$*"; }
+_success() { printf "  ${_GREEN}✓${_R}  %s\n" "$*"; }
+_warn()    { printf "  ${_YELLOW}⚠${_R}  %s\n" "$*" >&2; }
+_fail()    { printf "\n  ${_RED}✗${_R}  %s\n\n" "$*" >&2; exit 1; }
+_step()    { printf "\n  ${_B}%s${_R}\n" "$*"; }
 
 _check_cmd() { command -v "$1" >/dev/null 2>&1; }
 
-# ── Header ────────────────────────────────────────────────────
-printf '\n%s' "$_BOLD"
+# ── Banner ────────────────────────────────────────────────────
+printf "\n"
+printf "  ${_CYAN}${_B}██████╗ ███████╗██╗   ██╗██╗   ██╗${_R}\n"
+printf "  ${_CYAN}${_B}██╔══██╗██╔════╝██║   ██║██║   ██║${_R}\n"
+printf "  ${_CYAN}${_B}██████╔╝█████╗  ██║   ██║██║   ██║${_R}\n"
+printf "  ${_CYAN}${_B}██╔══██╗██╔══╝  ╚██╗ ██╔╝╚██╗ ██╔╝${_R}\n"
+printf "  ${_CYAN}${_B}██║  ██║███████╗ ╚████╔╝  ╚████╔╝ ${_R}\n"
+printf "  ${_CYAN}${_B}╚═╝  ╚═╝╚══════╝  ╚═══╝    ╚═══╝  ${_R}\n"
+printf "\n"
 if [[ "$MODE" == "dev" ]]; then
-  printf '  ┌─────────────────────────────────────┐\n'
-  printf '  │       Revv — Developer Setup        │\n'
-  printf '  └─────────────────────────────────────┘\n'
+  printf "  ${_D}AI-powered code review${_R}  ${_B}dev setup${_R}\n"
 else
-  printf '  ┌─────────────────────────────────────┐\n'
-  printf '  │          Revv — Installer           │\n'
-  printf '  │       AI-Powered Code Review        │\n'
-  printf '  └─────────────────────────────────────┘\n'
+  printf "  ${_D}AI-powered code review${_R}  ${_B}installer${_R}\n"
 fi
-printf '%s\n' "$_RESET"
+printf "\n"
+printf "  ${_D}"
+printf '─%.0s' {1..54}
+printf "${_R}\n\n"
 
 # ── Locate the checkout, cloning if necessary ─────────────────
 #

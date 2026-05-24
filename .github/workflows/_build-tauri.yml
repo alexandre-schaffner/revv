@@ -1,0 +1,116 @@
+name: Build Tauri (reusable)
+
+# Shared cross-platform Tauri build matrix. Invoked by:
+#   - release.yml     (per-version stable releases, prerelease=false)
+#   - nightly.yml     (moving `nightly` tag, prerelease=true)
+#
+# Inputs are intentionally minimal — the matrix, build steps, and attestation
+# logic are identical across both pipelines; only the release metadata differs.
+
+on:
+  workflow_call:
+    inputs:
+      tag_name:
+        description: "Git tag to upload artifacts under (e.g. v1.2.3 or nightly)"
+        required: true
+        type: string
+      release_name:
+        description: "Human-readable release title"
+        required: true
+        type: string
+      release_body:
+        description: "Release notes body"
+        required: false
+        type: string
+        default: "See assets below for platform-specific downloads."
+      prerelease:
+        description: "Mark the release as prerelease (true for nightly)"
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    name: Build (${{ matrix.label }})
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: macOS (Apple Silicon)
+            platform: macos-latest
+            args: "--target aarch64-apple-darwin"
+            rust-targets: "aarch64-apple-darwin,x86_64-apple-darwin"
+          - label: macOS (Intel)
+            platform: macos-latest
+            args: "--target x86_64-apple-darwin"
+            rust-targets: "aarch64-apple-darwin,x86_64-apple-darwin"
+          - label: Linux
+            platform: ubuntu-22.04
+            args: ""
+            rust-targets: ""
+          - label: Windows
+            platform: windows-latest
+            args: ""
+            rust-targets: ""
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag_name }}
+
+      - name: Install system dependencies (Linux)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "apps/desktop/src-tauri -> target"
+
+      - run: bun install --frozen-lockfile
+
+      - name: Build frontend & server
+        run: bun run build
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Uncomment when updater signing is configured:
+          # TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          # TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: ./apps/desktop
+          tauriScript: bunx tauri
+          tagName: ${{ inputs.tag_name }}
+          releaseName: ${{ inputs.release_name }}
+          releaseBody: ${{ inputs.release_body }}
+          releaseDraft: false
+          prerelease: ${{ inputs.prerelease }}
+          updaterJsonPreferNsis: true
+          args: ${{ matrix.args }}
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            apps/desktop/src-tauri/target/**/bundle/**/*.dmg
+            apps/desktop/src-tauri/target/**/bundle/**/*.msi
+            apps/desktop/src-tauri/target/**/bundle/**/*.deb
+            apps/desktop/src-tauri/target/**/bundle/**/*.AppImage
