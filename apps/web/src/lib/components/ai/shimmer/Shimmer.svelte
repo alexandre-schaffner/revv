@@ -10,6 +10,7 @@ export type ShimmerProps = HTMLAttributes<HTMLElement> & {
 </script>
 
 <script lang="ts">
+	import { tokens } from "$lib/motion";
 	import { cn } from "$lib/utils.js";
 
 	let {
@@ -20,7 +21,7 @@ export type ShimmerProps = HTMLAttributes<HTMLElement> & {
 		...restProps
 	}: ShimmerProps = $props();
 
-	const swap = 220;
+	const swap = tokens.smooth * 1000;
 
 	// Delayed deactivation: keep the shimmer running for one last sweep cycle
 	// before removing the animation, so deactivation feels smooth.

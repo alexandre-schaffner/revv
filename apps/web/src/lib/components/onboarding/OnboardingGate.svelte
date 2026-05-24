@@ -1,6 +1,6 @@
 <script lang="ts">
 import type { Snippet } from "svelte";
-import { fade } from "svelte/transition";
+import { gsapFade, tokens } from "$lib/motion";
 import {
   getAccountJustRemoved,
   getForceOnboardingFlow,
@@ -73,13 +73,13 @@ function handleNewAccount() {
 
 {#if ready}
 	{#if showApp}
-		<div class="root" in:fade={{ duration: 320 }}>
+		<div class="root" in:gsapFade={{ duration: tokens.slow }}>
 			{@render children()}
 		</div>
 	{:else if showPicker && !pickerDismissed}
 		<AccountPicker onNewAccount={handleNewAccount} />
 	{:else}
-		<div out:fade={{ duration: 220 }}>
+		<div out:gsapFade={{ duration: tokens.smooth }}>
 			<OnboardingFlow onFinish={handleFinish} />
 		</div>
 	{/if}

@@ -203,7 +203,7 @@ async function onGenerate(): Promise<void> {
 
 		{#if genActionState}
 			<div class="actions-float" style={actionsFloatStyle}>
-				<div class="actions-row">
+				<div class="actions-row" role="toolbar" aria-label="Recap actions">
 					{#if recapUiKind === "outdated"}
 						<GlassPill
 							variant="accent"
@@ -212,7 +212,7 @@ async function onGenerate(): Promise<void> {
 							title="Write a brand-new recap for {currentPeriodLabel} {periodLabelLower} window. The recap below stays as-is."
 						>
 							{#if generating}
-								<Loader2 size={14} weight="regular" class="animate-spin" aria-hidden="true" />
+								<Loader2 size={14} weight="regular" class="motion-essential-spin" aria-hidden="true" />
 							{:else}
 								<Sparkles size={16} weight="fill" aria-hidden="true" />
 							{/if}

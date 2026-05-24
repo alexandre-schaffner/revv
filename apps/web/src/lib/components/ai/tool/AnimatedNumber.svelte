@@ -56,6 +56,9 @@ const width = $derived(`${digits.length}ch`);
     flex-direction: row-reverse;
     justify-content: flex-end;
     line-height: inherit;
+    /* Width transition is deliberate: digit-count changes (9 → 10) need to
+       allocate one more tabular-nums column. Width is the only honest target
+       for this since tabular-nums already gives constant per-digit width. */
     transition: width var(--duration-smooth) var(--ease-out-expo);
   }
 </style>

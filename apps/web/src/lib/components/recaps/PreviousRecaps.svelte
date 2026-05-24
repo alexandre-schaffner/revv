@@ -85,7 +85,7 @@ function navigate(recapId: string): void {
 						<span class="period-window">{formatPeriod(recap)}</span>
 						{#if recap.status === "generating"}
 							<Badge variant="secondary">
-								<Loader2 class="animate-spin" />
+								<Loader2 class="motion-essential-spin" />
 								generating
 							</Badge>
 						{:else if recap.status === "error"}

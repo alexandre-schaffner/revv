@@ -4,7 +4,7 @@ import Check from "phosphor-svelte/lib/Check";
 import Clock from "phosphor-svelte/lib/Clock";
 import Loader2 from "phosphor-svelte/lib/Spinner";
 import AlertCircle from "phosphor-svelte/lib/WarningCircle";
-import { fade } from "svelte/transition";
+import { gsapFade } from "$lib/motion";
 
 let {
   status,
@@ -49,7 +49,7 @@ let tooltip = $derived.by(() => {
     case "ready":
       return showSuccess ? "Clone complete" : "";
     case "error":
-      return error && error.length > 0 ? error : "Clone failed — click to retry";
+      return error && error.length > 0 ? error : "Clone failed. Click to retry.";
   }
 });
 
@@ -132,7 +132,7 @@ function handleRetryKey(e: KeyboardEvent) {
 		class="inline-flex items-center gap-1 text-success"
 		title={tooltip}
 		aria-label={tooltip}
-		transition:fade
+		transition:gsapFade
 	>
 		<Check {size} />
 		{#if showLabel}

@@ -1,5 +1,6 @@
 <script lang="ts">
 import type { Snippet } from "svelte";
+import { gsap, prefersReducedMotion, tokens } from "$lib/motion";
 
 export type TabConfig = { id: string; label: string; shortcut?: string };
 
@@ -14,10 +15,9 @@ interface Props {
 let { tabs, activeTab, onTabChange, trailing, cmdHeld = false }: Props = $props();
 
 let pillEl: HTMLDivElement | null = $state(null);
+let indicatorEl: HTMLSpanElement | null = $state(null);
 let segmentEls = $state<(HTMLButtonElement | null)[]>([]);
 let hoveredIndex = $state<number | null>(null);
-let indicatorLeft = $state(0);
-let indicatorWidth = $state(0);
 let hasMeasured = $state(false);
 
 $effect(() => {
@@ -27,25 +27,38 @@ $effect(() => {
   }
 });
 
+// Indicator position is driven imperatively via GSAP rather than via reactive
+// inline styles + a CSS `transition:`. The first measure jumps (gsap.set),
+// subsequent measures tween — keeps GSAP as the single source of truth for
+// timing across rapid tab switches (overwrite:auto cancels in-flight tweens).
 $effect(() => {
   const activeIndex = tabs.findIndex((t) => t.id === activeTab);
   const index = hoveredIndex ?? activeIndex;
   const el = segmentEls[index];
-  if (!el) return;
+  if (!el || !indicatorEl) return;
 
   const measure = () => {
     const seg = el;
-    if (!pillEl || !seg) return;
+    if (!pillEl || !seg || !indicatorEl) return;
     const pillRect = pillEl.getBoundingClientRect();
     const segRect = seg.getBoundingClientRect();
     const borderLeft = parseFloat(getComputedStyle(pillEl).borderLeftWidth) || 0;
     const rawLeft = segRect.left - pillRect.left - borderLeft;
-    const rawRight = rawLeft + segRect.width;
-    const snappedLeft = Math.round(rawLeft);
-    const snappedRight = Math.round(rawRight);
-    indicatorLeft = snappedLeft;
-    indicatorWidth = snappedRight - snappedLeft;
-    hasMeasured = true;
+    const left = Math.round(rawLeft);
+    const width = Math.round(segRect.width);
+
+    if (!hasMeasured || prefersReducedMotion()) {
+      gsap.set(indicatorEl, { x: left, width, autoAlpha: 1 });
+      hasMeasured = true;
+    } else {
+      gsap.to(indicatorEl, {
+        x: left,
+        width,
+        duration: tokens.smooth,
+        ease: tokens.easeOutExpo,
+        overwrite: "auto",
+      });
+    }
   };
 
   measure();
@@ -63,14 +76,37 @@ function isDividerHidden(index: number): boolean {
   const highlighted = hoveredIndex ?? activeIndex;
   return index === highlighted || index + 1 === highlighted;
 }
+
+// Cmd-hold shortcut hint reveal. Animates the ⌘N labels next to each tab
+// label when the user holds Cmd. Reveal/hide are simultaneous across all
+// segments and symmetric in easing: a modifier-key hint should feel like
+// instant feedback, not a ripple. Width is animated to a fixed 22px (not
+// `auto`) so GSAP doesn't have to force a layout measurement before tweening.
+$effect(() => {
+  if (!pillEl) return;
+  const hints = pillEl.querySelectorAll<HTMLElement>(".seg-shortcut");
+  if (hints.length === 0) return;
+  const target = cmdHeld
+    ? { opacity: 0.55, width: 22, marginRight: 5 }
+    : { opacity: 0, width: 0, marginRight: 0 };
+  if (prefersReducedMotion()) {
+    gsap.set(hints, target);
+    return;
+  }
+  gsap.to(hints, {
+    ...target,
+    duration: tokens.snap,
+    ease: tokens.easeSoft,
+    overwrite: "auto",
+  });
+});
 </script>
 
 <div class="tabs-wrapper">
 	<div class="pill" bind:this={pillEl}>
 		<span
 			class="pill-indicator"
-			class:pill-indicator--ready={hasMeasured}
-			style="transform: translateX({indicatorLeft}px); width: {indicatorWidth}px;"
+			bind:this={indicatorEl}
 			aria-hidden="true"
 		></span>
 		{#each tabs as tab, i (tab.id)}
@@ -84,7 +120,7 @@ function isDividerHidden(index: number): boolean {
 				onpointerleave={() => {
 					if (hoveredIndex === i) hoveredIndex = null;
 				}}
->{#if tab.shortcut}<span class="seg-shortcut" class:seg-shortcut--visible={cmdHeld}>⌘{tab.shortcut}</span>{/if}<span class="seg-label">{tab.label}</span></button>
+>{#if tab.shortcut}<span class="seg-shortcut">⌘{tab.shortcut}</span>{/if}<span class="seg-label">{tab.label}</span></button>
 			{#if i < tabs.length - 1}
 				<span
 					class="pill-divider"
@@ -123,8 +159,8 @@ function isDividerHidden(index: number): boolean {
 		display: flex;
 		align-items: center;
 		background: var(--color-tab-track-bg);
-		backdrop-filter: blur(16px) saturate(1.4);
-		-webkit-backdrop-filter: blur(16px) saturate(1.4);
+		backdrop-filter: blur(10px) saturate(1.4);
+		-webkit-backdrop-filter: blur(10px) saturate(1.4);
 		border: 1px solid var(--color-glass-border);
 		border-radius: 9999px;
 		padding: 3px;
@@ -151,13 +187,13 @@ function isDividerHidden(index: number): boolean {
 		background: transparent;
 		border: none;
 		cursor: pointer;
-		transition:
-			color var(--duration-snap),
-			background-color var(--duration-snap),
-			box-shadow var(--duration-snap);
 		user-select: none;
 		white-space: nowrap;
 		-webkit-font-smoothing: antialiased;
+		/* Color crossfade between inactive / hovered / active states is a paint
+		   property, not a motion concern. It stays as CSS — GSAP would just be
+		   tweening color values, costing more than the benefit. */
+		transition: color var(--duration-snap) var(--ease-soft);
 	}
 
 	.pill-segment--hovered:not(.pill-segment--active) {
@@ -168,6 +204,10 @@ function isDividerHidden(index: number): boolean {
 		color: var(--color-text-primary);
 	}
 
+	/* The indicator's position, width, and opacity are driven by GSAP from the
+	   measurement $effect above — not by CSS. autoAlpha starts at 0 until the
+	   first measure runs, which keeps the indicator invisible during the
+	   pre-measure flash. */
 	.pill-indicator {
 		position: absolute;
 		top: 3px;
@@ -181,15 +221,8 @@ function isDividerHidden(index: number): boolean {
 		pointer-events: none;
 		z-index: 0;
 		opacity: 0;
+		visibility: hidden;
 		will-change: transform, width;
-	}
-
-	.pill-indicator--ready {
-		opacity: 1;
-		transition:
-			transform var(--duration-smooth) var(--ease-out-expo),
-			width var(--duration-smooth) var(--ease-out-expo),
-			opacity var(--duration-snap);
 	}
 
 	.pill-divider {
@@ -206,6 +239,10 @@ function isDividerHidden(index: number): boolean {
 		opacity: 0;
 	}
 
+	/* Reveal opacity, width, and margin are driven by GSAP from the cmdHeld
+	   $effect above. CSS only sets the rest state and the inherited type props.
+	   No `visibility: hidden` — that adds a frame of opacity → visibility
+	   sequencing that makes the modifier-key reveal feel laggy. */
 	.seg-shortcut {
 		display: inline-block;
 		font-size: 11px;
@@ -213,23 +250,8 @@ function isDividerHidden(index: number): boolean {
 		font-variant-numeric: tabular-nums;
 		color: var(--color-tab-inactive-text);
 		opacity: 0;
-		max-width: 0;
+		width: 0;
 		overflow: hidden;
-		transition:
-			opacity var(--duration-snap),
-			max-width var(--duration-snap),
-			margin-left var(--duration-snap);
-	}
-
-	.seg-shortcut--visible {
-		opacity: 0.45;
-		max-width: 22px;
-		margin-right: 5px;
-	}
-
-	@media (prefers-reduced-motion: reduce) {
-		.pill-indicator--ready {
-			transition-duration: 0ms;
-		}
+		pointer-events: none;
 	}
 </style>

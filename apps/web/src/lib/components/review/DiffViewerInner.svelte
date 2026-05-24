@@ -688,8 +688,9 @@ export interface ThreadMeta {
 		margin-left: 4px;
 		vertical-align: middle;
 		background: var(--color-glass-bg);
-		backdrop-filter: blur(16px) saturate(1.4);
-		-webkit-backdrop-filter: blur(16px) saturate(1.4);
+		/* Standing chrome: 10px blur, not 16px. */
+		backdrop-filter: blur(10px) saturate(1.4);
+		-webkit-backdrop-filter: blur(10px) saturate(1.4);
 		border: 1px solid var(--color-glass-border);
 		box-shadow:
 			var(--color-glass-shadow),
@@ -720,6 +721,12 @@ export interface ThreadMeta {
 
 	:global([data-view-btn='active']:hover) {
 		background-color: var(--color-glass-active-bg);
+	}
+
+	/* inset box-shadow avoids clipping by the pill's overflow:hidden */
+	:global([data-view-btn]:focus-visible) {
+		box-shadow: inset 0 0 0 2px var(--color-accent);
+		outline: none;
 	}
 
 	:global([data-view-sep]) {

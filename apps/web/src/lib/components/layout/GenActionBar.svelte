@@ -5,6 +5,7 @@ import Play from "phosphor-svelte/lib/Play";
 import Sparkle from "phosphor-svelte/lib/Sparkle";
 import StopCircle from "phosphor-svelte/lib/StopCircle";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
+import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
 
 /** Normalised lifecycle state for any generation pipeline
  *  (walkthrough, recap, etc.). */
@@ -47,77 +48,102 @@ const destructiveTitle = $derived(
 );
 </script>
 
-{#if uiState.kind === "empty"}
-  <GlassPill
-    disabled={destructiveDisabled}
-    title={destructiveTitle ?? "Generate walkthrough"}
-    onclick={onGenerate ?? onRegenerate}
+<!--
+  Keyed wrapper: when `uiState.kind` flips (e.g. empty → streaming), Svelte
+  destroys the old branch and mounts the new one. The fade-up / fade-out pair
+  smooths the lifecycle transition so Generate → Stop → Regenerate doesn't
+  pop in one frame.
+-->
+{#key uiState.kind}
+  <span
+    class="gen-branch"
+    in:gsapFadeY={{ duration: tokens.snap, y: 2 }}
+    out:gsapFade={{ duration: tokens.instant }}
   >
-    <Sparkle size={16} weight="fill" />
-    {uiState.label ?? "Generate walkthrough"}
-  </GlassPill>
-{:else if uiState.kind === "streaming"}
-  <GlassPill
-    variant="danger"
-    onclick={onStop}
-    disabled={pendingAction === "stop"}
-    title={pendingAction === "stop" ? "Stopping…" : "Stop generation"}
-  >
-    <StopCircle size={16} weight="fill" />
-    {pendingAction === "stop" ? "Stopping…" : "Stop generation"}
-  </GlassPill>
-{:else if uiState.kind === "resumable"}
-  <GlassPill
-    disabled={destructiveDisabled}
-    title={destructiveTitle ?? "Resume generation from where it stopped"}
-    onclick={onResume}
-    aria-label="Resume generation"
-  >
-    <Play size={16} weight="fill" fill="currentColor" />
-    Resume
-  </GlassPill>
-  <GlassPill
-    disabled={destructiveDisabled}
-    title={destructiveTitle ?? "Generate a fresh version (the current draft will be replaced)"}
-    onclick={onRegenerate}
-  >
-    <RefreshCw size={16} weight="fill" />
-    Regenerate
-  </GlassPill>
-{:else if uiState.kind === "error"}
-  <GlassPill
-    disabled={destructiveDisabled}
-    title={destructiveTitle ?? "Retry generation after error"}
-    onclick={onResume}
-    aria-label="Retry generation"
-  >
-    <RotateCcw size={16} weight="fill" />
-    Retry
-  </GlassPill>
-  <GlassPill
-    disabled={destructiveDisabled}
-    title={destructiveTitle ?? "Generate a fresh version (the current draft will be replaced)"}
-    onclick={onRegenerate}
-  >
-    <RefreshCw size={16} weight="fill" />
-    Regenerate
-  </GlassPill>
-{:else if uiState.kind === "complete"}
-  <GlassPill
-    disabled={destructiveDisabled}
-    title={destructiveTitle ?? "Generate a fresh version"}
-    onclick={onRegenerate}
-  >
-    <RefreshCw size={16} weight="fill" />
-    Regenerate
-  </GlassPill>
-{:else if uiState.kind === "stale"}
-  <GlassPill
-    disabled={destructiveDisabled}
-    title={destructiveTitle ?? "Regenerate for the latest version"}
-    onclick={onRegenerate}
-  >
-    <RefreshCw size={16} weight="fill" />
-    {uiState.label ?? "Regenerate for latest"}
-  </GlassPill>
-{/if}
+    {#if uiState.kind === "empty"}
+      <GlassPill
+        disabled={destructiveDisabled}
+        title={destructiveTitle ?? "Generate walkthrough"}
+        onclick={onGenerate ?? onRegenerate}
+      >
+        <Sparkle size={16} weight="fill" />
+        {uiState.label ?? "Generate walkthrough"}
+      </GlassPill>
+    {:else if uiState.kind === "streaming"}
+      <GlassPill
+        variant="danger"
+        onclick={onStop}
+        disabled={pendingAction === "stop"}
+        title={pendingAction === "stop" ? "Stopping…" : "Stop generation"}
+      >
+        <StopCircle size={16} weight="fill" />
+        {pendingAction === "stop" ? "Stopping…" : "Stop generation"}
+      </GlassPill>
+    {:else if uiState.kind === "resumable"}
+      <GlassPill
+        disabled={destructiveDisabled}
+        title={destructiveTitle ?? "Resume generation from where it stopped"}
+        onclick={onResume}
+        aria-label="Resume generation"
+      >
+        <Play size={16} weight="fill" fill="currentColor" />
+        Resume
+      </GlassPill>
+      <GlassPill
+        disabled={destructiveDisabled}
+        title={destructiveTitle ?? "Generate a fresh version (the current draft will be replaced)"}
+        onclick={onRegenerate}
+      >
+        <RefreshCw size={16} weight="fill" />
+        Regenerate
+      </GlassPill>
+    {:else if uiState.kind === "error"}
+      <GlassPill
+        disabled={destructiveDisabled}
+        title={destructiveTitle ?? "Retry generation after error"}
+        onclick={onResume}
+        aria-label="Retry generation"
+      >
+        <RotateCcw size={16} weight="fill" />
+        Retry
+      </GlassPill>
+      <GlassPill
+        disabled={destructiveDisabled}
+        title={destructiveTitle ?? "Generate a fresh version (the current draft will be replaced)"}
+        onclick={onRegenerate}
+      >
+        <RefreshCw size={16} weight="fill" />
+        Regenerate
+      </GlassPill>
+    {:else if uiState.kind === "complete"}
+      <GlassPill
+        disabled={destructiveDisabled}
+        title={destructiveTitle ?? "Generate a fresh version"}
+        onclick={onRegenerate}
+      >
+        <RefreshCw size={16} weight="fill" />
+        Regenerate
+      </GlassPill>
+    {:else if uiState.kind === "stale"}
+      <GlassPill
+        disabled={destructiveDisabled}
+        title={destructiveTitle ?? "Regenerate for the latest version"}
+        onclick={onRegenerate}
+      >
+        <RefreshCw size={16} weight="fill" />
+        {uiState.label ?? "Regenerate for latest"}
+      </GlassPill>
+    {/if}
+  </span>
+{/key}
+
+<style>
+  /* `inline-flex` so the wrapper participates in the parent's flex gap;
+     `gap` here matches `.actions-row` so multi-pill branches (resumable,
+     error) keep their inner rhythm. */
+  .gen-branch {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-island);
+  }
+</style>

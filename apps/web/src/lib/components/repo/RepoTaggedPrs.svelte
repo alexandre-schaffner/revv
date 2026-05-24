@@ -51,13 +51,13 @@ function handleClick(prId: string) {
 
 	{#if loading && prs.length === 0}
 		<div class="tagged-loading">
-			<Loader2 size={16} weight="regular" class="animate-spin" aria-hidden="true" />
+			<Loader2 size={16} weight="regular" class="motion-essential-spin" aria-hidden="true" />
 			<span>Loading…</span>
 		</div>
 	{:else if prs.length === 0}
 		<div class="tagged-empty">
 			<User size={16} weight="regular" aria-hidden="true" />
-			<p>No pull requests need your attention — you're all caught up!</p>
+			<p>No pull requests need your attention.</p>
 		</div>
 	{:else}
 		<ul class="tagged-list">

@@ -3,6 +3,7 @@ import { page } from "$app/state";
 import SettingsModal from "$lib/components/settings/SettingsModal.svelte";
 import UserMenu from "$lib/components/sidebar/UserMenu.svelte";
 import { RAIL_WIDTH } from "$lib/constants";
+import { gsap, gsapFade, prefersReducedMotion, tokens } from "$lib/motion";
 import { getSelectedPr } from "$lib/stores/prs.svelte";
 import {
   getActiveTab,
@@ -111,13 +112,50 @@ $effect(() => {
   }
 });
 
-// Inline style for the grid — drives the dynamic sidebar AND right-panel
-// column widths. The right pane is a real grid column whose width
-// collapses to 0 when closed; opening it shrinks the main column rather
-// than overlaying on top of it. Animation comes from the
-// grid-template-columns transition on .app-shell.
+// Right-panel slide + main-area vignette. Grid-track interpolation stays
+// on a CSS transition; JS-driving it forces a Svelte reactivity flush per
+// frame (de65e4c9). Snap on first paint and during a live drag.
+let panelEl = $state<HTMLElement | null>(null);
+let mainEl = $state<HTMLElement | null>(null);
+let panelSlide: gsap.QuickToFunc | null = null;
+let vignetteSetter: gsap.QuickToFunc | null = null;
+const vignetteProxy = { v: 0 };
+let firstChoreography = true;
+
+$effect(() => {
+  const open = rightPanelOpen;
+  const width = rightPanelWidth;
+  const resizing = isResizingRight;
+  if (!panelEl || !mainEl) return;
+
+  const targetX = open ? 0 : width;
+  const targetV = open ? 0.65 : 0;
+
+  if (firstChoreography || resizing || prefersReducedMotion()) {
+    gsap.set(panelEl, { x: targetX });
+    mainEl.style.setProperty("--vignette-opacity", String(targetV));
+    firstChoreography = false;
+    return;
+  }
+
+  const ease = `cubic-bezier(${tokens.easeOutExpo})`;
+  if (!panelSlide) {
+    panelSlide = gsap.quickTo(panelEl, "x", { duration: tokens.smooth, ease });
+  }
+  if (!vignetteSetter) {
+    const el = mainEl;
+    vignetteSetter = gsap.quickTo(vignetteProxy, "v", {
+      duration: tokens.smooth,
+      ease,
+      onUpdate: () => el.style.setProperty("--vignette-opacity", String(vignetteProxy.v)),
+    });
+  }
+  panelSlide(targetX);
+  vignetteSetter(targetV);
+});
+
 const gridStyle = $derived(
-  `grid-template-columns: ${RAIL_WIDTH}px ${sidebarEffectiveCollapsed ? "0" : `${sidebarWidth}px`} 1fr ${rightPanelOpen ? `${rightPanelWidth}px` : "0"}; --right-panel-width: ${rightPanelWidth}px`,
+  `grid-template-columns: ${RAIL_WIDTH}px ${sidebarEffectiveCollapsed ? 0 : sidebarWidth}px 1fr ${rightPanelOpen ? rightPanelWidth : 0}px; --right-panel-width: ${rightPanelWidth}px`,
 );
 
 function onHandlePointerDown(event: PointerEvent): void {
@@ -216,7 +254,7 @@ function onRightHandleDblClick(): void {
 		/>
 	</header>
 
-	<main class="main-area">
+	<main class="main-area" bind:this={mainEl}>
 		{#if pr && isReviewRoute && !isSettingsRoute}
 			<div class="main-tab-bar">
 				<FloatingTabs
@@ -230,7 +268,18 @@ function onRightHandleDblClick(): void {
 			</div>
 		{/if}
 		<div class="main-content">
-			{@render children()}
+			<!--
+				Keyed inner wrapper: re-mounts on every navigation so a Svelte
+				transition fires cleanly without touching the persistent
+				.main-content (which would briefly hide every fixed chrome child
+				underneath). Tagged data-page-root so page-transitions.ts can find
+				it for Flip morphs; the default crossfade is the transition below.
+			-->
+			{#key page.url.pathname}
+				<div class="page-slot" data-page-root in:gsapFade={{ duration: tokens.quick }}>
+					{@render children()}
+				</div>
+			{/key}
 		</div>
 
 		{#if showFloatingActions && pr}
@@ -251,6 +300,7 @@ function onRightHandleDblClick(): void {
 	</footer>
 
 	<aside
+		bind:this={panelEl}
 		class="rightpanel-area"
 		class:rightpanel-area--open={rightPanelOpen}
 		aria-hidden={!rightPanelOpen}
@@ -272,7 +322,13 @@ function onRightHandleDblClick(): void {
 	</aside>
 </div>
 
-<CommandPalette open={paletteOpen} mode={paletteMode} onClose={closePalette} />
+<CommandPalette
+	open={paletteOpen}
+	mode={paletteMode}
+	onOpenChange={(v) => {
+		if (!v) closePalette();
+	}}
+/>
 <SettingsModal open={getSettingsOpen()} onClose={closeSettings} />
 
 <style>
@@ -289,20 +345,16 @@ function onRightHandleDblClick(): void {
 		/* Positioning context for the absolutely-positioned right pane. */
 		position: relative;
 		background-color: var(--color-bg-secondary);
-	transition:
-		grid-template-columns var(--duration-smooth) var(--ease-out-expo),
-		grid-template-rows var(--duration-smooth) var(--ease-out-expo);
+		/* Browser-driven track interpolation. Cheaper than animating the
+		   grid-template-columns string from JS — Svelte reactivity + style
+		   diffing on every frame causes visible lag. */
+		transition: grid-template-columns var(--duration-smooth) var(--ease-out-expo);
 	}
 
-	/* Suppress the column transition while dragging so resize feels instant */
-	.app-shell.is-resizing {
-		transition: none;
-	}
-
-	/* Large file trees are already virtualized, but animating the grid column
-	   still forces layout through the tree's shadow DOM every frame. Snap the
-	   outer layout in that case; the inner sidebar drawer keeps its transform
-	   transition for normal view switches. */
+	/* Snap (no tween) during a live drag, and when the sidebar is showing a
+	   large virtualized tree where animating the column would relayout it
+	   on every frame. */
+	.app-shell.is-resizing,
 	.app-shell.snap-sidebar-layout {
 		transition: none;
 	}
@@ -397,8 +449,9 @@ function onRightHandleDblClick(): void {
 	}
 
 	/* Right-edge vignette that fades in when the panel opens, softening the
-	   hard clip as the main area loses width to the panel. GPU-composited
-	   (opacity only), so it doesn't affect layout or cause reflow. */
+	   hard clip as the main area loses width to the panel. Opacity is driven
+	   by GSAP through `--vignette-opacity` (see panel-choreography.ts) so
+	   the slide + fade share a single tween and stay in sync. */
 	.main-area::after {
 		content: '';
 		position: absolute;
@@ -407,14 +460,9 @@ function onRightHandleDblClick(): void {
 		bottom: 0;
 		width: calc(var(--spacing-island) * 4);
 		background: linear-gradient(to right, transparent, var(--color-bg-primary));
-		opacity: 0;
+		opacity: var(--vignette-opacity, 0);
 		pointer-events: none;
 		z-index: 2;
-		transition: opacity var(--duration-smooth) var(--ease-out-expo);
-	}
-
-	.rightpanel-open .main-area::after {
-		opacity: 0.65;
 	}
 
 	/* Tabs float over content — no background, no flex space reservation.
@@ -441,6 +489,15 @@ function onRightHandleDblClick(): void {
 		flex: 1;
 		min-height: 0;
 		overflow: hidden;
+		display: flex;
+	}
+
+	.page-slot {
+		flex: 1;
+		min-height: 0;
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
 	}
 
 	:global(:root.dark) .main-area {
@@ -503,14 +560,17 @@ function onRightHandleDblClick(): void {
 		/* min-width: 0 lets the grid track shrink to 0 even though the
 		   border-box would otherwise contribute its own min-content. */
 		min-width: 0;
-		/* Slide in/out from the right rather than growing in place. The
-		   translateX is keyed to --right-panel-width so it always moves
-		   the full panel width regardless of the current grid column value. */
+		/* First-paint transform for the closed state. The GSAP choreography
+		   (panel-choreography.ts) takes over once the first effect runs,
+		   writing the transform inline (which beats this rule on
+		   specificity). Keeping the static CSS means an open-on-reload
+		   panel renders at its correct resting position without a
+		   one-frame flash before JS attaches. */
+		transform: translateX(var(--right-panel-width));
+	}
+
+	.rightpanel-area.rightpanel-area--open {
 		transform: translateX(0);
-		transition:
-			transform var(--duration-smooth) var(--ease-out-expo),
-			border-color var(--duration-smooth) var(--ease-out-expo),
-			box-shadow var(--duration-smooth) var(--ease-out-expo);
 	}
 
 	:global(:root.dark) .rightpanel-area {
@@ -518,16 +578,6 @@ function onRightHandleDblClick(): void {
 			inset 0 1px 0 0 color-mix(in srgb, white 4%, transparent),
 			0 1px 2px -1px color-mix(in srgb, black 40%, transparent),
 			0 8px 24px -12px color-mix(in srgb, black 50%, transparent);
-	}
-
-	/* When closed: slide the panel off to the right so it enters/exits
-	   from outside the viewport rather than growing in place. The
-	   --right-panel-width CSS var (set via inline style on .app-shell)
-	   provides the fixed pixel offset regardless of column width. */
-	.rightpanel-area:not(.rightpanel-area--open) {
-		transform: translateX(var(--right-panel-width));
-		border-color: transparent;
-		box-shadow: none;
 	}
 
 	/* Left-edge resize handle — mirrors `.resize-handle` on the sidebar but

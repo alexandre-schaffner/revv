@@ -103,7 +103,7 @@ function cycleTheme() {
 			aria-label="Sync pull requests"
 			title="Sync pull requests"
 		>
-			<RefreshCw size={14} weight="fill" class={isSyncing ? 'animate-spin' : ''} />
+			<RefreshCw size={14} weight="fill" class={isSyncing ? 'motion-essential-spin' : ''} />
 		</button>
 		<button
 			class="theme-btn"

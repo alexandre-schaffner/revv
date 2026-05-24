@@ -190,7 +190,9 @@ async function copyCode() {
 		color: var(--ob-error);
 		margin: 0;
 		padding: 10px 14px;
-		border-left: 2px solid var(--ob-error-border);
+		border: 1px solid var(--ob-error-border);
+		background: color-mix(in srgb, var(--ob-error) 6%, transparent);
+		border-radius: 6px;
 	}
 
 	.actions {
@@ -298,7 +300,9 @@ async function copyCode() {
 		letter-spacing: 0.12em;
 		text-transform: uppercase;
 		cursor: pointer;
-		transition: all var(--duration-snap) var(--ease-out-expo);
+		transition:
+			border-color var(--duration-snap) var(--ease-out-expo),
+			color var(--duration-snap) var(--ease-out-expo);
 	}
 
 	.copy-btn:hover {

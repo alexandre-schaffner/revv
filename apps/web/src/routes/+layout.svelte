@@ -7,6 +7,7 @@ import OnboardingGate from "$lib/components/onboarding/OnboardingGate.svelte";
 import ErrorBanner from "$lib/components/shared/ErrorBanner.svelte";
 import { Toaster } from "$lib/components/ui/sonner";
 import { TooltipProvider } from "$lib/components/ui/tooltip";
+import { initGsap } from "$lib/motion";
 import { startPolling, stopPolling } from "$lib/services/sync";
 import { getToken, getUser, loadUser } from "$lib/stores/auth.svelte";
 import {
@@ -107,6 +108,7 @@ $effect(() => {
 });
 
 $effect(() => {
+  initGsap();
   const cleanupTheme = initTheme();
   const cleanupShortcuts = initShortcuts();
 

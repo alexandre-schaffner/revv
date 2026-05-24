@@ -242,6 +242,7 @@ function formatCompletedAt(iso: string): string {
       </div>
     </div>
   {:else}
+
     <div class="grid">
       <RecapSidebar
         recap={liveRecap}
@@ -313,7 +314,7 @@ function formatCompletedAt(iso: string): string {
           <RecapBody recap={liveRecap} />
         {:else}
           <div class="body-callout">
-            <Loader2 size={16} weight="regular" class="animate-spin" aria-hidden="true" />
+            <Loader2 size={16} weight="regular" class="motion-essential-spin" aria-hidden="true" />
             <p>Preparing recap…</p>
           </div>
         {/if}
@@ -583,6 +584,15 @@ function formatCompletedAt(iso: string): string {
 .generating-footer :global(.thought-content),
 .generating-empty :global(.thought-content) {
   overflow: hidden;
+}
+
+.thought-markdown :global(blockquote) {
+  padding: 8px 12px;
+  margin: 0 0 12px;
+  border: 1px solid color-mix(in srgb, var(--color-accent) 30%, var(--color-border));
+  background: color-mix(in srgb, var(--color-accent) 5%, transparent);
+  border-radius: 6px;
+  color: var(--color-text-secondary);
 }
 
 .thought-stream {
