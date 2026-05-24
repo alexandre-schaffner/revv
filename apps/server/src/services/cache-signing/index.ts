@@ -3,8 +3,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { Context, Effect, Layer, Stream } from "effect";
-import { account, user } from "../../db/schema";
 import type { Db } from "../../db/index";
+import { account, user } from "../../db/schema";
 import {
   SshKeysFetchFailed,
   SshSignatureInvalid,
@@ -101,9 +101,7 @@ async function autoDetectKeyPath(
     return null;
   }
 
-  const candidates = files.filter(
-    (f) => SSH_KEY_PATTERNS.test(f) && files.includes(`${f}.pub`),
-  );
+  const candidates = files.filter((f) => SSH_KEY_PATTERNS.test(f) && files.includes(`${f}.pub`));
 
   let publishedKeys: string[];
   try {
@@ -148,11 +146,13 @@ export const SshSignerLive = Layer.effect(
     return SshSigner.of({
       sign: (message) =>
         Effect.gen(function* () {
-          const settings = yield* settingsSvc.getSettings().pipe(
-            Effect.mapError(
-              (e) => new SshSigningUnavailable({ message: `settings error: ${e.message}` }),
-            ),
-          );
+          const settings = yield* settingsSvc
+            .getSettings()
+            .pipe(
+              Effect.mapError(
+                (e) => new SshSigningUnavailable({ message: `settings error: ${e.message}` }),
+              ),
+            );
 
           const acct = yield* Effect.try({
             try: () => findAccountWithLoginSync(db),

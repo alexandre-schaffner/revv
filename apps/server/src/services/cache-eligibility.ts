@@ -15,7 +15,6 @@
 import { eq } from "drizzle-orm";
 import { Context, Effect, Layer, Stream } from "effect";
 import { account, user } from "../db/schema";
-import type { Db } from "../db/index";
 import { debug } from "../logger";
 import { DbService } from "./Db";
 import { GitHubService } from "./GitHub";
@@ -29,7 +28,7 @@ interface CacheEntry {
 }
 
 const WRITE_TTL_MS = 15 * 60 * 1000; // 15 min for write/maintain/admin
-const READ_TTL_MS = 5 * 60 * 1000;   // 5 min for read/none (faster refresh on access grants)
+const READ_TTL_MS = 5 * 60 * 1000; // 5 min for read/none (faster refresh on access grants)
 
 function isEligible(perm: PermLevel): boolean {
   return perm === "write" || perm === "maintain" || perm === "admin";
@@ -94,9 +93,7 @@ export const CacheEligibilityLive = Layer.effect(
       return null;
     }
 
-    function getLocalAccountsForHost(
-      targetHost: string,
-    ): { login: string; token: string } | null {
+    function getLocalAccountsForHost(targetHost: string): { login: string; token: string } | null {
       const firstUser = db.select({ id: user.id }).from(user).limit(1).get();
       if (!firstUser) return null;
 
@@ -164,10 +161,7 @@ export const CacheEligibilityLive = Layer.effect(
         Effect.tap((perm) =>
           Effect.sync(() => {
             permCache.set(key, { permission: perm, fetchedAt: Date.now() });
-            debug(
-              "cache-eligibility",
-              `${login}@${host} has ${perm} on ${owner}/${repo}`,
-            );
+            debug("cache-eligibility", `${login}@${host} has ${perm} on ${owner}/${repo}`);
           }),
         ),
       );

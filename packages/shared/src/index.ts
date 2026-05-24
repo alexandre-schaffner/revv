@@ -1,6 +1,7 @@
 export type { Activity, ActivityKind } from "./activity";
 export { classifyTool, normalizeToolName } from "./activity";
 export type {
+  CacheSigningMode,
   GeneratedBy,
   GenerationProviderConfig,
   WalkthroughSnapshotBlock,
@@ -15,7 +16,6 @@ export {
   cacheObjectKey,
   cacheSigningMessage,
 } from "./cache";
-export type { CacheSigningMode } from "./cache";
 export type {
   ChatPlan,
   ChatQuestion,
