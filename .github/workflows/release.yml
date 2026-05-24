@@ -5,6 +5,15 @@ on:
     branches:
       - main
 
+# Top-level cap for the workflow's GITHUB_TOKEN. Must be ≥ the union of every
+# scope any job (including the reusable `_build-tauri.yml`) requests, otherwise
+# GitHub rejects the run at startup when the repo default is `read`.
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+  attestations: write
+
 jobs:
   # ── Quality gates (fast, single runner) ───────────────────────
   check:
@@ -53,7 +62,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
-          bootstrap-sha: d0b10912
+          bootstrap-sha: d0b1091216cd1ad9a7aff9ba3d2d59cbcc4e53c8
 
   # ── Cross-platform Tauri builds ───────────────────────────────
   # Shared matrix lives in `_build-tauri.yml` and is reused by `nightly.yml`.

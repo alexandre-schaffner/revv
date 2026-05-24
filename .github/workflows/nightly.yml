@@ -21,6 +21,14 @@ concurrency:
   group: nightly
   cancel-in-progress: true
 
+# Top-level cap for the workflow's GITHUB_TOKEN. Must be ≥ the union of every
+# scope any job (including the reusable `_build-tauri.yml`) requests, otherwise
+# GitHub rejects the run at startup when the repo default is `read`.
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
 jobs:
   # Same gates as the stable release workflow. If main is red, we don't
   # publish a nightly that would surface broken binaries to opt-in users.
