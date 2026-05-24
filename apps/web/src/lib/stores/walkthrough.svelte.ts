@@ -41,6 +41,17 @@ import { wtTrace } from "$lib/utils/wt-trace";
 
 // ── Entry shape ─────────────────────────────────────────────────────────────
 
+/**
+ * Chronologically ordered live-feed entry mixing model reasoning ("thought")
+ * with built-in exploration tool calls ("exploration"). Populated only during
+ * streaming so the client can render the "Reviewing…" feed with thoughts and
+ * tool calls interleaved in arrival order. Not persisted — rebuilt fresh on
+ * every stream.
+ */
+export type WalkthroughTimelineEntry =
+  | { kind: "thought"; id: string; text: string }
+  | { kind: "exploration"; id: string; activity: Activity };
+
 export interface WalkthroughEntry {
   semanticSteps: WalkthroughSemanticStep[];
   blocks: WalkthroughBlock[];
@@ -54,6 +65,16 @@ export interface WalkthroughEntry {
   doneReceived: boolean;
   superseded: boolean;
   explorationSteps: Activity[];
+  /**
+   * Streamed model reasoning text concatenated in arrival order. Drives the
+   * thoughts toggle UI alongside `timeline`. Ephemeral — not persisted.
+   */
+  thoughts: string;
+  /**
+   * Chronological mix of thoughts and exploration tool calls for the live
+   * "Reviewing…" feed. See `WalkthroughTimelineEntry`. Ephemeral.
+   */
+  timeline: WalkthroughTimelineEntry[];
   issues: WalkthroughIssue[];
   ratings: WalkthroughRating[];
   phase: WalkthroughLifecyclePhase;
@@ -122,6 +143,8 @@ export function freshEntry(): WalkthroughEntry {
     doneReceived: false,
     superseded: false,
     explorationSteps: [],
+    thoughts: "",
+    timeline: [],
     issues: [],
     ratings: [],
     phase: "connecting",
@@ -218,6 +241,12 @@ export function getStreamError(): string | null {
 }
 export function getExplorationSteps(): Activity[] {
   return _active?.explorationSteps ?? [];
+}
+export function getThoughts(): string {
+  return _active?.thoughts ?? "";
+}
+export function getTimeline(): WalkthroughTimelineEntry[] {
+  return _active?.timeline ?? [];
 }
 export function getIssues(): WalkthroughIssue[] {
   return _active?.issues ?? [];
@@ -399,9 +428,42 @@ export function applyEvents(prId: string, events: WalkthroughStreamEvent[]): voi
         case "usage":
           entry.tokenUsage = coerceTokenUsage(event.data.tokenUsage);
           break;
-        case "exploration":
+        case "exploration": {
           entry.explorationSteps = [...entry.explorationSteps, event.data];
+          entry.timeline = [
+            ...entry.timeline,
+            {
+              kind: "exploration",
+              id: `exp-${entry.timeline.length}`,
+              activity: event.data,
+            },
+          ];
           break;
+        }
+        case "thought": {
+          // Append to last thought-run instead of pushing a new entry per
+          // delta — the model emits hundreds of tiny deltas per burst, and
+          // we only want a new timeline entry when a tool call (or some
+          // other non-thought event) has broken the run.
+          const last = entry.timeline.at(-1);
+          if (last && last.kind === "thought") {
+            entry.timeline = [
+              ...entry.timeline.slice(0, -1),
+              { ...last, text: last.text + event.data.text },
+            ];
+          } else {
+            entry.timeline = [
+              ...entry.timeline,
+              {
+                kind: "thought",
+                id: `thought-${entry.timeline.length}`,
+                text: event.data.text,
+              },
+            ];
+          }
+          entry.thoughts = entry.thoughts + event.data.text;
+          break;
+        }
         case "issue": {
           const ii = entry.issues.findIndex((i) => i.id === event.data.id);
           if (ii >= 0) {

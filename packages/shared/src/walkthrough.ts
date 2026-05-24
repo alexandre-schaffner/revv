@@ -390,6 +390,13 @@ export type WalkthroughStreamEvent =
     }
   | { type: "in-progress"; data: { walkthroughId: string } }
   | { type: "thinking"; data: Record<string, never> }
+  /**
+   * Streamed model reasoning text. Mirrors the recap `thought` event and is
+   * separate from `thinking` (which is the empty stream-guard heartbeat).
+   * Forwarded from agent-side `reasoning-delta` events; not persisted to
+   * SQLite — only meaningful during live generation.
+   */
+  | { type: "thought"; data: { text: string } }
   // ── Lifecycle events (formerly carried as standalone WS envelopes) ───────
   //
   // After the SSE-unification refactor these are folded into the same event

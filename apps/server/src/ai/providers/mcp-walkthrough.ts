@@ -331,11 +331,17 @@ export function streamWalkthroughViaMCP(
         },
       });
 
-      // Walkthrough doesn't surface text/reasoning to the UI — content
-      // flows commit-first through MCP tool handlers. Tool calls drive
-      // either an `exploration` event (built-in tools) or a phase
-      // transition (MCP walkthrough tools).
+      // Walkthrough content flows commit-first through MCP tool handlers.
+      // We surface two ephemeral signals to the UI alongside that commit
+      // stream: `exploration` for built-in tool calls, and `thought` for
+      // streamed model reasoning text (so the client can interleave them
+      // chronologically in the live "Reviewing…" feed).
       const emit = (ev: NormalizedAgentEvent): void => {
+        if (ev.kind === "reasoning-delta") {
+          if (ev.data.length === 0) return;
+          push({ type: "thought", data: { text: ev.data } });
+          return;
+        }
         if (ev.kind !== "tool-call") return;
 
         if (ev.source === "builtin" && EXPLORATION_TOOLS.has(ev.toolName)) {
