@@ -4,6 +4,16 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+
+# Top-level cap for the workflow's GITHUB_TOKEN. Must be ≥ the union of every
+# scope any job (including the reusable `_build-tauri.yml`) requests, otherwise
+# GitHub rejects the run at startup when the repo default is `read`.
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+  attestations: write
 
 jobs:
   # ── Quality gates (fast, single runner) ───────────────────────
