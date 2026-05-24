@@ -192,166 +192,156 @@ function hideBrokenImg(e: Event): void {
      shadcn `Command.*` wrappers. Selectors mostly hit bits-ui's
      `data-command-*` attributes (stable across shadcn class drift); the
      input wrapper lives one level up in our own shadcn shell and uses
-     `data-slot` instead. `:global` is required because the dialog
-     content portals out of this component's scope. */
-  :global(.palette-shell) {
-    & [data-slot="command-input-wrapper"] {
-      margin: 0;
-      padding: 0 16px;
-      gap: 10px;
-      height: 44px;
-      border: none;
-      border-bottom: 1px solid var(--color-border-subtle);
-      border-radius: 0;
-      background: transparent;
+     `data-slot` instead. `:global` is required because the dialog content
+     portals out of this component's scope. Flat selectors on purpose:
+     Svelte's CSS compiler doesn't reliably pass native nesting through a
+     `:global()` block. */
+  :global(.palette-shell [data-slot="command-input-wrapper"]) {
+    margin: 0;
+    padding: 0 16px;
+    gap: 10px;
+    height: 44px;
+    border: none;
+    border-bottom: 1px solid var(--color-border-subtle);
+    border-radius: 0;
+    background: transparent;
+  }
+  :global(.palette-shell [data-slot="command-input-wrapper"] svg) {
+    width: 14px;
+    height: 14px;
+    opacity: 1;
+    color: var(--color-text-muted);
+  }
+  :global(.palette-shell [data-command-input]) {
+    height: 100%;
+    padding: 0;
+    font-size: 14px;
+  }
+  :global(.palette-shell [data-command-list]) {
+    padding: 4px 0;
+  }
+  :global(.palette-shell [data-command-group]) {
+    padding: 0;
+  }
+  :global(.palette-shell [data-command-group-heading]) {
+    padding: 6px 16px 2px;
+    margin-top: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--color-text-muted);
+    user-select: none;
+  }
+  :global(.palette-shell [data-command-item]) {
+    padding: 8px 16px;
+    border-radius: 0;
+    gap: 12px;
+    transition: background-color var(--duration-snap);
+  }
+  :global(.palette-shell [data-command-item][data-selected]),
+  :global(.palette-shell [data-command-item][aria-selected="true"]) {
+    background: var(--color-tree-active-bg);
+    color: var(--color-tree-active-text);
+  }
+  :global(.palette-shell [data-command-empty]) {
+    padding: 24px 16px;
+    font-size: 12px;
+    color: var(--color-text-muted);
+  }
 
-      & svg {
-        width: 14px;
-        height: 14px;
-        opacity: 1;
-        color: var(--color-text-muted);
-      }
-    }
+  /* Command rows: label left, kbd shortcut right. */
+  :global(.palette-shell .palette-cmd-item) {
+    align-items: center;
+    justify-content: space-between;
+  }
+  :global(.palette-shell .palette-cmd-item .cmd-label) {
+    font-size: 13px;
+    color: var(--color-text-secondary);
+  }
+  :global(.palette-shell .palette-cmd-item[data-selected] .cmd-label),
+  :global(.palette-shell .palette-cmd-item[aria-selected="true"] .cmd-label) {
+    color: var(--color-tree-active-text);
+  }
+  :global(.palette-shell .palette-cmd-item .cmd-shortcut) {
+    margin-inline-start: auto;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: var(--color-bg-tertiary);
+    border: 1px solid var(--color-border-subtle);
+    color: var(--color-text-muted);
+    flex-shrink: 0;
+  }
 
-    & [data-command-input] {
-      height: 100%;
-      padding: 0;
-      font-size: 14px;
-    }
-
-    & [data-command-list] {
-      padding: 4px 0;
-    }
-
-    & [data-command-group] {
-      padding: 0;
-    }
-    & [data-command-group-heading] {
-      padding: 6px 16px 2px;
-      margin-top: 4px;
-      font-size: 10px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-      color: var(--color-text-muted);
-      user-select: none;
-    }
-
-    & [data-command-item] {
-      padding: 8px 16px;
-      border-radius: 0;
-      gap: 12px;
-      transition: background-color var(--duration-snap);
-
-      &[data-selected],
-      &[aria-selected="true"] {
-        background: var(--color-tree-active-bg);
-        color: var(--color-tree-active-text);
-      }
-    }
-
-    & [data-command-empty] {
-      padding: 24px 16px;
-      font-size: 12px;
-      color: var(--color-text-muted);
-    }
-
-    /* Command rows: label left, kbd shortcut right. */
-    & .palette-cmd-item {
-      align-items: center;
-      justify-content: space-between;
-
-      & .cmd-label {
-        font-size: 13px;
-        color: var(--color-text-secondary);
-      }
-      &[data-selected] .cmd-label,
-      &[aria-selected="true"] .cmd-label {
-        color: var(--color-tree-active-text);
-      }
-      & .cmd-shortcut {
-        margin-inline-start: auto;
-        font-family: var(--font-mono);
-        font-size: 10px;
-        padding: 2px 6px;
-        border-radius: 4px;
-        background: var(--color-bg-tertiary);
-        border: 1px solid var(--color-border-subtle);
-        color: var(--color-text-muted);
-        flex-shrink: 0;
-      }
-    }
-
-    /* PR rows: avatar + title + meta on top, branch on bottom indented
-       past the avatar so it aligns under the title. */
-    & .palette-pr-item {
-      flex-direction: column;
-      align-items: stretch;
-      gap: 2px;
-
-      & .pr-row-top {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        width: 100%;
-        min-width: 0;
-      }
-      & .pr-avatar {
-        width: 16px;
-        height: 16px;
-        border-radius: 4px;
-        flex-shrink: 0;
-      }
-      & .pr-title {
-        font-size: 13px;
-        font-weight: 500;
-        color: var(--color-text-primary);
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        flex: 1;
-        min-width: 0;
-      }
-      &[data-selected] .pr-title,
-      &[aria-selected="true"] .pr-title {
-        color: var(--color-tree-active-text);
-      }
-      & .pr-status-badge {
-        font-size: 9px;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-        padding: 1px 5px;
-        border-radius: 4px;
-        background: var(--color-bg-tertiary);
-        color: var(--color-text-muted);
-        flex-shrink: 0;
-      }
-      & .pr-meta {
-        font-size: 11px;
-        color: var(--color-text-muted);
-        white-space: nowrap;
-        flex-shrink: 0;
-      }
-      & .pr-number {
-        font-family: var(--font-mono);
-        margin-inline-start: 4px;
-      }
-      & .pr-row-bottom {
-        padding-inline-start: 24px;
-      }
-      & .pr-branch {
-        font-size: 11px;
-        font-family: var(--font-mono);
-        color: var(--color-text-muted);
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-      }
-    }
-
-    & .palette-pr-item--archived .pr-title {
-      color: var(--color-text-secondary);
-    }
+  /* PR rows: avatar + title + meta on top, branch on bottom indented past
+     the avatar so it aligns under the title. */
+  :global(.palette-shell .palette-pr-item) {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+  }
+  :global(.palette-shell .palette-pr-item .pr-row-top) {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-width: 0;
+  }
+  :global(.palette-shell .palette-pr-item .pr-avatar) {
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+  :global(.palette-shell .palette-pr-item .pr-title) {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--color-text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+    min-width: 0;
+  }
+  :global(.palette-shell .palette-pr-item--archived .pr-title) {
+    color: var(--color-text-secondary);
+  }
+  :global(.palette-shell .palette-pr-item[data-selected] .pr-title),
+  :global(.palette-shell .palette-pr-item[aria-selected="true"] .pr-title) {
+    color: var(--color-tree-active-text);
+  }
+  :global(.palette-shell .palette-pr-item .pr-status-badge) {
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--color-bg-tertiary);
+    color: var(--color-text-muted);
+    flex-shrink: 0;
+  }
+  :global(.palette-shell .palette-pr-item .pr-meta) {
+    font-size: 11px;
+    color: var(--color-text-muted);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  :global(.palette-shell .palette-pr-item .pr-number) {
+    font-family: var(--font-mono);
+    margin-inline-start: 4px;
+  }
+  :global(.palette-shell .palette-pr-item .pr-row-bottom) {
+    padding-inline-start: 24px;
+  }
+  :global(.palette-shell .palette-pr-item .pr-branch) {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--color-text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 </style>
