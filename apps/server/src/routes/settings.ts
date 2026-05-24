@@ -7,6 +7,7 @@ import { BlobStore } from "../services/blob/BlobStore";
 import { PollScheduler } from "../services/PollScheduler";
 import { SettingsService } from "../services/Settings";
 import { handleAppError } from "./middleware";
+import { updateChannelSchema } from "./schemas";
 
 export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
   .get("/", async (ctx) => {
@@ -78,6 +79,7 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
               downloadsEnabled: t.Boolean(),
             }),
           ),
+          updateChannel: updateChannelSchema.optional,
         }),
       ),
     },

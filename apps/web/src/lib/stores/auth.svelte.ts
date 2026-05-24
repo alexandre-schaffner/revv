@@ -1,3 +1,4 @@
+import { isMaintainerLogin } from "@revv/shared";
 import { goto } from "$app/navigation";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { authClient } from "$lib/auth-client";
@@ -569,6 +570,18 @@ export function getUser(): {
 /** Current user's GitHub login, or null if not yet loaded or missing. */
 export function getCurrentUserLogin(): string | null {
   return user?.githubLogin ?? null;
+}
+
+/**
+ * Whether the current user's GitHub login is on the maintainer allowlist.
+ * Maintainers bypass the 48h stable-channel cooldown in the in-app updater.
+ * Computed locally from `MAINTAINER_LOGINS` so client and server agree without
+ * a round-trip — the `/api/user/identity` response also carries this flag,
+ * but recomputing here keeps the answer correct even before the first fetch
+ * completes (returns `false` until `githubLogin` is loaded).
+ */
+export function getIsMaintainer(): boolean {
+  return isMaintainerLogin(user?.githubLogin ?? null);
 }
 
 export function getIsLoading(): boolean {

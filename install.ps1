@@ -4,8 +4,8 @@
 #
 # One script, two audiences:
 #
-#   Curl-piped (end user):
-#     irm https://raw.githubusercontent.com/alexandre-schaffner/revv/main/install.ps1 | iex
+#   Curl-piped (end user) — use the signed release installer instead:
+#     irm https://github.com/alexandre-schaffner/revv/releases/latest/download/install.ps1 | iex
 #
 #   From a checkout (developer):
 #     .\install.ps1 -Dev       # toolchain + bun install, stop there
@@ -41,7 +41,7 @@ if ($Help) {
 Revv — Unified Installer (Windows)
 
 Usage:
-  irm https://raw.githubusercontent.com/alexandre-schaffner/revv/main/install.ps1 | iex
+  irm https://github.com/alexandre-schaffner/revv/releases/latest/download/install.ps1 | iex
 
   .\install.ps1 -Dev       # toolchain + deps only
   .\install.ps1            # full install
@@ -71,34 +71,52 @@ $REVV_APP_DIR  = $env:REVV_APP_DIR  ?: "$env:LOCALAPPDATA\Revv"
 
 # ── Inline bootstrap helpers ─────────────────────────────────
 $ESC = [char]27
-$UseColors = -not $env:NO_COLOR -and ($Host.UI.RawUI.WindowSize.Width -gt 0 -or $env:WT_SESSION)
+# Enable ANSI for Windows Terminal and modern consoles
+try {
+    Add-Type -TypeDefinition @'
+using System; using System.Runtime.InteropServices;
+public class ConH {
+    const uint ENABLE_VTP = 0x0004; const int STD_OUT = -11;
+    [DllImport("kernel32.dll")] static extern IntPtr GetStdHandle(int h);
+    [DllImport("kernel32.dll")] static extern bool GetConsoleMode(IntPtr h, out uint m);
+    [DllImport("kernel32.dll")] static extern bool SetConsoleMode(IntPtr h, uint m);
+    public static void EnableAnsi() { var h=GetStdHandle(STD_OUT); uint m; GetConsoleMode(h,out m); SetConsoleMode(h,m|ENABLE_VTP); }
+}
+'@ -ErrorAction SilentlyContinue
+    [ConH]::EnableAnsi()
+    $UseColors = $true
+} catch { $UseColors = $false }
+
 if ($UseColors) {
-    $_RED    = "$ESC[0;31m"; $_GREEN  = "$ESC[0;32m"; $_YELLOW = "$ESC[1;33m"
-    $_BLUE   = "$ESC[0;34m"; $_CYAN   = "$ESC[0;36m"; $_BOLD   = "$ESC[1m"
-    $_RESET  = "$ESC[0m"
+    $_R  = "$ESC[0m";  $_B  = "$ESC[1m";  $_D  = "$ESC[2m"
+    $_G  = "$ESC[32m"; $_Y  = "$ESC[33m"; $_RE = "$ESC[31m"; $_C  = "$ESC[36m"
 } else {
-    $_RED = $_GREEN = $_YELLOW = $_BLUE = $_CYAN = $_BOLD = $_RESET = ''
+    $_R = $_B = $_D = $_G = $_Y = $_RE = $_C = ''
 }
 
-function _info    { param($m) Write-Host "${_BLUE}[info]${_RESET}  $m" }
-function _success { param($m) Write-Host "${_GREEN}[  ok]${_RESET}  $m" }
-function _warn    { param($m) Write-Host "${_YELLOW}[warn]${_RESET}  $m" }
-function _fail    { param($m) Write-Host "${_RED}[FAIL]${_RESET}  $m" -ForegroundColor Red; exit 1 }
-function _step    { param($m) Write-Host "`n${_BOLD}${_CYAN}> $m${_RESET}" }
+function _info    { param($m) Write-Host "  ${_C}·${_R}  $m" }
+function _success { param($m) Write-Host "  ${_G}✓${_R}  $m" }
+function _warn    { param($m) Write-Host "  ${_Y}⚠${_R}  $m" }
+function _fail    { param($m) Write-Host "`n  ${_RE}✗${_R}  $m`n"; exit 1 }
+function _step    { param($m) Write-Host "`n  ${_B}$m${_R}" }
 
-# ── Header ────────────────────────────────────────────────────
-Write-Host "`n${_BOLD}"
+# ── Banner ────────────────────────────────────────────────────
+Write-Host ""
+Write-Host "  ${_C}${_B}██████╗ ███████╗██╗   ██╗██╗   ██╗${_R}"
+Write-Host "  ${_C}${_B}██╔══██╗██╔════╝██║   ██║██║   ██║${_R}"
+Write-Host "  ${_C}${_B}██████╔╝█████╗  ██║   ██║██║   ██║${_R}"
+Write-Host "  ${_C}${_B}██╔══██╗██╔══╝  ╚██╗ ██╔╝╚██╗ ██╔╝${_R}"
+Write-Host "  ${_C}${_B}██║  ██║███████╗ ╚████╔╝  ╚████╔╝ ${_R}"
+Write-Host "  ${_C}${_B}╚═╝  ╚═╝╚══════╝  ╚═══╝    ╚═══╝  ${_R}"
+Write-Host ""
 if ($Mode -eq 'dev') {
-    Write-Host '  +-----------------------------------+'
-    Write-Host '  |       Revv — Developer Setup      |'
-    Write-Host '  +-----------------------------------+'
+    Write-Host "  ${_D}AI-powered code review${_R}  ${_B}dev setup${_R}"
 } else {
-    Write-Host '  +-----------------------------------+'
-    Write-Host '  |          Revv — Installer         |'
-    Write-Host '  |       AI-Powered Code Review      |'
-    Write-Host '  +-----------------------------------+'
+    Write-Host "  ${_D}AI-powered code review${_R}  ${_B}installer${_R}"
 }
-Write-Host "${_RESET}"
+Write-Host ""
+Write-Host "  ${_D}$('─' * 54)${_R}"
+Write-Host ""
 
 # ── Locate the checkout, cloning if necessary ─────────────────
 $PROJECT_ROOT = ''
