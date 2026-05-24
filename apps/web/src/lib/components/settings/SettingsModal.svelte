@@ -46,10 +46,9 @@ import {
   setThemePreference,
   type ThemePreference,
 } from "$lib/stores/theme.svelte";
-import { getCommitHash } from "$lib/updater/client";
-import { runCheck as runUpdaterCheck } from "$lib/updater/service";
 import { isTauri } from "$lib/utils/platform";
 import { authHeaders } from "$lib/utils/session-token";
+import UpdatesSection from "./UpdatesSection.svelte";
 
 interface Props {
   open: boolean;
@@ -277,19 +276,6 @@ function commitMaxTurns(): void {
   if (clamped === current) return;
   lastCommittedMaxTurns = clamped;
   void updateSettings({ aiMaxTurns: clamped });
-}
-
-// ── Updates ───────────────────────────────────────────────────────────────
-let checking = $state(false);
-const commitHash = getCommitHash();
-
-async function handleCheckNow(): Promise<void> {
-  checking = true;
-  try {
-    await runUpdaterCheck({ manual: true });
-  } finally {
-    checking = false;
-  }
 }
 
 // ── Onboarding ────────────────────────────────────────────────────────────
@@ -934,41 +920,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 
 			<!-- Updates (Tauri only) -->
 			{#if runningInTauri}
-				<section id="section-updates" class="settings-section">
-					<h2 class="section-head-title">Updates</h2>
-
-					<div class="settings-subgroup">
-						<div class="settings-row">
-							<div class="settings-row-info">
-								<p class="settings-row-label">Current build</p>
-								<p class="settings-row-hint">Git commit snapshotted when this build was produced.</p>
-							</div>
-							<span class="font-mono text-xs text-text-secondary">{commitHash}</span>
-						</div>
-
-						<div class="settings-row">
-							<div class="settings-row-info">
-								<p class="settings-row-label">Check for updates now</p>
-								<p class="settings-row-hint">Revv checks automatically every hour.</p>
-							</div>
-							<Button
-								variant="outline"
-								size="sm"
-								onclick={handleCheckNow}
-								disabled={checking}
-								class="flex items-center gap-1.5 text-xs hover:border-accent hover:text-text-primary"
-							>
-								{#if checking}
-									<Loader2 size={12} weight="regular" class="animate-spin" />
-									Checking…
-								{:else}
-									<Download size={12} weight="fill" />
-									Check now
-								{/if}
-							</Button>
-						</div>
-					</div>
-				</section>
+				<UpdatesSection />
 			{/if}
 
 		<!-- Danger Zone -->

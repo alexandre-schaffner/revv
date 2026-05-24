@@ -22,14 +22,19 @@ export type {
   NormalizedQuestionOption,
   QuestionStatus,
 } from "./chat";
+export type { UpdateChannel } from "./constants";
 export {
   API_BASE_URL,
   API_PORT,
   AUTO_FETCH_DEFAULT_INTERVAL,
+  DEFAULT_UPDATE_CHANNEL,
   THREAD_SYNC_INTERVAL_SECONDS,
+  UPDATE_CHANNELS,
+  UPDATE_STABLE_COOLDOWN_MS,
 } from "./constants";
 export type { ServerEventMessage, WalkthroughEventEnvelope } from "./events";
 export { guessImageContentType, isImagePath } from "./images";
+export { isMaintainerLogin, MAINTAINER_LOGINS } from "./maintainers";
 export type {
   NewPrCommit,
   NewPrMessage,
