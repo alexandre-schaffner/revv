@@ -1,4 +1,4 @@
-CREATE TABLE `github_issues` (
+CREATE TABLE IF NOT EXISTS `github_issues` (
 	`id` text PRIMARY KEY NOT NULL,
 	`external_id` integer NOT NULL,
 	`node_id` text NOT NULL,
@@ -18,4 +18,4 @@ CREATE TABLE `github_issues` (
 	FOREIGN KEY (`repository_id`) REFERENCES `repositories`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE INDEX `github_issues_repo_state_updated_idx` ON `github_issues` (`repository_id`,`state`,`updated_at`);
+CREATE INDEX IF NOT EXISTS `github_issues_repo_state_updated_idx` ON `github_issues` (`repository_id`,`state`,`updated_at`);
