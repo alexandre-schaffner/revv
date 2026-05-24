@@ -43,7 +43,7 @@ export const updateManifestRoute = new Elysia()
     // The updater plugin treats any non-2xx as "no update available". When
     // the nightly tag hasn't been published yet, returning 204 keeps the
     // toast silent rather than surfacing a bogus error.
-    const upstream = await fetch(target, { redirect: "follow" });
+    const upstream = await fetch(target, { redirect: "follow", signal: AbortSignal.timeout(10_000) });
     if (upstream.status === 404) return new Response(null, { status: 204 });
     if (!upstream.ok) return new Response(null, { status: 502 });
 

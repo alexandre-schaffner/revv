@@ -76,7 +76,7 @@ async function handleCheckNow(): Promise<void> {
 				class="flex items-center gap-1.5 text-xs hover:border-accent hover:text-text-primary"
 			>
 				{#if checking}
-					<Loader2 size={12} weight="regular" class="animate-spin" />
+					<Loader2 size={12} weight="regular" class="motion-essential-spin" />
 					Checking…
 				{:else}
 					<Download size={12} weight="fill" />
