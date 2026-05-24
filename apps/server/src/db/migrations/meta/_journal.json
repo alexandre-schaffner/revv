@@ -127,6 +127,13 @@
       "when": 1779560000000,
       "tag": "0150_github_issues",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1779565000000,
+      "tag": "0160_github_issues_labels",
+      "breakpoints": true
     }
   ]
 }

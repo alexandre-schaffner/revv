@@ -16,6 +16,12 @@ export const githubIssues = sqliteTable(
     authorLogin: text("author_login").notNull(),
     authorAvatarUrl: text("author_avatar_url"),
     assigneeLogins: text("assignee_logins").notNull().default("[]"),
+    /**
+     * JSON-encoded `Array<{ name: string; color: string; description: string | null }>` —
+     * same pattern as `assigneeLogins`. Color is the 6-char hex GitHub
+     * returns (no leading `#`).
+     */
+    labels: text("labels").notNull().default("[]"),
     commentCount: integer("comment_count").notNull().default(0),
     url: text("url").notNull(),
     createdAt: text("created_at").notNull(),

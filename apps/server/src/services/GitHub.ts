@@ -381,6 +381,14 @@ function mapIssue(
   const user = raw.user as Record<string, unknown> | null;
   const rawAssignees = raw.assignees as Array<Record<string, unknown>> | undefined;
   const assigneeLogins = (rawAssignees ?? []).map((a) => a.login as string);
+  const rawLabels = raw.labels as Array<Record<string, unknown>> | undefined;
+  const labels = (rawLabels ?? [])
+    .filter((l) => typeof l.name === "string")
+    .map((l) => ({
+      name: l.name as string,
+      color: typeof l.color === "string" ? (l.color as string) : "",
+      description: typeof l.description === "string" ? (l.description as string) : null,
+    }));
   return {
     id: `${repositoryId}:${raw.number}`,
     externalId: raw.number as number,
@@ -392,6 +400,7 @@ function mapIssue(
     authorLogin: (user?.login as string | undefined) ?? "",
     authorAvatarUrl: (user?.avatar_url as string | null) ?? null,
     assigneeLogins,
+    labels,
     commentCount: (raw.comments as number | undefined) ?? 0,
     url: raw.html_url as string,
     createdAt: raw.created_at as string,

@@ -124,6 +124,24 @@ function handleRetry(): void {
 								<span class="card-title">{issue.title}</span>
 								<span class="card-id">#{issue.externalId}</span>
 							</div>
+							{#if issue.labels.length > 0}
+								{@const visibleLabels = issue.labels.slice(0, 3)}
+								{@const hiddenCount = issue.labels.length - visibleLabels.length}
+								<ul class="card-labels" aria-label="Labels">
+									{#each visibleLabels as label (label.name)}
+										<li
+											class="card-label"
+											style="--label-color: #{label.color || '9a958c'};"
+											title={label.description ?? label.name}
+										>
+											{label.name}
+										</li>
+									{/each}
+									{#if hiddenCount > 0}
+										<li class="card-label card-label--more">+{hiddenCount}</li>
+									{/if}
+								</ul>
+							{/if}
 							<div class="card-meta">
 								<span class="card-author">{issue.authorLogin}</span>
 								<span class="card-meta-sep" aria-hidden="true">·</span>
@@ -366,6 +384,46 @@ function handleRetry(): void {
 		font-size: 0.75rem;
 		font-feature-settings: "tnum";
 		color: var(--color-text-muted);
+	}
+
+	/* ─────────────────────── labels ───────────────────────
+	   GitHub label colors are vivid by default (red-500, green-500, …) — too
+	   bright for the warm-paper room. Each chip uses a `--label-color`
+	   CSS variable set inline from the issue's hex; the bg is a 12% mix of
+	   that color over the card surface (subtle tint), and the text color
+	   is a darkened mix to keep contrast usable across pale GitHub
+	   defaults (e.g. `fef2c0`). The result: chips read as "this label, in
+	   its color, but quietly." */
+	.card-labels {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: flex;
+		flex-wrap: wrap;
+		gap: 4px;
+		min-width: 0;
+	}
+
+	.card-label {
+		font-size: 0.6875rem;
+		font-weight: 500;
+		line-height: 1.3;
+		padding: 1px 7px;
+		border-radius: 999px;
+		max-width: 18ch;
+		overflow: hidden;
+		white-space: nowrap;
+		text-overflow: ellipsis;
+		background: color-mix(in srgb, var(--label-color) 14%, transparent);
+		color: color-mix(in srgb, var(--label-color) 80%, var(--color-text-primary));
+		border: 1px solid color-mix(in srgb, var(--label-color) 22%, transparent);
+	}
+
+	.card-label--more {
+		background: var(--color-bg-tertiary);
+		color: var(--color-text-muted);
+		border-color: transparent;
+		font-feature-settings: "tnum";
 	}
 
 	.card-meta {

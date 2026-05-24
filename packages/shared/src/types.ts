@@ -58,6 +58,19 @@ export interface PullRequest {
 
 export type IssueState = "open" | "closed";
 
+/**
+ * A GitHub issue label. `color` is the raw 6-char hex string GitHub
+ * returns (e.g. `"d73a4a"`), without a leading `#`. Rendering code
+ * computes the chip background via a color-mix tint so labels read in
+ * their identity color without blowing past Revv's restrained color
+ * budget.
+ */
+export interface IssueLabel {
+  name: string;
+  color: string;
+  description: string | null;
+}
+
 export interface Issue {
   id: string;
   externalId: number;
@@ -69,6 +82,7 @@ export interface Issue {
   authorLogin: string;
   authorAvatarUrl: string | null;
   assigneeLogins: string[];
+  labels: IssueLabel[];
   commentCount: number;
   url: string;
   createdAt: string;
