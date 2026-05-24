@@ -1,0 +1,351 @@
+#Requires -Version 5.1
+# ──────────────────────────────────────────────────────────────
+# Revv @@REVV_VERSION@@ — Release Installer (Windows)
+#
+# Downloads and installs the pre-built Revv MSI for Windows.
+# This script was generated for release @@RELEASE_TAG@@.
+#
+# Usage:
+#   # Recommended — verify before running:
+#   Invoke-WebRequest -Uri https://github.com/alexandre-schaffner/revv/releases/latest/download/install.ps1 -OutFile install.ps1
+#   gh attestation verify install.ps1 --repo alexandre-schaffner/revv
+#   .\install.ps1
+#
+#   # Pinned to this release:
+#   irm https://github.com/alexandre-schaffner/revv/releases/download/@@RELEASE_TAG@@/install.ps1 | iex
+#
+#   # Dev mode (build from source; requires full toolchain):
+#   .\install.ps1 -Dev
+#
+# Parameters:
+#   -Dev            Build from source instead of downloading a bundle.
+#   -Yes            Non-interactive: auto-approve every prompt.
+#   -SkipVerify     Skip attestation check (also requires $env:REVV_SKIP_VERIFY=1).
+#   -Help           This message.
+#
+# Verification (manual):
+#   gh attestation verify install.ps1 --repo alexandre-schaffner/revv
+# ──────────────────────────────────────────────────────────────
+
+param(
+    [switch]$Dev,
+    [Alias('y')][switch]$Yes,
+    [switch]$SkipVerify,
+    [switch]$Help
+)
+
+if ($Help) {
+    @'
+Revv @@REVV_VERSION@@ — Release Installer (Windows)
+
+Usage:
+  irm https://github.com/alexandre-schaffner/revv/releases/latest/download/install.ps1 | iex
+  irm https://github.com/alexandre-schaffner/revv/releases/download/@@RELEASE_TAG@@/install.ps1 | iex
+
+Flags:
+  -Dev          Build from source (requires toolchain)
+  -Yes, -y      Non-interactive
+  -SkipVerify   Skip attestation (also requires $env:REVV_SKIP_VERIFY=1)
+  -Help         This message
+'@
+    exit 0
+}
+
+$ErrorActionPreference = 'Stop'
+
+# ── Template variables ────────────────────────────────────────
+$RevvVersion = "@@REVV_VERSION@@"
+$ReleaseTag  = "@@RELEASE_TAG@@"
+$Repo        = "alexandre-schaffner/revv"
+$UrlMsi      = "@@URL_MSI@@"
+$ShaMsi      = "@@SHA_MSI@@"
+
+$AutoYes          = $Yes.IsPresent -or ($env:REVV_AUTO_YES -eq '1')
+$SkipVerifyActive = $SkipVerify.IsPresent -and ($env:REVV_SKIP_VERIFY -eq '1')
+
+# ── ANSI color support ────────────────────────────────────────
+# Enable VirtualTerminalProcessing for the current console handle
+$IsTty = $false
+try {
+    if ([System.Environment]::UserInteractive -and $Host.Name -ne 'Default Host') {
+        $stdout = [System.Console]::OutputEncoding  # touch stdout to ensure open
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public class ConsoleHelper {
+    const uint ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004;
+    const int STD_OUTPUT_HANDLE = -11;
+    [DllImport("kernel32.dll")] static extern IntPtr GetStdHandle(int h);
+    [DllImport("kernel32.dll")] static extern bool GetConsoleMode(IntPtr h, out uint m);
+    [DllImport("kernel32.dll")] static extern bool SetConsoleMode(IntPtr h, uint m);
+    public static void EnableAnsi() {
+        var h = GetStdHandle(STD_OUTPUT_HANDLE);
+        uint m; GetConsoleMode(h, out m);
+        SetConsoleMode(h, m | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+    }
+}
+'@ -ErrorAction SilentlyContinue
+        [ConsoleHelper]::EnableAnsi()
+        $IsTty = $true
+    }
+} catch { $IsTty = $false }
+
+$ESC = [char]27
+if ($IsTty) {
+    $R  = "$ESC[0m"   # reset
+    $B  = "$ESC[1m"   # bold
+    $D  = "$ESC[2m"   # dim
+    $G  = "$ESC[32m"  # green
+    $Y  = "$ESC[33m"  # yellow
+    $RE = "$ESC[31m"  # red
+    $C  = "$ESC[36m"  # cyan
+} else {
+    $R = $B = $D = $G = $Y = $RE = $C = ''
+}
+
+# ── UI functions ──────────────────────────────────────────────
+function Write-Ok   { param($msg) Write-Host "  ${G}✓${R}  $msg" }
+function Write-Info { param($msg) Write-Host "  ${C}·${R}  $msg" }
+function Write-Warn { param($msg) Write-Host "  ${Y}⚠${R}  $msg" }
+function Write-Fail { param($msg) Write-Host "`n  ${RE}✗${R}  $msg`n"; exit 1 }
+
+function Write-Hr {
+    Write-Host "  ${D}$('─' * 54)${R}"
+}
+
+function Write-Banner {
+    Write-Host ""
+    Write-Host "  ${C}${B}██████╗ ███████╗██╗   ██╗██╗   ██╗${R}"
+    Write-Host "  ${C}${B}██╔══██╗██╔════╝██║   ██║██║   ██║${R}"
+    Write-Host "  ${C}${B}██████╔╝█████╗  ██║   ██║██║   ██║${R}"
+    Write-Host "  ${C}${B}██╔══██╗██╔══╝  ╚██╗ ██╔╝╚██╗ ██╔╝${R}"
+    Write-Host "  ${C}${B}██║  ██║███████╗ ╚████╔╝  ╚████╔╝ ${R}"
+    Write-Host "  ${C}${B}╚═╝  ╚═╝╚══════╝  ╚═══╝    ╚═══╝  ${R}"
+    Write-Host ""
+    Write-Host "  ${D}AI-powered code review${R}  ${B}v$RevvVersion${R}"
+    Write-Host ""
+}
+
+# ── Spinner ───────────────────────────────────────────────────
+$SpinFrames = '⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'
+$SpinMsg    = ''
+$SpinJob    = $null
+
+function Start-Spinner { param($msg)
+    $script:SpinMsg = $msg
+    if (-not $IsTty) { Write-Host "  ···  $msg"; return }
+    # Run spinner in a runspace so it doesn't block
+    $rs = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+    $rs.Open()
+    $rs.SessionStateProxy.SetVariable('frames', $SpinFrames)
+    $rs.SessionStateProxy.SetVariable('label',  $msg)
+    $rs.SessionStateProxy.SetVariable('C',      $C)
+    $rs.SessionStateProxy.SetVariable('R',      $R)
+    $ps = [System.Management.Automation.PowerShell]::Create()
+    $ps.Runspace = $rs
+    $null = $ps.AddScript({
+        param(); $i = 0
+        while ($true) {
+            $f = $frames[$i % 10]
+            [Console]::Write("`r  $C$f$R  $label  ")
+            $i++; Start-Sleep -Milliseconds 70
+        }
+    })
+    $script:SpinJob = @{ ps = $ps; rs = $rs; handle = $ps.BeginInvoke() }
+}
+
+function Stop-Spinner { param([bool]$ok = $true)
+    if ($script:SpinJob) {
+        $script:SpinJob.ps.Stop()
+        $script:SpinJob.ps.Dispose()
+        $script:SpinJob.rs.Close()
+        $script:SpinJob = $null
+    }
+    if (-not $IsTty) { return }
+    if ($ok) { Write-Host "`r  ${G}✓${R}  $SpinMsg$((' ' * 4))" }
+    else      { Write-Host "`r  ${RE}✗${R}  $SpinMsg$((' ' * 4))" }
+}
+
+# ── Progress bar ──────────────────────────────────────────────
+$BarWidth = 34
+
+function Format-Bytes { param([long]$n)
+    if      ($n -ge 1073741824) { "{0:F1} GB" -f ($n / 1073741824) }
+    elseif  ($n -ge 1048576)    { "{0:F1} MB" -f ($n / 1048576) }
+    elseif  ($n -ge 1024)       { "{0:F0} KB" -f ($n / 1024) }
+    else                        { "$n B" }
+}
+
+function Draw-Bar { param([int]$pct)
+    $filled = [Math]::Floor($pct * $BarWidth / 100)
+    $empty  = $BarWidth - $filled
+    ('█' * $filled) + ('░' * $empty)
+}
+
+function Invoke-DownloadWithProgress { param($Url, $Dest, $Label)
+    # Probe size
+    $size = 0
+    try {
+        $head = Invoke-WebRequest -Uri $Url -Method Head -UseBasicParsing -ErrorAction Stop
+        $size = [long]$head.Headers['Content-Length']
+    } catch { $size = 0 }
+
+    $t0 = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+
+    if ($IsTty -and $size -gt 0) {
+        # Download in background job, watch file size
+        $job = Start-Job -ScriptBlock {
+            param($u, $d)
+            Invoke-WebRequest -Uri $u -OutFile $d -UseBasicParsing
+        } -ArgumentList $Url, $Dest
+
+        [Console]::CursorVisible = $false
+        while ($job.State -eq 'Running') {
+            $downloaded = 0
+            if (Test-Path $Dest) { $downloaded = (Get-Item $Dest).Length }
+            $pct = [Math]::Min([int]($downloaded * 100 / $size), 100)
+            $bar = Draw-Bar $pct
+            $dl  = Format-Bytes $downloaded
+            [Console]::Write("`r  ${C}↓${R}  $($Label.PadRight(24))  ${C}[$bar]${R}  ${B}$($pct.ToString().PadLeft(3))%${R}  $dl ")
+            Start-Sleep -Milliseconds 80
+        }
+        $null = Receive-Job $job -ErrorAction Stop
+        Remove-Job $job
+        [Console]::CursorVisible = $true
+
+        $elapsed = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - $t0
+        $bar100  = Draw-Bar 100
+        [Console]::Write("`r  ${G}✓${R}  $($Label.PadRight(24))  ${G}[$bar100]${R}  ${B}100%${R}  $(Format-Bytes $size) ${D}· ${elapsed}s${R}$('  ' * 6)`n")
+    }
+    else {
+        # Fallback: spinner
+        Start-Spinner "Downloading $Label..."
+        Invoke-WebRequest -Uri $Url -OutFile $Dest -UseBasicParsing
+        Stop-Spinner $true
+    }
+}
+
+# ── SHA256 verification ───────────────────────────────────────
+function Get-Sha256 { param($Path)
+    (Get-FileHash -Path $Path -Algorithm SHA256).Hash.ToLower()
+}
+
+function Invoke-VerifySha { param($Path, $Expected)
+    Start-Spinner "Verifying checksum..."
+    $actual = Get-Sha256 $Path
+    if ($actual -ne $Expected.ToLower()) {
+        Stop-Spinner $false
+        Write-Fail "SHA256 mismatch!`n     Expected: $Expected`n     Got:      $actual"
+    }
+    Stop-Spinner $true
+}
+
+# ── Attestation verification ──────────────────────────────────
+function Invoke-VerifyAttestation { param($ScriptPath)
+    if ($SkipVerifyActive) {
+        Write-Warn "Attestation skipped (-SkipVerify + REVV_SKIP_VERIFY=1)."
+        return
+    }
+
+    $bundlePath = [System.IO.Path]::GetTempFileName()
+    Start-Spinner "Fetching attestation bundle..."
+    try {
+        Invoke-WebRequest `
+            -Uri "https://github.com/$Repo/releases/download/$ReleaseTag/install.ps1.sigstore" `
+            -OutFile $bundlePath -UseBasicParsing -ErrorAction Stop
+        Stop-Spinner $true
+    } catch {
+        Stop-Spinner $false
+        Write-Warn "Attestation bundle unavailable — skipping."
+        Remove-Item $bundlePath -Force -ErrorAction SilentlyContinue
+        return
+    }
+
+    if (Get-Command gh -ErrorAction SilentlyContinue) {
+        Start-Spinner "Verifying attestation (gh CLI)..."
+        $r = & gh attestation verify $ScriptPath --repo $Repo --bundle $bundlePath 2>&1
+        if ($LASTEXITCODE -eq 0) { Stop-Spinner $true }
+        else { Stop-Spinner $false; Write-Fail "Attestation verification failed: $r" }
+    }
+    else {
+        Write-Warn "gh CLI not found — skipping attestation."
+        Write-Info "Install GitHub CLI and run: gh attestation verify install.ps1 --repo $Repo"
+    }
+
+    Remove-Item $bundlePath -Force -ErrorAction SilentlyContinue
+}
+
+# ── Dev mode ──────────────────────────────────────────────────
+if ($Dev) {
+    Write-Banner; Write-Hr
+    Write-Host "  ${Y}dev mode${R} · building from source"
+    Write-Hr; Write-Host ""
+    $scriptDir    = Split-Path -Parent $MyInvocation.MyCommand.Path
+    $rootInstaller = Join-Path $scriptDir "..\..\install.ps1"
+    if (Test-Path $rootInstaller) { & $rootInstaller -Dev; exit $LASTEXITCODE }
+    $repoUrl    = if ($env:REVV_REPO_URL)    { $env:REVV_REPO_URL }    else { "https://github.com/alexandre-schaffner/revv.git" }
+    $branch     = if ($env:REVV_BRANCH)      { $env:REVV_BRANCH }      else { "main" }
+    $installDir = if ($env:REVV_INSTALL_DIR) { $env:REVV_INSTALL_DIR } else { "$env:APPDATA\Revv\src" }
+    Start-Spinner "Cloning Revv source..."
+    git clone --depth=1 --branch $branch $repoUrl $installDir | Out-Null
+    Stop-Spinner $true
+    & "$installDir\install.ps1" -Dev
+    exit $LASTEXITCODE
+}
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Main install flow
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Write-Banner
+Write-Hr
+Write-Host "  ${D}Platform${R}  ${B}Windows x64${R}"
+Write-Host "  ${D}Release${R}   ${B}$ReleaseTag${R}"
+Write-Hr
+Write-Host ""
+
+# Self-verification
+$selfPath = $MyInvocation.MyCommand.Path
+if ($selfPath -and (Test-Path $selfPath)) {
+    Invoke-VerifyAttestation $selfPath
+} else {
+    Write-Info "Piped install — skipping file-based attestation."
+    Write-Info "To verify: download install.ps1 and run: gh attestation verify install.ps1 --repo $Repo"
+}
+
+Write-Host ""
+
+# Download + verify + install
+$tmpDir  = [System.IO.Path]::GetTempPath()
+$msiPath = Join-Path $tmpDir "revv-$RevvVersion.msi"
+
+Invoke-DownloadWithProgress $UrlMsi $msiPath "Revv.msi (x64)"
+Invoke-VerifySha $msiPath $ShaMsi
+
+Start-Spinner "Installing Revv $RevvVersion..."
+$msiArgs = if ($AutoYes) { @('/i', $msiPath, '/qn') } else { @('/i', $msiPath) }
+$proc    = Start-Process msiexec.exe -ArgumentList $msiArgs -Wait -PassThru
+if ($proc.ExitCode -ne 0) {
+    Stop-Spinner $false
+    Write-Fail "MSI installation failed (exit code $($proc.ExitCode))."
+}
+Stop-Spinner $true
+
+Remove-Item $msiPath -Force -ErrorAction SilentlyContinue
+
+# ── Success summary ───────────────────────────────────────────
+Write-Host ""
+Write-Hr
+Write-Host ""
+Write-Host "  ${G}${B}✓  Revv $RevvVersion is installed!${R}"
+Write-Host ""
+Write-Host "  ${D}▸${R}  Launch    ${B}Search 'Revv' in the Start Menu${R}"
+Write-Host ""
+Write-Host "  ${D}▸${R}  Verify    ${D}gh attestation verify install.ps1 ``${R}"
+Write-Host "               ${D}  --repo $Repo${R}"
+Write-Host ""
+Write-Host "  ${Y}⚠${R}  SmartScreen warning expected until Authenticode"
+Write-Host "     signing lands. Click 'More info' → 'Run anyway'."
+Write-Host ""
+Write-Hr
+Write-Host ""

@@ -19,6 +19,13 @@ export type UpdateInfo = {
   version: string;
   notes: string | undefined;
   /**
+   * Publish date string from the manifest's `pub_date` field (ISO 8601).
+   * `undefined` when the manifest omits it. Used to gate the in-app toast
+   * behind a 48-hour cooldown for non-maintainer users on the stable channel
+   * — explicit actions (manual "Check now", `revv update`) bypass that gate.
+   */
+  publishedAt: string | undefined;
+  /**
    * Downloads the update package, applies it, and relaunches the app.
    * Throws if any step fails — callers should `try/catch` to surface the
    * error in a toast.
@@ -41,6 +48,7 @@ export async function checkForUpdate(): Promise<UpdateInfo | null> {
   return {
     version: update.version,
     notes: update.body,
+    publishedAt: update.date,
     install: async () => {
       await update.downloadAndInstall();
       // On Windows/Linux the plugin's passive install mode exits the

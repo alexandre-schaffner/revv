@@ -40,11 +40,60 @@ DIM="$REVV_DIM"
 RESET="$REVV_RESET"
 
 # ── Logging ───────────────────────────────────────────────────
-info()    { printf "%s[info]%s  %s\n" "$REVV_BLUE"   "$REVV_RESET" "$*"; }
-success() { printf "%s[  ok]%s  %s\n" "$REVV_GREEN"  "$REVV_RESET" "$*"; }
-warn()    { printf "%s[warn]%s  %s\n" "$REVV_YELLOW" "$REVV_RESET" "$*"; }
-fail()    { printf "%s[FAIL]%s  %s\n" "$REVV_RED"    "$REVV_RESET" "$*" >&2; exit 1; }
-step()    { printf "\n%s%s▸ %s%s\n"  "$REVV_BOLD" "$REVV_CYAN" "$*" "$REVV_RESET"; }
+info()    { printf "  %s·%s  %s\n"        "$REVV_CYAN"   "$REVV_RESET" "$*"; }
+success() { printf "  %s✓%s  %s\n"        "$REVV_GREEN"  "$REVV_RESET" "$*"; }
+warn()    { printf "  %s⚠%s  %s\n"        "$REVV_YELLOW" "$REVV_RESET" "$*"; }
+fail()    { printf "\n  %s✗%s  %s\n\n"    "$REVV_RED"    "$REVV_RESET" "$*" >&2; exit 1; }
+step()    { printf "\n  %s%s▸%s  %s\n\n" "$REVV_BOLD" "$REVV_CYAN" "$REVV_RESET" "$*"; }
+
+# ── Banner ────────────────────────────────────────────────────
+banner() {
+  printf "\n"
+  printf "  %s%s██████╗ ███████╗██╗   ██╗██╗   ██╗%s\n" "$REVV_CYAN" "$REVV_BOLD" "$REVV_RESET"
+  printf "  %s%s██╔══██╗██╔════╝██║   ██║██║   ██║%s\n" "$REVV_CYAN" "$REVV_BOLD" "$REVV_RESET"
+  printf "  %s%s██████╔╝█████╗  ██║   ██║██║   ██║%s\n" "$REVV_CYAN" "$REVV_BOLD" "$REVV_RESET"
+  printf "  %s%s██╔══██╗██╔══╝  ╚██╗ ██╔╝╚██╗ ██╔╝%s\n" "$REVV_CYAN" "$REVV_BOLD" "$REVV_RESET"
+  printf "  %s%s██║  ██║███████╗ ╚████╔╝  ╚████╔╝ %s\n"  "$REVV_CYAN" "$REVV_BOLD" "$REVV_RESET"
+  printf "  %s%s╚═╝  ╚═╝╚══════╝  ╚═══╝    ╚═══╝  %s\n" "$REVV_CYAN" "$REVV_BOLD" "$REVV_RESET"
+  printf "\n  %sAI-powered code review%s\n\n" "$REVV_DIM" "$REVV_RESET"
+}
+
+# ── Spinner ───────────────────────────────────────────────────
+_REVV_SP_FRAMES='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+_REVV_SP_MSG=''
+_REVV_SP_PID=''
+
+spin_start() {
+  _REVV_SP_MSG="$1"
+  if [[ ! -t 1 ]]; then printf "  ···  %s\n" "$_REVV_SP_MSG"; return; fi
+  printf '\033[?25l'
+  (
+    local i=0
+    while true; do
+      printf "\r  %s%s%s  %s  " \
+        "$REVV_CYAN" "${_REVV_SP_FRAMES:$((i % 10)):1}" "$REVV_RESET" "$_REVV_SP_MSG"
+      i=$((i + 1)); sleep 0.07
+    done
+  ) &
+  _REVV_SP_PID=$!
+  disown "$_REVV_SP_PID" 2>/dev/null
+}
+
+spin_stop() {
+  local ok="${1:-1}"
+  if [[ -n "$_REVV_SP_PID" ]]; then
+    kill "$_REVV_SP_PID" 2>/dev/null
+    wait "$_REVV_SP_PID" 2>/dev/null
+    _REVV_SP_PID=''
+  fi
+  if [[ ! -t 1 ]]; then return; fi
+  printf '\033[?25h'
+  if [[ "$ok" -eq 1 ]]; then
+    printf "\r  %s✓%s  %-50s\n" "$REVV_GREEN" "$REVV_RESET" "$_REVV_SP_MSG"
+  else
+    printf "\r  %s✗%s  %-50s\n" "$REVV_RED"   "$REVV_RESET" "$_REVV_SP_MSG"
+  fi
+}
 
 # ── TTY-safe input (works under `curl … | bash`) ──────────────
 #

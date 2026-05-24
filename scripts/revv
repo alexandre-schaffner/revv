@@ -7,7 +7,8 @@
 # and the LaunchAgent at ~/Library/LaunchAgents/com.revv.server.plist.
 #
 # Commands:
-#   revv update      Pull latest, rebuild, reinstall, reload service
+#   revv update      Pull latest on the configured channel, rebuild, reinstall
+#   revv channel     Print or change the release channel (stable | nightly)
 #   revv uninstall   Remove ALL Revv artifacts (app, data, config, services, CLI)
 #   revv start       Load + start the server LaunchAgent
 #   revv stop        Unload + stop the server LaunchAgent
@@ -77,16 +78,50 @@ if [[ "$__revv_lib_loaded" -eq 0 ]]; then
   else
     RED=""; GREEN=""; YELLOW=""; BLUE=""; CYAN=""; BOLD=""; DIM=""; RESET=""
   fi
-  info()    { printf "%s[info]%s  %s\n" "$BLUE" "$RESET" "$*"; }
-  success() { printf "%s[  ok]%s  %s\n" "$GREEN" "$RESET" "$*"; }
-  warn()    { printf "%s[warn]%s  %s\n" "$YELLOW" "$RESET" "$*"; }
-  fail()    { printf "%s[FAIL]%s  %s\n" "$RED" "$RESET" "$*" >&2; exit 1; }
-  step()    { printf "\n%s%s▸ %s%s\n" "$BOLD" "$CYAN" "$*" "$RESET"; }
+  info()    { printf "  %s·%s  %s\n"     "$CYAN"   "$RESET" "$*"; }
+  success() { printf "  %s✓%s  %s\n"     "$GREEN"  "$RESET" "$*"; }
+  warn()    { printf "  %s⚠%s  %s\n"     "$YELLOW" "$RESET" "$*"; }
+  fail()    { printf "\n  %s✗%s  %s\n\n" "$RED"    "$RESET" "$*" >&2; exit 1; }
+  step()    { printf "\n  %s%s▸%s  %s\n\n" "$BOLD" "$CYAN" "$RESET" "$*"; }
   confirm() {
+    if [[ "${REVV_AUTO_YES:-0}" == "1" ]]; then return 0; fi
     local reply
-    printf "%s  → %s [y/N] %s" "$YELLOW" "$1" "$RESET"
-    read -r reply
+    printf "  %s→%s  %s [y/N] " "$YELLOW" "$RESET" "$1"
+    read -r reply </dev/tty || read -r reply
     [[ "$reply" =~ ^[Yy] ]]
+  }
+  _REVV_SP_FRAMES='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+  _REVV_SP_MSG=''; _REVV_SP_PID=''
+  spin_start() {
+    _REVV_SP_MSG="$1"
+    if [[ ! -t 1 ]]; then printf "  ···  %s\n" "$_REVV_SP_MSG"; return; fi
+    printf '\033[?25l'
+    ( local i=0
+      while true; do
+        printf "\r  %s%s%s  %s  " "$CYAN" "${_REVV_SP_FRAMES:$((i%10)):1}" "$RESET" "$_REVV_SP_MSG"
+        i=$((i+1)); sleep 0.07
+      done ) &
+    _REVV_SP_PID=$!; disown "$_REVV_SP_PID" 2>/dev/null
+  }
+  spin_stop() {
+    local ok="${1:-1}"
+    if [[ -n "$_REVV_SP_PID" ]]; then
+      kill "$_REVV_SP_PID" 2>/dev/null; wait "$_REVV_SP_PID" 2>/dev/null; _REVV_SP_PID=''
+    fi
+    if [[ ! -t 1 ]]; then return; fi
+    printf '\033[?25h'
+    if [[ "$ok" -eq 1 ]]; then printf "\r  %s✓%s  %-50s\n" "$GREEN" "$RESET" "$_REVV_SP_MSG"
+    else                        printf "\r  %s✗%s  %-50s\n" "$RED"   "$RESET" "$_REVV_SP_MSG"; fi
+  }
+  banner() {
+    printf "\n"
+    printf "  %s%s██████╗ ███████╗██╗   ██╗██╗   ██╗%s\n" "$CYAN" "$BOLD" "$RESET"
+    printf "  %s%s██╔══██╗██╔════╝██║   ██║██║   ██║%s\n" "$CYAN" "$BOLD" "$RESET"
+    printf "  %s%s██████╔╝█████╗  ██║   ██║██║   ██║%s\n" "$CYAN" "$BOLD" "$RESET"
+    printf "  %s%s██╔══██╗██╔══╝  ╚██╗ ██╔╝╚██╗ ██╔╝%s\n" "$CYAN" "$BOLD" "$RESET"
+    printf "  %s%s██║  ██║███████╗ ╚████╔╝  ╚████╔╝ %s\n"  "$CYAN" "$BOLD" "$RESET"
+    printf "  %s%s╚═╝  ╚═╝╚══════╝  ╚═══╝    ╚═══╝  %s\n" "$CYAN" "$BOLD" "$RESET"
+    printf "\n  %sAI-powered code review%s\n\n" "$DIM" "$RESET"
   }
 fi
 
@@ -126,6 +161,54 @@ server_running() {
   nc -z 127.0.0.1 45678 >/dev/null 2>&1
 }
 
+# ── Channel helpers ─────────────────────────────────────────────────────
+# SQLite is the source of truth for `update_channel`. The server writes
+# through to it inside `SettingsService.updateSettings`, so a read of the
+# column always reflects the latest committed state. Reads skip the API
+# entirely; writes go through the API so the in-memory `SubscriptionRef`
+# cache that drives the web app stays consistent.
+read_channel() {
+  command -v sqlite3 >/dev/null 2>&1 || \
+    fail "sqlite3 not found — install it (e.g. 'brew install sqlite') and retry."
+  [[ -f "$INSTALL_DIR/revv.db" ]] || \
+    fail "Revv database missing at $INSTALL_DIR/revv.db. Run 'revv start' to initialize it."
+  local v
+  v="$(sqlite3 "$INSTALL_DIR/revv.db" \
+    "SELECT update_channel FROM user_settings WHERE id='default';" 2>/dev/null)"
+  case "$v" in nightly) printf "nightly" ;; *) printf "stable" ;; esac
+}
+
+# Send a channel change through the running server. Going through the API
+# (instead of writing the column directly) keeps the in-memory
+# `SettingsService` cache consistent so the web app sees the new value
+# without a server restart.
+write_channel() {
+  local target="$1"
+  server_running || fail "Revv server is not running.
+Start it with 'revv start', then re-run 'revv channel $target'."
+  curl -fsS -X PUT "$API_URL/api/update-channel" \
+    -H 'Content-Type: application/json' \
+    -d "{\"channel\":\"$target\"}" >/dev/null 2>&1 || \
+    fail "Failed to update channel via $API_URL/api/update-channel."
+}
+
+# Resolve the git ref that `cmd_update` should fast-forward to. `stable`
+# pins to the latest `v*` tag reachable from origin/main (release-please's
+# semver tag); `nightly` rides origin/main HEAD. The caller is responsible
+# for having already fetched, so this never touches the network.
+resolve_target_ref() {
+  case "$1" in
+    nightly) printf "origin/main" ;;
+    stable)
+      local tag
+      tag="$(git -C "$INSTALL_DIR" describe --tags --abbrev=0 --match='v*' \
+        origin/main 2>/dev/null)" || tag=""
+      printf "%s" "${tag:-origin/main}"
+      ;;
+    *) fail "Invalid channel: $1" ;;
+  esac
+}
+
 # ── Commands ─────────────────────────────────────────────────
 
 cmd_help() {
@@ -136,7 +219,9 @@ ${BOLD}Usage:${RESET}
   revv <command>
 
 ${BOLD}Commands:${RESET}
-  ${CYAN}update${RESET}      Pull latest code, rebuild, reinstall, reload server
+  ${CYAN}update${RESET}      Pull latest on the configured channel, rebuild, reinstall
+              ${DIM}flags: --channel <stable|nightly> (one-shot, doesn't persist)${RESET}
+  ${CYAN}channel${RESET}     Print or change the release channel (stable | nightly)
   ${CYAN}uninstall${RESET}   Remove ALL Revv artifacts (app, data, config, services, CLI)
   ${CYAN}start${RESET}       Start the background API server
   ${CYAN}stop${RESET}        Stop the background API server
@@ -263,17 +348,47 @@ cmd_open() {
 }
 
 cmd_update() {
+  # Single-flag parser: `--channel <stable|nightly>` overrides the
+  # persisted channel for this invocation only (no setting write).
+  local channel_override=""
+  case "${1:-}" in
+    --channel)    channel_override="${2:-}"; shift 2 || true ;;
+    --channel=*)  channel_override="${1#--channel=}"; shift ;;
+    "")           ;;
+    *)            fail "Unknown argument to 'revv update': $1" ;;
+  esac
+  case "$channel_override" in
+    ""|stable|nightly) ;;
+    *) fail "Invalid --channel value: $channel_override (expected stable|nightly)" ;;
+  esac
+
   ensure_install_dir
   load_bun_path
-  step "Updating Revv"
+  banner
+  printf "  %s──────────────────────────────────────────────────────%s\n\n" "$DIM" "$RESET"
 
-  info "Fetching from origin"
-  git -C "$INSTALL_DIR" fetch --all --prune
+  local channel
+  if [[ -n "$channel_override" ]]; then
+    channel="$channel_override"
+    info "Channel: ${channel} ${DIM}(one-shot override; persisted channel unchanged)${RESET}"
+  else
+    channel="$(read_channel)"
+    info "Channel: ${channel}"
+  fi
 
-  local before after branch
-  branch="$(git -C "$INSTALL_DIR" rev-parse --abbrev-ref HEAD)"
+  # ── Fetch ─────────────────────────────────────────────────
+  spin_start "Fetching latest from origin…"
+  git -C "$INSTALL_DIR" fetch --all --prune --tags >/dev/null 2>&1 || true
+  spin_stop 1
+
+  local target_ref
+  target_ref="$(resolve_target_ref "$channel")"
+  info "Target ref: ${target_ref}"
+
+  local before after
   before="$(git -C "$INSTALL_DIR" rev-parse HEAD)"
-  git -C "$INSTALL_DIR" reset --hard "origin/$branch"
+  git -C "$INSTALL_DIR" reset --hard "$target_ref" >/dev/null 2>&1 || \
+    fail "Failed to fast-forward to $target_ref. Run 'git -C \"$INSTALL_DIR\" fetch' and retry."
   after="$(git -C "$INSTALL_DIR" rev-parse HEAD)"
 
   if [[ "$before" == "$after" ]]; then
@@ -283,20 +398,26 @@ cmd_update() {
       return 0
     fi
   else
-    info "Updated $before → $after"
-    info "Changes:"
-    git -C "$INSTALL_DIR" --no-pager log --oneline "$before..$after" | sed 's/^/    /'
+    local short_before short_after
+    short_before="$(git -C "$INSTALL_DIR" rev-parse --short "$before")"
+    short_after="$(git -C "$INSTALL_DIR" rev-parse --short "$after")"
+    info "Updated ${short_before} → ${short_after}"
+    git -C "$INSTALL_DIR" --no-pager log --oneline "$before..$after" | \
+      while IFS= read -r line; do
+        printf "    %s%s%s\n" "$DIM" "$line" "$RESET"
+      done
+    printf "\n"
   fi
 
-  info "Installing dependencies"
+  # ── Dependencies ──────────────────────────────────────────
+  step "Dependencies"
   (cd "$INSTALL_DIR" && bun install)
 
-  info "Building (make dist)"
+  # ── Build ─────────────────────────────────────────────────
+  step "Build"
   (cd "$INSTALL_DIR" && make dist)
 
-  # Find the newly built .app. Use a wildcard (*.app) so productName changes
-  # — e.g. "Revv" vs "Revv (Alpha).app" — don't break the lookup. install.sh
-  # uses the same pattern.
+  # Find the newly built .app.
   local bundle_app app_name
   bundle_app="$(find "$INSTALL_DIR/apps/desktop/target/release/bundle/macos" -maxdepth 1 -type d -name '*.app' 2>/dev/null | head -1)"
   if [[ -z "$bundle_app" ]]; then
@@ -305,7 +426,7 @@ cmd_update() {
   [[ -d "$bundle_app" ]] || fail "Build finished but no .app bundle was produced."
   app_name="$(basename "$bundle_app")"
 
-  # Replace the installed .app (prefer the same location it was at).
+  # Determine install destination.
   local dest_app dest_dir old_app
   old_app="$(find_app)" || old_app=""
   if [[ -n "$old_app" ]]; then
@@ -320,42 +441,39 @@ cmd_update() {
   fi
   dest_app="$dest_dir/$app_name"
 
-  # If the productName changed (old "Revv.app" -> new "Revv (Alpha).app"), the
-  # old bundle still sits there at its original path. Remove it so we don't
-  # leave two copies in /Applications.
   if [[ -n "$old_app" && "$old_app" != "$dest_app" && -d "$old_app" ]]; then
     info "Product name changed — removing stale $old_app"
     rm -rf "$old_app"
   fi
 
-  info "Quitting Revv if it's running"
+  # ── Install ───────────────────────────────────────────────
+  printf "\n"
+  spin_start "Quitting Revv…"
   osascript -e 'tell application "Revv" to quit' 2>/dev/null || true
   osascript -e 'tell application "Revv (Alpha)" to quit' 2>/dev/null || true
   sleep 1
+  spin_stop 1
 
-  info "Replacing $dest_app"
+  spin_start "Installing ${app_name}…"
   rm -rf "$dest_app"
   cp -R "$bundle_app" "$dest_app"
   xattr -cr "$dest_app" 2>/dev/null || true
+  spin_stop 1
 
   # Re-source common.sh from the freshly-pulled tree so we pick up any new
-  # helpers (e.g. write_launch_agent_plist) that didn't exist in the version
-  # this revv CLI started with. Unset the double-source guard first.
+  # helpers that didn't exist in the version this revv CLI started with.
   if [[ -f "$INSTALL_DIR/scripts/lib/common.sh" ]]; then
     unset __REVV_COMMON_LOADED__
     # shellcheck disable=SC1091
     source "$INSTALL_DIR/scripts/lib/common.sh"
   fi
 
-  info "Refreshing LaunchAgent (picks up new PATH + detected CLI binary locations)"
+  # ── LaunchAgent ───────────────────────────────────────────
   local bun_for_plist
   bun_for_plist="$(command -v bun || true)"
   [[ -x "$bun_for_plist" ]] || fail "Cannot locate bun for the LaunchAgent."
 
   if declare -F write_launch_agent_plist >/dev/null 2>&1; then
-    # Restore GitHub Enterprise config from the persisted conf file so the
-    # refreshed plist keeps the correct host/client-id without re-prompting.
-    # Priority: existing env var > github.conf > empty (defaults to github.com).
     local _github_conf="${REVV_SUPPORT_DIR}/github.conf"
     if [[ -z "${REVV_GITHUB_HOST:-}" ]] && declare -F _revv_dotenv_get >/dev/null 2>&1; then
       REVV_GITHUB_HOST="$(_revv_dotenv_get GITHUB_HOST "$_github_conf")"
@@ -365,18 +483,22 @@ cmd_update() {
     fi
     export REVV_GITHUB_HOST="${REVV_GITHUB_HOST:-}"
     export REVV_GITHUB_CLIENT_ID="${REVV_GITHUB_CLIENT_ID:-}"
+    spin_start "Refreshing LaunchAgent…"
     launchctl unload "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
+    # write_launch_agent_plist calls info/success — redirect to suppress mid-spinner noise
     write_launch_agent_plist \
       "$LAUNCH_AGENT_PLIST" \
       "$bun_for_plist" \
       "$INSTALL_DIR" \
-      "$LOG_DIR"
+      "$LOG_DIR" >/dev/null 2>&1
     launchctl load -w "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
+    spin_stop 1
   else
-    # Older common.sh without the helper — just reload the existing plist.
     warn "write_launch_agent_plist not found in common.sh; keeping existing plist"
+    spin_start "Reloading server…"
     launchctl unload "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
     launchctl load -w "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
+    spin_stop 1
   fi
 
   # Refresh the CLI itself + helper lib in case they changed upstream.
@@ -389,8 +511,45 @@ cmd_update() {
     cp "$INSTALL_DIR/scripts/lib/common.sh" "$HOME/.local/share/revv/common.sh"
   fi
 
-  success "Updated to $(git -C "$INSTALL_DIR" rev-parse --short HEAD)"
+  local short_head
+  short_head="$(git -C "$INSTALL_DIR" rev-parse --short HEAD)"
+  printf "\n"
+  printf "  %s──────────────────────────────────────────────────────%s\n\n" "$DIM" "$RESET"
+  printf "  %s%s✓  Revv is up to date!%s\n\n" "$GREEN" "$BOLD" "$RESET"
+  printf "  %s▸%s  Version  %s%s%s\n\n" "$DIM" "$RESET" "$BOLD" "$short_head" "$RESET"
+  printf "  %s──────────────────────────────────────────────────────%s\n\n" "$DIM" "$RESET"
   open "$dest_app" || true
+}
+
+cmd_channel() {
+  if [[ $# -eq 0 ]]; then
+    local current
+    current="$(read_channel)"
+    printf "%s\n" "$current"
+    return 0
+  fi
+  local target="$1"
+  case "$target" in
+    stable|nightly) ;;
+    -h|--help|help)
+      cat <<EOF
+${BOLD}revv channel${RESET} — print or change the release channel.
+
+${BOLD}Usage:${RESET}
+  revv channel               Print the current channel.
+  revv channel stable        Switch to vetted releases (48h notification buffer).
+  revv channel nightly       Switch to every push to main (notify instantly).
+EOF
+      return 0
+      ;;
+    *)
+      fail "Unknown channel: $target (expected stable|nightly)"
+      ;;
+  esac
+  step "Switching channel to ${target}"
+  write_channel "$target"
+  success "Channel is now ${target}."
+  info "Next 'revv update' will pull the latest ${target} build."
 }
 
 cmd_uninstall() {
@@ -601,7 +760,8 @@ cmd_doctor() {
 
 # ── Dispatch ─────────────────────────────────────────────────
 case "${1:-help}" in
-  update)     cmd_update ;;
+  update)     shift; cmd_update "$@" ;;
+  channel)    shift; cmd_channel "$@" ;;
   uninstall)  cmd_uninstall ;;
   start)      cmd_start ;;
   stop)       cmd_stop ;;

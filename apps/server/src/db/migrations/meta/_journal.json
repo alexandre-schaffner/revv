@@ -141,6 +141,13 @@
       "when": 1779570000000,
       "tag": "0170_drop_recap_stranded_columns",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1779575000000,
+      "tag": "0180_update_channel",
+      "breakpoints": true
     }
   ]
 }
