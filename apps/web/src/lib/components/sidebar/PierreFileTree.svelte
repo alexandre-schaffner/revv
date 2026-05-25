@@ -234,12 +234,9 @@ $effect(() => {
 						[data-file-tree-virtualized-scroll='true'] {
 							scrollbar-gutter: auto;
 							padding-inline: 2px;
-							/* Trailing scroll room equal to .sidebar-fade height
-							 * (48px in Sidebar.svelte) so the last file can be
-							 * scrolled above the bottom-edge fade — same trick the
-							 * PR list uses with padding-bottom: 48px on its own
-							 * scroller (Sidebar.svelte:597). Less than that leaves
-							 * the last row partially covered by the fade. */
+							/* Matches .sidebar-fade height so the last file can be
+							 * scrolled above the bottom-edge fade — same as the PR
+							 * list's own scroller. */
 							padding-block-end: 48px;
 						}
 						/* Reserve a fixed slot for the LOC badge on the right edge of
