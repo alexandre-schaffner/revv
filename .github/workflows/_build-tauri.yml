@@ -89,7 +89,7 @@ jobs:
         run: bun run build
 
       - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Uncomment when updater signing is configured:
@@ -101,7 +101,7 @@ jobs:
           tagName: ${{ inputs.tag_name }}
           releaseName: ${{ inputs.release_name }}
           releaseBody: ${{ inputs.release_body }}
-          releaseDraft: false
+          releaseDraft: true
           prerelease: ${{ inputs.prerelease }}
           updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
@@ -110,16 +110,16 @@ jobs:
       # when the release already exists (e.g. created by release-please). This
       # fallback ensures every platform's bundles land on the release.
       - name: Upload bundles (fallback)
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag_name }}
         run: |
           set -euo pipefail
           bundles=()
-          for f in apps/desktop/src-tauri/target/*/bundle/*/*.{dmg,msi,deb,AppImage} 2>/dev/null; do
-            [[ -f "$f" ]] || continue
+          while IFS= read -r -d '' f; do
             bundles+=("$f")
-          done
+          done < <(find apps/desktop/src-tauri/target -type f \( -name '*.dmg' -o -name '*.msi' -o -name '*.deb' -o -name '*.AppImage' \) -print0)
           if [[ ${#bundles[@]} -eq 0 ]]; then
             echo "No bundle files found — skipping fallback upload."
             exit 0
