@@ -1,10 +1,10 @@
 // Update-manifest dispatcher for the Tauri auto-updater.
 //
 // `tauri-plugin-updater` reads its endpoint list from `tauri.conf.json` at
-// compile time and offers no runtime override. To let the user switch
-// between stable and nightly channels without rebuilding the app, the static
-// endpoint points here, and this route reads the `update_channel` setting
-// and proxies the matching GitHub release manifest.
+// compile time and offers no runtime override. Release builds also reject
+// insecure updater endpoints, so the packaged desktop app points directly at
+// the HTTPS stable manifest. This local route remains for source installs and
+// CLI-managed channel experiments that already have the local API server up.
 //
 // The route is intentionally unauthenticated — the updater plugin runs in
 // the Rust host and doesn't forward bearer tokens, and the server only binds

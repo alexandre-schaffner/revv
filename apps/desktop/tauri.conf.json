@@ -87,7 +87,7 @@
     },
     "updater": {
       "active": true,
-      "endpoints": ["http://localhost:45678/api/update-manifest"],
+      "endpoints": ["https://github.com/alexandre-schaffner/revv/releases/latest/download/latest.json"],
       "dialog": false,
       "pubkey": "REPLACE_WITH_MINISIGN_PUBLIC_KEY",
       "windows": {
