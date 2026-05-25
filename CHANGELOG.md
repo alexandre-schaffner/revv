@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/alexandre-schaffner/revv/compare/v0.2.0...v0.2.1) (2026-05-25)
+
+
+### Bug Fixes
+
+* **release:** create tags for draft releases ([a0f468c](https://github.com/alexandre-schaffner/revv/commit/a0f468cfef08ce8c725499af21871b8f413b28ab))
+
 ## [0.2.0](https://github.com/alexandre-schaffner/revv/compare/v0.1.1...v0.2.0) (2026-05-25)
 
 
