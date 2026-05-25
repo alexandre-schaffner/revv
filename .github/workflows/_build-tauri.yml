@@ -81,7 +81,7 @@ jobs:
 
       - uses: swatinem/rust-cache@v2
         with:
-          workspaces: "apps/desktop/src-tauri -> target"
+          workspaces: "apps/desktop -> target"
 
       - run: bun install --frozen-lockfile
 
@@ -106,6 +106,27 @@ jobs:
           updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
 
+      - name: Find bundle artifacts
+        id: bundles
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundles=()
+          while IFS= read -r -d '' f; do
+            bundles+=("$f")
+          done < <(find apps/desktop/target -type f \( -name '*.dmg' -o -name '*.msi' -o -name '*.deb' -o -name '*.AppImage' \) -print0)
+          if [[ ${#bundles[@]} -eq 0 ]]; then
+            echo "No bundle files found."
+            exit 1
+          fi
+
+          echo "Found bundles: ${bundles[*]}"
+          {
+            echo "paths<<EOF"
+            printf '%s\n' "${bundles[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       # tauri-action uploads bundles automatically, but it can silently fail
       # when the release already exists (e.g. created by release-please). This
       # fallback ensures every platform's bundles land on the release.
@@ -114,16 +135,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag_name }}
+          BUNDLE_PATHS: ${{ steps.bundles.outputs.paths }}
         run: |
           set -euo pipefail
           bundles=()
-          while IFS= read -r -d '' f; do
-            bundles+=("$f")
-          done < <(find apps/desktop/src-tauri/target -type f \( -name '*.dmg' -o -name '*.msi' -o -name '*.deb' -o -name '*.AppImage' \) -print0)
-          if [[ ${#bundles[@]} -eq 0 ]]; then
-            echo "No bundle files found — skipping fallback upload."
-            exit 0
-          fi
+          while IFS= read -r f; do
+            [[ -n "$f" ]] && bundles+=("$f")
+          done <<< "$BUNDLE_PATHS"
+
           echo "Found bundles: ${bundles[*]}"
           for f in "${bundles[@]}"; do
             echo "Uploading $(basename "$f") …"
@@ -133,8 +152,4 @@ jobs:
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
         with:
-          subject-path: |
-            apps/desktop/src-tauri/target/**/bundle/**/*.dmg
-            apps/desktop/src-tauri/target/**/bundle/**/*.msi
-            apps/desktop/src-tauri/target/**/bundle/**/*.deb
-            apps/desktop/src-tauri/target/**/bundle/**/*.AppImage
+          subject-path: ${{ steps.bundles.outputs.paths }}
