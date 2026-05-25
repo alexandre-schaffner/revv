@@ -10,6 +10,7 @@ import ProjectHeader from "$lib/components/sidebar/ProjectHeader.svelte";
 import ProjectPrList from "$lib/components/sidebar/ProjectPrList.svelte";
 import SearchFilter from "$lib/components/sidebar/SearchFilter.svelte";
 import SidebarFilesView from "$lib/components/sidebar/SidebarFilesView.svelte";
+import { gsapFade, tokens } from "$lib/motion";
 import { enterScrollMode, getActivePanel } from "$lib/stores/focus-mode.svelte";
 import {
   getRepositories,
@@ -328,14 +329,17 @@ function handleKeydown(e: KeyboardEvent) {
 	onmouseleave={() => setSidebarPeekHovering(false)}
 >
 	<!-- Header — back-breadcrumb in files mode, ProjectHeader in PR-list
-	     mode. Drops to nothing when collapsed since the column is 0 wide. -->
+	     mode. Drops to nothing when collapsed since the column is 0 wide.
+	     Branches crossfade in sync with the pane slide below. -->
 	<div class="sidebar-header" class:sidebar-header--hidden={collapsed}>
 		{#if view === 'files'}
 			<button
-				class="files-header"
+				class="files-header header-branch"
 				onclick={() => setSidebarView('prs')}
 				title="Back to PR list (Esc)"
 				aria-label="Back to PR list"
+				in:gsapFade={{ duration: tokens.smooth }}
+				out:gsapFade={{ duration: tokens.snap }}
 			>
 				<ChevronLeft size={14} class="back-chevron" />
 				{#if filesViewRepo}
@@ -352,7 +356,13 @@ function handleKeydown(e: KeyboardEvent) {
 				{/if}
 			</button>
 		{:else}
-			<ProjectHeader repo={displayRepo} />
+			<div
+				class="header-branch header-branch--projectheader"
+				in:gsapFade={{ duration: tokens.smooth }}
+				out:gsapFade={{ duration: tokens.snap }}
+			>
+				<ProjectHeader repo={displayRepo} />
+			</div>
 		{/if}
 	</div>
 
@@ -423,7 +433,13 @@ function handleKeydown(e: KeyboardEvent) {
 		display: flex;
 		flex-direction: column;
 		height: 100%;
-		width: 100%; /* grid column controls actual width */
+		/* Stable internal width — the grid track animates 0 ↔ sidebarWidth
+		   during collapse/expand, but this element stays at full width so
+		   its contents don't reflow per frame. `.sidebar-area`'s
+		   overflow:hidden clips the overflow when the track is narrower.
+		   During a live drag `--sidebar-width` updates per pointer event,
+		   so the contents follow the cursor naturally. */
+		width: var(--sidebar-width, 100%);
 		background: var(--color-bg-secondary);
 		overflow: hidden;
 	}
@@ -439,41 +455,32 @@ function handleKeydown(e: KeyboardEvent) {
 		z-index: 5;
 	}
 
-	/* Header */
+	/* position:relative anchors the two stacked .header-branch children so
+	   they crossfade in place during the view-toggle. No opacity/transform
+	   transition on the collapse toggle — the sidebar stays at full
+	   --sidebar-width and the parent's overflow:hidden does the reveal;
+	   layering a fade on top reads as two competing motions. Visibility is
+	   deferred off so the content lingers through the full collapse, then
+	   drops out for tab focus once the panel is actually closed. */
 	.sidebar-header {
-		display: flex;
-		align-items: stretch;
+		position: relative;
 		min-height: 48px;
 		flex-shrink: 0;
-		opacity: 1;
-		transform: translateX(0);
 		visibility: visible;
-		/* No min-width — must be happy at 0 when collapsed */
-		transition:
-			opacity var(--duration-quick) var(--ease-out-expo) 60ms,
-			transform var(--duration-quick) var(--ease-out-expo) 60ms,
-			min-height var(--duration-quick) var(--ease-out-expo) 60ms,
-			visibility 0s linear 0s;
+		transition: visibility 0s linear 0s;
+	}
+
+	.header-branch {
+		position: absolute;
+		inset: 0;
+		display: flex;
+		align-items: center;
+		min-width: 0;
 	}
 
 	.sidebar-header--hidden {
-		min-height: 0;
-		overflow: hidden;
-		opacity: 0;
-		transform: translateX(-12px);
 		visibility: hidden;
-		transition:
-			opacity var(--duration-quick) var(--ease-soft),
-			transform var(--duration-quick) var(--ease-soft),
-			min-height var(--duration-quick) var(--ease-soft),
-			visibility 0s linear var(--duration-quick);
-	}
-
-	/* In PR-list mode the header is owned by ProjectHeader (its own padding).
-	   In files mode the back-breadcrumb stretches to fill. */
-	.sidebar-header > :global(*) {
-		flex: 1;
-		min-width: 0;
+		transition: visibility 0s linear var(--duration-smooth);
 	}
 
 	/* Files-view breadcrumb back-button. Stretches the full content row
@@ -482,8 +489,6 @@ function handleKeydown(e: KeyboardEvent) {
 		display: flex;
 		align-items: center;
 		gap: 6px;
-		flex: 1;
-		min-width: 0;
 		padding: 0 10px;
 		border: none;
 		border-radius: 5px;
@@ -527,32 +532,22 @@ function handleKeydown(e: KeyboardEvent) {
 	/* Body wrapper — provides the positioning context for the two stacked
 	   panes. Each pane is absolutely positioned and animates its own
 	   translateX so we never have to fight flex sizing across a 200%-wide
-	   track. The body's overflow:hidden clips the off-screen pane. */
+	   track. The body's overflow:hidden clips the off-screen pane.
+	   Collapse-toggle handling matches .sidebar-header above. */
 	.sidebar-body {
 		flex: 1;
 		min-height: 0;
 		overflow: hidden;
 		position: relative;
 		contain: layout paint;
-		opacity: 1;
 		visibility: visible;
-		transform: translateX(0);
-		will-change: transform, opacity;
-		transition:
-			opacity var(--duration-quick) var(--ease-out-expo) 60ms,
-			transform var(--duration-quick) var(--ease-out-expo) 60ms,
-			visibility 0s linear 0s;
+		transition: visibility 0s linear 0s;
 	}
 
 	.sidebar-body--hidden {
-		opacity: 0;
 		visibility: hidden;
-		transform: translateX(-12px);
 		pointer-events: none;
-		transition:
-			opacity var(--duration-quick) var(--ease-soft),
-			transform var(--duration-quick) var(--ease-soft),
-			visibility 0s linear var(--duration-quick);
+		transition: visibility 0s linear var(--duration-smooth);
 	}
 
 	.view-pane {

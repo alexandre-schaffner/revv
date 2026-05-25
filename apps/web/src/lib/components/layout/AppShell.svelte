@@ -115,6 +115,13 @@ $effect(() => {
 // Right-panel slide + main-area vignette. Grid-track interpolation stays
 // on a CSS transition; JS-driving it forces a Svelte reactivity flush per
 // frame (de65e4c9). Snap on first paint and during a live drag.
+//
+// The grid-track animation is cheap because both flanking panes render
+// at a stable width (sidebar via `width: var(--sidebar-width)`, right
+// panel via absolute positioning inside `.rightpanel-slot`), so neither
+// pane's contents reflow as the track changes. Only the main area
+// actually resizes, and its diff viewer / file tree are virtualized
+// externally (@pierre/diffs, @pierre/trees).
 let panelEl = $state<HTMLElement | null>(null);
 let mainEl = $state<HTMLElement | null>(null);
 let panelSlide: gsap.QuickToFunc | null = null;
@@ -138,15 +145,20 @@ $effect(() => {
     return;
   }
 
-  const ease = `cubic-bezier(${tokens.easeOutExpo})`;
+  // CustomEase parses bare cubic-bezier control points (tokens.ts:4–8).
+  // Wrapping them in `cubic-bezier(...)` silently falls back to power1.out,
+  // which desyncs against the CSS grid transition's real expo curve.
   if (!panelSlide) {
-    panelSlide = gsap.quickTo(panelEl, "x", { duration: tokens.smooth, ease });
+    panelSlide = gsap.quickTo(panelEl, "x", {
+      duration: tokens.smooth,
+      ease: tokens.easeOutExpo,
+    });
   }
   if (!vignetteSetter) {
     const el = mainEl;
     vignetteSetter = gsap.quickTo(vignetteProxy, "v", {
       duration: tokens.smooth,
-      ease,
+      ease: tokens.easeOutExpo,
       onUpdate: () => el.style.setProperty("--vignette-opacity", String(vignetteProxy.v)),
     });
   }
@@ -155,7 +167,7 @@ $effect(() => {
 });
 
 const gridStyle = $derived(
-  `grid-template-columns: ${RAIL_WIDTH}px ${sidebarEffectiveCollapsed ? 0 : sidebarWidth}px 1fr ${rightPanelOpen ? rightPanelWidth : 0}px; --right-panel-width: ${rightPanelWidth}px`,
+  `grid-template-columns: ${RAIL_WIDTH}px ${sidebarEffectiveCollapsed ? 0 : sidebarWidth}px 1fr ${rightPanelOpen ? rightPanelWidth : 0}px; --sidebar-width: ${sidebarWidth}px; --right-panel-width: ${rightPanelWidth}px`,
 );
 
 function onHandlePointerDown(event: PointerEvent): void {
@@ -299,27 +311,29 @@ function onRightHandleDblClick(): void {
 		<BottomBar />
 	</footer>
 
-	<aside
-		bind:this={panelEl}
-		class="rightpanel-area"
-		class:rightpanel-area--open={rightPanelOpen}
-		aria-hidden={!rightPanelOpen}
-	>
-		{#if rightPanelOpen}
-			<div
-				class="right-resize-handle"
-				role="separator"
-				aria-label="Resize right panel"
-				aria-orientation="vertical"
-				tabindex="-1"
-				onpointerdown={onRightHandlePointerDown}
-				onpointermove={onRightHandlePointerMove}
-				onpointerup={onRightHandlePointerUp}
-				ondblclick={onRightHandleDblClick}
-			></div>
-		{/if}
-		<RightPanel onClose={toggleRightPanel} prId={page.params['prId'] ?? ''} />
-	</aside>
+	<div class="rightpanel-slot">
+		<aside
+			bind:this={panelEl}
+			class="rightpanel-area"
+			class:rightpanel-area--open={rightPanelOpen}
+			aria-hidden={!rightPanelOpen}
+		>
+			{#if rightPanelOpen}
+				<div
+					class="right-resize-handle"
+					role="separator"
+					aria-label="Resize right panel"
+					aria-orientation="vertical"
+					tabindex="-1"
+					onpointerdown={onRightHandlePointerDown}
+					onpointermove={onRightHandlePointerMove}
+					onpointerup={onRightHandlePointerUp}
+					ondblclick={onRightHandleDblClick}
+				></div>
+			{/if}
+			<RightPanel onClose={toggleRightPanel} prId={page.params['prId'] ?? ''} />
+		</aside>
+	</div>
 </div>
 
 <CommandPalette
@@ -345,9 +359,9 @@ function onRightHandleDblClick(): void {
 		/* Positioning context for the absolutely-positioned right pane. */
 		position: relative;
 		background-color: var(--color-bg-secondary);
-		/* Browser-driven track interpolation. Cheaper than animating the
-		   grid-template-columns string from JS — Svelte reactivity + style
-		   diffing on every frame causes visible lag. */
+		/* Animates the main column when either flanking pane toggles. The
+		   per-frame cost is bounded by the stable-width pattern documented
+		   on the panel-choreography $effect above. */
 		transition: grid-template-columns var(--duration-smooth) var(--ease-out-expo);
 	}
 
@@ -534,38 +548,39 @@ function onRightHandleDblClick(): void {
 	}
 
 	/* ── Right pane (chat) ──
-	   A real grid column. Width is 0 when closed, rightPanelWidth when
-	   open; toggling shrinks the main column rather than overlaying. The
-	   open/close animation comes from the grid-template-columns transition
-	   on .app-shell.
-
-	   Margin pattern mirrors .main-area's island (top / bottom / right =
-	   spacing-island) but margin-left is 0 — main's own margin-right
-	   already produces the chrome gap between the two islands, so adding
-	   margin-left here would double it. */
-	.rightpanel-area {
+	   `.rightpanel-slot` is the grid cell whose width animates 0 ↔
+	   rightPanelWidth; that drives the main column's shrink/grow.
+	   `.rightpanel-area` is absolutely-positioned inside it at a stable
+	   width so its contents never reflow during the track animation. The
+	   visible slide is a GSAP translateX tween on the panel, synchronized
+	   with the CSS grid transition (same duration + easing). */
+	.rightpanel-slot {
 		grid-area: rightpanel;
 		position: relative;
+	}
+
+	.rightpanel-area {
+		position: absolute;
+		top: var(--spacing-island);
+		right: var(--spacing-island);
+		bottom: var(--spacing-island);
+		width: calc(var(--right-panel-width) - var(--spacing-island));
 		overflow: hidden;
 		background: var(--color-bg-primary);
 		border: 1px solid var(--color-border);
 		border-radius: var(--radius-island);
-		margin: var(--spacing-island) var(--spacing-island) var(--spacing-island) 0;
 		/* Mirrors .main-area's island elevation so both panes float
 		   identically inside the chrome. */
 		box-shadow:
 			inset 0 1px 0 0 color-mix(in srgb, white 60%, transparent),
 			0 1px 2px -1px color-mix(in srgb, black 6%, transparent),
 			0 8px 24px -12px color-mix(in srgb, black 10%, transparent);
-		/* min-width: 0 lets the grid track shrink to 0 even though the
-		   border-box would otherwise contribute its own min-content. */
-		min-width: 0;
 		/* First-paint transform for the closed state. The GSAP choreography
-		   (panel-choreography.ts) takes over once the first effect runs,
-		   writing the transform inline (which beats this rule on
-		   specificity). Keeping the static CSS means an open-on-reload
-		   panel renders at its correct resting position without a
-		   one-frame flash before JS attaches. */
+		   (panel-choreography $effect above) takes over once the first
+		   effect runs, writing the transform inline (which beats this rule
+		   on specificity). Keeping the static CSS means an open-on-reload
+		   panel renders at its correct resting position without a one-frame
+		   flash before JS attaches. */
 		transform: translateX(var(--right-panel-width));
 	}
 

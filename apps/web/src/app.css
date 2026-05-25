@@ -1001,7 +1001,7 @@ diffs-container {
   z-index: 10;
   pointer-events: none;
   transition:
-    left var(--duration-smooth) var(--ease-out-expo),
+    left var(--duration-instant) var(--ease-out-expo),
     right var(--duration-instant) var(--ease-out-expo);
 }
 .actions-float * {

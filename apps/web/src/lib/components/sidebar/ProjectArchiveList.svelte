@@ -78,6 +78,7 @@ const visible = $derived(archivedPrs.length > 0 || nextCursor !== null);
 				{:else}
 					{#each archivedPrs as pr, i (pr.id)}
 						<div
+							class="archive-row"
 							in:gsapFadeY={{
 								y: 6,
 								duration: tokens.quick,
@@ -113,6 +114,13 @@ const visible = $derived(archivedPrs.length > 0 || nextCursor !== null);
 	.archive-section {
 		border-top: 1px solid var(--color-border-subtle, var(--color-border));
 		padding: 6px 4px 4px;
+	}
+
+	/* Off-screen rows skip layout / paint — keeps sidebar-width animations
+	   cheap even with hundreds of archived PRs loaded. */
+	.archive-row {
+		content-visibility: auto;
+		contain-intrinsic-size: auto 48px;
 	}
 
 	.archive-toggle {
