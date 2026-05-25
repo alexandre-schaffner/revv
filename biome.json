@@ -108,6 +108,12 @@
           }
         }
       }
+    },
+    {
+      "includes": ["apps/desktop/tauri.conf.json"],
+      "formatter": {
+        "enabled": false
+      }
     }
   ]
 }
