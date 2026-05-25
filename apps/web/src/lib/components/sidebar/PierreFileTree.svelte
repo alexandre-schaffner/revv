@@ -203,10 +203,13 @@ let scrollHandler: (() => void) | null = null;
 // horizontally. The result is LOC badges at varying X positions per
 // row. Tracking the running max (monotonic) is enough: once we've seen
 // the widest row, all other rows widen to match via `min-width: max(var,
-// 100%)`, and scrollWidth stabilises at that max.
+// 100%)`, and scrollWidth stabilises at that max. `host.clientWidth`
+// is folded in as a floor so the var is never below viewport width
+// (the `100%` fallback resolves unreliably for flex items in
+// column-direction containers, especially inside `max()`).
 function syncRowMinWidth(): void {
   if (!scrollerEl || !host) return;
-  const w = scrollerEl.scrollWidth;
+  const w = Math.max(scrollerEl.scrollWidth, host.clientWidth);
   const current = parseFloat(host.style.getPropertyValue("--tree-row-min-width") || "0");
   if (w > current) {
     host.style.setProperty("--tree-row-min-width", `${w}px`);
@@ -506,16 +509,26 @@ $effect(() => {
 							 * filename and the pinned LOC badge. The opaque
 							 * \`background-color\` still occludes the text;
 							 * the mask just feathers the leading edge so
-							 * the cut doesn't read as a hard 1px line. */
+							 * the cut doesn't read as a hard 1px line.
+							 *
+							 * Four-stop ease-out curve so both ends of the row
+							 * feather with the same hand as the host-level
+							 * mask on the opposite edge. */
 							-webkit-mask-image: linear-gradient(
 								to right,
 								transparent 0,
-								black 12px
+								rgba(0, 0, 0, 0.25) 4px,
+								rgba(0, 0, 0, 0.7) 9px,
+								rgba(0, 0, 0, 0.94) 12px,
+								black 14px
 							);
 							mask-image: linear-gradient(
 								to right,
 								transparent 0,
-								black 12px
+								rgba(0, 0, 0, 0.25) 4px,
+								rgba(0, 0, 0, 0.7) 9px,
+								rgba(0, 0, 0, 0.94) 12px,
+								black 14px
 							);
 						}
 					`,
@@ -555,6 +568,12 @@ $effect(() => {
           }
         },
       });
+      // Seed the row-width floor before render so the first layout
+      // pass already has viewport-width baked into `min-width`; without
+      // this, rows flash as content-fit pills until the first raf-sync.
+      if (host.clientWidth > 0) {
+        host.style.setProperty("--tree-row-min-width", `${host.clientWidth}px`);
+      }
       tree.render({ containerWrapper: host });
       // Inject per-path colour rules now that the shadow root exists.
       syncStatsStyle();
@@ -638,10 +657,16 @@ $effect(() => {
       tree.resetPaths(withPhantomPaths(currentPaths));
       tree.setGitStatus(initialGitStatus);
       syncStatsStyle();
-      // Reset the row-width cap: the new path set could have a
-      // different widest row, and we don't want the previous PR's
-      // cap to leak into this one (would over-stretch every row).
-      host.style.removeProperty("--tree-row-min-width");
+      // Reset the row-width cap to the viewport floor: the new path
+      // set could have a different widest row, and we don't want the
+      // previous PR's cap to leak into this one (would over-stretch
+      // every row). Seeding (rather than removing) prevents a
+      // content-pill flash between this update and the next raf-sync.
+      if (host.clientWidth > 0) {
+        host.style.setProperty("--tree-row-min-width", `${host.clientWidth}px`);
+      } else {
+        host.style.removeProperty("--tree-row-min-width");
+      }
       // Re-measure on the next frame, once Pierre has rendered the
       // new path list and the inner scrollWidth reflects it.
       requestAnimationFrame(syncRowMinWidth);
@@ -818,9 +843,6 @@ onDestroy(() => {
 		overflow: hidden;
 		display: flex;
 		flex-direction: column;
-		/* `contain: layout paint` already makes this a containing block for
-		   absolutely-positioned descendants, so the `::before` fade overlay
-		   below doesn't need an explicit `position: relative`. */
 		contain: layout paint;
 		/* Force the tree into dark-mode rendering regardless of the user's
 		   system preference. The tree's CSS uses `light-dark()` and reads
@@ -851,46 +873,54 @@ onDestroy(() => {
 		outline: none;
 	}
 
-	/* Left-edge fade overlay shown only when the inner scroller has been
-	   scrolled horizontally. Sits above the shadow-root content via
-	   `z-index`, ignores pointer events so it doesn't intercept clicks
-	   on rows beneath it, and fades in/out on the standard motion tokens
-	   (no GSAP needed — this is a 1-property opacity transition gated
-	   by a data attribute that JS flips synchronously on scroll).
-
-	   The fade is a cue, not a transition: short width (20px) and a
-	   solid → transparent ramp without a midway plateau, so it reads as
-	   "content is hidden behind here" rather than a fashionable gradient
-	   panel. `linear` easing is intentional — a softened curve here lags
-	   the actual scroll motion. */
-	.pierre-tree-host::before {
-		content: "";
-		position: absolute;
-		top: 0;
-		bottom: 0;
-		left: 0;
-		width: 14px;
-		pointer-events: none;
-		z-index: 2;
-		background: linear-gradient(
+	/* Left-edge fade for the horizontal-scroll cue, implemented as a CSS
+	   mask on the host (not an opaque overlay) so the row's own background
+	   — selection tint, hover tint — dissolves into the parent's bg rather
+	   than being painted over. The mask is always applied; we slide its
+	   position to gate visibility. At rest, `mask-position-x: -8px` puts
+	   the transparent ramp off-screen to the left; `data-scrolled-x` moves
+	   it to `0`. `mask-size: calc(100% + 8px)` keeps the opaque tail
+	   covering the host's right edge in both states. `mask-position` is
+	   the interpolable handle for the snap-duration transition. */
+	.pierre-tree-host {
+		-webkit-mask-image: linear-gradient(
 			to right,
-			var(--color-bg-secondary) 0%,
-			color-mix(in srgb, var(--color-bg-secondary) 60%, transparent) 55%,
-			transparent 100%
+			rgba(0, 0, 0, 0) 0,
+			rgba(0, 0, 0, 0.14) 2px,
+			rgba(0, 0, 0, 0.5) 4px,
+			rgba(0, 0, 0, 0.86) 6px,
+			black 8px,
+			black 100%
 		);
-		opacity: 0;
-		transition: opacity var(--duration-snap) linear;
+		mask-image: linear-gradient(
+			to right,
+			rgba(0, 0, 0, 0) 0,
+			rgba(0, 0, 0, 0.14) 2px,
+			rgba(0, 0, 0, 0.5) 4px,
+			rgba(0, 0, 0, 0.86) 6px,
+			black 8px,
+			black 100%
+		);
+		-webkit-mask-repeat: no-repeat;
+		mask-repeat: no-repeat;
+		-webkit-mask-size: calc(100% + 8px) 100%;
+		mask-size: calc(100% + 8px) 100%;
+		-webkit-mask-position: -8px 0;
+		mask-position: -8px 0;
+		transition: -webkit-mask-position var(--duration-snap) linear,
+			mask-position var(--duration-snap) linear;
 	}
 
 	/* The attribute is flipped from JS, so Svelte's CSS scoper can't see
 	   it on the template. `:global` on that segment keeps the rest of
 	   the selector scoped via the host class. */
-	.pierre-tree-host:global([data-scrolled-x])::before {
-		opacity: 1;
+	.pierre-tree-host:global([data-scrolled-x]) {
+		-webkit-mask-position: 0 0;
+		mask-position: 0 0;
 	}
 
 	@media (prefers-reduced-motion: reduce) {
-		.pierre-tree-host::before {
+		.pierre-tree-host {
 			transition: none;
 		}
 	}
