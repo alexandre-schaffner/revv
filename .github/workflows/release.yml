@@ -63,7 +63,6 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
-          bootstrap-sha: d0b10912
 
   # ── Cross-platform Tauri builds ───────────────────────────────
   # Shared matrix lives in `_build-tauri.yml` and is reused by `nightly.yml`.
