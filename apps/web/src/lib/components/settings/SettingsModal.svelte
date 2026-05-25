@@ -111,6 +111,55 @@ async function testCacheConnection(): Promise<void> {
   }
 }
 
+// ── Cache signing — "Test signing" state ──────────────────────────────────
+// Round-trips a probe message through the local SSH key + the user's published
+// `.keys`. Surfaces the specific signer service error verbatim so a user can
+// see e.g. "no key in ~/.ssh matches your GitHub keys" or ssh-keygen output.
+type SigningTestResult =
+  | { ok: true; signerLogin: string; signerHost: string; signatureNamespace: string }
+  | { ok: false; error: string };
+let signingTestState = $state<SigningTestResult | null>(null);
+let signingTestRunning = $state(false);
+async function testCacheSigning(): Promise<void> {
+  if (signingTestRunning) return;
+  signingTestRunning = true;
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/settings/cache/signing/test`, {
+      method: "POST",
+      headers: await authHeaders(),
+    });
+    if (!res.ok) {
+      signingTestState = { ok: false, error: `HTTP ${res.status}` };
+      return;
+    }
+    signingTestState = (await res.json()) as SigningTestResult;
+  } catch (e) {
+    signingTestState = {
+      ok: false,
+      error: e instanceof Error ? e.message : String(e),
+    };
+  } finally {
+    signingTestRunning = false;
+  }
+}
+
+const signingModeOptions: { value: "off" | "permissive" | "strict"; label: string }[] = [
+  { value: "strict", label: "Strict — require valid signature" },
+  { value: "permissive", label: "Permissive — sign on push, warn on bad sig" },
+  { value: "off", label: "Off — no signing or verification" },
+];
+
+function trustedHostsToText(hosts: readonly string[] | undefined): string {
+  return (hosts ?? []).join(", ");
+}
+
+function parseTrustedHosts(text: string): string[] {
+  return text
+    .split(/[\s,]+/)
+    .map((h) => h.trim())
+    .filter(Boolean);
+}
+
 // ── Recap agent selector options ──────────────────────────────────────────
 const recapAgentOptions: { value: RecapAgentChoice; label: string }[] = [
   { value: "auto", label: "Auto (follow main agent)" },
@@ -827,6 +876,123 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 							}}
 							aria-label="Hydrate from team cache"
 						/>
+					</div>
+				</div>
+
+				<!-- Signing -->
+				<div class="settings-subgroup">
+					<h3 class="settings-subgroup-heading">Signing</h3>
+					<p class="settings-field-hint">
+						Sign uploaded snapshots with your GitHub SSH key. On download, signatures are
+						verified against the signer's published keys at
+						<code>https://&lt;host&gt;/&lt;login&gt;.keys</code> and the signer must currently
+						have write access to the repo.
+					</p>
+
+					<div class="settings-row">
+						<div class="settings-row-info">
+							<p class="settings-row-label">Verification mode</p>
+							<p class="settings-row-hint">
+								Strict is the default. Permissive accepts unsigned blobs with a warning.
+							</p>
+						</div>
+						<Select.Root
+							type="single"
+							value={getSettings()?.cache?.signing?.mode ?? 'strict'}
+							onValueChange={(v) => {
+								if (v !== 'off' && v !== 'permissive' && v !== 'strict') return;
+								void updateSettings({ cache: { signing: { mode: v } } });
+							}}
+						>
+							<Select.Trigger class="w-64 text-xs">
+								{signingModeOptions.find(
+									(o) => o.value === (getSettings()?.cache?.signing?.mode ?? 'strict'),
+								)?.label ?? 'Strict'}
+							</Select.Trigger>
+							<Select.Content>
+								{#each signingModeOptions as opt (opt.value)}
+									<Select.Item value={opt.value} class="text-xs">{opt.label}</Select.Item>
+								{/each}
+							</Select.Content>
+						</Select.Root>
+					</div>
+
+					<div class="settings-field">
+						<label class="settings-field-label" for="cache-signing-key-path">
+							SSH private key path
+						</label>
+						<Input
+							id="cache-signing-key-path"
+							type="text"
+							placeholder="Auto-detect from ~/.ssh"
+							value={getSettings()?.cache?.signing?.keyPath ?? ''}
+							oninput={(e) => {
+								void updateSettings({
+									cache: {
+										signing: { keyPath: (e.target as HTMLInputElement).value },
+									},
+								});
+							}}
+						/>
+						<p class="settings-field-hint">
+							Leave empty to auto-pick the first key in <code>~/.ssh</code> whose public
+							half is on your GitHub <code>.keys</code> page. The private key is never
+							read by Revv — <code>ssh-keygen</code> handles signing.
+						</p>
+					</div>
+
+					<div class="settings-field">
+						<label class="settings-field-label" for="cache-trusted-hosts">
+							Trusted signer hosts
+						</label>
+						<Input
+							id="cache-trusted-hosts"
+							type="text"
+							placeholder="github.com, nocturlab.ghe.com"
+							value={trustedHostsToText(getSettings()?.cache?.signing?.trustedSignerHosts)}
+							onchange={(e) => {
+								void updateSettings({
+									cache: {
+										signing: {
+											trustedSignerHosts: parseTrustedHosts(
+												(e.target as HTMLInputElement).value,
+											),
+										},
+									},
+								});
+							}}
+						/>
+						<p class="settings-field-hint">
+							Comma-separated. Blobs whose signer host is not in this list are rejected
+							before any network call.
+						</p>
+					</div>
+
+					<div class="flex items-center gap-3 pt-1">
+						<Button
+							variant="outline"
+							size="sm"
+							onclick={testCacheSigning}
+							disabled={signingTestRunning}
+						>
+							{#if signingTestRunning}
+								<Loader2 size={14} weight="regular" class="motion-essential-spin" />
+							{/if}
+							Test signing
+						</Button>
+						{#if signingTestState}
+							<span
+								class="probe-result"
+								class:probe-result--ok={signingTestState.ok}
+								class:probe-result--err={!signingTestState.ok}
+							>
+								{#if signingTestState.ok}
+									Signed &amp; verified as {signingTestState.signerLogin}@{signingTestState.signerHost}
+								{:else}
+									{signingTestState.error}
+								{/if}
+							</span>
+						{/if}
 					</div>
 				</div>
 			</section>

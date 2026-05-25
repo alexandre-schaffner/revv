@@ -75,7 +75,9 @@ export async function fetchSettings(): Promise<void> {
  */
 export type SettingsUpdate = Partial<Omit<UserSettings, "id" | "recap" | "cache">> & {
   recap?: Partial<UserSettings["recap"]>;
-  cache?: Partial<UserSettings["cache"]>;
+  cache?: Partial<Omit<UserSettings["cache"], "signing">> & {
+    signing?: Partial<UserSettings["cache"]["signing"]>;
+  };
 };
 
 export async function updateSettings(partial: SettingsUpdate): Promise<void> {
@@ -85,7 +87,15 @@ export async function updateSettings(partial: SettingsUpdate): Promise<void> {
   // deep-merged so a sub-field patch doesn't blow away the other sub-fields.
   if (settings) {
     const mergedRecap = partial.recap ? { ...settings.recap, ...partial.recap } : settings.recap;
-    const mergedCache = partial.cache ? { ...settings.cache, ...partial.cache } : settings.cache;
+    const mergedCache = partial.cache
+      ? {
+          ...settings.cache,
+          ...partial.cache,
+          signing: partial.cache.signing
+            ? { ...settings.cache.signing, ...partial.cache.signing }
+            : settings.cache.signing,
+        }
+      : settings.cache;
     settings = {
       ...settings,
       ...partial,
