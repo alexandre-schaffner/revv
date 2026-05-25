@@ -14,6 +14,7 @@
 
 import { eq } from "drizzle-orm";
 import { Context, Effect, Layer, Stream } from "effect";
+import { extractHostFromProviderId } from "../domain/provider-id";
 import { account, user } from "../db/schema";
 import { debug } from "../logger";
 import { DbService } from "./Db";
@@ -32,11 +33,6 @@ const READ_TTL_MS = 5 * 60 * 1000; // 5 min for read/none (faster refresh on acc
 
 function isEligible(perm: PermLevel): boolean {
   return perm === "write" || perm === "maintain" || perm === "admin";
-}
-
-function extractHostFromProviderId(providerId: string): string {
-  if (providerId.startsWith("github:")) return providerId.slice("github:".length);
-  return "github.com";
 }
 
 // ── Context tag ───────────────────────────────────────────────────────────────

@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm";
 import { Context, Effect, Layer, Stream } from "effect";
 import type { Db } from "../../db/index";
 import { account, user } from "../../db/schema";
+import { extractHostFromProviderId } from "../../domain/provider-id";
 import {
   SshKeysFetchFailed,
   SshSignatureInvalid,
@@ -50,11 +51,6 @@ export class SshSigner extends Context.Tag("SshSigner")<
 >() {}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-function extractHostFromProviderId(providerId: string): string {
-  if (providerId.startsWith("github:")) return providerId.slice("github:".length);
-  return "github.com";
-}
 
 const SSH_KEY_PATTERNS = /^id_(ed25519|ecdsa|rsa)$/;
 
