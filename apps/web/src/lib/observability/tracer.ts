@@ -1,3 +1,5 @@
+import { bumpVersion } from "./version";
+
 // ── Span ring buffer ────────────────────────────────────────────────────────
 //
 // In-memory tracer: every completed span is pushed into a fixed-size ring
@@ -57,6 +59,7 @@ export function recordSpan(
     ring[ringIdx] = span;
     ringIdx = (ringIdx + 1) % RING_CAPACITY;
   }
+  bumpVersion();
   if (verbose) emitVerboseLine(span);
 }
 

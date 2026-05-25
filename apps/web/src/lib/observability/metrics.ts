@@ -6,6 +6,8 @@
 // keyed by `"<name>{tag=value,tag=value}"` and expose a snapshot accessor
 // the dev panel and `window.__revv.metrics()` both read.
 
+import { bumpVersion } from "./version";
+
 export interface CounterValue {
   readonly count: number;
 }
@@ -50,6 +52,7 @@ export function recordCounter(
     counters.set(k, c);
   }
   c.count += delta;
+  bumpVersion();
 }
 
 export function recordHistogram(
@@ -74,6 +77,7 @@ export function recordHistogram(
     h.samples[h.ringIdx] = value;
     h.ringIdx = (h.ringIdx + 1) % HISTOGRAM_SAMPLE_CAP;
   }
+  bumpVersion();
 }
 
 export interface MetricsSnapshot {
@@ -109,4 +113,63 @@ export function snapshot(): MetricsSnapshot {
 export function clearMetrics(): void {
   counters.clear();
   histograms.clear();
+}
+
+// ── Top-N partial snapshot ──────────────────────────────────────────────────
+//
+// `snapshot()` sorts every histogram's 256-sample buffer to compute p50/p95.
+// With per-PR / per-walkthrough tagging, histogram cardinality scales with
+// active entries (50–200 keys is realistic). The dev panel only renders the
+// top 20, so paying O(H × S log S) on every refresh is wasted work.
+//
+// `snapshotTop(n)` picks the top N histograms by `max` first (cheap — `max`
+// is maintained on insert, no sort needed), then sorts only their samples.
+// Drops worst-case work from O(H × S log S) to O(H + N × S log S).
+
+export interface TopHistogramEntry {
+  readonly key: string;
+  readonly count: number;
+  readonly min: number;
+  readonly max: number;
+  readonly p50: number;
+  readonly p95: number;
+}
+
+export interface TopCounterEntry {
+  readonly key: string;
+  readonly count: number;
+}
+
+export interface MetricsTopSnapshot {
+  readonly counters: ReadonlyArray<TopCounterEntry>;
+  readonly histograms: ReadonlyArray<TopHistogramEntry>;
+}
+
+export function snapshotTop(n: number): MetricsTopSnapshot {
+  const topCounters: TopCounterEntry[] = [];
+  for (const [key, v] of counters) topCounters.push({ key, count: v.count });
+  topCounters.sort((a, b) => b.count - a.count);
+  topCounters.length = Math.min(topCounters.length, n);
+
+  const candidates: Array<{ key: string; max: number }> = [];
+  for (const [key, v] of histograms) candidates.push({ key, max: v.max });
+  candidates.sort((a, b) => b.max - a.max);
+  if (candidates.length > n) candidates.length = n;
+
+  const topHistograms: TopHistogramEntry[] = candidates.map(({ key }) => {
+    // biome-ignore lint/style/noNonNullAssertion: key came from the histograms map a moment ago.
+    const h = histograms.get(key)!;
+    const sorted = [...h.samples].sort((a, b) => a - b);
+    const len = sorted.length;
+    return {
+      key,
+      count: h.count,
+      min: h.min,
+      max: h.max,
+      p50: sorted[Math.floor(len * 0.5)] ?? 0,
+      p95: sorted[Math.floor(len * 0.95)] ?? 0,
+    };
+  });
+
+  return { counters: topCounters, histograms: topHistograms };
 }
