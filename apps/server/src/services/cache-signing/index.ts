@@ -169,6 +169,7 @@ export const SshSignerLive = Layer.effect(
           }
 
           let keyPath = settings.cache.signing.keyPath;
+          let autoDetected: string | undefined;
 
           if (!keyPath) {
             const detected = yield* Effect.tryPromise({
@@ -185,11 +186,7 @@ export const SshSignerLive = Layer.effect(
             }
 
             keyPath = detected;
-            // Persist auto-detected path so future calls skip detection.
-            yield* settingsSvc
-              .updateSettings({ cache: { signing: { keyPath: detected } } })
-              .pipe(Effect.ignore);
-            debug("cache-signing", `auto-detected key path: ${detected}`);
+            autoDetected = detected;
           }
 
           const namespace = `revv-cache@${acct.host}`;
@@ -203,6 +200,13 @@ export const SshSignerLive = Layer.effect(
               });
             },
           });
+
+          if (autoDetected) {
+            yield* settingsSvc
+              .updateSettings({ cache: { signing: { keyPath: autoDetected } } })
+              .pipe(Effect.ignore);
+            debug("cache-signing", `auto-detected key path: ${autoDetected}`);
+          }
 
           return {
             signature,
