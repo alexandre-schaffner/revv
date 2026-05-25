@@ -225,8 +225,39 @@ info "Running bun install…"
 bun install
 success "Workspace dependencies installed"
 
+# Verify workspace deps actually landed in node_modules (Bun's workspace
+# hoisting can leave stale trees when the lockfile changes under a warm cache).
+_verify_workspace_deps() {
+  local missing=()
+  # Critical frontend deps that have caused runtime crashes when absent
+  [[ -d "node_modules/gsap" ]] || missing+=("gsap")
+  [[ -d "node_modules/phosphor-svelte" ]] || missing+=("phosphor-svelte")
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    warn "Some workspace dependencies are missing from node_modules: ${missing[*]}"
+    if confirm "Force a clean reinstall (rm -rf node_modules && bun install)?"; then
+      info "Clearing node_modules and reinstalling…"
+      rm -rf node_modules apps/web/node_modules apps/server/node_modules packages/shared/node_modules
+      bun install
+      success "Clean reinstall complete"
+    else
+      warn "Continuing with incomplete node_modules — builds may fail"
+    fi
+  fi
+}
+_verify_workspace_deps
+
 # ── 5. Dev mode exits here ────────────────────────────────────
 if [[ "$MODE" == "dev" ]]; then
+  # Warn about stale dev DBs that can crash migrations on first dev-server start.
+  for stale_db in "apps/server/revv-dev.db" "revv-dev.db"; do
+    if [[ -f "$stale_db" ]]; then
+      warn "A dev database already exists at $stale_db."
+      info "If the server crashes with a migration error on startup, run:"
+      info "  make reset-db"
+      break
+    fi
+  done
+
   printf '\n%s%s' "$REVV_BOLD" "$REVV_GREEN"
   printf '  ┌─────────────────────────────────────┐\n'
   printf '  │   ✓  Dev environment ready          │\n'
