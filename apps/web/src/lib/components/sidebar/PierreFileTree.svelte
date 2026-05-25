@@ -234,7 +234,13 @@ $effect(() => {
 						[data-file-tree-virtualized-scroll='true'] {
 							scrollbar-gutter: auto;
 							padding-inline: 2px;
-							padding-block-end: var(--bottombar-height);
+							/* Trailing scroll room equal to .sidebar-fade height
+							 * (48px in Sidebar.svelte) so the last file can be
+							 * scrolled above the bottom-edge fade — same trick the
+							 * PR list uses with padding-bottom: 48px on its own
+							 * scroller (Sidebar.svelte:597). Less than that leaves
+							 * the last row partially covered by the fade. */
+							padding-block-end: 48px;
 						}
 						/* Reserve a fixed slot for the LOC badge on the right edge of
 						 * the row. Pierre's default decoration cell is \`flex: 1 1 0\`

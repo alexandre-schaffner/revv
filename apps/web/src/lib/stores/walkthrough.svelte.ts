@@ -1169,10 +1169,11 @@ export async function regenerate(prId: string): Promise<void> {
       // Non-fatal — the start call below will still create a fresh job.
     }
 
-    // Drop the stale freshEntry so the server's `lifecycle:started`
-    // emission re-seeds the entry with the new walkthroughId.
-    deleteEntry(prId);
-
+    // Keep the seeded freshEntry in place across the start POST: the
+    // `lifecycle:started` reducer patches `walkthroughId` on the existing
+    // entry, so dropping it here would only cause `_active` to flip to
+    // undefined and flash the "Generate walkthrough" pill between the
+    // regenerate and start round-trips.
     await startWalkthrough(prId);
   } finally {
     clearPending(prId);
