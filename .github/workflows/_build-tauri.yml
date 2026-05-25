@@ -106,6 +106,30 @@ jobs:
           updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
 
+      # tauri-action uploads bundles automatically, but it can silently fail
+      # when the release already exists (e.g. created by release-please). This
+      # fallback ensures every platform's bundles land on the release.
+      - name: Upload bundles (fallback)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag_name }}
+        run: |
+          set -euo pipefail
+          bundles=()
+          for f in apps/desktop/src-tauri/target/*/bundle/*/*.{dmg,msi,deb,AppImage} 2>/dev/null; do
+            [[ -f "$f" ]] || continue
+            bundles+=("$f")
+          done
+          if [[ ${#bundles[@]} -eq 0 ]]; then
+            echo "No bundle files found — skipping fallback upload."
+            exit 0
+          fi
+          echo "Found bundles: ${bundles[*]}"
+          for f in "${bundles[@]}"; do
+            echo "Uploading $(basename "$f") …"
+            gh release upload "$TAG" "$f" --clobber || true
+          done
+
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
         with:

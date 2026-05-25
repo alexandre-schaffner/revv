@@ -51,10 +51,9 @@ jobs:
       contents: write
       pull-requests: write
     outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
-      version: ${{ steps.release.outputs.version }}
-      upload_url: ${{ steps.release.outputs.upload_url }}
+      releases_created: ${{ steps.release.outputs.releases_created }}
+      tag_name: ${{ steps.parse.outputs.tag_name }}
+      version: ${{ steps.parse.outputs.version }}
 
     steps:
       - uses: googleapis/release-please-action@v4
@@ -64,11 +63,28 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
+      # release-please v4 outputs a JSON array under `releases`; for a
+      # single simple-release we extract tagName / version from the first
+      # element. If no release was created, these will be empty strings.
+      - name: Parse release outputs
+        id: parse
+        run: |
+          releases_json='${{ steps.release.outputs.releases }}'
+          if [[ "$releases_json" == "[]" || -z "$releases_json" ]]; then
+            echo "tag_name=" >> "$GITHUB_OUTPUT"
+            echo "version="  >> "$GITHUB_OUTPUT"
+          else
+            tag_name=$(echo "$releases_json" | jq -r '.[0].tagName // empty')
+            version=$(echo  "$releases_json" | jq -r '.[0].version // empty')
+            echo "tag_name=${tag_name}" >> "$GITHUB_OUTPUT"
+            echo "version=${version}"   >> "$GITHUB_OUTPUT"
+          fi
+
   # ── Cross-platform Tauri builds ───────────────────────────────
   # Shared matrix lives in `_build-tauri.yml` and is reused by `nightly.yml`.
   build-tauri:
     needs: release-please
-    if: needs.release-please.outputs.release_created == 'true'
+    if: needs.release-please.outputs.releases_created == 'true'
     uses: ./.github/workflows/_build-tauri.yml
     with:
       tag_name: ${{ needs.release-please.outputs.tag_name }}
@@ -80,7 +96,7 @@ jobs:
   package-installer:
     name: Package installer
     needs: [release-please, build-tauri]
-    if: needs.release-please.outputs.release_created == 'true'
+    if: needs.release-please.outputs.releases_created == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
