@@ -1,10 +1,16 @@
 name: Nightly
 
-# Builds an unstable preview from every push to `main` and publishes it to a
-# moving `nightly` prerelease tag. The in-app updater hits this when the user
-# has selected `Settings → Updates → Release channel = Nightly`, and the
-# `revv update` CLI maps the nightly channel to `origin/main` HEAD — so
+# Builds an unstable preview from every push to `main` and publishes it as a
+# per-SHA `nightly-<short-sha>` prerelease. The in-app updater hits this when
+# the user has selected `Settings → Updates → Release channel = Nightly`, and
+# the `revv update` CLI maps the nightly channel to `origin/main` HEAD — so
 # source installs and binary installs stay aligned on the same edge.
+#
+# Why per-SHA tags: GitHub's "Immutable releases" feature permanently reserves
+# any tag that's been used by a release. A moving `nightly` tag is therefore
+# unrecoverable after the first publish. Per-SHA tags sidestep that entirely;
+# the server resolves "latest nightly" dynamically via the releases API (see
+# `apps/server/src/routes/update-manifest.ts`).
 #
 # Independent of release.yml: this never opens a release-please PR, never
 # moves `vX.Y.Z` tags, and never publishes the stable `latest.json` manifest.
@@ -49,42 +55,73 @@ jobs:
       - name: Build
         run: bun run build
 
-  # Re-point the moving `nightly` tag at the just-pushed SHA before the
-  # build matrix runs, so every artifact uploads to a stable, predictable
-  # release URL. Deleting + recreating is simpler than parsing existing
-  # release metadata for an in-place edit.
-  retag:
-    name: Re-point nightly tag
+  # Push a per-SHA tag (`nightly-<short-sha>`) so the build job can check it
+  # out and `tauri-action` can create the release against it. Idempotent on
+  # re-runs of the same commit.
+  prep:
+    name: Create nightly tag
     runs-on: ubuntu-latest
     needs: check
     permissions:
       contents: write
     outputs:
-      short_sha: ${{ steps.sha.outputs.short_sha }}
+      tag_name: ${{ steps.tag.outputs.tag_name }}
+      short_sha: ${{ steps.tag.outputs.short_sha }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Compute short SHA
-        id: sha
-        run: echo "short_sha=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Reset nightly release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push per-SHA tag
+        id: tag
         run: |
-          gh release delete nightly --yes --cleanup-tag 2>/dev/null || true
-          gh release create nightly \
-            --target "$GITHUB_SHA" \
-            --title "Revv nightly (${{ steps.sha.outputs.short_sha }})" \
-            --notes "Auto-built from main @ ${GITHUB_SHA}. Expect bugs." \
-            --prerelease
+          short_sha=$(git rev-parse --short=7 HEAD)
+          tag_name="nightly-${short_sha}"
+          echo "short_sha=${short_sha}" >> "$GITHUB_OUTPUT"
+          echo "tag_name=${tag_name}" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "${tag_name}" >/dev/null 2>&1; then
+            echo "Tag ${tag_name} already exists on origin — reusing."
+          else
+            git tag "${tag_name}"
+            git push origin "${tag_name}"
+          fi
 
   build:
-    needs: retag
+    needs: prep
     uses: ./.github/workflows/_build-tauri.yml
     with:
-      tag_name: nightly
-      release_name: "Revv nightly (${{ needs.retag.outputs.short_sha }})"
-      release_body: "Auto-built from main. Expect bugs."
+      tag_name: ${{ needs.prep.outputs.tag_name }}
+      release_name: "Revv nightly (${{ needs.prep.outputs.short_sha }})"
+      release_body: "Auto-built from main @ ${{ github.sha }}. Expect bugs."
       prerelease: true
     secrets: inherit
+
+  # Cap the historical nightly count. Without trimming, every commit to main
+  # would leave a permanent release artifact, polluting the releases list.
+  # Keeps the 10 most recent `nightly-*` prereleases (including the one this
+  # run just published) and deletes the rest along with their tags.
+  trim:
+    name: Trim old nightlies
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: write
+    steps:
+      - name: Delete stale nightly releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          KEEP: "10"
+        run: |
+          set -euo pipefail
+          # `gh release list` sorts by created-at desc; skip the first $KEEP
+          # tagged `nightly-*` and delete the rest. `--cleanup-tag` removes
+          # the orphan tag too; immutable-releases means the tag slot stays
+          # reserved, which is fine — we never reuse a per-SHA tag.
+          gh release list \
+            --limit 200 \
+            --json tagName,isPrerelease,createdAt \
+            --jq '[.[] | select(.isPrerelease and (.tagName | startswith("nightly-")))] | sort_by(.createdAt) | reverse | .['"$KEEP"':] | .[] | .tagName' \
+            | while read -r tag; do
+                [ -z "$tag" ] && continue
+                echo "Deleting stale nightly release: $tag"
+                gh release delete "$tag" --yes --cleanup-tag || true
+              done
