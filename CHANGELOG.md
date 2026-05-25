@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.1.1](https://github.com/alexandre-schaffner/revv/compare/v0.1.0...v0.1.1) (2026-05-25)
+
+
+### Bug Fixes
+
+* **ci:** attest discovered tauri bundles ([48234eb](https://github.com/alexandre-schaffner/revv/commit/48234eb3c96b4cebac4d6b46c476a76990195cd7))
+* **ci:** format release config output ([c553d3b](https://github.com/alexandre-schaffner/revv/commit/c553d3b9afc9cbd2aaa75487b1ed78f9ab3755c9))
+* **ci:** format updater endpoint config ([4f3c2f6](https://github.com/alexandre-schaffner/revv/commit/4f3c2f6fd290bb5c0ec2be607016bcf909b8fd00))
+* **ci:** repair release-please v4 output names + add Tauri upload fallback ([466db2d](https://github.com/alexandre-schaffner/revv/commit/466db2d0aa0b00aa9afe5b7c41cec1472518bf78))
+* **ci:** upload release assets before publishing immutable releases ([58e7ce6](https://github.com/alexandre-schaffner/revv/commit/58e7ce66c3ab5c421a68987392082cb9b35ec8d6))
+* **ci:** use existing tauri-action tag ([58c03cd](https://github.com/alexandre-schaffner/revv/commit/58c03cd06b4dbc7feada8f8970cdfce520599de3))
+* **desktop:** use secure updater endpoint ([bba3f1d](https://github.com/alexandre-schaffner/revv/commit/bba3f1d2a8b36cfdfc82fdeada371cdd571d5964))
+* **install:** use release bundles for desktop app ([b15b661](https://github.com/alexandre-schaffner/revv/commit/b15b661460a2a45b26118557a5e1375dbadde00f))
+* **install:** verify workspace deps landed + warn about stale dev DBs ([a24c728](https://github.com/alexandre-schaffner/revv/commit/a24c728ca508747026b231fe6dbdbe53b18ec431))
+* **release:** configure release-please root package ([12cbe23](https://github.com/alexandre-schaffner/revv/commit/12cbe23880585ad41ba50577952c13f7a724a355))
+* sidebar search offset ([#79](https://github.com/alexandre-schaffner/revv/issues/79)) ([e219b7d](https://github.com/alexandre-schaffner/revv/commit/e219b7d7ac21d62a0b2620332de97ed6a39395ed))
+* **web:** align sidebar search below header ([#78](https://github.com/alexandre-schaffner/revv/issues/78)) ([215464e](https://github.com/alexandre-schaffner/revv/commit/215464ebfe497459fb9e707ffb16e967aea015b0))
+
 ## [0.1.0](https://github.com/alexandre-schaffner/revv/compare/v0.0.1...v0.1.0) (2026-05-25)
 
 
