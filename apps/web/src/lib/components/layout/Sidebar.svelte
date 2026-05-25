@@ -331,7 +331,11 @@ function handleKeydown(e: KeyboardEvent) {
 	<!-- Header — back-breadcrumb in files mode, ProjectHeader in PR-list
 	     mode. Drops to nothing when collapsed since the column is 0 wide.
 	     Branches crossfade in sync with the pane slide below. -->
-	<div class="sidebar-header" class:sidebar-header--hidden={collapsed}>
+	<div
+		class="sidebar-header"
+		class:sidebar-header--hidden={collapsed}
+		class:sidebar-header--project={view !== 'files'}
+	>
 		{#if view === 'files'}
 			<button
 				class="files-header header-branch"
@@ -470,12 +474,24 @@ function handleKeydown(e: KeyboardEvent) {
 		transition: visibility 0s linear 0s;
 	}
 
+	.sidebar-header--project {
+		min-height: 84px;
+	}
+
 	.header-branch {
 		position: absolute;
 		inset: 0;
 		display: flex;
 		align-items: center;
 		min-width: 0;
+	}
+
+	.header-branch--projectheader {
+		align-items: stretch;
+	}
+
+	.header-branch--projectheader :global(.project-header) {
+		width: 100%;
 	}
 
 	.sidebar-header--hidden {
