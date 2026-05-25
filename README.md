@@ -73,7 +73,7 @@ curl -fsSL https://github.com/alexandre-schaffner/revv/releases/download/v0.1.0/
 
 ```bash
 revv status      # show install paths, versions, server state, update availability
-revv update      # git pull + rebuild + reinstall + reload service
+revv update      # install channel bundle; rebuild only if no asset is available
 revv restart     # restart the background API server
 revv logs        # tail ~/Library/Logs/Revv/server.{out,err}.log
 revv open        # launch Revv.app

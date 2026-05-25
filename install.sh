@@ -9,7 +9,7 @@
 #
 #   From a checkout (developer):
 #     ./install.sh --dev       # toolchain + bun install, stop there
-#     ./install.sh             # full install (build .app, LaunchAgent, CLI)
+#     ./install.sh             # full install (release .app, LaunchAgent, CLI)
 #
 # Flags:
 #   --dev            Install the dev toolchain and project deps, nothing more.
@@ -20,6 +20,7 @@
 # Environment overrides:
 #   REVV_REPO_URL         Git URL (default: https://github.com/alexandre-schaffner/revv.git)
 #   REVV_BRANCH           Branch to clone (default: main)
+#   REVV_RELEASE_TAG      Release tag for the pre-built app bundle (default: latest nightly)
 #   REVV_INSTALL_DIR      Source install dir (default: ~/Library/Application Support/Revv/src)
 #   REVV_APP_DIR          App install dir  (default: /Applications, falls back to ~/Applications)
 #   REVV_AUTO_YES=1       Same as --yes
@@ -35,9 +36,11 @@ set -euo pipefail
 # ── Defaults ─────────────────────────────────────────────────
 REVV_REPO_URL="${REVV_REPO_URL:-https://github.com/alexandre-schaffner/revv.git}"
 REVV_BRANCH="${REVV_BRANCH:-main}"
+REVV_RELEASE_TAG="${REVV_RELEASE_TAG:-}"
 REVV_APP_DIR="${REVV_APP_DIR:-/Applications}"
 REVV_AUTO_YES="${REVV_AUTO_YES:-0}"
 MODE="user"   # user | dev
+REVV_GITHUB_REPO="alexandre-schaffner/revv"
 
 # ── Parse args ───────────────────────────────────────────────
 for arg in "$@"; do
@@ -75,6 +78,24 @@ _fail()    { printf "\n  ${_RED}✗${_R}  %s\n\n" "$*" >&2; exit 1; }
 _step()    { printf "\n  ${_B}%s${_R}\n" "$*"; }
 
 _check_cmd() { command -v "$1" >/dev/null 2>&1; }
+
+_latest_release_tag() {
+  local tag
+  tag="$(curl -fsSL "https://api.github.com/repos/${REVV_GITHUB_REPO}/releases/latest" \
+    | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+    | head -1)"
+  [[ -n "$tag" ]] || return 1
+  printf '%s' "$tag"
+}
+
+_latest_nightly_tag() {
+  local tag
+  tag="$(curl -fsSL "https://api.github.com/repos/${REVV_GITHUB_REPO}/releases?per_page=30" \
+    | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\(nightly-[^"]*\)".*/\1/p' \
+    | head -1)"
+  [[ -n "$tag" ]] || return 1
+  printf '%s' "$tag"
+}
 
 # ── Banner ────────────────────────────────────────────────────
 printf "\n"
@@ -143,18 +164,38 @@ On $os, clone the repo and run ./install.sh --dev manually:
   fi
   _check_cmd git || _fail "git not found after Xcode CLT install."
 
+  clone_ref="$REVV_BRANCH"
+  if [[ "$MODE" == "user" && -z "${REVV_RELEASE_TAG:-}" ]]; then
+    REVV_RELEASE_TAG="$(_latest_nightly_tag || _latest_release_tag || true)"
+  fi
+  if [[ "$MODE" == "user" && -n "${REVV_RELEASE_TAG:-}" ]]; then
+    clone_ref="$REVV_RELEASE_TAG"
+    _info "Using release $REVV_RELEASE_TAG"
+  fi
+
   dest="${REVV_INSTALL_DIR:-$HOME/Library/Application Support/Revv/src}"
   mkdir -p "$(dirname "$dest")"
   if [[ -d "$dest/.git" ]]; then
     _info "Existing clone at $dest — updating"
+    git -C "$dest" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
     git -C "$dest" fetch --all --prune
-    git -C "$dest" checkout "$REVV_BRANCH"
-    git -C "$dest" reset --hard "origin/$REVV_BRANCH"
+    git -C "$dest" fetch --tags --force
+    git -C "$dest" checkout "$clone_ref"
+    if [[ "$clone_ref" == "$REVV_BRANCH" ]]; then
+      git -C "$dest" reset --hard "origin/$REVV_BRANCH"
+    else
+      git -C "$dest" reset --hard "$clone_ref"
+    fi
   elif [[ -e "$dest" ]]; then
     _fail "$dest exists but is not a git clone. Move it aside and re-run."
   else
     _info "Cloning $REVV_REPO_URL ($REVV_BRANCH) → $dest"
     git clone --branch "$REVV_BRANCH" --depth 50 "$REVV_REPO_URL" "$dest"
+    if [[ "$clone_ref" != "$REVV_BRANCH" ]]; then
+      git -C "$dest" fetch --tags --force
+      git -C "$dest" checkout "$clone_ref"
+      git -C "$dest" reset --hard "$clone_ref"
+    fi
   fi
 
   _info "Re-executing installer from the cloned checkout"
@@ -186,7 +227,9 @@ step "Checking build toolchain"
 ensure_xcode_clt
 ensure_git
 ensure_bun
-ensure_rust
+if [[ "$MODE" == "dev" ]]; then
+  ensure_rust
+fi
 
 # Pick up bun/cargo in this shell if they were just installed.
 [[ -d "$HOME/.bun/bin" ]] && export PATH="$HOME/.bun/bin:$PATH"
@@ -279,57 +322,145 @@ fi
 step "Ensuring auth key"
 ensure_auth_key
 
-step "Building Revv.app (first run can take several minutes)"
-# We build only the .app, not the .dmg. The .dmg flow (create-dmg) is
-# fragile with paths containing spaces or parentheses and we copy the
-# .app to /Applications directly anyway.
-(
-  cd "$PROJECT_ROOT/packages/shared" && bun run typecheck
-)
-(
-  cd "$PROJECT_ROOT" && bun run build
-)
-(
-  cd "$PROJECT_ROOT/apps/desktop" && bunx tauri build --bundles app
-)
+_resolve_install_release_tag() {
+  if [[ -n "${REVV_RELEASE_TAG:-}" ]]; then
+    printf '%s' "$REVV_RELEASE_TAG"
+    return 0
+  fi
+  local exact_tag
+  exact_tag="$(git -C "$PROJECT_ROOT" describe --tags --exact-match HEAD 2>/dev/null || true)"
+  if [[ -n "$exact_tag" ]]; then
+    printf '%s' "$exact_tag"
+    return 0
+  fi
+  return 1
+}
 
-bundle_macos_dir="$PROJECT_ROOT/apps/desktop/target/release/bundle/macos"
-bundle_app="$(find "$bundle_macos_dir" -maxdepth 1 -type d -name '*.app' 2>/dev/null | head -1)"
-if [[ -z "$bundle_app" ]]; then
-  bundle_app="$(find "$PROJECT_ROOT/apps/desktop/target" -maxdepth 6 -type d -name '*.app' -path '*/bundle/macos/*' 2>/dev/null | head -1)"
-fi
-[[ -n "$bundle_app" && -d "$bundle_app" ]] \
-  || fail "Build finished but no .app was found under $bundle_macos_dir"
-app_name="$(basename "$bundle_app")"
-app_process_name="${app_name%.app}"
-success "Built $bundle_app"
+_install_prebuilt_app() {
+  local release_tag="$1" asset_arch release_json bundle_url bundle_sha bundle_file actual_sha mount_point app_source install_dir installed_app
+  [[ -n "$release_tag" ]] || return 1
+  case "$(uname -m)" in
+    arm64|aarch64) asset_arch="aarch64" ;;
+    x86_64)        asset_arch="x64" ;;
+    *)             return 1 ;;
+  esac
 
-step "Installing $app_name"
-# Prefer /Applications; fall back to ~/Applications if unwritable.
-if [[ -w "$REVV_APP_DIR" ]]; then
-  dest_app_dir="$REVV_APP_DIR"
+  release_json="$(mktemp)"
+  curl -fsSL \
+    "https://api.github.com/repos/${REVV_GITHUB_REPO}/releases/tags/${release_tag}" \
+    -o "$release_json" || { rm -f "$release_json"; return 1; }
+  bundle_url="$(sed -n "s/.*\"browser_download_url\": \"\([^\"]*_${asset_arch}\.dmg\)\".*/\1/p" "$release_json" | head -1)"
+  bundle_sha="$(sed -n "/\"name\": \".*_${asset_arch}\.dmg\"/,/}/ s/.*\"digest\": \"sha256:\([a-fA-F0-9]*\)\".*/\1/p" "$release_json" | head -1)"
+  rm -f "$release_json"
+  [[ -n "$bundle_url" ]] || return 1
+
+  bundle_file="$(mktemp).dmg"
+  info "Downloading pre-built Revv.app from ${release_tag} (${asset_arch})"
+  curl -fL "$bundle_url" -o "$bundle_file" || { rm -f "$bundle_file"; return 1; }
+  if [[ -n "$bundle_sha" ]]; then
+    actual_sha="$(shasum -a 256 "$bundle_file" | awk '{print $1}')"
+    if [[ "$actual_sha" != "$bundle_sha" ]]; then
+      rm -f "$bundle_file"
+      fail "Downloaded DMG checksum mismatch for ${release_tag}."
+    fi
+  else
+    warn "Release asset has no SHA256 digest; installing without checksum verification."
+  fi
+
+  mount_point="$(mktemp -d)"
+  hdiutil attach -quiet -nobrowse -mountpoint "$mount_point" "$bundle_file" || {
+    rm -rf "$mount_point" "$bundle_file"
+    return 1
+  }
+  app_source="$(find "$mount_point" -maxdepth 1 -type d -name '*.app' 2>/dev/null | head -1)"
+  if [[ -z "$app_source" ]]; then
+    hdiutil detach -quiet "$mount_point" 2>/dev/null || true
+    rm -rf "$mount_point" "$bundle_file"
+    return 1
+  fi
+
+  install_dir="$REVV_APP_DIR"
+  [[ -w "$install_dir" ]] || install_dir="$HOME/Applications"
+  mkdir -p "$install_dir"
+  installed_app="$install_dir/$(basename "$app_source")"
+  rm -rf "$installed_app"
+  cp -R "$app_source" "$installed_app"
+  xattr -cr "$installed_app" 2>/dev/null || true
+  hdiutil detach -quiet "$mount_point" 2>/dev/null || true
+  rm -rf "$mount_point" "$bundle_file"
+}
+
+_find_installed_app() {
+  local candidate
+  for candidate in "$REVV_APP_DIR"/Revv*.app "$HOME/Applications"/Revv*.app /Applications/Revv*.app; do
+    [[ -d "$candidate" ]] && { printf '%s' "$candidate"; return 0; }
+  done
+  return 1
+}
+
+step "Installing pre-built Revv.app"
+release_tag="$(_resolve_install_release_tag || true)"
+if ! _install_prebuilt_app "$release_tag"; then
+  warn "Could not install a pre-built app bundle; falling back to a local build."
+  ensure_rust
+  step "Building Revv.app (first run can take several minutes)"
+  # We build only the .app, not the .dmg. The .dmg flow (create-dmg) is
+  # fragile with paths containing spaces or parentheses and we copy the
+  # .app to /Applications directly anyway.
+  (
+    cd "$PROJECT_ROOT/packages/shared" && bun run typecheck
+  )
+  (
+    cd "$PROJECT_ROOT" && bun run build
+  )
+  (
+    cd "$PROJECT_ROOT/apps/desktop" && bunx tauri build --bundles app
+  )
+
+  bundle_macos_dir="$PROJECT_ROOT/apps/desktop/target/release/bundle/macos"
+  bundle_app="$(find "$bundle_macos_dir" -maxdepth 1 -type d -name '*.app' 2>/dev/null | head -1)"
+  if [[ -z "$bundle_app" ]]; then
+    bundle_app="$(find "$PROJECT_ROOT/apps/desktop/target" -maxdepth 6 -type d -name '*.app' -path '*/bundle/macos/*' 2>/dev/null | head -1)"
+  fi
+  [[ -n "$bundle_app" && -d "$bundle_app" ]] \
+    || fail "Build finished but no .app was found under $bundle_macos_dir"
+  app_name="$(basename "$bundle_app")"
+  app_process_name="${app_name%.app}"
+  success "Built $bundle_app"
+
+  step "Installing $app_name"
+  # Prefer /Applications; fall back to ~/Applications if unwritable.
+  if [[ -w "$REVV_APP_DIR" ]]; then
+    dest_app_dir="$REVV_APP_DIR"
+  else
+    warn "$REVV_APP_DIR is not writable — using ~/Applications"
+    dest_app_dir="$HOME/Applications"
+    mkdir -p "$dest_app_dir"
+  fi
+  dest_app="$dest_app_dir/$app_name"
+
+  # Clear quarantine before copying; it may still land on the destination
+  # but be robust and strip again after the copy.
+  xattr -cr "$bundle_app" 2>/dev/null || true
+
+  # Stop any running instance and unload the agent so we can swap the binary.
+  if [[ -f "$REVV_LAUNCH_AGENT_PLIST" ]]; then
+    launchctl unload "$REVV_LAUNCH_AGENT_PLIST" 2>/dev/null || true
+  fi
+  osascript -e "tell application \"$app_process_name\" to quit" 2>/dev/null || true
+  sleep 1
+
+  [[ -d "$dest_app" ]] && rm -rf "$dest_app"
+  cp -R "$bundle_app" "$dest_app"
+  xattr -cr "$dest_app" 2>/dev/null || true
+  success "Installed → $dest_app"
 else
-  warn "$REVV_APP_DIR is not writable — using ~/Applications"
-  dest_app_dir="$HOME/Applications"
-  mkdir -p "$dest_app_dir"
+  dest_app="$(_find_installed_app)" || fail "Release bundle installed but no Revv.app was found."
+  app_name="$(basename "$dest_app")"
+  app_process_name="${app_name%.app}"
+  dest_app_dir="$(dirname "$dest_app")"
+  success "Installed → $dest_app"
 fi
-dest_app="$dest_app_dir/$app_name"
-
-# Clear quarantine before copying; it may still land on the destination
-# but be robust and strip again after the copy.
-xattr -cr "$bundle_app" 2>/dev/null || true
-
-# Stop any running instance and unload the agent so we can swap the binary.
-if [[ -f "$REVV_LAUNCH_AGENT_PLIST" ]]; then
-  launchctl unload "$REVV_LAUNCH_AGENT_PLIST" 2>/dev/null || true
-fi
-osascript -e "tell application \"$app_process_name\" to quit" 2>/dev/null || true
-sleep 1
-
-[[ -d "$dest_app" ]] && rm -rf "$dest_app"
-cp -R "$bundle_app" "$dest_app"
-xattr -cr "$dest_app" 2>/dev/null || true
-success "Installed → $dest_app"
 
 # Revv bundles a GitHub OAuth App registered on nocturlab.ghe.com — the host
 # and client_id defaults live in apps/server/src/config.ts and are baked into
@@ -451,7 +582,7 @@ printf '  %sAuth key:%s   %s\n'    "$REVV_BOLD" "$REVV_RESET" "$REVV_AUTH_KEY"
 printf '  %sLogs:%s       %s\n'    "$REVV_BOLD" "$REVV_RESET" "$REVV_LOG_DIR"
 printf '\n  %sManage with the revv CLI:%s\n' "$REVV_BOLD" "$REVV_RESET"
 printf '    %s$%s revv status      show app + server status\n'    "$REVV_DIM" "$REVV_RESET"
-printf '    %s$%s revv update      pull latest, rebuild, reinstall\n' "$REVV_DIM" "$REVV_RESET"
+printf '    %s$%s revv update      install the latest channel build\n' "$REVV_DIM" "$REVV_RESET"
 printf '    %s$%s revv restart     restart the API server\n'      "$REVV_DIM" "$REVV_RESET"
 printf '    %s$%s revv logs        tail server logs\n'            "$REVV_DIM" "$REVV_RESET"
 printf '    %s$%s revv uninstall   remove everything\n\n'         "$REVV_DIM" "$REVV_RESET"

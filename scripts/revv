@@ -7,7 +7,7 @@
 # and the LaunchAgent at ~/Library/LaunchAgents/com.revv.server.plist.
 #
 # Commands:
-#   revv update      Pull latest on the configured channel, rebuild, reinstall
+#   revv update      Pull latest channel; install release bundle or rebuild fallback
 #   revv channel     Print or change the release channel (stable | nightly)
 #   revv uninstall   Remove ALL Revv artifacts (app, data, config, services, CLI)
 #   revv start       Load + start the server LaunchAgent
@@ -40,6 +40,7 @@ LAUNCH_AGENT_PLIST="$HOME/Library/LaunchAgents/$LAUNCH_AGENT_LABEL.plist"
 LOG_DIR="$HOME/Library/Logs/Revv"
 CLI_PATH="$HOME/.local/bin/revv"
 API_URL="http://localhost:45678"
+REVV_GITHUB_REPO="alexandre-schaffner/revv"
 
 # Override defaults with values persisted by the installer.
 if [[ -f "$CONFIG_FILE" ]]; then
@@ -209,6 +210,68 @@ resolve_target_ref() {
   esac
 }
 
+install_prebuilt_app() {
+  local release_tag="$1" app_dir="${2:-}" asset_arch release_json bundle_url bundle_sha bundle_file actual_sha mount_point app_source install_dir installed_app
+  [[ -n "$release_tag" ]] || return 1
+  case "$(uname -m)" in
+    arm64|aarch64) asset_arch="aarch64" ;;
+    x86_64)        asset_arch="x64" ;;
+    *)             return 1 ;;
+  esac
+
+  release_json="$(mktemp)"
+  curl -fsSL \
+    "https://api.github.com/repos/${REVV_GITHUB_REPO}/releases/tags/${release_tag}" \
+    -o "$release_json" || { rm -f "$release_json"; return 1; }
+  bundle_url="$(sed -n "s/.*\"browser_download_url\": \"\([^\"]*_${asset_arch}\.dmg\)\".*/\1/p" "$release_json" | head -1)"
+  bundle_sha="$(sed -n "/\"name\": \".*_${asset_arch}\.dmg\"/,/}/ s/.*\"digest\": \"sha256:\([a-fA-F0-9]*\)\".*/\1/p" "$release_json" | head -1)"
+  rm -f "$release_json"
+  [[ -n "$bundle_url" ]] || return 1
+
+  bundle_file="$(mktemp).dmg"
+  info "Downloading pre-built Revv.app from ${release_tag} (${asset_arch})"
+  curl -fL "$bundle_url" -o "$bundle_file" || { rm -f "$bundle_file"; return 1; }
+  if [[ -n "$bundle_sha" ]]; then
+    actual_sha="$(shasum -a 256 "$bundle_file" | awk '{print $1}')"
+    if [[ "$actual_sha" != "$bundle_sha" ]]; then
+      rm -f "$bundle_file"
+      fail "Downloaded DMG checksum mismatch for ${release_tag}."
+    fi
+  else
+    warn "Release asset has no SHA256 digest; installing without checksum verification."
+  fi
+
+  mount_point="$(mktemp -d)"
+  hdiutil attach -quiet -nobrowse -mountpoint "$mount_point" "$bundle_file" || {
+    rm -rf "$mount_point" "$bundle_file"
+    return 1
+  }
+  app_source="$(find "$mount_point" -maxdepth 1 -type d -name '*.app' 2>/dev/null | head -1)"
+  if [[ -z "$app_source" ]]; then
+    hdiutil detach -quiet "$mount_point" 2>/dev/null || true
+    rm -rf "$mount_point" "$bundle_file"
+    return 1
+  fi
+
+  install_dir="${app_dir:-/Applications}"
+  [[ -w "$install_dir" ]] || install_dir="$HOME/Applications"
+  mkdir -p "$install_dir"
+  installed_app="$install_dir/$(basename "$app_source")"
+  rm -rf "$installed_app"
+  cp -R "$app_source" "$installed_app"
+  xattr -cr "$installed_app" 2>/dev/null || true
+  hdiutil detach -quiet "$mount_point" 2>/dev/null || true
+  rm -rf "$mount_point" "$bundle_file"
+}
+
+find_app_fresh() {
+  local candidate
+  for candidate in "${APP_CANDIDATES[@]}" "$HOME/Applications"/Revv*.app /Applications/Revv*.app; do
+    [[ -d "$candidate" ]] && { printf '%s' "$candidate"; return 0; }
+  done
+  return 1
+}
+
 # ── Commands ─────────────────────────────────────────────────
 
 cmd_help() {
@@ -219,7 +282,7 @@ ${BOLD}Usage:${RESET}
   revv <command>
 
 ${BOLD}Commands:${RESET}
-  ${CYAN}update${RESET}      Pull latest on the configured channel, rebuild, reinstall
+  ${CYAN}update${RESET}      Pull latest channel; install release bundle or rebuild fallback
               ${DIM}flags: --channel <stable|nightly> (one-shot, doesn't persist)${RESET}
   ${CYAN}channel${RESET}     Print or change the release channel (stable | nightly)
   ${CYAN}uninstall${RESET}   Remove ALL Revv artifacts (app, data, config, services, CLI)
@@ -378,6 +441,7 @@ cmd_update() {
 
   # ── Fetch ─────────────────────────────────────────────────
   spin_start "Fetching latest from origin…"
+  git -C "$INSTALL_DIR" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
   git -C "$INSTALL_DIR" fetch --all --prune --tags >/dev/null 2>&1 || true
   spin_stop 1
 
@@ -393,7 +457,7 @@ cmd_update() {
 
   if [[ "$before" == "$after" ]]; then
     info "Already up to date ($(git -C "$INSTALL_DIR" rev-parse --short HEAD))"
-    if ! confirm "Force a rebuild anyway?"; then
+    if ! confirm "Force a reinstall anyway?"; then
       success "Nothing to do."
       return 0
     fi
@@ -413,40 +477,10 @@ cmd_update() {
   step "Dependencies"
   (cd "$INSTALL_DIR" && bun install)
 
-  # ── Build ─────────────────────────────────────────────────
-  step "Build"
-  (cd "$INSTALL_DIR" && make dist)
-
-  # Find the newly built .app.
-  local bundle_app app_name
-  bundle_app="$(find "$INSTALL_DIR/apps/desktop/target/release/bundle/macos" -maxdepth 1 -type d -name '*.app' 2>/dev/null | head -1)"
-  if [[ -z "$bundle_app" ]]; then
-    bundle_app="$(find "$INSTALL_DIR/apps/desktop/target" -maxdepth 6 -type d -name '*.app' -path '*/bundle/macos/*' 2>/dev/null | head -1)"
-  fi
-  [[ -d "$bundle_app" ]] || fail "Build finished but no .app bundle was produced."
-  app_name="$(basename "$bundle_app")"
-
-  # Determine install destination.
-  local dest_app dest_dir old_app
+  # ── Desktop app ───────────────────────────────────────────
+  local bundle_app app_name dest_app dest_dir old_app used_prebuilt=0
   old_app="$(find_app)" || old_app=""
-  if [[ -n "$old_app" ]]; then
-    dest_dir="$(dirname "$old_app")"
-  else
-    dest_dir="/Applications"
-  fi
-  if [[ ! -w "$dest_dir" ]]; then
-    warn "$dest_dir is not writable — falling back to ~/Applications"
-    dest_dir="$HOME/Applications"
-    mkdir -p "$dest_dir"
-  fi
-  dest_app="$dest_dir/$app_name"
 
-  if [[ -n "$old_app" && "$old_app" != "$dest_app" && -d "$old_app" ]]; then
-    info "Product name changed — removing stale $old_app"
-    rm -rf "$old_app"
-  fi
-
-  # ── Install ───────────────────────────────────────────────
   printf "\n"
   spin_start "Quitting Revv…"
   osascript -e 'tell application "Revv" to quit' 2>/dev/null || true
@@ -454,11 +488,59 @@ cmd_update() {
   sleep 1
   spin_stop 1
 
-  spin_start "Installing ${app_name}…"
-  rm -rf "$dest_app"
-  cp -R "$bundle_app" "$dest_app"
-  xattr -cr "$dest_app" 2>/dev/null || true
-  spin_stop 1
+  step "Desktop app"
+  local release_tag old_app_dir=""
+  if [[ "$channel" == "stable" ]]; then
+    release_tag="$(git -C "$INSTALL_DIR" describe --tags --exact-match HEAD 2>/dev/null || true)"
+  else
+    release_tag="nightly-$(git -C "$INSTALL_DIR" rev-parse --short HEAD)"
+  fi
+  [[ -n "$old_app" ]] && old_app_dir="$(dirname "$old_app")"
+  if install_prebuilt_app "$release_tag" "$old_app_dir"; then
+    dest_app="$(find_app_fresh)" || fail "Release bundle installed but no Revv.app was found."
+    app_name="$(basename "$dest_app")"
+    used_prebuilt=1
+    success "Installed → $dest_app"
+  else
+    warn "Could not install a pre-built app bundle; falling back to a local build."
+  fi
+
+  if [[ "$used_prebuilt" -eq 0 ]]; then
+    step "Build"
+    (cd "$INSTALL_DIR" && make dist)
+
+    # Find the newly built .app.
+    bundle_app="$(find "$INSTALL_DIR/apps/desktop/target/release/bundle/macos" -maxdepth 1 -type d -name '*.app' 2>/dev/null | head -1)"
+    if [[ -z "$bundle_app" ]]; then
+      bundle_app="$(find "$INSTALL_DIR/apps/desktop/target" -maxdepth 6 -type d -name '*.app' -path '*/bundle/macos/*' 2>/dev/null | head -1)"
+    fi
+    [[ -d "$bundle_app" ]] || fail "Build finished but no .app bundle was produced."
+    app_name="$(basename "$bundle_app")"
+
+    # Determine install destination.
+    if [[ -n "$old_app" ]]; then
+      dest_dir="$(dirname "$old_app")"
+    else
+      dest_dir="/Applications"
+    fi
+    if [[ ! -w "$dest_dir" ]]; then
+      warn "$dest_dir is not writable — falling back to ~/Applications"
+      dest_dir="$HOME/Applications"
+      mkdir -p "$dest_dir"
+    fi
+    dest_app="$dest_dir/$app_name"
+
+    if [[ -n "$old_app" && "$old_app" != "$dest_app" && -d "$old_app" ]]; then
+      info "Product name changed — removing stale $old_app"
+      rm -rf "$old_app"
+    fi
+
+    spin_start "Installing ${app_name}…"
+    rm -rf "$dest_app"
+    cp -R "$bundle_app" "$dest_app"
+    xattr -cr "$dest_app" 2>/dev/null || true
+    spin_stop 1
+  fi
 
   # Re-source common.sh from the freshly-pulled tree so we pick up any new
   # helpers that didn't exist in the version this revv CLI started with.
