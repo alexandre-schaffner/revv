@@ -23,10 +23,42 @@ import { updateChannelSchema } from "./schemas";
 
 const GITHUB_REPO = "alexandre-schaffner/revv";
 const STABLE_MANIFEST_URL = `https://github.com/${GITHUB_REPO}/releases/latest/download/latest.json`;
-// Same filename inside the moving `nightly` tag — the tag is what selects
-// the channel, the filename inside the release is just `latest.json` for
-// both pipelines so we don't need a post-build rename step in CI.
-const NIGHTLY_MANIFEST_URL = `https://github.com/${GITHUB_REPO}/releases/download/nightly/latest.json`;
+// Nightly uses per-SHA tags (`nightly-<short-sha>`) because GitHub's
+// immutable-releases feature permanently reserves any tag used by a release,
+// making a moving `nightly` tag a one-shot. We resolve "latest nightly" at
+// request time by listing releases and picking the newest prerelease whose
+// tag starts with `nightly-`. The asset filename inside each release is just
+// `latest.json` (same as stable) so no post-build rename step is needed.
+const NIGHTLY_RELEASES_API_URL = `https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=30`;
+const NIGHTLY_TAG_PREFIX = "nightly-";
+
+interface GitHubAsset {
+  name: string;
+  browser_download_url: string;
+}
+interface GitHubRelease {
+  tag_name: string;
+  prerelease: boolean;
+  draft: boolean;
+  assets: GitHubAsset[];
+}
+
+async function resolveNightlyManifestUrl(): Promise<string | null> {
+  const res = await fetch(NIGHTLY_RELEASES_API_URL, {
+    headers: { Accept: "application/vnd.github+json" },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) return null;
+  const releases = (await res.json()) as GitHubRelease[];
+  // The releases API returns results sorted by published_at desc, so the
+  // first matching entry is the newest nightly.
+  const nightly = releases.find(
+    (r) => r.prerelease && !r.draft && r.tag_name.startsWith(NIGHTLY_TAG_PREFIX),
+  );
+  if (!nightly) return null;
+  const asset = nightly.assets.find((a) => a.name === "latest.json");
+  return asset?.browser_download_url ?? null;
+}
 
 export const updateManifestRoute = new Elysia()
   .get("/api/update-manifest", async () => {
@@ -38,11 +70,18 @@ export const updateManifestRoute = new Elysia()
       }).pipe(Effect.orElseSucceed(() => "stable" as const)),
     );
 
-    const target = channel === "nightly" ? NIGHTLY_MANIFEST_URL : STABLE_MANIFEST_URL;
+    let target: string | null;
+    if (channel === "nightly") {
+      target = await resolveNightlyManifestUrl();
+      // No nightly published yet — keep the toast silent.
+      if (!target) return new Response(null, { status: 204 });
+    } else {
+      target = STABLE_MANIFEST_URL;
+    }
 
     // The updater plugin treats any non-2xx as "no update available". When
-    // the nightly tag hasn't been published yet, returning 204 keeps the
-    // toast silent rather than surfacing a bogus error.
+    // the tag hasn't been published yet, returning 204 keeps the toast
+    // silent rather than surfacing a bogus error.
     const upstream = await fetch(target, {
       redirect: "follow",
       signal: AbortSignal.timeout(10_000),
