@@ -87,7 +87,9 @@
     },
     "updater": {
       "active": true,
-      "endpoints": ["https://github.com/alexandre-schaffner/revv/releases/latest/download/latest.json"],
+      "endpoints": [
+        "https://github.com/alexandre-schaffner/revv/releases/latest/download/latest.json"
+      ],
       "dialog": false,
       "pubkey": "REPLACE_WITH_MINISIGN_PUBLIC_KEY",
       "windows": {
