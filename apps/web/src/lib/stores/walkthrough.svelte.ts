@@ -35,7 +35,7 @@ import { SvelteMap } from "svelte/reactivity";
 import { toast } from "svelte-sonner";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { api } from "$lib/api/client";
-import { recordCounter, startSpan, traced, tracedDerived } from "$lib/observability";
+import { startSpan, traced, tracedDerived } from "$lib/observability";
 import { updateRepoCloneStatus } from "$lib/stores/prs.svelte";
 import { authHeaders } from "$lib/utils/session-token";
 import { wtTrace } from "$lib/utils/wt-trace";
@@ -219,23 +219,6 @@ export function updateEntry(prId: string, updater: (e: WalkthroughEntry) => void
   }
   const next = { ...entry };
   updater(next);
-  // Shallow-equal fast path: if no top-level field reference changed, skip
-  // the SvelteMap write so we don't trigger the `_active` → `_uiState` →
-  // consumer cascade for a noop. Visible via the `walkthrough.entry.write-
-  // elided` counter — a high elision rate is itself a smell (callers
-  // doing redundant work).
-  let changed = false;
-  for (const k in next) {
-    if (next[k as keyof WalkthroughEntry] !== entry[k as keyof WalkthroughEntry]) {
-      changed = true;
-      break;
-    }
-  }
-  if (!changed) {
-    recordCounter("walkthrough.entry.write-elided", { prId });
-    return;
-  }
-  recordCounter("walkthrough.entry.write", { prId });
   store.entries.set(prId, next);
 }
 
@@ -1060,9 +1043,9 @@ export async function pollCloneUntilResolved(prId: string, repoId: string): Prom
  * UI-facing button clicks should use {@link generateWalkthrough} instead,
  * which adds the pending-action + optimistic-seed feedback.
  */
-export async function startWalkthrough(prId: string): Promise<void> {
+export async function startWalkthrough(prId: string): Promise<Response | null> {
   try {
-    await fetch(`${API_BASE_URL}/api/reviews/${prId}/walkthrough/start`, {
+    return await fetch(`${API_BASE_URL}/api/reviews/${prId}/walkthrough/start`, {
       method: "POST",
       headers: authHeaders(),
     });
@@ -1071,6 +1054,7 @@ export async function startWalkthrough(prId: string): Promise<void> {
       "lifecycle",
       `startWalkthrough prId=${prId} error=${e instanceof Error ? e.message : String(e)}`,
     );
+    return null;
   }
 }
 
@@ -1093,25 +1077,18 @@ export async function generateWalkthrough(prId: string): Promise<void> {
   store.activePrId = prId;
 
   try {
-    const res = await fetch(`${API_BASE_URL}/api/reviews/${prId}/walkthrough/start`, {
-      method: "POST",
-      headers: authHeaders(),
-    });
-    if (!res.ok) {
+    const res = await startWalkthrough(prId);
+    if (!res) {
+      updateEntry(prId, (e) => {
+        e.isStreaming = false;
+        e.streamError = "Failed to start walkthrough";
+      });
+    } else if (!res.ok) {
       updateEntry(prId, (e) => {
         e.isStreaming = false;
         e.streamError = `Failed to start walkthrough (HTTP ${res.status}).`;
       });
     }
-  } catch (e) {
-    wtTrace(
-      "lifecycle",
-      `generateWalkthrough prId=${prId} error=${e instanceof Error ? e.message : String(e)}`,
-    );
-    updateEntry(prId, (entry) => {
-      entry.isStreaming = false;
-      entry.streamError = e instanceof Error ? e.message : "Failed to start walkthrough";
-    });
   } finally {
     clearPending(prId);
   }

@@ -2,10 +2,8 @@
 // touch this file — never reach into ./tracer, ./metrics, ./logger directly.
 
 export { logger, setMinimumLogLevel } from "./logger";
-export { snapshot } from "./metrics";
+export { recordCounter, recordHistogram, snapshot } from "./metrics";
 export {
-  recordCounter,
-  recordHistogram,
   type SpanHandle,
   startSpan,
   traced,

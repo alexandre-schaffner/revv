@@ -127,5 +127,3 @@ export function tracedDerived<T>(name: string, fn: () => T): T {
   return traced(`derived.${name}`, {}, fn);
 }
 
-export { logger } from "./logger";
-export { recordCounter, recordHistogram } from "./metrics";
