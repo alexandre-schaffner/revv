@@ -47,9 +47,11 @@ export type {
   ProjectRecapStatus,
   ProjectRecapSummary,
   RecapPeriod,
+  RecapPrEntry,
   RecapStreamEvent,
   RecapStreamPhase,
   RecapSummaryStats,
+  RecapThemeSummary,
 } from "./recap";
 export { EMPTY_RECAP_STATS } from "./recap";
 export type {

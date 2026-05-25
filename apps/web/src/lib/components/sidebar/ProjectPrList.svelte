@@ -21,6 +21,7 @@ const selectedPrId = $derived(getSelectedPrId());
 	{:else}
 		{#each prs as pr, i (pr.id)}
 			<div
+				class="pr-list-row"
 				in:gsapFadeY={{
 					y: 6,
 					duration: tokens.quick,
@@ -43,6 +44,16 @@ const selectedPrId = $derived(getSelectedPrId());
 		flex-direction: column;
 		gap: 2px;
 		padding: 6px 4px;
+	}
+
+	/* Skip layout and paint for off-screen PR rows. With hundreds of PRs
+	   open this is what makes the sidebar-toggle width animation cheap:
+	   the browser only relayouts the ~20 rows currently in the viewport
+	   instead of all of them on every frame. `contain-intrinsic-size`
+	   reserves a placeholder height so scrollbar geometry stays stable. */
+	.pr-list-row {
+		content-visibility: auto;
+		contain-intrinsic-size: auto 48px;
 	}
 
 	.empty {

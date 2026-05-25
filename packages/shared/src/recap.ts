@@ -1,11 +1,5 @@
 import type { Activity } from "./activity";
 
-// ── Project Recap shared types ───────────────────────────────────────────────
-//
-// Daily / weekly recap of recently-archived PRs in a repository. Wire shape
-// matches the server's `project_recaps` row (see db/schema/project-recaps.ts).
-// See plan: /Users/alex/.claude/plans/let-s-review-the-archive-logical-eagle.md
-
 export type RecapPeriod = "daily" | "weekly";
 
 export type ProjectRecapStatus = "generating" | "complete" | "error" | "superseded";
@@ -37,13 +31,91 @@ export interface RecapSummaryStats {
   readonly walkthroughsMissingCount: number;
 }
 
+/**
+ * Structured per-PR row inside a recap. Written by the agent via
+ * `add_pr_entry` (idempotent upsert on `(recapId, prId)`); see
+ * `db/schema/recap-pr-entries.ts` for the storage shape.
+ *
+ * `theme` is an open-vocabulary lowercase label — the UI maps it
+ * deterministically to a swatch via hash and orders chapters by count desc.
+ * `description` may contain backtick-wrapped code spans; nothing else. `tight`
+ * is reserved for a future dense view.
+ */
+export interface RecapPrEntry {
+  readonly id: string;
+  readonly recapId: string;
+  readonly prId: string;
+  readonly position: number;
+  readonly theme: string;
+  readonly verb: string;
+  /** Denormalized PR title at recap time. Falls back to "(PR removed)". */
+  readonly prTitle: string;
+  /** Denormalized GitHub PR number at recap time. */
+  readonly prExternalId: number;
+  /** Denormalized author github login at recap time. */
+  readonly prAuthorLogin: string;
+  /**
+   * Base64 data URL of the author's avatar, joined from `remote_users` at read
+   * time. Not persisted on the entry row. Null when no avatar has been synced
+   * for this login yet — the UI falls back to an initials swatch.
+   */
+  readonly prAuthorAvatar: string | null;
+  readonly description: string;
+  readonly linesAdded: number;
+  readonly linesRemoved: number;
+  /**
+   * Whether the PR was already archived (merged/closed) at recap time or still
+   * open. Server-derived from which list the `pr_id` appeared in
+   * (`sourceBundle.prs` vs `sourceBundle.openPrs`) — agents never set this
+   * directly. The UI renders open entries as an "In progress" subgroup inside
+   * the theme chapter, alongside the merged entries.
+   */
+  readonly prState: "merged" | "open";
+}
+
+/**
+ * Short editorial paragraph (1–2 sentences) introducing the work that landed
+ * in a single theme. Written by the agent via the `set_theme_summary` MCP
+ * tool, idempotent upsert on `(recapId, theme)`. Themes without a summary
+ * row still render — the UI only adds the lede when one is present.
+ */
+export interface RecapThemeSummary {
+  readonly id: string;
+  readonly recapId: string;
+  /** Lowercase theme label matching `RecapPrEntry.theme` for the same recap. */
+  readonly theme: string;
+  /** 1–2 sentence summary. May contain backtick-wrapped code spans. */
+  readonly summary: string;
+}
+
 export interface ProjectRecap {
   readonly id: string;
   readonly repositoryId: string;
   readonly period: RecapPeriod;
   readonly periodStart: string;
   readonly periodEnd: string;
-  readonly overview: string;
+  /**
+   * Short editorial lede (1–3 sentences). May contain `<strong>` / `<em>`
+   * tags only — everything else is stripped at render.
+   */
+  readonly lede: string;
+  /** Sum of `entries[].linesAdded`. Stamped by `complete_recap`. */
+  readonly totalLinesAdded: number;
+  /** Sum of `entries[].linesRemoved`. */
+  readonly totalLinesRemoved: number;
+  /**
+   * Structured per-PR entries, ordered by `position`. Populated by joining
+   * `recap_pr_entries` on read.
+   */
+  readonly entries: ReadonlyArray<RecapPrEntry>;
+  /**
+   * Per-theme summary paragraphs. Each row binds a `theme` label (matching
+   * one of the `entries[].theme` values) to a 1–2 sentence editorial blurb
+   * that frames the chapter. Populated by joining `recap_theme_summaries`
+   * on read. May be empty when the agent skipped summaries or hasn't reached
+   * that step yet.
+   */
+  readonly themeSummaries: ReadonlyArray<RecapThemeSummary>;
   readonly status: ProjectRecapStatus;
   readonly supersededBy: string | null;
   readonly generatedAt: string;
@@ -88,23 +160,20 @@ export const EMPTY_RECAP_STATS: RecapSummaryStats = {
 
 // ── SSE stream events ───────────────────────────────────────────────────────
 
-/**
- * UI-lifecycle phase label for recap streaming.
- */
 export type RecapStreamPhase =
   | "analyzing"
-  | "shipped"
-  | "active_work"
-  | "project_state"
+  | "writing_lede"
+  | "categorizing"
   | "finalizing"
   | "connecting"
   | "other";
 
 export type RecapStreamEvent =
-  | { type: "chunk"; data: { text: string; section?: RecapStreamPhase } }
   | { type: "thought"; data: { text: string } }
   | { type: "phase"; data: { phase: RecapStreamPhase; message: string } }
   | { type: "activity"; data: Activity }
-  | { type: "overview"; data: { overview: string } }
+  | { type: "lede"; data: { lede: string } }
+  | { type: "entry"; data: { entry: RecapPrEntry } }
+  | { type: "theme_summary"; data: { summary: RecapThemeSummary } }
   | { type: "done"; data: { recapId: string } }
   | { type: "error"; data: { code: string; message: string } };

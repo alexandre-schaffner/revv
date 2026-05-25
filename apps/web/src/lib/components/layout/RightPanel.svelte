@@ -247,6 +247,23 @@ let newBranchDialogMode = $state<"input" | "confirm-overwrite">("input");
 let newBranchValue = $state("");
 let newBranchInputEl: HTMLInputElement | null = $state(null);
 
+// Floating composer's measured height. The conversation reserves this much
+// padding at the bottom so the last message can scroll above the composer
+// instead of getting hidden behind it. Composer height swings with the
+// queue dock (proposed commits + todos + queued messages) and textarea
+// autoResize, so a static `pb-32` isn't enough.
+let composerEl: HTMLDivElement | null = $state(null);
+let composerH = $state(0);
+$effect(() => {
+  if (!composerEl) return;
+  const ro = new ResizeObserver((entries) => {
+    const entry = entries[0];
+    if (entry) composerH = entry.contentRect.height;
+  });
+  ro.observe(composerEl);
+  return () => ro.disconnect();
+});
+
 // Hydrate on initial mount AND on PR switch. The panel is mounted once in
 // AppShell and just gets a new `prId` prop on navigation, so this $effect
 // is the only place that fires on PR switch. `loadChatHistory` is
@@ -608,7 +625,7 @@ function activitiesForTurn(
 			<ConversationEmptyState
 				title="Ask the agent about this pull request"
 				description="The agent runs inside the PR's worktree and can read the code, propose fixes, and commit them on a working branch."
-				class="pb-32"
+				style="padding-bottom: calc({composerH}px + 1rem)"
 			>
 				{#snippet icon()}
 					<Robot size={32} weight="fill" />
@@ -625,7 +642,7 @@ function activitiesForTurn(
 				</Suggestion>
 			</ConversationEmptyState>
 		{:else}
-			<ConversationContent class="gap-2 px-2.5 pt-3 pb-32">
+			<ConversationContent class="gap-2 px-2.5 pt-3" style="padding-bottom: calc({composerH}px + 1rem)">
 				{#each items as item, itemIdx (item.id)}
 				{#if item.kind === 'activity'}
 						<!-- Skip nested sub-agent tool calls — they render
@@ -845,7 +862,7 @@ function activitiesForTurn(
 
 	<!-- Floating composer: queue dock + chat input share one glass surface
 		 anchored to the panel bottom; messages scroll underneath them. -->
-	<div class="composer-float">
+	<div class="composer-float" bind:this={composerEl}>
 	<!-- Queue dock: proposed commits + agent tasks + queued messages -->
 	{#if showQueueDock}
 		<div class="queue-dock" transition:gsapSlide={{ duration: tokens.smooth }}>

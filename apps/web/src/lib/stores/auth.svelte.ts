@@ -2,7 +2,7 @@ import { isMaintainerLogin } from "@revv/shared";
 import { goto } from "$app/navigation";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { authClient } from "$lib/auth-client";
-import { stopPolling } from "$lib/services/sync";
+import { stopPolling, withSyncSuspended } from "$lib/services/sync";
 import {
   connect as connectEvents,
   disconnect as disconnectEvents,
@@ -448,64 +448,71 @@ if (typeof localStorage !== "undefined") {
 export async function switchAccount(userId: string, host?: string): Promise<void> {
   isSwitching = true;
   isLoading = true;
-  try {
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (token) headers.Authorization = `Bearer ${token}`;
-    const res = await fetch(`${API_BASE_URL}/api/auth/switch`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ userId }),
-    });
-    if (!res.ok) throw new Error("Switch failed");
-    const data = (await res.json()) as { token: string };
-    setToken(data.token);
-    resetPrs();
-    resetSettings();
-    resetOrgs();
-    clearReviewFiles();
-    if (typeof window !== "undefined" && /^\/(repo|review)(\/|$)/.test(window.location.pathname)) {
-      await goto("/", { replaceState: true });
-    }
-    // Persist the target host on the server FIRST so any handler resolving
-    // the active account from settings (e.g. `/api/prs`, `/api/repos`) sees
-    // the right host immediately. We hit the endpoint directly because the
-    // local settings store is null right now (just reset) and the optimistic
-    // merge in `updateSettings` would no-op.
-    if (host) {
-      try {
-        await fetch(`${API_BASE_URL}/api/settings`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.token}` },
-          body: JSON.stringify({ githubHost: host }),
-        });
-      } catch {
-        // best-effort — the WS host override below is the load-bearing path;
-        // the persisted setting only affects post-switch REST handlers and a
-        // missed PUT will self-heal once the user updates settings explicitly.
+  // Suspend background sync for the duration of the switch — an in-flight
+  // syncPrs() racing the new account's hydration can hang the swap.
+  await withSyncSuspended(async () => {
+    try {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (token) headers.Authorization = `Bearer ${token}`;
+      const res = await fetch(`${API_BASE_URL}/api/auth/switch`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ userId }),
+      });
+      if (!res.ok) throw new Error("Switch failed");
+      const data = (await res.json()) as { token: string };
+      setToken(data.token);
+      resetPrs();
+      resetSettings();
+      resetOrgs();
+      clearReviewFiles();
+      // Fire-and-forget navigation. Awaiting `goto` blocks on SvelteKit's
+      // load/render cycle which can sit behind any number of in-flight
+      // route effects — and the data hydration below works regardless of
+      // which route we end up on.
+      if (
+        typeof window !== "undefined" &&
+        /^\/(repo|review)(\/|$)/.test(window.location.pathname)
+      ) {
+        void goto("/", { replaceState: true });
       }
+      // Reconnect realtime channels with the new session token AND explicit
+      // host so the server binds them to the target user's correct account on
+      // the first attempt, even though the local settings store is still null.
+      disconnectWs();
+      disconnectEvents();
+      connectWs(data.token, host);
+      connectEvents(data.token, host);
+      const persistHost = host
+        ? fetch(`${API_BASE_URL}/api/settings`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.token}` },
+            body: JSON.stringify({ githubHost: host }),
+          }).catch(() => {
+            // best-effort — a missed PUT self-heals once the user updates
+            // settings explicitly.
+          })
+        : Promise.resolve();
+      // Block the switch UX only on the identity round-trip. Everything else
+      // hydrates in the background; awaiting the full payload here turned
+      // every slow /api/prs into a multi-second freeze that looked like the
+      // switch had hung.
+      await loadUser();
+      isSwitching = false;
+      void Promise.allSettled([
+        persistHost,
+        fetchSettings(),
+        fetchPrs(),
+        fetchRepos(),
+        fetchPinnedPrs(),
+      ]);
+    } catch (e) {
+      error = `Failed to switch account: ${e}`;
+    } finally {
+      isLoading = false;
+      isSwitching = false;
     }
-    // Reconnect WebSocket with the new session token AND explicit host so
-    // the server binds the WS to the target user's correct account on the
-    // first attempt, even though the local settings store is still null.
-    // Without the explicit host, the server falls back to
-    // `findAccount(userId, undefined)`, picks the wrong (or no) account,
-    // and the user never receives `prs:updated` broadcasts.
-    disconnectWs();
-    disconnectEvents();
-    connectWs(data.token, host);
-    connectEvents(data.token, host);
-    await loadUser();
-    // Pull settings into the local store so getGithubHost() returns the
-    // new host (e.g. for WS auto-reconnects and OrgSwitcher highlighting)
-    // and re-hydrate the PR / repo lists under the switched-to account.
-    await fetchSettings();
-    await Promise.all([fetchPrs(), fetchRepos(), fetchPinnedPrs()]);
-  } catch (e) {
-    error = `Failed to switch account: ${e}`;
-  } finally {
-    isLoading = false;
-    isSwitching = false;
-  }
+  });
 }
 
 export async function removeAccount(): Promise<void> {

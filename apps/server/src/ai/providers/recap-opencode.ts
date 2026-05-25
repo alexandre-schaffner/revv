@@ -3,14 +3,12 @@
 // Opencode driver for project-recap generation. Mirrors the walkthrough's
 // `mcp-walkthrough-opencode.ts` but smaller:
 //
-//   • Single-phase pipeline (compose-as-text → `commit_recap_overview` →
-//     `complete_recap`), so no phase machine and no real-time stream guard.
-//   • SSE subscriber (`subscribeOpencodeStream`) fans every `text-delta`
-//     out as a `chunk` event to UI subscribers AND appends to
-//     `ctx.textBuffer.current` so `commit_recap_overview`'s handler can
-//     read the markdown body. Tool-call events reset the buffer (except
-//     for `commit_recap_overview` itself, whose handler reads the buffer
-//     immediately after the SSE event surfaces).
+//   • Structured pipeline (`set_lede` + `add_pr_entry × N` + `complete_recap`)
+//     with no text buffer — all content flows through tool args.
+//   • SSE subscriber (`subscribeOpencodeStream`) forwards reasoning deltas
+//     as `thought` events and tool calls as `activity` events. Visible
+//     assistant text is discarded because the agent isn't supposed to emit
+//     any between tool calls in this pipeline.
 //   • Per CLAUDE.md invariant #13, the MCP tool handlers invoked by the
 //     daemon run through the SAME shared handlers the Claude SDK path
 //     uses (`apps/server/src/ai/providers/recap-tools/handlers.ts`).
@@ -21,7 +19,7 @@
 //   1. Ask the OpencodeSupervisor for a running daemon (lazy-started).
 //   2. Issue a session token in `ProjectRecapJobs` bound to the prepared
 //      `RecapToolContext` (recapId + sourceBundle + priorRecaps +
-//      onCompleted hook + textBuffer).
+//      onCompleted hook).
 //   3. Register `/mcp/recap` as a remote MCP server on the daemon via
 //      `client.mcp.add` with the bearer token in the connection headers.
 //   4. Create an opencode session, subscribe to `/global/event` SSE, and
@@ -46,7 +44,7 @@ import {
   withAgentTurn,
 } from "../agent-stream";
 import { buildRecapUserMessage, RECAP_SYSTEM_PROMPT } from "../prompts/recap";
-import { buildRecapActivity, normalizeRecapToolName } from "./recap-activity";
+import { createRecapDispatchState, dispatchRecapStreamEvent } from "./recap-event-dispatch";
 import type { RecapToolContext } from "./recap-tools";
 import { RECAP_MCP_SERVER } from "./recap-tools";
 
@@ -230,18 +228,13 @@ export async function runRecapAgentViaOpencode(
         sessionId = turnSessionId;
         debug("recap-opencode", "created session:", turnSessionId);
 
-        // ── 3. Subscribe to /global/event SSE for live text-deltas ──
+        // ── 3. Subscribe to /global/event SSE for live tool calls ──
         //
-        // The agent writes the recap markdown as visible assistant
-        // text — those text-deltas land on `/global/event` as
-        // `message.part.updated` frames. Forward each delta to
-        // `ctx.emit({type:"chunk", ...})` for the UI AND append to
-        // `ctx.textBuffer.current` so `commit_recap_overview`'s handler
-        // can read the markdown body when its HTTP-MCP call lands.
-        // Pre-commit read tool calls reset the buffer to drop any
-        // pre-composition prelude. `commit_recap_overview` and
-        // `complete_recap` must not reset: commit reads the buffer, and
-        // complete fires after the committed overview has reached the UI.
+        // All recap content flows through tool args under the structured
+        // pipeline; visible assistant text is discarded. Per CLAUDE.md
+        // invariant #13, both transports exhibit identical externally-
+        // observable behavior — see `recap-agent-runner.ts` for the
+        // matching Claude SDK path.
         const sseAbort = new AbortController();
         // Shared dedup state with the backstop walk below — anything
         // SSE already streamed is skipped when we walk response.parts.
@@ -260,63 +253,17 @@ export async function runRecapAgentViaOpencode(
             );
           }
         };
-        // Throttle reasoning-delta phase events so the UI doesn't
-        // spam "Model is thinking…" on every token.
-        let lastReasoningPush = 0;
-        let committed = false;
+        const dispatchState = createRecapDispatchState();
         const sseDone = subscribeOpencodeStream(
           client,
           turnSessionId,
           sseAbort.signal,
           (ev) => {
-            if (ev.kind === "text-delta") {
-              if (ev.data.length === 0) return;
-              params.ctx.textBuffer.current += ev.data;
-              if (!committed) {
-                fanOutEvent({ type: "chunk", data: { text: ev.data } });
-              }
-              return;
-            }
-            if (ev.kind === "reasoning-delta") {
-              if (ev.data.length > 0) {
-                fanOutEvent({ type: "thought", data: { text: ev.data } });
-              }
-              // Extended thinking — log so operators can see why the
-              // stream is silent for minutes at a time, AND push a
-              // phase heartbeat so the UI doesn't look hung. DeepSeek
-              // models can reason for 5–10 minutes before emitting
-              // any text-delta; without this the 10-minute timeout
-              // fires while the model is legitimately thinking.
-              const now = Date.now();
-              if (now - lastReasoningPush >= 30_000) {
-                lastReasoningPush = now;
-                fanOutEvent({
-                  type: "phase",
-                  data: { phase: "analyzing", message: "Model is thinking…" },
-                });
-              }
-              debug("recap-opencode", `reasoning-delta (${ev.data.length} chars)`);
-              return;
-            }
-            if (ev.kind === "tool-call") {
-              const toolName = normalizeRecapToolName(ev.bareName);
-              fanOutEvent({ type: "activity", data: buildRecapActivity(toolName, ev.input) });
-              if (toolName === "commit_recap_overview") {
-                committed = true;
-              } else if (toolName !== "complete_recap" && !committed) {
-                // Mirror the server-side buffer reset on the wire so the
-                // UI drops the agent's pre-composition narration. See
-                // recap-agent-runner.ts for the matching reset in the
-                // Claude SDK path.
-                params.ctx.textBuffer.current = "";
-                fanOutEvent({ type: "overview", data: { overview: "" } });
-              }
-              debug("recap-opencode", `tool-call: ${toolName} (source=${ev.source})`);
-              return;
-            }
+            // The opencode transport additionally surfaces user-question /
+            // error frames it wants to log; everything else routes through
+            // the shared recap dispatcher to stay byte-identical with the
+            // Claude SDK path.
             if (ev.kind === "user-question-asked") {
-              // If opencode blocks on a permission/question, we need to
-              // know — the daemon will wait forever for an answer.
               logError(
                 "recap-opencode",
                 `session ${turnSessionId} asked a question — this will block until answered/rejected.`,
@@ -328,7 +275,7 @@ export async function runRecapAgentViaOpencode(
               logError("recap-opencode", `session.error: ${ev.message}`);
               return;
             }
-            // task-list-update / subagent-* → ignored
+            dispatchRecapStreamEvent(ev, dispatchState, fanOutEvent);
           },
           {
             emittedTextLen,
@@ -422,11 +369,8 @@ export async function runRecapAgentViaOpencode(
 
         // Backstop walk: emit anything SSE missed via the synchronous
         // response body. Shared dedup state makes this a no-op for
-        // anything SSE already streamed (the common case). Only the
-        // recap's `commit_recap_overview` cares about the textBuffer,
-        // and its HTTP-MCP handler has already read it by now — any
-        // late-arriving text-deltas here are appended to the buffer
-        // but never consumed, which is harmless.
+        // anything SSE already streamed (the common case). Visible text
+        // is discarded; tool calls become `activity` events.
         walkOpencodePartsWithState(
           response.parts,
           {
@@ -436,36 +380,11 @@ export async function runRecapAgentViaOpencode(
             assistantMessageID: response.info.id,
           },
           (ev) => {
-            if (ev.kind === "text-delta") {
-              if (ev.data.length === 0) return;
-              params.ctx.textBuffer.current += ev.data;
-              if (!committed) {
-                fanOutEvent({ type: "chunk", data: { text: ev.data } });
-              }
-              return;
-            }
-            if (ev.kind === "reasoning-delta") {
-              if (ev.data.length > 0) {
-                fanOutEvent({ type: "thought", data: { text: ev.data } });
-              }
-              debug("recap-opencode", `backstop reasoning-delta (${ev.data.length} chars)`);
-              return;
-            }
-            if (ev.kind === "tool-call") {
-              const toolName = normalizeRecapToolName(ev.bareName);
-              fanOutEvent({ type: "activity", data: buildRecapActivity(toolName, ev.input) });
-              if (toolName === "commit_recap_overview") {
-                committed = true;
-              } else if (toolName !== "complete_recap" && !committed) {
-                params.ctx.textBuffer.current = "";
-                fanOutEvent({ type: "overview", data: { overview: "" } });
-              }
-              return;
-            }
             if (ev.kind === "error") {
               logError("recap-opencode", `backstop error: ${ev.message}`);
               return;
             }
+            dispatchRecapStreamEvent(ev, dispatchState, fanOutEvent);
           },
         );
 

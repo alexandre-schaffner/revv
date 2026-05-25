@@ -4,6 +4,7 @@ import { eq, inArray } from "drizzle-orm";
 import { Cause, Chunk, Context, Duration, Effect, Fiber, Layer, Ref, Schedule } from "effect";
 import { repositories } from "../db/schema";
 import { account, user } from "../db/schema/auth";
+import { GitHubAuthError } from "../domain/errors";
 import { withDb as withDbHelper } from "../effects/with-db";
 import { logError } from "../logger";
 import { DbService } from "./Db";
@@ -53,6 +54,14 @@ export const PollSchedulerLive = Layer.effect(
     const walkthroughJobs = yield* WalkthroughJobs;
     const walkthroughService = yield* WalkthroughService;
     const { db } = yield* DbService;
+
+    // Layer-scope guard tracking accounts whose access token returned a 401.
+    // Keyed on `accountId`, the value is the exact token string we saw fail.
+    // While the DB row still has that same token, every GitHub call for that
+    // account is skipped this cycle and the next — no listPrs, no archive
+    // backfill, no avatar refresh. A re-auth rotates the token, so equality
+    // against the live token is the auto-clear: zero explicit hooks needed.
+    const knownBadTokensByAccountId = new Map<string, string>();
 
     // Bind the captured db handle for convenience
     const withDb = <A, E>(eff: Effect.Effect<A, E, DbService>) => withDbHelper(db, eff);
@@ -143,36 +152,66 @@ export const PollSchedulerLive = Layer.effect(
                 .all()
             : [];
         const accountById = new Map(accountRows.map((a) => [a.id, a]));
-        const accountForRepo = (repoId: string): AccountCtx | null => {
-          const accId = repoToAccountId.get(repoId);
-          if (!accId) return null;
-          return accountById.get(accId) ?? null;
+
+        // First-time-only log when a token is observed to 401; subsequent
+        // calls in this or future cycles are silent until the token rotates.
+        // "Needs re-auth" is more useful than spamming the raw
+        // `Invalid or expired GitHub token` error on every repo every cycle.
+        const markTokenBad = (acc: AccountCtx): void => {
+          if (!acc.accessToken) return;
+          if (knownBadTokensByAccountId.get(acc.id) === acc.accessToken) return;
+          knownBadTokensByAccountId.set(acc.id, acc.accessToken);
+          logError(
+            "PollScheduler",
+            `Account ${acc.githubLogin ?? acc.id} returned 401 — pausing GitHub sync for this account until it is re-authenticated.`,
+          );
         };
 
-        // Per-cycle short-circuit: when an account's token returns 401 on the
-        // first GitHub call we attempt, stop trying it for the remainder of
-        // this tick. Without this gate, every repo bound to that account
-        // produces its own 401 + error log — a single signed-out user with
-        // ten repos used to spew ten "search failed" messages and burn ten
-        // round-trips. The next tick re-reads `account.accessToken`, so a
-        // freshly-signed-in user resumes automatically on the following
-        // poll interval.
-        const invalidAccountIds = new Set<string>();
-        const isAuthErr = (e: unknown): boolean =>
-          typeof e === "object" &&
-          e !== null &&
-          (e as { _tag?: string })._tag === "GitHubAuthError";
-        const markAuthFailure = (acc: AccountCtx, where: string): Effect.Effect<void> =>
-          Effect.sync(() => {
-            if (invalidAccountIds.has(acc.id)) return;
-            invalidAccountIds.add(acc.id);
-            logError(
-              "PollScheduler",
-              `GitHub token rejected for account ${acc.id} (${acc.githubLogin ?? "?"}) during ${where}; skipping remaining work for this account this cycle. Next tick will retry with the latest token.`,
-            );
-          });
-        const skipInvalid = (acc: AccountCtx | null): boolean =>
-          acc !== null && invalidAccountIds.has(acc.id);
+        // Resolve the OAuth account and live token for an account row,
+        // returning null when the token is missing OR has been observed to
+        // 401. Single gate — all per-account / per-repo guards funnel through
+        // this so the "skip everything for an account whose token is bad"
+        // rule lives in one place.
+        const liveAccount = (
+          acc: AccountCtx | null | undefined,
+        ): { acc: AccountCtx; token: string } | null => {
+          if (!acc?.accessToken) return null;
+          if (knownBadTokensByAccountId.get(acc.id) === acc.accessToken) return null;
+          return { acc, token: acc.accessToken };
+        };
+
+        const liveAccountForRepo = (repoId: string): { acc: AccountCtx; token: string } | null => {
+          const accId = repoToAccountId.get(repoId);
+          if (!accId) return null;
+          return liveAccount(accountById.get(accId));
+        };
+
+        // Run a GitHub call with the bad-token guard, returning the value or
+        // `null` on any failure. `GitHubAuthError` short-circuits subsequent
+        // calls for the same account (this cycle and next). All other errors
+        // are optionally logged with the given label — no caller-side
+        // tap/catch boilerplate. Pass `expectedAuthError: true` to suppress
+        // the noise after the cycle's first 401 (the per-account log line
+        // already covered it).
+        const tryGuarded = <A, E, R>(
+          acc: AccountCtx,
+          eff: Effect.Effect<A, E, R>,
+          opts?: { readonly errorLabel?: string },
+        ): Effect.Effect<A | null, never, R> =>
+          eff.pipe(
+            Effect.tapError((err) =>
+              Effect.sync(() => {
+                if (err instanceof GitHubAuthError) {
+                  markTokenBad(acc);
+                  return;
+                }
+                if (opts?.errorLabel) {
+                  logError("PollScheduler", `${opts.errorLabel}:`, err);
+                }
+              }),
+            ),
+            Effect.catchAll(() => Effect.succeed(null as A | null)),
+          );
 
         // Capture existing SHAs before sync for change detection
         const existingPrs = yield* withDb(prService.listPrs());
@@ -191,17 +230,11 @@ export const PollSchedulerLive = Layer.effect(
           allRepos,
           (repo) =>
             Effect.gen(function* () {
-              const acc = accountForRepo(repo.id);
-              const token = acc?.accessToken ?? "";
-              if (!token || skipInvalid(acc)) return;
-              const repoApiBase = hostToApiBase(repo.githubHost);
-              const fresh = yield* github.getRepoFresh(repo.fullName, token, repoApiBase).pipe(
-                Effect.tapError((err) =>
-                  isAuthErr(err) && acc
-                    ? markAuthFailure(acc, "repo metadata refresh")
-                    : Effect.void,
-                ),
-                Effect.catchAll(() => Effect.succeed(null)),
+              const live = liveAccountForRepo(repo.id);
+              if (!live) return;
+              const fresh = yield* tryGuarded(
+                live.acc,
+                github.getRepoFresh(repo.fullName, live.token, hostToApiBase(repo.githubHost)),
               );
               if (!fresh) return;
               if (
@@ -250,12 +283,11 @@ export const PollSchedulerLive = Layer.effect(
           accountRows,
           (acc) =>
             Effect.gen(function* () {
-              if (!acc.accessToken || invalidAccountIds.has(acc.id)) return;
-              const fresh = yield* github.getAuthenticatedUserFresh(acc.accessToken).pipe(
-                Effect.tapError((err) =>
-                  isAuthErr(err) ? markAuthFailure(acc, "account avatar refresh") : Effect.void,
-                ),
-                Effect.catchAll(() => Effect.succeed(null)),
+              const live = liveAccount(acc);
+              if (!live) return;
+              const fresh = yield* tryGuarded(
+                live.acc,
+                github.getAuthenticatedUserFresh(live.token),
               );
               if (!fresh) return;
 
@@ -333,34 +365,24 @@ export const PollSchedulerLive = Layer.effect(
           allRepos,
           (repo) =>
             Effect.gen(function* () {
-              // Auth failures must not silently poison the token: log + skip this
-              // repo's PR sync this cycle.
-              const acc = accountForRepo(repo.id);
-              const token = acc?.accessToken ?? "";
-              if (!token) {
-                logError(
-                  "PollScheduler",
-                  `GitHub auth unavailable; skipping PR sync for ${repo.fullName} (account ${
-                    acc?.id ?? repoToAccountId.get(repo.id) ?? "missing"
-                  })`,
-                );
+              const live = liveAccountForRepo(repo.id);
+              if (!live) {
+                // Surface the rare data-consistency case ("repo row with no
+                // account row") — token-bad accounts already announced once
+                // upstream and stay silent here.
+                if (!repoToAccountId.get(repo.id)) {
+                  logError(
+                    "PollScheduler",
+                    `GitHub auth unavailable; skipping PR sync for ${repo.fullName} (no account row)`,
+                  );
+                }
                 return null;
               }
-              if (skipInvalid(acc)) return null;
 
-              const repoApiBase = hostToApiBase(repo.githubHost);
-              const prs = yield* github.listPrs(repo.fullName, repo.id, token, repoApiBase).pipe(
-                Effect.tapError((err) =>
-                  isAuthErr(err) && acc ? markAuthFailure(acc, "PR sync") : Effect.void,
-                ),
-                Effect.tapError((err) =>
-                  Effect.sync(() => {
-                    if (!isAuthErr(err))
-                      logError("PollScheduler", `listPrs error for ${repo.fullName}:`, err);
-                  }),
-                ),
-                Effect.map((fetched) => fetched as PullRequest[] | null),
-                Effect.catchAll(() => Effect.succeed(null as PullRequest[] | null)),
+              const prs = yield* tryGuarded(
+                live.acc,
+                github.listPrs(repo.fullName, repo.id, live.token, hostToApiBase(repo.githubHost)),
+                { errorLabel: `listPrs error for ${repo.fullName}` },
               );
 
               // listPrs failed — leave existing DB rows untouched for this repo
@@ -433,27 +455,17 @@ export const PollSchedulerLive = Layer.effect(
                     };
                   }
                   const repo = repoMap.get(pr.repositoryId);
-                  if (!repo) {
+                  const live = repo ? liveAccountForRepo(repo.id) : null;
+                  if (!repo || !live) {
                     return {
                       id: pr.id,
                       status: "closed" as const,
                       closedAt: new Date().toISOString(),
                     };
                   }
-                  const acc = accountForRepo(repo.id);
-                  const token = acc?.accessToken ?? "";
-                  if (!token || skipInvalid(acc)) {
-                    return {
-                      id: pr.id,
-                      status: "closed" as const,
-                      closedAt: new Date().toISOString(),
-                    };
-                  }
-                  const fetched = yield* github.getPr(repo.fullName, pr.externalId, token).pipe(
-                    Effect.tapError((err) =>
-                      isAuthErr(err) && acc ? markAuthFailure(acc, "closed-PR fetch") : Effect.void,
-                    ),
-                    Effect.catchAll(() => Effect.succeed(null)),
+                  const fetched = yield* tryGuarded(
+                    live.acc,
+                    github.getPr(repo.fullName, pr.externalId, live.token),
                   );
                   if (!fetched) {
                     return {
@@ -529,39 +541,20 @@ export const PollSchedulerLive = Layer.effect(
           allRepos,
           (repo) =>
             Effect.gen(function* () {
-              const acc = accountForRepo(repo.id);
-              const token = acc?.accessToken ?? "";
-              if (!token || skipInvalid(acc)) return;
+              const live = liveAccountForRepo(repo.id);
+              if (!live) return;
 
-              const searched = yield* github
-                .searchClosedPrsInWindow(repo.fullName, backfillSinceIso, backfillUntilIso, token)
-                .pipe(
-                  Effect.tapError((err) =>
-                    isAuthErr(err) && acc
-                      ? markAuthFailure(acc, "archive backfill search")
-                      : Effect.void,
-                  ),
-                  Effect.tapError((err) =>
-                    Effect.sync(() => {
-                      if (!isAuthErr(err))
-                        logError(
-                          "PollScheduler",
-                          `archive backfill search failed for ${repo.fullName}:`,
-                          err,
-                        );
-                    }),
-                  ),
-                  Effect.catchAll(() =>
-                    Effect.succeed(
-                      [] as ReadonlyArray<{
-                        readonly number: number;
-                        readonly closedAt: string;
-                        readonly merged: boolean;
-                      }>,
-                    ),
-                  ),
-                );
-              if (searched.length === 0) return;
+              const searched = yield* tryGuarded(
+                live.acc,
+                github.searchClosedPrsInWindow(
+                  repo.fullName,
+                  backfillSinceIso,
+                  backfillUntilIso,
+                  live.token,
+                ),
+                { errorLabel: `archive backfill search failed for ${repo.fullName}` },
+              );
+              if (!searched || searched.length === 0) return;
 
               const known = existingExternalIdsByRepo.get(repo.id) ?? new Set<number>();
               const missing = searched
@@ -571,15 +564,7 @@ export const PollSchedulerLive = Layer.effect(
 
               const fetched = yield* Effect.forEach(
                 missing,
-                (m) =>
-                  github.getPr(repo.fullName, m.number, token).pipe(
-                    Effect.tapError((err) =>
-                      isAuthErr(err) && acc
-                        ? markAuthFailure(acc, "archive backfill fetch")
-                        : Effect.void,
-                    ),
-                    Effect.catchAll(() => Effect.succeed(null)),
-                  ),
+                (m) => tryGuarded(live.acc, github.getPr(repo.fullName, m.number, live.token)),
                 { concurrency: 3 },
               );
 
@@ -668,25 +653,16 @@ export const PollSchedulerLive = Layer.effect(
                   const repo = allRepos.find((r) => r.id === pr.repositoryId);
                   if (!repo) return;
 
-                  const acc = accountForRepo(repo.id);
-                  const token = acc?.accessToken ?? "";
-                  if (!token) {
-                    logError(
-                      "PollScheduler",
-                      `GitHub auth unavailable; skipping diff refresh for PR ${prId} (repo ${repo.fullName})`,
-                    );
-                    return;
-                  }
-                  if (skipInvalid(acc)) return;
+                  // No account row OR token is in the known-bad guard →
+                  // skip silently; the per-account log already covered it.
+                  const live = liveAccountForRepo(repo.id);
+                  if (!live) return;
 
-                  const fileList = yield* github
-                    .getPrFiles(repo.fullName, pr.externalId, token)
-                    .pipe(
-                      Effect.tapError((err) =>
-                        isAuthErr(err) && acc ? markAuthFailure(acc, "diff refresh") : Effect.void,
-                      ),
-                      Effect.orElseSucceed(() => []),
-                    );
+                  const fileList = yield* tryGuarded(
+                    live.acc,
+                    github.getPrFiles(repo.fullName, pr.externalId, live.token),
+                  );
+                  if (!fileList) return;
 
                   const files = fileList.map((f) => ({
                     path: f.filename,
@@ -728,7 +704,10 @@ export const PollSchedulerLive = Layer.effect(
             // account's GitHub identity. Using the first user's githubLogin
             // (the previous behavior) misattributes review requests as soon as
             // multiple users or multiple accounts on the same host exist.
-            const userLogin = accountForRepo(pr.repositoryId)?.githubLogin ?? null;
+            const accIdForLogin = repoToAccountId.get(pr.repositoryId);
+            const userLogin = accIdForLogin
+              ? (accountById.get(accIdForLogin)?.githubLogin ?? null)
+              : null;
             const existing = existingMap.get(pr.id);
 
             if (!existing) {

@@ -256,7 +256,8 @@ interface RecapForAgent {
   readonly periodStart: string;
   readonly periodEnd: string;
   readonly completedAt: string | null;
-  readonly overview: string;
+  /** Short editorial lede from the structured recap (1–3 sentences). */
+  readonly lede: string;
   readonly summaryStats: unknown;
 }
 
@@ -313,7 +314,7 @@ export const getRepoContextHandler: WalkthroughToolHandler<GetRepoContextInput> 
       periodStart: projectRecaps.periodStart,
       periodEnd: projectRecaps.periodEnd,
       completedAt: projectRecaps.completedAt,
-      overview: projectRecaps.overview,
+      lede: projectRecaps.lede,
       summaryStats: projectRecaps.summaryStats,
     })
     .from(projectRecaps)
@@ -335,7 +336,7 @@ export const getRepoContextHandler: WalkthroughToolHandler<GetRepoContextInput> 
       periodStart: r.periodStart,
       periodEnd: r.periodEnd,
       completedAt: r.completedAt ?? null,
-      overview: r.overview,
+      lede: r.lede,
       summaryStats: stats,
     };
   });

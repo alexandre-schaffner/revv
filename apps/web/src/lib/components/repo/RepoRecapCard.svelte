@@ -13,7 +13,6 @@ import {
   getRecapsForRepo,
   loadRecap,
 } from "$lib/stores/recaps.svelte";
-import { renderMarkdown } from "$lib/utils/markdown";
 
 interface Props {
   repoId: string;
@@ -75,7 +74,16 @@ function periodWindow(r: ProjectRecapSummary): string {
   return `${DAY_MONTH.format(start)} → ${DAY_MONTH.format(lastDay)}`;
 }
 
-let html = $derived(latestDetail?.overview ? renderMarkdown(latestDetail.overview) : "");
+// Allowlist sanitize the lede (matches RecapBody — only <strong>/<em>).
+let ledeHtml = $derived.by(() => {
+  const raw = latestDetail?.lede ?? "";
+  const escaped = raw.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return escaped
+    .replace(/&lt;strong&gt;/gi, "<strong>")
+    .replace(/&lt;\/strong&gt;/gi, "</strong>")
+    .replace(/&lt;em&gt;/gi, "<em>")
+    .replace(/&lt;\/em&gt;/gi, "</em>");
+});
 </script>
 
 <section class="recap-card-section">
@@ -129,7 +137,7 @@ let html = $derived(latestDetail?.overview ? renderMarkdown(latestDetail.overvie
 			</div>
 
 			<article class="recap-card-prose">
-				{@html html}
+				{@html ledeHtml}
 			</article>
 
 			<footer class="recap-card-paper-footer">

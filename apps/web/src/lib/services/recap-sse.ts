@@ -1,4 +1,5 @@
 import type { RecapStreamEvent } from "@revv/shared";
+import { recordCounter, tracedAsync } from "$lib/observability";
 import { authHeaders } from "$lib/utils/session-token";
 import { parseSSEBuffer } from "$lib/utils/sse-parser";
 
@@ -11,6 +12,10 @@ export interface RunRecapSseOptions {
 }
 
 export async function runRecapSse(opts: RunRecapSseOptions): Promise<void> {
+  return tracedAsync("recap.sse.run", {}, () => runRecapSseInner(opts));
+}
+
+async function runRecapSseInner(opts: RunRecapSseOptions): Promise<void> {
   const res = await fetch(opts.url, {
     headers: authHeaders(),
     signal: opts.signal,
@@ -51,6 +56,7 @@ export async function runRecapSse(opts: RunRecapSseOptions): Promise<void> {
     if (result.events.length > 0) {
       opts.onEvents(result.events);
     } else if (Date.now() - lastEventTime > INACTIVITY_TIMEOUT_MS) {
+      recordCounter("recap.sse.timeout", undefined);
       throw new Error("Recap stream lost — no data from server for 90 seconds.");
     }
 

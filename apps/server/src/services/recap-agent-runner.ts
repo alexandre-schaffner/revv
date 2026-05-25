@@ -10,40 +10,33 @@
 // Both paths run the same shared handlers in
 // `apps/server/src/ai/providers/recap-tools/handlers.ts`. The orchestrator
 // (`ProjectRecapJobs`) decides which transport to use via the
-// `effectiveAgent` param, which it resolves from settings through
-// `resolveRecapAgent` (per-feature `recap.agent` override with `'auto'`
-// inheriting the global `aiAgent`).
+// `effectiveAgent` param.
 //
-// Pipeline shape on either path:
+// Pipeline shape on either path (structured pipeline; no text buffer):
 //
-//   ≈ 4 tool calls total: get_recap_state → get_repo_context →
-//     commit_recap_overview → complete_recap. The model emits the recap
-//     markdown ONCE — as visible assistant text. The orchestrator's
-//     stream consumer (Claude SDK walker / opencode SSE subscriber)
-//     fans every `text-delta` out to UI subscribers as a `chunk` event
-//     AND appends to `ctx.textBuffer.current`; `commit_recap_overview`'s
-//     handler reads the buffer for the markdown body. Single emission,
-//     dual consumption — see plan
-//     /Users/alex/.claude/plans/i-want-the-recap-wild-kite.md.
+//   get_recap_state → [get_repo_context, list_open_prs?] → set_lede →
+//   add_pr_entry × N → complete_recap.
 //
-// Live UI streaming via best-effort `chunk` events; durability via the
-// atomic `commit_recap_overview` MCP write. The orchestrator observes
-// `complete_recap` via the `onCompleted` hook on the `RecapToolContext`
-// it passes in.
+// All content flows through tool arguments. Visible assistant text is
+// discarded — the prompt instructs the agent not to emit any. Live UI
+// updates come from per-handler SSE emissions (`lede`, `entry`, `phase`).
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { ProjectRecap, RecapStreamEvent } from "@revv/shared";
+import { eq } from "drizzle-orm";
 import { walkClaudeMessages } from "../ai/agent-stream";
 import { buildRecapUserMessage, RECAP_SYSTEM_PROMPT } from "../ai/prompts/recap";
 import { resolveCliBin } from "../ai/providers/cli-agent";
-import { buildRecapActivity, normalizeRecapToolName } from "../ai/providers/recap-activity";
+import {
+  createRecapDispatchState,
+  dispatchRecapStreamEvent,
+} from "../ai/providers/recap-event-dispatch";
 import {
   type RecapOpencodeSessionDeps,
   type RecapOpencodeSupervisorDeps,
   runRecapAgentViaOpencode,
 } from "../ai/providers/recap-opencode";
 import {
-  commitRecapOverviewHandler,
   completeRecapHandler,
   createRecapMcpServer,
   RECAP_ALLOWED_TOOLS,
@@ -53,6 +46,7 @@ import {
   type RecapToolContext,
 } from "../ai/providers/recap-tools";
 import type { Db } from "../db";
+import { projectRecaps, recapPrEntries } from "../db/schema/index";
 import { debug, logError } from "../logger";
 import type { CliAgent } from "./Ai";
 
@@ -106,20 +100,11 @@ export interface RunRecapAgentParams {
   readonly getPrDiff: (prId: string) => Promise<RecapSourcePrDiff | null>;
   /**
    * Stream emitter for live recap generation. Called by MCP tool handlers
-   * so the SSE endpoint can forward chunks to subscribers, and by this
-   * runner's own stream consumer to forward every `text-delta` as a
-   * `chunk` event.
+   * so the SSE endpoint can forward `lede` / `entry` / `phase` events to
+   * subscribers. The runner itself emits `activity` events on each tool
+   * call; visible assistant text is discarded.
    */
   readonly emitEvent: (event: RecapStreamEvent) => void;
-  /**
-   * Mutable closure cell the orchestrator hands in so it can later read
-   * the agent's currently-buffered visible text (used by the SSE route's
-   * reconnect snapshot). The runner appends text-deltas to `.current`
-   * and resets on each non-commit tool-call boundary; the
-   * `commit_recap_overview` MCP handler reads `.current` for the durable
-   * markdown body.
-   */
-  readonly textBuffer: { current: string };
 }
 
 /**
@@ -148,7 +133,6 @@ export async function runRecapAgent(params: RunRecapAgentParams): Promise<RecapA
     onCompleted: onCompletedWrapper,
     getPrDiff: params.getPrDiff,
     emit: params.emitEvent,
-    textBuffer: params.textBuffer,
     toolCalls,
   };
 
@@ -188,17 +172,20 @@ async function recoverMissedFinalToolCall(
     return { recovered: false };
   }
 
-  const buffered = ctx.textBuffer.current.trim();
-  if (buffered.length > 0) {
-    debug(
-      "recap-agent-runner",
-      `recovering recap ${ctx.recapId}: agent wrote markdown but missed or failed commit_recap_overview`,
-    );
-    const commit = await commitRecapOverviewHandler(ctx, buildFallbackCommitInput(ctx));
-    if (commit.isError) {
-      const error = firstToolText(commit) ?? existingError;
-      return error ? { recovered: false, error } : { recovered: false };
-    }
+  const row = ctx.db
+    .select({ lede: projectRecaps.lede })
+    .from(projectRecaps)
+    .where(eq(projectRecaps.id, ctx.recapId))
+    .get();
+  const entries = ctx.db
+    .select({ id: recapPrEntries.id })
+    .from(recapPrEntries)
+    .where(eq(recapPrEntries.recapId, ctx.recapId))
+    .all();
+  const hasLede = (row?.lede ?? "").trim().length > 0;
+  const hasEntries = entries.length > 0;
+  if (!hasLede || !hasEntries) {
+    return { recovered: false };
   }
 
   debug(
@@ -211,26 +198,6 @@ async function recoverMissedFinalToolCall(
     return error ? { recovered: false, error } : { recovered: false };
   }
   return { recovered: true };
-}
-
-function buildFallbackCommitInput(
-  ctx: RecapToolContext,
-): Parameters<typeof commitRecapOverviewHandler>[1] {
-  const allPrs = [...ctx.sourceBundle.prs, ...ctx.sourceBundle.openPrs];
-  return {
-    source_pr_ids: allPrs.map((pr) => pr.id),
-    source_walkthrough_ids: allPrs.flatMap((pr) => (pr.walkthrough ? [pr.walkthrough.id] : [])),
-    stats: {
-      pr_count: ctx.sourceBundle.stats.prCount,
-      merged_count: ctx.sourceBundle.stats.mergedCount,
-      closed_count: ctx.sourceBundle.stats.closedCount,
-      author_count: ctx.sourceBundle.stats.authorCount,
-      risk_low: ctx.sourceBundle.stats.riskBreakdown.low,
-      risk_medium: ctx.sourceBundle.stats.riskBreakdown.medium,
-      risk_high: ctx.sourceBundle.stats.riskBreakdown.high,
-      walkthroughs_missing_count: ctx.sourceBundle.stats.walkthroughsMissingCount,
-    },
-  };
 }
 
 function firstToolText(result: {
@@ -287,71 +254,16 @@ async function runViaClaude(
         maxTurns: params.aiMaxTurns,
         abortController: params.abortController,
         model: params.modelUsed,
-        // Surface `stream_event` messages so the walker emits per-token
-        // `text-delta` events. The recap composition lives in those
-        // deltas — we accumulate them into `ctx.textBuffer.current`
-        // (the durable source for `commit_recap_overview`) and fan
-        // each one out as a `chunk` SSE event to UI subscribers.
-        includePartialMessages: true,
         ...pathOption,
       },
     });
 
-    // Walk the SDK message stream. Two side effects per text-delta:
-    //   1. ctx.emit({type:"chunk", data:{text}})  → live UI (pre-commit only)
-    //   2. ctx.textBuffer.current += text         → durable source for commit handler
-    //
-    // Buffer lifecycle:
-    //   • Read tools (get_recap_state, list_open_prs, get_repo_context) reset
-    //     the buffer so pre-composition prelude is discarded before the model
-    //     starts writing the real recap. The reset is mirrored as `overview: ""`
-    //     to the client so it wipes any streamed prelude text.
-    //   • commit_recap_overview's handler reads the buffer, sanitizes it
-    //     (strips preamble/suffix narration), writes to DB, then clears the
-    //     buffer itself — so a second commit call only persists the new content.
-    //   • After commit fires, chunk emission stops (`committed` flag). Any text
-    //     the model generates in a second pass goes to the buffer (for a
-    //     potential second commit) but is NOT streamed to the client, preventing
-    //     the doubled-content visual in the streaming view.
-    //   • complete_recap must not reset — it fires after composition and any
-    //     reset here would blank the streaming view before the WS event arrives.
-    let committed = false;
+    // Walk the SDK message stream through the shared recap dispatcher so
+    // both transports apply the same discard / activity / heartbeat rules
+    // (CLAUDE.md invariant #13).
+    const dispatchState = createRecapDispatchState();
     const usage = await walkClaudeMessages(iter, (ev) => {
-      if (ev.kind === "text-delta") {
-        if (ev.data.length === 0) return;
-        ctx.textBuffer.current += ev.data;
-        // Stop streaming chunks after the first commit. The model sometimes
-        // generates the recap a second time; without this guard those chunks
-        // would append onto the clean committed content in the streaming view.
-        if (!committed) {
-          ctx.emit({ type: "chunk", data: { text: ev.data } });
-        }
-        return;
-      }
-      if (ev.kind === "reasoning-delta") {
-        if (ev.data.length === 0) return;
-        ctx.emit({ type: "thought", data: { text: ev.data } });
-        return;
-      }
-      if (ev.kind === "tool-call") {
-        const toolName = normalizeRecapToolName(ev.bareName);
-        ctx.emit({ type: "activity", data: buildRecapActivity(toolName, ev.input) });
-        if (toolName === "commit_recap_overview") {
-          committed = true;
-          return;
-        }
-        if (toolName === "complete_recap") {
-          return;
-        }
-        // Only reset on pre-commit read/prelude tools. After commit, a stray
-        // read tool must not wipe the committed content from the client view.
-        if (!committed) {
-          ctx.textBuffer.current = "";
-          ctx.emit({ type: "overview", data: { overview: "" } });
-        }
-        return;
-      }
-      // reasoning-delta / task-list-update / subagent-* / error / etc. → ignored
+      dispatchRecapStreamEvent(ev, dispatchState, ctx.emit);
     });
     if (usage) {
       tokenUsage = {

@@ -537,7 +537,7 @@ onDestroy(() => {
 <Dialog.Root {open} {onOpenChange}>
 	<Dialog.Content
 		showCloseButton={false}
-		class="proposed-diff-dialog !p-0 !gap-0 !top-1/2 !-translate-y-1/2 sm:!max-w-none !w-[min(1100px,92vw)] !h-[min(80vh,800px)] !rounded-none !border-0 !shadow-none !text-foreground"
+		class="proposed-diff-dialog !p-0 !gap-0 !inset-y-0 !my-auto sm:!max-w-none !w-[min(1100px,92vw)] !h-[min(80vh,800px)] !rounded-none !border-0 !shadow-none !text-foreground"
 	>
 		<Dialog.Header class="sr-only">
 			<Dialog.Title>Proposed commit diff — {subject}</Dialog.Title>

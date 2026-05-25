@@ -1000,6 +1000,9 @@ diffs-container {
   padding: 8px 0 10px;
   z-index: 10;
   pointer-events: none;
+  transition:
+    left var(--duration-instant) var(--ease-out-expo),
+    right var(--duration-instant) var(--ease-out-expo);
 }
 .actions-float * {
   pointer-events: auto;

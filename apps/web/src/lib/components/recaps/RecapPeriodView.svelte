@@ -6,7 +6,6 @@ import { untrack } from "svelte";
 import { Shimmer } from "$lib/components/ai/shimmer";
 import GenActionBar, { type GenActionState } from "$lib/components/layout/GenActionBar.svelte";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
-import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
 import {
   abortRecapStream,
   getRecapStreamEntry,
@@ -25,6 +24,8 @@ import {
   regenerateRecap,
   stopRecap,
 } from "$lib/stores/recaps.svelte";
+import { getActionsFloatStyle } from "$lib/stores/sidebar.svelte";
+import DotMatrixLoader from "./DotMatrixLoader.svelte";
 import PreviousRecaps from "./PreviousRecaps.svelte";
 import RecapDetail from "./RecapDetail.svelte";
 
@@ -228,6 +229,8 @@ async function onStop(): Promise<void> {
   if (!id) return;
   await stopRecap(id);
 }
+
+const actionsFloatStyle = $derived(getActionsFloatStyle());
 </script>
 
 <div class="period-view">
@@ -235,17 +238,16 @@ async function onStop(): Promise<void> {
 		<RecapDetail
 			recap={latestDetail}
 			loading={detailLoading}
+			{period}
 			{stream}
 		/>
 	{:else if latest && detailLoading}
-		<div class="period-loading">
-			<Loader2 size={20} weight="regular" class="motion-essential-spin" aria-hidden="true" />
-			<p>Loading {periodLabelLower} recap…</p>
+		<div class="loader-fullscreen">
+			<DotMatrixLoader label="Loading {periodLabelLower} recap" />
 		</div>
 	{:else if listLoading && recaps.length === 0}
-		<div class="period-loading">
-			<Loader2 size={20} weight="regular" class="motion-essential-spin" aria-hidden="true" />
-			<p>Loading recaps…</p>
+		<div class="loader-fullscreen">
+			<DotMatrixLoader label="Loading recaps" />
 		</div>
 	{:else}
 		<header class="period-hero">
@@ -254,30 +256,27 @@ async function onStop(): Promise<void> {
 			<p class="period-lede">
 				{#if period === "daily"}
 					A snapshot of every pull request that opened, moved, or shipped
-					today — written by the agent, ready in a minute.
+					today, written by the agent and ready in a minute.
 				{:else}
-					A week of pull-request activity distilled into one read — what
+					A week of pull-request activity distilled into one read: what
 					shipped, what's still in flight, where the risk sits.
 				{/if}
 			</p>
 		</header>
 	{/if}
 
-	<PreviousRecaps
-		{repoId}
-		{period}
-		{recaps}
-		loading={listLoading}
-		excludeRecapId={latestId}
-	/>
+	<div class="aux">
+		<PreviousRecaps
+			{repoId}
+			{period}
+			{recaps}
+			excludeRecapId={latestId}
+		/>
+	</div>
 </div>
 
 {#if showGenerateFab || genActionState}
-	<div
-		class="actions-float"
-		in:gsapFadeY={{ duration: tokens.quick, y: 8 }}
-		out:gsapFade={{ duration: tokens.snap }}
-	>
+	<div class="actions-float" style={actionsFloatStyle}>
 		<div class="actions-row" role="toolbar" aria-label="Recap actions">
 			{#if showGenerateFab}
 				<GlassPill
@@ -336,24 +335,25 @@ async function onStop(): Promise<void> {
 	.period-view {
 		display: flex;
 		flex-direction: column;
-		max-width: 56rem;
+		width: 100%;
+	}
+
+	/* Center the loader vertically + horizontally in the available viewport
+	   while the recap (or the recap list) is loading. Approximate viewport
+	   height by subtracting the app shell chrome so the loader sits in the
+	   visual middle of the page area, not the middle of the document. */
+	.loader-fullscreen {
+		display: grid;
+		place-items: center;
+		min-height: calc(100vh - 8rem);
+		width: 100%;
+	}
+
+	.aux {
+		max-width: 1280px;
 		margin: 0 auto;
 		width: 100%;
-		padding: 1rem 1.25rem 4rem;
-	}
-
-	.period-loading {
-		display: flex;
-		gap: 0.625rem;
-		align-items: center;
-		padding: 1rem 1.25rem;
-		background: var(--color-bg-secondary);
-		border-radius: 0.5rem;
-		color: var(--color-text-secondary);
-	}
-
-	.period-loading p {
-		margin: 0;
+		padding: 0 2rem 4rem;
 	}
 
 	/* Editorial empty state. Mono eyebrow → display heading → lede.
@@ -362,7 +362,10 @@ async function onStop(): Promise<void> {
 		display: flex;
 		flex-direction: column;
 		gap: 0.75rem;
-		padding: 3.5rem 0.25rem 1.5rem;
+		max-width: 56rem;
+		margin: 0 auto;
+		width: 100%;
+		padding: 3.5rem 2rem 1.5rem;
 	}
 
 	.period-eyebrow {
@@ -376,11 +379,17 @@ async function onStop(): Promise<void> {
 
 	.period-title {
 		margin: 0;
-		font-size: clamp(2rem, 4vw, 2.75rem);
+		font-size: 2.5rem;
 		font-weight: 500;
-		letter-spacing: -0.035em;
+		letter-spacing: -0.02em;
 		line-height: 1.02;
 		color: var(--color-text-primary);
+	}
+
+	@media (max-width: 720px) {
+		.period-title {
+			font-size: 2rem;
+		}
 	}
 
 	.period-lede {

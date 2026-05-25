@@ -9,19 +9,17 @@
 //     can't fork duplicate fibers.
 //   • Bounded retries via `resume_attempts`. Boot resume re-runs the agent
 //     from scratch — recap is single-phase so partial state is just the
-//     row at `status='generating'` with empty overview, which is
+//     row at `status='generating'` with empty content, which is
 //     recoverable by re-running.
 //
 // Per CLAUDE.md invariants #2 and #11: agents never write `status`. This
 // service is the sole writer. Content writes go through the recap MCP tool
 // handlers in `ai/providers/recap-tools/`.
 
-import type { ProjectRecap, RecapPeriod, RecapStreamEvent, RecapSummaryStats } from "@revv/shared";
+import type { ProjectRecap, RecapPeriod, RecapStreamEvent } from "@revv/shared";
 import { eq, sql } from "drizzle-orm";
 import { Cause, Context, Effect, Fiber, Layer, Ref } from "effect";
 import type {
-  RecapSourceBundle,
-  RecapSourcePr,
   RecapSourcePrDiff,
   RecapSourcePrDiffFile,
   RecapSourcePrDigest,
@@ -41,6 +39,15 @@ import { ProjectRecapService } from "./ProjectRecap";
 import { type ArchivedPrWithWalkthrough, PullRequestService } from "./PullRequest";
 import { RepositoryService } from "./Repository";
 import { runRecapAgent } from "./recap-agent-runner";
+import { makeRecapSessionManager } from "./recap-session";
+import {
+  attachRecapDigests,
+  buildDigestForRecapPr,
+  buildSourceBundle,
+  RECAP_DIFF_MAX_FILES_PER_PR,
+  RECAP_DIFF_MAX_PATCH_CHARS,
+  truncatePatch,
+} from "./recap-source-bundle";
 import { SettingsService } from "./Settings";
 import { TokenProvider } from "./TokenProvider";
 import { WebSocketHub } from "./WebSocketHub";
@@ -53,22 +60,8 @@ export const MAX_CONCURRENT_RECAP_JOBS = 2;
 /** Resume-on-boot retry budget. After this many attempts the row goes to 'error'. */
 export const RECAP_MAX_RESUME_ATTEMPTS = 3;
 
-/**
- * TTL for opencode HTTP-MCP session tokens. Covers the runner's 10-minute
- * soft cap plus slack for slow daemon startups and retries. Tokens are
- * cleared automatically on job end via `Effect.ensuring`; this TTL is a
- * defensive ceiling so a leaked token can't outlive the job indefinitely.
- */
+/** TTL for opencode HTTP-MCP session tokens (10-min cap + slack). */
 const RECAP_SESSION_TOKEN_TTL_MS = 15 * 60_000;
-
-/**
- * Per-PR caps applied when we surface a diff to the recap agent as a
- * walkthrough fallback. These are intentionally aggressive — the agent only
- * needs a high-level read on the change, not every line, and the bundle is
- * already carrying metadata + body for every PR in the window.
- */
-const RECAP_DIFF_MAX_FILES_PER_PR = 25;
-const RECAP_DIFF_MAX_PATCH_CHARS = 3000;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -98,22 +91,6 @@ interface ActiveRecapJob {
   readonly subscribers: Set<SubscriberHandle>;
   /** Monotonic seq for tracing. */
   nextSeq: number;
-  /**
-   * In-memory previous overview to thread into the source bundle. Set by
-   * `regenerateForPeriod` when reusing an existing row; null on a fresh
-   * row.
-   */
-  readonly previousOverview: string | null;
-  /**
-   * Mutable closure cell holding the agent's currently-buffered visible
-   * assistant text. The runner's stream consumer appends text-deltas
-   * here (and resets on each non-commit tool-call). The SSE route reads
-   * `.current` on reconnect to hand a pre-commit snapshot to a fresh
-   * subscriber. The same reference is also threaded into the
-   * `RecapToolContext` so `commit_recap_overview`'s handler reads from
-   * the same buffer.
-   */
-  readonly textBuffer: { current: string };
 }
 
 export type StartRecapJobTrigger = "scheduler" | "manual" | "resume";
@@ -126,15 +103,6 @@ export interface StartRecapJobParams {
   readonly trigger: StartRecapJobTrigger;
   /** Caller-provided id when resuming an existing row. */
   readonly recapId?: string;
-  /**
-   * Markdown overview from the prior recap row for this same window.
-   * Threaded into the source bundle so the agent treats this run as an
-   * in-place update rather than a fresh write. Only set by
-   * `regenerateForPeriod` on the rerun path. Lives in memory only —
-   * a crash + resume loses this context; the agent rebuilds from the
-   * current bundle (which is acceptable degradation for a rare path).
-   */
-  readonly previousOverview?: string;
 }
 
 export type StartRecapJobError = ValidationError | RecapError;
@@ -193,15 +161,6 @@ export class ProjectRecapJobs extends Context.Tag("ProjectRecapJobs")<
     readonly emitEvent: (recapId: string, event: RecapStreamEvent) => Effect.Effect<EmitResult>;
 
     /**
-     * Snapshot the in-memory text buffer for a generating recap. Used by
-     * the SSE route on reconnect: when the DB overview is still empty
-     * (the agent hasn't called `commit_recap_overview` yet), the buffer
-     * carries the partial composition the agent has streamed so far.
-     * Returns null when no live job exists or the buffer is empty.
-     */
-    readonly getCurrentBuffer: (recapId: string) => Effect.Effect<string | null>;
-
-    /**
      * Issue an opaque session token bound to a prepared {@link RecapToolContext}.
      * The HTTP MCP route at `/mcp/recap` authenticates opencode tool calls
      * against this map and resolves them to the per-job context (recapId +
@@ -242,67 +201,8 @@ export const ProjectRecapJobsLive = Layer.effect(
     const semaphore = yield* Effect.makeSemaphore(MAX_CONCURRENT_RECAP_JOBS);
     const startJobMutexes = yield* Ref.make(new Map<string, Effect.Semaphore>());
 
-    // ── Session-token registry (opencode HTTP-MCP) ────────────────────────
-    // Holds prepared RecapToolContexts keyed by an opaque bearer token. The
-    // `/mcp/recap` route resolves the token → context per JSON-RPC call.
-    // Per CLAUDE.md invariant #1, this is ephemeral coordination: a server
-    // restart wipes the map; the orchestrator's resume path rebuilds it on
-    // the next run.
-    interface SessionEntry {
-      readonly ctx: RecapToolContext;
-      readonly expiresAt: number;
-    }
-    const sessionTokens = yield* Ref.make(new Map<string, SessionEntry>());
-
-    const issueSessionToken = (ctx: RecapToolContext): Effect.Effect<string> =>
-      Effect.gen(function* () {
-        const token = crypto.randomUUID();
-        const expiresAt = Date.now() + RECAP_SESSION_TOKEN_TTL_MS;
-        yield* Ref.update(sessionTokens, (map) => {
-          const next = new Map(map);
-          next.set(token, { ctx, expiresAt });
-          return next;
-        });
-        return token;
-      });
-
-    const resolveSessionToken = (token: string): Effect.Effect<RecapToolContext | null> =>
-      Effect.gen(function* () {
-        const map = yield* Ref.get(sessionTokens);
-        const entry = map.get(token);
-        if (!entry) return null;
-        if (entry.expiresAt <= Date.now()) {
-          yield* Ref.update(sessionTokens, (m) => {
-            if (!m.has(token)) return m;
-            const next = new Map(m);
-            next.delete(token);
-            return next;
-          });
-          return null;
-        }
-        return entry.ctx;
-      });
-
-    const clearSessionToken = (token: string): Effect.Effect<void> =>
-      Ref.update(sessionTokens, (map) => {
-        if (!map.has(token)) return map;
-        const next = new Map(map);
-        next.delete(token);
-        return next;
-      });
-
-    const clearTokensForRecap = (recapId: string): Effect.Effect<void> =>
-      Ref.update(sessionTokens, (map) => {
-        let changed = false;
-        const next = new Map(map);
-        for (const [token, entry] of next) {
-          if (entry.ctx.recapId === recapId) {
-            next.delete(token);
-            changed = true;
-          }
-        }
-        return changed ? next : map;
-      });
+    const { issueSessionToken, resolveSessionToken, clearSessionToken, clearTokensForRecap } =
+      yield* makeRecapSessionManager(RECAP_SESSION_TOKEN_TTL_MS);
 
     const provideDb = <A, E>(eff: Effect.Effect<A, E, DbService>): Effect.Effect<A, E> =>
       withDb(db, eff);
@@ -487,22 +387,6 @@ export const ProjectRecapJobsLive = Layer.effect(
           ),
         );
       });
-
-    /**
-     * Clip a single file's patch text to fit the per-file char budget.
-     * Returns the bounded patch plus a flag indicating truncation, so the
-     * agent can know it isn't seeing the whole file change.
-     */
-    const truncatePatch = (patch: string | null): { patch: string | null; truncated: boolean } => {
-      if (patch === null) return { patch: null, truncated: false };
-      if (patch.length <= RECAP_DIFF_MAX_PATCH_CHARS) {
-        return { patch, truncated: false };
-      }
-      return {
-        patch: `${patch.slice(0, RECAP_DIFF_MAX_PATCH_CHARS)}\n[…patch truncated to ${RECAP_DIFF_MAX_PATCH_CHARS} chars — original ${patch.length}…]`,
-        truncated: true,
-      };
-    };
 
     /**
      * Materialize a {@link RecapSourcePrDiff} for a single PR. Tries the
@@ -746,103 +630,6 @@ export const ProjectRecapJobsLive = Layer.effect(
         return { addedCount: upsertable.length };
       });
 
-    // ── Source bundle assembly ──────────────────────────────────────────
-
-    const buildSourceBundle = (
-      repoFullName: string,
-      params: {
-        repoId: string;
-        period: RecapPeriod;
-        periodStart: string;
-        periodEnd: string;
-        previousOverview: string | null;
-      },
-      windowed: ReadonlyArray<ArchivedPrWithWalkthrough>,
-      openPrs: ReadonlyArray<ArchivedPrWithWalkthrough>,
-    ): RecapSourceBundle => {
-      const toRecapPr = (
-        row: ArchivedPrWithWalkthrough,
-        statusOverride?: "open",
-      ): RecapSourcePr => {
-        const pr = row.pr;
-        return {
-          id: pr.id,
-          externalId: pr.externalId,
-          title: pr.title,
-          authorLogin: pr.authorLogin,
-          status:
-            statusOverride ??
-            ((pr.status === "merged" ? "merged" : "closed") as "merged" | "closed"),
-          closedAt: pr.closedAt ?? "",
-          sourceBranch: pr.sourceBranch,
-          targetBranch: pr.targetBranch,
-          additions: pr.additions,
-          deletions: pr.deletions,
-          changedFiles: pr.changedFiles,
-          url: pr.url,
-          body: pr.body ? truncateBody(pr.body) : null,
-          walkthrough: row.walkthrough
-            ? {
-                id: row.walkthrough.id,
-                summary: row.walkthrough.summary,
-                sentiment: row.walkthrough.sentiment ?? null,
-                riskLevel:
-                  row.walkthrough.riskLevel === "high" || row.walkthrough.riskLevel === "medium"
-                    ? row.walkthrough.riskLevel
-                    : "low",
-                completedAt: row.walkthrough.completedAt ?? null,
-              }
-            : null,
-          diffDigest: null,
-        };
-      };
-
-      const prs: RecapSourcePr[] = windowed.map((row) => toRecapPr(row));
-      const openPrList: RecapSourcePr[] = openPrs.map((row) => toRecapPr(row, "open"));
-
-      // Aggregate stats up-front so the agent has a reference baseline and
-      // the read tool can hand it to them.
-      let mergedCount = 0;
-      let closedCount = 0;
-      const authorSet = new Set<string>();
-      let low = 0;
-      let medium = 0;
-      let high = 0;
-      let missing = 0;
-      for (const p of prs) {
-        if (p.status === "merged") mergedCount++;
-        else closedCount++;
-        authorSet.add(p.authorLogin);
-        if (p.walkthrough) {
-          if (p.walkthrough.riskLevel === "high") high++;
-          else if (p.walkthrough.riskLevel === "medium") medium++;
-          else low++;
-        } else {
-          missing++;
-        }
-      }
-      const stats: RecapSummaryStats = {
-        prCount: prs.length,
-        mergedCount,
-        closedCount,
-        authorCount: authorSet.size,
-        riskBreakdown: { low, medium, high },
-        walkthroughsMissingCount: missing,
-      };
-
-      return {
-        repoId: params.repoId,
-        repoFullName,
-        period: params.period,
-        periodStart: params.periodStart,
-        periodEnd: params.periodEnd,
-        prs,
-        openPrs: openPrList,
-        stats,
-        previousOverview: params.previousOverview,
-      };
-    };
-
     // ── Job body ─────────────────────────────────────────────────────────
 
     const buildJobBody = (job: ActiveRecapJob): Effect.Effect<void> =>
@@ -949,8 +736,15 @@ export const ProjectRecapJobsLive = Layer.effect(
           return Effect.runPromise(loadDiffForPr(row.pr, repo.fullName, cachedToken));
         };
 
+        // Compact diffs into per-PR digests for every PR (archived OR open)
+        // that lacks a completed walkthrough. Open PRs follow the same
+        // protocol as archived no-walkthrough PRs: the agent reads
+        // `diffDigest` from the source bundle when writing each
+        // `add_pr_entry` description. Without this open PRs would only carry
+        // a body excerpt, and active-work entries would read very differently
+        // from shipped entries.
         const digestEntries = yield* Effect.forEach(
-          windowed.filter((row) => row.walkthrough === null),
+          [...windowed, ...openPrs].filter((row) => row.walkthrough === null),
           (row) =>
             Effect.gen(function* () {
               if (cachedToken === undefined) {
@@ -1075,7 +869,6 @@ export const ProjectRecapJobsLive = Layer.effect(
               },
               getPrDiff,
               emitEvent: emit,
-              textBuffer: job.textBuffer,
             });
           },
           catch: (e) => new ValidationError({ message: String(e) }),
@@ -1317,8 +1110,6 @@ export const ProjectRecapJobsLive = Layer.effect(
               validatedComplete: false,
               subscribers: new Set<SubscriberHandle>(),
               nextSeq: 0,
-              previousOverview: params.previousOverview ?? null,
-              textBuffer: { current: "" },
             };
             yield* launchJob(job);
             return { recapId };
@@ -1391,15 +1182,6 @@ export const ProjectRecapJobsLive = Layer.effect(
         return { kind: "delivered", seq };
       });
 
-    const getCurrentBuffer = (recapId: string): Effect.Effect<string | null> =>
-      Effect.gen(function* () {
-        const map = yield* Ref.get(registry);
-        const job = map.get(recapId);
-        if (!job) return null;
-        const text = job.textBuffer.current;
-        return text.length > 0 ? text : null;
-      });
-
     const regenerateForPeriod = (params: {
       readonly repoId: string;
       readonly period: RecapPeriod;
@@ -1408,10 +1190,8 @@ export const ProjectRecapJobsLive = Layer.effect(
     }): Effect.Effect<{ readonly recapId: string }, StartRecapJobError> =>
       Effect.gen(function* () {
         // "Max 1 active recap per (repo, period, periodStart)" rule:
-        // if a row already exists for this window, update it in place
-        // instead of creating a new one + superseding the old. The agent
-        // receives the prior overview as context and writes the next
-        // version on top of it.
+        // if a row already exists for this window, reset it in place
+        // instead of creating a new one + superseding the old.
         const existing = yield* provideDb(
           recapService.findActiveForPeriod(params.repoId, params.period, params.periodStart),
         ).pipe(Effect.catchAll(() => Effect.succeed(null)));
@@ -1422,7 +1202,7 @@ export const ProjectRecapJobsLive = Layer.effect(
           // and clobber the cleared fields.
           yield* cancel(existing.id);
 
-          const { previousOverview } = yield* provideDb(
+          yield* provideDb(
             recapService.resetForRerun(existing.id, {
               periodStart: params.periodStart,
               periodEnd: params.periodEnd,
@@ -1451,7 +1231,6 @@ export const ProjectRecapJobsLive = Layer.effect(
             periodStart: params.periodStart,
             periodEnd: params.periodEnd,
             trigger: "manual",
-            previousOverview,
           });
         }
 
@@ -1528,103 +1307,9 @@ export const ProjectRecapJobsLive = Layer.effect(
       resumePending,
       subscribe,
       emitEvent,
-      getCurrentBuffer,
       issueSessionToken,
       resolveSessionToken,
       clearSessionToken,
     };
   }),
 );
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-function attachRecapDigests(
-  bundle: RecapSourceBundle,
-  digests: ReadonlyMap<string, RecapSourcePrDigest>,
-): RecapSourceBundle {
-  return {
-    ...bundle,
-    prs: bundle.prs.map((pr) => ({
-      ...pr,
-      diffDigest: pr.walkthrough ? null : (digests.get(pr.id) ?? pr.diffDigest),
-    })),
-  };
-}
-
-function buildDigestForRecapPr(
-  pr: ArchivedPrWithWalkthrough["pr"],
-  diff: RecapSourcePrDiff | null,
-): RecapSourcePrDigest {
-  if (diff === null || diff.source === "unavailable") {
-    return {
-      source: "unavailable",
-      digest:
-        "Raw diff was unavailable during recap ingestion. Describe this PR from title, body, branch names, and +/- counts only; state the limitation if detail matters.",
-      files: [],
-      note: diff?.note ?? "No diff bytes were available for this PR.",
-    };
-  }
-
-  const files = diff.files.slice(0, 12).map((file) => ({
-    path: file.path,
-    status: file.status,
-    additions: file.additions,
-    deletions: file.deletions,
-    patchAvailable: file.patch !== null,
-    patchTruncated: file.patchTruncated,
-  }));
-  const primaryFiles = files
-    .slice(0, 8)
-    .map((file) => `${file.status} ${file.path} (+${file.additions}/-${file.deletions})`)
-    .join("; ");
-  const patchHints = diff.files
-    .flatMap((file) => extractPatchHints(file))
-    .slice(0, 18)
-    .join("; ");
-  const extraNotes: string[] = [];
-  if (diff.filesTruncated) {
-    extraNotes.push(`file list truncated from ${diff.totalFiles} files`);
-  }
-  if (diff.note) extraNotes.push(diff.note);
-  const note = extraNotes.length > 0 ? extraNotes.join(" ") : null;
-  const digest = [
-    `PR #${pr.externalId} "${pr.title}" diff digest.`,
-    primaryFiles ? `Primary files: ${primaryFiles}.` : "No file-level rows were available.",
-    patchHints
-      ? `Patch signals: ${patchHints}.`
-      : "Patch text was absent or too small to extract semantic hints.",
-    note ? `Limitations: ${note}` : "",
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .slice(0, 1600);
-
-  return {
-    source: diff.source,
-    digest,
-    files,
-    note,
-  };
-}
-
-function extractPatchHints(file: RecapSourcePrDiffFile): string[] {
-  if (!file.patch) return [];
-  const hints: string[] = [];
-  for (const rawLine of file.patch.split("\n")) {
-    if (hints.length >= 4) break;
-    if (rawLine.startsWith("+++") || rawLine.startsWith("---")) continue;
-    if (!rawLine.startsWith("+") && !rawLine.startsWith("-")) continue;
-    const line = rawLine.slice(1).trim();
-    if (line.length < 8) continue;
-    if (/^[{}()[\],.;]+$/.test(line)) continue;
-    hints.push(`${file.path}: ${rawLine[0]} ${line.slice(0, 120)}`);
-  }
-  return hints;
-}
-
-/** Trim PR body to ~2KB so the bundle stays bounded. */
-function truncateBody(body: string): string {
-  const MAX = 2000;
-  if (body.length <= MAX) return body;
-  return `${body.slice(0, MAX)}\n\n[…truncated…]`;
-}

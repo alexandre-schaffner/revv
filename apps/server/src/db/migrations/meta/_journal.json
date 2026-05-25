@@ -118,7 +118,35 @@
       "idx": 16,
       "version": "6",
       "when": 1779555000000,
-      "tag": "0140_update_channel",
+      "tag": "0140_recap_structured_entries",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1779560000000,
+      "tag": "0150_recap_pr_state",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1779565000000,
+      "tag": "0160_recap_theme_summaries",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1779570000000,
+      "tag": "0170_drop_recap_stranded_columns",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1779575000000,
+      "tag": "0180_update_channel",
       "breakpoints": true
     }
   ]

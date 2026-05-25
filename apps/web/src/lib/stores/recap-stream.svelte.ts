@@ -1,11 +1,22 @@
-import type { Activity, RecapStreamEvent } from "@revv/shared";
+import type { Activity, RecapPrEntry, RecapStreamEvent, RecapThemeSummary } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
+import { startSpan, traced } from "$lib/observability";
 import { runRecapSse } from "$lib/services/recap-sse";
 
 // ── Entry shape ─────────────────────────────────────────────────────────────
 
 export interface RecapStreamEntry {
-  overview: string;
+  lede: string;
+  /**
+   * Per-PR structured entries indexed by prId so re-emits / reconnects merge
+   * cleanly. Render order is `position`, ascending.
+   */
+  entries: Map<string, RecapPrEntry>;
+  /**
+   * Per-theme summary paragraphs indexed by theme label. Idempotent on the
+   * server side too — `set_theme_summary` upserts on (recapId, theme).
+   */
+  themeSummaries: Map<string, RecapThemeSummary>;
   thoughts: string;
   phase: string;
   phaseMessage: string;
@@ -17,7 +28,9 @@ export interface RecapStreamEntry {
 
 export function freshEntry(): RecapStreamEntry {
   return {
-    overview: "",
+    lede: "",
+    entries: new Map(),
+    themeSummaries: new Map(),
     thoughts: "",
     phase: "analyzing",
     phaseMessage: "Analyzing pull requests…",
@@ -59,42 +72,55 @@ function deleteEntry(recapId: string): void {
 // ── Event reducer ───────────────────────────────────────────────────────────
 
 function applyEvents(recapId: string, evs: RecapStreamEvent[]): void {
-  const current = entries.get(recapId);
-  const entry = current ? { ...current } : freshEntry();
+  traced("recap.applyEvents", { recapId, count: evs.length }, () => {
+    const current = entries.get(recapId);
+    const entry: RecapStreamEntry = current
+      ? {
+          ...current,
+          entries: new Map(current.entries),
+          themeSummaries: new Map(current.themeSummaries),
+        }
+      : freshEntry();
 
-  for (const event of evs) {
-    switch (event.type) {
-      case "chunk":
-        entry.overview += event.data.text;
-        break;
-      case "thought":
-        entry.thoughts += event.data.text;
-        break;
-      case "phase":
-        entry.phase = event.data.phase;
-        entry.phaseMessage = event.data.message;
-        break;
-      case "activity":
-        entry.activities = [
-          ...entry.activities,
-          { ...normalizeRecapActivity(event.data), id: crypto.randomUUID() },
-        ];
-        break;
-      case "overview":
-        entry.overview = event.data.overview;
-        break;
-      case "done":
-        entry.doneReceived = true;
-        entry.isStreaming = false;
-        break;
-      case "error":
-        entry.streamError = event.data.message;
-        entry.isStreaming = false;
-        break;
+    for (const event of evs) {
+      const span = startSpan("recap.event", { type: event.type, recapId });
+      switch (event.type) {
+        case "lede":
+          entry.lede = event.data.lede;
+          break;
+        case "entry":
+          entry.entries.set(event.data.entry.prId, event.data.entry);
+          break;
+        case "theme_summary":
+          entry.themeSummaries.set(event.data.summary.theme, event.data.summary);
+          break;
+        case "thought":
+          entry.thoughts += event.data.text;
+          break;
+        case "phase":
+          entry.phase = event.data.phase;
+          entry.phaseMessage = event.data.message;
+          break;
+        case "activity":
+          entry.activities = [
+            ...entry.activities,
+            { ...normalizeRecapActivity(event.data), id: crypto.randomUUID() },
+          ];
+          break;
+        case "done":
+          entry.doneReceived = true;
+          entry.isStreaming = false;
+          break;
+        case "error":
+          entry.streamError = event.data.message;
+          entry.isStreaming = false;
+          break;
+      }
+      span.end();
     }
-  }
 
-  setEntry(recapId, entry);
+    setEntry(recapId, entry);
+  });
 }
 
 function normalizeRecapActivity(activity: Activity): Activity {
@@ -114,7 +140,9 @@ function normalizeRecapToolName(toolName: string): string {
     "get_pr_diff",
     "list_open_prs",
     "get_repo_context",
-    "commit_recap_overview",
+    "set_lede",
+    "add_pr_entry",
+    "set_theme_summary",
     "complete_recap",
     "Bash",
   ];
@@ -130,7 +158,8 @@ function recapActivityKind(toolName: string): Activity["activityKind"] | null {
     return "tool.read";
   }
   if (toolName === "list_open_prs") return "tool.ls";
-  if (toolName === "commit_recap_overview") return "tool.write";
+  if (toolName === "set_lede" || toolName === "add_pr_entry" || toolName === "set_theme_summary")
+    return "tool.write";
   if (toolName === "Bash") return "tool.bash";
   return null;
 }
@@ -145,8 +174,12 @@ function recapActivitySummary(toolName: string): string | null {
       return "Listing open pull requests";
     case "get_repo_context":
       return "Reading prior recaps";
-    case "commit_recap_overview":
-      return "Saving recap";
+    case "set_lede":
+      return "Writing lede";
+    case "add_pr_entry":
+      return "Cataloguing PR";
+    case "set_theme_summary":
+      return "Writing theme summary";
     case "complete_recap":
       return "Finalizing recap";
     case "Bash":
@@ -166,9 +199,8 @@ export async function streamRecap(recapId: string): Promise<void> {
   abortRecapStream(recapId);
 
   // Reuse the existing entry only when it's in a clean "could resume"
-  // state. The server's `overview` snapshot event will overwrite any
-  // stale overview text, so reuse is safe — it just preserves the
-  // phase label so the UI doesn't flash "Analyzing…" on reconnect.
+  // state. The server's `lede` and `entry` snapshot events on connect
+  // will overwrite stale data with the canonical DB state.
   const base =
     existing && !existing.doneReceived && !existing.streamError ? existing : freshEntry();
   setEntry(recapId, { ...base, isStreaming: true });

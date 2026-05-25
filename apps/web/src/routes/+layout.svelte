@@ -8,6 +8,8 @@ import ErrorBanner from "$lib/components/shared/ErrorBanner.svelte";
 import { Toaster } from "$lib/components/ui/sonner";
 import { TooltipProvider } from "$lib/components/ui/tooltip";
 import { initGsap } from "$lib/motion";
+import { initObservability, tracedEffect } from "$lib/observability";
+import ObsPanel from "$lib/observability/Panel.svelte";
 import { startPolling, stopPolling } from "$lib/services/sync";
 import { getToken, getUser, loadUser } from "$lib/stores/auth.svelte";
 import {
@@ -28,6 +30,7 @@ import { startUpdater, stopUpdater } from "$lib/updater/service";
 let { children } = $props();
 let hydrated = false;
 let cacheInspectorOpen = $state(false);
+let obsPanelOpen = $state(false);
 
 // Keep `selectedPrId` in sync with the URL.
 //
@@ -39,10 +42,12 @@ let cacheInspectorOpen = $state(false);
 // navigating back. Deriving from the URL here makes the URL the
 // single source of truth for every entry/exit path (Cmd+W, sidebar
 // settings link, logout, mouse back, deep link, WS-driven nav, …).
-$effect(() => {
-  const match = page.url.pathname.match(/^\/review\/([^/]+)/);
-  setSelectedPrId(match?.[1] ?? null);
-});
+$effect(() =>
+  tracedEffect("layout.url-to-prId", () => {
+    const match = page.url.pathname.match(/^\/review\/([^/]+)/);
+    setSelectedPrId(match?.[1] ?? null);
+  }),
+);
 
 // URL → selectedRepoId. The rail's active highlight and the project
 // column's content both read from this store. Resolution order:
@@ -53,16 +58,18 @@ $effect(() => {
 // Same single-source-of-truth pattern as selectedPrId. Re-runs whenever
 // the URL changes or when the active PR resolves (the latter matters on
 // cold-load of /review/{prId} when prs haven't been hydrated yet).
-$effect(() => {
-  const path = page.url.pathname;
-  const repoMatch = path.match(/^\/repo\/([^/]+)/);
-  if (repoMatch?.[1]) {
-    setSelectedRepoId(repoMatch[1]);
-    return;
-  }
-  const selectedPr = getSelectedPr();
-  setSelectedRepoId(selectedPr?.repositoryId ?? null);
-});
+$effect(() =>
+  tracedEffect("layout.url-to-repoId", () => {
+    const path = page.url.pathname;
+    const repoMatch = path.match(/^\/repo\/([^/]+)/);
+    if (repoMatch?.[1]) {
+      setSelectedRepoId(repoMatch[1]);
+      return;
+    }
+    const selectedPr = getSelectedPr();
+    setSelectedRepoId(selectedPr?.repositoryId ?? null);
+  }),
+);
 
 // Keep the sidebar view in lockstep with the URL in both directions.
 // PrItem.handleClick and CommandPalette already pair selectPr() with
@@ -78,11 +85,13 @@ $effect(() => {
 //
 // New-PR chat sessions also live in files-mode: the left pane shows the
 // worktree file tree while the main pane hosts the agent chat.
-$effect(() => {
-  const id = getSelectedPrId();
-  const onNewPr = /^\/repo\/[^/]+\/new-pr\/[^/]+/.test(page.url.pathname);
-  setSidebarView(id || onNewPr ? "files" : "prs");
-});
+$effect(() =>
+  tracedEffect("layout.sidebar-view", () => {
+    const id = getSelectedPrId();
+    const onNewPr = /^\/repo\/[^/]+\/new-pr\/[^/]+/.test(page.url.pathname);
+    setSidebarView(id || onNewPr ? "files" : "prs");
+  }),
+);
 
 $effect(() => {
   function handleKeydown(e: KeyboardEvent): void {
@@ -90,24 +99,35 @@ $effect(() => {
       e.preventDefault();
       cacheInspectorOpen = !cacheInspectorOpen;
     }
+    // Ctrl+Shift+O — toggle the observability inspector. Dev-only so the
+    // bundle doesn't ship the panel binding in production. The panel
+    // component itself is statically imported but tree-shakes from prod
+    // builds via the `import.meta.env.DEV` guard on the render below.
+    if (import.meta.env.DEV && e.ctrlKey && e.shiftKey && (e.key === "O" || e.key === "o")) {
+      e.preventDefault();
+      obsPanelOpen = !obsPanelOpen;
+    }
   }
   window.addEventListener("keydown", handleKeydown);
   return () => window.removeEventListener("keydown", handleKeydown);
 });
 
 // When user becomes authenticated, hydrate app data.
-$effect(() => {
-  const user = getUser();
-  if (user && !hydrated) {
-    hydrated = true;
-    hydrate();
-  }
-  if (!user) {
-    hydrated = false;
-  }
-});
+$effect(() =>
+  tracedEffect("layout.auth-hydrate", () => {
+    const user = getUser();
+    if (user && !hydrated) {
+      hydrated = true;
+      hydrate();
+    }
+    if (!user) {
+      hydrated = false;
+    }
+  }),
+);
 
 $effect(() => {
+  initObservability();
   initGsap();
   const cleanupTheme = initTheme();
   const cleanupShortcuts = initShortcuts();
@@ -160,5 +180,8 @@ async function hydrate() {
 	<Toaster />
 	{#if import.meta.env.DEV && cacheInspectorOpen}
 		<CacheInspector onclose={() => { cacheInspectorOpen = false; }} />
+	{/if}
+	{#if import.meta.env.DEV && obsPanelOpen}
+		<ObsPanel onclose={() => { obsPanelOpen = false; }} />
 	{/if}
 </TooltipProvider>

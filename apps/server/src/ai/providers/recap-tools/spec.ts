@@ -1,29 +1,30 @@
 // ─── recap-tools/spec ────────────────────────────────────────────────────────
 //
-// MCP tool surface for project-recap generation. Mirrors the structure of
-// `walkthrough-tools/spec.ts` but with a much smaller surface — single-phase
-// pipeline (see /Users/alex/.claude/plans/let-s-review-the-archive-logical-eagle.md):
+// MCP tool surface for project-recap generation. Replaces the prior
+// text-buffer / single-blob pipeline with a structured pipeline:
 //
 //   Phase 1 — Read source data:
 //     • get_recap_state  → period boundaries, source PR + walkthrough roll-up
-//     • get_repo_context → prior recaps for this repo (rolling context)
+//     • list_open_prs    → open PRs with diffDigest, written as active-work
+//                          entries inside theme chapters alongside shipped work
+//     • get_repo_context → prior recaps for rolling continuity
 //
-//   Phase 2 — Compose the recap as visible assistant text:
-//     • Agent writes the markdown body as its assistant response. The
-//       orchestrator's stream consumer fans every text-delta out as a
-//       `chunk` SSE event AND appends to `ctx.textBuffer.current`.
+//   Phase 2 — Write the lede (one atomic call):
+//     • set_lede(text) → 1–3 sentences, `<strong>`/`<em>` only.
 //
-//   Phase 3 — Commit (single atomic call):
-//     • commit_recap_overview → reads `ctx.textBuffer.current` for the
-//       markdown body, persists with provenance + stats. No `overview`
-//       arg — the model only emits the markdown once (as text).
+//   Phase 3 — Write per-PR entries (one atomic idempotent call per PR):
+//     • add_pr_entry(prId, position, theme, verb, description,
+//                    linesAdded, linesRemoved)
+//       Upsert on `(recap_id, pr_id)`; replay-safe.
 //
 //   Phase 4 — Finalize:
-//     • complete_recap → validation gate; orchestrator transitions status
+//     • complete_recap → validation gate. Requires non-empty lede + ≥1 entry.
+//       Also stamps `summary_stats` from the source bundle and derives
+//       `source_pr_ids` / `source_walkthrough_ids` from the entries.
 //
 // Per CLAUDE.md invariants #2 + #11: agents never write `status` directly.
-// `complete_recap` only validates; the orchestrator observes the agent run's
-// natural end and transitions `status` to `'complete'` then.
+// `complete_recap` only validates; the orchestrator observes the run's natural
+// end and flips `status` to `'complete'` after.
 
 import type { ProjectRecap, RecapPeriod, RecapStreamEvent, RecapSummaryStats } from "@revv/shared";
 import { z } from "zod";
@@ -70,24 +71,11 @@ export interface RecapToolContext {
    * produce content so the SSE endpoint can forward it to subscribers.
    */
   readonly emit: (event: RecapStreamEvent) => void;
-  /**
-   * Mutable closure cell holding the agent's currently-buffered visible
-   * assistant text. The orchestrator's stream consumer (Claude SDK walker
-   * or opencode SSE subscriber) appends every `text-delta` event to
-   * `.current` and resets it on each non-commit tool-call boundary.
-   * `commit_recap_overview`'s handler reads `.current` to obtain the
-   * markdown body — the model never re-serialises it as a tool argument.
-   *
-   * Reconstructible cache (CLAUDE.md invariant #1): on `kill -9` the
-   * buffer is lost; the orchestrator's resume path re-runs the agent
-   * from scratch and a fresh buffer accumulates.
-   */
-  readonly textBuffer: { current: string };
 
   /**
    * Tool names that actually reached a handler during this run. Used by the
-   * runner for narrow recovery when the model writes valid recap text but
-   * misses the final commit/complete call. Ephemeral, reconstructible state.
+   * runner for narrow recovery (e.g., the agent set the lede + entries but
+   * never called `complete_recap`). Ephemeral, reconstructible state.
    */
   readonly toolCalls?: Set<string>;
 }
@@ -214,15 +202,6 @@ export interface RecapSourceBundle {
   readonly openPrs: ReadonlyArray<RecapSourcePr>;
   /** Pre-computed summary stats — same shape persisted on the recap row. */
   readonly stats: RecapSummaryStats;
-  /**
-   * Markdown overview of the prior recap row for this exact (repo, period,
-   * periodStart) tuple. Populated when the orchestrator is rerunning an
-   * existing row in place (max-1-recap-per-period rule). `null` on a fresh
-   * first-time run for the period. The agent should use this as the
-   * starting point and update it with new information rather than starting
-   * from scratch.
-   */
-  readonly previousOverview: string | null;
 }
 
 // ── Tool input schemas ───────────────────────────────────────────────────────
@@ -259,31 +238,73 @@ export const getRepoContextSchema = z.object({
   limit: z.number().int().positive().max(10).nullable().optional(),
 });
 
-export const commitRecapOverviewSchema = z.object({
-  source_pr_ids: z
-    .array(z.string())
+export const setLedeSchema = z.object({
+  lede: z
+    .string()
     .min(1)
     .describe(
-      "Ids of the PRs included in this recap. Must be ids returned by get_recap_state — archived (`prs`) or open (`openPrs`) are both valid. The orchestrator validates against the full bundle. When nothing shipped this period, reference the open PRs you wrote about in 'Active work'.",
+      "Short editorial lede for this recap — 1 to 3 sentences naming the dominant theme of the period and any standout work. Plain text plus optional inline `<strong>` (for the headline phrase) and `<em>` (for technical names) tags. NO markdown headers, lists, links, code spans, or emoji. Everything outside the `<strong>` / `<em>` allowlist is stripped at render. Write at most ~50 words.",
     ),
-  source_walkthrough_ids: z
-    .array(z.string())
+});
+
+export const addPrEntrySchema = z.object({
+  pr_id: z
+    .string()
     .describe(
-      "Ids of the walkthroughs you incorporated. May be empty when none of the PRs had walkthroughs. Must be a subset of the walkthroughs in get_recap_state.",
+      "The `id` of a PR returned by `get_recap_state.prs` (archived) or `list_open_prs` (active). Upserts on `(recap_id, pr_id)` — calling again with the same `pr_id` overwrites in place.",
     ),
-  stats: z
-    .object({
-      pr_count: z.number().int().nonnegative(),
-      merged_count: z.number().int().nonnegative(),
-      closed_count: z.number().int().nonnegative(),
-      author_count: z.number().int().nonnegative(),
-      risk_low: z.number().int().nonnegative(),
-      risk_medium: z.number().int().nonnegative(),
-      risk_high: z.number().int().nonnegative(),
-      walkthroughs_missing_count: z.number().int().nonnegative(),
-    })
+  position: z
+    .number()
+    .int()
+    .nonnegative()
     .describe(
-      "Pre-aggregated counts you computed from the source bundle. Used by the UI for at-a-glance rendering — match the numbers in get_recap_state so the UI and the markdown agree.",
+      "Render order within the recap. Lower = earlier. Position is global across the whole recap, not per-theme; the UI groups by theme but preserves your relative order within each group.",
+    ),
+  theme: z
+    .string()
+    .min(1)
+    .max(40)
+    .describe(
+      "Short lowercase theme label grouping this PR with related work. Pick a SHARP, REUSABLE noun (e.g. `auth`, `payments`, `db`, `frontend`, `infra`, `agents`) — avoid one-off themes per PR. Reuse the same theme across PRs that touch the same area. The UI groups chapters by theme and orders them by count desc.",
+    ),
+  verb: z
+    .string()
+    .min(1)
+    .max(24)
+    .describe(
+      "Past-tense verb describing what landed: `shipped`, `fixed`, `refactored`, `removed`, `added`, `extended`, `tightened`, etc. Single word preferred; short phrases OK.",
+    ),
+  description: z
+    .string()
+    .min(1)
+    .describe(
+      "One-sentence description of what the PR does. Plain prose, may include backtick-wrapped code spans for identifiers / file paths (rendered as `.codechip` chips in the UI). No other markdown. Aim for ≤ 25 words.",
+    ),
+  lines_added: z
+    .number()
+    .int()
+    .nonnegative()
+    .describe("Additions for this PR — copy the value from `get_recap_state.prs[].additions`."),
+  lines_removed: z
+    .number()
+    .int()
+    .nonnegative()
+    .describe("Deletions for this PR — copy the value from `get_recap_state.prs[].deletions`."),
+});
+
+export const setThemeSummarySchema = z.object({
+  theme: z
+    .string()
+    .min(1)
+    .max(40)
+    .describe(
+      "Theme label this summary belongs to. MUST exactly match a `theme` you already passed to `add_pr_entry` (same lowercase noun). The server normalizes (lowercase + trim + collapse whitespace) before keying, so casing differences are tolerated — but the underlying word must match.",
+    ),
+  summary: z
+    .string()
+    .min(1)
+    .describe(
+      "One- or two-sentence editorial summary of what landed in this theme. Plain prose. May include backtick-wrapped code spans for identifiers / file paths (rendered as small inline chips). NO other markdown — no bold, no links, no headers, no lists. ≤ ~35 words. The UI renders this as a small lede paragraph below the chapter heading and above the PR rows.",
     ),
 });
 
@@ -302,6 +323,8 @@ export const getPrDiffSchema = z.object({
 export type GetRecapStateInput = z.infer<typeof getRecapStateSchema>;
 export type ListOpenPrsInput = z.infer<typeof listOpenPrsSchema>;
 export type GetRepoContextInput = z.infer<typeof getRepoContextSchema>;
-export type CommitRecapOverviewInput = z.infer<typeof commitRecapOverviewSchema>;
+export type SetLedeInput = z.infer<typeof setLedeSchema>;
+export type AddPrEntryInput = z.infer<typeof addPrEntrySchema>;
+export type SetThemeSummaryInput = z.infer<typeof setThemeSummarySchema>;
 export type CompleteRecapInput = z.infer<typeof completeRecapSchema>;
 export type GetPrDiffInput = z.infer<typeof getPrDiffSchema>;

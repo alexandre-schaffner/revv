@@ -380,7 +380,12 @@ onDestroy(() => {
 			minmax(24px, 1fr);
 		padding-left: 0;
 		padding-right: 0;
-		transition: grid-template-columns var(--duration-smooth) var(--ease-out-expo);
+		/* No transition on grid-template-columns: .app-shell already animates
+		   the parent grid, and the @container (max-width: 1335px) rule
+		   flipping mid-collapse interpolates linearly between rules that
+		   reallocate ~488px across tracks, briefly squeezing col_3 and
+		   wrapping the title. Per-frame formula re-eval keeps col_3 stable.
+		   The walkthrough grids below match. */
 	}
 
 	/* `:global(*)` is required here because the Badge rendered by this section

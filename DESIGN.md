@@ -44,6 +44,12 @@ colors:
   midnight-accent: "oklch(71% 0.14 225)"
 
 typography:
+  editorial-display:
+    fontFamily: "Newsreader, Georgia, serif"
+    fontSize: "2.75rem"
+    fontWeight: 500
+    lineHeight: 1.05
+    letterSpacing: "-0.02em"
   display:
     fontFamily: "Inter, system-ui, sans-serif"
     fontSize: "1.5rem"
@@ -249,35 +255,61 @@ is "considered" rather than "alarming." Stock-bright severity reads as a prototy
 
 ## 3. Typography
 
-**Display + Body Font:** Inter (with `system-ui, sans-serif` fallback)
+**Body + UI Font:** Inter (with `system-ui, sans-serif` fallback)
 **Mono Font:** JetBrains Mono (with `Fira Code, monospace` fallback)
+**Editorial Display Font:** Newsreader (with `Georgia, serif` fallback). Scoped — see
+the Editorial-Display Carve-out below.
 
 **Character:** A single warm humanist sans for the whole interface, paired with a clean
-geometric mono for code and identifiers. Inter is used at restrained weights (400, 500,
-600) and modest sizes. The hierarchy is built from scale and weight contrast, not from
-six display families competing for attention.
+geometric mono for code and identifiers, and one editorial display serif reserved for
+AI-authored long-form moments. Inter is used at restrained weights (400, 500, 600) and
+modest sizes. The hierarchy is built from scale and weight contrast, not from six
+display families competing for attention.
 
 ### Hierarchy
 
-- **Display** (600, 1.5rem, 1.2): rare; reserved for page-level titles when one exists.
-- **Headline** (600, 1.125rem, 1.3): panel headers, walkthrough section titles.
-- **Title** (600, 0.9375rem, 1.4): card titles, PR titles in the list.
-- **Body** (400, 0.875rem, 1.5): all running text. Body line length caps at 70ch in
-  prose contexts (walkthrough markdown, recap text).
-- **Label** (500, 0.75rem, 0.01em letter-spacing): inline labels, metadata, tab text.
-  Never uppercase by default; case is meaningful, not decorative.
-- **Mono** (400, 0.8125rem, JetBrains Mono): code in diffs, identifiers in prose,
+- **Editorial Display** (Newsreader, 500, 2.25–2.75rem, 1.05): scoped to AI-authored
+  long-form heroes. Reading-room voice. See carve-out below.
+- **Display** (Inter, 600, 1.5rem, 1.2): rare; reserved for page-level titles when one
+  exists.
+- **Headline** (Inter, 600, 1.125rem, 1.3): panel headers.
+- **Title** (Inter, 600, 0.9375rem, 1.4): card titles, PR titles in the list.
+- **Body** (Inter, 400, 0.875rem, 1.5): all running text. Body line length caps at 70ch
+  in prose contexts (walkthrough markdown, recap text).
+- **Label** (Inter, 500, 0.75rem, 0.01em letter-spacing): inline labels, metadata, tab
+  text. Never uppercase by default; case is meaningful, not decorative.
+- **Mono** (JetBrains Mono, 400, 0.8125rem): code in diffs, identifiers in prose,
   filenames in lists.
 
 ### Named Rules
 
-**The Single-Family Rule.** Inter is the only sans in the system; JetBrains Mono is
-the only mono. No display serif, no condensed sans, no second body family. Variety
-comes from weight (400/500/600) and scale, not from font-mixing.
+**The Two-and-a-Half-Family Rule.** Inter is the only sans for UI and body. JetBrains
+Mono is the only mono for code and identifiers. Newsreader is the only editorial
+display serif, and only on AI-authored long-form heroes (see carve-out). No condensed
+sans, no second body family, no display sans, no decorative serif elsewhere. The
+half-family is half because Newsreader appears at most once per screen and never below
+1.875rem.
+
+**The Editorial-Display Carve-out.** Newsreader is permitted only on hero titles of
+AI-authored long-form surfaces:
+
+- Recap hero (`RecapHeroBig.date`, `RecapSidebar.date`).
+- Walkthrough section heads (`GuidedWalkthrough`, `WalkthroughSection`).
+- Onboarding hero copy (the welcome / agent / sign-in / repo / host / done step
+  titles, plus the onboarding shell's frame headings).
+- Settings page section titles where they carry a reading-room voice.
+
+These are the surfaces where an agent is talking *to* the reader at length, so the
+serif earns the reading-room association the brand wants. Newsreader is never used
+for product chrome (buttons, tabs, sidebars, dialogs), never for body prose, and never
+below 1.875rem. If a new surface wants Newsreader, ask whether it's AI-authored
+long-form first; if not, use Inter.
 
 **The Earned-Uppercase Rule.** Uppercase is prohibited as a decorative style. Use
 sentence case for everything except technical identifiers that are uppercase by
-convention (HTTP verbs, env var names, type names).
+convention (HTTP verbs, env var names, type names). The mono eyebrow pattern
+(0.6875rem mono, 0.18em letter-spacing, uppercase) is exempt — it's a structural
+section marker, not decoration.
 
 **The 65–75ch Rule.** Body prose in walkthrough markdown, recap content, and chat
 messages caps at 70ch (`max-w-prose` in Tailwind). The diff is exempt; code wraps to
@@ -432,6 +464,8 @@ is alive.
 - **Do** translate buttons 1px down on `:active`. The press is tactile and on
   purpose.
 - **Do** cap body prose at 70ch (Tailwind's `max-w-prose`). The diff is exempt.
+- **Do** reach for Newsreader on AI-authored long-form hero titles (recap hero,
+  walkthrough section heads, onboarding hero copy). Inter everywhere else.
 - **Do** honor `prefers-reduced-motion` as a contract. Opt back in only for motion
   that carries meaning, using `.motion-essential-*` classes.
 - **Do** use motion tokens from the `@theme` block: `duration-snap`,
@@ -457,6 +491,9 @@ is alive.
   weight or content, the grid is the lazy answer.
 - **Don't** reach for a modal as the first thought. Inline expansion, progressive
   disclosure, and side panels exhaust before a modal is justified.
+- **Don't** use Newsreader for product chrome, body prose, or any heading below
+  1.875rem. The serif is reserved for AI-authored long-form heroes; using it anywhere
+  else dilutes the carve-out into a decorative second body family.
 - **Don't** animate CSS layout properties. Translate, scale, opacity, and color only.
 - **Don't** use heavy purple gradients or neon accents to signal "AI." Revv's AI
   surfaces are warm paper with a single Considered Violet accent and a streaming

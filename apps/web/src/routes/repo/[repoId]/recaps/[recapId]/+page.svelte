@@ -10,7 +10,6 @@ import GenActionBar, { type GenActionState } from "$lib/components/layout/GenAct
 import PreviousRecaps from "$lib/components/recaps/PreviousRecaps.svelte";
 import RecapDetail from "$lib/components/recaps/RecapDetail.svelte";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
-import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
 import {
   abortRecapStream,
   getRecapStreamEntry,
@@ -29,6 +28,7 @@ import {
   regenerateRecap,
   stopRecap,
 } from "$lib/stores/recaps.svelte";
+import { getActionsFloatStyle } from "$lib/stores/sidebar.svelte";
 
 const repoId = $derived(page.params.repoId ?? "");
 const recapId = $derived(page.params.recapId ?? "");
@@ -77,6 +77,8 @@ const stream = $derived(getRecapStreamEntry(recapId));
 const recaps = $derived(getRecapsForRepo(repoId));
 const listLoading = $derived(getRecapLoading(repoId));
 const pendingAction = $derived(getRecapPendingAction(recapId));
+
+const actionsFloatStyle = $derived(getActionsFloatStyle());
 
 const periodLabelLower = $derived(recap?.period === "weekly" ? "weekly" : "daily");
 const currentPeriodLabel = $derived(recap?.period === "weekly" ? "this week's" : "today's");
@@ -176,31 +178,27 @@ async function onGenerate(): Promise<void> {
 <AuthGuard>
 	<div class="recap-page">
 		<div class="page">
-			<div class="container">
-				<RecapDetail
-					{recap}
-					{loading}
-					{onBack}
-					{stream}
-				/>
-				{#if recap}
+			<RecapDetail
+				{recap}
+				{loading}
+				period={recap?.period}
+				{onBack}
+				{stream}
+			/>
+			{#if recap}
+				<div class="aux">
 					<PreviousRecaps
 						{repoId}
 						period={recap.period}
 						{recaps}
-						loading={listLoading}
 						excludeRecapId={recapId}
 					/>
-				{/if}
-			</div>
+				</div>
+			{/if}
 		</div>
 
 		{#if genActionState}
-			<div
-				class="actions-float"
-				in:gsapFadeY={{ duration: tokens.quick, y: 8 }}
-				out:gsapFade={{ duration: tokens.snap }}
-			>
+			<div class="actions-float" style={actionsFloatStyle}>
 				<div class="actions-row" role="toolbar" aria-label="Recap actions">
 					{#if recapUiKind === "outdated"}
 						<GlassPill
@@ -250,12 +248,9 @@ async function onGenerate(): Promise<void> {
 		overflow-y: auto;
 	}
 
-	.container {
-		display: flex;
-		flex-direction: column;
-		max-width: 56rem;
+	.aux {
+		max-width: 1280px;
 		margin: 0 auto;
-		width: 100%;
-		padding: 1rem 1.25rem 4rem;
+		padding: 0 2rem 4rem;
 	}
 </style>

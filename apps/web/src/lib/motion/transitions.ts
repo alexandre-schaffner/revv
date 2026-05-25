@@ -74,6 +74,20 @@ export function gsapSlide(
     delay: (params.delay ?? 0) * 1000,
     easing: easeSoft,
     tick: (t) => {
+      // Entry done: drop the inline styles so the element resumes natural
+      // sizing. Without this, the measured `height: …px` set on the final
+      // tick stays locked, and any later layout change inside the element
+      // (e.g. an inner bits-ui Collapsible closing) leaves a phantom gap.
+      if (t >= 1) {
+        el.style.overflow = "";
+        el.style.opacity = "";
+        el.style[dim] = "";
+        el.style[padA] = "";
+        el.style[padB] = "";
+        el.style[marA] = "";
+        el.style[marB] = "";
+        return;
+      }
       el.style.overflow = "hidden";
       el.style.opacity = String(Math.min(1, t * 1.5));
       el.style[dim] = `${t * size}px`;

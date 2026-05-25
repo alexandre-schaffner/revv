@@ -4,14 +4,12 @@ import { repositories } from "./repositories";
 /**
  * Daily / weekly recap of recently-archived PRs in a repository.
  *
- * Content is produced through a single-phase MCP-routed pipeline (compared to
- * the walkthrough's 4-phase A→B→C→D doctrine). One atomic write of the recap
- * overview + source provenance + summary stats by the agent's
- * `commit_recap_overview` MCP tool (which reads the markdown body from the
- * orchestrator's per-job text buffer rather than a tool argument, so the
- * model only emits the markdown once — as visible assistant text); the
- * orchestrator transitions `status` to `'complete'` only after
- * `complete_recap` validates the row.
+ * Content is produced through a structured MCP-routed pipeline. The agent
+ * writes (1) a short editorial `lede` via `set_lede`, then (2) one
+ * `recap_pr_entries` row per included PR via `add_pr_entry` (idempotent upsert
+ * keyed on `(recap_id, pr_id)`), then (3) `complete_recap` to finalize. The
+ * orchestrator transitions `status` to `'complete'` only after `complete_recap`
+ * validates non-empty lede + ≥1 entry row.
  *
  * Immutability: a recap is keyed on `(repositoryId, period, periodStart)`. On
  * regenerate, the existing row is marked `'superseded'` (with
@@ -43,13 +41,12 @@ export const projectRecaps = sqliteTable(
     /** Exclusive upper bound on the period window (ISO 8601 UTC). */
     periodEnd: text("period_end").notNull(),
     /**
-     * Markdown body of the recap, written atomically by the
-     * `commit_recap_overview` MCP tool (which reads it from the orchestrator's
-     * in-memory text buffer). Empty until the agent has produced it; the
-     * orchestrator's validation gate (`complete_recap`) refuses to transition
-     * status to 'complete' unless this is non-empty.
+     * Short (1–3 sentences) model-written lede for the structured recap. May
+     * contain `<strong>` / `<em>` tags only; everything else is stripped at
+     * render time. Written atomically by the `set_lede` MCP tool. Validation
+     * gate (`complete_recap`) requires non-empty before transitioning status.
      */
-    overview: text("overview").notNull().default(""),
+    lede: text("lede").notNull().default(""),
     /**
      * Job lifecycle status — owned exclusively by
      * `ProjectRecapJobs.setStatus` (single-writer per CLAUDE.md
