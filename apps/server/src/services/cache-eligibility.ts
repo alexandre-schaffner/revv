@@ -14,8 +14,8 @@
 
 import { eq } from "drizzle-orm";
 import { Context, Effect, Layer, Stream } from "effect";
-import { extractHostFromProviderId } from "../domain/provider-id";
 import { account, user } from "../db/schema";
+import { extractHostFromProviderId } from "../domain/provider-id";
 import { debug } from "../logger";
 import { DbService } from "./Db";
 import { GitHubService } from "./GitHub";

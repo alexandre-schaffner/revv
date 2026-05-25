@@ -5,12 +5,12 @@ import { eq } from "drizzle-orm";
 import { Context, Effect, Layer, Stream } from "effect";
 import type { Db } from "../../db/index";
 import { account, user } from "../../db/schema";
-import { extractHostFromProviderId } from "../../domain/provider-id";
 import {
   SshKeysFetchFailed,
   SshSignatureInvalid,
   SshSigningUnavailable,
 } from "../../domain/errors";
+import { extractHostFromProviderId } from "../../domain/provider-id";
 import { debug } from "../../logger";
 import { DbService } from "../Db";
 import { SettingsService } from "../Settings";
