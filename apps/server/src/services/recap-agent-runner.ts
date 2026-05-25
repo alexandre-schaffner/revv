@@ -164,14 +164,6 @@ interface RecoveryResult {
   readonly error?: string;
 }
 
-/**
- * Narrow recovery for "agent did the work but never said complete_recap". If
- * the DB shows a non-empty lede + ≥1 entry, treat that as good enough and run
- * the validation gate manually so the orchestrator can transition status.
- *
- * No fallback fabrication: if the agent never wrote a lede or never wrote any
- * entries, we refuse to recover — the run is a genuine failure.
- */
 async function recoverMissedFinalToolCall(
   ctx: RecapToolContext,
   existingError: string | undefined,

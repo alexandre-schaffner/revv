@@ -521,12 +521,12 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
           if (newBoundaries?.periodEnd !== undefined) {
             patch.periodEnd = newBoundaries.periodEnd;
           }
-          db.update(projectRecaps).set(patch).where(eq(projectRecaps.id, recapId)).run();
-          // Cascade-on-recap_id deletion isn't enough because the recap row
-          // stays put — drop entries and theme summaries explicitly so the
-          // agent restarts from a clean slate.
-          db.delete(recapPrEntries).where(eq(recapPrEntries.recapId, recapId)).run();
-          db.delete(recapThemeSummaries).where(eq(recapThemeSummaries.recapId, recapId)).run();
+          // Atomic so a crash can't strand the row in 'generating' with stale entries (invariant #1).
+          db.transaction(() => {
+            db.update(projectRecaps).set(patch).where(eq(projectRecaps.id, recapId)).run();
+            db.delete(recapPrEntries).where(eq(recapPrEntries.recapId, recapId)).run();
+            db.delete(recapThemeSummaries).where(eq(recapThemeSummaries.recapId, recapId)).run();
+          });
         },
         catch: (e) => {
           const msg = String(e);

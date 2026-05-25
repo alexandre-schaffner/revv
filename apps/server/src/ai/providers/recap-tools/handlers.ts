@@ -10,7 +10,7 @@
 
 import { randomUUID } from "node:crypto";
 import type { ProjectRecap, RecapPrEntry, RecapThemeSummary } from "@revv/shared";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import {
   projectRecaps,
   pullRequests,
@@ -186,6 +186,24 @@ export const getRepoContextHandler: RecapToolHandler<GetRepoContextInput> = asyn
       }),
     );
   }
+  const recapIds = slice.map((r) => r.id);
+  const themeRows =
+    recapIds.length > 0
+      ? ctx.db
+          .select({ recapId: recapPrEntries.recapId, theme: recapPrEntries.theme })
+          .from(recapPrEntries)
+          .where(inArray(recapPrEntries.recapId, recapIds))
+          .all()
+      : [];
+  const themesByRecapId = new Map<string, string[]>();
+  for (const row of themeRows) {
+    const existing = themesByRecapId.get(row.recapId);
+    if (existing) {
+      existing.push(row.theme);
+    } else {
+      themesByRecapId.set(row.recapId, [row.theme]);
+    }
+  }
   return ok(
     JSON.stringify({
       priorRecaps: slice.map((r) => ({
@@ -195,7 +213,7 @@ export const getRepoContextHandler: RecapToolHandler<GetRepoContextInput> = asyn
         periodEnd: r.periodEnd,
         completedAt: r.completedAt,
         lede: r.lede,
-        themes: Array.from(new Set(r.entries.map((e) => e.theme))),
+        themes: Array.from(new Set(themesByRecapId.get(r.id) ?? [])),
         stats: r.summaryStats,
       })),
       instructions:
