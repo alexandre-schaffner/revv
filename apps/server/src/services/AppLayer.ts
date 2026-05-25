@@ -6,6 +6,8 @@ import { CacheServiceLive } from "./Cache";
 import { ChatChangesPushServiceLive } from "./ChatChangesPush";
 import { ChatMcpTokensLive } from "./ChatMcpTokens";
 import { ChatSessionServiceLive } from "./ChatSession";
+import { CacheEligibilityLive } from "./cache-eligibility";
+import { SshSignerLive } from "./cache-signing/index";
 import { DbServiceLive } from "./Db";
 import { DbMaintenanceLive } from "./DbMaintenance";
 import { DiffCacheServiceLive } from "./DiffCache";
@@ -108,11 +110,19 @@ const DbMaintenanceWithDeps = DbMaintenanceLive.pipe(Layer.provide(DbServiceLive
 
 // Team remote walkthrough cache — opt-in GCS-backed snapshot store.
 // GcsBlobStore depends on SettingsService (to read bucket + credentials);
-// RemoteWalkthroughCache stacks on top of BlobStore + Settings + Db. The
-// importer is a thin Drizzle wrapper, no external deps beyond DbService.
+// RemoteWalkthroughCache stacks on top of BlobStore + Settings + Db +
+// SshSigner + CacheEligibility. The importer is a thin Drizzle wrapper.
 const GcsBlobStoreWithDeps = GcsBlobStoreLive.pipe(Layer.provide(SettingsServiceWithDeps));
+const SshSignerWithDeps = SshSignerLive.pipe(
+  Layer.provide(Layer.mergeAll(SettingsServiceWithDeps, DbServiceLive)),
+);
+const CacheEligibilityWithDeps = CacheEligibilityLive.pipe(
+  Layer.provide(Layer.mergeAll(BaseLayers)),
+);
 const RemoteWalkthroughCacheWithDeps = RemoteWalkthroughCacheLive.pipe(
-  Layer.provide(Layer.mergeAll(BaseLayers, GcsBlobStoreWithDeps)),
+  Layer.provide(
+    Layer.mergeAll(BaseLayers, GcsBlobStoreWithDeps, SshSignerWithDeps, CacheEligibilityWithDeps),
+  ),
 );
 const WalkthroughSnapshotImporterWithDeps = WalkthroughSnapshotImporterLive;
 
@@ -172,9 +182,12 @@ export const AppLayer = Layer.mergeAll(
   RecapSchedulerWithDeps,
   DbMaintenanceWithDeps,
   ChatChangesPushServiceWithDeps,
-  // Surface the remote-cache + blob primitives in the runtime so HTTP
-  // routes (e.g. GET /api/settings/cache/status) can resolve them directly.
+  // Surface the remote-cache + blob + signing primitives in the runtime so
+  // HTTP routes (e.g. GET /api/settings/cache/status, POST /api/settings/cache/signing/test)
+  // can resolve them directly.
   GcsBlobStoreWithDeps,
   RemoteWalkthroughCacheWithDeps,
   WalkthroughSnapshotImporterWithDeps,
+  SshSignerWithDeps,
+  CacheEligibilityWithDeps,
 );

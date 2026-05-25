@@ -47,6 +47,11 @@ const DEFAULT_SETTINGS: UserSettings = {
     credentialsPath: "",
     uploadsEnabled: true,
     downloadsEnabled: true,
+    signing: {
+      mode: "strict" as const,
+      keyPath: "",
+      trustedSignerHosts: [],
+    },
   },
   updateChannel: DEFAULT_UPDATE_CHANNEL,
 };
@@ -130,6 +135,26 @@ function normalize(raw: unknown): UserSettings {
   };
 }
 
+const VALID_SIGNING_MODES = new Set(["off", "permissive", "strict"]);
+
+function coerceCacheSigning(value: unknown): UserSettings["cache"]["signing"] {
+  if (value === null || typeof value !== "object") {
+    return { ...DEFAULT_SETTINGS.cache.signing };
+  }
+  const r = value as Record<string, unknown>;
+  const mode =
+    typeof r.mode === "string" && VALID_SIGNING_MODES.has(r.mode)
+      ? (r.mode as "off" | "permissive" | "strict")
+      : DEFAULT_SETTINGS.cache.signing.mode;
+  const keyPath =
+    typeof r.keyPath === "string" ? r.keyPath : DEFAULT_SETTINGS.cache.signing.keyPath;
+  let trustedSignerHosts = DEFAULT_SETTINGS.cache.signing.trustedSignerHosts;
+  if (Array.isArray(r.trustedSignerHosts)) {
+    trustedSignerHosts = r.trustedSignerHosts.filter((h): h is string => typeof h === "string");
+  }
+  return { mode, keyPath, trustedSignerHosts };
+}
+
 function coerceCache(value: unknown): UserSettings["cache"] {
   if (value === null || typeof value !== "object") return { ...DEFAULT_SETTINGS.cache };
   const r = value as Record<string, unknown>;
@@ -147,6 +172,7 @@ function coerceCache(value: unknown): UserSettings["cache"] {
     uploadsEnabled: r.uploadsEnabled === false ? false : DEFAULT_SETTINGS.cache.uploadsEnabled,
     downloadsEnabled:
       r.downloadsEnabled === false ? false : DEFAULT_SETTINGS.cache.downloadsEnabled,
+    signing: coerceCacheSigning(r.signing),
   };
 }
 
@@ -194,6 +220,19 @@ function toSettings(row: typeof userSettings.$inferSelect): UserSettings {
       credentialsPath: row.cacheCredentialsPath,
       uploadsEnabled: row.cacheUploadsEnabled,
       downloadsEnabled: row.cacheDownloadsEnabled,
+      signing: coerceCacheSigning(
+        (() => {
+          try {
+            return {
+              mode: row.cacheSigningMode,
+              keyPath: row.cacheSigningKeyPath,
+              trustedSignerHosts: JSON.parse(row.cacheTrustedSignerHosts ?? "[]"),
+            };
+          } catch {
+            return null;
+          }
+        })(),
+      ),
     },
     updateChannel: coerceUpdateChannel(row.updateChannel),
   };
@@ -224,6 +263,9 @@ function toInsert(s: UserSettings): typeof userSettings.$inferInsert {
     cacheUploadsEnabled: s.cache.uploadsEnabled,
     cacheDownloadsEnabled: s.cache.downloadsEnabled,
     updateChannel: s.updateChannel,
+    cacheSigningMode: s.cache.signing.mode,
+    cacheSigningKeyPath: s.cache.signing.keyPath,
+    cacheTrustedSignerHosts: JSON.stringify(s.cache.signing.trustedSignerHosts),
     updatedAt: new Date(),
   };
 }
@@ -287,7 +329,9 @@ async function migrateJsonToDb(db: Db): Promise<UserSettings> {
  */
 export type SettingsUpdate = Partial<Omit<UserSettings, "id" | "recap" | "cache">> & {
   recap?: Partial<UserSettings["recap"]>;
-  cache?: Partial<UserSettings["cache"]>;
+  cache?: Partial<Omit<UserSettings["cache"], "signing">> & {
+    signing?: Partial<UserSettings["cache"]["signing"]>;
+  };
 };
 
 export class SettingsService extends Context.Tag("SettingsService")<
@@ -324,7 +368,16 @@ export const SettingsServiceLive = Layer.effect(
           const mergedRecap =
             partial.recap !== undefined ? { ...current.recap, ...partial.recap } : current.recap;
           const mergedCache =
-            partial.cache !== undefined ? { ...current.cache, ...partial.cache } : current.cache;
+            partial.cache !== undefined
+              ? {
+                  ...current.cache,
+                  ...partial.cache,
+                  signing:
+                    partial.cache.signing !== undefined
+                      ? { ...current.cache.signing, ...partial.cache.signing }
+                      : current.cache.signing,
+                }
+              : current.cache;
           const merged: UserSettings = {
             ...current,
             ...partial,

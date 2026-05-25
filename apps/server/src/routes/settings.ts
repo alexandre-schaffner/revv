@@ -4,6 +4,7 @@ import { listCliModels } from "../ai/providers/cli-agent";
 import { AppRuntime } from "../runtime";
 import { AiService, resolveAgent } from "../services/Ai";
 import { BlobStore } from "../services/blob/BlobStore";
+import { SshSigner } from "../services/cache-signing/index";
 import { PollScheduler } from "../services/PollScheduler";
 import { SettingsService } from "../services/Settings";
 import { handleAppError } from "./middleware";
@@ -77,6 +78,13 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
               credentialsPath: t.String(),
               uploadsEnabled: t.Boolean(),
               downloadsEnabled: t.Boolean(),
+              signing: t.Partial(
+                t.Object({
+                  mode: t.Union([t.Literal("off"), t.Literal("permissive"), t.Literal("strict")]),
+                  keyPath: t.String(),
+                  trustedSignerHosts: t.Array(t.String()),
+                }),
+              ),
             }),
           ),
           updateChannel: updateChannelSchema.optional,
@@ -92,6 +100,34 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
           return yield* blob.status();
         }),
       );
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  })
+  .post("/cache/signing/test", async (ctx) => {
+    try {
+      const probe = "revv-signing-test";
+      const result = await AppRuntime.runPromise(
+        Effect.gen(function* () {
+          const signerSvc = yield* SshSigner;
+          const signed = yield* signerSvc.sign(probe);
+          yield* signerSvc.verify(probe, signed.signature, signed.signerHost, signed.signerLogin);
+          return {
+            ok: true as const,
+            signerLogin: signed.signerLogin,
+            signerHost: signed.signerHost,
+            signatureNamespace: signed.signatureNamespace,
+          };
+        }).pipe(
+          Effect.catchAll((e) =>
+            Effect.succeed({
+              ok: false as const,
+              error: (e as { message?: string }).message ?? String(e),
+            }),
+          ),
+        ),
+      );
+      return result;
     } catch (e) {
       return handleAppError(e, ctx);
     }

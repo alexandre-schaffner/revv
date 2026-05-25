@@ -28,6 +28,11 @@ const resolveApiBase: Effect.Effect<string, never, SettingsService> = Effect.gen
 
 const retrySchedule = Schedule.intersect(Schedule.exponential("2 seconds"), Schedule.recurs(3));
 
+/** Build the REST API base URL for an explicit host (no settings lookup needed). */
+function resolveApiBaseForHost(host: string): string {
+  return host === "github.com" ? "https://api.github.com" : `https://api.${host}`;
+}
+
 /** Parse "owner/repo" into parts, failing with GitHubNotFoundError if malformed. */
 function parseRepoFullName(
   fullName: string,
@@ -713,6 +718,21 @@ export class GitHubService extends Context.Tag("GitHubService")<
       GitHubError,
       SettingsService
     >;
+    /**
+     * Fetch the collaborator permission level for a specific user on a repo.
+     * Uses `GET /repos/{owner}/{repo}/collaborators/{username}/permission`.
+     * 404 (user not a collaborator) is mapped to `'none'`.
+     *
+     * Pass `host` and `token` explicitly so callers can query across GHE
+     * hosts without depending on the settings-derived `resolveApiBase`.
+     */
+    readonly getCollaboratorPermission: (
+      token: string,
+      host: string,
+      owner: string,
+      repo: string,
+      username: string,
+    ) => Effect.Effect<"admin" | "maintain" | "write" | "triage" | "read" | "none", GitHubError>;
   }
 >() {}
 
@@ -1460,6 +1480,36 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
         headSha: (head.sha as string | undefined) ?? "",
         baseSha: (base.sha as string | undefined) ?? "",
       };
+    }),
+
+  getCollaboratorPermission: (token, host, owner, repo, username) =>
+    Effect.tryPromise({
+      try: async () => {
+        const apiBase = resolveApiBaseForHost(host);
+        const res = await fetch(
+          `${apiBase}/repos/${owner}/${repo}/collaborators/${username}/permission`,
+          { headers: githubHeaders(token) },
+        );
+        if (res.status === 404) return "none" as const;
+        if (res.status === 401) throw new GitHubAuthError({ message: "Invalid or expired token" });
+        if (res.status === 403)
+          throw new GitHubNetworkError({ cause: `HTTP 403 on ${owner}/${repo}` });
+        if (!res.ok) throw new GitHubNetworkError({ cause: `HTTP ${res.status}` });
+        const body = (await res.json()) as { role_name?: string };
+        const roleName = body.role_name ?? "none";
+        if (
+          roleName === "admin" ||
+          roleName === "maintain" ||
+          roleName === "write" ||
+          roleName === "triage" ||
+          roleName === "read" ||
+          roleName === "none"
+        ) {
+          return roleName;
+        }
+        return "none" as const;
+      },
+      catch: toGitHubError,
     }),
 });
 

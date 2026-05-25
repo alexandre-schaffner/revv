@@ -54,5 +54,12 @@ export const userSettings = sqliteTable("user_settings", {
    * the 48-hour stable cooldown.
    */
   updateChannel: text("update_channel").notNull().default("stable"),
+  // ── SSH cache signing ─────────────────────────────────────────────────────
+  /** `'off' | 'permissive' | 'strict'`. Default `'strict'` (on by default). */
+  cacheSigningMode: text("cache_signing_mode").notNull().default("strict"),
+  /** Path to the SSH private key. Empty string = auto-detect. */
+  cacheSigningKeyPath: text("cache_signing_key_path").notNull().default(""),
+  /** JSON-encoded `string[]` of trusted GitHub hosts. */
+  cacheTrustedSignerHosts: text("cache_trusted_signer_hosts").notNull().default("[]"),
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
 });

@@ -168,6 +168,19 @@ export interface UserSettings {
     credentialsPath: string;
     uploadsEnabled: boolean;
     downloadsEnabled: boolean;
+    /**
+     * SSHSIG-based content signing. Signs blobs on push and verifies
+     * on fetch using the uploader's GitHub SSH key and repo-level
+     * collaborator permission as the trust anchor.
+     */
+    signing: {
+      /** `'strict'` (default) rejects unsigned/invalid blobs; `'permissive'` warns but accepts; `'off'` skips crypto entirely. */
+      mode: "off" | "permissive" | "strict";
+      /** Path to the SSH private key. Empty string = auto-detect from `~/.ssh/`. */
+      keyPath: string;
+      /** GitHub hosts whose signers are trusted. Defaults to the user's authenticated hosts. */
+      trustedSignerHosts: string[];
+    };
   };
   /**
    * Release channel the in-app updater (and `revv update` CLI) reads from.
