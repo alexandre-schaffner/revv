@@ -39,6 +39,7 @@ import { ProjectRecapService } from "./ProjectRecap";
 import { type ArchivedPrWithWalkthrough, PullRequestService } from "./PullRequest";
 import { RepositoryService } from "./Repository";
 import { runRecapAgent } from "./recap-agent-runner";
+import { makeRecapSessionManager } from "./recap-session";
 import {
   attachRecapDigests,
   buildDigestForRecapPr,
@@ -47,7 +48,6 @@ import {
   RECAP_DIFF_MAX_PATCH_CHARS,
   truncatePatch,
 } from "./recap-source-bundle";
-import { makeRecapSessionManager } from "./recap-session";
 import { SettingsService } from "./Settings";
 import { TokenProvider } from "./TokenProvider";
 import { WebSocketHub } from "./WebSocketHub";
@@ -201,12 +201,8 @@ export const ProjectRecapJobsLive = Layer.effect(
     const semaphore = yield* Effect.makeSemaphore(MAX_CONCURRENT_RECAP_JOBS);
     const startJobMutexes = yield* Ref.make(new Map<string, Effect.Semaphore>());
 
-    const {
-      issueSessionToken,
-      resolveSessionToken,
-      clearSessionToken,
-      clearTokensForRecap,
-    } = yield* makeRecapSessionManager(RECAP_SESSION_TOKEN_TTL_MS);
+    const { issueSessionToken, resolveSessionToken, clearSessionToken, clearTokensForRecap } =
+      yield* makeRecapSessionManager(RECAP_SESSION_TOKEN_TTL_MS);
 
     const provideDb = <A, E>(eff: Effect.Effect<A, E, DbService>): Effect.Effect<A, E> =>
       withDb(db, eff);
@@ -1317,4 +1313,3 @@ export const ProjectRecapJobsLive = Layer.effect(
     };
   }),
 );
-

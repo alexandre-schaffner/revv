@@ -164,9 +164,7 @@ function syncStatsStyle(): void {
     lines.push(
       `${sel}::before { content: '${delContent}'; color: var(--trees-git-deleted-color); margin-right: 4px; }`,
     );
-    lines.push(
-      `${sel}::after { content: '${addContent}'; color: var(--trees-git-added-color); }`,
-    );
+    lines.push(`${sel}::after { content: '${addContent}'; color: var(--trees-git-added-color); }`);
   }
   el.textContent = lines.join("\n");
 }

@@ -37,10 +37,7 @@ export function buildSourceBundle(
   windowed: ReadonlyArray<ArchivedPrWithWalkthrough>,
   openPrs: ReadonlyArray<ArchivedPrWithWalkthrough>,
 ): RecapSourceBundle {
-  const toRecapPr = (
-    row: ArchivedPrWithWalkthrough,
-    statusOverride?: "open",
-  ): RecapSourcePr => {
+  const toRecapPr = (row: ArchivedPrWithWalkthrough, statusOverride?: "open"): RecapSourcePr => {
     const pr = row.pr;
     return {
       id: pr.id,
@@ -48,8 +45,7 @@ export function buildSourceBundle(
       title: pr.title,
       authorLogin: pr.authorLogin,
       status:
-        statusOverride ??
-        ((pr.status === "merged" ? "merged" : "closed") as "merged" | "closed"),
+        statusOverride ?? ((pr.status === "merged" ? "merged" : "closed") as "merged" | "closed"),
       closedAt: pr.closedAt ?? "",
       sourceBranch: pr.sourceBranch,
       targetBranch: pr.targetBranch,

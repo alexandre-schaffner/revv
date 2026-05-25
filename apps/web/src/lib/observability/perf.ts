@@ -126,4 +126,3 @@ export function tracedEffect<T>(name: string, fn: () => T): T {
 export function tracedDerived<T>(name: string, fn: () => T): T {
   return traced(`derived.${name}`, {}, fn);
 }
-
