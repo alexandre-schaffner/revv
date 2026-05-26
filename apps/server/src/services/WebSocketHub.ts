@@ -57,30 +57,38 @@ export const WebSocketHubLive = Layer.effect(
        * state for clients that experience even a brief disconnect.
        */
       broadcast: (msg) =>
-        Effect.gen(function* () {
-          const set = yield* Ref.get(clients);
-          const data = JSON.stringify(msg);
-          for (const { ws } of set) {
-            try {
-              ws.send(data);
-            } catch {
-              // client disconnected, will be unregistered on close event
+        Effect.withSpan("WebSocketHub.broadcast", {
+          attributes: { type: msg.type },
+        })(
+          Effect.gen(function* () {
+            const set = yield* Ref.get(clients);
+            const data = JSON.stringify(msg);
+            for (const { ws } of set) {
+              try {
+                ws.send(data);
+              } catch {
+                // client disconnected, will be unregistered on close event
+              }
             }
-          }
-        }),
+          }),
+        ),
       broadcastToAccount: (accountId, msg) =>
-        Effect.gen(function* () {
-          const set = yield* Ref.get(clients);
-          const data = JSON.stringify(msg);
-          for (const c of set) {
-            if (c.accountId !== accountId) continue;
-            try {
-              c.ws.send(data);
-            } catch {
-              // client disconnected, will be unregistered on close event
+        Effect.withSpan("WebSocketHub.broadcastToAccount", {
+          attributes: { type: msg.type, accountId },
+        })(
+          Effect.gen(function* () {
+            const set = yield* Ref.get(clients);
+            const data = JSON.stringify(msg);
+            for (const c of set) {
+              if (c.accountId !== accountId) continue;
+              try {
+                c.ws.send(data);
+              } catch {
+                // client disconnected, will be unregistered on close event
+              }
             }
-          }
-        }),
+          }),
+        ),
       clientCount: Effect.map(Ref.get(clients), (set) => set.size),
     };
   }),

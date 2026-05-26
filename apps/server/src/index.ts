@@ -5,6 +5,7 @@ import { Elysia } from "elysia";
 import { auth } from "./auth";
 import { serverEnv } from "./config";
 import { logError } from "./logger";
+import { recordSpan } from "./observability/tracer";
 import { chatRoute } from "./routes/chat";
 import { debugRoutes } from "./routes/debug";
 import { deviceAuthRoutes } from "./routes/device-auth";
@@ -62,6 +63,40 @@ const app = new Elysia()
       methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     }),
   )
+  .onRequest((ctx) => {
+    // Stamp request start time for the post-hoc http.request span.
+    (ctx.store as { _revvStartMs?: number })._revvStartMs = performance.now();
+  })
+  .onAfterHandle(({ request, store, set }) => {
+    const startMs = (store as { _revvStartMs?: number })._revvStartMs;
+    if (startMs == null) return;
+    const url = new URL(request.url);
+    recordSpan("http.request", startMs, performance.now() - startMs, {
+      method: request.method,
+      path: url.pathname,
+      status: set.status,
+      statusClass: `${Math.floor(Number(set.status) / 100)}xx`,
+    });
+  })
+  .onError(({ request, store, set, error: err }) => {
+    const startMs = (store as { _revvStartMs?: number })._revvStartMs;
+    if (startMs == null) return;
+    const url = new URL(request.url);
+    recordSpan(
+      "http.request",
+      startMs,
+      performance.now() - startMs,
+      {
+        method: request.method,
+        path: url.pathname,
+        status: set.status ?? 500,
+        statusClass: `${Math.floor(Number(set.status ?? 500) / 100)}xx`,
+      },
+      err instanceof Error
+        ? { name: err.name, message: err.message }
+        : { name: "Error", message: String(err) },
+    );
+  })
   .mount(auth.handler)
   .use(chatRoute)
   .use(repoRoutes)

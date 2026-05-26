@@ -96,16 +96,20 @@ function githubFetch(
   token: string,
   apiBase: string,
 ): Effect.Effect<unknown, GitHubError> {
-  return Effect.tryPromise({
-    try: async () => {
-      const res = await fetch(`${apiBase}${path}`, {
-        headers: githubHeaders(token),
-      });
-      assertGitHubOk(res, path);
-      return res.json();
-    },
-    catch: toGitHubError,
-  });
+  return Effect.withSpan("GitHub.fetch", {
+    attributes: { path, method: "GET" },
+  })(
+    Effect.tryPromise({
+      try: async () => {
+        const res = await fetch(`${apiBase}${path}`, {
+          headers: githubHeaders(token),
+        });
+        assertGitHubOk(res, path);
+        return res.json();
+      },
+      catch: toGitHubError,
+    }),
+  );
 }
 
 /**
@@ -186,22 +190,26 @@ function githubPost(
   body: Record<string, unknown>,
   apiBase: string,
 ): Effect.Effect<unknown, GitHubError> {
-  return Effect.tryPromise({
-    try: async () => {
-      const res = await fetch(`${apiBase}${path}`, {
-        method: "POST",
-        headers: { ...githubHeaders(token), "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (res.status === 422) {
-        const text = await res.text().catch(() => "");
-        throw new GitHubNetworkError({ cause: `422 Unprocessable Entity: ${text}` });
-      }
-      assertGitHubOk(res, path);
-      return res.json();
-    },
-    catch: toGitHubError,
-  });
+  return Effect.withSpan("GitHub.post", {
+    attributes: { path, method: "POST" },
+  })(
+    Effect.tryPromise({
+      try: async () => {
+        const res = await fetch(`${apiBase}${path}`, {
+          method: "POST",
+          headers: { ...githubHeaders(token), "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (res.status === 422) {
+          const text = await res.text().catch(() => "");
+          throw new GitHubNetworkError({ cause: `422 Unprocessable Entity: ${text}` });
+        }
+        assertGitHubOk(res, path);
+        return res.json();
+      },
+      catch: toGitHubError,
+    }),
+  );
 }
 
 function githubPatch(
@@ -266,27 +274,32 @@ function githubGraphql<T = unknown>(
   token: string,
   apiBase: string,
 ): Effect.Effect<T, GitHubError> {
-  return Effect.tryPromise({
-    try: async () => {
-      const res = await fetch(`${apiBase}/graphql`, {
-        method: "POST",
-        headers: { ...githubHeaders(token), "Content-Type": "application/json" },
-        body: JSON.stringify({ query, variables }),
-      });
-      assertGitHubOk(res, "/graphql");
-      const payload = (await res.json()) as { data?: T; errors?: Array<{ message: string }> };
-      if (payload.errors && payload.errors.length > 0) {
-        throw new GitHubNetworkError({
-          cause: `GraphQL: ${payload.errors.map((e) => e.message).join("; ")}`,
+  const operationName = query.match(/(?:query|mutation)\s+(\w+)/)?.[1] ?? "unknown";
+  return Effect.withSpan("GitHub.graphql", {
+    attributes: { operationName },
+  })(
+    Effect.tryPromise({
+      try: async () => {
+        const res = await fetch(`${apiBase}/graphql`, {
+          method: "POST",
+          headers: { ...githubHeaders(token), "Content-Type": "application/json" },
+          body: JSON.stringify({ query, variables }),
         });
-      }
-      if (!payload.data) {
-        throw new GitHubNetworkError({ cause: "GraphQL: empty data field" });
-      }
-      return payload.data;
-    },
-    catch: toGitHubError,
-  });
+        assertGitHubOk(res, "/graphql");
+        const payload = (await res.json()) as { data?: T; errors?: Array<{ message: string }> };
+        if (payload.errors && payload.errors.length > 0) {
+          throw new GitHubNetworkError({
+            cause: `GraphQL: ${payload.errors.map((e) => e.message).join("; ")}`,
+          });
+        }
+        if (!payload.data) {
+          throw new GitHubNetworkError({ cause: "GraphQL: empty data field" });
+        }
+        return payload.data;
+      },
+      catch: toGitHubError,
+    }),
+  );
 }
 
 /** Parse GitHub Link header to find the URL for rel="next". */
@@ -306,29 +319,33 @@ function githubFetchPaginated(
   maxPages: number = 3,
   apiBase: string,
 ): Effect.Effect<unknown[], GitHubError> {
-  return Effect.tryPromise({
-    try: async () => {
-      const results: unknown[] = [];
-      let url: string | null = `${apiBase}${path}`;
+  return Effect.withSpan("GitHub.fetchPaginated", {
+    attributes: { path, maxPages },
+  })(
+    Effect.tryPromise({
+      try: async () => {
+        const results: unknown[] = [];
+        let url: string | null = `${apiBase}${path}`;
 
-      for (let page = 0; page < maxPages && url; page++) {
-        const res = await fetch(url, {
-          headers: githubHeaders(token),
-        });
-        assertGitHubOk(res, path);
+        for (let page = 0; page < maxPages && url; page++) {
+          const res = await fetch(url, {
+            headers: githubHeaders(token),
+          });
+          assertGitHubOk(res, path);
 
-        const data = await res.json();
-        if (Array.isArray(data)) {
-          results.push(...data);
+          const data = await res.json();
+          if (Array.isArray(data)) {
+            results.push(...data);
+          }
+
+          url = parseLinkNext(res.headers.get("Link"));
         }
 
-        url = parseLinkNext(res.headers.get("Link"));
-      }
-
-      return results;
-    },
-    catch: toGitHubError,
-  });
+        return results;
+      },
+      catch: toGitHubError,
+    }),
+  );
 }
 
 function mapPr(raw: Record<string, unknown>, repositoryId: string): PullRequest {

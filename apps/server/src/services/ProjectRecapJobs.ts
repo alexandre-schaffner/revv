@@ -931,68 +931,72 @@ export const ProjectRecapJobsLive = Layer.effect(
       });
 
     const launchJob = (job: ActiveRecapJob) =>
-      Effect.gen(function* () {
-        yield* Ref.update(registry, (map) => {
-          const next = new Map(map);
-          next.set(job.recapId, job);
-          return next;
-        });
+      Effect.withSpan("ProjectRecapJobs.job")(
+        Effect.gen(function* () {
+          yield* Effect.annotateCurrentSpan("recapId", job.recapId);
+          yield* Effect.annotateCurrentSpan("period", job.period);
+          yield* Ref.update(registry, (map) => {
+            const next = new Map(map);
+            next.set(job.recapId, job);
+            return next;
+          });
 
-        const scopedBody = buildJobBody(job).pipe(
-          Effect.annotateLogs({ recapId: job.recapId, repoId: job.repoId }),
-          semaphore.withPermits(1),
-          Effect.catchAllCause((cause) =>
-            Effect.gen(function* () {
-              const interruptedOnly = Cause.isInterruptedOnly(cause);
-              if (interruptedOnly) {
-                // If the interrupt was a user-driven Stop and the body
-                // didn't reach its own cancelled-branch (e.g. interrupted
-                // during DB read / bundle prep, before the agent's
-                // AbortController could catch), transition the row to
-                // 'error' here so the UI doesn't get stuck on
-                // 'generating'. Process-shutdown interrupts leave the row
-                // alone so resume-on-boot can pick it up.
-                if (job.cancelledByUser) {
-                  const msg = "Cancelled by user";
-                  fanOut(job, {
-                    type: "error",
-                    data: { code: "RecapGenerationError", message: msg },
-                  });
-                  yield* setStatus(
-                    {
-                      id: job.recapId,
-                      repositoryId: job.repoId,
-                      period: job.period,
-                    },
-                    "error",
-                    { errorMessage: msg },
-                  );
+          const scopedBody = buildJobBody(job).pipe(
+            Effect.annotateLogs({ recapId: job.recapId, repoId: job.repoId }),
+            semaphore.withPermits(1),
+            Effect.catchAllCause((cause) =>
+              Effect.gen(function* () {
+                const interruptedOnly = Cause.isInterruptedOnly(cause);
+                if (interruptedOnly) {
+                  // If the interrupt was a user-driven Stop and the body
+                  // didn't reach its own cancelled-branch (e.g. interrupted
+                  // during DB read / bundle prep, before the agent's
+                  // AbortController could catch), transition the row to
+                  // 'error' here so the UI doesn't get stuck on
+                  // 'generating'. Process-shutdown interrupts leave the row
+                  // alone so resume-on-boot can pick it up.
+                  if (job.cancelledByUser) {
+                    const msg = "Cancelled by user";
+                    fanOut(job, {
+                      type: "error",
+                      data: { code: "RecapGenerationError", message: msg },
+                    });
+                    yield* setStatus(
+                      {
+                        id: job.recapId,
+                        repositoryId: job.repoId,
+                        period: job.period,
+                      },
+                      "error",
+                      { errorMessage: msg },
+                    );
+                  }
+                  return;
                 }
-                return;
-              }
-              const msg = `Generation failed unexpectedly: ${Cause.pretty(cause).slice(0, 200)}`;
-              logError("recap-jobs", `job ${job.recapId} failed:`, Cause.pretty(cause));
-              fanOut(job, {
-                type: "error",
-                data: { code: "RecapGenerationError", message: msg },
-              });
-              yield* setStatus(
-                {
-                  id: job.recapId,
-                  repositoryId: job.repoId,
-                  period: job.period,
-                },
-                "error",
-                { errorMessage: msg },
-              );
-            }),
-          ),
-          Effect.ensuring(removeJob(job)),
-        );
+                const msg = `Generation failed unexpectedly: ${Cause.pretty(cause).slice(0, 200)}`;
+                logError("recap-jobs", `job ${job.recapId} failed:`, Cause.pretty(cause));
+                fanOut(job, {
+                  type: "error",
+                  data: { code: "RecapGenerationError", message: msg },
+                });
+                yield* setStatus(
+                  {
+                    id: job.recapId,
+                    repositoryId: job.repoId,
+                    period: job.period,
+                  },
+                  "error",
+                  { errorMessage: msg },
+                );
+              }),
+            ),
+            Effect.ensuring(removeJob(job)),
+          );
 
-        const fiber = yield* Effect.forkDaemon(scopedBody);
-        job.fiber = fiber as Fiber.RuntimeFiber<unknown, unknown>;
-      });
+          const fiber = yield* Effect.forkDaemon(scopedBody);
+          job.fiber = fiber as Fiber.RuntimeFiber<unknown, unknown>;
+        }),
+      );
 
     // ── Public API ──────────────────────────────────────────────────────
 
@@ -1259,46 +1263,48 @@ export const ProjectRecapJobsLive = Layer.effect(
       });
 
     const resumePending = (): Effect.Effect<void> =>
-      Effect.gen(function* () {
-        const rows = yield* provideDb(recapService.listGenerating());
-        debug("recap-jobs", `resumePending: ${rows.length} row(s)`);
-        for (const row of rows) {
-          const attempts = yield* provideDb(recapService.incrementResumeAttempts(row.id));
-          if (attempts > RECAP_MAX_RESUME_ATTEMPTS) {
-            debug("recap-jobs", `recap ${row.id} exceeded resume attempts — marking error`);
-            yield* setStatus(
-              {
-                id: row.id,
-                repositoryId: row.repositoryId,
-                period: row.period,
-              },
-              "error",
-              {
-                errorMessage: `Exceeded max resume attempts (${RECAP_MAX_RESUME_ATTEMPTS}) after repeated crashes`,
-              },
+      Effect.withSpan("ProjectRecapJobs.resumePending")(
+        Effect.gen(function* () {
+          const rows = yield* provideDb(recapService.listGenerating());
+          debug("recap-jobs", `resumePending: ${rows.length} row(s)`);
+          for (const row of rows) {
+            const attempts = yield* provideDb(recapService.incrementResumeAttempts(row.id));
+            if (attempts > RECAP_MAX_RESUME_ATTEMPTS) {
+              debug("recap-jobs", `recap ${row.id} exceeded resume attempts — marking error`);
+              yield* setStatus(
+                {
+                  id: row.id,
+                  repositoryId: row.repositoryId,
+                  period: row.period,
+                },
+                "error",
+                {
+                  errorMessage: `Exceeded max resume attempts (${RECAP_MAX_RESUME_ATTEMPTS}) after repeated crashes`,
+                },
+              );
+              continue;
+            }
+            yield* startJob({
+              recapId: row.id,
+              repoId: row.repositoryId,
+              period: row.period,
+              periodStart: row.periodStart,
+              periodEnd: row.periodEnd,
+              trigger: "resume",
+            }).pipe(
+              Effect.catchAllCause((cause) =>
+                Effect.sync(() => {
+                  logError(
+                    "recap-jobs",
+                    `resume startJob failed for ${row.id}:`,
+                    Cause.pretty(cause),
+                  );
+                }),
+              ),
             );
-            continue;
           }
-          yield* startJob({
-            recapId: row.id,
-            repoId: row.repositoryId,
-            period: row.period,
-            periodStart: row.periodStart,
-            periodEnd: row.periodEnd,
-            trigger: "resume",
-          }).pipe(
-            Effect.catchAllCause((cause) =>
-              Effect.sync(() => {
-                logError(
-                  "recap-jobs",
-                  `resume startJob failed for ${row.id}:`,
-                  Cause.pretty(cause),
-                );
-              }),
-            ),
-          );
-        }
-      });
+        }),
+      );
 
     return {
       startJob,

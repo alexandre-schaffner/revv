@@ -415,10 +415,14 @@ export const WalkthroughJobsLive = Layer.effect(
       status: WalkthroughStatus,
       options?: { tokenUsage?: WalkthroughTokenUsage },
     ) =>
-      provideDb(
-        walkthroughService.setStatus(walkthroughId, status, {
-          ...(options?.tokenUsage ? { tokenUsage: options.tokenUsage } : {}),
-        }),
+      Effect.withSpan("WalkthroughJobs.setStatus", {
+        attributes: { walkthroughId, status },
+      })(
+        provideDb(
+          walkthroughService.setStatus(walkthroughId, status, {
+            ...(options?.tokenUsage ? { tokenUsage: options.tokenUsage } : {}),
+          }),
+        ),
       );
 
     // ── Subscriber fan-out ──────────────────────────────────────────────
@@ -962,135 +966,141 @@ export const WalkthroughJobsLive = Layer.effect(
       });
 
     const launchJob = (job: ActiveJob, ctx: ResolvedContext, trigger: StartJobTrigger) =>
-      Effect.gen(function* () {
-        yield* Ref.update(registry, (map) => {
-          const next = new Map(map);
-          next.set(job.walkthroughId, job);
-          return next;
-        });
-
-        // Broadcast `lifecycle:started` so the client can pre-create the
-        // sidebar spinner entry before any content event arrives. Goes
-        // through emitEvent → bumpSeq → EventBus + legacy fanOut. Best-
-        // effort: this is the first emit, so the seq will be 0 in the
-        // common case (chat-edits on completed walkthroughs run a separate
-        // seq lineage on the same row).
-        yield* emitEvent(job.walkthroughId, {
-          type: "lifecycle:started",
-          data: {
-            walkthroughId: job.walkthroughId,
-            prHeadSha: job.prHeadSha,
-            trigger,
-          },
-        }).pipe(Effect.catchAll(() => Effect.void));
-
-        const handleFailure = (cause: Cause.Cause<AiError>) =>
-          Effect.gen(function* () {
-            const interruptedOnly = Cause.isInterruptedOnly(cause);
-            const cancelledByUser = job.cancelledByUser;
-
-            if (!interruptedOnly) {
-              logError("walkthrough-jobs", "job failed:", Cause.pretty(cause));
-              const failure = Cause.failureOption(cause);
-              if (Option.isSome(failure)) {
-                const err = failure.value as {
-                  _tag: string;
-                  message?: string;
-                  cause?: unknown;
-                };
-                const tag = err._tag ?? "unknown";
-                const msg = err.message ?? null;
-                const detail =
-                  err.cause instanceof Error
-                    ? err.cause.message
-                    : err.cause != null
-                      ? String(err.cause)
-                      : null;
-                logError(
-                  "walkthrough-jobs",
-                  "error detail:",
-                  [tag, msg, detail].filter(Boolean).join(" — "),
-                );
-              }
-              const defect = Cause.defects(cause);
-              if (defect.length > 0) {
-                for (const d of defect) {
-                  logError(
-                    "walkthrough-jobs",
-                    "defect:",
-                    d instanceof Error
-                      ? `${d.constructor.name}: ${d.message}\n${d.stack ?? ""}`
-                      : JSON.stringify(d, null, 2),
-                  );
-                }
-              }
-            }
-
-            if (interruptedOnly && !cancelledByUser) {
-              debug(
-                "walkthrough-jobs",
-                "job interrupted (likely shutdown) — leaving row for resume:",
-                job.walkthroughId,
-              );
-              return;
-            }
-
-            const failureOpt = Cause.failureOption(cause);
-            const message = cancelledByUser
-              ? "Walkthrough cancelled"
-              : failureOpt._tag === "Some"
-                ? (failureOpt.value as { cause?: unknown }).cause instanceof Error
-                  ? (
-                      failureOpt.value as {
-                        cause: Error;
-                      }
-                    ).cause.message
-                  : String(
-                      (
-                        failureOpt.value as {
-                          cause?: unknown;
-                        }
-                      ).cause ?? failureOpt.value,
-                    )
-                : "Walkthrough generation failed";
-            const code = cancelledByUser ? "Cancelled" : "AiGenerationError";
-
-            yield* setStatus(job.walkthroughId, "error").pipe(Effect.catchAll(() => Effect.void));
-
-            yield* emitEvent(job.walkthroughId, {
-              type: "lifecycle:error",
-              data: { code, message },
-            }).pipe(Effect.catchAll(() => Effect.void));
+      Effect.withSpan("WalkthroughJobs.job")(
+        Effect.gen(function* () {
+          yield* Effect.annotateCurrentSpan("walkthroughId", job.walkthroughId);
+          yield* Effect.annotateCurrentSpan("prId", job.prId);
+          yield* Effect.annotateCurrentSpan("headSha", job.prHeadSha);
+          yield* Effect.annotateCurrentSpan("trigger", trigger);
+          yield* Ref.update(registry, (map) => {
+            const next = new Map(map);
+            next.set(job.walkthroughId, job);
+            return next;
           });
 
-        const scopedBody = buildJobBody(job, ctx).pipe(
-          Effect.scoped,
-          Effect.annotateLogs({
-            walkthroughId: job.walkthroughId,
-            prId: job.prId,
-          }),
-          semaphore.withPermits(1),
-          Effect.catchAllCause(handleFailure),
-          Effect.ensuring(removeJob(job.walkthroughId)),
-          Effect.ensuring(
-            // Clear any session tokens issued for this job.
-            Ref.update(sessionTokens, (map) => {
-              let changed = false;
-              const next = new Map(map);
-              for (const [token, entry] of next.entries()) {
-                if (entry.walkthroughId === job.walkthroughId) {
-                  next.delete(token);
-                  changed = true;
+          // Broadcast `lifecycle:started` so the client can pre-create the
+          // sidebar spinner entry before any content event arrives. Goes
+          // through emitEvent → bumpSeq → EventBus + legacy fanOut. Best-
+          // effort: this is the first emit, so the seq will be 0 in the
+          // common case (chat-edits on completed walkthroughs run a separate
+          // seq lineage on the same row).
+          yield* emitEvent(job.walkthroughId, {
+            type: "lifecycle:started",
+            data: {
+              walkthroughId: job.walkthroughId,
+              prHeadSha: job.prHeadSha,
+              trigger,
+            },
+          }).pipe(Effect.catchAll(() => Effect.void));
+
+          const handleFailure = (cause: Cause.Cause<AiError>) =>
+            Effect.gen(function* () {
+              const interruptedOnly = Cause.isInterruptedOnly(cause);
+              const cancelledByUser = job.cancelledByUser;
+
+              if (!interruptedOnly) {
+                logError("walkthrough-jobs", "job failed:", Cause.pretty(cause));
+                const failure = Cause.failureOption(cause);
+                if (Option.isSome(failure)) {
+                  const err = failure.value as {
+                    _tag: string;
+                    message?: string;
+                    cause?: unknown;
+                  };
+                  const tag = err._tag ?? "unknown";
+                  const msg = err.message ?? null;
+                  const detail =
+                    err.cause instanceof Error
+                      ? err.cause.message
+                      : err.cause != null
+                        ? String(err.cause)
+                        : null;
+                  logError(
+                    "walkthrough-jobs",
+                    "error detail:",
+                    [tag, msg, detail].filter(Boolean).join(" — "),
+                  );
+                }
+                const defect = Cause.defects(cause);
+                if (defect.length > 0) {
+                  for (const d of defect) {
+                    logError(
+                      "walkthrough-jobs",
+                      "defect:",
+                      d instanceof Error
+                        ? `${d.constructor.name}: ${d.message}\n${d.stack ?? ""}`
+                        : JSON.stringify(d, null, 2),
+                    );
+                  }
                 }
               }
-              return changed ? next : map;
-            }),
-          ),
-        );
 
-        const fiber = yield* Effect.forkDaemon(scopedBody);
-        job.fiber = fiber as Fiber.RuntimeFiber<unknown, unknown>;
-      });
+              if (interruptedOnly && !cancelledByUser) {
+                debug(
+                  "walkthrough-jobs",
+                  "job interrupted (likely shutdown) — leaving row for resume:",
+                  job.walkthroughId,
+                );
+                return;
+              }
+
+              const failureOpt = Cause.failureOption(cause);
+              const message = cancelledByUser
+                ? "Walkthrough cancelled"
+                : failureOpt._tag === "Some"
+                  ? (failureOpt.value as { cause?: unknown }).cause instanceof Error
+                    ? (
+                        failureOpt.value as {
+                          cause: Error;
+                        }
+                      ).cause.message
+                    : String(
+                        (
+                          failureOpt.value as {
+                            cause?: unknown;
+                          }
+                        ).cause ?? failureOpt.value,
+                      )
+                  : "Walkthrough generation failed";
+              const code = cancelledByUser ? "Cancelled" : "AiGenerationError";
+
+              yield* setStatus(job.walkthroughId, "error").pipe(Effect.catchAll(() => Effect.void));
+
+              yield* emitEvent(job.walkthroughId, {
+                type: "lifecycle:error",
+                data: { code, message },
+              }).pipe(Effect.catchAll(() => Effect.void));
+            });
+
+          const scopedBody = buildJobBody(job, ctx).pipe(
+            Effect.scoped,
+            Effect.annotateLogs({
+              walkthroughId: job.walkthroughId,
+              prId: job.prId,
+            }),
+            semaphore.withPermits(1),
+            Effect.catchAllCause(handleFailure),
+            Effect.ensuring(removeJob(job.walkthroughId)),
+            Effect.ensuring(
+              // Clear any session tokens issued for this job.
+              Ref.update(sessionTokens, (map) => {
+                let changed = false;
+                const next = new Map(map);
+                for (const [token, entry] of next.entries()) {
+                  if (entry.walkthroughId === job.walkthroughId) {
+                    next.delete(token);
+                    changed = true;
+                  }
+                }
+                return changed ? next : map;
+              }),
+            ),
+          );
+
+          const fiber = yield* Effect.forkDaemon(scopedBody);
+          job.fiber = fiber as Fiber.RuntimeFiber<unknown, unknown>;
+        }),
+      );
 
     // ── Public API ──────────────────────────────────────────────────────
 
@@ -1507,56 +1517,58 @@ export const WalkthroughJobsLive = Layer.effect(
       });
 
     const resumePending = (): Effect.Effect<void> =>
-      Effect.gen(function* () {
-        const rows = yield* provideDb(walkthroughService.listGenerating());
-        debug("walkthrough-jobs", "resumePending: found", rows.length, "generating rows");
+      Effect.withSpan("WalkthroughJobs.resumePending")(
+        Effect.gen(function* () {
+          const rows = yield* provideDb(walkthroughService.listGenerating());
+          debug("walkthrough-jobs", "resumePending: found", rows.length, "generating rows");
 
-        // No worktree GC on resume: the unified per-PR worktree at
-        // `worktrees/pr-{prNumber}` is shared across walkthroughs and
-        // chat sessions, so it's never orphaned by a walkthrough fiber
-        // dying. The next `acquirePrWorktree` call simply refreshes
-        // the existing dir to the desired SHA in place.
+          // No worktree GC on resume: the unified per-PR worktree at
+          // `worktrees/pr-{prNumber}` is shared across walkthroughs and
+          // chat sessions, so it's never orphaned by a walkthrough fiber
+          // dying. The next `acquirePrWorktree` call simply refreshes
+          // the existing dir to the desired SHA in place.
 
-        for (const row of rows) {
-          const attempts = yield* provideDb(walkthroughService.incrementResumeAttempts(row.id));
-          if (attempts > WALKTHROUGH_MAX_RESUME_ATTEMPTS) {
-            debug(
-              "walkthrough-jobs",
-              "walkthrough",
-              row.id,
-              "exceeded resume attempts — marking error",
+          for (const row of rows) {
+            const attempts = yield* provideDb(walkthroughService.incrementResumeAttempts(row.id));
+            if (attempts > WALKTHROUGH_MAX_RESUME_ATTEMPTS) {
+              debug(
+                "walkthrough-jobs",
+                "walkthrough",
+                row.id,
+                "exceeded resume attempts — marking error",
+              );
+              yield* setStatus(row.id, "error");
+              yield* emitEvent(row.id, {
+                type: "lifecycle:error",
+                data: {
+                  code: "ResumeAttemptsExceeded",
+                  message: "Walkthrough failed after repeated retries. Try regenerating.",
+                },
+              }).pipe(Effect.catchAll(() => Effect.void));
+              continue;
+            }
+
+            yield* startJob({
+              prId: row.pullRequestId,
+              userId: "single-user",
+              trigger: "resume",
+              walkthroughId: row.id,
+            }).pipe(
+              Effect.catchAllCause((cause) =>
+                Effect.sync(() => {
+                  logError(
+                    "walkthrough-jobs",
+                    "resume startJob failed for",
+                    row.id,
+                    ":",
+                    Cause.pretty(cause),
+                  );
+                }),
+              ),
             );
-            yield* setStatus(row.id, "error");
-            yield* emitEvent(row.id, {
-              type: "lifecycle:error",
-              data: {
-                code: "ResumeAttemptsExceeded",
-                message: "Walkthrough failed after repeated retries. Try regenerating.",
-              },
-            }).pipe(Effect.catchAll(() => Effect.void));
-            continue;
           }
-
-          yield* startJob({
-            prId: row.pullRequestId,
-            userId: "single-user",
-            trigger: "resume",
-            walkthroughId: row.id,
-          }).pipe(
-            Effect.catchAllCause((cause) =>
-              Effect.sync(() => {
-                logError(
-                  "walkthrough-jobs",
-                  "resume startJob failed for",
-                  row.id,
-                  ":",
-                  Cause.pretty(cause),
-                );
-              }),
-            ),
-          );
-        }
-      });
+        }),
+      );
 
     const supersedeWalkthrough = (oldId: string, newId: string) =>
       Effect.gen(function* () {
@@ -1642,73 +1654,77 @@ export const WalkthroughJobsLive = Layer.effect(
       walkthroughId: string,
       event: WalkthroughStreamEvent,
     ): Effect.Effect<EmitResult> =>
-      Effect.gen(function* () {
-        // 1. Bump the per-walkthrough seq counter atomically in DB. This
-        //    is the authoritative wire seq stamped onto every envelope —
-        //    survives kill -9, resumes, chat edits after completion.
-        //    Decoupled from the registry so chat-edits on completed
-        //    walkthroughs (no fiber) still get correct cursors.
-        const seq = yield* provideDb(walkthroughService.bumpSeq(walkthroughId));
+      Effect.withSpan("WalkthroughJobs.emitEvent", {
+        attributes: { walkthroughId, eventType: event.type },
+      })(
+        Effect.gen(function* () {
+          // 1. Bump the per-walkthrough seq counter atomically in DB. This
+          //    is the authoritative wire seq stamped onto every envelope —
+          //    survives kill -9, resumes, chat edits after completion.
+          //    Decoupled from the registry so chat-edits on completed
+          //    walkthroughs (no fiber) still get correct cursors.
+          const seq = yield* provideDb(walkthroughService.bumpSeq(walkthroughId));
 
-        // 2. Look up the active job for the legacy SSE fanOut + targets.
-        const map = yield* Ref.get(registry);
-        const activeJob = map.get(walkthroughId);
+          // 2. Look up the active job for the legacy SSE fanOut + targets.
+          const map = yield* Ref.get(registry);
+          const activeJob = map.get(walkthroughId);
 
-        // 3. Resolve broadcast targets (fast path = in-memory job, slow
-        //    path = DB join for chat-edit-on-completed-walkthrough).
-        const targets = resolveEventTargets(walkthroughId, activeJob);
-        if (targets !== null) {
-          // EventBus broadcast — the new SSE path. Account-scoped so a
-          // multi-account user only sees their own walkthrough events.
-          yield* eventBus
-            .broadcastToAccount(targets.accountId, {
-              type: "walkthrough:event",
-              data: {
-                prId: targets.prId,
-                walkthroughId,
-                seq,
-                event,
-              },
-            })
-            .pipe(Effect.catchAll(() => Effect.void));
-        } else {
-          debug(
-            "wt-trace",
-            `emitEvent-no-target wt=${walkthroughId} type=${event.type} (walkthrough row missing)`,
-          );
-        }
+          // 3. Resolve broadcast targets (fast path = in-memory job, slow
+          //    path = DB join for chat-edit-on-completed-walkthrough).
+          const targets = resolveEventTargets(walkthroughId, activeJob);
+          if (targets !== null) {
+            // EventBus broadcast — the new SSE path. Account-scoped so a
+            // multi-account user only sees their own walkthrough events.
+            yield* eventBus
+              .broadcastToAccount(targets.accountId, {
+                type: "walkthrough:event",
+                data: {
+                  prId: targets.prId,
+                  walkthroughId,
+                  seq,
+                  event,
+                },
+              })
+              .pipe(Effect.catchAll(() => Effect.void));
+          } else {
+            debug(
+              "wt-trace",
+              `emitEvent-no-target wt=${walkthroughId} type=${event.type} (walkthrough row missing)`,
+            );
+          }
 
-        // 4. Legacy fanOut for the per-PR SSE handler. During the dual-emit
-        //    window both paths are active; the legacy SSE handler is deleted
-        //    once the client cutover lands (step 7 of the plan).
-        if (activeJob) {
-          fanOut(activeJob, event);
-        } else {
-          debug(
-            "wt-trace",
-            `emitEvent-no-job wt=${walkthroughId} type=${event.type} (chat-edit or post-completion path)`,
-          );
-        }
+          // 4. Legacy fanOut for the per-PR SSE handler. During the dual-emit
+          //    window both paths are active; the legacy SSE handler is deleted
+          //    once the client cutover lands (step 7 of the plan).
+          if (activeJob) {
+            fanOut(activeJob, event);
+          } else {
+            debug(
+              "wt-trace",
+              `emitEvent-no-job wt=${walkthroughId} type=${event.type} (chat-edit or post-completion path)`,
+            );
+          }
 
-        // 5. Refresh opencode stream-guard inactivity timer (unchanged).
-        //    Skip when the event being emitted is itself `thinking` — that's
-        //    already the heartbeat shape. Self-notifying would amplify into an
-        //    infinite loop via the consumer at processEvent (defense-in-depth
-        //    with the early-return on `thinking` there).
-        if (event.type !== "thinking") {
-          const notifiers = yield* Ref.get(activityNotifiers);
-          const notify = notifiers.get(walkthroughId);
-          if (notify) {
-            try {
-              notify({ type: "thinking", data: {} });
-            } catch {
-              /* notifier threw — ignore */
+          // 5. Refresh opencode stream-guard inactivity timer (unchanged).
+          //    Skip when the event being emitted is itself `thinking` — that's
+          //    already the heartbeat shape. Self-notifying would amplify into an
+          //    infinite loop via the consumer at processEvent (defense-in-depth
+          //    with the early-return on `thinking` there).
+          if (event.type !== "thinking") {
+            const notifiers = yield* Ref.get(activityNotifiers);
+            const notify = notifiers.get(walkthroughId);
+            if (notify) {
+              try {
+                notify({ type: "thinking", data: {} });
+              } catch {
+                /* notifier threw — ignore */
+              }
             }
           }
-        }
 
-        return { kind: "delivered" as const, seq };
-      });
+          return { kind: "delivered" as const, seq };
+        }),
+      );
 
     const issueSessionToken = (walkthroughId: string) =>
       Effect.gen(function* () {

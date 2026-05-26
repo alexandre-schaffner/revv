@@ -260,102 +260,141 @@ export const AiServiceLive = Layer.effect(
 
     return {
       streamWalkthrough: (params) =>
-        Effect.gen(function* () {
-          const settings = yield* getSettings();
-          const agent = resolveAgent(settings);
+        Effect.withSpan("Ai.streamWalkthrough", {
+          attributes: { walkthroughId: params.walkthroughId },
+        })(
+          Effect.gen(function* () {
+            const settings = yield* getSettings();
+            const agent = resolveAgent(settings);
 
-          if (!checkCliAvailability(agent)) {
-            return yield* Effect.fail(new AiNotConfiguredError());
-          }
-
-          // Both providers receive the same param shape (including
-          // walkthroughId + db) and the tool handlers they register
-          // are byte-for-byte the same code — doctrine invariant #13
-          // (Agent-path parity).
-          const providerParams = { ...params, db };
-
-          if (agent === "opencode") {
-            if (!params.issueOpencodeSessionToken || !params.clearOpencodeSessionToken) {
-              return yield* Effect.fail(
-                new AiGenerationError({
-                  cause: new Error("missing opencode session-token callbacks"),
-                  message: "opencode provider requires caller-supplied session-token callbacks",
-                }),
-              );
+            if (!checkCliAvailability(agent)) {
+              return yield* Effect.fail(new AiNotConfiguredError());
             }
-            if (
-              !params.registerOpencodeActivityNotifier ||
-              !params.unregisterOpencodeActivityNotifier
-            ) {
-              return yield* Effect.fail(
-                new AiGenerationError({
-                  cause: new Error("missing opencode activity-notifier callbacks"),
-                  message: "opencode provider requires caller-supplied activity-notifier callbacks",
-                }),
+
+            // Both providers receive the same param shape (including
+            // walkthroughId + db) and the tool handlers they register
+            // are byte-for-byte the same code — doctrine invariant #13
+            // (Agent-path parity).
+            const providerParams = { ...params, db };
+
+            if (agent === "opencode") {
+              if (!params.issueOpencodeSessionToken || !params.clearOpencodeSessionToken) {
+                return yield* Effect.fail(
+                  new AiGenerationError({
+                    cause: new Error("missing opencode session-token callbacks"),
+                    message: "opencode provider requires caller-supplied session-token callbacks",
+                  }),
+                );
+              }
+              if (
+                !params.registerOpencodeActivityNotifier ||
+                !params.unregisterOpencodeActivityNotifier
+              ) {
+                return yield* Effect.fail(
+                  new AiGenerationError({
+                    cause: new Error("missing opencode activity-notifier callbacks"),
+                    message:
+                      "opencode provider requires caller-supplied activity-notifier callbacks",
+                  }),
+                );
+              }
+              const issueToken = params.issueOpencodeSessionToken;
+              const clearToken = params.clearOpencodeSessionToken;
+              const registerNotifier = params.registerOpencodeActivityNotifier;
+              const unregisterNotifier = params.unregisterOpencodeActivityNotifier;
+              const deps: OpencodeProviderDeps = {
+                ensureDaemon: () => Effect.runPromise(supervisor.ensureRunning()),
+                jobStarted: () => Effect.runPromise(supervisor.jobStarted()),
+                jobEnded: () => Effect.runPromise(supervisor.jobEnded()),
+                client: () => Effect.runPromise(supervisor.client()),
+                issueSessionToken: (walkthroughId) => issueToken(walkthroughId),
+                clearSessionToken: (token) => clearToken(token),
+                registerActivityNotifier: (walkthroughId, callback) =>
+                  registerNotifier(walkthroughId, callback),
+                unregisterActivityNotifier: (walkthroughId) => unregisterNotifier(walkthroughId),
+              };
+              const raw = streamWalkthroughViaOpencodeMCP(
+                { ...providerParams, deps },
+                settings.aiModel ?? undefined,
+                settings,
               );
+              return guardWalkthroughStream(raw, {
+                label: "opencode-mcp",
+                synthesizePhases: false,
+              });
             }
-            const issueToken = params.issueOpencodeSessionToken;
-            const clearToken = params.clearOpencodeSessionToken;
-            const registerNotifier = params.registerOpencodeActivityNotifier;
-            const unregisterNotifier = params.unregisterOpencodeActivityNotifier;
-            const deps: OpencodeProviderDeps = {
+            const raw = streamWalkthroughViaMCP(
+              providerParams,
+              settings.aiModel ?? undefined,
+              settings,
+            );
+            return guardWalkthroughStream(raw, { label: "claude-mcp", synthesizePhases: false });
+          }),
+        ),
+
+      chat: (params: ChatParams) =>
+        Effect.withSpan("Ai.chat")(
+          Effect.gen(function* () {
+            const settings = yield* getSettings();
+            const agent = resolveAgent(settings);
+            yield* Effect.annotateCurrentSpan("prId", params.prId);
+            yield* Effect.annotateCurrentSpan("provider", agent);
+
+            if (!checkCliAvailability(agent)) {
+              return yield* Effect.fail(new AiNotConfiguredError());
+            }
+
+            const systemPrompt = buildChatSystemPrompt({
+              pr: params.pr,
+              walkthrough: params.walkthrough,
+              branchName: params.branchName,
+            });
+            // Only inline the `## Conversation history` block on a fresh
+            // session (no resume id). On resume, the agent daemon already
+            // has the prior turns in its own session state; sending the
+            // transcript again causes the agent to echo it back into its
+            // response, which then renders as a visible "Conversation
+            // history" block in the chat bubble.
+            const message = params.resumeSessionId
+              ? params.message
+              : buildChatUserMessage({
+                  message: params.message,
+                  history: params.history,
+                });
+
+            if (agent === "claude") {
+              return streamChatViaClaude({
+                message,
+                systemPrompt,
+                resumeSessionId: params.resumeSessionId ?? undefined,
+                cwd: params.cwd,
+                onSessionId: params.onSessionId,
+                abortController: params.abortController,
+                model: settings.aiModel ?? undefined,
+                db,
+                prId: params.prId,
+                userId: params.userId,
+                maxTurns: settings.aiMaxTurns,
+                interactionMode: params.interactionMode,
+              });
+            }
+
+            // opencode path
+            const deps = {
               ensureDaemon: () => Effect.runPromise(supervisor.ensureRunning()),
               jobStarted: () => Effect.runPromise(supervisor.jobStarted()),
               jobEnded: () => Effect.runPromise(supervisor.jobEnded()),
               client: () => Effect.runPromise(supervisor.client()),
-              issueSessionToken: (walkthroughId) => issueToken(walkthroughId),
-              clearSessionToken: (token) => clearToken(token),
-              registerActivityNotifier: (walkthroughId, callback) =>
-                registerNotifier(walkthroughId, callback),
-              unregisterActivityNotifier: (walkthroughId) => unregisterNotifier(walkthroughId),
+              issueChatMcpToken: (args: {
+                prId: string;
+                userId: string;
+                actor: "chat:opencode";
+                interactionMode: InteractionMode;
+              }) => Effect.runPromise(chatMcpTokens.issue(args)),
+              clearChatMcpToken: (token: string) => Effect.runPromise(chatMcpTokens.clear(token)),
+              hasAgent: (name: string) => Effect.runPromise(supervisor.hasAgent(name)),
             };
-            const raw = streamWalkthroughViaOpencodeMCP(
-              { ...providerParams, deps },
-              settings.aiModel ?? undefined,
-              settings,
-            );
-            return guardWalkthroughStream(raw, {
-              label: "opencode-mcp",
-              synthesizePhases: false,
-            });
-          }
-          const raw = streamWalkthroughViaMCP(
-            providerParams,
-            settings.aiModel ?? undefined,
-            settings,
-          );
-          return guardWalkthroughStream(raw, { label: "claude-mcp", synthesizePhases: false });
-        }),
-
-      chat: (params: ChatParams) =>
-        Effect.gen(function* () {
-          const settings = yield* getSettings();
-          const agent = resolveAgent(settings);
-
-          if (!checkCliAvailability(agent)) {
-            return yield* Effect.fail(new AiNotConfiguredError());
-          }
-
-          const systemPrompt = buildChatSystemPrompt({
-            pr: params.pr,
-            walkthrough: params.walkthrough,
-            branchName: params.branchName,
-          });
-          // Only inline the `## Conversation history` block on a fresh
-          // session (no resume id). On resume, the agent daemon already
-          // has the prior turns in its own session state; sending the
-          // transcript again causes the agent to echo it back into its
-          // response, which then renders as a visible "Conversation
-          // history" block in the chat bubble.
-          const message = params.resumeSessionId
-            ? params.message
-            : buildChatUserMessage({
-                message: params.message,
-                history: params.history,
-              });
-
-          if (agent === "claude") {
-            return streamChatViaClaude({
+            return streamChatViaOpencode({
               message,
               systemPrompt,
               resumeSessionId: params.resumeSessionId ?? undefined,
@@ -363,43 +402,13 @@ export const AiServiceLive = Layer.effect(
               onSessionId: params.onSessionId,
               abortController: params.abortController,
               model: settings.aiModel ?? undefined,
-              db,
+              deps,
               prId: params.prId,
               userId: params.userId,
-              maxTurns: settings.aiMaxTurns,
               interactionMode: params.interactionMode,
             });
-          }
-
-          // opencode path
-          const deps = {
-            ensureDaemon: () => Effect.runPromise(supervisor.ensureRunning()),
-            jobStarted: () => Effect.runPromise(supervisor.jobStarted()),
-            jobEnded: () => Effect.runPromise(supervisor.jobEnded()),
-            client: () => Effect.runPromise(supervisor.client()),
-            issueChatMcpToken: (args: {
-              prId: string;
-              userId: string;
-              actor: "chat:opencode";
-              interactionMode: InteractionMode;
-            }) => Effect.runPromise(chatMcpTokens.issue(args)),
-            clearChatMcpToken: (token: string) => Effect.runPromise(chatMcpTokens.clear(token)),
-            hasAgent: (name: string) => Effect.runPromise(supervisor.hasAgent(name)),
-          };
-          return streamChatViaOpencode({
-            message,
-            systemPrompt,
-            resumeSessionId: params.resumeSessionId ?? undefined,
-            cwd: params.cwd,
-            onSessionId: params.onSessionId,
-            abortController: params.abortController,
-            model: settings.aiModel ?? undefined,
-            deps,
-            prId: params.prId,
-            userId: params.userId,
-            interactionMode: params.interactionMode,
-          });
-        }),
+          }),
+        ),
 
       resolveMergeConflict: (params) =>
         Effect.gen(function* () {

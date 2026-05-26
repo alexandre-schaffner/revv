@@ -598,124 +598,128 @@ export const OpencodeSupervisorLive = Layer.effect(
 
     const ensureRunning = (): Effect.Effect<OpencodeEndpoint, OpencodeError> =>
       startLock.withPermits(1)(
-        Effect.gen(function* () {
-          // Cancel any pending idle stop — someone wants the daemon.
-          yield* clearIdleTimer();
+        Effect.withSpan("OpencodeSupervisor.ensureRunning")(
+          Effect.gen(function* () {
+            // Cancel any pending idle stop — someone wants the daemon.
+            yield* clearIdleTimer();
 
-          const snapshot = yield* Ref.get(stateRef);
+            const snapshot = yield* Ref.get(stateRef);
 
-          // Detect agent-change and stop if no feature needs opencode.
-          const settings = yield* withDb(db, settingsService.getSettings()).pipe(
-            Effect.orElseSucceed(() => null),
-          );
-          if (settings && !isOpencodeNeeded(settings)) {
-            const agent = settings.aiAgent ?? "opencode";
-            yield* stopNow();
-            return yield* Effect.fail(new OpencodeNotSelectedError({ selectedAgent: agent }));
-          }
-
-          if (snapshot.unhealthy) {
-            const now = Date.now();
-            if (
-              snapshot.lastUnhealthyAt !== null &&
-              now - snapshot.lastUnhealthyAt >= UNHEALTHY_AUTO_RESET_MS
-            ) {
-              debug(
-                "opencode-supervisor",
-                `auto-resetting unhealthy flag after ${UNHEALTHY_AUTO_RESET_MS}ms idle`,
-              );
-              yield* Ref.update(stateRef, (st) => ({
-                ...st,
-                unhealthy: false,
-                lastUnhealthyAt: null,
-                restartTimestamps: [],
-              }));
-              persistCrashTimestamps(db, []);
-            } else {
-              return yield* Effect.fail(new OpencodeUnhealthyError());
+            // Detect agent-change and stop if no feature needs opencode.
+            const settings = yield* withDb(db, settingsService.getSettings()).pipe(
+              Effect.orElseSucceed(() => null),
+            );
+            if (settings && !isOpencodeNeeded(settings)) {
+              const agent = settings.aiAgent ?? "opencode";
+              yield* stopNow();
+              return yield* Effect.fail(new OpencodeNotSelectedError({ selectedAgent: agent }));
             }
-          }
 
-          if (snapshot.running) {
+            if (snapshot.unhealthy) {
+              const now = Date.now();
+              if (
+                snapshot.lastUnhealthyAt !== null &&
+                now - snapshot.lastUnhealthyAt >= UNHEALTHY_AUTO_RESET_MS
+              ) {
+                debug(
+                  "opencode-supervisor",
+                  `auto-resetting unhealthy flag after ${UNHEALTHY_AUTO_RESET_MS}ms idle`,
+                );
+                yield* Ref.update(stateRef, (st) => ({
+                  ...st,
+                  unhealthy: false,
+                  lastUnhealthyAt: null,
+                  restartTimestamps: [],
+                }));
+                persistCrashTimestamps(db, []);
+              } else {
+                return yield* Effect.fail(new OpencodeUnhealthyError());
+              }
+            }
+
+            if (snapshot.running) {
+              return {
+                port: snapshot.running.port,
+                hostname: snapshot.running.hostname,
+                password: snapshot.running.password,
+              };
+            }
+
+            const running = yield* Effect.tryPromise({
+              try: () => spawnDaemon(),
+              catch: (err) => {
+                debug(
+                  "opencode-supervisor",
+                  "spawn failed:",
+                  err instanceof Error ? err.message : String(err),
+                );
+                return new AiGenerationError({
+                  cause: err,
+                  message: err instanceof Error ? err.message : String(err),
+                });
+              },
+            });
+
+            yield* Ref.update(stateRef, (s) => ({
+              ...s,
+              running,
+              lastSelectedAgent: settings?.aiAgent ?? "opencode",
+              // Successful start resets the crash-loop counter.
+              restartTimestamps: [],
+              unhealthy: false,
+              // Reset cached agent list — probe again below.
+              agentNames: null,
+            }));
+            // Clear persisted crash log — daemon is healthy.
+            persistCrashTimestamps(db, []);
+
+            // Fork a supervised fiber to observe the daemon's exit.
+            // This replaces the old proc.exited.then(Effect.runPromise) pattern.
+            yield* Effect.forkDaemon(observeExit(running));
+
+            // Probe available agents. Failures are best-effort: the
+            // chat-opencode driver checks `hasAgent('plan')` before
+            // requesting plan mode and degrades gracefully when missing.
+            const names = yield* Effect.tryPromise({
+              try: () => probeAgents(running.client),
+              catch: (err) => {
+                debug(
+                  "opencode-supervisor",
+                  "agent probe failed:",
+                  err instanceof Error ? err.message : String(err),
+                );
+                return new Error("agent probe failed");
+              },
+            }).pipe(Effect.orElseSucceed(() => [] as readonly string[]));
+            yield* Ref.update(stateRef, (s) => ({ ...s, agentNames: names }));
+            debug("opencode-supervisor", `agent probe ok: ${names.join(", ")}`);
+
             return {
-              port: snapshot.running.port,
-              hostname: snapshot.running.hostname,
-              password: snapshot.running.password,
+              port: running.port,
+              hostname: running.hostname,
+              password: running.password,
             };
-          }
-
-          const running = yield* Effect.tryPromise({
-            try: () => spawnDaemon(),
-            catch: (err) => {
-              debug(
-                "opencode-supervisor",
-                "spawn failed:",
-                err instanceof Error ? err.message : String(err),
-              );
-              return new AiGenerationError({
-                cause: err,
-                message: err instanceof Error ? err.message : String(err),
-              });
-            },
-          });
-
-          yield* Ref.update(stateRef, (s) => ({
-            ...s,
-            running,
-            lastSelectedAgent: settings?.aiAgent ?? "opencode",
-            // Successful start resets the crash-loop counter.
-            restartTimestamps: [],
-            unhealthy: false,
-            // Reset cached agent list — probe again below.
-            agentNames: null,
-          }));
-          // Clear persisted crash log — daemon is healthy.
-          persistCrashTimestamps(db, []);
-
-          // Fork a supervised fiber to observe the daemon's exit.
-          // This replaces the old proc.exited.then(Effect.runPromise) pattern.
-          yield* Effect.forkDaemon(observeExit(running));
-
-          // Probe available agents. Failures are best-effort: the
-          // chat-opencode driver checks `hasAgent('plan')` before
-          // requesting plan mode and degrades gracefully when missing.
-          const names = yield* Effect.tryPromise({
-            try: () => probeAgents(running.client),
-            catch: (err) => {
-              debug(
-                "opencode-supervisor",
-                "agent probe failed:",
-                err instanceof Error ? err.message : String(err),
-              );
-              return new Error("agent probe failed");
-            },
-          }).pipe(Effect.orElseSucceed(() => [] as readonly string[]));
-          yield* Ref.update(stateRef, (s) => ({ ...s, agentNames: names }));
-          debug("opencode-supervisor", `agent probe ok: ${names.join(", ")}`);
-
-          return {
-            port: running.port,
-            hostname: running.hostname,
-            password: running.password,
-          };
-        }),
+          }),
+        ),
       );
 
     const stopNow = (): Effect.Effect<void> =>
-      Effect.gen(function* () {
-        yield* clearIdleTimer();
-        const s = yield* Ref.get(stateRef);
-        if (s.running) {
-          debug("opencode-supervisor", "stopNow — killing daemon");
-          killRunning(s.running);
-        }
-        yield* Ref.update(stateRef, (st) => ({
-          ...st,
-          running: null,
-          activeJobCount: 0,
-          agentNames: null,
-        }));
-      });
+      Effect.withSpan("OpencodeSupervisor.stopNow")(
+        Effect.gen(function* () {
+          yield* clearIdleTimer();
+          const s = yield* Ref.get(stateRef);
+          if (s.running) {
+            debug("opencode-supervisor", "stopNow — killing daemon");
+            killRunning(s.running);
+          }
+          yield* Ref.update(stateRef, (st) => ({
+            ...st,
+            running: null,
+            activeJobCount: 0,
+            agentNames: null,
+          }));
+        }),
+      );
 
     // P4: Watch settings changes and react immediately:
     //   • away from opencode → stop daemon (no longer waiting for jobStarted)
@@ -826,57 +830,61 @@ export const OpencodeSupervisorLive = Layer.effect(
       });
 
     const jobStarted = (): Effect.Effect<void> =>
-      Effect.gen(function* () {
-        // Detect settings-change: if no feature needs opencode while a
-        // running daemon exists, kill it.
-        const settings = yield* withDb(db, settingsService.getSettings()).pipe(
-          Effect.orElseSucceed(() => null),
-        );
-        const s0 = yield* Ref.get(stateRef);
-        if (settings && !isOpencodeNeeded(settings) && s0.running) {
-          debug(
-            "opencode-supervisor",
-            `opencode no longer needed by any feature — stopping daemon`,
+      Effect.withSpan("OpencodeSupervisor.jobStarted")(
+        Effect.gen(function* () {
+          // Detect settings-change: if no feature needs opencode while a
+          // running daemon exists, kill it.
+          const settings = yield* withDb(db, settingsService.getSettings()).pipe(
+            Effect.orElseSucceed(() => null),
           );
-          yield* stopNow();
-        }
-        yield* clearIdleTimer();
-        const agent = settings?.aiAgent ?? "opencode";
-        yield* Ref.update(stateRef, (s) => ({
-          ...s,
-          activeJobCount: s.activeJobCount + 1,
-          lastSelectedAgent: agent,
-        }));
-        // Pre-warm when opencode might be needed (global or per-feature override)
-        if (!settings || isOpencodeNeeded(settings)) {
-          yield* Effect.forkDaemon(ensureRunning().pipe(Effect.catchAll(() => Effect.void)));
-        }
-      });
+          const s0 = yield* Ref.get(stateRef);
+          if (settings && !isOpencodeNeeded(settings) && s0.running) {
+            debug(
+              "opencode-supervisor",
+              `opencode no longer needed by any feature — stopping daemon`,
+            );
+            yield* stopNow();
+          }
+          yield* clearIdleTimer();
+          const agent = settings?.aiAgent ?? "opencode";
+          yield* Ref.update(stateRef, (s) => ({
+            ...s,
+            activeJobCount: s.activeJobCount + 1,
+            lastSelectedAgent: agent,
+          }));
+          // Pre-warm when opencode might be needed (global or per-feature override)
+          if (!settings || isOpencodeNeeded(settings)) {
+            yield* Effect.forkDaemon(ensureRunning().pipe(Effect.catchAll(() => Effect.void)));
+          }
+        }),
+      );
 
     const jobEnded = (): Effect.Effect<void> =>
-      Effect.gen(function* () {
-        yield* Ref.update(stateRef, (s) => ({
-          ...s,
-          activeJobCount: Math.max(0, s.activeJobCount - 1),
-        }));
-        const s = yield* Ref.get(stateRef);
-        if (s.activeJobCount === 0 && s.running) {
-          // The daemon stays warm for as long as opencode is the selected
-          // agent (or a per-feature override). Idle stop is only a
-          // defensive fallback for the race between a settings flip and
-          // the last in-flight job releasing — under normal flow the
-          // settings stream's stopNow() has already torn things down by
-          // the time we get here. On a settings read failure, err toward
-          // keeping the daemon warm rather than churning it.
-          const stillNeeded = yield* withDb(db, settingsService.getSettings()).pipe(
-            Effect.map(isOpencodeNeeded),
-            Effect.catchAll(() => Effect.succeed(true)),
-          );
-          if (!stillNeeded) {
-            yield* scheduleIdleStop();
+      Effect.withSpan("OpencodeSupervisor.jobEnded")(
+        Effect.gen(function* () {
+          yield* Ref.update(stateRef, (s) => ({
+            ...s,
+            activeJobCount: Math.max(0, s.activeJobCount - 1),
+          }));
+          const s = yield* Ref.get(stateRef);
+          if (s.activeJobCount === 0 && s.running) {
+            // The daemon stays warm for as long as opencode is the selected
+            // agent (or a per-feature override). Idle stop is only a
+            // defensive fallback for the race between a settings flip and
+            // the last in-flight job releasing — under normal flow the
+            // settings stream's stopNow() has already torn things down by
+            // the time we get here. On a settings read failure, err toward
+            // keeping the daemon warm rather than churning it.
+            const stillNeeded = yield* withDb(db, settingsService.getSettings()).pipe(
+              Effect.map(isOpencodeNeeded),
+              Effect.catchAll(() => Effect.succeed(true)),
+            );
+            if (!stillNeeded) {
+              yield* scheduleIdleStop();
+            }
           }
-        }
-      });
+        }),
+      );
 
     const onDaemonExit = (handler: () => void): (() => void) => {
       exitHandlers.add(handler);

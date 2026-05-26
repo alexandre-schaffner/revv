@@ -16,6 +16,7 @@ import { serverEnv } from "../../config";
 import { CLI_CHAT_TURN_TIMEOUT_MS } from "../../constants";
 import { AiGenerationError } from "../../domain/errors";
 import { debug, logError } from "../../logger";
+import { recordSpan } from "../../observability/tracer";
 import type { OpencodeClient, OpencodeEndpoint } from "../../services/OpencodeSupervisor";
 import {
   buildActivity,
@@ -28,6 +29,32 @@ import {
   withAgentTurn,
 } from "../agent-stream";
 import type { RawChatStreamFrame } from "./chat-claude";
+
+// ── Manual span helper for non-Effect async paths ─────────────────────────────
+
+async function traced<T>(
+  name: string,
+  attrs: Record<string, unknown>,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const startMs = performance.now();
+  try {
+    const result = await fn();
+    recordSpan(name, startMs, performance.now() - startMs, attrs);
+    return result;
+  } catch (err) {
+    recordSpan(
+      name,
+      startMs,
+      performance.now() - startMs,
+      attrs,
+      err instanceof Error
+        ? { name: err.name, message: err.message }
+        : { name: "Error", message: String(err) },
+    );
+    throw err;
+  }
+}
 
 export interface OpencodeChatDeps {
   readonly ensureDaemon: () => Promise<OpencodeEndpoint>;
@@ -156,17 +183,19 @@ export function streamChatViaOpencode(
           // omit `throwOnError` so we can inspect the status — the
           // daemon also returns 200 for failed connections, and the
           // only structured signal is the embedded status.
-          const result = await client.mcp.add({
-            directory: opts.cwd,
-            name: registrationName,
-            config: {
-              type: "remote",
-              url: mcpUrl,
-              headers: {
-                Authorization: `Bearer ${chatMcpToken}`,
+          const result = await traced("opencode.mcp.add", { name: registrationName }, () =>
+            client.mcp.add({
+              directory: opts.cwd,
+              name: registrationName,
+              config: {
+                type: "remote",
+                url: mcpUrl,
+                headers: {
+                  Authorization: `Bearer ${chatMcpToken}`,
+                },
               },
-            },
-          });
+            }),
+          );
           if (result.error) {
             throw new Error(
               `opencode mcp.add failed: ${
@@ -196,9 +225,14 @@ export function streamChatViaOpencode(
         // passed to the daemon so its built-in tools (Read/Edit/Bash)
         // operate on our chat worktree.
         if (!sessionId) {
-          const created = await client.session.create(
-            { directory: opts.cwd, title: `revv-chat-${opts.prId}` },
-            { throwOnError: true },
+          const created = await traced(
+            "opencode.session.create",
+            { cwd: opts.cwd, title: `revv-chat-${opts.prId}` },
+            () =>
+              client.session.create(
+                { directory: opts.cwd, title: `revv-chat-${opts.prId}` },
+                { throwOnError: true },
+              ),
           );
           sessionId = created.data.id;
           // Await: this commits the SQLite row that lets the next
@@ -343,9 +377,14 @@ export function streamChatViaOpencode(
             // we'd have to swallow. The SDK types the 404 path as
             // NotFoundError — we ignore both branches since either
             // way the daemon side has stopped.
-            const abortResult = await c.session.abort({
-              sessionID: turnSessionId,
-            });
+            const abortResult = await traced(
+              "opencode.session.abort",
+              { sessionID: turnSessionId },
+              () =>
+                c.session.abort({
+                  sessionID: turnSessionId,
+                }),
+            );
             if (abortResult.error) {
               const status = abortResult.response.status;
               if (status !== 404) {
@@ -402,33 +441,38 @@ export function streamChatViaOpencode(
             else ctx.signal.addEventListener("abort", onTurnAbort, { once: true });
 
             const wireModel = parseOpencodeModel(opts.model);
-            const promptResult = await client.session
-              .prompt(
-                {
-                  sessionID: turnSessionId,
-                  directory: opts.cwd,
-                  parts: [{ type: "text", text: opts.message }],
-                  ...(opts.resumeSessionId ? {} : { system: opts.systemPrompt }),
-                  ...(wireModel !== undefined ? { model: wireModel } : {}),
-                  // Plan-mode: route through the named `plan`
-                  // agent. We pre-flighted its existence above,
-                  // so a daemon missing the agent has already
-                  // failed with AgentUnavailableError.
-                  ...(planMode ? { agent: "plan" } : {}),
-                },
-                {
-                  // Thread the harness signal so a timeout or
-                  // external cancel tears down the HTTP call even
-                  // if the daemon's `/abort` endpoint doesn't
-                  // promptly close the long-poll.
-                  signal: ctx.signal,
-                  throwOnError: true,
-                },
-              )
-              .finally(() => {
-                ctx.signal.removeEventListener("abort", onTurnAbort);
-                sseAbort.abort();
-              });
+            const promptResult = await traced(
+              "opencode.session.prompt",
+              { sessionID: turnSessionId, model: wireModel, agent: planMode ? "plan" : undefined },
+              () =>
+                client.session
+                  .prompt(
+                    {
+                      sessionID: turnSessionId,
+                      directory: opts.cwd,
+                      parts: [{ type: "text", text: opts.message }],
+                      ...(opts.resumeSessionId ? {} : { system: opts.systemPrompt }),
+                      ...(wireModel !== undefined ? { model: wireModel } : {}),
+                      // Plan-mode: route through the named `plan`
+                      // agent. We pre-flighted its existence above,
+                      // so a daemon missing the agent has already
+                      // failed with AgentUnavailableError.
+                      ...(planMode ? { agent: "plan" } : {}),
+                    },
+                    {
+                      // Thread the harness signal so a timeout or
+                      // external cancel tears down the HTTP call even
+                      // if the daemon's `/abort` endpoint doesn't
+                      // promptly close the long-poll.
+                      signal: ctx.signal,
+                      throwOnError: true,
+                    },
+                  )
+                  .finally(() => {
+                    ctx.signal.removeEventListener("abort", onTurnAbort);
+                    sseAbort.abort();
+                  }),
+            );
             await sseDone;
 
             const response = promptResult.data;

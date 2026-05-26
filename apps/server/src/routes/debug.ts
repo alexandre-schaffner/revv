@@ -1,5 +1,6 @@
 import { Effect } from "effect";
 import { Elysia } from "elysia";
+import { clearSpans, readSpans, summarizeSpans } from "../observability/tracer";
 import { AppRuntime } from "../runtime";
 import { CacheService } from "../services/Cache";
 import { FileContentService } from "../services/FileContent";
@@ -59,4 +60,31 @@ export const debugRoutes = new Elysia({ prefix: "/api/_debug" })
     } catch (e) {
       return jsonResponse({ error: e instanceof Error ? e.message : String(e) }, 500);
     }
+  })
+  .get("/traces", ({ query }) => {
+    if (!import.meta.env?.DEV && process.env.REVV_DEBUG !== "1") {
+      return new Response("Not found", { status: 404 });
+    }
+
+    const filter: { name?: string | RegExp; minDurationMs?: number } = {};
+    if (typeof query.name === "string") {
+      filter.name = query.name;
+    }
+    if (typeof query.minDuration === "string") {
+      const n = Number.parseFloat(query.minDuration);
+      if (!Number.isNaN(n)) filter.minDurationMs = n;
+    }
+
+    return {
+      spans: readSpans(filter),
+      summary: summarizeSpans(),
+    };
+  })
+  .post("/traces/clear", () => {
+    if (!import.meta.env?.DEV && process.env.REVV_DEBUG !== "1") {
+      return new Response("Not found", { status: 404 });
+    }
+
+    clearSpans();
+    return { ok: true };
   });
