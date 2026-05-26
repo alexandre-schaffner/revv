@@ -108,7 +108,7 @@ for arg in "$@"; do
   esac
 done
 
-if [[ " ${INSTALLER_ARGS[*]} " != *" --help "* && " ${INSTALLER_ARGS[*]} " != *" -h "* ]]; then
+if [[ $# -eq 0 || ( " $* " != *" --help "* && " $* " != *" -h "* ) ]]; then
   SELF_PATH=""
   if [[ -n "${BASH_SOURCE[0]:-}" \
      && "${BASH_SOURCE[0]}" != "bash" \
