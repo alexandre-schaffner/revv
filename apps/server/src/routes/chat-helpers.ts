@@ -366,10 +366,11 @@ export function wrapStreamWithPersistence(
               ),
             );
           } else if (assistantMessageId) {
+            const msgId = assistantMessageId;
             await AppRuntime.runPromise(
               Effect.flatMap(ChatSessionService, (svc) =>
                 svc.finalizeAssistantMessage({
-                  messageId: assistantMessageId,
+                  messageId: msgId,
                   error: errorMessage,
                 }),
               ),

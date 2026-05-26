@@ -498,7 +498,8 @@ export const completeWalkthroughHandler: WalkthroughToolHandler<CompleteWalkthro
  * The full phase-bound tool surface. Both the Claude Agent SDK path and the
  * HTTP MCP route (opencode) consume this array — one source of truth.
  */
-export const TOOL_SPECS: Array<ToolSpec<unknown>> = [
+// biome-ignore lint/suspicious/noExplicitAny: heterogeneous tool spec array requires bivariant handler type
+export const TOOL_SPECS: Array<ToolSpec<any>> = [
   {
     name: "get_walkthrough_state",
     description:

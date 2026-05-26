@@ -35,7 +35,9 @@ function rowMajorIndex(row: number, col: number): number {
 
 /** Bounded array access — caller guarantees index is in range. */
 function at<T>(arr: readonly T[], index: number): T {
-  return arr[index % arr.length];
+  const val = arr[index % arr.length];
+  if (val === undefined) throw new Error(`Index out of bounds: ${index}`);
+  return val;
 }
 
 // ── Precomputed path-order tables (each table[idx] = order along the path) ──

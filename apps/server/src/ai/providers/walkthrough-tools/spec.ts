@@ -96,7 +96,8 @@ export interface ToolSpec<TShape extends z.ZodRawShape> {
   readonly name: string;
   readonly description: string;
   readonly inputSchema: z.ZodObject<TShape>;
-  readonly handler: WalkthroughToolHandler<unknown>;
+  // biome-ignore lint/suspicious/noExplicitAny: heterogeneous tool spec array requires bivariant handler type
+  readonly handler: WalkthroughToolHandler<any>;
 }
 
 // ── Tool input schemas (zod) ─────────────────────────────────────────────────

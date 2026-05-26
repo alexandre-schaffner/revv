@@ -41,6 +41,9 @@ let cursorLineIndex = $state<number>(1);
  */
 let cursorSide = $state<"additions" | "deletions" | null>(null);
 
+/** Visual-mode anchor line (start of selection). null outside visual mode. */
+let anchorLineIndex = $state<number | null>(null);
+
 /**
  * Total rendered line count. Set by DiffViewerInner after each render.
  * Used to clamp cursor movement.

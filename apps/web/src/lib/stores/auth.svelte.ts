@@ -271,7 +271,7 @@ export function cancelSignIn(): void {
   if (pollTimer) clearTimeout(pollTimer);
   pollTimer = null;
   deviceFlow = null;
-  isPolling = false;
+  _isPolling = false;
 }
 
 export function clearError(): void {

@@ -36,5 +36,7 @@ function fnv1a(input: string): number {
 
 export function squareVariantForId(id: string): DotmatrixVariant {
   const idx = fnv1a(id) % CHAT_VARIANT_POOL.length;
-  return CHAT_VARIANT_POOL[idx % CHAT_VARIANT_POOL.length];
+  const variant = CHAT_VARIANT_POOL[idx];
+  if (!variant) throw new Error(`Invalid variant index: ${idx}`);
+  return variant;
 }
