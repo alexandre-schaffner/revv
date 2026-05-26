@@ -100,19 +100,19 @@ jobs:
 
       - name: Attest install.sh
         id: attest-sh
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v3
         with:
           subject-path: dist/install.sh
 
       - name: Attest install.ps1
         id: attest-ps1
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v3
         with:
           subject-path: dist/install.ps1
 
       - name: Attest SHA256SUMS
         id: attest-sums
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v3
         with:
           subject-path: dist/SHA256SUMS
 
