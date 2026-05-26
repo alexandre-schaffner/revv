@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.0](https://github.com/alexandre-schaffner/revv/compare/v0.3.5...v0.4.0) (2026-05-26)
+
+
+### Features
+
+* **walkthrough:** remove tool-calls collapsible during generation ([1a3e635](https://github.com/alexandre-schaffner/revv/commit/1a3e63517e336da72dc5068ab8489195c2164663))
+
+
+### Bug Fixes
+
+* **ci:** remove unused exports and non-existent hooks entry to pass knip ([cdb8e98](https://github.com/alexandre-schaffner/revv/commit/cdb8e9893a7bfd2ca1c30584d7f8e510d7352cab))
+
 ## [0.3.5](https://github.com/alexandre-schaffner/revv/compare/v0.3.4...v0.3.5) (2026-05-26)
 
 
