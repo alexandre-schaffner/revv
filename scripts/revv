@@ -224,7 +224,7 @@ install_prebuilt_app() {
     "https://api.github.com/repos/${REVV_GITHUB_REPO}/releases/tags/${release_tag}" \
     -o "$release_json" || { rm -f "$release_json"; return 1; }
   bundle_url="$(sed -n "s/.*\"browser_download_url\": \"\([^\"]*_${asset_arch}\.dmg\)\".*/\1/p" "$release_json" | head -1)"
-  bundle_sha="$(sed -n "/\"name\": \".*_${asset_arch}\.dmg\"/,/}/ s/.*\"value\": *\"\([a-fA-F0-9]*\)\".*/\1/p" "$release_json" | head -1)"
+  bundle_sha="$(sed -n "/\"name\": \".*_${asset_arch}\.dmg\"/,/\"browser_download_url\"/ s/.*\"digest\": *\"sha256:\([a-fA-F0-9]*\)\".*/\1/p" "$release_json" | head -1)"
   rm -f "$release_json"
   [[ -n "$bundle_url" ]] || return 1
 
