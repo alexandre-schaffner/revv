@@ -321,6 +321,85 @@ ensure_rust() {
   fi
 }
 
+# ── Release bundle install ────────────────────────────────────
+
+revv_sha256_of() {
+  if check_cmd sha256sum; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
+install_release_app() {
+  local release_tag="$1" app_dir="${2:-}" asset_arch release_json bundle_url bundle_sha
+  local sums_file sums_url bundle_filename bundle_file actual_sha mount_point app_source install_dir installed_app
+
+  [[ -n "$release_tag" ]] || return 1
+  case "$(uname -m)" in
+    arm64|aarch64) asset_arch="aarch64" ;;
+    x86_64)        asset_arch="x64" ;;
+    *)             return 1 ;;
+  esac
+
+  release_json="$(mktemp)"
+  curl -fsSL \
+    "https://api.github.com/repos/${REVV_GITHUB_REPO}/releases/tags/${release_tag}" \
+    -o "$release_json" || { rm -f "$release_json"; return 1; }
+
+  bundle_url="$(sed -n "s/.*\"browser_download_url\": \"\([^\"]*_${asset_arch}\.dmg\)\".*/\1/p" "$release_json" | head -1)"
+  bundle_sha="$(sed -n "/\"name\": \".*_${asset_arch}\.dmg\"/,/\"browser_download_url\"/ s/.*\"digest\": *\"sha256:\([a-fA-F0-9]*\)\".*/\1/p" "$release_json" | head -1)"
+  rm -f "$release_json"
+  [[ -n "$bundle_url" ]] || return 1
+
+  if [[ -z "$bundle_sha" ]]; then
+    sums_url="https://github.com/${REVV_GITHUB_REPO}/releases/download/${release_tag}/SHA256SUMS"
+    sums_file="$(mktemp)"
+    if curl -fsSL "$sums_url" -o "$sums_file" 2>/dev/null; then
+      bundle_filename="$(basename "$bundle_url")"
+      bundle_sha="$(awk -v name="$bundle_filename" '$2 == name {print $1}' "$sums_file" | head -1)"
+    fi
+    rm -f "$sums_file"
+  fi
+
+  bundle_file="$(mktemp).dmg"
+  info "Downloading pre-built Revv.app from ${release_tag} (${asset_arch})"
+  curl -fL "$bundle_url" -o "$bundle_file" || { rm -f "$bundle_file"; return 1; }
+
+  if [[ -n "$bundle_sha" ]]; then
+    actual_sha="$(revv_sha256_of "$bundle_file")"
+    if [[ "$actual_sha" != "$bundle_sha" ]]; then
+      rm -f "$bundle_file"
+      fail "Downloaded DMG checksum mismatch for ${release_tag}."
+    fi
+  else
+    warn "SHA256SUMS unavailable for ${release_tag}; installing without checksum verification."
+  fi
+
+  mount_point="$(mktemp -d)"
+  hdiutil attach -quiet -nobrowse -mountpoint "$mount_point" "$bundle_file" || {
+    rm -rf "$mount_point" "$bundle_file"
+    return 1
+  }
+
+  app_source="$(find "$mount_point" -maxdepth 1 -type d -name '*.app' 2>/dev/null | head -1)"
+  if [[ -z "$app_source" ]]; then
+    hdiutil detach -quiet "$mount_point" 2>/dev/null || true
+    rm -rf "$mount_point" "$bundle_file"
+    return 1
+  fi
+
+  install_dir="${app_dir:-/Applications}"
+  [[ -w "$install_dir" ]] || install_dir="$HOME/Applications"
+  mkdir -p "$install_dir"
+  installed_app="$install_dir/$(basename "$app_source")"
+  rm -rf "$installed_app"
+  cp -R "$app_source" "$installed_app"
+  xattr -cr "$installed_app" 2>/dev/null || true
+  hdiutil detach -quiet "$mount_point" 2>/dev/null || true
+  rm -rf "$mount_point" "$bundle_file"
+}
+
 # ── LaunchAgent plist generator ───────────────────────────────
 #
 # Writes the com.revv.server LaunchAgent plist at $plist_path. Shared between

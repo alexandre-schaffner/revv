@@ -115,6 +115,11 @@ substitute() {
 echo ""
 echo "==> Substituting templates..."
 substitute "$SCRIPT_DIR/install.sh.tmpl"  "$DIST_DIR/install.sh"
+{
+  printf '\n# ---- embedded canonical installer ----\n'
+  sed '1{/^#!/d;}' "$REPO_ROOT/install.sh"
+} >> "$DIST_DIR/install.sh"
+chmod +x "$DIST_DIR/install.sh"
 substitute "$SCRIPT_DIR/install.ps1.tmpl" "$DIST_DIR/install.ps1"
 
 # SHA256SUMS covers the installer scripts and all downloaded bundles
