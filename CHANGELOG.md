@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.4](https://github.com/alexandre-schaffner/revv/compare/v0.3.3...v0.3.4) (2026-05-26)
+
+
+### Bug Fixes
+
+* avoid unbound variable on bash 3.2 (macOS) when INSTALLER_ARGS is empty under set -u ([c9e7e16](https://github.com/alexandre-schaffner/revv/commit/c9e7e162879f397dec312e588ca943bab376ac98))
+
 ## [0.3.3](https://github.com/alexandre-schaffner/revv/compare/v0.3.2...v0.3.3) (2026-05-26)
 
 
