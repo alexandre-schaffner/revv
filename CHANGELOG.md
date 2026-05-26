@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.4](https://github.com/alexandre-schaffner/revv/compare/v0.2.3...v0.2.4) (2026-05-26)
+
+
+### Bug Fixes
+
+* parse GitHub release digest as object instead of string ([31efb1b](https://github.com/alexandre-schaffner/revv/commit/31efb1b848da1589c39371584ad7a97c62fc23a7))
+
 ## [0.2.3](https://github.com/alexandre-schaffner/revv/compare/v0.2.2...v0.2.3) (2026-05-26)
 
 
