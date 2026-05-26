@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.5](https://github.com/alexandre-schaffner/revv/compare/v0.2.4...v0.2.5) (2026-05-26)
+
+
+### Bug Fixes
+
+* remove unused RecapToolSpec export ([bc8fa02](https://github.com/alexandre-schaffner/revv/commit/bc8fa020a21f13d1aeb4c8993ab00b7af6c42f46))
+* resolve all 23 lint warnings ([e68fdaa](https://github.com/alexandre-schaffner/revv/commit/e68fdaa917750772f931ab8db159c66918dc81cc))
+* resolve typecheck errors from lint fixes ([a94a376](https://github.com/alexandre-schaffner/revv/commit/a94a37618bbcdc237b502f9b2de0f8d75f956a70))
+* use browser_download_url as sed range end for digest extraction ([0a4ac9c](https://github.com/alexandre-schaffner/revv/commit/0a4ac9cf1e34d36a5c54ae882b13843fa78592ad))
+
 ## [0.2.4](https://github.com/alexandre-schaffner/revv/compare/v0.2.3...v0.2.4) (2026-05-26)
 
 
