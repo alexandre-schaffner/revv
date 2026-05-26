@@ -61,8 +61,6 @@ import {
 } from "$lib/stores/walkthrough.svelte";
 import {
   type GroupableActivity,
-  groupActivityRuns,
-  isActivityGroup,
   isExplorationActivity,
 } from "$lib/utils/activity-groups";
 import { initHighlighter } from "$lib/utils/code-highlight.svelte";
@@ -335,22 +333,6 @@ const showDiffSkeleton = $derived(
     (lastCompletedPhase === "none" || lastCompletedPhase === "A" || lastCompletedPhase === "B"),
 );
 
-// Below-chapter activity feed: mirrors the recap pattern
-// (`RecapDetail.svelte`). We only surface *exploration* tool calls
-// (Read/Grep/Glob/LS) here — MCP content-write calls like
-// `add_diff_step`, `set_overview`, `rate_axis`, etc. are deliberately
-// hidden because their output already lands as visible blocks/ratings
-// in the walkthrough itself. `groupActivityRuns` then collapses the
-// consecutive exploration calls into a single shimmer-labeled group
-// with odometer counts. We synthesize a stable `id` from the absolute
-// index because `Activity` doesn't carry one.
-const groupableExplorationSteps = $derived.by<readonly GroupableActivity[]>(() =>
-  explorationSteps
-    .map((step, i): GroupableActivity => ({ ...step, id: `step-${i}` }))
-    .filter((step) => isExplorationActivity(step)),
-);
-const walkthroughActivityEntries = $derived(groupActivityRuns(groupableExplorationSteps));
-
 // Interleaved view: walks the chronological `timeline` (mixed thoughts
 // + exploration tool calls) and emits a render list where consecutive
 // exploration calls between thoughts collapse into a single group (so
@@ -385,7 +367,7 @@ const interleavedEntries = $derived.by<readonly InterleavedRenderEntry[]>(() => 
   return out;
 });
 const hasThoughtText = $derived(thoughts.trim().length > 0);
-let thoughtsOpen = $state(false);
+let thoughtsOpen = $state(true);
 
 const blocksWithDelay = $derived.by(() => {
   let newInBatch = 0;
@@ -1172,18 +1154,6 @@ function handleRegenerate(): void {
 								No streamed thoughts yet. Tool calls will appear here as they happen.
 							</p>
 						{/if}
-					{:else if walkthroughActivityEntries.length > 0}
-						<div class="walkthrough-activity-stack">
-							{#each walkthroughActivityEntries as entry, entryIdx (isActivityGroup(entry) ? `group-${entry.items[0]?.id ?? entryIdx}` : entry.id)}
-								{#if isActivityGroup(entry)}
-									<ToolActivityGroup
-										items={entry.items}
-										active={entryIdx === walkthroughActivityEntries.length - 1}
-										defaultOpen={false}
-									/>
-								{/if}
-							{/each}
-						</div>
 					{/if}
 				</div>
 			</div>
