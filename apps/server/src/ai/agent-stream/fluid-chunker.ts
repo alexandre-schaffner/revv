@@ -78,9 +78,8 @@ export function splitForFluidStream(text: string, targetLen: number): string[] {
     const stop = Math.min(i + targetLen * 2, text.length);
     let foundBoundary = false;
     for (let j = end; j < stop; j += 1) {
-      if (boundary.test(text[j]!)) {
-        // Include the boundary char so the next chunk starts on a
-        // fresh word — `"hello, "` then `"world"` reads cleanly.
+      const ch = text[j];
+      if (ch !== undefined && boundary.test(ch)) {
         end = j + 1;
         foundBoundary = true;
         break;

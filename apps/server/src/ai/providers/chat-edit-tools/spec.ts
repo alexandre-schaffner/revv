@@ -73,7 +73,7 @@ export interface ChatEditToolSpec<TShape extends z.ZodRawShape> {
   readonly name: string;
   readonly description: string;
   readonly inputSchema: z.ZodObject<TShape>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // biome-ignore lint/suspicious/noExplicitAny: handler input varies per tool in heterogenous array
   readonly handler: ChatEditToolHandler<any>;
 }
 

@@ -219,7 +219,8 @@ export async function walkClaudeMessages(
       const attribution = parentId ?? fallbackParentId;
 
       for (let blockIdx = 0; blockIdx < message.message.content.length; blockIdx += 1) {
-        const block = message.message.content[blockIdx]!;
+        const block = message.message.content[blockIdx];
+        if (!block) continue;
         // Skip text/thinking blocks already streamed via `stream_event`
         // deltas — re-emitting would duplicate every chunk in the
         // assistant bubble. Tool blocks always go through (we only

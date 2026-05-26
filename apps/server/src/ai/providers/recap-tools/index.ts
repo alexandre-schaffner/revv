@@ -62,7 +62,7 @@ export {
   setThemeSummaryHandler,
 };
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// biome-ignore lint/suspicious/noExplicitAny: heterogenous tool spec array
 export const RECAP_TOOL_SPECS: Array<RecapToolSpec<any>> = [
   {
     name: "get_recap_state",
@@ -136,8 +136,7 @@ export function createRecapMcpServer(ctx: RecapToolContext): ReturnType<typeof c
         spec.name,
         spec.description,
         spec.inputSchema.shape,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        async (args: any) => {
+        async (args: Record<string, unknown>) => {
           ctx.toolCalls?.add(spec.name);
           return spec.handler(ctx, args);
         },

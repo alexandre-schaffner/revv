@@ -51,7 +51,7 @@ export type { ChatEditToolResult, ChatWalkthroughEditContext } from "./spec";
 
 // ── Canonical spec list ─────────────────────────────────────────────────────
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// biome-ignore lint/suspicious/noExplicitAny: heterogenous tool spec array
 export const EDIT_TOOL_SPECS: Array<ChatEditToolSpec<any>> = [
   {
     name: "get_walkthrough_for_edit",
