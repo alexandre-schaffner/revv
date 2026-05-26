@@ -350,7 +350,8 @@ detect_platform
 
 _banner
 _hr
-printf "  ${D}Platform${R}  ${B}%s %s${R}\n" "${PLATFORM^}" "$ARCH_LABEL"
+PLATFORM_DISPLAY="$(printf '%s' "$PLATFORM" | tr '[:lower:]' '[:upper:]')"
+printf "  ${D}Platform${R}  ${B}%s %s${R}\n" "$PLATFORM_DISPLAY" "$ARCH_LABEL"
 printf "  ${D}Release${R}   ${B}${RELEASE_TAG}${R}\n"
 _hr
 printf "\n"
