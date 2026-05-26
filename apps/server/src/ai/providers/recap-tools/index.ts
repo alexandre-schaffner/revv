@@ -47,7 +47,6 @@ export type {
   RecapToolContext,
   RecapToolHandler,
   RecapToolResult,
-  RecapToolSpec,
   SetLedeInput,
   SetThemeSummaryInput,
 } from "./spec";

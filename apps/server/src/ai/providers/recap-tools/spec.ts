@@ -91,7 +91,7 @@ export type RecapToolHandler<TInput> = (
   input: TInput,
 ) => Promise<RecapToolResult>;
 
-export interface RecapToolSpec<TShape extends z.ZodRawShape> {
+interface RecapToolSpec<TShape extends z.ZodRawShape> {
   readonly name: string;
   readonly description: string;
   readonly inputSchema: z.ZodObject<TShape>;
