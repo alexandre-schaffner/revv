@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.3](https://github.com/alexandre-schaffner/revv/compare/v0.2.2...v0.2.3) (2026-05-26)
+
+
+### Bug Fixes
+
+* remove biome-ignore comments, use method-bivariant typing instead ([7e4ffd6](https://github.com/alexandre-schaffner/revv/commit/7e4ffd6353f261f1632bf4fd7cb5184669d9362b))
+* resolve CI lint annotations (Node 20 actions, noExplicitAny, noNonNullAssertion) ([b139689](https://github.com/alexandre-schaffner/revv/commit/b139689568edb100e7f7ca5dc4e8cfd75402d808))
+* resolve CI lint annotations (Node 20 actions, noExplicitAny, noNonNullAssertion) ([b4c9d39](https://github.com/alexandre-schaffner/revv/commit/b4c9d39d128515cf5292c17378798a5e46516a5f))
+* stop exporting unused ChatEditToolSpec type ([#86](https://github.com/alexandre-schaffner/revv/issues/86)) ([6da66b9](https://github.com/alexandre-schaffner/revv/commit/6da66b9ceafa4a59ec8050cb253f08948ddd42f8))
+
 ## [0.2.2](https://github.com/alexandre-schaffner/revv/compare/v0.2.1...v0.2.2) (2026-05-26)
 
 
