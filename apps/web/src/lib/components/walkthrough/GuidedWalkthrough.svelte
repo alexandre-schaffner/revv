@@ -59,10 +59,7 @@ import {
   startWalkthrough,
   stopClonePoll,
 } from "$lib/stores/walkthrough.svelte";
-import {
-  type GroupableActivity,
-  isExplorationActivity,
-} from "$lib/utils/activity-groups";
+import { type GroupableActivity, isExplorationActivity } from "$lib/utils/activity-groups";
 import { initHighlighter } from "$lib/utils/code-highlight.svelte";
 import { renderMarkdown } from "$lib/utils/markdown";
 import { authHeaders } from "$lib/utils/session-token";
