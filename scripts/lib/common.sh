@@ -333,8 +333,9 @@ revv_sha256_of() {
 
 install_release_app() {
   local release_tag="$1" app_dir="${2:-}" asset_arch release_json bundle_url bundle_sha
-  local sums_file sums_url bundle_filename bundle_file actual_sha mount_point app_source install_dir installed_app
+  local sums_file sums_url bundle_filename bundle_file actual_sha mount_point app_source install_dir installed_app tmp_app backup_app
 
+  REVV_INSTALLED_APP=""
   [[ -n "$release_tag" ]] || return 1
   case "$(uname -m)" in
     arm64|aarch64) asset_arch="aarch64" ;;
@@ -391,13 +392,53 @@ install_release_app() {
 
   install_dir="${app_dir:-/Applications}"
   [[ -w "$install_dir" ]] || install_dir="$HOME/Applications"
-  mkdir -p "$install_dir"
+  mkdir -p "$install_dir" || {
+    hdiutil detach -quiet "$mount_point" 2>/dev/null || true
+    rm -rf "$mount_point" "$bundle_file"
+    return 1
+  }
   installed_app="$install_dir/$(basename "$app_source")"
-  rm -rf "$installed_app"
-  cp -R "$app_source" "$installed_app"
-  xattr -cr "$installed_app" 2>/dev/null || true
+  tmp_app="${installed_app}.tmp.$$"
+
+  rm -rf "$tmp_app" || {
+    hdiutil detach -quiet "$mount_point" 2>/dev/null || true
+    rm -rf "$mount_point" "$bundle_file"
+    return 1
+  }
+  if ! cp -R "$app_source" "$tmp_app"; then
+    rm -rf "$tmp_app"
+    hdiutil detach -quiet "$mount_point" 2>/dev/null || true
+    rm -rf "$mount_point" "$bundle_file"
+    return 1
+  fi
+  xattr -cr "$tmp_app" 2>/dev/null || true
+
+  backup_app=""
+  if [[ -e "$installed_app" ]]; then
+    backup_app="${installed_app}.backup.$$"
+    if ! rm -rf "$backup_app" || ! mv "$installed_app" "$backup_app"; then
+      rm -rf "$tmp_app"
+      hdiutil detach -quiet "$mount_point" 2>/dev/null || true
+      rm -rf "$mount_point" "$bundle_file"
+      return 1
+    fi
+  fi
+  if ! mv "$tmp_app" "$installed_app"; then
+    rm -rf "$tmp_app"
+    if [[ -n "$backup_app" ]]; then
+      mv "$backup_app" "$installed_app" 2>/dev/null || true
+    fi
+    hdiutil detach -quiet "$mount_point" 2>/dev/null || true
+    rm -rf "$mount_point" "$bundle_file"
+    return 1
+  fi
+  if [[ -n "$backup_app" ]]; then
+    rm -rf "$backup_app" || warn "Installed app, but could not remove backup: $backup_app"
+  fi
+
   hdiutil detach -quiet "$mount_point" 2>/dev/null || true
   rm -rf "$mount_point" "$bundle_file"
+  REVV_INSTALLED_APP="$installed_app"
 }
 
 # ── LaunchAgent plist generator ───────────────────────────────

@@ -116,16 +116,22 @@ if [[ " ${INSTALLER_ARGS[*]} " != *" --help "* && " ${INSTALLER_ARGS[*]} " != *"
      && "${BASH_SOURCE[0]}" != /dev/fd/* \
      && -f "${BASH_SOURCE[0]}" ]]; then
     SELF_PATH="${BASH_SOURCE[0]}"
+    verify_attestation "$SELF_PATH"
   else
     SELF_PATH="$(mktemp)"
     curl -fsSL "https://github.com/${REPO}/releases/download/${RELEASE_TAG}/install.sh" -o "$SELF_PATH" \
       || fail "Could not fetch installer copy for attestation."
-  fi
 
-  verify_attestation "$SELF_PATH"
+    verify_attestation "$SELF_PATH"
 
-  if [[ "${BASH_SOURCE[0]:-}" != "$SELF_PATH" ]]; then
+    rc=0
+    if [[ "$SKIP_VERIFY_FLAG" == "1" ]]; then
+      bash "$SELF_PATH" --skip-verify "${INSTALLER_ARGS[@]}" || rc=$?
+    else
+      bash "$SELF_PATH" "${INSTALLER_ARGS[@]}" || rc=$?
+    fi
     rm -f "$SELF_PATH"
+    exit "$rc"
   fi
 fi
 

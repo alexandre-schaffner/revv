@@ -210,14 +210,6 @@ resolve_target_ref() {
   esac
 }
 
-find_app_fresh() {
-  local candidate
-  for candidate in "${APP_CANDIDATES[@]}" "$HOME/Applications"/Revv*.app /Applications/Revv*.app; do
-    [[ -d "$candidate" ]] && { printf '%s' "$candidate"; return 0; }
-  done
-  return 1
-}
-
 # ── Commands ─────────────────────────────────────────────────
 
 cmd_help() {
@@ -451,7 +443,7 @@ cmd_update() {
   fi
   [[ -n "$old_app" ]] && old_app_dir="$(dirname "$old_app")"
   if install_release_app "$release_tag" "$old_app_dir"; then
-    dest_app="$(find_app_fresh)" || fail "Release bundle installed but no Revv.app was found."
+    dest_app="$REVV_INSTALLED_APP"
     app_name="$(basename "$dest_app")"
     used_prebuilt=1
     success "Installed → $dest_app"

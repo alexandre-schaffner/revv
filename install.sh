@@ -336,14 +336,6 @@ _resolve_install_release_tag() {
   return 1
 }
 
-_find_installed_app() {
-  local candidate
-  for candidate in "$REVV_APP_DIR"/Revv*.app "$HOME/Applications"/Revv*.app /Applications/Revv*.app; do
-    [[ -d "$candidate" ]] && { printf '%s' "$candidate"; return 0; }
-  done
-  return 1
-}
-
 step "Installing pre-built Revv.app"
 release_tag="$(_resolve_install_release_tag || true)"
 if ! install_release_app "$release_tag" "$REVV_APP_DIR"; then
@@ -401,7 +393,7 @@ if ! install_release_app "$release_tag" "$REVV_APP_DIR"; then
   xattr -cr "$dest_app" 2>/dev/null || true
   success "Installed → $dest_app"
 else
-  dest_app="$(_find_installed_app)" || fail "Release bundle installed but no Revv.app was found."
+  dest_app="$REVV_INSTALLED_APP"
   app_name="$(basename "$dest_app")"
   app_process_name="${app_name%.app}"
   dest_app_dir="$(dirname "$dest_app")"
