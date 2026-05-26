@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.2](https://github.com/alexandre-schaffner/revv/compare/v0.3.1...v0.3.2) (2026-05-26)
+
+
+### Bug Fixes
+
+* **installer:** embed full release installer ([1663b22](https://github.com/alexandre-schaffner/revv/commit/1663b2292d3d78d4fff6b471f420a1e998feacb1))
+* **installer:** install server from release script ([f2c8916](https://github.com/alexandre-schaffner/revv/commit/f2c8916c3d64ac1f8942793b6ee58470901462af))
+
 ## [0.3.1](https://github.com/alexandre-schaffner/revv/compare/v0.3.0...v0.3.1) (2026-05-26)
 
 
