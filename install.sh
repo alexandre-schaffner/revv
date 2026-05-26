@@ -350,9 +350,21 @@ _install_prebuilt_app() {
     "https://api.github.com/repos/${REVV_GITHUB_REPO}/releases/tags/${release_tag}" \
     -o "$release_json" || { rm -f "$release_json"; return 1; }
   bundle_url="$(sed -n "s/.*\"browser_download_url\": \"\([^\"]*_${asset_arch}\.dmg\)\".*/\1/p" "$release_json" | head -1)"
-  bundle_sha="$(sed -n "/\"name\": \".*_${asset_arch}\.dmg\"/,/}/ s/.*\"digest\": \"sha256:\([a-fA-F0-9]*\)\".*/\1/p" "$release_json" | head -1)"
+  bundle_sha="$(sed -n "/\"name\": \".*_${asset_arch}\.dmg\"/,/}/ s/.*\"value\": *\"\([a-fA-F0-9]*\)\".*/\1/p" "$release_json" | head -1)"
   rm -f "$release_json"
   [[ -n "$bundle_url" ]] || return 1
+
+  # Fast-path: per-asset digest from GitHub API. Fallback: SHA256SUMS file.
+  if [[ -z "$bundle_sha" ]]; then
+    local sums_file sums_url bundle_filename
+    sums_url="https://github.com/${REVV_GITHUB_REPO}/releases/download/${release_tag}/SHA256SUMS"
+    sums_file="$(mktemp)"
+    if curl -fsSL "$sums_url" -o "$sums_file" 2>/dev/null; then
+      bundle_filename="$(basename "$bundle_url")"
+      bundle_sha="$(awk -v name="$bundle_filename" '$2 == name {print $1}' "$sums_file" | head -1)"
+    fi
+    rm -f "$sums_file"
+  fi
 
   bundle_file="$(mktemp).dmg"
   info "Downloading pre-built Revv.app from ${release_tag} (${asset_arch})"
@@ -364,7 +376,7 @@ _install_prebuilt_app() {
       fail "Downloaded DMG checksum mismatch for ${release_tag}."
     fi
   else
-    warn "Release asset has no SHA256 digest; installing without checksum verification."
+    warn "SHA256SUMS unavailable for ${release_tag}; installing without checksum verification."
   fi
 
   mount_point="$(mktemp -d)"
