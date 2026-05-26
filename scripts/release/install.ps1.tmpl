@@ -247,7 +247,7 @@ function Invoke-VerifyAttestation { param($ScriptPath)
         return
     }
 
-    $bundlePath = [System.IO.Path]::GetTempFileName()
+    $bundlePath = [System.IO.Path]::GetTempFileName() + ".jsonl"
     Start-Spinner "Fetching attestation bundle..."
     try {
         Invoke-WebRequest `

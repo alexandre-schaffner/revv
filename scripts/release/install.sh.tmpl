@@ -259,7 +259,7 @@ verify_attestation() {
     return 0
   fi
 
-  local bundle; bundle="$(mktemp)"
+  local bundle; bundle="$(mktemp).jsonl"
   _spin_start "Fetching attestation bundle..."
   if ! curl -fsSL \
     "https://github.com/${REPO}/releases/download/${RELEASE_TAG}/install.sh.sigstore" \
