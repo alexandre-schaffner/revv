@@ -69,7 +69,7 @@ export type ChatEditToolHandler<TInput> = (
   input: TInput,
 ) => Promise<ChatEditToolResult>;
 
-export interface ChatEditToolSpec<TShape extends z.ZodRawShape> {
+interface ChatEditToolSpec<TShape extends z.ZodRawShape> {
   readonly name: string;
   readonly description: string;
   readonly inputSchema: z.ZodObject<TShape>;
