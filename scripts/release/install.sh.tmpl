@@ -126,9 +126,9 @@ if [[ $# -eq 0 || ( " $* " != *" --help "* && " $* " != *" -h "* ) ]]; then
 
     rc=0
     if [[ "$SKIP_VERIFY_FLAG" == "1" ]]; then
-      bash "$SELF_PATH" --skip-verify "${INSTALLER_ARGS[@]}" || rc=$?
+      bash "$SELF_PATH" --skip-verify "${INSTALLER_ARGS[@]+"${INSTALLER_ARGS[@]}"}" || rc=$?
     else
-      bash "$SELF_PATH" "${INSTALLER_ARGS[@]}" || rc=$?
+      bash "$SELF_PATH" "${INSTALLER_ARGS[@]+"${INSTALLER_ARGS[@]}"}" || rc=$?
     fi
     rm -f "$SELF_PATH"
     exit "$rc"
@@ -136,6 +136,6 @@ if [[ $# -eq 0 || ( " $* " != *" --help "* && " $* " != *" -h "* ) ]]; then
 fi
 
 export REVV_RELEASE_TAG="${REVV_RELEASE_TAG:-$RELEASE_TAG}"
-set -- "${INSTALLER_ARGS[@]}"
+set -- "${INSTALLER_ARGS[@]+"${INSTALLER_ARGS[@]}"}"
 
 # The canonical root install.sh is appended below at release build time.
