@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/alexandre-schaffner/revv/compare/v0.2.1...v0.2.2) (2026-05-26)
+
+
+### Bug Fixes
+
+* **ci:** add GH_REPO env to gh release edit steps ([c64bcc4](https://github.com/alexandre-schaffner/revv/commit/c64bcc4aaa343e21bbc50df3f2179a024a82a9bc))
+
 ## [0.2.1](https://github.com/alexandre-schaffner/revv/compare/v0.2.0...v0.2.1) (2026-05-25)
 
 
