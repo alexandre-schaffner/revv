@@ -104,6 +104,7 @@ jobs:
       - name: Publish draft nightly
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ needs.prep.outputs.tag_name }}
         run: gh release edit "$RELEASE_TAG" --draft=false --prerelease=true
 
