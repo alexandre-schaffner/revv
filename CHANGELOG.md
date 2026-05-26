@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/alexandre-schaffner/revv/compare/v0.3.0...v0.3.1) (2026-05-26)
+
+
+### Bug Fixes
+
+* **installer:** use .jsonl extension for attestation bundle temp file ([f658ce7](https://github.com/alexandre-schaffner/revv/commit/f658ce7868e299efce29641befeae08d5e7b0289))
+
 ## [0.3.0](https://github.com/alexandre-schaffner/revv/compare/v0.2.5...v0.3.0) (2026-05-26)
 
 
