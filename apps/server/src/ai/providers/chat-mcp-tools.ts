@@ -14,7 +14,7 @@
 
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { and, desc, eq, inArray } from "drizzle-orm";
-import { type ZodObject, z } from "zod";
+import { z } from "zod";
 import { commentThreads } from "../../db/schema/comment-threads";
 import { pullRequests } from "../../db/schema/pull-requests";
 import { reviewSessions } from "../../db/schema/review-sessions";
@@ -49,7 +49,7 @@ export type ChatToolHandler<TInput> = (
 export interface ChatToolSpec<TInput> {
   readonly name: string;
   readonly description: string;
-  readonly inputSchema: z.ZodType<TInput>;
+  readonly inputSchema: z.ZodObject<z.ZodRawShape>;
   readonly handler: ChatToolHandler<TInput>;
 }
 
@@ -335,7 +335,7 @@ export function createChatMcpServer(ctx: ChatToolContext): ReturnType<typeof cre
       tool(
         spec.name,
         spec.description,
-        (spec.inputSchema as ZodObject<z.ZodRawShape>).shape ?? {},
+        spec.inputSchema.shape,
         async (args: Record<string, unknown>) => spec.handler(ctx, args),
       ),
     ),

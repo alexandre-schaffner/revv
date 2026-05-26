@@ -73,8 +73,22 @@ export interface ChatEditToolSpec<TShape extends z.ZodRawShape> {
   readonly name: string;
   readonly description: string;
   readonly inputSchema: z.ZodObject<TShape>;
-  // biome-ignore lint/suspicious/noExplicitAny: handler input varies per tool in heterogenous array
-  readonly handler: ChatEditToolHandler<any>;
+  readonly handler: ChatEditToolHandler<z.input<z.ZodObject<TShape>>>;
+}
+
+/**
+ * Non-generic storage type for a heterogenous array of chat-edit tool specs.
+ * Uses method declaration (bivariant checking) so handlers with narrower
+ * input types are assignable to the wider Record<string, unknown> slot.
+ */
+export interface ChatEditToolSpecRecord {
+  readonly name: string;
+  readonly description: string;
+  readonly inputSchema: z.ZodObject<z.ZodRawShape>;
+  handler(
+    ctx: ChatWalkthroughEditContext,
+    input: Record<string, unknown>,
+  ): Promise<ChatEditToolResult>;
 }
 
 // ── Shared content sub-schemas (mirror walkthrough-tool-spec.ts shapes) ─────

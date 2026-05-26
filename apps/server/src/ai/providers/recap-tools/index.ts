@@ -28,6 +28,7 @@ import {
   listOpenPrsSchema,
   type RecapToolContext,
   type RecapToolSpec,
+  type RecapToolSpecRecord,
   setLedeSchema,
   setThemeSummarySchema,
 } from "./spec";
@@ -62,8 +63,7 @@ export {
   setThemeSummaryHandler,
 };
 
-// biome-ignore lint/suspicious/noExplicitAny: heterogenous tool spec array
-export const RECAP_TOOL_SPECS: Array<RecapToolSpec<any>> = [
+export const RECAP_TOOL_SPECS: RecapToolSpecRecord[] = [
   {
     name: "get_recap_state",
     description:
