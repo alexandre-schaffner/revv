@@ -525,14 +525,14 @@ function handleKeydown(e: KeyboardEvent) {
 		color: var(--color-text-muted);
 	}
 
-	.crumb-repo-icon {
+	:global(.crumb-repo-icon) {
 		width: 13px;
 		height: 13px;
 		flex-shrink: 0;
 		color: var(--color-text-muted);
 	}
 
-	.crumb-repo-avatar {
+	:global(.crumb-repo-avatar) {
 		flex-shrink: 0;
 	}
 

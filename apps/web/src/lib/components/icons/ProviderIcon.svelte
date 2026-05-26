@@ -33,5 +33,5 @@ const IconComponent = $derived(provider ? ICON_MAP[provider] : null);
 </script>
 
 {#if IconComponent}
-  <svelte:component this={IconComponent} size={size} class={className} />
+  <IconComponent size={size} class={className} />
 {/if}

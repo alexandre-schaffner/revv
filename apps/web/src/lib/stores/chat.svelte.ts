@@ -227,7 +227,8 @@ export function isRebasingProposed(prId: string): boolean {
 }
 
 export function getSelectedCommitShas(prId: string): Set<string> {
-  return selectedCommitShas.get(prId) ?? new Set();
+  const shas = selectedCommitShas.get(prId);
+  return shas ?? new Set();
 }
 
 export function isCommitSelected(prId: string, sha: string): boolean {
@@ -347,7 +348,8 @@ function setBatchOpInFlight(prId: string, inFlight: boolean): void {
 }
 
 export function toggleCommitSelection(prId: string, sha: string): void {
-  const current = selectedCommitShas.get(prId) ?? new Set<string>();
+  const existing = selectedCommitShas.get(prId);
+  const current = existing ?? new Set<string>();
   const next = new Set(current);
   if (next.has(sha)) {
     next.delete(sha);

@@ -601,7 +601,7 @@ let trackedCount = $derived(getRepositories().length);
 		color: var(--color-accent);
 	}
 
-	.dropdown-avatar {
+	:global(.dropdown-avatar) {
 		flex-shrink: 0;
 		margin-top: 2px;
 	}
@@ -653,7 +653,7 @@ let trackedCount = $derived(getRepositories().length);
 		background: var(--color-bg-secondary);
 	}
 
-	.owner-avatar {
+	:global(.owner-avatar) {
 		flex-shrink: 0;
 		opacity: 0.8;
 	}

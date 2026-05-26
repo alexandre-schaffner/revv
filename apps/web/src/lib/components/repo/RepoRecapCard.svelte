@@ -177,7 +177,7 @@ let ledeHtml = $derived.by(() => {
 		gap: 0.5rem;
 	}
 
-	.recap-card-icon {
+	:global(.recap-card-icon) {
 		color: var(--color-accent);
 		flex-shrink: 0;
 	}

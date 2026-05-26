@@ -113,11 +113,11 @@ const showCloneIndicator = $derived(
 		justify-content: center;
 	}
 
-	.avatar {
+	:global(.avatar) {
 		flex-shrink: 0;
 	}
 
-	.repo-button--active .avatar {
+	:global(.repo-button--active .avatar) {
 		box-shadow: 0 0 0 2px var(--color-bg-secondary), 0 0 0 3.5px var(--color-accent, var(--color-text-primary));
 	}
 

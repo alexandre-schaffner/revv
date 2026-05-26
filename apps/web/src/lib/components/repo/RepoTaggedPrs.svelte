@@ -102,7 +102,7 @@ function handleClick(prId: string) {
 		gap: 0.5rem;
 	}
 
-	.tagged-icon {
+	:global(.tagged-icon) {
 		color: var(--color-text-secondary);
 		flex-shrink: 0;
 	}

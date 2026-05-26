@@ -12,7 +12,7 @@ const DIFF_THEME_KEY = "revv-diff-theme";
 
 let preference = $state<ThemePreference>(readStored(THEME_KEY, "system"));
 let diffPreference = $state<DiffThemePreference>(readStored(DIFF_THEME_KEY, "sync"));
-let _resolved = $state<"light" | "dark">(resolve(preference));
+let _resolved = $derived<"light" | "dark">(resolve(preference));
 
 function readStored<T extends string>(key: string, fallback: T): T {
   if (typeof window === "undefined") return fallback;

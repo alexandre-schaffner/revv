@@ -82,9 +82,10 @@ function handleClick() {
 
 		{#if variant !== 'archived'}
 			{@const pinned = isPrPinned(pr.id)}
-			<button
-				type="button"
-				class="mt-0.5 shrink-0 opacity-0 transition-opacity duration-quick group-hover:opacity-100 {pinned
+			<span
+				role="button"
+				tabindex="0"
+				class="pin-btn mt-0.5 shrink-0 opacity-0 transition-opacity duration-quick group-hover:opacity-100 {pinned
 					? 'opacity-100 text-accent'
 					: 'text-text-muted hover:text-text-secondary'}"
 				onclick={(e) => {
@@ -92,11 +93,19 @@ function handleClick() {
 					if (pinned) unpinPr(pr.id);
 					else pinPr(pr.id);
 				}}
+				onkeydown={(e) => {
+					if (e.key === 'Enter' || e.key === ' ') {
+						e.preventDefault();
+						e.stopPropagation();
+						if (pinned) unpinPr(pr.id);
+						else pinPr(pr.id);
+					}
+				}}
 				aria-label={pinned ? 'Unpin PR' : 'Pin PR'}
 				title={pinned ? 'Unpin' : 'Pin'}
 			>
 				<Pin size={11} aria-hidden="true" class={pinned ? 'fill-current' : ''} />
-			</button>
+			</span>
 		{/if}
 	</button>
 </div>

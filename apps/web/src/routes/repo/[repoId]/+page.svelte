@@ -87,7 +87,7 @@ const repoIdFromUrl = $derived(page.params.repoId ?? "");
 		gap: 16px;
 	}
 
-	.hero-avatar {
+	:global(.hero-avatar) {
 		flex-shrink: 0;
 	}
 
