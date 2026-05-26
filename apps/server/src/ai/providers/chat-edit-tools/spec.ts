@@ -69,13 +69,6 @@ export type ChatEditToolHandler<TInput> = (
   input: TInput,
 ) => Promise<ChatEditToolResult>;
 
-interface ChatEditToolSpec<TShape extends z.ZodRawShape> {
-  readonly name: string;
-  readonly description: string;
-  readonly inputSchema: z.ZodObject<TShape>;
-  readonly handler: ChatEditToolHandler<z.input<z.ZodObject<TShape>>>;
-}
-
 /**
  * Non-generic storage type for a heterogenous array of chat-edit tool specs.
  * Uses method declaration (bivariant checking) so handlers with narrower

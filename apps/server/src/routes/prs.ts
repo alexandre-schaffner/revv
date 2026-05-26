@@ -513,7 +513,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
     try {
       const eligibility = await AppRuntime.runPromise(
         Effect.gen(function* () {
-          const { accountId } = yield* resolveActiveAccount(ctx.session.user.id);
+          yield* resolveActiveAccount(ctx.session.user.id);
           const prContext = yield* PrContextService;
           const github = yield* GitHubService;
           const { pr, repo, token } = yield* prContext.resolveBasic(

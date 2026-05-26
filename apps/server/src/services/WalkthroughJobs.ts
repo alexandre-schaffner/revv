@@ -1261,7 +1261,7 @@ export const WalkthroughJobsLive = Layer.effect(
             .from(account)
             .where(eq(account.id, repoRow.accountId))
             .get();
-          if (!acc || !acc.githubLogin) {
+          if (!acc?.githubLogin) {
             return { accountId: repoRow.accountId, generatedBy: undefined };
           }
           const githubUserId = Number(acc.accountId);

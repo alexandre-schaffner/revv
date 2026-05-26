@@ -54,7 +54,7 @@ function loadCollapsedOwners(): Set<string> {
 let sidebarCollapsed = $state(false);
 let rightPanelOpen = $state(false);
 let addRepoDialogOpen = $state(false);
-let collapseAllSignal = $state(0);
+let _collapseAllSignal = $state(0);
 let sidebarWidth = $state(loadPersistedWidth());
 let rightPanelWidth = $state(loadPersistedRightPanelWidth());
 
@@ -208,7 +208,7 @@ export function openAddRepoDialog(): void {
 }
 
 export function collapseAllRepoGroups(): void {
-  collapseAllSignal++;
+  _collapseAllSignal++;
 }
 
 // ── Sidebar view (PR list ⇄ file tree) ──────────────────

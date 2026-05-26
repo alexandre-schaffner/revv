@@ -96,8 +96,7 @@ export interface ToolSpec<TShape extends z.ZodRawShape> {
   readonly name: string;
   readonly description: string;
   readonly inputSchema: z.ZodObject<TShape>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  readonly handler: WalkthroughToolHandler<any>;
+  readonly handler: WalkthroughToolHandler<unknown>;
 }
 
 // ── Tool input schemas (zod) ─────────────────────────────────────────────────

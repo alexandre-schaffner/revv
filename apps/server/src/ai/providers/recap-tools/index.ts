@@ -27,7 +27,6 @@ import {
   getRepoContextSchema,
   listOpenPrsSchema,
   type RecapToolContext,
-  type RecapToolSpec,
   type RecapToolSpecRecord,
   setLedeSchema,
   setThemeSummarySchema,

@@ -178,7 +178,7 @@ export async function pullLatestCommit(prId: string): Promise<void> {
 
 // --- Session state ---
 let sessionId = $state<string | null>(null);
-let sessionLoading = $state(false);
+let _sessionLoading = $state(false);
 
 function clearSession(): void {
   sessionId = null;
@@ -212,7 +212,7 @@ export async function loadSession(prId: string): Promise<void> {
   }
 
   const seq = ++loadSessionSeq;
-  sessionLoading = true;
+  _sessionLoading = true;
   try {
     const { data, error } = await api.api.reviews.active({ prId }).get();
 
@@ -248,7 +248,7 @@ export async function loadSession(prId: string): Promise<void> {
   } finally {
     // Only clear loading if this is still the active request
     if (seq === loadSessionSeq) {
-      sessionLoading = false;
+      _sessionLoading = false;
     }
   }
 }

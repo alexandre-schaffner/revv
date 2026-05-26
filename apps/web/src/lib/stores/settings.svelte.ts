@@ -10,7 +10,7 @@ import { invalidateSuggestions } from "$lib/stores/suggestions.svelte";
 import { authHeaders } from "$lib/utils/session-token";
 
 let settings = $state<UserSettings | null>(null);
-let isLoading = $state(false);
+let _isLoading = $state(false);
 let modelsByAgent = $state<Record<AiAgent, ModelOption[]>>({
   opencode: [],
   claude: [],
@@ -55,14 +55,14 @@ export function areModelsLoaded(agent: AiAgent): boolean {
 }
 
 export async function fetchSettings(): Promise<void> {
-  isLoading = true;
+  _isLoading = true;
   try {
     const { data } = await api.api.settings.get();
     if (data) settings = data as UserSettings;
   } catch {
     // handle silently
   } finally {
-    isLoading = false;
+    _isLoading = false;
   }
 }
 
@@ -123,7 +123,7 @@ export async function updateSettings(partial: SettingsUpdate): Promise<void> {
 
 export function reset(): void {
   settings = null;
-  isLoading = false;
+  _isLoading = false;
   modelsByAgent = { opencode: [], claude: [] };
   modelsLoadedByAgent = { opencode: false, claude: false };
   modelsInFlight = {};

@@ -42,14 +42,6 @@ function setActiveOrg(login: string | null): void {
   }
 }
 
-function getAvailableOrgs(): Org[] {
-  return availableOrgs;
-}
-
-function getActiveOrg(): string | null {
-  return activeOrg;
-}
-
 export function reset(): void {
   availableOrgs = [];
   activeOrg = null;

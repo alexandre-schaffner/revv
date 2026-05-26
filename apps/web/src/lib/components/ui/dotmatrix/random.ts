@@ -36,5 +36,5 @@ function fnv1a(input: string): number {
 
 export function squareVariantForId(id: string): DotmatrixVariant {
   const idx = fnv1a(id) % CHAT_VARIANT_POOL.length;
-  return CHAT_VARIANT_POOL[idx]!;
+  return CHAT_VARIANT_POOL[idx % CHAT_VARIANT_POOL.length];
 }

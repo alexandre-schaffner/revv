@@ -284,7 +284,7 @@ function patchItem(prId: string, id: string, patch: (item: ChatItem) => ChatItem
   const idx = items.findIndex((i) => i.id === id);
   if (idx === -1) return;
   const next = [...items];
-  next[idx] = patch(items[idx]!);
+  next[idx] = patch(items[idx]);
   setItems(prId, next);
 }
 

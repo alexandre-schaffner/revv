@@ -369,7 +369,7 @@ export function wrapStreamWithPersistence(
             await AppRuntime.runPromise(
               Effect.flatMap(ChatSessionService, (svc) =>
                 svc.finalizeAssistantMessage({
-                  messageId: assistantMessageId!,
+                  messageId: assistantMessageId,
                   error: errorMessage,
                 }),
               ),

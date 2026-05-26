@@ -33,6 +33,11 @@ function rowMajorIndex(row: number, col: number): number {
   return row * N + col;
 }
 
+/** Bounded array access — caller guarantees index is in range. */
+function at<T>(arr: readonly T[], index: number): T {
+  return arr[index % arr.length];
+}
+
 // ── Precomputed path-order tables (each table[idx] = order along the path) ──
 
 const TR_BL_PATH_NORM: number[] = Array.from({ length: N * N }, (_, idx) => {
@@ -413,7 +418,7 @@ function prismBloomConfig(): VariantConfig {
     cycleMs: PRISM_BLOOM_SEQUENCE.length * 354,
     opacity: (step, _idx, row, col) => {
       const seqIdx = step % PRISM_BLOOM_SEQUENCE.length;
-      const frame = PRISM_BLOOM_FRAMES[PRISM_BLOOM_SEQUENCE[seqIdx]!]!;
+      const frame = PRISM_BLOOM_FRAMES[at(PRISM_BLOOM_SEQUENCE, seqIdx)];
       const ch = frame[rowMajorIndex(row, col)] ?? ".";
       if (ch === "x") return 1;
       if (ch === "o") return 0.52;
@@ -465,7 +470,7 @@ export const DOTMATRIX_VARIANTS: Record<DotmatrixVariant, VariantConfig> = {
       const parity = slice % 2;
       return {
         vars: {
-          "--dmx-path": TR_BL_PATH_NORM[idx]!,
+          "--dmx-path": at(TR_BL_PATH_NORM, idx),
           "--dmx-diagonal-parity": parity,
         },
       };
@@ -482,7 +487,7 @@ export const DOTMATRIX_VARIANTS: Record<DotmatrixVariant, VariantConfig> = {
       let op = 0.08;
       for (const s of visits) {
         const d = (step - s + SQUARE2_PATH.length) % SQUARE2_PATH.length;
-        if (d >= 0 && d < SQUARE2_TAIL.length) op = Math.max(op, SQUARE2_TAIL[d]!);
+        if (d >= 0 && d < SQUARE2_TAIL.length) op = Math.max(op, at(SQUARE2_TAIL, d));
       }
       return op;
     },
@@ -493,7 +498,7 @@ export const DOTMATRIX_VARIANTS: Record<DotmatrixVariant, VariantConfig> = {
   "square-3": {
     kind: "css",
     resolve: (idx) => ({
-      vars: { "--dmx-spiral-order": SPIRAL_INWARD_ORDER[idx]! },
+      vars: { "--dmx-spiral-order": at(SPIRAL_INWARD_ORDER, idx) },
     }),
   },
 
@@ -503,14 +508,14 @@ export const DOTMATRIX_VARIANTS: Record<DotmatrixVariant, VariantConfig> = {
     kind: "css",
     resolve: (idx, row, col) => {
       if (row === 2 && col === 2) return { inactive: true };
-      const outer = OUTER_RING_ORDER[idx]!;
+      const outer = at(OUTER_RING_ORDER, idx);
       if (outer >= 0) {
         return {
           className: "dmx-outer-snake",
           vars: { "--dmx-outer-order": outer },
         };
       }
-      const middle = MIDDLE_RING_ORDER[idx]!;
+      const middle = at(MIDDLE_RING_ORDER, idx);
       return {
         className: "dmx-middle-snake",
         vars: { "--dmx-middle-order": middle },
@@ -522,7 +527,7 @@ export const DOTMATRIX_VARIANTS: Record<DotmatrixVariant, VariantConfig> = {
   "square-5": {
     kind: "css",
     resolve: (idx) => ({
-      vars: { "--dmx-diagonal-snake-order": DIAGONAL_SNAKE_ORDER[idx]! },
+      vars: { "--dmx-diagonal-snake-order": at(DIAGONAL_SNAKE_ORDER, idx) },
     }),
   },
 
@@ -543,7 +548,7 @@ export const DOTMATRIX_VARIANTS: Record<DotmatrixVariant, VariantConfig> = {
     cycleMs: 1900,
     opacity: (step, _idx, row, col) => {
       const frame = SQUARE7_SEQUENCE[step] ?? 0;
-      const mask = SQUARE7_MASKS[frame] ?? SQUARE7_MASKS[0]!;
+      const mask = SQUARE7_MASKS[frame] ?? at(SQUARE7_MASKS, 0);
       const ch = mask[rowMajorIndex(row, col)] ?? ".";
       if (ch === "x") return 1;
       if (ch === "o") return 0.42;
@@ -636,7 +641,7 @@ export const DOTMATRIX_VARIANTS: Record<DotmatrixVariant, VariantConfig> = {
     cycleMs: 1550,
     opacity: (step, _idx, row, col) => {
       const frameIdx = SQUARE13_SEQUENCE[step] ?? 0;
-      const mask = SQUARE13_FRAMES[frameIdx] ?? SQUARE13_FRAMES[0]!;
+      const mask = SQUARE13_FRAMES[frameIdx] ?? at(SQUARE13_FRAMES, 0);
       const ch = mask[rowMajorIndex(row, col)] ?? ".";
       if (ch === "x") return 1;
       if (ch === "o") return 0.56;
@@ -760,8 +765,8 @@ export const DOTMATRIX_VARIANTS: Record<DotmatrixVariant, VariantConfig> = {
       if (onLoop >= 0) {
         const forward = (step - onLoop + SQUARE20_LOOP_LEN) % SQUARE20_LOOP_LEN;
         const along = (backHead - onLoop + SQUARE20_LOOP_LEN) % SQUARE20_LOOP_LEN;
-        if (forward < SQUARE20_TAIL.length) op = Math.max(op, SQUARE20_TAIL[forward]!);
-        if (along < SQUARE20_BACK_TAIL.length) op = Math.max(op, SQUARE20_BACK_TAIL[along]!);
+        if (forward < SQUARE20_TAIL.length) op = Math.max(op, at(SQUARE20_TAIL, forward));
+        if (along < SQUARE20_BACK_TAIL.length) op = Math.max(op, at(SQUARE20_BACK_TAIL, along));
       }
       const twistInner = SQUARE20_TWIST_INNER.get(step);
       if (twistInner === idx) op = Math.max(op, 0.52);

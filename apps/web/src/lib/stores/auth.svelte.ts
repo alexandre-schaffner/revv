@@ -36,7 +36,7 @@ let deviceFlow = $state<{
   expiresAt: number;
   host?: string;
 } | null>(null);
-let isPolling = $state(false);
+let _isPolling = $state(false);
 
 export type ConnectedAccount = {
   host: string;
@@ -57,7 +57,7 @@ export type LocalAccount = {
   }>;
 };
 
-let connectedAccounts = $state<ConnectedAccount[]>([]);
+let _connectedAccounts = $state<ConnectedAccount[]>([]);
 let localAccounts = $state<LocalAccount[]>([]);
 let accountJustRemoved = $state(false);
 
@@ -125,7 +125,7 @@ export function setToken(newToken: string): void {
 export function clearToken(): void {
   token = null;
   user = null;
-  connectedAccounts = [];
+  _connectedAccounts = [];
   if (typeof localStorage !== "undefined") {
     localStorage.removeItem("rev_session_token");
   }
@@ -178,7 +178,7 @@ export async function signIn(host?: string): Promise<void> {
 
 function startPolling(): void {
   if (!deviceFlow) return;
-  isPolling = true;
+  _isPolling = true;
   schedulePoll(deviceFlow.interval);
 }
 
@@ -229,7 +229,7 @@ async function poll(): Promise<void> {
 
     if (data.status === "linked") {
       deviceFlow = null;
-      isPolling = false;
+      _isPolling = false;
       await fetchConnectedAccounts();
       await focusWindow();
       return;
@@ -238,7 +238,7 @@ async function poll(): Promise<void> {
     if (data.status === "success" && data.token) {
       setToken(data.token);
       deviceFlow = null;
-      isPolling = false;
+      _isPolling = false;
       await loadUser();
       await focusWindow();
       // Auto-open-add-repo on sign-in used to live here. The onboarding
@@ -421,7 +421,7 @@ export async function fetchConnectedAccounts(): Promise<void> {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (res.ok) {
-      connectedAccounts = (await res.json()) as ConnectedAccount[];
+      _connectedAccounts = (await res.json()) as ConnectedAccount[];
     }
   } catch {
     // best-effort

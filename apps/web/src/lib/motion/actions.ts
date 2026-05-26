@@ -136,7 +136,7 @@ export const bitsAnim: Action<HTMLElement, BitsAnimParams> = (node, params) => {
 
     if (!isOpen && !isClosed) return;
 
-    const preset = isOpen ? current.inPreset : current.outPreset!;
+    const preset = isOpen ? current.inPreset : current.outPreset;
     active = (preset as PresetFn<unknown>)(node, opts);
 
     if (prefersReducedMotion()) {

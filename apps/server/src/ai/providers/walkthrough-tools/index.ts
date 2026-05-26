@@ -498,8 +498,7 @@ export const completeWalkthroughHandler: WalkthroughToolHandler<CompleteWalkthro
  * The full phase-bound tool surface. Both the Claude Agent SDK path and the
  * HTTP MCP route (opencode) consume this array — one source of truth.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const TOOL_SPECS: Array<ToolSpec<any>> = [
+export const TOOL_SPECS: Array<ToolSpec<unknown>> = [
   {
     name: "get_walkthrough_state",
     description:
@@ -596,12 +595,8 @@ export function createWalkthroughMcpServer(
     name: "revv-walkthrough",
     version: "2.0.0",
     tools: TOOL_SPECS.map((spec) =>
-      tool(
-        spec.name,
-        spec.description,
-        spec.inputSchema.shape,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        async (args: any) => spec.handler(ctx, args),
+      tool(spec.name, spec.description, spec.inputSchema.shape, async (args: unknown) =>
+        spec.handler(ctx, args),
       ),
     ),
   });
