@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.5](https://github.com/alexandre-schaffner/revv/compare/v0.3.4...v0.3.5) (2026-05-26)
+
+
+### Bug Fixes
+
+* bash 3.2-safe array expansion in install.sh template ([f16a021](https://github.com/alexandre-schaffner/revv/commit/f16a0214421add45f42859d0590b543846d707d8))
+
 ## [0.3.4](https://github.com/alexandre-schaffner/revv/compare/v0.3.3...v0.3.4) (2026-05-26)
 
 
