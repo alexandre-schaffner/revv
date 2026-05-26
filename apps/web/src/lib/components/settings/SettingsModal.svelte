@@ -111,6 +111,65 @@ async function testCacheConnection(): Promise<void> {
   }
 }
 
+// ── ADC (Application Default Credentials) status ──────────────────────────
+type AdcStatus =
+  | { available: true; source: string; gcloudFound: boolean; gcloudPath: string | null }
+  | {
+      available: false;
+      source: null;
+      gcloudFound: boolean;
+      gcloudPath: string | null;
+      adcPath: string | null;
+    };
+let adcStatus = $state<AdcStatus | null>(null);
+let adcPolling = $state(false);
+
+async function fetchAdcStatus(): Promise<void> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/settings/cache/adc-status`, {
+      headers: await authHeaders(),
+    });
+    if (!res.ok) return;
+    adcStatus = (await res.json()) as AdcStatus;
+  } catch {
+    // ignore
+  }
+}
+
+async function startAdcLogin(): Promise<void> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/settings/cache/adc-login`, {
+      method: "POST",
+      headers: await authHeaders(),
+    });
+    if (!res.ok) return;
+    const data = (await res.json()) as { started: boolean; error?: string };
+    if (!data.started) return;
+    // Poll until ADC becomes available
+    adcPolling = true;
+    const interval = setInterval(async () => {
+      await fetchAdcStatus();
+      if (adcStatus?.available) {
+        clearInterval(interval);
+        adcPolling = false;
+      }
+    }, 2000);
+    // Stop polling after 60 seconds
+    setTimeout(() => {
+      clearInterval(interval);
+      adcPolling = false;
+    }, 60000);
+  } catch {
+    // ignore
+  }
+}
+
+$effect(() => {
+  if (open && getSettings()?.cache?.enabled) {
+    void fetchAdcStatus();
+  }
+});
+
 // ── Cache signing — "Test signing" state ──────────────────────────────────
 // Round-trips a probe message through the local SSH key + the user's published
 // `.keys`. Surfaces the specific signer service error verbatim so a user can
@@ -780,42 +839,51 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 						/>
 					</div>
 
+					<!-- ADC status -->
 					<div class="settings-field">
-						<label class="settings-field-label" for="cache-creds-json">
-							Service-account JSON
-						</label>
-						<textarea
-							id="cache-creds-json"
-							class="settings-textarea"
-							rows={5}
-							placeholder={`{"type":"service_account",...}`}
-							value={getSettings()?.cache?.credentialsJson ?? ''}
-							onchange={(e) => {
-								void updateSettings({
-									cache: { credentialsJson: (e.target as HTMLTextAreaElement).value },
-								});
-							}}
-						></textarea>
-						<p class="settings-field-hint">
-							Stored in plaintext locally. Alternatively set a filesystem path below.
-						</p>
-					</div>
-
-					<div class="settings-field">
-						<label class="settings-field-label" for="cache-creds-path">
-							Service-account JSON path (optional)
-						</label>
-						<Input
-							id="cache-creds-path"
-							type="text"
-							placeholder="/Users/me/.config/revv/cache-sa.json"
-							value={getSettings()?.cache?.credentialsPath ?? ''}
-							oninput={(e) => {
-								void updateSettings({
-									cache: { credentialsPath: (e.target as HTMLInputElement).value },
-								});
-							}}
-						/>
+						{#if adcStatus === null}
+							<div class="flex items-center gap-2">
+								<Loader2 size={12} weight="regular" class="motion-essential-spin text-text-muted" />
+								<span class="text-xs text-text-muted">Checking credentials…</span>
+							</div>
+						{:else if adcStatus.available}
+							<div class="flex items-center gap-2">
+								<span class="status-line-dot status-line-dot--success" aria-hidden="true"></span>
+								<span class="text-xs text-text-secondary">Application Default Credentials ready</span>
+							</div>
+						{:else if adcStatus.gcloudFound}
+							<div class="flex flex-col gap-2">
+								<div class="flex items-center gap-2">
+									<span class="status-line-dot status-line-dot--warning" aria-hidden="true"></span>
+									<span class="text-xs text-text-muted">Not signed in to Google Cloud</span>
+								</div>
+								<Button
+									variant="outline"
+									size="sm"
+									onclick={startAdcLogin}
+									disabled={adcPolling}
+									class="w-fit"
+								>
+									{#if adcPolling}
+										<Loader2 size={14} weight="regular" class="motion-essential-spin" />
+										Waiting for sign-in…
+									{:else}
+										Sign in with Google Cloud
+									{/if}
+								</Button>
+							</div>
+						{:else}
+							<div class="flex flex-col gap-2">
+								<div class="flex items-center gap-2">
+									<span class="status-line-dot status-line-dot--warning" aria-hidden="true"></span>
+									<span class="text-xs text-text-muted">Google Cloud SDK not found</span>
+								</div>
+								<p class="settings-field-hint">
+									Install the <a href="https://cloud.google.com/sdk/docs/install" target="_blank" rel="noopener noreferrer" class="text-accent underline underline-offset-2 hover:text-accent-hover">Google Cloud SDK</a>,
+									then run <code>gcloud auth application-default login</code> in your terminal.
+								</p>
+							</div>
+						{/if}
 					</div>
 
 					<div class="flex items-center gap-3 pt-1">

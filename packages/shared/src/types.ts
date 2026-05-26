@@ -162,10 +162,6 @@ export interface UserSettings {
   cache: {
     enabled: boolean;
     bucket: string;
-    /** Service-account JSON. V1 stores plaintext in DB. */
-    credentialsJson: string;
-    /** Alternative: filesystem path to SA JSON file. */
-    credentialsPath: string;
     uploadsEnabled: boolean;
     downloadsEnabled: boolean;
     /**

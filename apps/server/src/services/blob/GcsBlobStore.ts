@@ -75,20 +75,8 @@ interface ClientCache {
   client: ResolvedClient | null;
 }
 
-function buildConfigKey(s: {
-  enabled: boolean;
-  bucket: string;
-  credentialsJson: string;
-  credentialsPath: string;
-}): string {
-  return [
-    s.enabled ? "1" : "0",
-    s.bucket,
-    // Length-prefix lets us detect "credentials changed" without keeping
-    // the raw secret in a string we'd then have to redact in logs.
-    s.credentialsJson.length > 0 ? `json:${s.credentialsJson.length}` : "json:0",
-    s.credentialsPath,
-  ].join("|");
+function buildConfigKey(s: { enabled: boolean; bucket: string }): string {
+  return [s.enabled ? "1" : "0", s.bucket].join("|");
 }
 
 function gcsErr(prefix: string, cause: unknown): BlobStoreUnavailable {
@@ -157,15 +145,6 @@ export const GcsBlobStoreLive = Layer.scoped(
 
         const mod = yield* loadGcs();
         const opts: Record<string, unknown> = {};
-        if (live.cache.credentialsPath.trim().length > 0) {
-          opts.keyFilename = live.cache.credentialsPath.trim();
-        } else if (live.cache.credentialsJson.trim().length > 0) {
-          try {
-            opts.credentials = JSON.parse(live.cache.credentialsJson);
-          } catch (cause) {
-            return yield* Effect.fail(gcsErr("cache.credentialsJson is not valid JSON", cause));
-          }
-        }
         // Emulator override (REVV_CACHE_API_ENDPOINT). We deliberately
         // do NOT use the SDK's own `STORAGE_EMULATOR_HOST`: with that
         // env var set, `@google-cloud/storage` v7 forces bare-bucket

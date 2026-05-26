@@ -45,27 +45,22 @@ gcloud storage buckets update gs://my-team-revv-cache \
 EOF
 )
 
-# 3. Create a custom role with the minimal permission set.
-gcloud iam roles create walkthroughCacheWriter \
-  --project=YOUR_PROJECT \
-  --title="Walkthrough Cache Writer" \
-  --permissions=storage.objects.get,storage.objects.list,storage.objects.create
-
-# 4. Create a service account per teammate (or one shared SA — team's call;
-#    per-teammate keeps audit logs cleaner).
-gcloud iam service-accounts create alice-revv-cache \
-  --display-name="Alice's Revv cache"
-gcloud projects add-iam-policy-binding YOUR_PROJECT \
-  --member="serviceAccount:alice-revv-cache@YOUR_PROJECT.iam.gserviceaccount.com" \
-  --role="projects/YOUR_PROJECT/roles/walkthroughCacheWriter"
+# 3. Grant your Google account (or your team's Google Group) access to the bucket.
+#    Revv uses Application Default Credentials, so it will authenticate as YOU.
 gcloud storage buckets add-iam-policy-binding gs://my-team-revv-cache \
-  --member="serviceAccount:alice-revv-cache@YOUR_PROJECT.iam.gserviceaccount.com" \
-  --role="projects/YOUR_PROJECT/roles/walkthroughCacheWriter"
-
-# 5. Download the JSON key. Paste into Revv → Settings → Team Cache.
-gcloud iam service-accounts keys create alice-revv-cache.json \
-  --iam-account=alice-revv-cache@YOUR_PROJECT.iam.gserviceaccount.com
+  --member="user:alice@example.com" \
+  --role="roles/storage.objectAdmin"
 ```
+
+### Per-machine setup
+
+Each teammate only needs to sign in once on their machine:
+
+```bash
+gcloud auth application-default login
+```
+
+Then open Revv → Settings → Team Cache, enter the bucket name, and click **Test connection**. Revv probes for the saved credentials automatically — no JSON keys, no copy-paste.
 
 ### Recommended bucket configuration
 
@@ -105,34 +100,42 @@ abstraction (`BlobStore`) doesn't change.
 
 ### Credentials
 
-V1 stores the service-account JSON in the local SQLite settings table as
-plaintext. This matches how `BETTER_AUTH_SECRET` is handled today (plain in
-the OS app-support directory, gated by OS file permissions). A V2 work item
-will move secrets into the OS keychain via `tauri-plugin-stronghold` and
-cover the GitHub token + better-auth secret in the same pass.
+Revv uses Google Cloud's Application Default Credentials (ADC). The user's
+OAuth token is stored by the Google Cloud SDK in the standard OS location
+(`~/.config/gcloud/` on macOS/Linux, `%APPDATA%\gcloud\` on Windows). Revv
+never sees or stores the credential itself — the `@google-cloud/storage`
+SDK reads it directly from that location. This removes the need for manual
+service-account keys entirely.
 
 ## Troubleshooting
 
 ### "Test connection" returns `403 Forbidden`
 
-Your service account doesn't have read access to the bucket. Re-check the
+Your Google account doesn't have access to the bucket. Re-check the
 IAM binding:
 ```bash
 gcloud storage buckets get-iam-policy gs://my-team-revv-cache
 ```
-The custom role must include `storage.objects.get`, `storage.objects.list`,
+Your account needs `storage.objects.get`, `storage.objects.list`,
 and `storage.objects.create`.
 
 ### "Test connection" returns `404 Not Found`
 
 Either the bucket name is wrong, or the project's billing isn't active.
 
+### "Application Default Credentials not found" in Settings
+
+Run `gcloud auth application-default login` in your terminal, then click
+**Test connection** again. If `gcloud` is not installed, download the
+[Google Cloud SDK](https://cloud.google.com/sdk/docs/install) first.
+
 ### Generation always runs locally even when teammates have already cached
 
 Open Settings → Team Cache and verify:
 - **Enable remote cache** is on.
 - **Hydrate from team cache** is on.
-- The bucket name and credentials are right (use "Test connection").
+- The bucket name is right (use "Test connection").
+- Application Default Credentials are detected (green dot in Settings).
 
 If those all look right, check `[remote-cache]` log lines on the local server
 console — failures (corrupt blob, schemaVersion mismatch, sha256 mismatch)

@@ -43,8 +43,6 @@ const DEFAULT_SETTINGS: UserSettings = {
   cache: {
     enabled: false,
     bucket: "",
-    credentialsJson: "",
-    credentialsPath: "",
     uploadsEnabled: true,
     downloadsEnabled: true,
     signing: {
@@ -161,14 +159,6 @@ function coerceCache(value: unknown): UserSettings["cache"] {
   return {
     enabled: r.enabled === true,
     bucket: typeof r.bucket === "string" ? r.bucket : DEFAULT_SETTINGS.cache.bucket,
-    credentialsJson:
-      typeof r.credentialsJson === "string"
-        ? r.credentialsJson
-        : DEFAULT_SETTINGS.cache.credentialsJson,
-    credentialsPath:
-      typeof r.credentialsPath === "string"
-        ? r.credentialsPath
-        : DEFAULT_SETTINGS.cache.credentialsPath,
     uploadsEnabled: r.uploadsEnabled === false ? false : DEFAULT_SETTINGS.cache.uploadsEnabled,
     downloadsEnabled:
       r.downloadsEnabled === false ? false : DEFAULT_SETTINGS.cache.downloadsEnabled,
@@ -216,8 +206,6 @@ function toSettings(row: typeof userSettings.$inferSelect): UserSettings {
     cache: {
       enabled: row.cacheEnabled,
       bucket: row.cacheBucket,
-      credentialsJson: row.cacheCredentialsJson,
-      credentialsPath: row.cacheCredentialsPath,
       uploadsEnabled: row.cacheUploadsEnabled,
       downloadsEnabled: row.cacheDownloadsEnabled,
       signing: coerceCacheSigning(
@@ -258,8 +246,8 @@ function toInsert(s: UserSettings): typeof userSettings.$inferInsert {
     recapAgent: s.recap.agent,
     cacheEnabled: s.cache.enabled,
     cacheBucket: s.cache.bucket,
-    cacheCredentialsJson: s.cache.credentialsJson,
-    cacheCredentialsPath: s.cache.credentialsPath,
+    cacheCredentialsJson: "",
+    cacheCredentialsPath: "",
     cacheUploadsEnabled: s.cache.uploadsEnabled,
     cacheDownloadsEnabled: s.cache.downloadsEnabled,
     updateChannel: s.updateChannel,

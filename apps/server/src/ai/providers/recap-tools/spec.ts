@@ -91,13 +91,6 @@ export type RecapToolHandler<TInput> = (
   input: TInput,
 ) => Promise<RecapToolResult>;
 
-interface RecapToolSpec<TShape extends z.ZodRawShape> {
-  readonly name: string;
-  readonly description: string;
-  readonly inputSchema: z.ZodObject<TShape>;
-  readonly handler: RecapToolHandler<z.input<z.ZodObject<TShape>>>;
-}
-
 /**
  * Non-generic storage type for a heterogenous array of tool specs.
  * Uses method declaration (bivariant checking) so handlers with narrower

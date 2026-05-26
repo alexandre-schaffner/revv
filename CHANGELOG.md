@@ -3,6 +3,10 @@
 ## [0.2.5](https://github.com/alexandre-schaffner/revv/compare/v0.2.4...v0.2.5) (2026-05-26)
 
 
+### Features
+
+* **cache:** switch team cache auth to Application Default Credentials (ADC). Removes manual service-account JSON/path inputs. Adds `GET /api/settings/cache/adc-status` and `POST /api/settings/cache/adc-login` endpoints. UI now probes ADC, shows sign-in state, and can launch `gcloud auth application-default login` directly from Settings.
+
 ### Bug Fixes
 
 * remove unused RecapToolSpec export ([bc8fa02](https://github.com/alexandre-schaffner/revv/commit/bc8fa020a21f13d1aeb4c8993ab00b7af6c42f46))

@@ -74,8 +74,6 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
             t.Object({
               enabled: t.Boolean(),
               bucket: t.String(),
-              credentialsJson: t.String(),
-              credentialsPath: t.String(),
               uploadsEnabled: t.Boolean(),
               downloadsEnabled: t.Boolean(),
               signing: t.Partial(
@@ -128,6 +126,183 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
         ),
       );
       return result;
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  })
+  .get("/cache/adc-status", async (ctx) => {
+    try {
+      return await AppRuntime.runPromise(
+        Effect.sync(() => {
+          const { existsSync } = require("node:fs");
+          const { homedir } = require("node:os");
+          const { join } = require("node:path");
+
+          // 1. Probe for gcloud binary (needed for validation)
+          let gcloudPath: string | null = null;
+          try {
+            gcloudPath = Bun.which("gcloud");
+          } catch {
+            // Bun.which throws if not found
+          }
+          if (!gcloudPath) {
+            const home = homedir();
+            const candidates =
+              process.platform === "win32"
+                ? [
+                    join(
+                      home,
+                      "AppData",
+                      "Local",
+                      "Google",
+                      "Cloud SDK",
+                      "google-cloud-sdk",
+                      "bin",
+                      "gcloud.cmd",
+                    ),
+                    "C:\\Program Files (x86)\\Google\\Cloud SDK\\google-cloud-sdk\\bin\\gcloud.cmd",
+                    "C:\\Program Files\\Google\\Cloud SDK\\google-cloud-sdk\\bin\\gcloud.cmd",
+                  ]
+                : [
+                    join(home, "google-cloud-sdk", "bin", "gcloud"),
+                    "/opt/homebrew/bin/gcloud",
+                    "/usr/local/bin/gcloud",
+                    "/usr/bin/gcloud",
+                  ];
+            for (const c of candidates) {
+              if (existsSync(c)) {
+                gcloudPath = c;
+                break;
+              }
+            }
+          }
+
+          // 2. Check for explicit env override (service-account keys or
+          // manually-set paths). We don't validate these with gcloud because
+          // service-account JSON keys don't work with `application-default
+          // print-access-token`; we trust the explicit configuration.
+          const envPath = process.env.GOOGLE_APPLICATION_CREDENTIALS?.trim();
+          if (envPath && envPath.length > 0 && existsSync(envPath)) {
+            return {
+              available: true,
+              source: "env",
+              gcloudFound: gcloudPath !== null,
+              gcloudPath: gcloudPath ?? null,
+              adcPath: envPath,
+            };
+          }
+
+          // 3. Platform-dependent default ADC path
+          const home = homedir();
+          let adcPath: string;
+          if (process.platform === "win32") {
+            const appData = process.env.APPDATA;
+            adcPath = appData
+              ? join(appData, "gcloud", "application_default_credentials.json")
+              : "";
+          } else {
+            adcPath = join(home, ".config", "gcloud", "application_default_credentials.json");
+          }
+
+          const adcExists = adcPath.length > 0 && existsSync(adcPath);
+
+          // Validate by asking gcloud to print an access token.
+          // File-existence alone isn't enough: `gcloud auth revoke` doesn't
+          // delete application_default_credentials.json, so the stale file
+          // would still report "ready".
+          function isAdcValid(): boolean {
+            if (!gcloudPath) return adcExists; // can't validate, fall back to file check
+            try {
+              const { spawnSync } = require("node:child_process");
+              const result = spawnSync(
+                gcloudPath,
+                ["auth", "application-default", "print-access-token"],
+                { timeout: 5000, stdio: ["ignore", "pipe", "pipe"] },
+              );
+              return result.status === 0;
+            } catch {
+              return false;
+            }
+          }
+
+          return {
+            available: adcExists && isAdcValid(),
+            source: adcExists ? "default" : null,
+            gcloudFound: gcloudPath !== null,
+            gcloudPath: gcloudPath ?? null,
+            adcPath: adcPath.length > 0 ? adcPath : null,
+          };
+        }),
+      );
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  })
+  .post("/cache/adc-login", async (ctx) => {
+    try {
+      return await AppRuntime.runPromise(
+        Effect.sync(() => {
+          let gcloudPath: string | null = null;
+          try {
+            gcloudPath = Bun.which("gcloud");
+          } catch {
+            // fall through
+          }
+          if (!gcloudPath) {
+            const { homedir } = require("node:os");
+            const { join } = require("node:path");
+            const { existsSync } = require("node:fs");
+            const home = homedir();
+            const candidates =
+              process.platform === "win32"
+                ? [
+                    join(
+                      home,
+                      "AppData",
+                      "Local",
+                      "Google",
+                      "Cloud SDK",
+                      "google-cloud-sdk",
+                      "bin",
+                      "gcloud.cmd",
+                    ),
+                    "C:\\Program Files (x86)\\Google\\Cloud SDK\\google-cloud-sdk\\bin\\gcloud.cmd",
+                    "C:\\Program Files\\Google\\Cloud SDK\\google-cloud-sdk\\bin\\gcloud.cmd",
+                  ]
+                : [
+                    join(home, "google-cloud-sdk", "bin", "gcloud"),
+                    "/opt/homebrew/bin/gcloud",
+                    "/usr/local/bin/gcloud",
+                    "/usr/bin/gcloud",
+                  ];
+            for (const c of candidates) {
+              if (existsSync(c)) {
+                gcloudPath = c;
+                break;
+              }
+            }
+          }
+
+          if (!gcloudPath) {
+            return {
+              started: false,
+              error: "gcloud CLI not found. Install the Google Cloud SDK first.",
+            };
+          }
+
+          const proc = Bun.spawn([gcloudPath, "auth", "application-default", "login"], {
+            detached: true,
+            stdio: ["ignore", "ignore", "ignore"],
+          });
+
+          // Unref so the server doesn't wait for the child to exit
+          if (typeof proc.unref === "function") {
+            proc.unref();
+          }
+
+          return { started: true, pid: proc.pid };
+        }),
+      );
     } catch (e) {
       return handleAppError(e, ctx);
     }
