@@ -25,7 +25,7 @@ import {
   updateIssueHandler,
   updateRatingHandler,
 } from "./review-handlers";
-import type { ChatEditToolSpec } from "./spec";
+import type { ChatEditToolSpecRecord } from "./spec";
 import {
   addBlockSchema,
   addIssueCommentEditSchema,
@@ -51,8 +51,7 @@ export type { ChatEditToolResult, ChatWalkthroughEditContext } from "./spec";
 
 // ── Canonical spec list ─────────────────────────────────────────────────────
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const EDIT_TOOL_SPECS: Array<ChatEditToolSpec<any>> = [
+export const EDIT_TOOL_SPECS: ChatEditToolSpecRecord[] = [
   {
     name: "get_walkthrough_for_edit",
     description:

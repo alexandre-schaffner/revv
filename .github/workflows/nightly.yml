@@ -43,7 +43,7 @@ jobs:
     name: Quality gates
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
@@ -68,7 +68,7 @@ jobs:
       tag_name: ${{ steps.tag.outputs.tag_name }}
       short_sha: ${{ steps.tag.outputs.short_sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Push per-SHA tag
         id: tag

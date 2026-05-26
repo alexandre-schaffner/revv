@@ -95,8 +95,19 @@ export interface RecapToolSpec<TShape extends z.ZodRawShape> {
   readonly name: string;
   readonly description: string;
   readonly inputSchema: z.ZodObject<TShape>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  readonly handler: RecapToolHandler<any>;
+  readonly handler: RecapToolHandler<z.input<z.ZodObject<TShape>>>;
+}
+
+/**
+ * Non-generic storage type for a heterogenous array of tool specs.
+ * Uses method declaration (bivariant checking) so handlers with narrower
+ * input types are assignable to the wider Record<string, unknown> slot.
+ */
+export interface RecapToolSpecRecord {
+  readonly name: string;
+  readonly description: string;
+  readonly inputSchema: z.ZodObject<z.ZodRawShape>;
+  handler(ctx: RecapToolContext, input: Record<string, unknown>): Promise<RecapToolResult>;
 }
 
 // ── Source bundle: the structured input the agent sees ───────────────────────

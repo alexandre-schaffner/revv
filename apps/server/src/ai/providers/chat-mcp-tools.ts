@@ -49,7 +49,7 @@ export type ChatToolHandler<TInput> = (
 export interface ChatToolSpec<TInput> {
   readonly name: string;
   readonly description: string;
-  readonly inputSchema: z.ZodType<TInput>;
+  readonly inputSchema: z.ZodObject<z.ZodRawShape>;
   readonly handler: ChatToolHandler<TInput>;
 }
 
@@ -335,10 +335,8 @@ export function createChatMcpServer(ctx: ChatToolContext): ReturnType<typeof cre
       tool(
         spec.name,
         spec.description,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (spec.inputSchema as any).shape ?? {},
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        async (args: any) => spec.handler(ctx, args),
+        spec.inputSchema.shape,
+        async (args: Record<string, unknown>) => spec.handler(ctx, args),
       ),
     ),
   });

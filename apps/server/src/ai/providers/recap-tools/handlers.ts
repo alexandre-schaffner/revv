@@ -465,8 +465,11 @@ export const completeRecapHandler: RecapToolHandler<CompleteRecapInput> = async 
   // not used for correctness.
   const allBundlePrs = [...ctx.sourceBundle.prs, ...ctx.sourceBundle.openPrs];
   const sourceWalkthroughIds = allBundlePrs
-    .filter((p) => sourcePrIds.includes(p.id) && p.walkthrough)
-    .map((p) => p.walkthrough!.id);
+    .filter(
+      (p): p is typeof p & Record<"walkthrough", NonNullable<typeof p.walkthrough>> =>
+        sourcePrIds.includes(p.id) && !!p.walkthrough,
+    )
+    .map((p) => p.walkthrough.id);
 
   ctx.db
     .update(projectRecaps)

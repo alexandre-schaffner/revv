@@ -28,6 +28,7 @@ import {
   listOpenPrsSchema,
   type RecapToolContext,
   type RecapToolSpec,
+  type RecapToolSpecRecord,
   setLedeSchema,
   setThemeSummarySchema,
 } from "./spec";
@@ -62,8 +63,7 @@ export {
   setThemeSummaryHandler,
 };
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const RECAP_TOOL_SPECS: Array<RecapToolSpec<any>> = [
+export const RECAP_TOOL_SPECS: RecapToolSpecRecord[] = [
   {
     name: "get_recap_state",
     description:
@@ -136,8 +136,7 @@ export function createRecapMcpServer(ctx: RecapToolContext): ReturnType<typeof c
         spec.name,
         spec.description,
         spec.inputSchema.shape,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        async (args: any) => {
+        async (args: Record<string, unknown>) => {
           ctx.toolCalls?.add(spec.name);
           return spec.handler(ctx, args);
         },

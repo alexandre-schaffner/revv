@@ -63,7 +63,8 @@ function handleQuestionReplied(
   const answers: Record<string, ReadonlyArray<string>> = {};
   if (original) {
     for (let i = 0; i < original.length; i += 1) {
-      const q = original[i]!;
+      const q = original[i];
+      if (!q) continue;
       answers[q.question] = r.answers[i] ?? [];
     }
     lastQuestionsByRequestId.delete(r.requestID);
