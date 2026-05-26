@@ -233,3 +233,13 @@ New agent subsystems must mirror this architecture: durable `*_jobs` table with 
 phase enum + `resumeAttempts`, MCP tool surface with phase preconditions, orchestrator
 owns lifecycle, resume-on-boot. If you find yourself adding in-memory state that couldn't
 survive a `kill -9`, stop — you're building on sand.
+
+## Operational Reminders
+
+Before concluding any task that touches code, **always run the full CI pipeline locally** and ensure it passes:
+
+```bash
+bun run typecheck && bun run lint && bun run knip && bun run build
+```
+
+Do not consider a task complete while any of these steps fail. Fix lint errors, unused exports, type errors, and build failures before committing or pushing.
