@@ -268,7 +268,7 @@ function onRightHandleDblClick(): void {
 
 	<main class="main-area" bind:this={mainEl}>
 		{#if pr && isReviewRoute && !isSettingsRoute}
-			<div class="main-tab-bar">
+			<div class="tabs-float">
 				<FloatingTabs
 					{activeTab}
 					onTabChange={setActiveTab}
@@ -477,26 +477,6 @@ function onRightHandleDblClick(): void {
 		opacity: var(--vignette-opacity, 0);
 		pointer-events: none;
 		z-index: 2;
-	}
-
-	/* Tabs float over content — no background, no flex space reservation.
-	   The pill already has backdrop-filter so content scrolling beneath
-	   shows through naturally. pointer-events passthrough on the wrapper
-	   so clicks reach content in the transparent zone around the pill. */
-	.main-tab-bar {
-		position: absolute;
-		top: 0;
-		left: 0;
-		right: 0;
-		z-index: 10;
-		display: flex;
-		justify-content: center;
-		padding: 10px 0 8px;
-		pointer-events: none;
-	}
-
-	.main-tab-bar :global(*) {
-		pointer-events: auto;
 	}
 
 	.main-content {

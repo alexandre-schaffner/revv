@@ -1014,30 +1014,19 @@ diffs-container {
 }
 
 /* ──────────────────────────────────────────────────────────
-   Floating tabs bar — top-anchored, centred between sidebar
-   and optional right panel.
-   top = topbar height + island margin + pill padding-top (10px).
-   Non-Tauri: 28 + 8 + 10 = 46px.  Tauri: 30 + 8 + 10 = 48px.
+   Floating tabs bar — top-anchored, centred in the main pane.
    ────────────────────────────────────────────────────────── */
 .tabs-float {
-  position: fixed;
-  top: calc(var(--topbar-height) + var(--spacing-island) + 10px);
+  position: absolute;
+  top: 0;
   left: 0;
   right: 0;
   display: flex;
   justify-content: center;
-  z-index: 20;
+  padding: 10px 0 8px;
+  z-index: 10;
   pointer-events: none;
-  /* GPU-composited slide. The inline `transform: translateX(...)` from the
-     route shifts the centre of the pill row to match the visible main area
-     as the sidebar / right panel toggle. Animating `left`/`right` here would
-     force per-frame paint instead. */
-  transition: transform var(--duration-smooth) var(--ease-out-expo);
-  will-change: transform;
 }
 .tabs-float * {
   pointer-events: auto;
-}
-html.tauri .tabs-float {
-  top: calc(22px + var(--spacing-island) * 2 + 10px);
 }
