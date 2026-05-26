@@ -35,9 +35,9 @@ curl -fsSL https://github.com/alexandre-schaffner/revv/releases/latest/download/
 The installer:
 
 1. Verifies its own Sigstore attestation (requires `gh` CLI or auto-bootstraps `cosign`)
-2. Downloads the pre-built `Revv.app` DMG for your architecture
-3. Verifies the bundle SHA256 checksum
-4. Installs `Revv.app` to `/Applications`
+2. Installs the pre-built `Revv.app` for your architecture
+3. Installs the local API server LaunchAgent on `http://localhost:45678`
+4. Installs the `revv` management CLI
 
 **Requires macOS 10.15 (Catalina) or later.**
 

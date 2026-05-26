@@ -2,8 +2,9 @@
 # ──────────────────────────────────────────────────────────────
 # Revv @@REVV_VERSION@@ — Release Installer
 #
-# Downloads and installs the pre-built Revv bundle for your
-# platform. This script was generated for release @@RELEASE_TAG@@.
+# Verifies this release installer, then hands off to the full Revv
+# installer for this tag. The full installer installs Revv.app plus
+# the local API server LaunchAgent and management CLI.
 #
 # Usage:
 #   # Recommended — verify before running:
@@ -380,73 +381,17 @@ fi
 
 printf "\n"
 
-TMPDIR_BUNDLE="$(mktemp -d)"
-cleanup() { rm -rf "$TMPDIR_BUNDLE"; }
+FULL_INSTALLER="$(mktemp)"
+cleanup() { rm -f "$FULL_INSTALLER"; }
 trap cleanup EXIT
 
-case "$PLATFORM" in
-  macos)
-    if [[ "$ARCH" == "arm64" ]]; then
-      BUNDLE_URL="$URL_DMG_ARM64"; BUNDLE_SHA="$SHA_DMG_ARM64"
-      BUNDLE_FILE="${TMPDIR_BUNDLE}/revv-arm64.dmg"; BUNDLE_LABEL="Revv.app (arm64)"
-    else
-      BUNDLE_URL="$URL_DMG_X64"; BUNDLE_SHA="$SHA_DMG_X64"
-      BUNDLE_FILE="${TMPDIR_BUNDLE}/revv-x64.dmg"; BUNDLE_LABEL="Revv.app (x64)"
-    fi
+_info "Fetching full installer for ${RELEASE_TAG}..."
+FULL_INSTALLER_URL="https://raw.githubusercontent.com/${REPO}/${RELEASE_TAG}/install.sh"
+curl -fsSL "$FULL_INSTALLER_URL" -o "$FULL_INSTALLER" \
+  || _fail "Could not fetch full installer from ${FULL_INSTALLER_URL}"
+chmod +x "$FULL_INSTALLER"
 
-    download_with_progress "$BUNDLE_URL" "$BUNDLE_FILE" "$BUNDLE_LABEL"
-    verify_sha "$BUNDLE_FILE" "$BUNDLE_SHA"
-
-    _spin_start "Installing Revv.app..."
-    MOUNT_POINT="$(mktemp -d)"
-    hdiutil attach -quiet -nobrowse -mountpoint "$MOUNT_POINT" "$BUNDLE_FILE"
-    INSTALL_DIR="$REVV_APP_DIR"
-    [[ -w "$INSTALL_DIR" ]] || INSTALL_DIR="$HOME/Applications"
-    mkdir -p "$INSTALL_DIR"
-    cp -R "$MOUNT_POINT"/*.app "$INSTALL_DIR/"
-    hdiutil detach -quiet "$MOUNT_POINT"
-    rm -rf "$MOUNT_POINT"
-    _spin_stop "ok"
-    ;;
-
-  linux)
-    BUNDLE_URL="$URL_DEB"; BUNDLE_SHA="$SHA_DEB"
-    BUNDLE_FILE="${TMPDIR_BUNDLE}/revv.deb"; BUNDLE_LABEL="revv (amd64 .deb)"
-
-    download_with_progress "$BUNDLE_URL" "$BUNDLE_FILE" "$BUNDLE_LABEL"
-    verify_sha "$BUNDLE_FILE" "$BUNDLE_SHA"
-
-    _spin_start "Installing revv.deb..."
-    command -v dpkg >/dev/null 2>&1 || _fail "dpkg not found."
-    sudo dpkg -i "$BUNDLE_FILE" >/dev/null 2>&1
-    _spin_stop "ok"
-    ;;
-
-  *) _fail "Unsupported platform: $PLATFORM" ;;
-esac
-
-# ── Success summary ───────────────────────────────────────────
-printf "\n"
-_hr
-printf "\n"
-printf "  ${G}${B}✓  Revv ${REVV_VERSION} is installed!${R}\n"
-printf "\n"
-
-if [[ "$PLATFORM" == "macos" ]]; then
-  printf "  ${D}▸${R}  Open      ${B}open \"${INSTALL_DIR}\"${R}\n"
-  printf "\n"
-  printf "  ${D}▸${R}  Verify    ${D}gh attestation verify install.sh \\${R}\n"
-  printf "               ${D}  --repo %s${R}\n" "$REPO"
-  printf "\n"
-  printf "  ${Y}⚠${R}  Gatekeeper warning expected until Apple Developer ID\n"
-  printf "     signing lands. Right-click → Open to bypass.\n"
-else
-  printf "  ${D}▸${R}  Launch    ${B}revv${R}  (or search your app launcher)\n"
-  printf "\n"
-  printf "  ${D}▸${R}  Verify    ${D}gh attestation verify install.sh \\${R}\n"
-  printf "               ${D}  --repo %s${R}\n" "$REPO"
-fi
-
-printf "\n"
-_hr
-printf "\n"
+export REVV_RELEASE_TAG="$RELEASE_TAG"
+_info "Continuing with full install: app, API server, LaunchAgent, and CLI"
+bash "$FULL_INSTALLER"
+exit $?
