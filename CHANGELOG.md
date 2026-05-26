@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.3](https://github.com/alexandre-schaffner/revv/compare/v0.3.2...v0.3.3) (2026-05-26)
+
+
+### Bug Fixes
+
+* **installer:** harden verified install flow ([99e6f78](https://github.com/alexandre-schaffner/revv/commit/99e6f78a31e97d2ed1405f0c68312a17855c38c9))
+* **web:** resolve build warnings ([ab5117a](https://github.com/alexandre-schaffner/revv/commit/ab5117a9b905691b08f7c4c9daff7cc7cd484e83))
+
 ## [0.3.2](https://github.com/alexandre-schaffner/revv/compare/v0.3.1...v0.3.2) (2026-05-26)
 
 
