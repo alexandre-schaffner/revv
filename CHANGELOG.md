@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.0](https://github.com/alexandre-schaffner/revv/compare/v0.2.5...v0.3.0) (2026-05-26)
+
+
+### Features
+
+* **cache:** switch team cache auth to Application Default Credentials ([78a744a](https://github.com/alexandre-schaffner/revv/commit/78a744a1e2967e2ee173176c85d08d2eb1d3e727))
+
+
+### Bug Fixes
+
+* **installer:** replace bash 4+ uppercase expansion for macOS 3.2 compat ([1bd1d22](https://github.com/alexandre-schaffner/revv/commit/1bd1d2258dc1c61085d870cf5d47f3492128d25e))
+
 ## [0.2.5](https://github.com/alexandre-schaffner/revv/compare/v0.2.4...v0.2.5) (2026-05-26)
 
 
