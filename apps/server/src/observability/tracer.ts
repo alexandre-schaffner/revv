@@ -10,7 +10,7 @@
 // receives every span that Effect.withSpan creates, plus any manual OTel
 // spans from non-Effect code (e.g. chat-opencode.ts).
 
-import { NodeSdk } from "@effect/opentelemetry";
+import * as NodeSdk from "@effect/opentelemetry/NodeSdk";
 import { ExportResultCode, hrTimeToMilliseconds } from "@opentelemetry/core";
 import type { ReadableSpan, SpanExporter } from "@opentelemetry/sdk-trace-base";
 import { BatchSpanProcessor, ConsoleSpanExporter } from "@opentelemetry/sdk-trace-base";
