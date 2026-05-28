@@ -31,29 +31,29 @@ sha256_of() {
 }
 
 download_cosign() {
-  local dir="$1" version="v2.4.3" url sha_url expected actual bin
+  local dir="$1" version="v2.4.3" asset url checksums_url expected actual bin
   bin="$dir/cosign"
 
   case "$(uname -s)-$(uname -m)" in
     Linux-x86_64)
-      url="https://github.com/sigstore/cosign/releases/download/${version}/cosign-linux-amd64"
-      sha_url="https://github.com/sigstore/cosign/releases/download/${version}/cosign-linux-amd64.sha256"
+      asset="cosign-linux-amd64"
       ;;
     Darwin-arm64)
-      url="https://github.com/sigstore/cosign/releases/download/${version}/cosign-darwin-arm64"
-      sha_url="https://github.com/sigstore/cosign/releases/download/${version}/cosign-darwin-arm64.sha256"
+      asset="cosign-darwin-arm64"
       ;;
     Darwin-x86_64)
-      url="https://github.com/sigstore/cosign/releases/download/${version}/cosign-darwin-amd64"
-      sha_url="https://github.com/sigstore/cosign/releases/download/${version}/cosign-darwin-amd64.sha256"
+      asset="cosign-darwin-amd64"
       ;;
     *) return 1 ;;
   esac
+  url="https://github.com/sigstore/cosign/releases/download/${version}/${asset}"
+  checksums_url="https://github.com/sigstore/cosign/releases/download/${version}/cosign_checksums.txt"
 
   info "gh CLI not found; bootstrapping cosign ${version}" >&2
   curl -fsSL "$url" -o "$bin"
   chmod +x "$bin"
-  expected="$(curl -fsSL "$sha_url" | awk '{print $1}')"
+  expected="$(curl -fsSL "$checksums_url" | awk -v asset="$asset" '$2 == asset || $2 == "./" asset { print $1; found = 1; exit } END { if (!found) exit 1 }')" \
+    || { rm -f "$bin"; fail "Could not find cosign checksum for ${asset}."; }
   actual="$(sha256_of "$bin")"
   [[ "$actual" == "$expected" ]] || fail "cosign checksum mismatch."
   printf '%s' "$bin"
