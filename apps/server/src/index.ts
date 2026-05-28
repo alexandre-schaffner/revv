@@ -1,5 +1,4 @@
 import { cors } from "@elysiajs/cors";
-import { API_PORT } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia } from "elysia";
 import { auth } from "./auth";
@@ -41,8 +40,8 @@ import { acquireSingleInstance } from "./singleInstance";
 // Acquire a PID file keyed on the DB path so dev (revv-dev.db) and prod
 // (revv.db) environments stay independent.  If a stale instance is found it
 // is SIGTERM'd (then SIGKILL'd after 3 s) before we bind the port.
-const port = Number(process.env.PORT) || API_PORT;
-const releasePidFile = acquireSingleInstance(`${serverEnv.dbPath}.pid`);
+const port = serverEnv.port;
+const releasePidFile = acquireSingleInstance(`${serverEnv.dbPath}.${serverEnv.channel}.pid`);
 
 logError("server", `starting on port ${port}`);
 
@@ -120,6 +119,8 @@ const app = new Elysia()
   .use(mcpChatContextRoute)
   .get("/api/health", () => ({
     status: "ok" as const,
+    channel: serverEnv.channel,
+    port,
     timestamp: new Date().toISOString(),
   }))
   .listen({

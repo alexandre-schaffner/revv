@@ -4,7 +4,14 @@
     "dev": {
       "persistent": true,
       "cache": false,
-      "passThroughEnv": ["PORT", "REVV_DB_PATH", "REVV_CLONE_DIR", "VITE_API_PORT"]
+      "passThroughEnv": [
+        "PORT",
+        "REVV_CHANNEL",
+        "REVV_DB_PATH",
+        "REVV_CLONE_DIR",
+        "VITE_REVV_CHANNEL",
+        "VITE_API_PORT"
+      ]
     },
     "build": {
       "dependsOn": ["^build"],

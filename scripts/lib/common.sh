@@ -586,6 +586,10 @@ write_launch_agent_plist() {
         <string>$HOME/.bun/bin:$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
         <key>HOME</key>
         <string>$HOME</string>
+        <key>REVV_CHANNEL</key>
+        <string>prod</string>
+        <key>PORT</key>
+        <string>45678</string>
         <key>REVV_CLAUDE_BIN</key>
         <string>$claude_bin</string>
         <key>REVV_OPENCODE_BIN</key>

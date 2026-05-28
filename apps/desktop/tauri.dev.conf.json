@@ -1,0 +1,21 @@
+{
+  "productName": "Revv Dev",
+  "identifier": "com.revv.desktop.dev",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Revv Dev",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 600,
+        "decorations": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "resizable": true,
+        "visible": false
+      }
+    ]
+  }
+}

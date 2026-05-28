@@ -2,7 +2,6 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { dirname, join } from "node:path";
-import { API_PORT } from "@revv/shared";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { bearer } from "better-auth/plugins";
@@ -54,16 +53,18 @@ function loadOrCreateAuthSecret(): string {
 function authKeyPath(): string {
   const home = homedir();
   const plat = platform();
+  const appDir = serverEnv.channel === "dev" ? "Revv Dev" : "Revv";
+  const xdgDir = serverEnv.channel === "dev" ? "revv-dev" : "revv";
   if (plat === "darwin") {
-    return join(home, "Library", "Application Support", "Revv", "auth.key");
+    return join(home, "Library", "Application Support", appDir, "auth.key");
   }
   if (plat === "win32") {
     const appData = process.env.APPDATA ?? join(home, "AppData", "Roaming");
-    return join(appData, "Revv", "auth.key");
+    return join(appData, appDir, "auth.key");
   }
   // XDG on Linux / other POSIX.
   const xdg = process.env.XDG_DATA_HOME ?? join(home, ".local", "share");
-  return join(xdg, "revv", "auth.key");
+  return join(xdg, xdgDir, "auth.key");
 }
 
 const db = createDb();
@@ -71,7 +72,7 @@ const db = createDb();
 export { db };
 
 export const auth = betterAuth({
-  baseURL: `http://localhost:${API_PORT}`,
+  baseURL: `http://localhost:${serverEnv.port}`,
   secret: loadOrCreateAuthSecret(),
   database: drizzleAdapter(db, {
     provider: "sqlite",

@@ -23,30 +23,30 @@ install-deps: ## Install project dependencies only (skip tool checks)
 
 # Dev env: use a different port/db/clone-dir so dev doesn't clash with the
 # installed (production) Revv instance running in the background.
-DEV_ENV = PORT=45679 REVV_DB_PATH=./revv-dev.db REVV_CLONE_DIR=$$HOME/.revv/repos-dev VITE_API_PORT=45679 REV_DEBUG=1
+DEV_ENV = REVV_CHANNEL=dev PORT=45679 REVV_DB_PATH=./revv-dev.db REVV_CLONE_DIR=$$HOME/.revv/repos-dev VITE_REVV_CHANNEL=dev VITE_API_PORT=45679 REV_DEBUG=1
 
 dev: kill-server ## Start all services in development mode
 	$(DEV_ENV) bun run dev
 
 dev-web: ## Start only the web frontend (port 5173)
-	VITE_API_PORT=45679 bun run dev:web
+	VITE_REVV_CHANNEL=dev VITE_API_PORT=45679 bun run dev:web
 
 dev-server: kill-server ## Start only the API server (port 45679)
-	REV_DEBUG=1 PORT=45679 REVV_DB_PATH=./revv-dev.db REVV_CLONE_DIR=$$HOME/.revv/repos-dev bun run dev:server
+	REV_DEBUG=1 REVV_CHANNEL=dev PORT=45679 REVV_DB_PATH=./revv-dev.db REVV_CLONE_DIR=$$HOME/.revv/repos-dev bun run dev:server
 
 dev-desktop: kill-server ## Start the Tauri desktop app in dev mode
 	$(DEV_ENV) bun run dev:desktop
 
 kill-server: ## Kill any stale dev server processes (uses PID files; safe to run at any time)
-	@if [ -f apps/server/revv-dev.db.pid ]; then \
-	  pid=$$(cat apps/server/revv-dev.db.pid 2>/dev/null); \
+	@if [ -f apps/server/revv-dev.db.dev.pid ]; then \
+	  pid=$$(cat apps/server/revv-dev.db.dev.pid 2>/dev/null); \
 	  if [ -n "$$pid" ] && kill -0 "$$pid" 2>/dev/null; then \
 	    printf "[kill-server] killing stale dev server (PID $$pid)…\n"; \
 	    kill "$$pid" 2>/dev/null || true; \
 	    sleep 1; \
 	    kill -9 "$$pid" 2>/dev/null || true; \
 	  fi; \
-	  rm -f apps/server/revv-dev.db.pid; \
+	  rm -f apps/server/revv-dev.db.dev.pid; \
 	fi
 
 # ── Team Cache Emulator (fake-gcs-server) ─────────────────────
