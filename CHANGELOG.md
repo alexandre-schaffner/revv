@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.5.0](https://github.com/alexandre-schaffner/revv/compare/v0.4.0...v0.5.0) (2026-05-28)
+
+
+### Features
+
+* Isolate dev and prod runtime channels ([098a025](https://github.com/alexandre-schaffner/revv/commit/098a0254ccff668fe479cbeabf2c588f8a664eb9))
+* isolate dev prod runtime ([8848dbe](https://github.com/alexandre-schaffner/revv/commit/8848dbed4591ccc2954be9063ae00b72c0aaadba))
+* **server:** add OpenTelemetry tracing instrumentation ([d256466](https://github.com/alexandre-schaffner/revv/commit/d256466f5d11a92367caeba50f9940aeacd0a28e))
+
 ## [0.4.0](https://github.com/alexandre-schaffner/revv/compare/v0.3.5...v0.4.0) (2026-05-26)
 
 
