@@ -1,6 +1,7 @@
 <script lang="ts">
 import "../app.css";
 import { page } from "$app/state";
+import { assertRuntimeChannel } from "$lib/api/runtime";
 import CacheInspector from "$lib/components/dev/CacheInspector.svelte";
 import AppShell from "$lib/components/layout/AppShell.svelte";
 import OnboardingGate from "$lib/components/onboarding/OnboardingGate.svelte";
@@ -31,6 +32,7 @@ let { children } = $props();
 let hydrated = false;
 let cacheInspectorOpen = $state(false);
 let obsPanelOpen = $state(false);
+let runtimeError = $state<string | null>(null);
 
 // Keep `selectedPrId` in sync with the URL.
 //
@@ -132,6 +134,10 @@ $effect(() => {
   const cleanupTheme = initTheme();
   const cleanupShortcuts = initShortcuts();
 
+  void assertRuntimeChannel().catch((error: unknown) => {
+    runtimeError = error instanceof Error ? error.message : String(error);
+  });
+
   // On mount: try to restore auth from localStorage.
   // If the token is valid, loadUser() sets the user, which triggers
   // the hydration effect above.
@@ -171,6 +177,11 @@ async function hydrate() {
 </script>
 
 <TooltipProvider>
+	{#if runtimeError}
+		<div class="runtime-channel-error" role="alert">
+			{runtimeError}
+		</div>
+	{/if}
 	<OnboardingGate>
 		<AppShell>
 			<ErrorBanner />
@@ -185,3 +196,19 @@ async function hydrate() {
 		<ObsPanel onclose={() => { obsPanelOpen = false; }} />
 	{/if}
 </TooltipProvider>
+
+<style>
+	.runtime-channel-error {
+		position: fixed;
+		z-index: 9999;
+		inset: 12px 12px auto 12px;
+		border: 1px solid var(--color-destructive);
+		border-radius: 8px;
+		background: var(--color-bg-elevated);
+		color: var(--color-text-primary);
+		box-shadow: 0 12px 40px color-mix(in srgb, black 18%, transparent);
+		padding: 12px 14px;
+		font-size: 13px;
+		line-height: 1.4;
+	}
+</style>

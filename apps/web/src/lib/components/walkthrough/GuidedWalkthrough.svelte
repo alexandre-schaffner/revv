@@ -4,11 +4,11 @@ import { onDestroy, onMount, untrack } from "svelte";
 const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
 
 import type { WalkthroughBlock, WalkthroughSemanticStep } from "@revv/shared";
-import { API_BASE_URL } from "@revv/shared";
 import RefreshCw from "phosphor-svelte/lib/ArrowsClockwise";
 import CaretDown from "phosphor-svelte/lib/CaretDown";
 import AlertTriangle from "phosphor-svelte/lib/Warning";
 import AlertCircle from "phosphor-svelte/lib/WarningCircle";
+import { API_BASE_URL } from "$lib/api/base-url";
 import { Shimmer } from "$lib/components/ai/shimmer";
 import { ToolActivityGroup } from "$lib/components/ai/tool";
 import { Button } from "$lib/components/ui/button";

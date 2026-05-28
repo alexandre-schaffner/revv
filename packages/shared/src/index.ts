@@ -28,12 +28,15 @@ export type {
   NormalizedQuestionOption,
   QuestionStatus,
 } from "./chat";
-export type { UpdateChannel } from "./constants";
+export type { AppChannel, UpdateChannel } from "./constants";
 export {
   API_BASE_URL,
   API_PORT,
+  APP_CHANNELS,
   AUTO_FETCH_DEFAULT_INTERVAL,
+  DEFAULT_APP_CHANNEL,
   DEFAULT_UPDATE_CHANNEL,
+  DEV_API_PORT,
   THREAD_SYNC_INTERVAL_SECONDS,
   UPDATE_CHANNELS,
   UPDATE_STABLE_COOLDOWN_MS,

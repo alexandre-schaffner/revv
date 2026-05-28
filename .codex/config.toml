@@ -1,0 +1,6 @@
+[mcp_servers.motion]
+command = "npx"
+args = [
+    "-y",
+    "https://api.motion.dev/registry.tgz?package=motion-studio-mcp&version=latest",
+]

@@ -30,7 +30,7 @@
     "knip": "knip",
     "dev:web": "cd apps/web && bun run dev",
     "dev:server": "cd apps/server && bun run dev",
-    "dev:desktop": "concurrently --kill-others \"bun run dev:web\" \"bun run dev:server\" \"sleep 3 && cd apps/desktop && bunx tauri dev\"",
+    "dev:desktop": "concurrently --kill-others \"bun run dev:web\" \"bun run dev:server\" \"sleep 3 && cd apps/desktop && bunx tauri dev --config tauri.dev.conf.json\"",
     "dist": "cd apps/desktop && bunx tauri build",
     "dist:debug": "cd apps/desktop && bunx tauri build --debug",
     "dev:app": "cd packages/app && bun run dev",

@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { API_PORT } from "@revv/shared";
+import { API_PORT, type AppChannel, DEFAULT_APP_CHANNEL } from "@revv/shared";
 import { Config, Effect } from "effect";
 
 /**
@@ -23,6 +23,7 @@ import { Config, Effect } from "effect";
  */
 export const ServerConfig = Config.all({
   port: Config.integer("PORT").pipe(Config.withDefault(API_PORT)),
+  channel: Config.string("REVV_CHANNEL").pipe(Config.withDefault(DEFAULT_APP_CHANNEL)),
   dbPath: Config.string("REVV_DB_PATH").pipe(Config.withDefault("./revv.db")),
   // Bundled OAuth App client_id, registered on `nocturlab.ghe.com`. The
   // `GITHUB_CLIENT_ID` env var overrides for development or self-hosting
@@ -66,6 +67,10 @@ const resolved = Effect.runSync(
   }),
 );
 
+function normalizeChannel(value: string): AppChannel {
+  return value === "dev" ? "dev" : "prod";
+}
+
 /** `api.github.com` for github.com, `api.<host>` for GitHub Enterprise. */
 const githubApiBase =
   resolved.githubHost === "github.com"
@@ -74,5 +79,6 @@ const githubApiBase =
 
 export const serverEnv = {
   ...resolved,
+  channel: normalizeChannel(resolved.channel),
   githubApiBase,
 } as const;
