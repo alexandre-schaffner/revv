@@ -35,7 +35,6 @@ import { SvelteMap } from "svelte/reactivity";
 import { toast } from "svelte-sonner";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { api } from "$lib/api/client";
-import { startSpan, traced, tracedDerived } from "$lib/observability";
 import { updateRepoCloneStatus } from "$lib/stores/prs.svelte";
 import { authHeaders } from "$lib/utils/session-token";
 import { wtTrace } from "$lib/utils/wt-trace";
@@ -194,12 +193,10 @@ const PHASE_RANK: Record<WalkthroughPipelinePhase, number> = {
 // boundaries silently kept a stale cached result, manifesting as floating
 // action buttons stuck on "Stop" until a tab switch forced the $derived to
 // re-evaluate.
-const _active: WalkthroughEntry | undefined = $derived.by(() =>
-  tracedDerived("walkthrough.active", () => {
-    if (!store.activePrId) return undefined;
-    return store.entries.get(store.activePrId);
-  }),
-);
+const _active: WalkthroughEntry | undefined = $derived.by(() => {
+  if (!store.activePrId) return undefined;
+  return store.entries.get(store.activePrId);
+});
 
 // ── Mutation helpers ────────────────────────────────────────────────────────
 
@@ -324,31 +321,29 @@ export type WalkthroughUiState =
   | { kind: "error-empty"; message: string }
   | { kind: "error-partial"; message: string; lastPhase: WalkthroughPipelinePhase };
 
-const _uiState: WalkthroughUiState = $derived.by(() =>
-  tracedDerived("walkthrough.uiState", (): WalkthroughUiState => {
-    const e = _active;
-    if (!e) return { kind: "absent" };
-    if (e.cloneInProgress && e.cloneRepoId) {
-      return { kind: "cloning", repoId: e.cloneRepoId };
-    }
-    if (e.isStreaming) return { kind: "streaming", phase: e.phase };
+const _uiState: WalkthroughUiState = $derived.by((): WalkthroughUiState => {
+  const e = _active;
+  if (!e) return { kind: "absent" };
+  if (e.cloneInProgress && e.cloneRepoId) {
+    return { kind: "cloning", repoId: e.cloneRepoId };
+  }
+  if (e.isStreaming) return { kind: "streaming", phase: e.phase };
 
-    const hasPartial = e.summary !== null || e.blocks.length > 0;
+  const hasPartial = e.summary !== null || e.blocks.length > 0;
 
-    if (e.streamError) {
-      return hasPartial
-        ? { kind: "error-partial", message: e.streamError, lastPhase: e.lastCompletedPhase }
-        : { kind: "error-empty", message: e.streamError };
-    }
-    if (e.doneReceived && e.lastCompletedPhase === "D") {
-      return e.superseded ? { kind: "complete-stale" } : { kind: "complete" };
-    }
-    if (hasPartial) {
-      return { kind: "resumable", lastPhase: e.lastCompletedPhase };
-    }
-    return { kind: "idle" };
-  }),
-);
+  if (e.streamError) {
+    return hasPartial
+      ? { kind: "error-partial", message: e.streamError, lastPhase: e.lastCompletedPhase }
+      : { kind: "error-empty", message: e.streamError };
+  }
+  if (e.doneReceived && e.lastCompletedPhase === "D") {
+    return e.superseded ? { kind: "complete-stale" } : { kind: "complete" };
+  }
+  if (hasPartial) {
+    return { kind: "resumable", lastPhase: e.lastCompletedPhase };
+  }
+  return { kind: "idle" };
+});
 
 export function getWalkthroughUiState(): WalkthroughUiState {
   return _uiState;
@@ -386,240 +381,226 @@ export function applyEvents(prId: string, events: WalkthroughStreamEvent[]): voi
     const types = events.map((e) => e.type).join(",");
     wtTrace("apply", `applyEvents prId=${prId} count=${events.length} types=[${types}]`);
   }
-  traced("walkthrough.applyEvents", { prId, count: events.length }, () => {
-    updateEntry(prId, (entry) => {
-      const walkthroughId = entry.walkthroughId ?? "none";
-      let newBlocks: WalkthroughBlock[] | null = null;
+  updateEntry(prId, (entry) => {
+    let newBlocks: WalkthroughBlock[] | null = null;
 
-      for (const event of events) {
-        // `startSpan` rather than `traced(() => ...)`: the inner switch
-        // mutates `newBlocks` (case "block"), and TS can't narrow that
-        // mutation across an arrow-function closure boundary. Scope-handle
-        // form keeps the mutation inline so the `if (newBlocks)` check
-        // below stays well-typed.
-        const span = startSpan("walkthrough.event", {
-          type: event.type,
-          prId,
-          walkthroughId,
-        });
-        switch (event.type) {
-          case "summary":
-            entry.summary = event.data.summary;
-            entry.riskLevel = event.data.riskLevel;
-            break;
-          case "sentiment":
-            entry.sentiment = event.data.sentiment;
-            break;
-          case "semantic-step": {
-            const idx = entry.semanticSteps.findIndex(
-              (s) => s.semanticStepIndex === event.data.semanticStepIndex,
+    for (const event of events) {
+      switch (event.type) {
+        case "summary":
+          entry.summary = event.data.summary;
+          entry.riskLevel = event.data.riskLevel;
+          break;
+        case "sentiment":
+          entry.sentiment = event.data.sentiment;
+          break;
+        case "semantic-step": {
+          const idx = entry.semanticSteps.findIndex(
+            (s) => s.semanticStepIndex === event.data.semanticStepIndex,
+          );
+          if (idx >= 0) {
+            entry.semanticSteps = entry.semanticSteps.map((s, i) => (i === idx ? event.data : s));
+          } else {
+            entry.semanticSteps = [...entry.semanticSteps, event.data].sort(
+              (a, b) => a.semanticStepIndex - b.semanticStepIndex,
             );
-            if (idx >= 0) {
-              entry.semanticSteps = entry.semanticSteps.map((s, i) => (i === idx ? event.data : s));
-            } else {
-              entry.semanticSteps = [...entry.semanticSteps, event.data].sort(
-                (a, b) => a.semanticStepIndex - b.semanticStepIndex,
-              );
-            }
-            break;
           }
-          case "block": {
-            if (!newBlocks) newBlocks = [...entry.blocks];
-            const bi = newBlocks.findIndex((b) => b.id === event.data.id);
-            if (bi >= 0) {
-              newBlocks[bi] = event.data;
-            } else {
-              newBlocks.push(event.data);
-            }
-            break;
+          break;
+        }
+        case "block": {
+          if (!newBlocks) newBlocks = [...entry.blocks];
+          const bi = newBlocks.findIndex((b) => b.id === event.data.id);
+          if (bi >= 0) {
+            newBlocks[bi] = event.data;
+          } else {
+            newBlocks.push(event.data);
           }
-          case "done":
-            entry.walkthroughId = event.data.walkthroughId;
-            entry.doneReceived = true;
-            entry.isStreaming = false;
-            entry.tokenUsage = coerceTokenUsage(event.data.tokenUsage);
-            if (entry.summary !== null && entry.blocks.length > 0 && entry.ratings.length === 9) {
-              entry.lastCompletedPhase = "D";
-            }
-            break;
-          case "usage":
-            entry.tokenUsage = coerceTokenUsage(event.data.tokenUsage);
-            break;
-          case "exploration": {
-            entry.explorationSteps = [...entry.explorationSteps, event.data];
+          break;
+        }
+        case "done":
+          entry.walkthroughId = event.data.walkthroughId;
+          entry.doneReceived = true;
+          entry.isStreaming = false;
+          entry.tokenUsage = coerceTokenUsage(event.data.tokenUsage);
+          if (entry.summary !== null && entry.blocks.length > 0 && entry.ratings.length === 9) {
+            entry.lastCompletedPhase = "D";
+          }
+          break;
+        case "usage":
+          entry.tokenUsage = coerceTokenUsage(event.data.tokenUsage);
+          break;
+        case "exploration": {
+          entry.explorationSteps = [...entry.explorationSteps, event.data];
+          entry.timeline = [
+            ...entry.timeline,
+            {
+              kind: "exploration",
+              id: `exp-${entry.timeline.length}`,
+              activity: event.data,
+            },
+          ];
+          break;
+        }
+        case "thought": {
+          // Append to last thought-run instead of pushing a new entry per
+          // delta — the model emits hundreds of tiny deltas per burst, and
+          // we only want a new timeline entry when a tool call (or some
+          // other non-thought event) has broken the run.
+          const last = entry.timeline.at(-1);
+          if (last && last.kind === "thought") {
+            entry.timeline = [
+              ...entry.timeline.slice(0, -1),
+              { ...last, text: last.text + event.data.text },
+            ];
+          } else {
             entry.timeline = [
               ...entry.timeline,
               {
-                kind: "exploration",
-                id: `exp-${entry.timeline.length}`,
-                activity: event.data,
+                kind: "thought",
+                id: `thought-${entry.timeline.length}`,
+                text: event.data.text,
               },
             ];
-            break;
           }
-          case "thought": {
-            // Append to last thought-run instead of pushing a new entry per
-            // delta — the model emits hundreds of tiny deltas per burst, and
-            // we only want a new timeline entry when a tool call (or some
-            // other non-thought event) has broken the run.
-            const last = entry.timeline.at(-1);
-            if (last && last.kind === "thought") {
-              entry.timeline = [
-                ...entry.timeline.slice(0, -1),
-                { ...last, text: last.text + event.data.text },
-              ];
-            } else {
-              entry.timeline = [
-                ...entry.timeline,
-                {
-                  kind: "thought",
-                  id: `thought-${entry.timeline.length}`,
-                  text: event.data.text,
-                },
-              ];
-            }
-            entry.thoughts = entry.thoughts + event.data.text;
-            break;
-          }
-          case "issue": {
-            const ii = entry.issues.findIndex((i) => i.id === event.data.id);
-            if (ii >= 0) {
-              entry.issues = entry.issues.map((i, x) => (x === ii ? event.data : i));
-            } else {
-              entry.issues = [...entry.issues, event.data];
-            }
-            break;
-          }
-          case "rating": {
-            const idx = entry.ratings.findIndex((r) => r.axis === event.data.axis);
-            if (idx >= 0) {
-              entry.ratings = entry.ratings.map((r, i) => (i === idx ? event.data : r));
-            } else {
-              entry.ratings = [...entry.ratings, event.data];
-            }
-            break;
-          }
-          case "phase":
-            entry.phase = event.data.phase;
-            entry.phaseMessage = event.data.message;
-            if (event.data.phase !== "connecting") {
-              entry.liveGeneration = true;
-            }
-            break;
-          case "phase:advanced":
-            entry.lastCompletedPhase = event.data.lastCompletedPhase;
-            entry.liveGeneration = true;
-            break;
-          case "error":
-            if (event.data.code === "CloneInProgress" && event.data.repoId != null) {
-              entry.cloneInProgress = true;
-              entry.cloneRepoId = event.data.repoId;
-              entry.isStreaming = false;
-            } else if (event.data.code === "CloneInProgress") {
-              entry.cloneInProgress = false;
-              entry.cloneRepoId = null;
-              entry.isStreaming = false;
-              entry.streamError =
-                "Walkthrough could not start: the repository is cloning, but the server did not report which one. Retry to try again.";
-            } else {
-              entry.streamError = event.data.message;
-              entry.isStreaming = false;
-            }
-            break;
-          case "in-progress":
-            entry.walkthroughId = event.data.walkthroughId;
-            entry.phase = "writing";
-            entry.phaseMessage = "Generating walkthrough...";
-            entry.liveGeneration = true;
-            break;
-          case "thinking":
-            break;
-          case "block:deleted":
-            if (!newBlocks) newBlocks = [...entry.blocks];
-            newBlocks = newBlocks.filter((b) => b.id !== event.data.id);
-            break;
-          case "rating:deleted":
-            entry.ratings = entry.ratings.filter((r) => r.axis !== event.data.axis);
-            break;
-          case "issue:deleted":
-            entry.issues = entry.issues.filter((i) => i.id !== event.data.id);
-            break;
-          case "semantic-step:deleted": {
-            const idx = event.data.semanticStepIndex;
-            entry.semanticSteps = entry.semanticSteps.filter((s) => s.semanticStepIndex !== idx);
-            if (!newBlocks) newBlocks = [...entry.blocks];
-            newBlocks = newBlocks.filter((b) => b.semanticStepIndex !== idx);
-            break;
-          }
-          // ── Lifecycle events (global SSE bus). Flip
-          //    streaming/completion/error/superseded state without touching
-          //    content. Each one was previously a standalone WS envelope.
-          case "lifecycle:started":
-            entry.walkthroughId = event.data.walkthroughId;
-            entry.isStreaming = true;
-            entry.doneReceived = false;
-            entry.streamError = null;
-            entry.superseded = false;
-            entry.liveGeneration = true;
-            entry.phase = "connecting";
-            entry.phaseMessage = "Starting walkthrough…";
-            if (entry.streamStartedAt === null) entry.streamStartedAt = Date.now();
-            if (event.data.status === "cloning" && event.data.repoId) {
-              entry.cloneInProgress = true;
-              entry.cloneRepoId = event.data.repoId;
-              entry.isStreaming = false;
-            } else {
-              entry.cloneInProgress = false;
-              entry.cloneRepoId = null;
-            }
-            break;
-          case "lifecycle:complete":
-            entry.walkthroughId = event.data.walkthroughId;
-            entry.doneReceived = true;
-            entry.isStreaming = false;
-            entry.tokenUsage = coerceTokenUsage(event.data.tokenUsage);
-            if (entry.summary !== null && entry.blocks.length > 0 && entry.ratings.length === 9) {
-              entry.lastCompletedPhase = "D";
-            }
-            break;
-          case "lifecycle:error":
-            if (event.data.code === "CloneInProgress" && event.data.repoId) {
-              entry.cloneInProgress = true;
-              entry.cloneRepoId = event.data.repoId;
-              entry.isStreaming = false;
-            } else if (event.data.code === "Cancelled") {
-              // User-initiated stop — not a failure. Suppress the error
-              // banner so the UI falls through to the "resumable" / "idle"
-              // state based on whether partial content exists.
-              entry.streamError = null;
-              entry.isStreaming = false;
-            } else {
-              entry.streamError = event.data.message;
-              entry.isStreaming = false;
-            }
-            break;
-          case "lifecycle:cache-hit":
-            entry.source = "remote";
-            entry.walkthroughId = event.data.walkthroughId;
-            break;
-          case "lifecycle:edited":
-            // No state change — the inner block/issue/etc. event lands in the
-            // same stream as a separate envelope (with its own seq). This
-            // marker is purely diagnostic / future-proofing.
-            break;
-          case "lifecycle:superseded":
-            entry.superseded = true;
-            entry.isStreaming = false;
-            break;
+          entry.thoughts = entry.thoughts + event.data.text;
+          break;
         }
-        span.end();
+        case "issue": {
+          const ii = entry.issues.findIndex((i) => i.id === event.data.id);
+          if (ii >= 0) {
+            entry.issues = entry.issues.map((i, x) => (x === ii ? event.data : i));
+          } else {
+            entry.issues = [...entry.issues, event.data];
+          }
+          break;
+        }
+        case "rating": {
+          const idx = entry.ratings.findIndex((r) => r.axis === event.data.axis);
+          if (idx >= 0) {
+            entry.ratings = entry.ratings.map((r, i) => (i === idx ? event.data : r));
+          } else {
+            entry.ratings = [...entry.ratings, event.data];
+          }
+          break;
+        }
+        case "phase":
+          entry.phase = event.data.phase;
+          entry.phaseMessage = event.data.message;
+          if (event.data.phase !== "connecting") {
+            entry.liveGeneration = true;
+          }
+          break;
+        case "phase:advanced":
+          entry.lastCompletedPhase = event.data.lastCompletedPhase;
+          entry.liveGeneration = true;
+          break;
+        case "error":
+          if (event.data.code === "CloneInProgress" && event.data.repoId != null) {
+            entry.cloneInProgress = true;
+            entry.cloneRepoId = event.data.repoId;
+            entry.isStreaming = false;
+          } else if (event.data.code === "CloneInProgress") {
+            entry.cloneInProgress = false;
+            entry.cloneRepoId = null;
+            entry.isStreaming = false;
+            entry.streamError =
+              "Walkthrough could not start: the repository is cloning, but the server did not report which one. Retry to try again.";
+          } else {
+            entry.streamError = event.data.message;
+            entry.isStreaming = false;
+          }
+          break;
+        case "in-progress":
+          entry.walkthroughId = event.data.walkthroughId;
+          entry.phase = "writing";
+          entry.phaseMessage = "Generating walkthrough...";
+          entry.liveGeneration = true;
+          break;
+        case "thinking":
+          break;
+        case "block:deleted":
+          if (!newBlocks) newBlocks = [...entry.blocks];
+          newBlocks = newBlocks.filter((b) => b.id !== event.data.id);
+          break;
+        case "rating:deleted":
+          entry.ratings = entry.ratings.filter((r) => r.axis !== event.data.axis);
+          break;
+        case "issue:deleted":
+          entry.issues = entry.issues.filter((i) => i.id !== event.data.id);
+          break;
+        case "semantic-step:deleted": {
+          const idx = event.data.semanticStepIndex;
+          entry.semanticSteps = entry.semanticSteps.filter((s) => s.semanticStepIndex !== idx);
+          if (!newBlocks) newBlocks = [...entry.blocks];
+          newBlocks = newBlocks.filter((b) => b.semanticStepIndex !== idx);
+          break;
+        }
+        // ── Lifecycle events (global SSE bus). Flip
+        //    streaming/completion/error/superseded state without touching
+        //    content. Each one was previously a standalone WS envelope.
+        case "lifecycle:started":
+          entry.walkthroughId = event.data.walkthroughId;
+          entry.isStreaming = true;
+          entry.doneReceived = false;
+          entry.streamError = null;
+          entry.superseded = false;
+          entry.liveGeneration = true;
+          entry.phase = "connecting";
+          entry.phaseMessage = "Starting walkthrough…";
+          if (entry.streamStartedAt === null) entry.streamStartedAt = Date.now();
+          if (event.data.status === "cloning" && event.data.repoId) {
+            entry.cloneInProgress = true;
+            entry.cloneRepoId = event.data.repoId;
+            entry.isStreaming = false;
+          } else {
+            entry.cloneInProgress = false;
+            entry.cloneRepoId = null;
+          }
+          break;
+        case "lifecycle:complete":
+          entry.walkthroughId = event.data.walkthroughId;
+          entry.doneReceived = true;
+          entry.isStreaming = false;
+          entry.tokenUsage = coerceTokenUsage(event.data.tokenUsage);
+          if (entry.summary !== null && entry.blocks.length > 0 && entry.ratings.length === 9) {
+            entry.lastCompletedPhase = "D";
+          }
+          break;
+        case "lifecycle:error":
+          if (event.data.code === "CloneInProgress" && event.data.repoId) {
+            entry.cloneInProgress = true;
+            entry.cloneRepoId = event.data.repoId;
+            entry.isStreaming = false;
+          } else if (event.data.code === "Cancelled") {
+            // User-initiated stop — not a failure. Suppress the error
+            // banner so the UI falls through to the "resumable" / "idle"
+            // state based on whether partial content exists.
+            entry.streamError = null;
+            entry.isStreaming = false;
+          } else {
+            entry.streamError = event.data.message;
+            entry.isStreaming = false;
+          }
+          break;
+        case "lifecycle:cache-hit":
+          entry.source = "remote";
+          entry.walkthroughId = event.data.walkthroughId;
+          break;
+        case "lifecycle:edited":
+          // No state change — the inner block/issue/etc. event lands in the
+          // same stream as a separate envelope (with its own seq). This
+          // marker is purely diagnostic / future-proofing.
+          break;
+        case "lifecycle:superseded":
+          entry.superseded = true;
+          entry.isStreaming = false;
+          break;
       }
+    }
 
-      if (newBlocks) {
-        newBlocks.sort((a, b) => a.order - b.order);
-        entry.blocks = newBlocks;
-      }
-    });
+    if (newBlocks) {
+      newBlocks.sort((a, b) => a.order - b.order);
+      entry.blocks = newBlocks;
+    }
   });
 }
 
