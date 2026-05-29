@@ -35,7 +35,7 @@
     "dist:debug": "cd apps/desktop && bunx tauri build --debug",
     "dev:app": "cd packages/app && bun run dev",
     "clean": "rm -rf apps/web/build apps/web/.svelte-kit apps/server/dist apps/desktop/target .turbo",
-    "postinstall": "echo '\\n  Run `bun run dev` to start developing, or `bun run dist` to build an installer.\\n'"
+    "postinstall": "echo $'\\n  Run `bun run dev` to start developing, or `bun run dist` to build an installer.\\n'"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.15",

@@ -95,6 +95,45 @@ spin_stop() {
   fi
 }
 
+# ── Quiet command runner ──────────────────────────────────────
+# Usage: run_quiet "Label" command [args...]
+#   Default: spinner while running; stdout+stderr captured to a temp log.
+#   REVV_VERBOSE=1: streams output inline with an indented label header.
+# On failure: prints exit code, log path, and last 15 log lines.
+run_quiet() {
+  local label="$1"; shift
+  local _log _rc
+
+  if [[ "${REVV_VERBOSE:-0}" == "1" ]]; then
+    printf "\n  %s%s▸%s  %s\n\n" "$REVV_BOLD" "$REVV_CYAN" "$REVV_RESET" "$label"
+    "$@" 2>&1 | sed 's/^/    /'
+    _rc="${PIPESTATUS[0]}"
+    if [[ "$_rc" -eq 0 ]]; then
+      success "$label"
+      return 0
+    else
+      fail "Command failed (exit $_rc): $*"
+    fi
+  fi
+
+  _log="$(mktemp)"
+  spin_start "$label"
+  if "$@" >"$_log" 2>&1; then
+    spin_stop 1
+    rm -f "$_log"
+    return 0
+  fi
+  _rc=$?
+  spin_stop 0
+  printf "\n  %s✗%s  Command failed (exit %d): %s\n" \
+    "$REVV_RED" "$REVV_RESET" "$_rc" "$*" >&2
+  printf "  %s→%s  Log: %s\n" "$REVV_DIM" "$REVV_RESET" "$_log" >&2
+  printf "  %sLast output:%s\n" "$REVV_DIM" "$REVV_RESET" >&2
+  tail -n 15 "$_log" | sed 's/^/    /' >&2
+  printf "\n" >&2
+  exit 1
+}
+
 # ── TTY-safe input (works under `curl … | bash`) ──────────────
 #
 # Reads from /dev/tty so prompts work even when stdin is the pipe carrying
@@ -364,8 +403,13 @@ install_release_app() {
   fi
 
   bundle_file="$(mktemp).dmg"
-  info "Downloading pre-built Revv.app from ${release_tag} (${asset_arch})"
-  curl -fL "$bundle_url" -o "$bundle_file" || { rm -f "$bundle_file"; return 1; }
+  spin_start "Downloading Revv.app from ${release_tag} (${asset_arch})"
+  if ! curl -fsSL "$bundle_url" -o "$bundle_file"; then
+    spin_stop 0
+    rm -f "$bundle_file"
+    return 1
+  fi
+  spin_stop 1
 
   if [[ -n "$bundle_sha" ]]; then
     actual_sha="$(revv_sha256_of "$bundle_file")"
