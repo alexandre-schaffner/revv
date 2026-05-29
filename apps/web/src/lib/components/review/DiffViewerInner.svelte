@@ -27,7 +27,7 @@ export interface ThreadMeta {
 	import type { ReviewFile, CommentThread, ThreadMessage } from '$lib/types/review';
 	import { workerManager } from '$lib/utils/worker-pool';
 	import { onMount, onDestroy } from 'svelte';
-	import { mountInto, cleanupAllMounted } from '$lib/utils/annotation-mount';
+	import { mountInto, cleanupAllMounted, pruneDetachedMounts } from '$lib/utils/annotation-mount';
 	import {
 		ANNOTATION_HOST_STYLE,
 		createMarkerDot,
@@ -297,11 +297,15 @@ export interface ThreadMeta {
 		threadDataRef.threadById = currentThreadById;
 		threadDataRef.threadMessages = currentThreadMessages;
 
-		// Clear annotation cache — the library caches DOM elements by annotation
-		// object reference. Without clearing, stale elements with empty thread
-		// data persist even after threadDataRef is updated.
-		// @ts-expect-error annotationCache is protected
-		instance.annotationCache?.clear();
+		// NOTE: do NOT clear `annotationCache` here. The library's
+		// renderAnnotations() is self-cleaning — it removes the previous wrapper
+		// before appending a new one whenever an annotation changed. Our store
+		// hands it a fresh `metadata` object every render and the library compares
+		// metadata by reference, so renderAnnotation always re-runs (picking up
+		// fresh thread data) AND the old row is removed. Calling `.clear()` empties
+		// the cache Map without removing the wrapper <div>s from the shadow DOM, so
+		// the next render appends fresh rows alongside the orphans → duplicate
+		// comments. That was the diff-tab comment-duplication bug.
 
 		// Clear header slots before re-render to prevent badge duplication.
 		// The library's applyHeaderToDOM reuses slot elements by reference; if
@@ -313,6 +317,11 @@ export interface ThreadMeta {
 		// Re-render with new annotations. Must pass lineAnnotations so the
 		// library updates its internal state and creates annotation rows.
 		instance.render({ lineAnnotations: currentAnnotations, forceRender: true });
+
+		// The library removes the previous annotation wrappers via element.remove(),
+		// but the Svelte components we mounted inside them stay registered and live.
+		// Unmount the now-detached ones so their effects/listeners don't leak.
+		pruneDetachedMounts();
 	});
 
 	// ── Line cursor highlight (diff-line mode) ────────────────────────────────
