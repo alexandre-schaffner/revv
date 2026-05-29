@@ -366,7 +366,7 @@
   --revv-accent: oklch(52% 0.12 62);
   --revv-accent-hover: oklch(46% 0.108 62);
   --revv-accent-muted: oklch(62% 0.09 62);
-  --revv-score-info-label: oklch(38% 0.10 62);
+  --revv-score-info-label: oklch(38% 0.1 62);
 }
 :root.dark[data-accent="amber"] {
   --primary: 30 79% 58%;
@@ -381,7 +381,7 @@
 :root[data-accent="rose"] {
   --primary: 319 31% 39%;
   --ring: 319 31% 39%;
-  --revv-accent: oklch(48% 0.10 340);
+  --revv-accent: oklch(48% 0.1 340);
   --revv-accent-hover: oklch(42% 0.09 340);
   --revv-accent-muted: oklch(58% 0.075 340);
   --revv-score-info-label: oklch(36% 0.08 340);
@@ -420,7 +420,7 @@
   --revv-accent: oklch(44% 0.13 265);
   --revv-accent-hover: oklch(38% 0.117 265);
   --revv-accent-muted: oklch(54% 0.098 265);
-  --revv-score-info-label: oklch(32% 0.10 265);
+  --revv-score-info-label: oklch(32% 0.1 265);
 }
 :root.dark[data-accent="indigo"] {
   --primary: 222 86% 67%;
@@ -428,7 +428,7 @@
   --revv-accent: oklch(66% 0.16 265);
   --revv-accent-hover: oklch(60% 0.16 265);
   --revv-accent-muted: oklch(75% 0.12 265);
-  --revv-score-info-label: oklch(85% 0.10 265);
+  --revv-score-info-label: oklch(85% 0.1 265);
 }
 
 /* ──────────────────────────────────────────────────────────

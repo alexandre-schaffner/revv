@@ -23,7 +23,6 @@ import {
 import { fetchAllModels, fetchSettings, getSettings } from "$lib/stores/settings.svelte";
 import { initShortcuts } from "$lib/stores/shortcuts.svelte";
 import { setSidebarView } from "$lib/stores/sidebar.svelte";
-import { initAccent } from "$lib/stores/accent.svelte";
 import { initTheme } from "$lib/stores/theme.svelte";
 import { startUpdater, stopUpdater } from "$lib/updater/service";
 
@@ -112,7 +111,6 @@ $effect(() => {
 
 $effect(() => {
   initGsap();
-  initAccent();
   const cleanupTheme = initTheme();
   const cleanupShortcuts = initShortcuts();
 

@@ -42,11 +42,6 @@ import {
   updateSettings,
 } from "$lib/stores/settings.svelte";
 import {
-  ACCENT_PRESETS,
-  getAccent,
-  setAccent,
-} from "$lib/stores/accent.svelte";
-import {
   getThemePreference,
   setThemePreference,
   type ThemePreference,
@@ -1099,24 +1094,6 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 						</div>
 					</div>
 
-					<div class="settings-row">
-						<div class="settings-row-info">
-							<p class="settings-row-label">Accent color</p>
-							<p class="settings-row-hint">Color used for primary actions and active states.</p>
-						</div>
-						<div class="flex items-center gap-2.5">
-							{#each ACCENT_PRESETS as preset (preset.value)}
-								{@const active = getAccent() === preset.value}
-								<button
-									type="button"
-									title={preset.label}
-									class="w-[18px] h-[18px] rounded-full transition-all duration-quick"
-									style="background-color: {preset.swatch}; box-shadow: {active ? `0 0 0 2px var(--revv-bg-primary), 0 0 0 3.5px ${preset.swatch}` : 'none'};"
-									onclick={() => setAccent(preset.value)}
-								/>
-							{/each}
-						</div>
-					</div>
 				</div>
 
 				<div class="settings-subgroup">
