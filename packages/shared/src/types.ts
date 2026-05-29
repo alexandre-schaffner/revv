@@ -248,6 +248,15 @@ export interface UserIdentity {
    * the moment CI publishes them — the 48h stable cooldown is bypassed.
    */
   isMaintainer: boolean;
+  /**
+   * `true` when the active account's GitHub token is invalid and could not be
+   * silently refreshed — the client gates the app behind a re-sign-in modal.
+   * Authoritative reconcile source for `auth:reauth-required` WS signals on
+   * boot / WS reconnect. `host` is the account's GitHub host, used to drive
+   * the re-auth device flow against the right instance.
+   */
+  reauthRequired: boolean;
+  host: string | null;
 }
 
 export interface Org {

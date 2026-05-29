@@ -20,6 +20,7 @@ import { debug } from "../logger";
 import { DbService } from "./Db";
 import { GitHubService } from "./GitHub";
 import { SettingsService } from "./Settings";
+import { TokenProvider } from "./TokenProvider";
 
 type PermLevel = "admin" | "maintain" | "write" | "triage" | "read" | "none";
 
@@ -73,6 +74,7 @@ export const CacheEligibilityLive = Layer.effect(
     const settingsSvc = yield* SettingsService;
     const githubSvc = yield* GitHubService;
     const { db } = yield* DbService;
+    const tokenProvider = yield* TokenProvider;
 
     const permCache = new Map<string, CacheEntry>();
 
@@ -89,25 +91,27 @@ export const CacheEligibilityLive = Layer.effect(
       return null;
     }
 
-    function getLocalAccountsForHost(targetHost: string): { login: string; token: string } | null {
+    function getLocalAccountForHost(
+      targetHost: string,
+    ): { accountId: string; login: string } | null {
       const firstUser = db.select({ id: user.id }).from(user).limit(1).get();
       if (!firstUser) return null;
 
       const rows = db
         .select({
+          id: account.id,
           providerId: account.providerId,
           githubLogin: account.githubLogin,
-          accessToken: account.accessToken,
         })
         .from(account)
         .where(eq(account.userId, firstUser.id))
         .all();
 
       for (const row of rows) {
-        if (!row.githubLogin || !row.accessToken) continue;
+        if (!row.githubLogin) continue;
         const host = extractHostFromProviderId(row.providerId);
         if (host === targetHost) {
-          return { login: row.githubLogin, token: row.accessToken };
+          return { accountId: row.id, login: row.githubLogin };
         }
       }
       return null;
@@ -177,19 +181,17 @@ export const CacheEligibilityLive = Layer.effect(
           const host = settings?.githubHost ?? "github.com";
 
           const localAcct = yield* Effect.try({
-            try: () => getLocalAccountsForHost(host),
+            try: () => getLocalAccountForHost(host),
             catch: () => null,
           }).pipe(Effect.catchAll(() => Effect.succeed(null)));
 
           if (!localAcct) return false;
+          const token = yield* tokenProvider
+            .getTokenByAccountId(localAcct.accountId)
+            .pipe(Effect.catchAll(() => Effect.succeed(null)));
+          if (!token) return false;
 
-          const perm = yield* resolvePermission(
-            host,
-            owner,
-            repo,
-            localAcct.login,
-            localAcct.token,
-          );
+          const perm = yield* resolvePermission(host, owner, repo, localAcct.login, token);
           return isEligible(perm);
         }).pipe(Effect.catchAll(() => Effect.succeed(false))),
 
@@ -209,19 +211,17 @@ export const CacheEligibilityLive = Layer.effect(
 
           // Use the local user's token for this host to query the signer's permission.
           const localAcct = yield* Effect.try({
-            try: () => getLocalAccountsForHost(signerHost),
+            try: () => getLocalAccountForHost(signerHost),
             catch: () => null,
           }).pipe(Effect.catchAll(() => Effect.succeed(null)));
 
           if (!localAcct) return false;
+          const token = yield* tokenProvider
+            .getTokenByAccountId(localAcct.accountId)
+            .pipe(Effect.catchAll(() => Effect.succeed(null)));
+          if (!token) return false;
 
-          const perm = yield* resolvePermission(
-            signerHost,
-            owner,
-            repo,
-            signerLogin,
-            localAcct.token,
-          );
+          const perm = yield* resolvePermission(signerHost, owner, repo, signerLogin, token);
           return isEligible(perm);
         }).pipe(Effect.catchAll(() => Effect.succeed(false))),
     });

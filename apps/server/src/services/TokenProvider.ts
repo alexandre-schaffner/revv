@@ -3,17 +3,34 @@ import { Context, Effect, Layer } from "effect";
 import { serverEnv } from "../config";
 import { account, user } from "../db/schema";
 import { GitHubAuthError } from "../domain/errors";
+import { clientIdForHost, tokenUrlForHost } from "../github-oauth";
 import { DbService } from "./Db";
+import { SecretStore, type TokenPair } from "./SecretStore";
+import { WebSocketHub } from "./WebSocketHub";
+
+const REFRESH_SKEW_MS = 5 * 60 * 1000;
+
+interface RefreshResponse {
+  access_token?: string;
+  refresh_token?: string;
+  expires_in?: number;
+  refresh_token_expires_in?: number;
+  error?: string;
+}
 
 /**
- * Fetches the GitHub access token stored on the user's linked GitHub account.
+ * Fetches and maintains the GitHub access token for a user's linked account.
  *
- * We read from the `account` table directly rather than going through
- * `better-auth`'s `getAccessToken` API because Revv's only auth path is the
- * device-code flow (see `routes/device-auth.ts`), which writes the token to
- * this table itself. Keeping the dependency local also means we don't need
- * better-auth's `socialProviders.github` to be configured — which it no
- * longer is, since `client_secret` was removed.
+ * Token *bytes* live in {@link SecretStore} (the OS secure element); the
+ * `account` row holds only non-secret metadata (provider/host, expiry
+ * timestamps, `reauthRequiredAt`). We read the `account` table directly rather
+ * than via better-auth because Revv's only auth path is the device-code flow
+ * (see `routes/device-auth.ts`), which now also captures a refresh token when
+ * the OAuth App issues one.
+ *
+ * The provider transparently refreshes a near-expiry access token on read, and
+ * exposes `refreshAccountToken` / `markReauthRequired` for the reactive 401
+ * recovery path driven by `PollScheduler`.
  */
 export class TokenProvider extends Context.Tag("TokenProvider")<
   TokenProvider,
@@ -43,6 +60,31 @@ export class TokenProvider extends Context.Tag("TokenProvider")<
      * accounts per host are present on the machine.
      */
     readonly getTokenByAccountId: (accountId: string) => Effect.Effect<string, GitHubAuthError>;
+    /**
+     * Persist freshly issued token material for an account and notify clients
+     * that any re-auth gate for this account can be cleared.
+     */
+    readonly storeAccountTokens: (
+      accountId: string,
+      host: string,
+      tokens: TokenPair,
+    ) => Effect.Effect<void>;
+    /** Delete token material for a locally disconnected account. */
+    readonly deleteAccountTokens: (accountId: string) => Effect.Effect<void>;
+    /**
+     * Exchange the account's stored refresh token for a fresh access token,
+     * persisting both to the secure store and clearing `reauthRequiredAt`.
+     * Fails with `GitHubAuthError` when no usable refresh token exists or
+     * GitHub rejects the grant — the caller then routes to
+     * `markReauthRequired`.
+     */
+    readonly refreshAccountToken: (accountId: string) => Effect.Effect<string, GitHubAuthError>;
+    /**
+     * Stamp `reauthRequiredAt` on the account and broadcast
+     * `auth:reauth-required` to its connected clients. Called when a token is
+     * invalid and could not be refreshed.
+     */
+    readonly markReauthRequired: (accountId: string) => Effect.Effect<void>;
   }
 >() {}
 
@@ -50,100 +92,234 @@ export const TokenProviderLive = Layer.effect(
   TokenProvider,
   Effect.gen(function* () {
     const { db } = yield* DbService;
+    const secretStore = yield* SecretStore;
+    const hub = yield* WebSocketHub;
 
-    async function findAccount(
-      userId: string,
-      host?: string,
-    ): Promise<{ id: string; accessToken: string; providerId: string }> {
-      // 'single-user' is a placeholder — resolve to the actual user ID
-      let resolvedId = userId;
-      if (userId === "single-user" || !userId) {
-        const rows = await db.select({ id: user.id }).from(user).limit(1);
-        const firstRow = rows[0];
-        if (!firstRow) throw new Error("No user found");
-        resolvedId = firstRow.id;
-      }
+    // De-dupe concurrent refreshes of the same account — PollScheduler fans
+    // out per-repo and would otherwise fire N parallel refresh grants, each
+    // invalidating the previous one's rotated refresh token.
+    const refreshInFlight = new Map<string, Promise<string>>();
 
-      // Build ordered list of providerIds to try: specific host first, legacy fallback last.
-      // Legacy 'github' rows exist for users who signed in before the host-keyed migration.
-      const providerIds = host
-        ? [`github:${host}`, "github"]
-        : ["github:github.com", `github:${serverEnv.githubHost}`, "github"];
-
-      const rows = await db
-        .select({
-          id: account.id,
-          accessToken: account.accessToken,
-          providerId: account.providerId,
-        })
-        .from(account)
-        .where(eq(account.userId, resolvedId));
-
-      for (const pid of providerIds) {
-        const match = rows.find((r) => r.providerId === pid);
-        if (match?.accessToken) {
-          return match as { id: string; accessToken: string; providerId: string };
-        }
-      }
-
-      // Fallback: the priority list above is keyed on host=github.com, the
-      // configured GHE host, and the legacy 'github' provider. A user who
-      // signed in only against a *different* GHE host (e.g. nocturlab.ghe.com)
-      // and whose WS opens without a `host=` query param — which happens
-      // during account-switch, since settings.githubHost is reset to null
-      // before the WS reconnect — would miss every entry above and we'd
-      // hand back accountId='unresolved'. The WS then binds to no account
-      // and never receives the `broadcastToAccount(...)` PR updates the
-      // PollScheduler emits. Falling back to any account this user actually
-      // owns keeps single-account users always correct and gives multi-
-      // account users a deterministic-but-arbitrary pick that an explicit
-      // host param still overrides.
-      const anyAccount = rows.find((r) => r.accessToken);
-      if (anyAccount) {
-        return anyAccount as { id: string; accessToken: string; providerId: string };
-      }
-
-      throw new Error("No access token found");
+    /** Derive the GitHub host from a `github:{host}` (or legacy `github`) providerId. */
+    function hostFromProviderId(providerId: string): string {
+      return providerId.split(":")[1] ?? serverEnv.githubHost;
     }
 
+    async function doRefresh(accountId: string): Promise<string> {
+      const row = db
+        .select({
+          providerId: account.providerId,
+          refreshTokenExpiresAt: account.refreshTokenExpiresAt,
+        })
+        .from(account)
+        .where(eq(account.id, accountId))
+        .get();
+      if (!row) throw new Error(`account ${accountId} not found`);
+
+      const stored = await Effect.runPromise(secretStore.getTokens(accountId));
+      const refreshToken = stored?.refreshToken ?? null;
+      if (!refreshToken) throw new Error("no refresh token available");
+      if (row.refreshTokenExpiresAt && row.refreshTokenExpiresAt.getTime() < Date.now()) {
+        throw new Error("refresh token expired");
+      }
+
+      const host = hostFromProviderId(row.providerId);
+      const res = await fetch(tokenUrlForHost(host), {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          client_id: clientIdForHost(host),
+          grant_type: "refresh_token",
+          refresh_token: refreshToken,
+        }),
+      });
+      const data = (await res.json()) as RefreshResponse;
+      if (!data.access_token) {
+        throw new Error(data.error ?? `refresh failed (HTTP ${res.status})`);
+      }
+
+      const now = new Date();
+      const newRefresh = data.refresh_token ?? refreshToken;
+      await Effect.runPromise(
+        secretStore.setTokens(accountId, {
+          accessToken: data.access_token,
+          refreshToken: newRefresh,
+        }),
+      );
+      db.update(account)
+        .set({
+          accessTokenExpiresAt: data.expires_in
+            ? new Date(now.getTime() + data.expires_in * 1000)
+            : null,
+          refreshTokenExpiresAt: data.refresh_token_expires_in
+            ? new Date(now.getTime() + data.refresh_token_expires_in * 1000)
+            : row.refreshTokenExpiresAt,
+          reauthRequiredAt: null,
+          updatedAt: now,
+        })
+        .where(eq(account.id, accountId))
+        .run();
+
+      await Effect.runPromise(
+        hub.broadcastToAccount(accountId, { type: "auth:reauth-cleared", data: { host } }),
+      );
+      return data.access_token;
+    }
+
+    const refreshAccountToken = (accountId: string): Effect.Effect<string, GitHubAuthError> =>
+      Effect.tryPromise({
+        try: () => {
+          const existing = refreshInFlight.get(accountId);
+          if (existing) return existing;
+          const p = doRefresh(accountId).finally(() => refreshInFlight.delete(accountId));
+          refreshInFlight.set(accountId, p);
+          return p;
+        },
+        catch: (e) => new GitHubAuthError({ message: String(e) }),
+      });
+
+    const markReauthRequired = (accountId: string): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        const row = db
+          .select({ providerId: account.providerId, githubLogin: account.githubLogin })
+          .from(account)
+          .where(eq(account.id, accountId))
+          .get();
+        if (!row) return;
+        yield* Effect.sync(() =>
+          db
+            .update(account)
+            .set({ reauthRequiredAt: new Date(), updatedAt: new Date() })
+            .where(eq(account.id, accountId))
+            .run(),
+        );
+        yield* hub.broadcastToAccount(accountId, {
+          type: "auth:reauth-required",
+          data: { host: hostFromProviderId(row.providerId), githubLogin: row.githubLogin ?? null },
+        });
+      });
+
+    const storeAccountTokens = (
+      accountId: string,
+      host: string,
+      tokens: TokenPair,
+    ): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        yield* secretStore.setTokens(accountId, tokens);
+        yield* hub.broadcastToAccount(accountId, {
+          type: "auth:reauth-cleared",
+          data: { host },
+        });
+      });
+
+    const deleteAccountTokens = (accountId: string): Effect.Effect<void> =>
+      secretStore.deleteTokens(accountId);
+
+    /** Refresh `accessToken` if it's within {@link REFRESH_SKEW_MS} of expiry
+     * and a refresh token exists. Best-effort: on refresh failure, return the
+     * existing token and let the eventual 401 drive `markReauthRequired`. */
+    const maybeRefresh = (
+      accountId: string,
+      accessTokenExpiresAt: Date | null,
+      accessToken: string,
+      refreshToken: string | null,
+    ): Effect.Effect<string> => {
+      const exp = accessTokenExpiresAt?.getTime();
+      const nearExpiry = exp != null && exp - Date.now() < REFRESH_SKEW_MS;
+      if (!nearExpiry || !refreshToken) return Effect.succeed(accessToken);
+      return refreshAccountToken(accountId).pipe(Effect.orElseSucceed(() => accessToken));
+    };
+
+    function resolveUserId(userId: string): string {
+      if (userId && userId !== "single-user") return userId;
+      const firstRow = db.select({ id: user.id }).from(user).limit(1).get();
+      if (!firstRow) throw new Error("No user found");
+      return firstRow.id;
+    }
+
+    /** Resolve the active account (id + provider + a valid token) for a user. */
+    const resolveValid = (
+      userId: string,
+      host?: string,
+    ): Effect.Effect<
+      { accountId: string; accessToken: string; providerId: string },
+      GitHubAuthError
+    > =>
+      Effect.gen(function* () {
+        const resolvedId = yield* Effect.try({
+          try: () => resolveUserId(userId),
+          catch: (e) => new GitHubAuthError({ message: String(e) }),
+        });
+
+        const rows = db
+          .select({
+            id: account.id,
+            providerId: account.providerId,
+            accessTokenExpiresAt: account.accessTokenExpiresAt,
+          })
+          .from(account)
+          .where(eq(account.userId, resolvedId))
+          .all();
+
+        // Priority order: requested host first, then defaults, then the
+        // legacy 'github' provider. Falls back to any remaining account the
+        // user owns (mirrors the prior behavior for non-default GHE hosts that
+        // open a WS without a `host=` param — see git history).
+        const providerIds = host
+          ? [`github:${host}`, "github"]
+          : ["github:github.com", `github:${serverEnv.githubHost}`, "github"];
+        const ordered: typeof rows = [];
+        for (const pid of providerIds) {
+          const m = rows.find((r) => r.providerId === pid);
+          if (m && !ordered.includes(m)) ordered.push(m);
+        }
+        for (const r of rows) if (!ordered.includes(r)) ordered.push(r);
+
+        for (const meta of ordered) {
+          const stored = yield* secretStore.getTokens(meta.id);
+          if (!stored?.accessToken) continue;
+          const token = yield* maybeRefresh(
+            meta.id,
+            meta.accessTokenExpiresAt,
+            stored.accessToken,
+            stored.refreshToken,
+          );
+          return { accountId: meta.id, accessToken: token, providerId: meta.providerId };
+        }
+        return yield* Effect.fail(new GitHubAuthError({ message: "No access token found" }));
+      });
+
     return {
-      getGitHubToken: (userId: string, host?: string) =>
-        Effect.tryPromise({
-          try: async () => {
-            const match = await findAccount(userId, host);
-            return match.accessToken;
-          },
-          catch: (e) => new GitHubAuthError({ message: String(e) }),
+      getGitHubToken: (userId, host) =>
+        resolveValid(userId, host).pipe(Effect.map((r) => r.accessToken)),
+
+      resolveAccount: (userId, host) => resolveValid(userId, host),
+
+      getTokenByAccountId: (accountId) =>
+        Effect.gen(function* () {
+          const row = db
+            .select({ accessTokenExpiresAt: account.accessTokenExpiresAt })
+            .from(account)
+            .where(eq(account.id, accountId))
+            .get();
+          const stored = yield* secretStore.getTokens(accountId);
+          if (!stored?.accessToken) {
+            return yield* Effect.fail(
+              new GitHubAuthError({ message: `No access token for account ${accountId}` }),
+            );
+          }
+          return yield* maybeRefresh(
+            accountId,
+            row?.accessTokenExpiresAt ?? null,
+            stored.accessToken,
+            stored.refreshToken,
+          );
         }),
 
-      resolveAccount: (userId: string, host?: string) =>
-        Effect.tryPromise({
-          try: async () => {
-            const match = await findAccount(userId, host);
-            return {
-              accountId: match.id,
-              accessToken: match.accessToken,
-              providerId: match.providerId,
-            };
-          },
-          catch: (e) => new GitHubAuthError({ message: String(e) }),
-        }),
-
-      getTokenByAccountId: (accountId: string) =>
-        Effect.tryPromise({
-          try: async () => {
-            const row = await db
-              .select({ accessToken: account.accessToken })
-              .from(account)
-              .where(eq(account.id, accountId))
-              .then((r) => r[0] ?? null);
-            if (!row?.accessToken) {
-              throw new Error(`No access token for account ${accountId}`);
-            }
-            return row.accessToken;
-          },
-          catch: (e) => new GitHubAuthError({ message: String(e) }),
-        }),
+      storeAccountTokens,
+      deleteAccountTokens,
+      refreshAccountToken,
+      markReauthRequired,
     };
   }),
 );

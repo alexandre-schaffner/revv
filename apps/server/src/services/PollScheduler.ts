@@ -16,6 +16,7 @@ import { RemoteUserService } from "./RemoteUser";
 import { RepositoryService } from "./Repository";
 import { SettingsService } from "./Settings";
 import { SyncService } from "./Sync";
+import { TokenProvider } from "./TokenProvider";
 import { WalkthroughService } from "./Walkthrough";
 import { WalkthroughJobs } from "./WalkthroughJobs";
 import { WebSocketHub } from "./WebSocketHub";
@@ -38,6 +39,11 @@ function hostToApiBase(host: string): string {
   return host === "github.com" ? "https://api.github.com" : `https://api.${host}`;
 }
 
+/** Derive the GitHub host from a `github:{host}` (or legacy `github`) providerId. */
+function hostFromProviderId(providerId: string): string {
+  return providerId.split(":")[1] ?? "github.com";
+}
+
 export const PollSchedulerLive = Layer.effect(
   PollScheduler,
   Effect.gen(function* () {
@@ -53,6 +59,7 @@ export const PollSchedulerLive = Layer.effect(
     const etagCache = yield* GitHubEtagCache;
     const walkthroughJobs = yield* WalkthroughJobs;
     const walkthroughService = yield* WalkthroughService;
+    const tokenProvider = yield* TokenProvider;
     const { db } = yield* DbService;
 
     // Layer-scope guard tracking accounts whose access token returned a 401.
@@ -138,21 +145,55 @@ export const PollSchedulerLive = Layer.effect(
             .all();
           const repoToAccountId = new Map(repoRowsForAccount.map((r) => [r.id, r.accountId]));
           const accountIdSet = Array.from(new Set(repoRowsForAccount.map((r) => r.accountId)));
-          const accountRows: AccountCtx[] =
+          // Token bytes live behind TokenProvider, not the DB. Fetch only the
+          // metadata the scheduler needs, then let TokenProvider resolve and
+          // refresh the usable access token.
+          const accountMetaRows =
             accountIdSet.length > 0
               ? db
                   .select({
                     id: account.id,
                     userId: account.userId,
-                    accessToken: account.accessToken,
+                    providerId: account.providerId,
                     githubLogin: account.githubLogin,
                     avatarUrl: account.avatarUrl,
+                    reauthRequiredAt: account.reauthRequiredAt,
                   })
                   .from(account)
                   .where(inArray(account.id, accountIdSet))
                   .all()
               : [];
+          const accountRows: AccountCtx[] = [];
+          for (const meta of accountMetaRows) {
+            const token = yield* tokenProvider
+              .getTokenByAccountId(meta.id)
+              .pipe(Effect.orElseSucceed(() => null));
+            // Reconcile: a client that reconnected after missing the live
+            // envelope learns it still needs to re-auth. Broadcast-only (no
+            // DB re-stamp) since the row already carries the flag.
+            if (meta.reauthRequiredAt) {
+              yield* hub
+                .broadcastToAccount(meta.id, {
+                  type: "auth:reauth-required",
+                  data: {
+                    host: hostFromProviderId(meta.providerId),
+                    githubLogin: meta.githubLogin,
+                  },
+                })
+                .pipe(Effect.orElseSucceed(() => undefined));
+            }
+            accountRows.push({
+              id: meta.id,
+              userId: meta.userId,
+              accessToken: token,
+              githubLogin: meta.githubLogin,
+              avatarUrl: meta.avatarUrl,
+            });
+          }
           const accountById = new Map(accountRows.map((a) => [a.id, a]));
+          // Accounts whose token was already refreshed this cycle — bounds the
+          // reactive 401 path to one refresh attempt per account per cycle.
+          const refreshedThisCycle = new Set<string>();
 
           // First-time-only log when a token is observed to 401; subsequent
           // calls in this or future cycles are silent until the token rotates.
@@ -196,6 +237,28 @@ export const PollSchedulerLive = Layer.effect(
           // tap/catch boilerplate. Pass `expectedAuthError: true` to suppress
           // the noise after the cycle's first 401 (the per-account log line
           // already covered it).
+          // On a 401, try once to silently refresh the account's token; if it
+          // rotates, update the in-memory ctx so later calls this cycle use it
+          // and the account is NOT paused. If refresh is impossible/failed,
+          // pause the account and stamp+broadcast the re-auth requirement.
+          const handleAuthError = (acc: AccountCtx): Effect.Effect<void> =>
+            Effect.gen(function* () {
+              if (refreshedThisCycle.has(acc.id)) return; // already attempted this cycle
+              refreshedThisCycle.add(acc.id);
+              const refreshed = yield* tokenProvider.refreshAccountToken(acc.id).pipe(
+                Effect.map((t): string | null => t),
+                Effect.orElseSucceed(() => null),
+              );
+              if (refreshed) {
+                const cur = accountById.get(acc.id);
+                if (cur) accountById.set(acc.id, { ...cur, accessToken: refreshed });
+                knownBadTokensByAccountId.delete(acc.id);
+                return;
+              }
+              markTokenBad(acc);
+              yield* tokenProvider.markReauthRequired(acc.id);
+            });
+
           const tryGuarded = <A, E, R>(
             acc: AccountCtx,
             eff: Effect.Effect<A, E, R>,
@@ -203,15 +266,13 @@ export const PollSchedulerLive = Layer.effect(
           ): Effect.Effect<A | null, never, R> =>
             eff.pipe(
               Effect.tapError((err) =>
-                Effect.sync(() => {
-                  if (err instanceof GitHubAuthError) {
-                    markTokenBad(acc);
-                    return;
-                  }
-                  if (opts?.errorLabel) {
-                    logError("PollScheduler", `${opts.errorLabel}:`, err);
-                  }
-                }),
+                err instanceof GitHubAuthError
+                  ? handleAuthError(acc)
+                  : Effect.sync(() => {
+                      if (opts?.errorLabel) {
+                        logError("PollScheduler", `${opts.errorLabel}:`, err);
+                      }
+                    }),
               ),
               Effect.catchAll(() => Effect.succeed(null as A | null)),
             );

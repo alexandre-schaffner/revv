@@ -71,6 +71,21 @@ export type WsServerMessage =
     }
   /** signal — Fatal server error (e.g. rate-limited). Show toast; `retryAfter` optional. */
   | { type: "error"; data: { code: string; message: string; retryAfter?: number } }
+  /**
+   * signal — The account's GitHub token is invalid and could not be silently
+   * refreshed (revoked / no or expired refresh token). The client gates the
+   * app behind a blocking re-sign-in modal. Account-scoped. Re-broadcast each
+   * poll cycle while the account stays flagged, so a client that missed it
+   * while disconnected reconciles; the authoritative state is
+   * `account.reauthRequiredAt`, surfaced on `GET /api/user/identity`.
+   */
+  | { type: "auth:reauth-required"; data: { host: string; githubLogin: string | null } }
+  /**
+   * signal — The account's GitHub token is valid again (successful refresh or
+   * device-flow re-auth). The client dismisses the re-sign-in modal.
+   * Account-scoped.
+   */
+  | { type: "auth:reauth-cleared"; data: { host: string } }
   /** delta — New comment thread created. Append to thread list. */
   | {
       type: "thread:created";

@@ -285,10 +285,6 @@ async function handleSignOut(): Promise<void> {
 		flex-shrink: 0;
 	}
 
-	.user-avatar--collapsed {
-		/* No size change — parent shrink handles the visual effect */
-	}
-
 	.user-avatar--fallback {
 		display: inline-flex;
 		align-items: center;

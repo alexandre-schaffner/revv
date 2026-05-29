@@ -1,0 +1,1 @@
+ALTER TABLE `account` ADD `reauth_required_at` integer;

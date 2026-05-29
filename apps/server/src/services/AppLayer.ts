@@ -28,6 +28,7 @@ import { RemoteWalkthroughCacheLive } from "./RemoteWalkthroughCache";
 import { RepoCloneServiceLive } from "./RepoClone";
 import { RepositoryServiceLive } from "./Repository";
 import { ReviewServiceLive } from "./Review";
+import { SecretStoreLive } from "./SecretStore";
 import { SettingsServiceLive } from "./Settings";
 import { SyncServiceLive } from "./Sync";
 import { TokenProviderLive } from "./TokenProvider";
@@ -36,8 +37,13 @@ import { WalkthroughJobsLive } from "./WalkthroughJobs";
 import { WalkthroughSnapshotImporterLive } from "./WalkthroughSnapshotImporter";
 import { WebSocketHubLive } from "./WebSocketHub";
 
-// TokenProvider now needs DbService
-const TokenProviderWithDeps = TokenProviderLive.pipe(Layer.provide(DbServiceLive));
+// TokenProvider reads token bytes from SecretStore, resolves account rows via
+// DbService, and broadcasts re-auth signals via WebSocketHub (token refresh
+// success/failure). WebSocketHub is a leaf layer, so providing it here as well
+// as in BaseLayers is a no-op dedupe.
+const TokenProviderWithDeps = TokenProviderLive.pipe(
+  Layer.provide(Layer.mergeAll(DbServiceLive, SecretStoreLive, WebSocketHubLive)),
+);
 
 // SettingsService now reads/writes via DbService instead of JSON file
 const SettingsServiceWithDeps = SettingsServiceLive.pipe(Layer.provide(DbServiceLive));
@@ -65,6 +71,7 @@ const RemoteUserServiceWithDeps = RemoteUserServiceLive.pipe(Layer.provide(DbSer
 // Base layer: all services that have no deps or only depend on DbService
 const BaseLayers = Layer.mergeAll(
   DbServiceLive,
+  SecretStoreLive,
   TokenProviderWithDeps,
   GitHubEtagCacheLive,
   GitHubServiceWithDeps,
