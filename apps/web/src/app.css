@@ -80,7 +80,7 @@
   --revv-diff-selected-bg: color-mix(in srgb, var(--revv-accent) 8%, transparent);
 
   /* Gutter markers — open pinned to brand accent */
-  --revv-marker-open: oklch(48% 0.08 195);
+  --revv-marker-open: var(--revv-accent);
   --revv-marker-open-glow: color-mix(in srgb, var(--revv-accent) 25%, transparent);
   --revv-marker-pending: #b45309;
   --revv-marker-pending-glow: rgba(180, 83, 9, 0.25);
@@ -100,11 +100,11 @@
   /* Context panel */
   --revv-panel-bg: #f4f1eb;
   --revv-panel-header-bg: rgba(244, 241, 235, 0.96);
-  --revv-stream-cursor: oklch(48% 0.08 195);
+  --revv-stream-cursor: var(--revv-accent);
 
   /* File tree */
   --revv-tree-active-bg: color-mix(in srgb, var(--revv-accent) 10%, transparent);
-  --revv-tree-active-text: oklch(42% 0.075 195);
+  --revv-tree-active-text: var(--revv-accent-hover);
   --revv-tree-hover-bg: #eae6de;
 
   /* Floating tabs */
@@ -172,11 +172,11 @@
        brand family. Darker and less saturated than pass-green so the two
        remain visually distinct in the scorecard context. */
   --revv-score-info-bg: color-mix(in srgb, var(--revv-accent) 4%, var(--revv-bg-secondary));
-  --revv-score-info-border: oklch(48% 0.08 195);
-  --revv-score-info-icon: oklch(42% 0.075 195);
+  --revv-score-info-border: var(--revv-accent);
+  --revv-score-info-icon: var(--revv-accent-hover);
   --revv-score-info-label: oklch(36% 0.065 195);
   --revv-score-info-conf-bg: color-mix(in srgb, var(--revv-score-info-icon) 12%, transparent);
-  --revv-score-info-conf: oklch(42% 0.075 195);
+  --revv-score-info-conf: var(--revv-accent-hover);
 }
 
 /* ──────────────────────────────────────────────────────────
@@ -251,7 +251,7 @@
   --revv-diff-selected-bg: color-mix(in srgb, var(--revv-accent) 10%, transparent);
 
   /* Gutter markers */
-  --revv-marker-open: oklch(72% 0.12 195);
+  --revv-marker-open: var(--revv-accent);
   --revv-marker-open-glow: color-mix(in srgb, var(--revv-accent) 35%, transparent);
   --revv-marker-pending: #f59e0b;
   --revv-marker-pending-glow: rgba(245, 158, 11, 0.35);
@@ -271,11 +271,11 @@
   /* Context panel */
   --revv-panel-bg: #0e0e0e;
   --revv-panel-header-bg: rgba(17, 17, 17, 0.95);
-  --revv-stream-cursor: oklch(72% 0.12 195);
+  --revv-stream-cursor: var(--revv-accent);
 
   /* File tree */
   --revv-tree-active-bg: color-mix(in srgb, var(--revv-accent) 12%, transparent);
-  --revv-tree-active-text: oklch(87% 0.07 195);
+  --revv-tree-active-text: var(--revv-accent-muted);
   --revv-tree-hover-bg: #141414;
 
   /* Floating tabs */
@@ -345,11 +345,90 @@
        luminance keeps "info" in the brand family while staying clearly
        distinct from pass-green (yellower) and concern-amber (warmer). */
   --revv-score-info-bg: color-mix(in srgb, var(--revv-accent) 4%, var(--revv-bg-secondary));
-  --revv-score-info-border: oklch(72% 0.12 195);
-  --revv-score-info-icon: oklch(81% 0.09 195);
+  --revv-score-info-border: var(--revv-accent);
+  --revv-score-info-icon: var(--revv-accent-muted);
   --revv-score-info-label: oklch(87% 0.07 195);
   --revv-score-info-conf-bg: color-mix(in srgb, var(--revv-score-info-icon) 25%, transparent);
-  --revv-score-info-conf: oklch(81% 0.09 195);
+  --revv-score-info-conf: var(--revv-accent-muted);
+}
+
+/* ──────────────────────────────────────────────────────────
+   Accent presets — override the accent token quintet.
+   All color-mix()-derived tokens follow automatically.
+   The "teal" default lives in :root / :root.dark above;
+   these blocks override for the 4 alternative presets.
+   ────────────────────────────────────────────────────────── */
+
+/* Amber --------------------------------------------------- */
+:root[data-accent="amber"] {
+  --primary: 34 100% 30%;
+  --ring: 34 100% 30%;
+  --revv-accent: oklch(52% 0.12 62);
+  --revv-accent-hover: oklch(46% 0.108 62);
+  --revv-accent-muted: oklch(62% 0.09 62);
+  --revv-score-info-label: oklch(38% 0.10 62);
+}
+:root.dark[data-accent="amber"] {
+  --primary: 30 79% 58%;
+  --ring: 30 79% 58%;
+  --revv-accent: oklch(74% 0.14 62);
+  --revv-accent-hover: oklch(68% 0.14 62);
+  --revv-accent-muted: oklch(83% 0.105 62);
+  --revv-score-info-label: oklch(88% 0.09 62);
+}
+
+/* Rose ---------------------------------------------------- */
+:root[data-accent="rose"] {
+  --primary: 319 31% 39%;
+  --ring: 319 31% 39%;
+  --revv-accent: oklch(48% 0.10 340);
+  --revv-accent-hover: oklch(42% 0.09 340);
+  --revv-accent-muted: oklch(58% 0.075 340);
+  --revv-score-info-label: oklch(36% 0.08 340);
+}
+:root.dark[data-accent="rose"] {
+  --primary: 319 54% 68%;
+  --ring: 319 54% 68%;
+  --revv-accent: oklch(72% 0.13 340);
+  --revv-accent-hover: oklch(66% 0.13 340);
+  --revv-accent-muted: oklch(81% 0.098 340);
+  --revv-score-info-label: oklch(87% 0.09 340);
+}
+
+/* Sage ---------------------------------------------------- */
+:root[data-accent="sage"] {
+  --primary: 145 46% 28%;
+  --ring: 145 46% 28%;
+  --revv-accent: oklch(46% 0.09 155);
+  --revv-accent-hover: oklch(40% 0.081 155);
+  --revv-accent-muted: oklch(56% 0.068 155);
+  --revv-score-info-label: oklch(34% 0.07 155);
+}
+:root.dark[data-accent="sage"] {
+  --primary: 143 33% 52%;
+  --ring: 143 33% 52%;
+  --revv-accent: oklch(68% 0.11 155);
+  --revv-accent-hover: oklch(62% 0.11 155);
+  --revv-accent-muted: oklch(77% 0.083 155);
+  --revv-score-info-label: oklch(85% 0.08 155);
+}
+
+/* Indigo -------------------------------------------------- */
+:root[data-accent="indigo"] {
+  --primary: 223 54% 39%;
+  --ring: 223 54% 39%;
+  --revv-accent: oklch(44% 0.13 265);
+  --revv-accent-hover: oklch(38% 0.117 265);
+  --revv-accent-muted: oklch(54% 0.098 265);
+  --revv-score-info-label: oklch(32% 0.10 265);
+}
+:root.dark[data-accent="indigo"] {
+  --primary: 222 86% 67%;
+  --ring: 222 86% 67%;
+  --revv-accent: oklch(66% 0.16 265);
+  --revv-accent-hover: oklch(60% 0.16 265);
+  --revv-accent-muted: oklch(75% 0.12 265);
+  --revv-score-info-label: oklch(85% 0.10 265);
 }
 
 /* ──────────────────────────────────────────────────────────
