@@ -98,23 +98,25 @@ _latest_nightly_tag() {
 }
 
 # ── Banner ────────────────────────────────────────────────────
-printf "\n"
-printf "  ${_CYAN}${_B}██████╗ ███████╗██╗   ██╗██╗   ██╗${_R}\n"
-printf "  ${_CYAN}${_B}██╔══██╗██╔════╝██║   ██║██║   ██║${_R}\n"
-printf "  ${_CYAN}${_B}██████╔╝█████╗  ██║   ██║██║   ██║${_R}\n"
-printf "  ${_CYAN}${_B}██╔══██╗██╔══╝  ╚██╗ ██╔╝╚██╗ ██╔╝${_R}\n"
-printf "  ${_CYAN}${_B}██║  ██║███████╗ ╚████╔╝  ╚████╔╝ ${_R}\n"
-printf "  ${_CYAN}${_B}╚═╝  ╚═╝╚══════╝  ╚═══╝    ╚═══╝  ${_R}\n"
-printf "\n"
-if [[ "$MODE" == "dev" ]]; then
-  printf "  ${_D}AI-powered code review${_R}  ${_B}dev setup${_R}\n"
-else
-  printf "  ${_D}AI-powered code review${_R}  ${_B}installer${_R}\n"
+if [[ -z "${REVV_SKIP_BANNER:-}" ]]; then
+  printf "\n"
+  printf "  ${_CYAN}${_B}██████╗ ███████╗██╗   ██╗██╗   ██╗${_R}\n"
+  printf "  ${_CYAN}${_B}██╔══██╗██╔════╝██║   ██║██║   ██║${_R}\n"
+  printf "  ${_CYAN}${_B}██████╔╝█████╗  ██║   ██║██║   ██║${_R}\n"
+  printf "  ${_CYAN}${_B}██╔══██╗██╔══╝  ╚██╗ ██╔╝╚██╗ ██╔╝${_R}\n"
+  printf "  ${_CYAN}${_B}██║  ██║███████╗ ╚████╔╝  ╚████╔╝ ${_R}\n"
+  printf "  ${_CYAN}${_B}╚═╝  ╚═╝╚══════╝  ╚═══╝    ╚═══╝  ${_R}\n"
+  printf "\n"
+  if [[ "$MODE" == "dev" ]]; then
+    printf "  ${_D}AI-powered code review${_R}  ${_B}dev setup${_R}\n"
+  else
+    printf "  ${_D}AI-powered code review${_R}  ${_B}installer${_R}\n"
+  fi
+  printf "\n"
+  printf "  ${_D}"
+  printf '─%.0s' {1..54}
+  printf "${_R}\n\n"
 fi
-printf "\n"
-printf "  ${_D}"
-printf '─%.0s' {1..54}
-printf "${_R}\n\n"
 
 # ── Locate the checkout, cloning if necessary ─────────────────
 #
@@ -200,6 +202,7 @@ On $os, clone the repo and run ./install.sh --dev manually:
 
   _info "Re-executing installer from the cloned checkout"
   # Preserve flags for the re-exec — quote heavily, path may contain spaces.
+  unset REVV_SKIP_BANNER
   exec bash "$dest/install.sh" "$@"
 fi
 
@@ -264,9 +267,7 @@ fi
 # ── 4. Install project deps ───────────────────────────────────
 step "Installing project dependencies"
 cd "$PROJECT_ROOT"
-info "Running bun install…"
-bun install
-success "Workspace dependencies installed"
+run_quiet "Installing workspace dependencies" bun install
 
 # Verify workspace deps actually landed in node_modules (Bun's workspace
 # hoisting can leave stale trees when the lockfile changes under a warm cache).
@@ -278,10 +279,9 @@ _verify_workspace_deps() {
   if [[ ${#missing[@]} -gt 0 ]]; then
     warn "Some workspace dependencies are missing from node_modules: ${missing[*]}"
     if confirm "Force a clean reinstall (rm -rf node_modules && bun install)?"; then
-      info "Clearing node_modules and reinstalling…"
+      info "Clearing node_modules…"
       rm -rf node_modules apps/web/node_modules apps/server/node_modules packages/shared/node_modules
-      bun install
-      success "Clean reinstall complete"
+      run_quiet "Reinstalling workspace dependencies" bun install
     else
       warn "Continuing with incomplete node_modules — builds may fail"
     fi

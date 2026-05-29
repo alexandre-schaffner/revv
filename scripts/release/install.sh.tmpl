@@ -95,9 +95,11 @@ verify_attestation() {
   rm -f "$bundle"
 }
 
-printf '\n'
-printf '  %s%sRevv%s  %srelease installer%s  %sv%s%s\n' "$C" "$B" "$R" "$D" "$R" "$B" "$REVV_VERSION" "$R"
-printf '  %sRelease:%s %s%s%s\n\n' "$D" "$R" "$B" "$RELEASE_TAG" "$R"
+if [[ -z "${REVV_PREFLIGHT_DONE:-}" ]]; then
+  printf '\n'
+  printf '  %s%sRevv%s  %srelease installer%s  %sv%s%s\n' "$C" "$B" "$R" "$D" "$R" "$B" "$REVV_VERSION" "$R"
+  printf '  %sRelease:%s %s%s%s\n\n' "$D" "$R" "$B" "$RELEASE_TAG" "$R"
+fi
 
 SKIP_VERIFY_FLAG=0
 INSTALLER_ARGS=()
@@ -126,9 +128,9 @@ if [[ $# -eq 0 || ( " $* " != *" --help "* && " $* " != *" -h "* ) ]]; then
 
     rc=0
     if [[ "$SKIP_VERIFY_FLAG" == "1" ]]; then
-      bash "$SELF_PATH" --skip-verify "${INSTALLER_ARGS[@]+"${INSTALLER_ARGS[@]}"}" || rc=$?
+      REVV_PREFLIGHT_DONE=1 REVV_SKIP_BANNER=1 bash "$SELF_PATH" --skip-verify "${INSTALLER_ARGS[@]+"${INSTALLER_ARGS[@]}"}" || rc=$?
     else
-      bash "$SELF_PATH" "${INSTALLER_ARGS[@]+"${INSTALLER_ARGS[@]}"}" || rc=$?
+      REVV_PREFLIGHT_DONE=1 REVV_SKIP_BANNER=1 bash "$SELF_PATH" "${INSTALLER_ARGS[@]+"${INSTALLER_ARGS[@]}"}" || rc=$?
     fi
     rm -f "$SELF_PATH"
     exit "$rc"
