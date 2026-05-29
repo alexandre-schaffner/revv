@@ -15,6 +15,7 @@ import { EventBusLive } from "./EventBus";
 import { FileContentServiceLive } from "./FileContent";
 import { GitHubServiceLive } from "./GitHub";
 import { GitHubEtagCacheLive } from "./GitHubEtagCache";
+import { IssuesServiceLive } from "./Issues";
 import { OnboardingServiceLive } from "./Onboarding";
 import { OpencodeSupervisorLive } from "./OpencodeSupervisor";
 import { PollSchedulerLive } from "./PollScheduler";
@@ -72,6 +73,7 @@ const BaseLayers = Layer.mergeAll(
   EventBusLive,
   RepositoryServiceLive,
   PullRequestServiceLive,
+  IssuesServiceLive,
   ReviewServiceLive,
   RemoteUserServiceWithDeps,
   SettingsServiceWithDeps,

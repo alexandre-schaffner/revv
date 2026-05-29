@@ -1,4 +1,11 @@
-import type { MergeEligibility, MergeMethod, Org, PullRequest, Repository } from "@revv/shared";
+import type {
+  Issue,
+  MergeEligibility,
+  MergeMethod,
+  Org,
+  PullRequest,
+  Repository,
+} from "@revv/shared";
 import { Context, Effect, Layer, Schedule } from "effect";
 import { serverEnv } from "../config";
 import {
@@ -382,6 +389,49 @@ function mapPr(raw: Record<string, unknown>, repositoryId: string): PullRequest 
   };
 }
 
+/**
+ * Map a raw GitHub issue payload to the storable Issue shape minus the
+ * per-viewer `assignedToViewer` flag (computed in IssuesService against the
+ * caller's GitHub login). The same endpoint also returns pull requests —
+ * the `pull_request` key on the raw payload is how GitHub distinguishes them;
+ * `IssuesService.listForRepo` filters those out before calling this.
+ */
+function mapIssue(
+  raw: Record<string, unknown>,
+  repositoryId: string,
+): Omit<Issue, "assignedToViewer"> {
+  const user = raw.user as Record<string, unknown> | null;
+  const rawAssignees = raw.assignees as Array<Record<string, unknown>> | undefined;
+  const assigneeLogins = (rawAssignees ?? []).map((a) => a.login as string);
+  const rawLabels = raw.labels as Array<Record<string, unknown>> | undefined;
+  const labels = (rawLabels ?? [])
+    .filter((l) => typeof l.name === "string")
+    .map((l) => ({
+      name: l.name as string,
+      color: typeof l.color === "string" ? (l.color as string) : "",
+      description: typeof l.description === "string" ? (l.description as string) : null,
+    }));
+  return {
+    id: `${repositoryId}:${raw.number}`,
+    externalId: raw.number as number,
+    nodeId: (raw.node_id as string | undefined) ?? "",
+    repositoryId,
+    title: raw.title as string,
+    body: (raw.body as string | null) ?? null,
+    state: (raw.state as string) === "closed" ? "closed" : "open",
+    authorLogin: (user?.login as string | undefined) ?? "",
+    authorAvatarUrl: (user?.avatar_url as string | null) ?? null,
+    assigneeLogins,
+    labels,
+    commentCount: (raw.comments as number | undefined) ?? 0,
+    url: raw.html_url as string,
+    createdAt: raw.created_at as string,
+    updatedAt: raw.updated_at as string,
+    closedAt: (raw.closed_at as string | null) ?? null,
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
 function mapRepo(raw: Record<string, unknown>): Repository {
   const owner = raw.owner as Record<string, unknown>;
   return {
@@ -432,6 +482,26 @@ export class GitHubService extends Context.Tag("GitHubService")<
       token: string,
       apiBase?: string,
     ) => Effect.Effect<PullRequest[], GitHubError, DbService | GitHubEtagCache | SettingsService>;
+    /**
+     * Open issues for a repo via REST `/repos/{owner}/{repo}/issues?state=open`.
+     * GitHub's REST issues endpoint includes pull requests in the response
+     * (every PR is technically an issue); rows carrying a `pull_request` field
+     * are filtered out so callers only see real issues.
+     *
+     * Returns rows ordered by GitHub's default (most recently updated first);
+     * the per-viewer `assignedToViewer` flag is computed downstream by
+     * IssuesService since it depends on which user is calling.
+     */
+    readonly listOpenIssues: (
+      repoFullName: string,
+      repositoryId: string,
+      token: string,
+      apiBase?: string,
+    ) => Effect.Effect<
+      ReadonlyArray<Omit<Issue, "assignedToViewer">>,
+      GitHubError,
+      SettingsService
+    >;
     readonly getPr: (
       repoFullName: string,
       prNumber: number,
@@ -786,6 +856,21 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
         apiBase,
       );
       return (data as Record<string, unknown>[]).map((pr) => mapPr(pr, repositoryId));
+    }).pipe(Effect.retry(retrySchedule)),
+
+  listOpenIssues: (repoFullName, repositoryId, token, explicitApiBase) =>
+    Effect.gen(function* () {
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
+      const { owner, repo } = yield* parseRepoFullName(repoFullName);
+      const data = yield* githubFetchPaginated(
+        `/repos/${owner}/${repo}/issues?state=open&sort=updated&direction=desc&per_page=100`,
+        token,
+        3,
+        apiBase,
+      );
+      return (data as Record<string, unknown>[])
+        .filter((raw) => raw.pull_request === undefined)
+        .map((raw) => mapIssue(raw, repositoryId));
     }).pipe(Effect.retry(retrySchedule)),
 
   getPr: (repoFullName, prNumber, token) =>

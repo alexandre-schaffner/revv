@@ -1,8 +1,12 @@
+import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
+import { db } from "../auth";
 import { serverEnv } from "../config";
+import { user } from "../db/schema";
 import { AppRuntime } from "../runtime";
 import { GitHubService } from "../services/GitHub";
+import { IssuesService } from "../services/Issues";
 import { PollScheduler } from "../services/PollScheduler";
 import { RepoCloneService } from "../services/RepoClone";
 import { RepositoryService } from "../services/Repository";
@@ -119,6 +123,42 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
           );
 
           return { success: true };
+        }),
+      );
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  })
+  .get("/:id/issues", async (ctx) => {
+    try {
+      // Look up the caller's GitHub login. Without a login we can't compute
+      // the `assignedToViewer` flag — short-circuit with an empty array so
+      // the homepage still renders.
+      const rows = await db
+        .select({ githubLogin: user.githubLogin })
+        .from(user)
+        .where(eq(user.id, ctx.session.user.id));
+      const login = rows[0]?.githubLogin;
+      if (!login) {
+        return [];
+      }
+
+      return await AppRuntime.runPromise(
+        Effect.gen(function* () {
+          const issuesSvc = yield* IssuesService;
+          const tokenProvider = yield* TokenProvider;
+          const settingsSvc = yield* SettingsService;
+
+          const currentSettings = yield* settingsSvc
+            .getSettings()
+            .pipe(Effect.orElseSucceed(() => null));
+          const githubHost = currentSettings?.githubHost?.trim() || serverEnv.githubHost;
+
+          const { accountId, accessToken } = yield* tokenProvider.resolveAccount(
+            ctx.session.user.id,
+            githubHost,
+          );
+          return yield* issuesSvc.listForRepo(ctx.params.id, login, accountId, accessToken);
         }),
       );
     } catch (e) {

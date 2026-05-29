@@ -56,6 +56,48 @@ export interface PullRequest {
   closedAt: string | null;
 }
 
+export type IssueState = "open" | "closed";
+
+/**
+ * A GitHub issue label. `color` is the raw 6-char hex string GitHub
+ * returns (e.g. `"d73a4a"`), without a leading `#`. Rendering code
+ * computes the chip background via a color-mix tint so labels read in
+ * their identity color without blowing past Revv's restrained color
+ * budget.
+ */
+export interface IssueLabel {
+  name: string;
+  color: string;
+  description: string | null;
+}
+
+export interface Issue {
+  id: string;
+  externalId: number;
+  nodeId: string;
+  repositoryId: string;
+  title: string;
+  body: string | null;
+  state: IssueState;
+  authorLogin: string;
+  authorAvatarUrl: string | null;
+  assigneeLogins: string[];
+  labels: IssueLabel[];
+  commentCount: number;
+  url: string;
+  createdAt: string;
+  updatedAt: string;
+  closedAt: string | null;
+  fetchedAt: string;
+  /**
+   * Whether the currently authenticated user is among the assignees.
+   * Computed server-side from the session's GitHub login and the row's
+   * `assigneeLogins` array. Used to pin "your" issues to the top of the
+   * repo homepage feed and surface a Deep Naval marker on the row.
+   */
+  assignedToViewer: boolean;
+}
+
 export type ThinkingEffort = "ultrathink" | "max" | "extra-high" | "high" | "medium" | "low";
 
 export type ContextWindow = "200k" | "1m";

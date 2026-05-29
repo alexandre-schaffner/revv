@@ -10,6 +10,7 @@ export { chatTasks } from "./chat-tasks";
 export { commentThreads } from "./comment-threads";
 export { fileContentCache } from "./file-content-cache";
 export { githubEtagCache } from "./github-etag-cache";
+export { githubIssues } from "./github-issues";
 export { hunkDecisions } from "./hunk-decisions";
 export { kvCache } from "./kv-cache";
 export { newPrActivities } from "./new-pr-activities";

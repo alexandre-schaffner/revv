@@ -3,6 +3,7 @@ import GitPullRequest from "phosphor-svelte/lib/GitPullRequest";
 import StarFour from "phosphor-svelte/lib/StarFour";
 import { page } from "$app/state";
 import AuthGuard from "$lib/components/auth/AuthGuard.svelte";
+import RepoOpenIssues from "$lib/components/repo/RepoOpenIssues.svelte";
 import RepoRecapCard from "$lib/components/repo/RepoRecapCard.svelte";
 import RepoTaggedPrs from "$lib/components/repo/RepoTaggedPrs.svelte";
 import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte";
@@ -49,6 +50,7 @@ const repoIdFromUrl = $derived(page.params.repoId ?? "");
 			</div>
 
 			<RepoTaggedPrs repoId={repo.id} />
+			<RepoOpenIssues repoId={repo.id} />
 			<RepoRecapCard repoId={repo.id} />
 		{:else}
 			<div class="missing">
