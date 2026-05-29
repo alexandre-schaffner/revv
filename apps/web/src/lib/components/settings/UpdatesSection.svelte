@@ -40,7 +40,7 @@ async function handleCheckNow(): Promise<void> {
 				<p class="settings-row-label">Release channel</p>
 				<p class="settings-row-hint">
 					Stable ships vetted releases with a 48-hour safety buffer before notifications.
-					Nightly tracks every push to <code>main</code> and notifies immediately — expect
+					Nightly tracks every push to <code>main</code> and notifies immediately; expect
 					bugs.
 				</p>
 			</div>

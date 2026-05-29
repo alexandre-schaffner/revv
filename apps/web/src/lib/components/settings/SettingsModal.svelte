@@ -49,6 +49,7 @@ import {
 import { isTauri } from "$lib/utils/platform";
 import { authHeaders } from "$lib/utils/session-token";
 import UpdatesSection from "./UpdatesSection.svelte";
+import "./settings-layout.css";
 
 interface Props {
   open: boolean;
@@ -1093,6 +1094,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 							{/each}
 						</div>
 					</div>
+
 				</div>
 
 				<div class="settings-subgroup">
@@ -1456,42 +1458,11 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 		background: var(--color-bg-secondary);
 	}
 
-	.settings-section {
-		padding: 32px 36px 28px;
-		border-bottom: 1px solid var(--color-border-subtle);
-	}
-
-	.section-head-title {
-		font-family: "Newsreader", Georgia, serif;
-		font-size: 20px;
-		font-weight: 500;
-		letter-spacing: -0.01em;
-		line-height: 1;
-		color: var(--color-text-primary);
-		margin-bottom: 22px;
-	}
-
 	.section-head-title--danger {
 		display: flex;
 		align-items: center;
 		gap: 8px;
 		color: var(--color-danger);
-	}
-
-	/* Sub-group inside a section (e.g. "Connection", "Behavior") */
-	.settings-subgroup {
-		display: flex;
-		flex-direction: column;
-		gap: 14px;
-		padding-top: 18px;
-		margin-top: 18px;
-		border-top: 1px solid var(--color-border-subtle);
-	}
-
-	.settings-subgroup:first-of-type {
-		padding-top: 0;
-		margin-top: 0;
-		border-top: none;
 	}
 
 	.settings-subgroup-heading {
@@ -1508,31 +1479,6 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 		color: var(--color-text-muted);
 		max-width: 64ch;
 		margin-bottom: 4px;
-	}
-
-	/* Row: label/description on the left, control on the right */
-	.settings-row {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 16px;
-	}
-
-	.settings-row-info {
-		min-width: 0;
-		flex: 1;
-	}
-
-	.settings-row-label {
-		font-size: 13px;
-		color: var(--color-text-primary);
-	}
-
-	.settings-row-hint {
-		font-size: 11px;
-		color: var(--color-text-muted);
-		margin-top: 2px;
-		line-height: 1.45;
 	}
 
 	/* Stacked field: label above, input below (full width) */

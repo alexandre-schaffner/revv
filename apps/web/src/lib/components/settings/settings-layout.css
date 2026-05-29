@@ -1,0 +1,53 @@
+.settings-modal .settings-section {
+  padding: 32px 36px 28px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.settings-modal .section-head-title {
+  font-family: "Newsreader", Georgia, serif;
+  font-size: 20px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  line-height: 1;
+  color: var(--color-text-primary);
+  margin-bottom: 22px;
+}
+
+.settings-modal .settings-subgroup {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-top: 18px;
+  margin-top: 18px;
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.settings-modal .settings-subgroup:first-of-type {
+  padding-top: 0;
+  margin-top: 0;
+  border-top: none;
+}
+
+.settings-modal .settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.settings-modal .settings-row-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.settings-modal .settings-row-label {
+  font-size: 13px;
+  color: var(--color-text-primary);
+}
+
+.settings-modal .settings-row-hint {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  margin-top: 2px;
+  line-height: 1.45;
+}
