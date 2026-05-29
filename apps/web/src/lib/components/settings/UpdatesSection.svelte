@@ -40,7 +40,7 @@ async function handleCheckNow(): Promise<void> {
 				<p class="settings-row-label">Release channel</p>
 				<p class="settings-row-hint">
 					Stable ships vetted releases with a 48-hour safety buffer before notifications.
-					Nightly tracks every push to <code>main</code> and notifies immediately — expect
+					Nightly tracks every push to <code>main</code> and notifies immediately; expect
 					bugs.
 				</p>
 			</div>
@@ -86,3 +86,50 @@ async function handleCheckNow(): Promise<void> {
 		</div>
 	</div>
 </section>
+
+<style>
+	.settings-section {
+		padding: 32px 36px 28px;
+		border-bottom: 1px solid var(--color-border-subtle);
+	}
+
+	.section-head-title {
+		font-family: "Newsreader", Georgia, serif;
+		font-size: 20px;
+		font-weight: 500;
+		letter-spacing: -0.01em;
+		line-height: 1;
+		color: var(--color-text-primary);
+		margin-bottom: 22px;
+	}
+
+	.settings-subgroup {
+		display: flex;
+		flex-direction: column;
+		gap: 14px;
+	}
+
+	.settings-row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 16px;
+	}
+
+	.settings-row-info {
+		min-width: 0;
+		flex: 1;
+	}
+
+	.settings-row-label {
+		font-size: 13px;
+		color: var(--color-text-primary);
+	}
+
+	.settings-row-hint {
+		font-size: 11px;
+		color: var(--color-text-muted);
+		margin-top: 2px;
+		line-height: 1.45;
+	}
+</style>
