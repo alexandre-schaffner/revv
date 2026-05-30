@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Entry } from "@napi-rs/keyring";
@@ -28,9 +28,17 @@ export interface TokenPair {
  *
  * When the OS keyring is unavailable (e.g. a Linux session with no Secret
  * Service daemon), the store degrades to an AES-256-GCM encrypted file under
- * the app data dir, keyed by a `0600` key file — the same trust model the
- * better-auth signing secret already uses (`auth.ts`). This is a fallback to
- * avoid a hard failure, not the intended path; it is logged loudly on entry.
+ * the app data dir. This is a fallback to avoid a hard failure, not the
+ * intended path; it is logged loudly on entry.
+ *
+ * The fallback encryption key is *derived* (scrypt) from a secret plus a
+ * persisted random salt, rather than read verbatim from a key file sitting
+ * next to the ciphertext. When `BETTER_AUTH_SECRET` is configured in the
+ * environment (the recommended deployment path), that secret never lands on
+ * disk, so an attacker with only filesystem read of the app-support dir holds
+ * the ciphertext and a useless salt — not the key. Absent an env secret we
+ * fall back to a persisted `0600` key file, matching the trust model the
+ * better-auth signing secret already uses (`auth.ts`).
  */
 export class SecretStore extends Context.Tag("SecretStore")<
   SecretStore,
@@ -70,6 +78,9 @@ function deserialize(raw: string): TokenPair {
 function fallbackKeyPath(): string {
   return join(appDataDir(), "secret-store.key");
 }
+function fallbackSaltPath(): string {
+  return join(appDataDir(), "secret-store.salt");
+}
 function fallbackDataPath(): string {
   return join(appDataDir(), "secret-store.enc");
 }
@@ -79,16 +90,42 @@ function ensureAppDir(): void {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
 }
 
-function loadFallbackKey(): Buffer {
-  const p = fallbackKeyPath();
+/** Load (or generate) the non-secret random salt persisted beside the data. */
+function loadFallbackSalt(): Buffer {
+  const p = fallbackSaltPath();
   if (existsSync(p)) {
     const hex = readFileSync(p, "utf8").trim();
-    if (hex.length >= 64) return Buffer.from(hex.slice(0, 64), "hex");
+    if (hex.length >= 32) return Buffer.from(hex.slice(0, 32), "hex");
   }
   ensureAppDir();
-  const key = randomBytes(32);
-  writeFileSync(p, key.toString("hex"), { mode: 0o600 });
-  return key;
+  const salt = randomBytes(16);
+  writeFileSync(p, salt.toString("hex"), { mode: 0o600 });
+  return salt;
+}
+
+/**
+ * Resolve the input secret for key derivation. Prefers `BETTER_AUTH_SECRET`
+ * from the environment (kept off disk); otherwise falls back to a persisted
+ * `0600` random key file, generated on first use.
+ */
+function loadFallbackSecret(): string {
+  const envSecret = process.env.BETTER_AUTH_SECRET;
+  if (envSecret && envSecret.length > 0) return envSecret;
+
+  const p = fallbackKeyPath();
+  if (existsSync(p)) {
+    const existing = readFileSync(p, "utf8").trim();
+    if (existing.length > 0) return existing;
+  }
+  ensureAppDir();
+  const secret = randomBytes(32).toString("hex");
+  writeFileSync(p, secret, { mode: 0o600 });
+  return secret;
+}
+
+/** Derive the AES-256 key from the resolved secret + persisted salt (scrypt). */
+function deriveFallbackKey(): Buffer {
+  return scryptSync(loadFallbackSecret(), loadFallbackSalt(), 32);
 }
 
 function readFallbackMap(): Record<string, TokenPair> {
@@ -99,7 +136,7 @@ function readFallbackMap(): Record<string, TokenPair> {
     const iv = raw.subarray(0, 12);
     const tag = raw.subarray(12, 28);
     const ct = raw.subarray(28);
-    const decipher = createDecipheriv("aes-256-gcm", loadFallbackKey(), iv);
+    const decipher = createDecipheriv("aes-256-gcm", deriveFallbackKey(), iv);
     decipher.setAuthTag(tag);
     const json = Buffer.concat([decipher.update(ct), decipher.final()]).toString("utf8");
     return JSON.parse(json) as Record<string, TokenPair>;
@@ -112,7 +149,7 @@ function readFallbackMap(): Record<string, TokenPair> {
 function writeFallbackMap(map: Record<string, TokenPair>): void {
   ensureAppDir();
   const iv = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", loadFallbackKey(), iv);
+  const cipher = createCipheriv("aes-256-gcm", deriveFallbackKey(), iv);
   const ct = Buffer.concat([cipher.update(JSON.stringify(map), "utf8"), cipher.final()]);
   const tag = cipher.getAuthTag();
   writeFileSync(fallbackDataPath(), Buffer.concat([iv, tag, ct]), { mode: 0o600 });
