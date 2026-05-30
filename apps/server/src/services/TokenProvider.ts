@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { Context, Effect, Layer } from "effect";
+import { Context, Deferred, Effect, Layer, Ref } from "effect";
 import { serverEnv } from "../config";
 import { account, user } from "../db/schema";
 import { GitHubAuthError } from "../domain/errors";
@@ -97,85 +97,113 @@ export const TokenProviderLive = Layer.effect(
 
     // De-dupe concurrent refreshes of the same account — PollScheduler fans
     // out per-repo and would otherwise fire N parallel refresh grants, each
-    // invalidating the previous one's rotated refresh token.
-    const refreshInFlight = new Map<string, Promise<string>>();
+    // invalidating the previous one's rotated refresh token. Holds the
+    // in-flight grant per account as a Deferred so followers await the leader.
+    const refreshInFlight = yield* Ref.make(
+      new Map<string, Deferred.Deferred<string, GitHubAuthError>>(),
+    );
 
     /** Derive the GitHub host from a `github:{host}` (or legacy `github`) providerId. */
     function hostFromProviderId(providerId: string): string {
       return providerId.split(":")[1] ?? serverEnv.githubHost;
     }
 
-    async function doRefresh(accountId: string): Promise<string> {
-      const row = db
-        .select({
-          providerId: account.providerId,
-          refreshTokenExpiresAt: account.refreshTokenExpiresAt,
-        })
-        .from(account)
-        .where(eq(account.id, accountId))
-        .get();
-      if (!row) throw new Error(`account ${accountId} not found`);
+    /** Exchange the stored refresh token for a fresh access token. Composed as
+     * an Effect end-to-end — secret-store reads/writes and the WS broadcast are
+     * `yield*`-ed rather than escaped via `Effect.runPromise` (CLAUDE.md §2). */
+    const doRefresh = (accountId: string): Effect.Effect<string, GitHubAuthError> =>
+      Effect.gen(function* () {
+        const row = db
+          .select({
+            providerId: account.providerId,
+            refreshTokenExpiresAt: account.refreshTokenExpiresAt,
+          })
+          .from(account)
+          .where(eq(account.id, accountId))
+          .get();
+        if (!row) {
+          return yield* Effect.fail(
+            new GitHubAuthError({ message: `account ${accountId} not found` }),
+          );
+        }
 
-      const stored = await Effect.runPromise(secretStore.getTokens(accountId));
-      const refreshToken = stored?.refreshToken ?? null;
-      if (!refreshToken) throw new Error("no refresh token available");
-      if (row.refreshTokenExpiresAt && row.refreshTokenExpiresAt.getTime() < Date.now()) {
-        throw new Error("refresh token expired");
-      }
+        const stored = yield* secretStore.getTokens(accountId);
+        const refreshToken = stored?.refreshToken ?? null;
+        if (!refreshToken) {
+          return yield* Effect.fail(new GitHubAuthError({ message: "no refresh token available" }));
+        }
+        if (row.refreshTokenExpiresAt && row.refreshTokenExpiresAt.getTime() < Date.now()) {
+          return yield* Effect.fail(new GitHubAuthError({ message: "refresh token expired" }));
+        }
 
-      const host = hostFromProviderId(row.providerId);
-      const res = await fetch(tokenUrlForHost(host), {
-        method: "POST",
-        headers: { Accept: "application/json", "Content-Type": "application/json" },
-        body: JSON.stringify({
-          client_id: clientIdForHost(host),
-          grant_type: "refresh_token",
-          refresh_token: refreshToken,
-        }),
+        const host = hostFromProviderId(row.providerId);
+        const { status, data } = yield* Effect.tryPromise({
+          try: async () => {
+            const res = await fetch(tokenUrlForHost(host), {
+              method: "POST",
+              headers: { Accept: "application/json", "Content-Type": "application/json" },
+              body: JSON.stringify({
+                client_id: clientIdForHost(host),
+                grant_type: "refresh_token",
+                refresh_token: refreshToken,
+              }),
+            });
+            return { status: res.status, data: (await res.json()) as RefreshResponse };
+          },
+          catch: (e) => new GitHubAuthError({ message: String(e) }),
+        });
+        if (!data.access_token) {
+          return yield* Effect.fail(
+            new GitHubAuthError({ message: data.error ?? `refresh failed (HTTP ${status})` }),
+          );
+        }
+
+        const now = new Date();
+        const accessToken = data.access_token;
+        const newRefresh = data.refresh_token ?? refreshToken;
+        yield* secretStore.setTokens(accountId, { accessToken, refreshToken: newRefresh });
+        yield* Effect.sync(() =>
+          db
+            .update(account)
+            .set({
+              accessTokenExpiresAt: data.expires_in
+                ? new Date(now.getTime() + data.expires_in * 1000)
+                : null,
+              refreshTokenExpiresAt: data.refresh_token_expires_in
+                ? new Date(now.getTime() + data.refresh_token_expires_in * 1000)
+                : row.refreshTokenExpiresAt,
+              reauthRequiredAt: null,
+              updatedAt: now,
+            })
+            .where(eq(account.id, accountId))
+            .run(),
+        );
+
+        yield* hub.broadcastToAccount(accountId, { type: "auth:reauth-cleared", data: { host } });
+        return accessToken;
       });
-      const data = (await res.json()) as RefreshResponse;
-      if (!data.access_token) {
-        throw new Error(data.error ?? `refresh failed (HTTP ${res.status})`);
-      }
-
-      const now = new Date();
-      const newRefresh = data.refresh_token ?? refreshToken;
-      await Effect.runPromise(
-        secretStore.setTokens(accountId, {
-          accessToken: data.access_token,
-          refreshToken: newRefresh,
-        }),
-      );
-      db.update(account)
-        .set({
-          accessTokenExpiresAt: data.expires_in
-            ? new Date(now.getTime() + data.expires_in * 1000)
-            : null,
-          refreshTokenExpiresAt: data.refresh_token_expires_in
-            ? new Date(now.getTime() + data.refresh_token_expires_in * 1000)
-            : row.refreshTokenExpiresAt,
-          reauthRequiredAt: null,
-          updatedAt: now,
-        })
-        .where(eq(account.id, accountId))
-        .run();
-
-      await Effect.runPromise(
-        hub.broadcastToAccount(accountId, { type: "auth:reauth-cleared", data: { host } }),
-      );
-      return data.access_token;
-    }
 
     const refreshAccountToken = (accountId: string): Effect.Effect<string, GitHubAuthError> =>
-      Effect.tryPromise({
-        try: () => {
-          const existing = refreshInFlight.get(accountId);
-          if (existing) return existing;
-          const p = doRefresh(accountId).finally(() => refreshInFlight.delete(accountId));
-          refreshInFlight.set(accountId, p);
-          return p;
-        },
-        catch: (e) => new GitHubAuthError({ message: String(e) }),
+      Effect.gen(function* () {
+        // Atomically claim the in-flight slot: the leader installs its own
+        // Deferred and runs the grant; followers receive the leader's Deferred
+        // and await its outcome instead of issuing a second grant.
+        const own = yield* Deferred.make<string, GitHubAuthError>();
+        const leader = yield* Ref.modify(refreshInFlight, (m) => {
+          const existing = m.get(accountId);
+          if (existing) return [existing, m] as const;
+          return [own, new Map(m).set(accountId, own)] as const;
+        });
+        if (leader !== own) return yield* Deferred.await(leader);
+
+        const exit = yield* Effect.exit(doRefresh(accountId));
+        yield* Ref.update(refreshInFlight, (m) => {
+          const next = new Map(m);
+          next.delete(accountId);
+          return next;
+        });
+        yield* Deferred.done(own, exit);
+        return yield* Deferred.await(own);
       });
 
     const markReauthRequired = (accountId: string): Effect.Effect<void> =>
