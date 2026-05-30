@@ -18,19 +18,19 @@ import SelectTrigger from "./SelectTrigger.svelte";
 let open = $state(false);
 let currentAgent = $derived((getSettings()?.aiAgent ?? "opencode") as AiAgent);
 let currentModel = $derived(getSettings()?.aiModel ?? "");
-let isOpus47 = $derived(currentModel === "claude-opus-4-7");
+let isOpus48 = $derived(currentModel === "claude-opus-4-8");
 let visible = $derived(agentSupportsThinkingEffort(currentAgent));
 let options = $derived(
-  isOpus47
+  isOpus48
     ? THINKING_EFFORT_OPTIONS
     : THINKING_EFFORT_OPTIONS.filter((o) => !OPUS_ONLY_EFFORTS.has(o.value)),
 );
 let currentEffort = $derived((getSettings()?.aiThinkingEffort ?? "medium") as ThinkingEffort);
 let currentLabel = $derived(options.find((o) => o.value === currentEffort)?.label ?? "High");
 
-// If a restricted effort is selected and model changes away from Opus 4.7, reset to 'high'
+// If a restricted effort is selected and model changes away from Opus 4.8, reset to 'high'
 $effect(() => {
-  if (!isOpus47 && OPUS_ONLY_EFFORTS.has(currentEffort)) {
+  if (!isOpus48 && OPUS_ONLY_EFFORTS.has(currentEffort)) {
     updateSettings({ aiThinkingEffort: "high" });
   }
 });

@@ -99,7 +99,7 @@ export interface WalkthroughEntry {
   /**
    * Snapshot of the AI provider config in effect when this walkthrough
    * was originally generated (locally or by a teammate). Shown as
-   * "claude-opus-4-7 • thinking: high" in the header detail line.
+   * "claude-opus-4-8 • thinking: high" in the header detail line.
    */
   providerConfig: {
     provider: string;

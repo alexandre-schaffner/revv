@@ -317,11 +317,11 @@ let currentSuggestionsModel = $derived(getSettings()?.aiSuggestionsModel ?? "");
 let currentSuggestionsModelLabel = $derived(
   modelOptions.find((o) => o.value === currentSuggestionsModel)?.label ?? currentSuggestionsModel,
 );
-let isOpus47 = $derived(currentModel === "claude-opus-4-7");
+let isOpus48 = $derived(currentModel === "claude-opus-4-8");
 let showThinkingEffort = $derived(agentSupportsThinkingEffort(aiAgent));
 let showContextWindow = $derived(agentSupportsContextWindow(aiAgent));
 let thinkingEffortOptions = $derived(
-  isOpus47
+  isOpus48
     ? THINKING_EFFORT_OPTIONS
     : THINKING_EFFORT_OPTIONS.filter((o) => !OPUS_ONLY_EFFORTS.has(o.value)),
 );

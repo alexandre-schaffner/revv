@@ -11,7 +11,7 @@ export const THINKING_EFFORT_OPTIONS: { label: string; value: ThinkingEffort }[]
   { label: "Low", value: "low" },
 ];
 
-/** Thinking effort values that are only available for Claude Opus 4.7. */
+/** Thinking effort values that are only available for Claude Opus 4.8. */
 export const OPUS_ONLY_EFFORTS: Set<ThinkingEffort> = new Set(["max", "extra-high"]);
 
 const DEFAULT_MODEL_BY_AGENT: Record<"opencode" | "claude", string> = {
