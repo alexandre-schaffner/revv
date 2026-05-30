@@ -1,7 +1,7 @@
 import { and, eq, gt, inArray } from "drizzle-orm";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
-import { db, GITHUB_CLIENT_ID, GITHUB_CLIENT_ID_PUBLIC } from "../auth";
+import { db, GITHUB_CLIENT_ID } from "../auth";
 import { serverEnv } from "../config";
 import { account, session, user } from "../db/schema";
 import { remoteUsers } from "../db/schema/remote-users";
@@ -614,40 +614,19 @@ const protectedAuthRoutes = new Elysia()
       const providerId = `github:${host}`;
       const userId = ctx.session.user.id;
 
-      // Fetch the account row id, then read its token from the secure store to
-      // attempt revocation on GitHub before deletion.
+      // We cannot revoke the grant on GitHub's side: the only OAuth flow Revv
+      // uses is the device-code flow, which never collects a client secret
+      // (see auth.ts), and GitHub's `DELETE /applications/{id}/token`
+      // endpoint requires HTTP Basic auth with that secret. Attempting it would
+      // just send an empty secret and silently 401. So disconnect is a local
+      // operation: delete the account row and wipe its stored tokens. Users who
+      // want to revoke the grant upstream do so from their GitHub app
+      // connections page (linked from the settings UI).
       const accountRow = await db
         .select({ id: account.id })
         .from(account)
         .where(and(eq(account.providerId, providerId), eq(account.userId, userId)))
         .then((r) => r[0] ?? null);
-
-      const accessToken = accountRow
-        ? await AppRuntime.runPromise(
-            Effect.flatMap(TokenProvider, (provider) =>
-              provider.getTokenByAccountId(accountRow.id),
-            ).pipe(Effect.orElseSucceed(() => null)),
-          )
-        : null;
-
-      if (accessToken) {
-        const isPublic = host === "github.com";
-        const clientId = isPublic ? (GITHUB_CLIENT_ID_PUBLIC ?? "") : GITHUB_CLIENT_ID;
-        const apiBase = isPublic ? "https://api.github.com" : `https://api.${host}`;
-        const clientSecret = process.env.GITHUB_CLIENT_SECRET ?? "";
-        try {
-          await fetch(`${apiBase}/applications/${clientId}/token`, {
-            method: "DELETE",
-            headers: {
-              Authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}`,
-              Accept: "application/vnd.github+json",
-            },
-            body: JSON.stringify({ access_token: accessToken }),
-          });
-        } catch {
-          // Best-effort — proceed with local deletion regardless
-        }
-      }
 
       await db
         .delete(account)
