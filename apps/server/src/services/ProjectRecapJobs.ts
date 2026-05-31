@@ -19,6 +19,7 @@
 import type { ProjectRecap, RecapPeriod, RecapStreamEvent } from "@revv/shared";
 import { eq, sql } from "drizzle-orm";
 import { Cause, Context, Effect, Fiber, Layer, Ref } from "effect";
+import { makeOpencodeRecapDeps } from "../ai/providers/opencode-deps";
 import type {
   RecapSourcePrDiff,
   RecapSourcePrDiffFile,
@@ -830,16 +831,10 @@ export const ProjectRecapJobsLive = Layer.effect(
         // Supervisor + session-token deps. Threaded through as callbacks so
         // `recap-agent-runner.ts` stays decoupled from the Effect runtime
         // (and avoids a layer cycle with this service).
-        const supervisorDeps = {
-          ensureDaemon: () => Effect.runPromise(supervisor.ensureRunning()),
-          jobStarted: () => Effect.runPromise(supervisor.jobStarted()),
-          jobEnded: () => Effect.runPromise(supervisor.jobEnded()),
-          client: () => Effect.runPromise(supervisor.client()),
-        };
-        const sessionDeps = {
+        const { supervisorDeps, sessionDeps } = makeOpencodeRecapDeps(supervisor, {
           issueSessionToken: (ctx: RecapToolContext) => Effect.runPromise(issueSessionToken(ctx)),
           clearSessionToken: (token: string) => Effect.runPromise(clearSessionToken(token)),
-        };
+        });
 
         // Emit initial phase so the UI knows the job is active.
         emit({ type: "phase", data: { phase: "analyzing", message: "Analyzing pull requests…" } });

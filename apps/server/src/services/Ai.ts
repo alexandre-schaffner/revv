@@ -14,8 +14,8 @@ import { streamChatViaOpencode } from "../ai/providers/chat-opencode";
 // ── Prompt & provider imports (split out of this file) ──────────────────────
 import { checkCliAvailability } from "../ai/providers/cli-agent";
 import { type ContinuationContext, streamWalkthroughViaMCP } from "../ai/providers/mcp-walkthrough";
-import type { OpencodeProviderDeps } from "../ai/providers/mcp-walkthrough-opencode";
 import { streamWalkthroughViaOpencodeMCP } from "../ai/providers/mcp-walkthrough-opencode";
+import { makeOpencodeChatDeps, makeOpencodeWalkthroughDeps } from "../ai/providers/opencode-deps";
 import { guardWalkthroughStream } from "../ai/providers/stream-guard";
 import {
   type AiError,
@@ -272,21 +272,12 @@ export const AiServiceLive = Layer.effect(
                   }),
                 );
               }
-              const issueToken = params.issueOpencodeSessionToken;
-              const clearToken = params.clearOpencodeSessionToken;
-              const registerNotifier = params.registerOpencodeActivityNotifier;
-              const unregisterNotifier = params.unregisterOpencodeActivityNotifier;
-              const deps: OpencodeProviderDeps = {
-                ensureDaemon: () => Effect.runPromise(supervisor.ensureRunning()),
-                jobStarted: () => Effect.runPromise(supervisor.jobStarted()),
-                jobEnded: () => Effect.runPromise(supervisor.jobEnded()),
-                client: () => Effect.runPromise(supervisor.client()),
-                issueSessionToken: (walkthroughId) => issueToken(walkthroughId),
-                clearSessionToken: (token) => clearToken(token),
-                registerActivityNotifier: (walkthroughId, callback) =>
-                  registerNotifier(walkthroughId, callback),
-                unregisterActivityNotifier: (walkthroughId) => unregisterNotifier(walkthroughId),
-              };
+              const deps = makeOpencodeWalkthroughDeps(supervisor, {
+                issueSessionToken: params.issueOpencodeSessionToken,
+                clearSessionToken: params.clearOpencodeSessionToken,
+                registerActivityNotifier: params.registerOpencodeActivityNotifier,
+                unregisterActivityNotifier: params.unregisterOpencodeActivityNotifier,
+              });
               const raw = streamWalkthroughViaOpencodeMCP(
                 { ...providerParams, deps },
                 settings.aiModel ?? undefined,
@@ -354,20 +345,7 @@ export const AiServiceLive = Layer.effect(
             }
 
             // opencode path
-            const deps = {
-              ensureDaemon: () => Effect.runPromise(supervisor.ensureRunning()),
-              jobStarted: () => Effect.runPromise(supervisor.jobStarted()),
-              jobEnded: () => Effect.runPromise(supervisor.jobEnded()),
-              client: () => Effect.runPromise(supervisor.client()),
-              issueChatMcpToken: (args: {
-                prId: string;
-                userId: string;
-                actor: "chat:opencode";
-                interactionMode: InteractionMode;
-              }) => Effect.runPromise(chatMcpTokens.issue(args)),
-              clearChatMcpToken: (token: string) => Effect.runPromise(chatMcpTokens.clear(token)),
-              hasAgent: (name: string) => Effect.runPromise(supervisor.hasAgent(name)),
-            };
+            const deps = makeOpencodeChatDeps(supervisor, chatMcpTokens);
             return streamChatViaOpencode({
               message,
               systemPrompt,
@@ -430,20 +408,7 @@ export const AiServiceLive = Layer.effect(
           // daemon is stateful per session id; using `undefined`
           // here forces a brand-new session that disappears when
           // the daemon idles out.
-          const deps = {
-            ensureDaemon: () => Effect.runPromise(supervisor.ensureRunning()),
-            jobStarted: () => Effect.runPromise(supervisor.jobStarted()),
-            jobEnded: () => Effect.runPromise(supervisor.jobEnded()),
-            client: () => Effect.runPromise(supervisor.client()),
-            issueChatMcpToken: (args: {
-              prId: string;
-              userId: string;
-              actor: "chat:opencode";
-              interactionMode: InteractionMode;
-            }) => Effect.runPromise(chatMcpTokens.issue(args)),
-            clearChatMcpToken: (token: string) => Effect.runPromise(chatMcpTokens.clear(token)),
-            hasAgent: (name: string) => Effect.runPromise(supervisor.hasAgent(name)),
-          };
+          const deps = makeOpencodeChatDeps(supervisor, chatMcpTokens);
           return streamChatViaOpencode({
             message,
             systemPrompt,

@@ -274,7 +274,6 @@ export function streamChatViaClaude(
             providerRequestId,
             questions,
             previewFormat: "markdown",
-            source: "claude",
           });
           lastWasNonText = true;
 
@@ -448,7 +447,6 @@ export function streamChatViaClaude(
           } else if (ev.kind === "task-list-update") {
             controller.enqueue({
               kind: "task-list",
-              source: ev.source,
               tasks: ev.tasks,
             });
             lastWasNonText = true;
@@ -457,7 +455,6 @@ export function streamChatViaClaude(
               kind: "plan-presented",
               providerPlanId: ev.providerPlanId,
               markdown: ev.markdown,
-              source: ev.source,
             });
             lastWasNonText = true;
           } else if (ev.kind === "subagent-start") {
@@ -467,7 +464,6 @@ export function streamChatViaClaude(
               subagentType: ev.subagentType,
               description: ev.description,
               prompt: ev.prompt,
-              source: ev.source,
             });
             lastWasNonText = true;
           } else if (ev.kind === "subagent-end") {
@@ -476,7 +472,6 @@ export function streamChatViaClaude(
               providerCallId: ev.providerCallId,
               result: ev.result,
               ok: ev.ok,
-              source: ev.source,
             });
             lastWasNonText = true;
           } else if (ev.kind === "user-question-asked") {
@@ -489,7 +484,6 @@ export function streamChatViaClaude(
               providerRequestId: ev.providerRequestId,
               questions: ev.questions,
               previewFormat: ev.previewFormat,
-              source: ev.source,
               ...(ev.providerToolCallId ? { providerToolCallId: ev.providerToolCallId } : {}),
             });
             lastWasNonText = true;
