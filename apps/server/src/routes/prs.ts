@@ -13,7 +13,7 @@ import { pinnedPullRequests, user } from "../db/schema";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
 import { type CachedDiffFile, DiffCacheService, getOrFetchDiffFiles } from "../services/DiffCache";
-import { GitHubService } from "../services/GitHub";
+import { GitHubGateway } from "../services/GitHub";
 import { OpencodeSupervisor } from "../services/OpencodeSupervisor";
 import { PollScheduler } from "../services/PollScheduler";
 import { PrContextService } from "../services/PrContext";
@@ -24,27 +24,9 @@ import { RepositoryService } from "../services/Repository";
 import { ReviewService } from "../services/Review";
 import { SettingsService } from "../services/Settings";
 import { SyncService } from "../services/Sync";
-import { TokenProvider } from "../services/TokenProvider";
 import { WalkthroughService } from "../services/Walkthrough";
 import { WebSocketHub } from "../services/WebSocketHub";
-import { handleAppError, withAuth } from "./middleware";
-
-// ── Active-account helper ────────────────────────────────────────────────────
-//
-// Every PR-scoped route needs to resolve the caller's active GitHub account
-// from their session + the active host in settings. This helper centralises
-// the pattern so route handlers can destructure `{ accountId, accessToken }`
-// in one line.
-
-function resolveActiveAccount(userId: string) {
-  return Effect.gen(function* () {
-    const tokenProvider = yield* TokenProvider;
-    const settingsSvc = yield* SettingsService;
-    const settings = yield* settingsSvc.getSettings().pipe(Effect.orElseSucceed(() => null));
-    const host = settings?.githubHost?.trim() || undefined;
-    return yield* tokenProvider.resolveAccount(userId, host);
-  });
-}
+import { handleAppError, withAccount } from "./middleware";
 
 // ── PR diff SSR options ─────────────────────────────────────────────────────
 //
@@ -116,7 +98,7 @@ async function prerenderPrFile(
 // ── Routes ───────────────────────────────────────────────────────────────────
 
 export const prRoutes = new Elysia({ prefix: "/api/prs" })
-  .use(withAuth)
+  .use(withAccount)
   .get(
     "/",
     async (ctx) => {
@@ -125,7 +107,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
         return await AppRuntime.runPromise(
           Effect.gen(function* () {
             const prService = yield* PullRequestService;
-            const { accountId } = yield* resolveActiveAccount(ctx.session.user.id);
+            const { accountId } = ctx.account;
             return yield* prService.listPrs(accountId, repoId);
           }),
         );
@@ -157,7 +139,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
         return await AppRuntime.runPromise(
           Effect.gen(function* () {
             const prService = yield* PullRequestService;
-            const { accountId } = yield* resolveActiveAccount(ctx.session.user.id);
+            const { accountId } = ctx.account;
             return yield* prService.listArchivedPrs(accountId, params);
           }),
         );
@@ -180,7 +162,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
       return await AppRuntime.runPromise(
         Effect.gen(function* () {
           const prService = yield* PullRequestService;
-          const { accountId } = yield* resolveActiveAccount(ctx.session.user.id);
+          const { accountId } = ctx.account;
           return yield* prService.getPr(ctx.params.id, accountId);
         }),
       );
@@ -209,7 +191,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
         return await AppRuntime.runPromise(
           Effect.gen(function* () {
             const prService = yield* PullRequestService;
-            const { accountId } = yield* resolveActiveAccount(ctx.session.user.id);
+            const { accountId } = ctx.account;
             return yield* prService.listTaggedPrs(repoId, login, accountId);
           }),
         );
@@ -226,9 +208,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
           const prService = yield* PullRequestService;
           const repoService = yield* RepositoryService;
           const reviewService = yield* ReviewService;
-          const { accountId, accessToken: token } = yield* resolveActiveAccount(
-            ctx.session.user.id,
-          );
+          const { accountId, accessToken: token } = ctx.account;
 
           const pr = yield* prService.getPr(ctx.params.id, accountId);
           const repo = yield* repoService.getRepoById(pr.repositoryId, accountId);
@@ -270,7 +250,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
           Effect.gen(function* () {
             const prService = yield* PullRequestService;
             const repoCloneService = yield* RepoCloneService;
-            const { accountId } = yield* resolveActiveAccount(ctx.session.user.id);
+            const { accountId } = ctx.account;
 
             const pr = yield* prService.getPr(ctx.params.id, accountId);
             if (!pr.headSha) {
@@ -343,10 +323,8 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
           Effect.gen(function* () {
             const prService = yield* PullRequestService;
             const repoService = yield* RepositoryService;
-            const { accountId, accessToken: token } = yield* resolveActiveAccount(
-              ctx.session.user.id,
-            );
-            const github = yield* GitHubService;
+            const { accountId, accessToken: token } = ctx.account;
+            const github = yield* GitHubGateway;
 
             const pr = yield* prService.getPr(ctx.params.id, accountId);
             const side = ctx.query.side;
@@ -357,7 +335,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
 
             const repo = yield* repoService.getRepoById(pr.repositoryId, accountId);
 
-            const bytes = yield* github.getFileRawBytes(repo.fullName, ctx.query.path, sha, token);
+            const bytes = yield* github.files.rawBytes(repo.fullName, ctx.query.path, sha, token);
 
             const contentType = guessImageContentType(ctx.query.path);
             // Bun typings on `bytes` are `Uint8Array<ArrayBufferLike>`,
@@ -393,7 +371,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
     try {
       const suggestions = await AppRuntime.runPromise(
         Effect.gen(function* () {
-          const { accountId } = yield* resolveActiveAccount(ctx.session.user.id);
+          const { accountId } = ctx.account;
           return yield* resolveSuggestionsForPr(ctx.params.id, accountId);
         }),
       );
@@ -419,15 +397,13 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
         Effect.gen(function* () {
           const prService = yield* PullRequestService;
           const repoService = yield* RepositoryService;
-          const { accountId, accessToken: token } = yield* resolveActiveAccount(
-            ctx.session.user.id,
-          );
-          const githubService = yield* GitHubService;
+          const { accountId, accessToken: token } = ctx.account;
+          const githubService = yield* GitHubGateway;
 
           const pr = yield* prService.getPr(ctx.params.id, accountId);
           const repo = yield* repoService.getRepoById(pr.repositoryId, accountId);
 
-          return yield* githubService.listPrCommits(repo.fullName, pr.externalId, token);
+          return yield* githubService.prs.commits(repo.fullName, pr.externalId, token);
         }),
       );
     } catch (e) {
@@ -472,7 +448,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
     try {
       await AppRuntime.runPromise(
         Effect.gen(function* () {
-          const { accountId } = yield* resolveActiveAccount(ctx.session.user.id);
+          const { accountId } = ctx.account;
           yield* mutatePr(ctx.params.id, ctx.session.user.id, accountId, "convert-to-draft");
         }),
       );
@@ -485,7 +461,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
     try {
       await AppRuntime.runPromise(
         Effect.gen(function* () {
-          const { accountId } = yield* resolveActiveAccount(ctx.session.user.id);
+          const { accountId } = ctx.account;
           yield* mutatePr(ctx.params.id, ctx.session.user.id, accountId, "ready-for-review");
         }),
       );
@@ -498,7 +474,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
     try {
       await AppRuntime.runPromise(
         Effect.gen(function* () {
-          const { accountId } = yield* resolveActiveAccount(ctx.session.user.id);
+          const { accountId } = ctx.account;
           yield* mutatePr(ctx.params.id, ctx.session.user.id, accountId, "close");
         }),
       );
@@ -512,14 +488,13 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
     try {
       const eligibility = await AppRuntime.runPromise(
         Effect.gen(function* () {
-          yield* resolveActiveAccount(ctx.session.user.id);
           const prContext = yield* PrContextService;
-          const github = yield* GitHubService;
+          const github = yield* GitHubGateway;
           const { pr, repo, token } = yield* prContext.resolveBasic(
             ctx.params.id,
             ctx.session.user.id,
           );
-          return yield* github.getMergeEligibility(repo.fullName, pr.externalId, token);
+          return yield* github.prs.mergeEligibility(repo.fullName, pr.externalId, token);
         }),
       );
       return eligibility;
@@ -534,9 +509,9 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
       try {
         await AppRuntime.runPromise(
           Effect.gen(function* () {
-            const { accountId } = yield* resolveActiveAccount(ctx.session.user.id);
+            const { accountId } = ctx.account;
             const prContext = yield* PrContextService;
-            const github = yield* GitHubService;
+            const github = yield* GitHubGateway;
             const prService = yield* PullRequestService;
             const hub = yield* WebSocketHub;
             const { pr, repo, token } = yield* prContext.resolveBasic(
@@ -545,7 +520,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
             );
             const mergeMethod = (ctx.body?.mergeMethod ??
               "merge") as import("@revv/shared").MergeMethod;
-            yield* github.mergePullRequest(repo.fullName, pr.externalId, mergeMethod, token);
+            yield* github.prs.merge(repo.fullName, pr.externalId, mergeMethod, token);
             // The merge succeeded, so we know the PR is merged. Do not trust
             // github.getPr here — it goes through the ETag cache and can return
             // the stale pre-merge body because the merge PUT and the PR GET are
@@ -766,33 +741,33 @@ type PrMutationAction = "convert-to-draft" | "ready-for-review" | "close";
 
 /**
  * Shared executor for the three owner-only PR mutations above. Each one is
- * a thin wrapper over a single GitHubService call, so the
+ * a thin wrapper over a single GitHubGateway call, so the
  * resolve → mutate → refresh-row → broadcast scaffolding is identical and
  * lifted here.
  */
 function mutatePr(prId: string, userId: string, accountId: string, action: PrMutationAction) {
   return Effect.gen(function* () {
     const prContext = yield* PrContextService;
-    const github = yield* GitHubService;
+    const github = yield* GitHubGateway;
     const prService = yield* PullRequestService;
     const hub = yield* WebSocketHub;
 
     const { pr, repo, token } = yield* prContext.resolveBasic(prId, userId);
 
     if (action === "convert-to-draft") {
-      yield* github.convertPrToDraft(repo.fullName, pr.externalId, token);
+      yield* github.prs.convertToDraft(repo.fullName, pr.externalId, token);
     } else if (action === "ready-for-review") {
-      yield* github.markPrReadyForReview(repo.fullName, pr.externalId, token);
+      yield* github.prs.markReadyForReview(repo.fullName, pr.externalId, token);
     } else {
-      yield* github.closePullRequest(repo.fullName, pr.externalId, token);
+      yield* github.prs.close(repo.fullName, pr.externalId, token);
     }
 
     // Refresh from a fresh GET so isDraft / status reflect GitHub's new
     // state — the mutation responses don't return the full PR shape we
     // store, and the conditional cache would otherwise replay the
     // pre-mutation body on the next read.
-    const refreshed = yield* github
-      .getPr(repo.fullName, pr.externalId, token)
+    const refreshed = yield* github.prs
+      .get(repo.fullName, pr.externalId, token)
       .pipe(Effect.map((p) => ({ ...p, id: pr.id, repositoryId: pr.repositoryId })));
     yield* prService.upsertPrs([refreshed]);
 

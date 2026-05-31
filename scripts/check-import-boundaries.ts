@@ -29,6 +29,33 @@ const legacyAllowlist = new Set([
   "apps/server/src/services/ProjectRecapJobs.ts::./TokenProvider",
 ]);
 
+const identityBoundaryRoots = [
+  /^apps\/server\/src\/index\.ts$/,
+  /^apps\/server\/src\/routes\/.*\.ts$/,
+];
+
+const identityForbiddenImports = new Set([
+  "../services/SecretStore",
+  "../services/TokenProvider",
+  "./services/SecretStore",
+  "./services/TokenProvider",
+]);
+
+// ── Local Git boundary ──────────────────────────────────────────────────────
+// `git-runner` is the raw git-subprocess primitive — an internal of the Local
+// Git module. Only the module's own files may spawn git directly; everything
+// else must go through `RepoCloneService` (clone + per-job worktrees) or
+// `GitOps` (push primitives), which keep worktree acquisition scoped and the
+// subprocess registry/signal-handling in one place.
+const gitRunnerSpecifierPattern = /(^|\/)git-runner$/;
+const gitRunnerAllowedImporters = new Set([
+  "apps/server/src/services/RepoClone.ts",
+  "apps/server/src/services/GitOps.ts",
+  // Legacy exception: the chat push pipeline still drives `git-runner` directly;
+  // scheduled to fold behind the Local Git module in a follow-up wave.
+  "apps/server/src/services/ChatChangesPush.ts",
+]);
+
 function listTsFiles(dir: string): string[] {
   const entries = readdirSync(dir);
   const files: string[] = [];
@@ -52,24 +79,36 @@ const violations: string[] = [];
 
 for (const file of listTsFiles(join(repoRoot, "apps/server/src"))) {
   const rel = relative(repoRoot, file);
-  if (!featureRoots.some((pattern) => pattern.test(rel))) continue;
 
   const source = readFileSync(file, "utf8");
   for (const match of source.matchAll(importPattern)) {
     const specifier = match[1];
-    if (!specifier || !forbiddenImports.has(specifier)) continue;
+    if (!specifier) continue;
 
-    const key = `${rel}::${specifier}`;
-    if (!legacyAllowlist.has(key)) {
-      violations.push(`${rel} imports ${specifier}`);
+    if (featureRoots.some((pattern) => pattern.test(rel)) && forbiddenImports.has(specifier)) {
+      const key = `${rel}::${specifier}`;
+      if (!legacyAllowlist.has(key)) {
+        violations.push(`${rel} imports ${specifier}`);
+      }
+    }
+
+    if (
+      identityBoundaryRoots.some((pattern) => pattern.test(rel)) &&
+      identityForbiddenImports.has(specifier)
+    ) {
+      violations.push(`${rel} imports ${specifier}; use Identity instead`);
+    }
+
+    if (gitRunnerSpecifierPattern.test(specifier) && !gitRunnerAllowedImporters.has(rel)) {
+      violations.push(
+        `${rel} imports ${specifier}; spawn git through RepoCloneService or GitOps, not git-runner directly`,
+      );
     }
   }
 }
 
 if (violations.length > 0) {
-  console.error(
-    "Feature modules must use PrContextService instead of direct GitHub/token/repo services:",
-  );
+  console.error("Import-boundary violations (see docs/architecture.md → Import Direction):");
   for (const violation of violations) {
     console.error(`  - ${violation}`);
   }

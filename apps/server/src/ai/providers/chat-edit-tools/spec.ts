@@ -14,6 +14,7 @@
 import type { WalkthroughStreamEvent, WsServerMessage } from "@revv/shared";
 import { z } from "zod";
 import type { Db } from "../../../db";
+import type { ToolSpec as GatewayToolSpec, McpToolResult } from "../mcp-tool-gateway";
 
 // ── Handler execution context ───────────────────────────────────────────────
 
@@ -55,9 +56,7 @@ export interface ChatWalkthroughEditContext {
   readonly broadcastThreadEvent: (msg: WsServerMessage) => void;
 }
 
-export interface ChatEditToolResult {
-  content: Array<{ type: "text"; text: string }>;
-  isError?: boolean;
+export interface ChatEditToolResult extends McpToolResult {
   // MCP SDK's tool() signature uses an open-ended response type with a
   // string index signature. This extra field lets our narrower type unify
   // with that shape when the SDK wraps us; it's never populated.
@@ -69,20 +68,10 @@ export type ChatEditToolHandler<TInput> = (
   input: TInput,
 ) => Promise<ChatEditToolResult>;
 
-/**
- * Non-generic storage type for a heterogenous array of chat-edit tool specs.
- * Uses method declaration (bivariant checking) so handlers with narrower
- * input types are assignable to the wider Record<string, unknown> slot.
- */
-export interface ChatEditToolSpecRecord {
-  readonly name: string;
-  readonly description: string;
-  readonly inputSchema: z.ZodObject<z.ZodRawShape>;
-  handler(
-    ctx: ChatWalkthroughEditContext,
-    input: Record<string, unknown>,
-  ): Promise<ChatEditToolResult>;
-}
+export type ChatEditToolSpecRecord = GatewayToolSpec<
+  ChatWalkthroughEditContext,
+  ChatEditToolResult
+>;
 
 // ── Shared content sub-schemas (mirror walkthrough-tool-spec.ts shapes) ─────
 

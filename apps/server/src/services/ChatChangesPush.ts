@@ -55,7 +55,7 @@ import { logError } from "../logger";
 import { AiService } from "./Ai";
 import { ChatSessionService } from "./ChatSession";
 import type { DbService } from "./Db";
-import { GitHubService } from "./GitHub";
+import { GitHubGateway } from "./GitHub";
 import type { GitHubEtagCache } from "./GitHubEtagCache";
 import {
   assertNotFlagLike,
@@ -286,7 +286,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
     const prCtx = yield* PrContextService;
     const chatSessions = yield* ChatSessionService;
     const wsHub = yield* WebSocketHub;
-    const github = yield* GitHubService;
+    const github = yield* GitHubGateway;
     const prService = yield* PullRequestService;
     const ai = yield* AiService;
 
@@ -510,8 +510,8 @@ export const ChatChangesPushServiceLive = Layer.effect(
           .listPrs()
           .pipe(Effect.map((prs) => prs.find((p) => p.id === params.pr.id) ?? null));
         if (fresh) {
-          const metaOpt = yield* github
-            .getPrMeta(params.repo.fullName, params.prExternalId, params.token)
+          const metaOpt = yield* github.prs
+            .meta(params.repo.fullName, params.prExternalId, params.token)
             .pipe(Effect.option);
           const headSha = metaOpt._tag === "Some" ? metaOpt.value.headSha : params.newTip;
           yield* prService

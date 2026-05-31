@@ -1,10 +1,9 @@
 import type { WsClientMessage } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia } from "elysia";
-import { auth } from "../auth";
 import { AppRuntime } from "../runtime";
+import { Identity } from "../services/Identity";
 import { PollScheduler } from "../services/PollScheduler";
-import { TokenProvider } from "../services/TokenProvider";
 import { WebSocketHub } from "../services/WebSocketHub";
 
 /** Server-side ping interval (30s) for dead-connection detection (W1). */
@@ -21,7 +20,11 @@ export const wsRoute = new Elysia().ws("/ws", {
 
     // Validate the bearer token with Better Auth
     const headers = new Headers({ Authorization: `Bearer ${token}` });
-    const session = await auth.api.getSession({ headers });
+    const session = await AppRuntime.runPromise(
+      Effect.flatMap(Identity, (identity) =>
+        Effect.promise(() => identity.sessionFromHeaders(headers)),
+      ),
+    );
     if (!session) {
       ws.close(4001, "Unauthorized");
       return;
@@ -33,8 +36,8 @@ export const wsRoute = new Elysia().ws("/ws", {
     try {
       const resolved = await AppRuntime.runPromise(
         Effect.gen(function* () {
-          const tokenProvider = yield* TokenProvider;
-          return yield* tokenProvider.resolveAccount(session.user.id, host);
+          const identity = yield* Identity;
+          return yield* identity.resolveAccount(session.user.id, host);
         }),
       );
       accountId = resolved.accountId;

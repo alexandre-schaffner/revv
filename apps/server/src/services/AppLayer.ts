@@ -1,6 +1,7 @@
 import { Layer } from "effect";
 import { CacheStatsLive, InvalidationBusLive } from "../cache/index";
 import { AiServiceLive } from "./Ai";
+import { BroadcasterLive } from "./Broadcaster";
 import { GcsBlobStoreLive } from "./blob/GcsBlobStore";
 import { CacheServiceLive } from "./Cache";
 import { ChatChangesPushServiceLive } from "./ChatChangesPush";
@@ -11,10 +12,10 @@ import { SshSignerLive } from "./cache-signing/index";
 import { DbServiceLive } from "./Db";
 import { DbMaintenanceLive } from "./DbMaintenance";
 import { DiffCacheServiceLive } from "./DiffCache";
-import { EventBusLive } from "./EventBus";
 import { FileContentServiceLive } from "./FileContent";
-import { GitHubServiceLive } from "./GitHub";
+import { GitHubGatewayLive } from "./GitHub";
 import { GitHubEtagCacheLive } from "./GitHubEtagCache";
+import { IdentityLive } from "./Identity";
 import { OnboardingServiceLive } from "./Onboarding";
 import { OpencodeSupervisorLive } from "./OpencodeSupervisor";
 import { PollSchedulerLive } from "./PollScheduler";
@@ -45,12 +46,14 @@ const TokenProviderWithDeps = TokenProviderLive.pipe(
   Layer.provide(Layer.mergeAll(DbServiceLive, SecretStoreLive, WebSocketHubLive)),
 );
 
+const IdentityWithDeps = IdentityLive.pipe(Layer.provide(TokenProviderWithDeps));
+
 // SettingsService now reads/writes via DbService instead of JSON file
 const SettingsServiceWithDeps = SettingsServiceLive.pipe(Layer.provide(DbServiceLive));
 
 // GitHub service depends on the etag cache for conditional requests,
 // and on SettingsService to resolve the API base URL dynamically.
-const GitHubServiceWithDeps = GitHubServiceLive.pipe(
+const GitHubGatewayWithDeps = GitHubGatewayLive.pipe(
   Layer.provide(Layer.mergeAll(GitHubEtagCacheLive, SettingsServiceWithDeps)),
 );
 
@@ -73,10 +76,11 @@ const BaseLayers = Layer.mergeAll(
   DbServiceLive,
   SecretStoreLive,
   TokenProviderWithDeps,
+  IdentityWithDeps,
   GitHubEtagCacheLive,
-  GitHubServiceWithDeps,
+  GitHubGatewayWithDeps,
   WebSocketHubLive,
-  EventBusLive,
+  BroadcasterLive,
   RepositoryServiceLive,
   PullRequestServiceLive,
   ReviewServiceLive,

@@ -423,335 +423,332 @@ export interface PrCommit {
   readonly date: string | null;
 }
 
-export class GitHubService extends Context.Tag("GitHubService")<
-  GitHubService,
-  {
-    readonly listPrs: (
-      repoFullName: string,
-      repositoryId: string,
-      token: string,
-      apiBase?: string,
-    ) => Effect.Effect<PullRequest[], GitHubError, DbService | GitHubEtagCache | SettingsService>;
-    readonly getPr: (
-      repoFullName: string,
-      prNumber: number,
-      token: string,
-    ) => Effect.Effect<PullRequest, GitHubError, DbService | GitHubEtagCache | SettingsService>;
-    /**
-     * Find PR numbers closed (or merged) in a time window via GitHub's
-     * issue-search API. Used by the recap pipeline to discover PRs that
-     * never made it into the local mirror — e.g. closed between two poll
-     * cycles or before the user added the repo to Revv.
-     *
-     * The Search API has a hard cap of 1000 results; for typical
-     * daily/weekly windows this is more than enough. Returns the matched
-     * PR numbers + their closed/merged metadata; the caller fetches full
-     * PR data via `getPr` for any number not already in the local DB.
-     */
-    readonly searchClosedPrsInWindow: (
-      repoFullName: string,
-      sinceIso: string,
-      untilIso: string,
-      token: string,
-    ) => Effect.Effect<
-      ReadonlyArray<{
-        readonly number: number;
-        readonly closedAt: string;
-        readonly merged: boolean;
-      }>,
-      GitHubError,
-      SettingsService
-    >;
-    readonly getRepo: (
-      fullName: string,
-      token: string,
-    ) => Effect.Effect<Repository, GitHubError, DbService | GitHubEtagCache | SettingsService>;
-    /**
-     * Like `getRepo`, but bypasses the ETag cache. Required for fields that
-     * rotate server-side without changing the endpoint's ETag — notably
-     * GitHub Enterprise signed `avatar_url`s, whose token expires but whose
-     * ETag stays the same. Hitting `getRepo` would replay the cached body
-     * with the now-dead token; this variant forces a 200 every time.
-     */
-    readonly getRepoFresh: (
-      fullName: string,
-      token: string,
-      apiBase?: string,
-    ) => Effect.Effect<Repository, GitHubError, SettingsService>;
-    readonly listUserRepos: (
-      token: string,
-    ) => Effect.Effect<Repository[], GitHubError, SettingsService>;
-    /**
-     * Open PR count per repo, batched into a single GraphQL request with
-     * aliased fields. Repos that error out (missing access, deleted, etc.)
-     * are simply omitted from the result map — the caller treats absence as
-     * "unknown" and renders accordingly. Pass at most ~80 fullNames per
-     * call; longer lists are split internally.
-     */
-    readonly getOpenPrCounts: (
-      fullNames: readonly string[],
-      token: string,
-    ) => Effect.Effect<Map<string, number>, GitHubError, SettingsService>;
-    readonly listUserOrgs: (token: string) => Effect.Effect<Org[], GitHubError, SettingsService>;
-    readonly getPrMeta: (
-      repoFullName: string,
-      prNumber: number,
-      token: string,
-    ) => Effect.Effect<PrMeta, GitHubError, DbService | GitHubEtagCache | SettingsService>;
-    readonly getPrFiles: (
-      repoFullName: string,
-      prNumber: number,
-      token: string,
-    ) => Effect.Effect<PrFileMeta[], GitHubError, DbService | GitHubEtagCache | SettingsService>;
-    readonly listPrCommits: (
-      repoFullName: string,
-      prNumber: number,
-      token: string,
-    ) => Effect.Effect<PrCommit[], GitHubError, SettingsService>;
-    readonly getFileContent: (
-      repoFullName: string,
-      path: string,
-      ref: string,
-      token: string,
-    ) => Effect.Effect<string, GitHubError, SettingsService>;
-    /**
-     * Fetch the raw bytes for a file at a specific ref. Uses the
-     * `application/vnd.github.raw` accept type, which makes GitHub stream
-     * the literal blob instead of the base64-encoded JSON envelope —
-     * required for binary files (images, fonts) where the local shallow
-     * clone may not have the head SHA's blob yet.
-     */
-    readonly getFileRawBytes: (
-      repoFullName: string,
-      path: string,
-      ref: string,
-      token: string,
-    ) => Effect.Effect<Uint8Array, GitHubError, SettingsService>;
-    readonly postReview: (
-      repoFullName: string,
-      prNumber: number,
-      review: {
-        readonly body: string;
-        readonly event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
-        readonly comments: ReadonlyArray<{
-          readonly path: string;
-          readonly body: string;
-          readonly line: number;
-          readonly side: "LEFT" | "RIGHT";
-          readonly startLine?: number;
-          readonly startSide?: "LEFT" | "RIGHT";
-        }>;
-      },
-      token: string,
-    ) => Effect.Effect<{ id: number; htmlUrl: string }, GitHubError, SettingsService>;
-    readonly listReviewCommentsForReview: (
-      repoFullName: string,
-      prNumber: number,
-      reviewId: number,
-      token: string,
-    ) => Effect.Effect<
-      Array<{
-        id: number;
-        path: string;
-        line: number | null;
-        originalLine: number | null;
-        body: string;
-      }>,
-      GitHubError,
-      SettingsService
-    >;
-    readonly postReviewComment: (
-      repoFullName: string,
-      prNumber: number,
-      comment: {
+interface GitHubGatewayFlatService {
+  readonly listPrs: (
+    repoFullName: string,
+    repositoryId: string,
+    token: string,
+    apiBase?: string,
+  ) => Effect.Effect<PullRequest[], GitHubError, DbService | GitHubEtagCache | SettingsService>;
+  readonly getPr: (
+    repoFullName: string,
+    prNumber: number,
+    token: string,
+  ) => Effect.Effect<PullRequest, GitHubError, DbService | GitHubEtagCache | SettingsService>;
+  /**
+   * Find PR numbers closed (or merged) in a time window via GitHub's
+   * issue-search API. Used by the recap pipeline to discover PRs that
+   * never made it into the local mirror — e.g. closed between two poll
+   * cycles or before the user added the repo to Revv.
+   *
+   * The Search API has a hard cap of 1000 results; for typical
+   * daily/weekly windows this is more than enough. Returns the matched
+   * PR numbers + their closed/merged metadata; the caller fetches full
+   * PR data via `getPr` for any number not already in the local DB.
+   */
+  readonly searchClosedPrsInWindow: (
+    repoFullName: string,
+    sinceIso: string,
+    untilIso: string,
+    token: string,
+  ) => Effect.Effect<
+    ReadonlyArray<{
+      readonly number: number;
+      readonly closedAt: string;
+      readonly merged: boolean;
+    }>,
+    GitHubError,
+    SettingsService
+  >;
+  readonly getRepo: (
+    fullName: string,
+    token: string,
+  ) => Effect.Effect<Repository, GitHubError, DbService | GitHubEtagCache | SettingsService>;
+  /**
+   * Like `getRepo`, but bypasses the ETag cache. Required for fields that
+   * rotate server-side without changing the endpoint's ETag — notably
+   * GitHub Enterprise signed `avatar_url`s, whose token expires but whose
+   * ETag stays the same. Hitting `getRepo` would replay the cached body
+   * with the now-dead token; this variant forces a 200 every time.
+   */
+  readonly getRepoFresh: (
+    fullName: string,
+    token: string,
+    apiBase?: string,
+  ) => Effect.Effect<Repository, GitHubError, SettingsService>;
+  readonly listUserRepos: (
+    token: string,
+  ) => Effect.Effect<Repository[], GitHubError, SettingsService>;
+  /**
+   * Open PR count per repo, batched into a single GraphQL request with
+   * aliased fields. Repos that error out (missing access, deleted, etc.)
+   * are simply omitted from the result map — the caller treats absence as
+   * "unknown" and renders accordingly. Pass at most ~80 fullNames per
+   * call; longer lists are split internally.
+   */
+  readonly getOpenPrCounts: (
+    fullNames: readonly string[],
+    token: string,
+  ) => Effect.Effect<Map<string, number>, GitHubError, SettingsService>;
+  readonly listUserOrgs: (token: string) => Effect.Effect<Org[], GitHubError, SettingsService>;
+  readonly getPrMeta: (
+    repoFullName: string,
+    prNumber: number,
+    token: string,
+  ) => Effect.Effect<PrMeta, GitHubError, DbService | GitHubEtagCache | SettingsService>;
+  readonly getPrFiles: (
+    repoFullName: string,
+    prNumber: number,
+    token: string,
+  ) => Effect.Effect<PrFileMeta[], GitHubError, DbService | GitHubEtagCache | SettingsService>;
+  readonly listPrCommits: (
+    repoFullName: string,
+    prNumber: number,
+    token: string,
+  ) => Effect.Effect<PrCommit[], GitHubError, SettingsService>;
+  readonly getFileContent: (
+    repoFullName: string,
+    path: string,
+    ref: string,
+    token: string,
+  ) => Effect.Effect<string, GitHubError, SettingsService>;
+  /**
+   * Fetch the raw bytes for a file at a specific ref. Uses the
+   * `application/vnd.github.raw` accept type, which makes GitHub stream
+   * the literal blob instead of the base64-encoded JSON envelope —
+   * required for binary files (images, fonts) where the local shallow
+   * clone may not have the head SHA's blob yet.
+   */
+  readonly getFileRawBytes: (
+    repoFullName: string,
+    path: string,
+    ref: string,
+    token: string,
+  ) => Effect.Effect<Uint8Array, GitHubError, SettingsService>;
+  readonly postReview: (
+    repoFullName: string,
+    prNumber: number,
+    review: {
+      readonly body: string;
+      readonly event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
+      readonly comments: ReadonlyArray<{
         readonly path: string;
         readonly body: string;
         readonly line: number;
         readonly side: "LEFT" | "RIGHT";
         readonly startLine?: number;
         readonly startSide?: "LEFT" | "RIGHT";
-        readonly commitSha: string;
-      },
-      token: string,
-    ) => Effect.Effect<
-      { id: number; htmlUrl: string; createdAt: string },
-      GitHubError,
-      SettingsService
-    >;
-    readonly replyToComment: (
-      repoFullName: string,
-      prNumber: number,
-      commentId: string | number,
-      body: string,
-      token: string,
-    ) => Effect.Effect<
-      { id: number; htmlUrl: string; createdAt: string },
-      GitHubError,
-      SettingsService
-    >;
-    readonly listReviewComments: (
-      repoFullName: string,
-      prNumber: number,
-      since: string | null,
-      token: string,
-    ) => Effect.Effect<GhReviewComment[], GitHubError, SettingsService>;
-    readonly listReviewThreads: (
-      repoFullName: string,
-      prNumber: number,
-      token: string,
-    ) => Effect.Effect<GhReviewThread[], GitHubError, SettingsService>;
-    readonly resolveReviewThread: (
-      threadNodeId: string,
-      token: string,
-    ) => Effect.Effect<void, GitHubError, SettingsService>;
-    readonly unresolveReviewThread: (
-      threadNodeId: string,
-      token: string,
-    ) => Effect.Effect<void, GitHubError, SettingsService>;
-    readonly getAuthenticatedUser: (
-      token: string,
-    ) => Effect.Effect<
-      { login: string; id: number; avatarUrl: string | null },
-      GitHubError,
-      DbService | GitHubEtagCache | SettingsService
-    >;
-    /**
-     * Flip an open PR to draft. GitHub only exposes this via GraphQL, which
-     * needs the PR's GraphQL node id — we resolve it first via a small
-     * lookup query, then run the mutation.
-     */
-    readonly convertPrToDraft: (
-      repoFullName: string,
-      prNumber: number,
-      token: string,
-    ) => Effect.Effect<void, GitHubError, SettingsService>;
-    /** Inverse of {@link convertPrToDraft}: move a draft back to ready-for-review. */
-    readonly markPrReadyForReview: (
-      repoFullName: string,
-      prNumber: number,
-      token: string,
-    ) => Effect.Effect<void, GitHubError, SettingsService>;
-    /**
-     * Close (but do not merge) the PR via REST PATCH /pulls/:number with
-     * `state: 'closed'`. Closing a draft works the same as closing an open
-     * PR.
-     */
-    readonly closePullRequest: (
-      repoFullName: string,
-      prNumber: number,
-      token: string,
-    ) => Effect.Effect<void, GitHubError, SettingsService>;
-    /**
-     * Check whether the authenticated viewer can merge this PR, and whether
-     * the PR is actually mergeable (no conflicts, required checks passing, etc.).
-     * Uses a lightweight GraphQL query so branch-protection rules are respected.
-     */
-    readonly getMergeEligibility: (
-      repoFullName: string,
-      prNumber: number,
-      token: string,
-    ) => Effect.Effect<MergeEligibility, GitHubError, SettingsService>;
-    /**
-     * Merge a pull request via the REST API. GitHub returns 405 when the PR
-     * is not mergeable (conflicts, failing checks, or not approved); 422 when
-     * the merge method is not enabled for the repo.
-     */
-    readonly mergePullRequest: (
-      repoFullName: string,
-      prNumber: number,
-      mergeMethod: MergeMethod,
-      token: string,
-    ) => Effect.Effect<void, GitHubError, SettingsService>;
-    /**
-     * Like `getAuthenticatedUser`, but bypasses the ETag cache. Required for
-     * the same reason as {@link getRepoFresh}: GitHub Enterprise signed
-     * `avatar_url`s rotate server-side without changing the endpoint's ETag,
-     * so a plain `getAuthenticatedUser` would replay the cached body with the
-     * now-dead token. This variant forces a 200 every time.
-     */
-    readonly getAuthenticatedUserFresh: (
-      token: string,
-    ) => Effect.Effect<
-      { login: string; id: number; avatarUrl: string | null },
-      GitHubError,
-      SettingsService
-    >;
-    /**
-     * Create a new pull request via REST `POST /repos/{owner}/{repo}/pulls`.
-     * `head` is the branch name (no `owner:` prefix needed for same-repo
-     * PRs). `base` defaults to the repo's default branch — pass it
-     * explicitly when the caller wants a different target.
-     *
-     * Used by the new-PR session flow's Open-PR step (orchestrator-only).
-     * The handler is idempotent at the orchestrator layer: callers should
-     * first run {@link findPrByHead} and short-circuit if a PR for `head`
-     * already exists, since GitHub will reject a duplicate-PR POST with
-     * 422.
-     */
-    readonly createPullRequest: (
-      repoFullName: string,
-      params: {
-        readonly title: string;
-        readonly body: string;
-        readonly head: string;
-        readonly base: string;
-        readonly draft?: boolean;
-      },
-      token: string,
-    ) => Effect.Effect<
-      {
-        readonly id: number;
-        readonly nodeId: string;
-        readonly number: number;
-        readonly htmlUrl: string;
-        readonly headSha: string;
-        readonly baseSha: string;
-      },
-      GitHubError,
-      SettingsService
-    >;
-    /**
-     * Find an existing PR (open or closed) whose head branch matches
-     * `headBranch` in the same repo. Returns null when none exists.
-     *
-     * The primary use-case is idempotency on the new-PR session
-     * Open-PR step: on resume-after-crash, the orchestrator looks up
-     * the branch we already pushed and, if a PR was already opened,
-     * short-circuits to `complete` without calling `createPullRequest`
-     * again.
-     */
-    readonly findPrByHead: (
-      repoFullName: string,
-      headBranch: string,
-      token: string,
-    ) => Effect.Effect<
-      {
-        readonly number: number;
-        readonly nodeId: string;
-        readonly htmlUrl: string;
-        readonly headSha: string;
-        readonly baseSha: string;
-      } | null,
-      GitHubError,
-      SettingsService
-    >;
-    /**
-     * Fetch the collaborator permission level for a specific user on a repo.
-     * Uses `GET /repos/{owner}/{repo}/collaborators/{username}/permission`.
-     * 404 (user not a collaborator) is mapped to `'none'`.
-     *
-     * Pass `host` and `token` explicitly so callers can query across GHE
-     * hosts without depending on the settings-derived `resolveApiBase`.
-     */
-    readonly getCollaboratorPermission: (
-      token: string,
-      host: string,
-      owner: string,
-      repo: string,
-      username: string,
-    ) => Effect.Effect<"admin" | "maintain" | "write" | "triage" | "read" | "none", GitHubError>;
-  }
->() {}
+      }>;
+    },
+    token: string,
+  ) => Effect.Effect<{ id: number; htmlUrl: string }, GitHubError, SettingsService>;
+  readonly listReviewCommentsForReview: (
+    repoFullName: string,
+    prNumber: number,
+    reviewId: number,
+    token: string,
+  ) => Effect.Effect<
+    Array<{
+      id: number;
+      path: string;
+      line: number | null;
+      originalLine: number | null;
+      body: string;
+    }>,
+    GitHubError,
+    SettingsService
+  >;
+  readonly postReviewComment: (
+    repoFullName: string,
+    prNumber: number,
+    comment: {
+      readonly path: string;
+      readonly body: string;
+      readonly line: number;
+      readonly side: "LEFT" | "RIGHT";
+      readonly startLine?: number;
+      readonly startSide?: "LEFT" | "RIGHT";
+      readonly commitSha: string;
+    },
+    token: string,
+  ) => Effect.Effect<
+    { id: number; htmlUrl: string; createdAt: string },
+    GitHubError,
+    SettingsService
+  >;
+  readonly replyToComment: (
+    repoFullName: string,
+    prNumber: number,
+    commentId: string | number,
+    body: string,
+    token: string,
+  ) => Effect.Effect<
+    { id: number; htmlUrl: string; createdAt: string },
+    GitHubError,
+    SettingsService
+  >;
+  readonly listReviewComments: (
+    repoFullName: string,
+    prNumber: number,
+    since: string | null,
+    token: string,
+  ) => Effect.Effect<GhReviewComment[], GitHubError, SettingsService>;
+  readonly listReviewThreads: (
+    repoFullName: string,
+    prNumber: number,
+    token: string,
+  ) => Effect.Effect<GhReviewThread[], GitHubError, SettingsService>;
+  readonly resolveReviewThread: (
+    threadNodeId: string,
+    token: string,
+  ) => Effect.Effect<void, GitHubError, SettingsService>;
+  readonly unresolveReviewThread: (
+    threadNodeId: string,
+    token: string,
+  ) => Effect.Effect<void, GitHubError, SettingsService>;
+  readonly getAuthenticatedUser: (
+    token: string,
+  ) => Effect.Effect<
+    { login: string; id: number; avatarUrl: string | null },
+    GitHubError,
+    DbService | GitHubEtagCache | SettingsService
+  >;
+  /**
+   * Flip an open PR to draft. GitHub only exposes this via GraphQL, which
+   * needs the PR's GraphQL node id — we resolve it first via a small
+   * lookup query, then run the mutation.
+   */
+  readonly convertPrToDraft: (
+    repoFullName: string,
+    prNumber: number,
+    token: string,
+  ) => Effect.Effect<void, GitHubError, SettingsService>;
+  /** Inverse of {@link convertPrToDraft}: move a draft back to ready-for-review. */
+  readonly markPrReadyForReview: (
+    repoFullName: string,
+    prNumber: number,
+    token: string,
+  ) => Effect.Effect<void, GitHubError, SettingsService>;
+  /**
+   * Close (but do not merge) the PR via REST PATCH /pulls/:number with
+   * `state: 'closed'`. Closing a draft works the same as closing an open
+   * PR.
+   */
+  readonly closePullRequest: (
+    repoFullName: string,
+    prNumber: number,
+    token: string,
+  ) => Effect.Effect<void, GitHubError, SettingsService>;
+  /**
+   * Check whether the authenticated viewer can merge this PR, and whether
+   * the PR is actually mergeable (no conflicts, required checks passing, etc.).
+   * Uses a lightweight GraphQL query so branch-protection rules are respected.
+   */
+  readonly getMergeEligibility: (
+    repoFullName: string,
+    prNumber: number,
+    token: string,
+  ) => Effect.Effect<MergeEligibility, GitHubError, SettingsService>;
+  /**
+   * Merge a pull request via the REST API. GitHub returns 405 when the PR
+   * is not mergeable (conflicts, failing checks, or not approved); 422 when
+   * the merge method is not enabled for the repo.
+   */
+  readonly mergePullRequest: (
+    repoFullName: string,
+    prNumber: number,
+    mergeMethod: MergeMethod,
+    token: string,
+  ) => Effect.Effect<void, GitHubError, SettingsService>;
+  /**
+   * Like `getAuthenticatedUser`, but bypasses the ETag cache. Required for
+   * the same reason as {@link getRepoFresh}: GitHub Enterprise signed
+   * `avatar_url`s rotate server-side without changing the endpoint's ETag,
+   * so a plain `getAuthenticatedUser` would replay the cached body with the
+   * now-dead token. This variant forces a 200 every time.
+   */
+  readonly getAuthenticatedUserFresh: (
+    token: string,
+  ) => Effect.Effect<
+    { login: string; id: number; avatarUrl: string | null },
+    GitHubError,
+    SettingsService
+  >;
+  /**
+   * Create a new pull request via REST `POST /repos/{owner}/{repo}/pulls`.
+   * `head` is the branch name (no `owner:` prefix needed for same-repo
+   * PRs). `base` defaults to the repo's default branch — pass it
+   * explicitly when the caller wants a different target.
+   *
+   * Used by the new-PR session flow's Open-PR step (orchestrator-only).
+   * The handler is idempotent at the orchestrator layer: callers should
+   * first run {@link findPrByHead} and short-circuit if a PR for `head`
+   * already exists, since GitHub will reject a duplicate-PR POST with
+   * 422.
+   */
+  readonly createPullRequest: (
+    repoFullName: string,
+    params: {
+      readonly title: string;
+      readonly body: string;
+      readonly head: string;
+      readonly base: string;
+      readonly draft?: boolean;
+    },
+    token: string,
+  ) => Effect.Effect<
+    {
+      readonly id: number;
+      readonly nodeId: string;
+      readonly number: number;
+      readonly htmlUrl: string;
+      readonly headSha: string;
+      readonly baseSha: string;
+    },
+    GitHubError,
+    SettingsService
+  >;
+  /**
+   * Find an existing PR (open or closed) whose head branch matches
+   * `headBranch` in the same repo. Returns null when none exists.
+   *
+   * The primary use-case is idempotency on the new-PR session
+   * Open-PR step: on resume-after-crash, the orchestrator looks up
+   * the branch we already pushed and, if a PR was already opened,
+   * short-circuits to `complete` without calling `createPullRequest`
+   * again.
+   */
+  readonly findPrByHead: (
+    repoFullName: string,
+    headBranch: string,
+    token: string,
+  ) => Effect.Effect<
+    {
+      readonly number: number;
+      readonly nodeId: string;
+      readonly htmlUrl: string;
+      readonly headSha: string;
+      readonly baseSha: string;
+    } | null,
+    GitHubError,
+    SettingsService
+  >;
+  /**
+   * Fetch the collaborator permission level for a specific user on a repo.
+   * Uses `GET /repos/{owner}/{repo}/collaborators/{username}/permission`.
+   * 404 (user not a collaborator) is mapped to `'none'`.
+   *
+   * Pass `host` and `token` explicitly so callers can query across GHE
+   * hosts without depending on the settings-derived `resolveApiBase`.
+   */
+  readonly getCollaboratorPermission: (
+    token: string,
+    host: string,
+    owner: string,
+    repo: string,
+    username: string,
+  ) => Effect.Effect<"admin" | "maintain" | "write" | "triage" | "read" | "none", GitHubError>;
+}
 
 export interface GhReviewComment {
   readonly id: number;
@@ -774,7 +771,7 @@ export interface GhReviewThread {
   readonly commentDatabaseIds: ReadonlyArray<number>;
 }
 
-export const GitHubServiceLive = Layer.succeed(GitHubService, {
+const githubGatewayFlat: GitHubGatewayFlatService = {
   listPrs: (repoFullName, repositoryId, token, explicitApiBase) =>
     Effect.gen(function* () {
       const apiBase = explicitApiBase ?? (yield* resolveApiBase);
@@ -1528,6 +1525,101 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
       },
       catch: toGitHubError,
     }),
+};
+
+type GitHubGatewayFlat = typeof githubGatewayFlat;
+
+export interface GitHubGatewayService {
+  readonly prs: {
+    readonly listOpen: GitHubGatewayFlat["listPrs"];
+    readonly get: GitHubGatewayFlat["getPr"];
+    readonly searchClosedInWindow: GitHubGatewayFlat["searchClosedPrsInWindow"];
+    readonly meta: GitHubGatewayFlat["getPrMeta"];
+    readonly files: GitHubGatewayFlat["getPrFiles"];
+    readonly commits: GitHubGatewayFlat["listPrCommits"];
+    readonly convertToDraft: GitHubGatewayFlat["convertPrToDraft"];
+    readonly markReadyForReview: GitHubGatewayFlat["markPrReadyForReview"];
+    readonly close: GitHubGatewayFlat["closePullRequest"];
+    readonly mergeEligibility: GitHubGatewayFlat["getMergeEligibility"];
+    readonly merge: GitHubGatewayFlat["mergePullRequest"];
+    readonly create: GitHubGatewayFlat["createPullRequest"];
+    readonly findByHead: GitHubGatewayFlat["findPrByHead"];
+  };
+  readonly reviews: {
+    readonly submit: GitHubGatewayFlat["postReview"];
+    readonly commentsForReview: GitHubGatewayFlat["listReviewCommentsForReview"];
+    readonly createComment: GitHubGatewayFlat["postReviewComment"];
+    readonly replyToComment: GitHubGatewayFlat["replyToComment"];
+    readonly listComments: GitHubGatewayFlat["listReviewComments"];
+    readonly listThreads: GitHubGatewayFlat["listReviewThreads"];
+    readonly resolveThread: GitHubGatewayFlat["resolveReviewThread"];
+    readonly unresolveThread: GitHubGatewayFlat["unresolveReviewThread"];
+  };
+  readonly repos: {
+    readonly get: GitHubGatewayFlat["getRepo"];
+    readonly getFresh: GitHubGatewayFlat["getRepoFresh"];
+    readonly listForUser: GitHubGatewayFlat["listUserRepos"];
+    readonly openPrCounts: GitHubGatewayFlat["getOpenPrCounts"];
+    readonly orgsForUser: GitHubGatewayFlat["listUserOrgs"];
+    readonly collaboratorPermission: GitHubGatewayFlat["getCollaboratorPermission"];
+  };
+  readonly files: {
+    readonly content: GitHubGatewayFlat["getFileContent"];
+    readonly rawBytes: GitHubGatewayFlat["getFileRawBytes"];
+  };
+  readonly users: {
+    readonly authenticated: GitHubGatewayFlat["getAuthenticatedUser"];
+    readonly authenticatedFresh: GitHubGatewayFlat["getAuthenticatedUserFresh"];
+  };
+}
+
+export class GitHubGateway extends Context.Tag("GitHubGateway")<
+  GitHubGateway,
+  GitHubGatewayService
+>() {}
+
+export const GitHubGatewayLive = Layer.succeed(GitHubGateway, {
+  prs: {
+    listOpen: githubGatewayFlat.listPrs,
+    get: githubGatewayFlat.getPr,
+    searchClosedInWindow: githubGatewayFlat.searchClosedPrsInWindow,
+    meta: githubGatewayFlat.getPrMeta,
+    files: githubGatewayFlat.getPrFiles,
+    commits: githubGatewayFlat.listPrCommits,
+    convertToDraft: githubGatewayFlat.convertPrToDraft,
+    markReadyForReview: githubGatewayFlat.markPrReadyForReview,
+    close: githubGatewayFlat.closePullRequest,
+    mergeEligibility: githubGatewayFlat.getMergeEligibility,
+    merge: githubGatewayFlat.mergePullRequest,
+    create: githubGatewayFlat.createPullRequest,
+    findByHead: githubGatewayFlat.findPrByHead,
+  },
+  reviews: {
+    submit: githubGatewayFlat.postReview,
+    commentsForReview: githubGatewayFlat.listReviewCommentsForReview,
+    createComment: githubGatewayFlat.postReviewComment,
+    replyToComment: githubGatewayFlat.replyToComment,
+    listComments: githubGatewayFlat.listReviewComments,
+    listThreads: githubGatewayFlat.listReviewThreads,
+    resolveThread: githubGatewayFlat.resolveReviewThread,
+    unresolveThread: githubGatewayFlat.unresolveReviewThread,
+  },
+  repos: {
+    get: githubGatewayFlat.getRepo,
+    getFresh: githubGatewayFlat.getRepoFresh,
+    listForUser: githubGatewayFlat.listUserRepos,
+    openPrCounts: githubGatewayFlat.getOpenPrCounts,
+    orgsForUser: githubGatewayFlat.listUserOrgs,
+    collaboratorPermission: githubGatewayFlat.getCollaboratorPermission,
+  },
+  files: {
+    content: githubGatewayFlat.getFileContent,
+    rawBytes: githubGatewayFlat.getFileRawBytes,
+  },
+  users: {
+    authenticated: githubGatewayFlat.getAuthenticatedUser,
+    authenticatedFresh: githubGatewayFlat.getAuthenticatedUserFresh,
+  },
 });
 
 /**

@@ -14,6 +14,7 @@ import type {
 import { RATING_AXES } from "@revv/shared";
 import { z } from "zod";
 import type { Db } from "../../../db";
+import type { ToolSpec as GatewayToolSpec, McpToolResult } from "../mcp-tool-gateway";
 
 // ─── Doctrine & phase model ─────────────────────────────────────────────────
 //
@@ -78,9 +79,7 @@ export interface WalkthroughToolContext {
   readonly broadcastThreadEvent: (msg: WsServerMessage) => void;
 }
 
-export interface WalkthroughToolResult {
-  content: Array<{ type: "text"; text: string }>;
-  isError?: boolean;
+export interface WalkthroughToolResult extends McpToolResult {
   // MCP SDK's tool() signature uses an open-ended response type with a
   // string index signature. This extra field lets our narrower type unify
   // with that shape when the SDK wraps us; it's never populated.
@@ -92,13 +91,7 @@ export type WalkthroughToolHandler<TInput> = (
   input: TInput,
 ) => Promise<WalkthroughToolResult>;
 
-export interface ToolSpec<TShape extends z.ZodRawShape> {
-  readonly name: string;
-  readonly description: string;
-  readonly inputSchema: z.ZodObject<TShape>;
-  // biome-ignore lint/suspicious/noExplicitAny: heterogeneous tool spec array requires bivariant handler type
-  readonly handler: WalkthroughToolHandler<any>;
-}
+export type WalkthroughToolSpec = GatewayToolSpec<WalkthroughToolContext, WalkthroughToolResult>;
 
 // ── Tool input schemas (zod) ─────────────────────────────────────────────────
 

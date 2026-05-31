@@ -12,7 +12,7 @@ export function startPolling(intervalSeconds: number, token: string): void {
   // Connect WebSocket for real-time updates (PR/repo/chat envelopes)
   connect(token);
   // Connect the global SSE stream for walkthrough events. Without this the
-  // browser never opens `/api/events`, so `EventBus.broadcastToAccount`
+  // browser never opens `/api/events`, so `Broadcaster.broadcastToAccount`
   // fan-outs land in an empty registration set and the UI sees zero progress
   // (and falls back to rendering the persisted error state from DB).
   // Account-switch in auth.svelte.ts reconnects this same channel; here is

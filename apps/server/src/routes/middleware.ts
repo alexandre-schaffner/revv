@@ -1,6 +1,6 @@
-import { Cause, Option } from "effect";
+import { Cause, Effect, Option } from "effect";
 import { Elysia, status } from "elysia";
-import { auth } from "../auth";
+import { serverEnv } from "../config";
 import {
   AiNotConfiguredError,
   CloneError,
@@ -16,6 +16,9 @@ import {
   ValidationError,
 } from "../domain/errors";
 import { debug, logError } from "../logger";
+import { AppRuntime } from "../runtime";
+import { Identity } from "../services/Identity";
+import { SettingsService } from "../services/Settings";
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
 
@@ -25,12 +28,51 @@ import { debug, logError } from "../logger";
  * `session` into typed context for downstream handlers.
  */
 export const withAuth = new Elysia({ name: "with-auth" }).derive({ as: "scoped" }, async (ctx) => {
-  const session = await auth.api.getSession({ headers: ctx.request.headers });
+  const session = await AppRuntime.runPromise(
+    Effect.flatMap(Identity, (identity) =>
+      Effect.promise(() => identity.sessionFromHeaders(ctx.request.headers)),
+    ),
+  );
   if (!session) {
     return status(401, { error: "Unauthorized" });
   }
   return { session };
 });
+
+function queryHost(query: Record<string, unknown>): string | undefined {
+  const host = query.host;
+  if (typeof host !== "string") return undefined;
+  const trimmed = host.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+export const withAccount = new Elysia({ name: "with-account" })
+  .use(withAuth)
+  .derive({ as: "scoped" }, async (ctx) => {
+    const session = ctx.session;
+    if (!session) {
+      return status(401, { error: "Unauthorized" });
+    }
+    const account = await AppRuntime.runPromise(
+      Effect.gen(function* () {
+        const settingsService = yield* SettingsService;
+        const settings = yield* settingsService
+          .getSettings()
+          .pipe(Effect.orElseSucceed(() => null));
+        const host =
+          queryHost(ctx.query as Record<string, unknown>) ??
+          settings?.githubHost?.trim() ??
+          serverEnv.githubHost;
+        const identity = yield* Identity;
+        return yield* identity.resolveAccount(session.user.id, host);
+      }),
+    ).catch(() => null);
+
+    if (!account) {
+      return status(401, { error: "Unauthorized" });
+    }
+    return { session, account };
+  });
 
 // ── Effect error unwrapping ─────────────────────────────────────────────────
 

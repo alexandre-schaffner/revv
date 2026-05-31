@@ -66,9 +66,35 @@ agent-choice fallback rules.
 ### Platform Modules
 
 Repos/GitHub hides API calls, retries, sync watermarks, and metadata persistence. Identity/Tokens
-hides OAuth account resolution and token refresh. Local Git hides clone/worktree management.
-Realtime/Events hides best-effort broadcast mechanics and keeps the DB as the reconciliation
-source.
+hides OAuth account resolution and token refresh.
+
+#### Realtime / Events
+
+`Broadcaster` is the realtime narrow neck for the global SSE stream (`GET /api/events`). Its
+interface is tiny — `register` / `broadcast` / `broadcastToAccount` — and it hides best-effort
+fan-out, SSE frame encoding, and disconnect bookkeeping. The envelope union (`ServerEventMessage`)
+lives entirely in `@revv/shared/src/events`, never server-side, so the wire contract has one
+source of truth.
+
+Doctrine: **commit-first, broadcast-second** (invariant #8). The broadcaster is the broadcast
+point — callers MUST commit to SQLite before broadcasting; a missed broadcast is reconstructible
+from the DB on reconnect via the snapshot REST endpoints. The interface carries no sequence cursor:
+the walkthrough emitter owns `bumpSeq` (durable wire cursor) and `nextSeq` (in-memory diagnostic)
+and stamps `seq` onto the envelope before it reaches the broadcaster.
+
+`WebSocketHub` is the legacy transport for the PR / repo / chat / new-PR-session WS envelopes
+(union in `@revv/shared/src/ws`). Those channels migrate onto the `Broadcaster` SSE stream
+incrementally in follow-up work; until then `WebSocketHub` follows the same best-effort,
+account-scoped, commit-first doctrine.
+
+#### Local Git
+
+`RepoCloneService` is the Local Git neck: it hides repo clone, per-PR worktree acquisition
+(`acquirePrWorktree`), and file reads at a SHA. `git-runner` (the raw git-subprocess primitive
+with its process registry and signal handling) and `GitOps` (push primitives) are module
+internals — only the Local Git module spawns git directly. Worktree acquisition stays scoped to
+the acquiring job. This module is distinct from `GitHubGateway`, which only talks to the GitHub
+API and never touches the local filesystem.
 
 ## Import Direction
 
@@ -78,6 +104,9 @@ Feature modules depend inward on platform seams:
 - Feature modules do not import `GitHubService`, `RepositoryService`, or `TokenProvider` directly.
 - Provider selection comes from `SettingsService`, not from AI-provider helpers.
 - Agent content writes go through MCP tool handlers; orchestrators own lifecycle/status writes.
+- Routes resolve account context through `Identity`, not `SecretStore` / `TokenProvider` directly.
+- Only the Local Git module (`RepoCloneService`, `GitOps`) spawns git via `git-runner`; everything
+  else goes through those seams.
 
-`bun run check:import-boundaries` enforces the current PR-context import rule and names the
-remaining legacy exceptions scheduled for later waves.
+`bun run check:import-boundaries` enforces the PR-context, Identity, and Local-Git import rules and
+names the remaining legacy exceptions scheduled for later waves.

@@ -17,16 +17,15 @@
 
 import { Effect } from "effect";
 import { Elysia } from "elysia";
-import { auth } from "../auth";
 import { debug, logError } from "../logger";
 import { AppRuntime } from "../runtime";
 import {
-  EventBus,
+  Broadcaster,
   type EventWriter,
   encodeSseFrame,
   encodeSseHeartbeat,
-} from "../services/EventBus";
-import { TokenProvider } from "../services/TokenProvider";
+} from "../services/Broadcaster";
+import { Identity } from "../services/Identity";
 
 const HEARTBEAT_INTERVAL_MS = 15_000;
 
@@ -38,7 +37,11 @@ export const eventsRoute = new Elysia().get("/api/events", async ({ query, reque
   }
 
   const headers = new Headers({ Authorization: `Bearer ${token}` });
-  const session = await auth.api.getSession({ headers });
+  const session = await AppRuntime.runPromise(
+    Effect.flatMap(Identity, (identity) =>
+      Effect.promise(() => identity.sessionFromHeaders(headers)),
+    ),
+  );
   if (!session) {
     return new Response("Unauthorized", { status: 401 });
   }
@@ -49,8 +52,8 @@ export const eventsRoute = new Elysia().get("/api/events", async ({ query, reque
   try {
     const resolved = await AppRuntime.runPromise(
       Effect.gen(function* () {
-        const tokenProvider = yield* TokenProvider;
-        return yield* tokenProvider.resolveAccount(session.user.id, host);
+        const identity = yield* Identity;
+        return yield* identity.resolveAccount(session.user.id, host);
       }),
     );
     accountId = resolved.accountId;
@@ -118,10 +121,10 @@ export const eventsRoute = new Elysia().get("/api/events", async ({ query, reque
     },
   });
 
-  // Register with the bus AFTER `controller` is captured so the writer's
-  // `send` never races a pre-start broadcast.
+  // Register with the broadcaster AFTER `controller` is captured so the
+  // writer's `send` never races a pre-start broadcast.
   unregister = await AppRuntime.runPromise(
-    Effect.flatMap(EventBus, (bus) => bus.register(accountId, writer)),
+    Effect.flatMap(Broadcaster, (bus) => bus.register(accountId, writer)),
   );
 
   // Heartbeat so Tauri webviews / proxies don't drop the connection during

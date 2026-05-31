@@ -9,7 +9,7 @@ import { withDb as withDbHelper } from "../effects/with-db";
 import { logError } from "../logger";
 import { DbService } from "./Db";
 import { DiffCacheService } from "./DiffCache";
-import { GitHubService } from "./GitHub";
+import { GitHubGateway } from "./GitHub";
 import { GitHubEtagCache } from "./GitHubEtagCache";
 import { PullRequestService } from "./PullRequest";
 import { RemoteUserService } from "./RemoteUser";
@@ -49,7 +49,7 @@ export const PollSchedulerLive = Layer.effect(
   Effect.gen(function* () {
     // Capture all dependencies once at layer construction time
     const hub = yield* WebSocketHub;
-    const github = yield* GitHubService;
+    const github = yield* GitHubGateway;
     const prService = yield* PullRequestService;
     const remoteUserService = yield* RemoteUserService;
     const diffCache = yield* DiffCacheService;
@@ -298,7 +298,7 @@ export const PollSchedulerLive = Layer.effect(
                 if (!live) return;
                 const fresh = yield* tryGuarded(
                   live.acc,
-                  github.getRepoFresh(repo.fullName, live.token, hostToApiBase(repo.githubHost)),
+                  github.repos.getFresh(repo.fullName, live.token, hostToApiBase(repo.githubHost)),
                 );
                 if (!fresh) return;
                 if (
@@ -354,7 +354,7 @@ export const PollSchedulerLive = Layer.effect(
                 if (!live) return;
                 const fresh = yield* tryGuarded(
                   live.acc,
-                  github.getAuthenticatedUserFresh(live.token),
+                  github.users.authenticatedFresh(live.token),
                 );
                 if (!fresh) return;
 
@@ -448,7 +448,7 @@ export const PollSchedulerLive = Layer.effect(
 
                 const prs = yield* tryGuarded(
                   live.acc,
-                  github.listPrs(
+                  github.prs.listOpen(
                     repo.fullName,
                     repo.id,
                     live.token,
@@ -541,7 +541,7 @@ export const PollSchedulerLive = Layer.effect(
                     }
                     const fetched = yield* tryGuarded(
                       live.acc,
-                      github.getPr(repo.fullName, pr.externalId, live.token),
+                      github.prs.get(repo.fullName, pr.externalId, live.token),
                     );
                     if (!fetched) {
                       return {
@@ -622,7 +622,7 @@ export const PollSchedulerLive = Layer.effect(
 
                 const searched = yield* tryGuarded(
                   live.acc,
-                  github.searchClosedPrsInWindow(
+                  github.prs.searchClosedInWindow(
                     repo.fullName,
                     backfillSinceIso,
                     backfillUntilIso,
@@ -640,7 +640,7 @@ export const PollSchedulerLive = Layer.effect(
 
                 const fetched = yield* Effect.forEach(
                   missing,
-                  (m) => tryGuarded(live.acc, github.getPr(repo.fullName, m.number, live.token)),
+                  (m) => tryGuarded(live.acc, github.prs.get(repo.fullName, m.number, live.token)),
                   { concurrency: 3 },
                 );
 
@@ -736,7 +736,7 @@ export const PollSchedulerLive = Layer.effect(
 
                     const fileList = yield* tryGuarded(
                       live.acc,
-                      github.getPrFiles(repo.fullName, pr.externalId, live.token),
+                      github.prs.files(repo.fullName, pr.externalId, live.token),
                     );
                     if (!fileList) return;
 

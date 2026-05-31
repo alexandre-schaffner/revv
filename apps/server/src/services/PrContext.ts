@@ -6,7 +6,7 @@ import { GitHubAuthError, type GitHubError, type NotFoundError } from "../domain
 import { withDb } from "../effects/with-db";
 import { DbService } from "./Db";
 import { type CachedDiffFile, DiffCacheService } from "./DiffCache";
-import { GitHubService, type PrCommit, type PrMeta } from "./GitHub";
+import { GitHubGateway, type PrCommit, type PrMeta } from "./GitHub";
 import type { GitHubEtagCache } from "./GitHubEtagCache";
 import { PullRequestService } from "./PullRequest";
 import { RepositoryService } from "./Repository";
@@ -77,7 +77,7 @@ export const PrContextServiceLive = Layer.effect(
     const prService = yield* PullRequestService;
     const repoService = yield* RepositoryService;
     const tokenProvider = yield* TokenProvider;
-    const github = yield* GitHubService;
+    const github = yield* GitHubGateway;
     const diffCache = yield* DiffCacheService;
 
     const resolveBasic = (prId: string, userId: string) =>
@@ -110,7 +110,7 @@ export const PrContextServiceLive = Layer.effect(
 
     // Cache-or-fetch diff files. Inlined from DiffCache.getOrFetchDiffFiles so
     // we can use the service values captured in this layer's closure without
-    // leaking GitHubService / DiffCacheService into the returned Effect's
+    // leaking GitHubGateway / DiffCacheService into the returned Effect's
     // context requirements.
     const cacheOrFetchFiles = (
       prId: string,
@@ -122,7 +122,7 @@ export const PrContextServiceLive = Layer.effect(
         const { db } = yield* DbService;
         const cached = yield* withDb(db, diffCache.getCachedFiles(prId));
         if (cached !== null) return cached;
-        const fileList = yield* github.getPrFiles(repoFullName, prExternalId, token);
+        const fileList = yield* github.prs.files(repoFullName, prExternalId, token);
         const fresh: CachedDiffFile[] = fileList.map((f) => ({
           path: f.filename,
           oldPath: f.previousFilename,
@@ -139,7 +139,7 @@ export const PrContextServiceLive = Layer.effect(
     const resolveWithDiff = (prId: string, userId: string) =>
       Effect.gen(function* () {
         const basic = yield* resolveBasic(prId, userId);
-        const meta = yield* github.getPrMeta(basic.repo.fullName, basic.pr.externalId, basic.token);
+        const meta = yield* github.prs.meta(basic.repo.fullName, basic.pr.externalId, basic.token);
         const cachedFiles = yield* cacheOrFetchFiles(
           basic.pr.id,
           basic.repo.fullName,
@@ -160,7 +160,7 @@ export const PrContextServiceLive = Layer.effect(
         // any callers that can't tolerate the failure should add their own
         // fallback. Today the only caller is the walkthrough start path
         // which already mapErrors GitHub failures, so propagation is safe.
-        const commits = yield* github.listPrCommits(
+        const commits = yield* github.prs.commits(
           basic.repo.fullName,
           basic.pr.externalId,
           basic.token,

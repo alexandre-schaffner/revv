@@ -32,14 +32,16 @@ import { withDb } from "../effects/with-db";
 import { debug, logError } from "../logger";
 import { DbService } from "./Db";
 import { DiffCacheService } from "./DiffCache";
-import { GitHubService } from "./GitHub";
+import { GitHubGateway } from "./GitHub";
 import { GitHubEtagCache } from "./GitHubEtagCache";
+import { analyzeJobFailure } from "./job-failure";
+import { makeStartJobMutex } from "./job-mutex";
+import { makeSubscriberRegistry, type SubscriberHandle } from "./job-subscribers";
 import { OpencodeSupervisor } from "./OpencodeSupervisor";
 import { ProjectRecapService } from "./ProjectRecap";
 import { type ArchivedPrWithWalkthrough, PullRequestService } from "./PullRequest";
 import { RepositoryService } from "./Repository";
 import { runRecapAgent } from "./recap-agent-runner";
-import { makeRecapSessionManager } from "./recap-session";
 import {
   attachRecapDigests,
   buildDigestForRecapPr,
@@ -49,6 +51,7 @@ import {
   truncatePatch,
 } from "./recap-source-bundle";
 import { SettingsService } from "./Settings";
+import { makeSessionTokenStore } from "./session-token-store";
 import { TokenProvider } from "./TokenProvider";
 import { WebSocketHub } from "./WebSocketHub";
 
@@ -67,15 +70,6 @@ const RECAP_SESSION_TOKEN_TTL_MS = 15 * 60_000;
 
 type Subscriber = (event: RecapStreamEvent) => void;
 
-interface SubscriberHandle {
-  readonly id: string;
-  readonly callback: Subscriber;
-  /** Buffer for pre-flush events. Null after flush (direct-forward mode). */
-  buffered: RecapStreamEvent[] | null;
-  /** Consecutive failure counter. Dropped after 3 consecutive throws. */
-  consecutiveFailures: number;
-}
-
 interface ActiveRecapJob {
   readonly recapId: string;
   readonly repoId: string;
@@ -88,8 +82,8 @@ interface ActiveRecapJob {
   /** Set to true the moment the agent calls `complete_recap` and validation passes. */
   validatedComplete: boolean;
   /** SSE subscribers keyed by opaque handle id. */
-  readonly subscribers: Set<SubscriberHandle>;
-  /** Monotonic seq for tracing. */
+  readonly subscribers: Set<SubscriberHandle<RecapStreamEvent>>;
+  /** Monotonic seq for tracing (in-memory diagnostic only). */
   nextSeq: number;
 }
 
@@ -193,22 +187,38 @@ export const ProjectRecapJobsLive = Layer.effect(
     const settingsService = yield* SettingsService;
     const supervisor = yield* OpencodeSupervisor;
     const diffCache = yield* DiffCacheService;
-    const github = yield* GitHubService;
+    const github = yield* GitHubGateway;
     const tokenProvider = yield* TokenProvider;
     const etagCache = yield* GitHubEtagCache;
 
     const registry = yield* Ref.make(new Map<string, ActiveRecapJob>());
     const semaphore = yield* Effect.makeSemaphore(MAX_CONCURRENT_RECAP_JOBS);
-    const startJobMutexes = yield* Ref.make(new Map<string, Effect.Semaphore>());
+    const startJobMutex = yield* makeStartJobMutex();
 
-    const { issueSessionToken, resolveSessionToken, clearSessionToken, clearTokensForRecap } =
-      yield* makeRecapSessionManager(RECAP_SESSION_TOKEN_TTL_MS);
+    // Per-job SSE subscriber subscribe/unsubscribe handling. Fan-out stays
+    // concrete below while this wave is still mid-refactor.
+    const subscribers = makeSubscriberRegistry<RecapStreamEvent>({
+      traceScope: "recap-jobs",
+      errorScope: "recap-jobs",
+      idLabel: "recap",
+      handleIdPrefix: "",
+    });
+
+    // Ephemeral opencode HTTP-MCP session tokens. Recap passes no liveness
+    // predicate — a token resolves to its stored RecapToolContext for as long
+    // as it hasn't expired, regardless of fiber liveness (invariant #1).
+    const sessionStore = yield* makeSessionTokenStore<RecapToolContext>(RECAP_SESSION_TOKEN_TTL_MS);
+    const issueSessionToken = sessionStore.issue;
+    const resolveSessionToken = sessionStore.resolve;
+    const clearSessionToken = sessionStore.clear;
+    const clearTokensForRecap = (recapId: string): Effect.Effect<void> =>
+      sessionStore.clearWhere((ctx) => ctx.recapId === recapId);
 
     const provideDb = <A, E>(eff: Effect.Effect<A, E, DbService>): Effect.Effect<A, E> =>
       withDb(db, eff);
 
     /**
-     * Provide the trio of services {@link GitHubService}'s read methods need
+     * Provide the trio of services {@link GitHubGateway}'s read methods need
      * at execution time (etag cache, db handle, settings for API base).
      * Use this when calling things like `github.getPrFiles` from inside
      * `Effect.gen` blocks that promise empty requirements.
@@ -221,20 +231,6 @@ export const ProjectRecapJobsLive = Layer.effect(
         Effect.provideService(GitHubEtagCache, etagCache),
         Effect.provideService(SettingsService, settingsService),
       );
-
-    const acquireStartJobMutex = (key: string): Effect.Effect<Effect.Semaphore> =>
-      Effect.gen(function* () {
-        const cached = (yield* Ref.get(startJobMutexes)).get(key);
-        if (cached) return cached;
-        const candidate = yield* Effect.makeSemaphore(1);
-        return yield* Ref.modify(startJobMutexes, (map) => {
-          const winner = map.get(key);
-          if (winner) return [winner, map];
-          const next = new Map(map);
-          next.set(key, candidate);
-          return [candidate, next];
-        });
-      });
 
     // ── Status chokepoint (CLAUDE.md invariant #11) ─────────────────────
     const setStatus = (
@@ -291,62 +287,10 @@ export const ProjectRecapJobsLive = Layer.effect(
       });
 
     // ── Subscriber fan-out ──────────────────────────────────────────────
-
-    let nextHandleId = 1;
-
-    const fanOut = (job: ActiveRecapJob, event: RecapStreamEvent): number => {
-      const seq = job.nextSeq++;
-      const subsCount = job.subscribers.size;
-      debug(
-        "recap-jobs",
-        `fanOut recap=${job.recapId} seq=${seq} type=${event.type} subs=${subsCount}`,
-      );
-      if (subsCount === 0) {
-        debug(
-          "recap-jobs",
-          `fanOut-no-subscribers recap=${job.recapId} seq=${seq} type=${event.type}`,
-        );
-      }
-      const toDrop: SubscriberHandle[] = [];
-      for (const handle of job.subscribers) {
-        try {
-          if (handle.buffered !== null) {
-            handle.buffered.push(event);
-            debug(
-              "recap-jobs",
-              `fanOut-buffered recap=${job.recapId} seq=${seq} type=${event.type} handle=${handle.id} bufLen=${handle.buffered.length}`,
-            );
-          } else {
-            handle.callback(event);
-            debug(
-              "recap-jobs",
-              `fanOut-delivered recap=${job.recapId} seq=${seq} type=${event.type} handle=${handle.id}`,
-            );
-          }
-          handle.consecutiveFailures = 0;
-        } catch (err) {
-          handle.consecutiveFailures += 1;
-          if (handle.consecutiveFailures >= 3) {
-            toDrop.push(handle);
-            logError(
-              "recap-jobs",
-              `subscriber dropped after 3 consecutive failures recap=${job.recapId} seq=${seq} handle=${handle.id}:`,
-              err instanceof Error ? err.message : String(err),
-            );
-          } else {
-            logError(
-              "recap-jobs",
-              `subscriber threw (${handle.consecutiveFailures}/3) recap=${job.recapId} seq=${seq} type=${event.type} handle=${handle.id}:`,
-              err instanceof Error ? err.message : String(err),
-            );
-          }
-        }
-      }
-      for (const handle of toDrop) {
-        job.subscribers.delete(handle);
-      }
-      return seq;
-    };
+    // Thin wrapper over the shared `subscribers` registry so the many local
+    // `fanOut(job, event)` call sites stay unchanged.
+    const fanOut = (job: ActiveRecapJob, event: RecapStreamEvent): number =>
+      subscribers.fanOut(job.recapId, job, event);
 
     // ── Diff loader (walkthrough-fallback path) ─────────────────────────
     //
@@ -463,7 +407,7 @@ export const ProjectRecapJobsLive = Layer.effect(
         }
 
         const fetched = yield* provideGithubDeps(
-          github.getPrFiles(repoFullName, pr.externalId, token),
+          github.prs.files(repoFullName, pr.externalId, token),
         ).pipe(
           Effect.catchAll((err) =>
             Effect.sync(() => {
@@ -549,7 +493,7 @@ export const ProjectRecapJobsLive = Layer.effect(
         }
 
         const searched = yield* provideGithubDeps(
-          github.searchClosedPrsInWindow(repoFullName, periodStart, periodEnd, token),
+          github.prs.searchClosedInWindow(repoFullName, periodStart, periodEnd, token),
         ).pipe(
           Effect.catchAll((err) =>
             Effect.sync(() => {
@@ -587,7 +531,7 @@ export const ProjectRecapJobsLive = Layer.effect(
         const fetched = yield* Effect.forEach(
           missing,
           (m) =>
-            provideGithubDeps(github.getPr(repoFullName, m.number, token)).pipe(
+            provideGithubDeps(github.prs.get(repoFullName, m.number, token)).pipe(
               Effect.catchAll((err) =>
                 Effect.sync(() => {
                   debug(
@@ -938,35 +882,26 @@ export const ProjectRecapJobsLive = Layer.effect(
             semaphore.withPermits(1),
             Effect.catchAllCause((cause) =>
               Effect.gen(function* () {
-                const interruptedOnly = Cause.isInterruptedOnly(cause);
-                if (interruptedOnly) {
-                  // If the interrupt was a user-driven Stop and the body
-                  // didn't reach its own cancelled-branch (e.g. interrupted
-                  // during DB read / bundle prep, before the agent's
-                  // AbortController could catch), transition the row to
-                  // 'error' here so the UI doesn't get stuck on
-                  // 'generating'. Process-shutdown interrupts leave the row
-                  // alone so resume-on-boot can pick it up.
-                  if (job.cancelledByUser) {
-                    const msg = "Cancelled by user";
-                    fanOut(job, {
-                      type: "error",
-                      data: { code: "RecapGenerationError", message: msg },
-                    });
-                    yield* setStatus(
-                      {
-                        id: job.recapId,
-                        repositoryId: job.repoId,
-                        period: job.period,
-                      },
-                      "error",
-                      { errorMessage: msg },
-                    );
-                  }
+                if (
+                  analyzeJobFailure(cause, { cancelledByUser: job.cancelledByUser }) ===
+                  "leave-for-resume"
+                ) {
+                  // Process-shutdown interrupt with no user intent — leave the
+                  // row 'generating' so resume-on-boot can pick it up.
                   return;
                 }
-                const msg = `Generation failed unexpectedly: ${Cause.pretty(cause).slice(0, 200)}`;
-                logError("recap-jobs", `job ${job.recapId} failed:`, Cause.pretty(cause));
+                // A real failure, or a user-driven Stop. Transition the row to
+                // 'error' so the UI doesn't get stuck on 'generating'. (A Stop
+                // may interrupt during DB read / bundle prep, before the
+                // agent's AbortController could catch — this catch-all still
+                // flips the row.)
+                const interruptedOnly = Cause.isInterruptedOnly(cause);
+                const msg = interruptedOnly
+                  ? "Cancelled by user"
+                  : `Generation failed unexpectedly: ${Cause.pretty(cause).slice(0, 200)}`;
+                if (!interruptedOnly) {
+                  logError("recap-jobs", `job ${job.recapId} failed:`, Cause.pretty(cause));
+                }
                 fanOut(job, {
                   type: "error",
                   data: { code: "RecapGenerationError", message: msg },
@@ -1053,7 +988,7 @@ export const ProjectRecapJobsLive = Layer.effect(
     ): Effect.Effect<{ readonly recapId: string }, StartRecapJobError> =>
       Effect.gen(function* () {
         const mutexKey = `${params.repoId}:${params.period}:${params.periodStart}`;
-        const mutex = yield* acquireStartJobMutex(mutexKey);
+        const mutex = yield* startJobMutex.acquire(mutexKey);
         return yield* mutex.withPermits(1)(
           Effect.gen(function* () {
             // Resume path: caller passed an existing row id. Re-run the
@@ -1104,7 +1039,7 @@ export const ProjectRecapJobsLive = Layer.effect(
               fiber: null,
               cancelledByUser: false,
               validatedComplete: false,
-              subscribers: new Set<SubscriberHandle>(),
+              subscribers: new Set<SubscriberHandle<RecapStreamEvent>>(),
               nextSeq: 0,
             };
             yield* launchJob(job);
@@ -1120,50 +1055,8 @@ export const ProjectRecapJobsLive = Layer.effect(
         if (!job) {
           return { found: false } as SubscribeResult;
         }
-        const handleId = String(nextHandleId++);
-        const handle: SubscriberHandle = {
-          id: handleId,
-          callback: onEvent,
-          buffered: [],
-          consecutiveFailures: 0,
-        };
-        job.subscribers.add(handle);
-        debug(
-          "recap-jobs",
-          `subscribe recap=${recapId} handle=${handleId} subs=${job.subscribers.size} nextSeq=${job.nextSeq}`,
-        );
-        return {
-          found: true,
-          unsubscribe: () => {
-            const removed = job.subscribers.delete(handle);
-            debug(
-              "recap-jobs",
-              `unsubscribe recap=${recapId} handle=${handleId} removed=${removed} subs=${job.subscribers.size}`,
-            );
-          },
-          flush: () => {
-            const buf = handle.buffered;
-            handle.buffered = null;
-            const flushed = buf?.length ?? 0;
-            debug(
-              "recap-jobs",
-              `flush recap=${recapId} handle=${handleId} flushedEvents=${flushed}`,
-            );
-            if (buf) {
-              for (const event of buf) {
-                try {
-                  onEvent(event);
-                } catch (err) {
-                  logError(
-                    "recap-jobs",
-                    `subscriber flush threw recap=${recapId} handle=${handleId} type=${event.type}:`,
-                    err instanceof Error ? err.message : String(err),
-                  );
-                }
-              }
-            }
-          },
-        };
+        const { unsubscribe, flush } = subscribers.subscribe(recapId, job, onEvent);
+        return { found: true, unsubscribe, flush };
       });
 
     const emitEvent = (recapId: string, event: RecapStreamEvent): Effect.Effect<EmitResult> =>

@@ -28,12 +28,12 @@ import { wsRoute } from "./routes/ws";
 import { AppRuntime } from "./runtime";
 import { ChatSessionService } from "./services/ChatSession";
 import { DbMaintenance } from "./services/DbMaintenance";
+import { Identity } from "./services/Identity";
 import { PollScheduler } from "./services/PollScheduler";
 import { ensureHighlighter } from "./services/PrerenderCache";
 import { ProjectRecapJobs } from "./services/ProjectRecapJobs";
 import { RecapScheduler } from "./services/RecapScheduler";
 import { RepoCloneService } from "./services/RepoClone";
-import { migrateLegacyTokens } from "./services/SecretStore";
 import { WalkthroughJobs } from "./services/WalkthroughJobs";
 import { acquireSingleInstance } from "./singleInstance";
 
@@ -137,7 +137,9 @@ logError("server", `listening on http://localhost:${port}`);
 // secure store, then null the columns. Awaited before the sync scheduler boots
 // so the first poll cycle reads tokens from their new home. One-time and
 // idempotent — a no-op once every row has been migrated.
-await AppRuntime.runPromise(migrateLegacyTokens)
+await AppRuntime.runPromise(
+  Effect.flatMap(Identity, (identity) => identity.migrateLegacyTokenSecrets),
+)
   .then((n) => {
     if (n > 0) logError("secret-store", `migrated ${n} GitHub token(s) into secure storage`);
   })

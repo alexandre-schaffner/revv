@@ -57,14 +57,18 @@ import {
 import { withDb } from "../effects/with-db";
 import { debug, logError } from "../logger";
 import { AiService, type ContinuationContext } from "./Ai";
+import { Broadcaster } from "./Broadcaster";
 import { DbService } from "./Db";
-import { EventBus } from "./EventBus";
 import { GitHubEtagCache } from "./GitHubEtagCache";
+import { analyzeJobFailure } from "./job-failure";
+import { makeStartJobMutex } from "./job-mutex";
+import { makeSubscriberRegistry, type SubscriberHandle } from "./job-subscribers";
 import { PrContextService } from "./PrContext";
 import { RemoteWalkthroughCache } from "./RemoteWalkthroughCache";
 import { RepoCloneService } from "./RepoClone";
 import { ReviewService } from "./Review";
 import { SettingsService } from "./Settings";
+import { makeSessionTokenStore } from "./session-token-store";
 import { WalkthroughService } from "./Walkthrough";
 import { WalkthroughSnapshotImporter } from "./WalkthroughSnapshotImporter";
 
@@ -104,20 +108,6 @@ export type EmitResult =
   | { readonly kind: "delivered"; readonly seq: number }
   | { readonly kind: "skipped-no-job"; readonly walkthroughId: string };
 
-interface SubscriberHandle {
-  /** Short opaque id for diagnostic logging — pairs with `[wt-trace]` lines. */
-  readonly id: string;
-  readonly callback: Subscriber;
-  /** Buffer for pre-flush events. `null` after flush (direct-forward mode). */
-  buffered: WalkthroughStreamEvent[] | null;
-  /**
-   * Consecutive failure counter for the per-subscriber error budget (S2).
-   * Incremented on every throw from the callback; reset to 0 on each
-   * successful invocation. Subscriber is dropped after 3 consecutive throws.
-   */
-  consecutiveFailures: number;
-}
-
 interface ActiveJob {
   readonly walkthroughId: string;
   readonly prId: string;
@@ -125,18 +115,19 @@ interface ActiveJob {
   readonly userId: string;
   /**
    * Better-auth `account.id` that owns the repo backing this PR. Resolved
-   * once at `startJob` time so `emitEvent` can target `EventBus.broadcastToAccount`
+   * once at `startJob` time so `emitEvent` can target `Broadcaster.broadcastToAccount`
    * without hitting the DB on every event. Empty string when the repo
    * lookup fails (rare — falls back to global broadcast).
    */
   readonly accountId: string;
   readonly abortController: AbortController;
-  readonly subscribers: Set<SubscriberHandle>;
+  readonly subscribers: Set<SubscriberHandle<WalkthroughStreamEvent>>;
   /**
    * Diagnostic-only monotonic counter assigned to every event flowing through
-   * `fanOut`. Lets tracing correlate server log lines with client-side event
-   * arrival (see `wt-trace` on the web side). Not on the wire — purely for
-   * paired-log debugging of the stream-loss bug.
+   * the subscriber fan-out. Lets tracing correlate server log lines with
+   * client-side event arrival (see `wt-trace` on the web side). Not on the
+   * wire — purely for paired-log debugging of the stream-loss bug. Distinct
+   * from the durable wire cursor stamped by `walkthroughService.bumpSeq`.
    */
   nextSeq: number;
   fiber: Fiber.RuntimeFiber<unknown, unknown> | null;
@@ -146,14 +137,6 @@ interface ActiveJob {
    * Observability only — answers "is the SSR cache earning its keep?" (S10).
    */
   prerenderFailures: number;
-}
-
-let nextHandleId = 1;
-
-export interface SessionTokenEntry {
-  readonly walkthroughId: string;
-  readonly issuedAt: number;
-  readonly expiresAt: number;
 }
 
 export type StartJobTrigger = "user" | "resume" | "review_requested";
@@ -326,7 +309,7 @@ export const WalkthroughJobsLive = Layer.effect(
     const walkthroughService = yield* WalkthroughService;
     const remoteCache = yield* RemoteWalkthroughCache;
     const snapshotImporter = yield* WalkthroughSnapshotImporter;
-    const eventBus = yield* EventBus;
+    const broadcaster = yield* Broadcaster;
 
     const registry = yield* Ref.make(new Map<string, ActiveJob>());
     const semaphore = yield* Effect.makeSemaphore(MAX_CONCURRENT_JOBS);
@@ -343,30 +326,28 @@ export const WalkthroughJobsLive = Layer.effect(
     // semaphore is exhausted and new jobs queue forever ("generation
     // stops"). The per-PR mutex serializes startJob calls for the same
     // PR so the registry/launchJob handoff is atomic; concurrent calls
-    // for *different* PRs still run in parallel.
-    const startJobMutexes = yield* Ref.make(new Map<string, Effect.Semaphore>());
+    // for *different* PRs still run in parallel. Keyed by prId.
+    const startJobMutex = yield* makeStartJobMutex();
 
-    const acquireStartJobMutex = (prId: string): Effect.Effect<Effect.Semaphore> =>
-      Effect.gen(function* () {
-        // Fast path: a mutex for this PR already exists.
-        const cached = (yield* Ref.get(startJobMutexes)).get(prId);
-        if (cached) return cached;
-        // Slow path: build a candidate, then atomically install it
-        // or yield to the racing winner inside `Ref.modify`.
-        const candidate = yield* Effect.makeSemaphore(1);
-        return yield* Ref.modify(startJobMutexes, (map) => {
-          const winner = map.get(prId);
-          if (winner) return [winner, map];
-          const next = new Map(map);
-          next.set(prId, candidate);
-          return [candidate, next];
-        });
-      });
+    // Per-job SSE subscriber fan-out (3-strike error budget, pre-flush
+    // buffering). Subscriber state lives on each `ActiveJob`; this owns only
+    // the shared algorithm.
+    const subscribers = makeSubscriberRegistry<WalkthroughStreamEvent>({
+      traceScope: "wt-trace",
+      errorScope: "walkthrough-jobs",
+      idLabel: "wt",
+      handleIdPrefix: "h",
+    });
 
-    // Opaque-token → walkthroughId map. Ephemeral coordination (invariant #1):
-    // tokens are never persisted; on restart they're regenerated by the
-    // resume path. The HTTP MCP route resolves against this map.
-    const sessionTokens = yield* Ref.make(new Map<string, SessionTokenEntry>());
+    // Opaque-token → walkthroughId store. Ephemeral coordination (invariant #1):
+    // tokens are never persisted; on restart they're regenerated by the resume
+    // path. The HTTP MCP route resolves against this store. The injected
+    // liveness predicate makes a token stop resolving the moment its job leaves
+    // the registry (the job died), even before TTL expiry.
+    const sessionStore = yield* makeSessionTokenStore<{ readonly walkthroughId: string }>(
+      SESSION_TOKEN_TTL_MS,
+      (payload) => Effect.map(Ref.get(registry), (map) => map.has(payload.walkthroughId)),
+    );
 
     // Activity notifiers for the opencode provider path. Keyed by walkthroughId.
     // The opencode provider registers a callback here; emitEvent fires it after
@@ -425,67 +406,12 @@ export const WalkthroughJobsLive = Layer.effect(
         ),
       );
 
-    // ── Subscriber fan-out ──────────────────────────────────────────────
-    //
+    // Subscriber fan-out lives in `subscribers` (job-subscribers.ts).
     // Commit-first / broadcast-second (invariant #8): by the time an event
-    // reaches this function, the MCP tool handler (for content events) or
-    // the orchestrator itself (for lifecycle events) has already committed
-    // the DB write. Broadcast failures here never roll back state — a
-    // reconnecting subscriber recovers the truth from DB.
-    const fanOut = (job: ActiveJob, event: WalkthroughStreamEvent): number => {
-      const seq = job.nextSeq++;
-      const subsCount = job.subscribers.size;
-      debug(
-        "wt-trace",
-        `fanOut wt=${job.walkthroughId} seq=${seq} type=${event.type} subs=${subsCount}`,
-      );
-      if (subsCount === 0) {
-        debug(
-          "wt-trace",
-          `fanOut-no-subscribers wt=${job.walkthroughId} seq=${seq} type=${event.type}`,
-        );
-      }
-      // Collect subscribers to drop (can't modify Set while iterating)
-      const toDrop: SubscriberHandle[] = [];
-      for (const handle of job.subscribers) {
-        try {
-          if (handle.buffered !== null) {
-            handle.buffered.push(event);
-            debug(
-              "wt-trace",
-              `fanOut-buffered wt=${job.walkthroughId} seq=${seq} type=${event.type} handle=${handle.id} bufLen=${handle.buffered.length}`,
-            );
-          } else {
-            handle.callback(event);
-            debug(
-              "wt-trace",
-              `fanOut-delivered wt=${job.walkthroughId} seq=${seq} type=${event.type} handle=${handle.id}`,
-            );
-          }
-          handle.consecutiveFailures = 0;
-        } catch (err) {
-          handle.consecutiveFailures += 1;
-          if (handle.consecutiveFailures >= 3) {
-            toDrop.push(handle);
-            logError(
-              "walkthrough-jobs",
-              `subscriber dropped after 3 consecutive failures wt=${job.walkthroughId} seq=${seq} handle=${handle.id}:`,
-              err instanceof Error ? err.message : String(err),
-            );
-          } else {
-            logError(
-              "walkthrough-jobs",
-              `subscriber threw (${handle.consecutiveFailures}/3) wt=${job.walkthroughId} seq=${seq} type=${event.type} handle=${handle.id}:`,
-              err instanceof Error ? err.message : String(err),
-            );
-          }
-        }
-      }
-      for (const handle of toDrop) {
-        job.subscribers.delete(handle);
-      }
-      return seq;
-    };
+    // reaches `subscribers.fanOut`, the MCP tool handler (content events) or
+    // the orchestrator (lifecycle events) has already committed the DB write.
+    // Broadcast failures never roll back state — a reconnecting subscriber
+    // recovers the truth from DB.
 
     const removeJob = (walkthroughId: string) =>
       Effect.all(
@@ -621,10 +547,9 @@ export const WalkthroughJobsLive = Layer.effect(
             }
           },
           // Supply opencode-path session-token callbacks. Ignored by
-          // the Claude SDK path. WalkthroughJobs owns the
-          // `sessionTokens` ref (see Ref.make below) — passing these
-          // through as callbacks avoids a layer-level cycle between
-          // AiService and WalkthroughJobs.
+          // the Claude SDK path. WalkthroughJobs owns the session-token
+          // store (`sessionStore`) — passing these through as callbacks
+          // avoids a layer-level cycle between AiService and WalkthroughJobs.
           issueOpencodeSessionToken: (walkthroughId: string) =>
             Effect.runPromise(issueSessionToken(walkthroughId)),
           clearOpencodeSessionToken: (token: string) => Effect.runPromise(clearSessionToken(token)),
@@ -980,7 +905,7 @@ export const WalkthroughJobsLive = Layer.effect(
 
           // Broadcast `lifecycle:started` so the client can pre-create the
           // sidebar spinner entry before any content event arrives. Goes
-          // through emitEvent → bumpSeq → EventBus + legacy fanOut. Best-
+          // through emitEvent → bumpSeq → Broadcaster + legacy fanOut. Best-
           // effort: this is the first emit, so the seq will be 0 in the
           // common case (chat-edits on completed walkthroughs run a separate
           // seq lineage on the same row).
@@ -1035,7 +960,7 @@ export const WalkthroughJobsLive = Layer.effect(
                 }
               }
 
-              if (interruptedOnly && !cancelledByUser) {
+              if (analyzeJobFailure(cause, { cancelledByUser }) === "leave-for-resume") {
                 debug(
                   "walkthrough-jobs",
                   "job interrupted (likely shutdown) — leaving row for resume:",
@@ -1083,17 +1008,7 @@ export const WalkthroughJobsLive = Layer.effect(
             Effect.ensuring(removeJob(job.walkthroughId)),
             Effect.ensuring(
               // Clear any session tokens issued for this job.
-              Ref.update(sessionTokens, (map) => {
-                let changed = false;
-                const next = new Map(map);
-                for (const [token, entry] of next.entries()) {
-                  if (entry.walkthroughId === job.walkthroughId) {
-                    next.delete(token);
-                    changed = true;
-                  }
-                }
-                return changed ? next : map;
-              }),
+              sessionStore.clearWhere((payload) => payload.walkthroughId === job.walkthroughId),
             ),
           );
 
@@ -1140,12 +1055,12 @@ export const WalkthroughJobsLive = Layer.effect(
           }
         }
 
-        // Per-PR serialization (see `startJobMutexes` rationale). The
+        // Per-PR serialization (see `startJobMutex` rationale). The
         // remainder of startJob — findActiveByPr, resolveWithDiff,
         // SHA-aware dedup, createPartial, launchJob — runs under the
         // mutex so the check-and-launch is atomic per PR and concurrent
         // callers can't both reach `launchJob` and fork duplicate fibers.
-        const mutex = yield* acquireStartJobMutex(params.prId);
+        const mutex = yield* startJobMutex.acquire(params.prId);
         return yield* mutex.withPermits(1)(startJobBody(params));
       });
 
@@ -1253,7 +1168,7 @@ export const WalkthroughJobsLive = Layer.effect(
         // Resolve `GeneratedBy` + owning account id from the OAuth account
         // that owns the repo. Best-effort — if rows are missing we skip
         // attribution rather than fail the job. The `accountId` flows into
-        // `ActiveJob` so `emitEvent` can target `EventBus.broadcastToAccount`
+        // `ActiveJob` so `emitEvent` can target `Broadcaster.broadcastToAccount`
         // without re-querying the DB on every event.
         const accountResolution = (() => {
           const repoRow = db
@@ -1439,51 +1354,8 @@ export const WalkthroughJobsLive = Layer.effect(
           return { found: false };
         }
 
-        const handleId = `h${nextHandleId++}`;
-        const handle: SubscriberHandle = {
-          id: handleId,
-          callback: onEvent,
-          buffered: [],
-          consecutiveFailures: 0,
-        };
-        job.subscribers.add(handle);
-        debug(
-          "wt-trace",
-          `subscribe wt=${walkthroughId} handle=${handleId} subs=${job.subscribers.size} nextSeq=${job.nextSeq}`,
-        );
-
-        return {
-          found: true,
-          unsubscribe: () => {
-            const removed = job.subscribers.delete(handle);
-            debug(
-              "wt-trace",
-              `unsubscribe wt=${walkthroughId} handle=${handleId} removed=${removed} subs=${job.subscribers.size}`,
-            );
-          },
-          flush: () => {
-            const buf = handle.buffered;
-            handle.buffered = null;
-            const flushed = buf?.length ?? 0;
-            debug(
-              "wt-trace",
-              `flush wt=${walkthroughId} handle=${handleId} flushedEvents=${flushed}`,
-            );
-            if (buf) {
-              for (const event of buf) {
-                try {
-                  onEvent(event);
-                } catch (err) {
-                  logError(
-                    "walkthrough-jobs",
-                    `subscriber flush threw wt=${walkthroughId} handle=${handleId} type=${event.type}:`,
-                    err instanceof Error ? err.message : String(err),
-                  );
-                }
-              }
-            }
-          },
-        };
+        const { unsubscribe, flush } = subscribers.subscribe(walkthroughId, job, onEvent);
+        return { found: true, unsubscribe, flush };
       });
 
     const cancel = (walkthroughId: string): Effect.Effect<void> =>
@@ -1673,9 +1545,9 @@ export const WalkthroughJobsLive = Layer.effect(
           //    path = DB join for chat-edit-on-completed-walkthrough).
           const targets = resolveEventTargets(walkthroughId, activeJob);
           if (targets !== null) {
-            // EventBus broadcast — the new SSE path. Account-scoped so a
+            // Broadcaster fan-out — the new SSE path. Account-scoped so a
             // multi-account user only sees their own walkthrough events.
-            yield* eventBus
+            yield* broadcaster
               .broadcastToAccount(targets.accountId, {
                 type: "walkthrough:event",
                 data: {
@@ -1697,7 +1569,7 @@ export const WalkthroughJobsLive = Layer.effect(
           //    window both paths are active; the legacy SSE handler is deleted
           //    once the client cutover lands (step 7 of the plan).
           if (activeJob) {
-            fanOut(activeJob, event);
+            subscribers.fanOut(activeJob.walkthroughId, activeJob, event);
           } else {
             debug(
               "wt-trace",
@@ -1726,44 +1598,24 @@ export const WalkthroughJobsLive = Layer.effect(
         }),
       );
 
-    const issueSessionToken = (walkthroughId: string) =>
-      Effect.gen(function* () {
-        const token = crypto.randomUUID();
-        const now = Date.now();
-        yield* Ref.update(sessionTokens, (map) => {
-          const next = new Map(map);
-          next.set(token, {
-            walkthroughId,
-            issuedAt: now,
-            expiresAt: now + SESSION_TOKEN_TTL_MS,
-          });
-          return next;
-        });
-        return token;
-      });
+    const issueSessionToken = (walkthroughId: string) => sessionStore.issue({ walkthroughId });
 
     const resolveSessionToken = (token: string) =>
       Effect.gen(function* () {
-        const map = yield* Ref.get(sessionTokens);
-        const entry = map.get(token);
-        if (!entry) return null;
-        if (entry.expiresAt < Date.now()) return null;
-        const registryMap = yield* Ref.get(registry);
-        const job = registryMap.get(entry.walkthroughId);
+        // `sessionStore.resolve` enforces TTL + the injected liveness check
+        // (job still in the registry). We re-read the registry here only to
+        // enrich the result with the job's `prId` for the MCP route.
+        const payload = yield* sessionStore.resolve(token);
+        if (!payload) return null;
+        const job = (yield* Ref.get(registry)).get(payload.walkthroughId);
         if (!job) return null;
         return {
-          walkthroughId: entry.walkthroughId,
+          walkthroughId: payload.walkthroughId,
           prId: job.prId,
         };
       });
 
-    const clearSessionToken = (token: string) =>
-      Ref.update(sessionTokens, (map) => {
-        if (!map.has(token)) return map;
-        const next = new Map(map);
-        next.delete(token);
-        return next;
-      });
+    const clearSessionToken = (token: string) => sessionStore.clear(token);
 
     const incrementPrerenderFailures = (walkthroughId: string) =>
       Effect.gen(function* () {

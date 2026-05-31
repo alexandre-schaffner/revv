@@ -8,7 +8,7 @@
 // the plan's "Out of Scope" section. The shared handlers in `handlers.ts`
 // are reusable from a future HTTP route without rewriting any logic.
 
-import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
+import { bindInProcess, type ToolSpecBundle } from "../mcp-tool-gateway";
 import {
   addPrEntryHandler,
   completeRecapHandler,
@@ -27,6 +27,7 @@ import {
   getRepoContextSchema,
   listOpenPrsSchema,
   type RecapToolContext,
+  type RecapToolResult,
   type RecapToolSpecRecord,
   setLedeSchema,
   setThemeSummarySchema,
@@ -120,26 +121,22 @@ export const RECAP_TOOL_SPECS: RecapToolSpecRecord[] = [
   },
 ];
 
+export const RECAP_TOOL_BUNDLE: ToolSpecBundle<RecapToolContext, RecapToolResult> = {
+  name: "revv-recap",
+  version: "1.0.0",
+  specs: RECAP_TOOL_SPECS,
+};
+
 /**
  * Build the Claude Agent SDK MCP server registration scoped to a single
  * recap job. The orchestrator passes the per-job context (recap id +
  * source bundle + prior recaps + onCompleted hook) through here.
  */
-export function createRecapMcpServer(ctx: RecapToolContext): ReturnType<typeof createSdkMcpServer> {
-  return createSdkMcpServer({
-    name: "revv-recap",
-    version: "1.0.0",
-    tools: RECAP_TOOL_SPECS.map((spec) =>
-      tool(
-        spec.name,
-        spec.description,
-        spec.inputSchema.shape,
-        async (args: Record<string, unknown>) => {
-          ctx.toolCalls?.add(spec.name);
-          return spec.handler(ctx, args);
-        },
-      ),
-    ),
+export function createRecapMcpServer(ctx: RecapToolContext): ReturnType<typeof bindInProcess> {
+  return bindInProcess(RECAP_TOOL_BUNDLE, ctx, {
+    beforeToolCall: (toolName, boundCtx) => {
+      boundCtx.toolCalls?.add(toolName);
+    },
   });
 }
 
