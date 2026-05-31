@@ -21,10 +21,15 @@ import { CLI_CACHE_TTL_MS } from "../../constants";
 
 let cachedCliAuth: { result: boolean; expiresAt: number; agent: string } | null = null;
 
-type CliAgent = "opencode" | "claude";
+type CliAgent = "opencode" | "claude" | "codex";
 
 function pinnedBin(agent: CliAgent): string {
-  const pinned = agent === "claude" ? serverEnv.claudeBin : serverEnv.opencodeBin;
+  const pinned =
+    agent === "claude"
+      ? serverEnv.claudeBin
+      : agent === "codex"
+        ? serverEnv.codexBin
+        : serverEnv.opencodeBin;
   return pinned && existsSync(pinned) ? pinned : "";
 }
 
@@ -74,14 +79,29 @@ export type CliModelOption = { label: string; value: string };
 /**
  * List models available to the selected CLI agent.
  * For opencode: runs `opencode models --verbose` and parses output.
- * For claude: returns a hardcoded list (no offline model listing available).
+ * For claude/codex: returns a hardcoded list (neither CLI exposes an
+ * offline, machine-readable model listing). The codex list mirrors the
+ * model ids accepted by the `@openai/codex-sdk` `ThreadOptions.model`.
  */
-export async function listCliModels(agent: "opencode" | "claude"): Promise<CliModelOption[]> {
+export async function listCliModels(
+  agent: "opencode" | "claude" | "codex",
+): Promise<CliModelOption[]> {
   if (agent === "claude") {
     return [
       { label: "Claude Opus 4.8", value: "claude-opus-4-8" },
       { label: "Claude Sonnet 4.6", value: "claude-sonnet-4-6" },
       { label: "Claude Haiku 4.5", value: "claude-haiku-4-5-20251001" },
+    ];
+  }
+
+  if (agent === "codex") {
+    // Codex has no offline `models` subcommand; this curated list tracks the
+    // model ids the codex CLI accepts via `--config model=…` / SDK
+    // `ThreadOptions.model`. Keep in sync with the web default-model map.
+    return [
+      { label: "GPT-5.1 Codex", value: "gpt-5.1-codex" },
+      { label: "GPT-5.1 Codex Mini", value: "gpt-5.1-codex-mini" },
+      { label: "GPT-5 Codex", value: "gpt-5-codex" },
     ];
   }
 

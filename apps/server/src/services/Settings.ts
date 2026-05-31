@@ -61,7 +61,12 @@ function coerceUpdateChannel(value: unknown): UpdateChannel {
     : DEFAULT_SETTINGS.updateChannel;
 }
 
-const VALID_RECAP_AGENTS: ReadonlySet<RecapAgentChoice> = new Set(["auto", "opencode", "claude"]);
+const VALID_RECAP_AGENTS: ReadonlySet<RecapAgentChoice> = new Set([
+  "auto",
+  "opencode",
+  "claude",
+  "codex",
+]);
 
 const MIN_MAX_TURNS = 10;
 const MAX_MAX_TURNS = 500;
@@ -104,7 +109,9 @@ function normalize(raw: unknown): UserSettings {
         ? (r.aiThinkingEffort as ThinkingEffort)
         : DEFAULT_SETTINGS.aiThinkingEffort,
     aiAgent:
-      r.aiAgent === "opencode" || r.aiAgent === "claude" ? r.aiAgent : DEFAULT_SETTINGS.aiAgent,
+      r.aiAgent === "opencode" || r.aiAgent === "claude" || r.aiAgent === "codex"
+        ? r.aiAgent
+        : DEFAULT_SETTINGS.aiAgent,
     aiContextWindow:
       typeof r.aiContextWindow === "string"
         ? (r.aiContextWindow as ContextWindow)

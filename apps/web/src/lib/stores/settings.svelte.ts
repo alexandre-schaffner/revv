@@ -14,10 +14,12 @@ let _isLoading = $state(false);
 let modelsByAgent = $state<Record<AiAgent, ModelOption[]>>({
   opencode: [],
   claude: [],
+  codex: [],
 });
 let modelsLoadedByAgent = $state<Record<AiAgent, boolean>>({
   opencode: false,
   claude: false,
+  codex: false,
 });
 let modelsInFlight: Partial<Record<AiAgent, Promise<ModelOption[]>>> = {};
 
@@ -124,8 +126,8 @@ export async function updateSettings(partial: SettingsUpdate): Promise<void> {
 export function reset(): void {
   settings = null;
   _isLoading = false;
-  modelsByAgent = { opencode: [], claude: [] };
-  modelsLoadedByAgent = { opencode: false, claude: false };
+  modelsByAgent = { opencode: [], claude: [], codex: [] };
+  modelsLoadedByAgent = { opencode: false, claude: false, codex: false };
   modelsInFlight = {};
   agentAvailability = null;
 }
@@ -165,7 +167,7 @@ export async function fetchModels(agent: AiAgent): Promise<ModelOption[]> {
  * app start so agent/model dropdowns render instantly without round-trips.
  */
 export async function fetchAllModels(): Promise<void> {
-  await Promise.all([fetchModels("opencode"), fetchModels("claude")]);
+  await Promise.all([fetchModels("opencode"), fetchModels("claude"), fetchModels("codex")]);
 }
 
 /**

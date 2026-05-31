@@ -39,14 +39,14 @@ export type RawChatStreamFrame =
     } & Activity)
   | {
       readonly kind: "task-list";
-      readonly source: "claude" | "opencode";
+      readonly source: "claude" | "opencode" | "codex";
       readonly tasks: ReadonlyArray<ChatTask>;
     }
   | {
       readonly kind: "plan-presented";
       readonly providerPlanId: string;
       readonly markdown: string;
-      readonly source: "claude" | "opencode";
+      readonly source: "claude" | "opencode" | "codex";
     }
   | {
       readonly kind: "subagent-start";
@@ -54,21 +54,21 @@ export type RawChatStreamFrame =
       readonly subagentType: string;
       readonly description: string;
       readonly prompt: string;
-      readonly source: "claude" | "opencode";
+      readonly source: "claude" | "opencode" | "codex";
     }
   | {
       readonly kind: "subagent-end";
       readonly providerCallId: string;
       readonly result: string;
       readonly ok: boolean;
-      readonly source: "claude" | "opencode";
+      readonly source: "claude" | "opencode" | "codex";
     }
   | {
       readonly kind: "user-question";
       readonly providerRequestId: string;
       readonly questions: ReadonlyArray<NormalizedQuestion>;
       readonly previewFormat: "markdown" | "html";
-      readonly source: "claude" | "opencode";
+      readonly source: "claude" | "opencode" | "codex";
       readonly providerToolCallId?: string;
     }
   | {

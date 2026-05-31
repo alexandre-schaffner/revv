@@ -549,9 +549,10 @@ write_launch_agent_plist() {
   [[ -d "$project_root" ]] || fail "write_launch_agent_plist: project_root missing: $project_root"
   [[ -n "$log_dir"      ]] || fail "write_launch_agent_plist: log_dir required"
 
-  local claude_bin opencode_bin
+  local claude_bin opencode_bin codex_bin
   claude_bin="$(command -v claude 2>/dev/null || true)"
   opencode_bin="$(command -v opencode 2>/dev/null || true)"
+  codex_bin="$(command -v codex 2>/dev/null || true)"
   [[ -n "$claude_bin"   ]] && info "Detected claude at $claude_bin"
   [[ -n "$opencode_bin" ]] && info "Detected opencode at $opencode_bin"
 
@@ -638,6 +639,8 @@ write_launch_agent_plist() {
         <string>$claude_bin</string>
         <key>REVV_OPENCODE_BIN</key>
         <string>$opencode_bin</string>
+        <key>REVV_CODEX_BIN</key>
+        <string>$codex_bin</string>
 $extra_env_xml    </dict>
 
     <key>RunAtLoad</key>

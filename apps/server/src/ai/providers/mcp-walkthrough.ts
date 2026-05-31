@@ -49,6 +49,8 @@ export interface ContinuationContext {
   existingIssueCount: number;
   existingRatedAxes: RatingAxis[];
   opencodeSessionId?: string;
+  /** Codex thread id for `codex.resumeThread()` on a resumed run. */
+  codexThreadId?: string;
 }
 
 // ── Built-in tools the model can use for file exploration ───────────────────

@@ -2,6 +2,7 @@
 import type { AiAgent } from "@revv/shared";
 import Check from "phosphor-svelte/lib/Check";
 import AnthropicIcon from "$lib/components/icons/AnthropicIcon.svelte";
+import OpenAIIcon from "$lib/components/icons/OpenAIIcon.svelte";
 import OpenCodeIcon from "$lib/components/icons/OpenCodeIcon.svelte";
 import {
   Content as PopoverContent,
@@ -19,6 +20,7 @@ import SelectTrigger from "./SelectTrigger.svelte";
 const AGENT_OPTIONS = [
   { label: "OpenCode", value: "opencode" as AiAgent, icon: OpenCodeIcon },
   { label: "Claude Code", value: "claude" as AiAgent, icon: AnthropicIcon },
+  { label: "Codex", value: "codex" as AiAgent, icon: OpenAIIcon },
 ];
 
 let open = $state(false);

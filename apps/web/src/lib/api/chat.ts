@@ -366,7 +366,7 @@ export async function submitQuestionAnswer(
 }
 
 export interface AvailableAgents {
-  agent: "claude" | "opencode";
+  agent: "claude" | "opencode" | "codex";
   agents: readonly string[];
   planAvailable: boolean;
 }
@@ -425,7 +425,7 @@ export interface PersistedChatPlan {
   turnId: string;
   planMarkdown: string;
   status: "pending" | "approved" | "rejected" | "superseded";
-  source: "claude" | "opencode";
+  source: "claude" | "opencode" | "codex";
   sequence: number;
   createdAt: string;
   decidedAt: string | null;
@@ -442,7 +442,7 @@ export interface PersistedChatSubagent {
   prompt: string;
   status: "running" | "completed" | "errored";
   result: string | null;
-  source: "claude" | "opencode";
+  source: "claude" | "opencode" | "codex";
   sequence: number;
   startedAt: string;
   completedAt: string | null;
@@ -453,7 +453,7 @@ export interface PersistedChatQuestion {
   id: string;
   chatSessionId: string;
   turnId: string;
-  source: "claude" | "opencode";
+  source: "claude" | "opencode" | "codex";
   providerRequestId: string;
   providerToolCallId: string | null;
   previewFormat: "markdown" | "html";

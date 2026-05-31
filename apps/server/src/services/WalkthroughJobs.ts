@@ -642,7 +642,16 @@ export const WalkthroughJobsLive = Layer.effect(
             existingBlocks: partial.blocks,
             existingIssueCount: partial.issues.length,
             existingRatedAxes: partial.ratings.map((r) => r.axis),
-            ...(partial.opencodeSessionId ? { opencodeSessionId: partial.opencodeSessionId } : {}),
+            // `opencode_session_id` is the provider-agnostic agent-session id
+            // captured via the `onSessionId` callback — it holds an opencode
+            // session id or a codex thread id depending on which agent ran.
+            // Populate both continuation fields; each provider reads its own.
+            ...(partial.opencodeSessionId
+              ? {
+                  opencodeSessionId: partial.opencodeSessionId,
+                  codexThreadId: partial.opencodeSessionId,
+                }
+              : {}),
           };
           generator = yield* ai.streamWalkthrough(buildStreamParams(continuation));
         } else {
@@ -805,8 +814,13 @@ export const WalkthroughJobsLive = Layer.effect(
               existingBlocks: partialForContinuation.blocks,
               existingIssueCount: partialForContinuation.issues.length,
               existingRatedAxes: partialForContinuation.ratings.map((r) => r.axis),
+              // See note above: this column is the provider-agnostic agent
+              // session id; feed both continuation fields from it.
               ...(partialForContinuation.opencodeSessionId
-                ? { opencodeSessionId: partialForContinuation.opencodeSessionId }
+                ? {
+                    opencodeSessionId: partialForContinuation.opencodeSessionId,
+                    codexThreadId: partialForContinuation.opencodeSessionId,
+                  }
                 : {}),
             };
 

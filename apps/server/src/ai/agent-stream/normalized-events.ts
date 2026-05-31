@@ -70,7 +70,7 @@ export type NormalizedAgentEvent =
   | {
       readonly kind: "task-list-update";
       readonly tasks: ReadonlyArray<NormalizedTask>;
-      readonly source: "claude" | "opencode";
+      readonly source: "claude" | "opencode" | "codex";
     }
   /**
    * Agent has presented a plan (Claude ExitPlanMode tool, or the opencode
@@ -83,7 +83,7 @@ export type NormalizedAgentEvent =
       readonly kind: "plan-presented";
       readonly markdown: string;
       readonly providerPlanId: string;
-      readonly source: "claude" | "opencode";
+      readonly source: "claude" | "opencode" | "codex";
     }
   /**
    * A sub-agent invocation has started. The driver maintains a closure-side
@@ -96,7 +96,7 @@ export type NormalizedAgentEvent =
       readonly subagentType: string;
       readonly description: string;
       readonly prompt: string;
-      readonly source: "claude" | "opencode";
+      readonly source: "claude" | "opencode" | "codex";
     }
   /**
    * A sub-agent invocation has finished. `ok = false` means the sub-agent
@@ -108,7 +108,7 @@ export type NormalizedAgentEvent =
       readonly providerCallId: string;
       readonly result: string;
       readonly ok: boolean;
-      readonly source: "claude" | "opencode";
+      readonly source: "claude" | "opencode" | "codex";
     }
   /**
    * Agent has asked the user one or more questions and is paused waiting
@@ -126,7 +126,7 @@ export type NormalizedAgentEvent =
   | {
       readonly kind: "user-question-asked";
       readonly providerRequestId: string;
-      readonly source: "claude" | "opencode";
+      readonly source: "claude" | "opencode" | "codex";
       readonly questions: ReadonlyArray<import("@revv/shared").NormalizedQuestion>;
       readonly previewFormat: "markdown" | "html";
       /** Opencode `QuestionRequest.tool.callID`; absent for Claude. */

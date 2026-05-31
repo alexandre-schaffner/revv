@@ -25,7 +25,7 @@ import { Context, Effect, Layer, Ref } from "effect";
  * registry's HTTP path. The Claude SDK in-process path doesn't go through
  * this registry — it builds its context directly with `actor: 'chat:claude'`.
  */
-export type ChatTokenActor = "chat:opencode";
+export type ChatTokenActor = "chat:opencode" | "chat:codex";
 
 export interface ChatTokenIssueArgs {
   readonly prId: string;

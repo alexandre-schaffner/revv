@@ -225,6 +225,7 @@ const recapAgentOptions: { value: RecapAgentChoice; label: string }[] = [
   { value: "auto", label: "Auto (follow main agent)" },
   { value: "opencode", label: "OpenCode" },
   { value: "claude", label: "Claude SDK" },
+  { value: "codex", label: "Codex" },
 ];
 
 const runningInTauri = isTauri();
@@ -584,11 +585,12 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 							}}
 						>
 							<Select.Trigger class="w-40 text-xs">
-								{aiAgent === 'opencode' ? 'opencode' : 'Claude SDK'}
+								{aiAgent === 'opencode' ? 'opencode' : aiAgent === 'codex' ? 'Codex' : 'Claude SDK'}
 							</Select.Trigger>
 							<Select.Content>
 								<Select.Item value="opencode" class="text-xs">opencode</Select.Item>
 								<Select.Item value="claude" class="text-xs">Claude SDK</Select.Item>
+									<Select.Item value="codex" class="text-xs">Codex</Select.Item>
 							</Select.Content>
 						</Select.Root>
 					</div>

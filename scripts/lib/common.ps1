@@ -325,6 +325,7 @@ function Write-ScheduledTask {
     # Detect claude / opencode binaries for MCP
     $claudeBin = (Get-Command claude -ErrorAction SilentlyContinue)?.Source
     $opencodeBin = (Get-Command opencode -ErrorAction SilentlyContinue)?.Source
+    $codexBin = (Get-Command codex -ErrorAction SilentlyContinue)?.Source
     if ($claudeBin) { info "Detected claude at $claudeBin" }
     if ($opencodeBin) { info "Detected opencode at $opencodeBin" }
 
@@ -358,6 +359,7 @@ function Write-ScheduledTask {
         'PATH'                = "$env:USERPROFILE\.bun\bin;$env:USERPROFILE\.cargo\bin;$env:PATH"
         'REVV_CLAUDE_BIN'     = $claudeBin ?: ''
         'REVV_OPENCODE_BIN'   = $opencodeBin ?: ''
+        'REVV_CODEX_BIN'      = $codexBin ?: ''
     }
     if ($githubHost) { $envVars['GITHUB_HOST'] = $githubHost }
     if ($githubClientId) { $envVars['GITHUB_CLIENT_ID'] = $githubClientId }
@@ -402,6 +404,7 @@ set PATH=$env:USERPROFILE\.bun\bin;$env:USERPROFILE\.cargo\bin;$env:PATH
 "@
     if ($claudeBin) { $batchContent += "`nset REVV_CLAUDE_BIN=$claudeBin" }
     if ($opencodeBin) { $batchContent += "`nset REVV_OPENCODE_BIN=$opencodeBin" }
+    if ($codexBin) { $batchContent += "`nset REVV_CODEX_BIN=$codexBin" }
     if ($githubHost) { $batchContent += "`nset GITHUB_HOST=$githubHost" }
     if ($githubClientId) { $batchContent += "`nset GITHUB_CLIENT_ID=$githubClientId" }
 

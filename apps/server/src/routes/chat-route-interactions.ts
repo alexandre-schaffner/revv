@@ -375,6 +375,15 @@ export const chatInteractionRoutes = new Elysia()
               planAvailable: true,
             };
           }
+          if (agent === "codex") {
+            // Codex has no daemon to probe. Plan mode is available: the driver
+            // runs the thread read-only and synthesizes a plan from the turn.
+            return {
+              agent: "codex" as const,
+              agents: ["plan"] as readonly string[],
+              planAvailable: true,
+            };
+          }
           // opencode: probe the supervisor's cached agent list.
           const supervisor = yield* OpencodeSupervisor;
           const agents = yield* supervisor.listAgents();
