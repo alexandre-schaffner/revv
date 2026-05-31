@@ -5,12 +5,9 @@
 
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
-import { withDb } from "../effects/with-db";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
-import { resolveAgent } from "../services/Ai";
 import { ChatSessionService } from "../services/ChatSession";
-import { DbService } from "../services/Db";
 import { OpencodeSupervisor } from "../services/OpencodeSupervisor";
 import { takePendingQuestion } from "../services/PendingQuestionRegistry";
 import { PrContextService } from "../services/PrContext";
@@ -36,12 +33,10 @@ export const chatInteractionRoutes = new Elysia()
             const prCtx = yield* PrContextService;
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
-            const { db } = yield* DbService;
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-            const settings = yield* withDb(db, settingsService.getSettings()).pipe(
-              Effect.orElseSucceed(() => ({ aiAgent: "opencode" }) as { aiAgent: string | null }),
-            );
-            const agent = resolveAgent(settings);
+            const agent = yield* settingsService
+              .resolveAgent()
+              .pipe(Effect.orElseSucceed(() => "opencode" as const));
             if (!pr.headSha) return;
             const row = yield* chatSessions.find(pr.id, agent, pr.headSha);
             if (!row) return;
@@ -362,11 +357,9 @@ export const chatInteractionRoutes = new Elysia()
       const result = await AppRuntime.runPromise(
         Effect.gen(function* () {
           const settingsService = yield* SettingsService;
-          const { db } = yield* DbService;
-          const settings = yield* withDb(db, settingsService.getSettings()).pipe(
-            Effect.orElseSucceed(() => ({ aiAgent: "opencode" }) as { aiAgent: string | null }),
-          );
-          const agent = resolveAgent(settings);
+          const agent = yield* settingsService
+            .resolveAgent()
+            .pipe(Effect.orElseSucceed(() => "opencode" as const));
           if (agent === "claude") {
             return {
               agent: "claude" as const,

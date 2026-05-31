@@ -56,7 +56,7 @@ import {
 } from "../domain/errors";
 import { withDb } from "../effects/with-db";
 import { debug, logError } from "../logger";
-import { AiService, type ContinuationContext, resolveAgent } from "./Ai";
+import { AiService, type ContinuationContext } from "./Ai";
 import { DbService } from "./Db";
 import { EventBus } from "./EventBus";
 import { GitHubEtagCache } from "./GitHubEtagCache";
@@ -1227,7 +1227,7 @@ export const WalkthroughJobsLive = Layer.effect(
         const reviewSessionId = partial?.reviewSessionId ?? reviewSession.id;
 
         const settings = yield* provideDb(settingsService.getSettings());
-        const agent = resolveAgent(settings);
+        const agent = yield* provideDb(settingsService.resolveAgent());
         const freshModelUsed =
           settings.aiModel ?? (agent === "opencode" ? "opencode" : "claude-sonnet-4-20250514");
         const modelUsed =

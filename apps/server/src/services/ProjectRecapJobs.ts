@@ -29,7 +29,6 @@ import { recapPrDigests, repositories } from "../db/schema/index";
 import { type RecapError, ValidationError } from "../domain/errors";
 import { withDb } from "../effects/with-db";
 import { debug, logError } from "../logger";
-import { resolveRecapAgent } from "./Ai";
 import { DbService } from "./Db";
 import { DiffCacheService } from "./DiffCache";
 import { GitHubService } from "./GitHub";
@@ -815,20 +814,18 @@ export const ProjectRecapJobsLive = Layer.effect(
         // (CLAUDE.md note: this lets users run Claude for interactive work
         // and opencode for background recaps, or vice versa). Defaults to
         // `'auto'` which inherits the global `aiAgent`.
-        const effectiveAgent = settings
-          ? (() => {
-              try {
-                return resolveRecapAgent(settings);
-              } catch (e) {
-                logError(
-                  "recap-jobs",
-                  `resolveRecapAgent failed; falling back to 'claude':`,
-                  e instanceof Error ? e.message : String(e),
-                );
-                return "claude" as const;
-              }
-            })()
-          : ("claude" as const);
+        const effectiveAgent = yield* provideDb(settingsService.resolveRecapAgent()).pipe(
+          Effect.catchAll((e) =>
+            Effect.sync(() => {
+              logError(
+                "recap-jobs",
+                `resolveRecapAgent failed; falling back to 'claude':`,
+                e instanceof Error ? e.message : String(e),
+              );
+              return "claude" as const;
+            }),
+          ),
+        );
 
         // Supervisor + session-token deps. Threaded through as callbacks so
         // `recap-agent-runner.ts` stays decoupled from the Effect runtime

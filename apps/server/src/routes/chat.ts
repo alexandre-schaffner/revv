@@ -23,10 +23,9 @@ import type { ChatHistoryEntry } from "../ai/prompts/chat";
 import type { ChatStreamFrame } from "../ai/providers/chat-claude";
 import { AgentUnavailableError } from "../ai/providers/chat-opencode";
 import { WorktreeBlockedByUnpushedCommits } from "../domain/errors";
-import { withDb } from "../effects/with-db";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
-import { AiService, resolveAgent } from "../services/Ai";
+import { AiService } from "../services/Ai";
 import { ChatChangesPushService } from "../services/ChatChangesPush";
 import { ChatSessionService } from "../services/ChatSession";
 import { DbService } from "../services/Db";
@@ -76,7 +75,6 @@ export const chatRoute = new Elysia()
             const github = yield* GitHubService;
             const chatPush = yield* ChatChangesPushService;
             const { db } = yield* DbService;
-
             // Resolve PR + repo + token
             const { pr, repo, token } = yield* prCtx.resolveBasic(
               ctx.body.prId,
@@ -89,11 +87,9 @@ export const chatRoute = new Elysia()
               const meta = yield* github.getPrMeta(repo.fullName, pr.externalId, token);
               headSha = meta.headSha;
             }
-
-            const settings = yield* withDb(db, settingsService.getSettings()).pipe(
-              Effect.orElseSucceed(() => ({ aiAgent: "opencode" }) as { aiAgent: string | null }),
-            );
-            const agent = resolveAgent(settings);
+            const agent = yield* settingsService
+              .resolveAgent()
+              .pipe(Effect.orElseSucceed(() => "opencode" as const));
 
             // Check for an existing session BEFORE acquiring the
             // worktree. No row means this is a fresh start (e.g.
@@ -428,14 +424,10 @@ export const chatRoute = new Elysia()
             const prCtx = yield* PrContextService;
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
-            const { db } = yield* DbService;
-
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-
-            const settings = yield* withDb(db, settingsService.getSettings()).pipe(
-              Effect.orElseSucceed(() => ({ aiAgent: "opencode" }) as { aiAgent: string | null }),
-            );
-            const agent = resolveAgent(settings);
+            const agent = yield* settingsService
+              .resolveAgent()
+              .pipe(Effect.orElseSucceed(() => "opencode" as const));
 
             if (!pr.headSha) return null;
 
@@ -482,14 +474,10 @@ export const chatRoute = new Elysia()
             const prCtx = yield* PrContextService;
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
-            const { db } = yield* DbService;
-
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-
-            const settings = yield* withDb(db, settingsService.getSettings()).pipe(
-              Effect.orElseSucceed(() => ({ aiAgent: "opencode" }) as { aiAgent: string | null }),
-            );
-            const agent = resolveAgent(settings);
+            const agent = yield* settingsService
+              .resolveAgent()
+              .pipe(Effect.orElseSucceed(() => "opencode" as const));
 
             // Capture the active worktree before dropping rows so we
             // can rewind it to the PR head SHA below — clearing the

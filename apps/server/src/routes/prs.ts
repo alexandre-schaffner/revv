@@ -12,7 +12,6 @@ import { db } from "../auth";
 import { pinnedPullRequests, user } from "../db/schema";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
-import { resolveAgent } from "../services/Ai";
 import { type CachedDiffFile, DiffCacheService, getOrFetchDiffFiles } from "../services/DiffCache";
 import { GitHubService } from "../services/GitHub";
 import { OpencodeSupervisor } from "../services/OpencodeSupervisor";
@@ -682,7 +681,7 @@ function resolveSuggestionsForPr(prId: string, accountId: string) {
     const supervisor = yield* OpencodeSupervisor;
 
     const settings = yield* settingsSvc.getSettings();
-    const agent = resolveAgent(settings);
+    const agent = yield* settingsSvc.resolveAgent();
     const model = settings.aiSuggestionsModel;
     if (!model || model.length === 0) {
       return [...FALLBACK_PROMPTS];

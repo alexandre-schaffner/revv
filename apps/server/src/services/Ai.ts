@@ -1,4 +1,4 @@
-import type { InteractionMode, UserSettings, WalkthroughStreamEvent } from "@revv/shared";
+import type { InteractionMode, WalkthroughStreamEvent } from "@revv/shared";
 import { Context, Effect, Layer } from "effect";
 import {
   buildChatSystemPrompt,
@@ -21,7 +21,7 @@ import {
   type AiError,
   AiGenerationError,
   AiNotConfiguredError,
-  ValidationError,
+  type ValidationError,
 } from "../domain/errors";
 import { withDb } from "../effects/with-db";
 import { logError } from "../logger";
@@ -30,7 +30,7 @@ import { ChatSessionService } from "./ChatSession";
 import { DbService } from "./Db";
 import type { PrFileMeta } from "./GitHub";
 import { OpencodeSupervisor } from "./OpencodeSupervisor";
-import { SettingsService } from "./Settings";
+import { type AgentId, SettingsService } from "./Settings";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -80,39 +80,7 @@ export interface ChatParams {
 
 // ── Agent resolution ────────────────────────────────────────────────────────
 
-export type CliAgent = "opencode" | "claude";
-
-/**
- * Resolve the configured CLI agent.
- * @throws {ValidationError} If the agent is not a known value. This should
- *   never happen when settings are read through `SettingsService` (which
- *   validates), but we assert rather than silently downgrade so bad values
- *   surface loudly.
- */
-export function resolveAgent(settings: { aiAgent: string | null }): CliAgent {
-  const agent = settings.aiAgent ?? "opencode";
-  if (agent === "opencode" || agent === "claude") return agent;
-  throw new ValidationError({
-    message: `Unknown aiAgent '${agent}' — expected "opencode" or "claude"`,
-    field: "aiAgent",
-  });
-}
-
-/**
- * Resolve the agent that should generate project recaps. `recap.agent` is a
- * per-feature override: `'auto'` (default) inherits {@link resolveAgent};
- * `'opencode'` / `'claude'` pin recap generation regardless of the global
- * choice. Mirrors {@link resolveAgent}'s error semantics for unknown values.
- */
-export function resolveRecapAgent(settings: UserSettings): CliAgent {
-  const choice = settings.recap?.agent ?? "auto";
-  if (choice === "opencode" || choice === "claude") return choice;
-  if (choice === "auto") return resolveAgent(settings);
-  throw new ValidationError({
-    message: `Unknown recap.agent '${choice}' — expected "auto", "opencode", or "claude"`,
-    field: "recap.agent",
-  });
-}
+export type CliAgent = AgentId;
 
 // ── Service definition ───────────────────────────────────────────────────────
 
@@ -249,12 +217,18 @@ export const AiServiceLive = Layer.effect(
             new AiGenerationError({ cause: e, message: e.message }) as AiError,
         ),
       );
+    const getAgent = () =>
+      withDb(db, settingsService.resolveAgent()).pipe(
+        Effect.mapError(
+          (e: ValidationError) =>
+            new AiGenerationError({ cause: e, message: e.message }) as AiError,
+        ),
+      );
 
     // Check if a CLI agent is available
     const checkConfigured = (): Effect.Effect<boolean> =>
       Effect.gen(function* () {
-        const settings = yield* getSettings();
-        const agent = resolveAgent(settings);
+        const agent = yield* getAgent();
         return checkCliAvailability(agent);
       }).pipe(Effect.catchAll(() => Effect.succeed(false)));
 
@@ -265,7 +239,7 @@ export const AiServiceLive = Layer.effect(
         })(
           Effect.gen(function* () {
             const settings = yield* getSettings();
-            const agent = resolveAgent(settings);
+            const agent = yield* getAgent();
 
             if (!checkCliAvailability(agent)) {
               return yield* Effect.fail(new AiNotConfiguredError());
@@ -336,7 +310,7 @@ export const AiServiceLive = Layer.effect(
         Effect.withSpan("Ai.chat")(
           Effect.gen(function* () {
             const settings = yield* getSettings();
-            const agent = resolveAgent(settings);
+            const agent = yield* getAgent();
             yield* Effect.annotateCurrentSpan("prId", params.prId);
             yield* Effect.annotateCurrentSpan("provider", agent);
 
@@ -413,7 +387,7 @@ export const AiServiceLive = Layer.effect(
       resolveMergeConflict: (params) =>
         Effect.gen(function* () {
           const settings = yield* getSettings();
-          const agent = resolveAgent(settings);
+          const agent = yield* getAgent();
 
           if (!checkCliAvailability(agent)) {
             return yield* Effect.fail(new AiNotConfiguredError());

@@ -63,6 +63,8 @@ function coerceUpdateChannel(value: unknown): UpdateChannel {
 
 const VALID_RECAP_AGENTS: ReadonlySet<RecapAgentChoice> = new Set(["auto", "opencode", "claude"]);
 
+export type AgentId = AiAgent;
+
 const MIN_MAX_TURNS = 10;
 const MAX_MAX_TURNS = 500;
 
@@ -179,6 +181,25 @@ function coerceRecap(value: unknown): UserSettings["recap"] {
     weeklyEnabled: r.weeklyEnabled === false ? false : DEFAULT_SETTINGS.recap.weeklyEnabled,
     agent,
   };
+}
+
+function resolveAgentFromSettings(settings: Pick<UserSettings, "aiAgent">): AgentId {
+  const agent = settings.aiAgent ?? DEFAULT_SETTINGS.aiAgent;
+  if (agent === "opencode" || agent === "claude") return agent;
+  throw new ValidationError({
+    message: `Unknown aiAgent '${agent}' — expected "opencode" or "claude"`,
+    field: "aiAgent",
+  });
+}
+
+function resolveRecapAgentFromSettings(settings: Pick<UserSettings, "aiAgent" | "recap">): AgentId {
+  const choice = settings.recap?.agent ?? DEFAULT_SETTINGS.recap.agent;
+  if (choice === "opencode" || choice === "claude") return choice;
+  if (choice === "auto") return resolveAgentFromSettings(settings);
+  throw new ValidationError({
+    message: `Unknown recap.agent '${choice}' — expected "auto", "opencode", or "claude"`,
+    field: "recap.agent",
+  });
 }
 
 // ── DB ↔ UserSettings mapping ────────────────────────────────────────────────
@@ -328,6 +349,8 @@ export class SettingsService extends Context.Tag("SettingsService")<
     getSettings: () => Effect.Effect<UserSettings, ValidationError>;
     updateSettings: (partial: SettingsUpdate) => Effect.Effect<UserSettings, ValidationError>;
     settingsChanges: () => Stream.Stream<UserSettings>;
+    resolveAgent: () => Effect.Effect<AgentId, ValidationError>;
+    resolveRecapAgent: () => Effect.Effect<AgentId, ValidationError>;
   }
 >() {}
 
@@ -399,6 +422,18 @@ export const SettingsServiceLive = Layer.effect(
         }),
 
       settingsChanges: () => settingsRef.changes.pipe(Stream.drop(1)),
+
+      resolveAgent: () =>
+        settingsRef.get.pipe(
+          Effect.mapError((e) => new ValidationError({ message: String(e) })),
+          Effect.map(resolveAgentFromSettings),
+        ),
+
+      resolveRecapAgent: () =>
+        settingsRef.get.pipe(
+          Effect.mapError((e) => new ValidationError({ message: String(e) })),
+          Effect.map(resolveRecapAgentFromSettings),
+        ),
     };
   }),
 );

@@ -21,6 +21,9 @@ auditing the codebase for existing violations.
 CLAUDE.md remains the load-bearing project guide. It cross-references this doc but stays
 short — that file is meant to be skimmed cold; this one is meant to be searched.
 
+Architecture companion: [`architecture.md`](./architecture.md) — the module map and narrow-neck
+interfaces that this conventions file enforces.
+
 ---
 
 <a id="effect-services"></a>
@@ -136,6 +139,48 @@ directly inside `Effect.gen` bodies — any synchronous throw bypasses Effect's 
 Same pattern in `Walkthrough.ts` and `Db.ts` consumers.
 
 **Backlog.** [`E-004`](./conventions-backlog.md#e-004), [`E-005`](./conventions-backlog.md#e-005).
+
+---
+
+<a id="module-boundaries"></a>
+## 2.5 Module Boundary Rules
+
+The server architecture is documented in [`architecture.md`](./architecture.md). The rules below
+are the import-direction guardrails for keeping those modules deep.
+
+<a id="feature-pr-context"></a>
+### 3.1 Feature modules use PR Context
+
+**Rule.** Walkthrough, Chat, and Recap feature modules must not import `GitHubService`,
+`RepositoryService`, or `TokenProvider` directly. PR-scoped GitHub context flows through
+`PrContextService`.
+
+**Why.** Feature modules should express product lifecycle and user workflow logic, not token
+lookup, repository ownership, GitHub API calls, or account fallback rules. `PrContextService`
+is the narrow seam that hides that platform detail.
+
+**Enforcement.** `bun run check:import-boundaries` is part of `bun run lint`. It rejects new
+direct imports and lists the remaining legacy exceptions explicitly in the script while later
+waves migrate them.
+
+**Canonical example.** `WalkthroughJobs` depends on `PrContextService` for PR/repo/token/diff
+context before starting a walkthrough job.
+
+**Anti-pattern.** A chat or recap route importing `GitHubService` to fetch PR metadata or
+`TokenProvider` to resolve an access token.
+
+<a id="settings-agent-resolution"></a>
+### 3.2 Settings owns provider selection
+
+**Rule.** Code that needs the effective CLI agent calls `SettingsService.resolveAgent()` or
+`SettingsService.resolveRecapAgent()`. AI-provider modules may branch on the returned agent, but
+they do not own fallback or validation rules.
+
+**Why.** Agent choice is a settings concern. Keeping it in one service prevents drift between
+walkthroughs, chat, recaps, model listing, session lookup, and daemon lifecycle.
+
+**Backlog.** The daemon lifecycle still has provider-specific mechanics in feature code until the
+later AI-provider and job-helper waves.
 
 ---
 
