@@ -805,58 +805,59 @@ function activitiesForTurn(
 						/>
 					</Confirmation>
 				{/each}
+
+				{#if isStreaming}
+					<div class="streaming-indicator" aria-label="AI is thinking…">
+						{#if streamingTurnId}
+							<Dotmatrix
+								variant={squareVariantForId(streamingTurnId)}
+								size="small"
+							/>
+						{/if}
+						{#if recentToolCalls.length > 0}
+							<div class="chat-tool-calls">
+								{#each recentToolCalls as step, i (step.id)}
+									<div
+										class="chat-tool-call"
+										style="top: {i * TOOL_CALL_ROW_H}px"
+										in:gsapFadeY={{ y: TOOL_CALL_ROW_H, duration: tokens.smooth }}
+										out:gsapFadeY={{ y: -TOOL_CALL_ROW_H, duration: tokens.quick }}
+									>
+										<span class="chat-tool-call-tool">{step.toolName}</span>
+										<span class="chat-tool-call-desc">{step.summary}</span>
+									</div>
+								{/each}
+							</div>
+						{:else}
+							<StreamingVerb />
+						{/if}
+					</div>
+				{/if}
+
+				{#if error && !isStreaming}
+					<div class="error-state">
+						{#if error.code === 'NOT_CONFIGURED'}
+							<Gear size={24} weight="fill" class="error-icon" />
+							<p class="error-primary">AI not configured</p>
+							<p class="error-hint">
+								Install <a href="https://opencode.ai" class="error-link">opencode</a>
+								or <a href="https://claude.ai/code" class="error-link">Claude Code</a>
+								and authenticate, then select your CLI agent in <a href="/settings" class="error-link">Gear</a>.
+							</p>
+						{:else if error.code === 'RATE_LIMITED'}
+							<Warning size={24} weight="fill" class="error-icon" />
+							<p class="error-primary">Rate limited</p>
+							<p class="error-hint">{error.message}</p>
+						{:else}
+							<Warning size={24} weight="fill" class="error-icon" />
+							<p class="error-primary">Chat failed</p>
+							<p class="error-hint">{error.message}</p>
+						{/if}
+					</div>
+				{/if}
 			</ConversationContent>
 		{/if}
 
-		{#if isStreaming}
-			<div class="streaming-indicator" aria-label="AI is thinking…">
-				{#if streamingTurnId}
-					<Dotmatrix
-						variant={squareVariantForId(streamingTurnId)}
-						size="small"
-					/>
-				{/if}
-				{#if recentToolCalls.length > 0}
-					<div class="chat-tool-calls">
-						{#each recentToolCalls as step, i (step.id)}
-							<div
-								class="chat-tool-call"
-								style="top: {i * TOOL_CALL_ROW_H}px"
-								in:gsapFadeY={{ y: TOOL_CALL_ROW_H, duration: tokens.smooth }}
-								out:gsapFadeY={{ y: -TOOL_CALL_ROW_H, duration: tokens.quick }}
-							>
-								<span class="chat-tool-call-tool">{step.toolName}</span>
-								<span class="chat-tool-call-desc">{step.summary}</span>
-							</div>
-						{/each}
-					</div>
-				{:else}
-					<StreamingVerb />
-				{/if}
-			</div>
-		{/if}
-
-		{#if error && !isStreaming}
-			<div class="error-state">
-				{#if error.code === 'NOT_CONFIGURED'}
-					<Gear size={24} weight="fill" class="error-icon" />
-					<p class="error-primary">AI not configured</p>
-					<p class="error-hint">
-						Install <a href="https://opencode.ai" class="error-link">opencode</a>
-						or <a href="https://claude.ai/code" class="error-link">Claude Code</a>
-						and authenticate, then select your CLI agent in <a href="/settings" class="error-link">Gear</a>.
-					</p>
-				{:else if error.code === 'RATE_LIMITED'}
-					<Warning size={24} weight="fill" class="error-icon" />
-					<p class="error-primary">Rate limited</p>
-					<p class="error-hint">{error.message}</p>
-				{:else}
-					<Warning size={24} weight="fill" class="error-icon" />
-					<p class="error-primary">Chat failed</p>
-					<p class="error-hint">{error.message}</p>
-				{/if}
-			</div>
-		{/if}
 		<ConversationScrollButton />
 	</Conversation>
 

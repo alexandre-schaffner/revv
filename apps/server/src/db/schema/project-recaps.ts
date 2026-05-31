@@ -68,7 +68,7 @@ export const projectRecaps = sqliteTable(
     generatedAt: text("generated_at").notNull(),
     /** ISO 8601 timestamp at `status='complete'` transition. Null until then. */
     completedAt: text("completed_at"),
-    /** Model identifier used to produce this recap (e.g. `claude-opus-4-7`). */
+    /** Model identifier used to produce this recap (e.g. `claude-opus-4-8`). */
     modelUsed: text("model_used"),
     /** Token usage stats as JSON (input/output/cache). Best-effort — recap is fire-and-forget. */
     tokenUsage: text("token_usage").notNull().default("{}"),

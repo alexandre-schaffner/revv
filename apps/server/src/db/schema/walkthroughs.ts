@@ -130,7 +130,7 @@ export const walkthroughs = sqliteTable(
     /**
      * Snapshot of the agent provider config captured at job start, as JSON
      * (`GenerationProviderConfig` from `@revv/shared`). Lets the cache hit
-     * UI render "claude-opus-4-7 • thinking: high • 1m context" without
+     * UI render "claude-opus-4-8 • thinking: high • 1m context" without
      * relying on the live settings (which may have changed since job
      * start). Captured atomically alongside `modelUsed` and never mutated.
      */

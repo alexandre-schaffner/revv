@@ -30,7 +30,7 @@ export const CACHE_SCHEMA_VERSION = 1 as const;
 /**
  * Captured atomically at job start so a settings change mid-run doesn't
  * corrupt the recorded config. Travels with the snapshot to the bucket
- * and back, so cache-hit UI can render "claude-opus-4-7 • thinking: high
+ * and back, so cache-hit UI can render "claude-opus-4-8 • thinking: high
  * • 1m context" from the original run rather than the live settings.
  */
 export interface GenerationProviderConfig {
