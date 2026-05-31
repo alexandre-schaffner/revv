@@ -50,6 +50,13 @@ export const account = sqliteTable("account", {
   password: text("password"),
   githubLogin: text("github_login"),
   avatarUrl: text("avatar_url"),
+  // Set when a GitHub call returns 401 and the token could not be silently
+  // refreshed (revoked, or no/expired refresh token). The orchestrator
+  // broadcasts `auth:reauth-required` and the client gates the app behind a
+  // re-sign-in modal. Cleared on any successful token write (device-flow
+  // re-auth or a successful refresh). Durable so the state survives restart
+  // and is reconcilable on WS reconnect.
+  reauthRequiredAt: integer("reauth_required_at", { mode: "timestamp" }),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
 });

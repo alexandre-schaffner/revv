@@ -1,14 +1,16 @@
 import { and, eq, gt, inArray } from "drizzle-orm";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
-import { db, GITHUB_CLIENT_ID, GITHUB_CLIENT_ID_PUBLIC } from "../auth";
+import { db, GITHUB_CLIENT_ID } from "../auth";
 import { serverEnv } from "../config";
 import { account, session, user } from "../db/schema";
 import { remoteUsers } from "../db/schema/remote-users";
+import { clientIdForHost, isPublicGitHub, tokenUrlForHost } from "../github-oauth";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
 import { RemoteUserService } from "../services/RemoteUser";
 import { SettingsService } from "../services/Settings";
+import { TokenProvider } from "../services/TokenProvider";
 import { withAuth } from "./middleware";
 
 // The device-code flow needs `client_id` only — no client_secret. If the
@@ -50,29 +52,13 @@ async function resolveGithubUrls(hostOverride?: string): Promise<{
     Effect.flatMap(SettingsService, (s) => s.getSettings()).pipe(Effect.orElseSucceed(() => null)),
   );
   const host = hostOverride?.trim() || settings?.githubHost?.trim() || serverEnv.githubHost;
-  const isPublicGitHub = host === "github.com";
-  // Use the public client_id when targeting github.com; fail fast if it is
-  // not configured so the user gets a clear error instead of a confusing
-  // "invalid client" response from GitHub.
-  let clientId: string;
-  if (isPublicGitHub) {
-    if (!GITHUB_CLIENT_ID_PUBLIC) {
-      throw new Error(
-        "Public GitHub sign-in requires GITHUB_CLIENT_ID_PUBLIC to be set. " +
-          "Register an OAuth App on github.com and add GITHUB_CLIENT_ID_PUBLIC=<id> to your .env file.",
-      );
-    }
-    clientId = GITHUB_CLIENT_ID_PUBLIC;
-  } else {
-    clientId = GITHUB_CLIENT_ID;
-  }
   const githubBase = `https://${host}`;
-  const apiBase = isPublicGitHub ? "https://api.github.com" : `https://api.${host}`;
+  const apiBase = isPublicGitHub(host) ? "https://api.github.com" : `https://api.${host}`;
   return {
     host,
-    clientId,
+    clientId: clientIdForHost(host),
     deviceCodeUrl: `${githubBase}/login/device/code`,
-    tokenUrl: `${githubBase}/login/oauth/access_token`,
+    tokenUrl: tokenUrlForHost(host),
     userUrl: `${apiBase}/user`,
     emailsUrl: `${apiBase}/user/emails`,
   };
@@ -88,8 +74,47 @@ interface GitHubDeviceCodeResponse {
 
 interface GitHubTokenResponse {
   access_token?: string;
+  /**
+   * Present only when the OAuth App has "Expire user authorization tokens"
+   * enabled (common on GitHub Enterprise). When present, `access_token`
+   * expires in `expires_in` seconds and is renewable with this refresh token
+   * until `refresh_token_expires_in` seconds elapse.
+   */
+  refresh_token?: string;
+  expires_in?: number;
+  refresh_token_expires_in?: number;
   error?: string;
   interval?: number;
+}
+
+interface ResolvedTokens {
+  accessToken: string;
+  refreshToken: string | null;
+  accessTokenExpiresAt: Date | null;
+  refreshTokenExpiresAt: Date | null;
+}
+
+function resolveTokens(data: GitHubTokenResponse, now: Date): ResolvedTokens {
+  return {
+    accessToken: data.access_token ?? "",
+    refreshToken: data.refresh_token ?? null,
+    accessTokenExpiresAt: data.expires_in ? new Date(now.getTime() + data.expires_in * 1000) : null,
+    refreshTokenExpiresAt: data.refresh_token_expires_in
+      ? new Date(now.getTime() + data.refresh_token_expires_in * 1000)
+      : null,
+  };
+}
+
+async function persistTokens(
+  accountRowId: string,
+  host: string,
+  tokens: { accessToken: string | null; refreshToken: string | null },
+): Promise<void> {
+  await AppRuntime.runPromise(
+    Effect.flatMap(TokenProvider, (provider) =>
+      provider.storeAccountTokens(accountRowId, host, tokens),
+    ),
+  );
 }
 
 interface GitHubUser {
@@ -167,9 +192,10 @@ async function retryFetch<T>(
 }
 
 async function upsertUserAndSession(
-  accessToken: string,
+  tokens: ResolvedTokens,
   urls: { host: string; userUrl: string; emailsUrl: string },
 ): Promise<string> {
+  const { accessToken } = tokens;
   const githubUser = await retryFetch(() => fetchGitHubUser(accessToken, urls), 2, 1000);
   const primaryEmail = await fetchPrimaryEmail(accessToken, urls);
   const email = primaryEmail ?? githubUser.email;
@@ -237,36 +263,47 @@ async function upsertUserAndSession(
     });
   }
 
-  // Upsert account by providerId + accountId
+  // Upsert account by providerId + accountId. Token bytes go to the secure
+  // store keyed on the account row id — never the DB columns. Expiry
+  // timestamps and the cleared `reauthRequiredAt` flag stay on the row.
   const providerId = `github:${urls.host}`;
   const existingAccounts = await db.select().from(account).where(eq(account.accountId, accountId));
   const existingAccount = existingAccounts.find((a) => a.providerId === providerId);
+  const accountRowId = existingAccount?.id ?? crypto.randomUUID();
 
   if (existingAccount) {
     await db
       .update(account)
       .set({
-        accessToken,
         updatedAt: now,
         userId,
         githubLogin: githubUser.login,
         avatarUrl: githubUser.avatar_url,
+        accessTokenExpiresAt: tokens.accessTokenExpiresAt,
+        refreshTokenExpiresAt: tokens.refreshTokenExpiresAt,
+        reauthRequiredAt: null,
       })
-      .where(eq(account.id, existingAccount.id));
+      .where(eq(account.id, accountRowId));
   } else {
     await db.insert(account).values({
-      id: crypto.randomUUID(),
+      id: accountRowId,
       accountId,
       providerId,
       userId,
-      accessToken,
       githubLogin: githubUser.login,
       avatarUrl: githubUser.avatar_url,
       scope: DEVICE_FLOW_SCOPE,
+      accessTokenExpiresAt: tokens.accessTokenExpiresAt,
+      refreshTokenExpiresAt: tokens.refreshTokenExpiresAt,
       createdAt: now,
       updatedAt: now,
     });
   }
+
+  await persistTokens(accountRowId, urls.host, {
+    accessToken: tokens.accessToken,
+    refreshToken: tokens.refreshToken,
+  });
 
   // Create new session
   const sessionToken = generateSecureToken();
@@ -285,11 +322,11 @@ async function upsertUserAndSession(
 }
 
 async function upsertAccountForUser(
-  accessToken: string,
+  tokens: ResolvedTokens,
   urls: { host: string; userUrl: string },
   userId: string,
 ): Promise<void> {
-  const githubUser = await retryFetch(() => fetchGitHubUser(accessToken, urls), 2, 1000);
+  const githubUser = await retryFetch(() => fetchGitHubUser(tokens.accessToken, urls), 2, 1000);
   const providerId = `github:${urls.host}`;
   const accountId = githubUser.id.toString();
   const now = new Date();
@@ -299,31 +336,40 @@ async function upsertAccountForUser(
     .from(account)
     .where(and(eq(account.providerId, providerId), eq(account.userId, userId)))
     .then((r) => r[0] ?? null);
+  const accountRowId = existing?.id ?? crypto.randomUUID();
 
   if (existing) {
     await db
       .update(account)
       .set({
-        accessToken,
         githubLogin: githubUser.login,
         avatarUrl: githubUser.avatar_url,
         updatedAt: now,
+        accessTokenExpiresAt: tokens.accessTokenExpiresAt,
+        refreshTokenExpiresAt: tokens.refreshTokenExpiresAt,
+        reauthRequiredAt: null,
       })
-      .where(eq(account.id, existing.id));
+      .where(eq(account.id, accountRowId));
   } else {
     await db.insert(account).values({
-      id: crypto.randomUUID(),
+      id: accountRowId,
       accountId,
       providerId,
       userId,
-      accessToken,
       githubLogin: githubUser.login,
       avatarUrl: githubUser.avatar_url,
       scope: DEVICE_FLOW_SCOPE,
+      accessTokenExpiresAt: tokens.accessTokenExpiresAt,
+      refreshTokenExpiresAt: tokens.refreshTokenExpiresAt,
       createdAt: now,
       updatedAt: now,
     });
   }
+
+  await persistTokens(accountRowId, urls.host, {
+    accessToken: tokens.accessToken,
+    refreshToken: tokens.refreshToken,
+  });
 }
 
 const KNOWN_HOSTS = ["nocturlab.ghe.com", "github.com"] as const;
@@ -493,9 +539,12 @@ const publicAuthRoutes = new Elysia()
       const data = (await res.json()) as GitHubTokenResponse;
 
       if (data.access_token && existingUserId) {
-        // Link path: user is already signed in — only upsert the account row
+        // Link path: user is already signed in — only upsert the account row.
+        // Also the re-auth path: re-signing-in the active account lands here
+        // (the client sends its session_token), refreshing the stored token
+        // and clearing `reauthRequiredAt` on the existing row.
         try {
-          await upsertAccountForUser(data.access_token, urls, existingUserId);
+          await upsertAccountForUser(resolveTokens(data, new Date()), urls, existingUserId);
           return { status: "linked" as const };
         } catch (e) {
           logError("device-auth", "account link failed:", e);
@@ -506,7 +555,7 @@ const publicAuthRoutes = new Elysia()
 
       if (data.access_token) {
         try {
-          const token = await upsertUserAndSession(data.access_token, urls);
+          const token = await upsertUserAndSession(resolveTokens(data, new Date()), urls);
           return { status: "success" as const, token };
         } catch (e) {
           logError("device-auth", "session creation failed:", e);
@@ -565,35 +614,28 @@ const protectedAuthRoutes = new Elysia()
       const providerId = `github:${host}`;
       const userId = ctx.session.user.id;
 
-      // Fetch the account row to attempt token revocation before deletion
+      // We cannot revoke the grant on GitHub's side: the only OAuth flow Revv
+      // uses is the device-code flow, which never collects a client secret
+      // (see auth.ts), and GitHub's `DELETE /applications/{id}/token`
+      // endpoint requires HTTP Basic auth with that secret. Attempting it would
+      // just send an empty secret and silently 401. So disconnect is a local
+      // operation: delete the account row and wipe its stored tokens. Users who
+      // want to revoke the grant upstream do so from their GitHub app
+      // connections page (linked from the settings UI).
       const accountRow = await db
-        .select({ accessToken: account.accessToken })
+        .select({ id: account.id })
         .from(account)
         .where(and(eq(account.providerId, providerId), eq(account.userId, userId)))
         .then((r) => r[0] ?? null);
 
-      if (accountRow?.accessToken) {
-        const isPublic = host === "github.com";
-        const clientId = isPublic ? (GITHUB_CLIENT_ID_PUBLIC ?? "") : GITHUB_CLIENT_ID;
-        const apiBase = isPublic ? "https://api.github.com" : `https://api.${host}`;
-        const clientSecret = process.env.GITHUB_CLIENT_SECRET ?? "";
-        try {
-          await fetch(`${apiBase}/applications/${clientId}/token`, {
-            method: "DELETE",
-            headers: {
-              Authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}`,
-              Accept: "application/vnd.github+json",
-            },
-            body: JSON.stringify({ access_token: accountRow.accessToken }),
-          });
-        } catch {
-          // Best-effort — proceed with local deletion regardless
-        }
-      }
-
       await db
         .delete(account)
         .where(and(eq(account.providerId, providerId), eq(account.userId, userId)));
+      if (accountRow) {
+        await AppRuntime.runPromise(
+          Effect.flatMap(TokenProvider, (provider) => provider.deleteAccountTokens(accountRow.id)),
+        );
+      }
       return { ok: true };
     },
     { body: t.Object({ host: t.String() }) },

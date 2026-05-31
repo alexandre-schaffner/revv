@@ -11,6 +11,7 @@ import {
   getUser,
   resetForceOnboardingFlow,
 } from "$lib/stores/auth.svelte";
+import ReauthModal from "../auth/ReauthModal.svelte";
 import AccountPicker from "./AccountPicker.svelte";
 import OnboardingFlow from "./OnboardingFlow.svelte";
 
@@ -76,6 +77,9 @@ function handleNewAccount() {
 		<div class="root" in:gsapFade={{ duration: tokens.slow }}>
 			{@render children()}
 		</div>
+		<!-- Blocking re-auth gate: overlays the app (kept mounted) when the
+		     active account's GitHub token expired and couldn't be refreshed. -->
+		<ReauthModal />
 	{:else if showPicker && !pickerDismissed}
 		<AccountPicker onNewAccount={handleNewAccount} />
 	{:else}

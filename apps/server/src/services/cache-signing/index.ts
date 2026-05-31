@@ -56,7 +56,7 @@ const SSH_KEY_PATTERNS = /^id_(ed25519|ecdsa|rsa)$/;
 
 function findAccountWithLoginSync(
   db: Db,
-): { host: string; login: string; githubUserId: string; accessToken: string } | null {
+): { host: string; login: string; githubUserId: string } | null {
   const firstUser = db.select({ id: user.id }).from(user).limit(1).get();
   if (!firstUser) return null;
 
@@ -65,19 +65,20 @@ function findAccountWithLoginSync(
       providerId: account.providerId,
       githubLogin: account.githubLogin,
       accountId: account.accountId,
-      accessToken: account.accessToken,
     })
     .from(account)
     .where(eq(account.userId, firstUser.id))
     .all();
 
+  // A linked account always carries `githubLogin` + `accountId`; the access
+  // token (now held in the OS secure store, not the DB) isn't needed here —
+  // SSH cache signing uses the local SSH key, not the GitHub token.
   for (const row of rows) {
-    if (row.githubLogin && row.accessToken && row.accountId) {
+    if (row.githubLogin && row.accountId) {
       return {
         host: extractHostFromProviderId(row.providerId),
         login: row.githubLogin,
         githubUserId: row.accountId,
-        accessToken: row.accessToken,
       };
     }
   }

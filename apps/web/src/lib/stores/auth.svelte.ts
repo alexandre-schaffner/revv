@@ -61,6 +61,29 @@ let _connectedAccounts = $state<ConnectedAccount[]>([]);
 let localAccounts = $state<LocalAccount[]>([]);
 let accountJustRemoved = $state(false);
 
+/**
+ * Set when the active account's GitHub token is invalid and could not be
+ * silently refreshed. Drives the blocking re-sign-in modal. Hydrated from
+ * `/api/user/identity` on boot and updated live by the `auth:reauth-required`
+ * / `auth:reauth-cleared` WS handlers. Cleared on successful re-auth.
+ */
+let reauthRequired = $state<{ host: string | null; githubLogin: string | null } | null>(null);
+
+export function getReauthRequired(): { host: string | null; githubLogin: string | null } | null {
+  return reauthRequired;
+}
+
+export function setReauthRequired(value: {
+  host: string | null;
+  githubLogin: string | null;
+}): void {
+  reauthRequired = value;
+}
+
+export function clearReauthRequired(): void {
+  reauthRequired = null;
+}
+
 export function getLocalAccounts(): LocalAccount[] {
   return localAccounts;
 }
@@ -230,6 +253,10 @@ async function poll(): Promise<void> {
     if (data.status === "linked") {
       deviceFlow = null;
       _isPolling = false;
+      // Re-auth of the active account lands here (session_token was sent).
+      // Clear the gate immediately; the server also broadcasts
+      // `auth:reauth-cleared`, but clearing here avoids modal flicker.
+      reauthRequired = null;
       await fetchConnectedAccounts();
       await focusWindow();
       return;
@@ -239,6 +266,7 @@ async function poll(): Promise<void> {
       setToken(data.token);
       deviceFlow = null;
       _isPolling = false;
+      reauthRequired = null;
       await loadUser();
       await focusWindow();
       // Auto-open-add-repo on sign-in used to live here. The onboarding
@@ -303,6 +331,8 @@ export async function loadUser(): Promise<void> {
             login: string | null;
             avatarContent?: string | null;
             onboardedAt?: string | null;
+            reauthRequired?: boolean;
+            host?: string | null;
           };
           if (user) {
             const next: typeof user = {
@@ -317,6 +347,10 @@ export async function loadUser(): Promise<void> {
             user = next;
             accountJustRemoved = false;
           }
+          // Reconcile the re-auth gate from the authoritative server state.
+          reauthRequired = data.reauthRequired
+            ? { host: data.host ?? null, githubLogin: data.login }
+            : null;
         }
       } catch {
         // best-effort

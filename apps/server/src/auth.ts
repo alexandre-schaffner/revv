@@ -1,12 +1,12 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir, platform } from "node:os";
 import { dirname, join } from "node:path";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { bearer } from "better-auth/plugins";
 import { serverEnv } from "./config";
 import { createDb } from "./db/index";
+import { appDataDir } from "./paths";
 
 // Re-exported for the handful of routes that still reach in directly.
 // All values are sourced from the centralized `serverEnv` snapshot in
@@ -17,7 +17,6 @@ import { createDb } from "./db/index";
 // longer revokes on GitHub's side. Users can revoke from the GitHub app
 // connections page if they want (linked from the settings UI).
 export const GITHUB_CLIENT_ID = serverEnv.githubClientId;
-export const GITHUB_CLIENT_ID_PUBLIC = serverEnv.githubClientIdPublic;
 
 /**
  * Locate (or create) the better-auth signing secret.
@@ -51,20 +50,7 @@ function loadOrCreateAuthSecret(): string {
 
 /** OS-appropriate path for the persisted better-auth key. */
 function authKeyPath(): string {
-  const home = homedir();
-  const plat = platform();
-  const appDir = serverEnv.channel === "dev" ? "Revv Dev" : "Revv";
-  const xdgDir = serverEnv.channel === "dev" ? "revv-dev" : "revv";
-  if (plat === "darwin") {
-    return join(home, "Library", "Application Support", appDir, "auth.key");
-  }
-  if (plat === "win32") {
-    const appData = process.env.APPDATA ?? join(home, "AppData", "Roaming");
-    return join(appData, appDir, "auth.key");
-  }
-  // XDG on Linux / other POSIX.
-  const xdg = process.env.XDG_DATA_HOME ?? join(home, ".local", "share");
-  return join(xdg, xdgDir, "auth.key");
+  return join(appDataDir(), "auth.key");
 }
 
 const db = createDb();

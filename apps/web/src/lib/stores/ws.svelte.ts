@@ -1,7 +1,7 @@
 import type { SyncChange, WsServerMessage } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { WS_BASE_URL } from "$lib/api/base-url";
-import { applyUserUpdate } from "./auth.svelte";
+import { applyUserUpdate, clearReauthRequired, setReauthRequired } from "./auth.svelte";
 import { onChatQuestionResolved } from "./chat.svelte";
 import { setError } from "./errors.svelte";
 import {
@@ -125,6 +125,12 @@ function dispatchMessage(msg: WsServerMessage): void {
       break;
     case "error":
       setError(msg.data);
+      break;
+    case "auth:reauth-required":
+      setReauthRequired({ host: msg.data.host, githubLogin: msg.data.githubLogin });
+      break;
+    case "auth:reauth-cleared":
+      clearReauthRequired();
       break;
     case "thread:created":
       onThreadCreated(msg.data.thread, msg.data.message);

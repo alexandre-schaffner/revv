@@ -33,6 +33,7 @@ import { ensureHighlighter } from "./services/PrerenderCache";
 import { ProjectRecapJobs } from "./services/ProjectRecapJobs";
 import { RecapScheduler } from "./services/RecapScheduler";
 import { RepoCloneService } from "./services/RepoClone";
+import { migrateLegacyTokens } from "./services/SecretStore";
 import { WalkthroughJobs } from "./services/WalkthroughJobs";
 import { acquireSingleInstance } from "./singleInstance";
 
@@ -131,6 +132,18 @@ const app = new Elysia()
   });
 
 logError("server", `listening on http://localhost:${port}`);
+
+// Migrate any plaintext GitHub tokens left in the `account` table into the OS
+// secure store, then null the columns. Awaited before the sync scheduler boots
+// so the first poll cycle reads tokens from their new home. One-time and
+// idempotent — a no-op once every row has been migrated.
+await AppRuntime.runPromise(migrateLegacyTokens)
+  .then((n) => {
+    if (n > 0) logError("secret-store", `migrated ${n} GitHub token(s) into secure storage`);
+  })
+  .catch((err) => {
+    logError("secret-store", "legacy token migration failed:", err);
+  });
 
 // ── Graceful shutdown ────────────────────────────────────────────────────────
 // SIGTERM arrives on bun --watch restarts and launchd stops.

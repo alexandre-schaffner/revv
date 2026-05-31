@@ -130,11 +130,42 @@ export const userRoutes = new Elysia({ prefix: "/api/user" })
           if (pr) role = pr.authorLogin === login ? "coder" : "reviewer";
         }
 
+        // Resolve the active account's re-auth state so the client can gate
+        // the app behind the re-sign-in modal on boot, reconciling any
+        // `auth:reauth-required` WS signal missed while disconnected.
+        const reauth = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const tokenProvider = yield* TokenProvider;
+            const settingsService = yield* SettingsService;
+            const settings = yield* settingsService
+              .getSettings()
+              .pipe(Effect.orElseSucceed(() => null));
+            const hostPref = settings?.githubHost?.trim() || undefined;
+            const resolved = yield* tokenProvider.resolveAccount(userId, hostPref);
+            const accountRow = db
+              .select({ reauthRequiredAt: account.reauthRequiredAt })
+              .from(account)
+              .where(eq(account.id, resolved.accountId))
+              .get();
+            return {
+              reauthRequired: accountRow?.reauthRequiredAt != null,
+              host: resolved.providerId.split(":")[1] ?? null,
+            };
+          }).pipe(
+            Effect.orElseSucceed(() => ({
+              reauthRequired: false,
+              host: null as string | null,
+            })),
+          ),
+        );
+
         const identity: UserIdentity = {
           login,
           role,
           avatarContent,
           isMaintainer: isMaintainerLogin(login),
+          reauthRequired: reauth.reauthRequired,
+          host: reauth.host,
         };
         return {
           ...identity,
