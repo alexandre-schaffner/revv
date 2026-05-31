@@ -29,8 +29,7 @@ import { Switch } from "$lib/components/ui/switch";
 import {
   agentSupportsContextWindow,
   agentSupportsThinkingEffort,
-  OPUS_ONLY_EFFORTS,
-  THINKING_EFFORT_OPTIONS,
+  thinkingEffortOptionsFor,
 } from "$lib/constants/models";
 import { getUser, removeAccount, resetOnboarding, signOut } from "$lib/stores/auth.svelte";
 import { deleteRepo, getRepositories } from "$lib/stores/prs.svelte";
@@ -318,14 +317,9 @@ let currentSuggestionsModel = $derived(getSettings()?.aiSuggestionsModel ?? "");
 let currentSuggestionsModelLabel = $derived(
   modelOptions.find((o) => o.value === currentSuggestionsModel)?.label ?? currentSuggestionsModel,
 );
-let isOpus48 = $derived(currentModel === "claude-opus-4-8");
 let showThinkingEffort = $derived(agentSupportsThinkingEffort(aiAgent));
 let showContextWindow = $derived(agentSupportsContextWindow(aiAgent));
-let thinkingEffortOptions = $derived(
-  isOpus48
-    ? THINKING_EFFORT_OPTIONS
-    : THINKING_EFFORT_OPTIONS.filter((o) => !OPUS_ONLY_EFFORTS.has(o.value)),
-);
+let thinkingEffortOptions = $derived(thinkingEffortOptionsFor(aiAgent, currentModel));
 
 $effect(() => {
   if (open) {

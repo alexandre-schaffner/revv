@@ -99,9 +99,11 @@ export async function listCliModels(
     // model ids the codex CLI accepts via `--config model=…` / SDK
     // `ThreadOptions.model`. Keep in sync with the web default-model map.
     return [
-      { label: "GPT-5.1 Codex", value: "gpt-5.1-codex" },
-      { label: "GPT-5.1 Codex Mini", value: "gpt-5.1-codex-mini" },
-      { label: "GPT-5 Codex", value: "gpt-5-codex" },
+      { label: "GPT-5.5", value: "gpt-5.5" },
+      { label: "GPT-5.4", value: "gpt-5.4" },
+      { label: "GPT-5.4 Mini", value: "gpt-5.4-mini" },
+      { label: "GPT-5.3 Codex", value: "gpt-5.3-codex" },
+      { label: "GPT-5.2", value: "gpt-5.2" },
     ];
   }
 

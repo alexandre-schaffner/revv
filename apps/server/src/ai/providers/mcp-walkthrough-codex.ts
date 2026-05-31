@@ -97,7 +97,7 @@ export interface CodexStreamParams {
 export function streamWalkthroughViaCodexMCP(
   params: CodexStreamParams,
   model?: string,
-  _settings?: UserSettings,
+  settings?: UserSettings,
 ): AsyncGenerator<WalkthroughStreamEvent> {
   const events: WalkthroughStreamEvent[] = [];
   let waiter: { resolve: () => void } | null = null;
@@ -177,7 +177,11 @@ export function streamWalkthroughViaCodexMCP(
 
           // ── 2. Construct codex with the HTTP MCP route baked in ───
           const codex = buildCodex(sessionToken, mcpUrl);
-          const threadOptions = buildThreadOptions(params.worktreePath, model);
+          const threadOptions = buildThreadOptions(
+            params.worktreePath,
+            model,
+            settings?.aiThinkingEffort,
+          );
           const thread = params.continuation?.codexThreadId
             ? codex.resumeThread(params.continuation.codexThreadId, threadOptions)
             : codex.startThread(threadOptions);
@@ -385,7 +389,12 @@ function buildCodex(sessionToken: string, mcpUrl: string): Codex {
   });
 }
 
-function buildThreadOptions(worktreePath: string, model?: string) {
+function buildThreadOptions(
+  worktreePath: string,
+  model?: string,
+  effort?: UserSettings["aiThinkingEffort"],
+) {
+  const reasoning = toCodexReasoningEffort(effort);
   return {
     workingDirectory: worktreePath,
     skipGitRepoCheck: true,
@@ -394,5 +403,31 @@ function buildThreadOptions(worktreePath: string, model?: string) {
     sandboxMode: "read-only" as const,
     approvalPolicy: "never" as const,
     ...(model ? { model } : {}),
+    ...(reasoning ? { modelReasoningEffort: reasoning } : {}),
   };
+}
+
+/**
+ * Map Revv's `aiThinkingEffort` vocabulary onto codex's `modelReasoningEffort`.
+ * The UI only offers low/medium/high/extra-high for codex, but the Claude-only
+ * `ultrathink`/`max` tiers can linger in settings after an agent switch — fold
+ * those into the highest codex tier rather than dropping the knob.
+ */
+function toCodexReasoningEffort(
+  effort: UserSettings["aiThinkingEffort"] | undefined,
+): "low" | "medium" | "high" | "xhigh" | undefined {
+  switch (effort) {
+    case "low":
+      return "low";
+    case "medium":
+      return "medium";
+    case "high":
+      return "high";
+    case "extra-high":
+    case "max":
+    case "ultrathink":
+      return "xhigh";
+    default:
+      return undefined;
+  }
 }
