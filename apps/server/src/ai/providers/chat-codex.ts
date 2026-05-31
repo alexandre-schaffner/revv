@@ -115,16 +115,22 @@ export function streamChatViaCodex(
         const pinned = resolveCliBin("codex");
         const codex = new Codex({
           ...(pinned !== "codex" ? { codexPathOverride: pinned } : {}),
-          ...(Object.keys(mcpServers).length > 0 ? { config: { mcp_servers: mcpServers } } : {}),
+          config: {
+            // `codex exec` is non-interactive: without this, MCP tool calls
+            // (get_review_context + the walkthrough-edit tools) are auto-
+            // cancelled for lack of an approver. Parity with the Claude chat
+            // path's bypassPermissions. Plan-mode's read-only intent is
+            // enforced by the MCP tool surface (edit tools are filtered out of
+            // tools/list by interactionMode), not by the codex sandbox.
+            dangerously_bypass_approvals_and_sandbox: true,
+            ...(Object.keys(mcpServers).length > 0 ? { mcp_servers: mcpServers } : {}),
+          },
         });
+        // Do NOT set sandboxMode/approvalPolicy — they conflict with the
+        // bypass config above.
         const threadOptions = {
           workingDirectory: opts.cwd,
           skipGitRepoCheck: true,
-          // Plan mode: read-only so the agent can investigate but not mutate.
-          // Default chat allows workspace writes (Edit/Write/Bash + merge
-          // conflict resolution).
-          sandboxMode: planMode ? ("read-only" as const) : ("workspace-write" as const),
-          approvalPolicy: "never" as const,
           ...(opts.model ? { model: opts.model } : {}),
         };
         const thread = opts.resumeSessionId
