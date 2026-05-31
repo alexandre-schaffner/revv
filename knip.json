@@ -29,7 +29,7 @@
       ]
     },
     "apps/server": {
-      "entry": ["src/index.ts"],
+      "entry": ["src/index.ts", "src/**/*.test.ts"],
       "ignoreDependencies": ["bun-types", "drizzle-kit"]
     },
     "packages/shared": {

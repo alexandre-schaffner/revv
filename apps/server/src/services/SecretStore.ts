@@ -55,14 +55,14 @@ function entryFor(accountId: string): Entry {
   return new Entry(keyringServiceName(), `${KEYRING_USER_PREFIX}${accountId}`);
 }
 
-function serialize(tokens: TokenPair): string {
+export function serialize(tokens: TokenPair): string {
   return JSON.stringify({
     accessToken: tokens.accessToken ?? null,
     refreshToken: tokens.refreshToken ?? null,
   });
 }
 
-function deserialize(raw: string): TokenPair {
+export function deserialize(raw: string): TokenPair {
   try {
     const o = JSON.parse(raw) as Partial<TokenPair>;
     return { accessToken: o.accessToken ?? null, refreshToken: o.refreshToken ?? null };
