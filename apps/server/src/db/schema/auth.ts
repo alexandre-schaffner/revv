@@ -55,7 +55,7 @@ export const account = sqliteTable("account", {
   // broadcasts `auth:reauth-required` and the client gates the app behind a
   // re-sign-in modal. Cleared on any successful token write (device-flow
   // re-auth or a successful refresh). Durable so the state survives restart
-  // and is reconcilable on WS reconnect.
+  // and is reconcilable on SSE reconnect.
   reauthRequiredAt: integer("reauth_required_at", { mode: "timestamp" }),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),

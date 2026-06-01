@@ -1,6 +1,6 @@
-import { Cause, Option } from "effect";
+import { Cause, Effect, Option } from "effect";
 import { Elysia, status } from "elysia";
-import { auth } from "../auth";
+import { serverEnv } from "../config";
 import {
   AiNotConfiguredError,
   CloneError,
@@ -16,6 +16,9 @@ import {
   ValidationError,
 } from "../domain/errors";
 import { debug, logError } from "../logger";
+import { AppRuntime } from "../runtime";
+import { Identity } from "../services/Identity";
+import { SettingsService } from "../services/Settings";
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
 
@@ -25,12 +28,78 @@ import { debug, logError } from "../logger";
  * `session` into typed context for downstream handlers.
  */
 export const withAuth = new Elysia({ name: "with-auth" }).derive({ as: "scoped" }, async (ctx) => {
-  const session = await auth.api.getSession({ headers: ctx.request.headers });
+  const session = await AppRuntime.runPromise(
+    Effect.flatMap(Identity, (identity) =>
+      Effect.promise(() => identity.sessionFromHeaders(ctx.request.headers)),
+    ),
+  );
   if (!session) {
     return status(401, { error: "Unauthorized" });
   }
   return { session };
 });
+
+function queryHost(query: Record<string, unknown>): string | undefined {
+  const host = query.host;
+  if (typeof host !== "string") return undefined;
+  const trimmed = host.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+// NOTE: this resolves the session itself rather than chaining `.use(withAuth)`
+// and reading `ctx.session`. Elysia deduplicates named plugins, and the
+// `withAuth` ("with-auth") scoped `derive` is also mounted on other route
+// trees — when deduped, its derived `session` does not propagate into this
+// sibling `derive`, leaving `ctx.session` undefined and 401-ing every
+// account-scoped route. Resolving from headers here (mirroring the events
+// route) keeps `withAccount` self-contained and immune to that ordering.
+export const withAccount = new Elysia({ name: "with-account" }).derive(
+  { as: "scoped" },
+  async (ctx) => {
+    const result = await AppRuntime.runPromise(
+      Effect.gen(function* () {
+        const identity = yield* Identity;
+        const session = yield* Effect.promise(() =>
+          identity.sessionFromHeaders(ctx.request.headers),
+        );
+        if (!session) return { __noSession: true as const };
+
+        const settingsService = yield* SettingsService;
+        const settings = yield* settingsService
+          .getSettings()
+          .pipe(Effect.orElseSucceed(() => null));
+        const host =
+          queryHost(ctx.query as Record<string, unknown>) ??
+          settings?.githubHost?.trim() ??
+          serverEnv.githubHost;
+        const account = yield* identity.resolveAccount(session.user.id, host);
+        return { session, account };
+      }),
+    ).catch((err) => {
+      const unwrapped = unwrapEffectError(err);
+      if (unwrapped instanceof GitHubAuthError) {
+        return { __authError: true as const, error: unwrapped };
+      }
+      logError(
+        "withAccount",
+        "account resolution failed:",
+        unwrapped instanceof Error ? unwrapped.message : String(unwrapped),
+      );
+      return null;
+    });
+
+    if (!result) {
+      return status(401, { error: "Unauthorized" });
+    }
+    if ("__noSession" in result) {
+      return status(401, { error: "Unauthorized" });
+    }
+    if ("__authError" in result) {
+      return status(401, { error: "GitHub token expired or invalid" });
+    }
+    return { session: result.session, account: result.account };
+  },
+);
 
 // ── Effect error unwrapping ─────────────────────────────────────────────────
 

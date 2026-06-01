@@ -38,7 +38,7 @@ export const pullRequests = sqliteTable(
     /**
      * sha256(sorted(threadNodeId + lastCommentUpdatedAt)) — computed after each
      * GraphQL thread pull. If unchanged on the next tick, skip all downstream
-     * DB writes and WS events for this PR (Phase 3 optimization; stored now so
+     * DB writes and SSE events for this PR (Phase 3 optimization; stored now so
      * migrations don't need to change again).
      */
     threadsFingerprint: text("threads_fingerprint"),

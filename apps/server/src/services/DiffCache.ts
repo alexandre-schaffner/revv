@@ -4,7 +4,7 @@ import { prDiffFiles } from "../db/schema/index";
 import type { GitHubError } from "../domain/errors";
 import { withDb } from "../effects/with-db";
 import { DbService } from "./Db";
-import { GitHubService } from "./GitHub";
+import { GitHubGateway } from "./GitHub";
 import type { GitHubEtagCache } from "./GitHubEtagCache";
 import type { SettingsService } from "./Settings";
 
@@ -115,17 +115,17 @@ export const getOrFetchDiffFiles = (
 ): Effect.Effect<
   CachedDiffFile[],
   GitHubError,
-  DiffCacheService | GitHubService | DbService | GitHubEtagCache | SettingsService
+  DiffCacheService | GitHubGateway | DbService | GitHubEtagCache | SettingsService
 > =>
   Effect.gen(function* () {
     const diffCache = yield* DiffCacheService;
-    const github = yield* GitHubService;
+    const github = yield* GitHubGateway;
     const { db } = yield* DbService;
 
     const cached = yield* withDb(db, diffCache.getCachedFiles(prId));
     if (cached !== null) return cached;
 
-    const fileList = yield* github.getPrFiles(repoFullName, prExternalId, token);
+    const fileList = yield* github.prs.files(repoFullName, prExternalId, token);
     const files: CachedDiffFile[] = fileList.map((f) => ({
       path: f.filename,
       oldPath: f.previousFilename,

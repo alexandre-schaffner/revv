@@ -1,18 +1,19 @@
 // ── GitOps ───────────────────────────────────────────────────────────────
 //
-// Shared git-push primitives + the small set of tagged errors that go with
-// them. Lifted from `ChatChangesPush.ts` so the new-PR session pipeline
-// (`NewPrSessionService`) can reuse the same push surface — same git
-// command shapes, same error semantics, same security-conscious helpers
+// Shared git command surface for the chat-push / new-PR-session flows, plus
+// the small set of tagged errors that go with them. This is the Local Git
+// module seam for command shapes that don't need RepoCloneService worktree
+// acquisition: same git args, same timeouts, same security-conscious helpers
 // (no token leaks in `.git/config`, flag-like argument rejection).
 //
-// Scope is deliberately narrow: only the helpers that both flows need.
-// Chat-specific operations (merge-then-push, cherry-pick, conflict
-// resolution, force-with-lease against an existing branch) stay in
-// `ChatChangesPush.ts` since they require the chat-session state machine.
+// Chat-session orchestration (merge state machine, conflict handling, leases,
+// and Effect error mapping) stays in `ChatChangesPush.ts`; raw subprocess
+// plumbing stays behind this module.
 
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { Data } from "effect";
-import { runGitCapture, spawnGit } from "./git-runner";
+import { runGit, runGitBestEffort, runGitCapture, spawnGit } from "./git-runner";
 
 // ── Errors ────────────────────────────────────────────────────────────────
 
@@ -50,6 +51,164 @@ export function assertNotFlagLike(value: string, label: string): void {
   if (value.startsWith("-")) {
     throw new Error(`refusing to use ${label} that looks like a flag: ${value}`);
   }
+}
+
+export async function statusPorcelain(worktreePath: string): Promise<string> {
+  return (await runGitCapture(["status", "--porcelain=v1"], worktreePath, 15_000)).trim();
+}
+
+// Block the push on any uncommitted *tracked* change — modifications,
+// deletions, staged work, or unmerged conflict state — but ignore untracked
+// files (`??`). Untracked entries are runtime artifacts that aren't in the
+// user-reviewed proposed-changes diff.
+export async function workingTreeIsClean(worktreePath: string): Promise<{
+  clean: boolean;
+  output: string;
+}> {
+  const raw = await statusPorcelain(worktreePath);
+  const blocking = raw
+    .split("\n")
+    .filter((line) => line.length > 0 && !line.startsWith("??"))
+    .join("\n");
+  return { clean: blocking.length === 0, output: blocking };
+}
+
+export async function unmergedPaths(worktreePath: string): Promise<string[]> {
+  const out = (
+    await runGitCapture(["diff", "--name-only", "--diff-filter=U"], worktreePath, 10_000)
+  ).trim();
+  if (out.length === 0) return [];
+  return out.split("\n").filter((file) => file.length > 0);
+}
+
+export async function revListCount(worktreePath: string, range: string): Promise<string> {
+  return (await runGitCapture(["rev-list", "--count", range], worktreePath, 10_000)).trim();
+}
+
+export async function revListReverse(worktreePath: string, range: string): Promise<string[]> {
+  const out = (await runGitCapture(["rev-list", "--reverse", range], worktreePath, 10_000)).trim();
+  if (out.length === 0) return [];
+  return out
+    .split("\n")
+    .map((sha) => sha.trim())
+    .filter(Boolean);
+}
+
+export async function revParse(
+  worktreePath: string,
+  ref: string,
+  timeoutMs: number,
+): Promise<string> {
+  return (await runGitCapture(["rev-parse", ref], worktreePath, timeoutMs)).trim();
+}
+
+export async function fetchRefspec(
+  worktreePath: string,
+  authedUrl: string,
+  refspec: string,
+): Promise<void> {
+  await runGit(["fetch", authedUrl, refspec], worktreePath);
+}
+
+export async function checkoutBranch(worktreePath: string, branch: string): Promise<void> {
+  await runGit(["checkout", branch], worktreePath);
+}
+
+export async function checkoutNewBranchFromRef(
+  worktreePath: string,
+  branch: string,
+  startRef: string,
+): Promise<void> {
+  await runGit(["checkout", "-B", branch, startRef], worktreePath);
+}
+
+export async function forceBranchTo(
+  worktreePath: string,
+  branch: string,
+  sha: string,
+): Promise<void> {
+  await runGit(["branch", "-f", branch, sha], worktreePath);
+}
+
+export async function merge(
+  worktreePath: string,
+  branch: string,
+): Promise<{ ok: boolean; stderr: string }> {
+  const result = await spawnGit(["merge", "--no-edit", branch], {
+    cwd: worktreePath,
+    timeoutMs: 60_000,
+    captureStdout: false,
+  });
+  return {
+    ok: !result.timedOut && result.exitCode === 0,
+    stderr: result.stderrTail,
+  };
+}
+
+export async function cherryPick(
+  worktreePath: string,
+  sha: string,
+  timeoutMs = 60_000,
+): Promise<{ ok: boolean; stderr: string }> {
+  const result = await spawnGit(["cherry-pick", sha], {
+    cwd: worktreePath,
+    timeoutMs,
+    captureStdout: false,
+  });
+  return {
+    ok: !result.timedOut && result.exitCode === 0,
+    stderr: result.stderrTail,
+  };
+}
+
+export async function rebaseOnto(
+  worktreePath: string,
+  onto: string,
+  upstream: string,
+  branch: string,
+): Promise<{ ok: boolean; stderr: string }> {
+  const result = await spawnGit(["rebase", "--onto", onto, upstream, branch], {
+    cwd: worktreePath,
+    timeoutMs: 60_000,
+    captureStdout: false,
+  });
+  return {
+    ok: !result.timedOut && result.exitCode === 0,
+    stderr: result.stderrTail,
+  };
+}
+
+export async function abortMerge(worktreePath: string): Promise<boolean> {
+  return runGitBestEffort(["merge", "--abort"], worktreePath, 15_000);
+}
+
+export async function abortRebase(worktreePath: string): Promise<boolean> {
+  return runGitBestEffort(["rebase", "--abort"], worktreePath, 15_000);
+}
+
+export async function abortCherryPick(worktreePath: string): Promise<boolean> {
+  return runGitBestEffort(["cherry-pick", "--abort"], worktreePath, 15_000);
+}
+
+export async function checkoutBranchBestEffort(
+  worktreePath: string,
+  branch: string,
+  timeoutMs: number,
+): Promise<boolean> {
+  return runGitBestEffort(["checkout", branch], worktreePath, timeoutMs);
+}
+
+export async function forceBranchToBestEffort(
+  worktreePath: string,
+  branch: string,
+  sha: string,
+  timeoutMs: number,
+): Promise<boolean> {
+  return runGitBestEffort(["branch", "-f", branch, sha], worktreePath, timeoutMs);
+}
+
+export function isMergeInProgress(worktreePath: string): boolean {
+  return existsSync(join(worktreePath, ".git", "MERGE_HEAD"));
 }
 
 /**

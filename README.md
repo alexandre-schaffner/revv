@@ -4,7 +4,7 @@ An AI-assisted code review desktop application. Revv syncs your GitHub pull requ
 
 ## Features
 
-- **Synced GitHub PRs** — Automatic fetch and polling across repos, with real-time WebSocket updates
+- **Synced GitHub PRs** — Automatic fetch and polling across repos, with real-time SSE updates
 - **AI Guided Walkthrough** — 4-phase MCP pipeline (Overview → Diff Analysis → Sentiment → 9-axis Rating) with chat-edit mutations post-completion
 - **Chat Agent** — Always-on right-panel agent with plan mode, tool-use streaming, task queue, and pending questions
 - **Chat-Driven Changes** — Proposed-commit strip with cherry-pick / discard / push (`--force-with-lease`) and AI merge-conflict resolution
@@ -259,7 +259,7 @@ bun run clean        # remove build artifacts
 revv/
 ├── apps/
 │   ├── web/            # SvelteKit frontend (served by Tauri, localhost:5173 in dev)
-│   ├── server/         # Elysia HTTP + WebSocket API (port 45678)
+│   ├── server/         # Elysia HTTP + SSE API (port 45678)
 │   └── desktop/        # Tauri v2 shell
 ├── packages/
 │   └── shared/         # Shared types & constants (@revv/shared)
@@ -289,7 +289,7 @@ Both Claude Agent SDK (in-process) and opencode (HTTP MCP, subprocess) paths sha
 
 ### Real-Time Updates
 
-WebSocket hub broadcasts `prs:updated`, `repos:updated`, `walkthrough:updated`, `walkthrough:edited`, etc. Clients authenticate via `?token=` query param. Shape is `{ type, data? }` with `namespace:action` type strings — source of truth in `packages/shared/src/ws.ts`.
+A single SSE stream (`GET /api/events`) broadcasts `prs:updated`, `repos:updated`, `walkthrough:event`, etc. via the `Broadcaster` service (account-scoped fan-out). Clients authenticate via `?token=` query param; inbound commands use REST endpoints. Shape is `{ type, data? }` with `namespace:action` type strings — source of truth in `packages/shared/src/events.ts`.
 
 ### Database
 
@@ -313,7 +313,7 @@ Key endpoints (all data routes require `Authorization: Bearer <token>`):
 - `POST /api/reviews` — Create or update review session
 - `GET /api/reviews/:id` — Fetch review
 
-WebSocket at `ws://localhost:45678` authenticates via `?token=<session-token>`.
+The SSE event stream at `GET http://localhost:45678/api/events` authenticates via `?token=<session-token>`.
 
 ## Troubleshooting
 

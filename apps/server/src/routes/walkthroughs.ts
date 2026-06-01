@@ -12,24 +12,17 @@ import { Effect } from "effect";
 import { Elysia } from "elysia";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
-import { SettingsService } from "../services/Settings";
-import { TokenProvider } from "../services/TokenProvider";
 import { WalkthroughService } from "../services/Walkthrough";
-import { handleAppError, withAuth } from "./middleware";
+import { handleAppError, withAccount } from "./middleware";
 
 export const walkthroughsRoute = new Elysia({ prefix: "/api/walkthroughs" })
-  .use(withAuth)
+  .use(withAccount)
   .get("/active", async (ctx) => {
     try {
       return await AppRuntime.runPromise(
         Effect.gen(function* () {
-          const tokenProvider = yield* TokenProvider;
-          const settingsSvc = yield* SettingsService;
-          const settings = yield* settingsSvc.getSettings().pipe(Effect.orElseSucceed(() => null));
-          const host = settings?.githubHost?.trim() || undefined;
-          const resolved = yield* tokenProvider.resolveAccount(ctx.session.user.id, host);
           const wts = yield* WalkthroughService;
-          const rows = yield* wts.listActiveForAccount(resolved.accountId);
+          const rows = yield* wts.listActiveForAccount(ctx.account.accountId);
           return { walkthroughs: rows };
         }),
       );

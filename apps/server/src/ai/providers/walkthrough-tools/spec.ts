@@ -5,15 +5,16 @@ import type {
   RatingAxis,
   RatingCitation,
   RiskLevel,
+  ThreadEventMessage,
   WalkthroughIssue,
   WalkthroughRating,
   WalkthroughSemanticStep,
   WalkthroughStreamEvent,
-  WsServerMessage,
 } from "@revv/shared";
 import { RATING_AXES } from "@revv/shared";
 import { z } from "zod";
 import type { Db } from "../../../db";
+import type { ToolSpec as GatewayToolSpec, McpToolResult } from "../mcp-tool-gateway";
 
 // ─── Doctrine & phase model ─────────────────────────────────────────────────
 //
@@ -68,19 +69,16 @@ export interface WalkthroughToolContext {
    */
   readonly emit: (event: WalkthroughStreamEvent) => void;
   /**
-   * General WebSocket broadcast hook (separate channel from the walkthrough
-   * SSE stream above). Used by handlers that mutate non-walkthrough tables —
+   * General thread-event broadcast hook. Used by handlers that mutate non-walkthrough tables —
    * specifically `add_issue_comment`, which writes to `comment_threads` /
    * `thread_messages` and must notify any open `DiffViewerInner` so the
    * agent's comment shows up inline in the diff. Like `emit`, it is called
    * AFTER the DB commit so subscribers never see an event without a row.
    */
-  readonly broadcastThreadEvent: (msg: WsServerMessage) => void;
+  readonly broadcastThreadEvent: (msg: ThreadEventMessage) => void;
 }
 
-export interface WalkthroughToolResult {
-  content: Array<{ type: "text"; text: string }>;
-  isError?: boolean;
+export interface WalkthroughToolResult extends McpToolResult {
   // MCP SDK's tool() signature uses an open-ended response type with a
   // string index signature. This extra field lets our narrower type unify
   // with that shape when the SDK wraps us; it's never populated.
@@ -92,13 +90,7 @@ export type WalkthroughToolHandler<TInput> = (
   input: TInput,
 ) => Promise<WalkthroughToolResult>;
 
-export interface ToolSpec<TShape extends z.ZodRawShape> {
-  readonly name: string;
-  readonly description: string;
-  readonly inputSchema: z.ZodObject<TShape>;
-  // biome-ignore lint/suspicious/noExplicitAny: heterogeneous tool spec array requires bivariant handler type
-  readonly handler: WalkthroughToolHandler<any>;
-}
+export type WalkthroughToolSpec = GatewayToolSpec<WalkthroughToolContext, WalkthroughToolResult>;
 
 // ── Tool input schemas (zod) ─────────────────────────────────────────────────
 

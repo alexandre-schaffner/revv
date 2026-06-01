@@ -41,19 +41,19 @@ make reset-db            # Delete SQLite database (apps/server/revv.db)
 ### Monorepo Layout
 
 - `apps/web` — SvelteKit frontend (served by Tauri, also accessible at `localhost:5173` in dev)
-- `apps/server` — Elysia HTTP + WebSocket server (port 45678)
+- `apps/server` — Elysia HTTP + SSE server (port 45678)
 - `apps/desktop` — Tauri v2 shell; minimal Rust, just window + plugin setup
-- `packages/shared` — Shared types, constants (`API_PORT`, `APP_NAME`), and WebSocket message schemas
+- `packages/shared` — Shared types, constants (`API_PORT`, `APP_NAME`), and SSE event message schemas
 
 `packages/shared` is the source of truth for cross-app types. Import from `@revv/shared`.
 
 ### Server (`apps/server`)
 
 - **Effect system** throughout: services use `Effect.gen`, `Context.Tag`, and `Layer` for DI and structured error handling. Don't bypass Effect when modifying services.
-- **Services**: `GitHubService`, `RepositoryService`, `PullRequestService`, `PollScheduler`, `WebSocketHub`, `Settings`, `TokenProvider`
+- **Services**: `GitHubService`, `RepositoryService`, `PullRequestService`, `PollScheduler`, `Broadcaster`, `Settings`, `TokenProvider`
 - **Auth**: `better-auth` with GitHub OAuth. Bearer token strategy. OAuth callback URL: `http://localhost:45678/api/auth/callback/github`
 - **Database**: Drizzle ORM on SQLite (`revv.db`). Schema in `src/db/schema.ts`. Migrations live in `src/db/migrations` and are auto-applied on startup via `drizzle-orm/bun-sqlite/migrator`. Generate new ones with `bunx drizzle-kit generate` (run from `apps/server`).
-- **WebSocket**: Clients authenticate via `?token=` query param. Server broadcasts `prs:updated`, `repos:updated`, etc. via `WebSocketHub`.
+- **Realtime (SSE)**: Clients open a single `GET /api/events?token=…` stream. Server broadcasts `prs:updated`, `repos:updated`, etc. via `Broadcaster` (account-scoped fan-out). Inbound commands use REST endpoints.
 
 #### Database migrations
 
@@ -77,7 +77,7 @@ The project uses **Drizzle's code-first migration workflow**.
 ### Web (`apps/web`)
 
 - **Svelte 5 runes** (`$state`, `$derived`, `$effect`) — not Svelte 4 stores/writables.
-- **Stores** (in `src/lib/stores/`): `auth.svelte.ts`, `prs.svelte.ts`, `ws.svelte.ts`, `settings.svelte.ts`. These expose getter/setter functions, not subscribables.
+- **Stores** (in `src/lib/stores/`): `auth.svelte.ts`, `prs.svelte.ts`, `events.svelte.ts`, `settings.svelte.ts`. These expose getter/setter functions, not subscribables.
 - **API client**: Eden (Elysia type-safe client) — import from `@revv/server` types.
 - **Deep-link handling**: OAuth callback comes in via `revv://auth/callback?token=…` scheme (Tauri) or polling `/api/auth/pending-token` (browser dev mode).
 - **Component library**: shadcn-svelte + Tailwind CSS v4.
@@ -105,8 +105,8 @@ All packages extend `tsconfig.base.json` which enables `strict`, `exactOptionalP
 Canonical patterns live in [`docs/conventions.md`](docs/conventions.md). Existing violations are tracked in [`docs/conventions-backlog.md`](docs/conventions-backlog.md). The rules below are the headline summary; the doc is the authority.
 
 - **Effect services.** Service tag `XService` pairs with Layer `XServiceLive`. No `Effect.runPromise` inside an Effect-returning method — schedule with `Effect.fork` / `Effect.sleep` / `Effect.async`. Tagged errors live in `apps/server/src/domain/errors.ts`, never inline. Drizzle calls inside `Effect.gen` are wrapped in `Effect.try*` mapping to a tagged DB error. ([§2](docs/conventions.md#effect-services))
-- **WebSocket envelopes.** Shape is `{ type, data? }`; type strings are `namespace:action` colon-style; payload contract is one of signal / full-state / delta and documented at the type definition. Source of truth: `packages/shared/src/ws.ts`. ([§3](docs/conventions.md#ws-envelopes))
-- **Web stores.** Singleton module + `getX/setX` exports; per-PR state is `Map<prId, Entry>` with shared `setEntry/deleteEntry/updateEntry` helpers; every Map/Set write is followed by reassignment for reactivity; request-state is a tagged `RequestState<T>` union, not parallel boolean+nullable triples; WS handlers are named `on<EventName>` matching the message type. ([§4](docs/conventions.md#stores))
+- **SSE event envelopes.** Shape is `{ type, data? }`; type strings are `namespace:action` colon-style; payload contract is one of signal / full-state / delta and documented at the type definition. Data-bearing envelopes are account-scoped (`broadcastToAccount`); `broadcastAll` is reserved for server-global sync signals. Source of truth: `packages/shared/src/events.ts`. ([§3](docs/conventions.md#event-envelopes))
+- **Web stores.** Singleton module + `getX/setX` exports; per-PR state is `Map<prId, Entry>` with shared `setEntry/deleteEntry/updateEntry` helpers; every Map/Set write is followed by reassignment for reactivity; request-state is a tagged `RequestState<T>` union, not parallel boolean+nullable triples; event handlers are named `on<EventName>` matching the message type. ([§4](docs/conventions.md#stores))
 - **Motion.** All durations and easings come from the `@theme` block in `app.css` (`--duration-snap/quick/smooth`, `--ease-soft/out-expo/standard`). A ceremonial tier (`--duration-ceremonial-quick/medium/slow`) is reserved for onboarding-style theatrical motion. No hand-typed `cubic-bezier(...)`, no `220ms`/`0.55s` literals. ([§5.1–5.2](docs/conventions.md#motion-tokens))
 - **Svelte components.** Props declared as `interface Props` + `$props()`. Event handlers as `onclick={fn}` (lowercase property style), not `on:click`. ([§6](docs/conventions.md#components))
 
@@ -194,11 +194,12 @@ agent tomorrow). Any change that violates them is wrong by construction — push
    `add_issue`, `update_issue`, `delete_issue`, `add_issue_comment`,
    `update_issue_comment`, `delete_issue_comment`) may mutate rows in place. Edits stamp
    `lastEditedAt` / `lastEditedBy` on the parent row, never change `status` or
-   `lastCompletedPhase`, and broadcast `walkthrough:edited` envelopes via `WebSocketHub`
-   (not the generation SSE stream, which dies on `done`). GitHub-submitted issues
+   `lastCompletedPhase`, and broadcast `walkthrough:event` envelopes carrying a
+   `lifecycle:edited` event via `Broadcaster` on the global SSE stream (`GET /api/events`),
+   not the per-generation stream, which dies on `done`. GitHub-submitted issues
    (`submittedAt!=null`) are off-limits even to the chat-edit path. The generation
    pipeline still never mutates a completed row.
-8. **Commit first, broadcast second.** DB upsert is the commit point. SSE/WebSocket
+8. **Commit first, broadcast second.** DB upsert is the commit point. SSE
    broadcast is best-effort. Subscribers reconnecting after a miss MUST reconcile by
    re-reading the DB.
 9. **Bounded retries with explicit budgets.** `WALKTHROUGH_MAX_RESUME_ATTEMPTS = 3`,

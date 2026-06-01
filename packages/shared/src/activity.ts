@@ -5,7 +5,7 @@
 //
 //   - chat (right-pane multi-turn): persisted into `chat_activities` and
 //     forwarded via the `activity` SSE-frame discriminator.
-//   - walkthrough generation (transient): broadcast over WebSocket as the
+//   - walkthrough generation (transient): broadcast over SSE as the
 //     `exploration` variant of `WalkthroughStreamEvent`. Drives the rolling
 //     6-step status window in the guided walkthrough header.
 //

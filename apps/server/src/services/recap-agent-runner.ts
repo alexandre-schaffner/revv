@@ -68,7 +68,7 @@ export interface RunRecapAgentParams {
   readonly modelUsed: string;
   /**
    * Resolved agent choice for THIS recap run. The orchestrator computes this
-   * via `resolveRecapAgent(settings)` and threads it in — keeps this module
+   * via `SettingsService.resolveRecapAgent()` and threads it in — keeps this module
    * decoupled from `SettingsService`.
    */
   readonly effectiveAgent: CliAgent;

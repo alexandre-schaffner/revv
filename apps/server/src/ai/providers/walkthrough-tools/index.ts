@@ -17,7 +17,6 @@
 // add_diff_step before set_overview, this module returns a structured error
 // the agent can recover from — the DB row is never touched.
 
-import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import type {
   RatingCitation,
   RiskLevel,
@@ -29,6 +28,7 @@ import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
 import { walkthroughRatings } from "../../../db/schema/walkthrough-ratings";
 import { walkthroughSemanticSteps } from "../../../db/schema/walkthrough-semantic-steps";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
+import { bindInProcess, type ToolSpecBundle } from "../mcp-tool-gateway";
 import {
   blockIdFor,
   errorResult,
@@ -67,10 +67,10 @@ import {
   type SetSentimentInput,
   setOverviewSchema,
   setSentimentSchema,
-  type ToolSpec,
   type WalkthroughToolContext,
   type WalkthroughToolHandler,
   type WalkthroughToolResult,
+  type WalkthroughToolSpec,
 } from "./spec";
 
 // ── Re-exports (preserve public API) ────────────────────────────────────────
@@ -498,8 +498,7 @@ export const completeWalkthroughHandler: WalkthroughToolHandler<CompleteWalkthro
  * The full phase-bound tool surface. Both the Claude Agent SDK path and the
  * HTTP MCP route (opencode) consume this array — one source of truth.
  */
-// biome-ignore lint/suspicious/noExplicitAny: heterogeneous tool spec array requires bivariant handler type
-export const TOOL_SPECS: Array<ToolSpec<any>> = [
+export const TOOL_SPECS: ReadonlyArray<WalkthroughToolSpec> = [
   {
     name: "get_walkthrough_state",
     description:
@@ -579,6 +578,15 @@ export const TOOL_SPECS: Array<ToolSpec<any>> = [
   },
 ];
 
+export const WALKTHROUGH_TOOL_BUNDLE: ToolSpecBundle<
+  WalkthroughToolContext,
+  WalkthroughToolResult
+> = {
+  name: "revv-walkthrough",
+  version: "2.0.0",
+  specs: TOOL_SPECS,
+};
+
 // ── Claude Agent SDK adapter ─────────────────────────────────────────────────
 //
 // Wraps TOOL_SPECS in the shape the Claude Agent SDK expects. The SDK calls
@@ -591,16 +599,8 @@ export const TOOL_SPECS: Array<ToolSpec<any>> = [
  */
 export function createWalkthroughMcpServer(
   ctx: WalkthroughToolContext,
-): ReturnType<typeof createSdkMcpServer> {
-  return createSdkMcpServer({
-    name: "revv-walkthrough",
-    version: "2.0.0",
-    tools: TOOL_SPECS.map((spec) =>
-      tool(spec.name, spec.description, spec.inputSchema.shape, async (args: unknown) =>
-        spec.handler(ctx, args),
-      ),
-    ),
-  });
+): ReturnType<typeof bindInProcess> {
+  return bindInProcess(WALKTHROUGH_TOOL_BUNDLE, ctx);
 }
 
 // ── Back-compat shims ────────────────────────────────────────────────────────

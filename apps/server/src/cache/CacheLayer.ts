@@ -23,7 +23,7 @@ import type { CacheCounters, CacheRow, FetcherResult, RevalidationHint } from ".
  * ### Not responsible for
  *
  * - Cross-namespace invalidation (use {@link InvalidationBus}).
- * - WebSocket fan-out (handled by the bus subscribers).
+ * - Realtime fan-out (handled by the bus subscribers).
  * - HTTP response headers (see `routes/etag.ts`).
  */
 export interface CacheLayer<K, V> {

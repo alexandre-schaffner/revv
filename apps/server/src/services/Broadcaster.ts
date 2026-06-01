@@ -1,20 +1,24 @@
-// ── EventBus ────────────────────────────────────────────────────────────────
+// ── Broadcaster (Realtime / Events) ─────────────────────────────────────────
 //
-// Account-scoped pub-sub for the global SSE stream that replaces the per-PR
-// walkthrough SSE. Each connected client owns one writer registered under
-// the account id resolved from their bearer token; broadcasts fan out to
-// every writer for the target account.
+// The realtime/events narrow neck. Account-scoped pub-sub for the global SSE
+// stream. Each connected client owns
+// one writer registered under the account id resolved from their bearer token;
+// broadcasts fan out to every writer for the target account.
 //
-// Scope (intentional): only walkthrough envelopes flow through here today.
-// Other real-time channels (PR/repo/chat/new-pr-session WS envelopes) keep
-// using `WebSocketHub` until they migrate. Add new envelope types to
-// `ServerEventMessage` in `@revv/shared/src/events` as each subsystem
-// moves.
+// This is the deep module the module map calls "Realtime/Events": a tiny
+// interface (`register` / `broadcastToAccount`) hides the best-effort fan-out,
+// SSE encoding, and disconnect bookkeeping. Features push events here; they
+// never touch transport internals.
+//
+// Scope: all server -> client realtime envelopes flow through `ServerEventMessage`
+// in `@revv/shared/src/events`. Inbound commands use REST endpoints.
 //
 // Doctrine: commit-first, broadcast-second (invariant #8). This service is
 // the broadcast point — callers MUST commit to SQLite first. Lost
 // broadcasts are reconstructible from DB on reconnect via the snapshot
-// REST endpoints.
+// REST endpoints. The interface carries no sequence cursor: the walkthrough
+// emitter owns `bumpSeq` (durable wire cursor) / `nextSeq` (in-memory
+// diagnostic) and stamps `seq` onto the envelope before it reaches here.
 
 import type { ServerEventMessage } from "@revv/shared";
 import { Context, Effect, Layer, Ref } from "effect";
@@ -22,12 +26,12 @@ import { Context, Effect, Layer, Ref } from "effect";
 const encoder = new TextEncoder();
 
 /**
- * Minimal writer surface the SSE route exposes to the bus. A writer:
+ * Minimal writer surface the SSE route exposes to the broadcaster. A writer:
  *   - encodes a JS object as an SSE `data:` frame and enqueues it
  *   - returns false if the underlying controller has been torn down
  *     (client disconnect, controller.close() raced with broadcast, etc.)
  *
- * The route owns lifecycle (controller, heartbeat); the bus only sees
+ * The route owns lifecycle (controller, heartbeat); the broadcaster only sees
  * this narrow interface so the two concerns stay separable.
  */
 export interface EventWriter {
@@ -43,8 +47,8 @@ interface Registration {
   readonly writer: EventWriter;
 }
 
-export class EventBus extends Context.Tag("EventBus")<
-  EventBus,
+export class Broadcaster extends Context.Tag("Broadcaster")<
+  Broadcaster,
   {
     /**
      * Register a writer for the given account. Returns an unsubscribe fn
@@ -58,25 +62,21 @@ export class EventBus extends Context.Tag("EventBus")<
       msg: ServerEventMessage,
     ) => Effect.Effect<void>;
 
-    /** Best-effort fan to every registered writer. */
-    readonly broadcast: (msg: ServerEventMessage) => Effect.Effect<void>;
-
-    /** Diagnostic — how many writers are currently open. */
-    readonly clientCount: Effect.Effect<number>;
+    /** Best-effort broadcast to every registered writer regardless of account. */
+    readonly broadcastAll: (msg: ServerEventMessage) => Effect.Effect<void>;
   }
 >() {}
 
-export const EventBusLive = Layer.effect(
-  EventBus,
+export const BroadcasterLive = Layer.effect(
+  Broadcaster,
   Effect.gen(function* () {
     const registrations = yield* Ref.make(new Set<Registration>());
     let nextId = 0;
 
     const dispatch = (target: Registration, msg: ServerEventMessage): void => {
       if (target.writer.isClosed()) return;
-      // Encoding once per message would shave work for a global fan; today
-      // every walkthrough event is account-scoped so per-target encoding is
-      // fine and keeps the writer surface from leaking SSE encoding details.
+      // Per-target encoding keeps the writer surface from leaking SSE encoding
+      // details; broadcasts are account-scoped so the fan-out is small.
       try {
         target.writer.send(msg);
       } catch {
@@ -116,15 +116,13 @@ export const EventBusLive = Layer.effect(
           }
         }),
 
-      broadcast: (msg) =>
+      broadcastAll: (msg) =>
         Effect.gen(function* () {
           const set = yield* Ref.get(registrations);
           for (const reg of set) {
             dispatch(reg, msg);
           }
         }),
-
-      clientCount: Effect.map(Ref.get(registrations), (set) => set.size),
     };
   }),
 );
@@ -140,7 +138,7 @@ export function encodeSseFrame(payload: unknown): Uint8Array {
   return encoder.encode(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
-/** Encode a `: ping` comment frame (keepalive, never reaches `onmessage`). */
+/** Encode a named heartbeat event so JS can observe liveness. */
 export function encodeSseHeartbeat(): Uint8Array {
-  return encoder.encode(": ping\n\n");
+  return encoder.encode("event: heartbeat\ndata: {}\n\n");
 }

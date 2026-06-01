@@ -23,7 +23,8 @@
     "dev": "turbo run dev",
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
-    "lint": "biome ci .",
+    "lint": "biome ci . && bun run check:import-boundaries",
+    "check:import-boundaries": "bun scripts/check-import-boundaries.ts",
     "lint:fix": "biome check --fix .",
     "format": "biome format --write .",
     "format:check": "biome format .",
@@ -39,6 +40,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.15",
+    "@effect/language-service": "^0.86.2",
     "@tauri-apps/cli": "^2",
     "concurrently": "^9.2.1",
     "knip": "^6.14.1",

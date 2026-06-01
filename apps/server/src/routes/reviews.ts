@@ -1,11 +1,11 @@
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { AppRuntime } from "../runtime";
+import { Broadcaster } from "../services/Broadcaster";
 import { ReviewService } from "../services/Review";
 import { SyncService } from "../services/Sync";
 import { WalkthroughJobs } from "../services/WalkthroughJobs";
-import { WebSocketHub } from "../services/WebSocketHub";
-import { handleAppError, withAuth } from "./middleware";
+import { handleAppError, withAccount } from "./middleware";
 import { activeSessionHandler } from "./reviews/handlers/active-session";
 import { submitGithubReviewHandler } from "./reviews/handlers/github-submit";
 import {
@@ -25,7 +25,7 @@ import { getCurrentWalkthroughHandler } from "./reviews/handlers/walkthrough-cur
  * walkthrough stream (formerly 370 lines inline) — lives in a handler file.
  */
 export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
-  .use(withAuth)
+  .use(withAccount)
 
   // ── Session lifecycle ──────────────────────────────────────────────────
   .get("/active/:prId", async (ctx) => {
@@ -93,7 +93,7 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
         const result = await AppRuntime.runPromise(
           Effect.gen(function* () {
             const reviewService = yield* ReviewService;
-            const hub = yield* WebSocketHub;
+            const broadcaster = yield* Broadcaster;
             // SyncService is kept as a dependency so future auto-push
             // from thread creation can be wired up without changing
             // this handler's shape.
@@ -124,7 +124,7 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
               .transitionStatus(thread.id, ctx.body.message.authorRole)
               .pipe(Effect.catchAll(() => Effect.succeed(null)));
 
-            yield* hub.broadcast({
+            yield* broadcaster.broadcastToAccount(ctx.account.accountId, {
               type: "thread:created",
               data: {
                 sessionId: ctx.params.id,

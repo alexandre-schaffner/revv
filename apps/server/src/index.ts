@@ -24,16 +24,15 @@ import { threadRoutes } from "./routes/threads";
 import { updateManifestRoute } from "./routes/update-manifest";
 import { userRoutes } from "./routes/user";
 import { walkthroughsRoute } from "./routes/walkthroughs";
-import { wsRoute } from "./routes/ws";
 import { AppRuntime } from "./runtime";
 import { ChatSessionService } from "./services/ChatSession";
 import { DbMaintenance } from "./services/DbMaintenance";
+import { Identity } from "./services/Identity";
 import { PollScheduler } from "./services/PollScheduler";
 import { ensureHighlighter } from "./services/PrerenderCache";
 import { ProjectRecapJobs } from "./services/ProjectRecapJobs";
 import { RecapScheduler } from "./services/RecapScheduler";
 import { RepoCloneService } from "./services/RepoClone";
-import { migrateLegacyTokens } from "./services/SecretStore";
 import { WalkthroughJobs } from "./services/WalkthroughJobs";
 import { acquireSingleInstance } from "./singleInstance";
 
@@ -112,7 +111,6 @@ const app = new Elysia()
   .use(onboardingRoutes)
   .use(userRoutes)
   .use(walkthroughsRoute)
-  .use(wsRoute)
   .use(eventsRoute)
   .use(debugRoutes)
   .use(mcpWalkthroughRoute)
@@ -137,7 +135,9 @@ logError("server", `listening on http://localhost:${port}`);
 // secure store, then null the columns. Awaited before the sync scheduler boots
 // so the first poll cycle reads tokens from their new home. One-time and
 // idempotent — a no-op once every row has been migrated.
-await AppRuntime.runPromise(migrateLegacyTokens)
+await AppRuntime.runPromise(
+  Effect.flatMap(Identity, (identity) => identity.migrateLegacyTokenSecrets),
+)
   .then((n) => {
     if (n > 0) logError("secret-store", `migrated ${n} GitHub token(s) into secure storage`);
   })
@@ -204,7 +204,7 @@ AppRuntime.runPromise(Effect.flatMap(WalkthroughJobs, (jobs) => jobs.resumePendi
 );
 
 // Start the background sync scheduler on boot, decoupled from any UI
-// client. Previously this was triggered from the WebSocket `open` handler,
+// client. Previously this was triggered from the realtime transport handler,
 // which meant sync only ran while the desktop window was open. With the
 // Tauri app running in tray mode (window hidden / closed to tray), the
 // server is the only long-lived process — it must drive its own polling.

@@ -11,7 +11,6 @@ import { fetchOrgs, initForUser, reset as resetOrgs } from "$lib/stores/orgs.sve
 import { fetchPinnedPrs, fetchPrs, fetchRepos, reset as resetPrs } from "$lib/stores/prs.svelte";
 import { clearReviewFiles } from "$lib/stores/review.svelte";
 import { fetchSettings, reset as resetSettings } from "$lib/stores/settings.svelte";
-import { connect as connectWs, disconnect as disconnectWs } from "$lib/stores/ws.svelte";
 
 const storedToken =
   typeof localStorage !== "undefined" ? localStorage.getItem("rev_session_token") : null;
@@ -65,7 +64,7 @@ let accountJustRemoved = $state(false);
  * Set when the active account's GitHub token is invalid and could not be
  * silently refreshed. Drives the blocking re-sign-in modal. Hydrated from
  * `/api/user/identity` on boot and updated live by the `auth:reauth-required`
- * / `auth:reauth-cleared` WS handlers. Cleared on successful re-auth.
+ * / `auth:reauth-cleared` SSE handlers. Cleared on successful re-auth.
  */
 let reauthRequired = $state<{ host: string | null; githubLogin: string | null } | null>(null);
 
@@ -374,7 +373,7 @@ export async function loadUser(): Promise<void> {
 
 /**
  * Apply a server-pushed user update (e.g. avatar URL rotation).
- * Called by the WS handler when the poll scheduler detects that the
+ * Called by the SSE event handler when the poll scheduler detects that the
  * authenticated user's GitHub profile changed.
  */
 export function applyUserUpdate(update: {
@@ -513,9 +512,7 @@ export async function switchAccount(userId: string, host?: string): Promise<void
       // Reconnect realtime channels with the new session token AND explicit
       // host so the server binds them to the target user's correct account on
       // the first attempt, even though the local settings store is still null.
-      disconnectWs();
       disconnectEvents();
-      connectWs(data.token, host);
       connectEvents(data.token, host);
       const persistHost = host
         ? fetch(`${API_BASE_URL}/api/settings`, {
@@ -561,7 +558,6 @@ export async function removeAccount(): Promise<void> {
   }
   // Server confirmed deletion — now clean up local state
   accountJustRemoved = true;
-  disconnectWs();
   disconnectEvents();
   clearToken();
   resetPrs();

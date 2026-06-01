@@ -43,7 +43,7 @@ $effect(() => {
 });
 
 // Hydrate the repo's recap list so the "Previous recaps" section below
-// has data to render. Cached after the first load — WS reducers in
+// has data to render. Cached after the first load — SSE reducers in
 // recaps.svelte.ts keep it fresh.
 $effect(() => {
   const id = repoId;

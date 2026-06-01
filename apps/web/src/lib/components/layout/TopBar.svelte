@@ -7,14 +7,13 @@ import PanelLeftOpen from "phosphor-svelte/lib/SidebarSimple";
 import Sun from "phosphor-svelte/lib/Sun";
 import { fetchOrgs } from "$lib/stores/orgs.svelte";
 import { getIsLoading, getSelectedPr, getSelectedPrId } from "$lib/stores/prs.svelte";
-import { getPrListSyncing } from "$lib/stores/sync.svelte";
+import { getPrListSyncing, requestFullSync, requestSync } from "$lib/stores/sync.svelte";
 import {
   getThemePreference,
   setThemePreference,
   type ThemePreference,
 } from "$lib/stores/theme.svelte";
 import { getTopbarSubtitle } from "$lib/stores/topbar.svelte";
-import { requestFullSync, requestSync } from "$lib/stores/ws.svelte";
 import FloatingTabs from "./FloatingTabs.svelte";
 
 interface Props {
@@ -31,7 +30,7 @@ const selectedPrId = $derived(getSelectedPrId());
 const theme = $derived(getThemePreference());
 const topbarSubtitle = $derived(getTopbarSubtitle());
 
-// Combines direct-HTTP sync (`getIsLoading`) with WebSocket-driven
+// Combines direct-HTTP sync (`getIsLoading`) with SSE-driven
 // PR-list sync (`getPrListSyncing`) so the spinner reflects any in-flight
 // PR-list sync regardless of transport. Mirrors what Sidebar used to do.
 const isSyncing = $derived(getIsLoading() || getPrListSyncing());

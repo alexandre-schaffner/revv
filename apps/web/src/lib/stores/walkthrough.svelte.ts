@@ -536,7 +536,7 @@ export function applyEvents(prId: string, events: WalkthroughStreamEvent[]): voi
         }
         // ── Lifecycle events (global SSE bus). Flip
         //    streaming/completion/error/superseded state without touching
-        //    content. Each one was previously a standalone WS envelope.
+        //    content. Each one was previously a standalone lifecycle envelope.
         case "lifecycle:started":
           entry.walkthroughId = event.data.walkthroughId;
           entry.isStreaming = true;
@@ -572,7 +572,7 @@ export function applyEvents(prId: string, events: WalkthroughStreamEvent[]): voi
             entry.isStreaming = false;
           } else if (event.data.code === "Cancelled") {
             // User-initiated stop — not a failure. Suppress the error
-            // banner so the UI falls through to the "resumable" / "idle"
+            // notification so the UI falls through to the "resumable" / "idle"
             // state based on whether partial content exists.
             entry.streamError = null;
             entry.isStreaming = false;

@@ -440,7 +440,7 @@ export function wrapStreamWithPersistence(
                   svc.applyTaskListSnapshot({
                     chatSessionId: ctx.chatSessionId,
                     turnId: ctx.turnId,
-                    source: value.source,
+                    source: ctx.agent,
                     tasks: value.tasks,
                   }),
                 ),
@@ -462,7 +462,7 @@ export function wrapStreamWithPersistence(
                   svc.createPlan({
                     chatSessionId: ctx.chatSessionId,
                     turnId: ctx.turnId,
-                    source: value.source,
+                    source: ctx.agent,
                     markdown: value.markdown,
                   }),
                 ),
@@ -489,7 +489,7 @@ export function wrapStreamWithPersistence(
                   svc.startSubagentInvocation({
                     chatSessionId: ctx.chatSessionId,
                     parentTurnId: ctx.turnId,
-                    source: value.source,
+                    source: ctx.agent,
                     providerCallId: value.providerCallId,
                     subagentType: value.subagentType,
                     description: value.description,
@@ -544,7 +544,7 @@ export function wrapStreamWithPersistence(
                   svc.createQuestion({
                     chatSessionId: ctx.chatSessionId,
                     turnId: ctx.turnId,
-                    source: value.source,
+                    source: ctx.agent,
                     providerRequestId: value.providerRequestId,
                     providerToolCallId: value.providerToolCallId ?? null,
                     previewFormat: value.previewFormat,

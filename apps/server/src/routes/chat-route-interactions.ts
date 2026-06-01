@@ -5,17 +5,14 @@
 
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
-import { withDb } from "../effects/with-db";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
-import { resolveAgent } from "../services/Ai";
+import { Broadcaster } from "../services/Broadcaster";
 import { ChatSessionService } from "../services/ChatSession";
-import { DbService } from "../services/Db";
 import { OpencodeSupervisor } from "../services/OpencodeSupervisor";
 import { takePendingQuestion } from "../services/PendingQuestionRegistry";
 import { PrContextService } from "../services/PrContext";
 import { SettingsService } from "../services/Settings";
-import { WebSocketHub } from "../services/WebSocketHub";
 import { handleAppError, jsonResponse, withAuth } from "./middleware";
 
 export const chatInteractionRoutes = new Elysia()
@@ -36,12 +33,8 @@ export const chatInteractionRoutes = new Elysia()
             const prCtx = yield* PrContextService;
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
-            const { db } = yield* DbService;
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-            const settings = yield* withDb(db, settingsService.getSettings()).pipe(
-              Effect.orElseSucceed(() => ({ aiAgent: "opencode" }) as { aiAgent: string | null }),
-            );
-            const agent = resolveAgent(settings);
+            const agent = yield* settingsService.resolveAgentOrDefault();
             if (!pr.headSha) return;
             const row = yield* chatSessions.find(pr.id, agent, pr.headSha);
             if (!row) return;
@@ -307,8 +300,12 @@ export const chatInteractionRoutes = new Elysia()
         // item locally; this is for cross-tab parity.
         try {
           await AppRuntime.runPromise(
-            Effect.flatMap(WebSocketHub, (hub) =>
-              hub.broadcast({
+            Effect.gen(function* () {
+              const prContext = yield* PrContextService;
+              const broadcaster = yield* Broadcaster;
+              const { repo } = yield* prContext.resolveBasic(prId, ctx.session.user.id);
+              const accountId = yield* prContext.getAccountIdForRepo(repo.id);
+              yield* broadcaster.broadcastToAccount(accountId, {
                 type: "chat:question-resolved",
                 data: {
                   prId,
@@ -320,8 +317,8 @@ export const chatInteractionRoutes = new Elysia()
                   // can flip the plan card locally without a refetch.
                   ...(supersededPlanId ? { supersededPlanId } : {}),
                 },
-              }),
-            ),
+              });
+            }),
           );
         } catch (err) {
           logError(
@@ -362,11 +359,7 @@ export const chatInteractionRoutes = new Elysia()
       const result = await AppRuntime.runPromise(
         Effect.gen(function* () {
           const settingsService = yield* SettingsService;
-          const { db } = yield* DbService;
-          const settings = yield* withDb(db, settingsService.getSettings()).pipe(
-            Effect.orElseSucceed(() => ({ aiAgent: "opencode" }) as { aiAgent: string | null }),
-          );
-          const agent = resolveAgent(settings);
+          const agent = yield* settingsService.resolveAgentOrDefault();
           if (agent === "claude") {
             return {
               agent: "claude" as const,

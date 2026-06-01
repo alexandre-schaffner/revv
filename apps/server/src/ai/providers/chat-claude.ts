@@ -13,19 +13,19 @@
 // `ChatStreamFrame`.
 
 import { type PermissionResult, query } from "@anthropic-ai/claude-agent-sdk";
-import type { InteractionMode, WalkthroughStreamEvent, WsServerMessage } from "@revv/shared";
+import type { InteractionMode, ThreadEventMessage, WalkthroughStreamEvent } from "@revv/shared";
 import { Effect } from "effect";
 import type { Db } from "../../db";
 import { AiGenerationError } from "../../domain/errors";
 import { logError } from "../../logger";
 import { AppRuntime } from "../../runtime";
+import { fireAndForgetThreadEventBroadcast } from "../../services/broadcast-thread-event";
 import {
   registerPendingQuestion,
   takePendingQuestion,
 } from "../../services/PendingQuestionRegistry";
 import { RemoteWalkthroughCache } from "../../services/RemoteWalkthroughCache";
 import { WalkthroughJobs } from "../../services/WalkthroughJobs";
-import { WebSocketHub } from "../../services/WebSocketHub";
 import {
   buildActivity,
   fluidEmit,
@@ -141,7 +141,7 @@ export function streamChatViaClaude(
         // emit + broadcastThreadEvent publish chat-edit walkthrough events
         // through `WalkthroughJobs.emitEvent` (CLAUDE.md invariant #7
         // carve-out, routed onto the global SSE bus) and `thread:*` events
-        // through the WebSocketHub. Both are fire-and-forget —
+        // through the global SSE bus. Both are fire-and-forget —
         // broadcast is best-effort per invariant #8.
         const emitWalkthroughEvent = (
           walkthroughId: string,
@@ -176,16 +176,8 @@ export function streamChatViaClaude(
             );
           });
         };
-        const broadcastThreadEvent = (msg: WsServerMessage): void => {
-          void AppRuntime.runPromise(
-            Effect.flatMap(WebSocketHub, (hub) => hub.broadcast(msg)),
-          ).catch((err) => {
-            logError(
-              "chat-claude",
-              "thread broadcast failed:",
-              err instanceof Error ? err.message : String(err),
-            );
-          });
+        const broadcastThreadEvent = (msg: ThreadEventMessage): void => {
+          fireAndForgetThreadEventBroadcast("chat-claude", opts.prId, opts.userId, msg);
         };
 
         const mcpServer = enableMcp
@@ -274,7 +266,6 @@ export function streamChatViaClaude(
             providerRequestId,
             questions,
             previewFormat: "markdown",
-            source: "claude",
           });
           lastWasNonText = true;
 
@@ -448,7 +439,6 @@ export function streamChatViaClaude(
           } else if (ev.kind === "task-list-update") {
             controller.enqueue({
               kind: "task-list",
-              source: ev.source,
               tasks: ev.tasks,
             });
             lastWasNonText = true;
@@ -457,7 +447,6 @@ export function streamChatViaClaude(
               kind: "plan-presented",
               providerPlanId: ev.providerPlanId,
               markdown: ev.markdown,
-              source: ev.source,
             });
             lastWasNonText = true;
           } else if (ev.kind === "subagent-start") {
@@ -467,7 +456,6 @@ export function streamChatViaClaude(
               subagentType: ev.subagentType,
               description: ev.description,
               prompt: ev.prompt,
-              source: ev.source,
             });
             lastWasNonText = true;
           } else if (ev.kind === "subagent-end") {
@@ -476,7 +464,6 @@ export function streamChatViaClaude(
               providerCallId: ev.providerCallId,
               result: ev.result,
               ok: ev.ok,
-              source: ev.source,
             });
             lastWasNonText = true;
           } else if (ev.kind === "user-question-asked") {
@@ -489,7 +476,6 @@ export function streamChatViaClaude(
               providerRequestId: ev.providerRequestId,
               questions: ev.questions,
               previewFormat: ev.previewFormat,
-              source: ev.source,
               ...(ev.providerToolCallId ? { providerToolCallId: ev.providerToolCallId } : {}),
             });
             lastWasNonText = true;

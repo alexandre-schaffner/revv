@@ -2,7 +2,7 @@ import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { listCliModels } from "../ai/providers/cli-agent";
 import { AppRuntime } from "../runtime";
-import { AiService, resolveAgent } from "../services/Ai";
+import { AiService } from "../services/Ai";
 import { BlobStore } from "../services/blob/BlobStore";
 import { SshSigner } from "../services/cache-signing/index";
 import { PollScheduler } from "../services/PollScheduler";
@@ -331,10 +331,9 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
         if (agentParam === "opencode" || agentParam === "claude") {
           agent = agentParam;
         } else {
-          const settings = await AppRuntime.runPromise(
-            Effect.flatMap(SettingsService, (s) => s.getSettings()),
+          agent = await AppRuntime.runPromise(
+            Effect.flatMap(SettingsService, (s) => s.resolveAgent()),
           );
-          agent = resolveAgent(settings);
         }
         const models = await listCliModels(agent);
         return { models, agent };

@@ -27,12 +27,12 @@ import {
   setReviewFiles,
   switchPrViewState,
 } from "$lib/stores/review.svelte";
+import { requestThreadSync } from "$lib/stores/sync.svelte";
 import {
   deactivate as deactivateWalkthrough,
   getRiskLevel as getWalkthroughRiskLevel,
 } from "$lib/stores/walkthrough.svelte";
 import { setScrollRoot } from "$lib/stores/walkthroughNav.svelte";
-import { requestThreadSync } from "$lib/stores/ws.svelte";
 
 const pr = $derived(getSelectedPr());
 const files = $derived(getReviewFiles());
@@ -149,7 +149,7 @@ $effect(() => {
     requestThreadSync(prId);
 
     // Short-circuit: same PR, recent load, files still in memory —
-    // keep rendering what's there. A WS `cache:invalidated` (Phase 3)
+    // keep rendering what's there. An SSE `cache:invalidated` (Phase 3)
     // or a hard refresh will bust this.
     const now = Date.now();
     const currentFiles = getReviewFiles();

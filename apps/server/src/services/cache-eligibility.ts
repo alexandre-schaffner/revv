@@ -18,7 +18,7 @@ import { account, user } from "../db/schema";
 import { extractHostFromProviderId } from "../domain/provider-id";
 import { debug } from "../logger";
 import { DbService } from "./Db";
-import { GitHubService } from "./GitHub";
+import { GitHubGateway } from "./GitHub";
 import { SettingsService } from "./Settings";
 import { TokenProvider } from "./TokenProvider";
 
@@ -72,7 +72,7 @@ export const CacheEligibilityLive = Layer.effect(
   CacheEligibility,
   Effect.gen(function* () {
     const settingsSvc = yield* SettingsService;
-    const githubSvc = yield* GitHubService;
+    const githubSvc = yield* GitHubGateway;
     const { db } = yield* DbService;
     const tokenProvider = yield* TokenProvider;
 
@@ -135,8 +135,8 @@ export const CacheEligibilityLive = Layer.effect(
       repo: string,
       login: string,
     ): Effect.Effect<PermLevel> =>
-      githubSvc
-        .getCollaboratorPermission(token, host, owner, repo, login)
+      githubSvc.repos
+        .collaboratorPermission(token, host, owner, repo, login)
         .pipe(Effect.catchAll(() => Effect.succeed("none" as PermLevel)));
 
     // Invalidate on settings changes (host set may change).

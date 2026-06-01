@@ -29,6 +29,7 @@
 import type { ProjectRecap, RecapPeriod, RecapStreamEvent, RecapSummaryStats } from "@revv/shared";
 import { z } from "zod";
 import type { Db } from "../../../db";
+import type { ToolSpec as GatewayToolSpec, McpToolResult } from "../mcp-tool-gateway";
 
 // ── Handler execution context ────────────────────────────────────────────────
 
@@ -80,9 +81,7 @@ export interface RecapToolContext {
   readonly toolCalls?: Set<string>;
 }
 
-export interface RecapToolResult {
-  content: Array<{ type: "text"; text: string }>;
-  isError?: boolean;
+export interface RecapToolResult extends McpToolResult {
   [k: string]: unknown;
 }
 
@@ -91,17 +90,7 @@ export type RecapToolHandler<TInput> = (
   input: TInput,
 ) => Promise<RecapToolResult>;
 
-/**
- * Non-generic storage type for a heterogenous array of tool specs.
- * Uses method declaration (bivariant checking) so handlers with narrower
- * input types are assignable to the wider Record<string, unknown> slot.
- */
-export interface RecapToolSpecRecord {
-  readonly name: string;
-  readonly description: string;
-  readonly inputSchema: z.ZodObject<z.ZodRawShape>;
-  handler(ctx: RecapToolContext, input: Record<string, unknown>): Promise<RecapToolResult>;
-}
+export type RecapToolSpecRecord = GatewayToolSpec<RecapToolContext, RecapToolResult>;
 
 // ── Source bundle: the structured input the agent sees ───────────────────────
 

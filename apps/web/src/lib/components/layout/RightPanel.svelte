@@ -5,7 +5,6 @@ import Check from "phosphor-svelte/lib/Check";
 import CheckCircle from "phosphor-svelte/lib/CheckCircle";
 import Circle from "phosphor-svelte/lib/Circle";
 import Copy from "phosphor-svelte/lib/Copy";
-import Gear from "phosphor-svelte/lib/Gear";
 import GitBranch from "phosphor-svelte/lib/GitBranch";
 import GitCommit from "phosphor-svelte/lib/GitCommit";
 import GitMerge from "phosphor-svelte/lib/GitMerge";
@@ -97,7 +96,6 @@ import {
   clearCommitSelection,
   discardProposedCommitAction,
   enqueueMessage,
-  getChatError,
   getChatItems,
   getCheckpoints,
   getInteractionMode,
@@ -168,7 +166,6 @@ const streamingTurnIds = $derived(
   ),
 );
 const isStreaming = $derived(prId ? isChatStreaming(prId) : false);
-const error = $derived(prId ? getChatError(prId) : null);
 const proposed = $derived(prId ? getProposedChanges(prId) : null);
 const commitCount = $derived(proposed?.commits.length ?? 0);
 const isPushing = $derived(prId ? isPushingProposed(prId) : false);
@@ -621,7 +618,7 @@ function activitiesForTurn(
 		resetKey={prId}
 		innerClass="min-h-0"
 	>
-		{#if items.length === 0 && !error}
+			{#if items.length === 0}
 			<ConversationEmptyState
 				title="Ask the agent about this pull request"
 				description="The agent runs inside the PR's worktree and can read the code, propose fixes, and commit them on a working branch."
@@ -757,12 +754,6 @@ function activitiesForTurn(
 							{#if item.content}
 								<MessageResponse content={item.content} class="text-sm leading-relaxed" />
 							{/if}
-							{#if item.error}
-								<div class="mt-2 flex items-start gap-1.5 rounded border border-border bg-muted/60 px-2 py-1.5 text-xs text-muted-foreground" role="alert">
-									<Warning size={12} weight="fill" class="mt-0.5 shrink-0" />
-									<span class="min-w-0 break-words">{item.error}</span>
-								</div>
-							{/if}
 						</MessageContent>
 					</Message>
 					{/if}
@@ -830,28 +821,6 @@ function activitiesForTurn(
 							</div>
 						{:else}
 							<StreamingVerb />
-						{/if}
-					</div>
-				{/if}
-
-				{#if error && !isStreaming}
-					<div class="error-state">
-						{#if error.code === 'NOT_CONFIGURED'}
-							<Gear size={24} weight="fill" class="error-icon" />
-							<p class="error-primary">AI not configured</p>
-							<p class="error-hint">
-								Install <a href="https://opencode.ai" class="error-link">opencode</a>
-								or <a href="https://claude.ai/code" class="error-link">Claude Code</a>
-								and authenticate, then select your CLI agent in <a href="/settings" class="error-link">Gear</a>.
-							</p>
-						{:else if error.code === 'RATE_LIMITED'}
-							<Warning size={24} weight="fill" class="error-icon" />
-							<p class="error-primary">Rate limited</p>
-							<p class="error-hint">{error.message}</p>
-						{:else}
-							<Warning size={24} weight="fill" class="error-icon" />
-							<p class="error-primary">Chat failed</p>
-							<p class="error-hint">{error.message}</p>
 						{/if}
 					</div>
 				{/if}
@@ -1851,40 +1820,6 @@ function activitiesForTurn(
 		white-space: nowrap;
 		min-width: 0;
 		color: var(--color-text-muted);
-	}
-
-	/* Error states */
-	.error-state {
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		padding: 24px;
-		text-align: center;
-		gap: 6px;
-	}
-
-	:global(.error-icon) {
-		color: var(--color-text-muted);
-		margin-bottom: 4px;
-	}
-
-	.error-primary {
-		font-size: 13px;
-		font-weight: 500;
-		color: var(--color-text-secondary);
-		margin: 0;
-	}
-
-	.error-hint {
-		font-size: 12px;
-		color: var(--color-text-muted);
-		margin: 0;
-	}
-
-	.error-link {
-		color: var(--color-accent);
-		text-decoration: underline;
-		text-underline-offset: 2px;
 	}
 
 	/* Queue dock — floats above the composer inside the floating composer
