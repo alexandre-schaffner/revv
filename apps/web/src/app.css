@@ -909,6 +909,32 @@ body {
    ────────────────────────────────────────────────────────── */
 diffs-container {
   color-scheme: inherit;
+
+  /* Base code-block surface (kills Pierre's #fff / #000 default) */
+  --diffs-light-bg: var(--color-diff-bg);
+  --diffs-dark-bg: var(--color-diff-bg);
+
+  /* Gutter / line-number column */
+  --diffs-bg-context-number-override: var(--color-diff-gutter-bg);
+  --diffs-fg-number-override: var(--color-text-muted);
+
+  /* Context-line hover */
+  --diffs-bg-hover-override: var(--color-diff-ctx-bg-hover);
+
+  /* Additions */
+  --diffs-bg-addition-override: var(--color-diff-add-bg);
+  --diffs-bg-addition-number-override: var(--color-diff-add-gutter);
+  --diffs-bg-addition-hover-override: var(--color-diff-add-bg-hover);
+  --diffs-bg-addition-emphasis-override: var(--color-diff-add-word);
+
+  /* Deletions */
+  --diffs-bg-deletion-override: var(--color-diff-del-bg);
+  --diffs-bg-deletion-number-override: var(--color-diff-del-gutter);
+  --diffs-bg-deletion-hover-override: var(--color-diff-del-bg-hover);
+  --diffs-bg-deletion-emphasis-override: var(--color-diff-del-word);
+
+  /* Line selection (accent-tinted) */
+  --diffs-bg-selection-override: var(--color-diff-selected-bg);
 }
 :root[data-diff-theme="light"] diffs-container {
   color-scheme: light;
