@@ -133,7 +133,11 @@ function parseProviderConfig(raw: string | null, modelUsed: string): GenerationP
     }
     const c = parsed as Record<string, unknown>;
     const provider: GenerationProviderConfig["provider"] =
-      c.provider === "opencode" ? "opencode" : "claude-agent-sdk";
+      c.provider === "opencode"
+        ? "opencode"
+        : c.provider === "codex"
+          ? "codex"
+          : "claude-agent-sdk";
     return {
       provider,
       model: typeof c.model === "string" ? c.model : modelUsed,

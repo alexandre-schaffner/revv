@@ -60,7 +60,7 @@ export type ThinkingEffort = "ultrathink" | "max" | "extra-high" | "high" | "med
 
 export type ContextWindow = "200k" | "1m";
 
-export type AiAgent = "opencode" | "claude";
+export type AiAgent = "opencode" | "claude" | "codex";
 
 /**
  * Per-feature override for which agent generates project recaps.
@@ -69,7 +69,7 @@ export type AiAgent = "opencode" | "claude";
  * user run Claude for interactive walkthroughs but keep background recaps
  * on opencode (cheaper, unattended), or vice versa.
  */
-export type RecapAgentChoice = "auto" | "opencode" | "claude";
+export type RecapAgentChoice = "auto" | "opencode" | "claude" | "codex";
 
 /**
  * Which CLI agents are detected on PATH (or pinned via the LaunchAgent
@@ -79,6 +79,7 @@ export type RecapAgentChoice = "auto" | "opencode" | "claude";
 export interface AgentAvailability {
   opencode: boolean;
   claude: boolean;
+  codex: boolean;
 }
 
 /**

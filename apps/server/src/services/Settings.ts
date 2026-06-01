@@ -62,7 +62,12 @@ function coerceUpdateChannel(value: unknown): UpdateChannel {
     : DEFAULT_SETTINGS.updateChannel;
 }
 
-const VALID_RECAP_AGENTS: ReadonlySet<RecapAgentChoice> = new Set(["auto", "opencode", "claude"]);
+const VALID_RECAP_AGENTS: ReadonlySet<RecapAgentChoice> = new Set([
+  "auto",
+  "opencode",
+  "claude",
+  "codex",
+]);
 
 export type AgentId = AiAgent;
 
@@ -107,7 +112,9 @@ function normalize(raw: unknown): UserSettings {
         ? (r.aiThinkingEffort as ThinkingEffort)
         : DEFAULT_SETTINGS.aiThinkingEffort,
     aiAgent:
-      r.aiAgent === "opencode" || r.aiAgent === "claude" ? r.aiAgent : DEFAULT_SETTINGS.aiAgent,
+      r.aiAgent === "opencode" || r.aiAgent === "claude" || r.aiAgent === "codex"
+        ? r.aiAgent
+        : DEFAULT_SETTINGS.aiAgent,
     aiContextWindow:
       typeof r.aiContextWindow === "string"
         ? (r.aiContextWindow as ContextWindow)
@@ -186,19 +193,19 @@ function coerceRecap(value: unknown): UserSettings["recap"] {
 
 function resolveAgentFromSettings(settings: Pick<UserSettings, "aiAgent">): AgentId {
   const agent = settings.aiAgent ?? DEFAULT_SETTINGS.aiAgent;
-  if (agent === "opencode" || agent === "claude") return agent;
+  if (agent === "opencode" || agent === "claude" || agent === "codex") return agent;
   throw new ValidationError({
-    message: `Unknown aiAgent '${agent}' — expected "opencode" or "claude"`,
+    message: `Unknown aiAgent '${agent}' — expected "opencode", "claude", or "codex"`,
     field: "aiAgent",
   });
 }
 
 function resolveRecapAgentFromSettings(settings: Pick<UserSettings, "aiAgent" | "recap">): AgentId {
   const choice = settings.recap?.agent ?? DEFAULT_SETTINGS.recap.agent;
-  if (choice === "opencode" || choice === "claude") return choice;
+  if (choice === "opencode" || choice === "claude" || choice === "codex") return choice;
   if (choice === "auto") return resolveAgentFromSettings(settings);
   throw new ValidationError({
-    message: `Unknown recap.agent '${choice}' — expected "auto", "opencode", or "claude"`,
+    message: `Unknown recap.agent '${choice}' — expected "auto", "opencode", "claude", or "codex"`,
     field: "recap.agent",
   });
 }

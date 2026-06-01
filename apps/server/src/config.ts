@@ -46,6 +46,7 @@ export const ServerConfig = Config.all({
   // apps/server/src/ai/providers/cli-agent.ts for the resolution chain.
   claudeBin: Config.string("REVV_CLAUDE_BIN").pipe(Config.withDefault("")),
   opencodeBin: Config.string("REVV_OPENCODE_BIN").pipe(Config.withDefault("")),
+  codexBin: Config.string("REVV_CODEX_BIN").pipe(Config.withDefault("")),
   cloneDir: Config.string("REVV_CLONE_DIR").pipe(
     Config.withDefault(join(homedir(), ".revv", "repos")),
   ),

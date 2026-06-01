@@ -28,7 +28,10 @@ import {
   walkOpencodePartsWithState,
   withAgentTurn,
 } from "../agent-stream";
+import { AgentUnavailableError } from "./chat-agent-errors";
 import type { RawChatStreamFrame } from "./chat-claude";
+
+export { AgentUnavailableError } from "./chat-agent-errors";
 
 // ── Manual span helper for non-Effect async paths ─────────────────────────────
 
@@ -90,16 +93,6 @@ export interface OpencodeChatDeps {
  * `plan` agent configured. Carried up to the route which surfaces it as a
  * 422 with a `code: 'AGENT_UNAVAILABLE'` body the client can interpret.
  */
-export class AgentUnavailableError extends Error {
-  readonly code = "AGENT_UNAVAILABLE";
-  constructor(public readonly agentName: string) {
-    super(
-      `opencode daemon has no agent named '${agentName}'. Install or configure one in .opencode/opencode.toml.`,
-    );
-    this.name = "AgentUnavailableError";
-  }
-}
-
 export interface StreamChatViaOpencodeOptions {
   readonly message: string;
   readonly systemPrompt: string;

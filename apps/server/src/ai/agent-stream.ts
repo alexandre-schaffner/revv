@@ -45,6 +45,7 @@
 export type { Part } from "@opencode-ai/sdk/v2";
 export * from "./agent-stream/agent-turn";
 export * from "./agent-stream/claude-walker";
+export * from "./agent-stream/codex-walker";
 export * from "./agent-stream/fluid-chunker";
 // Re-export everything from the split modules so existing import paths work
 export * from "./agent-stream/normalized-events";

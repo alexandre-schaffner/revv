@@ -30,6 +30,7 @@ function detectAgentsSync(): AgentAvailability {
   return {
     opencode: checkCliAvailability("opencode"),
     claude: checkCliAvailability("claude"),
+    codex: checkCliAvailability("codex"),
   };
 }
 

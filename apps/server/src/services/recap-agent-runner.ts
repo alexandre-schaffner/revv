@@ -27,6 +27,7 @@ import { eq } from "drizzle-orm";
 import { walkClaudeMessages } from "../ai/agent-stream";
 import { buildRecapUserMessage, RECAP_SYSTEM_PROMPT } from "../ai/prompts/recap";
 import { resolveCliBin } from "../ai/providers/cli-agent";
+import { runRecapAgentViaCodex } from "../ai/providers/recap-codex";
 import {
   createRecapDispatchState,
   dispatchRecapStreamEvent,
@@ -139,7 +140,9 @@ export async function runRecapAgent(params: RunRecapAgentParams): Promise<RecapA
   const outcome =
     params.effectiveAgent === "opencode"
       ? await runViaOpencode(params, ctx)
-      : await runViaClaude(params, ctx);
+      : params.effectiveAgent === "codex"
+        ? await runViaCodex(params, ctx)
+        : await runViaClaude(params, ctx);
   let errorMessage = outcome.error;
 
   if (!validatedComplete) {
@@ -315,6 +318,40 @@ async function runViaOpencode(
 
   if (result.error) {
     logError("recap-agent-runner", `opencode recap ${params.recapId} failed:`, result.error);
+    return { error: result.error };
+  }
+
+  return result.tokenUsage ? { tokenUsage: result.tokenUsage } : {};
+}
+
+// ── Codex path ─────────────────────────────────────────────────────────────
+
+async function runViaCodex(
+  params: RunRecapAgentParams,
+  ctx: RecapToolContext,
+): Promise<RunOutcome> {
+  // Codex reuses the same session-token callbacks as opencode (the HTTP-MCP
+  // route authenticates against the same in-memory map); it needs no daemon
+  // supervisor deps.
+  if (!params.sessionDeps) {
+    throw new Error("Recap codex path requires sessionDeps — orchestrator must wire them");
+  }
+  if (!params.repoWorkingDir) {
+    throw new Error("Recap codex path requires repoWorkingDir — orchestrator must wire it");
+  }
+
+  debug("recap-agent-runner", "starting codex run for recap", params.recapId);
+
+  const result = await runRecapAgentViaCodex({
+    ctx,
+    modelUsed: params.modelUsed,
+    workingDir: params.repoWorkingDir,
+    abortController: params.abortController,
+    sessionDeps: params.sessionDeps,
+  });
+
+  if (result.error) {
+    logError("recap-agent-runner", `codex recap ${params.recapId} failed:`, result.error);
     return { error: result.error };
   }
 

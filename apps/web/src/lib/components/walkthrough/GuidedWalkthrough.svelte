@@ -34,6 +34,7 @@ import {
   getIsSuperseded,
   getIssues,
   getLastCompletedPhase,
+  getLastWalkthroughEventAt,
   getPhase,
   getProviderConfig,
   getRatings,
@@ -211,6 +212,58 @@ $effect(() => {
     if (elapsedTimer) {
       clearInterval(elapsedTimer);
       elapsedTimer = null;
+    }
+  };
+});
+
+// ── Stream-stall watchdog ───────────────────────────────────────────
+// SSE delivery is best-effort (doctrine invariant #8): a fast-failing job
+// (e.g. an agent usage-limit hit that errors in <1s) can have its terminal
+// `lifecycle:error` envelope — along with `lifecycle:started`/`phase` — miss
+// this client entirely (broadcast/registration race, transient gap). The
+// connection-level dead-socket watchdog in events.svelte.ts never fires
+// because heartbeats keep flowing, so the entry stays `isStreaming` forever
+// and the error never surfaces. Mirrors the clone poller below: when a live
+// stream goes silent past the threshold, re-hydrate from `/current`, which is
+// authoritative for the terminal status regardless of SSE delivery.
+//
+// Two thresholds: a tight one before the first substantive SSE event confirms
+// the job is live (`lifecycle:started` should land within ~1-2s of Generate),
+// and a heartbeat-tolerant one afterward (the server emits a `phase` heartbeat
+// every 45s, so a genuinely-alive job is never silent that long).
+const STREAM_START_STALL_MS = 20_000;
+const STREAM_STALL_MS = 90_000;
+const STALL_CHECK_INTERVAL_MS = 5_000;
+let stallTimer: ReturnType<typeof setInterval> | null = null;
+let lastStallReconcileAt = 0;
+$effect(() => {
+  if (!isStreaming || cloneInProgress) {
+    if (stallTimer) {
+      clearInterval(stallTimer);
+      stallTimer = null;
+    }
+    return;
+  }
+  const watchedPrId = prId;
+  stallTimer = setInterval(() => {
+    const threshold = isLiveGeneration ? STREAM_STALL_MS : STREAM_START_STALL_MS;
+    const lastActivity = Math.max(
+      getLastWalkthroughEventAt(watchedPrId) ?? 0,
+      streamStartedAt ?? 0,
+    );
+    const now = Date.now();
+    if (now - lastActivity <= threshold) return;
+    // Gate so we reconcile at most once per window — for a genuinely-still-
+    // generating row `/current` keeps `isStreaming` true and doesn't refresh
+    // the activity clock, which would otherwise hammer the endpoint every tick.
+    if (now - lastStallReconcileAt <= threshold) return;
+    lastStallReconcileAt = now;
+    void hydrateFromCache(watchedPrId, { activate: false });
+  }, STALL_CHECK_INTERVAL_MS);
+  return () => {
+    if (stallTimer) {
+      clearInterval(stallTimer);
+      stallTimer = null;
     }
   };
 });
@@ -795,6 +848,7 @@ onMount(() => {
 
 onDestroy(() => {
   if (elapsedTimer) clearInterval(elapsedTimer);
+  if (stallTimer) clearInterval(stallTimer);
   if (walkthroughDebounce) clearTimeout(walkthroughDebounce);
   stopClonePoll(prId);
 });

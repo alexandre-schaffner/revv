@@ -57,7 +57,7 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
           ]),
           aiContextWindow: t.Union([t.Literal("200k"), t.Literal("1m")]),
           aiMaxTurns: t.Number({ minimum: 10, maximum: 500 }),
-          aiAgent: t.Union([t.Literal("opencode"), t.Literal("claude")]),
+          aiAgent: t.Union([t.Literal("opencode"), t.Literal("claude"), t.Literal("codex")]),
           theme: t.Union([t.Literal("system"), t.Literal("light"), t.Literal("dark")]),
           diffViewMode: t.Union([t.Literal("unified"), t.Literal("split")]),
           autoFetchInterval: t.Number(),
@@ -67,7 +67,12 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
               enabled: t.Boolean(),
               dailyEnabled: t.Boolean(),
               weeklyEnabled: t.Boolean(),
-              agent: t.Union([t.Literal("auto"), t.Literal("opencode"), t.Literal("claude")]),
+              agent: t.Union([
+                t.Literal("auto"),
+                t.Literal("opencode"),
+                t.Literal("claude"),
+                t.Literal("codex"),
+              ]),
             }),
           ),
           cache: t.Partial(
@@ -327,8 +332,8 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
     async (ctx) => {
       try {
         const agentParam = ctx.query?.agent;
-        let agent: "opencode" | "claude";
-        if (agentParam === "opencode" || agentParam === "claude") {
+        let agent: "opencode" | "claude" | "codex";
+        if (agentParam === "opencode" || agentParam === "claude" || agentParam === "codex") {
           agent = agentParam;
         } else {
           agent = await AppRuntime.runPromise(
@@ -344,7 +349,9 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
     {
       query: t.Optional(
         t.Object({
-          agent: t.Optional(t.Union([t.Literal("opencode"), t.Literal("claude")])),
+          agent: t.Optional(
+            t.Union([t.Literal("opencode"), t.Literal("claude"), t.Literal("codex")]),
+          ),
         }),
       ),
     },

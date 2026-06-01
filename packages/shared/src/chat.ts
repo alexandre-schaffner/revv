@@ -38,7 +38,7 @@ export interface ChatPlan {
   readonly turnId: string;
   readonly planMarkdown: string;
   readonly status: "pending" | "approved" | "rejected" | "superseded";
-  readonly source: "claude" | "opencode";
+  readonly source: "claude" | "opencode" | "codex";
   readonly createdAt: string;
   readonly decidedAt: string | null;
 }
@@ -55,7 +55,7 @@ export interface ChatSubagentInvocation {
   readonly prompt: string;
   readonly status: "running" | "completed" | "errored";
   readonly result: string | null;
-  readonly source: "claude" | "opencode";
+  readonly source: "claude" | "opencode" | "codex";
   readonly startedAt: string;
   readonly completedAt: string | null;
 }
@@ -103,7 +103,7 @@ export interface ChatQuestion {
   readonly id: string;
   readonly turnId: string;
   readonly providerRequestId: string;
-  readonly source: "claude" | "opencode";
+  readonly source: "claude" | "opencode" | "codex";
   readonly questions: ReadonlyArray<NormalizedQuestion>;
   readonly status: "pending" | "answered" | "rejected" | "superseded";
   /** Map question text → labels chosen. Null when status === 'pending'. */

@@ -297,7 +297,7 @@ export interface ProposedCommit {
  */
 export function wrapStreamWithPersistence(
   source: ReadableStream<RawChatStreamFrame>,
-  ctx: { chatSessionId: string; turnId: string; agent: "claude" | "opencode" },
+  ctx: { chatSessionId: string; turnId: string; agent: "claude" | "opencode" | "codex" },
 ): ReadableStream<ChatStreamFrame> {
   return new ReadableStream<ChatStreamFrame>({
     async start(controller) {

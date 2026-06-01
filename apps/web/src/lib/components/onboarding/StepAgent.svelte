@@ -4,6 +4,7 @@ import ChevronLeft from "phosphor-svelte/lib/CaretLeft";
 import { onDestroy, onMount } from "svelte";
 import { API_BASE_URL } from "$lib/api/base-url";
 import AnthropicIcon from "$lib/components/icons/AnthropicIcon.svelte";
+import OpenAIIcon from "$lib/components/icons/OpenAIIcon.svelte";
 import OpenCodeIcon from "$lib/components/icons/OpenCodeIcon.svelte";
 import Dotmatrix from "$lib/components/ui/dotmatrix/Dotmatrix.svelte";
 import {
@@ -28,10 +29,12 @@ let { onContinue, onBack, onSkip }: Props = $props();
 
 const OPENCODE: AiAgent = "opencode";
 const CLAUDE: AiAgent = "claude";
+const CODEX: AiAgent = "codex";
 
 const TAGLINES: Record<AiAgent, string> = {
   opencode: "Local engine, works out of the box.",
   claude: "Anthropic's reasoning model.",
+  codex: "OpenAI's coding agent.",
 };
 
 // ── Detection state ──────────────────────────────────────────────────────
@@ -69,16 +72,15 @@ onMount(async () => {
     mode = "picker";
     return;
   }
-  if (data.opencode || data.claude) {
+  if (data.opencode || data.claude || data.codex) {
     // If the saved agent isn't installed, nudge the selection to whichever
-    // IS installed so Continue doesn't pick a missing CLI.
+    // IS installed (preference order opencode → claude → codex) so Continue
+    // doesn't pick a missing CLI.
     const saved = (getSettings()?.aiAgent as AiAgent | undefined) ?? OPENCODE;
-    if (saved === OPENCODE && !data.opencode && data.claude) {
-      selected = CLAUDE;
-    } else if (saved === CLAUDE && !data.claude && data.opencode) {
-      selected = OPENCODE;
-    } else {
+    if (data[saved]) {
       selected = saved;
+    } else {
+      selected = data.opencode ? OPENCODE : data.claude ? CLAUDE : CODEX;
     }
     mode = "picker";
   } else {
@@ -238,6 +240,25 @@ function handleSkip(): void {
 						{/if}
 					</span>
 					<span class="option-host">{TAGLINES.claude}</span>
+				</span>
+			</label>
+
+			<label class="option" data-selected={selected === CODEX}>
+				<input type="radio" name="agent" value={CODEX} bind:group={selected} />
+				<span class="option-mark" aria-hidden="true"></span>
+				<span class="option-icon" aria-hidden="true">
+					<OpenAIIcon size={20} />
+				</span>
+				<span class="option-body">
+					<span class="option-row">
+						<span class="option-name">Codex</span>
+						{#if availability?.codex}
+							<span class="option-tag tag-installed">installed</span>
+						{:else}
+							<span class="option-tag tag-missing">not installed</span>
+						{/if}
+					</span>
+					<span class="option-host">{TAGLINES.codex}</span>
 				</span>
 			</label>
 		</fieldset>

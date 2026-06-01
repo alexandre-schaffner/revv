@@ -34,7 +34,7 @@ export const CACHE_SCHEMA_VERSION = 1 as const;
  * • 1m context" from the original run rather than the live settings.
  */
 export interface GenerationProviderConfig {
-  provider: "claude-agent-sdk" | "opencode";
+  provider: "claude-agent-sdk" | "opencode" | "codex";
   model: string;
   /** "ultrathink" | "max" | "extra-high" | "high" | "medium" | "low" | null. */
   thinkingEffort: string | null;

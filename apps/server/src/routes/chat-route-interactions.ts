@@ -368,6 +368,15 @@ export const chatInteractionRoutes = new Elysia()
               planAvailable: true,
             };
           }
+          if (agent === "codex") {
+            // Codex currently requires danger-full-access for MCP tool execution,
+            // so there is no enforceable read-only plan turn yet.
+            return {
+              agent: "codex" as const,
+              agents: [] as readonly string[],
+              planAvailable: false,
+            };
+          }
           // opencode: probe the supervisor's cached agent list.
           const supervisor = yield* OpencodeSupervisor;
           const agents = yield* supervisor.listAgents();

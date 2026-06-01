@@ -29,8 +29,7 @@ import { Switch } from "$lib/components/ui/switch";
 import {
   agentSupportsContextWindow,
   agentSupportsThinkingEffort,
-  OPUS_ONLY_EFFORTS,
-  THINKING_EFFORT_OPTIONS,
+  thinkingEffortOptionsFor,
 } from "$lib/constants/models";
 import { getUser, removeAccount, resetOnboarding, signOut } from "$lib/stores/auth.svelte";
 import { deleteRepo, getRepositories } from "$lib/stores/prs.svelte";
@@ -225,6 +224,7 @@ const recapAgentOptions: { value: RecapAgentChoice; label: string }[] = [
   { value: "auto", label: "Auto (follow main agent)" },
   { value: "opencode", label: "OpenCode" },
   { value: "claude", label: "Claude SDK" },
+  { value: "codex", label: "Codex" },
 ];
 
 const runningInTauri = isTauri();
@@ -317,14 +317,9 @@ let currentSuggestionsModel = $derived(getSettings()?.aiSuggestionsModel ?? "");
 let currentSuggestionsModelLabel = $derived(
   modelOptions.find((o) => o.value === currentSuggestionsModel)?.label ?? currentSuggestionsModel,
 );
-let isOpus48 = $derived(currentModel === "claude-opus-4-8");
 let showThinkingEffort = $derived(agentSupportsThinkingEffort(aiAgent));
 let showContextWindow = $derived(agentSupportsContextWindow(aiAgent));
-let thinkingEffortOptions = $derived(
-  isOpus48
-    ? THINKING_EFFORT_OPTIONS
-    : THINKING_EFFORT_OPTIONS.filter((o) => !OPUS_ONLY_EFFORTS.has(o.value)),
-);
+let thinkingEffortOptions = $derived(thinkingEffortOptionsFor(aiAgent, currentModel));
 
 $effect(() => {
   if (open) {
@@ -584,11 +579,12 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 							}}
 						>
 							<Select.Trigger class="w-40 text-xs">
-								{aiAgent === 'opencode' ? 'opencode' : 'Claude SDK'}
+								{aiAgent === 'opencode' ? 'opencode' : aiAgent === 'codex' ? 'Codex' : 'Claude SDK'}
 							</Select.Trigger>
 							<Select.Content>
 								<Select.Item value="opencode" class="text-xs">opencode</Select.Item>
 								<Select.Item value="claude" class="text-xs">Claude SDK</Select.Item>
+									<Select.Item value="codex" class="text-xs">Codex</Select.Item>
 							</Select.Content>
 						</Select.Root>
 					</div>

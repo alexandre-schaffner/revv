@@ -10,10 +10,13 @@ import {
   type ChatWalkthroughContext,
 } from "../ai/prompts/chat";
 import { type RawChatStreamFrame, streamChatViaClaude } from "../ai/providers/chat-claude";
+import { streamChatViaCodex } from "../ai/providers/chat-codex";
 import { streamChatViaOpencode } from "../ai/providers/chat-opencode";
 // ── Prompt & provider imports (split out of this file) ──────────────────────
 import { checkCliAvailability } from "../ai/providers/cli-agent";
 import { type ContinuationContext, streamWalkthroughViaMCP } from "../ai/providers/mcp-walkthrough";
+import type { CodexProviderDeps } from "../ai/providers/mcp-walkthrough-codex";
+import { streamWalkthroughViaCodexMCP } from "../ai/providers/mcp-walkthrough-codex";
 import { streamWalkthroughViaOpencodeMCP } from "../ai/providers/mcp-walkthrough-opencode";
 import { makeOpencodeChatDeps, makeOpencodeWalkthroughDeps } from "../ai/providers/opencode-deps";
 import { guardWalkthroughStream } from "../ai/providers/stream-guard";
@@ -122,21 +125,21 @@ export class AiService extends Context.Tag("AiService")<
       abortController?: AbortController;
       /**
        * Optional caller-provided callbacks for minting + clearing the
-       * opencode HTTP-MCP session token. Only consulted when the
-       * resolved agent is 'opencode'; the Claude SDK path ignores them.
+       * HTTP-MCP session token. Only consulted when the resolved agent uses
+       * the HTTP MCP transport; the Claude SDK path ignores them.
        * WalkthroughJobs supplies these because it owns the session-token
        * map (in-process, ephemeral per invariant #1). Kept as plain
        * callbacks so AiService doesn't need a layer dependency on
        * WalkthroughJobs (that would cycle — WalkthroughJobs depends on
        * AiService already).
        */
-      issueOpencodeSessionToken?: (walkthroughId: string) => Promise<string>;
-      clearOpencodeSessionToken?: (token: string) => Promise<void>;
-      registerOpencodeActivityNotifier?: (
+      issueHttpMcpSessionToken?: (walkthroughId: string) => Promise<string>;
+      clearHttpMcpSessionToken?: (token: string) => Promise<void>;
+      registerHttpMcpActivityNotifier?: (
         walkthroughId: string,
         callback: (event: WalkthroughStreamEvent) => void,
       ) => Promise<void>;
-      unregisterOpencodeActivityNotifier?: (walkthroughId: string) => Promise<void>;
+      unregisterHttpMcpActivityNotifier?: (walkthroughId: string) => Promise<void>;
     }) => Effect.Effect<AsyncGenerator<WalkthroughStreamEvent>, AiError>;
     /**
      * Stream a single chat turn for the right-pane chat. Resolves the
@@ -258,7 +261,7 @@ export const AiServiceLive = Layer.effect(
             const providerParams = { ...params, db };
 
             if (agent === "opencode") {
-              if (!params.issueOpencodeSessionToken || !params.clearOpencodeSessionToken) {
+              if (!params.issueHttpMcpSessionToken || !params.clearHttpMcpSessionToken) {
                 return yield* Effect.fail(
                   new AiGenerationError({
                     cause: new Error("missing opencode session-token callbacks"),
@@ -267,8 +270,8 @@ export const AiServiceLive = Layer.effect(
                 );
               }
               if (
-                !params.registerOpencodeActivityNotifier ||
-                !params.unregisterOpencodeActivityNotifier
+                !params.registerHttpMcpActivityNotifier ||
+                !params.unregisterHttpMcpActivityNotifier
               ) {
                 return yield* Effect.fail(
                   new AiGenerationError({
@@ -279,10 +282,10 @@ export const AiServiceLive = Layer.effect(
                 );
               }
               const deps = makeOpencodeWalkthroughDeps(supervisor, {
-                issueSessionToken: params.issueOpencodeSessionToken,
-                clearSessionToken: params.clearOpencodeSessionToken,
-                registerActivityNotifier: params.registerOpencodeActivityNotifier,
-                unregisterActivityNotifier: params.unregisterOpencodeActivityNotifier,
+                issueSessionToken: params.issueHttpMcpSessionToken,
+                clearSessionToken: params.clearHttpMcpSessionToken,
+                registerActivityNotifier: params.registerHttpMcpActivityNotifier,
+                unregisterActivityNotifier: params.unregisterHttpMcpActivityNotifier,
               });
               const raw = streamWalkthroughViaOpencodeMCP(
                 { ...providerParams, deps },
@@ -294,6 +297,52 @@ export const AiServiceLive = Layer.effect(
                 synthesizePhases: false,
               });
             }
+
+            if (agent === "codex") {
+              // Codex reuses the same HTTP-MCP session-token + activity-notifier
+              // callbacks opencode uses (the `*Opencode*` names are historical —
+              // they serve both HTTP-MCP agents). It needs no daemon deps.
+              if (!params.issueHttpMcpSessionToken || !params.clearHttpMcpSessionToken) {
+                return yield* Effect.fail(
+                  new AiGenerationError({
+                    cause: new Error("missing HTTP-MCP session-token callbacks"),
+                    message: "codex provider requires caller-supplied session-token callbacks",
+                  }),
+                );
+              }
+              if (
+                !params.registerHttpMcpActivityNotifier ||
+                !params.unregisterHttpMcpActivityNotifier
+              ) {
+                return yield* Effect.fail(
+                  new AiGenerationError({
+                    cause: new Error("missing HTTP-MCP activity-notifier callbacks"),
+                    message: "codex provider requires caller-supplied activity-notifier callbacks",
+                  }),
+                );
+              }
+              const issueToken = params.issueHttpMcpSessionToken;
+              const clearToken = params.clearHttpMcpSessionToken;
+              const registerNotifier = params.registerHttpMcpActivityNotifier;
+              const unregisterNotifier = params.unregisterHttpMcpActivityNotifier;
+              const codexDeps: CodexProviderDeps = {
+                issueSessionToken: (walkthroughId) => issueToken(walkthroughId),
+                clearSessionToken: (token) => clearToken(token),
+                registerActivityNotifier: (walkthroughId, callback) =>
+                  registerNotifier(walkthroughId, callback),
+                unregisterActivityNotifier: (walkthroughId) => unregisterNotifier(walkthroughId),
+              };
+              const raw = streamWalkthroughViaCodexMCP(
+                { ...providerParams, deps: codexDeps },
+                settings.aiModel ?? undefined,
+                settings,
+              );
+              return guardWalkthroughStream(raw, {
+                label: "codex-mcp",
+                synthesizePhases: false,
+              });
+            }
+
             const raw = streamWalkthroughViaMCP(
               providerParams,
               settings.aiModel ?? undefined,
@@ -346,6 +395,31 @@ export const AiServiceLive = Layer.effect(
                 prId: params.prId,
                 userId: params.userId,
                 maxTurns: settings.aiMaxTurns,
+                interactionMode: params.interactionMode,
+              });
+            }
+
+            if (agent === "codex") {
+              return streamChatViaCodex({
+                message,
+                systemPrompt,
+                resumeSessionId: params.resumeSessionId ?? undefined,
+                cwd: params.cwd,
+                onSessionId: params.onSessionId,
+                abortController: params.abortController,
+                model: settings.aiModel ?? undefined,
+                deps: {
+                  issueChatMcpToken: (args: {
+                    prId: string;
+                    userId: string;
+                    actor: "chat:codex";
+                    interactionMode: InteractionMode;
+                  }) => Effect.runPromise(chatMcpTokens.issue(args)),
+                  clearChatMcpToken: (token: string) =>
+                    Effect.runPromise(chatMcpTokens.clear(token)),
+                },
+                prId: params.prId,
+                userId: params.userId,
                 interactionMode: params.interactionMode,
               });
             }
@@ -407,6 +481,31 @@ export const AiServiceLive = Layer.effect(
               // doesn't need it.
               enableReviewContextMcp: false,
               maxTurns: settings.aiMaxTurns,
+            });
+          }
+
+          if (agent === "codex") {
+            return streamChatViaCodex({
+              message,
+              systemPrompt,
+              resumeSessionId: undefined,
+              cwd: params.cwd,
+              onSessionId: undefined,
+              abortController: params.abortController,
+              model: settings.aiModel ?? undefined,
+              deps: {
+                issueChatMcpToken: (args: {
+                  prId: string;
+                  userId: string;
+                  actor: "chat:codex";
+                  interactionMode: InteractionMode;
+                }) => Effect.runPromise(chatMcpTokens.issue(args)),
+                clearChatMcpToken: (token: string) => Effect.runPromise(chatMcpTokens.clear(token)),
+              },
+              prId: params.prId,
+              userId: params.userId,
+              // No review-context MCP — conflict resolution doesn't need it.
+              enableReviewContextMcp: false,
             });
           }
 
