@@ -2,13 +2,13 @@ import type { ThreadStatus } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { AppRuntime } from "../runtime";
+import { Broadcaster } from "../services/Broadcaster";
 import { ReviewService } from "../services/Review";
 import { SyncService } from "../services/Sync";
-import { WebSocketHub } from "../services/WebSocketHub";
-import { handleAppError, withAuth } from "./middleware";
+import { handleAppError, withAccount } from "./middleware";
 
 export const threadRoutes = new Elysia({ prefix: "/api/threads" })
-  .use(withAuth)
+  .use(withAccount)
   // PATCH /api/threads/:id — update thread status
   .patch(
     "/:id",
@@ -17,7 +17,7 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
         const updated = await AppRuntime.runPromise(
           Effect.gen(function* () {
             const reviewService = yield* ReviewService;
-            const hub = yield* WebSocketHub;
+            const broadcaster = yield* Broadcaster;
             const sync = yield* SyncService;
 
             const thread = yield* reviewService.updateThreadStatus(
@@ -25,7 +25,7 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
               ctx.body.status as ThreadStatus,
             );
 
-            yield* hub.broadcast({
+            yield* broadcaster.broadcastToAccount(ctx.account.accountId, {
               type: "thread:updated",
               data: { threadId: ctx.params.id, status: thread.status },
             });
@@ -62,11 +62,11 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
       const updated = await AppRuntime.runPromise(
         Effect.gen(function* () {
           const reviewService = yield* ReviewService;
-          const hub = yield* WebSocketHub;
+          const broadcaster = yield* Broadcaster;
           const sync = yield* SyncService;
 
           const thread = yield* reviewService.updateThreadStatus(ctx.params.id, "open");
-          yield* hub.broadcast({
+          yield* broadcaster.broadcastToAccount(ctx.account.accountId, {
             type: "thread:updated",
             data: { threadId: ctx.params.id, status: thread.status },
           });
@@ -97,7 +97,7 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
       await AppRuntime.runPromise(
         Effect.gen(function* () {
           const reviewService = yield* ReviewService;
-          const hub = yield* WebSocketHub;
+          const broadcaster = yield* Broadcaster;
 
           const thread = yield* reviewService.getThread(ctx.params.id);
 
@@ -109,7 +109,7 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
 
           yield* reviewService.deleteThread(ctx.params.id);
 
-          yield* hub.broadcast({
+          yield* broadcaster.broadcastToAccount(ctx.account.accountId, {
             type: "thread:deleted",
             data: { threadId: ctx.params.id },
           });
@@ -129,11 +129,11 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
         const updated = await AppRuntime.runPromise(
           Effect.gen(function* () {
             const reviewService = yield* ReviewService;
-            const hub = yield* WebSocketHub;
+            const broadcaster = yield* Broadcaster;
 
             const message = yield* reviewService.editMessage(ctx.params.messageId, ctx.body.body);
 
-            yield* hub.broadcast({
+            yield* broadcaster.broadcastToAccount(ctx.account.accountId, {
               type: "thread:message:edited",
               data: { threadId: ctx.params.id, message },
             });
@@ -173,11 +173,11 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
       await AppRuntime.runPromise(
         Effect.gen(function* () {
           const reviewService = yield* ReviewService;
-          const hub = yield* WebSocketHub;
+          const broadcaster = yield* Broadcaster;
 
           yield* reviewService.deleteMessage(ctx.params.messageId);
 
-          yield* hub.broadcast({
+          yield* broadcaster.broadcastToAccount(ctx.account.accountId, {
             type: "thread:message:deleted",
             data: {
               threadId: ctx.params.id,
@@ -211,7 +211,7 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
         const message = await AppRuntime.runPromise(
           Effect.gen(function* () {
             const reviewService = yield* ReviewService;
-            const hub = yield* WebSocketHub;
+            const broadcaster = yield* Broadcaster;
 
             const msg = yield* reviewService.addMessage(ctx.params.id, {
               authorRole: ctx.body.authorRole,
@@ -229,12 +229,12 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
               .transitionStatus(ctx.params.id, ctx.body.authorRole)
               .pipe(Effect.catchAll(() => Effect.succeed(null)));
 
-            yield* hub.broadcast({
+            yield* broadcaster.broadcastToAccount(ctx.account.accountId, {
               type: "thread:message",
               data: { threadId: ctx.params.id, message: msg },
             });
             if (transitioned) {
-              yield* hub.broadcast({
+              yield* broadcaster.broadcastToAccount(ctx.account.accountId, {
                 type: "thread:updated",
                 data: { threadId: ctx.params.id, status: transitioned.status },
               });

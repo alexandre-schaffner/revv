@@ -13,6 +13,7 @@ import {
   type WorktreeBlockedByUnpushedCommits,
 } from "../domain/errors";
 import { debug, logError } from "../logger";
+import { Broadcaster } from "./Broadcaster";
 import { DbService } from "./Db";
 import {
   ensureSignalHandlersInstalled,
@@ -23,7 +24,6 @@ import {
   runGitCloneWithTimeout,
 } from "./git-runner";
 import { TokenProvider } from "./TokenProvider";
-import { WebSocketHub } from "./WebSocketHub";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -50,7 +50,11 @@ export class RepoCloneService extends Context.Tag("RepoCloneService")<
   RepoCloneService,
   {
     /** Start a shallow clone for a repo. Updates DB status. Fire-and-forget via Effect.fork. */
-    readonly cloneRepo: (repo: Repository, githubToken: string) => Effect.Effect<void, CloneError>;
+    readonly cloneRepo: (
+      repo: Repository,
+      githubToken: string,
+      accountId: string,
+    ) => Effect.Effect<void, CloneError>;
     /**
      * Read a file's content at a given commit SHA from the local clone.
      * Used by the sidebar's "view unchanged file" path — the user clicked
@@ -335,7 +339,7 @@ export const RepoCloneServiceLive = Layer.effect(
   RepoCloneService,
   Effect.gen(function* () {
     const { db } = yield* DbService;
-    const wsHub = yield* WebSocketHub;
+    const broadcaster = yield* Broadcaster;
     const tokenProvider = yield* TokenProvider;
 
     // Install the signal handlers eagerly so even an early crash (before
@@ -363,7 +367,11 @@ export const RepoCloneServiceLive = Layer.effect(
     // for status; this set is a process-local short-circuit.
     const inFlightClones = new Set<string>();
 
-    const cloneRepo = (repo: Repository, githubToken: string): Effect.Effect<void, CloneError> =>
+    const cloneRepo = (
+      repo: Repository,
+      githubToken: string,
+      accountId: string,
+    ): Effect.Effect<void, CloneError> =>
       Effect.suspend((): Effect.Effect<void, CloneError> => {
         // Short-circuit if a clone is already running for this repo in
         // this process. Returning success-void is correct: the in-flight
@@ -436,7 +444,7 @@ export const RepoCloneServiceLive = Layer.effect(
 
                     debug("repo-clone", `clone ready for ${repo.fullName} at ${cloneDir}`);
 
-                    yield* wsHub.broadcast({
+                    yield* broadcaster.broadcastToAccount(accountId, {
                       type: "repos:clone-status",
                       data: { repoId: repo.id, status: "ready" },
                     });
@@ -466,7 +474,7 @@ export const RepoCloneServiceLive = Layer.effect(
                     // happens to be disconnected at the moment of failure).
                     logError("repo-clone", `clone failed for ${repo.fullName}: ${errorMessage}`);
 
-                    yield* wsHub.broadcast({
+                    yield* broadcaster.broadcastToAccount(accountId, {
                       type: "repos:clone-status",
                       data: {
                         repoId: repo.id,
@@ -856,7 +864,7 @@ export const RepoCloneServiceLive = Layer.effect(
 
           for (const repo of pendingRepos) {
             const tokenOption = yield* tokenProvider
-              .getGitHubToken("single-user")
+              .getTokenByAccountId(repo.accountId)
               .pipe(Effect.option);
 
             if (tokenOption._tag === "None") {
@@ -881,7 +889,7 @@ export const RepoCloneServiceLive = Layer.effect(
 
             const token = tokenOption.value;
             yield* Effect.forkDaemon(
-              cloneRepo(repoRecord, token).pipe(
+              cloneRepo(repoRecord, token, repo.accountId).pipe(
                 Effect.catchAll((err) => {
                   debug("repo-clone", `clone failed for ${repo.fullName}: ${err.message}`);
                   return Effect.void;

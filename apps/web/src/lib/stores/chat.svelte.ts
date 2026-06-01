@@ -10,7 +10,6 @@
 //
 // State map shape:
 //   - `chatHistories` — the message + activity list rendered in the panel
-//   - `chatErrors`    — latest error per PR (NOT_CONFIGURED, RATE_LIMITED, …)
 //   - `streamingPrIds`— who's mid-turn so the UI can show the indicator
 //   - `loadedPrIds`   — set of PRs whose persisted history has been hydrated
 //                       at least once. Prevents re-fetching on every panel
@@ -113,7 +112,6 @@ export type ChatItem =
     };
 
 let chatHistories = $state(new Map<string, ChatItem[]>());
-let chatErrors = $state(new Map<string, { code: string; message: string } | null>());
 let streamingPrIds = $state(new Set<string>());
 let loadedPrIds = $state(new Set<string>());
 let proposedChanges = $state(new Map<string, ProposedChanges | null>());
@@ -180,10 +178,6 @@ const resolveAbortControllers = new Map<string, AbortController>();
 
 export function getChatItems(prId: string): ChatItem[] {
   return chatHistories.get(prId) ?? [];
-}
-
-export function getChatError(prId: string): { code: string; message: string } | null {
-  return chatErrors.get(prId) ?? null;
 }
 
 export function isChatStreaming(prId: string): boolean {
@@ -296,11 +290,6 @@ function removeItem(prId: string, id: string): void {
   const next = items.filter((i) => i.id !== id);
   if (next.length === items.length) return;
   setItems(prId, next);
-}
-
-function setError(prId: string, error: { code: string; message: string } | null): void {
-  chatErrors.set(prId, error);
-  chatErrors = new Map(chatErrors);
 }
 
 function setStreaming(prId: string, streaming: boolean): void {
@@ -561,7 +550,6 @@ export function sendChatMessage(params: SendChatMessageParams): void {
   // Cancel any in-flight turn for this PR. The user is overriding it.
   abortControllers.get(prId)?.abort();
   abortControllers.delete(prId);
-  setError(prId, null);
 
   // Append the user's message + a placeholder assistant message.
   // `turnId` correlates the assistant placeholder with the activities that
@@ -767,13 +755,26 @@ export function sendChatMessage(params: SendChatMessageParams): void {
         } else {
           removeItem(prId, assistantId);
         }
-        setError(prId, err);
         setStreaming(prId, false);
         abortControllers.delete(prId);
         // The agent may have committed before the stream errored —
         // refresh so the proposed-changes strip reflects whatever
         // landed in the worktree.
         void refreshProposedChanges(prId);
+        if (err.code === "NOT_CONFIGURED") {
+          toast.error("AI agent not configured", {
+            description: "Install opencode or Claude Code, then configure it in Settings.",
+            duration: Number.POSITIVE_INFINITY,
+          });
+          return;
+        }
+        if (err.code === "GITHUB_RATE_LIMITED") {
+          toast.error("GitHub rate limit reached", {
+            description: err.message,
+            duration: 15000,
+          });
+          return;
+        }
         toast.error(err.message || "AI chat failed");
       },
     },
@@ -858,8 +859,8 @@ export interface SubmitQuestionAction {
 /**
  * Submit the user's response (or rejection) to an open question. Optimistic:
  * flips the local item to its terminal state before the server confirms so
- * the UI feels snappy; reverts on error. The server's WS broadcast (or the
- * SSE follow-up frame for opencode) keeps other tabs in sync.
+ * the UI feels snappy; reverts on error. The server's SSE broadcast keeps
+ * other tabs in sync.
  */
 export async function submitQuestionAnswers(
   prId: string,
@@ -968,7 +969,6 @@ export function sendProposedFeedback(params: SendProposedFeedbackParams): boolea
 export function invalidateChatHistory(prId: string): void {
   abortControllers.get(prId)?.abort();
   abortControllers.delete(prId);
-  setError(prId, null);
   setStreaming(prId, false);
   if (loadedPrIds.has(prId)) {
     loadedPrIds.delete(prId);
@@ -980,7 +980,6 @@ export async function clearChatHistory(prId: string): Promise<void> {
   abortControllers.get(prId)?.abort();
   abortControllers.delete(prId);
   setItems(prId, []);
-  setError(prId, null);
   setStreaming(prId, false);
   setProposedChanges(prId, null);
   setWorktreeBlocked(prId, null);
@@ -1549,7 +1548,7 @@ export function clearToolApprovals(prId: string): void {
 }
 
 /**
- * Apply a `chat:question-resolved` WebSocket broadcast from another client.
+ * Apply a `chat:question-resolved` SSE broadcast from another client.
  * Mirrors the optimistic patch in `submitQuestionAnswers` so every open tab
  * sees the card flip to its terminal state without a full history reload.
  */

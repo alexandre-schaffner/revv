@@ -7,11 +7,11 @@ import { db } from "../auth";
 import { account, repositories, user } from "../db/schema";
 import { remoteUsers } from "../db/schema/remote-users";
 import { AppRuntime } from "../runtime";
-import { GitHubService } from "../services/GitHub";
+import { GitHubGateway } from "../services/GitHub";
+import { Identity } from "../services/Identity";
 import { PullRequestService } from "../services/PullRequest";
 import { RemoteUserService } from "../services/RemoteUser";
 import { SettingsService } from "../services/Settings";
-import { TokenProvider } from "../services/TokenProvider";
 import { handleAppError, withAuth } from "./middleware";
 
 /**
@@ -54,15 +54,15 @@ export const userRoutes = new Elysia({ prefix: "/api/user" })
         if (!login || !avatarUrl) {
           const backfilled = await AppRuntime.runPromise(
             Effect.gen(function* () {
-              const tokenProvider = yield* TokenProvider;
-              const github = yield* GitHubService;
+              const identityService = yield* Identity;
+              const github = yield* GitHubGateway;
               const settingsService = yield* SettingsService;
               const settings = yield* settingsService
                 .getSettings()
                 .pipe(Effect.orElseSucceed(() => null));
               const host = settings?.githubHost?.trim() || undefined;
-              const token = yield* tokenProvider.getGitHubToken(userId, host);
-              const gh = yield* github.getAuthenticatedUserFresh(token);
+              const token = yield* identityService.tokenForUser(userId, host);
+              const gh = yield* github.users.authenticatedFresh(token);
               return gh;
             }).pipe(Effect.orElseSucceed(() => null)),
           );
@@ -123,7 +123,7 @@ export const userRoutes = new Elysia({ prefix: "/api/user" })
         const prId = ctx.query.prId;
         if (prId && login) {
           const pr = await AppRuntime.runPromise(
-            Effect.flatMap(PullRequestService, (s) => s.getPr(prId)).pipe(
+            Effect.flatMap(PullRequestService, (prs) => prs.getPr(prId)).pipe(
               Effect.orElseSucceed(() => null),
             ),
           );
@@ -132,16 +132,16 @@ export const userRoutes = new Elysia({ prefix: "/api/user" })
 
         // Resolve the active account's re-auth state so the client can gate
         // the app behind the re-sign-in modal on boot, reconciling any
-        // `auth:reauth-required` WS signal missed while disconnected.
+        // `auth:reauth-required` SSE signal missed while disconnected.
         const reauth = await AppRuntime.runPromise(
           Effect.gen(function* () {
-            const tokenProvider = yield* TokenProvider;
+            const identityService = yield* Identity;
             const settingsService = yield* SettingsService;
             const settings = yield* settingsService
               .getSettings()
               .pipe(Effect.orElseSucceed(() => null));
             const hostPref = settings?.githubHost?.trim() || undefined;
-            const resolved = yield* tokenProvider.resolveAccount(userId, hostPref);
+            const resolved = yield* identityService.resolveAccount(userId, hostPref);
             const accountRow = db
               .select({ reauthRequiredAt: account.reauthRequiredAt })
               .from(account)
@@ -186,15 +186,15 @@ export const userRoutes = new Elysia({ prefix: "/api/user" })
       const userId = ctx.session.user.id;
       const orgs = await AppRuntime.runPromise(
         Effect.gen(function* () {
-          const tokenProvider = yield* TokenProvider;
-          const github = yield* GitHubService;
+          const identityService = yield* Identity;
+          const github = yield* GitHubGateway;
           const settingsService = yield* SettingsService;
           const settings = yield* settingsService
             .getSettings()
             .pipe(Effect.orElseSucceed(() => null));
           const host = settings?.githubHost?.trim() || undefined;
-          const token = yield* tokenProvider.getGitHubToken(userId, host);
-          return yield* github.listUserOrgs(token);
+          const token = yield* identityService.tokenForUser(userId, host);
+          return yield* github.repos.orgsForUser(token);
         }).pipe(Effect.orElseSucceed(() => [] as Org[])),
       );
       return { orgs };

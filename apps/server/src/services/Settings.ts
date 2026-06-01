@@ -14,6 +14,7 @@ import { Context, Effect, Layer, Stream, SubscriptionRef } from "effect";
 import type { Db } from "../db/index";
 import { userSettings } from "../db/schema/user-settings";
 import { ValidationError } from "../domain/errors";
+import { logError } from "../logger";
 import { DbService } from "./Db";
 
 // ── Storage ───────────────────────────────────────────────────────────────────
@@ -67,6 +68,8 @@ const VALID_RECAP_AGENTS: ReadonlySet<RecapAgentChoice> = new Set([
   "claude",
   "codex",
 ]);
+
+export type AgentId = AiAgent;
 
 const MIN_MAX_TURNS = 10;
 const MAX_MAX_TURNS = 500;
@@ -186,6 +189,25 @@ function coerceRecap(value: unknown): UserSettings["recap"] {
     weeklyEnabled: r.weeklyEnabled === false ? false : DEFAULT_SETTINGS.recap.weeklyEnabled,
     agent,
   };
+}
+
+function resolveAgentFromSettings(settings: Pick<UserSettings, "aiAgent">): AgentId {
+  const agent = settings.aiAgent ?? DEFAULT_SETTINGS.aiAgent;
+  if (agent === "opencode" || agent === "claude" || agent === "codex") return agent;
+  throw new ValidationError({
+    message: `Unknown aiAgent '${agent}' — expected "opencode", "claude", or "codex"`,
+    field: "aiAgent",
+  });
+}
+
+function resolveRecapAgentFromSettings(settings: Pick<UserSettings, "aiAgent" | "recap">): AgentId {
+  const choice = settings.recap?.agent ?? DEFAULT_SETTINGS.recap.agent;
+  if (choice === "opencode" || choice === "claude" || choice === "codex") return choice;
+  if (choice === "auto") return resolveAgentFromSettings(settings);
+  throw new ValidationError({
+    message: `Unknown recap.agent '${choice}' — expected "auto", "opencode", "claude", or "codex"`,
+    field: "recap.agent",
+  });
 }
 
 // ── DB ↔ UserSettings mapping ────────────────────────────────────────────────
@@ -335,6 +357,9 @@ export class SettingsService extends Context.Tag("SettingsService")<
     getSettings: () => Effect.Effect<UserSettings, ValidationError>;
     updateSettings: (partial: SettingsUpdate) => Effect.Effect<UserSettings, ValidationError>;
     settingsChanges: () => Stream.Stream<UserSettings>;
+    resolveAgent: () => Effect.Effect<AgentId, ValidationError>;
+    resolveAgentOrDefault: () => Effect.Effect<AgentId>;
+    resolveRecapAgent: () => Effect.Effect<AgentId, ValidationError>;
   }
 >() {}
 
@@ -406,6 +431,34 @@ export const SettingsServiceLive = Layer.effect(
         }),
 
       settingsChanges: () => settingsRef.changes.pipe(Stream.drop(1)),
+
+      resolveAgent: () =>
+        settingsRef.get.pipe(
+          Effect.mapError((e) => new ValidationError({ message: String(e) })),
+          Effect.map(resolveAgentFromSettings),
+        ),
+
+      resolveAgentOrDefault: () =>
+        settingsRef.get.pipe(
+          Effect.mapError((e) => new ValidationError({ message: String(e) })),
+          Effect.map(resolveAgentFromSettings),
+          Effect.tapError((e) =>
+            Effect.sync(() => {
+              logError(
+                "settings",
+                "resolveAgentOrDefault failed, defaulting to opencode:",
+                String(e),
+              );
+            }),
+          ),
+          Effect.orElseSucceed(() => "opencode" as const),
+        ),
+
+      resolveRecapAgent: () =>
+        settingsRef.get.pipe(
+          Effect.mapError((e) => new ValidationError({ message: String(e) })),
+          Effect.map(resolveRecapAgentFromSettings),
+        ),
     };
   }),
 );

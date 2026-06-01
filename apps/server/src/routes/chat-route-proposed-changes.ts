@@ -5,10 +5,8 @@
 
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
-import { withDb } from "../effects/with-db";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
-import { resolveAgent } from "../services/Ai";
 import {
   ChatChangesPushService,
   ChatStreamingConflictError,
@@ -21,7 +19,6 @@ import {
   RefAlreadyExistsError,
 } from "../services/ChatChangesPush";
 import { ChatSessionService } from "../services/ChatSession";
-import { DbService } from "../services/Db";
 import { PrContextService } from "../services/PrContext";
 import { RepoCloneService } from "../services/RepoClone";
 import { SettingsService } from "../services/Settings";
@@ -52,14 +49,8 @@ export const chatProposedChangesRoutes = new Elysia()
             const prCtx = yield* PrContextService;
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
-            const { db } = yield* DbService;
-
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-
-            const settings = yield* withDb(db, settingsService.getSettings()).pipe(
-              Effect.orElseSucceed(() => ({ aiAgent: "opencode" }) as { aiAgent: string | null }),
-            );
-            const agent = resolveAgent(settings);
+            const agent = yield* settingsService.resolveAgentOrDefault();
 
             if (!pr.headSha) return null;
             const row = yield* chatSessions.find(pr.id, agent, pr.headSha);
@@ -108,14 +99,8 @@ export const chatProposedChangesRoutes = new Elysia()
             const prCtx = yield* PrContextService;
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
-            const { db } = yield* DbService;
-
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-
-            const settings = yield* withDb(db, settingsService.getSettings()).pipe(
-              Effect.orElseSucceed(() => ({ aiAgent: "opencode" }) as { aiAgent: string | null }),
-            );
-            const agent = resolveAgent(settings);
+            const agent = yield* settingsService.resolveAgentOrDefault();
 
             if (!pr.headSha) return null;
             return yield* chatSessions.find(pr.id, agent, pr.headSha);
@@ -159,14 +144,8 @@ export const chatProposedChangesRoutes = new Elysia()
             const prCtx = yield* PrContextService;
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
-            const { db } = yield* DbService;
-
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-
-            const settings = yield* withDb(db, settingsService.getSettings()).pipe(
-              Effect.orElseSucceed(() => ({ aiAgent: "opencode" }) as { aiAgent: string | null }),
-            );
-            const agent = resolveAgent(settings);
+            const agent = yield* settingsService.resolveAgentOrDefault();
 
             if (!pr.headSha) return null;
             return yield* chatSessions.find(pr.id, agent, pr.headSha);
@@ -555,13 +534,8 @@ export const chatProposedChangesRoutes = new Elysia()
             const prCtx = yield* PrContextService;
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
-            const { db } = yield* DbService;
-
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-            const settings = yield* withDb(db, settingsService.getSettings()).pipe(
-              Effect.orElseSucceed(() => ({ aiAgent: "opencode" }) as { aiAgent: string | null }),
-            );
-            const agent = resolveAgent(settings);
+            const agent = yield* settingsService.resolveAgentOrDefault();
             return yield* chatSessions.findLatestForPr(pr.id, agent);
           }),
         );
@@ -643,13 +617,8 @@ export const chatProposedChangesRoutes = new Elysia()
             const prCtx = yield* PrContextService;
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
-            const { db } = yield* DbService;
-
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-            const settings = yield* withDb(db, settingsService.getSettings()).pipe(
-              Effect.orElseSucceed(() => ({ aiAgent: "opencode" }) as { aiAgent: string | null }),
-            );
-            const agent = resolveAgent(settings);
+            const agent = yield* settingsService.resolveAgentOrDefault();
             return yield* chatSessions.findLatestForPr(pr.id, agent);
           }),
         );
@@ -784,13 +753,8 @@ export const chatProposedChangesRoutes = new Elysia()
             const prCtx = yield* PrContextService;
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
-            const { db } = yield* DbService;
-
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-            const settings = yield* withDb(db, settingsService.getSettings()).pipe(
-              Effect.orElseSucceed(() => ({ aiAgent: "opencode" }) as { aiAgent: string | null }),
-            );
-            const agent = resolveAgent(settings);
+            const agent = yield* settingsService.resolveAgentOrDefault();
             return yield* chatSessions.findLatestForPr(pr.id, agent);
           }),
         );
@@ -851,16 +815,11 @@ export const chatProposedChangesRoutes = new Elysia()
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
             const repoClone = yield* RepoCloneService;
-            const { db } = yield* DbService;
-
             const { pr, repo, token } = yield* prCtx.resolveBasic(
               ctx.params.prId,
               ctx.session.user.id,
             );
-            const settings = yield* withDb(db, settingsService.getSettings()).pipe(
-              Effect.orElseSucceed(() => ({ aiAgent: "opencode" }) as { aiAgent: string | null }),
-            );
-            const agent = resolveAgent(settings);
+            const agent = yield* settingsService.resolveAgentOrDefault();
 
             const row = yield* chatSessions.findLatestForPr(pr.id, agent);
             if (!row) return;

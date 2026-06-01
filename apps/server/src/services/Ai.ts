@@ -1,4 +1,4 @@
-import type { InteractionMode, UserSettings, WalkthroughStreamEvent } from "@revv/shared";
+import type { InteractionMode, WalkthroughStreamEvent } from "@revv/shared";
 import { Context, Effect, Layer } from "effect";
 import {
   buildChatSystemPrompt,
@@ -17,14 +17,14 @@ import { checkCliAvailability } from "../ai/providers/cli-agent";
 import { type ContinuationContext, streamWalkthroughViaMCP } from "../ai/providers/mcp-walkthrough";
 import type { CodexProviderDeps } from "../ai/providers/mcp-walkthrough-codex";
 import { streamWalkthroughViaCodexMCP } from "../ai/providers/mcp-walkthrough-codex";
-import type { OpencodeProviderDeps } from "../ai/providers/mcp-walkthrough-opencode";
 import { streamWalkthroughViaOpencodeMCP } from "../ai/providers/mcp-walkthrough-opencode";
+import { makeOpencodeChatDeps, makeOpencodeWalkthroughDeps } from "../ai/providers/opencode-deps";
 import { guardWalkthroughStream } from "../ai/providers/stream-guard";
 import {
   type AiError,
   AiGenerationError,
   AiNotConfiguredError,
-  ValidationError,
+  type ValidationError,
 } from "../domain/errors";
 import { withDb } from "../effects/with-db";
 import { logError } from "../logger";
@@ -33,7 +33,7 @@ import { ChatSessionService } from "./ChatSession";
 import { DbService } from "./Db";
 import type { PrFileMeta } from "./GitHub";
 import { OpencodeSupervisor } from "./OpencodeSupervisor";
-import { SettingsService } from "./Settings";
+import { type AgentId, SettingsService } from "./Settings";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -83,39 +83,7 @@ export interface ChatParams {
 
 // ── Agent resolution ────────────────────────────────────────────────────────
 
-export type CliAgent = "opencode" | "claude" | "codex";
-
-/**
- * Resolve the configured CLI agent.
- * @throws {ValidationError} If the agent is not a known value. This should
- *   never happen when settings are read through `SettingsService` (which
- *   validates), but we assert rather than silently downgrade so bad values
- *   surface loudly.
- */
-export function resolveAgent(settings: { aiAgent: string | null }): CliAgent {
-  const agent = settings.aiAgent ?? "opencode";
-  if (agent === "opencode" || agent === "claude" || agent === "codex") return agent;
-  throw new ValidationError({
-    message: `Unknown aiAgent '${agent}' — expected "opencode", "claude", or "codex"`,
-    field: "aiAgent",
-  });
-}
-
-/**
- * Resolve the agent that should generate project recaps. `recap.agent` is a
- * per-feature override: `'auto'` (default) inherits {@link resolveAgent};
- * `'opencode'` / `'claude'` pin recap generation regardless of the global
- * choice. Mirrors {@link resolveAgent}'s error semantics for unknown values.
- */
-export function resolveRecapAgent(settings: UserSettings): CliAgent {
-  const choice = settings.recap?.agent ?? "auto";
-  if (choice === "opencode" || choice === "claude" || choice === "codex") return choice;
-  if (choice === "auto") return resolveAgent(settings);
-  throw new ValidationError({
-    message: `Unknown recap.agent '${choice}' — expected "auto", "opencode", "claude", or "codex"`,
-    field: "recap.agent",
-  });
-}
+export type CliAgent = AgentId;
 
 // ── Service definition ───────────────────────────────────────────────────────
 
@@ -131,6 +99,12 @@ export class AiService extends Context.Tag("AiService")<
        * (doctrine invariant #11 — identity is orchestrator-provided).
        */
       walkthroughId: string;
+      /**
+       * Account that owns the PR. Passed through to the Claude MCP provider
+       * so it can scope SSE broadcasts without re-deriving accountId via a
+       * DB join on every tool call.
+       */
+      accountId: string;
       pr: {
         title: string;
         body: string | null;
@@ -252,12 +226,18 @@ export const AiServiceLive = Layer.effect(
             new AiGenerationError({ cause: e, message: e.message }) as AiError,
         ),
       );
+    const getAgent = () =>
+      withDb(db, settingsService.resolveAgent()).pipe(
+        Effect.mapError(
+          (e: ValidationError) =>
+            new AiGenerationError({ cause: e, message: e.message }) as AiError,
+        ),
+      );
 
     // Check if a CLI agent is available
     const checkConfigured = (): Effect.Effect<boolean> =>
       Effect.gen(function* () {
-        const settings = yield* getSettings();
-        const agent = resolveAgent(settings);
+        const agent = yield* getAgent();
         return checkCliAvailability(agent);
       }).pipe(Effect.catchAll(() => Effect.succeed(false)));
 
@@ -268,7 +248,7 @@ export const AiServiceLive = Layer.effect(
         })(
           Effect.gen(function* () {
             const settings = yield* getSettings();
-            const agent = resolveAgent(settings);
+            const agent = yield* getAgent();
 
             if (!checkCliAvailability(agent)) {
               return yield* Effect.fail(new AiNotConfiguredError());
@@ -301,21 +281,12 @@ export const AiServiceLive = Layer.effect(
                   }),
                 );
               }
-              const issueToken = params.issueOpencodeSessionToken;
-              const clearToken = params.clearOpencodeSessionToken;
-              const registerNotifier = params.registerOpencodeActivityNotifier;
-              const unregisterNotifier = params.unregisterOpencodeActivityNotifier;
-              const deps: OpencodeProviderDeps = {
-                ensureDaemon: () => Effect.runPromise(supervisor.ensureRunning()),
-                jobStarted: () => Effect.runPromise(supervisor.jobStarted()),
-                jobEnded: () => Effect.runPromise(supervisor.jobEnded()),
-                client: () => Effect.runPromise(supervisor.client()),
-                issueSessionToken: (walkthroughId) => issueToken(walkthroughId),
-                clearSessionToken: (token) => clearToken(token),
-                registerActivityNotifier: (walkthroughId, callback) =>
-                  registerNotifier(walkthroughId, callback),
-                unregisterActivityNotifier: (walkthroughId) => unregisterNotifier(walkthroughId),
-              };
+              const deps = makeOpencodeWalkthroughDeps(supervisor, {
+                issueSessionToken: params.issueOpencodeSessionToken,
+                clearSessionToken: params.clearOpencodeSessionToken,
+                registerActivityNotifier: params.registerOpencodeActivityNotifier,
+                unregisterActivityNotifier: params.unregisterOpencodeActivityNotifier,
+              });
               const raw = streamWalkthroughViaOpencodeMCP(
                 { ...providerParams, deps },
                 settings.aiModel ?? undefined,
@@ -385,7 +356,7 @@ export const AiServiceLive = Layer.effect(
         Effect.withSpan("Ai.chat")(
           Effect.gen(function* () {
             const settings = yield* getSettings();
-            const agent = resolveAgent(settings);
+            const agent = yield* getAgent();
             yield* Effect.annotateCurrentSpan("prId", params.prId);
             yield* Effect.annotateCurrentSpan("provider", agent);
 
@@ -454,20 +425,7 @@ export const AiServiceLive = Layer.effect(
             }
 
             // opencode path
-            const deps = {
-              ensureDaemon: () => Effect.runPromise(supervisor.ensureRunning()),
-              jobStarted: () => Effect.runPromise(supervisor.jobStarted()),
-              jobEnded: () => Effect.runPromise(supervisor.jobEnded()),
-              client: () => Effect.runPromise(supervisor.client()),
-              issueChatMcpToken: (args: {
-                prId: string;
-                userId: string;
-                actor: "chat:opencode";
-                interactionMode: InteractionMode;
-              }) => Effect.runPromise(chatMcpTokens.issue(args)),
-              clearChatMcpToken: (token: string) => Effect.runPromise(chatMcpTokens.clear(token)),
-              hasAgent: (name: string) => Effect.runPromise(supervisor.hasAgent(name)),
-            };
+            const deps = makeOpencodeChatDeps(supervisor, chatMcpTokens);
             return streamChatViaOpencode({
               message,
               systemPrompt,
@@ -487,7 +445,7 @@ export const AiServiceLive = Layer.effect(
       resolveMergeConflict: (params) =>
         Effect.gen(function* () {
           const settings = yield* getSettings();
-          const agent = resolveAgent(settings);
+          const agent = yield* getAgent();
 
           if (!checkCliAvailability(agent)) {
             return yield* Effect.fail(new AiNotConfiguredError());
@@ -555,20 +513,7 @@ export const AiServiceLive = Layer.effect(
           // daemon is stateful per session id; using `undefined`
           // here forces a brand-new session that disappears when
           // the daemon idles out.
-          const deps = {
-            ensureDaemon: () => Effect.runPromise(supervisor.ensureRunning()),
-            jobStarted: () => Effect.runPromise(supervisor.jobStarted()),
-            jobEnded: () => Effect.runPromise(supervisor.jobEnded()),
-            client: () => Effect.runPromise(supervisor.client()),
-            issueChatMcpToken: (args: {
-              prId: string;
-              userId: string;
-              actor: "chat:opencode";
-              interactionMode: InteractionMode;
-            }) => Effect.runPromise(chatMcpTokens.issue(args)),
-            clearChatMcpToken: (token: string) => Effect.runPromise(chatMcpTokens.clear(token)),
-            hasAgent: (name: string) => Effect.runPromise(supervisor.hasAgent(name)),
-          };
+          const deps = makeOpencodeChatDeps(supervisor, chatMcpTokens);
           return streamChatViaOpencode({
             message,
             systemPrompt,

@@ -4,13 +4,8 @@ import { Context, Effect, Layer } from "effect";
 import { pullRequests, remoteUsers, repositories, walkthroughs } from "../db/schema/index";
 import { NotFoundError, ValidationError } from "../domain/errors";
 import { DbService } from "./Db";
-
-/** Extract GitHub @-mentions from a block of text. */
-function extractMentions(body: string): string[] {
-  const matches = body.match(/@([a-zA-Z0-9-]+)/g);
-  if (!matches) return [];
-  return [...new Set(matches.map((m) => m.slice(1)))];
-}
+import { extractGitHubMentions } from "./sync-engine/mentions";
+import type { SyncWatermark } from "./sync-engine/watermark";
 
 function rowToPr(
   row: typeof pullRequests.$inferSelect,
@@ -157,7 +152,7 @@ export class PullRequestService extends Context.Tag("PullRequestService")<
     ) => Effect.Effect<void, never, DbService>;
     /**
      * Read the GraphQL-thread fingerprint for a PR. Used to skip redundant
-     * downstream DB writes and WS events when nothing changed on GitHub.
+     * downstream DB writes and SSE events when nothing changed on GitHub.
      * Null = fingerprint has never been computed for this PR.
      */
     readonly getThreadsFingerprint: (
@@ -168,6 +163,8 @@ export class PullRequestService extends Context.Tag("PullRequestService")<
       prId: string,
       fingerprint: string,
     ) => Effect.Effect<void, never, DbService>;
+    /** Read all sync watermarks for a PR as one typed projection. */
+    readonly getSyncWatermark: (prId: string) => Effect.Effect<SyncWatermark, never, DbService>;
     /**
      * Append GitHub logins to a PR's `mentionedUsers` JSON array.
      * Idempotent: merges new logins into the existing set, skipping
@@ -302,7 +299,7 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
         try: () => {
           const values = prs.map((pr) => {
             // Extract @-mentions from the PR body.
-            const bodyMentions = pr.body ? extractMentions(pr.body) : [];
+            const bodyMentions = pr.body ? extractGitHubMentions(pr.body) : [];
             const base: typeof pullRequests.$inferInsert = {
               id: pr.id,
               externalId: pr.externalId,
@@ -740,6 +737,34 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
         catch: (e) => new ValidationError({ message: String(e) }),
       });
     }).pipe(Effect.catchAll(() => Effect.void)),
+
+  getSyncWatermark: (prId) =>
+    Effect.gen(function* () {
+      const { db } = yield* DbService;
+      const row = yield* Effect.try({
+        try: () =>
+          db
+            .select({
+              commentsSyncedAt: pullRequests.commentsSyncedAt,
+              threadsFingerprint: pullRequests.threadsFingerprint,
+            })
+            .from(pullRequests)
+            .where(eq(pullRequests.id, prId))
+            .get(),
+        catch: (e) => new ValidationError({ message: String(e) }),
+      });
+      return {
+        commentsSyncedAt: row?.commentsSyncedAt ?? null,
+        threadsFingerprint: row?.threadsFingerprint ?? null,
+      };
+    }).pipe(
+      Effect.catchAll(() =>
+        Effect.succeed({
+          commentsSyncedAt: null,
+          threadsFingerprint: null,
+        }),
+      ),
+    ),
 
   appendMentionedUsers: (prId, logins) =>
     Effect.gen(function* () {

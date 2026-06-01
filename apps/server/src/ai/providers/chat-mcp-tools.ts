@@ -12,7 +12,6 @@
 // to a single context; the HTTP route in `routes/mcp/chat-context.ts`
 // drives the same TOOL_SPECS with a per-request context.
 
-import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { commentThreads } from "../../db/schema/comment-threads";
@@ -24,6 +23,7 @@ import { walkthroughIssues } from "../../db/schema/walkthrough-issues";
 import { walkthroughs } from "../../db/schema/walkthroughs";
 import type { ChatEditToolResult, ChatWalkthroughEditContext } from "./chat-edit-tools";
 import { EDIT_TOOL_SPECS } from "./chat-edit-tools";
+import { bindInProcess, type ToolSpec, type ToolSpecBundle } from "./mcp-tool-gateway";
 
 // ── Context ─────────────────────────────────────────────────────────────────
 
@@ -46,12 +46,7 @@ export type ChatToolHandler<TInput> = (
   args: TInput,
 ) => Promise<ChatToolResult>;
 
-export interface ChatToolSpec<TInput> {
-  readonly name: string;
-  readonly description: string;
-  readonly inputSchema: z.ZodObject<z.ZodRawShape>;
-  readonly handler: ChatToolHandler<TInput>;
-}
+export type ChatToolSpec = ToolSpec<ChatToolContext, ChatToolResult>;
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -300,25 +295,26 @@ const getReviewContextHandler: ChatToolHandler<GetReviewContextInput> = async (c
 
 // ── Tool registry ───────────────────────────────────────────────────────────
 
-export const CHAT_TOOL_SPECS: ReadonlyArray<ChatToolSpec<unknown>> = [
+export const CHAT_TOOL_SPECS: ReadonlyArray<ChatToolSpec> = [
   {
     name: "get_review_context",
     description:
       "Fetch the structured review context for the current PR — walkthrough analysis, all flagged issues (with their associated diff steps and inline review comments), and standalone reviewer comment threads. Returns a single JSON-stringified payload. Call this at the start of a conversation when the user asks you to address issues or comments, instead of grepping the worktree for them.",
     inputSchema: getReviewContextSchema,
-    handler: getReviewContextHandler as ChatToolHandler<unknown>,
+    handler: getReviewContextHandler,
   },
   // Walkthrough-edit tools (CLAUDE.md invariant #7 chat-edit carve-out).
   // These mutate the latest completed walkthrough for the PR; they never
   // touch status / lastCompletedPhase. See `chat-edit-tools.ts` for
   // handler implementations.
-  ...(EDIT_TOOL_SPECS.map((spec) => ({
-    name: spec.name,
-    description: spec.description,
-    inputSchema: spec.inputSchema,
-    handler: spec.handler,
-  })) as unknown as ChatToolSpec<unknown>[]),
+  ...EDIT_TOOL_SPECS,
 ];
+
+export const CHAT_TOOL_BUNDLE: ToolSpecBundle<ChatToolContext, ChatToolResult> = {
+  name: "revv-chat-context",
+  version: "1.0.0",
+  specs: CHAT_TOOL_SPECS,
+};
 
 // ── Claude Agent SDK adapter ────────────────────────────────────────────────
 
@@ -327,17 +323,6 @@ export const CHAT_TOOL_SPECS: ReadonlyArray<ChatToolSpec<unknown>> = [
  * scoped to a single PR. Mirrors `createWalkthroughMcpServer` but with the
  * read-only tool surface above.
  */
-export function createChatMcpServer(ctx: ChatToolContext): ReturnType<typeof createSdkMcpServer> {
-  return createSdkMcpServer({
-    name: "revv-chat-context",
-    version: "1.0.0",
-    tools: CHAT_TOOL_SPECS.map((spec) =>
-      tool(
-        spec.name,
-        spec.description,
-        spec.inputSchema.shape,
-        async (args: Record<string, unknown>) => spec.handler(ctx, args),
-      ),
-    ),
-  });
+export function createChatMcpServer(ctx: ChatToolContext): ReturnType<typeof bindInProcess> {
+  return bindInProcess(CHAT_TOOL_BUNDLE, ctx);
 }

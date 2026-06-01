@@ -13,9 +13,13 @@ import {
 } from "$lib/components/ai/context";
 import { getSelectedPr, getSelectedPrId } from "$lib/stores/prs.svelte";
 import { getSettings } from "$lib/stores/settings.svelte";
-import { getLastSyncAt, getSyncError, getThreadsSyncing } from "$lib/stores/sync.svelte";
+import {
+  getLastSyncAt,
+  getSyncError,
+  getThreadsSyncing,
+  requestFullSync,
+} from "$lib/stores/sync.svelte";
 import { getTokenUsage } from "$lib/stores/walkthrough.svelte";
-import { requestFullSync } from "$lib/stores/ws.svelte";
 import AgentSelector from "./AgentSelector.svelte";
 import CommitsDropdown from "./CommitsDropdown.svelte";
 import ModelSelector from "./ModelSelector.svelte";

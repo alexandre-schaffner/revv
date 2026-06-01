@@ -161,7 +161,7 @@ export function streamChatViaCodex(
             controller.enqueue({ kind: "activity", ...activity });
             lastWasNonText = true;
           } else if (ev.kind === "task-list-update") {
-            controller.enqueue({ kind: "task-list", source: ev.source, tasks: ev.tasks });
+            controller.enqueue({ kind: "task-list", tasks: ev.tasks });
             lastWasNonText = true;
           } else if (ev.kind === "error") {
             logError("chat-codex", "session.error:", ev.message);
@@ -199,7 +199,6 @@ export function streamChatViaCodex(
               kind: "plan-presented",
               providerPlanId: `codex-plan-${capturedThreadId ?? opts.prId}`,
               markdown: planMarkdown,
-              source: "codex",
             });
           }
         }

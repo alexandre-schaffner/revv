@@ -8,9 +8,9 @@ import { remoteUsers } from "../db/schema/remote-users";
 import { clientIdForHost, isPublicGitHub, tokenUrlForHost } from "../github-oauth";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
+import { Identity } from "../services/Identity";
 import { RemoteUserService } from "../services/RemoteUser";
 import { SettingsService } from "../services/Settings";
-import { TokenProvider } from "../services/TokenProvider";
 import { withAuth } from "./middleware";
 
 // The device-code flow needs `client_id` only — no client_secret. If the
@@ -111,9 +111,7 @@ async function persistTokens(
   tokens: { accessToken: string | null; refreshToken: string | null },
 ): Promise<void> {
   await AppRuntime.runPromise(
-    Effect.flatMap(TokenProvider, (provider) =>
-      provider.storeAccountTokens(accountRowId, host, tokens),
-    ),
+    Effect.flatMap(Identity, (identity) => identity.storeAccountTokens(accountRowId, host, tokens)),
   );
 }
 
@@ -633,7 +631,7 @@ const protectedAuthRoutes = new Elysia()
         .where(and(eq(account.providerId, providerId), eq(account.userId, userId)));
       if (accountRow) {
         await AppRuntime.runPromise(
-          Effect.flatMap(TokenProvider, (provider) => provider.deleteAccountTokens(accountRow.id)),
+          Effect.flatMap(Identity, (identity) => identity.deleteAccountTokens(accountRow.id)),
         );
       }
       return { ok: true };

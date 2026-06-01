@@ -44,6 +44,9 @@ export class RepositoryService extends Context.Tag("RepositoryService")<
       fullName: string,
       accountId: string,
     ) => Effect.Effect<Repository | null, never, DbService>;
+    readonly getAccountIdForRepo: (
+      repoId: string,
+    ) => Effect.Effect<string, NotFoundError, DbService>;
     readonly updateRepoMetadata: (
       id: string,
       data: { readonly avatarUrl?: string | null; readonly defaultBranch?: string },
@@ -133,6 +136,20 @@ export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
       const row = db.select().from(repositories).where(eq(repositories.fullName, fullName)).get();
       if (!row || row.accountId !== accountId) return null;
       return rowToRepo(row);
+    }),
+
+  getAccountIdForRepo: (repoId) =>
+    Effect.gen(function* () {
+      const { db } = yield* DbService;
+      const row = db
+        .select({ accountId: repositories.accountId })
+        .from(repositories)
+        .where(eq(repositories.id, repoId))
+        .get();
+      if (!row) {
+        return yield* Effect.fail(new NotFoundError({ resource: "repository", id: repoId }));
+      }
+      return row.accountId;
     }),
 
   updateRepoMetadata: (id, data, accountId) =>

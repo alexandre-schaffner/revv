@@ -3,21 +3,17 @@ import { eq } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { reviewSessions } from "../db/schema/review-sessions";
 import { SyncError } from "../domain/errors";
+import { Broadcaster } from "./Broadcaster";
 import { DbService } from "./Db";
-import { type GhReviewComment, GitHubService } from "./GitHub";
+import { type GhReviewComment, GitHubGateway } from "./GitHub";
 import { PrContextService } from "./PrContext";
 import { PullRequestService } from "./PullRequest";
 import { RemoteUserService } from "./RemoteUser";
+import { RepositoryService } from "./Repository";
 import { ReviewService } from "./Review";
 import type { SettingsService } from "./Settings";
-import { WebSocketHub } from "./WebSocketHub";
-
-/** Extract GitHub @-mentions from a block of text. */
-function extractMentions(body: string): string[] {
-  const matches = body.match(/@([a-zA-Z0-9-]+)/g);
-  if (!matches) return [];
-  return [...new Set(matches.map((m) => m.slice(1)))];
-}
+import { extractGitHubMentions } from "./sync-engine/mentions";
+import { latestUpdatedAt } from "./sync-engine/watermark";
 
 export interface PullResult {
   readonly newThreads: number;
@@ -85,12 +81,13 @@ function rolePendingThem(thread: CommentThread, role: UserRole): boolean {
 export const SyncServiceLive = Layer.effect(
   SyncService,
   Effect.gen(function* () {
-    const github = yield* GitHubService;
+    const github = yield* GitHubGateway;
     const prService = yield* PullRequestService;
     const prContext = yield* PrContextService;
     const reviewService = yield* ReviewService;
     const remoteUserService = yield* RemoteUserService;
-    const hub = yield* WebSocketHub;
+    const repoService = yield* RepositoryService;
+    const broadcaster = yield* Broadcaster;
 
     // Background-worker PR context — always uses the 'single-user' token.
     const resolvePrContext = (prId: string) => prContext.resolveBasic(prId, "single-user");
@@ -157,7 +154,7 @@ export const SyncServiceLive = Layer.effect(
           commentPayload.startSide = commentPayload.side;
         }
 
-        const posted = yield* github.postReviewComment(
+        const posted = yield* github.reviews.createComment(
           repo.fullName,
           pr.externalId,
           commentPayload,
@@ -171,7 +168,7 @@ export const SyncServiceLive = Layer.effect(
         });
         yield* reviewService.setMessageExternalId(first.id, externalCommentId);
 
-        const threadsOnGithub = yield* github.listReviewThreads(
+        const threadsOnGithub = yield* github.reviews.listThreads(
           repo.fullName,
           pr.externalId,
           token,
@@ -212,7 +209,7 @@ export const SyncServiceLive = Layer.effect(
         const sessionPrId = yield* resolvePrIdFromSession(thread.reviewSessionId);
         const { pr, repo, token } = yield* resolvePrContext(sessionPrId);
 
-        const posted = yield* github.replyToComment(
+        const posted = yield* github.reviews.replyToComment(
           repo.fullName,
           pr.externalId,
           parentCommentId,
@@ -234,8 +231,8 @@ export const SyncServiceLive = Layer.effect(
 
         const isResolved = thread.status === "resolved" || thread.status === "wont_fix";
         yield* isResolved
-          ? github.resolveReviewThread(thread.externalThreadId, token)
-          : github.unresolveReviewThread(thread.externalThreadId, token);
+          ? github.reviews.resolveThread(thread.externalThreadId, token)
+          : github.reviews.unresolveThread(thread.externalThreadId, token);
       }).pipe(Effect.mapError(toSyncError(threadId)));
 
     const getThreadSummary = (
@@ -273,12 +270,13 @@ export const SyncServiceLive = Layer.effect(
     ): Effect.Effect<PullResult, SyncError, DbService | SettingsService> =>
       Effect.gen(function* () {
         const { pr, repo, token } = yield* resolvePrContext(prId);
+        const accountId = yield* repoService.getAccountIdForRepo(repo.id);
         const session = yield* reviewService.getOrCreateActiveSession(pr.id);
 
         // Incremental poll: ask GitHub only for comments newer than our
         // last successful sync. Null on cold-start pulls everything.
         const since = yield* prService.getCommentsSyncedAt(pr.id);
-        const comments = yield* github.listReviewComments(
+        const comments = yield* github.reviews.listComments(
           repo.fullName,
           pr.externalId,
           since,
@@ -303,7 +301,7 @@ export const SyncServiceLive = Layer.effect(
             ) {
               yield* reviewService.updateMessageBody(existingMsg.id, c.body, c.updatedAt);
               const updatedMsg = yield* reviewService.getMessage(existingMsg.id);
-              yield* hub.broadcast({
+              yield* broadcaster.broadcastToAccount(accountId, {
                 type: "thread:message",
                 data: { threadId: existingMsg.threadId, message: updatedMsg },
               });
@@ -344,7 +342,7 @@ export const SyncServiceLive = Layer.effect(
 
             yield* reviewService.transitionStatus(thread.id, authorRole);
 
-            yield* hub.broadcast({
+            yield* broadcaster.broadcastToAccount(accountId, {
               type: "threads:new-reply",
               data: { prId: pr.id, thread, message: msg },
             });
@@ -374,7 +372,7 @@ export const SyncServiceLive = Layer.effect(
 
           yield* reviewService.transitionStatus(thread.id, authorRole);
 
-          yield* hub.broadcast({
+          yield* broadcaster.broadcastToAccount(accountId, {
             type: "threads:new-reply",
             data: { prId: pr.id, thread, message: msg },
           });
@@ -382,7 +380,7 @@ export const SyncServiceLive = Layer.effect(
 
         // Extract @-mentions from newly-synced review comments and append
         // them to the PR's `mentionedUsers` array.
-        const commentMentions = comments.flatMap((c) => extractMentions(c.body));
+        const commentMentions = comments.flatMap((c) => extractGitHubMentions(c.body));
         if (commentMentions.length > 0) {
           yield* prService
             .appendMentionedUsers(pr.id, commentMentions)
@@ -390,7 +388,7 @@ export const SyncServiceLive = Layer.effect(
         }
 
         // Reconcile resolution status via GraphQL.
-        const ghThreads = yield* github.listReviewThreads(repo.fullName, pr.externalId, token);
+        const ghThreads = yield* github.reviews.listThreads(repo.fullName, pr.externalId, token);
         for (const ght of ghThreads) {
           for (const cdbId of ght.commentDatabaseIds) {
             const local = yield* reviewService.getThreadByExternalCommentId(
@@ -408,14 +406,14 @@ export const SyncServiceLive = Layer.effect(
             const localResolved = local.status === "resolved" || local.status === "wont_fix";
             if (ght.isResolved && !localResolved) {
               yield* reviewService.updateThreadStatus(local.id, "resolved");
-              yield* hub.broadcast({
+              yield* broadcaster.broadcastToAccount(accountId, {
                 type: "thread:updated",
                 data: { threadId: local.id, status: "resolved" },
               });
               statusChanges++;
             } else if (!ght.isResolved && localResolved) {
               yield* reviewService.updateThreadStatus(local.id, "open");
-              yield* hub.broadcast({
+              yield* broadcaster.broadcastToAccount(accountId, {
                 type: "thread:updated",
                 data: { threadId: local.id, status: "open" },
               });
@@ -429,10 +427,7 @@ export const SyncServiceLive = Layer.effect(
         // succeeded AND produced comments — otherwise keep the old
         // watermark so the next tick refetches from the same point.
         if (comments.length > 0) {
-          const watermark = comments.reduce(
-            (max, c) => (c.updatedAt > max ? c.updatedAt : max),
-            "",
-          );
+          const watermark = latestUpdatedAt(comments);
           if (watermark) {
             yield* prService.setCommentsSyncedAt(pr.id, watermark);
           }
@@ -447,12 +442,14 @@ export const SyncServiceLive = Layer.effect(
       Effect.gen(function* () {
         const pulled = yield* pullComments(prId);
         const summary = yield* getThreadSummary(prId, null);
-        yield* hub.broadcast({
+        const { repo } = yield* resolvePrContext(prId);
+        const accountId = yield* repoService.getAccountIdForRepo(repo.id);
+        yield* broadcaster.broadcastToAccount(accountId, {
           type: "threads:synced",
           data: { prId, summary, timestamp: new Date().toISOString() },
         });
         return { pulled, summary };
-      });
+      }).pipe(Effect.mapError(toSyncError()));
 
     return {
       pushThread,

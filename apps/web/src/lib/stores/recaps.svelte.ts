@@ -176,7 +176,7 @@ export async function regenerateRecap(recapId: string): Promise<{ recapId: strin
  * (so the UI stops painting) and hits the server cancel endpoint so the
  * agent stops burning tokens. The server transitions the row to
  * `status='error'` with `errorMessage="Cancelled by user"`, broadcasts
- * the change via WS, and the reducer here patches the cached detail/list
+ * the change via SSE, and the reducer here patches the cached detail/list
  * state on receipt. Returns true on success.
  */
 export async function stopRecap(recapId: string): Promise<boolean> {
@@ -187,7 +187,7 @@ export async function stopRecap(recapId: string): Promise<boolean> {
     const { error } = await api.api.recaps({ id: recapId }).stop.post();
     if (error) throw new Error(`HTTP ${error.status}`);
     // Optimistically patch local state so the UI flips out of
-    // "generating" immediately instead of waiting for the WS broadcast.
+    // "generating" immediately instead of waiting for the SSE broadcast.
     const existing = recapDetailById.get(recapId);
     if (existing) {
       const patched: ProjectRecap = {
@@ -221,7 +221,7 @@ export async function stopRecap(recapId: string): Promise<boolean> {
   }
 }
 
-// ── WebSocket reducers ──────────────────────────────────────────────────────
+// ── SSE event reducers ──────────────────────────────────────────────────────
 
 /**
  * Patch the status of a recap in both the summary list (if loaded) and

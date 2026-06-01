@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 import { AppRuntime } from "../../../runtime";
-import { GitHubService } from "../../../services/GitHub";
+import { GitHubGateway } from "../../../services/GitHub";
 import { PrContextService } from "../../../services/PrContext";
 import { WalkthroughService } from "../../../services/Walkthrough";
 import { WalkthroughJobs } from "../../../services/WalkthroughJobs";
@@ -33,12 +33,12 @@ export function getCurrentWalkthroughHandler(prId: string, userId: string) {
   return AppRuntime.runPromise(
     Effect.gen(function* () {
       const prContext = yield* PrContextService;
-      const github = yield* GitHubService;
+      const github = yield* GitHubGateway;
       const walkthroughService = yield* WalkthroughService;
       const jobs = yield* WalkthroughJobs;
 
       const { pr, repo, token } = yield* prContext.resolveBasic(prId, userId);
-      const meta = yield* github.getPrMeta(repo.fullName, pr.externalId, token);
+      const meta = yield* github.prs.meta(repo.fullName, pr.externalId, token);
 
       // 1. Complete walkthrough — best case, no SSE needed.
       const complete = yield* walkthroughService.getCached(pr.id, meta.headSha);

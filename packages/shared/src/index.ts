@@ -42,6 +42,7 @@ export {
   UPDATE_STABLE_COOLDOWN_MS,
 } from "./constants";
 export type { ServerEventMessage, WalkthroughEventEnvelope } from "./events";
+export * from "./events";
 export { guessImageContentType, isImagePath } from "./images";
 export { isMaintainerLogin, MAINTAINER_LOGINS } from "./maintainers";
 export type {
@@ -97,4 +98,3 @@ export type {
   UserSettings,
 } from "./types";
 export * from "./walkthrough";
-export type { WsClientMessage, WsServerMessage } from "./ws";

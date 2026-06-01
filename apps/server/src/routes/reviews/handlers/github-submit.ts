@@ -1,7 +1,7 @@
 import { Effect } from "effect";
 import { logError } from "../../../logger";
 import { AppRuntime } from "../../../runtime";
-import { GitHubService } from "../../../services/GitHub";
+import { GitHubGateway } from "../../../services/GitHub";
 import { PrContextService } from "../../../services/PrContext";
 import { ReviewService } from "../../../services/Review";
 import { WalkthroughService } from "../../../services/Walkthrough";
@@ -41,7 +41,7 @@ export function submitGithubReviewHandler(prId: string, userId: string, body: Su
   return AppRuntime.runPromise(
     Effect.gen(function* () {
       const prContext = yield* PrContextService;
-      const github = yield* GitHubService;
+      const github = yield* GitHubGateway;
       const reviewService = yield* ReviewService;
       const walkthroughService = yield* WalkthroughService;
 
@@ -74,7 +74,7 @@ export function submitGithubReviewHandler(prId: string, userId: string, body: Su
         return comment;
       });
 
-      const review = yield* github.postReview(
+      const review = yield* github.reviews.submit(
         repo.fullName,
         pr.externalId,
         {
@@ -89,8 +89,8 @@ export function submitGithubReviewHandler(prId: string, userId: string, body: Su
       // sync-threads call doesn't create duplicate entries.
       const inputComments = body.comments ?? [];
       if (inputComments.length > 0) {
-        const ghComments = yield* github
-          .listReviewCommentsForReview(repo.fullName, pr.externalId, review.id, ghToken)
+        const ghComments = yield* github.reviews
+          .commentsForReview(repo.fullName, pr.externalId, review.id, ghToken)
           .pipe(Effect.orElseSucceed(() => []));
 
         for (const input of inputComments) {

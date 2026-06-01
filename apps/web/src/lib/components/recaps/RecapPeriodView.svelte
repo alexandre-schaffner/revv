@@ -45,7 +45,7 @@ const periodLabelLower = $derived(period === "daily" ? "daily" : "weekly");
 // user's current period, not a regeneration of the displayed one.
 const currentPeriodLabel = $derived(period === "daily" ? "today's" : "this week's");
 
-// Fetch the recap list for this repo. The list reducer hydrates from WS
+// Fetch the recap list for this repo. The list reducer hydrates from SSE
 // envelopes so navigating between periods doesn't re-hit the network.
 $effect(() => {
   const id = repoId;
@@ -87,7 +87,7 @@ $effect(() => {
   }
 });
 
-// SSE `done` should reveal the final persisted markdown even if the WS
+// SSE `done` should reveal the final persisted markdown even if the
 // completion broadcast arrives late or was missed while reconnecting.
 $effect(() => {
   const id = latestId;

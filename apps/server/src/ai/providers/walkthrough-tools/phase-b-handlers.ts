@@ -587,7 +587,7 @@ export const flagIssueHandler: WalkthroughToolHandler<FlagIssueInput> = async (c
 //
 // Writes (one transaction): one `comment_threads` row + one `thread_messages`
 // row, both keyed on deterministic ids so retries upsert in place. Does NOT
-// advance phase. After commit broadcasts a `thread:created` WS event so any
+// advance phase. After commit broadcasts a `thread:created` SSE event so any
 // open `DiffViewerInner` re-renders inline at the anchor.
 //
 // Idempotency:
