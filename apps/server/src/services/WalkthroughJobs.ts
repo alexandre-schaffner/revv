@@ -647,10 +647,23 @@ export const WalkthroughJobsLive = Layer.effect(
             }
 
             if (event.type === "error") {
-              if (job.abortController.signal.aborted) {
+              // Only suppress the error when the user explicitly cancelled.
+              // A user cancel sets `cancelledByUser` AND interrupts the fiber,
+              // so `handleFailure` owns the terminal lifecycle event — emitting
+              // here too would double-broadcast. Every OTHER abort of
+              // `job.abortController` (the 10-minute hard timeout in the
+              // provider, scope-close, shutdown) flips `signal.aborted` WITHOUT
+              // `cancelledByUser` and does NOT interrupt the fiber, so
+              // `handleFailure` never runs. Keying suppression on
+              // `signal.aborted` (the old condition) swallowed those errors and
+              // returned `returnDone` — the job completed "successfully", no
+              // terminal event reached the client, and the row stayed
+              // `generating` forever (the observed hang). Fall through to the
+              // error path for those so the UI gets a terminal event.
+              if (job.cancelledByUser) {
                 debug(
                   "walkthrough-jobs",
-                  "suppressing error broadcast — abort initiated locally:",
+                  "suppressing error broadcast — cancelled by user:",
                   event.data.message,
                 );
                 return { _tag: "returnDone", tokenUsage: state.accumulatedTokenUsage } as const;
