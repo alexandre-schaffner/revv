@@ -43,9 +43,6 @@ const gitRunnerSpecifierPattern = /(^|\/)git-runner$/;
 const gitRunnerAllowedImporters = new Set([
   "apps/server/src/services/RepoClone.ts",
   "apps/server/src/services/GitOps.ts",
-  // Legacy exception: the chat push pipeline still drives `git-runner` directly;
-  // scheduled to fold behind the Local Git module in a follow-up wave.
-  "apps/server/src/services/ChatChangesPush.ts",
 ]);
 
 function listTsFiles(dir: string): string[] {
