@@ -189,7 +189,7 @@ $effect(() => {
       label: "Regenerate",
       onClick: () => handleRegenerate(),
     },
-    duration: 8000,
+    duration: Number.POSITIVE_INFINITY,
   });
 });
 

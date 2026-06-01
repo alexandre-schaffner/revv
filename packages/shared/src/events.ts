@@ -166,6 +166,11 @@ export interface ThreadMessageDeletedEnvelope {
   data: { threadId: string; messageId: string };
 }
 
+export interface ThreadsSyncErrorEnvelope {
+  type: "threads:sync-error";
+  data: { prId: string; message: string };
+}
+
 export interface ChatQuestionResolvedEnvelope {
   type: "chat:question-resolved";
   data: {
@@ -281,7 +286,8 @@ export type ThreadEventMessage =
   | ThreadsNewReplyEnvelope
   | ThreadDeletedEnvelope
   | ThreadMessageEditedEnvelope
-  | ThreadMessageDeletedEnvelope;
+  | ThreadMessageDeletedEnvelope
+  | ThreadsSyncErrorEnvelope;
 
 export type ServerEventMessage =
   | WalkthroughEventEnvelope

@@ -761,6 +761,20 @@ export function sendChatMessage(params: SendChatMessageParams): void {
         // refresh so the proposed-changes strip reflects whatever
         // landed in the worktree.
         void refreshProposedChanges(prId);
+        if (err.code === "NOT_CONFIGURED") {
+          toast.error("AI agent not configured", {
+            description: "Install opencode or Claude Code, then configure it in Settings.",
+            duration: Number.POSITIVE_INFINITY,
+          });
+          return;
+        }
+        if (err.code === "GITHUB_RATE_LIMITED") {
+          toast.error("GitHub rate limit reached", {
+            description: err.message,
+            duration: 15000,
+          });
+          return;
+        }
         toast.error(err.message || "AI chat failed");
       },
     },

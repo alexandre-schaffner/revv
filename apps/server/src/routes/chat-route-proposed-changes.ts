@@ -50,9 +50,7 @@ export const chatProposedChangesRoutes = new Elysia()
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-            const agent = yield* settingsService
-              .resolveAgent()
-              .pipe(Effect.orElseSucceed(() => "opencode" as const));
+            const agent = yield* settingsService.resolveAgentOrDefault();
 
             if (!pr.headSha) return null;
             const row = yield* chatSessions.find(pr.id, agent, pr.headSha);
@@ -102,9 +100,7 @@ export const chatProposedChangesRoutes = new Elysia()
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-            const agent = yield* settingsService
-              .resolveAgent()
-              .pipe(Effect.orElseSucceed(() => "opencode" as const));
+            const agent = yield* settingsService.resolveAgentOrDefault();
 
             if (!pr.headSha) return null;
             return yield* chatSessions.find(pr.id, agent, pr.headSha);
@@ -149,9 +145,7 @@ export const chatProposedChangesRoutes = new Elysia()
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-            const agent = yield* settingsService
-              .resolveAgent()
-              .pipe(Effect.orElseSucceed(() => "opencode" as const));
+            const agent = yield* settingsService.resolveAgentOrDefault();
 
             if (!pr.headSha) return null;
             return yield* chatSessions.find(pr.id, agent, pr.headSha);
@@ -541,9 +535,7 @@ export const chatProposedChangesRoutes = new Elysia()
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-            const agent = yield* settingsService
-              .resolveAgent()
-              .pipe(Effect.orElseSucceed(() => "opencode" as const));
+            const agent = yield* settingsService.resolveAgentOrDefault();
             return yield* chatSessions.findLatestForPr(pr.id, agent);
           }),
         );
@@ -626,9 +618,7 @@ export const chatProposedChangesRoutes = new Elysia()
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-            const agent = yield* settingsService
-              .resolveAgent()
-              .pipe(Effect.orElseSucceed(() => "opencode" as const));
+            const agent = yield* settingsService.resolveAgentOrDefault();
             return yield* chatSessions.findLatestForPr(pr.id, agent);
           }),
         );
@@ -764,9 +754,7 @@ export const chatProposedChangesRoutes = new Elysia()
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-            const agent = yield* settingsService
-              .resolveAgent()
-              .pipe(Effect.orElseSucceed(() => "opencode" as const));
+            const agent = yield* settingsService.resolveAgentOrDefault();
             return yield* chatSessions.findLatestForPr(pr.id, agent);
           }),
         );
@@ -831,9 +819,7 @@ export const chatProposedChangesRoutes = new Elysia()
               ctx.params.prId,
               ctx.session.user.id,
             );
-            const agent = yield* settingsService
-              .resolveAgent()
-              .pipe(Effect.orElseSucceed(() => "opencode" as const));
+            const agent = yield* settingsService.resolveAgentOrDefault();
 
             const row = yield* chatSessions.findLatestForPr(pr.id, agent);
             if (!row) return;

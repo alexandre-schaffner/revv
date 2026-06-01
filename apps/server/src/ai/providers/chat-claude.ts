@@ -19,14 +19,12 @@ import type { Db } from "../../db";
 import { AiGenerationError } from "../../domain/errors";
 import { logError } from "../../logger";
 import { AppRuntime } from "../../runtime";
-import { Broadcaster } from "../../services/Broadcaster";
+import { fireAndForgetThreadEventBroadcast } from "../../services/broadcast-thread-event";
 import {
   registerPendingQuestion,
   takePendingQuestion,
 } from "../../services/PendingQuestionRegistry";
-import { PrContextService } from "../../services/PrContext";
 import { RemoteWalkthroughCache } from "../../services/RemoteWalkthroughCache";
-import { RepositoryService } from "../../services/Repository";
 import { WalkthroughJobs } from "../../services/WalkthroughJobs";
 import {
   buildActivity,
@@ -179,22 +177,7 @@ export function streamChatViaClaude(
           });
         };
         const broadcastThreadEvent = (msg: ThreadEventMessage): void => {
-          void AppRuntime.runPromise(
-            Effect.gen(function* () {
-              const prContext = yield* PrContextService;
-              const repoService = yield* RepositoryService;
-              const broadcaster = yield* Broadcaster;
-              const { repo } = yield* prContext.resolveBasic(opts.prId, opts.userId);
-              const accountId = yield* repoService.getAccountIdForRepo(repo.id);
-              yield* broadcaster.broadcastToAccount(accountId, msg);
-            }),
-          ).catch((err) => {
-            logError(
-              "chat-claude",
-              "thread broadcast failed:",
-              err instanceof Error ? err.message : String(err),
-            );
-          });
+          fireAndForgetThreadEventBroadcast("chat-claude", opts.prId, opts.userId, msg);
         };
 
         const mcpServer = enableMcp

@@ -10,12 +10,10 @@ import { EDIT_TOOL_SPECS } from "../../ai/providers/chat-edit-tools";
 import { CHAT_TOOL_BUNDLE, type ChatToolContext } from "../../ai/providers/chat-mcp-tools";
 import { logError } from "../../logger";
 import { AppRuntime } from "../../runtime";
-import { Broadcaster } from "../../services/Broadcaster";
+import { fireAndForgetThreadEventBroadcast } from "../../services/broadcast-thread-event";
 import { ChatMcpTokens, type ChatTokenResolved } from "../../services/ChatMcpTokens";
 import { DbService } from "../../services/Db";
-import { PrContextService } from "../../services/PrContext";
 import { RemoteWalkthroughCache } from "../../services/RemoteWalkthroughCache";
-import { RepositoryService } from "../../services/Repository";
 import { WalkthroughJobs } from "../../services/WalkthroughJobs";
 import { bindHttp, type ContextResolution, extractBearer } from "./utils";
 
@@ -72,22 +70,7 @@ async function resolveContext(
   };
 
   const broadcastThreadEvent = (msg: ThreadEventMessage): void => {
-    void AppRuntime.runPromise(
-      Effect.gen(function* () {
-        const prContext = yield* PrContextService;
-        const repoService = yield* RepositoryService;
-        const broadcaster = yield* Broadcaster;
-        const { repo } = yield* prContext.resolveBasic(resolved.prId, resolved.userId);
-        const accountId = yield* repoService.getAccountIdForRepo(repo.id);
-        yield* broadcaster.broadcastToAccount(accountId, msg);
-      }),
-    ).catch((err) => {
-      logError(
-        "mcp-chat-context",
-        "thread event broadcast failed:",
-        err instanceof Error ? err.message : String(err),
-      );
-    });
+    fireAndForgetThreadEventBroadcast("mcp-chat-context", resolved.prId, resolved.userId, msg);
   };
 
   return {

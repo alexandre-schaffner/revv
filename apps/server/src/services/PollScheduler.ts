@@ -92,20 +92,8 @@ export const PollSchedulerLive = Layer.effect(
     const hasPeriodicSyncedOnceRef = yield* Ref.make(false);
     // Set to true by syncNow to suppress the summary during manual syncs.
     const suppressSummaryRef = yield* Ref.make(false);
-    const currentAccountIdsRef = yield* Ref.make<ReadonlyArray<string>>([]);
-
-    const broadcastToCurrentAccounts = (msg: import("@revv/shared").ServerEventMessage) =>
-      Effect.gen(function* () {
-        const accountIds = yield* Ref.get(currentAccountIdsRef);
-        yield* Effect.forEach(
-          accountIds,
-          (accountId) =>
-            broadcaster
-              .broadcastToAccount(accountId, msg)
-              .pipe(Effect.orElseSucceed(() => undefined)),
-          { concurrency: 1 },
-        );
-      });
+    const broadcastGlobal = (msg: import("@revv/shared").ServerEventMessage) =>
+      broadcaster.broadcastAll(msg).pipe(Effect.orElseSucceed(() => undefined));
 
     // Fiber ref for the running poll loop — null when stopped
     const fiberRef = yield* Ref.make<Fiber.RuntimeFiber<number, never> | null>(null);
@@ -128,12 +116,11 @@ export const PollSchedulerLive = Layer.effect(
             .all();
           const repoToAccountId = new Map(repoRowsForAccount.map((r) => [r.id, r.accountId]));
           const accountIdSet = Array.from(new Set(repoRowsForAccount.map((r) => r.accountId)));
-          yield* Ref.set(currentAccountIdsRef, accountIdSet);
-          yield* broadcastToCurrentAccounts({ type: "prs:sync-started" });
+          yield* broadcastGlobal({ type: "prs:sync-started" });
 
           if (allRepos.length === 0) {
             const etagStatsAfter = etagCache.stats();
-            yield* broadcastToCurrentAccounts({
+            yield* broadcastGlobal({
               type: "prs:sync-complete",
               data: {
                 count: 0,
@@ -932,7 +919,7 @@ export const PollSchedulerLive = Layer.effect(
           yield* Ref.set(suppressSummaryRef, false);
 
           const etagStatsAfter = etagCache.stats();
-          yield* broadcastToCurrentAccounts({
+          yield* broadcastGlobal({
             type: "prs:sync-complete",
             data: {
               count: allPrs.length,
@@ -949,7 +936,7 @@ export const PollSchedulerLive = Layer.effect(
           }),
         ),
         Effect.catchAllCause((cause) =>
-          broadcastToCurrentAccounts({
+          broadcastGlobal({
             type: "error",
             data: { code: "SYNC_ERROR", message: String(cause) },
           }),
@@ -995,7 +982,7 @@ export const PollSchedulerLive = Layer.effect(
       );
     }).pipe(
       Effect.catchAllCause((cause) =>
-        broadcastToCurrentAccounts({
+        broadcastGlobal({
           type: "error",
           data: { code: "THREAD_SYNC_ERROR", message: String(cause) },
         }),
@@ -1113,7 +1100,23 @@ export const PollSchedulerLive = Layer.effect(
               `Manual thread sync failed for PR ${prId}:`,
               [detail, defectStr, pretty].filter(Boolean).join("\n"),
             );
-            return Effect.void;
+            const userMessage = detail ?? "Unknown error";
+            return Effect.gen(function* () {
+              const prRow = yield* withDb(prService.getPr(prId)).pipe(
+                Effect.catchAll(() => Effect.succeed(null)),
+              );
+              if (!prRow) return;
+              const accountId = yield* withDb(
+                repoService.getAccountIdForRepo(prRow.repositoryId),
+              ).pipe(Effect.catchAll(() => Effect.succeed(null)));
+              if (!accountId) return;
+              yield* broadcaster
+                .broadcastToAccount(accountId, {
+                  type: "threads:sync-error",
+                  data: { prId, message: userMessage },
+                })
+                .pipe(Effect.orElseSucceed(() => undefined));
+            });
           }),
         ),
     };

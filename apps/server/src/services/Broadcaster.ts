@@ -61,6 +61,9 @@ export class Broadcaster extends Context.Tag("Broadcaster")<
       accountId: string,
       msg: ServerEventMessage,
     ) => Effect.Effect<void>;
+
+    /** Best-effort broadcast to every registered writer regardless of account. */
+    readonly broadcastAll: (msg: ServerEventMessage) => Effect.Effect<void>;
   }
 >() {}
 
@@ -109,6 +112,14 @@ export const BroadcasterLive = Layer.effect(
           const set = yield* Ref.get(registrations);
           for (const reg of set) {
             if (reg.accountId !== accountId) continue;
+            dispatch(reg, msg);
+          }
+        }),
+
+      broadcastAll: (msg) =>
+        Effect.gen(function* () {
+          const set = yield* Ref.get(registrations);
+          for (const reg of set) {
             dispatch(reg, msg);
           }
         }),

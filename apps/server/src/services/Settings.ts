@@ -350,6 +350,7 @@ export class SettingsService extends Context.Tag("SettingsService")<
     updateSettings: (partial: SettingsUpdate) => Effect.Effect<UserSettings, ValidationError>;
     settingsChanges: () => Stream.Stream<UserSettings>;
     resolveAgent: () => Effect.Effect<AgentId, ValidationError>;
+    resolveAgentOrDefault: () => Effect.Effect<AgentId>;
     resolveRecapAgent: () => Effect.Effect<AgentId, ValidationError>;
   }
 >() {}
@@ -427,6 +428,13 @@ export const SettingsServiceLive = Layer.effect(
         settingsRef.get.pipe(
           Effect.mapError((e) => new ValidationError({ message: String(e) })),
           Effect.map(resolveAgentFromSettings),
+        ),
+
+      resolveAgentOrDefault: () =>
+        settingsRef.get.pipe(
+          Effect.mapError((e) => new ValidationError({ message: String(e) })),
+          Effect.map(resolveAgentFromSettings),
+          Effect.orElseSucceed(() => "opencode" as const),
         ),
 
       resolveRecapAgent: () =>

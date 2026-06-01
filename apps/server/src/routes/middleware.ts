@@ -77,10 +77,24 @@ export const withAccount = new Elysia({ name: "with-account" }).derive(
         const identity = yield* Identity;
         return yield* identity.resolveAccount(session.user.id, host);
       }),
-    ).catch(() => null);
+    ).catch((err) => {
+      const unwrapped = unwrapEffectError(err);
+      if (unwrapped instanceof GitHubAuthError) {
+        return { __authError: true as const, error: unwrapped };
+      }
+      logError(
+        "withAccount",
+        "account resolution failed:",
+        unwrapped instanceof Error ? unwrapped.message : String(unwrapped),
+      );
+      return null;
+    });
 
     if (!account) {
       return status(401, { error: "Unauthorized" });
+    }
+    if ("__authError" in account) {
+      return status(401, { error: "GitHub token expired or invalid" });
     }
     return { session, account };
   },

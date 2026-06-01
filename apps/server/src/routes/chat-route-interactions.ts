@@ -34,9 +34,7 @@ export const chatInteractionRoutes = new Elysia()
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-            const agent = yield* settingsService
-              .resolveAgent()
-              .pipe(Effect.orElseSucceed(() => "opencode" as const));
+            const agent = yield* settingsService.resolveAgentOrDefault();
             if (!pr.headSha) return;
             const row = yield* chatSessions.find(pr.id, agent, pr.headSha);
             if (!row) return;
@@ -361,9 +359,7 @@ export const chatInteractionRoutes = new Elysia()
       const result = await AppRuntime.runPromise(
         Effect.gen(function* () {
           const settingsService = yield* SettingsService;
-          const agent = yield* settingsService
-            .resolveAgent()
-            .pipe(Effect.orElseSucceed(() => "opencode" as const));
+          const agent = yield* settingsService.resolveAgentOrDefault();
           if (agent === "claude") {
             return {
               agent: "claude" as const,

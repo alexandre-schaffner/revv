@@ -41,7 +41,7 @@ import {
   onThreadUpdated,
 } from "./review.svelte";
 import { getGithubHost } from "./settings.svelte";
-import { applySynced, requestThreadSync, setPrListSyncing } from "./sync.svelte";
+import { applySynced, requestThreadSync, setPrListSyncing, setSyncError } from "./sync.svelte";
 import {
   hydrateActiveWalkthroughs,
   hydrateFromCache,
@@ -244,6 +244,13 @@ function dispatch(msg: ServerEventMessage): void {
       if (msg.data.prId === getSelectedPrId()) {
         void loadSession(msg.data.prId);
       }
+      break;
+    case "threads:sync-error":
+      setSyncError(msg.data.prId, msg.data.message);
+      toast.error("Comment sync failed", {
+        description: msg.data.message,
+        duration: 6000,
+      });
       break;
     case "threads:new-reply":
       onThreadCreated(msg.data.thread, msg.data.message);

@@ -85,9 +85,7 @@ export const chatRoute = new Elysia()
               const meta = yield* prCtx.prMeta(repo.fullName, pr.externalId, token);
               headSha = meta.headSha;
             }
-            const agent = yield* settingsService
-              .resolveAgent()
-              .pipe(Effect.orElseSucceed(() => "opencode" as const));
+            const agent = yield* settingsService.resolveAgentOrDefault();
 
             // Check for an existing session BEFORE acquiring the
             // worktree. No row means this is a fresh start (e.g.
@@ -423,9 +421,7 @@ export const chatRoute = new Elysia()
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-            const agent = yield* settingsService
-              .resolveAgent()
-              .pipe(Effect.orElseSucceed(() => "opencode" as const));
+            const agent = yield* settingsService.resolveAgentOrDefault();
 
             if (!pr.headSha) return null;
 
@@ -473,9 +469,7 @@ export const chatRoute = new Elysia()
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-            const agent = yield* settingsService
-              .resolveAgent()
-              .pipe(Effect.orElseSucceed(() => "opencode" as const));
+            const agent = yield* settingsService.resolveAgentOrDefault();
 
             // Capture the active worktree before dropping rows so we
             // can rewind it to the PR head SHA below — clearing the

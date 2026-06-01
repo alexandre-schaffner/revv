@@ -1,4 +1,5 @@
 import type { ThreadSummary } from "@revv/shared";
+import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 
 // Map keyed by PR id (`owner/repo:number`) — summary is recomputed server-side
@@ -46,19 +47,35 @@ export function setPrListSyncing(v: boolean): void {
 
 export function requestSync(): void {
   setPrListSyncing(true);
-  void api.api.prs.sync.post();
+  void api.api.prs.sync.post().catch(() => {
+    setPrListSyncing(false);
+    toast.error("Failed to sync pull requests");
+  });
 }
 
 export function requestThreadSync(prId: string): void {
   markThreadsSyncing(prId);
-  void api.api.prs({ id: prId })["sync-threads"].post();
+  void api.api
+    .prs({ id: prId })
+    ["sync-threads"].post()
+    .catch(() => {
+      setSyncError(prId, "Failed to reach server");
+    });
 }
 
 export function requestFullSync(prId: string): void {
   markThreadsSyncing(prId);
   setPrListSyncing(true);
-  void api.api.prs.sync.post();
-  void api.api.prs({ id: prId })["sync-threads"].post();
+  void api.api.prs.sync.post().catch(() => {
+    setPrListSyncing(false);
+    toast.error("Failed to sync pull requests");
+  });
+  void api.api
+    .prs({ id: prId })
+    ["sync-threads"].post()
+    .catch(() => {
+      setSyncError(prId, "Failed to reach server");
+    });
 }
 
 /** Mark a PR's threads sync as in-flight (called when we send the request). */
@@ -73,6 +90,17 @@ export function markThreadsSyncing(prId: string): void {
     nextErr.delete(prId);
     syncErrorByPr = nextErr;
   }
+}
+
+export function setSyncError(prId: string, message: string): void {
+  if (threadsSyncingByPr.has(prId)) {
+    const nextSyncing = new Set(threadsSyncingByPr);
+    nextSyncing.delete(prId);
+    threadsSyncingByPr = nextSyncing;
+  }
+  const nextErr = new Map(syncErrorByPr);
+  nextErr.set(prId, message);
+  syncErrorByPr = nextErr;
 }
 
 export function applySynced(prId: string, summary: ThreadSummary, timestamp: string): void {

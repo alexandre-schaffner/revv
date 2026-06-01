@@ -35,6 +35,10 @@ function makeFakeHub() {
       Effect.sync(() => {
         events.push({ accountId, msg });
       }),
+    broadcastAll: (msg: ServerEventMessage) =>
+      Effect.sync(() => {
+        events.push({ accountId: "*", msg });
+      }),
   });
   return { layer, events };
 }

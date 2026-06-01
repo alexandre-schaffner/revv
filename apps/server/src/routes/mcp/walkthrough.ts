@@ -10,10 +10,8 @@ import type { WalkthroughToolContext } from "../../ai/providers/walkthrough-tool
 import { WALKTHROUGH_TOOL_BUNDLE } from "../../ai/providers/walkthrough-tools";
 import { logError } from "../../logger";
 import { AppRuntime } from "../../runtime";
-import { Broadcaster } from "../../services/Broadcaster";
+import { fireAndForgetThreadEventBroadcast } from "../../services/broadcast-thread-event";
 import { DbService } from "../../services/Db";
-import { PrContextService } from "../../services/PrContext";
-import { RepositoryService } from "../../services/Repository";
 import { WalkthroughJobs } from "../../services/WalkthroughJobs";
 import { bindHttp, type ContextResolution, extractBearer } from "./utils";
 
@@ -57,22 +55,7 @@ async function resolveContext(
     }
   };
   const broadcastThreadEvent = (msg: ThreadEventMessage): void => {
-    void AppRuntime.runPromise(
-      Effect.gen(function* () {
-        const prContext = yield* PrContextService;
-        const repoService = yield* RepositoryService;
-        const broadcaster = yield* Broadcaster;
-        const { repo } = yield* prContext.resolveBasic(resolved.prId, "single-user");
-        const accountId = yield* repoService.getAccountIdForRepo(repo.id);
-        yield* broadcaster.broadcastToAccount(accountId, msg);
-      }),
-    ).catch((err) => {
-      logError(
-        "mcp-walkthrough-route",
-        `broadcastThreadEvent failed for ${walkthroughId}:`,
-        err instanceof Error ? err.message : String(err),
-      );
-    });
+    fireAndForgetThreadEventBroadcast("mcp-walkthrough-route", resolved.prId, "single-user", msg);
   };
 
   return {
