@@ -378,14 +378,6 @@ function buildCodex(sessionToken: string, mcpUrl: string): Codex {
     // process.env and strip the codex CLI's own auth + PATH.
     ...(pinned !== "codex" ? { codexPathOverride: pinned } : {}),
     config: {
-      // `codex exec` is non-interactive: MCP tool calls "require approval by
-      // policy" and, with no interactive approver, are auto-cancelled ("user
-      // cancelled MCP tool call") unless the run bypasses the approval +
-      // sandbox + project-trust gate. This is the parity of the Claude path's
-      // `bypassPermissions` + `allowDangerouslySkipPermissions` and opencode's
-      // no-prompt runs (invariant #13). The agent is confined to its dedicated
-      // per-job worktree; all durable content lands via the MCP tools.
-      dangerously_bypass_approvals_and_sandbox: true,
       mcp_servers: {
         [WALKTHROUGH_MCP_SERVER]: {
           url: mcpUrl,
@@ -403,11 +395,21 @@ function buildThreadOptions(
   effort?: UserSettings["aiThinkingEffort"],
 ) {
   const reasoning = toCodexReasoningEffort(effort);
-  // Do NOT set `sandboxMode`/`approvalPolicy` here — they emit `--sandbox` /
-  // `approval_policy` flags that conflict with the bypass config above.
+  // `codex exec` is one-way (the SDK writes the prompt to stdin then only reads
+  // events — it never sends approval responses). Any MCP tool call that
+  // "requires approval" is therefore auto-cancelled ("user cancelled MCP tool
+  // call") UNLESS the run is non-interactive-safe. Empirically only
+  // `danger-full-access` + `approval_policy=never` lets MCP tool calls execute
+  // without an approver (read-only / workspace-write both cancel). This is the
+  // parity of the Claude path's `bypassPermissions` +
+  // `allowDangerouslySkipPermissions` and opencode's no-prompt runs (invariant
+  // #13); the agent is confined to its dedicated per-job worktree and all
+  // durable content lands via the MCP tools.
   return {
     workingDirectory: worktreePath,
     skipGitRepoCheck: true,
+    sandboxMode: "danger-full-access" as const,
+    approvalPolicy: "never" as const,
     ...(model ? { model } : {}),
     ...(reasoning ? { modelReasoningEffort: reasoning } : {}),
   };

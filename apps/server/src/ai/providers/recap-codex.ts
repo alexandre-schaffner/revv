@@ -94,10 +94,6 @@ export async function runRecapAgentViaCodex(
         const codex = new Codex({
           ...(pinned !== "codex" ? { codexPathOverride: pinned } : {}),
           config: {
-            // Bypass the approval/sandbox/trust gate so the recap MCP tools run
-            // non-interactively under `codex exec` (parity with Claude's
-            // bypassPermissions — see mcp-walkthrough-codex for the rationale).
-            dangerously_bypass_approvals_and_sandbox: true,
             mcp_servers: {
               [mcpServerName]: {
                 url: mcpUrl,
@@ -107,9 +103,15 @@ export async function runRecapAgentViaCodex(
             },
           },
         });
+        // danger-full-access + approval=never is the only combination that lets
+        // MCP tool calls execute under one-way `codex exec` (read-only /
+        // workspace-write auto-cancel them). Parity with Claude's
+        // bypassPermissions — see mcp-walkthrough-codex for the full rationale.
         const thread = codex.startThread({
           workingDirectory: params.workingDir,
           skipGitRepoCheck: true,
+          sandboxMode: "danger-full-access",
+          approvalPolicy: "never",
           ...(params.modelUsed ? { model: params.modelUsed } : {}),
         });
 
