@@ -206,6 +206,28 @@ export function setEntry(prId: string, entry: WalkthroughEntry): void {
 
 export function deleteEntry(prId: string): void {
   store.entries.delete(prId);
+  lastEventAtByPr.delete(prId);
+}
+
+// ── Stream-liveness tracking ──────────────────────────────────────────────
+//
+// Non-reactive wall-clock timestamp of the last `walkthrough:event` applied
+// for each PR. Read imperatively by the per-walkthrough stall watchdog
+// (GuidedWalkthrough) — NOT reactive state, so stamping it on every streamed
+// event doesn't churn Svelte's dependency graph. Lets the client detect a
+// stream that went silent without a terminal `lifecycle:complete` /
+// `lifecycle:error` (missed SSE envelopes for a fast-failing job, a brief
+// broadcast/registration race, etc.) and reconcile against the authoritative
+// DB via REST — the same SSE-is-best-effort recovery the clone poller does
+// (doctrine invariant #8).
+const lastEventAtByPr = new Map<string, number>();
+
+/**
+ * Wall-clock ms of the last streamed walkthrough event applied for `prId`,
+ * or `null` if none has arrived this session. Drives the stall watchdog.
+ */
+export function getLastWalkthroughEventAt(prId: string): number | null {
+  return lastEventAtByPr.get(prId) ?? null;
 }
 
 export function updateEntry(prId: string, updater: (e: WalkthroughEntry) => void): void {
@@ -641,6 +663,9 @@ export function onWalkthroughEvent(
 
   applyEvents(prId, [event]);
   store.lastSeenSeq.set(walkthroughId, seq);
+  // Stamp stream liveness so the stall watchdog measures from the last
+  // genuinely-delivered event rather than from stream start.
+  lastEventAtByPr.set(prId, Date.now());
 
   // Background-completion toast: only if the completion event landed on a
   // PR the user isn't actively viewing.
