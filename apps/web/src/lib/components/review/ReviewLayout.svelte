@@ -468,7 +468,7 @@ const panel = $derived(getActivePanel());
 
 <svelte:window onkeydown={handleGlobalKeydown} />
 
-<div class="relative flex h-full flex-col overflow-hidden bg-diff-bg">
+<div class="relative flex h-full flex-col overflow-hidden bg-bg-primary">
 	<!-- @pierre/diffs renderer -->
 	<div
 		class="diff-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden outline-none"

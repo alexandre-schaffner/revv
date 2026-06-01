@@ -909,6 +909,36 @@ body {
    ────────────────────────────────────────────────────────── */
 diffs-container {
   color-scheme: inherit;
+
+  /* Base code-block surface (kills Pierre's #fff / #000 default).
+     light-dark() resolves against color-scheme on this element, so
+     data-diff-theme="light|dark" overrides (which flip color-scheme
+     here) automatically pick the correct palette leg — including the
+     decoupled-diff-theme case (e.g. light diff in dark app). */
+  --diffs-light-bg: #f4f1eb;
+  --diffs-dark-bg: #0d0d0d;
+
+  /* Gutter / line-number column */
+  --diffs-bg-context-number-override: light-dark(#edeae3, #0a0a0a);
+  --diffs-fg-number-override: light-dark(#9a958c, #52525b);
+
+  /* Context-line hover */
+  --diffs-bg-hover-override: light-dark(#eae6de, #131313);
+
+  /* Additions */
+  --diffs-bg-addition-override: light-dark(#e6f4ec, #0d1f0d);
+  --diffs-bg-addition-number-override: light-dark(#ddf0e3, #0e1f0e);
+  --diffs-bg-addition-hover-override: light-dark(#d0ebd9, #112811);
+  --diffs-bg-addition-emphasis-override: light-dark(#a3dab6, #162d16);
+
+  /* Deletions */
+  --diffs-bg-deletion-override: light-dark(#fbe9eb, #1f0d0d);
+  --diffs-bg-deletion-number-override: light-dark(#f7d9dc, #1c0e0e);
+  --diffs-bg-deletion-hover-override: light-dark(#f5d0d4, #281212);
+  --diffs-bg-deletion-emphasis-override: light-dark(#efb4ba, #2d1212);
+
+  /* Line selection (accent-tinted — follows app theme by design) */
+  --diffs-bg-selection-override: var(--color-diff-selected-bg);
 }
 :root[data-diff-theme="light"] diffs-container {
   color-scheme: light;
