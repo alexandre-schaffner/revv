@@ -606,13 +606,6 @@ interface GitHubGatewayFlatService {
     threadNodeId: string,
     token: string,
   ) => Effect.Effect<void, GitHubError, SettingsService>;
-  readonly getAuthenticatedUser: (
-    token: string,
-  ) => Effect.Effect<
-    { login: string; id: number; avatarUrl: string | null },
-    GitHubError,
-    DbService | GitHubEtagCache | SettingsService
-  >;
   /**
    * Flip an open PR to draft. GitHub only exposes this via GraphQL, which
    * needs the PR's GraphQL node id — we resolve it first via a small
@@ -661,10 +654,10 @@ interface GitHubGatewayFlatService {
     token: string,
   ) => Effect.Effect<void, GitHubError, SettingsService>;
   /**
-   * Like `getAuthenticatedUser`, but bypasses the ETag cache. Required for
-   * the same reason as {@link getRepoFresh}: GitHub Enterprise signed
-   * `avatar_url`s rotate server-side without changing the endpoint's ETag,
-   * so a plain `getAuthenticatedUser` would replay the cached body with the
+   * Fetch the authenticated viewer (`GET /user`), bypassing the ETag cache.
+   * Required for the same reason as {@link getRepoFresh}: GitHub Enterprise
+   * signed `avatar_url`s rotate server-side without changing the endpoint's
+   * ETag, so a conditional fetch would replay the cached body with the
    * now-dead token. This variant forces a 200 every time.
    */
   readonly getAuthenticatedUserFresh: (
@@ -1324,18 +1317,6 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       );
     }),
 
-  getAuthenticatedUser: (token) =>
-    Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
-      const data = yield* conditionalFetch(`/user`, token, apiBase);
-      const raw = data as Record<string, unknown>;
-      return {
-        login: raw.login as string,
-        id: raw.id as number,
-        avatarUrl: (raw.avatar_url as string | null) ?? null,
-      };
-    }).pipe(Effect.retry(retrySchedule)),
-
   getAuthenticatedUserFresh: (token) =>
     Effect.gen(function* () {
       const apiBase = yield* resolveApiBase;
@@ -1568,7 +1549,6 @@ export interface GitHubGatewayService {
     readonly rawBytes: GitHubGatewayFlat["getFileRawBytes"];
   };
   readonly users: {
-    readonly authenticated: GitHubGatewayFlat["getAuthenticatedUser"];
     readonly authenticatedFresh: GitHubGatewayFlat["getAuthenticatedUserFresh"];
   };
 }
@@ -1617,7 +1597,6 @@ export const GitHubGatewayLive = Layer.succeed(GitHubGateway, {
     rawBytes: githubGatewayFlat.getFileRawBytes,
   },
   users: {
-    authenticated: githubGatewayFlat.getAuthenticatedUser,
     authenticatedFresh: githubGatewayFlat.getAuthenticatedUserFresh,
   },
 });

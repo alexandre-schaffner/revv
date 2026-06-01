@@ -1,7 +1,8 @@
 import { Context, Effect, Layer } from "effect";
 import { auth } from "../auth";
 import type { GitHubAuthError } from "../domain/errors";
-import type { TokenPair } from "./SecretStore";
+import type { DbService } from "./Db";
+import type { SecretStore, TokenPair } from "./SecretStore";
 import { migrateLegacyTokens } from "./SecretStore";
 import { TokenProvider } from "./TokenProvider";
 
@@ -28,7 +29,6 @@ export class Identity extends Context.Tag("Identity")<
       userId: string,
       host?: string,
     ) => Effect.Effect<AccountIdentity, GitHubAuthError>;
-    readonly tokenFor: (accountId: string) => Effect.Effect<string, GitHubAuthError>;
     readonly tokenForUser: (
       userId: string,
       host?: string,
@@ -39,9 +39,7 @@ export class Identity extends Context.Tag("Identity")<
       tokens: TokenPair,
     ) => Effect.Effect<void>;
     readonly deleteAccountTokens: (accountId: string) => Effect.Effect<void>;
-    readonly refreshAccountToken: (accountId: string) => Effect.Effect<string, GitHubAuthError>;
-    readonly markReauthRequired: (accountId: string) => Effect.Effect<void>;
-    readonly migrateLegacyTokenSecrets: typeof migrateLegacyTokens;
+    readonly migrateLegacyTokenSecrets: Effect.Effect<number, never, SecretStore | DbService>;
   }
 >() {}
 
@@ -57,12 +55,9 @@ export const IdentityLive = Layer.effect(
             host: hostFromProviderId(account.providerId),
           })),
         ),
-      tokenFor: tokenProvider.getTokenByAccountId,
       tokenForUser: tokenProvider.getGitHubToken,
       storeAccountTokens: tokenProvider.storeAccountTokens,
       deleteAccountTokens: tokenProvider.deleteAccountTokens,
-      refreshAccountToken: tokenProvider.refreshAccountToken,
-      markReauthRequired: tokenProvider.markReauthRequired,
       migrateLegacyTokenSecrets: migrateLegacyTokens,
     })),
   ),
