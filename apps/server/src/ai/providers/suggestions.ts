@@ -8,8 +8,9 @@
 //     back JSON. Spawning the review-context server and waiting for a tool
 //     round-trip would defeat the "cheap, sub-2s" goal.
 //   • No session persistence — these turns must never land in the chat
-//     JSONL on disk, the opencode session store, or any history the user can
-//     resume into. The suggestions are stateless ephemeral UI hints.
+//     JSONL on disk, the opencode session store, Codex thread state, or any
+//     history the user can resume into. The suggestions are stateless ephemeral
+//     UI hints.
 //   • Single turn, capped output — enforced by SDK flags (Claude) and by
 //     parsing only the first `text` part out of the response (opencode).
 //
@@ -25,6 +26,7 @@ import { debug, logError } from "../../logger";
 import type { OpencodeClient, OpencodeEndpoint } from "../../services/OpencodeSupervisor";
 import { parseOpencodeModel } from "../agent-stream";
 import { resolveCliBin } from "./cli-agent";
+import { startCodexThread } from "./codex-transport";
 
 export const FALLBACK_PROMPTS: readonly string[] = [
   "What's the riskiest change here?",
@@ -342,6 +344,23 @@ async function generateViaOpencode(
   }
 }
 
+// ── Codex branch ─────────────────────────────────────────────────────────────
+
+async function generateViaCodex(input: GenerateSuggestionsInput): Promise<string[]> {
+  const thread = startCodexThread({
+    workingDirectory: process.cwd(),
+    sandboxMode: "read-only",
+    approvalPolicy: "never",
+    ...(input.model ? { model: input.model } : {}),
+  });
+  const turn = await thread.run(`${SYSTEM_PROMPT}\n\n---\n\n${buildUserMessage(input)}`);
+  const parsed = parsePrompts(turn.finalResponse);
+  if (!parsed) {
+    throw new Error(`codex returned unparseable output (len=${turn.finalResponse.length})`);
+  }
+  return parsed;
+}
+
 // ── Public entry point ───────────────────────────────────────────────────────
 
 export async function generateSuggestions(input: GenerateSuggestionsInput): Promise<string[]> {
@@ -349,12 +368,14 @@ export async function generateSuggestions(input: GenerateSuggestionsInput): Prom
     const work =
       input.agent === "claude"
         ? generateViaClaude(input)
-        : (() => {
-            if (!input.opencodeDeps) {
-              throw new Error("generateSuggestions: opencodeDeps required when agent='opencode'");
-            }
-            return generateViaOpencode(input, input.opencodeDeps);
-          })();
+        : input.agent === "codex"
+          ? generateViaCodex(input)
+          : (() => {
+              if (!input.opencodeDeps) {
+                throw new Error("generateSuggestions: opencodeDeps required when agent='opencode'");
+              }
+              return generateViaOpencode(input, input.opencodeDeps);
+            })();
     const result = await withTimeout(work, SUGGESTIONS_TIMEOUT_MS, `suggestions:${input.agent}`);
     debug("suggestions", `generated ${result.length} prompts via ${input.agent}/${input.model}`);
     return result;

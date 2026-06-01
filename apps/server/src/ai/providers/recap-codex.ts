@@ -16,14 +16,19 @@
 //      tool calling, or auth not configured).
 //   5. Clear the session token in `finally`.
 
-import { Codex } from "@openai/codex-sdk";
 import type { RecapStreamEvent } from "@revv/shared";
 import { serverEnv } from "../../config";
 import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../../constants";
 import { debug, logError } from "../../logger";
 import { type NormalizedAgentEvent, walkCodexEvents, withAgentTurn } from "../agent-stream";
 import { buildRecapUserMessage, RECAP_SYSTEM_PROMPT } from "../prompts/recap";
-import { resolveCliBin } from "./cli-agent";
+import {
+  type CodexMcpServers,
+  codexMcpServerName,
+  codexUsageRecord,
+  makeCodexMcpServer,
+  startCodexThread,
+} from "./codex-transport";
 import { createRecapDispatchState, dispatchRecapStreamEvent } from "./recap-event-dispatch";
 import type { RecapToolContext } from "./recap-tools";
 import { RECAP_MCP_SERVER } from "./recap-tools";
@@ -86,30 +91,20 @@ export async function runRecapAgentViaCodex(
         // ── 1. Issue session token ───────────────────────────────
         sessionToken = await params.sessionDeps.issueSessionToken(toolCtx);
         const mcpUrl = `http://127.0.0.1:${serverEnv.port}/mcp/recap`;
-        const mcpServerName = `${RECAP_MCP_SERVER}-${params.ctx.recapId}`;
+        const mcpServerName = codexMcpServerName(RECAP_MCP_SERVER, params.ctx.recapId);
         debug("recap-codex", `registering MCP ${mcpServerName} → ${mcpUrl}`);
 
         // ── 2. Construct codex with the HTTP MCP route baked in ───
-        const pinned = resolveCliBin("codex");
-        const codex = new Codex({
-          ...(pinned !== "codex" ? { codexPathOverride: pinned } : {}),
-          config: {
-            mcp_servers: {
-              [mcpServerName]: {
-                url: mcpUrl,
-                http_headers: { Authorization: `Bearer ${sessionToken}` },
-                startup_timeout_sec: 30,
-              },
-            },
-          },
-        });
+        const mcpServers: CodexMcpServers = {
+          [mcpServerName]: makeCodexMcpServer(mcpUrl, sessionToken),
+        };
         // danger-full-access + approval=never is the only combination that lets
         // MCP tool calls execute under one-way `codex exec` (read-only /
         // workspace-write auto-cancel them). Parity with Claude's
         // bypassPermissions — see mcp-walkthrough-codex for the full rationale.
-        const thread = codex.startThread({
+        const thread = startCodexThread({
           workingDirectory: params.workingDir,
-          skipGitRepoCheck: true,
+          mcpServers,
           sandboxMode: "danger-full-access",
           approvalPolicy: "never",
           ...(params.modelUsed ? { model: params.modelUsed } : {}),
@@ -153,15 +148,8 @@ export async function runRecapAgentViaCodex(
         }
 
         // ── 5. Token usage ────────────────────────────────────────
-        if (!usage) return {};
-        return {
-          tokenUsage: {
-            input_tokens: usage.inputTokens,
-            output_tokens: usage.outputTokens,
-            cache_read_input_tokens: usage.cacheReadInputTokens,
-            cache_creation_input_tokens: usage.cacheCreationInputTokens,
-          },
-        };
+        const tokenUsage = codexUsageRecord(usage);
+        return tokenUsage ? { tokenUsage } : {};
       },
     });
   } catch (err) {

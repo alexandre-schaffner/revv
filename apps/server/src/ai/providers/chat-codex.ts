@@ -12,7 +12,6 @@
 // `chat_sessions` and resume by id on the next turn — the same resume contract
 // as the other providers.
 
-import { Codex } from "@openai/codex-sdk";
 import type { InteractionMode } from "@revv/shared";
 import { serverEnv } from "../../config";
 import { CLI_CHAT_TURN_TIMEOUT_MS } from "../../constants";
@@ -25,8 +24,14 @@ import {
   walkCodexEvents,
   withAgentTurn,
 } from "../agent-stream";
+import { AgentUnavailableError } from "./chat-agent-errors";
 import type { RawChatStreamFrame } from "./chat-types";
-import { resolveCliBin } from "./cli-agent";
+import {
+  type CodexMcpServers,
+  codexMcpServerName,
+  makeCodexMcpServer,
+  startCodexThread,
+} from "./codex-transport";
 
 export interface CodexChatDeps {
   /**
@@ -68,9 +73,9 @@ export interface StreamChatViaCodexOptions {
    */
   readonly enableReviewContextMcp?: boolean | undefined;
   /**
-   * Session-level interaction toggle. In `'plan'` mode codex runs read-only
-   * (no worktree mutation) and the full assistant turn is synthesized into a
-   * single `plan-presented` frame — codex has no structured plan delimiter.
+   * Session-level interaction toggle. Codex plan mode is intentionally disabled
+   * until the SDK exposes a non-mutating tool/sandbox contract that still lets
+   * the agent inspect the PR reliably.
    */
   readonly interactionMode?: InteractionMode | undefined;
 }
@@ -87,16 +92,19 @@ export function streamChatViaCodex(
 
       try {
         const planMode = opts.interactionMode === "plan";
+        if (planMode) {
+          throw new AgentUnavailableError(
+            "codex-plan",
+            "Codex plan mode is disabled because Codex cannot currently enforce a read-only plan turn.",
+          );
+        }
         const enableMcp = opts.enableReviewContextMcp ?? true;
 
         // Mint the token BEFORE constructing Codex — the bearer header is
         // baked into the config at construction. Revoked in `finally`.
         // Typed concretely (not `unknown`) so it satisfies the SDK's
         // `CodexConfigObject` shape under exactOptionalPropertyTypes.
-        const mcpServers: Record<
-          string,
-          { url: string; http_headers: Record<string, string>; startup_timeout_sec: number }
-        > = {};
+        const mcpServers: CodexMcpServers = {};
         if (enableMcp) {
           chatMcpToken = await opts.deps.issueChatMcpToken({
             prId: opts.prId,
@@ -105,35 +113,28 @@ export function streamChatViaCodex(
             interactionMode: opts.interactionMode ?? "default",
           });
           const mcpUrl = `http://127.0.0.1:${serverEnv.port}/mcp/chat-context`;
-          mcpServers[`${CHAT_CONTEXT_MCP_SERVER}-${opts.prId}`] = {
-            url: mcpUrl,
-            http_headers: { Authorization: `Bearer ${chatMcpToken}` },
-            startup_timeout_sec: 30,
-          };
+          mcpServers[codexMcpServerName(CHAT_CONTEXT_MCP_SERVER, opts.prId)] = makeCodexMcpServer(
+            mcpUrl,
+            chatMcpToken,
+          );
         }
 
-        const pinned = resolveCliBin("codex");
-        const codex = new Codex({
-          ...(pinned !== "codex" ? { codexPathOverride: pinned } : {}),
-          ...(Object.keys(mcpServers).length > 0 ? { config: { mcp_servers: mcpServers } } : {}),
-        });
         // `codex exec` is one-way (no approver), so MCP tool calls
         // (get_review_context + the walkthrough-edit tools) only execute under
         // danger-full-access + approval=never — read-only / workspace-write
         // auto-cancel them. Parity with the Claude chat path's
         // bypassPermissions. Plan-mode's read-only intent is enforced by the
         // MCP tool surface (edit tools filtered out of tools/list by
-        // interactionMode), not by the codex sandbox.
-        const threadOptions = {
+        // interactionMode), not by the codex sandbox. Plan mode is therefore
+        // blocked above instead of relying on this full-access execution mode.
+        const thread = startCodexThread({
           workingDirectory: opts.cwd,
-          skipGitRepoCheck: true,
           sandboxMode: "danger-full-access" as const,
           approvalPolicy: "never" as const,
+          ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
           ...(opts.model ? { model: opts.model } : {}),
-        };
-        const thread = opts.resumeSessionId
-          ? codex.resumeThread(opts.resumeSessionId, threadOptions)
-          : codex.startThread(threadOptions);
+          ...(opts.resumeSessionId ? { resumeThreadId: opts.resumeSessionId } : {}),
+        });
 
         // Codex has no separate system-prompt channel — prepend it to the
         // first turn's input. On resume the thread already carries it.

@@ -369,12 +369,12 @@ export const chatInteractionRoutes = new Elysia()
             };
           }
           if (agent === "codex") {
-            // Codex has no daemon to probe. Plan mode is available: the driver
-            // runs the thread read-only and synthesizes a plan from the turn.
+            // Codex currently requires danger-full-access for MCP tool execution,
+            // so there is no enforceable read-only plan turn yet.
             return {
               agent: "codex" as const,
-              agents: ["plan"] as readonly string[],
-              planAvailable: true,
+              agents: [] as readonly string[],
+              planAvailable: false,
             };
           }
           // opencode: probe the supervisor's cached agent list.

@@ -125,21 +125,21 @@ export class AiService extends Context.Tag("AiService")<
       abortController?: AbortController;
       /**
        * Optional caller-provided callbacks for minting + clearing the
-       * opencode HTTP-MCP session token. Only consulted when the
-       * resolved agent is 'opencode'; the Claude SDK path ignores them.
+       * HTTP-MCP session token. Only consulted when the resolved agent uses
+       * the HTTP MCP transport; the Claude SDK path ignores them.
        * WalkthroughJobs supplies these because it owns the session-token
        * map (in-process, ephemeral per invariant #1). Kept as plain
        * callbacks so AiService doesn't need a layer dependency on
        * WalkthroughJobs (that would cycle — WalkthroughJobs depends on
        * AiService already).
        */
-      issueOpencodeSessionToken?: (walkthroughId: string) => Promise<string>;
-      clearOpencodeSessionToken?: (token: string) => Promise<void>;
-      registerOpencodeActivityNotifier?: (
+      issueHttpMcpSessionToken?: (walkthroughId: string) => Promise<string>;
+      clearHttpMcpSessionToken?: (token: string) => Promise<void>;
+      registerHttpMcpActivityNotifier?: (
         walkthroughId: string,
         callback: (event: WalkthroughStreamEvent) => void,
       ) => Promise<void>;
-      unregisterOpencodeActivityNotifier?: (walkthroughId: string) => Promise<void>;
+      unregisterHttpMcpActivityNotifier?: (walkthroughId: string) => Promise<void>;
     }) => Effect.Effect<AsyncGenerator<WalkthroughStreamEvent>, AiError>;
     /**
      * Stream a single chat turn for the right-pane chat. Resolves the
@@ -261,7 +261,7 @@ export const AiServiceLive = Layer.effect(
             const providerParams = { ...params, db };
 
             if (agent === "opencode") {
-              if (!params.issueOpencodeSessionToken || !params.clearOpencodeSessionToken) {
+              if (!params.issueHttpMcpSessionToken || !params.clearHttpMcpSessionToken) {
                 return yield* Effect.fail(
                   new AiGenerationError({
                     cause: new Error("missing opencode session-token callbacks"),
@@ -270,8 +270,8 @@ export const AiServiceLive = Layer.effect(
                 );
               }
               if (
-                !params.registerOpencodeActivityNotifier ||
-                !params.unregisterOpencodeActivityNotifier
+                !params.registerHttpMcpActivityNotifier ||
+                !params.unregisterHttpMcpActivityNotifier
               ) {
                 return yield* Effect.fail(
                   new AiGenerationError({
@@ -282,10 +282,10 @@ export const AiServiceLive = Layer.effect(
                 );
               }
               const deps = makeOpencodeWalkthroughDeps(supervisor, {
-                issueSessionToken: params.issueOpencodeSessionToken,
-                clearSessionToken: params.clearOpencodeSessionToken,
-                registerActivityNotifier: params.registerOpencodeActivityNotifier,
-                unregisterActivityNotifier: params.unregisterOpencodeActivityNotifier,
+                issueSessionToken: params.issueHttpMcpSessionToken,
+                clearSessionToken: params.clearHttpMcpSessionToken,
+                registerActivityNotifier: params.registerHttpMcpActivityNotifier,
+                unregisterActivityNotifier: params.unregisterHttpMcpActivityNotifier,
               });
               const raw = streamWalkthroughViaOpencodeMCP(
                 { ...providerParams, deps },
@@ -302,7 +302,7 @@ export const AiServiceLive = Layer.effect(
               // Codex reuses the same HTTP-MCP session-token + activity-notifier
               // callbacks opencode uses (the `*Opencode*` names are historical —
               // they serve both HTTP-MCP agents). It needs no daemon deps.
-              if (!params.issueOpencodeSessionToken || !params.clearOpencodeSessionToken) {
+              if (!params.issueHttpMcpSessionToken || !params.clearHttpMcpSessionToken) {
                 return yield* Effect.fail(
                   new AiGenerationError({
                     cause: new Error("missing HTTP-MCP session-token callbacks"),
@@ -311,8 +311,8 @@ export const AiServiceLive = Layer.effect(
                 );
               }
               if (
-                !params.registerOpencodeActivityNotifier ||
-                !params.unregisterOpencodeActivityNotifier
+                !params.registerHttpMcpActivityNotifier ||
+                !params.unregisterHttpMcpActivityNotifier
               ) {
                 return yield* Effect.fail(
                   new AiGenerationError({
@@ -321,10 +321,10 @@ export const AiServiceLive = Layer.effect(
                   }),
                 );
               }
-              const issueToken = params.issueOpencodeSessionToken;
-              const clearToken = params.clearOpencodeSessionToken;
-              const registerNotifier = params.registerOpencodeActivityNotifier;
-              const unregisterNotifier = params.unregisterOpencodeActivityNotifier;
+              const issueToken = params.issueHttpMcpSessionToken;
+              const clearToken = params.clearHttpMcpSessionToken;
+              const registerNotifier = params.registerHttpMcpActivityNotifier;
+              const unregisterNotifier = params.unregisterHttpMcpActivityNotifier;
               const codexDeps: CodexProviderDeps = {
                 issueSessionToken: (walkthroughId) => issueToken(walkthroughId),
                 clearSessionToken: (token) => clearToken(token),

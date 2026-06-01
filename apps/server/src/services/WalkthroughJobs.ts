@@ -553,14 +553,14 @@ export const WalkthroughJobsLive = Layer.effect(
           // the Claude SDK path. WalkthroughJobs owns the session-token
           // store (`sessionStore`) — passing these through as callbacks
           // avoids a layer-level cycle between AiService and WalkthroughJobs.
-          issueOpencodeSessionToken: (walkthroughId: string) =>
+          issueHttpMcpSessionToken: (walkthroughId: string) =>
             Effect.runPromise(issueSessionToken(walkthroughId)),
-          clearOpencodeSessionToken: (token: string) => Effect.runPromise(clearSessionToken(token)),
-          registerOpencodeActivityNotifier: (
+          clearHttpMcpSessionToken: (token: string) => Effect.runPromise(clearSessionToken(token)),
+          registerHttpMcpActivityNotifier: (
             walkthroughId: string,
             callback: (event: WalkthroughStreamEvent) => void,
           ) => Effect.runPromise(registerActivityNotifier(walkthroughId, callback)),
-          unregisterOpencodeActivityNotifier: (walkthroughId: string) =>
+          unregisterHttpMcpActivityNotifier: (walkthroughId: string) =>
             Effect.runPromise(unregisterActivityNotifier(walkthroughId)),
         });
 
@@ -1188,7 +1188,8 @@ export const WalkthroughJobsLive = Layer.effect(
         // actually running, and the same JSON gets exported to the
         // remote cache as `providerConfig`.
         const providerConfigForJob: GenerationProviderConfig = {
-          provider: agent === "opencode" ? "opencode" : "claude-agent-sdk",
+          provider:
+            agent === "opencode" ? "opencode" : agent === "codex" ? "codex" : "claude-agent-sdk",
           model: modelUsed,
           thinkingEffort: settings.aiThinkingEffort ?? null,
           contextWindow: settings.aiContextWindow ?? null,

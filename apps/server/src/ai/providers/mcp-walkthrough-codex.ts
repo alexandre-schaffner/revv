@@ -21,7 +21,6 @@
 //   4. Thread the caller's AbortController straight into `runStreamed`'s signal
 //      via `withAgentTurn` (no-op refcount — there is no daemon to refcount).
 
-import { Codex } from "@openai/codex-sdk";
 import type {
   UserSettings,
   WalkthroughLifecyclePhase,
@@ -42,7 +41,7 @@ import {
   withAgentTurn,
 } from "../agent-stream";
 import { buildWalkthroughPrompt, WALKTHROUGH_MCP_SYSTEM_PROMPT } from "../prompts/walkthrough";
-import { resolveCliBin } from "./cli-agent";
+import { type CodexMcpServers, makeCodexMcpServer, startCodexThread } from "./codex-transport";
 import type { ContinuationContext } from "./mcp-walkthrough";
 import { TOOL_SPECS } from "./walkthrough-tools";
 
@@ -50,6 +49,7 @@ import { TOOL_SPECS } from "./walkthrough-tools";
 const EXPLORATION_TOOLS = new Set(["Read", "Grep", "Glob", "Bash", "Write", "Edit"]);
 
 const WALKTHROUGH_MCP_SERVER = "revv-walkthrough";
+const ALLOWED_PHASE_NAMES = new Set(TOOL_SPECS.map((s) => s.name));
 
 // ── Deps injected by the caller (AiService) ──────────────────────────────────
 //
@@ -176,15 +176,21 @@ export function streamWalkthroughViaCodexMCP(
           debug("walkthrough-codex-mcp", `registering MCP ${WALKTHROUGH_MCP_SERVER} → ${mcpUrl}`);
 
           // ── 2. Construct codex with the HTTP MCP route baked in ───
-          const codex = buildCodex(sessionToken, mcpUrl);
+          const mcpServers: CodexMcpServers = {
+            [WALKTHROUGH_MCP_SERVER]: makeCodexMcpServer(mcpUrl, sessionToken),
+          };
           const threadOptions = buildThreadOptions(
             params.worktreePath,
             model,
             settings?.aiThinkingEffort,
           );
-          const thread = params.continuation?.codexThreadId
-            ? codex.resumeThread(params.continuation.codexThreadId, threadOptions)
-            : codex.startThread(threadOptions);
+          const thread = startCodexThread({
+            ...threadOptions,
+            mcpServers,
+            ...(params.continuation?.codexThreadId
+              ? { resumeThreadId: params.continuation.codexThreadId }
+              : {}),
+          });
 
           lastPhaseMessage = "Waiting for model response...";
           push({ type: "phase", data: { phase: "connecting", message: lastPhaseMessage } });
@@ -213,6 +219,14 @@ export function streamWalkthroughViaCodexMCP(
               }
               return;
             }
+            if (ev.kind === "error") {
+              logError("walkthrough-codex-mcp", "session.error:", ev.message);
+              if (!errorEmitted && !cancelled) {
+                errorEmitted = true;
+                push({ type: "error", data: { code: "AiGenerationError", message: ev.message } });
+              }
+              return;
+            }
             if (ev.kind !== "tool-call") return;
 
             if (ev.source === "builtin" && EXPLORATION_TOOLS.has(ev.toolName)) {
@@ -225,7 +239,6 @@ export function streamWalkthroughViaCodexMCP(
             // tool name in `bareName` (e.g. "set_overview"). Constrain to the
             // TOOL_SPECS allowlist so a hallucinated name can't drive a bogus
             // transition.
-            const ALLOWED_PHASE_NAMES = new Set(TOOL_SPECS.map((s) => s.name));
             if (!ALLOWED_PHASE_NAMES.has(ev.bareName)) return;
             if (ev.bareName === "set_overview") {
               anySummaryEmitted = true;
@@ -366,27 +379,6 @@ export function streamWalkthroughViaCodexMCP(
       };
     }
   })();
-}
-
-// ── codex construction helpers ───────────────────────────────────────────────
-
-function buildCodex(sessionToken: string, mcpUrl: string): Codex {
-  const pinned = resolveCliBin("codex");
-  return new Codex({
-    // Use the pinned binary path when the installer baked one in; else let the
-    // SDK resolve `codex` from PATH. Never pass `env` — that would REPLACE
-    // process.env and strip the codex CLI's own auth + PATH.
-    ...(pinned !== "codex" ? { codexPathOverride: pinned } : {}),
-    config: {
-      mcp_servers: {
-        [WALKTHROUGH_MCP_SERVER]: {
-          url: mcpUrl,
-          http_headers: { Authorization: `Bearer ${sessionToken}` },
-          startup_timeout_sec: 30,
-        },
-      },
-    },
-  });
 }
 
 function buildThreadOptions(
