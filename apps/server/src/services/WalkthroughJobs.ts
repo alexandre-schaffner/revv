@@ -273,6 +273,7 @@ export class WalkthroughJobs extends Context.Tag("WalkthroughJobs")<
     readonly resolveSessionToken: (token: string) => Effect.Effect<{
       readonly walkthroughId: string;
       readonly prId: string;
+      readonly accountId: string;
     } | null>;
 
     /** Invalidate a session token early (e.g. on job cancel). */
@@ -530,6 +531,7 @@ export const WalkthroughJobsLive = Layer.effect(
           files: ctx.files as never,
           worktreePath,
           walkthroughId: job.walkthroughId,
+          accountId: job.accountId,
           ...(overrideContinuation ? { continuation: overrideContinuation } : {}),
           onSessionId: (id: string) => {
             capturedOpencodeSessionId = id;
@@ -1625,6 +1627,7 @@ export const WalkthroughJobsLive = Layer.effect(
         return {
           walkthroughId: payload.walkthroughId,
           prId: job.prId,
+          accountId: job.accountId,
         };
       });
 

@@ -96,6 +96,12 @@ export class AiService extends Context.Tag("AiService")<
        * (doctrine invariant #11 — identity is orchestrator-provided).
        */
       walkthroughId: string;
+      /**
+       * Account that owns the PR. Passed through to the Claude MCP provider
+       * so it can scope SSE broadcasts without re-deriving accountId via a
+       * DB join on every tool call.
+       */
+      accountId: string;
       pr: {
         title: string;
         body: string | null;

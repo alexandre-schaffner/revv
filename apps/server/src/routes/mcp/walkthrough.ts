@@ -55,7 +55,13 @@ async function resolveContext(
     }
   };
   const broadcastThreadEvent = (msg: ThreadEventMessage): void => {
-    fireAndForgetThreadEventBroadcast("mcp-walkthrough-route", resolved.prId, "single-user", msg);
+    fireAndForgetThreadEventBroadcast(
+      "mcp-walkthrough-route",
+      resolved.prId,
+      "single-user",
+      msg,
+      resolved.accountId,
+    );
   };
 
   return {

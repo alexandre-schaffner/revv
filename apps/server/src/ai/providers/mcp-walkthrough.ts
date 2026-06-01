@@ -25,7 +25,6 @@ import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { WALKTHROUGH_HEARTBEAT_MS } from "../../constants";
 import type { Db } from "../../db";
-import { pullRequests, repositories } from "../../db/schema";
 import { walkthroughs as walkthroughsTable } from "../../db/schema/walkthroughs";
 import { debug, logError } from "../../logger";
 import { AppRuntime } from "../../runtime";
@@ -200,6 +199,8 @@ function isForward(current: Phase, next: Phase): boolean {
 export function streamWalkthroughViaMCP(
   params: {
     walkthroughId: string;
+    /** Account that owns the PR — used to scope SSE broadcasts to the right client. */
+    accountId: string;
     db: Db;
     pr: {
       title: string;
@@ -235,20 +236,14 @@ export function streamWalkthroughViaMCP(
   // non-walkthrough tables (currently only `add_issue_comment` →
   // `comment_threads`). Same shape as the HTTP MCP path so handler behavior
   // is byte-identical across transports (doctrine invariant #13).
+  //
+  // `accountId` is provided by the caller (WalkthroughJobs.ActiveJob) so
+  // this path doesn't need to re-derive it via a raw DB join.
   const broadcastThreadEvent = (msg: ThreadEventMessage): void => {
     void AppRuntime.runPromise(
-      Effect.gen(function* () {
-        const row = params.db
-          .select({ accountId: repositories.accountId })
-          .from(walkthroughsTable)
-          .innerJoin(pullRequests, eq(walkthroughsTable.pullRequestId, pullRequests.id))
-          .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
-          .where(eq(walkthroughsTable.id, params.walkthroughId))
-          .get();
-        if (!row) return;
-        const broadcaster = yield* Broadcaster;
-        yield* broadcaster.broadcastToAccount(row.accountId, msg);
-      }),
+      Effect.flatMap(Broadcaster, (broadcaster) =>
+        broadcaster.broadcastToAccount(params.accountId, msg),
+      ),
     ).catch((err) => {
       logError(
         "walkthrough-mcp",

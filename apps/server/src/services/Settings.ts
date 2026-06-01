@@ -14,6 +14,7 @@ import { Context, Effect, Layer, Stream, SubscriptionRef } from "effect";
 import type { Db } from "../db/index";
 import { userSettings } from "../db/schema/user-settings";
 import { ValidationError } from "../domain/errors";
+import { logError } from "../logger";
 import { DbService } from "./Db";
 
 // ── Storage ───────────────────────────────────────────────────────────────────
@@ -434,6 +435,15 @@ export const SettingsServiceLive = Layer.effect(
         settingsRef.get.pipe(
           Effect.mapError((e) => new ValidationError({ message: String(e) })),
           Effect.map(resolveAgentFromSettings),
+          Effect.tapError((e) =>
+            Effect.sync(() => {
+              logError(
+                "settings",
+                "resolveAgentOrDefault failed, defaulting to opencode:",
+                String(e),
+              );
+            }),
+          ),
           Effect.orElseSucceed(() => "opencode" as const),
         ),
 

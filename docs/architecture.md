@@ -71,10 +71,15 @@ hides OAuth account resolution and token refresh.
 #### Realtime / Events
 
 `Broadcaster` is the realtime narrow neck for the global SSE stream (`GET /api/events`). Its
-interface is tiny — `register` / `broadcast` / `broadcastToAccount` — and it hides best-effort
+interface is — `register` / `broadcastToAccount` / `broadcastAll` — and it hides best-effort
 fan-out, SSE frame encoding, and disconnect bookkeeping. The envelope union (`ServerEventMessage`)
 lives entirely in `@revv/shared/src/events`, never server-side, so the wire contract has one
 source of truth.
+
+`broadcastToAccount(accountId, msg)` fans out only to the writers registered for that account.
+`broadcastAll(msg)` fans out to every registered writer regardless of account — use this only
+for server-global signals (sync lifecycle events: `prs:sync-started`, `prs:sync-complete`,
+`prs:sync-error`). All feature-level events use `broadcastToAccount`.
 
 Doctrine: **commit-first, broadcast-second** (invariant #8). The broadcaster is the broadcast
 point — callers MUST commit to SQLite before broadcasting; a missed broadcast is reconstructible

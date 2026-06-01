@@ -56,16 +56,14 @@ function queryHost(query: Record<string, unknown>): string | undefined {
 export const withAccount = new Elysia({ name: "with-account" }).derive(
   { as: "scoped" },
   async (ctx) => {
-    const session = await AppRuntime.runPromise(
-      Effect.flatMap(Identity, (identity) =>
-        Effect.promise(() => identity.sessionFromHeaders(ctx.request.headers)),
-      ),
-    );
-    if (!session) {
-      return status(401, { error: "Unauthorized" });
-    }
-    const account = await AppRuntime.runPromise(
+    const result = await AppRuntime.runPromise(
       Effect.gen(function* () {
+        const identity = yield* Identity;
+        const session = yield* Effect.promise(() =>
+          identity.sessionFromHeaders(ctx.request.headers),
+        );
+        if (!session) return { __noSession: true as const };
+
         const settingsService = yield* SettingsService;
         const settings = yield* settingsService
           .getSettings()
@@ -74,8 +72,8 @@ export const withAccount = new Elysia({ name: "with-account" }).derive(
           queryHost(ctx.query as Record<string, unknown>) ??
           settings?.githubHost?.trim() ??
           serverEnv.githubHost;
-        const identity = yield* Identity;
-        return yield* identity.resolveAccount(session.user.id, host);
+        const account = yield* identity.resolveAccount(session.user.id, host);
+        return { session, account };
       }),
     ).catch((err) => {
       const unwrapped = unwrapEffectError(err);
@@ -90,13 +88,16 @@ export const withAccount = new Elysia({ name: "with-account" }).derive(
       return null;
     });
 
-    if (!account) {
+    if (!result) {
       return status(401, { error: "Unauthorized" });
     }
-    if ("__authError" in account) {
+    if ("__noSession" in result) {
+      return status(401, { error: "Unauthorized" });
+    }
+    if ("__authError" in result) {
       return status(401, { error: "GitHub token expired or invalid" });
     }
-    return { session, account };
+    return { session: result.session, account: result.account };
   },
 );
 
