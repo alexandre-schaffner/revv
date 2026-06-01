@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.6.0](https://github.com/alexandre-schaffner/revv/compare/v0.5.0...v0.6.0) (2026-06-01)
+
+
+### Features
+
+* **install:** quiet installer output with spinner and verbose mode ([94b92f9](https://github.com/alexandre-schaffner/revv/commit/94b92f92877122a9898d0d8ad4680f346fc81723))
+* **install:** quiet installer output with spinner and verbose mode ([888b749](https://github.com/alexandre-schaffner/revv/commit/888b74996ebc261e4a5ce088ce2758fbb84f8f56))
+* move GitHub tokens to OS secure store with transparent refresh ([#103](https://github.com/alexandre-schaffner/revv/issues/103)) ([a266678](https://github.com/alexandre-schaffner/revv/commit/a2666781c466820be738837726aac6fac371aaad))
+* **web:** change brand accent from deep naval to tidewater teal ([#101](https://github.com/alexandre-schaffner/revv/issues/101)) ([1dcab70](https://github.com/alexandre-schaffner/revv/commit/1dcab70e3724d4fddc2369a82881ddff44272f09))
+
+
+### Bug Fixes
+
+* stop diff-tab comments from duplicating on re-render ([bc71b98](https://github.com/alexandre-schaffner/revv/commit/bc71b98f26c07161551cd49875c5ba55e265cd95))
+* stop diff-tab comments from duplicating on re-render ([7e672f5](https://github.com/alexandre-schaffner/revv/commit/7e672f532f03ef1d6a5f6f85af1313b8f4819510))
+
 ## [0.5.0](https://github.com/alexandre-schaffner/revv/compare/v0.4.0...v0.5.0) (2026-05-28)
 
 
