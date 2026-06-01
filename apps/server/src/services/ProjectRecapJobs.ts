@@ -17,7 +17,7 @@
 // handlers in `ai/providers/recap-tools/`.
 
 import type { ProjectRecap, RecapPeriod, RecapStreamEvent } from "@revv/shared";
-import { eq, sql } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { Cause, Context, Effect, Fiber, Layer, Ref } from "effect";
 import { makeOpencodeRecapDeps } from "../ai/providers/opencode-deps";
 import type {
@@ -26,21 +26,20 @@ import type {
   RecapSourcePrDigest,
   RecapToolContext,
 } from "../ai/providers/recap-tools";
-import { recapPrDigests, repositories } from "../db/schema/index";
+import { recapPrDigests } from "../db/schema/index";
 import { type RecapError, ValidationError } from "../domain/errors";
 import { withDb } from "../effects/with-db";
 import { debug, logError } from "../logger";
 import { DbService } from "./Db";
 import { DiffCacheService } from "./DiffCache";
-import { GitHubGateway } from "./GitHub";
 import { GitHubEtagCache } from "./GitHubEtagCache";
 import { analyzeJobFailure } from "./job-failure";
 import { makeStartJobMutex } from "./job-mutex";
 import { makeSubscriberRegistry, type SubscriberHandle } from "./job-subscribers";
 import { OpencodeSupervisor } from "./OpencodeSupervisor";
+import { PrContextService } from "./PrContext";
 import { ProjectRecapService } from "./ProjectRecap";
 import { type ArchivedPrWithWalkthrough, PullRequestService } from "./PullRequest";
-import { RepositoryService } from "./Repository";
 import { runRecapAgent } from "./recap-agent-runner";
 import {
   attachRecapDigests,
@@ -52,7 +51,6 @@ import {
 } from "./recap-source-bundle";
 import { SettingsService } from "./Settings";
 import { makeSessionTokenStore } from "./session-token-store";
-import { TokenProvider } from "./TokenProvider";
 import { WebSocketHub } from "./WebSocketHub";
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -183,12 +181,10 @@ export const ProjectRecapJobsLive = Layer.effect(
     const hub = yield* WebSocketHub;
     const recapService = yield* ProjectRecapService;
     const prService = yield* PullRequestService;
-    const repoService = yield* RepositoryService;
+    const prCtx = yield* PrContextService;
     const settingsService = yield* SettingsService;
     const supervisor = yield* OpencodeSupervisor;
     const diffCache = yield* DiffCacheService;
-    const github = yield* GitHubGateway;
-    const tokenProvider = yield* TokenProvider;
     const etagCache = yield* GitHubEtagCache;
 
     const registry = yield* Ref.make(new Map<string, ActiveRecapJob>());
@@ -218,10 +214,10 @@ export const ProjectRecapJobsLive = Layer.effect(
       withDb(db, eff);
 
     /**
-     * Provide the trio of services {@link GitHubGateway}'s read methods need
-     * at execution time (etag cache, db handle, settings for API base).
-     * Use this when calling things like `github.getPrFiles` from inside
-     * `Effect.gen` blocks that promise empty requirements.
+     * Provide the trio of services {@link PrContextService}'s GitHub-read
+     * passthroughs need at execution time (etag cache, db handle, settings
+     * for API base). Use this when calling things like `prCtx.prFiles` from
+     * inside `Effect.gen` blocks that promise empty requirements.
      */
     const provideGithubDeps = <A, E>(
       eff: Effect.Effect<A, E, DbService | GitHubEtagCache | SettingsService>,
@@ -309,28 +305,19 @@ export const ProjectRecapJobsLive = Layer.effect(
      * minted for the owning account.
      */
     const resolveRepoToken = (repoId: string): Effect.Effect<string | null> =>
-      Effect.gen(function* () {
-        const row = yield* Effect.sync(() =>
-          db
-            .select({ accountId: repositories.accountId })
-            .from(repositories)
-            .where(eq(repositories.id, repoId))
-            .get(),
-        );
-        if (!row) return null;
-        return yield* tokenProvider.getTokenByAccountId(row.accountId).pipe(
-          Effect.catchAll((err) =>
-            Effect.sync(() => {
-              debug(
-                "recap-jobs",
-                `token lookup failed for account ${row.accountId} — recap will fall back to cache-only diffs:`,
-                err instanceof Error ? err.message : String(err),
-              );
-              return null;
-            }),
-          ),
-        );
-      });
+      prCtx.resolveRepoToken(repoId).pipe(
+        Effect.provideService(DbService, { db }),
+        Effect.catchAll((err) =>
+          Effect.sync(() => {
+            debug(
+              "recap-jobs",
+              `token lookup failed for repo ${repoId} — recap will fall back to cache-only diffs:`,
+              err instanceof Error ? err.message : String(err),
+            );
+            return null;
+          }),
+        ),
+      );
 
     /**
      * Materialize a {@link RecapSourcePrDiff} for a single PR. Tries the
@@ -407,7 +394,7 @@ export const ProjectRecapJobsLive = Layer.effect(
         }
 
         const fetched = yield* provideGithubDeps(
-          github.prs.files(repoFullName, pr.externalId, token),
+          prCtx.prFiles(repoFullName, pr.externalId, token),
         ).pipe(
           Effect.catchAll((err) =>
             Effect.sync(() => {
@@ -493,7 +480,7 @@ export const ProjectRecapJobsLive = Layer.effect(
         }
 
         const searched = yield* provideGithubDeps(
-          github.prs.searchClosedInWindow(repoFullName, periodStart, periodEnd, token),
+          prCtx.searchClosedPrs(repoFullName, periodStart, periodEnd, token),
         ).pipe(
           Effect.catchAll((err) =>
             Effect.sync(() => {
@@ -531,7 +518,7 @@ export const ProjectRecapJobsLive = Layer.effect(
         const fetched = yield* Effect.forEach(
           missing,
           (m) =>
-            provideGithubDeps(github.prs.get(repoFullName, m.number, token)).pipe(
+            provideGithubDeps(prCtx.fetchPr(repoFullName, m.number, token)).pipe(
               Effect.catchAll((err) =>
                 Effect.sync(() => {
                   debug(
@@ -588,7 +575,7 @@ export const ProjectRecapJobsLive = Layer.effect(
         };
 
         // Repo metadata for the prompt.
-        const repo = yield* provideDb(repoService.getRepoById(job.repoId)).pipe(
+        const repo = yield* provideDb(prCtx.getRepo(job.repoId)).pipe(
           Effect.catchAll(() => Effect.succeed(null)),
         );
         if (!repo) {

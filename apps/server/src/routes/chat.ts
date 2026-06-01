@@ -29,7 +29,6 @@ import { AiService } from "../services/Ai";
 import { ChatChangesPushService } from "../services/ChatChangesPush";
 import { ChatSessionService } from "../services/ChatSession";
 import { DbService } from "../services/Db";
-import { GitHubGateway } from "../services/GitHub";
 import { PrContextService } from "../services/PrContext";
 import { RepoCloneService } from "../services/RepoClone";
 import { SettingsService } from "../services/Settings";
@@ -72,7 +71,6 @@ export const chatRoute = new Elysia()
             const settingsService = yield* SettingsService;
             const chatSessions = yield* ChatSessionService;
             const repoClone = yield* RepoCloneService;
-            const github = yield* GitHubGateway;
             const chatPush = yield* ChatChangesPushService;
             const { db } = yield* DbService;
             // Resolve PR + repo + token
@@ -84,7 +82,7 @@ export const chatRoute = new Elysia()
             // Resolve current head SHA (fall back to fetching meta)
             let headSha = pr.headSha;
             if (!headSha) {
-              const meta = yield* github.prs.meta(repo.fullName, pr.externalId, token);
+              const meta = yield* prCtx.prMeta(repo.fullName, pr.externalId, token);
               headSha = meta.headSha;
             }
             const agent = yield* settingsService

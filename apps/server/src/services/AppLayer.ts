@@ -165,7 +165,9 @@ const PollSchedulerWithDeps = PollSchedulerLive.pipe(
 // ProjectRecapJobs is the recap orchestrator. Mirrors WalkthroughJobs but
 // simpler — no worktree / continuation. Depends on BaseLayers for repo,
 // PR, recap service, settings, and WebSocketHub.
-const ProjectRecapJobsWithDeps = ProjectRecapJobsLive.pipe(Layer.provide(BaseLayers));
+const ProjectRecapJobsWithDeps = ProjectRecapJobsLive.pipe(
+  Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps)),
+);
 
 // RecapScheduler depends on ProjectRecapJobs (to enqueue) plus BaseLayers
 // for repo/PR/recap reads.

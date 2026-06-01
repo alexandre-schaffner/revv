@@ -21,14 +21,6 @@ const forbiddenImports = new Set([
   "./TokenProvider",
 ]);
 
-const legacyAllowlist = new Set([
-  "apps/server/src/routes/chat.ts::../services/GitHub",
-  "apps/server/src/services/ChatChangesPush.ts::./GitHub",
-  "apps/server/src/services/ProjectRecapJobs.ts::./GitHub",
-  "apps/server/src/services/ProjectRecapJobs.ts::./Repository",
-  "apps/server/src/services/ProjectRecapJobs.ts::./TokenProvider",
-]);
-
 const identityBoundaryRoots = [
   /^apps\/server\/src\/index\.ts$/,
   /^apps\/server\/src\/routes\/.*\.ts$/,
@@ -86,10 +78,7 @@ for (const file of listTsFiles(join(repoRoot, "apps/server/src"))) {
     if (!specifier) continue;
 
     if (featureRoots.some((pattern) => pattern.test(rel)) && forbiddenImports.has(specifier)) {
-      const key = `${rel}::${specifier}`;
-      if (!legacyAllowlist.has(key)) {
-        violations.push(`${rel} imports ${specifier}`);
-      }
+      violations.push(`${rel} imports ${specifier}`);
     }
 
     if (
