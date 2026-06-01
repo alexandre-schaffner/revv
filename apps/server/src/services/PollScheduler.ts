@@ -345,7 +345,7 @@ export const PollSchedulerLive = Layer.effect(
           //
           // We refresh PER ACCOUNT (not "the first user") because each account
           // has its own OAuth identity — github_login + avatar_url live on the
-          // `account` row, and the connected client's WS is account-scoped. The
+          // `account` row, and the connected client's SSE stream is account-scoped. The
           // `user.image` mirror is updated to the avatar of one of the user's
           // accounts so existing code that reads `user.image` keeps working.
           yield* Effect.forEach(
@@ -413,7 +413,7 @@ export const PollSchedulerLive = Layer.effect(
                   }).pipe(Effect.orElseSucceed(() => undefined));
                 }
 
-                // Broadcast scoped to this account's WS clients so only the
+                // Broadcast scoped to this account's SSE clients so only the
                 // sessions actually authenticated against `acc` see the avatar
                 // swap. The full broadcast path would leak A's avatar to B.
                 yield* broadcaster.broadcastToAccount(acc.id, {

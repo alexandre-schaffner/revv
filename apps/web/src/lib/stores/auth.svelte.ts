@@ -373,7 +373,7 @@ export async function loadUser(): Promise<void> {
 
 /**
  * Apply a server-pushed user update (e.g. avatar URL rotation).
- * Called by the WS handler when the poll scheduler detects that the
+ * Called by the SSE event handler when the poll scheduler detects that the
  * authenticated user's GitHub profile changed.
  */
 export function applyUserUpdate(update: {

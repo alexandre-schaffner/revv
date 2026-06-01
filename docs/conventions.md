@@ -47,7 +47,7 @@ convention.
 **Canonical example.** `apps/server/src/services/Cache.ts:51` declares
 `class CacheService extends Context.Tag("CacheService")<...>` and exports its implementation as
 `CacheServiceLive = Layer.sync(CacheService, () => {...})` at `apps/server/src/services/Cache.ts:72`.
-`WebSocketHub` / `WebSocketHubLive` at `apps/server/src/services/WebSocketHub.ts:9` and `:19`
+`Broadcaster` / `BroadcasterLive` at `apps/server/src/services/Broadcaster.ts:50` and `:70`
 follows the same shape.
 
 **Anti-pattern.** `export const Cache = Layer.sync(...)` (Live suffix missing — caller can't
@@ -184,64 +184,67 @@ later AI-provider and job-helper waves.
 
 ---
 
-<a id="ws-envelopes"></a>
-## 3. WebSocket Envelope Conventions
+<a id="event-envelopes"></a>
+## 3. SSE Event Envelope Conventions
 
-All cross-process socket traffic between the Elysia server and the SvelteKit web client is
-shaped by the discriminated union in `packages/shared/src/ws.ts`. This is the canonical source
-of truth — anything else is divergence.
+All server-to-client realtime traffic between the Elysia server and the SvelteKit web client
+flows over a single SSE stream (`GET /api/events`) and is shaped by the discriminated union
+`ServerEventMessage` in `packages/shared/src/events.ts`. This is the canonical source of truth —
+anything else is divergence. Inbound (client-to-server) commands are REST endpoints, not stream
+messages. The server-side narrow neck that fans these out is `Broadcaster`
+(`apps/server/src/services/Broadcaster.ts`); see [`architecture.md`](./architecture.md#realtime--events).
 
-<a id="ws-envelope-shape"></a>
+<a id="event-envelope-shape"></a>
 ### 3.1 Envelope shape is `{ type, data? }`
 
-**Rule.** Every server-to-client message is a discriminated union arm of `WsServerMessage`
+**Rule.** Every server-to-client message is a discriminated union arm of `ServerEventMessage`
 with shape `{ type: string; data?: object | array }`. No flat fields hoisted to the top level;
 no alternative discriminator names (`event`, `kind`); no top-level payload fields outside `data`.
 Messages with no payload omit `data` entirely rather than passing `data: null`.
 
-**Why.** A single envelope shape lets the frontend dispatcher (`apps/web/src/lib/stores/ws.svelte.ts`)
+**Why.** A single envelope shape lets the frontend dispatcher (`apps/web/src/lib/stores/events.svelte.ts`)
 exhaustively switch on `msg.type` with `noUncheckedIndexedAccess`-friendly types. Adding a flat
 field means every consumer needs to know which arms carry it.
 
-**Canonical example.** `packages/shared/src/ws.ts:13–90` defines 25+ message arms, all conforming
-to `{ type, data? }`. Signal-only arms (`prs:sync-started` at `:15`) omit `data`; payload-bearing
-arms (`prs:sync-complete` at `:16`) carry a structured `data` object.
+**Canonical example.** `packages/shared/src/events.ts:59–320` defines 30+ message arms, all
+conforming to `{ type, data? }`. Signal-only arms (`prs:sync-started` at `:74`) omit `data`;
+payload-bearing arms (`prs:sync-complete` at `:78`) carry a structured `data` object.
 
 **Anti-pattern.** `{ type: "thing-happened", thing: { ... } }` (flat `thing` instead of nested
 in `data`). Or `{ event: "thing-happened", data: ... }` (`event` instead of `type`).
 
 **Nested payload note.** Embedding a typed sub-envelope inside `data` is fine when it carries
-real meaning. `walkthrough:edited` at `packages/shared/src/ws.ts:62–69` wraps a
-`WalkthroughStreamEvent` inside `data` so the frontend can reuse the SSE reducer code path —
-this is consistent with the rule (the outer shape is still `{ type, data }`) and is documented
-in code.
+real meaning. `walkthrough:event` at `packages/shared/src/events.ts:49–57` wraps a
+`WalkthroughStreamEvent` (plus the `prId` / `walkthroughId` / `seq` routing cursor) inside `data`
+so the frontend can reuse the walkthrough reducer code path — this is consistent with the rule
+(the outer shape is still `{ type, data }`) and is documented in code.
 
 **Backlog.** None — current canon is clean.
 
-<a id="ws-envelope-naming"></a>
+<a id="event-envelope-naming"></a>
 ### 3.2 Type names are `namespace:action`, lowercase, kebab-cased
 
 **Rule.** Message type strings use colon-separated namespace and action segments. Segments are
 lowercase ASCII letters with hyphens between words. The namespace is the entity (`prs`, `thread`,
-`threads`, `walkthrough`, `repos`, `user`, `chat`, `error`); the action is the verb
-(`updated`, `created`, `sync-started`, `clone-status`, `question-resolved`).
+`threads`, `walkthrough`, `repos`, `user`, `chat`, `recap`, `auth`, `new-pr-session`, `error`);
+the action is the verb (`updated`, `created`, `sync-started`, `clone-status`, `question-resolved`).
 
 **Why.** Easy to grep, easy to scan, no Ambiguity-About-Casing arguments. Bonus: `:` is illegal
 in most identifiers, so message types can never accidentally collide with frontend variable
 names.
 
-**Canonical example.** Every entry in `packages/shared/src/ws.ts:13–90` follows the rule
-(`prs:updated`, `repos:clone-status`, `thread:message:edited` at `:72`).
+**Canonical example.** Every entry in `packages/shared/src/events.ts:59–320` follows the rule
+(`prs:updated`, `repos:clone-status`, `thread:message:edited` at `:159`).
 
 **Anti-pattern.** `prsUpdated`, `PRS_UPDATED`, `prs.updated`, or routing on a generic
 `message-type` discriminator field that holds free-form strings.
 
 **Backlog.** None — current canon is clean.
 
-<a id="ws-payload-semantics"></a>
+<a id="event-payload-semantics"></a>
 ### 3.3 Pick one payload contract: signal, full-state, delta
 
-**Rule.** Each WS message arm declares exactly one of three semantic contracts:
+**Rule.** Each event message arm declares exactly one of three semantic contracts:
 
 - **Signal** — no `data`. The receipt of the message is the entire signal. Example:
   `prs:sync-started`. Receivers re-fetch authoritative state from the DB.
@@ -256,17 +259,35 @@ The choice is documented at the type definition.
 **Why.** Frontend consumers wire reducers to one of three shapes. A message that "kinda" carries
 state and "kinda" carries deltas needs custom handler logic per consumer.
 
-**Canonical example.** Three arms of `packages/shared/src/ws.ts` illustrating each:
-`prs:sync-started` (signal, `:15`); `prs:updated` (full-state, `:14`); `thread:message`
-(delta, `:45`).
+**Canonical example.** Three arms of `packages/shared/src/events.ts` illustrating each:
+`prs:sync-started` (signal, `:74`); `prs:updated` (full-state, `:59`); `thread:message`
+(delta, `:134`).
 
 **Anti-pattern.** Mixing — e.g. a `repos:partial-update` message that sometimes carries the
 full list and sometimes carries one repo. Receivers can't tell whether to replace or merge.
 
-**Broadcast contract.** All WS broadcasts are best-effort and lossy. The hub's contract is
-documented in code at `apps/server/src/services/WebSocketHub.ts:36–45`: receivers reconcile
-from the DB on reconnect; never derive authoritative display state exclusively from WS
-messages. This is CLAUDE.md invariant #8.
+**Broadcast contract.** All broadcasts are best-effort and lossy. The broadcaster's contract is
+documented in code at `apps/server/src/services/Broadcaster.ts:16–21`: commit to SQLite first,
+broadcast second; receivers reconcile from the DB on reconnect (the snapshot REST endpoints) and
+never derive authoritative display state exclusively from stream messages. This is CLAUDE.md
+invariant #8.
+
+<a id="event-scope-targeting"></a>
+### 3.4 Account-scoped by default; `broadcastAll` only for server-global signals
+
+**Rule.** Feature events carry per-account data and MUST be sent with
+`broadcastToAccount(accountId, msg)`. `broadcastAll(msg)` fans out to every registered writer
+regardless of account and is reserved for server-global sync-lifecycle signals — today the
+`prs:sync-started` / `prs:sync-complete` spinners and the generic `error` envelope used for
+sync failures (`SYNC_ERROR` / `THREAD_SYNC_ERROR` codes), all emitted from
+`PollScheduler.ts`.
+
+**Why.** A data-bearing envelope (`prs:updated`, recap, thread, walkthrough) sent with
+`broadcastAll` leaks one account's data to every connected client. Scoping is a security
+boundary, not a perf optimization.
+
+**Anti-pattern.** Routing `prs:updated` (carries a specific account's `PullRequest[]`) through
+`broadcastAll`.
 
 **Backlog.** None — current canon is clean.
 
@@ -277,8 +298,7 @@ messages. This is CLAUDE.md invariant #8.
 
 Svelte 5 stores under `apps/web/src/lib/stores/` are how reactive state crosses component
 boundaries. The canon below is what `walkthrough.svelte.ts`, `prs.svelte.ts`, and `auth.svelte.ts`
-already do; `review.svelte.ts`, `sync.svelte.ts`, and the in-progress
-`walkthrough-stream.svelte.ts` are the migration targets.
+already do; `review.svelte.ts` and `sync.svelte.ts` are the remaining migration targets.
 
 <a id="stores-singleton"></a>
 ### 4.1 Singleton module + getX/setX exports
@@ -384,33 +404,31 @@ possible combinations; only ~4 are legal.
 
 **Backlog.** [`S-003`](./conventions-backlog.md#s-003).
 
-<a id="stores-ws-handlers"></a>
-### 4.5 WS message handlers in stores are named `on<EventName>`
+<a id="stores-event-handlers"></a>
+### 4.5 Event handlers in stores are named `on<EventName>`
 
-**Rule.** Functions exported from a store for the WS dispatcher (`ws.svelte.ts`) to call follow
-the form `on<EventName>` where `<EventName>` is the WS message `type` with the colon dropped
-and segments PascalCased (`thread:created` → `onThreadCreated`; `walkthrough:edited` →
-`onWalkthroughEdited`). One handler per WS message arm.
+**Rule.** Functions exported from a store for the SSE dispatcher
+(`apps/web/src/lib/stores/events.svelte.ts`) to call follow the form `on<EventName>` where
+`<EventName>` is the event message `type` with the colon dropped and segments PascalCased
+(`thread:created` → `onThreadCreated`; `chat:question-resolved` → `onChatQuestionResolved`).
+One handler per event message arm.
 
 **Why.** Reading the dispatcher should make it obvious which store owns which message. The
-`*FromWs` suffix style buries the event identity in the middle of the name and pluralizes
-inconsistently (`updateThreadStatusFromWs` vs the WS type `thread:updated`).
+legacy `*FromWs` suffix style buried the event identity in the middle of the name and pluralized
+inconsistently (`updateThreadStatusFromWs` vs the event type `thread:updated`).
 
-**Canonical example.** `apps/web/src/lib/stores/walkthrough.svelte.ts:444`
-(`onWalkthroughError`), `:461` (`onWalkthroughEdited`), and
-`apps/web/src/lib/stores/walkthrough-stream.svelte.ts:601` (`onWalkthroughComplete`) match the
-WS message types `walkthrough:error`, `walkthrough:edited`, `walkthrough:complete`.
+**Canonical example.** `apps/web/src/lib/stores/review.svelte.ts:559` (`onThreadUpdated`),
+`:576` (`onThreadCreated`), `:699` (`onThreadMessageEdited`);
+`apps/web/src/lib/stores/walkthrough.svelte.ts:609` (`onWalkthroughEvent`); and
+`apps/web/src/lib/stores/chat.svelte.ts:1555` (`onChatQuestionResolved`) match the event
+message types `thread:updated`, `thread:created`, `thread:message:edited`, `walkthrough:event`,
+and `chat:question-resolved`. The `events.svelte.ts:184` dispatch reads as a flat list of these
+`on*` calls.
 
-**Anti-pattern.** `apps/web/src/lib/stores/review.svelte.ts:660` `updateThreadStatusFromWs`,
-`:677` `addThreadFromWs`, `:695` `addMessageFromWs`, `:933` `updateMessageFromWs`. Same pattern
-in `apps/web/src/lib/stores/chat.svelte.ts` (`resolveQuestionFromWs`).
+**Anti-pattern.** The retired `*FromWs` suffix style — `updateThreadStatusFromWs`,
+`addThreadFromWs`, `resolveQuestionFromWs`. No occurrences remain in the codebase.
 
-**Migration form.** `updateThreadStatusFromWs` → `onThreadUpdated`; `addThreadFromWs` →
-`onThreadCreated`; `addMessageFromWs` → `onThreadMessage`; `updateMessageFromWs` →
-`onThreadMessageEdited`; `removeMessageFromWs` → `onThreadMessageDeleted`; `removeThreadFromWs` →
-`onThreadDeleted`; `resolveQuestionFromWs` → `onChatQuestionResolved`.
-
-**Backlog.** [`S-004`](./conventions-backlog.md#s-004).
+**Backlog.** [`S-004`](./conventions-backlog.md#s-004) — closed; all handlers renamed.
 
 <a id="stores-optimistic"></a>
 ### 4.6 Client-initiated mutations are optimistic with entity-scoped rollback
@@ -421,7 +439,7 @@ specific fields being mutated on the specific entities involved* — never a lis
 the calling component branches on the throw (loading spinners, inline errors), the function
 rethrows after the toast; otherwise it may swallow.
 
-**Why.** Two reasons. (1) **UI lag.** Waiting for the server round-trip plus the WS
+**Why.** Two reasons. (1) **UI lag.** Waiting for the server round-trip plus the SSE
 rebroadcast before reflecting the user's action is the laggy-feel symptom this rule
 eliminates — closing a PR, flipping draft state, merging, pinning should feel
 instantaneous because the outcome is rarely in doubt. (2) **Concurrency.** A `prs:updated`
@@ -443,7 +461,7 @@ for the reverse rollback. Both helpers touch exactly one PR per call so concurre
 `repositories`, `pullRequests`, `archivedPrs`, `taggedPrsByRepo`, and `pinnedPrIds` whole
 via `snapshotRepoState()`, restores them whole on error via `restoreRepoState()`. The
 shape works for the rare single-entity-delete case it lives in, but it does not generalize:
-any concurrent WS broadcast between snapshot and rollback is silently dropped. The fix is
+any concurrent SSE broadcast between snapshot and rollback is silently dropped. The fix is
 entity-scoped removal — capture the removed repo, the removed PR ids, and the removed
 pinned ids — and inverse them on rollback rather than restoring the whole world.
 

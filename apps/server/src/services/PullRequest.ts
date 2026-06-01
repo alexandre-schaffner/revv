@@ -152,7 +152,7 @@ export class PullRequestService extends Context.Tag("PullRequestService")<
     ) => Effect.Effect<void, never, DbService>;
     /**
      * Read the GraphQL-thread fingerprint for a PR. Used to skip redundant
-     * downstream DB writes and WS events when nothing changed on GitHub.
+     * downstream DB writes and SSE events when nothing changed on GitHub.
      * Null = fingerprint has never been computed for this PR.
      */
     readonly getThreadsFingerprint: (

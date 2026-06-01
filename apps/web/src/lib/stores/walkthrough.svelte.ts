@@ -536,7 +536,7 @@ export function applyEvents(prId: string, events: WalkthroughStreamEvent[]): voi
         }
         // ── Lifecycle events (global SSE bus). Flip
         //    streaming/completion/error/superseded state without touching
-        //    content. Each one was previously a standalone WS envelope.
+        //    content. Each one was previously a standalone lifecycle envelope.
         case "lifecycle:started":
           entry.walkthroughId = event.data.walkthroughId;
           entry.isStreaming = true;

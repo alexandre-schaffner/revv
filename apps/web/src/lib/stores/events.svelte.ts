@@ -119,7 +119,7 @@ function reconcileOnReconnect(): void {
 /**
  * Open the global SSE stream for the given bearer token. Closes any
  * existing connection first. Called from `auth.svelte.ts` on sign-in /
- * account-switch, parallel to `ws.connect`.
+ * account-switch.
  *
  * `hostOverride` lets account-switch hand
  * us a specific host the local settings store is still empty for, we

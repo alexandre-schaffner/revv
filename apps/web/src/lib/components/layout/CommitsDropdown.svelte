@@ -49,7 +49,7 @@ async function fetchData(prId: string) {
 }
 
 $effect(() => {
-  // Only `open` is tracked here. pr.id is read via untrack so WS-driven
+  // Only `open` is tracked here. pr.id is read via untrack so SSE-driven
   // PR object updates don't re-trigger a fetch while the dropdown is open.
   if (open) {
     const prId = untrack(() => pr.id);

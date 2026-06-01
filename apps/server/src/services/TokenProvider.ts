@@ -109,7 +109,7 @@ export const TokenProviderLive = Layer.effect(
     }
 
     /** Exchange the stored refresh token for a fresh access token. Composed as
-     * an Effect end-to-end — secret-store reads/writes and the WS broadcast are
+     * an Effect end-to-end — secret-store reads/writes and the SSE broadcast are
      * `yield*`-ed rather than escaped via `Effect.runPromise` (CLAUDE.md §2). */
     const doRefresh = (accountId: string): Effect.Effect<string, GitHubAuthError> =>
       Effect.gen(function* () {
@@ -295,7 +295,7 @@ export const TokenProviderLive = Layer.effect(
         // Priority order: requested host first, then defaults, then the
         // legacy 'github' provider. Falls back to any remaining account the
         // user owns (mirrors the prior behavior for non-default GHE hosts that
-        // open a WS without a `host=` param — see git history).
+        // open an SSE stream without a `host=` param — see git history).
         const providerIds = host
           ? [`github:${host}`, "github"]
           : ["github:github.com", `github:${serverEnv.githubHost}`, "github"];

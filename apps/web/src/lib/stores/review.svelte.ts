@@ -86,7 +86,7 @@ export function clearRepoFile(): void {
 // --- New-commit-available detection ------------------------------------------
 //
 // Tracks which git SHA the currently-rendered `reviewFiles[]` correspond to,
-// per-PR. When a `prs:updated` WebSocket event swaps in a new `pr.headSha`, the
+// per-PR. When a `prs:updated` SSE event swaps in a new `pr.headSha`, the
 // in-memory PR changes but the on-screen diff still reflects the older SHA.
 // Comparing `pr.headSha` to the stamped value tells the FloatingTabs dot
 // whether to morph into a "Pull" button.
@@ -454,7 +454,7 @@ export async function addThread(
 
   const result = data as { thread: CommentThread; message: ThreadMessage };
 
-  // Update local state — guard against WS broadcast arriving first
+  // Update local state — guard against SSE broadcast arriving first
   if (!threads.some((t) => t.id === result.thread.id)) {
     threads = [...threads, result.thread];
     threadMessages = {
@@ -498,7 +498,7 @@ export async function addThreadMessage(
 
   const message = data as ThreadMessage;
 
-  // Guard against WS broadcast arriving first
+  // Guard against SSE broadcast arriving first
   const existing = threadMessages[threadId] ?? [];
   if (!existing.some((m) => m.id === message.id)) {
     threadMessages = {
@@ -554,7 +554,7 @@ export async function reopenThread(threadId: string): Promise<void> {
 }
 
 /**
- * Update a thread's status from a WebSocket message (no API call needed).
+ * Update a thread's status from an SSE event (no API call needed).
  */
 export function onThreadUpdated(threadId: string, status: ThreadStatus): void {
   const isResolved = status === "resolved" || status === "wont_fix";
@@ -571,7 +571,7 @@ export function onThreadUpdated(threadId: string, status: ThreadStatus): void {
 }
 
 /**
- * Push a thread and message from a WebSocket broadcast (no API call needed).
+ * Push a thread and message from an SSE broadcast (no API call needed).
  */
 export function onThreadCreated(thread: CommentThread, message: ThreadMessage): void {
   if (!threads.some((t) => t.id === thread.id)) {
@@ -589,7 +589,7 @@ export function onThreadCreated(thread: CommentThread, message: ThreadMessage): 
 }
 
 /**
- * Push a message from a WebSocket broadcast (no API call needed).
+ * Push a message from an SSE broadcast (no API call needed).
  */
 export function onThreadMessage(threadId: string, message: ThreadMessage): void {
   // Avoid duplicates
@@ -684,7 +684,7 @@ export async function deleteThread(threadId: string): Promise<boolean> {
 }
 
 /**
- * Remove a thread from local state in response to a WebSocket broadcast.
+ * Remove a thread from local state in response to an SSE broadcast.
  */
 export function onThreadDeleted(threadId: string): void {
   threads = threads.filter((t) => t.id !== threadId);
@@ -694,7 +694,7 @@ export function onThreadDeleted(threadId: string): void {
 }
 
 /**
- * Update a message body from a WebSocket broadcast (no API call needed).
+ * Update a message body from an SSE broadcast (no API call needed).
  */
 export function onThreadMessageEdited(threadId: string, message: ThreadMessage): void {
   threadMessages = {
@@ -704,7 +704,7 @@ export function onThreadMessageEdited(threadId: string, message: ThreadMessage):
 }
 
 /**
- * Remove a message from local state in response to a WebSocket broadcast.
+ * Remove a message from local state in response to an SSE broadcast.
  */
 export function onThreadMessageDeleted(threadId: string, messageId: string): void {
   const existing = threadMessages[threadId];

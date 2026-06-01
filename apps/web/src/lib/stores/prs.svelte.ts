@@ -165,7 +165,7 @@ export async function fetchTaggedPrs(repoId: string): Promise<void> {
 }
 
 /**
- * Apply the full open-PR state from a WebSocket `prs:updated` event.
+ * Apply the full open-PR state from a `prs:updated` SSE event.
  * The server sends the canonical DB list for the active account, so replacing
  * avoids stale closed/reopened rows and preserves server ordering.
  */
@@ -362,7 +362,7 @@ export async function unpinPr(prId: string): Promise<void> {
 }
 
 /**
- * Patch in-memory state in response to a `pr:archived` WS envelope.
+ * Patch in-memory state in response to a `pr:archived` SSE envelope.
  * Removes the PR from the open list, prepends it to the archive (newest
  * first), updates its status/closedAt fields if present. Best-effort: if
  * the PR isn't known locally, this is a no-op and the next `prs:updated`
@@ -413,7 +413,7 @@ export async function syncPrs(): Promise<void> {
   try {
     await api.api.prs.sync.post();
   } catch {
-    // errors arrive via WebSocket
+    // errors arrive via SSE
   } finally {
     isLoading = false;
   }
@@ -445,8 +445,8 @@ export async function addRepo(fullName: string): Promise<void> {
   // The server-side POST handler forks a background sync, but that fiber
   // may complete after the response returns.  An explicit sync here uses
   // the awaited POST /api/prs/sync endpoint, which guarantees the sync
-  // finishes and broadcasts prs:updated over the WebSocket before
-  // returning.  fetchPrs() is a safety net in case the WS message is
+  // finishes and broadcasts prs:updated over the SSE stream before
+  // returning.  fetchPrs() is a safety net in case the SSE message is
   // missed.
   await syncPrs();
   await fetchPrs();
@@ -551,7 +551,7 @@ function restorePrFromArchive(
 export async function closePr(prId: string): Promise<void> {
   const pr = pullRequests.find((p) => p.id === prId);
   if (!pr) {
-    // PR not known locally — fall back to pessimistic. WS reconciles.
+    // PR not known locally — fall back to pessimistic. SSE reconciles.
     const { error } = await api.api.prs({ id: prId }).close.post();
     if (error) {
       toast.error(`Failed to close PR (HTTP ${error.status})`);
@@ -594,7 +594,7 @@ export async function getMergeEligibility(prId: string): Promise<MergeEligibilit
 export async function mergePr(prId: string, mergeMethod: MergeMethod): Promise<void> {
   const pr = pullRequests.find((p) => p.id === prId);
   if (!pr) {
-    // PR not known locally — fall back to pessimistic. WS reconciles.
+    // PR not known locally — fall back to pessimistic. SSE reconciles.
     const { error } = await api.api.prs({ id: prId }).merge.post({ mergeMethod });
     if (error) {
       toast.error(`Failed to merge pull request (HTTP ${error.status})`);
@@ -628,7 +628,7 @@ export async function mergePr(prId: string, mergeMethod: MergeMethod): Promise<v
 export async function retryClone(id: string): Promise<void> {
   // Optimistic flip so the spinner appears immediately. The server's
   // background fiber will broadcast 'cloning' then 'ready'/'error' via the
-  // `repos:clone-status` WS message, which `ws.svelte.ts` routes through
+  // `repos:clone-status` SSE message, which `events.svelte.ts` routes through
   // `updateRepoCloneStatus`. If the POST itself fails, we surface the error
   // state here so the indicator stays actionable.
   updateRepoCloneStatus(id, "pending", "");

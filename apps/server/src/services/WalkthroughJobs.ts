@@ -49,6 +49,7 @@ import {
   type CloneError,
   CloneInProgressError,
   CloneNotReadyError,
+  DbError,
   type GitHubError,
   type NotFoundError,
   type ReviewError,
@@ -1519,22 +1520,30 @@ export const WalkthroughJobsLive = Layer.effect(
     const resolveEventTargets = (
       walkthroughId: string,
       activeJob: ActiveJob | undefined,
-    ): { prId: string; accountId: string } | null => {
+    ): Effect.Effect<{ prId: string; accountId: string } | null> => {
       if (activeJob) {
-        return { prId: activeJob.prId, accountId: activeJob.accountId };
+        return Effect.succeed({ prId: activeJob.prId, accountId: activeJob.accountId });
       }
-      const row = db
-        .select({
-          prId: walkthroughs.pullRequestId,
-          accountId: repositories.accountId,
-        })
-        .from(walkthroughs)
-        .innerJoin(pullRequests, eq(pullRequests.id, walkthroughs.pullRequestId))
-        .innerJoin(repositories, eq(repositories.id, pullRequests.repositoryId))
-        .where(eq(walkthroughs.id, walkthroughId))
-        .get();
-      if (!row) return null;
-      return { prId: row.prId, accountId: row.accountId };
+      return Effect.try({
+        try: () =>
+          db
+            .select({
+              prId: walkthroughs.pullRequestId,
+              accountId: repositories.accountId,
+            })
+            .from(walkthroughs)
+            .innerJoin(pullRequests, eq(pullRequests.id, walkthroughs.pullRequestId))
+            .innerJoin(repositories, eq(repositories.id, pullRequests.repositoryId))
+            .where(eq(walkthroughs.id, walkthroughId))
+            .get(),
+        catch: (cause) => new DbError({ message: "resolveEventTargets failed", cause }),
+      }).pipe(
+        Effect.map((row) => (row ? { prId: row.prId, accountId: row.accountId } : null)),
+        // Best-effort broadcast addressing: a DB read failure here just means
+        // we skip this one broadcast — clients reconcile from the DB on
+        // reconnect (CLAUDE.md invariant #8), same as a missing row.
+        Effect.orElseSucceed(() => null),
+      );
     };
 
     const emitEvent = (
@@ -1558,7 +1567,7 @@ export const WalkthroughJobsLive = Layer.effect(
 
           // 3. Resolve broadcast targets (fast path = in-memory job, slow
           //    path = DB join for chat-edit-on-completed-walkthrough).
-          const targets = resolveEventTargets(walkthroughId, activeJob);
+          const targets = yield* resolveEventTargets(walkthroughId, activeJob);
           if (targets !== null) {
             // Broadcaster fan-out — the new SSE path. Account-scoped so a
             // multi-account user only sees their own walkthrough events.

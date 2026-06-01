@@ -78,8 +78,8 @@ source of truth.
 
 `broadcastToAccount(accountId, msg)` fans out only to the writers registered for that account.
 `broadcastAll(msg)` fans out to every registered writer regardless of account — use this only
-for server-global signals (sync lifecycle events: `prs:sync-started`, `prs:sync-complete`,
-`prs:sync-error`). All feature-level events use `broadcastToAccount`.
+for server-global sync-lifecycle signals (`prs:sync-started`, `prs:sync-complete`, and the
+generic `error` envelope for sync failures). All feature-level events use `broadcastToAccount`.
 
 Doctrine: **commit-first, broadcast-second** (invariant #8). The broadcaster is the broadcast
 point — callers MUST commit to SQLite before broadcasting; a missed broadcast is reconstructible

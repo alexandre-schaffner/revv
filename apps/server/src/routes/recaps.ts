@@ -199,7 +199,7 @@ export const recapRoutes = new Elysia({ prefix: "/api" })
   // aborts the agent's AbortController, and interrupts the fiber. The
   // `buildJobBody` cancellation branch then transitions status to
   // 'error' with message "Cancelled by user", and broadcasts the change
-  // via WS so other clients update. No-op if no live job is registered
+  // via SSE so other clients update. No-op if no live job is registered
   // for this recapId (e.g. it already finished or was never started).
   .post("/recaps/:id/stop", async (ctx) => {
     try {

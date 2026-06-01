@@ -39,7 +39,7 @@ let cacheInspectorOpen = $state(false);
 // clicking it just toggled the file-tree expander instead of
 // navigating back. Deriving from the URL here makes the URL the
 // single source of truth for every entry/exit path (Cmd+W, sidebar
-// settings link, logout, mouse back, deep link, WS-driven nav, …).
+// settings link, logout, mouse back, deep link, SSE-driven nav, …).
 $effect(() => {
   const match = page.url.pathname.match(/^\/review\/([^/]+)/);
   setSelectedPrId(match?.[1] ?? null);
@@ -69,7 +69,7 @@ $effect(() => {
 // PrItem.handleClick and CommandPalette already pair selectPr() with
 // setSidebarView('files') so the click-driven path is in sync. This
 // effect covers every URL-driven path that doesn't go through those
-// handlers — deep link, browser back/forward, refresh, WS-driven nav,
+// handlers — deep link, browser back/forward, refresh, SSE-driven nav,
 // settings-link round-trip — and was previously one-sided (only reset
 // to 'prs' when the route left a PR), which let the header (OrgSwitcher)
 // and the body (file tree, because selectedPrId was set) desync.

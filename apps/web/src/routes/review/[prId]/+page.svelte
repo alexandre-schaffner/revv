@@ -149,7 +149,7 @@ $effect(() => {
     requestThreadSync(prId);
 
     // Short-circuit: same PR, recent load, files still in memory —
-    // keep rendering what's there. A WS `cache:invalidated` (Phase 3)
+    // keep rendering what's there. An SSE `cache:invalidated` (Phase 3)
     // or a hard refresh will bust this.
     const now = Date.now();
     const currentFiles = getReviewFiles();

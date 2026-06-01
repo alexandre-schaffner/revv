@@ -175,10 +175,23 @@ export const makeSubscriberRegistry = <E extends { readonly type: string }>(
           for (const event of buf) {
             try {
               onEvent(event);
+              handle.consecutiveFailures = 0;
             } catch (err) {
+              // Same 3-strike error budget as `fanOut`: a buffered replay can
+              // be many events, so a wedged client must be droppable here too.
+              handle.consecutiveFailures += 1;
+              if (handle.consecutiveFailures >= 3) {
+                channel.subscribers.delete(handle);
+                logError(
+                  errorScope,
+                  `subscriber dropped after 3 consecutive failures during flush ${idLabel}=${jobId} handle=${handleId}:`,
+                  err instanceof Error ? err.message : String(err),
+                );
+                break;
+              }
               logError(
                 errorScope,
-                `subscriber flush threw ${idLabel}=${jobId} handle=${handleId} type=${event.type}:`,
+                `subscriber flush threw (${handle.consecutiveFailures}/3) ${idLabel}=${jobId} handle=${handleId} type=${event.type}:`,
                 err instanceof Error ? err.message : String(err),
               );
             }

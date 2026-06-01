@@ -248,7 +248,7 @@ export const ProjectRecapJobsLive = Layer.effect(
     ): Effect.Effect<void> =>
       Effect.gen(function* () {
         yield* provideDb(recapService.setStatus(recap.id, status, options));
-        // Reload completedAt so the WS payload is accurate.
+        // Reload completedAt so the broadcast payload is accurate.
         const fresh = yield* provideDb(recapService.getById(recap.id)).pipe(
           Effect.catchAll(() => Effect.succeed(null)),
         );
@@ -964,7 +964,7 @@ export const ProjectRecapJobsLive = Layer.effect(
         // Either way, read the row's current status and force the
         // 'generating' → 'error' transition via the chokepoint here
         // (idempotent — UPDATE with the same status is harmless). This
-        // is what guarantees the UI's WS reducer flips the floating bar
+        // is what guarantees the UI's SSE reducer flips the floating bar
         // out of the Stop state after the user clicks Stop.
         const row = yield* provideDb(recapService.getById(recapId)).pipe(
           Effect.catchAll(() => Effect.succeed(null)),

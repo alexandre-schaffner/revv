@@ -56,8 +56,8 @@ export const eventsRoute = new Elysia().get("/api/events", async ({ query, reque
     );
     accountId = resolved.accountId;
   } catch {
-    // Parity with the WS route: an unresolvable account opens an
-    // observer-only connection that never receives scoped broadcasts.
+    // An unresolvable account opens an observer-only connection that never
+    // receives scoped broadcasts.
     accountId = "unresolved";
   }
 
@@ -134,8 +134,8 @@ export const eventsRoute = new Elysia().get("/api/events", async ({ query, reque
 
   // Best-effort: tear down when the underlying fetch is aborted. Bun forwards
   // client disconnects through `request.signal` for the HTTP/1.1 response
-  // streaming path, so this is the symmetric counterpart to the WS `close`
-  // hook. Not all environments reliably fire this — the ReadableStream
+  // streaming path, so this is the symmetric counterpart to the ReadableStream
+  // `cancel()` callback. Not all environments reliably fire this — the
   // `cancel()` callback above is the authoritative fallback.
   request.signal.addEventListener("abort", tearDown, { once: true });
 

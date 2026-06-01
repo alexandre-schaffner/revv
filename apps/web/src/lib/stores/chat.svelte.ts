@@ -859,8 +859,8 @@ export interface SubmitQuestionAction {
 /**
  * Submit the user's response (or rejection) to an open question. Optimistic:
  * flips the local item to its terminal state before the server confirms so
- * the UI feels snappy; reverts on error. The server's WS broadcast (or the
- * SSE follow-up frame for opencode) keeps other tabs in sync.
+ * the UI feels snappy; reverts on error. The server's SSE broadcast keeps
+ * other tabs in sync.
  */
 export async function submitQuestionAnswers(
   prId: string,
@@ -1548,7 +1548,7 @@ export function clearToolApprovals(prId: string): void {
 }
 
 /**
- * Apply a `chat:question-resolved` WebSocket broadcast from another client.
+ * Apply a `chat:question-resolved` SSE broadcast from another client.
  * Mirrors the optimistic patch in `submitQuestionAnswers` so every open tab
  * sees the card flip to its terminal state without a full history reload.
  */

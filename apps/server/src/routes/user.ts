@@ -132,7 +132,7 @@ export const userRoutes = new Elysia({ prefix: "/api/user" })
 
         // Resolve the active account's re-auth state so the client can gate
         // the app behind the re-sign-in modal on boot, reconciling any
-        // `auth:reauth-required` WS signal missed while disconnected.
+        // `auth:reauth-required` SSE signal missed while disconnected.
         const reauth = await AppRuntime.runPromise(
           Effect.gen(function* () {
             const identityService = yield* Identity;

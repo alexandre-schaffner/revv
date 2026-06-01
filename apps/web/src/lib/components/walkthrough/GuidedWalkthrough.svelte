@@ -801,14 +801,14 @@ onDestroy(() => {
 
 // ── Clone-in-progress auto-retry ────────────────────────────────────
 // When the server rejects the walkthrough because the repo is still
-// cloning, we used to rely solely on a WS-delivered `cloneStatus === 'ready'`
-// update to auto-retry. That's fragile: missed WS messages, server restarts
+// cloning, we used to rely solely on an SSE-delivered `cloneStatus === 'ready'`
+// update to auto-retry. That's fragile: missed SSE messages, server restarts
 // that reset clone state to 'pending', and outright clone failures would
 // leave the UI permanently stuck on "Cloning repository…". Now we start a
 // poller against `GET /api/repos/:id/clone-status` that is authoritative for
-// all terminal states (ready/error/pending) regardless of WS delivery. The
-// WS fast-path still runs: if the repositories store already reports 'ready'
-// (from a WS broadcast) we stream immediately without waiting for the next
+// all terminal states (ready/error/pending) regardless of SSE delivery. The
+// SSE fast-path still runs: if the repositories store already reports 'ready'
+// (from an SSE broadcast) we stream immediately without waiting for the next
 // poll tick.
 $effect(() => {
   if (!cloneInProgress || !cloneRepoId) return;
@@ -824,7 +824,7 @@ $effect(() => {
 // Visible when the UI is stuck in the clone-in-progress state. Hits the
 // server's `/retry-clone` endpoint, which resets the repo's clone state and
 // kicks off a fresh clone, then restarts the poller so the UI un-sticks
-// regardless of whether the WS fast-path fires.
+// regardless of whether the SSE fast-path fires.
 let retryingClone = $state(false);
 async function handleRetryClone(): Promise<void> {
   if (!cloneRepoId || retryingClone) return;

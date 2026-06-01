@@ -209,6 +209,24 @@ describe("makeSubscriberRegistry", () => {
     expect(channel.subscribers.size).toBe(1);
   });
 
+  it("drops a subscriber that throws 3 times while replaying buffered events on flush", () => {
+    const registry = makeSubscriberRegistry<TestEvent>(config);
+    const channel = makeChannel();
+    const { flush } = registry.subscribe("job", channel, () => {
+      throw new Error("always throws");
+    });
+
+    // Buffer 4 pre-flush events; replay throws on each.
+    registry.fanOut("job", channel, { type: "1" });
+    registry.fanOut("job", channel, { type: "2" });
+    registry.fanOut("job", channel, { type: "3" });
+    registry.fanOut("job", channel, { type: "4" });
+    expect(channel.subscribers.size).toBe(1);
+
+    flush(); // replay budget exhausted on the 3rd throw
+    expect(channel.subscribers.size).toBe(0);
+  });
+
   it("stops delivering to an unsubscribed handle", () => {
     const registry = makeSubscriberRegistry<TestEvent>(config);
     const channel = makeChannel();
