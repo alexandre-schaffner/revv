@@ -6,9 +6,9 @@
 // broadcasts fan out to every writer for the target account.
 //
 // This is the deep module the module map calls "Realtime/Events": a tiny
-// interface (`register` / `broadcast` / `broadcastToAccount`) hides the
-// best-effort fan-out, SSE encoding, and disconnect bookkeeping. Features push
-// events here; they never touch transport internals.
+// interface (`register` / `broadcastToAccount`) hides the best-effort fan-out,
+// SSE encoding, and disconnect bookkeeping. Features push events here; they
+// never touch transport internals.
 //
 // Scope (intentional): only walkthrough envelopes flow through here today.
 // Other real-time channels (PR/repo/chat/new-pr-session WS envelopes) keep
@@ -64,12 +64,6 @@ export class Broadcaster extends Context.Tag("Broadcaster")<
       accountId: string,
       msg: ServerEventMessage,
     ) => Effect.Effect<void>;
-
-    /** Best-effort fan to every registered writer. */
-    readonly broadcast: (msg: ServerEventMessage) => Effect.Effect<void>;
-
-    /** Diagnostic — how many writers are currently open. */
-    readonly clientCount: Effect.Effect<number>;
   }
 >() {}
 
@@ -81,9 +75,8 @@ export const BroadcasterLive = Layer.effect(
 
     const dispatch = (target: Registration, msg: ServerEventMessage): void => {
       if (target.writer.isClosed()) return;
-      // Encoding once per message would shave work for a global fan; today
-      // every walkthrough event is account-scoped so per-target encoding is
-      // fine and keeps the writer surface from leaking SSE encoding details.
+      // Per-target encoding keeps the writer surface from leaking SSE encoding
+      // details; broadcasts are account-scoped so the fan-out is small.
       try {
         target.writer.send(msg);
       } catch {
@@ -122,16 +115,6 @@ export const BroadcasterLive = Layer.effect(
             dispatch(reg, msg);
           }
         }),
-
-      broadcast: (msg) =>
-        Effect.gen(function* () {
-          const set = yield* Ref.get(registrations);
-          for (const reg of set) {
-            dispatch(reg, msg);
-          }
-        }),
-
-      clientCount: Effect.map(Ref.get(registrations), (set) => set.size),
     };
   }),
 );

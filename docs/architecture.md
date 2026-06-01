@@ -100,8 +100,11 @@ API and never touches the local filesystem.
 
 Feature modules depend inward on platform seams:
 
-- Walkthrough, Chat, and Recap use `PrContextService` for PR-scoped GitHub context.
-- Feature modules do not import `GitHubService`, `RepositoryService`, or `TokenProvider` directly.
+- Walkthrough and Chat use `PrContextService` for PR-scoped GitHub context. Recap still imports
+  `GitHubGateway`, `RepositoryService`, and `TokenProvider` directly — an explicit, allowlisted
+  exception in `check-import-boundaries.ts` scheduled for migration in a later wave.
+- Feature modules otherwise do not import `GitHubService`, `RepositoryService`, or `TokenProvider`
+  directly.
 - Provider selection comes from `SettingsService`, not from AI-provider helpers.
 - Agent content writes go through MCP tool handlers; orchestrators own lifecycle/status writes.
 - Routes resolve account context through `Identity`, not `SecretStore` / `TokenProvider` directly.

@@ -149,7 +149,7 @@ The server architecture is documented in [`architecture.md`](./architecture.md).
 are the import-direction guardrails for keeping those modules deep.
 
 <a id="feature-pr-context"></a>
-### 3.1 Feature modules use PR Context
+### 2.5.1 Feature modules use PR Context
 
 **Rule.** Walkthrough, Chat, and Recap feature modules must not import `GitHubService`,
 `RepositoryService`, or `TokenProvider` directly. PR-scoped GitHub context flows through
@@ -170,7 +170,7 @@ context before starting a walkthrough job.
 `TokenProvider` to resolve an access token.
 
 <a id="settings-agent-resolution"></a>
-### 3.2 Settings owns provider selection
+### 2.5.2 Settings owns provider selection
 
 **Rule.** Code that needs the effective CLI agent calls `SettingsService.resolveAgent()` or
 `SettingsService.resolveRecapAgent()`. AI-provider modules may branch on the returned agent, but
