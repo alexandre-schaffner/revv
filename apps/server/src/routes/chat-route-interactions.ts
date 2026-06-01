@@ -7,12 +7,12 @@ import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
+import { Broadcaster } from "../services/Broadcaster";
 import { ChatSessionService } from "../services/ChatSession";
 import { OpencodeSupervisor } from "../services/OpencodeSupervisor";
 import { takePendingQuestion } from "../services/PendingQuestionRegistry";
 import { PrContextService } from "../services/PrContext";
 import { SettingsService } from "../services/Settings";
-import { WebSocketHub } from "../services/WebSocketHub";
 import { handleAppError, jsonResponse, withAuth } from "./middleware";
 
 export const chatInteractionRoutes = new Elysia()
@@ -302,8 +302,12 @@ export const chatInteractionRoutes = new Elysia()
         // item locally; this is for cross-tab parity.
         try {
           await AppRuntime.runPromise(
-            Effect.flatMap(WebSocketHub, (hub) =>
-              hub.broadcast({
+            Effect.gen(function* () {
+              const prContext = yield* PrContextService;
+              const broadcaster = yield* Broadcaster;
+              const { repo } = yield* prContext.resolveBasic(prId, ctx.session.user.id);
+              const accountId = yield* prContext.getAccountIdForRepo(repo.id);
+              yield* broadcaster.broadcastToAccount(accountId, {
                 type: "chat:question-resolved",
                 data: {
                   prId,
@@ -315,8 +319,8 @@ export const chatInteractionRoutes = new Elysia()
                   // can flip the plan card locally without a refetch.
                   ...(supersededPlanId ? { supersededPlanId } : {}),
                 },
-              }),
-            ),
+              });
+            }),
           );
         } catch (err) {
           logError(

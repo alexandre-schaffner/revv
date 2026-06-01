@@ -7,6 +7,7 @@ import { account, user } from "../db/schema/auth";
 import { GitHubAuthError } from "../domain/errors";
 import { withDb as withDbHelper } from "../effects/with-db";
 import { logError } from "../logger";
+import { Broadcaster } from "./Broadcaster";
 import { DbService } from "./Db";
 import { DiffCacheService } from "./DiffCache";
 import { GitHubGateway } from "./GitHub";
@@ -19,7 +20,6 @@ import { SyncService } from "./Sync";
 import { TokenProvider } from "./TokenProvider";
 import { WalkthroughService } from "./Walkthrough";
 import { WalkthroughJobs } from "./WalkthroughJobs";
-import { WebSocketHub } from "./WebSocketHub";
 
 type PollSchedulerService = {
   readonly start: () => Effect.Effect<void>;
@@ -48,7 +48,7 @@ export const PollSchedulerLive = Layer.effect(
   PollScheduler,
   Effect.gen(function* () {
     // Capture all dependencies once at layer construction time
-    const hub = yield* WebSocketHub;
+    const broadcaster = yield* Broadcaster;
     const github = yield* GitHubGateway;
     const prService = yield* PullRequestService;
     const remoteUserService = yield* RemoteUserService;
@@ -92,6 +92,20 @@ export const PollSchedulerLive = Layer.effect(
     const hasPeriodicSyncedOnceRef = yield* Ref.make(false);
     // Set to true by syncNow to suppress the summary during manual syncs.
     const suppressSummaryRef = yield* Ref.make(false);
+    const currentAccountIdsRef = yield* Ref.make<ReadonlyArray<string>>([]);
+
+    const broadcastToCurrentAccounts = (msg: import("@revv/shared").ServerEventMessage) =>
+      Effect.gen(function* () {
+        const accountIds = yield* Ref.get(currentAccountIdsRef);
+        yield* Effect.forEach(
+          accountIds,
+          (accountId) =>
+            broadcaster
+              .broadcastToAccount(accountId, msg)
+              .pipe(Effect.orElseSucceed(() => undefined)),
+          { concurrency: 1 },
+        );
+      });
 
     // Fiber ref for the running poll loop — null when stopped
     const fiberRef = yield* Ref.make<Fiber.RuntimeFiber<number, never> | null>(null);
@@ -103,16 +117,23 @@ export const PollSchedulerLive = Layer.effect(
     const syncAllRepos: Effect.Effect<void, never, DbService | GitHubEtagCache | SettingsService> =
       Effect.withSpan("PollScheduler.syncAllRepos")(
         Effect.gen(function* () {
-          yield* hub.broadcast({ type: "prs:sync-started" });
-
           // Snapshot ETag-cache counters so we can report deltas for this cycle.
           const etagStatsBefore = etagCache.stats();
 
           const allRepos = yield* withDb(repoService.listRepos());
 
+          const repoRowsForAccount = db
+            .select({ id: repositories.id, accountId: repositories.accountId })
+            .from(repositories)
+            .all();
+          const repoToAccountId = new Map(repoRowsForAccount.map((r) => [r.id, r.accountId]));
+          const accountIdSet = Array.from(new Set(repoRowsForAccount.map((r) => r.accountId)));
+          yield* Ref.set(currentAccountIdsRef, accountIdSet);
+          yield* broadcastToCurrentAccounts({ type: "prs:sync-started" });
+
           if (allRepos.length === 0) {
             const etagStatsAfter = etagCache.stats();
-            yield* hub.broadcast({
+            yield* broadcastToCurrentAccounts({
               type: "prs:sync-complete",
               data: {
                 count: 0,
@@ -139,12 +160,6 @@ export const PollSchedulerLive = Layer.effect(
             readonly githubLogin: string | null;
             readonly avatarUrl: string | null;
           };
-          const repoRowsForAccount = db
-            .select({ id: repositories.id, accountId: repositories.accountId })
-            .from(repositories)
-            .all();
-          const repoToAccountId = new Map(repoRowsForAccount.map((r) => [r.id, r.accountId]));
-          const accountIdSet = Array.from(new Set(repoRowsForAccount.map((r) => r.accountId)));
           // Token bytes live behind TokenProvider, not the DB. Fetch only the
           // metadata the scheduler needs, then let TokenProvider resolve and
           // refresh the usable access token.
@@ -172,7 +187,7 @@ export const PollSchedulerLive = Layer.effect(
             // envelope learns it still needs to re-auth. Broadcast-only (no
             // DB re-stamp) since the row already carries the flag.
             if (meta.reauthRequiredAt) {
-              yield* hub
+              yield* broadcaster
                 .broadcastToAccount(meta.id, {
                   type: "auth:reauth-required",
                   data: {
@@ -326,7 +341,7 @@ export const PollSchedulerLive = Layer.effect(
               (r) => repoToAccountId.get(r.id) ?? "unknown",
             );
             for (const [accountId, accountRepos] of reposByAccount) {
-              yield* hub.broadcastToAccount(accountId, {
+              yield* broadcaster.broadcastToAccount(accountId, {
                 type: "repos:updated",
                 data: accountRepos,
               });
@@ -414,7 +429,7 @@ export const PollSchedulerLive = Layer.effect(
                 // Broadcast scoped to this account's WS clients so only the
                 // sessions actually authenticated against `acc` see the avatar
                 // swap. The full broadcast path would leak A's avatar to B.
-                yield* hub.broadcastToAccount(acc.id, {
+                yield* broadcaster.broadcastToAccount(acc.id, {
                   type: "user:updated",
                   data: {
                     id: userRow.id,
@@ -573,7 +588,7 @@ export const PollSchedulerLive = Layer.effect(
               if (!pr) continue;
               const accountId = repoToAccountId.get(pr.repositoryId);
               if (!accountId) continue;
-              yield* hub
+              yield* broadcaster
                 .broadcastToAccount(accountId, {
                   type: "pr:archived",
                   data: {
@@ -764,7 +779,10 @@ export const PollSchedulerLive = Layer.effect(
           // treat `prs:updated` as full-state instead of a merge patch.
           for (const accountId of accountIdSet) {
             const accountPrs = yield* withDb(prService.listPrs(accountId));
-            yield* hub.broadcastToAccount(accountId, { type: "prs:updated", data: accountPrs });
+            yield* broadcaster.broadcastToAccount(accountId, {
+              type: "prs:updated",
+              data: accountPrs,
+            });
           }
 
           // ── Sync diff: compute what changed for notifications ────────────────
@@ -868,7 +886,7 @@ export const PollSchedulerLive = Layer.effect(
               (c) => changeAccountByPrId.get(c.prId) ?? "unknown",
             );
             for (const [accountId, accountChanges] of changesByAccount) {
-              yield* hub.broadcastToAccount(accountId, {
+              yield* broadcaster.broadcastToAccount(accountId, {
                 type: "prs:sync-summary",
                 data: accountChanges,
               });
@@ -914,7 +932,7 @@ export const PollSchedulerLive = Layer.effect(
           yield* Ref.set(suppressSummaryRef, false);
 
           const etagStatsAfter = etagCache.stats();
-          yield* hub.broadcast({
+          yield* broadcastToCurrentAccounts({
             type: "prs:sync-complete",
             data: {
               count: allPrs.length,
@@ -931,7 +949,7 @@ export const PollSchedulerLive = Layer.effect(
           }),
         ),
         Effect.catchAllCause((cause) =>
-          hub.broadcast({
+          broadcastToCurrentAccounts({
             type: "error",
             data: { code: "SYNC_ERROR", message: String(cause) },
           }),
@@ -977,7 +995,7 @@ export const PollSchedulerLive = Layer.effect(
       );
     }).pipe(
       Effect.catchAllCause((cause) =>
-        hub.broadcast({
+        broadcastToCurrentAccounts({
           type: "error",
           data: { code: "THREAD_SYNC_ERROR", message: String(cause) },
         }),
@@ -1095,13 +1113,7 @@ export const PollSchedulerLive = Layer.effect(
               `Manual thread sync failed for PR ${prId}:`,
               [detail, defectStr, pretty].filter(Boolean).join("\n"),
             );
-            return hub.broadcast({
-              type: "threads:sync-error",
-              data: {
-                prId,
-                message: detail ?? defectStr ?? pretty,
-              },
-            });
+            return Effect.void;
           }),
         ),
     };

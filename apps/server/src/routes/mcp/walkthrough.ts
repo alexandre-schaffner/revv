@@ -4,15 +4,17 @@
 // context construction are walkthrough-specific; JSON-RPC dispatch is shared
 // by the MCP tool gateway binder.
 
-import type { WalkthroughStreamEvent, WsServerMessage } from "@revv/shared";
+import type { ThreadEventMessage, WalkthroughStreamEvent } from "@revv/shared";
 import { Effect } from "effect";
 import type { WalkthroughToolContext } from "../../ai/providers/walkthrough-tools";
 import { WALKTHROUGH_TOOL_BUNDLE } from "../../ai/providers/walkthrough-tools";
 import { logError } from "../../logger";
 import { AppRuntime } from "../../runtime";
+import { Broadcaster } from "../../services/Broadcaster";
 import { DbService } from "../../services/Db";
+import { PrContextService } from "../../services/PrContext";
+import { RepositoryService } from "../../services/Repository";
 import { WalkthroughJobs } from "../../services/WalkthroughJobs";
-import { WebSocketHub } from "../../services/WebSocketHub";
 import { bindHttp, type ContextResolution, extractBearer } from "./utils";
 
 interface WalkthroughRouteMeta {
@@ -54,16 +56,23 @@ async function resolveContext(
       );
     }
   };
-  const broadcastThreadEvent = (msg: WsServerMessage): void => {
-    void AppRuntime.runPromise(Effect.flatMap(WebSocketHub, (hub) => hub.broadcast(msg))).catch(
-      (err) => {
-        logError(
-          "mcp-walkthrough-route",
-          `broadcastThreadEvent failed for ${walkthroughId}:`,
-          err instanceof Error ? err.message : String(err),
-        );
-      },
-    );
+  const broadcastThreadEvent = (msg: ThreadEventMessage): void => {
+    void AppRuntime.runPromise(
+      Effect.gen(function* () {
+        const prContext = yield* PrContextService;
+        const repoService = yield* RepositoryService;
+        const broadcaster = yield* Broadcaster;
+        const { repo } = yield* prContext.resolveBasic(resolved.prId, "single-user");
+        const accountId = yield* repoService.getAccountIdForRepo(repo.id);
+        yield* broadcaster.broadcastToAccount(accountId, msg);
+      }),
+    ).catch((err) => {
+      logError(
+        "mcp-walkthrough-route",
+        `broadcastThreadEvent failed for ${walkthroughId}:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    });
   };
 
   return {

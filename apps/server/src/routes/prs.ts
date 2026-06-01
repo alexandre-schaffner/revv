@@ -12,6 +12,7 @@ import { db } from "../auth";
 import { pinnedPullRequests, user } from "../db/schema";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
+import { Broadcaster } from "../services/Broadcaster";
 import { type CachedDiffFile, DiffCacheService, getOrFetchDiffFiles } from "../services/DiffCache";
 import { GitHubGateway } from "../services/GitHub";
 import { OpencodeSupervisor } from "../services/OpencodeSupervisor";
@@ -25,7 +26,6 @@ import { ReviewService } from "../services/Review";
 import { SettingsService } from "../services/Settings";
 import { SyncService } from "../services/Sync";
 import { WalkthroughService } from "../services/Walkthrough";
-import { WebSocketHub } from "../services/WebSocketHub";
 import { handleAppError, withAccount } from "./middleware";
 
 // ── PR diff SSR options ─────────────────────────────────────────────────────
@@ -513,7 +513,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
             const prContext = yield* PrContextService;
             const github = yield* GitHubGateway;
             const prService = yield* PullRequestService;
-            const hub = yield* WebSocketHub;
+            const broadcaster = yield* Broadcaster;
             const { pr, repo, token } = yield* prContext.resolveBasic(
               ctx.params.id,
               ctx.session.user.id,
@@ -535,7 +535,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
             };
             yield* prService.upsertPrs([refreshed]);
             const all = yield* prService.listPrs(accountId);
-            yield* hub.broadcastToAccount(accountId, { type: "prs:updated", data: all });
+            yield* broadcaster.broadcastToAccount(accountId, { type: "prs:updated", data: all });
           }),
         );
         return { success: true };
@@ -750,7 +750,7 @@ function mutatePr(prId: string, userId: string, accountId: string, action: PrMut
     const prContext = yield* PrContextService;
     const github = yield* GitHubGateway;
     const prService = yield* PullRequestService;
-    const hub = yield* WebSocketHub;
+    const broadcaster = yield* Broadcaster;
 
     const { pr, repo, token } = yield* prContext.resolveBasic(prId, userId);
 
@@ -772,6 +772,6 @@ function mutatePr(prId: string, userId: string, accountId: string, action: PrMut
     yield* prService.upsertPrs([refreshed]);
 
     const all = yield* prService.listPrs(accountId);
-    yield* hub.broadcastToAccount(accountId, { type: "prs:updated", data: all });
+    yield* broadcaster.broadcastToAccount(accountId, { type: "prs:updated", data: all });
   });
 }

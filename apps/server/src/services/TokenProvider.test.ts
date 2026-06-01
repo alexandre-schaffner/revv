@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import type { WsServerMessage } from "@revv/shared";
+import type { ServerEventMessage } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Effect, Either, Layer } from "effect";
 import { createDb, type Db } from "../db/index";
 import { account, user } from "../db/schema";
+import { Broadcaster } from "./Broadcaster";
 import { DbService } from "./Db";
 import { SecretStore, type TokenPair } from "./SecretStore";
 import { TokenProvider, TokenProviderLive } from "./TokenProvider";
-import { WebSocketHub } from "./WebSocketHub";
 
 // ── Fakes ──────────────────────────────────────────────────────────────────
 
@@ -28,19 +28,13 @@ function makeFakeStore(initial?: Record<string, TokenPair>) {
 }
 
 function makeFakeHub() {
-  const events: Array<{ accountId: string | null; msg: WsServerMessage }> = [];
-  const layer = Layer.succeed(WebSocketHub, {
-    register: () => Effect.void,
-    unregister: () => Effect.void,
-    broadcast: (msg: WsServerMessage) =>
-      Effect.sync(() => {
-        events.push({ accountId: null, msg });
-      }),
-    broadcastToAccount: (accountId: string, msg: WsServerMessage) =>
+  const events: Array<{ accountId: string; msg: ServerEventMessage }> = [];
+  const layer = Layer.succeed(Broadcaster, {
+    register: () => Effect.succeed(() => undefined),
+    broadcastToAccount: (accountId: string, msg: ServerEventMessage) =>
       Effect.sync(() => {
         events.push({ accountId, msg });
       }),
-    clientCount: Effect.succeed(0),
   });
   return { layer, events };
 }

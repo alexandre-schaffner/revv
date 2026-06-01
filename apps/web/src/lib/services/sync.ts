@@ -4,14 +4,11 @@ import {
 } from "$lib/stores/events.svelte";
 import { fetchPinnedPrs, fetchPrs, fetchRepos, syncPrs } from "$lib/stores/prs.svelte";
 import { getSettings } from "$lib/stores/settings.svelte";
-import { connect, disconnect } from "$lib/stores/ws.svelte";
 
 let pollingInterval: ReturnType<typeof setInterval> | null = null;
 
 export function startPolling(intervalSeconds: number, token: string): void {
-  // Connect WebSocket for real-time updates (PR/repo/chat envelopes)
-  connect(token);
-  // Connect the global SSE stream for walkthrough events. Without this the
+  // Connect the global SSE stream for realtime events. Without this the
   // browser never opens `/api/events`, so `Broadcaster.broadcastToAccount`
   // fan-outs land in an empty registration set and the UI sees zero progress
   // (and falls back to rendering the persisted error state from DB).
@@ -28,7 +25,7 @@ export function startPolling(intervalSeconds: number, token: string): void {
   if (pollingInterval) clearInterval(pollingInterval);
   pollingInterval = setInterval(() => {
     syncPrs().catch(() => {
-      // errors arrive via WebSocket
+      // errors arrive via SSE
     });
   }, intervalSeconds * 1000);
 }
@@ -38,7 +35,6 @@ export function stopPolling(): void {
     clearInterval(pollingInterval);
     pollingInterval = null;
   }
-  disconnect();
   disconnectEvents();
 }
 
@@ -53,7 +49,7 @@ function resumeSyncTimer(intervalSeconds: number): void {
   if (pollingInterval) clearInterval(pollingInterval);
   pollingInterval = setInterval(() => {
     syncPrs().catch(() => {
-      // errors arrive via WebSocket
+      // errors arrive via SSE
     });
   }, intervalSeconds * 1000);
 }

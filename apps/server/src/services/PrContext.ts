@@ -129,6 +129,10 @@ export class PrContextService extends Context.Tag("PrContextService")<
     ) => Effect.Effect<string | null, GitHubAuthError, DbService>;
     /** Look up a repo row by id. Thin forward to {@link RepositoryService}. */
     readonly getRepo: (repoId: string) => Effect.Effect<Repository, NotFoundError, DbService>;
+    /** Resolve the owning OAuth account id for a repo row. */
+    readonly getAccountIdForRepo: (
+      repoId: string,
+    ) => Effect.Effect<string, NotFoundError, DbService>;
   }
 >() {}
 
@@ -260,6 +264,7 @@ export const PrContextServiceLive = Layer.effect(
       });
 
     const getRepo = (repoId: string) => repoService.getRepoById(repoId);
+    const getAccountIdForRepo = (repoId: string) => repoService.getAccountIdForRepo(repoId);
 
     return {
       resolveBasic,
@@ -270,6 +275,7 @@ export const PrContextServiceLive = Layer.effect(
       searchClosedPrs,
       resolveRepoToken,
       getRepo,
+      getAccountIdForRepo,
     };
   }),
 );

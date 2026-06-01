@@ -15,21 +15,22 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type {
   RatingAxis,
+  ThreadEventMessage,
   UserSettings,
   WalkthroughBlock,
   WalkthroughStreamEvent,
   WalkthroughTokenUsage,
-  WsServerMessage,
 } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { WALKTHROUGH_HEARTBEAT_MS } from "../../constants";
 import type { Db } from "../../db";
+import { pullRequests, repositories } from "../../db/schema";
 import { walkthroughs as walkthroughsTable } from "../../db/schema/walkthroughs";
 import { debug, logError } from "../../logger";
 import { AppRuntime } from "../../runtime";
+import { Broadcaster } from "../../services/Broadcaster";
 import type { PrFileMeta } from "../../services/GitHub";
-import { WebSocketHub } from "../../services/WebSocketHub";
 import { buildActivity, type NormalizedAgentEvent, walkClaudeMessages } from "../agent-stream";
 import { buildWalkthroughPrompt, WALKTHROUGH_MCP_SYSTEM_PROMPT } from "../prompts/walkthrough";
 import { resolveCliBin } from "./cli-agent";
@@ -230,20 +231,31 @@ export function streamWalkthroughViaMCP(
     }
   }
 
-  // Fire-and-forget WebSocket broadcaster used by tools that mutate
+  // Fire-and-forget SSE broadcaster used by tools that mutate
   // non-walkthrough tables (currently only `add_issue_comment` →
   // `comment_threads`). Same shape as the HTTP MCP path so handler behavior
   // is byte-identical across transports (doctrine invariant #13).
-  const broadcastThreadEvent = (msg: WsServerMessage): void => {
-    void AppRuntime.runPromise(Effect.flatMap(WebSocketHub, (hub) => hub.broadcast(msg))).catch(
-      (err) => {
-        logError(
-          "walkthrough-mcp",
-          "broadcastThreadEvent failed:",
-          err instanceof Error ? err.message : String(err),
-        );
-      },
-    );
+  const broadcastThreadEvent = (msg: ThreadEventMessage): void => {
+    void AppRuntime.runPromise(
+      Effect.gen(function* () {
+        const row = params.db
+          .select({ accountId: repositories.accountId })
+          .from(walkthroughsTable)
+          .innerJoin(pullRequests, eq(walkthroughsTable.pullRequestId, pullRequests.id))
+          .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
+          .where(eq(walkthroughsTable.id, params.walkthroughId))
+          .get();
+        if (!row) return;
+        const broadcaster = yield* Broadcaster;
+        yield* broadcaster.broadcastToAccount(row.accountId, msg);
+      }),
+    ).catch((err) => {
+      logError(
+        "walkthrough-mcp",
+        "broadcastThreadEvent failed:",
+        err instanceof Error ? err.message : String(err),
+      );
+    });
   };
 
   // Route MCP tool handler events through WalkthroughJobs.emitEvent when

@@ -7,7 +7,7 @@ import type { WalkthroughBlock, WalkthroughSemanticStep } from "@revv/shared";
 import RefreshCw from "phosphor-svelte/lib/ArrowsClockwise";
 import CaretDown from "phosphor-svelte/lib/CaretDown";
 import AlertTriangle from "phosphor-svelte/lib/Warning";
-import AlertCircle from "phosphor-svelte/lib/WarningCircle";
+import { toast } from "svelte-sonner";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { Shimmer } from "$lib/components/ai/shimmer";
 import { ToolActivityGroup } from "$lib/components/ai/tool";
@@ -94,6 +94,8 @@ const isLiveGeneration = $derived(getIsLiveGeneration());
 const cloneInProgress = $derived(getCloneInProgress());
 const cloneRepoId = $derived(getCloneRepoId());
 const repositories = $derived(getRepositories());
+const cloneRepo = $derived(cloneRepoId ? repositories.find((r) => r.id === cloneRepoId) : null);
+const cloneError = $derived(cloneRepo?.cloneError ?? null);
 // Phase C markdown — rendered inline as its own sentiment card when set.
 // Replaces the legacy heuristic of sniffing markdown blocks for a `##
 // Overall Sentiment` heading.
@@ -101,7 +103,7 @@ const sentiment = $derived(getSentiment());
 const renderedSentiment = $derived(sentiment ? renderMarkdown(sentiment) : "");
 // Pointer into the A→B→C→D pipeline — drives the 4-dot header indicator.
 const lastCompletedPhase = $derived(getLastCompletedPhase());
-// Newer commit invalidated this walkthrough mid-render — show a banner.
+// Newer commit invalidated this walkthrough mid-render.
 const superseded = $derived(getIsSuperseded());
 // Attribution + cache-source — drives the mono footer (matches the recap
 // detail footer pattern) shown under the walkthrough body. Leads with the
@@ -133,6 +135,63 @@ let elapsedSeconds = $state(0);
 let elapsedTimer: ReturnType<typeof setInterval> | null = null;
 let walkthroughDebounce: ReturnType<typeof setTimeout> | undefined;
 let hydrating = $state(true);
+let lastStreamErrorToast: string | null = null;
+let lastCloneErrorToast: string | null = null;
+let lastSupersededToastPrId: string | null = null;
+
+$effect(() => {
+  if (!isActive || !streamError) {
+    if (!streamError) lastStreamErrorToast = null;
+    return;
+  }
+
+  const key = `${prId}:${streamError}`;
+  if (lastStreamErrorToast === key) return;
+  lastStreamErrorToast = key;
+
+  toast.error("Walkthrough failed", {
+    id: `walkthrough-error-${prId}`,
+    description: streamError,
+    duration: 8000,
+  });
+});
+
+$effect(() => {
+  if (!isActive || !cloneError) {
+    if (!cloneError) lastCloneErrorToast = null;
+    return;
+  }
+
+  const key = `${cloneRepoId ?? "unknown"}:${cloneError}`;
+  if (lastCloneErrorToast === key) return;
+  lastCloneErrorToast = key;
+
+  toast.error("Repository clone failed", {
+    id: `repo-clone-error-${cloneRepoId ?? prId}`,
+    description: cloneError,
+    duration: 8000,
+  });
+});
+
+$effect(() => {
+  if (!isActive || !superseded) {
+    if (!superseded) lastSupersededToastPrId = null;
+    return;
+  }
+
+  if (lastSupersededToastPrId === prId) return;
+  lastSupersededToastPrId = prId;
+
+  toast.warning("This walkthrough is outdated", {
+    id: `walkthrough-superseded-${prId}`,
+    description: "The PR has new commits since this review was generated.",
+    action: {
+      label: "Regenerate",
+      onClick: () => handleRegenerate(),
+    },
+    duration: 8000,
+  });
+});
 
 $effect(() => {
   if (isStreaming && streamStartedAt) {
@@ -753,8 +812,7 @@ onDestroy(() => {
 // poll tick.
 $effect(() => {
   if (!cloneInProgress || !cloneRepoId) return;
-  const repo = repositories.find((r) => r.id === cloneRepoId);
-  if (repo?.cloneStatus === "ready") {
+  if (cloneRepo?.cloneStatus === "ready") {
     void startWalkthrough(prId);
     return;
   }
@@ -790,29 +848,6 @@ function handleRegenerate(): void {
 </script>
 
 <div class="walkthrough">
-	{#if superseded}
-		<!-- Outdated-walkthrough banner. The server marked this row 'superseded'
-		     because a new commit landed mid-render and a fresher walkthrough
-		     was created for the newer head SHA. Regenerate swaps this entry for
-		     the new one via the /walkthrough/regenerate endpoint. -->
-		<div class="walkthrough-banner" role="status">
-			<div class="walkthrough-banner-row walkthrough-banner-row--superseded">
-				<div class="walkthrough-banner-icon">
-					<AlertCircle size={16} weight="fill" />
-				</div>
-				<div class="walkthrough-banner-body">
-					<p class="walkthrough-banner-title">This walkthrough is outdated</p>
-					<p class="walkthrough-banner-subtitle">
-						The PR has new commits since this review was generated.
-					</p>
-				</div>
-				<Button variant="outline" size="sm" style="cursor: pointer;" onclick={handleRegenerate}>
-					<RefreshCw size={14} weight="fill" />
-					Regenerate
-				</Button>
-			</div>
-		</div>
-	{/if}
 	{#if !streamError && stepperVisible}
 		<!-- Persistent chapters stepper. Replaces the old A→B→C→D dot indicator.
 		     Lives outside the if/else ladder so it stays mounted as the streaming
@@ -895,7 +930,6 @@ function handleRegenerate(): void {
 	{/if}
 
 	{#if streamError && !summary && blocks.length === 0}
-		<!-- Error state: no data at all -->
 		<div class="walkthrough-empty">
 			{#if explorationSteps.length > 0}
 				<div class="exploration-feed exploration-feed--error">
@@ -907,10 +941,11 @@ function handleRegenerate(): void {
 					{/each}
 				</div>
 			{/if}
-			<pre class="error-text">{streamError}</pre>
-			{#if streamError.includes('not configured') || streamError.includes('API key')}
-				<p class="error-hint">Add your Anthropic API key in Settings to enable walkthroughs.</p>
-			{/if}
+			<p class="loading-text">Walkthrough generation stopped. Check the notification for details.</p>
+			<Button variant="outline" size="lg" style="cursor: pointer;" onclick={handleRegenerate}>
+				<RefreshCw size={16} weight="fill" />
+				Try again
+			</Button>
 		</div>
 	{:else if cloneInProgress && !summary && blocks.length === 0}
 		<!-- Clone-in-progress state: show indeterminate progress bar + Retry
@@ -922,30 +957,25 @@ function handleRegenerate(): void {
 		     error event didn't carry it), we can't address the retry at a
 		     specific repo, so we fall back to a generic Try again that
 		     regenerates the walkthrough. -->
-		{@const repo = cloneRepoId ? repositories.find((r) => r.id === cloneRepoId) : null}
-		{@const repoError = repo?.cloneError ?? null}
 		<div class="walkthrough-empty">
 			{#if !cloneRepoId}
-			<AlertTriangle size={20} weight="fill" />
-			<p class="loading-text">Couldn't identify the repository that was cloning.</p>
-		{:else}
+				<AlertTriangle size={20} weight="fill" />
+				<p class="loading-text">Couldn't identify the repository that was cloning.</p>
+			{:else}
 				<div class="clone-progress-container">
 					<p class="loading-text">Cloning repository…</p>
 					<Progress indeterminate class="clone-progress-bar" />
 					<p class="loading-subtext">The walkthrough will start automatically when cloning completes.</p>
-					{#if repoError}
-						<pre class="error-text">{repoError}</pre>
-					{/if}
-                <Button
-                    variant="outline"
-                    size="lg"
-                    style="cursor: pointer;"
-                    disabled={retryingClone}
-                    onclick={handleRetryClone}
-                >
-                    <RefreshCw size={16} weight="fill" />
-                    Retry clone
-                </Button>
+					<Button
+						variant="outline"
+						size="lg"
+						style="cursor: pointer;"
+						disabled={retryingClone}
+						onclick={handleRetryClone}
+					>
+						<RefreshCw size={16} weight="fill" />
+						Retry clone
+					</Button>
 				</div>
 			{/if}
 		</div>
@@ -993,14 +1023,6 @@ function handleRegenerate(): void {
 			class:walkthrough-content--no-anim={contentAnimated}
 			onanimationend={(e) => lockContainerAnimation('content', e)}
 		>
-			<!-- Inline error (only when the stream errored mid-flight after we
-			     already had a summary; the empty-state branches above handle
-			     summary-less errors). Lives in col 3 of the walkthrough grid via
-			     the `.walkthrough-content > .stream-error-inline` rule. -->
-			{#if streamError}
-				<p class="stream-error-inline">{streamError}</p>
-			{/if}
-
 			<!-- Issues — bucketed by severity (Critical → Warning → Info) so the
 			     reviewer's eye lands on blockers before nice-to-knows. The overall
 			     "N issues flagged" line is preserved as the section header; each
@@ -1269,9 +1291,7 @@ function handleRegenerate(): void {
 		animation: fadeIn var(--duration-smooth) var(--ease-standard) 60ms both;
 	}
 
-	/* Single-column sections live in the content column (col 3). Separator,
-	   .stream-error-inline, and .issues-section sit there as direct children. */
-	.walkthrough-content > .stream-error-inline,
+	/* Single-column sections live in the content column (col 3). */
 	.walkthrough-content > .issues-section,
 	.walkthrough-content > .walkthrough-footer,
 	.walkthrough-content > :global([data-slot="separator"]) {
@@ -1290,13 +1310,6 @@ function handleRegenerate(): void {
 		color: var(--color-text-muted);
 		font-family: var(--font-mono);
 		letter-spacing: 0.01em;
-	}
-
-	/* Mid-stream error surfaced above the body when summary already landed. */
-	.stream-error-inline {
-		color: var(--color-danger);
-		font-size: 13px;
-		margin: 0 0 8px;
 	}
 
 	/* Suppress the entrance animation on tab revisits. Paired with the
@@ -1611,70 +1624,6 @@ function handleRegenerate(): void {
 		overflow: hidden;
 		transition: color var(--duration-smooth) var(--ease-soft);
 		text-overflow: ellipsis;
-	}
-
-	/* ── Superseded banner ──────────────────────────────────────────────
-	   Renders at the top of the walkthrough when the server marked this row
-	   `superseded`. The outer grid aligns it with the content column (col 3
-	   of the 6-col walkthrough grid), and the inner flex row stacks an icon,
-	   a two-line message, and a Regenerate button on one line. */
-
-	.walkthrough-banner {
-		display: grid;
-		grid-template-columns:
-			max(24px, min(calc(100% - 50vw - 458px), calc(100% - 1312px)))
-			48px
-			minmax(0, 820px)
-			40px
-			380px
-			minmax(24px, 1fr);
-		padding: 14px 0 0;
-	}
-
-	.walkthrough-banner > .walkthrough-banner-row {
-		grid-column: 3;
-	}
-
-	.walkthrough-banner-row {
-		display: flex;
-		align-items: center;
-		gap: 12px;
-		padding: 10px 12px;
-		border-radius: 8px;
-	}
-
-	.walkthrough-banner-row--superseded {
-		background: color-mix(in srgb, var(--color-warning) 8%, transparent);
-		border: 1px solid color-mix(in srgb, var(--color-warning) 28%, transparent);
-	}
-
-	.walkthrough-banner-icon {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		flex-shrink: 0;
-		color: var(--color-warning);
-	}
-
-	.walkthrough-banner-body {
-		flex: 1;
-		min-width: 0;
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-	}
-
-	.walkthrough-banner-title {
-		font-size: 13px;
-		font-weight: 600;
-		color: var(--color-text-primary);
-		margin: 0;
-	}
-
-	.walkthrough-banner-subtitle {
-		font-size: 12px;
-		color: var(--color-text-muted);
-		margin: 0;
 	}
 
 	/* ── Exploration feed (error branch only) ────────────────────────────
@@ -2159,31 +2108,6 @@ function handleRegenerate(): void {
 		margin: 0;
 	}
 
-	/* ── Error states ────────────────────────────────────────────────── */
-
-	.error-text {
-		font-size: 12px;
-		color: var(--color-danger);
-		white-space: pre-wrap;
-		word-break: break-word;
-		overflow-y: auto;
-		max-height: 200px;
-		max-width: 480px;
-		width: 100%;
-		background: color-mix(in srgb, var(--color-danger) 8%, transparent);
-		border: 1px solid color-mix(in srgb, var(--color-danger) 25%, transparent);
-		border-radius: 6px;
-		padding: 10px 12px;
-		margin: 0;
-		font-family: var(--font-mono, monospace);
-	}
-
-	.error-hint {
-		font-size: 12px;
-		color: var(--color-text-muted);
-		margin: 0;
-	}
-
 	.error-inline {
 		font-size: 12px;
 		color: var(--color-danger);
@@ -2351,7 +2275,6 @@ function handleRegenerate(): void {
 		}
 
 		/* Children no longer need explicit column placement. */
-		.walkthrough-content > .stream-error-inline,
 		.walkthrough-content > .issues-section,
 		.walkthrough-content > :global([data-slot="separator"]) {
 			grid-column: auto;
@@ -2362,8 +2285,7 @@ function handleRegenerate(): void {
 		   extra horizontal padding — that would shift them inward of the
 		   parent's content edges and break alignment with .blocks below. */
 		.walkthrough-loading,
-		.walkthrough-stepper-header,
-		.walkthrough-banner {
+		.walkthrough-stepper-header {
 			display: block;
 			width: 100%;
 			max-width: calc(72px + 820px + 32px);
@@ -2371,10 +2293,6 @@ function handleRegenerate(): void {
 			padding-right: 32px;
 			margin-inline: 0;
 			box-sizing: border-box;
-		}
-
-		.walkthrough-banner > .walkthrough-banner-row {
-			grid-column: auto;
 		}
 
 		.walkthrough-loading {

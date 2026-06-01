@@ -1,7 +1,7 @@
 // ── Broadcaster (Realtime / Events) ─────────────────────────────────────────
 //
 // The realtime/events narrow neck. Account-scoped pub-sub for the global SSE
-// stream that replaces the per-PR walkthrough SSE. Each connected client owns
+// stream. Each connected client owns
 // one writer registered under the account id resolved from their bearer token;
 // broadcasts fan out to every writer for the target account.
 //
@@ -10,11 +10,8 @@
 // SSE encoding, and disconnect bookkeeping. Features push events here; they
 // never touch transport internals.
 //
-// Scope (intentional): only walkthrough envelopes flow through here today.
-// Other real-time channels (PR/repo/chat/new-pr-session WS envelopes) keep
-// using `WebSocketHub`, the legacy transport, until they migrate. Add new
-// envelope types to `ServerEventMessage` in `@revv/shared/src/events` as each
-// subsystem moves — the union lives entirely in `@revv/shared`, never here.
+// Scope: all server -> client realtime envelopes flow through `ServerEventMessage`
+// in `@revv/shared/src/events`. Inbound commands use REST endpoints.
 //
 // Doctrine: commit-first, broadcast-second (invariant #8). This service is
 // the broadcast point — callers MUST commit to SQLite first. Lost
@@ -130,7 +127,7 @@ export function encodeSseFrame(payload: unknown): Uint8Array {
   return encoder.encode(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
-/** Encode a `: ping` comment frame (keepalive, never reaches `onmessage`). */
+/** Encode a named heartbeat event so JS can observe liveness. */
 export function encodeSseHeartbeat(): Uint8Array {
-  return encoder.encode(": ping\n\n");
+  return encoder.encode("event: heartbeat\ndata: {}\n\n");
 }

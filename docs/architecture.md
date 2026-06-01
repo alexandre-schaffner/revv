@@ -82,16 +82,15 @@ from the DB on reconnect via the snapshot REST endpoints. The interface carries 
 the walkthrough emitter owns `bumpSeq` (durable wire cursor) and `nextSeq` (in-memory diagnostic)
 and stamps `seq` onto the envelope before it reaches the broadcaster.
 
-`WebSocketHub` is the legacy transport for the PR / repo / chat / new-PR-session WS envelopes
-(union in `@revv/shared/src/ws`). Those channels migrate onto the `Broadcaster` SSE stream
-incrementally in follow-up work; until then `WebSocketHub` follows the same best-effort,
-account-scoped, commit-first doctrine.
+PR / repo / auth / thread / chat / recap / new-PR-session envelopes all flow through this same
+SSE channel. Client-initiated sync requests are REST commands; server-to-client updates are
+`ServerEventMessage` envelopes broadcast by `Broadcaster`.
 
 #### Local Git
 
 `RepoCloneService` is the Local Git neck: it hides repo clone, per-PR worktree acquisition
 (`acquirePrWorktree`), and file reads at a SHA. `git-runner` (the raw git-subprocess primitive
-with its process registry and signal handling) and `GitOps` (push primitives) are module
+with its process registry and signal handling) and `GitOps` (git command primitives) are module
 internals — only the Local Git module spawns git directly. Worktree acquisition stays scoped to
 the acquiring job. This module is distinct from `GitHubGateway`, which only talks to the GitHub
 API and never touches the local filesystem.

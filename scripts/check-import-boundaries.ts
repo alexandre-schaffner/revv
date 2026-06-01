@@ -37,8 +37,8 @@ const identityForbiddenImports = new Set([
 // `git-runner` is the raw git-subprocess primitive — an internal of the Local
 // Git module. Only the module's own files may spawn git directly; everything
 // else must go through `RepoCloneService` (clone + per-job worktrees) or
-// `GitOps` (push primitives), which keep worktree acquisition scoped and the
-// subprocess registry/signal-handling in one place.
+// `GitOps` (git command primitives), which keep worktree acquisition scoped
+// and the subprocess registry/signal-handling in one place.
 const gitRunnerSpecifierPattern = /(^|\/)git-runner$/;
 const gitRunnerAllowedImporters = new Set([
   "apps/server/src/services/RepoClone.ts",

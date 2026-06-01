@@ -4,9 +4,9 @@ import { serverEnv } from "../config";
 import { account, user } from "../db/schema";
 import { GitHubAuthError } from "../domain/errors";
 import { clientIdForHost, tokenUrlForHost } from "../github-oauth";
+import { Broadcaster } from "./Broadcaster";
 import { DbService } from "./Db";
 import { SecretStore, type TokenPair } from "./SecretStore";
-import { WebSocketHub } from "./WebSocketHub";
 
 const REFRESH_SKEW_MS = 5 * 60 * 1000;
 
@@ -93,7 +93,7 @@ export const TokenProviderLive = Layer.effect(
   Effect.gen(function* () {
     const { db } = yield* DbService;
     const secretStore = yield* SecretStore;
-    const hub = yield* WebSocketHub;
+    const broadcaster = yield* Broadcaster;
 
     // De-dupe concurrent refreshes of the same account — PollScheduler fans
     // out per-repo and would otherwise fire N parallel refresh grants, each
@@ -179,7 +179,10 @@ export const TokenProviderLive = Layer.effect(
             .run(),
         );
 
-        yield* hub.broadcastToAccount(accountId, { type: "auth:reauth-cleared", data: { host } });
+        yield* broadcaster.broadcastToAccount(accountId, {
+          type: "auth:reauth-cleared",
+          data: { host },
+        });
         return accessToken;
       });
 
@@ -221,7 +224,7 @@ export const TokenProviderLive = Layer.effect(
             .where(eq(account.id, accountId))
             .run(),
         );
-        yield* hub.broadcastToAccount(accountId, {
+        yield* broadcaster.broadcastToAccount(accountId, {
           type: "auth:reauth-required",
           data: { host: hostFromProviderId(row.providerId), githubLogin: row.githubLogin ?? null },
         });
@@ -234,7 +237,7 @@ export const TokenProviderLive = Layer.effect(
     ): Effect.Effect<void> =>
       Effect.gen(function* () {
         yield* secretStore.setTokens(accountId, tokens);
-        yield* hub.broadcastToAccount(accountId, {
+        yield* broadcaster.broadcastToAccount(accountId, {
           type: "auth:reauth-cleared",
           data: { host },
         });

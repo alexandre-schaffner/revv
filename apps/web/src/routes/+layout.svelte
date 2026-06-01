@@ -1,11 +1,11 @@
 <script lang="ts">
 import "../app.css";
+import { toast } from "svelte-sonner";
 import { page } from "$app/state";
 import { assertRuntimeChannel } from "$lib/api/runtime";
 import CacheInspector from "$lib/components/dev/CacheInspector.svelte";
 import AppShell from "$lib/components/layout/AppShell.svelte";
 import OnboardingGate from "$lib/components/onboarding/OnboardingGate.svelte";
-import ErrorBanner from "$lib/components/shared/ErrorBanner.svelte";
 import { Toaster } from "$lib/components/ui/sonner";
 import { TooltipProvider } from "$lib/components/ui/tooltip";
 import { initGsap } from "$lib/motion";
@@ -29,7 +29,6 @@ import { startUpdater, stopUpdater } from "$lib/updater/service";
 let { children } = $props();
 let hydrated = false;
 let cacheInspectorOpen = $state(false);
-let runtimeError = $state<string | null>(null);
 
 // Keep `selectedPrId` in sync with the URL.
 //
@@ -115,7 +114,11 @@ $effect(() => {
   const cleanupShortcuts = initShortcuts();
 
   void assertRuntimeChannel().catch((error: unknown) => {
-    runtimeError = error instanceof Error ? error.message : String(error);
+    toast.error("Runtime channel unavailable", {
+      id: "runtime-channel-error",
+      description: error instanceof Error ? error.message : String(error),
+      duration: 6000,
+    });
   });
 
   // On mount: try to restore auth from localStorage.
@@ -157,14 +160,8 @@ async function hydrate() {
 </script>
 
 <TooltipProvider>
-	{#if runtimeError}
-		<div class="runtime-channel-error" role="alert">
-			{runtimeError}
-		</div>
-	{/if}
 	<OnboardingGate>
 		<AppShell>
-			<ErrorBanner />
 			{@render children()}
 		</AppShell>
 	</OnboardingGate>
@@ -173,19 +170,3 @@ async function hydrate() {
 		<CacheInspector onclose={() => { cacheInspectorOpen = false; }} />
 	{/if}
 </TooltipProvider>
-
-<style>
-	.runtime-channel-error {
-		position: fixed;
-		z-index: 9999;
-		inset: 12px 12px auto 12px;
-		border: 1px solid var(--color-destructive);
-		border-radius: 8px;
-		background: var(--color-bg-elevated);
-		color: var(--color-text-primary);
-		box-shadow: 0 12px 40px color-mix(in srgb, black 18%, transparent);
-		padding: 12px 14px;
-		font-size: 13px;
-		line-height: 1.4;
-	}
-</style>

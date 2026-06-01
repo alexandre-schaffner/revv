@@ -1,4 +1,5 @@
 import type { ThreadSummary } from "@revv/shared";
+import { api } from "$lib/api/client";
 
 // Map keyed by PR id (`owner/repo:number`) — summary is recomputed server-side
 // on every sync tick and broadcast via `threads:synced`.
@@ -8,11 +9,11 @@ let summaries = $state<Map<string, ThreadSummary>>(new Map());
 // "Synced Xm ago" reflects the currently selected PR's entry, not a global.
 let lastSyncAtByPr = $state<Map<string, string>>(new Map());
 
-// Per-PR in-flight threads sync (set after the user clicks sync / we queue a
-// request, cleared on `threads:synced` or `threads:sync-error`).
+// Per-PR in-flight threads sync (set after the user clicks sync, cleared on
+// `threads:synced`).
 let threadsSyncingByPr = $state<Set<string>>(new Set());
 
-// Per-PR last error message from `threads:sync-error`.
+// Per-PR last error message. Reserved for request-level sync failures.
 let syncErrorByPr = $state<Map<string, string>>(new Map());
 
 // Separate flag for the global PR-list metadata poll (`prs:sync-started` →
@@ -41,6 +42,23 @@ export function getPrListSyncing(): boolean {
 
 export function setPrListSyncing(v: boolean): void {
   prListSyncing = v;
+}
+
+export function requestSync(): void {
+  setPrListSyncing(true);
+  void api.api.prs.sync.post();
+}
+
+export function requestThreadSync(prId: string): void {
+  markThreadsSyncing(prId);
+  void api.api.prs({ id: prId })["sync-threads"].post();
+}
+
+export function requestFullSync(prId: string): void {
+  markThreadsSyncing(prId);
+  setPrListSyncing(true);
+  void api.api.prs.sync.post();
+  void api.api.prs({ id: prId })["sync-threads"].post();
 }
 
 /** Mark a PR's threads sync as in-flight (called when we send the request). */
@@ -76,18 +94,6 @@ export function applySynced(prId: string, summary: ThreadSummary, timestamp: str
     const nextErr = new Map(syncErrorByPr);
     nextErr.delete(prId);
     syncErrorByPr = nextErr;
-  }
-}
-
-export function applySyncError(prId: string, message: string): void {
-  const nextErr = new Map(syncErrorByPr);
-  nextErr.set(prId, message);
-  syncErrorByPr = nextErr;
-
-  if (threadsSyncingByPr.has(prId)) {
-    const nextSyncing = new Set(threadsSyncingByPr);
-    nextSyncing.delete(prId);
-    threadsSyncingByPr = nextSyncing;
   }
 }
 

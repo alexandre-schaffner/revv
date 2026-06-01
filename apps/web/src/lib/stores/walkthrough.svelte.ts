@@ -572,7 +572,7 @@ export function applyEvents(prId: string, events: WalkthroughStreamEvent[]): voi
             entry.isStreaming = false;
           } else if (event.data.code === "Cancelled") {
             // User-initiated stop — not a failure. Suppress the error
-            // banner so the UI falls through to the "resumable" / "idle"
+            // notification so the UI falls through to the "resumable" / "idle"
             // state based on whether partial content exists.
             entry.streamError = null;
             entry.isStreaming = false;

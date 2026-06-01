@@ -1,11 +1,9 @@
 // ── Global SSE stream ───────────────────────────────────────────────────────
 //
 // `GET /api/events` — one long-lived SSE connection per client tab carrying
-// account-scoped server pushes. Replaces the per-PR walkthrough SSE for the
-// walkthrough subsystem (other channels keep using the WS for now and migrate
-// in follow-up PRs).
+// account-scoped server pushes.
 //
-// Auth: `?token=<bearer>` query param, mirroring `routes/ws.ts`. Cannot use
+// Auth: `?token=<bearer>` query param. Cannot use
 // the `Authorization` header because the browser's `EventSource` API does
 // not allow custom headers.
 //
@@ -128,7 +126,8 @@ export const eventsRoute = new Elysia().get("/api/events", async ({ query, reque
   );
 
   // Heartbeat so Tauri webviews / proxies don't drop the connection during
-  // quiet windows (no walkthroughs running, etc.).
+  // quiet windows. This is a named SSE event so the client watchdog can
+  // observe liveness without routing it through the message dispatcher.
   heartbeat = setInterval(() => {
     tryEnqueue(encodeSseHeartbeat());
   }, HEARTBEAT_INTERVAL_MS);

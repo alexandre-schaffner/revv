@@ -8,10 +8,9 @@
 // See CLAUDE.md invariant #7 — these tools are the only authorized
 // post-completion mutation path for a walkthrough. They never touch `status`
 // or `lastCompletedPhase`; they stamp `lastEditedAt` / `lastEditedBy` on the
-// parent row and broadcast `walkthrough:edited` envelopes via WebSocketHub
-// (not the generation SSE stream, which dies on `done`).
+// parent row and broadcast `walkthrough:edited` envelopes via the global SSE bus.
 
-import type { WalkthroughStreamEvent, WsServerMessage } from "@revv/shared";
+import type { ThreadEventMessage, WalkthroughStreamEvent } from "@revv/shared";
 import { z } from "zod";
 import type { Db } from "../../../db";
 import type { ToolSpec as GatewayToolSpec, McpToolResult } from "../mcp-tool-gateway";
@@ -44,16 +43,16 @@ export interface ChatWalkthroughEditContext {
    * see an event without a durable row. The walkthroughId is passed at call
    * time (handlers resolve it lazily — see {@link resolveActiveWalkthroughId})
    * because chat sessions outlive any one walkthrough; the route wraps this
-   * to broadcast a `walkthrough:edited` envelope via WebSocketHub.
+   * to broadcast a `walkthrough:edited` envelope.
    */
   readonly emit: (walkthroughId: string, event: WalkthroughStreamEvent) => void;
   /**
-   * General WebSocket broadcast hook for `comment_threads` /
+   * General thread-event broadcast hook for `comment_threads` /
    * `thread_messages` events (mirrors `WalkthroughToolContext`). Used by
    * add_issue_comment / update_issue_comment / delete_issue_comment so any
    * open DiffViewerInner picks up the inline-comment change.
    */
-  readonly broadcastThreadEvent: (msg: WsServerMessage) => void;
+  readonly broadcastThreadEvent: (msg: ThreadEventMessage) => void;
 }
 
 export interface ChatEditToolResult extends McpToolResult {

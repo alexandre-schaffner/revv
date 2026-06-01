@@ -45,7 +45,7 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
 
             // Trigger shallow clone in background — fire and forget
             yield* Effect.forkDaemon(
-              cloneSvc.cloneRepo(saved, token).pipe(
+              cloneSvc.cloneRepo(saved, token, accountId).pipe(
                 Effect.catchAll(() => Effect.void), // errors tracked in DB, don't fail the add
               ),
             );
@@ -82,7 +82,7 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
           const repo = yield* repoSvc.getRepoById(ctx.params.id, accountId);
 
           yield* Effect.forkDaemon(
-            cloneSvc.cloneRepo(repo, token).pipe(Effect.catchAll(() => Effect.void)),
+            cloneSvc.cloneRepo(repo, token, accountId).pipe(Effect.catchAll(() => Effect.void)),
           );
 
           return { success: true };

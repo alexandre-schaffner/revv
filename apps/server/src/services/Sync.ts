@@ -3,16 +3,17 @@ import { eq } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { reviewSessions } from "../db/schema/review-sessions";
 import { SyncError } from "../domain/errors";
+import { Broadcaster } from "./Broadcaster";
 import { DbService } from "./Db";
 import { type GhReviewComment, GitHubGateway } from "./GitHub";
 import { PrContextService } from "./PrContext";
 import { PullRequestService } from "./PullRequest";
 import { RemoteUserService } from "./RemoteUser";
+import { RepositoryService } from "./Repository";
 import { ReviewService } from "./Review";
 import type { SettingsService } from "./Settings";
 import { extractGitHubMentions } from "./sync-engine/mentions";
 import { latestUpdatedAt } from "./sync-engine/watermark";
-import { WebSocketHub } from "./WebSocketHub";
 
 export interface PullResult {
   readonly newThreads: number;
@@ -85,7 +86,8 @@ export const SyncServiceLive = Layer.effect(
     const prContext = yield* PrContextService;
     const reviewService = yield* ReviewService;
     const remoteUserService = yield* RemoteUserService;
-    const hub = yield* WebSocketHub;
+    const repoService = yield* RepositoryService;
+    const broadcaster = yield* Broadcaster;
 
     // Background-worker PR context — always uses the 'single-user' token.
     const resolvePrContext = (prId: string) => prContext.resolveBasic(prId, "single-user");
@@ -268,6 +270,7 @@ export const SyncServiceLive = Layer.effect(
     ): Effect.Effect<PullResult, SyncError, DbService | SettingsService> =>
       Effect.gen(function* () {
         const { pr, repo, token } = yield* resolvePrContext(prId);
+        const accountId = yield* repoService.getAccountIdForRepo(repo.id);
         const session = yield* reviewService.getOrCreateActiveSession(pr.id);
 
         // Incremental poll: ask GitHub only for comments newer than our
@@ -298,7 +301,7 @@ export const SyncServiceLive = Layer.effect(
             ) {
               yield* reviewService.updateMessageBody(existingMsg.id, c.body, c.updatedAt);
               const updatedMsg = yield* reviewService.getMessage(existingMsg.id);
-              yield* hub.broadcast({
+              yield* broadcaster.broadcastToAccount(accountId, {
                 type: "thread:message",
                 data: { threadId: existingMsg.threadId, message: updatedMsg },
               });
@@ -339,7 +342,7 @@ export const SyncServiceLive = Layer.effect(
 
             yield* reviewService.transitionStatus(thread.id, authorRole);
 
-            yield* hub.broadcast({
+            yield* broadcaster.broadcastToAccount(accountId, {
               type: "threads:new-reply",
               data: { prId: pr.id, thread, message: msg },
             });
@@ -369,7 +372,7 @@ export const SyncServiceLive = Layer.effect(
 
           yield* reviewService.transitionStatus(thread.id, authorRole);
 
-          yield* hub.broadcast({
+          yield* broadcaster.broadcastToAccount(accountId, {
             type: "threads:new-reply",
             data: { prId: pr.id, thread, message: msg },
           });
@@ -403,14 +406,14 @@ export const SyncServiceLive = Layer.effect(
             const localResolved = local.status === "resolved" || local.status === "wont_fix";
             if (ght.isResolved && !localResolved) {
               yield* reviewService.updateThreadStatus(local.id, "resolved");
-              yield* hub.broadcast({
+              yield* broadcaster.broadcastToAccount(accountId, {
                 type: "thread:updated",
                 data: { threadId: local.id, status: "resolved" },
               });
               statusChanges++;
             } else if (!ght.isResolved && localResolved) {
               yield* reviewService.updateThreadStatus(local.id, "open");
-              yield* hub.broadcast({
+              yield* broadcaster.broadcastToAccount(accountId, {
                 type: "thread:updated",
                 data: { threadId: local.id, status: "open" },
               });
@@ -439,12 +442,14 @@ export const SyncServiceLive = Layer.effect(
       Effect.gen(function* () {
         const pulled = yield* pullComments(prId);
         const summary = yield* getThreadSummary(prId, null);
-        yield* hub.broadcast({
+        const { repo } = yield* resolvePrContext(prId);
+        const accountId = yield* repoService.getAccountIdForRepo(repo.id);
+        yield* broadcaster.broadcastToAccount(accountId, {
           type: "threads:synced",
           data: { prId, summary, timestamp: new Date().toISOString() },
         });
         return { pulled, summary };
-      });
+      }).pipe(Effect.mapError(toSyncError()));
 
     return {
       pushThread,

@@ -4,17 +4,19 @@
 // plan-mode filtering, and edit broadcasts are chat-specific; JSON-RPC
 // dispatch is shared by the MCP tool gateway binder.
 
-import type { WalkthroughStreamEvent, WsServerMessage } from "@revv/shared";
+import type { ThreadEventMessage, WalkthroughStreamEvent } from "@revv/shared";
 import { Effect } from "effect";
 import { EDIT_TOOL_SPECS } from "../../ai/providers/chat-edit-tools";
 import { CHAT_TOOL_BUNDLE, type ChatToolContext } from "../../ai/providers/chat-mcp-tools";
 import { logError } from "../../logger";
 import { AppRuntime } from "../../runtime";
+import { Broadcaster } from "../../services/Broadcaster";
 import { ChatMcpTokens, type ChatTokenResolved } from "../../services/ChatMcpTokens";
 import { DbService } from "../../services/Db";
+import { PrContextService } from "../../services/PrContext";
 import { RemoteWalkthroughCache } from "../../services/RemoteWalkthroughCache";
+import { RepositoryService } from "../../services/Repository";
 import { WalkthroughJobs } from "../../services/WalkthroughJobs";
-import { WebSocketHub } from "../../services/WebSocketHub";
 import { bindHttp, type ContextResolution, extractBearer } from "./utils";
 
 const EDIT_TOOL_NAMES = new Set(EDIT_TOOL_SPECS.map((s) => s.name));
@@ -69,16 +71,23 @@ async function resolveContext(
     });
   };
 
-  const broadcastThreadEvent = (msg: WsServerMessage): void => {
-    void AppRuntime.runPromise(Effect.flatMap(WebSocketHub, (hub) => hub.broadcast(msg))).catch(
-      (err) => {
-        logError(
-          "mcp-chat-context",
-          "thread event broadcast failed:",
-          err instanceof Error ? err.message : String(err),
-        );
-      },
-    );
+  const broadcastThreadEvent = (msg: ThreadEventMessage): void => {
+    void AppRuntime.runPromise(
+      Effect.gen(function* () {
+        const prContext = yield* PrContextService;
+        const repoService = yield* RepositoryService;
+        const broadcaster = yield* Broadcaster;
+        const { repo } = yield* prContext.resolveBasic(resolved.prId, resolved.userId);
+        const accountId = yield* repoService.getAccountIdForRepo(repo.id);
+        yield* broadcaster.broadcastToAccount(accountId, msg);
+      }),
+    ).catch((err) => {
+      logError(
+        "mcp-chat-context",
+        "thread event broadcast failed:",
+        err instanceof Error ? err.message : String(err),
+      );
+    });
   };
 
   return {

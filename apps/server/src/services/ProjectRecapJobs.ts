@@ -3,7 +3,7 @@
 // the structure of {@link WalkthroughJobs} but radically simpler:
 //
 //   • Single-phase MCP-routed pipeline (one atomic write per recap).
-//   • No worktrees, no continuations, no SSE streaming. Status-only WS
+//   • No worktrees, no continuations, no SSE streaming. Status-only SSE
 //     broadcasts; the recap UI re-fetches the row when needed.
 //   • Per-(repoId, period, periodStart) mutex so concurrent claim paths
 //     can't fork duplicate fibers.
@@ -30,6 +30,7 @@ import { recapPrDigests } from "../db/schema/index";
 import { type RecapError, ValidationError } from "../domain/errors";
 import { withDb } from "../effects/with-db";
 import { debug, logError } from "../logger";
+import { Broadcaster } from "./Broadcaster";
 import { DbService } from "./Db";
 import { DiffCacheService } from "./DiffCache";
 import { GitHubEtagCache } from "./GitHubEtagCache";
@@ -51,7 +52,6 @@ import {
 } from "./recap-source-bundle";
 import { SettingsService } from "./Settings";
 import { makeSessionTokenStore } from "./session-token-store";
-import { WebSocketHub } from "./WebSocketHub";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -178,7 +178,7 @@ export const ProjectRecapJobsLive = Layer.effect(
   ProjectRecapJobs,
   Effect.gen(function* () {
     const { db } = yield* DbService;
-    const hub = yield* WebSocketHub;
+    const broadcaster = yield* Broadcaster;
     const recapService = yield* ProjectRecapService;
     const prService = yield* PullRequestService;
     const prCtx = yield* PrContextService;
@@ -212,6 +212,18 @@ export const ProjectRecapJobsLive = Layer.effect(
 
     const provideDb = <A, E>(eff: Effect.Effect<A, E, DbService>): Effect.Effect<A, E> =>
       withDb(db, eff);
+
+    const broadcastRecapToRepoAccount = (
+      repoId: string,
+      msg: import("@revv/shared").ServerEventMessage,
+    ): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        const accountId = yield* provideDb(prCtx.getAccountIdForRepo(repoId));
+        yield* broadcaster.broadcastToAccount(accountId, msg);
+      }).pipe(
+        Effect.timeout("5 seconds"),
+        Effect.catchAll(() => Effect.void),
+      );
 
     /**
      * Provide the trio of services {@link PrContextService}'s GitHub-read
@@ -260,17 +272,17 @@ export const ProjectRecapJobsLive = Layer.effect(
           data.completedAt = fresh.completedAt;
           data.errorMessage = fresh.errorMessage;
         }
-        yield* hub.broadcast({ type: "recap:status-changed", data }).pipe(
-          Effect.timeout("5 seconds"),
-          Effect.catchAll(() => Effect.void),
-        );
+        yield* broadcastRecapToRepoAccount(recap.repositoryId, {
+          type: "recap:status-changed",
+          data,
+        });
         // For 'complete', also broadcast the fresh row so the UI can render
         // immediately without re-fetching.
         if (status === "complete" && fresh) {
-          yield* hub.broadcast({ type: "recap:added", data: { recap: fresh } }).pipe(
-            Effect.timeout("5 seconds"),
-            Effect.catchAll(() => Effect.void),
-          );
+          yield* broadcastRecapToRepoAccount(recap.repositoryId, {
+            type: "recap:added",
+            data: { recap: fresh },
+          });
         }
       });
 
@@ -994,15 +1006,10 @@ export const ProjectRecapJobsLive = Layer.effect(
               recapId = created.id;
               // Announce the new row immediately so the UI can show a
               // "generating" placeholder.
-              yield* hub
-                .broadcast({
-                  type: "recap:added",
-                  data: { recap: created },
-                })
-                .pipe(
-                  Effect.timeout("5 seconds"),
-                  Effect.catchAll(() => Effect.void),
-                );
+              yield* broadcastRecapToRepoAccount(params.repoId, {
+                type: "recap:added",
+                data: { recap: created },
+              });
             }
 
             // Already running? Reuse, unless the old job was cancelled
@@ -1094,10 +1101,10 @@ export const ProjectRecapJobsLive = Layer.effect(
             Effect.catchAll(() => Effect.succeed(null)),
           );
           if (refreshed) {
-            yield* hub.broadcast({ type: "recap:added", data: { recap: refreshed } }).pipe(
-              Effect.timeout("5 seconds"),
-              Effect.catchAll(() => Effect.void),
-            );
+            yield* broadcastRecapToRepoAccount(params.repoId, {
+              type: "recap:added",
+              data: { recap: refreshed },
+            });
           }
 
           return yield* startJob({
@@ -1119,10 +1126,10 @@ export const ProjectRecapJobsLive = Layer.effect(
             periodEnd: params.periodEnd,
           }),
         );
-        yield* hub.broadcast({ type: "recap:added", data: { recap: newRow } }).pipe(
-          Effect.timeout("5 seconds"),
-          Effect.catchAll(() => Effect.void),
-        );
+        yield* broadcastRecapToRepoAccount(params.repoId, {
+          type: "recap:added",
+          data: { recap: newRow },
+        });
 
         return yield* startJob({
           recapId: newRow.id,

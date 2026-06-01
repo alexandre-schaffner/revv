@@ -51,6 +51,7 @@ import {
 } from "../domain/errors";
 import { logError } from "../logger";
 import { AiService } from "./Ai";
+import { Broadcaster } from "./Broadcaster";
 import { ChatSessionService } from "./ChatSession";
 import type { DbService } from "./Db";
 import type { GitHubEtagCache } from "./GitHubEtagCache";
@@ -87,7 +88,6 @@ import {
 import { PrContextService } from "./PrContext";
 import { PullRequestService } from "./PullRequest";
 import { SettingsService } from "./Settings";
-import { WebSocketHub } from "./WebSocketHub";
 
 // Re-export the GitOps errors so existing callers that destructured them
 // from this module keep working without import churn.
@@ -268,7 +268,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
   Effect.gen(function* () {
     const prCtx = yield* PrContextService;
     const chatSessions = yield* ChatSessionService;
-    const wsHub = yield* WebSocketHub;
+    const broadcaster = yield* Broadcaster;
     const prService = yield* PullRequestService;
     const ai = yield* AiService;
 
@@ -499,10 +499,13 @@ export const ChatChangesPushServiceLive = Layer.effect(
           prHeadSha: params.newTip,
         });
 
-        yield* wsHub.broadcast({
+        const pr = yield* prService.getPr(params.pr.id);
+        const accountId = yield* prCtx.getAccountIdForRepo(pr.repositoryId);
+        const prs = yield* prService.listPrs(accountId);
+        yield* broadcaster.broadcastToAccount(accountId, {
           type: "prs:updated",
-          data: {},
-        } as never);
+          data: prs,
+        });
       });
 
     const completePush = (params: {
@@ -682,7 +685,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
     // hasn't moved.
     const pushToNewBranchEffect = (params: {
       ctx: {
-        readonly pr: { readonly sourceBranch: string };
+        readonly pr: { readonly id: string; readonly sourceBranch: string };
         readonly session: {
           readonly worktreePath: string;
           readonly branchName: string;
@@ -692,7 +695,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
       authedUrl: string;
       newBranchName: string;
       force: boolean;
-    }): Effect.Effect<AttemptPushResult, ChatPushError> =>
+    }): Effect.Effect<AttemptPushResult, ChatPushError, DbService> =>
       Effect.gen(function* () {
         const trimmed = params.newBranchName.trim();
         if (trimmed.length === 0 || /\s/.test(trimmed) || trimmed.includes("..")) {
@@ -795,10 +798,13 @@ export const ChatChangesPushServiceLive = Layer.effect(
           );
         }
 
-        yield* wsHub.broadcast({
+        const pr = yield* prService.getPr(params.ctx.pr.id);
+        const accountId = yield* prCtx.getAccountIdForRepo(pr.repositoryId);
+        const prs = yield* prService.listPrs(accountId);
+        yield* broadcaster.broadcastToAccount(accountId, {
           type: "prs:updated",
-          data: {},
-        } as never);
+          data: prs,
+        });
 
         return {
           status: "pushed" as const,
@@ -828,7 +834,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
           if (params.newBranchName !== undefined) {
             return yield* pushToNewBranchEffect({
               ctx: {
-                pr: { sourceBranch: ctx.pr.sourceBranch },
+                pr: { id: ctx.pr.id, sourceBranch: ctx.pr.sourceBranch },
                 session: {
                   worktreePath: ctx.session.worktreePath,
                   branchName: ctx.session.branchName,

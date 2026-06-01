@@ -36,14 +36,12 @@ import { TokenProviderLive } from "./TokenProvider";
 import { WalkthroughServiceLive } from "./Walkthrough";
 import { WalkthroughJobsLive } from "./WalkthroughJobs";
 import { WalkthroughSnapshotImporterLive } from "./WalkthroughSnapshotImporter";
-import { WebSocketHubLive } from "./WebSocketHub";
 
 // TokenProvider reads token bytes from SecretStore, resolves account rows via
-// DbService, and broadcasts re-auth signals via WebSocketHub (token refresh
-// success/failure). WebSocketHub is a leaf layer, so providing it here as well
-// as in BaseLayers is a no-op dedupe.
+// DbService, and broadcasts re-auth signals via Broadcaster (token refresh
+// success/failure).
 const TokenProviderWithDeps = TokenProviderLive.pipe(
-  Layer.provide(Layer.mergeAll(DbServiceLive, SecretStoreLive, WebSocketHubLive)),
+  Layer.provide(Layer.mergeAll(DbServiceLive, SecretStoreLive, BroadcasterLive)),
 );
 
 const IdentityWithDeps = IdentityLive.pipe(Layer.provide(TokenProviderWithDeps));
@@ -79,7 +77,6 @@ const BaseLayers = Layer.mergeAll(
   IdentityWithDeps,
   GitHubEtagCacheLive,
   GitHubGatewayWithDeps,
-  WebSocketHubLive,
   BroadcasterLive,
   RepositoryServiceLive,
   PullRequestServiceLive,
@@ -113,7 +110,7 @@ const SyncServiceWithDeps = SyncServiceLive.pipe(
 // AiService depends on DbService + SettingsService (both in BaseLayers)
 const AiServiceWithDeps = AiServiceLive.pipe(Layer.provide(BaseLayers));
 
-// RepoCloneService depends on DbService + WebSocketHub (both in BaseLayers)
+// RepoCloneService depends on DbService + Broadcaster (both in BaseLayers)
 const RepoCloneServiceWithDeps = RepoCloneServiceLive.pipe(Layer.provide(BaseLayers));
 
 // DbMaintenance only needs DbService (already in BaseLayers)
@@ -164,7 +161,7 @@ const PollSchedulerWithDeps = PollSchedulerLive.pipe(
 
 // ProjectRecapJobs is the recap orchestrator. Mirrors WalkthroughJobs but
 // simpler — no worktree / continuation. Depends on BaseLayers for repo,
-// PR, recap service, settings, and WebSocketHub.
+// PR, recap service, settings, and Broadcaster.
 const ProjectRecapJobsWithDeps = ProjectRecapJobsLive.pipe(
   Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps)),
 );
@@ -177,7 +174,7 @@ const RecapSchedulerWithDeps = RecapSchedulerLive.pipe(
 
 // ChatChangesPush depends on PrContext (for resolving repo+token), AiService
 // (for invoking the conflict-resolution agent), and BaseLayers (db, github,
-// chat sessions, ws hub, pr service, etag cache).
+// chat sessions, realtime broadcaster, pr service, etag cache).
 const ChatChangesPushServiceWithDeps = ChatChangesPushServiceLive.pipe(
   Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps, AiServiceWithDeps)),
 );

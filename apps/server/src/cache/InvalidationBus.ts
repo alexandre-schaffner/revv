@@ -7,12 +7,12 @@ import { Context, Effect, Layer, PubSub, Stream } from "effect";
  * domain events; subscribers translate those events into:
  *
  *   1. Cross-namespace cache drops (cache-cascade subscriber).
- *   2. `cache:invalidated` WebSocket fan-out to clients.
+ *   2. `cache:invalidated` realtime fan-out to clients.
  *   3. A short-window ring buffer that powers `/api/cache/stats`
  *      ("invalidationsLastHour").
  *
  * The bus itself is transport-neutral — it doesn't know about caches or
- * WebSockets. That's intentional: adding a new subscriber is a layer-only
+ * transports. That's intentional: adding a new subscriber is a layer-only
  * concern, no publisher has to change.
  *
  * ### Event taxonomy

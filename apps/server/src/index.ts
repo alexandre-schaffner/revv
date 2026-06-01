@@ -24,7 +24,6 @@ import { threadRoutes } from "./routes/threads";
 import { updateManifestRoute } from "./routes/update-manifest";
 import { userRoutes } from "./routes/user";
 import { walkthroughsRoute } from "./routes/walkthroughs";
-import { wsRoute } from "./routes/ws";
 import { AppRuntime } from "./runtime";
 import { ChatSessionService } from "./services/ChatSession";
 import { DbMaintenance } from "./services/DbMaintenance";
@@ -112,7 +111,6 @@ const app = new Elysia()
   .use(onboardingRoutes)
   .use(userRoutes)
   .use(walkthroughsRoute)
-  .use(wsRoute)
   .use(eventsRoute)
   .use(debugRoutes)
   .use(mcpWalkthroughRoute)
@@ -206,7 +204,7 @@ AppRuntime.runPromise(Effect.flatMap(WalkthroughJobs, (jobs) => jobs.resumePendi
 );
 
 // Start the background sync scheduler on boot, decoupled from any UI
-// client. Previously this was triggered from the WebSocket `open` handler,
+// client. Previously this was triggered from the realtime transport handler,
 // which meant sync only ran while the desktop window was open. With the
 // Tauri app running in tray mode (window hidden / closed to tray), the
 // server is the only long-lived process — it must drive its own polling.

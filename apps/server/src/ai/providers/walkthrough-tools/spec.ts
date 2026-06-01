@@ -5,11 +5,11 @@ import type {
   RatingAxis,
   RatingCitation,
   RiskLevel,
+  ThreadEventMessage,
   WalkthroughIssue,
   WalkthroughRating,
   WalkthroughSemanticStep,
   WalkthroughStreamEvent,
-  WsServerMessage,
 } from "@revv/shared";
 import { RATING_AXES } from "@revv/shared";
 import { z } from "zod";
@@ -69,14 +69,13 @@ export interface WalkthroughToolContext {
    */
   readonly emit: (event: WalkthroughStreamEvent) => void;
   /**
-   * General WebSocket broadcast hook (separate channel from the walkthrough
-   * SSE stream above). Used by handlers that mutate non-walkthrough tables —
+   * General thread-event broadcast hook. Used by handlers that mutate non-walkthrough tables —
    * specifically `add_issue_comment`, which writes to `comment_threads` /
    * `thread_messages` and must notify any open `DiffViewerInner` so the
    * agent's comment shows up inline in the diff. Like `emit`, it is called
    * AFTER the DB commit so subscribers never see an event without a row.
    */
-  readonly broadcastThreadEvent: (msg: WsServerMessage) => void;
+  readonly broadcastThreadEvent: (msg: ThreadEventMessage) => void;
 }
 
 export interface WalkthroughToolResult extends McpToolResult {
