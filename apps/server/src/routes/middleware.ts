@@ -46,10 +46,21 @@ function queryHost(query: Record<string, unknown>): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-export const withAccount = new Elysia({ name: "with-account" })
-  .use(withAuth)
-  .derive({ as: "scoped" }, async (ctx) => {
-    const session = ctx.session;
+// NOTE: this resolves the session itself rather than chaining `.use(withAuth)`
+// and reading `ctx.session`. Elysia deduplicates named plugins, and the
+// `withAuth` ("with-auth") scoped `derive` is also mounted on other route
+// trees — when deduped, its derived `session` does not propagate into this
+// sibling `derive`, leaving `ctx.session` undefined and 401-ing every
+// account-scoped route. Resolving from headers here (mirroring the events
+// route) keeps `withAccount` self-contained and immune to that ordering.
+export const withAccount = new Elysia({ name: "with-account" }).derive(
+  { as: "scoped" },
+  async (ctx) => {
+    const session = await AppRuntime.runPromise(
+      Effect.flatMap(Identity, (identity) =>
+        Effect.promise(() => identity.sessionFromHeaders(ctx.request.headers)),
+      ),
+    );
     if (!session) {
       return status(401, { error: "Unauthorized" });
     }
@@ -72,7 +83,8 @@ export const withAccount = new Elysia({ name: "with-account" })
       return status(401, { error: "Unauthorized" });
     }
     return { session, account };
-  });
+  },
+);
 
 // ── Effect error unwrapping ─────────────────────────────────────────────────
 
