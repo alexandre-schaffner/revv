@@ -17,8 +17,9 @@ import {
   resolveThread,
 } from "$lib/stores/review.svelte";
 import type { CommentThread, ReviewFile, ThreadMessage } from "$lib/types/review";
-import type { ThreadMeta, TokenHoverInfo } from "./DiffViewerInner.svelte";
+import type { TokenHoverInfo } from "./DiffViewerInner.svelte";
 import DiffViewerInner from "./DiffViewerInner.svelte";
+import type { ThreadMeta } from "./pierre-diff-adapter";
 
 // ── Re-export for consumers ───────────────────────────────────────────────
 
@@ -38,6 +39,7 @@ interface Props {
   onLineClick?: (info: LineClickInfo) => void;
   onModeChange?: (mode: "unified" | "split") => void;
   onTokenHover?: (info: TokenHoverInfo | null) => void;
+  scrollRoot?: HTMLElement | null;
   /** When set, triggers opening a comment input at the given line range. */
   commentTrigger?: {
     startLine: number;
@@ -47,7 +49,14 @@ interface Props {
   } | null;
 }
 
-let { file, onLineClick, onModeChange, onTokenHover, commentTrigger = null }: Props = $props();
+let {
+  file,
+  onLineClick,
+  onModeChange,
+  onTokenHover,
+  commentTrigger = null,
+  scrollRoot = null,
+}: Props = $props();
 
 // ── Interaction state ─────────────────────────────────────────────────────
 
@@ -278,6 +287,7 @@ async function handleEditMessage(threadId: string, messageId: string, body: stri
 			{onTokenHover}
 			onApplySuggestion={handleApplySuggestion}
 			onEditMessage={handleEditMessage}
+			{scrollRoot}
 		/>
 	{/key}
 {/if}

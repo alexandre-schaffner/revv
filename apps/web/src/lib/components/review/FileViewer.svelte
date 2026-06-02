@@ -25,8 +25,9 @@ import {
   resolveThread,
 } from "$lib/stores/review.svelte";
 import type { CommentThread, ThreadMessage } from "$lib/types/review";
-import type { FileLineClickInfo, ThreadMeta, TokenHoverInfo } from "./FileViewerInner.svelte";
+import type { FileLineClickInfo, TokenHoverInfo } from "./FileViewerInner.svelte";
 import FileViewerInner from "./FileViewerInner.svelte";
+import type { ThreadMeta } from "./pierre-diff-adapter";
 
 // ── Props ─────────────────────────────────────────────────────────────────
 
@@ -38,9 +39,19 @@ interface Props {
   status: "idle" | "loading" | "ready" | "binary" | "too-large" | "not-found" | "error";
   errorMessage?: string | null;
   onTokenHover?: (info: TokenHoverInfo | null) => void;
+  scrollRoot?: HTMLElement | null;
 }
 
-let { path, content, isBinary, size, status, errorMessage = null, onTokenHover }: Props = $props();
+let {
+  path,
+  content,
+  isBinary,
+  size,
+  status,
+  errorMessage = null,
+  onTokenHover,
+  scrollRoot = null,
+}: Props = $props();
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -275,6 +286,7 @@ async function handleEditMessage(threadId: string, messageId: string, body: stri
 			{onTokenHover}
 			onApplySuggestion={handleApplySuggestion}
 			onEditMessage={handleEditMessage}
+			{scrollRoot}
 		/>
 	{/key}
 {/if}

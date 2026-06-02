@@ -52,6 +52,14 @@ export type {
   NewPrSessionSnapshot,
   NewPrSessionStatus,
 } from "./new-pr-session";
+export type { GitPatchHeaderFile, PrDiffRenderOptions } from "./pierre-diffs";
+export {
+  buildGitPatchHeader,
+  PIERRE_DIFF_PRELOAD_LANGS,
+  PIERRE_THEME,
+  PIERRE_THEMES,
+  PR_DIFF_RENDER_OPTIONS,
+} from "./pierre-diffs";
 export type {
   ProjectRecap,
   ProjectRecapStatus,

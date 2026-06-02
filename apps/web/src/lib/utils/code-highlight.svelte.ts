@@ -1,5 +1,6 @@
 import pierreDark from "@pierre/theme/pierre-dark";
 import pierreLight from "@pierre/theme/pierre-light";
+import { PIERRE_THEME } from "@revv/shared";
 import { createHighlighter, type Highlighter } from "shiki";
 
 let highlighter: Highlighter | null = null;
@@ -73,10 +74,7 @@ export function highlightCode(code: string, lang: string): string | null {
 
     return highlighter.codeToHtml(code, {
       lang: normalized,
-      themes: {
-        light: "pierre-light",
-        dark: "pierre-dark",
-      },
+      themes: PIERRE_THEME,
     });
   } catch {
     return null;

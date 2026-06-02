@@ -1,17 +1,4 @@
 <script lang="ts" module>
-// ── ThreadMeta ─────────────────────────────────────────────────────────────
-// Forked from DiffViewerInner. Same shape so AnnotationThread /
-// AnnotationCommentInput / mountInto can be shared verbatim.
-export interface ThreadMeta {
-  threadId: string;
-  status: string;
-  messageCount: number;
-  isExpanded: boolean;
-  isInputActive: boolean;
-  isReplying: boolean;
-  isPending: boolean;
-}
-
 // ── TokenHoverInfo ─────────────────────────────────────────────────────────
 export interface TokenHoverInfo {
   tokenText: string;
@@ -35,11 +22,13 @@ export interface TokenHoverInfo {
 	//     diff viewer's "new" / "deleted" / "renamed" badges.
 	import {
 		File as PierreFile,
+		VirtualizedFile,
 		type FileOptions,
 		type LineAnnotation,
 		type OnLineClickProps,
 		type TokenEventBase,
 	} from '@pierre/diffs';
+	import { PIERRE_THEME } from '@revv/shared';
 	import type { CommentThread, ThreadMessage } from '$lib/types/review';
 	import { workerManager } from '$lib/utils/worker-pool';
 	import { onMount, onDestroy } from 'svelte';
@@ -56,6 +45,14 @@ export interface TokenHoverInfo {
 		setTotalLineCount,
 		isInLineCursorMode,
 	} from '$lib/stores/focus-mode.svelte';
+	import {
+		createDiffsHost,
+		createHeaderBadge,
+		createPierreVirtualizer,
+		getPierreShadowRoot,
+		PIERRE_BASE_CSS,
+		type ThreadMeta
+	} from './pierre-diff-adapter';
 
 	// ── Line-click info bubbled to the wrapper ─────────────────────────────────
 	// Same shape as DiffViewer's `LineClickInfo`, minus the `side` field that
@@ -91,6 +88,7 @@ export interface TokenHoverInfo {
 		onTokenHover?: ((info: TokenHoverInfo | null) => void) | undefined;
 		onApplySuggestion?: ((threadId: string, suggestion: string) => void) | undefined;
 		onEditMessage?: ((threadId: string, messageId: string, body: string) => void) | undefined;
+		scrollRoot?: HTMLElement | null;
 	}
 
 	let {
@@ -113,6 +111,7 @@ export interface TokenHoverInfo {
 		onTokenHover,
 		onApplySuggestion,
 		onEditMessage,
+		scrollRoot = null,
 	}: Props = $props();
 
 	function formatSize(bytes: number): string {
@@ -121,15 +120,13 @@ export interface TokenHoverInfo {
 		return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 	}
 
-	// ── Base shadow-DOM CSS — same trick DiffViewerInner uses ────────────────
-	const BASE_CSS = `[data-diffs-header='default'] { position: static !important; }`;
-
 	// ── Local state ──────────────────────────────────────────────────────────
 
 	let wrapperEl: HTMLDivElement | null = null;
-	let instance = $state.raw<PierreFile<ThreadMeta> | null>(null);
+	let instance = $state.raw<PierreFile<ThreadMeta> | VirtualizedFile<ThreadMeta> | null>(null);
 	let error = $state<string | null>(null);
 	let initialOptions: FileOptions<ThreadMeta> | null = null;
+	let virtualizer = $state.raw<ReturnType<typeof createPierreVirtualizer> | null>(null);
 
 	function captureEl(el: HTMLDivElement) {
 		wrapperEl = el;
@@ -142,26 +139,8 @@ export interface TokenHoverInfo {
 
 	// ── Shadow DOM helpers (line-cursor scroll) ──────────────────────────────
 
-	function findShadowHost(container: HTMLElement): HTMLElement | null {
-		for (const child of container.children) {
-			if (child instanceof HTMLElement && child.shadowRoot) return child;
-		}
-		for (const child of container.children) {
-			if (child instanceof HTMLElement) {
-				for (const grandchild of child.children) {
-					if (grandchild instanceof HTMLElement && grandchild.shadowRoot) {
-						return grandchild;
-					}
-				}
-			}
-		}
-		return null;
-	}
-
 	function getShadowRoot(): ShadowRoot | null {
-		if (!wrapperEl) return null;
-		const host = findShadowHost(wrapperEl);
-		return host?.shadowRoot ?? null;
+		return getPierreShadowRoot(wrapperEl);
 	}
 
 	// ── Reactive updates ─────────────────────────────────────────────────────
@@ -190,14 +169,14 @@ export interface TokenHoverInfo {
 
 		if (panel === 'diff-line') {
 			const css =
-				`${BASE_CSS} [data-line-index="${lineIdx}"] { ` +
+				`${PIERRE_BASE_CSS} [data-line-index="${lineIdx}"] { ` +
 				`background-color: var(--color-tree-active-bg) !important; ` +
 				`outline: 1px solid color-mix(in srgb, var(--color-accent) 25%, transparent); ` +
 				`outline-offset: -1px; ` +
 				`}`;
 			instance.setOptions({ ...initialOptions, unsafeCSS: css });
 		} else if (panel !== 'diff-visual') {
-			instance.setOptions({ ...initialOptions, unsafeCSS: BASE_CSS });
+			instance.setOptions({ ...initialOptions, unsafeCSS: PIERRE_BASE_CSS });
 		}
 	});
 
@@ -233,12 +212,12 @@ export interface TokenHoverInfo {
 
 		try {
 			const options: FileOptions<ThreadMeta> = {
-				theme: { dark: 'pierre-dark', light: 'pierre-light' },
+				theme: PIERRE_THEME,
 				overflow: 'scroll',
 				lineHoverHighlight: 'both',
 				enableGutterUtility: true,
 				enableLineSelection: true,
-				unsafeCSS: BASE_CSS,
+				unsafeCSS: PIERRE_BASE_CSS,
 
 				// ── Header: "unchanged" badge ─────────────────────────────────
 				// Mirrors DiffViewerInner's renderHeaderPrefix shape so the
@@ -248,15 +227,8 @@ export interface TokenHoverInfo {
 					const wrap = document.createElement('span');
 					wrap.style.cssText = 'display:flex;align-items:center;gap:6px;';
 
-					const badge = document.createElement('span');
-					badge.textContent = 'unchanged';
 					const color = 'var(--color-text-muted)';
-					badge.style.cssText =
-						`font-size:9px;font-weight:600;letter-spacing:0.06em;` +
-						`text-transform:uppercase;` +
-						`background:color-mix(in srgb, ${color} 13%, transparent);` +
-						`color:${color};border-radius:3px;padding:1px 5px;`;
-					wrap.appendChild(badge);
+					wrap.appendChild(createHeaderBadge('unchanged', color));
 
 					return wrap;
 				},
@@ -356,11 +328,16 @@ export interface TokenHoverInfo {
 				},
 			};
 
-			instance = new PierreFile<ThreadMeta>(options, workerManager);
+			virtualizer = createPierreVirtualizer(scrollRoot, wrapperEl);
+			const hostEl = createDiffsHost();
+			wrapperEl.appendChild(hostEl);
+			instance = virtualizer
+				? new VirtualizedFile<ThreadMeta>(options, virtualizer, undefined, workerManager)
+				: new PierreFile<ThreadMeta>(options, workerManager);
 			initialOptions = options;
 
 			instance.render({
-				containerWrapper: wrapperEl,
+				fileContainer: hostEl,
 				file: { name: path, contents: content },
 				lineAnnotations: annotations,
 			});
@@ -379,10 +356,12 @@ export interface TokenHoverInfo {
 		cleanupAllMounted();
 		try {
 			instance?.cleanUp();
+			virtualizer?.cleanUp();
 		} catch {
 			// ignore cleanup errors
 		}
 		instance = null;
+		virtualizer = null;
 	});
 </script>
 

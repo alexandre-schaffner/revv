@@ -1,6 +1,6 @@
 <script lang="ts">
 import { DIFFS_TAG_NAME, FileDiff, type FileDiffOptions, parsePatchFiles } from "@pierre/diffs";
-import type { DiffBlock } from "@revv/shared";
+import { buildGitPatchHeader, type DiffBlock, PIERRE_THEME } from "@revv/shared";
 import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
 import { jumpToDiffLine } from "$lib/stores/review.svelte";
@@ -31,7 +31,7 @@ let instance: FileDiff<never> | null = null;
 function mountDiffBlock(el: HTMLDivElement) {
   const options: FileDiffOptions<never> = {
     diffStyle: "unified",
-    theme: { dark: "pierre-dark", light: "pierre-light" },
+    theme: PIERRE_THEME,
     overflow: "scroll",
     // Suppress Pierre's built-in file header — we render our own clickable
     // header above so the user can jump to this file in the Diff tab.
@@ -40,11 +40,7 @@ function mountDiffBlock(el: HTMLDivElement) {
 
   instance = new FileDiff<never>(options, workerManager);
 
-  const patchHeader = [
-    `diff --git a/${block.filePath} b/${block.filePath}`,
-    `--- a/${block.filePath}`,
-    `+++ b/${block.filePath}`,
-  ].join("\n");
+  const patchHeader = buildGitPatchHeader({ path: block.filePath });
   const fullPatch = `${patchHeader}\n${block.patch}`;
   const parsed = parsePatchFiles(fullPatch)[0]?.files[0];
 
