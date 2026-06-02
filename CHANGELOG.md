@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.8.0](https://github.com/alexandre-schaffner/revv/compare/v0.7.0...v0.8.0) (2026-06-02)
+
+
+### Features
+
+* improve Pierre diff rendering and reconcile docs ([#113](https://github.com/alexandre-schaffner/revv/issues/113)) ([b67d4eb](https://github.com/alexandre-schaffner/revv/commit/b67d4ebfad8649793d579ea514bf2100b1104cf4))
+
+
+### Bug Fixes
+
+* handle GitHub rate limits and ETag caching ([#109](https://github.com/alexandre-schaffner/revv/issues/109)) ([921a603](https://github.com/alexandre-schaffner/revv/commit/921a603784e08bac31adbceaf387d814733e8130))
+* **walkthrough:** serve current walkthrough from local head SHA, not live GitHub ([#111](https://github.com/alexandre-schaffner/revv/issues/111)) ([c2a8b06](https://github.com/alexandre-schaffner/revv/commit/c2a8b06210fc5ac861cef8c3646d31b65d310115))
+
 ## [0.7.0](https://github.com/alexandre-schaffner/revv/compare/v0.6.0...v0.7.0) (2026-06-01)
 
 
