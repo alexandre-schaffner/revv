@@ -3,6 +3,9 @@ import { Data } from "effect";
 // GitHub API errors
 export class GitHubRateLimitError extends Data.TaggedError("GitHubRateLimitError")<{
   readonly resetAt: Date;
+  readonly retryAfter?: number;
+  readonly kind?: "primary" | "secondary";
+  readonly resource?: string;
 }> {}
 
 export class GitHubAuthError extends Data.TaggedError("GitHubAuthError")<{
