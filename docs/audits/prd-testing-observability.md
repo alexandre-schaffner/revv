@@ -37,16 +37,16 @@ The codebase currently has **zero test files** (`*.test.ts`, `*.spec.ts`, etc.).
 - [ ] Test: `loadUser` calls `clearToken` on 401.
 - [ ] Tests run with `bun test`.
 
-### US-003: Add unit tests for `ws.svelte.ts` reconnect logic
+### US-003: Add unit tests for `events.svelte.ts` reconnect logic
 
-**Description:** As a developer, I want tests covering WebSocket reconnect behavior, so that the disconnect→reconnect loop bug cannot regress.
+**Description:** As a developer, I want tests covering the SSE store's watchdog/reconnect behavior, so that the disconnect→reconnect loop bug cannot regress.
 
 **Acceptance Criteria:**
 
-- [ ] `apps/web/src/lib/stores/ws.svelte.test.ts` is created.
-- [ ] Test: calling `disconnect()` does not schedule a reconnect.
-- [ ] Test: an unexpected close schedules a reconnect.
-- [ ] Test: reconnect uses the current token, not a stale one.
+- [ ] `apps/web/src/lib/stores/events.svelte.test.ts` is created.
+- [ ] Test: calling `disconnect()` closes the `EventSource`, clears the watchdog, and does not reconnect.
+- [ ] Test: the watchdog force-reconnects after >60s of silence (no heartbeat or message).
+- [ ] Test: a reconnect uses the current token, not a stale one.
 - [ ] Tests run with `bun test`.
 
 ### US-004: Add integration tests for PR route handlers
@@ -91,9 +91,9 @@ The codebase currently has **zero test files** (`*.test.ts`, `*.spec.ts`, etc.).
 
 **Acceptance Criteria:**
 
-- [ ] Every `logError` in `walkthrough-stream.ts` includes `walkthroughId`.
-- [ ] `emitQueue` errors include the event type being processed.
-- [ ] `prerenderBlock` errors include the block index.
+- [ ] Every `logError` on the walkthrough emit path (`WalkthroughJobs.ts` `emitEvent` + the `Broadcaster` global-bus broadcast) includes `walkthroughId`.
+- [ ] Emit drops / fan-out errors include the event type being processed.
+- [ ] Prerender failures include the block index.
 - [ ] Logs are queryable by `walkthroughId` in development (`REV_DEBUG=1`).
 
 ### US-008: Add health-check endpoint with dependency status
@@ -109,7 +109,7 @@ The codebase currently has **zero test files** (`*.test.ts`, `*.spec.ts`, etc.).
 
 ## Functional Requirements
 
-- FR-1: Store modules must have unit tests for deduplication, auth transitions, and WS reconnect.
+- FR-1: Store modules must have unit tests for deduplication, auth transitions, and SSE reconnect.
 - FR-2: PR and review routes must have integration tests for limits, rate limiting, and authz.
 - FR-3: Walkthrough pipeline must have a smoke test for status transitions.
 - FR-4: Walkthrough errors must include correlation IDs in logs.
@@ -127,7 +127,7 @@ The codebase currently has **zero test files** (`*.test.ts`, `*.spec.ts`, etc.).
 - Use `bun:test` for all tests (Bun's native test runner).
 - Use an in-memory SQLite DB (`:memory:`) for server integration tests.
 - Mock `fetch` for GitHub API calls in integration tests.
-- Mock WebSocket for `ws.svelte.ts` tests using a lightweight WebSocket server.
+- Mock `EventSource` for `events.svelte.ts` tests (a lightweight fake that can emit `message` / `heartbeat` / `error` events and advance the watchdog clock).
 - Follow existing file naming: `<module>.test.ts`.
 
 ## Success Metrics

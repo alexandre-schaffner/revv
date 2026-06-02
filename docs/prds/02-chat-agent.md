@@ -62,7 +62,7 @@ Chat state is persistent. Tables:
 - `components/layout/StreamingVerb.svelte` — animated streaming indicator
 - `components/ai/conversation/`, `message/`, `tool/`, `plan/`, `question/`, `queue/`, `confirmation/`, `checkpoint/`, `prompt-input/`, `shimmer/`, `suggestion/`, `context/` — message/tool-use rendering, plan UI, queue, confirmations
 - `stores/chat.svelte.ts` — chat state (messages, activities, tasks, plan, pending questions, streaming status, proposed commits)
-- `stores/ws.svelte.ts` — connection management
+- `stores/events.svelte.ts` — global SSE connection (`GET /api/events`) carrying coordination envelopes (e.g. `chat:question-resolved`); live chat message/token streaming is a per-request `text/event-stream` response handled in `$lib/api/chat`
 
 ### Settings location
 

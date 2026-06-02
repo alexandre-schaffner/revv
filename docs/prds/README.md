@@ -17,7 +17,7 @@ The agent and walkthrough subsystems are governed by the **"Agent Subsystem Inva
 | [03](./03-ai-walkthrough.md) | AI Guided Walkthrough | **SHIPPED (~95%)** | 4-phase MCP pipeline; see CLAUDE.md for invariants |
 | [04](./04-github-sync.md) | GitHub Sync & Conversations | **Backend SHIPPED · Frontend ~50%** | Badges, sync indicator, reopen UI still TODO |
 | [05](./05-chat-driven-changes.md) | Chat-Driven Changes | **SHIPPED core · polish PARTIAL** | Replaced original "Post-Review Agent"; commits-as-proposals + `--force-with-lease` push + AI conflict resolution |
-| [06](./06-polish-ship.md) | Polish, Performance & Ship | **PARTIAL (~50%)** | Onboarding/multi-account/GHE/tray SHIPPED; kbd nav, virtualization, offline outbox, signing remaining |
+| [06](./06-polish-ship.md) | Polish, Performance & Ship | **PARTIAL (~50%)** | Onboarding/multi-account/GHE/tray/diff-virtualization SHIPPED; kbd nav, offline outbox, signing remaining |
 | [07](./07-emergent-features.md) | Emergent Features (index) | n/a | Cross-link index, not a roadmap |
 
 ---
@@ -28,14 +28,14 @@ Foundation:
 
 - **Monorepo**: Bun workspaces + Turborepo, TypeScript strict (`exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`)
 - **Desktop shell**: Tauri v2, deep-link (`revv://`), sidecar server, macOS system tray, auto-start, updater plugin wired
-- **Server**: Elysia on Bun with a full Effect service layer — `GitHubService`, `RepositoryService`, `PullRequestService`, `PollScheduler`, `WebSocketHub`, `SettingsService`, `TokenProvider`, `ReviewService`, `SyncService`, `WalkthroughService`, `WalkthroughJobs`, `AiService`, `ChatSessionService`, `ChatChangesPushService`, `ChatMcpTokens`, `OpencodeSupervisor`
+- **Server**: Elysia on Bun with a full Effect service layer — `GitHubService`, `RepositoryService`, `PullRequestService`, `PollScheduler`, `Broadcaster`, `SettingsService`, `TokenProvider`, `ReviewService`, `SyncService`, `WalkthroughService`, `WalkthroughJobs`, `AiService`, `ChatSessionService`, `ChatChangesPushService`, `ChatMcpTokens`, `OpencodeSupervisor`
 - **Auth**: Better Auth with GitHub OAuth; multi-account (`ConnectedAccount[]` / `LocalAccount[]`); GHE-default with public `github.com` opt-in
 - **Database**: SQLite via Drizzle; schema applied directly (no migration runner). Tables include `review_sessions`, `comment_threads`, `thread_messages`, `hunk_decisions`, `chat_*` (7 tables), `walkthroughs` + 4 walkthrough cohort tables, `pr_diff_files`, `file_content_cache`, `pull_requests`, `repositories`, plus Better Auth tables. `user_settings` was dropped; preferences live in `~/.revv/settings.json`.
 
 Review surface:
 
-- **Sidebar**: collapsible repo groups, org switcher, fuzzy PR search, status dots, j/k navigation, virtualized file tree attribute (no implementation yet)
-- **Diff view**: `@pierre/diffs` rendering, unified + split modes, file tree, syntax highlighting, token-hover popover (`TokenTooltip`)
+- **Sidebar**: collapsible repo groups, org switcher, fuzzy PR search, status dots, j/k navigation, natively virtualized file tree (`@pierre/trees`)
+- **Diff view**: `@pierre/diffs` rendering, unified + split modes, virtualized scrolling (`VirtualizedFileDiff`), file tree, syntax highlighting, token-hover plumbing (callbacks wired; floating tooltip UI not yet built — see `pierre-diffs-backlog.md`)
 - **Hunk decisions**: persisted accept/reject per file, per hunk, per review session
 - **Comments**: persisted threads with status machine, GitHub-sync bidirectional, gutter-marker colors by status, code-suggestion application
 - **Walkthrough**: 4-phase MCP-driven generation (Overview → Diff Analysis → Sentiment → 9-axis Rating) with chat-edit post-completion mutations, supersession on new head SHA, resume-on-boot
@@ -117,6 +117,6 @@ Features that shipped without their own PRD are folded into the PRDs they touch 
 | Database       | SQLite via Drizzle ORM (schema applied directly, no migration runner) |
 | Auth           | Better Auth with GitHub OAuth; multi-account                          |
 | AI             | Claude Agent SDK (in-process) + opencode (HTTP MCP, subprocess); MCP tool handlers shared in-process |
-| Real-time      | Bun native WebSocket + custom `WebSocketHub`                          |
+| Real-time      | Server-Sent Events (SSE) — one `GET /api/events` stream per tab, fanned out by the `Broadcaster` service |
 | Type safety    | Eden treaty client (Elysia type-safe RPC); shared types in `@revv/shared` |
 | Settings       | `~/.revv/settings.json` (not in DB)                                   |
