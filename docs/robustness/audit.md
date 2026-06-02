@@ -1,6 +1,6 @@
 # Robustness Audit — Walkthrough Generation Pipeline
 
-Point-in-time audit of the three load-bearing layers underneath walkthrough generation: the SSE generation stream, the long-lived `WebSocketHub`, and the provider façade that fronts the Claude Agent SDK and opencode. Captured at the start of the "robustness and reliability" arc.
+Point-in-time audit of the three load-bearing layers underneath walkthrough generation: the SSE generation stream, the long-lived global SSE bus (`Broadcaster`), and the provider façade that fronts the Claude Agent SDK and opencode. Captured at the start of the "robustness and reliability" arc.
 
 Companion: [`backlog.md`](./backlog.md) — the living punch list. Every gap below carries an id (`S1`, `W3`, `P2`, …) that backlog rows back-reference.
 
@@ -50,14 +50,14 @@ The SSE channel carries per-job Phase A→D events from MCP tool handlers to the
 | Route handler | `apps/server/src/routes/reviews/handlers/walkthrough-stream.ts` | Subscribe → DB snapshot replay → flush buffer → live forward. Replay dedup. |
 | Client transport | `apps/web/src/lib/services/walkthrough-sse.ts` + `apps/web/src/lib/stores/walkthrough-stream.svelte.ts` | Fetch + body reader + parser, inactivity (90s) and exploration-stall (3min) guards, abort controller, reconciliation poll on unexpected end. |
 
-Event envelope shape is defined in `packages/shared/src/walkthrough.ts` as the `WalkthroughStreamEvent` union — same union the WS `walkthrough:edited` envelope wraps for the chat-edit carve-out.
+Event envelope shape is defined in `packages/shared/src/walkthrough.ts` as the `WalkthroughStreamEvent` union — the same union the global-bus `walkthrough:event` SSE envelope wraps (as `lifecycle:edited`) for the chat-edit carve-out.
 
 ### 1.2 Already correct — call out, do not rewrite
 
 | Invariant | Evidence |
 |---|---|
 | #1 / #8 — DB authoritative, commit-first | SSE handler does DB snapshot replay before live forward; cache hydration always reads DB. (`walkthrough-stream.ts` `subscribe → snapshot → flush → live`.) |
-| #7 — Chat-edit carve-out | SSE stream dies on `done`; post-completion edits go through `walkthrough:edited` WS envelope only. Verified at `apps/server/src/routes/mcp/chat-context.ts` `emit()`. |
+| #7 — Chat-edit carve-out | Post-completion edits go through the `walkthrough:event` SSE envelope (`lifecycle:edited`) on the global bus only. Verified at `apps/server/src/routes/mcp/chat-context.ts` `emit()`. |
 | Reconcile on reconnect | Client's `scheduleReconciliationPoll` calls `hydrateFromCache(prId)` on unexpected stream end with exponential backoff. (`walkthrough-stream.svelte.ts:216–252`.) |
 | Per-job worktree teardown | Worktree registered as scope finalizer in `WalkthroughJobs`; cleanup runs on every exit path including `kill -9`-style fiber interruption. |
 | Strong typing | `WalkthroughStreamEvent` union is shared end-to-end. No `unknown`/`any` widening at the SSE boundary. |
@@ -167,93 +167,94 @@ Event envelope shape is defined in `packages/shared/src/walkthrough.ts` as the `
 
 ---
 
-## 2. WebSocketHub
+## 2. Broadcaster (global SSE bus)
 
 ### 2.1 Architecture
 
-The long-lived WebSocket channel carries cross-PR events and acts as the chat-edit broadcast bus per invariant #7. Implementation is a single `Ref<Set<BunServerWebSocket>>` with fire-and-forget broadcast.
+The long-lived global SSE stream (`GET /api/events`) carries cross-PR events and acts as the chat-edit broadcast bus per invariant #7. Implementation is a single `Ref<Set<Registration>>` of account-scoped writers with best-effort, fire-and-forget broadcast.
 
 | Layer | File |
 |---|---|
-| Envelope union | `packages/shared/src/ws.ts:13–94` |
-| Hub | `apps/server/src/services/WebSocketHub.ts` |
-| Route | `apps/server/src/routes/ws.ts` |
-| Client | `apps/web/src/lib/stores/ws.svelte.ts` |
+| Envelope union | `packages/shared/src/events.ts` (`ServerEventMessage`) |
+| Bus | `apps/server/src/services/Broadcaster.ts` |
+| Route | `apps/server/src/routes/events.ts` |
+| Client | `apps/web/src/lib/stores/events.svelte.ts` |
 
-Per the explicit broadcast contract at `WebSocketHub.ts:39–44`: *"Subscribers MUST reconcile from the DB on reconnect — any message missed during a disconnect is permanently lost."*
+Per the explicit broadcast contract (`Broadcaster.ts` doctrine + the reconnect note in `events.ts`): *"The server does NOT replay missed events on reconnect — the client reconciles via REST snapshots."* Commit-first, broadcast-second (invariant #8): callers must commit to SQLite before broadcasting; a lost broadcast is recoverable from the DB.
 
-### 2.2 Message catalog (walkthrough-relevant)
+### 2.2 Event catalog (walkthrough-relevant)
 
-| Type | Direction | Payload contract | Notes |
+All walkthrough lifecycle rides the single `walkthrough:event` envelope; the inner `data.event` (a `WalkthroughStreamEvent`) carries the variant below.
+
+| Inner event type | Direction | Payload contract | Notes |
 |---|---|---|---|
-| `walkthrough:complete` | server→client | signal | Emitted at end of generation pipeline. Triggers client `hydrateFromCache`. |
-| `walkthrough:error` | server→client | signal | Generation failed terminally. |
-| `walkthrough:edited` | server→client | delta wrapping `WalkthroughStreamEvent` | Chat-edit carve-out (invariant #7). Reuses the SSE reducer. |
-| `prs:updated` | server→client | full-state | PR list snapshot. |
-| `prs:sync-summary` | server→client | delta | Highlights changes since last sync. |
+| `lifecycle:complete` | server→client | signal | Emitted at end of generation pipeline (Phase D validated). Client flips the entry to complete and reconciles from cache. |
+| `lifecycle:error` | server→client | signal | Generation failed terminally. |
+| `lifecycle:edited` | server→client | delta — the mutating content event follows with a later `seq` | Chat-edit carve-out (invariant #7). Reuses the same reducer / per-walkthrough `seq` cursor. |
+| `prs:updated` (top-level envelope) | server→client | full-state | PR list snapshot. |
+| `prs:sync-summary` (top-level envelope) | server→client | delta | Highlights changes since last sync. |
 
-The non-walkthrough message types are catalogued in [§4 Tangential findings](#4-tangential-findings) where the audit notes affect them.
+The non-walkthrough envelopes are catalogued in [§4 Tangential findings](#4-tangential-findings) where the audit notes affect them.
 
 ### 2.3 Already correct
 
 | Invariant | Evidence |
 |---|---|
-| #7 chat-edit carve-out | `walkthrough:edited` broadcast emitted from chat-edit MCP handlers only; SSE generation path never broadcasts on this type. |
-| #8 commit-first | `walkthrough:complete` site at `WalkthroughJobs.ts` awaits `setStatus(..., 'complete', ...)` *then* broadcasts, with a 5s timeout-and-swallow on the broadcast. |
-| Reconnect reconciliation | Client `open` handler calls `prs.fetchPrs()` + `hydrateFromCache(selectedPrId)`. Invariant #8 honored. |
-| Strong typing | `WsServerMessage` union shared end-to-end; client `handleMessage(msg: WsServerMessage)` cases the union with no `any` widening. |
-| Auth | Bearer-token-via-query-param validated against `better-auth` in the WS route; unauth → 4001 close. |
+| #7 chat-edit carve-out | `lifecycle:edited` emitted from chat-edit MCP handlers only; the generation path never produces it. |
+| #8 commit-first | `lifecycle:complete` site at `WalkthroughJobs.ts` awaits `setStatus(..., 'complete', ...)` *then* broadcasts, with a 5s timeout-and-swallow on the broadcast. |
+| Reconnect reconciliation | Client `open` handler (on reconnect, `openCount > 1`) calls `reconcileOnReconnect()` → `fetchRepos/fetchPrs/fetchPinnedPrs` + `hydrateFromCache(selectedPrId)` + `loadSession`. Invariant #8 honored. |
+| Strong typing | `ServerEventMessage` union shared end-to-end; client `dispatch(msg: ServerEventMessage)` cases the union with an exhaustive `never` check and no `any` widening. |
+| Auth | Bearer-token-via-`?token=` query param validated against `better-auth` (`Identity`) in the SSE route; missing/invalid token → 401. An unresolvable account opens an observer-only (`"unresolved"`) connection that receives no scoped broadcasts. |
 
 ### 2.4 Findings
 
-#### W1 — No heartbeat / dead-connection detection
+#### W1 — No heartbeat / dead-connection detection — **RESOLVED**
 
 | Field | Value |
 |---|---|
 | **Severity** | Medium |
 | **Walkthrough impact** | High |
-| **Location** | `apps/server/src/routes/ws.ts`, `apps/web/src/lib/stores/ws.svelte.ts` |
-| **Failure mode** | Proxies, OS sleep, NAT timeouts, captive-portal limbo can sever a TCP connection without delivering a close frame to either end. The client sits on a dead socket missing every `walkthrough:complete`, `walkthrough:edited`, and `walkthrough:error` until the user takes an action that surfaces the broken state. This is the most likely root cause of "the UI didn't update" bug reports in a long-running session. |
-| **Remediation** | Server-driven ping every ~30s (Bun ws supports `ws.ping()`; alternatively a JSON `{type: 'hub:ping'}` envelope kept off the union to avoid client noise). Client treats >60s silence as dead and triggers reconnect. Cheapest, highest-leverage robustness change in the catalog. |
+| **Location** | `apps/server/src/routes/events.ts`, `apps/web/src/lib/stores/events.svelte.ts` |
+| **Failure mode** | Proxies, OS sleep, NAT timeouts, captive-portal limbo can sever a TCP connection without delivering a close frame to either end. The client sat on a dead stream missing every `lifecycle:complete`, `lifecycle:edited`, and `lifecycle:error` until the user took an action that surfaced the broken state. This was the most likely root cause of "the UI didn't update" bug reports in a long-running session. |
+| **Resolution** | The SSE route emits a named `heartbeat` event every 15s (`HEARTBEAT_INTERVAL_MS`). The client runs a watchdog (`startWatchdog`) that checks every 30s (`KEEPALIVE_CHECK_INTERVAL_MS`) and force-closes + reconnects after >60s silence (`DEAD_CONNECTION_THRESHOLD_MS`). |
 
-#### W2 — `pendingThreadSync` is a single string slot
-
-| Field | Value |
-|---|---|
-| **Severity** | Low |
-| **Walkthrough impact** | Low |
-| **Location** | `apps/web/src/lib/stores/ws.svelte.ts:229–237` |
-| **Failure mode** | If `requestThreadSync` is called for two different PRs while the WS is down, the second call overwrites the first; only the second PR is synced on reconnect. Not on the walkthrough hot path. |
-| **Remediation** | Promote `pendingThreadSync` to `Set<string>`; drain all entries on reconnect. |
-
-#### W3 — Malformed WS message silently swallowed
+#### W2 — `pendingThreadSync` single-slot overwrite — **OBSOLETE**
 
 | Field | Value |
 |---|---|
 | **Severity** | Low |
 | **Walkthrough impact** | Low |
-| **Location** | `apps/web/src/lib/stores/ws.svelte.ts:205–212` |
-| **Failure mode** | The `JSON.parse → handleMessage` chain wraps in `try { … } catch { }` with no log, counter, or hook. A server-side serializer bug or client-side schema drift produces no diagnostic trail. |
-| **Remediation** | At minimum `console.warn` with the raw payload (truncated). Eventually a counter that the observability layer can pick up. |
+| **Location** | (was) `ws.svelte.ts:229–237` |
+| **Status** | No longer applies. The per-PR pending-sync slot is gone: `requestThreadSync` (`sync.svelte.ts`) fires the `POST /sync-threads` REST call directly, and `reconcileOnReconnect` invokes it per selected PR. In-flight state is tracked as a `Set<string>` (`threadsSyncingByPr`), so there is no single slot to overwrite. |
 
-#### W4 — WS event listeners not explicitly removed on disconnect
-
-| Field | Value |
-|---|---|
-| **Severity** | Low |
-| **Walkthrough impact** | Low |
-| **Location** | `apps/web/src/lib/stores/ws.svelte.ts:164–201` |
-| **Failure mode** | `addEventListener` with no matching `removeEventListener` on disconnect. Browser GC reclaims listeners when the WS object is nulled, but the pattern is brittle: any code that retains a reference to the old socket retains the listener too. |
-| **Remediation** | Refactor `connect()` to capture listener references in closure-scoped variables; matching `disconnect()` calls `removeEventListener` for each. Cosmetic but cheap. |
-
-#### W5 — `WsServerMessage` union members lack signal/state/delta JSDoc
+#### W3 — Malformed message silently swallowed — **RESOLVED**
 
 | Field | Value |
 |---|---|
 | **Severity** | Low |
 | **Walkthrough impact** | Low |
-| **Location** | `packages/shared/src/ws.ts:13–94` |
-| **Failure mode** | Conventions §3 (WS envelopes) requires each event's payload contract (signal / full-state / delta) to be documented at the type definition. Today only `walkthrough:edited` carries a docstring. Future readers cannot tell from the type whether a `prs:updated` is a delta or a snapshot. |
+| **Location** | `apps/web/src/lib/stores/events.svelte.ts` (`message` handler) |
+| **Failure mode** | The `JSON.parse → dispatch` chain previously wrapped in `try { … } catch { }` with no log, counter, or hook, so a serializer bug or schema drift produced no diagnostic trail. |
+| **Resolution** | The handler now `console.warn`s `"[events] malformed message:"` on parse failure. A counter for the observability layer is still a future nicety, but the silent-swallow is gone. |
+
+#### W4 — Event listeners not explicitly removed on disconnect
+
+| Field | Value |
+|---|---|
+| **Severity** | Low |
+| **Walkthrough impact** | Low |
+| **Location** | `apps/web/src/lib/stores/events.svelte.ts` (`connect` / `disconnect`) |
+| **Failure mode** | `addEventListener` on the `EventSource` with no matching `removeEventListener`; `disconnect()` relies on `source.close()` + nulling the ref so GC reclaims the listeners. Works, but brittle: any code retaining a reference to the old source retains its listeners too. |
+| **Remediation** | Capture listener references in closure-scoped variables; have `disconnect()` call `removeEventListener` for each. Cosmetic but cheap. |
+
+#### W5 — `ServerEventMessage` union members lack signal/state/delta JSDoc
+
+| Field | Value |
+|---|---|
+| **Severity** | Low |
+| **Walkthrough impact** | Low |
+| **Location** | `packages/shared/src/events.ts` |
+| **Failure mode** | Conventions §3 (SSE event envelopes) requires each event's payload contract (signal / full-state / delta) to be documented at the type definition. Today only `WalkthroughEventEnvelope` carries a substantial docstring. Future readers cannot tell from the type whether a `prs:updated` is a delta or a snapshot. |
 | **Remediation** | Add a JSDoc comment per union member with one of the three labels and a one-line rationale. |
 
 ### 2.5 Deliberate non-findings
@@ -391,8 +392,8 @@ These came out of the broad-scope audit but do not touch the walkthrough generat
 
 | Id | Layer | Finding | Impact |
 |---|---|---|---|
-| T1 | WS | `thread:*` events broadcast to every connected client even though they are PR-scoped. Wastes a bit of bandwidth + frontend processing in a single-user app; would be a real problem in any multi-tenant future. | Low. |
-| T2 | WS | No sequence numbers on broadcasts. Subscribers cannot detect "missed N messages" — they can only reconcile DB state. Invariant #8 says this is fine, but it limits diagnostic tooling. | Low. |
+| T1 | SSE | `thread:*` events broadcast to every connected client in the account even though they are PR-scoped. Wastes a bit of bandwidth + frontend processing in a single-user app; would be a real problem in any multi-tenant future. | Low. |
+| T2 | SSE | No sequence numbers on the non-walkthrough envelopes (`prs:updated`, `thread:*`, …). Subscribers cannot detect "missed N messages" — they can only reconcile DB state. (Walkthrough envelopes do carry a per-walkthrough `seq`.) Invariant #8 says this is fine, but it limits diagnostic tooling. | Low. |
 | T3 | SSE | Phase-message strings (`"Reading files and understanding changes…"`) are shipped from the server inside the event. UI does not allow customization. Likely fine, but worth noting as a coupling. | Low. |
 | T4 | Façade | Crash-loop unhealthy state for opencode persists across server restarts (loaded from `kvCache`). Recovery requires either a manual reset or waiting for the rolling window to expire. UX friction, not correctness. | Low. |
 
@@ -401,7 +402,7 @@ These came out of the broad-scope audit but do not touch the walkthrough generat
 ## 5. Cross-references
 
 - [`backlog.md`](./backlog.md) — punch list with `Now / Next / Later / Not actionable / Done` sections.
-- [`../conventions.md`](../conventions.md) — code conventions (Effect, WS envelopes, stores, motion).
+- [`../conventions.md`](../conventions.md) — code conventions (Effect, SSE event envelopes, stores, motion).
 - [`../conventions-backlog.md`](../conventions-backlog.md) — convention violations with severity / effort / blast.
 - [`../../CLAUDE.md`](../../CLAUDE.md) — load-bearing project guide. Invariants referenced throughout this audit live in *Agent Subsystem Invariants*.
 - [PRD-03 (AI Guided Walkthrough)](../prds/03-ai-walkthrough.md) — see CLAUDE.md for current agent subsystem invariants.

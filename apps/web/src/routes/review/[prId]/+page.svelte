@@ -167,6 +167,7 @@ $effect(() => {
 
     clearReviewFiles();
     setIsLoadingFiles(true);
+    const activeFileHint = getActiveFilePath();
 
     (async () => {
       try {
@@ -175,7 +176,9 @@ $effect(() => {
         // matching GitHub's "Files changed" tab. There is no per-commit
         // selection — the dropdown is read-only.
         const [filesResult] = await Promise.all([
-          api.api.prs({ id: prId }).files.get(),
+          api.api.prs({ id: prId }).files.get({
+            query: activeFileHint === null ? {} : { active: activeFileHint },
+          }),
           loadSession(prId).catch((e) =>
             console.error("[review] Session load failed (non-blocking):", e),
           ),

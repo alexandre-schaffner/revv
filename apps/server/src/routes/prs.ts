@@ -1,5 +1,10 @@
 import type { DiffLineAnnotation } from "@pierre/diffs";
-import { type CommentThread, guessImageContentType } from "@revv/shared";
+import {
+  buildGitPatchHeader,
+  type CommentThread,
+  guessImageContentType,
+  PR_DIFF_RENDER_OPTIONS,
+} from "@revv/shared";
 import { and, eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
@@ -18,7 +23,12 @@ import { GitHubGateway } from "../services/GitHub";
 import { OpencodeSupervisor } from "../services/OpencodeSupervisor";
 import { PollScheduler } from "../services/PollScheduler";
 import { PrContextService } from "../services/PrContext";
-import { prerenderDiff, type SsrDiffOptions } from "../services/PrerenderCache";
+import {
+  prerenderDiff,
+  SSR_PATCH_BYTE_LIMIT,
+  SSR_PATCH_LINE_LIMIT,
+  type SsrDiffOptions,
+} from "../services/PrerenderCache";
 import { PullRequestService } from "../services/PullRequest";
 import { RepoCloneService } from "../services/RepoClone";
 import { RepositoryService } from "../services/Repository";
@@ -35,37 +45,23 @@ import { handleAppError, withAccount } from "./middleware";
 // and DOM-producing options stay client-side; only the layout-affecting
 // fields are mirrored here.
 
-const PR_DIFF_SSR_OPTIONS: SsrDiffOptions = {
-  diffStyle: "unified",
-  theme: { dark: "pierre-dark", light: "pierre-light" },
-  overflow: "scroll",
-  expansionLineCount: 20,
-  collapsedContextThreshold: 3,
-  diffIndicators: "bars",
-  expandUnchanged: true,
-  lineHoverHighlight: "both",
-  hunkSeparators: "line-info",
-};
+const PR_DIFF_SSR_OPTIONS: SsrDiffOptions = PR_DIFF_RENDER_OPTIONS;
 
 /** Build the full git patch the SSR call expects from a cached PR file row. */
 function buildPrFilePatch(file: CachedDiffFile): string {
-  const header = [
-    `diff --git a/${file.oldPath ?? file.path} b/${file.path}`,
-    ...(file.status === "added" ? ["new file mode 100644"] : []),
-    ...(file.status === "removed" ? ["deleted file mode 100644"] : []),
-    `--- ${file.status === "added" ? "/dev/null" : `a/${file.oldPath ?? file.path}`}`,
-    `+++ ${file.status === "removed" ? "/dev/null" : `b/${file.path}`}`,
-  ].join("\n");
+  const header = buildGitPatchHeader({
+    path: file.path,
+    oldPath: file.oldPath,
+    isNew: file.status === "added",
+    isDeleted: file.status === "removed",
+  });
   return file.patch !== null ? `${header}\n${file.patch}` : header;
 }
 
 /**
  * SSR a single PR file, returning the prerendered HTML or undefined if the
- * file has no patch (binary) or rendering failed. No size cap — the user's
- * "no wait on file switch" UX hinges on every file in the PR being
- * prerendered. First-visit cost is paid once per PR head sha (LRU-cached);
- * subsequent /files calls hit the cache. Failures only log — the client
- * always has a working render-path fallback.
+ * file has no patch (binary), exceeds the SSR guardrails, or rendering
+ * failed. The client always has a working render-path fallback.
  */
 function annotationsForFile(
   filePath: string,
@@ -93,6 +89,13 @@ async function prerenderPrFile(
     logError("pr-files-prerender", `prerender failed for ${file.path}:`, err);
     return undefined;
   }
+}
+
+function selectPrerenderPath(files: CachedDiffFile[], activePath?: string): string | null {
+  if (activePath !== undefined && files.some((file) => file.path === activePath)) {
+    return activePath;
+  }
+  return files[0]?.path ?? null;
 }
 
 // ── Routes ───────────────────────────────────────────────────────────────────
@@ -201,47 +204,64 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
     },
     { query: t.Object({ repo: t.String() }) },
   )
-  .get("/:id/files", async (ctx) => {
-    try {
-      const { files, threads } = await AppRuntime.runPromise(
-        Effect.gen(function* () {
-          const prService = yield* PullRequestService;
-          const repoService = yield* RepositoryService;
-          const reviewService = yield* ReviewService;
-          const { accountId, accessToken: token } = ctx.account;
+  .get(
+    "/:id/files",
+    async (ctx) => {
+      try {
+        const { files, threads } = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const prService = yield* PullRequestService;
+            const repoService = yield* RepositoryService;
+            const reviewService = yield* ReviewService;
+            const { accountId, accessToken: token } = ctx.account;
 
-          const pr = yield* prService.getPr(ctx.params.id, accountId);
-          const repo = yield* repoService.getRepoById(pr.repositoryId, accountId);
+            const pr = yield* prService.getPr(ctx.params.id, accountId);
+            const repo = yield* repoService.getRepoById(pr.repositoryId, accountId);
 
-          // Always the full PR diff (merge-base 3-dot, matching GitHub's
-          // "Files changed" tab). No per-commit selection anymore — the
-          // commits dropdown is read-only.
-          const files = yield* getOrFetchDiffFiles(pr.id, repo.fullName, pr.externalId, token);
-          const session = yield* reviewService.getActiveSession(pr.id);
-          const threads = session ? yield* reviewService.getThreadsForSession(session.id) : [];
-          return { files, threads };
-        }),
-      );
+            // Always the full PR diff (merge-base 3-dot, matching GitHub's
+            // "Files changed" tab). No per-commit selection anymore — the
+            // commits dropdown is read-only.
+            const files = yield* getOrFetchDiffFiles(pr.id, repo.fullName, pr.externalId, token);
+            const session = yield* reviewService.getActiveSession(pr.id);
+            const threads = session ? yield* reviewService.getThreadsForSession(session.id) : [];
+            return { files, threads };
+          }),
+        );
 
-      // SSR each file in parallel — Bun's JS thread interleaves the awaits,
-      // and Shiki's shared highlighter is already warm (preloaded at boot).
-      // Cache hits skip work entirely; misses are bounded by SSR_PATCH_BYTE_LIMIT.
-      return await Promise.all(
-        files.map(async (f) => ({
-          path: f.path,
-          oldPath: f.oldPath,
-          patch: f.patch,
-          additions: f.additions,
-          deletions: f.deletions,
-          isNew: f.status === "added",
-          isDeleted: f.status === "removed",
-          prerenderedHtml: await prerenderPrFile(f, threads),
-        })),
-      );
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
+        // SSR only the first visible file. Shiki tokenization is synchronous CPU
+        // work, so rendering every file before returning makes cold /files calls
+        // scale with total PR size. Oversized patches skip SSR entirely and use
+        // the client renderer instead.
+        const prerenderPath = selectPrerenderPath(files, ctx.query.active);
+        return await Promise.all(
+          files.map(async (f) => {
+            const prerenderedHtml =
+              f.path === prerenderPath ? await prerenderPrFile(f, threads) : undefined;
+            return {
+              path: f.path,
+              oldPath: f.oldPath,
+              patch: f.patch,
+              additions: f.additions,
+              deletions: f.deletions,
+              isNew: f.status === "added",
+              isDeleted: f.status === "removed",
+              ...(prerenderedHtml ? { prerenderedHtml } : {}),
+            };
+          }),
+        );
+      } catch (e) {
+        return handleAppError(e, ctx);
+      }
+    },
+    {
+      query: t.Object({
+        active: t.Optional(t.String()),
+      }),
+      detail: {
+        description: `Returns PR files and server-renders at most one diff, capped at ${SSR_PATCH_BYTE_LIMIT} bytes / ${SSR_PATCH_LINE_LIMIT} lines.`,
+      },
+    },
+  )
   .get(
     "/:id/repo-file",
     async (ctx) => {

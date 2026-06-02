@@ -1,6 +1,8 @@
+import { Buffer } from "node:buffer";
 import type { DiffLineAnnotation, FileDiffOptions } from "@pierre/diffs";
 import { preloadHighlighter } from "@pierre/diffs";
 import { preloadPatchDiff, preloadPatchFile } from "@pierre/diffs/ssr";
+import { PIERRE_DIFF_PRELOAD_LANGS, PIERRE_THEMES } from "@revv/shared";
 
 /**
  * Server-side SSR cache for `@pierre/diffs`. Calls `preloadPatchFile` /
@@ -14,28 +16,26 @@ import { preloadPatchDiff, preloadPatchFile } from "@pierre/diffs/ssr";
 
 // ── Defaults ────────────────────────────────────────────────────────────────
 
-/**
- * Same languages the client worker pool preloads
- * (apps/web/src/lib/utils/worker-pool.ts:14-27). Keeping the lists in sync
- * means the SSR HTML lines up byte-for-byte with what the client would
- * produce on a cold render.
- */
-const PRELOAD_LANGS = [
-  "typescript",
-  "javascript",
-  "svelte",
-  "css",
-  "json",
-  "python",
-  "go",
-  "rust",
-  "html",
-  "shellscript",
-  "yaml",
-  "sql",
-] as const;
+export const SSR_PATCH_BYTE_LIMIT = 256 * 1024;
+export const SSR_PATCH_LINE_LIMIT = 6_000;
 
-const PRELOAD_THEMES = ["pierre-dark", "pierre-light"] as const;
+function lineCountWithinLimit(content: string, limit: number): boolean {
+  let lines = content.length === 0 ? 0 : 1;
+  for (let i = 0; i < content.length; i++) {
+    if (content.charCodeAt(i) === 10) {
+      lines++;
+      if (lines > limit) return false;
+    }
+  }
+  return true;
+}
+
+function canPrerenderPatch(patch: string): boolean {
+  return (
+    Buffer.byteLength(patch, "utf8") <= SSR_PATCH_BYTE_LIMIT &&
+    lineCountWithinLimit(patch, SSR_PATCH_LINE_LIMIT)
+  );
+}
 
 // ── Highlighter priming ─────────────────────────────────────────────────────
 
@@ -50,8 +50,8 @@ let highlighterReady: Promise<void> | null = null;
 export function ensureHighlighter(): Promise<void> {
   if (highlighterReady === null) {
     highlighterReady = preloadHighlighter({
-      themes: [...PRELOAD_THEMES],
-      langs: [...PRELOAD_LANGS],
+      themes: [...PIERRE_THEMES],
+      langs: [...PIERRE_DIFF_PRELOAD_LANGS],
     });
   }
   return highlighterReady;
@@ -127,6 +127,8 @@ export async function prerenderDiff(
   options: SsrDiffOptions,
   annotations?: DiffLineAnnotation<unknown>[],
 ): Promise<string | null> {
+  if (!canPrerenderPatch(patch)) return null;
+
   await ensureHighlighter();
 
   const optionsKey = stableOptionsKey(options);

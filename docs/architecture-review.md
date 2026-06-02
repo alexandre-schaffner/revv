@@ -22,16 +22,16 @@
 
 ```
 apps/web        SvelteKit frontend (Tauri webview + localhost:5173 in dev)
-apps/server     Bun/Elysia HTTP + WebSocket server (port 45678)
+apps/server     Bun/Elysia HTTP + SSE server (port 45678)
 apps/desktop    Tauri v2 shell (minimal Rust: window, tray, deep-link, updater)
-packages/shared Cross-app types, WS schemas, constants
+packages/shared Cross-app types, SSE event schemas, constants
 ```
 
 ### Server Layer
 
 The server uses the [Effect](https://effect.website/) library pervasively. Every service is a `Context.Tag` + `Layer`, composed through `Layer.provide` / `Layer.mergeAll`. Dependency injection is compile-time typed via the `Effect<A, E, R>` `R` parameter; errors are typed via the `E` channel.
 
-**Key services:** `WalkthroughJobs`, `PollScheduler`, `WebSocketHub`, `SettingsService`, `OpencodeSupervisor`, `ChatSessionService`, `RepoCloneService`, `SyncService`, `AiService`.
+**Key services:** `WalkthroughJobs`, `PollScheduler`, `Broadcaster`, `SettingsService`, `OpencodeSupervisor`, `ChatSessionService`, `RepoCloneService`, `SyncService`, `AiService`.
 
 **Database:** Drizzle ORM on SQLite. 25 tables. All timestamps stored as ISO 8601 text. JSON arrays/objects stored as text columns. No migration runner — schema applied directly on boot.
 
@@ -72,8 +72,8 @@ Both paths share the same MCP tool handler implementations, satisfying the agent
 
 **Stores (Svelte 5 runes):** `$state` / `$derived` / `$effect` in `.svelte.ts` files. Named getter/setter functions, not subscribables.
 
-- `walkthrough.svelte.ts` — SSE streaming, hydration from REST, WS mutation application, all walkthrough display state (~1545 lines)
-- `ws.svelte.ts` — WebSocket connection with exponential backoff reconnect; exhaustive switch on `WsServerMessage.type`
+- `walkthrough.svelte.ts` — applies `walkthrough:event` envelopes from the global SSE bus, hydration from REST, all walkthrough display state (~1545 lines)
+- `events.svelte.ts` — global SSE (`EventSource`) connection to `GET /api/events` with exponential backoff reconnect; exhaustive switch on `ServerEventMessage.type`
 - `prs.svelte.ts` — PR list with fuzzy search, grouping, and derived views
 - `review.svelte.ts` — diff files, comment threads, per-PR scroll positions
 
@@ -93,7 +93,7 @@ Applying schema directly with `createTableIfNotExists` works during development 
 
 ### 2. `walkthrough.svelte.ts` is a Maintenance Liability
 
-At ~1545 lines, this file conflates transport concerns (SSE streaming, WS mutation application) with domain state (phases, blocks, issues, ratings) and hydration logic. As the chat-edit path and generation path diverge in their invalidation needs, this file will become increasingly difficult to reason about. It should be split — at minimum, separating streaming/transport from display state.
+At ~1545 lines, this file conflates transport concerns (SSE event dispatch and mutation application) with domain state (phases, blocks, issues, ratings) and hydration logic. As the chat-edit path and generation path diverge in their invalidation needs, this file will become increasingly difficult to reason about. It should be split — at minimum, separating streaming/transport from display state.
 
 ### 3. Single-User Assumption Baked In
 
@@ -103,9 +103,9 @@ The `settings.json` singleton, `id: "default"` user, and the lack of user scopin
 
 The 60-second rolling crash-loop window is tracked in memory. A server restart resets the counter, so a persistently broken opencode daemon gets 3 free retry attempts on every server restart rather than hitting a terminal error state. This can cause repeated startup noise without a clean failure mode.
 
-### 5. WebSocket Hub Has No Message Queue
+### 5. SSE Broadcaster Has No Message Queue
 
-The design correctly requires clients to reconcile from the DB on reconnect, and the WS store does this. But it's an implicit contract that every future WS consumer must also uphold. A missed `walkthrough:complete` during a brief disconnect requires a round-trip re-fetch to recover. This adds cognitive load on every new feature that introduces WS events.
+The design correctly requires clients to reconcile from the DB on reconnect, and the SSE store (`events.svelte.ts`) does this — the server does not replay missed events. But it's an implicit contract that every future SSE consumer must also uphold. A missed `lifecycle:complete` during a brief disconnect requires a round-trip re-fetch to recover. This adds cognitive load on every new feature that introduces SSE events.
 
 ---
 

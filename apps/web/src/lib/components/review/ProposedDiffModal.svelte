@@ -7,6 +7,7 @@ import {
   parseDiffFromFile,
 } from "@pierre/diffs";
 import { FileTree, type GitStatusEntry } from "@pierre/trees";
+import { PIERRE_THEME } from "@revv/shared";
 import MessageSquare from "phosphor-svelte/lib/Chat";
 import GitMerge from "phosphor-svelte/lib/GitMerge";
 import Send from "phosphor-svelte/lib/PaperPlaneRight";
@@ -242,7 +243,7 @@ function buildOptions(
 ): FileDiffOptions<CommentMeta> {
   return {
     diffStyle,
-    theme: { dark: "pierre-dark", light: "pierre-light" },
+    theme: PIERRE_THEME,
     // Collapse unchanged regions by default so line-info separators have
     // something to expand. With `true`, Pierre flattens the whole file
     // inline and no separator clicks would be meaningful.

@@ -129,7 +129,10 @@ export async function pullLatestCommit(prId: string): Promise<void> {
     setIsLoadingFiles(true);
     setFilesError(null);
 
-    const { data, error } = await api.api.prs({ id: prId }).files.get();
+    const activePath = getActiveFilePath();
+    const { data, error } = await api.api.prs({ id: prId }).files.get({
+      query: activePath === null ? {} : { active: activePath },
+    });
     if (error || !Array.isArray(data)) {
       throw new Error("Failed to refetch files");
     }
@@ -149,7 +152,6 @@ export async function pullLatestCommit(prId: string): Promise<void> {
     // If the user has an active file that's gone in the new diff, fall back
     // to the first file. If the active file still exists, leave it alone so
     // the user's scroll position in the diff tab isn't reset.
-    const activePath = getActiveFilePath();
     const stillExists = activePath !== null && mapped.some((f) => f.path === activePath);
     if (!stillExists && mapped.length > 0) {
       // biome-ignore lint/style/noNonNullAssertion: length > 0 guarantees [0] exists

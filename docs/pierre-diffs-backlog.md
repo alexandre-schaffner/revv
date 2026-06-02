@@ -1,56 +1,17 @@
 # @pierre/diffs Backlog
 
 Opportunities to further leverage the `@pierre/diffs` ecosystem beyond what's already in use.
-Revv already uses `FileDiff`, `File`, `parsePatchFiles`, SSR preloading, `@pierre/trees`,
-worker pool, token hover, and line annotations. These are the remaining improvement paths.
+Revv already uses `FileDiff`, `VirtualizedFileDiff`, `File`/`VirtualizedFile`, `Virtualizer`,
+`parsePatchFiles`, SSR preloading, `@pierre/trees`, worker pool, token hover, and line
+annotations. These are the remaining improvement paths.
 
 ## Summary
 
 | Area | Open | Effort |
 |---|---|---|
-| Virtualization | 1 | M |
 | Multi-file view | 1 | M |
-| PatchDiff simplification | 1 | S |
 | Token hover UI | 1 | M |
-| Truncate for paths | 1 | S |
-| **Total** | **5** | |
-
----
-
-## Virtualization — `VirtualizedFileDiff`
-
-**Priority:** P1 · **Effort:** M
-
-**What:** Replace `FileDiff` with `VirtualizedFileDiff` (+ `Virtualizer`) in
-`DiffViewerInner.svelte` and `FileViewerInner.svelte` so that only the visible
-viewport of lines is rendered at any time.
-
-**Why:** Large diffs (thousands of lines) currently render all DOM nodes at once,
-causing jank on scroll and high memory usage. Virtualization renders only the
-visible rows plus an overscan buffer.
-
-**Where to change:**
-- `apps/web/src/lib/components/review/DiffViewerInner.svelte` — swap
-  `new FileDiff()` → `new VirtualizedFileDiff()`, wire up a `Virtualizer`
-  instance, attach scroll container ref
-- `apps/web/src/lib/components/review/FileViewerInner.svelte` — same pattern
-- `apps/web/src/lib/components/review/ReviewLayout.svelte` — ensure the
-  diff scroll container has a fixed height (required by virtualizer)
-
-**Key API:**
-```ts
-import { VirtualizedFileDiff, Virtualizer } from '@pierre/diffs';
-const virtualizer = new Virtualizer({ overscan: 5, estimatedRowHeight: 20 });
-const diff = new VirtualizedFileDiff(options, workerManager, virtualizer);
-diff.render({ oldFile, newFile, containerWrapper });
-virtualizer.scrollToLine(n);
-```
-
-**Caveats:**
-- Virtualizer requires a fixed-height container — verify `ReviewLayout` provides one
-- `setSelectedLines` and `unsafeCSS` APIs should still work (same instance interface)
-- SSR hydration path needs testing — virtualizer may not support hydrate; may need
-  to fall back to `render()` for SSR'd content
+| **Total** | **2** | |
 
 ---
 
@@ -79,42 +40,10 @@ import { MultiFileDiff } from '@pierre/diffs/react';
 **Design decisions:**
 - File tree sidebar should remain visible for navigation
 - Annotations/threads need to work across all files simultaneously
-- Virtualization is essential here (many files × many lines)
+- Virtualization is essential here (many files × many lines) — reuse the
+  `createPierreVirtualizer` helper already wired into `DiffViewerInner.svelte`
 - Should this use `MultiFileDiff` from `@pierre/diffs/react` (requires React bridge)
   or build a vanilla wrapper around iterating `FileDiff` instances?
-
----
-
-## Simplify with `PatchDiff` Component
-
-**Priority:** P2 · **Effort:** S
-
-**What:** Replace the manual git patch header construction + `parsePatchFiles()`
-pattern in `DiffViewerInner.svelte` with Pierre's `PatchDiff` component, which
-accepts a unified diff patch string directly.
-
-**Why:** `DiffViewerInner.svelte:459-470` manually constructs a git patch header
-string and calls `parsePatchFiles()` to get `FileDiffMetadata`. `PatchDiff` is
-designed to accept a raw patch string and handle parsing internally, reducing
-boilerplate and potential edge-case bugs in header construction.
-
-**Where to change:**
-- `apps/web/src/lib/components/review/DiffViewerInner.svelte` — replace
-  `parsePatchFiles(fullPatch)` → `PatchDiff` component or `preloadPatchDiff`
-
-**Key API:**
-```ts
-import { PatchDiff } from '@pierre/diffs/react';
-// Or vanilla: preloadPatchDiff(patchString, options) → spread into PatchDiff
-```
-
-**Caveats:**
-- `PatchDiff` is a React component; for Svelte we'd use the vanilla
-  `preloadPatchDiff` SSR utility or the `ParsedPatch` type directly
-- Need to verify that custom `renderHeaderPrefix` / `renderHeaderMetadata`
-  callbacks still work with `PatchDiff`
-- The view-mode pill toggle (unified/split) is currently rendered via
-  `renderHeaderMetadata` — must still work
 
 ---
 
@@ -124,11 +53,11 @@ import { PatchDiff } from '@pierre/diffs/react';
 
 **What:** Build a floating tooltip that appears on token hover, powered by the
 existing `onTokenEnter` / `onTokenLeave` callbacks already wired in
-`DiffViewerInner.svelte:460-470`.
+`DiffViewerInner.svelte` and `FileViewerInner.svelte`.
 
 **Why:** The token hover plumbing already exists — `onTokenHover` bubbles
-`TokenHoverInfo` up to `DiffViewer.svelte` — but no UI consumes it. A tooltip
-could show:
+`TokenHoverInfo` up to `DiffViewer.svelte` / `FileViewer.svelte` — but no UI
+consumes it (no parent passes a handler). A tooltip could show:
 - Syntax token type (keyword, string, comment, etc.)
 - AI-generated context (type inference, definition lookup)
 - Quick actions (copy token, search in codebase)
@@ -156,35 +85,26 @@ interface TokenHoverInfo {
 
 ---
 
-## Path Truncation with `@pierre/truncate`
+## Resolved / withdrawn
 
-**Priority:** P3 · **Effort:** S
+Closed by the "Improve Pierre diff rendering" work (commit `f81d07d`) and the
+warm-palette wiring (`#108`):
 
-**What:** Use `@pierre/truncate` components (`MiddleTruncate`, `Fruncate`) for
-long file paths in the sidebar file tree and diff viewer headers.
-
-**Why:** Deeply nested file paths currently overflow or wrap awkwardly in the
-sidebar and header. Pierre's `@pierre/truncate` provides intelligent truncation
-strategies (preserve extension, preserve leaf path, fade variant) that are
-cleaner than CSS `text-overflow: ellipsis`.
-
-**Where to change:**
-- `apps/web/src/lib/components/sidebar/PierreFileTree.svelte` — use `Fruncate`
-  for file path labels in the tree
-- `apps/web/src/lib/components/review/DiffViewerInner.svelte` — use
-  `MiddleTruncate` for the file path in the diff header
-- `apps/web/src/lib/components/review/ReviewLayout.svelte` — truncate the
-  active file name in the top bar
-
-**Key API:**
-```tsx
-import { MiddleTruncate, Fruncate } from '@pierre/truncate/react';
-// For Svelte: use the underlying OverflowText class from '@pierre/truncate'
-// or wrap the React components
-```
-
-**Caveats:**
-- `@pierre/truncate` is React-only; for Svelte we'd need to use the vanilla
-  `OverflowText` class or implement equivalent CSS truncation
-- May not be worth adding a new dependency if CSS `text-overflow` suffices
-- Check if `@pierre/truncate` is already in `package.json` (it is not)
+- **Virtualization (`VirtualizedFileDiff`)** — *Shipped.* Both
+  `DiffViewerInner.svelte` and `FileViewerInner.svelte` now construct a
+  `VirtualizedFileDiff` / `VirtualizedFile` via the shared
+  `createPierreVirtualizer` adapter (`pierre-diff-adapter.ts`), falling back to
+  the non-virtualized class only when there's no scroll root. The sidebar file
+  tree virtualizes natively through `@pierre/trees` `FileTree`
+  (`data-file-tree-virtualized-scroll`).
+- **Simplify with `PatchDiff`** — *Withdrawn.* The manual `buildGitPatchHeader`
+  + `parsePatchFiles` path is now a deliberate choice: it preserves GitHub's
+  exact additions/deletions counts (so header stats match the file tree without
+  overrides) and supports the SSR-hydrate path plus the custom
+  `renderHeaderPrefix` / `renderHeaderMetadata` header slots and the
+  unified/split view-mode pill — none of which the React-only `PatchDiff`
+  component accommodates.
+- **Path truncation with `@pierre/truncate`** — *Withdrawn.* `PierreFileTree.svelte`
+  deliberately *disables* Pierre's built-in `MiddleTruncate` in favor of showing
+  the full path with horizontal scroll (and a synced per-row min-width that keeps
+  the sticky LOC badges aligned). No new dependency needed.

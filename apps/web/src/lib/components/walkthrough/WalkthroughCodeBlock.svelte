@@ -1,6 +1,6 @@
 <script lang="ts">
 import { DIFFS_TAG_NAME, type FileOptions, File as PierreFile } from "@pierre/diffs";
-import type { CodeBlock } from "@revv/shared";
+import { type CodeBlock, PIERRE_THEME } from "@revv/shared";
 import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
 import { jumpToDiffLine } from "$lib/stores/review.svelte";
 import { renderMarkdown } from "$lib/utils/markdown";
@@ -19,7 +19,7 @@ let instance: PierreFile<never> | null = null;
 
 function mountCodeBlock(el: HTMLDivElement) {
   const options: FileOptions<never> = {
-    theme: { dark: "pierre-dark", light: "pierre-light" },
+    theme: PIERRE_THEME,
     overflow: "scroll",
     // Suppress Pierre's built-in file header — we render our own clickable
     // header above so the user can jump to this file in the Diff tab.

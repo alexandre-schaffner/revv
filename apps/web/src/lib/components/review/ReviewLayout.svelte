@@ -480,41 +480,46 @@ const panel = $derived(getActivePanel());
 		bind:this={diffScrollEl}
 		onscroll={handleDiffScroll}
 	>
-		{#if activeFile}
-			<div class="file-title-section" bind:this={fileTitleSectionEl}>
-				<h1 class="file-title">{activeFileName}</h1>
-			</div>
-			<FileIssues filePath={activeFile.path} />
-			{#if activeFileIsImage}
-				<ImageDiffViewer {prId} file={activeFile} />
+		{#if diffScrollEl}
+			{#if activeFile}
+				<div class="file-title-section" bind:this={fileTitleSectionEl}>
+					<h1 class="file-title">{activeFileName}</h1>
+				</div>
+				<FileIssues filePath={activeFile.path} />
+				{#if activeFileIsImage}
+					<ImageDiffViewer {prId} file={activeFile} />
+				{:else}
+					<DiffViewer
+						file={activeFile}
+						onModeChange={(m) => setDiffMode(m)}
+						commentTrigger={pendingCommentTrigger}
+						scrollRoot={diffScrollEl}
+					/>
+				{/if}
+			{:else if showFileViewer && activeFilePath}
+				<!-- Title rendered by the layout (same as the diff path) so the
+				     file viewer fills the pane edge-to-edge — no inner padding,
+				     full-width gutter, identical font / sizing to the diff. -->
+				<div class="file-title-section" bind:this={fileTitleSectionEl}>
+					<h1 class="file-title">{activeFileName}</h1>
+				</div>
+				<FileViewer
+					path={activeFilePath}
+					content={repoFile.status === "ok" && repoFile.data.status === "ready" ? repoFile.data.content : ""}
+					isBinary={repoFile.status === "ok" && repoFile.data.status === "binary"}
+					size={repoFile.status === "ok" ? ("size" in repoFile.data ? repoFile.data.size : 0) : 0}
+					status={repoFile.status === "ok" ? repoFile.data.status : repoFile.status}
+					errorMessage={repoFile.status === "error" ? repoFile.error : null}
+					scrollRoot={diffScrollEl}
+				/>
 			{:else}
 				<DiffViewer
-					file={activeFile}
+					file={null}
 					onModeChange={(m) => setDiffMode(m)}
 					commentTrigger={pendingCommentTrigger}
+					scrollRoot={diffScrollEl}
 				/>
 			{/if}
-		{:else if showFileViewer && activeFilePath}
-			<!-- Title rendered by the layout (same as the diff path) so the
-			     file viewer fills the pane edge-to-edge — no inner padding,
-			     full-width gutter, identical font / sizing to the diff. -->
-			<div class="file-title-section" bind:this={fileTitleSectionEl}>
-				<h1 class="file-title">{activeFileName}</h1>
-			</div>
-			<FileViewer
-				path={activeFilePath}
-				content={repoFile.status === "ok" && repoFile.data.status === "ready" ? repoFile.data.content : ""}
-				isBinary={repoFile.status === "ok" && repoFile.data.status === "binary"}
-				size={repoFile.status === "ok" ? ("size" in repoFile.data ? repoFile.data.size : 0) : 0}
-				status={repoFile.status === "ok" ? repoFile.data.status : repoFile.status}
-				errorMessage={repoFile.status === "error" ? repoFile.error : null}
-			/>
-		{:else}
-			<DiffViewer
-				file={null}
-				onModeChange={(m) => setDiffMode(m)}
-				commentTrigger={pendingCommentTrigger}
-			/>
 		{/if}
 	</div>
 
@@ -540,4 +545,3 @@ const panel = $derived(getActivePanel());
 		word-break: break-all;
 	}
 </style>
-

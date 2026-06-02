@@ -177,15 +177,18 @@ Not in original PRD-06. Added because the primary deployment target is GHE; publ
 
 ## 6. Performance optimization
 
-### Status: **MOSTLY TODO**
+### Status: **PARTIAL** — virtualized diff/file rendering shipped; lazy loading, LRU, and async-highlight polish remain
 
-### Virtualized diff scrolling
+### Virtualized diff scrolling — **SHIPPED**
 
-Diffs with 500+ lines need virtualized rendering. `PierreFileTree.svelte` has a `data-file-tree-virtualized-scroll` attribute, but no virtualization library is wired in.
-
-- Only render visible lines + a ±50-line buffer
-- Gutter annotations and comment threads must work within the virtualized list
-- Target: 60fps scroll on a 2000-line unified diff
+`DiffViewerInner.svelte` and `FileViewerInner.svelte` now render through
+`VirtualizedFileDiff` / `VirtualizedFile`, wired via the shared
+`createPierreVirtualizer` adapter (`apps/web/src/lib/components/review/pierre-diff-adapter.ts`).
+Only the visible viewport (plus Pierre's overscan buffer) is in the DOM; gutter
+annotations and comment threads attach within the virtualized list. The sidebar
+file tree virtualizes natively through `@pierre/trees` `FileTree`
+(`data-file-tree-virtualized-scroll`). Remaining diff-perf opportunities are
+tracked in [`../pierre-diffs-backlog.md`](../pierre-diffs-backlog.md).
 
 ### Lazy file loading
 
