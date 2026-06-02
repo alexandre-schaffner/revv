@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.7.0](https://github.com/alexandre-schaffner/revv/compare/v0.6.0...v0.7.0) (2026-06-01)
+
+
+### Features
+
+* add Codex as a third AI agent provider ([#105](https://github.com/alexandre-schaffner/revv/issues/105)) ([56f1e08](https://github.com/alexandre-schaffner/revv/commit/56f1e089fb87f231680237834e53ef98d15dd196))
+
+
+### Bug Fixes
+
+* **web:** wire Revv warm diff palette into Pierre shadow DOM ([#108](https://github.com/alexandre-schaffner/revv/issues/108)) ([787fd8b](https://github.com/alexandre-schaffner/revv/commit/787fd8bc67916d1d6bdf4235098687cd1c6d6cbc))
+
 ## [0.6.0](https://github.com/alexandre-schaffner/revv/compare/v0.5.0...v0.6.0) (2026-06-01)
 
 
