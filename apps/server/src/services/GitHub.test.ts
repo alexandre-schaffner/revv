@@ -115,13 +115,13 @@ describe("GitHubGateway rate-limit handling", () => {
 });
 
 describe("GitHubGateway conditional pagination", () => {
-  it("ETag-caches review comments and ignores the since parameter", async () => {
+  it("keeps review comments incremental and uncached", async () => {
     const db = createDb(":memory:");
     const calls = stubFetch((_call, index) => {
       if (index === 0) {
         return responseJson([rawComment(1)], { headers: { ETag: '"comments-v1"' } });
       }
-      return new Response(null, { status: 304 });
+      return responseJson([rawComment(2)], { headers: { ETag: '"comments-v2"' } });
     });
 
     const comments = await Effect.runPromise(
@@ -133,13 +133,15 @@ describe("GitHubGateway conditional pagination", () => {
     );
 
     expect(comments).toHaveLength(1);
-    expect(comments[0]?.id).toBe(1);
+    expect(comments[0]?.id).toBe(2);
     expect(calls).toHaveLength(2);
     expect(calls[0]?.url).toBe(
-      "https://api.github.com/repos/octo/repo/pulls/1/comments?per_page=100",
+      "https://api.github.com/repos/octo/repo/pulls/1/comments?per_page=100&since=2026-01-01T00%3A00%3A00Z",
     );
-    expect(calls[0]?.url.includes("since=")).toBe(false);
-    expect(calls[1]?.headers.get("If-None-Match")).toBe('"comments-v1"');
+    expect(calls[1]?.url).toBe(
+      "https://api.github.com/repos/octo/repo/pulls/1/comments?per_page=100&since=2026-01-02T00%3A00%3A00Z",
+    );
+    expect(calls[1]?.headers.get("If-None-Match")).toBeNull();
   });
 
   it("replays cached open PRs on 304 only when the cached set fit on one page", async () => {
@@ -172,6 +174,25 @@ describe("GitHubGateway conditional pagination", () => {
     expect(prs[0]?.externalId).toBe(101);
     expect(calls).toHaveLength(3);
     expect(calls[1]?.headers.get("If-None-Match")).toBe('"prs-v1"');
+    expect(calls[2]?.headers.get("If-None-Match")).toBeNull();
+  });
+
+  it("separates ETag cache entries by API base and token", async () => {
+    const db = createDb(":memory:");
+    const calls = stubFetch(() => responseJson([rawPr(1)], { headers: { ETag: '"prs-v1"' } }));
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const github = yield* GitHubGateway;
+        yield* github.prs.listOpen("octo/repo", "repo-1", "token-a", "https://api.github.test");
+        yield* github.prs.listOpen("octo/repo", "repo-1", "token-a", "https://api.github.example");
+        yield* github.prs.listOpen("octo/repo", "repo-1", "token-b", "https://api.github.test");
+      }).pipe(Effect.provide(gatewayLayer(db))),
+    );
+
+    expect(calls).toHaveLength(3);
+    expect(calls[0]?.headers.get("If-None-Match")).toBeNull();
+    expect(calls[1]?.headers.get("If-None-Match")).toBeNull();
     expect(calls[2]?.headers.get("If-None-Match")).toBeNull();
   });
 });

@@ -6,7 +6,6 @@ import { SyncError } from "../domain/errors";
 import { Broadcaster } from "./Broadcaster";
 import { DbService } from "./Db";
 import { type GhReviewComment, GitHubGateway } from "./GitHub";
-import type { GitHubEtagCache } from "./GitHubEtagCache";
 import { PrContextService } from "./PrContext";
 import { PullRequestService } from "./PullRequest";
 import { RemoteUserService } from "./RemoteUser";
@@ -42,10 +41,10 @@ export class SyncService extends Context.Tag("SyncService")<
     ) => Effect.Effect<void, SyncError, DbService | SettingsService>;
     readonly pullComments: (
       prId: string,
-    ) => Effect.Effect<PullResult, SyncError, DbService | GitHubEtagCache | SettingsService>;
+    ) => Effect.Effect<PullResult, SyncError, DbService | SettingsService>;
     readonly syncThreads: (
       prId: string,
-    ) => Effect.Effect<SyncResult, SyncError, DbService | GitHubEtagCache | SettingsService>;
+    ) => Effect.Effect<SyncResult, SyncError, DbService | SettingsService>;
     readonly getThreadSummary: (
       prId: string,
       userLogin: string | null,
@@ -268,7 +267,7 @@ export const SyncServiceLive = Layer.effect(
 
     const pullComments = (
       prId: string,
-    ): Effect.Effect<PullResult, SyncError, DbService | GitHubEtagCache | SettingsService> =>
+    ): Effect.Effect<PullResult, SyncError, DbService | SettingsService> =>
       Effect.gen(function* () {
         const { pr, repo, token } = yield* resolvePrContext(prId);
         const accountId = yield* repoService.getAccountIdForRepo(repo.id);
@@ -439,7 +438,7 @@ export const SyncServiceLive = Layer.effect(
 
     const syncThreads = (
       prId: string,
-    ): Effect.Effect<SyncResult, SyncError, DbService | GitHubEtagCache | SettingsService> =>
+    ): Effect.Effect<SyncResult, SyncError, DbService | SettingsService> =>
       Effect.gen(function* () {
         const pulled = yield* pullComments(prId);
         const summary = yield* getThreadSummary(prId, null);
