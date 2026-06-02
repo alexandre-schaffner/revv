@@ -28,6 +28,13 @@ const resolveApiBase: Effect.Effect<string, never, SettingsService> = Effect.gen
 
 const retrySchedule = Schedule.intersect(Schedule.exponential("2 seconds"), Schedule.recurs(3));
 
+const isTransientGitHubError = (e: GitHubError): boolean => e instanceof GitHubNetworkError;
+
+const retryTransient = <A, R>(
+  effect: Effect.Effect<A, GitHubError, R>,
+): Effect.Effect<A, GitHubError, R> =>
+  effect.pipe(Effect.retry({ schedule: retrySchedule, while: isTransientGitHubError }));
+
 /** Build the REST API base URL for an explicit host (no settings lookup needed). */
 function resolveApiBaseForHost(host: string): string {
   return host === "github.com" ? "https://api.github.com" : `https://api.${host}`;
@@ -71,13 +78,37 @@ function assertGitHubOk(res: Response, path: string): void {
   if (res.status === 401) {
     throw new GitHubAuthError({ message: "Invalid or expired GitHub token" });
   }
-  if (res.status === 403) {
+  if (res.status === 403 || res.status === 429) {
+    const retryAfter = parseRetryAfter(res.headers.get("Retry-After"));
+    if (retryAfter !== null) {
+      throw new GitHubRateLimitError({
+        resetAt: new Date(Date.now() + retryAfter * 1000),
+        retryAfter,
+        kind: "secondary",
+      });
+    }
+
     const remaining = res.headers.get("X-RateLimit-Remaining");
-    if (remaining === "0") {
+    if (res.status === 403 && remaining === "0") {
       const resetHeader = res.headers.get("X-RateLimit-Reset");
       const resetAt = resetHeader ? new Date(Number(resetHeader) * 1000) : new Date();
-      throw new GitHubRateLimitError({ resetAt });
+      const resource = res.headers.get("X-RateLimit-Resource");
+      throw new GitHubRateLimitError({
+        resetAt,
+        kind: "primary",
+        ...(resource ? { resource } : {}),
+      });
     }
+
+    if (res.status === 429) {
+      const defaultRetryAfter = 60;
+      throw new GitHubRateLimitError({
+        resetAt: new Date(Date.now() + defaultRetryAfter * 1000),
+        retryAfter: defaultRetryAfter,
+        kind: "secondary",
+      });
+    }
+
     // Not a rate limit — likely org access restriction or insufficient permissions
     throw new GitHubNetworkError({
       cause: `HTTP 403 – access denied for ${path} (check GitHub org OAuth app policies)`,
@@ -89,6 +120,17 @@ function assertGitHubOk(res: Response, path: string): void {
   if (!res.ok) {
     throw new GitHubNetworkError({ cause: `HTTP ${res.status}` });
   }
+}
+
+function parseRetryAfter(header: string | null): number | null {
+  if (!header) return null;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.ceil(seconds);
+  }
+  const retryAt = Date.parse(header);
+  if (Number.isNaN(retryAt)) return null;
+  return Math.max(0, Math.ceil((retryAt - Date.now()) / 1000));
 }
 
 function githubFetch(
@@ -119,9 +161,9 @@ function githubFetch(
  * and we replay the stored body — zero bytes of real payload, zero rate-limit
  * cost. On `200`, we refresh the stored ETag + body for next time.
  *
- * Only use this for endpoints that return a single page. Paginated endpoints
- * (`listUserRepos`, `listReviewComments`) still call `githubFetchPaginated`
- * directly; per-page ETag caching can be added later.
+ * Only use this for endpoints that return a single page. Paginated list
+ * endpoints need `conditionalFetchPaginated` so the cached body represents the
+ * assembled result.
  */
 function conditionalFetch(
   path: string,
@@ -182,6 +224,109 @@ function conditionalFetch(
     }
     return result.body;
   });
+}
+
+/**
+ * Fetch a paginated GitHub REST list endpoint with page-1 conditional caching.
+ *
+ * The cached body is the assembled array from all fetched pages, but the ETag
+ * comes from page 1 because GitHub ETags are response-scoped. Callers can
+ * decide when a page-1 304 is safe to replay; `listPrs` only does so when the
+ * cached open set fit on one page.
+ */
+function conditionalFetchPaginated(
+  path: string,
+  token: string,
+  maxPages: number = 3,
+  apiBase: string,
+  options: {
+    readonly canReplayCached?: (cached: readonly unknown[]) => boolean;
+  } = {},
+): Effect.Effect<unknown[], GitHubError, DbService | GitHubEtagCache> {
+  return Effect.withSpan("GitHub.fetchPaginated.conditional", {
+    attributes: { path, maxPages },
+  })(
+    Effect.gen(function* () {
+      const cache = yield* GitHubEtagCache;
+      const cacheKey = buildCacheKey("GET", path);
+      const cached = yield* cache.get(cacheKey);
+
+      const result = yield* Effect.tryPromise({
+        try: async () => {
+          const headers: Record<string, string> = githubHeaders(token);
+          if (cached) {
+            headers["If-None-Match"] = cached.etag;
+          }
+
+          const firstUrl = `${apiBase}${path}`;
+          let firstResponse = await fetch(firstUrl, { headers });
+
+          if (firstResponse.status === 304 && cached) {
+            if (Array.isArray(cached.body)) {
+              const replayAllowed = options.canReplayCached?.(cached.body) ?? true;
+              if (replayAllowed) {
+                return { kind: "hit" as const, body: cached.body };
+              }
+            }
+
+            firstResponse = await fetch(firstUrl, { headers: githubHeaders(token) });
+          }
+
+          const results: unknown[] = [];
+          let url: string | null = firstUrl;
+          let etag: string | null = null;
+          let lastModified: string | null = null;
+          let bytes = 0;
+
+          for (let page = 0; page < maxPages && url; page++) {
+            const res =
+              page === 0 ? firstResponse : await fetch(url, { headers: githubHeaders(token) });
+            assertGitHubOk(res, path);
+
+            if (page === 0) {
+              etag = res.headers.get("ETag");
+              lastModified = res.headers.get("Last-Modified");
+            }
+
+            const bodyText = await res.text();
+            bytes += bodyText.length;
+            const data = bodyText ? JSON.parse(bodyText) : [];
+            if (Array.isArray(data)) {
+              results.push(...data);
+            }
+
+            url = parseLinkNext(res.headers.get("Link"));
+          }
+
+          return {
+            kind: "miss" as const,
+            body: results,
+            bytes,
+            etag,
+            lastModified,
+          };
+        },
+        catch: toGitHubError,
+      });
+
+      if (result.kind === "hit") {
+        let saved = 0;
+        try {
+          saved = JSON.stringify(result.body).length;
+        } catch {
+          /* swallow — stats are best-effort */
+        }
+        cache.recordHit(saved);
+        return [...result.body];
+      }
+
+      cache.recordMiss();
+      if (result.etag) {
+        yield* cache.put(cacheKey, result.etag, result.lastModified, result.body);
+      }
+      return result.body;
+    }),
+  );
 }
 
 function githubPost(
@@ -592,7 +737,7 @@ interface GitHubGatewayFlatService {
     prNumber: number,
     since: string | null,
     token: string,
-  ) => Effect.Effect<GhReviewComment[], GitHubError, SettingsService>;
+  ) => Effect.Effect<GhReviewComment[], GitHubError, DbService | GitHubEtagCache | SettingsService>;
   readonly listReviewThreads: (
     repoFullName: string,
     prNumber: number,
@@ -769,14 +914,15 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
     Effect.gen(function* () {
       const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
-      const data = yield* githubFetchPaginated(
+      const data = yield* conditionalFetchPaginated(
         `/repos/${owner}/${repo}/pulls?state=open&sort=updated&direction=desc&per_page=100`,
         token,
         10,
         apiBase,
+        { canReplayCached: (cached) => cached.length < 100 },
       );
       return (data as Record<string, unknown>[]).map((pr) => mapPr(pr, repositoryId));
-    }).pipe(Effect.retry(retrySchedule)),
+    }).pipe(retryTransient),
 
   getPr: (repoFullName, prNumber, token) =>
     Effect.gen(function* () {
@@ -788,7 +934,7 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
         apiBase,
       );
       return mapPr(data as Record<string, unknown>, `${owner}/${repo}`);
-    }).pipe(Effect.retry(retrySchedule)),
+    }).pipe(retryTransient),
 
   searchClosedPrsInWindow: (repoFullName, sinceIso, untilIso, token) =>
     Effect.gen(function* () {
@@ -839,7 +985,7 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
         readonly closedAt: string;
         readonly merged: boolean;
       }>;
-    }).pipe(Effect.retry(retrySchedule)),
+    }).pipe(retryTransient),
 
   getRepo: (fullName, token) =>
     Effect.gen(function* () {
@@ -847,7 +993,7 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       const { owner, repo } = yield* parseRepoFullName(fullName);
       const data = yield* conditionalFetch(`/repos/${owner}/${repo}`, token, apiBase);
       return mapRepo(data as Record<string, unknown>);
-    }).pipe(Effect.retry(retrySchedule)),
+    }).pipe(retryTransient),
 
   getRepoFresh: (fullName, token, explicitApiBase) =>
     Effect.gen(function* () {
@@ -855,7 +1001,7 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       const { owner, repo } = yield* parseRepoFullName(fullName);
       const data = yield* githubFetch(`/repos/${owner}/${repo}`, token, apiBase);
       return mapRepo(data as Record<string, unknown>);
-    }).pipe(Effect.retry(retrySchedule)),
+    }).pipe(retryTransient),
 
   listUserRepos: (token) =>
     Effect.gen(function* () {
@@ -867,7 +1013,7 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
         apiBase,
       );
       return (data as Record<string, unknown>[]).map((raw) => mapRepo(raw));
-    }).pipe(Effect.retry(retrySchedule)),
+    }).pipe(retryTransient),
 
   getOpenPrCounts: (fullNames, token) =>
     Effect.gen(function* () {
@@ -933,7 +1079,7 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       }
 
       return result;
-    }).pipe(Effect.retry(retrySchedule)),
+    }).pipe(retryTransient),
 
   listUserOrgs: (token) =>
     Effect.gen(function* () {
@@ -943,7 +1089,7 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
         login: raw.login as string,
         avatarUrl: (raw.avatar_url as string | null) ?? null,
       }));
-    }).pipe(Effect.retry(retrySchedule)),
+    }).pipe(retryTransient),
 
   getPrMeta: (repoFullName, prNumber, token) =>
     Effect.gen(function* () {
@@ -958,7 +1104,7 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       const base = raw.base as Record<string, unknown>;
       const head = raw.head as Record<string, unknown>;
       return { baseSha: base.sha as string, headSha: head.sha as string };
-    }).pipe(Effect.retry(retrySchedule)),
+    }).pipe(retryTransient),
 
   getPrFiles: (repoFullName, prNumber, token) =>
     Effect.gen(function* () {
@@ -977,7 +1123,7 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
         deletions: (f.deletions as number | undefined) ?? 0,
         patch: (f.patch as string | undefined) ?? null,
       }));
-    }).pipe(Effect.retry(retrySchedule)),
+    }).pipe(retryTransient),
 
   listPrCommits: (repoFullName, prNumber, token) =>
     Effect.gen(function* () {
@@ -1056,7 +1202,7 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
           date: c.date,
         }),
       );
-    }).pipe(Effect.retry(retrySchedule)),
+    }).pipe(retryTransient),
 
   getFileContent: (repoFullName, path, ref, token) =>
     Effect.gen(function* () {
@@ -1074,7 +1220,7 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       }
       // Binary or unsupported encoding
       return "";
-    }).pipe(Effect.retry(retrySchedule)),
+    }).pipe(retryTransient),
 
   getFileRawBytes: (repoFullName, path, ref, token) =>
     Effect.gen(function* () {
@@ -1099,7 +1245,7 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
         },
         catch: toGitHubError,
       });
-    }).pipe(Effect.retry(retrySchedule)),
+    }).pipe(retryTransient),
 
   postReview: (repoFullName, prNumber, review, token) =>
     Effect.gen(function* () {
@@ -1203,13 +1349,12 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       };
     }),
 
-  listReviewComments: (repoFullName, prNumber, since, token) =>
+  listReviewComments: (repoFullName, prNumber, _since, token) =>
     Effect.gen(function* () {
       const apiBase = yield* resolveApiBase;
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
-      const sinceQ = since ? `&since=${encodeURIComponent(since)}` : "";
-      const data = yield* githubFetchPaginated(
-        `/repos/${owner}/${repo}/pulls/${prNumber}/comments?per_page=100${sinceQ}`,
+      const data = yield* conditionalFetchPaginated(
+        `/repos/${owner}/${repo}/pulls/${prNumber}/comments?per_page=100`,
         token,
         5,
         apiBase,
@@ -1231,7 +1376,7 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
           htmlUrl: (raw.html_url as string | undefined) ?? "",
         };
       });
-    }).pipe(Effect.retry(retrySchedule)),
+    }).pipe(retryTransient),
 
   listReviewThreads: (repoFullName, prNumber, token) =>
     Effect.gen(function* () {
@@ -1293,7 +1438,7 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
         cursor = page.pageInfo.endCursor;
       }
       return out;
-    }).pipe(Effect.retry(retrySchedule)),
+    }).pipe(retryTransient),
 
   resolveReviewThread: (threadNodeId, token) =>
     Effect.gen(function* () {
@@ -1327,7 +1472,7 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
         id: raw.id as number,
         avatarUrl: (raw.avatar_url as string | null) ?? null,
       };
-    }).pipe(Effect.retry(retrySchedule)),
+    }).pipe(retryTransient),
 
   convertPrToDraft: (repoFullName, prNumber, token) =>
     Effect.gen(function* () {
@@ -1481,15 +1626,10 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
     Effect.tryPromise({
       try: async () => {
         const apiBase = resolveApiBaseForHost(host);
-        const res = await fetch(
-          `${apiBase}/repos/${owner}/${repo}/collaborators/${username}/permission`,
-          { headers: githubHeaders(token) },
-        );
+        const path = `/repos/${owner}/${repo}/collaborators/${username}/permission`;
+        const res = await fetch(`${apiBase}${path}`, { headers: githubHeaders(token) });
         if (res.status === 404) return "none" as const;
-        if (res.status === 401) throw new GitHubAuthError({ message: "Invalid or expired token" });
-        if (res.status === 403)
-          throw new GitHubNetworkError({ cause: `HTTP 403 on ${owner}/${repo}` });
-        if (!res.ok) throw new GitHubNetworkError({ cause: `HTTP ${res.status}` });
+        assertGitHubOk(res, path);
         const body = (await res.json()) as { role_name?: string };
         const roleName = body.role_name ?? "none";
         if (
