@@ -1,6 +1,5 @@
 import { Effect } from "effect";
 import { AppRuntime } from "../../../runtime";
-import { GitHubGateway } from "../../../services/GitHub";
 import { PrContextService } from "../../../services/PrContext";
 import { WalkthroughService } from "../../../services/Walkthrough";
 import { WalkthroughJobs } from "../../../services/WalkthroughJobs";
@@ -28,20 +27,33 @@ import { WalkthroughJobs } from "../../../services/WalkthroughJobs";
  *
  * `opencodeSessionId` is stripped before returning — it's an orchestrator
  * credential, not something the UI consumes.
+ *
+ * The head SHA is read from the locally-synced PR row (`pr.headSha`), NOT a
+ * live GitHub call. This endpoint serves locally-cached content and must not
+ * depend on GitHub being reachable — a live `prs.meta()` call here meant any
+ * rate-limit (429), expired token (401), or network blip threw before the DB
+ * was even consulted, stranding a perfectly good complete walkthrough behind
+ * the "Generate" empty state on reload. `pr.headSha` is also the exact SHA the
+ * diff view loads against, so the walkthrough stays consistent with the diff;
+ * new-commit detection / superseding is the PollScheduler's job, not this
+ * read path's. (Doctrine: SQLite is authoritative.)
  */
 export function getCurrentWalkthroughHandler(prId: string, userId: string) {
   return AppRuntime.runPromise(
     Effect.gen(function* () {
       const prContext = yield* PrContextService;
-      const github = yield* GitHubGateway;
       const walkthroughService = yield* WalkthroughService;
       const jobs = yield* WalkthroughJobs;
 
-      const { pr, repo, token } = yield* prContext.resolveBasic(prId, userId);
-      const meta = yield* github.prs.meta(repo.fullName, pr.externalId, token);
+      const { pr, repo } = yield* prContext.resolveBasic(prId, userId);
+      const headSha = pr.headSha;
+      // No synced head SHA → nothing to match a walkthrough against. The PR
+      // row hasn't fully synced yet; the client shows the Generate button and
+      // a later `prs:updated` + component-mount re-hydration recovers.
+      if (!headSha) return { status: "not_found" as const };
 
       // 1. Complete walkthrough — best case, no SSE needed.
-      const complete = yield* walkthroughService.getCached(pr.id, meta.headSha);
+      const complete = yield* walkthroughService.getCached(pr.id, headSha);
       if (complete) {
         const seqAt = yield* walkthroughService.getSeqAt(complete.id);
         return {
@@ -53,7 +65,7 @@ export function getCurrentWalkthroughHandler(prId: string, userId: string) {
       }
 
       // 2. In-progress or errored walkthrough — hydrate partial state.
-      const partial = yield* walkthroughService.getPartial(pr.id, meta.headSha);
+      const partial = yield* walkthroughService.getPartial(pr.id, headSha);
       if (partial) {
         const { opencodeSessionId: _ignored, ...walkthrough } = partial;
         const seqAt = yield* walkthroughService.getSeqAt(walkthrough.id);
@@ -67,9 +79,9 @@ export function getCurrentWalkthroughHandler(prId: string, userId: string) {
 
       // 3. No local row — probe the team cache. On a hit the cache importer
       //    creates a complete row, so we re-query and return it as complete.
-      const hydrated = yield* jobs.tryHydrateFromRemoteCache(pr.id, meta.headSha, repo.fullName);
+      const hydrated = yield* jobs.tryHydrateFromRemoteCache(pr.id, headSha, repo.fullName);
       if (hydrated) {
-        const fromCache = yield* walkthroughService.getCached(pr.id, meta.headSha);
+        const fromCache = yield* walkthroughService.getCached(pr.id, headSha);
         if (fromCache) {
           const seqAt = yield* walkthroughService.getSeqAt(fromCache.id);
           return {
