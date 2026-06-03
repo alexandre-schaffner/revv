@@ -1,5 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import { decideCloneDestination, parseRemoteFullName, remoteUrlMatches } from "./clone-policy";
+import {
+  assertSafeManagedClonePath,
+  CLONE_BASE_DIR,
+  decideCloneDestination,
+  parseRemoteFullName,
+  remoteUrlMatches,
+} from "./clone-policy";
 
 describe("parseRemoteFullName", () => {
   it("parses HTTPS and SSH GitHub remotes for the configured host", () => {
@@ -74,5 +80,23 @@ describe("decideCloneDestination", () => {
       removeExisting: true,
     });
     expect(decideCloneDestination("non-empty-non-git", false).action).toBe("fail");
+  });
+});
+
+describe("assertSafeManagedClonePath", () => {
+  it("accepts paths under the managed clone base", () => {
+    expect(() => assertSafeManagedClonePath(`${CLONE_BASE_DIR}/owner/repo`)).not.toThrow();
+  });
+
+  it("rejects paths outside the managed clone base", () => {
+    expect(() => assertSafeManagedClonePath("/tmp/owner/repo")).toThrow();
+    expect(() => assertSafeManagedClonePath("/etc/passwd")).toThrow();
+    expect(() => assertSafeManagedClonePath("/usr/local/src")).toThrow();
+  });
+
+  it("rejects empty, root, and home paths", () => {
+    expect(() => assertSafeManagedClonePath("")).toThrow();
+    expect(() => assertSafeManagedClonePath("   ")).toThrow();
+    expect(() => assertSafeManagedClonePath("/")).toThrow();
   });
 });

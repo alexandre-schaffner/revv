@@ -49,7 +49,12 @@ export function existingPathIsUnder(child: string, parent: string): boolean {
 export function assertSafeManagedClonePath(clonePath: string): void {
   const resolvedPath = resolve(clonePath);
   const home = resolve(homedir());
-  if (!clonePath.trim() || resolvedPath === "/" || resolvedPath === home) {
+  if (
+    !clonePath.trim() ||
+    resolvedPath === "/" ||
+    resolvedPath === home ||
+    !pathIsUnder(resolvedPath, CLONE_BASE_DIR)
+  ) {
     throw new CloneError({
       message: `Refusing to delete unsafe managed clone path: ${clonePath}`,
     });
