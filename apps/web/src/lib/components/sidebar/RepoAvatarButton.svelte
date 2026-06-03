@@ -1,5 +1,6 @@
 <script lang="ts">
 import type { Repository } from "@revv/shared";
+import LinkSimple from "phosphor-svelte/lib/LinkSimple";
 import { goto } from "$app/navigation";
 import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte";
 import * as Tooltip from "$lib/components/ui/tooltip/index.js";
@@ -25,6 +26,21 @@ const showCloneIndicator = $derived(
     repository.cloneStatus === "pending" ||
     repository.cloneStatus === "error",
 );
+
+// Spell the clone state into the tooltip so the status dot never carries
+// meaning by color alone (brand a11y contract).
+const cloneStatusLabel = $derived.by(() => {
+  switch (repository.cloneStatus) {
+    case "cloning":
+      return "Cloning…";
+    case "pending":
+      return "Queued to clone";
+    case "error":
+      return "Clone failed";
+    default:
+      return null;
+  }
+});
 </script>
 
 <Tooltip.Root>
@@ -55,16 +71,21 @@ const showCloneIndicator = $derived(
 				{#if showCloneIndicator}
 					<span
 						class="status-dot"
-						class:status-dot--pending={repository.cloneStatus !== 'error'}
+						class:status-dot--cloning={repository.cloneStatus === 'cloning'}
+						class:status-dot--pending={repository.cloneStatus === 'pending'}
 						class:status-dot--error={repository.cloneStatus === 'error'}
 						aria-hidden="true"
 					></span>
+				{:else if !repository.managed}
+					<span class="linked-dot" aria-hidden="true">
+						<LinkSimple size={8} weight="bold" />
+					</span>
 				{/if}
 			</span>
 		</button>
 	</Tooltip.Trigger>
 	<Tooltip.Content side="right" sideOffset={8}>
-		{repository.fullName}
+		{repository.fullName}{cloneStatusLabel ? ` · ${cloneStatusLabel}` : repository.managed ? '' : ' · Linked'}
 	</Tooltip.Content>
 </Tooltip.Root>
 
@@ -131,11 +152,61 @@ const showCloneIndicator = $derived(
 		border: 1.5px solid var(--color-bg-secondary);
 	}
 
+	/* Cloning is live work: the accent dot breathes a halo so it reads as
+	   active, distinct from the static amber "queued" dot. */
+	.status-dot--cloning {
+		background: var(--color-accent, #2563eb);
+	}
+
+	.status-dot--cloning::after {
+		content: '';
+		position: absolute;
+		z-index: -1;
+		inset: -1.5px;
+		border-radius: 50%;
+		background: var(--color-accent, #2563eb);
+		animation: clone-pulse 1.6s var(--ease-soft) infinite;
+	}
+
 	.status-dot--pending {
 		background: var(--color-warning, #f59e0b);
 	}
 
 	.status-dot--error {
 		background: var(--color-danger, #ef4444);
+	}
+
+	@keyframes clone-pulse {
+		0% {
+			opacity: 0.55;
+			transform: scale(1);
+		}
+		70%,
+		100% {
+			opacity: 0;
+			transform: scale(2.1);
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.status-dot--cloning::after {
+			animation: none;
+			opacity: 0;
+		}
+	}
+
+	.linked-dot {
+		position: absolute;
+		right: -4px;
+		bottom: -4px;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 14px;
+		height: 14px;
+		border: 1.5px solid var(--color-bg-secondary);
+		border-radius: 50%;
+		background: var(--color-bg-tertiary);
+		color: var(--color-text-secondary);
 	}
 </style>

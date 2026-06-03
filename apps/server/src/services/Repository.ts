@@ -20,16 +20,25 @@ function rowToRepo(row: typeof repositories.$inferSelect): Repository {
     cloneStatus: row.cloneStatus,
     clonePath: row.clonePath ?? null,
     cloneError: row.cloneError ?? null,
+    managed: row.managed,
     githubHost: row.githubHost,
   };
 }
+
+type AddRepoData = Omit<
+  Repository,
+  "id" | "addedAt" | "cloneStatus" | "clonePath" | "cloneError" | "managed"
+> & {
+  readonly managed?: boolean;
+  readonly clonePath?: string | null;
+};
 
 export class RepositoryService extends Context.Tag("RepositoryService")<
   RepositoryService,
   {
     readonly listRepos: (accountId?: string) => Effect.Effect<Repository[], never, DbService>;
     readonly addRepo: (
-      data: Omit<Repository, "id" | "addedAt" | "cloneStatus" | "clonePath" | "cloneError">,
+      data: AddRepoData,
       accountId: string,
     ) => Effect.Effect<Repository, ValidationError, DbService>;
     readonly deleteRepo: (
@@ -80,6 +89,8 @@ export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
         ...(data.avatarUrl !== null ? { avatarUrl: data.avatarUrl } : {}),
         addedAt,
         githubHost: data.githubHost,
+        managed: data.managed ?? true,
+        ...(data.clonePath !== undefined ? { clonePath: data.clonePath } : {}),
         accountId,
       } satisfies typeof repositories.$inferInsert;
       yield* Effect.tryPromise({
@@ -96,8 +107,9 @@ export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
         avatarUrl: data.avatarUrl ?? null,
         addedAt,
         cloneStatus: "pending",
-        clonePath: null,
+        clonePath: data.clonePath ?? null,
         cloneError: null,
+        managed: data.managed ?? true,
         githubHost: data.githubHost,
         accountId,
       });

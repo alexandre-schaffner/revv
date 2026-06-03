@@ -433,8 +433,22 @@ export function setSearchQuery(q: string): void {
   searchQuery = q;
 }
 
-export async function addRepo(fullName: string): Promise<void> {
-  const { error } = await api.api.repos.post({ fullName });
+export type AddRepoInput =
+  | string
+  | { readonly fullName: string; readonly mode?: "clone"; readonly basePath?: string }
+  | { readonly fullName: string; readonly mode: "link"; readonly clonePath: string };
+
+function toAddRepoBody(
+  input: AddRepoInput,
+):
+  | { readonly fullName: string; readonly mode?: "clone"; readonly basePath?: string }
+  | { readonly fullName: string; readonly mode: "link"; readonly clonePath: string } {
+  if (typeof input === "string") return { fullName: input };
+  return input;
+}
+
+export async function addRepo(input: AddRepoInput): Promise<void> {
+  const { error } = await api.api.repos.post(toAddRepoBody(input));
   if (error) {
     const value = error.value as { error?: string; message?: string } | undefined;
     const msg = value?.error ?? value?.message ?? `Failed to add repository (HTTP ${error.status})`;

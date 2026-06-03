@@ -147,9 +147,28 @@ export const userRoutes = new Elysia({ prefix: "/api/user" })
               .from(account)
               .where(eq(account.id, resolved.accountId))
               .get();
+            const host = resolved.providerId.split(":")[1] ?? null;
+            if (accountRow?.reauthRequiredAt) {
+              const github = yield* GitHubGateway;
+              const tokenStillWorks = yield* github.users
+                .authenticatedFreshForHost(resolved.accessToken, host ?? "github.com")
+                .pipe(
+                  Effect.as(true),
+                  Effect.orElseSucceed(() => false),
+                );
+              if (tokenStillWorks) {
+                yield* identityService
+                  .clearReauthRequired(resolved.accountId)
+                  .pipe(Effect.orElseSucceed(() => undefined));
+                return {
+                  reauthRequired: false,
+                  host,
+                };
+              }
+            }
             return {
               reauthRequired: accountRow?.reauthRequiredAt != null,
-              host: resolved.providerId.split(":")[1] ?? null,
+              host,
             };
           }).pipe(
             Effect.orElseSucceed(() => ({

@@ -99,6 +99,7 @@ function mapRepo(raw: Record<string, unknown>): Repository {
     cloneStatus: "pending",
     clonePath: null,
     cloneError: null,
+    managed: true,
     // githubHost is resolved by the caller (repo.githubHost for syncs, current settings host for add-repo)
     githubHost: "",
   };
@@ -370,6 +371,10 @@ interface GitHubGatewayFlatService {
     GitHubError,
     SettingsService
   >;
+  readonly getAuthenticatedUserFreshForHost: (
+    token: string,
+    host: string,
+  ) => Effect.Effect<{ login: string; id: number; avatarUrl: string | null }, GitHubError>;
   /**
    * Create a new pull request via REST `POST /repos/{owner}/{repo}/pulls`.
    * `head` is the branch name (no `owner:` prefix needed for same-repo
@@ -1033,6 +1038,18 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       };
     }).pipe(retryTransient),
 
+  getAuthenticatedUserFreshForHost: (token, host) =>
+    Effect.gen(function* () {
+      const apiBase = resolveApiBaseForHost(host);
+      const data = yield* githubFetch(`/user`, token, apiBase);
+      const raw = data as Record<string, unknown>;
+      return {
+        login: raw.login as string,
+        id: raw.id as number,
+        avatarUrl: (raw.avatar_url as string | null) ?? null,
+      };
+    }).pipe(retryTransient),
+
   convertPrToDraft: (repoFullName, prNumber, token) =>
     Effect.gen(function* () {
       const apiBase = yield* resolveApiBase;
@@ -1249,6 +1266,7 @@ export interface GitHubGatewayService {
   };
   readonly users: {
     readonly authenticatedFresh: GitHubGatewayFlat["getAuthenticatedUserFresh"];
+    readonly authenticatedFreshForHost: GitHubGatewayFlat["getAuthenticatedUserFreshForHost"];
   };
 }
 
@@ -1297,6 +1315,7 @@ export const GitHubGatewayLive = Layer.succeed(GitHubGateway, {
   },
   users: {
     authenticatedFresh: githubGatewayFlat.getAuthenticatedUserFresh,
+    authenticatedFreshForHost: githubGatewayFlat.getAuthenticatedUserFreshForHost,
   },
 });
 

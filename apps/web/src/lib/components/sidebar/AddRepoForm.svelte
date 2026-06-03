@@ -1,14 +1,21 @@
 <script lang="ts">
 import type { Repository } from "@revv/shared";
+import ArrowRight from "phosphor-svelte/lib/ArrowRight";
 import RefreshCw from "phosphor-svelte/lib/ArrowsClockwise";
 import Folder from "phosphor-svelte/lib/Folder";
-import Search from "phosphor-svelte/lib/MagnifyingGlass";
+import GitPullRequest from "phosphor-svelte/lib/GitPullRequest";
+import LinkSimple from "phosphor-svelte/lib/LinkSimple";
 import Plus from "phosphor-svelte/lib/Plus";
+import Spinner from "phosphor-svelte/lib/Spinner";
 import Trash2 from "phosphor-svelte/lib/Trash";
 import { toast } from "svelte-sonner";
 import CloneStatusIndicator from "$lib/components/shared/CloneStatusIndicator.svelte";
+import OwnerAvatar from "$lib/components/shared/OwnerAvatar.svelte";
 import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte";
-import { Dotmatrix } from "$lib/components/ui/dotmatrix";
+import { Badge } from "$lib/components/ui/badge/index.js";
+import { Button } from "$lib/components/ui/button/index.js";
+import * as Command from "$lib/components/ui/command/index.js";
+import { Input } from "$lib/components/ui/input/index.js";
 import {
   addRepo,
   deleteRepo,
@@ -16,44 +23,64 @@ import {
   getAvailablePrCount,
   getAvailablePrCountsLoaded,
   getAvailableRepos,
+  getAvailableReposFetchFailed,
   getAvailableReposLoading,
   getPullRequests,
   getRepositories,
   retryClone,
 } from "$lib/stores/prs.svelte";
+import { isTauri } from "$lib/utils/platform";
+import RepoDeleteConfirm from "./RepoDeleteConfirm.svelte";
 
-// Shared "Add Repository" form. Renders without a modal wrapper so it can
-// be embedded inline. The parent provides horizontal padding equivalent
-// to `p-5`; the list extends visually past it with small negative margins.
+// Shared "Add Repository" picker. Built on the shadcn `Command` (cmdk)
+// primitive so the search input is pinned, the list is the only scroll
+// region, and keyboard nav / selection come for free. Renders without a
+// modal wrapper so it can be embedded inline; the parent supplies padding.
 let {
   onClose,
   autoFocus = true,
   showTitle = true,
+  showLocation = false,
+  cloneBasePath = "",
+  onCloneBasePathChange,
+  onCloneSuccess,
 }: {
   onClose?: () => void;
   autoFocus?: boolean;
   showTitle?: boolean;
+  showLocation?: boolean;
+  cloneBasePath?: string;
+  onCloneBasePathChange?: (path: string) => void;
+  onCloneSuccess?: (basePath: string) => void;
 } = $props();
 
 const MANUAL_REPO_REGEX = /^[\w.-]+\/[\w.-]+$/;
-
-function focusOnMount(node: HTMLElement) {
-  if (autoFocus) requestAnimationFrame(() => node.focus());
-}
+const MAX_AUTO_RETRIES = 3;
+const AUTO_RETRY_DELAY_MS = 2000;
+const MANUAL_IMPORT_VALUE = "__manual_import__";
 
 let search = $state("");
 let addingRepos = $state(new Set<string>());
 let removingRepos = $state(new Set<string>());
-let highlightedIndex = $state(-1);
-let repoListEl = $state<HTMLDivElement | null>(null);
 let isManualLoading = $state(false);
+let browsing = $state(false);
+let repoPendingDelete = $state<Repository | null>(null);
+let autoRetries = $state(0);
+let searchEl = $state<HTMLInputElement | null>(null);
+const runningInTauri = isTauri();
+
+// Focus the search on mount (rAF so it lands after the dialog's open motion),
+// avoiding the `autofocus` attribute and its a11y lint.
+$effect(() => {
+  if (autoFocus && searchEl) requestAnimationFrame(() => searchEl?.focus());
+});
 
 // Reactive map of tracked repos so clone-status changes ripple through.
 let trackedByFullName = $derived(
   new Map<string, Repository>(getRepositories().map((r) => [r.fullName, r])),
 );
 
-// Open-PR count per tracked repo, surfaced as the dropdown hint.
+// Open-PR count per tracked repo, surfaced as a row badge.
 let openPrCountByRepoId = $derived.by(() => {
   const m = new Map<string, number>();
   for (const pr of getPullRequests()) {
@@ -96,28 +123,52 @@ let showManualImport = $derived.by(() => {
   return !filteredAvailable.some((r) => r.fullName.toLowerCase() === lowered);
 });
 
-// Combined selectable list for keyboard nav: manual-import row first
-// (when shown), then available repos.
-let selectableCount = $derived(filteredAvailable.length + (showManualImport ? 1 : 0));
-
 let isManualAlreadyTracked = $derived(showManualImport && trackedByFullName.has(trimmedSearch));
 
-// When the query changes, default focus on the manual-import row if it's
-// shown — that's the "primary" action when the user types an explicit slug.
-$effect(() => {
-  search;
-  highlightedIndex = showManualImport ? 0 : -1;
+// One source of truth for which list state to render.
+let listState = $derived.by<"loading" | "error" | "empty" | "no-match" | "groups">(() => {
+  const hasRepos = getAvailableRepos().length > 0;
+  if (hasRepos) return filteredAvailable.length > 0 ? "groups" : "no-match";
+  if (getAvailableReposLoading()) return "loading";
+  if (getAvailableReposFetchFailed()) {
+    return autoRetries < MAX_AUTO_RETRIES ? "loading" : "error";
+  }
+  return "empty";
 });
 
 $effect(() => {
-  if (getAvailableRepos().length === 0) fetchAvailableRepos();
+  if (
+    getAvailableRepos().length === 0 &&
+    !getAvailableReposLoading() &&
+    !getAvailableReposFetchFailed()
+  ) {
+    fetchAvailableRepos();
+  }
 });
+
+// Auto-retry: a freshly-issued GitHub token can briefly 401 during the race
+// between sign-in and propagation. Retry a few times before falling back to
+// the manual Retry button.
+$effect(() => {
+  if (!getAvailableReposFetchFailed() || autoRetries >= MAX_AUTO_RETRIES) return;
+  const timer = setTimeout(() => {
+    autoRetries++;
+    fetchAvailableRepos(true);
+  }, AUTO_RETRY_DELAY_MS);
+  return () => clearTimeout(timer);
+});
+
+function retryFetch(): void {
+  autoRetries = 0;
+  fetchAvailableRepos(true);
+}
 
 async function handleAdd(repoFullName: string) {
   if (addingRepos.has(repoFullName) || trackedByFullName.has(repoFullName)) return;
   addingRepos = new Set([...addingRepos, repoFullName]);
   try {
-    await addRepo(repoFullName);
+    await addRepo(addBody(repoFullName));
+    rememberCloneBase();
   } catch (e) {
     toast.error(e instanceof Error ? e.message : "Failed to add repository");
   } finally {
@@ -132,6 +183,7 @@ async function handleRemove(repoId: string) {
   removingRepos = new Set([...removingRepos, repoId]);
   try {
     await deleteRepo(repoId);
+    repoPendingDelete = null;
   } catch {
     // toast handled by store
   } finally {
@@ -153,7 +205,8 @@ async function handleManualImport() {
   }
   isManualLoading = true;
   try {
-    await addRepo(slug);
+    await addRepo(addBody(slug));
+    rememberCloneBase();
     search = "";
     onClose?.();
   } catch (e) {
@@ -163,248 +216,301 @@ async function handleManualImport() {
   }
 }
 
-function scrollHighlightedIntoView() {
-  if (!repoListEl) return;
-  const el = repoListEl.querySelector<HTMLElement>('[data-highlighted="true"]');
-  el?.scrollIntoView({ block: "nearest" });
+let trackedCount = $derived(getRepositories().length);
+let trimmedCloneBasePath = $derived(cloneBasePath.trim());
+let resolvedClonePath = $derived.by(() => {
+  if (!showLocation || !MANUAL_REPO_REGEX.test(trimmedSearch)) return null;
+  const [owner, name] = trimmedSearch.split("/");
+  if (!owner || !name) return null;
+  const base = trimmedCloneBasePath || "~/.revv/repos";
+  return `${base.replace(/\/$/, "")}/${owner}/${name}`;
+});
+
+function addBody(repoFullName: string) {
+  if (!showLocation) return repoFullName;
+  const basePath = trimmedCloneBasePath || "~/.revv/repos";
+  return { fullName: repoFullName, mode: "clone" as const, basePath };
 }
 
-function handleKeydown(e: KeyboardEvent) {
-  if (e.key === "Escape") {
-    onClose?.();
-  } else if (e.key === "ArrowDown") {
-    e.preventDefault();
-    highlightedIndex = Math.min(highlightedIndex + 1, selectableCount - 1);
-    scrollHighlightedIntoView();
-  } else if (e.key === "ArrowUp") {
-    e.preventDefault();
-    if (highlightedIndex > 0) highlightedIndex--;
-    scrollHighlightedIntoView();
-  } else if (e.key === "Enter") {
-    e.preventDefault();
-    if (showManualImport && highlightedIndex === 0) {
-      void handleManualImport();
-      return;
-    }
-    const idx = showManualImport ? highlightedIndex - 1 : highlightedIndex;
-    const repo = filteredAvailable[idx];
-    if (repo) {
-      void handleAdd(repo.fullName);
-    } else if (MANUAL_REPO_REGEX.test(trimmedSearch)) {
-      void handleManualImport();
-    }
+function rememberCloneBase(): void {
+  if (!showLocation) return;
+  onCloneSuccess?.(trimmedCloneBasePath || "~/.revv/repos");
+}
+
+async function browseForCloneBase(): Promise<void> {
+  if (!runningInTauri || browsing) return;
+  browsing = true;
+  try {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const selected = await open({ directory: true });
+    if (typeof selected === "string") onCloneBasePathChange?.(selected);
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : "Failed to open folder picker");
+  } finally {
+    browsing = false;
   }
 }
 
-let trackedCount = $derived(getRepositories().length);
+function prCountFor(
+  repo: { fullName: string },
+  tracked: Repository | undefined,
+): number | undefined {
+  if (tracked) return openPrCountByRepoId.get(tracked.id) ?? 0;
+  return getAvailablePrCount(repo.fullName) ?? (getAvailablePrCountsLoaded() ? 0 : undefined);
+}
 </script>
 
-{#if showTitle}
-	<div class="form-header">
-		<h2 class="title">Add Repository</h2>
-		{#if trackedCount > 0}
-			<span class="title-meta">{trackedCount} tracked</span>
-		{/if}
-	</div>
-{/if}
-
-<!-- Search + refresh -->
-<div class="search-row">
-	<div class="search-input-wrap">
-		<Search size={13} class="search-icon" />
-		<input
-			class="search-input"
-			placeholder="Search or type owner/name…"
-			aria-label="Search repositories or paste owner/repository"
-			bind:value={search}
-			onkeydown={handleKeydown}
-			use:focusOnMount
-			autocomplete="off"
-			autocorrect="off"
-			autocapitalize="off"
-			spellcheck="false"
-		/>
-		{#if search}
-			<button
-				type="button"
-				class="clear-btn"
-				onclick={() => (search = '')}
-				aria-label="Clear search"
-				tabindex="-1"
-			>
-				<span aria-hidden="true">×</span>
-			</button>
-		{/if}
-	</div>
-	<button
-		class="refresh-btn"
-		onclick={() => fetchAvailableRepos(true)}
-		disabled={getAvailableReposLoading()}
-		aria-label="Refresh repositories"
-		title="Refresh repositories"
-	>
-		<RefreshCw size={13} weight="fill" class={getAvailableReposLoading() ? 'motion-essential-spin' : ''} />
-	</button>
-</div>
-
-<!-- List -->
-<div class="repo-list" bind:this={repoListEl}>
-	{#if showManualImport}
-		{@const isImportHighlighted = highlightedIndex === 0}
-		<button
-			type="button"
-			class="dropdown-row dropdown-row--import"
-			class:dropdown-row--highlighted={isImportHighlighted}
-			class:dropdown-row--disabled={isManualAlreadyTracked || isManualLoading}
-			data-highlighted={isImportHighlighted ? 'true' : undefined}
-			disabled={isManualAlreadyTracked || isManualLoading}
-			onclick={() => void handleManualImport()}
-			onmouseenter={() => (highlightedIndex = 0)}
-		>
-			<span class="dropdown-icon" aria-hidden="true">
-				{#if isManualLoading}
-					<Dotmatrix variant="square-10" size="small" />
-				{:else}
-					<Plus size={12} />
-				{/if}
-			</span>
-			<div class="dropdown-body">
-				<span class="dropdown-title">{trimmedSearch}</span>
-				<span class="dropdown-hint">
-					{#if isManualAlreadyTracked}
-						Already tracked
-					{:else if isManualLoading}
-						Importing…
-					{:else}
-						Import this repository
-					{/if}
-				</span>
-			</div>
-		</button>
+<Command.Root
+	shouldFilter={false}
+	loop
+	class="add-repo flex h-auto min-h-0 flex-1 flex-col overflow-visible bg-transparent"
+>
+	{#if showTitle}
+		<div class="form-header">
+			<h2 class="title">Add Repository</h2>
+			{#if trackedCount > 0}
+				<span class="title-meta">{trackedCount} tracked</span>
+			{/if}
+		</div>
 	{/if}
 
-	{#if getAvailableReposLoading() && getAvailableRepos().length === 0}
-		<div class="state-block">
-			<Dotmatrix variant="square-10" />
-			<span>Loading repositories...</span>
+	<!-- Search (pinned). cmdk owns keyboard nav + selection. -->
+	<div class="search-shell">
+		<Command.Input
+			bind:ref={searchEl}
+			value={search}
+			oninput={(e) => (search = e.currentTarget.value)}
+			placeholder="Search or type owner/name…"
+		/>
+		<Button
+			variant="ghost"
+			size="icon-sm"
+			class="refresh-btn"
+			onclick={() => fetchAvailableRepos(true)}
+			disabled={getAvailableReposLoading()}
+			aria-label="Refresh repositories"
+			title="Refresh repositories"
+		>
+			<RefreshCw class={getAvailableReposLoading() ? 'motion-essential-spin' : ''} />
+		</Button>
+	</div>
+
+	{#if showLocation}
+		<div class="location-row">
+			<div class="location-field">
+				<Folder size={13} class="location-icon" />
+				<Input
+					placeholder="~/.revv/repos"
+					aria-label="Clone location"
+					value={cloneBasePath}
+					oninput={(e) => onCloneBasePathChange?.(e.currentTarget.value)}
+					autocomplete="off"
+					spellcheck="false"
+					class="pl-8"
+				/>
+			</div>
+			<Button
+				variant="outline"
+				size="sm"
+				class="h-8 rounded-[var(--radius-card)]"
+				onclick={() => void browseForCloneBase()}
+				disabled={!runningInTauri || browsing}
+				title="Browse for folder"
+			>
+				<Folder size={13} weight="fill" />
+				<span>Browse</span>
+			</Button>
 		</div>
-	{:else if getAvailableRepos().length === 0}
-		<div class="state-block">
-			<span>No repositories found. Try refreshing.</span>
-		</div>
-	{:else if filteredAvailable.length === 0 && !showManualImport}
-		<div class="state-block state-block--hint">
-			<span>No repositories match <em>"{trimmedSearch}"</em>.</span>
-			<span class="state-hint">Tip: paste <span class="kbd-inline">owner/name</span> to import any repo.</span>
-		</div>
-	{:else if filteredAvailable.length > 0}
-		{#each [...groupedByOwner] as [owner, repos] (owner)}
-			<div class="owner-group">
-				<div class="owner-header">
-					<RepoGradientAvatar
-						fullName={owner}
-						ownerAvatarUrl={repos[0]?.avatarUrl ?? null}
-						size={13}
-						radius={999}
-						class="owner-avatar"
-					/>
-					<span class="owner-name">{owner}</span>
-					<span class="owner-count">{repos.length}</span>
-				</div>
+		{#if resolvedClonePath}
+			<div class="resolved-path">
+				<ArrowRight size={11} weight="bold" />
+				<span>{resolvedClonePath}</span>
+			</div>
+		{/if}
+	{/if}
 
-				{#each repos as repo (repo.fullName)}
-					{@const trackedRepo = trackedByFullName.get(repo.fullName)}
-					{@const isTracked = trackedRepo !== undefined}
-					{@const isAdding = addingRepos.has(repo.fullName)}
-					{@const isRemoving = trackedRepo ? removingRepos.has(trackedRepo.id) : false}
-					{@const flatIndex = filteredAvailable.indexOf(repo)}
-					{@const navIndex = showManualImport ? flatIndex + 1 : flatIndex}
-					{@const isHighlighted = navIndex === highlightedIndex}
-					{@const prCount = trackedRepo
-						? (openPrCountByRepoId.get(trackedRepo.id) ?? 0)
-						: (getAvailablePrCount(repo.fullName) ?? (getAvailablePrCountsLoaded() ? 0 : undefined))}
-					<div
-						role="button"
-						tabindex={isTracked || isAdding ? -1 : 0}
-						aria-disabled={isTracked || isAdding ? 'true' : undefined}
-						class="dropdown-row"
-						class:dropdown-row--highlighted={isHighlighted}
-						class:dropdown-row--tracked={isTracked}
-						class:dropdown-row--actionable={!isTracked && !isAdding}
-						data-highlighted={isHighlighted ? 'true' : undefined}
-						onmouseenter={() => (highlightedIndex = navIndex)}
-						onclick={() => {
-							if (!isTracked && !isAdding) handleAdd(repo.fullName);
-						}}
-						onkeydown={(e) => {
-							if ((e.key === 'Enter' || e.key === ' ') && !isTracked && !isAdding) {
-								e.preventDefault();
-								handleAdd(repo.fullName);
-							}
-						}}
-					>
-					<RepoGradientAvatar
-						fullName={repo.fullName}
-						ownerAvatarUrl={repo.avatarUrl}
-						size={14}
-						radius={999}
-						class="dropdown-avatar"
-					/>
-
-						<div class="dropdown-body">
-							<span class="dropdown-title">{repo.name}</span>
-							{#if prCount !== undefined}
-								<span class="dropdown-hint">{prCount === 0 ? 'No open PRs' : `${prCount} open PR${prCount === 1 ? '' : 's'}`}</span>
-							{/if}
-						</div>
-
-						<div class="repo-actions">
-							{#if isAdding}
-								<Dotmatrix variant="square-10" size="small" />
-							{:else if isTracked && trackedRepo.cloneStatus !== 'ready'}
-								<CloneStatusIndicator
-									status={trackedRepo.cloneStatus}
-									error={trackedRepo.cloneError}
-									onRetry={() => retryClone(trackedRepo.id)}
-									size={13}
-									showLabel
-								/>
-							{:else if isTracked}
-								<span class="tracked-pill">Tracked</span>
-							{/if}
-
-							{#if isTracked}
-								<button
-									type="button"
-									class="remove-btn"
-									onclick={(e) => {
-										e.stopPropagation();
-										handleRemove(trackedRepo.id);
-									}}
-									disabled={isRemoving}
-									aria-label="Remove {repo.fullName}"
-									title="Remove {repo.fullName}"
-								>
-									{#if isRemoving}
-										<Dotmatrix variant="square-10" size="small" />
-									{:else}
-										<Trash2 size={11} weight="fill" />
-									{/if}
-								</button>
-							{/if}
-						</div>
+	<Command.List class="add-repo-list">
+		{#if listState === 'loading'}
+			<div class="skeleton-list" aria-hidden="true">
+				{#each [58, 44, 66, 38, 52] as width, i (i)}
+					<div class="skeleton-row">
+						<span class="sk sk-avatar"></span>
+						<span class="sk sk-line" style="width: {width}%"></span>
 					</div>
 				{/each}
 			</div>
-		{/each}
-	{/if}
-</div>
+			<span class="sr-only" role="status">Loading repositories…</span>
+		{:else if listState === 'error'}
+			<Command.Empty forceMount>
+				<div class="state-block">
+					<span>Couldn't load your repositories. Your GitHub session may have expired.</span>
+					<Button variant="outline" size="sm" onclick={retryFetch}>
+						<RefreshCw size={13} weight="fill" />
+						<span>Retry</span>
+					</Button>
+				</div>
+			</Command.Empty>
+		{:else if listState === 'empty'}
+			<Command.Empty forceMount>
+				<div class="state-block">
+					<span>No repositories available yet.</span>
+					<Button variant="outline" size="sm" onclick={retryFetch}>
+						<RefreshCw size={13} weight="fill" />
+						<span>Refresh</span>
+					</Button>
+				</div>
+			</Command.Empty>
+		{/if}
 
-{#if onClose}
-	<div class="footer">
-		<button class="done-btn" onclick={onClose}>Done</button>
-	</div>
-{/if}
+		{#if showManualImport}
+			<Command.Group>
+				<Command.Item
+					value={MANUAL_IMPORT_VALUE}
+					keywords={[trimmedSearch]}
+					disabled={isManualAlreadyTracked || isManualLoading}
+					onSelect={() => void handleManualImport()}
+					class="import-item"
+				>
+					<span class="import-icon" aria-hidden="true">
+						{#if isManualLoading}
+							<Spinner size={12} weight="bold" class="motion-essential-spin" />
+						{:else}
+							<Plus size={12} weight="bold" />
+						{/if}
+					</span>
+					<div class="import-body">
+						<span class="import-slug">{trimmedSearch}</span>
+						<span class="import-hint">
+							{#if isManualAlreadyTracked}
+								Already tracked
+							{:else if isManualLoading}
+								Importing…
+							{:else}
+								Import this repository
+							{/if}
+						</span>
+					</div>
+				</Command.Item>
+			</Command.Group>
+		{/if}
+
+		{#if listState === 'no-match' && !showManualImport}
+			<Command.Empty forceMount>
+				<div class="state-block state-block--hint">
+					<span>No repositories match <em>“{trimmedSearch}”</em>.</span>
+					<span class="state-hint">Tip: type <span class="kbd-inline">owner/name</span> to import any repo.</span>
+				</div>
+			</Command.Empty>
+		{/if}
+
+		{#if listState === 'groups'}
+			{#each [...groupedByOwner] as [owner, repos] (owner)}
+				<Command.Group value={owner}>
+					{#snippet headingChild()}
+						<OwnerAvatar
+							name={owner}
+							avatarUrl={repos[0]?.avatarUrl ?? null}
+							size={16}
+							radius={999}
+							class="org-avatar"
+						/>
+						<span class="org-heading-name">{owner}</span>
+					{/snippet}
+					{#each repos as repo (repo.fullName)}
+						{@const trackedRepo = trackedByFullName.get(repo.fullName)}
+						{@const isTracked = trackedRepo !== undefined}
+						{@const isAdding = addingRepos.has(repo.fullName)}
+						{@const isRemoving = trackedRepo ? removingRepos.has(trackedRepo.id) : false}
+						{@const prCount = prCountFor(repo, trackedRepo)}
+						<Command.Item
+							value={repo.fullName}
+							keywords={[repo.name, repo.owner]}
+							onSelect={() => {
+								if (!isTracked && !isAdding) void handleAdd(repo.fullName);
+							}}
+							class={isTracked ? 'repo-item repo-item--tracked' : 'repo-item'}
+						>
+							<RepoGradientAvatar
+								fullName={repo.fullName}
+								ownerAvatarUrl={repo.avatarUrl}
+								size={18}
+								radius={999}
+								class="repo-avatar"
+							/>
+							<span class="repo-name">{repo.name}</span>
+
+							<div class="repo-meta">
+								{#if isAdding}
+									<Spinner size={13} weight="bold" class="motion-essential-spin text-accent" />
+								{:else if isTracked && trackedRepo.cloneStatus !== 'ready'}
+									<CloneStatusIndicator
+										status={trackedRepo.cloneStatus}
+										error={trackedRepo.cloneError}
+										onRetry={() => retryClone(trackedRepo.id)}
+										size={13}
+										showLabel
+									/>
+								{:else if isTracked && !trackedRepo.managed}
+									<Badge variant="secondary" class="meta-badge meta-badge--linked" title="Linked clone">
+										<LinkSimple size={10} weight="bold" />
+										Linked
+									</Badge>
+								{:else if isTracked}
+									<Badge variant="secondary" class="meta-badge">Tracked</Badge>
+								{:else if prCount !== undefined && prCount > 0}
+									<span class="pr-count" title="{prCount} open pull request{prCount === 1 ? '' : 's'}">
+										<GitPullRequest size={11} weight="bold" />
+										{prCount}
+									</span>
+								{/if}
+
+								{#if isTracked}
+									<button
+										type="button"
+										class="remove-btn"
+										onclick={(e) => {
+											e.stopPropagation();
+											repoPendingDelete = trackedRepo;
+										}}
+										disabled={isRemoving}
+										aria-label="Remove {repo.fullName}"
+										title="Remove {repo.fullName}"
+									>
+										{#if isRemoving}
+											<Spinner size={11} weight="bold" class="motion-essential-spin" />
+										{:else}
+											<Trash2 size={11} weight="fill" />
+										{/if}
+									</button>
+								{/if}
+							</div>
+						</Command.Item>
+					{/each}
+				</Command.Group>
+			{/each}
+		{/if}
+	</Command.List>
+
+	{#if onClose}
+		<div class="footer">
+			<Button variant="ghost" size="sm" onclick={onClose}>Done</Button>
+		</div>
+	{/if}
+</Command.Root>
+
+<RepoDeleteConfirm
+	repo={repoPendingDelete}
+	open={repoPendingDelete !== null}
+	deleting={repoPendingDelete ? removingRepos.has(repoPendingDelete.id) : false}
+	onOpenChange={(nextOpen) => {
+		if (!nextOpen && (!repoPendingDelete || !removingRepos.has(repoPendingDelete.id))) {
+			repoPendingDelete = null;
+		}
+	}}
+	onConfirm={() => {
+		if (repoPendingDelete) void handleRemove(repoPendingDelete.id);
+	}}
+/>
 
 <style>
 	/* ── Header ─────────────────────────────────────────── */
@@ -431,168 +537,245 @@ let trackedCount = $derived(getRepositories().length);
 		font-variant-numeric: tabular-nums;
 	}
 
-	/* ── Search row ─────────────────────────────────────── */
-	.search-row {
-		display: flex;
-		gap: 6px;
+	/* ── Search (cmdk input restyled as a pill field) ───── */
+	.search-shell {
+		position: relative;
 		flex-shrink: 0;
 	}
 
-	.search-input-wrap {
+	/* Restyle the shadcn command-input wrapper into the warm-paper pill the
+	   rest of the add-repo surface uses, and clear its default bottom rule. */
+	.search-shell :global([data-slot="command-input-wrapper"]) {
+		height: 32px;
+		gap: 7px;
+		padding: 0 34px 0 11px;
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-card);
+		background: var(--color-input-bg);
+		transition:
+			border-color var(--duration-instant) var(--ease-soft),
+			background var(--duration-instant) var(--ease-soft),
+			box-shadow var(--duration-instant) var(--ease-soft);
+	}
+
+	.search-shell :global([data-slot="command-input-wrapper"]:focus-within) {
+		border-color: color-mix(in srgb, var(--color-accent) 55%, transparent);
+		background: var(--color-bg-primary);
+		box-shadow: 0 0 0 3px var(--color-input-focus-ring);
+	}
+
+	.search-shell :global([data-slot="command-input-wrapper"] svg) {
+		width: 13px;
+		height: 13px;
+		opacity: 1;
+		color: var(--color-text-muted);
+	}
+
+	.search-shell :global([data-slot="command-input"]) {
+		height: 100%;
+		padding: 0;
+		font-size: 12.5px;
+		font-weight: 450;
+		color: var(--color-text-primary);
+	}
+
+	.search-shell :global([data-slot="command-input"]::placeholder) {
+		color: var(--color-text-muted);
+	}
+
+	.search-shell :global(.refresh-btn) {
+		position: absolute;
+		top: 50%;
+		right: 3px;
+		transform: translateY(-50%);
+		color: var(--color-text-muted);
+	}
+
+	/* ── Location row ───────────────────────────────────── */
+	.location-row {
+		display: flex;
+		gap: 6px;
+		margin-top: 8px;
+		flex-shrink: 0;
+	}
+
+	.location-field {
 		position: relative;
 		display: flex;
 		align-items: center;
 		flex: 1;
+		min-width: 0;
 	}
 
-	.search-input-wrap :global(.search-icon) {
+	.location-field :global(.location-icon) {
 		position: absolute;
 		left: 11px;
 		color: var(--color-text-muted);
 		pointer-events: none;
-		flex-shrink: 0;
-		transition: color var(--duration-snap) var(--ease-soft);
 	}
 
-	.search-input-wrap:focus-within :global(.search-icon) {
-		color: var(--color-text-secondary);
-	}
-
-	.search-input {
+	.location-field :global(input) {
 		height: 32px;
-		width: 100%;
-		padding: 0 30px 0 30px;
+		border-radius: var(--radius-card);
+		background: var(--color-input-bg);
+		border-color: var(--color-border);
 		font-size: 12.5px;
-		font-weight: 450;
-		background: var(--color-glass-bg, rgba(255, 255, 255, 0.03));
-		border: 1px solid var(--color-glass-border, rgba(255, 255, 255, 0.07));
-		border-radius: 9999px;
-		color: var(--color-text-primary);
-		transition:
-			border-color var(--duration-instant) var(--ease-soft),
-			background var(--duration-instant) var(--ease-soft);
-		outline: none;
 	}
 
-	.search-input::placeholder {
-		color: var(--color-text-muted);
+	.location-field :global(input:focus-visible) {
+		border-color: color-mix(in srgb, var(--color-accent) 55%, transparent);
+		background: var(--color-bg-primary);
+		box-shadow: 0 0 0 3px var(--color-input-focus-ring);
 	}
 
-	.search-input:focus {
-		border-color: color-mix(in srgb, var(--color-text-primary) 22%, transparent);
-		background: var(--color-glass-active-bg, rgba(255, 255, 255, 0.05));
-	}
-
-	.clear-btn {
-		position: absolute;
-		right: 8px;
+	.resolved-path {
 		display: flex;
 		align-items: center;
-		justify-content: center;
-		width: 18px;
-		height: 18px;
-		font-size: 14px;
-		line-height: 1;
+		gap: 5px;
+		margin: 6px 2px 0;
 		color: var(--color-text-muted);
-		background: transparent;
-		border: none;
-		border-radius: 4px;
-		cursor: pointer;
-		transition: color var(--duration-instant) var(--ease-soft), background var(--duration-instant) var(--ease-soft);
-	}
-
-	.clear-btn:hover {
-		color: var(--color-text-primary);
-		background: var(--color-glass-active-bg, rgba(255, 255, 255, 0.08));
-	}
-
-	.refresh-btn {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		height: 32px;
-		width: 32px;
+		font-size: 11px;
 		flex-shrink: 0;
-		cursor: pointer;
-		background: transparent;
-		border: 1px solid var(--color-glass-border, rgba(255, 255, 255, 0.07));
-		border-radius: 7px;
-		color: var(--color-text-muted);
-		transition:
-			color var(--duration-instant) var(--ease-soft),
-			background var(--duration-instant) var(--ease-soft);
 	}
 
-	.refresh-btn:hover:not(:disabled) {
-		color: var(--color-text-primary);
-		background: var(--color-glass-active-bg, rgba(255, 255, 255, 0.04));
+	.resolved-path :global(svg) {
+		flex-shrink: 0;
+		opacity: 0.7;
 	}
 
-	.refresh-btn:disabled {
-		cursor: not-allowed;
-		opacity: 0.5;
+	.resolved-path span {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 
-	/* ── List ───────────────────────────────────────────── */
-	.repo-list {
+	/* ── List (the only scroll region) ──────────────────────
+	   cmdk- and component-prop classes (.add-repo, .add-repo-list,
+	   [data-command-*], .repo-item, .repo-avatar, .meta-badge) live on
+	   elements that don't carry this component's scope hash (they're set via
+	   child-component `class` props or generated by bits-ui), so these
+	   selectors are fully `:global(...)`, mirroring CommandPalette. Own-DOM
+	   layout classes below stay scoped. */
+	:global(.add-repo .add-repo-list) {
 		flex: 1;
 		min-height: 0;
+		max-height: none;
+		margin: 8px 0 0;
+		padding: 0 2px 4px;
 		overflow-y: auto;
 		overflow-x: hidden;
-		margin: 0 -12px;
-		padding: 0 8px 4px;
-		scroll-padding-top: 36px;
 	}
 
-	.repo-list::-webkit-scrollbar {
+	:global(.add-repo .add-repo-list)::-webkit-scrollbar {
 		width: 8px;
 	}
-	.repo-list::-webkit-scrollbar-track {
-		background: transparent;
-	}
-	.repo-list::-webkit-scrollbar-thumb {
-		background: var(--color-glass-border, rgba(255, 255, 255, 0.08));
+	:global(.add-repo .add-repo-list)::-webkit-scrollbar-thumb {
+		background: var(--color-glass-border);
 		border-radius: 4px;
 		border: 2px solid transparent;
 		background-clip: padding-box;
 	}
-	.repo-list::-webkit-scrollbar-thumb:hover {
-		background: var(--color-glass-active-bg, rgba(255, 255, 255, 0.14));
+	:global(.add-repo .add-repo-list)::-webkit-scrollbar-thumb:hover {
+		background: var(--color-glass-active-bg);
 		background-clip: padding-box;
 	}
 
-	/* ── Dropdown-style row (manual-import + repo) ──────── */
-	.dropdown-row {
+	/* ── Group + heading ────────────────────────────────── */
+	:global(.add-repo [data-command-group]) {
+		padding: 0;
+	}
+
+	:global(.add-repo [data-command-group] + [data-command-group]) {
+		margin-top: 4px;
+	}
+
+	/* A plain section title — no scrim, no sticky. On the translucent modal any
+	   opaque scrim reads as a foreign band, and a transparent sticky heading
+	   would let rows scroll through it. So it scrolls inline and stands out
+	   through weight + ink, not a background. */
+	:global(.add-repo [data-command-group-heading]) {
 		display: flex;
-		align-items: flex-start;
-		gap: 8px;
-		width: 100%;
-		padding: 8px 10px;
-		border-radius: 8px;
-		background: transparent;
-		border: none;
-		text-align: left;
-		cursor: pointer;
-		outline: none;
+		align-items: center;
+		gap: 7px;
+		padding: 11px 10px 6px;
+		font-size: 11.5px;
+		font-weight: 600;
+		letter-spacing: 0.01em;
 		color: var(--color-text-primary);
+		user-select: none;
+	}
+
+	:global(.add-repo .org-avatar) {
+		flex-shrink: 0;
+	}
+
+	:global(.add-repo .org-heading-name) {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	/* ── Rows (cmdk items) ──────────────────────────────── */
+	:global(.add-repo [data-command-item]) {
+		display: flex;
+		align-items: center;
+		gap: 9px;
+		padding: 7px 10px;
+		border-radius: 8px;
+		color: var(--color-text-primary);
+		cursor: pointer;
 		transition: background-color var(--duration-snap) var(--ease-soft);
 	}
 
-	.dropdown-row:hover:not(:disabled),
-	.dropdown-row--highlighted:not(:disabled) {
-		background: var(--color-bg-tertiary);
+	:global(.add-repo [data-command-item][data-selected]),
+	:global(.add-repo [data-command-item][aria-selected="true"]) {
+		background: var(--color-tree-active-bg);
+		color: var(--color-tree-active-text);
 	}
 
-	.dropdown-row--disabled {
+	:global(.add-repo [data-command-item][data-disabled]) {
 		opacity: 0.55;
 		cursor: not-allowed;
 	}
 
-	.dropdown-row--tracked:not(:hover):not(.dropdown-row--highlighted) {
+	:global(.add-repo .repo-item--tracked) {
 		cursor: default;
 	}
 
-	.dropdown-icon {
+	:global(.add-repo .repo-avatar) {
+		flex-shrink: 0;
+	}
+
+	:global(.add-repo .repo-name) {
+		flex: 1;
+		min-width: 0;
+		font-size: 12px;
+		font-weight: 500;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	:global(.add-repo .repo-item--tracked .repo-name) {
+		color: var(--color-text-secondary);
+	}
+
+	:global(.add-repo .repo-meta) {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		flex-shrink: 0;
+	}
+
+	/* ── Manual-import row ──────────────────────────────── */
+	:global(.add-repo .import-item) {
+		align-items: flex-start;
+		gap: 8px;
+		padding: 8px 10px;
+	}
+
+	:global(.add-repo .import-icon) {
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
@@ -601,12 +784,7 @@ let trackedCount = $derived(getRepositories().length);
 		color: var(--color-accent);
 	}
 
-	:global(.dropdown-avatar) {
-		flex-shrink: 0;
-		margin-top: 2px;
-	}
-
-	.dropdown-body {
+	:global(.add-repo .import-body) {
 		display: flex;
 		flex-direction: column;
 		gap: 2px;
@@ -614,82 +792,54 @@ let trackedCount = $derived(getRepositories().length);
 		flex: 1;
 	}
 
-	.dropdown-title {
+	:global(.add-repo .import-slug) {
 		font-size: 12px;
 		font-weight: 500;
-		color: var(--color-text-primary);
+		font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
 
-	.dropdown-row--import .dropdown-title {
-		font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
-	}
-
-	.dropdown-row--tracked .dropdown-title {
-		color: var(--color-text-secondary);
-	}
-
-	.dropdown-hint {
+	:global(.add-repo .import-hint) {
 		font-size: 11px;
 		color: var(--color-text-muted);
 		line-height: 1.4;
 	}
 
-	/* ── Owner groups ───────────────────────────────────── */
-	.owner-group + .owner-group {
-		margin-top: 6px;
-	}
-
-	.owner-header {
-		position: sticky;
-		top: 0;
-		z-index: 2;
-		display: flex;
-		align-items: center;
-		gap: 7px;
-		padding: 12px 10px 6px;
-		background: var(--color-bg-secondary);
-	}
-
-	:global(.owner-avatar) {
-		flex-shrink: 0;
-		opacity: 0.8;
-	}
-
-	.owner-name {
-		font-size: 11px;
-		font-weight: 500;
-		color: var(--color-text-secondary);
-		flex: 1;
-		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.owner-count {
+	/* ── Right-side metadata ────────────────────────────── */
+	:global(.add-repo .meta-badge) {
+		height: 18px;
+		padding: 0 7px;
 		font-size: 10.5px;
+		font-weight: 500;
+	}
+
+	:global(.add-repo .meta-badge--linked) {
+		gap: 3px;
+		background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+		color: var(--color-text-secondary);
+	}
+
+	:global(.add-repo .pr-count) {
+		display: inline-flex;
+		align-items: center;
+		gap: 3px;
 		color: var(--color-text-muted);
+		font-size: 11px;
 		font-variant-numeric: tabular-nums;
 	}
 
-	/* ── Right-side actions (status / tracked / remove) ───── */
-	.repo-actions {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		flex-shrink: 0;
-		margin-top: 1px;
+	:global(.add-repo .pr-count svg) {
+		opacity: 0.7;
 	}
 
-	.tracked-pill {
-		font-size: 10.5px;
-		color: var(--color-text-muted);
+	:global(.add-repo [data-command-item][data-selected] .pr-count),
+	:global(.add-repo [data-command-item][aria-selected="true"] .pr-count) {
+		color: var(--color-tree-active-text);
 	}
 
-	.remove-btn {
+	:global(.add-repo .remove-btn) {
 		display: flex;
 		align-items: center;
 		justify-content: center;
@@ -700,39 +850,45 @@ let trackedCount = $derived(getRepositories().length);
 		border: none;
 		border-radius: 5px;
 		color: var(--color-text-muted);
-		opacity: 0.6;
+		opacity: 0.55;
 		transition:
 			color var(--duration-instant) var(--ease-soft),
 			background var(--duration-instant) var(--ease-soft),
 			opacity var(--duration-instant) var(--ease-soft);
 	}
 
-	.dropdown-row:hover .remove-btn {
+	:global(.add-repo [data-command-item]:hover .remove-btn),
+	:global(.add-repo [data-command-item][aria-selected="true"] .remove-btn) {
 		opacity: 1;
 	}
 
-	.remove-btn:hover:not(:disabled) {
+	:global(.add-repo .remove-btn:hover:not(:disabled)) {
 		color: var(--color-danger);
 		background: color-mix(in srgb, var(--color-danger) 10%, transparent);
 		opacity: 1;
 	}
 
-	.remove-btn:disabled {
+	:global(.add-repo .remove-btn:disabled) {
 		cursor: not-allowed;
 		opacity: 0.5;
 	}
 
-	/* ── State blocks (empty / loading) ─────────────────── */
+	/* ── State blocks (empty / error / no-match) ────────── */
 	.state-block {
 		display: flex;
 		flex-direction: column;
 		align-items: center;
 		justify-content: center;
-		gap: 6px;
+		gap: 12px;
 		padding: 36px 16px;
 		font-size: 12px;
-		color: var(--color-text-muted);
+		color: var(--color-text-secondary);
 		text-align: center;
+	}
+
+	.state-block--hint {
+		gap: 6px;
+		color: var(--color-text-muted);
 	}
 
 	.state-block--hint em {
@@ -745,6 +901,86 @@ let trackedCount = $derived(getRepositories().length);
 		opacity: 0.8;
 	}
 
+	.kbd-inline {
+		font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+		font-size: 10.5px;
+		padding: 1px 5px;
+		border-radius: 4px;
+		background: var(--color-glass-active-bg);
+		color: var(--color-text-secondary);
+	}
+
+	/* ── Skeleton loading ───────────────────────────────── */
+	.skeleton-list {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		padding: 6px 6px;
+	}
+
+	.skeleton-row {
+		display: flex;
+		align-items: center;
+		gap: 9px;
+		padding: 7px 10px;
+	}
+
+	.sk {
+		background: var(--color-glass-active-bg);
+		border-radius: 5px;
+		position: relative;
+		overflow: hidden;
+	}
+
+	.sk::after {
+		content: "";
+		position: absolute;
+		inset: 0;
+		background: linear-gradient(
+			90deg,
+			transparent,
+			color-mix(in srgb, var(--color-text-primary) 6%, transparent),
+			transparent
+		);
+		transform: translateX(-100%);
+		animation: sk-shimmer 1.4s var(--ease-soft) infinite;
+	}
+
+	.sk-avatar {
+		width: 18px;
+		height: 18px;
+		border-radius: 999px;
+		flex-shrink: 0;
+	}
+
+	.sk-line {
+		height: 9px;
+	}
+
+	@keyframes sk-shimmer {
+		to {
+			transform: translateX(100%);
+		}
+	}
+
+	.sr-only {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		padding: 0;
+		margin: -1px;
+		overflow: hidden;
+		clip: rect(0, 0, 0, 0);
+		white-space: nowrap;
+		border: 0;
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.sk::after {
+			animation: none;
+		}
+	}
+
 	/* ── Footer ─────────────────────────────────────────── */
 	.footer {
 		display: flex;
@@ -752,23 +988,7 @@ let trackedCount = $derived(getRepositories().length);
 		justify-content: flex-end;
 		margin: 8px -20px 0;
 		padding: 10px 20px 0;
-		border-top: 1px solid var(--color-border-subtle, var(--color-glass-border, rgba(255, 255, 255, 0.06)));
+		border-top: 1px solid var(--color-border-subtle);
 		flex-shrink: 0;
-	}
-
-	.done-btn {
-		cursor: pointer;
-		padding: 5px 14px;
-		font-size: 11.5px;
-		font-weight: 500;
-		color: var(--color-text-muted);
-		background: transparent;
-		border: none;
-		border-radius: 6px;
-		transition: color var(--duration-instant) var(--ease-soft);
-	}
-
-	.done-btn:hover {
-		color: var(--color-text-primary);
 	}
 </style>
