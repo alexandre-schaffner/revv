@@ -23,6 +23,7 @@ export interface Repository {
   cloneStatus: CloneStatus;
   clonePath: string | null;
   cloneError: string | null;
+  managed: boolean;
   githubHost: string;
 }
 

@@ -38,6 +38,7 @@ export class Identity extends Context.Tag("Identity")<
       host: string,
       tokens: TokenPair,
     ) => Effect.Effect<void>;
+    readonly clearReauthRequired: (accountId: string) => Effect.Effect<void>;
     readonly deleteAccountTokens: (accountId: string) => Effect.Effect<void>;
     readonly migrateLegacyTokenSecrets: Effect.Effect<number, never, SecretStore | DbService>;
   }
@@ -57,6 +58,7 @@ export const IdentityLive = Layer.effect(
         ),
       tokenForUser: tokenProvider.getGitHubToken,
       storeAccountTokens: tokenProvider.storeAccountTokens,
+      clearReauthRequired: tokenProvider.clearReauthRequired,
       deleteAccountTokens: tokenProvider.deleteAccountTokens,
       migrateLegacyTokenSecrets: migrateLegacyTokens,
     })),

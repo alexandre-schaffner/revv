@@ -38,10 +38,13 @@ const identityForbiddenImports = new Set([
 // Git module. Only the module's own files may spawn git directly; everything
 // else must go through `RepoCloneService` (clone + per-job worktrees) or
 // `GitOps` (git command primitives), which keep worktree acquisition scoped
-// and the subprocess registry/signal-handling in one place.
+// and the subprocess registry/signal-handling in one place. `clone-policy` is
+// `RepoCloneService`'s own read-only inspection/policy helper, so it sits
+// inside the module boundary too.
 const gitRunnerSpecifierPattern = /(^|\/)git-runner$/;
 const gitRunnerAllowedImporters = new Set([
   "apps/server/src/services/RepoClone.ts",
+  "apps/server/src/services/clone-policy.ts",
   "apps/server/src/services/GitOps.ts",
 ]);
 

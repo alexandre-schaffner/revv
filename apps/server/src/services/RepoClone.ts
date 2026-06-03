@@ -1,8 +1,9 @@
+import { Buffer } from "node:buffer";
 import { existsSync, mkdirSync } from "node:fs";
 import { rm } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { CloneStatus, Repository } from "@revv/shared";
-import { eq, or } from "drizzle-orm";
+import { and, eq, or } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { serverEnv } from "../config";
 import { CLONE_TIMEOUT_MS } from "../constants";
@@ -14,6 +15,20 @@ import {
 } from "../domain/errors";
 import { debug, logError } from "../logger";
 import { Broadcaster } from "./Broadcaster";
+import {
+  assertSafeManagedClonePath,
+  CLONE_BASE_DIR,
+  decideCloneDestination,
+  existingPathIsUnder,
+  expandUserPath,
+  findWorktreesOnBranch,
+  isGitRepo,
+  parseRemoteFullName,
+  pathIsUnder,
+  readCloneDestinationState,
+  remoteMatches,
+  worktreeHolderPath,
+} from "./clone-policy";
 import { DbService } from "./Db";
 import {
   ensureSignalHandlersInstalled,
@@ -24,10 +39,6 @@ import {
   runGitCloneWithTimeout,
 } from "./git-runner";
 import { TokenProvider } from "./TokenProvider";
-
-// ── Constants ─────────────────────────────────────────────────────────────────
-
-const CLONE_BASE_DIR = serverEnv.cloneDir;
 
 /**
  * Hard upper bound on file sizes the frontend will render. Anything bigger
@@ -54,7 +65,24 @@ export class RepoCloneService extends Context.Tag("RepoCloneService")<
       repo: Repository,
       githubToken: string,
       accountId: string,
+      opts?: { readonly basePath?: string },
     ) => Effect.Effect<void, CloneError>;
+    readonly linkExisting: (
+      repo: Repository,
+      localPath: string,
+      accountId: string,
+    ) => Effect.Effect<void, CloneError>;
+    readonly inspectLocal: (
+      localPath: string,
+      gitHost: string,
+    ) => Effect.Effect<
+      {
+        readonly isGitRepo: boolean;
+        readonly proposedFullName: string | null;
+        readonly remotes: ReadonlyArray<{ readonly name: string; readonly url: string }>;
+      },
+      CloneError
+    >;
     /**
      * Read a file's content at a given commit SHA from the local clone.
      * Used by the sidebar's "view unchanged file" path — the user clicked
@@ -108,15 +136,18 @@ export class RepoCloneService extends Context.Tag("RepoCloneService")<
      *
      * One worktree per PR — used by both walkthrough generation (read-only)
      * and the AI chat (read/write). Path is
-     * `{clonePath}/worktrees/pr-{prNumber}`, always checked out on the local
-     * tracking branch `pr-{prNumber}`. The worktree is long-lived: it is NOT
+     * `~/.revv/repos/{owner}/{name}/worktrees/pr-{prNumber}`, always checked out on the local
+     * tracking branch `revv/pr-{prNumber}`. The worktree is long-lived: it is NOT
      * torn down on scope close, on chat clear, or on SHA change. It only
      * goes away when the PR row is deleted or the repo is removed.
      *
      * Lifecycle:
      *   - **First acquire (no dir on disk):** fetch
-     *     `+refs/pull/N/head:refs/heads/pr-N` from the bare clone, then
-     *     `git worktree add` checks it out at the new branch.
+     *     `+refs/pull/N/head:refs/revv-pull/N` from GitHub, then
+     *     `git worktree add -B revv/pr-N` checks it out at the new branch.
+     *     The fetch ref lives under `refs/revv-pull/` (not `refs/revv/pr-N`)
+     *     so it can't shadow the bare branch name `revv/pr-N` — see the
+     *     `prFetchRef` comment in the body.
      *   - **Already exists, branch == pr-N, HEAD == prHeadSha:** no-op.
      *   - **Already exists, branch == pr-N, different HEAD:** fetch the PR
      *     ref into FETCH_HEAD *inside the worktree* (so the in-place
@@ -197,8 +228,12 @@ async function readGitHead(worktreePath: string): Promise<string | null> {
  * walkthrough job for a different PR could be holding them legitimately —
  * `MAX_CONCURRENT_JOBS = 5` allows that concurrency.
  */
-async function clearStalePrWorktreeLocks(clonePath: string, branchName: string): Promise<void> {
-  const worktreeGitdir = join(clonePath, ".git", "worktrees", branchName);
+async function clearStalePrWorktreeLocks(
+  clonePath: string,
+  prDirName: string,
+  branchName: string,
+): Promise<void> {
+  const worktreeGitdir = join(clonePath, ".git", "worktrees", prDirName);
   const candidates = [
     join(worktreeGitdir, "index.lock"),
     join(worktreeGitdir, "HEAD.lock"),
@@ -262,11 +297,12 @@ async function ensurePrCommitPresent(
   cwd: string,
   prHeadSha: string,
   prNumber: number,
+  authedUrl: string,
 ): Promise<void> {
   if (await commitExists(cwd, prHeadSha)) return;
 
   try {
-    await runGit(["fetch", "origin", prHeadSha], cwd);
+    await runGit(["fetch", "--no-tags", authedUrl, prHeadSha], cwd);
     if (await commitExists(cwd, prHeadSha)) return;
   } catch (err) {
     debug(
@@ -276,61 +312,13 @@ async function ensurePrCommitPresent(
     );
   }
 
-  await runGit(["fetch", "origin", `refs/pull/${prNumber}/head`], cwd);
+  await runGit(["fetch", "--no-tags", authedUrl, `refs/pull/${prNumber}/head`], cwd);
 
   if (!(await commitExists(cwd, prHeadSha))) {
     throw new Error(
       `commit ${prHeadSha} is not available on origin — it may have been force-pushed away or garbage-collected by GitHub`,
     );
   }
-}
-
-/** Validate that a path is safely within the expected clone base directory. */
-function assertSafeClonePath(clonePath: string): void {
-  if (!clonePath.startsWith(CLONE_BASE_DIR)) {
-    throw new CloneError({
-      message: `Refusing to delete path outside of clone base dir: ${clonePath}`,
-    });
-  }
-}
-
-/**
- * Return every worktree path currently checked out on `refs/heads/<branch>`,
- * parsed from `git worktree list --porcelain`. Used to reclaim `pr-N` when
- * an orphan worktree (e.g. a pre-refactor `chat-{prId}-{sha12}` dir) is
- * squatting on it — leaving such a checkout in place would make any
- * external fetch with a `:refs/heads/pr-N` destination fail. Returns
- * an empty array on parse / spawn failure (best-effort).
- */
-async function findWorktreesOnBranch(clonePath: string, branchName: string): Promise<string[]> {
-  let out: string;
-  try {
-    out = await runGitCapture(["worktree", "list", "--porcelain"], clonePath, 15_000);
-  } catch {
-    return [];
-  }
-  const ref = `refs/heads/${branchName}`;
-  const paths: string[] = [];
-  // Porcelain output is record-per-blank-line. Each record has lines like:
-  //   worktree <path>
-  //   HEAD <sha>
-  //   branch <ref>     (absent for detached HEADs)
-  // We only need (worktree, branch) pairs; everything else we ignore.
-  for (const block of out.split("\n\n")) {
-    let wtPath: string | null = null;
-    let wtBranch: string | null = null;
-    for (const line of block.split("\n")) {
-      if (line.startsWith("worktree ")) {
-        wtPath = line.slice("worktree ".length).trim();
-      } else if (line.startsWith("branch ")) {
-        wtBranch = line.slice("branch ".length).trim();
-      }
-    }
-    if (wtPath && wtBranch === ref) {
-      paths.push(wtPath);
-    }
-  }
-  return paths;
 }
 
 // ── Live implementation ───────────────────────────────────────────────────────
@@ -371,6 +359,7 @@ export const RepoCloneServiceLive = Layer.effect(
       repo: Repository,
       githubToken: string,
       accountId: string,
+      opts?: { readonly basePath?: string },
     ): Effect.Effect<void, CloneError> =>
       Effect.suspend((): Effect.Effect<void, CloneError> => {
         // Short-circuit if a clone is already running for this repo in
@@ -389,43 +378,86 @@ export const RepoCloneServiceLive = Layer.effect(
           attributes: { repoFullName: repo.fullName },
         })(
           Effect.gen(function* () {
-            const cloneDir = join(CLONE_BASE_DIR, repo.owner, repo.name);
+            const cloneDir = opts?.basePath
+              ? join(expandUserPath(opts.basePath), repo.owner, repo.name)
+              : (repo.clonePath ?? join(CLONE_BASE_DIR, repo.owner, repo.name));
             const gitHost = repo.githubHost;
-            const cloneUrl = `https://x-access-token:${githubToken}@${gitHost}/${repo.fullName}.git`;
+            const cleanUrl = `https://${gitHost}/${repo.fullName}.git`;
+            const authHeader = `Authorization: Basic ${Buffer.from(
+              `x-access-token:${githubToken}`,
+            ).toString("base64")}`;
 
             debug("repo-clone", `starting clone for ${repo.fullName} -> ${cloneDir}`);
 
-            // Mark as cloning in DB
-            db.update(repositories)
-              .set({
-                cloneStatus: "cloning",
-                clonePath: cloneDir,
-                cloneError: null,
-              })
-              .where(eq(repositories.id, repo.id))
-              .run();
-
-            // Perform the git clone (pure async I/O — no Effect deps needed inside)
             const cloneResult = yield* Effect.tryPromise({
               try: async () => {
-                // Ensure parent directory exists
-                mkdirSync(join(CLONE_BASE_DIR, repo.owner), { recursive: true });
+                const state = await readCloneDestinationState(cloneDir, gitHost, repo.fullName);
+                const decision = decideCloneDestination(
+                  state,
+                  pathIsUnder(cloneDir, CLONE_BASE_DIR),
+                );
 
-                // Remove any partial/stale clone directory before starting
-                if (existsSync(cloneDir)) {
+                if (decision.action === "fail") {
+                  throw new Error(decision.message);
+                }
+
+                if (decision.action === "link") {
+                  db.update(repositories)
+                    .set({
+                      managed: false,
+                      cloneStatus: "ready",
+                      clonePath: cloneDir,
+                      cloneError: null,
+                    })
+                    .where(eq(repositories.id, repo.id))
+                    .run();
+                  return { mode: "linked" as const };
+                }
+
+                if (decision.action === "adopt") {
+                  // A valid clone of this repo already exists inside the
+                  // managed base — adopt it as managed without re-cloning.
+                  db.update(repositories)
+                    .set({
+                      managed: true,
+                      cloneStatus: "ready",
+                      clonePath: cloneDir,
+                      cloneError: null,
+                    })
+                    .where(eq(repositories.id, repo.id))
+                    .run();
+                  return { mode: "adopted" as const };
+                }
+
+                db.update(repositories)
+                  .set({
+                    managed: true,
+                    cloneStatus: "cloning",
+                    clonePath: cloneDir,
+                    cloneError: null,
+                  })
+                  .where(eq(repositories.id, repo.id))
+                  .run();
+
+                mkdirSync(dirname(cloneDir), { recursive: true });
+
+                if (decision.removeExisting && existsSync(cloneDir)) {
                   await rm(cloneDir, { recursive: true, force: true });
                 }
 
                 await runGitCloneWithTimeout(
-                  ["clone", "--depth=1", cloneUrl, cloneDir],
+                  [
+                    "-c",
+                    `http.extraHeader=${authHeader}`,
+                    "clone",
+                    "--depth=1",
+                    cleanUrl,
+                    cloneDir,
+                  ],
                   CLONE_TIMEOUT_MS,
                 );
 
-                // Strip the auth token from the remote URL (security hygiene)
-                await runGit(
-                  ["remote", "set-url", "origin", `https://${gitHost}/${repo.fullName}.git`],
-                  cloneDir,
-                );
+                return { mode: "managed" as const };
               },
               catch: (err) =>
                 new CloneError({
@@ -434,13 +466,14 @@ export const RepoCloneServiceLive = Layer.effect(
                 }),
             }).pipe(
               Effect.matchEffect({
-                onSuccess: () =>
+                onSuccess: ({ mode }) =>
                   Effect.gen(function* () {
-                    // Mark as ready in DB then broadcast success
-                    db.update(repositories)
-                      .set({ cloneStatus: "ready" })
-                      .where(eq(repositories.id, repo.id))
-                      .run();
+                    if (mode === "managed") {
+                      db.update(repositories)
+                        .set({ managed: true, cloneStatus: "ready" })
+                        .where(eq(repositories.id, repo.id))
+                        .run();
+                    }
 
                     debug("repo-clone", `clone ready for ${repo.fullName} at ${cloneDir}`);
 
@@ -451,8 +484,10 @@ export const RepoCloneServiceLive = Layer.effect(
                   }),
                 onFailure: (err) =>
                   Effect.gen(function* () {
-                    // Clean up any partial clone directory (best effort)
-                    if (existsSync(cloneDir)) {
+                    // Clean up any partial clone directory only when Revv owns
+                    // the default-base path. Custom-location failures may point
+                    // at user content and must not be guessed away.
+                    if (pathIsUnder(cloneDir, CLONE_BASE_DIR) && existsSync(cloneDir)) {
                       yield* Effect.tryPromise({
                         try: () => rm(cloneDir, { recursive: true, force: true }),
                         catch: () => undefined,
@@ -503,8 +538,120 @@ export const RepoCloneServiceLive = Layer.effect(
         );
       });
 
+    const linkExisting = (
+      repo: Repository,
+      localPath: string,
+      accountId: string,
+    ): Effect.Effect<void, CloneError> =>
+      Effect.tryPromise({
+        try: async () => {
+          // Record a link failure (DB + broadcast) and surface it. Linked
+          // repos always stay `managed: false` so the deletion path never
+          // `rm -rf`s a user-owned checkout.
+          const failLink = async (error: string): Promise<never> => {
+            db.update(repositories)
+              .set({
+                managed: false,
+                cloneStatus: "error",
+                clonePath: localPath,
+                cloneError: error,
+              })
+              .where(eq(repositories.id, repo.id))
+              .run();
+            await broadcaster.broadcastToAccount(accountId, {
+              type: "repos:clone-status",
+              data: { repoId: repo.id, status: "error", error },
+            });
+            throw new Error(error);
+          };
+
+          const ready = existsSync(localPath) && (await isGitRepo(localPath));
+          if (!ready) {
+            await failLink("Linked clone not found — re-link");
+          }
+
+          // Verify the local checkout's origin actually points at the
+          // GitHub repo identity we saved. The HTTP route validates
+          // `fullName` against GitHub but never proves the *path* belongs
+          // to it — and the link form lets the user edit the full name
+          // after inspection. Without this guard, `owner/A` could be linked
+          // to a clone of `owner/B`; later PR worktree creation would fetch
+          // `owner/A` refs into the wrong clone and write `revv/pr-*`
+          // branches there.
+          const matches = await remoteMatches(localPath, repo.githubHost, repo.fullName);
+          if (!matches) {
+            await failLink(
+              `Local clone's origin remote does not match ${repo.fullName} — choose the matching checkout`,
+            );
+          }
+
+          db.update(repositories)
+            .set({
+              managed: false,
+              cloneStatus: "ready",
+              clonePath: localPath,
+              cloneError: null,
+            })
+            .where(eq(repositories.id, repo.id))
+            .run();
+          await broadcaster.broadcastToAccount(accountId, {
+            type: "repos:clone-status",
+            data: { repoId: repo.id, status: "ready" },
+          });
+        },
+        catch: (err) =>
+          new CloneError({
+            message: err instanceof Error ? err.message : String(err),
+            cause: err,
+          }),
+      });
+
     return {
       cloneRepo,
+      linkExisting,
+
+      inspectLocal: (localPath, gitHost) =>
+        Effect.tryPromise({
+          try: async () => {
+            const repoReady = existsSync(localPath) && (await isGitRepo(localPath));
+            if (!repoReady) {
+              return { isGitRepo: false, proposedFullName: null, remotes: [] };
+            }
+
+            let out = "";
+            try {
+              out = await runGitCapture(["remote", "-v"], localPath, 10_000);
+            } catch {
+              out = "";
+            }
+
+            const seen = new Set<string>();
+            const remotes: { name: string; url: string }[] = [];
+            for (const line of out.split("\n")) {
+              const match = /^(\S+)\s+(\S+)\s+\((fetch|push)\)$/.exec(line.trim());
+              if (!match) continue;
+              const [, name, url] = match;
+              if (!name || !url) continue;
+              const key = `${name}\0${url}`;
+              if (seen.has(key)) continue;
+              seen.add(key);
+              remotes.push({ name, url });
+            }
+
+            const origin = remotes.find((remote) => remote.name === "origin");
+            const proposedFullName =
+              (origin ? parseRemoteFullName(origin.url, gitHost) : null) ??
+              remotes.map((remote) => parseRemoteFullName(remote.url, gitHost)).find(Boolean) ??
+              null;
+
+            return { isGitRepo: true, proposedFullName, remotes };
+          },
+          catch: (err) =>
+            new CloneError({
+              message: err instanceof Error ? err.message : String(err),
+              cause: err,
+            }),
+        }),
 
       acquirePrWorktree: ({ repoId, prNumber, prHeadSha, githubToken }) =>
         Effect.withSpan("RepoClone.acquirePrWorktree", {
@@ -521,182 +668,144 @@ export const RepoCloneServiceLive = Layer.effect(
 
                 const gitHost = row.githubHost ?? serverEnv.githubHost;
                 const clonePath = row.clonePath;
-                const branchName = `pr-${prNumber}`;
-                const worktreePath = join(clonePath, "worktrees", branchName);
+                const prDirName = `pr-${prNumber}`;
+                const branchName = `revv/pr-${prNumber}`;
+                // The PR head is fetched into a dedicated namespace that can
+                // NEVER collide with the local working branch. Git resolves a
+                // bare ref name by trying `refs/<name>` before
+                // `refs/heads/<name>` (see gitrevisions(7)), so the earlier
+                // scheme that fetched into `refs/revv/pr-N` made the bare name
+                // `revv/pr-N` ambiguous with the branch `refs/heads/revv/pr-N`
+                // — and resolved to the *immutable PR head* instead of the
+                // working branch. That silently broke every bare-branch git op
+                // (rev-list miscounted to 0 → "No agent commits to push",
+                // `git merge revv/pr-N` reported "Already up to date" and
+                // merged nothing, etc.). `refs/revv-pull/N` shares no name
+                // with any branch, so the bare branch name is unambiguous.
+                const prFetchRef = `refs/revv-pull/${prNumber}`;
+                const holderBase = worktreeHolderPath(row.owner, row.name);
+                const worktreePath = join(holderBase, prDirName);
 
                 const authedUrl = `https://x-access-token:${githubToken}@${gitHost}/${row.fullName}.git`;
-                const cleanUrl = `https://${gitHost}/${row.fullName}.git`;
 
-                try {
-                  // Clear any per-worktree git locks left behind by a
-                  // SIGTERM'd previous run before any git operation that
-                  // would block on them. Without this, an aborted Claude
-                  // Code subprocess can wedge `pr-N`'s worktree gitdir
-                  // indefinitely; the only known recovery was to remove
-                  // and re-add the repo.
-                  await clearStalePrWorktreeLocks(clonePath, branchName);
+                mkdirSync(holderBase, { recursive: true });
 
-                  // Self-heal a worktree wedged in a mid-merge or
-                  // mid-rebase state — leftovers of a SIGKILL'd
-                  // merge-and-push run. Without this, the next
-                  // `git reset --hard` (lower in this function) trips
-                  // over `MERGE_HEAD` / `rebase-merge` directories and
-                  // fails with cryptic errors. Best-effort: a clean
-                  // worktree no-ops because there's nothing to abort.
-                  if (existsSync(worktreePath)) {
-                    await runGitBestEffort(["merge", "--abort"], worktreePath, 10_000);
-                    await runGitBestEffort(["rebase", "--abort"], worktreePath, 10_000);
-                  }
+                // Clear any per-worktree git locks left behind by a
+                // SIGTERM'd previous run before any git operation that
+                // would block on them.
+                await clearStalePrWorktreeLocks(clonePath, prDirName, branchName);
 
-                  await runGit(["remote", "set-url", "origin", authedUrl], clonePath);
+                // Heal clones seeded by the old scheme: delete the stale
+                // `refs/revv/pr-N` ref so it stops shadowing the working
+                // branch `refs/heads/revv/pr-N`. Best-effort and idempotent —
+                // a no-op on clones that never had it. Runs on every acquire
+                // (including the existing-worktree early-return paths below) so
+                // an already-checked-out worktree is fixed in place without a
+                // teardown, preserving any unpushed agent commits.
+                await runGitBestEffort(
+                  ["update-ref", "-d", `refs/revv/pr-${prNumber}`],
+                  clonePath,
+                  10_000,
+                );
 
-                  if (existsSync(worktreePath)) {
-                    // Existing dir — verify it's actually on the expected
-                    // branch. A wrong-branch / detached / corrupted state
-                    // means we tear down and recreate; otherwise we move
-                    // the worktree to `prHeadSha` in place.
-                    const headRef = await readGitHead(worktreePath);
-                    if (headRef === `refs/heads/${branchName}`) {
-                      const currentSha = (
-                        await runGitCapture(["rev-parse", "HEAD"], worktreePath)
-                      ).trim();
-                      if (currentSha === prHeadSha) {
-                        return { worktreePath, branchName };
-                      }
-                      // HEAD has moved past `prHeadSha`. Two distinct
-                      // shapes hide behind that:
-                      //
-                      //   (a) The chat agent committed on top of
-                      //       `prHeadSha` (no push yet). `currentSha`
-                      //       is a descendant of `prHeadSha` and those
-                      //       commits must survive into the next chat
-                      //       turn — they're what the chat-header push
-                      //       pill and proposed-changes strip render.
-                      //   (b) `prHeadSha` itself advanced on the remote
-                      //       (PR head moved) while we held a stale
-                      //       snapshot, so the worktree's HEAD has a
-                      //       different base than the requested
-                      //       `prHeadSha`. Here we want the old reset
-                      //       behavior — realign to the new head; any
-                      //       unpushed agent commits based on the
-                      //       stale head are discarded by design.
-                      //
-                      // `merge-base --is-ancestor prHeadSha currentSha`
-                      // is exit-0 iff (a) — `prHeadSha` is reachable
-                      // from `currentSha`. It also exit-0s in the rare
-                      // fast-forward case where the worktree is
-                      // somehow already past `prHeadSha` without the
-                      // agent's involvement, which is still the
-                      // correct no-op outcome.
-                      const isAncestor = await runGitBestEffort(
-                        ["merge-base", "--is-ancestor", prHeadSha, currentSha],
-                        worktreePath,
-                      );
-                      if (isAncestor) {
-                        return { worktreePath, branchName };
-                      }
-                      // Pull the requested commit into the local object
-                      // store. We target `prHeadSha` directly rather than
-                      // `refs/pull/{N}/head` because the PR's current head
-                      // can have advanced past `prHeadSha` since metadata
-                      // was resolved — fetching the ref in that case would
-                      // pull the wrong objects and the subsequent reset
-                      // would fail with "Could not parse object". The
-                      // fetch runs from inside the worktree that owns the
-                      // branch so the subsequent `reset --hard` updates
-                      // both working tree and branch ref atomically
-                      // without tripping git's "refusing to fetch into
-                      // branch checked out at <path>" guard.
-                      await ensurePrCommitPresent(worktreePath, prHeadSha, prNumber);
-                      await runGit(["reset", "--hard", prHeadSha], worktreePath);
+                // Self-heal a worktree wedged in a mid-merge or
+                // mid-rebase state — leftovers of a SIGKILL'd
+                // merge-and-push run.
+                if (existsSync(worktreePath)) {
+                  await runGitBestEffort(["merge", "--abort"], worktreePath, 10_000);
+                  await runGitBestEffort(["rebase", "--abort"], worktreePath, 10_000);
+                }
+
+                if (existsSync(worktreePath)) {
+                  // Existing dir — verify it's actually on the expected
+                  // branch. A wrong-branch / detached / corrupted state
+                  // means we tear down and recreate; otherwise we move
+                  // the worktree to `prHeadSha` in place.
+                  const headRef = await readGitHead(worktreePath);
+                  if (headRef === `refs/heads/${branchName}`) {
+                    const currentSha = (
+                      await runGitCapture(["rev-parse", "HEAD"], worktreePath)
+                    ).trim();
+                    if (currentSha === prHeadSha) {
                       return { worktreePath, branchName };
                     }
-                    // Wrong branch / detached / corrupted — tear down so
-                    // the fresh-setup path below can recreate cleanly.
-                    await runGitBestEffort(
-                      ["worktree", "remove", "--force", worktreePath],
-                      clonePath,
-                      10_000,
+                    const isAncestor = await runGitBestEffort(
+                      ["merge-base", "--is-ancestor", prHeadSha, currentSha],
+                      worktreePath,
                     );
-                    await rm(worktreePath, {
-                      recursive: true,
-                      force: true,
-                    });
-                  }
-
-                  // Fresh worktree path. Prune stale `.git/worktrees/<name>`
-                  // entries first — without this `git worktree add` would
-                  // fail with "already exists" on a half-cleaned previous
-                  // run. Idempotent on success.
-                  await runGitBestEffort(["worktree", "prune"], clonePath, 15_000);
-
-                  // Reclaim `refs/heads/pr-N` if some other worktree is
-                  // squatting on it — e.g. a pre-refactor
-                  // `chat-…-<sha12>` dir, or any user-created worktree
-                  // that happened to check out the branch. Without this
-                  // the fetch below would fail with
-                  //   "fatal: refusing to fetch into branch
-                  //    'refs/heads/pr-N' checked out at <other path>"
-                  // because git refuses to update a branch that's
-                  // checked out anywhere. We forcibly remove the
-                  // squatter — it can never be us, since
-                  // `existsSync(worktreePath)` was false above or we'd
-                  // have taken the in-place-refresh branch.
-                  const squatters = await findWorktreesOnBranch(clonePath, branchName);
-                  for (const squatter of squatters) {
-                    if (squatter === worktreePath) continue;
-                    await runGitBestEffort(
-                      ["worktree", "remove", "--force", squatter],
-                      clonePath,
-                      10_000,
-                    );
-                    try {
-                      if (existsSync(squatter)) {
-                        await rm(squatter, {
-                          recursive: true,
-                          force: true,
-                        });
-                      }
-                    } catch (err) {
-                      logError(
-                        "pr-worktree",
-                        "failed to rm squatter dir:",
-                        err instanceof Error ? err.message : String(err),
-                      );
+                    if (isAncestor) {
+                      return { worktreePath, branchName };
                     }
-                  }
-                  if (squatters.length > 0) {
-                    await runGitBestEffort(["worktree", "prune"], clonePath, 15_000);
-                  }
-
-                  // Fetch with the branch destination. Safe now because
-                  // nothing currently has `pr-N` checked out — we just
-                  // removed any squatter, and a fresh path means no
-                  // worktree owns it yet. The `+` is the standard
-                  // force-update prefix used by every fetch refspec
-                  // in this file.
-                  await runGit(
-                    ["fetch", "origin", `+refs/pull/${prNumber}/head:refs/heads/${branchName}`],
-                    clonePath,
-                  );
-                  await runGit(["worktree", "add", worktreePath, branchName], clonePath);
-                  // Realign to the caller's requested SHA in case the PR
-                  // head on GitHub has advanced past it (rare but possible
-                  // when the caller is acting on a slightly-stale snapshot,
-                  // e.g. resuming a walkthrough at its original SHA). The
-                  // PR-ref fetch above only pulls the *current* head, so we
-                  // have to ensure `prHeadSha` is fetched explicitly before
-                  // resetting — otherwise reset fails with
-                  // "Could not parse object".
-                  const tipSha = (await runGitCapture(["rev-parse", "HEAD"], worktreePath)).trim();
-                  if (tipSha !== prHeadSha) {
-                    await ensurePrCommitPresent(worktreePath, prHeadSha, prNumber);
+                    await ensurePrCommitPresent(worktreePath, prHeadSha, prNumber, authedUrl);
                     await runGit(["reset", "--hard", prHeadSha], worktreePath);
+                    return { worktreePath, branchName };
                   }
-                  return { worktreePath, branchName };
-                } finally {
-                  await runGit(["remote", "set-url", "origin", cleanUrl], clonePath);
+                  // Wrong branch / detached / corrupted — tear down so
+                  // the fresh-setup path below can recreate cleanly.
+                  await runGitBestEffort(
+                    ["worktree", "remove", "--force", worktreePath],
+                    clonePath,
+                    10_000,
+                  );
+                  await rm(worktreePath, {
+                    recursive: true,
+                    force: true,
+                  });
                 }
+
+                // Fresh worktree path. Prune stale `.git/worktrees/<name>`
+                // entries first — without this `git worktree add` would
+                // fail with "already exists" on a half-cleaned previous
+                // run. Idempotent on success.
+                await runGitBestEffort(["worktree", "prune"], clonePath, 15_000);
+
+                // Reclaim Revv-owned squatters only. User-created worktrees
+                // on the same branch are outside our holder and must survive.
+                const squatters = await findWorktreesOnBranch(clonePath, branchName);
+                for (const squatter of squatters) {
+                  if (squatter === worktreePath) continue;
+                  if (!existingPathIsUnder(squatter, CLONE_BASE_DIR)) {
+                    debug("pr-worktree", `leaving non-Revv squatter alone: ${squatter}`);
+                    continue;
+                  }
+                  await runGitBestEffort(
+                    ["worktree", "remove", "--force", squatter],
+                    clonePath,
+                    10_000,
+                  );
+                  try {
+                    if (existsSync(squatter)) {
+                      await rm(squatter, {
+                        recursive: true,
+                        force: true,
+                      });
+                    }
+                  } catch (err) {
+                    logError(
+                      "pr-worktree",
+                      "failed to rm squatter dir:",
+                      err instanceof Error ? err.message : String(err),
+                    );
+                  }
+                }
+                if (squatters.length > 0) {
+                  await runGitBestEffort(["worktree", "prune"], clonePath, 15_000);
+                }
+
+                await runGit(
+                  ["fetch", "--no-tags", authedUrl, `+refs/pull/${prNumber}/head:${prFetchRef}`],
+                  clonePath,
+                );
+                await runGit(
+                  ["worktree", "add", "-B", branchName, worktreePath, prFetchRef],
+                  clonePath,
+                );
+                const tipSha = (await runGitCapture(["rev-parse", "HEAD"], worktreePath)).trim();
+                if (tipSha !== prHeadSha) {
+                  await ensurePrCommitPresent(worktreePath, prHeadSha, prNumber, authedUrl);
+                  await runGit(["reset", "--hard", prHeadSha], worktreePath);
+                }
+                return { worktreePath, branchName };
               },
               catch: (err) => {
                 if (err instanceof CloneNotReadyError) return err;
@@ -820,12 +929,58 @@ export const RepoCloneServiceLive = Layer.effect(
           try: async () => {
             const row = db.select().from(repositories).where(eq(repositories.id, repoId)).get();
 
-            if (row?.clonePath) {
-              // Guard against path traversal — only delete within the designated clone dir
-              assertSafeClonePath(row.clonePath);
+            if (row) {
+              if (row.clonePath && existsSync(row.clonePath)) {
+                await runGitBestEffort(["worktree", "prune"], row.clonePath, 15_000);
+              }
 
-              if (existsSync(row.clonePath)) {
+              const holder = worktreeHolderPath(row.owner, row.name);
+              if (existsSync(holder)) {
+                await rm(holder, { recursive: true, force: true });
+              }
+
+              if (row.clonePath && row.managed) {
+                assertSafeManagedClonePath(row.clonePath);
                 await rm(row.clonePath, { recursive: true, force: true });
+              } else if (row.clonePath) {
+                // The holder dir (and its `pr-*` worktrees) was just
+                // removed above, but git still tracks those worktrees in
+                // `.git/worktrees`. Prune again now that the directories
+                // are gone — otherwise the `branch -D` calls below abort
+                // with "branch is used by worktree" against the stale
+                // metadata.
+                if (existsSync(row.clonePath)) {
+                  await runGitBestEffort(["worktree", "prune"], row.clonePath, 15_000);
+                }
+
+                const branches = await runGitCapture(
+                  ["branch", "--list", "revv/pr-*", "--format=%(refname:short)"],
+                  row.clonePath,
+                  15_000,
+                ).catch(() => "");
+                for (const branch of branches
+                  .split("\n")
+                  .map((b) => b.trim())
+                  .filter(Boolean)) {
+                  await runGitBestEffort(["branch", "-D", branch], row.clonePath, 15_000);
+                }
+
+                // Both namespaces: `refs/revv-pull/*` is the current PR-head
+                // fetch target; `refs/revv/*` is the legacy target left on
+                // clones seeded by the old scheme. `refs/revv` does NOT prefix
+                // `refs/revv-pull` (the char after `refs/revv` is `-`, not
+                // `/`), so both patterns are required.
+                const refs = await runGitCapture(
+                  ["for-each-ref", "--format=%(refname)", "refs/revv", "refs/revv-pull"],
+                  row.clonePath,
+                  15_000,
+                ).catch(() => "");
+                for (const ref of refs
+                  .split("\n")
+                  .map((r) => r.trim())
+                  .filter(Boolean)) {
+                  await runGitBestEffort(["update-ref", "-d", ref], row.clonePath, 15_000);
+                }
               }
             }
 
@@ -854,7 +1009,10 @@ export const RepoCloneServiceLive = Layer.effect(
             .select()
             .from(repositories)
             .where(
-              or(eq(repositories.cloneStatus, "pending"), eq(repositories.cloneStatus, "error")),
+              and(
+                eq(repositories.managed, true),
+                or(eq(repositories.cloneStatus, "pending"), eq(repositories.cloneStatus, "error")),
+              ),
             )
             .all();
 
@@ -884,6 +1042,7 @@ export const RepoCloneServiceLive = Layer.effect(
               cloneStatus: repo.cloneStatus,
               clonePath: repo.clonePath ?? null,
               cloneError: repo.cloneError ?? null,
+              managed: repo.managed,
               githubHost: repo.githubHost,
             };
 

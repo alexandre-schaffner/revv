@@ -27,6 +27,7 @@ pub fn run() {
 			show_main_window(app);
 		}))
 		.plugin(tauri_plugin_deep_link::init())
+		.plugin(tauri_plugin_dialog::init())
 		.plugin(tauri_plugin_opener::init())
 		// Registered so the frontend can toggle launch-on-login via the
 		// `plugin:autostart|enable` / `disable` / `is_enabled` IPC commands.

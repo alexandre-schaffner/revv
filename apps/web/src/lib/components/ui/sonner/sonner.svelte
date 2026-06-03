@@ -15,7 +15,18 @@ let { ...restProps }: SonnerProps = $props();
 	position="top-right"
 	closeButton
 	class="toaster group"
-	style="--normal-bg: var(--color-popover); --normal-text: var(--color-popover-foreground); --normal-border: var(--color-border); --normal-description: var(--color-text-secondary);"
+	style="
+		--normal-bg: var(--color-popover);
+		--normal-text: var(--color-popover-foreground);
+		--normal-border: var(--color-border);
+		--normal-bg-hover: var(--color-bg-tertiary);
+		--normal-border-hover: var(--color-border);
+		--normal-description: var(--color-text-secondary);
+		--gray2: var(--color-bg-tertiary);
+		--gray4: var(--color-border);
+		--gray5: var(--color-border);
+		--gray12: var(--color-popover-foreground);
+	"
 	{...restProps}
 >
 	{#snippet loadingIcon()}

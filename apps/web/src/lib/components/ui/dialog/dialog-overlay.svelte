@@ -1,5 +1,6 @@
 <script lang="ts">
 import { Dialog as DialogPrimitive } from "bits-ui";
+import { bitsAnim, overlayFadeIn, overlayFadeOut } from "$lib/motion";
 import { cn } from "$lib/utils.js";
 
 let {
@@ -9,9 +10,14 @@ let {
 }: DialogPrimitive.OverlayProps = $props();
 </script>
 
-<DialogPrimitive.Overlay
-	bind:ref
-	data-slot="dialog-overlay"
-	class={cn("data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 bg-black/40 duration-instant supports-backdrop-filter:backdrop-blur-sm fixed inset-0 isolate z-50", className)}
-	{...restProps}
-/>
+<DialogPrimitive.Overlay {...restProps}>
+	{#snippet child({ props })}
+		<div
+			bind:this={ref}
+			{...props}
+			data-slot="dialog-overlay"
+			class={cn("bg-black/40 supports-backdrop-filter:backdrop-blur-sm fixed inset-0 isolate z-50", className)}
+			use:bitsAnim={{ inPreset: overlayFadeIn, outPreset: overlayFadeOut }}
+		></div>
+	{/snippet}
+</DialogPrimitive.Overlay>
