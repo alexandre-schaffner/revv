@@ -1,7 +1,7 @@
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { AppRuntime } from "../runtime";
-import { CLONE_BASE_DIR } from "../services/clone-policy";
+import { assertSafeCloneBasePath, CLONE_BASE_DIR } from "../services/clone-policy";
 import { GitHubGateway } from "../services/GitHub";
 import { PollScheduler } from "../services/PollScheduler";
 import { RepoCloneService } from "../services/RepoClone";
@@ -33,6 +33,10 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
     async (ctx) => {
       const body = ctx.body;
       const isLink = body.mode === "link";
+
+      if (!isLink && body.basePath !== undefined) {
+        assertSafeCloneBasePath(body.basePath);
+      }
 
       try {
         return await AppRuntime.runPromise(

@@ -49,9 +49,24 @@ export function existingPathIsUnder(child: string, parent: string): boolean {
 export function assertSafeManagedClonePath(clonePath: string): void {
   const resolvedPath = resolve(clonePath);
   const home = resolve(homedir());
-  if (!clonePath.trim() || resolvedPath === "/" || resolvedPath === home) {
+  if (
+    !clonePath.trim() ||
+    resolvedPath === "/" ||
+    resolvedPath === home ||
+    (!pathIsUnder(resolvedPath, CLONE_BASE_DIR) && !pathIsUnder(resolvedPath, home))
+  ) {
     throw new CloneError({
       message: `Refusing to delete unsafe managed clone path: ${clonePath}`,
+    });
+  }
+}
+
+export function assertSafeCloneBasePath(basePath: string): void {
+  const resolvedPath = resolve(expandUserPath(basePath));
+  const home = resolve(homedir());
+  if (!pathIsUnder(resolvedPath, CLONE_BASE_DIR) && !pathIsUnder(resolvedPath, home)) {
+    throw new CloneError({
+      message: `Refusing to clone into unsafe base path: ${basePath}`,
     });
   }
 }
