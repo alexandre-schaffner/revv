@@ -143,8 +143,11 @@ export class RepoCloneService extends Context.Tag("RepoCloneService")<
      *
      * Lifecycle:
      *   - **First acquire (no dir on disk):** fetch
-     *     `+refs/pull/N/head:refs/revv/pr-N` from GitHub, then
+     *     `+refs/pull/N/head:refs/revv-pull/N` from GitHub, then
      *     `git worktree add -B revv/pr-N` checks it out at the new branch.
+     *     The fetch ref lives under `refs/revv-pull/` (not `refs/revv/pr-N`)
+     *     so it can't shadow the bare branch name `revv/pr-N` — see the
+     *     `prFetchRef` comment in the body.
      *   - **Already exists, branch == pr-N, HEAD == prHeadSha:** no-op.
      *   - **Already exists, branch == pr-N, different HEAD:** fetch the PR
      *     ref into FETCH_HEAD *inside the worktree* (so the in-place
@@ -667,6 +670,19 @@ export const RepoCloneServiceLive = Layer.effect(
                 const clonePath = row.clonePath;
                 const prDirName = `pr-${prNumber}`;
                 const branchName = `revv/pr-${prNumber}`;
+                // The PR head is fetched into a dedicated namespace that can
+                // NEVER collide with the local working branch. Git resolves a
+                // bare ref name by trying `refs/<name>` before
+                // `refs/heads/<name>` (see gitrevisions(7)), so the earlier
+                // scheme that fetched into `refs/revv/pr-N` made the bare name
+                // `revv/pr-N` ambiguous with the branch `refs/heads/revv/pr-N`
+                // — and resolved to the *immutable PR head* instead of the
+                // working branch. That silently broke every bare-branch git op
+                // (rev-list miscounted to 0 → "No agent commits to push",
+                // `git merge revv/pr-N` reported "Already up to date" and
+                // merged nothing, etc.). `refs/revv-pull/N` shares no name
+                // with any branch, so the bare branch name is unambiguous.
+                const prFetchRef = `refs/revv-pull/${prNumber}`;
                 const holderBase = worktreeHolderPath(row.owner, row.name);
                 const worktreePath = join(holderBase, prDirName);
 
@@ -678,6 +694,19 @@ export const RepoCloneServiceLive = Layer.effect(
                 // SIGTERM'd previous run before any git operation that
                 // would block on them.
                 await clearStalePrWorktreeLocks(clonePath, prDirName, branchName);
+
+                // Heal clones seeded by the old scheme: delete the stale
+                // `refs/revv/pr-N` ref so it stops shadowing the working
+                // branch `refs/heads/revv/pr-N`. Best-effort and idempotent —
+                // a no-op on clones that never had it. Runs on every acquire
+                // (including the existing-worktree early-return paths below) so
+                // an already-checked-out worktree is fixed in place without a
+                // teardown, preserving any unpushed agent commits.
+                await runGitBestEffort(
+                  ["update-ref", "-d", `refs/revv/pr-${prNumber}`],
+                  clonePath,
+                  10_000,
+                );
 
                 // Self-heal a worktree wedged in a mid-merge or
                 // mid-rebase state — leftovers of a SIGKILL'd
@@ -764,16 +793,11 @@ export const RepoCloneServiceLive = Layer.effect(
                 }
 
                 await runGit(
-                  [
-                    "fetch",
-                    "--no-tags",
-                    authedUrl,
-                    `+refs/pull/${prNumber}/head:refs/revv/pr-${prNumber}`,
-                  ],
+                  ["fetch", "--no-tags", authedUrl, `+refs/pull/${prNumber}/head:${prFetchRef}`],
                   clonePath,
                 );
                 await runGit(
-                  ["worktree", "add", "-B", branchName, worktreePath, `refs/revv/pr-${prNumber}`],
+                  ["worktree", "add", "-B", branchName, worktreePath, prFetchRef],
                   clonePath,
                 );
                 const tipSha = (await runGitCapture(["rev-parse", "HEAD"], worktreePath)).trim();
@@ -941,8 +965,13 @@ export const RepoCloneServiceLive = Layer.effect(
                   await runGitBestEffort(["branch", "-D", branch], row.clonePath, 15_000);
                 }
 
+                // Both namespaces: `refs/revv-pull/*` is the current PR-head
+                // fetch target; `refs/revv/*` is the legacy target left on
+                // clones seeded by the old scheme. `refs/revv` does NOT prefix
+                // `refs/revv-pull` (the char after `refs/revv` is `-`, not
+                // `/`), so both patterns are required.
                 const refs = await runGitCapture(
-                  ["for-each-ref", "--format=%(refname)", "refs/revv"],
+                  ["for-each-ref", "--format=%(refname)", "refs/revv", "refs/revv-pull"],
                   row.clonePath,
                   15_000,
                 ).catch(() => "");
