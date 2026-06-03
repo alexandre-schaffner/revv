@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/alexandre-schaffner/revv/compare/v0.8.0...v0.9.0) (2026-06-03)
+
+
+### Features
+
+* link existing local clones and redesign the add-repo modal ([#115](https://github.com/alexandre-schaffner/revv/issues/115)) ([e5c6085](https://github.com/alexandre-schaffner/revv/commit/e5c6085abc14b50ee87be0c51f6145d8964ff616))
+
 ## [0.8.0](https://github.com/alexandre-schaffner/revv/compare/v0.7.0...v0.8.0) (2026-06-02)
 
 
