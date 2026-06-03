@@ -13,6 +13,7 @@ import { Button } from "$lib/components/ui/button/index.js";
 import { gsapFadeY, tokens } from "$lib/motion";
 import { addRepo, getRepositories, retryClone } from "$lib/stores/prs.svelte";
 import { isTauri } from "$lib/utils/platform";
+import RepoDialogHeader from "./RepoDialogHeader.svelte";
 import RepoField from "./RepoField.svelte";
 
 let { onClose }: { onClose?: () => void } = $props();
@@ -115,9 +116,7 @@ function onPathKeydown(e: KeyboardEvent): void {
 <div class="link-form">
 	{#if linkedRepo}
 		<div class="success-view" in:gsapFadeY={{ y: 6, duration: tokens.quick }}>
-			<div class="form-header">
-				<h2 class="title">Repository Linked</h2>
-			</div>
+			<RepoDialogHeader title="Repository Linked" />
 
 			<div class="linked-card">
 				<RepoGradientAvatar
@@ -155,10 +154,7 @@ function onPathKeydown(e: KeyboardEvent): void {
 			</div>
 		</div>
 	{:else}
-		<div class="form-header">
-			<h2 class="title">Open Existing Clone</h2>
-			<span class="title-meta">Linked</span>
-		</div>
+		<RepoDialogHeader title="Open Existing Clone" meta="Linked" />
 
 		<div class="path-row">
 			<RepoField
@@ -234,28 +230,6 @@ function onPathKeydown(e: KeyboardEvent): void {
 		display: flex;
 		min-height: 0;
 		flex-direction: column;
-	}
-
-	.form-header {
-		display: flex;
-		align-items: baseline;
-		justify-content: space-between;
-		gap: 10px;
-		margin-bottom: 12px;
-		flex-shrink: 0;
-	}
-
-	.title {
-		margin: 0;
-		color: var(--color-text-primary);
-		font-size: 13.5px;
-		font-weight: 600;
-		letter-spacing: -0.005em;
-	}
-
-	.title-meta {
-		color: var(--color-text-muted);
-		font-size: 11px;
 	}
 
 	.path-row {

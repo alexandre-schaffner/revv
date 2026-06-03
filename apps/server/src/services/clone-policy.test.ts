@@ -54,8 +54,14 @@ describe("decideCloneDestination", () => {
     });
   });
 
-  it("auto-links matching git repositories", () => {
+  it("links a matching git repository outside the managed base", () => {
     expect(decideCloneDestination("matching-git-repo", false)).toEqual({ action: "link" });
+  });
+
+  it("adopts a matching git repository inside the managed base", () => {
+    // A base-internal clone must become managed, not linked — otherwise
+    // delete would never reclaim it and it would leak in `~/.revv`.
+    expect(decideCloneDestination("matching-git-repo", true)).toEqual({ action: "adopt" });
   });
 
   it("refuses different git repositories", () => {

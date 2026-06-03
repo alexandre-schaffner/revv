@@ -15,7 +15,6 @@ import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte
 import { Badge } from "$lib/components/ui/badge/index.js";
 import { Button } from "$lib/components/ui/button/index.js";
 import * as Command from "$lib/components/ui/command/index.js";
-import { Input } from "$lib/components/ui/input/index.js";
 import {
   addRepo,
   deleteRepo,
@@ -25,12 +24,15 @@ import {
   getAvailableRepos,
   getAvailableReposFetchFailed,
   getAvailableReposLoading,
+  getDefaultCloneBaseDir,
   getPullRequests,
   getRepositories,
   retryClone,
 } from "$lib/stores/prs.svelte";
 import { isTauri } from "$lib/utils/platform";
 import RepoDeleteConfirm from "./RepoDeleteConfirm.svelte";
+import RepoDialogHeader from "./RepoDialogHeader.svelte";
+import RepoField from "./RepoField.svelte";
 
 // Shared "Add Repository" picker. Built on the shadcn `Command` (cmdk)
 // primitive so the search input is pinned, the list is the only scroll
@@ -218,23 +220,27 @@ async function handleManualImport() {
 
 let trackedCount = $derived(getRepositories().length);
 let trimmedCloneBasePath = $derived(cloneBasePath.trim());
+// Empty field falls back to the server's default base; both the preview and
+// the submitted `basePath` read through this single value, never a literal.
+let effectiveBase = $derived(trimmedCloneBasePath || getDefaultCloneBaseDir() || "");
 let resolvedClonePath = $derived.by(() => {
-  if (!showLocation || !MANUAL_REPO_REGEX.test(trimmedSearch)) return null;
+  if (!showLocation || !effectiveBase || !MANUAL_REPO_REGEX.test(trimmedSearch)) return null;
   const [owner, name] = trimmedSearch.split("/");
   if (!owner || !name) return null;
-  const base = trimmedCloneBasePath || "~/.revv/repos";
-  return `${base.replace(/\/$/, "")}/${owner}/${name}`;
+  return `${effectiveBase.replace(/\/$/, "")}/${owner}/${name}`;
 });
 
 function addBody(repoFullName: string) {
   if (!showLocation) return repoFullName;
-  const basePath = trimmedCloneBasePath || "~/.revv/repos";
-  return { fullName: repoFullName, mode: "clone" as const, basePath };
+  // Only send a custom base; an empty field defers to the server's default
+  // (omitting `basePath`) rather than echoing a guessed path.
+  if (!trimmedCloneBasePath) return { fullName: repoFullName, mode: "clone" as const };
+  return { fullName: repoFullName, mode: "clone" as const, basePath: trimmedCloneBasePath };
 }
 
 function rememberCloneBase(): void {
   if (!showLocation) return;
-  onCloneSuccess?.(trimmedCloneBasePath || "~/.revv/repos");
+  onCloneSuccess?.(trimmedCloneBasePath);
 }
 
 async function browseForCloneBase(): Promise<void> {
@@ -266,12 +272,7 @@ function prCountFor(
 	class="add-repo flex h-auto min-h-0 flex-1 flex-col overflow-visible bg-transparent"
 >
 	{#if showTitle}
-		<div class="form-header">
-			<h2 class="title">Add Repository</h2>
-			{#if trackedCount > 0}
-				<span class="title-meta">{trackedCount} tracked</span>
-			{/if}
-		</div>
+		<RepoDialogHeader title="Add Repository" meta={trackedCount > 0 ? `${trackedCount} tracked` : undefined} />
 	{/if}
 
 	<!-- Search (pinned). cmdk owns keyboard nav + selection. -->
@@ -297,18 +298,16 @@ function prCountFor(
 
 	{#if showLocation}
 		<div class="location-row">
-			<div class="location-field">
-				<Folder size={13} class="location-icon" />
-				<Input
-					placeholder="~/.revv/repos"
-					aria-label="Clone location"
-					value={cloneBasePath}
-					oninput={(e) => onCloneBasePathChange?.(e.currentTarget.value)}
-					autocomplete="off"
-					spellcheck="false"
-					class="pl-8"
-				/>
-			</div>
+			<RepoField
+				placeholder={getDefaultCloneBaseDir() ?? 'Default clone location'}
+				aria-label="Clone location"
+				value={cloneBasePath}
+				oninput={(e) => onCloneBasePathChange?.(e.currentTarget.value)}
+				autocomplete="off"
+				spellcheck="false"
+			>
+				{#snippet icon()}<Folder size={13} />{/snippet}
+			</RepoField>
 			<Button
 				variant="outline"
 				size="sm"
@@ -513,30 +512,6 @@ function prCountFor(
 />
 
 <style>
-	/* ── Header ─────────────────────────────────────────── */
-	.form-header {
-		display: flex;
-		align-items: baseline;
-		justify-content: space-between;
-		gap: 10px;
-		margin-bottom: 12px;
-		flex-shrink: 0;
-	}
-
-	.title {
-		font-size: 13.5px;
-		font-weight: 600;
-		color: var(--color-text-primary);
-		letter-spacing: -0.005em;
-		margin: 0;
-	}
-
-	.title-meta {
-		font-size: 11px;
-		color: var(--color-text-muted);
-		font-variant-numeric: tabular-nums;
-	}
-
 	/* ── Search (cmdk input restyled as a pill field) ───── */
 	.search-shell {
 		position: relative;
@@ -597,35 +572,6 @@ function prCountFor(
 		gap: 6px;
 		margin-top: 8px;
 		flex-shrink: 0;
-	}
-
-	.location-field {
-		position: relative;
-		display: flex;
-		align-items: center;
-		flex: 1;
-		min-width: 0;
-	}
-
-	.location-field :global(.location-icon) {
-		position: absolute;
-		left: 11px;
-		color: var(--color-text-muted);
-		pointer-events: none;
-	}
-
-	.location-field :global(input) {
-		height: 32px;
-		border-radius: var(--radius-card);
-		background: var(--color-input-bg);
-		border-color: var(--color-border);
-		font-size: 12.5px;
-	}
-
-	.location-field :global(input:focus-visible) {
-		border-color: color-mix(in srgb, var(--color-accent) 55%, transparent);
-		background: var(--color-bg-primary);
-		box-shadow: 0 0 0 3px var(--color-input-focus-ring);
 	}
 
 	.resolved-path {

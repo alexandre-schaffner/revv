@@ -28,6 +28,11 @@ let availablePrCounts = $state<Record<string, number>>({});
 // least once. Lets the UI treat missing entries as "No open PRs" rather
 // than holding a blank hint indefinitely when a repo errors out server-side.
 let availablePrCountsLoaded = $state(false);
+// The server's effective managed-clone base (`REVV_CLONE_DIR`). Fetched once
+// from the server so the add-repo flow never hardcodes a default that could
+// diverge from an operator's override. Null until fetched (or if the fetch
+// failed) — callers then omit `basePath` and let the server apply its own.
+let defaultCloneBaseDir = $state<string | null>(null);
 let selectedPrId = $state<string | null>(null);
 // URL-driven: set by the +layout effect that reads /repo/[repoId] (or
 // derives from the active PR's repositoryId). Mirrors the selectedPrId
@@ -433,16 +438,14 @@ export function setSearchQuery(q: string): void {
   searchQuery = q;
 }
 
-export type AddRepoInput =
-  | string
+export type AddRepoBody =
   | { readonly fullName: string; readonly mode?: "clone"; readonly basePath?: string }
   | { readonly fullName: string; readonly mode: "link"; readonly clonePath: string };
 
-function toAddRepoBody(
-  input: AddRepoInput,
-):
-  | { readonly fullName: string; readonly mode?: "clone"; readonly basePath?: string }
-  | { readonly fullName: string; readonly mode: "link"; readonly clonePath: string } {
+/** A bare `owner/name` string is sugar for `{ fullName, mode: "clone" }`. */
+export type AddRepoInput = string | AddRepoBody;
+
+function toAddRepoBody(input: AddRepoInput): AddRepoBody {
   if (typeof input === "string") return { fullName: input };
   return input;
 }
@@ -727,6 +730,27 @@ async function fetchAvailablePrCounts(fullNames: string[]): Promise<void> {
   } finally {
     availablePrCountsLoaded = true;
   }
+}
+
+/**
+ * Fetch the server's default clone base directory once and cache it. Idempotent
+ * — subsequent calls no-op once a value is cached. Best-effort: on failure the
+ * value stays null and the add-repo form omits `basePath`, deferring to the
+ * server's own default.
+ */
+export async function fetchDefaultCloneBaseDir(): Promise<void> {
+  if (defaultCloneBaseDir !== null) return;
+  try {
+    const { data, error } = await api.api.repos["clone-base-dir"].get();
+    if (error || !data) return;
+    defaultCloneBaseDir = (data as { path: string }).path;
+  } catch {
+    // Best-effort — see the field doc.
+  }
+}
+
+export function getDefaultCloneBaseDir(): string | null {
+  return defaultCloneBaseDir;
 }
 
 export function getAvailableRepos(): Repository[] {

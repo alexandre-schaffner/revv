@@ -1,6 +1,7 @@
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { AppRuntime } from "../runtime";
+import { CLONE_BASE_DIR } from "../services/clone-policy";
 import { GitHubGateway } from "../services/GitHub";
 import { PollScheduler } from "../services/PollScheduler";
 import { RepoCloneService } from "../services/RepoClone";
@@ -22,6 +23,11 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
       return handleAppError(e, ctx);
     }
   })
+  // The server's effective managed-clone base (`REVV_CLONE_DIR`, default
+  // `~/.revv/repos`). The web add-repo flow reads this for its location
+  // placeholder, resolved-path preview, and default `basePath` so the UI
+  // never hardcodes a value that diverges from an operator's override.
+  .get("/clone-base-dir", () => ({ path: CLONE_BASE_DIR }))
   .post(
     "/",
     async (ctx) => {

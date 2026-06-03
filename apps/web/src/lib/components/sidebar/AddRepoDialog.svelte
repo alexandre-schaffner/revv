@@ -4,8 +4,10 @@ import CloudArrowDown from "phosphor-svelte/lib/CloudArrowDown";
 import FolderOpen from "phosphor-svelte/lib/FolderOpen";
 import * as Dialog from "$lib/components/ui/dialog/index.js";
 import { gsapFade, gsapFadeY, gsapPress, tokens } from "$lib/motion";
+import { fetchDefaultCloneBaseDir } from "$lib/stores/prs.svelte";
 import AddRepoForm from "./AddRepoForm.svelte";
 import LinkRepoForm from "./LinkRepoForm.svelte";
+import RepoDialogHeader from "./RepoDialogHeader.svelte";
 
 let {
   open = false,
@@ -19,7 +21,9 @@ const LAST_CLONE_BASE_KEY = "revv:lastCloneBaseDir";
 type View = "choose" | "clone" | "link";
 
 let view = $state<View>("choose");
-let cloneBasePath = $state("~/.revv/repos");
+// Empty = "use the server's default base" (shown as the placeholder, fetched
+// from the server). Only a user-chosen custom base is ever held here.
+let cloneBasePath = $state("");
 
 // Reset to the source chooser *before* the reopened modal paints. $effect.pre
 // runs ahead of the dialog content's DOM update in the same flush, so when
@@ -29,14 +33,18 @@ let cloneBasePath = $state("~/.revv/repos");
 $effect.pre(() => {
   if (!open) return;
   view = "choose";
+  void fetchDefaultCloneBaseDir();
   const saved =
     typeof localStorage === "undefined" ? null : localStorage.getItem(LAST_CLONE_BASE_KEY);
-  cloneBasePath = saved?.trim() ? saved : "~/.revv/repos";
+  cloneBasePath = saved?.trim() ? saved : "";
 });
 
 function rememberCloneBase(path: string): void {
   cloneBasePath = path;
-  localStorage.setItem(LAST_CLONE_BASE_KEY, path);
+  // Persist only an explicit custom base; an empty value means "default", which
+  // we never want to pin (it would survive a later server-default change).
+  if (path.trim()) localStorage.setItem(LAST_CLONE_BASE_KEY, path);
+  else localStorage.removeItem(LAST_CLONE_BASE_KEY);
 }
 </script>
 
@@ -62,10 +70,7 @@ function rememberCloneBase(path: string): void {
           in:gsapFadeY={{ y: 6, duration: tokens.quick }}
           out:gsapFade={{ duration: tokens.snap }}
         >
-          <div class="form-header">
-            <h2 class="title">Add Repository</h2>
-            <span class="title-meta">Sources</span>
-          </div>
+          <RepoDialogHeader title="Add Repository" meta="Sources" />
 
           <button type="button" class="source-row" onclick={() => (view = "clone")} use:gsapPress>
             <span class="source-icon"><CloudArrowDown size={17} weight="fill" /></span>
@@ -139,28 +144,6 @@ function rememberCloneBase(path: string): void {
     display: flex;
     min-height: 0;
     flex-direction: column;
-  }
-
-  .form-header {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 10px;
-    margin-bottom: 12px;
-    flex-shrink: 0;
-  }
-
-  .title {
-    margin: 0;
-    color: var(--color-text-primary);
-    font-size: 13.5px;
-    font-weight: 600;
-    letter-spacing: -0.005em;
-  }
-
-  .title-meta {
-    color: var(--color-text-muted);
-    font-size: 11px;
   }
 
   .source-row {

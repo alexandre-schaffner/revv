@@ -108,6 +108,7 @@ export type CloneDestinationState =
 
 export type CloneDestinationDecision =
   | { readonly action: "clone"; readonly removeExisting: boolean }
+  | { readonly action: "adopt" }
   | { readonly action: "link" }
   | { readonly action: "fail"; readonly message: string };
 
@@ -120,7 +121,13 @@ export function decideCloneDestination(
     case "empty":
       return { action: "clone", removeExisting: false };
     case "matching-git-repo":
-      return { action: "link" };
+      // A valid clone of the right remote already sits here. Inside Revv's
+      // managed base, adopt it as a managed clone — Revv created it (e.g. a
+      // re-add over a directory a prior delete left behind) and may reclaim
+      // it on delete. Outside the base it's the user's own checkout, so link
+      // it read-only (`managed: false`) and never delete it. Flipping a
+      // base-internal clone to linked would orphan it permanently in `~/.revv`.
+      return underDefaultBase ? { action: "adopt" } : { action: "link" };
     case "different-git-repo":
       return {
         action: "fail",

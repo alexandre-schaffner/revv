@@ -411,6 +411,21 @@ export const RepoCloneServiceLive = Layer.effect(
                   return { mode: "linked" as const };
                 }
 
+                if (decision.action === "adopt") {
+                  // A valid clone of this repo already exists inside the
+                  // managed base — adopt it as managed without re-cloning.
+                  db.update(repositories)
+                    .set({
+                      managed: true,
+                      cloneStatus: "ready",
+                      clonePath: cloneDir,
+                      cloneError: null,
+                    })
+                    .where(eq(repositories.id, repo.id))
+                    .run();
+                  return { mode: "adopted" as const };
+                }
+
                 db.update(repositories)
                   .set({
                     managed: true,
@@ -595,9 +610,7 @@ export const RepoCloneServiceLive = Layer.effect(
       inspectLocal: (localPath, gitHost) =>
         Effect.tryPromise({
           try: async () => {
-            const repoReady =
-              existsSync(localPath) &&
-              (await runGitBestEffort(["rev-parse", "--git-dir"], localPath, 10_000));
+            const repoReady = existsSync(localPath) && (await isGitRepo(localPath));
             if (!repoReady) {
               return { isGitRepo: false, proposedFullName: null, remotes: [] };
             }
