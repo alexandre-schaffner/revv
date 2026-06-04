@@ -39,6 +39,7 @@ import {
   type NormalizedAgentEvent,
   walkCodexEvents,
   withAgentTurn,
+  ZERO_TOKEN_USAGE,
 } from "../agent-stream";
 import { buildWalkthroughPrompt, WALKTHROUGH_MCP_SYSTEM_PROMPT } from "../prompts/walkthrough";
 import { type CodexMcpServers, makeCodexMcpServer, startCodexThread } from "./codex-transport";
@@ -270,14 +271,7 @@ export function streamWalkthroughViaCodexMCP(
             anySummaryEmitted = anySummaryEmitted && !errorEmitted;
           }
 
-          return (
-            usage ?? {
-              inputTokens: 0,
-              outputTokens: 0,
-              cacheReadInputTokens: 0,
-              cacheCreationInputTokens: 0,
-            }
-          );
+          return usage ?? ZERO_TOKEN_USAGE;
         },
       });
     } catch (err) {
@@ -287,12 +281,7 @@ export function streamWalkthroughViaCodexMCP(
         errorEmitted = true;
         push({ type: "error", data: { code: "AiGenerationError", message } });
       }
-      return {
-        inputTokens: 0,
-        outputTokens: 0,
-        cacheReadInputTokens: 0,
-        cacheCreationInputTokens: 0,
-      };
+      return ZERO_TOKEN_USAGE;
     } finally {
       clearInterval(heartbeatInterval);
       await params.deps.unregisterActivityNotifier(params.walkthroughId).catch(() => {

@@ -45,6 +45,7 @@ import {
   subscribeOpencodeStream,
   walkOpencodePartsWithState,
   withAgentTurn,
+  ZERO_TOKEN_USAGE,
 } from "../agent-stream";
 import { buildWalkthroughPrompt, WALKTHROUGH_MCP_SYSTEM_PROMPT } from "../prompts/walkthrough";
 import type { ContinuationContext } from "./mcp-walkthrough";
@@ -671,12 +672,7 @@ export function streamWalkthroughViaOpencodeMCP(
           data: { code: "AiGenerationError", message },
         });
       }
-      return {
-        inputTokens: 0,
-        outputTokens: 0,
-        cacheReadInputTokens: 0,
-        cacheCreationInputTokens: 0,
-      };
+      return ZERO_TOKEN_USAGE;
     } finally {
       clearInterval(heartbeatInterval);
       await params.deps.unregisterActivityNotifier(params.walkthroughId).catch(() => {

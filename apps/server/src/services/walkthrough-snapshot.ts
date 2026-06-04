@@ -74,39 +74,43 @@ const isCitation = (v: unknown): v is RatingCitation =>
   typeof (v as { startLine?: unknown }).startLine === "number" &&
   typeof (v as { endLine?: unknown }).endLine === "number";
 
+const ZERO_USAGE: WalkthroughTokenUsage = {
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadInputTokens: 0,
+  cacheCreationInputTokens: 0,
+  contextTokens: 0,
+};
+
 function parseTokenUsage(raw: string | null): WalkthroughTokenUsage {
-  if (!raw)
-    return {
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheReadInputTokens: 0,
-      cacheCreationInputTokens: 0,
-    };
+  if (!raw) return ZERO_USAGE;
   try {
     const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== "object" || parsed === null) {
-      return {
-        inputTokens: 0,
-        outputTokens: 0,
-        cacheReadInputTokens: 0,
-        cacheCreationInputTokens: 0,
-      };
-    }
+    if (typeof parsed !== "object" || parsed === null) return ZERO_USAGE;
     const u = parsed as Record<string, unknown>;
+    const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+    const inputTokens = num(u.inputTokens);
+    const outputTokens = num(u.outputTokens);
+    const cacheReadInputTokens = num(u.cacheReadInputTokens);
+    const cacheCreationInputTokens = num(u.cacheCreationInputTokens);
+    const contextWindowTokens = num(u.contextWindowTokens);
+    // Snapshots predating context-occupancy tracking carry no `contextTokens`.
+    // Fall back to the throughput sum (the gauge's legacy formula) so an
+    // imported historical walkthrough doesn't render an empty gauge.
+    const contextTokens =
+      typeof u.contextTokens === "number" && Number.isFinite(u.contextTokens)
+        ? u.contextTokens
+        : inputTokens + outputTokens + cacheReadInputTokens + cacheCreationInputTokens;
     return {
-      inputTokens: typeof u.inputTokens === "number" ? u.inputTokens : 0,
-      outputTokens: typeof u.outputTokens === "number" ? u.outputTokens : 0,
-      cacheReadInputTokens: typeof u.cacheReadInputTokens === "number" ? u.cacheReadInputTokens : 0,
-      cacheCreationInputTokens:
-        typeof u.cacheCreationInputTokens === "number" ? u.cacheCreationInputTokens : 0,
+      inputTokens,
+      outputTokens,
+      cacheReadInputTokens,
+      cacheCreationInputTokens,
+      contextTokens,
+      ...(contextWindowTokens > 0 ? { contextWindowTokens } : {}),
     };
   } catch {
-    return {
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheReadInputTokens: 0,
-      cacheCreationInputTokens: 0,
-    };
+    return ZERO_USAGE;
   }
 }
 

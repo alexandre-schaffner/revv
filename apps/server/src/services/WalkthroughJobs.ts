@@ -36,6 +36,12 @@ import type {
 } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Cause, Context, Effect, Fiber, Layer, Option, Ref, type Scope } from "effect";
+import {
+  accumulateTokenUsage,
+  addThroughput,
+  mergeContextOccupancy,
+  ZERO_TOKEN_USAGE,
+} from "../ai/agent-stream/token-usage";
 import { findIssuesMissingInlineComment } from "../ai/providers/walkthrough-tools";
 import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../constants";
 import { account } from "../db/schema/auth";
@@ -99,65 +105,6 @@ const MAX_AUTO_CONTINUATIONS = 2;
  * This ensures the token outlives even the longest allowed generation session.
  */
 const SESSION_TOKEN_TTL_MS = CLI_WALKTHROUGH_TIMEOUT_MS * (1 + MAX_AUTO_CONTINUATIONS) + 5 * 60_000;
-
-function addTokenThroughput(
-  left: WalkthroughTokenUsage,
-  right: WalkthroughTokenUsage,
-): WalkthroughTokenUsage {
-  return {
-    inputTokens: left.inputTokens + right.inputTokens,
-    outputTokens: left.outputTokens + right.outputTokens,
-    cacheReadInputTokens: left.cacheReadInputTokens + right.cacheReadInputTokens,
-    cacheCreationInputTokens: left.cacheCreationInputTokens + right.cacheCreationInputTokens,
-  };
-}
-
-function updateLatestContextUsage(
-  state: {
-    latestContextTokens: number | undefined;
-    latestContextWindowTokens: number | undefined;
-  },
-  usage: WalkthroughTokenUsage,
-): void {
-  if (
-    typeof usage.contextTokens === "number" &&
-    Number.isFinite(usage.contextTokens) &&
-    usage.contextTokens > 0
-  ) {
-    state.latestContextTokens = usage.contextTokens;
-  }
-  if (
-    typeof usage.contextWindowTokens === "number" &&
-    Number.isFinite(usage.contextWindowTokens) &&
-    usage.contextWindowTokens > 0
-  ) {
-    state.latestContextWindowTokens = Math.max(
-      state.latestContextWindowTokens ?? 0,
-      usage.contextWindowTokens,
-    );
-  }
-}
-
-function tokenUsageSnapshot(
-  state: {
-    latestContextTokens: number | undefined;
-    latestContextWindowTokens: number | undefined;
-  },
-  throughput: WalkthroughTokenUsage,
-): WalkthroughTokenUsage {
-  return {
-    inputTokens: throughput.inputTokens,
-    outputTokens: throughput.outputTokens,
-    cacheReadInputTokens: throughput.cacheReadInputTokens,
-    cacheCreationInputTokens: throughput.cacheCreationInputTokens,
-    ...(state.latestContextTokens !== undefined
-      ? { contextTokens: state.latestContextTokens }
-      : {}),
-    ...(state.latestContextWindowTokens !== undefined
-      ? { contextWindowTokens: state.latestContextWindowTokens }
-      : {}),
-  };
-}
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -522,9 +469,11 @@ export const WalkthroughJobsLive = Layer.effect(
     };
 
     interface LoopState {
+      // The full running snapshot: throughput accumulates across generators /
+      // auto-continuations, while occupancy (contextTokens / contextWindowTokens)
+      // tracks the latest call point-in-time. See `token-usage.ts` for the
+      // accumulation semantics. Every exit path reads this directly.
       accumulatedTokenUsage: WalkthroughTokenUsage;
-      latestContextTokens: number | undefined;
-      latestContextWindowTokens: number | undefined;
       autoContinuations: number;
       currentGenerator: AsyncGenerator<WalkthroughStreamEvent>;
       capturedOpencodeSessionId: string | undefined;
@@ -664,12 +613,11 @@ export const WalkthroughJobsLive = Layer.effect(
         ): Effect.Effect<ProcessResult, never, never> =>
           Effect.gen(function* () {
             if (event.type === "done") {
-              updateLatestContextUsage(state, event.data.tokenUsage);
-              state.accumulatedTokenUsage = addTokenThroughput(
+              state.accumulatedTokenUsage = accumulateTokenUsage(
                 state.accumulatedTokenUsage,
                 event.data.tokenUsage,
               );
-              const currentTokenUsage = tokenUsageSnapshot(state, state.accumulatedTokenUsage);
+              const currentTokenUsage = state.accumulatedTokenUsage;
 
               yield* emitEvent(job.walkthroughId, {
                 type: "usage",
@@ -735,7 +683,7 @@ export const WalkthroughJobsLive = Layer.effect(
                 );
                 return {
                   _tag: "returnDone",
-                  tokenUsage: tokenUsageSnapshot(state, state.accumulatedTokenUsage),
+                  tokenUsage: state.accumulatedTokenUsage,
                 } as const;
               }
               yield* setStatus(job.walkthroughId, "error");
@@ -751,11 +699,15 @@ export const WalkthroughJobsLive = Layer.effect(
             }
 
             if (event.type === "usage") {
-              updateLatestContextUsage(state, event.data.tokenUsage);
-              const combined = tokenUsageSnapshot(
-                state,
-                addTokenThroughput(state.accumulatedTokenUsage, event.data.tokenUsage),
+              // Commit the latest occupancy, but only PREVIEW throughput: the
+              // generator's running totals aren't final until its `done` event,
+              // so we add them transiently for the live broadcast without
+              // mutating the accumulator (that single commit happens in `done`).
+              state.accumulatedTokenUsage = mergeContextOccupancy(
+                state.accumulatedTokenUsage,
+                event.data.tokenUsage,
               );
+              const combined = addThroughput(state.accumulatedTokenUsage, event.data.tokenUsage);
               yield* emitEvent(job.walkthroughId, {
                 type: "usage",
                 data: { tokenUsage: combined },
@@ -880,6 +832,7 @@ export const WalkthroughJobsLive = Layer.effect(
               // exhaustion forced an error, emit `lifecycle:error` instead
               // so new clients see a terminal failure rather than a fake
               // success.
+              const currentTokenUsage = state.accumulatedTokenUsage;
               if (!phaseD || missingCommentsAtExhaustion.length > 0) {
                 yield* emitEvent(job.walkthroughId, {
                   type: "lifecycle:error",
@@ -891,7 +844,6 @@ export const WalkthroughJobsLive = Layer.effect(
                   },
                 }).pipe(Effect.catchAll(() => Effect.void));
               } else {
-                const currentTokenUsage = tokenUsageSnapshot(state, state.accumulatedTokenUsage);
                 yield* emitEvent(job.walkthroughId, {
                   type: "lifecycle:complete",
                   data: {
@@ -900,7 +852,6 @@ export const WalkthroughJobsLive = Layer.effect(
                   },
                 }).pipe(Effect.catchAll(() => Effect.void));
               }
-              const currentTokenUsage = tokenUsageSnapshot(state, state.accumulatedTokenUsage);
               yield* emitEvent(job.walkthroughId, {
                 type: "done",
                 data: {
@@ -913,7 +864,7 @@ export const WalkthroughJobsLive = Layer.effect(
 
             const continuation = yield* buildContinuationEffect();
             if (continuation._tag === "none") {
-              const currentTokenUsage = tokenUsageSnapshot(state, state.accumulatedTokenUsage);
+              const currentTokenUsage = state.accumulatedTokenUsage;
               yield* emitEvent(job.walkthroughId, {
                 type: "done",
                 data: {
@@ -943,14 +894,7 @@ export const WalkthroughJobsLive = Layer.effect(
           });
 
         const initialState: LoopState = {
-          accumulatedTokenUsage: {
-            inputTokens: 0,
-            outputTokens: 0,
-            cacheReadInputTokens: 0,
-            cacheCreationInputTokens: 0,
-          },
-          latestContextTokens: undefined,
-          latestContextWindowTokens: undefined,
+          accumulatedTokenUsage: ZERO_TOKEN_USAGE,
           autoContinuations: 0,
           currentGenerator: generator,
           capturedOpencodeSessionId: undefined,
@@ -1357,12 +1301,7 @@ export const WalkthroughJobsLive = Layer.effect(
                 type: "lifecycle:complete",
                 data: {
                   walkthroughId,
-                  tokenUsage: {
-                    inputTokens: 0,
-                    outputTokens: 0,
-                    cacheReadInputTokens: 0,
-                    cacheCreationInputTokens: 0,
-                  },
+                  tokenUsage: ZERO_TOKEN_USAGE,
                 },
               }).pipe(Effect.catchAll(() => Effect.void));
               debug(
@@ -1773,12 +1712,7 @@ export const WalkthroughJobsLive = Layer.effect(
           type: "lifecycle:complete",
           data: {
             walkthroughId,
-            tokenUsage: {
-              inputTokens: 0,
-              outputTokens: 0,
-              cacheReadInputTokens: 0,
-              cacheCreationInputTokens: 0,
-            },
+            tokenUsage: ZERO_TOKEN_USAGE,
           },
         }).pipe(Effect.catchAll(() => Effect.void));
 

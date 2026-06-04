@@ -5,6 +5,7 @@ import {
   WALKTHROUGH_INACTIVITY_TIMEOUT_MS,
 } from "../../constants";
 import { debug } from "../../logger";
+import { ZERO_TOKEN_USAGE } from "../agent-stream/token-usage";
 
 // ── Phase synthesis messages ────────────────────────────────────────────────
 //
@@ -201,12 +202,7 @@ export function guardWalkthroughStream(
             type: "done" as const,
             data: {
               walkthroughId: "",
-              tokenUsage: {
-                inputTokens: 0,
-                outputTokens: 0,
-                cacheReadInputTokens: 0,
-                cacheCreationInputTokens: 0,
-              },
+              tokenUsage: ZERO_TOKEN_USAGE,
             },
           };
         } else {

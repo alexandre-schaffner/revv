@@ -32,8 +32,10 @@ const syncing = $derived(getThreadsSyncing(selectedPrId));
 const syncError = $derived(getSyncError(selectedPrId));
 
 const usage = $derived(getTokenUsage(selectedPrId ?? undefined));
-const usedTokens = $derived(usage.contextTokens ?? 0);
+const usedTokens = $derived(usage.contextTokens);
 const contextWindow = $derived(getSettings()?.aiContextWindow ?? "200k");
+// `contextWindowTokens` is reported by the Claude Agent SDK only; codex and
+// opencode runs leave it unset and fall back to the configured window.
 const fallbackContextWindow = $derived(contextWindow === "1m" ? 1_000_000 : 200_000);
 const maxContext = $derived(usage.contextWindowTokens ?? fallbackContextWindow);
 const showUsage = $derived(selectedPrId !== null);

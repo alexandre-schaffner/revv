@@ -122,13 +122,25 @@ export function coerceTokenUsage(raw: unknown): WalkthroughTokenUsage {
   if (raw === null || typeof raw !== "object") return { ...ZERO_TOKEN_USAGE };
   const r = raw as Record<string, unknown>;
   const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+  const inputTokens = num(r.inputTokens);
+  const outputTokens = num(r.outputTokens);
+  const cacheReadInputTokens = num(r.cacheReadInputTokens);
+  const cacheCreationInputTokens = num(r.cacheCreationInputTokens);
   const contextWindowTokens = num(r.contextWindowTokens);
+  // Walkthroughs generated before context occupancy was tracked carry no
+  // `contextTokens`. Fall back to the throughput sum (the gauge's old formula)
+  // so historical PRs render a populated gauge instead of an empty 0% ring;
+  // freshly generated rows always carry a real point-in-time value.
+  const contextTokens =
+    typeof r.contextTokens === "number" && Number.isFinite(r.contextTokens)
+      ? r.contextTokens
+      : inputTokens + outputTokens + cacheReadInputTokens + cacheCreationInputTokens;
   return {
-    inputTokens: num(r.inputTokens),
-    outputTokens: num(r.outputTokens),
-    cacheReadInputTokens: num(r.cacheReadInputTokens),
-    cacheCreationInputTokens: num(r.cacheCreationInputTokens),
-    contextTokens: num(r.contextTokens),
+    inputTokens,
+    outputTokens,
+    cacheReadInputTokens,
+    cacheCreationInputTokens,
+    contextTokens,
     ...(contextWindowTokens > 0 ? { contextWindowTokens } : {}),
   };
 }

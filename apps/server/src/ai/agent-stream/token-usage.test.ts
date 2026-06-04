@@ -3,6 +3,12 @@ import type { Usage } from "@openai/codex-sdk";
 import { computeOpencodeAggregateTokens } from "../providers/mcp-walkthrough-opencode";
 import { walkClaudeMessages } from "./claude-walker";
 import { mapCodexUsage } from "./codex-walker";
+import {
+  accumulateTokenUsage,
+  addThroughput,
+  mergeContextOccupancy,
+  ZERO_TOKEN_USAGE,
+} from "./token-usage";
 
 async function* stream(messages: readonly unknown[]) {
   for (const message of messages) {
@@ -60,7 +66,7 @@ describe("provider context token usage", () => {
     });
   });
 
-  it("maps Codex occupancy without double-counting cached input", () => {
+  it("includes Codex's separately-reported cached input in occupancy", () => {
     const codexUsage = {
       input_tokens: 1_000,
       cached_input_tokens: 400,
@@ -73,7 +79,10 @@ describe("provider context token usage", () => {
       outputTokens: 250,
       cacheReadInputTokens: 400,
       cacheCreationInputTokens: 0,
-      contextTokens: 1_250,
+      // Throughput keeps cached input broken out (not folded into inputTokens),
+      // but occupancy is the WHOLE prompt — so the 400 cached tokens are added
+      // back: 1000 + 400 + 200 + 50.
+      contextTokens: 1_650,
     });
   });
 
@@ -108,5 +117,68 @@ describe("provider context token usage", () => {
       cacheCreationInputTokens: 12,
       contextTokens: 226,
     });
+  });
+});
+
+describe("token-usage accumulation algebra", () => {
+  it("sums throughput but takes the latest occupancy and max window", () => {
+    const first = {
+      inputTokens: 100,
+      outputTokens: 20,
+      cacheReadInputTokens: 30,
+      cacheCreationInputTokens: 5,
+      contextTokens: 150,
+      contextWindowTokens: 200_000,
+    };
+    const second = {
+      inputTokens: 200,
+      outputTokens: 40,
+      cacheReadInputTokens: 60,
+      cacheCreationInputTokens: 10,
+      contextTokens: 300,
+      contextWindowTokens: 1_000_000,
+    };
+
+    const afterFirst = accumulateTokenUsage(ZERO_TOKEN_USAGE, first);
+    const afterSecond = accumulateTokenUsage(afterFirst, second);
+
+    expect(afterSecond).toEqual({
+      // Throughput accumulates across both deltas.
+      inputTokens: 300,
+      outputTokens: 60,
+      cacheReadInputTokens: 90,
+      cacheCreationInputTokens: 15,
+      // Occupancy is point-in-time: the latest delta wins.
+      contextTokens: 300,
+      // Window is a fixed model property: keep the largest seen.
+      contextWindowTokens: 1_000_000,
+    });
+  });
+
+  it("treats zero/absent occupancy as 'no info' and never clobbers a known value", () => {
+    const known = mergeContextOccupancy(ZERO_TOKEN_USAGE, {
+      ...ZERO_TOKEN_USAGE,
+      contextTokens: 500,
+      contextWindowTokens: 200_000,
+    });
+    // A later delta with no occupancy (e.g. a codex/opencode `usage` event that
+    // reports throughput only) must leave the previously-observed occupancy.
+    const merged = mergeContextOccupancy(known, ZERO_TOKEN_USAGE);
+    expect(merged.contextTokens).toBe(500);
+    expect(merged.contextWindowTokens).toBe(200_000);
+  });
+
+  it("addThroughput previews totals without touching occupancy", () => {
+    const acc = {
+      ...ZERO_TOKEN_USAGE,
+      inputTokens: 10,
+      contextTokens: 42,
+      contextWindowTokens: 200_000,
+    };
+    const preview = addThroughput(acc, { ...ZERO_TOKEN_USAGE, inputTokens: 5, contextTokens: 999 });
+    expect(preview.inputTokens).toBe(15);
+    // Occupancy is preserved from the accumulator, not the delta.
+    expect(preview.contextTokens).toBe(42);
+    expect(preview.contextWindowTokens).toBe(200_000);
   });
 });

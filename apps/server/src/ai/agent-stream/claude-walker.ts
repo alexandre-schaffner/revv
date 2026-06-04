@@ -397,7 +397,7 @@ export async function walkClaudeMessages(
         outputTokens: message.usage.output_tokens,
         cacheReadInputTokens: message.usage.cache_read_input_tokens ?? 0,
         cacheCreationInputTokens: message.usage.cache_creation_input_tokens ?? 0,
-        ...(contextTokens !== undefined ? { contextTokens } : {}),
+        contextTokens: contextTokens ?? 0,
         ...(contextWindowTokens !== undefined ? { contextWindowTokens } : {}),
       };
     }
@@ -406,6 +406,16 @@ export async function walkClaudeMessages(
   return tokenUsage;
 }
 
+/**
+ * Point-in-time context occupancy for Claude's latest assistant turn: the full
+ * prompt (uncached `input_tokens` + cache read + cache creation — Anthropic
+ * reports the cached portion separately from `input_tokens`) plus that turn's
+ * output. This is the live context-window fill, distinct from the cumulative
+ * throughput in `result.usage`. The field set is Claude-specific: each
+ * provider's walker computes occupancy from the fields IT reports, so do not
+ * "unify" this with codex-walker / mcp-walkthrough-opencode — they differ on
+ * purpose.
+ */
 function sumClaudeContextTokens(usage: ClaudeUsage | undefined): number | undefined {
   if (!usage) return undefined;
   return (
