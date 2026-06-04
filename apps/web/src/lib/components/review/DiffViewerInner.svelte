@@ -6,6 +6,7 @@ import {
   FileDiff,
   type FileDiffMetadata,
   type FileDiffOptions,
+  getLineAnnotationName,
   parsePatchFiles,
   VirtualizedFileDiff,
 } from "@pierre/diffs";
@@ -193,6 +194,30 @@ function captureEl(el: HTMLDivElement) {
 
 function getShadowRoot(): ShadowRoot | null {
   return getPierreShadowRoot(wrapperEl);
+}
+
+/**
+ * True when a live annotation has no matching `<slot>` in the just-hydrated
+ * shadow DOM. The server prerenders the unified diff's annotation slots from a
+ * point-in-time thread snapshot (`/api/prs/:id/files`); the client's live
+ * thread set (loaded via `/reviews/active`, and reloaded on SSE without
+ * refetching files) can diverge — e.g. AI comments that land after the
+ * snapshot. Pierre's `hydrate` adopts the prerendered slots as-is and never
+ * rebuilds the body, so those extra comments project into a non-existent slot
+ * and silently vanish in unified view (they show in split, which always uses
+ * the full `render()` path). Detecting the gap lets us force a single
+ * corrective render only when needed, keeping the SSR no-tokenize happy path.
+ */
+function hasUnhydratedAnnotation(annos: DiffLineAnnotation<ThreadMeta>[]): boolean {
+  if (annos.length === 0) return false;
+  const shadowRoot = getShadowRoot();
+  if (!shadowRoot) return annos.length > 0;
+  const slotNames = new Set<string>();
+  for (const slot of shadowRoot.querySelectorAll("slot[name^='annotation-']")) {
+    const name = slot.getAttribute("name");
+    if (name) slotNames.add(name);
+  }
+  return annos.some((anno) => !slotNames.has(getLineAnnotationName(anno)));
 }
 
 function findRenderedLineElement(lineIndex: number): HTMLElement | null {
@@ -597,6 +622,12 @@ onMount(() => {
     // populate the header slots after hydrate using the exported slot
     // IDs — Pierre's shadow DOM has `<slot name="...">` placeholders
     // that project these light-DOM children.
+    //
+    // Set true when hydration adopted prerendered slots that don't cover every
+    // live annotation — the post-mount $effect must then run one corrective
+    // render() to rebuild the missing ones.
+    let needsAnnotationReconcile = false;
+
     if (file.prerenderedHtml !== undefined && mode === "unified") {
       instance = new FileDiff<ThreadMeta>(options, workerManager);
       // Match the render() DOM structure: a <diffs-container> custom element
@@ -615,6 +646,7 @@ onMount(() => {
         lineAnnotations: annotations,
       });
       populateDiffHeaderSlots(hostEl, parsed, options);
+      needsAnnotationReconcile = hasUnhydratedAnnotation(annotations);
     } else {
       virtualizer = createPierreVirtualizer(scrollRoot, wrapperEl);
       const hostEl = createDiffsHost();
@@ -631,7 +663,12 @@ onMount(() => {
     }
     // Mark initial state as applied so the post-mount $effect
     // (which would otherwise re-render with forceRender:true) is a no-op.
-    appliedAnnotations = annotations;
+    // Exception: when hydration left some live annotations without a slot,
+    // leave appliedAnnotations null so the $effect fires exactly once and
+    // rebuilds the missing slots via a corrective render().
+    if (!needsAnnotationReconcile) {
+      appliedAnnotations = annotations;
+    }
     appliedThreadById = threadById;
     appliedThreadMessages = threadMessages;
 
