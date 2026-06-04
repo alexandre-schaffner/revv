@@ -133,7 +133,7 @@ function focusOnMount(node: HTMLTextAreaElement) {
 					</div>
 				{:else}
 					<div
-						class="msg-body msg-body--editable prose prose-sm"
+						class="msg-body msg-body--editable prose prose-sm prose-dense"
 						role="button"
 						tabindex="0"
 						title="Click to edit"
@@ -142,7 +142,7 @@ function focusOnMount(node: HTMLTextAreaElement) {
 					>{@html renderMarkdown(msg.body)}</div>
 				{/if}
 			{:else}
-				<div class="msg-body prose prose-sm">{@html renderMarkdown(msg.body)}</div>
+				<div class="msg-body prose prose-sm prose-dense">{@html renderMarkdown(msg.body)}</div>
 			{/if}
 
 			{#if msg.codeSuggestion}				<div class="suggestion-block">
@@ -276,10 +276,9 @@ function focusOnMount(node: HTMLTextAreaElement) {
 		margin-left: auto;
 	}
 
+	/* Density + body tone come from `prose prose-sm prose-dense`; this only
+	   keeps long unbroken tokens from overflowing the thread column. */
 	.msg-body {
-		font-size: 13px;
-		line-height: 1.6;
-		color: var(--color-text-secondary);
 		word-break: break-word;
 	}
 

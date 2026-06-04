@@ -76,7 +76,7 @@ const renderedThreads = $derived.by(() => {
                                     {formatRelativeTime(msg.createdAt)}
                                 </time>
                             </div>
-                            <div class="turn-body prose prose-sm">
+                            <div class="turn-body prose prose-sm prose-dense">
                                 {#if entry.rendered[i]?.html}
                                     {@html entry.rendered[i].html}
                                 {:else}
@@ -199,11 +199,9 @@ const renderedThreads = $derived.by(() => {
         margin-left: auto;
     }
 
+    /* Density + body tone come from `prose prose-sm prose-dense`; this only
+       owns the reading measure and offset. */
     .turn-body {
-        font-family: var(--font-sans);
-        font-size: 13px;
-        line-height: 1.55;
-        color: var(--color-text-secondary);
         max-width: 65ch;
         margin-top: 6px;
     }

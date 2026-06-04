@@ -114,7 +114,7 @@ function handleJumpToDiff(filePath: string, line: number): void {
     </div>
 
     <div class="rationale">
-        <div class="rationale-text prose prose-sm">{@html rationaleHtml}</div>
+        <div class="rationale-text prose prose-sm prose-dense">{@html rationaleHtml}</div>
     </div>
 
     {#if detailsHtml}
@@ -122,7 +122,7 @@ function handleJumpToDiff(filePath: string, line: number): void {
             <span class="section-divider-label">details</span>
         </div>
         {#await detailsHtml then html}
-            <div class="rating-details prose prose-sm">{@html html}</div>
+            <div class="rating-details prose prose-sm prose-dense">{@html html}</div>
         {/await}
     {/if}
 
@@ -226,11 +226,11 @@ function handleJumpToDiff(filePath: string, line: number): void {
 
 
 
+    /* Density from `prose prose-sm prose-dense`; primary body tone via the
+       prose token so headings/bold track it too. */
     .rationale-text {
         font-family: var(--font-sans);
-        font-size: 13px;
-        line-height: 1.55;
-        color: var(--color-text-primary);
+        --tw-prose-body: var(--color-text-primary);
         margin: 0;
         /* Cap line length to a newspaper-column measure. 65ch lands in the
            55-75 char/line range typography research identifies as optimal for
@@ -357,13 +357,11 @@ function handleJumpToDiff(filePath: string, line: number): void {
 
     /* ── Details (rendered markdown) ─────────────────────────────── */
 
+    /* Density from `prose prose-sm prose-dense`; primary body tone via the
+       prose token, matching .rationale-text. */
     .rating-details {
         font-family: var(--font-sans);
-        font-size: 13px;
-        line-height: 1.6;
-        /* Primary-toned body, matching .rationale-text; markdown styling
-           otherwise comes from the app-wide prose layer (see app.css). */
-        color: var(--color-text-primary);
+        --tw-prose-body: var(--color-text-primary);
         max-height: 480px;
         overflow-y: auto;
         /* Cap line length to a newspaper-column measure. 65ch ≈ 55-75

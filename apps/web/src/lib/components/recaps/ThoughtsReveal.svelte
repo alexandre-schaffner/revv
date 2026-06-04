@@ -29,7 +29,7 @@ let { open = $bindable(), blocks, triggerClass, ariaLabel, prefix }: Props = $pr
     </div>
   </CollapsibleTrigger>
   <CollapsibleContent class="thought-content">
-    <div class="thought-stream thought-markdown">
+    <div class="thought-stream">
       {#each blocks as block (block.id)}
         <div class="thought-markdown-block prose prose-sm">
           {@html block.html}

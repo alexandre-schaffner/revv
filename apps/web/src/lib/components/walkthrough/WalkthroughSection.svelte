@@ -117,7 +117,7 @@ $effect(() => {
 			<h3 class="section-title">{section.title}</h3>
 		</div>
 		{#if renderedSummary}
-			<div class="section-summary prose prose-sm">{@html renderedSummary}</div>
+			<div class="section-summary prose prose-sm prose-dense">{@html renderedSummary}</div>
 		{/if}
 	</button>
 
@@ -295,10 +295,9 @@ $effect(() => {
 		--severity-dot-color: var(--color-danger);
 	}
 
+	/* Density + body tone come from `prose prose-sm prose-dense`; this only
+	   sets the reading measure. */
 	.section-summary {
-		font-size: 13px;
-		line-height: 1.55;
-		color: var(--color-text-secondary);
 		max-width: 720px;
 	}
 
