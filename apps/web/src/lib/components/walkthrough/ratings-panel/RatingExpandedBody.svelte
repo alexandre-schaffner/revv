@@ -114,7 +114,7 @@ function handleJumpToDiff(filePath: string, line: number): void {
     </div>
 
     <div class="rationale">
-        <div class="rationale-text">{@html rationaleHtml}</div>
+        <div class="rationale-text prose prose-sm">{@html rationaleHtml}</div>
     </div>
 
     {#if detailsHtml}
@@ -122,7 +122,7 @@ function handleJumpToDiff(filePath: string, line: number): void {
             <span class="section-divider-label">details</span>
         </div>
         {#await detailsHtml then html}
-            <div class="rating-details prose">{@html html}</div>
+            <div class="rating-details prose prose-sm">{@html html}</div>
         {/await}
     {/if}
 

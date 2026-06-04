@@ -1210,7 +1210,7 @@ function handleRegenerate(): void {
 							<div class="walkthrough-activity-stack">
 								{#each interleavedEntries as entry, entryIdx (entry.id)}
 									{#if entry.kind === 'thought'}
-										<div class="walkthrough-inline-thought">
+										<div class="walkthrough-inline-thought prose prose-sm">
 											{@html renderMarkdown(entry.text)}
 										</div>
 									{:else}
@@ -1245,7 +1245,7 @@ function handleRegenerate(): void {
 							<div class="sentiment-card-header">
 								<h3 class="sentiment-card-title">Overall Sentiment</h3>
 							</div>
-							<div class="sentiment-card-body">{@html renderedSentiment}</div>
+							<div class="sentiment-card-body prose prose-sm">{@html renderedSentiment}</div>
 						</div>
 					{/if}
 					{#if ratings.length > 0 || isStreaming}

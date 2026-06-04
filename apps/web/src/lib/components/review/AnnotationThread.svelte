@@ -133,7 +133,7 @@ function focusOnMount(node: HTMLTextAreaElement) {
 					</div>
 				{:else}
 					<div
-						class="msg-body msg-body--editable prose"
+						class="msg-body msg-body--editable prose prose-sm"
 						role="button"
 						tabindex="0"
 						title="Click to edit"
@@ -142,7 +142,7 @@ function focusOnMount(node: HTMLTextAreaElement) {
 					>{@html renderMarkdown(msg.body)}</div>
 				{/if}
 			{:else}
-				<div class="msg-body prose">{@html renderMarkdown(msg.body)}</div>
+				<div class="msg-body prose prose-sm">{@html renderMarkdown(msg.body)}</div>
 			{/if}
 
 			{#if msg.codeSuggestion}				<div class="suggestion-block">

@@ -60,7 +60,7 @@ function mountCodeBlock(el: HTMLDivElement) {
 <div class="annotated-block" class:annotated-block--no-annotation={!block.annotation || hideAnnotation}>
 	{#if !hideAnnotation && block.annotation && block.annotationPosition === 'left'}
 		<div class="annotation annotation--left">
-			<div class="annotation-content">
+			<div class="annotation-content prose prose-sm">
 				{@html renderedAnnotation}
 			</div>
 		</div>
@@ -79,7 +79,7 @@ function mountCodeBlock(el: HTMLDivElement) {
 
 	{#if !hideAnnotation && block.annotation && block.annotationPosition === 'right'}
 		<div class="annotation annotation--right">
-			<div class="annotation-content">
+			<div class="annotation-content prose prose-sm">
 				{@html renderedAnnotation}
 			</div>
 		</div>

@@ -639,7 +639,7 @@ function activitiesForTurn(
 				</Suggestion>
 			</ConversationEmptyState>
 		{:else}
-			<ConversationContent class="gap-2 px-2.5 pt-3" style="padding-bottom: calc({composerH}px + 1rem)">
+			<ConversationContent class="gap-3 px-3.5 pt-3" style="padding-bottom: calc({composerH}px + 1rem)">
 				{#each items as item, itemIdx (item.id)}
 				{#if item.kind === 'activity'}
 						<!-- Skip nested sub-agent tool calls — they render
@@ -676,7 +676,7 @@ function activitiesForTurn(
 									</span>
 								{/if}
 							</PlanHeader>
-							<PlanContent class="text-sm leading-relaxed">
+							<PlanContent class="prose prose-sm max-w-none">
 								{@html messageHtml(item.markdown)}
 							</PlanContent>
 							{#if item.status === 'pending'}
@@ -745,14 +745,14 @@ function activitiesForTurn(
 				{:else if item.role === 'user'}
 					<Message from="user">
 						<MessageContent>
-							<MessageResponse content={item.content} class="rounded-[14px] rounded-br-[4px] bg-accent px-3 py-2 text-sm leading-relaxed text-white [&_a]:text-white [&_a]:underline [&_code]:bg-black/20 [&_code]:text-xs [&_pre]:bg-black/20" />
+							<MessageResponse content={item.content} class="prose-on-accent rounded-[14px] rounded-br-[4px] bg-accent px-3 py-2 text-white" />
 						</MessageContent>
 					</Message>
 				{:else if item.kind === 'message' && item.role === 'assistant'}
 					<Message from="assistant">
 						<MessageContent>
 							{#if item.content}
-								<MessageResponse content={item.content} class="text-sm leading-relaxed" />
+								<MessageResponse content={item.content} />
 							{/if}
 						</MessageContent>
 					</Message>

@@ -76,7 +76,7 @@ const renderedThreads = $derived.by(() => {
                                     {formatRelativeTime(msg.createdAt)}
                                 </time>
                             </div>
-                            <div class="turn-body prose">
+                            <div class="turn-body prose prose-sm">
                                 {#if entry.rendered[i]?.html}
                                     {@html entry.rendered[i].html}
                                 {:else}

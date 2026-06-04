@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "./lib/components/ui/dotmatrix/dotmatrix-loader.css";
 @import "./lib/components/ui/glass-pill/glass-pill.css";
+@plugin "@tailwindcss/typography";
 
 /* ──────────────────────────────────────────────────────────
    Light theme (default)
@@ -757,6 +758,79 @@ body {
   font-weight: var(--shiki-dark-font-weight) !important;
   /* biome-ignore lint/complexity/noImportantStyles: shiki inline-style override */
   text-decoration: var(--shiki-dark-text-decoration) !important;
+}
+
+/* ──────────────────────────────────────────────────────────
+   Markdown prose — @tailwindcss/typography themed to the Revv
+   design tokens. Every `--tw-prose-*` slot maps to a `--color-*`
+   token (which already swaps under `:root.dark`), so prose renders
+   correctly in both themes with no `prose-invert`. This is the
+   app-wide markdown foundation: chat, walkthrough, recap, review
+   comments, annotations, and rating rationales all render through
+   `.prose`. Density-sensitive panels layer thin overrides on top.
+   ────────────────────────────────────────────────────────── */
+:where(.prose) {
+  --tw-prose-body: var(--color-text-secondary);
+  --tw-prose-headings: var(--color-text-primary);
+  --tw-prose-lead: var(--color-text-secondary);
+  --tw-prose-links: var(--color-accent);
+  --tw-prose-bold: var(--color-text-primary);
+  --tw-prose-counters: var(--color-text-muted);
+  --tw-prose-bullets: var(--color-text-muted);
+  --tw-prose-hr: var(--color-border-subtle);
+  --tw-prose-quotes: var(--color-text-secondary);
+  --tw-prose-quote-borders: color-mix(in srgb, var(--color-accent) 35%, var(--color-border));
+  --tw-prose-captions: var(--color-text-muted);
+  --tw-prose-code: var(--color-text-primary);
+  --tw-prose-pre-code: var(--color-text-primary);
+  --tw-prose-pre-bg: var(--color-bg-tertiary);
+  --tw-prose-th-borders: var(--color-border-subtle);
+  --tw-prose-td-borders: var(--color-border-subtle);
+}
+
+/* These are panels, not article columns — never clamp to a reading measure. */
+.prose {
+  max-width: none;
+}
+
+/* Drop the plugin's `` `code` `` backtick pseudo-elements and give inline code
+   a subtle chip instead, matching the rest of the UI. (Code inside fenced
+   blocks / Shiki output is left to its own block styling.) */
+.prose :where(code):not(:where(pre code, .shiki code))::before,
+.prose :where(code):not(:where(pre code, .shiki code))::after {
+  content: none;
+}
+.prose :where(code):not(:where(pre code, .shiki code)) {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  background: var(--color-bg-tertiary);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+}
+
+/* User chat bubble renders markdown on the teal accent fill — remap the prose
+   tokens to the on-accent foreground so every element stays legible. */
+.prose-on-accent {
+  --tw-prose-body: #fff;
+  --tw-prose-headings: #fff;
+  --tw-prose-lead: #fff;
+  --tw-prose-links: #fff;
+  --tw-prose-bold: #fff;
+  --tw-prose-counters: color-mix(in srgb, #fff 75%, transparent);
+  --tw-prose-bullets: color-mix(in srgb, #fff 70%, transparent);
+  --tw-prose-hr: color-mix(in srgb, #fff 30%, transparent);
+  --tw-prose-quotes: color-mix(in srgb, #fff 85%, transparent);
+  --tw-prose-quote-borders: color-mix(in srgb, #fff 40%, transparent);
+  --tw-prose-code: #fff;
+  --tw-prose-pre-code: #fff;
+  --tw-prose-pre-bg: rgb(0 0 0 / 0.2);
+}
+.prose-on-accent :where(code):not(:where(pre code, .shiki code)) {
+  background: rgb(0 0 0 / 0.2);
+  color: #fff;
+}
+.prose-on-accent a {
+  color: #fff;
 }
 
 /* ──────────────────────────────────────────────────────────

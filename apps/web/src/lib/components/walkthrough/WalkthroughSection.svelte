@@ -117,7 +117,7 @@ $effect(() => {
 			<h3 class="section-title">{section.title}</h3>
 		</div>
 		{#if renderedSummary}
-			<div class="section-summary">{@html renderedSummary}</div>
+			<div class="section-summary prose prose-sm">{@html renderedSummary}</div>
 		{/if}
 	</button>
 
@@ -165,7 +165,7 @@ $effect(() => {
 							style:--enter-delay="{delay}ms"
 							aria-label="Annotation"
 						>
-							<div class="block-annotation-inner">
+							<div class="block-annotation-inner prose prose-sm">
 								{@html renderedAnnotation}
 							</div>
 						</aside>

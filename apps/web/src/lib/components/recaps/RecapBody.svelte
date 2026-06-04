@@ -39,7 +39,9 @@ const summaryByTheme = $derived.by(() => {
 <div class="body">
   {#if recap.lede}
     <span class="eyebrow">Overview</span>
-    <p class="lede">{@html ledeHtml}</p>
+    <!-- not-prose: the lede is a custom inline-only sanitized string (strong/em),
+         intentionally styled as display text rather than typography-plugin body. -->
+    <p class="lede not-prose">{@html ledeHtml}</p>
   {/if}
 
   {#each chapters as chapter (chapter.theme)}
