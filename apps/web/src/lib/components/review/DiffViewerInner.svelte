@@ -211,7 +211,7 @@ function getShadowRoot(): ShadowRoot | null {
 function hasUnhydratedAnnotation(annos: DiffLineAnnotation<ThreadMeta>[]): boolean {
   if (annos.length === 0) return false;
   const shadowRoot = getShadowRoot();
-  if (!shadowRoot) return annos.length > 0;
+  if (!shadowRoot) return true;
   const slotNames = new Set<string>();
   for (const slot of shadowRoot.querySelectorAll("slot[name^='annotation-']")) {
     const name = slot.getAttribute("name");
