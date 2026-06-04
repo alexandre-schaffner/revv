@@ -79,7 +79,7 @@ function mountDiffBlock(el: HTMLDivElement) {
 <div class="annotated-block" class:annotated-block--no-annotation={!block.annotation || hideAnnotation}>
 	{#if !hideAnnotation && block.annotation && block.annotationPosition === 'left'}
 		<div class="annotation annotation--left">
-			<div class="annotation-content">
+			<div class="annotation-content prose prose-sm">
 				{@html renderedAnnotation}
 			</div>
 		</div>
@@ -97,7 +97,7 @@ function mountDiffBlock(el: HTMLDivElement) {
 
 	{#if !hideAnnotation && block.annotation && block.annotationPosition === 'right'}
 		<div class="annotation annotation--right">
-			<div class="annotation-content">
+			<div class="annotation-content prose prose-sm">
 				{@html renderedAnnotation}
 			</div>
 		</div>
@@ -152,26 +152,8 @@ function mountDiffBlock(el: HTMLDivElement) {
 		overflow-y: auto;
 	}
 
-	.annotation-content :global(p) {
-		margin: 0 0 8px;
-	}
-
-	.annotation-content :global(p:last-child) {
-		margin-bottom: 0;
-	}
-
-	.annotation-content :global(code) {
-		font-family: var(--font-mono);
-		font-size: 12px;
-		background: var(--revv-bg-tertiary);
-		padding: 1px 4px;
-		border-radius: 3px;
-	}
-
-	.annotation-content :global(strong) {
-		color: var(--revv-text-primary);
-		font-weight: 600;
-	}
+	/* Markdown styling comes from the app-wide themed @tailwindcss/typography
+	   prose layer (see app.css); `.annotation-content` only owns layout. */
 
 	.diff-panel {
 		display: flex;

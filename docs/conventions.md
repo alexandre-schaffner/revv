@@ -562,6 +562,23 @@ marks; no emoji glyphs in rendered UI, toasts, or component text.
 
 **Backlog.** None.
 
+### 5.4 Rendered markdown goes through `.prose`
+
+Every `{@html …}` sink that renders markdown (`renderMarkdown(...)`, `messageHtml(...)`,
+`rendered*Html`, …) is wrapped in an element carrying `prose prose-sm`. Markdown styling is
+owned by one place — the themed `@tailwindcss/typography` layer in
+`apps/web/src/lib/styles/prose.css` (imported by `app.css`), whose `--tw-prose-*` slots map to
+`--color-*` tokens so both themes work with no `prose-invert`. Components **must not** re-declare
+element-level markdown CSS (`:global(p|code|strong|ul|ol|li|pre|blockquote|a)`) in their own
+`<style>`; express per-panel deviations as `--tw-prose-*` / container overrides instead. Dense
+side panels add `prose-dense` (13px/1.55) alongside `prose prose-sm`. The accent chat bubble adds
+`prose-on-accent`. A surface that deliberately is *not* prose (e.g. an inline-only sanitized
+display string) simply omits `.prose` — keep it outside a `.prose` ancestor.
+
+**Backlog.** None — the consolidation removed all per-component markdown CSS. (This rule was
+previously enforced by `scripts/check-prose.ts`; that gate was retired once the migration was
+complete, so the rule is now convention-only.)
+
 ---
 
 <a id="components"></a>
