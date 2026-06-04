@@ -214,42 +214,8 @@ const renderedThreads = $derived.by(() => {
         font-style: italic;
     }
 
-    /* Prose overrides — keep paragraphs flush, trim spacing. */
-    .turn-body :global(p) {
-        margin: 0 0 6px;
-    }
-    .turn-body :global(p:last-child) {
-        margin-bottom: 0;
-    }
-    .turn-body :global(strong) {
-        font-weight: 600;
-        color: var(--color-text-primary);
-    }
-    .turn-body :global(code) {
-        font-family: var(--font-mono, ui-monospace, monospace);
-        font-size: 0.85em;
-        background: color-mix(in srgb, var(--color-text-muted) 12%, transparent);
-        padding: 1px 4px;
-        border-radius: 3px;
-    }
-    .turn-body :global(ul),
-    .turn-body :global(ol) {
-        margin: 4px 0 6px;
-        padding-left: 1.25em;
-    }
-    .turn-body :global(pre) {
-        background: var(--color-bg-tertiary);
-        padding: 8px 10px;
-        border-radius: 4px;
-        overflow-x: auto;
-        font-size: 12px;
-        margin: 6px 0;
-    }
-    .turn-body :global(pre code) {
-        background: transparent;
-        padding: 0;
-        font-size: inherit;
-    }
+    /* Markdown styling comes from the app-wide themed @tailwindcss/typography
+       prose layer (see app.css); `.turn-body` only owns the reading measure. */
 
     .empty-thread {
         margin: 0;

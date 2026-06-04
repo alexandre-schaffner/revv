@@ -2027,61 +2027,9 @@ function handleRegenerate(): void {
 		word-break: break-word;
 	}
 
-	.walkthrough-inline-thought :global(p),
-	.walkthrough-inline-thought :global(ul),
-	.walkthrough-inline-thought :global(ol),
-	.walkthrough-inline-thought :global(pre),
-	.walkthrough-inline-thought :global(blockquote) {
-		margin: 0 0 0.5rem;
-	}
-
-	.walkthrough-inline-thought :global(:last-child) {
-		margin-bottom: 0;
-	}
-
-	.walkthrough-inline-thought :global(ul),
-	.walkthrough-inline-thought :global(ol) {
-		padding-left: 1.25rem;
-	}
-
-	.walkthrough-inline-thought :global(li) {
-		margin: 0.15rem 0;
-	}
-
-	.walkthrough-inline-thought :global(code) {
-		font-family: var(--font-mono);
-		font-size: 0.92em;
-		padding: 0.08em 0.3em;
-		border-radius: 0.25rem;
-		background: color-mix(in srgb, var(--color-bg-tertiary) 70%, transparent);
-		color: var(--color-text-secondary);
-	}
-
-	.walkthrough-inline-thought :global(pre) {
-		overflow-x: auto;
-		padding: 0.625rem;
-		border-radius: 0.375rem;
-		background: var(--color-bg-tertiary);
-	}
-
-	.walkthrough-inline-thought :global(pre code) {
-		padding: 0;
-		background: transparent;
-		font-size: inherit;
-	}
-
-	.walkthrough-inline-thought :global(blockquote) {
-		padding-left: 0.75rem;
-		border-left: 2px solid color-mix(in srgb, var(--color-accent) 45%, transparent);
-		color: var(--color-text-secondary);
-	}
-
-	.walkthrough-inline-thought :global(a) {
-		color: var(--color-accent);
-		text-decoration-line: underline;
-		text-decoration-color: color-mix(in srgb, var(--color-accent) 35%, transparent);
-		text-underline-offset: 2px;
-	}
+	/* Markdown styling comes from the app-wide themed @tailwindcss/typography
+	   prose layer (see app.css); `.walkthrough-inline-thought` only sets the
+	   quieter muted body tone. */
 
 	/* ── Annotation rail ─────────────────────────────────────────────────
 	   Sits top-aligned beside its block in the grid row. No sticky — CSS
@@ -2129,26 +2077,8 @@ function handleRegenerate(): void {
 		overflow-wrap: anywhere;
 	}
 
-	.block-annotation-inner :global(p) {
-		margin: 0 0 8px;
-	}
-
-	.block-annotation-inner :global(p:last-child) {
-		margin-bottom: 0;
-	}
-
-	.block-annotation-inner :global(code) {
-		font-family: var(--font-mono);
-		font-size: 12px;
-		background: var(--color-bg-tertiary);
-		padding: 1px 4px;
-		border-radius: 3px;
-	}
-
-	.block-annotation-inner :global(strong) {
-		color: var(--color-text-primary);
-		font-weight: 600;
-	}
+	/* Markdown styling comes from the app-wide themed @tailwindcss/typography
+	   prose layer (see app.css); `.block-annotation-inner` only owns the card box. */
 
 	.loading-text {
 		font-size: 13px;
@@ -2265,42 +2195,8 @@ function handleRegenerate(): void {
 		color: var(--color-text-secondary);
 	}
 
-	.sentiment-card-body :global(p) {
-		margin: 0 0 8px;
-	}
-
-	.sentiment-card-body :global(p:last-child) {
-		margin-bottom: 0;
-	}
-
-	.sentiment-card-body :global(code) {
-		font-family: var(--font-mono);
-		font-size: 12px;
-		background: var(--color-bg-tertiary);
-		padding: 1px 4px;
-		border-radius: 3px;
-	}
-
-	.sentiment-card-body :global(strong) {
-		color: var(--color-text-primary);
-		font-weight: 600;
-	}
-
-	.sentiment-card-body :global(ul),
-	.sentiment-card-body :global(ol) {
-		margin: 4px 0 8px;
-		padding-left: 20px;
-	}
-
-	.sentiment-card-body :global(li) {
-		margin: 2px 0;
-	}
-
-	.sentiment-card-body :global(a) {
-		color: var(--color-accent);
-		text-decoration: underline;
-		text-underline-offset: 2px;
-	}
+	/* Markdown styling comes from the app-wide themed @tailwindcss/typography
+	   prose layer (see app.css); `.sentiment-card-body` only owns base text density. */
 
 	/* ── Narrow-viewport fallback ────────────────────────────────────────
 	   Below the 1336px geometric minimum (24 left + 48 + 820 + 40 + 380 +

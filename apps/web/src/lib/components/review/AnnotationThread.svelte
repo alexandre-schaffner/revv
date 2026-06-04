@@ -283,60 +283,8 @@ function focusOnMount(node: HTMLTextAreaElement) {
 		word-break: break-word;
 	}
 
-	.msg-body :global(p) {
-		margin: 0 0 6px;
-	}
-	.msg-body :global(p:last-child) {
-		margin-bottom: 0;
-	}
-	.msg-body :global(strong) {
-		font-weight: 600;
-		color: var(--color-text-primary);
-	}
-	.msg-body :global(em) {
-		font-style: italic;
-	}
-	.msg-body :global(code) {
-		font-family: var(--font-mono, ui-monospace, monospace);
-		font-size: 0.85em;
-		background: color-mix(in srgb, var(--color-text-muted) 12%, transparent);
-		padding: 1px 4px;
-		border-radius: 3px;
-	}
-	.msg-body :global(ul),
-	.msg-body :global(ol) {
-		margin: 4px 0 6px;
-		padding-left: 1.4em;
-	}
-	.msg-body :global(li) {
-		margin-bottom: 2px;
-	}
-	.msg-body :global(pre) {
-		background: var(--color-bg-tertiary);
-		padding: 8px 10px;
-		border-radius: 4px;
-		overflow-x: auto;
-		font-size: 12px;
-		margin: 6px 0;
-	}
-	.msg-body :global(pre code) {
-		background: transparent;
-		padding: 0;
-		font-size: inherit;
-	}
-	.msg-body :global(blockquote) {
-		margin: 4px 0;
-		padding: 6px 10px;
-		border: 1px solid var(--color-border);
-		background: color-mix(in srgb, var(--color-text-muted) 4%, transparent);
-		border-radius: 6px;
-		color: var(--color-text-muted);
-	}
-	.msg-body :global(a) {
-		color: var(--color-accent);
-		text-decoration: underline;
-		text-underline-offset: 2px;
-	}
+	/* Markdown styling comes from the app-wide themed @tailwindcss/typography
+	   prose layer (see app.css); `.msg-body` only owns its base text density. */
 
 	.suggestion-block {
 		margin-top: 8px;

@@ -239,39 +239,9 @@ function handleJumpToDiff(filePath: string, line: number): void {
         max-width: 65ch;
     }
 
-    /* Prose rules for markdown-rendered rationale. Mirror .rating-details but
-       without the max-height / overflow treatment — rationale is short prose. */
-    .rationale-text :global(p) {
-        margin: 0 0 8px;
-        color: var(--color-text-primary);
-    }
-    .rationale-text :global(p:last-child) {
-        margin-bottom: 0;
-    }
-    .rationale-text :global(strong) {
-        font-weight: 600;
-        color: var(--color-text-primary);
-    }
-    .rationale-text :global(code) {
-        font-family: var(--font-mono, ui-monospace, monospace);
-        font-size: 0.85em;
-        background: color-mix(
-            in srgb,
-            var(--color-text-muted) 12%,
-            transparent
-        );
-        padding: 1px 4px;
-        border-radius: 3px;
-    }
-    .rationale-text :global(ul),
-    .rationale-text :global(ol) {
-        margin: 4px 0 8px;
-        padding-left: 1.25em;
-    }
-    .rationale-text :global(li) {
-        margin-bottom: 3px;
-        color: var(--color-text-primary);
-    }
+    /* Markdown styling comes from the app-wide themed @tailwindcss/typography
+       prose layer (see app.css); `.rationale-text` keeps primary-toned body
+       (via its own `color`) and the reading measure. */
 
     /* ── Expected / Received (Jest-style) ────────────────────────── */
 
@@ -391,6 +361,9 @@ function handleJumpToDiff(filePath: string, line: number): void {
         font-family: var(--font-sans);
         font-size: 13px;
         line-height: 1.6;
+        /* Primary-toned body, matching .rationale-text; markdown styling
+           otherwise comes from the app-wide prose layer (see app.css). */
+        color: var(--color-text-primary);
         max-height: 480px;
         overflow-y: auto;
         /* Cap line length to a newspaper-column measure. 65ch ≈ 55-75
@@ -404,38 +377,9 @@ function handleJumpToDiff(filePath: string, line: number): void {
            the content does overflow. */
     }
 
-    /* Prose rules ported from the original .dialog-details :global(...) block. */
-    .rating-details :global(p) {
-        margin: 0 0 8px;
-        color: var(--color-text-primary);
-    }
-    .rating-details :global(p:last-child) {
-        margin-bottom: 0;
-    }
-    .rating-details :global(strong) {
-        font-weight: 600;
-        color: var(--color-text-primary);
-    }
-    .rating-details :global(code) {
-        font-family: var(--font-mono, ui-monospace, monospace);
-        font-size: 0.85em;
-        background: color-mix(
-            in srgb,
-            var(--color-text-muted) 12%,
-            transparent
-        );
-        padding: 1px 4px;
-        border-radius: 3px;
-    }
-    .rating-details :global(ul),
-    .rating-details :global(ol) {
-        margin: 4px 0 8px;
-        padding-left: 1.25em;
-    }
-    .rating-details :global(li) {
-        margin-bottom: 3px;
-        color: var(--color-text-primary);
-    }
+    /* `### headings` in rating details render as small uppercase section
+       labels rather than prose headings — a deliberate deviation kept here.
+       All other markdown styling comes from the app-wide prose layer. */
     .rating-details :global(h3) {
         font-size: 12px;
         font-weight: 700;
@@ -444,20 +388,6 @@ function handleJumpToDiff(filePath: string, line: number): void {
         color: var(--color-text-muted);
         margin: 12px 0 4px;
     }
-    .rating-details :global(pre) {
-        background: var(--color-bg-tertiary);
-        padding: 8px 10px;
-        border-radius: 4px;
-        overflow-x: auto;
-        font-size: 12px;
-        margin: 6px 0 8px;
-    }
-    .rating-details :global(pre code) {
-        background: transparent;
-        padding: 0;
-        font-size: inherit;
-    }
-
     /* ── References (citations, stack-trace style) ─────────────── */
 
     .references {

@@ -920,9 +920,9 @@ body {
   text-align: right;
 }
 
-/* Inline code inside tables — slightly tighter than free-flowing prose
-   code so cells don't bloat. Component-level `:global(code)` rules win
-   on specificity, so this only kicks in where no override exists. */
+/* Inline code inside tables — slightly tighter than the free-flowing prose
+   code chip so cells don't bloat. The table wrapper is `not-prose`, so the
+   plugin's own code styling is suppressed here and this rule owns cell code. */
 .prose-table code {
   font-family: var(--font-mono);
   font-size: 0.9em;
