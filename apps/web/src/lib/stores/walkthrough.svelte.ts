@@ -115,17 +115,21 @@ export const ZERO_TOKEN_USAGE: WalkthroughTokenUsage = Object.freeze({
   outputTokens: 0,
   cacheReadInputTokens: 0,
   cacheCreationInputTokens: 0,
+  contextTokens: 0,
 });
 
 export function coerceTokenUsage(raw: unknown): WalkthroughTokenUsage {
   if (raw === null || typeof raw !== "object") return { ...ZERO_TOKEN_USAGE };
   const r = raw as Record<string, unknown>;
   const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+  const contextWindowTokens = num(r.contextWindowTokens);
   return {
     inputTokens: num(r.inputTokens),
     outputTokens: num(r.outputTokens),
     cacheReadInputTokens: num(r.cacheReadInputTokens),
     cacheCreationInputTokens: num(r.cacheCreationInputTokens),
+    contextTokens: num(r.contextTokens),
+    ...(contextWindowTokens > 0 ? { contextWindowTokens } : {}),
   };
 }
 

@@ -8,6 +8,13 @@ import {
   normalizeTaskStatus,
 } from "./normalized-events";
 
+interface ClaudeUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+}
+
 /**
  * Minimal shape of the Claude Agent SDK message stream that we care about.
  * The full SDK type is broader; this captures only the fields we read so
@@ -38,15 +45,10 @@ interface ClaudeMessage {
       content?: string | Array<{ type: string; text?: string }>;
     }>;
     // Cumulative token usage for THIS turn (one model inference call).
-    // Populated on `assistant` SDK messages by the Claude Agent SDK; the
-    // walker sums these across turns to produce the running session total.
-    // Field names mirror the Anthropic API shape.
-    usage?: {
-      input_tokens?: number;
-      output_tokens?: number;
-      cache_read_input_tokens?: number;
-      cache_creation_input_tokens?: number;
-    };
+    // Populated on `assistant` SDK messages by the Claude Agent SDK. The
+    // walker keeps the latest one for point-in-time context occupancy; the
+    // terminal `result.usage` remains the cumulative throughput total.
+    usage?: ClaudeUsage;
   };
   // `stream_event` shape (SDKPartialAssistantMessage). Populated only when
   // the caller opted into partial messages via `includePartialMessages:
@@ -87,6 +89,7 @@ interface ClaudeMessage {
     cache_read_input_tokens?: number;
     cache_creation_input_tokens?: number;
   };
+  modelUsage?: Array<{ contextWindow?: number }>;
 }
 
 /**
@@ -126,6 +129,7 @@ export async function walkClaudeMessages(
   opts?: { onMessage?: (msg: unknown) => void | Promise<void> },
 ): Promise<WalkthroughTokenUsage | null> {
   let tokenUsage: WalkthroughTokenUsage | null = null;
+  let lastAssistantUsage: ClaudeUsage | undefined;
 
   // Tracks active Agent (sub-agent) invocations by tool_use.id so we can:
   //   (a) emit `subagent-end` when the matching tool_result arrives, and
@@ -167,6 +171,10 @@ export async function walkClaudeMessages(
       await opts.onMessage(raw);
     }
     const message = raw as ClaudeMessage;
+
+    if (message.type === "assistant" && message.message?.usage) {
+      lastAssistantUsage = message.message.usage;
+    }
 
     if (message.type === "stream_event") {
       const event = message.event;
@@ -382,16 +390,44 @@ export async function walkClaudeMessages(
         }
       }
     } else if (message.type === "result" && message.usage) {
+      const contextTokens = sumClaudeContextTokens(lastAssistantUsage);
+      const contextWindowTokens = maxClaudeContextWindow(message.modelUsage);
       tokenUsage = {
         inputTokens: message.usage.input_tokens,
         outputTokens: message.usage.output_tokens,
         cacheReadInputTokens: message.usage.cache_read_input_tokens ?? 0,
         cacheCreationInputTokens: message.usage.cache_creation_input_tokens ?? 0,
+        ...(contextTokens !== undefined ? { contextTokens } : {}),
+        ...(contextWindowTokens !== undefined ? { contextWindowTokens } : {}),
       };
     }
   }
 
   return tokenUsage;
+}
+
+function sumClaudeContextTokens(usage: ClaudeUsage | undefined): number | undefined {
+  if (!usage) return undefined;
+  return (
+    (usage.input_tokens ?? 0) +
+    (usage.output_tokens ?? 0) +
+    (usage.cache_read_input_tokens ?? 0) +
+    (usage.cache_creation_input_tokens ?? 0)
+  );
+}
+
+function maxClaudeContextWindow(
+  modelUsage: Array<{ contextWindow?: number }> | undefined,
+): number | undefined {
+  if (!modelUsage) return undefined;
+  let max = 0;
+  for (const usage of modelUsage) {
+    const contextWindow = usage.contextWindow;
+    if (typeof contextWindow === "number" && Number.isFinite(contextWindow)) {
+      max = Math.max(max, contextWindow);
+    }
+  }
+  return max > 0 ? max : undefined;
 }
 
 // ── Claude tool-input decoders ─────────────────────────────────────────────

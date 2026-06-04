@@ -228,11 +228,12 @@ function codexTodoToTask(item: TodoListItem["items"][number], index: number): No
  * shape (its `output_tokens` already includes reasoning). Codex does not
  * report cache-creation tokens, so that field is 0.
  */
-function mapCodexUsage(usage: Usage): WalkthroughTokenUsage {
+export function mapCodexUsage(usage: Usage): WalkthroughTokenUsage {
   return {
     inputTokens: usage.input_tokens,
     outputTokens: usage.output_tokens + usage.reasoning_output_tokens,
     cacheReadInputTokens: usage.cached_input_tokens,
     cacheCreationInputTokens: 0,
+    contextTokens: usage.input_tokens + usage.output_tokens + usage.reasoning_output_tokens,
   };
 }

@@ -100,6 +100,65 @@ const MAX_AUTO_CONTINUATIONS = 2;
  */
 const SESSION_TOKEN_TTL_MS = CLI_WALKTHROUGH_TIMEOUT_MS * (1 + MAX_AUTO_CONTINUATIONS) + 5 * 60_000;
 
+function addTokenThroughput(
+  left: WalkthroughTokenUsage,
+  right: WalkthroughTokenUsage,
+): WalkthroughTokenUsage {
+  return {
+    inputTokens: left.inputTokens + right.inputTokens,
+    outputTokens: left.outputTokens + right.outputTokens,
+    cacheReadInputTokens: left.cacheReadInputTokens + right.cacheReadInputTokens,
+    cacheCreationInputTokens: left.cacheCreationInputTokens + right.cacheCreationInputTokens,
+  };
+}
+
+function updateLatestContextUsage(
+  state: {
+    latestContextTokens: number | undefined;
+    latestContextWindowTokens: number | undefined;
+  },
+  usage: WalkthroughTokenUsage,
+): void {
+  if (
+    typeof usage.contextTokens === "number" &&
+    Number.isFinite(usage.contextTokens) &&
+    usage.contextTokens > 0
+  ) {
+    state.latestContextTokens = usage.contextTokens;
+  }
+  if (
+    typeof usage.contextWindowTokens === "number" &&
+    Number.isFinite(usage.contextWindowTokens) &&
+    usage.contextWindowTokens > 0
+  ) {
+    state.latestContextWindowTokens = Math.max(
+      state.latestContextWindowTokens ?? 0,
+      usage.contextWindowTokens,
+    );
+  }
+}
+
+function tokenUsageSnapshot(
+  state: {
+    latestContextTokens: number | undefined;
+    latestContextWindowTokens: number | undefined;
+  },
+  throughput: WalkthroughTokenUsage,
+): WalkthroughTokenUsage {
+  return {
+    inputTokens: throughput.inputTokens,
+    outputTokens: throughput.outputTokens,
+    cacheReadInputTokens: throughput.cacheReadInputTokens,
+    cacheCreationInputTokens: throughput.cacheCreationInputTokens,
+    ...(state.latestContextTokens !== undefined
+      ? { contextTokens: state.latestContextTokens }
+      : {}),
+    ...(state.latestContextWindowTokens !== undefined
+      ? { contextWindowTokens: state.latestContextWindowTokens }
+      : {}),
+  };
+}
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 type Subscriber = (event: WalkthroughStreamEvent) => void;
@@ -464,6 +523,8 @@ export const WalkthroughJobsLive = Layer.effect(
 
     interface LoopState {
       accumulatedTokenUsage: WalkthroughTokenUsage;
+      latestContextTokens: number | undefined;
+      latestContextWindowTokens: number | undefined;
       autoContinuations: number;
       currentGenerator: AsyncGenerator<WalkthroughStreamEvent>;
       capturedOpencodeSessionId: string | undefined;
@@ -603,22 +664,16 @@ export const WalkthroughJobsLive = Layer.effect(
         ): Effect.Effect<ProcessResult, never, never> =>
           Effect.gen(function* () {
             if (event.type === "done") {
-              state.accumulatedTokenUsage = {
-                inputTokens:
-                  state.accumulatedTokenUsage.inputTokens + event.data.tokenUsage.inputTokens,
-                outputTokens:
-                  state.accumulatedTokenUsage.outputTokens + event.data.tokenUsage.outputTokens,
-                cacheReadInputTokens:
-                  state.accumulatedTokenUsage.cacheReadInputTokens +
-                  event.data.tokenUsage.cacheReadInputTokens,
-                cacheCreationInputTokens:
-                  state.accumulatedTokenUsage.cacheCreationInputTokens +
-                  event.data.tokenUsage.cacheCreationInputTokens,
-              };
+              updateLatestContextUsage(state, event.data.tokenUsage);
+              state.accumulatedTokenUsage = addTokenThroughput(
+                state.accumulatedTokenUsage,
+                event.data.tokenUsage,
+              );
+              const currentTokenUsage = tokenUsageSnapshot(state, state.accumulatedTokenUsage);
 
               yield* emitEvent(job.walkthroughId, {
                 type: "usage",
-                data: { tokenUsage: state.accumulatedTokenUsage },
+                data: { tokenUsage: currentTokenUsage },
               }).pipe(Effect.catchAll(() => Effect.void));
 
               const dbState = yield* provideDb(
@@ -629,7 +684,7 @@ export const WalkthroughJobsLive = Layer.effect(
                 const missingComments = findIssuesMissingInlineComment(db, job.walkthroughId);
                 if (missingComments.length === 0) {
                   yield* setStatus(job.walkthroughId, "complete", {
-                    tokenUsage: state.accumulatedTokenUsage,
+                    tokenUsage: currentTokenUsage,
                   });
                   // Fire-and-forget push to the team cache. Failures log
                   // inside the service and never block job completion
@@ -642,10 +697,10 @@ export const WalkthroughJobsLive = Layer.effect(
                     type: "lifecycle:complete",
                     data: {
                       walkthroughId: job.walkthroughId,
-                      tokenUsage: state.accumulatedTokenUsage,
+                      tokenUsage: currentTokenUsage,
                     },
                   }).pipe(Effect.catchAll(() => Effect.void));
-                  return { _tag: "returnDone", tokenUsage: state.accumulatedTokenUsage } as const;
+                  return { _tag: "returnDone", tokenUsage: currentTokenUsage } as const;
                 }
                 debug(
                   "walkthrough-jobs",
@@ -678,7 +733,10 @@ export const WalkthroughJobsLive = Layer.effect(
                   "suppressing error broadcast — cancelled by user:",
                   event.data.message,
                 );
-                return { _tag: "returnDone", tokenUsage: state.accumulatedTokenUsage } as const;
+                return {
+                  _tag: "returnDone",
+                  tokenUsage: tokenUsageSnapshot(state, state.accumulatedTokenUsage),
+                } as const;
               }
               yield* setStatus(job.walkthroughId, "error");
               yield* emitEvent(job.walkthroughId, {
@@ -693,21 +751,10 @@ export const WalkthroughJobsLive = Layer.effect(
             }
 
             if (event.type === "usage") {
-              const combined = {
-                inputTokens:
-                  state.accumulatedTokenUsage.inputTokens + event.data.tokenUsage.inputTokens,
-                outputTokens:
-                  state.accumulatedTokenUsage.outputTokens + event.data.tokenUsage.outputTokens,
-                cacheReadInputTokens:
-                  state.accumulatedTokenUsage.cacheReadInputTokens +
-                  event.data.tokenUsage.cacheReadInputTokens,
-                cacheCreationInputTokens:
-                  state.accumulatedTokenUsage.cacheCreationInputTokens +
-                  event.data.tokenUsage.cacheCreationInputTokens,
-              };
-              logError(
-                "walkthrough-jobs",
-                `[usage-diag] fanOut usage combined=${JSON.stringify(combined)} subscribers=${job.subscribers.size}`,
+              updateLatestContextUsage(state, event.data.tokenUsage);
+              const combined = tokenUsageSnapshot(
+                state,
+                addTokenThroughput(state.accumulatedTokenUsage, event.data.tokenUsage),
               );
               yield* emitEvent(job.walkthroughId, {
                 type: "usage",
@@ -844,19 +891,21 @@ export const WalkthroughJobsLive = Layer.effect(
                   },
                 }).pipe(Effect.catchAll(() => Effect.void));
               } else {
+                const currentTokenUsage = tokenUsageSnapshot(state, state.accumulatedTokenUsage);
                 yield* emitEvent(job.walkthroughId, {
                   type: "lifecycle:complete",
                   data: {
                     walkthroughId: job.walkthroughId,
-                    tokenUsage: state.accumulatedTokenUsage,
+                    tokenUsage: currentTokenUsage,
                   },
                 }).pipe(Effect.catchAll(() => Effect.void));
               }
+              const currentTokenUsage = tokenUsageSnapshot(state, state.accumulatedTokenUsage);
               yield* emitEvent(job.walkthroughId, {
                 type: "done",
                 data: {
                   walkthroughId: job.walkthroughId,
-                  tokenUsage: state.accumulatedTokenUsage,
+                  tokenUsage: currentTokenUsage,
                 },
               }).pipe(Effect.catchAll(() => Effect.void));
               return;
@@ -864,11 +913,12 @@ export const WalkthroughJobsLive = Layer.effect(
 
             const continuation = yield* buildContinuationEffect();
             if (continuation._tag === "none") {
+              const currentTokenUsage = tokenUsageSnapshot(state, state.accumulatedTokenUsage);
               yield* emitEvent(job.walkthroughId, {
                 type: "done",
                 data: {
                   walkthroughId: job.walkthroughId,
-                  tokenUsage: state.accumulatedTokenUsage,
+                  tokenUsage: currentTokenUsage,
                 },
               }).pipe(Effect.catchAll(() => Effect.void));
               return;
@@ -899,6 +949,8 @@ export const WalkthroughJobsLive = Layer.effect(
             cacheReadInputTokens: 0,
             cacheCreationInputTokens: 0,
           },
+          latestContextTokens: undefined,
+          latestContextWindowTokens: undefined,
           autoContinuations: 0,
           currentGenerator: generator,
           capturedOpencodeSessionId: undefined,
