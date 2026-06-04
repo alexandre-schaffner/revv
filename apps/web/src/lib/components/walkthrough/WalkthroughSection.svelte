@@ -117,7 +117,7 @@ $effect(() => {
 			<h3 class="section-title">{section.title}</h3>
 		</div>
 		{#if renderedSummary}
-			<div class="section-summary">{@html renderedSummary}</div>
+			<div class="section-summary prose prose-sm prose-dense">{@html renderedSummary}</div>
 		{/if}
 	</button>
 
@@ -165,7 +165,7 @@ $effect(() => {
 							style:--enter-delay="{delay}ms"
 							aria-label="Annotation"
 						>
-							<div class="block-annotation-inner">
+							<div class="block-annotation-inner prose prose-sm">
 								{@html renderedAnnotation}
 							</div>
 						</aside>
@@ -295,29 +295,14 @@ $effect(() => {
 		--severity-dot-color: var(--color-danger);
 	}
 
+	/* Density + body tone come from `prose prose-sm prose-dense`; this only
+	   sets the reading measure. */
 	.section-summary {
-		font-size: 13px;
-		line-height: 1.55;
-		color: var(--color-text-secondary);
 		max-width: 720px;
 	}
 
-	.section-summary :global(p) {
-		margin: 0;
-	}
-
-	.section-summary :global(code) {
-		font-family: var(--font-mono);
-		font-size: 11.5px;
-		background: var(--color-bg-tertiary);
-		padding: 1px 4px;
-		border-radius: 3px;
-	}
-
-	.section-summary :global(strong) {
-		color: var(--color-text-primary);
-		font-weight: 600;
-	}
+	/* Markdown styling comes from the app-wide themed @tailwindcss/typography
+	   prose layer (see app.css); `.section-summary` only owns the reading measure. */
 
 	/* `display: contents` lets the per-block grid items (block-step-dot
 	   in col 2, block-wrapper in col 3, block-annotation in col 5)
@@ -422,26 +407,8 @@ $effect(() => {
 		overflow-wrap: anywhere;
 	}
 
-	.block-annotation-inner :global(p) {
-		margin: 0 0 8px;
-	}
-
-	.block-annotation-inner :global(p:last-child) {
-		margin-bottom: 0;
-	}
-
-	.block-annotation-inner :global(code) {
-		font-family: var(--font-mono);
-		font-size: 12px;
-		background: var(--color-bg-tertiary);
-		padding: 1px 4px;
-		border-radius: 3px;
-	}
-
-	.block-annotation-inner :global(strong) {
-		color: var(--color-text-primary);
-		font-weight: 600;
-	}
+	/* Markdown styling comes from the app-wide themed @tailwindcss/typography
+	   prose layer (see app.css); `.block-annotation-inner` only owns the card box. */
 
 	@keyframes block-slide-up {
 		from {

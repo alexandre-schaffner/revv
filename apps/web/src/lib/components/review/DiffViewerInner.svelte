@@ -6,6 +6,7 @@ import {
   FileDiff,
   type FileDiffMetadata,
   type FileDiffOptions,
+  getLineAnnotationName,
   parsePatchFiles,
   VirtualizedFileDiff,
 } from "@pierre/diffs";
@@ -195,6 +196,24 @@ function getShadowRoot(): ShadowRoot | null {
   return getPierreShadowRoot(wrapperEl);
 }
 
+/**
+ * True when a live annotation has no matching `<slot>` in the just-hydrated
+ * shadow DOM — i.e. Pierre's `hydrate` adopted prerendered slots that don't
+ * cover the current annotation set. See the hydrate call site in onMount for
+ * why the prerendered and live sets diverge and what the corrective render does.
+ */
+function hasUnhydratedAnnotation(annos: DiffLineAnnotation<ThreadMeta>[]): boolean {
+  if (annos.length === 0) return false;
+  const shadowRoot = getShadowRoot();
+  if (!shadowRoot) return true;
+  const slotNames = new Set<string>();
+  for (const slot of shadowRoot.querySelectorAll("slot[name^='annotation-']")) {
+    const name = slot.getAttribute("name");
+    if (name) slotNames.add(name);
+  }
+  return annos.some((anno) => !slotNames.has(getLineAnnotationName(anno)));
+}
+
 function findRenderedLineElement(lineIndex: number): HTMLElement | null {
   const shadowRoot = getShadowRoot();
   if (!shadowRoot) return null;
@@ -317,6 +336,13 @@ function findPatchLineIndex(patch: string, targetLine: number): number | null {
 // threadMessages, and annotations all get new references, triggering this
 // effect. We update the mutable ref (so renderAnnotation sees fresh data),
 // clear stale caches, and re-render with the new annotations.
+//
+// LOAD-BEARING: the hydrate path in onMount may deliberately leave
+// `appliedAnnotations` null (when prerendered slots don't cover every live
+// annotation) precisely so this guard sees a mismatch and fires one corrective
+// render on first run. Don't "simplify" the guard to assume appliedAnnotations
+// is always set after mount — that silently reintroduces the vanished-comment
+// bug fixed in #114.
 $effect(() => {
   if (!instance) return;
   const currentAnnotations = annotations;
@@ -615,6 +641,20 @@ onMount(() => {
         lineAnnotations: annotations,
       });
       populateDiffHeaderSlots(hostEl, parsed, options);
+
+      // The server prerenders the unified diff's annotation slots from a
+      // point-in-time thread snapshot (`/api/prs/:id/files`); the client's
+      // live thread set (loaded via `/reviews/active`, and reloaded on SSE
+      // without refetching files) can diverge — e.g. AI comments that land
+      // after the snapshot. `hydrate` adopts the prerendered slots as-is and
+      // never rebuilds the body, so those extra comments project into a
+      // non-existent slot and silently vanish in unified view (split is fine —
+      // it always uses the full `render()` path). When that gap exists, leave
+      // appliedAnnotations null so the reconcile $effect fires exactly once and
+      // rebuilds the missing slots via one corrective render(); otherwise mark
+      // them applied so the $effect is a no-op and the SSR no-tokenize fast
+      // paint is preserved.
+      appliedAnnotations = hasUnhydratedAnnotation(annotations) ? null : annotations;
     } else {
       virtualizer = createPierreVirtualizer(scrollRoot, wrapperEl);
       const hostEl = createDiffsHost();
@@ -628,10 +668,14 @@ onMount(() => {
         lineAnnotations: annotations,
         forceRender: true,
       });
+      // render() projected every annotation, so mark them applied to keep the
+      // post-mount $effect a no-op.
+      appliedAnnotations = annotations;
     }
-    // Mark initial state as applied so the post-mount $effect
-    // (which would otherwise re-render with forceRender:true) is a no-op.
-    appliedAnnotations = annotations;
+    // Mark thread data as applied so the post-mount $effect (which would
+    // otherwise re-render with forceRender:true) is a no-op. appliedAnnotations
+    // is set per-branch above — the hydrate branch may leave it null on purpose
+    // to trigger one corrective render.
     appliedThreadById = threadById;
     appliedThreadMessages = threadMessages;
 

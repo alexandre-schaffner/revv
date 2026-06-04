@@ -94,29 +94,21 @@ function handleKeydown(e: KeyboardEvent): void {
     return;
   }
 
-  // Cmd+B → toggle sidebar
-  if (!e.shiftKey && e.key.toLowerCase() === "b") {
-    e.preventDefault();
-    e.stopPropagation();
-    toggleSidebar();
-    return;
-  }
-
-  // Cmd+S → toggle sidebar (same as Cmd+B)
-  if (!e.shiftKey && e.key.toLowerCase() === "s") {
-    e.preventDefault();
-    e.stopPropagation();
-    toggleSidebar();
-    return;
-  }
-
-  // Cmd+R → toggle right panel (chat) — only when actively reviewing a PR
-  if (!e.shiftKey && e.key.toLowerCase() === "r") {
+  // Cmd+Option+B → toggle right panel (chat) — only when actively reviewing a PR
+  if (!e.shiftKey && e.altKey && e.key.toLowerCase() === "b") {
     const onPrPage = window.location.pathname.startsWith("/review/");
     if (!onPrPage) return;
     e.preventDefault();
     e.stopPropagation();
     toggleRightPanel();
+    return;
+  }
+
+  // Cmd+B → toggle sidebar
+  if (!e.shiftKey && !e.altKey && e.key.toLowerCase() === "b") {
+    e.preventDefault();
+    e.stopPropagation();
+    toggleSidebar();
     return;
   }
 
