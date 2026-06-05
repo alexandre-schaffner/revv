@@ -116,6 +116,11 @@ $effect(() => {
   const open = rightPanelOpen;
   const width = rightPanelWidth;
   if (!panelEl || !mainEl) return;
+  // gsap.set (not panelEl.style.transform): it writes the same
+  // `transform: translate3d(...)` format as the CSS fallback on
+  // `.rightpanel-area`, so the inline write and the static rule agree on
+  // units and there's no first-paint flash. Don't "simplify" to a plain
+  // style write — that risks format drift against the CSS fallback.
   gsap.set(panelEl, { x: open ? 0 : width });
   mainEl.style.setProperty("--vignette-opacity", open ? "0.65" : "0");
 });
@@ -315,7 +320,7 @@ function onRightHandleDblClick(): void {
 		   the resize-observing @pierre diff in the main pane on every frame,
 		   tanking the toggle to single-digit fps. Both panes toggle instantly —
 		   the sidebar via the grid track, the right panel via the snapped
-		   translateX in the panel-choreography $effect above. */
+		   translateX in the right-panel $effect above. */
 	}
 
 	/* ── Rail (always-visible project switcher) ── */
@@ -407,10 +412,10 @@ function onRightHandleDblClick(): void {
 			0 8px 24px -12px color-mix(in srgb, black 10%, transparent);
 	}
 
-	/* Right-edge vignette that fades in when the panel opens, softening the
-	   hard clip as the main area loses width to the panel. Opacity is driven
-	   by GSAP through `--vignette-opacity` (see panel-choreography.ts) so
-	   the slide + fade share a single tween and stay in sync. */
+	/* Right-edge vignette that appears when the panel opens, softening the
+	   hard clip as the main area loses width to the panel. Opacity is set
+	   directly (`--vignette-opacity`) by the right-panel $effect above —
+	   instant, no tween, in lockstep with the panel's snapped translateX. */
 	.main-area::after {
 		content: '';
 		position: absolute;
@@ -473,12 +478,12 @@ function onRightHandleDblClick(): void {
 	}
 
 	/* ── Right pane (chat) ──
-	   `.rightpanel-slot` is the grid cell whose width animates 0 ↔
+	   `.rightpanel-slot` is the grid cell whose width snaps 0 ↔
 	   rightPanelWidth; that drives the main column's shrink/grow.
 	   `.rightpanel-area` is absolutely-positioned inside it at a stable
-	   width so its contents never reflow during the track animation. The
-	   visible slide is a GSAP translateX tween on the panel, synchronized
-	   with the CSS grid transition (same duration + easing). */
+	   width so its contents never reflow when the track changes. The panel's
+	   translateX (off-screen ↔ 0) is snapped via `gsap.set` in the
+	   right-panel $effect above — instant, matching the grid track. */
 	.rightpanel-slot {
 		grid-area: rightpanel;
 		position: relative;
@@ -500,12 +505,11 @@ function onRightHandleDblClick(): void {
 			inset 0 1px 0 0 color-mix(in srgb, white 60%, transparent),
 			0 1px 2px -1px color-mix(in srgb, black 6%, transparent),
 			0 8px 24px -12px color-mix(in srgb, black 10%, transparent);
-		/* First-paint transform for the closed state. The GSAP choreography
-		   (panel-choreography $effect above) takes over once the first
-		   effect runs, writing the transform inline (which beats this rule
-		   on specificity). Keeping the static CSS means an open-on-reload
-		   panel renders at its correct resting position without a one-frame
-		   flash before JS attaches. */
+		/* First-paint transform for the closed state. The right-panel $effect
+		   above takes over once it first runs, writing the transform inline
+		   (which beats this rule on specificity). Keeping the static CSS means
+		   an open-on-reload panel renders at its correct resting position
+		   without a one-frame flash before JS attaches. */
 		transform: translateX(var(--right-panel-width));
 	}
 
