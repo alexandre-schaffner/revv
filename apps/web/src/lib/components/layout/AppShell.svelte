@@ -3,13 +3,12 @@ import { page } from "$app/state";
 import SettingsModal from "$lib/components/settings/SettingsModal.svelte";
 import UserMenu from "$lib/components/sidebar/UserMenu.svelte";
 import { RAIL_WIDTH } from "$lib/constants";
-import { gsap, gsapFade, prefersReducedMotion, tokens } from "$lib/motion";
+import { gsap, gsapFade, tokens } from "$lib/motion";
 import { getSelectedPr } from "$lib/stores/prs.svelte";
 import {
   getActiveTab,
   getIsPullingCommit,
   getLoadedHeadSha,
-  getReviewFiles,
   pullLatestCommit,
   setActiveTab,
 } from "$lib/stores/review.svelte";
@@ -20,7 +19,6 @@ import {
   getRightPanelWidth,
   getSidebarCollapsed,
   getSidebarPeekHovering,
-  getSidebarView,
   getSidebarWidth,
   RIGHT_PANEL_WIDTH_MAX,
   RIGHT_PANEL_WIDTH_MIN,
@@ -47,8 +45,6 @@ import WalkthroughActionBar from "./WalkthroughActionBar.svelte";
 
 let { children } = $props();
 
-const LARGE_FILE_TREE_ANIMATION_THRESHOLD = 120;
-
 const sidebarCollapsed = $derived(getSidebarCollapsed());
 // Effective collapsed state: false when the user is hovering a project
 // avatar (or the sidebar itself) so the column expands as a peek without
@@ -63,16 +59,11 @@ const paletteOpen = $derived(getPaletteOpen());
 const paletteMode = $derived(getPaletteMode());
 const sidebarWidth = $derived(getSidebarWidth());
 const rightPanelWidth = $derived(getRightPanelWidth());
-const sidebarView = $derived(getSidebarView());
-const reviewFiles = $derived(getReviewFiles());
 const pr = $derived(getSelectedPr());
 const walkthroughStatus = $derived(pr ? getPrWalkthroughStatus(pr.id) : "idle");
 const activeTab = $derived(getActiveTab());
 const isSettingsRoute = $derived(page.url.pathname.startsWith("/settings"));
 const isReviewRoute = $derived(page.url.pathname.startsWith("/review/"));
-const shouldSnapSidebarLayout = $derived(
-  sidebarView === "files" && reviewFiles.length >= LARGE_FILE_TREE_ANIMATION_THRESHOLD,
-);
 const showFloatingActions = $derived(
   !!pr && isReviewRoute && !isSettingsRoute && activeTab === "walkthrough",
 );
@@ -112,58 +103,21 @@ $effect(() => {
   }
 });
 
-// Right-panel slide + main-area vignette. Grid-track interpolation stays
-// on a CSS transition; JS-driving it forces a Svelte reactivity flush per
-// frame (de65e4c9). Snap on first paint and during a live drag.
-//
-// The grid-track animation is cheap because both flanking panes render
-// at a stable width (sidebar via `width: var(--sidebar-width)`, right
-// panel via absolute positioning inside `.rightpanel-slot`), so neither
-// pane's contents reflow as the track changes. Only the main area
-// actually resizes, and its diff viewer / file tree are virtualized
-// externally (@pierre/diffs, @pierre/trees).
+// Right panel appears/disappears instantly, same as the sidebar — snap the
+// panel's translateX (off-screen ↔ 0) and the main-area vignette on every
+// toggle, no tween. The vignette softens the main pane's clipped right edge
+// while the chat panel covers it. The closed-state transform also lives in
+// CSS (`.rightpanel-area`) so an open-on-reload panel paints correctly before
+// this effect attaches.
 let panelEl = $state<HTMLElement | null>(null);
 let mainEl = $state<HTMLElement | null>(null);
-let panelSlide: gsap.QuickToFunc | null = null;
-let vignetteSetter: gsap.QuickToFunc | null = null;
-const vignetteProxy = { v: 0 };
-let firstChoreography = true;
 
 $effect(() => {
   const open = rightPanelOpen;
   const width = rightPanelWidth;
-  const resizing = isResizingRight;
   if (!panelEl || !mainEl) return;
-
-  const targetX = open ? 0 : width;
-  const targetV = open ? 0.65 : 0;
-
-  if (firstChoreography || resizing || prefersReducedMotion()) {
-    gsap.set(panelEl, { x: targetX });
-    mainEl.style.setProperty("--vignette-opacity", String(targetV));
-    firstChoreography = false;
-    return;
-  }
-
-  // CustomEase parses bare cubic-bezier control points (tokens.ts:4–8).
-  // Wrapping them in `cubic-bezier(...)` silently falls back to power1.out,
-  // which desyncs against the CSS grid transition's real expo curve.
-  if (!panelSlide) {
-    panelSlide = gsap.quickTo(panelEl, "x", {
-      duration: tokens.smooth,
-      ease: tokens.easeOutExpo,
-    });
-  }
-  if (!vignetteSetter) {
-    const el = mainEl;
-    vignetteSetter = gsap.quickTo(vignetteProxy, "v", {
-      duration: tokens.smooth,
-      ease: tokens.easeOutExpo,
-      onUpdate: () => el.style.setProperty("--vignette-opacity", String(vignetteProxy.v)),
-    });
-  }
-  panelSlide(targetX);
-  vignetteSetter(targetV);
+  gsap.set(panelEl, { x: open ? 0 : width });
+  mainEl.style.setProperty("--vignette-opacity", open ? "0.65" : "0");
 });
 
 const gridStyle = $derived(
@@ -230,8 +184,6 @@ function onRightHandleDblClick(): void {
 <div
 	class="app-shell"
 	class:sidebar-collapsed={sidebarEffectiveCollapsed}
-	class:is-resizing={isDragging || isResizingRight}
-	class:snap-sidebar-layout={shouldSnapSidebarLayout}
 	class:rightpanel-open={rightPanelOpen}
 	style={gridStyle}
 >
@@ -359,18 +311,11 @@ function onRightHandleDblClick(): void {
 		/* Positioning context for the absolutely-positioned right pane. */
 		position: relative;
 		background-color: var(--color-bg-secondary);
-		/* Animates the main column when either flanking pane toggles. The
-		   per-frame cost is bounded by the stable-width pattern documented
-		   on the panel-choreography $effect above. */
-		transition: grid-template-columns var(--duration-smooth) var(--ease-out-expo);
-	}
-
-	/* Snap (no tween) during a live drag, and when the sidebar is showing a
-	   large virtualized tree where animating the column would relayout it
-	   on every frame. */
-	.app-shell.is-resizing,
-	.app-shell.snap-sidebar-layout {
-		transition: none;
+		/* No transition on grid-template-columns: tweening the track relayouts
+		   the resize-observing @pierre diff in the main pane on every frame,
+		   tanking the toggle to single-digit fps. Both panes toggle instantly —
+		   the sidebar via the grid track, the right panel via the snapped
+		   translateX in the panel-choreography $effect above. */
 	}
 
 	/* ── Rail (always-visible project switcher) ── */
