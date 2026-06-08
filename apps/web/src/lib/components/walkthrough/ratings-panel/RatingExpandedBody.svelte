@@ -2,9 +2,11 @@
 import type { Confidence, Verdict, WalkthroughBlock, WalkthroughRating } from "@revv/shared";
 import { RATING_AXIS_LABELS } from "@revv/shared";
 import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
+import { mermaidDiagrams } from "$lib/actions/mermaid.svelte";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
 import * as Tooltip from "$lib/components/ui/tooltip";
 import { jumpToDiffLine } from "$lib/stores/review.svelte";
+import { getResolvedTheme } from "$lib/stores/theme.svelte";
 import { renderMarkdown } from "$lib/utils/markdown";
 
 interface Props {
@@ -114,7 +116,7 @@ function handleJumpToDiff(filePath: string, line: number): void {
     </div>
 
     <div class="rationale">
-        <div class="rationale-text prose prose-sm prose-dense">{@html rationaleHtml}</div>
+        <div class="rationale-text prose prose-sm prose-dense" use:mermaidDiagrams={getResolvedTheme()}>{@html rationaleHtml}</div>
     </div>
 
     {#if detailsHtml}
@@ -122,7 +124,7 @@ function handleJumpToDiff(filePath: string, line: number): void {
             <span class="section-divider-label">details</span>
         </div>
         {#await detailsHtml then html}
-            <div class="rating-details prose prose-sm prose-dense">{@html html}</div>
+            <div class="rating-details prose prose-sm prose-dense" use:mermaidDiagrams={getResolvedTheme()}>{@html html}</div>
         {/await}
     {/if}
 

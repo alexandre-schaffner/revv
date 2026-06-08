@@ -8,6 +8,7 @@ import RefreshCw from "phosphor-svelte/lib/ArrowsClockwise";
 import CaretDown from "phosphor-svelte/lib/CaretDown";
 import AlertTriangle from "phosphor-svelte/lib/Warning";
 import { toast } from "svelte-sonner";
+import { mermaidDiagrams } from "$lib/actions/mermaid.svelte";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { Shimmer } from "$lib/components/ai/shimmer";
 import { ToolActivityGroup } from "$lib/components/ai/tool";
@@ -23,6 +24,7 @@ import {
   getPendingWalkthroughBlockJump,
   jumpToDiffLine,
 } from "$lib/stores/review.svelte";
+import { getResolvedTheme } from "$lib/stores/theme.svelte";
 import {
   getBlocks,
   getCloneInProgress,
@@ -1245,7 +1247,7 @@ function handleRegenerate(): void {
 							<div class="sentiment-card-header">
 								<h3 class="sentiment-card-title">Overall Sentiment</h3>
 							</div>
-							<div class="sentiment-card-body prose prose-sm">{@html renderedSentiment}</div>
+							<div class="sentiment-card-body prose prose-sm" use:mermaidDiagrams={getResolvedTheme()}>{@html renderedSentiment}</div>
 						</div>
 					{/if}
 					{#if ratings.length > 0 || isStreaming}

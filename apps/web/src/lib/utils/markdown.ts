@@ -25,6 +25,9 @@ marked.use({
   },
   renderer: {
     code({ text, lang }) {
+      if (isMermaidLang(lang)) {
+        return `<div class="mermaid-diagram not-prose" data-mermaid-src="${encodeBase64(text)}"><span class="mermaid-loading">Rendering diagram...</span></div>`;
+      }
       if (lang) {
         const highlighted = highlightCode(text, lang);
         if (highlighted) return highlighted;
@@ -35,6 +38,31 @@ marked.use({
     },
   },
 });
+
+function isMermaidLang(lang: string | undefined): boolean {
+  const normalized = lang?.trim().toLowerCase();
+  return normalized === "mermaid" || normalized === "mmd";
+}
+
+function encodeBase64(source: string): string {
+  const bytes = new TextEncoder().encode(source);
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  let out = "";
+
+  for (let i = 0; i < bytes.length; i += 3) {
+    const first = bytes[i] ?? 0;
+    const second = bytes[i + 1] ?? 0;
+    const third = bytes[i + 2] ?? 0;
+    const triplet = (first << 16) | (second << 8) | third;
+
+    out += alphabet[(triplet >> 18) & 63] ?? "";
+    out += alphabet[(triplet >> 12) & 63] ?? "";
+    out += i + 1 < bytes.length ? (alphabet[(triplet >> 6) & 63] ?? "") : "=";
+    out += i + 2 < bytes.length ? (alphabet[triplet & 63] ?? "") : "=";
+  }
+
+  return out;
+}
 
 export function renderMarkdown(source: string): string {
   // Normalize literal \n escape sequences (AI output artefact) to real newlines

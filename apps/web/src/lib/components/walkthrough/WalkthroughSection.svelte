@@ -1,6 +1,8 @@
 <script lang="ts">
 import type { WalkthroughBlock, WalkthroughSemanticStep } from "@revv/shared";
 import ChevronDown from "phosphor-svelte/lib/CaretDown";
+import { mermaidDiagrams } from "$lib/actions/mermaid.svelte";
+import { getResolvedTheme } from "$lib/stores/theme.svelte";
 import { renderMarkdown } from "$lib/utils/markdown";
 import WalkthroughCodeBlock from "./WalkthroughCodeBlock.svelte";
 import WalkthroughDiffBlock from "./WalkthroughDiffBlock.svelte";
@@ -117,7 +119,7 @@ $effect(() => {
 			<h3 class="section-title">{section.title}</h3>
 		</div>
 		{#if renderedSummary}
-			<div class="section-summary prose prose-sm prose-dense">{@html renderedSummary}</div>
+			<div class="section-summary prose prose-sm prose-dense" use:mermaidDiagrams={getResolvedTheme()}>{@html renderedSummary}</div>
 		{/if}
 	</button>
 
@@ -165,7 +167,7 @@ $effect(() => {
 							style:--enter-delay="{delay}ms"
 							aria-label="Annotation"
 						>
-							<div class="block-annotation-inner prose prose-sm">
+							<div class="block-annotation-inner prose prose-sm" use:mermaidDiagrams={getResolvedTheme()}>
 								{@html renderedAnnotation}
 							</div>
 						</aside>

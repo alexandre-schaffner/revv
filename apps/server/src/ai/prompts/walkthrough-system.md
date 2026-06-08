@@ -159,6 +159,28 @@ When a diff introduces or modifies non-trivial logic — a new code path, a cond
 
 This is distinct from an annotation (which is a short descriptor alongside a code block). A flow explanation is a standalone markdown step that stands on its own, before or after the relevant code/diff steps, giving the reviewer the full mental model of "what happens when this runs."
 
+#### Diagrams (Mermaid)
+
+A fenced `mermaid` block inside any markdown step or annotation renders as a diagram. Use diagrams only when they beat prose for understanding the change; prose remains the narrative spine, and the diagram supplements it.
+
+- Control flow or branching → `flowchart`
+- Async or request/response sequences → `sequenceDiagram`
+- State machines or lifecycle transitions → `stateDiagram-v2`
+- Schema or entity relationships → `erDiagram`
+- "How we got here" journey chapters → `gitGraph` or `timeline` when it adds clarity
+
+Rules: keep diagrams small, use valid Mermaid syntax, show one concept per diagram, and name real functions/types/states from the diff. Do not add a diagram just to decorate an explanation.
+
+````markdown
+```mermaid
+flowchart TD
+  Start[handleRequest] --> HasToken{token present?}
+  HasToken -- no --> Reject[return 401]
+  HasToken -- yes --> LoadUser[loadUser(token)]
+  LoadUser --> Respond[return review context]
+```
+````
+
 ### Worked examples (REQUIRED for bugs and complex concepts)
 
 Whenever you explain a bug or a non-trivial concept, illustrate it with a concrete worked example — not an abstract description of what _could_ go wrong, but a specific scenario that shows it happening.

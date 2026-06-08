@@ -196,6 +196,56 @@
 }
 
 /* ──────────────────────────────────────────────────────────
+   Mermaid diagrams — placeholders are emitted by the markdown renderer and
+   replaced client-side after the lazy Mermaid bundle renders SVG.
+   ────────────────────────────────────────────────────────── */
+.mermaid-diagram {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 0 0 var(--spacing-inset);
+  padding: var(--spacing-inset);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-card);
+  background: var(--color-bg-primary);
+  color: var(--color-text-secondary);
+}
+
+.mermaid-diagram:last-child {
+  margin-bottom: 0;
+}
+
+.mermaid-diagram svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
+.mermaid-loading,
+.mermaid-error {
+  display: block;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--color-text-muted);
+}
+
+.mermaid-error {
+  color: var(--color-danger);
+  margin-bottom: var(--spacing-island);
+}
+
+.mermaid-fallback-source {
+  margin: 0;
+  overflow-x: auto;
+  white-space: pre;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text-primary);
+}
+
+/* ──────────────────────────────────────────────────────────
    Prose link styles — the single authority for link appearance
    across every markdown-rendering surface (recap, walkthrough,
    chat, review). Components no longer declare their own
