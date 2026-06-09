@@ -4,7 +4,6 @@ import LinkSimple from "phosphor-svelte/lib/LinkSimple";
 import { goto } from "$app/navigation";
 import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte";
 import * as Tooltip from "$lib/components/ui/tooltip/index.js";
-import { setSidebarPeekHovering, setSidebarPeekRepoId } from "$lib/stores/sidebar.svelte";
 
 interface Props {
   repository: Repository;
@@ -50,13 +49,6 @@ const cloneStatusLabel = $derived.by(() => {
 			class="repo-button"
 			class:repo-button--active={isActive}
 			onclick={handleClick}
-			onmouseenter={() => {
-				setSidebarPeekRepoId(repository.id);
-				setSidebarPeekHovering(true);
-			}}
-			onmouseleave={() => {
-				setSidebarPeekHovering(false);
-			}}
 			aria-label={repository.fullName}
 			aria-current={isActive ? 'page' : undefined}
 		>
