@@ -794,6 +794,9 @@ export function setSelectedMode(prId: string, mode: WalkthroughMode): void {
   deleteEntry(prId);
   const entry = freshEntry();
   entry.mode = mode;
+  entry.isStreaming = false;
+  entry.phaseMessage = "";
+  entry.streamStartedAt = null;
   setEntry(prId, entry);
 }
 

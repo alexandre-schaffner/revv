@@ -187,14 +187,13 @@ function selectMode(mode: WalkthroughMode): void {
 
   .mode-switch {
     display: inline-grid;
-    grid-template-columns: minmax(92px, auto) minmax(112px, auto);
+    grid-template-columns: minmax(84px, auto) minmax(102px, auto);
     align-items: center;
-    min-height: 34px;
-    padding: 3px;
-    border: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--color-bg-elevated) 88%, transparent);
-    box-shadow: var(--shadow-island);
+    min-height: 32px;
+    padding: 2px;
+    border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--color-bg-elevated) 78%, transparent);
   }
 
   .mode-switch button {
@@ -206,19 +205,19 @@ function selectMode(mode: WalkthroughMode): void {
     height: 28px;
     padding: 0 10px;
     border: 0;
-    border-radius: 999px;
+    border-radius: 6px;
     background: transparent;
     color: var(--color-text-muted);
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     line-height: 1;
     white-space: nowrap;
   }
 
   .mode-switch button.active {
-    background: var(--color-bg);
+    background: color-mix(in srgb, var(--color-bg) 92%, var(--color-bg-elevated));
     color: var(--color-text-primary);
-    box-shadow: 0 1px 4px color-mix(in srgb, var(--color-text-primary) 14%, transparent);
+    box-shadow: 0 1px 2px color-mix(in srgb, var(--color-text-primary) 12%, transparent);
   }
 
   .mode-switch button:disabled {
