@@ -6,10 +6,7 @@
 // comment creation.
 
 import type {
-  CodeBlock,
   CommentThread,
-  DiffBlock,
-  MarkdownBlock,
   ThreadMessage,
   WalkthroughBlock,
   WalkthroughIssue,
@@ -24,6 +21,13 @@ import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import { walkthroughSemanticSteps } from "../../../db/schema/walkthrough-semantic-steps";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
+import {
+  type BlockVariantInput,
+  blockRow,
+  blockVariantCount,
+  buildBlock,
+  emptyBlockError,
+} from "../walkthrough-blocks";
 import {
   blockIdFor,
   errorResult,
@@ -46,65 +50,17 @@ import {
 // ── Block persistence helper ─────────────────────────────────────────────────
 //
 // Shared by addSemanticStepHandler (step_index=0 initial block) and
-// addDiffStepHandler (subsequent blocks). Both construct a typed
-// WalkthroughBlock from one of three variant inputs and upsert into
-// walkthroughBlocks with the same conflict target.
-
-interface BlockVariantInput {
-  readonly markdown?: { readonly content: string } | null | undefined;
-  readonly code?:
-    | {
-        readonly file_path: string;
-        readonly start_line: number;
-        readonly end_line: number;
-        readonly language: string;
-        readonly content: string;
-        readonly annotation: string | null;
-        readonly annotation_position: "left" | "right";
-      }
-    | null
-    | undefined;
-  readonly diff?:
-    | {
-        readonly file_path: string;
-        readonly patch: string;
-        readonly annotation: string | null;
-        readonly annotation_position: "left" | "right";
-      }
-    | null
-    | undefined;
-}
-
-function blockVariantCount(input: BlockVariantInput): number {
-  let n = 0;
-  if (input.markdown != null) n++;
-  if (input.code != null) n++;
-  if (input.diff != null) n++;
-  return n;
-}
+// addDiffStepHandler (subsequent blocks). The typed-block construction and
+// variant validation live in `../walkthrough-blocks` so the generation path
+// and the chat-edit path stay byte-for-byte identical (CLAUDE.md #2, #13).
+// This wrapper adds only the generation-path concern: the idempotent upsert
+// into `walkthrough_blocks` on the composite key.
 
 /**
- * Reject blocks whose payload would render as an empty box. An annotation on
- * a code/diff block reads as commentary *about* code that isn't there — use
- * a markdown block for prose-only content instead.
- */
-function emptyBlockError(input: BlockVariantInput): string | null {
-  if (input.markdown && input.markdown.content.trim().length === 0) {
-    return "Error: markdown block requires non-empty content. Either fill it in or omit the block.";
-  }
-  if (input.code && input.code.content.trim().length === 0) {
-    return "Error: code block requires non-empty content. Use a markdown block if you only want to write prose; an annotation without code reads as commentary about nothing.";
-  }
-  if (input.diff && input.diff.patch.trim().length === 0) {
-    return "Error: diff block requires a non-empty patch. Use a markdown block for prose-only content.";
-  }
-  return null;
-}
-
-/**
- * Construct a typed WalkthroughBlock from one of the three variant inputs and
- * upsert it into walkthroughBlocks. Returns the constructed block, or null if
- * no variant was provided (caller must validate beforehand).
+ * Build a typed WalkthroughBlock from one of the four variant inputs (via the
+ * shared {@link buildBlock}) and upsert it into walkthroughBlocks. Returns the
+ * constructed block, or null if no variant was provided (caller must validate
+ * beforehand with {@link blockVariantCount}).
  */
 function persistBlockVariant(
   db: Db,
@@ -120,57 +76,9 @@ function persistBlockVariant(
 ): WalkthroughBlock | null {
   const { walkthroughId, blockId, semanticStepIndex, stepIndex, order, createdAt } = opts;
 
-  let block: WalkthroughBlock;
-  let type: string;
-
-  if (variant.markdown) {
-    const md: MarkdownBlock = {
-      type: "markdown",
-      id: blockId,
-      order,
-      phase: "diff_analysis",
-      semanticStepIndex,
-      stepIndex,
-      content: variant.markdown.content,
-    };
-    block = md;
-    type = "markdown";
-  } else if (variant.code) {
-    const code: CodeBlock = {
-      type: "code",
-      id: blockId,
-      order,
-      phase: "diff_analysis",
-      semanticStepIndex,
-      stepIndex,
-      filePath: variant.code.file_path,
-      startLine: variant.code.start_line,
-      endLine: variant.code.end_line,
-      language: variant.code.language,
-      content: variant.code.content,
-      annotation: variant.code.annotation,
-      annotationPosition: variant.code.annotation_position,
-    };
-    block = code;
-    type = "code";
-  } else if (variant.diff) {
-    const diff: DiffBlock = {
-      type: "diff",
-      id: blockId,
-      order,
-      phase: "diff_analysis",
-      semanticStepIndex,
-      stepIndex,
-      filePath: variant.diff.file_path,
-      patch: variant.diff.patch,
-      annotation: variant.diff.annotation,
-      annotationPosition: variant.diff.annotation_position,
-    };
-    block = diff;
-    type = "diff";
-  } else {
-    return null;
-  }
+  const block = buildBlock(blockId, semanticStepIndex, stepIndex, variant);
+  if (!block) return null;
+  const { type, data } = blockRow(block);
 
   db.insert(walkthroughBlocks)
     .values({
@@ -181,7 +89,7 @@ function persistBlockVariant(
       semanticStepIndex,
       stepIndex,
       type,
-      data: JSON.stringify(block),
+      data,
       createdAt,
     })
     .onConflictDoUpdate({
@@ -191,7 +99,7 @@ function persistBlockVariant(
         walkthroughBlocks.semanticStepIndex,
         walkthroughBlocks.stepIndex,
       ],
-      set: { type, data: JSON.stringify(block) },
+      set: { type, data },
     })
     .run();
 
@@ -227,7 +135,7 @@ export const addSemanticStepHandler: WalkthroughToolHandler<AddSemanticStepInput
 
   if (blockVariantCount(input.initial_block) !== 1) {
     return errorResult(
-      "Error: add_semantic_step.initial_block requires exactly one of { markdown, code, diff } — not zero, not two. A chapter cannot be opened without its first block.",
+      "Error: add_semantic_step.initial_block requires exactly one of { markdown, code, diff, artifact } — not zero, not two. A chapter cannot be opened without its first block.",
     );
   }
   const initialBlockErr = emptyBlockError(input.initial_block);
@@ -368,10 +276,10 @@ export const addSemanticStepHandler: WalkthroughToolHandler<AddSemanticStepInput
 // semanticStepIndex, stepIndex)).
 
 export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> = async (ctx, input) => {
-  // Exactly one of {markdown, code, diff} must be provided.
+  // Exactly one of {markdown, code, diff, artifact} must be provided.
   if (blockVariantCount(input) !== 1) {
     return errorResult(
-      "Error: add_diff_step requires exactly one of { markdown, code, diff } — not zero, not two. Pick the shape that matches the step's intent.",
+      "Error: add_diff_step requires exactly one of { markdown, code, diff, artifact } — not zero, not two. Pick the shape that matches the step's intent.",
     );
   }
   const emptyErr = emptyBlockError(input);
@@ -424,7 +332,7 @@ export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> = asyn
         order: input.semantic_step_index * 10000 + input.step_index,
         createdAt: now,
       },
-      { markdown: input.markdown, code: input.code, diff: input.diff },
+      { markdown: input.markdown, code: input.code, diff: input.diff, artifact: input.artifact },
     );
   });
   if (result) return result;

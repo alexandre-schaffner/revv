@@ -49,6 +49,7 @@ function seedAccount(
     id: string;
     accessTokenExpiresAt?: Date | null;
     refreshTokenExpiresAt?: Date | null;
+    reauthRequiredAt?: Date | null;
   },
 ) {
   const now = new Date();
@@ -70,7 +71,7 @@ function seedAccount(
       userId: `user-${opts.id}`,
       accessTokenExpiresAt: opts.accessTokenExpiresAt ?? null,
       refreshTokenExpiresAt: opts.refreshTokenExpiresAt ?? null,
-      reauthRequiredAt: null,
+      reauthRequiredAt: opts.reauthRequiredAt ?? null,
       createdAt: now,
       updatedAt: now,
     })
@@ -242,6 +243,61 @@ describe("TokenProvider.markReauthRequired", () => {
     const evt = hub.events.find((e) => e.msg.type === "auth:reauth-required");
     expect(evt?.accountId).toBe("acc");
     expect(evt?.msg.type === "auth:reauth-required" && evt.msg.data.host).toBe("github.com");
+  });
+});
+
+describe("TokenProvider.clearReauthRequired", () => {
+  it("clears reauthRequiredAt and broadcasts auth:reauth-cleared", async () => {
+    const db = createDb(":memory:");
+    seedAccount(db, { id: "acc", reauthRequiredAt: new Date(Date.now() - HOUR) });
+    const store = makeFakeStore();
+    const hub = makeFakeHub();
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const p = yield* TokenProvider;
+        yield* p.clearReauthRequired("acc");
+      }).pipe(Effect.provide(buildLayer(db, store, hub))),
+    );
+
+    const row = db
+      .select({ reauthRequiredAt: account.reauthRequiredAt })
+      .from(account)
+      .where(eq(account.id, "acc"))
+      .get();
+    expect(row?.reauthRequiredAt).toBeNull();
+
+    const evt = hub.events.find((e) => e.msg.type === "auth:reauth-cleared");
+    expect(evt?.accountId).toBe("acc");
+    expect(evt?.msg.type === "auth:reauth-cleared" && evt.msg.data.host).toBe("github.com");
+  });
+});
+
+describe("TokenProvider.storeAccountTokens", () => {
+  it("stores token bytes and clears a stale persisted reauth gate", async () => {
+    const db = createDb(":memory:");
+    seedAccount(db, { id: "acc", reauthRequiredAt: new Date(Date.now() - HOUR) });
+    const store = makeFakeStore();
+    const hub = makeFakeHub();
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const p = yield* TokenProvider;
+        yield* p.storeAccountTokens("acc", "github.com", {
+          accessToken: "new",
+          refreshToken: null,
+        });
+      }).pipe(Effect.provide(buildLayer(db, store, hub))),
+    );
+
+    expect(store.map.get("acc")).toEqual({ accessToken: "new", refreshToken: null });
+    const row = db
+      .select({ reauthRequiredAt: account.reauthRequiredAt })
+      .from(account)
+      .where(eq(account.id, "acc"))
+      .get();
+    expect(row?.reauthRequiredAt).toBeNull();
+    expect(hub.events.some((e) => e.msg.type === "auth:reauth-cleared")).toBe(true);
   });
 });
 

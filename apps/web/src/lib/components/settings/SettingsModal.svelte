@@ -1,5 +1,11 @@
 <script lang="ts">
-import type { AiAgent, ContextWindow, RecapAgentChoice, ThinkingEffort } from "@revv/shared";
+import type {
+  AiAgent,
+  ContextWindow,
+  RecapAgentChoice,
+  Repository,
+  ThinkingEffort,
+} from "@revv/shared";
 import { Dialog as DialogPrimitive } from "bits-ui";
 import RotateCcw from "phosphor-svelte/lib/ArrowCounterClockwise";
 import ExternalLink from "phosphor-svelte/lib/ArrowSquareOut";
@@ -21,6 +27,7 @@ import { SvelteMap } from "svelte/reactivity";
 import { goto } from "$app/navigation";
 import { API_BASE_URL } from "$lib/api/base-url";
 import SignInButton from "$lib/components/auth/SignInButton.svelte";
+import RepoDeleteConfirm from "$lib/components/sidebar/RepoDeleteConfirm.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import * as Dialog from "$lib/components/ui/dialog/index.js";
 import { Input } from "$lib/components/ui/input";
@@ -402,11 +409,13 @@ let deleting = $state(false);
 let deleteError = $state<string | null>(null);
 
 let removingRepoId = $state<string | null>(null);
+let repoPendingDelete = $state<Repository | null>(null);
 
 async function handleDeleteRepo(id: string): Promise<void> {
   removingRepoId = id;
   try {
     await deleteRepo(id);
+    repoPendingDelete = null;
   } finally {
     removingRepoId = null;
   }
@@ -1178,7 +1187,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 											type="button"
 											class="repo-delete-btn"
 											disabled={removingRepoId === repo.id}
-											onclick={() => handleDeleteRepo(repo.id)}
+											onclick={() => (repoPendingDelete = repo)}
 											aria-label="Remove {repo.fullName}"
 										>
 											{#if removingRepoId === repo.id}
@@ -1256,6 +1265,20 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 		</DialogPrimitive.Content>
 	</Dialog.Portal>
 </DialogPrimitive.Root>
+
+<RepoDeleteConfirm
+	repo={repoPendingDelete}
+	open={repoPendingDelete !== null}
+	deleting={repoPendingDelete ? removingRepoId === repoPendingDelete.id : false}
+	onOpenChange={(nextOpen) => {
+		if (!nextOpen && (!repoPendingDelete || removingRepoId !== repoPendingDelete.id)) {
+			repoPendingDelete = null;
+		}
+	}}
+	onConfirm={() => {
+		if (repoPendingDelete) void handleDeleteRepo(repoPendingDelete.id);
+	}}
+/>
 
 <style>
 	@keyframes settings-modal-in {

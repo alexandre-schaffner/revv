@@ -327,10 +327,10 @@ $effect(() => {
 		background: var(--color-bg-primary);
 	}
 
-	/* Both sections use the SAME viewport-anchored 6-col grid as
+	/* Both sections use the SAME main-area-anchored 6-col grid as
 	   `.walkthrough-content` (see GuidedWalkthrough.svelte for the col_1
-	   derivation — it keeps the content column stable under sidebar toggle/
-	   resize and aligns with the `.page-title-section--narrow` header above).
+	   derivation — it re-centres the content column on every sidebar/right-panel
+	   toggle and aligns with the `.page-title-section--narrow` header above).
 	   Column layout must stay byte-identical to the walkthrough grids so the
 	   title, the Request Changes panels, and the walkthrough content all
 	   land in the same horizontal band.
@@ -350,7 +350,7 @@ $effect(() => {
 	.rc-sections {
 		display: grid;
 		grid-template-columns:
-			max(24px, min(calc(100% - 50vw - 458px), calc(100% - 1312px)))
+			max(24px, min(calc(50% - 458px), calc(100% - 1312px)))
 			48px
 			820px
 			40px

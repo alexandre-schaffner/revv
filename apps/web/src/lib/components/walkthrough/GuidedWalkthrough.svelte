@@ -5,11 +5,12 @@ const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
 
 import type { WalkthroughBlock, WalkthroughSemanticStep } from "@revv/shared";
 import RefreshCw from "phosphor-svelte/lib/ArrowsClockwise";
-import CaretDown from "phosphor-svelte/lib/CaretDown";
 import AlertTriangle from "phosphor-svelte/lib/Warning";
 import { toast } from "svelte-sonner";
+import { mermaidDiagrams } from "$lib/actions/mermaid.svelte";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { Shimmer } from "$lib/components/ai/shimmer";
+import { ThoughtsReveal } from "$lib/components/ai/thoughts";
 import { ToolActivityGroup } from "$lib/components/ai/tool";
 import { Button } from "$lib/components/ui/button";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix/index.js";
@@ -23,6 +24,7 @@ import {
   getPendingWalkthroughBlockJump,
   jumpToDiffLine,
 } from "$lib/stores/review.svelte";
+import { getResolvedTheme } from "$lib/stores/theme.svelte";
 import {
   getBlocks,
   getCloneInProgress,
@@ -45,7 +47,6 @@ import {
   getStreamError,
   getStreamStartedAt,
   getSummary,
-  getThoughts,
   getTimeline,
   hasBlockAnimated,
   hasContainerAnimated,
@@ -84,7 +85,6 @@ const riskLevel = $derived(getRiskLevel());
 const isStreaming = $derived(getIsStreaming());
 const streamError = $derived(getStreamError());
 const explorationSteps = $derived(getExplorationSteps());
-const thoughts = $derived(getThoughts());
 const timeline = $derived(getTimeline());
 const phase = $derived(getPhase());
 const streamStartedAt = $derived(getStreamStartedAt());
@@ -475,7 +475,6 @@ const interleavedEntries = $derived.by<readonly InterleavedRenderEntry[]>(() => 
   }
   return out;
 });
-const hasThoughtText = $derived(thoughts.trim().length > 0);
 let thoughtsOpen = $state(true);
 
 const blocksWithDelay = $derived.by(() => {
@@ -483,9 +482,10 @@ const blocksWithDelay = $derived.by(() => {
   return visibleBlocks.map((block) => {
     // Pre-render annotation markdown once per block so the template can
     // emit the annotation as a sibling grid item without each re-render
-    // re-parsing markdown. Only code/diff blocks carry annotations.
+    // re-parsing markdown. Only code/diff/artifact blocks carry annotations.
     const renderedAnnotation =
-      (block.type === "code" || block.type === "diff") && block.annotation
+      (block.type === "code" || block.type === "diff" || block.type === "artifact") &&
+      block.annotation
         ? renderMarkdown(block.annotation)
         : null;
     if (hasBlockAnimated(prId, block.id)) {
@@ -1186,39 +1186,32 @@ function handleRegenerate(): void {
 			<div class="block-group">
 				<span class="block-step-dot" aria-hidden="true"></span>
 				<div class="block-wrapper block-wrapper--no-anim walkthrough-skeleton">
-					<button
-						type="button"
-						class="walkthrough-skeleton-trigger"
-						aria-label="Reviewing. Toggle streamed thoughts."
-						aria-expanded={thoughtsOpen}
-						onclick={() => { thoughtsOpen = !thoughtsOpen; }}
+					<ThoughtsReveal
+						bind:open={thoughtsOpen}
+						triggerClass="walkthrough-phase-trigger"
+						ariaLabel="Reviewing. Toggle streamed thoughts."
+						metaLabel=""
 					>
-						<Shimmer class="text-sm" aria-label="Reviewing">Reviewing...</Shimmer>
-						<span class="walkthrough-skeleton-meta">
-							<span>{hasThoughtText ? 'Thoughts' : 'Waiting for thoughts'}</span>
-							<span
-								class="walkthrough-skeleton-chevron-wrap"
-								data-state={thoughtsOpen ? 'open' : 'closed'}
-							>
-								<CaretDown class="walkthrough-skeleton-chevron" aria-hidden="true" />
-							</span>
-						</span>
-					</button>
-
-					{#if thoughtsOpen}
+						{#snippet prefix()}
+							<Shimmer class="text-sm" aria-label="Reviewing">Reviewing...</Shimmer>
+						{/snippet}
 						{#if interleavedEntries.length > 0}
 							<div class="walkthrough-activity-stack">
 								{#each interleavedEntries as entry, entryIdx (entry.id)}
 									{#if entry.kind === 'thought'}
-										<div class="walkthrough-inline-thought">
-											{@html renderMarkdown(entry.text)}
+										<div class="walkthrough-activity-entry" data-kind="thought">
+											<div class="walkthrough-inline-thought prose prose-sm">
+												{@html renderMarkdown(entry.text)}
+											</div>
 										</div>
 									{:else}
-										<ToolActivityGroup
-											items={entry.items}
-											active={entryIdx === interleavedEntries.length - 1}
-											defaultOpen={false}
-										/>
+										<div class="walkthrough-activity-entry" data-kind="explorations">
+											<ToolActivityGroup
+												items={entry.items}
+												active={entryIdx === interleavedEntries.length - 1}
+												defaultOpen={false}
+											/>
+										</div>
 									{/if}
 								{/each}
 							</div>
@@ -1227,7 +1220,7 @@ function handleRegenerate(): void {
 								No streamed thoughts yet. Tool calls will appear here as they happen.
 							</p>
 						{/if}
-					{/if}
+					</ThoughtsReveal>
 				</div>
 			</div>
 		{/if}
@@ -1245,7 +1238,7 @@ function handleRegenerate(): void {
 							<div class="sentiment-card-header">
 								<h3 class="sentiment-card-title">Overall Sentiment</h3>
 							</div>
-							<div class="sentiment-card-body">{@html renderedSentiment}</div>
+							<div class="sentiment-card-body prose prose-sm" use:mermaidDiagrams={getResolvedTheme()}>{@html renderedSentiment}</div>
 						</div>
 					{/if}
 					{#if ratings.length > 0 || isStreaming}
@@ -1291,29 +1284,27 @@ function handleRegenerate(): void {
 	}
 
 	.walkthrough-content {
-		/* 6-col grid that anchors the content column to the VIEWPORT centre
-		   (not the main-area centre), so resizing or toggling the left pane
-		   doesn't shift the content horizontally. Content only moves left —
-		   and only by exactly the required distance — when the main-area
-		   has shrunk enough that rail-plus-content would overflow.
+		/* 6-col grid that centres the content column within the MAIN AREA,
+		   so the content re-centres whenever either flanking pane (sidebar
+		   or right chat panel) toggles. Both panes are real grid columns in
+		   AppShell.svelte, so opening either shrinks the main-area — and the
+		   grid container here (`.review-content`, container-type: inline-size)
+		   shrinks with it. `100%`/`50%` therefore always track the visible
+		   main-area width, which is exactly what we centre against.
 
-		   col 1 = max(24px, min(100% - 50vw - 458px, 100% - 1312px))
-		     - 100% - 50vw - 458px : the col_1 width that places the content
-		         column's centre at viewport x = 50vw. Derivation: sidebar
-		         width S = 100vw - 100% (because 100% = main-area width =
-		         V - S). Content's viewport x-centre = S + col_1 + 48 + 410;
-		         setting that to V/2 = 50vw gives col_1 = 100% - 50vw - 458.
-		         When S changes (sidebar toggle/resize), 100% and 50vw shift
-		         in lockstep so that S + col_1 + 458 stays at V/2 — content
-		         position in the viewport is stable.
+		   col 1 = max(24px, min(50% - 458px, 100% - 1312px))
+		     - 50% - 458px : the col_1 width that places the content column's
+		         centre at the main-area centre (50%). Content x-centre within
+		         the grid = col_1 + 48 + 410; setting that to 50% gives
+		         col_1 = 50% - 458. Because `%` is relative to the main-area
+		         width, this stays centred on every sidebar/right-panel toggle.
 		     - 100% - 1312px : the largest col_1 that still lets the rail end
 		         at exactly 100% - 24 (24px right gutter inside main-area).
-		         When this binds (narrow main-area), content's viewport x
-		         = S + (100% - 1312) + 458 = V - 854 — also independent of S,
-		         so toggling the sidebar still doesn't jump the content.
-		     min() picks whichever binds. They cross when V ≥ 1708 (viewport,
-		     not main-area); above, viewport-centring wins; below, rail
-		     pinning wins. Floor of 24px keeps a minimum left gutter.
+		         Binds on narrower main-areas where pure centring would push
+		         rail-plus-content past the right gutter.
+		     min() picks whichever binds. They cross at a main-area width of
+		         1708; above, centring wins; below, rail pinning wins. Floor
+		         of 24px keeps a minimum left gutter.
 		   col 2 = 48        (severity-dot gutter)
 		   col 3 = 820       (content)
 		   col 4 = 40        (content ↔ rail gap)
@@ -1325,17 +1316,10 @@ function handleRegenerate(): void {
 		   the @container rule at the bottom falls through to a stacked
 		   layout. The breakpoint is on main-area width (100%, via
 		   container-type: inline-size on .review-content) so the collapse
-		   triggers only when the sidebar has eaten enough room to matter.
-
-		   Note: the right pane (chat) is positioned absolutely on top of
-		   the main-area in AppShell.svelte (NOT a grid column), so opening
-		   it does not change `100%` and therefore does not affect any of
-		   the math here. That's by design — the user wants the right-pane
-		   toggle to leave the main-content render byte-identical, which
-		   requires not shrinking main-area. */
+		   triggers only when a flanking pane has eaten enough room to matter. */
 		display: grid;
 		grid-template-columns:
-			max(24px, min(calc(100% - 50vw - 458px), calc(100% - 1312px)))
+			max(24px, min(calc(50% - 458px), calc(100% - 1312px)))
 			48px
 			minmax(0, 820px)
 			40px
@@ -1417,7 +1401,7 @@ function handleRegenerate(): void {
 	.walkthrough-loading {
 		display: grid;
 		grid-template-columns:
-			max(24px, min(calc(100% - 50vw - 458px), calc(100% - 1312px)))
+			max(24px, min(calc(50% - 458px), calc(100% - 1312px)))
 			48px
 			minmax(0, 820px)
 			40px
@@ -1443,7 +1427,7 @@ function handleRegenerate(): void {
 	.walkthrough-stepper-header {
 		display: grid;
 		grid-template-columns:
-			max(24px, min(calc(100% - 50vw - 458px), calc(100% - 1312px)))
+			max(24px, min(calc(50% - 458px), calc(100% - 1312px)))
 			48px
 			minmax(0, 820px)
 			40px
@@ -1829,7 +1813,7 @@ function handleRegenerate(): void {
 		display: grid;
 		grid-column: 1 / -1;
 		grid-template-columns:
-			max(24px, min(calc(100% - 50vw - 458px), calc(100% - 1312px)))
+			max(24px, min(calc(50% - 458px), calc(100% - 1312px)))
 			48px
 			minmax(0, 820px)
 			40px
@@ -1964,10 +1948,10 @@ function handleRegenerate(): void {
 	.walkthrough-skeleton {
 		display: flex;
 		flex-direction: column;
-		gap: 0.5rem;
+		width: 100%;
 	}
 
-	.walkthrough-skeleton-trigger {
+	.walkthrough-phase-trigger {
 		display: flex;
 		width: 100%;
 		align-items: center;
@@ -1982,36 +1966,24 @@ function handleRegenerate(): void {
 		font: inherit;
 	}
 
-	.walkthrough-skeleton-meta {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.35rem;
-		flex-shrink: 0;
-		font-size: 0.75rem;
-		color: var(--color-text-muted);
-	}
-
-	.walkthrough-skeleton-chevron-wrap {
-		display: inline-grid;
-		place-items: center;
-		transition: transform var(--duration-snap) var(--ease-out-expo);
-	}
-
-	.walkthrough-skeleton-chevron-wrap[data-state="open"] {
-		transform: rotate(180deg);
-	}
-
-	.walkthrough-skeleton-chevron-wrap :global(.walkthrough-skeleton-chevron) {
-		width: 0.75rem;
-		height: 0.75rem;
-	}
-
 	.walkthrough-activity-stack {
 		display: flex;
 		flex-direction: column;
-		gap: 0.5rem;
-		max-width: 42rem;
+		margin-top: 0.375rem;
+		padding-left: 0.75rem;
+		border-left: 1px solid var(--color-border);
+	}
+
+	.walkthrough-activity-entry + .walkthrough-activity-entry {
+		margin-top: 0.375rem;
+	}
+
+	.walkthrough-activity-entry[data-kind="thought"] + .walkthrough-activity-entry[data-kind="explorations"] {
 		margin-top: 0.25rem;
+	}
+
+	.walkthrough-activity-entry[data-kind="explorations"] + .walkthrough-activity-entry[data-kind="thought"] {
+		margin-top: 0.875rem;
 	}
 
 	.walkthrough-thought-empty {
@@ -2027,61 +1999,9 @@ function handleRegenerate(): void {
 		word-break: break-word;
 	}
 
-	.walkthrough-inline-thought :global(p),
-	.walkthrough-inline-thought :global(ul),
-	.walkthrough-inline-thought :global(ol),
-	.walkthrough-inline-thought :global(pre),
-	.walkthrough-inline-thought :global(blockquote) {
-		margin: 0 0 0.5rem;
-	}
-
-	.walkthrough-inline-thought :global(:last-child) {
-		margin-bottom: 0;
-	}
-
-	.walkthrough-inline-thought :global(ul),
-	.walkthrough-inline-thought :global(ol) {
-		padding-left: 1.25rem;
-	}
-
-	.walkthrough-inline-thought :global(li) {
-		margin: 0.15rem 0;
-	}
-
-	.walkthrough-inline-thought :global(code) {
-		font-family: var(--font-mono);
-		font-size: 0.92em;
-		padding: 0.08em 0.3em;
-		border-radius: 0.25rem;
-		background: color-mix(in srgb, var(--color-bg-tertiary) 70%, transparent);
-		color: var(--color-text-secondary);
-	}
-
-	.walkthrough-inline-thought :global(pre) {
-		overflow-x: auto;
-		padding: 0.625rem;
-		border-radius: 0.375rem;
-		background: var(--color-bg-tertiary);
-	}
-
-	.walkthrough-inline-thought :global(pre code) {
-		padding: 0;
-		background: transparent;
-		font-size: inherit;
-	}
-
-	.walkthrough-inline-thought :global(blockquote) {
-		padding-left: 0.75rem;
-		border-left: 2px solid color-mix(in srgb, var(--color-accent) 45%, transparent);
-		color: var(--color-text-secondary);
-	}
-
-	.walkthrough-inline-thought :global(a) {
-		color: var(--color-accent);
-		text-decoration-line: underline;
-		text-decoration-color: color-mix(in srgb, var(--color-accent) 35%, transparent);
-		text-underline-offset: 2px;
-	}
+	/* Markdown styling comes from the app-wide themed @tailwindcss/typography
+	   prose layer (see app.css); `.walkthrough-inline-thought` only sets the
+	   quieter muted body tone. */
 
 	/* ── Annotation rail ─────────────────────────────────────────────────
 	   Sits top-aligned beside its block in the grid row. No sticky — CSS
@@ -2129,26 +2049,8 @@ function handleRegenerate(): void {
 		overflow-wrap: anywhere;
 	}
 
-	.block-annotation-inner :global(p) {
-		margin: 0 0 8px;
-	}
-
-	.block-annotation-inner :global(p:last-child) {
-		margin-bottom: 0;
-	}
-
-	.block-annotation-inner :global(code) {
-		font-family: var(--font-mono);
-		font-size: 12px;
-		background: var(--color-bg-tertiary);
-		padding: 1px 4px;
-		border-radius: 3px;
-	}
-
-	.block-annotation-inner :global(strong) {
-		color: var(--color-text-primary);
-		font-weight: 600;
-	}
+	/* Markdown styling comes from the app-wide themed @tailwindcss/typography
+	   prose layer (see app.css); `.block-annotation-inner` only owns the card box. */
 
 	.loading-text {
 		font-size: 13px;
@@ -2265,42 +2167,8 @@ function handleRegenerate(): void {
 		color: var(--color-text-secondary);
 	}
 
-	.sentiment-card-body :global(p) {
-		margin: 0 0 8px;
-	}
-
-	.sentiment-card-body :global(p:last-child) {
-		margin-bottom: 0;
-	}
-
-	.sentiment-card-body :global(code) {
-		font-family: var(--font-mono);
-		font-size: 12px;
-		background: var(--color-bg-tertiary);
-		padding: 1px 4px;
-		border-radius: 3px;
-	}
-
-	.sentiment-card-body :global(strong) {
-		color: var(--color-text-primary);
-		font-weight: 600;
-	}
-
-	.sentiment-card-body :global(ul),
-	.sentiment-card-body :global(ol) {
-		margin: 4px 0 8px;
-		padding-left: 20px;
-	}
-
-	.sentiment-card-body :global(li) {
-		margin: 2px 0;
-	}
-
-	.sentiment-card-body :global(a) {
-		color: var(--color-accent);
-		text-decoration: underline;
-		text-underline-offset: 2px;
-	}
+	/* Markdown styling comes from the app-wide themed @tailwindcss/typography
+	   prose layer (see app.css); `.sentiment-card-body` only owns base text density. */
 
 	/* ── Narrow-viewport fallback ────────────────────────────────────────
 	   Below the 1336px geometric minimum (24 left + 48 + 820 + 40 + 380 +

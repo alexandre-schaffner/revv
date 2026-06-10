@@ -72,7 +72,17 @@ export interface DiffBlock extends BlockPhaseFields {
   prerenderedHtml?: string;
 }
 
-export type WalkthroughBlock = MarkdownBlock | CodeBlock | DiffBlock;
+export interface ArtifactBlock extends BlockPhaseFields {
+  type: "artifact";
+  id: string;
+  order: number;
+  /** Complete self-contained HTML document rendered in a sandboxed iframe. */
+  html: string;
+  annotation: string | null;
+  annotationPosition: AnnotationPosition;
+}
+
+export type WalkthroughBlock = MarkdownBlock | CodeBlock | DiffBlock | ArtifactBlock;
 
 // ── Semantic step (Phase B chapter) ─────────────────────────────────────────
 

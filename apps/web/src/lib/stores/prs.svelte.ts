@@ -4,6 +4,7 @@ import type {
   MergeMethod,
   PullRequest,
   Repository,
+  Team,
   ThreadSummary,
 } from "@revv/shared";
 import { toast } from "svelte-sonner";
@@ -28,6 +29,11 @@ let availablePrCounts = $state<Record<string, number>>({});
 // least once. Lets the UI treat missing entries as "No open PRs" rather
 // than holding a blank hint indefinitely when a repo errors out server-side.
 let availablePrCountsLoaded = $state(false);
+// The server's effective managed-clone base (`REVV_CLONE_DIR`). Fetched once
+// from the server so the add-repo flow never hardcodes a default that could
+// diverge from an operator's override. Null until fetched (or if the fetch
+// failed) — callers then omit `basePath` and let the server apply its own.
+let defaultCloneBaseDir = $state<string | null>(null);
 let selectedPrId = $state<string | null>(null);
 // URL-driven: set by the +layout effect that reads /repo/[repoId] (or
 // derives from the active PR's repositoryId). Mirrors the selectedPrId
@@ -35,6 +41,14 @@ let selectedPrId = $state<string | null>(null);
 // browser back/forward behave naturally.
 let selectedRepoId = $state<string | null>(null);
 let searchQuery = $state("");
+let selectedAuthorLogins = $state<Set<string>>(new Set());
+// GitHub teams per org login (lowercased key), used by the creator filter to
+// offer "select everyone on team X" shortcuts. Populated lazily the first
+// time the filter popover opens for a repo owned by that org. Absence of a
+// key means "not fetched yet"; an empty array means "fetched, none visible"
+// (org has no teams, or the token lacks `read:org`).
+let teamsByOrg = $state<Map<string, Team[]>>(new Map());
+let teamsLoadingByOrg = $state<Map<string, boolean>>(new Map());
 let isLoading = $state(false);
 let archivedPrs = $state<PullRequest[]>([]);
 // Cursor for the next page of archived PRs. Null = exhausted or never
@@ -69,13 +83,18 @@ interface RepoDeleteSnapshot {
 // Result ordering: when there's an active query we sort by score (descending)
 // so the strongest matches surface first within each repo group; with no
 // query we preserve the server-provided order.
+const authorFilteredPrs = $derived.by((): PullRequest[] => {
+  if (selectedAuthorLogins.size === 0) return pullRequests;
+  return pullRequests.filter((pr) => selectedAuthorLogins.has(pr.authorLogin));
+});
+
 const filteredPrs = $derived.by((): PullRequest[] => {
   const q = searchQuery.trim();
-  if (q === "") return pullRequests;
+  if (q === "") return authorFilteredPrs;
 
   const repoMap = new Map(repositories.map((r) => [r.id, r]));
 
-  return pullRequests
+  return authorFilteredPrs
     .map((pr) => {
       const repoName = repoMap.get(pr.repositoryId)?.fullName ?? "";
       const score = Math.max(
@@ -116,6 +135,74 @@ const selectedRepo = $derived(
   selectedRepoId ? (repositories.find((r) => r.id === selectedRepoId) ?? null) : null,
 );
 
+export interface PrAuthorFilterOption {
+  readonly login: string;
+  readonly count: number;
+  readonly avatarContent: string | null;
+}
+
+type AuthorAccumulator = Map<string, { count: number; avatarContent: string | null }>;
+
+function tallyAuthor(counts: AuthorAccumulator, pr: PullRequest): void {
+  const existing = counts.get(pr.authorLogin);
+  if (existing) {
+    existing.count += 1;
+    existing.avatarContent ??= pr.authorAvatarContent;
+  } else {
+    counts.set(pr.authorLogin, { count: 1, avatarContent: pr.authorAvatarContent });
+  }
+}
+
+function toSortedOptions(counts: AuthorAccumulator): PrAuthorFilterOption[] {
+  return [...counts.entries()]
+    .map(([login, value]) => ({ login, ...value }))
+    .sort((a, b) => b.count - a.count || a.login.localeCompare(b.login));
+}
+
+// Author options precomputed per repo. Rebuilt only when the open-PR list
+// changes (i.e. on a sync / `prs:updated`), never when the filter popover
+// opens — so clicking the filter is an O(1) lookup of an already-built,
+// reference-stable array, even on repos with hundreds of contributors.
+const authorOptionsByRepo = $derived.by((): Map<string, PrAuthorFilterOption[]> => {
+  const byRepo = new Map<string, AuthorAccumulator>();
+  for (const pr of pullRequests) {
+    let counts = byRepo.get(pr.repositoryId);
+    if (!counts) {
+      counts = new Map();
+      byRepo.set(pr.repositoryId, counts);
+    }
+    tallyAuthor(counts, pr);
+  }
+  const result = new Map<string, PrAuthorFilterOption[]>();
+  for (const [repoId, counts] of byRepo) result.set(repoId, toSortedOptions(counts));
+  return result;
+});
+
+const allAuthorOptions = $derived.by((): PrAuthorFilterOption[] => {
+  const counts: AuthorAccumulator = new Map();
+  for (const pr of pullRequests) tallyAuthor(counts, pr);
+  return toSortedOptions(counts);
+});
+
+/**
+ * Author options for the raw open-PR list. This intentionally ignores search
+ * and the current author filter so the user can recover from an over-narrow
+ * view without clearing other controls first. Reads from the precomputed
+ * per-repo cache above, so it does no work when the popover opens.
+ */
+export function getAuthorFilterOptions(repoId?: string): PrAuthorFilterOption[] {
+  if (!repoId) return allAuthorOptions;
+  return authorOptionsByRepo.get(repoId) ?? [];
+}
+
+export function getSelectedAuthorLogins(): Set<string> {
+  return selectedAuthorLogins;
+}
+
+export function hasActivePrListFilter(): boolean {
+  return searchQuery.trim() !== "" || selectedAuthorLogins.size > 0;
+}
+
 /**
  * Open PRs for one repo with pinned PRs sorted to the very top, then
  * needs-your-review PRs, then the rest.
@@ -127,6 +214,10 @@ export function getOpenPrsByRepoOrdered(repoId: string): PullRequest[] {
   const skipIds = new Set([...pinned.map((p) => p.id), ...review.map((p) => p.id)]);
   const rest = all.filter((p) => !skipIds.has(p.id));
   return [...pinned, ...review, ...rest];
+}
+
+export function getOpenPrCountByRepo(repoId: string): number {
+  return pullRequests.filter((pr) => pr.repositoryId === repoId).length;
 }
 
 export function getArchivedPrs(): PullRequest[] {
@@ -433,8 +524,78 @@ export function setSearchQuery(q: string): void {
   searchQuery = q;
 }
 
-export async function addRepo(fullName: string): Promise<void> {
-  const { error } = await api.api.repos.post({ fullName });
+export function toggleAuthorFilter(login: string): void {
+  const next = new Set(selectedAuthorLogins);
+  if (next.has(login)) next.delete(login);
+  else next.add(login);
+  selectedAuthorLogins = next;
+}
+
+/**
+ * Add or remove a batch of author logins from the filter in one update.
+ * Used by the team shortcuts: selecting a team adds all its members,
+ * deselecting removes them. Reuses the same `selectedAuthorLogins` set the
+ * per-creator toggles drive, so the downstream filter logic is unchanged.
+ */
+export function setAuthorFilters(logins: readonly string[], selected: boolean): void {
+  if (logins.length === 0) return;
+  const next = new Set(selectedAuthorLogins);
+  for (const login of logins) {
+    if (selected) next.add(login);
+    else next.delete(login);
+  }
+  selectedAuthorLogins = next;
+}
+
+export function clearAuthorFilters(): void {
+  if (selectedAuthorLogins.size === 0) return;
+  selectedAuthorLogins = new Set();
+}
+
+export function getTeamsForOrg(owner: string): Team[] {
+  return teamsByOrg.get(owner.toLowerCase()) ?? [];
+}
+
+/**
+ * Lazily fetch an org's teams (and members) the first time they're needed.
+ * Idempotent: no-ops once a result is cached or a request is already in
+ * flight. Best-effort — failures resolve to an empty team list so the
+ * creator filter keeps working without teams.
+ */
+export async function fetchTeamsForOrg(owner: string): Promise<void> {
+  const key = owner.toLowerCase();
+  if (teamsByOrg.has(key) || teamsLoadingByOrg.get(key)) return;
+  teamsLoadingByOrg = new Map(teamsLoadingByOrg).set(key, true);
+  try {
+    const { data } = await api.api.github.teams({ org: owner }).get();
+    // Cache the result — including an empty list — so reopening the popover
+    // never re-hits the network. The server already degrades to `{ teams: [] }`
+    // when teams aren't visible (no `read:org`, not a member), so an empty
+    // array here is a real answer, not a failure to retry on every open.
+    teamsByOrg = new Map(teamsByOrg).set(key, (data as { teams: Team[] } | null)?.teams ?? []);
+  } catch {
+    // Network/transport error: cache empty so we don't lag every open. A
+    // later `reset()` (account switch / re-login) clears this to retry.
+    teamsByOrg = new Map(teamsByOrg).set(key, []);
+  } finally {
+    teamsLoadingByOrg = new Map(teamsLoadingByOrg).set(key, false);
+  }
+}
+
+export type AddRepoBody =
+  | { readonly fullName: string; readonly mode?: "clone"; readonly basePath?: string }
+  | { readonly fullName: string; readonly mode: "link"; readonly clonePath: string };
+
+/** A bare `owner/name` string is sugar for `{ fullName, mode: "clone" }`. */
+export type AddRepoInput = string | AddRepoBody;
+
+function toAddRepoBody(input: AddRepoInput): AddRepoBody {
+  if (typeof input === "string") return { fullName: input };
+  return input;
+}
+
+export async function addRepo(input: AddRepoInput): Promise<void> {
+  const { error } = await api.api.repos.post(toAddRepoBody(input));
   if (error) {
     const value = error.value as { error?: string; message?: string } | undefined;
     const msg = value?.error ?? value?.message ?? `Failed to add repository (HTTP ${error.status})`;
@@ -650,6 +811,10 @@ export function getRepositories(): Repository[] {
   return repositories;
 }
 
+export function getRepoOwner(repoId: string): string | null {
+  return repositories.find((r) => r.id === repoId)?.owner ?? null;
+}
+
 export function getSelectedPrId(): string | null {
   return selectedPrId;
 }
@@ -715,6 +880,27 @@ async function fetchAvailablePrCounts(fullNames: string[]): Promise<void> {
   }
 }
 
+/**
+ * Fetch the server's default clone base directory once and cache it. Idempotent
+ * — subsequent calls no-op once a value is cached. Best-effort: on failure the
+ * value stays null and the add-repo form omits `basePath`, deferring to the
+ * server's own default.
+ */
+export async function fetchDefaultCloneBaseDir(): Promise<void> {
+  if (defaultCloneBaseDir !== null) return;
+  try {
+    const { data, error } = await api.api.repos["clone-base-dir"].get();
+    if (error || !data) return;
+    defaultCloneBaseDir = (data as { path: string }).path;
+  } catch {
+    // Best-effort — see the field doc.
+  }
+}
+
+export function getDefaultCloneBaseDir(): string | null {
+  return defaultCloneBaseDir;
+}
+
 export function getAvailableRepos(): Repository[] {
   return availableRepos;
 }
@@ -748,6 +934,9 @@ export function reset(): void {
   selectedPrId = null;
   selectedRepoId = null;
   searchQuery = "";
+  selectedAuthorLogins = new Set();
+  teamsByOrg = new Map();
+  teamsLoadingByOrg = new Map();
   isLoading = false;
   archivedPrs = [];
   archivedNextCursor = null;

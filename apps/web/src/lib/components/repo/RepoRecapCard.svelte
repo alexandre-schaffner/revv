@@ -136,7 +136,7 @@ let ledeHtml = $derived.by(() => {
 				<RecapStats stats={latestDetail.summaryStats} />
 			</div>
 
-			<article class="recap-card-prose">
+			<article class="recap-card-prose prose prose-sm">
 				{@html ledeHtml}
 			</article>
 
@@ -298,48 +298,16 @@ let ledeHtml = $derived.by(() => {
 		color: var(--color-text-muted);
 	}
 
+	/* Markdown styling comes from the app-wide themed @tailwindcss/typography
+	   prose layer (see app.css). The recap lede reads as primary-weight body
+	   text rather than the muted prose default, and headings get a touch of
+	   negative tracking to match the card's display type. */
 	.recap-card-prose {
-		font-size: 0.875rem;
-		line-height: 1.6;
-		color: var(--color-text-primary);
+		--tw-prose-body: var(--color-text-primary);
 	}
 
-	.recap-card-prose :global(h1),
-	.recap-card-prose :global(h2),
-	.recap-card-prose :global(h3) {
-		margin: 1.25em 0 0.5em;
-		font-weight: 600;
+	.recap-card-prose :global(:is(h1, h2, h3)) {
 		letter-spacing: -0.015em;
-	}
-
-	.recap-card-prose :global(h1) {
-		font-size: 1.25em;
-	}
-
-	.recap-card-prose :global(h2) {
-		font-size: 1.1em;
-	}
-
-	.recap-card-prose :global(p) {
-		margin: 0.625em 0;
-	}
-
-	.recap-card-prose :global(ul),
-	.recap-card-prose :global(ol) {
-		margin: 0.5em 0;
-		padding-left: 1.25em;
-	}
-
-	.recap-card-prose :global(li) {
-		margin: 0.25em 0;
-	}
-
-	.recap-card-prose :global(code) {
-		font-family: var(--font-mono, monospace);
-		font-size: 0.85em;
-		padding: 0.125em 0.375em;
-		background: var(--color-bg-secondary);
-		border-radius: 0.25em;
 	}
 
 	.recap-card-no-content {

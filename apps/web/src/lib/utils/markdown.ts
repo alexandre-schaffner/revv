@@ -12,16 +12,22 @@ marked.use({
   hooks: {
     // Wrap every rendered table in a scroll container so wide tables don't
     // blow out narrow panels. Styled globally via `.prose-table` in app.css.
+    // The `not-prose` opt-out keeps @tailwindcss/typography from layering its
+    // own table defaults (margins, row borders) onto the inner `<table>`, so
+    // `.prose-table` fully owns table rendering inside a `.prose` surface.
     // Safe because the custom code renderer escapes `<` to `&lt;` — real
     // `<table>` tags only appear for actually-rendered GFM tables.
     postprocess(html: string): string {
       return html
-        .replace(/<table([\s>])/g, '<div class="prose-table" tabindex="0"><table$1')
+        .replace(/<table([\s>])/g, '<div class="prose-table not-prose" tabindex="0"><table$1')
         .replace(/<\/table>/g, "</table></div>");
     },
   },
   renderer: {
     code({ text, lang }) {
+      if (isMermaidLang(lang)) {
+        return `<div class="mermaid-diagram not-prose" data-mermaid-src="${encodeBase64(text)}"><span class="mermaid-loading">Rendering diagram...</span></div>`;
+      }
       if (lang) {
         const highlighted = highlightCode(text, lang);
         if (highlighted) return highlighted;
@@ -32,6 +38,20 @@ marked.use({
     },
   },
 });
+
+function isMermaidLang(lang: string | undefined): boolean {
+  const normalized = lang?.trim().toLowerCase();
+  return normalized === "mermaid" || normalized === "mmd";
+}
+
+// UTF-8 → base64. Inverse of the decode in mermaid.svelte.ts (atob → bytes →
+// TextDecoder), so multi-byte source survives the data-attribute round-trip.
+function encodeBase64(source: string): string {
+  const bytes = new TextEncoder().encode(source);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
 
 export function renderMarkdown(source: string): string {
   // Normalize literal \n escape sequences (AI output artefact) to real newlines

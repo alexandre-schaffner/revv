@@ -12,6 +12,7 @@ import { DbService } from "./Db";
 import { DiffCacheService } from "./DiffCache";
 import { GitHubGateway } from "./GitHub";
 import { GitHubEtagCache } from "./GitHubEtagCache";
+import { githubFetch } from "./github-rest";
 import { PullRequestService } from "./PullRequest";
 import { RemoteUserService } from "./RemoteUser";
 import { RepositoryService } from "./Repository";
@@ -143,6 +144,7 @@ export const PollSchedulerLive = Layer.effect(
           type AccountCtx = {
             readonly id: string;
             readonly userId: string;
+            readonly host: string;
             readonly accessToken: string | null;
             readonly githubLogin: string | null;
             readonly avatarUrl: string | null;
@@ -166,6 +168,7 @@ export const PollSchedulerLive = Layer.effect(
                   .all()
               : [];
           const accountRows: AccountCtx[] = [];
+          const accountsMarkedForReauth = new Set<string>();
           for (const meta of accountMetaRows) {
             const token = yield* tokenProvider
               .getTokenByAccountId(meta.id)
@@ -174,6 +177,21 @@ export const PollSchedulerLive = Layer.effect(
             // envelope learns it still needs to re-auth. Broadcast-only (no
             // DB re-stamp) since the row already carries the flag.
             if (meta.reauthRequiredAt) {
+              accountsMarkedForReauth.add(meta.id);
+            } else if (knownBadTokensByAccountId.has(meta.id)) {
+              // Reconcile the in-memory pause with the persistent reauth gate.
+              // `knownBadTokensByAccountId` only self-clears when the token
+              // *value* rotates, but the DB flag clears whenever the token is
+              // proven good — on re-auth, on the `/api/user/identity` probe, or
+              // in `handleAuthError`'s own re-check. A *transient* 401 (GHE
+              // rate-limit / SSO / gateway) pauses a still-valid token here
+              // without rotating it, so without this the account would stay
+              // skipped every cycle until a server restart. DB flag clear +
+              // still-paused ⇒ the in-memory entry is stale: evict it so this
+              // cycle re-validates the live token instead of trusting the guard.
+              knownBadTokensByAccountId.delete(meta.id);
+            }
+            if (meta.reauthRequiredAt && !token) {
               yield* broadcaster
                 .broadcastToAccount(meta.id, {
                   type: "auth:reauth-required",
@@ -187,6 +205,7 @@ export const PollSchedulerLive = Layer.effect(
             accountRows.push({
               id: meta.id,
               userId: meta.userId,
+              host: hostFromProviderId(meta.providerId),
               accessToken: token,
               githubLogin: meta.githubLogin,
               avatarUrl: meta.avatarUrl,
@@ -245,6 +264,7 @@ export const PollSchedulerLive = Layer.effect(
           // pause the account and stamp+broadcast the re-auth requirement.
           const handleAuthError = (acc: AccountCtx): Effect.Effect<void> =>
             Effect.gen(function* () {
+              if (!acc.accessToken) return;
               if (refreshedThisCycle.has(acc.id)) return; // already attempted this cycle
               refreshedThisCycle.add(acc.id);
               const refreshed = yield* tokenProvider.refreshAccountToken(acc.id).pipe(
@@ -257,9 +277,38 @@ export const PollSchedulerLive = Layer.effect(
                 knownBadTokensByAccountId.delete(acc.id);
                 return;
               }
+
+              const tokenStillValid = yield* githubFetch(
+                "/user",
+                acc.accessToken,
+                hostToApiBase(acc.host),
+              ).pipe(
+                Effect.as(true),
+                Effect.orElseSucceed(() => false),
+              );
+              if (tokenStillValid) {
+                yield* tokenProvider
+                  .clearReauthRequired(acc.id)
+                  .pipe(Effect.orElseSucceed(() => undefined));
+                knownBadTokensByAccountId.delete(acc.id);
+                return;
+              }
+
               markTokenBad(acc);
               yield* tokenProvider.markReauthRequired(acc.id);
             });
+
+          const clearStaleReauth = (acc: AccountCtx): Effect.Effect<void> => {
+            if (!accountsMarkedForReauth.has(acc.id)) return Effect.void;
+            return tokenProvider.clearReauthRequired(acc.id).pipe(
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  accountsMarkedForReauth.delete(acc.id);
+                }),
+              ),
+              Effect.orElseSucceed(() => undefined),
+            );
+          };
 
           const tryGuarded = <A, E, R>(
             acc: AccountCtx,
@@ -267,6 +316,7 @@ export const PollSchedulerLive = Layer.effect(
             opts?: { readonly errorLabel?: string },
           ): Effect.Effect<A | null, never, R> =>
             eff.pipe(
+              Effect.tap(() => clearStaleReauth(acc)),
               Effect.tapError((err) =>
                 err instanceof GitHubAuthError
                   ? handleAuthError(acc)
@@ -999,8 +1049,19 @@ export const PollSchedulerLive = Layer.effect(
 
     const startThreadFiber: Effect.Effect<void> = Effect.gen(function* () {
       const schedule = Schedule.spaced(Duration.seconds(THREAD_SYNC_INTERVAL_SECONDS));
+      // Delay the FIRST background thread sweep by one interval. At boot the
+      // PR-sync fiber already fires immediately (repo metadata + user avatars +
+      // listOpen per repo + archive backfill), and running the all-open-PRs
+      // thread sweep concurrently on top of that produces a request burst that
+      // trips GitHub's *secondary* (abuse) rate limit — the "rate limited as
+      // soon as I open Revv" symptom, made worse when an IDE shares the
+      // account. Opening a PR force-syncs its threads on demand, so this delay
+      // never affects the PR the user is actually looking at.
       const fiber: Fiber.RuntimeFiber<number, never> = yield* Effect.fork(
-        syncThreadsForOpenPrs.pipe(Effect.repeat(schedule)),
+        syncThreadsForOpenPrs.pipe(
+          Effect.repeat(schedule),
+          Effect.delay(Duration.seconds(THREAD_SYNC_INTERVAL_SECONDS)),
+        ),
       );
       yield* Ref.set(threadFiberRef, fiber);
     });

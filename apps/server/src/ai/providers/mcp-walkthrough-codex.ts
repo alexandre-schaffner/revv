@@ -231,7 +231,10 @@ export function streamWalkthroughViaCodexMCP(
 
             if (ev.source === "builtin" && EXPLORATION_TOOLS.has(ev.toolName)) {
               transitionPhase("exploring", "Reading files and understanding changes...");
-              push({ type: "exploration", data: buildActivity(ev.toolName, ev.input) });
+              push({
+                type: "exploration",
+                data: buildActivity(ev.toolName, ev.input, params.worktreePath),
+              });
               return;
             }
 

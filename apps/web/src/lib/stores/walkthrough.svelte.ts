@@ -66,13 +66,10 @@ export interface WalkthroughEntry {
   superseded: boolean;
   explorationSteps: Activity[];
   /**
-   * Streamed model reasoning text concatenated in arrival order. Drives the
-   * thoughts toggle UI alongside `timeline`. Ephemeral — not persisted.
-   */
-  thoughts: string;
-  /**
    * Chronological mix of thoughts and exploration tool calls for the live
-   * "Reviewing…" feed. See `WalkthroughTimelineEntry`. Ephemeral.
+   * "Reviewing…" feed. See `WalkthroughTimelineEntry`. Ephemeral. The thoughts
+   * toggle UI renders from this directly — there is no separate concatenated
+   * thoughts string.
    */
   timeline: WalkthroughTimelineEntry[];
   issues: WalkthroughIssue[];
@@ -143,7 +140,6 @@ export function freshEntry(): WalkthroughEntry {
     doneReceived: false,
     superseded: false,
     explorationSteps: [],
-    thoughts: "",
     timeline: [],
     issues: [],
     ratings: [],
@@ -263,9 +259,6 @@ export function getStreamError(): string | null {
 }
 export function getExplorationSteps(): Activity[] {
   return _active?.explorationSteps ?? [];
-}
-export function getThoughts(): string {
-  return _active?.thoughts ?? "";
 }
 export function getTimeline(): WalkthroughTimelineEntry[] {
   return _active?.timeline ?? [];
@@ -483,7 +476,6 @@ export function applyEvents(prId: string, events: WalkthroughStreamEvent[]): voi
               },
             ];
           }
-          entry.thoughts = entry.thoughts + event.data.text;
           break;
         }
         case "issue": {
@@ -886,7 +878,14 @@ async function doHydrateFromCache(
     );
 
     const previous = store.entries.get(prId);
-    const entry = previous ?? freshEntry();
+    // Clone (don't reuse `previous`): `setEntry` writes into a SvelteMap, whose
+    // `set` only fires reactivity when the stored *reference* changes
+    // (`prev_res !== value`). Mutating `previous` in place and re-setting the
+    // same object would land the data in the map but never notify subscribers —
+    // the UI stays on the pre-hydration empty state until a remount reads the
+    // entry fresh (the "reload shows nothing, but switching PRs and back fixes
+    // it" bug). A fresh object guarantees the write is observed.
+    const entry: WalkthroughEntry = previous ? { ...previous } : freshEntry();
     const hasRealSummary = wt.summary !== "";
 
     // Entry-wins merge: SSE events applied to `entry` during the REST fetch

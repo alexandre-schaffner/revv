@@ -22,7 +22,7 @@
 //   • #12 — `complete_walkthrough` validation gate. We replicate the
 //           same checks as a pre-import assertion.
 
-import type { WalkthroughSnapshotV1 } from "@revv/shared";
+import type { WalkthroughSnapshotV2 } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { walkthroughBlocks } from "../db/schema/walkthrough-blocks";
@@ -54,7 +54,7 @@ export class WalkthroughSnapshotImporter extends Context.Tag("WalkthroughSnapsho
      */
     readonly import: (params: {
       readonly walkthroughId: string;
-      readonly snapshot: WalkthroughSnapshotV1;
+      readonly snapshot: WalkthroughSnapshotV2;
     }) => Effect.Effect<void, ImportError, DbService>;
   }
 >() {}

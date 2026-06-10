@@ -3,9 +3,6 @@
 // Shared helper functions and types used by chat-edit tool handlers.
 
 import type {
-  CodeBlock,
-  DiffBlock,
-  MarkdownBlock,
   RatingAxis,
   RatingCitation,
   WalkthroughBlock,
@@ -18,7 +15,7 @@ import type { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import type { walkthroughRatings } from "../../../db/schema/walkthrough-ratings";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
-import type { BlockContentInput, ChatEditToolResult } from "./spec";
+import type { ChatEditToolResult } from "./spec";
 
 // ── Result helpers ──────────────────────────────────────────────────────────
 
@@ -82,94 +79,11 @@ export function stampLastEdited(db: Db, walkthroughId: string, actor: string): v
 }
 
 // ── Block construction ──────────────────────────────────────────────────────
-
-export function blockContentVariantCount(content: BlockContentInput): number {
-  let n = 0;
-  if (content.markdown != null) n++;
-  if (content.code != null) n++;
-  if (content.diff != null) n++;
-  return n;
-}
-
-/**
- * Reject blocks whose payload would render as an empty box. An annotation on
- * a code/diff block reads as commentary about code that isn't there — use a
- * markdown block for prose-only content instead. Mirrors `emptyBlockError`
- * in `walkthrough-tools/phase-b-handlers.ts` for the generation path.
- */
-export function emptyBlockContentError(content: BlockContentInput): string | null {
-  if (content.markdown && content.markdown.content.trim().length === 0) {
-    return "Error: markdown block requires non-empty content. Either fill it in or omit the block.";
-  }
-  if (content.code && content.code.content.trim().length === 0) {
-    return "Error: code block requires non-empty content. Use a markdown block if you only want to write prose; an annotation without code reads as commentary about nothing.";
-  }
-  if (content.diff && content.diff.patch.trim().length === 0) {
-    return "Error: diff block requires a non-empty patch. Use a markdown block for prose-only content.";
-  }
-  return null;
-}
-
-export interface BuiltBlock {
-  readonly block: WalkthroughBlock;
-  readonly type: "markdown" | "code" | "diff";
-  readonly data: string;
-}
-
-export function buildBlock(
-  blockId: string,
-  semanticStepIndex: number,
-  stepIndex: number,
-  content: BlockContentInput,
-): BuiltBlock {
-  const order = semanticStepIndex * 10000 + stepIndex;
-  if (content.markdown) {
-    const md: MarkdownBlock = {
-      type: "markdown",
-      id: blockId,
-      order,
-      phase: "diff_analysis",
-      semanticStepIndex,
-      stepIndex,
-      content: content.markdown.content,
-    };
-    return { block: md, type: "markdown", data: JSON.stringify(md) };
-  }
-  if (content.code) {
-    const code: CodeBlock = {
-      type: "code",
-      id: blockId,
-      order,
-      phase: "diff_analysis",
-      semanticStepIndex,
-      stepIndex,
-      filePath: content.code.file_path,
-      startLine: content.code.start_line,
-      endLine: content.code.end_line,
-      language: content.code.language,
-      content: content.code.content,
-      annotation: content.code.annotation,
-      annotationPosition: content.code.annotation_position,
-    };
-    return { block: code, type: "code", data: JSON.stringify(code) };
-  }
-  if (content.diff) {
-    const diff: DiffBlock = {
-      type: "diff",
-      id: blockId,
-      order,
-      phase: "diff_analysis",
-      semanticStepIndex,
-      stepIndex,
-      filePath: content.diff.file_path,
-      patch: content.diff.patch,
-      annotation: content.diff.annotation,
-      annotationPosition: content.diff.annotation_position,
-    };
-    return { block: diff, type: "diff", data: JSON.stringify(diff) };
-  }
-  throw new Error("buildBlock called with empty content variant");
-}
+//
+// The variant-count, empty/size validation, and typed-block construction are
+// shared with the generation pipeline in `../walkthrough-blocks` so the two
+// MCP write paths can never drift (CLAUDE.md #2, #13). Handlers import
+// `blockVariantCount`, `emptyBlockError`, and `buildBlock` from there directly.
 
 // ── Issue-blockIds JSON helpers ─────────────────────────────────────────────
 

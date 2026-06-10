@@ -50,6 +50,23 @@ export const dialogSpringOut: PresetFn = (el) =>
     ease: tokens.easeSoft,
   });
 
+/**
+ * Backdrop fade for a dialog/sheet overlay. Timed to match `dialogSpringIn` /
+ * `dialogSpringOut` (same durations + easings) so the scrim and the surface
+ * move together instead of the scrim snapping in ahead of the spring.
+ */
+export const overlayFadeIn: PresetFn = (el) =>
+  gsap
+    .timeline()
+    .fromTo(
+      el,
+      { autoAlpha: 0 },
+      { autoAlpha: 1, duration: tokens.smooth, ease: tokens.easeOutExpo },
+    );
+
+export const overlayFadeOut: PresetFn = (el) =>
+  gsap.timeline().to(el, { autoAlpha: 0, duration: tokens.quick, ease: tokens.easeSoft });
+
 export const popoverPopIn: PresetFn<{ side?: Side }> = (el, opts) =>
   popInFromSide(el, opts?.side ?? "bottom", 0.96);
 

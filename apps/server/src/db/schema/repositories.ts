@@ -1,5 +1,5 @@
 import type { CloneStatus } from "@revv/shared";
-import { sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import { serverEnv } from "../../config";
 import { account } from "./auth";
 
@@ -17,6 +17,7 @@ export const repositories = sqliteTable(
     cloneStatus: text("clone_status").notNull().default("pending").$type<CloneStatus>(),
     clonePath: text("clone_path"),
     cloneError: text("clone_error"),
+    managed: integer("managed", { mode: "boolean" }).notNull().default(true),
     githubHost: text("github_host").notNull().default(serverEnv.githubHost),
     accountId: text("account_id")
       .notNull()

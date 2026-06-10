@@ -123,8 +123,8 @@ function cycleTheme() {
 			class="panel-btn"
 			class:panel-btn--open={rightPanelOpen}
 			onclick={onTogglePanel}
-			aria-label={pr ? 'Toggle context panel (⌘R)' : 'Chat panel is only available when reviewing a PR'}
-			title={pr ? 'Toggle context panel (⌘R)' : 'Chat panel is only available when reviewing a PR'}
+			aria-label={pr ? 'Toggle context panel (⌘⌥B)' : 'Chat panel is only available when reviewing a PR'}
+			title={pr ? 'Toggle context panel (⌘⌥B)' : 'Chat panel is only available when reviewing a PR'}
 			disabled={!pr}
 		>
 			<svg

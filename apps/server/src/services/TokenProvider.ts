@@ -81,6 +81,11 @@ export class TokenProvider extends Context.Tag("TokenProvider")<
      */
     readonly refreshAccountToken: (accountId: string) => Effect.Effect<string, GitHubAuthError>;
     /**
+     * Clear a persisted re-auth gate after the account has either received new
+     * token material or proven its existing token still works.
+     */
+    readonly clearReauthRequired: (accountId: string) => Effect.Effect<void>;
+    /**
      * Stamp `reauthRequiredAt` on the account and broadcast
      * `auth:reauth-required` to its connected clients. Called when a token is
      * invalid and could not be refreshed.
@@ -244,17 +249,40 @@ export const TokenProviderLive = Layer.effect(
         });
       });
 
+    const clearReauthRequired = (accountId: string): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        const row = db
+          .select({
+            providerId: account.providerId,
+            reauthRequiredAt: account.reauthRequiredAt,
+          })
+          .from(account)
+          .where(eq(account.id, accountId))
+          .get();
+        if (!row) return;
+        if (row.reauthRequiredAt) {
+          yield* Effect.sync(() =>
+            db
+              .update(account)
+              .set({ reauthRequiredAt: null, updatedAt: new Date() })
+              .where(eq(account.id, accountId))
+              .run(),
+          );
+        }
+        yield* broadcaster.broadcastToAccount(accountId, {
+          type: "auth:reauth-cleared",
+          data: { host: hostFromProviderId(row.providerId) },
+        });
+      });
+
     const storeAccountTokens = (
       accountId: string,
-      host: string,
+      _host: string,
       tokens: TokenPair,
     ): Effect.Effect<void> =>
       Effect.gen(function* () {
         yield* secretStore.setTokens(accountId, tokens);
-        yield* broadcaster.broadcastToAccount(accountId, {
-          type: "auth:reauth-cleared",
-          data: { host },
-        });
+        yield* clearReauthRequired(accountId);
       });
 
     const deleteAccountTokens = (accountId: string): Effect.Effect<void> =>
@@ -364,6 +392,7 @@ export const TokenProviderLive = Layer.effect(
       storeAccountTokens,
       deleteAccountTokens,
       refreshAccountToken,
+      clearReauthRequired,
       markReauthRequired,
     };
   }),

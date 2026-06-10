@@ -3,6 +3,7 @@ import type { ProjectRecap, RecapPeriod, RecapPrEntry, RecapThemeSummary } from 
 import ArrowLeft from "phosphor-svelte/lib/ArrowLeft";
 import Loader2 from "phosphor-svelte/lib/Spinner";
 import CircleAlert from "phosphor-svelte/lib/WarningCircle";
+import { ThoughtsReveal } from "$lib/components/ai/thoughts";
 import { Button } from "$lib/components/ui/button";
 import { heroMorph } from "$lib/motion";
 import type { RecapStreamEntry } from "$lib/stores/recap-stream.svelte";
@@ -11,7 +12,6 @@ import DotMatrixLoader from "./DotMatrixLoader.svelte";
 import RecapBody from "./RecapBody.svelte";
 import RecapHeroBig from "./RecapHeroBig.svelte";
 import RecapSidebar from "./RecapSidebar.svelte";
-import ThoughtsReveal from "./ThoughtsReveal.svelte";
 
 interface Props {
   recap: ProjectRecap | null;

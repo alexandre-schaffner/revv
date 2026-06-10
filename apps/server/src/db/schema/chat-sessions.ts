@@ -15,7 +15,7 @@ import { pullRequests } from "./pull-requests";
  *                       Opencode: the daemon's session id.
  *   - `worktreePath`  — absolute path to the chat worktree (`chat-{prId}-{sha12}`)
  *                       checked out at `prHeadSha`. The agent's `cwd`.
- *   - `branchName`    — the local PR tracking branch (`pr-{prNumber}`) the
+ *   - `branchName`    — the local PR tracking branch (`revv/pr-{prNumber}`) the
  *                       agent commits its proposed changes to.
  *   - `nextSequence`  — per-session monotonic counter shared by `chat_messages`
  *                       and `chat_activities`. Allocated atomically on every

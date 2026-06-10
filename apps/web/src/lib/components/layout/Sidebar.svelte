@@ -4,6 +4,7 @@ import GitPullRequestCreateArrow from "phosphor-svelte/lib/GitPullRequest";
 import Plus from "phosphor-svelte/lib/Plus";
 import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte";
 import AddRepoDialog from "$lib/components/sidebar/AddRepoDialog.svelte";
+import AuthorFilter from "$lib/components/sidebar/AuthorFilter.svelte";
 import ProjectArchiveList from "$lib/components/sidebar/ProjectArchiveList.svelte";
 import ProjectDraftsList from "$lib/components/sidebar/ProjectDraftsList.svelte";
 import ProjectHeader from "$lib/components/sidebar/ProjectHeader.svelte";
@@ -22,11 +23,8 @@ import { getPrScrollPosition, setPrScrollPosition } from "$lib/stores/review.sve
 import { getPaletteOpen } from "$lib/stores/shortcuts.svelte";
 import {
   getAddRepoDialogOpen,
-  getSidebarCollapsed,
-  getSidebarPeekRepoId,
   getSidebarView,
   setAddRepoDialogOpen,
-  setSidebarPeekHovering,
   setSidebarView,
 } from "$lib/stores/sidebar.svelte";
 import {
@@ -54,27 +52,8 @@ const filesViewRepo = $derived(
 // Active project for the PR-list view header / lists. URL-driven by the
 // +layout effect — single source of truth, so the column tracks the rail
 // and deep-links resolve correctly.
-const activeRepo = $derived(getSelectedRepo());
+const displayRepo = $derived(getSelectedRepo());
 const hasRepos = $derived(getRepositories().length > 0);
-// During a rail-avatar peek, render that repo's PRs in the sidebar
-// instead of the URL-selected one — selecting (clicking) still requires
-// navigation; the hover is read-only preview. Peek-swap only applies when
-// the sidebar is collapsed (the "hover-to-reveal" affordance). When the
-// pane is already extended, the user is intentionally looking at the
-// active repo's PRs, so hovering a different avatar in the rail must not
-// swap the list out from under them.
-const peekRepoId = $derived(getSidebarPeekRepoId());
-const peekRepo = $derived(
-  peekRepoId !== null ? (getRepositories().find((r) => r.id === peekRepoId) ?? null) : null,
-);
-const sidebarCollapsed = $derived(getSidebarCollapsed());
-// "Peek active" means a peek is currently swapping the displayed repo —
-// only true while the sidebar is collapsed. When extended, hovering an
-// avatar still sets peekRepoId (the rail button can't know to suppress
-// it), but it has no display effect, so downstream scroll logic must
-// treat it as inactive.
-const peekActive = $derived(sidebarCollapsed && peekRepoId !== null);
-const displayRepo = $derived(peekActive ? (peekRepo ?? activeRepo) : activeRepo);
 
 // ── Per-PR scroll persistence (left pane) ────────────────────────────────
 //
@@ -94,30 +73,13 @@ function handlePrListScroll(): void {
     return;
   }
   if (!prListEl || !selectedPrId) return;
-  // During an active peek the visible list belongs to the peeked repo,
-  // not the selected PR's repo — saving its scroll under selectedPrId
-  // would corrupt the next restore for that PR. (A peek that is set but
-  // not swapping the display — sidebar extended — is harmless.)
-  if (peekActive) return;
   setPrScrollPosition(selectedPrId, "sidebar", prListEl.scrollTop);
 }
 
 $effect(() => {
-  // Peek and PR-restore share this effect so they don't fight each other:
-  //  - peek active → snap to top of the peeked list every time the peek
-  //    repo changes, so the user sees the head of each repo's PRs
-  //  - peek inactive → restore the selected PR's saved scrollTop
-  const swapping = peekActive;
-  const peekId = peekRepoId;
+  // Restore the selected PR's saved scrollTop whenever it changes.
   const prId = selectedPrId;
   if (!prListEl) return;
-  if (swapping) {
-    // Touch peekId so the snap-to-top fires on every peek-target change.
-    void peekId;
-    suppressNextPrListScroll = true;
-    prListEl.scrollTop = 0;
-    return;
-  }
   if (!prId) return;
   const saved = getPrScrollPosition(prId, "sidebar");
   suppressNextPrListScroll = true;
@@ -325,8 +287,6 @@ function handleKeydown(e: KeyboardEvent) {
 	class="sidebar"
 	role="none"
 	onclick={handleSidebarClick}
-	onmouseenter={() => setSidebarPeekHovering(true)}
-	onmouseleave={() => setSidebarPeekHovering(false)}
 >
 	<!-- Header — back-breadcrumb in files mode, ProjectHeader in PR-list
 	     mode. Drops to nothing when collapsed since the column is 0 wide.
@@ -388,7 +348,13 @@ function handleKeydown(e: KeyboardEvent) {
 			class="view-pane view-pane--prs"
 			aria-hidden={view === 'files'}
 		>
-			<SearchFilter />
+			<SearchFilter>
+				{#snippet trailing()}
+					{#if displayRepo}
+						<AuthorFilter repoId={displayRepo.id} />
+					{/if}
+				{/snippet}
+			</SearchFilter>
 
 			<div class="pr-list" bind:this={prListEl} onscroll={handlePrListScroll}>
 				{#if displayRepo}

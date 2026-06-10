@@ -1,4 +1,5 @@
 <script lang="ts">
+import type { Snippet } from "svelte";
 import { setSearchQuery } from "$lib/stores/prs.svelte";
 import {
   expandOrSelect,
@@ -8,7 +9,9 @@ import {
   setFocusedId,
 } from "$lib/stores/sidebar-nav.svelte";
 
-// No props — the rail owns the "Add repository" affordance now.
+// `trailing` renders inline to the right of the search input — the creator
+// filter button lives here so it reads as part of the search row.
+let { trailing }: { trailing?: Snippet } = $props();
 
 let inputEl: HTMLInputElement;
 let inputValue = $state("");
@@ -152,4 +155,5 @@ function handleClear() {
 			</button>
 		{/if}
 	</div>
+	{@render trailing?.()}
 </div>
