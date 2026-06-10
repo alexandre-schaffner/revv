@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { isAbsolute, relative } from "node:path";
-import type { RatingAxis, WalkthroughBlock } from "@revv/shared";
+import type { RatingAxis, WalkthroughBlock, WalkthroughMode } from "@revv/shared";
 import type { PrFileMeta } from "../../services/GitHub";
 
 // ── Continuation context (imported here to avoid circular deps) ──────────────
@@ -17,10 +17,31 @@ export interface PromptContinuationContext {
 
 // ── MCP-based walkthrough prompt (phase-bound, A→B→C→D) ─────────────────────
 
-export const WALKTHROUGH_MCP_SYSTEM_PROMPT: string = readFileSync(
-  `${import.meta.dir}/walkthrough-system.md`,
+const WALKTHROUGH_SYSTEM_COMMON_PROMPT = readFileSync(
+  `${import.meta.dir}/walkthrough-system-common.md`,
   "utf-8",
 );
+const WALKTHROUGH_SYSTEM_REVIEWER_PROMPT = readFileSync(
+  `${import.meta.dir}/walkthrough-system-reviewer.md`,
+  "utf-8",
+);
+const WALKTHROUGH_SYSTEM_AUTHOR_PROMPT = readFileSync(
+  `${import.meta.dir}/walkthrough-system-author.md`,
+  "utf-8",
+);
+const WALKTHROUGH_COMMON_PROMPT = readFileSync(`${import.meta.dir}/walkthrough-common.md`, "utf-8");
+const WALKTHROUGH_REVIEWER_PROMPT = readFileSync(
+  `${import.meta.dir}/walkthrough-reviewer.md`,
+  "utf-8",
+);
+const WALKTHROUGH_AUTHOR_PROMPT = readFileSync(`${import.meta.dir}/walkthrough-author.md`, "utf-8");
+
+export function buildWalkthroughSystemPrompt(mode: WalkthroughMode = "reviewer"): string {
+  const modePrompt =
+    mode === "author" ? WALKTHROUGH_SYSTEM_AUTHOR_PROMPT : WALKTHROUGH_SYSTEM_REVIEWER_PROMPT;
+
+  return [WALKTHROUGH_SYSTEM_COMMON_PROMPT, modePrompt].join("\n\n");
+}
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -85,24 +106,25 @@ export function buildWalkthroughPrompt(
       targetBranch: string;
       url: string;
     };
+    mode?: WalkthroughMode;
     files: PrFileMeta[];
   },
   maxTokenBudget = 40000,
   continuation?: PromptContinuationContext,
 ): string {
+  const mode = params.mode ?? "reviewer";
   const lines: string[] = [
+    WALKTHROUGH_COMMON_PROMPT.trim(),
+    "",
+    mode === "author" ? WALKTHROUGH_AUTHOR_PROMPT.trim() : WALKTHROUGH_REVIEWER_PROMPT.trim(),
+    "",
     `## Pull Request: ${params.pr.title}`,
     `Branch: ${params.pr.sourceBranch} → ${params.pr.targetBranch}`,
+    `Review mode: ${mode}`,
   ];
   if (params.pr.body) {
     lines.push("", "### Description", params.pr.body);
   }
-  // Commit history is intentionally NOT inlined here. The orchestrator
-  // persists it on the walkthrough row at job start; the agent fetches it
-  // lazily via the `get_commit_history` MCP read tool when it's about to
-  // open the required "How we got here" journey chapter (chapter 0). This
-  // keeps the prompt token-bounded on long PRs (up to 300 commits) and
-  // resume reruns of the prompt cheap.
 
   lines.push("", "### Changed Files (diff — you can read full file contents with your tools)", "");
 
@@ -127,7 +149,9 @@ export function buildWalkthroughPrompt(
     "## First actions",
     "",
     "1. Call `get_walkthrough_state` before any other tool. The response will tell you whether this is a fresh run or a resume, and exactly which phase + steps are persisted. Use it to decide where to pick up. Never assume you are starting from scratch.",
-    "2. Call `get_repo_context` once during Phase A. It returns recent daily/weekly project recaps for this repository, which let you ground your overview in what shipped recently, recurring themes, and risk patterns. Empty list = no prior context, proceed without. Do not cite recap themes unless directly relevant to this PR — no padding.",
+    mode === "author"
+      ? "2. Call `get_repo_context` once during Phase A. It returns recent daily/weekly project recaps for this repository. Use it only for risk patterns that are directly relevant to the current diff."
+      : "2. Call `get_repo_context` once during Phase A. It returns recent daily/weekly project recaps for this repository, which let you ground your overview in what shipped recently, recurring themes, and risk patterns. Empty list = no prior context, proceed without. Do not cite recap themes unless directly relevant to this PR — no padding.",
   );
 
   if (continuation) {

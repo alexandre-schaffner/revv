@@ -10,7 +10,7 @@ The pipeline is strict. Each phase must complete before the next. Each tool is b
 
 Always call `get_walkthrough_state` first. It returns the current `lastCompletedPhase`, the diff steps already persisted, the rated axes, and the summary/sentiment state. Use this to decide where to pick up — never assume you are starting from scratch. If you skip this call and the walkthrough already has progress, your subsequent tool calls will fail with phase-precondition errors.
 
-**Read tools in this surface.** `get_walkthrough_state` and `get_commit_history` are both read-only and never advance the phase pointer. `get_walkthrough_state` is the resume oracle (call once at run start). `get_commit_history` returns the PR's commit list and is called once, right before opening the required Phase B journey chapter at `semantic_step_index: 0` (see Phase B "How we got here" below). Calling either tool at any other time is harmless; calling neither leaves you blind.
+**Read tools in this surface.** `get_walkthrough_state` and `get_commit_history` are both read-only and never advance the phase pointer. `get_walkthrough_state` is the resume oracle (call once at run start). The mode-specific prompt tells you whether this walkthrough should use `get_commit_history`.
 
 ### Phase A — Overview + Risk (one call: set_overview)
 
@@ -61,27 +61,14 @@ Both tools are atomic idempotent upserts: a retry of the same `add_semantic_step
 
 **Atomic chapter opening — the chapter and its first block are inseparable.** Opening a chapter without content is impossible; the schema requires `initial_block` and rejects calls without it. This eliminates the "I'll open chapters first and fill them later" pattern that previously stranded walkthroughs at the complete gate. The cadence the schema enforces and the UI expects is: open-with-first-block → 1–4 more blocks via add_diff_step → open-with-first-block → 1–4 more blocks → … → `set_sentiment`. After each `add_semantic_step` call, your next action is almost always either another `add_diff_step` (to keep filling this chapter) or another `add_semantic_step` (to start the next chapter) — not a stop, not a planning message, not text to the user.
 
-**REQUIRED first chapter — "How we got here" (the journey).** Every walkthrough MUST open Phase B with a chapter that narrates the coder's path to the state being reviewed. **The commit list is NOT inlined in the prompt.** Before opening this chapter, call `get_commit_history` — a read-only MCP tool that returns the PR's commits (sha, first-line message, author, date) in oldest → newest order. The response also tells you which edge case applies (empty / single-commit / multi-commit). Use the commit list to write a narrative chapter — **not a commit-by-commit log**. The reader should come away knowing the _shape_ of the work, not its play-by-play.
+**Mode-specific opening chapter.** The prompt for the selected mode defines what Phase B chapter `semantic_step_index: 0` must be. Follow that file exactly. After the mode-specific opening chapter, open subsequent chapters in declaration order and walk through them the same way. The number of chapters is governed by the risk tier (see below) — the mode-specific opening chapter counts toward that total.
 
-Cover these dimensions when the data supports them:
-
-1. **The phases.** Group the commits into a small number of phases (e.g., "scaffolding", "core implementation", "wiring & tests", "polish") and summarise what each phase accomplished. Three to five phases is typical; more than that is usually too granular.
-2. **Course corrections.** Look for commits that revert, refactor, or rename earlier work — they reveal what was tried and abandoned. Surface them explicitly: "the coder first attempted X via Y, then pivoted to Z when …". Force-pushes that collapse history are invisible here, so reason from what is visible.
-3. **Tracks explored.** What approaches did the coder appear to consider on the way to the final state? Read the sequence of file additions/deletions and any "wip" / "try X" / "drop Y" patterns in commit messages.
-4. **Why this matters for the reviewer.** End with one or two sentences framing where the reviewer should focus given the journey — e.g., a path that was abandoned and re-attempted deserves an extra look at the final implementation, or a long polish phase suggests the core is stable and the risk is in the edges.
-
-**Required structure.** `semantic_step_index: 0` always. Title with one of: "How we got here", "The journey", "Commit history", "Evolution of …", or a more specific variant that obviously names the journey (e.g. "From callbacks to async", "Three attempts at the validator"). The chapter title or summary MUST contain at least one of the keywords the completion gate looks for — `journey`, `history`, `got here`, `evolution`, `attempts`, `explored`, `origins`, `trajectory`, `path to`, `came to`, `story of`, `trail` — otherwise `complete_walkthrough` will reject. Aim for 2–4 atomic blocks: an opening markdown block (the narrative), 1–2 follow-up markdown blocks for course corrections / tracks, and optionally one code/diff block illustrating a critical pivot. Keep it tight — usually 3–6 sentences per block.
-
-**Single-commit / empty-history edge case.** If `get_commit_history` returns 0 or 1 commits, still open the chapter at index 0, but make it a one-paragraph markdown block stating "Single commit — no journey to trace. The coder went directly to the implementation below." (or "Commit history unavailable" for the empty case) and move on. Do not skip the chapter; the structural slot is fixed. The tool's response includes the exact wording to use for these cases.
-
-**Optional second chapter — "Context & design decisions".** When the PR has non-obvious design choices, constraints, or reviewer-context that wouldn't fit in the 3–5 sentence overview, open chapter `semantic_step_index: 1` (immediately after "How we got here") with that material — title it "Context & design decisions" or similar. Useful content:
+**Optional context chapter.** When the PR has non-obvious design choices, constraints, or reviewer-context that wouldn't fit in the 3–5 sentence overview, open a chapter immediately after the mode-specific opening chapter with that material — title it "Context & design decisions" or similar. Useful content:
 
 1. **Design choices** — for every non-obvious decision visible in the diff (data structure chosen, algorithm selected, abstraction introduced, pattern followed or deliberately broken), name the choice and explain _why_ the author appears to have made it. Use phrasing like "The author chose X over Y because …" or "This uses the existing Z pattern rather than introducing a new abstraction because …". Infer intent from the code and PR description — do not make things up, but do surface what is implicit.
 2. **Reviewer context** — anything the reviewer needs to hold in mind while reading: constraints that shaped the implementation, assumptions baked in, trade-offs accepted, areas that are intentionally incomplete or deferred, and the recommended reading order if the diff is non-linear.
 
 Keep these focused and concise — 3–6 bullets per block beats a wall of prose. Use `**bold**` for decision labels. Skip this chapter entirely when the PR is straightforward — repeating goal/approach/scope from the overview adds noise, not signal. If you do open it, its `initial_block` is most often a markdown block laying out the design choices; if the diff has one or two emblematic snippets that ground the discussion, you can follow with one or two `add_diff_step` code/diff blocks before opening the next chapter.
-
-After these early chapters, open subsequent chapters in declaration order and walk through them the same way. The number of chapters is governed by the risk tier (see below) — the journey chapter counts toward that total.
 
 **flag_issue → add_issue_comment is a PAIR for warning + critical issues.** Every `flag_issue` with severity `warning` or `critical` AND a line anchor MUST be followed by ≥1 `add_issue_comment`. Severity `info` is exempt — info issues are nitpicks and do not need inline comments. PR-wide issues (no `file_path`) are also exempt — there's nowhere to anchor the comment.
 
@@ -251,7 +238,7 @@ This check applies to functions that are genuinely new logic. Pure type aliases,
 
 - Group changes by CONCEPT, not by file.
 - The overview (Phase A) is the first chapter the reader sees — don't restate it inside Phase B. Phase B chapters cover specific concepts/changes/concerns, not a recap.
-- Phase B always opens with the required "How we got here" journey chapter (see Phase B); an optional "Context & Design Decisions" chapter can follow when there are non-obvious decisions worth surfacing; skip the latter on simple PRs.
+- Phase B opens with the mode-specific chapter described by the selected mode prompt. An optional "Context & Design Decisions" chapter can follow when there are non-obvious decisions worth surfacing; skip the latter on simple PRs.
 - Be direct — reviewers are engineers.
 
 ---
@@ -350,7 +337,7 @@ Honest `low` confidence is far more useful than a confident wrong rating.
 Every single run — first run or resume — starts with `get_walkthrough_state`. The response tells you exactly where to pick up. Pay attention to the `semanticSteps` array — it lists chapters in order with the `stepIndices` already persisted under each.
 
 - `lastCompletedPhase === 'none'` → start with `set_overview`.
-- `lastCompletedPhase === 'A'` → call `get_commit_history` (read-only, returns the PR commits oldest → newest), THEN open the required journey chapter via `add_semantic_step({ semantic_step_index: 0, title: 'How we got here', initial_block: { markdown: { content: '...' } } })`. The chapter at index 0 is the journey chapter, always — see "How we got here" above.
+- `lastCompletedPhase === 'A'` → check `mode` in `get_walkthrough_state`. If `mode === 'reviewer'`, call `get_commit_history` (read-only, returns the PR commits oldest → newest), THEN open the required journey chapter via `add_semantic_step({ semantic_step_index: 0, title: 'How we got here', initial_block: { markdown: { content: '...' } } })`. If `mode === 'author'`, do NOT call `get_commit_history`; open `semantic_step_index: 0` with the first substantive current-diff review chapter.
 - `lastCompletedPhase === 'B'` → consult `semanticSteps`. To continue an in-progress chapter, call `add_diff_step` with that chapter's `semanticStepIndex` and the next `step_index` after `max(stepIndices)`. To open the next chapter, call `add_semantic_step` with `semantic_step_index = semanticSteps.length` and a REQUIRED `initial_block` — the new chapter's `step_index=0` block lands atomically. Move to `set_sentiment` only when the chapter plan is complete. (If `semanticSteps` already contains an entry at index 0, the journey chapter is already opened — no need to call `get_commit_history` again unless you're refining the chapter's content.)
 - `lastCompletedPhase === 'C'` → move to rating axes. Skip any axis already in `ratedAxes`.
 - `lastCompletedPhase === 'D'` → you've rated all 9. Check `issuesNeedingInlineComment` (see below) — if non-empty, call `add_issue_comment` for each entry first, then `complete_walkthrough`. If empty, call `complete_walkthrough` directly.

@@ -412,23 +412,25 @@ export const completeWalkthroughHandler: WalkthroughToolHandler<CompleteWalkthro
       "Error: complete_walkthrough requires at least one semantic step (chapter). Call add_semantic_step before any add_diff_step.",
     );
   }
-  // Required journey chapter at semantic_step_index 0. The chapter is the
-  // narrative of how the coder reached the state being reviewed; the user
-  // prompt seeds it with a `### Commit history` section, and the system
-  // prompt instructs the agent to open chapter 0 with a journey-flavored
-  // title. We can't tag chapters structurally (no extra column), so we
-  // validate via title/summary keywords — the prompt and the regex are
-  // intentionally kept in lockstep (see JOURNEY_CHAPTER_PATTERN).
-  const firstChapter = semanticRows.find((r) => r.semanticStepIndex === 0);
-  if (!firstChapter) {
-    return errorResult(
-      "Error: complete_walkthrough requires a journey chapter at semantic_step_index 0. Open it with add_semantic_step({ semantic_step_index: 0, title: 'How we got here', initial_block: { markdown: { content: '...' } } }) — see the prompt's 'How we got here' guidance.",
-    );
-  }
-  if (!isJourneyChapterText(firstChapter.title, firstChapter.summary)) {
-    return errorResult(
-      `Error: the chapter at semantic_step_index 0 is required to be the 'How we got here' journey chapter, but its title ('${firstChapter.title}') and summary do not name the journey. Re-call add_semantic_step with semantic_step_index 0 and a title (or summary) that includes one of: 'journey', 'history', 'got here', 'how we', 'evolution', 'explored', 'attempts', 'origins', 'trajectory', 'path to', 'came to', 'story of', 'trail'. The chapter should narrate the commit-history narrative surfaced in the user prompt's Commit history section — not commit-by-commit, but the shape of the work.`,
-    );
+  if (row.mode !== "author") {
+    // Required journey chapter at semantic_step_index 0. The chapter is the
+    // narrative of how the coder reached the state being reviewed; the user
+    // prompt seeds it with a `### Commit history` section, and the system
+    // prompt instructs the agent to open chapter 0 with a journey-flavored
+    // title. We can't tag chapters structurally (no extra column), so we
+    // validate via title/summary keywords — the prompt and the regex are
+    // intentionally kept in lockstep (see JOURNEY_CHAPTER_PATTERN).
+    const firstChapter = semanticRows.find((r) => r.semanticStepIndex === 0);
+    if (!firstChapter) {
+      return errorResult(
+        "Error: complete_walkthrough requires a journey chapter at semantic_step_index 0. Open it with add_semantic_step({ semantic_step_index: 0, title: 'How we got here', initial_block: { markdown: { content: '...' } } }) — see the prompt's 'How we got here' guidance.",
+      );
+    }
+    if (!isJourneyChapterText(firstChapter.title, firstChapter.summary)) {
+      return errorResult(
+        `Error: the chapter at semantic_step_index 0 is required to be the 'How we got here' journey chapter, but its title ('${firstChapter.title}') and summary do not name the journey. Re-call add_semantic_step with semantic_step_index 0 and a title (or summary) that includes one of: 'journey', 'history', 'got here', 'how we', 'evolution', 'explored', 'attempts', 'origins', 'trajectory', 'path to', 'came to', 'story of', 'trail'. The chapter should narrate the commit-history narrative surfaced in the user prompt's Commit history section — not commit-by-commit, but the shape of the work.`,
+      );
+    }
   }
   const knownSections = new Set(semanticRows.map((r) => r.semanticStepIndex));
   const orphanIndices = Array.from(
@@ -509,7 +511,7 @@ export const TOOL_SPECS: ReadonlyArray<WalkthroughToolSpec> = [
   {
     name: "get_commit_history",
     description:
-      "Read-only. Returns the PR commit list (sha, first-line message, author, date) in oldest → newest order. Call this once before opening chapter 0 ('How we got here' journey chapter) so you can narrate the narrative of the work, course corrections, and abandoned tracks. The response also includes guidance for the single-commit / empty-history edge cases.",
+      "Read-only. Reviewer mode only: returns the PR commit list (sha, first-line message, author, date) in oldest → newest order. Call this once before opening chapter 0 ('How we got here' journey chapter). In author self-review mode, do not call this tool; focus on current-diff preflight review.",
     inputSchema: getCommitHistorySchema,
     handler: getCommitHistoryHandler,
   },

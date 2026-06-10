@@ -24,6 +24,7 @@
 import type {
   UserSettings,
   WalkthroughLifecyclePhase,
+  WalkthroughMode,
   WalkthroughStreamEvent,
   WalkthroughTokenUsage,
 } from "@revv/shared";
@@ -40,7 +41,7 @@ import {
   walkCodexEvents,
   withAgentTurn,
 } from "../agent-stream";
-import { buildWalkthroughPrompt, WALKTHROUGH_MCP_SYSTEM_PROMPT } from "../prompts/walkthrough";
+import { buildWalkthroughPrompt, buildWalkthroughSystemPrompt } from "../prompts/walkthrough";
 import { type CodexMcpServers, makeCodexMcpServer, startCodexThread } from "./codex-transport";
 import type { ContinuationContext } from "./mcp-walkthrough";
 import { TOOL_SPECS } from "./walkthrough-tools";
@@ -81,6 +82,7 @@ export interface CodexStreamParams {
     targetBranch: string;
     url: string;
   };
+  mode: WalkthroughMode;
   files: PrFileMeta[];
   worktreePath: string;
   continuation?: ContinuationContext;
@@ -134,7 +136,7 @@ export function streamWalkthroughViaCodexMCP(
   };
 
   const userMessage =
-    WALKTHROUGH_MCP_SYSTEM_PROMPT +
+    buildWalkthroughSystemPrompt(params.mode) +
     "\n\n---\n\n" +
     buildWalkthroughPrompt(params, undefined, params.continuation);
 

@@ -1,3 +1,4 @@
+import type { WalkthroughMode } from "@revv/shared";
 import { Effect } from "effect";
 import { AppRuntime } from "../../../runtime";
 import { PrContextService } from "../../../services/PrContext";
@@ -38,7 +39,11 @@ import { WalkthroughJobs } from "../../../services/WalkthroughJobs";
  * new-commit detection / superseding is the PollScheduler's job, not this
  * read path's. (Doctrine: SQLite is authoritative.)
  */
-export function getCurrentWalkthroughHandler(prId: string, userId: string) {
+export function getCurrentWalkthroughHandler(
+  prId: string,
+  userId: string,
+  mode: WalkthroughMode = "reviewer",
+) {
   return AppRuntime.runPromise(
     Effect.gen(function* () {
       const prContext = yield* PrContextService;
@@ -53,7 +58,7 @@ export function getCurrentWalkthroughHandler(prId: string, userId: string) {
       if (!headSha) return { status: "not_found" as const };
 
       // 1. Complete walkthrough — best case, no SSE needed.
-      const complete = yield* walkthroughService.getCached(pr.id, headSha);
+      const complete = yield* walkthroughService.getCached(pr.id, headSha, mode);
       if (complete) {
         const seqAt = yield* walkthroughService.getSeqAt(complete.id);
         return {
@@ -65,7 +70,7 @@ export function getCurrentWalkthroughHandler(prId: string, userId: string) {
       }
 
       // 2. In-progress or errored walkthrough — hydrate partial state.
-      const partial = yield* walkthroughService.getPartial(pr.id, headSha);
+      const partial = yield* walkthroughService.getPartial(pr.id, headSha, mode);
       if (partial) {
         const { opencodeSessionId: _ignored, ...walkthrough } = partial;
         const seqAt = yield* walkthroughService.getSeqAt(walkthrough.id);
@@ -79,9 +84,9 @@ export function getCurrentWalkthroughHandler(prId: string, userId: string) {
 
       // 3. No local row — probe the team cache. On a hit the cache importer
       //    creates a complete row, so we re-query and return it as complete.
-      const hydrated = yield* jobs.tryHydrateFromRemoteCache(pr.id, headSha, repo.fullName);
+      const hydrated = yield* jobs.tryHydrateFromRemoteCache(pr.id, headSha, repo.fullName, mode);
       if (hydrated) {
-        const fromCache = yield* walkthroughService.getCached(pr.id, headSha);
+        const fromCache = yield* walkthroughService.getCached(pr.id, headSha, mode);
         if (fromCache) {
           const seqAt = yield* walkthroughService.getSeqAt(fromCache.id);
           return {

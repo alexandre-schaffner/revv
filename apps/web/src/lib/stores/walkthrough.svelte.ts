@@ -25,6 +25,7 @@ import type {
   WalkthroughBlock,
   WalkthroughIssue,
   WalkthroughLifecyclePhase,
+  WalkthroughMode,
   WalkthroughPipelinePhase,
   WalkthroughRating,
   WalkthroughSemanticStep,
@@ -53,6 +54,7 @@ export type WalkthroughTimelineEntry =
   | { kind: "exploration"; id: string; activity: Activity };
 
 export interface WalkthroughEntry {
+  mode: WalkthroughMode;
   semanticSteps: WalkthroughSemanticStep[];
   blocks: WalkthroughBlock[];
   summary: string | null;
@@ -128,6 +130,7 @@ export function coerceTokenUsage(raw: unknown): WalkthroughTokenUsage {
 
 export function freshEntry(): WalkthroughEntry {
   return {
+    mode: "reviewer",
     semanticSteps: [],
     blocks: [],
     summary: null,
@@ -553,6 +556,7 @@ export function applyEvents(prId: string, events: WalkthroughStreamEvent[]): voi
         //    content. Each one was previously a standalone lifecycle envelope.
         case "lifecycle:started":
           entry.walkthroughId = event.data.walkthroughId;
+          entry.mode = event.data.mode ?? entry.mode;
           entry.isStreaming = true;
           entry.doneReceived = false;
           entry.streamError = null;
@@ -640,6 +644,7 @@ export function onWalkthroughEvent(
   // sidebar spinner has something to read.
   if (event.type === "lifecycle:started" && !store.entries.has(prId)) {
     const stub = freshEntry();
+    stub.mode = event.data.mode ?? getSelectedMode(prId);
     stub.walkthroughId = walkthroughId;
     stub.isStreaming = event.data.status !== "cloning";
     stub.liveGeneration = true;
@@ -736,11 +741,12 @@ export function markIssuesAsSubmitted(
  * fetch resolves, so the UI renders the skeleton immediately instead of
  * briefly flashing the empty state.
  */
-export function prepareEntry(prId: string): void {
+export function prepareEntry(prId: string, mode: WalkthroughMode = getSelectedMode(prId)): void {
   store.activePrId = prId;
   const existing = store.entries.get(prId);
   if (
     existing &&
+    existing.mode === mode &&
     existing.summary !== null &&
     existing.blocks.length > 0 &&
     existing.doneReceived &&
@@ -748,9 +754,10 @@ export function prepareEntry(prId: string): void {
   ) {
     return;
   }
-  if (existing) return;
+  if (existing && existing.mode === mode) return;
   setEntry(prId, {
     ...freshEntry(),
+    mode,
     isStreaming: false,
     phaseMessage: "",
     streamStartedAt: null,
@@ -770,6 +777,25 @@ export function deactivate(): void {
 // ── Cache hydration ─────────────────────────────────────────────────────────
 
 const pendingHydration = new Map<string, Promise<boolean>>();
+const selectedModes = $state(new SvelteMap<string, WalkthroughMode>());
+
+export function getSelectedMode(
+  prId: string,
+  fallback: WalkthroughMode = "reviewer",
+): WalkthroughMode {
+  return selectedModes.get(prId) ?? fallback;
+}
+
+export function setSelectedMode(prId: string, mode: WalkthroughMode): void {
+  const current = selectedModes.get(prId);
+  if (current === mode) return;
+  selectedModes.set(prId, mode);
+  clearAnimationTrackers(prId);
+  deleteEntry(prId);
+  const entry = freshEntry();
+  entry.mode = mode;
+  setEntry(prId, entry);
+}
 
 /**
  * Read current walkthrough state for `prId` and reconcile it into the
@@ -780,31 +806,35 @@ const pendingHydration = new Map<string, Promise<boolean>>();
  */
 export async function hydrateFromCache(
   prId: string,
-  options?: { activate?: boolean },
+  options?: { activate?: boolean; mode?: WalkthroughMode },
 ): Promise<boolean> {
-  const inflight = pendingHydration.get(prId);
+  const mode = options?.mode ?? getSelectedMode(prId);
+  const key = `${prId}:${mode}`;
+  const inflight = pendingHydration.get(key);
   if (inflight) {
     wtTrace("lifecycle", `hydrateFromCache deduped prId=${prId}`);
     return inflight;
   }
 
-  const promise = doHydrateFromCache(prId, options);
-  pendingHydration.set(prId, promise);
+  const promise = doHydrateFromCache(prId, { ...options, mode });
+  pendingHydration.set(key, promise);
   try {
     return await promise;
   } finally {
-    pendingHydration.delete(prId);
+    pendingHydration.delete(key);
   }
 }
 
 async function doHydrateFromCache(
   prId: string,
-  options?: { activate?: boolean },
+  options?: { activate?: boolean; mode?: WalkthroughMode },
 ): Promise<boolean> {
+  const mode = options?.mode ?? getSelectedMode(prId);
   wtTrace("lifecycle", `hydrateFromCache enter prId=${prId}`);
   const existing = store.entries.get(prId);
   if (
     existing &&
+    existing.mode === mode &&
     existing.summary !== null &&
     existing.blocks.length > 0 &&
     existing.doneReceived &&
@@ -818,10 +848,13 @@ async function doHydrateFromCache(
   }
 
   try {
-    const res = await fetch(`${API_BASE_URL}/api/reviews/${prId}/walkthrough/current`, {
-      headers: authHeaders(),
-      credentials: "include",
-    });
+    const res = await fetch(
+      `${API_BASE_URL}/api/reviews/${prId}/walkthrough/current?mode=${mode}`,
+      {
+        headers: authHeaders(),
+        credentials: "include",
+      },
+    );
     if (!res.ok) {
       wtTrace("lifecycle", `hydrateFromCache prId=${prId} httpStatus=${res.status} → false`);
       return false;
@@ -829,6 +862,7 @@ async function doHydrateFromCache(
 
     type WalkthroughPayload = {
       id: string;
+      mode?: WalkthroughMode;
       summary: string;
       riskLevel: RiskLevel;
       sentiment?: string | null;
@@ -886,6 +920,7 @@ async function doHydrateFromCache(
     // entry fresh (the "reload shows nothing, but switching PRs and back fixes
     // it" bug). A fresh object guarantees the write is observed.
     const entry: WalkthroughEntry = previous ? { ...previous } : freshEntry();
+    entry.mode = wt.mode ?? mode;
     const hasRealSummary = wt.summary !== "";
 
     // Entry-wins merge: SSE events applied to `entry` during the REST fetch
@@ -974,7 +1009,11 @@ export function stopClonePoll(prId: string): void {
   clonePollers.delete(prId);
 }
 
-export async function pollCloneUntilResolved(prId: string, repoId: string): Promise<void> {
+export async function pollCloneUntilResolved(
+  prId: string,
+  repoId: string,
+  mode: WalkthroughMode = getSelectedMode(prId),
+): Promise<void> {
   if (clonePollers.has(prId)) return;
   const token = { cancelled: false };
   clonePollers.set(prId, token);
@@ -1003,7 +1042,7 @@ export async function pollCloneUntilResolved(prId: string, repoId: string): Prom
       if (status === "ready") {
         // Clone finished — kick off generation; server will broadcast
         // `lifecycle:started` and content events via the global SSE bus.
-        void startWalkthrough(prId);
+        void startWalkthrough(prId, mode);
         return;
       }
       if (status === "error" || status === "pending") {
@@ -1048,11 +1087,15 @@ export async function pollCloneUntilResolved(prId: string, repoId: string): Prom
  * UI-facing button clicks should use {@link generateWalkthrough} instead,
  * which adds the pending-action + optimistic-seed feedback.
  */
-export async function startWalkthrough(prId: string): Promise<Response | null> {
+export async function startWalkthrough(
+  prId: string,
+  mode: WalkthroughMode = getSelectedMode(prId),
+): Promise<Response | null> {
   try {
     return await fetch(`${API_BASE_URL}/api/reviews/${prId}/walkthrough/start`, {
       method: "POST",
-      headers: authHeaders(),
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ mode }),
     });
   } catch (e) {
     wtTrace(
@@ -1072,17 +1115,21 @@ export async function startWalkthrough(prId: string): Promise<Response | null> {
  * and the click looks like a no-op. The button is template-gated on the
  * UI state being `absent` or `idle`, so the seed is always safe here.
  */
-export async function generateWalkthrough(prId: string): Promise<void> {
+export async function generateWalkthrough(
+  prId: string,
+  mode: WalkthroughMode = getSelectedMode(prId),
+): Promise<void> {
   if (pendingActions.map.has(prId)) return;
   setPending(prId, "start");
 
   const seed = freshEntry();
+  seed.mode = mode;
   seed.phaseMessage = "Starting walkthrough…";
   setEntry(prId, seed);
   store.activePrId = prId;
 
   try {
-    const res = await startWalkthrough(prId);
+    const res = await startWalkthrough(prId, mode);
     if (!res) {
       updateEntry(prId, (e) => {
         e.isStreaming = false;
@@ -1109,6 +1156,7 @@ export async function generateWalkthrough(prId: string): Promise<void> {
  * state (Resume/Regenerate buttons).
  */
 export function abort(prId: string): void {
+  const mode = getSelectedMode(prId);
   updateEntry(prId, (e) => {
     e.isStreaming = false;
     e.streamError = null;
@@ -1124,13 +1172,17 @@ export function abort(prId: string): void {
   // on, and the next pull/regenerate will catch the leak.
   fetch(`${API_BASE_URL}/api/reviews/${prId}/walkthrough/abort`, {
     method: "POST",
-    headers: authHeaders(),
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ mode }),
   }).catch(() => {
     /* best-effort */
   });
 }
 
-export async function regenerate(prId: string): Promise<void> {
+export async function regenerate(
+  prId: string,
+  mode: WalkthroughMode = getSelectedMode(prId),
+): Promise<void> {
   if (pendingActions.map.has(prId)) return;
   setPending(prId, "regenerate");
   try {
@@ -1139,13 +1191,15 @@ export async function regenerate(prId: string): Promise<void> {
     store.activePrId = prId;
 
     const entry = freshEntry();
+    entry.mode = mode;
     entry.phaseMessage = "Regenerating...";
     setEntry(prId, entry);
 
     try {
       await fetch(`${API_BASE_URL}/api/reviews/${prId}/walkthrough/regenerate`, {
         method: "POST",
-        headers: authHeaders(),
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ mode }),
       });
     } catch {
       // Non-fatal — the start call below will still create a fresh job.
@@ -1156,13 +1210,16 @@ export async function regenerate(prId: string): Promise<void> {
     // entry, so dropping it here would only cause `_active` to flip to
     // undefined and flash the "Generate walkthrough" pill between the
     // regenerate and start round-trips.
-    await startWalkthrough(prId);
+    await startWalkthrough(prId, mode);
   } finally {
     clearPending(prId);
   }
 }
 
-export async function resume(prId: string): Promise<void> {
+export async function resume(
+  prId: string,
+  mode: WalkthroughMode = getSelectedMode(prId),
+): Promise<void> {
   if (pendingActions.map.has(prId)) return;
   setPending(prId, "resume");
   try {
@@ -1172,7 +1229,8 @@ export async function resume(prId: string): Promise<void> {
     try {
       const res = await fetch(`${API_BASE_URL}/api/reviews/${prId}/walkthrough/resume`, {
         method: "POST",
-        headers: authHeaders(),
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ mode }),
       });
       if (!res.ok) return;
     } catch {

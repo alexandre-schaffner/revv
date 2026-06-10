@@ -31,6 +31,7 @@ import type {
   Walkthrough,
   WalkthroughBlock,
   WalkthroughIssue,
+  WalkthroughMode,
   WalkthroughPipelinePhase,
   WalkthroughRating,
   WalkthroughSemanticStep,
@@ -180,6 +181,7 @@ function rowToWalkthrough(
     blocks: sortedBlocks,
     issues: sortedIssues,
     ratings: sortedRatings,
+    mode: (row.mode ?? "reviewer") as WalkthroughMode,
     lastCompletedPhase: row.lastCompletedPhase as WalkthroughPipelinePhase,
     riskLevel: row.riskLevel as RiskLevel,
     generatedAt: row.generatedAt,
@@ -229,6 +231,7 @@ export class WalkthroughService extends Context.Tag("WalkthroughService")<
       prId: string;
       modelUsed: string;
       prHeadSha: string;
+      mode?: WalkthroughMode;
       /**
        * PR commit list (oldest → newest, post-reverse) captured from GitHub
        * at job start. Persisted as JSON on the walkthrough row; the agent
@@ -296,12 +299,14 @@ export class WalkthroughService extends Context.Tag("WalkthroughService")<
     readonly supersedeAllForPr: (
       prId: string,
       exceptHeadSha?: string,
+      mode?: WalkthroughMode,
     ) => Effect.Effect<void, never, DbService>;
 
     /** Get a complete (cached) walkthrough by PR + sha. */
     readonly getCached: (
       prId: string,
       headSha: string,
+      mode?: WalkthroughMode,
     ) => Effect.Effect<Walkthrough | null, never, DbService>;
 
     /**
@@ -311,6 +316,7 @@ export class WalkthroughService extends Context.Tag("WalkthroughService")<
     readonly getPartial: (
       prId: string,
       headSha: string,
+      mode?: WalkthroughMode,
     ) => Effect.Effect<
       | (Walkthrough & {
           status: "generating" | "error";
@@ -358,6 +364,7 @@ export class WalkthroughService extends Context.Tag("WalkthroughService")<
         readonly id: string;
         readonly pullRequestId: string;
         readonly prHeadSha: string;
+        readonly mode: WalkthroughMode;
         readonly opencodeSessionId: string | null;
         readonly resumeAttempts: number;
       }>,
@@ -375,11 +382,15 @@ export class WalkthroughService extends Context.Tag("WalkthroughService")<
      * and resets the retry counter before relaunching, so the partial content
      * is preserved instead of getting recycled by `createPartial`.
      */
-    readonly findResumable: (prId: string) => Effect.Effect<
+    readonly findResumable: (
+      prId: string,
+      mode?: WalkthroughMode,
+    ) => Effect.Effect<
       {
         readonly id: string;
         readonly pullRequestId: string;
         readonly prHeadSha: string;
+        readonly mode: WalkthroughMode;
         readonly status: "generating" | "error";
       } | null,
       never,
@@ -478,11 +489,12 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
       const { db } = yield* DbService;
       const newId = params.id ?? crypto.randomUUID();
       const generatedAt = new Date().toISOString();
+      const mode = params.mode ?? "reviewer";
 
       // Atomically: look at any existing row at (prId, prHeadSha), recycle
       // it if it's terminal (superseded/error), otherwise reuse it. The
       // transaction ensures concurrent startJob calls for the same
-      // (prId, prHeadSha) can't race the delete-then-insert and produce
+      // (prId, prHeadSha, mode) can't race the delete-then-insert and produce
       // duplicate rows or zero rows.
       //
       // Cascade chain on DELETE walkthroughs:
@@ -507,6 +519,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
                 and(
                   eq(walkthroughs.pullRequestId, params.prId),
                   eq(walkthroughs.prHeadSha, params.prHeadSha),
+                  eq(walkthroughs.mode, mode),
                 ),
               )
               .get();
@@ -530,6 +543,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
                 reviewSessionId: params.reviewSessionId,
                 pullRequestId: params.prId,
                 summary: "",
+                mode,
                 riskLevel: "low",
                 sentiment: null,
                 status: "generating",
@@ -608,7 +622,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
       });
     }).pipe(Effect.catchAll(() => Effect.void)),
 
-  supersedeAllForPr: (prId, exceptHeadSha) =>
+  supersedeAllForPr: (prId, exceptHeadSha, mode) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
       db.transaction(() => {
@@ -619,6 +633,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         const baseConditions = [
           eq(walkthroughs.pullRequestId, prId),
           ne(walkthroughs.status, "superseded"),
+          ...(mode ? [eq(walkthroughs.mode, mode)] : []),
         ];
         const condition =
           exceptHeadSha !== undefined
@@ -652,7 +667,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
       });
     }).pipe(Effect.catchAll(() => Effect.void)),
 
-  getCached: (prId, headSha) =>
+  getCached: (prId, headSha, mode = "reviewer") =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
 
@@ -670,6 +685,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
           and(
             eq(walkthroughs.pullRequestId, prId),
             eq(walkthroughs.prHeadSha, headSha),
+            eq(walkthroughs.mode, mode),
             eq(walkthroughs.status, "complete"),
           ),
         )
@@ -707,7 +723,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
       return rowToWalkthrough(row, semanticSteps, blocks, issues, ratings, avatarContent);
     }),
 
-  getPartial: (prId, headSha) =>
+  getPartial: (prId, headSha, mode = "reviewer") =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
 
@@ -728,6 +744,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
           and(
             eq(walkthroughs.pullRequestId, prId),
             eq(walkthroughs.prHeadSha, headSha),
+            eq(walkthroughs.mode, mode),
             ne(walkthroughs.status, "complete"),
             ne(walkthroughs.status, "superseded"),
           ),
@@ -787,6 +804,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
           id: walkthroughs.id,
           pullRequestId: walkthroughs.pullRequestId,
           prHeadSha: walkthroughs.prHeadSha,
+          mode: walkthroughs.mode,
           opencodeSessionId: walkthroughs.opencodeSessionId,
           resumeAttempts: walkthroughs.resumeAttempts,
         })
@@ -797,12 +815,13 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         id: r.id,
         pullRequestId: r.pullRequestId,
         prHeadSha: r.prHeadSha,
+        mode: r.mode as WalkthroughMode,
         opencodeSessionId: r.opencodeSessionId ?? null,
         resumeAttempts: r.resumeAttempts,
       }));
     }),
 
-  findResumable: (prId) =>
+  findResumable: (prId, mode) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
       const row = db
@@ -810,12 +829,14 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
           id: walkthroughs.id,
           pullRequestId: walkthroughs.pullRequestId,
           prHeadSha: walkthroughs.prHeadSha,
+          mode: walkthroughs.mode,
           status: walkthroughs.status,
         })
         .from(walkthroughs)
         .where(
           and(
             eq(walkthroughs.pullRequestId, prId),
+            ...(mode ? [eq(walkthroughs.mode, mode)] : []),
             inArray(walkthroughs.status, ["generating", "error"]),
           ),
         )
@@ -826,6 +847,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         id: row.id,
         pullRequestId: row.pullRequestId,
         prHeadSha: row.prHeadSha,
+        mode: row.mode as WalkthroughMode,
         status: row.status as "generating" | "error",
       };
     }),

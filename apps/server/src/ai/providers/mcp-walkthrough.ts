@@ -18,6 +18,7 @@ import type {
   ThreadEventMessage,
   UserSettings,
   WalkthroughBlock,
+  WalkthroughMode,
   WalkthroughStreamEvent,
   WalkthroughTokenUsage,
 } from "@revv/shared";
@@ -31,7 +32,7 @@ import { AppRuntime } from "../../runtime";
 import { Broadcaster } from "../../services/Broadcaster";
 import type { PrFileMeta } from "../../services/GitHub";
 import { buildActivity, type NormalizedAgentEvent, walkClaudeMessages } from "../agent-stream";
-import { buildWalkthroughPrompt, WALKTHROUGH_MCP_SYSTEM_PROMPT } from "../prompts/walkthrough";
+import { buildWalkthroughPrompt, buildWalkthroughSystemPrompt } from "../prompts/walkthrough";
 import { resolveCliBin } from "./cli-agent";
 import { createWalkthroughMcpServer, TOOL_SPECS } from "./walkthrough-tools";
 
@@ -211,6 +212,7 @@ export function streamWalkthroughViaMCP(
       targetBranch: string;
       url: string;
     };
+    mode: WalkthroughMode;
     files: PrFileMeta[];
     worktreePath: string;
     continuation?: ContinuationContext;
@@ -269,6 +271,7 @@ export function streamWalkthroughViaMCP(
     broadcastThreadEvent,
   });
 
+  const systemPrompt = buildWalkthroughSystemPrompt(params.mode);
   const userMessage = buildWalkthroughPrompt(params, undefined, params.continuation);
 
   let errorEmitted = false;
@@ -319,7 +322,7 @@ export function streamWalkthroughViaMCP(
       const q = query({
         prompt: userMessage,
         options: {
-          systemPrompt: WALKTHROUGH_MCP_SYSTEM_PROMPT,
+          systemPrompt,
           cwd: params.worktreePath,
           tools: ["Read", "Grep", "Glob"],
           allowedTools: [...ALLOWED_TOOLS] as string[],

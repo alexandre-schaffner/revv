@@ -129,6 +129,8 @@ export interface WalkthroughIssue {
 
 export type RiskLevel = "low" | "medium" | "high";
 
+export type WalkthroughMode = "reviewer" | "author";
+
 export interface WalkthroughTokenUsage {
   inputTokens: number;
   outputTokens: number;
@@ -233,6 +235,7 @@ export interface Walkthrough {
   id: string;
   reviewSessionId: string;
   pullRequestId: string;
+  mode: WalkthroughMode;
   summary: string;
   riskLevel: RiskLevel;
   /**
@@ -301,6 +304,7 @@ export interface Walkthrough {
 export interface WalkthroughState {
   walkthroughId: string;
   prHeadSha: string;
+  mode: WalkthroughMode;
   status: WalkthroughStatus;
   lastCompletedPhase: WalkthroughPipelinePhase;
   summary: string | null;
@@ -427,6 +431,7 @@ export type WalkthroughStreamEvent =
       data: {
         walkthroughId: string;
         prHeadSha: string;
+        mode?: WalkthroughMode;
         trigger: WalkthroughStartTrigger;
         status?: "cloning";
         repoId?: string;

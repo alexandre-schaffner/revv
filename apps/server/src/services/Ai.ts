@@ -1,4 +1,4 @@
-import type { InteractionMode, WalkthroughStreamEvent } from "@revv/shared";
+import type { InteractionMode, WalkthroughMode, WalkthroughStreamEvent } from "@revv/shared";
 import { Context, Effect, Layer } from "effect";
 import {
   buildChatSystemPrompt,
@@ -112,6 +112,7 @@ export class AiService extends Context.Tag("AiService")<
         targetBranch: string;
         url: string;
       };
+      mode: WalkthroughMode;
       files: PrFileMeta[];
       worktreePath: string;
       continuation?: ContinuationContext;

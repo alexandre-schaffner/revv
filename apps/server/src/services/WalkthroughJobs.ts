@@ -30,6 +30,7 @@
 import type {
   GenerationProviderConfig,
   Walkthrough,
+  WalkthroughMode,
   WalkthroughStatus,
   WalkthroughStreamEvent,
   WalkthroughTokenUsage,
@@ -113,6 +114,7 @@ interface ActiveJob {
   readonly walkthroughId: string;
   readonly prId: string;
   readonly prHeadSha: string;
+  readonly mode: WalkthroughMode;
   readonly userId: string;
   /**
    * Better-auth `account.id` that owns the repo backing this PR. Resolved
@@ -170,6 +172,7 @@ export class WalkthroughJobs extends Context.Tag("WalkthroughJobs")<
       readonly userId: string;
       readonly trigger: StartJobTrigger;
       readonly walkthroughId?: string;
+      readonly mode?: WalkthroughMode;
     }) => Effect.Effect<{ readonly walkthroughId: string }, StartJobError>;
 
     /**
@@ -186,6 +189,7 @@ export class WalkthroughJobs extends Context.Tag("WalkthroughJobs")<
       prId: string,
       headSha: string,
       repoFullName: string,
+      mode?: WalkthroughMode,
     ) => Effect.Effect<boolean>;
 
     readonly subscribe: (
@@ -195,6 +199,7 @@ export class WalkthroughJobs extends Context.Tag("WalkthroughJobs")<
 
     readonly findActiveByPr: (
       prId: string,
+      mode?: WalkthroughMode,
     ) => Effect.Effect<{ readonly walkthroughId: string; readonly prHeadSha: string } | null>;
 
     readonly cancel: (walkthroughId: string) => Effect.Effect<void>;
@@ -241,7 +246,11 @@ export class WalkthroughJobs extends Context.Tag("WalkthroughJobs")<
      * created walkthrough at the latest SHA is by definition not stale.
      * Regenerate (no exception passed) keeps its kill-everything semantics.
      */
-    readonly supersedeForPr: (prId: string, exceptHeadSha?: string) => Effect.Effect<void>;
+    readonly supersedeForPr: (
+      prId: string,
+      exceptHeadSha?: string,
+      mode?: WalkthroughMode,
+    ) => Effect.Effect<void>;
 
     /**
      * Fan an event out to a running job's subscribers. The primary caller
@@ -460,6 +469,7 @@ export const WalkthroughJobsLive = Layer.effect(
       readonly partial: PartialSnapshot | null;
       readonly reviewSessionId: string;
       readonly modelUsed: string;
+      readonly mode: WalkthroughMode;
     };
 
     interface LoopState {
@@ -530,6 +540,7 @@ export const WalkthroughJobsLive = Layer.effect(
             url: ctx.pr.url,
           },
           files: ctx.files as never,
+          mode: ctx.mode,
           worktreePath,
           walkthroughId: job.walkthroughId,
           accountId: job.accountId,
@@ -622,7 +633,7 @@ export const WalkthroughJobsLive = Layer.effect(
               }).pipe(Effect.catchAll(() => Effect.void));
 
               const dbState = yield* provideDb(
-                walkthroughService.getPartial(ctx.pr.id, ctx.prHeadSha),
+                walkthroughService.getPartial(ctx.pr.id, ctx.prHeadSha, ctx.mode),
               ).pipe(Effect.catchAll(() => Effect.succeed(null)));
 
               if (dbState?.lastCompletedPhase === "D") {
@@ -635,9 +646,11 @@ export const WalkthroughJobsLive = Layer.effect(
                   // inside the service and never block job completion
                   // (invariant #8 — commit first, broadcast second; the
                   // cache push is broadcast-equivalent).
-                  yield* Effect.forkDaemon(
-                    remoteCache.push(job.walkthroughId).pipe(Effect.catchAll(() => Effect.void)),
-                  );
+                  if (job.mode === "reviewer") {
+                    yield* Effect.forkDaemon(
+                      remoteCache.push(job.walkthroughId).pipe(Effect.catchAll(() => Effect.void)),
+                    );
+                  }
                   yield* emitEvent(job.walkthroughId, {
                     type: "lifecycle:complete",
                     data: {
@@ -742,7 +755,7 @@ export const WalkthroughJobsLive = Layer.effect(
         > =>
           Effect.gen(function* () {
             const partialForContinuation = yield* provideDb(
-              walkthroughService.getPartial(ctx.pr.id, ctx.prHeadSha),
+              walkthroughService.getPartial(ctx.pr.id, ctx.prHeadSha, ctx.mode),
             ).pipe(Effect.catchAll(() => Effect.succeed(null)));
 
             if (!partialForContinuation) {
@@ -812,7 +825,7 @@ export const WalkthroughJobsLive = Layer.effect(
                   : "aborted",
               );
               const finalState = yield* provideDb(
-                walkthroughService.getPartial(ctx.pr.id, ctx.prHeadSha),
+                walkthroughService.getPartial(ctx.pr.id, ctx.prHeadSha, ctx.mode),
               ).pipe(Effect.catchAll(() => Effect.succeed(null)));
               const phaseD = finalState?.lastCompletedPhase === "D";
               const missingCommentsAtExhaustion = phaseD
@@ -944,6 +957,7 @@ export const WalkthroughJobsLive = Layer.effect(
             data: {
               walkthroughId: job.walkthroughId,
               prHeadSha: job.prHeadSha,
+              mode: job.mode,
               trigger,
             },
           }).pipe(Effect.catchAll(() => Effect.void));
@@ -1051,11 +1065,12 @@ export const WalkthroughJobsLive = Layer.effect(
 
     const findActiveByPr = (
       prId: string,
+      mode: WalkthroughMode = "reviewer",
     ): Effect.Effect<{ readonly walkthroughId: string; readonly prHeadSha: string } | null> =>
       Effect.gen(function* () {
         const map = yield* Ref.get(registry);
         for (const job of map.values()) {
-          if (job.prId === prId) {
+          if (job.prId === prId && job.mode === mode) {
             return {
               walkthroughId: job.walkthroughId,
               prHeadSha: job.prHeadSha,
@@ -1070,8 +1085,10 @@ export const WalkthroughJobsLive = Layer.effect(
       readonly userId: string;
       readonly trigger: StartJobTrigger;
       readonly walkthroughId?: string;
+      readonly mode?: WalkthroughMode;
     }): Effect.Effect<{ readonly walkthroughId: string }, StartJobError> =>
       Effect.gen(function* () {
+        const mode = params.mode ?? "reviewer";
         // Resume fast-path: if the caller passed a specific walkthroughId
         // (resumePending / explicit resume) and the registry already holds
         // that exact job, short-circuit without acquiring the mutex or
@@ -1079,7 +1096,7 @@ export const WalkthroughJobsLive = Layer.effect(
         // and avoids blocking on any other in-flight startJob for the
         // same PR.
         if (params.walkthroughId !== undefined) {
-          const cached = yield* findActiveByPr(params.prId);
+          const cached = yield* findActiveByPr(params.prId, mode);
           if (cached !== null && cached.walkthroughId === params.walkthroughId) {
             return { walkthroughId: cached.walkthroughId };
           }
@@ -1099,11 +1116,13 @@ export const WalkthroughJobsLive = Layer.effect(
       readonly userId: string;
       readonly trigger: StartJobTrigger;
       readonly walkthroughId?: string;
+      readonly mode?: WalkthroughMode;
     }): Effect.Effect<{ readonly walkthroughId: string }, StartJobError> =>
       Effect.gen(function* () {
+        const mode = params.mode ?? "reviewer";
         // Re-check the registry now that we hold the mutex — a concurrent
         // caller may have launched the job for this PR while we waited.
-        const existing = yield* findActiveByPr(params.prId);
+        const existing = yield* findActiveByPr(params.prId, mode);
         if (
           params.walkthroughId !== undefined &&
           existing !== null &&
@@ -1159,7 +1178,7 @@ export const WalkthroughJobsLive = Layer.effect(
           );
         }
 
-        let partial = yield* provideDb(walkthroughService.getPartial(pr.id, meta.headSha));
+        let partial = yield* provideDb(walkthroughService.getPartial(pr.id, meta.headSha, mode));
         if (
           params.walkthroughId !== undefined &&
           partial !== null &&
@@ -1258,6 +1277,7 @@ export const WalkthroughJobsLive = Layer.effect(
             prId: pr.id,
             modelUsed,
             prHeadSha: meta.headSha,
+            mode,
             prCommits: commits,
             ...(generatedBy ? { generatedBy } : {}),
             providerConfig: providerConfigForJob,
@@ -1280,7 +1300,12 @@ export const WalkthroughJobsLive = Layer.effect(
         // failure, fall through to the usual generation path. This is
         // safe for `partial !== null` paths too — the importer wipes
         // any leftover partial children inside its transaction.
-        if (settings.cache.enabled && settings.cache.downloadsEnabled && partial === null) {
+        if (
+          mode === "reviewer" &&
+          settings.cache.enabled &&
+          settings.cache.downloadsEnabled &&
+          partial === null
+        ) {
           const snapshotOpt = yield* remoteCache.fetch(repo.fullName, meta.headSha);
           if (Option.isSome(snapshotOpt)) {
             const importResult = yield* provideDb(
@@ -1339,6 +1364,7 @@ export const WalkthroughJobsLive = Layer.effect(
           prHeadSha: meta.headSha,
           userId: params.userId,
           accountId: ownerAccountId,
+          mode,
           abortController,
           subscribers: new Set(),
           nextSeq: 0,
@@ -1366,6 +1392,7 @@ export const WalkthroughJobsLive = Layer.effect(
             partial,
             reviewSessionId,
             modelUsed,
+            mode,
           },
           params.trigger,
         );
@@ -1456,6 +1483,7 @@ export const WalkthroughJobsLive = Layer.effect(
               userId: "single-user",
               trigger: "resume",
               walkthroughId: row.id,
+              mode: row.mode,
             }).pipe(
               Effect.catchAllCause((cause) =>
                 Effect.sync(() => {
@@ -1486,7 +1514,7 @@ export const WalkthroughJobsLive = Layer.effect(
         }).pipe(Effect.catchAll(() => Effect.void));
       });
 
-    const supersedeForPr = (prId: string, exceptHeadSha?: string) =>
+    const supersedeForPr = (prId: string, exceptHeadSha?: string, mode?: WalkthroughMode) =>
       Effect.gen(function* () {
         // Cancel any in-flight job first so the fiber's scope finalizer
         // runs before we touch the DB row. See regenerateWalkthroughHandler
@@ -1507,13 +1535,14 @@ export const WalkthroughJobsLive = Layer.effect(
         const supersededIds: string[] = [];
         for (const job of map.values()) {
           if (job.prId !== prId) continue;
+          if (mode !== undefined && job.mode !== mode) continue;
           if (exceptHeadSha !== undefined && job.prHeadSha === exceptHeadSha) {
             continue;
           }
           supersededIds.push(job.walkthroughId);
           yield* cancel(job.walkthroughId);
         }
-        yield* provideDb(walkthroughService.supersedeAllForPr(prId, exceptHeadSha));
+        yield* provideDb(walkthroughService.supersedeAllForPr(prId, exceptHeadSha, mode));
         for (const id of supersededIds) {
           yield* emitEvent(id, {
             type: "lifecycle:superseded",
@@ -1674,8 +1703,10 @@ export const WalkthroughJobsLive = Layer.effect(
       prId: string,
       headSha: string,
       repoFullName: string,
+      mode: WalkthroughMode = "reviewer",
     ): Effect.Effect<boolean> =>
       Effect.gen(function* () {
+        if (mode !== "reviewer") return false;
         const settings = yield* settingsService
           .getSettings()
           .pipe(Effect.catchAll(() => Effect.succeed(null)));
@@ -1693,6 +1724,7 @@ export const WalkthroughJobsLive = Layer.effect(
             prId,
             modelUsed: snapshot.modelUsed,
             prHeadSha: headSha,
+            mode,
             generatedBy: snapshot.generatedBy,
             providerConfig: snapshot.providerConfig,
           }),
