@@ -4,7 +4,6 @@ import Check from "phosphor-svelte/lib/Check";
 import Funnel from "phosphor-svelte/lib/Funnel";
 import User from "phosphor-svelte/lib/User";
 import UsersThree from "phosphor-svelte/lib/UsersThree";
-import X from "phosphor-svelte/lib/X";
 import * as Popover from "$lib/components/ui/popover";
 import {
   clearAuthorFilters,
@@ -125,30 +124,18 @@ function toggleTeam(members: string[]): void {
 
 {#if options.length > 1 || teamRows.length > 0 || selectedCount > 0}
 	<Popover.Root bind:open>
-		<div class="filter-row">
-			<Popover.Trigger
-				class="filter-trigger"
-				aria-label="Filter pull requests by creator"
-				title="Filter pull requests by creator"
-			>
-				<Funnel size={12} aria-hidden="true" />
-				<span class="filter-label">{selectedLabel}</span>
-			</Popover.Trigger>
-
+		<Popover.Trigger
+			class={`filter-trigger${selectedCount > 0 ? " filter-trigger--active" : ""}`}
+			aria-label="Filter pull requests by creator"
+			title={selectedCount > 0 ? selectedLabel : "Filter pull requests by creator"}
+		>
+			<Funnel size={13} weight={selectedCount > 0 ? "fill" : "regular"} aria-hidden="true" />
 			{#if selectedCount > 0}
-				<button
-					type="button"
-					class="clear-button"
-					onclick={clearAuthorFilters}
-					aria-label="Clear creator filters"
-					title="Clear creator filters"
-				>
-					<X size={12} aria-hidden="true" />
-				</button>
+				<span class="filter-badge">{selectedCount}</span>
 			{/if}
-		</div>
+		</Popover.Trigger>
 
-		<Popover.Content align="start" sideOffset={4} class="author-popover">
+		<Popover.Content align="end" sideOffset={6} class="author-popover">
 			<div class="popover-header">
 				<span class="popover-title">Filter by creator</span>
 				{#if selectedCount > 0}
@@ -205,50 +192,43 @@ function toggleTeam(members: string[]): void {
 {/if}
 
 <style>
-	.filter-row {
-		display: flex;
-		align-items: center;
-		gap: 4px;
-		padding: 0 var(--spacing-inset) var(--spacing-island-half);
-	}
-
-	:global(.filter-trigger),
-	.clear-button {
+	/* Compact icon button living inline to the right of the search input —
+	   matches the input's 28px height and pill shape. */
+	:global(.filter-trigger) {
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
-		height: 24px;
+		gap: 3px;
+		height: 28px;
+		min-width: 28px;
+		flex-shrink: 0;
+		padding: 0 7px;
 		border: 1px solid var(--color-border);
+		border-radius: 999px;
 		background: var(--color-bg-elevated);
 		color: var(--color-text-secondary);
 	}
 
-	:global(.filter-trigger) {
-		min-width: 0;
-		max-width: 100%;
-		gap: 5px;
-		border-radius: 999px;
-		padding: 0 9px;
-		font-size: 11px;
-	}
-
-	:global(.filter-trigger:hover),
-	.clear-button:hover {
+	:global(.filter-trigger:hover) {
 		border-color: var(--color-border-strong);
 		color: var(--color-text-primary);
 		background: var(--color-bg-tertiary);
 	}
 
-	.filter-label {
-		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
+	/* Active = at least one creator selected. */
+	:global(.filter-trigger--active) {
+		border-color: var(--color-accent);
+		color: var(--color-accent);
+		background: color-mix(in srgb, var(--color-accent) 12%, transparent);
 	}
 
-	.clear-button {
-		width: 24px;
-		border-radius: 999px;
+	.filter-badge {
+		min-width: 12px;
+		font-size: 10px;
+		font-weight: 600;
+		font-variant-numeric: tabular-nums;
+		line-height: 1;
+		text-align: center;
 	}
 
 	:global(.author-popover) {

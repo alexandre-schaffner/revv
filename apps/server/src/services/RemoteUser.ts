@@ -52,6 +52,29 @@ export class RemoteUserService extends Context.Tag("RemoteUserService")<
 
 const AVATAR_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
+// Avatars are displayed at most ~40px (≈80px @2x) anywhere in the app, but
+// GitHub serves full-resolution images by default (we measured 50KB avg,
+// 450KB max). Since the base64 data URL is embedded in every PR row and
+// re-decoded each time the creator-filter popover opens, an unsized avatar
+// makes that popover lag on repos with many contributors. Request a small
+// fixed size so the cached payload is ~5KB and decoding is instant.
+const AVATAR_FETCH_SIZE = 96;
+
+/**
+ * Append a size hint to a provider avatar URL (`?s=96`). GitHub/Gravatar
+ * honour it; other hosts ignore the extra query param. Returns the input
+ * unchanged if it isn't a parseable absolute URL.
+ */
+function sizedAvatarUrl(url: string, size = AVATAR_FETCH_SIZE): string {
+  try {
+    const u = new URL(url);
+    u.searchParams.set("s", String(size));
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
 export const RemoteUserServiceLive = Layer.effect(
   RemoteUserService,
   Effect.gen(function* () {
@@ -83,17 +106,21 @@ export const RemoteUserServiceLive = Layer.effect(
             )
             .get();
 
-          // Determine if we need to fetch the avatar.
+          // Determine if we need to fetch the avatar. We track the *sized*
+          // URL as `lastAvatarUrl`, so rows cached before sizing was added
+          // (whose stored URL is the raw, full-res one) naturally fail the
+          // equality check and get refetched small on the next sync.
+          const targetAvatarUrl = params.avatarUrl ? sizedAvatarUrl(params.avatarUrl) : null;
           let avatarContent: string | null = existing?.avatarContent ?? null;
           const shouldFetch =
-            params.avatarUrl &&
+            targetAvatarUrl &&
             (!existing?.lastFetchedAt ||
               now.getTime() - existing.lastFetchedAt.getTime() > AVATAR_TTL_MS ||
-              existing.lastAvatarUrl !== params.avatarUrl);
+              existing.lastAvatarUrl !== targetAvatarUrl);
 
-          if (shouldFetch && params.avatarUrl) {
+          if (shouldFetch && targetAvatarUrl) {
             try {
-              avatarContent = await fetchImageAsDataUrl(params.avatarUrl);
+              avatarContent = await fetchImageAsDataUrl(targetAvatarUrl);
             } catch {
               // Keep existing cached avatar if fetch fails.
             }
@@ -111,7 +138,7 @@ export const RemoteUserServiceLive = Layer.effect(
               displayName: params.displayName ?? existing?.displayName ?? null,
               avatarContent,
               lastFetchedAt: shouldFetch && avatarContent ? now : (existing?.lastFetchedAt ?? null),
-              lastAvatarUrl: params.avatarUrl ?? existing?.lastAvatarUrl ?? null,
+              lastAvatarUrl: targetAvatarUrl ?? existing?.lastAvatarUrl ?? null,
             })
             .onConflictDoUpdate({
               target: [remoteUsers.provider, remoteUsers.login],

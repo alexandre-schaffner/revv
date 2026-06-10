@@ -141,30 +141,58 @@ export interface PrAuthorFilterOption {
   readonly avatarContent: string | null;
 }
 
-/**
- * Author options for the raw open-PR list. This intentionally ignores search
- * and the current author filter so the user can recover from an over-narrow
- * view without clearing other controls first.
- */
-export function getAuthorFilterOptions(repoId?: string): PrAuthorFilterOption[] {
-  const counts = new Map<string, { count: number; avatarContent: string | null }>();
-  for (const pr of pullRequests) {
-    if (repoId && pr.repositoryId !== repoId) continue;
-    const existing = counts.get(pr.authorLogin);
-    if (existing) {
-      existing.count += 1;
-      existing.avatarContent ??= pr.authorAvatarContent;
-    } else {
-      counts.set(pr.authorLogin, {
-        count: 1,
-        avatarContent: pr.authorAvatarContent,
-      });
-    }
-  }
+type AuthorAccumulator = Map<string, { count: number; avatarContent: string | null }>;
 
+function tallyAuthor(counts: AuthorAccumulator, pr: PullRequest): void {
+  const existing = counts.get(pr.authorLogin);
+  if (existing) {
+    existing.count += 1;
+    existing.avatarContent ??= pr.authorAvatarContent;
+  } else {
+    counts.set(pr.authorLogin, { count: 1, avatarContent: pr.authorAvatarContent });
+  }
+}
+
+function toSortedOptions(counts: AuthorAccumulator): PrAuthorFilterOption[] {
   return [...counts.entries()]
     .map(([login, value]) => ({ login, ...value }))
     .sort((a, b) => b.count - a.count || a.login.localeCompare(b.login));
+}
+
+// Author options precomputed per repo. Rebuilt only when the open-PR list
+// changes (i.e. on a sync / `prs:updated`), never when the filter popover
+// opens — so clicking the filter is an O(1) lookup of an already-built,
+// reference-stable array, even on repos with hundreds of contributors.
+const authorOptionsByRepo = $derived.by((): Map<string, PrAuthorFilterOption[]> => {
+  const byRepo = new Map<string, AuthorAccumulator>();
+  for (const pr of pullRequests) {
+    let counts = byRepo.get(pr.repositoryId);
+    if (!counts) {
+      counts = new Map();
+      byRepo.set(pr.repositoryId, counts);
+    }
+    tallyAuthor(counts, pr);
+  }
+  const result = new Map<string, PrAuthorFilterOption[]>();
+  for (const [repoId, counts] of byRepo) result.set(repoId, toSortedOptions(counts));
+  return result;
+});
+
+const allAuthorOptions = $derived.by((): PrAuthorFilterOption[] => {
+  const counts: AuthorAccumulator = new Map();
+  for (const pr of pullRequests) tallyAuthor(counts, pr);
+  return toSortedOptions(counts);
+});
+
+/**
+ * Author options for the raw open-PR list. This intentionally ignores search
+ * and the current author filter so the user can recover from an over-narrow
+ * view without clearing other controls first. Reads from the precomputed
+ * per-repo cache above, so it does no work when the popover opens.
+ */
+export function getAuthorFilterOptions(repoId?: string): PrAuthorFilterOption[] {
+  if (!repoId) return allAuthorOptions;
+  return authorOptionsByRepo.get(repoId) ?? [];
 }
 
 export function getSelectedAuthorLogins(): Set<string> {
@@ -540,11 +568,15 @@ export async function fetchTeamsForOrg(owner: string): Promise<void> {
   teamsLoadingByOrg = new Map(teamsLoadingByOrg).set(key, true);
   try {
     const { data } = await api.api.github.teams({ org: owner }).get();
-    if (data) {
-      teamsByOrg = new Map(teamsByOrg).set(key, (data as { teams: Team[] }).teams);
-    }
+    // Cache the result — including an empty list — so reopening the popover
+    // never re-hits the network. The server already degrades to `{ teams: [] }`
+    // when teams aren't visible (no `read:org`, not a member), so an empty
+    // array here is a real answer, not a failure to retry on every open.
+    teamsByOrg = new Map(teamsByOrg).set(key, (data as { teams: Team[] } | null)?.teams ?? []);
   } catch {
-    // best-effort — leave unfetched so a later open can retry
+    // Network/transport error: cache empty so we don't lag every open. A
+    // later `reset()` (account switch / re-login) clears this to retry.
+    teamsByOrg = new Map(teamsByOrg).set(key, []);
   } finally {
     teamsLoadingByOrg = new Map(teamsLoadingByOrg).set(key, false);
   }

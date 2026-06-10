@@ -389,10 +389,13 @@ function handleKeydown(e: KeyboardEvent) {
 			class="view-pane view-pane--prs"
 			aria-hidden={view === 'files'}
 		>
-			<SearchFilter />
-			{#if displayRepo}
-				<AuthorFilter repoId={displayRepo.id} />
-			{/if}
+			<SearchFilter>
+				{#snippet trailing()}
+					{#if displayRepo}
+						<AuthorFilter repoId={displayRepo.id} />
+					{/if}
+				{/snippet}
+			</SearchFilter>
 
 			<div class="pr-list" bind:this={prListEl} onscroll={handlePrListScroll}>
 				{#if displayRepo}
