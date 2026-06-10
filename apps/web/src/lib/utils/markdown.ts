@@ -25,6 +25,9 @@ marked.use({
   },
   renderer: {
     code({ text, lang }) {
+      if (isMermaidLang(lang)) {
+        return `<div class="mermaid-diagram not-prose" data-mermaid-src="${encodeBase64(text)}"><span class="mermaid-loading">Rendering diagram...</span></div>`;
+      }
       if (lang) {
         const highlighted = highlightCode(text, lang);
         if (highlighted) return highlighted;
@@ -35,6 +38,20 @@ marked.use({
     },
   },
 });
+
+function isMermaidLang(lang: string | undefined): boolean {
+  const normalized = lang?.trim().toLowerCase();
+  return normalized === "mermaid" || normalized === "mmd";
+}
+
+// UTF-8 → base64. Inverse of the decode in mermaid.svelte.ts (atob → bytes →
+// TextDecoder), so multi-byte source survives the data-attribute round-trip.
+function encodeBase64(source: string): string {
+  const bytes = new TextEncoder().encode(source);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
 
 export function renderMarkdown(source: string): string {
   // Normalize literal \n escape sequences (AI output artefact) to real newlines

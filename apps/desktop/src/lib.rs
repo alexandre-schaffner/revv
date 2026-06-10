@@ -1,8 +1,34 @@
 use tauri::{
+	http::{header, Response, StatusCode},
 	menu::{Menu, MenuItem, PredefinedMenuItem},
 	tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 	AppHandle, Manager, WindowEvent,
 };
+
+const ARTIFACT_HOST_HTML: &str = include_str!("../../web/static/artifact-host.html");
+
+/// Single source of truth for the artifact-host CSP is the
+/// `<meta http-equiv="Content-Security-Policy" content="…">` tag inside
+/// artifact-host.html. We extract it from the compiled-in HTML and serve it as
+/// an HTTP header too — the header (unlike the meta tag) survives the host's
+/// `document.write`, so it is the durable enforcement. Deriving it here instead
+/// of duplicating the literal keeps the header and the meta from drifting.
+fn artifact_host_csp() -> &'static str {
+	const FALLBACK: &str = "default-src 'none'";
+	let html = ARTIFACT_HOST_HTML;
+	let Some(marker) = html.find("Content-Security-Policy") else {
+		return FALLBACK;
+	};
+	let tail = &html[marker..];
+	let Some(rel_start) = tail.find("content=\"") else {
+		return FALLBACK;
+	};
+	let start = marker + rel_start + "content=\"".len();
+	match html[start..].find('"') {
+		Some(len) => &html[start..start + len],
+		None => FALLBACK,
+	}
+}
 
 /// Show, unminimize, and focus the main window. Called from tray menu
 /// interactions, tray left-clicks, and the single-instance handler (when
@@ -18,6 +44,22 @@ fn show_main_window(app: &AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
 	let builder = tauri::Builder::default()
+		.register_uri_scheme_protocol("artifact", |_ctx, request| {
+			let path = request.uri().path();
+			if path == "/" || path == "/artifact-host.html" {
+				Response::builder()
+					.header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+					.header(header::CONTENT_SECURITY_POLICY, artifact_host_csp())
+					.body(ARTIFACT_HOST_HTML.as_bytes().to_vec())
+					.expect("artifact host response should be valid")
+			} else {
+				Response::builder()
+					.status(StatusCode::NOT_FOUND)
+					.header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+					.body(b"not found".to_vec())
+					.expect("artifact not-found response should be valid")
+			}
+		})
 		// Single-instance must be the first plugin registered. If a second
 		// copy of Revv is launched (e.g. the user clicks the app icon while
 		// it's already running in the tray), this fires in the existing

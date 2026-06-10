@@ -1,7 +1,7 @@
 // ─── Walkthrough snapshot exporter ──────────────────────────────────────────
 //
 // Pure (DB-only) translation between an on-disk `walkthroughs`-row family
-// and a `WalkthroughSnapshotV1`. Used by:
+// and a `WalkthroughSnapshotV2`. Used by:
 //
 //   • RemoteWalkthroughCache.push — exports the row before gzip+upload.
 //   • Tests — round-trips a generated walkthrough through
@@ -30,7 +30,7 @@ import type {
   WalkthroughSnapshotIssue,
   WalkthroughSnapshotRating,
   WalkthroughSnapshotSemanticStep,
-  WalkthroughSnapshotV1,
+  WalkthroughSnapshotV2,
   WalkthroughTokenUsage,
 } from "@revv/shared";
 import { CACHE_SCHEMA_VERSION } from "@revv/shared";
@@ -157,7 +157,7 @@ function parseProviderConfig(raw: string | null, modelUsed: string): GenerationP
 }
 
 /**
- * Build a `WalkthroughSnapshotV1` from a completed walkthrough row.
+ * Build a `WalkthroughSnapshotV2` from a completed walkthrough row.
  *
  * Pre-conditions checked by the caller (`RemoteWalkthroughCache.push`):
  *   • `status='complete'` (avoids exporting half-generated rows)
@@ -168,7 +168,7 @@ function parseProviderConfig(raw: string | null, modelUsed: string): GenerationP
  * Synchronous Drizzle reads — wrap in `Effect.try` at the call site if
  * you need an Effect-returning wrapper.
  */
-export function exportWalkthroughSnapshot(db: Db, params: ExportParams): WalkthroughSnapshotV1 {
+export function exportWalkthroughSnapshot(db: Db, params: ExportParams): WalkthroughSnapshotV2 {
   const row = db.select().from(walkthroughs).where(eq(walkthroughs.id, params.walkthroughId)).get();
   if (!row) {
     throw new ExportError(`walkthrough ${params.walkthroughId} not found`);
@@ -310,7 +310,7 @@ export function exportWalkthroughSnapshot(db: Db, params: ExportParams): Walkthr
  * `complete_walkthrough` from the MCP tool surface — same checks).
  */
 export function validateSnapshot(
-  s: WalkthroughSnapshotV1,
+  s: WalkthroughSnapshotV2,
 ): { ok: true } | { ok: false; reason: string } {
   if (s.schemaVersion !== CACHE_SCHEMA_VERSION) {
     return {

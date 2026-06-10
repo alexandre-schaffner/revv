@@ -361,7 +361,7 @@ export function streamWalkthroughViaMCP(
             );
             if (transition) push(transition);
           }
-          const activity = buildActivity(ev.toolName, ev.input);
+          const activity = buildActivity(ev.toolName, ev.input, params.worktreePath);
           push({ type: "exploration", data: activity });
           return;
         }

@@ -2,8 +2,10 @@
 import { DIFFS_TAG_NAME, FileDiff, type FileDiffOptions, parsePatchFiles } from "@pierre/diffs";
 import { buildGitPatchHeader, type DiffBlock, PIERRE_THEME } from "@revv/shared";
 import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
+import { mermaidDiagrams } from "$lib/actions/mermaid.svelte";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
 import { jumpToDiffLine } from "$lib/stores/review.svelte";
+import { getResolvedTheme } from "$lib/stores/theme.svelte";
 import { renderMarkdown } from "$lib/utils/markdown";
 import { workerManager } from "$lib/utils/worker-pool";
 
@@ -79,7 +81,7 @@ function mountDiffBlock(el: HTMLDivElement) {
 <div class="annotated-block" class:annotated-block--no-annotation={!block.annotation || hideAnnotation}>
 	{#if !hideAnnotation && block.annotation && block.annotationPosition === 'left'}
 		<div class="annotation annotation--left">
-			<div class="annotation-content prose prose-sm">
+			<div class="annotation-content prose prose-sm" use:mermaidDiagrams={getResolvedTheme()}>
 				{@html renderedAnnotation}
 			</div>
 		</div>
@@ -97,7 +99,7 @@ function mountDiffBlock(el: HTMLDivElement) {
 
 	{#if !hideAnnotation && block.annotation && block.annotationPosition === 'right'}
 		<div class="annotation annotation--right">
-			<div class="annotation-content prose prose-sm">
+			<div class="annotation-content prose prose-sm" use:mermaidDiagrams={getResolvedTheme()}>
 				{@html renderedAnnotation}
 			</div>
 		</div>

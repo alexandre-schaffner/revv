@@ -905,9 +905,10 @@ diffs-container {
   padding: 8px 0 10px;
   z-index: 10;
   pointer-events: none;
-  transition:
-    left var(--duration-instant) var(--ease-out-expo),
-    right var(--duration-instant) var(--ease-out-expo);
+  /* No left/right transition: the floating bar is pinned to the main-pane
+     bounds (getActionsFloatStyle), so tweening its inset slides it across the
+     main pane while the sidebar/right-panel toggles snap instantly. Snap it
+     too — match the instant pane toggles (see AppShell). */
 }
 .actions-float * {
   pointer-events: auto;

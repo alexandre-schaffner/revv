@@ -377,7 +377,7 @@ export function streamWalkthroughViaOpencodeMCP(
 
             if (ev.source === "builtin" && EXPLORATION_TOOLS.has(ev.toolName)) {
               transitionPhase("exploring", "Reading files and understanding changes...");
-              const activity = buildActivity(ev.toolName, ev.input);
+              const activity = buildActivity(ev.toolName, ev.input, params.worktreePath);
               push({ type: "exploration", data: activity });
               return;
             }

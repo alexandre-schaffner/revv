@@ -18,7 +18,6 @@ import {
   getRightPanelOpen,
   getRightPanelWidth,
   getSidebarCollapsed,
-  getSidebarPeekHovering,
   getSidebarWidth,
   RIGHT_PANEL_WIDTH_MAX,
   RIGHT_PANEL_WIDTH_MIN,
@@ -46,14 +45,6 @@ import WalkthroughActionBar from "./WalkthroughActionBar.svelte";
 let { children } = $props();
 
 const sidebarCollapsed = $derived(getSidebarCollapsed());
-// Effective collapsed state: false when the user is hovering a project
-// avatar (or the sidebar itself) so the column expands as a peek without
-// flipping the persistent toggle. Used for layout (grid columns, floating
-// action bar alignment, Sidebar contents). The TopBar toggle and the
-// resize handle stay bound to the real `sidebarCollapsed` so peek is
-// purely visual and never repositions controls.
-const sidebarPeekHovering = $derived(getSidebarPeekHovering());
-const sidebarEffectiveCollapsed = $derived(sidebarCollapsed && !sidebarPeekHovering);
 const rightPanelOpen = $derived(getRightPanelOpen());
 const paletteOpen = $derived(getPaletteOpen());
 const paletteMode = $derived(getPaletteMode());
@@ -126,7 +117,7 @@ $effect(() => {
 });
 
 const gridStyle = $derived(
-  `grid-template-columns: ${RAIL_WIDTH}px ${sidebarEffectiveCollapsed ? 0 : sidebarWidth}px 1fr ${rightPanelOpen ? rightPanelWidth : 0}px; --sidebar-width: ${sidebarWidth}px; --right-panel-width: ${rightPanelWidth}px`,
+  `grid-template-columns: ${RAIL_WIDTH}px ${sidebarCollapsed ? 0 : sidebarWidth}px 1fr ${rightPanelOpen ? rightPanelWidth : 0}px; --sidebar-width: ${sidebarWidth}px; --right-panel-width: ${rightPanelWidth}px`,
 );
 
 function onHandlePointerDown(event: PointerEvent): void {
@@ -188,7 +179,7 @@ function onRightHandleDblClick(): void {
 
 <div
 	class="app-shell"
-	class:sidebar-collapsed={sidebarEffectiveCollapsed}
+	class:sidebar-collapsed={sidebarCollapsed}
 	class:rightpanel-open={rightPanelOpen}
 	style={gridStyle}
 >
@@ -197,7 +188,7 @@ function onRightHandleDblClick(): void {
 	</aside>
 
 	<aside class="sidebar-area">
-		<Sidebar collapsed={sidebarEffectiveCollapsed} />
+		<Sidebar collapsed={sidebarCollapsed} />
 
 		{#if !sidebarCollapsed}
 			<div
@@ -261,7 +252,7 @@ function onRightHandleDblClick(): void {
 	</main>
 
 	<aside class="userbar-area">
-		<UserMenu collapsed={sidebarEffectiveCollapsed} />
+		<UserMenu collapsed={sidebarCollapsed} />
 	</aside>
 
 	<footer class="bottombar-area">
