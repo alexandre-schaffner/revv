@@ -80,6 +80,9 @@
   }
 
   window.addEventListener("message", (event) => {
+    // Only the host frame that wrote us may drive theme changes; ignore any
+    // other window that holds a handle to this opaque-origin frame.
+    if (event.source !== parentWindow) return;
     const data = event.data;
     if (!data || typeof data !== "object" || data.kind !== "theme") return;
     if (data.theme !== "light" && data.theme !== "dark") return;
@@ -174,6 +177,10 @@ ${"<"}/style>`;
         }
 
         window.addEventListener("message", (event) => {
+          // Only accept the mount handshake from the parent that embedded us;
+          // a sibling frame holding our contentWindow must not win the race and
+          // inject arbitrary markup ahead of the legitimate mount.
+          if (event.source !== parentWindow) return;
           const data = event.data;
           if (!data || typeof data !== "object" || data.kind !== "mount") return;
           if (typeof data.html !== "string") return;
