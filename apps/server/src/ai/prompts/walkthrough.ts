@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import { isAbsolute, relative } from "node:path";
 import type { RatingAxis, WalkthroughBlock } from "@revv/shared";
 import type { PrFileMeta } from "../../services/GitHub";
-import { loadSkills } from "../skills/registry";
 
 // ── Continuation context (imported here to avoid circular deps) ──────────────
 //
@@ -18,10 +17,10 @@ export interface PromptContinuationContext {
 
 // ── MCP-based walkthrough prompt (phase-bound, A→B→C→D) ─────────────────────
 
-export const WALKTHROUGH_MCP_SYSTEM_PROMPT: string =
-  readFileSync(`${import.meta.dir}/walkthrough-system.md`, "utf-8") +
-  "\n\n" +
-  loadSkills(["beautiful-markdown"]);
+export const WALKTHROUGH_MCP_SYSTEM_PROMPT: string = readFileSync(
+  `${import.meta.dir}/walkthrough-system.md`,
+  "utf-8",
+);
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 

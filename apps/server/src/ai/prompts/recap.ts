@@ -7,7 +7,6 @@
 
 import type { ProjectRecap } from "@revv/shared";
 import type { RecapSourceBundle } from "../providers/recap-tools";
-import { loadSkills } from "../skills/registry";
 
 export const RECAP_SYSTEM_PROMPT = `You are a project historian and review companion. Your job is to write a concise, useful recap of recent pull-request activity in a single repository — both work that SHIPPED (merged/closed in this window) and work that is STILL IN FLIGHT (open) — as a SHORT EDITORIAL LEDE plus a list of STRUCTURED PER-PR ENTRIES the UI can render as themed chapters. Each chapter mixes shipped entries and active (open) entries under the same theme so a reader can see "what landed" and "what's coming" side by side.
 
@@ -80,9 +79,7 @@ Tool-use rules (critical):
 Constraints:
 - Do not write file paths or line numbers in descriptions unless they appear verbatim in walkthrough summary/sentiment or a diffDigest.
 - Do not fabricate walkthrough text. Quote sparingly and only when it carries real signal.
-- Do not fabricate diff content. If diffDigest source is unavailable, describe the PR from its metadata and say so — don't invent file changes.
-
-${loadSkills(["beautiful-markdown"])}`;
+- Do not fabricate diff content. If diffDigest source is unavailable, describe the PR from its metadata and say so — don't invent file changes.`;
 
 export function buildRecapUserMessage(
   bundle: RecapSourceBundle,
