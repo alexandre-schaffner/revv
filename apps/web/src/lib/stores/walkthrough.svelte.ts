@@ -66,13 +66,10 @@ export interface WalkthroughEntry {
   superseded: boolean;
   explorationSteps: Activity[];
   /**
-   * Streamed model reasoning text concatenated in arrival order. Drives the
-   * thoughts toggle UI alongside `timeline`. Ephemeral — not persisted.
-   */
-  thoughts: string;
-  /**
    * Chronological mix of thoughts and exploration tool calls for the live
-   * "Reviewing…" feed. See `WalkthroughTimelineEntry`. Ephemeral.
+   * "Reviewing…" feed. See `WalkthroughTimelineEntry`. Ephemeral. The thoughts
+   * toggle UI renders from this directly — there is no separate concatenated
+   * thoughts string.
    */
   timeline: WalkthroughTimelineEntry[];
   issues: WalkthroughIssue[];
@@ -143,7 +140,6 @@ export function freshEntry(): WalkthroughEntry {
     doneReceived: false,
     superseded: false,
     explorationSteps: [],
-    thoughts: "",
     timeline: [],
     issues: [],
     ratings: [],
@@ -480,7 +476,6 @@ export function applyEvents(prId: string, events: WalkthroughStreamEvent[]): voi
               },
             ];
           }
-          entry.thoughts = entry.thoughts + event.data.text;
           break;
         }
         case "issue": {

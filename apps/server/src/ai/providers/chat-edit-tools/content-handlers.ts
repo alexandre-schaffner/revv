@@ -8,7 +8,7 @@ import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import { walkthroughSemanticSteps } from "../../../db/schema/walkthrough-semantic-steps";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
-import { blockVariantCount, buildBlock, emptyBlockError } from "../walkthrough-blocks";
+import { blockRow, blockVariantCount, buildBlock, emptyBlockError } from "../walkthrough-blocks";
 import { blockIdFor, unwrapJsonWrappedString } from "../walkthrough-tools";
 import {
   assertStillComplete,
@@ -153,6 +153,7 @@ export const addSemanticStepEditHandler: ChatEditToolHandler<AddSemanticStepEdit
       result = fail("Internal error: add_semantic_step built an empty initial block.");
       return;
     }
+    const { type, data } = blockRow(block);
     ctx.db
       .insert(walkthroughBlocks)
       .values({
@@ -162,8 +163,8 @@ export const addSemanticStepEditHandler: ChatEditToolHandler<AddSemanticStepEdit
         order: input.semantic_step_index * 10000,
         semanticStepIndex: input.semantic_step_index,
         stepIndex: 0,
-        type: block.type,
-        data: JSON.stringify(block),
+        type,
+        data,
         createdAt: now,
       })
       .run();
@@ -477,6 +478,7 @@ export const addBlockHandler: ChatEditToolHandler<AddBlockInput> = async (ctx, i
       result = fail("Internal error: add_block built an empty block.");
       return;
     }
+    const { type, data } = blockRow(block);
     const now = new Date().toISOString();
     ctx.db
       .insert(walkthroughBlocks)
@@ -487,8 +489,8 @@ export const addBlockHandler: ChatEditToolHandler<AddBlockInput> = async (ctx, i
         order: input.semantic_step_index * 10000 + stepIndex,
         semanticStepIndex: input.semantic_step_index,
         stepIndex,
-        type: block.type,
-        data: JSON.stringify(block),
+        type,
+        data,
         createdAt: now,
       })
       .run();
@@ -554,7 +556,7 @@ export const updateBlockHandler: ChatEditToolHandler<UpdateBlockInput> = async (
     }
     ctx.db
       .update(walkthroughBlocks)
-      .set({ type: block.type, data: JSON.stringify(block) })
+      .set(blockRow(block))
       .where(eq(walkthroughBlocks.id, blockId))
       .run();
     stampLastEdited(ctx.db, walkthroughId, ctx.actor);

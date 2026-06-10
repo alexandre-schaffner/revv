@@ -183,3 +183,18 @@ export function buildBlock(
   }
   return null;
 }
+
+/**
+ * The two `walkthrough_blocks` columns derived from a built block: the variant
+ * `type` discriminator and the JSON-serialized payload written to `data`.
+ * Centralized here so no write path hand-writes `JSON.stringify(block)` — the
+ * serialization that turns a typed block into a row is this module's
+ * responsibility, the same way construction is, and must not drift between the
+ * generation and chat-edit paths (CLAUDE.md #2, #13).
+ */
+export function blockRow(block: WalkthroughBlock): {
+  type: WalkthroughBlock["type"];
+  data: string;
+} {
+  return { type: block.type, data: JSON.stringify(block) };
+}

@@ -23,6 +23,7 @@ import { walkthroughSemanticSteps } from "../../../db/schema/walkthrough-semanti
 import { walkthroughs } from "../../../db/schema/walkthroughs";
 import {
   type BlockVariantInput,
+  blockRow,
   blockVariantCount,
   buildBlock,
   emptyBlockError,
@@ -77,7 +78,7 @@ function persistBlockVariant(
 
   const block = buildBlock(blockId, semanticStepIndex, stepIndex, variant);
   if (!block) return null;
-  const data = JSON.stringify(block);
+  const { type, data } = blockRow(block);
 
   db.insert(walkthroughBlocks)
     .values({
@@ -87,7 +88,7 @@ function persistBlockVariant(
       order,
       semanticStepIndex,
       stepIndex,
-      type: block.type,
+      type,
       data,
       createdAt,
     })
@@ -98,7 +99,7 @@ function persistBlockVariant(
         walkthroughBlocks.semanticStepIndex,
         walkthroughBlocks.stepIndex,
       ],
-      set: { type: block.type, data },
+      set: { type, data },
     })
     .run();
 

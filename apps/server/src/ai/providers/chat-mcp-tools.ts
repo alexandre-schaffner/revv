@@ -96,9 +96,14 @@ function parseBlock(row: typeof walkthroughBlocks.$inferSelect): ParsedBlock {
     case "diff":
       content = str("patch");
       break;
-    case "artifact":
-      content = str("html");
+    case "artifact": {
+      // An artifact is a full HTML document (up to 256 KB) the chat agent
+      // can't act on; surface a compact placeholder plus the human-readable
+      // annotation instead of dumping the verbatim markup into its context.
+      const note = str("annotation").trim();
+      content = note ? `[interactive artifact: ${note}]` : "[interactive artifact]";
       break;
+    }
     default:
       content = JSON.stringify(parsed);
   }
