@@ -18,11 +18,11 @@ import FileBadge from "$lib/components/ui/FileBadge.svelte";
 import { Progress } from "$lib/components/ui/progress";
 import { Separator } from "$lib/components/ui/separator";
 import { gsapFadeY, tokens } from "$lib/motion";
-import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
-import { getRepositories, getSelectedPr } from "$lib/stores/prs.svelte";
+import { getRepositories } from "$lib/stores/prs.svelte";
 import {
   clearPendingWalkthroughBlockJump,
   getPendingWalkthroughBlockJump,
+  getReviewMode,
   jumpToDiffLine,
 } from "$lib/stores/review.svelte";
 import { getResolvedTheme } from "$lib/stores/theme.svelte";
@@ -42,7 +42,6 @@ import {
   getProviderConfig,
   getRatings,
   getRiskLevel,
-  getSelectedMode,
   getSemanticSteps,
   getSentiment,
   getSource,
@@ -97,14 +96,7 @@ const isLiveGeneration = $derived(getIsLiveGeneration());
 const cloneInProgress = $derived(getCloneInProgress());
 const cloneRepoId = $derived(getCloneRepoId());
 const repositories = $derived(getRepositories());
-const pr = $derived(getSelectedPr());
-const currentUserLogin = $derived(getCurrentUserLogin());
-const defaultMode: WalkthroughMode = $derived(
-  pr?.authorLogin && currentUserLogin && pr.authorLogin === currentUserLogin
-    ? "author"
-    : "reviewer",
-);
-const selectedMode = $derived(getSelectedMode(prId, defaultMode));
+const selectedMode = $derived(getReviewMode(prId));
 const cloneRepo = $derived(cloneRepoId ? repositories.find((r) => r.id === cloneRepoId) : null);
 const cloneError = $derived(cloneRepo?.cloneError ?? null);
 // Phase C markdown — rendered inline as its own sentiment card when set.

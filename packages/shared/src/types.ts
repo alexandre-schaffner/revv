@@ -194,6 +194,8 @@ export interface UserSettings {
 
 export type SessionStatus = "active" | "completed" | "abandoned";
 
+export type ReviewMode = "reviewer" | "author";
+
 export type ThreadStatus = "open" | "pending_coder" | "pending_reviewer" | "resolved" | "wont_fix";
 
 export type AuthorRole = "reviewer" | "coder" | "ai_agent";
@@ -205,6 +207,7 @@ export type HunkDecisionType = "accepted" | "rejected";
 export interface ReviewSession {
   id: string;
   pullRequestId: string;
+  mode: ReviewMode;
   startedAt: string;
   completedAt: string | null;
   status: SessionStatus;

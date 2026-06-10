@@ -30,8 +30,10 @@ import {
   getRcSelectedCount,
   getRcSubmitting,
 } from "$lib/stores/rcActions.svelte";
+import { getReviewMode } from "$lib/stores/review.svelte";
 
 const pr = $derived(getSelectedPr());
+const reviewMode = $derived(pr ? getReviewMode(pr.id) : "reviewer");
 const rcSubmitting = $derived(getRcSubmitting());
 const rcSelectedCount = $derived(getRcSelectedCount());
 const rcHasContent = $derived(getRcHasContent());
@@ -212,7 +214,7 @@ async function runMerge(method: import("@revv/shared").MergeMethod): Promise<voi
         <XCircle size={16} weight="fill" />
         {ownerSubmitting === "close" ? "Closing…" : "Close PR"}
       </GlassPill>
-    {:else}
+    {:else if reviewMode === "reviewer"}
       <GlassPill
         variant="accent"
         disabled={rcSubmitting !== null || !rcHasContent}

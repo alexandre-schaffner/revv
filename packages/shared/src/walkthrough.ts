@@ -1,6 +1,7 @@
 // ── Block types ─────────────────────────────────────────────────────────────
 
 import type { Activity } from "./activity";
+import type { ReviewMode } from "./types";
 
 export type AnnotationPosition = "left" | "right";
 
@@ -129,7 +130,7 @@ export interface WalkthroughIssue {
 
 export type RiskLevel = "low" | "medium" | "high";
 
-export type WalkthroughMode = "reviewer" | "author";
+export type WalkthroughMode = ReviewMode;
 
 export interface WalkthroughTokenUsage {
   inputTokens: number;

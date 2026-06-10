@@ -37,6 +37,7 @@ import { SettingsService } from "../services/Settings";
 import { SyncService } from "../services/Sync";
 import { WalkthroughService } from "../services/Walkthrough";
 import { handleAppError, withAccount } from "./middleware";
+import { coerceReviewMode } from "./reviews/handlers/active-session";
 
 // ── PR diff SSR options ─────────────────────────────────────────────────────
 //
@@ -222,7 +223,8 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
             // "Files changed" tab). No per-commit selection anymore — the
             // commits dropdown is read-only.
             const files = yield* getOrFetchDiffFiles(pr.id, repo.fullName, pr.externalId, token);
-            const session = yield* reviewService.getActiveSession(pr.id);
+            const mode = coerceReviewMode(ctx.query.mode);
+            const session = yield* reviewService.getActiveSession(pr.id, mode);
             const threads = session ? yield* reviewService.getThreadsForSession(session.id) : [];
             return { files, threads };
           }),
@@ -256,6 +258,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
     {
       query: t.Object({
         active: t.Optional(t.String()),
+        mode: t.Optional(t.String()),
       }),
       detail: {
         description: `Returns PR files and server-renders at most one diff, capped at ${SSR_PATCH_BYTE_LIMIT} bytes / ${SSR_PATCH_LINE_LIMIT} lines.`,

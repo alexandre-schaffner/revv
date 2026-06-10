@@ -1,4 +1,7 @@
 <script lang="ts">
+import type { ReviewMode } from "@revv/shared";
+import User from "phosphor-svelte/lib/User";
+import Users from "phosphor-svelte/lib/Users";
 import { onDestroy, untrack } from "svelte";
 import { page } from "$app/state";
 import { api } from "$lib/api/client";
@@ -8,16 +11,19 @@ import ReviewLayout from "$lib/components/review/ReviewLayout.svelte";
 import { Badge } from "$lib/components/ui/badge";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import GuidedWalkthrough from "$lib/components/walkthrough/GuidedWalkthrough.svelte";
+import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
 import { markVisited as markPrVisited } from "$lib/stores/pr-visits.svelte";
 import { getSelectedPr, setSelectedPrId } from "$lib/stores/prs.svelte";
 import {
   clearReviewFiles,
+  ensureReviewMode,
   getActiveFilePath,
   getActiveTab,
   getFilesError,
   getIsLoadingFiles,
   getPrScrollPosition,
   getReviewFiles,
+  getReviewMode,
   loadSession,
   setActiveFilePath,
   setFilesError,
@@ -25,6 +31,7 @@ import {
   setLoadedHeadSha,
   setPrScrollPosition,
   setReviewFiles,
+  setReviewMode,
   switchPrViewState,
 } from "$lib/stores/review.svelte";
 import { requestThreadSync } from "$lib/stores/sync.svelte";
@@ -35,11 +42,24 @@ import {
 import { setScrollRoot } from "$lib/stores/walkthroughNav.svelte";
 
 const pr = $derived(getSelectedPr());
+const currentUserLogin = $derived(getCurrentUserLogin());
+const defaultReviewMode: ReviewMode = $derived(
+  pr?.authorLogin && currentUserLogin && pr.authorLogin === currentUserLogin
+    ? "author"
+    : "reviewer",
+);
+const reviewMode = $derived(getReviewMode(page.params.prId ?? "", defaultReviewMode));
 const files = $derived(getReviewFiles());
 const isLoading = $derived(getIsLoadingFiles());
 const loadError = $derived(getFilesError());
 const activeTab = $derived(getActiveTab());
 const walkthroughRiskLevel = $derived(getWalkthroughRiskLevel());
+
+$effect(() => {
+  const prId = page.params.prId;
+  if (!prId) return;
+  ensureReviewMode(prId, defaultReviewMode);
+});
 
 const riskClasses: Record<string, string> = {
   low: "risk-badge risk-badge--low",
@@ -48,6 +68,13 @@ const riskClasses: Record<string, string> = {
 };
 
 let scrollRootEl: HTMLDivElement | undefined = $state(undefined);
+
+function selectReviewMode(mode: ReviewMode): void {
+  const prId = page.params.prId;
+  if (!prId || mode === reviewMode) return;
+  setReviewMode(prId, mode);
+  void loadSession(prId, mode);
+}
 
 // Per-PR scroll persistence for the walkthrough / request-changes tabs.
 // (Diff tab has its own scroll container inside ReviewLayout.svelte and
@@ -129,11 +156,13 @@ let currentRequestId = 0;
 // Phase 1 stopgap: avoid refetching diff files when the user bounces back to
 // the same PR within a minute. Replaced by queryStore in Phase 3.
 let lastLoadedPrId: string | null = null;
+let lastLoadedMode: ReviewMode | null = null;
 let lastLoadedAt = 0;
 const PR_REFETCH_WINDOW_MS = 60_000;
 
 $effect(() => {
   const prId = page.params.prId;
+  const mode = reviewMode;
   if (!prId) return;
 
   // Everything below mutates store state. Calls like `clearReviewFiles()`
@@ -155,11 +184,12 @@ $effect(() => {
     const currentFiles = getReviewFiles();
     if (
       prId === lastLoadedPrId &&
+      mode === lastLoadedMode &&
       now - lastLoadedAt < PR_REFETCH_WINDOW_MS &&
       currentFiles.length > 0
     ) {
       // Still kick off a session load so thread-counts refresh; cheap.
-      loadSession(prId).catch((e) =>
+      loadSession(prId, mode).catch((e) =>
         console.error("[review] Session load failed (non-blocking):", e),
       );
       return;
@@ -177,9 +207,9 @@ $effect(() => {
         // selection — the dropdown is read-only.
         const [filesResult] = await Promise.all([
           api.api.prs({ id: prId }).files.get({
-            query: activeFileHint === null ? {} : { active: activeFileHint },
+            query: activeFileHint === null ? { mode } : { active: activeFileHint, mode },
           }),
-          loadSession(prId).catch((e) =>
+          loadSession(prId, mode).catch((e) =>
             console.error("[review] Session load failed (non-blocking):", e),
           ),
         ]);
@@ -221,6 +251,7 @@ $effect(() => {
             setLoadedHeadSha(prId, currentPr.headSha);
           }
           lastLoadedPrId = prId;
+          lastLoadedMode = mode;
           lastLoadedAt = Date.now();
         }
       } catch (e) {
@@ -283,6 +314,28 @@ onDestroy(() => {
 			>
 				<div class="title-row">
 					<h1 class="page-title">{pr.title}</h1>
+					<div class="review-mode-switch" role="group" aria-label="Review mode">
+						<button
+							type="button"
+							class:active={reviewMode === 'reviewer'}
+							aria-pressed={reviewMode === 'reviewer'}
+							title="Review someone else's PR"
+							onclick={() => selectReviewMode('reviewer')}
+						>
+							<Users size={14} weight="regular" />
+							Reviewer
+						</button>
+						<button
+							type="button"
+							class:active={reviewMode === 'author'}
+							aria-pressed={reviewMode === 'author'}
+							title="Self-review your own PR"
+							onclick={() => selectReviewMode('author')}
+						>
+							<User size={14} weight="regular" />
+							Self-review
+						</button>
+					</div>
 				</div>
 				<span class="page-subtitle">#{pr.externalId} · {pr.sourceBranch} → {pr.targetBranch}</span>
 				{#if activeTab === 'walkthrough' && walkthroughRiskLevel}
@@ -424,6 +477,41 @@ onDestroy(() => {
 		align-items: center;
 		gap: 8px;
 		min-width: 0;
+	}
+
+	.review-mode-switch {
+		display: inline-grid;
+		grid-template-columns: minmax(84px, auto) minmax(102px, auto);
+		align-items: center;
+		min-height: 30px;
+		padding: 2px;
+		border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
+		border-radius: 8px;
+		background: color-mix(in srgb, var(--color-bg-elevated) 78%, transparent);
+		flex-shrink: 0;
+	}
+
+	.review-mode-switch button {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 6px;
+		height: 26px;
+		padding: 0 10px;
+		border: 0;
+		border-radius: 6px;
+		background: transparent;
+		color: var(--color-text-muted);
+		font-size: 12px;
+		font-weight: 500;
+		line-height: 1;
+		white-space: nowrap;
+	}
+
+	.review-mode-switch button.active {
+		background: color-mix(in srgb, var(--color-bg) 92%, var(--color-bg-elevated));
+		color: var(--color-text-primary);
+		box-shadow: 0 1px 2px color-mix(in srgb, var(--color-text-primary) 12%, transparent);
 	}
 
 	.page-title {

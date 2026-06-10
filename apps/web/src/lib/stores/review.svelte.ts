@@ -2,16 +2,21 @@ import type {
   AuthorRole,
   CommentThread,
   MessageType,
+  ReviewMode,
   ThreadMessage,
   ThreadStatus,
 } from "@revv/shared";
+import { SvelteMap } from "svelte/reactivity";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 import { RequestState, type RequestState as RequestStateType } from "$lib/stores/_types";
 import { invalidateChatHistory } from "$lib/stores/chat.svelte";
 import { enterSidebarMode } from "$lib/stores/focus-mode.svelte";
 import { getPullRequests } from "$lib/stores/prs.svelte";
-import { invalidateForPull } from "$lib/stores/walkthrough.svelte";
+import {
+  invalidateForPull,
+  setSelectedMode as setWalkthroughSelectedMode,
+} from "$lib/stores/walkthrough.svelte";
 import type { ReviewFile } from "$lib/types/review";
 
 // --- Review files (shared between sidebar tree + review page) ---
@@ -130,8 +135,9 @@ export async function pullLatestCommit(prId: string): Promise<void> {
     setFilesError(null);
 
     const activePath = getActiveFilePath();
+    const mode = getReviewMode(prId);
     const { data, error } = await api.api.prs({ id: prId }).files.get({
-      query: activePath === null ? {} : { active: activePath },
+      query: activePath === null ? { mode } : { active: activePath, mode },
     });
     if (error || !Array.isArray(data)) {
       throw new Error("Failed to refetch files");
@@ -181,6 +187,27 @@ export async function pullLatestCommit(prId: string): Promise<void> {
 // --- Session state ---
 let sessionId = $state<string | null>(null);
 let _sessionLoading = $state(false);
+const selectedReviewModes = $state(new SvelteMap<string, ReviewMode>());
+
+export function getReviewMode(prId: string, fallback: ReviewMode = "reviewer"): ReviewMode {
+  return selectedReviewModes.get(prId) ?? fallback;
+}
+
+export function ensureReviewMode(prId: string, fallback: ReviewMode): ReviewMode {
+  const existing = selectedReviewModes.get(prId);
+  if (existing) return existing;
+  selectedReviewModes.set(prId, fallback);
+  setWalkthroughSelectedMode(prId, fallback);
+  return fallback;
+}
+
+export function setReviewMode(prId: string, mode: ReviewMode): void {
+  const current = selectedReviewModes.get(prId);
+  if (current === mode) return;
+  selectedReviewModes.set(prId, mode);
+  setWalkthroughSelectedMode(prId, mode);
+  clearSession();
+}
 
 function clearSession(): void {
   sessionId = null;
@@ -189,7 +216,7 @@ function clearSession(): void {
   threadsVersion++;
   // Reset the short-circuit window too — an explicit clear means callers
   // want a fresh hydration on the next `loadSession` call.
-  lastSessionPrId = null;
+  lastSessionKey = null;
   lastSessionAt = 0;
 }
 
@@ -198,15 +225,19 @@ let loadSessionSeq = 0;
 // Phase 1 stopgap: skip redundant session loads when the same PR was hydrated
 // within the last minute AND we still have a live session id. Phase 3's
 // queryStore replaces this with per-key cache semantics.
-let lastSessionPrId: string | null = null;
+let lastSessionKey: string | null = null;
 let lastSessionAt = 0;
 const SESSION_REFETCH_WINDOW_MS = 60_000;
 
 /** Load (or create) the active review session for a PR, hydrating all state. */
-export async function loadSession(prId: string): Promise<void> {
+export async function loadSession(
+  prId: string,
+  mode: ReviewMode = getReviewMode(prId),
+): Promise<void> {
+  const sessionKey = `${prId}:${mode}`;
   // Short-circuit: same PR, recent hydration, session still live.
   if (
-    prId === lastSessionPrId &&
+    sessionKey === lastSessionKey &&
     Date.now() - lastSessionAt < SESSION_REFETCH_WINDOW_MS &&
     sessionId !== null
   ) {
@@ -216,7 +247,9 @@ export async function loadSession(prId: string): Promise<void> {
   const seq = ++loadSessionSeq;
   _sessionLoading = true;
   try {
-    const { data, error } = await api.api.reviews.active({ prId }).get();
+    const { data, error } = await api.api.reviews.active({ prId }).get({
+      query: { mode },
+    });
 
     // Discard if a newer call has started
     if (seq !== loadSessionSeq) return;
@@ -229,12 +262,16 @@ export async function loadSession(prId: string): Promise<void> {
 
     // Type-narrow: the response is the full hydration payload
     const payload = data as {
-      session: { id: string };
+      session: { id: string; mode?: ReviewMode };
       threads: CommentThread[];
       messages: Record<string, ThreadMessage[]>;
     };
 
     sessionId = payload.session.id;
+    if (payload.session.mode) {
+      selectedReviewModes.set(prId, payload.session.mode);
+      setWalkthroughSelectedMode(prId, payload.session.mode);
+    }
     threads = payload.threads;
 
     // Populate thread messages
@@ -245,7 +282,7 @@ export async function loadSession(prId: string): Promise<void> {
     threadMessages = msgs;
 
     threadsVersion++;
-    lastSessionPrId = prId;
+    lastSessionKey = sessionKey;
     lastSessionAt = Date.now();
   } finally {
     // Only clear loading if this is still the active request

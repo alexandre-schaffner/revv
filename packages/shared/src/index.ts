@@ -91,6 +91,7 @@ export type {
   PullRequestStatus,
   RecapAgentChoice,
   Repository,
+  ReviewMode,
   ReviewSession,
   ReviewStatus,
   SessionStatus,

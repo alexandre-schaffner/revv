@@ -6,7 +6,7 @@ import { ReviewService } from "../services/Review";
 import { SyncService } from "../services/Sync";
 import { WalkthroughJobs } from "../services/WalkthroughJobs";
 import { handleAppError, withAccount } from "./middleware";
-import { activeSessionHandler } from "./reviews/handlers/active-session";
+import { activeSessionHandler, coerceReviewMode } from "./reviews/handlers/active-session";
 import { submitGithubReviewHandler } from "./reviews/handlers/github-submit";
 import {
   coerceWalkthroughMode,
@@ -31,7 +31,7 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
   // ── Session lifecycle ──────────────────────────────────────────────────
   .get("/active/:prId", async (ctx) => {
     try {
-      return await activeSessionHandler(ctx.params.prId);
+      return await activeSessionHandler(ctx.params.prId, coerceReviewMode(ctx.query.mode));
     } catch (e) {
       return handleAppError(e, ctx);
     }
@@ -42,13 +42,15 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
     async (ctx) => {
       try {
         return await AppRuntime.runPromise(
-          Effect.flatMap(ReviewService, (s) => s.getOrCreateActiveSession(ctx.body.pullRequestId)),
+          Effect.flatMap(ReviewService, (s) =>
+            s.getOrCreateActiveSession(ctx.body.pullRequestId, coerceReviewMode(ctx.body.mode)),
+          ),
         );
       } catch (e) {
         return handleAppError(e, ctx);
       }
     },
-    { body: t.Object({ pullRequestId: t.String() }) },
+    { body: t.Object({ pullRequestId: t.String(), mode: t.Optional(t.String()) }) },
   )
 
   .patch(
@@ -234,7 +236,9 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
       const result = await AppRuntime.runPromise(
         Effect.gen(function* () {
           const jobs = yield* WalkthroughJobs;
+          const reviewService = yield* ReviewService;
           const mode = coerceWalkthroughMode((ctx.body as { mode?: unknown } | undefined)?.mode);
+          yield* reviewService.getOrCreateActiveSession(ctx.params.id, mode);
           const existing = yield* jobs.findActiveByPr(ctx.params.id, mode);
           if (existing !== null) {
             return { walkthroughId: existing.walkthroughId };

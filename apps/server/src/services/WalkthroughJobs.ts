@@ -1187,7 +1187,7 @@ export const WalkthroughJobsLive = Layer.effect(
           partial = null;
         }
 
-        const reviewSession = yield* provideDb(reviewService.getOrCreateActiveSession(pr.id));
+        const reviewSession = yield* provideDb(reviewService.getOrCreateActiveSession(pr.id, mode));
         const reviewSessionId = partial?.reviewSessionId ?? reviewSession.id;
 
         const settings = yield* provideDb(settingsService.getSettings());
@@ -1717,7 +1717,7 @@ export const WalkthroughJobsLive = Layer.effect(
 
         const snapshot = snapshotOpt.value;
 
-        const reviewSession = yield* provideDb(reviewService.getOrCreateActiveSession(prId));
+        const reviewSession = yield* provideDb(reviewService.getOrCreateActiveSession(prId, mode));
         const walkthroughId = yield* provideDb(
           walkthroughService.createPartial({
             reviewSessionId: reviewSession.id,
