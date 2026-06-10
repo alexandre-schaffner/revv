@@ -4,6 +4,7 @@ import GitPullRequestCreateArrow from "phosphor-svelte/lib/GitPullRequest";
 import Plus from "phosphor-svelte/lib/Plus";
 import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte";
 import AddRepoDialog from "$lib/components/sidebar/AddRepoDialog.svelte";
+import AuthorFilter from "$lib/components/sidebar/AuthorFilter.svelte";
 import ProjectArchiveList from "$lib/components/sidebar/ProjectArchiveList.svelte";
 import ProjectDraftsList from "$lib/components/sidebar/ProjectDraftsList.svelte";
 import ProjectHeader from "$lib/components/sidebar/ProjectHeader.svelte";
@@ -388,7 +389,13 @@ function handleKeydown(e: KeyboardEvent) {
 			class="view-pane view-pane--prs"
 			aria-hidden={view === 'files'}
 		>
-			<SearchFilter />
+			<SearchFilter>
+				{#snippet trailing()}
+					{#if displayRepo}
+						<AuthorFilter repoId={displayRepo.id} />
+					{/if}
+				{/snippet}
+			</SearchFilter>
 
 			<div class="pr-list" bind:this={prListEl} onscroll={handlePrListScroll}>
 				{#if displayRepo}

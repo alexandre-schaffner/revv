@@ -266,6 +266,18 @@ export interface Org {
   avatarUrl: string | null;
 }
 
+export interface Team {
+  /** GitHub team slug — unique within the org, used as the stable key. */
+  slug: string;
+  /** Human-readable team name. */
+  name: string;
+  /**
+   * Logins of the team's members. Currently capped at the first 100 members
+   * per team (and the first 100 teams per org) — see `listTeamsForOrg`.
+   */
+  memberLogins: string[];
+}
+
 export interface ThreadMessage {
   id: string;
   threadId: string;

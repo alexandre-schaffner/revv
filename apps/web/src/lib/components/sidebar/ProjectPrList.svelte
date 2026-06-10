@@ -1,6 +1,11 @@
 <script lang="ts">
 import { gsapFadeY, tokens } from "$lib/motion";
-import { getOpenPrsByRepoOrdered, getSelectedPrId } from "$lib/stores/prs.svelte";
+import {
+  getOpenPrCountByRepo,
+  getOpenPrsByRepoOrdered,
+  getSelectedPrId,
+  hasActivePrListFilter,
+} from "$lib/stores/prs.svelte";
 import PrItem from "./PrItem.svelte";
 
 interface Props {
@@ -13,11 +18,19 @@ const STAGGER_CAP = 20;
 
 const prs = $derived(getOpenPrsByRepoOrdered(repoId));
 const selectedPrId = $derived(getSelectedPrId());
+const hasRawOpenPrs = $derived(getOpenPrCountByRepo(repoId) > 0);
+const filtered = $derived(hasActivePrListFilter());
 </script>
 
 <div class="pr-list-body select-none">
 	{#if prs.length === 0}
-		<p class="empty">No open pull requests</p>
+		<p class="empty">
+			{#if hasRawOpenPrs && filtered}
+				No matching pull requests
+			{:else}
+				No open pull requests
+			{/if}
+		</p>
 	{:else}
 		{#each prs as pr, i (pr.id)}
 			<div

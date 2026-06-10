@@ -96,6 +96,7 @@ export type {
   SessionStatus,
   SyncChange,
   SyncChangeKind,
+  Team,
   ThemePreference,
   ThinkingEffort,
   ThreadMessage,
