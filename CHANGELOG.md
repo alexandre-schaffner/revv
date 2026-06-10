@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.10.0](https://github.com/alexandre-schaffner/revv/compare/v0.9.0...v0.10.0) (2026-06-10)
+
+
+### Features
+
+* filter PR by teams or creators ([#117](https://github.com/alexandre-schaffner/revv/issues/117)) ([b11fd60](https://github.com/alexandre-schaffner/revv/commit/b11fd602fa91e7db5bff70f8c095aeba2e34973a))
+* **web:** unify markdown rendering on @tailwindcss/typography ([#121](https://github.com/alexandre-schaffner/revv/issues/121)) ([9f5906d](https://github.com/alexandre-schaffner/revv/commit/9f5906db21369838170cd4af88658a352034e122))
+
+
+### Bug Fixes
+
+* **diff:** show all comments in unified view after SSR hydrate ([#114](https://github.com/alexandre-schaffner/revv/issues/114)) ([#122](https://github.com/alexandre-schaffner/revv/issues/122)) ([715aa77](https://github.com/alexandre-schaffner/revv/commit/715aa774664faf82d521a8bda1be156067c2c491))
+* update panel keyboard shortcuts ([#119](https://github.com/alexandre-schaffner/revv/issues/119)) ([f2b7b3b](https://github.com/alexandre-schaffner/revv/commit/f2b7b3b2cd127b5bd789f50921c59d3da6602ad0))
+* **web:** instant pane toggles + repair Cmd+Option+B shortcut ([#123](https://github.com/alexandre-schaffner/revv/issues/123)) ([a6be2d0](https://github.com/alexandre-schaffner/revv/commit/a6be2d081496c598476468538ec31ad01048b8d1))
+
+
+### Performance Improvements
+
+* **server:** cut GitHub poll rate-limit pressure ([#125](https://github.com/alexandre-schaffner/revv/issues/125)) ([4a7f0a7](https://github.com/alexandre-schaffner/revv/commit/4a7f0a7570721883b11937c9751388d554444626))
+
 ## [0.9.0](https://github.com/alexandre-schaffner/revv/compare/v0.8.0...v0.9.0) (2026-06-03)
 
 
