@@ -162,6 +162,13 @@
       "when": 1779580000000,
       "tag": "0190_account_reauth_required",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "6",
+      "when": 1779585000000,
+      "tag": "0210_github_client_id",
+      "breakpoints": true
     }
   ]
 }

@@ -1,4 +1,5 @@
 <script lang="ts">
+import CaretDown from "phosphor-svelte/lib/CaretDown";
 import ChevronLeft from "phosphor-svelte/lib/CaretLeft";
 import {
   cancelSignIn,
@@ -6,7 +7,7 @@ import {
   getIsAuthenticated,
   setForceOnboardingFlow,
 } from "$lib/stores/auth.svelte";
-import { getGithubHost, setGithubHost } from "$lib/stores/settings.svelte";
+import { getGithubClientId, getGithubHost, setGithubConfig } from "$lib/stores/settings.svelte";
 
 interface Props {
   onContinue: () => void;
@@ -15,15 +16,45 @@ interface Props {
 
 let { onContinue, onBack }: Props = $props();
 
-const NOCTURLAB = "nocturlab.ghe.com";
 const PUBLIC = "github.com";
+// Sentinel for the radio group — the actual host comes from `customHost`.
+const CUSTOM = "custom";
 
-let selected = $state<string>(getGithubHost() ?? NOCTURLAB);
+// Resolve the initial selection from stored settings: the only host with a
+// bundled client ID is github.com; anything else is a user-added GitHub
+// Enterprise instance and goes through the custom path.
+const storedHost = getGithubHost();
+const isStoredCustom = storedHost !== null && storedHost !== PUBLIC;
+
+let selected = $state<string>(isStoredCustom ? CUSTOM : PUBLIC);
+let customHost = $state<string>(isStoredCustom ? (storedHost ?? "") : "");
+let customClientId = $state<string>(isStoredCustom ? getGithubClientId() : "");
+let showInstructions = $state(isStoredCustom);
 let isSaving = $state(false);
 
+/** Strip protocol, whitespace, and trailing slashes so the user can paste a URL. */
+function normalizeHost(raw: string): string {
+  return raw
+    .trim()
+    .replace(/^https?:\/\//i, "")
+    .replace(/\/+$/, "")
+    .trim();
+}
+
+const resolvedHost = $derived(selected === CUSTOM ? normalizeHost(customHost) : selected);
+const resolvedClientId = $derived(selected === CUSTOM ? customClientId.trim() : "");
+// Example URL for the "create a GitHub App" instructions — uses the host the
+// user typed once it's present, otherwise a placeholder.
+const appCreateUrl = $derived(`https://${resolvedHost || "your-ghe-host.com"}/settings/apps/new`);
+const canContinue = $derived(
+  selected !== CUSTOM || (resolvedHost.length > 0 && resolvedClientId.length > 0),
+);
+
 async function handleContinue() {
+  if (!canContinue) return;
+
   const previousHost = getGithubHost();
-  const hostChanged = previousHost !== null && previousHost !== selected;
+  const hostChanged = previousHost !== null && previousHost !== resolvedHost;
 
   if (hostChanged && getIsAuthenticated()) {
     // Suppress the AccountPicker — we're still inside the onboarding
@@ -35,7 +66,8 @@ async function handleContinue() {
 
   isSaving = true;
   try {
-    await setGithubHost(selected);
+    // Bundled hosts carry no client ID; clear any previously-saved custom one.
+    await setGithubConfig(resolvedHost, resolvedClientId);
     onContinue();
   } finally {
     isSaving = false;
@@ -59,18 +91,6 @@ async function handleContinue() {
 	<fieldset class="options">
 		<legend class="visually-hidden">GitHub host</legend>
 
-		<label class="option" data-selected={selected === NOCTURLAB}>
-			<input type="radio" name="host" value={NOCTURLAB} bind:group={selected} />
-			<span class="option-mark" aria-hidden="true"></span>
-			<span class="option-body">
-				<span class="option-row">
-					<span class="option-name">Nocturlab</span>
-					<span class="option-tag">recommended</span>
-				</span>
-				<span class="option-host">{NOCTURLAB}</span>
-			</span>
-		</label>
-
 		<label class="option" data-selected={selected === PUBLIC}>
 			<input type="radio" name="host" value={PUBLIC} bind:group={selected} />
 			<span class="option-mark" aria-hidden="true"></span>
@@ -81,10 +101,108 @@ async function handleContinue() {
 				<span class="option-host">{PUBLIC}</span>
 			</span>
 		</label>
+
+		<label class="option" data-selected={selected === CUSTOM}>
+			<input type="radio" name="host" value={CUSTOM} bind:group={selected} />
+			<span class="option-mark" aria-hidden="true"></span>
+			<span class="option-body">
+				<span class="option-row">
+					<span class="option-name">GitHub Enterprise</span>
+				</span>
+				<span class="option-host">your own Enterprise Cloud host (e.g. acme.ghe.com)</span>
+			</span>
+		</label>
 	</fieldset>
 
+	{#if selected === CUSTOM}
+		<div class="custom">
+			<div class="field">
+				<label class="field-label" for="ghe-host">Enterprise host</label>
+				<input
+					id="ghe-host"
+					class="field-input"
+					type="text"
+					autocapitalize="off"
+					autocorrect="off"
+					spellcheck="false"
+					placeholder="acme.ghe.com"
+					bind:value={customHost}
+				/>
+			</div>
+
+			<div class="field">
+				<label class="field-label" for="ghe-client-id">GitHub App client ID</label>
+				<input
+					id="ghe-client-id"
+					class="field-input"
+					type="text"
+					autocapitalize="off"
+					autocorrect="off"
+					spellcheck="false"
+					placeholder="Iv23xxxxxxxxxxxxxxxx"
+					bind:value={customClientId}
+				/>
+				<p class="field-hint">
+					Revv has no app registered on your instance — you create one and paste its
+					public client ID here. It's safe to store (it isn't a secret).
+				</p>
+			</div>
+
+			<div class="guide" data-open={showInstructions}>
+				<button
+					type="button"
+					class="guide-toggle"
+					aria-expanded={showInstructions}
+					onclick={() => (showInstructions = !showInstructions)}
+				>
+					<CaretDown size={13} weight="bold" />
+					<span>How to create the GitHub App</span>
+				</button>
+
+				{#if showInstructions}
+					<ol class="guide-steps">
+						<li>
+							On your instance, open
+							<a href={appCreateUrl} target="_blank" rel="noopener noreferrer" class="guide-link"
+								>{appCreateUrl}</a
+							>
+							(or, for an org, its <em>Settings → Developer settings → GitHub Apps → New</em>).
+						</li>
+						<li>Name it <strong>Revv</strong>. Any homepage URL is fine.</li>
+						<li>
+							Under <em>Webhook</em>, <strong>uncheck “Active”</strong> — Revv polls locally and
+							needs no webhook deliveries.
+						</li>
+						<li>
+							Set <em>Repository permissions</em>:
+							<span class="perms">
+								<span><strong>Pull requests</strong> → Read &amp; write</span>
+								<span><strong>Contents</strong> → Read &amp; write</span>
+								<span><strong>Metadata</strong> → Read-only</span>
+							</span>
+							Leave everything else at <em>No access</em>.
+						</li>
+						<li>
+							Under <em>Where can this GitHub App be installed?</em> pick whichever fits, then
+							<strong>tick “Enable Device Flow.”</strong> Leave “Request user authorization (OAuth)
+							during installation” unchecked.
+						</li>
+						<li>
+							Create the app, copy its <strong>Client ID</strong> (starts with <code>Iv</code>),
+							and paste it above.
+						</li>
+						<li>
+							Finally, <strong>Install</strong> the app on the repositories you want Revv to see —
+							you'll only review PRs from installed repos.
+						</li>
+					</ol>
+				{/if}
+			</div>
+		</div>
+	{/if}
+
 	<div class="actions">
-		<button class="primary" onclick={handleContinue} disabled={isSaving}>
+		<button class="primary" onclick={handleContinue} disabled={isSaving || !canContinue}>
 			<span>Continue</span>
 			<svg
 				width="18"
@@ -265,14 +383,6 @@ async function handleContinue() {
 		font-style: italic;
 	}
 
-	.option-tag {
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 9.5px;
-		letter-spacing: 0.18em;
-		text-transform: uppercase;
-		color: var(--ob-text-label);
-	}
-
 	.option-host {
 		font-family: var(--font-mono, 'JetBrains Mono', monospace);
 		font-size: 12px;
@@ -340,7 +450,165 @@ async function handleContinue() {
 		cursor: not-allowed;
 	}
 
+	/* ── Custom GHE host ────────────────────────────────────────── */
+	.custom {
+		display: flex;
+		flex-direction: column;
+		gap: 22px;
+		margin-top: -8px;
+		animation: custom-in var(--duration-smooth) var(--ease-out-expo) backwards;
+	}
+
+	@keyframes custom-in {
+		from {
+			opacity: 0;
+			transform: translateY(-4px);
+		}
+		to {
+			opacity: 1;
+			transform: translateY(0);
+		}
+	}
+
+	.field {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+
+	.field-label {
+		font-family: var(--font-mono, 'JetBrains Mono', monospace);
+		font-size: 10.5px;
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+		color: var(--ob-text-label);
+	}
+
+	.field-input {
+		width: 100%;
+		padding: 11px 14px;
+		background: var(--ob-hover-subtle);
+		border: 1px solid var(--ob-border-btn);
+		border-radius: 2px;
+		color: var(--ob-text-heading);
+		font-family: var(--font-mono, 'JetBrains Mono', monospace);
+		font-size: 13px;
+		letter-spacing: 0.01em;
+		transition: border-color var(--duration-snap) var(--ease-out-expo);
+	}
+
+	.field-input::placeholder {
+		color: var(--ob-text-muted);
+	}
+
+	.field-input:focus {
+		outline: none;
+		border-color: var(--ob-text-italic);
+	}
+
+	.field-hint {
+		margin: 0;
+		font-family: 'Newsreader', Georgia, serif;
+		font-size: 13.5px;
+		line-height: 1.55;
+		color: var(--ob-text-muted);
+	}
+
+	.guide {
+		border-top: 1px solid var(--ob-border);
+		padding-top: 16px;
+	}
+
+	.guide-toggle {
+		display: inline-flex;
+		align-items: center;
+		gap: 9px;
+		background: none;
+		border: 0;
+		padding: 0;
+		cursor: pointer;
+		color: var(--ob-text-label);
+		font-family: var(--font-mono, 'JetBrains Mono', monospace);
+		font-size: 10.5px;
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+		transition: color var(--duration-snap) var(--ease-out-expo);
+	}
+
+	.guide-toggle:hover {
+		color: var(--ob-text-italic);
+	}
+
+	.guide-toggle :global(svg) {
+		transition: transform var(--duration-quick) var(--ease-out-expo);
+	}
+
+	.guide[data-open='true'] .guide-toggle :global(svg) {
+		transform: rotate(180deg);
+	}
+
+	.guide-steps {
+		margin: 16px 0 0;
+		padding-left: 20px;
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+		font-family: 'Newsreader', Georgia, serif;
+		font-size: 14.5px;
+		line-height: 1.6;
+		color: var(--ob-text-body);
+		animation: custom-in var(--duration-smooth) var(--ease-out-expo) backwards;
+	}
+
+	.guide-steps li {
+		padding-left: 4px;
+	}
+
+	.guide-steps em {
+		color: var(--ob-text-italic);
+		font-style: italic;
+	}
+
+	.guide-steps strong {
+		color: var(--ob-text-heading);
+		font-weight: 600;
+	}
+
+	.perms {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		margin: 8px 0;
+		font-family: var(--font-mono, 'JetBrains Mono', monospace);
+		font-size: 12px;
+		color: var(--ob-text-body);
+	}
+
+	.guide-steps code {
+		font-family: var(--font-mono, 'JetBrains Mono', monospace);
+		font-size: 12.5px;
+		padding: 1px 5px;
+		border-radius: 3px;
+		background: var(--ob-hover-subtle);
+		color: var(--ob-text-heading);
+	}
+
+	.guide-link {
+		color: var(--ob-text-muted);
+		word-break: break-all;
+		transition: color var(--duration-snap) var(--ease-out-expo);
+	}
+
+	.guide-link:hover {
+		color: var(--ob-text-italic);
+	}
+
 	@media (prefers-reduced-motion: reduce) {
+		.custom,
+		.guide-steps {
+			animation: none !important;
+		}
+
 		.option,
 		.option[data-selected='true'] .option-mark::after,
 		.actions {

@@ -1,0 +1,1 @@
+ALTER TABLE `user_settings` ADD `github_client_id` text DEFAULT '' NOT NULL;

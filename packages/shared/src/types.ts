@@ -147,12 +147,21 @@ export interface UserSettings {
     agent: RecapAgentChoice;
   };
   /**
-   * GitHub host the app authenticates against. `'nocturlab.ghe.com'` for
-   * the bundled GHE instance (default) or `'github.com'` for public
-   * GitHub. Picked during onboarding and consumed by the device-flow
-   * routes to build per-host OAuth and API URLs.
+   * GitHub host the app authenticates against. `'github.com'` for public
+   * GitHub (the default), or any GitHub Enterprise host the user enters
+   * during onboarding. Consumed by the device-flow routes to build per-host
+   * OAuth and API URLs.
    */
   githubHost: string;
+  /**
+   * GitHub OAuth/App client ID for a user-added GitHub Enterprise host.
+   * Empty string for `github.com`, whose client ID comes from server config.
+   * When a user points Revv at their own GHE instance they register a GitHub
+   * App there and paste its public client ID here — there is no bundled
+   * registration on a customer's host. An `Iv…` prefix marks a GitHub App
+   * (device flow sends no scope); `Ov…` marks a classic OAuth App.
+   */
+  githubClientId: string;
   /**
    * Team-shared walkthrough cache settings. Backed by a single GCS
    * bucket — IAM grants are the team boundary. When `enabled` is off,

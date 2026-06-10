@@ -5,7 +5,12 @@ import { db, GITHUB_CLIENT_ID } from "../auth";
 import { serverEnv } from "../config";
 import { account, session, user } from "../db/schema";
 import { remoteUsers } from "../db/schema/remote-users";
-import { clientIdForHost, isPublicGitHub, tokenUrlForHost } from "../github-oauth";
+import {
+  clientIdForHost,
+  clientIdIsGitHubApp,
+  isPublicGitHub,
+  tokenUrlForHost,
+} from "../github-oauth";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
 import { Identity } from "../services/Identity";
@@ -13,24 +18,32 @@ import { RemoteUserService } from "../services/RemoteUser";
 import { SettingsService } from "../services/Settings";
 import { withAuth } from "./middleware";
 
-// The device-code flow needs `client_id` only — no client_secret. If the
-// bundled id is missing (someone replaced it with a placeholder), warn early
-// so sign-in failures are easy to diagnose.
-if (
-  !GITHUB_CLIENT_ID ||
-  GITHUB_CLIENT_ID.startsWith("BUNDLED_") ||
-  GITHUB_CLIENT_ID.startsWith("REPLACE_")
-) {
+// The device-code flow needs `client_id` only — no client_secret. An empty
+// `GITHUB_CLIENT_ID` is now normal: GHE hosts supply their client ID during
+// onboarding (stored in settings), and the env var is only an override for a
+// fixed self-hosted deployment. We warn only if it's been set to an obvious
+// placeholder, and otherwise diagnose missing-client-id at request time (see
+// `clientIdForHost`).
+if (GITHUB_CLIENT_ID.startsWith("BUNDLED_") || GITHUB_CLIENT_ID.startsWith("REPLACE_")) {
   logError(
     "device-auth",
-    "WARNING: GITHUB_CLIENT_ID looks like a placeholder — sign-in will fail for GHE. " +
-      "Override with the GITHUB_CLIENT_ID env var or fix the bundled value in apps/server/src/config.ts",
+    "WARNING: GITHUB_CLIENT_ID looks like a placeholder — sign-in will fail. " +
+      "Set GITHUB_CLIENT_ID to a real client ID or leave it empty and configure the host during onboarding.",
   );
 }
-// GITHUB_CLIENT_ID_PUBLIC being empty is fine if the user never picks github.com —
-// we warn at request time instead of boot time (see resolveGithubUrls).
 
+// Classic OAuth App device-flow scope. GitHub App sign-in (bundled Pro, or a
+// user-registered GitHub App on a GHE host) sends no scope — its permissions
+// are fixed at registration/install, not requested at login — so this applies
+// only to OAuth-App client IDs. See `clientIdIsGitHubApp` in github-oauth.ts.
 const DEVICE_FLOW_SCOPE = "repo read:org user:email";
+
+/** Scope persisted on the account row, and sent at device-code request, keyed
+ * on the resolved client ID. `null` for the GitHub App path (no scope concept,
+ * detected from the `Iv…` prefix). */
+function deviceFlowScopeFor(clientId: string): string | null {
+  return clientIdIsGitHubApp(clientId) ? null : DEVICE_FLOW_SCOPE;
+}
 
 /**
  * Resolve the GitHub host at request time from user settings (set during
@@ -54,9 +67,12 @@ async function resolveGithubUrls(hostOverride?: string): Promise<{
   const host = hostOverride?.trim() || settings?.githubHost?.trim() || serverEnv.githubHost;
   const githubBase = `https://${host}`;
   const apiBase = isPublicGitHub(host) ? "https://api.github.com" : `https://api.${host}`;
+  // The BYO client ID applies only to the host it was saved with. For
+  // github.com it's empty and the resolver falls back to server config.
+  const customClientId = settings?.githubHost?.trim() === host ? settings?.githubClientId : null;
   return {
     host,
-    clientId: clientIdForHost(host),
+    clientId: clientIdForHost(host, customClientId),
     deviceCodeUrl: `${githubBase}/login/device/code`,
     tokenUrl: tokenUrlForHost(host),
     userUrl: `${apiBase}/user`,
@@ -191,7 +207,7 @@ async function retryFetch<T>(
 
 async function upsertUserAndSession(
   tokens: ResolvedTokens,
-  urls: { host: string; userUrl: string; emailsUrl: string },
+  urls: { host: string; clientId: string; userUrl: string; emailsUrl: string },
 ): Promise<string> {
   const { accessToken } = tokens;
   const githubUser = await retryFetch(() => fetchGitHubUser(accessToken, urls), 2, 1000);
@@ -290,7 +306,7 @@ async function upsertUserAndSession(
       userId,
       githubLogin: githubUser.login,
       avatarUrl: githubUser.avatar_url,
-      scope: DEVICE_FLOW_SCOPE,
+      scope: deviceFlowScopeFor(urls.clientId),
       accessTokenExpiresAt: tokens.accessTokenExpiresAt,
       refreshTokenExpiresAt: tokens.refreshTokenExpiresAt,
       createdAt: now,
@@ -321,7 +337,7 @@ async function upsertUserAndSession(
 
 async function upsertAccountForUser(
   tokens: ResolvedTokens,
-  urls: { host: string; userUrl: string },
+  urls: { host: string; clientId: string; userUrl: string },
   userId: string,
 ): Promise<void> {
   const githubUser = await retryFetch(() => fetchGitHubUser(tokens.accessToken, urls), 2, 1000);
@@ -356,7 +372,7 @@ async function upsertAccountForUser(
       userId,
       githubLogin: githubUser.login,
       avatarUrl: githubUser.avatar_url,
-      scope: DEVICE_FLOW_SCOPE,
+      scope: deviceFlowScopeFor(urls.clientId),
       accessTokenExpiresAt: tokens.accessTokenExpiresAt,
       refreshTokenExpiresAt: tokens.refreshTokenExpiresAt,
       createdAt: now,
@@ -370,7 +386,10 @@ async function upsertAccountForUser(
   });
 }
 
-const KNOWN_HOSTS = ["nocturlab.ghe.com", "github.com"] as const;
+// Hosts Revv ships a bundled client ID for. Always offered in the connected-
+// accounts list even when not yet connected. User-added GitHub Enterprise
+// hosts are discovered from the account rows themselves.
+const BUNDLED_HOSTS = ["github.com"] as const;
 
 // Public routes — no session required
 const publicAuthRoutes = new Elysia()
@@ -480,7 +499,12 @@ const publicAuthRoutes = new Elysia()
       const res = await fetch(urls.deviceCodeUrl, {
         method: "POST",
         headers: { Accept: "application/json", "Content-Type": "application/json" },
-        body: JSON.stringify({ client_id: urls.clientId, scope: DEVICE_FLOW_SCOPE }),
+        body: JSON.stringify({
+          client_id: urls.clientId,
+          // GitHub App device-code requests send no scope (permissions are
+          // fixed at registration/install). OAuth Apps request the scope.
+          ...(clientIdIsGitHubApp(urls.clientId) ? {} : { scope: DEVICE_FLOW_SCOPE }),
+        }),
       });
 
       if (!res.ok) {
@@ -585,30 +609,42 @@ const protectedAuthRoutes = new Elysia()
   .use(withAuth)
   .get("/api/auth/accounts", async (ctx) => {
     const userId = ctx.session.user.id;
-    return Promise.all(
-      KNOWN_HOSTS.map(async (host) => {
-        const providerId = `github:${host}`;
-        const accountRow = await db
-          .select()
-          .from(account)
-          .where(and(eq(account.providerId, providerId), eq(account.userId, userId)))
-          .then((r) => r[0] ?? null);
-        return {
-          host,
-          connected: accountRow !== null,
-          githubLogin: accountRow?.githubLogin ?? null,
-          avatarUrl: accountRow?.avatarUrl ?? null,
-        };
-      }),
-    );
+
+    // Derive the connected hosts from the user's actual account rows rather
+    // than a fixed list, so a user-added GitHub Enterprise host shows up
+    // alongside the bundled ones. The bundled hosts are always listed (as
+    // connected:false when absent) so the UI can offer them to connect.
+    const rows = await db
+      .select({
+        providerId: account.providerId,
+        githubLogin: account.githubLogin,
+        avatarUrl: account.avatarUrl,
+      })
+      .from(account)
+      .where(eq(account.userId, userId));
+
+    const byHost = new Map<string, { githubLogin: string | null; avatarUrl: string | null }>();
+    for (const r of rows) {
+      const host = r.providerId.split(":")[1];
+      if (!host) continue;
+      byHost.set(host, { githubLogin: r.githubLogin ?? null, avatarUrl: r.avatarUrl ?? null });
+    }
+
+    const hosts = new Set<string>([...BUNDLED_HOSTS, ...byHost.keys()]);
+    return [...hosts].map((host) => {
+      const connected = byHost.get(host);
+      return {
+        host,
+        connected: connected !== undefined,
+        githubLogin: connected?.githubLogin ?? null,
+        avatarUrl: connected?.avatarUrl ?? null,
+      };
+    });
   })
   .post(
     "/api/auth/accounts/disconnect",
     async (ctx) => {
       const { host } = ctx.body;
-      if (!KNOWN_HOSTS.includes(host as (typeof KNOWN_HOSTS)[number])) {
-        return ctx.status(400, { error: `Unknown host: ${host}` });
-      }
       const providerId = `github:${host}`;
       const userId = ctx.session.user.id;
 

@@ -1013,7 +1013,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 						<Input
 							id="cache-trusted-hosts"
 							type="text"
-							placeholder="github.com, nocturlab.ghe.com"
+							placeholder="github.com, acme.ghe.com"
 							value={trustedHostsToText(getSettings()?.cache?.signing?.trustedSignerHosts)}
 							onchange={(e) => {
 								void updateSettings({
