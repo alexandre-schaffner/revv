@@ -1049,8 +1049,19 @@ export const PollSchedulerLive = Layer.effect(
 
     const startThreadFiber: Effect.Effect<void> = Effect.gen(function* () {
       const schedule = Schedule.spaced(Duration.seconds(THREAD_SYNC_INTERVAL_SECONDS));
+      // Delay the FIRST background thread sweep by one interval. At boot the
+      // PR-sync fiber already fires immediately (repo metadata + user avatars +
+      // listOpen per repo + archive backfill), and running the all-open-PRs
+      // thread sweep concurrently on top of that produces a request burst that
+      // trips GitHub's *secondary* (abuse) rate limit — the "rate limited as
+      // soon as I open Revv" symptom, made worse when an IDE shares the
+      // account. Opening a PR force-syncs its threads on demand, so this delay
+      // never affects the PR the user is actually looking at.
       const fiber: Fiber.RuntimeFiber<number, never> = yield* Effect.fork(
-        syncThreadsForOpenPrs.pipe(Effect.repeat(schedule)),
+        syncThreadsForOpenPrs.pipe(
+          Effect.repeat(schedule),
+          Effect.delay(Duration.seconds(THREAD_SYNC_INTERVAL_SECONDS)),
+        ),
       );
       yield* Ref.set(threadFiberRef, fiber);
     });

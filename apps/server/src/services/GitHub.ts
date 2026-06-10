@@ -296,7 +296,7 @@ interface GitHubGatewayFlatService {
     prNumber: number,
     since: string | null,
     token: string,
-  ) => Effect.Effect<GhReviewComment[], GitHubError, SettingsService>;
+  ) => Effect.Effect<GhReviewComment[], GitHubError, DbService | GitHubEtagCache | SettingsService>;
   readonly listReviewThreads: (
     repoFullName: string,
     prNumber: number,
@@ -917,11 +917,20 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       const apiBase = yield* resolveApiBase;
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       const sinceQ = since ? `&since=${encodeURIComponent(since)}` : "";
-      const data = yield* githubFetchPaginated(
+      // Conditional (ETag) fetch: this is the per-PR REST call the 30s thread
+      // poll fires for every open PR. A conditional request that returns 304
+      // does NOT count against GitHub's primary REST rate limit, so quiet PRs
+      // (the overwhelming majority each tick) become free. The cache key folds
+      // in `since`, which only advances when new comments actually arrive — so
+      // an unchanged PR replays the same key and 304s. `canReplayCached` only
+      // allows the cheap replay when the cached body was a single (<100) page;
+      // a full page means there may be more, so we force a refetch.
+      const data = yield* conditionalFetchPaginated(
         `/repos/${owner}/${repo}/pulls/${prNumber}/comments?per_page=100${sinceQ}`,
         token,
         5,
         apiBase,
+        { canReplayCached: (cached) => cached.length < 100 },
       );
       return (data as Record<string, unknown>[]).map((raw): GhReviewComment => {
         const user = (raw.user as Record<string, unknown> | null) ?? {};
