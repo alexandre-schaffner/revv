@@ -209,6 +209,17 @@ export function setReviewMode(prId: string, mode: ReviewMode): void {
   clearSession();
 }
 
+/**
+ * Switch the active review mode for a PR and re-hydrate its session. This is
+ * the single entry point used by the mode toggle in the top bar — it only
+ * changes context (mode + session), it never starts walkthrough generation.
+ */
+export function selectReviewMode(prId: string, mode: ReviewMode): void {
+  if (getReviewMode(prId) === mode) return;
+  setReviewMode(prId, mode);
+  void loadSession(prId, mode);
+}
+
 function clearSession(): void {
   sessionId = null;
   threads = [];

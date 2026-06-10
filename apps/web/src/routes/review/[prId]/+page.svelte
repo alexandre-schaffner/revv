@@ -1,7 +1,5 @@
 <script lang="ts">
 import type { ReviewMode } from "@revv/shared";
-import User from "phosphor-svelte/lib/User";
-import Users from "phosphor-svelte/lib/Users";
 import { onDestroy, untrack } from "svelte";
 import { page } from "$app/state";
 import { api } from "$lib/api/client";
@@ -31,7 +29,6 @@ import {
   setLoadedHeadSha,
   setPrScrollPosition,
   setReviewFiles,
-  setReviewMode,
   switchPrViewState,
 } from "$lib/stores/review.svelte";
 import { requestThreadSync } from "$lib/stores/sync.svelte";
@@ -68,13 +65,6 @@ const riskClasses: Record<string, string> = {
 };
 
 let scrollRootEl: HTMLDivElement | undefined = $state(undefined);
-
-function selectReviewMode(mode: ReviewMode): void {
-  const prId = page.params.prId;
-  if (!prId || mode === reviewMode) return;
-  setReviewMode(prId, mode);
-  void loadSession(prId, mode);
-}
 
 // Per-PR scroll persistence for the walkthrough / request-changes tabs.
 // (Diff tab has its own scroll container inside ReviewLayout.svelte and
@@ -312,31 +302,7 @@ onDestroy(() => {
 				class="page-title-section"
 				class:page-title-section--narrow={activeTab === 'walkthrough' || activeTab === 'request-changes'}
 			>
-				<div class="title-row">
-					<h1 class="page-title">{pr.title}</h1>
-					<div class="review-mode-switch" role="group" aria-label="Review mode">
-						<button
-							type="button"
-							class:active={reviewMode === 'reviewer'}
-							aria-pressed={reviewMode === 'reviewer'}
-							title="Review someone else's PR"
-							onclick={() => selectReviewMode('reviewer')}
-						>
-							<Users size={14} weight="regular" />
-							Reviewer
-						</button>
-						<button
-							type="button"
-							class:active={reviewMode === 'author'}
-							aria-pressed={reviewMode === 'author'}
-							title="Self-review your own PR"
-							onclick={() => selectReviewMode('author')}
-						>
-							<User size={14} weight="regular" />
-							Self-review
-						</button>
-					</div>
-				</div>
+				<h1 class="page-title">{pr.title}</h1>
 				<span class="page-subtitle">#{pr.externalId} · {pr.sourceBranch} → {pr.targetBranch}</span>
 				{#if activeTab === 'walkthrough' && walkthroughRiskLevel}
 					<Badge variant="outline" class={riskClasses[walkthroughRiskLevel] ?? ''}>
@@ -470,48 +436,6 @@ onDestroy(() => {
 				0
 				minmax(32px, 1fr);
 		}
-	}
-
-	.title-row {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		min-width: 0;
-	}
-
-	.review-mode-switch {
-		display: inline-grid;
-		grid-template-columns: minmax(84px, auto) minmax(102px, auto);
-		align-items: center;
-		min-height: 30px;
-		padding: 2px;
-		border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
-		border-radius: 8px;
-		background: color-mix(in srgb, var(--color-bg-elevated) 78%, transparent);
-		flex-shrink: 0;
-	}
-
-	.review-mode-switch button {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		gap: 6px;
-		height: 26px;
-		padding: 0 10px;
-		border: 0;
-		border-radius: 6px;
-		background: transparent;
-		color: var(--color-text-muted);
-		font-size: 12px;
-		font-weight: 500;
-		line-height: 1;
-		white-space: nowrap;
-	}
-
-	.review-mode-switch button.active {
-		background: color-mix(in srgb, var(--color-bg) 92%, var(--color-bg-elevated));
-		color: var(--color-text-primary);
-		box-shadow: 0 1px 2px color-mix(in srgb, var(--color-text-primary) 12%, transparent);
 	}
 
 	.page-title {
