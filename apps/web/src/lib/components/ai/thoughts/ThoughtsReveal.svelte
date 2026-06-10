@@ -9,33 +9,47 @@ import {
 
 interface Props {
   open: boolean;
-  blocks: ReadonlyArray<{ id: string; html: string }>;
+  blocks?: ReadonlyArray<{ id: string; html: string }>;
+  children?: Snippet;
   triggerClass: string;
   ariaLabel: string;
   prefix?: Snippet;
+  metaLabel?: string;
 }
 
-let { open = $bindable(), blocks, triggerClass, ariaLabel, prefix }: Props = $props();
+let {
+  open = $bindable(),
+  blocks = [],
+  children,
+  triggerClass,
+  ariaLabel,
+  prefix,
+  metaLabel = "Thoughts",
+}: Props = $props();
 </script>
 
 <Collapsible bind:open>
   <CollapsibleTrigger class={triggerClass} aria-label={ariaLabel}>
     {#if prefix}{@render prefix()}{/if}
     <div class="meta">
-      <span>Thoughts</span>
+      {#if metaLabel}<span>{metaLabel}</span>{/if}
       <span class="chevron-wrap" data-state={open ? "open" : "closed"}>
         <CaretDown class="chevron" aria-hidden="true" />
       </span>
     </div>
   </CollapsibleTrigger>
   <CollapsibleContent class="thought-content">
-    <div class="thought-stream">
-      {#each blocks as block (block.id)}
-        <div class="thought-markdown-block prose prose-sm">
-          {@html block.html}
-        </div>
-      {/each}
-    </div>
+    {#if children}
+      {@render children()}
+    {:else}
+      <div class="thought-stream">
+        {#each blocks as block (block.id)}
+          <div class="thought-markdown-block prose prose-sm">
+            {@html block.html}
+          </div>
+        {/each}
+      </div>
+    {/if}
   </CollapsibleContent>
 </Collapsible>
 

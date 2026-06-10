@@ -4,6 +4,7 @@ import ChevronDown from "phosphor-svelte/lib/CaretDown";
 import { mermaidDiagrams } from "$lib/actions/mermaid.svelte";
 import { getResolvedTheme } from "$lib/stores/theme.svelte";
 import { renderMarkdown } from "$lib/utils/markdown";
+import WalkthroughArtifactBlock from "./WalkthroughArtifactBlock.svelte";
 import WalkthroughCodeBlock from "./WalkthroughCodeBlock.svelte";
 import WalkthroughDiffBlock from "./WalkthroughDiffBlock.svelte";
 import WalkthroughMarkdownBlock from "./WalkthroughMarkdownBlock.svelte";
@@ -157,6 +158,8 @@ $effect(() => {
 							<WalkthroughCodeBlock {block} hideAnnotation />
 						{:else if block.type === 'diff'}
 							<WalkthroughDiffBlock {block} hideAnnotation />
+						{:else if block.type === 'artifact'}
+							<WalkthroughArtifactBlock {block} />
 						{/if}
 					</div>
 

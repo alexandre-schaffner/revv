@@ -96,6 +96,9 @@ function parseBlock(row: typeof walkthroughBlocks.$inferSelect): ParsedBlock {
     case "diff":
       content = str("patch");
       break;
+    case "artifact":
+      content = str("html");
+      break;
     default:
       content = JSON.stringify(parsed);
   }

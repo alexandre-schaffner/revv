@@ -77,7 +77,7 @@ export type ChatEditToolSpecRecord = GatewayToolSpec<
 /**
  * Atomic block content variant. Same shape used by the generation pipeline's
  * `add_diff_step` / `add_semantic_step.initial_block`. Exactly one of
- * `markdown`, `code`, or `diff` must be provided.
+ * `markdown`, `code`, `diff`, or `artifact` must be provided.
  */
 export const blockContentSchema = z
   .object({
@@ -86,7 +86,7 @@ export const blockContentSchema = z
       .nullable()
       .optional()
       .describe(
-        "Use for narrative/explanatory content. Mutually exclusive with `code` and `diff`.",
+        "Use for narrative/explanatory content. Mutually exclusive with `code`, `diff`, and `artifact`.",
       ),
     code: z
       .object({
@@ -100,7 +100,9 @@ export const blockContentSchema = z
       })
       .nullable()
       .optional()
-      .describe("Use for source-code excerpts. Mutually exclusive with `markdown` and `diff`."),
+      .describe(
+        "Use for source-code excerpts. Mutually exclusive with `markdown`, `diff`, and `artifact`.",
+      ),
     diff: z
       .object({
         file_path: z.string(),
@@ -110,10 +112,27 @@ export const blockContentSchema = z
       })
       .nullable()
       .optional()
-      .describe("Use for unified-diff hunks. Mutually exclusive with `markdown` and `code`."),
+      .describe(
+        "Use for unified-diff hunks. Mutually exclusive with `markdown`, `code`, and `artifact`.",
+      ),
+    artifact: z
+      .object({
+        html: z
+          .string()
+          .describe(
+            "A complete, self-contained HTML document with inline CSS/JS. Vanilla JS only; no external network/CDN; no localStorage. Renders in a sandboxed iframe. Style with the injected Revv theme variables (`var(--color-*)`, `var(--font-*)`) so it matches the app and follows light/dark — never hardcode colors. See the system prompt for the full token list and design rules.",
+          ),
+        annotation: z.string().nullable(),
+        annotation_position: z.enum(["left", "right"]),
+      })
+      .nullable()
+      .optional()
+      .describe(
+        "Use for an interactive widget when prose/code/diff fall short. Mutually exclusive with markdown, code, and diff.",
+      ),
   })
   .describe(
-    "REQUIRED. Exactly one of { markdown, code, diff } — the same shape add_diff_step uses.",
+    "REQUIRED. Exactly one of { markdown, code, diff, artifact } — the same shape add_diff_step uses.",
   );
 
 /** Composite identifier for an existing diff block (matches walkthrough-tool-spec.ts). */
@@ -381,5 +400,3 @@ export type DeleteIssueInput = z.infer<typeof deleteIssueSchema>;
 export type AddIssueCommentEditInput = z.infer<typeof addIssueCommentEditSchema>;
 export type UpdateIssueCommentInput = z.infer<typeof updateIssueCommentSchema>;
 export type DeleteIssueCommentInput = z.infer<typeof deleteIssueCommentSchema>;
-
-export type BlockContentInput = z.infer<typeof blockContentSchema>;

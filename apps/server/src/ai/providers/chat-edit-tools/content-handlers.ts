@@ -8,13 +8,11 @@ import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import { walkthroughSemanticSteps } from "../../../db/schema/walkthrough-semantic-steps";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
+import { blockVariantCount, buildBlock, emptyBlockError } from "../walkthrough-blocks";
 import { blockIdFor, unwrapJsonWrappedString } from "../walkthrough-tools";
 import {
   assertStillComplete,
-  blockContentVariantCount,
-  buildBlock,
   decodeIssue,
-  emptyBlockContentError,
   fail,
   findIssuesReferencingBlocks,
   ok,
@@ -90,12 +88,12 @@ export const addSemanticStepEditHandler: ChatEditToolHandler<AddSemanticStepEdit
   ctx,
   input,
 ) => {
-  if (blockContentVariantCount(input.initial_block) !== 1) {
+  if (blockVariantCount(input.initial_block) !== 1) {
     return fail(
-      "Error: add_semantic_step.initial_block requires exactly one of { markdown, code, diff }.",
+      "Error: add_semantic_step.initial_block requires exactly one of { markdown, code, diff, artifact }.",
     );
   }
-  const initialBlockErr = emptyBlockContentError(input.initial_block);
+  const initialBlockErr = emptyBlockError(input.initial_block);
   if (initialBlockErr) return fail(initialBlockErr);
   const title = input.title.trim();
   if (title.length === 0) {
@@ -150,11 +148,11 @@ export const addSemanticStepEditHandler: ChatEditToolHandler<AddSemanticStepEdit
       .run();
 
     const blockId = blockIdFor(walkthroughId, input.semantic_step_index, 0);
-    const built = buildBlock(blockId, input.semantic_step_index, 0, {
-      ...(input.initial_block.markdown != null ? { markdown: input.initial_block.markdown } : {}),
-      ...(input.initial_block.code != null ? { code: input.initial_block.code } : {}),
-      ...(input.initial_block.diff != null ? { diff: input.initial_block.diff } : {}),
-    });
+    const block = buildBlock(blockId, input.semantic_step_index, 0, input.initial_block);
+    if (!block) {
+      result = fail("Internal error: add_semantic_step built an empty initial block.");
+      return;
+    }
     ctx.db
       .insert(walkthroughBlocks)
       .values({
@@ -164,8 +162,8 @@ export const addSemanticStepEditHandler: ChatEditToolHandler<AddSemanticStepEdit
         order: input.semantic_step_index * 10000,
         semanticStepIndex: input.semantic_step_index,
         stepIndex: 0,
-        type: built.type,
-        data: built.data,
+        type: block.type,
+        data: JSON.stringify(block),
         createdAt: now,
       })
       .run();
@@ -177,7 +175,7 @@ export const addSemanticStepEditHandler: ChatEditToolHandler<AddSemanticStepEdit
       title,
       summary: input.summary ?? null,
     };
-    emitBlock = built.block;
+    emitBlock = block;
   });
   if (result) return result;
   if (!emitChapter || !emitBlock) {
@@ -395,10 +393,12 @@ export const deleteSemanticStepHandler: ChatEditToolHandler<DeleteSemanticStepIn
 // ── Tool: add_block ─────────────────────────────────────────────────────────
 
 export const addBlockHandler: ChatEditToolHandler<AddBlockInput> = async (ctx, input) => {
-  if (blockContentVariantCount(input.content) !== 1) {
-    return fail("Error: add_block.content requires exactly one of { markdown, code, diff }.");
+  if (blockVariantCount(input.content) !== 1) {
+    return fail(
+      "Error: add_block.content requires exactly one of { markdown, code, diff, artifact }.",
+    );
   }
-  const emptyErr = emptyBlockContentError(input.content);
+  const emptyErr = emptyBlockError(input.content);
   if (emptyErr) return fail(emptyErr);
 
   const active = resolveActiveWalkthroughId(ctx.db, ctx.prId);
@@ -472,11 +472,11 @@ export const addBlockHandler: ChatEditToolHandler<AddBlockInput> = async (ctx, i
     }
 
     const blockId = blockIdFor(walkthroughId, input.semantic_step_index, stepIndex);
-    const built = buildBlock(blockId, input.semantic_step_index, stepIndex, {
-      ...(input.content.markdown != null ? { markdown: input.content.markdown } : {}),
-      ...(input.content.code != null ? { code: input.content.code } : {}),
-      ...(input.content.diff != null ? { diff: input.content.diff } : {}),
-    });
+    const block = buildBlock(blockId, input.semantic_step_index, stepIndex, input.content);
+    if (!block) {
+      result = fail("Internal error: add_block built an empty block.");
+      return;
+    }
     const now = new Date().toISOString();
     ctx.db
       .insert(walkthroughBlocks)
@@ -487,13 +487,13 @@ export const addBlockHandler: ChatEditToolHandler<AddBlockInput> = async (ctx, i
         order: input.semantic_step_index * 10000 + stepIndex,
         semanticStepIndex: input.semantic_step_index,
         stepIndex,
-        type: built.type,
-        data: built.data,
+        type: block.type,
+        data: JSON.stringify(block),
         createdAt: now,
       })
       .run();
     stampLastEdited(ctx.db, walkthroughId, ctx.actor);
-    emitBlock = built.block;
+    emitBlock = block;
     resolvedStepIndex = stepIndex;
   });
   if (result) return result;
@@ -506,10 +506,12 @@ export const addBlockHandler: ChatEditToolHandler<AddBlockInput> = async (ctx, i
 // ── Tool: update_block ──────────────────────────────────────────────────────
 
 export const updateBlockHandler: ChatEditToolHandler<UpdateBlockInput> = async (ctx, input) => {
-  if (blockContentVariantCount(input.content) !== 1) {
-    return fail("Error: update_block.content requires exactly one of { markdown, code, diff }.");
+  if (blockVariantCount(input.content) !== 1) {
+    return fail(
+      "Error: update_block.content requires exactly one of { markdown, code, diff, artifact }.",
+    );
   }
-  const emptyErr = emptyBlockContentError(input.content);
+  const emptyErr = emptyBlockError(input.content);
   if (emptyErr) return fail(emptyErr);
 
   const active = resolveActiveWalkthroughId(ctx.db, ctx.prId);
@@ -545,18 +547,18 @@ export const updateBlockHandler: ChatEditToolHandler<UpdateBlockInput> = async (
     }
 
     const blockId = existing.id;
-    const built = buildBlock(blockId, input.semantic_step_index, input.step_index, {
-      ...(input.content.markdown != null ? { markdown: input.content.markdown } : {}),
-      ...(input.content.code != null ? { code: input.content.code } : {}),
-      ...(input.content.diff != null ? { diff: input.content.diff } : {}),
-    });
+    const block = buildBlock(blockId, input.semantic_step_index, input.step_index, input.content);
+    if (!block) {
+      result = fail("Internal error: update_block built an empty block.");
+      return;
+    }
     ctx.db
       .update(walkthroughBlocks)
-      .set({ type: built.type, data: built.data })
+      .set({ type: block.type, data: JSON.stringify(block) })
       .where(eq(walkthroughBlocks.id, blockId))
       .run();
     stampLastEdited(ctx.db, walkthroughId, ctx.actor);
-    emitBlock = built.block;
+    emitBlock = block;
   });
   if (result) return result;
   if (!emitBlock) return fail("Internal error: update_block did not persist.");

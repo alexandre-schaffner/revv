@@ -44,24 +44,13 @@ function isMermaidLang(lang: string | undefined): boolean {
   return normalized === "mermaid" || normalized === "mmd";
 }
 
+// UTF-8 → base64. Inverse of the decode in mermaid.svelte.ts (atob → bytes →
+// TextDecoder), so multi-byte source survives the data-attribute round-trip.
 function encodeBase64(source: string): string {
   const bytes = new TextEncoder().encode(source);
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  let out = "";
-
-  for (let i = 0; i < bytes.length; i += 3) {
-    const first = bytes[i] ?? 0;
-    const second = bytes[i + 1] ?? 0;
-    const third = bytes[i + 2] ?? 0;
-    const triplet = (first << 16) | (second << 8) | third;
-
-    out += alphabet[(triplet >> 18) & 63] ?? "";
-    out += alphabet[(triplet >> 12) & 63] ?? "";
-    out += i + 1 < bytes.length ? (alphabet[(triplet >> 6) & 63] ?? "") : "=";
-    out += i + 2 < bytes.length ? (alphabet[triplet & 63] ?? "") : "=";
-  }
-
-  return out;
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
 }
 
 export function renderMarkdown(source: string): string {
