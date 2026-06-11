@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/alexandre-schaffner/revv/compare/v0.10.0...v0.11.0) (2026-06-10)
+
+
+### Features
+
+* **walkthrough:** render Mermaid diagrams in walkthroughs ([#124](https://github.com/alexandre-schaffner/revv/issues/124)) ([e55a632](https://github.com/alexandre-schaffner/revv/commit/e55a632d97e7e048ac91675179adda2ebb87de27))
+
 ## [0.10.0](https://github.com/alexandre-schaffner/revv/compare/v0.9.0...v0.10.0) (2026-06-10)
 
 
