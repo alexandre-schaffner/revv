@@ -44,6 +44,7 @@
     }
   },
   "ignore": [
+    ".context/**",
     "apps/server/src/cache/CacheLayer.ts",
     "apps/server/src/cache/Key.ts",
     "apps/server/src/cache/backends/**",

@@ -1,6 +1,7 @@
 <script lang="ts">
 import CaretDown from "phosphor-svelte/lib/CaretDown";
 import ChevronLeft from "phosphor-svelte/lib/CaretLeft";
+import GithubLogo from "phosphor-svelte/lib/GithubLogo";
 import {
   cancelSignIn,
   clearToken,
@@ -155,45 +156,87 @@ async function handleContinue() {
 					aria-expanded={showInstructions}
 					onclick={() => (showInstructions = !showInstructions)}
 				>
-					<CaretDown size={13} weight="bold" />
-					<span>How to create the GitHub App</span>
+					<span class="guide-toggle-copy">
+						<span class="guide-icon" aria-hidden="true">
+							<GithubLogo size={15} weight="fill" />
+						</span>
+						<span>
+							<span class="guide-title">How to create the GitHub App</span>
+							<span class="guide-subtitle">Enterprise setup checklist</span>
+						</span>
+					</span>
+					<span class="guide-caret" aria-hidden="true">
+						<CaretDown size={13} weight="bold" />
+					</span>
 				</button>
 
 				{#if showInstructions}
 					<ol class="guide-steps">
 						<li>
-							On your instance, open
-							<a href={appCreateUrl} target="_blank" rel="noopener noreferrer" class="guide-link"
-								>{appCreateUrl}</a
-							>
-							(or, for an org, its <em>Settings → Developer settings → GitHub Apps → New</em>).
-						</li>
-						<li>Name it <strong>Revv</strong>. Any homepage URL is fine.</li>
-						<li>
-							Under <em>Webhook</em>, <strong>uncheck “Active”</strong> — Revv polls locally and
-							needs no webhook deliveries.
-						</li>
-						<li>
-							Set <em>Repository permissions</em>:
-							<span class="perms">
-								<span><strong>Pull requests</strong> → Read &amp; write</span>
-								<span><strong>Contents</strong> → Read &amp; write</span>
-								<span><strong>Metadata</strong> → Read-only</span>
+							<span class="step-copy">
+								<span class="step-title">Open the new app page</span>
+								<span class="step-detail">
+									On your instance, open
+									<a href={appCreateUrl} target="_blank" rel="noopener noreferrer" class="guide-link"
+										>{appCreateUrl}</a
+									>
+									or use <em>Settings -> Developer settings -> GitHub Apps -> New</em> for an org.
+								</span>
 							</span>
-							Leave everything else at <em>No access</em>.
 						</li>
 						<li>
-							Under <em>Where can this GitHub App be installed?</em> pick whichever fits, then
-							<strong>tick “Enable Device Flow.”</strong> Leave “Request user authorization (OAuth)
-							during installation” unchecked.
+							<span class="step-copy">
+								<span class="step-title">Name the app</span>
+								<span class="step-detail">Use <strong>Revv</strong>. Any homepage URL is fine.</span>
+							</span>
 						</li>
 						<li>
-							Create the app, copy its <strong>Client ID</strong> (starts with <code>Iv</code>),
-							and paste it above.
+							<span class="step-copy">
+								<span class="step-title">Disable webhooks</span>
+								<span class="step-detail">
+									Under <em>Webhook</em>, <strong>uncheck "Active"</strong>. Revv polls locally and
+									does not need webhook deliveries.
+								</span>
+							</span>
 						</li>
 						<li>
-							Finally, <strong>Install</strong> the app on the repositories you want Revv to see —
-							you'll only review PRs from installed repos.
+							<span class="step-copy">
+								<span class="step-title">Set repository permissions</span>
+								<span class="permission-grid" aria-label="Required repository permissions">
+									<span><strong>Pull requests</strong><span>Read &amp; write</span></span>
+									<span><strong>Contents</strong><span>Read &amp; write</span></span>
+									<span><strong>Metadata</strong><span>Read-only</span></span>
+								</span>
+								<span class="step-detail">Leave everything else at <em>No access</em>.</span>
+							</span>
+						</li>
+						<li>
+							<span class="step-copy">
+								<span class="step-title">Enable device flow</span>
+								<span class="step-detail">
+									Under <em>Where can this GitHub App be installed?</em> pick whichever fits, then
+									<strong>tick "Enable Device Flow."</strong> Leave
+									<em>Request user authorization (OAuth) during installation</em> unchecked.
+								</span>
+							</span>
+						</li>
+						<li>
+							<span class="step-copy">
+								<span class="step-title">Copy the client ID</span>
+								<span class="step-detail">
+									Create the app, copy its <strong>Client ID</strong> (starts with <code>Iv</code>),
+									and paste it above.
+								</span>
+							</span>
+						</li>
+						<li>
+							<span class="step-copy">
+								<span class="step-title">Install it on repositories</span>
+								<span class="step-detail">
+									Install the app on the repositories you want Revv to see. You can only review PRs
+									from installed repos.
+								</span>
+							</span>
 						</li>
 					</ol>
 				{/if}
@@ -429,10 +472,6 @@ async function handleContinue() {
 	}
 
 	.primary svg {
-		transition: transform var(--duration-smooth) var(--ease-out-expo);
-	}
-
-	.primary svg {
 		transition: transform var(--duration-slow) var(--ease-out-expo);
 	}
 
@@ -515,53 +554,149 @@ async function handleContinue() {
 	}
 
 	.guide {
-		border-top: 1px solid var(--ob-border);
-		padding-top: 16px;
+		border: 1px solid var(--ob-border);
+		border-radius: 10px;
+		background:
+			linear-gradient(180deg, var(--ob-hover-subtle), transparent 120px),
+			color-mix(in srgb, var(--ob-bg) 86%, var(--ob-border-subtle));
+		min-height: 0;
 	}
 
 	.guide-toggle {
-		display: inline-flex;
+		width: 100%;
+		display: flex;
 		align-items: center;
-		gap: 9px;
+		justify-content: space-between;
+		gap: 14px;
 		background: none;
 		border: 0;
-		padding: 0;
+		padding: 13px 14px;
 		cursor: pointer;
-		color: var(--ob-text-label);
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 10.5px;
-		letter-spacing: 0.14em;
-		text-transform: uppercase;
+		color: var(--ob-text-heading);
+		text-align: left;
 		transition: color var(--duration-snap) var(--ease-out-expo);
 	}
 
 	.guide-toggle:hover {
-		color: var(--ob-text-italic);
+		color: var(--ob-text-heading-bright);
 	}
 
 	.guide-toggle :global(svg) {
 		transition: transform var(--duration-quick) var(--ease-out-expo);
 	}
 
-	.guide[data-open='true'] .guide-toggle :global(svg) {
+	.guide-toggle-copy {
+		display: flex;
+		align-items: center;
+		gap: 11px;
+		min-width: 0;
+	}
+
+	.guide-icon {
+		display: grid;
+		place-items: center;
+		width: 26px;
+		height: 26px;
+		flex: 0 0 auto;
+		border: 1px solid var(--ob-border);
+		border-radius: 7px;
+		background: var(--ob-hover-subtle);
+		color: var(--ob-text-italic);
+	}
+
+	.guide-title,
+	.guide-subtitle {
+		display: block;
+	}
+
+	.guide-title {
+		font-family: var(--font-sans, 'Inter', system-ui, sans-serif);
+		font-size: 13px;
+		font-weight: 600;
+		letter-spacing: 0;
+		line-height: 1.25;
+	}
+
+	.guide-subtitle {
+		margin-top: 2px;
+		font-family: var(--font-mono, 'JetBrains Mono', monospace);
+		font-size: 10px;
+		letter-spacing: 0.09em;
+		text-transform: uppercase;
+		color: var(--ob-text-muted);
+	}
+
+	.guide-caret {
+		flex: 0 0 auto;
+		color: var(--ob-text-muted);
+	}
+
+	.guide[data-open='true'] .guide-caret {
 		transform: rotate(180deg);
 	}
 
 	.guide-steps {
-		margin: 16px 0 0;
-		padding-left: 20px;
+		counter-reset: setup-step;
+		margin: 0;
+		padding: 2px 14px 12px;
 		display: flex;
 		flex-direction: column;
-		gap: 12px;
-		font-family: 'Newsreader', Georgia, serif;
-		font-size: 14.5px;
-		line-height: 1.6;
+		gap: 0;
+		font-family: var(--font-sans, 'Inter', system-ui, sans-serif);
+		font-size: 13px;
+		line-height: 1.5;
 		color: var(--ob-text-body);
 		animation: custom-in var(--duration-smooth) var(--ease-out-expo) backwards;
+		list-style: none;
 	}
 
 	.guide-steps li {
-		padding-left: 4px;
+		counter-increment: setup-step;
+		position: relative;
+		display: grid;
+		grid-template-columns: 24px 1fr;
+		gap: 10px;
+		padding: 10px 0;
+		border-top: 1px solid var(--ob-border-subtle);
+	}
+
+	.guide-steps li::before {
+		content: counter(setup-step);
+		display: grid;
+		place-items: center;
+		width: 22px;
+		height: 22px;
+		margin-top: 1px;
+		border: 1px solid var(--ob-border);
+		border-radius: 999px;
+		background: var(--ob-bg);
+		color: var(--ob-text-italic);
+		font-family: var(--font-mono, 'JetBrains Mono', monospace);
+		font-size: 10px;
+		line-height: 1;
+	}
+
+	.step-copy {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		min-width: 0;
+	}
+
+	.step-title {
+		color: var(--ob-text-heading);
+		font-size: 13px;
+		font-weight: 600;
+		line-height: 1.35;
+	}
+
+	.step-detail {
+		color: var(--ob-text-body);
+	}
+
+	.step-detail,
+	.permission-grid {
+		max-width: 62ch;
 	}
 
 	.guide-steps em {
@@ -574,19 +709,47 @@ async function handleContinue() {
 		font-weight: 600;
 	}
 
-	.perms {
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
+	.permission-grid {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 1px;
 		margin: 8px 0;
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
+		border: 1px solid var(--ob-border);
+		border-radius: 8px;
+		overflow: hidden;
+		background: var(--ob-border);
+	}
+
+	.permission-grid > span {
+		display: flex;
+		min-width: 0;
+		flex-direction: column;
+		gap: 3px;
+		padding: 8px 10px;
+		background: color-mix(in srgb, var(--ob-bg) 92%, var(--ob-hover-subtle));
+	}
+
+	.permission-grid strong,
+	.permission-grid span span {
+		overflow-wrap: anywhere;
+	}
+
+	.permission-grid strong {
+		font-family: var(--font-sans, 'Inter', system-ui, sans-serif);
 		font-size: 12px;
-		color: var(--ob-text-body);
+		line-height: 1.3;
+	}
+
+	.permission-grid span span {
+		font-family: var(--font-mono, 'JetBrains Mono', monospace);
+		font-size: 10.5px;
+		line-height: 1.35;
+		color: var(--ob-text-muted);
 	}
 
 	.guide-steps code {
 		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 12.5px;
+		font-size: 12px;
 		padding: 1px 5px;
 		border-radius: 3px;
 		background: var(--ob-hover-subtle);
@@ -594,13 +757,21 @@ async function handleContinue() {
 	}
 
 	.guide-link {
-		color: var(--ob-text-muted);
+		color: var(--ob-text-italic);
+		font-family: var(--font-mono, 'JetBrains Mono', monospace);
+		font-size: 12px;
 		word-break: break-all;
 		transition: color var(--duration-snap) var(--ease-out-expo);
 	}
 
 	.guide-link:hover {
-		color: var(--ob-text-italic);
+		color: var(--ob-text-heading);
+	}
+
+	@media (max-width: 640px) {
+		.permission-grid {
+			grid-template-columns: 1fr;
+		}
 	}
 
 	@media (prefers-reduced-motion: reduce) {

@@ -3,6 +3,7 @@ import Monitor from "phosphor-svelte/lib/Desktop";
 import Moon from "phosphor-svelte/lib/Moon";
 import Sun from "phosphor-svelte/lib/Sun";
 import type { Snippet } from "svelte";
+import type { Action } from "svelte/action";
 import { Dotmatrix, type DotmatrixVariant } from "$lib/components/ui/dotmatrix";
 import {
   getThemePreference,
@@ -60,9 +61,50 @@ const labels: Record<ThemePreference, string> = {
   light: "Light theme",
   dark: "Dark theme",
 };
+
+let isScrollable = $state(false);
+
 function cycleTheme() {
   setThemePreference(cycle[theme]);
 }
+
+// Show the scrollbar thumb only when the step overflows. A ResizeObserver
+// catches viewport changes; a MutationObserver catches content growing
+// (the GHE fields and guide expanding). The action param is the step index,
+// so `update` resets scroll to the top on every step change.
+const scrollStage: Action<HTMLElement, number> = (node) => {
+  let frame: number | null = null;
+
+  const schedule = () => {
+    if (frame !== null) cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(() => {
+      frame = null;
+      isScrollable = node.scrollHeight - node.clientHeight > 2;
+    });
+  };
+
+  const resizeObserver = new ResizeObserver(schedule);
+  resizeObserver.observe(node);
+
+  const mutationObserver = new MutationObserver(schedule);
+  mutationObserver.observe(node, { childList: true, subtree: true });
+
+  const reset = () => {
+    node.scrollTop = 0;
+    schedule();
+  };
+
+  reset();
+
+  return {
+    update: reset,
+    destroy() {
+      if (frame !== null) cancelAnimationFrame(frame);
+      resizeObserver.disconnect();
+      mutationObserver.disconnect();
+    },
+  };
+};
 </script>
 
 <div class="onboarding-shell" data-step={stepId}>
@@ -97,22 +139,24 @@ function cycleTheme() {
 
 	<!-- Main column. The title block + content occupies a narrow center
 	     column for that book-page measure. -->
-	<main class="stage">
-		<div class="title-block">
-			<div class="chapter-label" data-key={stepIndex}>
-				<span class="chapter-rule"></span>
-				<span class="chapter-text">{chapter}</span>
+	<main class="stage" data-scrollable={isScrollable}>
+		<div class="stage-scroll" use:scrollStage={stepIndex}>
+			<div class="title-block">
+				<div class="chapter-label" data-key={stepIndex}>
+					<span class="chapter-rule"></span>
+					<span class="chapter-text">{chapter}</span>
+				</div>
+				<h1 class="title" data-key={stepIndex}>
+					<span class="title-line">{title}</span>
+					{#if titleItalic}
+						<span class="title-line title-italic">{titleItalic}</span>
+					{/if}
+				</h1>
 			</div>
-			<h1 class="title" data-key={stepIndex}>
-				<span class="title-line">{title}</span>
-				{#if titleItalic}
-					<span class="title-line title-italic">{titleItalic}</span>
-				{/if}
-			</h1>
-		</div>
 
-		<div class="content" data-key={stepIndex}>
-			{@render children()}
+			<div class="content" data-key={stepIndex}>
+				{@render children()}
+			</div>
 		</div>
 	</main>
 
@@ -323,15 +367,45 @@ function cycleTheme() {
 	/* Stage — title + content column */
 	.stage {
 		grid-row: 2;
-		display: flex;
-		flex-direction: column;
-		justify-content: center;
-		align-items: center;
-		padding: 32px 24px;
-		gap: 48px;
+		position: relative;
 		z-index: 2;
 		width: min(640px, 92vw);
 		justify-self: center;
+		min-height: 0;
+		overflow: hidden;
+	}
+
+	.stage-scroll {
+		height: 100%;
+		min-height: 0;
+		overflow-y: auto;
+		overscroll-behavior: contain;
+		scrollbar-gutter: stable;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: clamp(24px, 5vh, 48px);
+		padding: 48px 18px 96px;
+		scroll-padding-block: 48px 96px;
+	}
+
+	.stage-scroll::-webkit-scrollbar {
+		width: 8px;
+	}
+
+	.stage-scroll::-webkit-scrollbar-track {
+		background: transparent;
+	}
+
+	.stage-scroll::-webkit-scrollbar-thumb {
+		background: transparent;
+		border: 3px solid transparent;
+		border-radius: 999px;
+		background-clip: content-box;
+	}
+
+	.stage[data-scrollable='true'] .stage-scroll::-webkit-scrollbar-thumb {
+		background-color: color-mix(in srgb, var(--ob-text-dimmed) 78%, transparent);
 	}
 
 	.title-block {
@@ -340,6 +414,11 @@ function cycleTheme() {
 		align-items: flex-start;
 		gap: 24px;
 		width: 100%;
+		flex: 0 0 auto;
+		/* Auto-margins (with margin-bottom: auto on .content) center the group
+		   when it fits and collapse when it overflows, so the top stays
+		   scrollable. justify-content: center would strand the overflow. */
+		margin-top: auto;
 	}
 
 	.chapter-label {
@@ -394,6 +473,8 @@ function cycleTheme() {
 		width: 100%;
 		display: flex;
 		flex-direction: column;
+		flex: 0 0 auto;
+		margin-bottom: auto;
 		animation: fade-up var(--duration-ceremonial-slow) var(--ease-out-expo) 200ms backwards;
 	}
 
