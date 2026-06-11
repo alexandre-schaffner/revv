@@ -14,6 +14,7 @@
       "!!**/.svelte-kit",
       "!!**/target",
       "!!**/.turbo",
+      "!!**/.context",
       "!**/migrations",
       "!**/gen",
       "!**/*.gen.ts"

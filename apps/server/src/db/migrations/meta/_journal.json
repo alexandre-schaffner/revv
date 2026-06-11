@@ -169,6 +169,13 @@
       "when": 1779585000000,
       "tag": "0200_linked_clones",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1779590000000,
+      "tag": "0210_github_client_id",
+      "breakpoints": true
     }
   ]
 }

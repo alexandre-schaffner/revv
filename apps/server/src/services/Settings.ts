@@ -35,6 +35,7 @@ const DEFAULT_SETTINGS: UserSettings = {
   diffViewMode: "unified",
   autoFetchInterval: AUTO_FETCH_DEFAULT_INTERVAL,
   githubHost: "github.com",
+  githubClientId: "",
   recap: {
     enabled: true,
     dailyEnabled: true,
@@ -137,6 +138,10 @@ function normalize(raw: unknown): UserSettings {
       typeof r.githubHost === "string" && (r.githubHost as string).length > 0
         ? (r.githubHost as string)
         : DEFAULT_SETTINGS.githubHost,
+    githubClientId:
+      typeof r.githubClientId === "string"
+        ? (r.githubClientId as string)
+        : DEFAULT_SETTINGS.githubClientId,
     recap: coerceRecap(r.recap),
     cache: coerceCache(r.cache),
     updateChannel: coerceUpdateChannel(r.updateChannel),
@@ -226,6 +231,7 @@ function toSettings(row: typeof userSettings.$inferSelect): UserSettings {
     diffViewMode: row.diffViewMode as DiffViewMode,
     autoFetchInterval: row.autoFetchInterval,
     githubHost: row.githubHost,
+    githubClientId: row.githubClientId,
     recap: {
       enabled: row.recapEnabled,
       dailyEnabled: row.recapDailyEnabled,
@@ -269,6 +275,7 @@ function toInsert(s: UserSettings): typeof userSettings.$inferInsert {
     diffViewMode: s.diffViewMode,
     autoFetchInterval: s.autoFetchInterval,
     githubHost: s.githubHost,
+    githubClientId: s.githubClientId,
     recapEnabled: s.recap.enabled,
     recapDailyEnabled: s.recap.dailyEnabled,
     recapWeeklyEnabled: s.recap.weeklyEnabled,
