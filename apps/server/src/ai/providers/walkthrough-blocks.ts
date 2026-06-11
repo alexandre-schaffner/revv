@@ -106,6 +106,72 @@ export function emptyBlockError(input: BlockVariantInput): string | null {
   return null;
 }
 
+const FUNCTIONAL_COLOR_RE = /\b(rgb|rgba|hsl|hsla|hwb|oklch|oklab|lab|lch|color)\s*\(/i;
+const HEX_COLOR_VALUE_RE = /[:\s]#[0-9a-fA-F]{3,8}\b/;
+const FONT_FAMILY_DECL_RE = /font-family\s*:\s*([^;{}]+)/gi;
+const GENERIC_FONT_FAMILIES = new Set([
+  "inherit",
+  "initial",
+  "unset",
+  "revert",
+  "sans-serif",
+  "serif",
+  "monospace",
+  "system-ui",
+  "ui-sans-serif",
+  "ui-monospace",
+  "cursive",
+  "fantasy",
+]);
+
+function isGenericFontFamilyList(value: string): boolean {
+  const families = value
+    .split(",")
+    .map((family) => family.trim().toLowerCase())
+    .filter((family) => family.length > 0);
+
+  return families.length > 0 && families.every((family) => GENERIC_FONT_FAMILIES.has(family));
+}
+
+/**
+ * Best-effort theme-safety lint for artifact HTML. Warn-only by design: the
+ * write still succeeds, and callers append the returned message to the MCP
+ * success result so the agent can self-correct on later blocks.
+ */
+export function artifactThemingWarning(input: BlockVariantInput): string | null {
+  if (!input.artifact) return null;
+
+  const html = input.artifact.html;
+  const issues = new Set<string>();
+
+  if (HEX_COLOR_VALUE_RE.test(html)) {
+    // Warn-only accepts the residual false positive where an all-hex id selector
+    // like `#fad { ... }` appears after whitespace.
+    issues.add("hex color literal");
+  }
+  if (FUNCTIONAL_COLOR_RE.test(html)) {
+    issues.add("rgb()/hsl()/oklch() color");
+  }
+
+  for (const match of html.matchAll(FONT_FAMILY_DECL_RE)) {
+    const value = match[1];
+    if (!value) continue;
+    if (value.includes("var(--font")) continue;
+    if (isGenericFontFamilyList(value)) continue;
+    issues.add("literal font-family");
+    break;
+  }
+
+  if (issues.size === 0) return null;
+
+  return `Warning: this artifact hardcodes styling that won't adapt to light/dark theme (found: ${Array.from(issues).join(", ")}). Style with the injected theme variables instead — var(--color-bg-primary), var(--color-accent), var(--font-sans)/var(--font-mono), var(--radius-card) — so it matches the app and flips with the theme. The block was saved; correct it in this or a later block.`;
+}
+
+export function withArtifactThemingWarning(okText: string, input: BlockVariantInput): string {
+  const warning = artifactThemingWarning(input);
+  return warning ? `${okText}\n\n${warning}` : okText;
+}
+
 /**
  * Construct a typed `WalkthroughBlock` from exactly one populated variant.
  * Returns null when no variant is present — callers validate variant count

@@ -41,7 +41,7 @@ Each `add_diff_step` persists exactly one unit:
   - `markdown.content` — prose narrative (headings / bullets / inline code — see formatting below).
   - `code` — source-code excerpt (`file_path`, line range, language, content, annotation, annotation_position).
   - `diff` — unified-diff hunk (`file_path`, `patch`, annotation, annotation_position).
-  - `artifact` — an interactive HTML/CSS/JS island (`html`, annotation, annotation_position) for a steppable state machine, toggleable before/after, tiny chart, or other interaction that prose/code/diff cannot express clearly.
+  - `artifact` — an interactive HTML/CSS/JS island (`html`, annotation, annotation_position) for a steppable state machine, toggleable before/after, tiny chart, or other interaction that prose/code/diff cannot express clearly. **Required for every worked example, and the default for any complex explanation** — see "Worked examples" below.
 
 Artifacts are for the interactive piece only; keep the surrounding explanation in `markdown` blocks. Artifact `html` MUST be a single complete self-contained HTML document with inline `<style>` and `<script>`, vanilla JS only, no external network/CDN imports, and no `localStorage` or `sessionStorage` access. The document runs in a sandboxed iframe with an opaque origin, so storage APIs throw and parent DOM/cookies are inaccessible.
 
@@ -225,7 +225,11 @@ Whenever you explain a bug or a non-trivial concept, illustrate it with a concre
  `id` has a B-tree index and the query starts at the leaf, not the root."
 ```
 
-Worked examples belong inside a markdown block, either inline in the narrative or as a dedicated markdown step when the concept warrants it. Use fenced code blocks (` ``` `) with the pseudocode/snippet inside. Length: as short as possible while still being concrete — the goal is "I see exactly what happens", not completeness.
+**ALWAYS pair a worked example with an interactive `artifact` block.** Whenever you write a worked example — a bug trace, a step-by-step scenario, a before/after — add an `artifact` block that makes it interactive: a steppable trace the reader advances one state at a time, a toggleable before/after, a tiny live diagram of the data/control flow. The prose worked example (in a `markdown` block) sets it up; the artifact lets the reader _drive_ it. Don't settle for a static fenced code block when the example can be walked. Keep the surrounding narrative in `markdown` and put only the interaction in the `artifact` (see the artifact styling/sandbox rules above).
+
+The prose half of the worked example still uses fenced code blocks (` ``` `) for the pseudocode/snippet, and stays as short as possible while concrete — the goal is "I see exactly what happens", not completeness.
+
+**Reach for an `artifact` for any complex explanation, not just worked examples.** Any time prose alone would be hard to follow — a multi-step state machine, an ordering/timing subtlety, a tricky data transformation, an interaction between several moving parts — express it with an interactive `artifact` the reader can manipulate, rather than asking them to hold the whole thing in their head from a paragraph.
 
 ### Reuse check (REQUIRED for every new function/helper/utility introduced)
 

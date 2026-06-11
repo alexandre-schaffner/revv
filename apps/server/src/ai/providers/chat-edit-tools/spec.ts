@@ -120,7 +120,7 @@ export const blockContentSchema = z
         html: z
           .string()
           .describe(
-            "A complete, self-contained HTML document with inline CSS/JS. Vanilla JS only; no external network/CDN; no localStorage. Renders in a sandboxed iframe. Style with the injected Revv theme variables (`var(--color-*)`, `var(--font-*)`) so it matches the app and follows light/dark — never hardcode colors. See the system prompt for the full token list and design rules.",
+            "A complete, self-contained HTML document with inline CSS/JS. Vanilla JS only; no external network/CDN; no localStorage. Renders in a sandboxed iframe. Style with the injected Revv theme variables (`var(--color-*)`, `var(--font-*)`) so it matches the app and follows light/dark — never hardcode colors or font-family. See the system prompt for the full token list and design rules.",
           ),
         annotation: z.string().nullable(),
         annotation_position: z.enum(["left", "right"]),
