@@ -1,11 +1,9 @@
 <script lang="ts">
-import type { ReviewMode } from "@revv/shared";
 import DownloadCloud from "phosphor-svelte/lib/CloudArrowDown";
 import Loader2 from "phosphor-svelte/lib/Spinner";
 import { gsap, prefersReducedMotion, tokens } from "$lib/motion";
 import { getCmdHeld } from "$lib/stores/shortcuts.svelte";
 import PillTabs from "./PillTabs.svelte";
-import ReviewModeSwitch from "./ReviewModeSwitch.svelte";
 
 type Tab = "walkthrough" | "diff" | "request-changes";
 type WalkthroughStatus = "idle" | "generating" | "complete" | "error";
@@ -22,9 +20,6 @@ interface Props {
   /** True while the pull is in-flight (refetching + regenerating). */
   isPulling?: boolean;
   onPullCommit?: () => void;
-  /** Active review lens. Omitted when not on a PR review route. */
-  reviewMode?: ReviewMode | undefined;
-  onReviewModeChange?: ((mode: ReviewMode) => void) | undefined;
 }
 
 let {
@@ -34,8 +29,6 @@ let {
   hasNewCommit = false,
   isPulling = false,
   onPullCommit,
-  reviewMode,
-  onReviewModeChange,
 }: Props = $props();
 
 // The dot and the pull button live in the same slot to the right of the
@@ -127,11 +120,6 @@ $effect(() => {
 </script>
 
 <PillTabs {tabs} {activeTab} onTabChange={handleTabChange} {cmdHeld}>
-	{#snippet leading()}
-		{#if reviewMode && onReviewModeChange}
-			<ReviewModeSwitch mode={reviewMode} onSelect={onReviewModeChange} />
-		{/if}
-	{/snippet}
 	{#snippet trailing()}
 		<div class="status-slot" aria-hidden={!dotVisible && !buttonVisible}>
 			<span

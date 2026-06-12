@@ -5,7 +5,6 @@ import WalkthroughRatingsPanel from "$lib/components/walkthrough/WalkthroughRati
 import { sendChatMessage } from "$lib/stores/chat.svelte";
 import { resetRcActions, setRcHandlers, setRcState } from "$lib/stores/rcActions.svelte";
 import {
-  getReviewMode,
   getThreadMessages,
   getThreads,
   jumpToDiffLine,
@@ -38,7 +37,6 @@ const unresolvedThreads = $derived(
 );
 const ratings = $derived(getRatings());
 const blocks = $derived(getBlocks());
-const reviewMode = $derived(getReviewMode(prId));
 
 let selectedIssueIds = $state<Set<string>>(new Set());
 // Derived from the walkthrough store — each issue carries its own
@@ -196,7 +194,8 @@ async function submit(action: Action): Promise<void> {
     await api.api.prs({ id: prId })["sync-threads"].post();
 
     // Reload session so externalCommentId fields are refreshed locally
-    await loadSession(prId, reviewMode);
+    // (mode is derived inside loadSession from the PR's review perspective).
+    await loadSession(prId);
 
     const payload = data as {
       htmlUrl?: string;

@@ -7,6 +7,7 @@ import type {
   Team,
   ThreadSummary,
 } from "@revv/shared";
+import { REVIEW_MODE, type ReviewMode } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { goto } from "$app/navigation";
 import { api } from "$lib/api/client";
@@ -230,6 +231,22 @@ export function getArchivedByRepo(): Map<string, PullRequest[]> {
 
 export function getSelectedPr(): PullRequest | null {
   return selectedPr;
+}
+
+/**
+ * The review lens for a PR, derived purely from identity: `"author"` when the
+ * signed-in user is the PR author, otherwise `"reviewer"`. This is the single
+ * source of truth — there is no manual override. (The server still stores an
+ * author walkthrough and a reviewer walkthrough separately per head SHA; we
+ * always request the one that matches the viewer's role.)
+ */
+export function getReviewModeForPr(prId: string): ReviewMode {
+  const pr =
+    pullRequests.find((p) => p.id === prId) ?? archivedPrs.find((p) => p.id === prId) ?? null;
+  const login = getCurrentUserLogin();
+  return pr?.authorLogin && login && pr.authorLogin === login
+    ? REVIEW_MODE.author
+    : REVIEW_MODE.reviewer;
 }
 
 export function getTaggedPrs(repoId: string): PullRequest[] {

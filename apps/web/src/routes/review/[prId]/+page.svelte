@@ -9,12 +9,10 @@ import ReviewLayout from "$lib/components/review/ReviewLayout.svelte";
 import { Badge } from "$lib/components/ui/badge";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import GuidedWalkthrough from "$lib/components/walkthrough/GuidedWalkthrough.svelte";
-import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
 import { markVisited as markPrVisited } from "$lib/stores/pr-visits.svelte";
 import { getSelectedPr, setSelectedPrId } from "$lib/stores/prs.svelte";
 import {
   clearReviewFiles,
-  ensureReviewMode,
   getActiveFilePath,
   getActiveTab,
   getFilesError,
@@ -39,24 +37,15 @@ import {
 import { setScrollRoot } from "$lib/stores/walkthroughNav.svelte";
 
 const pr = $derived(getSelectedPr());
-const currentUserLogin = $derived(getCurrentUserLogin());
-const defaultReviewMode: ReviewMode = $derived(
-  pr?.authorLogin && currentUserLogin && pr.authorLogin === currentUserLogin
-    ? "author"
-    : "reviewer",
-);
-const reviewMode = $derived(getReviewMode(page.params.prId ?? "", defaultReviewMode));
+// Review lens is derived from identity (author vs. signed-in user) — see
+// `getReviewModeForPr`. No manual override; the file fetch + session load
+// below resolve through it.
+const reviewMode = $derived(getReviewMode(page.params.prId ?? ""));
 const files = $derived(getReviewFiles());
 const isLoading = $derived(getIsLoadingFiles());
 const loadError = $derived(getFilesError());
 const activeTab = $derived(getActiveTab());
 const walkthroughRiskLevel = $derived(getWalkthroughRiskLevel());
-
-$effect(() => {
-  const prId = page.params.prId;
-  if (!prId) return;
-  ensureReviewMode(prId, defaultReviewMode);
-});
 
 const riskClasses: Record<string, string> = {
   low: "risk-badge risk-badge--low",

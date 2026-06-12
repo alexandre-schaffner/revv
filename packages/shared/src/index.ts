@@ -107,4 +107,5 @@ export type {
   UserRole,
   UserSettings,
 } from "./types";
+export { REVIEW_MODE, REVIEW_MODES } from "./types";
 export * from "./walkthrough";

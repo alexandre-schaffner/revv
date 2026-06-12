@@ -1,6 +1,6 @@
-## Reviewer mode
+## Reviewer perspective
 
-You are reviewing someone else's pull request. The reader is a human reviewer who needs to understand both the final diff and the path the author took to arrive there.
+You are reviewing a pull request authored by someone other than the reader. The reader is a human reviewer (not the author) who needs to understand both the final diff and the path the author took to arrive there. This perspective applies automatically because the viewer is not the PR's author; it is not a user-chosen mode.
 
 ### Required first Phase B chapter — "How we got here"
 

@@ -1,19 +1,15 @@
 <script lang="ts">
-import type { ReviewMode } from "@revv/shared";
 import { page } from "$app/state";
 import SettingsModal from "$lib/components/settings/SettingsModal.svelte";
 import UserMenu from "$lib/components/sidebar/UserMenu.svelte";
 import { RAIL_WIDTH } from "$lib/constants";
 import { gsap, gsapFade, tokens } from "$lib/motion";
-import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
 import { getSelectedPr } from "$lib/stores/prs.svelte";
 import {
   getActiveTab,
   getIsPullingCommit,
   getLoadedHeadSha,
-  getReviewMode,
   pullLatestCommit,
-  selectReviewMode,
   setActiveTab,
 } from "$lib/stores/review.svelte";
 import { closeSettings, getSettingsOpen } from "$lib/stores/settingsModal.svelte";
@@ -77,22 +73,6 @@ const hasNewCommit = $derived.by(() => {
 const isPulling = $derived(pr ? getIsPullingCommit(pr.id) : false);
 function onPullCommit(): void {
   if (pr) void pullLatestCommit(pr.id);
-}
-
-// Review lens (Reviewer / Self-review) surfaced in the floating tab bar so it
-// stays visible across all three tabs. Defaults to self-review when the
-// signed-in user authored the PR. The page route owns hydration
-// (`ensureReviewMode`); here we only read the resolved value and forward the
-// switch action — which only swaps context, never starts generation.
-const currentUserLogin = $derived(getCurrentUserLogin());
-const defaultReviewMode = $derived<ReviewMode>(
-  pr?.authorLogin && currentUserLogin && pr.authorLogin === currentUserLogin
-    ? "author"
-    : "reviewer",
-);
-const reviewMode = $derived(pr ? getReviewMode(pr.id, defaultReviewMode) : undefined);
-function onReviewModeChange(mode: ReviewMode): void {
-  if (pr) selectReviewMode(pr.id, mode);
 }
 
 // Drag state — not reactive $state, just local mutable refs
@@ -244,8 +224,6 @@ function onRightHandleDblClick(): void {
 					{hasNewCommit}
 					{isPulling}
 					{onPullCommit}
-					{reviewMode}
-					{onReviewModeChange}
 				/>
 			</div>
 		{/if}

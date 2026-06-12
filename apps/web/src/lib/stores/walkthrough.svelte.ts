@@ -36,7 +36,7 @@ import { SvelteMap } from "svelte/reactivity";
 import { toast } from "svelte-sonner";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { api } from "$lib/api/client";
-import { updateRepoCloneStatus } from "$lib/stores/prs.svelte";
+import { getReviewModeForPr, updateRepoCloneStatus } from "$lib/stores/prs.svelte";
 import { authHeaders } from "$lib/utils/session-token";
 import { wtTrace } from "$lib/utils/wt-trace";
 
@@ -777,27 +777,15 @@ export function deactivate(): void {
 // ── Cache hydration ─────────────────────────────────────────────────────────
 
 const pendingHydration = new Map<string, Promise<boolean>>();
-const selectedModes = $state(new SvelteMap<string, WalkthroughMode>());
 
-export function getSelectedMode(
-  prId: string,
-  fallback: WalkthroughMode = "reviewer",
-): WalkthroughMode {
-  return selectedModes.get(prId) ?? fallback;
-}
-
-export function setSelectedMode(prId: string, mode: WalkthroughMode): void {
-  const current = selectedModes.get(prId);
-  if (current === mode) return;
-  selectedModes.set(prId, mode);
-  clearAnimationTrackers(prId);
-  deleteEntry(prId);
-  const entry = freshEntry();
-  entry.mode = mode;
-  entry.isStreaming = false;
-  entry.phaseMessage = "";
-  entry.streamStartedAt = null;
-  setEntry(prId, entry);
+/**
+ * The walkthrough mode for a PR. Derived purely from identity (author vs.
+ * signed-in user) via the PR store — no manual selection. Both an author and
+ * a reviewer walkthrough may exist server-side per head SHA; the viewer's
+ * role decides which one this client hydrates and generates.
+ */
+export function getSelectedMode(prId: string): WalkthroughMode {
+  return getReviewModeForPr(prId);
 }
 
 /**

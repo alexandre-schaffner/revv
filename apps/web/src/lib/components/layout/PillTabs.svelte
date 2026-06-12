@@ -8,12 +8,11 @@ interface Props {
   tabs: TabConfig[];
   activeTab: string;
   onTabChange: (tab: string) => void;
-  leading?: Snippet;
   trailing?: Snippet;
   cmdHeld?: boolean;
 }
 
-let { tabs, activeTab, onTabChange, leading, trailing, cmdHeld = false }: Props = $props();
+let { tabs, activeTab, onTabChange, trailing, cmdHeld = false }: Props = $props();
 
 let pillEl: HTMLDivElement | null = $state(null);
 let indicatorEl: HTMLSpanElement | null = $state(null);
@@ -104,12 +103,6 @@ $effect(() => {
 </script>
 
 <div class="tabs-wrapper">
-	{#if leading}
-		<div class="leading-slot">
-			{@render leading()}
-		</div>
-	{/if}
-
 	<div class="pill" bind:this={pillEl}>
 		<span
 			class="pill-indicator"
@@ -159,18 +152,6 @@ $effect(() => {
 		height: 18px;
 		transform: translateY(-50%);
 		pointer-events: none;
-	}
-
-	/* Mirror of .status-slot, anchored to the *left* of the pill. Absolute so
-	   it never shifts the centred pill (the .tabs-float container centres the
-	   pill in normal flow; flanking accessories escape that flow). */
-	.leading-slot {
-		position: absolute;
-		right: calc(100% + 8px);
-		top: 50%;
-		transform: translateY(-50%);
-		display: flex;
-		align-items: center;
 	}
 
 	.pill {

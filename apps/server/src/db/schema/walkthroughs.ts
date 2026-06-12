@@ -1,3 +1,4 @@
+import { REVIEW_MODE, type WalkthroughMode } from "@revv/shared";
 import {
   type AnySQLiteColumn,
   integer,
@@ -43,7 +44,7 @@ export const walkthroughs = sqliteTable(
      * a third-party PR review with commit journey and reviewer-facing scorecard.
      * `author` is a self-review/preflight pass for the PR author.
      */
-    mode: text("mode").notNull().default("reviewer"),
+    mode: text("mode").$type<WalkthroughMode>().notNull().default(REVIEW_MODE.reviewer),
     /** Phase A output: `'low' | 'medium' | 'high'`. Written by `set_overview` MCP tool. */
     riskLevel: text("risk_level").notNull().default("low"),
     /**

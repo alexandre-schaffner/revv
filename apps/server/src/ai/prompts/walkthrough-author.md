@@ -1,6 +1,6 @@
 ## Author self-review task
 
-You are reviewing the user's own pull request before they request or continue human review.
+You are reviewing this pull request **on behalf of its own author**: the reader wrote this code and is self-reviewing it before requesting (or continuing) human review. This perspective applies automatically because the person viewing the walkthrough is the PR's author — it is not a user-chosen mode.
 
 - Do NOT call `get_commit_history`.
 - Do NOT write a "How we got here", journey, evolution, path, or commit-history chapter.

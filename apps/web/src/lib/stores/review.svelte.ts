@@ -6,17 +6,13 @@ import type {
   ThreadMessage,
   ThreadStatus,
 } from "@revv/shared";
-import { SvelteMap } from "svelte/reactivity";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 import { RequestState, type RequestState as RequestStateType } from "$lib/stores/_types";
 import { invalidateChatHistory } from "$lib/stores/chat.svelte";
 import { enterSidebarMode } from "$lib/stores/focus-mode.svelte";
-import { getPullRequests } from "$lib/stores/prs.svelte";
-import {
-  invalidateForPull,
-  setSelectedMode as setWalkthroughSelectedMode,
-} from "$lib/stores/walkthrough.svelte";
+import { getPullRequests, getReviewModeForPr } from "$lib/stores/prs.svelte";
+import { invalidateForPull } from "$lib/stores/walkthrough.svelte";
 import type { ReviewFile } from "$lib/types/review";
 
 // --- Review files (shared between sidebar tree + review page) ---
@@ -187,37 +183,14 @@ export async function pullLatestCommit(prId: string): Promise<void> {
 // --- Session state ---
 let sessionId = $state<string | null>(null);
 let _sessionLoading = $state(false);
-const selectedReviewModes = $state(new SvelteMap<string, ReviewMode>());
-
-export function getReviewMode(prId: string, fallback: ReviewMode = "reviewer"): ReviewMode {
-  return selectedReviewModes.get(prId) ?? fallback;
-}
-
-export function ensureReviewMode(prId: string, fallback: ReviewMode): ReviewMode {
-  const existing = selectedReviewModes.get(prId);
-  if (existing) return existing;
-  selectedReviewModes.set(prId, fallback);
-  setWalkthroughSelectedMode(prId, fallback);
-  return fallback;
-}
-
-export function setReviewMode(prId: string, mode: ReviewMode): void {
-  const current = selectedReviewModes.get(prId);
-  if (current === mode) return;
-  selectedReviewModes.set(prId, mode);
-  setWalkthroughSelectedMode(prId, mode);
-  clearSession();
-}
-
 /**
- * Switch the active review mode for a PR and re-hydrate its session. This is
- * the single entry point used by the mode toggle in the top bar — it only
- * changes context (mode + session), it never starts walkthrough generation.
+ * The active review lens for a PR. Derived purely from identity (PR author
+ * vs. the signed-in user) via `getReviewModeForPr` — there is no manual
+ * override. The server still keeps an author and a reviewer walkthrough per
+ * head SHA; we always resolve to the one matching the viewer's role.
  */
-export function selectReviewMode(prId: string, mode: ReviewMode): void {
-  if (getReviewMode(prId) === mode) return;
-  setReviewMode(prId, mode);
-  void loadSession(prId, mode);
+export function getReviewMode(prId: string): ReviewMode {
+  return getReviewModeForPr(prId);
 }
 
 function clearSession(): void {
@@ -279,10 +252,6 @@ export async function loadSession(
     };
 
     sessionId = payload.session.id;
-    if (payload.session.mode) {
-      selectedReviewModes.set(prId, payload.session.mode);
-      setWalkthroughSelectedMode(prId, payload.session.mode);
-    }
     threads = payload.threads;
 
     // Populate thread messages
