@@ -17,6 +17,15 @@ export const userSettings = sqliteTable("user_settings", {
   diffViewMode: text("diff_view_mode").notNull(),
   autoFetchInterval: integer("auto_fetch_interval").notNull(),
   githubHost: text("github_host").notNull(),
+  /**
+   * GitHub OAuth/App client ID for a user-added GitHub Enterprise host. Empty
+   * for github.com, which resolves its client ID from server config. When a
+   * user points Revv at their own GHE instance they register a GitHub App
+   * there and paste its (public) client ID here — there is no bundled
+   * registration on a customer's host. An `Iv…`-prefixed value is a GitHub App
+   * (no device-flow scope); `Ov…` is a classic OAuth App.
+   */
+  githubClientId: text("github_client_id").notNull().default(""),
   // recap sub-object flattened to individual columns
   recapEnabled: integer("recap_enabled", { mode: "boolean" }).notNull(),
   recapDailyEnabled: integer("recap_daily_enabled", { mode: "boolean" }).notNull(),

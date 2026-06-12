@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.12.0](https://github.com/alexandre-schaffner/revv/compare/v0.11.0...v0.12.0) (2026-06-11)
+
+
+### Features
+
+* **auth:** bring-your-own GitHub App for arbitrary Enterprise hosts ([#130](https://github.com/alexandre-schaffner/revv/issues/130)) ([7f8644b](https://github.com/alexandre-schaffner/revv/commit/7f8644bd6c29d689c1b2ca0c5cde5d1a1bb30bf8))
+
+## [0.11.0](https://github.com/alexandre-schaffner/revv/compare/v0.10.0...v0.11.0) (2026-06-10)
+
+
+### Features
+
+* **walkthrough:** render Mermaid diagrams in walkthroughs ([#124](https://github.com/alexandre-schaffner/revv/issues/124)) ([e55a632](https://github.com/alexandre-schaffner/revv/commit/e55a632d97e7e048ac91675179adda2ebb87de27))
+
 ## [0.10.0](https://github.com/alexandre-schaffner/revv/compare/v0.9.0...v0.10.0) (2026-06-10)
 
 

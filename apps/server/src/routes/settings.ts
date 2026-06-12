@@ -62,6 +62,7 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
           diffViewMode: t.Union([t.Literal("unified"), t.Literal("split")]),
           autoFetchInterval: t.Number(),
           githubHost: t.String({ minLength: 1 }),
+          githubClientId: t.String(),
           recap: t.Partial(
             t.Object({
               enabled: t.Boolean(),

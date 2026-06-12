@@ -27,6 +27,7 @@ import {
   blockVariantCount,
   buildBlock,
   emptyBlockError,
+  withArtifactThemingWarning,
 } from "../walkthrough-blocks";
 import {
   blockIdFor,
@@ -264,7 +265,10 @@ export const addSemanticStepHandler: WalkthroughToolHandler<AddSemanticStepInput
     });
   }
   return okResult(
-    `Chapter ${input.semantic_step_index} ('${trimmedTitle}') opened with its first block at step_index=0. Add 1–4 more atomic blocks for this chapter via add_diff_step({ semantic_step_index: ${input.semantic_step_index}, step_index: 1, ... }) — step_index 2, 3, 4 for the rest. When this chapter is full, open the next chapter via another add_semantic_step call. Do not call set_sentiment until every planned chapter is filled.`,
+    withArtifactThemingWarning(
+      `Chapter ${input.semantic_step_index} ('${trimmedTitle}') opened with its first block at step_index=0. Add 1–4 more atomic blocks for this chapter via add_diff_step({ semantic_step_index: ${input.semantic_step_index}, step_index: 1, ... }) — step_index 2, 3, 4 for the rest. When this chapter is full, open the next chapter via another add_semantic_step call. Do not call set_sentiment until every planned chapter is filled.`,
+      input.initial_block,
+    ),
   );
 };
 
@@ -284,6 +288,12 @@ export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> = asyn
   }
   const emptyErr = emptyBlockError(input);
   if (emptyErr) return errorResult(emptyErr);
+  const variant = {
+    markdown: input.markdown,
+    code: input.code,
+    diff: input.diff,
+    artifact: input.artifact,
+  };
 
   let result: WalkthroughToolResult | null = null;
   let block: WalkthroughBlock | null = null;
@@ -332,7 +342,7 @@ export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> = asyn
         order: input.semantic_step_index * 10000 + input.step_index,
         createdAt: now,
       },
-      { markdown: input.markdown, code: input.code, diff: input.diff, artifact: input.artifact },
+      variant,
     );
   });
   if (result) return result;
@@ -342,7 +352,10 @@ export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> = asyn
 
   ctx.emit({ type: "block", data: block });
   return okResult(
-    `Atomic block persisted at chapter ${input.semantic_step_index}, step ${input.step_index}. Continue with more blocks in this chapter, open the next chapter with add_semantic_step, or call set_sentiment when Phase B is done.`,
+    withArtifactThemingWarning(
+      `Atomic block persisted at chapter ${input.semantic_step_index}, step ${input.step_index}. Continue with more blocks in this chapter, open the next chapter with add_semantic_step, or call set_sentiment when Phase B is done.`,
+      variant,
+    ),
   );
 };
 

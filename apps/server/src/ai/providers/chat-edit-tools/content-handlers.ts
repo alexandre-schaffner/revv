@@ -8,7 +8,13 @@ import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import { walkthroughSemanticSteps } from "../../../db/schema/walkthrough-semantic-steps";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
-import { blockRow, blockVariantCount, buildBlock, emptyBlockError } from "../walkthrough-blocks";
+import {
+  blockRow,
+  blockVariantCount,
+  buildBlock,
+  emptyBlockError,
+  withArtifactThemingWarning,
+} from "../walkthrough-blocks";
 import { blockIdFor, unwrapJsonWrappedString } from "../walkthrough-tools";
 import {
   assertStillComplete,
@@ -185,7 +191,12 @@ export const addSemanticStepEditHandler: ChatEditToolHandler<AddSemanticStepEdit
 
   ctx.emit(walkthroughId, { type: "semantic-step", data: emitChapter });
   ctx.emit(walkthroughId, { type: "block", data: emitBlock });
-  return ok(`Chapter ${input.semantic_step_index} ('${title}') inserted with its first block.`);
+  return ok(
+    withArtifactThemingWarning(
+      `Chapter ${input.semantic_step_index} ('${title}') inserted with its first block.`,
+      input.initial_block,
+    ),
+  );
 };
 
 // ── Tool: update_semantic_step ──────────────────────────────────────────────
@@ -502,7 +513,12 @@ export const addBlockHandler: ChatEditToolHandler<AddBlockInput> = async (ctx, i
   if (!emitBlock) return fail("Internal error: add_block did not persist.");
 
   ctx.emit(walkthroughId, { type: "block", data: emitBlock });
-  return ok(`Block added at chapter ${input.semantic_step_index}, step ${resolvedStepIndex}.`);
+  return ok(
+    withArtifactThemingWarning(
+      `Block added at chapter ${input.semantic_step_index}, step ${resolvedStepIndex}.`,
+      input.content,
+    ),
+  );
 };
 
 // ── Tool: update_block ──────────────────────────────────────────────────────
@@ -566,7 +582,12 @@ export const updateBlockHandler: ChatEditToolHandler<UpdateBlockInput> = async (
   if (!emitBlock) return fail("Internal error: update_block did not persist.");
 
   ctx.emit(walkthroughId, { type: "block", data: emitBlock });
-  return ok(`Block at chapter ${input.semantic_step_index}, step ${input.step_index} updated.`);
+  return ok(
+    withArtifactThemingWarning(
+      `Block at chapter ${input.semantic_step_index}, step ${input.step_index} updated.`,
+      input.content,
+    ),
+  );
 };
 
 // ── Tool: delete_block ──────────────────────────────────────────────────────
