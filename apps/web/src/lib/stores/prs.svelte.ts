@@ -49,6 +49,7 @@ let selectedAuthorLogins = $state<Set<string>>(new Set());
 // (org has no teams, or the token lacks `read:org`).
 let teamsByOrg = $state<Map<string, Team[]>>(new Map());
 let teamsLoadingByOrg = $state<Map<string, boolean>>(new Map());
+let teamsFailedByOrg = $state<Map<string, boolean>>(new Map());
 let isLoading = $state(false);
 let archivedPrs = $state<PullRequest[]>([]);
 // Cursor for the next page of archived PRs. Null = exhausted or never
@@ -556,27 +557,46 @@ export function getTeamsForOrg(owner: string): Team[] {
   return teamsByOrg.get(owner.toLowerCase()) ?? [];
 }
 
+export function getTeamsFetchStateForOrg(owner: string): "idle" | "loading" | "loaded" | "error" {
+  const key = owner.toLowerCase();
+  if (teamsLoadingByOrg.get(key)) return "loading";
+  if (teamsFailedByOrg.get(key)) return "error";
+  if (teamsByOrg.has(key)) return "loaded";
+  return "idle";
+}
+
 /**
  * Lazily fetch an org's teams (and members) the first time they're needed.
  * Idempotent: no-ops once a result is cached or a request is already in
- * flight. Best-effort — failures resolve to an empty team list so the
- * creator filter keeps working without teams.
+ * flight. Best-effort — failures leave the entry uncached so a later popover
+ * open can retry instead of pinning a transient error as "no teams".
  */
-export async function fetchTeamsForOrg(owner: string): Promise<void> {
+export async function fetchTeamsForOrg(
+  owner: string,
+  options?: { force?: boolean },
+): Promise<void> {
   const key = owner.toLowerCase();
-  if (teamsByOrg.has(key) || teamsLoadingByOrg.get(key)) return;
+  if (!options?.force && (teamsByOrg.has(key) || teamsLoadingByOrg.get(key))) return;
+  if (options?.force) {
+    const nextTeams = new Map(teamsByOrg);
+    nextTeams.delete(key);
+    teamsByOrg = nextTeams;
+  }
   teamsLoadingByOrg = new Map(teamsLoadingByOrg).set(key, true);
+  teamsFailedByOrg = new Map(teamsFailedByOrg).set(key, false);
   try {
-    const { data } = await api.api.github.teams({ org: owner }).get();
-    // Cache the result — including an empty list — so reopening the popover
-    // never re-hits the network. The server already degrades to `{ teams: [] }`
-    // when teams aren't visible (no `read:org`, not a member), so an empty
-    // array here is a real answer, not a failure to retry on every open.
+    const { data, error } = await api.api.github.teams({ org: owner }).get();
+    if (error) {
+      teamsFailedByOrg = new Map(teamsFailedByOrg).set(key, true);
+      return;
+    }
+    // Cache successful results — including an empty list — so reopening the
+    // popover never re-hits the network when GitHub answered cleanly.
     teamsByOrg = new Map(teamsByOrg).set(key, (data as { teams: Team[] } | null)?.teams ?? []);
   } catch {
-    // Network/transport error: cache empty so we don't lag every open. A
-    // later `reset()` (account switch / re-login) clears this to retry.
-    teamsByOrg = new Map(teamsByOrg).set(key, []);
+    // Leave the entry uncached. The popover remains usable with creator rows,
+    // and a later open can retry without requiring account reset/re-login.
+    teamsFailedByOrg = new Map(teamsFailedByOrg).set(key, true);
   } finally {
     teamsLoadingByOrg = new Map(teamsLoadingByOrg).set(key, false);
   }
@@ -937,6 +957,7 @@ export function reset(): void {
   selectedAuthorLogins = new Set();
   teamsByOrg = new Map();
   teamsLoadingByOrg = new Map();
+  teamsFailedByOrg = new Map();
   isLoading = false;
   archivedPrs = [];
   archivedNextCursor = null;
