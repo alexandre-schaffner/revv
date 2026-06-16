@@ -4,7 +4,7 @@ import { prDiffFiles } from "../db/schema/index";
 import type { GitHubError } from "../domain/errors";
 import { withDb } from "../effects/with-db";
 import { DbService } from "./Db";
-import { GitHubGateway } from "./GitHub";
+import { GitHubGateway, PR_FILES_MAX_COUNT } from "./GitHub";
 import type { GitHubEtagCache } from "./GitHubEtagCache";
 import type { SettingsService } from "./Settings";
 
@@ -103,6 +103,14 @@ export const DiffCacheServiceLive = Layer.succeed(DiffCacheService, {
     }),
 });
 
+export function hasCompleteCachedFiles(
+  cached: readonly CachedDiffFile[],
+  expectedChangedFiles?: number,
+): boolean {
+  if (expectedChangedFiles === undefined) return true;
+  return cached.length >= Math.min(expectedChangedFiles, PR_FILES_MAX_COUNT);
+}
+
 /**
  * Get diff files from cache, or fetch from GitHub on a cache miss.
  * Errors from GitHub propagate to the caller.
@@ -112,6 +120,7 @@ export const getOrFetchDiffFiles = (
   repoFullName: string,
   prExternalId: number,
   token: string,
+  expectedChangedFiles?: number,
 ): Effect.Effect<
   CachedDiffFile[],
   GitHubError,
@@ -123,7 +132,7 @@ export const getOrFetchDiffFiles = (
     const { db } = yield* DbService;
 
     const cached = yield* withDb(db, diffCache.getCachedFiles(prId));
-    if (cached !== null) return cached;
+    if (cached !== null && hasCompleteCachedFiles(cached, expectedChangedFiles)) return cached;
 
     const fileList = yield* github.prs.files(repoFullName, prExternalId, token);
     const files: CachedDiffFile[] = fileList.map((f) => ({

@@ -126,6 +126,10 @@ export interface PrFileMeta {
   readonly patch: string | null;
 }
 
+const PR_FILES_PAGE_SIZE = 100;
+export const PR_FILES_MAX_PAGES = 30;
+export const PR_FILES_MAX_COUNT = PR_FILES_PAGE_SIZE * PR_FILES_MAX_PAGES;
+
 export interface PrCommit {
   readonly sha: string;
   readonly message: string;
@@ -786,9 +790,12 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
     Effect.gen(function* () {
       const apiBase = yield* resolveApiBase;
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
-      const data = yield* conditionalFetch(
-        `/repos/${owner}/${repo}/pulls/${prNumber}/files?per_page=100`,
+      // GitHub returns PR files in 100-file pages. Fetch the endpoint's full
+      // supported range so large PRs don't cache an incomplete sidebar/diff.
+      const data = yield* githubFetchPaginated(
+        `/repos/${owner}/${repo}/pulls/${prNumber}/files?per_page=${PR_FILES_PAGE_SIZE}`,
         token,
+        PR_FILES_MAX_PAGES,
         apiBase,
       );
       return (data as Record<string, unknown>[]).map((f) => ({
