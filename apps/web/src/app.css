@@ -1,8 +1,13 @@
 @import "tailwindcss";
 @import "./lib/components/ui/dotmatrix/dotmatrix-loader.css";
 @import "./lib/components/ui/glass-pill/glass-pill.css";
-@import "./lib/styles/prose.css";
 @plugin "@tailwindcss/typography";
+/* prose.css must be imported *after* the typography @plugin: it defines `.prose`
+   overrides that the plugin has to register first, otherwise Tailwind v4 skips
+   generating the prose component styles entirely (no paragraph spacing, no
+   font sizing). This deliberately places an @import after a non-import at-rule.
+   biome-ignore lint/correctness/noInvalidPositionAtImportRule: must follow @plugin */
+@import "./lib/styles/prose.css";
 
 /* ──────────────────────────────────────────────────────────
    Light theme (default)
@@ -398,6 +403,16 @@
   --color-danger: var(--revv-danger);
   --font-sans: "Inter", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", "Fira Code", monospace;
+
+  /* Markdown / prose type scale — reusable size + line-height presets.
+     Every markdown surface (walkthrough, chat, recap, review, annotations)
+     reads from these so the app has one reading scale. They also generate
+     `text-prose` / `text-prose-dense` utilities. Tuned to the pre-typography
+     reading sizes; consumed by the prose layer in lib/styles/prose.css. */
+  --text-prose: 0.875rem; /* 14px — default markdown reading size */
+  --text-prose--line-height: 1.7;
+  --text-prose-dense: 0.8125rem; /* 13px — dense side panels & summaries */
+  --text-prose-dense--line-height: 1.55;
 
   /* Diff canvas */
   --color-diff-bg: var(--revv-diff-bg);
