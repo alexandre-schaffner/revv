@@ -81,6 +81,16 @@ function rawPr(number: number): Record<string, unknown> {
   };
 }
 
+function rawPrFile(filename: string): Record<string, unknown> {
+  return {
+    filename,
+    status: "modified",
+    additions: 1,
+    deletions: 0,
+    patch: `@@ -1 +1 @@\n-${filename}\n+${filename}`,
+  };
+}
+
 describe("GitHubGateway rate-limit handling", () => {
   it("classifies Retry-After responses as rate limits without retrying", async () => {
     const db = createDb(":memory:");
@@ -115,6 +125,38 @@ describe("GitHubGateway rate-limit handling", () => {
 });
 
 describe("GitHubGateway conditional pagination", () => {
+  it("fetches all changed files across paginated PR files responses", async () => {
+    const db = createDb(":memory:");
+    const firstPage = Array.from({ length: 100 }, (_, i) => rawPrFile(`src/page-${i + 1}.ts`));
+    const secondPage = Array.from({ length: 25 }, (_, i) => rawPrFile(`src/page-${i + 101}.ts`));
+    const calls = stubFetch((_call, index) => {
+      if (index === 0) {
+        return responseJson(firstPage, {
+          headers: {
+            Link: '<https://api.github.test/repos/octo/repo/pulls/1/files?per_page=100&page=2>; rel="next"',
+          },
+        });
+      }
+      return responseJson(secondPage);
+    });
+
+    const files = await Effect.runPromise(
+      Effect.gen(function* () {
+        const github = yield* GitHubGateway;
+        return yield* github.prs.files("octo/repo", 1, "token");
+      }).pipe(Effect.provide(gatewayLayer(db))),
+    );
+
+    expect(files).toHaveLength(125);
+    expect(files[0]?.filename).toBe("src/page-1.ts");
+    expect(files.at(-1)?.filename).toBe("src/page-125.ts");
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.url).toBe("https://api.github.com/repos/octo/repo/pulls/1/files?per_page=100");
+    expect(calls[1]?.url).toBe(
+      "https://api.github.test/repos/octo/repo/pulls/1/files?per_page=100&page=2",
+    );
+  });
+
   it("keeps review comments incremental and uncached", async () => {
     const db = createDb(":memory:");
     const calls = stubFetch((_call, index) => {

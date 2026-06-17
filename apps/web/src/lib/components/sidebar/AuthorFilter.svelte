@@ -2,6 +2,8 @@
 import CaretRight from "phosphor-svelte/lib/CaretRight";
 import Check from "phosphor-svelte/lib/Check";
 import Funnel from "phosphor-svelte/lib/Funnel";
+import MagnifyingGlass from "phosphor-svelte/lib/MagnifyingGlass";
+import Spinner from "phosphor-svelte/lib/Spinner";
 import User from "phosphor-svelte/lib/User";
 import UsersThree from "phosphor-svelte/lib/UsersThree";
 import * as Popover from "$lib/components/ui/popover";
@@ -11,6 +13,7 @@ import {
   getAuthorFilterOptions,
   getRepoOwner,
   getSelectedAuthorLogins,
+  getTeamsFetchStateForOrg,
   getTeamsForOrg,
   setAuthorFilters,
   toggleAuthorFilter,
@@ -25,8 +28,15 @@ let open = $state(false);
 let failedAvatars = $state<Set<string>>(new Set());
 let teamsCollapsed = $state(false);
 let creatorsCollapsed = $state(false);
+let creatorQuery = $state("");
 
 const options = $derived(getAuthorFilterOptions(repoId));
+const normalizedCreatorQuery = $derived(creatorQuery.trim().toLowerCase());
+const visibleOptions = $derived(
+  normalizedCreatorQuery === ""
+    ? options
+    : options.filter((option) => option.login.toLowerCase().includes(normalizedCreatorQuery)),
+);
 const selected = $derived(getSelectedAuthorLogins());
 const selectedCount = $derived(selected.size);
 const selectedLabel = $derived(
@@ -40,21 +50,34 @@ const selectedLabel = $derived(
 // Teams for the repo's owning org, narrowed to members who actually have an
 // open PR here — a team you can't filter anyone down to isn't worth showing.
 const owner = $derived(repoId ? getRepoOwner(repoId) : null);
-const optionLogins = $derived(new Set(options.map((o) => o.login)));
+const teamsFetchState = $derived(owner ? getTeamsFetchStateForOrg(owner) : "idle");
+const optionLoginByKey = $derived(
+  new Map(options.map((option) => [option.login.toLowerCase(), option.login])),
+);
 const teamRows = $derived(
   (owner ? getTeamsForOrg(owner) : [])
     .map((team) => ({
       slug: team.slug,
       name: team.name,
-      members: team.memberLogins.filter((login) => optionLogins.has(login)),
+      members: [
+        ...new Set(
+          team.memberLogins
+            .map((login) => optionLoginByKey.get(login.toLowerCase()))
+            .filter((login): login is string => login !== undefined),
+        ),
+      ],
     }))
     .filter((team) => team.members.length > 0)
     .sort((a, b) => b.members.length - a.members.length || a.name.localeCompare(b.name)),
 );
+const showTeamsSection = $derived(
+  owner !== null && (teamsFetchState !== "idle" || teamRows.length > 0),
+);
 
-// Fetch the org's teams the first time the popover opens (idempotent).
+// Fetch the org's teams when the repo filter mounts. The request is
+// idempotent, so the popover usually opens with the team state already known.
 $effect(() => {
-  if (open && owner) void fetchTeamsForOrg(owner);
+  if (owner) void fetchTeamsForOrg(owner);
 });
 
 function markAvatarFailed(login: string): void {
@@ -67,6 +90,10 @@ function isTeamChecked(members: string[]): boolean {
 
 function toggleTeam(members: string[]): void {
   setAuthorFilters(members, !isTeamChecked(members));
+}
+
+function retryTeams(): void {
+  if (owner) void fetchTeamsForOrg(owner, { force: true });
 }
 </script>
 
@@ -86,43 +113,67 @@ function toggleTeam(members: string[]): void {
 {/snippet}
 
 {#snippet creatorRows()}
-	{#each options as option (option.login)}
-		{@const checked = selected.has(option.login)}
-		<button
-			type="button"
-			class="author-option"
-			class:author-option--checked={checked}
-			onclick={() => toggleAuthorFilter(option.login)}
-			aria-pressed={checked}
-		>
-			<span class="check-slot" aria-hidden="true">
-				{#if checked}
-					<Check size={12} weight="bold" />
-				{/if}
-			</span>
-
-			{#if option.avatarContent && !failedAvatars.has(option.login)}
-				<img
-					src={option.avatarContent}
-					alt=""
-					class="avatar"
-					loading="lazy"
-					referrerpolicy="no-referrer"
-					onerror={() => markAvatarFailed(option.login)}
-				/>
-			{:else}
-				<span class="avatar avatar--fallback" aria-hidden="true">
-					<User size={10} />
+	{#if visibleOptions.length > 0}
+		{#each visibleOptions as option (option.login)}
+			{@const checked = selected.has(option.login)}
+			<button
+				type="button"
+				class="author-option"
+				class:author-option--checked={checked}
+				onclick={() => toggleAuthorFilter(option.login)}
+				aria-pressed={checked}
+			>
+				<span class="check-slot" aria-hidden="true">
+					{#if checked}
+						<Check size={12} weight="bold" />
+					{/if}
 				</span>
-			{/if}
 
-			<span class="login" title={option.login}>{option.login}</span>
-			<span class="count">{option.count}</span>
-		</button>
-	{/each}
+				{#if option.avatarContent && !failedAvatars.has(option.login)}
+					<img
+						src={option.avatarContent}
+						alt=""
+						class="avatar"
+						loading="lazy"
+						referrerpolicy="no-referrer"
+						onerror={() => markAvatarFailed(option.login)}
+					/>
+				{:else}
+					<span class="avatar avatar--fallback" aria-hidden="true">
+						<User size={10} />
+					</span>
+				{/if}
+
+				<span class="login" title={option.login}>{option.login}</span>
+				<span class="count">{option.count}</span>
+			</button>
+		{/each}
+	{:else}
+		<div class="team-state-row">
+			<span>No creators match</span>
+		</div>
+	{/if}
 {/snippet}
 
-{#if options.length > 1 || teamRows.length > 0 || selectedCount > 0}
+{#snippet teamStateRow()}
+	{#if teamsFetchState === "loading"}
+		<div class="team-state-row">
+			<Spinner size={12} class="motion-essential-spin" aria-hidden="true" />
+			<span>Loading teams</span>
+		</div>
+	{:else if teamsFetchState === "error"}
+		<button type="button" class="team-state-row team-state-row--button" onclick={retryTeams}>
+			<span>Teams unavailable</span>
+			<span class="team-state-action">Retry</span>
+		</button>
+	{:else if teamRows.length === 0}
+		<div class="team-state-row">
+			<span>No teams match current PR creators</span>
+		</div>
+	{/if}
+{/snippet}
+
+{#if options.length > 1 || showTeamsSection || selectedCount > 0}
 	<Popover.Root bind:open>
 		<Popover.Trigger
 			class={`filter-trigger${selectedCount > 0 ? " filter-trigger--active" : ""}`}
@@ -142,42 +193,57 @@ function toggleTeam(members: string[]): void {
 					<button type="button" class="popover-clear" onclick={clearAuthorFilters}>Clear</button>
 				{/if}
 			</div>
+			<label class="creator-search">
+				<MagnifyingGlass size={12} aria-hidden="true" />
+				<input
+					bind:value={creatorQuery}
+					type="search"
+					placeholder="Search creators"
+					aria-label="Search creators"
+					spellcheck="false"
+					autocomplete="off"
+				/>
+			</label>
 
 			<div class="filter-scroll">
-				{#if teamRows.length > 0}
+				{#if showTeamsSection}
 					{@render sectionHeader("Teams", teamRows.length, teamsCollapsed, () => {
 						teamsCollapsed = !teamsCollapsed;
 					})}
 					{#if !teamsCollapsed}
-						<div class="author-list">
-							{#each teamRows as team (team.slug)}
-								{@const checked = isTeamChecked(team.members)}
-								<button
-									type="button"
-									class="author-option"
-									class:author-option--checked={checked}
-									onclick={() => toggleTeam(team.members)}
-									aria-pressed={checked}
-									title={`Everyone on @${team.name} with an open PR`}
-								>
-									<span class="check-slot" aria-hidden="true">
-										{#if checked}
-											<Check size={12} weight="bold" />
-										{/if}
-									</span>
+						{#if teamRows.length > 0}
+							<div class="author-list">
+								{#each teamRows as team (team.slug)}
+									{@const checked = isTeamChecked(team.members)}
+									<button
+										type="button"
+										class="author-option"
+										class:author-option--checked={checked}
+										onclick={() => toggleTeam(team.members)}
+										aria-pressed={checked}
+										title={`Everyone on @${team.name} with an open PR`}
+									>
+										<span class="check-slot" aria-hidden="true">
+											{#if checked}
+												<Check size={12} weight="bold" />
+											{/if}
+										</span>
 
-									<span class="avatar avatar--fallback" aria-hidden="true">
-										<UsersThree size={11} />
-									</span>
+										<span class="avatar avatar--fallback" aria-hidden="true">
+											<UsersThree size={11} />
+										</span>
 
-									<span class="login" title={team.name}>{team.name}</span>
-									<span class="count">{team.members.length}</span>
-								</button>
-							{/each}
-						</div>
+										<span class="login" title={team.name}>{team.name}</span>
+										<span class="count">{team.members.length}</span>
+									</button>
+								{/each}
+							</div>
+						{:else}
+							{@render teamStateRow()}
+						{/if}
 					{/if}
 
-					{@render sectionHeader("Creators", options.length, creatorsCollapsed, () => {
+					{@render sectionHeader("Creators", visibleOptions.length, creatorsCollapsed, () => {
 						creatorsCollapsed = !creatorsCollapsed;
 					})}
 					{#if !creatorsCollapsed}
@@ -259,6 +325,38 @@ function toggleTeam(members: string[]): void {
 
 	.popover-clear:hover {
 		color: var(--color-text-primary);
+	}
+
+	.creator-search {
+		display: grid;
+		grid-template-columns: 14px minmax(0, 1fr);
+		align-items: center;
+		gap: 6px;
+		min-height: 28px;
+		border: 1px solid var(--color-border);
+		border-radius: 6px;
+		padding: 0 7px;
+		background: var(--color-bg-secondary);
+		color: var(--color-text-muted);
+	}
+
+	.creator-search:focus-within {
+		border-color: var(--color-border-strong);
+		color: var(--color-text-secondary);
+	}
+
+	.creator-search input {
+		min-width: 0;
+		border: 0;
+		outline: 0;
+		background: transparent;
+		color: var(--color-text-primary);
+		font-size: 11px;
+		line-height: 1;
+	}
+
+	.creator-search input::placeholder {
+		color: var(--color-text-muted);
 	}
 
 	/* Single scroll region for both sections: scrolling carries the user past
@@ -343,6 +441,33 @@ function toggleTeam(members: string[]): void {
 	.author-option--checked {
 		background: var(--color-bg-tertiary);
 		color: var(--color-text-primary);
+	}
+
+	.team-state-row {
+		display: flex;
+		align-items: center;
+		gap: 7px;
+		min-height: 30px;
+		padding: 4px 6px 4px 21px;
+		border-radius: 6px;
+		color: var(--color-text-muted);
+		font-size: 11px;
+		text-align: left;
+	}
+
+	.team-state-row--button {
+		width: 100%;
+		justify-content: space-between;
+	}
+
+	.team-state-row--button:hover {
+		background: var(--color-bg-tertiary);
+		color: var(--color-text-secondary);
+	}
+
+	.team-state-action {
+		color: var(--color-accent);
+		font-weight: 600;
 	}
 
 	.check-slot {

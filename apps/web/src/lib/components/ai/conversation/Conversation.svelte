@@ -88,7 +88,7 @@ export type ConversationProps = HTMLAttributes<HTMLDivElement> & {
 >
 	<div
 		bind:this={scrollEl}
-		class={cn("flex-1 overflow-y-auto", innerClass)}
+		class={cn("flex-1 overflow-x-hidden overflow-y-auto", innerClass)}
 		onscroll={handleScroll}
 	>
 		{@render children?.()}

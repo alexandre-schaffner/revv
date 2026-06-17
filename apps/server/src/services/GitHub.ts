@@ -6,7 +6,7 @@ import type {
   Repository,
   Team,
 } from "@revv/shared";
-import { Context, Effect, Layer } from "effect";
+import { Context, Effect, Either, Layer } from "effect";
 import { serverEnv } from "../config";
 import { type GitHubError, GitHubNotFoundError } from "../domain/errors";
 import type { DbService } from "./Db";
@@ -126,6 +126,10 @@ export interface PrFileMeta {
   readonly patch: string | null;
 }
 
+const PR_FILES_PAGE_SIZE = 100;
+export const PR_FILES_MAX_PAGES = 30;
+export const PR_FILES_MAX_COUNT = PR_FILES_PAGE_SIZE * PR_FILES_MAX_PAGES;
+
 export interface PrCommit {
   readonly sha: string;
   readonly message: string;
@@ -203,11 +207,9 @@ interface GitHubGatewayFlatService {
   ) => Effect.Effect<Map<string, number>, GitHubError, SettingsService>;
   readonly listUserOrgs: (token: string) => Effect.Effect<Org[], GitHubError, SettingsService>;
   /**
-   * Teams (and their members) for a single org, fetched in one GraphQL call.
-   * Requires the token to carry the `read:org` scope and the user to be an
-   * org member; otherwise GitHub returns `organization: null` and this
-   * resolves to an empty list (callers treat teams as a best-effort
-   * enhancement). Capped at the first 100 teams and 100 members per team.
+   * Teams (and their members) for a single org. Requires the token to carry
+   * the `read:org` scope and the user to be an org member; otherwise GitHub
+   * may deny the request and callers treat teams as a best-effort enhancement.
    */
   readonly listTeamsForOrg: (
     org: string,
@@ -679,7 +681,8 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
   listTeamsForOrg: (org, token, explicitApiBase) =>
     Effect.gen(function* () {
       const apiBase = explicitApiBase ?? (yield* resolveApiBase);
-      const query = `query OrgTeams($org: String!) {
+      const fromGraphql = Effect.gen(function* () {
+        const query = `query OrgTeams($org: String!) {
         organization(login: $org) {
           teams(first: 100, orderBy: { field: NAME, direction: ASC }) {
             nodes {
@@ -691,42 +694,81 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
         }
       }`;
 
-      // Fetch directly rather than via the shared `githubGraphql` helper:
-      // for orgs the user can't see teams in (missing `read:org`, SAML, or
-      // non-membership) GitHub answers 200 with `organization: null` and a
-      // top-level `errors` array. The helper rejects on any `errors`; here
-      // we tolerate the partial response and degrade to "no teams".
-      const response = yield* Effect.tryPromise({
-        try: async () => {
-          const res = await fetch(`${apiBase}/graphql`, {
-            method: "POST",
-            headers: { ...githubHeaders(token), "Content-Type": "application/json" },
-            body: JSON.stringify({ query, variables: { org } }),
-          });
-          assertGitHubOk(res, "/graphql");
-          return (await res.json()) as {
-            data?: {
-              organization: {
-                teams: {
-                  nodes: Array<{
-                    slug: string;
-                    name: string;
-                    members: { nodes: Array<{ login: string }> };
-                  }>;
-                };
-              } | null;
+        // Fetch directly rather than via the shared `githubGraphql` helper:
+        // for orgs the user can't see teams in (missing `read:org`, SAML, or
+        // non-membership) GitHub answers 200 with `organization: null` and a
+        // top-level `errors` array. The helper rejects on any `errors`; here
+        // we tolerate the partial response and let the REST fallback decide.
+        const response = yield* Effect.tryPromise({
+          try: async () => {
+            const res = await fetch(`${apiBase}/graphql`, {
+              method: "POST",
+              headers: { ...githubHeaders(token), "Content-Type": "application/json" },
+              body: JSON.stringify({ query, variables: { org } }),
+            });
+            assertGitHubOk(res, "/graphql");
+            return (await res.json()) as {
+              data?: {
+                organization: {
+                  teams: {
+                    nodes: Array<{
+                      slug: string;
+                      name: string;
+                      members: { nodes: Array<{ login: string }> };
+                    }>;
+                  };
+                } | null;
+              };
             };
-          };
-        },
-        catch: toGitHubError,
+          },
+          catch: toGitHubError,
+        });
+
+        const nodes = response.data?.organization?.teams?.nodes ?? [];
+        return nodes.map((team) => ({
+          slug: team.slug,
+          name: team.name,
+          memberLogins: (team.members?.nodes ?? []).map((m) => m.login),
+        }));
       });
 
-      const nodes = response.data?.organization?.teams?.nodes ?? [];
-      return nodes.map((team) => ({
-        slug: team.slug,
-        name: team.name,
-        memberLogins: (team.members?.nodes ?? []).map((m) => m.login),
-      }));
+      const fromRest = Effect.gen(function* () {
+        const teamRows = (yield* githubFetchPaginated(
+          `/orgs/${encodeURIComponent(org)}/teams?per_page=100`,
+          token,
+          5,
+          apiBase,
+        )) as Array<{ slug: string; name: string }>;
+
+        return yield* Effect.forEach(
+          teamRows,
+          (team) =>
+            Effect.gen(function* () {
+              const members = (yield* githubFetchPaginated(
+                `/orgs/${encodeURIComponent(org)}/teams/${encodeURIComponent(team.slug)}/members?per_page=100`,
+                token,
+                10,
+                apiBase,
+              )) as Array<{ login: string }>;
+
+              return {
+                slug: team.slug,
+                name: team.name,
+                memberLogins: members.map((member) => member.login),
+              };
+            }),
+          { concurrency: 4 },
+        );
+      });
+
+      const graphqlResult = yield* Effect.either(fromGraphql);
+      if (Either.isRight(graphqlResult)) {
+        const graphqlTeams = graphqlResult.right;
+        if (graphqlTeams.some((team) => team.memberLogins.length > 0)) return graphqlTeams;
+        return yield* fromRest.pipe(Effect.catchAll(() => Effect.succeed(graphqlTeams)));
+      }
+
+      return yield* fromRest;
     }).pipe(retryTransient),
 
   getPrMeta: (repoFullName, prNumber, token) =>
@@ -748,9 +790,12 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
     Effect.gen(function* () {
       const apiBase = yield* resolveApiBase;
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
-      const data = yield* conditionalFetch(
-        `/repos/${owner}/${repo}/pulls/${prNumber}/files?per_page=100`,
+      // GitHub returns PR files in 100-file pages. Fetch the endpoint's full
+      // supported range so large PRs don't cache an incomplete sidebar/diff.
+      const data = yield* githubFetchPaginated(
+        `/repos/${owner}/${repo}/pulls/${prNumber}/files?per_page=${PR_FILES_PAGE_SIZE}`,
         token,
+        PR_FILES_MAX_PAGES,
         apiBase,
       );
       return (data as Record<string, unknown>[]).map((f) => ({

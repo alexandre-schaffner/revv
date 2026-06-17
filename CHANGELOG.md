@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.1](https://github.com/alexandre-schaffner/revv/compare/v0.12.0...v0.12.1) (2026-06-16)
+
+
+### Bug Fixes
+
+* creator and team filters + search by creator ([#135](https://github.com/alexandre-schaffner/revv/issues/135)) ([34f1633](https://github.com/alexandre-schaffner/revv/commit/34f1633c624163cd6db7d1676de93bfdd4e3f344))
+
 ## [0.12.0](https://github.com/alexandre-schaffner/revv/compare/v0.11.0...v0.12.0) (2026-06-11)
 
 

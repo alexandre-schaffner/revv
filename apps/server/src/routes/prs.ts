@@ -222,7 +222,13 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
             // Always the full PR diff (merge-base 3-dot, matching GitHub's
             // "Files changed" tab). No per-commit selection anymore — the
             // commits dropdown is read-only.
-            const files = yield* getOrFetchDiffFiles(pr.id, repo.fullName, pr.externalId, token);
+            const files = yield* getOrFetchDiffFiles(
+              pr.id,
+              repo.fullName,
+              pr.externalId,
+              token,
+              pr.changedFiles,
+            );
             const mode = coerceReviewMode(ctx.query.mode);
             const session = yield* reviewService.getActiveSession(pr.id, mode);
             const threads = session ? yield* reviewService.getThreadsForSession(session.id) : [];

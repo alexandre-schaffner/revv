@@ -31,7 +31,12 @@ import { debug, logError } from "../../logger";
 import { AppRuntime } from "../../runtime";
 import { Broadcaster } from "../../services/Broadcaster";
 import type { PrFileMeta } from "../../services/GitHub";
-import { buildActivity, type NormalizedAgentEvent, walkClaudeMessages } from "../agent-stream";
+import {
+  buildActivity,
+  type NormalizedAgentEvent,
+  walkClaudeMessages,
+  ZERO_TOKEN_USAGE,
+} from "../agent-stream";
 import { buildWalkthroughPrompt, buildWalkthroughSystemPrompt } from "../prompts/walkthrough";
 import { resolveCliBin } from "./cli-agent";
 import { createWalkthroughMcpServer, TOOL_SPECS } from "./walkthrough-tools";
@@ -384,14 +389,7 @@ export function streamWalkthroughViaMCP(
       const tokenUsage = await walkClaudeMessages(q, emit);
 
       debug("walkthrough-mcp", "Query complete.");
-      return (
-        tokenUsage ?? {
-          inputTokens: 0,
-          outputTokens: 0,
-          cacheReadInputTokens: 0,
-          cacheCreationInputTokens: 0,
-        }
-      );
+      return tokenUsage ?? ZERO_TOKEN_USAGE;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       debug("walkthrough-mcp", "Query error/abort:", message);
@@ -400,12 +398,7 @@ export function streamWalkthroughViaMCP(
         type: "error",
         data: { code: "AiGenerationError", message },
       });
-      return {
-        inputTokens: 0,
-        outputTokens: 0,
-        cacheReadInputTokens: 0,
-        cacheCreationInputTokens: 0,
-      };
+      return ZERO_TOKEN_USAGE;
     } finally {
       clearTimeout(timeoutId);
       clearInterval(heartbeatInterval);

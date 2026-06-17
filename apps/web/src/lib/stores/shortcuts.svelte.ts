@@ -95,9 +95,10 @@ function handleKeydown(e: KeyboardEvent): void {
   }
 
   // Cmd+Option+B → toggle right panel (chat) — only when actively reviewing a PR.
-  // Match on `e.code` (physical key), not `e.key`: on macOS, holding Option
-  // rewrites `e.key` to the composed glyph (Option+B → "∫"), so `e.key` never
-  // equals "b" for this combo and the shortcut would silently never fire.
+  //
+  // Match on `e.code` (the physical key), not `e.key`: on macOS, holding Option
+  // rewrites the produced character — Option+B yields "∫", so `e.key` is never
+  // "b" here. `e.code` stays "KeyB" regardless of modifiers.
   if (!e.shiftKey && e.altKey && e.code === "KeyB") {
     const onPrPage = window.location.pathname.startsWith("/review/");
     if (!onPrPage) return;

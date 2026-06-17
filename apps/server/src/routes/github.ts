@@ -1,4 +1,4 @@
-import type { Repository, Team } from "@revv/shared";
+import type { Repository } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { REPO_CACHE_TTL_MS } from "../constants";
@@ -78,10 +78,7 @@ export const githubRoutes = new Elysia({ prefix: "/api/github" })
         }),
       );
       return { teams };
-    } catch {
-      // Teams are a best-effort enhancement (needs `read:org` and org
-      // membership). Degrade to an empty list rather than failing the
-      // filter UI — the popover just falls back to per-creator filtering.
-      return { teams: [] as Team[] };
+    } catch (e) {
+      return handleAppError(e, ctx);
     }
   });

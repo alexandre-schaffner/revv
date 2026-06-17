@@ -8,8 +8,8 @@ import Copy from "phosphor-svelte/lib/Copy";
 import GitBranch from "phosphor-svelte/lib/GitBranch";
 import GitCommit from "phosphor-svelte/lib/GitCommit";
 import GitMerge from "phosphor-svelte/lib/GitMerge";
-import Lightbulb from "phosphor-svelte/lib/Lightbulb";
 import MagicWand from "phosphor-svelte/lib/MagicWand";
+import MapTrifold from "phosphor-svelte/lib/MapTrifold";
 import PaperPlaneTilt from "phosphor-svelte/lib/PaperPlaneTilt";
 import Robot from "phosphor-svelte/lib/Robot";
 import Spinner from "phosphor-svelte/lib/Spinner";
@@ -1134,7 +1134,10 @@ function activitiesForTurn(
 						aria-pressed={interactionMode === 'plan'}
 						class={interactionMode === 'plan' ? 'bg-accent/15 text-accent hover:bg-accent/25 hover:text-accent' : ''}
 					>
-						<Lightbulb class="size-3.5" />
+						<MapTrifold class="size-3.5" />
+						{#if interactionMode === 'plan'}
+							<span class="text-xs font-medium">Plan</span>
+						{/if}
 					</PromptInputButton>
 				</PromptInputTools>
 				<PromptInputSubmit disabled={!prId} />
