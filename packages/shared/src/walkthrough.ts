@@ -130,10 +130,27 @@ export interface WalkthroughIssue {
 export type RiskLevel = "low" | "medium" | "high";
 
 export interface WalkthroughTokenUsage {
+  /**
+   * Throughput totals used for billing/debug breakdowns. These count tokens
+   * processed across a run and may exceed the active model context window.
+   */
   inputTokens: number;
   outputTokens: number;
   cacheReadInputTokens: number;
   cacheCreationInputTokens: number;
+  /**
+   * Point-in-time context occupancy for the latest model call: the full prompt
+   * (including cached tokens) plus that call's output. This — not the
+   * throughput totals above — is what context-window gauges should read.
+   * Always present; `0` means "unknown / none observed yet".
+   */
+  contextTokens: number;
+  /**
+   * Provider-reported context window for the active model. Only some providers
+   * report this (e.g. the Claude Agent SDK); the sole optional field, omitted
+   * when unavailable so consumers fall back to a configured window.
+   */
+  contextWindowTokens?: number;
 }
 
 // ── Per-axis scorecard ──────────────────────────────────────────────────────

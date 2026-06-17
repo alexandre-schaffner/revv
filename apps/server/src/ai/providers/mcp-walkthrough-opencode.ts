@@ -45,6 +45,7 @@ import {
   subscribeOpencodeStream,
   walkOpencodePartsWithState,
   withAgentTurn,
+  ZERO_TOKEN_USAGE,
 } from "../agent-stream";
 import { buildWalkthroughPrompt, WALKTHROUGH_MCP_SYSTEM_PROMPT } from "../prompts/walkthrough";
 import type { ContinuationContext } from "./mcp-walkthrough";
@@ -69,6 +70,38 @@ const EXPLORATION_TOOLS = new Set([
 ]);
 
 const WALKTHROUGH_MCP_SERVER = "revv-walkthrough";
+
+type OpencodeMessageTokenSnapshot = {
+  input: number;
+  output: number;
+  reasoning: number;
+  cacheRead: number;
+  cacheWrite: number;
+};
+
+export function computeOpencodeAggregateTokens(
+  perMessageSnap: ReadonlyMap<string, OpencodeMessageTokenSnapshot>,
+  messageOrder: readonly string[],
+): WalkthroughTokenUsage {
+  let outputSum = 0;
+  let cacheWriteSum = 0;
+  for (const m of perMessageSnap.values()) {
+    outputSum += m.output + m.reasoning;
+    cacheWriteSum += m.cacheWrite;
+  }
+  const latestId = messageOrder[messageOrder.length - 1];
+  const latest = latestId !== undefined ? perMessageSnap.get(latestId) : undefined;
+  return {
+    inputTokens: latest?.input ?? 0,
+    outputTokens: outputSum,
+    cacheReadInputTokens: latest?.cacheRead ?? 0,
+    cacheCreationInputTokens: cacheWriteSum,
+    contextTokens:
+      latest !== undefined
+        ? latest.input + latest.output + latest.reasoning + latest.cacheRead + latest.cacheWrite
+        : 0,
+  };
+}
 
 // ── Deps injected by the caller (AiService) ──────────────────────────────────
 
@@ -460,14 +493,7 @@ export function streamWalkthroughViaOpencodeMCP(
           //     — both grow monotonically with conversation history, so
           //     the latest call's prompt size is the meaningful "context
           //     window usage" figure (summing would double-count history).
-          type MsgSnap = {
-            input: number;
-            output: number;
-            reasoning: number;
-            cacheRead: number;
-            cacheWrite: number;
-          };
-          const perMessageSnap = new Map<string, MsgSnap>();
+          const perMessageSnap = new Map<string, OpencodeMessageTokenSnapshot>();
           const messageOrder: string[] = [];
 
           const updateMsgSnap = (
@@ -491,23 +517,6 @@ export function streamWalkthroughViaOpencodeMCP(
             });
           };
 
-          const computeAggregateTokens = (): WalkthroughTokenUsage => {
-            let outputSum = 0;
-            let cacheWriteSum = 0;
-            for (const m of perMessageSnap.values()) {
-              outputSum += m.output + m.reasoning;
-              cacheWriteSum += m.cacheWrite;
-            }
-            const latestId = messageOrder[messageOrder.length - 1];
-            const latest = latestId !== undefined ? perMessageSnap.get(latestId) : undefined;
-            return {
-              inputTokens: latest?.input ?? 0,
-              outputTokens: outputSum,
-              cacheReadInputTokens: latest?.cacheRead ?? 0,
-              cacheCreationInputTokens: cacheWriteSum,
-            };
-          };
-
           // Dedupe by *value*, not time. Opencode resends
           // `message.updated` (and step-finish parts) verbatim across
           // state transitions, so a time-throttle would either
@@ -515,7 +524,6 @@ export function streamWalkthroughViaOpencodeMCP(
           // snapshot key lets every real change through instantly
           // while collapsing no-op resends.
           let lastUsageKey = "";
-          let tokenCallbackHits = 0;
           const onAssistantTokens = (
             messageId: string,
             tokens: {
@@ -525,14 +533,9 @@ export function streamWalkthroughViaOpencodeMCP(
               cache: { read: number; write: number };
             },
           ): void => {
-            tokenCallbackHits += 1;
             updateMsgSnap(messageId, tokens);
-            const aggregate = computeAggregateTokens();
-            const key = `${aggregate.inputTokens}|${aggregate.outputTokens}|${aggregate.cacheReadInputTokens}|${aggregate.cacheCreationInputTokens}`;
-            logError(
-              "walkthrough-opencode-mcp",
-              `[usage-diag] onAssistantTokens hit=${tokenCallbackHits} msg=${messageId} key=${key} skip=${key === lastUsageKey}`,
-            );
+            const aggregate = computeOpencodeAggregateTokens(perMessageSnap, messageOrder);
+            const key = `${aggregate.inputTokens}|${aggregate.outputTokens}|${aggregate.cacheReadInputTokens}|${aggregate.cacheCreationInputTokens}|${aggregate.contextTokens ?? 0}|${aggregate.contextWindowTokens ?? 0}`;
             if (key === lastUsageKey) return;
             lastUsageKey = key;
             push({
@@ -656,7 +659,7 @@ export function streamWalkthroughViaOpencodeMCP(
           // for that message and supersedes any earlier step-finish
           // value for the same messageID.
           updateMsgSnap(response.info.id, response.info.tokens);
-          return computeAggregateTokens();
+          return computeOpencodeAggregateTokens(perMessageSnap, messageOrder);
         },
       });
     } catch (err) {
@@ -669,12 +672,7 @@ export function streamWalkthroughViaOpencodeMCP(
           data: { code: "AiGenerationError", message },
         });
       }
-      return {
-        inputTokens: 0,
-        outputTokens: 0,
-        cacheReadInputTokens: 0,
-        cacheCreationInputTokens: 0,
-      };
+      return ZERO_TOKEN_USAGE;
     } finally {
       clearInterval(heartbeatInterval);
       await params.deps.unregisterActivityNotifier(params.walkthroughId).catch(() => {

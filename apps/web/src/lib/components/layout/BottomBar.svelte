@@ -32,14 +32,12 @@ const syncing = $derived(getThreadsSyncing(selectedPrId));
 const syncError = $derived(getSyncError(selectedPrId));
 
 const usage = $derived(getTokenUsage(selectedPrId ?? undefined));
-const totalTokens = $derived(
-  usage.inputTokens +
-    usage.outputTokens +
-    usage.cacheReadInputTokens +
-    usage.cacheCreationInputTokens,
-);
+const usedTokens = $derived(usage.contextTokens);
 const contextWindow = $derived(getSettings()?.aiContextWindow ?? "200k");
-const maxContext = $derived(contextWindow === "1m" ? 1_000_000 : 200_000);
+// `contextWindowTokens` is reported by the Claude Agent SDK only; codex and
+// opencode runs leave it unset and fall back to the configured window.
+const fallbackContextWindow = $derived(contextWindow === "1m" ? 1_000_000 : 200_000);
+const maxContext = $derived(usage.contextWindowTokens ?? fallbackContextWindow);
 const showUsage = $derived(selectedPrId !== null);
 
 let tick = $state(0);
@@ -85,7 +83,7 @@ function handleRetrySync() {
 	<!-- Right: usage indicator + sync + branch/sha -->
 	<div class="bottombar-right">
 		{#if showUsage}
-			<Context usedTokens={totalTokens} maxTokens={maxContext} {usage}>
+			<Context {usedTokens} maxTokens={maxContext} {usage}>
 				<ContextTrigger />
 				<ContextContent>
 					<ContextContentHeader />
