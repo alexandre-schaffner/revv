@@ -66,10 +66,11 @@ export const ServerConfig = Config.all({
   // ── ACP (Agent Client Protocol) chat transport ──────────────────────────
   // The right-pane chat (and merge-conflict resolution) run on a single ACP
   // client adapter — the agent runs as a subprocess spoken to over stdio
-  // JSON-RPC. The launch command is agent-agnostic: pick a baked-in preset
-  // (`acpPreset`) or override the raw command (`acpCommand` / `acpArgs`).
-  // See ai/acp/presets.ts.
-  acpPreset: Config.string("REVV_ACP_PRESET").pipe(Config.withDefault("claude-agent-acp")),
+  // JSON-RPC. Agent selection (see ai/acp/presets.ts): `acpAgent` picks any
+  // registry agent by id (e.g. `cursor`, `gemini`) regardless of the legacy
+  // `aiAgent` setting; `acpCommand`/`acpArgs` pin a raw command for an agent
+  // not in the registry.
+  acpAgent: Config.string("REVV_ACP_AGENT").pipe(Config.withDefault("")),
   acpCommand: Config.string("REVV_ACP_COMMAND").pipe(Config.withDefault("")),
   acpArgs: Config.string("REVV_ACP_ARGS").pipe(Config.withDefault("")),
 });
