@@ -176,6 +176,13 @@
       "when": 1779590000000,
       "tag": "0210_github_client_id",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1779595000000,
+      "tag": "0220_chat_session_model",
+      "breakpoints": true
     }
   ]
 }

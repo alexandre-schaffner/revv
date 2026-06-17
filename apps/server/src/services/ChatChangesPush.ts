@@ -297,9 +297,10 @@ export const ChatChangesPushServiceLive = Layer.effect(
 
         // Find a chat session for the PR's current head SHA. Try both
         // agent flavors — pick whichever one has commits.
-        const opencodeSession = yield* chatSessions.find(pr.id, "opencode", pr.headSha);
-        const claudeSession = yield* chatSessions.find(pr.id, "claude", pr.headSha);
-        const session = opencodeSession ?? claudeSession;
+        const opencodeSession = yield* chatSessions.findLatestForPr(pr.id, "opencode");
+        const claudeSession = yield* chatSessions.findLatestForPr(pr.id, "claude");
+        const codexSession = yield* chatSessions.findLatestForPr(pr.id, "codex");
+        const session = opencodeSession ?? claudeSession ?? codexSession;
         if (!session) {
           return yield* Effect.fail(new NoChatSessionError({ prId: params.prId }));
         }

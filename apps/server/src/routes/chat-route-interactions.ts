@@ -34,9 +34,10 @@ export const chatInteractionRoutes = new Elysia()
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
+            const settings = yield* settingsService.getSettings();
             const agent = yield* settingsService.resolveAgentOrDefault();
             if (!pr.headSha) return;
-            const row = yield* chatSessions.find(pr.id, agent, pr.headSha);
+            const row = yield* chatSessions.find(pr.id, agent, settings.aiModel, pr.headSha);
             if (!row) return;
             yield* chatSessions.setInteractionMode({
               chatSessionId: row.id,

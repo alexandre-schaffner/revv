@@ -15,6 +15,7 @@ import { serverEnv } from "../../config";
 import { CLI_CHAT_TURN_TIMEOUT_MS } from "../../constants";
 import { AiGenerationError } from "../../domain/errors";
 import { debug, logError } from "../../logger";
+import type { AgentId } from "../../services/Settings";
 import { getAcpConnection } from "../acp/acp-connection";
 import {
   buildActivity,
@@ -53,12 +54,9 @@ export interface StreamChatViaAcpOptions {
   readonly cwd: string;
   readonly onSessionId?: ((id: string) => Promise<void> | void) | undefined;
   readonly abortController?: AbortController | undefined;
-  /**
-   * Accepted for parity with the other drivers; ACP model selection is
-   * agent-side (the agent runs with its own configured model), so this is not
-   * forwarded over the wire.
-   */
+  /** Selected Revv model. Used when an ACP adapter supports launch-time model config. */
   readonly model?: string | undefined;
+  readonly agent: AgentId;
   readonly deps: AcpChatDeps;
   readonly prId: string;
   readonly userId: string;
@@ -90,7 +88,7 @@ export function streamChatViaAcp(
       const planMode = opts.interactionMode === "plan";
 
       try {
-        const h = await getAcpConnection(opts.cwd);
+        const h = await getAcpConnection(opts.cwd, opts.agent, opts.model);
         handle = h;
 
         // Hand the agent our chat-context HTTP MCP endpoint (review context +

@@ -9,6 +9,7 @@
 
 import { execSync } from "node:child_process";
 import { serverEnv } from "../../config";
+import type { AgentId } from "../../services/Settings";
 
 export type AcpPreset = "claude-agent-acp" | "opencode-acp" | "gemini" | "codex-acp" | "custom";
 
@@ -26,21 +27,33 @@ const PRESET_COMMANDS: Record<Exclude<AcpPreset, "custom">, AcpLaunch> = {
   "codex-acp": { command: "npx", args: ["-y", "@zed-industries/codex-acp"] },
 };
 
+const PRESET_BY_AGENT: Record<AgentId, Exclude<AcpPreset, "custom" | "gemini">> = {
+  claude: "claude-agent-acp",
+  opencode: "opencode-acp",
+  codex: "codex-acp",
+};
+
+function argsForAgent(agent: AgentId, model: string | undefined): readonly string[] {
+  const launch = PRESET_COMMANDS[PRESET_BY_AGENT[agent]];
+  if (agent !== "codex" || !model) return launch.args;
+
+  // codex-acp forwards Codex CLI config overrides. Keep this at process launch
+  // so the ACP session is born under the selected model.
+  return [...launch.args, "-c", `model=${JSON.stringify(model)}`];
+}
+
 /**
  * Resolve the effective ACP launch command. An explicit `REVV_ACP_COMMAND`
- * override wins (with space-separated `REVV_ACP_ARGS`); otherwise the configured
- * preset's baked-in command is used, falling back to `claude-agent-acp`.
+ * override wins (with space-separated `REVV_ACP_ARGS`); otherwise the selected
+ * Revv agent determines the baked-in ACP adapter.
  */
-export function resolveAcpLaunch(): AcpLaunch {
+export function resolveAcpLaunch(agent: AgentId, model?: string | undefined): AcpLaunch {
   if (serverEnv.acpCommand) {
     const args = serverEnv.acpArgs.trim().length > 0 ? serverEnv.acpArgs.trim().split(/\s+/) : [];
     return { command: serverEnv.acpCommand, args };
   }
-  const preset = serverEnv.acpPreset as AcpPreset;
-  if (preset !== "custom" && preset in PRESET_COMMANDS) {
-    return PRESET_COMMANDS[preset as Exclude<AcpPreset, "custom">];
-  }
-  return PRESET_COMMANDS["claude-agent-acp"];
+  const preset = PRESET_BY_AGENT[agent];
+  return { command: PRESET_COMMANDS[preset].command, args: argsForAgent(agent, model) };
 }
 
 /**
@@ -48,8 +61,8 @@ export function resolveAcpLaunch(): AcpLaunch {
  * as always available (it ships with Node/Bun and fetches the adapter on
  * demand); any other command is probed with `which`.
  */
-export function isAcpAvailable(): boolean {
-  const { command } = resolveAcpLaunch();
+export function isAcpAvailable(agent: AgentId): boolean {
+  const { command } = resolveAcpLaunch(agent);
   if (command === "npx" || command === "bunx") return true;
   try {
     return execSync(`which ${command}`, { encoding: "utf-8", timeout: 3000 }).trim().length > 0;

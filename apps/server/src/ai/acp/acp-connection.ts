@@ -31,6 +31,7 @@ import {
   type StopReason,
 } from "@agentclientprotocol/sdk";
 import { debug } from "../../logger";
+import type { AgentId } from "../../services/Settings";
 import { resolveAcpLaunch } from "./presets";
 
 const IDLE_STOP_MS = 5 * 60 * 1000;
@@ -69,6 +70,9 @@ export interface AcpConnectionHandle {
 }
 
 interface ConnectionEntry {
+  readonly key: string;
+  readonly agent: AgentId;
+  readonly model: string | null;
   readonly cwd: string;
   readonly proc: Bun.Subprocess<"pipe", "pipe", "pipe">;
   readonly connection: ClientSideConnection;
@@ -81,8 +85,13 @@ interface ConnectionEntry {
   alive: boolean;
 }
 
-// Keyed by cwd. One agent process per worktree.
+// Keyed by agent + model + cwd. A model/provider switch must not reuse an
+// older ACP subprocess that was launched under different credentials/config.
 const pool = new Map<string, Promise<ConnectionEntry>>();
+
+function poolKey(cwd: string, agent: AgentId, model: string | undefined): string {
+  return `${agent}\0${model ?? ""}\0${cwd}`;
+}
 
 function buildClient(entry: () => ConnectionEntry): Client {
   return {
@@ -119,8 +128,13 @@ function buildClient(entry: () => ConnectionEntry): Client {
   };
 }
 
-async function spawnConnection(cwd: string): Promise<ConnectionEntry> {
-  const { command, args } = resolveAcpLaunch();
+async function spawnConnection(
+  cwd: string,
+  agent: AgentId,
+  model: string | undefined,
+  key: string,
+): Promise<ConnectionEntry> {
+  const { command, args } = resolveAcpLaunch(agent, model);
   const proc = Bun.spawn([command, ...args], {
     cwd,
     stdin: "pipe",
@@ -149,6 +163,9 @@ async function spawnConnection(cwd: string): Promise<ConnectionEntry> {
   );
 
   const entry: ConnectionEntry = {
+    key,
+    agent,
+    model: model ?? null,
     cwd,
     proc,
     connection,
@@ -182,9 +199,9 @@ async function spawnConnection(cwd: string): Promise<ConnectionEntry> {
   // the next turn spawns fresh.
   void proc.exited.then((code) => {
     entry.alive = false;
-    pool.delete(cwd);
+    pool.delete(entry.key);
     entry.listeners.clear();
-    debug("acp-connection", `agent for ${cwd} exited (code=${code ?? "?"})`);
+    debug("acp-connection", `${entry.agent} agent for ${cwd} exited (code=${code ?? "?"})`);
   });
 
   const initialize = await connection.initialize({
@@ -219,8 +236,8 @@ function scheduleIdleStop(entry: ConnectionEntry): void {
   if (entry.idleTimer) clearTimeout(entry.idleTimer);
   entry.idleTimer = setTimeout(() => {
     if (entry.refcount > 0 || !entry.alive) return;
-    debug("acp-connection", `idle-stopping agent for ${entry.cwd}`);
-    pool.delete(entry.cwd);
+    debug("acp-connection", `idle-stopping ${entry.agent} agent for ${entry.cwd}`);
+    pool.delete(entry.key);
     try {
       entry.proc.kill();
     } catch {
@@ -289,20 +306,25 @@ function makeHandle(entry: ConnectionEntry): AcpConnectionHandle {
  * Get (or lazily spawn) the ACP agent connection for a working directory.
  * Concurrent callers for the same cwd share one subprocess.
  */
-export async function getAcpConnection(cwd: string): Promise<AcpConnectionHandle> {
-  let pending = pool.get(cwd);
+export async function getAcpConnection(
+  cwd: string,
+  agent: AgentId,
+  model?: string | undefined,
+): Promise<AcpConnectionHandle> {
+  const key = poolKey(cwd, agent, model);
+  let pending = pool.get(key);
   if (!pending) {
-    pending = spawnConnection(cwd).catch((err) => {
-      pool.delete(cwd);
+    pending = spawnConnection(cwd, agent, model, key).catch((err) => {
+      pool.delete(key);
       throw err;
     });
-    pool.set(cwd, pending);
+    pool.set(key, pending);
   }
   const entry = await pending;
   if (!entry.alive) {
     // Raced with an exit between resolve and use — retry once with a fresh spawn.
-    pool.delete(cwd);
-    return getAcpConnection(cwd);
+    pool.delete(key);
+    return getAcpConnection(cwd, agent, model);
   }
   return makeHandle(entry);
 }

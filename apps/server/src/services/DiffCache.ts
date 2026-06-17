@@ -1,7 +1,7 @@
 import { eq, inArray } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { prDiffFiles } from "../db/schema/index";
-import type { GitHubError } from "../domain/errors";
+import { type GitHubError, GitHubRateLimitError } from "../domain/errors";
 import { withDb } from "../effects/with-db";
 import { DbService } from "./Db";
 import { GitHubGateway, PR_FILES_MAX_COUNT } from "./GitHub";
@@ -111,9 +111,17 @@ export function hasCompleteCachedFiles(
   return cached.length >= Math.min(expectedChangedFiles, PR_FILES_MAX_COUNT);
 }
 
+export function shouldServeCachedFilesOnFetchError(
+  cached: readonly CachedDiffFile[] | null,
+  error: GitHubError,
+): cached is readonly CachedDiffFile[] {
+  return cached !== null && error instanceof GitHubRateLimitError;
+}
+
 /**
  * Get diff files from cache, or fetch from GitHub on a cache miss.
- * Errors from GitHub propagate to the caller.
+ * Errors from GitHub propagate to the caller unless a rate limit happens
+ * after we already have cached rows to render.
  */
 export const getOrFetchDiffFiles = (
   prId: string,
@@ -134,7 +142,19 @@ export const getOrFetchDiffFiles = (
     const cached = yield* withDb(db, diffCache.getCachedFiles(prId));
     if (cached !== null && hasCompleteCachedFiles(cached, expectedChangedFiles)) return cached;
 
-    const fileList = yield* github.prs.files(repoFullName, prExternalId, token);
+    const fetched = yield* github.prs.files(repoFullName, prExternalId, token).pipe(
+      Effect.map((fileList) => ({ source: "github" as const, fileList })),
+      Effect.catchAll((err) => {
+        if (shouldServeCachedFilesOnFetchError(cached, err)) {
+          return Effect.succeed({ source: "cache" as const, files: cached });
+        }
+        return Effect.fail(err);
+      }),
+    );
+
+    if (fetched.source === "cache") return [...fetched.files];
+
+    const fileList = fetched.fileList;
     const files: CachedDiffFile[] = fileList.map((f) => ({
       path: f.filename,
       oldPath: f.previousFilename,

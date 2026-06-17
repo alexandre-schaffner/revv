@@ -4,7 +4,7 @@ import { eq, inArray } from "drizzle-orm";
 import { Cause, Chunk, Context, Duration, Effect, Fiber, Layer, Ref, Schedule } from "effect";
 import { repositories } from "../db/schema";
 import { account, user } from "../db/schema/auth";
-import { GitHubAuthError } from "../domain/errors";
+import { GitHubAuthError, GitHubRateLimitError } from "../domain/errors";
 import { withDb as withDbHelper } from "../effects/with-db";
 import { logError } from "../logger";
 import { Broadcaster } from "./Broadcaster";
@@ -45,6 +45,9 @@ function hostFromProviderId(providerId: string): string {
   return providerId.split(":")[1] ?? "github.com";
 }
 
+const METADATA_REFRESH_INTERVAL_MS = 60 * 60 * 1000;
+const ARCHIVE_BACKFILL_INTERVAL_MS = 60 * 60 * 1000;
+
 export const PollSchedulerLive = Layer.effect(
   PollScheduler,
   Effect.gen(function* () {
@@ -70,6 +73,9 @@ export const PollSchedulerLive = Layer.effect(
     // backfill, no avatar refresh. A re-auth rotates the token, so equality
     // against the live token is the auto-clear: zero explicit hooks needed.
     const knownBadTokensByAccountId = new Map<string, string>();
+    const rateLimitedUntilByAccountId = new Map<string, number>();
+    let lastMetadataRefreshAt = Date.now();
+    let lastArchiveBackfillAt = Date.now();
 
     // Bind the captured db handle for convenience
     const withDb = <A, E>(eff: Effect.Effect<A, E, DbService>) => withDbHelper(db, eff);
@@ -230,6 +236,32 @@ export const PollSchedulerLive = Layer.effect(
             );
           };
 
+          const markRateLimited = (acc: AccountCtx, err: GitHubRateLimitError): void => {
+            const now = Date.now();
+            const resetAt = err.resetAt.getTime();
+            const retryAfterMs = err.retryAfter === undefined ? 0 : err.retryAfter * 1000;
+            const until = Math.max(
+              Number.isFinite(resetAt) ? resetAt : 0,
+              now + retryAfterMs,
+              now + 60_000,
+            );
+            const existingUntil = rateLimitedUntilByAccountId.get(acc.id);
+            rateLimitedUntilByAccountId.set(acc.id, Math.max(existingUntil ?? 0, until));
+            if (existingUntil !== undefined && existingUntil > now) return;
+            logError(
+              "PollScheduler",
+              `Account ${acc.githubLogin ?? acc.id} hit GitHub ${err.kind ?? "unknown"} rate limit — pausing GitHub sync for this account until ${new Date(until).toISOString()}.`,
+            );
+          };
+
+          const isRateLimited = (acc: AccountCtx): boolean => {
+            const until = rateLimitedUntilByAccountId.get(acc.id);
+            if (until === undefined) return false;
+            if (Date.now() < until) return true;
+            rateLimitedUntilByAccountId.delete(acc.id);
+            return false;
+          };
+
           // Resolve the OAuth account and live token for an account row,
           // returning null when the token is missing OR has been observed to
           // 401. Single gate — all per-account / per-repo guards funnel through
@@ -240,6 +272,7 @@ export const PollSchedulerLive = Layer.effect(
           ): { acc: AccountCtx; token: string } | null => {
             if (!acc?.accessToken) return null;
             if (knownBadTokensByAccountId.get(acc.id) === acc.accessToken) return null;
+            if (isRateLimited(acc)) return null;
             return { acc, token: acc.accessToken };
           };
 
@@ -320,11 +353,13 @@ export const PollSchedulerLive = Layer.effect(
               Effect.tapError((err) =>
                 err instanceof GitHubAuthError
                   ? handleAuthError(acc)
-                  : Effect.sync(() => {
-                      if (opts?.errorLabel) {
-                        logError("PollScheduler", `${opts.errorLabel}:`, err);
-                      }
-                    }),
+                  : err instanceof GitHubRateLimitError
+                    ? Effect.sync(() => markRateLimited(acc, err))
+                    : Effect.sync(() => {
+                        if (opts?.errorLabel) {
+                          logError("PollScheduler", `${opts.errorLabel}:`, err);
+                        }
+                      }),
               ),
               Effect.catchAll(() => Effect.succeed(null as A | null)),
             );
@@ -339,146 +374,157 @@ export const PollSchedulerLive = Layer.effect(
           // Bypasses the ETag cache — some GitHub Enterprise instances return
           // signed `avatar_url`s whose token expires without invalidating the
           // endpoint's ETag, so a plain `getRepo` would replay the stale body.
-          // Runs before PR sync so the sidebar sees fresh avatars ASAP after
-          // server startup.
+          // Runs hourly rather than on every PR-list poll. Repo creation and
+          // login paths already hydrate these values; this pass is maintenance
+          // for expiring GitHub Enterprise avatar URLs.
           let anyRepoChanged = false;
-          yield* Effect.forEach(
-            allRepos,
-            (repo) =>
-              Effect.gen(function* () {
-                const live = liveAccountForRepo(repo.id);
-                if (!live) return;
-                const fresh = yield* tryGuarded(
-                  live.acc,
-                  github.repos.getFresh(repo.fullName, live.token, hostToApiBase(repo.githubHost)),
-                );
-                if (!fresh) return;
-                if (
-                  fresh.avatarUrl !== repo.avatarUrl ||
-                  fresh.defaultBranch !== repo.defaultBranch
-                ) {
-                  yield* withDb(
-                    repoService.updateRepoMetadata(repo.id, {
-                      avatarUrl: fresh.avatarUrl,
-                      defaultBranch: fresh.defaultBranch,
-                    }),
-                  ).pipe(Effect.orElseSucceed(() => undefined));
-                  anyRepoChanged = true;
-                }
-              }).pipe(Effect.orElseSucceed(() => undefined)),
-            { concurrency: 3 },
-          );
-
-          if (anyRepoChanged) {
-            const refreshedRepos = yield* withDb(repoService.listRepos());
-            // Group by account and broadcast per-account so each connected client
-            // only receives repos for the account it is authenticated against.
-            const reposByAccount = Map.groupBy(
-              refreshedRepos,
-              (r) => repoToAccountId.get(r.id) ?? "unknown",
-            );
-            for (const [accountId, accountRepos] of reposByAccount) {
-              yield* broadcaster.broadcastToAccount(accountId, {
-                type: "repos:updated",
-                data: accountRepos,
-              });
-            }
-          }
-
-          // ── Refresh per-account user avatar + githubLogin ────────────────────
-          // Same rationale as the repo-metadata refresh above: GitHub Enterprise
-          // signed `avatar_url`s on the /user endpoint expire without the ETag
-          // changing, so a cached response replays a dead token. Bypassing the
-          // ETag cache keeps the stored avatar URLs fresh so sidebars, comment
-          // headers, and the settings page don't render broken avatars after the
-          // signed URL rotates.
-          //
-          // We refresh PER ACCOUNT (not "the first user") because each account
-          // has its own OAuth identity — github_login + avatar_url live on the
-          // `account` row, and the connected client's SSE stream is account-scoped. The
-          // `user.image` mirror is updated to the avatar of one of the user's
-          // accounts so existing code that reads `user.image` keeps working.
-          yield* Effect.forEach(
-            accountRows,
-            (acc) =>
-              Effect.gen(function* () {
-                const live = liveAccount(acc);
-                if (!live) return;
-                const fresh = yield* tryGuarded(
-                  live.acc,
-                  github.users.authenticatedFresh(live.token),
-                );
-                if (!fresh) return;
-
-                const avatarChanged = acc.avatarUrl !== fresh.avatarUrl;
-                const loginChanged = acc.githubLogin !== fresh.login;
-                if (!avatarChanged && !loginChanged) return;
-
-                const now = new Date();
-                yield* Effect.try({
-                  try: () =>
-                    db
-                      .update(account)
-                      .set({
+          const shouldRefreshMetadata =
+            Date.now() - lastMetadataRefreshAt >= METADATA_REFRESH_INTERVAL_MS;
+          if (shouldRefreshMetadata) {
+            lastMetadataRefreshAt = Date.now();
+            yield* Effect.forEach(
+              allRepos,
+              (repo) =>
+                Effect.gen(function* () {
+                  const live = liveAccountForRepo(repo.id);
+                  if (!live) return;
+                  const fresh = yield* tryGuarded(
+                    live.acc,
+                    github.repos.getFresh(
+                      repo.fullName,
+                      live.token,
+                      hostToApiBase(repo.githubHost),
+                    ),
+                  );
+                  if (!fresh) return;
+                  if (
+                    fresh.avatarUrl !== repo.avatarUrl ||
+                    fresh.defaultBranch !== repo.defaultBranch
+                  ) {
+                    yield* withDb(
+                      repoService.updateRepoMetadata(repo.id, {
                         avatarUrl: fresh.avatarUrl,
-                        githubLogin: fresh.login,
-                        updatedAt: now,
-                      })
-                      .where(eq(account.id, acc.id))
-                      .run(),
-                  catch: (e) => new Error(String(e)),
-                }).pipe(Effect.orElseSucceed(() => undefined));
+                        defaultBranch: fresh.defaultBranch,
+                      }),
+                    ).pipe(Effect.orElseSucceed(() => undefined));
+                    anyRepoChanged = true;
+                  }
+                }).pipe(Effect.orElseSucceed(() => undefined)),
+              { concurrency: 3 },
+            );
 
-                // Keep the in-memory map coherent for downstream consumers in
-                // this same sync cycle (e.g. the change-detection loop below).
-                accountById.set(acc.id, {
-                  ...acc,
-                  avatarUrl: fresh.avatarUrl,
-                  githubLogin: fresh.login,
+            if (anyRepoChanged) {
+              const refreshedRepos = yield* withDb(repoService.listRepos());
+              // Group by account and broadcast per-account so each connected client
+              // only receives repos for the account it is authenticated against.
+              const reposByAccount = Map.groupBy(
+                refreshedRepos,
+                (r) => repoToAccountId.get(r.id) ?? "unknown",
+              );
+              for (const [accountId, accountRepos] of reposByAccount) {
+                yield* broadcaster.broadcastToAccount(accountId, {
+                  type: "repos:updated",
+                  data: accountRepos,
                 });
+              }
+            }
 
-                // Mirror to the user row so existing code that reads
-                // `user.image` / `user.github_login` keeps working. Only touch
-                // the row if our values actually differ.
-                const userRow = db
-                  .select({ id: user.id, name: user.name, email: user.email, image: user.image })
-                  .from(user)
-                  .where(eq(user.id, acc.userId))
-                  .get();
-                if (!userRow) return;
-                const needsUserUpdate = userRow.image !== fresh.avatarUrl || loginChanged === true;
-                if (needsUserUpdate) {
+            // ── Refresh per-account user avatar + githubLogin ────────────────────
+            // Same rationale as the repo-metadata refresh above: GitHub Enterprise
+            // signed `avatar_url`s on the /user endpoint expire without the ETag
+            // changing, so a cached response replays a dead token. Bypassing the
+            // ETag cache keeps the stored avatar URLs fresh so sidebars, comment
+            // headers, and the settings page don't render broken avatars after the
+            // signed URL rotates.
+            //
+            // We refresh PER ACCOUNT (not "the first user") because each account
+            // has its own OAuth identity — github_login + avatar_url live on the
+            // `account` row, and the connected client's SSE stream is account-scoped. The
+            // `user.image` mirror is updated to the avatar of one of the user's
+            // accounts so existing code that reads `user.image` keeps working.
+            yield* Effect.forEach(
+              accountRows,
+              (acc) =>
+                Effect.gen(function* () {
+                  const live = liveAccount(acc);
+                  if (!live) return;
+                  const fresh = yield* tryGuarded(
+                    live.acc,
+                    github.users.authenticatedFresh(live.token),
+                  );
+                  if (!fresh) return;
+
+                  const avatarChanged = acc.avatarUrl !== fresh.avatarUrl;
+                  const loginChanged = acc.githubLogin !== fresh.login;
+                  if (!avatarChanged && !loginChanged) return;
+
+                  const now = new Date();
                   yield* Effect.try({
                     try: () =>
                       db
-                        .update(user)
+                        .update(account)
                         .set({
-                          image: fresh.avatarUrl,
+                          avatarUrl: fresh.avatarUrl,
                           githubLogin: fresh.login,
                           updatedAt: now,
                         })
-                        .where(eq(user.id, acc.userId))
+                        .where(eq(account.id, acc.id))
                         .run(),
                     catch: (e) => new Error(String(e)),
                   }).pipe(Effect.orElseSucceed(() => undefined));
-                }
 
-                // Broadcast scoped to this account's SSE clients so only the
-                // sessions actually authenticated against `acc` see the avatar
-                // swap. The full broadcast path would leak A's avatar to B.
-                yield* broadcaster.broadcastToAccount(acc.id, {
-                  type: "user:updated",
-                  data: {
-                    id: userRow.id,
-                    name: userRow.name,
-                    email: userRow.email,
-                    image: fresh.avatarUrl,
+                  // Keep the in-memory map coherent for downstream consumers in
+                  // this same sync cycle (e.g. the change-detection loop below).
+                  accountById.set(acc.id, {
+                    ...acc,
+                    avatarUrl: fresh.avatarUrl,
                     githubLogin: fresh.login,
-                  },
-                });
-              }).pipe(Effect.orElseSucceed(() => undefined)),
-            { concurrency: 3 },
-          );
+                  });
+
+                  // Mirror to the user row so existing code that reads
+                  // `user.image` / `user.github_login` keeps working. Only touch
+                  // the row if our values actually differ.
+                  const userRow = db
+                    .select({ id: user.id, name: user.name, email: user.email, image: user.image })
+                    .from(user)
+                    .where(eq(user.id, acc.userId))
+                    .get();
+                  if (!userRow) return;
+                  const needsUserUpdate =
+                    userRow.image !== fresh.avatarUrl || loginChanged === true;
+                  if (needsUserUpdate) {
+                    yield* Effect.try({
+                      try: () =>
+                        db
+                          .update(user)
+                          .set({
+                            image: fresh.avatarUrl,
+                            githubLogin: fresh.login,
+                            updatedAt: now,
+                          })
+                          .where(eq(user.id, acc.userId))
+                          .run(),
+                      catch: (e) => new Error(String(e)),
+                    }).pipe(Effect.orElseSucceed(() => undefined));
+                  }
+
+                  // Broadcast scoped to this account's SSE clients so only the
+                  // sessions actually authenticated against `acc` see the avatar
+                  // swap. The full broadcast path would leak A's avatar to B.
+                  yield* broadcaster.broadcastToAccount(acc.id, {
+                    type: "user:updated",
+                    data: {
+                      id: userRow.id,
+                      name: userRow.name,
+                      email: userRow.email,
+                      image: fresh.avatarUrl,
+                      githubLogin: fresh.login,
+                    },
+                  });
+                }).pipe(Effect.orElseSucceed(() => undefined)),
+              { concurrency: 3 },
+            );
+          }
 
           const results = yield* Effect.forEach(
             allRepos,
@@ -648,82 +694,88 @@ export const PollSchedulerLive = Layer.effect(
           // GitHub. Per-repo fetch cap defends against bursty repos. Failures
           // are non-fatal — we degrade silently to whatever the local mirror
           // already has.
-          const ARCHIVE_BACKFILL_DAYS = 7;
-          const ARCHIVE_BACKFILL_MAX_FETCHES_PER_REPO = 25;
-          const backfillSinceIso = new Date(
-            Date.now() - ARCHIVE_BACKFILL_DAYS * 24 * 60 * 60 * 1000,
-          ).toISOString();
-          const backfillUntilIso = new Date().toISOString();
+          const shouldRunArchiveBackfill =
+            Date.now() - lastArchiveBackfillAt >= ARCHIVE_BACKFILL_INTERVAL_MS;
+          if (shouldRunArchiveBackfill) {
+            lastArchiveBackfillAt = Date.now();
+            const ARCHIVE_BACKFILL_DAYS = 7;
+            const ARCHIVE_BACKFILL_MAX_FETCHES_PER_REPO = 25;
+            const backfillSinceIso = new Date(
+              Date.now() - ARCHIVE_BACKFILL_DAYS * 24 * 60 * 60 * 1000,
+            ).toISOString();
+            const backfillUntilIso = new Date().toISOString();
 
-          const existingExternalIdsByRepo = new Map<string, Set<number>>();
-          for (const pr of existingPrs) {
-            let set = existingExternalIdsByRepo.get(pr.repositoryId);
-            if (!set) {
-              set = new Set<number>();
-              existingExternalIdsByRepo.set(pr.repositoryId, set);
+            const existingExternalIdsByRepo = new Map<string, Set<number>>();
+            for (const pr of existingPrs) {
+              let set = existingExternalIdsByRepo.get(pr.repositoryId);
+              if (!set) {
+                set = new Set<number>();
+                existingExternalIdsByRepo.set(pr.repositoryId, set);
+              }
+              set.add(pr.externalId);
             }
-            set.add(pr.externalId);
+
+            yield* Effect.forEach(
+              allRepos,
+              (repo) =>
+                Effect.gen(function* () {
+                  const live = liveAccountForRepo(repo.id);
+                  if (!live) return;
+
+                  const searched = yield* tryGuarded(
+                    live.acc,
+                    github.prs.searchClosedInWindow(
+                      repo.fullName,
+                      backfillSinceIso,
+                      backfillUntilIso,
+                      live.token,
+                    ),
+                    { errorLabel: `archive backfill search failed for ${repo.fullName}` },
+                  );
+                  if (!searched || searched.length === 0) return;
+
+                  const known = existingExternalIdsByRepo.get(repo.id) ?? new Set<number>();
+                  const missing = searched
+                    .filter((s) => !known.has(s.number))
+                    .slice(0, ARCHIVE_BACKFILL_MAX_FETCHES_PER_REPO);
+                  if (missing.length === 0) return;
+
+                  const fetched = yield* Effect.forEach(
+                    missing,
+                    (m) =>
+                      tryGuarded(live.acc, github.prs.get(repo.fullName, m.number, live.token)),
+                    { concurrency: 3 },
+                  );
+
+                  // Repoint every fetched row at our local repo id — `getPr`
+                  // derives `id` and `repositoryId` from `${owner}/${repo}` because
+                  // it doesn't know the local row id. Matches the recap-jobs
+                  // backfill (see ProjectRecapJobs.backfillMissingPrs).
+                  const upsertable = fetched
+                    .filter((pr): pr is NonNullable<typeof pr> => pr !== null)
+                    .map((pr) => ({
+                      ...pr,
+                      id: `${repo.id}:${pr.externalId}`,
+                      repositoryId: repo.id,
+                    }));
+                  if (upsertable.length === 0) return;
+
+                  yield* withDb(prService.upsertPrs(upsertable)).pipe(
+                    Effect.tapError((err) =>
+                      Effect.sync(() => {
+                        logError(
+                          "PollScheduler",
+                          `archive backfill upsert failed for ${repo.fullName}:`,
+                          err,
+                        );
+                      }),
+                    ),
+                    Effect.orElseSucceed(() => undefined),
+                  );
+                }).pipe(Effect.orElseSucceed(() => undefined)),
+              { concurrency: 3 },
+            );
           }
-
-          yield* Effect.forEach(
-            allRepos,
-            (repo) =>
-              Effect.gen(function* () {
-                const live = liveAccountForRepo(repo.id);
-                if (!live) return;
-
-                const searched = yield* tryGuarded(
-                  live.acc,
-                  github.prs.searchClosedInWindow(
-                    repo.fullName,
-                    backfillSinceIso,
-                    backfillUntilIso,
-                    live.token,
-                  ),
-                  { errorLabel: `archive backfill search failed for ${repo.fullName}` },
-                );
-                if (!searched || searched.length === 0) return;
-
-                const known = existingExternalIdsByRepo.get(repo.id) ?? new Set<number>();
-                const missing = searched
-                  .filter((s) => !known.has(s.number))
-                  .slice(0, ARCHIVE_BACKFILL_MAX_FETCHES_PER_REPO);
-                if (missing.length === 0) return;
-
-                const fetched = yield* Effect.forEach(
-                  missing,
-                  (m) => tryGuarded(live.acc, github.prs.get(repo.fullName, m.number, live.token)),
-                  { concurrency: 3 },
-                );
-
-                // Repoint every fetched row at our local repo id — `getPr`
-                // derives `id` and `repositoryId` from `${owner}/${repo}` because
-                // it doesn't know the local row id. Matches the recap-jobs
-                // backfill (see ProjectRecapJobs.backfillMissingPrs).
-                const upsertable = fetched
-                  .filter((pr): pr is NonNullable<typeof pr> => pr !== null)
-                  .map((pr) => ({
-                    ...pr,
-                    id: `${repo.id}:${pr.externalId}`,
-                    repositoryId: repo.id,
-                  }));
-                if (upsertable.length === 0) return;
-
-                yield* withDb(prService.upsertPrs(upsertable)).pipe(
-                  Effect.tapError((err) =>
-                    Effect.sync(() => {
-                      logError(
-                        "PollScheduler",
-                        `archive backfill upsert failed for ${repo.fullName}:`,
-                        err,
-                      );
-                    }),
-                  ),
-                  Effect.orElseSucceed(() => undefined),
-                );
-              }).pipe(Effect.orElseSucceed(() => undefined)),
-            { concurrency: 3 },
-          );
 
           // Detect PRs whose headSha or baseSha changed since last sync
           const changedPrIds = allPrs
@@ -1002,8 +1054,9 @@ export const PollSchedulerLive = Layer.effect(
     });
 
     // ── Thread sync loop ──────────────────────────────────────────────────
-    // Separate, lightweight fiber that polls every ~30s to keep threads in
-    // sync with GitHub. Runs in addition to the PR-sync fiber above.
+    // Separate fiber that periodically reconciles threads for all open PRs.
+    // Opening a PR triggers an immediate targeted sync, so this background
+    // sweep stays intentionally slow to avoid GitHub rate-limit bursts.
     const threadFiberRef = yield* Ref.make<Fiber.RuntimeFiber<number, never> | null>(null);
 
     const syncThreadsForOpenPrs: Effect.Effect<void> = Effect.gen(function* () {

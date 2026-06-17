@@ -336,13 +336,15 @@ export const AiServiceLive = Layer.effect(
         Effect.withSpan("Ai.chat")(
           Effect.gen(function* () {
             const settings = yield* getSettings();
+            const agent = yield* getAgent();
             yield* Effect.annotateCurrentSpan("prId", params.prId);
             yield* Effect.annotateCurrentSpan("provider", "acp");
+            yield* Effect.annotateCurrentSpan("agent", agent);
 
             // Chat runs exclusively on the ACP transport — one adapter drives
             // whichever ACP agent is configured (see ai/acp/presets.ts).
             // Availability is the ACP command's, not a per-agent CLI's.
-            if (!isAcpAvailable()) {
+            if (!isAcpAvailable(agent)) {
               return yield* Effect.fail(new AiNotConfiguredError());
             }
 
@@ -370,6 +372,7 @@ export const AiServiceLive = Layer.effect(
               onSessionId: params.onSessionId,
               abortController: params.abortController,
               model: settings.aiModel ?? undefined,
+              agent,
               deps: {
                 issueChatMcpToken: (args: {
                   prId: string;
@@ -389,8 +392,9 @@ export const AiServiceLive = Layer.effect(
       resolveMergeConflict: (params) =>
         Effect.gen(function* () {
           const settings = yield* getSettings();
+          const agent = yield* getAgent();
 
-          if (!isAcpAvailable()) {
+          if (!isAcpAvailable(agent)) {
             return yield* Effect.fail(new AiNotConfiguredError());
           }
 
@@ -412,6 +416,7 @@ export const AiServiceLive = Layer.effect(
             onSessionId: undefined,
             abortController: params.abortController,
             model: settings.aiModel ?? undefined,
+            agent,
             deps: {
               issueChatMcpToken: (args: {
                 prId: string;

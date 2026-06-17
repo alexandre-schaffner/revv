@@ -85,7 +85,9 @@ export const chatRoute = new Elysia()
               const meta = yield* prCtx.prMeta(repo.fullName, pr.externalId, token);
               headSha = meta.headSha;
             }
+            const settings = yield* settingsService.getSettings();
             const agent = yield* settingsService.resolveAgentOrDefault();
+            const model = settings.aiModel;
 
             // Check for an existing session BEFORE acquiring the
             // worktree. No row means this is a fresh start (e.g.
@@ -93,7 +95,7 @@ export const chatRoute = new Elysia()
             // worktree we must hard-reset it — stale agent commits
             // may have survived the clear if the reset raced with
             // this new message.
-            const existingSessionRow = yield* chatSessions.find(pr.id, agent, headSha);
+            const existingSessionRow = yield* chatSessions.find(pr.id, agent, model, headSha);
             const isFreshStart = existingSessionRow === null;
 
             // Acquire (or refresh) the per-PR worktree. Shared across
@@ -132,6 +134,7 @@ export const chatRoute = new Elysia()
             const chatSessionRow = yield* chatSessions.findOrCreate({
               prId: pr.id,
               agent,
+              model,
               prHeadSha: headSha,
               worktreePath,
               branchName,
@@ -421,6 +424,7 @@ export const chatRoute = new Elysia()
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
+            const settings = yield* settingsService.getSettings();
             const agent = yield* settingsService.resolveAgentOrDefault();
 
             if (!pr.headSha) return null;
@@ -428,7 +432,7 @@ export const chatRoute = new Elysia()
             // Resolve the chat session for the *current* head SHA
             // only. Older SHAs are dormant — the user has moved on
             // and a fresh PR commit creates a fresh session row.
-            const row = yield* chatSessions.find(pr.id, agent, pr.headSha);
+            const row = yield* chatSessions.find(pr.id, agent, settings.aiModel, pr.headSha);
             if (!row) return null;
 
             const timeline = yield* chatSessions.listTimeline(row.id);
