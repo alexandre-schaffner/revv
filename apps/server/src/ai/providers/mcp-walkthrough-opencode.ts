@@ -26,6 +26,7 @@
 import type {
   UserSettings,
   WalkthroughLifecyclePhase,
+  WalkthroughMode,
   WalkthroughStreamEvent,
   WalkthroughTokenUsage,
 } from "@revv/shared";
@@ -47,7 +48,7 @@ import {
   withAgentTurn,
   ZERO_TOKEN_USAGE,
 } from "../agent-stream";
-import { buildWalkthroughPrompt, WALKTHROUGH_MCP_SYSTEM_PROMPT } from "../prompts/walkthrough";
+import { buildWalkthroughPrompt, buildWalkthroughSystemPrompt } from "../prompts/walkthrough";
 import type { ContinuationContext } from "./mcp-walkthrough";
 import { TOOL_SPECS } from "./walkthrough-tools";
 
@@ -139,6 +140,7 @@ export interface OpencodeStreamParams {
     targetBranch: string;
     url: string;
   };
+  mode: WalkthroughMode;
   files: PrFileMeta[];
   worktreePath: string;
   continuation?: ContinuationContext;
@@ -209,10 +211,12 @@ export function streamWalkthroughViaOpencodeMCP(
     push({ type: "phase", data: { phase: next, message } });
   };
 
-  const userMessage =
-    WALKTHROUGH_MCP_SYSTEM_PROMPT +
-    "\n\n---\n\n" +
-    buildWalkthroughPrompt(params, undefined, params.continuation);
+  const systemPrompt = buildWalkthroughSystemPrompt(params.mode);
+  const userMessage = `${systemPrompt}\n\n---\n\n${buildWalkthroughPrompt(
+    params,
+    undefined,
+    params.continuation,
+  )}`;
 
   const queryTask = (async (): Promise<WalkthroughTokenUsage> => {
     let sessionToken: string | null = null;
@@ -561,7 +565,7 @@ export function streamWalkthroughViaOpencodeMCP(
                 sessionID: sessionId,
                 directory: params.worktreePath,
                 parts: [{ type: "text", text: userMessage }],
-                system: WALKTHROUGH_MCP_SYSTEM_PROMPT,
+                system: systemPrompt,
                 ...(wireModel !== undefined ? { model: wireModel } : {}),
               },
               {

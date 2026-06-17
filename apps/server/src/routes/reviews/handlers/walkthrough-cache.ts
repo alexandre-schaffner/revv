@@ -1,3 +1,4 @@
+import type { WalkthroughMode } from "@revv/shared";
 import { Effect } from "effect";
 import { NotFoundError } from "../../../domain/errors";
 import { AppRuntime } from "../../../runtime";
@@ -5,6 +6,10 @@ import { GitHubGateway } from "../../../services/GitHub";
 import { PrContextService } from "../../../services/PrContext";
 import { WalkthroughService } from "../../../services/Walkthrough";
 import { WalkthroughJobs } from "../../../services/WalkthroughJobs";
+
+export function coerceWalkthroughMode(value: unknown): WalkthroughMode {
+  return value === "author" ? "author" : "reviewer";
+}
 
 /**
  * GET /api/reviews/:id/walkthrough/cached — check whether a walkthrough
@@ -27,7 +32,11 @@ import { WalkthroughJobs } from "../../../services/WalkthroughJobs";
  * intentionally stripped before send — it's an orchestrator credential,
  * not something the UI consumes.
  */
-export function getCachedWalkthroughHandler(prId: string, userId: string) {
+export function getCachedWalkthroughHandler(
+  prId: string,
+  userId: string,
+  mode: WalkthroughMode = "reviewer",
+) {
   return AppRuntime.runPromise(
     Effect.gen(function* () {
       const prContext = yield* PrContextService;
@@ -38,7 +47,7 @@ export function getCachedWalkthroughHandler(prId: string, userId: string) {
       const { pr, repo, token } = yield* prContext.resolveBasic(prId, userId);
       const meta = yield* github.prs.meta(repo.fullName, pr.externalId, token);
 
-      const cached = yield* walkthroughService.getCached(pr.id, meta.headSha);
+      const cached = yield* walkthroughService.getCached(pr.id, meta.headSha, mode);
       if (cached) {
         return {
           cached: true as const,
@@ -47,7 +56,7 @@ export function getCachedWalkthroughHandler(prId: string, userId: string) {
         };
       }
 
-      const partial = yield* walkthroughService.getPartial(pr.id, meta.headSha);
+      const partial = yield* walkthroughService.getPartial(pr.id, meta.headSha, mode);
       if (partial && partial.status === "generating") {
         const { opencodeSessionId: _ignored, status: _status, ...walkthrough } = partial;
         return {
@@ -60,9 +69,14 @@ export function getCachedWalkthroughHandler(prId: string, userId: string) {
       // No local row — probe the team cache. On a hit, import + complete
       // the row in one shot so the client renders immediately without
       // needing a Generate click or an SSE round-trip.
-      const hydrated = yield* jobs.tryHydrateFromRemoteCache(pr.id, meta.headSha, repo.fullName);
+      const hydrated = yield* jobs.tryHydrateFromRemoteCache(
+        pr.id,
+        meta.headSha,
+        repo.fullName,
+        mode,
+      );
       if (hydrated) {
-        const fromCache = yield* walkthroughService.getCached(pr.id, meta.headSha);
+        const fromCache = yield* walkthroughService.getCached(pr.id, meta.headSha, mode);
         if (fromCache) {
           return {
             cached: true as const,
@@ -95,9 +109,9 @@ export function getCachedWalkthroughHandler(prId: string, userId: string) {
  * change in the background, so the user-clicked Pull and the
  * polling-detected commit produce identical externally-observable state.
  */
-export function regenerateWalkthroughHandler(prId: string) {
+export function regenerateWalkthroughHandler(prId: string, mode?: WalkthroughMode) {
   return AppRuntime.runPromise(
-    Effect.flatMap(WalkthroughJobs, (jobs) => jobs.supersedeForPr(prId)),
+    Effect.flatMap(WalkthroughJobs, (jobs) => jobs.supersedeForPr(prId, undefined, mode)),
   );
 }
 
@@ -126,12 +140,15 @@ export function regenerateWalkthroughHandler(prId: string) {
  * 404 when no resumable row exists — the partial was superseded by a
  * head-SHA advance or never created. Regenerate is the right next action.
  */
-export function resumeWalkthroughHandler(prId: string): Promise<{ walkthroughId: string }> {
+export function resumeWalkthroughHandler(
+  prId: string,
+  mode?: WalkthroughMode,
+): Promise<{ walkthroughId: string }> {
   return AppRuntime.runPromise(
     Effect.gen(function* () {
       const jobs = yield* WalkthroughJobs;
       const service = yield* WalkthroughService;
-      const row = yield* service.findResumable(prId);
+      const row = yield* service.findResumable(prId, mode);
       if (!row) {
         return yield* Effect.fail(new NotFoundError({ resource: "walkthrough", id: prId }));
       }
@@ -143,6 +160,7 @@ export function resumeWalkthroughHandler(prId: string): Promise<{ walkthroughId:
         userId: "single-user",
         trigger: "resume",
         walkthroughId: row.id,
+        mode: mode ?? row.mode,
       });
     }),
   );

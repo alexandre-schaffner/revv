@@ -6,9 +6,10 @@ import { ReviewService } from "../services/Review";
 import { SyncService } from "../services/Sync";
 import { WalkthroughJobs } from "../services/WalkthroughJobs";
 import { handleAppError, withAccount } from "./middleware";
-import { activeSessionHandler } from "./reviews/handlers/active-session";
+import { activeSessionHandler, coerceReviewMode } from "./reviews/handlers/active-session";
 import { submitGithubReviewHandler } from "./reviews/handlers/github-submit";
 import {
+  coerceWalkthroughMode,
   getCachedWalkthroughHandler,
   regenerateWalkthroughHandler,
   resumeWalkthroughHandler,
@@ -30,7 +31,7 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
   // ── Session lifecycle ──────────────────────────────────────────────────
   .get("/active/:prId", async (ctx) => {
     try {
-      return await activeSessionHandler(ctx.params.prId);
+      return await activeSessionHandler(ctx.params.prId, coerceReviewMode(ctx.query.mode));
     } catch (e) {
       return handleAppError(e, ctx);
     }
@@ -41,13 +42,15 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
     async (ctx) => {
       try {
         return await AppRuntime.runPromise(
-          Effect.flatMap(ReviewService, (s) => s.getOrCreateActiveSession(ctx.body.pullRequestId)),
+          Effect.flatMap(ReviewService, (s) =>
+            s.getOrCreateActiveSession(ctx.body.pullRequestId, coerceReviewMode(ctx.body.mode)),
+          ),
         );
       } catch (e) {
         return handleAppError(e, ctx);
       }
     },
-    { body: t.Object({ pullRequestId: t.String() }) },
+    { body: t.Object({ pullRequestId: t.String(), mode: t.Optional(t.String()) }) },
   )
 
   .patch(
@@ -233,7 +236,10 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
       const result = await AppRuntime.runPromise(
         Effect.gen(function* () {
           const jobs = yield* WalkthroughJobs;
-          const existing = yield* jobs.findActiveByPr(ctx.params.id);
+          const reviewService = yield* ReviewService;
+          const mode = coerceWalkthroughMode((ctx.body as { mode?: unknown } | undefined)?.mode);
+          yield* reviewService.getOrCreateActiveSession(ctx.params.id, mode);
+          const existing = yield* jobs.findActiveByPr(ctx.params.id, mode);
           if (existing !== null) {
             return { walkthroughId: existing.walkthroughId };
           }
@@ -241,6 +247,7 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
             prId: ctx.params.id,
             userId: ctx.session.user.id,
             trigger: "user",
+            mode,
           });
         }),
       );
@@ -252,7 +259,11 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
 
   .get("/:id/walkthrough/current", async (ctx) => {
     try {
-      return await getCurrentWalkthroughHandler(ctx.params.id, ctx.session.user.id);
+      return await getCurrentWalkthroughHandler(
+        ctx.params.id,
+        ctx.session.user.id,
+        coerceWalkthroughMode(ctx.query.mode),
+      );
     } catch (e) {
       return handleAppError(e, ctx);
     }
@@ -260,7 +271,11 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
 
   .get("/:id/walkthrough/cached", async (ctx) => {
     try {
-      return await getCachedWalkthroughHandler(ctx.params.id, ctx.session.user.id);
+      return await getCachedWalkthroughHandler(
+        ctx.params.id,
+        ctx.session.user.id,
+        coerceWalkthroughMode(ctx.query.mode),
+      );
     } catch (e) {
       return handleAppError(e, ctx);
     }
@@ -268,7 +283,12 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
 
   .post("/:id/walkthrough/regenerate", async (ctx) => {
     try {
-      await regenerateWalkthroughHandler(ctx.params.id);
+      await regenerateWalkthroughHandler(
+        ctx.params.id,
+        (ctx.body as { mode?: unknown } | undefined)?.mode === undefined
+          ? undefined
+          : coerceWalkthroughMode((ctx.body as { mode?: unknown }).mode),
+      );
       return { success: true };
     } catch (e) {
       return handleAppError(e, ctx);
@@ -277,7 +297,12 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
 
   .post("/:id/walkthrough/resume", async (ctx) => {
     try {
-      const result = await resumeWalkthroughHandler(ctx.params.id);
+      const result = await resumeWalkthroughHandler(
+        ctx.params.id,
+        (ctx.body as { mode?: unknown } | undefined)?.mode === undefined
+          ? undefined
+          : coerceWalkthroughMode((ctx.body as { mode?: unknown }).mode),
+      );
       return { success: true, walkthroughId: result.walkthroughId };
     } catch (e) {
       return handleAppError(e, ctx);
@@ -296,7 +321,8 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
       await AppRuntime.runPromise(
         Effect.gen(function* () {
           const jobs = yield* WalkthroughJobs;
-          const existing = yield* jobs.findActiveByPr(ctx.params.id);
+          const mode = coerceWalkthroughMode((ctx.body as { mode?: unknown } | undefined)?.mode);
+          const existing = yield* jobs.findActiveByPr(ctx.params.id, mode);
           if (existing !== null) {
             yield* jobs.cancel(existing.walkthroughId);
           }

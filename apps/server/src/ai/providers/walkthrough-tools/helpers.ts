@@ -198,10 +198,10 @@ export function renderMissingInlineCommentError(uncommented: MissingInlineCommen
 // We don't have a structural flag for "this chapter is the journey" — the
 // schema is generic over chapters. Instead, we enforce via a permissive
 // regex on the title/summary text. Keywords mirror the prompt's allowed
-// titles in walkthrough-system.md so an honest agent following the prompt
+// titles in walkthrough-system-reviewer.md so an honest agent following the prompt
 // cannot accidentally trip the gate. Keep the regex and the prompt's
 // keyword list in lockstep — any change here MUST land alongside a matching
-// change to walkthrough-system.md.
+// change to walkthrough-system-reviewer.md.
 export const JOURNEY_CHAPTER_PATTERN =
   /(journey|history|got here|how we|evolution|explor|attempts?|origins?|trajectory|path to|came to|story of|trail)/i;
 

@@ -3,7 +3,7 @@ import { onDestroy, onMount, untrack } from "svelte";
 
 const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
 
-import type { WalkthroughBlock, WalkthroughSemanticStep } from "@revv/shared";
+import type { WalkthroughBlock, WalkthroughMode, WalkthroughSemanticStep } from "@revv/shared";
 import RefreshCw from "phosphor-svelte/lib/ArrowsClockwise";
 import AlertTriangle from "phosphor-svelte/lib/Warning";
 import { toast } from "svelte-sonner";
@@ -22,6 +22,7 @@ import { getRepositories } from "$lib/stores/prs.svelte";
 import {
   clearPendingWalkthroughBlockJump,
   getPendingWalkthroughBlockJump,
+  getReviewMode,
   jumpToDiffLine,
 } from "$lib/stores/review.svelte";
 import { getResolvedTheme } from "$lib/stores/theme.svelte";
@@ -95,6 +96,7 @@ const isLiveGeneration = $derived(getIsLiveGeneration());
 const cloneInProgress = $derived(getCloneInProgress());
 const cloneRepoId = $derived(getCloneRepoId());
 const repositories = $derived(getRepositories());
+const selectedMode = $derived(getReviewMode(prId));
 const cloneRepo = $derived(cloneRepoId ? repositories.find((r) => r.id === cloneRepoId) : null);
 const cloneError = $derived(cloneRepo?.cloneError ?? null);
 // Phase C markdown — rendered inline as its own sentiment card when set.
@@ -136,6 +138,7 @@ let elapsedSeconds = $state(0);
 let elapsedTimer: ReturnType<typeof setInterval> | null = null;
 let walkthroughDebounce: ReturnType<typeof setTimeout> | undefined;
 let hydrating = $state(true);
+let hydratedForMode: WalkthroughMode | null = $state(null);
 let lastStreamErrorToast: string | null = null;
 let lastCloneErrorToast: string | null = null;
 let lastSupersededToastPrId: string | null = null;
@@ -258,7 +261,7 @@ $effect(() => {
     // the activity clock, which would otherwise hammer the endpoint every tick.
     if (now - lastStallReconcileAt <= threshold) return;
     lastStallReconcileAt = now;
-    void hydrateFromCache(watchedPrId, { activate: false });
+    void hydrateFromCache(watchedPrId, { activate: false, mode: selectedMode });
   }, STALL_CHECK_INTERVAL_MS);
   return () => {
     if (stallTimer) {
@@ -826,17 +829,24 @@ $effect(() => {
 
 onMount(() => {
   initHighlighter();
+});
+
+$effect(() => {
+  const mode = selectedMode;
+  if (hydratedForMode === mode) return;
+  hydratedForMode = mode;
+  hydrating = true;
   // Seed a loading entry synchronously so the UI renders the skeleton
   // while we check the cache. Without this, the derived state resolves
   // to defaults (no summary, not streaming, no error) and the template
   // briefly shows the "No walkthrough data received" empty state.
-  prepareEntry(prId);
+  prepareEntry(prId, mode);
   // Try to hydrate instantly from the JSON cache endpoint. On a hit the
   // walkthrough renders immediately with no SSE round-trip. On a miss
   // we fall back to the debounced SSE stream — the debounce is intentional
   // for uncached PRs so quickly arrowing through the PR list doesn't
   // trigger spurious AI generations.
-  hydrateFromCache(prId).then(
+  hydrateFromCache(prId, { mode }).then(
     () => {
       hydrating = false;
     },
@@ -867,10 +877,10 @@ onDestroy(() => {
 $effect(() => {
   if (!cloneInProgress || !cloneRepoId) return;
   if (cloneRepo?.cloneStatus === "ready") {
-    void startWalkthrough(prId);
+    void startWalkthrough(prId, selectedMode);
     return;
   }
-  void pollCloneUntilResolved(prId, cloneRepoId);
+  void pollCloneUntilResolved(prId, cloneRepoId, selectedMode);
   return () => stopClonePoll(prId);
 });
 
@@ -889,7 +899,7 @@ async function handleRetryClone(): Promise<void> {
       method: "POST",
       headers: authHeaders(),
     });
-    void pollCloneUntilResolved(prId, repoId);
+    void pollCloneUntilResolved(prId, repoId, selectedMode);
   } finally {
     retryingClone = false;
   }
@@ -897,7 +907,7 @@ async function handleRetryClone(): Promise<void> {
 
 // ── Regenerate ──────────────────────────────────────────────────────
 function handleRegenerate(): void {
-  regenerate(prId);
+  regenerate(prId, selectedMode);
 }
 </script>
 

@@ -203,6 +203,22 @@ export interface UserSettings {
 
 export type SessionStatus = "active" | "completed" | "abandoned";
 
+/**
+ * Review perspective for a PR. Not a user choice — derived from identity:
+ * `author` when the signed-in user is the PR's creator (self-review),
+ * otherwise `reviewer`. Const-object "enum" (mirrors `PIERRE_THEME`) so the
+ * values are referenced as `REVIEW_MODE.author` rather than bare strings,
+ * while the persisted/wire value stays a plain string.
+ */
+export const REVIEW_MODE = {
+  reviewer: "reviewer",
+  author: "author",
+} as const;
+
+export type ReviewMode = (typeof REVIEW_MODE)[keyof typeof REVIEW_MODE];
+
+export const REVIEW_MODES: readonly ReviewMode[] = [REVIEW_MODE.reviewer, REVIEW_MODE.author];
+
 export type ThreadStatus = "open" | "pending_coder" | "pending_reviewer" | "resolved" | "wont_fix";
 
 export type AuthorRole = "reviewer" | "coder" | "ai_agent";
@@ -214,6 +230,7 @@ export type HunkDecisionType = "accepted" | "rejected";
 export interface ReviewSession {
   id: string;
   pullRequestId: string;
+  mode: ReviewMode;
   startedAt: string;
   completedAt: string | null;
   status: SessionStatus;

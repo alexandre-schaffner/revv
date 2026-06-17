@@ -131,6 +131,7 @@ export const getWalkthroughStateHandler: WalkthroughToolHandler<GetWalkthroughSt
   const state: WalkthroughState = {
     walkthroughId: row.id,
     prHeadSha: row.prHeadSha,
+    mode: row.mode as WalkthroughState["mode"],
     status: row.status as WalkthroughState["status"],
     lastCompletedPhase: row.lastCompletedPhase as WalkthroughPipelinePhase,
     summary: row.summary || null,
@@ -221,9 +222,25 @@ export const getCommitHistoryHandler: WalkthroughToolHandler<GetCommitHistoryInp
   // Return as a structured JSON payload. The agent reads commits in
   // oldest → newest order and writes the journey chapter from it; the
   // narrative shape is governed by the system prompt, not this tool.
+  if (row.mode === "author") {
+    const payload = {
+      walkthroughId: row.id,
+      prHeadSha: row.prHeadSha,
+      mode: row.mode,
+      commitCount: commits.length,
+      commits: [],
+      instructions:
+        "This walkthrough is in author self-review mode. Do not write a commit-history or journey chapter. Return to Phase B current-diff preflight review and open semantic_step_index 0 with the first substantive review area.",
+    };
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(payload) }],
+    };
+  }
+
   const payload = {
     walkthroughId: row.id,
     prHeadSha: row.prHeadSha,
+    mode: row.mode,
     commitCount: commits.length,
     commits,
     instructions:

@@ -1,4 +1,5 @@
 <script lang="ts">
+import type { ReviewMode } from "@revv/shared";
 import { onDestroy, untrack } from "svelte";
 import { page } from "$app/state";
 import { api } from "$lib/api/client";
@@ -18,6 +19,7 @@ import {
   getIsLoadingFiles,
   getPrScrollPosition,
   getReviewFiles,
+  getReviewMode,
   loadSession,
   setActiveFilePath,
   setFilesError,
@@ -35,6 +37,10 @@ import {
 import { setScrollRoot } from "$lib/stores/walkthroughNav.svelte";
 
 const pr = $derived(getSelectedPr());
+// Review lens is derived from identity (author vs. signed-in user) — see
+// `getReviewModeForPr`. No manual override; the file fetch + session load
+// below resolve through it.
+const reviewMode = $derived(getReviewMode(page.params.prId ?? ""));
 const files = $derived(getReviewFiles());
 const isLoading = $derived(getIsLoadingFiles());
 const loadError = $derived(getFilesError());
@@ -129,11 +135,13 @@ let currentRequestId = 0;
 // Phase 1 stopgap: avoid refetching diff files when the user bounces back to
 // the same PR within a minute. Replaced by queryStore in Phase 3.
 let lastLoadedPrId: string | null = null;
+let lastLoadedMode: ReviewMode | null = null;
 let lastLoadedAt = 0;
 const PR_REFETCH_WINDOW_MS = 60_000;
 
 $effect(() => {
   const prId = page.params.prId;
+  const mode = reviewMode;
   if (!prId) return;
 
   // Everything below mutates store state. Calls like `clearReviewFiles()`
@@ -155,11 +163,12 @@ $effect(() => {
     const currentFiles = getReviewFiles();
     if (
       prId === lastLoadedPrId &&
+      mode === lastLoadedMode &&
       now - lastLoadedAt < PR_REFETCH_WINDOW_MS &&
       currentFiles.length > 0
     ) {
       // Still kick off a session load so thread-counts refresh; cheap.
-      loadSession(prId).catch((e) =>
+      loadSession(prId, mode).catch((e) =>
         console.error("[review] Session load failed (non-blocking):", e),
       );
       return;
@@ -177,9 +186,9 @@ $effect(() => {
         // selection — the dropdown is read-only.
         const [filesResult] = await Promise.all([
           api.api.prs({ id: prId }).files.get({
-            query: activeFileHint === null ? {} : { active: activeFileHint },
+            query: activeFileHint === null ? { mode } : { active: activeFileHint, mode },
           }),
-          loadSession(prId).catch((e) =>
+          loadSession(prId, mode).catch((e) =>
             console.error("[review] Session load failed (non-blocking):", e),
           ),
         ]);
@@ -221,6 +230,7 @@ $effect(() => {
             setLoadedHeadSha(prId, currentPr.headSha);
           }
           lastLoadedPrId = prId;
+          lastLoadedMode = mode;
           lastLoadedAt = Date.now();
         }
       } catch (e) {
@@ -281,9 +291,7 @@ onDestroy(() => {
 				class="page-title-section"
 				class:page-title-section--narrow={activeTab === 'walkthrough' || activeTab === 'request-changes'}
 			>
-				<div class="title-row">
-					<h1 class="page-title">{pr.title}</h1>
-				</div>
+				<h1 class="page-title">{pr.title}</h1>
 				<span class="page-subtitle">#{pr.externalId} · {pr.sourceBranch} → {pr.targetBranch}</span>
 				{#if activeTab === 'walkthrough' && walkthroughRiskLevel}
 					<Badge variant="outline" class={riskClasses[walkthroughRiskLevel] ?? ''}>
@@ -417,13 +425,6 @@ onDestroy(() => {
 				0
 				minmax(32px, 1fr);
 		}
-	}
-
-	.title-row {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		min-width: 0;
 	}
 
 	.page-title {

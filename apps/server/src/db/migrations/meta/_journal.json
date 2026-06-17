@@ -176,6 +176,20 @@
       "when": 1779590000000,
       "tag": "0210_github_client_id",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1779595000000,
+      "tag": "0220_walkthrough_modes",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1779600000000,
+      "tag": "0230_review_session_modes",
+      "breakpoints": true
     }
   ]
 }

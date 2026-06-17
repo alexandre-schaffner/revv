@@ -1,3 +1,4 @@
+import { REVIEW_MODE, type WalkthroughMode } from "@revv/shared";
 import {
   type AnySQLiteColumn,
   integer,
@@ -38,6 +39,12 @@ export const walkthroughs = sqliteTable(
      * is the signal that summary isn't populated yet.
      */
     summary: text("summary").notNull().default(""),
+    /**
+     * Generation contract for this row. `reviewer` is the existing behavior:
+     * a third-party PR review with commit journey and reviewer-facing scorecard.
+     * `author` is a self-review/preflight pass for the PR author.
+     */
+    mode: text("mode").$type<WalkthroughMode>().notNull().default(REVIEW_MODE.reviewer),
     /** Phase A output: `'low' | 'medium' | 'high'`. Written by `set_overview` MCP tool. */
     riskLevel: text("risk_level").notNull().default("low"),
     /**
@@ -153,15 +160,16 @@ export const walkthroughs = sqliteTable(
   },
   (t) => ({
     /**
-     * Enforces the doctrine invariant "one walkthrough per (PR, head_sha)" at the
+     * Enforces the doctrine invariant "one walkthrough per (PR, head_sha, mode)" at the
      * database level. Makes `WalkthroughJobs.startJob` naturally idempotent:
      * concurrent starts upsert onto the same row instead of spawning duplicates.
      * Superseded rows share the PR but differ on head_sha, so this uniqueness
      * doesn't block new-commit flows.
      */
-    prHeadShaUnique: uniqueIndex("walkthroughs_pr_head_sha_unique").on(
+    prHeadShaUnique: uniqueIndex("walkthroughs_pr_head_sha_mode_unique").on(
       t.pullRequestId,
       t.prHeadSha,
+      t.mode,
     ),
   }),
 );

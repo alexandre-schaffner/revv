@@ -6,6 +6,7 @@ import GenActionBar, { type GenActionState } from "$lib/components/layout/GenAct
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
 import { isChatStreaming } from "$lib/stores/chat.svelte";
+import { getReviewMode } from "$lib/stores/review.svelte";
 import {
   abort as abortWalkthrough,
   generateWalkthrough,
@@ -33,6 +34,7 @@ const walkthroughPendingAction = $derived(getWalkthroughPendingAction(prId));
 const walkthroughHasRatings = $derived(getWalkthroughRatings().length > 0);
 const walkthroughHasNewContentBelow = $derived(getWalkthroughHasNewContentBelow());
 const chatStreaming = $derived(isChatStreaming(prId));
+const selectedMode = $derived(getReviewMode(prId));
 
 /** Map walkthrough-specific state to the normalised GenActionState. */
 const genActionState = $derived.by((): GenActionState | null => {
@@ -84,9 +86,9 @@ const combinedDisabledTitle = $derived(
         pendingAction={combinedPendingAction}
         disabledTitle={combinedDisabledTitle}
         onStop={() => abortWalkthrough(prId)}
-        onResume={() => resumeWalkthrough(prId)}
-        onGenerate={() => generateWalkthrough(prId)}
-        onRegenerate={() => regenerateWalkthrough(prId)}
+        onResume={() => resumeWalkthrough(prId, selectedMode)}
+        onGenerate={() => generateWalkthrough(prId, selectedMode)}
+        onRegenerate={() => regenerateWalkthrough(prId, selectedMode)}
       />
 
       {#if walkthroughUiState.kind === "streaming" && walkthroughHasNewContentBelow}
