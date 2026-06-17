@@ -4,6 +4,7 @@ import type {
   HunkDecision,
   HunkDecisionType,
   MessageType,
+  ReviewMode,
   ReviewSession,
   ThreadMessage,
   ThreadStatus,
@@ -25,6 +26,7 @@ function rowToSession(row: typeof reviewSessions.$inferSelect): ReviewSession {
   return {
     id: row.id,
     pullRequestId: row.pullRequestId,
+    mode: (row.mode ?? "reviewer") as ReviewMode,
     startedAt: row.startedAt,
     completedAt: row.completedAt ?? null,
     status: row.status as ReviewSession["status"],
@@ -110,9 +112,11 @@ export class ReviewService extends Context.Tag("ReviewService")<
     // Sessions
     readonly getOrCreateActiveSession: (
       prId: string,
+      mode?: ReviewMode,
     ) => Effect.Effect<ReviewSession, ReviewError, DbService>;
     readonly getActiveSession: (
       prId: string,
+      mode?: ReviewMode,
     ) => Effect.Effect<ReviewSession | null, ReviewError, DbService>;
     readonly completeSession: (
       id: string,
@@ -219,13 +223,19 @@ export class ReviewService extends Context.Tag("ReviewService")<
 export const ReviewServiceLive = Layer.succeed(ReviewService, {
   // ── Sessions ──────────────────────────────────────────────────────────────
 
-  getOrCreateActiveSession: (prId) =>
+  getOrCreateActiveSession: (prId, mode = "reviewer") =>
     Effect.gen(function* () {
       const existing = yield* tryDb("find active session", (db) =>
         db
           .select()
           .from(reviewSessions)
-          .where(and(eq(reviewSessions.pullRequestId, prId), eq(reviewSessions.status, "active")))
+          .where(
+            and(
+              eq(reviewSessions.pullRequestId, prId),
+              eq(reviewSessions.mode, mode),
+              eq(reviewSessions.status, "active"),
+            ),
+          )
           .get(),
       );
 
@@ -237,26 +247,33 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
       yield* tryDb("create session", (db) =>
         db
           .insert(reviewSessions)
-          .values({ id, pullRequestId: prId, startedAt, status: "active" })
+          .values({ id, pullRequestId: prId, mode, startedAt, status: "active" })
           .run(),
       );
 
       return {
         id,
         pullRequestId: prId,
+        mode,
         startedAt,
         completedAt: null,
         status: "active" as const,
       };
     }),
 
-  getActiveSession: (prId) =>
+  getActiveSession: (prId, mode = "reviewer") =>
     Effect.gen(function* () {
       const row = yield* tryDb("find active session", (db) =>
         db
           .select()
           .from(reviewSessions)
-          .where(and(eq(reviewSessions.pullRequestId, prId), eq(reviewSessions.status, "active")))
+          .where(
+            and(
+              eq(reviewSessions.pullRequestId, prId),
+              eq(reviewSessions.mode, mode),
+              eq(reviewSessions.status, "active"),
+            ),
+          )
           .get(),
       );
       return row ? rowToSession(row) : null;

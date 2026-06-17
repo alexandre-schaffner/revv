@@ -213,6 +213,8 @@ async function runMerge(method: import("@revv/shared").MergeMethod): Promise<voi
         {ownerSubmitting === "close" ? "Closing…" : "Close PR"}
       </GlassPill>
     {:else}
+      <!-- Not the PR owner → a reviewer. Review mode is derived from identity
+           (see getReviewModeForPr), so "not owner" is exactly "reviewer". -->
       <GlassPill
         variant="accent"
         disabled={rcSubmitting !== null || !rcHasContent}

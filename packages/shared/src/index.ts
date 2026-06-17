@@ -91,6 +91,7 @@ export type {
   PullRequestStatus,
   RecapAgentChoice,
   Repository,
+  ReviewMode,
   ReviewSession,
   ReviewStatus,
   SessionStatus,
@@ -106,4 +107,5 @@ export type {
   UserRole,
   UserSettings,
 } from "./types";
+export { REVIEW_MODE, REVIEW_MODES } from "./types";
 export * from "./walkthrough";

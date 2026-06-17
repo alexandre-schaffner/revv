@@ -183,6 +183,20 @@
       "when": 1779595000000,
       "tag": "0220_chat_session_model",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1779600000000,
+      "tag": "0220_walkthrough_modes",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "6",
+      "when": 1779605000000,
+      "tag": "0230_review_session_modes",
+      "breakpoints": true
     }
   ]
 }

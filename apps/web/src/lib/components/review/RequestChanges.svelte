@@ -194,6 +194,7 @@ async function submit(action: Action): Promise<void> {
     await api.api.prs({ id: prId })["sync-threads"].post();
 
     // Reload session so externalCommentId fields are refreshed locally
+    // (mode is derived inside loadSession from the PR's review perspective).
     await loadSession(prId);
 
     const payload = data as {
