@@ -1,6 +1,7 @@
 import { cors } from "@elysiajs/cors";
 import { Effect } from "effect";
 import { Elysia } from "elysia";
+import { stopAllAcpConnections } from "./ai/acp/acp-connection";
 import { auth } from "./auth";
 import { serverEnv } from "./config";
 import { logError } from "./logger";
@@ -181,6 +182,11 @@ async function gracefulShutdown(signal: string): Promise<void> {
   // 2. Dispose the Effect runtime — stops PollScheduler, WalkthroughJobs, etc.
   try {
     await AppRuntime.dispose();
+  } catch {}
+
+  // 2b. Tear down any pooled ACP agent subprocesses (chat transport).
+  try {
+    stopAllAcpConnections();
   } catch {}
 
   // 3. Release the PID file so the next startup doesn't treat us as stale.

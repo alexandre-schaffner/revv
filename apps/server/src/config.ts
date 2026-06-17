@@ -50,6 +50,15 @@ export const ServerConfig = Config.all({
   cloneDir: Config.string("REVV_CLONE_DIR").pipe(
     Config.withDefault(join(homedir(), ".revv", "repos")),
   ),
+  // ── ACP (Agent Client Protocol) chat transport ──────────────────────────
+  // The right-pane chat (and merge-conflict resolution) run on a single ACP
+  // client adapter — the agent runs as a subprocess spoken to over stdio
+  // JSON-RPC. The launch command is agent-agnostic: pick a baked-in preset
+  // (`acpPreset`) or override the raw command (`acpCommand` / `acpArgs`).
+  // See ai/acp/presets.ts.
+  acpPreset: Config.string("REVV_ACP_PRESET").pipe(Config.withDefault("claude-agent-acp")),
+  acpCommand: Config.string("REVV_ACP_COMMAND").pipe(Config.withDefault("")),
+  acpArgs: Config.string("REVV_ACP_ARGS").pipe(Config.withDefault("")),
 });
 
 export type ServerConfig = Config.Config.Success<typeof ServerConfig>;

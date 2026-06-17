@@ -16,8 +16,9 @@
     },
     "apps/server": {
       "name": "@revv/server",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "dependencies": {
+        "@agentclientprotocol/sdk": "^0.26.0",
         "@anthropic-ai/claude-agent-sdk": "0.3.142",
         "@effect/opentelemetry": "^0.63.0",
         "@effect/platform": "^0.96.0",
@@ -52,7 +53,7 @@
     },
     "apps/web": {
       "name": "@revv/web",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "dependencies": {
         "@elysiajs/eden": "^1.4.9",
         "@internationalized/date": "^3.12.0",
@@ -95,7 +96,7 @@
     },
     "packages/app": {
       "name": "@revv/app",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "dependencies": {
         "@revv/ui": "workspace:*",
         "@tanstack/react-router": "^1.168.0",
@@ -116,14 +117,14 @@
     },
     "packages/shared": {
       "name": "@revv/shared",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "devDependencies": {
         "typescript": "^5.7.0",
       },
     },
     "packages/ui": {
       "name": "@revv/ui",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "dependencies": {
         "@radix-ui/react-popover": "^1.1.15",
         "@radix-ui/react-slot": "^1.2.4",
@@ -157,6 +158,8 @@
     "vite": "^6.3.0",
   },
   "packages": {
+    "@agentclientprotocol/sdk": ["@agentclientprotocol/sdk@0.26.0", "", { "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" } }, "sha512-ialrcI+RzKOYe+fw+TfpyTdRmEoqIkXLlwbTi6XgaXXfdhNcdod7TmE1VsTnG3yTlox8TMTSMQgWbLLbz3r86Q=="],
+
     "@anthropic-ai/claude-agent-sdk": ["@anthropic-ai/claude-agent-sdk@0.3.142", "", { "dependencies": { "@anthropic-ai/sdk": "^0.93.0", "@modelcontextprotocol/sdk": "^1.29.0" }, "optionalDependencies": { "@anthropic-ai/claude-agent-sdk-darwin-arm64": "0.3.142", "@anthropic-ai/claude-agent-sdk-darwin-x64": "0.3.142", "@anthropic-ai/claude-agent-sdk-linux-arm64": "0.3.142", "@anthropic-ai/claude-agent-sdk-linux-arm64-musl": "0.3.142", "@anthropic-ai/claude-agent-sdk-linux-x64": "0.3.142", "@anthropic-ai/claude-agent-sdk-linux-x64-musl": "0.3.142", "@anthropic-ai/claude-agent-sdk-win32-arm64": "0.3.142", "@anthropic-ai/claude-agent-sdk-win32-x64": "0.3.142" }, "peerDependencies": { "zod": "^4.0.0" } }, "sha512-k1xBon6ov0PT/vZNf+Z+SuAqmylGJU/+a+h/k04MW5cBbzOIwiVcGFRTGJ/qbY5pcboJbLtts/yBwSu9AvSipg=="],
 
     "@anthropic-ai/claude-agent-sdk-darwin-arm64": ["@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.142", "", { "os": "darwin", "cpu": "arm64" }, "sha512-yBHOiRqJ8JcD9OAMGJALbypaD3u3K8hyUmcnZ+91AHJtymzWxuMkVi4IY1qp8L5jzkKeTnvYfCspzkbiHLuYWg=="],

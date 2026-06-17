@@ -454,69 +454,6 @@ function claudeTodoHash(content: string, activeForm: string | null): string {
 }
 
 /**
- * Normalize a Claude `askUserQuestion` tool input to our cross-provider
- * `NormalizedQuestion[]`. Defensive against malformed inputs — the SDK
- * enforces the schema, but a corrupt tool_use block shouldn't crash the
- * driver. Returns an empty array if parsing fails.
- *
- * Schema (per `AskUserQuestionInput`):
- *   { questions: Array<{
- *       question: string;
- *       header: string;
- *       multiSelect: boolean;
- *       options: Array<{ label: string; description: string; preview?: string }>;
- *     }>
- *   }
- *
- * Claude's `askUserQuestion` has no equivalent of opencode's `custom` flag,
- * so `allowCustom` is always false.
- */
-export function normalizeClaudeAskUserQuestionInput(
-  input: unknown,
-): ReadonlyArray<import("@revv/shared").NormalizedQuestion> {
-  if (!input || typeof input !== "object") return [];
-  const obj = input as Record<string, unknown>;
-  const raw = obj.questions;
-  if (!Array.isArray(raw)) return [];
-  const out: import("@revv/shared").NormalizedQuestion[] = [];
-  for (const q of raw) {
-    if (!q || typeof q !== "object") continue;
-    const qo = q as Record<string, unknown>;
-    const question = typeof qo.question === "string" ? qo.question : "";
-    const header = typeof qo.header === "string" ? qo.header : "";
-    const multiSelect = qo.multiSelect === true;
-    const optionsRaw = qo.options;
-    const options: Array<{
-      label: string;
-      description: string;
-      preview?: string;
-    }> = [];
-    if (Array.isArray(optionsRaw)) {
-      for (const o of optionsRaw) {
-        if (!o || typeof o !== "object") continue;
-        const oo = o as Record<string, unknown>;
-        const label = typeof oo.label === "string" ? oo.label : "";
-        const description = typeof oo.description === "string" ? oo.description : "";
-        const preview = typeof oo.preview === "string" ? oo.preview : undefined;
-        if (label.length === 0) continue;
-        options.push(
-          preview !== undefined ? { label, description, preview } : { label, description },
-        );
-      }
-    }
-    if (question.length === 0 || options.length === 0) continue;
-    out.push({
-      question,
-      header,
-      multiSelect,
-      allowCustom: false,
-      options,
-    });
-  }
-  return out;
-}
-
-/**
  * `ExitPlanMode.input` per Claude SDK has a single `plan: string` field.
  * Defensive: accept other shapes too.
  */

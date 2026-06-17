@@ -36,16 +36,14 @@ export interface PendingQuestionDeferred {
 
 const registry = new Map<string, PendingQuestionDeferred>();
 
-export function registerPendingQuestion(
-  providerRequestId: string,
-  deferred: PendingQuestionDeferred,
-): void {
-  registry.set(providerRequestId, deferred);
-}
-
 /**
  * Look up and remove the deferred. Returns null if the entry is gone (server
  * restarted, driver already cleaned up, or the answer was already submitted).
+ *
+ * NOTE: the ACP chat transport auto-allows tool permissions and does not bridge
+ * `askUserQuestion`, so nothing currently registers deferreds here — this always
+ * returns null until question-bridging lands. Kept so the answer endpoint stays
+ * a safe no-op.
  */
 export function takePendingQuestion(providerRequestId: string): PendingQuestionDeferred | null {
   const deferred = registry.get(providerRequestId);

@@ -22,7 +22,7 @@ import type { ToolSpec as GatewayToolSpec, McpToolResult } from "../mcp-tool-gat
  * map to the two transports: the in-process Claude SDK and the HTTP MCP
  * route used by the opencode daemon.
  */
-export type ChatEditActor = "chat:claude" | "chat:opencode" | "chat:codex";
+export type ChatEditActor = "chat:claude" | "chat:opencode" | "chat:codex" | "chat:acp";
 
 export interface ChatWalkthroughEditContext {
   /** Direct DB handle (Bun sqlite + drizzle). */

@@ -25,6 +25,7 @@
     "typecheck": "turbo run typecheck",
     "lint": "biome ci . && bun run check:import-boundaries",
     "check:import-boundaries": "bun scripts/check-import-boundaries.ts",
+    "spike:acp": "bun scripts/acp-capability-spike.ts",
     "lint:fix": "biome check --fix .",
     "format": "biome format --write .",
     "format:check": "biome format .",

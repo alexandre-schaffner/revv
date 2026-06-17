@@ -23,7 +23,7 @@ import { walkthroughIssues } from "../../db/schema/walkthrough-issues";
 import { walkthroughs } from "../../db/schema/walkthroughs";
 import type { ChatEditToolResult, ChatWalkthroughEditContext } from "./chat-edit-tools";
 import { EDIT_TOOL_SPECS } from "./chat-edit-tools";
-import { bindInProcess, type ToolSpec, type ToolSpecBundle } from "./mcp-tool-gateway";
+import type { ToolSpec, ToolSpecBundle } from "./mcp-tool-gateway";
 
 // ── Context ─────────────────────────────────────────────────────────────────
 
@@ -315,14 +315,3 @@ export const CHAT_TOOL_BUNDLE: ToolSpecBundle<ChatToolContext, ChatToolResult> =
   version: "1.0.0",
   specs: CHAT_TOOL_SPECS,
 };
-
-// ── Claude Agent SDK adapter ────────────────────────────────────────────────
-
-/**
- * Create an in-process MCP server registration for the Claude Agent SDK,
- * scoped to a single PR. Mirrors `createWalkthroughMcpServer` but with the
- * read-only tool surface above.
- */
-export function createChatMcpServer(ctx: ChatToolContext): ReturnType<typeof bindInProcess> {
-  return bindInProcess(CHAT_TOOL_BUNDLE, ctx);
-}

@@ -43,11 +43,12 @@
 // Re-export the SDK's Part type for any other file in this package that wants
 // to talk about opencode parts without depending on the SDK directly.
 export type { Part } from "@opencode-ai/sdk/v2";
+// Re-export everything from the split modules so existing import paths work
+export * from "./agent-stream/acp-decoders";
 export * from "./agent-stream/agent-turn";
 export * from "./agent-stream/claude-walker";
 export * from "./agent-stream/codex-walker";
 export * from "./agent-stream/fluid-chunker";
-// Re-export everything from the split modules so existing import paths work
 export * from "./agent-stream/normalized-events";
 export * from "./agent-stream/opencode-decoders";
 export * from "./agent-stream/opencode-sse";
