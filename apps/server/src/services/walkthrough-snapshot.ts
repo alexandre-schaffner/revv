@@ -1,7 +1,7 @@
 // ─── Walkthrough snapshot exporter ──────────────────────────────────────────
 //
 // Pure (DB-only) translation between an on-disk `walkthroughs`-row family
-// and a `WalkthroughSnapshotV1`. Used by:
+// and a `WalkthroughSnapshotV2`. Used by:
 //
 //   • RemoteWalkthroughCache.push — exports the row before gzip+upload.
 //   • Tests — round-trips a generated walkthrough through
@@ -30,7 +30,7 @@ import type {
   WalkthroughSnapshotIssue,
   WalkthroughSnapshotRating,
   WalkthroughSnapshotSemanticStep,
-  WalkthroughSnapshotV1,
+  WalkthroughSnapshotV2,
   WalkthroughTokenUsage,
 } from "@revv/shared";
 import { CACHE_SCHEMA_VERSION } from "@revv/shared";
@@ -74,39 +74,43 @@ const isCitation = (v: unknown): v is RatingCitation =>
   typeof (v as { startLine?: unknown }).startLine === "number" &&
   typeof (v as { endLine?: unknown }).endLine === "number";
 
+const ZERO_USAGE: WalkthroughTokenUsage = {
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadInputTokens: 0,
+  cacheCreationInputTokens: 0,
+  contextTokens: 0,
+};
+
 function parseTokenUsage(raw: string | null): WalkthroughTokenUsage {
-  if (!raw)
-    return {
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheReadInputTokens: 0,
-      cacheCreationInputTokens: 0,
-    };
+  if (!raw) return ZERO_USAGE;
   try {
     const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== "object" || parsed === null) {
-      return {
-        inputTokens: 0,
-        outputTokens: 0,
-        cacheReadInputTokens: 0,
-        cacheCreationInputTokens: 0,
-      };
-    }
+    if (typeof parsed !== "object" || parsed === null) return ZERO_USAGE;
     const u = parsed as Record<string, unknown>;
+    const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+    const inputTokens = num(u.inputTokens);
+    const outputTokens = num(u.outputTokens);
+    const cacheReadInputTokens = num(u.cacheReadInputTokens);
+    const cacheCreationInputTokens = num(u.cacheCreationInputTokens);
+    const contextWindowTokens = num(u.contextWindowTokens);
+    // Snapshots predating context-occupancy tracking carry no `contextTokens`.
+    // Fall back to the throughput sum (the gauge's legacy formula) so an
+    // imported historical walkthrough doesn't render an empty gauge.
+    const contextTokens =
+      typeof u.contextTokens === "number" && Number.isFinite(u.contextTokens)
+        ? u.contextTokens
+        : inputTokens + outputTokens + cacheReadInputTokens + cacheCreationInputTokens;
     return {
-      inputTokens: typeof u.inputTokens === "number" ? u.inputTokens : 0,
-      outputTokens: typeof u.outputTokens === "number" ? u.outputTokens : 0,
-      cacheReadInputTokens: typeof u.cacheReadInputTokens === "number" ? u.cacheReadInputTokens : 0,
-      cacheCreationInputTokens:
-        typeof u.cacheCreationInputTokens === "number" ? u.cacheCreationInputTokens : 0,
+      inputTokens,
+      outputTokens,
+      cacheReadInputTokens,
+      cacheCreationInputTokens,
+      contextTokens,
+      ...(contextWindowTokens > 0 ? { contextWindowTokens } : {}),
     };
   } catch {
-    return {
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheReadInputTokens: 0,
-      cacheCreationInputTokens: 0,
-    };
+    return ZERO_USAGE;
   }
 }
 
@@ -157,7 +161,7 @@ function parseProviderConfig(raw: string | null, modelUsed: string): GenerationP
 }
 
 /**
- * Build a `WalkthroughSnapshotV1` from a completed walkthrough row.
+ * Build a `WalkthroughSnapshotV2` from a completed walkthrough row.
  *
  * Pre-conditions checked by the caller (`RemoteWalkthroughCache.push`):
  *   • `status='complete'` (avoids exporting half-generated rows)
@@ -168,7 +172,7 @@ function parseProviderConfig(raw: string | null, modelUsed: string): GenerationP
  * Synchronous Drizzle reads — wrap in `Effect.try` at the call site if
  * you need an Effect-returning wrapper.
  */
-export function exportWalkthroughSnapshot(db: Db, params: ExportParams): WalkthroughSnapshotV1 {
+export function exportWalkthroughSnapshot(db: Db, params: ExportParams): WalkthroughSnapshotV2 {
   const row = db.select().from(walkthroughs).where(eq(walkthroughs.id, params.walkthroughId)).get();
   if (!row) {
     throw new ExportError(`walkthrough ${params.walkthroughId} not found`);
@@ -310,7 +314,7 @@ export function exportWalkthroughSnapshot(db: Db, params: ExportParams): Walkthr
  * `complete_walkthrough` from the MCP tool surface — same checks).
  */
 export function validateSnapshot(
-  s: WalkthroughSnapshotV1,
+  s: WalkthroughSnapshotV2,
 ): { ok: true } | { ok: false; reason: string } {
   if (s.schemaVersion !== CACHE_SCHEMA_VERSION) {
     return {

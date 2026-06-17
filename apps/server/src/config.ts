@@ -25,16 +25,29 @@ export const ServerConfig = Config.all({
   port: Config.integer("PORT").pipe(Config.withDefault(API_PORT)),
   channel: Config.string("REVV_CHANNEL").pipe(Config.withDefault(DEFAULT_APP_CHANNEL)),
   dbPath: Config.string("REVV_DB_PATH").pipe(Config.withDefault("./revv.db")),
-  // Bundled OAuth App client_id, registered on `nocturlab.ghe.com`. The
-  // `GITHUB_CLIENT_ID` env var overrides for development or self-hosting
-  // against a different GitHub instance.
-  githubClientId: Config.string("GITHUB_CLIENT_ID").pipe(
-    Config.withDefault("Ov23g4GLrM59sDrek6wo"),
-  ),
+  // Build edition. `oss` (default) authenticates via the classic OAuth App
+  // with the coarse `repo` scope, bring-your-own-credentials, for self-hosting.
+  // `pro` authenticates via the Revv GitHub App (fine-grained permissions,
+  // user-to-server tokens) on github.com. Device flow either way — no secret.
+  // See docs/adr/0001-pro-github-app-oss-oauth-split.md.
+  edition: Config.string("REVV_EDITION").pipe(Config.withDefault("oss")),
+  // Generic GitHub Enterprise OAuth/App client_id override for dev or
+  // self-hosting. No host is baked in — GHE users supply their own client_id
+  // during onboarding (stored in settings, see `clientIdForHost`); this env
+  // var is the escape hatch for a fixed self-hosted deployment. Empty by
+  // default: a GHE host with neither a settings nor an env client_id fails
+  // sign-in with a clear, diagnosable error rather than a wrong fallback.
+  githubClientId: Config.string("GITHUB_CLIENT_ID").pipe(Config.withDefault("")),
   // Bundled OAuth App client_id, registered on github.com. The
   // `GITHUB_CLIENT_ID_PUBLIC` env var overrides for self-hosting.
   githubClientIdPublic: Config.string("GITHUB_CLIENT_ID_PUBLIC").pipe(
     Config.withDefault("Ov23liI36U1MLWk3kF8l"),
+  ),
+  // Bundled GitHub App client_id (Pro edition), registered on github.com.
+  // Public value, not a secret — device flow needs no client_secret and the
+  // app uses no private key on the client. Overridable via env.
+  githubAppClientId: Config.string("GITHUB_APP_CLIENT_ID").pipe(
+    Config.withDefault("Iv23lixUYaPwtByygekJ"),
   ),
   githubHost: Config.string("GITHUB_HOST").pipe(Config.withDefault("github.com")),
   revDebug: Config.boolean("REV_DEBUG").pipe(Config.withDefault(false)),
@@ -81,6 +94,10 @@ function normalizeChannel(value: string): AppChannel {
   return value === "dev" ? "dev" : "prod";
 }
 
+function normalizeEdition(value: string): "oss" | "pro" {
+  return value === "pro" ? "pro" : "oss";
+}
+
 /** `api.github.com` for github.com, `api.<host>` for GitHub Enterprise. */
 const githubApiBase =
   resolved.githubHost === "github.com"
@@ -90,5 +107,6 @@ const githubApiBase =
 export const serverEnv = {
   ...resolved,
   channel: normalizeChannel(resolved.channel),
+  edition: normalizeEdition(resolved.edition),
   githubApiBase,
 } as const;

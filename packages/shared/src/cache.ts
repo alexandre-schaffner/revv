@@ -1,7 +1,7 @@
 // ─── Remote walkthrough cache (GCS-backed) ──────────────────────────────────
 //
 // Wire format for the team-shared walkthrough cache. The local server
-// gzip-encodes a `WalkthroughSnapshotV1` and uploads it to:
+// gzip-encodes a `WalkthroughSnapshotV2` and uploads it to:
 //
 //   gs://<bucket>/<owner>/<repo>/<headSha>.json.gz
 //
@@ -25,7 +25,7 @@ import type {
 } from "./walkthrough";
 
 /** Bump this when the snapshot shape changes. Importers reject mismatches. */
-export const CACHE_SCHEMA_VERSION = 1 as const;
+export const CACHE_SCHEMA_VERSION = 2 as const;
 
 /**
  * Captured atomically at job start so a settings change mid-run doesn't
@@ -67,7 +67,7 @@ export interface WalkthroughSnapshotBlock {
   semanticStepIndex: number;
   stepIndex: number;
   /** Block type — discriminates the `data` payload. */
-  type: "diff" | "code" | "markdown";
+  type: WalkthroughBlock["type"];
   /** Typed payload — same shape as the on-row JSON. */
   data: WalkthroughBlock;
 }
@@ -115,8 +115,8 @@ export interface WalkthroughSnapshotSemanticStep {
  *   • issues where `submittedAt != null` (per-account GitHub state)
  *   • per-row ids on blocks/issues/ratings (regenerated on import)
  */
-export interface WalkthroughSnapshotV1 {
-  schemaVersion: 1;
+export interface WalkthroughSnapshotV2 {
+  schemaVersion: typeof CACHE_SCHEMA_VERSION;
   /** `"owner/repo"` — pairs with `prHeadSha` to locate the bucket object. */
   repoFullName: string;
   prHeadSha: string;

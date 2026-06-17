@@ -37,8 +37,22 @@ export function getGithubHost(): string | null {
   return settings?.githubHost ?? null;
 }
 
-export async function setGithubHost(host: string): Promise<void> {
-  await updateSettings({ githubHost: host });
+/**
+ * BYO OAuth/App client ID for a user-added GitHub Enterprise host. Empty for
+ * github.com. The onboarding host step writes this alongside `githubHost`
+ * when the user points Revv at their own GHE instance.
+ */
+export function getGithubClientId(): string {
+  return settings?.githubClientId ?? "";
+}
+
+/**
+ * Persist the host and its client ID together. Pass an empty `clientId` for
+ * github.com so a previously-saved custom ID is cleared when switching back
+ * to public GitHub.
+ */
+export async function setGithubConfig(host: string, clientId: string): Promise<void> {
+  await updateSettings({ githubHost: host, githubClientId: clientId });
 }
 
 /**

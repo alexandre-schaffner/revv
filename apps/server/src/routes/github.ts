@@ -67,4 +67,18 @@ export const githubRoutes = new Elysia({ prefix: "/api/github" })
       }
     },
     { body: t.Object({ fullNames: t.Array(t.String()) }) },
-  );
+  )
+  .get("/teams/:org", async (ctx) => {
+    try {
+      const teams = await AppRuntime.runPromise(
+        Effect.gen(function* () {
+          const github = yield* GitHubGateway;
+          const token = ctx.account.accessToken;
+          return yield* github.repos.teamsForOrg(ctx.params.org, token);
+        }),
+      );
+      return { teams };
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  });

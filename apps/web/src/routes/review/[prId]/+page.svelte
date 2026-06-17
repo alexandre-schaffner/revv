@@ -369,13 +369,13 @@ onDestroy(() => {
 	   6-col grid used by every container inside GuidedWalkthrough (content,
 	   loading skeleton, stepper header, blocks, …). See the derivation in
 	   GuidedWalkthrough.svelte → `.walkthrough-content` for the col_1 math
-	   (viewport-anchored centring that stays stable under sidebar toggle/
-	   resize). Template must stay byte-for-byte identical to the walkthrough
+	   (main-area-anchored centring that re-centres on every sidebar/right-panel
+	   toggle). Template must stay byte-for-byte identical to the walkthrough
 	   grids so the title above and the content below align pixel-for-pixel. */
 	.page-title-section--narrow {
 		display: grid;
 		grid-template-columns:
-			max(24px, min(calc(100% - 50vw - 458px), calc(100% - 1312px)))
+			max(24px, min(calc(50% - 458px), calc(100% - 1312px)))
 			48px
 			minmax(0, 820px)
 			40px

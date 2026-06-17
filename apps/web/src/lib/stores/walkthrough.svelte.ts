@@ -66,13 +66,10 @@ export interface WalkthroughEntry {
   superseded: boolean;
   explorationSteps: Activity[];
   /**
-   * Streamed model reasoning text concatenated in arrival order. Drives the
-   * thoughts toggle UI alongside `timeline`. Ephemeral — not persisted.
-   */
-  thoughts: string;
-  /**
    * Chronological mix of thoughts and exploration tool calls for the live
-   * "Reviewing…" feed. See `WalkthroughTimelineEntry`. Ephemeral.
+   * "Reviewing…" feed. See `WalkthroughTimelineEntry`. Ephemeral. The thoughts
+   * toggle UI renders from this directly — there is no separate concatenated
+   * thoughts string.
    */
   timeline: WalkthroughTimelineEntry[];
   issues: WalkthroughIssue[];
@@ -115,17 +112,33 @@ export const ZERO_TOKEN_USAGE: WalkthroughTokenUsage = Object.freeze({
   outputTokens: 0,
   cacheReadInputTokens: 0,
   cacheCreationInputTokens: 0,
+  contextTokens: 0,
 });
 
 export function coerceTokenUsage(raw: unknown): WalkthroughTokenUsage {
   if (raw === null || typeof raw !== "object") return { ...ZERO_TOKEN_USAGE };
   const r = raw as Record<string, unknown>;
   const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+  const inputTokens = num(r.inputTokens);
+  const outputTokens = num(r.outputTokens);
+  const cacheReadInputTokens = num(r.cacheReadInputTokens);
+  const cacheCreationInputTokens = num(r.cacheCreationInputTokens);
+  const contextWindowTokens = num(r.contextWindowTokens);
+  // Walkthroughs generated before context occupancy was tracked carry no
+  // `contextTokens`. Fall back to the throughput sum (the gauge's old formula)
+  // so historical PRs render a populated gauge instead of an empty 0% ring;
+  // freshly generated rows always carry a real point-in-time value.
+  const contextTokens =
+    typeof r.contextTokens === "number" && Number.isFinite(r.contextTokens)
+      ? r.contextTokens
+      : inputTokens + outputTokens + cacheReadInputTokens + cacheCreationInputTokens;
   return {
-    inputTokens: num(r.inputTokens),
-    outputTokens: num(r.outputTokens),
-    cacheReadInputTokens: num(r.cacheReadInputTokens),
-    cacheCreationInputTokens: num(r.cacheCreationInputTokens),
+    inputTokens,
+    outputTokens,
+    cacheReadInputTokens,
+    cacheCreationInputTokens,
+    contextTokens,
+    ...(contextWindowTokens > 0 ? { contextWindowTokens } : {}),
   };
 }
 
@@ -143,7 +156,6 @@ export function freshEntry(): WalkthroughEntry {
     doneReceived: false,
     superseded: false,
     explorationSteps: [],
-    thoughts: "",
     timeline: [],
     issues: [],
     ratings: [],
@@ -263,9 +275,6 @@ export function getStreamError(): string | null {
 }
 export function getExplorationSteps(): Activity[] {
   return _active?.explorationSteps ?? [];
-}
-export function getThoughts(): string {
-  return _active?.thoughts ?? "";
 }
 export function getTimeline(): WalkthroughTimelineEntry[] {
   return _active?.timeline ?? [];
@@ -483,7 +492,6 @@ export function applyEvents(prId: string, events: WalkthroughStreamEvent[]): voi
               },
             ];
           }
-          entry.thoughts = entry.thoughts + event.data.text;
           break;
         }
         case "issue": {
@@ -886,7 +894,14 @@ async function doHydrateFromCache(
     );
 
     const previous = store.entries.get(prId);
-    const entry = previous ?? freshEntry();
+    // Clone (don't reuse `previous`): `setEntry` writes into a SvelteMap, whose
+    // `set` only fires reactivity when the stored *reference* changes
+    // (`prev_res !== value`). Mutating `previous` in place and re-setting the
+    // same object would land the data in the map but never notify subscribers —
+    // the UI stays on the pre-hydration empty state until a remount reads the
+    // entry fresh (the "reload shows nothing, but switching PRs and back fixes
+    // it" bug). A fresh object guarantees the write is observed.
+    const entry: WalkthroughEntry = previous ? { ...previous } : freshEntry();
     const hasRealSummary = wt.summary !== "";
 
     // Entry-wins merge: SSE events applied to `entry` during the REST fetch

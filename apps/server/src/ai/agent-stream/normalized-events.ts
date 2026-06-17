@@ -210,13 +210,17 @@ export interface BuiltActivity {
  * Used by every provider that surfaces tool calls in the UI. Centralising
  * this means a future change to how we describe Bash commands or MCP tools
  * only needs to land in one place.
+ *
+ * `cwd` (the agent's working directory — the per-job git worktree) is optional:
+ * when supplied, absolute path arguments are rendered relative to it so the
+ * feed shows `apps/server/…` instead of the full `/Users/…/worktree/…` path.
  */
-export function buildActivity(rawToolName: string, input: unknown): BuiltActivity {
+export function buildActivity(rawToolName: string, input: unknown, cwd?: string): BuiltActivity {
   const toolName = normalizeToolName(rawToolName);
   return {
     activityKind: classifyTool(toolName),
     toolName,
-    summary: buildExplorationDescription(toolName, input),
+    summary: buildExplorationDescription(toolName, input, cwd),
     ...(input !== undefined ? { payload: input } : {}),
   };
 }

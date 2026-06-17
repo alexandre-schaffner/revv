@@ -228,11 +228,22 @@ function codexTodoToTask(item: TodoListItem["items"][number], index: number): No
  * shape (its `output_tokens` already includes reasoning). Codex does not
  * report cache-creation tokens, so that field is 0.
  */
-function mapCodexUsage(usage: Usage): WalkthroughTokenUsage {
+export function mapCodexUsage(usage: Usage): WalkthroughTokenUsage {
   return {
     inputTokens: usage.input_tokens,
     outputTokens: usage.output_tokens + usage.reasoning_output_tokens,
     cacheReadInputTokens: usage.cached_input_tokens,
     cacheCreationInputTokens: 0,
+    // Point-in-time context occupancy: the full prompt plus this turn's output.
+    // Codex reports `cached_input_tokens` SEPARATELY from `input_tokens` (it is
+    // not folded in — see the throughput fields above), so the cached portion
+    // must be added back to reflect the true prompt size. Mirrors the
+    // Claude/opencode occupancy formulas, which likewise count the whole prompt
+    // including their cache terms; do not "simplify" by dropping it.
+    contextTokens:
+      usage.input_tokens +
+      usage.cached_input_tokens +
+      usage.output_tokens +
+      usage.reasoning_output_tokens,
   };
 }

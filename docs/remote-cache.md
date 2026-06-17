@@ -15,7 +15,7 @@ no service-account JSON to copy around.
 ## Architecture in one paragraph
 
 The cache key is content-addressable on `<owner>/<repo>/<headSha>.json.gz`. The
-local server gzips a `WalkthroughSnapshotV1` (see
+local server gzips a `WalkthroughSnapshotV2` (see
 `packages/shared/src/cache.ts`) and uploads it to the bucket on every
 successful generation — but only after an eligibility check (the local user
 must currently hold `write` on the repo) and, unless signing is `off`, after

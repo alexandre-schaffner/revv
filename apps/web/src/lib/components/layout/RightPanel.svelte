@@ -8,8 +8,8 @@ import Copy from "phosphor-svelte/lib/Copy";
 import GitBranch from "phosphor-svelte/lib/GitBranch";
 import GitCommit from "phosphor-svelte/lib/GitCommit";
 import GitMerge from "phosphor-svelte/lib/GitMerge";
-import Lightbulb from "phosphor-svelte/lib/Lightbulb";
 import MagicWand from "phosphor-svelte/lib/MagicWand";
+import MapTrifold from "phosphor-svelte/lib/MapTrifold";
 import PaperPlaneTilt from "phosphor-svelte/lib/PaperPlaneTilt";
 import Robot from "phosphor-svelte/lib/Robot";
 import Spinner from "phosphor-svelte/lib/Spinner";
@@ -639,7 +639,7 @@ function activitiesForTurn(
 				</Suggestion>
 			</ConversationEmptyState>
 		{:else}
-			<ConversationContent class="gap-2 px-2.5 pt-3" style="padding-bottom: calc({composerH}px + 1rem)">
+			<ConversationContent class="gap-3 px-3.5 pt-3" style="padding-bottom: calc({composerH}px + 1rem)">
 				{#each items as item, itemIdx (item.id)}
 				{#if item.kind === 'activity'}
 						<!-- Skip nested sub-agent tool calls — they render
@@ -676,7 +676,7 @@ function activitiesForTurn(
 									</span>
 								{/if}
 							</PlanHeader>
-							<PlanContent class="text-sm leading-relaxed">
+							<PlanContent class="prose prose-sm max-w-none">
 								{@html messageHtml(item.markdown)}
 							</PlanContent>
 							{#if item.status === 'pending'}
@@ -745,14 +745,14 @@ function activitiesForTurn(
 				{:else if item.role === 'user'}
 					<Message from="user">
 						<MessageContent>
-							<MessageResponse content={item.content} class="rounded-[14px] rounded-br-[4px] bg-accent px-3 py-2 text-sm leading-relaxed text-white [&_a]:text-white [&_a]:underline [&_code]:bg-black/20 [&_code]:text-xs [&_pre]:bg-black/20" />
+							<MessageResponse content={item.content} class="prose-on-accent rounded-[14px] rounded-br-[4px] bg-accent px-3 py-2 text-white" />
 						</MessageContent>
 					</Message>
 				{:else if item.kind === 'message' && item.role === 'assistant'}
 					<Message from="assistant">
 						<MessageContent>
 							{#if item.content}
-								<MessageResponse content={item.content} class="text-sm leading-relaxed" />
+								<MessageResponse content={item.content} />
 							{/if}
 						</MessageContent>
 					</Message>
@@ -1134,7 +1134,10 @@ function activitiesForTurn(
 						aria-pressed={interactionMode === 'plan'}
 						class={interactionMode === 'plan' ? 'bg-accent/15 text-accent hover:bg-accent/25 hover:text-accent' : ''}
 					>
-						<Lightbulb class="size-3.5" />
+						<MapTrifold class="size-3.5" />
+						{#if interactionMode === 'plan'}
+							<span class="text-xs font-medium">Plan</span>
+						{/if}
 					</PromptInputButton>
 				</PromptInputTools>
 				<PromptInputSubmit disabled={!prId} />

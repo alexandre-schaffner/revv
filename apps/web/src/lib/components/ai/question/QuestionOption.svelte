@@ -127,7 +127,7 @@ export type QuestionOptionProps = {
 				{detailsOpen ? "Hide" : "Show"} preview
 			</summary>
 			<div
-				class="mt-1.5 rounded bg-muted/60 p-2 text-xs leading-relaxed [&_pre]:overflow-x-auto"
+				class="prose prose-sm max-w-none mt-1.5 rounded bg-muted/60 p-2 text-xs leading-relaxed [&_pre]:overflow-x-auto"
 			>
 				{@html previewHtml}
 			</div>

@@ -17,7 +17,7 @@
 
 import { createHash } from "node:crypto";
 import { gunzipSync, gzipSync } from "node:zlib";
-import type { WalkthroughSnapshotV1 } from "@revv/shared";
+import type { WalkthroughSnapshotV2 } from "@revv/shared";
 import {
   CACHE_METADATA_KEYS,
   CACHE_SCHEMA_VERSION,
@@ -75,7 +75,7 @@ export class RemoteWalkthroughCache extends Context.Tag("RemoteWalkthroughCache"
     readonly fetch: (
       repoFullName: string,
       headSha: string,
-    ) => Effect.Effect<Option.Option<WalkthroughSnapshotV1>>;
+    ) => Effect.Effect<Option.Option<WalkthroughSnapshotV2>>;
 
     /**
      * Build a snapshot from the local DB and upload. Fire-and-forget at
@@ -131,7 +131,7 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
       fetch: (repoFullName, headSha) =>
         Effect.gen(function* () {
           const ok = yield* isDownloadEnabled();
-          if (!ok) return Option.none<WalkthroughSnapshotV1>();
+          if (!ok) return Option.none<WalkthroughSnapshotV2>();
 
           const live = yield* settings
             .getSettings()
@@ -152,7 +152,7 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
               );
             }),
           );
-          if (Option.isNone(record)) return Option.none<WalkthroughSnapshotV1>();
+          if (Option.isNone(record)) return Option.none<WalkthroughSnapshotV2>();
 
           const { body, metadata } = record.value;
 
@@ -163,7 +163,7 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
               "remote-cache",
               `schemaVersion mismatch key=${key} advertised=${advertisedVersion} expected=${CACHE_SCHEMA_VERSION}`,
             );
-            return Option.none<WalkthroughSnapshotV1>();
+            return Option.none<WalkthroughSnapshotV2>();
           }
 
           // contentSha256 cross-check — defensive against silent corruption.
@@ -175,7 +175,7 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
                 "remote-cache",
                 `contentSha256 mismatch key=${key} advertised=${advertisedSha} actual=${actualSha}`,
               );
-              return Option.none<WalkthroughSnapshotV1>();
+              return Option.none<WalkthroughSnapshotV2>();
             }
           }
 
@@ -192,7 +192,7 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
                   "remote-cache",
                   `unsigned blob in strict mode — treating as miss key=${key}`,
                 );
-                return Option.none<WalkthroughSnapshotV1>();
+                return Option.none<WalkthroughSnapshotV2>();
               }
               // permissive: log and continue
               logError("remote-cache", `unsigned blob accepted in permissive mode key=${key}`);
@@ -203,7 +203,7 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
                   "remote-cache",
                   `signerHost=${signerHost} not in trusted hosts — treating as miss key=${key}`,
                 );
-                return Option.none<WalkthroughSnapshotV1>();
+                return Option.none<WalkthroughSnapshotV2>();
               }
 
               const contentSha = advertisedSha ?? createHash("sha256").update(body).digest("hex");
@@ -227,7 +227,7 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
                     "remote-cache",
                     `signature verification failed in strict mode key=${key}: ${detail}`,
                   );
-                  return Option.none<WalkthroughSnapshotV1>();
+                  return Option.none<WalkthroughSnapshotV2>();
                 }
                 logError(
                   "remote-cache",
@@ -245,7 +245,7 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
                       "remote-cache",
                       `signer ${signerLogin}@${signerHost} lacks write permission on ${repoFullName} — treating as miss key=${key}`,
                     );
-                    return Option.none<WalkthroughSnapshotV1>();
+                    return Option.none<WalkthroughSnapshotV2>();
                   }
                   logError(
                     "remote-cache",
@@ -261,22 +261,22 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
             }
           }
 
-          let parsed: WalkthroughSnapshotV1;
+          let parsed: WalkthroughSnapshotV2;
           try {
             const decompressed = gunzipSync(body);
-            parsed = JSON.parse(decompressed.toString("utf8")) as WalkthroughSnapshotV1;
+            parsed = JSON.parse(decompressed.toString("utf8")) as WalkthroughSnapshotV2;
           } catch (cause) {
             logError(
               "remote-cache",
               `gunzip/parse failed key=${key}: ${cause instanceof Error ? cause.message : String(cause)}`,
             );
-            return Option.none<WalkthroughSnapshotV1>();
+            return Option.none<WalkthroughSnapshotV2>();
           }
 
           const v = validateSnapshot(parsed);
           if (!v.ok) {
             logError("remote-cache", `validation failed key=${key}: ${v.reason}`);
-            return Option.none<WalkthroughSnapshotV1>();
+            return Option.none<WalkthroughSnapshotV2>();
           }
 
           debug(

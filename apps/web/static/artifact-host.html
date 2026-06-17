@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; media-src data:; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Revv Artifact Host</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: transparent;
+      }
+    </style>
+  </head>
+  <body>
+    <script>
+      (() => {
+        const parentWindow = window.parent;
+
+        // The CSP that governs this host (declared once in the <meta> above and
+        // also served as an HTTP header in the Tauri build). We re-inject it
+        // into the document we write below so the policy survives document.write
+        // in every environment — including dev, where the page is served by
+        // Vite with no CSP header and the original <meta> is discarded by the
+        // rewrite. Single-sourced: read from our own meta, never hard-coded.
+        const HOST_CSP = (() => {
+          const meta = document.querySelector(
+            'meta[http-equiv="Content-Security-Policy"]',
+          );
+          return meta ? meta.getAttribute("content") : null;
+        })();
+
+        function post(message) {
+          parentWindow.postMessage(message, "*");
+        }
+
+        function escapeForScript(value) {
+          return JSON.stringify(value)
+            .replace(/</g, "\\u003c")
+            .replace(/>/g, "\\u003e")
+            .replace(/&/g, "\\u0026")
+            .replace(/\u2028/g, "\\u2028")
+            .replace(/\u2029/g, "\\u2029");
+        }
+
+        function bridgeScript(theme, tokens) {
+          const payload = escapeForScript({ theme, tokens });
+          return `<script>
+(() => {
+  const parentWindow = window.parent;
+  let current = ${payload};
+
+  function post(message) {
+    parentWindow.postMessage(message, "*");
+  }
+
+  function applyTheme(payload) {
+    current = payload;
+    document.documentElement.dataset.theme = payload.theme;
+    document.documentElement.style.colorScheme = payload.theme;
+    for (const [name, value] of Object.entries(payload.tokens || {})) {
+      document.documentElement.style.setProperty(name, value);
+    }
+  }
+
+  function reportSize() {
+    const body = document.body;
+    const root = document.documentElement;
+    const height = Math.max(
+      body ? body.scrollHeight : 0,
+      body ? body.offsetHeight : 0,
+      root.scrollHeight,
+      root.offsetHeight
+    );
+    post({ kind: "resize", height: Math.ceil(height) });
+  }
+
+  window.addEventListener("message", (event) => {
+    // Only the host frame that wrote us may drive theme changes; ignore any
+    // other window that holds a handle to this opaque-origin frame.
+    if (event.source !== parentWindow) return;
+    const data = event.data;
+    if (!data || typeof data !== "object" || data.kind !== "theme") return;
+    if (data.theme !== "light" && data.theme !== "dark") return;
+    if (!data.tokens || typeof data.tokens !== "object") return;
+    applyTheme({ theme: data.theme, tokens: data.tokens });
+    requestAnimationFrame(reportSize);
+  });
+
+  window.addEventListener("error", (event) => {
+    post({ kind: "error", message: event.message || "Artifact script error." });
+  });
+
+  window.addEventListener("unhandledrejection", (event) => {
+    const reason = event.reason;
+    const message = reason instanceof Error ? reason.message : String(reason || "Artifact promise rejection.");
+    post({ kind: "error", message });
+  });
+
+  applyTheme(current);
+  const observer = new ResizeObserver(reportSize);
+  observer.observe(document.documentElement);
+  if (document.body) observer.observe(document.body);
+  requestAnimationFrame(() => {
+    reportSize();
+    post({ kind: "mounted" });
+  });
+})();
+${"<"}/script>`;
+        }
+
+        // The on-brand, theme-aware baseline. Every rule references an injected
+        // CSS variable (the bridge applies them via setProperty on <html> and
+        // re-applies on theme toggle), so a do-nothing artifact is already
+        // styled in Revv's type/colors and flips light↔dark for free instead of
+        // inheriting the UA defaults (Times New Roman, black-on-transparent).
+        // Injected at the top of <head> at lowest specificity, so any artifact
+        // <style> overrides it.
+        function baseStyle() {
+          return `<style>
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+code, pre, kbd, samp { font-family: var(--font-mono); }
+a { color: var(--color-accent); }
+a:hover { color: var(--color-accent-hover); }
+:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+img, svg, canvas { max-width: 100%; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+${"<"}/style>`;
+        }
+
+        function injectHead(html) {
+          const meta = HOST_CSP
+            ? `<meta http-equiv="Content-Security-Policy" content="${HOST_CSP.replace(/"/g, "&quot;")}">`
+            : "";
+          // The CSP meta must sit at the top of <head>, before any content it
+          // governs; the baseline follows it at lowest specificity. Insert after
+          // <head>, synthesizing one if the document has none, so a
+          // self-contained artifact is covered either way.
+          const head = `${meta}${baseStyle()}`;
+          if (/<head[^>]*>/i.test(html)) {
+            return html.replace(/<head[^>]*>/i, (match) => `${match}${head}`);
+          }
+          if (/<html[^>]*>/i.test(html)) {
+            return html.replace(/<html[^>]*>/i, (match) => `${match}<head>${head}</head>`);
+          }
+          return `<head>${head}</head>${html}`;
+        }
+
+        function injectArtifact(html, theme, tokens) {
+          const bridge = bridgeScript(theme, tokens);
+          const withBridge = /<\/body\s*>/i.test(html)
+            ? html.replace(/<\/body\s*>/i, `${bridge}</body>`)
+            : `${html}${bridge}`;
+          document.open();
+          document.write(injectHead(withBridge));
+          document.close();
+        }
+
+        window.addEventListener("message", (event) => {
+          // Only accept the mount handshake from the parent that embedded us;
+          // a sibling frame holding our contentWindow must not win the race and
+          // inject arbitrary markup ahead of the legitimate mount.
+          if (event.source !== parentWindow) return;
+          const data = event.data;
+          if (!data || typeof data !== "object" || data.kind !== "mount") return;
+          if (typeof data.html !== "string") return;
+          if (data.theme !== "light" && data.theme !== "dark") return;
+          if (!data.tokens || typeof data.tokens !== "object") return;
+          injectArtifact(data.html, data.theme, data.tokens);
+        });
+
+        post({ kind: "ready" });
+      })();
+    </script>
+  </body>
+</html>

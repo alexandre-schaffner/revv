@@ -40,10 +40,8 @@ export type MessageResponseProps = HTMLAttributes<HTMLDivElement> & {
 <div
 	data-slot="message-response"
 	class={cn(
-		"prose-sm min-w-0 max-w-full break-words [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_.shiki]:max-w-full [&_.shiki]:overflow-x-auto",
-		ctx?.role === "user"
-			? "rounded-2xl bg-secondary px-4 py-2.5 text-secondary-foreground"
-			: "text-foreground",
+		"prose prose-sm max-w-none min-w-0 break-words [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_.shiki]:max-w-full [&_.shiki]:overflow-x-auto",
+		ctx?.role === "user" && "rounded-2xl bg-secondary px-4 py-2.5",
 		className,
 	)}
 	{...restProps}

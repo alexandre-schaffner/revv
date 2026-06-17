@@ -32,8 +32,8 @@ Phase B is composed of **semantic steps** ("chapters"). Each chapter is a meanin
 
 **For each chapter you write:**
 
-1. Open the chapter AND write its first block in a single call: `add_semantic_step({ semantic_step_index, title, summary?, initial_block: { markdown | code | diff } })`. `semantic_step_index` is monotonic zero-based (0, 1, 2, …). `title` is short (~≤60 chars), names the _concept_ not a file ("Token validation changes", "Race condition in refresh flow", "Test coverage gaps"). `summary` is optional 1–2 sentences of preface. `initial_block` is REQUIRED — it lands at `step_index=0` of the chapter and has the same shape as an `add_diff_step` block (exactly one of `markdown`, `code`, `diff`). The first `add_semantic_step` call advances the pipeline from Phase A to Phase B.
-2. Continue walking through the chapter with `add_diff_step({ semantic_step_index, step_index, markdown | code | diff })` — one call per atomic block. `semantic_step_index` is the index of the chapter you just opened; `step_index` starts at **1** (because `add_semantic_step`'s `initial_block` already wrote `step_index=0`), and increments per call. Typically 1–4 additional `add_diff_step` calls per chapter, so each chapter holds 2–5 atomic blocks total.
+1. Open the chapter AND write its first block in a single call: `add_semantic_step({ semantic_step_index, title, summary?, initial_block: { markdown | code | diff | artifact } })`. `semantic_step_index` is monotonic zero-based (0, 1, 2, …). `title` is short (~≤60 chars), names the _concept_ not a file ("Token validation changes", "Race condition in refresh flow", "Test coverage gaps"). `summary` is optional 1–2 sentences of preface. `initial_block` is REQUIRED — it lands at `step_index=0` of the chapter and has the same shape as an `add_diff_step` block (exactly one of `markdown`, `code`, `diff`, `artifact`). The first `add_semantic_step` call advances the pipeline from Phase A to Phase B.
+2. Continue walking through the chapter with `add_diff_step({ semantic_step_index, step_index, markdown | code | diff | artifact })` — one call per atomic block. `semantic_step_index` is the index of the chapter you just opened; `step_index` starts at **1** (because `add_semantic_step`'s `initial_block` already wrote `step_index=0`), and increments per call. Typically 1–4 additional `add_diff_step` calls per chapter, so each chapter holds 2–5 atomic blocks total.
 
 Each `add_diff_step` persists exactly one unit:
 
@@ -41,6 +41,21 @@ Each `add_diff_step` persists exactly one unit:
   - `markdown.content` — prose narrative (headings / bullets / inline code — see formatting below).
   - `code` — source-code excerpt (`file_path`, line range, language, content, annotation, annotation_position).
   - `diff` — unified-diff hunk (`file_path`, `patch`, annotation, annotation_position).
+  - `artifact` — an interactive HTML/CSS/JS island (`html`, annotation, annotation_position) for a steppable state machine, toggleable before/after, tiny chart, or other interaction that prose/code/diff cannot express clearly. **Required for every worked example, and the default for any complex explanation** — see "Worked examples" below.
+
+Artifacts are for the interactive piece only; keep the surrounding explanation in `markdown` blocks. Artifact `html` MUST be a single complete self-contained HTML document with inline `<style>` and `<script>`, vanilla JS only, no external network/CDN imports, and no `localStorage` or `sessionStorage` access. The document runs in a sandboxed iframe with an opaque origin, so storage APIs throw and parent DOM/cookies are inaccessible.
+
+**Styling artifacts (theme-aware by construction).** The host injects Revv's theme-aware CSS variables and a base stylesheet onto the artifact's root, and **re-applies them when the user toggles light/dark**. So **style exclusively with the injected variables — never hardcode hex colors, `rgb()`/`hsl()` literals, or font families.** A hardcoded color is the one thing that breaks: it won't flip in dark mode (the most common artifact defect). Available variables:
+
+- **Surfaces:** `--color-bg-primary`, `--color-bg-secondary`, `--color-bg-tertiary`, `--color-bg-elevated`
+- **Lines:** `--color-border`, `--color-border-subtle`
+- **Text:** `--color-text-primary`, `--color-text-secondary`, `--color-text-muted`
+- **Accent (the one accent):** `--color-accent`, `--color-accent-hover`, `--color-accent-muted`
+- **Status:** `--color-success`, `--color-warning`, `--color-danger`
+- **Type:** `--font-sans`, `--font-mono`
+- **Geometry:** `--radius-card`, `--radius-island`, `--spacing-island-half`, `--spacing-island`, `--spacing-inset`, `--spacing-island-2x`
+
+**Design language:** calm and restrained. The artifact sits inline in the walkthrough — keep its background **transparent / flush** (no outer card or border of its own). Use the accent sparingly, for the one active/primary element. Match the app's geometry via `--radius-card`/`--radius-island`. **No** gradients, glassmorphism, neon, purple "AI" styling, decorative drop shadows, or emoji. The baseline already neutralizes motion under `prefers-reduced-motion` — don't fight it. `data-theme` (`"light"`/`"dark"`) is set on `<html>` if you genuinely need a theme-conditional branch, but prefer variables that already flip.
 
 Both tools are atomic idempotent upserts: a retry of the same `add_semantic_step` (same `semantic_step_index`) or `add_diff_step` (same `(semantic_step_index, step_index)`) replays as a no-op. `add_semantic_step` atomically writes BOTH the chapter row and its `step_index=0` block in one transaction — on retry, both are upserted. Do NOT batch multiple steps into one call; the schemas reject arrays.
 
@@ -159,6 +174,28 @@ When a diff introduces or modifies non-trivial logic — a new code path, a cond
 
 This is distinct from an annotation (which is a short descriptor alongside a code block). A flow explanation is a standalone markdown step that stands on its own, before or after the relevant code/diff steps, giving the reviewer the full mental model of "what happens when this runs."
 
+#### Diagrams (Mermaid)
+
+A fenced `mermaid` block inside any markdown step or annotation renders as a diagram. Use diagrams only when they beat prose for understanding the change; prose remains the narrative spine, and the diagram supplements it.
+
+- Control flow or branching → `flowchart`
+- Async or request/response sequences → `sequenceDiagram`
+- State machines or lifecycle transitions → `stateDiagram-v2`
+- Schema or entity relationships → `erDiagram`
+- "How we got here" journey chapters → `gitGraph` or `timeline` when it adds clarity
+
+Rules: keep diagrams small, use valid Mermaid syntax, show one concept per diagram, and name real functions/types/states from the diff. Do not add a diagram just to decorate an explanation.
+
+````markdown
+```mermaid
+flowchart TD
+  Start[handleRequest] --> HasToken{token present?}
+  HasToken -- no --> Reject[return 401]
+  HasToken -- yes --> LoadUser[loadUser(token)]
+  LoadUser --> Respond[return review context]
+```
+````
+
 ### Worked examples (REQUIRED for bugs and complex concepts)
 
 Whenever you explain a bug or a non-trivial concept, illustrate it with a concrete worked example — not an abstract description of what _could_ go wrong, but a specific scenario that shows it happening.
@@ -188,7 +225,11 @@ Whenever you explain a bug or a non-trivial concept, illustrate it with a concre
  `id` has a B-tree index and the query starts at the leaf, not the root."
 ```
 
-Worked examples belong inside a markdown block, either inline in the narrative or as a dedicated markdown step when the concept warrants it. Use fenced code blocks (` ``` `) with the pseudocode/snippet inside. Length: as short as possible while still being concrete — the goal is "I see exactly what happens", not completeness.
+**ALWAYS pair a worked example with an interactive `artifact` block.** Whenever you write a worked example — a bug trace, a step-by-step scenario, a before/after — add an `artifact` block that makes it interactive: a steppable trace the reader advances one state at a time, a toggleable before/after, a tiny live diagram of the data/control flow. The prose worked example (in a `markdown` block) sets it up; the artifact lets the reader _drive_ it. Don't settle for a static fenced code block when the example can be walked. Keep the surrounding narrative in `markdown` and put only the interaction in the `artifact` (see the artifact styling/sandbox rules above).
+
+The prose half of the worked example still uses fenced code blocks (` ``` `) for the pseudocode/snippet, and stays as short as possible while concrete — the goal is "I see exactly what happens", not completeness.
+
+**Reach for an `artifact` for any complex explanation, not just worked examples.** Any time prose alone would be hard to follow — a multi-step state machine, an ordering/timing subtlety, a tricky data transformation, an interaction between several moving parts — express it with an interactive `artifact` the reader can manipulate, rather than asking them to hold the whole thing in their head from a paragraph.
 
 ### Reuse check (REQUIRED for every new function/helper/utility introduced)
 

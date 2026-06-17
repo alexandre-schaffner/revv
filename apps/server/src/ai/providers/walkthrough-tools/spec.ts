@@ -1,4 +1,5 @@
 import type {
+  ArtifactBlock,
   CodeBlock,
   DiffBlock,
   MarkdownBlock,
@@ -133,6 +134,22 @@ const setOverviewSchema = z.object({
   risk_level: z.enum(["low", "medium", "high"]).describe("Overall risk assessment"),
 });
 
+const artifactBlockSchema = z
+  .object({
+    html: z
+      .string()
+      .describe(
+        "A complete, self-contained HTML document with inline CSS/JS. Vanilla JS only; no external network/CDN; no localStorage. Renders in a sandboxed iframe. Style with the injected Revv theme variables (`var(--color-*)`, `var(--font-*)`) so it matches the app and follows light/dark — never hardcode colors or font-family. See the system prompt for the full token list and design rules.",
+      ),
+    annotation: z.string().nullable(),
+    annotation_position: z.enum(["left", "right"]),
+  })
+  .nullable()
+  .optional()
+  .describe(
+    "Use for an interactive widget when prose/code/diff fall short. Mutually exclusive with markdown, code, and diff.",
+  );
+
 /**
  * Phase B chapter declaration — opens a chapter AND writes its first atomic
  * block in one transaction. This is the ONLY way to create a chapter. The
@@ -166,7 +183,7 @@ const semanticStepInitialBlockSchema = z
       .nullable()
       .optional()
       .describe(
-        "Use for narrative/explanatory opening content. Mutually exclusive with `code` and `diff`.",
+        "Use for narrative/explanatory opening content. Mutually exclusive with `code`, `diff`, and `artifact`.",
       ),
     code: z
       .object({
@@ -181,7 +198,7 @@ const semanticStepInitialBlockSchema = z
       .nullable()
       .optional()
       .describe(
-        "Use for source-code excerpts. Mutually exclusive with `markdown` and `diff`. Annotation REQUIRED (1–3 sentences) — code without annotation is a wall of code.",
+        "Use for source-code excerpts. Mutually exclusive with `markdown`, `diff`, and `artifact`. Annotation REQUIRED (1–3 sentences) — code without annotation is a wall of code.",
       ),
     diff: z
       .object({
@@ -193,11 +210,12 @@ const semanticStepInitialBlockSchema = z
       .nullable()
       .optional()
       .describe(
-        "Use for unified-diff hunks. Mutually exclusive with `markdown` and `code`. Annotation REQUIRED (1–3 sentences).",
+        "Use for unified-diff hunks. Mutually exclusive with `markdown`, `code`, and `artifact`. Annotation REQUIRED (1–3 sentences).",
       ),
+    artifact: artifactBlockSchema,
   })
   .describe(
-    "REQUIRED. Exactly one of { markdown, code, diff }. Becomes the chapter's step_index=0 block, written atomically with the chapter itself.",
+    "REQUIRED. Exactly one of { markdown, code, diff, artifact }. Becomes the chapter's step_index=0 block, written atomically with the chapter itself.",
   );
 
 const addSemanticStepSchema = z.object({
@@ -249,7 +267,7 @@ const addDiffStepSchema = z.object({
     .describe(
       "Monotonic zero-based index for this atomic block *within* its parent chapter. Restart at 0 in each new chapter. Required. Upsert key: a retry with the same (semantic_step_index, step_index) replaces (not duplicates) the prior row.",
     ),
-  /** One of three mutually-exclusive block shapes. Agent picks which to send. */
+  /** One of four mutually-exclusive block shapes. Agent picks which to send. */
   markdown: z
     .object({
       content: z
@@ -260,7 +278,9 @@ const addDiffStepSchema = z.object({
     })
     .nullable()
     .optional()
-    .describe("Use for narrative/explanatory content. Mutually exclusive with `code` and `diff`."),
+    .describe(
+      "Use for narrative/explanatory content. Mutually exclusive with `code`, `diff`, and `artifact`.",
+    ),
   code: z
     .object({
       file_path: z.string(),
@@ -274,7 +294,7 @@ const addDiffStepSchema = z.object({
     .nullable()
     .optional()
     .describe(
-      "Use for source-code excerpts. Mutually exclusive with `markdown` and `diff`. Annotations on issue-target blocks must be LONG (multi-paragraph).",
+      "Use for source-code excerpts. Mutually exclusive with `markdown`, `diff`, and `artifact`. Annotations on issue-target blocks must be LONG (multi-paragraph).",
     ),
   diff: z
     .object({
@@ -286,8 +306,9 @@ const addDiffStepSchema = z.object({
     .nullable()
     .optional()
     .describe(
-      "Use for unified-diff hunks. Mutually exclusive with `markdown` and `code`. Annotations on issue-target blocks must be LONG (multi-paragraph).",
+      "Use for unified-diff hunks. Mutually exclusive with `markdown`, `code`, and `artifact`. Annotations on issue-target blocks must be LONG (multi-paragraph).",
     ),
+  artifact: artifactBlockSchema,
 });
 
 /**
@@ -522,6 +543,7 @@ export async function computeAnchorThreadId(
 // Re-export the canonical types used by handlers so walkthrough-tools.ts does
 // not need separate @revv/shared imports.
 export type {
+  ArtifactBlock,
   CodeBlock,
   DiffBlock,
   MarkdownBlock,

@@ -52,3 +52,4 @@ export * from "./agent-stream/fluid-chunker";
 export * from "./agent-stream/normalized-events";
 export * from "./agent-stream/opencode-decoders";
 export * from "./agent-stream/opencode-sse";
+export * from "./agent-stream/token-usage";

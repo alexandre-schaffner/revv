@@ -8,7 +8,7 @@ export type {
   WalkthroughSnapshotIssue,
   WalkthroughSnapshotRating,
   WalkthroughSnapshotSemanticStep,
-  WalkthroughSnapshotV1,
+  WalkthroughSnapshotV2,
 } from "./cache";
 export {
   CACHE_METADATA_KEYS,
@@ -96,6 +96,7 @@ export type {
   SessionStatus,
   SyncChange,
   SyncChangeKind,
+  Team,
   ThemePreference,
   ThinkingEffort,
   ThreadMessage,

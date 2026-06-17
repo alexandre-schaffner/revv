@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { Context, Deferred, Effect, Layer, Ref } from "effect";
 import { serverEnv } from "../config";
 import { account, user } from "../db/schema";
+import { userSettings } from "../db/schema/user-settings";
 import { GitHubAuthError } from "../domain/errors";
 import { clientIdForHost, tokenUrlForHost } from "../github-oauth";
 import { Broadcaster } from "./Broadcaster";
@@ -142,13 +143,26 @@ export const TokenProviderLive = Layer.effect(
         }
 
         const host = hostFromProviderId(row.providerId);
+        // The refresh grant must use the same client_id the token was minted
+        // with. For a user-added GHE host that's the BYO client ID in settings;
+        // for the bundled hosts the resolver falls back to server config. The
+        // custom ID only applies to the host it was saved with.
+        const settingsRow = db
+          .select({
+            githubHost: userSettings.githubHost,
+            githubClientId: userSettings.githubClientId,
+          })
+          .from(userSettings)
+          .where(eq(userSettings.id, "default"))
+          .get();
+        const customClientId = settingsRow?.githubHost === host ? settingsRow.githubClientId : null;
         const { status, data } = yield* Effect.tryPromise({
           try: async () => {
             const res = await fetch(tokenUrlForHost(host), {
               method: "POST",
               headers: { Accept: "application/json", "Content-Type": "application/json" },
               body: JSON.stringify({
-                client_id: clientIdForHost(host),
+                client_id: clientIdForHost(host, customClientId),
                 grant_type: "refresh_token",
                 refresh_token: refreshToken,
               }),
