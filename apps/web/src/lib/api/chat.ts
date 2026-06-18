@@ -9,6 +9,7 @@
 // from SQLite on mount instead of starting empty after a desktop reload.
 
 import type {
+  AcpAgentId,
   Activity,
   ActivityKind,
   ChatStreamFrame,
@@ -366,8 +367,7 @@ export async function submitQuestionAnswer(
 }
 
 export interface AvailableAgents {
-  agent: "claude" | "opencode" | "codex";
-  agents: readonly string[];
+  agent: AcpAgentId;
   planAvailable: boolean;
 }
 
@@ -425,7 +425,7 @@ export interface PersistedChatPlan {
   turnId: string;
   planMarkdown: string;
   status: "pending" | "approved" | "rejected" | "superseded";
-  source: "claude" | "opencode" | "codex";
+  source: "acp";
   sequence: number;
   createdAt: string;
   decidedAt: string | null;
@@ -442,7 +442,7 @@ export interface PersistedChatSubagent {
   prompt: string;
   status: "running" | "completed" | "errored";
   result: string | null;
-  source: "claude" | "opencode" | "codex";
+  source: "acp";
   sequence: number;
   startedAt: string;
   completedAt: string | null;
@@ -453,7 +453,7 @@ export interface PersistedChatQuestion {
   id: string;
   chatSessionId: string;
   turnId: string;
-  source: "claude" | "opencode" | "codex";
+  source: "acp";
   providerRequestId: string;
   providerToolCallId: string | null;
   previewFormat: "markdown" | "html";

@@ -22,10 +22,10 @@ import { Context, Effect, Layer, Ref } from "effect";
 /**
  * Source transport that minted this token. Stamped on
  * `walkthroughs.lastEditedBy` when an edit MCP tool fires through this
- * registry's HTTP path. The Claude SDK in-process path doesn't go through
- * this registry — it builds its context directly with `actor: 'chat:claude'`.
+ * registry's HTTP path. All chat edits run on the ACP transport, so the
+ * only actor today is `'chat:acp'`.
  */
-export type ChatTokenActor = "chat:opencode" | "chat:codex" | "chat:acp";
+export type ChatTokenActor = "chat:acp";
 
 export interface ChatTokenIssueArgs {
   readonly prId: string;

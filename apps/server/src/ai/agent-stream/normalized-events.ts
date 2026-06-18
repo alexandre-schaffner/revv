@@ -70,7 +70,7 @@ export type NormalizedAgentEvent =
   | {
       readonly kind: "task-list-update";
       readonly tasks: ReadonlyArray<NormalizedTask>;
-      readonly source: "claude" | "opencode" | "codex" | "acp";
+      readonly source: "acp";
     }
   /**
    * Agent has presented a plan (Claude ExitPlanMode tool, or the opencode
@@ -83,7 +83,7 @@ export type NormalizedAgentEvent =
       readonly kind: "plan-presented";
       readonly markdown: string;
       readonly providerPlanId: string;
-      readonly source: "claude" | "opencode" | "codex";
+      readonly source: "acp";
     }
   /**
    * A sub-agent invocation has started. The driver maintains a closure-side
@@ -96,7 +96,7 @@ export type NormalizedAgentEvent =
       readonly subagentType: string;
       readonly description: string;
       readonly prompt: string;
-      readonly source: "claude" | "opencode" | "codex";
+      readonly source: "acp";
     }
   /**
    * A sub-agent invocation has finished. `ok = false` means the sub-agent
@@ -108,7 +108,7 @@ export type NormalizedAgentEvent =
       readonly providerCallId: string;
       readonly result: string;
       readonly ok: boolean;
-      readonly source: "claude" | "opencode" | "codex";
+      readonly source: "acp";
     }
   /**
    * Agent has asked the user one or more questions and is paused waiting
@@ -126,25 +126,25 @@ export type NormalizedAgentEvent =
   | {
       readonly kind: "user-question-asked";
       readonly providerRequestId: string;
-      readonly source: "claude" | "opencode" | "codex";
+      readonly source: "acp";
       readonly questions: ReadonlyArray<import("@revv/shared").NormalizedQuestion>;
       readonly previewFormat: "markdown" | "html";
       /** Opencode `QuestionRequest.tool.callID`; absent for Claude. */
       readonly providerToolCallId?: string;
     }
   /**
-   * Opencode-only follow-up: the daemon broadcasts `question.replied` /
-   * `question.rejected` after our HTTP POST resolves the question. We emit
+   * Out-of-band resolution follow-up: emitted when the agent surfaces a
+   * question-resolved signal after our reply was POSTed back to it. We emit
    * this so the persistence wrapper can flip the row's status idempotently
    * (the answer endpoint already wrote the DB row on the user-facing path).
    *
-   * Claude doesn't emit this — its resolution lives entirely inside the
-   * answer endpoint (resolve the in-memory deferred and update DB inline).
+   * Agents whose resolution lives entirely inside the answer endpoint
+   * (resolve the in-memory deferred and update DB inline) never emit this.
    */
   | {
       readonly kind: "user-question-resolved";
       readonly providerRequestId: string;
-      readonly source: "opencode";
+      readonly source: "acp";
       readonly status: "answered" | "rejected";
       readonly answers?: Readonly<Record<string, ReadonlyArray<string>>>;
     }

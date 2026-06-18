@@ -39,7 +39,7 @@ export const chatSessions = sqliteTable(
     pullRequestId: text("pull_request_id")
       .notNull()
       .references(() => pullRequests.id, { onDelete: "cascade" }),
-    agent: text("agent").notNull(), // 'claude' | 'opencode' | 'codex'
+    agent: text("agent").notNull(), // ACP registry id: 'claude-code' | 'opencode' | 'codex' | 'cursor'
     model: text("model").notNull().default(""),
     sessionId: text("session_id"),
     prHeadSha: text("pr_head_sha").notNull(),
