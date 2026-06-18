@@ -1,10 +1,9 @@
 // ─── walkthrough-tools ───────────────────────────────────────────────────────
 //
-// Phase-bound MCP tool handlers for the walkthrough pipeline. Consumed by both
-// the Claude Agent SDK (in-process via mcp-walkthrough.ts) and the HTTP MCP
-// route (apps/server/src/routes/mcp/walkthrough.ts). Handler implementations
-// are shared — per doctrine invariant #13 (Agent-path parity), behavior is
-// byte-for-byte identical across transports.
+// Phase-bound MCP tool handlers for the walkthrough pipeline. Consumed by the
+// HTTP MCP route (apps/server/src/routes/mcp/walkthrough.ts) that every ACP
+// agent talks to. Handler implementations are shared — per doctrine invariant
+// #13 (Agent-path parity), behavior is byte-for-byte identical across agents.
 //
 // Each handler:
 //   1. Opens a single db.transaction() covering: phase read, precondition
@@ -28,7 +27,7 @@ import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
 import { walkthroughRatings } from "../../../db/schema/walkthrough-ratings";
 import { walkthroughSemanticSteps } from "../../../db/schema/walkthrough-semantic-steps";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
-import { bindInProcess, type ToolSpecBundle } from "../mcp-tool-gateway";
+import type { ToolSpecBundle } from "../mcp-tool-gateway";
 import {
   blockIdFor,
   errorResult,
@@ -589,21 +588,10 @@ export const WALKTHROUGH_TOOL_BUNDLE: ToolSpecBundle<
   specs: TOOL_SPECS,
 };
 
-// ── Claude Agent SDK adapter ─────────────────────────────────────────────────
-//
-// Wraps TOOL_SPECS in the shape the Claude Agent SDK expects. The SDK calls
-// tool handlers with just `args`, so we bind the context here (per MCP server
-// creation). The HTTP MCP route binds the context per-request instead.
-
-/**
- * Create an MCP server registration for the Claude Agent SDK, scoped to a
- * specific walkthroughId + emitter.
- */
-export function createWalkthroughMcpServer(
-  ctx: WalkthroughToolContext,
-): ReturnType<typeof bindInProcess> {
-  return bindInProcess(WALKTHROUGH_TOOL_BUNDLE, ctx);
-}
+// The walkthrough tool surface is reached exclusively over the HTTP MCP route
+// (`/mcp/walkthrough`), which binds the per-request context via `bindHttp`.
+// The former `createWalkthroughMcpServer` in-process adapter (for the deleted
+// Claude Agent SDK driver) is gone — every agent now runs on the ACP transport.
 
 // ── Back-compat shims ────────────────────────────────────────────────────────
 //

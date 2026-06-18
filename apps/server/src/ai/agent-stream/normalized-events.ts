@@ -70,7 +70,7 @@ export type NormalizedAgentEvent =
   | {
       readonly kind: "task-list-update";
       readonly tasks: ReadonlyArray<NormalizedTask>;
-      readonly source: "claude" | "opencode" | "codex";
+      readonly source: "claude" | "opencode" | "codex" | "acp";
     }
   /**
    * Agent has presented a plan (Claude ExitPlanMode tool, or the opencode
@@ -148,31 +148,20 @@ export type NormalizedAgentEvent =
       readonly status: "answered" | "rejected";
       readonly answers?: Readonly<Record<string, ReadonlyArray<string>>>;
     }
-  | { readonly kind: "error"; readonly message: string };
-
-/**
- * Helper used by both Claude and opencode adapters to derive `source` /
- * `mcpServer` / `bareName` from a raw tool name. Public so callers writing
- * their own tool-name dispatchers can stay consistent.
- */
-export function classifyToolCallShape(rawToolName: string): {
-  source: "builtin" | "mcp";
-  mcpServer?: string;
-  bareName: string;
-} {
-  if (rawToolName.startsWith("mcp__")) {
-    const rest = rawToolName.slice("mcp__".length);
-    const sep = rest.indexOf("__");
-    if (sep > 0) {
-      return {
-        source: "mcp",
-        mcpServer: rest.slice(0, sep),
-        bareName: rest.slice(sep + 2),
-      };
+  /**
+   * Point-in-time context-window occupancy from the agent. ACP's
+   * `usage_update` carries only `used` (tokens currently in context) and
+   * `size` (window size) — NOT the input/output/cache throughput breakdown —
+   * so this event populates the occupancy gauge only. Consumers that track
+   * `WalkthroughTokenUsage` fold it via `mergeContextOccupancy`; chat ignores
+   * it. Not all ACP agents emit it; consumers must not depend on one arriving.
+   */
+  | {
+      readonly kind: "usage";
+      readonly contextTokens: number;
+      readonly contextWindowTokens?: number;
     }
-  }
-  return { source: "builtin", bareName: rawToolName };
-}
+  | { readonly kind: "error"; readonly message: string };
 
 export function normalizeTaskStatus(v: unknown): "pending" | "in_progress" | "completed" {
   if (v === "in_progress") return "in_progress";

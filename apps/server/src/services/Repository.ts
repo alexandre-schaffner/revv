@@ -5,6 +5,23 @@ import { repositories } from "../db/schema/index";
 import { NotFoundError, ValidationError } from "../domain/errors";
 import { DbService } from "./Db";
 
+/**
+ * Fetch an image URL and return it as a base64 data URL, or null on any
+ * failure. Used to cache owner avatars locally so the client never depends on
+ * an expiring signed `avatar_url`.
+ */
+async function fetchAvatarAsDataUrl(url: string): Promise<string | null> {
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) return null;
+    const contentType = resp.headers.get("content-type") ?? "image/png";
+    const base64 = Buffer.from(await resp.arrayBuffer()).toString("base64");
+    return `data:${contentType};base64,${base64}`;
+  } catch {
+    return null;
+  }
+}
+
 function rowToRepo(row: typeof repositories.$inferSelect): Repository {
   return {
     id: row.id,
@@ -13,7 +30,10 @@ function rowToRepo(row: typeof repositories.$inferSelect): Repository {
     name: row.name,
     fullName: row.fullName,
     defaultBranch: row.defaultBranch,
+    // Prefer the cached data URL — it never expires. Fall back to the raw
+    // (possibly signed/expiring) URL, then to the GitHub default-by-owner URL.
     avatarUrl:
+      row.avatarContent ??
       row.avatarUrl ??
       (row.provider === "github" ? `https://avatars.githubusercontent.com/${row.owner}` : null),
     addedAt: row.addedAt,
@@ -105,6 +125,7 @@ export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
         fullName: data.fullName,
         defaultBranch: data.defaultBranch,
         avatarUrl: data.avatarUrl ?? null,
+        avatarContent: null,
         addedAt,
         cloneStatus: "pending",
         clonePath: data.clonePath ?? null,
@@ -175,8 +196,24 @@ export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
         return yield* Effect.fail(new NotFoundError({ resource: "repository", id }));
       }
       const updates: Partial<typeof repositories.$inferInsert> = {};
-      if (data.avatarUrl !== undefined) updates.avatarUrl = data.avatarUrl;
       if (data.defaultBranch !== undefined) updates.defaultBranch = data.defaultBranch;
+
+      // Re-fetch the avatar bytes when the raw URL changed (GitHub Enterprise
+      // signed URLs rotate hourly) or when we never cached them. The fetch is
+      // best-effort: on failure we keep whatever is already cached so a
+      // transient network blip never blanks the icon.
+      if (data.avatarUrl !== undefined && data.avatarUrl !== existing.avatarUrl) {
+        updates.avatarUrl = data.avatarUrl;
+      }
+      const rawUrl = data.avatarUrl !== undefined ? data.avatarUrl : existing.avatarUrl;
+      const urlChanged = data.avatarUrl !== undefined && data.avatarUrl !== existing.avatarUrl;
+      if (rawUrl && (urlChanged || existing.avatarContent == null)) {
+        const fetched = yield* Effect.promise(() => fetchAvatarAsDataUrl(rawUrl));
+        if (fetched !== null && fetched !== existing.avatarContent) {
+          updates.avatarContent = fetched;
+        }
+      }
+
       if (Object.keys(updates).length === 0) {
         return rowToRepo(existing);
       }

@@ -190,6 +190,34 @@
       "when": 1779600000000,
       "tag": "0230_review_session_modes",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "6",
+      "when": 1779610000000,
+      "tag": "0240_repository_avatar_content",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "6",
+      "when": 1779615000000,
+      "tag": "0250_chat_agent",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "6",
+      "when": 1779620000000,
+      "tag": "0260_chat_session_model",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "6",
+      "when": 1779625000000,
+      "tag": "0270_unify_agent_ids",
+      "breakpoints": true
     }
   ]
 }

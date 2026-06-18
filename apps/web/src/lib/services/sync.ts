@@ -7,7 +7,7 @@ import { getSettings } from "$lib/stores/settings.svelte";
 
 let pollingInterval: ReturnType<typeof setInterval> | null = null;
 
-export function startPolling(intervalSeconds: number, token: string): void {
+export function startPolling(intervalMinutes: number, token: string): void {
   // Connect the global SSE stream for realtime events. Without this the
   // browser never opens `/api/events`, so `Broadcaster.broadcastToAccount`
   // fan-outs land in an empty registration set and the UI sees zero progress
@@ -23,11 +23,18 @@ export function startPolling(intervalSeconds: number, token: string): void {
 
   // Set up polling
   if (pollingInterval) clearInterval(pollingInterval);
-  pollingInterval = setInterval(() => {
-    syncPrs().catch(() => {
-      // errors arrive via SSE
-    });
-  }, intervalSeconds * 1000);
+  if (intervalMinutes <= 0) {
+    pollingInterval = null;
+    return;
+  }
+  pollingInterval = setInterval(
+    () => {
+      syncPrs().catch(() => {
+        // errors arrive via SSE
+      });
+    },
+    intervalMinutes * 60 * 1000,
+  );
 }
 
 export function stopPolling(): void {
@@ -45,13 +52,20 @@ function pauseSyncTimer(): void {
   }
 }
 
-function resumeSyncTimer(intervalSeconds: number): void {
+function resumeSyncTimer(intervalMinutes: number): void {
   if (pollingInterval) clearInterval(pollingInterval);
-  pollingInterval = setInterval(() => {
-    syncPrs().catch(() => {
-      // errors arrive via SSE
-    });
-  }, intervalSeconds * 1000);
+  if (intervalMinutes <= 0) {
+    pollingInterval = null;
+    return;
+  }
+  pollingInterval = setInterval(
+    () => {
+      syncPrs().catch(() => {
+        // errors arrive via SSE
+      });
+    },
+    intervalMinutes * 60 * 1000,
+  );
 }
 
 /**

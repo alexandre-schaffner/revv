@@ -148,6 +148,11 @@ export function clearToken(): void {
   token = null;
   user = null;
   _connectedAccounts = [];
+  // The re-auth modal is gated solely on `reauthRequired`, so an invalidated /
+  // signed-out session must clear it (and any stale sign-in error) — otherwise
+  // a dead session strands the modal with no account behind it.
+  reauthRequired = null;
+  error = null;
   if (typeof localStorage !== "undefined") {
     localStorage.removeItem("rev_session_token");
   }
@@ -163,7 +168,20 @@ export async function signIn(host?: string): Promise<void> {
         ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ host }) }
         : {}),
     });
-    if (!res.ok) throw new Error("Failed to initiate sign-in");
+    if (!res.ok) {
+      // Surface the server's actual reason (e.g. "Signing in to <host> requires
+      // a GitHub App or OAuth App client ID") instead of a generic message.
+      // `device/init` returns either a JSON `{ error }` or a plain-text reason.
+      const body = await res.text().catch(() => "");
+      let detail = body.trim();
+      try {
+        const parsed = JSON.parse(body) as { error?: string };
+        if (parsed?.error) detail = parsed.error;
+      } catch {
+        /* plain-text body — use as-is */
+      }
+      throw new Error(detail || `Failed to initiate sign-in (HTTP ${res.status})`);
+    }
     const data = (await res.json()) as {
       device_code: string;
       user_code: string;
@@ -192,7 +210,7 @@ export async function signIn(host?: string): Promise<void> {
     }
     startPolling();
   } catch (e) {
-    error = `Failed to start sign-in: ${e}`;
+    error = `Failed to start sign-in: ${e instanceof Error ? e.message : String(e)}`;
   } finally {
     isLoading = false;
   }

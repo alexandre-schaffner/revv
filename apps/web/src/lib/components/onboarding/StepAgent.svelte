@@ -1,18 +1,22 @@
 <script lang="ts">
-import type { AgentAvailability, AiAgent, InstallEvent } from "@revv/shared";
+import {
+  ACP_AGENTS,
+  type AcpAgentId,
+  type AgentAvailability,
+  type InstallEvent,
+} from "@revv/shared";
 import ChevronLeft from "phosphor-svelte/lib/CaretLeft";
 import { onDestroy, onMount } from "svelte";
 import { API_BASE_URL } from "$lib/api/base-url";
-import AnthropicIcon from "$lib/components/icons/AnthropicIcon.svelte";
-import OpenAIIcon from "$lib/components/icons/OpenAIIcon.svelte";
-import OpenCodeIcon from "$lib/components/icons/OpenCodeIcon.svelte";
+import { acpAgentIcon } from "$lib/components/icons/acpAgentIcon";
 import Dotmatrix from "$lib/components/ui/dotmatrix/Dotmatrix.svelte";
 import {
-  cascadeAgentChange,
+  cascadeChatAgentChange,
   fetchAgentAvailability,
   fetchModels,
   getAgentAvailability,
   getSettings,
+  resolveChatAgentId,
   updateSettings,
 } from "$lib/stores/settings.svelte";
 import { authHeaders } from "$lib/utils/session-token";
@@ -27,32 +31,21 @@ interface Props {
 
 let { onContinue, onBack, onSkip }: Props = $props();
 
-const OPENCODE: AiAgent = "opencode";
-const CLAUDE: AiAgent = "claude";
-const CODEX: AiAgent = "codex";
-
-const TAGLINES: Record<AiAgent, string> = {
-  opencode: "Local engine, works out of the box.",
-  claude: "Anthropic's reasoning model.",
-  codex: "OpenAI's coding agent.",
-};
+const OPENCODE: AcpAgentId = "opencode";
 
 // ── Detection state ──────────────────────────────────────────────────────
 //
 // Three rendering modes:
 //   - 'loading' — initial detection in flight
 //   - 'picker'  — at least one provider detected, user picks one
-//   - 'install' — neither detected, offer to install opencode
+//   - 'install' — none detected, offer to install opencode
 let mode = $state<"loading" | "picker" | "install">("loading");
 let availability = $state<AgentAvailability | null>(null);
 
-// Picker state: pre-select the currently saved agent, falling back to
-// opencode if either the settings haven't loaded or the saved agent isn't
-// installed (rare — but if so, prefer the installed one over the empty
-// pre-selection).
-let selected = $state<AiAgent>(
-  ((getSettings()?.aiAgent as AiAgent | undefined) ?? OPENCODE) as AiAgent,
-);
+// Picker state: pre-select the current chat agent, falling back to opencode if
+// either the settings haven't loaded or the saved agent isn't installed (rare —
+// but if so, prefer an installed one over the empty pre-selection).
+let selected = $state<AcpAgentId>(resolveChatAgentId(getSettings()));
 let isSaving = $state(false);
 
 // Install state.
@@ -72,15 +65,15 @@ onMount(async () => {
     mode = "picker";
     return;
   }
-  if (data.opencode || data.claude || data.codex) {
-    // If the saved agent isn't installed, nudge the selection to whichever
-    // IS installed (preference order opencode → claude → codex) so Continue
-    // doesn't pick a missing CLI.
-    const saved = (getSettings()?.aiAgent as AiAgent | undefined) ?? OPENCODE;
+  if (ACP_AGENTS.some((a) => data[a.id])) {
+    // If the saved agent isn't installed, nudge the selection to the first
+    // installed agent (registry order) so Continue doesn't pick a missing CLI.
+    const saved = resolveChatAgentId(getSettings());
     if (data[saved]) {
       selected = saved;
     } else {
-      selected = data.opencode ? OPENCODE : data.claude ? CLAUDE : CODEX;
+      const firstInstalled = ACP_AGENTS.find((a) => data[a.id]);
+      if (firstInstalled) selected = firstInstalled.id;
     }
     mode = "picker";
   } else {
@@ -95,8 +88,10 @@ onDestroy(() => {
 async function handleContinue(): Promise<void> {
   isSaving = true;
   try {
-    void fetchModels(selected);
-    await updateSettings(cascadeAgentChange(selected));
+    // opencode's catalog is dynamic — kick off a fetch so the cascade can pick a
+    // real default model. Other agents have static catalogs in the registry.
+    if (selected === OPENCODE) void fetchModels("opencode");
+    await updateSettings(cascadeChatAgentChange(selected));
     onContinue();
   } finally {
     isSaving = false;
@@ -167,8 +162,7 @@ function applyEvent(event: InstallEvent): void {
       // Refresh detection so the picker pre-selects opencode and shows
       // the Installed tag accurately.
       void (async () => {
-        const fresh = await fetchAgentAvailability();
-        availability = fresh;
+        availability = await fetchAgentAvailability();
         selected = OPENCODE;
         mode = "picker";
       })();
@@ -205,62 +199,31 @@ function handleSkip(): void {
 		<fieldset class="options">
 			<legend class="visually-hidden">AI agent</legend>
 
-			<label class="option" data-selected={selected === OPENCODE}>
-				<input type="radio" name="agent" value={OPENCODE} bind:group={selected} />
-				<span class="option-mark" aria-hidden="true"></span>
-				<span class="option-icon" aria-hidden="true">
-					<OpenCodeIcon size={20} />
-				</span>
-				<span class="option-body">
-					<span class="option-row">
-						<span class="option-name">OpenCode</span>
-						{#if availability?.opencode}
-							<span class="option-tag tag-installed">installed</span>
-						{:else}
-							<span class="option-tag tag-missing">not installed</span>
-						{/if}
+			{#each ACP_AGENTS as agent, i (agent.id)}
+				{@const AgentIcon = acpAgentIcon(agent.icon)}
+				<label
+					class="option"
+					data-selected={selected === agent.id}
+					style="--option-index: {i}"
+				>
+					<input type="radio" name="agent" value={agent.id} bind:group={selected} />
+					<span class="option-mark" aria-hidden="true"></span>
+					<span class="option-icon" aria-hidden="true">
+						<AgentIcon size={20} />
 					</span>
-					<span class="option-host">{TAGLINES.opencode}</span>
-				</span>
-			</label>
-
-			<label class="option" data-selected={selected === CLAUDE}>
-				<input type="radio" name="agent" value={CLAUDE} bind:group={selected} />
-				<span class="option-mark" aria-hidden="true"></span>
-				<span class="option-icon" aria-hidden="true">
-					<AnthropicIcon size={20} />
-				</span>
-				<span class="option-body">
-					<span class="option-row">
-						<span class="option-name">Claude Code</span>
-						{#if availability?.claude}
-							<span class="option-tag tag-installed">installed</span>
-						{:else}
-							<span class="option-tag tag-missing">not installed</span>
-						{/if}
+					<span class="option-body">
+						<span class="option-row">
+							<span class="option-name">{agent.label}</span>
+							{#if availability?.[agent.id]}
+								<span class="option-tag tag-installed">installed</span>
+							{:else}
+								<span class="option-tag tag-missing">not installed</span>
+							{/if}
+						</span>
+						<span class="option-host">{agent.description}</span>
 					</span>
-					<span class="option-host">{TAGLINES.claude}</span>
-				</span>
-			</label>
-
-			<label class="option" data-selected={selected === CODEX}>
-				<input type="radio" name="agent" value={CODEX} bind:group={selected} />
-				<span class="option-mark" aria-hidden="true"></span>
-				<span class="option-icon" aria-hidden="true">
-					<OpenAIIcon size={20} />
-				</span>
-				<span class="option-body">
-					<span class="option-row">
-						<span class="option-name">Codex</span>
-						{#if availability?.codex}
-							<span class="option-tag tag-installed">installed</span>
-						{:else}
-							<span class="option-tag tag-missing">not installed</span>
-						{/if}
-					</span>
-					<span class="option-host">{TAGLINES.codex}</span>
-				</span>
-			</label>
+				</label>
+			{/each}
 		</fieldset>
 
 		<div class="actions">
@@ -400,14 +363,7 @@ function handleSkip(): void {
 		cursor: pointer;
 		transition: background-color var(--duration-snap) var(--ease-out-expo);
 		animation: option-in var(--duration-ceremonial-medium) var(--ease-out-expo) backwards;
-	}
-
-	.option:nth-child(2) {
-		animation-delay: 80ms;
-	}
-
-	.option:nth-child(3) {
-		animation-delay: 160ms;
+		animation-delay: calc(var(--option-index, 0) * 80ms);
 	}
 
 	@keyframes option-in {

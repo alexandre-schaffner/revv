@@ -1,4 +1,10 @@
-import type { AgentAvailability, AiAgent, UserSettings } from "@revv/shared";
+import {
+  ACP_AGENT_IDS,
+  type AcpAgentId,
+  type AgentAvailability,
+  getAgentCapabilities,
+  type UserSettings,
+} from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { api } from "$lib/api/client";
 import {
@@ -9,19 +15,21 @@ import {
 import { invalidateSuggestions } from "$lib/stores/suggestions.svelte";
 import { authHeaders } from "$lib/utils/session-token";
 
+/** The agent that drives chat / walkthrough / recap (single registry id). */
+export function resolveChatAgentId(s: UserSettings | null): AcpAgentId {
+  return s?.aiAgent ?? "opencode";
+}
+
+/** A per-agent record seeded with `make()` for every registry agent. */
+function byAgent<T>(make: () => T): Record<AcpAgentId, T> {
+  return Object.fromEntries(ACP_AGENT_IDS.map((id) => [id, make()])) as Record<AcpAgentId, T>;
+}
+
 let settings = $state<UserSettings | null>(null);
 let _isLoading = $state(false);
-let modelsByAgent = $state<Record<AiAgent, ModelOption[]>>({
-  opencode: [],
-  claude: [],
-  codex: [],
-});
-let modelsLoadedByAgent = $state<Record<AiAgent, boolean>>({
-  opencode: false,
-  claude: false,
-  codex: false,
-});
-let modelsInFlight: Partial<Record<AiAgent, Promise<ModelOption[]>>> = {};
+let modelsByAgent = $state<Record<AcpAgentId, ModelOption[]>>(byAgent(() => []));
+let modelsLoadedByAgent = $state<Record<AcpAgentId, boolean>>(byAgent(() => false));
+let modelsInFlight: Partial<Record<AcpAgentId, Promise<ModelOption[]>>> = {};
 
 export function getSettings(): UserSettings | null {
   return settings;
@@ -61,12 +69,12 @@ export async function setGithubConfig(host: string, clientId: string): Promise<v
  * been fetched yet — callers can use `areModelsLoaded` to disambiguate
  * "loading" from "genuinely empty".
  */
-export function getAvailableModels(agent?: AiAgent): ModelOption[] {
-  const a = agent ?? (settings?.aiAgent as AiAgent) ?? "opencode";
+export function getAvailableModels(agent?: AcpAgentId): ModelOption[] {
+  const a = agent ?? settings?.aiAgent ?? "opencode";
   return modelsByAgent[a] ?? [];
 }
 
-export function areModelsLoaded(agent: AiAgent): boolean {
+export function areModelsLoaded(agent: AcpAgentId): boolean {
   return modelsLoadedByAgent[agent] ?? false;
 }
 
@@ -140,8 +148,8 @@ export async function updateSettings(partial: SettingsUpdate): Promise<void> {
 export function reset(): void {
   settings = null;
   _isLoading = false;
-  modelsByAgent = { opencode: [], claude: [], codex: [] };
-  modelsLoadedByAgent = { opencode: false, claude: false, codex: false };
+  modelsByAgent = byAgent(() => []);
+  modelsLoadedByAgent = byAgent(() => false);
   modelsInFlight = {};
   agentAvailability = null;
 }
@@ -151,7 +159,7 @@ export function reset(): void {
  * the same agent de-dupe onto a single in-flight request so rapid agent toggles
  * don't thrash the server.
  */
-export async function fetchModels(agent: AiAgent): Promise<ModelOption[]> {
+export async function fetchModels(agent: AcpAgentId): Promise<ModelOption[]> {
   const existing = modelsInFlight[agent];
   if (existing) return existing;
 
@@ -181,36 +189,43 @@ export async function fetchModels(agent: AiAgent): Promise<ModelOption[]> {
  * app start so agent/model dropdowns render instantly without round-trips.
  */
 export async function fetchAllModels(): Promise<void> {
-  await Promise.all([fetchModels("opencode"), fetchModels("claude"), fetchModels("codex")]);
+  await Promise.all(ACP_AGENT_IDS.map((id) => fetchModels(id)));
 }
 
 /**
- * Build the three-field settings partial used when the agent flips:
- * `aiAgent` + `aiModel` (re-picked against the new agent's catalog) +
- * `aiSuggestionsModel` (low-cost default for the new agent).
- *
- * Centralises the cascade logic that lived in AgentSelector and
- * SettingsModal so the onboarding agent step doesn't have to copy it a
- * third time. Side-effect free — callers pass the result to
- * `updateSettings()`.
+ * Cascade for the agent picker. There is a single `aiAgent` now (it drives
+ * chat, walkthrough, and recap), so picking an ACP agent must:
+ *   - set `aiAgent`;
+ *   - re-pick `aiModel` from that agent's capability catalog (dynamic = opencode
+ *     → cached list / default) so the shared model stays compatible;
+ *   - re-pick the low-cost `aiSuggestionsModel` default for the new agent;
+ *   - clamp `aiThinkingEffort` to a tier the new agent supports.
+ * Side-effect free — callers pass the result to `updateSettings()`.
  */
-export function cascadeAgentChange(agent: AiAgent): {
-  aiAgent: AiAgent;
-  aiModel: string;
-  aiSuggestionsModel: string;
-} {
-  const cached = getAvailableModels(agent);
-  const fallback = getDefaultModel(agent);
-  const picked =
-    cached.length === 0
-      ? fallback
-      : // biome-ignore lint/style/noNonNullAssertion: length > 0 guarantees [0] exists
-        (cached.find((m) => m.value === fallback)?.value ?? cached[0]!.value);
-  return {
-    aiAgent: agent,
-    aiModel: picked,
-    aiSuggestionsModel: getDefaultSuggestionsModel(agent),
+export function cascadeChatAgentChange(acpId: AcpAgentId): SettingsUpdate {
+  const caps = getAgentCapabilities(acpId);
+  const update: SettingsUpdate = {
+    aiAgent: acpId,
+    aiSuggestionsModel: getDefaultSuggestionsModel(acpId),
   };
+
+  if (caps.models === "dynamic") {
+    const cached = getAvailableModels(acpId);
+    update.aiModel = cached[0]?.value ?? getDefaultModel(acpId);
+  } else {
+    const first = caps.models[0];
+    if (first) update.aiModel = first.value;
+  }
+
+  if (caps.thinkingEfforts.length > 0) {
+    const cur = getSettings()?.aiThinkingEffort;
+    if (!cur || !caps.thinkingEfforts.includes(cur)) {
+      const fallback = caps.thinkingEfforts.includes("high") ? "high" : caps.thinkingEfforts[0];
+      if (fallback) update.aiThinkingEffort = fallback;
+    }
+  }
+
+  return update;
 }
 
 // ── Agent availability ──────────────────────────────────────────────────────

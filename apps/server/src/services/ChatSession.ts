@@ -6,7 +6,7 @@
 //
 // Two responsibilities:
 //
-//   1. Session bookkeeping — find/upsert/clear per (prId, agent, prHeadSha),
+//   1. Session bookkeeping — find/upsert/clear per (prId, agent, model, prHeadSha),
 //      patch in the agent-side session id once the SDK / daemon emits it.
 //   2. Transcript persistence — append user messages, stream assistant
 //      content into a single row, append typed activity rows. All inserts
@@ -35,6 +35,7 @@ export interface ChatSessionRow {
   readonly id: string;
   readonly pullRequestId: string;
   readonly agent: string;
+  readonly model: string;
   readonly sessionId: string | null;
   readonly prHeadSha: string;
   readonly worktreePath: string;
@@ -48,6 +49,7 @@ export interface ChatSessionRow {
 export interface FindOrCreateChatSessionParams {
   readonly prId: string;
   readonly agent: string;
+  readonly model: string;
   readonly prHeadSha: string;
   readonly worktreePath: string;
   readonly branchName: string;
@@ -56,6 +58,7 @@ export interface FindOrCreateChatSessionParams {
 export interface UpsertChatSessionParams {
   readonly prId: string;
   readonly agent: string;
+  readonly model: string;
   readonly prHeadSha: string;
   readonly sessionId: string;
   readonly worktreePath: string;
@@ -97,7 +100,7 @@ export interface ChatTaskRow {
   readonly activeForm: string | null;
   readonly status: "pending" | "in_progress" | "completed";
   readonly priority: "low" | "medium" | "high" | null;
-  readonly source: "claude" | "opencode" | "codex";
+  readonly source: "claude" | "opencode" | "codex" | "acp";
   readonly sequence: number;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -109,7 +112,7 @@ export interface ChatPlanRow {
   readonly turnId: string;
   readonly planMarkdown: string;
   readonly status: "pending" | "approved" | "rejected" | "superseded";
-  readonly source: "claude" | "opencode" | "codex";
+  readonly source: "claude" | "opencode" | "codex" | "acp";
   readonly sequence: number;
   readonly createdAt: string;
   readonly decidedAt: string | null;
@@ -125,7 +128,7 @@ export interface ChatSubagentInvocationRow {
   readonly prompt: string;
   readonly status: "running" | "completed" | "errored";
   readonly result: string | null;
-  readonly source: "claude" | "opencode" | "codex";
+  readonly source: "claude" | "opencode" | "codex" | "acp";
   readonly sequence: number;
   readonly startedAt: string;
   readonly completedAt: string | null;
@@ -135,7 +138,7 @@ export interface ChatQuestionRow {
   readonly id: string;
   readonly chatSessionId: string;
   readonly turnId: string;
-  readonly source: "claude" | "opencode" | "codex";
+  readonly source: "claude" | "opencode" | "codex" | "acp";
   readonly providerRequestId: string;
   readonly providerToolCallId: string | null;
   readonly previewFormat: "markdown" | "html";
@@ -173,6 +176,7 @@ export class ChatSessionService extends Context.Tag("ChatSessionService")<
     readonly find: (
       prId: string,
       agent: string,
+      model: string,
       prHeadSha: string,
     ) => Effect.Effect<ChatSessionRow | null>;
     /**
@@ -182,7 +186,7 @@ export class ChatSessionService extends Context.Tag("ChatSessionService")<
      */
     readonly findLatestForPr: (prId: string, agent: string) => Effect.Effect<ChatSessionRow | null>;
     /**
-     * Look up the existing row for (prId, agent, prHeadSha) or insert a
+     * Look up the existing row for (prId, agent, model, prHeadSha) or insert a
      * fresh one with `session_id = NULL`. Used by the chat route at the
      * START of a turn so subsequent message/activity inserts can FK to
      * the row before the agent emits its session id (which arrives
@@ -204,14 +208,19 @@ export class ChatSessionService extends Context.Tag("ChatSessionService")<
     /**
      * Update the prHeadSha of an existing session row. Called by the
      * merge-and-push flow after a successful push so the session lookup
-     * (keyed on `(prId, agent, prHeadSha)`) keeps finding this conversation
+     * (keyed on `(prId, agent, model, prHeadSha)`) keeps finding this conversation
      * even after `pull_requests.headSha` advances to the freshly pushed tip.
      */
     readonly updatePrHeadSha: (params: {
       readonly chatSessionId: string;
       readonly prHeadSha: string;
     }) => Effect.Effect<void>;
-    readonly clear: (prId: string, agent: string, prHeadSha: string) => Effect.Effect<void>;
+    readonly clear: (
+      prId: string,
+      agent: string,
+      model: string,
+      prHeadSha: string,
+    ) => Effect.Effect<void>;
     readonly clearAllForPr: (prId: string, agent: string) => Effect.Effect<void>;
     readonly clearAllForAgent: (agent: string) => Effect.Effect<void>;
 
@@ -283,7 +292,7 @@ export class ChatSessionService extends Context.Tag("ChatSessionService")<
     readonly applyTaskListSnapshot: (params: {
       readonly chatSessionId: string;
       readonly turnId: string;
-      readonly source: "claude" | "opencode" | "codex";
+      readonly source: "claude" | "opencode" | "codex" | "acp";
       readonly tasks: ReadonlyArray<ChatTask>;
     }) => Effect.Effect<readonly ChatTaskRow[]>;
 
@@ -298,7 +307,7 @@ export class ChatSessionService extends Context.Tag("ChatSessionService")<
     readonly createPlan: (params: {
       readonly chatSessionId: string;
       readonly turnId: string;
-      readonly source: "claude" | "opencode" | "codex";
+      readonly source: "claude" | "opencode" | "codex" | "acp";
       readonly markdown: string;
     }) => Effect.Effect<ChatPlanRow>;
 
@@ -316,7 +325,7 @@ export class ChatSessionService extends Context.Tag("ChatSessionService")<
     readonly startSubagentInvocation: (params: {
       readonly chatSessionId: string;
       readonly parentTurnId: string;
-      readonly source: "claude" | "opencode" | "codex";
+      readonly source: "claude" | "opencode" | "codex" | "acp";
       readonly providerCallId: string;
       readonly subagentType: string;
       readonly description: string;
@@ -347,7 +356,7 @@ export class ChatSessionService extends Context.Tag("ChatSessionService")<
     readonly createQuestion: (params: {
       readonly chatSessionId: string;
       readonly turnId: string;
-      readonly source: "claude" | "opencode" | "codex";
+      readonly source: "claude" | "opencode" | "codex" | "acp";
       readonly providerRequestId: string;
       readonly providerToolCallId?: string | null;
       readonly previewFormat: "markdown" | "html";
@@ -416,6 +425,7 @@ export const ChatSessionServiceLive = Layer.effect(
       id: row.id,
       pullRequestId: row.pullRequestId,
       agent: row.agent,
+      model: row.model,
       sessionId: row.sessionId,
       prHeadSha: row.prHeadSha,
       worktreePath: row.worktreePath,
@@ -516,7 +526,7 @@ export const ChatSessionServiceLive = Layer.effect(
     });
 
     return {
-      find: (prId, agent, prHeadSha) =>
+      find: (prId, agent, model, prHeadSha) =>
         Effect.sync(() => {
           const row = db
             .select()
@@ -525,6 +535,7 @@ export const ChatSessionServiceLive = Layer.effect(
               and(
                 eq(chatSessions.pullRequestId, prId),
                 eq(chatSessions.agent, agent),
+                eq(chatSessions.model, model),
                 eq(chatSessions.prHeadSha, prHeadSha),
               ),
             )
@@ -544,7 +555,7 @@ export const ChatSessionServiceLive = Layer.effect(
           return row ? rowToSessionRow(row) : null;
         }),
 
-      findOrCreate: ({ prId, agent, prHeadSha, worktreePath, branchName }) =>
+      findOrCreate: ({ prId, agent, model, prHeadSha, worktreePath, branchName }) =>
         Effect.sync(() => {
           const existing = db
             .select()
@@ -553,6 +564,7 @@ export const ChatSessionServiceLive = Layer.effect(
               and(
                 eq(chatSessions.pullRequestId, prId),
                 eq(chatSessions.agent, agent),
+                eq(chatSessions.model, model),
                 eq(chatSessions.prHeadSha, prHeadSha),
               ),
             )
@@ -577,6 +589,7 @@ export const ChatSessionServiceLive = Layer.effect(
               id,
               pullRequestId: prId,
               agent,
+              model,
               sessionId: null,
               prHeadSha,
               worktreePath,
@@ -591,6 +604,7 @@ export const ChatSessionServiceLive = Layer.effect(
             id,
             pullRequestId: prId,
             agent,
+            model,
             sessionId: null,
             prHeadSha,
             worktreePath,
@@ -623,7 +637,7 @@ export const ChatSessionServiceLive = Layer.effect(
             .run();
         }),
 
-      upsert: ({ prId, agent, prHeadSha, sessionId, worktreePath, branchName }) =>
+      upsert: ({ prId, agent, model, prHeadSha, sessionId, worktreePath, branchName }) =>
         Effect.sync(() => {
           const now = nowIso();
           db.insert(chatSessions)
@@ -631,6 +645,7 @@ export const ChatSessionServiceLive = Layer.effect(
               id: crypto.randomUUID(),
               pullRequestId: prId,
               agent,
+              model,
               sessionId,
               prHeadSha,
               worktreePath,
@@ -641,7 +656,12 @@ export const ChatSessionServiceLive = Layer.effect(
               lastActivityAt: now,
             })
             .onConflictDoUpdate({
-              target: [chatSessions.pullRequestId, chatSessions.agent, chatSessions.prHeadSha],
+              target: [
+                chatSessions.pullRequestId,
+                chatSessions.agent,
+                chatSessions.model,
+                chatSessions.prHeadSha,
+              ],
               set: {
                 sessionId,
                 worktreePath,
@@ -652,13 +672,14 @@ export const ChatSessionServiceLive = Layer.effect(
             .run();
         }),
 
-      clear: (prId, agent, prHeadSha) =>
+      clear: (prId, agent, model, prHeadSha) =>
         Effect.sync(() => {
           db.delete(chatSessions)
             .where(
               and(
                 eq(chatSessions.pullRequestId, prId),
                 eq(chatSessions.agent, agent),
+                eq(chatSessions.model, model),
                 eq(chatSessions.prHeadSha, prHeadSha),
               ),
             )

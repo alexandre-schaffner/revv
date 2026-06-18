@@ -1,3 +1,4 @@
+import type { AcpAgentId } from "./acp-agents";
 import type { UpdateChannel } from "./constants";
 
 export type PullRequestStatus = "open" | "closed" | "merged";
@@ -61,27 +62,14 @@ export type ThinkingEffort = "ultrathink" | "max" | "extra-high" | "high" | "med
 
 export type ContextWindow = "200k" | "1m";
 
-export type AiAgent = "opencode" | "claude" | "codex";
-
 /**
  * Per-feature override for which agent generates project recaps.
- * `'auto'` (default) inherits the global `aiAgent`; explicit values pin
- * recap generation to that agent regardless of the global choice. Lets a
- * user run Claude for interactive walkthroughs but keep background recaps
+ * `'auto'` (default) inherits the global `aiAgent`; an explicit ACP agent id
+ * pins recap generation to that agent regardless of the global choice. Lets a
+ * user run Claude Code for interactive walkthroughs but keep background recaps
  * on opencode (cheaper, unattended), or vice versa.
  */
-export type RecapAgentChoice = "auto" | "opencode" | "claude" | "codex";
-
-/**
- * Which CLI agents are detected on PATH (or pinned via the LaunchAgent
- * `REVV_*_BIN` env vars). Surfaced during onboarding so we can offer to
- * install opencode when neither provider is present.
- */
-export interface AgentAvailability {
-  opencode: boolean;
-  claude: boolean;
-  codex: boolean;
-}
+export type RecapAgentChoice = "auto" | AcpAgentId;
 
 /**
  * Event frames emitted over SSE while the server runs the opencode install
@@ -109,14 +97,18 @@ export interface UserSettings {
   aiProvider: string;
   aiModel: string;
   aiThinkingEffort: ThinkingEffort;
-  aiAgent: AiAgent;
+  /**
+   * Selected ACP agent id (one of `ACP_AGENTS`, e.g. `claude-code`, `opencode`,
+   * `codex`, `cursor`). The single agent that drives chat, walkthrough, and
+   * recap generation.
+   */
+  aiAgent: AcpAgentId;
   aiContextWindow: ContextWindow;
   /**
    * Low-cost model used for one-shot, no-tools PR-aware suggestion
    * generation (right-panel empty-state prompts). Follows the global
-   * `aiAgent` — pick from the opencode catalog when `aiAgent='opencode'`,
-   * the Claude catalog when `aiAgent='claude'`. Defaults to a cheap model
-   * (e.g. Haiku for Claude) so generating suggestions for every PR open
+   * `aiAgent` — picked from that agent's catalog. Defaults to a cheap model
+   * (e.g. Haiku for Claude Code) so generating suggestions for every PR open
    * doesn't burn the same tokens as the main review agent.
    */
   aiSuggestionsModel: string;
@@ -142,7 +134,7 @@ export interface UserSettings {
     weeklyEnabled: boolean;
     /**
      * Per-feature agent override. `'auto'` (default) follows the global
-     * `aiAgent`; `'opencode'` / `'claude'` pin recap generation to that
+     * `aiAgent`; an explicit ACP agent id pins recap generation to that
      * agent regardless of the global choice.
      */
     agent: RecapAgentChoice;

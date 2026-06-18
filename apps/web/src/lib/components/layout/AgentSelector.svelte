@@ -1,46 +1,34 @@
 <script lang="ts">
-import type { AiAgent } from "@revv/shared";
+import { ACP_AGENTS, type AcpAgentId } from "@revv/shared";
 import Check from "phosphor-svelte/lib/Check";
-import AnthropicIcon from "$lib/components/icons/AnthropicIcon.svelte";
-import OpenAIIcon from "$lib/components/icons/OpenAIIcon.svelte";
-import OpenCodeIcon from "$lib/components/icons/OpenCodeIcon.svelte";
+import { acpAgentIcon } from "$lib/components/icons/acpAgentIcon";
 import {
   Content as PopoverContent,
   Root as PopoverRoot,
   Trigger as PopoverTrigger,
 } from "$lib/components/ui/popover/index.js";
 import {
-  cascadeAgentChange,
+  cascadeChatAgentChange,
   fetchModels,
   getSettings,
+  resolveChatAgentId,
   updateSettings,
 } from "$lib/stores/settings.svelte";
 import SelectTrigger from "./SelectTrigger.svelte";
 
-const AGENT_OPTIONS = [
-  { label: "OpenCode", value: "opencode" as AiAgent, icon: OpenCodeIcon },
-  { label: "Claude Code", value: "claude" as AiAgent, icon: AnthropicIcon },
-  { label: "Codex", value: "codex" as AiAgent, icon: OpenAIIcon },
-];
-
 let open = $state(false);
 
-let currentAgent = $derived((getSettings()?.aiAgent ?? "opencode") as AiAgent);
-let currentLabel = $derived(
-  AGENT_OPTIONS.find((a) => a.value === currentAgent)?.label ?? "OpenCode",
-);
-let CurrentIcon = $derived(
-  AGENT_OPTIONS.find((a) => a.value === currentAgent)?.icon ?? OpenCodeIcon,
-);
+// The selected agent (single `aiAgent`) so the trigger reflects what runs.
+let currentId = $derived(resolveChatAgentId(getSettings()));
+let current = $derived(ACP_AGENTS.find((a) => a.id === currentId));
+let currentLabel = $derived(current?.label ?? "Agent");
+let CurrentIcon = $derived(acpAgentIcon(current?.icon ?? "generic"));
 
-function select(value: AiAgent) {
-  // If the cache is cold (e.g. app-start prefetch hadn't completed yet),
-  // kick a fetch so subsequent agent switches are race-free.
-  void fetchModels(value);
-  // `cascadeAgentChange` re-picks `aiModel` against the new agent's
-  // catalog and resets `aiSuggestionsModel` to the cheap default — same
-  // logic the onboarding agent step and settings modal share.
-  updateSettings(cascadeAgentChange(value));
+function select(id: AcpAgentId) {
+  // opencode's catalog is dynamic — kick off a fetch so the cascade can pick a
+  // real default model (and the model selector renders without a round-trip).
+  if (id === "opencode") void fetchModels("opencode");
+  void updateSettings(cascadeChatAgentChange(id));
   open = false;
 }
 </script>
@@ -55,14 +43,15 @@ function select(value: AiAgent) {
 		</SelectTrigger>
 	</PopoverTrigger>
 	<PopoverContent class="w-40 p-1" align="start" side="top">
-		{#each AGENT_OPTIONS as opt (opt.value)}
+		{#each ACP_AGENTS as opt (opt.id)}
+			{@const OptIcon = acpAgentIcon(opt.icon)}
 			<button
 				class="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-xs text-text-secondary transition-colors hover:bg-bg-tertiary"
-				onclick={() => select(opt.value)}
+				onclick={() => select(opt.id)}
 			>
-				<opt.icon size={12} class="text-text-muted" />
+				<OptIcon size={12} class="text-text-muted" />
 				<span class="flex-1 text-left">{opt.label}</span>
-				{#if currentAgent === opt.value}
+				{#if currentId === opt.id}
 					<Check size={12} weight="regular" class="text-accent" />
 				{/if}
 			</button>

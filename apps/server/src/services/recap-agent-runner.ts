@@ -1,18 +1,14 @@
 // ─── Recap agent runner ──────────────────────────────────────────────────────
 //
-// Thin agent-SDK adapter for recap generation. Two transports, byte-identical
-// behaviour (CLAUDE.md invariant #13):
+// Thin adapter for recap generation over the ACP transport (CLAUDE.md
+// invariant #13). The single transport is `recap-acp.ts`, which routes all tool
+// handling through the HTTP MCP route at `/mcp/recap` (see `routes/mcp/recap.ts`)
+// running the shared handlers in
+// `apps/server/src/ai/providers/recap-tools/handlers.ts`. This replaces the
+// bespoke Claude-SDK / opencode / codex recap drivers — exactly as
+// `walkthrough-acp.ts` / `chat-acp.ts` replaced their feature's bespoke drivers.
 //
-//   • Claude Agent SDK — in-process MCP via `createSdkMcpServer`.
-//   • Opencode daemon  — HTTP MCP route at `/mcp/recap` (see
-//                        `recap-opencode.ts` + `routes/mcp/recap.ts`).
-//
-// Both paths run the same shared handlers in
-// `apps/server/src/ai/providers/recap-tools/handlers.ts`. The orchestrator
-// (`ProjectRecapJobs`) decides which transport to use via the
-// `effectiveAgent` param.
-//
-// Pipeline shape on either path (structured pipeline; no text buffer):
+// Pipeline shape (structured pipeline; no text buffer):
 //
 //   get_recap_state → [get_repo_context, list_open_prs?] → set_lede →
 //   add_pr_entry × N → complete_recap.
@@ -21,35 +17,24 @@
 // discarded — the prompt instructs the agent not to emit any. Live UI
 // updates come from per-handler SSE emissions (`lede`, `entry`, `phase`).
 
-import { query } from "@anthropic-ai/claude-agent-sdk";
-import type { ProjectRecap, RecapStreamEvent } from "@revv/shared";
+import type {
+  AcpAgentId,
+  ContextWindow,
+  ProjectRecap,
+  RecapStreamEvent,
+  ThinkingEffort,
+} from "@revv/shared";
 import { eq } from "drizzle-orm";
-import { walkClaudeMessages } from "../ai/agent-stream";
-import { buildRecapUserMessage, RECAP_SYSTEM_PROMPT } from "../ai/prompts/recap";
-import { resolveCliBin } from "../ai/providers/cli-agent";
-import { runRecapAgentViaCodex } from "../ai/providers/recap-codex";
-import {
-  createRecapDispatchState,
-  dispatchRecapStreamEvent,
-} from "../ai/providers/recap-event-dispatch";
-import {
-  type RecapOpencodeSessionDeps,
-  type RecapOpencodeSupervisorDeps,
-  runRecapAgentViaOpencode,
-} from "../ai/providers/recap-opencode";
+import { type RecapAcpSessionDeps, runRecapAgentViaAcp } from "../ai/providers/recap-acp";
 import {
   completeRecapHandler,
-  createRecapMcpServer,
-  RECAP_ALLOWED_TOOLS,
-  RECAP_MCP_SERVER,
   type RecapSourceBundle,
   type RecapSourcePrDiff,
   type RecapToolContext,
 } from "../ai/providers/recap-tools";
 import type { Db } from "../db";
 import { projectRecaps, recapPrEntries } from "../db/schema/index";
-import { debug, logError } from "../logger";
-import type { CliAgent } from "./Ai";
+import { debug } from "../logger";
 
 export interface RecapAgentResult {
   /** True when `complete_recap` returned success during this run. */
@@ -67,32 +52,21 @@ export interface RunRecapAgentParams {
   readonly priorRecaps: ReadonlyArray<ProjectRecap>;
   readonly abortController: AbortController;
   readonly modelUsed: string;
+  /** Resolved ACP registry agent id that drives this recap run. */
+  readonly acpAgentId: AcpAgentId;
+  readonly thinkingEffort?: ThinkingEffort | undefined;
+  readonly contextWindow?: ContextWindow | undefined;
   /**
-   * Resolved agent choice for THIS recap run. The orchestrator computes this
-   * via `SettingsService.resolveRecapAgent()` and threads it in — keeps this module
-   * decoupled from `SettingsService`.
+   * Server-side working directory the ACP connection is pooled under. Recap
+   * doesn't run against a worktree the way walkthrough does; the repo's clone
+   * path (or the server cwd as fallback) is enough.
    */
-  readonly effectiveAgent: CliAgent;
-  readonly aiMaxTurns: number;
-  /**
-   * Server-side working directory passed to opencode's `session.create`.
-   * Recap doesn't run against a worktree the way walkthrough does, but the
-   * daemon requires a directory; supplying the repo's clone path (or the
-   * server cwd as fallback) is enough. Required only when
-   * `effectiveAgent === 'opencode'`.
-   */
-  readonly repoWorkingDir?: string;
-  /**
-   * Supervisor callbacks for the opencode path. Required only when
-   * `effectiveAgent === 'opencode'`; ignored on the Claude path.
-   */
-  readonly supervisorDeps?: RecapOpencodeSupervisorDeps;
+  readonly repoWorkingDir: string;
   /**
    * Session-token callbacks (in-memory map on `ProjectRecapJobs`). The
-   * opencode HTTP-MCP route authenticates incoming tool calls against
-   * this map.
+   * HTTP-MCP route authenticates incoming tool calls against this map.
    */
-  readonly sessionDeps?: RecapOpencodeSessionDeps;
+  readonly sessionDeps: RecapAcpSessionDeps;
   readonly onCompleted: () => void;
   /**
    * Lazy diff loader wired by the orchestrator. Called by the `get_pr_diff`
@@ -102,8 +76,7 @@ export interface RunRecapAgentParams {
   /**
    * Stream emitter for live recap generation. Called by MCP tool handlers
    * so the SSE endpoint can forward `lede` / `entry` / `phase` events to
-   * subscribers. The runner itself emits `activity` events on each tool
-   * call; visible assistant text is discarded.
+   * subscribers. Visible assistant text is discarded.
    */
   readonly emitEvent: (event: RecapStreamEvent) => void;
 }
@@ -137,12 +110,16 @@ export async function runRecapAgent(params: RunRecapAgentParams): Promise<RecapA
     toolCalls,
   };
 
-  const outcome =
-    params.effectiveAgent === "opencode"
-      ? await runViaOpencode(params, ctx)
-      : params.effectiveAgent === "codex"
-        ? await runViaCodex(params, ctx)
-        : await runViaClaude(params, ctx);
+  const outcome = await runRecapAgentViaAcp({
+    ctx,
+    acpAgentId: params.acpAgentId,
+    modelUsed: params.modelUsed,
+    thinkingEffort: params.thinkingEffort,
+    contextWindow: params.contextWindow,
+    workingDir: params.repoWorkingDir,
+    abortController: params.abortController,
+    sessionDeps: params.sessionDeps,
+  });
   let errorMessage = outcome.error;
 
   if (!validatedComplete) {
@@ -207,153 +184,4 @@ function firstToolText(result: {
   content: Array<{ type: "text"; text: string }>;
 }): string | undefined {
   return result.content[0]?.text;
-}
-
-// ── Claude SDK path ──────────────────────────────────────────────────────────
-
-interface RunOutcome {
-  readonly tokenUsage?: Record<string, number>;
-  readonly error?: string;
-}
-
-async function runViaClaude(
-  params: RunRecapAgentParams,
-  ctx: RecapToolContext,
-): Promise<RunOutcome> {
-  const mcpServer = createRecapMcpServer(ctx);
-  const userMessage = buildRecapUserMessage(params.sourceBundle, params.priorRecaps);
-  const pinnedClaude = resolveCliBin("claude");
-  const pathOption = pinnedClaude !== "claude" ? { pathToClaudeCodeExecutable: pinnedClaude } : {};
-
-  // 10-minute soft cap. Recaps are bounded — if the agent isn't done in
-  // 10 minutes something is wrong and we should give up rather than
-  // letting the fiber hold its semaphore permit forever.
-  const timeoutId = setTimeout(
-    () => {
-      try {
-        params.abortController.abort(new Error("Recap generation timed out after 10 minutes"));
-      } catch {
-        /* already aborted */
-      }
-    },
-    10 * 60 * 1000,
-  );
-
-  let tokenUsage: Record<string, number> | undefined;
-
-  try {
-    debug("recap-agent-runner", "starting Claude query for recap", params.recapId);
-
-    const iter = query({
-      prompt: userMessage,
-      options: {
-        systemPrompt: RECAP_SYSTEM_PROMPT,
-        tools: [],
-        allowedTools: RECAP_ALLOWED_TOOLS,
-        mcpServers: { [RECAP_MCP_SERVER]: mcpServer },
-        permissionMode: "bypassPermissions",
-        allowDangerouslySkipPermissions: true,
-        persistSession: false,
-        maxTurns: params.aiMaxTurns,
-        abortController: params.abortController,
-        model: params.modelUsed,
-        ...pathOption,
-      },
-    });
-
-    // Walk the SDK message stream through the shared recap dispatcher so
-    // both transports apply the same discard / activity / heartbeat rules
-    // (CLAUDE.md invariant #13).
-    const dispatchState = createRecapDispatchState();
-    const usage = await walkClaudeMessages(iter, (ev) => {
-      dispatchRecapStreamEvent(ev, dispatchState, ctx.emit);
-    });
-    if (usage) {
-      tokenUsage = {
-        input_tokens: usage.inputTokens,
-        output_tokens: usage.outputTokens,
-        cache_read_input_tokens: usage.cacheReadInputTokens,
-        cache_creation_input_tokens: usage.cacheCreationInputTokens,
-      };
-    }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (params.abortController.signal.aborted) {
-      debug("recap-agent-runner", "recap aborted:", message);
-    } else {
-      logError("recap-agent-runner", `recap ${params.recapId} failed:`, message);
-    }
-  } finally {
-    clearTimeout(timeoutId);
-  }
-
-  return tokenUsage ? { tokenUsage } : {};
-}
-
-// ── Opencode path ────────────────────────────────────────────────────────────
-
-async function runViaOpencode(
-  params: RunRecapAgentParams,
-  ctx: RecapToolContext,
-): Promise<RunOutcome> {
-  if (!params.supervisorDeps || !params.sessionDeps) {
-    throw new Error(
-      "Recap opencode path requires supervisorDeps and sessionDeps — orchestrator must wire them",
-    );
-  }
-  if (!params.repoWorkingDir) {
-    throw new Error("Recap opencode path requires repoWorkingDir — orchestrator must wire it");
-  }
-
-  debug("recap-agent-runner", "starting opencode run for recap", params.recapId);
-
-  const result = await runRecapAgentViaOpencode({
-    ctx,
-    modelUsed: params.modelUsed,
-    workingDir: params.repoWorkingDir,
-    abortController: params.abortController,
-    supervisorDeps: params.supervisorDeps,
-    sessionDeps: params.sessionDeps,
-  });
-
-  if (result.error) {
-    logError("recap-agent-runner", `opencode recap ${params.recapId} failed:`, result.error);
-    return { error: result.error };
-  }
-
-  return result.tokenUsage ? { tokenUsage: result.tokenUsage } : {};
-}
-
-// ── Codex path ─────────────────────────────────────────────────────────────
-
-async function runViaCodex(
-  params: RunRecapAgentParams,
-  ctx: RecapToolContext,
-): Promise<RunOutcome> {
-  // Codex reuses the same session-token callbacks as opencode (the HTTP-MCP
-  // route authenticates against the same in-memory map); it needs no daemon
-  // supervisor deps.
-  if (!params.sessionDeps) {
-    throw new Error("Recap codex path requires sessionDeps — orchestrator must wire them");
-  }
-  if (!params.repoWorkingDir) {
-    throw new Error("Recap codex path requires repoWorkingDir — orchestrator must wire it");
-  }
-
-  debug("recap-agent-runner", "starting codex run for recap", params.recapId);
-
-  const result = await runRecapAgentViaCodex({
-    ctx,
-    modelUsed: params.modelUsed,
-    workingDir: params.repoWorkingDir,
-    abortController: params.abortController,
-    sessionDeps: params.sessionDeps,
-  });
-
-  if (result.error) {
-    logError("recap-agent-runner", `codex recap ${params.recapId} failed:`, result.error);
-    return { error: result.error };
-  }
-
-  return result.tokenUsage ? { tokenUsage: result.tokenUsage } : {};
 }

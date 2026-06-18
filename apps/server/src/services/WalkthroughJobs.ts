@@ -37,6 +37,7 @@ import type {
 } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Cause, Context, Effect, Fiber, Layer, Option, Ref, type Scope } from "effect";
+import { resolveGenerationModel } from "../ai/acp/presets";
 import {
   accumulateTokenUsage,
   addThroughput,
@@ -1188,8 +1189,12 @@ export const WalkthroughJobsLive = Layer.effect(
 
         const settings = yield* provideDb(settingsService.getSettings());
         const agent = yield* provideDb(settingsService.resolveAgent());
+        // Guard the shared `aiModel` against the generation agent: the chat
+        // bottom bar may have left a model id for a chat-only agent (e.g. cursor)
+        // that this agent can't use — fall back to its default if so.
         const freshModelUsed =
-          settings.aiModel ?? (agent === "opencode" ? "opencode" : "claude-sonnet-4-20250514");
+          resolveGenerationModel(agent, settings.aiModel) ??
+          (agent === "opencode" ? "opencode" : "claude-sonnet-4-20250514");
         const modelUsed =
           params.trigger === "resume"
             ? freshModelUsed

@@ -1,5 +1,5 @@
 import type {
-  AiAgent,
+  AcpAgentId,
   ContextWindow,
   DiffViewMode,
   RecapAgentChoice,
@@ -8,9 +8,15 @@ import type {
   UpdateChannel,
   UserSettings,
 } from "@revv/shared";
-import { AUTO_FETCH_DEFAULT_INTERVAL, DEFAULT_UPDATE_CHANNEL, UPDATE_CHANNELS } from "@revv/shared";
+import {
+  AUTO_FETCH_DEFAULT_INTERVAL,
+  DEFAULT_UPDATE_CHANNEL,
+  isAcpAgentId,
+  UPDATE_CHANNELS,
+} from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Context, Effect, Layer, Stream, SubscriptionRef } from "effect";
+import { applyAcpAgentOverride } from "../ai/acp/presets";
 import type { Db } from "../db/index";
 import { userSettings } from "../db/schema/user-settings";
 import { ValidationError } from "../domain/errors";
@@ -63,14 +69,24 @@ function coerceUpdateChannel(value: unknown): UpdateChannel {
     : DEFAULT_SETTINGS.updateChannel;
 }
 
-const VALID_RECAP_AGENTS: ReadonlySet<RecapAgentChoice> = new Set([
-  "auto",
-  "opencode",
-  "claude",
-  "codex",
-]);
+function isRecapAgentChoice(value: unknown): value is RecapAgentChoice {
+  return value === "auto" || (typeof value === "string" && isAcpAgentId(value));
+}
 
-export type AgentId = AiAgent;
+/**
+ * Coerce an agent id out of a raw settings object onto the single ACP registry
+ * id space. Handles the legacy `~/.revv/settings.json` shape: a separate
+ * `chatAgent` (already a registry id) wins, then the legacy `aiAgent: 'claude'`
+ * enum value maps onto `'claude-code'`; anything invalid falls back to default.
+ */
+function coerceAgentId(raw: Record<string, unknown>): AcpAgentId {
+  const chat = raw.chatAgent;
+  if (typeof chat === "string" && isAcpAgentId(chat)) return chat;
+  const ai = raw.aiAgent;
+  if (ai === "claude") return "claude-code";
+  if (typeof ai === "string" && isAcpAgentId(ai)) return ai;
+  return DEFAULT_SETTINGS.aiAgent;
+}
 
 const MIN_MAX_TURNS = 10;
 const MAX_MAX_TURNS = 500;
@@ -112,10 +128,7 @@ function normalize(raw: unknown): UserSettings {
       typeof r.aiThinkingEffort === "string"
         ? (r.aiThinkingEffort as ThinkingEffort)
         : DEFAULT_SETTINGS.aiThinkingEffort,
-    aiAgent:
-      r.aiAgent === "opencode" || r.aiAgent === "claude" || r.aiAgent === "codex"
-        ? r.aiAgent
-        : DEFAULT_SETTINGS.aiAgent,
+    aiAgent: coerceAgentId(r),
     aiContextWindow:
       typeof r.aiContextWindow === "string"
         ? (r.aiContextWindow as ContextWindow)
@@ -184,10 +197,9 @@ function coerceCache(value: unknown): UserSettings["cache"] {
 function coerceRecap(value: unknown): UserSettings["recap"] {
   if (value === null || typeof value !== "object") return { ...DEFAULT_SETTINGS.recap };
   const r = value as Record<string, unknown>;
-  const agent =
-    typeof r.agent === "string" && VALID_RECAP_AGENTS.has(r.agent as RecapAgentChoice)
-      ? (r.agent as RecapAgentChoice)
-      : DEFAULT_SETTINGS.recap.agent;
+  // Legacy `'claude'` enum value maps onto its registry id.
+  const rawAgent = r.agent === "claude" ? "claude-code" : r.agent;
+  const agent = isRecapAgentChoice(rawAgent) ? rawAgent : DEFAULT_SETTINGS.recap.agent;
   return {
     enabled: r.enabled === false ? false : DEFAULT_SETTINGS.recap.enabled,
     dailyEnabled: r.dailyEnabled === false ? false : DEFAULT_SETTINGS.recap.dailyEnabled,
@@ -196,21 +208,23 @@ function coerceRecap(value: unknown): UserSettings["recap"] {
   };
 }
 
-function resolveAgentFromSettings(settings: Pick<UserSettings, "aiAgent">): AgentId {
+function resolveAgentFromSettings(settings: Pick<UserSettings, "aiAgent">): AcpAgentId {
   const agent = settings.aiAgent ?? DEFAULT_SETTINGS.aiAgent;
-  if (agent === "opencode" || agent === "claude" || agent === "codex") return agent;
+  if (isAcpAgentId(agent)) return applyAcpAgentOverride(agent);
   throw new ValidationError({
-    message: `Unknown aiAgent '${agent}' — expected "opencode", "claude", or "codex"`,
+    message: `Unknown aiAgent '${agent}' — expected one of the ACP registry agent ids`,
     field: "aiAgent",
   });
 }
 
-function resolveRecapAgentFromSettings(settings: Pick<UserSettings, "aiAgent" | "recap">): AgentId {
+function resolveRecapAgentFromSettings(
+  settings: Pick<UserSettings, "aiAgent" | "recap">,
+): AcpAgentId {
   const choice = settings.recap?.agent ?? DEFAULT_SETTINGS.recap.agent;
-  if (choice === "opencode" || choice === "claude" || choice === "codex") return choice;
   if (choice === "auto") return resolveAgentFromSettings(settings);
+  if (isAcpAgentId(choice)) return applyAcpAgentOverride(choice);
   throw new ValidationError({
-    message: `Unknown recap.agent '${choice}' — expected "auto", "opencode", "claude", or "codex"`,
+    message: `Unknown recap.agent '${choice}' — expected "auto" or an ACP registry agent id`,
     field: "recap.agent",
   });
 }
@@ -223,7 +237,7 @@ function toSettings(row: typeof userSettings.$inferSelect): UserSettings {
     aiProvider: row.aiProvider,
     aiModel: row.aiModel,
     aiThinkingEffort: row.aiThinkingEffort as ThinkingEffort,
-    aiAgent: row.aiAgent as AiAgent,
+    aiAgent: row.aiAgent as AcpAgentId,
     aiContextWindow: row.aiContextWindow as ContextWindow,
     aiSuggestionsModel: row.aiSuggestionsModel,
     aiMaxTurns: row.aiMaxTurns,
@@ -364,9 +378,16 @@ export class SettingsService extends Context.Tag("SettingsService")<
     getSettings: () => Effect.Effect<UserSettings, ValidationError>;
     updateSettings: (partial: SettingsUpdate) => Effect.Effect<UserSettings, ValidationError>;
     settingsChanges: () => Stream.Stream<UserSettings>;
-    resolveAgent: () => Effect.Effect<AgentId, ValidationError>;
-    resolveAgentOrDefault: () => Effect.Effect<AgentId>;
-    resolveRecapAgent: () => Effect.Effect<AgentId, ValidationError>;
+    resolveAgent: () => Effect.Effect<AcpAgentId, ValidationError>;
+    resolveRecapAgent: () => Effect.Effect<AcpAgentId, ValidationError>;
+    /**
+     * The ACP registry agent id that drives chat — the persisted `aiAgent`
+     * (with the `REVV_ACP_AGENT` env override). Same as {@link resolveAgent}
+     * but never fails: falls back to the default agent. Used as the chat-session
+     * key so switching agents starts a fresh session instead of resuming a
+     * foreign one.
+     */
+    resolveChatAgentId: () => Effect.Effect<AcpAgentId>;
   }
 >() {}
 
@@ -445,20 +466,15 @@ export const SettingsServiceLive = Layer.effect(
           Effect.map(resolveAgentFromSettings),
         ),
 
-      resolveAgentOrDefault: () =>
+      resolveChatAgentId: () =>
         settingsRef.get.pipe(
-          Effect.mapError((e) => new ValidationError({ message: String(e) })),
           Effect.map(resolveAgentFromSettings),
           Effect.tapError((e) =>
             Effect.sync(() => {
-              logError(
-                "settings",
-                "resolveAgentOrDefault failed, defaulting to opencode:",
-                String(e),
-              );
+              logError("settings", "resolveChatAgentId failed, defaulting:", String(e));
             }),
           ),
-          Effect.orElseSucceed(() => "opencode" as const),
+          Effect.orElseSucceed(() => applyAcpAgentOverride(DEFAULT_SETTINGS.aiAgent)),
         ),
 
       resolveRecapAgent: () =>

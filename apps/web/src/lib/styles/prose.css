@@ -35,13 +35,24 @@
   max-width: none;
 }
 
+/* Font sizing is authoritative here — NOT the typography plugin's base
+   `.prose { font-size: 1rem }` (16px). The plugin's base and our density
+   modifiers (`prose-sm`, `prose-dense`) all match at (0,1,0) specificity, so
+   the winner was decided by stylesheet injection order — markdown
+   intermittently ballooned to the 16px plugin base. The `:root` prefix lifts
+   these to (0,2,0) so the intended reading size is deterministic regardless of
+   load order. Sizes come from the `--text-prose*` theme presets (app.css). */
+:root .prose {
+  font-size: var(--text-prose);
+  line-height: var(--text-prose--line-height);
+}
+
 /* Compact density for dense side panels (review comments, annotation threads,
-   rating rationales, section summaries). `prose-sm` is tuned for reading
-   columns (14px / 1.71); panels want a tighter 13px / 1.55. Apply alongside
-   `prose prose-sm` rather than re-typing the magic numbers per component. */
-.prose-dense {
-  font-size: 13px;
-  line-height: 1.55;
+   rating rationales, section summaries). Layered after the base via the same
+   `:root` bump so `prose-dense` wins over `prose`/`prose-sm` on source order. */
+:root .prose-dense {
+  font-size: var(--text-prose-dense);
+  line-height: var(--text-prose-dense--line-height);
 }
 
 /* Drop the plugin's `` `code` `` backtick pseudo-elements and give inline code
@@ -80,9 +91,9 @@
   background: rgb(0 0 0 / 0.2);
   color: #fff;
 }
-.prose-on-accent a {
-  color: #fff;
-}
+/* `.prose-on-accent a` lives at the END of the link section below, not here —
+   it must follow `.prose a` (equal specificity) to win on source order, else
+   links in the accent bubble fall back to `--color-accent` (the bubble bg). */
 
 /* ──────────────────────────────────────────────────────────
    Prose tables — global styling for GFM tables rendered by
@@ -266,4 +277,16 @@
 .prose a:hover {
   color: var(--color-accent-hover);
   text-decoration-color: var(--color-accent-hover);
+}
+
+/* On-accent links — the user chat bubble renders prose on the accent fill, so a
+   link colored `--color-accent` would vanish into the background. These must sit
+   after `.prose a` / `.prose a:hover` (equal specificity) to win on source order. */
+.prose-on-accent a {
+  color: #fff;
+  text-decoration-color: color-mix(in srgb, #fff 50%, transparent);
+}
+.prose-on-accent a:hover {
+  color: #fff;
+  text-decoration-color: #fff;
 }

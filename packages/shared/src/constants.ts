@@ -7,7 +7,7 @@ export const API_PORT = 45678;
 export const DEV_API_PORT = 45679;
 export const API_BASE_URL = `http://localhost:${API_PORT}`;
 export const AUTO_FETCH_DEFAULT_INTERVAL = 5; // minutes
-export const THREAD_SYNC_INTERVAL_SECONDS = 30;
+export const THREAD_SYNC_INTERVAL_SECONDS = 5 * 60;
 
 // Stable-channel cooldown: how long after a release is published before
 // non-maintainer users on the stable channel see the in-app update toast.
