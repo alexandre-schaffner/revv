@@ -18,11 +18,10 @@ import type { ToolSpec as GatewayToolSpec, McpToolResult } from "../mcp-tool-gat
 // ── Handler execution context ───────────────────────────────────────────────
 
 /**
- * Actor identifier stamped on `walkthroughs.lastEditedBy`. The two values
- * map to the two transports: the in-process Claude SDK and the HTTP MCP
- * route used by the opencode daemon.
+ * Actor identifier stamped on `walkthroughs.lastEditedBy`. All chat edits
+ * run on the unified ACP transport, so the only value today is `'chat:acp'`.
  */
-export type ChatEditActor = "chat:claude" | "chat:opencode" | "chat:codex" | "chat:acp";
+export type ChatEditActor = "chat:acp";
 
 export interface ChatWalkthroughEditContext {
   /** Direct DB handle (Bun sqlite + drizzle). */

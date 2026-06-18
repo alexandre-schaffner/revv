@@ -254,7 +254,6 @@ export async function loadAvailableAgents(): Promise<void> {
     // Best-effort — the composer falls back to disabled plan mode.
     availableAgents = {
       agent: "opencode",
-      agents: [],
       planAvailable: false,
     };
   } finally {

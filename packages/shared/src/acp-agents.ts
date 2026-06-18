@@ -39,6 +39,13 @@ export interface AcpAgentCapabilities {
   readonly contextWindow: boolean;
   /** Thinking-effort tiers offered; empty = no thinking-effort control. */
   readonly thinkingEfforts: readonly ThinkingEffort[];
+  /**
+   * Whether the agent supports a read-only plan turn — i.e. it advertises a
+   * plan/ask/architect mode (`findPlanModeId` in chat-acp) the transport can
+   * select. Drives the composer's Plan-mode toggle; when `false`, requesting
+   * plan mode would 422, so the toggle stays disabled.
+   */
+  readonly planMode: boolean;
 }
 
 export interface AcpAgentDescriptor {
@@ -75,6 +82,8 @@ export const ACP_AGENTS = [
       ],
       contextWindow: true,
       thinkingEfforts: ["ultrathink", "max", "extra-high", "high", "medium", "low"],
+      // claude-agent-acp advertises a read-only plan mode.
+      planMode: true,
     },
   },
   {
@@ -90,6 +99,9 @@ export const ACP_AGENTS = [
       models: "dynamic",
       contextWindow: false,
       thinkingEfforts: [],
+      // opencode ships a read-only `plan` agent, selected via the session's
+      // advertised modes.
+      planMode: true,
     },
   },
   {
@@ -110,6 +122,9 @@ export const ACP_AGENTS = [
       contextWindow: false,
       // Codex maps these onto its `model_reasoning_effort` (no ultrathink/max).
       thinkingEfforts: ["extra-high", "high", "medium", "low"],
+      // Codex requires danger-full-access for MCP tool execution, so there is
+      // no enforceable read-only plan turn yet.
+      planMode: false,
     },
   },
   {
@@ -134,6 +149,9 @@ export const ACP_AGENTS = [
       ],
       contextWindow: false,
       thinkingEfforts: [],
+      // Cursor degrades generically over ACP (no resume, no MCP tools) and
+      // advertises no read-only/plan mode.
+      planMode: false,
     },
   },
 ] as const satisfies readonly AcpAgentDescriptor[];

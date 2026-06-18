@@ -103,8 +103,8 @@ export const walkthroughs = sqliteTable(
      */
     lastEditedAt: text("last_edited_at"),
     /**
-     * Actor that performed the most recent chat-driven edit. Typically
-     * `'chat:claude'` or `'chat:opencode'`. Pairs with `lastEditedAt`.
+     * Actor that performed the most recent chat-driven edit — `'chat:acp'`
+     * for chat edits on the ACP transport. Pairs with `lastEditedAt`.
      */
     lastEditedBy: text("last_edited_by"),
     /**

@@ -3,6 +3,7 @@
 // Elysia sub-router for plan/question/agent interaction endpoints.
 // Composed into the main chatRoute via `.use()`.
 
+import { getAgentCapabilities } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { logError } from "../logger";
@@ -243,40 +244,18 @@ export const chatInteractionRoutes = new Elysia()
     },
   )
   // ── Agent availability ─────────────────────────────────────────────────
-  // Lightweight probe the frontend uses to decide whether to enable the
-  // composer's Plan-mode toggle for the opencode path. For Claude the
-  // toggle is always available (the SDK supplies `permissionMode: 'plan'`).
+  // Lightweight lookup the frontend uses to decide whether to enable the
+  // composer's Plan-mode toggle. Plan-mode support is a static per-agent
+  // capability defined once in the shared `ACP_AGENTS` registry, so this
+  // endpoint just echoes the configured agent and its `planMode` flag —
+  // adding a new agent never requires touching this handler.
   .get("/api/chat/agents/available", async (ctx) => {
     try {
       const result = await AppRuntime.runPromise(
         Effect.gen(function* () {
           const settingsService = yield* SettingsService;
           const agent = yield* settingsService.resolveChatAgentId();
-          if (agent === "claude-code") {
-            return {
-              agent: "claude-code" as const,
-              agents: ["plan", "general-purpose"] as readonly string[],
-              // claude-agent-acp advertises a read-only plan mode.
-              planAvailable: true,
-            };
-          }
-          if (agent === "codex") {
-            // Codex currently requires danger-full-access for MCP tool execution,
-            // so there is no enforceable read-only plan turn yet.
-            return {
-              agent: "codex" as const,
-              agents: [] as readonly string[],
-              planAvailable: false,
-            };
-          }
-          // opencode: ships a read-only `plan` agent, which the ACP transport
-          // selects via the session's advertised modes (`findPlanModeId` in
-          // chat-acp). Report it as available without probing a daemon.
-          return {
-            agent: "opencode" as const,
-            agents: ["plan", "general-purpose"] as readonly string[],
-            planAvailable: true,
-          };
+          return { agent, planAvailable: getAgentCapabilities(agent).planMode };
         }),
       );
       return jsonResponse(result, 200);
