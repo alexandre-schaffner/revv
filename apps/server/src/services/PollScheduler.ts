@@ -74,7 +74,11 @@ export const PollSchedulerLive = Layer.effect(
     // against the live token is the auto-clear: zero explicit hooks needed.
     const knownBadTokensByAccountId = new Map<string, string>();
     const rateLimitedUntilByAccountId = new Map<string, number>();
-    let lastMetadataRefreshAt = Date.now();
+    // Start at 0 so the first poll runs a metadata refresh immediately: this
+    // re-signs any expired GitHub Enterprise avatar URLs and backfills the
+    // cached avatar bytes (`repositories.avatar_content`) right after boot,
+    // instead of leaving stale/blank icons for up to an hour.
+    let lastMetadataRefreshAt = 0;
     let lastArchiveBackfillAt = Date.now();
 
     // Bind the captured db handle for convenience
@@ -397,16 +401,23 @@ export const PollSchedulerLive = Layer.effect(
                     ),
                   );
                   if (!fresh) return;
+                  // Always hand the fresh metadata to the service — it owns the
+                  // change detection now (the served `avatarUrl` is the cached
+                  // data URL, so a raw-URL comparison here would never match).
+                  // It re-fetches the avatar bytes only when the raw URL rotated
+                  // or was never cached, then returns the updated repo. Broadcast
+                  // only when the externally-visible value actually changed.
+                  const updated = yield* withDb(
+                    repoService.updateRepoMetadata(repo.id, {
+                      avatarUrl: fresh.avatarUrl,
+                      defaultBranch: fresh.defaultBranch,
+                    }),
+                  ).pipe(Effect.orElseSucceed(() => null));
                   if (
-                    fresh.avatarUrl !== repo.avatarUrl ||
-                    fresh.defaultBranch !== repo.defaultBranch
+                    updated &&
+                    (updated.avatarUrl !== repo.avatarUrl ||
+                      updated.defaultBranch !== repo.defaultBranch)
                   ) {
-                    yield* withDb(
-                      repoService.updateRepoMetadata(repo.id, {
-                        avatarUrl: fresh.avatarUrl,
-                        defaultBranch: fresh.defaultBranch,
-                      }),
-                    ).pipe(Effect.orElseSucceed(() => undefined));
                     anyRepoChanged = true;
                   }
                 }).pipe(Effect.orElseSucceed(() => undefined)),

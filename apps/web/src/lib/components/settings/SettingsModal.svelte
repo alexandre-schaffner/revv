@@ -1,15 +1,8 @@
 <script lang="ts">
-import type {
-  AiAgent,
-  ContextWindow,
-  RecapAgentChoice,
-  Repository,
-  ThinkingEffort,
-} from "@revv/shared";
+import { ACP_AGENTS, type RecapAgentChoice, type Repository } from "@revv/shared";
 import { Dialog as DialogPrimitive } from "bits-ui";
 import RotateCcw from "phosphor-svelte/lib/ArrowCounterClockwise";
 import ExternalLink from "phosphor-svelte/lib/ArrowSquareOut";
-import RefreshCw from "phosphor-svelte/lib/ArrowsClockwise";
 import CalendarClock from "phosphor-svelte/lib/CalendarCheck";
 import Cloud from "phosphor-svelte/lib/Cloud";
 import Cpu from "phosphor-svelte/lib/Cpu";
@@ -33,15 +26,9 @@ import * as Dialog from "$lib/components/ui/dialog/index.js";
 import { Input } from "$lib/components/ui/input";
 import * as Select from "$lib/components/ui/select";
 import { Switch } from "$lib/components/ui/switch";
-import {
-  agentSupportsContextWindow,
-  agentSupportsThinkingEffort,
-  thinkingEffortOptionsFor,
-} from "$lib/constants/models";
 import { getUser, removeAccount, resetOnboarding, signOut } from "$lib/stores/auth.svelte";
 import { deleteRepo, getRepositories } from "$lib/stores/prs.svelte";
 import {
-  cascadeAgentChange,
   fetchModels,
   getAvailableModels,
   getSettings,
@@ -229,9 +216,7 @@ function parseTrustedHosts(text: string): string[] {
 // ── Recap agent selector options ──────────────────────────────────────────
 const recapAgentOptions: { value: RecapAgentChoice; label: string }[] = [
   { value: "auto", label: "Auto (follow main agent)" },
-  { value: "opencode", label: "OpenCode" },
-  { value: "claude", label: "Claude SDK" },
-  { value: "codex", label: "Codex" },
+  ...ACP_AGENTS.map((a) => ({ value: a.id, label: a.label })),
 ];
 
 const runningInTauri = isTauri();
@@ -312,25 +297,22 @@ const intervalOptions = [
 // ── AI Configuration ──────────────────────────────────────────────────────
 let aiConfigured = $state(false);
 let aiStatusLoading = $state(true);
-let modelsLoading = $state(false);
-let aiAgent = $derived((getSettings()?.aiAgent ?? "opencode") as AiAgent);
-
+// Agent / review-model / context-window / thinking-effort are configured from
+// the chat bottom bar (capability-driven per the selected ACP agent); the
+// settings modal only keeps the low-cost suggestions model + limits.
+let aiAgent = $derived(getSettings()?.aiAgent ?? "opencode");
 let modelOptions = $derived(getAvailableModels(aiAgent));
-let currentModel = $derived(getSettings()?.aiModel ?? "");
-let currentModelLabel = $derived(
-  modelOptions.find((o) => o.value === currentModel)?.label ?? currentModel,
-);
 let currentSuggestionsModel = $derived(getSettings()?.aiSuggestionsModel ?? "");
 let currentSuggestionsModelLabel = $derived(
   modelOptions.find((o) => o.value === currentSuggestionsModel)?.label ?? currentSuggestionsModel,
 );
-let showThinkingEffort = $derived(agentSupportsThinkingEffort(aiAgent));
-let showContextWindow = $derived(agentSupportsContextWindow(aiAgent));
-let thinkingEffortOptions = $derived(thinkingEffortOptionsFor(aiAgent, currentModel));
 
 $effect(() => {
   if (open) {
     fetchAiStatus();
+    // Populate the suggestions-model dropdown for the current agent (boot
+    // prefetch usually covers this; this backstops a cold cache).
+    void fetchModels(aiAgent);
   }
 });
 
@@ -348,15 +330,6 @@ async function fetchAiStatus(): Promise<void> {
     // Ignore — status will show as unconfigured
   } finally {
     aiStatusLoading = false;
-  }
-}
-
-async function loadModels(agent: AiAgent): Promise<void> {
-  modelsLoading = true;
-  try {
-    await fetchModels(agent);
-  } finally {
-    modelsLoading = false;
   }
 }
 
@@ -435,11 +408,6 @@ async function handleRemoveAccount(): Promise<void> {
 }
 
 // ── Theme options ────────────────────────────────────────────────────────
-
-const CONTEXT_WINDOW_OPTIONS: { label: string; value: ContextWindow }[] = [
-  { label: "200K", value: "200k" },
-  { label: "1M", value: "1m" },
-];
 
 const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[] = [
   { value: "system", label: "System", icon: Monitor },
@@ -568,69 +536,10 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 			<section id="section-ai" class="settings-section">
 				<h2 class="section-head-title">AI Configuration</h2>
 
-				<!-- Agent + Model selection -->
+				<!-- Suggestions model (agent, review model, context window, and thinking
+				     effort are configured from the chat bottom bar). -->
 				<div class="settings-subgroup">
-					<h3 class="settings-subgroup-heading">Agent & models</h3>
-
-					<div class="settings-row">
-						<div class="settings-row-info">
-							<p class="settings-row-label">Agent</p>
-							<p class="settings-row-hint">Which AI agent powers code reviews.</p>
-						</div>
-						<Select.Root
-							type="single"
-							value={aiAgent}
-							onValueChange={(v) => {
-								if (!v) return;
-								const newAgent = v as AiAgent;
-								void loadModels(newAgent);
-								void updateSettings(cascadeAgentChange(newAgent));
-							}}
-						>
-							<Select.Trigger class="w-40 text-xs">
-								{aiAgent === 'opencode' ? 'opencode' : aiAgent === 'codex' ? 'Codex' : 'Claude SDK'}
-							</Select.Trigger>
-							<Select.Content>
-								<Select.Item value="opencode" class="text-xs">opencode</Select.Item>
-								<Select.Item value="claude" class="text-xs">Claude SDK</Select.Item>
-									<Select.Item value="codex" class="text-xs">Codex</Select.Item>
-							</Select.Content>
-						</Select.Root>
-					</div>
-
-					<div class="settings-row">
-						<div class="settings-row-info">
-							<p class="settings-row-label">Review model</p>
-							<p class="settings-row-hint">The model used for generating reviews.</p>
-						</div>
-						<div class="flex items-center gap-2">
-							<Button
-								variant="ghost"
-								size="icon-sm"
-								onclick={() => loadModels(aiAgent)}
-								disabled={modelsLoading}
-								aria-label="Refresh models"
-							>
-								<RefreshCw size={12} weight="fill" class={modelsLoading ? 'motion-essential-spin' : ''} />
-							</Button>
-							<Select.Root
-								type="single"
-								value={currentModel}
-								onValueChange={(v) => {
-									if (v) void updateSettings({ aiModel: v });
-								}}
-							>
-								<Select.Trigger class="w-52 text-xs truncate">
-									{currentModelLabel || 'Select model…'}
-								</Select.Trigger>
-								<Select.Content>
-									{#each modelOptions as opt (opt.value)}
-										<Select.Item value={opt.value} class="text-xs">{opt.label}</Select.Item>
-									{/each}
-								</Select.Content>
-							</Select.Root>
-						</div>
-					</div>
+					<h3 class="settings-subgroup-heading">Models</h3>
 
 					<div class="settings-row">
 						<div class="settings-row-info">
@@ -657,63 +566,6 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 						</Select.Root>
 					</div>
 				</div>
-
-				<!-- Generation tuning -->
-				{#if showThinkingEffort || showContextWindow}
-					<div class="settings-subgroup">
-						<h3 class="settings-subgroup-heading">Generation</h3>
-
-						{#if showThinkingEffort}
-							<div class="settings-row">
-								<div class="settings-row-info">
-									<p class="settings-row-label">Thinking effort</p>
-									<p class="settings-row-hint">How much reasoning budget the model uses.</p>
-								</div>
-								<Select.Root
-									type="single"
-									value={getSettings()?.aiThinkingEffort ?? 'auto'}
-									onValueChange={(v) => {
-										if (v) void updateSettings({ aiThinkingEffort: v as ThinkingEffort });
-									}}
-								>
-									<Select.Trigger class="w-40 text-xs">
-										{thinkingEffortOptions.find((o) => o.value === (getSettings()?.aiThinkingEffort ?? 'auto'))?.label ?? 'Auto'}
-									</Select.Trigger>
-									<Select.Content>
-										{#each thinkingEffortOptions as opt (opt.value)}
-											<Select.Item value={opt.value} class="text-xs">{opt.label}</Select.Item>
-										{/each}
-									</Select.Content>
-								</Select.Root>
-							</div>
-						{/if}
-
-						{#if showContextWindow}
-							<div class="settings-row">
-								<div class="settings-row-info">
-									<p class="settings-row-label">Context window</p>
-									<p class="settings-row-hint">Maximum context fed to the model per review.</p>
-								</div>
-								<Select.Root
-									type="single"
-									value={getSettings()?.aiContextWindow ?? '200k'}
-									onValueChange={(v) => {
-										if (v) void updateSettings({ aiContextWindow: v as ContextWindow });
-									}}
-								>
-									<Select.Trigger class="w-28 text-xs">
-										{CONTEXT_WINDOW_OPTIONS.find((o) => o.value === (getSettings()?.aiContextWindow ?? '200k'))?.label ?? '200K'}
-									</Select.Trigger>
-									<Select.Content>
-										{#each CONTEXT_WINDOW_OPTIONS as opt (opt.value)}
-											<Select.Item value={opt.value} class="text-xs">{opt.label}</Select.Item>
-										{/each}
-									</Select.Content>
-								</Select.Root>
-							</div>
-						{/if}
-					</div>
-				{/if}
 
 				<!-- Limits -->
 				<div class="settings-subgroup">

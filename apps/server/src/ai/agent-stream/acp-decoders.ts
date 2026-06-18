@@ -1,10 +1,10 @@
 // ── ACP session/update decoder ───────────────────────────────────────────────
 //
 // Pure mapping from ACP (Agent Client Protocol) `session/update` notifications
-// to Revv's transport-agnostic `NormalizedAgentEvent` union. Sibling to
-// opencode-decoders / claude-walker — the chat (and, later, walkthrough/recap)
-// providers consume the normalized events and map them onto their own output
-// frames, so this is the only place ACP wire shapes are interpreted.
+// to Revv's transport-agnostic `NormalizedAgentEvent` union. The chat,
+// walkthrough, recap, and suggestions providers all consume the normalized
+// events and map them onto their own output frames, so this is the only place
+// ACP wire shapes are interpreted.
 
 import type { PlanEntry, SessionUpdate, ToolKind } from "@agentclientprotocol/sdk";
 import {
@@ -117,9 +117,21 @@ export function decodeAcpSessionUpdate(
       }));
       return [{ kind: "task-list-update", tasks, source: "acp" }];
     }
-    // tool_call_update, usage_update, current_mode_update,
-    // available_commands_update, plan_update/removed, config/session_info, and
-    // replayed user_message_chunk have no chat-surface equivalent in v1.
+    case "usage_update": {
+      // Context-window occupancy. ACP reports only `used`/`size` (no
+      // input/output/cache throughput), so this drives the occupancy gauge
+      // only. `size <= 0` means "unknown window" — omit it.
+      return [
+        {
+          kind: "usage",
+          contextTokens: update.used,
+          ...(update.size > 0 ? { contextWindowTokens: update.size } : {}),
+        },
+      ];
+    }
+    // tool_call_update, current_mode_update, available_commands_update,
+    // plan_update/removed, config/session_info, and replayed
+    // user_message_chunk have no chat-surface equivalent in v1.
     default:
       return [];
   }

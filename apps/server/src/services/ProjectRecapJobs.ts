@@ -19,7 +19,7 @@
 import type { ProjectRecap, RecapPeriod, RecapStreamEvent } from "@revv/shared";
 import { sql } from "drizzle-orm";
 import { Cause, Context, Effect, Fiber, Layer, Ref } from "effect";
-import { makeOpencodeRecapDeps } from "../ai/providers/opencode-deps";
+import { isAcpAgentAvailable, resolveGenerationModel } from "../ai/acp/presets";
 import type {
   RecapSourcePrDiff,
   RecapSourcePrDiffFile,
@@ -37,7 +37,6 @@ import { GitHubEtagCache } from "./GitHubEtagCache";
 import { analyzeJobFailure } from "./job-failure";
 import { makeStartJobMutex } from "./job-mutex";
 import { makeSubscriberRegistry, type SubscriberHandle } from "./job-subscribers";
-import { OpencodeSupervisor } from "./OpencodeSupervisor";
 import { PrContextService } from "./PrContext";
 import { ProjectRecapService } from "./ProjectRecap";
 import { type ArchivedPrWithWalkthrough, PullRequestService } from "./PullRequest";
@@ -183,7 +182,6 @@ export const ProjectRecapJobsLive = Layer.effect(
     const prService = yield* PullRequestService;
     const prCtx = yield* PrContextService;
     const settingsService = yield* SettingsService;
-    const supervisor = yield* OpencodeSupervisor;
     const diffCache = yield* DiffCacheService;
     const etagCache = yield* GitHubEtagCache;
 
@@ -763,21 +761,37 @@ export const ProjectRecapJobsLive = Layer.effect(
             Effect.sync(() => {
               logError(
                 "recap-jobs",
-                `resolveRecapAgent failed; falling back to 'claude':`,
+                `resolveRecapAgent failed; falling back to 'claude-code':`,
                 e instanceof Error ? e.message : String(e),
               );
-              return "claude" as const;
+              return "claude-code" as const;
             }),
           ),
         );
 
-        // Supervisor + session-token deps. Threaded through as callbacks so
-        // `recap-agent-runner.ts` stays decoupled from the Effect runtime
-        // (and avoids a layer cycle with this service).
-        const { supervisorDeps, sessionDeps } = makeOpencodeRecapDeps(supervisor, {
+        // Recap generation runs exclusively on the ACP transport now. The shared
+        // MCP tool handlers behind `/mcp/recap` are the same code every agent
+        // reaches (CLAUDE.md invariant #13 — agent-path parity).
+        const acpAgentId = effectiveAgent;
+        if (!isAcpAgentAvailable(acpAgentId)) {
+          const msg = `The configured recap agent ('${acpAgentId}') is not available on this machine.`;
+          logError("recap-jobs", `recap ${job.recapId}: ${msg}`);
+          emit({ type: "error", data: { code: "RecapGenerationError", message: msg } });
+          yield* setStatus(
+            { id: job.recapId, repositoryId: job.repoId, period: job.period },
+            "error",
+            { errorMessage: msg },
+          );
+          return;
+        }
+
+        // Session-token deps for the `/mcp/recap` HTTP bearer. Threaded through
+        // as callbacks so `recap-agent-runner.ts` stays decoupled from the
+        // Effect runtime (and avoids a layer cycle with this service).
+        const sessionDeps = {
           issueSessionToken: (ctx: RecapToolContext) => Effect.runPromise(issueSessionToken(ctx)),
           clearSessionToken: (token: string) => Effect.runPromise(clearSessionToken(token)),
-        });
+        };
 
         // Emit initial phase so the UI knows the job is active.
         emit({ type: "phase", data: { phase: "analyzing", message: "Analyzing pull requests…" } });
@@ -793,11 +807,12 @@ export const ProjectRecapJobsLive = Layer.effect(
               sourceBundle: bundle,
               priorRecaps,
               abortController: job.abortController,
-              modelUsed: settings?.aiModel ?? "claude-opus-4-5",
-              effectiveAgent,
-              aiMaxTurns: settings?.aiMaxTurns ?? 12,
+              modelUsed:
+                resolveGenerationModel(effectiveAgent, settings?.aiModel) ?? "claude-opus-4-5",
+              acpAgentId,
+              thinkingEffort: settings?.aiThinkingEffort,
+              contextWindow: settings?.aiContextWindow,
               repoWorkingDir: repo.clonePath ?? process.cwd(),
-              supervisorDeps,
               sessionDeps,
               onCompleted: () => {
                 job.validatedComplete = true;

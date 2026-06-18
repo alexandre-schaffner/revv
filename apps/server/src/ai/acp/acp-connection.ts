@@ -30,9 +30,9 @@ import {
   type SessionUpdate,
   type StopReason,
 } from "@agentclientprotocol/sdk";
+import type { AcpAgentId } from "@revv/shared";
 import { debug } from "../../logger";
-import type { AgentId } from "../../services/Settings";
-import { resolveAcpLaunch } from "./presets";
+import { type AcpLaunchConfig, resolveAcpLaunchById } from "./presets";
 
 const IDLE_STOP_MS = 5 * 60 * 1000;
 
@@ -51,11 +51,11 @@ export interface AcpConnectionHandle {
   readonly loadSessionSupported: boolean;
   readonly httpMcpSupported: boolean;
   /** Open a fresh session, handing the agent the supplied MCP servers. */
-  readonly newSession: (mcpServers: readonly McpServer[]) => Promise<AcpNewSessionResult>;
+  readonly newSession: (mcpServers: McpServer[]) => Promise<AcpNewSessionResult>;
   /** Resume an existing session by id. Returns its mode state (for plan mode). */
   readonly loadSession: (
     sessionId: string,
-    mcpServers: readonly McpServer[],
+    mcpServers: McpServer[],
   ) => Promise<SessionModeState | null>;
   readonly setMode: (sessionId: string, modeId: string) => Promise<void>;
   readonly prompt: (sessionId: string, prompt: ContentBlock[]) => Promise<StopReason>;
@@ -71,8 +71,8 @@ export interface AcpConnectionHandle {
 
 interface ConnectionEntry {
   readonly key: string;
-  readonly agent: AgentId;
-  readonly model: string | null;
+  readonly agent: AcpAgentId;
+  readonly config: AcpLaunchConfig;
   readonly cwd: string;
   readonly proc: Bun.Subprocess<"pipe", "pipe", "pipe">;
   readonly connection: ClientSideConnection;
@@ -85,12 +85,20 @@ interface ConnectionEntry {
   alive: boolean;
 }
 
-// Keyed by agent + model + cwd. A model/provider switch must not reuse an
-// older ACP subprocess that was launched under different credentials/config.
+// Keyed by agent + model + thinking-effort + context-window + cwd. Any of those
+// changing must not reuse an older ACP subprocess launched under different
+// model/effort/context (which are baked into its launch args/env), so they all
+// participate in the key.
 const pool = new Map<string, Promise<ConnectionEntry>>();
 
-function poolKey(cwd: string, agent: AgentId, model: string | undefined): string {
-  return `${agent}\0${model ?? ""}\0${cwd}`;
+function poolKey(cwd: string, agent: AcpAgentId, config: AcpLaunchConfig): string {
+  return [
+    agent,
+    config.model ?? "",
+    config.thinkingEffort ?? "",
+    config.contextWindow ?? "",
+    cwd,
+  ].join("\0");
 }
 
 function buildClient(entry: () => ConnectionEntry): Client {
@@ -130,17 +138,19 @@ function buildClient(entry: () => ConnectionEntry): Client {
 
 async function spawnConnection(
   cwd: string,
-  agent: AgentId,
-  model: string | undefined,
+  agent: AcpAgentId,
+  config: AcpLaunchConfig,
   key: string,
 ): Promise<ConnectionEntry> {
-  const { command, args } = resolveAcpLaunch(agent, model);
+  const { command, args, env } = resolveAcpLaunchById(agent, config);
   const proc = Bun.spawn([command, ...args], {
     cwd,
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env },
+    // Per-adapter model/effort/context env (Claude Code) layered over the
+    // inherited environment.
+    env: { ...process.env, ...env },
   });
 
   // Bun's `proc.stdin` is a FileSink; wrap it as a WritableStream<Uint8Array>
@@ -165,7 +175,7 @@ async function spawnConnection(
   const entry: ConnectionEntry = {
     key,
     agent,
-    model: model ?? null,
+    config,
     cwd,
     proc,
     connection,
@@ -254,7 +264,7 @@ function makeHandle(entry: ConnectionEntry): AcpConnectionHandle {
     newSession: async (mcpServers) => {
       const res = await connection.newSession({
         cwd: entry.cwd,
-        mcpServers: mcpServers as McpServer[],
+        mcpServers,
       });
       return { sessionId: res.sessionId, modes: res.modes ?? null };
     },
@@ -262,7 +272,7 @@ function makeHandle(entry: ConnectionEntry): AcpConnectionHandle {
       const res = await connection.loadSession({
         sessionId,
         cwd: entry.cwd,
-        mcpServers: mcpServers as McpServer[],
+        mcpServers,
       });
       return res.modes ?? null;
     },
@@ -308,13 +318,13 @@ function makeHandle(entry: ConnectionEntry): AcpConnectionHandle {
  */
 export async function getAcpConnection(
   cwd: string,
-  agent: AgentId,
-  model?: string | undefined,
+  agent: AcpAgentId,
+  config: AcpLaunchConfig = {},
 ): Promise<AcpConnectionHandle> {
-  const key = poolKey(cwd, agent, model);
+  const key = poolKey(cwd, agent, config);
   let pending = pool.get(key);
   if (!pending) {
-    pending = spawnConnection(cwd, agent, model, key).catch((err) => {
+    pending = spawnConnection(cwd, agent, config, key).catch((err) => {
       pool.delete(key);
       throw err;
     });
@@ -324,7 +334,7 @@ export async function getAcpConnection(
   if (!entry.alive) {
     // Raced with an exit between resolve and use — retry once with a fresh spawn.
     pool.delete(key);
-    return getAcpConnection(cwd, agent, model);
+    return getAcpConnection(cwd, agent, config);
   }
   return makeHandle(entry);
 }

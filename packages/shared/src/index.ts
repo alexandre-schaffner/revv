@@ -1,3 +1,18 @@
+export type {
+  AcpAgentCapabilities,
+  AcpAgentDescriptor,
+  AcpAgentIconKey,
+  AcpAgentId,
+  AcpAgentModel,
+  AgentAvailability,
+} from "./acp-agents";
+export {
+  ACP_AGENT_IDS,
+  ACP_AGENTS,
+  getAcpAgent,
+  getAgentCapabilities,
+  isAcpAgentId,
+} from "./acp-agents";
 export type { Activity, ActivityKind } from "./activity";
 export { classifyTool, normalizeToolName } from "./activity";
 export type {
@@ -73,8 +88,6 @@ export type {
 } from "./recap";
 export { EMPTY_RECAP_STATS } from "./recap";
 export type {
-  AgentAvailability,
-  AiAgent,
   AuthorRole,
   CloneStatus,
   CommentThread,

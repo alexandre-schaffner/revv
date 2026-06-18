@@ -1,12 +1,10 @@
 // ── Token-usage algebra ──────────────────────────────────────────────────────
 //
-// The provider-AGNOSTIC algebra over `WalkthroughTokenUsage`. Provider-SPECIFIC
-// mapping — which raw fields each agent reports, and how occupancy is derived
-// from them — lives in the individual walkers (`claude-walker`, `codex-walker`,
-// `mcp-walkthrough-opencode`). Those occupancy formulas legitimately differ per
-// provider and must NOT be unified here. This module owns only the
-// orchestrator-side accumulation: how a running total folds in each usage delta
-// as a walkthrough job streams and auto-continues.
+// The provider-AGNOSTIC algebra over `WalkthroughTokenUsage`. Over the ACP
+// transport, occupancy comes from the agent's `usage_update` frames (decoded in
+// `acp-decoders.ts`); throughput fields are unavailable and stay zero. This
+// module owns only the orchestrator-side accumulation: how a running total folds
+// in each usage delta as a walkthrough job streams and auto-continues.
 //
 // Two distinct notions of "tokens" coexist on `WalkthroughTokenUsage`:
 //

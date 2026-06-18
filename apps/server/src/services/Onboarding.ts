@@ -1,16 +1,26 @@
 import { existsSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
-import type { AgentAvailability, InstallEvent } from "@revv/shared";
+import {
+  ACP_AGENT_IDS,
+  type AcpAgentId,
+  type AgentAvailability,
+  type InstallEvent,
+} from "@revv/shared";
 import { Context, Effect, Layer } from "effect";
-import { checkCliAvailability, invalidateCliAgentCache } from "../ai/providers/cli-agent";
+import {
+  checkCliAvailability,
+  invalidateCliAgentCache,
+  isCommandOnPath,
+} from "../ai/providers/cli-agent";
 import { debug, logError } from "../logger";
 
 // ── Onboarding service ──────────────────────────────────────────────────────
 //
 // One-shot installer plumbing the agent step of onboarding uses to:
-//   1. Detect which CLI agents (opencode / claude) are present on PATH.
-//   2. Run the official opencode install script when neither is detected.
+//   1. Detect which registry agents' CLIs (opencode / claude / codex / cursor)
+//      are present on PATH.
+//   2. Run the official opencode install script when none is detected.
 //
 // The install script lives upstream (https://opencode.ai/install for
 // macOS/Linux, https://opencode.ai/install.ps1 for Windows). We spawn it
@@ -26,12 +36,26 @@ import { debug, logError } from "../logger";
 const INSTALL_BIN_DIRS_UNIX = [".opencode/bin", ".local/bin"] as const;
 const INSTALL_BIN_DIRS_WINDOWS = [".opencode/bin"] as const;
 
+// Registry id → the CLI binary whose presence means the agent is set up
+// locally. The legacy three honor their `REVV_*_BIN` pins via
+// `checkCliAvailability`; Cursor's `cursor-agent` has no pin, so it's a bare
+// PATH probe. Adding a registry agent surfaces a type error here until its
+// detection is wired — a deliberate compile-time nudge.
+const ACP_CLI_NAME: Record<AcpAgentId, "opencode" | "claude" | "codex" | "cursor-agent"> = {
+  "claude-code": "claude",
+  opencode: "opencode",
+  codex: "codex",
+  cursor: "cursor-agent",
+};
+
+function detectAgentCli(cli: (typeof ACP_CLI_NAME)[AcpAgentId]): boolean {
+  return cli === "cursor-agent" ? isCommandOnPath(cli) : checkCliAvailability(cli);
+}
+
 function detectAgentsSync(): AgentAvailability {
-  return {
-    opencode: checkCliAvailability("opencode"),
-    claude: checkCliAvailability("claude"),
-    codex: checkCliAvailability("codex"),
-  };
+  return Object.fromEntries(
+    ACP_AGENT_IDS.map((id) => [id, detectAgentCli(ACP_CLI_NAME[id])]),
+  ) as AgentAvailability;
 }
 
 /**

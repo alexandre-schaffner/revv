@@ -67,9 +67,9 @@ export const ServerConfig = Config.all({
   // The right-pane chat (and merge-conflict resolution) run on a single ACP
   // client adapter — the agent runs as a subprocess spoken to over stdio
   // JSON-RPC. Agent selection (see ai/acp/presets.ts): `acpAgent` picks any
-  // registry agent by id (e.g. `cursor`, `gemini`) regardless of the legacy
-  // `aiAgent` setting; `acpCommand`/`acpArgs` pin a raw command for an agent
-  // not in the registry.
+  // registry agent by id (e.g. `cursor`) regardless of the legacy `aiAgent`
+  // setting; `acpCommand`/`acpArgs` pin a raw command for an agent not in the
+  // registry.
   acpAgent: Config.string("REVV_ACP_AGENT").pipe(Config.withDefault("")),
   acpCommand: Config.string("REVV_ACP_COMMAND").pipe(Config.withDefault("")),
   acpArgs: Config.string("REVV_ACP_ARGS").pipe(Config.withDefault("")),

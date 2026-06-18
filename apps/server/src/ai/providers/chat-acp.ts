@@ -10,12 +10,11 @@
 // (persistence, SSE encoder, the web chat panel) changes.
 
 import type { McpServer, SessionModeState } from "@agentclientprotocol/sdk";
-import type { InteractionMode } from "@revv/shared";
+import type { AcpAgentId, ContextWindow, InteractionMode, ThinkingEffort } from "@revv/shared";
 import { serverEnv } from "../../config";
 import { CLI_CHAT_TURN_TIMEOUT_MS } from "../../constants";
 import { AiGenerationError } from "../../domain/errors";
 import { debug, logError } from "../../logger";
-import type { AgentId } from "../../services/Settings";
 import { getAcpConnection } from "../acp/acp-connection";
 import {
   buildActivity,
@@ -54,9 +53,13 @@ export interface StreamChatViaAcpOptions {
   readonly cwd: string;
   readonly onSessionId?: ((id: string) => Promise<void> | void) | undefined;
   readonly abortController?: AbortController | undefined;
-  /** Selected Revv model. Used when an ACP adapter supports launch-time model config. */
+  /** Selected Revv model. Propagated into the adapter at launch where supported (presets.ts). */
   readonly model?: string | undefined;
-  readonly agent: AgentId;
+  /** Selected thinking-effort tier. Propagated to Claude Code / Codex at launch. */
+  readonly thinkingEffort?: ThinkingEffort | undefined;
+  /** Selected context window. Propagated to Claude Code at launch (200K vs 1M). */
+  readonly contextWindow?: ContextWindow | undefined;
+  readonly acpAgentId: AcpAgentId;
   readonly deps: AcpChatDeps;
   readonly prId: string;
   readonly userId: string;
@@ -88,7 +91,11 @@ export function streamChatViaAcp(
       const planMode = opts.interactionMode === "plan";
 
       try {
-        const h = await getAcpConnection(opts.cwd, opts.agent, opts.model);
+        const h = await getAcpConnection(opts.cwd, opts.acpAgentId, {
+          model: opts.model,
+          thinkingEffort: opts.thinkingEffort,
+          contextWindow: opts.contextWindow,
+        });
         handle = h;
 
         // Hand the agent our chat-context HTTP MCP endpoint (review context +
@@ -162,13 +169,6 @@ export function streamChatViaAcp(
             lastWasNonText = true;
           } else if (ev.kind === "task-list-update") {
             controller.enqueue({ kind: "task-list", tasks: ev.tasks });
-            lastWasNonText = true;
-          } else if (ev.kind === "plan-presented") {
-            controller.enqueue({
-              kind: "plan-presented",
-              providerPlanId: ev.providerPlanId,
-              markdown: ev.markdown,
-            });
             lastWasNonText = true;
           } else if (ev.kind === "error") {
             logError("chat-acp", "session.error:", ev.message);

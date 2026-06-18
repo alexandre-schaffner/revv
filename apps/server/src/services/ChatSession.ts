@@ -100,7 +100,7 @@ export interface ChatTaskRow {
   readonly activeForm: string | null;
   readonly status: "pending" | "in_progress" | "completed";
   readonly priority: "low" | "medium" | "high" | null;
-  readonly source: "claude" | "opencode" | "codex";
+  readonly source: "claude" | "opencode" | "codex" | "acp";
   readonly sequence: number;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -112,7 +112,7 @@ export interface ChatPlanRow {
   readonly turnId: string;
   readonly planMarkdown: string;
   readonly status: "pending" | "approved" | "rejected" | "superseded";
-  readonly source: "claude" | "opencode" | "codex";
+  readonly source: "claude" | "opencode" | "codex" | "acp";
   readonly sequence: number;
   readonly createdAt: string;
   readonly decidedAt: string | null;
@@ -128,7 +128,7 @@ export interface ChatSubagentInvocationRow {
   readonly prompt: string;
   readonly status: "running" | "completed" | "errored";
   readonly result: string | null;
-  readonly source: "claude" | "opencode" | "codex";
+  readonly source: "claude" | "opencode" | "codex" | "acp";
   readonly sequence: number;
   readonly startedAt: string;
   readonly completedAt: string | null;
@@ -138,7 +138,7 @@ export interface ChatQuestionRow {
   readonly id: string;
   readonly chatSessionId: string;
   readonly turnId: string;
-  readonly source: "claude" | "opencode" | "codex";
+  readonly source: "claude" | "opencode" | "codex" | "acp";
   readonly providerRequestId: string;
   readonly providerToolCallId: string | null;
   readonly previewFormat: "markdown" | "html";
@@ -292,7 +292,7 @@ export class ChatSessionService extends Context.Tag("ChatSessionService")<
     readonly applyTaskListSnapshot: (params: {
       readonly chatSessionId: string;
       readonly turnId: string;
-      readonly source: "claude" | "opencode" | "codex";
+      readonly source: "claude" | "opencode" | "codex" | "acp";
       readonly tasks: ReadonlyArray<ChatTask>;
     }) => Effect.Effect<readonly ChatTaskRow[]>;
 
@@ -307,7 +307,7 @@ export class ChatSessionService extends Context.Tag("ChatSessionService")<
     readonly createPlan: (params: {
       readonly chatSessionId: string;
       readonly turnId: string;
-      readonly source: "claude" | "opencode" | "codex";
+      readonly source: "claude" | "opencode" | "codex" | "acp";
       readonly markdown: string;
     }) => Effect.Effect<ChatPlanRow>;
 
@@ -325,7 +325,7 @@ export class ChatSessionService extends Context.Tag("ChatSessionService")<
     readonly startSubagentInvocation: (params: {
       readonly chatSessionId: string;
       readonly parentTurnId: string;
-      readonly source: "claude" | "opencode" | "codex";
+      readonly source: "claude" | "opencode" | "codex" | "acp";
       readonly providerCallId: string;
       readonly subagentType: string;
       readonly description: string;
@@ -356,7 +356,7 @@ export class ChatSessionService extends Context.Tag("ChatSessionService")<
     readonly createQuestion: (params: {
       readonly chatSessionId: string;
       readonly turnId: string;
-      readonly source: "claude" | "opencode" | "codex";
+      readonly source: "claude" | "opencode" | "codex" | "acp";
       readonly providerRequestId: string;
       readonly providerToolCallId?: string | null;
       readonly previewFormat: "markdown" | "html";

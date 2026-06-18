@@ -86,7 +86,7 @@ export const chatRoute = new Elysia()
               headSha = meta.headSha;
             }
             const settings = yield* settingsService.getSettings();
-            const agent = yield* settingsService.resolveAgentOrDefault();
+            const agent = yield* settingsService.resolveChatAgentId();
             const model = settings.aiModel;
 
             // Check for an existing session BEFORE acquiring the
@@ -301,7 +301,6 @@ export const chatRoute = new Elysia()
               chatSessionId: chatSessionRow.id,
               turnId,
               prId: pr.id,
-              agent,
             };
           }),
         );
@@ -336,7 +335,9 @@ export const chatRoute = new Elysia()
         const persistedStream = wrapStreamWithPersistence(prepared.frameStream, {
           chatSessionId: prepared.chatSessionId,
           turnId: prepared.turnId,
-          agent: prepared.agent,
+          // All chat runs on the ACP transport; the specific registry agent is
+          // a launch detail. `source` records the transport.
+          agent: "acp",
         });
 
         // Wrap the persisted stream so we clear the streaming flag
@@ -425,7 +426,7 @@ export const chatRoute = new Elysia()
             const settingsService = yield* SettingsService;
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
             const settings = yield* settingsService.getSettings();
-            const agent = yield* settingsService.resolveAgentOrDefault();
+            const agent = yield* settingsService.resolveChatAgentId();
 
             if (!pr.headSha) return null;
 
@@ -473,7 +474,7 @@ export const chatRoute = new Elysia()
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-            const agent = yield* settingsService.resolveAgentOrDefault();
+            const agent = yield* settingsService.resolveChatAgentId();
 
             // Capture the active worktree before dropping rows so we
             // can rewind it to the PR head SHA below — clearing the

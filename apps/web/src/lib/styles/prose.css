@@ -91,9 +91,9 @@
   background: rgb(0 0 0 / 0.2);
   color: #fff;
 }
-.prose-on-accent a {
-  color: #fff;
-}
+/* `.prose-on-accent a` lives at the END of the link section below, not here —
+   it must follow `.prose a` (equal specificity) to win on source order, else
+   links in the accent bubble fall back to `--color-accent` (the bubble bg). */
 
 /* ──────────────────────────────────────────────────────────
    Prose tables — global styling for GFM tables rendered by
@@ -277,4 +277,16 @@
 .prose a:hover {
   color: var(--color-accent-hover);
   text-decoration-color: var(--color-accent-hover);
+}
+
+/* On-accent links — the user chat bubble renders prose on the accent fill, so a
+   link colored `--color-accent` would vanish into the background. These must sit
+   after `.prose a` / `.prose a:hover` (equal specificity) to win on source order. */
+.prose-on-accent a {
+  color: #fff;
+  text-decoration-color: color-mix(in srgb, #fff 50%, transparent);
+}
+.prose-on-accent a:hover {
+  color: #fff;
+  text-decoration-color: #fff;
 }

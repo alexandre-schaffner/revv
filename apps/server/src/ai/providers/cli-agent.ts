@@ -1,5 +1,6 @@
 import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import { type AcpAgentId, getAgentCapabilities } from "@revv/shared";
 import { serverEnv } from "../../config";
 import { CLI_CACHE_TTL_MS } from "../../constants";
 
@@ -52,6 +53,19 @@ export function resolveCliBin(agent: CliAgent): string {
   return pinnedBin(agent) || agent;
 }
 
+/**
+ * Bare `which <command>` probe — no env-pin, no cache. Used by onboarding to
+ * detect agent CLIs that have no `REVV_*_BIN` pin (e.g. Cursor's `cursor-agent`),
+ * where the pinned/cached `checkCliAvailability` path doesn't apply.
+ */
+export function isCommandOnPath(command: string): boolean {
+  try {
+    return execSync(`which ${command}`, { encoding: "utf-8", timeout: 3000 }).trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
 export function checkCliAvailability(agent: CliAgent): boolean {
   if (cachedCliAuth && Date.now() < cachedCliAuth.expiresAt && cachedCliAuth.agent === agent) {
     return cachedCliAuth.result;
@@ -77,34 +91,18 @@ export function invalidateCliAgentCache(): void {
 export type CliModelOption = { label: string; value: string };
 
 /**
- * List models available to the selected CLI agent.
- * For opencode: runs `opencode models --verbose` and parses output.
- * For claude/codex: returns a hardcoded list (neither CLI exposes an
- * offline, machine-readable model listing). The codex list mirrors the
- * model ids accepted by the `@openai/codex-sdk` `ThreadOptions.model`.
+ * List models available to the selected ACP agent. Agents with a static
+ * catalog (claude-code, codex, cursor) return it straight from the shared
+ * registry; opencode is the only dynamic catalog, probed by running
+ * `opencode models --verbose` and parsing the output.
  */
-export async function listCliModels(
-  agent: "opencode" | "claude" | "codex",
-): Promise<CliModelOption[]> {
-  if (agent === "claude") {
-    return [
-      { label: "Claude Opus 4.8", value: "claude-opus-4-8" },
-      { label: "Claude Sonnet 4.6", value: "claude-sonnet-4-6" },
-      { label: "Claude Haiku 4.5", value: "claude-haiku-4-5-20251001" },
-    ];
-  }
-
-  if (agent === "codex") {
-    // Codex has no offline `models` subcommand; this curated list tracks the
-    // model ids the codex CLI accepts via `--config model=…` / SDK
-    // `ThreadOptions.model`. Keep in sync with the web default-model map.
-    return [
-      { label: "GPT-5.5", value: "gpt-5.5" },
-      { label: "GPT-5.4", value: "gpt-5.4" },
-      { label: "GPT-5.4 Mini", value: "gpt-5.4-mini" },
-      { label: "GPT-5.3 Codex", value: "gpt-5.3-codex" },
-      { label: "GPT-5.2", value: "gpt-5.2" },
-    ];
+export async function listCliModels(agent: AcpAgentId): Promise<CliModelOption[]> {
+  // Static catalogs come straight from the shared ACP registry — the single
+  // source of truth — so there's no second copy to keep in sync. Only opencode
+  // has a dynamic catalog that must be probed at runtime.
+  const caps = getAgentCapabilities(agent);
+  if (caps.models !== "dynamic") {
+    return caps.models.map((m) => ({ label: m.label, value: m.value }));
   }
 
   // opencode: run `opencode models --verbose` and parse interleaved output

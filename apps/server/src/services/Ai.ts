@@ -1,6 +1,10 @@
 import type { InteractionMode, WalkthroughMode, WalkthroughStreamEvent } from "@revv/shared";
 import { Context, Effect, Layer } from "effect";
-import { isAcpAvailable } from "../ai/acp/presets";
+import {
+  applyAcpAgentOverride,
+  isAcpAgentAvailable,
+  resolveGenerationModel,
+} from "../ai/acp/presets";
 import {
   buildChatSystemPrompt,
   buildChatUserMessage,
@@ -13,13 +17,8 @@ import {
 import { streamChatViaAcp } from "../ai/providers/chat-acp";
 import type { RawChatStreamFrame } from "../ai/providers/chat-types";
 // ── Prompt & provider imports (split out of this file) ──────────────────────
-import { checkCliAvailability } from "../ai/providers/cli-agent";
-import { type ContinuationContext, streamWalkthroughViaMCP } from "../ai/providers/mcp-walkthrough";
-import type { CodexProviderDeps } from "../ai/providers/mcp-walkthrough-codex";
-import { streamWalkthroughViaCodexMCP } from "../ai/providers/mcp-walkthrough-codex";
-import { streamWalkthroughViaOpencodeMCP } from "../ai/providers/mcp-walkthrough-opencode";
-import { makeOpencodeWalkthroughDeps } from "../ai/providers/opencode-deps";
 import { guardWalkthroughStream } from "../ai/providers/stream-guard";
+import { type ContinuationContext, streamWalkthroughViaAcp } from "../ai/providers/walkthrough-acp";
 import {
   type AiError,
   AiGenerationError,
@@ -30,8 +29,7 @@ import { withDb } from "../effects/with-db";
 import { ChatMcpTokens } from "./ChatMcpTokens";
 import { DbService } from "./Db";
 import type { PrFileMeta } from "./GitHub";
-import { OpencodeSupervisor } from "./OpencodeSupervisor";
-import { type AgentId, SettingsService } from "./Settings";
+import { SettingsService } from "./Settings";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -78,10 +76,6 @@ export interface ChatParams {
    */
   readonly interactionMode?: InteractionMode;
 }
-
-// ── Agent resolution ────────────────────────────────────────────────────────
-
-export type CliAgent = AgentId;
 
 // ── Service definition ───────────────────────────────────────────────────────
 
@@ -192,11 +186,9 @@ export const AiServiceLive = Layer.effect(
   Effect.gen(function* () {
     const settingsService = yield* SettingsService;
     const { db } = yield* DbService;
-    // OpencodeSupervisor is still required by the walkthrough opencode
-    // transport (chat + merge-conflict run on ACP). The chat path no longer
-    // uses the daemon, so the old opencode chat-session clear-on-exit handler
-    // is gone — ACP sessions persist agent-side (e.g. claude-agent-acp on disk).
-    const supervisor = yield* OpencodeSupervisor;
+    // Every AI pipeline — chat, merge-conflict, walkthrough, recap, and
+    // suggestions — runs on the ACP transport now. There is no opencode daemon
+    // or provider SDK left to manage.
     const chatMcpTokens = yield* ChatMcpTokens;
 
     // Map ValidationError from getSettings() to AiGenerationError
@@ -215,11 +207,11 @@ export const AiServiceLive = Layer.effect(
         ),
       );
 
-    // Check if a CLI agent is available
+    // Whether the resolved agent's ACP launch command is available.
     const checkConfigured = (): Effect.Effect<boolean> =>
       Effect.gen(function* () {
         const agent = yield* getAgent();
-        return checkCliAvailability(agent);
+        return isAcpAgentAvailable(agent);
       }).pipe(Effect.catchAll(() => Effect.succeed(false)));
 
     return {
@@ -231,105 +223,57 @@ export const AiServiceLive = Layer.effect(
             const settings = yield* getSettings();
             const agent = yield* getAgent();
 
-            if (!checkCliAvailability(agent)) {
+            // Walkthrough generation runs exclusively on the ACP transport now.
+            // The shared MCP tool handlers behind `/mcp/walkthrough` are the same
+            // code every agent reaches (doctrine invariant #13 — agent-path parity).
+            const acpAgentId = agent;
+            if (!isAcpAgentAvailable(acpAgentId)) {
               return yield* Effect.fail(new AiNotConfiguredError());
             }
 
-            // Both providers receive the same param shape (including
-            // walkthroughId + db) and the tool handlers they register
-            // are byte-for-byte the same code — doctrine invariant #13
-            // (Agent-path parity).
-            const providerParams = { ...params, db };
-
-            if (agent === "opencode") {
-              if (!params.issueHttpMcpSessionToken || !params.clearHttpMcpSessionToken) {
-                return yield* Effect.fail(
-                  new AiGenerationError({
-                    cause: new Error("missing opencode session-token callbacks"),
-                    message: "opencode provider requires caller-supplied session-token callbacks",
-                  }),
-                );
-              }
-              if (
-                !params.registerHttpMcpActivityNotifier ||
-                !params.unregisterHttpMcpActivityNotifier
-              ) {
-                return yield* Effect.fail(
-                  new AiGenerationError({
-                    cause: new Error("missing opencode activity-notifier callbacks"),
-                    message:
-                      "opencode provider requires caller-supplied activity-notifier callbacks",
-                  }),
-                );
-              }
-              const deps = makeOpencodeWalkthroughDeps(supervisor, {
-                issueSessionToken: params.issueHttpMcpSessionToken,
-                clearSessionToken: params.clearHttpMcpSessionToken,
-                registerActivityNotifier: params.registerHttpMcpActivityNotifier,
-                unregisterActivityNotifier: params.unregisterHttpMcpActivityNotifier,
-              });
-              const raw = streamWalkthroughViaOpencodeMCP(
-                { ...providerParams, deps },
-                settings.aiModel ?? undefined,
-                settings,
+            // HTTP-MCP callbacks are MANDATORY for every walkthrough now (there
+            // is no in-process path). WalkthroughJobs always supplies them.
+            if (
+              !params.issueHttpMcpSessionToken ||
+              !params.clearHttpMcpSessionToken ||
+              !params.registerHttpMcpActivityNotifier ||
+              !params.unregisterHttpMcpActivityNotifier
+            ) {
+              return yield* Effect.fail(
+                new AiGenerationError({
+                  cause: new Error("missing HTTP-MCP callbacks"),
+                  message:
+                    "walkthrough generation requires caller-supplied HTTP-MCP session-token + activity-notifier callbacks",
+                }),
               );
-              return guardWalkthroughStream(raw, {
-                label: "opencode-mcp",
-                synthesizePhases: false,
-              });
             }
 
-            if (agent === "codex") {
-              // Codex reuses the same HTTP-MCP session-token + activity-notifier
-              // callbacks opencode uses (the `*Opencode*` names are historical —
-              // they serve both HTTP-MCP agents). It needs no daemon deps.
-              if (!params.issueHttpMcpSessionToken || !params.clearHttpMcpSessionToken) {
-                return yield* Effect.fail(
-                  new AiGenerationError({
-                    cause: new Error("missing HTTP-MCP session-token callbacks"),
-                    message: "codex provider requires caller-supplied session-token callbacks",
-                  }),
-                );
-              }
-              if (
-                !params.registerHttpMcpActivityNotifier ||
-                !params.unregisterHttpMcpActivityNotifier
-              ) {
-                return yield* Effect.fail(
-                  new AiGenerationError({
-                    cause: new Error("missing HTTP-MCP activity-notifier callbacks"),
-                    message: "codex provider requires caller-supplied activity-notifier callbacks",
-                  }),
-                );
-              }
-              const issueToken = params.issueHttpMcpSessionToken;
-              const clearToken = params.clearHttpMcpSessionToken;
-              const registerNotifier = params.registerHttpMcpActivityNotifier;
-              const unregisterNotifier = params.unregisterHttpMcpActivityNotifier;
-              const codexDeps: CodexProviderDeps = {
-                issueSessionToken: (walkthroughId) => issueToken(walkthroughId),
-                clearSessionToken: (token) => clearToken(token),
-                registerActivityNotifier: (walkthroughId, callback) =>
-                  registerNotifier(walkthroughId, callback),
-                unregisterActivityNotifier: (walkthroughId) => unregisterNotifier(walkthroughId),
-              };
-              const raw = streamWalkthroughViaCodexMCP(
-                { ...providerParams, deps: codexDeps },
-                settings.aiModel ?? undefined,
-                settings,
-              );
-              return guardWalkthroughStream(raw, {
-                label: "codex-mcp",
-                synthesizePhases: false,
-              });
-            }
-
-            const raw = streamWalkthroughViaMCP(
-              providerParams,
-              settings.aiModel ?? undefined,
+            const issueToken = params.issueHttpMcpSessionToken;
+            const clearToken = params.clearHttpMcpSessionToken;
+            const registerNotifier = params.registerHttpMcpActivityNotifier;
+            const unregisterNotifier = params.unregisterHttpMcpActivityNotifier;
+            const raw = streamWalkthroughViaAcp(
+              {
+                ...params,
+                db,
+                acpAgentId,
+                deps: {
+                  issueSessionToken: (walkthroughId) => issueToken(walkthroughId),
+                  clearSessionToken: (token) => clearToken(token),
+                  registerActivityNotifier: (walkthroughId, callback) =>
+                    registerNotifier(walkthroughId, callback),
+                  unregisterActivityNotifier: (walkthroughId) => unregisterNotifier(walkthroughId),
+                },
+              },
+              // Guard the shared model against this agent (the chat bottom bar
+              // may have left a chat-only agent's model id, e.g. cursor).
+              resolveGenerationModel(agent, settings.aiModel),
               settings,
             );
-            return guardWalkthroughStream(raw, { label: "claude-mcp", synthesizePhases: false });
+            return guardWalkthroughStream(raw, {
+              label: "walkthrough-acp",
+              synthesizePhases: false,
+            });
           }),
         ),
 
@@ -337,15 +281,15 @@ export const AiServiceLive = Layer.effect(
         Effect.withSpan("Ai.chat")(
           Effect.gen(function* () {
             const settings = yield* getSettings();
-            const agent = yield* getAgent();
+            // Chat runs exclusively on the ACP transport — the selected registry
+            // agent drives it.
+            const acpAgentId = applyAcpAgentOverride(settings.aiAgent);
             yield* Effect.annotateCurrentSpan("prId", params.prId);
             yield* Effect.annotateCurrentSpan("provider", "acp");
-            yield* Effect.annotateCurrentSpan("agent", agent);
+            yield* Effect.annotateCurrentSpan("agent", acpAgentId);
 
-            // Chat runs exclusively on the ACP transport — one adapter drives
-            // whichever ACP agent is configured (see ai/acp/presets.ts).
             // Availability is the ACP command's, not a per-agent CLI's.
-            if (!isAcpAvailable(agent)) {
+            if (!isAcpAgentAvailable(acpAgentId)) {
               return yield* Effect.fail(new AiNotConfiguredError());
             }
 
@@ -373,7 +317,9 @@ export const AiServiceLive = Layer.effect(
               onSessionId: params.onSessionId,
               abortController: params.abortController,
               model: settings.aiModel ?? undefined,
-              agent,
+              thinkingEffort: settings.aiThinkingEffort ?? undefined,
+              contextWindow: settings.aiContextWindow ?? undefined,
+              acpAgentId,
               deps: {
                 issueChatMcpToken: (args: {
                   prId: string;
@@ -393,9 +339,9 @@ export const AiServiceLive = Layer.effect(
       resolveMergeConflict: (params) =>
         Effect.gen(function* () {
           const settings = yield* getSettings();
-          const agent = yield* getAgent();
+          const acpAgentId = applyAcpAgentOverride(settings.aiAgent);
 
-          if (!isAcpAvailable(agent)) {
+          if (!isAcpAgentAvailable(acpAgentId)) {
             return yield* Effect.fail(new AiNotConfiguredError());
           }
 
@@ -417,7 +363,9 @@ export const AiServiceLive = Layer.effect(
             onSessionId: undefined,
             abortController: params.abortController,
             model: settings.aiModel ?? undefined,
-            agent,
+            thinkingEffort: settings.aiThinkingEffort ?? undefined,
+            contextWindow: settings.aiContextWindow ?? undefined,
+            acpAgentId,
             deps: {
               issueChatMcpToken: (args: {
                 prId: string;
