@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.13.0](https://github.com/alexandre-schaffner/revv/compare/v0.12.1...v0.13.0) (2026-06-18)
+
+
+### Features
+
+* add author self-review mode across the review session ([#129](https://github.com/alexandre-schaffner/revv/issues/129)) ([41e42e2](https://github.com/alexandre-schaffner/revv/commit/41e42e2783a2c1b69426aa8fcc88e7ccf809a061))
+* **chat:** single ACP transport for the chat panel, plus UI fixes ([#138](https://github.com/alexandre-schaffner/revv/issues/138)) ([69ab44a](https://github.com/alexandre-schaffner/revv/commit/69ab44afc31ed676096dde46937d3e511ddd1762))
+* **chat:** use map-trifold icon for plan mode and prevent text overflow ([#134](https://github.com/alexandre-schaffner/revv/issues/134)) ([5cef066](https://github.com/alexandre-schaffner/revv/commit/5cef066fff76602bcdb0b4820cb78b5b8436a26f))
+
+
+### Bug Fixes
+
+* context token usage gauge ([#118](https://github.com/alexandre-schaffner/revv/issues/118)) ([b42317c](https://github.com/alexandre-schaffner/revv/commit/b42317c9bf331c088a43c1b4f7d5f85f2c66dc77))
+
 ## [0.12.1](https://github.com/alexandre-schaffner/revv/compare/v0.12.0...v0.12.1) (2026-06-16)
 
 
