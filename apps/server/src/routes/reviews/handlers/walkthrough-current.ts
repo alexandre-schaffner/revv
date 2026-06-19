@@ -6,12 +6,13 @@ import { WalkthroughService } from "../../../services/Walkthrough";
 import { WalkthroughJobs } from "../../../services/WalkthroughJobs";
 
 /**
- * GET /api/reviews/:id/walkthrough/current — full current state for any
- * non-superseded walkthrough at the PR's HEAD SHA.
+ * GET /api/reviews/:id/walkthrough/current — full current state for the PR.
  *
  * Four response shapes:
  *   • `status: 'complete'`   → finished walkthrough; client renders immediately,
- *                              no SSE needed.
+ *                              no SSE needed. May include `stale: true` when
+ *                              it is the latest historical walkthrough rather
+ *                              than a walkthrough for the current PR HEAD.
  *   • `status: 'generating'` → in-flight job; client hydrates partial content
  *                              and opens SSE from `snapshotAt` cursor so only
  *                              race-window events arrive over the wire.
@@ -96,6 +97,22 @@ export function getCurrentWalkthroughHandler(
             seqAt,
           };
         }
+      }
+
+      // 4. New commits have invalidated the latest generated row, but the
+      //    user has not started the incremental walkthrough yet. Keep the
+      //    last reviewed artifact visible and mark it stale so the action bar
+      //    offers "Review new commits" instead of making the page feel empty.
+      const latest = yield* walkthroughService.getLatestDisplayable(pr.id, mode);
+      if (latest && latest.prHeadSha !== headSha) {
+        const seqAt = yield* walkthroughService.getSeqAt(latest.id);
+        return {
+          status: "complete" as const,
+          walkthrough: latest,
+          snapshotAt: new Date().toISOString(),
+          seqAt,
+          stale: true as const,
+        };
       }
 
       return { status: "not_found" as const };

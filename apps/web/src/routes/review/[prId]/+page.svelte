@@ -139,12 +139,16 @@ let lastLoadedMode: ReviewMode | null = null;
 let lastLoadedAt = 0;
 const PR_REFETCH_WINDOW_MS = 60_000;
 
-function apiErrorMessage(error: { value?: unknown }, fallback: string): string {
+function apiErrorMessage(
+  error: { status?: number; value?: unknown },
+  fallback = "Failed to fetch PR files",
+): string {
   const value = error.value;
   if (typeof value !== "object" || value === null) return fallback;
   const body = value as Record<string, unknown>;
   if (typeof body.error === "string" && body.error.length > 0) return body.error;
   if (typeof body.message === "string" && body.message.length > 0) return body.message;
+  if (typeof error.status === "number") return `${fallback} (HTTP ${error.status})`;
   return fallback;
 }
 

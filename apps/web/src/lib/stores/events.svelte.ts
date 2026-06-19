@@ -46,6 +46,7 @@ import {
   hydrateActiveWalkthroughs,
   hydrateFromCache,
   onWalkthroughEvent,
+  refreshReviewRoundsForPrs,
 } from "./walkthrough.svelte";
 
 let source: EventSource | null = null;
@@ -188,6 +189,7 @@ function dispatch(msg: ServerEventMessage): void {
       break;
     case "prs:updated":
       replacePullRequests(msg.data);
+      refreshReviewRoundsForPrs(msg.data.map((pr) => pr.id));
       break;
     case "pr:archived":
       onPrArchived(msg.data);

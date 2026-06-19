@@ -10,10 +10,13 @@ import { getReviewMode } from "$lib/stores/review.svelte";
 import {
   abort as abortWalkthrough,
   generateWalkthrough,
+  getHasUnreviewedCommits,
   getPendingAction as getWalkthroughPendingAction,
   getRatings as getWalkthroughRatings,
   getWalkthroughUiState,
+  loadReviewRounds,
   regenerate as regenerateWalkthrough,
+  regenerateFromScratch as regenerateWalkthroughFromScratch,
   resume as resumeWalkthrough,
 } from "$lib/stores/walkthrough.svelte";
 import {
@@ -35,12 +38,21 @@ const walkthroughHasRatings = $derived(getWalkthroughRatings().length > 0);
 const walkthroughHasNewContentBelow = $derived(getWalkthroughHasNewContentBelow());
 const chatStreaming = $derived(isChatStreaming(prId));
 const selectedMode = $derived(getReviewMode(prId));
+const hasUnreviewedCommits = $derived(getHasUnreviewedCommits(prId, selectedMode));
+const reviewNewCommitsLabel = "Review new commits";
+
+$effect(() => {
+  void loadReviewRounds(prId, selectedMode);
+});
 
 /** Map walkthrough-specific state to the normalised GenActionState. */
 const genActionState = $derived.by((): GenActionState | null => {
   switch (walkthroughUiState.kind) {
     case "absent":
     case "idle":
+      if (hasUnreviewedCommits) {
+        return { kind: "stale", label: reviewNewCommitsLabel };
+      }
       return { kind: "empty", label: "Generate walkthrough" };
     case "streaming":
       return { kind: "streaming" };
@@ -50,9 +62,12 @@ const genActionState = $derived.by((): GenActionState | null => {
     case "error-empty":
       return { kind: "error" };
     case "complete":
+      if (hasUnreviewedCommits) {
+        return { kind: "stale", label: reviewNewCommitsLabel };
+      }
       return { kind: "complete" };
     case "complete-stale":
-      return { kind: "stale", label: "Regenerate for latest commit" };
+      return { kind: "stale", label: reviewNewCommitsLabel };
     default:
       return null;
   }
@@ -89,6 +104,7 @@ const combinedDisabledTitle = $derived(
         onResume={() => resumeWalkthrough(prId, selectedMode)}
         onGenerate={() => generateWalkthrough(prId, selectedMode)}
         onRegenerate={() => regenerateWalkthrough(prId, selectedMode)}
+        onRegenerateFromScratch={() => regenerateWalkthroughFromScratch(prId)}
       />
 
       {#if walkthroughUiState.kind === "streaming" && walkthroughHasNewContentBelow}

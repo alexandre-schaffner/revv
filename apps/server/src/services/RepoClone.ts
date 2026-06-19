@@ -158,9 +158,9 @@ export class RepoCloneService extends Context.Tag("RepoCloneService")<
      * goes away when the PR row is deleted or the repo is removed.
      *
      * Lifecycle:
-     *   - **First acquire (no dir on disk):** fetch
-     *     `+refs/pull/N/head:refs/revv-pull/N` from GitHub, then
-     *     `git worktree add -B revv/pr-N` checks it out at the new branch.
+     *   - **First acquire (no dir on disk):** fetch the resolved head SHA
+     *     from GitHub, update `refs/revv-pull/N`, then `git worktree add -B
+     *     revv/pr-N` checks it out at the new branch.
      *     The fetch ref lives under `refs/revv-pull/` (not `refs/revv/pr-N`)
      *     so it can't shadow the bare branch name `revv/pr-N` — see the
      *     `prFetchRef` comment in the body.
@@ -185,6 +185,7 @@ export class RepoCloneService extends Context.Tag("RepoCloneService")<
       readonly prNumber: number;
       readonly prHeadSha: string;
       readonly githubToken: string;
+      readonly exactHead?: boolean;
     }) => Effect.Effect<
       { readonly worktreePath: string; readonly branchName: string },
       CloneError | CloneNotReadyError | WorktreeBlockedByUnpushedCommits
@@ -317,10 +318,12 @@ async function ensurePrCommitPresent(
 ): Promise<void> {
   if (await commitExists(cwd, prHeadSha)) return;
 
+  let directFetchError: unknown = null;
   try {
     await runGit(["fetch", "--no-tags", authedUrl, prHeadSha], cwd);
     if (await commitExists(cwd, prHeadSha)) return;
   } catch (err) {
+    directFetchError = err;
     debug(
       "pr-worktree",
       `direct SHA fetch failed for ${prHeadSha}, falling back to PR ref:`,
@@ -328,7 +331,19 @@ async function ensurePrCommitPresent(
     );
   }
 
-  await runGit(["fetch", "--no-tags", authedUrl, `refs/pull/${prNumber}/head`], cwd);
+  try {
+    await runGit(["fetch", "--no-tags", authedUrl, `refs/pull/${prNumber}/head`], cwd);
+  } catch (err) {
+    throw new Error(
+      [
+        `Unable to fetch PR #${prNumber} head commit ${prHeadSha}.`,
+        "GitHub did not provide the direct commit or refs/pull head ref.",
+        "The PR may have been force-pushed, deleted, moved, or the local PR metadata may be stale.",
+        `Direct SHA fetch: ${directFetchError instanceof Error ? directFetchError.message : String(directFetchError)}`,
+        `PR ref fetch: ${err instanceof Error ? err.message : String(err)}`,
+      ].join(" "),
+    );
+  }
 
   if (!(await commitExists(cwd, prHeadSha))) {
     throw new Error(
@@ -669,7 +684,7 @@ export const RepoCloneServiceLive = Layer.effect(
             }),
         }),
 
-      acquirePrWorktree: ({ repoId, prNumber, prHeadSha, githubToken }) =>
+      acquirePrWorktree: ({ repoId, prNumber, prHeadSha, githubToken, exactHead = false }) =>
         Effect.withSpan("RepoClone.acquirePrWorktree", {
           attributes: { repoId, prNumber, headSha: prHeadSha },
         })(
@@ -755,7 +770,7 @@ export const RepoCloneServiceLive = Layer.effect(
                         ["merge-base", "--is-ancestor", prHeadSha, currentSha],
                         worktreePath,
                       );
-                      if (isAncestor) {
+                      if (isAncestor && !exactHead) {
                         return { worktreePath, branchName };
                       }
                       await ensurePrCommitPresent(worktreePath, prHeadSha, prNumber, authedUrl);
@@ -814,12 +829,10 @@ export const RepoCloneServiceLive = Layer.effect(
                     await runGitBestEffort(["worktree", "prune"], clonePath, 15_000);
                   }
 
+                  await ensurePrCommitPresent(clonePath, prHeadSha, prNumber, authedUrl);
+                  await runGit(["update-ref", prFetchRef, prHeadSha], clonePath);
                   await runGit(
-                    ["fetch", "--no-tags", authedUrl, `+refs/pull/${prNumber}/head:${prFetchRef}`],
-                    clonePath,
-                  );
-                  await runGit(
-                    ["worktree", "add", "-B", branchName, worktreePath, prFetchRef],
+                    ["worktree", "add", "-B", branchName, worktreePath, prHeadSha],
                     clonePath,
                   );
                   const tipSha = (await runGitCapture(["rev-parse", "HEAD"], worktreePath)).trim();

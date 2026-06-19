@@ -30,6 +30,7 @@
 import type {
   GenerationProviderConfig,
   Walkthrough,
+  WalkthroughGenerationMode,
   WalkthroughMode,
   WalkthroughStatus,
   WalkthroughStreamEvent,
@@ -69,6 +70,7 @@ import { AiService, type ContinuationContext } from "./Ai";
 import { Broadcaster } from "./Broadcaster";
 import { DbService } from "./Db";
 import { GitHubEtagCache } from "./GitHubEtagCache";
+import { commitExists, diffNameStatusZ, diffPatchForPath, fetchCommit } from "./GitOps";
 import { analyzeJobFailure } from "./job-failure";
 import { makeStartJobMutex } from "./job-mutex";
 import { makeSubscriberRegistry, type SubscriberHandle } from "./job-subscribers";
@@ -180,6 +182,7 @@ export class WalkthroughJobs extends Context.Tag("WalkthroughJobs")<
       readonly trigger: StartJobTrigger;
       readonly walkthroughId?: string;
       readonly mode?: WalkthroughMode;
+      readonly generationMode?: WalkthroughGenerationMode;
     }) => Effect.Effect<{ readonly walkthroughId: string }, StartJobError>;
 
     /**
@@ -465,6 +468,8 @@ export const WalkthroughJobsLive = Layer.effect(
       readonly repoId: string;
       readonly token: string;
       readonly prHeadSha: string;
+      readonly repoFullName: string;
+      readonly githubHost: string;
       readonly files: ReadonlyArray<{
         readonly filename: string;
         readonly previousFilename: string | null;
@@ -477,6 +482,145 @@ export const WalkthroughJobsLive = Layer.effect(
       readonly reviewSessionId: string;
       readonly modelUsed: string;
       readonly mode: WalkthroughMode;
+      readonly generationMode: WalkthroughGenerationMode;
+      readonly parentWalkthroughId: string | null;
+      readonly baseHeadSha: string | null;
+    };
+
+    type PromptFile = ResolvedContext["files"][number];
+    type PromptFilesResult = {
+      readonly files: ReadonlyArray<PromptFile>;
+      readonly diffSource: "full_pr" | "incremental_range" | "full_pr_fallback";
+    };
+
+    const normalizeGitStatus = (raw: string): PromptFile["status"] => {
+      const prefix = raw[0] ?? "M";
+      switch (prefix) {
+        case "A":
+          return "added";
+        case "D":
+          return "removed";
+        case "R":
+          return "renamed";
+        case "C":
+          return "copied";
+        case "T":
+          return "changed";
+        default:
+          return "modified";
+      }
+    };
+
+    const parseNameStatusZ = (
+      raw: string,
+    ): ReadonlyArray<{
+      readonly status: string;
+      readonly filename: string;
+      readonly previousFilename: string | null;
+    }> => {
+      const tokens = raw.split("\0").filter((token) => token.length > 0);
+      const files: Array<{
+        readonly status: string;
+        readonly filename: string;
+        readonly previousFilename: string | null;
+      }> = [];
+      for (let i = 0; i < tokens.length; ) {
+        const status = tokens[i++];
+        if (!status) break;
+        if (status.startsWith("R") || status.startsWith("C")) {
+          const previousFilename = tokens[i++];
+          const filename = tokens[i++];
+          if (previousFilename && filename) {
+            files.push({ status, filename, previousFilename });
+          }
+          continue;
+        }
+        const filename = tokens[i++];
+        if (filename) {
+          files.push({ status, filename, previousFilename: null });
+        }
+      }
+      return files;
+    };
+
+    const countPatchLines = (
+      patch: string,
+    ): { readonly additions: number; readonly deletions: number } => {
+      let additions = 0;
+      let deletions = 0;
+      for (const line of patch.split("\n")) {
+        if (line.startsWith("+++") || line.startsWith("---")) continue;
+        if (line.startsWith("+")) additions += 1;
+        else if (line.startsWith("-")) deletions += 1;
+      }
+      return { additions, deletions };
+    };
+
+    const buildAuthedRepoUrl = (ctx: ResolvedContext): string =>
+      `https://x-access-token:${ctx.token}@${ctx.githubHost}/${ctx.repoFullName}.git`;
+
+    const redactGitAuth = (message: string): string =>
+      message.replace(/x-access-token:[^@\s]+@/g, "x-access-token:<redacted>@");
+
+    const resolveIncrementalPromptFiles = (
+      ctx: ResolvedContext,
+      worktreePath: string,
+    ): Effect.Effect<PromptFilesResult> => {
+      if (ctx.generationMode !== "incremental" || !ctx.baseHeadSha) {
+        return Effect.succeed({ files: ctx.files, diffSource: "full_pr" });
+      }
+      const baseHeadSha = ctx.baseHeadSha;
+
+      return Effect.tryPromise({
+        try: async () => {
+          if (!(await commitExists(worktreePath, baseHeadSha))) {
+            await fetchCommit(worktreePath, buildAuthedRepoUrl(ctx), baseHeadSha);
+          }
+          if (!(await commitExists(worktreePath, baseHeadSha))) {
+            throw new Error(`base commit ${baseHeadSha} is not available locally`);
+          }
+
+          const nameStatus = parseNameStatusZ(
+            await diffNameStatusZ(worktreePath, baseHeadSha, ctx.prHeadSha),
+          );
+          const files: PromptFile[] = [];
+          for (const file of nameStatus) {
+            let patch: string | null = null;
+            try {
+              const rawPatch = await diffPatchForPath(
+                worktreePath,
+                baseHeadSha,
+                ctx.prHeadSha,
+                file.filename,
+              );
+              patch = rawPatch.trim().length > 0 ? rawPatch : null;
+            } catch {
+              patch = null;
+            }
+            const counts = patch ? countPatchLines(patch) : { additions: 0, deletions: 0 };
+            files.push({
+              filename: file.filename,
+              previousFilename: file.previousFilename,
+              status: normalizeGitStatus(file.status),
+              additions: counts.additions,
+              deletions: counts.deletions,
+              patch,
+            });
+          }
+          return { files, diffSource: "incremental_range" as const };
+        },
+        catch: (cause) => cause,
+      }).pipe(
+        Effect.catchAll((cause) => {
+          logError(
+            "walkthrough-jobs",
+            `incremental diff build failed pr=${ctx.pr.id} base=${ctx.baseHeadSha} head=${ctx.prHeadSha}; falling back to full PR diff: ${redactGitAuth(
+              cause instanceof Error ? cause.message : String(cause),
+            )}`,
+          );
+          return Effect.succeed({ files: ctx.files, diffSource: "full_pr_fallback" as const });
+        }),
+      );
     };
 
     interface LoopState {
@@ -520,6 +664,7 @@ export const WalkthroughJobsLive = Layer.effect(
             prNumber: ctx.pr.externalId,
             prHeadSha: ctx.prHeadSha,
             githubToken: ctx.token,
+            exactHead: true,
           })
           .pipe(
             Effect.mapError((e) => {
@@ -541,6 +686,7 @@ export const WalkthroughJobsLive = Layer.effect(
         const partial = ctx.partial;
         let generator: AsyncGenerator<WalkthroughStreamEvent>;
         let capturedOpencodeSessionId: string | undefined;
+        const promptInput = yield* resolveIncrementalPromptFiles(ctx, worktreePath);
 
         const buildStreamParams = (overrideContinuation?: ContinuationContext) => ({
           pr: {
@@ -550,11 +696,18 @@ export const WalkthroughJobsLive = Layer.effect(
             targetBranch: ctx.pr.targetBranch,
             url: ctx.pr.url,
           },
-          files: ctx.files as never,
+          files: promptInput.files as never,
           mode: ctx.mode,
           worktreePath,
           walkthroughId: job.walkthroughId,
           accountId: job.accountId,
+          reviewMode: {
+            mode: ctx.generationMode,
+            parentWalkthroughId: ctx.parentWalkthroughId,
+            baseHeadSha: ctx.baseHeadSha,
+            headSha: ctx.prHeadSha,
+            diffSource: promptInput.diffSource,
+          },
           ...(overrideContinuation ? { continuation: overrideContinuation } : {}),
           onSessionId: (id: string) => {
             capturedOpencodeSessionId = id;
@@ -1083,6 +1236,7 @@ export const WalkthroughJobsLive = Layer.effect(
       readonly trigger: StartJobTrigger;
       readonly walkthroughId?: string;
       readonly mode?: WalkthroughMode;
+      readonly generationMode?: WalkthroughGenerationMode;
     }): Effect.Effect<{ readonly walkthroughId: string }, StartJobError> =>
       Effect.gen(function* () {
         const mode = params.mode ?? "reviewer";
@@ -1114,6 +1268,7 @@ export const WalkthroughJobsLive = Layer.effect(
       readonly trigger: StartJobTrigger;
       readonly walkthroughId?: string;
       readonly mode?: WalkthroughMode;
+      readonly generationMode?: WalkthroughGenerationMode;
     }): Effect.Effect<{ readonly walkthroughId: string }, StartJobError> =>
       Effect.gen(function* () {
         const mode = params.mode ?? "reviewer";
@@ -1186,6 +1341,7 @@ export const WalkthroughJobsLive = Layer.effect(
 
         const reviewSession = yield* provideDb(reviewService.getOrCreateActiveSession(pr.id, mode));
         const reviewSessionId = partial?.reviewSessionId ?? reviewSession.id;
+        const requestedGenerationMode = params.generationMode ?? "full";
 
         const settings = yield* provideDb(settingsService.getSettings());
         const agent = yield* provideDb(settingsService.resolveAgent());
@@ -1270,6 +1426,24 @@ export const WalkthroughJobsLive = Layer.effect(
         // the journey chapter (chapter 0). On the "keep existing row"
         // path inside createPartial, the commits are not overwritten —
         // the row already has them from the original insert.
+        const priorArtifact =
+          partial === null && requestedGenerationMode === "incremental"
+            ? yield* provideDb(walkthroughService.findLatestReviewArtifact(pr.id))
+            : null;
+        if (partial === null && priorArtifact?.prHeadSha === meta.headSha) {
+          debug(
+            "walkthrough-jobs",
+            `incremental start requested at unchanged head sha=${meta.headSha}; reusing wt=${priorArtifact.id}`,
+          );
+          return { walkthroughId: priorArtifact.id };
+        }
+        const parentWalkthroughId = partial?.parentWalkthroughId ?? priorArtifact?.id ?? null;
+        const baseHeadSha = partial?.baseHeadSha ?? priorArtifact?.prHeadSha ?? null;
+        const generationMode: WalkthroughGenerationMode =
+          requestedGenerationMode === "incremental" && parentWalkthroughId && baseHeadSha
+            ? "incremental"
+            : "full";
+
         const idCandidate = partial?.id ?? params.walkthroughId;
         const walkthroughId = yield* provideDb(
           walkthroughService.createPartial({
@@ -1279,6 +1453,10 @@ export const WalkthroughJobsLive = Layer.effect(
             modelUsed,
             prHeadSha: meta.headSha,
             mode,
+            generationMode,
+            parentWalkthroughId,
+            baseHeadSha,
+            forceNew: params.trigger === "user" && generationMode === "full",
             prCommits: commits,
             ...(generatedBy ? { generatedBy } : {}),
             providerConfig: providerConfigForJob,
@@ -1316,7 +1494,7 @@ export const WalkthroughJobsLive = Layer.effect(
               }),
             ).pipe(Effect.either);
             if (importResult._tag === "Right") {
-              yield* setStatus(walkthroughId, "complete");
+              yield* setStatus(walkthroughId, "complete", { tokenUsage: ZERO_TOKEN_USAGE });
               // New clients see the cache-hit marker + lifecycle:complete on
               // the global SSE bus and re-hydrate via REST `/current` to get
               // the imported content. (A future iteration can replay the
@@ -1382,6 +1560,8 @@ export const WalkthroughJobsLive = Layer.effect(
               externalId: pr.externalId,
             },
             repoId: repo.id,
+            repoFullName: repo.fullName,
+            githubHost: repo.githubHost,
             token,
             prHeadSha: meta.headSha,
             files,
@@ -1389,6 +1569,9 @@ export const WalkthroughJobsLive = Layer.effect(
             reviewSessionId,
             modelUsed,
             mode,
+            generationMode,
+            parentWalkthroughId,
+            baseHeadSha,
           },
           params.trigger,
         );
@@ -1738,7 +1921,7 @@ export const WalkthroughJobsLive = Layer.effect(
           return false;
         }
 
-        yield* setStatus(walkthroughId, "complete");
+        yield* setStatus(walkthroughId, "complete", { tokenUsage: ZERO_TOKEN_USAGE });
         // New SSE bus only. Clients re-hydrate via `/current` to fetch the
         // imported content; replay-as-events is a follow-up improvement.
         yield* emitEvent(walkthroughId, {

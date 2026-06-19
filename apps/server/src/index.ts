@@ -57,6 +57,7 @@ const app = new Elysia()
         "http://localhost:45678",
         "http://localhost:45679",
         "tauri://localhost",
+        "http://tauri.localhost",
         "https://tauri.localhost",
       ],
       credentials: true,

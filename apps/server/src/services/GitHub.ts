@@ -267,6 +267,22 @@ interface GitHubGatewayFlatService {
     },
     token: string,
   ) => Effect.Effect<{ id: number; htmlUrl: string }, GitHubError, SettingsService>;
+  readonly findPendingReview: (
+    repoFullName: string,
+    prNumber: number,
+    reviewerLogin: string,
+    token: string,
+  ) => Effect.Effect<{ id: number; htmlUrl: string } | null, GitHubError, SettingsService>;
+  readonly submitPendingReview: (
+    repoFullName: string,
+    prNumber: number,
+    reviewId: number,
+    review: {
+      readonly body: string;
+      readonly event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
+    },
+    token: string,
+  ) => Effect.Effect<{ id: number; htmlUrl: string }, GitHubError, SettingsService>;
   readonly listReviewCommentsForReview: (
     repoFullName: string,
     prNumber: number,
@@ -506,7 +522,12 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
         token,
         50,
         apiBase,
-        { canReplayCached: (cached) => cached.length < 100 },
+        // This endpoint is sorted by updated_at desc, so any new or recently
+        // changed PR changes page 1's ETag. Replaying a 304 is therefore safe
+        // even for large repos with 100+ open PRs; forcing a full refetch on
+        // every poll burns rate limit and leaves those repos stuck on stale DB
+        // state once GitHub starts returning 403 rate-limit responses.
+        { canReplayCached: () => true },
       );
       return (data as Record<string, unknown>[]).map((pr) => mapPr(pr, repositoryId));
     }).pipe(retryTransient),
@@ -966,6 +987,49 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       };
     }),
 
+  findPendingReview: (repoFullName, prNumber, reviewerLogin, token) =>
+    Effect.gen(function* () {
+      const apiBase = yield* resolveApiBase;
+      const { owner, repo } = yield* parseRepoFullName(repoFullName);
+      const data = yield* githubFetchPaginated(
+        `/repos/${owner}/${repo}/pulls/${prNumber}/reviews?per_page=100`,
+        token,
+        10,
+        apiBase,
+      );
+      const pending = (data as Record<string, unknown>[])
+        .filter((raw) => {
+          const user = raw.user as Record<string, unknown> | null | undefined;
+          return raw.state === "PENDING" && user?.login === reviewerLogin;
+        })
+        .sort((a, b) => Number(b.id ?? 0) - Number(a.id ?? 0))[0];
+      if (!pending) return null;
+      return {
+        id: pending.id as number,
+        htmlUrl: (pending.html_url as string | undefined) ?? "",
+      };
+    }),
+
+  submitPendingReview: (repoFullName, prNumber, reviewId, review, token) =>
+    Effect.gen(function* () {
+      const apiBase = yield* resolveApiBase;
+      const { owner, repo } = yield* parseRepoFullName(repoFullName);
+      const data = yield* githubPost(
+        `/repos/${owner}/${repo}/pulls/${prNumber}/reviews/${reviewId}/events`,
+        token,
+        {
+          event: review.event,
+          body: review.body,
+        },
+        apiBase,
+      );
+      const raw = data as Record<string, unknown>;
+      return {
+        id: raw.id as number,
+        htmlUrl: (raw.html_url as string | undefined) ?? "",
+      };
+    }),
+
   listReviewCommentsForReview: (repoFullName, prNumber, reviewId, token) =>
     Effect.gen(function* () {
       const apiBase = yield* resolveApiBase;
@@ -1373,6 +1437,8 @@ export interface GitHubGatewayService {
   };
   readonly reviews: {
     readonly submit: GitHubGatewayFlat["postReview"];
+    readonly findPending: GitHubGatewayFlat["findPendingReview"];
+    readonly submitPending: GitHubGatewayFlat["submitPendingReview"];
     readonly commentsForReview: GitHubGatewayFlat["listReviewCommentsForReview"];
     readonly createComment: GitHubGatewayFlat["postReviewComment"];
     readonly replyToComment: GitHubGatewayFlat["replyToComment"];
@@ -1423,6 +1489,8 @@ export const GitHubGatewayLive = Layer.succeed(GitHubGateway, {
   },
   reviews: {
     submit: githubGatewayFlat.postReview,
+    findPending: githubGatewayFlat.findPendingReview,
+    submitPending: githubGatewayFlat.submitPendingReview,
     commentsForReview: githubGatewayFlat.listReviewCommentsForReview,
     createComment: githubGatewayFlat.postReviewComment,
     replyToComment: githubGatewayFlat.replyToComment,

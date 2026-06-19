@@ -1,4 +1,5 @@
 import { Effect } from "effect";
+import { GitHubNetworkError } from "../../../domain/errors";
 import { AppRuntime } from "../../../runtime";
 import { Broadcaster } from "../../../services/Broadcaster";
 import { GitHubGateway } from "../../../services/GitHub";
@@ -26,6 +27,19 @@ export interface SubmitReviewInput {
    * PR-switches. Empty / missing for pure approve flows with no issue list.
    */
   issueIds?: string[];
+}
+
+interface SubmittedCommentLink {
+  readonly threadId: string;
+  readonly externalCommentId: string;
+}
+
+function isExistingPendingReviewError(error: unknown): boolean {
+  return (
+    error instanceof GitHubNetworkError &&
+    typeof error.cause === "string" &&
+    error.cause.includes("User can only have one pending review per pull request")
+  );
 }
 
 /**
@@ -57,7 +71,8 @@ export function submitGithubReviewHandler(prId: string, userId: string, body: Su
         comment: "COMMENT",
       } as const;
 
-      const comments = (body.comments ?? []).map((c) => {
+      const inputComments = body.comments ?? [];
+      const comments = inputComments.map((c) => {
         const comment: {
           path: string;
           body: string;
@@ -78,26 +93,107 @@ export function submitGithubReviewHandler(prId: string, userId: string, body: Su
         return comment;
       });
 
-      const review = yield* github.reviews.submit(
-        repo.fullName,
-        pr.externalId,
-        {
-          event: eventMap[body.action],
-          body: body.body ?? "",
-          comments,
-        },
-        ghToken,
-      );
+      const submittedCommentLinks: SubmittedCommentLink[] = [];
+      const reviewInput = {
+        event: eventMap[body.action],
+        body: body.body ?? "",
+        comments,
+      };
+      const review = yield* github.reviews
+        .submit(repo.fullName, pr.externalId, reviewInput, ghToken)
+        .pipe(
+          Effect.catchIf(isExistingPendingReviewError, () =>
+            Effect.gen(function* () {
+              const reviewer = yield* github.users.authenticatedFresh(ghToken);
+              const pending = yield* github.reviews.findPending(
+                repo.fullName,
+                pr.externalId,
+                reviewer.login,
+                ghToken,
+              );
+              if (!pending) {
+                return yield* Effect.fail(
+                  new GitHubNetworkError({
+                    cause:
+                      "GitHub reported an existing pending review, but Revv could not find it for the authenticated user.",
+                  }),
+                );
+              }
+
+              const submitted = yield* github.reviews.submitPending(
+                repo.fullName,
+                pr.externalId,
+                pending.id,
+                {
+                  event: reviewInput.event,
+                  body: reviewInput.body,
+                },
+                ghToken,
+              );
+
+              const commitSha = pr.headSha;
+              if (!commitSha) {
+                return yield* Effect.fail(
+                  new GitHubNetworkError({
+                    cause:
+                      "Cannot post review comments because the pull request head SHA is missing locally. Sync the PR and retry.",
+                  }),
+                );
+              }
+
+              for (const [index, comment] of comments.entries()) {
+                const input = inputComments[index];
+                if (!input) continue;
+                const posted = yield* github.reviews.createComment(
+                  repo.fullName,
+                  pr.externalId,
+                  {
+                    ...comment,
+                    commitSha,
+                  },
+                  ghToken,
+                );
+                submittedCommentLinks.push({
+                  threadId: input.threadId,
+                  externalCommentId: String(posted.id),
+                });
+              }
+
+              return submitted;
+            }),
+          ),
+        );
 
       // Link local threads to GitHub comment IDs so that the subsequent
       // sync-threads call doesn't create duplicate entries.
-      const inputComments = body.comments ?? [];
+      for (const link of submittedCommentLinks) {
+        yield* reviewService
+          .setThreadExternalIds(link.threadId, {
+            externalCommentId: link.externalCommentId,
+          })
+          .pipe(Effect.orElseSucceed(() => undefined));
+
+        const messages = yield* reviewService
+          .getMessages(link.threadId)
+          .pipe(Effect.orElseSucceed(() => []));
+        const unsyncedMsg = [...messages]
+          .reverse()
+          .find((m) => m.authorRole === "reviewer" && m.externalId == null);
+        if (unsyncedMsg) {
+          yield* reviewService
+            .setMessageExternalId(unsyncedMsg.id, link.externalCommentId)
+            .pipe(Effect.orElseSucceed(() => undefined));
+        }
+      }
+
       if (inputComments.length > 0) {
+        const linkedThreadIds = new Set(submittedCommentLinks.map((link) => link.threadId));
         const ghComments = yield* github.reviews
           .commentsForReview(repo.fullName, pr.externalId, review.id, ghToken)
           .pipe(Effect.orElseSucceed(() => []));
 
         for (const input of inputComments) {
+          if (linkedThreadIds.has(input.threadId)) continue;
           const effectiveLine = input.line;
           // Prefer an exact path+line+body match; fall back to path+line, then
           // path+body. The `/reviews/:id/comments` response can return a null

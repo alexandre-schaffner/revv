@@ -114,6 +114,13 @@ export function getIsPullingCommit(prId: string): boolean {
   return isPullingCommit.has(prId);
 }
 
+function apiErrorMessage(error: { status: number; value?: unknown }, fallback: string): string {
+  const value = error.value as { error?: unknown; message?: unknown } | null | undefined;
+  if (typeof value?.error === "string") return value.error;
+  if (typeof value?.message === "string") return value.message;
+  return `${fallback} (HTTP ${error.status})`;
+}
+
 /**
  * Refetch the PR's diff files against the current `pr.headSha`, restamp
  * the loaded SHA, and regenerate the walkthrough against the new content.
@@ -136,7 +143,9 @@ export async function pullLatestCommit(prId: string): Promise<void> {
       query: activePath === null ? { mode } : { active: activePath, mode },
     });
     if (error || !Array.isArray(data)) {
-      throw new Error("Failed to refetch files");
+      throw new Error(
+        error ? apiErrorMessage(error, "Failed to refetch files") : "Failed to refetch files",
+      );
     }
 
     const mapped: ReviewFile[] = data.map((f) => ({

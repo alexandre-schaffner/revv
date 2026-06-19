@@ -4,9 +4,9 @@ import { eq, inArray } from "drizzle-orm";
 import { Cause, Chunk, Context, Duration, Effect, Fiber, Layer, Ref, Schedule } from "effect";
 import { repositories } from "../db/schema";
 import { account, user } from "../db/schema/auth";
-import { GitHubAuthError, GitHubRateLimitError } from "../domain/errors";
+import { GitHubAccessDeniedError, GitHubAuthError, GitHubRateLimitError } from "../domain/errors";
 import { withDb as withDbHelper } from "../effects/with-db";
-import { logError } from "../logger";
+import { debug, logError } from "../logger";
 import { Broadcaster } from "./Broadcaster";
 import { DbService } from "./Db";
 import { DiffCacheService } from "./DiffCache";
@@ -359,17 +359,26 @@ export const PollSchedulerLive = Layer.effect(
           ): Effect.Effect<A | null, never, R> =>
             eff.pipe(
               Effect.tap(() => clearStaleReauth(acc)),
-              Effect.tapError((err) =>
-                err instanceof GitHubAuthError
-                  ? handleAuthError(acc)
-                  : err instanceof GitHubRateLimitError
-                    ? Effect.sync(() => markRateLimited(acc, err))
-                    : Effect.sync(() => {
-                        if (opts?.errorLabel) {
-                          logError("PollScheduler", `${opts.errorLabel}:`, err);
-                        }
-                      }),
-              ),
+              Effect.tapError((err) => {
+                if (err instanceof GitHubAuthError) return handleAuthError(acc);
+                if (err instanceof GitHubRateLimitError) {
+                  return Effect.sync(() => {
+                    markRateLimited(acc, err);
+                  });
+                }
+                if (err instanceof GitHubAccessDeniedError) {
+                  return Effect.sync(() => {
+                    if (opts?.errorLabel) {
+                      debug("PollScheduler", `${opts.errorLabel}: ${err.message}`);
+                    }
+                  });
+                }
+                return Effect.sync(() => {
+                  if (opts?.errorLabel) {
+                    logError("PollScheduler", `${opts.errorLabel}:`, err);
+                  }
+                });
+              }),
               Effect.catchAll(() => Effect.succeed(null as A | null)),
             );
 
