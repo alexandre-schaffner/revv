@@ -1130,6 +1130,7 @@ async function doHydrateFromCache(
     const { status } = body;
     const isGenerating = status === "generating";
     const isError = status === "error";
+    const isHistorical = body.historical === true && !isGenerating;
     wtTrace(
       "lifecycle",
       `hydrateFromCache prId=${prId} status=${status} blocks=${wt.blocks.length} issues=${wt.issues.length} ratings=${wt.ratings.length} semanticSteps=${wt.semanticSteps?.length ?? 0} hasSentiment=${wt.sentiment !== null && wt.sentiment !== undefined}`,
@@ -1188,12 +1189,12 @@ async function doHydrateFromCache(
     entry.isStreaming = isGenerating;
     entry.tokenUsage = coerceTokenUsage(wt.tokenUsage);
     entry.streamError = isError
-      ? body.historical === true
+      ? isHistorical
         ? null
         : "Walkthrough generation failed. Resume or regenerate to retry."
       : null;
     entry.superseded = body.stale === true;
-    entry.historical = body.historical === true;
+    entry.historical = isHistorical;
     entry.phase = isGenerating ? "writing" : "finishing";
     entry.phaseMessage = isGenerating ? "Resuming walkthrough…" : "Complete";
     entry.liveGeneration = isGenerating;
@@ -1202,7 +1203,7 @@ async function doHydrateFromCache(
     if (previous?.source === "remote") entry.source = "remote";
     if (isGenerating) entry.streamStartedAt = Date.now();
     setEntry(prId, entry);
-    store.selectedReportIds.set(prId, body.historical === true ? wt.id : null);
+    store.selectedReportIds.set(prId, isHistorical ? wt.id : null);
 
     // Math.max so SSE can't regress the cursor below what it already advanced
     // past during the fetch window.
@@ -1445,7 +1446,30 @@ export async function regenerate(
     // entry, so dropping it here would only cause `_active` to flip to
     // undefined and flash the "Generate walkthrough" pill between the
     // regenerate and start round-trips.
-    await startWalkthrough(prId, mode, generationMode);
+    const res = await startWalkthrough(prId, mode, generationMode);
+    if (!res) {
+      updateEntry(prId, (e) => {
+        e.isStreaming = false;
+        e.streamError = "Failed to start walkthrough";
+      });
+      return;
+    }
+    if (!res.ok) {
+      updateEntry(prId, (e) => {
+        e.isStreaming = false;
+        e.streamError = `Failed to start walkthrough (HTTP ${res.status}).`;
+      });
+      return;
+    }
+
+    const started = (await res.json().catch(() => null)) as { walkthroughId?: string } | null;
+    if (started?.walkthroughId) {
+      await hydrateFromCache(prId, {
+        mode,
+        reportId: started.walkthroughId,
+        replace: true,
+      });
+    }
   } finally {
     clearPending(prId);
   }

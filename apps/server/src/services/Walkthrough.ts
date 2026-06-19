@@ -583,7 +583,10 @@ export class WalkthroughService extends Context.Tag("WalkthroughService")<
      * Find the latest completed/superseded walkthrough that can seed an
      * incremental refresh for a new PR head.
      */
-    readonly findLatestReviewArtifact: (prId: string) => Effect.Effect<
+    readonly findLatestReviewArtifact: (
+      prId: string,
+      mode?: WalkthroughMode,
+    ) => Effect.Effect<
       {
         readonly id: string;
         readonly prHeadSha: string;
@@ -1145,9 +1148,41 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
       return Math.max(0, (row?.nextSeq ?? 1) - 1);
     }).pipe(Effect.catchAll(() => Effect.succeed(0))),
 
-  findLatestReviewArtifact: (prId) =>
+  findLatestReviewArtifact: (prId, mode = "reviewer") =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
+      const roundRows = db
+        .select({
+          id: walkthroughs.id,
+          prHeadSha: walkthroughs.prHeadSha,
+          kind: reviewRounds.kind,
+          visibility: reviewRounds.visibility,
+          fromSha: reviewRounds.fromSha,
+          toSha: reviewRounds.toSha,
+        })
+        .from(reviewRounds)
+        .innerJoin(walkthroughs, eq(walkthroughs.id, reviewRounds.walkthroughId))
+        .where(
+          and(
+            eq(reviewRounds.pullRequestId, prId),
+            eq(walkthroughs.mode, mode),
+            inArray(walkthroughs.status, ["complete", "superseded"]),
+          ),
+        )
+        .orderBy(desc(reviewRounds.roundNumber))
+        .all();
+
+      const visibleRound = roundRows.find(
+        (row) =>
+          row.visibility !== "hidden" && !(row.kind === "incremental" && row.fromSha === row.toSha),
+      );
+      if (visibleRound) {
+        return {
+          id: visibleRound.id,
+          prHeadSha: visibleRound.prHeadSha,
+        };
+      }
+
       const row = db
         .select({
           id: walkthroughs.id,
@@ -1157,6 +1192,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         .where(
           and(
             eq(walkthroughs.pullRequestId, prId),
+            eq(walkthroughs.mode, mode),
             inArray(walkthroughs.status, ["complete", "superseded"]),
           ),
         )

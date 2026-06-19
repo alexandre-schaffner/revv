@@ -1428,15 +1428,8 @@ export const WalkthroughJobsLive = Layer.effect(
         // the row already has them from the original insert.
         const priorArtifact =
           partial === null && requestedGenerationMode === "incremental"
-            ? yield* provideDb(walkthroughService.findLatestReviewArtifact(pr.id))
+            ? yield* provideDb(walkthroughService.findLatestReviewArtifact(pr.id, mode))
             : null;
-        if (partial === null && priorArtifact?.prHeadSha === meta.headSha) {
-          debug(
-            "walkthrough-jobs",
-            `incremental start requested at unchanged head sha=${meta.headSha}; reusing wt=${priorArtifact.id}`,
-          );
-          return { walkthroughId: priorArtifact.id };
-        }
         const parentWalkthroughId = partial?.parentWalkthroughId ?? priorArtifact?.id ?? null;
         const baseHeadSha = partial?.baseHeadSha ?? priorArtifact?.prHeadSha ?? null;
         const generationMode: WalkthroughGenerationMode =

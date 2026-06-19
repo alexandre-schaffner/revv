@@ -409,6 +409,29 @@ export function githubPut(
   });
 }
 
+export function githubDelete(
+  path: string,
+  token: string,
+  apiBase: string,
+): Effect.Effect<unknown, GitHubError> {
+  return Effect.tryPromise({
+    try: async () => {
+      const res = await githubHttpFetch(
+        `${apiBase}${path}`,
+        {
+          method: "DELETE",
+          headers: githubHeaders(token),
+        },
+        path,
+      );
+      assertGitHubOk(res, path);
+      const text = await res.text();
+      return text ? JSON.parse(text) : null;
+    },
+    catch: toGitHubError,
+  });
+}
+
 export function githubGraphql<T = unknown>(
   query: string,
   variables: Record<string, unknown>,

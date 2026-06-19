@@ -15,6 +15,7 @@ import {
   assertGitHubOk,
   conditionalFetch,
   conditionalFetchPaginated,
+  githubDelete,
   githubFetch,
   githubFetchPaginated,
   githubGraphql,
@@ -273,16 +274,12 @@ interface GitHubGatewayFlatService {
     reviewerLogin: string,
     token: string,
   ) => Effect.Effect<{ id: number; htmlUrl: string } | null, GitHubError, SettingsService>;
-  readonly submitPendingReview: (
+  readonly deletePendingReview: (
     repoFullName: string,
     prNumber: number,
     reviewId: number,
-    review: {
-      readonly body: string;
-      readonly event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
-    },
     token: string,
-  ) => Effect.Effect<{ id: number; htmlUrl: string }, GitHubError, SettingsService>;
+  ) => Effect.Effect<void, GitHubError, SettingsService>;
   readonly listReviewCommentsForReview: (
     repoFullName: string,
     prNumber: number,
@@ -1010,24 +1007,15 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       };
     }),
 
-  submitPendingReview: (repoFullName, prNumber, reviewId, review, token) =>
+  deletePendingReview: (repoFullName, prNumber, reviewId, token) =>
     Effect.gen(function* () {
       const apiBase = yield* resolveApiBase;
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
-      const data = yield* githubPost(
-        `/repos/${owner}/${repo}/pulls/${prNumber}/reviews/${reviewId}/events`,
+      yield* githubDelete(
+        `/repos/${owner}/${repo}/pulls/${prNumber}/reviews/${reviewId}`,
         token,
-        {
-          event: review.event,
-          body: review.body,
-        },
         apiBase,
       );
-      const raw = data as Record<string, unknown>;
-      return {
-        id: raw.id as number,
-        htmlUrl: (raw.html_url as string | undefined) ?? "",
-      };
     }),
 
   listReviewCommentsForReview: (repoFullName, prNumber, reviewId, token) =>
@@ -1438,7 +1426,7 @@ export interface GitHubGatewayService {
   readonly reviews: {
     readonly submit: GitHubGatewayFlat["postReview"];
     readonly findPending: GitHubGatewayFlat["findPendingReview"];
-    readonly submitPending: GitHubGatewayFlat["submitPendingReview"];
+    readonly deletePending: GitHubGatewayFlat["deletePendingReview"];
     readonly commentsForReview: GitHubGatewayFlat["listReviewCommentsForReview"];
     readonly createComment: GitHubGatewayFlat["postReviewComment"];
     readonly replyToComment: GitHubGatewayFlat["replyToComment"];
@@ -1490,7 +1478,7 @@ export const GitHubGatewayLive = Layer.succeed(GitHubGateway, {
   reviews: {
     submit: githubGatewayFlat.postReview,
     findPending: githubGatewayFlat.findPendingReview,
-    submitPending: githubGatewayFlat.submitPendingReview,
+    deletePending: githubGatewayFlat.deletePendingReview,
     commentsForReview: githubGatewayFlat.listReviewCommentsForReview,
     createComment: githubGatewayFlat.postReviewComment,
     replyToComment: githubGatewayFlat.replyToComment,
