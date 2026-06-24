@@ -28,7 +28,7 @@ interface Props {
 }
 let { prId }: Props = $props();
 
-type Action = "approve" | "request_changes";
+type Action = "approve" | "request_changes" | "comment";
 
 const issues = $derived(getIssues());
 const threads = $derived(getThreads());
@@ -69,6 +69,20 @@ function handleApproveClick(): void {
 
 const selectedCount = $derived(selectedIssueIds.size);
 const hasContent = $derived(selectedCount > 0);
+
+// Number of unresolved threads that carry at least one unsynced reviewer
+// message — i.e. line comments that would actually be pushed to GitHub.
+// Mirrors the filtering in buildComments() so the Comment button's enabled
+// state matches what gets sent.
+const pendingCommentCount = $derived(
+  unresolvedThreads.filter((t) =>
+    getThreadMessages(t.id).some(
+      (m) => m.authorRole === "reviewer" && m.externalId == null && m.body.trim().length > 0,
+    ),
+  ).length,
+);
+// A plain COMMENT review can go up with selected issues OR pending comments.
+const canComment = $derived(selectedCount > 0 || pendingCommentCount > 0);
 
 const approveBlockerSummary = $derived.by(() => {
   const parts: string[] = [];
@@ -240,6 +254,7 @@ function generateChanges(): void {
 
 function actionLabel(a: Action): string {
   if (a === "approve") return "Approved";
+  if (a === "comment") return "Comments posted";
   return "Changes requested";
 }
 
@@ -270,6 +285,7 @@ $effect(() => {
     submitting,
     selectedCount,
     hasContent,
+    canComment,
     approveBlockerSummary,
   });
 });
@@ -278,6 +294,7 @@ $effect(() => {
   setRcHandlers({
     onGenerateChanges: generateChanges,
     onSubmitReview: () => void submit("request_changes"),
+    onComment: () => void submit("comment"),
     onApprove: handleApproveClick,
   });
   return resetRcActions;

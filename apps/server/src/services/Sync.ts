@@ -1,4 +1,4 @@
-import type { CommentThread, ThreadSummary, UserRole } from "@revv/shared";
+import type { CommentThread, ThreadMessage, ThreadSummary, UserRole } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { reviewSessions } from "../db/schema/review-sessions";
@@ -292,6 +292,37 @@ export const SyncServiceLive = Layer.effect(
         const byExternalId = new Map<number, GhReviewComment>();
         for (const c of comments) byExternalId.set(c.id, c);
 
+        // Local threads the user authored in Revv that aren't yet linked to a
+        // GitHub comment id. When the matching comment comes back from the
+        // poll we adopt the existing thread rather than creating a duplicate.
+        // The post-submit fast-path link (see github-submit.ts) can miss
+        // because the `/reviews/:id/comments` response it relies on may return
+        // a null `line`; the `/pulls/:n/comments` response used here populates
+        // `line` reliably, so this is the authoritative, content-aware dedup.
+        const sessionThreads = yield* reviewService.getThreadsForSession(session.id);
+        const unsyncedLocal: Array<{
+          thread: CommentThread;
+          rootMessage: ThreadMessage;
+          joinedBody: string;
+        }> = [];
+        for (const t of sessionThreads) {
+          if (t.externalCommentId != null) continue;
+          const msgs = yield* reviewService.getMessages(t.id);
+          const unsynced = msgs.filter(
+            (m) => m.authorRole === "reviewer" && m.externalId == null && m.body.trim().length > 0,
+          );
+          const root = unsynced[0];
+          if (!root) continue;
+          unsyncedLocal.push({
+            thread: t,
+            rootMessage: root,
+            // Mirrors the client's buildComments(): a thread's pending reviewer
+            // messages are joined into one GitHub comment body.
+            joinedBody: unsynced.map((m) => m.body).join("\n\n"),
+          });
+        }
+        const adoptedThreadIds = new Set<string>();
+
         for (const c of comments) {
           const existingMsg = yield* reviewService.findMessageByExternalId(String(c.id));
 
@@ -347,6 +378,41 @@ export const SyncServiceLive = Layer.effect(
               type: "threads:new-reply",
               data: { prId: pr.id, thread, message: msg },
             });
+            continue;
+          }
+
+          // Idempotency: the fast-path may have linked the thread
+          // (externalCommentId) but not its root message. Don't create a
+          // second thread — backfill the message link so future syncs dedup
+          // by message id too.
+          const linkedThread = yield* reviewService.getThreadByExternalCommentId(
+            session.id,
+            String(c.id),
+          );
+          if (linkedThread) {
+            const linkedMsgs = yield* reviewService.getMessages(linkedThread.id);
+            const unlinked = linkedMsgs.find((m) => m.externalId == null && m.body === c.body);
+            if (unlinked) yield* reviewService.setMessageExternalId(unlinked.id, String(c.id));
+            continue;
+          }
+
+          // Content-based adoption: a local thread the user authored whose
+          // post-submit link missed. Match on the reliable location + body.
+          const adoptable = unsyncedLocal.find(
+            (u) =>
+              !adoptedThreadIds.has(u.thread.id) &&
+              u.thread.filePath === c.path &&
+              u.thread.endLine === (c.line ?? c.startLine ?? 1) &&
+              u.thread.diffSide === (c.side === "LEFT" ? "old" : "new") &&
+              u.joinedBody === c.body,
+          );
+          if (adoptable) {
+            yield* reviewService.setThreadExternalIds(adoptable.thread.id, {
+              externalCommentId: String(c.id),
+              lastSyncedAt: new Date().toISOString(),
+            });
+            yield* reviewService.setMessageExternalId(adoptable.rootMessage.id, String(c.id));
+            adoptedThreadIds.add(adoptable.thread.id);
             continue;
           }
 
