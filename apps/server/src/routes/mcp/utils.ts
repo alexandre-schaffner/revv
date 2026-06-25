@@ -282,6 +282,17 @@ export function bindHttp<Ctx, Meta, Result extends McpToolResult>(
       debug(options.logScope, served);
     }
 
+    // All inbound messages were notifications/responses (no `id`), so there is
+    // nothing to reply with — e.g. the `notifications/initialized` handshake
+    // step. Per the MCP Streamable HTTP spec, return 202 Accepted with an empty
+    // body. Returning a bodyless 200 + `Content-Type: application/json` (the old
+    // behavior) makes strict clients try to JSON-parse an empty body and fail
+    // with "EOF while parsing a value at line 1 column 0" — this killed Codex's
+    // `rmcp` transport worker right after the initialized notification.
+    if (responses.length === 0) {
+      return new Response(null, { status: 202 });
+    }
+
     const payload = Array.isArray(body) ? responses : responses[0];
     return new Response(JSON.stringify(payload), {
       status: 200,
