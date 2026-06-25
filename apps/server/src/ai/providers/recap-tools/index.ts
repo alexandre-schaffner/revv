@@ -1,14 +1,11 @@
 // ─── recap-tools ─────────────────────────────────────────────────────────────
 //
-// Public surface for the project-recap MCP tool set. Re-exports the schemas,
-// the handler types, and constructs the Claude Agent SDK adapter so
-// `ProjectRecapJobs` can spawn an agent with these tools in-process.
-//
-// HTTP MCP transport (for opencode parity) is not implemented in v1 — see
-// the plan's "Out of Scope" section. The shared handlers in `handlers.ts`
-// are reusable from a future HTTP route without rewriting any logic.
+// Public surface for the project-recap MCP tool set. Re-exports the schemas
+// and the handler types, and bundles the specs for the HTTP MCP route at
+// `/mcp/recap` (the single transport every ACP agent reaches — see
+// `recap-acp.ts`). The shared handlers in `handlers.ts` run transport-agnostic.
 
-import { bindInProcess, type ToolSpecBundle } from "../mcp-tool-gateway";
+import type { ToolSpecBundle } from "../mcp-tool-gateway";
 import {
   addPrEntryHandler,
   completeRecapHandler,
@@ -127,24 +124,5 @@ export const RECAP_TOOL_BUNDLE: ToolSpecBundle<RecapToolContext, RecapToolResult
   specs: RECAP_TOOL_SPECS,
 };
 
-/**
- * Build the Claude Agent SDK MCP server registration scoped to a single
- * recap job. The orchestrator passes the per-job context (recap id +
- * source bundle + prior recaps + onCompleted hook) through here.
- */
-export function createRecapMcpServer(ctx: RecapToolContext): ReturnType<typeof bindInProcess> {
-  return bindInProcess(RECAP_TOOL_BUNDLE, ctx, {
-    beforeToolCall: (toolName, boundCtx) => {
-      boundCtx.toolCalls?.add(toolName);
-    },
-  });
-}
-
 /** Canonical MCP-server name; mirrors the walkthrough's `revv-walkthrough`. */
 export const RECAP_MCP_SERVER = "revv-recap";
-
-/** Tool prefix the Claude SDK applies to MCP-server tools. */
-export const RECAP_TOOL_PREFIX = `mcp__${RECAP_MCP_SERVER}__`;
-
-/** Allowed-tools list to pass into `query()` so the SDK surfaces our tools. */
-export const RECAP_ALLOWED_TOOLS = RECAP_TOOL_SPECS.map((s) => `${RECAP_TOOL_PREFIX}${s.name}`);

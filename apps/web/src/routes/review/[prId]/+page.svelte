@@ -139,6 +139,15 @@ let lastLoadedMode: ReviewMode | null = null;
 let lastLoadedAt = 0;
 const PR_REFETCH_WINDOW_MS = 60_000;
 
+function apiErrorMessage(error: { value?: unknown }, fallback: string): string {
+  const value = error.value;
+  if (typeof value !== "object" || value === null) return fallback;
+  const body = value as Record<string, unknown>;
+  if (typeof body.error === "string" && body.error.length > 0) return body.error;
+  if (typeof body.message === "string" && body.message.length > 0) return body.message;
+  return fallback;
+}
+
 $effect(() => {
   const prId = page.params.prId;
   const mode = reviewMode;
@@ -196,7 +205,7 @@ $effect(() => {
         if (requestId !== currentRequestId) return;
 
         const { data, error } = filesResult;
-        if (error) throw new Error("Failed to fetch PR files");
+        if (error) throw new Error(apiErrorMessage(error, "Failed to fetch PR files"));
         if (Array.isArray(data)) {
           const mapped = data.map((f) => ({
             path: f.path,

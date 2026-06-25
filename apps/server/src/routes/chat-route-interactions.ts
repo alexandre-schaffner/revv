@@ -3,14 +3,13 @@
 // Elysia sub-router for plan/question/agent interaction endpoints.
 // Composed into the main chatRoute via `.use()`.
 
+import { getAgentCapabilities } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
 import { Broadcaster } from "../services/Broadcaster";
 import { ChatSessionService } from "../services/ChatSession";
-import { OpencodeSupervisor } from "../services/OpencodeSupervisor";
-import { takePendingQuestion } from "../services/PendingQuestionRegistry";
 import { PrContextService } from "../services/PrContext";
 import { SettingsService } from "../services/Settings";
 import { handleAppError, jsonResponse, withAuth } from "./middleware";
@@ -34,9 +33,10 @@ export const chatInteractionRoutes = new Elysia()
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-            const agent = yield* settingsService.resolveAgentOrDefault();
+            const settings = yield* settingsService.getSettings();
+            const agent = yield* settingsService.resolveChatAgentId();
             if (!pr.headSha) return;
-            const row = yield* chatSessions.find(pr.id, agent, pr.headSha);
+            const row = yield* chatSessions.find(pr.id, agent, settings.aiModel, pr.headSha);
             if (!row) return;
             yield* chatSessions.setInteractionMode({
               chatSessionId: row.id,
@@ -108,17 +108,13 @@ export const chatInteractionRoutes = new Elysia()
     },
   )
   // ── Question answer ────────────────────────────────────────────────────
-  // One endpoint handles both providers. Branch on the row's `source`:
-  //   • claude:  resolve the in-memory deferred from PendingQuestionRegistry
-  //              with a `behavior: 'deny'` PermissionResult carrying the
-  //              user's answers JSON-stringified. The SDK delivers that
-  //              message back to the model as the tool_result; the next
-  //              assistant message resumes the turn.
-  //   • opencode: POST to the daemon's `/question/{id}/reply` (or `/reject`)
-  //              which is what actually unblocks the daemon-side agent.
-  //              The daemon then broadcasts `question.replied` on its SSE
-  //              channel; our subscribeOpencodeStream surfaces that as a
-  //              follow-up frame which calls decideQuestion idempotently.
+  // The ACP chat transport auto-allows permissions and does not (yet) bridge
+  // `askUserQuestion`, so no new question rows are created and there is no live
+  // agent run to unblock. This endpoint therefore only persists the user's
+  // decision to the authoritative DB row and broadcasts the resolution for
+  // cross-tab parity — there is no provider-side resolution to perform. Kept so
+  // the web question UI's submit path stays a safe, idempotent no-op (and so any
+  // pre-ACP rows left pending in a user's DB can still be marked terminal).
   .post(
     "/api/chat/:prId/question/:questionId/answer",
     async (ctx) => {
@@ -146,11 +142,8 @@ export const chatInteractionRoutes = new Elysia()
           );
         }
 
-        // Persist FIRST so the DB row is authoritative even if the
-        // downstream provider call fails. If the resolve path below
-        // errors out we still leave the row marked terminal — the
-        // in-memory deferred (claude) will reject naturally on stream
-        // close, and the opencode daemon will time out on its end.
+        // Persist the decision to the authoritative DB row. There is no
+        // provider-side run to unblock under ACP — the row IS the resolution.
         const finalStatus: "answered" | "rejected" =
           decision === "reject" ? "rejected" : "answered";
         const decided = await AppRuntime.runPromise(
@@ -166,106 +159,6 @@ export const chatInteractionRoutes = new Elysia()
         if (!decided) {
           ctx.set.status = 404;
           return { code: "QUESTION_NOT_FOUND", message: "Question disappeared mid-write" };
-        }
-
-        if (row.source === "claude") {
-          const deferred = takePendingQuestion(row.providerRequestId);
-          if (!deferred) {
-            // Driver already cleaned up (stream closed, restart, etc).
-            // DB row is now marked terminal; return 410 so the web
-            // client can surface a "question expired" message and
-            // remove the pending UI.
-            ctx.set.status = 410;
-            return {
-              code: "QUESTION_EXPIRED",
-              message:
-                "The agent run that asked this question has ended. Send a new message to continue.",
-            };
-          }
-          if (finalStatus === "rejected") {
-            deferred.resolve({
-              behavior: "deny",
-              message: "User declined to answer the question.",
-              interrupt: false,
-            });
-          } else {
-            // Format the result so the model sees a complete payload.
-            // Claude's `AskUserQuestionOutput` shape uses
-            // `answers: Record<questionText, "label1, label2">` —
-            // match it. Optional free-text customAnswers appended as
-            // a parenthetical so the model can still read it even
-            // though Claude's spec doesn't include it.
-            //
-            // Elysia's `t.Record(...)` validator infers the body
-            // fields as `{}` at the type level, so we cast through
-            // the schema we already validated against (Elysia
-            // guarantees the runtime shape matches).
-            const answersMap = (answers ?? {}) as Record<string, ReadonlyArray<string>>;
-            const customMap = (customAnswers ?? {}) as Record<string, string>;
-            const flatAnswers: Record<string, string> = {};
-            for (const [q, labels] of Object.entries(answersMap)) {
-              const custom = customMap[q];
-              flatAnswers[q] = custom
-                ? labels.length > 0
-                  ? `${labels.join(", ")} (custom: ${custom})`
-                  : `(custom: ${custom})`
-                : labels.join(", ");
-            }
-            deferred.resolve({
-              behavior: "deny",
-              message: JSON.stringify({
-                questions: row.questions,
-                answers: flatAnswers,
-              }),
-              interrupt: false,
-            });
-          }
-        } else {
-          // opencode: hit the daemon via `client.question.{reply,reject}`.
-          // The daemon's follow-up SSE event will hit
-          // subscribeOpencodeStream and fall through to the idempotent
-          // decideQuestion in the stream wrapper — no double-write because
-          // the row is already non-pending.
-          //
-          // 404 = the daemon already cleared the request (e.g. the agent
-          // timed out). Treat as success in both branches.
-          const client = await AppRuntime.runPromise(
-            Effect.gen(function* () {
-              const supervisor = yield* OpencodeSupervisor;
-              yield* supervisor.ensureRunning();
-              return yield* supervisor.client();
-            }),
-          );
-          if (!client) {
-            throw new Error("opencode daemon not running");
-          }
-          if (finalStatus === "rejected") {
-            const result = await client.question.reject({
-              requestID: row.providerRequestId,
-            });
-            if (result.error && result.response.status !== 404) {
-              throw new Error(
-                `opencode reject failed: ${result.response.status} ${result.response.statusText}`,
-              );
-            }
-          } else {
-            // Reconstruct opencode's positional `Array<Array<string>>`
-            // answer order from `(question text → labels)` using the
-            // original question list as the canonical order.
-            const answersMap = (answers ?? {}) as Record<string, ReadonlyArray<string>>;
-            const orderedAnswers: Array<Array<string>> = row.questions.map((q) =>
-              Array.from(answersMap[q.question] ?? []),
-            );
-            const result = await client.question.reply({
-              requestID: row.providerRequestId,
-              answers: orderedAnswers,
-            });
-            if (result.error && result.response.status !== 404) {
-              throw new Error(
-                `opencode reply failed: ${result.response.status} ${result.response.statusText}`,
-              );
-            }
-          }
         }
 
         // ── Auto-supersede pending plan ──────────────────────────
@@ -351,40 +244,18 @@ export const chatInteractionRoutes = new Elysia()
     },
   )
   // ── Agent availability ─────────────────────────────────────────────────
-  // Lightweight probe the frontend uses to decide whether to enable the
-  // composer's Plan-mode toggle for the opencode path. For Claude the
-  // toggle is always available (the SDK supplies `permissionMode: 'plan'`).
+  // Lightweight lookup the frontend uses to decide whether to enable the
+  // composer's Plan-mode toggle. Plan-mode support is a static per-agent
+  // capability defined once in the shared `ACP_AGENTS` registry, so this
+  // endpoint just echoes the configured agent and its `planMode` flag —
+  // adding a new agent never requires touching this handler.
   .get("/api/chat/agents/available", async (ctx) => {
     try {
       const result = await AppRuntime.runPromise(
         Effect.gen(function* () {
           const settingsService = yield* SettingsService;
-          const agent = yield* settingsService.resolveAgentOrDefault();
-          if (agent === "claude") {
-            return {
-              agent: "claude" as const,
-              agents: ["plan", "general-purpose"] as readonly string[],
-              // Claude SDK exposes plan mode via permissionMode.
-              planAvailable: true,
-            };
-          }
-          if (agent === "codex") {
-            // Codex currently requires danger-full-access for MCP tool execution,
-            // so there is no enforceable read-only plan turn yet.
-            return {
-              agent: "codex" as const,
-              agents: [] as readonly string[],
-              planAvailable: false,
-            };
-          }
-          // opencode: probe the supervisor's cached agent list.
-          const supervisor = yield* OpencodeSupervisor;
-          const agents = yield* supervisor.listAgents();
-          return {
-            agent: "opencode" as const,
-            agents,
-            planAvailable: agents.includes("plan"),
-          };
+          const agent = yield* settingsService.resolveChatAgentId();
+          return { agent, planAvailable: getAgentCapabilities(agent).planMode };
         }),
       );
       return jsonResponse(result, 200);

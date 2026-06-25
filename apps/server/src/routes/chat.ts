@@ -20,8 +20,8 @@ import type { InteractionMode } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import type { ChatHistoryEntry } from "../ai/prompts/chat";
-import type { ChatStreamFrame } from "../ai/providers/chat-claude";
-import { AgentUnavailableError } from "../ai/providers/chat-opencode";
+import { AgentUnavailableError } from "../ai/providers/chat-agent-errors";
+import type { ChatStreamFrame } from "../ai/providers/chat-types";
 import { WorktreeBlockedByUnpushedCommits } from "../domain/errors";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
@@ -85,7 +85,9 @@ export const chatRoute = new Elysia()
               const meta = yield* prCtx.prMeta(repo.fullName, pr.externalId, token);
               headSha = meta.headSha;
             }
-            const agent = yield* settingsService.resolveAgentOrDefault();
+            const settings = yield* settingsService.getSettings();
+            const agent = yield* settingsService.resolveChatAgentId();
+            const model = settings.aiModel;
 
             // Check for an existing session BEFORE acquiring the
             // worktree. No row means this is a fresh start (e.g.
@@ -93,7 +95,7 @@ export const chatRoute = new Elysia()
             // worktree we must hard-reset it — stale agent commits
             // may have survived the clear if the reset raced with
             // this new message.
-            const existingSessionRow = yield* chatSessions.find(pr.id, agent, headSha);
+            const existingSessionRow = yield* chatSessions.find(pr.id, agent, model, headSha);
             const isFreshStart = existingSessionRow === null;
 
             // Acquire (or refresh) the per-PR worktree. Shared across
@@ -132,6 +134,7 @@ export const chatRoute = new Elysia()
             const chatSessionRow = yield* chatSessions.findOrCreate({
               prId: pr.id,
               agent,
+              model,
               prHeadSha: headSha,
               worktreePath,
               branchName,
@@ -298,7 +301,6 @@ export const chatRoute = new Elysia()
               chatSessionId: chatSessionRow.id,
               turnId,
               prId: pr.id,
-              agent,
             };
           }),
         );
@@ -333,7 +335,9 @@ export const chatRoute = new Elysia()
         const persistedStream = wrapStreamWithPersistence(prepared.frameStream, {
           chatSessionId: prepared.chatSessionId,
           turnId: prepared.turnId,
-          agent: prepared.agent,
+          // All chat runs on the ACP transport; the specific registry agent is
+          // a launch detail. `source` records the transport.
+          agent: "acp",
         });
 
         // Wrap the persisted stream so we clear the streaming flag
@@ -421,14 +425,15 @@ export const chatRoute = new Elysia()
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-            const agent = yield* settingsService.resolveAgentOrDefault();
+            const settings = yield* settingsService.getSettings();
+            const agent = yield* settingsService.resolveChatAgentId();
 
             if (!pr.headSha) return null;
 
             // Resolve the chat session for the *current* head SHA
             // only. Older SHAs are dormant — the user has moved on
             // and a fresh PR commit creates a fresh session row.
-            const row = yield* chatSessions.find(pr.id, agent, pr.headSha);
+            const row = yield* chatSessions.find(pr.id, agent, settings.aiModel, pr.headSha);
             if (!row) return null;
 
             const timeline = yield* chatSessions.listTimeline(row.id);
@@ -469,7 +474,7 @@ export const chatRoute = new Elysia()
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-            const agent = yield* settingsService.resolveAgentOrDefault();
+            const agent = yield* settingsService.resolveChatAgentId();
 
             // Capture the active worktree before dropping rows so we
             // can rewind it to the PR head SHA below — clearing the

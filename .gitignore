@@ -37,4 +37,5 @@ packages/app/dist/
 .DS_Store
 
 # Tooling
+.context/
 .openlogs/

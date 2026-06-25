@@ -20,7 +20,6 @@ import { AppRuntime } from "../runtime";
 import { Broadcaster } from "../services/Broadcaster";
 import { type CachedDiffFile, DiffCacheService, getOrFetchDiffFiles } from "../services/DiffCache";
 import { GitHubGateway } from "../services/GitHub";
-import { OpencodeSupervisor } from "../services/OpencodeSupervisor";
 import { PollScheduler } from "../services/PollScheduler";
 import { PrContextService } from "../services/PrContext";
 import {
@@ -682,7 +681,6 @@ function resolveSuggestionsForPr(prId: string, accountId: string) {
     const prService = yield* PullRequestService;
     const walkthroughSvc = yield* WalkthroughService;
     const diffCache = yield* DiffCacheService;
-    const supervisor = yield* OpencodeSupervisor;
 
     const settings = yield* settingsSvc.getSettings();
     const agent = yield* settingsSvc.resolveAgent();
@@ -727,17 +725,11 @@ function resolveSuggestionsForPr(prId: string, accountId: string) {
     const cachedFiles = yield* diffCache.getCachedFiles(prId);
     const changedFiles = (cachedFiles ?? []).map((f) => f.path);
 
-    // Build opencode deps lazily — the provider only consults them
-    // when `agent === 'opencode'`. Using the same supervisor
-    // instance that chat/walkthrough share keeps the daemon
-    // single-tenant.
-    const opencodeDeps =
-      agent === "opencode"
-        ? {
-            ensureDaemon: () => Effect.runPromise(supervisor.ensureRunning()),
-            client: () => Effect.runPromise(supervisor.client()),
-          }
-        : undefined;
+    // Suggestions run on the ACP transport. The resolved agent is already a
+    // registry id; the connection is pooled under the server cwd (no tools run,
+    // so the directory is irrelevant — and a shared cwd keeps one warm agent
+    // process serving suggestions across every repo).
+    const acpAgentId = agent;
 
     const suggestions = yield* Effect.tryPromise({
       try: () =>
@@ -748,9 +740,11 @@ function resolveSuggestionsForPr(prId: string, accountId: string) {
           additions: pr.additions,
           deletions: pr.deletions,
           walkthrough: walkthroughContext,
-          agent,
+          acpAgentId,
+          cwd: process.cwd(),
           model,
-          ...(opencodeDeps !== undefined ? { opencodeDeps } : {}),
+          thinkingEffort: settings.aiThinkingEffort,
+          contextWindow: settings.aiContextWindow,
         }),
       // Provider has its own internal fallback; this catch is
       // belt-and-suspenders for the rare case where the Promise

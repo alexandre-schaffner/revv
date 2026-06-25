@@ -752,7 +752,7 @@ function activitiesForTurn(
 					<Message from="assistant">
 						<MessageContent>
 							{#if item.content}
-								<MessageResponse content={item.content} />
+								<MessageResponse content={item.content} linkifyFiles class="w-full" />
 							{/if}
 						</MessageContent>
 					</Message>

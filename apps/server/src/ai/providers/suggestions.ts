@@ -1,32 +1,32 @@
 // ── suggestions ────────────────────────────────────────────────────────────
 //
-// One-shot, no-tools, no-persistence provider for PR-aware chat starter
-// prompts (rendered in the right-panel empty-state). Deliberately bypasses
-// the chat/walkthrough pipelines:
+// One-shot, no-tools provider for PR-aware chat starter prompts (rendered in
+// the right-panel empty-state). Runs over the same ACP transport as chat /
+// walkthrough / recap (see ai/acp/presets.ts) — the single transport that
+// replaced the bespoke claude / opencode / codex drivers — but deliberately
+// bypasses the chat pipeline:
 //
-//   • No MCP tools — the model just reads the inlined PR metadata and writes
-//     back JSON. Spawning the review-context server and waiting for a tool
-//     round-trip would defeat the "cheap, sub-2s" goal.
-//   • No session persistence — these turns must never land in the chat
-//     JSONL on disk, the opencode session store, Codex thread state, or any
-//     history the user can resume into. The suggestions are stateless ephemeral
-//     UI hints.
-//   • Single turn, capped output — enforced by SDK flags (Claude) and by
-//     parsing only the first `text` part out of the response (opencode).
+//   • No MCP tools — the agent gets a fresh ACP session with NO MCP servers
+//     attached, so it has only its built-in tools (which the prompt tells it
+//     not to use). It just reads the inlined PR metadata and writes back JSON.
+//   • Ephemeral — the session id is never surfaced, persisted, or resumed into,
+//     so these throwaway turns can't appear in any history the user can resume.
+//     (The ACP agent may still spool a session file to its own store; that
+//     orphan is unreachable from Revv — an accepted change vs. the SDK path's
+//     `persistSession:false`.)
+//   • Single turn, capped output — we issue one prompt, collect the agent's
+//     text deltas, and parse the first JSON object out of them.
 //
-// On any failure (CLI missing, model error, JSON parse failure, timeout) we
+// On any failure (agent missing, model error, JSON parse failure, timeout) we
 // return {@link FALLBACK_PROMPTS} so the UI always renders three sensible
 // defaults instead of going blank. This is the same array the right panel
 // historically hardcoded — keeping it server-side means the client doesn't
 // need to know about the fallback policy.
 
-import { query } from "@anthropic-ai/claude-agent-sdk";
-import type { AiAgent } from "@revv/shared";
+import type { AcpAgentId, ContextWindow, ThinkingEffort } from "@revv/shared";
 import { debug, logError } from "../../logger";
-import type { OpencodeClient, OpencodeEndpoint } from "../../services/OpencodeSupervisor";
-import { parseOpencodeModel } from "../agent-stream";
-import { resolveCliBin } from "./cli-agent";
-import { startCodexThread } from "./codex-transport";
+import { getAcpConnection } from "../acp/acp-connection";
+import { decodeAcpSessionUpdate, makeAcpDecodeState, withAgentTurn } from "../agent-stream";
 
 export const FALLBACK_PROMPTS: readonly string[] = [
   "What's the riskiest change here?",
@@ -37,11 +37,6 @@ export const FALLBACK_PROMPTS: readonly string[] = [
 const SUGGESTIONS_TIMEOUT_MS = 30_000;
 const MAX_PROMPT_LENGTH = 80;
 const MAX_FILES_LISTED = 30;
-
-export interface OpencodeSuggestionsDeps {
-  readonly ensureDaemon: () => Promise<OpencodeEndpoint>;
-  readonly client: () => Promise<OpencodeClient | null>;
-}
 
 /**
  * Subset of the completed walkthrough we feed into the suggestions prompt.
@@ -69,10 +64,13 @@ export interface GenerateSuggestionsInput {
   readonly additions: number;
   readonly deletions: number;
   readonly walkthrough: SuggestionsWalkthroughContext | null;
-  readonly agent: AiAgent;
+  /** Resolved ACP registry agent id that produces the suggestions. */
+  readonly acpAgentId: AcpAgentId;
+  /** Working directory the ACP connection is pooled under (server cwd is fine — no tools run). */
+  readonly cwd: string;
   readonly model: string;
-  /** Required when `agent === 'opencode'`; ignored otherwise. */
-  readonly opencodeDeps?: OpencodeSuggestionsDeps;
+  readonly thinkingEffort?: ThinkingEffort | undefined;
+  readonly contextWindow?: ContextWindow | undefined;
 }
 
 const SYSTEM_PROMPT = `You are helping a code reviewer skim a pull request. \
@@ -221,142 +219,55 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): P
   }
 }
 
-// ── Claude branch ────────────────────────────────────────────────────────────
+// ── ACP one-shot ─────────────────────────────────────────────────────────────
 
-async function generateViaClaude(input: GenerateSuggestionsInput): Promise<string[]> {
+async function generateViaAcp(input: GenerateSuggestionsInput): Promise<string[]> {
   const userMessage = buildUserMessage(input);
-  const pinned = resolveCliBin("claude");
-  const pathOption = pinned !== "claude" ? { pathToClaudeCodeExecutable: pinned } : {};
-
-  const q = query({
-    prompt: userMessage,
-    options: {
-      systemPrompt: SYSTEM_PROMPT,
-      // No tools: the model just reads the user message and writes
-      // back JSON. No MCP servers, no file access, no shell.
-      allowedTools: [],
-      maxTurns: 1,
-      permissionMode: "default",
-      // Critical: never write a session JSONL for these throwaway turns.
-      persistSession: false,
-      model: input.model,
-      ...pathOption,
-    },
+  const h = await getAcpConnection(input.cwd, input.acpAgentId, {
+    model: input.model,
+    thinkingEffort: input.thinkingEffort,
+    contextWindow: input.contextWindow,
   });
 
+  let sessionId: string | null = null;
   let collected = "";
-  for await (const message of q) {
-    if (
-      (message as { type?: string }).type === "assistant" &&
-      (message as { message?: { content?: unknown } }).message
-    ) {
-      const content = (message as { message: { content: unknown } }).message.content;
-      if (Array.isArray(content)) {
-        for (const block of content) {
-          if (
-            typeof block === "object" &&
-            block !== null &&
-            (block as { type?: string }).type === "text" &&
-            typeof (block as { text?: string }).text === "string"
-          ) {
-            collected += (block as { text: string }).text;
+
+  try {
+    await withAgentTurn<void>({
+      hardTimeoutMs: SUGGESTIONS_TIMEOUT_MS,
+      jobStarted: async () => {
+        h.jobStarted();
+      },
+      jobEnded: async () => {
+        h.jobEnded();
+      },
+      debugLabel: "suggestions-acp",
+      abortSession: async () => {
+        if (sessionId) await h.cancel(sessionId);
+      },
+      run: async () => {
+        // Fresh session, NO MCP servers — the agent has only its built-in
+        // tools and the prompt tells it to just read + answer in JSON.
+        const created = await h.newSession([]);
+        sessionId = created.sessionId;
+        const decodeState = makeAcpDecodeState();
+        h.setListener(sessionId, (update) => {
+          for (const ev of decodeAcpSessionUpdate(update, decodeState)) {
+            if (ev.kind === "text-delta") collected += ev.data;
           }
-        }
-      }
-    }
+        });
+        // ACP has no separate system-prompt channel — prepend it (codex-style).
+        const promptText = `${SYSTEM_PROMPT}\n\n---\n\n${userMessage}`;
+        await h.prompt(sessionId, [{ type: "text", text: promptText }]);
+      },
+    });
+  } finally {
+    if (sessionId) h.setListener(sessionId, null);
   }
 
   const parsed = parsePrompts(collected);
   if (!parsed) {
-    throw new Error(`claude returned unparseable output (len=${collected.length})`);
-  }
-  return parsed;
-}
-
-// ── Opencode branch ──────────────────────────────────────────────────────────
-
-async function generateViaOpencode(
-  input: GenerateSuggestionsInput,
-  deps: OpencodeSuggestionsDeps,
-): Promise<string[]> {
-  await deps.ensureDaemon();
-  const client = await deps.client();
-  if (!client) {
-    throw new Error("OpencodeSupervisor reports daemon-running but no client available");
-  }
-
-  const userMessage = buildUserMessage(input);
-  const wireModel = parseOpencodeModel(input.model);
-
-  // Create an ephemeral session. No MCP servers are attached, so the
-  // daemon has only its built-in tools — and we don't allow any
-  // tools-use round trips because we never re-prompt after the first turn.
-  const created = await client.session.create(
-    { title: `revv-suggestions-${Date.now()}` },
-    { throwOnError: true },
-  );
-  const sessionId = created.data.id;
-
-  try {
-    const promptResult = await client.session.prompt(
-      {
-        sessionID: sessionId,
-        parts: [{ type: "text", text: userMessage }],
-        system: SYSTEM_PROMPT,
-        ...(wireModel !== undefined ? { model: wireModel } : {}),
-      },
-      { throwOnError: true },
-    );
-
-    const response = promptResult.data;
-    const errObj = response.info.error;
-    if (errObj) {
-      throw new Error(`opencode agent error: ${JSON.stringify(errObj).slice(0, 200)}`);
-    }
-
-    // Walk parts in declaration order, concat all text whose messageID
-    // matches the assistant message we just got back. (Same filter pattern
-    // chat-opencode uses to drop user-message echoes.)
-    const assistantMessageId = response.info.id;
-    let collected = "";
-    for (const part of response.parts) {
-      if (
-        part.type === "text" &&
-        (part as { messageID?: string }).messageID === assistantMessageId
-      ) {
-        collected += (part as { text?: string }).text ?? "";
-      }
-    }
-
-    const parsed = parsePrompts(collected);
-    if (!parsed) {
-      throw new Error(`opencode returned unparseable output (len=${collected.length})`);
-    }
-    return parsed;
-  } finally {
-    // Best-effort cleanup of the throwaway session so the daemon doesn't
-    // accumulate stale state across PR opens.
-    try {
-      await client.session.delete({ sessionID: sessionId });
-    } catch {
-      /* ignore */
-    }
-  }
-}
-
-// ── Codex branch ─────────────────────────────────────────────────────────────
-
-async function generateViaCodex(input: GenerateSuggestionsInput): Promise<string[]> {
-  const thread = startCodexThread({
-    workingDirectory: process.cwd(),
-    sandboxMode: "read-only",
-    approvalPolicy: "never",
-    ...(input.model ? { model: input.model } : {}),
-  });
-  const turn = await thread.run(`${SYSTEM_PROMPT}\n\n---\n\n${buildUserMessage(input)}`);
-  const parsed = parsePrompts(turn.finalResponse);
-  if (!parsed) {
-    throw new Error(`codex returned unparseable output (len=${turn.finalResponse.length})`);
+    throw new Error(`acp agent returned unparseable output (len=${collected.length})`);
   }
   return parsed;
 }
@@ -365,19 +276,15 @@ async function generateViaCodex(input: GenerateSuggestionsInput): Promise<string
 
 export async function generateSuggestions(input: GenerateSuggestionsInput): Promise<string[]> {
   try {
-    const work =
-      input.agent === "claude"
-        ? generateViaClaude(input)
-        : input.agent === "codex"
-          ? generateViaCodex(input)
-          : (() => {
-              if (!input.opencodeDeps) {
-                throw new Error("generateSuggestions: opencodeDeps required when agent='opencode'");
-              }
-              return generateViaOpencode(input, input.opencodeDeps);
-            })();
-    const result = await withTimeout(work, SUGGESTIONS_TIMEOUT_MS, `suggestions:${input.agent}`);
-    debug("suggestions", `generated ${result.length} prompts via ${input.agent}/${input.model}`);
+    const result = await withTimeout(
+      generateViaAcp(input),
+      SUGGESTIONS_TIMEOUT_MS,
+      `suggestions:${input.acpAgentId}`,
+    );
+    debug(
+      "suggestions",
+      `generated ${result.length} prompts via ${input.acpAgentId}/${input.model}`,
+    );
     return result;
   } catch (err) {
     // Any failure path — CLI missing, model error, JSON parse fail,

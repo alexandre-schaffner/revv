@@ -46,7 +46,7 @@ export const chatSubagentInvocations = sqliteTable(
     // `content`. Opencode: final assistant text from the sub-agent's
     // message (best-effort). Nullable while running.
     result: text("result"),
-    // 'claude' | 'opencode'
+    // Transport that produced the row: always 'acp'.
     source: text("source").notNull(),
     sequence: integer("sequence").notNull(),
     startedAt: text("started_at").notNull(),

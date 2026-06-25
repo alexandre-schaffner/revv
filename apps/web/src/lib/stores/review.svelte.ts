@@ -658,6 +658,25 @@ export function clearPendingDiffJump(): void {
   pendingDiffJump = null;
 }
 
+/**
+ * Open a changed file in the diff tab, optionally scrolling to a line. Used by
+ * clickable file references in the chat panel: with a line we reuse the
+ * pending-jump scroll machinery; without one we just select the file and switch
+ * tabs. No-ops when the path isn't part of the current review (the file
+ * reference resolver only emits known paths, but a stale render could lag a
+ * fresh pull). Matches against `oldPath` too so a renamed file still resolves.
+ */
+export function openFileInDiff(filePath: string, lineNumber?: number): void {
+  const match = reviewFiles.find((f) => f.path === filePath || f.oldPath === filePath);
+  if (!match) return;
+  if (typeof lineNumber === "number") {
+    jumpToDiffLine(match.path, lineNumber);
+    return;
+  }
+  setActiveFilePath(match.path);
+  setActiveTab("diff");
+}
+
 // --- Pending walkthrough-block jump ---
 // Mirrors the pending-diff-jump pattern: RequestChanges (and potentially other
 // tabs) can request a scroll to a specific walkthrough block without needing a

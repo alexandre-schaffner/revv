@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { and, desc, eq } from "drizzle-orm";
 import { Effect } from "effect";
 import type { ChatWalkthroughContext } from "../ai/prompts/chat";
-import type { ChatStreamFrame, RawChatStreamFrame } from "../ai/providers/chat-claude";
+import type { ChatStreamFrame, RawChatStreamFrame } from "../ai/providers/chat-types";
 import type { Db } from "../db/index";
 import { walkthroughIssues } from "../db/schema/walkthrough-issues";
 import { walkthroughs } from "../db/schema/walkthroughs";
@@ -297,7 +297,7 @@ export interface ProposedCommit {
  */
 export function wrapStreamWithPersistence(
   source: ReadableStream<RawChatStreamFrame>,
-  ctx: { chatSessionId: string; turnId: string; agent: "claude" | "opencode" | "codex" },
+  ctx: { chatSessionId: string; turnId: string; agent: "acp" },
 ): ReadableStream<ChatStreamFrame> {
   return new ReadableStream<ChatStreamFrame>({
     async start(controller) {

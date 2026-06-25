@@ -1,5 +1,5 @@
 <script lang="ts">
-import type { AiAgent, ContextWindow } from "@revv/shared";
+import { type ContextWindow, getAgentCapabilities } from "@revv/shared";
 import Check from "phosphor-svelte/lib/Check";
 import { SvelteMap } from "svelte/reactivity";
 import ProviderIcon from "$lib/components/icons/ProviderIcon.svelte";
@@ -8,11 +8,13 @@ import {
   Root as PopoverRoot,
   Trigger as PopoverTrigger,
 } from "$lib/components/ui/popover/index.js";
+import type { ModelOption } from "$lib/constants/models";
 import {
   areModelsLoaded,
   fetchModels,
   getAvailableModels,
   getSettings,
+  resolveChatAgentId,
   updateSettings,
 } from "$lib/stores/settings.svelte";
 import SelectTrigger from "./SelectTrigger.svelte";
@@ -24,12 +26,19 @@ const CONTEXT_WINDOW_OPTIONS: { label: string; value: ContextWindow }[] = [
 
 let open = $state(false);
 
-let currentAgent = $derived((getSettings()?.aiAgent ?? "opencode") as AiAgent);
-// Read models for the *current* agent straight from the cached store.
-// This eliminates the race where a local fetch could resolve with models
-// for an agent the user has already switched away from.
-let fetchedModels = $derived(getAvailableModels(currentAgent));
-let fetchDone = $derived(areModelsLoaded(currentAgent));
+// The model/context-window surface follows the selected `aiAgent`.
+// Capabilities are the registry's single source of truth.
+let currentId = $derived(resolveChatAgentId(getSettings()));
+let caps = $derived(getAgentCapabilities(currentId));
+// opencode is the only agent whose catalog is fetched live; everything else
+// uses the curated static list baked into the registry.
+let isDynamic = $derived(caps.models === "dynamic");
+let fetchedModels = $derived<ModelOption[]>(
+  caps.models === "dynamic"
+    ? getAvailableModels("opencode")
+    : caps.models.map((m) => ({ label: m.label, value: m.value })),
+);
+let fetchDone = $derived(caps.models === "dynamic" ? areModelsLoaded("opencode") : true);
 let currentModel = $derived(getSettings()?.aiModel ?? "");
 let currentLabel = $derived(
   !fetchDone
@@ -40,13 +49,11 @@ let currentLabel = $derived(
         (currentModel || "Select model")),
 );
 
-// Cache-miss fallback: if the bootstrap prefetch hasn't populated this
-// agent's models yet (e.g. the server was unreachable at app start), kick
-// off a single fetch. `fetchModels` internally de-dupes concurrent calls.
+// Cache-miss fallback for opencode's dynamic catalog: if the bootstrap prefetch
+// hasn't populated it yet, kick off a single (de-duped) fetch.
 $effect(() => {
-  const agent = currentAgent;
-  if (!areModelsLoaded(agent)) {
-    void fetchModels(agent);
+  if (caps.models === "dynamic" && !areModelsLoaded("opencode")) {
+    void fetchModels("opencode");
   }
 });
 
@@ -76,7 +83,7 @@ type ModelGroup = {
 };
 
 let groupedModels = $derived.by((): ModelGroup[] => {
-  if (currentAgent !== "opencode") return [];
+  if (!isDynamic) return [];
   const map = new SvelteMap<string, { label: string; value: string }[]>();
   for (const m of fetchedModels) {
     const p = getProvider(m.value) ?? "__none__";
@@ -111,7 +118,7 @@ function selectWindow(value: ContextWindow) {
 				<ProviderIcon provider={currentProvider} size={14} class="shrink-0 opacity-60 text-text-secondary" />
 			{/snippet}
 			{#snippet trailing()}
-				{#if currentAgent === 'claude'}
+				{#if caps.contextWindow}
 					<span class="text-xs text-text-muted">·</span>
 					<span class="text-xs text-text-secondary">{currentWindow === '1m' ? '1M' : '200K'}</span>
 				{/if}
@@ -123,7 +130,7 @@ function selectWindow(value: ContextWindow) {
 		align="start"
 		side="top"
 	>
-		{#if currentAgent === 'opencode'}
+		{#if isDynamic}
 			{#each groupedModels as group, i (group.provider ?? '__none__')}
 				{#if i > 0}
 					<div class="my-1 border-t border-border"></div>
@@ -161,7 +168,7 @@ function selectWindow(value: ContextWindow) {
 		{/each}
 		{/if}
 
-		{#if currentAgent === 'claude'}
+		{#if caps.contextWindow}
 			<div class="my-1 border-t border-border"></div>
 			<div class="px-2 pt-2 pb-1 text-xs font-medium uppercase tracking-wider text-text-muted">
 				Context Window

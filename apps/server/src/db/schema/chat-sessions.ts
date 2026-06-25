@@ -5,7 +5,7 @@ import { pullRequests } from "./pull-requests";
  * Persistent mapping for the right-pane AI chat session.
  *
  * Each row is the durable handle for a live agent conversation scoped to
- * `(pullRequestId, agent, prHeadSha)`:
+ * `(pullRequestId, agent, model, prHeadSha)`:
  *   - `sessionId`     — the agent-side session UUID. Nullable so the route
  *                       can create the row eagerly when the user sends the
  *                       first message and patch in the agent-side id once
@@ -39,7 +39,8 @@ export const chatSessions = sqliteTable(
     pullRequestId: text("pull_request_id")
       .notNull()
       .references(() => pullRequests.id, { onDelete: "cascade" }),
-    agent: text("agent").notNull(), // 'claude' | 'opencode'
+    agent: text("agent").notNull(), // ACP registry id: 'claude-code' | 'opencode' | 'codex' | 'cursor'
+    model: text("model").notNull().default(""),
     sessionId: text("session_id"),
     prHeadSha: text("pr_head_sha").notNull(),
     worktreePath: text("worktree_path").notNull(),
@@ -55,9 +56,10 @@ export const chatSessions = sqliteTable(
     lastActivityAt: text("last_activity_at").notNull(),
   },
   (t) => ({
-    prAgentShaUnique: uniqueIndex("chat_sessions_pr_agent_sha_unique").on(
+    prAgentModelShaUnique: uniqueIndex("chat_sessions_pr_agent_model_sha_unique").on(
       t.pullRequestId,
       t.agent,
+      t.model,
       t.prHeadSha,
     ),
   }),

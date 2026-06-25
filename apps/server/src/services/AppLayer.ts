@@ -17,7 +17,6 @@ import { GitHubGatewayLive } from "./GitHub";
 import { GitHubEtagCacheLive } from "./GitHubEtagCache";
 import { IdentityLive } from "./Identity";
 import { OnboardingServiceLive } from "./Onboarding";
-import { OpencodeSupervisorLive } from "./OpencodeSupervisor";
 import { PollSchedulerLive } from "./PollScheduler";
 import { PrContextServiceLive } from "./PrContext";
 import { ProjectRecapServiceLive } from "./ProjectRecap";
@@ -55,13 +54,6 @@ const GitHubGatewayWithDeps = GitHubGatewayLive.pipe(
   Layer.provide(Layer.mergeAll(GitHubEtagCacheLive, SettingsServiceWithDeps)),
 );
 
-// OpencodeSupervisor depends on DbService + SettingsService (for detecting
-// agent-changed + resolving the selected agent). It's in BaseLayers because
-// AiService needs it; AiService in turn is consumed by WalkthroughJobs.
-const OpencodeSupervisorWithDeps = OpencodeSupervisorLive.pipe(
-  Layer.provide(Layer.mergeAll(DbServiceLive, SettingsServiceWithDeps)),
-);
-
 // ChatSessionService is a thin Drizzle wrapper for the right-pane chat —
 // uses Layer.effect to grab `db` at construction, so we satisfy DbService
 // at the same boundary other DB-dependent services do.
@@ -89,7 +81,6 @@ const BaseLayers = Layer.mergeAll(
   FileContentServiceLive,
   CacheServiceLive,
   OnboardingServiceLive,
-  OpencodeSupervisorWithDeps,
   ChatSessionServiceWithDeps,
   ChatMcpTokensLive,
   // Unified cache layer (M1 Foundations) — InvalidationBus is live with zero

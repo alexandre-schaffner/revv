@@ -1,5 +1,5 @@
 <script lang="ts">
-import type { AiAgent, ThinkingEffort } from "@revv/shared";
+import { getAgentCapabilities, type ThinkingEffort } from "@revv/shared";
 import Brain from "phosphor-svelte/lib/Brain";
 import Check from "phosphor-svelte/lib/Check";
 import {
@@ -7,24 +7,30 @@ import {
   Root as PopoverRoot,
   Trigger as PopoverTrigger,
 } from "$lib/components/ui/popover/index.js";
-import { agentSupportsThinkingEffort, thinkingEffortOptionsFor } from "$lib/constants/models";
-import { getSettings, updateSettings } from "$lib/stores/settings.svelte";
+import { THINKING_EFFORT_OPTIONS } from "$lib/constants/models";
+import { getSettings, resolveChatAgentId, updateSettings } from "$lib/stores/settings.svelte";
 import SelectTrigger from "./SelectTrigger.svelte";
 
 let open = $state(false);
-let currentAgent = $derived((getSettings()?.aiAgent ?? "opencode") as AiAgent);
-let currentModel = $derived(getSettings()?.aiModel ?? "");
-let visible = $derived(agentSupportsThinkingEffort(currentAgent));
-let options = $derived(thinkingEffortOptionsFor(currentAgent, currentModel));
+// Thinking-effort options follow the selected chat agent's capabilities.
+let currentId = $derived(resolveChatAgentId(getSettings()));
+let caps = $derived(getAgentCapabilities(currentId));
+let visible = $derived(caps.thinkingEfforts.length > 0);
+let options = $derived(
+  THINKING_EFFORT_OPTIONS.filter((o) => caps.thinkingEfforts.includes(o.value)),
+);
 let currentEffort = $derived((getSettings()?.aiThinkingEffort ?? "medium") as ThinkingEffort);
-let currentLabel = $derived(options.find((o) => o.value === currentEffort)?.label ?? "High");
+let currentLabel = $derived(
+  options.find((o) => o.value === currentEffort)?.label ?? options[0]?.label ?? "High",
+);
 
-// If the selected effort isn't valid for the current agent/model (e.g. an
-// opus-only tier after switching off Opus 4.8, or an ultrathink/max tier
-// after switching to codex), reset to a level that always exists.
+// If the selected effort isn't valid for the current agent (e.g. an opus-only
+// tier after switching to codex, or any tier after switching to an agent with
+// no thinking-effort knob), reset to one the agent supports.
 $effect(() => {
-  if (visible && !options.some((o) => o.value === currentEffort)) {
-    updateSettings({ aiThinkingEffort: "high" });
+  if (visible && !caps.thinkingEfforts.includes(currentEffort)) {
+    const fallback = caps.thinkingEfforts.includes("high") ? "high" : caps.thinkingEfforts[0];
+    if (fallback) updateSettings({ aiThinkingEffort: fallback });
   }
 });
 

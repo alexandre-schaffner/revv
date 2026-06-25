@@ -41,6 +41,7 @@
 //   - if not, `git merge --abort` so the worktree returns to a clean
 //     `pr-{N}` checkout and the user can decide what to do.
 
+import { ACP_AGENT_IDS } from "@revv/shared";
 import { Context, Data, Effect, Layer, Queue } from "effect";
 import { serverEnv } from "../config";
 import {
@@ -52,7 +53,7 @@ import {
 import { logError } from "../logger";
 import { AiService } from "./Ai";
 import { Broadcaster } from "./Broadcaster";
-import { ChatSessionService } from "./ChatSession";
+import { type ChatSessionRow, ChatSessionService } from "./ChatSession";
 import type { DbService } from "./Db";
 import type { GitHubEtagCache } from "./GitHubEtagCache";
 import {
@@ -295,11 +296,22 @@ export const ChatChangesPushServiceLive = Layer.effect(
           );
         }
 
-        // Find a chat session for the PR's current head SHA. Try both
-        // agent flavors — pick whichever one has commits.
-        const opencodeSession = yield* chatSessions.find(pr.id, "opencode", pr.headSha);
-        const claudeSession = yield* chatSessions.find(pr.id, "claude", pr.headSha);
-        const session = opencodeSession ?? claudeSession;
+        // Find a chat session for the PR. Prefer the currently-configured
+        // chat agent, then fall back to any other ACP agent that has a
+        // session for this PR (the user may have switched agents after the
+        // conversation was created). Scanning the full registry keeps this in
+        // step with `ACP_AGENT_IDS` instead of a hand-maintained agent list.
+        const settingsService = yield* SettingsService;
+        const configuredAgent = yield* settingsService.resolveChatAgentId();
+        const agentOrder = [
+          configuredAgent,
+          ...ACP_AGENT_IDS.filter((id) => id !== configuredAgent),
+        ];
+        let session: ChatSessionRow | null = null;
+        for (const agent of agentOrder) {
+          session = yield* chatSessions.findLatestForPr(pr.id, agent);
+          if (session) break;
+        }
         if (!session) {
           return yield* Effect.fail(new NoChatSessionError({ prId: params.prId }));
         }

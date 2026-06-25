@@ -1,3 +1,4 @@
+import { ACP_AGENT_IDS, type AcpAgentId, isAcpAgentId } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { listCliModels } from "../ai/providers/cli-agent";
@@ -9,6 +10,12 @@ import { PollScheduler } from "../services/PollScheduler";
 import { SettingsService } from "../services/Settings";
 import { handleAppError } from "./middleware";
 import { updateChannelSchema } from "./schemas";
+
+// Registry-derived literal unions for request validation — adding an ACP agent
+// to the shared registry extends these automatically.
+const acpAgentLiterals = ACP_AGENT_IDS.map((id) => t.Literal(id));
+const aiAgentSchema = t.Union(acpAgentLiterals);
+const recapAgentSchema = t.Union([t.Literal("auto"), ...acpAgentLiterals]);
 
 export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
   .get("/", async (ctx) => {
@@ -57,7 +64,7 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
           ]),
           aiContextWindow: t.Union([t.Literal("200k"), t.Literal("1m")]),
           aiMaxTurns: t.Number({ minimum: 10, maximum: 500 }),
-          aiAgent: t.Union([t.Literal("opencode"), t.Literal("claude"), t.Literal("codex")]),
+          aiAgent: aiAgentSchema,
           theme: t.Union([t.Literal("system"), t.Literal("light"), t.Literal("dark")]),
           diffViewMode: t.Union([t.Literal("unified"), t.Literal("split")]),
           autoFetchInterval: t.Number(),
@@ -68,12 +75,7 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
               enabled: t.Boolean(),
               dailyEnabled: t.Boolean(),
               weeklyEnabled: t.Boolean(),
-              agent: t.Union([
-                t.Literal("auto"),
-                t.Literal("opencode"),
-                t.Literal("claude"),
-                t.Literal("codex"),
-              ]),
+              agent: recapAgentSchema,
             }),
           ),
           cache: t.Partial(
@@ -333,14 +335,10 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
     async (ctx) => {
       try {
         const agentParam = ctx.query?.agent;
-        let agent: "opencode" | "claude" | "codex";
-        if (agentParam === "opencode" || agentParam === "claude" || agentParam === "codex") {
-          agent = agentParam;
-        } else {
-          agent = await AppRuntime.runPromise(
-            Effect.flatMap(SettingsService, (s) => s.resolveAgent()),
-          );
-        }
+        const agent: AcpAgentId =
+          agentParam && isAcpAgentId(agentParam)
+            ? agentParam
+            : await AppRuntime.runPromise(Effect.flatMap(SettingsService, (s) => s.resolveAgent()));
         const models = await listCliModels(agent);
         return { models, agent };
       } catch (e) {
@@ -350,9 +348,7 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
     {
       query: t.Optional(
         t.Object({
-          agent: t.Optional(
-            t.Union([t.Literal("opencode"), t.Literal("claude"), t.Literal("codex")]),
-          ),
+          agent: t.Optional(aiAgentSchema),
         }),
       ),
     },
