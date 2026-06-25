@@ -403,8 +403,13 @@ function handlePathKey(e: KeyboardEvent) {
 			</div>
 
 				<div class="repo-actions">
-					<button class="skip" onclick={() => (mode = 'link')}>
-						Open an existing clone instead →
+					<button class="alt-path" onclick={() => (mode = 'link')}>
+						<FolderOpen size={17} />
+						<span class="alt-path-text">
+							<span class="alt-path-title">Open an existing clone instead</span>
+							<span class="alt-path-sub">Link a repository already cloned to this machine</span>
+						</span>
+						<span class="alt-path-arrow" aria-hidden="true">→</span>
 					</button>
 					{#if onSkip}
 						<button class="skip" onclick={onSkip}>
@@ -469,7 +474,7 @@ function handlePathKey(e: KeyboardEvent) {
 				<div class="link-actions">
 					<button class="skip" onclick={() => (mode = 'browse')}>Back</button>
 					<button class="link-submit" onclick={() => void submitLink()} disabled={!canLink}>
-						<LinkSimple size={13} weight="bold" />
+						<LinkSimple size={14} weight="bold" />
 						<span>Link this repository</span>
 					</button>
 				</div>
@@ -583,16 +588,19 @@ function handlePathKey(e: KeyboardEvent) {
 		align-items: center;
 		gap: 6px;
 		align-self: center;
-		border: 1px solid var(--ob-border);
-		border-radius: 999px;
+		border: 1px solid var(--ob-border-btn);
+		border-radius: 2px;
 		background: transparent;
-		padding: 6px 10px;
+		padding: 7px 11px;
 		color: var(--ob-text-label);
 		font-family: var(--font-mono, 'JetBrains Mono', monospace);
 		font-size: 10.5px;
 		letter-spacing: 0.12em;
 		text-transform: uppercase;
 		cursor: pointer;
+		transition:
+			color var(--duration-snap) var(--ease-out-expo),
+			border-color var(--duration-snap) var(--ease-out-expo);
 	}
 
 	.browse-button:disabled {
@@ -767,17 +775,98 @@ function handlePathKey(e: KeyboardEvent) {
 		white-space: nowrap;
 	}
 
-	.repo-actions,
+	.repo-actions {
+		display: flex;
+		flex-direction: column;
+		align-items: stretch;
+		gap: 14px;
+	}
+
 	.link-actions {
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
-		justify-content: flex-end;
+		justify-content: space-between;
 		gap: 12px;
 	}
 
+	/* The second path: linking a clone already on disk. A real, visible
+	   choice — bordered, icon-led, serif — not a dimmed dismiss link. */
+	.alt-path {
+		display: flex;
+		align-items: center;
+		gap: 14px;
+		width: 100%;
+		padding: 14px 16px;
+		border: 1px solid var(--ob-border);
+		border-radius: 2px;
+		background: transparent;
+		text-align: left;
+		cursor: pointer;
+		transition:
+			border-color var(--duration-snap) var(--ease-out-expo),
+			background-color var(--duration-snap) var(--ease-out-expo),
+			transform var(--duration-smooth) var(--ease-out-expo);
+	}
+
+	.alt-path :global(svg) {
+		flex-shrink: 0;
+		color: var(--ob-text-label);
+		transition: color var(--duration-snap) var(--ease-out-expo);
+	}
+
+	.alt-path-text {
+		display: flex;
+		flex-direction: column;
+		gap: 3px;
+		min-width: 0;
+	}
+
+	.alt-path-title {
+		font-family: 'Newsreader', Georgia, serif;
+		font-style: italic;
+		font-size: 16px;
+		font-weight: 500;
+		letter-spacing: 0.01em;
+		color: var(--ob-text-heading);
+	}
+
+	.alt-path-sub {
+		font-family: var(--font-mono, 'JetBrains Mono', monospace);
+		font-size: 10px;
+		letter-spacing: 0.08em;
+		color: var(--ob-text-muted);
+	}
+
+	.alt-path-arrow {
+		margin-left: auto;
+		font-family: 'Newsreader', Georgia, serif;
+		font-size: 18px;
+		color: var(--ob-text-dimmed);
+		transition:
+			transform var(--duration-smooth) var(--ease-out-expo),
+			color var(--duration-snap) var(--ease-out-expo);
+	}
+
+	.alt-path:hover {
+		border-color: var(--ob-text-italic);
+		background: var(--ob-hover-subtle);
+	}
+
+	.alt-path:hover :global(svg),
+	.alt-path:hover .alt-path-arrow {
+		color: var(--ob-text-italic);
+	}
+
+	.alt-path:hover .alt-path-arrow {
+		transform: translateX(4px);
+	}
+
+	.alt-path:active {
+		transform: scale(0.99);
+	}
+
 	.skip {
-		align-self: flex-end;
 		background: none;
 		border: 0;
 		padding: 6px 0;
@@ -790,35 +879,60 @@ function handlePathKey(e: KeyboardEvent) {
 		transition: color var(--duration-snap) var(--ease-out-expo);
 	}
 
+	/* Quiet dismiss sits below the alt-path, right-aligned. */
+	.repo-actions .skip {
+		align-self: flex-end;
+	}
+
 	.skip:hover {
 		color: var(--ob-text-label);
 	}
 
+	/* Matches the onboarding primary CTA (StepWelcome / StepHost): 2px
+	   outline rectangle, serif italic — never the pill it used to be. */
 	.link-submit {
 		display: inline-flex;
 		align-items: center;
-		gap: 7px;
-		border: 1px solid var(--ob-text-label);
-		border-radius: 999px;
-		background: var(--ob-text-heading);
-		padding: 8px 13px;
-		color: var(--ob-surface, #faf9f6);
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 10.5px;
-		letter-spacing: 0.12em;
-		text-transform: uppercase;
+		gap: 10px;
+		padding: 11px 20px;
+		border: 1px solid var(--ob-border-btn);
+		border-radius: 2px;
+		background: transparent;
+		color: var(--ob-text-heading);
+		font-family: 'Newsreader', Georgia, serif;
+		font-style: italic;
+		font-size: 16px;
+		font-weight: 500;
+		letter-spacing: 0.01em;
 		cursor: pointer;
+		transition:
+			border-color var(--duration-snap) var(--ease-out-expo),
+			color var(--duration-snap) var(--ease-out-expo),
+			background-color var(--duration-snap) var(--ease-out-expo),
+			transform var(--duration-smooth) var(--ease-out-expo);
+	}
+
+	.link-submit :global(svg) {
+		color: var(--ob-text-label);
+		transition: color var(--duration-snap) var(--ease-out-expo);
 	}
 
 	.link-submit:disabled {
-		border-color: var(--ob-border);
-		background: transparent;
-		color: var(--ob-text-dimmed);
-		cursor: default;
+		opacity: 0.4;
+		cursor: not-allowed;
 	}
 
 	.link-submit:not(:disabled):hover {
-		background: var(--ob-text-label);
+		border-color: var(--ob-text-italic);
+		color: var(--ob-text-heading-bright);
+	}
+
+	.link-submit:not(:disabled):hover :global(svg) {
+		color: var(--ob-text-italic);
+	}
+
+	.link-submit:not(:disabled):active {
+		transform: scale(0.99);
 	}
 
 	.skip-waiting {
