@@ -186,59 +186,7 @@ let tree: FileTree | null = null;
 let clickHandler: (() => void) | null = null;
 // Cleanup handle for the capture-phase keydown gate — replaced on each tree build.
 let keyHandler: ((event: KeyboardEvent) => void) | null = null;
-// Cached reference to the shadow-root scroller and its scroll listener, so
-// we can detach the previous listener when the tree is rebuilt (and on
-// destroy). The listener drives `data-scrolled-x` on the host, which gates
-// the left-edge fade overlay defined in the component style block below.
-let scrollerEl: HTMLElement | null = null;
-let scrollHandler: (() => void) | null = null;
 
-// Push the scroll container's current `scrollWidth` into a CSS variable
-// (`--tree-row-min-width`) on the host so every row can adopt the same
-// minimum width — otherwise short rows clamp their `position: sticky;
-// right: 0` decoration child at `row.right`, which is to the *left* of
-// the scroll port for any narrow row when the tree has been scrolled
-// horizontally. The result is LOC badges at varying X positions per
-// row. Tracking the running max (monotonic) is enough: once we've seen
-// the widest row, all other rows widen to match via `min-width: max(var,
-// 100%)`, and scrollWidth stabilises at that max. `host.clientWidth`
-// is folded in as a floor so the var is never below viewport width
-// (the `100%` fallback resolves unreliably for flex items in
-// column-direction containers, especially inside `max()`).
-function syncRowMinWidth(): void {
-  if (!scrollerEl || !host) return;
-  const w = Math.max(scrollerEl.scrollWidth, host.clientWidth);
-  const current = parseFloat(host.style.getPropertyValue("--tree-row-min-width") || "0");
-  if (w > current) {
-    host.style.setProperty("--tree-row-min-width", `${w}px`);
-  }
-}
-
-function attachHorizontalScrollFade(): void {
-  // The scroller lives inside @pierre/trees' shadow root. Scroll events
-  // don't cross shadow boundaries, so the listener has to be attached
-  // *inside* the shadow root — there's no way to drive this purely
-  // from CSS yet (no stable `:scroll-start` / scroll-state queries).
-  const scroller = tree
-    ?.getFileTreeContainer()
-    ?.shadowRoot?.querySelector<HTMLElement>('[data-file-tree-virtualized-scroll="true"]');
-  if (!scroller || !host) return;
-  if (scrollerEl === scroller) return;
-  if (scrollerEl && scrollHandler) {
-    scrollerEl.removeEventListener("scroll", scrollHandler);
-  }
-  scrollerEl = scroller;
-  const sync = (): void => {
-    host.toggleAttribute("data-scrolled-x", scroller.scrollLeft > 0);
-    // Vertical scrolling can reveal newly-rendered wider rows
-    // (virtualization), so refresh the row-width cap on every
-    // scroll event. Cheap: monotonic comparison, single var set.
-    syncRowMinWidth();
-  };
-  scrollHandler = sync;
-  scroller.addEventListener("scroll", sync, { passive: true });
-  sync();
-}
 // Remembers what `initialExpansion` the live tree was constructed with.
 // When the prop flips (e.g. user toggles file-tree scope), we tear the
 // tree down and rebuild instead of taking the cheap `resetPaths` path —
@@ -378,24 +326,16 @@ $effect(() => {
 						 * here: drop the stable gutter and force symmetric 2px
 						 * padding so each row's effective inset (2px container + 2px
 						 * item-margin + 8px item-padding = 12px) matches \`px-3\` on
-						 * both sides.
-						 *
-						 * \`overflow-x: auto\` swaps Pierre's default middle-truncate
-						 * behavior for horizontal scrolling — see the row /
-						 * content / truncate-container overrides further down for
-						 * the matching half of that change. */
+						 * both sides. */
 						[data-file-tree-virtualized-scroll='true'] {
 							scrollbar-gutter: auto;
 							padding-inline: 2px;
-							overflow-x: auto;
-							/* macOS rubber-band at the natural max scroll position
-							 * is what made reaching the end feel jumpy — \`contain\`
-							 * suppresses the bounce without preventing scroll
-							 * chaining elsewhere. The trailing scroll room itself
-							 * comes from the phantom rows appended to the path set
-							 * (see PHANTOM_PATHS above); CSS padding-block-end
-							 * would be snapped back instantly by FileTreeView's
-							 * update loop. */
+							/* Suppress vertical rubber-band / scroll-chaining to the
+							 * parent. The trailing scroll room that lets the last
+							 * file clear the bottom \`.sidebar-fade\` comes from the
+							 * phantom rows appended to the path set (see
+							 * PHANTOM_PATHS above); CSS padding-block-end would be
+							 * snapped back instantly by FileTreeView's update loop. */
 							overscroll-behavior: contain;
 						}
 						/* Phantom rows exist solely to extend the library's
@@ -412,122 +352,32 @@ $effect(() => {
 							visibility: hidden;
 							pointer-events: none;
 						}
-						/* ── Horizontal scroll instead of middle-truncation ─────
+						/* ── Filename truncation + fixed LOC gutter ─────────────
 						 * Pierre absolute-positions every row with inline
-						 * \`left:0; right:0\`, which pins each row to the scroll
-						 * container's width and lets MiddleTruncate kick in once
-						 * the filename overflows. We'd rather show the full path
-						 * and let the user scroll sideways. Releasing \`right\`
-						 * (needs \`!important\` to beat the inline style) lets
-						 * each row size to its own content while still filling
-						 * the viewport for hover/click on short filenames.
-						 *
-						 * \`min-width: max(var(--tree-row-min-width, 0px), 100%)\`
-						 * is the key to keeping the per-row sticky LOC badge
-						 * aligned across the whole tree: every row adopts at
-						 * least the *widest* row's width (tracked in
-						 * \`--tree-row-min-width\` by \`syncRowMinWidth()\`), so
-						 * every row's containing block extends to the scroll
-						 * port's right edge — and the sticky decoration cell
-						 * (clamped within its containing block) lands at the
-						 * same X no matter which row owns it. Without this,
-						 * narrow rows clamp their sticky child at the row's
-						 * own right edge, leaving badges at varying X
-						 * positions per row. */
-						button[data-type='item'] {
-							right: auto !important;
-							width: -moz-max-content;
-							width: max-content;
-							min-width: max(var(--tree-row-min-width, 0px), 100%);
-						}
-						/* Content cell: intrinsic width, no shrinking, no
-						 * ellipsis. With this in place MiddleTruncate's grid
-						 * never registers overflow, so its marker stays hidden
-						 * — but we also explicitly disable the container's
-						 * clip below so the full name lays out cleanly. */
+						 * \`left:0; right:0\` and middle-truncates the filename
+						 * (keeping the extension) once it overflows. That's the
+						 * behavior we want, so we DON'T override row sizing — rows
+						 * fill the viewport and the name truncates to fit. The
+						 * only nudge the content cell needs is \`min-width: 0\` so
+						 * it can shrink below its intrinsic width and let
+						 * MiddleTruncate engage. */
 						button[data-type='item'] > [data-item-section='content'] {
-							flex: 0 0 auto;
 							min-width: 0;
-							max-width: none;
-							overflow: visible;
-							white-space: nowrap;
 						}
-						button[data-type='item'] [data-truncate-container] {
-							overflow: visible;
-							height: auto;
-						}
-						/* Decoration cell: pinned to the *viewport's* right
-						 * edge via \`position: sticky; right: 0\` so every
-						 * row's LOC badge vertically aligns regardless of
-						 * horizontal scroll position. \`margin-inline-start:
-						 * auto\` still pushes the cell to the row's trailing
-						 * edge when the row fits the viewport (sticky is a
-						 * no-op then); once the row grows wider than the
-						 * scroll port, sticky parks the cell against the
-						 * right edge while the filename scrolls behind it.
-						 *
-						 * \`background-color: inherit\` carries the row's
-						 * current bg (incl. hover / selected state) so the
-						 * badge text reads cleanly over the filename
-						 * scrolling underneath rather than overlapping it.
-						 *
-						 * \`padding-inline-start\` keeps a small gap between
-						 * filename and \`+N\`/\`-N\` glyphs. \`z-index\` lifts
-						 * the cell above the row's content section so the
-						 * sticky bg occludes scrolling text rather than
-						 * being painted under it (DOM order alone suffices
-						 * in static flow, but sticky's stacking-context
-						 * interactions with absolute-positioned rows want
-						 * an explicit lift). */
+						/* Decoration cell: a plain fixed-width trailing gutter.
+						 * The name truncates *before* it, so the LOC count is
+						 * always fully visible at any panel width — no sticky, no
+						 * mask, no horizontal scroll. \`margin-inline-start: auto\`
+						 * parks it at the row's trailing edge; \`min-width\`
+						 * reserves the column even for additions-only files (\`+1\`)
+						 * so the leading edge doesn't zigzag row to row.
+						 * \`pad-start + 2.25em + 4px gap + 2.5em\` ≈ 12 + 22 + 4 +
+						 * 25 = 63px. */
 						button[data-type='item'] > [data-item-section='decoration'] {
 							flex: 0 0 auto;
 							margin-inline-start: auto;
-							/* Wider gap so the leading fade has room to
-							 * resolve before the badge text starts. */
 							padding-inline-start: 12px;
-							/* Reserve the LOC column even when only one
-							 * pseudo is present (e.g. \`+1\`), so the column
-							 * doesn't visually collapse for additions-only
-							 * files. \`pad-start + 2.25em + 4px gap + 2.5em\`
-							 * ≈ 12 + 22 + 4 + 25 = 63px. */
 							min-width: 64px;
-							position: sticky;
-							right: 0;
-							z-index: 1;
-							background-color: inherit;
-							/* Force a compositing layer. Belt-and-suspenders
-							 * for WebKit's historical bugs around
-							 * \`position: sticky\` inside \`position: absolute\`
-							 * parents — without it, some Safari builds skip
-							 * the sticky offset and leave the cell parked at
-							 * the row's trailing edge (which is past the
-							 * scroll port for long filenames). */
-							transform: translateZ(0);
-							/* Soften the boundary between the scrolling
-							 * filename and the pinned LOC badge. The opaque
-							 * \`background-color\` still occludes the text;
-							 * the mask just feathers the leading edge so
-							 * the cut doesn't read as a hard 1px line.
-							 *
-							 * Four-stop ease-out curve so both ends of the row
-							 * feather with the same hand as the host-level
-							 * mask on the opposite edge. */
-							-webkit-mask-image: linear-gradient(
-								to right,
-								transparent 0,
-								rgba(0, 0, 0, 0.25) 4px,
-								rgba(0, 0, 0, 0.7) 9px,
-								rgba(0, 0, 0, 0.94) 12px,
-								black 14px
-							);
-							mask-image: linear-gradient(
-								to right,
-								transparent 0,
-								rgba(0, 0, 0, 0.25) 4px,
-								rgba(0, 0, 0, 0.7) 9px,
-								rgba(0, 0, 0, 0.94) 12px,
-								black 14px
-							);
 						}
 					`,
         // ── Right-side line-count badge ────────────────────────────
@@ -566,25 +416,9 @@ $effect(() => {
           }
         },
       });
-      // Seed the row-width floor before render so the first layout
-      // pass already has viewport-width baked into `min-width`; without
-      // this, rows flash as content-fit pills until the first raf-sync.
-      if (host.clientWidth > 0) {
-        host.style.setProperty("--tree-row-min-width", `${host.clientWidth}px`);
-      }
       tree.render({ containerWrapper: host });
       // Inject per-path colour rules now that the shadow root exists.
       syncStatsStyle();
-      // Wire up the horizontal-scroll fade listener — has to wait until
-      // after `render()` because that's when the shadow root materialises
-      // its virtualized scroller node. The listener also seeds the
-      // initial row-width cap via `syncRowMinWidth()` on its first
-      // `sync()` call.
-      attachHorizontalScrollFade();
-      // Pierre lays out rows on the next frame, so the very first
-      // `scrollWidth` read inside `attachHorizontalScrollFade`'s
-      // initial `sync()` undercounts. Re-measure once layout settles.
-      requestAnimationFrame(syncRowMinWidth);
       liveExpansion = expansion;
 
       // Re-fire onSelect when the user clicks an already-selected item.
@@ -655,19 +489,6 @@ $effect(() => {
       tree.resetPaths(withPhantomPaths(currentPaths));
       tree.setGitStatus(initialGitStatus);
       syncStatsStyle();
-      // Reset the row-width cap to the viewport floor: the new path
-      // set could have a different widest row, and we don't want the
-      // previous PR's cap to leak into this one (would over-stretch
-      // every row). Seeding (rather than removing) prevents a
-      // content-pill flash between this update and the next raf-sync.
-      if (host.clientWidth > 0) {
-        host.style.setProperty("--tree-row-min-width", `${host.clientWidth}px`);
-      } else {
-        host.style.removeProperty("--tree-row-min-width");
-      }
-      // Re-measure on the next frame, once Pierre has rendered the
-      // new path list and the inner scrollWidth reflects it.
-      requestAnimationFrame(syncRowMinWidth);
     }
   });
 });
@@ -822,19 +643,45 @@ onDestroy(() => {
     host?.removeEventListener("keydown", keyHandler, true);
     keyHandler = null;
   }
-  if (scrollerEl && scrollHandler) {
-    scrollerEl.removeEventListener("scroll", scrollHandler);
-    scrollerEl = null;
-    scrollHandler = null;
-  }
   tree?.cleanUp();
   tree = null;
 });
 </script>
 
-<div bind:this={host} class="pierre-tree-host" tabindex="-1"></div>
+<div class="pierre-tree-wrap">
+	<div bind:this={host} class="pierre-tree-host" tabindex="-1"></div>
+</div>
 
 <style>
+	/* Containment context for the narrow-panel indent query below. The wrap
+	   is the flex child of the sidebar pane; the host fills it. `inline-size`
+	   containment lets `@container` react to the panel width without a
+	   ResizeObserver. */
+	.pierre-tree-wrap {
+		flex: 1;
+		min-height: 0;
+		display: flex;
+		flex-direction: column;
+		container-type: inline-size;
+		container-name: filetree;
+	}
+
+	/* As the panel narrows, tighten the per-level indent so deep paths leave
+	   more room for the filename before it truncates. Pierre derives each
+	   level's indent from `--trees-level-gap` (default `8px * density`); we
+	   override it directly. Two steps so it degrades smoothly rather than
+	   snapping. The LOC gutter is fixed-width and unaffected. */
+	@container filetree (width <= 250px) {
+		.pierre-tree-host {
+			--trees-level-gap-override: 6px;
+		}
+	}
+	@container filetree (width <= 215px) {
+		.pierre-tree-host {
+			--trees-level-gap-override: 4px;
+		}
+	}
+
 	.pierre-tree-host {
 		flex: 1;
 		min-height: 0;
@@ -869,57 +716,5 @@ onDestroy(() => {
 
 	.pierre-tree-host:focus {
 		outline: none;
-	}
-
-	/* Left-edge fade for the horizontal-scroll cue, implemented as a CSS
-	   mask on the host (not an opaque overlay) so the row's own background
-	   — selection tint, hover tint — dissolves into the parent's bg rather
-	   than being painted over. The mask is always applied; we slide its
-	   position to gate visibility. At rest, `mask-position-x: -8px` puts
-	   the transparent ramp off-screen to the left; `data-scrolled-x` moves
-	   it to `0`. `mask-size: calc(100% + 8px)` keeps the opaque tail
-	   covering the host's right edge in both states. `mask-position` is
-	   the interpolable handle for the snap-duration transition. */
-	.pierre-tree-host {
-		-webkit-mask-image: linear-gradient(
-			to right,
-			rgba(0, 0, 0, 0) 0,
-			rgba(0, 0, 0, 0.14) 2px,
-			rgba(0, 0, 0, 0.5) 4px,
-			rgba(0, 0, 0, 0.86) 6px,
-			black 8px,
-			black 100%
-		);
-		mask-image: linear-gradient(
-			to right,
-			rgba(0, 0, 0, 0) 0,
-			rgba(0, 0, 0, 0.14) 2px,
-			rgba(0, 0, 0, 0.5) 4px,
-			rgba(0, 0, 0, 0.86) 6px,
-			black 8px,
-			black 100%
-		);
-		-webkit-mask-repeat: no-repeat;
-		mask-repeat: no-repeat;
-		-webkit-mask-size: calc(100% + 8px) 100%;
-		mask-size: calc(100% + 8px) 100%;
-		-webkit-mask-position: -8px 0;
-		mask-position: -8px 0;
-		transition: -webkit-mask-position var(--duration-snap) linear,
-			mask-position var(--duration-snap) linear;
-	}
-
-	/* The attribute is flipped from JS, so Svelte's CSS scoper can't see
-	   it on the template. `:global` on that segment keeps the rest of
-	   the selector scoped via the host class. */
-	.pierre-tree-host:global([data-scrolled-x]) {
-		-webkit-mask-position: 0 0;
-		mask-position: 0 0;
-	}
-
-	@media (prefers-reduced-motion: reduce) {
-		.pierre-tree-host {
-			transition: none;
-		}
 	}
 </style>
