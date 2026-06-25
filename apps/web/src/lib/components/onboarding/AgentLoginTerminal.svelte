@@ -1,7 +1,7 @@
 <script lang="ts">
 import type { AcpAgentId, LoginEvent } from "@revv/shared";
 import type { FitAddon } from "@xterm/addon-fit";
-import type { Terminal } from "@xterm/xterm";
+import type { ITheme, Terminal } from "@xterm/xterm";
 import ArrowSquareOut from "phosphor-svelte/lib/ArrowSquareOut";
 import { onDestroy, onMount } from "svelte";
 import { API_BASE_URL } from "$lib/api/base-url";
@@ -137,6 +137,57 @@ function onResize(): void {
   }
 }
 
+/**
+ * xterm can't resolve CSS `var()` — it needs literal color/font strings to
+ * measure glyph cells and paint. Read the resolved onboarding tokens off the
+ * mounted element so the terminal tracks light/dark mode and the warm paper
+ * palette instead of xterm's default white-on-black (invisible here) plus its
+ * garish bright-ANSI colors.
+ */
+function readTerminalStyle(el: HTMLElement): {
+  fontFamily: string;
+  theme: ITheme;
+} {
+  const cs = getComputedStyle(el);
+  const v = (name: string, fallback: string): string =>
+    cs.getPropertyValue(name).trim() || fallback;
+
+  const fg = v("--ob-text", "#2a2825");
+  const muted = v("--ob-text-muted", "#9a958c");
+  const dim = v("--ob-text-dimmed", "#c4bfb6");
+  const accent = v("--ob-text-italic", "#6b5d3e");
+  const heading = v("--ob-text-heading", "#1a1816");
+
+  return {
+    fontFamily: v("--font-mono", '"JetBrains Mono", "Fira Code", monospace'),
+    theme: {
+      background: "#00000000",
+      foreground: fg,
+      cursor: accent,
+      cursorAccent: v("--ob-bg", "#faf9f6"),
+      selectionBackground: v("--ob-row-highlight", "rgba(107, 93, 62, 0.18)"),
+      // Map the 16 ANSI slots onto the onboarding palette so CLI-colored
+      // output (cyan tips, dim hints, bold headings) reads on the paper bg.
+      black: dim,
+      red: v("--ob-error", "#b5494b"),
+      green: accent,
+      yellow: accent,
+      blue: muted,
+      magenta: accent,
+      cyan: muted,
+      white: fg,
+      brightBlack: muted,
+      brightRed: v("--ob-error", "#b5494b"),
+      brightGreen: accent,
+      brightYellow: accent,
+      brightBlue: muted,
+      brightMagenta: accent,
+      brightCyan: muted,
+      brightWhite: heading,
+    },
+  };
+}
+
 onMount(async () => {
   // 1. Start (or join) the login job.
   try {
@@ -162,13 +213,14 @@ onMount(async () => {
     import("@xterm/xterm"),
     import("@xterm/addon-fit"),
   ]);
+  const { fontFamily, theme } = readTerminalStyle(container);
   term = new Terminal({
     convertEol: false,
     cursorBlink: !prefersReducedMotion(),
     fontSize: 12,
-    fontFamily: "var(--font-mono, 'JetBrains Mono', monospace)",
+    fontFamily,
     allowTransparency: true,
-    theme: { background: "#00000000" },
+    theme,
   });
   fit = new FitAddon();
   term.loadAddon(fit);
