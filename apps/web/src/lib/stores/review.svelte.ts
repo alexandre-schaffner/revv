@@ -217,10 +217,15 @@ const SESSION_REFETCH_WINDOW_MS = 60_000;
 export async function loadSession(
   prId: string,
   mode: ReviewMode = getReviewMode(prId),
+  force = false,
 ): Promise<void> {
   const sessionKey = `${prId}:${mode}`;
-  // Short-circuit: same PR, recent hydration, session still live.
+  // Short-circuit: same PR, recent hydration, session still live. Callers that
+  // just mutated server state (e.g. submitting a review) pass `force` to skip
+  // it — otherwise stale local rows (missing the externalId stamped on
+  // just-pushed comments) would survive and get re-submitted as duplicates.
   if (
+    !force &&
     sessionKey === lastSessionKey &&
     Date.now() - lastSessionAt < SESSION_REFETCH_WINDOW_MS &&
     sessionId !== null

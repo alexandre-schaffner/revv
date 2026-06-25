@@ -141,6 +141,10 @@ function buildComments(): Array<{
 
   // Collect IDs of all unresolved threads
   for (const thread of unresolvedThreads) {
+    // Threads already on GitHub take the reply push path (see submit()), not
+    // the new-review-comment path — including them here would re-post the
+    // thread as a fresh comment on every submit.
+    if (thread.externalCommentId != null) continue;
     const messages = getThreadMessages(thread.id).filter(
       (m) => m.authorRole === "reviewer" && m.externalId == null,
     );
@@ -206,9 +210,12 @@ async function submit(action: Action): Promise<void> {
     // Trigger sync-threads to pull back GitHub comment IDs
     await api.api.prs({ id: prId })["sync-threads"].post();
 
-    // Reload session so externalCommentId fields are refreshed locally
-    // (mode is derived inside loadSession from the PR's review perspective).
-    await loadSession(prId);
+    // Reload session so externalCommentId / externalId fields are refreshed
+    // locally (mode is derived inside loadSession from the PR's review
+    // perspective). `force` bypasses the 60s refetch short-circuit — without
+    // it the just-pushed comments keep their null externalId locally and a
+    // second submit would re-post them as duplicates.
+    await loadSession(prId, undefined, true);
 
     const payload = data as {
       htmlUrl?: string;
