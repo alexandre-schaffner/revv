@@ -187,6 +187,81 @@ let clickHandler: (() => void) | null = null;
 // Cleanup handle for the capture-phase keydown gate — replaced on each tree build.
 let keyHandler: ((event: KeyboardEvent) => void) | null = null;
 
+// ── Content-aware indentation ──────────────────────────────────────────
+// The per-level indent is normally `8px * density` (the first/widest step
+// below). Rather than tie tightening to fixed panel-width breakpoints, we
+// tie it to the thing the user actually cares about: filename truncation.
+// `syncIndent()` picks the *largest* gap on this ladder at which no rendered
+// row's name needs to clip, stepping down only as far as required. So the
+// indent starts collapsing the instant a name would truncate, and no sooner.
+const INDENT_GAP_STEPS = [8, 6, 4, 3, 2, 1] as const;
+let indentRO: ResizeObserver | null = null;
+let indentRaf = 0;
+let measureCanvas: HTMLCanvasElement | null = null;
+
+function basename(path: string): string {
+  const i = path.lastIndexOf("/");
+  return i === -1 ? path : path.slice(i + 1);
+}
+
+// Recompute the per-level indent from the currently-rendered rows. Pierre's
+// MiddleTruncate keeps the content cell from overflowing (it draws a marker
+// instead), so `scrollWidth > clientWidth` is unreliable here. We instead
+// measure each name's *natural* width with a canvas (the DOM text may already
+// be middle-truncated, so we measure the source path's basename, not the
+// rendered string) and compare it against the row's real available width
+// (`content.clientWidth`) at each candidate gap. The probe loop sets the gap
+// and reads `clientWidth` — that read flushes layout, so each iteration
+// reflects the gap just set — and only the final value is painted (all the
+// sets happen synchronously within one frame), so no intermediate indent
+// flashes. Changing the gap never changes the host's own width, so this can't
+// feed back into the ResizeObserver.
+function syncIndent(): void {
+  const sr = tree?.getFileTreeContainer()?.shadowRoot;
+  if (!sr || !host) return;
+
+  const rows = Array.from(sr.querySelectorAll<HTMLElement>('button[data-type="item"]')).filter(
+    (r) => r.dataset.itemParked !== "true" && !isPhantomPath(r.dataset.itemPath ?? ""),
+  );
+  const first = rows[0];
+  if (!first) return;
+
+  const sample = first.querySelector<HTMLElement>('[data-item-section="content"]');
+  if (!sample) return;
+  const cs = getComputedStyle(sample);
+  measureCanvas ??= document.createElement("canvas");
+  const ctx = measureCanvas.getContext("2d");
+  if (!ctx) return;
+  ctx.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+
+  const measured: { content: HTMLElement; natural: number }[] = [];
+  for (const r of rows) {
+    const content = r.querySelector<HTMLElement>('[data-item-section="content"]');
+    if (!content) continue;
+    const name = basename(r.dataset.itemPath ?? "");
+    // +2px so a name that fits to the pixel isn't treated as clipped.
+    measured.push({ content, natural: ctx.measureText(name).width + 2 });
+  }
+  if (measured.length === 0) return;
+
+  let chosen: number = INDENT_GAP_STEPS[0];
+  for (const g of INDENT_GAP_STEPS) {
+    host.style.setProperty("--trees-level-gap-override", `${g}px`);
+    const fits = measured.every((m) => m.natural <= m.content.clientWidth);
+    chosen = g;
+    if (fits) break;
+  }
+  host.style.setProperty("--trees-level-gap-override", `${chosen}px`);
+}
+
+function scheduleIndentSync(): void {
+  if (indentRaf) return;
+  indentRaf = requestAnimationFrame(() => {
+    indentRaf = 0;
+    syncIndent();
+  });
+}
+
 // Remembers what `initialExpansion` the live tree was constructed with.
 // When the prop flips (e.g. user toggles file-tree scope), we tear the
 // tree down and rebuild instead of taking the cheap `resetPaths` path —
@@ -421,6 +496,13 @@ $effect(() => {
       tree.render({ containerWrapper: host });
       // Inject per-path colour rules now that the shadow root exists.
       syncStatsStyle();
+      // Recompute indentation from content, and keep it in sync as the panel
+      // is resized. `observe` on an already-observed target is a no-op, so a
+      // rebuild won't double-subscribe. The observer fires once on attach,
+      // which also seeds the initial indent.
+      indentRO ??= new ResizeObserver(() => scheduleIndentSync());
+      indentRO.observe(host);
+      scheduleIndentSync();
       liveExpansion = expansion;
 
       // Re-fire onSelect when the user clicks an already-selected item.
@@ -491,6 +573,8 @@ $effect(() => {
       tree.resetPaths(withPhantomPaths(currentPaths));
       tree.setGitStatus(initialGitStatus);
       syncStatsStyle();
+      // New path set → different names/depths → recompute the indent.
+      scheduleIndentSync();
     }
   });
 });
@@ -645,63 +729,23 @@ onDestroy(() => {
     host?.removeEventListener("keydown", keyHandler, true);
     keyHandler = null;
   }
+  if (indentRaf) {
+    cancelAnimationFrame(indentRaf);
+    indentRaf = 0;
+  }
+  indentRO?.disconnect();
+  indentRO = null;
   tree?.cleanUp();
   tree = null;
 });
 </script>
 
-<div class="pierre-tree-wrap">
-	<div bind:this={host} class="pierre-tree-host" tabindex="-1"></div>
-</div>
+<div bind:this={host} class="pierre-tree-host" tabindex="-1"></div>
 
 <style>
-	/* Containment context for the narrow-panel indent query below. The wrap
-	   is the flex child of the sidebar pane; the host fills it. `inline-size`
-	   containment lets `@container` react to the panel width without a
-	   ResizeObserver. */
-	.pierre-tree-wrap {
-		flex: 1;
-		min-height: 0;
-		display: flex;
-		flex-direction: column;
-		container-type: inline-size;
-		container-name: filetree;
-	}
-
-	/* As the panel narrows, aggressively tighten the per-level indent so deep
-	   paths leave as much room as possible for the filename before it
-	   truncates. Pierre derives each level's indent from `--trees-level-gap`
-	   (default `8px * density`); we override it directly. The ramp starts near
-	   the default panel width and steps down hard — at the narrow end a level
-	   is barely 1px so the tree reads almost flat, trading indent legibility
-	   for filename legibility (the chevrons still carry the hierarchy). The
-	   LOC gutter is fixed-width and unaffected. */
-	@container filetree (width <= 300px) {
-		.pierre-tree-host {
-			--trees-level-gap-override: 6px;
-		}
-	}
-	@container filetree (width <= 270px) {
-		.pierre-tree-host {
-			--trees-level-gap-override: 4px;
-		}
-	}
-	@container filetree (width <= 240px) {
-		.pierre-tree-host {
-			--trees-level-gap-override: 3px;
-		}
-	}
-	@container filetree (width <= 215px) {
-		.pierre-tree-host {
-			--trees-level-gap-override: 2px;
-		}
-	}
-	@container filetree (width <= 195px) {
-		.pierre-tree-host {
-			--trees-level-gap-override: 1px;
-		}
-	}
-
+	/* The per-level indent is driven from JS (`syncIndent`) so it tightens the
+	   moment a filename would truncate, not at fixed widths. The default
+	   `--trees-level-gap` (8px) applies until that first runs. */
 	.pierre-tree-host {
 		flex: 1;
 		min-height: 0;
