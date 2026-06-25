@@ -291,7 +291,12 @@ $effect(() => {
 $effect(() => {
   setRcHandlers({
     onGenerateChanges: generateChanges,
-    onSubmitReview: () => void submit("request_changes"),
+    // One submit posts everything in a single GitHub review. The review event
+    // is decided by content: selecting walkthrough issues means "request
+    // changes"; with none it's a plain comment review. Either way the line
+    // comments ride along. Read `.size` live so the decision reflects the
+    // selection at click time, not when this handler was registered.
+    onSubmitReview: () => void submit(selectedIssueIds.size > 0 ? "request_changes" : "comment"),
     onComment: () => void submit("comment"),
     onApprove: handleApproveClick,
   });

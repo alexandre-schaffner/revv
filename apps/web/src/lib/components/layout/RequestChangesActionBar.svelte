@@ -38,9 +38,6 @@ const rcSubmitting = $derived(getRcSubmitting());
 const rcSelectedCount = $derived(getRcSelectedCount());
 const rcCanComment = $derived(getRcCanComment());
 const rcApproveBlockerSummary = $derived(getRcApproveBlockerSummary());
-
-// Open-state for the "Submit Review" dropdown (Comment / Request changes).
-let reviewMenuOpen = $state(false);
 const chatStreaming = $derived(pr ? isChatStreaming(pr.id) : false);
 
 let rcGenerating = $state(false);
@@ -238,61 +235,22 @@ async function runMerge(method: import("@revv/shared").MergeMethod): Promise<voi
       </GlassPill>
     {:else}
       <!-- Not the PR owner → a reviewer. Review mode is derived from identity
-           (see getReviewModeForPr), so "not owner" is exactly "reviewer".
-           "Submit Review" collapses the two review-posting actions (Comment,
-           Request changes) into one menu; Approve stays a distinct action. -->
-      <Popover bind:open={reviewMenuOpen}>
-        <PopoverTrigger>
-          {#snippet child({ props })}
-            <GlassPill
-              {...props}
-              variant="accent"
-              disabled={rcSubmitting !== null || !rcCanComment}
-              title={!rcCanComment
-                ? "Add comments or select walkthrough issues first"
-                : "Submit your review to GitHub"}
-            >
-              <Send size={16} weight="fill" />
-              {rcSubmitting === "comment"
-                ? "Posting…"
-                : rcSubmitting === "request_changes"
-                  ? "Requesting changes…"
-                  : "Submit Review"}
-              <ChevronDown size={14} />
-            </GlassPill>
-          {/snippet}
-        </PopoverTrigger>
-        <PopoverContent class="w-64 p-1" align="end" side="top">
-          <button
-            type="button"
-            class="review-menu-item"
-            onclick={() => {
-              reviewMenuOpen = false;
-              getRcOnComment()();
-            }}
-          >
-            <ChatCircle size={16} weight="regular" />
-            <span class="review-menu-text">
-              <span class="review-menu-title">Comment</span>
-              <span class="review-menu-sub">Post feedback without approving or requesting changes</span>
-            </span>
-          </button>
-          <button
-            type="button"
-            class="review-menu-item"
-            onclick={() => {
-              reviewMenuOpen = false;
-              getRcOnSubmitReview()();
-            }}
-          >
-            <ArrowUp size={16} weight="regular" />
-            <span class="review-menu-text">
-              <span class="review-menu-title">Request changes</span>
-              <span class="review-menu-sub">Submit feedback that must be addressed before merge</span>
-            </span>
-          </button>
-        </PopoverContent>
-      </Popover>
+           (see getReviewModeForPr), so "not owner" is exactly "reviewer". One
+           "Submit Review" posts everything in a single GitHub review: the line
+           comments always go up, and it requests changes when walkthrough
+           issues are selected (otherwise it's a plain comment review). Approve
+           stays a distinct action. -->
+      <GlassPill
+        variant="accent"
+        disabled={rcSubmitting !== null || !rcCanComment}
+        onclick={() => getRcOnSubmitReview()()}
+        title={!rcCanComment
+          ? "Add comments or select walkthrough issues first"
+          : "Submit your review — posts your comments, and requests changes if any issues are selected"}
+      >
+        <ArrowUp size={16} weight="regular" />
+        {rcSubmitting !== null ? "Submitting…" : "Submit Review"}
+      </GlassPill>
       <GlassPill
         variant="success"
         disabled={rcSubmitting !== null}
@@ -371,44 +329,5 @@ async function runMerge(method: import("@revv/shared").MergeMethod): Promise<voi
   .merge-pill-chevron:disabled {
     cursor: not-allowed;
     opacity: 0.4;
-  }
-
-  /* "Submit Review" dropdown items. Two-line rows (action + one-line
-     description) inside the popover; mirrors the merge menu's spacing. */
-  .review-menu-item {
-    display: flex;
-    width: 100%;
-    align-items: flex-start;
-    gap: var(--spacing-island);
-    padding: 8px 10px;
-    border: none;
-    border-radius: 6px;
-    background: transparent;
-    text-align: left;
-    color: inherit;
-    font-family: inherit;
-    cursor: pointer;
-  }
-
-  .review-menu-item:hover {
-    background: var(--color-bg-tertiary);
-  }
-
-  .review-menu-text {
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-  }
-
-  .review-menu-title {
-    font-size: 13px;
-    font-weight: 500;
-    letter-spacing: -0.01em;
-  }
-
-  .review-menu-sub {
-    font-size: 11px;
-    line-height: 1.3;
-    color: var(--color-text-muted);
   }
 </style>
