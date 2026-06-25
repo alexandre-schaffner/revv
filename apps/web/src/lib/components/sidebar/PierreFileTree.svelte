@@ -683,10 +683,10 @@ onDestroy(() => {
 		   Effective row indent = max(inline - item-margin, 0) + item-margin + item-padding-x
 		                        = max(4px - 2px, 0) + 2px + 8px = 12px */
 		--trees-padding-inline-override: 4px;
-		/* Fixed per-level indent — tighter than the library default (8px) to
-		   leave more room for filenames, but constant: it never reacts to panel
-		   width or truncation. */
-		--trees-level-gap-override: 4px;
+		/* Fixed per-level indent — much tighter than the library default (8px)
+		   to leave more room for filenames, but constant: it never reacts to
+		   panel width or truncation. */
+		--trees-level-gap-override: 2px;
 	}
 
 	.pierre-tree-host:focus {
