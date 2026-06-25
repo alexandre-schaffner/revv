@@ -3,6 +3,7 @@ import type { Repository } from "@revv/shared";
 import ChevronLeft from "phosphor-svelte/lib/CaretLeft";
 import CheckCircle from "phosphor-svelte/lib/CheckCircle";
 import FolderOpen from "phosphor-svelte/lib/FolderOpen";
+import GithubLogo from "phosphor-svelte/lib/GithubLogo";
 import LinkSimple from "phosphor-svelte/lib/LinkSimple";
 import { untrack } from "svelte";
 import { toast } from "svelte-sonner";
@@ -29,7 +30,7 @@ let { onContinue, onBack, onSkip, isGhe = false }: Props = $props();
 
 const runningInTauri = isTauri();
 
-let mode = $state<"browse" | "link">("browse");
+let mode = $state<"browse" | "link">("link");
 let search = $state("");
 let isAdding = $state(false);
 let addingRepoName = $state<string | null>(null);
@@ -344,81 +345,7 @@ function handlePathKey(e: KeyboardEvent) {
 			{/if}
 		</div>
 	{:else}
-		{#if mode === 'browse'}
-			<div class="browse">
-			<div class="search-row">
-				<input
-					class="search"
-					type="text"
-					placeholder={isGhe ? 'Search repositories…' : 'Search or enter owner/repo…'}
-					aria-label="Search repositories"
-					bind:value={search}
-					onkeydown={handleKey}
-					use:focusOnMount
-					autocomplete="off"
-					spellcheck="false"
-				/>
-				{#if getAvailableReposLoading()}
-					<Dotmatrix variant="square-13" size="small" />
-				{/if}
-			</div>
-
-			<div class="list" role="listbox">
-				{#if (getAvailableReposLoading() || (getAvailableReposFetchFailed() && autoRetries < MAX_AUTO_RETRIES)) && filtered.length === 0}
-					<p class="empty">Loading repositories…</p>
-				{:else if getAvailableReposFetchFailed() && filtered.length === 0}
-					<p class="empty error-state">
-						Could not load repositories — your GitHub session may have expired.
-						<button class="retry-link" onclick={() => { autoRetries = 0; fetchAvailableRepos(true); }}>Retry</button>
-					</p>
-				{:else if filtered.length === 0}
-					<p class="empty">No repositories match "{search}"</p>
-				{:else}
-					{#each filtered as repo, i (repo.fullName)}
-						{@const isHighlighted = i === highlightedIndex}
-						{@const isTracked = tracked.has(repo.fullName)}
-						{@const isThisAdding = addingRepoName === repo.fullName}
-						<button
-							class="row"
-							data-highlighted={isHighlighted}
-							data-tracked={isTracked}
-							onclick={() => select(repo)}
-							onmouseenter={() => (highlightedIndex = i)}
-							disabled={isAdding}
-							style="animation-delay: {Math.min(i, 8) * 30}ms"
-						>
-							<span class="row-owner">{repo.owner}</span>
-							<span class="row-slash">/</span>
-							<span class="row-name">{repo.name}</span>
-							<span class="row-status">
-								{#if isThisAdding}
-									<Dotmatrix variant="square-2" size="small" />
-								{:else if isTracked}
-									tracked
-								{/if}
-							</span>
-						</button>
-					{/each}
-				{/if}
-			</div>
-
-				<div class="repo-actions">
-					<button class="alt-path" onclick={() => (mode = 'link')}>
-						<FolderOpen size={17} />
-						<span class="alt-path-text">
-							<span class="alt-path-title">Open an existing clone instead</span>
-							<span class="alt-path-sub">Link a repository already cloned to this machine</span>
-						</span>
-						<span class="alt-path-arrow" aria-hidden="true">→</span>
-					</button>
-					{#if onSkip}
-						<button class="skip" onclick={onSkip}>
-							Skip for now
-						</button>
-					{/if}
-				</div>
-			</div>
-		{:else}
+		{#if mode === 'link'}
 			<div class="link">
 				<div class="search-row link-path-row">
 					<input
@@ -472,12 +399,98 @@ function handlePathKey(e: KeyboardEvent) {
 				{/if}
 
 				<div class="link-actions">
-					<button class="skip" onclick={() => (mode = 'browse')}>Back</button>
 					<button class="link-submit" onclick={() => void submitLink()} disabled={!canLink}>
 						<LinkSimple size={14} weight="bold" />
 						<span>Link this repository</span>
 					</button>
 				</div>
+
+				<div class="repo-actions">
+					<button class="alt-path" onclick={() => (mode = 'browse')}>
+						<GithubLogo size={17} />
+						<span class="alt-path-text">
+							<span class="alt-path-title">Clone a repository from GitHub instead</span>
+							<span class="alt-path-sub">Browse and clone any repository you can access</span>
+						</span>
+						<span class="alt-path-arrow" aria-hidden="true">→</span>
+					</button>
+					{#if onSkip}
+						<button class="skip" onclick={onSkip}>
+							Skip for now
+						</button>
+					{/if}
+				</div>
+			</div>
+		{:else}
+			<div class="browse">
+				<button class="back-mode" onclick={() => (mode = 'link')}>
+					<ChevronLeft size={13} />
+					<span>Open an existing clone</span>
+				</button>
+
+				<div class="search-row">
+					<input
+						class="search"
+						type="text"
+						placeholder={isGhe ? 'Search repositories…' : 'Search or enter owner/repo…'}
+						aria-label="Search repositories"
+						bind:value={search}
+						onkeydown={handleKey}
+						use:focusOnMount
+						autocomplete="off"
+						spellcheck="false"
+					/>
+					{#if getAvailableReposLoading()}
+						<Dotmatrix variant="square-13" size="small" />
+					{/if}
+				</div>
+
+				<div class="list" role="listbox">
+					{#if (getAvailableReposLoading() || (getAvailableReposFetchFailed() && autoRetries < MAX_AUTO_RETRIES)) && filtered.length === 0}
+						<p class="empty">Loading repositories…</p>
+					{:else if getAvailableReposFetchFailed() && filtered.length === 0}
+						<p class="empty error-state">
+							Could not load repositories — your GitHub session may have expired.
+							<button class="retry-link" onclick={() => { autoRetries = 0; fetchAvailableRepos(true); }}>Retry</button>
+						</p>
+					{:else if filtered.length === 0}
+						<p class="empty">No repositories match "{search}"</p>
+					{:else}
+						{#each filtered as repo, i (repo.fullName)}
+							{@const isHighlighted = i === highlightedIndex}
+							{@const isTracked = tracked.has(repo.fullName)}
+							{@const isThisAdding = addingRepoName === repo.fullName}
+							<button
+								class="row"
+								data-highlighted={isHighlighted}
+								data-tracked={isTracked}
+								onclick={() => select(repo)}
+								onmouseenter={() => (highlightedIndex = i)}
+								disabled={isAdding}
+								style="animation-delay: {Math.min(i, 8) * 30}ms"
+							>
+								<span class="row-owner">{repo.owner}</span>
+								<span class="row-slash">/</span>
+								<span class="row-name">{repo.name}</span>
+								<span class="row-status">
+									{#if isThisAdding}
+										<Dotmatrix variant="square-2" size="small" />
+									{:else if isTracked}
+										tracked
+									{/if}
+								</span>
+							</button>
+						{/each}
+					{/if}
+				</div>
+
+				{#if onSkip}
+					<div class="repo-actions">
+						<button class="skip" onclick={onSkip}>
+							Skip for now
+						</button>
+					</div>
+				{/if}
 			</div>
 		{/if}
 	{/if}
@@ -520,6 +533,37 @@ function handlePathKey(e: KeyboardEvent) {
 	}
 
 	.back:hover :global(svg) {
+		transform: translateX(-3px);
+	}
+
+	/* Return to the primary path (link an existing clone) from the
+	   secondary GitHub-browse view. Mirrors the step-level back link. */
+	.back-mode {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		align-self: flex-start;
+		background: none;
+		border: 0;
+		padding: 0;
+		color: var(--ob-text-muted);
+		font-family: var(--font-mono, 'JetBrains Mono', monospace);
+		font-size: 10.5px;
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+		cursor: pointer;
+		transition: color var(--duration-snap) var(--ease-out-expo);
+	}
+
+	.back-mode:hover {
+		color: var(--ob-text-italic);
+	}
+
+	.back-mode :global(svg) {
+		transition: transform var(--duration-quick) var(--ease-out-expo);
+	}
+
+	.back-mode:hover :global(svg) {
 		transform: translateX(-3px);
 	}
 
@@ -786,7 +830,7 @@ function handlePathKey(e: KeyboardEvent) {
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
-		justify-content: space-between;
+		justify-content: flex-start;
 		gap: 12px;
 	}
 
