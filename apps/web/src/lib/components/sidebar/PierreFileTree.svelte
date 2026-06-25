@@ -666,19 +666,37 @@ onDestroy(() => {
 		container-name: filetree;
 	}
 
-	/* As the panel narrows, tighten the per-level indent so deep paths leave
-	   more room for the filename before it truncates. Pierre derives each
-	   level's indent from `--trees-level-gap` (default `8px * density`); we
-	   override it directly. Two steps so it degrades smoothly rather than
-	   snapping. The LOC gutter is fixed-width and unaffected. */
-	@container filetree (width <= 250px) {
+	/* As the panel narrows, aggressively tighten the per-level indent so deep
+	   paths leave as much room as possible for the filename before it
+	   truncates. Pierre derives each level's indent from `--trees-level-gap`
+	   (default `8px * density`); we override it directly. The ramp starts near
+	   the default panel width and steps down hard — at the narrow end a level
+	   is barely 1px so the tree reads almost flat, trading indent legibility
+	   for filename legibility (the chevrons still carry the hierarchy). The
+	   LOC gutter is fixed-width and unaffected. */
+	@container filetree (width <= 300px) {
 		.pierre-tree-host {
 			--trees-level-gap-override: 6px;
 		}
 	}
-	@container filetree (width <= 215px) {
+	@container filetree (width <= 270px) {
 		.pierre-tree-host {
 			--trees-level-gap-override: 4px;
+		}
+	}
+	@container filetree (width <= 240px) {
+		.pierre-tree-host {
+			--trees-level-gap-override: 3px;
+		}
+	}
+	@container filetree (width <= 215px) {
+		.pierre-tree-host {
+			--trees-level-gap-override: 2px;
+		}
+	}
+	@container filetree (width <= 195px) {
+		.pierre-tree-host {
+			--trees-level-gap-override: 1px;
 		}
 	}
 
