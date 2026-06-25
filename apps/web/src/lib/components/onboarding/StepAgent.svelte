@@ -35,11 +35,11 @@ const OPENCODE: AcpAgentId = "opencode";
 
 // ── Detection state ──────────────────────────────────────────────────────
 //
-// Three rendering modes:
+// Two rendering modes:
 //   - 'loading' — initial detection in flight
-//   - 'picker'  — at least one provider detected, user picks one
-//   - 'install' — none detected, offer to install opencode
-let mode = $state<"loading" | "picker" | "install">("loading");
+//   - 'picker'  — the agent list; the install log shows inline as a sub-state
+//                 (keyed on `installingAgent`) while a job runs.
+let mode = $state<"loading" | "picker">("loading");
 let availability = $state<AgentAvailability | null>(null);
 
 // Picker state: pre-select the current chat agent, falling back to opencode if
@@ -48,13 +48,24 @@ let availability = $state<AgentAvailability | null>(null);
 let selected = $state<AcpAgentId>(resolveChatAgentId(getSettings()));
 let isSaving = $state(false);
 
-// Install state.
-let installJobId = $state<string | null>(null);
+// Install sub-state — rendered in place of the actions while a job runs.
+// `installingAgent` is the agent whose installer is in flight (or whose run
+// just failed); null means no install is showing.
+let installingAgent = $state<AcpAgentId | null>(null);
 let installLog = $state<string[]>([]);
 let installFailed = $state(false);
 let installError = $state<string | null>(null);
 let installAbort: AbortController | null = null;
 const LOG_TAIL = 6;
+
+// True once detection has resolved and nothing is installed — we advertise
+// opencode (pre-selected, free / no sign-in) as the zero-config option.
+const noneInstalled = $derived(
+  availability !== null && !ACP_AGENTS.some((a) => availability?.[a.id]),
+);
+// Whether the currently-selected agent is installed — drives the adaptive CTA.
+const selectedInstalled = $derived(availability?.[selected] ?? false);
+const selectedLabel = $derived(ACP_AGENTS.find((a) => a.id === selected)?.label ?? selected);
 
 onMount(async () => {
   const cached = getAgentAvailability();
@@ -75,10 +86,11 @@ onMount(async () => {
       const firstInstalled = ACP_AGENTS.find((a) => data[a.id]);
       if (firstInstalled) selected = firstInstalled.id;
     }
-    mode = "picker";
   } else {
-    mode = "install";
+    // Nothing installed — advertise opencode as the out-of-the-box option.
+    selected = OPENCODE;
   }
+  mode = "picker";
 });
 
 onDestroy(() => {
@@ -98,15 +110,17 @@ async function handleContinue(): Promise<void> {
   }
 }
 
-async function handleInstall(): Promise<void> {
+async function handleInstall(agent: AcpAgentId): Promise<void> {
+  installingAgent = agent;
   installFailed = false;
   installError = null;
   installLog = [];
 
   try {
-    const startRes = await fetch(`${API_BASE_URL}/api/onboarding/install-opencode`, {
+    const startRes = await fetch(`${API_BASE_URL}/api/onboarding/install`, {
       method: "POST",
       headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ agent }),
     });
     if (!startRes.ok) {
       installFailed = true;
@@ -114,7 +128,6 @@ async function handleInstall(): Promise<void> {
       return;
     }
     const { jobId } = (await startRes.json()) as { jobId: string };
-    installJobId = jobId;
 
     const ctrl = new AbortController();
     installAbort = ctrl;
@@ -129,7 +142,7 @@ async function handleInstall(): Promise<void> {
 }
 
 async function streamInstallEvents(jobId: string, signal: AbortSignal): Promise<void> {
-  const url = `${API_BASE_URL}/api/onboarding/install-opencode/stream?jobId=${encodeURIComponent(jobId)}`;
+  const url = `${API_BASE_URL}/api/onboarding/install/stream?jobId=${encodeURIComponent(jobId)}`;
   const res = await fetch(url, { headers: authHeaders(), signal });
   if (!res.ok || !res.body) {
     installFailed = true;
@@ -159,12 +172,11 @@ function applyEvent(event: InstallEvent): void {
   }
   if (event.type === "done") {
     if (event.success) {
-      // Refresh detection so the picker pre-selects opencode and shows
-      // the Installed tag accurately.
+      // Refresh detection so the just-installed agent shows the Installed tag
+      // and the CTA flips to Continue. Keep `selected` on that agent.
       void (async () => {
         availability = await fetchAgentAvailability();
-        selected = OPENCODE;
-        mode = "picker";
+        installingAgent = null;
       })();
     } else {
       installFailed = true;
@@ -190,10 +202,16 @@ function handleSkip(): void {
 
 	{#if mode === 'loading'}
 		<p class="lede">Detecting installed agents…</p>
-	{:else if mode === 'picker'}
+	{:else}
 		<p class="lede">
-			Choose the agent that reads your pull requests. You can swap engines later
-			from settings.
+			{#if noneInstalled}
+				No agent is set up on this machine yet. <em>opencode</em> is free,
+				open-source, and works out of the box — no sign-in needed. Start with it,
+				or install another agent below.
+			{:else}
+				Choose the agent that reads your pull requests. You can swap engines later
+				from settings.
+			{/if}
 		</p>
 
 		<fieldset class="options">
@@ -201,12 +219,19 @@ function handleSkip(): void {
 
 			{#each ACP_AGENTS as agent, i (agent.id)}
 				{@const AgentIcon = acpAgentIcon(agent.icon)}
+				{@const isInstalled = availability?.[agent.id] ?? false}
 				<label
 					class="option"
 					data-selected={selected === agent.id}
 					style="--option-index: {i}"
 				>
-					<input type="radio" name="agent" value={agent.id} bind:group={selected} />
+					<input
+						type="radio"
+						name="agent"
+						value={agent.id}
+						bind:group={selected}
+						disabled={installingAgent !== null}
+					/>
 					<span class="option-mark" aria-hidden="true"></span>
 					<span class="option-icon" aria-hidden="true">
 						<AgentIcon size={20} />
@@ -214,10 +239,12 @@ function handleSkip(): void {
 					<span class="option-body">
 						<span class="option-row">
 							<span class="option-name">{agent.label}</span>
-							{#if availability?.[agent.id]}
+							{#if isInstalled}
 								<span class="option-tag tag-installed">installed</span>
+							{:else if agent.id === OPENCODE}
+								<span class="option-tag tag-free">free · no sign-in</span>
 							{:else}
-								<span class="option-tag tag-missing">not installed</span>
+								<span class="option-tag tag-missing">needs sign-in</span>
 							{/if}
 						</span>
 						<span class="option-host">{agent.description}</span>
@@ -226,48 +253,7 @@ function handleSkip(): void {
 			{/each}
 		</fieldset>
 
-		<div class="actions">
-			<button class="primary" onclick={handleContinue} disabled={isSaving}>
-				<span>Continue</span>
-				<svg
-					width="18"
-					height="10"
-					viewBox="0 0 18 10"
-					fill="none"
-					xmlns="http://www.w3.org/2000/svg"
-					aria-hidden="true"
-				>
-					<path d="M0 5h16M12 1l4 4-4 4" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
-				</svg>
-			</button>
-		</div>
-	{:else}
-		<p class="lede">
-			No AI agent was found on this machine. Install OpenCode to run reviews
-			locally — it ships as a single binary and takes about a minute.
-		</p>
-
-		{#if installJobId === null && !installFailed}
-			<div class="install-actions">
-				<button class="primary" onclick={handleInstall}>
-					<span>Install OpenCode</span>
-				</button>
-				<button class="secondary" onclick={handleSkip}>Skip for now</button>
-			</div>
-		{:else if installFailed}
-			<div class="install-log error">
-				{#each installLog as line, i (i)}
-					<div class="log-line">{line}</div>
-				{/each}
-				<div class="log-line log-error">{installError ?? 'Install failed.'}</div>
-			</div>
-			<div class="install-actions">
-				<button class="primary" onclick={handleInstall}>
-					<span>Retry</span>
-				</button>
-				<button class="secondary" onclick={handleSkip}>Skip for now</button>
-			</div>
-		{:else}
+		{#if installingAgent !== null && !installFailed}
 			<div class="installing">
 				<Dotmatrix variant="square-7" />
 				<div class="install-log">
@@ -280,6 +266,42 @@ function handleSkip(): void {
 					{/if}
 				</div>
 				<button class="secondary" onclick={handleSkip}>Skip waiting</button>
+			</div>
+		{:else if installFailed}
+			<div class="install-log error">
+				{#each installLog as line, i (i)}
+					<div class="log-line">{line}</div>
+				{/each}
+				<div class="log-line log-error">{installError ?? 'Install failed.'}</div>
+			</div>
+			<div class="install-actions">
+				<button class="primary" onclick={() => handleInstall(selected)}>
+					<span>Retry</span>
+				</button>
+				<button class="secondary" onclick={handleSkip}>Skip for now</button>
+			</div>
+		{:else if selectedInstalled}
+			<div class="actions">
+				<button class="primary" onclick={handleContinue} disabled={isSaving}>
+					<span>Continue</span>
+					<svg
+						width="18"
+						height="10"
+						viewBox="0 0 18 10"
+						fill="none"
+						xmlns="http://www.w3.org/2000/svg"
+						aria-hidden="true"
+					>
+						<path d="M0 5h16M12 1l4 4-4 4" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+					</svg>
+				</button>
+			</div>
+		{:else}
+			<div class="install-actions">
+				<button class="primary" onclick={() => handleInstall(selected)}>
+					<span>Install {selectedLabel}</span>
+				</button>
+				<button class="secondary" onclick={handleSkip}>Skip for now</button>
 			</div>
 		{/if}
 	{/if}
@@ -465,6 +487,10 @@ function handleSkip(): void {
 	}
 
 	.tag-installed {
+		color: var(--ob-text-italic);
+	}
+
+	.tag-free {
 		color: var(--ob-text-italic);
 	}
 

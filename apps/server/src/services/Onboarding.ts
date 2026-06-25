@@ -20,12 +20,13 @@ import { debug, logError } from "../logger";
 // One-shot installer plumbing the agent step of onboarding uses to:
 //   1. Detect which registry agents' CLIs (opencode / claude / codex / cursor)
 //      are present on PATH.
-//   2. Run the official opencode install script when none is detected.
+//   2. Run the official install script for whichever registry agent the user
+//      selects when it isn't already present.
 //
-// The install script lives upstream (https://opencode.ai/install for
-// macOS/Linux, https://opencode.ai/install.ps1 for Windows). We spawn it
-// once per server lifetime — a second `startInstall()` call returns the
-// running job's id instead of double-spawning.
+// Each agent ships an official one-line installer (see `AGENT_INSTALL`). We
+// spawn it once per agent per server lifetime — a second `startInstall(agent)`
+// call for an in-flight agent returns the running job's id instead of
+// double-spawning. Installs for different agents run independently.
 //
 // Events are kept in a small in-memory log so a late SSE subscriber (e.g.
 // the client tab that started the install reconnects after a slow render)
@@ -33,8 +34,61 @@ import { debug, logError } from "../logger";
 // log is purely ephemeral — a kill -9 mid-install just means the user
 // sees the prompt again on next boot, which is the desired behavior.
 
-const INSTALL_BIN_DIRS_UNIX = [".opencode/bin", ".local/bin"] as const;
-const INSTALL_BIN_DIRS_WINDOWS = [".opencode/bin"] as const;
+/**
+ * Per-agent install registry: the official one-line installer argv (POSIX vs
+ * Windows) plus the home-relative bin dirs that installer writes to, which we
+ * prepend to `PATH` so the freshly-installed binary is found without waiting
+ * for a shell re-source or server restart.
+ *
+ * Mirrors the `Record<AcpAgentId, …>` shape used elsewhere in the registry so
+ * adding an ACP agent surfaces a compile-time error here until its installer is
+ * wired — a deliberate nudge. Commands track each vendor's published installer.
+ */
+const AGENT_INSTALL: Record<
+  AcpAgentId,
+  {
+    unix: readonly string[];
+    windows: readonly string[];
+    binDirs: { unix: readonly string[]; windows: readonly string[] };
+  }
+> = {
+  opencode: {
+    unix: ["bash", "-c", "curl -fsSL https://opencode.ai/install | bash"],
+    windows: [
+      "powershell",
+      "-NoProfile",
+      "-Command",
+      "iwr -useb https://opencode.ai/install.ps1 | iex",
+    ],
+    binDirs: { unix: [".opencode/bin", ".local/bin"], windows: [".opencode/bin"] },
+  },
+  "claude-code": {
+    unix: ["bash", "-c", "curl -fsSL https://claude.ai/install.sh | bash"],
+    windows: ["powershell", "-NoProfile", "-Command", "irm https://claude.ai/install.ps1 | iex"],
+    binDirs: { unix: [".local/bin"], windows: [".local/bin"] },
+  },
+  codex: {
+    unix: ["bash", "-c", "curl -fsSL https://chatgpt.com/codex/install.sh | sh"],
+    windows: [
+      "powershell",
+      "-ExecutionPolicy",
+      "ByPass",
+      "-Command",
+      "irm https://chatgpt.com/codex/install.ps1 | iex",
+    ],
+    binDirs: { unix: [".local/bin"], windows: [".local/bin"] },
+  },
+  cursor: {
+    unix: ["bash", "-c", "curl https://cursor.com/install -fsS | bash"],
+    windows: [
+      "powershell",
+      "-NoProfile",
+      "-Command",
+      "irm 'https://cursor.com/install?win32=true' | iex",
+    ],
+    binDirs: { unix: [".local/bin"], windows: [".local/bin"] },
+  },
+};
 
 // Registry id → the CLI binary whose presence means the agent is set up
 // locally. The legacy three honor their `REVV_*_BIN` pins via
@@ -59,19 +113,19 @@ function detectAgentsSync(): AgentAvailability {
 }
 
 /**
- * Prepend the directories the official opencode installer writes to
- * (`~/.opencode/bin` and friends) onto `process.env.PATH`, so the next
- * `which opencode` invocation finds the freshly-installed binary without
- * waiting for the user's shell config to be re-sourced or for a server
- * restart.
+ * Prepend the directories the given agent's official installer writes to
+ * (e.g. `~/.opencode/bin`, `~/.local/bin`) onto `process.env.PATH`, so the next
+ * availability probe finds the freshly-installed binary without waiting for the
+ * user's shell config to be re-sourced or for a server restart.
  */
-function augmentPathForInstall(): void {
+function augmentPathForInstall(binDirs: {
+  unix: readonly string[];
+  windows: readonly string[];
+}): void {
   const home = homedir();
-  const sep = platform() === "win32" ? ";" : ":";
-  const dirs =
-    platform() === "win32"
-      ? INSTALL_BIN_DIRS_WINDOWS.map((d) => join(home, d))
-      : INSTALL_BIN_DIRS_UNIX.map((d) => join(home, d));
+  const isWindows = platform() === "win32";
+  const sep = isWindows ? ";" : ":";
+  const dirs = (isWindows ? binDirs.windows : binDirs.unix).map((d) => join(home, d));
   const current = process.env.PATH ?? "";
   const existing = current.split(sep);
   const toPrepend = dirs.filter((d) => existsSync(d) && !existing.includes(d));
@@ -82,6 +136,7 @@ function augmentPathForInstall(): void {
 
 interface InstallJob {
   jobId: string;
+  agentId: AcpAgentId;
   events: InstallEvent[];
   done: boolean;
   subscribers: Set<(event: InstallEvent) => void>;
@@ -101,11 +156,12 @@ export class OnboardingService extends Context.Tag("OnboardingService")<
     /** Read PATH for opencode + claude. Cheap; cached per the cli-agent module's TTL. */
     detectAgents: () => Effect.Effect<AgentAvailability>;
     /**
-     * Start the opencode install script if no job is running, or return the
-     * id of the in-flight job. Always idempotent — callers can race and the
-     * second one rides the first.
+     * Start the given agent's official install script if no job for that agent
+     * is running, or return the id of the in-flight job. Idempotent per agent —
+     * callers can race and the second one rides the first. Installs for
+     * different agents run independently.
      */
-    startInstallOpencode: () => Effect.Effect<{ jobId: string }>;
+    startInstall: (agent: AcpAgentId) => Effect.Effect<{ jobId: string }>;
     /**
      * Register a callback that receives every `InstallEvent` for the job:
      * first the full replay buffer (fired synchronously before subscribe
@@ -123,11 +179,11 @@ export class OnboardingService extends Context.Tag("OnboardingService")<
 export const OnboardingServiceLive = Layer.effect(
   OnboardingService,
   Effect.gen(function* () {
-    // Single-job state: install is process-lifetime idempotent. Holding
-    // this in a closure (not a Ref) is intentional — the field is read
-    // and written only from the service's own handlers, and ref-style
-    // serialization buys us nothing here.
-    let currentJob: InstallJob | null = null;
+    // Per-agent job state: each agent's install is process-lifetime idempotent.
+    // Holding this in a closure Map (not a Ref) is intentional — it's read and
+    // written only from the service's own handlers, and ref-style serialization
+    // buys us nothing here.
+    const currentJobs = new Map<AcpAgentId, InstallJob>();
 
     const broadcast = (job: InstallJob, event: InstallEvent): void => {
       job.events.push(event);
@@ -193,19 +249,13 @@ export const OnboardingServiceLive = Layer.effect(
 
     const spawnInstall = (job: InstallJob): void => {
       const isWindows = platform() === "win32";
-      // Pipe the official installer into the matching shell. On macOS/Linux
-      // we use `bash -c` (the installer is bash). On Windows the canonical
-      // path is the PowerShell one-liner.
-      const argv = isWindows
-        ? [
-            "powershell",
-            "-NoProfile",
-            "-Command",
-            "iwr -useb https://opencode.ai/install.ps1 | iex",
-          ]
-        : ["bash", "-c", "curl -fsSL https://opencode.ai/install | bash"];
+      const spec = AGENT_INSTALL[job.agentId];
+      // Pipe the agent's official installer into the matching shell. On
+      // macOS/Linux that's a `bash -c "curl … | sh"` line; on Windows it's the
+      // vendor's PowerShell one-liner.
+      const argv = [...(isWindows ? spec.windows : spec.unix)];
 
-      debug("onboarding-install", `spawning installer: ${argv.join(" ")}`);
+      debug("onboarding-install", `spawning installer (${job.agentId}): ${argv.join(" ")}`);
       broadcast(job, { type: "log", line: `> ${argv.join(" ")}` });
 
       let proc: ReturnType<typeof Bun.spawn>;
@@ -224,9 +274,9 @@ export const OnboardingServiceLive = Layer.effect(
       void (async () => {
         await Promise.all([drainStream(job, proc.stdout), drainStream(job, proc.stderr)]);
         const code = await proc.exited;
-        augmentPathForInstall();
+        augmentPathForInstall(spec.binDirs);
         invalidateCliAgentCache();
-        const installed = checkCliAvailability("opencode");
+        const installed = detectAgentCli(ACP_CLI_NAME[job.agentId]);
         const success = code === 0 && installed;
         if (success) {
           broadcast(job, { type: "done", success: true });
@@ -234,7 +284,7 @@ export const OnboardingServiceLive = Layer.effect(
           const error =
             code !== 0
               ? `Installer exited with code ${code}`
-              : "Installer finished but opencode is still not on PATH";
+              : `Installer finished but ${ACP_CLI_NAME[job.agentId]} is still not on PATH`;
           broadcast(job, { type: "done", success: false, error });
         }
       })();
@@ -243,26 +293,29 @@ export const OnboardingServiceLive = Layer.effect(
     return {
       detectAgents: () => Effect.sync(detectAgentsSync),
 
-      startInstallOpencode: () =>
+      startInstall: (agent) =>
         Effect.sync(() => {
-          if (currentJob && !currentJob.done) {
-            return { jobId: currentJob.jobId };
+          const running = currentJobs.get(agent);
+          if (running && !running.done) {
+            return { jobId: running.jobId };
           }
           const job: InstallJob = {
             jobId: crypto.randomUUID(),
+            agentId: agent,
             events: [],
             done: false,
             subscribers: new Set(),
           };
-          currentJob = job;
+          currentJobs.set(agent, job);
           spawnInstall(job);
           return { jobId: job.jobId };
         }),
 
       subscribe: (jobId, onEvent) =>
         Effect.sync(() => {
-          const job = currentJob;
-          if (!job || job.jobId !== jobId) {
+          // Resolve the job by id across all per-agent slots.
+          const job = Array.from(currentJobs.values()).find((j) => j.jobId === jobId);
+          if (!job) {
             return {
               found: false,
               unsubscribe: () => {

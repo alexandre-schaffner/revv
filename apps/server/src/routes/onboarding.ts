@@ -1,4 +1,4 @@
-import type { InstallEvent } from "@revv/shared";
+import { type InstallEvent, isAcpAgentId } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { Elysia } from "elysia";
@@ -14,10 +14,10 @@ import { createSseStream, sseHeaders } from "./reviews/sse";
  *
  * - `/complete` and `/reset` are the gate flips for the `onboardedAt`
  *   column the SvelteKit `OnboardingGate` reads.
- * - `/agent-availability` / `/install-opencode` are the agent-step plumbing:
- *   detect which CLI agents are installed and (if neither is) run the
- *   official opencode installer with a streamed log so the user can see
- *   progress without leaving the onboarding wizard.
+ * - `/agent-availability` / `/install` are the agent-step plumbing: detect
+ *   which CLI agents are installed and run the selected agent's official
+ *   installer with a streamed log so the user can see progress without
+ *   leaving the onboarding wizard.
  */
 export const onboardingRoutes = new Elysia({ prefix: "/api/onboarding" })
   .use(withAuth)
@@ -65,7 +65,8 @@ export const onboardingRoutes = new Elysia({ prefix: "/api/onboarding" })
   /**
    * Snapshot of which CLI agents are present on PATH (or pinned via the
    * LaunchAgent env vars). Used by the agent-selection onboarding step to
-   * decide between the picker and the install-opencode prompt.
+   * tag each picker option installed/not-installed and key the adaptive
+   * Install/Continue CTA.
    */
   .get("/agent-availability", async (ctx) => {
     try {
@@ -77,13 +78,19 @@ export const onboardingRoutes = new Elysia({ prefix: "/api/onboarding" })
     }
   })
   /**
-   * Kick off (or join) the opencode install job. Idempotent at the
-   * process-lifetime level — concurrent requests get the same `jobId`.
+   * Kick off (or join) the install job for the selected registry agent.
+   * Idempotent per agent — concurrent requests for the same agent get the
+   * same `jobId`. Body: `{ agent: AcpAgentId }`.
    */
-  .post("/install-opencode", async (ctx) => {
+  .post("/install", async (ctx) => {
     try {
+      const agent = (ctx.body as { agent?: unknown } | undefined)?.agent;
+      if (typeof agent !== "string" || !isAcpAgentId(agent)) {
+        ctx.set.status = 400;
+        return { error: "Invalid or missing agent" };
+      }
       return await AppRuntime.runPromise(
-        Effect.flatMap(OnboardingService, (s) => s.startInstallOpencode()),
+        Effect.flatMap(OnboardingService, (s) => s.startInstall(agent)),
       );
     } catch (e) {
       return handleAppError(e, ctx);
@@ -94,7 +101,7 @@ export const onboardingRoutes = new Elysia({ prefix: "/api/onboarding" })
    * subscription point and then forwards live events until `done`. Closes
    * the stream after `done` (success or failure).
    */
-  .get("/install-opencode/stream", async (ctx) => {
+  .get("/install/stream", async (ctx) => {
     const jobId = ctx.query?.jobId;
     if (typeof jobId !== "string" || jobId.length === 0) {
       ctx.set.status = 400;

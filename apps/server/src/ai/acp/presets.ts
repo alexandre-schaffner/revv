@@ -8,7 +8,6 @@
 // model protocol — per-adapter injection of the selected model / thinking-effort
 // / context-window at launch time (args for Codex/opencode, env for Claude Code).
 
-import { execSync } from "node:child_process";
 import {
   type AcpAgentId,
   type ContextWindow,
@@ -18,6 +17,7 @@ import {
   type ThinkingEffort,
 } from "@revv/shared";
 import { serverEnv } from "../../config";
+import { isCommandOnPath } from "../providers/cli-agent";
 
 export interface AcpLaunch {
   readonly command: string;
@@ -146,14 +146,12 @@ export function resolveGenerationModel(
 
 /**
  * Best-effort availability check for a registry agent's command. `npx`/`bunx`
- * are treated as always available; any other command is probed with `which`.
+ * are treated as always available; any other command is probed against the
+ * user's login-shell PATH (see `isCommandOnPath`), so a server launched with a
+ * sanitized PATH still finds shell-managed installs.
  */
 export function isAcpAgentAvailable(id: AcpAgentId): boolean {
   const { command } = resolveAcpLaunchById(id);
   if (command === "npx" || command === "bunx") return true;
-  try {
-    return execSync(`which ${command}`, { encoding: "utf-8", timeout: 3000 }).trim().length > 0;
-  } catch {
-    return false;
-  }
+  return isCommandOnPath(command);
 }
