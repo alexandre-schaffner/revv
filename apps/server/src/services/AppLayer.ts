@@ -1,5 +1,6 @@
 import { Layer } from "effect";
 import { CacheStatsLive, InvalidationBusLive } from "../cache/index";
+import { AgentLoginServiceLive } from "./AgentLogin";
 import { AiServiceLive } from "./Ai";
 import { BroadcasterLive } from "./Broadcaster";
 import { GcsBlobStoreLive } from "./blob/GcsBlobStore";
@@ -81,6 +82,7 @@ const BaseLayers = Layer.mergeAll(
   FileContentServiceLive,
   CacheServiceLive,
   OnboardingServiceLive,
+  AgentLoginServiceLive,
   ChatSessionServiceWithDeps,
   ChatMcpTokensLive,
   // Unified cache layer (M1 Foundations) — InvalidationBus is live with zero

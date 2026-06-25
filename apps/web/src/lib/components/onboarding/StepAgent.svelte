@@ -2,7 +2,7 @@
 import {
   ACP_AGENTS,
   type AcpAgentId,
-  type AgentAvailability,
+  type AgentStatusReport,
   type InstallEvent,
 } from "@revv/shared";
 import ChevronLeft from "phosphor-svelte/lib/CaretLeft";
@@ -12,15 +12,16 @@ import { acpAgentIcon } from "$lib/components/icons/acpAgentIcon";
 import Dotmatrix from "$lib/components/ui/dotmatrix/Dotmatrix.svelte";
 import {
   cascadeChatAgentChange,
-  fetchAgentAvailability,
+  fetchAgentStatus,
   fetchModels,
-  getAgentAvailability,
+  getAgentStatus,
   getSettings,
   resolveChatAgentId,
   updateSettings,
 } from "$lib/stores/settings.svelte";
 import { authHeaders } from "$lib/utils/session-token";
 import { parseSSEBuffer } from "$lib/utils/sse-parser";
+import AgentLoginTerminal from "./AgentLoginTerminal.svelte";
 
 interface Props {
   onContinue: () => void;
@@ -32,60 +33,84 @@ interface Props {
 let { onContinue, onBack, onSkip }: Props = $props();
 
 const OPENCODE: AcpAgentId = "opencode";
-
-// ── Detection state ──────────────────────────────────────────────────────
-//
-// Two rendering modes:
-//   - 'loading' — initial detection in flight
-//   - 'picker'  — the agent list; the install log shows inline as a sub-state
-//                 (keyed on `installingAgent`) while a job runs.
-let mode = $state<"loading" | "picker">("loading");
-let availability = $state<AgentAvailability | null>(null);
-
-// Picker state: pre-select the current chat agent, falling back to opencode if
-// either the settings haven't loaded or the saved agent isn't installed (rare —
-// but if so, prefer an installed one over the empty pre-selection).
-let selected = $state<AcpAgentId>(resolveChatAgentId(getSettings()));
-let isSaving = $state(false);
-
-// Install sub-state — rendered in place of the actions while a job runs.
-// `installingAgent` is the agent whose installer is in flight (or whose run
-// just failed); null means no install is showing.
-let installingAgent = $state<AcpAgentId | null>(null);
-let installLog = $state<string[]>([]);
-let installFailed = $state(false);
-let installError = $state<string | null>(null);
-let installAbort: AbortController | null = null;
 const LOG_TAIL = 6;
 
-// True once detection has resolved and nothing is installed — we advertise
-// opencode (pre-selected, free / no sign-in) as the zero-config option.
-const noneInstalled = $derived(
-  availability !== null && !ACP_AGENTS.some((a) => availability?.[a.id]),
-);
-// Whether the currently-selected agent is installed — drives the adaptive CTA.
-const selectedInstalled = $derived(availability?.[selected] ?? false);
+// ── State ──────────────────────────────────────────────────────────────────
+//
+// `mode` gates the loading screen vs. the picker. `status` is the server's
+// one-shot detection snapshot (per-agent installed + authed + login command,
+// plus whether this host can drive the embedded PTY login). `install` is a
+// tagged request-state union; `signingIn` is the agent whose embedded sign-in
+// terminal is mounted. The adaptive CTA is derived from all three (see `cta`).
+type InstallState =
+  | { kind: "idle" }
+  | { kind: "running"; agent: AcpAgentId; log: string[] }
+  | { kind: "failed"; agent: AcpAgentId; log: string[]; error: string };
+
+let mode = $state<"loading" | "picker">("loading");
+let status = $state<AgentStatusReport | null>(null);
+let install = $state<InstallState>({ kind: "idle" });
+let signingIn = $state<AcpAgentId | null>(null);
+let isSaving = $state(false);
+let installAbort: AbortController | null = null;
+
+// Picker selection: pre-select the current chat agent, falling back to opencode
+// if the settings haven't loaded or the saved agent isn't installed.
+let selected = $state<AcpAgentId>(resolveChatAgentId(getSettings()));
+
+// ── Derived ──────────────────────────────────────────────────────────────
+const selectedInstalled = $derived(status?.agents[selected]?.installed ?? false);
+// When detection hasn't resolved (null) treat the selection as authed so a
+// probe failure never blocks Continue.
+const selectedAuthed = $derived(status ? (status.agents[selected]?.authed ?? false) : true);
 const selectedLabel = $derived(ACP_AGENTS.find((a) => a.id === selected)?.label ?? selected);
+// Manual login command for the no-embedded-PTY fallback — server-provided, so
+// there's a single source of truth for each agent's login command.
+const selectedLoginCommand = $derived(
+  status?.agents[selected]?.loginCommand ?? `${selected} login`,
+);
+// True once detection resolved and nothing is installed — we advertise opencode
+// (pre-selected, free / no sign-in) as the zero-config option.
+const noneInstalled = $derived(
+  status !== null && !ACP_AGENTS.some((a) => status?.agents[a.id]?.installed),
+);
+
+// The single adaptive CTA state — one tagged value instead of an order-dependent
+// boolean ladder, so each arm's precondition is explicit and self-contained.
+type CtaState =
+  | { kind: "signing-in"; agent: AcpAgentId }
+  | { kind: "installing" }
+  | { kind: "install-failed" }
+  | { kind: "ready" }
+  | { kind: "needs-login" }
+  | { kind: "needs-login-manual" }
+  | { kind: "needs-install" };
+
+const cta = $derived.by((): CtaState => {
+  if (signingIn !== null) return { kind: "signing-in", agent: signingIn };
+  if (install.kind === "running") return { kind: "installing" };
+  if (install.kind === "failed") return { kind: "install-failed" };
+  if (!selectedInstalled) return { kind: "needs-install" };
+  if (selectedAuthed) return { kind: "ready" };
+  // Installed but not authed: embedded PTY login where the host supports it
+  // (the server is the authority), else a manual-command hint.
+  return status?.embeddedLoginSupported ? { kind: "needs-login" } : { kind: "needs-login-manual" };
+});
 
 onMount(async () => {
-  const cached = getAgentAvailability();
-  const data = cached ?? (await fetchAgentAvailability());
-  availability = data;
+  const data = getAgentStatus() ?? (await fetchAgentStatus());
+  status = data;
   if (!data) {
     // Detection failed — fall back to picker so the user isn't stuck.
     mode = "picker";
     return;
   }
-  if (ACP_AGENTS.some((a) => data[a.id])) {
+  const installed = ACP_AGENTS.filter((a) => data.agents[a.id]?.installed);
+  if (installed.length > 0) {
     // If the saved agent isn't installed, nudge the selection to the first
     // installed agent (registry order) so Continue doesn't pick a missing CLI.
     const saved = resolveChatAgentId(getSettings());
-    if (data[saved]) {
-      selected = saved;
-    } else {
-      const firstInstalled = ACP_AGENTS.find((a) => data[a.id]);
-      if (firstInstalled) selected = firstInstalled.id;
-    }
+    selected = data.agents[saved]?.installed ? saved : (installed[0]?.id ?? selected);
   } else {
     // Nothing installed — advertise opencode as the out-of-the-box option.
     selected = OPENCODE;
@@ -111,11 +136,7 @@ async function handleContinue(): Promise<void> {
 }
 
 async function handleInstall(agent: AcpAgentId): Promise<void> {
-  installingAgent = agent;
-  installFailed = false;
-  installError = null;
-  installLog = [];
-
+  install = { kind: "running", agent, log: [] };
   try {
     const startRes = await fetch(`${API_BASE_URL}/api/onboarding/install`, {
       method: "POST",
@@ -123,30 +144,51 @@ async function handleInstall(agent: AcpAgentId): Promise<void> {
       body: JSON.stringify({ agent }),
     });
     if (!startRes.ok) {
-      installFailed = true;
-      installError = `Failed to start installer (HTTP ${startRes.status})`;
+      install = {
+        kind: "failed",
+        agent,
+        log: currentLog(),
+        error: `Failed to start installer (HTTP ${startRes.status})`,
+      };
       return;
     }
     const { jobId } = (await startRes.json()) as { jobId: string };
 
     const ctrl = new AbortController();
     installAbort = ctrl;
-    await streamInstallEvents(jobId, ctrl.signal);
+    await streamInstallEvents(jobId, agent, ctrl.signal);
   } catch (err) {
     if ((err as Error)?.name === "AbortError") return;
-    installFailed = true;
-    installError = err instanceof Error ? err.message : "Install failed";
+    install = {
+      kind: "failed",
+      agent,
+      log: currentLog(),
+      error: err instanceof Error ? err.message : "Install failed",
+    };
   } finally {
     installAbort = null;
   }
 }
 
-async function streamInstallEvents(jobId: string, signal: AbortSignal): Promise<void> {
+/** Lines accumulated so far, preserved across a running → failed transition. */
+function currentLog(): string[] {
+  return install.kind === "idle" ? [] : install.log;
+}
+
+async function streamInstallEvents(
+  jobId: string,
+  agent: AcpAgentId,
+  signal: AbortSignal,
+): Promise<void> {
   const url = `${API_BASE_URL}/api/onboarding/install/stream?jobId=${encodeURIComponent(jobId)}`;
   const res = await fetch(url, { headers: authHeaders(), signal });
   if (!res.ok || !res.body) {
-    installFailed = true;
-    installError = `Stream failed (HTTP ${res.status})`;
+    install = {
+      kind: "failed",
+      agent,
+      log: currentLog(),
+      error: `Stream failed (HTTP ${res.status})`,
+    };
     return;
   }
   const reader = res.body.getReader();
@@ -158,31 +200,51 @@ async function streamInstallEvents(jobId: string, signal: AbortSignal): Promise<
     buffer += decoder.decode(value, { stream: true });
     const result = parseSSEBuffer<InstallEvent>(buffer);
     buffer = result.remaining;
-    for (const event of result.events) {
-      applyEvent(event);
-    }
+    for (const event of result.events) applyInstallEvent(event, agent);
     if (result.done) break;
   }
 }
 
-function applyEvent(event: InstallEvent): void {
+function applyInstallEvent(event: InstallEvent, agent: AcpAgentId): void {
   if (event.type === "log") {
-    installLog = [...installLog, event.line].slice(-LOG_TAIL);
+    if (install.kind === "running") {
+      install = { kind: "running", agent, log: [...install.log, event.line].slice(-LOG_TAIL) };
+    }
     return;
   }
-  if (event.type === "done") {
-    if (event.success) {
-      // Refresh detection so the just-installed agent shows the Installed tag
-      // and the CTA flips to Continue. Keep `selected` on that agent.
-      void (async () => {
-        availability = await fetchAgentAvailability();
-        installingAgent = null;
-      })();
-    } else {
-      installFailed = true;
-      installError = event.error ?? "Install failed";
-    }
+  // done
+  if (!event.success) {
+    install = { kind: "failed", agent, log: currentLog(), error: event.error ?? "Install failed" };
+    return;
   }
+  // Success — refresh detection so the just-installed agent shows the Installed
+  // tag. If it still needs a login and the host supports the embedded PTY,
+  // advance straight to sign-in; otherwise the CTA flips to Continue (or the
+  // manual hint where the embedded login isn't available).
+  void (async () => {
+    const data = await fetchAgentStatus();
+    status = data;
+    install = { kind: "idle" };
+    if (data && data.agents[agent]?.authed === false && data.embeddedLoginSupported) {
+      signingIn = agent;
+    }
+  })();
+}
+
+function handleSignIn(agent: AcpAgentId): void {
+  signingIn = agent;
+}
+
+async function onLoginDone(): Promise<void> {
+  // The CLI reported a verified login — refresh the snapshot so the CTA flips to
+  // Continue, then drop the terminal.
+  status = await fetchAgentStatus();
+  signingIn = null;
+}
+
+function onLoginSkip(): void {
+  // Unmounting the terminal triggers its onDestroy, which kills the server PTY.
+  signingIn = null;
 }
 
 function handleSkip(): void {
@@ -219,7 +281,7 @@ function handleSkip(): void {
 
 			{#each ACP_AGENTS as agent, i (agent.id)}
 				{@const AgentIcon = acpAgentIcon(agent.icon)}
-				{@const isInstalled = availability?.[agent.id] ?? false}
+				{@const isInstalled = status?.agents[agent.id]?.installed ?? false}
 				<label
 					class="option"
 					data-selected={selected === agent.id}
@@ -230,7 +292,7 @@ function handleSkip(): void {
 						name="agent"
 						value={agent.id}
 						bind:group={selected}
-						disabled={installingAgent !== null}
+						disabled={install.kind === 'running' || signingIn !== null}
 					/>
 					<span class="option-mark" aria-hidden="true"></span>
 					<span class="option-icon" aria-hidden="true">
@@ -253,26 +315,33 @@ function handleSkip(): void {
 			{/each}
 		</fieldset>
 
-		{#if installingAgent !== null && !installFailed}
+		{#if cta.kind === 'signing-in'}
+			<AgentLoginTerminal
+				agent={cta.agent}
+				agentLabel={ACP_AGENTS.find((a) => a.id === cta.agent)?.label ?? cta.agent}
+				onDone={onLoginDone}
+				onSkip={onLoginSkip}
+			/>
+		{:else if cta.kind === 'installing'}
 			<div class="installing">
 				<Dotmatrix variant="square-7" />
 				<div class="install-log">
-					{#if installLog.length === 0}
-						<div class="log-line log-muted">Starting installer…</div>
-					{:else}
-						{#each installLog as line, i (i)}
+					{#if install.kind === 'running' && install.log.length > 0}
+						{#each install.log as line, i (i)}
 							<div class="log-line">{line}</div>
 						{/each}
+					{:else}
+						<div class="log-line log-muted">Starting installer…</div>
 					{/if}
 				</div>
 				<button class="secondary" onclick={handleSkip}>Skip waiting</button>
 			</div>
-		{:else if installFailed}
+		{:else if cta.kind === 'install-failed' && install.kind === 'failed'}
 			<div class="install-log error">
-				{#each installLog as line, i (i)}
+				{#each install.log as line, i (i)}
 					<div class="log-line">{line}</div>
 				{/each}
-				<div class="log-line log-error">{installError ?? 'Install failed.'}</div>
+				<div class="log-line log-error">{install.error}</div>
 			</div>
 			<div class="install-actions">
 				<button class="primary" onclick={() => handleInstall(selected)}>
@@ -280,7 +349,7 @@ function handleSkip(): void {
 				</button>
 				<button class="secondary" onclick={handleSkip}>Skip for now</button>
 			</div>
-		{:else if selectedInstalled}
+		{:else if cta.kind === 'ready'}
 			<div class="actions">
 				<button class="primary" onclick={handleContinue} disabled={isSaving}>
 					<span>Continue</span>
@@ -295,6 +364,28 @@ function handleSkip(): void {
 						<path d="M0 5h16M12 1l4 4-4 4" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
 					</svg>
 				</button>
+			</div>
+		{:else if cta.kind === 'needs-login-manual'}
+			<div class="win-hint">
+				<p class="win-hint-text">
+					Signing in from inside Revv isn't available on this platform yet. Open a
+					terminal and run this to sign in to <em>{selectedLabel}</em>, then come
+					back and continue:
+				</p>
+				<code class="win-hint-cmd">{selectedLoginCommand}</code>
+			</div>
+			<div class="install-actions">
+				<button class="primary" onclick={handleContinue} disabled={isSaving}>
+					<span>Continue</span>
+				</button>
+				<button class="secondary" onclick={handleSkip}>Skip for now</button>
+			</div>
+		{:else if cta.kind === 'needs-login'}
+			<div class="install-actions">
+				<button class="primary" onclick={() => handleSignIn(selected)}>
+					<span>Sign in to {selectedLabel}</span>
+				</button>
+				<button class="secondary" onclick={handleSkip}>Skip for now</button>
 			</div>
 		{:else}
 			<div class="install-actions">
@@ -623,6 +714,37 @@ function handleSkip(): void {
 
 	.log-error {
 		color: var(--ob-text-italic);
+	}
+
+	.win-hint {
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+	}
+
+	.win-hint-text {
+		font-family: 'Newsreader', Georgia, serif;
+		font-size: 15px;
+		line-height: 1.6;
+		color: var(--ob-text-body);
+		margin: 0;
+	}
+
+	.win-hint-text em {
+		font-style: italic;
+		color: var(--ob-text-italic);
+	}
+
+	.win-hint-cmd {
+		align-self: flex-start;
+		padding: 10px 14px;
+		border: 1px solid var(--ob-border);
+		border-radius: 2px;
+		background: var(--ob-hover-subtle);
+		font-family: var(--font-mono, 'JetBrains Mono', monospace);
+		font-size: 12.5px;
+		color: var(--ob-text-heading);
+		user-select: all;
 	}
 
 	@media (prefers-reduced-motion: reduce) {

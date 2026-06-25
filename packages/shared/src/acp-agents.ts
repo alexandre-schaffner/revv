@@ -177,10 +177,32 @@ export function getAgentCapabilities(id: AcpAgentId): AcpAgentCapabilities {
 }
 
 /**
- * Which agents' local CLIs are detected on PATH (or pinned via the LaunchAgent
- * `REVV_*_BIN` env vars). Keyed by registry id so the onboarding picker renders
- * straight from `ACP_AGENTS` and a new agent surfaces an availability flag
- * automatically. Surfaced during onboarding to tag installed/not-installed and
- * to decide whether to offer the opencode install fallback when none is present.
+ * Per-agent onboarding setup status. A single detection call resolves both
+ * facts the agent step needs so the UI never races two endpoints:
+ *   - `installed` — the agent's CLI is present on PATH (or pinned via the
+ *     LaunchAgent `REVV_*_BIN` env vars), or — for the SDK/auth-store agents —
+ *     otherwise usable.
+ *   - `authed` — the user is logged in. opencode needs no login, so it always
+ *     reports `true`.
+ * `loginCommand` is the agent's official interactive login command (joined
+ * argv), surfaced so the UI can show a manual hint where the embedded PTY login
+ * isn't available; `null` for agents that need no login (opencode).
  */
-export type AgentAvailability = Record<AcpAgentId, boolean>;
+export interface AgentStatus {
+  installed: boolean;
+  authed: boolean;
+  loginCommand: string | null;
+}
+
+/**
+ * Full onboarding detection snapshot: per-agent {@link AgentStatus} keyed by
+ * registry id (so the picker renders straight from `ACP_AGENTS` and a new agent
+ * surfaces automatically), plus whether this host can drive an agent's CLI
+ * login inside an embedded pseudo-terminal. The embedded PTY is POSIX-only, so
+ * `embeddedLoginSupported` is `false` on Windows and the UI falls back to the
+ * per-agent `loginCommand` hint. The server is the single authority on this.
+ */
+export interface AgentStatusReport {
+  embeddedLoginSupported: boolean;
+  agents: Record<AcpAgentId, AgentStatus>;
+}

@@ -16,7 +16,7 @@
     },
     "apps/server": {
       "name": "@revv/server",
-      "version": "0.12.1",
+      "version": "0.13.0",
       "dependencies": {
         "@agentclientprotocol/sdk": "^0.26.0",
         "@effect/opentelemetry": "^0.63.0",
@@ -50,7 +50,7 @@
     },
     "apps/web": {
       "name": "@revv/web",
-      "version": "0.12.1",
+      "version": "0.13.0",
       "dependencies": {
         "@elysiajs/eden": "^1.4.9",
         "@internationalized/date": "^3.12.0",
@@ -59,6 +59,8 @@
         "@pierre/trees": "^1.0.0-beta.3",
         "@revv/shared": "workspace:*",
         "@tauri-apps/api": "^2.10.1",
+        "@xterm/addon-fit": "^0.10.0",
+        "@xterm/xterm": "^5.5.0",
         "better-auth": "^1.6.3",
         "bits-ui": "^2.16.3",
         "clsx": "^2.1.1",
@@ -95,7 +97,7 @@
     },
     "packages/app": {
       "name": "@revv/app",
-      "version": "0.12.1",
+      "version": "0.13.0",
       "dependencies": {
         "@revv/ui": "workspace:*",
         "@tanstack/react-router": "^1.168.0",
@@ -116,14 +118,14 @@
     },
     "packages/shared": {
       "name": "@revv/shared",
-      "version": "0.12.1",
+      "version": "0.13.0",
       "devDependencies": {
         "typescript": "^5.7.0",
       },
     },
     "packages/ui": {
       "name": "@revv/ui",
-      "version": "0.12.1",
+      "version": "0.13.0",
       "dependencies": {
         "@radix-ui/react-popover": "^1.1.15",
         "@radix-ui/react-slot": "^1.2.4",
@@ -886,6 +888,10 @@
     "@upsetjs/venn.js": ["@upsetjs/venn.js@2.0.0", "", { "optionalDependencies": { "d3-selection": "^3.0.0", "d3-transition": "^3.0.1" } }, "sha512-WbBhLrooyePuQ1VZxrJjtLvTc4NVfpOyKx0sKqioq9bX1C1m7Jgykkn8gLrtwumBioXIqam8DLxp88Adbue6Hw=="],
 
     "@vitejs/plugin-react": ["@vitejs/plugin-react@4.7.0", "", { "dependencies": { "@babel/core": "^7.28.0", "@babel/plugin-transform-react-jsx-self": "^7.27.1", "@babel/plugin-transform-react-jsx-source": "^7.27.1", "@rolldown/pluginutils": "1.0.0-beta.27", "@types/babel__core": "^7.20.5", "react-refresh": "^0.17.0" }, "peerDependencies": { "vite": "^4.2.0 || ^5.0.0 || ^6.0.0 || ^7.0.0" } }, "sha512-gUu9hwfWvvEDBBmgtAowQCojwZmJ5mcLn3aufeCsitijs3+f2NsrPtlAWIR6OPiqljl96GVCUbLe0HyqIpVaoA=="],
+
+    "@xterm/addon-fit": ["@xterm/addon-fit@0.10.0", "", { "peerDependencies": { "@xterm/xterm": "^5.0.0" } }, "sha512-UFYkDm4HUahf2lnEyHvio51TNGiLK66mqP2JoATy7hRZeXaGMRDr00JiSF7m63vR5WKATF605yEggJKsw0JpMQ=="],
+
+    "@xterm/xterm": ["@xterm/xterm@5.5.0", "", {}, "sha512-hqJHYaQb5OptNunnyAnkHyM8aCjZ1MEIDTQu1iIbbTD/xops91NB5yq1ZK/dC2JDbVWtF23zUtl9JE2NqwT87A=="],
 
     "abort-controller": ["abort-controller@3.0.0", "", { "dependencies": { "event-target-shim": "^5.0.0" } }, "sha512-h8lQ8tacZYnR3vNQTgibj+tODHI5/+l06Au2Pcriv/Gmet0eaj4TwWH41sO9wnHDiQsEj19q0drzdWdeAHtweg=="],
 

@@ -1,7 +1,7 @@
 import {
   ACP_AGENT_IDS,
   type AcpAgentId,
-  type AgentAvailability,
+  type AgentStatusReport,
   getAgentCapabilities,
   type UserSettings,
 } from "@revv/shared";
@@ -151,7 +151,7 @@ export function reset(): void {
   modelsByAgent = byAgent(() => []);
   modelsLoadedByAgent = byAgent(() => false);
   modelsInFlight = {};
-  agentAvailability = null;
+  agentStatus = null;
 }
 
 /**
@@ -228,28 +228,29 @@ export function cascadeChatAgentChange(acpId: AcpAgentId): SettingsUpdate {
   return update;
 }
 
-// ── Agent availability ──────────────────────────────────────────────────────
-// Cached snapshot of which CLI agents are installed locally. Used by the
-// onboarding agent step to decide between the picker and the install
-// prompt. Stays null until `fetchAgentAvailability()` runs, since first
-// render has nothing useful to show.
+// ── Agent status ──────────────────────────────────────────────────────────────
+// Cached one-shot detection snapshot — per-agent installed + authed + login
+// command, plus whether this host supports the embedded PTY login. Used by the
+// onboarding agent step to render the picker tags and the adaptive CTA. Stays
+// null until `fetchAgentStatus()` runs, since first render has nothing useful to
+// show.
 
-let agentAvailability = $state<AgentAvailability | null>(null);
+let agentStatus = $state<AgentStatusReport | null>(null);
 
-export function getAgentAvailability(): AgentAvailability | null {
-  return agentAvailability;
+export function getAgentStatus(): AgentStatusReport | null {
+  return agentStatus;
 }
 
-export async function fetchAgentAvailability(): Promise<AgentAvailability | null> {
+export async function fetchAgentStatus(): Promise<AgentStatusReport | null> {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/onboarding/agent-availability`, {
+    const res = await fetch(`${API_BASE_URL}/api/onboarding/agent-status`, {
       headers: authHeaders(),
     });
-    if (!res.ok) return agentAvailability;
-    const data = (await res.json()) as AgentAvailability;
-    agentAvailability = data;
+    if (!res.ok) return agentStatus;
+    const data = (await res.json()) as AgentStatusReport;
+    agentStatus = data;
     return data;
   } catch {
-    return agentAvailability;
+    return agentStatus;
   }
 }

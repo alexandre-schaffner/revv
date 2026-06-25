@@ -4,7 +4,8 @@ export type {
   AcpAgentIconKey,
   AcpAgentId,
   AcpAgentModel,
-  AgentAvailability,
+  AgentStatus,
+  AgentStatusReport,
 } from "./acp-agents";
 export {
   ACP_AGENT_IDS,
@@ -96,6 +97,7 @@ export type {
   HunkDecision,
   HunkDecisionType,
   InstallEvent,
+  LoginEvent,
   MergeEligibility,
   MergeMethod,
   MessageType,
