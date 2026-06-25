@@ -95,10 +95,20 @@ export function submitGithubReviewHandler(prId: string, userId: string, body: Su
 
         for (const input of inputComments) {
           const effectiveLine = input.line;
-          const match = ghComments.find((gh) => {
-            const ghLine = gh.line ?? gh.originalLine;
-            return gh.path === input.path && ghLine === effectiveLine && gh.body === input.body;
-          });
+          // Prefer an exact path+line+body match; fall back to path+line, then
+          // path+body. The `/reviews/:id/comments` response can return a null
+          // `line` and GitHub may normalize the body, so requiring all three
+          // exactly would miss — leaving the comment unlinked and re-postable.
+          const match =
+            ghComments.find((gh) => {
+              const ghLine = gh.line ?? gh.originalLine;
+              return gh.path === input.path && ghLine === effectiveLine && gh.body === input.body;
+            }) ??
+            ghComments.find((gh) => {
+              const ghLine = gh.line ?? gh.originalLine;
+              return gh.path === input.path && ghLine === effectiveLine;
+            }) ??
+            ghComments.find((gh) => gh.path === input.path && gh.body === input.body);
 
           if (!match) {
             logError(

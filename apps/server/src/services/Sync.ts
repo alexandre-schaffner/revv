@@ -391,21 +391,34 @@ export const SyncServiceLive = Layer.effect(
           );
           if (linkedThread) {
             const linkedMsgs = yield* reviewService.getMessages(linkedThread.id);
-            const unlinked = linkedMsgs.find((m) => m.externalId == null && m.body === c.body);
+            // Prefer an exact body match; fall back to the first unsynced
+            // reviewer message (the root). Without this fallback a normalized
+            // body leaves the root message unlinked, and the next submit
+            // re-pushes it as a reply — the same text appearing twice.
+            const unlinked =
+              linkedMsgs.find((m) => m.externalId == null && m.body === c.body) ??
+              linkedMsgs.find((m) => m.externalId == null && m.authorRole === "reviewer");
             if (unlinked) yield* reviewService.setMessageExternalId(unlinked.id, String(c.id));
             continue;
           }
 
-          // Content-based adoption: a local thread the user authored whose
-          // post-submit link missed. Match on the reliable location + body.
-          const adoptable = unsyncedLocal.find(
+          // Location-based adoption: a local thread the user authored whose
+          // post-submit link missed. Match on the reliable file + line + side.
+          // Prefer an exact body match, but fall back to the sole local comment
+          // at this location — GitHub may normalize the stored body (line
+          // endings / trailing whitespace), so exact equality can't be
+          // required, and a single unsynced thread at one (file, line, side) is
+          // unambiguous.
+          const sameLocation = unsyncedLocal.filter(
             (u) =>
               !adoptedThreadIds.has(u.thread.id) &&
               u.thread.filePath === c.path &&
               u.thread.endLine === (c.line ?? c.startLine ?? 1) &&
-              u.thread.diffSide === (c.side === "LEFT" ? "old" : "new") &&
-              u.joinedBody === c.body,
+              u.thread.diffSide === (c.side === "LEFT" ? "old" : "new"),
           );
+          const adoptable =
+            sameLocation.find((u) => u.joinedBody === c.body) ??
+            (sameLocation.length === 1 ? sameLocation[0] : undefined);
           if (adoptable) {
             yield* reviewService.setThreadExternalIds(adoptable.thread.id, {
               externalCommentId: String(c.id),
