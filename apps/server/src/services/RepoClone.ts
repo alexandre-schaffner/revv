@@ -916,7 +916,7 @@ export const RepoCloneServiceLive = Layer.effect(
             // NUL byte in the first 8 KB flips the verdict. The
             // content string was decoded via TextDecoder
             // (replacement char on invalid UTF-8) so a true binary
-            // will both contain ` ` from real NULs *and* lots
+            // will both contain `\0` from real NULs *and* lots
             // of U+FFFD; the NUL test alone is sufficient and
             // avoids false positives on valid Unicode replacement
             // characters that happen to be in legitimate text.
