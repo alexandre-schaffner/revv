@@ -371,13 +371,15 @@ $effect(() => {
 						 * parks it at the row's trailing edge; \`min-width\`
 						 * reserves the column even for additions-only files (\`+1\`)
 						 * so the leading edge doesn't zigzag row to row.
-						 * \`pad-start + 2.25em + 4px gap + 2.5em\` ≈ 12 + 22 + 4 +
-						 * 25 = 63px. */
+						 * \`padding-inline-start\` is kept tight (the gap between
+						 * the filename and the count) so the name gets the most
+						 * room and truncates as late as possible. \`pad-start +
+						 * 2.25em + 4px gap + 2.5em\` ≈ 6 + 22 + 4 + 25 = 57px. */
 						button[data-type='item'] > [data-item-section='decoration'] {
 							flex: 0 0 auto;
 							margin-inline-start: auto;
-							padding-inline-start: 12px;
-							min-width: 64px;
+							padding-inline-start: 6px;
+							min-width: 58px;
 						}
 					`,
         // ── Right-side line-count badge ────────────────────────────
