@@ -17,9 +17,77 @@ import { walkthroughs } from "../db/schema/walkthroughs";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
 import type { ResolvePushFrame } from "../services/ChatChangesPush";
-import { ChatSessionService } from "../services/ChatSession";
+import { type ChatSessionRow, ChatSessionService } from "../services/ChatSession";
+import { PrContextService } from "../services/PrContext";
+import { RepoCloneService } from "../services/RepoClone";
+import { SettingsService } from "../services/Settings";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+/**
+ * Cheap, read-only bootstrap prefix shared by `POST /api/chat` and the
+ * `GET /api/chat/:prId/session-context` menu fetch: PR + repo + token, the
+ * current head SHA (falling back to a live GitHub meta fetch), the resolved
+ * agent/model, and the existing session row.
+ *
+ * Performs NO writes and NO worktree mutation — crucially it does NOT
+ * `acquirePrWorktree` (which fetches + may `reset --hard`), `findOrCreate`,
+ * `newSession`, or `setAgentSessionId`. That keeps the menu fetch — which
+ * fires on every PR selection — free of git side effects and incapable of
+ * racing an in-flight turn writing to the same worktree. The worktree acquire
+ * is the POST turn's job (see `resolveChatTurnContext`).
+ */
+export const resolveChatReadContext = (prId: string, userId: string) =>
+  Effect.gen(function* () {
+    const prCtx = yield* PrContextService;
+    const settingsService = yield* SettingsService;
+    const chatSessions = yield* ChatSessionService;
+
+    const { pr, repo, token } = yield* prCtx.resolveBasic(prId, userId);
+
+    // Resolve current head SHA (fall back to fetching meta).
+    let headSha = pr.headSha;
+    if (!headSha) {
+      const meta = yield* prCtx.prMeta(repo.fullName, pr.externalId, token);
+      headSha = meta.headSha;
+    }
+
+    const settings = yield* settingsService.getSettings();
+    const agent = yield* settingsService.resolveChatAgentId();
+    const model = settings.aiModel;
+
+    // A null row means a fresh start (e.g. the user just cleared chat) — the
+    // POST handler keys its hard-reset off this.
+    const existingSessionRow: ChatSessionRow | null = yield* chatSessions.find(
+      pr.id,
+      agent,
+      model,
+      headSha,
+    );
+
+    return { pr, repo, token, headSha, settings, agent, model, existingSessionRow };
+  });
+
+/**
+ * The full turn bootstrap for `POST /api/chat`: the read prefix above plus the
+ * per-PR worktree acquire (shared across walkthrough generation and every chat
+ * session for this PR). Only the POST turn mutates the worktree; the
+ * session-context menu fetch uses {@link resolveChatReadContext} instead.
+ */
+export const resolveChatTurnContext = (prId: string, userId: string) =>
+  Effect.gen(function* () {
+    const read = yield* resolveChatReadContext(prId, userId);
+    const repoClone = yield* RepoCloneService;
+
+    const { worktreePath, branchName } = yield* repoClone.acquirePrWorktree({
+      repoId: read.repo.id,
+      prNumber: read.pr.externalId,
+      prHeadSha: read.headSha,
+      githubToken: read.token,
+    });
+
+    return { ...read, worktreePath, branchName };
+  });
 
 /**
  * Best-effort fetch of the latest completed walkthrough's summary, risk,
@@ -106,6 +174,11 @@ export function gitStdout(args: string[], cwd: string, timeoutMs = 10_000): Prom
       reject(err);
     });
   });
+}
+
+export async function listRepoFiles(worktreePath: string): Promise<string[]> {
+  const stdout = await gitStdout(["ls-tree", "-r", "--name-only", "-z", "HEAD"], worktreePath);
+  return stdout.split("\0").filter((path) => path.length > 0);
 }
 
 /**

@@ -35,6 +35,9 @@ Editing rules:
 
 The worktree is checked out on a working branch named `{{BRANCH_NAME}}`.
 
+User messages may include `@path/to/file` tokens. Treat those as worktree-relative file references; the prompt may also include resource links for the same paths.
+User messages may include attached resources or images. Treat attached text files and images as part of the user's request, not as transcript decoration.
+
 When the user asks you to "address all issues" / "address the comments" / similar:
   1. Call `get_review_context` once. The payload contains:
      - `flaggedIssues[]` — each with `id`, `severity`, `title`, `description`, location, the associated diff `blocks[]`, and the agent-authored `inlineComment` (when present).

@@ -16,6 +16,7 @@ export type PromptInputProps = Omit<HTMLFormAttributes, "onsubmit"> & {
 
 <script lang="ts">
 	import { setContext } from "svelte";
+	import { toast } from "svelte-sonner";
 	import { cn } from "$lib/utils.js";
 	import { PROMPT_INPUT_CTX_KEY, type PromptInputContext } from "./context.js";
 
@@ -29,11 +30,24 @@ export type PromptInputProps = Omit<HTMLFormAttributes, "onsubmit"> & {
 		...restProps
 	}: PromptInputProps = $props();
 
+	let files = $state<File[]>([]);
+	let dragActive = $state(false);
+
+	function addFiles(nextFiles: readonly File[]) {
+		if (nextFiles.length === 0) return;
+		files = [...files, ...nextFiles];
+	}
+
+	function removeFile(index: number) {
+		files = files.filter((_, i) => i !== index);
+	}
+
 	function submit() {
 		const trimmed = value.trim();
-		if (!trimmed) return;
-		onSubmit?.({ text: trimmed });
+		if (!trimmed && files.length === 0) return;
+		onSubmit?.({ text: trimmed, files });
 		value = "";
+		files = [];
 	}
 
 	function stop() {
@@ -49,10 +63,40 @@ export type PromptInputProps = Omit<HTMLFormAttributes, "onsubmit"> & {
 		}
 	}
 
+	function handlePaste(e: ClipboardEvent) {
+		const pasted = Array.from(e.clipboardData?.files ?? []);
+		if (pasted.length === 0) return;
+		addFiles(pasted);
+	}
+
+	function handleDragOver(e: DragEvent) {
+		if (!e.dataTransfer || Array.from(e.dataTransfer.items).every((item) => item.kind !== "file")) {
+			return;
+		}
+		e.preventDefault();
+		dragActive = true;
+	}
+
+	function handleDragLeave(e: DragEvent) {
+		if (e.currentTarget === e.target) dragActive = false;
+	}
+
+	function handleDrop(e: DragEvent) {
+		const dropped = Array.from(e.dataTransfer?.files ?? []);
+		if (dropped.length === 0) return;
+		e.preventDefault();
+		dragActive = false;
+		addFiles(dropped);
+		toast.message(dropped.length === 1 ? "Attached file" : "Attached files");
+	}
+
 	const ctx: PromptInputContext = {
 		get status() { return status; },
 		get value() { return value; },
+		get files() { return files; },
 		setValue(v: string) { value = v; },
+		addFiles,
+		removeFile,
 		submit,
 		stop,
 	};
@@ -63,9 +107,14 @@ export type PromptInputProps = Omit<HTMLFormAttributes, "onsubmit"> & {
 	data-slot="prompt-input"
 	class={cn(
 		"relative flex flex-col rounded-xl border border-border bg-background shadow-xs",
+		dragActive && "border-accent shadow-sm shadow-accent/20",
 		className,
 	)}
 	onsubmit={handleFormSubmit}
+	onpaste={handlePaste}
+	ondragover={handleDragOver}
+	ondragleave={handleDragLeave}
+	ondrop={handleDrop}
 	{...restProps}
 >
 	{@render children?.()}

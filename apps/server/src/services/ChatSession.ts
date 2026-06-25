@@ -17,7 +17,12 @@
 // turns (which shouldn't happen for the same PR but could during retries)
 // can't double-issue the same sequence number.
 
-import type { ChatTask, InteractionMode, NormalizedQuestion } from "@revv/shared";
+import type {
+  ChatAttachmentMetadata,
+  ChatTask,
+  InteractionMode,
+  NormalizedQuestion,
+} from "@revv/shared";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import {
@@ -70,6 +75,7 @@ export interface ChatMessageRow {
   readonly chatSessionId: string;
   readonly role: "user" | "assistant";
   readonly content: string;
+  readonly attachments: ReadonlyArray<ChatAttachmentMetadata>;
   readonly isStreaming: boolean;
   readonly sequence: number;
   readonly turnId: string;
@@ -233,6 +239,7 @@ export class ChatSessionService extends Context.Tag("ChatSessionService")<
       readonly chatSessionId: string;
       readonly turnId: string;
       readonly content: string;
+      readonly attachments?: ReadonlyArray<ChatAttachmentMetadata>;
     }) => Effect.Effect<{ readonly id: string; readonly sequence: number }>;
 
     /**
@@ -435,6 +442,36 @@ export const ChatSessionServiceLive = Layer.effect(
       createdAt: row.createdAt,
       lastActivityAt: row.lastActivityAt,
     });
+
+    const parseAttachmentMetadata = (
+      value: string | null,
+    ): ReadonlyArray<ChatAttachmentMetadata> => {
+      if (!value) return [];
+      try {
+        const parsed: unknown = JSON.parse(value);
+        if (!Array.isArray(parsed)) return [];
+        const result: ChatAttachmentMetadata[] = [];
+        for (const item of parsed) {
+          if (!item || typeof item !== "object") continue;
+          const record = item as Record<string, unknown>;
+          const kind = record.kind;
+          const name = record.name;
+          const mimeType = record.mimeType;
+          const size = record.size;
+          if (
+            (kind === "image" || kind === "text") &&
+            typeof name === "string" &&
+            typeof mimeType === "string" &&
+            typeof size === "number"
+          ) {
+            result.push({ kind, name, mimeType, size });
+          }
+        }
+        return result;
+      } catch {
+        return [];
+      }
+    };
 
     const rowToTaskRow = (row: typeof chatTasks.$inferSelect): ChatTaskRow => ({
       id: row.id,
@@ -698,17 +735,20 @@ export const ChatSessionServiceLive = Layer.effect(
           db.delete(chatSessions).where(eq(chatSessions.agent, agent)).run();
         }),
 
-      appendUserMessage: ({ chatSessionId, turnId, content }) =>
+      appendUserMessage: ({ chatSessionId, turnId, content, attachments }) =>
         Effect.sync(() => {
           const sequence = allocateSequence(chatSessionId);
           const id = crypto.randomUUID();
           const now = nowIso();
+          const attachmentsJson =
+            attachments && attachments.length > 0 ? JSON.stringify(attachments) : null;
           db.insert(chatMessages)
             .values({
               id,
               chatSessionId,
               role: "user",
               content,
+              attachmentsJson,
               isStreaming: 0,
               sequence,
               turnId,
@@ -731,6 +771,7 @@ export const ChatSessionServiceLive = Layer.effect(
               chatSessionId,
               role: "assistant",
               content: "",
+              attachmentsJson: null,
               isStreaming: 1,
               sequence,
               turnId,
@@ -886,6 +927,7 @@ export const ChatSessionServiceLive = Layer.effect(
                 chatSessionId: m.chatSessionId,
                 role: m.role as "user" | "assistant",
                 content: m.content,
+                attachments: parseAttachmentMetadata(m.attachmentsJson),
                 isStreaming: m.isStreaming === 1,
                 sequence: m.sequence,
                 turnId: m.turnId,

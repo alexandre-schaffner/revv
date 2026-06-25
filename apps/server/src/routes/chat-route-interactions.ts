@@ -3,15 +3,19 @@
 // Elysia sub-router for plan/question/agent interaction endpoints.
 // Composed into the main chatRoute via `.use()`.
 
-import { getAgentCapabilities } from "@revv/shared";
+import { existsSync } from "node:fs";
+import { type ChatSessionContext, getAgentCapabilities } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
+import { getAcpConnection } from "../ai/acp/acp-connection";
+import { applyAcpAgentOverride } from "../ai/acp/presets";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
 import { Broadcaster } from "../services/Broadcaster";
 import { ChatSessionService } from "../services/ChatSession";
 import { PrContextService } from "../services/PrContext";
 import { SettingsService } from "../services/Settings";
+import { listRepoFiles, resolveChatReadContext } from "./chat-helpers";
 import { handleAppError, jsonResponse, withAuth } from "./middleware";
 
 export const chatInteractionRoutes = new Elysia()
@@ -262,4 +266,77 @@ export const chatInteractionRoutes = new Elysia()
     } catch (e) {
       return handleAppError(e, ctx);
     }
-  });
+  })
+  .get(
+    "/api/chat/:prId/session-context",
+    async (ctx) => {
+      try {
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            // Read-only context for the composer's `@`-mention and `/`-command
+            // menus. This endpoint fires on every PR selection, so it is
+            // deliberately side-effect-free: it does NOT acquire/mutate the
+            // worktree and does NOT create or mutate session state. (Acquiring
+            // here would run a git fetch + possible `reset --hard` on every PR
+            // click and could race an in-flight turn writing the worktree;
+            // pre-creating a session would strip the system prompt from the
+            // first turn and mask the fresh-start worktree reset.)
+            const { settings, agent, existingSessionRow } = yield* resolveChatReadContext(
+              ctx.params.prId,
+              ctx.session.user.id,
+            );
+
+            // Only read the agent + filesystem when a worktree already exists
+            // on disk (created by a prior turn). On a fresh PR there is no
+            // worktree yet, so we return an empty context — the mention menu
+            // still works from the client's changed-file list, and slash
+            // commands + the full repo file list fill in after the first turn
+            // (the client re-fetches on turn completion).
+            const worktreePath = existingSessionRow?.worktreePath ?? null;
+            let commands: ChatSessionContext["commands"] = [];
+            let promptImage = false;
+            let embeddedContext = false;
+            let repoFiles: ReadonlyArray<string> = [];
+
+            if (worktreePath && existsSync(worktreePath)) {
+              const acpAgent = applyAcpAgentOverride(agent);
+              const handle = yield* Effect.promise(() =>
+                getAcpConnection(worktreePath, acpAgent, {
+                  model: settings.aiModel ?? undefined,
+                  thinkingEffort: settings.aiThinkingEffort ?? undefined,
+                  contextWindow: settings.aiContextWindow ?? undefined,
+                }),
+              );
+              promptImage = handle.promptImage;
+              embeddedContext = handle.embeddedContext;
+              // Available slash commands are cached against a live session id,
+              // populated as the agent streams `available_commands_update`
+              // after a session opens. Empty until the first turn runs.
+              const sessionId = existingSessionRow?.sessionId ?? null;
+              commands = sessionId
+                ? handle.getAvailableCommands(sessionId).map((command) => ({
+                    name: command.name,
+                    description: command.description,
+                  }))
+                : [];
+              repoFiles = yield* Effect.promise(() => listRepoFiles(worktreePath));
+            }
+
+            const response: ChatSessionContext = {
+              commands,
+              promptImage,
+              embeddedContext,
+              repoFiles,
+            };
+            return response;
+          }),
+        );
+        return jsonResponse({ ...result }, 200);
+      } catch (e) {
+        return handleAppError(e, ctx);
+      }
+    },
+    {
+      params: t.Object({ prId: t.String() }),
+    },
+  );

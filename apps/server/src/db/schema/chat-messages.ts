@@ -36,6 +36,7 @@ export const chatMessages = sqliteTable(
       .references(() => chatSessions.id, { onDelete: "cascade" }),
     role: text("role").notNull(), // 'user' | 'assistant'
     content: text("content").notNull().default(""),
+    attachmentsJson: text("attachments_json"),
     isStreaming: integer("is_streaming").notNull().default(0),
     sequence: integer("sequence").notNull(),
     turnId: text("turn_id").notNull(),

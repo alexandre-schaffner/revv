@@ -123,6 +123,79 @@ export type QuestionStatus = ChatQuestion["status"];
 /** Role of a message in the right-pane chat. */
 export type MessageRole = "user" | "assistant" | "system";
 
+export interface ChatAttachment {
+  readonly kind: "image" | "text";
+  readonly name: string;
+  readonly mimeType: string;
+  /**
+   * Images are base64-encoded bytes. Text attachments carry UTF-8 text.
+   */
+  readonly data: string;
+}
+
+export interface ChatAttachmentMetadata {
+  readonly kind: "image" | "text";
+  readonly name: string;
+  readonly mimeType: string;
+  readonly size: number;
+}
+
+// ── Attachment limits + helpers ────────────────────────────────────────────
+//
+// Canonical home for the attachment size math, formatting, and limit messages.
+// Both the server (validation + 413s) and the web client (pre-send gate +
+// toasts + size labels) import these so the two sides can never drift on the
+// caps, the byte accounting, or the user-facing copy.
+
+/** Per-attachment hard cap. */
+export const MAX_CHAT_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+/** Combined cap across every attachment in a single message. */
+export const MAX_CHAT_ATTACHMENTS_TOTAL_BYTES = 12 * 1024 * 1024;
+
+/**
+ * Decoded byte size of an attachment's payload. Images carry base64 (the
+ * decoded byte count is ≈ 3/4 of the string length); text carries raw UTF-8.
+ */
+export function attachmentByteSize(attachment: ChatAttachment): number {
+  if (attachment.kind === "image") {
+    return Math.ceil((attachment.data.length * 3) / 4);
+  }
+  return new TextEncoder().encode(attachment.data).byteLength;
+}
+
+/** Human-readable size label (B / KB / MB). */
+export function formatAttachmentSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Per-attachment over-limit message. */
+export function attachmentTooLargeMessage(name: string): string {
+  return `${name} is too large. Attachments are limited to ${
+    MAX_CHAT_ATTACHMENT_BYTES / (1024 * 1024)
+  } MB each.`;
+}
+
+/** Total-over-limit message. */
+export function attachmentsTotalTooLargeMessage(): string {
+  return `Attachments are too large. The total attachment limit is ${
+    MAX_CHAT_ATTACHMENTS_TOTAL_BYTES / (1024 * 1024)
+  } MB.`;
+}
+
+export interface ChatSessionCommand {
+  readonly name: string;
+  readonly description: string;
+}
+
+export interface ChatSessionContext {
+  readonly commands: ReadonlyArray<ChatSessionCommand>;
+  readonly promptImage: boolean;
+  readonly embeddedContext: boolean;
+  readonly repoFiles: ReadonlyArray<string>;
+}
+
 // ── SSE wire frame ────────────────────────────────────────────────────────
 
 import type { Activity } from "./activity";

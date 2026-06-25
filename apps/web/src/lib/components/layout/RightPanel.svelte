@@ -24,6 +24,8 @@ const TOOL_CALL_ROW_H = 14; // px — match walkthrough's compact tool-call rows
 
 import { toast } from "svelte-sonner";
 import { fetchProposedDiffFiles, type ProposedDiffFile } from "$lib/api/chat";
+import { encodeAttachments } from "$lib/chat/attachments";
+import AttachmentChip from "$lib/components/ai/AttachmentChip.svelte";
 import { Checkpoint } from "$lib/components/ai/checkpoint";
 import {
   Confirmation,
@@ -48,6 +50,8 @@ import {
 } from "$lib/components/ai/plan";
 import {
   PromptInput,
+  PromptInputAttachButton,
+  PromptInputAttachments,
   PromptInputBody,
   PromptInputButton,
   PromptInputFooter,
@@ -97,6 +101,7 @@ import {
   discardProposedCommitAction,
   enqueueMessage,
   getChatItems,
+  getChatSessionContext,
   getCheckpoints,
   getInteractionMode,
   getProposedChanges,
@@ -116,6 +121,7 @@ import {
   isResolvingPush,
   loadAvailableAgents,
   loadChatHistory,
+  loadChatSessionContext,
   pushProposed,
   rebaseAllProposedAction,
   refreshProposedChanges,
@@ -130,7 +136,7 @@ import {
   toggleCommitSelection,
 } from "$lib/stores/chat.svelte";
 import { getSelectedPr } from "$lib/stores/prs.svelte";
-import { getLoadedHeadSha } from "$lib/stores/review.svelte";
+import { getLoadedHeadSha, getReviewFiles } from "$lib/stores/review.svelte";
 import {
   FALLBACK_PROMPTS,
   fetchSuggestions,
@@ -184,6 +190,13 @@ const planModeAvailable = $derived(isPlanModeAvailable());
 const queuedMessages = $derived(prId ? getQueuedMessages(prId) : []);
 const chatCheckpoints = $derived(prId ? getCheckpoints(prId) : []);
 const toolApprovals = $derived(prId ? getToolApprovals(prId) : []);
+const sessionContext = $derived(prId ? getChatSessionContext(prId) : null);
+const mentionPaths = $derived.by(() => {
+  const changed = getReviewFiles().map((file) => file.path);
+  const changedSet = new Set(changed);
+  const repo = sessionContext?.repoFiles ?? [];
+  return [...changed, ...repo.filter((path) => !changedSet.has(path))];
+});
 /** Index → checkpoint lookup for interleaving in the message loop. */
 const checkpointByAfterIndex = $derived(new Map(chatCheckpoints.map((cp) => [cp.afterIndex, cp])));
 /** Pending (un-responded) tool approvals, rendered after the last message. */
@@ -271,6 +284,7 @@ $effect(() => {
     void refreshProposedChanges(prId);
     void loadChatHistory(prId);
     void loadAvailableAgents();
+    void loadChatSessionContext(prId);
   }
 });
 
@@ -307,15 +321,16 @@ function nestedActivitiesFor(invocationId: string) {
   );
 }
 
-function handlePromptSubmit(message: PromptInputMessage): void {
+async function handlePromptSubmit(message: PromptInputMessage): Promise<void> {
   if (!prId) return;
   const value = message.text.trim();
-  if (value.length === 0) return;
+  const attachments = await encodeAttachments(message.files ?? [], (msg) => toast.error(msg));
+  if (value.length === 0 && attachments.length === 0) return;
   if (isStreaming) {
     // Agent is busy — queue the message for dispatch when it finishes.
-    enqueueMessage(prId, value);
+    enqueueMessage(prId, value, attachments);
   } else {
-    sendChatMessage({ prId, message: value });
+    sendChatMessage({ prId, message: value, attachments });
   }
 }
 
@@ -745,7 +760,23 @@ function activitiesForTurn(
 				{:else if item.role === 'user'}
 					<Message from="user">
 						<MessageContent>
-							<MessageResponse content={item.content} class="prose-on-accent rounded-[14px] rounded-br-[4px] bg-accent px-3 py-2 text-white" />
+							<div class="flex max-w-full flex-col items-end gap-1.5">
+								{#if item.content}
+									<MessageResponse content={item.content} class="prose-on-accent rounded-[14px] rounded-br-[4px] bg-accent px-3 py-2 text-white" />
+								{/if}
+								{#if item.attachments && item.attachments.length > 0}
+									<div class="flex max-w-[min(26rem,80vw)] flex-wrap justify-end gap-1">
+										{#each item.attachments as attachment (`${attachment.name}-${attachment.size}`)}
+											<AttachmentChip
+												kind={attachment.kind}
+												name={attachment.name}
+												size={attachment.size}
+												tone="accent"
+											/>
+										{/each}
+									</div>
+								{/if}
+							</div>
 						</MessageContent>
 					</Message>
 				{:else if item.kind === 'message' && item.role === 'assistant'}
@@ -1113,14 +1144,18 @@ function activitiesForTurn(
 			class={'composer-glass composer-glass-input transition-[border-color,box-shadow] duration-quick ease-out-expo' + (showQueueDock ? ' composer-glass--attached rounded-t-none border-t-0' : '') + (!prId ? ' opacity-60' : '')}
 		>
 			<PromptInputBody>
+				<PromptInputAttachments />
 				<PromptInputTextarea
 					placeholder="Ask anything…"
 					disabled={!prId}
 					class="text-sm leading-relaxed"
+					commands={sessionContext?.commands ?? []}
+					mentionPaths={mentionPaths}
 				/>
 			</PromptInputBody>
 			<PromptInputFooter>
 				<PromptInputTools>
+					<PromptInputAttachButton />
 					<PromptInputButton
 						tooltip={
 							planModeAvailable

@@ -20,7 +20,16 @@
 // Map-reassignment for Svelte-5 reactivity, matching the `loadedHeadShas`
 // idiom in `review.svelte.ts` and the entry maps in `walkthrough.svelte.ts`.
 
-import type { ActivityKind, ChatTask, InteractionMode, NormalizedQuestion } from "@revv/shared";
+import {
+  type ActivityKind,
+  attachmentByteSize,
+  type ChatAttachment,
+  type ChatAttachmentMetadata,
+  type ChatSessionContext,
+  type ChatTask,
+  type InteractionMode,
+  type NormalizedQuestion,
+} from "@revv/shared";
 import { toast } from "svelte-sonner";
 import {
   type AvailableAgents,
@@ -34,6 +43,7 @@ import {
   fetchAvailableAgents,
   fetchChatMessages,
   fetchProposedChanges,
+  fetchSessionContext,
   type MergePushError,
   type MergePushResult,
   type PersistedChatEntry,
@@ -56,6 +66,7 @@ export type ChatItem =
       role: "user" | "assistant";
       content: string;
       isStreaming: boolean;
+      attachments?: ReadonlyArray<ChatAttachmentMetadata>;
       turnId?: string;
       /**
        * Set when this turn errored mid-stream and we kept the bubble
@@ -124,6 +135,8 @@ let interactionModes = $state(new Map<string, InteractionMode>());
 // CLI agent, not on the PR).
 let availableAgents = $state<AvailableAgents | null>(null);
 let availableAgentsLoading = $state(false);
+let sessionContexts = $state(new Map<string, ChatSessionContext>());
+let sessionContextLoading = $state(new Set<string>());
 
 // In-progress reviewer comments left on a proposed-changes diff. These are
 // ephemeral feedback bound for the chat agent (NOT PR review threads — the
@@ -243,6 +256,43 @@ export function getInteractionMode(prId: string): InteractionMode {
 
 export function isPlanModeAvailable(): boolean {
   return availableAgents?.planAvailable ?? false;
+}
+
+export function getChatSessionContext(prId: string): ChatSessionContext | null {
+  return sessionContexts.get(prId) ?? null;
+}
+
+async function fetchAndStoreSessionContext(prId: string): Promise<void> {
+  try {
+    const context = await fetchSessionContext(prId);
+    sessionContexts.set(prId, context);
+    sessionContexts = new Map(sessionContexts);
+  } catch (err) {
+    console.warn("Failed to load chat session context", err);
+  }
+}
+
+export async function loadChatSessionContext(prId: string): Promise<void> {
+  if (sessionContexts.has(prId) || sessionContextLoading.has(prId)) return;
+  sessionContextLoading.add(prId);
+  sessionContextLoading = new Set(sessionContextLoading);
+  try {
+    await fetchAndStoreSessionContext(prId);
+  } finally {
+    sessionContextLoading.delete(prId);
+    sessionContextLoading = new Set(sessionContextLoading);
+  }
+}
+
+/**
+ * Re-fetch session context, bypassing the load-once cache. Called when a turn
+ * completes: the first turn opens the agent session + worktree, so this is
+ * when slash commands and the full repo-file list become available (the
+ * initial PR-selection fetch returns them empty by design — the server's
+ * session-context endpoint is side-effect-free and never opens a session).
+ */
+async function refreshChatSessionContext(prId: string): Promise<void> {
+  await fetchAndStoreSessionContext(prId);
 }
 
 export async function loadAvailableAgents(): Promise<void> {
@@ -434,6 +484,7 @@ function entryToChatItem(entry: PersistedChatEntry): ChatItem {
       role: entry.role,
       content: entry.content,
       isStreaming: entry.isStreaming,
+      attachments: entry.attachments,
       turnId: entry.turnId,
       ...(entry.error ? { error: entry.error } : {}),
     };
@@ -529,6 +580,7 @@ export interface SendChatMessageParams {
   approvedPlanId?: string;
   /** Override the session's stored interaction mode for this turn. */
   interactionMode?: InteractionMode;
+  attachments?: ReadonlyArray<ChatAttachment>;
 }
 
 function spliceBeforeAssistant(prId: string, assistantId: string, item: ChatItem): void {
@@ -542,9 +594,9 @@ function spliceBeforeAssistant(prId: string, assistantId: string, item: ChatItem
 }
 
 export function sendChatMessage(params: SendChatMessageParams): void {
-  const { prId, message, approvedPlanId, interactionMode } = params;
+  const { prId, message, approvedPlanId, interactionMode, attachments = [] } = params;
   const trimmed = message.trim();
-  if (trimmed.length === 0) return;
+  if (trimmed.length === 0 && attachments.length === 0) return;
 
   // Cancel any in-flight turn for this PR. The user is overriding it.
   abortControllers.get(prId)?.abort();
@@ -563,6 +615,12 @@ export function sendChatMessage(params: SendChatMessageParams): void {
     role: "user",
     content: trimmed,
     isStreaming: false,
+    attachments: attachments.map((attachment) => ({
+      kind: attachment.kind,
+      name: attachment.name,
+      mimeType: attachment.mimeType,
+      size: attachmentByteSize(attachment),
+    })),
     turnId,
   });
   appendItem(prId, {
@@ -579,6 +637,7 @@ export function sendChatMessage(params: SendChatMessageParams): void {
     {
       prId,
       message: trimmed,
+      attachments,
       ...(approvedPlanId !== undefined ? { approvedPlanId } : {}),
       ...(interactionMode !== undefined ? { interactionMode } : {}),
     },
@@ -690,6 +749,10 @@ export function sendChatMessage(params: SendChatMessageParams): void {
         // Refresh the proposed-changes strip — the agent may have made
         // commits during this turn.
         void refreshProposedChanges(prId);
+        // The first turn opens the agent session + worktree, so slash commands
+        // and the full repo-file list only become available now — re-fetch the
+        // (otherwise load-once) session context to populate the menus.
+        void refreshChatSessionContext(prId);
         // Auto-dispatch the next queued message, if any.
         dequeueAndSend(prId);
       },
@@ -1402,8 +1465,7 @@ export async function batchDiscardSelectedAction(prId: string): Promise<void> {
 export interface QueuedMessage {
   id: string;
   text: string;
-  /** Files attached to this queued message (not yet sent). */
-  files?: File[] | undefined;
+  attachments?: ReadonlyArray<ChatAttachment> | undefined;
   queuedAt: number;
 }
 
@@ -1413,14 +1475,18 @@ export function getQueuedMessages(prId: string): QueuedMessage[] {
   return queuedMessages.get(prId) ?? [];
 }
 
-export function enqueueMessage(prId: string, text: string, files?: File[]): void {
+export function enqueueMessage(
+  prId: string,
+  text: string,
+  attachments?: ReadonlyArray<ChatAttachment>,
+): void {
   const trimmed = text.trim();
-  if (trimmed.length === 0) return;
+  if (trimmed.length === 0 && (!attachments || attachments.length === 0)) return;
   const existing = queuedMessages.get(prId) ?? [];
   const msg: QueuedMessage = {
     id: crypto.randomUUID(),
     text: trimmed,
-    files,
+    attachments,
     queuedAt: Date.now(),
   };
   queuedMessages.set(prId, [...existing, msg]);
@@ -1464,7 +1530,11 @@ function dequeueAndSend(prId: string): void {
     queuedMessages.set(prId, rest);
   }
   queuedMessages = new Map(queuedMessages);
-  sendChatMessage({ prId, message: next.text });
+  sendChatMessage({
+    prId,
+    message: next.text,
+    ...(next.attachments !== undefined ? { attachments: next.attachments } : {}),
+  });
 }
 
 // ── Checkpoints ────────────────────────────────────────────────────────────

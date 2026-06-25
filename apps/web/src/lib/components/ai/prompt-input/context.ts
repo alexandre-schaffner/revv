@@ -8,7 +8,10 @@ export interface PromptInputMessage {
 export interface PromptInputContext {
   readonly status: PromptInputStatus;
   readonly value: string;
+  readonly files: readonly File[];
   setValue: (v: string) => void;
+  addFiles: (files: readonly File[]) => void;
+  removeFile: (index: number) => void;
   readonly submit: () => void;
   readonly stop: () => void;
 }
