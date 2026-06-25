@@ -329,7 +329,7 @@ function handlePathKey(e: KeyboardEvent) {
 </script>
 
 <div class="repo">
-	{#if onBack && !isAdding}
+	{#if onBack && !isAdding && mode !== 'browse'}
 		<button class="back" onclick={onBack}>
 			<ChevronLeft size={14} />
 			<span>Back</span>
@@ -398,34 +398,54 @@ function handlePathKey(e: KeyboardEvent) {
 					<p class="path-hint">Choose a local checkout. Revv detects the GitHub repository from its origin remote.</p>
 				{/if}
 
-				<div class="link-actions">
-					<button class="link-submit" onclick={() => void submitLink()} disabled={!canLink}>
-						<LinkSimple size={14} weight="bold" />
-						<span>Link this repository</span>
-					</button>
-				</div>
-
-				<div class="repo-actions">
-					<button class="alt-path" onclick={() => (mode = 'browse')}>
-						<GithubLogo size={17} />
-						<span class="alt-path-text">
-							<span class="alt-path-title">Clone a repository from GitHub instead</span>
-							<span class="alt-path-sub">Browse and clone any repository you can access</span>
-						</span>
-						<span class="alt-path-arrow" aria-hidden="true">→</span>
-					</button>
-					{#if onSkip}
-						<button class="skip" onclick={onSkip}>
-							Skip for now
+				{#if canLink}
+					<!-- A linkable clone is recognized: the Link button is the
+					     primary action, so the GitHub-clone path recedes to a
+					     quiet inline alternative beside it rather than competing
+					     as a full-width card. -->
+					<div class="link-actions">
+						<button class="link-submit" onclick={() => void submitLink()}>
+							<LinkSimple size={14} weight="bold" />
+							<span>Link this repository</span>
 						</button>
+						<button class="alt-link" onclick={() => (mode = 'browse')}>
+							<span>or clone from GitHub instead</span>
+							<span class="alt-link-arrow" aria-hidden="true">→</span>
+						</button>
+					</div>
+
+					{#if onSkip}
+						<div class="repo-actions">
+							<button class="skip" onclick={onSkip}>
+								Skip for now
+							</button>
+						</div>
 					{/if}
-				</div>
+				{:else}
+					<!-- No linkable clone yet: the GitHub-clone path is the only
+					     actionable choice on screen, so it earns the full card. -->
+					<div class="repo-actions">
+						<button class="alt-path" onclick={() => (mode = 'browse')}>
+							<GithubLogo size={17} />
+							<span class="alt-path-text">
+								<span class="alt-path-title">Clone a repository from GitHub instead</span>
+								<span class="alt-path-sub">Browse and clone any repository you can access</span>
+							</span>
+							<span class="alt-path-arrow" aria-hidden="true">→</span>
+						</button>
+						{#if onSkip}
+							<button class="skip" onclick={onSkip}>
+								Skip for now
+							</button>
+						{/if}
+					</div>
+				{/if}
 			</div>
 		{:else}
 			<div class="browse">
 				<button class="back-mode" onclick={() => (mode = 'link')}>
 					<ChevronLeft size={13} />
-					<span>Open an existing clone</span>
+					<span>Back</span>
 				</button>
 
 				<div class="search-row">
@@ -831,7 +851,42 @@ function handlePathKey(e: KeyboardEvent) {
 		flex-wrap: wrap;
 		align-items: center;
 		justify-content: flex-start;
-		gap: 12px;
+		gap: 18px;
+	}
+
+	/* Quiet textual alternative that sits beside the primary Link CTA once a
+	   clone is recognized. Echoes the alt-path's serif voice and arrow nudge,
+	   but at text weight so the primary action clearly leads. */
+	.alt-link {
+		display: inline-flex;
+		align-items: center;
+		gap: 7px;
+		background: none;
+		border: 0;
+		padding: 4px 2px;
+		font-family: 'Newsreader', Georgia, serif;
+		font-style: italic;
+		font-size: 14.5px;
+		color: var(--ob-text-muted);
+		cursor: pointer;
+		transition: color var(--duration-snap) var(--ease-out-expo);
+	}
+
+	.alt-link:hover {
+		color: var(--ob-text-italic);
+	}
+
+	.alt-link-arrow {
+		font-size: 15px;
+		color: var(--ob-text-dimmed);
+		transition:
+			transform var(--duration-smooth) var(--ease-out-expo),
+			color var(--duration-snap) var(--ease-out-expo);
+	}
+
+	.alt-link:hover .alt-link-arrow {
+		transform: translateX(3px);
+		color: var(--ob-text-italic);
 	}
 
 	/* The second path: linking a clone already on disk. A real, visible
