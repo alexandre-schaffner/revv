@@ -24,6 +24,7 @@ import {
   type ChatAttachmentMetadata,
   type InteractionMode,
   MAX_CHAT_ATTACHMENT_BYTES,
+  MAX_CHAT_ATTACHMENTS_COUNT,
   MAX_CHAT_ATTACHMENTS_TOTAL_BYTES,
 } from "@revv/shared";
 import { Effect } from "effect";
@@ -65,10 +66,14 @@ import {
 const BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
 
 // Defense-in-depth bound on a single attachment's raw `data` string, enforced
-// at the schema layer. The authoritative decoded-size caps live in
-// `validateAttachments`; this just rejects an absurd single field early. Sized
-// to the per-attachment byte cap expanded for base64 (~4/3) plus slack. (Bun's
-// global body limit remains the real parse-time memory guard.)
+// at the schema layer. This just rejects an absurd single field early; the
+// authoritative, per-kind decoded-byte caps live in `validateAttachments`.
+// Sized for the worst case — base64 image data, which inflates the byte cap by
+// ~4/3, plus slack. For `text` attachments (`data` is raw UTF-8, ~1 byte/char)
+// this cap therefore over-permits by ~33%; that is intentional — text relies
+// entirely on the decoded-byte check in `validateAttachments`, this bound only
+// exists to stop a pathologically huge single field. (Bun's global body limit
+// remains the real parse-time memory guard.)
 const MAX_ATTACHMENT_DATA_CHARS = Math.ceil((MAX_CHAT_ATTACHMENT_BYTES * 4) / 3) + 1024;
 
 /**
@@ -496,10 +501,11 @@ export const chatRoute = new Elysia()
           t.Array(
             t.Object({
               kind: t.Union([t.Literal("image"), t.Literal("text")]),
-              name: t.String(),
-              mimeType: t.String(),
+              name: t.String({ maxLength: 1024 }),
+              mimeType: t.String({ maxLength: 256 }),
               data: t.String({ maxLength: MAX_ATTACHMENT_DATA_CHARS }),
             }),
+            { maxItems: MAX_CHAT_ATTACHMENTS_COUNT },
           ),
         ),
         interactionMode: t.Optional(t.Union([t.Literal("default"), t.Literal("plan")])),

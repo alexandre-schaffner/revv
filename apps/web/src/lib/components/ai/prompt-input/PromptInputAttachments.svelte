@@ -1,5 +1,6 @@
 <script lang="ts">
 import { getContext } from "svelte";
+import { classifyFile } from "$lib/chat/attachments.js";
 import AttachmentChip from "$lib/components/ai/AttachmentChip.svelte";
 import { gsapFadeY, tokens } from "$lib/motion";
 import { PROMPT_INPUT_CTX_KEY, type PromptInputContext } from "./context.js";
@@ -15,7 +16,7 @@ const ctx = getContext<PromptInputContext>(PROMPT_INPUT_CTX_KEY);
 				out:gsapFadeY={{ y: -3, duration: tokens.snap }}
 			>
 				<AttachmentChip
-					kind={file.type.startsWith("image/") ? "image" : "text"}
+					kind={classifyFile(file) === "image" ? "image" : "text"}
 					name={file.name}
 					size={file.size}
 					onRemove={() => ctx.removeFile(index)}

@@ -10,7 +10,8 @@ export interface PromptInputContext {
   readonly value: string;
   readonly files: readonly File[];
   setValue: (v: string) => void;
-  addFiles: (files: readonly File[]) => void;
+  /** Adds supported files (unsupported types are rejected); returns the count accepted. */
+  addFiles: (files: readonly File[]) => number;
   removeFile: (index: number) => void;
   readonly submit: () => void;
   readonly stop: () => void;

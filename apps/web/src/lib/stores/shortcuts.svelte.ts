@@ -1,7 +1,7 @@
 import { goto } from "$app/navigation";
 import { setActiveTab } from "./review.svelte";
 import { toggleSettings } from "./settingsModal.svelte";
-import { toggleRightPanel, toggleSidebar } from "./sidebar.svelte";
+import { setRightPanelOpen, toggleRightPanel, toggleSidebar } from "./sidebar.svelte";
 
 export type PaletteMode = "search" | "command";
 
@@ -105,6 +105,24 @@ function handleKeydown(e: KeyboardEvent): void {
     e.preventDefault();
     e.stopPropagation();
     toggleRightPanel();
+    return;
+  }
+
+  // Cmd+L → focus the chat composer — only when actively reviewing a PR.
+  // Opens the right panel first if it's collapsed, then focuses the textarea
+  // once it has rendered (rAF defers past the panel's mount).
+  if (!e.shiftKey && !e.altKey && e.key.toLowerCase() === "l") {
+    const onPrPage = window.location.pathname.startsWith("/review/");
+    if (!onPrPage) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setRightPanelOpen(true);
+    requestAnimationFrame(() => {
+      const textarea = document.querySelector<HTMLTextAreaElement>(
+        '[data-slot="prompt-input-textarea"]',
+      );
+      textarea?.focus();
+    });
     return;
   }
 

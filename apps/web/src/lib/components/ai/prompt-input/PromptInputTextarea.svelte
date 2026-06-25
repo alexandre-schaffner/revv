@@ -1,15 +1,11 @@
 <script lang="ts" module>
+import type { ChatSessionCommand } from "@revv/shared";
 import type { HTMLTextareaAttributes } from "svelte/elements";
-
-export interface PromptInputCommand {
-  readonly name: string;
-  readonly description: string;
-}
 
 export type PromptInputTextareaProps = HTMLTextareaAttributes & {
   /** Placeholder text. */
   placeholder?: string;
-  commands?: readonly PromptInputCommand[];
+  commands?: readonly ChatSessionCommand[];
   mentionPaths?: readonly string[];
 };
 </script>
@@ -17,10 +13,10 @@ export type PromptInputTextareaProps = HTMLTextareaAttributes & {
 <script lang="ts">
 	import { detectMentionTrigger, type MentionTrigger } from "@revv/shared";
 	import { cn } from "$lib/utils.js";
+	import { fileIcon } from "$lib/utils/file-icon";
 	import { getContext } from "svelte";
 	import { PROMPT_INPUT_CTX_KEY, type PromptInputContext } from "./context.js";
-	import PromptInputMentionMenu from "./PromptInputMentionMenu.svelte";
-	import PromptInputSlashMenu from "./PromptInputSlashMenu.svelte";
+	import PromptInputAutocompleteMenu from "./PromptInputAutocompleteMenu.svelte";
 
 	let {
 		placeholder = "Type a message...",
@@ -90,13 +86,28 @@ export type PromptInputTextareaProps = HTMLTextareaAttributes & {
 		});
 	}
 
+	// Single source for the inserted-token format, shared by the keyboard
+	// (`selectActive`) and mouse (`onselect`) paths so the marker + trailing
+	// space convention lives in exactly one place per kind.
+	function applySlash(name: string) {
+		replaceToken(`/${name} `);
+	}
+	function applyMention(path: string) {
+		replaceToken(`@${path} `);
+	}
+
+	function shortPath(path: string): string {
+		if (path.length <= 58) return path;
+		return `${path.slice(0, 24)}...${path.slice(-28)}`;
+	}
+
 	function selectActive() {
 		if (trigger?.kind === "slash") {
 			const item = slashItems[activeIndex];
-			if (item) replaceToken(`/${item.name} `);
+			if (item) applySlash(item.name);
 		} else if (trigger?.kind === "mention") {
-			const item = mentionItems[activeIndex];
-			if (item) replaceToken(`@${item} `);
+			const path = mentionItems[activeIndex];
+			if (path) applyMention(path);
 		}
 	}
 
@@ -154,17 +165,42 @@ export type PromptInputTextareaProps = HTMLTextareaAttributes & {
 	});
 </script>
 
+{#snippet slashRow(item: ChatSessionCommand)}
+	<span class="block font-mono text-xs">/{item.name}</span>
+	<span class="block truncate text-xs text-muted-foreground">{item.description}</span>
+{/snippet}
+
+{#snippet mentionRow(path: string)}
+	{@const icon = fileIcon(path)}
+	<svg
+		class="size-3.5 shrink-0"
+		viewBox="0 0 16 16"
+		style={icon.color ? `color: ${icon.color}` : undefined}
+		aria-hidden="true"
+	>
+		<use href={`#${icon.symbolId}`} />
+	</svg>
+	<span class="min-w-0 truncate">{shortPath(path)}</span>
+{/snippet}
+
 {#if menuOpen && trigger?.kind === "slash"}
-	<PromptInputSlashMenu
+	<PromptInputAutocompleteMenu
 		items={slashItems}
 		{activeIndex}
-		onselect={(item) => replaceToken(`/${item.name} `)}
+		key={(item) => item.name}
+		rowClass="block text-sm"
+		onselect={(item) => applySlash(item.name)}
+		row={slashRow}
 	/>
 {:else if menuOpen && trigger?.kind === "mention"}
-	<PromptInputMentionMenu
-		paths={mentionItems}
+	<PromptInputAutocompleteMenu
+		items={mentionItems}
 		{activeIndex}
-		onselect={(path) => replaceToken(`@${path} `)}
+		key={(path) => path}
+		rowClass="flex items-center gap-2 font-mono text-xs"
+		rowTitle={(path) => path}
+		onselect={applyMention}
+		row={mentionRow}
 	/>
 {/if}
 

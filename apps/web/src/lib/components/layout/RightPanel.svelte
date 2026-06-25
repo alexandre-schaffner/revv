@@ -101,6 +101,7 @@ import {
   discardProposedCommitAction,
   enqueueMessage,
   getChatItems,
+  getChatMentionPaths,
   getChatSessionContext,
   getCheckpoints,
   getInteractionMode,
@@ -134,6 +135,7 @@ import {
   sendChatMessage,
   setInteractionMode,
   toggleCommitSelection,
+  warmChatSessionContext,
 } from "$lib/stores/chat.svelte";
 import { getSelectedPr } from "$lib/stores/prs.svelte";
 import { getLoadedHeadSha, getReviewFiles } from "$lib/stores/review.svelte";
@@ -191,12 +193,12 @@ const queuedMessages = $derived(prId ? getQueuedMessages(prId) : []);
 const chatCheckpoints = $derived(prId ? getCheckpoints(prId) : []);
 const toolApprovals = $derived(prId ? getToolApprovals(prId) : []);
 const sessionContext = $derived(prId ? getChatSessionContext(prId) : null);
-const mentionPaths = $derived.by(() => {
-  const changed = getReviewFiles().map((file) => file.path);
-  const changedSet = new Set(changed);
-  const repo = sessionContext?.repoFiles ?? [];
-  return [...changed, ...repo.filter((path) => !changedSet.has(path))];
-});
+const mentionPaths = $derived(
+  getChatMentionPaths(
+    prId,
+    getReviewFiles().map((file) => file.path),
+  ),
+);
 /** Index → checkpoint lookup for interleaving in the message loop. */
 const checkpointByAfterIndex = $derived(new Map(chatCheckpoints.map((cp) => [cp.afterIndex, cp])));
 /** Pending (un-responded) tool approvals, rendered after the last message. */
@@ -766,7 +768,7 @@ function activitiesForTurn(
 								{/if}
 								{#if item.attachments && item.attachments.length > 0}
 									<div class="flex max-w-[min(26rem,80vw)] flex-wrap justify-end gap-1">
-										{#each item.attachments as attachment (`${attachment.name}-${attachment.size}`)}
+										{#each item.attachments as attachment, attachmentIndex (`${attachment.name}-${attachment.size}-${attachmentIndex}`)}
 											<AttachmentChip
 												kind={attachment.kind}
 												name={attachment.name}
@@ -1151,6 +1153,7 @@ function activitiesForTurn(
 					class="text-sm leading-relaxed"
 					commands={sessionContext?.commands ?? []}
 					mentionPaths={mentionPaths}
+					onfocus={() => prId && warmChatSessionContext(prId)}
 				/>
 			</PromptInputBody>
 			<PromptInputFooter>

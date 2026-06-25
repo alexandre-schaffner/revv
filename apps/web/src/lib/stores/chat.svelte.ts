@@ -137,6 +137,12 @@ let availableAgents = $state<AvailableAgents | null>(null);
 let availableAgentsLoading = $state(false);
 let sessionContexts = $state(new Map<string, ChatSessionContext>());
 let sessionContextLoading = $state(new Set<string>());
+// PRs successfully warmed this session, so composer focus only triggers the
+// (worktree-acquiring) warm fetch once per PR. Failed warms are NOT recorded
+// here — they must stay retryable. `warmingPrIds` dedupes concurrent in-flight
+// warms (repeated focus events) without making a failure permanent.
+const warmedPrIds = new Set<string>();
+const warmingPrIds = new Set<string>();
 
 // In-progress reviewer comments left on a proposed-changes diff. These are
 // ephemeral feedback bound for the chat agent (NOT PR review threads — the
@@ -262,13 +268,54 @@ export function getChatSessionContext(prId: string): ChatSessionContext | null {
   return sessionContexts.get(prId) ?? null;
 }
 
-async function fetchAndStoreSessionContext(prId: string): Promise<void> {
+/**
+ * `@`-mention candidate paths for a PR: the changed files first (most likely
+ * targets), then the rest of the repo tree, de-duplicated. The caller supplies
+ * the changed paths (they live in the review/diff store); this owns the merge
+ * so the composer view stays free of data-shaping.
+ */
+export function getChatMentionPaths(
+  prId: string | null | undefined,
+  changedPaths: readonly string[],
+): string[] {
+  const changedSet = new Set(changedPaths);
+  const repo = (prId ? sessionContexts.get(prId)?.repoFiles : undefined) ?? [];
+  return [...changedPaths, ...repo.filter((path) => !changedSet.has(path))];
+}
+
+async function fetchAndStoreSessionContext(
+  prId: string,
+  opts: { warm?: boolean } = {},
+): Promise<boolean> {
   try {
-    const context = await fetchSessionContext(prId);
+    const context = await fetchSessionContext(prId, opts);
     sessionContexts.set(prId, context);
     sessionContexts = new Map(sessionContexts);
+    return true;
   } catch (err) {
     console.warn("Failed to load chat session context", err);
+    return false;
+  }
+}
+
+/**
+ * Eagerly warm the chat session for a PR: acquire its worktree and harvest the
+ * agent's slash commands so the `/`-command menu works on a brand-new chat,
+ * before any message is sent. Triggered on composer focus (real intent to chat)
+ * and deduped to once per PR — it is heavier than the plain context fetch (git
+ * fetch + agent start), so we never run it on mere PR browsing.
+ */
+export async function warmChatSessionContext(prId: string): Promise<void> {
+  if (warmedPrIds.has(prId) || warmingPrIds.has(prId)) return;
+  warmingPrIds.add(prId);
+  try {
+    // Mark warmed only on success — a failed warm (worktree acquire error, agent
+    // cold-start timeout, transient GitHub 5xx) must stay retryable, or the PR is
+    // stuck without slash commands until reload.
+    const ok = await fetchAndStoreSessionContext(prId, { warm: true });
+    if (ok) warmedPrIds.add(prId);
+  } finally {
+    warmingPrIds.delete(prId);
   }
 }
 

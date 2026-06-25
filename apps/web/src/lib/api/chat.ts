@@ -386,8 +386,15 @@ export async function fetchAvailableAgents(): Promise<AvailableAgents> {
   return (await res.json()) as AvailableAgents;
 }
 
-export async function fetchSessionContext(prId: string): Promise<ChatSessionContext> {
-  const res = await fetch(`${API_BASE_URL}/api/chat/${prId}/session-context`, {
+export async function fetchSessionContext(
+  prId: string,
+  opts: { warm?: boolean } = {},
+): Promise<ChatSessionContext> {
+  // `warm=1` opts into the server's eager path (acquire worktree + harvest slash
+  // commands) so the `/`-command menu works on a brand-new chat. The plain fetch
+  // stays side-effect-free.
+  const query = opts.warm ? "?warm=1" : "";
+  const res = await fetch(`${API_BASE_URL}/api/chat/${prId}/session-context${query}`, {
     headers: authHeaders(),
   });
   if (!res.ok) {

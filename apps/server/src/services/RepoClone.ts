@@ -55,6 +55,22 @@ const MAX_FILE_CONTENT_BYTES = 5 * 1024 * 1024;
  */
 const BINARY_SNIFF_SAMPLE_BYTES = 8 * 1024;
 
+// Tail of the in-flight `acquirePrWorktree` queue, keyed by
+// `${repoId}:${prNumber}`. Two concurrent acquires for the same PR — e.g. a
+// composer warm-up and the first real chat turn firing within the
+// git-fetch/`worktree add` window — would otherwise both run `git worktree add`
+// on the same path (TOCTOU → "already exists" / lock contention). Callers
+// *chain* onto the current tail so they run sequentially. Chaining (rather than
+// sharing one resolved promise) is deliberate: each caller re-runs the body and
+// resolves to *its own* `prHeadSha`. A follower hits the existing-worktree fast
+// path and, on a head-moved race where the winner left a different SHA checked
+// out, resets the worktree to the SHA *it* asked for — sharing one promise would
+// silently hand the follower the winner's SHA.
+const inflightWorktreeAcquires = new Map<
+  string,
+  Promise<{ worktreePath: string; branchName: string }>
+>();
+
 // ── Service definition ────────────────────────────────────────────────────────
 
 export class RepoCloneService extends Context.Tag("RepoCloneService")<
@@ -660,152 +676,176 @@ export const RepoCloneServiceLive = Layer.effect(
           Effect.gen(function* () {
             return yield* Effect.tryPromise({
               try: async () => {
-                const row = db.select().from(repositories).where(eq(repositories.id, repoId)).get();
+                const acquireKey = `${repoId}:${prNumber}`;
+                const runAcquire = async () => {
+                  const row = db
+                    .select()
+                    .from(repositories)
+                    .where(eq(repositories.id, repoId))
+                    .get();
 
-                if (!row || row.cloneStatus !== "ready" || !row.clonePath) {
-                  throw new CloneNotReadyError({ repoId });
-                }
+                  if (!row || row.cloneStatus !== "ready" || !row.clonePath) {
+                    throw new CloneNotReadyError({ repoId });
+                  }
 
-                const gitHost = row.githubHost ?? serverEnv.githubHost;
-                const clonePath = row.clonePath;
-                const prDirName = `pr-${prNumber}`;
-                const branchName = `revv/pr-${prNumber}`;
-                // The PR head is fetched into a dedicated namespace that can
-                // NEVER collide with the local working branch. Git resolves a
-                // bare ref name by trying `refs/<name>` before
-                // `refs/heads/<name>` (see gitrevisions(7)), so the earlier
-                // scheme that fetched into `refs/revv/pr-N` made the bare name
-                // `revv/pr-N` ambiguous with the branch `refs/heads/revv/pr-N`
-                // — and resolved to the *immutable PR head* instead of the
-                // working branch. That silently broke every bare-branch git op
-                // (rev-list miscounted to 0 → "No agent commits to push",
-                // `git merge revv/pr-N` reported "Already up to date" and
-                // merged nothing, etc.). `refs/revv-pull/N` shares no name
-                // with any branch, so the bare branch name is unambiguous.
-                const prFetchRef = `refs/revv-pull/${prNumber}`;
-                const holderBase = worktreeHolderPath(row.owner, row.name);
-                const worktreePath = join(holderBase, prDirName);
+                  const gitHost = row.githubHost ?? serverEnv.githubHost;
+                  const clonePath = row.clonePath;
+                  const prDirName = `pr-${prNumber}`;
+                  const branchName = `revv/pr-${prNumber}`;
+                  // The PR head is fetched into a dedicated namespace that can
+                  // NEVER collide with the local working branch. Git resolves a
+                  // bare ref name by trying `refs/<name>` before
+                  // `refs/heads/<name>` (see gitrevisions(7)), so the earlier
+                  // scheme that fetched into `refs/revv/pr-N` made the bare name
+                  // `revv/pr-N` ambiguous with the branch `refs/heads/revv/pr-N`
+                  // — and resolved to the *immutable PR head* instead of the
+                  // working branch. That silently broke every bare-branch git op
+                  // (rev-list miscounted to 0 → "No agent commits to push",
+                  // `git merge revv/pr-N` reported "Already up to date" and
+                  // merged nothing, etc.). `refs/revv-pull/N` shares no name
+                  // with any branch, so the bare branch name is unambiguous.
+                  const prFetchRef = `refs/revv-pull/${prNumber}`;
+                  const holderBase = worktreeHolderPath(row.owner, row.name);
+                  const worktreePath = join(holderBase, prDirName);
 
-                const authedUrl = `https://x-access-token:${githubToken}@${gitHost}/${row.fullName}.git`;
+                  const authedUrl = `https://x-access-token:${githubToken}@${gitHost}/${row.fullName}.git`;
 
-                mkdirSync(holderBase, { recursive: true });
+                  mkdirSync(holderBase, { recursive: true });
 
-                // Clear any per-worktree git locks left behind by a
-                // SIGTERM'd previous run before any git operation that
-                // would block on them.
-                await clearStalePrWorktreeLocks(clonePath, prDirName, branchName);
+                  // Clear any per-worktree git locks left behind by a
+                  // SIGTERM'd previous run before any git operation that
+                  // would block on them.
+                  await clearStalePrWorktreeLocks(clonePath, prDirName, branchName);
 
-                // Heal clones seeded by the old scheme: delete the stale
-                // `refs/revv/pr-N` ref so it stops shadowing the working
-                // branch `refs/heads/revv/pr-N`. Best-effort and idempotent —
-                // a no-op on clones that never had it. Runs on every acquire
-                // (including the existing-worktree early-return paths below) so
-                // an already-checked-out worktree is fixed in place without a
-                // teardown, preserving any unpushed agent commits.
-                await runGitBestEffort(
-                  ["update-ref", "-d", `refs/revv/pr-${prNumber}`],
-                  clonePath,
-                  10_000,
-                );
+                  // Heal clones seeded by the old scheme: delete the stale
+                  // `refs/revv/pr-N` ref so it stops shadowing the working
+                  // branch `refs/heads/revv/pr-N`. Best-effort and idempotent —
+                  // a no-op on clones that never had it. Runs on every acquire
+                  // (including the existing-worktree early-return paths below) so
+                  // an already-checked-out worktree is fixed in place without a
+                  // teardown, preserving any unpushed agent commits.
+                  await runGitBestEffort(
+                    ["update-ref", "-d", `refs/revv/pr-${prNumber}`],
+                    clonePath,
+                    10_000,
+                  );
 
-                // Self-heal a worktree wedged in a mid-merge or
-                // mid-rebase state — leftovers of a SIGKILL'd
-                // merge-and-push run.
-                if (existsSync(worktreePath)) {
-                  await runGitBestEffort(["merge", "--abort"], worktreePath, 10_000);
-                  await runGitBestEffort(["rebase", "--abort"], worktreePath, 10_000);
-                }
+                  // Self-heal a worktree wedged in a mid-merge or
+                  // mid-rebase state — leftovers of a SIGKILL'd
+                  // merge-and-push run.
+                  if (existsSync(worktreePath)) {
+                    await runGitBestEffort(["merge", "--abort"], worktreePath, 10_000);
+                    await runGitBestEffort(["rebase", "--abort"], worktreePath, 10_000);
+                  }
 
-                if (existsSync(worktreePath)) {
-                  // Existing dir — verify it's actually on the expected
-                  // branch. A wrong-branch / detached / corrupted state
-                  // means we tear down and recreate; otherwise we move
-                  // the worktree to `prHeadSha` in place.
-                  const headRef = await readGitHead(worktreePath);
-                  if (headRef === `refs/heads/${branchName}`) {
-                    const currentSha = (
-                      await runGitCapture(["rev-parse", "HEAD"], worktreePath)
-                    ).trim();
-                    if (currentSha === prHeadSha) {
+                  if (existsSync(worktreePath)) {
+                    // Existing dir — verify it's actually on the expected
+                    // branch. A wrong-branch / detached / corrupted state
+                    // means we tear down and recreate; otherwise we move
+                    // the worktree to `prHeadSha` in place.
+                    const headRef = await readGitHead(worktreePath);
+                    if (headRef === `refs/heads/${branchName}`) {
+                      const currentSha = (
+                        await runGitCapture(["rev-parse", "HEAD"], worktreePath)
+                      ).trim();
+                      if (currentSha === prHeadSha) {
+                        return { worktreePath, branchName };
+                      }
+                      const isAncestor = await runGitBestEffort(
+                        ["merge-base", "--is-ancestor", prHeadSha, currentSha],
+                        worktreePath,
+                      );
+                      if (isAncestor) {
+                        return { worktreePath, branchName };
+                      }
+                      await ensurePrCommitPresent(worktreePath, prHeadSha, prNumber, authedUrl);
+                      await runGit(["reset", "--hard", prHeadSha], worktreePath);
                       return { worktreePath, branchName };
                     }
-                    const isAncestor = await runGitBestEffort(
-                      ["merge-base", "--is-ancestor", prHeadSha, currentSha],
-                      worktreePath,
+                    // Wrong branch / detached / corrupted — tear down so
+                    // the fresh-setup path below can recreate cleanly.
+                    await runGitBestEffort(
+                      ["worktree", "remove", "--force", worktreePath],
+                      clonePath,
+                      10_000,
                     );
-                    if (isAncestor) {
-                      return { worktreePath, branchName };
+                    await rm(worktreePath, {
+                      recursive: true,
+                      force: true,
+                    });
+                  }
+
+                  // Fresh worktree path. Prune stale `.git/worktrees/<name>`
+                  // entries first — without this `git worktree add` would
+                  // fail with "already exists" on a half-cleaned previous
+                  // run. Idempotent on success.
+                  await runGitBestEffort(["worktree", "prune"], clonePath, 15_000);
+
+                  // Reclaim Revv-owned squatters only. User-created worktrees
+                  // on the same branch are outside our holder and must survive.
+                  const squatters = await findWorktreesOnBranch(clonePath, branchName);
+                  for (const squatter of squatters) {
+                    if (squatter === worktreePath) continue;
+                    if (!existingPathIsUnder(squatter, CLONE_BASE_DIR)) {
+                      debug("pr-worktree", `leaving non-Revv squatter alone: ${squatter}`);
+                      continue;
                     }
+                    await runGitBestEffort(
+                      ["worktree", "remove", "--force", squatter],
+                      clonePath,
+                      10_000,
+                    );
+                    try {
+                      if (existsSync(squatter)) {
+                        await rm(squatter, {
+                          recursive: true,
+                          force: true,
+                        });
+                      }
+                    } catch (err) {
+                      logError(
+                        "pr-worktree",
+                        "failed to rm squatter dir:",
+                        err instanceof Error ? err.message : String(err),
+                      );
+                    }
+                  }
+                  if (squatters.length > 0) {
+                    await runGitBestEffort(["worktree", "prune"], clonePath, 15_000);
+                  }
+
+                  await runGit(
+                    ["fetch", "--no-tags", authedUrl, `+refs/pull/${prNumber}/head:${prFetchRef}`],
+                    clonePath,
+                  );
+                  await runGit(
+                    ["worktree", "add", "-B", branchName, worktreePath, prFetchRef],
+                    clonePath,
+                  );
+                  const tipSha = (await runGitCapture(["rev-parse", "HEAD"], worktreePath)).trim();
+                  if (tipSha !== prHeadSha) {
                     await ensurePrCommitPresent(worktreePath, prHeadSha, prNumber, authedUrl);
                     await runGit(["reset", "--hard", prHeadSha], worktreePath);
-                    return { worktreePath, branchName };
                   }
-                  // Wrong branch / detached / corrupted — tear down so
-                  // the fresh-setup path below can recreate cleanly.
-                  await runGitBestEffort(
-                    ["worktree", "remove", "--force", worktreePath],
-                    clonePath,
-                    10_000,
-                  );
-                  await rm(worktreePath, {
-                    recursive: true,
-                    force: true,
-                  });
-                }
+                  return { worktreePath, branchName };
+                };
 
-                // Fresh worktree path. Prune stale `.git/worktrees/<name>`
-                // entries first — without this `git worktree add` would
-                // fail with "already exists" on a half-cleaned previous
-                // run. Idempotent on success.
-                await runGitBestEffort(["worktree", "prune"], clonePath, 15_000);
-
-                // Reclaim Revv-owned squatters only. User-created worktrees
-                // on the same branch are outside our holder and must survive.
-                const squatters = await findWorktreesOnBranch(clonePath, branchName);
-                for (const squatter of squatters) {
-                  if (squatter === worktreePath) continue;
-                  if (!existingPathIsUnder(squatter, CLONE_BASE_DIR)) {
-                    debug("pr-worktree", `leaving non-Revv squatter alone: ${squatter}`);
-                    continue;
-                  }
-                  await runGitBestEffort(
-                    ["worktree", "remove", "--force", squatter],
-                    clonePath,
-                    10_000,
-                  );
-                  try {
-                    if (existsSync(squatter)) {
-                      await rm(squatter, {
-                        recursive: true,
-                        force: true,
-                      });
-                    }
-                  } catch (err) {
-                    logError(
-                      "pr-worktree",
-                      "failed to rm squatter dir:",
-                      err instanceof Error ? err.message : String(err),
-                    );
+                // Chain onto the current tail so concurrent acquires for the
+                // same worktree path run sequentially (no racing `git worktree
+                // add`). A rejected predecessor must not poison followers, so we
+                // swallow its outcome before running our own body.
+                const prev = inflightWorktreeAcquires.get(acquireKey);
+                const acquire = (prev ? prev.catch(() => {}) : Promise.resolve()).then(runAcquire);
+                inflightWorktreeAcquires.set(acquireKey, acquire);
+                try {
+                  return await acquire;
+                } finally {
+                  // Only clear if we're still the tail — a later caller may have
+                  // already chained onto us and taken over the slot.
+                  if (inflightWorktreeAcquires.get(acquireKey) === acquire) {
+                    inflightWorktreeAcquires.delete(acquireKey);
                   }
                 }
-                if (squatters.length > 0) {
-                  await runGitBestEffort(["worktree", "prune"], clonePath, 15_000);
-                }
-
-                await runGit(
-                  ["fetch", "--no-tags", authedUrl, `+refs/pull/${prNumber}/head:${prFetchRef}`],
-                  clonePath,
-                );
-                await runGit(
-                  ["worktree", "add", "-B", branchName, worktreePath, prFetchRef],
-                  clonePath,
-                );
-                const tipSha = (await runGitCapture(["rev-parse", "HEAD"], worktreePath)).trim();
-                if (tipSha !== prHeadSha) {
-                  await ensurePrCommitPresent(worktreePath, prHeadSha, prNumber, authedUrl);
-                  await runGit(["reset", "--hard", prHeadSha], worktreePath);
-                }
-                return { worktreePath, branchName };
               },
               catch: (err) => {
                 if (err instanceof CloneNotReadyError) return err;

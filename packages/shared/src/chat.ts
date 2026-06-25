@@ -151,6 +151,16 @@ export interface ChatAttachmentMetadata {
 export const MAX_CHAT_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 /** Combined cap across every attachment in a single message. */
 export const MAX_CHAT_ATTACHMENTS_TOTAL_BYTES = 12 * 1024 * 1024;
+/**
+ * Hard cap on the number of attachments in a single message. Bounds the array
+ * at the schema layer so a request can't carry an unbounded list of
+ * just-under-cap fields before `validateAttachments` runs.
+ */
+export const MAX_CHAT_ATTACHMENTS_COUNT = 20;
+
+// Reused across every `attachmentByteSize` call (hot on both the optimistic
+// composer path and server-side validation) instead of allocating per call.
+const TEXT_ENCODER = new TextEncoder();
 
 /**
  * Decoded byte size of an attachment's payload. Images carry base64 (the
@@ -160,7 +170,7 @@ export function attachmentByteSize(attachment: ChatAttachment): number {
   if (attachment.kind === "image") {
     return Math.ceil((attachment.data.length * 3) / 4);
   }
-  return new TextEncoder().encode(attachment.data).byteLength;
+  return TEXT_ENCODER.encode(attachment.data).byteLength;
 }
 
 /** Human-readable size label (B / KB / MB). */

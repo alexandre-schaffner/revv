@@ -24,6 +24,20 @@ export function isTextLike(file: File): boolean {
   return TEXT_LIKE_EXTENSIONS.test(file.name);
 }
 
+export type AttachmentKind = "image" | "text" | "unsupported";
+
+/**
+ * The single source of truth for what kind of attachment a picked `File`
+ * becomes. The composer chip preview and the encode path both consume this so
+ * they can never disagree — otherwise a file could show an "attached" chip and
+ * then be silently dropped at encode time (or vice-versa).
+ */
+export function classifyFile(file: File): AttachmentKind {
+  if (file.type.startsWith("image/")) return "image";
+  if (isTextLike(file)) return "text";
+  return "unsupported";
+}
+
 function readAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -57,7 +71,8 @@ export async function encodeAttachments(
       onSkip?.(attachmentsTotalTooLargeMessage());
       break;
     }
-    if (file.type.startsWith("image/")) {
+    const kind = classifyFile(file);
+    if (kind === "image") {
       const dataUrl = await readAsDataUrl(file);
       const [, data = ""] = dataUrl.split(",", 2);
       attachments.push({
@@ -66,7 +81,7 @@ export async function encodeAttachments(
         mimeType: file.type,
         data,
       });
-    } else if (isTextLike(file)) {
+    } else if (kind === "text") {
       attachments.push({
         kind: "text",
         name: file.name,

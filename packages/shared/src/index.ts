@@ -53,6 +53,7 @@ export {
   attachmentTooLargeMessage,
   formatAttachmentSize,
   MAX_CHAT_ATTACHMENT_BYTES,
+  MAX_CHAT_ATTACHMENTS_COUNT,
   MAX_CHAT_ATTACHMENTS_TOTAL_BYTES,
 } from "./chat";
 export type { AppChannel, UpdateChannel } from "./constants";

@@ -17,6 +17,7 @@ export type PromptInputProps = Omit<HTMLFormAttributes, "onsubmit"> & {
 <script lang="ts">
 	import { setContext } from "svelte";
 	import { toast } from "svelte-sonner";
+	import { classifyFile } from "$lib/chat/attachments.js";
 	import { cn } from "$lib/utils.js";
 	import { PROMPT_INPUT_CTX_KEY, type PromptInputContext } from "./context.js";
 
@@ -33,9 +34,27 @@ export type PromptInputProps = Omit<HTMLFormAttributes, "onsubmit"> & {
 	let files = $state<File[]>([]);
 	let dragActive = $state(false);
 
-	function addFiles(nextFiles: readonly File[]) {
-		if (nextFiles.length === 0) return;
-		files = [...files, ...nextFiles];
+	function addFiles(nextFiles: readonly File[]): number {
+		if (nextFiles.length === 0) return 0;
+		// Reject unsupported types here, at the single entry point, so the
+		// composer never shows a chip for a file the encoder would silently drop
+		// on submit. The chip preview and encode path agree by construction.
+		const accepted: File[] = [];
+		const rejected: string[] = [];
+		for (const file of nextFiles) {
+			if (classifyFile(file) === "unsupported") rejected.push(file.name);
+			else accepted.push(file);
+		}
+		if (rejected.length > 0) {
+			toast.error(
+				rejected.length === 1
+					? `${rejected[0]} is not a supported attachment type.`
+					: `${rejected.length} files are not supported attachment types.`,
+			);
+		}
+		if (accepted.length === 0) return 0;
+		files = [...files, ...accepted];
+		return accepted.length;
 	}
 
 	function removeFile(index: number) {
@@ -86,8 +105,8 @@ export type PromptInputProps = Omit<HTMLFormAttributes, "onsubmit"> & {
 		if (dropped.length === 0) return;
 		e.preventDefault();
 		dragActive = false;
-		addFiles(dropped);
-		toast.message(dropped.length === 1 ? "Attached file" : "Attached files");
+		const added = addFiles(dropped);
+		if (added > 0) toast.message(added === 1 ? "Attached file" : "Attached files");
 	}
 
 	const ctx: PromptInputContext = {
