@@ -374,7 +374,8 @@ $effect(() => {
 						 * \`padding-inline-start\` is kept tight (the gap between
 						 * the filename and the count) so the name gets the most
 						 * room and truncates as late as possible. \`pad-start +
-						 * 2.25em + 4px gap + 2.5em\` ≈ 6 + 22 + 4 + 25 = 57px. */
+						 * 2.25em + 4px gap + 2.5em\` ≈ 6 + 22.5 + 4 + 25 = 57.5px,
+						 * rounded up to the 58px floor below. */
 						button[data-type='item'] > [data-item-section='decoration'] {
 							flex: 0 0 auto;
 							margin-inline-start: auto;
