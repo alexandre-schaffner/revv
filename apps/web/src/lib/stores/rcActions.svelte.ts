@@ -11,10 +11,9 @@ type Action = "approve" | "request_changes" | "comment";
 
 let _submitting = $state<Action | null>(null);
 let _selectedCount = $state(0);
-let _hasContent = $state(false);
-// `canComment` is broader than `hasContent`: a plain COMMENT review can be
-// posted with selected walkthrough issues OR pending line comments, whereas
-// the Request-changes gate (`hasContent`) only counts selected issues.
+// `canComment` is true when there's anything to submit — selected walkthrough
+// issues OR pending line comments. Gates both review-posting actions (Comment,
+// Request changes) behind the single "Submit Review" trigger.
 let _canComment = $state(false);
 let _approveBlockerSummary = $state("");
 
@@ -33,10 +32,6 @@ export function getRcSubmitting(): Action | null {
 
 export function getRcSelectedCount(): number {
   return _selectedCount;
-}
-
-export function getRcHasContent(): boolean {
-  return _hasContent;
 }
 
 export function getRcCanComment(): boolean {
@@ -68,13 +63,11 @@ export function getRcOnApprove(): () => void {
 export function setRcState(state: {
   submitting: Action | null;
   selectedCount: number;
-  hasContent: boolean;
   canComment: boolean;
   approveBlockerSummary: string;
 }): void {
   _submitting = state.submitting;
   _selectedCount = state.selectedCount;
-  _hasContent = state.hasContent;
   _canComment = state.canComment;
   _approveBlockerSummary = state.approveBlockerSummary;
 }
@@ -94,7 +87,6 @@ export function setRcHandlers(handlers: {
 export function resetRcActions(): void {
   _submitting = null;
   _selectedCount = 0;
-  _hasContent = false;
   _canComment = false;
   _approveBlockerSummary = "";
   _onGenerateChanges = () => {};

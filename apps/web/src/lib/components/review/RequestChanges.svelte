@@ -68,7 +68,6 @@ function handleApproveClick(): void {
 }
 
 const selectedCount = $derived(selectedIssueIds.size);
-const hasContent = $derived(selectedCount > 0);
 
 // Number of unresolved threads that carry at least one unsynced reviewer
 // message — i.e. line comments that would actually be pushed to GitHub.
@@ -284,7 +283,6 @@ $effect(() => {
   setRcState({
     submitting,
     selectedCount,
-    hasContent,
     canComment,
     approveBlockerSummary,
   });
