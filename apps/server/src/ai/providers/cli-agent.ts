@@ -1,6 +1,14 @@
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { type AcpAgentId, getAgentCapabilities } from "@revv/shared";
+import { homedir, platform } from "node:os";
+import { join } from "node:path";
+import {
+  ACP_AGENT_IDS,
+  type AcpAgentId,
+  type AgentStatus,
+  type AgentStatusReport,
+  getAgentCapabilities,
+} from "@revv/shared";
 import { serverEnv } from "../../config";
 import { CLI_CACHE_TTL_MS } from "../../constants";
 
@@ -8,21 +16,77 @@ import { CLI_CACHE_TTL_MS } from "../../constants";
 //
 // Resolution chain, in order:
 //
-//   1. REVV_CLAUDE_BIN / REVV_OPENCODE_BIN — absolute paths baked into the
-//      LaunchAgent at install time by `write_launch_agent_plist` in
-//      scripts/lib/common.sh (which runs `command -v <tool>` with the
-//      installer's shell PATH). Survives restricted LaunchAgent PATH.
-//   2. `which <tool>` at runtime — covers `make dev` / dev shells where the
-//      env var isn't in play and PATH is rich.
+//   1. REVV_CLAUDE_BIN / REVV_OPENCODE_BIN / REVV_CODEX_BIN — absolute paths
+//      baked into the LaunchAgent at install time by `write_launch_agent_plist`
+//      in scripts/lib/common.sh (which runs `command -v <tool>` with the
+//      installer's shell PATH). Survives a restricted LaunchAgent PATH.
+//   2. Auth-only fallback for the npx-adapter agents whose adapter authenticates
+//      from a local store instead of shelling out to the named CLI:
+//        • Codex  — `@zed-industries/codex-acp` reads `~/.codex/auth.json`
+//          (honoring `CODEX_HOME`). CLI *or* Codex desktop app login counts.
+//        • Claude — `claude-agent-acp` runs on the Claude Agent SDK; an
+//          `ANTHROPIC_API_KEY`, `~/.claude/.credentials.json`, or the macOS
+//          Keychain login counts.
+//      opencode (own binary) and Cursor (`cursor-agent-acp` shells out to the
+//      `cursor-agent` CLI) are excluded — they genuinely need their binary.
+//   3. `which <tool>` resolved against the user's *login-shell* PATH — not the
+//      process PATH. A server launched by launchd / a GUI inherits a sanitized
+//      PATH that omits where CLIs actually live (nvm, Homebrew on Apple Silicon,
+//      npm global prefixes, app-managed bin dirs). Probing the login shell makes
+//      detection match what the user sees in a terminal. Falls back to the
+//      process PATH when there's no usable login shell (e.g. Windows).
 //
-// No hardcoded dir list: if neither source finds the binary, treat it as
-// not installed.
-//
-// Detection is cached per-agent with a short TTL (see CLI_CACHE_TTL_MS).
-
-let cachedCliAuth: { result: boolean; expiresAt: number; agent: string } | null = null;
+// The (expensive) login-shell PATH lookup is resolved once and cached with a
+// short TTL (see CLI_CACHE_TTL_MS); `which` against that PATH is a cheap
+// filesystem probe.
 
 type CliAgent = "opencode" | "claude" | "codex";
+
+let cachedPath: { value: string; expiresAt: number } | null = null;
+
+/**
+ * The directories the user's interactive login shell would search, merged onto
+ * the process PATH. This is the PATH detection and ACP launches should use —
+ * see the resolution-chain note above for why the inherited process PATH is not
+ * enough. Result is cached; `invalidateCliAgentCache` drops it.
+ */
+export function resolveUserPath(): string {
+  if (cachedPath && Date.now() < cachedPath.expiresAt) return cachedPath.value;
+  const base = process.env.PATH ?? "";
+  const login = loginShellPath();
+  const value = login
+    ? Array.from(new Set([...base.split(":"), ...login.split(":")].filter(Boolean))).join(":")
+    : base;
+  cachedPath = { value, expiresAt: Date.now() + CLI_CACHE_TTL_MS };
+  return value;
+}
+
+/**
+ * Ask the user's login shell for its PATH. Returns `null` on Windows, when no
+ * `$SHELL` is set, or if the probe fails — callers fall back to the process
+ * PATH. fish stores `$PATH` as a list, so it needs `string join`; POSIX shells
+ * (bash/zsh) get `printf`. `command -v` is intentionally avoided here so one
+ * probe yields the whole PATH rather than one binary.
+ */
+function loginShellPath(): string | null {
+  const shell = process.env.SHELL;
+  if (!shell || platform() === "win32") return null;
+  const isFish = /(^|\/)fish$/.test(shell);
+  const inner = isFish ? "string join : $PATH" : 'printf %s "$PATH"';
+  try {
+    // `-lic`: login + interactive so PATH set in either profile or rc is sourced.
+    // `execFileSync` (argv form) — never interpolate `$SHELL` into a shell string;
+    // a `$SHELL` with spaces or metacharacters would otherwise mis-parse.
+    const out = execFileSync(shell, ["-lic", inner], {
+      encoding: "utf-8",
+      timeout: 4000,
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return out.length > 0 ? out : null;
+  } catch {
+    return null;
+  }
+}
 
 function pinnedBin(agent: CliAgent): string {
   const pinned =
@@ -34,14 +98,114 @@ function pinnedBin(agent: CliAgent): string {
   return pinned && existsSync(pinned) ? pinned : "";
 }
 
+/** Codex's config/auth dir — `$CODEX_HOME`, else `~/.codex`. */
+function codexHome(): string {
+  const fromEnv = process.env.CODEX_HOME?.trim();
+  return fromEnv && fromEnv.length > 0 ? fromEnv : join(homedir(), ".codex");
+}
+
+/** The user has logged in to Codex (via CLI or the desktop app) if its auth file exists. */
+function codexLoggedIn(): boolean {
+  return existsSync(join(codexHome(), "auth.json"));
+}
+
+/**
+ * Whether Claude Code is authenticated. The `claude-agent-acp` adapter runs on
+ * the Claude Agent SDK (not the `claude` binary), so a logged-in user is usable
+ * without the CLI on PATH. The SDK accepts, in order: an `ANTHROPIC_API_KEY`
+ * env var; the OAuth creds Claude Code writes to `~/.claude/.credentials.json`
+ * (Linux/other); or, on macOS, the same creds stored in the login Keychain.
+ */
+function claudeLoggedIn(): boolean {
+  if (process.env.ANTHROPIC_API_KEY?.trim()) return true;
+  if (existsSync(join(homedir(), ".claude", ".credentials.json"))) return true;
+  if (platform() === "darwin") {
+    try {
+      // Existence probe only (no `-w`): returns attributes, doesn't print the secret.
+      execFileSync("security", ["find-generic-password", "-s", "Claude Code-credentials"], {
+        timeout: 3000,
+        stdio: "ignore",
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+/**
+ * Whether the user has logged in to Cursor's CLI. `cursor-agent` persists its
+ * session token after `cursor-agent login`; an env-injected `CURSOR_API_KEY`
+ * also counts. The on-disk location isn't part of Cursor's public contract, so
+ * we probe the credential files seen across versions/platforms — XDG
+ * (`~/.config/cursor-agent`, `~/.local/share/cursor-agent`) and the legacy
+ * `~/.cursor` dir.
+ *
+ * NOTE: re-verify these paths against a real `cursor-agent` install — if Cursor
+ * moves its credential file, only this allowlist needs updating. A miss here is
+ * conservative (UI shows "Sign in" for an already-authed Cursor), never unsafe.
+ */
+function cursorLoggedIn(): boolean {
+  if (process.env.CURSOR_API_KEY?.trim()) return true;
+  const home = homedir();
+  const candidates = [
+    join(home, ".config", "cursor-agent", "credentials.json"),
+    join(home, ".config", "cursor-agent", "auth.json"),
+    join(home, ".local", "share", "cursor-agent", "credentials.json"),
+    join(home, ".local", "share", "cursor-agent", "auth.json"),
+    join(home, ".cursor", "credentials.json"),
+    join(home, ".cursor", "auth.json"),
+  ];
+  return candidates.some((p) => existsSync(p));
+}
+
+/**
+ * Whether the given registry agent is *authenticated* (logged in), independent
+ * of whether its CLI is on PATH. Onboarding uses this to distinguish
+ * installed-but-not-logged-in (show "Sign in") from ready-to-use (show
+ * "Continue"). opencode needs no login — it's a local engine — so it always
+ * reports authed.
+ */
+export function detectAgentAuth(agent: AcpAgentId): boolean {
+  switch (agent) {
+    case "opencode":
+      return true;
+    case "claude-code":
+      return claudeLoggedIn();
+    case "codex":
+      return codexLoggedIn();
+    case "cursor":
+      return cursorLoggedIn();
+  }
+}
+
+/**
+ * Absolute path of `command` if found on the user's login-shell PATH, else null.
+ */
+function resolveCommandPath(command: string): string | null {
+  const isWin = platform() === "win32";
+  try {
+    const out = execFileSync(isWin ? "where" : "which", [command], {
+      encoding: "utf-8",
+      timeout: 3000,
+      env: { ...process.env, PATH: resolveUserPath() },
+    }).trim();
+    return out.length > 0 ? (out.split("\n")[0] ?? null) : null;
+  } catch {
+    return null;
+  }
+}
+
 function isCliAgentAvailable(agent: CliAgent): boolean {
   if (pinnedBin(agent)) return true;
-  try {
-    const result = execSync(`which ${agent}`, { encoding: "utf-8", timeout: 3000 });
-    return result.trim().length > 0;
-  } catch {
-    return false;
-  }
+  // Agents whose ACP adapter is npx-based and authenticates from a local store
+  // (rather than shelling out to the named CLI) are usable when logged in, even
+  // with no binary on PATH. opencode is intentionally excluded: it launches via
+  // its own `opencode` binary, so the binary is genuinely required.
+  if (agent === "codex" && codexLoggedIn()) return true;
+  if (agent === "claude" && claudeLoggedIn()) return true;
+  return resolveCommandPath(agent) !== null;
 }
 
 /**
@@ -50,40 +214,106 @@ function isCliAgentAvailable(agent: CliAgent): boolean {
  * directly as argv[0] of a spawn call.
  */
 export function resolveCliBin(agent: CliAgent): string {
-  return pinnedBin(agent) || agent;
+  return pinnedBin(agent) || resolveCommandPath(agent) || agent;
 }
 
 /**
- * Bare `which <command>` probe — no env-pin, no cache. Used by onboarding to
- * detect agent CLIs that have no `REVV_*_BIN` pin (e.g. Cursor's `cursor-agent`),
- * where the pinned/cached `checkCliAvailability` path doesn't apply.
+ * Whether `command` resolves on the user's login-shell PATH. Used by onboarding
+ * to detect agent CLIs that have no `REVV_*_BIN` pin (e.g. Cursor's
+ * `cursor-agent`), where the pinned `checkCliAvailability` path doesn't apply.
  */
 export function isCommandOnPath(command: string): boolean {
-  try {
-    return execSync(`which ${command}`, { encoding: "utf-8", timeout: 3000 }).trim().length > 0;
-  } catch {
-    return false;
-  }
+  return resolveCommandPath(command) !== null;
 }
 
 export function checkCliAvailability(agent: CliAgent): boolean {
-  if (cachedCliAuth && Date.now() < cachedCliAuth.expiresAt && cachedCliAuth.agent === agent) {
-    return cachedCliAuth.result;
-  }
-
-  const available = isCliAgentAvailable(agent);
-  cachedCliAuth = { result: available, expiresAt: Date.now() + CLI_CACHE_TTL_MS, agent };
-  return available;
+  return isCliAgentAvailable(agent);
 }
 
 /**
- * Drop the cached availability result so the next `checkCliAvailability`
- * call hits the filesystem again. Called by the install-opencode flow
- * after a successful install — without this the TTL would mask the
- * newly-present binary until the cache naturally expired.
+ * Drop the cached login-shell PATH so the next availability check re-probes the
+ * shell and filesystem. Called by the onboarding install flow after a
+ * successful install — without this the TTL would mask the newly-present binary
+ * until the cache naturally expired.
  */
 export function invalidateCliAgentCache(): void {
-  cachedCliAuth = null;
+  cachedPath = null;
+}
+
+// ── Onboarding agent status ────────────────────────────────────────────────────
+//
+// The single detection surface the onboarding agent step consumes — both
+// "installed?" and "logged in?" for every registry agent, plus the per-agent
+// login command and whether this host can drive an embedded PTY login. Keeping
+// it here (the canonical CLI-detection module) means the UI hits one endpoint
+// and the install/login services don't each own half of the detection logic.
+
+/**
+ * Registry id → the CLI binary whose presence means the agent is set up
+ * locally. The SDK/auth-store agents (claude, codex) honor their `REVV_*_BIN`
+ * pins via `checkCliAvailability`; Cursor's `cursor-agent` has no pin, so it's a
+ * bare PATH probe. Adding a registry agent surfaces a type error here until its
+ * detection is wired — a deliberate compile-time nudge.
+ */
+export const ACP_CLI_NAME: Record<AcpAgentId, "opencode" | "claude" | "codex" | "cursor-agent"> = {
+  "claude-code": "claude",
+  opencode: "opencode",
+  codex: "codex",
+  cursor: "cursor-agent",
+};
+
+/**
+ * Per-agent interactive login command. `null` means the agent needs no login
+ * (opencode is a local engine). Mirrors the `Record<AcpAgentId, …>` shape used
+ * across the registry so adding an ACP agent forces a decision here.
+ *
+ * Each is a dedicated, exit-after-auth login subcommand (verified against the
+ * vendors' published CLI docs + the installed binaries' `--help`), so the
+ * login flow's "spawn → wait for exit → re-check auth" model holds:
+ *   - claude-code: `claude auth login`  (`/login` is the in-REPL slash command,
+ *     NOT a CLI subcommand).
+ *   - codex:       `codex login`.
+ *   - cursor:      `cursor-agent login` (the docs alias the binary as `agent`,
+ *     but the installed binary — and our `ACP_CLI_NAME.cursor` key — is
+ *     `cursor-agent`).
+ * Each CLI opens the user's browser itself; the login UI's auth-url scan only
+ * powers a fallback link. Surfaced in {@link AgentStatus.loginCommand} as the
+ * manual hint where the embedded PTY login isn't available (Windows).
+ */
+export const ACP_LOGIN_COMMAND: Record<AcpAgentId, readonly string[] | null> = {
+  opencode: null,
+  "claude-code": ["claude", "auth", "login"],
+  codex: ["codex", "login"],
+  cursor: ["cursor-agent", "login"],
+};
+
+/** Whether the given registry agent's CLI is present (or otherwise usable). */
+export function detectAgentCli(agent: AcpAgentId): boolean {
+  const cli = ACP_CLI_NAME[agent];
+  return cli === "cursor-agent" ? isCommandOnPath(cli) : checkCliAvailability(cli);
+}
+
+/**
+ * One-shot onboarding detection snapshot for every registry agent: installed +
+ * authed + the manual login command, plus whether this host supports the
+ * embedded PTY login (POSIX-only). The single source of truth the agent step's
+ * adaptive CTA reads.
+ */
+export function detectAgentStatus(): AgentStatusReport {
+  const agents = Object.fromEntries(
+    ACP_AGENT_IDS.map((id) => {
+      const cmd = ACP_LOGIN_COMMAND[id];
+      return [
+        id,
+        {
+          installed: detectAgentCli(id),
+          authed: detectAgentAuth(id),
+          loginCommand: cmd ? cmd.join(" ") : null,
+        } satisfies AgentStatus,
+      ];
+    }),
+  ) as Record<AcpAgentId, AgentStatus>;
+  return { embeddedLoginSupported: platform() !== "win32", agents };
 }
 
 // ── Dynamic model listing ─────────────────────────────────────────────────────

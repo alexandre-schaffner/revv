@@ -1,7 +1,7 @@
 {
   "name": "revv",
   "private": true,
-  "packageManager": "bun@1.3.4",
+  "packageManager": "bun@1.3.5",
   "workspaces": {
     "packages": [
       "apps/*",

@@ -32,6 +32,7 @@ import {
 } from "@agentclientprotocol/sdk";
 import type { AcpAgentId } from "@revv/shared";
 import { debug } from "../../logger";
+import { resolveUserPath } from "../providers/cli-agent";
 import { type AcpLaunchConfig, resolveAcpLaunchById } from "./presets";
 
 const IDLE_STOP_MS = 5 * 60 * 1000;
@@ -149,8 +150,10 @@ async function spawnConnection(
     stdout: "pipe",
     stderr: "pipe",
     // Per-adapter model/effort/context env (Claude Code) layered over the
-    // inherited environment.
-    env: { ...process.env, ...env },
+    // inherited environment. PATH is widened to the user's login-shell PATH so
+    // `npx`/`opencode` resolve even when the server inherited a sanitized PATH
+    // (launchd / GUI launch) — matching how availability is detected.
+    env: { ...process.env, ...env, PATH: resolveUserPath() },
   });
 
   // Bun's `proc.stdin` is a FileSink; wrap it as a WritableStream<Uint8Array>
