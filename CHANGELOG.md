@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.1](https://github.com/alexandre-schaffner/revv/compare/v0.14.0...v0.14.1) (2026-06-26)
+
+
+### Bug Fixes
+
+* **chat:** stop merge-of-main from ballooning proposed commits ([#149](https://github.com/alexandre-schaffner/revv/issues/149)) ([3a53d0c](https://github.com/alexandre-schaffner/revv/commit/3a53d0cc639b7613ed8f7195f3cd67322c1762ae))
+
 ## [0.14.0](https://github.com/alexandre-schaffner/revv/compare/v0.13.0...v0.14.0) (2026-06-26)
 
 
