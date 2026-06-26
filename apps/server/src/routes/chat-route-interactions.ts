@@ -12,6 +12,7 @@ import { Broadcaster } from "../services/Broadcaster";
 import { ChatSessionService } from "../services/ChatSession";
 import { PrContextService } from "../services/PrContext";
 import { SettingsService } from "../services/Settings";
+import { resolveChatSessionContext } from "./chat-helpers";
 import { handleAppError, jsonResponse, withAuth } from "./middleware";
 
 export const chatInteractionRoutes = new Elysia()
@@ -262,4 +263,27 @@ export const chatInteractionRoutes = new Elysia()
     } catch (e) {
       return handleAppError(e, ctx);
     }
-  });
+  })
+  .get(
+    "/api/chat/:prId/session-context",
+    async (ctx) => {
+      // Opt-in warm-up. The default fetch (fired on every PR selection) stays
+      // side-effect-free: no worktree acquire, no session. With `?warm=1` — sent
+      // when the user focuses the composer, signalling real intent to chat — we
+      // eagerly acquire the worktree and harvest the agent's slash commands so
+      // they're available on a brand-new chat, before the first message.
+      const warm = ctx.query.warm === "1" || ctx.query.warm === "true";
+      try {
+        const result = await AppRuntime.runPromise(
+          resolveChatSessionContext(ctx.params.prId, ctx.session.user.id, warm),
+        );
+        return jsonResponse({ ...result }, 200);
+      } catch (e) {
+        return handleAppError(e, ctx);
+      }
+    },
+    {
+      params: t.Object({ prId: t.String() }),
+      query: t.Object({ warm: t.Optional(t.String()) }),
+    },
+  );

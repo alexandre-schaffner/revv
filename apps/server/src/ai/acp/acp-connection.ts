@@ -18,6 +18,7 @@
 
 import {
   type Agent,
+  type AvailableCommand,
   type Client,
   ClientSideConnection,
   type ContentBlock,
@@ -51,6 +52,18 @@ export interface AcpConnectionHandle {
   /** Capabilities advertised by the agent at `initialize`. */
   readonly loadSessionSupported: boolean;
   readonly httpMcpSupported: boolean;
+  readonly promptImage: boolean;
+  readonly embeddedContext: boolean;
+  readonly getAvailableCommands: (sessionId: string) => readonly AvailableCommand[];
+  /**
+   * Harvest the agent's available slash commands without running a turn. Returns
+   * the connection-level cache if already known (populated by any prior session,
+   * including real turns); otherwise opens a throwaway session purely to receive
+   * the agent's `available_commands_update`. The throwaway session is NEVER
+   * persisted as a chat session id — the first real turn still opens its own
+   * fresh `session/new` (preserving the system-prompt / walkthrough prepend).
+   */
+  readonly listAvailableCommands: (timeoutMs?: number) => Promise<readonly AvailableCommand[]>;
   /** Open a fresh session, handing the agent the supplied MCP servers. */
   readonly newSession: (mcpServers: McpServer[]) => Promise<AcpNewSessionResult>;
   /** Resume an existing session by id. Returns its mode state (for plan mode). */
@@ -78,9 +91,18 @@ interface ConnectionEntry {
   readonly proc: Bun.Subprocess<"pipe", "pipe", "pipe">;
   readonly connection: ClientSideConnection;
   readonly listeners: Map<string, AcpUpdateListener>;
+  readonly availableCommands: Map<string, AvailableCommand[]>;
+  // Connection-level snapshot of the most recent `available_commands_update`
+  // from ANY session on this subprocess. Slash commands are project-scoped (the
+  // pool is keyed by cwd), so once any session reports them they're valid for
+  // the whole connection — lets `listAvailableCommands` answer without opening a
+  // session after the first turn, and survives churn through session ids.
+  lastCommands: AvailableCommand[] | null;
   readonly planModeSessions: Set<string>;
   loadSessionSupported: boolean;
   httpMcpSupported: boolean;
+  promptImage: boolean;
+  embeddedContext: boolean;
   refcount: number;
   idleTimer: ReturnType<typeof setTimeout> | null;
   alive: boolean;
@@ -105,7 +127,12 @@ function poolKey(cwd: string, agent: AcpAgentId, config: AcpLaunchConfig): strin
 function buildClient(entry: () => ConnectionEntry): Client {
   return {
     sessionUpdate: async (params): Promise<void> => {
-      const listener = entry().listeners.get(params.sessionId);
+      const current = entry();
+      if (params.update.sessionUpdate === "available_commands_update") {
+        current.availableCommands.set(params.sessionId, params.update.availableCommands);
+        current.lastCommands = params.update.availableCommands;
+      }
+      const listener = current.listeners.get(params.sessionId);
       if (listener) listener(params.update);
     },
     requestPermission: async (
@@ -183,9 +210,13 @@ async function spawnConnection(
     proc,
     connection,
     listeners: new Map(),
+    availableCommands: new Map(),
+    lastCommands: null,
     planModeSessions: new Set(),
     loadSessionSupported: false,
     httpMcpSupported: false,
+    promptImage: false,
+    embeddedContext: false,
     refcount: 0,
     idleTimer: null,
     alive: true,
@@ -213,7 +244,12 @@ async function spawnConnection(
   void proc.exited.then((code) => {
     entry.alive = false;
     pool.delete(entry.key);
+    // Drop every per-session map so a long-lived connection that churns
+    // through many sessions can't leak entries (the listener clear also
+    // releases any in-flight notification handlers).
     entry.listeners.clear();
+    entry.availableCommands.clear();
+    entry.planModeSessions.clear();
     debug("acp-connection", `${entry.agent} agent for ${cwd} exited (code=${code ?? "?"})`);
   });
 
@@ -231,6 +267,9 @@ async function spawnConnection(
 
   entry.loadSessionSupported = initialize.agentCapabilities?.loadSession === true;
   entry.httpMcpSupported = initialize.agentCapabilities?.mcpCapabilities?.http === true;
+  entry.promptImage = initialize.agentCapabilities?.promptCapabilities?.image === true;
+  entry.embeddedContext =
+    initialize.agentCapabilities?.promptCapabilities?.embeddedContext === true;
 
   // Authenticate only if the agent advertises auth methods (claude-agent-acp
   // typically inherits local CLI credentials and needs none).
@@ -264,6 +303,53 @@ function makeHandle(entry: ConnectionEntry): AcpConnectionHandle {
   return {
     loadSessionSupported: entry.loadSessionSupported,
     httpMcpSupported: entry.httpMcpSupported,
+    promptImage: entry.promptImage,
+    embeddedContext: entry.embeddedContext,
+    getAvailableCommands: (sessionId) => entry.availableCommands.get(sessionId) ?? [],
+    listAvailableCommands: async (timeoutMs = 8_000) => {
+      // Already harvested (e.g. a prior turn or warm-up) — answer instantly.
+      if (entry.lastCommands) return entry.lastCommands;
+
+      // Open a throwaway session (no MCP servers needed — commands are the
+      // agent's own, not tool-derived). Its id is intentionally NOT reported to
+      // any caller, so it never becomes a persisted chat session id.
+      let sessionId: string;
+      try {
+        const res = await connection.newSession({ cwd: entry.cwd, mcpServers: [] });
+        sessionId = res.sessionId;
+      } catch (err) {
+        debug(
+          "acp-connection",
+          "listAvailableCommands newSession failed:",
+          err instanceof Error ? err.message : String(err),
+        );
+        return entry.lastCommands ?? [];
+      }
+
+      // Commands may already have streamed in during `newSession`.
+      const immediate = entry.availableCommands.get(sessionId);
+      if (immediate && immediate.length > 0) return immediate;
+
+      // Otherwise wait (bounded) for the `available_commands_update` notification.
+      await new Promise<void>((resolve) => {
+        let settled = false;
+        const finish = (): void => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          entry.listeners.delete(sessionId);
+          resolve();
+        };
+        const timer = setTimeout(finish, timeoutMs);
+        entry.listeners.set(sessionId, (update) => {
+          if (update.sessionUpdate === "available_commands_update") finish();
+        });
+        // Close the race: the update may have landed between the post-newSession
+        // check above and this listener registration.
+        if ((entry.availableCommands.get(sessionId)?.length ?? 0) > 0) finish();
+      });
+      return entry.lastCommands ?? entry.availableCommands.get(sessionId) ?? [];
+    },
     newSession: async (mcpServers) => {
       const res = await connection.newSession({
         cwd: entry.cwd,
@@ -339,6 +425,31 @@ export async function getAcpConnection(
     pool.delete(key);
     return getAcpConnection(cwd, agent, config);
   }
+  return makeHandle(entry);
+}
+
+/**
+ * Return a handle to an ALREADY-WARM pooled connection for `cwd`, or null if
+ * none is pooled (or it has since exited). Unlike {@link getAcpConnection},
+ * this never spawns a subprocess. Read-only callers that only want
+ * capabilities/cached commands (the session-context menu fetch, which fires on
+ * every PR selection) use this so they never pay a cold-start just to read.
+ */
+export async function peekAcpConnection(
+  cwd: string,
+  agent: AcpAgentId,
+  config: AcpLaunchConfig = {},
+): Promise<AcpConnectionHandle | null> {
+  const pending = pool.get(poolKey(cwd, agent, config));
+  if (!pending) return null;
+  let entry: ConnectionEntry;
+  try {
+    entry = await pending;
+  } catch {
+    // The pooled spawn rejected — treat as no warm connection.
+    return null;
+  }
+  if (!entry.alive) return null;
   return makeHandle(entry);
 }
 

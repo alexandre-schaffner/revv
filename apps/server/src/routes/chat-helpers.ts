@@ -7,8 +7,11 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
+import type { ChatSessionContext } from "@revv/shared";
 import { and, desc, eq } from "drizzle-orm";
 import { Effect } from "effect";
+import { getAcpConnection, peekAcpConnection } from "../ai/acp/acp-connection";
+import { applyAcpAgentOverride } from "../ai/acp/presets";
 import type { ChatWalkthroughContext } from "../ai/prompts/chat";
 import type { ChatStreamFrame, RawChatStreamFrame } from "../ai/providers/chat-types";
 import type { Db } from "../db/index";
@@ -17,9 +20,173 @@ import { walkthroughs } from "../db/schema/walkthroughs";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
 import type { ResolvePushFrame } from "../services/ChatChangesPush";
-import { ChatSessionService } from "../services/ChatSession";
+import { type ChatSessionRow, ChatSessionService } from "../services/ChatSession";
+import { PrContextService } from "../services/PrContext";
+import { RepoCloneService } from "../services/RepoClone";
+import { SettingsService } from "../services/Settings";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+/**
+ * Cheap, read-only bootstrap prefix shared by `POST /api/chat` and the
+ * `GET /api/chat/:prId/session-context` menu fetch: PR + repo + token, the
+ * current head SHA (falling back to a live GitHub meta fetch), the resolved
+ * agent/model, and the existing session row.
+ *
+ * Performs NO writes and NO worktree mutation — crucially it does NOT
+ * `acquirePrWorktree` (which fetches + may `reset --hard`), `findOrCreate`,
+ * `newSession`, or `setAgentSessionId`. That keeps the menu fetch — which
+ * fires on every PR selection — free of git side effects and incapable of
+ * racing an in-flight turn writing to the same worktree. The worktree acquire
+ * is the POST turn's job (see `resolveChatTurnContext`).
+ */
+export const resolveChatReadContext = (
+  prId: string,
+  userId: string,
+  opts: { fetchHeadShaFromGithub?: boolean } = {},
+) =>
+  Effect.gen(function* () {
+    const { fetchHeadShaFromGithub = true } = opts;
+    const prCtx = yield* PrContextService;
+    const settingsService = yield* SettingsService;
+    const chatSessions = yield* ChatSessionService;
+
+    const { pr, repo, token } = yield* prCtx.resolveBasic(prId, userId);
+
+    // Resolve current head SHA. When the cached PR row has none, the only way
+    // to learn it is a live GitHub meta fetch — expensive and rate-limited, and
+    // this resolver fires on every PR selection. Read-only callers (the
+    // side-effect-free session-context menu fetch) opt out via
+    // `fetchHeadShaFromGithub: false` and tolerate a null head SHA (→ empty
+    // menus) rather than pay a GitHub call and risk a 500 on mere PR browsing.
+    let headSha: string | null = pr.headSha;
+    if (!headSha && fetchHeadShaFromGithub) {
+      const meta = yield* prCtx.prMeta(repo.fullName, pr.externalId, token);
+      headSha = meta.headSha;
+    }
+
+    const settings = yield* settingsService.getSettings();
+    const agent = yield* settingsService.resolveChatAgentId();
+    const model = settings.aiModel;
+
+    // No head SHA → no session can match (rows are keyed on it), so skip the
+    // lookup. Otherwise a null row means a fresh start (e.g. the user just
+    // cleared chat) — the POST handler keys its hard-reset off this.
+    const existingSessionRow: ChatSessionRow | null = headSha
+      ? yield* chatSessions.find(pr.id, agent, model, headSha)
+      : null;
+
+    return { pr, repo, token, headSha, settings, agent, model, existingSessionRow };
+  });
+
+/**
+ * The full turn bootstrap for `POST /api/chat`: the read prefix above plus the
+ * per-PR worktree acquire (shared across walkthrough generation and every chat
+ * session for this PR). Only the POST turn mutates the worktree; the
+ * session-context menu fetch uses {@link resolveChatReadContext} instead.
+ */
+export const resolveChatTurnContext = (prId: string, userId: string) =>
+  Effect.gen(function* () {
+    const read = yield* resolveChatReadContext(prId, userId);
+    const { headSha } = read;
+    if (headSha === null) {
+      // Unreachable: the turn path leaves `fetchHeadShaFromGithub` at its
+      // default, so `prMeta` either yields a SHA or fails the Effect above.
+      // The guard narrows the type for the worktree acquire.
+      return yield* Effect.dieMessage("resolveChatTurnContext: head SHA unresolved");
+    }
+    const repoClone = yield* RepoCloneService;
+
+    const { worktreePath, branchName } = yield* repoClone.acquirePrWorktree({
+      repoId: read.repo.id,
+      prNumber: read.pr.externalId,
+      prHeadSha: headSha,
+      githubToken: read.token,
+    });
+
+    return { ...read, headSha, worktreePath, branchName };
+  });
+
+const EMPTY_SESSION_CONTEXT: ChatSessionContext = {
+  commands: [],
+  promptImage: false,
+  embeddedContext: false,
+  repoFiles: [],
+};
+
+/**
+ * Resolve the composer's `@`-mention / `/`-command context for a PR, behind a
+ * single `warm` capability flag instead of re-testing it at each step.
+ *
+ *   - **Default (`warm: false`).** Side-effect-free: no GitHub head-SHA fetch,
+ *     no worktree acquire, no session mutation. Reads an already-warm agent
+ *     (`peekAcpConnection` never cold-spawns) and only the commands a prior
+ *     turn already cached. Fires on every PR selection, so it must stay cheap.
+ *   - **Warm (`warm: true`).** Sent on composer focus (real intent to chat):
+ *     acquires the worktree (deduped against a concurrent first turn inside
+ *     `acquirePrWorktree`), (re)starts the agent via `getAcpConnection`, and
+ *     harvests slash commands through a throwaway, never-persisted session.
+ *
+ * Returns empty context (rather than erroring) whenever the prerequisites for a
+ * given tier are absent — no head SHA, no worktree yet, no warm agent — so the
+ * menus degrade to empty rather than failing the request.
+ */
+export const resolveChatSessionContext = (prId: string, userId: string, warm: boolean) =>
+  Effect.gen(function* () {
+    const read = yield* resolveChatReadContext(prId, userId, { fetchHeadShaFromGithub: warm });
+    const { settings, agent, existingSessionRow } = read;
+
+    // No head SHA → nothing to read (worktree + session rows are keyed on it).
+    if (read.headSha === null) return EMPTY_SESSION_CONTEXT;
+
+    // Resolve the worktree: read the one a prior turn created, or — only when
+    // warming — acquire it now.
+    let worktreePath = existingSessionRow?.worktreePath ?? null;
+    if (warm && !(worktreePath && existsSync(worktreePath))) {
+      const repoClone = yield* RepoCloneService;
+      const acquired = yield* repoClone.acquirePrWorktree({
+        repoId: read.repo.id,
+        prNumber: read.pr.externalId,
+        prHeadSha: read.headSha,
+        githubToken: read.token,
+      });
+      worktreePath = acquired.worktreePath;
+    }
+
+    if (!(worktreePath && existsSync(worktreePath))) return EMPTY_SESSION_CONTEXT;
+
+    // Repo files come straight from git — no agent process needed.
+    const repoFiles = yield* Effect.promise(() => listRepoFiles(worktreePath));
+
+    // Capabilities + slash commands from the agent connection.
+    const acpAgent = applyAcpAgentOverride(agent);
+    const config = {
+      model: settings.aiModel ?? undefined,
+      thinkingEffort: settings.aiThinkingEffort ?? undefined,
+      contextWindow: settings.aiContextWindow ?? undefined,
+    };
+    const handle = yield* Effect.promise(() =>
+      warm
+        ? getAcpConnection(worktreePath, acpAgent, config)
+        : peekAcpConnection(worktreePath, acpAgent, config),
+    );
+    if (!handle) return { ...EMPTY_SESSION_CONTEXT, repoFiles };
+
+    // Slash commands are cached against a live session id, populated as the
+    // agent streams `available_commands_update`; harvest fresh only when warming.
+    const sessionId = existingSessionRow?.sessionId ?? null;
+    let raw = sessionId ? handle.getAvailableCommands(sessionId) : [];
+    if (raw.length === 0 && warm) {
+      raw = yield* Effect.promise(() => handle.listAvailableCommands());
+    }
+
+    return {
+      commands: raw.map((command) => ({ name: command.name, description: command.description })),
+      promptImage: handle.promptImage,
+      embeddedContext: handle.embeddedContext,
+      repoFiles,
+    } satisfies ChatSessionContext;
+  });
 
 /**
  * Best-effort fetch of the latest completed walkthrough's summary, risk,
@@ -106,6 +273,11 @@ export function gitStdout(args: string[], cwd: string, timeoutMs = 10_000): Prom
       reject(err);
     });
   });
+}
+
+export async function listRepoFiles(worktreePath: string): Promise<string[]> {
+  const stdout = await gitStdout(["ls-tree", "-r", "--name-only", "-z", "HEAD"], worktreePath);
+  return stdout.split("\0").filter((path) => path.length > 0);
 }
 
 /**

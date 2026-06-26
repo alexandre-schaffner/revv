@@ -16,7 +16,17 @@
 // still tracked so follow-up turns resume the same provider context.
 
 import { existsSync } from "node:fs";
-import type { InteractionMode } from "@revv/shared";
+import {
+  attachmentByteSize,
+  attachmentsTotalTooLargeMessage,
+  attachmentTooLargeMessage,
+  type ChatAttachment,
+  type ChatAttachmentMetadata,
+  type InteractionMode,
+  MAX_CHAT_ATTACHMENT_BYTES,
+  MAX_CHAT_ATTACHMENTS_COUNT,
+  MAX_CHAT_ATTACHMENTS_TOTAL_BYTES,
+} from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import type { ChatHistoryEntry } from "../ai/prompts/chat";
@@ -30,11 +40,11 @@ import { ChatChangesPushService } from "../services/ChatChangesPush";
 import { ChatSessionService } from "../services/ChatSession";
 import { DbService } from "../services/Db";
 import { PrContextService } from "../services/PrContext";
-import { RepoCloneService } from "../services/RepoClone";
 import { SettingsService } from "../services/Settings";
 import {
   discardAgentCommits,
   fetchWalkthroughContext,
+  resolveChatTurnContext,
   wrapStreamWithPersistence,
 } from "./chat-helpers";
 import { chatInteractionRoutes } from "./chat-route-interactions";
@@ -50,12 +60,115 @@ import {
 
 // ── Route ──────────────────────────────────────────────────────────────────
 
+// Valid base64 alphabet, optional `=` padding, length a multiple of 4. Used to
+// confirm an attachment the client labelled `image` actually carries base64
+// bytes (and not, say, raw text mislabelled as an image).
+const BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
+
+// Defense-in-depth bound on a single attachment's raw `data` string, enforced
+// at the schema layer. This just rejects an absurd single field early; the
+// authoritative, per-kind decoded-byte caps live in `validateAttachments`.
+// Sized for the worst case — base64 image data, which inflates the byte cap by
+// ~4/3, plus slack. For `text` attachments (`data` is raw UTF-8, ~1 byte/char)
+// this cap therefore over-permits by ~33%; that is intentional — text relies
+// entirely on the decoded-byte check in `validateAttachments`, this bound only
+// exists to stop a pathologically huge single field. (Bun's global body limit
+// remains the real parse-time memory guard.)
+const MAX_ATTACHMENT_DATA_CHARS = Math.ceil((MAX_CHAT_ATTACHMENT_BYTES * 4) / 3) + 1024;
+
+/**
+ * Sanity-check the client-asserted `kind` at the trust boundary so downstream
+ * consumers (size accounting in `attachmentByteSize`, the ACP render branch in
+ * `buildPromptBlocks`) can rely on `kind` matching the payload shape — an
+ * `image` carries non-empty base64 with an image MIME type; `text` does not
+ * claim an image type. This is a cheap structural guard, not a semantic one:
+ * valid base64 is not necessarily a decodable image (that's the agent's
+ * problem). Returns a structured error string on mismatch.
+ */
+function validateAttachmentKind(attachment: ChatAttachment): string | null {
+  if (attachment.kind === "image") {
+    if (!attachment.mimeType.startsWith("image/")) {
+      return `${attachment.name} is labelled an image but has a non-image type.`;
+    }
+    if (
+      attachment.data.length === 0 ||
+      attachment.data.length % 4 !== 0 ||
+      !BASE64_RE.test(attachment.data)
+    ) {
+      return `${attachment.name} is not valid base64 image data.`;
+    }
+    return null;
+  }
+  // Text attachments carry raw UTF-8; reject anything claiming an image type.
+  if (attachment.mimeType.startsWith("image/")) {
+    return `${attachment.name} has an image type but was sent as text.`;
+  }
+  return null;
+}
+
+type AttachmentValidation =
+  | { ok: true; metadata: ChatAttachmentMetadata[] }
+  | {
+      ok: false;
+      status: 413 | 415;
+      code: "ATTACHMENT_TOO_LARGE" | "ATTACHMENT_INVALID";
+      message: string;
+    };
+
+function validateAttachments(
+  attachments: ReadonlyArray<ChatAttachment> | undefined,
+): AttachmentValidation {
+  if (!attachments || attachments.length === 0) return { ok: true, metadata: [] };
+  let total = 0;
+  const metadata: ChatAttachmentMetadata[] = [];
+  for (const attachment of attachments) {
+    const kindError = validateAttachmentKind(attachment);
+    if (kindError) {
+      return { ok: false, status: 415, code: "ATTACHMENT_INVALID", message: kindError };
+    }
+    const size = attachmentByteSize(attachment);
+    if (size > MAX_CHAT_ATTACHMENT_BYTES) {
+      return {
+        ok: false,
+        status: 413,
+        code: "ATTACHMENT_TOO_LARGE",
+        message: attachmentTooLargeMessage(attachment.name),
+      };
+    }
+    total += size;
+    if (total > MAX_CHAT_ATTACHMENTS_TOTAL_BYTES) {
+      return {
+        ok: false,
+        status: 413,
+        code: "ATTACHMENT_TOO_LARGE",
+        message: attachmentsTotalTooLargeMessage(),
+      };
+    }
+    metadata.push({
+      kind: attachment.kind,
+      name: attachment.name,
+      mimeType: attachment.mimeType,
+      size,
+    });
+  }
+  return { ok: true, metadata };
+}
+
 export const chatRoute = new Elysia()
   .use(withAuth)
   .post(
     "/api/chat",
     async (ctx) => {
       try {
+        const attachments = ctx.body.attachments ?? [];
+        const attachmentValidation = validateAttachments(attachments);
+        if (!attachmentValidation.ok) {
+          ctx.set.status = attachmentValidation.status;
+          return {
+            code: attachmentValidation.code,
+            message: attachmentValidation.message,
+          };
+        }
         const requestedMode: InteractionMode | undefined =
           ctx.body.interactionMode === "plan" || ctx.body.interactionMode === "default"
             ? ctx.body.interactionMode
@@ -67,51 +180,23 @@ export const chatRoute = new Elysia()
         const prepared = await AppRuntime.runPromise(
           Effect.gen(function* () {
             const ai = yield* AiService;
-            const prCtx = yield* PrContextService;
-            const settingsService = yield* SettingsService;
             const chatSessions = yield* ChatSessionService;
-            const repoClone = yield* RepoCloneService;
             const chatPush = yield* ChatChangesPushService;
             const { db } = yield* DbService;
-            // Resolve PR + repo + token
-            const { pr, repo, token } = yield* prCtx.resolveBasic(
-              ctx.body.prId,
-              ctx.session.user.id,
-            );
 
-            // Resolve current head SHA (fall back to fetching meta)
-            let headSha = pr.headSha;
-            if (!headSha) {
-              const meta = yield* prCtx.prMeta(repo.fullName, pr.externalId, token);
-              headSha = meta.headSha;
-            }
-            const settings = yield* settingsService.getSettings();
-            const agent = yield* settingsService.resolveChatAgentId();
-            const model = settings.aiModel;
+            // Shared bootstrap: PR/repo/token, head SHA, agent/model, the
+            // existing session row (read-only), and the per-PR worktree. The
+            // worktree preserves a descendant HEAD (unpushed agent commits
+            // from a prior turn) and only resets when its base diverges from
+            // `prHeadSha` (PR head moved on the remote).
+            const { pr, headSha, agent, model, worktreePath, branchName, existingSessionRow } =
+              yield* resolveChatTurnContext(ctx.body.prId, ctx.session.user.id);
 
-            // Check for an existing session BEFORE acquiring the
-            // worktree. No row means this is a fresh start (e.g.
-            // the user just cleared chat), so after we acquire the
-            // worktree we must hard-reset it — stale agent commits
-            // may have survived the clear if the reset raced with
-            // this new message.
-            const existingSessionRow = yield* chatSessions.find(pr.id, agent, model, headSha);
+            // No row means this is a fresh start (e.g. the user just cleared
+            // chat), so after acquiring the worktree we hard-reset it — stale
+            // agent commits may have survived the clear if the reset raced
+            // with this new message.
             const isFreshStart = existingSessionRow === null;
-
-            // Acquire (or refresh) the per-PR worktree. Shared across
-            // walkthrough generation and every chat session for this
-            // PR. If HEAD is a descendant of `prHeadSha` — i.e. the
-            // agent has committed on top in a previous turn but not
-            // pushed — those commits are preserved (the chat-header
-            // push pill renders against them). HEAD is only reset
-            // when its base diverges from `prHeadSha`, e.g. the PR
-            // head moved on the remote.
-            const { worktreePath, branchName } = yield* repoClone.acquirePrWorktree({
-              repoId: repo.id,
-              prNumber: pr.externalId,
-              prHeadSha: headSha,
-              githubToken: token,
-            });
 
             // Fresh start: hard-reset the worktree to `prHeadSha`
             // so any stale agent commits that survived the clear
@@ -243,6 +328,7 @@ export const chatRoute = new Elysia()
               chatSessionId: chatSessionRow.id,
               turnId,
               content: ctx.body.message,
+              attachments: attachmentValidation.metadata,
             });
 
             // Synchronous-by-await: drivers must await this before
@@ -279,6 +365,7 @@ export const chatRoute = new Elysia()
               },
               walkthrough,
               message: ctx.body.message,
+              attachments,
               history,
               cwd: worktreePath,
               branchName,
@@ -410,6 +497,17 @@ export const chatRoute = new Elysia()
       body: t.Object({
         prId: t.String(),
         message: t.String(),
+        attachments: t.Optional(
+          t.Array(
+            t.Object({
+              kind: t.Union([t.Literal("image"), t.Literal("text")]),
+              name: t.String({ maxLength: 1024 }),
+              mimeType: t.String({ maxLength: 256 }),
+              data: t.String({ maxLength: MAX_ATTACHMENT_DATA_CHARS }),
+            }),
+            { maxItems: MAX_CHAT_ATTACHMENTS_COUNT },
+          ),
+        ),
         interactionMode: t.Optional(t.Union([t.Literal("default"), t.Literal("plan")])),
         approvedPlanId: t.Optional(t.String()),
       }),

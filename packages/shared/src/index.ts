@@ -33,8 +33,12 @@ export {
   cacheSigningMessage,
 } from "./cache";
 export type {
+  ChatAttachment,
+  ChatAttachmentMetadata,
   ChatPlan,
   ChatQuestion,
+  ChatSessionCommand,
+  ChatSessionContext,
   ChatStreamFrame,
   ChatSubagentInvocation,
   ChatTask,
@@ -43,6 +47,15 @@ export type {
   NormalizedQuestion,
   NormalizedQuestionOption,
   QuestionStatus,
+} from "./chat";
+export {
+  attachmentByteSize,
+  attachmentsTotalTooLargeMessage,
+  attachmentTooLargeMessage,
+  formatAttachmentSize,
+  MAX_CHAT_ATTACHMENT_BYTES,
+  MAX_CHAT_ATTACHMENTS_COUNT,
+  MAX_CHAT_ATTACHMENTS_TOTAL_BYTES,
 } from "./chat";
 export type { AppChannel, UpdateChannel } from "./constants";
 export {
@@ -61,6 +74,7 @@ export type { ServerEventMessage, WalkthroughEventEnvelope } from "./events";
 export * from "./events";
 export { guessImageContentType, isImagePath } from "./images";
 export { isMaintainerLogin, MAINTAINER_LOGINS } from "./maintainers";
+export { detectMentionTrigger, extractMentionTokens, type MentionTrigger } from "./mentions";
 export type {
   NewPrCommit,
   NewPrMessage,

@@ -28,7 +28,7 @@ export type PromptInputSubmitProps = ButtonProps;
 	const ctx = getContext<PromptInputContext>(PROMPT_INPUT_CTX_KEY);
 	const status = $derived(ctx.status);
 	const isReady = $derived(status === "ready");
-	const isEmpty = $derived(ctx.value.trim().length === 0);
+	const isEmpty = $derived(ctx.value.trim().length === 0 && ctx.files.length === 0);
 	// In "ready" state the form is the send action — disable when the buffer is
 	// empty or the parent has explicitly disabled. In streaming/submitted, the
 	// button is a stop action and stays enabled (the parent's `disabled` is

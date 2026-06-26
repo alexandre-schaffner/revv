@@ -12,6 +12,9 @@ import type {
   AcpAgentId,
   Activity,
   ActivityKind,
+  ChatAttachment,
+  ChatAttachmentMetadata,
+  ChatSessionContext,
   ChatStreamFrame,
   ChatTask,
   InteractionMode,
@@ -37,6 +40,7 @@ export interface ChatRequestParams {
   message: string;
   interactionMode?: InteractionMode;
   approvedPlanId?: string;
+  attachments?: ReadonlyArray<ChatAttachment>;
 }
 
 export interface ChatCallbacks {
@@ -124,6 +128,7 @@ export function streamChatMessage(
     body: JSON.stringify({
       prId: params.prId,
       message: params.message,
+      ...(params.attachments !== undefined ? { attachments: params.attachments } : {}),
       ...(params.interactionMode !== undefined ? { interactionMode: params.interactionMode } : {}),
       ...(params.approvedPlanId !== undefined ? { approvedPlanId: params.approvedPlanId } : {}),
     }),
@@ -381,6 +386,23 @@ export async function fetchAvailableAgents(): Promise<AvailableAgents> {
   return (await res.json()) as AvailableAgents;
 }
 
+export async function fetchSessionContext(
+  prId: string,
+  opts: { warm?: boolean } = {},
+): Promise<ChatSessionContext> {
+  // `warm=1` opts into the server's eager path (acquire worktree + harvest slash
+  // commands) so the `/`-command menu works on a brand-new chat. The plain fetch
+  // stays side-effect-free.
+  const query = opts.warm ? "?warm=1" : "";
+  const res = await fetch(`${API_BASE_URL}/api/chat/${prId}/session-context${query}`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to load chat session context: ${res.status}`);
+  }
+  return (await res.json()) as ChatSessionContext;
+}
+
 // ── History reload ────────────────────────────────────────────────────────
 
 export interface PersistedChatMessage {
@@ -389,6 +411,7 @@ export interface PersistedChatMessage {
   chatSessionId: string;
   role: "user" | "assistant";
   content: string;
+  attachments: ReadonlyArray<ChatAttachmentMetadata>;
   isStreaming: boolean;
   sequence: number;
   turnId: string;

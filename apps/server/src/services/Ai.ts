@@ -1,4 +1,9 @@
-import type { InteractionMode, WalkthroughMode, WalkthroughStreamEvent } from "@revv/shared";
+import type {
+  ChatAttachment,
+  InteractionMode,
+  WalkthroughMode,
+  WalkthroughStreamEvent,
+} from "@revv/shared";
 import { Context, Effect, Layer } from "effect";
 import {
   applyAcpAgentOverride,
@@ -39,6 +44,7 @@ export interface ChatParams {
   readonly pr: ChatPrContext;
   readonly walkthrough: ChatWalkthroughContext | null;
   readonly message: string;
+  readonly attachments?: ReadonlyArray<ChatAttachment>;
   /**
    * Persisted chat timeline (messages + activities) for the current
    * session, NOT including the message being sent in this turn. The chat
@@ -311,6 +317,7 @@ export const AiServiceLive = Layer.effect(
 
             return streamChatViaAcp({
               message,
+              attachments: params.attachments,
               systemPrompt,
               resumeSessionId: params.resumeSessionId ?? undefined,
               cwd: params.cwd,

@@ -9,8 +9,18 @@
 // maps the normalized agent events onto chat frames — so nothing downstream
 // (persistence, SSE encoder, the web chat panel) changes.
 
-import type { McpServer, SessionModeState } from "@agentclientprotocol/sdk";
-import type { AcpAgentId, ContextWindow, InteractionMode, ThinkingEffort } from "@revv/shared";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+import type { ContentBlock, McpServer, SessionModeState } from "@agentclientprotocol/sdk";
+import {
+  type AcpAgentId,
+  type ChatAttachment,
+  type ContextWindow,
+  extractMentionTokens,
+  type InteractionMode,
+  type ThinkingEffort,
+} from "@revv/shared";
 import { serverEnv } from "../../config";
 import { CLI_CHAT_TURN_TIMEOUT_MS } from "../../constants";
 import { AiGenerationError } from "../../domain/errors";
@@ -48,6 +58,7 @@ export interface AcpChatDeps {
 
 export interface StreamChatViaAcpOptions {
   readonly message: string;
+  readonly attachments?: ReadonlyArray<ChatAttachment> | undefined;
   readonly systemPrompt: string;
   readonly resumeSessionId?: string | undefined;
   readonly cwd: string;
@@ -78,6 +89,79 @@ function findPlanModeId(modes: SessionModeState | null): string | undefined {
     if (/(plan|ask|architect|read.?only|readonly)/.test(haystack)) return mode.id;
   }
   return undefined;
+}
+
+function attachmentUri(name: string): string {
+  return `attachment://${encodeURIComponent(name)}`;
+}
+
+// Resolve `@path/to/file` mentions in the user's message into ACP
+// `resource_link` blocks. Tokenization uses the shared grammar
+// (`extractMentionTokens`) so the server and the web composer agree on what a
+// mention is; here we add the server-only concerns: reject path traversal /
+// absolute paths, and emit a link only for paths that resolve to a real file
+// inside the worktree — so dangling `@TODO`-style prose tokens never become
+// `file://` links the agent might try (and fail) to read.
+function extractFileReferences(message: string, cwd: string): ContentBlock[] {
+  const blocks: ContentBlock[] = [];
+  for (const path of extractMentionTokens(message)) {
+    if (path.startsWith("/") || path.includes("..")) continue;
+    const absolute = join(cwd, path);
+    if (!existsSync(absolute)) continue;
+    blocks.push({
+      type: "resource_link",
+      uri: pathToFileURL(absolute).toString(),
+      name: path,
+    });
+  }
+  return blocks;
+}
+
+function buildPromptBlocks(opts: {
+  readonly promptText: string;
+  /** The raw user message — `@`-mentions are scanned from this, not promptText. */
+  readonly message: string;
+  readonly cwd: string;
+  readonly attachments: ReadonlyArray<ChatAttachment>;
+  readonly promptImage: boolean;
+  readonly embeddedContext: boolean;
+}): ContentBlock[] {
+  const notes: string[] = [];
+  let text = opts.promptText;
+  const blocks: ContentBlock[] = [];
+
+  for (const attachment of opts.attachments) {
+    if (attachment.kind === "image") {
+      if (opts.promptImage) {
+        blocks.push({
+          type: "image",
+          data: attachment.data,
+          mimeType: attachment.mimeType,
+        });
+      } else {
+        notes.push(
+          `Image attachment "${attachment.name}" was omitted because this agent does not support image prompts.`,
+        );
+      }
+    } else if (opts.embeddedContext) {
+      blocks.push({
+        type: "resource",
+        resource: {
+          uri: attachmentUri(attachment.name),
+          text: attachment.data,
+          mimeType: attachment.mimeType,
+        },
+      });
+    } else {
+      text += `\n\n---\n\nAttached file: ${attachment.name}\n\n${attachment.data}`;
+    }
+  }
+
+  if (notes.length > 0) {
+    text += `\n\n${notes.join("\n")}`;
+  }
+
+  return [{ type: "text", text }, ...extractFileReferences(opts.message, opts.cwd), ...blocks];
 }
 
 export function streamChatViaAcp(
@@ -188,6 +272,14 @@ export function streamChatViaAcp(
         const promptText = opts.resumeSessionId
           ? opts.message
           : `${opts.systemPrompt}\n\n---\n\n${opts.message}`;
+        const promptBlocks = buildPromptBlocks({
+          promptText,
+          message: opts.message,
+          cwd: opts.cwd,
+          attachments: opts.attachments ?? [],
+          promptImage: h.promptImage,
+          embeddedContext: h.embeddedContext,
+        });
 
         await withAgentTurn({
           externalAbort: opts.abortController,
@@ -203,7 +295,7 @@ export function streamChatViaAcp(
             await h.cancel(turnSessionId);
           },
           run: async () => {
-            const stopReason = await h.prompt(turnSessionId, [{ type: "text", text: promptText }]);
+            const stopReason = await h.prompt(turnSessionId, promptBlocks);
             if (stopReason === "refusal") {
               controller.enqueue({ kind: "text", data: "\n\n_The agent declined to continue._" });
             }
