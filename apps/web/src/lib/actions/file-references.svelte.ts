@@ -19,11 +19,21 @@
 
 import type { Action } from "svelte/action";
 
-import { getReviewFiles, openFileInDiff } from "$lib/stores/review.svelte";
+import { openFileInDiff } from "$lib/stores/review.svelte";
+import type { ReviewFile } from "$lib/types/review";
+import { basename } from "$lib/utils/activity-groups";
+import { createFileGlyph } from "$lib/utils/file-glyph";
 
 const REF_PATH_ATTR = "data-file-ref-path";
 const REF_LINE_ATTR = "data-file-ref-line";
 const REF_CLASS = "file-ref";
+const ICON_CLASS = "file-ref-icon";
+
+/** Prepend the per-extension file-type glyph into a resolved reference once. */
+function ensureIcon(code: HTMLElement, path: string): void {
+  if (code.querySelector(`.${ICON_CLASS}`)) return;
+  code.prepend(createFileGlyph(path, ICON_CLASS));
+}
 
 interface ResolvedRef {
   path: string;
@@ -37,14 +47,14 @@ interface FileLookup {
   byBasename: Map<string, Set<string>>;
 }
 
-function buildLookup(): FileLookup {
+function buildLookup(files: ReadonlyArray<ReviewFile>): FileLookup {
   const paths = new Set<string>();
   const byBasename = new Map<string, Set<string>>();
-  for (const file of getReviewFiles()) {
+  for (const file of files) {
     for (const p of [file.path, file.oldPath]) {
       if (!p) continue;
       paths.add(p);
-      const base = p.slice(p.lastIndexOf("/") + 1);
+      const base = basename(p);
       let set = byBasename.get(base);
       if (!set) {
         set = new Set();
@@ -80,7 +90,7 @@ function resolveRef(raw: string, lookup: FileLookup): ResolvedRef | null {
 
   // Otherwise fall back to a unique basename match so a bare `foo.ts` resolves
   // to `src/foo.ts` — but only when exactly one changed file owns that name.
-  const base = candidate.slice(candidate.lastIndexOf("/") + 1);
+  const base = basename(candidate);
   const owners = lookup.byBasename.get(base);
   if (!owners || owners.size !== 1) return null;
   const [only] = owners;
@@ -98,14 +108,15 @@ function undecorate(code: HTMLElement): void {
   code.removeAttribute("role");
   code.removeAttribute("tabindex");
   code.removeAttribute("title");
+  code.querySelector(`.${ICON_CLASS}`)?.remove();
 }
 
-function decorate(node: HTMLElement, enabled: boolean): void {
-  if (!enabled) {
+function decorate(node: HTMLElement, files: ReadonlyArray<ReviewFile> | null): void {
+  if (!files) {
     for (const code of node.querySelectorAll<HTMLElement>(`code.${REF_CLASS}`)) undecorate(code);
     return;
   }
-  const lookup = buildLookup();
+  const lookup = buildLookup(files);
   const codes = node.querySelectorAll<HTMLElement>("code");
   for (const code of codes) {
     // Inline code only — skip fenced/highlighted blocks (`<pre><code>`).
@@ -119,6 +130,7 @@ function decorate(node: HTMLElement, enabled: boolean): void {
       code.setAttribute("role", "button");
       code.setAttribute("tabindex", "0");
       code.setAttribute("title", `Open ${ref.path} in diff`);
+      ensureIcon(code, ref.path);
     } else if (code.classList.contains(REF_CLASS)) {
       // A prior render matched but the file set changed — strip the affordance.
       undecorate(code);
@@ -135,26 +147,35 @@ function open(target: HTMLElement): void {
 }
 
 /**
- * Bound value gates the action: a truthy value (the current review file set)
- * enables decoration, a falsy value (`null`/`false`) leaves the markdown inert.
- * The value also re-triggers `update` so decoration tracks the live file set.
+ * The bound value IS the review file set (or `null`/`false` to leave the
+ * markdown inert). It gates decoration AND carries the data resolution uses —
+ * passing a fresh array on each render is what re-runs `update` so decoration
+ * tracks the live file set. There is no hidden second signal.
  */
-export const fileReferences: Action<HTMLElement, unknown> = (node, value) => {
+export const fileReferences: Action<
+  HTMLElement,
+  ReadonlyArray<ReviewFile> | null | false | undefined
+> = (node, value) => {
   let destroyed = false;
   let scheduled = false;
-  let enabled = Boolean(value);
+  let files: ReadonlyArray<ReviewFile> | null = value || null;
 
   const schedule = (): void => {
     if (destroyed || scheduled) return;
     scheduled = true;
     queueMicrotask(() => {
       scheduled = false;
-      if (!destroyed) decorate(node, enabled);
+      if (destroyed) return;
+      // Pause observation while we mutate (we inject icon <svg>s, a childList
+      // change that would otherwise re-trigger this observer).
+      observer.disconnect();
+      decorate(node, files);
+      if (!destroyed) observer.observe(node, { childList: true, subtree: true });
     });
   };
 
   const onClick = (e: MouseEvent): void => {
-    if (!enabled) return;
+    if (!files) return;
     const ref = (e.target as HTMLElement | null)?.closest<HTMLElement>(`.${REF_CLASS}`);
     if (!ref || !node.contains(ref)) return;
     e.preventDefault();
@@ -162,7 +183,7 @@ export const fileReferences: Action<HTMLElement, unknown> = (node, value) => {
   };
 
   const onKeydown = (e: KeyboardEvent): void => {
-    if (!enabled || (e.key !== "Enter" && e.key !== " ")) return;
+    if (!files || (e.key !== "Enter" && e.key !== " ")) return;
     const ref = (e.target as HTMLElement | null)?.closest<HTMLElement>(`.${REF_CLASS}`);
     if (!ref || !node.contains(ref)) return;
     e.preventDefault();
@@ -178,7 +199,7 @@ export const fileReferences: Action<HTMLElement, unknown> = (node, value) => {
   return {
     // Re-decorate when the bound value (the current file set) changes.
     update(next) {
-      enabled = Boolean(next);
+      files = next || null;
       schedule();
     },
     destroy() {

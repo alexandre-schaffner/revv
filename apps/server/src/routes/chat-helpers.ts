@@ -633,6 +633,7 @@ export function wrapStreamWithPersistence(
                     toolName: value.toolName,
                     summary: value.summary,
                     payload: value.payload,
+                    callId: value.callId ?? null,
                     subagentInvocationId,
                   }),
                 ),
@@ -648,6 +649,47 @@ export function wrapStreamWithPersistence(
               ? { ...activityRest, subagentInvocationId }
               : activityRest;
             controller.enqueue(wireActivity);
+            continue;
+          } else if (value.kind === "activity-result") {
+            // Stamp the captured output onto the originating activity row
+            // (matched by provider call id) so it survives reload, then
+            // forward the frame unchanged for live patching.
+            try {
+              await AppRuntime.runPromise(
+                Effect.flatMap(ChatSessionService, (svc) =>
+                  svc.updateActivityResult({
+                    chatSessionId: ctx.chatSessionId,
+                    turnId: ctx.turnId,
+                    callId: value.callId,
+                    output: value.output,
+                    isError: value.isError,
+                  }),
+                ),
+              );
+            } catch (err) {
+              logPersistError("updateActivityResult", err);
+            }
+            controller.enqueue(value);
+            continue;
+          } else if (value.kind === "activity-input") {
+            // Late-arriving tool input — persist the payload onto the activity
+            // row (by call id) so the filename/peek survives reload, then
+            // forward for live patching.
+            try {
+              await AppRuntime.runPromise(
+                Effect.flatMap(ChatSessionService, (svc) =>
+                  svc.updateActivityInput({
+                    chatSessionId: ctx.chatSessionId,
+                    turnId: ctx.turnId,
+                    callId: value.callId,
+                    payload: value.payload,
+                  }),
+                ),
+              );
+            } catch (err) {
+              logPersistError("updateActivityInput", err);
+            }
+            controller.enqueue(value);
             continue;
           } else if (value.kind === "task-list") {
             try {

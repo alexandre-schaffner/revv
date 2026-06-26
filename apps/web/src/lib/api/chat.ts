@@ -46,6 +46,8 @@ export interface ChatRequestParams {
 export interface ChatCallbacks {
   onText: (chunk: string) => void;
   onActivity: (activity: Activity & { subagentInvocationId?: string }) => void;
+  onActivityResult: (params: { callId: string; output: string; isError: boolean }) => void;
+  onActivityInput: (params: { callId: string; payload: unknown }) => void;
   onTaskList: (params: { turnId: string; tasks: ReadonlyArray<ChatTask> }) => void;
   onPlanPresented: (params: { planId: string; turnId: string; markdown: string }) => void;
   onSubagentStart: (params: {
@@ -188,10 +190,19 @@ export function streamChatMessage(
               toolName: frame.toolName,
               summary: frame.summary,
               payload: frame.payload,
+              ...(frame.callId !== undefined ? { callId: frame.callId } : {}),
               ...(frame.subagentInvocationId !== undefined
                 ? { subagentInvocationId: frame.subagentInvocationId }
                 : {}),
             });
+          } else if (frame.kind === "activity-result") {
+            callbacks.onActivityResult({
+              callId: frame.callId,
+              output: frame.output,
+              isError: frame.isError,
+            });
+          } else if (frame.kind === "activity-input") {
+            callbacks.onActivityInput({ callId: frame.callId, payload: frame.payload });
           } else if (frame.kind === "task-list") {
             callbacks.onTaskList({
               turnId: frame.turnId,
@@ -429,6 +440,9 @@ export interface PersistedChatActivity {
   toolName: string | null;
   summary: string;
   payloadJson: string | null;
+  callId: string | null;
+  output: string | null;
+  isError: boolean | null;
   sequence: number;
   subagentInvocationId: string | null;
   createdAt: string;

@@ -32,6 +32,7 @@ import {
   fluidEmit,
   makeAcpDecodeState,
   type NormalizedAgentEvent,
+  relativizeToolInput,
   withAgentTurn,
 } from "../agent-stream";
 import { AgentUnavailableError } from "./chat-agent-errors";
@@ -248,8 +249,23 @@ export function streamChatViaAcp(
             controller.enqueue({ kind: "reasoning", data: ev.data });
             lastWasNonText = true;
           } else if (ev.kind === "tool-call") {
-            const activity = buildActivity(ev.toolName, ev.input);
+            const activity = buildActivity(ev.toolName, ev.input, opts.cwd, ev.callId);
             controller.enqueue({ kind: "activity", ...activity });
+            lastWasNonText = true;
+          } else if (ev.kind === "tool-result") {
+            controller.enqueue({
+              kind: "activity-result",
+              callId: ev.callId,
+              output: ev.output,
+              isError: ev.isError,
+            });
+            lastWasNonText = true;
+          } else if (ev.kind === "tool-call-update") {
+            controller.enqueue({
+              kind: "activity-input",
+              callId: ev.callId,
+              payload: relativizeToolInput(ev.input, opts.cwd),
+            });
             lastWasNonText = true;
           } else if (ev.kind === "task-list-update") {
             controller.enqueue({ kind: "task-list", tasks: ev.tasks });

@@ -77,7 +77,7 @@ import {
 } from "$lib/components/ai/queue";
 import { Suggestion, SuggestionItem } from "$lib/components/ai/suggestion";
 import type { ToolState } from "$lib/components/ai/tool";
-import { Tool, ToolContent, ToolHeader, ToolOutput } from "$lib/components/ai/tool";
+import { Tool, ToolCallCard, ToolContent, ToolHeader, ToolOutput } from "$lib/components/ai/tool";
 import ProposedDiffModal from "$lib/components/review/ProposedDiffModal.svelte";
 import { Button } from "$lib/components/ui/button";
 import { Checkbox } from "$lib/components/ui/checkbox";
@@ -664,10 +664,15 @@ function activitiesForTurn(
 							 active-turn tool calls into the dot-matrix
 							 indicator below. -->
 						{#if !item.subagentInvocationId && !(item.turnId && streamingTurnIds.has(item.turnId))}
-							<div class="tool-line">
-								<span class="tool-bullet">&rsaquo;</span>
-								<span class="tool-text">{item.summary}</span>
-							</div>
+							<ToolCallCard
+								activityKind={item.activityKind}
+								toolName={item.toolName}
+								summary={item.summary}
+								payload={item.payload}
+								output={item.output}
+								isError={item.isError}
+								prId={prId ?? undefined}
+							/>
 						{/if}
 					{:else if item.kind === 'task-list'}
 						<!-- Rendered exclusively in the Queue dock below. -->
@@ -728,10 +733,15 @@ function activitiesForTurn(
 								{#if nestedActivitiesFor(item.id).length > 0}
 									<div class="space-y-0.5">
 										{#each nestedActivitiesFor(item.id) as activity (activity.id)}
-											<div class="flex items-baseline gap-1.5 text-xs text-muted-foreground">
-												<span class="font-semibold text-muted-foreground/60">&rsaquo;</span>
-												<span class="flex-1 min-w-0 break-words">{activity.summary}</span>
-											</div>
+											<ToolCallCard
+												activityKind={activity.activityKind}
+												toolName={activity.toolName}
+												summary={activity.summary}
+												payload={activity.payload}
+												output={activity.output}
+												isError={activity.isError}
+												prId={prId ?? undefined}
+											/>
 										{/each}
 									</div>
 								{/if}
@@ -764,7 +774,7 @@ function activitiesForTurn(
 						<MessageContent>
 							<div class="flex max-w-full flex-col items-end gap-1.5">
 								{#if item.content}
-									<MessageResponse content={item.content} class="prose-on-accent rounded-[14px] rounded-br-[4px] bg-accent px-3 py-2 text-white" />
+									<MessageResponse content={item.content} mentionPills class="prose-on-accent rounded-[14px] rounded-br-[4px] bg-accent px-3 py-2 text-white" />
 								{/if}
 								{#if item.attachments && item.attachments.length > 0}
 									<div class="flex max-w-[min(26rem,80vw)] flex-wrap justify-end gap-1">
@@ -1801,26 +1811,6 @@ function activitiesForTurn(
 	}
 
 	/* Content / messages */
-	/* Tool-use line */
-	.tool-line {
-		display: flex;
-		align-items: baseline;
-		gap: 6px;
-		font-size: 11px;
-		color: var(--color-text-muted);
-		font-family: var(--font-mono);
-	}
-
-	.tool-bullet {
-		color: var(--color-accent);
-	}
-
-	.tool-text {
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-	}
-
 	/* Streaming tool-call stack: shown in the panel header during a
 	   streaming turn (next to the dot-matrix loader). Last 2 activities
 	   stack vertically and animate up as new ones arrive — same shape as

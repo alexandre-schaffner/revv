@@ -100,7 +100,13 @@ export async function unmergedPaths(worktreePath: string): Promise<string[]> {
   return out.split("\n").filter((file) => file.length > 0);
 }
 
-export async function revListCount(worktreePath: string, range: string): Promise<string> {
+/**
+ * Count commits in a proposed-commit range (`<base>..<branch>`). Bakes in
+ * {@link PROPOSED_COMMIT_RANGE_FLAGS}, so this is NOT a general rev-list count —
+ * it deliberately reports only first-parent, non-merge commits. A caller
+ * wanting a true commit count must not use this.
+ */
+export async function proposedCommitCount(worktreePath: string, range: string): Promise<string> {
   return (
     await runGitCapture(
       ["rev-list", "--count", ...PROPOSED_COMMIT_RANGE_FLAGS, range],
@@ -110,7 +116,11 @@ export async function revListCount(worktreePath: string, range: string): Promise
   ).trim();
 }
 
-export async function revListReverse(worktreePath: string, range: string): Promise<string[]> {
+/**
+ * List the SHAs in a proposed-commit range, oldest-first (cherry-pick order).
+ * Bakes in {@link PROPOSED_COMMIT_RANGE_FLAGS} — see {@link proposedCommitCount}.
+ */
+export async function proposedCommitShas(worktreePath: string, range: string): Promise<string[]> {
   const out = (
     await runGitCapture(
       ["rev-list", "--reverse", ...PROPOSED_COMMIT_RANGE_FLAGS, range],

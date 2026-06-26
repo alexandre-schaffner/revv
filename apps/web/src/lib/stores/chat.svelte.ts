@@ -82,6 +82,14 @@ export type ChatItem =
       toolName: string;
       summary: string;
       turnId?: string;
+      /** Raw tool input (file_path, command, …) — powers the clickable peek. */
+      payload?: unknown;
+      /** Provider tool-call id; correlates the later `activity-result` patch. */
+      callId?: string;
+      /** Captured tool output (stdout / result text), once the result arrives. */
+      output?: string;
+      /** Whether the tool call ended in error. */
+      isError?: boolean;
       /**
        * When set, this activity row was emitted by a sub-agent. The
        * SubagentInvocation card filters its nested activities by this
@@ -381,6 +389,31 @@ function patchItem(prId: string, id: string, patch: (item: ChatItem) => ChatItem
   setItems(prId, next);
 }
 
+/**
+ * Patch the activity item whose provider `callId` matches — used to stamp a
+ * tool's captured output onto its row when the `activity-result` frame lands.
+ * No-op if no matching activity is present (result for a different session, or
+ * an activity that was never surfaced).
+ */
+function patchActivityByCallId(
+  prId: string,
+  callId: string,
+  patch: (item: Extract<ChatItem, { kind: "activity" }>) => ChatItem,
+): void {
+  const items = chatHistories.get(prId) ?? [];
+  // Match the LAST activity with this call id: result/input frames arrive during
+  // the active turn, so the current turn's row is the most recent one. This
+  // mirrors the server's turn-scoped `updateActivityResult` so the two agree
+  // even if a provider recycles a `toolCallId` across turns.
+  const idx = items.findLastIndex((i) => i.kind === "activity" && i.callId === callId);
+  if (idx === -1) return;
+  const item = items[idx];
+  if (!item || item.kind !== "activity") return;
+  const next = [...items];
+  next[idx] = patch(item);
+  setItems(prId, next);
+}
+
 function removeItem(prId: string, id: string): void {
   const items = chatHistories.get(prId) ?? [];
   const next = items.filter((i) => i.id !== id);
@@ -523,6 +556,15 @@ export function clearProposedComments(prId: string, sha: string): void {
 
 // ── Persisted-entry → ChatItem projection ─────────────────────────────────
 
+/** Parse a persisted JSON column without throwing on malformed data. */
+function safeParseJson(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+}
+
 function entryToChatItem(entry: PersistedChatEntry): ChatItem {
   if (entry.entryKind === "message") {
     return {
@@ -544,6 +586,10 @@ function entryToChatItem(entry: PersistedChatEntry): ChatItem {
       toolName: entry.toolName ?? entry.activityKind,
       summary: entry.summary,
       turnId: entry.turnId,
+      ...(entry.payloadJson != null ? { payload: safeParseJson(entry.payloadJson) } : {}),
+      ...(entry.callId != null ? { callId: entry.callId } : {}),
+      ...(entry.output != null ? { output: entry.output } : {}),
+      ...(entry.isError != null ? { isError: entry.isError } : {}),
       ...(entry.subagentInvocationId ? { subagentInvocationId: entry.subagentInvocationId } : {}),
     };
   }
@@ -706,10 +752,22 @@ export function sendChatMessage(params: SendChatMessageParams): void {
           toolName: activity.toolName,
           summary: activity.summary,
           turnId,
+          ...(activity.payload !== undefined ? { payload: activity.payload } : {}),
+          ...(activity.callId !== undefined ? { callId: activity.callId } : {}),
           ...(activity.subagentInvocationId
             ? { subagentInvocationId: activity.subagentInvocationId }
             : {}),
         });
+      },
+      onActivityResult: ({ callId, output, isError }) => {
+        // Stamp captured output onto the matching activity (by provider call
+        // id) so its peek can render stdout / results in place.
+        patchActivityByCallId(prId, callId, (item) => ({ ...item, output, isError }));
+      },
+      onActivityInput: ({ callId, payload }) => {
+        // Back-fill late-arriving tool input so the card's filename/command
+        // and file peek resolve (agents that send an empty initial tool-call).
+        patchActivityByCallId(prId, callId, (item) => ({ ...item, payload }));
       },
       onTaskList: ({ turnId: taskTurnId, tasks }) => {
         // Reconcile with any existing task-list for the same turn —

@@ -225,6 +225,13 @@
       "when": 1779630000000,
       "tag": "0280_chat_message_attachments",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1779635000000,
+      "tag": "0290_chat_activity_results",
+      "breakpoints": true
     }
   ]
 }

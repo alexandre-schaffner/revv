@@ -38,6 +38,17 @@ export type RawChatStreamFrame =
       readonly subagentProviderCallId?: string;
     } & Activity)
   | {
+      readonly kind: "activity-result";
+      readonly callId: string;
+      readonly output: string;
+      readonly isError: boolean;
+    }
+  | {
+      readonly kind: "activity-input";
+      readonly callId: string;
+      readonly payload: unknown;
+    }
+  | {
       readonly kind: "task-list";
       readonly tasks: ReadonlyArray<ChatTask>;
     }
