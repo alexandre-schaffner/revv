@@ -30,6 +30,8 @@ import {
   getBlocks,
   getCloneInProgress,
   getCloneRepoId,
+  getExplorationInputs,
+  getExplorationResults,
   getExplorationSteps,
   getGeneratedBy,
   getIsLiveGeneration,
@@ -86,6 +88,8 @@ const riskLevel = $derived(getRiskLevel());
 const isStreaming = $derived(getIsStreaming());
 const streamError = $derived(getStreamError());
 const explorationSteps = $derived(getExplorationSteps());
+const explorationResults = $derived(getExplorationResults());
+const explorationInputs = $derived(getExplorationInputs());
 const timeline = $derived(getTimeline());
 const phase = $derived(getPhase());
 const streamStartedAt = $derived(getStreamStartedAt());
@@ -468,7 +472,15 @@ const interleavedEntries = $derived.by<readonly InterleavedRenderEntry[]>(() => 
       continue;
     }
     if (!isExplorationActivity(entry.activity)) continue;
-    const item: GroupableActivity = { ...entry.activity, id: entry.id };
+    const callId = entry.activity.callId;
+    const result = callId ? explorationResults[callId] : undefined;
+    const lateInput = callId ? explorationInputs[callId] : undefined;
+    const item: GroupableActivity = {
+      ...entry.activity,
+      id: entry.id,
+      ...(lateInput !== undefined ? { payload: lateInput } : {}),
+      ...(result ? { output: result.output, isError: result.isError } : {}),
+    };
     const last = out.at(-1);
     if (last && last.kind === "explorations") {
       out[out.length - 1] = { ...last, items: [...last.items, item] };
@@ -1220,6 +1232,7 @@ function handleRegenerate(): void {
 												items={entry.items}
 												active={entryIdx === interleavedEntries.length - 1}
 												defaultOpen={false}
+												prId={prId}
 											/>
 										</div>
 									{/if}

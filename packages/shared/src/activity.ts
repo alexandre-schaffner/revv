@@ -51,12 +51,80 @@ export interface Activity {
   readonly summary: string;
   readonly payload?: unknown;
   /**
+   * Provider-assigned tool-call id (ACP `toolCallId`). Carried so a later
+   * tool *result* (decoded from the ACP `tool_call_update` and surfaced as an
+   * `activity-result` chat frame / `exploration-result` walkthrough event) can
+   * be correlated back onto this activity for the clickable output peek.
+   * Optional — phase/MCP-emitted activities have no call id.
+   */
+  readonly callId?: string;
+  /**
    * When set, this activity row was emitted by a sub-agent (Claude `Task`
    * tool, opencode `agent` part) rather than the parent agent. The UI uses
    * this to nest the activity inside the matching `ChatSubagentInvocation`
    * card. Unset for top-level tool calls.
    */
   readonly subagentInvocationId?: string;
+}
+
+/**
+ * Captured terminal result of a tool call — the output/stdout (or error text)
+ * a tool produced, decoded from the ACP `tool_call_update` notification once
+ * its `status` reaches a terminal `completed`/`failed`. Correlated to its
+ * originating {@link Activity} by `callId`. `output` is best-effort textual
+ * content (text content blocks joined; diffs rendered to text) and may be
+ * truncated by the producer to keep the journal small.
+ */
+export interface ActivityResult {
+  readonly callId: string;
+  readonly output: string;
+  readonly isError: boolean;
+}
+
+/**
+ * Sentinel-tagged structured diff carried in an {@link ActivityResult}'s/
+ * activity's `output` string for file-edit tool calls. Plain string output
+ * (Bash stdout, file reads) never carries the sentinel.
+ *
+ * The tool `output` column is a single multiplexed channel: it holds either
+ * plain text OR a JSON-encoded {@link ToolDiffOutput}. The sentinel key is the
+ * discriminator. Both ends MUST go through {@link encodeToolDiffOutput} /
+ * {@link decodeToolDiffOutput} so the wire shape lives in exactly one place —
+ * the server decoder encodes it, the web ToolCallCard decodes it to render a
+ * real diff + LOC counts.
+ */
+export const DIFF_OUTPUT_SENTINEL = "__revvDiff" as const;
+
+/** Old/new pair for a file edit, recovered from a tool's diff/output. */
+export interface ToolDiffOutput {
+  readonly path: string;
+  readonly oldText: string;
+  readonly newText: string;
+}
+
+/** Encode an edit's before/after into the sentinel-tagged `output` channel. */
+export function encodeToolDiffOutput(path: string, oldText: string, newText: string): string {
+  return JSON.stringify({ [DIFF_OUTPUT_SENTINEL]: true, path, oldText, newText });
+}
+
+/**
+ * Decode an activity `output` as a structured edit diff, or null when it is
+ * plain text (or absent). The leading-`{` check is a cheap fast-path so the
+ * common plain-text case never hits `JSON.parse`.
+ */
+export function decodeToolDiffOutput(output: string | undefined): ToolDiffOutput | null {
+  if (!output || output[0] !== "{") return null;
+  try {
+    const parsed = JSON.parse(output) as Record<string, unknown>;
+    if (parsed[DIFF_OUTPUT_SENTINEL] !== true) return null;
+    return {
+      path: typeof parsed.path === "string" ? parsed.path : "",
+      oldText: typeof parsed.oldText === "string" ? parsed.oldText : "",
+      newText: typeof parsed.newText === "string" ? parsed.newText : "",
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**

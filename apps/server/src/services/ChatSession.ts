@@ -92,6 +92,9 @@ export interface ChatActivityRow {
   readonly toolName: string | null;
   readonly summary: string;
   readonly payloadJson: string | null;
+  readonly callId: string | null;
+  readonly output: string | null;
+  readonly isError: boolean | null;
   readonly sequence: number;
   readonly subagentInvocationId: string | null;
   readonly createdAt: string;
@@ -274,8 +277,39 @@ export class ChatSessionService extends Context.Tag("ChatSessionService")<
       readonly toolName: string | null;
       readonly summary: string;
       readonly payload?: unknown;
+      readonly callId?: string | null;
       readonly subagentInvocationId?: string | null;
     }) => Effect.Effect<{ readonly id: string; readonly sequence: number }>;
+
+    /**
+     * Stamp a tool's captured output onto its activity row, matched by provider
+     * `callId` *within a turn*. Idempotent last-write-wins; a no-op if the call
+     * id is unknown (the activity wasn't persisted, or the result arrived for a
+     * different session). Scoping by `turnId` keeps a provider that recycles a
+     * `toolCallId` across turns (warm ACP connections span turns) from stamping
+     * onto an older turn's row. Powers the clickable output peek after a reload.
+     */
+    readonly updateActivityResult: (params: {
+      readonly chatSessionId: string;
+      readonly turnId: string;
+      readonly callId: string;
+      readonly output: string;
+      readonly isError: boolean;
+    }) => Effect.Effect<void>;
+
+    /**
+     * Back-fill an activity's tool input (matched by provider `callId` within a
+     * turn) when it arrives after the initial tool-call — so the persisted
+     * payload (and thus the filename/command + file peek) survives a reload.
+     * Idempotent; a no-op if the call id is unknown. Turn-scoped for the same
+     * reason as `updateActivityResult`.
+     */
+    readonly updateActivityInput: (params: {
+      readonly chatSessionId: string;
+      readonly turnId: string;
+      readonly callId: string;
+      readonly payload: unknown;
+    }) => Effect.Effect<void>;
 
     /** Read the full timeline for a session, ordered by sequence. */
     readonly listTimeline: (chatSessionId: string) => Effect.Effect<readonly ChatTimelineEntry[]>;
@@ -812,6 +846,7 @@ export const ChatSessionServiceLive = Layer.effect(
         toolName,
         summary,
         payload,
+        callId,
         subagentInvocationId,
       }) =>
         Effect.sync(() => {
@@ -827,12 +862,43 @@ export const ChatSessionServiceLive = Layer.effect(
               toolName: toolName ?? null,
               summary,
               payloadJson: payload === undefined ? null : JSON.stringify(payload),
+              callId: callId ?? null,
+              output: null,
+              isError: null,
               sequence,
               subagentInvocationId: subagentInvocationId ?? null,
               createdAt: now,
             })
             .run();
           return { id, sequence };
+        }),
+
+      updateActivityResult: ({ chatSessionId, turnId, callId, output, isError }) =>
+        Effect.sync(() => {
+          db.update(chatActivities)
+            .set({ output, isError })
+            .where(
+              and(
+                eq(chatActivities.chatSessionId, chatSessionId),
+                eq(chatActivities.turnId, turnId),
+                eq(chatActivities.callId, callId),
+              ),
+            )
+            .run();
+        }),
+
+      updateActivityInput: ({ chatSessionId, turnId, callId, payload }) =>
+        Effect.sync(() => {
+          db.update(chatActivities)
+            .set({ payloadJson: payload === undefined ? null : JSON.stringify(payload) })
+            .where(
+              and(
+                eq(chatActivities.chatSessionId, chatSessionId),
+                eq(chatActivities.turnId, turnId),
+                eq(chatActivities.callId, callId),
+              ),
+            )
+            .run();
         }),
 
       listTimeline: (chatSessionId) =>
@@ -949,6 +1015,9 @@ export const ChatSessionServiceLive = Layer.effect(
                 toolName: a.toolName,
                 summary: a.summary,
                 payloadJson: a.payloadJson,
+                callId: a.callId,
+                output: a.output,
+                isError: a.isError,
                 sequence: a.sequence,
                 subagentInvocationId: a.subagentInvocationId,
                 createdAt: a.createdAt,

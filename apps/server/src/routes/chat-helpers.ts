@@ -21,6 +21,7 @@ import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
 import type { ResolvePushFrame } from "../services/ChatChangesPush";
 import { type ChatSessionRow, ChatSessionService } from "../services/ChatSession";
+import { PROPOSED_COMMIT_RANGE_FLAGS } from "../services/GitOps";
 import { PrContextService } from "../services/PrContext";
 import { RepoCloneService } from "../services/RepoClone";
 import { SettingsService } from "../services/Settings";
@@ -115,6 +116,25 @@ const EMPTY_SESSION_CONTEXT: ChatSessionContext = {
 };
 
 /**
+ * Durable, process-survivable cache of harvested slash commands, keyed by
+ * `agent::repoId`. Slash commands are a property of the agent binary (its own
+ * commands) plus the repo's project commands — they're PR-independent and
+ * change rarely, so the same list is valid across every PR worktree of a repo.
+ *
+ * Without this, the *first* `/` in a session was slow: the side-effect-free
+ * PR-selection fetch (`peek`, no live agent) returned an empty menu, and the
+ * real command list only arrived after the focus-time warm paid a cold agent
+ * spawn + a throwaway-session harvest (up to 8s). With it, once ANY warm run
+ * for an `(agent, repo)` has harvested commands, every subsequent PR-selection
+ * fetch serves them instantly — the slash menu is populated before the user
+ * even types `/`. The warm path still re-harvests live and refreshes the cache,
+ * so a project-command edit self-heals within one warm. The cache is an
+ * ephemeral, reconstructible coordination cache (lost on server restart,
+ * re-harvested on the next warm) — never a source of truth.
+ */
+const slashCommandCache = new Map<string, ReadonlyArray<ChatSessionContext["commands"][number]>>();
+
+/**
  * Resolve the composer's `@`-mention / `/`-command context for a PR, behind a
  * single `warm` capability flag instead of re-testing it at each step.
  *
@@ -136,8 +156,17 @@ export const resolveChatSessionContext = (prId: string, userId: string, warm: bo
     const read = yield* resolveChatReadContext(prId, userId, { fetchHeadShaFromGithub: warm });
     const { settings, agent, existingSessionRow } = read;
 
+    // Slash commands are PR-independent (agent + repo project commands), so a
+    // prior warm's harvest is valid here. Resolve the cache key up front so the
+    // early-return tiers below (no head SHA, no worktree yet) can still serve a
+    // populated menu instead of degrading to empty — this is what makes the
+    // first `/` instant before any agent for this PR is warm.
+    const acpAgent = applyAcpAgentOverride(agent);
+    const commandCacheKey = `${acpAgent}::${read.repo.id}`;
+    const cachedCommands = slashCommandCache.get(commandCacheKey) ?? EMPTY_SESSION_CONTEXT.commands;
+
     // No head SHA → nothing to read (worktree + session rows are keyed on it).
-    if (read.headSha === null) return EMPTY_SESSION_CONTEXT;
+    if (read.headSha === null) return { ...EMPTY_SESSION_CONTEXT, commands: cachedCommands };
 
     // Resolve the worktree: read the one a prior turn created, or — only when
     // warming — acquire it now.
@@ -153,13 +182,14 @@ export const resolveChatSessionContext = (prId: string, userId: string, warm: bo
       worktreePath = acquired.worktreePath;
     }
 
-    if (!(worktreePath && existsSync(worktreePath))) return EMPTY_SESSION_CONTEXT;
+    if (!(worktreePath && existsSync(worktreePath))) {
+      return { ...EMPTY_SESSION_CONTEXT, commands: cachedCommands };
+    }
 
     // Repo files come straight from git — no agent process needed.
     const repoFiles = yield* Effect.promise(() => listRepoFiles(worktreePath));
 
     // Capabilities + slash commands from the agent connection.
-    const acpAgent = applyAcpAgentOverride(agent);
     const config = {
       model: settings.aiModel ?? undefined,
       thinkingEffort: settings.aiThinkingEffort ?? undefined,
@@ -170,7 +200,12 @@ export const resolveChatSessionContext = (prId: string, userId: string, warm: bo
         ? getAcpConnection(worktreePath, acpAgent, config)
         : peekAcpConnection(worktreePath, acpAgent, config),
     );
-    if (!handle) return { ...EMPTY_SESSION_CONTEXT, repoFiles };
+    // No live agent (the non-warm peek before any agent for this repo is warm):
+    // serve commands harvested by a prior warm so the slash menu is ready before
+    // the user types — without paying a cold spawn on mere PR browsing.
+    if (!handle) {
+      return { ...EMPTY_SESSION_CONTEXT, commands: cachedCommands, repoFiles };
+    }
 
     // Slash commands are cached against a live session id, populated as the
     // agent streams `available_commands_update`; harvest fresh only when warming.
@@ -179,9 +214,18 @@ export const resolveChatSessionContext = (prId: string, userId: string, warm: bo
     if (raw.length === 0 && warm) {
       raw = yield* Effect.promise(() => handle.listAvailableCommands());
     }
+    const harvested = raw.map((command) => ({
+      name: command.name,
+      description: command.description,
+    }));
+    // Persist a non-empty harvest so future PR-selection fetches for this
+    // `(agent, repo)` get an instant menu; fall back to the cache when this run
+    // couldn't harvest (e.g. a live connection with no session-scoped commands yet).
+    if (harvested.length > 0) slashCommandCache.set(commandCacheKey, harvested);
+    const commands = harvested.length > 0 ? harvested : cachedCommands;
 
     return {
-      commands: raw.map((command) => ({ name: command.name, description: command.description })),
+      commands,
       promptImage: handle.promptImage,
       embeddedContext: handle.embeddedContext,
       repoFiles,
@@ -589,6 +633,7 @@ export function wrapStreamWithPersistence(
                     toolName: value.toolName,
                     summary: value.summary,
                     payload: value.payload,
+                    callId: value.callId ?? null,
                     subagentInvocationId,
                   }),
                 ),
@@ -604,6 +649,47 @@ export function wrapStreamWithPersistence(
               ? { ...activityRest, subagentInvocationId }
               : activityRest;
             controller.enqueue(wireActivity);
+            continue;
+          } else if (value.kind === "activity-result") {
+            // Stamp the captured output onto the originating activity row
+            // (matched by provider call id) so it survives reload, then
+            // forward the frame unchanged for live patching.
+            try {
+              await AppRuntime.runPromise(
+                Effect.flatMap(ChatSessionService, (svc) =>
+                  svc.updateActivityResult({
+                    chatSessionId: ctx.chatSessionId,
+                    turnId: ctx.turnId,
+                    callId: value.callId,
+                    output: value.output,
+                    isError: value.isError,
+                  }),
+                ),
+              );
+            } catch (err) {
+              logPersistError("updateActivityResult", err);
+            }
+            controller.enqueue(value);
+            continue;
+          } else if (value.kind === "activity-input") {
+            // Late-arriving tool input — persist the payload onto the activity
+            // row (by call id) so the filename/peek survives reload, then
+            // forward for live patching.
+            try {
+              await AppRuntime.runPromise(
+                Effect.flatMap(ChatSessionService, (svc) =>
+                  svc.updateActivityInput({
+                    chatSessionId: ctx.chatSessionId,
+                    turnId: ctx.turnId,
+                    callId: value.callId,
+                    payload: value.payload,
+                  }),
+                ),
+              );
+            } catch (err) {
+              logPersistError("updateActivityInput", err);
+            }
+            controller.enqueue(value);
             continue;
           } else if (value.kind === "task-list") {
             try {
@@ -800,6 +886,11 @@ export async function listProposedCommits(
   const log = await gitStdout(
     [
       "log",
+      // Same traversal as every other proposed-commit enumeration: stay on the
+      // agent branch's first-parent line and skip merges, so a `merge
+      // origin/main` to refresh the branch doesn't surface the entire base
+      // history as bogus proposed commits. See PROPOSED_COMMIT_RANGE_FLAGS.
+      ...PROPOSED_COMMIT_RANGE_FLAGS,
       range,
       // %x09 = tab; we emit one line per commit then a blank line.
       "--pretty=format:%H%x09%s%x09%aI",

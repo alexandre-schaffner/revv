@@ -74,7 +74,7 @@ export function buildWalkthroughSystemPrompt(mode: WalkthroughMode = REVIEW_MODE
  * e.g. Grep's `.`), or it resolves outside the worktree (so we never surface a
  * confusing `../../` escape).
  */
-function toRepoRelative(p: string, cwd?: string): string {
+export function toRepoRelative(p: string, cwd?: string): string {
   if (!p || !cwd || !isAbsolute(p)) return p;
   const rel = relative(cwd, p);
   if (!rel || rel.startsWith("..")) return p;

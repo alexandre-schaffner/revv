@@ -14,8 +14,14 @@ export {
   getAgentCapabilities,
   isAcpAgentId,
 } from "./acp-agents";
-export type { Activity, ActivityKind } from "./activity";
-export { classifyTool, normalizeToolName } from "./activity";
+export type { Activity, ActivityKind, ActivityResult, ToolDiffOutput } from "./activity";
+export {
+  classifyTool,
+  DIFF_OUTPUT_SENTINEL,
+  decodeToolDiffOutput,
+  encodeToolDiffOutput,
+  normalizeToolName,
+} from "./activity";
 export type {
   CacheSigningMode,
   GeneratedBy,

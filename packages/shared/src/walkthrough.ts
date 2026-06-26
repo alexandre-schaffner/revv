@@ -1,6 +1,6 @@
 // ── Block types ─────────────────────────────────────────────────────────────
 
-import type { Activity } from "./activity";
+import type { Activity, ActivityResult } from "./activity";
 import type { ReviewMode } from "./types";
 
 export type AnnotationPosition = "left" | "right";
@@ -413,6 +413,19 @@ export type WalkthroughStreamEvent =
   | { type: "usage"; data: { tokenUsage: WalkthroughTokenUsage } }
   | { type: "error"; data: { code: string; message: string; repoId?: string } }
   | { type: "exploration"; data: Activity }
+  /**
+   * Terminal output of a previously-streamed `exploration` tool call,
+   * correlated by `callId`. Lets the live walkthrough feed attach a clickable
+   * output peek (e.g. a Bash command's stdout) to the matching exploration
+   * pill. Transient — not persisted (walkthrough exploration is live-only).
+   */
+  | { type: "exploration-result"; data: ActivityResult }
+  /**
+   * Late-arriving tool input for a previously-streamed `exploration` pill,
+   * correlated by `callId` — patches its payload so the filename/command and
+   * file peek resolve when the agent only supplies them after the tool-call.
+   */
+  | { type: "exploration-input"; data: { callId: string; payload: unknown } }
   | { type: "issue"; data: WalkthroughIssue }
   | { type: "rating"; data: WalkthroughRating }
   | { type: "phase"; data: { phase: WalkthroughLifecyclePhase; message: string } }

@@ -225,6 +225,31 @@ export type ChatStreamFrame =
   | { readonly kind: "reasoning"; readonly data: string }
   | ({ readonly kind: "activity" } & Activity)
   | {
+      /**
+       * Terminal output of a previously-streamed `activity`, correlated by
+       * `callId`. Arrives after the activity frame (once the tool finishes)
+       * so the web store patches the matching activity in place to power the
+       * clickable output peek. Best-effort: may never arrive if the agent
+       * doesn't report a terminal tool-call status.
+       */
+      readonly kind: "activity-result";
+      readonly callId: string;
+      readonly output: string;
+      readonly isError: boolean;
+    }
+  | {
+      /**
+       * Late-arriving tool input for a previously-streamed `activity`,
+       * correlated by `callId`. Some agents send the initial tool-call with an
+       * empty `rawInput` and only populate it (the touched file, the command)
+       * on a follow-up update — this frame patches the activity's payload in
+       * place so its filename/command and file peek resolve.
+       */
+      readonly kind: "activity-input";
+      readonly callId: string;
+      readonly payload: unknown;
+    }
+  | {
       readonly kind: "task-list";
       readonly turnId: string;
       readonly tasks: ReadonlyArray<ChatTask>;

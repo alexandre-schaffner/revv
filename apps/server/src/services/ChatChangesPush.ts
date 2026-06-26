@@ -75,13 +75,13 @@ import {
   lsRemoteHead,
   merge as mergeBranch,
   PushRejectedError,
+  proposedCommitCount,
+  proposedCommitShas,
   pushFastForward,
   pushNewBranch,
   pushWithLease,
   type RefAlreadyExistsError,
   rebaseOnto,
-  revListCount,
-  revListReverse,
   revParse,
   unmergedPaths,
   workingTreeIsClean,
@@ -344,7 +344,10 @@ export const ChatChangesPushServiceLive = Layer.effect(
 
         const aheadOut = yield* Effect.tryPromise({
           try: () =>
-            revListCount(session.worktreePath, `${session.prHeadSha}..${session.branchName}`),
+            proposedCommitCount(
+              session.worktreePath,
+              `${session.prHeadSha}..${session.branchName}`,
+            ),
           catch: (err) =>
             new GitOperationError({
               message: err instanceof Error ? err.message : String(err),
@@ -1390,7 +1393,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
           // agent branch.
           const orderedListOut = yield* Effect.tryPromise({
             try: () =>
-              revListReverse(
+              proposedCommitShas(
                 ctx.session.worktreePath,
                 `${ctx.session.prHeadSha}..${ctx.session.branchName}`,
               ),

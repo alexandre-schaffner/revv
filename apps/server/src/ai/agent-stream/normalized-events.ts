@@ -64,6 +64,33 @@ export type NormalizedAgentEvent =
       readonly subagentProviderCallId?: string;
     }
   /**
+   * Terminal result of a previously-emitted `tool-call`, decoded from the ACP
+   * `tool_call_update` notification once its `status` reaches `completed` /
+   * `failed`. `callId` correlates back to the originating `tool-call`. `output`
+   * is best-effort textual content (text content blocks joined; diffs rendered
+   * to text); producers truncate it to keep the journal small. Surfaced to the
+   * UI as a clickable output peek (chat `activity-result` /
+   * walkthrough `exploration-result`).
+   */
+  | {
+      readonly kind: "tool-result";
+      readonly callId: string;
+      readonly output: string;
+      readonly isError: boolean;
+    }
+  /**
+   * Late-arriving tool input for a previously-emitted `tool-call`, decoded from
+   * the first `tool_call_update` that carries a usable `rawInput`/`locations`.
+   * Some adapters send the initial `tool_call` with an empty input and only fill
+   * it in on a follow-up update; this lets the UI back-fill the activity's
+   * filename/command (and file peek) by `callId`.
+   */
+  | {
+      readonly kind: "tool-call-update";
+      readonly callId: string;
+      readonly input: unknown;
+    }
+  /**
    * Full task-list snapshot. Both providers re-emit the entire list on each
    * update — the consumer reconciles against persisted rows.
    */
@@ -181,13 +208,38 @@ export function normalizeTaskPriority(v: unknown): "low" | "medium" | "high" | n
 
 import type { ActivityKind } from "@revv/shared";
 import { classifyTool, normalizeToolName } from "@revv/shared";
-import { buildExplorationDescription } from "../prompts/walkthrough";
+import { buildExplorationDescription, toRepoRelative } from "../prompts/walkthrough";
 
 export interface BuiltActivity {
   readonly activityKind: ActivityKind;
   readonly toolName: string;
   readonly summary: string;
   readonly payload?: unknown;
+  readonly callId?: string;
+}
+
+/**
+ * Tool-input keys that hold a filesystem path. When `cwd` is known we rewrite
+ * these to repo-relative form so the persisted payload matches the (already
+ * relativized) summary — and so the web file-peek can pass the path straight to
+ * `GET /api/prs/:id/repo-file` (which resolves against the clone root, not an
+ * absolute worktree path).
+ */
+const PATH_INPUT_KEYS = ["file_path", "path", "notebook_path"] as const;
+
+export function relativizeToolInput(input: unknown, cwd?: string): unknown {
+  if (!cwd || input === null || typeof input !== "object" || Array.isArray(input)) return input;
+  const obj = input as Record<string, unknown>;
+  let next: Record<string, unknown> | null = null;
+  for (const key of PATH_INPUT_KEYS) {
+    const v = obj[key];
+    if (typeof v !== "string") continue;
+    const rel = toRepoRelative(v, cwd);
+    if (rel === v) continue;
+    next ??= { ...obj };
+    next[key] = rel;
+  }
+  return next ?? input;
 }
 
 /**
@@ -204,12 +256,18 @@ export interface BuiltActivity {
  * when supplied, absolute path arguments are rendered relative to it so the
  * feed shows `apps/server/…` instead of the full `/Users/…/worktree/…` path.
  */
-export function buildActivity(rawToolName: string, input: unknown, cwd?: string): BuiltActivity {
+export function buildActivity(
+  rawToolName: string,
+  input: unknown,
+  cwd?: string,
+  callId?: string,
+): BuiltActivity {
   const toolName = normalizeToolName(rawToolName);
   return {
     activityKind: classifyTool(toolName),
     toolName,
     summary: buildExplorationDescription(toolName, input, cwd),
-    ...(input !== undefined ? { payload: input } : {}),
+    ...(input !== undefined ? { payload: relativizeToolInput(input, cwd) } : {}),
+    ...(callId !== undefined ? { callId } : {}),
   };
 }

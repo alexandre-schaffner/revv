@@ -54,6 +54,7 @@ import {
   makeAcpDecodeState,
   mergeContextOccupancy,
   type NormalizedAgentEvent,
+  relativizeToolInput,
   withAgentTurn,
   ZERO_TOKEN_USAGE,
 } from "../agent-stream";
@@ -172,6 +173,9 @@ export function streamWalkthroughViaAcp(
   let currentPhase: WalkthroughLifecyclePhase = "connecting";
   let lastPhaseMessage = "Starting up...";
   let lastReasoningPush = 0;
+  // Exploration tool-call ids we surfaced as pills, so their later `tool-result`
+  // can be forwarded as an `exploration-result` (and others dropped).
+  const surfacedExplorationCallIds = new Set<string>();
   const PHASE_ORDER: WalkthroughLifecyclePhase[] = [
     "connecting",
     "exploring",
@@ -262,9 +266,33 @@ export function streamWalkthroughViaAcp(
     if (ev.kind === "tool-call") {
       if (EXPLORATION_TOOLS.has(ev.toolName)) {
         transitionPhase("exploring", "Reading files and understanding changes...");
+        if (ev.callId) surfacedExplorationCallIds.add(ev.callId);
         push({
           type: "exploration",
-          data: buildActivity(ev.toolName, ev.input, params.worktreePath),
+          data: buildActivity(ev.toolName, ev.input, params.worktreePath, ev.callId),
+        });
+      }
+      return;
+    }
+
+    if (ev.kind === "tool-result") {
+      // Only forward results for exploration pills we actually surfaced — the
+      // feed keys peeks by callId and ignores unmatched ones anyway.
+      if (surfacedExplorationCallIds.has(ev.callId)) {
+        push({
+          type: "exploration-result",
+          data: { callId: ev.callId, output: ev.output, isError: ev.isError },
+        });
+      }
+      return;
+    }
+
+    if (ev.kind === "tool-call-update") {
+      // Late-arriving input — back-fill the surfaced pill's filename/command.
+      if (surfacedExplorationCallIds.has(ev.callId)) {
+        push({
+          type: "exploration-input",
+          data: { callId: ev.callId, payload: relativizeToolInput(ev.input, params.worktreePath) },
         });
       }
       return;

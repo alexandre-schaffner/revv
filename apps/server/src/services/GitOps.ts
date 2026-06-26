@@ -36,6 +36,25 @@ export class InvalidBranchNameError extends Data.TaggedError("InvalidBranchNameE
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
+/**
+ * Traversal flags that define an agent branch's *proposed commits* — the
+ * commits the agent authored on top of the PR head that a reviewer can
+ * cherry-pick or discard.
+ *
+ * `prHeadSha..branch` on its own walks BOTH parents of any merge commit. If
+ * the agent (or the user, through the agent) ran `git merge origin/main` to
+ * bring the branch up to date, that single merge drags the *entire* base
+ * branch history into the range — hundreds of unrelated commits surface as
+ * bogus "proposed commits" (the insane brand-new-session list). `--first-parent`
+ * keeps traversal on the agent branch's own line so merged-in base history is
+ * excluded; `--no-merges` drops the merge commits themselves (plumbing, not
+ * proposed content). Every enumeration of the proposed-commit range — the
+ * display list, the push ahead-count, the push cherry-pick order, and the
+ * discard/rebuild list — MUST share these flags so they never disagree about
+ * what "the agent's commits" are.
+ */
+export const PROPOSED_COMMIT_RANGE_FLAGS = ["--first-parent", "--no-merges"] as const;
+
 /** Loose validation for a git SHA — abbreviated or full. */
 export function isValidSha(sha: string): boolean {
   return /^[0-9a-f]{7,40}$/.test(sha);
@@ -81,12 +100,34 @@ export async function unmergedPaths(worktreePath: string): Promise<string[]> {
   return out.split("\n").filter((file) => file.length > 0);
 }
 
-export async function revListCount(worktreePath: string, range: string): Promise<string> {
-  return (await runGitCapture(["rev-list", "--count", range], worktreePath, 10_000)).trim();
+/**
+ * Count commits in a proposed-commit range (`<base>..<branch>`). Bakes in
+ * {@link PROPOSED_COMMIT_RANGE_FLAGS}, so this is NOT a general rev-list count —
+ * it deliberately reports only first-parent, non-merge commits. A caller
+ * wanting a true commit count must not use this.
+ */
+export async function proposedCommitCount(worktreePath: string, range: string): Promise<string> {
+  return (
+    await runGitCapture(
+      ["rev-list", "--count", ...PROPOSED_COMMIT_RANGE_FLAGS, range],
+      worktreePath,
+      10_000,
+    )
+  ).trim();
 }
 
-export async function revListReverse(worktreePath: string, range: string): Promise<string[]> {
-  const out = (await runGitCapture(["rev-list", "--reverse", range], worktreePath, 10_000)).trim();
+/**
+ * List the SHAs in a proposed-commit range, oldest-first (cherry-pick order).
+ * Bakes in {@link PROPOSED_COMMIT_RANGE_FLAGS} — see {@link proposedCommitCount}.
+ */
+export async function proposedCommitShas(worktreePath: string, range: string): Promise<string[]> {
+  const out = (
+    await runGitCapture(
+      ["rev-list", "--reverse", ...PROPOSED_COMMIT_RANGE_FLAGS, range],
+      worktreePath,
+      10_000,
+    )
+  ).trim();
   if (out.length === 0) return [];
   return out
     .split("\n")

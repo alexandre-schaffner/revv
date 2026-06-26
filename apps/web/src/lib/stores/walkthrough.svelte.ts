@@ -20,6 +20,7 @@
 
 import type {
   Activity,
+  ActivityResult,
   CloneStatus,
   RiskLevel,
   WalkthroughBlock,
@@ -67,6 +68,18 @@ export interface WalkthroughEntry {
   doneReceived: boolean;
   superseded: boolean;
   explorationSteps: Activity[];
+  /**
+   * Captured tool outputs keyed by provider `callId`, merged into each
+   * exploration pill so its peek can render stdout / results. Ephemeral —
+   * populated from `exploration-result` events during live generation only.
+   */
+  explorationResults: Record<string, ActivityResult>;
+  /**
+   * Late-arriving tool inputs keyed by provider `callId`, merged into each
+   * exploration pill so its filename/command + file peek resolve when the agent
+   * only supplies them after the tool-call. Ephemeral (live generation only).
+   */
+  explorationInputs: Record<string, unknown>;
   /**
    * Chronological mix of thoughts and exploration tool calls for the live
    * "Reviewing…" feed. See `WalkthroughTimelineEntry`. Ephemeral. The thoughts
@@ -159,6 +172,8 @@ export function freshEntry(): WalkthroughEntry {
     doneReceived: false,
     superseded: false,
     explorationSteps: [],
+    explorationResults: {},
+    explorationInputs: {},
     timeline: [],
     issues: [],
     ratings: [],
@@ -278,6 +293,12 @@ export function getStreamError(): string | null {
 }
 export function getExplorationSteps(): Activity[] {
   return _active?.explorationSteps ?? [];
+}
+export function getExplorationResults(): Record<string, ActivityResult> {
+  return _active?.explorationResults ?? {};
+}
+export function getExplorationInputs(): Record<string, unknown> {
+  return _active?.explorationInputs ?? {};
 }
 export function getTimeline(): WalkthroughTimelineEntry[] {
   return _active?.timeline ?? [];
@@ -472,6 +493,20 @@ export function applyEvents(prId: string, events: WalkthroughStreamEvent[]): voi
               activity: event.data,
             },
           ];
+          break;
+        }
+        case "exploration-result": {
+          entry.explorationResults = {
+            ...entry.explorationResults,
+            [event.data.callId]: event.data,
+          };
+          break;
+        }
+        case "exploration-input": {
+          entry.explorationInputs = {
+            ...entry.explorationInputs,
+            [event.data.callId]: event.data.payload,
+          };
           break;
         }
         case "thought": {

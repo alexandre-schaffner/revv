@@ -69,7 +69,6 @@ export type PromptInputTextareaProps = HTMLTextareaAttributes & {
 		void trigger?.kind;
 		void trigger?.query;
 		activeIndex = 0;
-		dismissed = false;
 	});
 
 	function replaceToken(replacement: string) {
@@ -79,6 +78,12 @@ export type PromptInputTextareaProps = HTMLTextareaAttributes & {
 		const after = ctx.value.slice(caret);
 		const next = `${before}${replacement}${after}`;
 		ctx.setValue(next);
+		// Close the menu. The token is now complete and the caret moves past it,
+		// but `selectionStart` is non-reactive so the trigger re-derives against
+		// the stale caret (still inside the token) and would otherwise keep the
+		// menu open. Dismiss explicitly; the next real keystroke (`oninput`)
+		// clears it so a fresh token reopens the menu.
+		dismissed = true;
 		const nextCaret = before.length + replacement.length;
 		requestAnimationFrame(() => {
 			textareaEl?.focus();
@@ -209,6 +214,8 @@ export type PromptInputTextareaProps = HTMLTextareaAttributes & {
 	value={ctx.value}
 	oninput={(e) => {
 		ctx.setValue(e.currentTarget.value);
+		// Real typing re-arms the menu after an Escape/selection dismiss.
+		dismissed = false;
 		autoResize();
 	}}
 	data-slot="prompt-input-textarea"
