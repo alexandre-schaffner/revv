@@ -21,6 +21,7 @@ import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
 import type { ResolvePushFrame } from "../services/ChatChangesPush";
 import { type ChatSessionRow, ChatSessionService } from "../services/ChatSession";
+import { PROPOSED_COMMIT_RANGE_FLAGS } from "../services/GitOps";
 import { PrContextService } from "../services/PrContext";
 import { RepoCloneService } from "../services/RepoClone";
 import { SettingsService } from "../services/Settings";
@@ -800,6 +801,11 @@ export async function listProposedCommits(
   const log = await gitStdout(
     [
       "log",
+      // Same traversal as every other proposed-commit enumeration: stay on the
+      // agent branch's first-parent line and skip merges, so a `merge
+      // origin/main` to refresh the branch doesn't surface the entire base
+      // history as bogus proposed commits. See PROPOSED_COMMIT_RANGE_FLAGS.
+      ...PROPOSED_COMMIT_RANGE_FLAGS,
       range,
       // %x09 = tab; we emit one line per commit then a blank line.
       "--pretty=format:%H%x09%s%x09%aI",

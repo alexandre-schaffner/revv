@@ -19,6 +19,7 @@ import {
   RefAlreadyExistsError,
 } from "../services/ChatChangesPush";
 import { ChatSessionService } from "../services/ChatSession";
+import { PROPOSED_COMMIT_RANGE_FLAGS } from "../services/GitOps";
 import { PrContextService } from "../services/PrContext";
 import { RepoCloneService } from "../services/RepoClone";
 import { SettingsService } from "../services/Settings";
@@ -638,9 +639,13 @@ export const chatProposedChangesRoutes = new Elysia()
           dropSet.add(full.trim());
         }
 
-        // List all proposed commits oldest-first.
+        // List all proposed commits oldest-first. Must mirror the display /
+        // push enumerations (PROPOSED_COMMIT_RANGE_FLAGS): first-parent +
+        // no-merges, so a `merge origin/main` in the worktree doesn't pull the
+        // entire base history into the rebuild (cherry-picking hundreds of
+        // unrelated commits onto the detached PR head).
         const listOut = await gitStdout(
-          ["rev-list", "--reverse", `${prHeadSha}..${branchName}`],
+          ["rev-list", "--reverse", ...PROPOSED_COMMIT_RANGE_FLAGS, `${prHeadSha}..${branchName}`],
           worktreePath,
           10_000,
         ).catch(() => null);
