@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.14.0](https://github.com/alexandre-schaffner/revv/compare/v0.13.0...v0.14.0) (2026-06-26)
+
+
+### Features
+
+* add chat attachments and composer shortcuts ([#148](https://github.com/alexandre-schaffner/revv/issues/148)) ([4785960](https://github.com/alexandre-schaffner/revv/commit/4785960bbf7f80ed7e1eccb0322e33766731cbca))
+* add onboarding local repo linking ([#139](https://github.com/alexandre-schaffner/revv/issues/139)) ([b944870](https://github.com/alexandre-schaffner/revv/commit/b944870c971eed3c32821f44efd1da08e7c3abd0))
+* **onboarding:** robust agent detection + generalized OS-aware install ([#147](https://github.com/alexandre-schaffner/revv/issues/147)) ([6658b31](https://github.com/alexandre-schaffner/revv/commit/6658b3151622b190cc4444537651315aa3e32c4d))
+
+
+### Bug Fixes
+
+* **chat:** resolve chat-push session by configured ACP agent id ([#142](https://github.com/alexandre-schaffner/revv/issues/142)) ([7267e75](https://github.com/alexandre-schaffner/revv/commit/7267e75bc9fe3b02ff965abbb6a76857a110b9f9))
+* **filetree:** replace LOC sticky-badge overlay with truncation + fixed gutter ([#146](https://github.com/alexandre-schaffner/revv/issues/146)) ([55850fa](https://github.com/alexandre-schaffner/revv/commit/55850fa066a741896435b55e1779bd222d70cc8a))
+* **mcp:** return 202 for notification-only HTTP MCP requests ([#145](https://github.com/alexandre-schaffner/revv/issues/145)) ([9ce52f1](https://github.com/alexandre-schaffner/revv/commit/9ce52f1a006638b60c291d8e09d39cb282ea2d15))
+
 ## [0.13.0](https://github.com/alexandre-schaffner/revv/compare/v0.12.1...v0.13.0) (2026-06-18)
 
 
