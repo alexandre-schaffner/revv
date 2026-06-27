@@ -28,6 +28,7 @@ export type PromptInputTextareaProps = HTMLTextareaAttributes & {
 
 	const ctx = getContext<PromptInputContext>(PROMPT_INPUT_CTX_KEY);
 	let textareaEl: HTMLTextAreaElement | undefined = $state(undefined);
+	let overlayEl: HTMLDivElement | undefined = $state(undefined);
 	let activeIndex = $state(0);
 	// Set true on Escape to hide the menu without changing the text; reset
 	// whenever the trigger token changes (see the activeIndex effect below).
@@ -151,6 +152,49 @@ export type PromptInputTextareaProps = HTMLTextareaAttributes & {
 		}
 	}
 
+	// ── Mention highlight overlay ────────────────────────────────────────────
+	// A textarea can't render inline pills, so we mirror its text in an overlay
+	// behind transparent textarea text and style the `@path` tokens there. The
+	// overlay shares the textarea's exact box + typography so glyphs line up; the
+	// pill carries no horizontal padding (a box-shadow halo fakes the breathing
+	// room) so it never shifts the text the caret is editing.
+	const MENTION_RE = /@((?:[\w.-]+\/)*[\w.-]+\.[A-Za-z0-9]+)(?::\d+)?/g;
+	const mentionPathSet = $derived(new Set(mentionPaths));
+
+	function escapeHtml(s: string): string {
+		return s.replace(
+			/[&<>]/g,
+			(c) => (c === "&" ? "&amp;" : c === "<" ? "&lt;" : "&gt;"),
+		);
+	}
+
+	// Only tokens that name a real mentionable file become pills; a bare `@foo`
+	// or an in-progress token stays plain text. Unmatched stretches fall through
+	// into the next plain slice, so nothing is dropped.
+	const overlayHtml = $derived.by(() => {
+		const value = ctx.value;
+		let html = "";
+		let last = 0;
+		MENTION_RE.lastIndex = 0;
+		for (let m = MENTION_RE.exec(value); m; m = MENTION_RE.exec(value)) {
+			const path = m[1] ?? "";
+			if (!mentionPathSet.has(path)) continue;
+			html += `${escapeHtml(value.slice(last, m.index))}<span class="composer-mention">${escapeHtml(m[0])}</span>`;
+			last = m.index + m[0].length;
+		}
+		html += escapeHtml(value.slice(last));
+		// A trailing newline leaves no glyph for the browser to give height to;
+		// a zero-width space keeps the overlay's last line in sync with the
+		// textarea's so the two never drift by a row.
+		return value.endsWith("\n") ? `${html}​` : html;
+	});
+
+	function syncScroll() {
+		if (!overlayEl || !textareaEl) return;
+		overlayEl.scrollTop = textareaEl.scrollTop;
+		overlayEl.scrollLeft = textareaEl.scrollLeft;
+	}
+
 	function autoResize() {
 		if (!textareaEl) return;
 		// Empty: defer to CSS min-height. Measuring scrollHeight during the
@@ -209,22 +253,72 @@ export type PromptInputTextareaProps = HTMLTextareaAttributes & {
 	/>
 {/if}
 
-<textarea
-	bind:this={textareaEl}
-	value={ctx.value}
-	oninput={(e) => {
-		ctx.setValue(e.currentTarget.value);
-		// Real typing re-arms the menu after an Escape/selection dismiss.
-		dismissed = false;
-		autoResize();
-	}}
-	data-slot="prompt-input-textarea"
-	class={cn(
-		"block w-full min-h-[2.75rem] resize-none bg-transparent px-4 py-3 text-sm leading-relaxed text-foreground placeholder:text-muted-foreground focus:outline-none",
-		className,
-	)}
-	{placeholder}
-	rows={1}
-	onkeydown={handleKeydown}
-	{...restProps}
-></textarea>
+<div class="ta-wrap">
+	<!-- Visible mirror layer: same box + typography as the textarea, styling the
+	     `@path` tokens. The textarea above it carries transparent text + a
+	     visible caret, so editing semantics are untouched. -->
+	<div
+		bind:this={overlayEl}
+		aria-hidden="true"
+		class={cn("ta-overlay px-4 py-3 text-sm leading-relaxed text-foreground", className)}
+	>{@html overlayHtml}</div>
+	<textarea
+		bind:this={textareaEl}
+		value={ctx.value}
+		oninput={(e) => {
+			ctx.setValue(e.currentTarget.value);
+			// Real typing re-arms the menu after an Escape/selection dismiss.
+			dismissed = false;
+			autoResize();
+			syncScroll();
+		}}
+		onscroll={syncScroll}
+		data-slot="prompt-input-textarea"
+		class={cn(
+			"ta-field block w-full min-h-[2.75rem] resize-none bg-transparent px-4 py-3 text-sm leading-relaxed placeholder:text-muted-foreground focus:outline-none",
+			className,
+		)}
+		{placeholder}
+		rows={1}
+		onkeydown={handleKeydown}
+		{...restProps}
+	></textarea>
+</div>
+
+<style>
+	.ta-wrap {
+		position: relative;
+	}
+	/* Mirror layer sits under the textarea, sharing its exact box so glyphs
+	   register. Wrapping must match the textarea's: pre-wrap + break-anywhere. */
+	.ta-overlay {
+		position: absolute;
+		inset: 0;
+		z-index: 0;
+		/* Identical box model to the textarea is what keeps the available text
+		   width — and therefore every wrap point — in lockstep. */
+		box-sizing: border-box;
+		overflow: hidden;
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
+		pointer-events: none;
+		user-select: none;
+		color: var(--color-foreground);
+	}
+	.ta-field {
+		position: relative;
+		z-index: 1;
+		box-sizing: border-box;
+		/* Text is invisible (the overlay renders it); only the caret shows. */
+		color: transparent;
+		caret-color: var(--color-foreground);
+	}
+	/* Injected via {@html}, so global. No horizontal padding — a box-shadow halo
+	   gives the pill breathing room without shifting the glyphs the caret tracks. */
+	:global(.ta-overlay .composer-mention) {
+		border-radius: 4px;
+		background: color-mix(in srgb, var(--color-accent) 16%, transparent);
+		box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--color-accent) 16%, transparent);
+		color: var(--color-accent);
+	}
+</style>
