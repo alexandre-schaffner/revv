@@ -18,9 +18,16 @@ interface Props {
   path: string;
   /** Agent-captured output, shown if the file fetch fails. */
   fallbackOutput?: string | undefined;
+  /**
+   * For a windowed Read (`offset`/`limit`), restrict the preview to the lines
+   * actually read. `offset` is the 1-based first line; `limit` is the line
+   * count, or null/undefined to read to end of file. Omit both for a full file.
+   */
+  offset?: number | undefined;
+  limit?: number | null | undefined;
 }
 
-let { prId, path, fallbackOutput }: Props = $props();
+let { prId, path, fallbackOutput, offset, limit }: Props = $props();
 
 // The repo-file route returns its state in the JSON body (with non-2xx HTTP
 // codes for non-ready cases), so we read the body directly rather than via the
@@ -38,6 +45,18 @@ type State =
   | { status: "unavailable"; message: string };
 
 let state = $state<State>({ status: "loading" });
+
+// Resolve the windowed read into concrete (1-based start, line count) bounds for
+// the peek. A windowless read (no offset/limit) renders the whole file. When
+// only an offset is given, window from there to the file's end.
+const startLine = $derived(offset != null && offset > 0 ? offset : 1);
+const lineCount = $derived.by(() => {
+  if (offset == null && (limit == null || limit <= 0)) return undefined;
+  if (limit != null && limit > 0) return limit;
+  if (state.status !== "ready") return undefined;
+  const total = state.content.replace(/\n$/, "").split("\n").length;
+  return Math.max(1, total - (startLine - 1));
+});
 
 const UNAVAILABLE: Record<string, string> = {
   "too-large": "File too large to preview.",
@@ -71,7 +90,7 @@ onMount(async () => {
 			<span>Loading {path}…</span>
 		</div>
 	{:else if state.status === "ready"}
-		<CodePeek path={path} content={state.content} />
+		<CodePeek path={path} content={state.content} startLine={startLine} lineCount={lineCount} />
 	{:else}
 		<div class="file-peek-status">{state.message}</div>
 		{#if fallbackOutput}

@@ -44,6 +44,7 @@ import {
   activityFilePath,
   activityHasPeek,
   activityLabel,
+  activityReadWindow,
 } from "$lib/utils/activity-groups";
 import { diffLineStats, parseDiffOutput } from "$lib/utils/diff-output";
 import { fileIcon } from "$lib/utils/file-icon";
@@ -97,6 +98,9 @@ const iconColor = $derived(ICON_COLORS[activityKind] ?? "var(--color-text-muted)
 const label = $derived(activityLabel({ activityKind, toolName, output }));
 const detail = $derived(activityDetailText({ activityKind, payload, summary }));
 const filePath = $derived(activityFilePath({ activityKind, payload }));
+// For a windowed Read, the line range it actually read — narrows the file peek
+// from the whole file down to those lines.
+const readWindow = $derived(activityReadWindow({ activityKind, payload }));
 const command = $derived(activityCommand({ activityKind, payload }));
 const peekable = $derived(activityHasPeek({ activityKind, payload, output }));
 // Per-extension file-type glyph (matches the sidebar tree) shown inside the
@@ -157,7 +161,13 @@ let open = $state(false);
 					{:else if diffOut}
 						<DiffPeek path={diffOut.path || filePath || "file"} oldText={diffOut.oldText} newText={diffOut.newText} />
 					{:else if filePath && prId}
-						<FilePeek prId={prId} path={filePath} fallbackOutput={output} />
+						<FilePeek
+							prId={prId}
+							path={filePath}
+							fallbackOutput={output}
+							offset={readWindow?.offset}
+							limit={readWindow?.limit}
+						/>
 					{:else if output}
 						<pre class="tcc-output" class:tcc-output--error={isError}>{output}</pre>
 					{:else}

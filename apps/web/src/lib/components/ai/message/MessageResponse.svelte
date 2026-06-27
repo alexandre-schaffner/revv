@@ -122,4 +122,11 @@ export type MessageResponseProps = HTMLAttributes<HTMLDivElement> & {
 		border-color: color-mix(in srgb, white 60%, transparent);
 		background: color-mix(in srgb, white 28%, transparent);
 	}
+	/* The glyph carries a per-extension brand color set inline (e.g. TypeScript
+	   blue), which clashes on the teal bubble — neutralize it to the white
+	   on-accent foreground so the pill reads as one legible monochrome chip.
+	   `!important` is required to beat the element's inline `style="color:…"`. */
+	:global([data-slot='message-response'].prose-on-accent .mention-ref-icon) {
+		color: inherit !important;
+	}
 </style>

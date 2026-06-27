@@ -124,6 +124,12 @@ function payloadString(payload: unknown, key: string): string {
   return typeof v === "string" ? v : "";
 }
 
+function payloadNumber(payload: unknown, key: string): number | null {
+  if (payload === null || typeof payload !== "object") return null;
+  const v = (payload as Record<string, unknown>)[key];
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
 /**
  * Path keys a file tool's input may carry, in precedence order. Mirrors the
  * server's `PATH_INPUT_KEYS` (normalized-events.ts) — Claude uses `file_path`,
@@ -157,6 +163,26 @@ export function activityFilePath(
 ): string | null {
   if (!FILE_TOOL_KINDS.has(item.activityKind)) return null;
   return payloadPath(item.payload) || null;
+}
+
+/**
+ * The line window a Read tool requested via `offset`/`limit`, if any. Lets the
+ * file peek render only the lines the agent actually read instead of the whole
+ * file. `offset` is the 1-based first line (defaults to 1 when only a limit is
+ * given); `limit` is the requested line count, or null for "to end of file".
+ * Returns null for non-reads or a full-file read (no offset and no limit).
+ */
+export function activityReadWindow(
+  item: Pick<GroupableActivity, "activityKind" | "payload">,
+): { offset: number; limit: number | null } | null {
+  if (item.activityKind !== "tool.read") return null;
+  const offset = payloadNumber(item.payload, "offset");
+  const limit = payloadNumber(item.payload, "limit");
+  if (offset === null && limit === null) return null;
+  return {
+    offset: offset !== null && offset > 0 ? offset : 1,
+    limit: limit !== null && limit > 0 ? limit : null,
+  };
 }
 
 /** The shell command a Bash tool ran, if any. Drives the terminal peek. */
