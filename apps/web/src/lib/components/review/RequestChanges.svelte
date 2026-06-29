@@ -5,6 +5,8 @@ import WalkthroughRatingsPanel from "$lib/components/walkthrough/WalkthroughRati
 import { sendChatMessage } from "$lib/stores/chat.svelte";
 import { resetRcActions, setRcHandlers, setRcState } from "$lib/stores/rcActions.svelte";
 import {
+  deleteThread,
+  getReviewFiles,
   getThreadMessages,
   getThreads,
   jumpToDiffLine,
@@ -37,6 +39,19 @@ const unresolvedThreads = $derived(
 );
 const ratings = $derived(getRatings());
 const blocks = $derived(getBlocks());
+
+// File paths currently part of the PR diff (new path + old path for renames).
+// A pending comment whose file isn't here is "stale": its line no longer
+// exists in the diff, so GitHub would reject the whole review submission.
+const currentFilePaths = $derived(
+  new Set(getReviewFiles().flatMap((f) => (f.oldPath ? [f.path, f.oldPath] : [f.path]))),
+);
+function isStalePending(thread: { filePath: string; externalCommentId: string | null }): boolean {
+  // Empty set means the diff hasn't loaded — we can't judge staleness, so
+  // never flag anything (flushing here would wrongly discard valid comments).
+  if (currentFilePaths.size === 0) return false;
+  return thread.externalCommentId == null && !currentFilePaths.has(thread.filePath);
+}
 
 let selectedIssueIds = $state<Set<string>>(new Set());
 // Derived from the walkthrough store — each issue carries its own
@@ -145,6 +160,12 @@ function buildComments(): Array<{
     // the new-review-comment path — including them here would re-post the
     // thread as a fresh comment on every submit.
     if (thread.externalCommentId != null) continue;
+    // Pending comments on files no longer in the diff would 422 the whole
+    // review — they're flushed in submit() before we get here, but guard
+    // anyway so a stale row can never reach the GitHub payload. Skip the
+    // check when the diff hasn't loaded (empty set), so we don't drop valid
+    // comments.
+    if (currentFilePaths.size > 0 && !currentFilePaths.has(thread.filePath)) continue;
     const messages = getThreadMessages(thread.id).filter(
       (m) => m.authorRole === "reviewer" && m.externalId == null,
     );
@@ -182,9 +203,28 @@ async function submit(action: Action): Promise<void> {
   submitSuccess = null;
 
   try {
+    // Flush pending comments on files no longer in the diff. They can't be
+    // posted (GitHub would 422 and fail the entire review), so discard them
+    // and tell the user rather than blocking the whole submission.
+    const stale = unresolvedThreads.filter(isStalePending);
+    if (stale.length > 0) {
+      await Promise.allSettled(stale.map((t) => deleteThread(t.id)));
+      toast.info(
+        `Discarded ${stale.length} comment${stale.length === 1 ? "" : "s"} on files no longer in the diff`,
+      );
+    }
+
     const body = buildBody();
     const comments = buildComments();
     const issueIdsForSubmit = Array.from(selectedIssueIds);
+
+    // After flushing, a comment-only submit may have nothing left to send.
+    // Skip the GitHub call (an empty COMMENT review errors) — the flush was
+    // the whole operation.
+    if (action === "comment" && comments.length === 0 && body.trim().length === 0) {
+      return;
+    }
+
     const { data, error } = await api.api
       .reviews({ id: prId })
       ["github-submit"].post({ action, body, comments, issueIds: issueIdsForSubmit });
@@ -328,6 +368,7 @@ $effect(() => {
 			threads={unresolvedThreads}
 			{getThreadMessages}
 			onJump={jumpToDiffLine}
+			onDiscard={(threadId) => void deleteThread(threadId)}
 		/>
 
 		{#if ratings.length > 0}

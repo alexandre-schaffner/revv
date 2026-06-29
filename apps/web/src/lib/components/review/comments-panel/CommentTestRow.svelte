@@ -34,6 +34,7 @@ interface Props {
   index: number;
   onToggleOpen: () => void;
   onJump?: ((filePath: string, line: number) => void) | undefined;
+  onDiscard?: ((threadId: string) => void) | undefined;
   onTriggerRef?: ((el: HTMLElement | null) => void) | undefined;
 }
 
@@ -45,6 +46,7 @@ let {
   index,
   onToggleOpen,
   onJump,
+  onDiscard,
   onTriggerRef,
 }: Props = $props();
 
@@ -165,7 +167,7 @@ const ariaLabel = $derived(
         {/snippet}
 
         {#snippet content()}
-            <CommentExpandedBody {threads} {getThreadMessages} {onJump} />
+            <CommentExpandedBody {threads} {getThreadMessages} {onJump} {onDiscard} />
         {/snippet}
     </SpecRow>
 </div>
