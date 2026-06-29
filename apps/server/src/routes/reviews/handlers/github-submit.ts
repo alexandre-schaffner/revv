@@ -1,8 +1,9 @@
 import { Effect } from "effect";
-import { logError } from "../../../logger";
 import { AppRuntime } from "../../../runtime";
+import { Broadcaster } from "../../../services/Broadcaster";
 import { GitHubGateway } from "../../../services/GitHub";
 import { PrContextService } from "../../../services/PrContext";
+import { RepositoryService } from "../../../services/Repository";
 import { ReviewService } from "../../../services/Review";
 import { WalkthroughService } from "../../../services/Walkthrough";
 
@@ -44,8 +45,11 @@ export function submitGithubReviewHandler(prId: string, userId: string, body: Su
       const github = yield* GitHubGateway;
       const reviewService = yield* ReviewService;
       const walkthroughService = yield* WalkthroughService;
+      const repoService = yield* RepositoryService;
+      const broadcaster = yield* Broadcaster;
 
       const { pr, repo, token: ghToken } = yield* prContext.resolveBasic(prId, userId);
+      const accountId = yield* repoService.getAccountIdForRepo(repo.id);
 
       const eventMap = {
         approve: "APPROVE",
@@ -111,10 +115,23 @@ export function submitGithubReviewHandler(prId: string, userId: string, body: Su
             ghComments.find((gh) => gh.path === input.path && gh.body === input.body);
 
           if (!match) {
-            logError(
-              "github-submit",
-              `No GitHub comment matched for thread ${input.threadId} (path=${input.path} line=${effectiveLine})`,
-            );
+            // We couldn't tie this just-pushed comment to its GitHub id (the
+            // review API returns no per-comment ids, and GitHub can normalize
+            // the body, defeating a body match). Rather than leave an unlinked
+            // local draft that a later submit would re-post, delete it — the
+            // sync-threads call that follows re-creates it from GitHub with a
+            // real externalCommentId. Local-only metadata (a freshly authored
+            // comment has none worth keeping) is sacrificed to guarantee no
+            // duplicate ever reaches GitHub.
+            yield* reviewService
+              .deleteThread(input.threadId)
+              .pipe(Effect.orElseSucceed(() => undefined));
+            yield* broadcaster
+              .broadcastToAccount(accountId, {
+                type: "thread:deleted",
+                data: { threadId: input.threadId },
+              })
+              .pipe(Effect.orElseSucceed(() => undefined));
             continue;
           }
 
