@@ -6,6 +6,7 @@ import { sendChatMessage } from "$lib/stores/chat.svelte";
 import { resetRcActions, setRcHandlers, setRcState } from "$lib/stores/rcActions.svelte";
 import {
   deleteThread,
+  getReviewFiles,
   getThreadMessages,
   getThreads,
   jumpToDiffLine,
@@ -38,6 +39,13 @@ const unresolvedThreads = $derived(
 );
 const ratings = $derived(getRatings());
 const blocks = $derived(getBlocks());
+
+// File paths currently part of the PR diff (new path + old path for renames).
+// A pending comment whose file isn't here is stale: its line no longer exists
+// in the diff, so including it would make GitHub 422 the whole review.
+const currentFilePaths = $derived(
+  new Set(getReviewFiles().flatMap((f) => (f.oldPath ? [f.path, f.oldPath] : [f.path]))),
+);
 
 let selectedIssueIds = $state<Set<string>>(new Set());
 // Derived from the walkthrough store — each issue carries its own
@@ -146,6 +154,11 @@ function buildComments(): Array<{
     // the new-review-comment path — including them here would re-post the
     // thread as a fresh comment on every submit.
     if (thread.externalCommentId != null) continue;
+    // Skip pending comments whose file is no longer in the diff — sending one
+    // would make GitHub reject the entire review (422). It stays a local draft
+    // the user can remove with the Discard button. Skip the check when the
+    // diff hasn't loaded (empty set) so valid comments are never dropped.
+    if (currentFilePaths.size > 0 && !currentFilePaths.has(thread.filePath)) continue;
     const messages = getThreadMessages(thread.id).filter(
       (m) => m.authorRole === "reviewer" && m.externalId == null,
     );
