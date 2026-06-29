@@ -503,13 +503,31 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 
       yield* tryDb("add message", (db) => db.insert(threadMessages).values(row).run());
 
+      // Resolve the author's cached avatar (same join getMessages/getMessage
+      // use) so the returned message carries it immediately. The client
+      // renders this object optimistically and loadSession may short-circuit,
+      // so returning null here would leave the just-posted comment avatar-less
+      // until the next full hydration.
+      const login = params.authorLogin ?? null;
+      let authorAvatarContent: string | null = null;
+      if (login) {
+        const avatarRow = yield* tryDb("resolve message avatar", (db) =>
+          db
+            .select({ avatarContent: remoteUsers.avatarContent })
+            .from(remoteUsers)
+            .where(and(eq(remoteUsers.provider, "github"), eq(remoteUsers.login, login)))
+            .get(),
+        );
+        authorAvatarContent = avatarRow?.avatarContent ?? null;
+      }
+
       return {
         id,
         threadId,
         authorRole: params.authorRole as ThreadMessage["authorRole"],
         authorName: params.authorName,
         authorLogin: params.authorLogin ?? null,
-        authorAvatarContent: null,
+        authorAvatarContent,
         body: params.body,
         messageType: params.messageType as ThreadMessage["messageType"],
         codeSuggestion: params.codeSuggestion ?? null,

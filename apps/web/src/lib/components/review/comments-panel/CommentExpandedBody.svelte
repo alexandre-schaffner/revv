@@ -10,6 +10,7 @@
 
 import type { CommentThread, ThreadMessage } from "@revv/shared";
 import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
+import Trash from "phosphor-svelte/lib/Trash";
 import { isHighlighterReady } from "$lib/utils/code-highlight.svelte";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
 import { renderMarkdown } from "$lib/utils/markdown";
@@ -19,9 +20,12 @@ interface Props {
   threads: readonly CommentThread[];
   getThreadMessages: (threadId: string) => ThreadMessage[];
   onJump?: ((filePath: string, line: number) => void) | undefined;
+  /** Discard a pending (unsynced) thread. Only offered for threads that
+      haven't been pushed to GitHub yet (externalCommentId == null). */
+  onDiscard?: ((threadId: string) => void) | undefined;
 }
 
-let { threads, getThreadMessages, onJump }: Props = $props();
+let { threads, getThreadMessages, onJump, onDiscard }: Props = $props();
 
 // Flatten to a render-ready shape so the template doesn't recompute on
 // every iteration. Re-derive when the shiki highlighter becomes ready
@@ -59,6 +63,17 @@ const renderedThreads = $derived.by(() => {
                     >
                         <span class="thread-jump-label">jump</span>
                         <ArrowUpRight size={11} weight="fill" aria-hidden="true" />
+                    </button>
+                {/if}
+                {#if onDiscard && entry.thread.externalCommentId == null}
+                    <button
+                        type="button"
+                        class="thread-discard"
+                        onclick={() => onDiscard?.(entry.thread.id)}
+                        title="Discard this pending comment"
+                    >
+                        <Trash size={11} weight="fill" aria-hidden="true" />
+                        <span class="thread-discard-label">discard</span>
                     </button>
                 {/if}
             </div>
@@ -159,6 +174,43 @@ const renderedThreads = $derived.by(() => {
     }
 
     .thread-jump-label {
+        line-height: 1;
+    }
+
+    /* Discard sits at the right edge of the thread head. Danger-tinted to
+       match the inline AnnotationThread "Discard" affordance. */
+    .thread-discard {
+        margin-left: auto;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 7px;
+        border-radius: 4px;
+        border: 1px solid color-mix(in srgb, var(--color-danger) 24%, transparent);
+        background: color-mix(in srgb, var(--color-danger) 8%, transparent);
+        color: var(--color-danger);
+        font-family: var(--font-mono);
+        font-size: 10.5px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        cursor: pointer;
+        transition:
+            background var(--duration-snap) var(--ease-soft),
+            border-color var(--duration-snap) var(--ease-soft);
+    }
+
+    .thread-discard:hover {
+        background: color-mix(in srgb, var(--color-danger) 16%, transparent);
+        border-color: color-mix(in srgb, var(--color-danger) 40%, transparent);
+    }
+
+    .thread-discard:focus-visible {
+        outline: 2px solid var(--color-danger);
+        outline-offset: 2px;
+    }
+
+    .thread-discard-label {
         line-height: 1;
     }
 
