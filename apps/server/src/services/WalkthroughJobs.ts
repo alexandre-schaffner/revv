@@ -1338,6 +1338,9 @@ export const WalkthroughJobsLive = Layer.effect(
         ) {
           partial = null;
         }
+        if (params.trigger === "user" && partial?.status === "error") {
+          partial = null;
+        }
 
         const reviewSession = yield* provideDb(reviewService.getOrCreateActiveSession(pr.id, mode));
         const reviewSessionId = partial?.reviewSessionId ?? reviewSession.id;

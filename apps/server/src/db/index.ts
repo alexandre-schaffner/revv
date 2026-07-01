@@ -90,6 +90,13 @@ const REVIEW_SESSION_MODES_MIGRATION_TAG = "0230_review_session_modes";
 const REVIEW_SESSION_MODES_MIGRATION_WHEN = 1779600000000;
 const REPOSITORY_AVATAR_CONTENT_MIGRATION_TAG = "0240_repository_avatar_content";
 const REPOSITORY_AVATAR_CONTENT_MIGRATION_WHEN = 1779610000000;
+const CHAT_SESSION_MODEL_MIGRATION_TAG = "0260_chat_session_model";
+const CHAT_SESSION_MODEL_MIGRATION_WHEN = 1779620000000;
+const UNIFY_AGENT_IDS_MIGRATION_WHEN = 1779625000000;
+const CHAT_MESSAGE_ATTACHMENTS_MIGRATION_TAG = "0280_chat_message_attachments";
+const CHAT_MESSAGE_ATTACHMENTS_MIGRATION_WHEN = 1779630000000;
+const CHAT_ACTIVITY_RESULTS_MIGRATION_TAG = "0290_chat_activity_results";
+const CHAT_ACTIVITY_RESULTS_MIGRATION_WHEN = 1779635000000;
 const REVIEW_ROUNDS_MIGRATION_TAG = "0300_review_rounds";
 const REVIEW_ROUNDS_MIGRATION_WHEN = 1779640000000;
 
@@ -472,6 +479,138 @@ function recoverAvatarContentMigrations(sqlite: Database): void {
   }
 }
 
+function hasAnyChatSessionModelMigrationArtifact(sqlite: Database): boolean {
+  return (
+    columnExists(sqlite, "chat_sessions", "model") ||
+    indexExists(sqlite, "chat_sessions_pr_agent_model_sha_unique")
+  );
+}
+
+function hasLaterChatSessionMigration(sqlite: Database): boolean {
+  return (
+    migrationRecorded(sqlite, UNIFY_AGENT_IDS_MIGRATION_WHEN) ||
+    migrationRecorded(sqlite, CHAT_MESSAGE_ATTACHMENTS_MIGRATION_WHEN) ||
+    migrationRecorded(sqlite, CHAT_ACTIVITY_RESULTS_MIGRATION_WHEN) ||
+    migrationRecorded(sqlite, REVIEW_ROUNDS_MIGRATION_WHEN) ||
+    hasAnyReviewRoundMigrationArtifact(sqlite)
+  );
+}
+
+function ensureChatSessionModelSchema(sqlite: Database): void {
+  if (!tableExists(sqlite, "chat_sessions")) return;
+
+  if (!columnExists(sqlite, "chat_sessions", "model")) {
+    sqlite.run("ALTER TABLE `chat_sessions` ADD `model` text DEFAULT '' NOT NULL");
+  }
+
+  sqlite.run("DROP INDEX IF EXISTS `chat_sessions_pr_agent_sha_unique`");
+
+  const expectedColumns = ["pull_request_id", "agent", "model", "pr_head_sha"];
+  const currentColumns = indexColumns(sqlite, "chat_sessions_pr_agent_model_sha_unique");
+  if (currentColumns.join("\0") !== expectedColumns.join("\0")) {
+    sqlite.run("DROP INDEX IF EXISTS `chat_sessions_pr_agent_model_sha_unique`");
+    sqlite.run(`
+      CREATE UNIQUE INDEX \`chat_sessions_pr_agent_model_sha_unique\`
+        ON \`chat_sessions\` (\`pull_request_id\`, \`agent\`, \`model\`, \`pr_head_sha\`)
+    `);
+  }
+}
+
+function recoverChatSessionModelMigration(sqlite: Database): void {
+  if (!tableExists(sqlite, "chat_sessions")) return;
+
+  const isRecorded = migrationRecorded(sqlite, CHAT_SESSION_MODEL_MIGRATION_WHEN);
+  const hasArtifacts = hasAnyChatSessionModelMigrationArtifact(sqlite);
+  if (!isRecorded && !hasArtifacts && !hasLaterChatSessionMigration(sqlite)) return;
+
+  ensureChatSessionModelSchema(sqlite);
+  recordMigration(sqlite, CHAT_SESSION_MODEL_MIGRATION_TAG, CHAT_SESSION_MODEL_MIGRATION_WHEN);
+  refreshMigrationHash(sqlite, CHAT_SESSION_MODEL_MIGRATION_TAG, CHAT_SESSION_MODEL_MIGRATION_WHEN);
+}
+
+function hasLaterChatMessageMigration(sqlite: Database): boolean {
+  return (
+    migrationRecorded(sqlite, CHAT_ACTIVITY_RESULTS_MIGRATION_WHEN) ||
+    migrationRecorded(sqlite, REVIEW_ROUNDS_MIGRATION_WHEN) ||
+    hasAnyReviewRoundMigrationArtifact(sqlite)
+  );
+}
+
+function ensureChatMessageAttachmentsSchema(sqlite: Database): void {
+  if (!tableExists(sqlite, "chat_messages")) return;
+  if (columnExists(sqlite, "chat_messages", "attachments_json")) return;
+  sqlite.run("ALTER TABLE `chat_messages` ADD `attachments_json` text");
+}
+
+function recoverChatMessageAttachmentsMigration(sqlite: Database): void {
+  if (!tableExists(sqlite, "chat_messages")) return;
+
+  const isRecorded = migrationRecorded(sqlite, CHAT_MESSAGE_ATTACHMENTS_MIGRATION_WHEN);
+  const hasColumn = columnExists(sqlite, "chat_messages", "attachments_json");
+  if (!isRecorded && !hasColumn && !hasLaterChatMessageMigration(sqlite)) return;
+
+  ensureChatMessageAttachmentsSchema(sqlite);
+  recordMigration(
+    sqlite,
+    CHAT_MESSAGE_ATTACHMENTS_MIGRATION_TAG,
+    CHAT_MESSAGE_ATTACHMENTS_MIGRATION_WHEN,
+  );
+  refreshMigrationHash(
+    sqlite,
+    CHAT_MESSAGE_ATTACHMENTS_MIGRATION_TAG,
+    CHAT_MESSAGE_ATTACHMENTS_MIGRATION_WHEN,
+  );
+}
+
+function ensureChatActivityResultsSchema(sqlite: Database): void {
+  if (!tableExists(sqlite, "chat_activities")) return;
+
+  if (!columnExists(sqlite, "chat_activities", "call_id")) {
+    sqlite.run("ALTER TABLE `chat_activities` ADD `call_id` text");
+  }
+  if (!columnExists(sqlite, "chat_activities", "output")) {
+    sqlite.run("ALTER TABLE `chat_activities` ADD `output` text");
+  }
+  if (!columnExists(sqlite, "chat_activities", "is_error")) {
+    sqlite.run("ALTER TABLE `chat_activities` ADD `is_error` integer");
+  }
+  sqlite.run(`
+    CREATE INDEX IF NOT EXISTS \`chat_activities_session_call_idx\`
+      ON \`chat_activities\` (\`chat_session_id\`, \`call_id\`)
+  `);
+}
+
+function recoverChatActivityResultsMigration(sqlite: Database): void {
+  if (!tableExists(sqlite, "chat_activities")) return;
+
+  const isRecorded = migrationRecorded(sqlite, CHAT_ACTIVITY_RESULTS_MIGRATION_WHEN);
+  const hasArtifacts =
+    columnExists(sqlite, "chat_activities", "call_id") ||
+    columnExists(sqlite, "chat_activities", "output") ||
+    columnExists(sqlite, "chat_activities", "is_error") ||
+    indexExists(sqlite, "chat_activities_session_call_idx");
+  if (
+    !isRecorded &&
+    !hasArtifacts &&
+    !migrationRecorded(sqlite, REVIEW_ROUNDS_MIGRATION_WHEN) &&
+    !hasAnyReviewRoundMigrationArtifact(sqlite)
+  ) {
+    return;
+  }
+
+  ensureChatActivityResultsSchema(sqlite);
+  recordMigration(
+    sqlite,
+    CHAT_ACTIVITY_RESULTS_MIGRATION_TAG,
+    CHAT_ACTIVITY_RESULTS_MIGRATION_WHEN,
+  );
+  refreshMigrationHash(
+    sqlite,
+    CHAT_ACTIVITY_RESULTS_MIGRATION_TAG,
+    CHAT_ACTIVITY_RESULTS_MIGRATION_WHEN,
+  );
+}
+
 /**
  * Defensive repair for local databases that already received part or all of
  * the review-round schema outside the Drizzle journal. Keep this idempotent
@@ -595,10 +734,16 @@ export function createDb(path?: string) {
     recoverWalkthroughModesMigration(fresh);
     recoverReviewSessionModesMigration(fresh);
     recoverAvatarContentMigrations(fresh);
+    recoverChatSessionModelMigration(fresh);
+    recoverChatMessageAttachmentsMigration(fresh);
+    recoverChatActivityResultsMigration(fresh);
     recoverUnjournaledReviewRoundMigration(fresh);
     migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
     ensureGithubClientIdColumn(fresh);
     ensureAvatarContentSchema(fresh);
+    ensureChatSessionModelSchema(fresh);
+    ensureChatMessageAttachmentsSchema(fresh);
+    ensureChatActivityResultsSchema(fresh);
     ensureWalkthroughModesSchema(fresh);
     ensureReviewSessionModesSchema(fresh);
     ensureReviewRoundSchema(fresh);
@@ -613,10 +758,16 @@ export function createDb(path?: string) {
   recoverWalkthroughModesMigration(sqlite);
   recoverReviewSessionModesMigration(sqlite);
   recoverAvatarContentMigrations(sqlite);
+  recoverChatSessionModelMigration(sqlite);
+  recoverChatMessageAttachmentsMigration(sqlite);
+  recoverChatActivityResultsMigration(sqlite);
   recoverUnjournaledReviewRoundMigration(sqlite);
   migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
   ensureGithubClientIdColumn(sqlite);
   ensureAvatarContentSchema(sqlite);
+  ensureChatSessionModelSchema(sqlite);
+  ensureChatMessageAttachmentsSchema(sqlite);
+  ensureChatActivityResultsSchema(sqlite);
   ensureWalkthroughModesSchema(sqlite);
   ensureReviewSessionModesSchema(sqlite);
   ensureReviewRoundSchema(sqlite);
