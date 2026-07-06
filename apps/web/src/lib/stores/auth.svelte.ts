@@ -226,13 +226,8 @@ export async function signIn(host?: string): Promise<boolean> {
       ...(host ? { host } : {}),
     };
     try {
-      const { isTauri } = await import("$lib/utils/platform");
-      if (isTauri()) {
-        const { openUrl } = await import("@tauri-apps/plugin-opener");
-        await openUrl(data.verification_uri);
-      } else {
-        window.open(data.verification_uri, "_blank");
-      }
+      const { openUrl } = await import("@tauri-apps/plugin-opener");
+      await openUrl(data.verification_uri);
     } catch {
       // Opening browser is best-effort
     }
@@ -681,13 +676,8 @@ export function getIsLoading(): boolean {
 /** Bring the app window to the foreground after auth completes. */
 export async function focusWindow(): Promise<void> {
   try {
-    const { isTauri } = await import("$lib/utils/platform");
-    if (isTauri()) {
-      const { getCurrentWindow } = await import("@tauri-apps/api/window");
-      await getCurrentWindow().setFocus();
-    } else {
-      window.focus();
-    }
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    await getCurrentWindow().setFocus();
   } catch {
     // Focus is best-effort
   }

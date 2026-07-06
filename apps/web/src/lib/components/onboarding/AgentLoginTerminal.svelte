@@ -37,16 +37,11 @@ let failed = $state(false);
 let errorMsg = $state<string | null>(null);
 
 async function openBrowser(url: string): Promise<void> {
-  // Same handoff the GitHub device-flow login uses (auth.svelte.ts): the Tauri
-  // opener in the desktop shell, `window.open` in browser dev.
+  // Same handoff the GitHub device-flow login uses (auth.svelte.ts): hand the
+  // URL to the Tauri opener so it lands in the user's system browser.
   try {
-    const { isTauri } = await import("$lib/utils/platform");
-    if (isTauri()) {
-      const { openUrl } = await import("@tauri-apps/plugin-opener");
-      await openUrl(url);
-    } else {
-      window.open(url, "_blank");
-    }
+    const { openUrl } = await import("@tauri-apps/plugin-opener");
+    await openUrl(url);
   } catch {
     // Opening the browser is best-effort — the URL is also visible in the
     // terminal and behind the "Reopen sign-in page" button.

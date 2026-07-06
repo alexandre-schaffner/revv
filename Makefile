@@ -28,9 +28,6 @@ DEV_ENV = REVV_CHANNEL=dev PORT=45679 REVV_DB_PATH=./revv-dev.db REVV_CLONE_DIR=
 dev: kill-server ## Start all services in development mode
 	$(DEV_ENV) bun run dev
 
-dev-web: ## Start only the web frontend (port 5173)
-	VITE_REVV_CHANNEL=dev VITE_API_PORT=45679 bun run dev:web
-
 dev-server: kill-server ## Start only the API server (port 45679)
 	REV_DEBUG=1 REVV_CHANNEL=dev PORT=45679 REVV_DB_PATH=./revv-dev.db REVV_CLONE_DIR=$$HOME/.revv/repos-dev bun run dev:server
 

@@ -12,13 +12,10 @@ import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte
 import { Button } from "$lib/components/ui/button/index.js";
 import { gsapFadeY, tokens } from "$lib/motion";
 import { addRepo, getRepositories, retryClone } from "$lib/stores/prs.svelte";
-import { isTauri } from "$lib/utils/platform";
 import RepoDialogHeader from "./RepoDialogHeader.svelte";
 import RepoField from "./RepoField.svelte";
 
 let { onClose }: { onClose?: () => void } = $props();
-
-const runningInTauri = isTauri();
 
 let clonePath = $state("");
 // Resolved by the server (`inspect-local`) from the clone's `origin` remote —
@@ -71,7 +68,7 @@ async function inspectPath(path: string): Promise<void> {
 }
 
 async function browse(): Promise<void> {
-  if (!runningInTauri || inspecting) return;
+  if (inspecting) return;
   try {
     const { open } = await import("@tauri-apps/plugin-dialog");
     const selected = await open({ directory: true });
@@ -174,7 +171,7 @@ function onPathKeydown(e: KeyboardEvent): void {
 				size="sm"
 				class="affordance-btn h-8 rounded-[var(--radius-card)]"
 				onclick={() => void browse()}
-				disabled={!runningInTauri || inspecting}
+				disabled={inspecting}
 			>
 				{#if inspecting}
 					<Spinner size={13} weight="bold" class="motion-essential-spin" />

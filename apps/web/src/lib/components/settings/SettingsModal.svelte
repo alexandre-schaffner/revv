@@ -50,7 +50,6 @@ import {
   setThemePreference,
   type ThemePreference,
 } from "$lib/stores/theme.svelte";
-import { isTauri } from "$lib/utils/platform";
 import { authHeaders } from "$lib/utils/session-token";
 import UpdatesSection from "./UpdatesSection.svelte";
 import "./settings-layout.css";
@@ -77,7 +76,6 @@ interface NavItem {
   id: SectionId;
   label: string;
   icon: typeof User;
-  tauriOnly?: boolean;
 }
 
 const navItems: NavItem[] = [
@@ -87,7 +85,7 @@ const navItems: NavItem[] = [
   { id: "cache", label: "Team Cache", icon: Cloud },
   { id: "preferences", label: "Preferences", icon: SlidersHorizontal },
   { id: "onboarding", label: "Onboarding", icon: RotateCcw },
-  { id: "updates", label: "Updates", icon: Download, tauriOnly: true },
+  { id: "updates", label: "Updates", icon: Download },
   { id: "danger", label: "Danger Zone", icon: TriangleAlert },
 ];
 
@@ -230,9 +228,6 @@ const recapAgentOptions: { value: RecapAgentChoice; label: string }[] = [
   ...ACP_AGENTS.map((a) => ({ value: a.id, label: a.label })),
 ];
 
-const runningInTauri = isTauri();
-const visibleNavItems = $derived(navItems.filter((n) => !n.tauriOnly || runningInTauri));
-
 let activeSection = $state<SectionId>("account");
 let contentEl = $state<HTMLElement | null>(null);
 
@@ -240,7 +235,7 @@ let contentEl = $state<HTMLElement | null>(null);
 $effect(() => {
   if (!contentEl || !open) return;
 
-  const sectionEls = visibleNavItems
+  const sectionEls = navItems
     .map((n) => contentEl?.querySelector<HTMLElement>(`#section-${n.id}`))
     .filter((el): el is HTMLElement => el !== null);
 
@@ -497,7 +492,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 					<span class="settings-title">Settings</span>
 				</div>
 				<ul class="settings-nav" role="list">
-					{#each visibleNavItems as item (item.id)}
+					{#each navItems as item (item.id)}
 						<li>
 							<button
 								class="settings-nav-item"
@@ -1168,10 +1163,8 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 				</div>
 			</section>
 
-			<!-- Updates (Tauri only) -->
-			{#if runningInTauri}
-				<UpdatesSection />
-			{/if}
+			<!-- Updates -->
+			<UpdatesSection />
 
 		<!-- Danger Zone -->
 		{#if getUser()}
