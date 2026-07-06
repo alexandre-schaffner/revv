@@ -1,11 +1,74 @@
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, renameSync } from "node:fs";
-import { dirname } from "node:path";
+import { chmodSync, existsSync, mkdirSync, renameSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import { serverEnv } from "../config";
+import { appDataDir } from "../paths";
 import * as schema from "./schema";
+
+// The DB may hold session bearer tokens; keep it owner-only. The enclosing
+// app-data dir is already 0700, but this is a defensive backstop in case
+// REVV_DB_PATH points somewhere with looser parent permissions.
+const DB_FILE_MODE = 0o600;
+
+/**
+ * Resolve the SQLite path. Precedence:
+ *   1. explicit `path` arg (tests pass `:memory:`)
+ *   2. `REVV_DB_PATH` env override (`serverEnv.dbPath`, non-empty)
+ *   3. default: `<appDataDir>/revv.db`
+ *
+ * The default lives here rather than in `config.ts` because `appDataDir()`
+ * reads `serverEnv`, and computing it inside the `Config` schema would form a
+ * `config → paths → config` import cycle evaluated before `serverEnv` exists.
+ */
+export function resolveDbPath(explicit?: string): string {
+  if (explicit) return explicit;
+  if (serverEnv.dbPath) return serverEnv.dbPath;
+  return join(appDataDir(), "revv.db");
+}
+
+/**
+ * One-time migration of a pre-existing DB from the legacy cwd-relative
+ * location (`<cwd>/revv.db` — historically the launchd WorkingDirectory / git
+ * checkout) into the canonical app-data location. Moves the WAL/SHM sidecars
+ * too so no uncommitted transactions — or session tokens — are left behind.
+ * No-op once the canonical DB exists or when already running from the
+ * canonical location.
+ */
+function relocateLegacyDb(targetPath: string): void {
+  if (targetPath === ":memory:" || targetPath === "") return;
+  const legacy = resolve(process.cwd(), "revv.db");
+  if (legacy === targetPath) return; // already canonical
+  if (existsSync(targetPath)) return; // canonical DB wins; leave legacy in place
+  if (!existsSync(legacy)) return; // nothing to migrate
+
+  mkdirSync(dirname(targetPath), { recursive: true, mode: 0o700 });
+  renameSync(legacy, targetPath);
+  for (const ext of ["-wal", "-shm"]) {
+    const from = `${legacy}${ext}`;
+    if (existsSync(from)) renameSync(from, `${targetPath}${ext}`);
+  }
+  console.log(`[db] Migrated database ${legacy} → ${targetPath}`);
+}
+
+/**
+ * Best-effort restriction of the DB file — and its WAL/SHM sidecars, which
+ * hold committed-but-uncheckpointed rows (session tokens included) — to
+ * owner-only. Sidecars only exist once WAL mode is active and a write has
+ * occurred, so call this *after* migrations run.
+ */
+function hardenDbFile(dbPath: string): void {
+  if (dbPath === ":memory:" || dbPath === "") return;
+  for (const file of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+    try {
+      if (existsSync(file)) chmodSync(file, DB_FILE_MODE);
+    } catch {
+      // Best-effort; the 0700 parent dir is the real backstop.
+    }
+  }
+}
 
 // ── Pre-squash recovery ─────────────────────────────────────
 // TODO(2026-05-17): Revv squashed 21 incremental migrations into 4.
@@ -210,10 +273,14 @@ function insertData(freshDb: ReturnType<typeof drizzle>, d: Recovered) {
 }
 
 export function createDb(path?: string) {
-  const dbPath = path ?? serverEnv.dbPath;
+  const dbPath = resolveDbPath(path);
+
+  // Move a legacy cwd-relative DB into place before opening, so existing
+  // installs keep their onboarding/settings across the update that ships this.
+  relocateLegacyDb(dbPath);
 
   const dir = dirname(dbPath);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
 
   const sqlite = new Database(dbPath, { create: true });
   sqlite.run("PRAGMA journal_mode = WAL");
@@ -247,12 +314,14 @@ export function createDb(path?: string) {
     const db = drizzle(fresh, { schema });
     migrate(db, { migrationsFolder: fileURLToPath(new URL("./migrations", import.meta.url)) });
     insertData(db, data);
+    hardenDbFile(dbPath);
     return db;
   }
 
   // ── Normal path ──────────────────────────────────────────
   const db = drizzle(sqlite, { schema });
   migrate(db, { migrationsFolder: fileURLToPath(new URL("./migrations", import.meta.url)) });
+  hardenDbFile(dbPath);
   return db;
 }
 

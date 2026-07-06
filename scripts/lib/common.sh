@@ -635,6 +635,8 @@ write_launch_agent_plist() {
         <string>prod</string>
         <key>PORT</key>
         <string>45678</string>
+        <key>REVV_DB_PATH</key>
+        <string>${REVV_SUPPORT_DIR}/revv.db</string>
         <key>REVV_CLAUDE_BIN</key>
         <string>$claude_bin</string>
         <key>REVV_OPENCODE_BIN</key>

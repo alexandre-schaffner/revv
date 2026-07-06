@@ -4,6 +4,7 @@ import { Elysia } from "elysia";
 import { stopAllAcpConnections } from "./ai/acp/acp-connection";
 import { auth } from "./auth";
 import { serverEnv } from "./config";
+import { resolveDbPath } from "./db/index";
 import { logError } from "./logger";
 import { recordSpan } from "./observability/tracer";
 import { chatRoute } from "./routes/chat";
@@ -42,7 +43,7 @@ import { acquireSingleInstance } from "./singleInstance";
 // (revv.db) environments stay independent.  If a stale instance is found it
 // is SIGTERM'd (then SIGKILL'd after 3 s) before we bind the port.
 const port = serverEnv.port;
-const releasePidFile = acquireSingleInstance(`${serverEnv.dbPath}.${serverEnv.channel}.pid`);
+const releasePidFile = acquireSingleInstance(`${resolveDbPath()}.${serverEnv.channel}.pid`);
 
 logError("server", `starting on port ${port}`);
 
