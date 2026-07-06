@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0](https://github.com/alexandre-schaffner/revv/compare/v0.14.1...v0.15.0) (2026-07-06)
+
+
+### Features
+
+* self comment + comment-only review action ([#143](https://github.com/alexandre-schaffner/revv/issues/143)) ([e05833b](https://github.com/alexandre-schaffner/revv/commit/e05833b4315abae025df2960dec631ecc4442c8e))
+
 ## [0.14.1](https://github.com/alexandre-schaffner/revv/compare/v0.14.0...v0.14.1) (2026-06-26)
 
 
