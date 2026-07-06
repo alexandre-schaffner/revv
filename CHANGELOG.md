@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.1](https://github.com/alexandre-schaffner/revv/compare/v0.15.0...v0.15.1) (2026-07-06)
+
+
+### Bug Fixes
+
+* persist DB in app-data dir so updates don't reset onboarding ([#155](https://github.com/alexandre-schaffner/revv/issues/155)) ([b985e5c](https://github.com/alexandre-schaffner/revv/commit/b985e5c350440e4bd2c0ca765ff59d60ba38ddbd))
+
 ## [0.15.0](https://github.com/alexandre-schaffner/revv/compare/v0.14.1...v0.15.0) (2026-07-06)
 
 
