@@ -2,9 +2,9 @@ import { platform } from "node:os";
 import type { AcpAgentId, LoginEvent } from "@revv/shared";
 import { Context, Effect, Layer } from "effect";
 import {
-  ACP_LOGIN_COMMAND,
   detectAgentAuth,
   invalidateCliAgentCache,
+  resolveAgentLoginCommand,
   resolveUserPath,
 } from "../ai/providers/cli-agent";
 import { debug, logError } from "../logger";
@@ -106,7 +106,7 @@ export const AgentLoginServiceLive = Layer.effect(
     };
 
     const spawnLogin = (job: LoginJob, broadcast: (event: LoginEvent) => void): void => {
-      const argv = ACP_LOGIN_COMMAND[job.agentId];
+      const argv = resolveAgentLoginCommand(job.agentId);
       if (!argv) {
         // No login needed (opencode) — succeed immediately and idempotently.
         broadcast({ type: "done", success: true });

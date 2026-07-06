@@ -17,13 +17,19 @@ import {
   type ThinkingEffort,
 } from "@revv/shared";
 import { serverEnv } from "../../config";
-import { isCommandOnPath } from "../providers/cli-agent";
+import { detectClaudeSubscriptionAuth, isCommandOnPath } from "../providers/cli-agent";
 
 export interface AcpLaunch {
   readonly command: string;
   readonly args: readonly string[];
   /** Extra env vars merged over `process.env` when spawning (Claude Code model/effort/context). */
   readonly env?: Readonly<Record<string, string>>;
+}
+
+export interface AcpProcessLaunch {
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly env: Readonly<Record<string, string>>;
 }
 
 /**
@@ -36,6 +42,14 @@ export interface AcpLaunchConfig {
   readonly model?: string | undefined;
   readonly thinkingEffort?: ThinkingEffort | undefined;
   readonly contextWindow?: ContextWindow | undefined;
+}
+
+export interface AcpProcessEnvOptions {
+  /**
+   * Test seam for the Claude subscription status probe. Production leaves it
+   * undefined so subscription verification is read from the host.
+   */
+  readonly claudeSubscriptionAuth?: boolean | undefined;
 }
 
 // Revv thinking-effort tier → Codex `model_reasoning_effort`. Codex has no
@@ -119,6 +133,61 @@ export function resolveAcpLaunchById(id: AcpAgentId, config: AcpLaunchConfig = {
     command: def.command,
     args,
     ...(Object.keys(env).length > 0 ? { env } : {}),
+  };
+}
+
+/**
+ * Build the environment for an ACP subprocess. Claude Code subscription auth is
+ * fragile when a stale `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` is inherited:
+ * Claude Code documents that those credentials can take precedence over a valid
+ * Pro/Max subscription and produce 401s. When subscription credentials are
+ * verified, drop the generic API credentials for the Claude ACP adapter while
+ * preserving `CLAUDE_CODE_OAUTH_TOKEN` and all Revv model/context overrides.
+ */
+function buildAcpProcessEnv(
+  id: AcpAgentId,
+  inheritedEnv: Readonly<Record<string, string | undefined>>,
+  launchEnv: Readonly<Record<string, string>> | undefined,
+  path: string,
+  options: AcpProcessEnvOptions = {},
+): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(inheritedEnv)) {
+    if (value !== undefined) env[key] = value;
+  }
+
+  const hasClaudeSubscriptionAuth =
+    options.claudeSubscriptionAuth ?? (id === "claude-code" && detectClaudeSubscriptionAuth());
+  if (id === "claude-code" && hasClaudeSubscriptionAuth) {
+    delete env.ANTHROPIC_API_KEY;
+    delete env.ANTHROPIC_AUTH_TOKEN;
+  }
+
+  return {
+    ...env,
+    ...(launchEnv ?? {}),
+    PATH: path,
+  };
+}
+
+/**
+ * Resolve a complete subprocess launch for an ACP agent. The connection layer
+ * intentionally calls this instead of composing env itself: all per-adapter
+ * launch quirks stay in this preset module, while `acp-connection` remains a
+ * transport/pool implementation.
+ */
+export function resolveAcpProcessLaunchById(
+  id: AcpAgentId,
+  config: AcpLaunchConfig,
+  inheritedEnv: Readonly<Record<string, string | undefined>>,
+  path: string,
+  options: AcpProcessEnvOptions = {},
+): AcpProcessLaunch {
+  const launch = resolveAcpLaunchById(id, config);
+  return {
+    command: launch.command,
+    args: launch.args,
+    env: buildAcpProcessEnv(id, inheritedEnv, launch.env, path, options),
   };
 }
 

@@ -34,7 +34,7 @@ import {
 import type { AcpAgentId } from "@revv/shared";
 import { debug } from "../../logger";
 import { resolveUserPath } from "../providers/cli-agent";
-import { type AcpLaunchConfig, resolveAcpLaunchById } from "./presets";
+import { type AcpLaunchConfig, resolveAcpProcessLaunchById } from "./presets";
 
 const IDLE_STOP_MS = 5 * 60 * 1000;
 
@@ -170,7 +170,12 @@ async function spawnConnection(
   config: AcpLaunchConfig,
   key: string,
 ): Promise<ConnectionEntry> {
-  const { command, args, env } = resolveAcpLaunchById(agent, config);
+  const { command, args, env } = resolveAcpProcessLaunchById(
+    agent,
+    config,
+    process.env,
+    resolveUserPath(),
+  );
   const proc = Bun.spawn([command, ...args], {
     cwd,
     stdin: "pipe",
@@ -180,7 +185,7 @@ async function spawnConnection(
     // inherited environment. PATH is widened to the user's login-shell PATH so
     // `npx`/`opencode` resolve even when the server inherited a sanitized PATH
     // (launchd / GUI launch) — matching how availability is detected.
-    env: { ...process.env, ...env, PATH: resolveUserPath() },
+    env,
   });
 
   // Bun's `proc.stdin` is a FileSink; wrap it as a WritableStream<Uint8Array>
