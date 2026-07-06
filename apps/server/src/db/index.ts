@@ -53,13 +53,20 @@ function relocateLegacyDb(targetPath: string): void {
   console.log(`[db] Migrated database ${legacy} → ${targetPath}`);
 }
 
-/** Best-effort restriction of the DB file to owner-only. */
+/**
+ * Best-effort restriction of the DB file — and its WAL/SHM sidecars, which
+ * hold committed-but-uncheckpointed rows (session tokens included) — to
+ * owner-only. Sidecars only exist once WAL mode is active and a write has
+ * occurred, so call this *after* migrations run.
+ */
 function hardenDbFile(dbPath: string): void {
   if (dbPath === ":memory:" || dbPath === "") return;
-  try {
-    chmodSync(dbPath, DB_FILE_MODE);
-  } catch {
-    // Best-effort; the 0700 parent dir is the real backstop.
+  for (const file of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+    try {
+      if (existsSync(file)) chmodSync(file, DB_FILE_MODE);
+    } catch {
+      // Best-effort; the 0700 parent dir is the real backstop.
+    }
   }
 }
 
@@ -276,7 +283,6 @@ export function createDb(path?: string) {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
 
   const sqlite = new Database(dbPath, { create: true });
-  hardenDbFile(dbPath);
   sqlite.run("PRAGMA journal_mode = WAL");
   sqlite.run("PRAGMA foreign_keys = ON");
   sqlite.run("PRAGMA busy_timeout = 5000");
@@ -302,19 +308,20 @@ export function createDb(path?: string) {
     }
 
     const fresh = new Database(dbPath, { create: true });
-    hardenDbFile(dbPath);
     fresh.run("PRAGMA journal_mode = WAL");
     fresh.run("PRAGMA foreign_keys = ON");
     fresh.run("PRAGMA busy_timeout = 5000");
     const db = drizzle(fresh, { schema });
     migrate(db, { migrationsFolder: fileURLToPath(new URL("./migrations", import.meta.url)) });
     insertData(db, data);
+    hardenDbFile(dbPath);
     return db;
   }
 
   // ── Normal path ──────────────────────────────────────────
   const db = drizzle(sqlite, { schema });
   migrate(db, { migrationsFolder: fileURLToPath(new URL("./migrations", import.meta.url)) });
+  hardenDbFile(dbPath);
   return db;
 }
 
