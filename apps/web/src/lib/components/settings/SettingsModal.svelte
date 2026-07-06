@@ -1,5 +1,11 @@
 <script lang="ts">
-import { ACP_AGENTS, type RecapAgentChoice, type Repository } from "@revv/shared";
+import {
+  ACP_AGENTS,
+  type AgentStatus,
+  type AgentStatusReport,
+  type RecapAgentChoice,
+  type Repository,
+} from "@revv/shared";
 import { Dialog as DialogPrimitive } from "bits-ui";
 import RotateCcw from "phosphor-svelte/lib/ArrowCounterClockwise";
 import ExternalLink from "phosphor-svelte/lib/ArrowSquareOut";
@@ -29,7 +35,9 @@ import { Switch } from "$lib/components/ui/switch";
 import { getUser, removeAccount, resetOnboarding, signOut } from "$lib/stores/auth.svelte";
 import { deleteRepo, getRepositories } from "$lib/stores/prs.svelte";
 import {
+  fetchAgentStatus,
   fetchModels,
+  getAgentStatus,
   getAvailableModels,
   getSettings,
   updateSettings,
@@ -297,10 +305,14 @@ const intervalOptions = [
 // ── AI Configuration ──────────────────────────────────────────────────────
 let aiConfigured = $state(false);
 let aiStatusLoading = $state(true);
+let providerStatus = $state<AgentStatusReport | null>(getAgentStatus());
+let providerStatusLoading = $state(false);
 // Agent / review-model / context-window / thinking-effort are configured from
 // the chat bottom bar (capability-driven per the selected ACP agent); the
 // settings modal only keeps the low-cost suggestions model + limits.
 let aiAgent = $derived(getSettings()?.aiAgent ?? "opencode");
+let currentAgent = $derived(ACP_AGENTS.find((a) => a.id === aiAgent));
+let currentAgentStatus = $derived(providerStatus?.agents[aiAgent] ?? null);
 let modelOptions = $derived(getAvailableModels(aiAgent));
 let currentSuggestionsModel = $derived(getSettings()?.aiSuggestionsModel ?? "");
 let currentSuggestionsModelLabel = $derived(
@@ -310,6 +322,7 @@ let currentSuggestionsModelLabel = $derived(
 $effect(() => {
   if (open) {
     fetchAiStatus();
+    void refreshProviderStatus();
     // Populate the suggestions-model dropdown for the current agent (boot
     // prefetch usually covers this; this backstops a cold cache).
     void fetchModels(aiAgent);
@@ -331,6 +344,31 @@ async function fetchAiStatus(): Promise<void> {
   } finally {
     aiStatusLoading = false;
   }
+}
+
+async function refreshProviderStatus(): Promise<void> {
+  providerStatusLoading = true;
+  try {
+    providerStatus = await fetchAgentStatus();
+  } finally {
+    providerStatusLoading = false;
+  }
+}
+
+function providerReady(s: AgentStatus | null | undefined): boolean {
+  return !!s?.installed && s.authed;
+}
+
+function providerStatusText(s: AgentStatus | null | undefined): string {
+  if (!s) return "Not checked";
+  if (!s.installed) return "Agent not installed";
+  if (!s.authed) return "Needs sign-in";
+  return s.authLabel;
+}
+
+function providerStateLabel(s: AgentStatus | null | undefined): string {
+  if (!providerReady(s)) return "Action needed";
+  return s?.verified ? "Connected" : "Configured";
 }
 
 // ── Max turns ─────────────────────────────────────────────────────────────
@@ -535,6 +573,51 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 			<!-- AI Configuration -->
 			<section id="section-ai" class="settings-section">
 				<h2 class="section-head-title">AI Configuration</h2>
+
+				<div class="settings-subgroup">
+					<h3 class="settings-subgroup-heading">Provider</h3>
+
+					<div class="settings-row">
+						<div class="settings-row-info">
+							<p class="settings-row-label">{currentAgent?.label ?? 'Agent'}</p>
+							<p class="settings-row-hint">
+								{#if providerStatusLoading}
+									Checking provider connection…
+								{:else}
+									{providerStatusText(currentAgentStatus)}
+								{/if}
+							</p>
+							{#if currentAgentStatus?.authWarning}
+								<p class="provider-warning">
+									<TriangleAlert size={12} weight="fill" />
+									<span>{currentAgentStatus.authWarning}</span>
+								</p>
+							{/if}
+						</div>
+						<div class="provider-status-action">
+							<div class="status-line">
+								{#if providerStatusLoading}
+									<Loader2 size={11} weight="regular" class="motion-essential-spin text-text-muted" />
+									<span class="status-line-text">Checking</span>
+								{:else if providerReady(currentAgentStatus)}
+									<span
+										class="status-line-dot"
+										class:status-line-dot--success={currentAgentStatus?.verified}
+										class:status-line-dot--warning={!currentAgentStatus?.verified}
+										aria-hidden="true"
+									></span>
+									<span class="status-line-text">{providerStateLabel(currentAgentStatus)}</span>
+								{:else}
+									<span class="status-line-dot status-line-dot--warning" aria-hidden="true"></span>
+									<span class="status-line-text">Action needed</span>
+								{/if}
+							</div>
+							<Button variant="ghost" size="sm" onclick={refreshProviderStatus} disabled={providerStatusLoading} class="text-xs">
+								Check again
+							</Button>
+						</div>
+					</div>
+				</div>
 
 				<!-- Suggestions model (agent, review model, context window, and thinking
 				     effort are configured from the chat bottom bar). -->
@@ -1394,6 +1477,24 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 
 	.status-line-dot--warning {
 		background: var(--color-warning);
+	}
+
+	.provider-status-action {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		flex-shrink: 0;
+	}
+
+	.provider-warning {
+		margin-top: 6px;
+		display: flex;
+		align-items: flex-start;
+		gap: 6px;
+		max-width: 440px;
+		font-size: 11px;
+		line-height: 1.45;
+		color: var(--color-warning);
 	}
 
 	/* ── Probe result (test connection feedback) ── */

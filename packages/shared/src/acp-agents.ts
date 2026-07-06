@@ -182,8 +182,9 @@ export function getAgentCapabilities(id: AcpAgentId): AcpAgentCapabilities {
  *   - `installed` — the agent's CLI is present on PATH (or pinned via the
  *     LaunchAgent `REVV_*_BIN` env vars), or — for the SDK/auth-store agents —
  *     otherwise usable.
- *   - `authed` — the user is logged in. opencode needs no login, so it always
- *     reports `true`.
+ *   - `authed` — usable credentials are configured. opencode needs no login,
+ *     so it always reports `true`.
+ *   - `verified` — the provider's own status command confirmed the session.
  * `loginCommand` is the agent's official interactive login command (joined
  * argv), surfaced so the UI can show a manual hint where the embedded PTY login
  * isn't available; `null` for agents that need no login (opencode).
@@ -191,6 +192,22 @@ export function getAgentCapabilities(id: AcpAgentId): AcpAgentCapabilities {
 export interface AgentStatus {
   installed: boolean;
   authed: boolean;
+  /**
+   * `true` only when the provider's own status command confirms the session.
+   * Env keys and credential files can make an agent usable, but they are
+   * reported as configured rather than verified unless the provider can prove
+   * the connection without starting a generation.
+   */
+  verified: boolean;
+  authSource:
+    | "none"
+    | "not-required"
+    | "subscription"
+    | "api-key"
+    | "local-credentials"
+    | "unknown";
+  authLabel: string;
+  authWarning: string | null;
   loginCommand: string | null;
 }
 
