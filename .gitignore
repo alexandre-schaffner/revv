@@ -9,7 +9,6 @@ apps/web/build/
 apps/web/.svelte-kit/
 apps/server/dist/
 apps/desktop/target/
-packages/app/dist/
 
 # TypeScript
 *.tsbuildinfo
