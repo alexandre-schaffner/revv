@@ -1,7 +1,7 @@
-import { ACP_AGENT_IDS, type AcpAgentId, isAcpAgentId } from "@revv/shared";
+import { ACP_AGENT_IDS, type AcpAgentId, getAgentCredentials, isAcpAgentId } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
-import { listCliModels } from "../ai/providers/cli-agent";
+import { isCommandOnPath, listCliModels, resolveCliBin } from "../ai/providers/cli-agent";
 import { AppRuntime } from "../runtime";
 import { AiService } from "../services/Ai";
 import { BlobStore } from "../services/blob/BlobStore";
@@ -315,6 +315,124 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
       return handleAppError(e, ctx);
     }
   })
+  // ── ACP agent credentials (agent-agnostic auth) ───────────────────────────
+  // The packaged app runs the server as a LaunchAgent with a sparse env, so a
+  // spawned ACP agent can't reach the OS keychain where its CLI stashes the
+  // interactive login — chat 401s and generation dies with "ACP connection
+  // closed". These endpoints capture (via a per-agent `setupCommand`) or accept
+  // a pasted credential and store it for injection at spawn. Which env vars
+  // apply is declared per agent in `ACP_AGENTS[].credentials`.
+  .get("/agent-credentials", async (ctx) => {
+    try {
+      const connections = await AppRuntime.runPromise(
+        Effect.flatMap(SettingsService, (s) => s.getAgentCredentialConnections()),
+      );
+      const items = ACP_AGENT_IDS.flatMap((agent) =>
+        getAgentCredentials(agent).map((cred) => ({
+          agent,
+          envVar: cred.envVar,
+          label: cred.label,
+          hint: cred.hint,
+          placeholder: cred.placeholder,
+          hasSetup: (cred.setupCommand?.length ?? 0) > 0,
+          connected: connections[agent]?.[cred.envVar] === true,
+        })),
+      );
+      return { credentials: items };
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  })
+  .post(
+    "/agent-credentials/connect",
+    async (ctx) => {
+      try {
+        const agent = ctx.body.agent as AcpAgentId;
+        const cred = getAgentCredentials(agent).find((c) => c.envVar === ctx.body.envVar);
+        if (!cred?.setupCommand || cred.setupCommand.length === 0 || !cred.tokenPattern) {
+          return { connected: false, error: "This credential has no automated connect flow." };
+        }
+        const [command, ...rest] = cred.setupCommand;
+        const bin =
+          command === "claude" || command === "codex" || command === "opencode"
+            ? resolveCliBin(command)
+            : (command ?? "");
+        if (!bin || !isCommandOnPath(command ?? "")) {
+          return {
+            connected: false,
+            error: `\`${command}\` CLI not found. Install it and retry, or paste the ${cred.label} manually.`,
+          };
+        }
+
+        // The setup command opens the browser for the OAuth flow, then prints the
+        // credential to stdout. Capture it, bounded by a timeout so an abandoned
+        // login doesn't wedge the request.
+        const proc = Bun.spawn([bin, ...rest], {
+          stdin: "ignore",
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        const SETUP_TIMEOUT_MS = 180_000;
+        let timedOut = false;
+        const timer = setTimeout(() => {
+          timedOut = true;
+          try {
+            proc.kill();
+          } catch {
+            /* already gone */
+          }
+        }, SETUP_TIMEOUT_MS);
+
+        let stdout = "";
+        let stderr = "";
+        try {
+          [stdout, stderr] = await Promise.all([
+            new Response(proc.stdout).text(),
+            new Response(proc.stderr).text(),
+          ]);
+          await proc.exited;
+        } finally {
+          clearTimeout(timer);
+        }
+
+        const token = `${stdout}\n${stderr}`.match(new RegExp(cred.tokenPattern))?.[0] ?? null;
+        if (!token) {
+          return {
+            connected: false,
+            error: timedOut
+              ? `Timed out waiting for \`${cred.setupCommand.join(" ")}\`. Complete the login and retry.`
+              : stderr.trim() ||
+                `No credential returned by \`${cred.setupCommand.join(" ")}\`. Complete the login and retry.`,
+          };
+        }
+
+        await AppRuntime.runPromise(
+          Effect.flatMap(SettingsService, (s) => s.setAgentCredential(agent, cred.envVar, token)),
+        );
+        return { connected: true };
+      } catch (e) {
+        return handleAppError(e, ctx);
+      }
+    },
+    { body: t.Object({ agent: aiAgentSchema, envVar: t.String() }) },
+  )
+  .post(
+    "/agent-credentials",
+    async (ctx) => {
+      try {
+        const value = ctx.body.value.trim();
+        await AppRuntime.runPromise(
+          Effect.flatMap(SettingsService, (s) =>
+            s.setAgentCredential(ctx.body.agent as AcpAgentId, ctx.body.envVar, value || null),
+          ),
+        );
+        return { connected: value.length > 0 };
+      } catch (e) {
+        return handleAppError(e, ctx);
+      }
+    },
+    { body: t.Object({ agent: aiAgentSchema, envVar: t.String(), value: t.String() }) },
+  )
   .get("/ai-status", async (ctx) => {
     try {
       return await AppRuntime.runPromise(

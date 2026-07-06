@@ -70,5 +70,25 @@ export const userSettings = sqliteTable("user_settings", {
   cacheSigningKeyPath: text("cache_signing_key_path").notNull().default(""),
   /** JSON-encoded `string[]` of trusted GitHub hosts. */
   cacheTrustedSignerHosts: text("cache_trusted_signer_hosts").notNull().default("[]"),
+  // ── ACP agent credentials (agent-agnostic auth) ───────────────────────────
+  /**
+   * Per-agent credentials Revv injects into the ACP subprocess environment at
+   * spawn, as a JSON map `{ [agentId]: { [ENV_VAR]: value } }`. Which env vars
+   * apply is declared per agent in `ACP_AGENTS[].credentials` (`@revv/shared`) —
+   * e.g. `claude-code` → `CLAUDE_CODE_OAUTH_TOKEN`, `codex` → `OPENAI_API_KEY`.
+   *
+   * This is the deploy-safe path: the packaged LaunchAgent runs with a sparse
+   * environment and can't reach the OS keychain where CLIs stash their
+   * interactive login, so chat 401s and generation dies with "ACP connection
+   * closed". Injecting a stored value as an env var sidesteps the keychain.
+   *
+   * Deliberately kept OUT of the `UserSettings` type / round-trip (like
+   * `cacheCredentialsJson`) so secrets are never shipped to the web client —
+   * only per-credential `connected` booleans are exposed. Written via the
+   * dedicated `Settings.setAgentCredential` path, never `updateSettings`. V1
+   * stores plaintext; a future migration moves it into the OS keychain via
+   * `tauri-plugin-stronghold`.
+   */
+  agentCredentialsJson: text("agent_credentials_json").notNull().default("{}"),
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
 });

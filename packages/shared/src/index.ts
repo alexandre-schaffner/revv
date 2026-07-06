@@ -1,5 +1,6 @@
 export type {
   AcpAgentCapabilities,
+  AcpAgentCredential,
   AcpAgentDescriptor,
   AcpAgentIconKey,
   AcpAgentId,
@@ -12,6 +13,7 @@ export {
   ACP_AGENTS,
   getAcpAgent,
   getAgentCapabilities,
+  getAgentCredentials,
   isAcpAgentId,
 } from "./acp-agents";
 export type { Activity, ActivityKind, ActivityResult, ToolDiffOutput } from "./activity";

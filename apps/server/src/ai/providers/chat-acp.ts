@@ -26,6 +26,7 @@ import { CLI_CHAT_TURN_TIMEOUT_MS } from "../../constants";
 import { AiGenerationError } from "../../domain/errors";
 import { debug, logError } from "../../logger";
 import { getAcpConnection } from "../acp/acp-connection";
+import { withAgentAuthHint } from "../acp/presets";
 import {
   buildActivity,
   decodeAcpSessionUpdate,
@@ -272,7 +273,10 @@ export function streamChatViaAcp(
             lastWasNonText = true;
           } else if (ev.kind === "error") {
             logError("chat-acp", "session.error:", ev.message);
-            controller.enqueue({ kind: "text", data: `\n\n_Error: ${ev.message}_` });
+            controller.enqueue({
+              kind: "text",
+              data: `\n\n_Error: ${withAgentAuthHint(opts.acpAgentId, ev.message)}_`,
+            });
             hasEmittedText = true;
             lastWasNonText = false;
           }
@@ -334,7 +338,9 @@ export function streamChatViaAcp(
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         logError("chat-acp", "queryTask error:", msg);
-        controller.error(new AiGenerationError({ cause: err, message: msg }));
+        controller.error(
+          new AiGenerationError({ cause: err, message: withAgentAuthHint(opts.acpAgentId, msg) }),
+        );
       } finally {
         if (handle && sessionId) {
           handle.setListener(sessionId, null);

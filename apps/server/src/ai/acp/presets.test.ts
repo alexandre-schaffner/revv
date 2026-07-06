@@ -1,11 +1,14 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { ACP_AGENTS, getAcpAgent } from "@revv/shared";
 import { serverEnv } from "../../config";
 import { ACP_LOGIN_COMMAND } from "../providers/cli-agent";
 import {
+  agentCredentialsMissing,
   resolveAcpLaunchById,
   resolveAcpProcessLaunchById,
   resolveGenerationModel,
+  setAgentCredentialCache,
+  withAgentAuthHint,
 } from "./presets";
 
 describe("ACP agent registry", () => {
@@ -140,6 +143,126 @@ describe("ACP launch presets", () => {
 describe("ACP login commands", () => {
   it("uses Claude's subscription login path", () => {
     expect(ACP_LOGIN_COMMAND["claude-code"]).toEqual(["claude", "auth", "login", "--claudeai"]);
+  });
+});
+// Injection and the missing-credential guard both read ambient env, so isolate
+// every test in these blocks from the runner's real credentials and reset the
+// module-level cache afterward (otherwise it would leak into the strict
+// `toEqual` env test above).
+function isolateAgentCredentials(): void {
+  const saved: Record<string, string | undefined> = {
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+    CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN,
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+  };
+
+  beforeEach(() => {
+    for (const key of Object.keys(saved)) delete process.env[key];
+    setAgentCredentialCache({});
+  });
+
+  afterEach(() => {
+    setAgentCredentialCache({});
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+}
+
+describe("ACP agent credential injection", () => {
+  isolateAgentCredentials();
+
+  it("injects each agent's declared credential env var from the cache", () => {
+    if (serverEnv.acpCommand) return;
+    setAgentCredentialCache({
+      "claude-code": { CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-abc" },
+      codex: { OPENAI_API_KEY: "sk-openai-xyz" },
+    });
+    expect(resolveAcpLaunchById("claude-code").env?.CLAUDE_CODE_OAUTH_TOKEN).toBe(
+      "sk-ant-oat01-abc",
+    );
+    expect(resolveAcpLaunchById("codex").env?.OPENAI_API_KEY).toBe("sk-openai-xyz");
+  });
+
+  it("skips injection only when the credential's OWN env var is already inherited", () => {
+    if (serverEnv.acpCommand) return;
+    // Own var present → don't double-inject (returned env holds only overrides).
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = "sk-ant-oat01-inherited";
+    process.env.OPENAI_API_KEY = "sk-openai-inherited";
+    setAgentCredentialCache({
+      "claude-code": { CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-abc" },
+      codex: { OPENAI_API_KEY: "sk-openai-xyz" },
+    });
+    expect(resolveAcpLaunchById("claude-code").env?.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(resolveAcpLaunchById("codex").env?.OPENAI_API_KEY).toBeUndefined();
+  });
+
+  it("still injects the stored token when only a hazard var (ANTHROPIC_API_KEY) is inherited", () => {
+    if (serverEnv.acpCommand) return;
+    // A stale ANTHROPIC_API_KEY must NOT suppress injection — it's a hazard that
+    // buildAcpProcessEnv drops in favor of the token, not a substitute for it.
+    process.env.ANTHROPIC_API_KEY = "sk-ant-api-key";
+    setAgentCredentialCache({ "claude-code": { CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-abc" } });
+    expect(resolveAcpLaunchById("claude-code").env?.CLAUDE_CODE_OAUTH_TOKEN).toBe(
+      "sk-ant-oat01-abc",
+    );
+  });
+
+  it("only injects env vars the agent declares", () => {
+    if (serverEnv.acpCommand) return;
+    // opencode declares no credentials, so a stray cache entry is never injected.
+    setAgentCredentialCache({ opencode: { SOMETHING: "x" } });
+    expect(resolveAcpLaunchById("opencode").env).toBeUndefined();
+  });
+
+  it("drops a stale ANTHROPIC_API_KEY when injecting a stored subscription token", () => {
+    if (serverEnv.acpCommand) return;
+    // The crux fix: a stored token reaches the spawn env AND the inherited stale
+    // key is dropped — without passing claudeSubscriptionAuth, since the injected
+    // token is itself the subscription signal (the host probe can't see it).
+    setAgentCredentialCache({ "claude-code": { CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-stored" } });
+    const launch = resolveAcpProcessLaunchById(
+      "claude-code",
+      {},
+      { ANTHROPIC_API_KEY: "stale-api-key", KEEP_ME: "yes" },
+      "/usr/bin",
+    );
+    expect(launch.env.CLAUDE_CODE_OAUTH_TOKEN).toBe("sk-ant-oat01-stored");
+    expect(launch.env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(launch.env.KEEP_ME).toBe("yes");
+  });
+});
+
+describe("ACP agent auth-failure hints", () => {
+  isolateAgentCredentials();
+
+  it("flags an agent as credential-less only when nothing is configured", () => {
+    expect(agentCredentialsMissing("claude-code")).toBe(true);
+    expect(agentCredentialsMissing("codex")).toBe(true);
+    setAgentCredentialCache({ "claude-code": { CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-abc" } });
+    expect(agentCredentialsMissing("claude-code")).toBe(false);
+  });
+
+  it("never flags agents that declare no credentials", () => {
+    expect(agentCredentialsMissing("opencode")).toBe(false);
+  });
+
+  it("appends the connect hint to a credential-less agent's auth/connection error", () => {
+    const out = withAgentAuthHint("claude-code", "ACP connection closed");
+    expect(out).toContain("ACP connection closed");
+    expect(out).toContain("Claude Code");
+  });
+
+  it("leaves errors for credential-free agents untouched", () => {
+    expect(withAgentAuthHint("opencode", "boom")).toBe("boom");
+  });
+
+  it("does not append when creds are present and the error is unrelated", () => {
+    setAgentCredentialCache({ "claude-code": { CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-abc" } });
+    expect(withAgentAuthHint("claude-code", "some unrelated failure")).toBe(
+      "some unrelated failure",
+    );
   });
 });
 
