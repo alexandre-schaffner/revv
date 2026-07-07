@@ -131,10 +131,24 @@ REVV_SUPPORT_DIR="${REVV_SUPPORT_DIR:-$HOME/Library/Application Support/Revv}"
 REVV_AUTH_KEY="${REVV_AUTH_KEY:-$REVV_SUPPORT_DIR/auth.key}"
 # Canonical DB path. The server resolves the SQLite file to the durable
 # app-data dir (`<appDataDir>/revv.db` = `$REVV_SUPPORT_DIR/revv.db`), NOT the
-# cwd/INSTALL_DIR — see apps/server/src/db/index.ts (resolveDbPath) and the
-# LaunchAgent plist's REVV_DB_PATH. Mirror that same precedence here so the CLI
-# reads the same file the server writes.
-REVV_DB_PATH="${REVV_DB_PATH:-$REVV_SUPPORT_DIR/revv.db}"
+# cwd/INSTALL_DIR — see apps/server/src/db/index.ts (resolveDbPath). In a prod
+# install the server's REVV_DB_PATH is set in the LaunchAgent plist's
+# EnvironmentVariables, which THIS shell does not inherit — so we read it back
+# from the plist to track whatever the server actually uses, instead of blindly
+# recomputing the default (which only coincidentally matches today). Precedence:
+#   1. REVV_DB_PATH exported in this shell (explicit CLI/dev override)
+#   2. REVV_DB_PATH from the LaunchAgent plist (authoritative server value)
+#   3. default: $REVV_SUPPORT_DIR/revv.db
+resolve_db_path() {
+  if [[ -n "${REVV_DB_PATH:-}" ]]; then printf '%s' "$REVV_DB_PATH"; return; fi
+  if [[ -f "$LAUNCH_AGENT_PLIST" ]]; then
+    local p
+    p="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:REVV_DB_PATH' \
+      "$LAUNCH_AGENT_PLIST" 2>/dev/null)" && [[ -n "$p" ]] && { printf '%s' "$p"; return; }
+  fi
+  printf '%s' "$REVV_SUPPORT_DIR/revv.db"
+}
+REVV_DB_PATH="$(resolve_db_path)"
 
 find_app() {
   for p in "${APP_CANDIDATES[@]}"; do
