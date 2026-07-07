@@ -48,6 +48,21 @@ export interface AcpAgentCapabilities {
   readonly planMode: boolean;
 }
 
+/**
+ * Declares that an agent's login lives in the macOS login Keychain, so Revv's
+ * background service may be blocked from reading it (a per-machine Access-Control
+ * state) — surfacing as a 401 / "ACP connection closed". Present only for agents
+ * that use the keychain; file-based agents (their config is reachable via `$HOME`)
+ * omit it. Drives the keychain-access detection, probe, and remediation, so
+ * covering another keychain-using provider is one more entry here — no code change.
+ */
+export interface AcpAgentKeychainAuth {
+  /** `security` service name of the login item (e.g. `Claude Code-credentials`). */
+  readonly service: string;
+  /** User-facing steps to grant the background service access to that item. */
+  readonly remediation: string;
+}
+
 export interface AcpAgentDescriptor {
   /** Stable id — persisted as the chat-agent setting and the connection-pool key. */
   readonly id: string;
@@ -63,6 +78,12 @@ export interface AcpAgentDescriptor {
   readonly args: readonly string[];
   /** Model / context-window / thinking-effort surface Revv exposes for this agent. */
   readonly capabilities: AcpAgentCapabilities;
+  /**
+   * macOS keychain login details, when the agent stores its credential there and
+   * the background server can be ACL-blocked from reading it. Absent for
+   * file-based agents (codex/opencode/cursor), which the server reaches directly.
+   */
+  readonly keychainAuth?: AcpAgentKeychainAuth;
 }
 
 // ⇩ Add a new ACP agent here — one entry is all it takes. ⇩
@@ -84,6 +105,14 @@ export const ACP_AGENTS = [
       thinkingEfforts: ["ultrathink", "max", "extra-high", "high", "medium", "low"],
       // claude-agent-acp advertises a read-only plan mode.
       planMode: true,
+    },
+    keychainAuth: {
+      service: "Claude Code-credentials",
+      remediation:
+        "Revv's background service isn't allowed to read your Claude subscription login from " +
+        "the macOS Keychain, so the Claude Code agent can't authenticate. To grant access: open " +
+        'Keychain Access, search "Claude Code-credentials", double-click it, open the Access ' +
+        'Control tab, choose "Allow all applications to access this item", and Save Changes. Then retry.',
     },
   },
   {
@@ -174,6 +203,11 @@ export function getAcpAgent(id: AcpAgentId): AcpAgentDescriptor {
 /** The model / context-window / thinking-effort surface Revv exposes for an agent. */
 export function getAgentCapabilities(id: AcpAgentId): AcpAgentCapabilities {
   return getAcpAgent(id).capabilities;
+}
+
+/** Keychain-login details for an agent, or `undefined` when it isn't keychain-backed. */
+export function getAgentKeychainAuth(id: AcpAgentId): AcpAgentKeychainAuth | undefined {
+  return getAcpAgent(id).keychainAuth;
 }
 
 /**

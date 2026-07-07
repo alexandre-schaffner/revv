@@ -29,6 +29,7 @@ import { serverEnv } from "../../config";
 import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../../constants";
 import { debug, logError } from "../../logger";
 import { type AcpConnectionHandle, getAcpConnection } from "../acp/acp-connection";
+import { withAgentKeychainHint } from "../acp/agent-keychain";
 import {
   decodeAcpSessionUpdate,
   makeAcpDecodeState,
@@ -209,7 +210,10 @@ export async function runRecapAgentViaAcp(params: RunRecapAgentAcpParams): Promi
   } catch (err) {
     // An abort fired by a successful `complete_recap` is success, not failure.
     if (validatedCompleteSeen) return {};
-    const message = err instanceof Error ? err.message : String(err);
+    const message = withAgentKeychainHint(
+      params.acpAgentId,
+      err instanceof Error ? err.message : String(err),
+    );
     logError("recap-acp", "run failed:", message);
     return { error: message };
   } finally {

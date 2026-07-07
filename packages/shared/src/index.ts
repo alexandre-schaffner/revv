@@ -3,6 +3,7 @@ export type {
   AcpAgentDescriptor,
   AcpAgentIconKey,
   AcpAgentId,
+  AcpAgentKeychainAuth,
   AcpAgentModel,
   AgentStatus,
   AgentStatusReport,
@@ -12,6 +13,7 @@ export {
   ACP_AGENTS,
   getAcpAgent,
   getAgentCapabilities,
+  getAgentKeychainAuth,
   isAcpAgentId,
 } from "./acp-agents";
 export type { Activity, ActivityKind, ActivityResult, ToolDiffOutput } from "./activity";

@@ -3,6 +3,7 @@ import {
   ACP_AGENTS,
   type AgentStatus,
   type AgentStatusReport,
+  getAgentKeychainAuth,
   type RecapAgentChoice,
   type Repository,
 } from "@revv/shared";
@@ -35,6 +36,8 @@ import { Switch } from "$lib/components/ui/switch";
 import { getUser, removeAccount, resetOnboarding, signOut } from "$lib/stores/auth.svelte";
 import { deleteRepo, getRepositories } from "$lib/stores/prs.svelte";
 import {
+  type AgentKeychainResult,
+  checkAgentKeychain,
   fetchAgentStatus,
   fetchModels,
   getAgentStatus,
@@ -327,6 +330,28 @@ $effect(() => {
     // prefetch usually covers this; this backstops a cold cache).
     void fetchModels(aiAgent);
   }
+});
+
+// ── Agent keychain access check (Solution B: guide, don't store) ───────────
+// Shown only for keychain-backed agents (registry-declared); today that's
+// Claude Code, but any provider that adds `keychainAuth` surfaces here.
+let agentKeychainAuth = $derived(getAgentKeychainAuth(aiAgent));
+let keychainChecking = $state(false);
+let keychainResult = $state<AgentKeychainResult | null>(null);
+
+async function handleCheckAgentKeychain(): Promise<void> {
+  keychainChecking = true;
+  try {
+    keychainResult = await checkAgentKeychain(aiAgent);
+  } finally {
+    keychainChecking = false;
+  }
+}
+
+// Drop a stale result when the selected agent changes.
+$effect(() => {
+  void aiAgent;
+  keychainResult = null;
 });
 
 async function fetchAiStatus(): Promise<void> {
@@ -649,6 +674,55 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 						</Select.Root>
 					</div>
 				</div>
+
+				<!-- Keychain access (only for keychain-backed agents, e.g. Claude Code) -->
+				{#if agentKeychainAuth}
+					<div class="settings-subgroup">
+						<h3 class="settings-subgroup-heading">Keychain access</h3>
+
+						<div class="settings-row">
+							<div class="settings-row-info">
+								<p class="settings-row-label">Background access</p>
+								<p class="settings-row-hint">
+									Report generation runs in Revv's background service, which needs permission to
+									read your {currentAgent?.label ?? 'agent'} login from the macOS Keychain. Check
+									whether it's allowed.
+								</p>
+							</div>
+							<Button
+								size="sm"
+								variant="secondary"
+								class="text-xs"
+								disabled={keychainChecking}
+								onclick={handleCheckAgentKeychain}
+							>
+								{#if keychainChecking}
+									<Loader2 size={12} weight="regular" class="motion-essential-spin" />
+									Checking…
+								{:else}
+									Check access
+								{/if}
+							</Button>
+						</div>
+
+						{#if keychainResult}
+							<div class="status-line">
+								{#if keychainResult.readable === true}
+									<span class="status-line-dot status-line-dot--success" aria-hidden="true"></span>
+									<span class="status-line-text"
+										>Revv can read your {currentAgent?.label ?? 'agent'} login — you're set.</span
+									>
+								{:else if keychainResult.readable === false}
+									<span class="status-line-dot status-line-dot--warning" aria-hidden="true"></span>
+									<span class="status-line-text">{keychainResult.remediation}</span>
+								{:else}
+									<span class="status-line-dot status-line-dot--muted" aria-hidden="true"></span>
+									<span class="status-line-text">Check unavailable on this platform.</span>
+								{/if}
+							</div>
+						{/if}
+					</div>
+				{/if}
 
 				<!-- Limits -->
 				<div class="settings-subgroup">

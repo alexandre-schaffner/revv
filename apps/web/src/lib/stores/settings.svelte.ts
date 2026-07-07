@@ -292,3 +292,33 @@ export async function fetchAgentStatus(): Promise<AgentStatusReport | null> {
     return agentStatus;
   }
 }
+
+// ── Agent keychain access (Solution B: guide, don't store) ──────────────────
+// Whether Revv's background service can read a keychain-backed agent's login
+// from the macOS Keychain. `readable: null` = not macOS, the agent isn't
+// keychain-backed, or the probe is unavailable. No credential is ever stored —
+// on a block we surface the remediation steps.
+
+export interface AgentKeychainResult {
+  readable: boolean | null;
+  remediation: string | null;
+}
+
+/**
+ * Explicit check (user-triggered) so opening Settings never fires a surprise
+ * keychain prompt. Runs the probe in the server's own context, for the given
+ * agent's declared keychain item.
+ */
+export async function checkAgentKeychain(agent: AcpAgentId): Promise<AgentKeychainResult> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/settings/agent/keychain-check`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ agent }),
+    });
+    if (!res.ok) return { readable: null, remediation: null };
+    return (await res.json()) as AgentKeychainResult;
+  } catch {
+    return { readable: null, remediation: null };
+  }
+}
