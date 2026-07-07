@@ -189,17 +189,26 @@ server_running() {
 # entirely; writes go through the API so the in-memory `SubscriptionRef`
 # cache that drives the web app stays consistent.
 read_channel() {
-  command -v sqlite3 >/dev/null 2>&1 || \
-    fail "sqlite3 not found — install it (e.g. 'brew install sqlite') and retry."
+  # NEVER abort the caller: `read_channel` runs at the very top of `cmd_update`,
+  # before the fresh source (and this CLI) is installed. A hard failure here
+  # would strand an install that can't read its own channel — including any
+  # future DB-path regression — with no way to `revv update` out of it. So on
+  # any unreadable-DB condition we warn (to stderr, so the captured stdout stays
+  # clean) and default to 'stable', letting the update proceed and self-heal.
+  # A nightly user hitting this can re-run with 'revv update --channel nightly'.
+  if ! command -v sqlite3 >/dev/null 2>&1; then
+    warn "sqlite3 not found — defaulting to the 'stable' channel for this update (install it, e.g. 'brew install sqlite', for channel-aware updates)." >&2
+    printf "stable"; return 0
+  fi
   # Prefer the canonical app-data DB, but fall back to the legacy cwd/INSTALL_DIR
   # location: on an install whose new server hasn't booted yet, the one-time
   # relocation in db/index.ts hasn't run, so the DB may still sit at the old path.
   local db="$REVV_DB_PATH"
   [[ -f "$db" ]] || db="$INSTALL_DIR/revv.db"
-  [[ -f "$db" ]] || \
-    fail "Revv database not found (looked in $REVV_DB_PATH and $INSTALL_DIR/revv.db).
-Run 'revv start' to initialize it, then retry — or bypass the persisted-channel
-lookup with 'revv update --channel <stable|nightly>'."
+  if [[ ! -f "$db" ]]; then
+    warn "Revv database not found (looked in $REVV_DB_PATH and $INSTALL_DIR/revv.db) — defaulting to 'stable'. Run 'revv start' to initialize it, or pass 'revv update --channel <stable|nightly>' to pick explicitly." >&2
+    printf "stable"; return 0
+  fi
   local v
   v="$(sqlite3 "$db" \
     "SELECT update_channel FROM user_settings WHERE id='default';" 2>/dev/null)"
