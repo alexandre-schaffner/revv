@@ -2,12 +2,16 @@
 import Archive from "phosphor-svelte/lib/Archive";
 import ChevronDown from "phosphor-svelte/lib/CaretDown";
 import ChevronRight from "phosphor-svelte/lib/CaretRight";
+import { untrack } from "svelte";
 import { gsapFadeY, gsapSlide, tokens } from "$lib/motion";
 import {
+  fetchArchivedPrsForRepo,
   fetchMoreArchived,
-  getArchivedByRepo,
+  getArchivedFetchStateForRepo,
   getArchivedLoadingMore,
   getArchivedNextCursor,
+  getArchivedPrsByRepo,
+  getRawArchivedPrsByRepo,
   getSelectedPrId,
 } from "$lib/stores/prs.svelte";
 import PrItem from "./PrItem.svelte";
@@ -32,6 +36,11 @@ $effect(() => {
   expanded = stored === "1";
 });
 
+$effect(() => {
+  const id = repoId;
+  void untrack(() => fetchArchivedPrsForRepo(id));
+});
+
 function toggle(): void {
   expanded = !expanded;
   if (typeof localStorage !== "undefined") {
@@ -40,14 +49,18 @@ function toggle(): void {
   }
 }
 
-const archivedPrs = $derived(getArchivedByRepo().get(repoId) ?? []);
+const rawArchivedPrs = $derived(getRawArchivedPrsByRepo(repoId));
+const archivedPrs = $derived(getArchivedPrsByRepo(repoId));
 const selectedPrId = $derived(getSelectedPrId());
-const nextCursor = $derived(getArchivedNextCursor());
-const loadingMore = $derived(getArchivedLoadingMore());
+const nextCursor = $derived(getArchivedNextCursor(repoId));
+const loadingMore = $derived(getArchivedLoadingMore(repoId));
+const fetchState = $derived(getArchivedFetchStateForRepo(repoId));
 
 // Hide the toggle entirely when there's nothing to show — keeps the
 // column clean for fresh repos and reduces visual noise.
-const visible = $derived(archivedPrs.length > 0 || nextCursor !== null);
+const visible = $derived(
+  rawArchivedPrs.length > 0 || nextCursor !== null || fetchState !== "loaded",
+);
 </script>
 
 {#if visible}
@@ -74,7 +87,9 @@ const visible = $derived(archivedPrs.length > 0 || nextCursor !== null);
 		{#if expanded}
 			<div class="archive-body" transition:gsapSlide={{ duration: tokens.smooth }}>
 				{#if archivedPrs.length === 0}
-					<p class="empty">No closed pull requests</p>
+					<p class="empty">
+						{fetchState === "loading" ? 'Loading closed pull requests' : 'No closed pull requests'}
+					</p>
 				{:else}
 					{#each archivedPrs as pr, i (pr.id)}
 						<div
@@ -100,7 +115,7 @@ const visible = $derived(archivedPrs.length > 0 || nextCursor !== null);
 						type="button"
 						class="load-more"
 						disabled={loadingMore}
-						onclick={() => fetchMoreArchived()}
+						onclick={() => fetchMoreArchived(repoId)}
 					>
 						{loadingMore ? 'Loading…' : 'Load more'}
 					</button>

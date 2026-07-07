@@ -17,6 +17,8 @@ import { setBatchSummaries } from "$lib/stores/sync.svelte";
 import { clearOwnerHueCache, preloadOwnerHues } from "$lib/utils/avatarPalette";
 import { fuzzyScore } from "$lib/utils/fuzzy";
 
+const SIDEBAR_ARCHIVE_PAGE_LIMIT = "500";
+
 let pullRequests = $state<PullRequest[]>([]);
 let repositories = $state<Repository[]>([]);
 let availableRepos = $state<Repository[]>([]);
@@ -60,6 +62,9 @@ let archivedNextCursor = $state<string | null>(null);
 // True while a `fetchMoreArchived` request is in flight, so the sidebar
 // can disable the "show more" affordance and show a spinner.
 let archivedLoadingMore = $state(false);
+let archivedNextCursorByRepo = $state<Map<string, string | null>>(new Map());
+let archivedLoadedByRepo = $state<Set<string>>(new Set());
+let archivedLoadingByRepo = $state<Map<string, boolean>>(new Map());
 // Tagged PRs per repo (requested reviewer, @-mentioned, or authored by the
 // current user). Populated by `fetchTaggedPrs` — used by the repo homepage.
 let taggedPrsByRepo = $state<Map<string, PullRequest[]>>(new Map());
@@ -85,18 +90,17 @@ interface RepoDeleteSnapshot {
 // Result ordering: when there's an active query we sort by score (descending)
 // so the strongest matches surface first within each repo group; with no
 // query we preserve the server-provided order.
-const authorFilteredPrs = $derived.by((): PullRequest[] => {
-  if (selectedAuthorLogins.size === 0) return pullRequests;
-  return pullRequests.filter((pr) => selectedAuthorLogins.has(pr.authorLogin));
-});
-
-const filteredPrs = $derived.by((): PullRequest[] => {
+function filterPrsForSidebar(prs: PullRequest[]): PullRequest[] {
+  const authorFiltered =
+    selectedAuthorLogins.size === 0
+      ? prs
+      : prs.filter((pr) => selectedAuthorLogins.has(pr.authorLogin));
   const q = searchQuery.trim();
-  if (q === "") return authorFilteredPrs;
+  if (q === "") return authorFiltered;
 
   const repoMap = new Map(repositories.map((r) => [r.id, r]));
 
-  return authorFilteredPrs
+  return authorFiltered
     .map((pr) => {
       const repoName = repoMap.get(pr.repositoryId)?.fullName ?? "";
       const score = Math.max(
@@ -111,7 +115,14 @@ const filteredPrs = $derived.by((): PullRequest[] => {
     .filter((r) => r.score >= 0)
     .sort((a, b) => b.score - a.score)
     .map((r) => r.pr);
-});
+}
+
+function filterPrsBySelectedAuthors(prs: PullRequest[]): PullRequest[] {
+  if (selectedAuthorLogins.size === 0) return prs;
+  return prs.filter((pr) => selectedAuthorLogins.has(pr.authorLogin));
+}
+
+const filteredPrs = $derived.by((): PullRequest[] => filterPrsForSidebar(pullRequests));
 
 const groupedByRepo = $derived(Map.groupBy(filteredPrs, (pr) => pr.repositoryId));
 
@@ -124,8 +135,6 @@ const needsYourReview = $derived(
 );
 
 const needsYourReviewByRepo = $derived(Map.groupBy(needsYourReview, (pr) => pr.repositoryId));
-
-const archivedByRepo = $derived(Map.groupBy(archivedPrs, (pr) => pr.repositoryId));
 
 const selectedPr = $derived(
   pullRequests.find((pr) => pr.id === selectedPrId) ??
@@ -161,13 +170,13 @@ function toSortedOptions(counts: AuthorAccumulator): PrAuthorFilterOption[] {
     .sort((a, b) => b.count - a.count || a.login.localeCompare(b.login));
 }
 
-// Author options precomputed per repo. Rebuilt only when the open-PR list
-// changes (i.e. on a sync / `prs:updated`), never when the filter popover
-// opens — so clicking the filter is an O(1) lookup of an already-built,
-// reference-stable array, even on repos with hundreds of contributors.
+// Author options precomputed per repo. Rebuilt only when the PR lists change,
+// never when the filter popover opens — so clicking the filter is an O(1)
+// lookup of an already-built, reference-stable array, even on repos with
+// hundreds of contributors.
 const authorOptionsByRepo = $derived.by((): Map<string, PrAuthorFilterOption[]> => {
   const byRepo = new Map<string, AuthorAccumulator>();
-  for (const pr of pullRequests) {
+  for (const pr of [...pullRequests, ...archivedPrs]) {
     let counts = byRepo.get(pr.repositoryId);
     if (!counts) {
       counts = new Map();
@@ -183,18 +192,26 @@ const authorOptionsByRepo = $derived.by((): Map<string, PrAuthorFilterOption[]> 
 const allAuthorOptions = $derived.by((): PrAuthorFilterOption[] => {
   const counts: AuthorAccumulator = new Map();
   for (const pr of pullRequests) tallyAuthor(counts, pr);
+  for (const pr of archivedPrs) tallyAuthor(counts, pr);
   return toSortedOptions(counts);
 });
 
 /**
- * Author options for the raw open-PR list. This intentionally ignores search
- * and the current author filter so the user can recover from an over-narrow
- * view without clearing other controls first. Reads from the precomputed
- * per-repo cache above, so it does no work when the popover opens.
+ * Author options for the raw loaded PR list. This intentionally ignores
+ * search and the current author filter so the user can recover from an
+ * over-narrow view without clearing other controls first. Reads from the
+ * precomputed per-repo cache above, so it does no work when the popover opens.
  */
 export function getAuthorFilterOptions(repoId?: string): PrAuthorFilterOption[] {
   if (!repoId) return allAuthorOptions;
-  return authorOptionsByRepo.get(repoId) ?? [];
+  const repoFullName = repositories.find((repo) => repo.id === repoId)?.fullName;
+  if (!repoFullName) return authorOptionsByRepo.get(repoId) ?? [];
+
+  const counts: AuthorAccumulator = new Map();
+  for (const pr of [...pullRequests, ...archivedPrs]) {
+    if (pr.repositoryId === repoId || pr.repositoryId === repoFullName) tallyAuthor(counts, pr);
+  }
+  return toSortedOptions(counts);
 }
 
 export function getSelectedAuthorLogins(): Set<string> {
@@ -226,8 +243,16 @@ export function getArchivedPrs(): PullRequest[] {
   return archivedPrs;
 }
 
-export function getArchivedByRepo(): Map<string, PullRequest[]> {
-  return archivedByRepo;
+export function getArchivedPrsByRepo(repoId: string): PullRequest[] {
+  const repoFullName = repositories.find((repo) => repo.id === repoId)?.fullName;
+  return filterPrsBySelectedAuthors(
+    archivedPrs.filter((pr) => pr.repositoryId === repoId || pr.repositoryId === repoFullName),
+  );
+}
+
+export function getRawArchivedPrsByRepo(repoId: string): PullRequest[] {
+  const repoFullName = repositories.find((repo) => repo.id === repoId)?.fullName;
+  return archivedPrs.filter((pr) => pr.repositoryId === repoId || pr.repositoryId === repoFullName);
 }
 
 export function getSelectedPr(): PullRequest | null {
@@ -331,6 +356,16 @@ function removeRepoLocally(repoId: string): void {
   }
 }
 
+function mergeArchivedPrs(
+  existing: readonly PullRequest[],
+  incoming: readonly PullRequest[],
+): PullRequest[] {
+  const byId = new Map<string, PullRequest>();
+  for (const pr of existing) byId.set(pr.id, pr);
+  for (const pr of incoming) byId.set(pr.id, pr);
+  return [...byId.values()].sort((a, b) => (b.closedAt ?? "").localeCompare(a.closedAt ?? ""));
+}
+
 export function updateRepoCloneStatus(repoId: string, status: CloneStatus, error?: string): void {
   repositories = repositories.map((r) =>
     r.id === repoId ? { ...r, cloneStatus: status, cloneError: error ?? r.cloneError } : r,
@@ -383,11 +418,33 @@ export async function fetchArchivedPrs(): Promise<void> {
     const { data } = await api.api.prs.archived.get({ query: {} });
     if (data) {
       const page = data as { prs: PullRequest[]; nextCursor: string | null };
-      archivedPrs = page.prs;
+      archivedPrs = mergeArchivedPrs(archivedPrs, page.prs);
       archivedNextCursor = page.nextCursor;
     }
   } catch {
     // best-effort
+  }
+}
+
+export async function fetchArchivedPrsForRepo(repoId: string): Promise<void> {
+  if (archivedLoadedByRepo.has(repoId) || archivedLoadingByRepo.get(repoId)) return;
+  archivedLoadingByRepo = new Map(archivedLoadingByRepo).set(repoId, true);
+  try {
+    const { data } = await api.api.prs.archived.get({
+      query: { repo: repoId, limit: SIDEBAR_ARCHIVE_PAGE_LIMIT },
+    });
+    if (data) {
+      const page = data as { prs: PullRequest[]; nextCursor: string | null };
+      archivedPrs = mergeArchivedPrs(archivedPrs, page.prs);
+      archivedNextCursorByRepo = new Map(archivedNextCursorByRepo).set(repoId, page.nextCursor);
+      archivedLoadedByRepo = new Set(archivedLoadedByRepo).add(repoId);
+    } else {
+      await fetchArchivedPrs();
+    }
+  } catch {
+    await fetchArchivedPrs();
+  } finally {
+    archivedLoadingByRepo = new Map(archivedLoadingByRepo).set(repoId, false);
   }
 }
 
@@ -397,13 +454,16 @@ export async function fetchArchivedPrs(): Promise<void> {
  * the sidebar's "show more" affordance. No-op if there's no cursor
  * (already exhausted) or a fetch is already in flight.
  */
-export async function fetchMoreArchived(): Promise<void> {
-  if (archivedNextCursor === null) return;
-  if (archivedLoadingMore) return;
-  archivedLoadingMore = true;
+export async function fetchMoreArchived(repoId?: string): Promise<void> {
+  const cursor = repoId ? (archivedNextCursorByRepo.get(repoId) ?? null) : archivedNextCursor;
+  const loading = repoId ? (archivedLoadingByRepo.get(repoId) ?? false) : archivedLoadingMore;
+  if (cursor === null) return;
+  if (loading) return;
+  if (repoId) archivedLoadingByRepo = new Map(archivedLoadingByRepo).set(repoId, true);
+  else archivedLoadingMore = true;
   try {
     const { data } = await api.api.prs.archived.get({
-      query: { cursor: archivedNextCursor },
+      query: repoId ? { repo: repoId, cursor, limit: SIDEBAR_ARCHIVE_PAGE_LIMIT } : { cursor },
     });
     if (data) {
       const page = data as { prs: PullRequest[]; nextCursor: string | null };
@@ -411,22 +471,35 @@ export async function fetchMoreArchived(): Promise<void> {
       // landed between request and response.
       const existingIds = new Set(archivedPrs.map((p) => p.id));
       const fresh = page.prs.filter((p) => !existingIds.has(p.id));
-      archivedPrs = [...archivedPrs, ...fresh];
-      archivedNextCursor = page.nextCursor;
+      archivedPrs = mergeArchivedPrs(archivedPrs, fresh);
+      if (repoId) {
+        archivedNextCursorByRepo = new Map(archivedNextCursorByRepo).set(repoId, page.nextCursor);
+      } else {
+        archivedNextCursor = page.nextCursor;
+      }
     }
   } catch {
     // best-effort — leave cursor in place so the user can retry
   } finally {
-    archivedLoadingMore = false;
+    if (repoId) archivedLoadingByRepo = new Map(archivedLoadingByRepo).set(repoId, false);
+    else archivedLoadingMore = false;
   }
 }
 
-export function getArchivedNextCursor(): string | null {
+export function getArchivedNextCursor(repoId?: string): string | null {
+  if (repoId) return archivedNextCursorByRepo.get(repoId) ?? null;
   return archivedNextCursor;
 }
 
-export function getArchivedLoadingMore(): boolean {
+export function getArchivedLoadingMore(repoId?: string): boolean {
+  if (repoId) return archivedLoadingByRepo.get(repoId) ?? false;
   return archivedLoadingMore;
+}
+
+export function getArchivedFetchStateForRepo(repoId: string): "idle" | "loading" | "loaded" {
+  if (archivedLoadingByRepo.get(repoId)) return "loading";
+  if (archivedLoadedByRepo.has(repoId)) return "loaded";
+  return "idle";
 }
 
 export function isPrPinned(prId: string): boolean {
@@ -979,5 +1052,8 @@ export function reset(): void {
   archivedPrs = [];
   archivedNextCursor = null;
   archivedLoadingMore = false;
+  archivedNextCursorByRepo = new Map();
+  archivedLoadedByRepo = new Set();
+  archivedLoadingByRepo = new Map();
   pinnedPrIds = new Set();
 }

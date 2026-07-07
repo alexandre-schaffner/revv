@@ -6,6 +6,7 @@ import { NotFoundError, ValidationError } from "../domain/errors";
 import { DbService } from "./Db";
 import { extractGitHubMentions } from "./sync-engine/mentions";
 import type { SyncWatermark } from "./sync-engine/watermark";
+import { debug } from "../logger";
 
 function rowToPr(
   row: typeof pullRequests.$inferSelect,
@@ -388,16 +389,29 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
         MAX_ARCHIVE_PAGE_LIMIT,
       );
 
-      const repoIds = accountId
+      const accountRepos = accountId
         ? db
-            .select({ id: repositories.id })
+            .select({ id: repositories.id, fullName: repositories.fullName })
             .from(repositories)
             .where(eq(repositories.accountId, accountId))
             .all()
-            .map((r) => r.id)
         : null;
+      
+      debug("prs-archived", "accountRepos for accountId", accountId, "=", JSON.stringify(accountRepos?.map((r) => r.fullName)));
+      const repoKeys = accountRepos?.flatMap((r) => [r.id, r.fullName]) ?? null;
 
-      if (accountId && (!repoIds || repoIds.length === 0)) {
+      if (accountId && (!repoKeys || repoKeys.length === 0)) {
+        return { prs: [], nextCursor: null };
+      }
+
+      const requestedRepoKeys =
+        params?.repoId !== undefined && accountRepos
+          ? (accountRepos
+              .filter((r) => r.id === params.repoId || r.fullName === params.repoId)
+              .flatMap((r) => [r.id, r.fullName]) as string[])
+          : null;
+
+      if (params?.repoId !== undefined && accountRepos && requestedRepoKeys?.length === 0) {
         return { prs: [], nextCursor: null };
       }
 
@@ -410,10 +424,12 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
             | ReturnType<typeof lt>
             | ReturnType<typeof inArray>
           )[] = [ne(pullRequests.status, "open")];
-          if (repoIds && repoIds.length > 0) {
-            conditions.push(inArray(pullRequests.repositoryId, repoIds));
+          if (repoKeys && repoKeys.length > 0) {
+            conditions.push(inArray(pullRequests.repositoryId, repoKeys));
           }
-          if (params?.repoId !== undefined) {
+          if (requestedRepoKeys && requestedRepoKeys.length > 0) {
+            conditions.push(inArray(pullRequests.repositoryId, requestedRepoKeys));
+          } else if (params?.repoId !== undefined) {
             conditions.push(eq(pullRequests.repositoryId, params.repoId));
           }
           if (params?.since !== undefined) {
@@ -452,9 +468,14 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
           const trimmed = hasMore ? rows.slice(0, limit) : rows;
           const lastRow = trimmed[trimmed.length - 1];
           const nextCursor = hasMore && lastRow ? (lastRow.pr.closedAt ?? null) : null;
+          const repoIdByFullName = new Map(accountRepos?.map((r) => [r.fullName, r.id]) ?? []);
 
           return {
-            prs: trimmed.map((r) => rowToPr(r.pr, r.avatarContent)),
+            prs: trimmed.map((r) => {
+              const pr = rowToPr(r.pr, r.avatarContent);
+              const canonicalRepoId = repoIdByFullName.get(pr.repositoryId);
+              return canonicalRepoId ? { ...pr, repositoryId: canonicalRepoId } : pr;
+            }),
             nextCursor,
           };
         },

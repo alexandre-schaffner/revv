@@ -47,8 +47,8 @@ const selectedLabel = $derived(
       : `${selectedCount} creators`,
 );
 
-// Teams for the repo's owning org, narrowed to members who actually have an
-// open PR here — a team you can't filter anyone down to isn't worth showing.
+// Teams for the repo's owning org, narrowed to members who actually have a
+// loaded PR here — a team you can't filter anyone down to isn't worth showing.
 const owner = $derived(repoId ? getRepoOwner(repoId) : null);
 const teamsFetchState = $derived(owner ? getTeamsFetchStateForOrg(owner) : "idle");
 const optionLoginByKey = $derived(
@@ -221,7 +221,7 @@ function retryTeams(): void {
 										class:author-option--checked={checked}
 										onclick={() => toggleTeam(team.members)}
 										aria-pressed={checked}
-										title={`Everyone on @${team.name} with an open PR`}
+										title={`Everyone on @${team.name} with a PR`}
 									>
 										<span class="check-slot" aria-hidden="true">
 											{#if checked}

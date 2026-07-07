@@ -139,13 +139,24 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
           const n = Number(ctx.query.limit);
           if (Number.isFinite(n) && n > 0) params.limit = Math.floor(n);
         }
-        return await AppRuntime.runPromise(
+        const result = await AppRuntime.runPromise(
           Effect.gen(function* () {
             const prService = yield* PullRequestService;
             const { accountId } = ctx.account;
             return yield* prService.listArchivedPrs(accountId, params);
           }),
         );
+        // TEMP DEBUG — remove after diagnosing empty closed-PR list.
+        try {
+          const { appendFileSync } = await import("node:fs");
+          appendFileSync(
+            "/tmp/revv-archived-debug.log",
+            `${new Date().toISOString()} repo=${ctx.query.repo ?? "(none)"} host=${ctx.query.host ?? "(none)"} accountId=${ctx.account.accountId} returned=${result.prs.length} repoIds=${[...new Set(result.prs.map((p) => p.repositoryId))].join(",")}\n`,
+          );
+        } catch {
+          // ignore debug-logging failures
+        }
+        return result;
       } catch (e) {
         return handleAppError(e, ctx);
       }
@@ -157,6 +168,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
         until: t.Optional(t.String()),
         cursor: t.Optional(t.String()),
         limit: t.Optional(t.String()),
+        host: t.Optional(t.String()),
       }),
     },
   )
