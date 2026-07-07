@@ -61,6 +61,7 @@ export type LocalAccount = {
 
 let _connectedAccounts = $state<ConnectedAccount[]>([]);
 let localAccounts = $state<LocalAccount[]>([]);
+let localAccountsLoaded = $state(typeof localStorage === "undefined");
 let accountJustRemoved = $state(false);
 
 /**
@@ -88,6 +89,10 @@ export function clearReauthRequired(): void {
 
 export function getLocalAccounts(): LocalAccount[] {
   return localAccounts;
+}
+
+export function getLocalAccountsLoaded(): boolean {
+  return localAccountsLoaded;
 }
 
 export function getAccountJustRemoved(): boolean {
@@ -508,6 +513,8 @@ export async function fetchLocalAccounts(): Promise<void> {
     }
   } catch {
     // best-effort
+  } finally {
+    localAccountsLoaded = true;
   }
 }
 
