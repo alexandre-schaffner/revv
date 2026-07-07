@@ -27,6 +27,9 @@ let isLoading = $state(false);
 let isSwitching = $state(false);
 let error = $state<string | null>(null);
 
+export type SignInErrorCode = "invalid_github_client_id" | "missing_github_client_id";
+let signInErrorCode = $state<SignInErrorCode | null>(null);
+
 let deviceFlow = $state<{
   userCode: string;
   verificationUri: string;
@@ -133,6 +136,10 @@ export function getError(): string | null {
   return error;
 }
 
+export function getSignInErrorCode(): SignInErrorCode | null {
+  return signInErrorCode;
+}
+
 export function getDeviceFlow(): typeof deviceFlow {
   return deviceFlow;
 }
@@ -153,13 +160,21 @@ export function clearToken(): void {
   // a dead session strands the modal with no account behind it.
   reauthRequired = null;
   error = null;
+  signInErrorCode = null;
   if (typeof localStorage !== "undefined") {
     localStorage.removeItem("rev_session_token");
   }
 }
 
-export async function signIn(host?: string): Promise<void> {
+function parseSignInErrorCode(value: unknown): SignInErrorCode | null {
+  return value === "missing_github_client_id" || value === "invalid_github_client_id"
+    ? value
+    : null;
+}
+
+export async function signIn(host?: string): Promise<boolean> {
   error = null;
+  signInErrorCode = null;
   isLoading = true;
   try {
     const res = await fetch(`${API_BASE_URL}/api/auth/device/init`, {
@@ -175,8 +190,9 @@ export async function signIn(host?: string): Promise<void> {
       const body = await res.text().catch(() => "");
       let detail = body.trim();
       try {
-        const parsed = JSON.parse(body) as { error?: string };
+        const parsed = JSON.parse(body) as { error?: string; code?: unknown };
         if (parsed?.error) detail = parsed.error;
+        signInErrorCode = parseSignInErrorCode(parsed?.code);
       } catch {
         /* plain-text body — use as-is */
       }
@@ -209,8 +225,10 @@ export async function signIn(host?: string): Promise<void> {
       // Opening browser is best-effort
     }
     startPolling();
+    return true;
   } catch (e) {
     error = `Failed to start sign-in: ${e instanceof Error ? e.message : String(e)}`;
+    return false;
   } finally {
     isLoading = false;
   }
@@ -231,6 +249,7 @@ async function poll(): Promise<void> {
 
   if (Date.now() > deviceFlow.expiresAt) {
     error = "Sign-in timed out. Please try again.";
+    signInErrorCode = null;
     cancelSignIn();
     return;
   }
@@ -305,6 +324,7 @@ async function poll(): Promise<void> {
           : data.error
             ? `Sign-in failed: ${data.error}`
             : "Sign-in failed. Please try again.";
+    signInErrorCode = null;
     cancelSignIn();
   } catch {
     // Network error — retry after current interval
@@ -321,6 +341,7 @@ export function cancelSignIn(): void {
 
 export function clearError(): void {
   error = null;
+  signInErrorCode = null;
 }
 
 export async function loadUser(): Promise<void> {

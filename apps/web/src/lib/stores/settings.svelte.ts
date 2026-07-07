@@ -63,6 +63,10 @@ export async function setGithubConfig(host: string, clientId: string): Promise<v
   await updateSettings({ githubHost: host, githubClientId: clientId });
 }
 
+export async function setGithubConfigStrict(host: string, clientId: string): Promise<void> {
+  await updateSettings({ githubHost: host, githubClientId: clientId }, { strict: true });
+}
+
 /**
  * Read the cached model list for a given agent (or the currently selected
  * agent when `agent` is omitted). Returns an empty array if models have not
@@ -104,7 +108,36 @@ export type SettingsUpdate = Partial<Omit<UserSettings, "id" | "recap" | "cache"
   };
 };
 
-export async function updateSettings(partial: SettingsUpdate): Promise<void> {
+type UpdateSettingsOptions = {
+  /**
+   * Most settings controls are optimistic/best-effort. Recovery flows can opt
+   * into strict mode to rollback local state and surface persistence failures.
+   */
+  strict?: boolean;
+};
+
+function settingsErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === "object") {
+    const value = "value" in error ? (error as { value?: unknown }).value : error;
+    if (value && typeof value === "object" && "message" in value) {
+      const message = (value as { message?: unknown }).message;
+      if (typeof message === "string") return message;
+    }
+    try {
+      return JSON.stringify(value);
+    } catch {
+      // fall through
+    }
+  }
+  return String(error);
+}
+
+export async function updateSettings(
+  partial: SettingsUpdate,
+  options: UpdateSettingsOptions = {},
+): Promise<void> {
+  const previous = settings;
   // Optimistic local merge — apply the partial immediately so concurrent calls
   // (e.g. model + context-window in the same popover session) don't clobber each
   // other when server responses arrive out of order. `recap` and `cache` are
@@ -137,11 +170,16 @@ export async function updateSettings(partial: SettingsUpdate): Promise<void> {
     invalidateSuggestions();
   }
   try {
-    await api.api.settings.put(partial as Record<string, unknown>);
+    const result = await api.api.settings.put(partial as Record<string, unknown>);
+    if (result.error) throw new Error(settingsErrorMessage(result.error));
     // Intentionally ignore the response body: merging a full settings object
     // here would reintroduce the race described above.
-  } catch {
-    // handle silently
+  } catch (e) {
+    if (options.strict) {
+      settings = previous;
+      throw e instanceof Error ? e : new Error(settingsErrorMessage(e));
+    }
+    // Non-strict settings controls are best-effort.
   }
 }
 

@@ -78,6 +78,7 @@ export {
 } from "./constants";
 export type { ServerEventMessage, WalkthroughEventEnvelope } from "./events";
 export * from "./events";
+export { GITHUB_CLIENT_ID_HINT, isLikelyGitHubClientId } from "./github-client-id";
 export { guessImageContentType, isImagePath } from "./images";
 export { isMaintainerLogin, MAINTAINER_LOGINS } from "./maintainers";
 export { detectMentionTrigger, extractMentionTokens, type MentionTrigger } from "./mentions";

@@ -8,7 +8,9 @@ import { remoteUsers } from "../db/schema/remote-users";
 import {
   clientIdForHost,
   clientIdIsGitHubApp,
+  InvalidGitHubClientIdError,
   isPublicGitHub,
+  MissingGitHubClientIdError,
   tokenUrlForHost,
 } from "../github-oauth";
 import { logError } from "../logger";
@@ -77,6 +79,56 @@ async function resolveGithubUrls(hostOverride?: string): Promise<{
     tokenUrl: tokenUrlForHost(host),
     userUrl: `${apiBase}/user`,
     emailsUrl: `${apiBase}/user/emails`,
+  };
+}
+
+type GitHubClientIdErrorCode =
+  | MissingGitHubClientIdError["code"]
+  | InvalidGitHubClientIdError["code"];
+
+function isGitHubClientIdError(
+  e: unknown,
+): e is MissingGitHubClientIdError | InvalidGitHubClientIdError {
+  return e instanceof MissingGitHubClientIdError || e instanceof InvalidGitHubClientIdError;
+}
+
+function githubClientIdErrorBody(e: MissingGitHubClientIdError | InvalidGitHubClientIdError): {
+  error: string;
+  code: GitHubClientIdErrorCode;
+  host: string;
+} {
+  return { error: e.message, code: e.code, host: e.host };
+}
+
+async function resolveGithubUrlsForDeviceAuth(
+  hostOverride: string | undefined,
+  status: (
+    code: 400,
+    body: { error: string; code: GitHubClientIdErrorCode; host: string },
+  ) => unknown,
+): Promise<
+  | { ok: true; urls: Awaited<ReturnType<typeof resolveGithubUrls>> }
+  | { ok: false; response: unknown }
+> {
+  try {
+    return { ok: true, urls: await resolveGithubUrls(hostOverride) };
+  } catch (e) {
+    if (isGitHubClientIdError(e)) {
+      return { ok: false, response: status(400, githubClientIdErrorBody(e)) };
+    }
+    throw e;
+  }
+}
+
+function rejectedClientIdBody(host: string): {
+  error: string;
+  code: InvalidGitHubClientIdError["code"];
+  host: string;
+} {
+  return {
+    error: `GitHub rejected the client ID for ${host}. Check that it was copied from the GitHub App or OAuth App registered on that host.`,
+    code: "invalid_github_client_id",
+    host,
   };
 }
 
@@ -495,7 +547,9 @@ const publicAuthRoutes = new Elysia()
   .post(
     "/api/auth/device/init",
     async ({ body, status }) => {
-      const urls = await resolveGithubUrls(body?.host);
+      const resolved = await resolveGithubUrlsForDeviceAuth(body?.host, status);
+      if (!resolved.ok) return resolved.response;
+      const { urls } = resolved;
       const res = await fetch(urls.deviceCodeUrl, {
         method: "POST",
         headers: { Accept: "application/json", "Content-Type": "application/json" },
@@ -514,6 +568,9 @@ const publicAuthRoutes = new Elysia()
           `GitHub device code request failed: ${res.status} ${res.statusText}`,
           text,
         );
+        if (res.status === 400 || res.status === 401) {
+          return status(400, rejectedClientIdBody(urls.host));
+        }
         return status(502, { error: "Failed to initiate device flow" });
       }
 
@@ -545,7 +602,9 @@ const publicAuthRoutes = new Elysia()
         }
       }
 
-      const urls = await resolveGithubUrls(body.host);
+      const resolved = await resolveGithubUrlsForDeviceAuth(body.host, status);
+      if (!resolved.ok) return resolved.response;
+      const { urls } = resolved;
       // Per GitHub's docs, device-flow token exchange does not take a
       // client_secret — only client_id, device_code, and grant_type.
       const res = await fetch(urls.tokenUrl, {

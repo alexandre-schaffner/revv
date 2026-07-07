@@ -86,7 +86,7 @@ async function copyCode() {
 		{/if}
 		<button
 			class="flex cursor-pointer items-center gap-2 rounded-lg border border-border bg-bg-elevated px-4 py-2.5 text-sm font-medium text-text-primary transition-colors hover:bg-bg-tertiary disabled:cursor-not-allowed disabled:opacity-50"
-			onclick={() => signIn()}
+			onclick={() => void signIn()}
 			disabled={isLoading}
 		>
 			{#if isLoading}
