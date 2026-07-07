@@ -378,9 +378,31 @@ export async function fetchPrs(): Promise<void> {
   }
 }
 
+/**
+ * Serialize the active creator/team filter into the `authors` query param the
+ * archived endpoint expects (comma-separated logins). Returns `undefined` when
+ * no filter is active so the server applies no author restriction. Keeps
+ * `selectedAuthorLogins` the single source of truth for both the open and
+ * closed lists.
+ */
+function archivedAuthorsParam(): string | undefined {
+  if (selectedAuthorLogins.size === 0) return undefined;
+  return [...selectedAuthorLogins].join(",");
+}
+
+// Guards against out-of-order archived reloads: rapid filter toggles can fire
+// overlapping `fetchArchivedPrs` calls, and only the latest one's result should
+// win. Each call captures the token; a stale response is discarded.
+let archivedFetchToken = 0;
+
 export async function fetchArchivedPrs(): Promise<void> {
+  const token = ++archivedFetchToken;
   try {
-    const { data } = await api.api.prs.archived.get({ query: {} });
+    const authors = archivedAuthorsParam();
+    const { data } = await api.api.prs.archived.get({
+      query: authors === undefined ? {} : { authors },
+    });
+    if (token !== archivedFetchToken) return; // superseded by a newer reload
     if (data) {
       const page = data as { prs: PullRequest[]; nextCursor: string | null };
       archivedPrs = page.prs;
@@ -402,8 +424,12 @@ export async function fetchMoreArchived(): Promise<void> {
   if (archivedLoadingMore) return;
   archivedLoadingMore = true;
   try {
+    const authors = archivedAuthorsParam();
     const { data } = await api.api.prs.archived.get({
-      query: { cursor: archivedNextCursor },
+      query:
+        authors === undefined
+          ? { cursor: archivedNextCursor }
+          : { cursor: archivedNextCursor, authors },
     });
     if (data) {
       const page = data as { prs: PullRequest[]; nextCursor: string | null };
@@ -503,7 +529,12 @@ export function onPrArchived(data: {
     if (!existing) return;
     const archived = { ...existing, status: data.status, closedAt: data.closedAt };
     pullRequests = [...pullRequests.slice(0, openIdx), ...pullRequests.slice(openIdx + 1)];
-    archivedPrs = [archived, ...archivedPrs];
+    // Respect the active creator/team filter: the archived list is a
+    // server-filtered view, so a newly-closed PR whose author is filtered out
+    // must not pop into it. It's already gone from the open list above.
+    if (selectedAuthorLogins.size === 0 || selectedAuthorLogins.has(archived.authorLogin)) {
+      archivedPrs = [archived, ...archivedPrs];
+    }
   }
   // PR not known locally — wait for the `prs:updated` reconcile.
 }
@@ -547,6 +578,7 @@ export function toggleAuthorFilter(login: string): void {
   if (next.has(login)) next.delete(login);
   else next.add(login);
   selectedAuthorLogins = next;
+  void fetchArchivedPrs();
 }
 
 /**
@@ -563,11 +595,13 @@ export function setAuthorFilters(logins: readonly string[], selected: boolean): 
     else next.delete(login);
   }
   selectedAuthorLogins = next;
+  void fetchArchivedPrs();
 }
 
 export function clearAuthorFilters(): void {
   if (selectedAuthorLogins.size === 0) return;
   selectedAuthorLogins = new Set();
+  void fetchArchivedPrs();
 }
 
 export function getTeamsForOrg(owner: string): Team[] {
