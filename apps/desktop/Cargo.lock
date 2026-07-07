@@ -3501,7 +3501,7 @@ dependencies = [
 
 [[package]]
 name = "revv-desktop"
-version = "0.15.1"
+version = "0.16.0"
 dependencies = [
  "serde_json",
  "tauri",
