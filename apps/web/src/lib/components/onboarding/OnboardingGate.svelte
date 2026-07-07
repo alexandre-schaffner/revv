@@ -7,6 +7,7 @@ import {
   getIsAuthenticated,
   getIsOnboarded,
   getLocalAccounts,
+  getLocalAccountsLoaded,
   getToken,
   getUser,
   resetForceOnboardingFlow,
@@ -35,20 +36,23 @@ const authed = $derived(getIsAuthenticated());
 const onboarded = $derived(getIsOnboarded());
 const hasUser = $derived(getUser() !== null);
 const localAccounts = $derived(getLocalAccounts());
+const localAccountsLoaded = $derived(getLocalAccountsLoaded());
+const hasLocalConnectedAccount = $derived(localAccounts.some((la) => la.accounts.length > 0));
 
 // During a fresh page load with a stored token but no user payload yet,
 // `authed` is true but `onboarded` is false because the identity request
 // hasn't returned. Showing onboarding in that window would flash the
 // welcome screen for an already-onboarded user. Hold the gate's decision
-// until either the user payload lands OR we can confirm there's no token.
-const ready = $derived(getToken() === null || hasUser);
+// until either the user payload lands OR, for signed-out boots, local
+// account detection has resolved so returning users go straight to picker.
+const ready = $derived(getToken() === null ? localAccountsLoaded : hasUser);
 
 let showApp = $derived(authed && onboarded);
 const forceFlow = $derived(getForceOnboardingFlow());
 // Show the account picker when: not authenticated, but local accounts exist on this machine
 // Suppress picker when the account was just removed or force flag is set — fall through to OnboardingFlow instead
 let showPicker = $derived(
-  !authed && localAccounts.length > 0 && !getAccountJustRemoved() && !forceFlow,
+  !authed && hasLocalConnectedAccount && !getAccountJustRemoved() && !forceFlow,
 );
 
 // User can dismiss the picker to reach the full onboarding flow
