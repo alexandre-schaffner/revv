@@ -1,3 +1,4 @@
+import { GITHUB_CLIENT_ID_HINT, isLikelyGitHubClientId } from "@revv/shared";
 import { serverEnv } from "./config";
 
 /**
@@ -52,6 +53,18 @@ export class MissingGitHubClientIdError extends Error {
   }
 }
 
+export class InvalidGitHubClientIdError extends Error {
+  readonly code = "invalid_github_client_id";
+
+  constructor(
+    readonly host: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "InvalidGitHubClientIdError";
+  }
+}
+
 /**
  * Client_id for a host.
  *
@@ -70,7 +83,15 @@ export class MissingGitHubClientIdError extends Error {
 export function clientIdForHost(host: string, customClientId?: string | null): string {
   if (usesGitHubApp(host)) return serverEnv.githubAppClientId;
   const custom = customClientId?.trim();
-  if (custom) return custom;
+  if (custom) {
+    if (!isLikelyGitHubClientId(custom)) {
+      throw new InvalidGitHubClientIdError(
+        host,
+        `The GitHub App or OAuth App client ID for ${host} is not valid. ${GITHUB_CLIENT_ID_HINT}`,
+      );
+    }
+    return custom;
+  }
   if (isPublicGitHub(host)) {
     if (!serverEnv.githubClientIdPublic) {
       throw new MissingGitHubClientIdError(

@@ -1,4 +1,5 @@
 <script lang="ts">
+import { GITHUB_CLIENT_ID_HINT, isLikelyGitHubClientId } from "@revv/shared";
 import { GithubLogo, WarningCircle } from "phosphor-svelte";
 import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
 import {
@@ -27,7 +28,9 @@ const needsClientId = $derived(
   Boolean(
     reauth?.host &&
       reauth.host !== "github.com" &&
-      (signInErrorCode === "missing_github_client_id" || clientIdError),
+      (signInErrorCode === "missing_github_client_id" ||
+        signInErrorCode === "invalid_github_client_id" ||
+        clientIdError),
   ),
 );
 
@@ -50,6 +53,11 @@ async function saveClientIdAndRetry(): Promise<void> {
   if (!host || !trimmed || isSavingClientId) return;
 
   clientIdError = null;
+  if (!isLikelyGitHubClientId(trimmed)) {
+    clientIdError = GITHUB_CLIENT_ID_HINT;
+    return;
+  }
+
   isSavingClientId = true;
   try {
     await setGithubConfigStrict(host, trimmed);

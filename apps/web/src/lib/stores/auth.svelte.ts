@@ -27,7 +27,7 @@ let isLoading = $state(false);
 let isSwitching = $state(false);
 let error = $state<string | null>(null);
 
-export type SignInErrorCode = "missing_github_client_id";
+export type SignInErrorCode = "invalid_github_client_id" | "missing_github_client_id";
 let signInErrorCode = $state<SignInErrorCode | null>(null);
 
 let deviceFlow = $state<{
@@ -167,7 +167,9 @@ export function clearToken(): void {
 }
 
 function parseSignInErrorCode(value: unknown): SignInErrorCode | null {
-  return value === "missing_github_client_id" ? value : null;
+  return value === "missing_github_client_id" || value === "invalid_github_client_id"
+    ? value
+    : null;
 }
 
 export async function signIn(host?: string): Promise<boolean> {
