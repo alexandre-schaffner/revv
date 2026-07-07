@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.0](https://github.com/alexandre-schaffner/revv/compare/v0.15.3...v0.16.0) (2026-07-07)
+
+
+### Features
+
+* Worktree filter closed prs by creator ([#159](https://github.com/alexandre-schaffner/revv/issues/159)) ([a00d3d9](https://github.com/alexandre-schaffner/revv/commit/a00d3d96a29bd791b131a36ea8d57015e32851d9))
+
 ## [0.15.3](https://github.com/alexandre-schaffner/revv/compare/v0.15.2...v0.15.3) (2026-07-07)
 
 
