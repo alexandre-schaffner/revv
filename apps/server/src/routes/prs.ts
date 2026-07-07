@@ -130,6 +130,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
           until?: string;
           cursor?: string;
           limit?: number;
+          authorLogins?: string[];
         } = {};
         if (ctx.query.repo !== undefined) params.repoId = ctx.query.repo;
         if (ctx.query.since !== undefined) params.since = ctx.query.since;
@@ -138,6 +139,13 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
         if (ctx.query.limit !== undefined) {
           const n = Number(ctx.query.limit);
           if (Number.isFinite(n) && n > 0) params.limit = Math.floor(n);
+        }
+        if (ctx.query.authors !== undefined) {
+          // Comma-separated author logins. GitHub logins never contain commas,
+          // so a plain split is safe. Empty segments (e.g. trailing comma) are
+          // dropped so an all-empty value behaves as "no author filter".
+          const logins = ctx.query.authors.split(",").filter((s) => s.length > 0);
+          if (logins.length > 0) params.authorLogins = logins;
         }
         return await AppRuntime.runPromise(
           Effect.gen(function* () {
@@ -157,6 +165,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
         until: t.Optional(t.String()),
         cursor: t.Optional(t.String()),
         limit: t.Optional(t.String()),
+        authors: t.Optional(t.String()),
       }),
     },
   )

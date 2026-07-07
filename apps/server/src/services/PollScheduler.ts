@@ -79,7 +79,12 @@ export const PollSchedulerLive = Layer.effect(
     // cached avatar bytes (`repositories.avatar_content`) right after boot,
     // instead of leaving stale/blank icons for up to an hour.
     let lastMetadataRefreshAt = 0;
-    let lastArchiveBackfillAt = Date.now();
+    // Seed to 0 (not `Date.now()`) so the archive backfill runs on the first
+    // poll after boot rather than waiting a full interval. Without this a fresh
+    // mirror shows no closed/merged PRs for the first hour, and in dev — where
+    // the server restarts more often than once an hour — the backfill would
+    // never run at all, leaving the archive populated only by live closures.
+    let lastArchiveBackfillAt = 0;
 
     // Bind the captured db handle for convenience
     const withDb = <A, E>(eff: Effect.Effect<A, E, DbService>) => withDbHelper(db, eff);
@@ -710,7 +715,14 @@ export const PollSchedulerLive = Layer.effect(
           if (shouldRunArchiveBackfill) {
             lastArchiveBackfillAt = Date.now();
             const ARCHIVE_BACKFILL_DAYS = 7;
-            const ARCHIVE_BACKFILL_MAX_FETCHES_PER_REPO = 25;
+            // Sized to cover the full backfill window in a single cycle for an
+            // active repo (~13 closed PRs/day × 7 days ≈ 90, with headroom).
+            // The search returns the whole window; this caps how many missing
+            // rows we individually fetch per repo per cycle. At 25 a busy repo
+            // only imported ~2 days per cycle, so a fresh mirror never showed
+            // the whole week. Only ever fetches PRs not already mirrored, so
+            // the cost is a bounded one-time burst that converges to near-zero.
+            const ARCHIVE_BACKFILL_MAX_FETCHES_PER_REPO = 150;
             const backfillSinceIso = new Date(
               Date.now() - ARCHIVE_BACKFILL_DAYS * 24 * 60 * 60 * 1000,
             ).toISOString();
