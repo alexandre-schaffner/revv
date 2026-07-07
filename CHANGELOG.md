@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.3](https://github.com/alexandre-schaffner/revv/compare/v0.15.2...v0.15.3) (2026-07-07)
+
+
+### Bug Fixes
+
+* **cli:** read DB from app-data dir, not INSTALL_DIR ([#162](https://github.com/alexandre-schaffner/revv/issues/162)) ([4febd34](https://github.com/alexandre-schaffner/revv/commit/4febd349b609f7bc25642e9fb8e6922a5419fd4c))
+
 ## [0.15.2](https://github.com/alexandre-schaffner/revv/compare/v0.15.1...v0.15.2) (2026-07-07)
 
 
