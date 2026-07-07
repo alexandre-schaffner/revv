@@ -64,6 +64,28 @@ export async function setGithubConfig(host: string, clientId: string): Promise<v
 }
 
 /**
+ * Persist GitHub host/client ID and surface failures to callers that need a
+ * hard recovery path, such as reauth after an upgrade. Most settings controls
+ * intentionally use `updateSettings`, which remains best-effort/optimistic.
+ */
+export async function setGithubConfigStrict(host: string, clientId: string): Promise<void> {
+  const partial = { githubHost: host, githubClientId: clientId };
+  const previous = settings;
+  if (settings) settings = { ...settings, ...partial };
+
+  const res = await fetch(`${API_BASE_URL}/api/settings`, {
+    method: "PUT",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify(partial),
+  });
+  if (!res.ok) {
+    settings = previous;
+    const detail = await res.text().catch(() => "");
+    throw new Error(detail.trim() || `Failed to save GitHub settings (HTTP ${res.status})`);
+  }
+}
+
+/**
  * Read the cached model list for a given agent (or the currently selected
  * agent when `agent` is omitted). Returns an empty array if models have not
  * been fetched yet — callers can use `areModelsLoaded` to disambiguate
