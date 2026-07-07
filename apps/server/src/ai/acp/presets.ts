@@ -13,6 +13,7 @@ import {
   type ContextWindow,
   getAcpAgent,
   getAgentCapabilities,
+  getAgentCredentials,
   isAcpAgentId,
   type ThinkingEffort,
 } from "@revv/shared";
@@ -72,6 +73,73 @@ const CLAUDE_THINKING_TOKENS: Record<ThinkingEffort, number> = {
   ultrathink: 64_000,
 };
 
+// ── ACP agent credentials (agent-agnostic auth) ──────────────────────────────
+//
+// In-memory cache of per-agent credential env vars (`agentId → { ENV_VAR: value }`),
+// seeded from SQLite at boot by `SettingsServiceLive` and refreshed on every
+// connect/disconnect. SQLite stays authoritative (see the agent-subsystem
+// invariants); this is a reconstructible cache read synchronously at spawn time.
+// Each declared credential (see `ACP_AGENTS[].credentials`) is injected as its
+// env var into the subprocess so the packaged LaunchAgent — which runs with a
+// sparse env and can't reach the OS keychain where CLIs stash their interactive
+// login — can authenticate. Without it, chat 401s and generation dies with
+// "ACP connection closed".
+type AgentCredentialMap = Record<string, Record<string, string>>;
+let agentCredentialCache: AgentCredentialMap = {};
+
+/** Replace the cached credential map (called at boot and on every write). */
+export function setAgentCredentialCache(map: AgentCredentialMap): void {
+  agentCredentialCache = map;
+}
+
+/** The stored value for one agent credential env var, or null. */
+function storedCredential(agent: AcpAgentId, envVar: string): string | null {
+  const value = agentCredentialCache[agent]?.[envVar]?.trim();
+  return value && value.length > 0 ? value : null;
+}
+
+/**
+ * Whether the inherited environment already proves the agent is authenticated —
+ * its own env var, or any `alsoSatisfiedBy` var. Used ONLY for the missing/hint
+ * check, NOT to gate injection: an `alsoSatisfiedBy` var may be a hazard we want
+ * to override (see the field's doc), so injection keys off the own var alone.
+ */
+function credentialAuthedByEnv(cred: {
+  envVar: string;
+  alsoSatisfiedBy?: readonly string[];
+}): boolean {
+  return [cred.envVar, ...(cred.alsoSatisfiedBy ?? [])].some((v) => Boolean(process.env[v]));
+}
+
+/**
+ * True when the agent declares credentials but none are satisfied — neither a
+ * Revv-stored value nor a satisfying inherited env var for any of them. Used to
+ * turn an opaque 401 / "ACP connection closed" into an actionable "connect it"
+ * hint. Agents that declare no credentials (they self-authenticate) are never
+ * missing.
+ */
+export function agentCredentialsMissing(agent: AcpAgentId): boolean {
+  const creds = getAgentCredentials(agent);
+  if (creds.length === 0) return false;
+  return creds.every((c) => !storedCredential(agent, c.envVar) && !credentialAuthedByEnv(c));
+}
+
+/**
+ * Append an actionable connect hint to a raw ACP error when it's likely an auth
+ * failure — either the agent has no credential configured, or the message looks
+ * like an auth/connection error (401, "ACP connection closed", expired token).
+ */
+export function withAgentAuthHint(agent: AcpAgentId, rawMessage: string): string {
+  const creds = getAgentCredentials(agent);
+  if (creds.length === 0) return rawMessage;
+  const looksAuth = /401|unauthor|authenticat|invalid api key|oauth|connection closed/i.test(
+    rawMessage,
+  );
+  if (!agentCredentialsMissing(agent) && !looksAuth) return rawMessage;
+  const labels = creds.map((c) => c.label).join(" / ");
+  return `${rawMessage}\n\nConnect ${getAcpAgent(agent).label} in Settings (add the ${labels}), then retry.`;
+}
+
 /**
  * Apply the `REVV_ACP_AGENT` env override (a testing / power-user knob) over a
  * persisted agent id. Returns the override when it names a valid registry agent,
@@ -129,6 +197,19 @@ export function resolveAcpLaunchById(id: AcpAgentId, config: AcpLaunchConfig = {
     }
   }
 
+  // Inject each Revv-stored credential as its declared env var, unless that var
+  // is already inherited (leaves dev shells that export a key untouched, and
+  // avoids handing the agent two conflicting credentials). Agent-agnostic: the
+  // set of env vars comes entirely from the registry descriptor.
+  for (const cred of getAgentCredentials(id)) {
+    // Gate on the credential's OWN env var only — never `alsoSatisfiedBy`. A
+    // hazard like a stale ANTHROPIC_API_KEY must not suppress injecting the
+    // stored token; `buildAcpProcessEnv` then drops the hazard in its favor.
+    if (process.env[cred.envVar]) continue;
+    const value = storedCredential(id, cred.envVar);
+    if (value) env[cred.envVar] = value;
+  }
+
   return {
     command: def.command,
     args,
@@ -156,8 +237,16 @@ function buildAcpProcessEnv(
     if (value !== undefined) env[key] = value;
   }
 
+  // A Revv-injected OAuth token (in `launchEnv`) is itself proof of subscription
+  // auth — the host probe (`detectClaudeSubscriptionAuth`) can't see it, since it
+  // isn't in `process.env`. Treat it as subscription auth so the stale-key drop
+  // below still fires; otherwise an inherited ANTHROPIC_API_KEY would shadow the
+  // injected token and 401 (the exact failure this drop exists to prevent).
+  const injectsClaudeOauthToken =
+    id === "claude-code" && Boolean(launchEnv?.CLAUDE_CODE_OAUTH_TOKEN);
   const hasClaudeSubscriptionAuth =
-    options.claudeSubscriptionAuth ?? (id === "claude-code" && detectClaudeSubscriptionAuth());
+    options.claudeSubscriptionAuth ??
+    (id === "claude-code" && (injectsClaudeOauthToken || detectClaudeSubscriptionAuth()));
   if (id === "claude-code" && hasClaudeSubscriptionAuth) {
     delete env.ANTHROPIC_API_KEY;
     delete env.ANTHROPIC_AUTH_TOKEN;
