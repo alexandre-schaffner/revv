@@ -48,7 +48,6 @@ import { walkthroughs as walkthroughsTable } from "../../db/schema/walkthroughs"
 import { debug, logError } from "../../logger";
 import type { PrFileMeta } from "../../services/GitHub";
 import { type AcpConnectionHandle, getAcpConnection } from "../acp/acp-connection";
-import { withAgentAuthHint } from "../acp/presets";
 import {
   buildActivity,
   decodeAcpSessionUpdate,
@@ -418,10 +417,7 @@ export function streamWalkthroughViaAcp(
         },
       });
     } catch (err) {
-      const message = withAgentAuthHint(
-        params.acpAgentId,
-        err instanceof Error ? err.message : String(err),
-      );
+      const message = err instanceof Error ? err.message : String(err);
       logError("walkthrough-acp", "queryTask error:", message);
       if (!errorEmitted) {
         errorEmitted = true;

@@ -190,7 +190,6 @@ export function reset(): void {
   modelsLoadedByAgent = byAgent(() => false);
   modelsInFlight = {};
   agentStatus = null;
-  agentCredentials = [];
 }
 
 /**
@@ -291,91 +290,5 @@ export async function fetchAgentStatus(): Promise<AgentStatusReport | null> {
     return data;
   } catch {
     return agentStatus;
-  }
-}
-
-// ── ACP agent credentials (agent-agnostic auth) ─────────────────────────────
-// Per-agent credential fields declared in the shared registry, plus whether
-// each is currently stored server-side. Secret values never reach the client —
-// only the `connected` boolean and the field metadata do. Needed because the
-// packaged app can't inherit CLIs' keychain-stored logins.
-
-export interface AgentCredentialField {
-  agent: AcpAgentId;
-  envVar: string;
-  label: string;
-  hint: string;
-  placeholder: string;
-  /** Whether a one-click "Connect" flow (a `setupCommand`) exists for this credential. */
-  hasSetup: boolean;
-  connected: boolean;
-}
-
-let agentCredentials = $state<AgentCredentialField[]>([]);
-
-/** Declared credential fields for one agent (or all agents when omitted). */
-export function getAgentCredentialFields(agent?: AcpAgentId): AgentCredentialField[] {
-  return agent ? agentCredentials.filter((c) => c.agent === agent) : agentCredentials;
-}
-
-export async function fetchAgentCredentials(): Promise<AgentCredentialField[]> {
-  try {
-    const res = await fetch(`${API_BASE_URL}/api/settings/agent-credentials`, {
-      headers: authHeaders(),
-    });
-    if (!res.ok) return agentCredentials;
-    const data = (await res.json()) as { credentials: AgentCredentialField[] };
-    agentCredentials = data.credentials ?? [];
-    return agentCredentials;
-  } catch {
-    return agentCredentials;
-  }
-}
-
-function markConnected(agent: AcpAgentId, envVar: string, connected: boolean): void {
-  agentCredentials = agentCredentials.map((c) =>
-    c.agent === agent && c.envVar === envVar ? { ...c, connected } : c,
-  );
-}
-
-/**
- * Run the credential's server-side `setupCommand` (opens the browser OAuth flow)
- * and store the captured value. On failure `error` carries an actionable message.
- */
-export async function connectAgentCredential(
-  agent: AcpAgentId,
-  envVar: string,
-): Promise<{ connected: boolean; error?: string }> {
-  try {
-    const res = await fetch(`${API_BASE_URL}/api/settings/agent-credentials/connect`, {
-      method: "POST",
-      headers: { ...authHeaders(), "Content-Type": "application/json" },
-      body: JSON.stringify({ agent, envVar }),
-    });
-    const data = (await res.json()) as { connected: boolean; error?: string };
-    if (data.connected) markConnected(agent, envVar, true);
-    return data;
-  } catch (e) {
-    return { connected: false, error: e instanceof Error ? e.message : String(e) };
-  }
-}
-
-/** Store (or clear, with an empty string) a manually-entered credential value. */
-export async function saveAgentCredential(
-  agent: AcpAgentId,
-  envVar: string,
-  value: string,
-): Promise<boolean> {
-  try {
-    const res = await fetch(`${API_BASE_URL}/api/settings/agent-credentials`, {
-      method: "POST",
-      headers: { ...authHeaders(), "Content-Type": "application/json" },
-      body: JSON.stringify({ agent, envVar, value }),
-    });
-    const data = (await res.json()) as { connected: boolean };
-    markConnected(agent, envVar, data.connected);
-    return data.connected;
-  } catch {
-    return false;
   }
 }

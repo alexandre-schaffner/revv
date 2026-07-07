@@ -35,15 +35,11 @@ import { Switch } from "$lib/components/ui/switch";
 import { getUser, removeAccount, resetOnboarding, signOut } from "$lib/stores/auth.svelte";
 import { deleteRepo, getRepositories } from "$lib/stores/prs.svelte";
 import {
-  connectAgentCredential,
-  fetchAgentCredentials,
   fetchAgentStatus,
   fetchModels,
-  getAgentCredentialFields,
   getAgentStatus,
   getAvailableModels,
   getSettings,
-  saveAgentCredential,
   updateSettings,
 } from "$lib/stores/settings.svelte";
 import {
@@ -330,45 +326,8 @@ $effect(() => {
     // Populate the suggestions-model dropdown for the current agent (boot
     // prefetch usually covers this; this backstops a cold cache).
     void fetchModels(aiAgent);
-    void fetchAgentCredentials();
   }
 });
-
-// ── Agent credential connect state ──────────────────────────────────────────
-// Credential fields for the selected agent (registry-declared), plus per-field
-// connect/paste UI state. Agent-agnostic — the fields come from the server.
-let credentialFields = $derived(getAgentCredentialFields(aiAgent));
-let connectingEnvVar = $state<string | null>(null);
-let credentialError = $state<string | null>(null);
-let credentialDrafts = $state<Record<string, string>>({});
-
-async function handleConnectCredential(envVar: string): Promise<void> {
-  connectingEnvVar = envVar;
-  credentialError = null;
-  try {
-    const res = await connectAgentCredential(aiAgent, envVar);
-    if (!res.connected) credentialError = res.error ?? "Connection failed. Please try again.";
-  } finally {
-    connectingEnvVar = null;
-  }
-}
-
-async function handleSaveCredential(envVar: string): Promise<void> {
-  const value = (credentialDrafts[envVar] ?? "").trim();
-  if (!value) return;
-  credentialError = null;
-  const ok = await saveAgentCredential(aiAgent, envVar, value);
-  if (ok) {
-    credentialDrafts = { ...credentialDrafts, [envVar]: "" };
-  } else {
-    credentialError = "That value wasn't accepted. Check it and try again.";
-  }
-}
-
-async function handleDisconnectCredential(envVar: string): Promise<void> {
-  credentialError = null;
-  await saveAgentCredential(aiAgent, envVar, "");
-}
 
 async function fetchAiStatus(): Promise<void> {
   aiStatusLoading = true;
@@ -690,90 +649,6 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 						</Select.Root>
 					</div>
 				</div>
-
-				<!-- Agent credentials (registry-declared; only for agents that need them) -->
-				{#if credentialFields.length > 0}
-					<div class="settings-subgroup">
-						<h3 class="settings-subgroup-heading">Credentials</h3>
-
-						{#each credentialFields as field (field.envVar)}
-							<div class="settings-row">
-								<div class="settings-row-info">
-									<p class="settings-row-label">{field.label}</p>
-									<p class="settings-row-hint">{field.hint}</p>
-								</div>
-								<div class="flex items-center gap-2">
-									{#if field.connected}
-										<span class="status-line-dot status-line-dot--success" aria-hidden="true"></span>
-										<span class="status-line-text">Connected</span>
-										<Button
-											variant="ghost"
-											size="sm"
-											class="text-xs"
-											onclick={() => handleDisconnectCredential(field.envVar)}
-										>
-											Disconnect
-										</Button>
-									{:else if field.hasSetup}
-										<Button
-											size="sm"
-											class="text-xs"
-											disabled={connectingEnvVar === field.envVar}
-											onclick={() => handleConnectCredential(field.envVar)}
-										>
-											{#if connectingEnvVar === field.envVar}
-												<Loader2 size={12} weight="regular" class="motion-essential-spin" />
-												Connecting…
-											{:else}
-												Connect
-											{/if}
-										</Button>
-									{/if}
-								</div>
-							</div>
-
-							{#if !field.connected}
-								<div class="settings-row">
-									<div class="settings-row-info">
-										<p class="settings-row-label">
-											{field.hasSetup ? 'Or paste manually' : 'Paste value'}
-										</p>
-										<p class="settings-row-hint">Stored locally and injected into the agent at launch.</p>
-									</div>
-									<div class="flex items-center gap-2">
-										<Input
-											type="password"
-											placeholder={field.placeholder}
-											class="w-48 text-xs"
-											value={credentialDrafts[field.envVar] ?? ''}
-											oninput={(e) =>
-												(credentialDrafts = {
-													...credentialDrafts,
-													[field.envVar]: (e.currentTarget as HTMLInputElement).value,
-												})}
-										/>
-										<Button
-											size="sm"
-											variant="secondary"
-											class="text-xs"
-											disabled={!(credentialDrafts[field.envVar] ?? '').trim()}
-											onclick={() => handleSaveCredential(field.envVar)}
-										>
-											Save
-										</Button>
-									</div>
-								</div>
-							{/if}
-						{/each}
-
-						{#if credentialError}
-							<div class="status-line">
-								<span class="status-line-dot status-line-dot--warning" aria-hidden="true"></span>
-								<span class="status-line-text">{credentialError}</span>
-							</div>
-						{/if}
-					</div>
-				{/if}
 
 				<!-- Limits -->
 				<div class="settings-subgroup">
