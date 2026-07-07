@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.2](https://github.com/alexandre-schaffner/revv/compare/v0.15.1...v0.15.2) (2026-07-07)
+
+
+### Bug Fixes
+
+* Recover missing GHE client ID during reauth ([#160](https://github.com/alexandre-schaffner/revv/issues/160)) ([f139bcd](https://github.com/alexandre-schaffner/revv/commit/f139bcd3a9ca9ae1560b58d6327bb16a7a98d7d0))
+
 ## [0.15.1](https://github.com/alexandre-schaffner/revv/compare/v0.15.0...v0.15.1) (2026-07-06)
 
 
