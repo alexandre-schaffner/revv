@@ -48,49 +48,6 @@ export interface AcpAgentCapabilities {
   readonly planMode: boolean;
 }
 
-/**
- * A credential the agent's subprocess needs in its environment to authenticate.
- * ACP has no auth protocol, so — like model/effort/context — Revv can only hand
- * the agent an environment. This descriptor is the agent-agnostic contract: the
- * store, the injection at spawn, the settings UI, and the optional "Connect"
- * flow are all driven off these entries, so covering another agent is one more
- * registry entry.
- *
- * Why this exists: the packaged app runs the server as a background process with
- * a sparse environment that can't reach the OS keychain where CLIs stash their
- * interactive login. Injecting a stored value as an env var is the deploy-safe
- * path. File-based logins (e.g. opencode) are reachable via `$HOME` and need no
- * entry here.
- */
-export interface AcpAgentCredential {
-  /** Env var injected into the agent subprocess at spawn (e.g. `CLAUDE_CODE_OAUTH_TOKEN`). */
-  readonly envVar: string;
-  /** Short label for the settings field (e.g. "Claude subscription"). */
-  readonly label: string;
-  /** Help text shown under the field. */
-  readonly hint: string;
-  /** Input placeholder / format hint. */
-  readonly placeholder: string;
-  /**
-   * Additional env vars whose presence means the agent is already authenticated,
-   * so Revv should not flag this credential as *missing* (used only for the
-   * "connect it" error hint). It deliberately does NOT gate injection: Revv still
-   * injects its stored value even when one of these is present, because some of
-   * them are hazards rather than substitutes — e.g. a stale `ANTHROPIC_API_KEY`
-   * can shadow a valid Claude subscription and 401, so `buildAcpProcessEnv`
-   * drops it in favor of the injected `CLAUDE_CODE_OAUTH_TOKEN`.
-   */
-  readonly alsoSatisfiedBy?: readonly string[];
-  /**
-   * Optional CLI that mints the credential non-interactively and prints it to
-   * stdout — drives the one-click "Connect" button. Omit for paste-only
-   * credentials (e.g. an API key the user copies from a dashboard).
-   */
-  readonly setupCommand?: readonly string[];
-  /** Regex (string form) matching the token in `setupCommand` stdout. */
-  readonly tokenPattern?: string;
-}
-
 export interface AcpAgentDescriptor {
   /** Stable id — persisted as the chat-agent setting and the connection-pool key. */
   readonly id: string;
@@ -106,12 +63,6 @@ export interface AcpAgentDescriptor {
   readonly args: readonly string[];
   /** Model / context-window / thinking-effort surface Revv exposes for this agent. */
   readonly capabilities: AcpAgentCapabilities;
-  /**
-   * Credentials Revv stores and injects into the subprocess env at spawn.
-   * Absent/empty = the agent authenticates entirely on its own (e.g. opencode's
-   * local file-based config, reachable via `$HOME`).
-   */
-  readonly credentials?: readonly AcpAgentCredential[];
 }
 
 // ⇩ Add a new ACP agent here — one entry is all it takes. ⇩
@@ -134,17 +85,6 @@ export const ACP_AGENTS = [
       // claude-agent-acp advertises a read-only plan mode.
       planMode: true,
     },
-    credentials: [
-      {
-        envVar: "CLAUDE_CODE_OAUTH_TOKEN",
-        label: "Claude subscription",
-        hint: "Connect your Claude subscription so the agent can authenticate. Runs `claude setup-token`.",
-        placeholder: "sk-ant-oat…",
-        alsoSatisfiedBy: ["ANTHROPIC_API_KEY"],
-        setupCommand: ["claude", "setup-token"],
-        tokenPattern: "sk-ant-oat\\d*-[A-Za-z0-9_-]+",
-      },
-    ],
   },
   {
     id: "opencode",
@@ -186,14 +126,6 @@ export const ACP_AGENTS = [
       // no enforceable read-only plan turn yet.
       planMode: false,
     },
-    credentials: [
-      {
-        envVar: "OPENAI_API_KEY",
-        label: "OpenAI API key",
-        hint: "Paste an OpenAI API key so Codex can authenticate without the system keychain (needed in the packaged app).",
-        placeholder: "sk-…",
-      },
-    ],
   },
   {
     id: "cursor",
@@ -242,11 +174,6 @@ export function getAcpAgent(id: AcpAgentId): AcpAgentDescriptor {
 /** The model / context-window / thinking-effort surface Revv exposes for an agent. */
 export function getAgentCapabilities(id: AcpAgentId): AcpAgentCapabilities {
   return getAcpAgent(id).capabilities;
-}
-
-/** Credentials Revv stores + injects for an agent (empty when it self-authenticates). */
-export function getAgentCredentials(id: AcpAgentId): readonly AcpAgentCredential[] {
-  return getAcpAgent(id).credentials ?? [];
 }
 
 /**

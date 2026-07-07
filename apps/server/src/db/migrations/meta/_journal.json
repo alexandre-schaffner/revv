@@ -232,13 +232,6 @@
       "when": 1779635000000,
       "tag": "0290_chat_activity_results",
       "breakpoints": true
-    },
-    {
-      "idx": 33,
-      "version": "6",
-      "when": 1779640000000,
-      "tag": "0300_agent_credentials",
-      "breakpoints": true
     }
   ]
 }

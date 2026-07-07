@@ -16,7 +16,7 @@ import {
 } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Context, Effect, Layer, Stream, SubscriptionRef } from "effect";
-import { applyAcpAgentOverride, setAgentCredentialCache } from "../ai/acp/presets";
+import { applyAcpAgentOverride } from "../ai/acp/presets";
 import type { Db } from "../db/index";
 import { userSettings } from "../db/schema/user-settings";
 import { ValidationError } from "../domain/errors";
@@ -229,33 +229,6 @@ function resolveRecapAgentFromSettings(
   });
 }
 
-// ── Agent credentials (agent-agnostic, kept off UserSettings) ────────────────
-// Stored as a JSON map `{ [agentId]: { [ENV_VAR]: value } }` in a dedicated
-// column, read/written directly (never through the UserSettings round-trip) so
-// secrets never reach the web client and `updateSettings` can't clobber them.
-
-type AgentCredentialMap = Record<string, Record<string, string>>;
-
-function parseAgentCredentials(json: string): AgentCredentialMap {
-  try {
-    const parsed = JSON.parse(json) as unknown;
-    if (!parsed || typeof parsed !== "object") return {};
-    const out: AgentCredentialMap = {};
-    for (const [agent, vars] of Object.entries(parsed as Record<string, unknown>)) {
-      if (vars && typeof vars === "object") {
-        const entry: Record<string, string> = {};
-        for (const [envVar, value] of Object.entries(vars as Record<string, unknown>)) {
-          if (typeof value === "string" && value.trim().length > 0) entry[envVar] = value;
-        }
-        if (Object.keys(entry).length > 0) out[agent] = entry;
-      }
-    }
-    return out;
-  } catch {
-    return {};
-  }
-}
-
 // ── DB ↔ UserSettings mapping ────────────────────────────────────────────────
 
 function toSettings(row: typeof userSettings.$inferSelect): UserSettings {
@@ -415,27 +388,6 @@ export class SettingsService extends Context.Tag("SettingsService")<
      * foreign one.
      */
     resolveChatAgentId: () => Effect.Effect<AcpAgentId>;
-    /**
-     * Which agent credentials are stored, as `{ [agentId]: { [ENV_VAR]: true } }`.
-     * Only booleans are exposed — secret values never leave the server. Empty
-     * entries are omitted. See {@link setAgentCredential}.
-     */
-    getAgentCredentialConnections: () => Effect.Effect<
-      Record<string, Record<string, boolean>>,
-      ValidationError
-    >;
-    /**
-     * Store (or clear, with `null`) one agent credential env var. Writes the
-     * dedicated `agent_credentials_json` column directly — kept out of the
-     * `UserSettings` round-trip so secrets are never shipped to the client and
-     * `updateSettings` can't clobber them — and refreshes the in-memory spawn
-     * cache via `setAgentCredentialCache`.
-     */
-    setAgentCredential: (
-      agent: AcpAgentId,
-      envVar: string,
-      value: string | null,
-    ) => Effect.Effect<void, ValidationError>;
   }
 >() {}
 
@@ -453,28 +405,6 @@ export const SettingsServiceLive = Layer.effect(
         }),
     });
     const settingsRef = yield* SubscriptionRef.make(initial);
-
-    // Read the agent-credentials JSON column directly — it's intentionally not
-    // part of `UserSettings`, so it isn't carried on `initial`.
-    const readCredentialMap = (): Promise<AgentCredentialMap> =>
-      db
-        .select({ json: userSettings.agentCredentialsJson })
-        .from(userSettings)
-        .where(eq(userSettings.id, "default"))
-        .limit(1)
-        .then(([row]) => parseAgentCredentials(row?.json ?? "{}"));
-
-    // Seed the in-memory spawn cache from SQLite (authoritative).
-    yield* Effect.tryPromise({
-      try: async () => setAgentCredentialCache(await readCredentialMap()),
-      catch: (e) => new ValidationError({ message: e instanceof Error ? e.message : String(e) }),
-    }).pipe(
-      Effect.catchAll((e) =>
-        Effect.sync(() =>
-          logError("settings", "failed to seed agent-credential cache:", String(e)),
-        ),
-      ),
-    );
 
     return {
       getSettings: () =>
@@ -546,44 +476,6 @@ export const SettingsServiceLive = Layer.effect(
           ),
           Effect.orElseSucceed(() => applyAcpAgentOverride(DEFAULT_SETTINGS.aiAgent)),
         ),
-
-      getAgentCredentialConnections: () =>
-        Effect.tryPromise({
-          try: async () => {
-            const map = await readCredentialMap();
-            const out: Record<string, Record<string, boolean>> = {};
-            for (const [agent, vars] of Object.entries(map)) {
-              out[agent] = Object.fromEntries(Object.keys(vars).map((envVar) => [envVar, true]));
-            }
-            return out;
-          },
-          catch: (e) =>
-            new ValidationError({ message: e instanceof Error ? e.message : String(e) }),
-        }),
-
-      setAgentCredential: (agent, envVar, value) =>
-        Effect.gen(function* () {
-          const next = yield* Effect.tryPromise({
-            try: async () => {
-              const map = await readCredentialMap();
-              const normalized = typeof value === "string" ? value.trim() : "";
-              const entry = { ...(map[agent] ?? {}) };
-              if (normalized.length > 0) entry[envVar] = normalized;
-              else delete entry[envVar];
-              if (Object.keys(entry).length > 0) map[agent] = entry;
-              else delete map[agent];
-              await db
-                .update(userSettings)
-                .set({ agentCredentialsJson: JSON.stringify(map), updatedAt: new Date() })
-                .where(eq(userSettings.id, "default"));
-              return map;
-            },
-            catch: (e) =>
-              new ValidationError({ message: e instanceof Error ? e.message : String(e) }),
-          });
-          // Refresh the spawn cache so the next ACP launch picks it up.
-          setAgentCredentialCache(next);
-        }),
 
       resolveRecapAgent: () =>
         settingsRef.get.pipe(
