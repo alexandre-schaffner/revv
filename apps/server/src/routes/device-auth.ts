@@ -9,6 +9,7 @@ import {
   clientIdForHost,
   clientIdIsGitHubApp,
   isPublicGitHub,
+  MissingGitHubClientIdError,
   tokenUrlForHost,
 } from "../github-oauth";
 import { logError } from "../logger";
@@ -495,7 +496,15 @@ const publicAuthRoutes = new Elysia()
   .post(
     "/api/auth/device/init",
     async ({ body, status }) => {
-      const urls = await resolveGithubUrls(body?.host);
+      let urls: Awaited<ReturnType<typeof resolveGithubUrls>>;
+      try {
+        urls = await resolveGithubUrls(body?.host);
+      } catch (e) {
+        if (e instanceof MissingGitHubClientIdError) {
+          return status(400, { error: e.message, code: e.code, host: e.host });
+        }
+        throw e;
+      }
       const res = await fetch(urls.deviceCodeUrl, {
         method: "POST",
         headers: { Accept: "application/json", "Content-Type": "application/json" },
@@ -545,7 +554,15 @@ const publicAuthRoutes = new Elysia()
         }
       }
 
-      const urls = await resolveGithubUrls(body.host);
+      let urls: Awaited<ReturnType<typeof resolveGithubUrls>>;
+      try {
+        urls = await resolveGithubUrls(body.host);
+      } catch (e) {
+        if (e instanceof MissingGitHubClientIdError) {
+          return status(400, { error: e.message, code: e.code, host: e.host });
+        }
+        throw e;
+      }
       // Per GitHub's docs, device-flow token exchange does not take a
       // client_secret — only client_id, device_code, and grant_type.
       const res = await fetch(urls.tokenUrl, {

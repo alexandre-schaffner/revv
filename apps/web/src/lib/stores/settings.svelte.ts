@@ -63,26 +63,8 @@ export async function setGithubConfig(host: string, clientId: string): Promise<v
   await updateSettings({ githubHost: host, githubClientId: clientId });
 }
 
-/**
- * Persist GitHub host/client ID and surface failures to callers that need a
- * hard recovery path, such as reauth after an upgrade. Most settings controls
- * intentionally use `updateSettings`, which remains best-effort/optimistic.
- */
 export async function setGithubConfigStrict(host: string, clientId: string): Promise<void> {
-  const partial = { githubHost: host, githubClientId: clientId };
-  const previous = settings;
-  if (settings) settings = { ...settings, ...partial };
-
-  const res = await fetch(`${API_BASE_URL}/api/settings`, {
-    method: "PUT",
-    headers: { ...authHeaders(), "Content-Type": "application/json" },
-    body: JSON.stringify(partial),
-  });
-  if (!res.ok) {
-    settings = previous;
-    const detail = await res.text().catch(() => "");
-    throw new Error(detail.trim() || `Failed to save GitHub settings (HTTP ${res.status})`);
-  }
+  await updateSettings({ githubHost: host, githubClientId: clientId }, { strict: true });
 }
 
 /**
@@ -126,7 +108,36 @@ export type SettingsUpdate = Partial<Omit<UserSettings, "id" | "recap" | "cache"
   };
 };
 
-export async function updateSettings(partial: SettingsUpdate): Promise<void> {
+type UpdateSettingsOptions = {
+  /**
+   * Most settings controls are optimistic/best-effort. Recovery flows can opt
+   * into strict mode to rollback local state and surface persistence failures.
+   */
+  strict?: boolean;
+};
+
+function settingsErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === "object") {
+    const value = "value" in error ? (error as { value?: unknown }).value : error;
+    if (value && typeof value === "object" && "message" in value) {
+      const message = (value as { message?: unknown }).message;
+      if (typeof message === "string") return message;
+    }
+    try {
+      return JSON.stringify(value);
+    } catch {
+      // fall through
+    }
+  }
+  return String(error);
+}
+
+export async function updateSettings(
+  partial: SettingsUpdate,
+  options: UpdateSettingsOptions = {},
+): Promise<void> {
+  const previous = settings;
   // Optimistic local merge — apply the partial immediately so concurrent calls
   // (e.g. model + context-window in the same popover session) don't clobber each
   // other when server responses arrive out of order. `recap` and `cache` are
@@ -159,11 +170,16 @@ export async function updateSettings(partial: SettingsUpdate): Promise<void> {
     invalidateSuggestions();
   }
   try {
-    await api.api.settings.put(partial as Record<string, unknown>);
+    const result = await api.api.settings.put(partial as Record<string, unknown>);
+    if (result.error) throw new Error(settingsErrorMessage(result.error));
     // Intentionally ignore the response body: merging a full settings object
     // here would reintroduce the race described above.
-  } catch {
-    // handle silently
+  } catch (e) {
+    if (options.strict) {
+      settings = previous;
+      throw e instanceof Error ? e : new Error(settingsErrorMessage(e));
+    }
+    // Non-strict settings controls are best-effort.
   }
 }
 

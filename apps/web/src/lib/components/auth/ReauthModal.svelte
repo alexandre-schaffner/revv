@@ -7,6 +7,7 @@ import {
   getError,
   getIsLoading,
   getReauthRequired,
+  getSignInErrorCode,
   signIn,
 } from "$lib/stores/auth.svelte";
 import { setGithubConfigStrict } from "$lib/stores/settings.svelte";
@@ -14,6 +15,7 @@ import { setGithubConfigStrict } from "$lib/stores/settings.svelte";
 const reauth = $derived(getReauthRequired());
 const deviceFlow = $derived(getDeviceFlow());
 const error = $derived(getError());
+const signInErrorCode = $derived(getSignInErrorCode());
 const isLoading = $derived(getIsLoading());
 
 let copied = $state(false);
@@ -25,7 +27,7 @@ const needsClientId = $derived(
   Boolean(
     reauth?.host &&
       reauth.host !== "github.com" &&
-      error?.includes("requires a GitHub App or OAuth App client ID"),
+      (signInErrorCode === "missing_github_client_id" || clientIdError),
   ),
 );
 
@@ -51,7 +53,10 @@ async function saveClientIdAndRetry(): Promise<void> {
   isSavingClientId = true;
   try {
     await setGithubConfigStrict(host, trimmed);
-    await signIn(host);
+    const started = await signIn(host);
+    if (!started) {
+      clientIdError = getError() ?? "Failed to start sign-in. Check the client ID and try again.";
+    }
   } catch (e) {
     clientIdError = e instanceof Error ? e.message : String(e);
   } finally {
@@ -125,7 +130,7 @@ async function saveClientIdAndRetry(): Promise<void> {
 					</button>
 				</div>
 			{:else}
-				{#if error}
+				{#if error && !clientIdError}
 					<p class="text-sm text-danger">{error}</p>
 				{/if}
 				{#if needsClientId}

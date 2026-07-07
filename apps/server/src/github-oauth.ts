@@ -40,6 +40,18 @@ export function clientIdIsGitHubApp(clientId: string): boolean {
   return clientId.startsWith("Iv");
 }
 
+export class MissingGitHubClientIdError extends Error {
+  readonly code = "missing_github_client_id";
+
+  constructor(
+    readonly host: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "MissingGitHubClientIdError";
+  }
+}
+
 /**
  * Client_id for a host.
  *
@@ -61,7 +73,8 @@ export function clientIdForHost(host: string, customClientId?: string | null): s
   if (custom) return custom;
   if (isPublicGitHub(host)) {
     if (!serverEnv.githubClientIdPublic) {
-      throw new Error(
+      throw new MissingGitHubClientIdError(
+        host,
         "Public GitHub sign-in requires GITHUB_CLIENT_ID_PUBLIC to be set. " +
           "Register an OAuth App on github.com and add GITHUB_CLIENT_ID_PUBLIC=<id> to your .env file.",
       );
@@ -69,7 +82,8 @@ export function clientIdForHost(host: string, customClientId?: string | null): s
     return serverEnv.githubClientIdPublic;
   }
   if (serverEnv.githubClientId) return serverEnv.githubClientId;
-  throw new Error(
+  throw new MissingGitHubClientIdError(
+    host,
     `Signing in to ${host} requires a GitHub App or OAuth App client ID. ` +
       "Add one during onboarding (GitHub Enterprise → client ID), or set GITHUB_CLIENT_ID for a fixed deployment.",
   );
