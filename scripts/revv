@@ -129,6 +129,26 @@ fi
 # Canonical paths (auth key, support dir, etc.)
 REVV_SUPPORT_DIR="${REVV_SUPPORT_DIR:-$HOME/Library/Application Support/Revv}"
 REVV_AUTH_KEY="${REVV_AUTH_KEY:-$REVV_SUPPORT_DIR/auth.key}"
+# Canonical DB path. The server resolves the SQLite file to the durable
+# app-data dir (`<appDataDir>/revv.db` = `$REVV_SUPPORT_DIR/revv.db`), NOT the
+# cwd/INSTALL_DIR — see apps/server/src/db/index.ts (resolveDbPath). In a prod
+# install the server's REVV_DB_PATH is set in the LaunchAgent plist's
+# EnvironmentVariables, which THIS shell does not inherit — so we read it back
+# from the plist to track whatever the server actually uses, instead of blindly
+# recomputing the default (which only coincidentally matches today). Precedence:
+#   1. REVV_DB_PATH exported in this shell (explicit CLI/dev override)
+#   2. REVV_DB_PATH from the LaunchAgent plist (authoritative server value)
+#   3. default: $REVV_SUPPORT_DIR/revv.db
+resolve_db_path() {
+  if [[ -n "${REVV_DB_PATH:-}" ]]; then printf '%s' "$REVV_DB_PATH"; return; fi
+  if [[ -f "$LAUNCH_AGENT_PLIST" ]]; then
+    local p
+    p="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:REVV_DB_PATH' \
+      "$LAUNCH_AGENT_PLIST" 2>/dev/null)" && [[ -n "$p" ]] && { printf '%s' "$p"; return; }
+  fi
+  printf '%s' "$REVV_SUPPORT_DIR/revv.db"
+}
+REVV_DB_PATH="$(resolve_db_path)"
 
 find_app() {
   for p in "${APP_CANDIDATES[@]}"; do
@@ -169,12 +189,28 @@ server_running() {
 # entirely; writes go through the API so the in-memory `SubscriptionRef`
 # cache that drives the web app stays consistent.
 read_channel() {
-  command -v sqlite3 >/dev/null 2>&1 || \
-    fail "sqlite3 not found — install it (e.g. 'brew install sqlite') and retry."
-  [[ -f "$INSTALL_DIR/revv.db" ]] || \
-    fail "Revv database missing at $INSTALL_DIR/revv.db. Run 'revv start' to initialize it."
+  # NEVER abort the caller: `read_channel` runs at the very top of `cmd_update`,
+  # before the fresh source (and this CLI) is installed. A hard failure here
+  # would strand an install that can't read its own channel — including any
+  # future DB-path regression — with no way to `revv update` out of it. So on
+  # any unreadable-DB condition we warn (to stderr, so the captured stdout stays
+  # clean) and default to 'stable', letting the update proceed and self-heal.
+  # A nightly user hitting this can re-run with 'revv update --channel nightly'.
+  if ! command -v sqlite3 >/dev/null 2>&1; then
+    warn "sqlite3 not found — defaulting to the 'stable' channel for this update (install it, e.g. 'brew install sqlite', for channel-aware updates)." >&2
+    printf "stable"; return 0
+  fi
+  # Prefer the canonical app-data DB, but fall back to the legacy cwd/INSTALL_DIR
+  # location: on an install whose new server hasn't booted yet, the one-time
+  # relocation in db/index.ts hasn't run, so the DB may still sit at the old path.
+  local db="$REVV_DB_PATH"
+  [[ -f "$db" ]] || db="$INSTALL_DIR/revv.db"
+  if [[ ! -f "$db" ]]; then
+    warn "Revv database not found (looked in $REVV_DB_PATH and $INSTALL_DIR/revv.db) — defaulting to 'stable'. Run 'revv start' to initialize it, or pass 'revv update --channel <stable|nightly>' to pick explicitly." >&2
+    printf "stable"; return 0
+  fi
   local v
-  v="$(sqlite3 "$INSTALL_DIR/revv.db" \
+  v="$(sqlite3 "$db" \
     "SELECT update_channel FROM user_settings WHERE id='default';" 2>/dev/null)"
   case "$v" in nightly) printf "nightly" ;; *) printf "stable" ;; esac
 }
@@ -246,7 +282,7 @@ ${BOLD}Install${RESET}
   Helper lib:      $HOME/.local/share/revv/common.sh
 
 ${BOLD}Data${RESET}
-  Database:        $INSTALL_DIR/revv.db
+  Database:        $REVV_DB_PATH
   Git clones:      $HOME/.revv/repos/
   Settings:        $HOME/.revv/settings.json
   Auth key:        $REVV_AUTH_KEY
@@ -586,10 +622,13 @@ cmd_uninstall() {
   local tauri_http_caches="$HOME/Library/Caches/${tauri_id}.WebView"
   local tauri_preferences="$HOME/Library/Preferences/${tauri_id}.plist"
 
-  # The production database lives in the server CWD (= INSTALL_DIR for prod installs).
-  local prod_db="$INSTALL_DIR/revv.db"
-  local prod_db_wal="$INSTALL_DIR/revv.db-wal"
-  local prod_db_shm="$INSTALL_DIR/revv.db-shm"
+  # The production database lives in the app-data dir ($REVV_SUPPORT_DIR/revv.db,
+  # resolved into $REVV_DB_PATH above). Step 7 removes $REVV_SUPPORT_DIR wholesale,
+  # but list/remove it explicitly too so a REVV_DB_PATH override outside the
+  # support dir is still cleaned up.
+  local prod_db="$REVV_DB_PATH"
+  local prod_db_wal="$REVV_DB_PATH-wal"
+  local prod_db_shm="$REVV_DB_PATH-shm"
 
   cat <<EOF
 
@@ -665,11 +704,17 @@ EOF
   rm -f "$tauri_autostart_plist"
 
   # ── 5. Remove database files ────────────────────────────────
-  # Production DB (lives in server CWD = INSTALL_DIR for prod installs)
+  # Production DB lives in the app-data dir ($prod_db, resolved from
+  # $REVV_DB_PATH); step 7 removes $REVV_SUPPORT_DIR wholesale, but clean it up
+  # explicitly here too so a REVV_DB_PATH override outside that tree is handled.
   for f in "$prod_db" "$prod_db_wal" "$prod_db_shm"; do
     [[ -f "$f" ]] && rm -f "$f"
   done
-  # Also check repo root (some installs run from there)
+  # Also sweep the legacy cwd/INSTALL_DIR and repo-root locations (pre-b985e5c
+  # installs, or a dev server run from either directory).
+  for f in "$INSTALL_DIR/revv.db" "$INSTALL_DIR/revv.db-wal" "$INSTALL_DIR/revv.db-shm"; do
+    [[ -f "$f" ]] && rm -f "$f"
+  done
   for f in "./revv.db" "./revv.db-wal" "./revv.db-shm"; do
     [[ -f "$f" ]] && rm -f "$f"
   done
