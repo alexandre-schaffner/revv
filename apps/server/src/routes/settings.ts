@@ -1,6 +1,7 @@
 import { ACP_AGENT_IDS, type AcpAgentId, isAcpAgentId } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
+import { agentKeychainRemediation, probeAgentKeychainReadable } from "../ai/acp/agent-keychain";
 import { listCliModels } from "../ai/providers/cli-agent";
 import { AppRuntime } from "../runtime";
 import { AiService } from "../services/Ai";
@@ -315,6 +316,28 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
       return handleAppError(e, ctx);
     }
   })
+  // Keychain access check for a keychain-backed agent (Solution B: guide, don't
+  // store). Runs the probe in the SERVER's own context — the same context the
+  // agent subprocess inherits — so the result reflects whether generation can
+  // authenticate. Explicit user action (not auto-run) so an unexpected keychain
+  // prompt never appears just from opening Settings. `readable: null` = not
+  // macOS, or the agent isn't keychain-backed.
+  .post(
+    "/agent/keychain-check",
+    async (ctx) => {
+      try {
+        const agent = ctx.body.agent as AcpAgentId;
+        const readable = await probeAgentKeychainReadable(agent);
+        return {
+          readable,
+          remediation: readable === false ? agentKeychainRemediation(agent) : null,
+        };
+      } catch (e) {
+        return handleAppError(e, ctx);
+      }
+    },
+    { body: t.Object({ agent: aiAgentSchema }) },
+  )
   .get("/ai-status", async (ctx) => {
     try {
       return await AppRuntime.runPromise(
