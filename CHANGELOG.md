@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.16.1](https://github.com/alexandre-schaffner/revv/compare/v0.16.0...v0.16.1) (2026-07-07)
+
+
+### Bug Fixes
+
+* **acp:** inject stored agent credentials so packaged installs authenticate ([c873b7e](https://github.com/alexandre-schaffner/revv/commit/c873b7e16d62e9ec844ca51cdb56bebe0a1bd612))
+* **acp:** inject stored agent credentials so packaged installs authenticate ([1528945](https://github.com/alexandre-schaffner/revv/commit/15289457f548673bcb16bc82c7fc6118b9f33b46))
+* Revert [#158](https://github.com/alexandre-schaffner/revv/issues/158) (fix/acp-agent-credential-injection) ([4e7d6e9](https://github.com/alexandre-schaffner/revv/commit/4e7d6e94ea1ada781e59a5d746ba66793a0383a8))
+
 ## [0.16.0](https://github.com/alexandre-schaffner/revv/compare/v0.15.3...v0.16.0) (2026-07-07)
 
 
