@@ -3,8 +3,16 @@ import { onDestroy, onMount, untrack } from "svelte";
 
 const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
 
-import type { WalkthroughBlock, WalkthroughMode, WalkthroughSemanticStep } from "@revv/shared";
+import type {
+  WalkthroughBlock,
+  WalkthroughMode,
+  WalkthroughReviewRound,
+  WalkthroughSemanticStep,
+} from "@revv/shared";
 import RefreshCw from "phosphor-svelte/lib/ArrowsClockwise";
+import CaretDown from "phosphor-svelte/lib/CaretDown";
+import Check from "phosphor-svelte/lib/Check";
+import Clock from "phosphor-svelte/lib/Clock";
 import AlertTriangle from "phosphor-svelte/lib/Warning";
 import { toast } from "svelte-sonner";
 import { mermaidDiagrams } from "$lib/actions/mermaid.svelte";
@@ -15,6 +23,7 @@ import { ToolActivityGroup } from "$lib/components/ai/tool";
 import { Button } from "$lib/components/ui/button";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix/index.js";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
+import * as Popover from "$lib/components/ui/popover";
 import { Progress } from "$lib/components/ui/progress";
 import { Separator } from "$lib/components/ui/separator";
 import { gsapFadeY, tokens } from "$lib/motion";
@@ -30,6 +39,7 @@ import {
   getBlocks,
   getCloneInProgress,
   getCloneRepoId,
+  getDisplayedWalkthroughId,
   getExplorationInputs,
   getExplorationResults,
   getExplorationSteps,
@@ -43,7 +53,9 @@ import {
   getPhase,
   getProviderConfig,
   getRatings,
+  getReviewRounds,
   getRiskLevel,
+  getSelectedReportId,
   getSemanticSteps,
   getSentiment,
   getSource,
@@ -55,17 +67,20 @@ import {
   hasContainerAnimated,
   hasIssueAnimated,
   hydrateFromCache,
+  loadReviewRounds,
   markBlockAnimated,
   markContainerAnimated,
   markIssueAnimated,
   pollCloneUntilResolved,
   prepareEntry,
   regenerate,
+  selectWalkthroughReport,
   startWalkthrough,
   stopClonePoll,
 } from "$lib/stores/walkthrough.svelte";
 import { type GroupableActivity, isExplorationActivity } from "$lib/utils/activity-groups";
 import { initHighlighter } from "$lib/utils/code-highlight.svelte";
+import { formatRelativeTime } from "$lib/utils/format-relative-time";
 import { renderMarkdown } from "$lib/utils/markdown";
 import { authHeaders } from "$lib/utils/session-token";
 import { groupIssuesBySeverityWithIndex } from "$lib/utils/walkthrough-issues";
@@ -78,6 +93,8 @@ interface Props {
   scrollRoot?: HTMLElement | undefined;
   isActive?: boolean;
 }
+
+type DisplayReportRound = WalkthroughReviewRound & { displayRoundNumber: number };
 
 let { prId, scrollRoot, isActive = true }: Props = $props();
 
@@ -119,6 +136,120 @@ const superseded = $derived(getIsSuperseded());
 const generatedBy = $derived(getGeneratedBy());
 const providerConfig = $derived(getProviderConfig());
 const walkthroughSource = $derived(getSource());
+const reviewRounds = $derived(getReviewRounds(prId, selectedMode));
+const displayedWalkthroughId = $derived(getDisplayedWalkthroughId(prId));
+const selectedReportId = $derived(getSelectedReportId(prId));
+const reportRounds = $derived(reviewRounds?.rounds ?? []);
+const currentReportHeadSha = $derived(reviewRounds?.currentHeadSha ?? null);
+const visibleReportRounds = $derived.by((): DisplayReportRound[] => {
+  const numbered = [...reportRounds]
+    .filter((round) => round.visibility !== "hidden")
+    .sort((a, b) => a.roundNumber - b.roundNumber)
+    .map((round, index) => ({ ...round, displayRoundNumber: index + 1 }));
+
+  return numbered.sort((a, b) => {
+    const aCurrent = currentReportHeadSha !== null && a.toSha === currentReportHeadSha;
+    const bCurrent = currentReportHeadSha !== null && b.toSha === currentReportHeadSha;
+    if (aCurrent !== bCurrent) return aCurrent ? -1 : 1;
+
+    const aTime = Date.parse(a.completedAt ?? a.createdAt);
+    const bTime = Date.parse(b.completedAt ?? b.createdAt);
+    if (aTime !== bTime) return bTime - aTime;
+
+    return b.roundNumber - a.roundNumber;
+  });
+});
+const activeReportRound = $derived(
+  displayedWalkthroughId
+    ? (visibleReportRounds.find((round) => round.walkthroughId === displayedWalkthroughId) ?? null)
+    : null,
+);
+const displayedReportIsVisible = $derived(
+  displayedWalkthroughId !== null &&
+    visibleReportRounds.some((round) => round.walkthroughId === displayedWalkthroughId),
+);
+const reportSelectorVisible = $derived(visibleReportRounds.length > 1 || selectedReportId !== null);
+
+let reportPopoverOpen = $state(false);
+let reportLoadingId = $state<string | null>(null);
+let autoSelectedReportKey: string | null = null;
+
+function reportKindLabel(kind: WalkthroughReviewRound["kind"]): string {
+  return kind === "incremental" ? "New commits" : "Full PR";
+}
+
+function reportStatusLabel(status: WalkthroughReviewRound["status"]): string {
+  if (status === "superseded") return "Previous";
+  if (status === "generating") return "Generating";
+  if (status === "error") return "Stopped";
+  return "Complete";
+}
+
+function reportShortSha(sha: string | null): string {
+  return sha ? sha.slice(0, 7) : "start";
+}
+
+function reportCommitRange(round: WalkthroughReviewRound): string {
+  return `${reportShortSha(round.fromSha)} → ${reportShortSha(round.toSha)}`;
+}
+
+function reportTitle(round: WalkthroughReviewRound & { displayRoundNumber?: number }): string {
+  return `Report ${round.displayRoundNumber ?? round.roundNumber}: ${reportKindLabel(round.kind)}`;
+}
+
+function reportShortName(round: WalkthroughReviewRound): string {
+  if (round.focusTitle) return round.focusTitle;
+  if (currentReportHeadSha !== null && round.toSha === currentReportHeadSha) {
+    return round.kind === "full" ? "Current full review" : "Current changes";
+  }
+  return round.kind === "full" ? "Prior full review" : "Prior changes";
+}
+
+function reportHeadLabel(round: WalkthroughReviewRound): string {
+  return currentReportHeadSha !== null && round.toSha === currentReportHeadSha
+    ? "Current head"
+    : "Older head";
+}
+
+const reportTriggerLabel = $derived.by(() => {
+  if (activeReportRound) {
+    return `${reportTitle(activeReportRound)} · ${reportShortName(activeReportRound)}`;
+  }
+  if (selectedReportId !== null) return "Historical report";
+  return "Walkthrough reports";
+});
+
+async function chooseReport(walkthroughId: string | null): Promise<void> {
+  if (reportLoadingId !== null) return;
+  reportLoadingId = walkthroughId ?? "latest";
+  try {
+    await selectWalkthroughReport(prId, walkthroughId, selectedMode);
+    reportPopoverOpen = false;
+  } finally {
+    reportLoadingId = null;
+  }
+}
+
+$effect(() => {
+  const candidate =
+    visibleReportRounds.find((round) => round.status !== "generating") ??
+    visibleReportRounds[0] ??
+    null;
+  if (
+    !candidate ||
+    selectedReportId !== null ||
+    displayedReportIsVisible ||
+    isStreaming ||
+    reportLoadingId !== null
+  ) {
+    return;
+  }
+
+  const key = `${prId}:${selectedMode}:${candidate.walkthroughId}`;
+  if (autoSelectedReportKey === key) return;
+  autoSelectedReportKey = key;
+  void chooseReport(candidate.walkthroughId);
+});
 
 const footerParts: string[] = $derived.by(() => {
   const parts: string[] = [];
@@ -146,6 +277,10 @@ let hydratedForMode: WalkthroughMode | null = $state(null);
 let lastStreamErrorToast: string | null = null;
 let lastCloneErrorToast: string | null = null;
 let lastSupersededToastPrId: string | null = null;
+
+$effect(() => {
+  void loadReviewRounds(prId, selectedMode);
+});
 
 $effect(() => {
   if (!isActive || !streamError) {
@@ -194,7 +329,7 @@ $effect(() => {
     id: `walkthrough-superseded-${prId}`,
     description: "The PR has new commits since this review was generated.",
     action: {
-      label: "Regenerate",
+      label: "Review new commits",
       onClick: () => handleRegenerate(),
     },
     duration: Number.POSITIVE_INFINITY,
@@ -924,6 +1059,57 @@ function handleRegenerate(): void {
 </script>
 
 <div class="walkthrough">
+	{#if reportSelectorVisible}
+		<div class="report-selector-row">
+			<Popover.Root bind:open={reportPopoverOpen}>
+				<Popover.Trigger
+					class="report-selector-trigger"
+					aria-label="Choose walkthrough report"
+					title="Choose walkthrough report"
+				>
+					<Clock size={13} weight="regular" aria-hidden="true" />
+					<span>{reportTriggerLabel}</span>
+					<CaretDown size={12} weight="bold" aria-hidden="true" />
+				</Popover.Trigger>
+
+				<Popover.Content align="start" sideOffset={6} class="report-selector-popover">
+					<div class="report-selector-header">
+						<span>Walkthrough reports</span>
+					</div>
+
+					<div class="report-option-list">
+						{#each visibleReportRounds as round (round.id)}
+							{@const active = displayedWalkthroughId === round.walkthroughId}
+							{@const disabled = reportLoadingId !== null || round.status === 'generating'}
+							<button
+								type="button"
+								class="report-option"
+								class:report-option--active={active}
+								disabled={disabled}
+								onclick={() => chooseReport(round.walkthroughId)}
+							>
+								<span class="report-check" aria-hidden="true">
+									{#if active}
+										<Check size={12} weight="bold" />
+									{/if}
+								</span>
+								<span class="report-option-main">
+									<span class="report-option-title">
+										<span>{reportTitle(round)}</span>
+										<span class="report-option-shortname">{reportShortName(round)}</span>
+									</span>
+									<span class="report-option-meta">
+										{reportStatusLabel(round.status)} · {reportHeadLabel(round)} · {reportCommitRange(round)} · {formatRelativeTime(round.completedAt ?? round.createdAt)}
+									</span>
+								</span>
+							</button>
+						{/each}
+					</div>
+				</Popover.Content>
+			</Popover.Root>
+		</div>
+	{/if}
+
 	{#if !streamError && stepperVisible}
 		<!-- Persistent chapters stepper. Replaces the old A→B→C→D dot indicator.
 		     Lives outside the if/else ladder so it stays mounted as the streaming
@@ -1439,6 +1625,150 @@ function handleRegenerate(): void {
 	   emit elements without the parent's Svelte scope hash. */
 	.walkthrough-loading > :global(*) {
 		grid-column: 3;
+	}
+
+	.report-selector-row {
+		display: grid;
+		grid-template-columns:
+			max(24px, min(calc(50% - 458px), calc(100% - 1312px)))
+			48px
+			minmax(0, 820px)
+			40px
+			380px
+			minmax(24px, 1fr);
+		padding: 18px 0 0;
+	}
+
+	.report-selector-row > :global(*) {
+		grid-column: 3;
+		justify-self: start;
+	}
+
+	:global(.report-selector-trigger) {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		max-width: min(100%, 340px);
+		height: 28px;
+		padding: 0 10px;
+		border: 1px solid var(--color-border);
+		border-radius: 999px;
+		background: var(--color-bg-elevated);
+		color: var(--color-text-secondary);
+		font-size: 0.75rem;
+		line-height: 1;
+	}
+
+	:global(.report-selector-trigger:hover),
+	:global(.report-selector-trigger[data-state="open"]) {
+		border-color: var(--color-border-strong);
+		color: var(--color-text-primary);
+	}
+
+	:global(.report-selector-trigger span) {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	:global(.report-selector-popover) {
+		width: min(420px, calc(100vw - 32px));
+		max-height: min(480px, calc(100vh - 120px));
+		overflow: auto;
+	}
+
+	.report-selector-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 0 2px 4px;
+		font-size: 0.72rem;
+		font-weight: 650;
+		color: var(--color-text-muted);
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+	}
+
+	.report-option-list {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+	}
+
+	.report-option {
+		display: grid;
+		grid-template-columns: 18px minmax(0, 1fr);
+		gap: 8px;
+		width: 100%;
+		padding: 8px;
+		border: 1px solid transparent;
+		border-radius: 8px;
+		background: transparent;
+		color: var(--color-text-primary);
+		text-align: left;
+	}
+
+	.report-option:hover:not(:disabled),
+	.report-option--active {
+		border-color: var(--color-border);
+		background: var(--color-bg-elevated);
+	}
+
+	.report-option:disabled {
+		opacity: 0.55;
+		cursor: default;
+	}
+
+	.report-check {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 18px;
+		height: 18px;
+		color: var(--color-accent);
+	}
+
+	.report-option-main {
+		display: flex;
+		min-width: 0;
+		flex-direction: column;
+		gap: 2px;
+	}
+
+	.report-option-title {
+		display: flex;
+		min-width: 0;
+		align-items: baseline;
+		gap: 6px;
+		overflow: hidden;
+		font-size: 0.82rem;
+		font-weight: 650;
+		color: var(--color-text-primary);
+	}
+
+	.report-option-title > span:first-child,
+	.report-option-shortname,
+	.report-option-meta {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.report-option-title > span:first-child {
+		flex: 0 0 auto;
+	}
+
+	.report-option-shortname {
+		min-width: 0;
+		flex: 1 1 auto;
+		font-weight: 500;
+		color: var(--color-text-muted);
+	}
+
+	.report-option-meta {
+		font-size: 0.72rem;
+		color: var(--color-text-muted);
 	}
 
 	/* ── Persistent chapters stepper header ─────────────────────────────
@@ -2122,6 +2452,7 @@ function handleRegenerate(): void {
 		.block-annotation,
 		.issues-section,
 		.walkthrough-content,
+		.report-selector-row,
 		.walkthrough-stepper-header,
 		.dotmatrix-dot {
 			animation-duration: 0.01ms !important;
@@ -2230,6 +2561,7 @@ function handleRegenerate(): void {
 		   extra horizontal padding — that would shift them inward of the
 		   parent's content edges and break alignment with .blocks below. */
 		.walkthrough-loading,
+		.report-selector-row,
 		.walkthrough-stepper-header {
 			display: block;
 			width: 100%;
@@ -2251,6 +2583,7 @@ function handleRegenerate(): void {
 		}
 
 		.walkthrough-loading > :global(*),
+		.report-selector-row > :global(*),
 		.walkthrough-stepper-header > * {
 			grid-column: auto;
 		}

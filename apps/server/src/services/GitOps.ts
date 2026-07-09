@@ -143,12 +143,54 @@ export async function revParse(
   return (await runGitCapture(["rev-parse", ref], worktreePath, timeoutMs)).trim();
 }
 
+export async function commitExists(worktreePath: string, sha: string): Promise<boolean> {
+  try {
+    await runGit(["cat-file", "-e", `${sha}^{commit}`], worktreePath, 10_000);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function fetchRefspec(
   worktreePath: string,
   authedUrl: string,
   refspec: string,
 ): Promise<void> {
   await runGit(["fetch", authedUrl, refspec], worktreePath);
+}
+
+export async function fetchCommit(
+  worktreePath: string,
+  authedUrl: string,
+  sha: string,
+): Promise<void> {
+  await runGit(["fetch", "--no-tags", authedUrl, sha], worktreePath);
+}
+
+export async function diffNameStatusZ(
+  worktreePath: string,
+  baseRef: string,
+  headRef: string,
+): Promise<string> {
+  return runGitCapture(
+    ["diff", "--find-renames", "--name-status", "-z", baseRef, headRef],
+    worktreePath,
+    30_000,
+  );
+}
+
+export async function diffPatchForPath(
+  worktreePath: string,
+  baseRef: string,
+  headRef: string,
+  path: string,
+): Promise<string> {
+  return runGitCapture(
+    ["diff", "--find-renames", "--unified=80", baseRef, headRef, "--", path],
+    worktreePath,
+    30_000,
+  );
 }
 
 export async function checkoutBranch(worktreePath: string, branch: string): Promise<void> {

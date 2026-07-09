@@ -17,6 +17,7 @@ import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import { walkthroughRatings } from "../../../db/schema/walkthrough-ratings";
 import { walkthroughSemanticSteps } from "../../../db/schema/walkthrough-semantic-steps";
+import { walkthroughs as walkthroughsTable } from "../../../db/schema/walkthroughs";
 import { errorResult, findIssuesMissingInlineComment, loadWalkthroughRow } from "./helpers";
 import type {
   GetCommitHistoryInput,
@@ -127,11 +128,94 @@ export const getWalkthroughStateHandler: WalkthroughToolHandler<GetWalkthroughSt
   // the orchestrator and `complete_walkthrough` use — single source of
   // truth (see findIssuesMissingInlineComment).
   const issuesNeedingInlineComment = findIssuesMissingInlineComment(ctx.db, ctx.walkthroughId);
+  const priorReview = row.parentWalkthroughId
+    ? (() => {
+        const prior = ctx.db
+          .select()
+          .from(walkthroughsTable)
+          .where(eq(walkthroughsTable.id, row.parentWalkthroughId))
+          .get();
+        if (!prior) return null;
+        const priorSemanticSteps = ctx.db
+          .select({
+            semanticStepIndex: walkthroughSemanticSteps.semanticStepIndex,
+            title: walkthroughSemanticSteps.title,
+            summary: walkthroughSemanticSteps.summary,
+          })
+          .from(walkthroughSemanticSteps)
+          .where(eq(walkthroughSemanticSteps.walkthroughId, prior.id))
+          .orderBy(asc(walkthroughSemanticSteps.semanticStepIndex))
+          .all()
+          .map((s) => ({
+            semanticStepIndex: s.semanticStepIndex,
+            title: s.title,
+            summary: s.summary ?? null,
+          }));
+        const priorIssues = ctx.db
+          .select({
+            id: walkthroughIssues.id,
+            severity: walkthroughIssues.severity,
+            title: walkthroughIssues.title,
+            description: walkthroughIssues.description,
+            filePath: walkthroughIssues.filePath,
+            startLine: walkthroughIssues.startLine,
+            endLine: walkthroughIssues.endLine,
+            submittedAt: walkthroughIssues.submittedAt,
+            order: walkthroughIssues.order,
+          })
+          .from(walkthroughIssues)
+          .where(eq(walkthroughIssues.walkthroughId, prior.id))
+          .orderBy(asc(walkthroughIssues.order))
+          .all()
+          .map((i) => ({
+            id: i.id,
+            severity: i.severity as "info" | "warning" | "critical",
+            title: i.title,
+            description: i.description,
+            filePath: i.filePath,
+            startLine: i.startLine,
+            endLine: i.endLine,
+            submittedAt: i.submittedAt,
+          }));
+        const priorRatings = ctx.db
+          .select({
+            axis: walkthroughRatings.axis,
+            verdict: walkthroughRatings.verdict,
+            confidence: walkthroughRatings.confidence,
+            rationale: walkthroughRatings.rationale,
+            createdAt: walkthroughRatings.createdAt,
+          })
+          .from(walkthroughRatings)
+          .where(eq(walkthroughRatings.walkthroughId, prior.id))
+          .orderBy(asc(walkthroughRatings.createdAt))
+          .all()
+          .map((r) => ({
+            axis: r.axis as RatingAxis,
+            verdict: r.verdict as "pass" | "concern" | "blocker",
+            confidence: r.confidence as "low" | "medium" | "high",
+            rationale: r.rationale,
+          }));
+        return {
+          walkthroughId: prior.id,
+          prHeadSha: prior.prHeadSha,
+          summary: prior.summary,
+          riskLevel: prior.riskLevel as RiskLevel,
+          sentiment: prior.sentiment ?? null,
+          semanticSteps: priorSemanticSteps,
+          issues: priorIssues,
+          ratings: priorRatings,
+        };
+      })()
+    : null;
 
   const state: WalkthroughState = {
     walkthroughId: row.id,
     prHeadSha: row.prHeadSha,
     mode: row.mode as WalkthroughState["mode"],
+    generationMode: row.generationMode as WalkthroughState["generationMode"],
+    parentWalkthroughId: row.parentWalkthroughId ?? null,
+    baseHeadSha: row.baseHeadSha ?? null,
+    priorReview,
     status: row.status as WalkthroughState["status"],
     lastCompletedPhase: row.lastCompletedPhase as WalkthroughPipelinePhase,
     summary: row.summary || null,

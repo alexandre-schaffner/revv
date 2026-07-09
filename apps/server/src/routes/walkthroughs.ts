@@ -4,9 +4,8 @@
 //   • GET /api/walkthroughs/active — list in-flight jobs for the user's
 //     account so the SSE client can seed sidebar spinners + `lastSeenSeq`
 //     cursors on (re)connect. Returns the cursor `seqAt = next_seq - 1` per
-//     row; future SSE envelopes with `seq > seqAt` apply normally; any
-//     in-flight envelope with `seq <= seqAt` is dropped defensively by
-//     the client reducer.
+//     row; clients must pair that cursor with a REST snapshot before dropping
+//     older envelopes.
 
 import { Effect } from "effect";
 import { Elysia } from "elysia";

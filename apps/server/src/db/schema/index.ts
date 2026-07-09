@@ -25,6 +25,7 @@ export { recapPrEntries } from "./recap-pr-entries";
 export { recapThemeSummaries } from "./recap-theme-summaries";
 export { remoteUsers } from "./remote-users";
 export { repositories } from "./repositories";
+export { reviewRounds } from "./review-rounds";
 export { reviewSessions } from "./review-sessions";
 export { threadMessages } from "./thread-messages";
 export { userSettings } from "./user-settings";

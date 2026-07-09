@@ -113,6 +113,13 @@ export class AiService extends Context.Tag("AiService")<
       mode: WalkthroughMode;
       files: PrFileMeta[];
       worktreePath: string;
+      reviewMode?: {
+        readonly mode: "full" | "incremental";
+        readonly parentWalkthroughId: string | null;
+        readonly baseHeadSha: string | null;
+        readonly headSha: string;
+        readonly diffSource?: "full_pr" | "incremental_range" | "full_pr_fallback";
+      };
       continuation?: ContinuationContext;
       onSessionId?: (sessionId: string) => void;
       /**

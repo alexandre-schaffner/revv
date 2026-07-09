@@ -177,6 +177,27 @@ function parseSignInErrorCode(value: unknown): SignInErrorCode | null {
     : null;
 }
 
+async function signInHttpError(res: Response): Promise<Error> {
+  const body = await res.text().catch(() => "");
+  let detail = body.trim();
+  try {
+    const parsed = JSON.parse(body) as { error?: string; code?: unknown };
+    if (parsed?.error) detail = parsed.error;
+    signInErrorCode = parseSignInErrorCode(parsed?.code);
+  } catch {
+    // Plain-text body — use it as-is.
+  }
+  return new Error(`Sign-in request failed (${res.status})${detail ? `: ${detail}` : ""}`);
+}
+
+function signInErrorMessage(e: unknown): string {
+  if (e instanceof TypeError) {
+    return `Failed to reach the local Revv server at ${API_BASE_URL}: ${e.message}`;
+  }
+  if (e instanceof Error) return e.message;
+  return String(e);
+}
+
 export async function signIn(host?: string): Promise<boolean> {
   error = null;
   signInErrorCode = null;
@@ -188,21 +209,7 @@ export async function signIn(host?: string): Promise<boolean> {
         ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ host }) }
         : {}),
     });
-    if (!res.ok) {
-      // Surface the server's actual reason (e.g. "Signing in to <host> requires
-      // a GitHub App or OAuth App client ID") instead of a generic message.
-      // `device/init` returns either a JSON `{ error }` or a plain-text reason.
-      const body = await res.text().catch(() => "");
-      let detail = body.trim();
-      try {
-        const parsed = JSON.parse(body) as { error?: string; code?: unknown };
-        if (parsed?.error) detail = parsed.error;
-        signInErrorCode = parseSignInErrorCode(parsed?.code);
-      } catch {
-        /* plain-text body — use as-is */
-      }
-      throw new Error(detail || `Failed to initiate sign-in (HTTP ${res.status})`);
-    }
+    if (!res.ok) throw await signInHttpError(res);
     const data = (await res.json()) as {
       device_code: string;
       user_code: string;
@@ -232,7 +239,7 @@ export async function signIn(host?: string): Promise<boolean> {
     startPolling();
     return true;
   } catch (e) {
-    error = `Failed to start sign-in: ${e instanceof Error ? e.message : String(e)}`;
+    error = `Failed to start sign-in: ${signInErrorMessage(e)}`;
     return false;
   } finally {
     isLoading = false;

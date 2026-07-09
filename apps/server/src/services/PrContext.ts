@@ -88,6 +88,11 @@ export class PrContextService extends Context.Tag("PrContextService")<
       externalId: number,
       token: string,
     ) => Effect.Effect<PrFileMeta[], GitHubError, DbService | GitHubEtagCache | SettingsService>;
+    readonly prCommits: (
+      repoFullName: string,
+      externalId: number,
+      token: string,
+    ) => Effect.Effect<PrCommit[], GitHubError, SettingsService>;
     /**
      * Full PR fetch by number. Thin forward to the GitHub gateway. Used by
      * the recap backfill path to hydrate PRs that never landed in the local
@@ -244,6 +249,8 @@ export const PrContextServiceLive = Layer.effect(
       github.prs.meta(repoFullName, externalId, token);
     const prFiles = (repoFullName: string, externalId: number, token: string) =>
       github.prs.files(repoFullName, externalId, token);
+    const prCommits = (repoFullName: string, externalId: number, token: string) =>
+      github.prs.commits(repoFullName, externalId, token);
     const fetchPr = (repoFullName: string, externalId: number, token: string) =>
       github.prs.get(repoFullName, externalId, token);
     const searchClosedPrs = (
@@ -273,6 +280,7 @@ export const PrContextServiceLive = Layer.effect(
       resolveWithDiff,
       prMeta,
       prFiles,
+      prCommits,
       fetchPr,
       searchClosedPrs,
       resolveRepoToken,

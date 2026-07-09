@@ -109,9 +109,24 @@ export function getCachedWalkthroughHandler(
  * change in the background, so the user-clicked Pull and the
  * polling-detected commit produce identical externally-observable state.
  */
-export function regenerateWalkthroughHandler(prId: string, mode?: WalkthroughMode) {
+export function regenerateWalkthroughHandler(
+  prId: string,
+  userId: string,
+  mode?: WalkthroughMode,
+  generationMode: "full" | "incremental" = "incremental",
+) {
   return AppRuntime.runPromise(
-    Effect.flatMap(WalkthroughJobs, (jobs) => jobs.supersedeForPr(prId, undefined, mode)),
+    Effect.gen(function* () {
+      const jobs = yield* WalkthroughJobs;
+      if (generationMode === "full") {
+        yield* jobs.supersedeForPr(prId, undefined, mode);
+        return;
+      }
+
+      const prContext = yield* PrContextService;
+      const { pr } = yield* prContext.resolveBasic(prId, userId);
+      yield* jobs.supersedeForPr(prId, pr.headSha ?? undefined, mode);
+    }),
   );
 }
 

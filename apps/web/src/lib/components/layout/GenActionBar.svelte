@@ -28,10 +28,19 @@ interface Props {
   onResume?: () => void;
   onGenerate?: () => void;
   onRegenerate: () => void;
+  onRegenerateFromScratch?: () => void;
 }
 
-let { uiState, pendingAction, disabledTitle, onStop, onResume, onGenerate, onRegenerate }: Props =
-  $props();
+let {
+  uiState,
+  pendingAction,
+  disabledTitle,
+  onStop,
+  onResume,
+  onGenerate,
+  onRegenerate,
+  onRegenerateFromScratch,
+}: Props = $props();
 
 const destructiveDisabled = $derived(pendingAction !== null);
 const destructiveTitle = $derived(
@@ -123,20 +132,36 @@ const destructiveTitle = $derived(
     {:else if uiState.kind === "complete"}
       <GlassPill
         disabled={destructiveDisabled}
-        title={destructiveTitle ?? "Generate a fresh version"}
+        title={destructiveTitle ?? "Refresh this report using the current review as context"}
         onclick={onRegenerate}
       >
         <RefreshCw size={16} weight="fill" />
         Regenerate
       </GlassPill>
+      <GlassPill
+        disabled={destructiveDisabled}
+        title={destructiveTitle ?? "Generate a fresh review without using the prior report"}
+        onclick={onRegenerateFromScratch ?? onRegenerate}
+      >
+        <RotateCcw size={16} weight="fill" />
+        From scratch
+      </GlassPill>
     {:else if uiState.kind === "stale"}
       <GlassPill
         disabled={destructiveDisabled}
-        title={destructiveTitle ?? "Regenerate for the latest version"}
+        title={destructiveTitle ?? "Review only what changed since the last reviewed commit"}
         onclick={onRegenerate}
       >
         <RefreshCw size={16} weight="fill" />
-        {uiState.label ?? "Regenerate for latest"}
+        {uiState.label ?? "Review new commits"}
+      </GlassPill>
+      <GlassPill
+        disabled={destructiveDisabled}
+        title={destructiveTitle ?? "Generate a fresh review for the latest commit"}
+        onclick={onRegenerateFromScratch ?? onRegenerate}
+      >
+        <RotateCcw size={16} weight="fill" />
+        From scratch
       </GlassPill>
     {/if}
     </span>

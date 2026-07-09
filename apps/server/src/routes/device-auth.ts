@@ -132,6 +132,22 @@ function rejectedClientIdBody(host: string): {
   };
 }
 
+function githubDeviceFlowErrorMessage(host: string, res: Response, bodyText: string): string {
+  let detail = bodyText.trim();
+  try {
+    const parsed = JSON.parse(bodyText) as { error?: string; error_description?: string };
+    detail = parsed.error_description ?? parsed.error ?? detail;
+  } catch {
+    // Keep the raw text below.
+  }
+
+  const suffix = detail ? `: ${detail.slice(0, 300)}` : "";
+  return (
+    `GitHub device flow failed for ${host} (${res.status} ${res.statusText}${suffix}). ` +
+    "Check that the client ID belongs to this GitHub host and that Device Flow is enabled."
+  );
+}
+
 interface GitHubDeviceCodeResponse {
   device_code: string;
   user_code: string;
@@ -571,7 +587,7 @@ const publicAuthRoutes = new Elysia()
         if (res.status === 400 || res.status === 401) {
           return status(400, rejectedClientIdBody(urls.host));
         }
-        return status(502, { error: "Failed to initiate device flow" });
+        return status(502, { error: githubDeviceFlowErrorMessage(urls.host, res, text) });
       }
 
       const data = (await res.json()) as GitHubDeviceCodeResponse;

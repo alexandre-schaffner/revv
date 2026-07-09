@@ -6,6 +6,7 @@ import {
   CloneError,
   CloneInProgressError,
   CloneNotReadyError,
+  GitHubAccessDeniedError,
   GitHubAuthError,
   GitHubNetworkError,
   GitHubNotFoundError,
@@ -148,6 +149,11 @@ export function handleAppError(
   if (e instanceof GitHubNotFoundError) {
     ctx.set.status = 404;
     return { error: "Not found on GitHub" };
+  }
+
+  if (e instanceof GitHubAccessDeniedError) {
+    ctx.set.status = 403;
+    return { error: e.message };
   }
 
   if (e instanceof AiNotConfiguredError) {

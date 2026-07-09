@@ -1,4 +1,5 @@
 import { Effect } from "effect";
+import { GitHubNetworkError } from "../../../domain/errors";
 import { AppRuntime } from "../../../runtime";
 import { Broadcaster } from "../../../services/Broadcaster";
 import { GitHubGateway } from "../../../services/GitHub";
@@ -26,6 +27,21 @@ export interface SubmitReviewInput {
    * PR-switches. Empty / missing for pure approve flows with no issue list.
    */
   issueIds?: string[];
+}
+
+export function isExistingPendingReviewError(error: unknown): boolean {
+  if (!(error instanceof GitHubNetworkError) || typeof error.cause !== "string") {
+    return false;
+  }
+
+  const cause = error.cause;
+  if (cause.includes("User can only have one pending review per pull request")) {
+    return true;
+  }
+
+  return (
+    cause.includes("422 Unprocessable Entity") && cause.toLowerCase().includes("pending review")
+  );
 }
 
 /**
@@ -57,7 +73,8 @@ export function submitGithubReviewHandler(prId: string, userId: string, body: Su
         comment: "COMMENT",
       } as const;
 
-      const comments = (body.comments ?? []).map((c) => {
+      const inputComments = body.comments ?? [];
+      const comments = inputComments.map((c) => {
         const comment: {
           path: string;
           body: string;
@@ -78,20 +95,50 @@ export function submitGithubReviewHandler(prId: string, userId: string, body: Su
         return comment;
       });
 
-      const review = yield* github.reviews.submit(
-        repo.fullName,
-        pr.externalId,
-        {
-          event: eventMap[body.action],
-          body: body.body ?? "",
-          comments,
-        },
-        ghToken,
-      );
+      const reviewInput = {
+        event: eventMap[body.action],
+        body: body.body ?? "",
+        comments,
+      };
+      const review = yield* github.reviews
+        .submit(repo.fullName, pr.externalId, reviewInput, ghToken)
+        .pipe(
+          Effect.catchIf(isExistingPendingReviewError, () =>
+            Effect.gen(function* () {
+              const reviewer = yield* github.users.authenticatedFresh(ghToken);
+              const pending = yield* github.reviews.findPending(
+                repo.fullName,
+                pr.externalId,
+                reviewer.login,
+                ghToken,
+              );
+              if (!pending) {
+                return yield* Effect.fail(
+                  new GitHubNetworkError({
+                    cause:
+                      "GitHub reported an existing pending review, but Revv could not find it for the authenticated user.",
+                  }),
+                );
+              }
+
+              yield* github.reviews.deletePending(
+                repo.fullName,
+                pr.externalId,
+                pending.id,
+                ghToken,
+              );
+              return yield* github.reviews.submit(
+                repo.fullName,
+                pr.externalId,
+                reviewInput,
+                ghToken,
+              );
+            }),
+          ),
+        );
 
       // Link local threads to GitHub comment IDs so that the subsequent
       // sync-threads call doesn't create duplicate entries.
-      const inputComments = body.comments ?? [];
       if (inputComments.length > 0) {
         const ghComments = yield* github.reviews
           .commentsForReview(repo.fullName, pr.externalId, review.id, ghToken)

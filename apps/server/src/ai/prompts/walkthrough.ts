@@ -62,6 +62,16 @@ export function buildWalkthroughSystemPrompt(mode: WalkthroughMode = REVIEW_MODE
   return WALKTHROUGH_SYSTEM_COMMON_PROMPT.replace(REVIEW_PERSPECTIVE_MARKER, modePrompt.trim());
 }
 
+const WALKTHROUGH_SHARED_REVIEW_PRINCIPLES: string = readFileSync(
+  `${import.meta.dir}/walkthrough-shared-review-principles.md`,
+  "utf-8",
+);
+
+const WALKTHROUGH_INCREMENTAL_REFRESH_PROMPT: string = readFileSync(
+  `${import.meta.dir}/walkthrough-incremental-refresh.md`,
+  "utf-8",
+);
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 /**
@@ -127,6 +137,13 @@ export function buildWalkthroughPrompt(
     };
     mode?: WalkthroughMode;
     files: PrFileMeta[];
+    reviewMode?: {
+      readonly mode: "full" | "incremental";
+      readonly parentWalkthroughId: string | null;
+      readonly baseHeadSha: string | null;
+      readonly headSha: string;
+      readonly diffSource?: "full_pr" | "incremental_range" | "full_pr_fallback";
+    };
   },
   maxTokenBudget = 40000,
   continuation?: PromptContinuationContext,
@@ -148,8 +165,50 @@ export function buildWalkthroughPrompt(
   if (params.pr.body) {
     lines.push("", "### Description", params.pr.body);
   }
+  lines.push("", WALKTHROUGH_SHARED_REVIEW_PRINCIPLES);
 
-  lines.push("", "### Changed Files (diff — you can read full file contents with your tools)", "");
+  if (params.reviewMode?.mode === "incremental") {
+    lines.push(
+      "",
+      WALKTHROUGH_INCREMENTAL_REFRESH_PROMPT,
+      "",
+      "### Incremental Range",
+      `Previous reviewed head: ${params.reviewMode.baseHeadSha ?? "unknown"}`,
+      `Current head: ${params.reviewMode.headSha}`,
+      `Prior walkthrough id: ${params.reviewMode.parentWalkthroughId ?? "unknown"}`,
+      `Diff input: ${
+        params.reviewMode.diffSource === "full_pr_fallback"
+          ? "full PR diff fallback because the incremental range could not be resolved locally"
+          : params.reviewMode.diffSource === "incremental_range"
+            ? "incremental range only"
+            : "full PR diff"
+      }`,
+    );
+  }
+
+  // Commit history is intentionally NOT inlined here. The orchestrator
+  // persists it on the walkthrough row at job start; the agent fetches it
+  // lazily via the `get_commit_history` MCP read tool when it's about to
+  // open the required "How we got here" journey chapter (chapter 0). This
+  // keeps the prompt token-bounded on long PRs (up to 300 commits) and
+  // resume reruns of the prompt cheap.
+
+  const changedFilesHeading =
+    params.reviewMode?.mode === "incremental"
+      ? params.reviewMode.diffSource === "full_pr_fallback"
+        ? "### Changed Files (full PR diff fallback — incremental range unavailable)"
+        : "### Changed Files in Incremental Range (diff — prior reviewed head to current head)"
+      : "### Changed Files (diff — you can read full file contents with your tools)";
+  lines.push("", changedFilesHeading, "");
+
+  if (params.files.length === 0) {
+    lines.push(
+      params.reviewMode?.mode === "incremental"
+        ? "No files changed in the incremental range. Use the prior review state to confirm whether the current PR assessment still stands, then produce a concise updated report."
+        : "No changed files were returned for this PR.",
+      "",
+    );
+  }
 
   let approxTokens = 0;
   for (const file of params.files) {
