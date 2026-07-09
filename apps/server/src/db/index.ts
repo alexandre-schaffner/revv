@@ -401,11 +401,16 @@ function recoverWalkthroughModesMigration(sqlite: Database): void {
 
   const hasMode = columnExists(sqlite, "walkthroughs", "mode");
   const isRecorded = migrationRecorded(sqlite, WALKTHROUGH_MODES_MIGRATION_WHEN);
-  if (!hasMode && (isRecorded || hasAnyReviewRoundMigrationArtifact(sqlite))) {
+  const shouldRecover = hasMode || isRecorded || hasAnyReviewRoundMigrationArtifact(sqlite);
+  if (!shouldRecover) return;
+
+  if (!hasMode) {
     ensureWalkthroughModesSchema(sqlite);
-    recordMigration(sqlite, WALKTHROUGH_MODES_MIGRATION_TAG, WALKTHROUGH_MODES_MIGRATION_WHEN);
-    refreshMigrationHash(sqlite, WALKTHROUGH_MODES_MIGRATION_TAG, WALKTHROUGH_MODES_MIGRATION_WHEN);
   }
+  if (!isRecorded) {
+    recordMigration(sqlite, WALKTHROUGH_MODES_MIGRATION_TAG, WALKTHROUGH_MODES_MIGRATION_WHEN);
+  }
+  refreshMigrationHash(sqlite, WALKTHROUGH_MODES_MIGRATION_TAG, WALKTHROUGH_MODES_MIGRATION_WHEN);
 }
 
 function ensureReviewSessionModesSchema(sqlite: Database): void {
@@ -425,19 +430,24 @@ function recoverReviewSessionModesMigration(sqlite: Database): void {
 
   const hasMode = columnExists(sqlite, "review_sessions", "mode");
   const isRecorded = migrationRecorded(sqlite, REVIEW_SESSION_MODES_MIGRATION_WHEN);
-  if (!hasMode && (isRecorded || hasAnyReviewRoundMigrationArtifact(sqlite))) {
+  const shouldRecover = hasMode || isRecorded || hasAnyReviewRoundMigrationArtifact(sqlite);
+  if (!shouldRecover) return;
+
+  if (!hasMode) {
     ensureReviewSessionModesSchema(sqlite);
+  }
+  if (!isRecorded) {
     recordMigration(
       sqlite,
       REVIEW_SESSION_MODES_MIGRATION_TAG,
       REVIEW_SESSION_MODES_MIGRATION_WHEN,
     );
-    refreshMigrationHash(
-      sqlite,
-      REVIEW_SESSION_MODES_MIGRATION_TAG,
-      REVIEW_SESSION_MODES_MIGRATION_WHEN,
-    );
   }
+  refreshMigrationHash(
+    sqlite,
+    REVIEW_SESSION_MODES_MIGRATION_TAG,
+    REVIEW_SESSION_MODES_MIGRATION_WHEN,
+  );
 }
 
 function ensureAvatarContentSchema(sqlite: Database): void {
@@ -776,3 +786,15 @@ export function createDb(path?: string) {
 }
 
 export type Db = ReturnType<typeof createDb>;
+
+export const __dbRecoveryTest = {
+  columnExists,
+  ensureReviewRoundSchema,
+  migrationRecorded,
+  recoverReviewSessionModesMigration,
+  recoverUnjournaledReviewRoundMigration,
+  recoverWalkthroughModesMigration,
+  REVIEW_ROUNDS_MIGRATION_WHEN,
+  REVIEW_SESSION_MODES_MIGRATION_WHEN,
+  WALKTHROUGH_MODES_MIGRATION_WHEN,
+};

@@ -244,8 +244,7 @@ function commitsInRoundRange(
   }
 
   if (fromIndex !== -1) {
-    const afterFrom = commits.slice(0, fromIndex);
-    return afterFrom.reverse();
+    return commits.slice(fromIndex + 1);
   }
 
   return commits;
@@ -771,23 +770,24 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
       // in period N+1 lands in N+1's recap. We deliberately do NOT clear
       // it on any other transition: a row that briefly hit 'complete'
       // then got 'superseded' retains its completedAt for audit.
-      const completedAtPatch =
-        status === "complete" ? { completedAt: new Date().toISOString() } : {};
-      db.update(walkthroughs)
-        .set({
-          status,
-          ...completedAtPatch,
-          ...(options?.tokenUsage ? { tokenUsage: JSON.stringify(options.tokenUsage) } : {}),
-        })
-        .where(eq(walkthroughs.id, walkthroughId))
-        .run();
-      db.update(reviewRounds)
-        .set({
-          status,
-          ...(status === "complete" ? { completedAt: new Date().toISOString() } : {}),
-        })
-        .where(eq(reviewRounds.walkthroughId, walkthroughId))
-        .run();
+      const completedAt = status === "complete" ? new Date().toISOString() : null;
+      db.transaction(() => {
+        db.update(walkthroughs)
+          .set({
+            status,
+            ...(completedAt ? { completedAt } : {}),
+            ...(options?.tokenUsage ? { tokenUsage: JSON.stringify(options.tokenUsage) } : {}),
+          })
+          .where(eq(walkthroughs.id, walkthroughId))
+          .run();
+        db.update(reviewRounds)
+          .set({
+            status,
+            ...(completedAt ? { completedAt } : {}),
+          })
+          .where(eq(reviewRounds.walkthroughId, walkthroughId))
+          .run();
+      });
     }).pipe(Effect.catchAll(() => Effect.void)),
 
   supersede: (oldId, newId) =>
@@ -1542,3 +1542,8 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
       ),
     ),
 });
+
+export const __walkthroughTest = {
+  commitsInRoundRange,
+  deriveRoundFocusTitle,
+};

@@ -6,6 +6,7 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { bearer } from "better-auth/plugins";
 import { serverEnv } from "./config";
 import { createDb } from "./db/index";
+import { AUTH_TRUSTED_ORIGINS } from "./http-origins";
 import { appDataDir } from "./paths";
 
 // Re-exported for the handful of routes that still reach in directly.
@@ -68,15 +69,7 @@ export const auth = betterAuth({
   // social provider was never wired up on the frontend and required
   // `client_secret`, which we no longer collect.
   plugins: [bearer()],
-  trustedOrigins: [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:45678",
-    "http://localhost:45679",
-    "tauri://localhost",
-    "http://tauri.localhost",
-    "https://tauri.localhost",
-  ],
+  trustedOrigins: [...AUTH_TRUSTED_ORIGINS],
   account: {
     // Store OAuth state entirely in an encrypted cookie instead of DB + signed-cookie.
     // This avoids cross-origin cookie mismatch errors when the sign-in fetch originates

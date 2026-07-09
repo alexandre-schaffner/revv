@@ -235,7 +235,13 @@ $effect(() => {
     visibleReportRounds.find((round) => round.status !== "generating") ??
     visibleReportRounds[0] ??
     null;
-  if (!candidate || displayedReportIsVisible || isStreaming || reportLoadingId !== null) {
+  if (
+    !candidate ||
+    selectedReportId !== null ||
+    displayedReportIsVisible ||
+    isStreaming ||
+    reportLoadingId !== null
+  ) {
     return;
   }
 

@@ -29,11 +29,18 @@ export interface SubmitReviewInput {
   issueIds?: string[];
 }
 
-function isExistingPendingReviewError(error: unknown): boolean {
+export function isExistingPendingReviewError(error: unknown): boolean {
+  if (!(error instanceof GitHubNetworkError) || typeof error.cause !== "string") {
+    return false;
+  }
+
+  const cause = error.cause;
+  if (cause.includes("User can only have one pending review per pull request")) {
+    return true;
+  }
+
   return (
-    error instanceof GitHubNetworkError &&
-    typeof error.cause === "string" &&
-    error.cause.includes("User can only have one pending review per pull request")
+    cause.includes("422 Unprocessable Entity") && cause.toLowerCase().includes("pending review")
   );
 }
 
