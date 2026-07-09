@@ -1500,9 +1500,30 @@ export async function resume(
 ): Promise<void> {
   if (pendingActions.map.has(prId)) return;
   setPending(prId, "resume");
+  store.selectedReportIds.set(prId, null);
+  store.activePrId = prId;
+  if (!store.entries.has(prId)) {
+    const seed = freshEntry();
+    seed.mode = mode;
+    seed.historical = false;
+    seed.liveGeneration = true;
+    seed.phaseMessage = "Resuming walkthrough...";
+    setEntry(prId, seed);
+  }
   try {
     updateEntry(prId, (e) => {
+      e.mode = mode;
+      e.isStreaming = true;
+      e.doneReceived = false;
       e.streamError = null;
+      e.superseded = false;
+      e.historical = false;
+      e.liveGeneration = true;
+      e.cloneInProgress = false;
+      e.cloneRepoId = null;
+      e.phase = "connecting";
+      e.phaseMessage = "Resuming walkthrough...";
+      e.streamStartedAt = Date.now();
     });
     try {
       const res = await fetch(`${API_BASE_URL}/api/reviews/${prId}/walkthrough/resume`, {
@@ -1512,14 +1533,26 @@ export async function resume(
       });
       if (!res.ok) {
         updateEntry(prId, (e) => {
+          e.isStreaming = false;
+          e.liveGeneration = false;
           e.streamError =
             res.status === 404
               ? "No resumable walkthrough was found. Review new commits or regenerate instead."
               : `Failed to resume walkthrough (HTTP ${res.status}).`;
         });
+        return;
+      }
+
+      const started = (await res.json().catch(() => null)) as { walkthroughId?: string } | null;
+      if (started?.walkthroughId) {
+        updateEntry(prId, (e) => {
+          e.walkthroughId = started.walkthroughId ?? e.walkthroughId;
+        });
       }
     } catch (err) {
       updateEntry(prId, (e) => {
+        e.isStreaming = false;
+        e.liveGeneration = false;
         e.streamError = `Failed to resume walkthrough: ${
           err instanceof Error ? err.message : String(err)
         }`;
