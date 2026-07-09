@@ -7,6 +7,7 @@ import { serverEnv } from "./config";
 import { resolveDbPath } from "./db/index";
 import { CORS_ORIGINS } from "./http-origins";
 import { logError } from "./logger";
+import { isLoopbackAddress } from "./net";
 import { recordSpan } from "./observability/tracer";
 import { chatRoute } from "./routes/chat";
 import { debugRoutes } from "./routes/debug";
@@ -57,6 +58,18 @@ const app = new Elysia()
       methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     }),
   )
+  .onRequest(({ request, server, set }) => {
+    // Defense-in-depth: reject non-loopback peers so a future bind-widening
+    // can't silently re-expose the API. Skipped when bound to a non-loopback
+    // host; fails open when the peer IP is undeterminable.
+    if (isLoopbackAddress(serverEnv.host)) {
+      const peer = server?.requestIP(request)?.address;
+      if (peer && !isLoopbackAddress(peer)) {
+        set.status = 403;
+        return "Forbidden: this server only accepts loopback connections";
+      }
+    }
+  })
   .onRequest((ctx) => {
     // Stamp request start time for the post-hoc http.request span.
     (ctx.store as { _revvStartMs?: number })._revvStartMs = performance.now();
@@ -119,12 +132,14 @@ const app = new Elysia()
   }))
   .listen({
     port,
+    // Loopback only — without a hostname Bun binds to 0.0.0.0 (every interface).
+    hostname: serverEnv.host,
     // Prevent Bun's default idle timeout from killing long-running SSE streams
     // (e.g. agent chat turns that go quiet for >10 s during tool execution).
     idleTimeout: 255,
   });
 
-logError("server", `listening on http://localhost:${port}`);
+logError("server", `listening on http://${serverEnv.host}:${port}`);
 
 // Migrate any plaintext GitHub tokens left in the `account` table into the OS
 // secure store, then null the columns. Awaited before the sync scheduler boots
