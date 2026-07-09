@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.0](https://github.com/alexandre-schaffner/revv/compare/v0.16.1...v0.17.0) (2026-07-09)
+
+
+### Features
+
+* add incremental walkthrough review rounds ([#141](https://github.com/alexandre-schaffner/revv/issues/141)) ([f90d117](https://github.com/alexandre-schaffner/revv/commit/f90d117b4a96257eb896dda62044bfb04d743102))
+
 ## [0.16.1](https://github.com/alexandre-schaffner/revv/compare/v0.16.0...v0.16.1) (2026-07-07)
 
 
