@@ -565,6 +565,7 @@ export class WalkthroughService extends Context.Tag("WalkthroughService")<
         readonly prId: string;
         readonly walkthroughId: string;
         readonly prHeadSha: string;
+        readonly mode: WalkthroughMode;
         readonly seqAt: number;
       }>,
       never,
@@ -1122,6 +1123,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
           walkthroughId: walkthroughs.id,
           prId: walkthroughs.pullRequestId,
           prHeadSha: walkthroughs.prHeadSha,
+          mode: walkthroughs.mode,
           nextSeq: walkthroughs.nextSeq,
         })
         .from(walkthroughs)
@@ -1133,6 +1135,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         prId: r.prId,
         walkthroughId: r.walkthroughId,
         prHeadSha: r.prHeadSha,
+        mode: r.mode,
         seqAt: Math.max(0, r.nextSeq - 1),
       }));
     }).pipe(Effect.catchAll(() => Effect.succeed([]))),

@@ -891,9 +891,10 @@ export function onWalkthroughEvent(
 
 /**
  * On SSE (re)connect: seed entries for any in-flight walkthroughs owned
- * by the user's account. Drives the sidebar spinner and primes
- * `lastSeenSeq` so subsequent SSE envelopes apply via the same cursor
- * the snapshot already covered.
+ * by the user's account. Each cursor returned by `/active` is only safe
+ * after the matching REST snapshot has been merged into the store; otherwise
+ * the UI would drop already-written events without ever rendering the content
+ * they represent.
  */
 export async function hydrateActiveWalkthroughs(): Promise<void> {
   try {
@@ -907,22 +908,36 @@ export async function hydrateActiveWalkthroughs(): Promise<void> {
         prId: string;
         walkthroughId: string;
         prHeadSha: string;
+        mode?: WalkthroughMode;
         seqAt: number;
       }>;
     };
     for (const row of body.walkthroughs) {
+      const mode = row.mode ?? getSelectedMode(row.prId);
+      const selectedReportId = store.selectedReportIds.get(row.prId) ?? null;
+      if (selectedReportId !== null && selectedReportId !== row.walkthroughId) {
+        continue;
+      }
+
       const existing = store.entries.get(row.prId);
       if (!existing) {
         const stub = freshEntry();
         stub.walkthroughId = row.walkthroughId;
+        stub.mode = mode;
         stub.isStreaming = true;
         stub.liveGeneration = true;
         stub.phase = "writing";
         stub.phaseMessage = "Generating walkthrough…";
         setEntry(row.prId, stub);
       }
-      const existingSeq = store.lastSeenSeq.get(row.walkthroughId) ?? -1;
-      store.lastSeenSeq.set(row.walkthroughId, Math.max(existingSeq, row.seqAt));
+      const hydrated = await hydrateFromCache(row.prId, {
+        activate: store.activePrId === row.prId,
+        mode,
+      });
+      if (hydrated) {
+        const existingSeq = store.lastSeenSeq.get(row.walkthroughId) ?? -1;
+        store.lastSeenSeq.set(row.walkthroughId, Math.max(existingSeq, row.seqAt));
+      }
     }
   } catch (e) {
     wtTrace(

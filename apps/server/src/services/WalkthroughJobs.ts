@@ -772,6 +772,19 @@ export const WalkthroughJobsLive = Layer.effect(
         //     progress) for auto-continuation + completion.
         //   - Reacts to the terminal `done` / `error` events.
 
+        const closeGeneratorBestEffort = (
+          generator: AsyncGenerator<WalkthroughStreamEvent>,
+        ): Effect.Effect<void> =>
+          Effect.sync(() => {
+            void generator.return?.(undefined).catch((err) => {
+              debug(
+                "walkthrough-jobs",
+                "generator cleanup failed:",
+                err instanceof Error ? err.message : String(err),
+              );
+            });
+          });
+
         const processEvent = (
           state: LoopState,
           event: WalkthroughStreamEvent,
@@ -952,6 +965,7 @@ export const WalkthroughJobsLive = Layer.effect(
             if (result._tag === "continue") {
               return yield* consumeGenerator(state);
             }
+            yield* closeGeneratorBestEffort(state.currentGenerator);
             return result;
           });
 

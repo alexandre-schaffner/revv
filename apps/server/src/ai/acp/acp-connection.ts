@@ -74,6 +74,8 @@ export interface AcpConnectionHandle {
   readonly setMode: (sessionId: string, modeId: string) => Promise<void>;
   readonly prompt: (sessionId: string, prompt: ContentBlock[]) => Promise<StopReason>;
   readonly cancel: (sessionId: string) => Promise<void>;
+  /** Force-stop this pooled ACP subprocess. Next use will spawn a fresh connection. */
+  readonly stop: () => void;
   /** Register (or clear, with null) the update listener for a session. */
   readonly setListener: (sessionId: string, listener: AcpUpdateListener | null) => void;
   /** Flag a session as plan-mode so the permission handler refuses mode switches. */
@@ -303,6 +305,24 @@ function scheduleIdleStop(entry: ConnectionEntry): void {
   }, IDLE_STOP_MS);
 }
 
+function stopEntry(entry: ConnectionEntry): void {
+  if (!entry.alive) return;
+  entry.alive = false;
+  pool.delete(entry.key);
+  if (entry.idleTimer) {
+    clearTimeout(entry.idleTimer);
+    entry.idleTimer = null;
+  }
+  entry.listeners.clear();
+  entry.availableCommands.clear();
+  entry.planModeSessions.clear();
+  try {
+    entry.proc.kill();
+  } catch {
+    /* already gone */
+  }
+}
+
 function makeHandle(entry: ConnectionEntry): AcpConnectionHandle {
   const { connection } = entry;
   return {
@@ -384,6 +404,10 @@ function makeHandle(entry: ConnectionEntry): AcpConnectionHandle {
         debug("acp-connection", "cancel failed:", err instanceof Error ? err.message : String(err));
       }
     },
+    stop: () => {
+      debug("acp-connection", `force-stopping ${entry.agent} agent for ${entry.cwd}`);
+      stopEntry(entry);
+    },
     setListener: (sessionId, listener) => {
       if (listener) entry.listeners.set(sessionId, listener);
       else entry.listeners.delete(sessionId);
@@ -464,12 +488,7 @@ export function stopAllAcpConnections(): void {
     pool.delete(cwd);
     void pending
       .then((entry) => {
-        entry.alive = false;
-        try {
-          entry.proc.kill();
-        } catch {
-          /* already gone */
-        }
+        stopEntry(entry);
       })
       .catch(() => {
         /* never spawned */
