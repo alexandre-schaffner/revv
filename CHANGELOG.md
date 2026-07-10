@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.1](https://github.com/alexandre-schaffner/revv/compare/v0.17.0...v0.17.1) (2026-07-10)
+
+
+### Bug Fixes
+
+* **server:** bind API to loopback only + loopback request guard ([#171](https://github.com/alexandre-schaffner/revv/issues/171)) ([5350516](https://github.com/alexandre-schaffner/revv/commit/53505164faa6ac390853a6ecf69c110ef0b0bae0))
+
 ## [0.17.0](https://github.com/alexandre-schaffner/revv/compare/v0.16.1...v0.17.0) (2026-07-09)
 
 
