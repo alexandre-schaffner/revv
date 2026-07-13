@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.2](https://github.com/alexandre-schaffner/revv/compare/v0.17.1...v0.17.2) (2026-07-13)
+
+
+### Performance Improvements
+
+* **server:** make walkthrough rounds endpoint DB-only ([#174](https://github.com/alexandre-schaffner/revv/issues/174)) ([12d2415](https://github.com/alexandre-schaffner/revv/commit/12d24151e12d0c06e62b3d873bc8c0bce8756f6e))
+
 ## [0.17.1](https://github.com/alexandre-schaffner/revv/compare/v0.17.0...v0.17.1) (2026-07-10)
 
 
