@@ -280,14 +280,13 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
           const prContext = yield* PrContextService;
           const walkthroughService = yield* WalkthroughService;
           const mode = coerceWalkthroughMode(ctx.query.mode);
-          const { pr, repo, token } = yield* prContext.resolveBasic(
-            ctx.params.id,
-            ctx.session.user.id,
-          );
-          const commits = yield* prContext
-            .prCommits(repo.fullName, pr.externalId, token)
-            .pipe(Effect.catchAll(() => Effect.succeed([])));
-          return yield* walkthroughService.listReviewRounds(pr.id, pr.headSha, commits, mode);
+          const { pr } = yield* prContext.resolveBasic(ctx.params.id, ctx.session.user.id);
+          // No live GitHub commit fetch here: round focus titles derive from the
+          // commit list persisted per walkthrough (`walkthroughs.prCommits`), so
+          // this high-frequency endpoint stays DB-only. The client refreshes it
+          // for every active PR on each `prs:updated`, so an uncached paginated
+          // GitHub call here would add avoidable rate-limit pressure.
+          return yield* walkthroughService.listReviewRounds(pr.id, pr.headSha, mode);
         }),
       );
     } catch (e) {
