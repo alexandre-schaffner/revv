@@ -10,7 +10,7 @@ import { logError } from "./logger";
 import { isLoopbackAddress } from "./net";
 import { recordSpan } from "./observability/tracer";
 import { chatRoute } from "./routes/chat";
-import { debugClientLogRoute, debugRoutes } from "./routes/debug";
+import { debugRoutes } from "./routes/debug";
 import { deviceAuthRoutes } from "./routes/device-auth";
 import { eventsRoute } from "./routes/events";
 import { githubRoutes } from "./routes/github";
@@ -121,7 +121,6 @@ const app = new Elysia()
   .use(walkthroughsRoute)
   .use(eventsRoute)
   .use(debugRoutes)
-  .use(debugClientLogRoute)
   .use(mcpWalkthroughRoute)
   .use(mcpRecapRoute)
   .use(mcpChatContextRoute)

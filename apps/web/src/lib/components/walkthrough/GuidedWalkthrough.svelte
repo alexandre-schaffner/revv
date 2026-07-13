@@ -84,7 +84,6 @@ import { formatRelativeTime } from "$lib/utils/format-relative-time";
 import { renderMarkdown } from "$lib/utils/markdown";
 import { authHeaders } from "$lib/utils/session-token";
 import { groupIssuesBySeverityWithIndex } from "$lib/utils/walkthrough-issues";
-import { wtTrace } from "$lib/utils/wt-trace";
 import IssueCard from "./IssueCard.svelte";
 import WalkthroughRatingsGrid from "./WalkthroughRatingsGrid.svelte";
 import WalkthroughSection from "./WalkthroughSection.svelte";
@@ -222,14 +221,12 @@ const reportTriggerLabel = $derived.by(() => {
 
 async function chooseReport(walkthroughId: string | null): Promise<void> {
   if (reportLoadingId !== null) return;
-  wtTrace("report", `chooseReport enter prId=${prId} wt=${walkthroughId ?? "latest"}`);
   reportLoadingId = walkthroughId ?? "latest";
   try {
     await selectWalkthroughReport(prId, walkthroughId, selectedMode);
     reportPopoverOpen = false;
   } finally {
     reportLoadingId = null;
-    wtTrace("report", `chooseReport exit prId=${prId} wt=${walkthroughId ?? "latest"}`);
   }
 }
 
@@ -250,10 +247,6 @@ $effect(() => {
 
   const key = `${prId}:${selectedMode}:${candidate.walkthroughId}`;
   if (autoSelectedReportKey === key) return;
-  wtTrace(
-    "report",
-    `auto-select fire prId=${prId} candidate=${candidate.walkthroughId} prevKey=${autoSelectedReportKey ?? "null"} rounds=${visibleReportRounds.length}`,
-  );
   autoSelectedReportKey = key;
   void chooseReport(candidate.walkthroughId);
 });

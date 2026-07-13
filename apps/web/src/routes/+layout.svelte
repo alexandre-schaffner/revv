@@ -25,7 +25,6 @@ import { initShortcuts } from "$lib/stores/shortcuts.svelte";
 import { setSidebarView } from "$lib/stores/sidebar.svelte";
 import { initTheme } from "$lib/stores/theme.svelte";
 import { startUpdater, stopUpdater } from "$lib/updater/service";
-import { installDebugLogCapture } from "$lib/utils/debug-log";
 
 let { children } = $props();
 let hydrated = false;
@@ -110,7 +109,6 @@ $effect(() => {
 });
 
 $effect(() => {
-  installDebugLogCapture();
   initGsap();
   const cleanupTheme = initTheme();
   const cleanupShortcuts = initShortcuts();

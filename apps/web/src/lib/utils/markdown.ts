@@ -2,14 +2,6 @@ import DOMPurify from "dompurify";
 import { marked } from "marked";
 import remend from "remend";
 import { highlightCode } from "./code-highlight.svelte";
-import { debugLog, debugLogEnabled } from "./debug-log";
-
-// Diagnostic counters (REV_DEBUG only): a runaway `renderMarkdown` call rate
-// during walkthrough streaming is the signature of the O(N²) re-parse freeze.
-// Reported every 100 calls so the on-disk log shows the explosion + its rate.
-let rmCalls = 0;
-let rmChars = 0;
-let rmLastReport = 0;
 
 marked.setOptions({
   breaks: true,
@@ -62,14 +54,6 @@ function encodeBase64(source: string): string {
 }
 
 export function renderMarkdown(source: string): string {
-  if (debugLogEnabled()) {
-    rmCalls += 1;
-    rmChars += source.length;
-    if (rmCalls - rmLastReport >= 100) {
-      debugLog(`renderMarkdown calls=${rmCalls} totalChars=${rmChars}`);
-      rmLastReport = rmCalls;
-    }
-  }
   // Normalize literal \n escape sequences (AI output artefact) to real newlines
   // so that marked sees actual paragraph breaks instead of two-character text.
   const normalized = source.replace(/\\n/g, "\n");
