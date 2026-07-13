@@ -53,6 +53,10 @@ describe("commitsInRoundRange", () => {
 });
 
 describe("deriveRoundFocusTitle", () => {
+  it("returns null when persisted commits are unavailable", () => {
+    expect(__walkthroughTest.deriveRoundFocusTitle(null, "b", "d")).toBeNull();
+  });
+
   it("uses the newest non-low-signal commit in the selected round", () => {
     const commits = [
       commit("a", "feat: base"),
