@@ -7,8 +7,14 @@
 // Pairs with `debug("wt-trace", ...)` calls on the server side. When
 // investigating, also enable `REV_DEBUG=1` on the server so the matched
 // `[wt-trace]` lines surface in both vantage points.
+//
+// Additionally mirrors every trace to `debugLog` (see `debug-log.ts`), which
+// ships breadcrumbs to the on-disk `revv-debug.log` — the only vantage point
+// that survives a hard renderer freeze + app kill.
 
-const ENABLED: boolean = (() => {
+import { debugLog, debugLogEnabled } from "./debug-log";
+
+const CONSOLE_ENABLED: boolean = (() => {
   if (typeof window === "undefined") return false;
   try {
     return window.localStorage.getItem("revv:wt-trace") === "1";
@@ -18,7 +24,8 @@ const ENABLED: boolean = (() => {
 })();
 
 export function wtTrace(scope: string, ...args: unknown[]): void {
-  if (!ENABLED) return;
+  if (!CONSOLE_ENABLED && !debugLogEnabled()) return;
   const msg = args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ");
-  console.debug(`[wt-trace] [${scope}] ${msg}`);
+  if (CONSOLE_ENABLED) console.debug(`[wt-trace] [${scope}] ${msg}`);
+  debugLog(`[${scope}] ${msg}`);
 }

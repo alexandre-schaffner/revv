@@ -358,6 +358,7 @@ export function getIsSuperseded(): boolean {
 }
 
 export function markWalkthroughStale(prId: string): void {
+  wtTrace("superseded", `markWalkthroughStale prId=${prId}`);
   updateEntry(prId, (entry) => {
     if (!entry.doneReceived || entry.superseded) return;
     entry.superseded = true;
@@ -488,7 +489,11 @@ export async function loadReviewRounds(
 ): Promise<WalkthroughReviewRoundsResponse | null> {
   const key = reviewRoundsKey(prId, mode);
   const inflight = pendingReviewRoundLoads.get(key);
-  if (inflight) return inflight;
+  if (inflight) {
+    wtTrace("rounds", `loadReviewRounds dedup key=${key}`);
+    return inflight;
+  }
+  wtTrace("rounds", `loadReviewRounds fetch key=${key}`);
 
   const promise = (async () => {
     reviewRounds.entries.set(key, { status: "loading" });
@@ -520,6 +525,7 @@ export async function loadReviewRounds(
 }
 
 export function refreshReviewRoundsForPrs(prIds: readonly string[]): void {
+  wtTrace("rounds", `refreshReviewRoundsForPrs n=${prIds.length}`);
   for (const prId of prIds) {
     const mode = getSelectedMode(prId);
     if (
@@ -1432,6 +1438,7 @@ export async function regenerate(
   generationMode: "full" | "incremental" = "incremental",
 ): Promise<void> {
   if (pendingActions.map.has(prId)) return;
+  wtTrace("regenerate", `enter prId=${prId} mode=${mode} genMode=${generationMode}`);
   setPending(prId, "regenerate");
   try {
     clearAnimationTrackers(prId);
