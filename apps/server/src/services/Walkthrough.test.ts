@@ -130,3 +130,77 @@ describe("setStatus", () => {
     expect(round?.completedAt).toBe(walkthrough?.completedAt);
   });
 });
+
+// Regression: resuming an incremental walkthrough used to crash with
+// `UNIQUE constraint failed: walkthroughs.id`. `resumePending` didn't pass the
+// row's generationMode, so the resume defaulted to "full", `createPartial`'s
+// dedup keyed on the wrong (prId, headSha, mode, generationMode) tuple, missed
+// the existing incremental row, and tried to INSERT a duplicate id.
+describe("resume incremental walkthrough", () => {
+  function seedIncrementalGenerating(db: Db): void {
+    const sqlite = (db as unknown as { session: { client: { run: (sql: string) => void } } })
+      .session.client;
+    sqlite.run("PRAGMA foreign_keys = OFF");
+    db.insert(walkthroughs)
+      .values({
+        id: "wt-inc",
+        reviewSessionId: "session-1",
+        pullRequestId: "pr-1",
+        generatedAt: "2026-01-01T00:00:00Z",
+        modelUsed: "test-model",
+        prHeadSha: "head-2",
+        status: "generating",
+        mode: "author",
+        generationMode: "incremental",
+        parentWalkthroughId: "wt-parent",
+        baseHeadSha: "head-1",
+      })
+      .run();
+  }
+
+  it("listGenerating surfaces generationMode so resume can preserve it", async () => {
+    const db = createDb(":memory:");
+    seedIncrementalGenerating(db);
+
+    const rows = await Effect.runPromise(
+      Effect.gen(function* () {
+        return yield* (yield* WalkthroughService).listGenerating();
+      }).pipe(
+        Effect.provide(WalkthroughServiceLive),
+        Effect.provide(Layer.succeed(DbService, { db })),
+      ),
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.id).toBe("wt-inc");
+    expect(rows[0]?.generationMode).toBe("incremental");
+  });
+
+  it("createPartial reuses the existing row on a same-mode resume (no duplicate-id insert)", async () => {
+    const db = createDb(":memory:");
+    seedIncrementalGenerating(db);
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        return yield* (yield* WalkthroughService).createPartial({
+          id: "wt-inc",
+          reviewSessionId: "session-1",
+          prId: "pr-1",
+          modelUsed: "test-model",
+          prHeadSha: "head-2",
+          mode: "author",
+          generationMode: "incremental",
+          parentWalkthroughId: "wt-parent",
+          baseHeadSha: "head-1",
+        });
+      }).pipe(
+        Effect.provide(WalkthroughServiceLive),
+        Effect.provide(Layer.succeed(DbService, { db })),
+      ),
+    );
+
+    expect(result).toBe("wt-inc");
+    const count = db.select({ id: walkthroughs.id }).from(walkthroughs).all().length;
+    expect(count).toBe(1);
+  });
+});

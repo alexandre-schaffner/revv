@@ -461,6 +461,7 @@ export class WalkthroughService extends Context.Tag("WalkthroughService")<
         readonly pullRequestId: string;
         readonly prHeadSha: string;
         readonly mode: WalkthroughMode;
+        readonly generationMode: WalkthroughGenerationMode;
         readonly opencodeSessionId: string | null;
         readonly resumeAttempts: number;
       }>,
@@ -1003,6 +1004,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
           pullRequestId: walkthroughs.pullRequestId,
           prHeadSha: walkthroughs.prHeadSha,
           mode: walkthroughs.mode,
+          generationMode: walkthroughs.generationMode,
           opencodeSessionId: walkthroughs.opencodeSessionId,
           resumeAttempts: walkthroughs.resumeAttempts,
         })
@@ -1014,6 +1016,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         pullRequestId: r.pullRequestId,
         prHeadSha: r.prHeadSha,
         mode: r.mode as WalkthroughMode,
+        generationMode: r.generationMode as WalkthroughGenerationMode,
         opencodeSessionId: r.opencodeSessionId ?? null,
         resumeAttempts: r.resumeAttempts,
       }));

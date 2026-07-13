@@ -1627,6 +1627,13 @@ export const WalkthroughJobsLive = Layer.effect(
               trigger: "resume",
               walkthroughId: row.id,
               mode: row.mode,
+              // Carry the row's generationMode so `createPartial` dedups on the
+              // correct (prId, headSha, mode, generationMode) tuple and REUSES
+              // the existing row. Omitting it defaulted to "full", so resuming
+              // an incremental row missed the dedup and tried to INSERT a
+              // duplicate id → `UNIQUE constraint failed: walkthroughs.id`,
+              // leaving the row stuck at `generating` forever.
+              generationMode: row.generationMode,
             }).pipe(
               Effect.catchAllCause((cause) =>
                 Effect.sync(() => {
