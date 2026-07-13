@@ -158,6 +158,22 @@ describe("resume incremental walkthrough", () => {
       .run();
   }
 
+  function seedFullGeneratingAtSameSha(db: Db): void {
+    db.insert(walkthroughs)
+      .values({
+        id: "wt-full",
+        reviewSessionId: "session-2",
+        pullRequestId: "pr-1",
+        generatedAt: "2026-01-01T00:01:00Z",
+        modelUsed: "test-model",
+        prHeadSha: "head-2",
+        status: "generating",
+        mode: "author",
+        generationMode: "full",
+      })
+      .run();
+  }
+
   it("listGenerating surfaces generationMode so resume can preserve it", async () => {
     const db = createDb(":memory:");
     seedIncrementalGenerating(db);
@@ -174,6 +190,46 @@ describe("resume incremental walkthrough", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.id).toBe("wt-inc");
     expect(rows[0]?.generationMode).toBe("incremental");
+  });
+
+  it("findResumable surfaces generationMode for manual resume", async () => {
+    const db = createDb(":memory:");
+    seedIncrementalGenerating(db);
+
+    const row = await Effect.runPromise(
+      Effect.gen(function* () {
+        return yield* (yield* WalkthroughService).findResumable("pr-1", "author");
+      }).pipe(
+        Effect.provide(WalkthroughServiceLive),
+        Effect.provide(Layer.succeed(DbService, { db })),
+      ),
+    );
+
+    expect(row?.id).toBe("wt-inc");
+    expect(row?.generationMode).toBe("incremental");
+  });
+
+  it("getPartial can disambiguate rows by generationMode", async () => {
+    const db = createDb(":memory:");
+    seedIncrementalGenerating(db);
+    seedFullGeneratingAtSameSha(db);
+
+    const partial = await Effect.runPromise(
+      Effect.gen(function* () {
+        return yield* (yield* WalkthroughService).getPartial(
+          "pr-1",
+          "head-2",
+          "author",
+          "incremental",
+        );
+      }).pipe(
+        Effect.provide(WalkthroughServiceLive),
+        Effect.provide(Layer.succeed(DbService, { db })),
+      ),
+    );
+
+    expect(partial?.id).toBe("wt-inc");
+    expect(partial?.generationMode).toBe("incremental");
   });
 
   it("createPartial reuses the existing row on a same-mode resume (no duplicate-id insert)", async () => {

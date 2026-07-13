@@ -7,12 +7,17 @@
 // from re-invalidating on its own output → `effect_update_depth_exceeded`
 // (a hard UI freeze).
 //
-// A SHALLOW comparison is sound here specifically because every store updater
-// replaces a field's reference when it changes it (immutable updates:
-// `entry.blocks = [...]`, `entry.explorationResults = {...}`, scalar
-// reassignments). So a `!==` on any own key means a real change, and all-equal
-// means a genuine no-op. In-place nested mutation would defeat this — don't
-// introduce it in an updater.
+// A SHALLOW comparison is sound here specifically because `updateEntryInMap`
+// freezes the existing entry's nested references before handing a shallow clone
+// to the updater. Scalar assignments and reference replacements still work;
+// in-place nested mutations throw instead of being mistaken for no-ops.
+
+type MutableEntryMap<T extends object> = {
+  get(key: string): T | undefined;
+  set(key: string, value: T): unknown;
+};
+
+export type EntryUpdateResult = "missing" | "unchanged" | "changed";
 
 /**
  * True when `a` and `b` have identical own enumerable keys with `===`-equal
@@ -31,4 +36,56 @@ export function shallowEntryEqual<T extends object>(a: T, b: T): boolean {
     }
   }
   return true;
+}
+
+function freezeDeep(value: unknown, seen: WeakSet<object>): void {
+  if (value === null || typeof value !== "object") return;
+  if (seen.has(value)) return;
+  seen.add(value);
+  for (const child of Object.values(value)) {
+    freezeDeep(child, seen);
+  }
+  if (!Object.isFrozen(value)) {
+    Object.freeze(value);
+  }
+}
+
+function freezeNestedReferences<T extends object>(entry: T): void {
+  const seen = new WeakSet<object>();
+  for (const value of Object.values(entry)) {
+    freezeDeep(value, seen);
+  }
+}
+
+/**
+ * Shared write primitive for walkthrough entry maps.
+ *
+ * Updaters mutate a shallow clone. When they make a real change, they must
+ * replace the changed field's reference; mutating nested arrays/objects in
+ * place is rejected by freezing the existing nested references first.
+ */
+export function updateEntryInMap<T extends object>(
+  entries: MutableEntryMap<T>,
+  key: string,
+  updater: (entry: T) => void,
+): EntryUpdateResult {
+  const entry = entries.get(key);
+  if (!entry) return "missing";
+
+  freezeNestedReferences(entry);
+  const next = { ...entry };
+  try {
+    updater(next);
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new TypeError(
+        "updateEntry updater attempted an in-place nested mutation; replace the field reference instead.",
+      );
+    }
+    throw error;
+  }
+
+  if (shallowEntryEqual(entry, next)) return "unchanged";
+  entries.set(key, next);
+  return "changed";
 }

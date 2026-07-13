@@ -413,6 +413,7 @@ export class WalkthroughService extends Context.Tag("WalkthroughService")<
       prId: string,
       headSha: string,
       mode?: WalkthroughMode,
+      generationMode?: WalkthroughGenerationMode,
     ) => Effect.Effect<
       | (Walkthrough & {
           status: "generating" | "error";
@@ -488,6 +489,7 @@ export class WalkthroughService extends Context.Tag("WalkthroughService")<
         readonly pullRequestId: string;
         readonly prHeadSha: string;
         readonly mode: WalkthroughMode;
+        readonly generationMode: WalkthroughGenerationMode;
         readonly status: "generating" | "error";
       } | null,
       never,
@@ -922,7 +924,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
       return rowToWalkthrough(row, semanticSteps, blocks, issues, ratings, avatarContent);
     }),
 
-  getPartial: (prId, headSha, mode = "reviewer") =>
+  getPartial: (prId, headSha, mode = "reviewer", generationMode) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
 
@@ -944,6 +946,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
             eq(walkthroughs.pullRequestId, prId),
             eq(walkthroughs.prHeadSha, headSha),
             eq(walkthroughs.mode, mode),
+            ...(generationMode ? [eq(walkthroughs.generationMode, generationMode)] : []),
             ne(walkthroughs.status, "complete"),
             ne(walkthroughs.status, "superseded"),
           ),
@@ -1031,6 +1034,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
           pullRequestId: walkthroughs.pullRequestId,
           prHeadSha: walkthroughs.prHeadSha,
           mode: walkthroughs.mode,
+          generationMode: walkthroughs.generationMode,
           status: walkthroughs.status,
         })
         .from(walkthroughs)
@@ -1049,6 +1053,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         pullRequestId: row.pullRequestId,
         prHeadSha: row.prHeadSha,
         mode: row.mode as WalkthroughMode,
+        generationMode: row.generationMode as WalkthroughGenerationMode,
         status: row.status as "generating" | "error",
       };
     }),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { shallowEntryEqual } from "./walkthrough-entry-equal";
+import { shallowEntryEqual, updateEntryInMap } from "./walkthrough-entry-equal";
 
 // Regression guard for the new-commit freeze: `updateEntry` relies on this
 // detecting a no-op update so it can skip the reactive `store.entries` write.
@@ -32,13 +32,39 @@ describe("shallowEntryEqual", () => {
     expect(shallowEntryEqual(a, { ...a, results: { ...a.results } })).toBe(false);
   });
 
-  it("does NOT detect an in-place nested mutation (why updaters must be immutable)", () => {
-    const a = { blocks: [{ id: "1" }] };
-    const b = { ...a };
-    // Same array reference mutated in place — shallow equality can't see it.
-    // This documents the invariant: store updaters replace references, never
-    // mutate nested state in place.
-    b.blocks.push({ id: "2" });
-    expect(shallowEntryEqual(a, b)).toBe(true);
+  it("does not write the entry map for a no-op updater", () => {
+    class CountingMap<K, V> extends Map<K, V> {
+      setCount = 0;
+
+      override set(key: K, value: V): this {
+        this.setCount += 1;
+        return super.set(key, value);
+      }
+    }
+
+    const entries = new CountingMap<string, { doneReceived: boolean; superseded: boolean }>();
+    const entry = { doneReceived: false, superseded: false };
+    entries.set("pr-1", entry);
+    entries.setCount = 0;
+
+    const result = updateEntryInMap(entries, "pr-1", (draft) => {
+      if (!draft.doneReceived || draft.superseded) return;
+      draft.superseded = true;
+    });
+
+    expect(result).toBe("unchanged");
+    expect(entries.setCount).toBe(0);
+    expect(entries.get("pr-1")).toBe(entry);
+  });
+
+  it("rejects in-place nested mutations instead of treating them as no-ops", () => {
+    const entries = new Map<string, { blocks: Array<{ id: string }> }>();
+    entries.set("pr-1", { blocks: [{ id: "1" }] });
+
+    expect(() =>
+      updateEntryInMap(entries, "pr-1", (draft) => {
+        draft.blocks.push({ id: "2" });
+      }),
+    ).toThrow(/in-place nested mutation/);
   });
 });

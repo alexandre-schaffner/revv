@@ -1298,7 +1298,10 @@ export const WalkthroughJobsLive = Layer.effect(
           );
         }
 
-        let partial = yield* provideDb(walkthroughService.getPartial(pr.id, meta.headSha, mode));
+        const requestedGenerationMode = params.generationMode ?? "full";
+        let partial = yield* provideDb(
+          walkthroughService.getPartial(pr.id, meta.headSha, mode, requestedGenerationMode),
+        );
         if (
           params.walkthroughId !== undefined &&
           partial !== null &&
@@ -1312,8 +1315,6 @@ export const WalkthroughJobsLive = Layer.effect(
 
         const reviewSession = yield* provideDb(reviewService.getOrCreateActiveSession(pr.id, mode));
         const reviewSessionId = partial?.reviewSessionId ?? reviewSession.id;
-        const requestedGenerationMode = params.generationMode ?? "full";
-
         const settings = yield* provideDb(settingsService.getSettings());
         const agent = yield* provideDb(settingsService.resolveAgent());
         // Guard the shared `aiModel` against the generation agent: the chat

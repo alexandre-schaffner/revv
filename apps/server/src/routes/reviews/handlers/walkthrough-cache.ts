@@ -176,6 +176,7 @@ export function resumeWalkthroughHandler(
         trigger: "resume",
         walkthroughId: row.id,
         mode: mode ?? row.mode,
+        generationMode: row.generationMode,
       });
     }),
   );
