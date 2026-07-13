@@ -1,7 +1,11 @@
+import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
+import { pullRequests } from "../db/schema";
+import { NotFoundError } from "../domain/errors";
 import { AppRuntime } from "../runtime";
 import { Broadcaster } from "../services/Broadcaster";
+import { DbService } from "../services/Db";
 import { PrContextService } from "../services/PrContext";
 import { ReviewService } from "../services/Review";
 import { SyncService } from "../services/Sync";
@@ -277,15 +281,24 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
     try {
       return await AppRuntime.runPromise(
         Effect.gen(function* () {
-          const prContext = yield* PrContextService;
+          const { db } = yield* DbService;
           const walkthroughService = yield* WalkthroughService;
           const mode = coerceWalkthroughMode(ctx.query.mode);
-          const { pr } = yield* prContext.resolveBasic(ctx.params.id, ctx.session.user.id);
-          // No live GitHub commit fetch here: round focus titles derive from the
-          // commit list persisted per walkthrough (`walkthroughs.prCommits`), so
-          // this high-frequency endpoint stays DB-only. The client refreshes it
-          // for every active PR on each `prs:updated`, so an uncached paginated
-          // GitHub call here would add avoidable rate-limit pressure.
+          const pr = db
+            .select({ id: pullRequests.id, headSha: pullRequests.headSha })
+            .from(pullRequests)
+            .where(eq(pullRequests.id, ctx.params.id))
+            .get();
+          if (!pr) {
+            return yield* Effect.fail(
+              new NotFoundError({ resource: "pull_request", id: ctx.params.id }),
+            );
+          }
+          // No PR context or live GitHub commit fetch here: round focus titles
+          // derive from the commit list persisted per walkthrough
+          // (`walkthroughs.prCommits`), so this high-frequency endpoint stays
+          // DB-only. The client refreshes it for every active PR on each
+          // `prs:updated`, so GitHub calls here add avoidable rate-limit pressure.
           return yield* walkthroughService.listReviewRounds(pr.id, pr.headSha, mode);
         }),
       );
