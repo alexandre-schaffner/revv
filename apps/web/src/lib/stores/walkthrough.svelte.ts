@@ -39,6 +39,7 @@ import { toast } from "svelte-sonner";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { api } from "$lib/api/client";
 import { getReviewModeForPr, updateRepoCloneStatus } from "$lib/stores/prs.svelte";
+import { shallowEntryEqual } from "$lib/stores/walkthrough-entry-equal";
 import { authHeaders } from "$lib/utils/session-token";
 import { wtTrace } from "$lib/utils/wt-trace";
 
@@ -287,12 +288,14 @@ export function updateEntry(prId: string, updater: (e: WalkthroughEntry) => void
   }
   const next = { ...entry };
   updater(next);
-  // NOTE: this reads `store.entries` (get, above) and writes it (set, below)
-  // unconditionally — even when `updater` changed nothing. Calling this from a
-  // `$effect` is therefore a self-invalidation trap: Svelte tracks the read,
-  // the write re-triggers the effect, and you get `effect_update_depth_exceeded`.
-  // Callers invoked from an effect (e.g. `markWalkthroughStale`) MUST guard so
-  // they only reach this on an actual state transition.
+  // Skip the reactive write on a genuine no-op. `store.entries` is both read
+  // (get, above) and written (set, below), so an UNCONDITIONAL write turns any
+  // `$effect` that calls updateEntry into a self-invalidation loop —
+  // `effect_update_depth_exceeded`, a hard UI freeze (this is exactly how a
+  // new commit on a viewed PR used to freeze the app via `markWalkthroughStale`).
+  // Every updater replaces references on change, so shallow equality is a sound
+  // no-op detector; see `shallowEntryEqual`.
+  if (shallowEntryEqual(entry, next)) return;
   store.entries.set(prId, next);
 }
 
@@ -364,21 +367,16 @@ export function getIsSuperseded(): boolean {
 }
 
 export function markWalkthroughStale(prId: string): void {
-  // Guard the WRITE, not just the field mutation. `updateEntry` reassigns
-  // `store.entries` UNCONDITIONALLY (fresh clone even on a no-op), and this
-  // function is called from a `$effect` (AppShell's new-commit watcher).
-  // Svelte tracks the `store.entries` read that happens inside `updateEntry`,
-  // so writing on every call makes that effect re-invalidate on its own
-  // output → `effect_update_depth_exceeded`, i.e. a hard UI freeze the moment
-  // a viewed PR gains a commit. Bailing before we touch the map when the row
-  // is absent or already stale lets the effect settle after one transition.
-  const entry = store.entries.get(prId);
-  if (!entry?.doneReceived || entry.superseded) return;
-  updateEntry(prId, (e) => {
-    e.superseded = true;
-    e.isStreaming = false;
-    e.liveGeneration = false;
-    e.streamError = null;
+  // Called from a `$effect` (AppShell's new-commit watcher). The early return
+  // leaves the cloned entry untouched, so `updateEntry`'s no-op dirty-check
+  // skips the `store.entries` write — that is what stops the effect from
+  // re-invalidating on its own output (`effect_update_depth_exceeded`).
+  updateEntry(prId, (entry) => {
+    if (!entry.doneReceived || entry.superseded) return;
+    entry.superseded = true;
+    entry.isStreaming = false;
+    entry.liveGeneration = false;
+    entry.streamError = null;
   });
 }
 export function getSource(): "local" | "remote" {
