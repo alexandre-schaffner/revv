@@ -200,6 +200,11 @@ export async function diffPatchForPath(
  * which forces a synchronous multi-MB `String.split` on the event loop for
  * large/generated files. Output is `<added>\t<deleted>\t<path>` per line;
  * binary files report `-\t-`.
+ *
+ * `core.quotePath=false` keeps non-ASCII paths verbatim (git octal-escapes
+ * them by default), so they match the verbatim paths that `--name-status -z`
+ * emits — otherwise every non-ASCII file would miss the numstat lookup and
+ * fall back to counting its patch body.
  */
 export async function diffNumstat(
   worktreePath: string,
@@ -207,7 +212,7 @@ export async function diffNumstat(
   headRef: string,
 ): Promise<string> {
   return runGitCapture(
-    ["diff", "--find-renames", "--numstat", baseRef, headRef],
+    ["-c", "core.quotePath=false", "diff", "--find-renames", "--numstat", baseRef, headRef],
     worktreePath,
     30_000,
   );

@@ -2,10 +2,11 @@ import { describe, expect, it } from "bun:test";
 import {
   capPatch,
   countPatchLines,
-  MAX_INCREMENTAL_PATCH_BYTES,
+  MAX_INCREMENTAL_PATCH_CHARS,
   normalizeGitStatus,
   parseNameStatusZ,
   parseNumstat,
+  resolveCounts,
 } from "./incremental-diff";
 
 // ── normalizeGitStatus ───────────────────────────────────────────────────────
@@ -105,18 +106,45 @@ describe("capPatch", () => {
   });
 
   it("returns a patch at exactly the cap unchanged", () => {
-    const patch = "+".repeat(MAX_INCREMENTAL_PATCH_BYTES);
+    const patch = "+".repeat(MAX_INCREMENTAL_PATCH_CHARS);
     expect(capPatch(patch)).toBe(patch);
   });
 
   it("truncates oversized patches with a marker", () => {
-    const oversized = "+".repeat(MAX_INCREMENTAL_PATCH_BYTES + 5000);
+    const oversized = "+".repeat(MAX_INCREMENTAL_PATCH_CHARS + 5000);
     const result = capPatch(oversized);
     expect(result).not.toBeNull();
-    expect(result?.startsWith("+".repeat(MAX_INCREMENTAL_PATCH_BYTES))).toBe(true);
+    expect(result?.startsWith("+".repeat(MAX_INCREMENTAL_PATCH_CHARS))).toBe(true);
     expect(result).toContain("diff truncated");
+    // The original length is recorded in the marker.
     expect(result).toContain(String(oversized.length));
     // The kept diff body never exceeds the cap (the marker is short metadata).
-    expect(result?.length).toBeLessThan(MAX_INCREMENTAL_PATCH_BYTES + 200);
+    expect(result?.length).toBeLessThan(MAX_INCREMENTAL_PATCH_CHARS + 200);
+  });
+});
+
+// ── resolveCounts ────────────────────────────────────────────────────────────
+
+describe("resolveCounts", () => {
+  const numstat = parseNumstat("12\t3\tsrc/a.ts\n");
+
+  it("uses the exact numstat entry when the path matches", () => {
+    // Patch is deliberately wrong to prove numstat wins over scanning it.
+    expect(resolveCounts(numstat, "src/a.ts", "+x\n-y\n+z")).toEqual({
+      additions: 12,
+      deletions: 3,
+    });
+  });
+
+  it("falls back to scanning the patch when numstat has no entry (renames)", () => {
+    const patch = ["@@ -1 +1,2 @@", "-old", "+new", "+extra"].join("\n");
+    expect(resolveCounts(numstat, "src/renamed.ts", patch)).toEqual({
+      additions: 2,
+      deletions: 1,
+    });
+  });
+
+  it("returns zero counts when there is neither a numstat entry nor a patch", () => {
+    expect(resolveCounts(numstat, "src/gone.ts", null)).toEqual({ additions: 0, deletions: 0 });
   });
 });

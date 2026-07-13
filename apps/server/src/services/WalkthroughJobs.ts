@@ -79,10 +79,10 @@ import {
 } from "./GitOps";
 import {
   capPatch,
-  countPatchLines,
   normalizeGitStatus,
   parseNameStatusZ,
   parseNumstat,
+  resolveCounts,
 } from "./incremental-diff";
 import { analyzeJobFailure } from "./job-failure";
 import { makeStartJobMutex } from "./job-mutex";
@@ -551,11 +551,7 @@ export const WalkthroughJobsLive = Layer.effect(
             } catch {
               patch = null;
             }
-            // Exact counts from numstat when the path matches; renames (numstat
-            // uses `a => b` notation) fall back to scanning the capped patch.
-            const counts =
-              numstat.get(file.filename) ??
-              (patch ? countPatchLines(patch) : { additions: 0, deletions: 0 });
+            const counts = resolveCounts(numstat, file.filename, patch);
             files.push({
               filename: file.filename,
               previousFilename: file.previousFilename,

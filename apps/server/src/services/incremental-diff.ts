@@ -10,12 +10,15 @@
 // each patch, and source add/delete counts from `git diff --numstat` (which
 // git computes) instead of scanning every patch body.
 
+import { truncatePatchToChars } from "./patch-truncate";
+
 /**
  * Upper bound on the size of a single file's incremental diff patch we keep
  * and hand to the agent. Anything larger is truncated with a marker so the
- * agent knows the diff was clipped.
+ * agent knows the diff was clipped. Measured in UTF-16 code units (see
+ * `patch-truncate.ts`).
  */
-export const MAX_INCREMENTAL_PATCH_BYTES = 128 * 1024;
+export const MAX_INCREMENTAL_PATCH_CHARS = 128 * 1024;
 
 /** Map a `git diff --name-status` status letter to the prompt file status. */
 export function normalizeGitStatus(raw: string): string {
@@ -118,12 +121,25 @@ export function parseNumstat(raw: string): ReadonlyMap<string, LineCounts> {
 /**
  * Clip an oversized patch so no synchronous scan (or the model's context
  * window) ever sees a multi-MB blob. Returns `null` for an empty/whitespace
- * patch. Slices on a UTF-16 code-unit boundary — good enough for a diff, which
- * is line-oriented ASCII in practice.
+ * patch; otherwise delegates to the shared truncation primitive.
  */
 export function capPatch(raw: string): string | null {
-  const trimmed = raw.trim();
-  if (trimmed.length === 0) return null;
-  if (raw.length <= MAX_INCREMENTAL_PATCH_BYTES) return raw;
-  return `${raw.slice(0, MAX_INCREMENTAL_PATCH_BYTES)}\n… [diff truncated: ${raw.length} bytes, showing first ${MAX_INCREMENTAL_PATCH_BYTES}]`;
+  if (raw.trim().length === 0) return null;
+  return truncatePatchToChars(raw, MAX_INCREMENTAL_PATCH_CHARS, "diff").patch;
+}
+
+/**
+ * Resolve a file's line counts: prefer the exact numbers git reported via
+ * `--numstat` (keyed by path), and fall back to scanning the already-capped
+ * patch only for the files numstat can't key directly — renames (arrow
+ * notation). A file with no patch and no numstat entry counts as zero.
+ */
+export function resolveCounts(
+  numstat: ReadonlyMap<string, LineCounts>,
+  filename: string,
+  patch: string | null,
+): LineCounts {
+  const hit = numstat.get(filename);
+  if (hit) return hit;
+  return patch ? countPatchLines(patch) : { additions: 0, deletions: 0 };
 }
