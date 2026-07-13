@@ -281,11 +281,8 @@ function deriveRoundFocusTitle(
   rawCommits: string | null,
   fromSha: string | null,
   toSha: string,
-  fallbackCommits: readonly PrCommit[] = [],
 ): string | null {
-  const persistedCommits = parsePrCommits(rawCommits);
-  const sourceCommits = persistedCommits.length > 0 ? persistedCommits : fallbackCommits;
-  const commits = commitsInRoundRange(sourceCommits, fromSha, toSha);
+  const commits = commitsInRoundRange(parsePrCommits(rawCommits), fromSha, toSha);
   const subjects = commits
     .map((commit) => subjectFromCommitMessage(commit.message))
     .filter((subject) => subject.length > 0);
@@ -624,7 +621,6 @@ export class WalkthroughService extends Context.Tag("WalkthroughService")<
     readonly listReviewRounds: (
       prId: string,
       currentHeadSha: string | null,
-      fallbackCommits?: readonly PrCommit[],
       mode?: WalkthroughMode,
     ) => Effect.Effect<WalkthroughReviewRoundsResponse, never, DbService>;
   }
@@ -1316,7 +1312,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
       };
     }).pipe(Effect.catchAll(() => Effect.succeed(null))),
 
-  listReviewRounds: (prId, currentHeadSha, fallbackCommits = [], mode = "reviewer") =>
+  listReviewRounds: (prId, currentHeadSha, mode = "reviewer") =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
       const rows = db
@@ -1358,12 +1354,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         createdAt: row.createdAt,
         completedAt: row.completedAt ?? null,
         summary: row.summary.trim() ? row.summary : null,
-        focusTitle: deriveRoundFocusTitle(
-          row.prCommits,
-          row.fromSha ?? null,
-          row.toSha,
-          fallbackCommits,
-        ),
+        focusTitle: deriveRoundFocusTitle(row.prCommits, row.fromSha ?? null, row.toSha),
         prHeadSha: row.prHeadSha,
       }));
 
@@ -1402,12 +1393,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
           createdAt: row.generatedAt,
           completedAt: row.completedAt ?? null,
           summary: row.summary.trim() ? row.summary : null,
-          focusTitle: deriveRoundFocusTitle(
-            row.prCommits,
-            row.baseHeadSha ?? null,
-            row.prHeadSha,
-            fallbackCommits,
-          ),
+          focusTitle: deriveRoundFocusTitle(row.prCommits, row.baseHeadSha ?? null, row.prHeadSha),
           prHeadSha: row.prHeadSha,
         }));
       }

@@ -61,7 +61,7 @@ describe("deriveRoundFocusTitle", () => {
       commit("d", "test: add query coverage"),
     ];
 
-    expect(__walkthroughTest.deriveRoundFocusTitle(null, "b", "d", commits)).toBe(
+    expect(__walkthroughTest.deriveRoundFocusTitle(JSON.stringify(commits), "b", "d")).toBe(
       "add range indexes",
     );
   });
