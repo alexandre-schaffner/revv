@@ -1,7 +1,7 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
-import { pullRequests } from "../db/schema";
+import { pullRequests, repositories } from "../db/schema";
 import { NotFoundError } from "../domain/errors";
 import { AppRuntime } from "../runtime";
 import { Broadcaster } from "../services/Broadcaster";
@@ -287,7 +287,13 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
           const pr = db
             .select({ id: pullRequests.id, headSha: pullRequests.headSha })
             .from(pullRequests)
-            .where(eq(pullRequests.id, ctx.params.id))
+            .innerJoin(repositories, eq(repositories.id, pullRequests.repositoryId))
+            .where(
+              and(
+                eq(pullRequests.id, ctx.params.id),
+                eq(repositories.accountId, ctx.account.accountId),
+              ),
+            )
             .get();
           if (!pr) {
             return yield* Effect.fail(
