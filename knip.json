@@ -9,6 +9,7 @@
       "entry": [
         "src/routes/**/+{page,layout,server,error,page.load,layout.load}.svelte",
         "src/routes/**/+{page,layout}.ts",
+        "src/**/*.test.ts",
         "src/app.html",
         "src/app.d.ts",
         "src/hooks.server.ts",

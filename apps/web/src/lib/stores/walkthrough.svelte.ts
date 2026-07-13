@@ -39,6 +39,7 @@ import { toast } from "svelte-sonner";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { api } from "$lib/api/client";
 import { getReviewModeForPr, updateRepoCloneStatus } from "$lib/stores/prs.svelte";
+import { updateEntryInMap } from "$lib/stores/walkthrough-entry-equal";
 import { authHeaders } from "$lib/utils/session-token";
 import { wtTrace } from "$lib/utils/wt-trace";
 
@@ -280,14 +281,10 @@ export function getLastWalkthroughEventAt(prId: string): number | null {
 }
 
 export function updateEntry(prId: string, updater: (e: WalkthroughEntry) => void): void {
-  const entry = store.entries.get(prId);
-  if (!entry) {
+  const result = updateEntryInMap(store.entries, prId, updater);
+  if (result === "missing") {
     wtTrace("store", `updateEntry-noop prId=${prId} reason=no-entry`);
-    return;
   }
-  const next = { ...entry };
-  updater(next);
-  store.entries.set(prId, next);
 }
 
 // ── Getters ─────────────────────────────────────────────────────────────────
@@ -358,6 +355,10 @@ export function getIsSuperseded(): boolean {
 }
 
 export function markWalkthroughStale(prId: string): void {
+  // Called from a `$effect` (AppShell's new-commit watcher). The early return
+  // leaves the cloned entry untouched, so `updateEntry`'s no-op dirty-check
+  // skips the `store.entries` write — that is what stops the effect from
+  // re-invalidating on its own output (`effect_update_depth_exceeded`).
   updateEntry(prId, (entry) => {
     if (!entry.doneReceived || entry.superseded) return;
     entry.superseded = true;
