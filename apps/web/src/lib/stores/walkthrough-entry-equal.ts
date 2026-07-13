@@ -8,9 +8,10 @@
 // (a hard UI freeze).
 //
 // A SHALLOW comparison is sound here specifically because `updateEntryInMap`
-// freezes the existing entry's nested references before handing a shallow clone
-// to the updater. Scalar assignments and reference replacements still work;
-// in-place nested mutations throw instead of being mistaken for no-ops.
+// freezes the existing entry's direct mutable field references before handing
+// a shallow clone to the updater. Scalar assignments and reference replacements
+// still work; in-place mutations like `entry.blocks.push(...)` throw instead
+// of being mistaken for no-ops.
 
 type MutableEntryMap<T extends object> = {
   get(key: string): T | undefined;
@@ -38,22 +39,11 @@ export function shallowEntryEqual<T extends object>(a: T, b: T): boolean {
   return true;
 }
 
-function freezeDeep(value: unknown, seen: WeakSet<object>): void {
-  if (value === null || typeof value !== "object") return;
-  if (seen.has(value)) return;
-  seen.add(value);
-  for (const child of Object.values(value)) {
-    freezeDeep(child, seen);
-  }
-  if (!Object.isFrozen(value)) {
-    Object.freeze(value);
-  }
-}
-
-function freezeNestedReferences<T extends object>(entry: T): void {
-  const seen = new WeakSet<object>();
+function freezeMutableFieldReferences<T extends object>(entry: T): void {
   for (const value of Object.values(entry)) {
-    freezeDeep(value, seen);
+    if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
+      Object.freeze(value);
+    }
   }
 }
 
@@ -61,8 +51,8 @@ function freezeNestedReferences<T extends object>(entry: T): void {
  * Shared write primitive for walkthrough entry maps.
  *
  * Updaters mutate a shallow clone. When they make a real change, they must
- * replace the changed field's reference; mutating nested arrays/objects in
- * place is rejected by freezing the existing nested references first.
+ * replace the changed field's reference; mutating existing field references in
+ * place is rejected by shallow-freezing them first.
  */
 export function updateEntryInMap<T extends object>(
   entries: MutableEntryMap<T>,
@@ -72,7 +62,7 @@ export function updateEntryInMap<T extends object>(
   const entry = entries.get(key);
   if (!entry) return "missing";
 
-  freezeNestedReferences(entry);
+  freezeMutableFieldReferences(entry);
   const next = { ...entry };
   try {
     updater(next);
