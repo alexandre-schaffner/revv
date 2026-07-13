@@ -287,6 +287,12 @@ export function updateEntry(prId: string, updater: (e: WalkthroughEntry) => void
   }
   const next = { ...entry };
   updater(next);
+  // NOTE: this reads `store.entries` (get, above) and writes it (set, below)
+  // unconditionally — even when `updater` changed nothing. Calling this from a
+  // `$effect` is therefore a self-invalidation trap: Svelte tracks the read,
+  // the write re-triggers the effect, and you get `effect_update_depth_exceeded`.
+  // Callers invoked from an effect (e.g. `markWalkthroughStale`) MUST guard so
+  // they only reach this on an actual state transition.
   store.entries.set(prId, next);
 }
 
@@ -358,13 +364,22 @@ export function getIsSuperseded(): boolean {
 }
 
 export function markWalkthroughStale(prId: string): void {
+  // Guard the WRITE, not just the field mutation. `updateEntry` reassigns
+  // `store.entries` UNCONDITIONALLY (fresh clone even on a no-op), and this
+  // function is called from a `$effect` (AppShell's new-commit watcher).
+  // Svelte tracks the `store.entries` read that happens inside `updateEntry`,
+  // so writing on every call makes that effect re-invalidate on its own
+  // output → `effect_update_depth_exceeded`, i.e. a hard UI freeze the moment
+  // a viewed PR gains a commit. Bailing before we touch the map when the row
+  // is absent or already stale lets the effect settle after one transition.
+  const entry = store.entries.get(prId);
+  if (!entry?.doneReceived || entry.superseded) return;
   wtTrace("superseded", `markWalkthroughStale prId=${prId}`);
-  updateEntry(prId, (entry) => {
-    if (!entry.doneReceived || entry.superseded) return;
-    entry.superseded = true;
-    entry.isStreaming = false;
-    entry.liveGeneration = false;
-    entry.streamError = null;
+  updateEntry(prId, (e) => {
+    e.superseded = true;
+    e.isStreaming = false;
+    e.liveGeneration = false;
+    e.streamError = null;
   });
 }
 export function getSource(): "local" | "remote" {
