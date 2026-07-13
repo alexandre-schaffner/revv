@@ -193,6 +193,26 @@ export async function diffPatchForPath(
   );
 }
 
+/**
+ * Per-file added/deleted line counts for the range, computed by git itself
+ * (`--numstat`) in a single invocation. Cheap to parse (one integer pair per
+ * changed file) — unlike counting the lines of every file's full patch body,
+ * which forces a synchronous multi-MB `String.split` on the event loop for
+ * large/generated files. Output is `<added>\t<deleted>\t<path>` per line;
+ * binary files report `-\t-`.
+ */
+export async function diffNumstat(
+  worktreePath: string,
+  baseRef: string,
+  headRef: string,
+): Promise<string> {
+  return runGitCapture(
+    ["diff", "--find-renames", "--numstat", baseRef, headRef],
+    worktreePath,
+    30_000,
+  );
+}
+
 export async function checkoutBranch(worktreePath: string, branch: string): Promise<void> {
   await runGit(["checkout", branch], worktreePath);
 }

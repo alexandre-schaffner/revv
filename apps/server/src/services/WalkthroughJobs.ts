@@ -70,7 +70,20 @@ import { AiService, type ContinuationContext } from "./Ai";
 import { Broadcaster } from "./Broadcaster";
 import { DbService } from "./Db";
 import { GitHubEtagCache } from "./GitHubEtagCache";
-import { commitExists, diffNameStatusZ, diffPatchForPath, fetchCommit } from "./GitOps";
+import {
+  commitExists,
+  diffNameStatusZ,
+  diffNumstat,
+  diffPatchForPath,
+  fetchCommit,
+} from "./GitOps";
+import {
+  capPatch,
+  countPatchLines,
+  normalizeGitStatus,
+  parseNameStatusZ,
+  parseNumstat,
+} from "./incremental-diff";
 import { analyzeJobFailure } from "./job-failure";
 import { makeStartJobMutex } from "./job-mutex";
 import { makeSubscriberRegistry, type SubscriberHandle } from "./job-subscribers";
@@ -493,69 +506,6 @@ export const WalkthroughJobsLive = Layer.effect(
       readonly diffSource: "full_pr" | "incremental_range" | "full_pr_fallback";
     };
 
-    const normalizeGitStatus = (raw: string): PromptFile["status"] => {
-      const prefix = raw[0] ?? "M";
-      switch (prefix) {
-        case "A":
-          return "added";
-        case "D":
-          return "removed";
-        case "R":
-          return "renamed";
-        case "C":
-          return "copied";
-        case "T":
-          return "changed";
-        default:
-          return "modified";
-      }
-    };
-
-    const parseNameStatusZ = (
-      raw: string,
-    ): ReadonlyArray<{
-      readonly status: string;
-      readonly filename: string;
-      readonly previousFilename: string | null;
-    }> => {
-      const tokens = raw.split("\0").filter((token) => token.length > 0);
-      const files: Array<{
-        readonly status: string;
-        readonly filename: string;
-        readonly previousFilename: string | null;
-      }> = [];
-      for (let i = 0; i < tokens.length; ) {
-        const status = tokens[i++];
-        if (!status) break;
-        if (status.startsWith("R") || status.startsWith("C")) {
-          const previousFilename = tokens[i++];
-          const filename = tokens[i++];
-          if (previousFilename && filename) {
-            files.push({ status, filename, previousFilename });
-          }
-          continue;
-        }
-        const filename = tokens[i++];
-        if (filename) {
-          files.push({ status, filename, previousFilename: null });
-        }
-      }
-      return files;
-    };
-
-    const countPatchLines = (
-      patch: string,
-    ): { readonly additions: number; readonly deletions: number } => {
-      let additions = 0;
-      let deletions = 0;
-      for (const line of patch.split("\n")) {
-        if (line.startsWith("+++") || line.startsWith("---")) continue;
-        if (line.startsWith("+")) additions += 1;
-        else if (line.startsWith("-")) deletions += 1;
-      }
-      return { additions, deletions };
-    };
-
     const buildAuthedRepoUrl = (ctx: ResolvedContext): string =>
       `https://x-access-token:${ctx.token}@${ctx.githubHost}/${ctx.repoFullName}.git`;
 
@@ -583,6 +533,10 @@ export const WalkthroughJobsLive = Layer.effect(
           const nameStatus = parseNameStatusZ(
             await diffNameStatusZ(worktreePath, baseHeadSha, ctx.prHeadSha),
           );
+          // Counts come from git (`--numstat`) in one call, not from scanning
+          // each file's patch body — the latter forces a synchronous multi-MB
+          // split on the event loop for large/generated files.
+          const numstat = parseNumstat(await diffNumstat(worktreePath, baseHeadSha, ctx.prHeadSha));
           const files: PromptFile[] = [];
           for (const file of nameStatus) {
             let patch: string | null = null;
@@ -593,11 +547,15 @@ export const WalkthroughJobsLive = Layer.effect(
                 ctx.prHeadSha,
                 file.filename,
               );
-              patch = rawPatch.trim().length > 0 ? rawPatch : null;
+              patch = capPatch(rawPatch);
             } catch {
               patch = null;
             }
-            const counts = patch ? countPatchLines(patch) : { additions: 0, deletions: 0 };
+            // Exact counts from numstat when the path matches; renames (numstat
+            // uses `a => b` notation) fall back to scanning the capped patch.
+            const counts =
+              numstat.get(file.filename) ??
+              (patch ? countPatchLines(patch) : { additions: 0, deletions: 0 });
             files.push({
               filename: file.filename,
               previousFilename: file.previousFilename,
