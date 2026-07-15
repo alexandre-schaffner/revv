@@ -58,9 +58,9 @@ onMount(async () => {
     // determine the resume step. A stale token (e.g. after a DB reset)
     // would cause getIsAuthenticated() to return true even though the
     // session is gone, skipping signin and then failing with 401 on
-    // the repo step. loadUser() calls clearToken() internally when the
-    // server rejects the session, so getIsAuthenticated() will return
-    // false below if the token is no longer valid.
+    // the repo step. loadUser() clears the token only when the server
+    // confirms the session is invalid, so getIsAuthenticated() will
+    // return false below if the token is no longer valid.
     await loadUser();
 
     // Refresh repo list before evaluating the resume point so stale

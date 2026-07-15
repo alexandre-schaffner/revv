@@ -63,6 +63,7 @@ let _connectedAccounts = $state<ConnectedAccount[]>([]);
 let localAccounts = $state<LocalAccount[]>([]);
 let localAccountsLoaded = $state(typeof localStorage === "undefined");
 let accountJustRemoved = $state(false);
+let loadUserRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
 /**
  * Set when the active account's GitHub token is invalid and could not be
@@ -157,6 +158,7 @@ export function setToken(newToken: string): void {
 }
 
 export function clearToken(): void {
+  clearLoadUserRetry();
   token = null;
   user = null;
   _connectedAccounts = [];
@@ -196,6 +198,40 @@ function signInErrorMessage(e: unknown): string {
   }
   if (e instanceof Error) return e.message;
   return String(e);
+}
+
+function authErrorStatus(error: unknown): number | null {
+  if (typeof error !== "object" || error === null || !("status" in error)) return null;
+  const status = (error as { status: unknown }).status;
+  return typeof status === "number" ? status : null;
+}
+
+function authErrorMessage(error: unknown): string | null {
+  if (typeof error !== "object" || error === null || !("message" in error)) return null;
+  const message = (error as { message: unknown }).message;
+  return typeof message === "string" && message.length > 0 ? message : null;
+}
+
+function shouldClearTokenAfterSessionMiss(error: unknown): boolean {
+  if (error === null) return true;
+  const status = authErrorStatus(error);
+  return status === 401 || status === 403;
+}
+
+function clearLoadUserRetry(): void {
+  if (!loadUserRetryTimer) return;
+  clearTimeout(loadUserRetryTimer);
+  loadUserRetryTimer = null;
+}
+
+function scheduleLoadUserRetry(tokenSnapshot: string): void {
+  if (loadUserRetryTimer) return;
+  loadUserRetryTimer = setTimeout(() => {
+    loadUserRetryTimer = null;
+    if (token === tokenSnapshot && !user) {
+      void loadUser();
+    }
+  }, 1000);
 }
 
 export async function signIn(host?: string): Promise<boolean> {
@@ -353,10 +389,12 @@ export function clearError(): void {
 
 export async function loadUser(): Promise<void> {
   if (!token) return;
+  const tokenSnapshot = token;
   isLoading = true;
   try {
     const session = await authClient.getSession();
     if (session.data?.user) {
+      clearLoadUserRetry();
       const u = session.data.user;
       user = {
         name: u.name,
@@ -407,11 +445,21 @@ export async function loadUser(): Promise<void> {
       void fetchOrgs();
       void fetchConnectedAccounts();
       void fetchLocalAccounts();
-    } else {
+    } else if (shouldClearTokenAfterSessionMiss(session.error)) {
       clearToken();
+    } else {
+      error =
+        authErrorMessage(session.error) ??
+        "Could not restore your session. Revv will retry when the local server is available.";
+      scheduleLoadUserRetry(tokenSnapshot);
     }
-  } catch {
-    clearToken();
+  } catch (e) {
+    // A freshly-updated desktop app can open while the restarted local API is
+    // still booting. Treat that as a transient startup failure, not logout:
+    // clearing the persisted token here makes OnboardingGate believe this is a
+    // first-run install until the user closes and reopens the window.
+    error = signInErrorMessage(e);
+    scheduleLoadUserRetry(tokenSnapshot);
   } finally {
     isLoading = false;
   }
