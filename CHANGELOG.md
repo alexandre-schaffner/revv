@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.3](https://github.com/alexandre-schaffner/revv/compare/v0.17.2...v0.17.3) (2026-07-15)
+
+
+### Bug Fixes
+
+* rebase ([1726c46](https://github.com/alexandre-schaffner/revv/commit/1726c46713612967e9a1de08b64a2ead69728835))
+
 ## [0.17.2](https://github.com/alexandre-schaffner/revv/compare/v0.17.1...v0.17.2) (2026-07-13)
 
 
