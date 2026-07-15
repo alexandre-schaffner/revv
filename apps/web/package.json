@@ -1,6 +1,6 @@
 {
   "name": "@revv/web",
-  "version": "0.17.2",
+  "version": "0.18.0",
   "private": true,
   "scripts": {
     "dev": "svelte-kit sync && vite dev",
