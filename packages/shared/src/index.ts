@@ -12,6 +12,7 @@ export {
   ACP_AGENT_IDS,
   ACP_AGENTS,
   getAcpAgent,
+  getAcpAgentDefaultModel,
   getAgentCapabilities,
   getAgentKeychainAuth,
   isAcpAgentId,

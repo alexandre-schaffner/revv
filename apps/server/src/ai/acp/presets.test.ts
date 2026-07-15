@@ -24,9 +24,15 @@ describe("ACP agent registry", () => {
       expect(typeof def.command).toBe("string");
       expect(Array.isArray(def.args)).toBe(true);
       expect(def.capabilities).toBeDefined();
+      expect(typeof def.capabilities.defaultModel).toBe("string");
       expect(def.capabilities.models === "dynamic" || Array.isArray(def.capabilities.models)).toBe(
         true,
       );
+      if (def.capabilities.models !== "dynamic") {
+        expect(
+          def.capabilities.models.some((model) => model.value === def.capabilities.defaultModel),
+        ).toBe(true);
+      }
     }
   });
 });
@@ -151,12 +157,13 @@ describe("resolveGenerationModel", () => {
 
   it("falls back to the agent default when the model belongs to another agent", () => {
     // A Cursor model id left in the shared setting must not reach Claude Code.
-    expect(resolveGenerationModel("claude-code", "sonnet-4.6")).toBe("claude-opus-4-8");
+    expect(resolveGenerationModel("claude-code", "sonnet-4.6")).toBe("claude-sonnet-5");
   });
 
   it("trusts opencode's dynamic catalog", () => {
     expect(resolveGenerationModel("opencode", "some-provider/some-model")).toBe(
       "some-provider/some-model",
     );
+    expect(resolveGenerationModel("opencode", null)).toBe("opencode/big-pickle");
   });
 });
