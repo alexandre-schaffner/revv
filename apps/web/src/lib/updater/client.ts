@@ -1,14 +1,9 @@
 // Thin wrapper around `@tauri-apps/plugin-updater` that isolates the rest of
-// the app from the plugin API shape and from the "are we running in Tauri?"
-// guard. Every export here is safe to call from the browser dev build
-// (`make dev-web`) — outside Tauri they either return `null` / a sensible
-// fallback or are no-ops.
+// the app from the plugin API shape.
 //
-// The plugin imports are dynamic so that Vite doesn't try to bundle native
-// Tauri IPC calls into the browser build. Same pattern as
-// `auth.svelte.ts`'s `await import('@tauri-apps/plugin-opener')`.
-
-import { isTauri } from "$lib/utils/platform";
+// The plugin imports are dynamic to keep the native Tauri IPC calls out of the
+// initial bundle. Same pattern as `auth.svelte.ts`'s
+// `await import('@tauri-apps/plugin-opener')`.
 
 /**
  * Normalised view of an available update, returned by {@link checkForUpdate}.
@@ -35,12 +30,9 @@ export type UpdateInfo = {
 
 /**
  * Returns the available update, or `null` if we're already on the latest
- * version, the updater is unreachable, or we're running outside of Tauri
- * (i.e. the browser dev build).
+ * version or the updater is unreachable.
  */
 export async function checkForUpdate(): Promise<UpdateInfo | null> {
-  if (!isTauri()) return null;
-
   const { check } = await import("@tauri-apps/plugin-updater");
   const update = await check();
   if (!update) return null;

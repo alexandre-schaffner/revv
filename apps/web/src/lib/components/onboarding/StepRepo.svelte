@@ -17,7 +17,6 @@ import {
   getAvailableReposLoading,
   getRepositories,
 } from "$lib/stores/prs.svelte";
-import { isTauri } from "$lib/utils/platform";
 
 interface Props {
   onContinue: () => void;
@@ -27,8 +26,6 @@ interface Props {
 }
 
 let { onContinue, onBack, onSkip, isGhe = false }: Props = $props();
-
-const runningInTauri = isTauri();
 
 let mode = $state<"browse" | "link">("link");
 let search = $state("");
@@ -273,7 +270,7 @@ function handlePathInput(e: Event): void {
 }
 
 async function browseLocalClone(): Promise<void> {
-  if (!runningInTauri || inspecting || isAdding) return;
+  if (inspecting || isAdding) return;
   try {
     const { open } = await import("@tauri-apps/plugin-dialog");
     const selected = await open({ directory: true });
@@ -364,12 +361,10 @@ function handlePathKey(e: KeyboardEvent) {
 					{#if inspecting}
 						<Dotmatrix variant="square-13" size="small" />
 					{/if}
-					{#if runningInTauri}
-						<button class="browse-button" onclick={() => void browseLocalClone()} disabled={inspecting}>
-							<FolderOpen size={13} weight="fill" />
-							<span>Browse</span>
-						</button>
-					{/if}
+					<button class="browse-button" onclick={() => void browseLocalClone()} disabled={inspecting}>
+						<FolderOpen size={13} weight="fill" />
+						<span>Browse</span>
+					</button>
 				</div>
 
 				{#if isGitRepo === false}

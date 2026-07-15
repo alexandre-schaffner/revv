@@ -19,7 +19,6 @@ import Download from "phosphor-svelte/lib/Download";
 import { toast } from "svelte-sonner";
 import { getIsMaintainer } from "$lib/stores/auth.svelte";
 import { getSettings } from "$lib/stores/settings.svelte";
-import { isTauri } from "$lib/utils/platform";
 import { checkForUpdate, type UpdateInfo } from "./client";
 
 const HOURLY_MS = 60 * 60 * 1000;
@@ -30,11 +29,11 @@ let dismissedVersion: string | null = null;
 let inFlight = false;
 
 /**
- * Kick off the background update checker. Idempotent and a no-op outside
- * Tauri. Call this from the root layout's `$effect`.
+ * Kick off the background update checker. Idempotent. Call this from the root
+ * layout's `$effect`.
  */
 export function startUpdater(): void {
-  if (started || !isTauri()) return;
+  if (started) return;
   started = true;
   // First check runs immediately — the caller is expected to delay this
   // call with a setTimeout so it doesn't compete with initial PR sync.
