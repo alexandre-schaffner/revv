@@ -251,8 +251,13 @@ export function cascadeChatAgentChange(acpId: AcpAgentId): SettingsUpdate {
     const cached = getAvailableModels(acpId);
     update.aiModel = cached[0]?.value ?? getDefaultModel(acpId);
   } else {
-    const first = caps.models[0];
-    if (first) update.aiModel = first.value;
+    const defaultModel = getDefaultModel(acpId);
+    const fallback = caps.models[0]?.value;
+    if (caps.models.some((m) => m.value === defaultModel)) {
+      update.aiModel = defaultModel;
+    } else if (fallback) {
+      update.aiModel = fallback;
+    }
   }
 
   if (caps.thinkingEfforts.length > 0) {

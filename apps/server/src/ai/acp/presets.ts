@@ -12,6 +12,7 @@ import {
   type AcpAgentId,
   type ContextWindow,
   getAcpAgent,
+  getAcpAgentDefaultModel,
   getAgentCapabilities,
   isAcpAgentId,
   type ThinkingEffort,
@@ -197,19 +198,19 @@ export function resolveAcpProcessLaunchById(
  * `aiModel` (written against the global agent's catalog) may not belong to the
  * resolved agent. Guard against that: if the configured id isn't in the agent's
  * catalog, fall back to that agent's default model. opencode's catalog is
- * dynamic, so its models are taken on trust. Returns `undefined` only when
- * there is no configured model and no static default (caller supplies its own
- * fallback).
+ * dynamic, so configured opencode models are taken on trust.
  */
 export function resolveGenerationModel(
   agent: AcpAgentId,
   configuredModel: string | null | undefined,
 ): string | undefined {
   const caps = getAgentCapabilities(agent);
-  if (caps.models === "dynamic") return configuredModel ?? undefined;
+  if (caps.models === "dynamic") return configuredModel ?? getAcpAgentDefaultModel(agent);
   if (configuredModel && caps.models.some((m) => m.value === configuredModel)) {
     return configuredModel;
   }
+  const defaultModel = getAcpAgentDefaultModel(agent);
+  if (caps.models.some((m) => m.value === defaultModel)) return defaultModel;
   return caps.models[0]?.value;
 }
 

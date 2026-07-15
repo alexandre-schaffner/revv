@@ -29,6 +29,8 @@ export interface AcpAgentModel {
  * default the persisted model. Anything not represented here is owned agent-side.
  */
 export interface AcpAgentCapabilities {
+  /** Revv's default model for this agent when no user-specific model is saved. */
+  readonly defaultModel: string;
   /**
    * Static model catalog (label + id), or the literal `"dynamic"` when the list
    * must be fetched live from the server (opencode runs `opencode models`). ACP
@@ -96,6 +98,7 @@ export const ACP_AGENTS = [
     command: "npx",
     args: ["-y", "@agentclientprotocol/claude-agent-acp"],
     capabilities: {
+      defaultModel: "claude-sonnet-5",
       models: [
         { label: "Claude Fable 5", value: "claude-fable-5" },
         { label: "Claude Opus 4.8", value: "claude-opus-4-8" },
@@ -125,6 +128,7 @@ export const ACP_AGENTS = [
     command: "opencode",
     args: ["acp"],
     capabilities: {
+      defaultModel: "opencode/big-pickle",
       // opencode exposes 75+ models across providers; fetched live via the
       // server's `opencode models` parse rather than curated here.
       models: "dynamic",
@@ -143,6 +147,7 @@ export const ACP_AGENTS = [
     command: "npx",
     args: ["-y", "@zed-industries/codex-acp"],
     capabilities: {
+      defaultModel: "gpt-5.5",
       models: [
         { label: "GPT-5.5", value: "gpt-5.5" },
         { label: "GPT-5.4", value: "gpt-5.4" },
@@ -166,6 +171,7 @@ export const ACP_AGENTS = [
     command: "npx",
     args: ["-y", "cursor-agent-acp"],
     capabilities: {
+      defaultModel: "auto",
       // Curated from Cursor's CLI model roster (`cursor-agent --list-models`).
       // Re-verify when Cursor ships/retires models.
       models: [
@@ -205,6 +211,11 @@ export function getAcpAgent(id: AcpAgentId): AcpAgentDescriptor {
 /** The model / context-window / thinking-effort surface Revv exposes for an agent. */
 export function getAgentCapabilities(id: AcpAgentId): AcpAgentCapabilities {
   return getAcpAgent(id).capabilities;
+}
+
+/** Revv's persisted-model default for an ACP agent. */
+export function getAcpAgentDefaultModel(id: AcpAgentId): string {
+  return getAcpAgent(id).capabilities.defaultModel;
 }
 
 /** Keychain-login details for an agent, or `undefined` when it isn't keychain-backed. */
