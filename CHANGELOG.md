@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.18.0](https://github.com/alexandre-schaffner/revv/compare/v0.17.2...v0.18.0) (2026-07-15)
+
+
+### Features
+
+* set default model ([8d96872](https://github.com/alexandre-schaffner/revv/commit/8d968722b68a0cddd1214aa254a78d016e824c26))
+* set default model ([fd880e5](https://github.com/alexandre-schaffner/revv/commit/fd880e5ce84c40602053d04f40056cac0eddd99d))
+
+
+### Bug Fixes
+
+* rebase ([1726c46](https://github.com/alexandre-schaffner/revv/commit/1726c46713612967e9a1de08b64a2ead69728835))
+
 ## [0.17.2](https://github.com/alexandre-schaffner/revv/compare/v0.17.1...v0.17.2) (2026-07-13)
 
 
