@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.18.1](https://github.com/alexandre-schaffner/revv/compare/v0.18.0...v0.18.1) (2026-07-16)
+
+
+### Bug Fixes
+
+* onboarding flow was not reopening correctly after an update ([4070207](https://github.com/alexandre-schaffner/revv/commit/407020797681d6b3317da1a128160fc97aaa5f2e))
+* onboarding flow when update ([36d0752](https://github.com/alexandre-schaffner/revv/commit/36d0752b271d9dc4c3899dd3a164d2e6b812b69f))
+
 ## [0.18.0](https://github.com/alexandre-schaffner/revv/compare/v0.17.2...v0.18.0) (2026-07-15)
 
 
