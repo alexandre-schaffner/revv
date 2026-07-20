@@ -74,6 +74,7 @@ import {
   pollCloneUntilResolved,
   prepareEntry,
   regenerate,
+  resume,
   selectWalkthroughReport,
   startWalkthrough,
   stopClonePoll,
@@ -1056,6 +1057,10 @@ async function handleRetryClone(): Promise<void> {
 function handleRegenerate(): void {
   regenerate(prId, selectedMode);
 }
+
+function handleResume(): void {
+  resume(prId, selectedMode);
+}
 </script>
 
 <div class="walkthrough">
@@ -1204,9 +1209,9 @@ function handleRegenerate(): void {
 				</div>
 			{/if}
 			<p class="loading-text">Walkthrough generation stopped. Check the notification for details.</p>
-			<Button variant="outline" size="lg" style="cursor: pointer;" onclick={handleRegenerate}>
+			<Button variant="outline" size="lg" style="cursor: pointer;" onclick={handleResume}>
 				<RefreshCw size={16} weight="fill" />
-				Try again
+				Retry
 			</Button>
 		</div>
 	{:else if cloneInProgress && !summary && blocks.length === 0}
@@ -1291,9 +1296,9 @@ function handleRegenerate(): void {
 						<AlertTriangle size={14} weight="fill" />
 						<span>{streamError}</span>
 					</div>
-					<Button variant="outline" size="sm" style="cursor: pointer;" onclick={handleRegenerate}>
+					<Button variant="outline" size="sm" style="cursor: pointer;" onclick={handleResume}>
 						<RefreshCw size={14} weight="fill" />
-						Try again
+						Retry
 					</Button>
 				</div>
 			{/if}
