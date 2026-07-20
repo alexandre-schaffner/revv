@@ -308,6 +308,8 @@ export interface Walkthrough {
   ratings: WalkthroughRating[];
   /** Current phase pointer. See {@link WalkthroughPipelinePhase}. */
   lastCompletedPhase: WalkthroughPipelinePhase;
+  /** Last terminal generation failure, if this row is in `status='error'`. */
+  errorMessage?: string | null;
   generatedAt: string;
   modelUsed: string;
   tokenUsage: WalkthroughTokenUsage;
@@ -504,7 +506,7 @@ export type WalkthroughStreamEvent =
       data: { lastCompletedPhase: WalkthroughPipelinePhase };
     }
   | { type: "in-progress"; data: { walkthroughId: string } }
-  | { type: "thinking"; data: Record<string, never> }
+  | { type: "thinking"; data: { reportContent?: boolean } }
   /**
    * Streamed model reasoning text. Mirrors the recap `thought` event and is
    * separate from `thinking` (which is the empty stream-guard heartbeat).

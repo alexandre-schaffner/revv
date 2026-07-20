@@ -1105,6 +1105,7 @@ async function doHydrateFromCache(
       riskLevel: RiskLevel;
       sentiment?: string | null;
       lastCompletedPhase?: WalkthroughPipelinePhase;
+      errorMessage?: string | null;
       semanticSteps?: WalkthroughSemanticStep[];
       blocks: WalkthroughBlock[];
       issues: WalkthroughIssue[];
@@ -1207,7 +1208,7 @@ async function doHydrateFromCache(
     entry.streamError = isError
       ? isHistorical
         ? null
-        : "Walkthrough generation failed. Resume or regenerate to retry."
+        : (wt.errorMessage ?? "Walkthrough generation failed. Resume or regenerate to retry.")
       : null;
     entry.superseded = body.stale === true;
     entry.historical = isHistorical;

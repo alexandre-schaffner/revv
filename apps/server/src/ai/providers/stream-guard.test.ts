@@ -98,4 +98,124 @@ describe("guardWalkthroughStream", () => {
       data: { walkthroughId: "walkthrough-1" },
     });
   });
+
+  it("does not enforce exploration stall after report content starts", async () => {
+    const stream = guardWalkthroughStream(
+      delayedEvents(
+        [
+          {
+            type: "summary",
+            data: { summary: "Adds indexes for range queries.", riskLevel: "low" },
+          },
+          {
+            type: "phase",
+            data: { phase: "writing", message: "Building walkthrough..." },
+          },
+          { type: "usage", data: { tokenUsage: ZERO_TOKEN_USAGE } },
+          { type: "thought", data: { text: "Still drafting the next chapter." } },
+          {
+            type: "phase",
+            data: { phase: "writing", message: "Building walkthrough..." },
+          },
+          {
+            type: "done",
+            data: { walkthroughId: "walkthrough-1", tokenUsage: ZERO_TOKEN_USAGE },
+          },
+        ],
+        15,
+      ),
+      {
+        explorationStallMs: 30,
+        firstEventTimeoutMs: 100,
+        inactivityTimeoutMs: 100,
+        label: "stream-guard-test",
+        synthesizePhases: false,
+      },
+    );
+
+    const events = await collectUntilTerminal(stream);
+
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      data: { walkthroughId: "walkthrough-1" },
+    });
+  });
+
+  it("does not enforce exploration stall for continuation streams with prior report content", async () => {
+    const stream = guardWalkthroughStream(
+      delayedEvents(
+        [
+          {
+            type: "phase",
+            data: { phase: "rating", message: "Finishing walkthrough (phase B)..." },
+          },
+          { type: "usage", data: { tokenUsage: ZERO_TOKEN_USAGE } },
+          { type: "thought", data: { text: "Reconstructing prior walkthrough state." } },
+          {
+            type: "phase",
+            data: { phase: "rating", message: "Finishing walkthrough (phase B)..." },
+          },
+          {
+            type: "done",
+            data: { walkthroughId: "walkthrough-1", tokenUsage: ZERO_TOKEN_USAGE },
+          },
+        ],
+        15,
+      ),
+      {
+        explorationStallMs: 30,
+        firstEventTimeoutMs: 100,
+        hasReportContent: true,
+        inactivityTimeoutMs: 100,
+        label: "stream-guard-test",
+        synthesizePhases: false,
+      },
+    );
+
+    const events = await collectUntilTerminal(stream);
+
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      data: { walkthroughId: "walkthrough-1" },
+    });
+  });
+
+  it("treats report-content heartbeats as persisted output", async () => {
+    const stream = guardWalkthroughStream(
+      delayedEvents(
+        [
+          { type: "thinking", data: { reportContent: true } },
+          {
+            type: "phase",
+            data: { phase: "writing", message: "Building walkthrough..." },
+          },
+          { type: "usage", data: { tokenUsage: ZERO_TOKEN_USAGE } },
+          { type: "thought", data: { text: "Planning the first chapter." } },
+          {
+            type: "phase",
+            data: { phase: "writing", message: "Building walkthrough..." },
+          },
+          {
+            type: "done",
+            data: { walkthroughId: "walkthrough-1", tokenUsage: ZERO_TOKEN_USAGE },
+          },
+        ],
+        15,
+      ),
+      {
+        explorationStallMs: 30,
+        firstEventTimeoutMs: 100,
+        inactivityTimeoutMs: 100,
+        label: "stream-guard-test",
+        synthesizePhases: false,
+      },
+    );
+
+    const events = await collectUntilTerminal(stream);
+
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      data: { walkthroughId: "walkthrough-1" },
+    });
+  });
 });

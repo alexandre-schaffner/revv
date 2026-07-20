@@ -17,11 +17,11 @@ import { ZERO_TOKEN_USAGE } from "../agent-stream/token-usage";
 //
 // On the opencode path, MCP-tool content (set_overview / add_diff_step / …)
 // runs through the HTTP MCP route and writes commit-first via
-// `WalkthroughJobs.emitEvent`, which ALSO fires a `thinking` event into the
+// `WalkthroughJobs.emitEvent`, which ALSO fires a `thinking` heartbeat into the
 // provider's activity-notifier (see `WalkthroughJobs.ts:emitEvent`). That
-// notifier pushes into the same queue the guard drains, so non-exploration
-// progress IS visible to the guard — keeping the exploration-stall timer
-// honest without needing a per-path override.
+// heartbeat is marked when the source event was persisted report content, so
+// the guard can distinguish "still reading" from "content already started"
+// without rebroadcasting the content event a second time.
 
 const PHASE_MESSAGES = {
   exploration: {
@@ -50,6 +50,22 @@ function isMeaningfulProgressEvent(event: WalkthroughStreamEvent): boolean {
   }
 }
 
+function isReportContentEvent(event: WalkthroughStreamEvent): boolean {
+  switch (event.type) {
+    case "summary":
+    case "sentiment":
+    case "semantic-step":
+    case "block":
+    case "issue":
+    case "rating":
+      return true;
+    case "thinking":
+      return event.data.reportContent === true;
+    default:
+      return false;
+  }
+}
+
 // ── Guard wrapper ───────────────────────────────────────────────────────────
 
 /**
@@ -70,6 +86,7 @@ export function guardWalkthroughStream(
     synthesizePhases?: boolean;
     label?: string;
     firstEventTimeoutMs?: number;
+    hasReportContent?: boolean;
   },
 ): AsyncGenerator<WalkthroughStreamEvent> {
   const inactivityMs = options?.inactivityTimeoutMs ?? WALKTHROUGH_INACTIVITY_TIMEOUT_MS;
@@ -78,9 +95,11 @@ export function guardWalkthroughStream(
   const label = options?.label ?? "guard";
   const firstEventMs = options?.firstEventTimeoutMs ?? WALKTHROUGH_FIRST_EVENT_TIMEOUT_MS;
 
-  // Tracks when we last saw a non-exploration event (summary, block, phase, done, error).
-  // Used to detect a model that keeps reading files but never produces walkthrough output.
+  // Tracks pre-content stalls: before the model writes the first report row,
+  // reasoning/exploration heartbeats prove liveness but not user-visible progress.
+  // After report content starts, the hard turn timeout is the backstop.
   let lastProgressTime = Date.now();
+  let sawReportContent = options?.hasReportContent ?? false;
   let isFirstEvent = true;
 
   return (async function* (): AsyncGenerator<WalkthroughStreamEvent> {
@@ -152,6 +171,7 @@ export function guardWalkthroughStream(
         if (event.type === "rating") sawRating = true;
         if (event.type === "done") sawDone = true;
         if (event.type === "error") sawError = true;
+        if (isReportContentEvent(event)) sawReportContent = true;
 
         // Synthesize phase events for providers that don't emit them
         if (synthesize) {
@@ -181,7 +201,7 @@ export function guardWalkthroughStream(
         // distinction a provider can sit on "Reading files..." indefinitely.
         if (isMeaningfulProgressEvent(event)) {
           lastProgressTime = Date.now();
-        } else if (Date.now() - lastProgressTime > explorationStallMs) {
+        } else if (!sawReportContent && Date.now() - lastProgressTime > explorationStallMs) {
           debug(label, "Exploration stall — no report progress for", explorationStallMs, "ms");
           yield {
             type: "error" as const,

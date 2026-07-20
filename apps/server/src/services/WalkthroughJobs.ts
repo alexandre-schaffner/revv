@@ -428,7 +428,7 @@ export const WalkthroughJobsLive = Layer.effect(
     const setStatus = (
       walkthroughId: string,
       status: WalkthroughStatus,
-      options?: { tokenUsage?: WalkthroughTokenUsage },
+      options?: { tokenUsage?: WalkthroughTokenUsage; errorMessage?: string },
     ) =>
       Effect.withSpan("WalkthroughJobs.setStatus", {
         attributes: { walkthroughId, status },
@@ -436,9 +436,18 @@ export const WalkthroughJobsLive = Layer.effect(
         provideDb(
           walkthroughService.setStatus(walkthroughId, status, {
             ...(options?.tokenUsage ? { tokenUsage: options.tokenUsage } : {}),
+            ...(options?.errorMessage ? { errorMessage: options.errorMessage } : {}),
           }),
         ),
       );
+
+    const isReportContentEvent = (event: WalkthroughStreamEvent): boolean =>
+      event.type === "summary" ||
+      event.type === "sentiment" ||
+      event.type === "semantic-step" ||
+      event.type === "block" ||
+      event.type === "issue" ||
+      event.type === "rating";
 
     // Subscriber fan-out lives in `subscribers` (job-subscribers.ts).
     // Commit-first / broadcast-second (invariant #8): by the time an event
@@ -467,6 +476,14 @@ export const WalkthroughJobsLive = Layer.effect(
       readonly status: "generating" | "error";
       readonly opencodeSessionId: string | null;
     };
+
+    const hasReportContent = (partial: PartialSnapshot): boolean =>
+      partial.lastCompletedPhase !== "none" ||
+      partial.summary.trim().length > 0 ||
+      (partial.sentiment?.trim().length ?? 0) > 0 ||
+      partial.blocks.length > 0 ||
+      partial.issues.length > 0 ||
+      partial.ratings.length > 0;
 
     type ResolvedContext = {
       readonly pr: {
@@ -696,6 +713,7 @@ export const WalkthroughJobsLive = Layer.effect(
         if (partial) {
           const continuation: ContinuationContext = {
             walkthroughId: partial.id,
+            existingHasReportContent: hasReportContent(partial),
             existingBlocks: partial.blocks,
             existingIssueCount: partial.issues.length,
             existingRatedAxes: partial.ratings.map((r) => r.axis),
@@ -757,7 +775,12 @@ export const WalkthroughJobsLive = Layer.effect(
               }).pipe(Effect.catchAll(() => Effect.void));
 
               const dbState = yield* provideDb(
-                walkthroughService.getPartial(ctx.pr.id, ctx.prHeadSha, ctx.mode),
+                walkthroughService.getPartial(
+                  ctx.pr.id,
+                  ctx.prHeadSha,
+                  ctx.mode,
+                  ctx.generationMode,
+                ),
               ).pipe(Effect.catchAll(() => Effect.succeed(null)));
 
               if (dbState?.lastCompletedPhase === "D") {
@@ -820,7 +843,7 @@ export const WalkthroughJobsLive = Layer.effect(
                   tokenUsage: state.accumulatedTokenUsage,
                 } as const;
               }
-              yield* setStatus(job.walkthroughId, "error");
+              yield* setStatus(job.walkthroughId, "error", { errorMessage: event.data.message });
               yield* emitEvent(job.walkthroughId, {
                 type: "lifecycle:error",
                 data: { code: "AiGenerationError", message: event.data.message },
@@ -875,7 +898,7 @@ export const WalkthroughJobsLive = Layer.effect(
         > =>
           Effect.gen(function* () {
             const partialForContinuation = yield* provideDb(
-              walkthroughService.getPartial(ctx.pr.id, ctx.prHeadSha, ctx.mode),
+              walkthroughService.getPartial(ctx.pr.id, ctx.prHeadSha, ctx.mode, ctx.generationMode),
             ).pipe(Effect.catchAll(() => Effect.succeed(null)));
 
             if (!partialForContinuation) {
@@ -885,6 +908,7 @@ export const WalkthroughJobsLive = Layer.effect(
 
             const continuationCtx: ContinuationContext = {
               walkthroughId: partialForContinuation.id,
+              existingHasReportContent: hasReportContent(partialForContinuation),
               existingBlocks: partialForContinuation.blocks,
               existingIssueCount: partialForContinuation.issues.length,
               existingRatedAxes: partialForContinuation.ratings.map((r) => r.axis),
@@ -946,7 +970,12 @@ export const WalkthroughJobsLive = Layer.effect(
                   : "aborted",
               );
               const finalState = yield* provideDb(
-                walkthroughService.getPartial(ctx.pr.id, ctx.prHeadSha, ctx.mode),
+                walkthroughService.getPartial(
+                  ctx.pr.id,
+                  ctx.prHeadSha,
+                  ctx.mode,
+                  ctx.generationMode,
+                ),
               ).pipe(Effect.catchAll(() => Effect.succeed(null)));
               const phaseD = finalState?.lastCompletedPhase === "D";
               const missingCommentsAtExhaustion = phaseD
@@ -959,7 +988,6 @@ export const WalkthroughJobsLive = Layer.effect(
                     `exhausted auto-continuations with ${missingCommentsAtExhaustion.length} warning/critical issue(s) still missing inline comment(s) — marking error`,
                   );
                 }
-                yield* setStatus(job.walkthroughId, "error");
               }
               // Exhausted: legacy SSE clients still expect `done`; new
               // clients get `lifecycle:complete` only if the row actually
@@ -969,13 +997,15 @@ export const WalkthroughJobsLive = Layer.effect(
               // success.
               const currentTokenUsage = state.accumulatedTokenUsage;
               if (!phaseD || missingCommentsAtExhaustion.length > 0) {
+                const message = phaseD
+                  ? "Generation finished but warning/critical issues lack inline comments."
+                  : "Generation exhausted auto-continuation budget before reaching phase D.";
+                yield* setStatus(job.walkthroughId, "error", { errorMessage: message });
                 yield* emitEvent(job.walkthroughId, {
                   type: "lifecycle:error",
                   data: {
                     code: "AutoContinuationExhausted",
-                    message: phaseD
-                      ? "Generation finished but warning/critical issues lack inline comments."
-                      : "Generation exhausted auto-continuation budget before reaching phase D.",
+                    message,
                   },
                 }).pipe(Effect.catchAll(() => Effect.void));
               } else {
@@ -1151,7 +1181,9 @@ export const WalkthroughJobsLive = Layer.effect(
                   : "Walkthrough generation failed";
               const code = cancelledByUser ? "Cancelled" : "AiGenerationError";
 
-              yield* setStatus(job.walkthroughId, "error").pipe(Effect.catchAll(() => Effect.void));
+              yield* setStatus(job.walkthroughId, "error", { errorMessage: message }).pipe(
+                Effect.catchAll(() => Effect.void),
+              );
 
               yield* emitEvent(job.walkthroughId, {
                 type: "lifecycle:error",
@@ -1611,12 +1643,13 @@ export const WalkthroughJobsLive = Layer.effect(
                 row.id,
                 "exceeded resume attempts — marking error",
               );
-              yield* setStatus(row.id, "error");
+              const message = "Walkthrough failed after repeated retries. Try regenerating.";
+              yield* setStatus(row.id, "error", { errorMessage: message });
               yield* emitEvent(row.id, {
                 type: "lifecycle:error",
                 data: {
                   code: "ResumeAttemptsExceeded",
-                  message: "Walkthrough failed after repeated retries. Try regenerating.",
+                  message,
                 },
               }).pipe(Effect.catchAll(() => Effect.void));
               continue;
@@ -1806,7 +1839,10 @@ export const WalkthroughJobsLive = Layer.effect(
             const notify = notifiers.get(walkthroughId);
             if (notify) {
               try {
-                notify({ type: "thinking", data: {} });
+                notify({
+                  type: "thinking",
+                  data: { ...(isReportContentEvent(event) ? { reportContent: true } : {}) },
+                });
               } catch {
                 /* notifier threw — ignore */
               }

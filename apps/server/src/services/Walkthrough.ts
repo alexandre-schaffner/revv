@@ -187,6 +187,7 @@ function rowToWalkthrough(
     ratings: sortedRatings,
     mode: (row.mode ?? "reviewer") as WalkthroughMode,
     lastCompletedPhase: row.lastCompletedPhase as WalkthroughPipelinePhase,
+    errorMessage: row.errorMessage ?? null,
     riskLevel: row.riskLevel as RiskLevel,
     generatedAt: row.generatedAt,
     modelUsed: row.modelUsed,
@@ -367,7 +368,7 @@ export class WalkthroughService extends Context.Tag("WalkthroughService")<
     readonly setStatus: (
       walkthroughId: string,
       status: WalkthroughStatus,
-      options?: { tokenUsage?: WalkthroughTokenUsage },
+      options?: { tokenUsage?: WalkthroughTokenUsage; errorMessage?: string },
     ) => Effect.Effect<void, never, DbService>;
 
     /**
@@ -774,6 +775,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         db.update(walkthroughs)
           .set({
             status,
+            errorMessage: status === "error" ? (options?.errorMessage ?? null) : null,
             ...(completedAt ? { completedAt } : {}),
             ...(options?.tokenUsage ? { tokenUsage: JSON.stringify(options.tokenUsage) } : {}),
           })
