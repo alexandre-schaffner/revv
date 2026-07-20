@@ -1436,57 +1436,7 @@ export async function regenerate(
   if (pendingActions.map.has(prId)) return;
   setPending(prId, "regenerate");
   try {
-    clearAnimationTrackers(prId);
-    deleteEntry(prId);
-    store.selectedReportIds.set(prId, null);
-    store.activePrId = prId;
-
-    const entry = freshEntry();
-    entry.mode = mode;
-    entry.historical = false;
-    entry.phaseMessage =
-      generationMode === "incremental" ? "Reviewing new commits..." : "Regenerating...";
-    setEntry(prId, entry);
-
-    try {
-      await fetch(`${API_BASE_URL}/api/reviews/${prId}/walkthrough/regenerate`, {
-        method: "POST",
-        headers: { ...authHeaders(), "Content-Type": "application/json" },
-        body: JSON.stringify({ mode, generationMode }),
-      });
-    } catch {
-      // Non-fatal — the start call below will still create a fresh job.
-    }
-
-    // Keep the seeded freshEntry in place across the start POST: the
-    // `lifecycle:started` reducer patches `walkthroughId` on the existing
-    // entry, so dropping it here would only cause `_active` to flip to
-    // undefined and flash the "Generate walkthrough" pill between the
-    // regenerate and start round-trips.
-    const res = await startWalkthrough(prId, mode, generationMode);
-    if (!res) {
-      updateEntry(prId, (e) => {
-        e.isStreaming = false;
-        e.streamError = "Failed to start walkthrough";
-      });
-      return;
-    }
-    if (!res.ok) {
-      updateEntry(prId, (e) => {
-        e.isStreaming = false;
-        e.streamError = `Failed to start walkthrough (HTTP ${res.status}).`;
-      });
-      return;
-    }
-
-    const started = (await res.json().catch(() => null)) as { walkthroughId?: string } | null;
-    if (started?.walkthroughId) {
-      await hydrateFromCache(prId, {
-        mode,
-        reportId: started.walkthroughId,
-        replace: true,
-      });
-    }
+    await runRegenerate(prId, mode, generationMode);
   } finally {
     clearPending(prId);
   }
@@ -1494,6 +1444,64 @@ export async function regenerate(
 
 export function regenerateFromScratch(prId: string): Promise<void> {
   return regenerate(prId, getSelectedMode(prId), "full");
+}
+
+async function runRegenerate(
+  prId: string,
+  mode: WalkthroughMode,
+  generationMode: "full" | "incremental",
+): Promise<void> {
+  clearAnimationTrackers(prId);
+  deleteEntry(prId);
+  store.selectedReportIds.set(prId, null);
+  store.activePrId = prId;
+
+  const entry = freshEntry();
+  entry.mode = mode;
+  entry.historical = false;
+  entry.phaseMessage =
+    generationMode === "incremental" ? "Reviewing new commits..." : "Regenerating...";
+  setEntry(prId, entry);
+
+  try {
+    await fetch(`${API_BASE_URL}/api/reviews/${prId}/walkthrough/regenerate`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ mode, generationMode }),
+    });
+  } catch {
+    // Non-fatal — the start call below will still create a fresh job.
+  }
+
+  // Keep the seeded freshEntry in place across the start POST: the
+  // `lifecycle:started` reducer patches `walkthroughId` on the existing
+  // entry, so dropping it here would only cause `_active` to flip to
+  // undefined and flash the "Generate walkthrough" pill between the
+  // regenerate and start round-trips.
+  const res = await startWalkthrough(prId, mode, generationMode);
+  if (!res) {
+    updateEntry(prId, (e) => {
+      e.isStreaming = false;
+      e.streamError = "Failed to start walkthrough";
+    });
+    return;
+  }
+  if (!res.ok) {
+    updateEntry(prId, (e) => {
+      e.isStreaming = false;
+      e.streamError = `Failed to start walkthrough (HTTP ${res.status}).`;
+    });
+    return;
+  }
+
+  const started = (await res.json().catch(() => null)) as { walkthroughId?: string } | null;
+  if (started?.walkthroughId) {
+    await hydrateFromCache(prId, {
+      mode,
+      reportId: started.walkthroughId,
+      replace: true,
+    });
+  }
 }
 
 export async function resume(
@@ -1534,13 +1542,14 @@ export async function resume(
         body: JSON.stringify({ mode }),
       });
       if (!res.ok) {
+        if (res.status === 404) {
+          await runRegenerate(prId, mode, "incremental");
+          return;
+        }
         updateEntry(prId, (e) => {
           e.isStreaming = false;
           e.liveGeneration = false;
-          e.streamError =
-            res.status === 404
-              ? "No resumable walkthrough was found. Review new commits or regenerate instead."
-              : `Failed to resume walkthrough (HTTP ${res.status}).`;
+          e.streamError = `Failed to resume walkthrough (HTTP ${res.status}).`;
         });
         return;
       }
