@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.19.0](https://github.com/alexandre-schaffner/revv/compare/v0.18.1...v0.19.0) (2026-07-22)
+
+
+### Features
+
+* **walkthrough:** add issue bug bar and sharpen severity definitions ([#150](https://github.com/alexandre-schaffner/revv/issues/150)) ([e6b4a6e](https://github.com/alexandre-schaffner/revv/commit/e6b4a6ecd8b33a043c70967e382ba955c96370a3))
+
+
+### Bug Fixes
+
+* **chat:** correct file-pill color and window the Read tool peek ([#152](https://github.com/alexandre-schaffner/revv/issues/152)) ([262f0c6](https://github.com/alexandre-schaffner/revv/commit/262f0c6477647c46907225b018320e28b22fd611))
+
 ## [0.18.1](https://github.com/alexandre-schaffner/revv/compare/v0.18.0...v0.18.1) (2026-07-16)
 
 
