@@ -115,7 +115,7 @@ const getRepoContextSchema = z.object({
    */
   period: z.enum(["daily", "weekly"]).nullable().optional(),
   /** Optional cap; defaults to 3. Hard maximum 10 to keep prompts bounded. */
-  limit: z.number().int().positive().max(10).nullable().optional(),
+  limit: z.coerce.number().int().positive().max(10).nullable().optional(),
 });
 
 /**
@@ -188,8 +188,8 @@ const semanticStepInitialBlockSchema = z
     code: z
       .object({
         file_path: z.string(),
-        start_line: z.number().int(),
-        end_line: z.number().int(),
+        start_line: z.coerce.number().int(),
+        end_line: z.coerce.number().int(),
         language: z.string(),
         content: z.string(),
         annotation: z.string().nullable(),
@@ -219,7 +219,7 @@ const semanticStepInitialBlockSchema = z
   );
 
 const addSemanticStepSchema = z.object({
-  semantic_step_index: z
+  semantic_step_index: z.coerce
     .number()
     .int()
     .nonnegative()
@@ -253,14 +253,14 @@ const addSemanticStepSchema = z.object({
  * `(walkthroughId, phase, semantic_step_index, step_index)`.
  */
 const addDiffStepSchema = z.object({
-  semantic_step_index: z
+  semantic_step_index: z.coerce
     .number()
     .int()
     .nonnegative()
     .describe(
       "Index of the parent chapter — must reference a `semantic_step_index` already created via `add_semantic_step`. Required. Use the same value for every block in a chapter.",
     ),
-  step_index: z
+  step_index: z.coerce
     .number()
     .int()
     .nonnegative()
@@ -284,8 +284,8 @@ const addDiffStepSchema = z.object({
   code: z
     .object({
       file_path: z.string(),
-      start_line: z.number().int(),
-      end_line: z.number().int(),
+      start_line: z.coerce.number().int(),
+      end_line: z.coerce.number().int(),
       language: z.string(),
       content: z.string(),
       annotation: z.string().nullable(),
@@ -319,12 +319,12 @@ const addDiffStepSchema = z.object({
  * and persists them in the row's `blockIds` JSON.
  */
 const blockRefSchema = z.object({
-  semantic_step_index: z
+  semantic_step_index: z.coerce
     .number()
     .int()
     .nonnegative()
     .describe("Parent chapter's semantic_step_index."),
-  step_index: z
+  step_index: z.coerce
     .number()
     .int()
     .nonnegative()
@@ -337,7 +337,7 @@ const flagIssueSchema = z.object({
   severity: z
     .enum(["info", "warning", "critical"])
     .describe(
-      "DEFAULT TO 'warning' WHEN UNSURE. Calibration: 'info' = nitpick the coder can ignore (style preference, optional cleanup, observation a real reviewer would not block on) — RARE, most reviews have zero info. 'warning' = a real concern the coder should address before merge (concrete bug, missing test, error path not handled, design issue, unclear naming on critical path, missing edge-case handling) — this is the COMMON case for any concern worth surfacing. 'critical' = hard merge blocker (security flaw, auth bypass, data loss, broken migration, breaking API change without compatibility shim, race condition in shared state, unhandled error that crashes the process). Do not soften 'critical' to 'warning' — if it would cause an incident, call it critical. Do not soften 'warning' to 'info' to hedge — if you would mention it as a reviewer, it is at minimum a warning.",
+      "Two decisions, kept separate. (1) WHETHER TO FLAG — a HIGH bar: flag only if ALL hold — meaningful impact (accuracy/perf/security/maintainability); discrete & actionable with a clear fix; rigor matching the surrounding codebase; introduced by THIS diff (not pre-existing); the author would likely fix it; rests on verifiable facts (no speculation); provably affects specific code (not theoretical); not an intentional design choice. If any fails, do not flag. (2) SEVERITY ONCE FLAGGED — a LOW bar: DEFAULT TO 'warning'; don't hedge a real finding down to 'info'. 'critical' = blocks release / causes an incident (RCE, hardcoded prod secret, auth bypass, unauthenticated privileged endpoint, data-loss path, broken migration, breaking API change without a shim, race on shared state, crash-on-unhandled-error). 'warning' (the common tier) = address before merge / next cycle (SQLi behind auth, stored XSS, sensitive-data IDOR, CSRF on state change, info disclosure, prompt injection behind auth, very-new dependency, missed edge case, missing test for new behavior, unhandled error path, off-by-one). 'info' = RARE genuine nitpick / low-impact hardening the author can defer — most reviews have zero. Security examples are illustrative per tier, not a narrowing — correctness/perf/tests/maintainability map the same way.",
     ),
   title: z.string().describe("Short title of the concern (10 words max)"),
   description: z
@@ -352,8 +352,16 @@ const flagIssueSchema = z.object({
       "Composite identifiers of the diff step(s) that explain this concern, in the form { semantic_step_index, step_index }. Must reference blocks already added via add_diff_step. Provide every block the reviewer should read to understand the issue.",
     ),
   file_path: z.string().nullable().describe("Path to the relevant file, or null if PR-wide"),
-  start_line: z.number().int().nullable().describe("Starting line number of the concern, or null"),
-  end_line: z.number().int().nullable().describe("Ending line number of the concern, or null"),
+  start_line: z.coerce
+    .number()
+    .int()
+    .nullable()
+    .describe("Starting line number of the concern, or null"),
+  end_line: z.coerce
+    .number()
+    .int()
+    .nullable()
+    .describe("Ending line number of the concern, or null"),
 });
 
 const addIssueCommentSchema = z.object({
@@ -367,13 +375,13 @@ const addIssueCommentSchema = z.object({
     .describe(
       "Path of the file the comment anchors to — must match a path present in the PR diff.",
     ),
-  start_line: z
+  start_line: z.coerce
     .number()
     .int()
     .describe(
       "1-based start line of the anchor range. Must be inside a hunk present in the PR diff (same rule as human review comments on GitHub).",
     ),
-  end_line: z
+  end_line: z.coerce
     .number()
     .int()
     .describe("1-based inclusive end line. Equal to start_line for a single-line comment."),
@@ -438,8 +446,8 @@ const rateAxisSchema = z.object({
     .array(
       z.object({
         file_path: z.string(),
-        start_line: z.number().int(),
-        end_line: z.number().int(),
+        start_line: z.coerce.number().int(),
+        end_line: z.coerce.number().int(),
         note: z.string().nullable(),
       }),
     )

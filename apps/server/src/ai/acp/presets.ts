@@ -117,8 +117,12 @@ export function resolveAcpLaunchById(id: AcpAgentId, config: AcpLaunchConfig = {
       break;
     }
     case "opencode": {
-      // opencode accepts `--model provider/model` at startup (same format as its config).
-      if (model) args.push("--model", model);
+      // `opencode acp` does NOT accept a `--model` flag (unlike `opencode run` /
+      // the TUI) — passing one makes yargs print help and exit 1, which surfaces
+      // as "ACP connection closed". Inject the model the way the ACP subcommand
+      // honors it: an inline config override via OPENCODE_CONFIG_CONTENT, whose
+      // `model` field takes the same `provider/model` format as the config file.
+      if (model) env.OPENCODE_CONFIG_CONTENT = JSON.stringify({ model });
       break;
     }
     case "cursor": {

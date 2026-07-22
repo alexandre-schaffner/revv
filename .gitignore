@@ -5,9 +5,9 @@
 node_modules/
 
 # Build output
-apps/web/build/
+build/
+dist/
 apps/web/.svelte-kit/
-apps/server/dist/
 apps/desktop/target/
 
 # TypeScript

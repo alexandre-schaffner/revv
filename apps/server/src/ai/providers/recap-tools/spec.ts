@@ -202,7 +202,7 @@ export interface RecapSourceBundle {
 export const getRecapStateSchema = z.object({});
 
 export const listOpenPrsSchema = z.object({
-  offset: z
+  offset: z.coerce
     .number()
     .int()
     .nonnegative()
@@ -210,7 +210,7 @@ export const listOpenPrsSchema = z.object({
     .describe(
       "Zero-based offset into the open-PR list. Defaults to 0. Use the `nextOffset` returned by the previous call to walk through pages — when it's null, you've reached the end.",
     ),
-  limit: z
+  limit: z.coerce
     .number()
     .int()
     .positive()
@@ -228,7 +228,7 @@ export const getRepoContextSchema = z.object({
    */
   period: z.enum(["daily", "weekly"]).nullable().optional(),
   /** Optional cap on returned rows. Defaults to 3. */
-  limit: z.number().int().positive().max(10).nullable().optional(),
+  limit: z.coerce.number().int().positive().max(10).nullable().optional(),
 });
 
 export const setLedeSchema = z.object({
@@ -246,7 +246,7 @@ export const addPrEntrySchema = z.object({
     .describe(
       "The `id` of a PR returned by `get_recap_state.prs` (archived) or `list_open_prs` (active). Upserts on `(recap_id, pr_id)` — calling again with the same `pr_id` overwrites in place.",
     ),
-  position: z
+  position: z.coerce
     .number()
     .int()
     .nonnegative()
@@ -273,12 +273,12 @@ export const addPrEntrySchema = z.object({
     .describe(
       "One-sentence description of what the PR does. Plain prose, may include backtick-wrapped code spans for identifiers / file paths (rendered as `.codechip` chips in the UI). No other markdown. Aim for ≤ 25 words.",
     ),
-  lines_added: z
+  lines_added: z.coerce
     .number()
     .int()
     .nonnegative()
     .describe("Additions for this PR — copy the value from `get_recap_state.prs[].additions`."),
-  lines_removed: z
+  lines_removed: z.coerce
     .number()
     .int()
     .nonnegative()
