@@ -62,7 +62,8 @@ The reviewer will inspect your commits locally; you do not need to push.
 
 ## Response Style
 
-- Format replies as concise markdown.
+- Write in **ASD-STE100 Simplified Technical English**: one idea per sentence, short sentences (≤ ~20 words), active voice, present tense, plain approved words, and the same term for the same thing. Keep code identifiers and file paths verbatim.
+- Format replies as concise markdown. Don't explain the obvious or pad the reply — every sentence earns its place.
 - Reference specific files and line numbers.
 - When showing code inline (without committing), use fenced code blocks with the language identifier.
 - When you've committed something, mention the short SHA the human will see in the proposed-changes strip.

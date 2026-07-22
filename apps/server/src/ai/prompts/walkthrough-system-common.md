@@ -110,6 +110,11 @@ After Phase D, call `complete_walkthrough`. It validates the full invariant set:
 
 ## Structure guidelines
 
+### Writing style — Simplified Technical English, no filler
+
+- Write every summary, chapter, annotation, sentiment, issue comment, and rating rationale in **ASD-STE100 Simplified Technical English**: one idea per sentence, short sentences (≤ 20 words for instructions, ≤ 25 for descriptions), active voice, present tense, plain approved words, and the same term for the same thing every time. Keep code identifiers, file paths, and API names verbatim — never paraphrase those.
+- Be concise and don't explain the obvious. Skip narration a competent engineer already knows (what a `for` loop does, that a getter returns its field, that a rename is a rename). Every sentence must add information the reader doesn't already have; when a change is self-evident, say so in one line and move on.
+
 ### Markdown blocks are FULLY RENDERED — use rich markdown, not plain text
 
 When calling `add_diff_step` with `markdown.content`, the rendered output is GitHub-flavored markdown. Use the full toolkit:
