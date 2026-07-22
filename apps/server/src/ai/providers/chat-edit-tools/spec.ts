@@ -90,8 +90,8 @@ export const blockContentSchema = z
     code: z
       .object({
         file_path: z.string(),
-        start_line: z.number().int(),
-        end_line: z.number().int(),
+        start_line: z.coerce.number().int(),
+        end_line: z.coerce.number().int(),
         language: z.string(),
         content: z.string(),
         annotation: z.string().nullable(),
@@ -136,8 +136,8 @@ export const blockContentSchema = z
 
 /** Composite identifier for an existing diff block (matches walkthrough-tool-spec.ts). */
 const blockRefSchema = z.object({
-  semantic_step_index: z.number().int().nonnegative(),
-  step_index: z.number().int().nonnegative(),
+  semantic_step_index: z.coerce.number().int().nonnegative(),
+  step_index: z.coerce.number().int().nonnegative(),
 });
 
 /** Rating axis enum, matched against `RATING_AXES`. */
@@ -175,7 +175,7 @@ export const updateOverviewSchema = z.object({
 });
 
 export const addSemanticStepEditSchema = z.object({
-  semantic_step_index: z
+  semantic_step_index: z.coerce
     .number()
     .int()
     .nonnegative()
@@ -192,7 +192,7 @@ export const addSemanticStepEditSchema = z.object({
 });
 
 export const updateSemanticStepSchema = z.object({
-  semantic_step_index: z
+  semantic_step_index: z.coerce
     .number()
     .int()
     .nonnegative()
@@ -213,7 +213,7 @@ export const updateSemanticStepSchema = z.object({
 });
 
 export const deleteSemanticStepSchema = z.object({
-  semantic_step_index: z
+  semantic_step_index: z.coerce
     .number()
     .int()
     .nonnegative()
@@ -223,14 +223,14 @@ export const deleteSemanticStepSchema = z.object({
 });
 
 export const addBlockSchema = z.object({
-  semantic_step_index: z
+  semantic_step_index: z.coerce
     .number()
     .int()
     .nonnegative()
     .describe(
       "Index of the parent chapter — must already exist. Use update_semantic_step or add_semantic_step first if you need a new chapter.",
     ),
-  step_index: z
+  step_index: z.coerce
     .number()
     .int()
     .nonnegative()
@@ -243,8 +243,8 @@ export const addBlockSchema = z.object({
 });
 
 export const updateBlockSchema = z.object({
-  semantic_step_index: z.number().int().nonnegative(),
-  step_index: z
+  semantic_step_index: z.coerce.number().int().nonnegative(),
+  step_index: z.coerce
     .number()
     .int()
     .nonnegative()
@@ -253,8 +253,8 @@ export const updateBlockSchema = z.object({
 });
 
 export const deleteBlockSchema = z.object({
-  semantic_step_index: z.number().int().nonnegative(),
-  step_index: z
+  semantic_step_index: z.coerce.number().int().nonnegative(),
+  step_index: z.coerce
     .number()
     .int()
     .nonnegative()
@@ -299,8 +299,8 @@ export const updateRatingSchema = z.object({
     .array(
       z.object({
         file_path: z.string(),
-        start_line: z.number().int(),
-        end_line: z.number().int(),
+        start_line: z.coerce.number().int(),
+        end_line: z.coerce.number().int(),
         note: z.string().nullable(),
       }),
     )
@@ -340,8 +340,8 @@ export const addIssueEditSchema = z.object({
       "Composite identifiers of existing diff block(s) the issue is anchored to. Must reference blocks that already exist.",
     ),
   file_path: z.string().nullable(),
-  start_line: z.number().int().nullable(),
-  end_line: z.number().int().nullable(),
+  start_line: z.coerce.number().int().nullable(),
+  end_line: z.coerce.number().int().nullable(),
 });
 
 export const updateIssueSchema = z.object({
@@ -355,8 +355,8 @@ export const updateIssueSchema = z.object({
   description: z.string().nullable().optional(),
   block_refs: z.array(blockRefSchema).nullable().optional(),
   file_path: z.string().nullable().optional(),
-  start_line: z.number().int().nullable().optional(),
-  end_line: z.number().int().nullable().optional(),
+  start_line: z.coerce.number().int().nullable().optional(),
+  end_line: z.coerce.number().int().nullable().optional(),
 });
 
 export const deleteIssueSchema = z.object({
@@ -370,8 +370,8 @@ export const deleteIssueSchema = z.object({
 export const addIssueCommentEditSchema = z.object({
   issue_id: z.string(),
   file_path: z.string(),
-  start_line: z.number().int(),
-  end_line: z.number().int(),
+  start_line: z.coerce.number().int(),
+  end_line: z.coerce.number().int(),
   diff_side: z.enum(["old", "new"]).default("new"),
   body: z.string(),
 });

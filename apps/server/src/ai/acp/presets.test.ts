@@ -134,11 +134,14 @@ describe("ACP launch presets", () => {
     expect(launch.env.ANTHROPIC_API_KEY).toBe("api-key");
   });
 
-  it("passes the selected model to opencode acp via --model", () => {
+  it("injects the selected model into opencode acp via OPENCODE_CONFIG_CONTENT", () => {
     if (serverEnv.acpCommand) return;
+    // `opencode acp` rejects a `--model` flag, so the model rides in as an inline
+    // config override the ACP subcommand honors.
     expect(resolveAcpLaunchById("opencode", { model: "anthropic/claude-sonnet-4-6" })).toEqual({
       command: "opencode",
-      args: ["acp", "--model", "anthropic/claude-sonnet-4-6"],
+      args: ["acp"],
+      env: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ model: "anthropic/claude-sonnet-4-6" }) },
     });
   });
 });
