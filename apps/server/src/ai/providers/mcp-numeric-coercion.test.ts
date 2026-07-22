@@ -31,14 +31,28 @@ const SURFACES: ReadonlyArray<{ label: string; specs: readonly SchemaSpec[] }> =
 type PathToken = string | number;
 type NumericPath = ReadonlyArray<PathToken>;
 
-// Zod wraps .optional() / .nullable() / .default() in Def-holding shells.
-// Each def exposes its inner type at `_zod.def.innerType`; peel until stable.
+// Peel wrapper types via zod's PUBLIC `.unwrap()` method. The previous
+// version reached into `_zod.def.innerType` (private): if a zod upgrade
+// renamed that field, the loop silently stopped peeling, nested numeric
+// paths were never discovered, and the "no numeric field at any depth"
+// test passed vacuously. Using the public classes + `.unwrap()` makes a
+// break loud — instanceof throws if the class is gone, and the self-check
+// test below pins the nested paths that REQUIRE a peel.
+const WRAPPER_CLASSES = [
+  z.ZodOptional,
+  z.ZodNullable,
+  z.ZodDefault,
+  z.ZodCatch,
+  z.ZodPrefault,
+  z.ZodReadonly,
+] as const;
+
 function unwrap(t: z.ZodType): z.ZodType {
   let cur: z.ZodType = t;
   for (let i = 0; i < 16; i++) {
-    const def = (cur as { _zod?: { def?: { innerType?: z.ZodType } } })._zod?.def;
-    if (!def?.innerType) break;
-    cur = def.innerType;
+    const isWrapper = WRAPPER_CLASSES.some((cls) => cur instanceof cls);
+    if (!isWrapper) break;
+    cur = (cur as unknown as { unwrap: () => z.ZodType }).unwrap();
   }
   return cur;
 }
@@ -106,6 +120,56 @@ describe("agent MCP tools coerce string-valued numeric arguments", () => {
       initial_block: { markdown: { content: "hello" } },
     });
     expect(parsed?.success).toBe(false);
+  });
+
+  it("walker discovers nested numeric paths that require wrapper peeling", () => {
+    // Self-check. unwrap() peels .optional()/.nullable()/.default() wrappers
+    // via zod's public .unwrap(). If a zod upgrade changes that surface (or
+    // a new wrapper type appears that unwrap() doesn't recognise),
+    // collectNumericPaths silently returns [] for wrapped subtrees and the
+    // main "no numeric field at any depth" test below would pass vacuously.
+    // Pin the nested paths that REQUIRE a peel — plus a plain-array recursion
+    // check — so a broken peel fails HERE instead of masking a regression.
+    const pathsOf = (specs: readonly SchemaSpec[], name: string): Set<string> => {
+      const spec = specs.find((s) => s.name === name);
+      expect(spec).toBeDefined();
+      return spec
+        ? new Set(collectNumericPaths(spec.inputSchema).map((p) => p.join(".")))
+        : new Set<string>();
+    };
+    const wt = WALKTHROUGH_TOOL_BUNDLE.specs;
+    const ce = EDIT_TOOL_SPECS as unknown as readonly SchemaSpec[];
+
+    // add_semantic_step.initial_block.code is .nullable().optional() — the
+    // double-wrap is the worst case for the peel; reaching start_line/end_line
+    // REQUIRES unwrap to fire twice before the ZodObject recurse.
+    const addStep = pathsOf(wt, "add_semantic_step");
+    expect(addStep.has("initial_block.code.start_line")).toBe(true);
+    expect(addStep.has("initial_block.code.end_line")).toBe(true);
+
+    // flag_issue.block_refs is a plain array — peel not required, but the
+    // inner blockRefSchema ZodObject must still be recursed into.
+    const flagIssue = pathsOf(wt, "flag_issue");
+    expect(flagIssue.has("block_refs.0.semantic_step_index")).toBe(true);
+    expect(flagIssue.has("block_refs.0.step_index")).toBe(true);
+
+    // rate_axis exposes both a citations array and a block_refs array.
+    const rateAxis = pathsOf(wt, "rate_axis");
+    expect(rateAxis.has("citations.0.start_line")).toBe(true);
+    expect(rateAxis.has("citations.0.end_line")).toBe(true);
+    expect(rateAxis.has("block_refs.0.semantic_step_index")).toBe(true);
+
+    // chat-edit.update_rating: citations AND block_refs are .nullable().optional().
+    const updateRating = pathsOf(ce, "update_rating");
+    expect(updateRating.has("citations.0.start_line")).toBe(true);
+    expect(updateRating.has("citations.0.end_line")).toBe(true);
+    expect(updateRating.has("block_refs.0.semantic_step_index")).toBe(true);
+    expect(updateRating.has("block_refs.0.step_index")).toBe(true);
+
+    // chat-edit.update_issue: block_refs is .nullable().optional().
+    const updateIssue = pathsOf(ce, "update_issue");
+    expect(updateIssue.has("block_refs.0.semantic_step_index")).toBe(true);
+    expect(updateIssue.has("block_refs.0.step_index")).toBe(true);
   });
 
   it("no numeric field at any depth rejects a numeric string as a non-number", () => {
