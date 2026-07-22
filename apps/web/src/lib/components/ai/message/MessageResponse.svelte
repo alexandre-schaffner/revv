@@ -111,15 +111,19 @@ export type MessageResponseProps = HTMLAttributes<HTMLDivElement> & {
 		height: 0.9em;
 		flex-shrink: 0;
 	}
-	/* On the accent (user) bubble the neutral chip is invisible — use a
-	   translucent-white pill so it reads on the teal background. */
+	/* On the teal accent bubble a translucent-white chip leaves white text at
+	   ~4.3:1 (below AA) and muddies the file glyph's color. Flip it to a solid,
+	   brand-tinted light chip: ink-deep teal text hits ~11:1, the per-extension
+	   glyph keeps its meaningful color on a surface bright enough to carry it,
+	   and the chip separates from the bubble at ~5.6:1. Tinted toward the brand
+	   hue (195), never raw #fff, per the design system. */
 	:global([data-slot='message-response'].prose-on-accent .mention-ref) {
-		border-color: color-mix(in srgb, white 36%, transparent);
-		background: color-mix(in srgb, white 18%, transparent);
-		color: inherit;
+		border-color: oklch(88% 0.02 195);
+		background: oklch(96% 0.012 195);
+		color: oklch(32% 0.03 195);
 	}
 	:global([data-slot='message-response'].prose-on-accent .mention-ref[data-mention-path]:hover) {
-		border-color: color-mix(in srgb, white 60%, transparent);
-		background: color-mix(in srgb, white 28%, transparent);
+		border-color: oklch(80% 0.04 195);
+		background: oklch(92% 0.022 195);
 	}
 </style>

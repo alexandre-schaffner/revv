@@ -41,6 +41,7 @@ $effect(() => {
 					index === activeIndex ? "bg-accent/10 text-accent" : "text-foreground hover:bg-muted",
 				]}
 				title={rowTitle?.(item)}
+				onmousedown={(e) => e.preventDefault()}
 				onclick={() => onselect(item)}
 			>
 				{@render row(item, index === activeIndex)}

@@ -11,20 +11,22 @@
 // streaming content changes, microtask-scheduled), pausing observation while we
 // mutate so our injected nodes don't re-trigger it.
 
+import { MENTION_PATH_PATTERN } from "@revv/shared";
 import type { Action } from "svelte/action";
 
 import { openFileInDiff } from "$lib/stores/review.svelte";
 import type { ReviewFile } from "$lib/types/review";
 import { basename } from "$lib/utils/activity-groups";
-import { createFileGlyph } from "$lib/utils/file-glyph";
+import { appendPillContents } from "$lib/utils/file-glyph";
 
 const PILL_CLASS = "mention-ref";
 const PATH_ATTR = "data-mention-path";
 const LINE_ATTR = "data-mention-line";
 
 // `@` followed by a path with an extension, optional `:line`. Conservative on
-// purpose so prose `@handle` mentions don't get captured.
-const MENTION_RE = /@((?:[\w.-]+\/)*[\w.-]+\.[A-Za-z0-9]+)(?::(\d+))?/g;
+// purpose so prose `@handle` mentions don't get captured. Grammar is shared
+// with the composer via `@revv/shared` so the two never drift.
+const MENTION_RE = new RegExp(MENTION_PATH_PATTERN, "g");
 
 /** A mention resolves to a changed file by exact path or unique basename. */
 function resolvePath(candidate: string, files: ReadonlyArray<ReviewFile>): string | null {
@@ -40,28 +42,42 @@ function resolvePath(candidate: string, files: ReadonlyArray<ReviewFile>): strin
   return null;
 }
 
+/**
+ * Apply (or strip) the clickable affordance on a pill from the current file
+ * set. Idempotent and called both at creation and on every re-decoration, so a
+ * pill minted before `reviewFiles` loaded gets upgraded once the file it names
+ * becomes resolvable (and downgraded if the set later drops it). The pill's full
+ * path lives in `title` and its line in `data-mention-line`, so resolution
+ * survives without re-parsing the original `@token`.
+ */
+function syncPill(pill: HTMLElement, files: ReadonlyArray<ReviewFile>): void {
+  const resolved = resolvePath(pill.title, files);
+  if (resolved) {
+    pill.setAttribute(PATH_ATTR, resolved);
+    pill.setAttribute("role", "button");
+    pill.setAttribute("tabindex", "0");
+  } else {
+    pill.removeAttribute(PATH_ATTR);
+    pill.removeAttribute("role");
+    pill.removeAttribute("tabindex");
+  }
+}
+
 function makePill(
   fullPath: string,
   line: number | null,
   files: ReadonlyArray<ReviewFile>,
 ): HTMLElement {
-  const resolved = resolvePath(fullPath, files);
   const span = document.createElement("span");
   span.className = PILL_CLASS;
   span.title = fullPath;
-  if (resolved) {
-    span.setAttribute(PATH_ATTR, resolved);
-    if (line !== null) span.setAttribute(LINE_ATTR, String(line));
-    span.setAttribute("role", "button");
-    span.setAttribute("tabindex", "0");
-  }
+  // Stamp the line up front (independent of resolution) so a later upgrade can
+  // restore the jump target without the original token.
+  if (line !== null) span.setAttribute(LINE_ATTR, String(line));
 
-  span.appendChild(createFileGlyph(fullPath, "mention-ref-icon"));
+  appendPillContents(span, fullPath, "mention-ref-icon", "mention-ref-text");
 
-  const text = document.createElement("span");
-  text.className = "mention-ref-text";
-  text.textContent = basename(fullPath);
-  span.appendChild(text);
+  syncPill(span, files);
   return span;
 }
 
@@ -92,6 +108,13 @@ function decorate(node: HTMLElement, files: ReadonlyArray<ReviewFile> | null): v
       pill.replaceWith(document.createTextNode(`@${pill.title}`));
     }
     return;
+  }
+  // Re-resolve pills minted on a prior pass: the file set may have loaded (or
+  // changed) since, and the converted pill is no longer an `@text` node for the
+  // walk below to catch. This is what lets a pill become clickable once its
+  // file appears in the review — mirroring the `fileReferences` self-heal.
+  for (const pill of node.querySelectorAll<HTMLElement>(`.${PILL_CLASS}`)) {
+    syncPill(pill, files);
   }
   // Collect text nodes first (the walk and the mutation must not interleave).
   const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);

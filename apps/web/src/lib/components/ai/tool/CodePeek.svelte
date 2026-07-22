@@ -15,9 +15,16 @@ interface Props {
   path: string;
   /** File contents / code to render. */
   content: string;
+  /**
+   * Render only a window of `content` (the gutter keeps absolute line numbers)
+   * instead of the whole file. `startLine` is 1-based. Used by the Read peek so
+   * a `Read(offset, limit)` shows just the lines it read.
+   */
+  startLine?: number | undefined;
+  lineCount?: number | undefined;
 }
 
-let { path, content }: Props = $props();
+let { path, content, startLine, lineCount }: Props = $props();
 
 let instance: PierreFile<never> | null = null;
 
@@ -29,12 +36,20 @@ function mountCodeBlock(el: HTMLDivElement) {
     disableFileHeader: true,
   };
   instance = new PierreFile<never>(options, workerManager);
+  // Pierre virtualizes to a line window via `renderRange` (0-based start +
+  // count) while the gutter still shows absolute line numbers. Zero buffers
+  // keep the block exactly the window's height, not the whole file's.
+  const renderRange =
+    startLine != null && lineCount != null && lineCount > 0
+      ? { startingLine: startLine - 1, totalLines: lineCount, bufferBefore: 0, bufferAfter: 0 }
+      : undefined;
   // Pierre's File renders plaintext (which reads as unstyled "markdown") unless
   // a language is set, so resolve it from the path's extension explicitly —
   // matching WalkthroughCodeBlock, which passes `lang`.
   instance.render({
     containerWrapper: el,
     file: { name: path, contents: content, lang: getFiletypeFromFileName(path) },
+    ...(renderRange ? { renderRange } : {}),
   });
   return {
     destroy() {

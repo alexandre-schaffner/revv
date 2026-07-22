@@ -26,6 +26,23 @@ const TRIGGER_AT_CARET_RE = /(^|\s)([/@])([^\s]*)$/;
 const MENTION_TOKEN_RE = /(^|\s)@([^\s`]+)/g;
 
 /**
+ * A single `@path[:line]` mention token as it appears in composer / message
+ * text: a slash-separated path ending in a file extension, with an optional
+ * `:line` suffix. Capture 1 is the path; capture 2 is the line number (if
+ * present). Deliberately requires an extension so a prose `@handle` isn't
+ * captured.
+ *
+ * This is the CLIENT-side *pill* grammar — the source of truth shared by the
+ * composer (pillify on render) and the message-pill decoration action so those
+ * two never drift on what a file mention looks like. It is intentionally
+ * distinct from `MENTION_TOKEN_RE` above, which is the SERVER's
+ * boundary-anchored token extractor: the two answer different questions (see
+ * the file header). Callers build their own `RegExp` from this source so no
+ * mutable `lastIndex` is shared across modules.
+ */
+export const MENTION_PATH_PATTERN = "@((?:[\\w.-]+/)*[\\w.-]+\\.[A-Za-z0-9]+)(?::(\\d+))?";
+
+/**
  * Detect the active autocomplete trigger in the text before the caret. Slash
  * commands only trigger at the very start of the input; `@`-mentions trigger
  * anywhere. Returns `null` when the caret is not in a trigger token.
