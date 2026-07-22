@@ -520,6 +520,7 @@ export type PromptInputTextareaProps = Omit<HTMLAttributes<HTMLDivElement>, "con
 		onkeydown={handleKeydown}
 		onkeyup={refreshTrigger}
 		onmouseup={refreshTrigger}
+		onpaste={handlePaste}
 		onblur={handleBlur}
 		onfocus={(e) => {
 			refreshTrigger();
