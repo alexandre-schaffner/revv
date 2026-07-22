@@ -273,6 +273,7 @@ function retryTeams(): void {
 		border-radius: 999px;
 		background: var(--color-bg-elevated);
 		color: var(--color-text-secondary);
+		cursor: pointer;
 	}
 
 	:global(.filter-trigger:hover) {
