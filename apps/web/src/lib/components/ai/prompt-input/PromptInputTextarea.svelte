@@ -275,18 +275,84 @@ export type PromptInputTextareaProps = Omit<HTMLAttributes<HTMLDivElement>, "con
 		return n;
 	}
 
-	// The node a Backspace (prev) / Delete (next) would act on, given a collapsed
-	// caret. Returns null when there's ordinary text to delete in that direction
-	// (let the browser handle it).
-	function adjacentNode(range: Range, dir: "prev" | "next"): Node | null {
+	// The node a Delete (next) would act on, given a collapsed caret. Returns
+	// null when there's ordinary text to delete forward (let the browser handle
+	// it).
+	function forwardNode(range: Range): Node | null {
 		const { startContainer: c, startOffset: o } = range;
 		if (c.nodeType === Node.TEXT_NODE) {
-			const atEdge = dir === "prev" ? o === 0 : o === (c.nodeValue?.length ?? 0);
-			if (!atEdge) return null;
-			return skipEmptyText(dir === "prev" ? c.previousSibling : c.nextSibling, dir);
+			if (o !== (c.nodeValue?.length ?? 0)) return null;
+			return skipEmptyText(c.nextSibling, "next");
 		}
-		const child = dir === "prev" ? c.childNodes[o - 1] : c.childNodes[o];
-		return skipEmptyText(child ?? null, dir);
+		return skipEmptyText(c.childNodes[o] ?? null, "next");
+	}
+
+	function isWhitespaceText(node: Node | null): boolean {
+		return node?.nodeType === Node.TEXT_NODE && (node.nodeValue ?? "").trim().length === 0;
+	}
+
+	// What a single Backspace should remove: the pill just before the caret, plus
+	// any auto-inserted whitespace sitting between it and the caret (so the
+	// `[pill][" "]` a mention insertion leaves behind — where the caret lands at
+	// element level right after the space — dies in one press instead of two).
+	// Returns null when there's ordinary text to delete first: then the browser
+	// handles it. `removeNodes` are whitespace/empty text nodes to delete whole;
+	// `trimNode`'s first `trimLen` chars are the whitespace prefix to strip from
+	// the caret's own text node; `caretNode` is where the caret should collapse.
+	function backwardPillTarget(range: Range): {
+		pill: HTMLElement;
+		removeNodes: Node[];
+		trimNode: Text | null;
+		trimLen: number;
+		caretNode: Node | null;
+	} | null {
+		const { startContainer: c, startOffset: o } = range;
+
+		// The node just left of the caret, and the text prefix to strip if the
+		// caret sits inside a (whitespace-only) text node.
+		let scan: Node | null;
+		let trimNode: Text | null = null;
+		let trimLen = 0;
+		let caretNode: Node | null;
+		if (c.nodeType === Node.TEXT_NODE) {
+			const before = (c.nodeValue ?? "").slice(0, o);
+			if (before.trim().length > 0) return null; // real text → normal delete
+			trimNode = c as Text;
+			trimLen = before.length;
+			caretNode = c; // keep this node; caret collapses to its start
+			scan = c.previousSibling;
+		} else {
+			caretNode = c.childNodes[o] ?? null; // node the caret sits before (kept)
+			scan = c.childNodes[o - 1] ?? null;
+		}
+
+		// Walk left across whitespace/empty text nodes to reach the pill.
+		const removeNodes: Node[] = [];
+		while (scan && scan.nodeType === Node.TEXT_NODE) {
+			if (!isWhitespaceText(scan)) return null; // real text → normal delete
+			removeNodes.push(scan);
+			scan = scan.previousSibling;
+		}
+		if (!isPill(scan)) return null;
+		return { pill: scan, removeNodes, trimNode, trimLen, caretNode };
+	}
+
+	// Remove a pill and collapse the caret to where it stood.
+	function removePill(sel: Selection, pill: HTMLElement) {
+		const anchor = pill.nextSibling;
+		const parent = pill.parentNode;
+		pill.remove();
+		const r = document.createRange();
+		if (anchor && anchor.parentNode === parent) r.setStartBefore(anchor);
+		else {
+			r.selectNodeContents(parent ?? (editorEl as Node));
+			r.collapse(false);
+		}
+		r.collapse(true);
+		sel.removeAllRanges();
+		sel.addRange(r);
+		pushValue();
+		refreshTrigger();
 	}
 
 	// Atomic pill deletion. WebKit otherwise needs two Backspaces on a
@@ -297,17 +363,27 @@ export type PromptInputTextareaProps = Omit<HTMLAttributes<HTMLDivElement>, "con
 		if (!sel || sel.rangeCount === 0) return false;
 		const range = sel.getRangeAt(0);
 		if (!range.collapsed) return false;
-		const dir = e.key === "Backspace" ? "prev" : "next";
-		const pill = adjacentNode(range, dir);
-		if (!isPill(pill)) return false;
+
+		if (e.key === "Delete") {
+			const pill = forwardNode(range);
+			if (!isPill(pill)) return false;
+			e.preventDefault();
+			removePill(sel, pill);
+			return true;
+		}
+
+		const target = backwardPillTarget(range);
+		if (!target) return false;
 		e.preventDefault();
-		const anchor = pill.nextSibling;
-		const parent = pill.parentNode;
-		pill.remove();
+		if (target.trimNode && target.trimLen > 0) {
+			target.trimNode.nodeValue = (target.trimNode.nodeValue ?? "").slice(target.trimLen);
+		}
+		for (const n of target.removeNodes) n.parentNode?.removeChild(n);
+		target.pill.remove();
 		const r = document.createRange();
-		if (anchor && anchor.parentNode === parent) r.setStartBefore(anchor);
+		if (target.caretNode && target.caretNode.parentNode) r.setStartBefore(target.caretNode);
 		else {
-			r.selectNodeContents(parent ?? (editorEl as Node));
+			r.selectNodeContents(editorEl as Node);
 			r.collapse(false);
 		}
 		r.collapse(true);
