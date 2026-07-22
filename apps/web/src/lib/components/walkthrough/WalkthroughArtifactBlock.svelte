@@ -46,15 +46,13 @@ let mountWatchdog: ReturnType<typeof setTimeout> | null = null;
 
 const hostUrl = $derived.by(() => {
   if (!browser) return "about:blank";
-  // Tauri addresses custom URI schemes differently per platform: macOS/iOS use
-  // the real `artifact://localhost/...` scheme, while Windows (WebView2) and
-  // Linux (WebKitGTK) expose it at `http://artifact.localhost/...`. Both forms
-  // are allow-listed in tauri.conf.json → frame-src. Let Tauri pick the right
-  // one via `convertFileSrc` (it reads the OS at runtime) rather than sniffing
-  // `window.location.protocol`: in dev the frontend is served from the Vite
-  // dev server, so the protocol is `http:` even inside the macOS app — the old
-  // check then wrongly chose the `http://artifact.localhost` form, which macOS
-  // WKWebView can't resolve, so the iframe never loaded and stuck on "Rendering".
+  // macOS WKWebView exposes the custom URI scheme as `artifact://localhost/...`,
+  // which is allow-listed in tauri.conf.json → frame-src. Let Tauri build the URL
+  // via `convertFileSrc` rather than sniffing `window.location.protocol`: in dev
+  // the frontend is served from the Vite dev server, so the protocol is `http:`
+  // even inside the macOS app — a protocol check would then wrongly build an
+  // `http://` URL that WKWebView can't resolve, leaving the iframe stuck on
+  // "Rendering".
   return convertFileSrc("artifact-host.html", "artifact");
 });
 

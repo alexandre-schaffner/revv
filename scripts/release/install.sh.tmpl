@@ -35,9 +35,6 @@ download_cosign() {
   bin="$dir/cosign"
 
   case "$(uname -s)-$(uname -m)" in
-    Linux-x86_64)
-      asset="cosign-linux-amd64"
-      ;;
     Darwin-arm64)
       asset="cosign-darwin-arm64"
       ;;

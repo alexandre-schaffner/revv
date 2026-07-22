@@ -1,4 +1,3 @@
-import { platform } from "node:os";
 import type { AcpAgentId, LoginEvent } from "@revv/shared";
 import { Context, Effect, Layer } from "effect";
 import {
@@ -110,18 +109,6 @@ export const AgentLoginServiceLive = Layer.effect(
       if (!argv) {
         // No login needed (opencode) — succeed immediately and idempotently.
         broadcast({ type: "done", success: true });
-        return;
-      }
-
-      // PTY is POSIX-only; Windows degrades to a browser-handoff path the UI
-      // owns, so we don't attempt to spawn a terminal there.
-      if (platform() === "win32") {
-        broadcast({
-          type: "done",
-          success: false,
-          error:
-            "Embedded sign-in isn't supported on Windows yet — open the agent's CLI to log in.",
-        });
         return;
       }
 

@@ -116,7 +116,7 @@ dist: ## Build the Revv.app bundle used by the source installer
 	@printf "  Step 2/3: Building web frontend + API server\n"
 	bun run build
 	@printf "  Step 3/3: Building Tauri desktop bundle (.app only)\n"
-	# --bundles app skips DMG/MSI/DEB. Revv is distributed via source install,
+	# --bundles app skips the DMG. Revv is distributed via source install,
 	# not via a signed DMG, and tauri-bundler's bundle_dmg.sh has been flaky
 	# on machines where it's blocked from Finder/AppleEvents. Use `make dmg`
 	# explicitly if you actually need the .dmg.

@@ -62,7 +62,7 @@ If the GitHub org/repo changes, update that URL before the first release.
      }
    }
    ```
-   Tauri's docs have the full schema including Windows + Linux targets.
+   Tauri's docs have the full schema.
 4. Create a GitHub Release tagged `v<version>` and upload:
    - the `.dmg` (user-facing download)
    - the `.tar.gz` referenced in `latest.json` (what the updater downloads)

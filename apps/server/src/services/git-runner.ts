@@ -263,8 +263,8 @@ export async function runGitBestEffort(
  * the current lifetime for `.git/shallow.lock`, write to `rm`'d directories
  * via still-open FDs, and generally make the next clone hang.
  *
- * macOS / Linux only. Best-effort: missing pkill, permission errors, or no
- * matching processes are all silently ignored.
+ * Best-effort: missing pkill, permission errors, or no matching processes are
+ * all silently ignored.
  */
 export async function killStaleCloneProcesses(): Promise<void> {
   try {

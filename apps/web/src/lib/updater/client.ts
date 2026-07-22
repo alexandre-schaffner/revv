@@ -43,10 +43,9 @@ export async function checkForUpdate(): Promise<UpdateInfo | null> {
     publishedAt: update.date,
     install: async () => {
       await update.downloadAndInstall();
-      // On Windows/Linux the plugin's passive install mode exits the
-      // running process; on macOS we must explicitly relaunch so the
-      // user lands back in the new version immediately. Calling
-      // `relaunch()` is a no-op if the process is already exiting.
+      // On macOS the installer doesn't restart the app for us, so we must
+      // explicitly relaunch to land the user back in the new version
+      // immediately. `relaunch()` is a no-op if the process is already exiting.
       const { relaunch } = await import("@tauri-apps/plugin-process");
       await relaunch();
     },

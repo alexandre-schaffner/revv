@@ -4,7 +4,7 @@
 
 Revv pulls in your GitHub pull requests and turns reviewing them into a fast, conversational experience. Get an AI-generated walkthrough of every change, chat with an agent that understands the diff, leave comments that sync back to GitHub, and even propose and push fixes — all without leaving the app.
 
-Available for macOS, Windows, and Linux.
+Available for macOS.
 
 ---
 
@@ -51,31 +51,6 @@ bash install.sh
 
 </details>
 
-### Windows
-
-```powershell
-irm https://github.com/alexandre-schaffner/revv/releases/latest/download/install.ps1 | iex
-```
-
-Or download the MSI from [Releases](https://github.com/alexandre-schaffner/revv/releases) and run it directly.
-
-> Windows SmartScreen may warn about the installer until code-signing is finalized.
-
-### Linux
-
-Download the **AppImage** or **`.deb`** from [Releases](https://github.com/alexandre-schaffner/revv/releases).
-
-```bash
-# AppImage (any distro)
-chmod +x Revv_*.AppImage && ./Revv_*.AppImage
-
-# Debian / Ubuntu
-sudo dpkg -i revv_*.deb
-sudo apt-get install -f   # if dpkg reports missing deps
-```
-
-The `.deb` needs `libwebkit2gtk-4.1-0` and `libgtk-3-0` (available by default on Ubuntu 22.04+). See [Build from source](#build-from-source) for the developer setup.
-
 ## Quickstart
 
 1. **Launch Revv** and click **Sign in with GitHub**. Revv uses GitHub's device-code flow — you'll get a short code to enter at `github.com/login/device`. Approve it and you're in.
@@ -89,7 +64,7 @@ That's it — your review happens entirely inside Revv, and everything you do fl
 
 ## Managing your install
 
-The `revv` CLI (installed on macOS and Windows) handles the lifecycle:
+The `revv` CLI handles the lifecycle:
 
 ```bash
 revv status      # install paths, versions, server state, available updates
@@ -115,7 +90,7 @@ revv restart                    # restart it if not
 
 Revv is a Bun + TypeScript monorepo with a SvelteKit frontend, an Elysia API server, and a Tauri v2 desktop shell.
 
-**Prerequisites:** [Bun](https://bun.sh) 1.3+ and [Rust](https://rustup.rs). On macOS also `xcode-select --install`; on Linux the Tauri system libraries; on Windows the MSVC C++ Build Tools and WebView2.
+**Prerequisites:** [Bun](https://bun.sh) 1.3+ and [Rust](https://rustup.rs), plus the macOS Xcode Command Line Tools (`xcode-select --install`).
 
 ```bash
 git clone https://github.com/alexandre-schaffner/revv.git

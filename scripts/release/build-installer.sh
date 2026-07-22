@@ -52,9 +52,6 @@ BUNDLE_DIR="$(mktemp -d)"
 # Downloads whatever is attached; missing assets produce a warning, not an error
 gh release download "$TAG" \
   --pattern '*.dmg' \
-  --pattern '*.msi' \
-  --pattern '*.deb' \
-  --pattern '*.AppImage' \
   --dir "$BUNDLE_DIR" || true
 
 ls -la "$BUNDLE_DIR/"
@@ -63,21 +60,12 @@ ls -la "$BUNDLE_DIR/"
 DMG_ARM64="$(find_bundle "$BUNDLE_DIR" '*aarch64*.dmg')"
 DMG_X64="$(find_bundle "$BUNDLE_DIR" '*x64*.dmg')"
 [[ -z "$DMG_X64" ]] && DMG_X64="$(find_bundle "$BUNDLE_DIR" '*x86_64*.dmg')"
-DEB="$(find_bundle "$BUNDLE_DIR" '*.deb')"
-APPIMAGE="$(find_bundle "$BUNDLE_DIR" '*.AppImage')"
-MSI="$(find_bundle "$BUNDLE_DIR" '*.msi')"
 
 SHA_DMG_ARM64="$(sha256_of "$DMG_ARM64")"
 SHA_DMG_X64="$(sha256_of "$DMG_X64")"
-SHA_DEB="$(sha256_of "$DEB")"
-SHA_APPIMAGE="$(sha256_of "$APPIMAGE")"
-SHA_MSI="$(sha256_of "$MSI")"
 
 URL_DMG_ARM64="$(make_url "$DMG_ARM64")"
 URL_DMG_X64="$(make_url "$DMG_X64")"
-URL_DEB="$(make_url "$DEB")"
-URL_APPIMAGE="$(make_url "$APPIMAGE")"
-URL_MSI="$(make_url "$MSI")"
 
 echo ""
 echo "Bundle SHAs and URLs:"
@@ -85,12 +73,6 @@ echo "  DMG arm64:  $SHA_DMG_ARM64"
 echo "              $URL_DMG_ARM64"
 echo "  DMG x64:    $SHA_DMG_X64"
 echo "              $URL_DMG_X64"
-echo "  DEB:        $SHA_DEB"
-echo "              $URL_DEB"
-echo "  AppImage:   $SHA_APPIMAGE"
-echo "              $URL_APPIMAGE"
-echo "  MSI:        $SHA_MSI"
-echo "              $URL_MSI"
 
 # Substitute template variables into an installer template
 substitute() {
@@ -100,14 +82,8 @@ substitute() {
     -e "s|@@RELEASE_TAG@@|${TAG}|g" \
     -e "s|@@URL_DMG_ARM64@@|${URL_DMG_ARM64}|g" \
     -e "s|@@URL_DMG_X64@@|${URL_DMG_X64}|g" \
-    -e "s|@@URL_DEB@@|${URL_DEB}|g" \
-    -e "s|@@URL_APPIMAGE@@|${URL_APPIMAGE}|g" \
-    -e "s|@@URL_MSI@@|${URL_MSI}|g" \
     -e "s|@@SHA_DMG_ARM64@@|${SHA_DMG_ARM64}|g" \
     -e "s|@@SHA_DMG_X64@@|${SHA_DMG_X64}|g" \
-    -e "s|@@SHA_DEB@@|${SHA_DEB}|g" \
-    -e "s|@@SHA_APPIMAGE@@|${SHA_APPIMAGE}|g" \
-    -e "s|@@SHA_MSI@@|${SHA_MSI}|g" \
     "$tmpl" > "$out"
   chmod +x "$out"
 }
@@ -120,12 +96,11 @@ substitute "$SCRIPT_DIR/install.sh.tmpl"  "$DIST_DIR/install.sh"
   sed '1{/^#!/d;}' "$REPO_ROOT/install.sh"
 } >> "$DIST_DIR/install.sh"
 chmod +x "$DIST_DIR/install.sh"
-substitute "$SCRIPT_DIR/install.ps1.tmpl" "$DIST_DIR/install.ps1"
 
-# SHA256SUMS covers the installer scripts and all downloaded bundles
+# SHA256SUMS covers the installer script and all downloaded bundles
 echo ""
 echo "==> Generating SHA256SUMS..."
-(cd "$DIST_DIR" && sha256sum install.sh install.ps1) > "$DIST_DIR/SHA256SUMS"
+(cd "$DIST_DIR" && sha256sum install.sh) > "$DIST_DIR/SHA256SUMS"
 for f in "$BUNDLE_DIR"/*; do
   [[ -f "$f" ]] && sha256sum "$f" | sed "s|${BUNDLE_DIR}/||g" >> "$DIST_DIR/SHA256SUMS"
 done

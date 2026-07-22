@@ -262,9 +262,9 @@ export interface AgentStatus {
  * Full onboarding detection snapshot: per-agent {@link AgentStatus} keyed by
  * registry id (so the picker renders straight from `ACP_AGENTS` and a new agent
  * surfaces automatically), plus whether this host can drive an agent's CLI
- * login inside an embedded pseudo-terminal. The embedded PTY is POSIX-only, so
- * `embeddedLoginSupported` is `false` on Windows and the UI falls back to the
- * per-agent `loginCommand` hint. The server is the single authority on this.
+ * login inside an embedded pseudo-terminal. Revv is macOS-only, so
+ * `embeddedLoginSupported` is always `true`; the per-agent `loginCommand` hint
+ * remains as a manual fallback. The server is the single authority on this.
  */
 export interface AgentStatusReport {
   embeddedLoginSupported: boolean;

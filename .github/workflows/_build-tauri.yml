@@ -1,6 +1,6 @@
 name: Build Tauri (reusable)
 
-# Shared cross-platform Tauri build matrix. Invoked by:
+# Shared macOS Tauri build matrix (Apple Silicon + Intel). Invoked by:
 #   - release.yml     (per-version stable releases, prerelease=false)
 #   - nightly.yml     (moving `nightly` tag, prerelease=true)
 #
@@ -22,7 +22,7 @@ on:
         description: "Release notes body"
         required: false
         type: string
-        default: "See assets below for platform-specific downloads."
+        default: "See assets below for macOS downloads."
       prerelease:
         description: "Mark the release as prerelease (true for nightly)"
         required: false
@@ -49,14 +49,6 @@ jobs:
             platform: macos-latest
             args: "--target x86_64-apple-darwin"
             rust-targets: "aarch64-apple-darwin,x86_64-apple-darwin"
-          - label: Linux
-            platform: ubuntu-22.04
-            args: ""
-            rust-targets: ""
-          - label: Windows
-            platform: windows-latest
-            args: ""
-            rust-targets: ""
 
     runs-on: ${{ matrix.platform }}
 
@@ -64,12 +56,6 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.tag_name }}
-
-      - name: Install system dependencies (Linux)
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -103,7 +89,6 @@ jobs:
           releaseBody: ${{ inputs.release_body }}
           releaseDraft: true
           prerelease: ${{ inputs.prerelease }}
-          updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
 
       - name: Find bundle artifacts
@@ -114,7 +99,7 @@ jobs:
           bundles=()
           while IFS= read -r -d '' f; do
             bundles+=("$f")
-          done < <(find apps/desktop/target -type f \( -name '*.dmg' -o -name '*.msi' -o -name '*.deb' -o -name '*.AppImage' \) -print0)
+          done < <(find apps/desktop/target -type f -name '*.dmg' -print0)
           if [[ ${#bundles[@]} -eq 0 ]]; then
             echo "No bundle files found."
             exit 1

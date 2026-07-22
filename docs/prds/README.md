@@ -47,7 +47,7 @@ Review surface:
 
 Distribution:
 
-- **CI**: `.github/workflows/ci.yml` (lint, typecheck, build), `.github/workflows/release.yml` (cross-platform Tauri build — DMG, NSIS, AppImage). Updater signing and macOS notarization still TODO.
+- **CI**: `.github/workflows/ci.yml` (lint, typecheck, build), `.github/workflows/release.yml` (macOS Tauri build — DMG). Updater signing and macOS notarization still TODO.
 
 ---
 

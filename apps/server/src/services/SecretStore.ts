@@ -21,15 +21,13 @@ export interface TokenPair {
 /**
  * Secure store for GitHub OAuth token bytes.
  *
- * The OS secure element (macOS Keychain / Windows Credential Manager / Linux
- * Secret Service, via `@napi-rs/keyring`) is the authoritative home for the
+ * The macOS Keychain (via `@napi-rs/keyring`) is the authoritative home for the
  * token material — the `account` row keeps everything non-secret (which
  * accounts exist, provider/host, expiries, `reauthRequiredAt`, login/avatar).
  *
- * When the OS keyring is unavailable (e.g. a Linux session with no Secret
- * Service daemon), the store degrades to an AES-256-GCM encrypted file under
- * the app data dir. This is a fallback to avoid a hard failure, not the
- * intended path; it is logged loudly on entry.
+ * When the macOS Keychain is unavailable, the store degrades to an AES-256-GCM
+ * encrypted file under the app data dir. This is a fallback to avoid a hard
+ * failure, not the intended path; it is logged loudly on entry.
  *
  * The fallback encryption key is *derived* (scrypt) from a secret plus a
  * persisted random salt, rather than read verbatim from a key file sitting
