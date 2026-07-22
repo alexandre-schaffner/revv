@@ -113,6 +113,12 @@ export type PromptInputTextareaProps = Omit<HTMLAttributes<HTMLDivElement>, "con
 	// the editor and drop the live selection — can still target the right spot.
 	let savedRange: Range | null = null;
 
+	function sameTrigger(a: MentionTrigger | null, b: MentionTrigger | null): boolean {
+		if (a === b) return true;
+		if (!a || !b) return false;
+		return a.kind === b.kind && a.start === b.start && a.query === b.query;
+	}
+
 	function refreshTrigger() {
 		const sel = window.getSelection();
 		if (sel && sel.rangeCount > 0) {
@@ -121,7 +127,12 @@ export type PromptInputTextareaProps = Omit<HTMLAttributes<HTMLDivElement>, "con
 				savedRange = range.cloneRange();
 			}
 		}
-		trigger = editorEl ? detectMentionTrigger(caretTextBefore(editorEl, savedRange)) : null;
+		const next = editorEl ? detectMentionTrigger(caretTextBefore(editorEl, savedRange)) : null;
+		// Only reassign when the token actually changed. `refreshTrigger` runs on
+		// every keyup/mouseup (incl. ArrowUp/Down menu navigation), and a fresh
+		// object with identical kind/query would still re-run the activeIndex-reset
+		// effect below, snapping the highlighted row back to the top on each arrow.
+		if (!sameTrigger(trigger, next)) trigger = next;
 	}
 
 	// ── Token replacement (autocomplete selection) ───────────────────────────
