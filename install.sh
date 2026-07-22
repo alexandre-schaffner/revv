@@ -7,7 +7,7 @@
 #   Curl-piped (end user) — use the signed release installer instead:
 #     curl -fsSL https://github.com/alexandre-schaffner/revv/releases/latest/download/install.sh | bash
 #
-#   From a checkout (developer):
+#   From a checkout (developer, macOS):
 #     ./install.sh --dev       # toolchain + bun install, stop there
 #     ./install.sh             # full install (release .app, LaunchAgent, CLI)
 #
@@ -26,8 +26,7 @@
 #   REVV_AUTO_YES=1       Same as --yes
 #
 # Notes:
-#   • End-user install currently targets macOS only. --dev works on macOS and
-#     Linux (toolchain install + deps).
+#   • Revv is macOS-only; both the end-user install and --dev require macOS.
 #   • No .env prompts. Revv's GitHub OAuth App is bundled; secrets are
 #     generated locally and never leave the machine.
 # ──────────────────────────────────────────────────────────────
@@ -142,15 +141,11 @@ if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
 fi
 
 if [[ -z "$PROJECT_ROOT" ]]; then
-  # Curl-pipe path. For now we only support macOS bootstrap — Linux users
-  # should `git clone` manually and then run `./install.sh --dev`.
+  # Curl-pipe path. Revv is macOS-only.
   _step "Bootstrapping from curl"
   os="$(uname -s)"
   if [[ "$os" != "Darwin" ]]; then
-    _fail "Curl-piped install currently targets macOS only.
-On $os, clone the repo and run ./install.sh --dev manually:
-  git clone $REVV_REPO_URL
-  cd revv && ./install.sh --dev"
+    _fail "Revv is macOS-only; this installer requires macOS (detected $os)."
   fi
 
   # Xcode CLT (gives us git). Minimal inline copy of ensure_xcode_clt —
@@ -216,14 +211,10 @@ source "$PROJECT_ROOT/scripts/lib/common.sh"
 info "Project root: $PROJECT_ROOT"
 
 # ── 1. Platform detect ────────────────────────────────────────
+# detect_platform fails hard on any non-macOS host — Revv is macOS-only.
 step "Detecting platform"
 detect_platform
 success "Platform: $PLATFORM ($ARCH) → target $RUST_TARGET"
-
-if [[ "$MODE" == "user" && "$PLATFORM" != "macos" ]]; then
-  fail "End-user install currently supports macOS only. On Linux, run:
-  ./install.sh --dev"
-fi
 
 # ── 2. Toolchain ──────────────────────────────────────────────
 step "Checking build toolchain"
@@ -239,32 +230,7 @@ fi
 # shellcheck disable=SC1091
 [[ -f "$HOME/.cargo/env" ]] && source "$HOME/.cargo/env"
 
-# ── 3. Linux system libs (dev mode) ───────────────────────────
-if [[ "$PLATFORM" == "linux" ]]; then
-  step "Checking Linux system libraries"
-  missing=()
-  check_cmd pkg-config || missing+=("pkg-config")
-  if check_cmd pkg-config; then
-    for lib in webkit2gtk-4.1 gtk+-3.0 openssl; do
-      pkg-config --exists "$lib" 2>/dev/null || missing+=("$lib")
-    done
-  fi
-  if [[ ${#missing[@]} -eq 0 ]]; then
-    success "Tauri system libraries present"
-  else
-    warn "Missing system packages: ${missing[*]}"
-    cat <<'EOT'
-  On Ubuntu/Debian:
-    sudo apt update && sudo apt install -y \
-      build-essential curl wget file \
-      libssl-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
-      librsvg2-dev patchelf libayatana-appindicator3-dev
-EOT
-    warn "Install those first, then re-run this script."
-  fi
-fi
-
-# ── 4. Install project deps ───────────────────────────────────
+# ── 3. Install project deps ───────────────────────────────────
 step "Installing project dependencies"
 cd "$PROJECT_ROOT"
 run_quiet "Installing workspace dependencies" bun install
@@ -289,7 +255,7 @@ _verify_workspace_deps() {
 }
 _verify_workspace_deps
 
-# ── 5. Dev mode exits here ────────────────────────────────────
+# ── 4. Dev mode exits here ────────────────────────────────────
 if [[ "$MODE" == "dev" ]]; then
   # Warn about stale dev DBs that can crash migrations on first dev-server start.
   for stale_db in "apps/server/revv-dev.db" "revv-dev.db"; do
@@ -316,7 +282,7 @@ if [[ "$MODE" == "dev" ]]; then
   exit 0
 fi
 
-# ── 6. User install: auth key, build, ship ────────────────────
+# ── 5. User install: auth key, build, ship ────────────────────
 
 step "Ensuring auth key"
 ensure_auth_key
@@ -427,7 +393,7 @@ else
   rm -f "$REVV_SUPPORT_DIR/github.conf" 2>/dev/null || true
 fi
 
-# ── 7. LaunchAgent ────────────────────────────────────────────
+# ── 6. LaunchAgent ────────────────────────────────────────────
 step "Installing background service (LaunchAgent)"
 mkdir -p "$(dirname "$REVV_LAUNCH_AGENT_PLIST")" "$REVV_LOG_DIR"
 bun_bin="$HOME/.bun/bin/bun"
@@ -460,7 +426,7 @@ for i in {1..30}; do
   fi
 done
 
-# ── 8. Install the management CLI ─────────────────────────────
+# ── 7. Install the management CLI ─────────────────────────────
 step "Installing revv CLI"
 mkdir -p "$REVV_SUPPORT_DIR"
 cat > "$REVV_SUPPORT_DIR/config" <<CFG
@@ -501,11 +467,11 @@ if ! printf '%s' ":$PATH:" | grep -q ":$REVV_CLI_DIR:"; then
   fi
 fi
 
-# ── 9. Launch the app ─────────────────────────────────────────
+# ── 8. Launch the app ─────────────────────────────────────────
 step "Launching Revv"
 open "$dest_app" || warn "Could not auto-launch. Open it from $dest_app_dir manually."
 
-# ── 10. Summary ───────────────────────────────────────────────
+# ── 9. Summary ────────────────────────────────────────────────
 printf '\n%s%s' "$REVV_BOLD" "$REVV_GREEN"
 printf '  ┌────────────────────────────────────────┐\n'
 printf '  │   ✓  Revv installed successfully       │\n'

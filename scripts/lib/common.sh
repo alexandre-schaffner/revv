@@ -167,30 +167,19 @@ check_cmd() { command -v "$1" >/dev/null 2>&1; }
 
 # ── Platform detection ────────────────────────────────────────
 #
-# Sets globals: PLATFORM (macos|linux), ARCH (raw uname -m),
-# RUST_TARGET (aarch64-apple-darwin, x86_64-unknown-linux-gnu, …).
+# Revv is macOS-only. Sets globals: PLATFORM (always macos), ARCH (raw
+# uname -m), RUST_TARGET (aarch64-apple-darwin | x86_64-apple-darwin).
 detect_platform() {
   local os arch
   os="$(uname -s)"
   arch="$(uname -m)"
-  case "$os" in
-    Darwin) PLATFORM="macos" ;;
-    Linux)  PLATFORM="linux" ;;
-    *)      fail "Unsupported OS: $os" ;;
-  esac
+  [[ "$os" == "Darwin" ]] || fail "Unsupported OS: $os (Revv is macOS-only)"
+  PLATFORM="macos"
   ARCH="$arch"
-  if [[ "$PLATFORM" == "macos" ]]; then
-    if [[ "$ARCH" == "arm64" || "$ARCH" == "aarch64" ]]; then
-      RUST_TARGET="aarch64-apple-darwin"
-    else
-      RUST_TARGET="x86_64-apple-darwin"
-    fi
+  if [[ "$ARCH" == "arm64" || "$ARCH" == "aarch64" ]]; then
+    RUST_TARGET="aarch64-apple-darwin"
   else
-    if [[ "$ARCH" == "aarch64" || "$ARCH" == "arm64" ]]; then
-      RUST_TARGET="aarch64-unknown-linux-gnu"
-    else
-      RUST_TARGET="x86_64-unknown-linux-gnu"
-    fi
+    RUST_TARGET="x86_64-apple-darwin"
   fi
   export PLATFORM ARCH RUST_TARGET
 }
@@ -210,15 +199,8 @@ revv_paths() {
       REVV_LOG_DIR="${REVV_LOG_DIR:-$HOME/Library/Logs/Revv}"
       REVV_LAUNCH_AGENT_PLIST="${REVV_LAUNCH_AGENT_PLIST:-$HOME/Library/LaunchAgents/com.revv.server.plist}"
       ;;
-    linux)
-      REVV_SUPPORT_DIR="${REVV_SUPPORT_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/revv}"
-      REVV_LOG_DIR="${REVV_LOG_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/revv/logs}"
-      REVV_LAUNCH_AGENT_PLIST="${REVV_LAUNCH_AGENT_PLIST:-}"
-      ;;
     *)
-      REVV_SUPPORT_DIR="${REVV_SUPPORT_DIR:-$HOME/.revv}"
-      REVV_LOG_DIR="${REVV_LOG_DIR:-$HOME/.revv/logs}"
-      REVV_LAUNCH_AGENT_PLIST="${REVV_LAUNCH_AGENT_PLIST:-}"
+      fail "Unsupported platform: $__platform_lc (Revv is macOS-only)"
       ;;
   esac
   REVV_SRC_DIR="${REVV_INSTALL_DIR:-$REVV_SUPPORT_DIR/src}"
@@ -284,10 +266,7 @@ ensure_git() {
     success "git $(git --version | awk '{print $3}')"
     return 0
   fi
-  if [[ "${PLATFORM:-}" == "macos" ]]; then
-    fail "git not found. It should ship with Xcode CLT — re-run 'xcode-select --install'."
-  fi
-  fail "git not found. Install it from https://git-scm.com and re-run."
+  fail "git not found. It should ship with Xcode CLT — re-run 'xcode-select --install'."
 }
 
 ensure_bun() {

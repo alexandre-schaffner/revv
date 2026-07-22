@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { homedir, platform } from "node:os";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import type { AcpAgentId, AgentStatusReport, InstallEvent } from "@revv/shared";
 import { Context, Effect, Layer } from "effect";
@@ -29,10 +29,10 @@ import { EventJobRegistry, type Job, type JobSubscription } from "./jobs/EventJo
 // `done`; a kill -9 mid-install just re-shows the prompt on next boot.
 
 /**
- * Per-agent install registry: the official one-line installer argv (POSIX vs
- * Windows) plus the home-relative bin dirs that installer writes to, which we
- * prepend to `PATH` so the freshly-installed binary is found without waiting
- * for a shell re-source or server restart.
+ * Per-agent install registry: the official one-line installer argv plus the
+ * home-relative bin dirs that installer writes to, which we prepend to `PATH`
+ * so the freshly-installed binary is found without waiting for a shell
+ * re-source or server restart.
  *
  * Mirrors the `Record<AcpAgentId, …>` shape used elsewhere in the registry so
  * adding an ACP agent surfaces a compile-time error here until its installer is
@@ -42,45 +42,24 @@ const AGENT_INSTALL: Record<
   AcpAgentId,
   {
     unix: readonly string[];
-    windows: readonly string[];
-    binDirs: { unix: readonly string[]; windows: readonly string[] };
+    binDirs: readonly string[];
   }
 > = {
   opencode: {
     unix: ["bash", "-c", "curl -fsSL https://opencode.ai/install | bash"],
-    windows: [
-      "powershell",
-      "-NoProfile",
-      "-Command",
-      "iwr -useb https://opencode.ai/install.ps1 | iex",
-    ],
-    binDirs: { unix: [".opencode/bin", ".local/bin"], windows: [".opencode/bin"] },
+    binDirs: [".opencode/bin", ".local/bin"],
   },
   "claude-code": {
     unix: ["bash", "-c", "curl -fsSL https://claude.ai/install.sh | bash"],
-    windows: ["powershell", "-NoProfile", "-Command", "irm https://claude.ai/install.ps1 | iex"],
-    binDirs: { unix: [".local/bin"], windows: [".local/bin"] },
+    binDirs: [".local/bin"],
   },
   codex: {
     unix: ["bash", "-c", "curl -fsSL https://chatgpt.com/codex/install.sh | sh"],
-    windows: [
-      "powershell",
-      "-ExecutionPolicy",
-      "ByPass",
-      "-Command",
-      "irm https://chatgpt.com/codex/install.ps1 | iex",
-    ],
-    binDirs: { unix: [".local/bin"], windows: [".local/bin"] },
+    binDirs: [".local/bin"],
   },
   cursor: {
     unix: ["bash", "-c", "curl https://cursor.com/install -fsS | bash"],
-    windows: [
-      "powershell",
-      "-NoProfile",
-      "-Command",
-      "irm 'https://cursor.com/install?win32=true' | iex",
-    ],
-    binDirs: { unix: [".local/bin"], windows: [".local/bin"] },
+    binDirs: [".local/bin"],
   },
 };
 
@@ -90,19 +69,14 @@ const AGENT_INSTALL: Record<
  * availability probe finds the freshly-installed binary without waiting for the
  * user's shell config to be re-sourced or for a server restart.
  */
-function augmentPathForInstall(binDirs: {
-  unix: readonly string[];
-  windows: readonly string[];
-}): void {
+function augmentPathForInstall(binDirs: readonly string[]): void {
   const home = homedir();
-  const isWindows = platform() === "win32";
-  const sep = isWindows ? ";" : ":";
-  const dirs = (isWindows ? binDirs.windows : binDirs.unix).map((d) => join(home, d));
+  const dirs = binDirs.map((d) => join(home, d));
   const current = process.env.PATH ?? "";
-  const existing = current.split(sep);
+  const existing = current.split(":");
   const toPrepend = dirs.filter((d) => existsSync(d) && !existing.includes(d));
   if (toPrepend.length > 0) {
-    process.env.PATH = [...toPrepend, current].join(sep);
+    process.env.PATH = [...toPrepend, current].join(":");
   }
 }
 
@@ -185,12 +159,10 @@ export const OnboardingServiceLive = Layer.effect(
       job: Job<InstallEvent, Record<string, never>>,
       broadcast: (event: InstallEvent) => void,
     ): void => {
-      const isWindows = platform() === "win32";
       const spec = AGENT_INSTALL[job.agentId];
-      // Pipe the agent's official installer into the matching shell. On
-      // macOS/Linux that's a `bash -c "curl … | sh"` line; on Windows it's the
-      // vendor's PowerShell one-liner.
-      const argv = [...(isWindows ? spec.windows : spec.unix)];
+      // Pipe the agent's official installer into a shell — a
+      // `bash -c "curl … | sh"` line.
+      const argv = [...spec.unix];
 
       debug("onboarding-install", `spawning installer (${job.agentId}): ${argv.join(" ")}`);
       broadcast({ type: "log", line: `> ${argv.join(" ")}` });

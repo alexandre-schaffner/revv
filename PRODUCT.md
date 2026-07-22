@@ -68,7 +68,7 @@ Adjacent references (peers, not copies): **Linear** (dense product UI craft), **
 
 ## Accessibility & Inclusion
 
-- **macOS-first**, cross-platform supported where Tauri makes it cheap (Windows installer exists; Linux DEB on the roadmap).
+- **macOS-only.** Revv is a native Mac app; there are no Windows or Linux builds.
 - **OS-default accessibility minimum**: keyboard reachable, focus states visible, contrast meets WCAG AA in light and dark themes.
 - **Reduced motion is a hard requirement.** `prefersReducedMotion()` is the single arbiter across the app; every motion path respects it. The global `@media (prefers-reduced-motion: reduce)` block in `app.css` covers the surviving CSS animations.
 - **Severity is never communicated by color alone.** Diff status, marker state, walkthrough scorecard, and queue indicators all pair color with shape, icon, or label.

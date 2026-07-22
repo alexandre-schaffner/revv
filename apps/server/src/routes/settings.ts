@@ -156,28 +156,12 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
           }
           if (!gcloudPath) {
             const home = homedir();
-            const candidates =
-              process.platform === "win32"
-                ? [
-                    join(
-                      home,
-                      "AppData",
-                      "Local",
-                      "Google",
-                      "Cloud SDK",
-                      "google-cloud-sdk",
-                      "bin",
-                      "gcloud.cmd",
-                    ),
-                    "C:\\Program Files (x86)\\Google\\Cloud SDK\\google-cloud-sdk\\bin\\gcloud.cmd",
-                    "C:\\Program Files\\Google\\Cloud SDK\\google-cloud-sdk\\bin\\gcloud.cmd",
-                  ]
-                : [
-                    join(home, "google-cloud-sdk", "bin", "gcloud"),
-                    "/opt/homebrew/bin/gcloud",
-                    "/usr/local/bin/gcloud",
-                    "/usr/bin/gcloud",
-                  ];
+            const candidates = [
+              join(home, "google-cloud-sdk", "bin", "gcloud"),
+              "/opt/homebrew/bin/gcloud",
+              "/usr/local/bin/gcloud",
+              "/usr/bin/gcloud",
+            ];
             for (const c of candidates) {
               if (existsSync(c)) {
                 gcloudPath = c;
@@ -201,17 +185,9 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
             };
           }
 
-          // 3. Platform-dependent default ADC path
+          // 3. Default ADC path
           const home = homedir();
-          let adcPath: string;
-          if (process.platform === "win32") {
-            const appData = process.env.APPDATA;
-            adcPath = appData
-              ? join(appData, "gcloud", "application_default_credentials.json")
-              : "";
-          } else {
-            adcPath = join(home, ".config", "gcloud", "application_default_credentials.json");
-          }
+          const adcPath = join(home, ".config", "gcloud", "application_default_credentials.json");
 
           const adcExists = adcPath.length > 0 && existsSync(adcPath);
 
@@ -262,28 +238,12 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
             const { join } = require("node:path");
             const { existsSync } = require("node:fs");
             const home = homedir();
-            const candidates =
-              process.platform === "win32"
-                ? [
-                    join(
-                      home,
-                      "AppData",
-                      "Local",
-                      "Google",
-                      "Cloud SDK",
-                      "google-cloud-sdk",
-                      "bin",
-                      "gcloud.cmd",
-                    ),
-                    "C:\\Program Files (x86)\\Google\\Cloud SDK\\google-cloud-sdk\\bin\\gcloud.cmd",
-                    "C:\\Program Files\\Google\\Cloud SDK\\google-cloud-sdk\\bin\\gcloud.cmd",
-                  ]
-                : [
-                    join(home, "google-cloud-sdk", "bin", "gcloud"),
-                    "/opt/homebrew/bin/gcloud",
-                    "/usr/local/bin/gcloud",
-                    "/usr/bin/gcloud",
-                  ];
+            const candidates = [
+              join(home, "google-cloud-sdk", "bin", "gcloud"),
+              "/opt/homebrew/bin/gcloud",
+              "/usr/local/bin/gcloud",
+              "/usr/bin/gcloud",
+            ];
             for (const c of candidates) {
               if (existsSync(c)) {
                 gcloudPath = c;

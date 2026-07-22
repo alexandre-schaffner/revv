@@ -305,8 +305,8 @@ When online, a background job drains the outbox in order. Failed items retry wit
 ### What we built
 
 - `.github/workflows/ci.yml` — lint, typecheck, build on every PR
-- `.github/workflows/release.yml` — cross-platform Tauri build (macOS DMG, Windows NSIS, Linux AppImage)
-- `tauri.conf.json` — bundle config for all three platforms
+- `.github/workflows/release.yml` — macOS Tauri build (macOS DMG)
+- `tauri.conf.json` — macOS bundle config
 
 ### Remaining
 
@@ -316,14 +316,6 @@ When online, a background job drains the outbox in order. Failed items retry wit
 - [ ] Notarization via `notarytool` (required for Gatekeeper)
 - [ ] DMG custom background image
 - [ ] Signing secrets: `APPLE_CERTIFICATE` (base64), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD`
-
-#### Windows
-
-- [ ] Authenticode signing (currently unsigned NSIS installer triggers SmartScreen warnings)
-
-#### Linux
-
-- AppImage builds today without signing — acceptable for v1
 
 ---
 

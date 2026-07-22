@@ -179,7 +179,7 @@ as you'd expect — only `strict` gives the full guarantee.
 
 Revv uses Google Cloud's Application Default Credentials (ADC). The user's
 OAuth token is stored by the Google Cloud SDK in the standard OS location
-(`~/.config/gcloud/` on macOS/Linux, `%APPDATA%\gcloud\` on Windows). Revv
+(`~/.config/gcloud/`). Revv
 never sees or stores the credential itself — the `@google-cloud/storage`
 SDK reads it directly from that location. This removes the need for manual
 service-account keys entirely.

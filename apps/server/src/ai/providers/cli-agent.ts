@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { homedir, platform } from "node:os";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   ACP_AGENT_IDS,
@@ -34,7 +34,7 @@ import { CLI_CACHE_TTL_MS } from "../../constants";
 //      PATH that omits where CLIs actually live (nvm, Homebrew on Apple Silicon,
 //      npm global prefixes, app-managed bin dirs). Probing the login shell makes
 //      detection match what the user sees in a terminal. Falls back to the
-//      process PATH when there's no usable login shell (e.g. Windows).
+//      process PATH when there's no usable login shell.
 //
 // The (expensive) login-shell PATH lookup is resolved once and cached with a
 // short TTL (see CLI_CACHE_TTL_MS); `which` against that PATH is a cheap
@@ -66,15 +66,15 @@ export function resolveUserPath(): string {
 }
 
 /**
- * Ask the user's login shell for its PATH. Returns `null` on Windows, when no
- * `$SHELL` is set, or if the probe fails — callers fall back to the process
- * PATH. fish stores `$PATH` as a list, so it needs `string join`; POSIX shells
- * (bash/zsh) get `printf`. `command -v` is intentionally avoided here so one
- * probe yields the whole PATH rather than one binary.
+ * Ask the user's login shell for its PATH. Returns `null` when no `$SHELL` is
+ * set or if the probe fails — callers fall back to the process PATH. fish
+ * stores `$PATH` as a list, so it needs `string join`; POSIX shells (bash/zsh)
+ * get `printf`. `command -v` is intentionally avoided here so one probe yields
+ * the whole PATH rather than one binary.
  */
 function loginShellPath(): string | null {
   const shell = process.env.SHELL;
-  if (!shell || platform() === "win32") return null;
+  if (!shell) return null;
   const isFish = /(^|\/)fish$/.test(shell);
   const inner = isFish ? "string join : $PATH" : 'printf %s "$PATH"';
   try {
@@ -216,19 +216,16 @@ function codexAuthStatus(): AgentAuthStatus {
 function detectClaudeSubscriptionAuthHint(): boolean {
   if (process.env.CLAUDE_CODE_OAUTH_TOKEN?.trim()) return true;
   if (existsSync(join(homedir(), ".claude", ".credentials.json"))) return true;
-  if (platform() === "darwin") {
-    try {
-      // Existence probe only (no `-w`): returns attributes, doesn't print the secret.
-      execFileSync("security", ["find-generic-password", "-s", "Claude Code-credentials"], {
-        timeout: 3000,
-        stdio: "ignore",
-      });
-      return true;
-    } catch {
-      return false;
-    }
+  try {
+    // Existence probe only (no `-w`): returns attributes, doesn't print the secret.
+    execFileSync("security", ["find-generic-password", "-s", "Claude Code-credentials"], {
+      timeout: 3000,
+      stdio: "ignore",
+    });
+    return true;
+  } catch {
+    return false;
   }
-  return false;
 }
 
 function claudeSubscriptionVerified(): boolean {
@@ -426,9 +423,8 @@ export function detectAgentAuth(agent: AcpAgentId): boolean {
  * Absolute path of `command` if found on the user's login-shell PATH, else null.
  */
 function resolveCommandPath(command: string): string | null {
-  const isWin = platform() === "win32";
   try {
-    const out = execFileSync(isWin ? "where" : "which", [command], {
+    const out = execFileSync("which", [command], {
       encoding: "utf-8",
       timeout: 3000,
       env: { ...process.env, PATH: resolveUserPath() },
@@ -521,8 +517,8 @@ export const ACP_CLI_NAME: Record<AcpAgentId, "opencode" | "claude" | "codex" | 
  *     but the installed binary — and our `ACP_CLI_NAME.cursor` key — is
  *     `cursor-agent`).
  * Each CLI opens the user's browser itself; the login UI's auth-url scan only
- * powers a fallback link. Surfaced in {@link AgentStatus.loginCommand} as the
- * manual hint where the embedded PTY login isn't available (Windows).
+ * powers a fallback link. Surfaced in {@link AgentStatus.loginCommand} as a
+ * manual copy-paste hint alongside the embedded PTY login.
  */
 export const ACP_LOGIN_COMMAND: Record<AcpAgentId, readonly string[] | null> = {
   opencode: null,
@@ -558,8 +554,8 @@ export function detectAgentCli(agent: AcpAgentId): boolean {
 /**
  * One-shot onboarding detection snapshot for every registry agent: installed +
  * authed + the manual login command, plus whether this host supports the
- * embedded PTY login (POSIX-only). The single source of truth the agent step's
- * adaptive CTA reads.
+ * embedded PTY login (always true on macOS). The single source of truth the
+ * agent step's adaptive CTA reads.
  */
 export function detectAgentStatus(): AgentStatusReport {
   const agents = Object.fromEntries(
@@ -576,7 +572,8 @@ export function detectAgentStatus(): AgentStatusReport {
       ];
     }),
   ) as Record<AcpAgentId, AgentStatus>;
-  return { embeddedLoginSupported: platform() !== "win32", agents };
+  // Revv is macOS-only, so the embedded PTY login is always available.
+  return { embeddedLoginSupported: true, agents };
 }
 
 // ── Dynamic model listing ─────────────────────────────────────────────────────

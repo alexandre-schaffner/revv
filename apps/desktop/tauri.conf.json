@@ -11,13 +11,12 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["app", "dmg"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
-      "icons/icon.icns",
-      "icons/icon.ico"
+      "icons/icon.icns"
     ],
     "category": "DeveloperTool",
     "shortDescription": "AI-powered code review",
@@ -39,28 +38,6 @@
           "height": 400
         }
       }
-    },
-    "windows": {
-      "wix": {
-        "language": "en-US"
-      },
-      "nsis": {
-        "installMode": "both",
-        "displayLanguageSelector": false,
-        "compression": "lzma"
-      }
-    },
-    "linux": {
-      "deb": {
-        "depends": [
-          "libwebkit2gtk-4.1-0",
-          "libgtk-3-0"
-        ],
-        "section": "devel"
-      },
-      "appimage": {
-        "bundleMediaFramework": false
-      }
     }
   },
   "app": {
@@ -81,7 +58,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' http://localhost:45678 http://localhost:45679 ws://localhost:45678 ws://localhost:45679 ws://localhost:9223; frame-src artifact: http://artifact.localhost; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:"
+      "csp": "default-src 'self'; connect-src 'self' http://localhost:45678 http://localhost:45679 ws://localhost:45678 ws://localhost:45679 ws://localhost:9223; frame-src artifact:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:"
     }
   },
   "plugins": {
@@ -94,10 +71,7 @@
         "https://github.com/alexandre-schaffner/revv/releases/latest/download/latest.json"
       ],
       "dialog": false,
-      "pubkey": "REPLACE_WITH_MINISIGN_PUBLIC_KEY",
-      "windows": {
-        "installMode": "passive"
-      }
+      "pubkey": "REPLACE_WITH_MINISIGN_PUBLIC_KEY"
     }
   }
 }

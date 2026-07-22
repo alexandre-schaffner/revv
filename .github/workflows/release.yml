@@ -63,7 +63,7 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-  # ── Cross-platform Tauri builds ───────────────────────────────
+  # ── macOS Tauri builds ────────────────────────────────────────
   # Shared matrix lives in `_build-tauri.yml` and is reused by `nightly.yml`.
   build-tauri:
     needs: release-please
@@ -104,12 +104,6 @@ jobs:
         with:
           subject-path: dist/install.sh
 
-      - name: Attest install.ps1
-        id: attest-ps1
-        uses: actions/attest-build-provenance@v3
-        with:
-          subject-path: dist/install.ps1
-
       - name: Attest SHA256SUMS
         id: attest-sums
         uses: actions/attest-build-provenance@v3
@@ -119,7 +113,6 @@ jobs:
       - name: Stage attestation bundles
         run: |
           cp "${{ steps.attest-sh.outputs.bundle-path }}"   dist/install.sh.sigstore
-          cp "${{ steps.attest-ps1.outputs.bundle-path }}"  dist/install.ps1.sigstore
           cp "${{ steps.attest-sums.outputs.bundle-path }}" dist/SHA256SUMS.sigstore
 
       - name: Upload installer artifacts to release
@@ -129,10 +122,8 @@ jobs:
         run: |
           gh release upload "$RELEASE_TAG" \
             dist/install.sh \
-            dist/install.ps1 \
             dist/SHA256SUMS \
             dist/install.sh.sigstore \
-            dist/install.ps1.sigstore \
             dist/SHA256SUMS.sigstore \
             --clobber
 
