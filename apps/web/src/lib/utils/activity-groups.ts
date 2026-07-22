@@ -127,7 +127,15 @@ function payloadString(payload: unknown, key: string): string {
 function payloadNumber(payload: unknown, key: string): number | null {
   if (payload === null || typeof payload !== "object") return null;
   const v = (payload as Record<string, unknown>)[key];
-  return typeof v === "number" && Number.isFinite(v) ? v : null;
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  // ACP/opencode delivers tool-call numeric args as strings, so coerce or the
+  // Read window silently fails to engage for that agent path (breaking the
+  // agent-path parity invariant).
+  if (typeof v === "string" && v.trim() !== "") {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
 }
 
 /**

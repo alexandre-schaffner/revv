@@ -11,20 +11,22 @@
 // streaming content changes, microtask-scheduled), pausing observation while we
 // mutate so our injected nodes don't re-trigger it.
 
+import { MENTION_PATH_PATTERN } from "@revv/shared";
 import type { Action } from "svelte/action";
 
 import { openFileInDiff } from "$lib/stores/review.svelte";
 import type { ReviewFile } from "$lib/types/review";
 import { basename } from "$lib/utils/activity-groups";
-import { createFileGlyph } from "$lib/utils/file-glyph";
+import { appendPillContents } from "$lib/utils/file-glyph";
 
 const PILL_CLASS = "mention-ref";
 const PATH_ATTR = "data-mention-path";
 const LINE_ATTR = "data-mention-line";
 
 // `@` followed by a path with an extension, optional `:line`. Conservative on
-// purpose so prose `@handle` mentions don't get captured.
-const MENTION_RE = /@((?:[\w.-]+\/)*[\w.-]+\.[A-Za-z0-9]+)(?::(\d+))?/g;
+// purpose so prose `@handle` mentions don't get captured. Grammar is shared
+// with the composer via `@revv/shared` so the two never drift.
+const MENTION_RE = new RegExp(MENTION_PATH_PATTERN, "g");
 
 /** A mention resolves to a changed file by exact path or unique basename. */
 function resolvePath(candidate: string, files: ReadonlyArray<ReviewFile>): string | null {
@@ -73,12 +75,7 @@ function makePill(
   // restore the jump target without the original token.
   if (line !== null) span.setAttribute(LINE_ATTR, String(line));
 
-  span.appendChild(createFileGlyph(fullPath, "mention-ref-icon"));
-
-  const text = document.createElement("span");
-  text.className = "mention-ref-text";
-  text.textContent = basename(fullPath);
-  span.appendChild(text);
+  appendPillContents(span, fullPath, "mention-ref-icon", "mention-ref-text");
 
   syncPill(span, files);
   return span;

@@ -16,9 +16,21 @@ export type PromptInputTextareaProps = Omit<HTMLAttributes<HTMLDivElement>, "con
 	import { detectMentionTrigger, type MentionTrigger } from "@revv/shared";
 	import { getContext } from "svelte";
 	import { cn } from "$lib/utils.js";
-	import { basename } from "$lib/utils/activity-groups";
 	import { fileIcon } from "$lib/utils/file-icon";
-	import { createFileGlyph } from "$lib/utils/file-glyph";
+	import {
+		backwardPillTarget,
+		caretTextBefore,
+		deletePillBackward,
+		deletePillForward,
+		editorCaret,
+		forwardNode,
+		isPill,
+		makePill,
+		placeCaretAfter,
+		render,
+		replaceTokenRange,
+		serialize,
+	} from "./composer-editor-model";
 	import { PROMPT_INPUT_CTX_KEY, type PromptInputContext } from "./context.js";
 	import PromptInputAutocompleteMenu from "./PromptInputAutocompleteMenu.svelte";
 
@@ -63,7 +75,10 @@ export type PromptInputTextareaProps = Omit<HTMLAttributes<HTMLDivElement>, "con
 				(trigger?.kind === "mention" && mentionItems.length > 0)),
 	);
 
-	const isEmpty = $derived(ctx.value.trim().length === 0);
+	// Raw length, not trimmed: a value of just "\n" (Shift+Enter on an empty
+	// editor) is non-empty, so the overlaid placeholder hides instead of sitting
+	// on top of the live caret on line 2.
+	const isEmpty = $derived(ctx.value.length === 0);
 
 	$effect(() => {
 		void trigger?.kind;
@@ -75,68 +90,9 @@ export type PromptInputTextareaProps = Omit<HTMLAttributes<HTMLDivElement>, "con
 	// The editor is a contenteditable surface, NOT a textarea: a `@path` mention
 	// is a real, non-editable pill node, while everything else is plain text.
 	// `ctx.value` stays a flat string (the backend's contract) by serializing the
-	// DOM — each pill back to its `@path` token — on every edit.
-	const MENTION_RE = /@((?:[\w.-]+\/)*[\w.-]+\.[A-Za-z0-9]+)(?::\d+)?/g;
-	const PILL_CLASS = "composer-pill";
-
-	function makePill(path: string): HTMLElement {
-		const span = document.createElement("span");
-		span.className = PILL_CLASS;
-		span.contentEditable = "false";
-		span.dataset.token = `@${path}`;
-		span.title = path;
-		span.appendChild(createFileGlyph(path, "composer-pill-icon"));
-		const label = document.createElement("span");
-		label.textContent = basename(path);
-		span.appendChild(label);
-		return span;
-	}
-
-	/** Serialize a node tree back to the flat `@path`-bearing message string. */
-	function serializeNode(node: Node): string {
-		if (node.nodeType === Node.TEXT_NODE) return node.nodeValue ?? "";
-		if (node.nodeType !== Node.ELEMENT_NODE) return "";
-		const el = node as HTMLElement;
-		if (el.classList.contains(PILL_CLASS)) return el.dataset.token ?? "";
-		if (el.tagName === "BR") return "\n";
-		let s = "";
-		for (const child of el.childNodes) s += serializeNode(child);
-		return s;
-	}
-
-	function serialize(root: Node | undefined): string {
-		if (!root) return "";
-		let s = "";
-		for (const child of root.childNodes) s += serializeNode(child);
-		return s;
-	}
-
-	/** Rebuild the editor DOM from a flat string, pillifying known mentions. */
-	function render(value: string) {
-		if (!editorEl) return;
-		const frag = document.createDocumentFragment();
-		let last = 0;
-		MENTION_RE.lastIndex = 0;
-		for (let m = MENTION_RE.exec(value); m; m = MENTION_RE.exec(value)) {
-			const path = m[1] ?? "";
-			if (!mentionPathSet.has(path)) continue;
-			if (m.index > last) appendText(frag, value.slice(last, m.index));
-			frag.append(makePill(path));
-			last = m.index + m[0].length;
-		}
-		if (last < value.length) appendText(frag, value.slice(last));
-		editorEl.replaceChildren(frag);
-	}
-
-	// Newlines render as <br> (matching what the browser inserts on Shift+Enter)
-	// so the two never mix; plain runs become text nodes.
-	function appendText(frag: DocumentFragment, text: string) {
-		const parts = text.split("\n");
-		parts.forEach((part, i) => {
-			if (i > 0) frag.append(document.createElement("br"));
-			if (part) frag.append(document.createTextNode(part));
-		});
-	}
+	// DOM — each pill back to its `@path` token — on every edit. The DOM algebra
+	// (serialize/render/caret/pill-deletion) lives in `composer-editor-model.ts`;
+	// this component keeps only the reactive glue.
 
 	// Keep the editor DOM in step with programmatic value changes (the submit
 	// clear, mainly). Skip when the DOM already serializes to `ctx.value` — i.e.
@@ -144,7 +100,7 @@ export type PromptInputTextareaProps = Omit<HTMLAttributes<HTMLDivElement>, "con
 	$effect(() => {
 		const v = ctx.value;
 		if (!editorEl || v === serialize(editorEl)) return;
-		render(v);
+		render(editorEl, v, mentionPathSet);
 	});
 
 	function pushValue() {
@@ -157,24 +113,6 @@ export type PromptInputTextareaProps = Omit<HTMLAttributes<HTMLDivElement>, "con
 	// the editor and drop the live selection — can still target the right spot.
 	let savedRange: Range | null = null;
 
-	function editorCaret(): Range | null {
-		const sel = window.getSelection();
-		if (sel && sel.rangeCount > 0) {
-			const range = sel.getRangeAt(0);
-			if (range.collapsed && editorEl?.contains(range.startContainer)) return range;
-		}
-		return savedRange;
-	}
-
-	function caretTextBefore(): string {
-		const range = editorCaret();
-		if (!range || !editorEl) return "";
-		const pre = range.cloneRange();
-		pre.selectNodeContents(editorEl);
-		pre.setEnd(range.startContainer, range.startOffset);
-		return serialize(pre.cloneContents());
-	}
-
 	function refreshTrigger() {
 		const sel = window.getSelection();
 		if (sel && sel.rangeCount > 0) {
@@ -183,43 +121,16 @@ export type PromptInputTextareaProps = Omit<HTMLAttributes<HTMLDivElement>, "con
 				savedRange = range.cloneRange();
 			}
 		}
-		trigger = detectMentionTrigger(caretTextBefore());
+		trigger = editorEl ? detectMentionTrigger(caretTextBefore(editorEl, savedRange)) : null;
 	}
 
 	// ── Token replacement (autocomplete selection) ───────────────────────────
-	// The active token is freshly-typed plain text ending at the caret, so it
-	// lives in one text node; delete `marker + query` chars and drop in the
-	// replacement (a pill for mentions, plain text for slash commands).
-	function replaceTokenRange(markerAndQueryLen: number): Range | null {
-		const caret = editorCaret();
-		if (!caret) return null;
-		const node = caret.startContainer;
-		if (node.nodeType !== Node.TEXT_NODE) return null;
-		const start = caret.startOffset - markerAndQueryLen;
-		if (start < 0) return null;
-		const r = document.createRange();
-		r.setStart(node, start);
-		r.setEnd(node, caret.startOffset);
-		r.deleteContents();
-		return r;
-	}
-
-	function placeCaretAfter(node: Node) {
-		const sel = window.getSelection();
-		if (!sel) return;
-		const r = document.createRange();
-		r.setStartAfter(node);
-		r.collapse(true);
-		sel.removeAllRanges();
-		sel.addRange(r);
-	}
-
 	function applyMention(path: string) {
-		if (trigger?.kind !== "mention") return;
-		const r = replaceTokenRange(trigger.query.length + 1);
+		if (trigger?.kind !== "mention" || !editorEl) return;
+		const r = replaceTokenRange(editorEl, savedRange, trigger.query.length + 1);
 		if (!r) return;
 		const space = document.createTextNode(" ");
-		const pill = makePill(path);
+		const pill = makePill(`@${path}`, path);
 		r.insertNode(space);
 		r.insertNode(pill);
 		placeCaretAfter(space);
@@ -227,8 +138,8 @@ export type PromptInputTextareaProps = Omit<HTMLAttributes<HTMLDivElement>, "con
 	}
 
 	function applySlash(name: string) {
-		if (trigger?.kind !== "slash") return;
-		const r = replaceTokenRange(trigger.query.length + 1);
+		if (trigger?.kind !== "slash" || !editorEl) return;
+		const r = replaceTokenRange(editorEl, savedRange, trigger.query.length + 1);
 		if (!r) return;
 		const txt = document.createTextNode(`/${name} `);
 		r.insertNode(txt);
@@ -258,109 +169,14 @@ export type PromptInputTextareaProps = Omit<HTMLAttributes<HTMLDivElement>, "con
 		return `${path.slice(0, 24)}...${path.slice(-28)}`;
 	}
 
-	function isPill(node: Node | null): node is HTMLElement {
-		return (
-			node?.nodeType === Node.ELEMENT_NODE &&
-			(node as HTMLElement).classList.contains(PILL_CLASS)
-		);
-	}
-
-	// Walk past empty text nodes the browser may leave between siblings so an
-	// adjacent pill is still recognized.
-	function skipEmptyText(node: Node | null, dir: "prev" | "next"): Node | null {
-		let n = node;
-		while (n && n.nodeType === Node.TEXT_NODE && n.nodeValue === "") {
-			n = dir === "prev" ? n.previousSibling : n.nextSibling;
-		}
-		return n;
-	}
-
-	// The node a Delete (next) would act on, given a collapsed caret. Returns
-	// null when there's ordinary text to delete forward (let the browser handle
-	// it).
-	function forwardNode(range: Range): Node | null {
-		const { startContainer: c, startOffset: o } = range;
-		if (c.nodeType === Node.TEXT_NODE) {
-			if (o !== (c.nodeValue?.length ?? 0)) return null;
-			return skipEmptyText(c.nextSibling, "next");
-		}
-		return skipEmptyText(c.childNodes[o] ?? null, "next");
-	}
-
-	function isWhitespaceText(node: Node | null): boolean {
-		return node?.nodeType === Node.TEXT_NODE && (node.nodeValue ?? "").trim().length === 0;
-	}
-
-	// What a single Backspace should remove: the pill just before the caret, plus
-	// any auto-inserted whitespace sitting between it and the caret (so the
-	// `[pill][" "]` a mention insertion leaves behind — where the caret lands at
-	// element level right after the space — dies in one press instead of two).
-	// Returns null when there's ordinary text to delete first: then the browser
-	// handles it. `removeNodes` are whitespace/empty text nodes to delete whole;
-	// `trimNode`'s first `trimLen` chars are the whitespace prefix to strip from
-	// the caret's own text node; `caretNode` is where the caret should collapse.
-	function backwardPillTarget(range: Range): {
-		pill: HTMLElement;
-		removeNodes: Node[];
-		trimNode: Text | null;
-		trimLen: number;
-		caretNode: Node | null;
-	} | null {
-		const { startContainer: c, startOffset: o } = range;
-
-		// The node just left of the caret, and the text prefix to strip if the
-		// caret sits inside a (whitespace-only) text node.
-		let scan: Node | null;
-		let trimNode: Text | null = null;
-		let trimLen = 0;
-		let caretNode: Node | null;
-		if (c.nodeType === Node.TEXT_NODE) {
-			const before = (c.nodeValue ?? "").slice(0, o);
-			if (before.trim().length > 0) return null; // real text → normal delete
-			trimNode = c as Text;
-			trimLen = before.length;
-			caretNode = c; // keep this node; caret collapses to its start
-			scan = c.previousSibling;
-		} else {
-			caretNode = c.childNodes[o] ?? null; // node the caret sits before (kept)
-			scan = c.childNodes[o - 1] ?? null;
-		}
-
-		// Walk left across whitespace/empty text nodes to reach the pill.
-		const removeNodes: Node[] = [];
-		while (scan && scan.nodeType === Node.TEXT_NODE) {
-			if (!isWhitespaceText(scan)) return null; // real text → normal delete
-			removeNodes.push(scan);
-			scan = scan.previousSibling;
-		}
-		if (!isPill(scan)) return null;
-		return { pill: scan, removeNodes, trimNode, trimLen, caretNode };
-	}
-
-	// Remove a pill and collapse the caret to where it stood.
-	function removePill(sel: Selection, pill: HTMLElement) {
-		const anchor = pill.nextSibling;
-		const parent = pill.parentNode;
-		pill.remove();
-		const r = document.createRange();
-		if (anchor && anchor.parentNode === parent) r.setStartBefore(anchor);
-		else {
-			r.selectNodeContents(parent ?? (editorEl as Node));
-			r.collapse(false);
-		}
-		r.collapse(true);
-		sel.removeAllRanges();
-		sel.addRange(r);
-		pushValue();
-		refreshTrigger();
-	}
-
 	// Atomic pill deletion. WebKit otherwise needs two Backspaces on a
 	// `contenteditable=false` node (the first only steps the caret over it), so
-	// when a pill sits next to the caret we remove it ourselves in one press.
+	// when a pill sits next to the caret we remove it ourselves in one press. The
+	// model computes the target/plan; we execute it, then re-sync value + trigger
+	// once at the end (shared by both directions).
 	function deleteAdjacentPill(e: KeyboardEvent): boolean {
 		const sel = window.getSelection();
-		if (!sel || sel.rangeCount === 0) return false;
+		if (!sel || sel.rangeCount === 0 || !editorEl) return false;
 		const range = sel.getRangeAt(0);
 		if (!range.collapsed) return false;
 
@@ -368,27 +184,13 @@ export type PromptInputTextareaProps = Omit<HTMLAttributes<HTMLDivElement>, "con
 			const pill = forwardNode(range);
 			if (!isPill(pill)) return false;
 			e.preventDefault();
-			removePill(sel, pill);
-			return true;
+			deletePillForward(editorEl, sel, pill);
+		} else {
+			const target = backwardPillTarget(range);
+			if (!target) return false;
+			e.preventDefault();
+			deletePillBackward(editorEl, sel, target);
 		}
-
-		const target = backwardPillTarget(range);
-		if (!target) return false;
-		e.preventDefault();
-		if (target.trimNode && target.trimLen > 0) {
-			target.trimNode.nodeValue = (target.trimNode.nodeValue ?? "").slice(target.trimLen);
-		}
-		for (const n of target.removeNodes) n.parentNode?.removeChild(n);
-		target.pill.remove();
-		const r = document.createRange();
-		if (target.caretNode && target.caretNode.parentNode) r.setStartBefore(target.caretNode);
-		else {
-			r.selectNodeContents(editorEl as Node);
-			r.collapse(false);
-		}
-		r.collapse(true);
-		sel.removeAllRanges();
-		sel.addRange(r);
 		pushValue();
 		refreshTrigger();
 		return true;
@@ -425,7 +227,9 @@ export type PromptInputTextareaProps = Omit<HTMLAttributes<HTMLDivElement>, "con
 		}
 		if (e.key === "Enter" && !e.isComposing) {
 			// Enter submits; Shift+Enter inserts a newline as a <br> so the
-			// serializer sees a single, predictable break shape.
+			// serializer sees a single, predictable break shape. `execCommand` is
+			// deprecated but chosen deliberately: it preserves the native undo
+			// stack that manual Range surgery would break. Don't "modernize" it.
 			e.preventDefault();
 			if (e.shiftKey) {
 				document.execCommand("insertLineBreak");
@@ -446,16 +250,20 @@ export type PromptInputTextareaProps = Omit<HTMLAttributes<HTMLDivElement>, "con
 	// since there's no caret to disturb. Serialization is unchanged, so ctx.value
 	// stays put.
 	function handleBlur() {
-		if (editorEl && ctx.value.trim().length > 0) render(ctx.value);
+		if (editorEl && ctx.value.trim().length > 0) render(editorEl, ctx.value, mentionPathSet);
 	}
 
-	// Strip formatting from pasted content (and never inject HTML); file pastes
-	// carry no text/plain and fall through to the form's attachment handler.
+	// Always take over paste: insert the clipboard's plain text via `execCommand`
+	// (deprecated but keeps the native undo stack; never injects HTML). We
+	// `preventDefault()` unconditionally — including for image/rich pastes that
+	// carry no `text/plain` — so WebKit can't drop an `<img>`/`<div>` ghost node
+	// the serializer would silently ignore (DOM and `ctx.value` desyncing). File
+	// attachments still reach the parent form's paste handler on the bubbled
+	// event (preventDefault doesn't stop propagation).
 	function handlePaste(e: ClipboardEvent) {
-		const text = e.clipboardData?.getData("text/plain") ?? "";
-		if (!text) return;
 		e.preventDefault();
-		document.execCommand("insertText", false, text);
+		const text = e.clipboardData?.getData("text/plain") ?? "";
+		if (text) document.execCommand("insertText", false, text);
 	}
 </script>
 
