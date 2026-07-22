@@ -16,8 +16,7 @@ bun install              # Install all workspace deps
 cp .env.example .env     # Then fill in GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET
 
 # Development
-make dev                 # All 3 services (web @ 5173, server @ 45678, Tauri desktop)
-make dev-web             # SvelteKit only
+make dev                 # All services (web @ 5173, server @ 45678, Tauri desktop)
 make dev-server          # Elysia API only
 
 # Quality
@@ -40,7 +39,7 @@ make reset-db            # Delete SQLite database (apps/server/revv.db)
 
 ### Monorepo Layout
 
-- `apps/web` — SvelteKit frontend (served by Tauri, also accessible at `localhost:5173` in dev)
+- `apps/web` — SvelteKit frontend rendered by the Tauri desktop shell (from the Vite dev server at `localhost:5173` in dev, from `../web/build` in prod). Revv is a desktop-only app; the frontend is not a standalone browser app.
 - `apps/server` — Elysia HTTP + SSE server (port 45678)
 - `apps/desktop` — Tauri v2 shell; minimal Rust, just window + plugin setup
 - `packages/shared` — Shared types, constants (`API_PORT`, `APP_NAME`), and SSE event message schemas

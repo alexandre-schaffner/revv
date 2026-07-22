@@ -4,9 +4,9 @@ import { eq, inArray } from "drizzle-orm";
 import { Cause, Chunk, Context, Duration, Effect, Fiber, Layer, Ref, Schedule } from "effect";
 import { repositories } from "../db/schema";
 import { account, user } from "../db/schema/auth";
-import { GitHubAuthError, GitHubRateLimitError } from "../domain/errors";
+import { GitHubAccessDeniedError, GitHubAuthError, GitHubRateLimitError } from "../domain/errors";
 import { withDb as withDbHelper } from "../effects/with-db";
-import { logError } from "../logger";
+import { debug, logError } from "../logger";
 import { Broadcaster } from "./Broadcaster";
 import { DbService } from "./Db";
 import { DiffCacheService } from "./DiffCache";
@@ -79,7 +79,12 @@ export const PollSchedulerLive = Layer.effect(
     // cached avatar bytes (`repositories.avatar_content`) right after boot,
     // instead of leaving stale/blank icons for up to an hour.
     let lastMetadataRefreshAt = 0;
-    let lastArchiveBackfillAt = Date.now();
+    // Seed to 0 (not `Date.now()`) so the archive backfill runs on the first
+    // poll after boot rather than waiting a full interval. Without this a fresh
+    // mirror shows no closed/merged PRs for the first hour, and in dev — where
+    // the server restarts more often than once an hour — the backfill would
+    // never run at all, leaving the archive populated only by live closures.
+    let lastArchiveBackfillAt = 0;
 
     // Bind the captured db handle for convenience
     const withDb = <A, E>(eff: Effect.Effect<A, E, DbService>) => withDbHelper(db, eff);
@@ -354,17 +359,26 @@ export const PollSchedulerLive = Layer.effect(
           ): Effect.Effect<A | null, never, R> =>
             eff.pipe(
               Effect.tap(() => clearStaleReauth(acc)),
-              Effect.tapError((err) =>
-                err instanceof GitHubAuthError
-                  ? handleAuthError(acc)
-                  : err instanceof GitHubRateLimitError
-                    ? Effect.sync(() => markRateLimited(acc, err))
-                    : Effect.sync(() => {
-                        if (opts?.errorLabel) {
-                          logError("PollScheduler", `${opts.errorLabel}:`, err);
-                        }
-                      }),
-              ),
+              Effect.tapError((err) => {
+                if (err instanceof GitHubAuthError) return handleAuthError(acc);
+                if (err instanceof GitHubRateLimitError) {
+                  return Effect.sync(() => {
+                    markRateLimited(acc, err);
+                  });
+                }
+                if (err instanceof GitHubAccessDeniedError) {
+                  return Effect.sync(() => {
+                    if (opts?.errorLabel) {
+                      debug("PollScheduler", `${opts.errorLabel}: ${err.message}`);
+                    }
+                  });
+                }
+                return Effect.sync(() => {
+                  if (opts?.errorLabel) {
+                    logError("PollScheduler", `${opts.errorLabel}:`, err);
+                  }
+                });
+              }),
               Effect.catchAll(() => Effect.succeed(null as A | null)),
             );
 
@@ -710,7 +724,14 @@ export const PollSchedulerLive = Layer.effect(
           if (shouldRunArchiveBackfill) {
             lastArchiveBackfillAt = Date.now();
             const ARCHIVE_BACKFILL_DAYS = 7;
-            const ARCHIVE_BACKFILL_MAX_FETCHES_PER_REPO = 25;
+            // Sized to cover the full backfill window in a single cycle for an
+            // active repo (~13 closed PRs/day × 7 days ≈ 90, with headroom).
+            // The search returns the whole window; this caps how many missing
+            // rows we individually fetch per repo per cycle. At 25 a busy repo
+            // only imported ~2 days per cycle, so a fresh mirror never showed
+            // the whole week. Only ever fetches PRs not already mirrored, so
+            // the cost is a bounded one-time burst that converges to near-zero.
+            const ARCHIVE_BACKFILL_MAX_FETCHES_PER_REPO = 150;
             const backfillSinceIso = new Date(
               Date.now() - ARCHIVE_BACKFILL_DAYS * 24 * 60 * 60 * 1000,
             ).toISOString();

@@ -48,6 +48,7 @@ import { walkthroughs as walkthroughsTable } from "../../db/schema/walkthroughs"
 import { debug, logError } from "../../logger";
 import type { PrFileMeta } from "../../services/GitHub";
 import { type AcpConnectionHandle, getAcpConnection } from "../acp/acp-connection";
+import { withAgentKeychainHint } from "../acp/agent-keychain";
 import {
   buildActivity,
   decodeAcpSessionUpdate,
@@ -61,6 +62,7 @@ import {
 import { buildWalkthroughPrompt, buildWalkthroughSystemPrompt } from "../prompts/walkthrough";
 
 const WALKTHROUGH_MCP_SERVER = "revv-walkthrough";
+const ACP_CANCEL_GRACE_MS = 1_500;
 
 // Built-in exploration tools the agent runs natively (NOT via our MCP route).
 // ACP tags these with a `kind` the decoder maps onto canonical names, so they
@@ -358,7 +360,13 @@ export function streamWalkthroughViaAcp(
           cancelled = true;
         },
         abortSession: async () => {
-          if (sessionId) await h.cancel(sessionId);
+          if (sessionId) {
+            await Promise.race([
+              h.cancel(sessionId),
+              new Promise<void>((resolve) => setTimeout(resolve, ACP_CANCEL_GRACE_MS)),
+            ]);
+          }
+          h.stop();
         },
         run: async (ctx) => {
           // ── 1. Issue session token + hand the agent our HTTP MCP endpoint ──
@@ -417,7 +425,10 @@ export function streamWalkthroughViaAcp(
         },
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = withAgentKeychainHint(
+        params.acpAgentId,
+        err instanceof Error ? err.message : String(err),
+      );
       logError("walkthrough-acp", "queryTask error:", message);
       if (!errorEmitted) {
         errorEmitted = true;

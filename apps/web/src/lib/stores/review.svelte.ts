@@ -114,6 +114,13 @@ export function getIsPullingCommit(prId: string): boolean {
   return isPullingCommit.has(prId);
 }
 
+function apiErrorMessage(error: { status: number; value?: unknown }, fallback: string): string {
+  const value = error.value as { error?: unknown; message?: unknown } | null | undefined;
+  if (typeof value?.error === "string") return value.error;
+  if (typeof value?.message === "string") return value.message;
+  return `${fallback} (HTTP ${error.status})`;
+}
+
 /**
  * Refetch the PR's diff files against the current `pr.headSha`, restamp
  * the loaded SHA, and regenerate the walkthrough against the new content.
@@ -136,7 +143,9 @@ export async function pullLatestCommit(prId: string): Promise<void> {
       query: activePath === null ? { mode } : { active: activePath, mode },
     });
     if (error || !Array.isArray(data)) {
-      throw new Error("Failed to refetch files");
+      throw new Error(
+        error ? apiErrorMessage(error, "Failed to refetch files") : "Failed to refetch files",
+      );
     }
 
     const mapped: ReviewFile[] = data.map((f) => ({
@@ -217,10 +226,15 @@ const SESSION_REFETCH_WINDOW_MS = 60_000;
 export async function loadSession(
   prId: string,
   mode: ReviewMode = getReviewMode(prId),
+  force = false,
 ): Promise<void> {
   const sessionKey = `${prId}:${mode}`;
-  // Short-circuit: same PR, recent hydration, session still live.
+  // Short-circuit: same PR, recent hydration, session still live. Callers that
+  // just mutated server state (e.g. submitting a review) pass `force` to skip
+  // it — otherwise stale local rows (missing the externalId stamped on
+  // just-pushed comments) would survive and get re-submitted as duplicates.
   if (
+    !force &&
     sessionKey === lastSessionKey &&
     Date.now() - lastSessionAt < SESSION_REFETCH_WINDOW_MS &&
     sessionId !== null

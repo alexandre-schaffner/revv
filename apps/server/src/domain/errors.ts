@@ -16,6 +16,11 @@ export class GitHubNetworkError extends Data.TaggedError("GitHubNetworkError")<{
   readonly cause: unknown;
 }> {}
 
+export class GitHubAccessDeniedError extends Data.TaggedError("GitHubAccessDeniedError")<{
+  readonly resource: string;
+  readonly message: string;
+}> {}
+
 export class GitHubNotFoundError extends Data.TaggedError("GitHubNotFoundError")<{
   readonly resource: string;
   readonly id: string;
@@ -24,6 +29,7 @@ export class GitHubNotFoundError extends Data.TaggedError("GitHubNotFoundError")
 export type GitHubError =
   | GitHubRateLimitError
   | GitHubAuthError
+  | GitHubAccessDeniedError
   | GitHubNetworkError
   | GitHubNotFoundError;
 

@@ -247,6 +247,42 @@ export type WalkthroughPipelinePhase = "none" | "A" | "B" | "C" | "D";
 /** Job lifecycle status. `WalkthroughJobs.setStatus` is the only writer. */
 export type WalkthroughStatus = "generating" | "complete" | "error" | "superseded";
 
+/**
+ * How a walkthrough row was produced.
+ *
+ * `full` analyzes the current PR diff without using a prior walkthrough as
+ * input. `incremental` still produces the same report shape, but the agent is
+ * expected to use the linked prior walkthrough and the new commit range as its
+ * starting point.
+ */
+export type WalkthroughGenerationMode = "full" | "incremental";
+
+export interface WalkthroughReviewRound {
+  id: string;
+  walkthroughId: string;
+  previousWalkthroughId: string | null;
+  roundNumber: number;
+  kind: WalkthroughGenerationMode;
+  visibility: "visible" | "hidden";
+  status: WalkthroughStatus;
+  fromSha: string | null;
+  toSha: string;
+  createdAt: string;
+  completedAt: string | null;
+  summary: string | null;
+  focusTitle: string | null;
+  prHeadSha: string;
+}
+
+export interface WalkthroughReviewRoundsResponse {
+  prId: string;
+  currentHeadSha: string | null;
+  latestReviewedHeadSha: string | null;
+  hasNewCommits: boolean;
+  nextBaseHeadSha: string | null;
+  rounds: WalkthroughReviewRound[];
+}
+
 // ── Walkthrough (cached & replayed) ─────────────────────────────────────────
 
 export interface Walkthrough {
@@ -276,6 +312,9 @@ export interface Walkthrough {
   modelUsed: string;
   tokenUsage: WalkthroughTokenUsage;
   prHeadSha: string;
+  generationMode?: WalkthroughGenerationMode;
+  parentWalkthroughId?: string | null;
+  baseHeadSha?: string | null;
   /**
    * ISO 8601 timestamp of the most recent chat-driven edit, or null if the
    * walkthrough has only ever been produced by the generation pipeline. See
@@ -323,6 +362,37 @@ export interface WalkthroughState {
   walkthroughId: string;
   prHeadSha: string;
   mode: WalkthroughMode;
+  generationMode: WalkthroughGenerationMode;
+  parentWalkthroughId: string | null;
+  baseHeadSha: string | null;
+  priorReview: {
+    walkthroughId: string;
+    prHeadSha: string;
+    summary: string;
+    riskLevel: RiskLevel;
+    sentiment: string | null;
+    semanticSteps: Array<{
+      semanticStepIndex: number;
+      title: string;
+      summary: string | null;
+    }>;
+    issues: Array<{
+      id: string;
+      severity: WalkthroughIssue["severity"];
+      title: string;
+      description: string;
+      filePath: string | null;
+      startLine: number | null;
+      endLine: number | null;
+      submittedAt: string | null;
+    }>;
+    ratings: Array<{
+      axis: RatingAxis;
+      verdict: Verdict;
+      confidence: Confidence;
+      rationale: string;
+    }>;
+  } | null;
   status: WalkthroughStatus;
   lastCompletedPhase: WalkthroughPipelinePhase;
   summary: string | null;

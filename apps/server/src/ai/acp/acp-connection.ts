@@ -34,7 +34,7 @@ import {
 import type { AcpAgentId } from "@revv/shared";
 import { debug } from "../../logger";
 import { resolveUserPath } from "../providers/cli-agent";
-import { type AcpLaunchConfig, resolveAcpLaunchById } from "./presets";
+import { type AcpLaunchConfig, resolveAcpProcessLaunchById } from "./presets";
 
 const IDLE_STOP_MS = 5 * 60 * 1000;
 
@@ -74,6 +74,8 @@ export interface AcpConnectionHandle {
   readonly setMode: (sessionId: string, modeId: string) => Promise<void>;
   readonly prompt: (sessionId: string, prompt: ContentBlock[]) => Promise<StopReason>;
   readonly cancel: (sessionId: string) => Promise<void>;
+  /** Force-stop this pooled ACP subprocess. Next use will spawn a fresh connection. */
+  readonly stop: () => void;
   /** Register (or clear, with null) the update listener for a session. */
   readonly setListener: (sessionId: string, listener: AcpUpdateListener | null) => void;
   /** Flag a session as plan-mode so the permission handler refuses mode switches. */
@@ -170,7 +172,12 @@ async function spawnConnection(
   config: AcpLaunchConfig,
   key: string,
 ): Promise<ConnectionEntry> {
-  const { command, args, env } = resolveAcpLaunchById(agent, config);
+  const { command, args, env } = resolveAcpProcessLaunchById(
+    agent,
+    config,
+    process.env,
+    resolveUserPath(),
+  );
   const proc = Bun.spawn([command, ...args], {
     cwd,
     stdin: "pipe",
@@ -180,7 +187,7 @@ async function spawnConnection(
     // inherited environment. PATH is widened to the user's login-shell PATH so
     // `npx`/`opencode` resolve even when the server inherited a sanitized PATH
     // (launchd / GUI launch) — matching how availability is detected.
-    env: { ...process.env, ...env, PATH: resolveUserPath() },
+    env,
   });
 
   // Bun's `proc.stdin` is a FileSink; wrap it as a WritableStream<Uint8Array>
@@ -298,6 +305,24 @@ function scheduleIdleStop(entry: ConnectionEntry): void {
   }, IDLE_STOP_MS);
 }
 
+function stopEntry(entry: ConnectionEntry): void {
+  if (!entry.alive) return;
+  entry.alive = false;
+  pool.delete(entry.key);
+  if (entry.idleTimer) {
+    clearTimeout(entry.idleTimer);
+    entry.idleTimer = null;
+  }
+  entry.listeners.clear();
+  entry.availableCommands.clear();
+  entry.planModeSessions.clear();
+  try {
+    entry.proc.kill();
+  } catch {
+    /* already gone */
+  }
+}
+
 function makeHandle(entry: ConnectionEntry): AcpConnectionHandle {
   const { connection } = entry;
   return {
@@ -379,6 +404,10 @@ function makeHandle(entry: ConnectionEntry): AcpConnectionHandle {
         debug("acp-connection", "cancel failed:", err instanceof Error ? err.message : String(err));
       }
     },
+    stop: () => {
+      debug("acp-connection", `force-stopping ${entry.agent} agent for ${entry.cwd}`);
+      stopEntry(entry);
+    },
     setListener: (sessionId, listener) => {
       if (listener) entry.listeners.set(sessionId, listener);
       else entry.listeners.delete(sessionId);
@@ -459,12 +488,7 @@ export function stopAllAcpConnections(): void {
     pool.delete(cwd);
     void pending
       .then((entry) => {
-        entry.alive = false;
-        try {
-          entry.proc.kill();
-        } catch {
-          /* already gone */
-        }
+        stopEntry(entry);
       })
       .catch(() => {
         /* never spawned */

@@ -1,8 +1,10 @@
 import { Effect } from "effect";
-import { logError } from "../../../logger";
+import { GitHubNetworkError } from "../../../domain/errors";
 import { AppRuntime } from "../../../runtime";
+import { Broadcaster } from "../../../services/Broadcaster";
 import { GitHubGateway } from "../../../services/GitHub";
 import { PrContextService } from "../../../services/PrContext";
+import { RepositoryService } from "../../../services/Repository";
 import { ReviewService } from "../../../services/Review";
 import { WalkthroughService } from "../../../services/Walkthrough";
 
@@ -27,6 +29,21 @@ export interface SubmitReviewInput {
   issueIds?: string[];
 }
 
+export function isExistingPendingReviewError(error: unknown): boolean {
+  if (!(error instanceof GitHubNetworkError) || typeof error.cause !== "string") {
+    return false;
+  }
+
+  const cause = error.cause;
+  if (cause.includes("User can only have one pending review per pull request")) {
+    return true;
+  }
+
+  return (
+    cause.includes("422 Unprocessable Entity") && cause.toLowerCase().includes("pending review")
+  );
+}
+
 /**
  * POST /api/reviews/:id/github-submit — submit a review to GitHub with
  * line-level comments. Maps our internal action type to GitHub's `event`
@@ -44,8 +61,11 @@ export function submitGithubReviewHandler(prId: string, userId: string, body: Su
       const github = yield* GitHubGateway;
       const reviewService = yield* ReviewService;
       const walkthroughService = yield* WalkthroughService;
+      const repoService = yield* RepositoryService;
+      const broadcaster = yield* Broadcaster;
 
       const { pr, repo, token: ghToken } = yield* prContext.resolveBasic(prId, userId);
+      const accountId = yield* repoService.getAccountIdForRepo(repo.id);
 
       const eventMap = {
         approve: "APPROVE",
@@ -53,7 +73,8 @@ export function submitGithubReviewHandler(prId: string, userId: string, body: Su
         comment: "COMMENT",
       } as const;
 
-      const comments = (body.comments ?? []).map((c) => {
+      const inputComments = body.comments ?? [];
+      const comments = inputComments.map((c) => {
         const comment: {
           path: string;
           body: string;
@@ -74,20 +95,50 @@ export function submitGithubReviewHandler(prId: string, userId: string, body: Su
         return comment;
       });
 
-      const review = yield* github.reviews.submit(
-        repo.fullName,
-        pr.externalId,
-        {
-          event: eventMap[body.action],
-          body: body.body ?? "",
-          comments,
-        },
-        ghToken,
-      );
+      const reviewInput = {
+        event: eventMap[body.action],
+        body: body.body ?? "",
+        comments,
+      };
+      const review = yield* github.reviews
+        .submit(repo.fullName, pr.externalId, reviewInput, ghToken)
+        .pipe(
+          Effect.catchIf(isExistingPendingReviewError, () =>
+            Effect.gen(function* () {
+              const reviewer = yield* github.users.authenticatedFresh(ghToken);
+              const pending = yield* github.reviews.findPending(
+                repo.fullName,
+                pr.externalId,
+                reviewer.login,
+                ghToken,
+              );
+              if (!pending) {
+                return yield* Effect.fail(
+                  new GitHubNetworkError({
+                    cause:
+                      "GitHub reported an existing pending review, but Revv could not find it for the authenticated user.",
+                  }),
+                );
+              }
+
+              yield* github.reviews.deletePending(
+                repo.fullName,
+                pr.externalId,
+                pending.id,
+                ghToken,
+              );
+              return yield* github.reviews.submit(
+                repo.fullName,
+                pr.externalId,
+                reviewInput,
+                ghToken,
+              );
+            }),
+          ),
+        );
 
       // Link local threads to GitHub comment IDs so that the subsequent
       // sync-threads call doesn't create duplicate entries.
-      const inputComments = body.comments ?? [];
       if (inputComments.length > 0) {
         const ghComments = yield* github.reviews
           .commentsForReview(repo.fullName, pr.externalId, review.id, ghToken)
@@ -95,16 +146,39 @@ export function submitGithubReviewHandler(prId: string, userId: string, body: Su
 
         for (const input of inputComments) {
           const effectiveLine = input.line;
-          const match = ghComments.find((gh) => {
-            const ghLine = gh.line ?? gh.originalLine;
-            return gh.path === input.path && ghLine === effectiveLine && gh.body === input.body;
-          });
+          // Prefer an exact path+line+body match; fall back to path+line, then
+          // path+body. The `/reviews/:id/comments` response can return a null
+          // `line` and GitHub may normalize the body, so requiring all three
+          // exactly would miss — leaving the comment unlinked and re-postable.
+          const match =
+            ghComments.find((gh) => {
+              const ghLine = gh.line ?? gh.originalLine;
+              return gh.path === input.path && ghLine === effectiveLine && gh.body === input.body;
+            }) ??
+            ghComments.find((gh) => {
+              const ghLine = gh.line ?? gh.originalLine;
+              return gh.path === input.path && ghLine === effectiveLine;
+            }) ??
+            ghComments.find((gh) => gh.path === input.path && gh.body === input.body);
 
           if (!match) {
-            logError(
-              "github-submit",
-              `No GitHub comment matched for thread ${input.threadId} (path=${input.path} line=${effectiveLine})`,
-            );
+            // We couldn't tie this just-pushed comment to its GitHub id (the
+            // review API returns no per-comment ids, and GitHub can normalize
+            // the body, defeating a body match). Rather than leave an unlinked
+            // local draft that a later submit would re-post, delete it — the
+            // sync-threads call that follows re-creates it from GitHub with a
+            // real externalCommentId. Local-only metadata (a freshly authored
+            // comment has none worth keeping) is sacrificed to guarantee no
+            // duplicate ever reaches GitHub.
+            yield* reviewService
+              .deleteThread(input.threadId)
+              .pipe(Effect.orElseSucceed(() => undefined));
+            yield* broadcaster
+              .broadcastToAccount(accountId, {
+                type: "thread:deleted",
+                data: { threadId: input.threadId },
+              })
+              .pipe(Effect.orElseSucceed(() => undefined));
             continue;
           }
 

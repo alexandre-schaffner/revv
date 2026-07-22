@@ -1,9 +1,15 @@
+import { and, eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
+import { pullRequests, repositories } from "../db/schema";
+import { NotFoundError } from "../domain/errors";
 import { AppRuntime } from "../runtime";
 import { Broadcaster } from "../services/Broadcaster";
+import { DbService } from "../services/Db";
+import { PrContextService } from "../services/PrContext";
 import { ReviewService } from "../services/Review";
 import { SyncService } from "../services/Sync";
+import { WalkthroughService } from "../services/Walkthrough";
 import { WalkthroughJobs } from "../services/WalkthroughJobs";
 import { handleAppError, withAccount } from "./middleware";
 import { activeSessionHandler, coerceReviewMode } from "./reviews/handlers/active-session";
@@ -233,6 +239,7 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
   // events moved to the unified bus.
   .post("/:id/walkthrough/start", async (ctx) => {
     try {
+      const body = ctx.body as { generationMode?: "full" | "incremental" } | undefined;
       const result = await AppRuntime.runPromise(
         Effect.gen(function* () {
           const jobs = yield* WalkthroughJobs;
@@ -248,6 +255,7 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
             userId: ctx.session.user.id,
             trigger: "user",
             mode,
+            generationMode: body?.generationMode ?? "full",
           });
         }),
       );
@@ -269,6 +277,70 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
     }
   })
 
+  .get("/:id/walkthrough/rounds", async (ctx) => {
+    try {
+      return await AppRuntime.runPromise(
+        Effect.gen(function* () {
+          const { db } = yield* DbService;
+          const walkthroughService = yield* WalkthroughService;
+          const mode = coerceWalkthroughMode(ctx.query.mode);
+          const pr = db
+            .select({ id: pullRequests.id, headSha: pullRequests.headSha })
+            .from(pullRequests)
+            .innerJoin(repositories, eq(repositories.id, pullRequests.repositoryId))
+            .where(
+              and(
+                eq(pullRequests.id, ctx.params.id),
+                eq(repositories.accountId, ctx.account.accountId),
+              ),
+            )
+            .get();
+          if (!pr) {
+            return yield* Effect.fail(
+              new NotFoundError({ resource: "pull_request", id: ctx.params.id }),
+            );
+          }
+          // No PR context or live GitHub commit fetch here: round focus titles
+          // derive from the commit list persisted per walkthrough
+          // (`walkthroughs.prCommits`), so this high-frequency endpoint stays
+          // DB-only. The client refreshes it for every active PR on each
+          // `prs:updated`, so GitHub calls here add avoidable rate-limit pressure.
+          return yield* walkthroughService.listReviewRounds(pr.id, pr.headSha, mode);
+        }),
+      );
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  })
+
+  .get("/:id/walkthrough/report/:walkthroughId", async (ctx) => {
+    try {
+      return await AppRuntime.runPromise(
+        Effect.gen(function* () {
+          const prContext = yield* PrContextService;
+          const walkthroughService = yield* WalkthroughService;
+          const mode = coerceWalkthroughMode(ctx.query.mode);
+          const { pr } = yield* prContext.resolveBasic(ctx.params.id, ctx.session.user.id);
+          const report = yield* walkthroughService.getReport(pr.id, ctx.params.walkthroughId, mode);
+          if (!report) return { status: "not_found" as const };
+          const seqAt = yield* walkthroughService.getSeqAt(report.walkthrough.id);
+          return {
+            status: report.status as "complete" | "generating" | "error" | "superseded",
+            walkthrough: report.walkthrough,
+            snapshotAt: new Date().toISOString(),
+            seqAt,
+            stale:
+              report.status === "superseded" ||
+              (pr.headSha !== null && report.walkthrough.prHeadSha !== pr.headSha),
+            historical: true as const,
+          };
+        }),
+      );
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  })
+
   .get("/:id/walkthrough/cached", async (ctx) => {
     try {
       return await getCachedWalkthroughHandler(
@@ -283,11 +355,14 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
 
   .post("/:id/walkthrough/regenerate", async (ctx) => {
     try {
+      const body = ctx.body as
+        | { mode?: unknown; generationMode?: "full" | "incremental" }
+        | undefined;
       await regenerateWalkthroughHandler(
         ctx.params.id,
-        (ctx.body as { mode?: unknown } | undefined)?.mode === undefined
-          ? undefined
-          : coerceWalkthroughMode((ctx.body as { mode?: unknown }).mode),
+        ctx.session.user.id,
+        body?.mode === undefined ? undefined : coerceWalkthroughMode(body.mode),
+        body?.generationMode ?? "incremental",
       );
       return { success: true };
     } catch (e) {

@@ -1,6 +1,7 @@
 <script lang="ts">
 import ArrowUp from "phosphor-svelte/lib/ArrowUp";
 import ChevronDown from "phosphor-svelte/lib/CaretDown";
+import ChatCircle from "phosphor-svelte/lib/ChatCircle";
 import Check from "phosphor-svelte/lib/Check";
 import GitMerge from "phosphor-svelte/lib/GitMerge";
 import Send from "phosphor-svelte/lib/PaperPlaneRight";
@@ -23,8 +24,9 @@ import {
 } from "$lib/stores/prs.svelte";
 import {
   getRcApproveBlockerSummary,
-  getRcHasContent,
+  getRcCanComment,
   getRcOnApprove,
+  getRcOnComment,
   getRcOnGenerateChanges,
   getRcOnSubmitReview,
   getRcSelectedCount,
@@ -34,7 +36,7 @@ import {
 const pr = $derived(getSelectedPr());
 const rcSubmitting = $derived(getRcSubmitting());
 const rcSelectedCount = $derived(getRcSelectedCount());
-const rcHasContent = $derived(getRcHasContent());
+const rcCanComment = $derived(getRcCanComment());
 const rcApproveBlockerSummary = $derived(getRcApproveBlockerSummary());
 const chatStreaming = $derived(pr ? isChatStreaming(pr.id) : false);
 
@@ -90,6 +92,24 @@ async function runMerge(method: import("@revv/shared").MergeMethod): Promise<voi
 }
 </script>
 
+{#snippet commentPill()}
+  <!-- Plain COMMENT review: pushes line comments + selected walkthrough
+       issues to GitHub without approving or requesting changes. This is the
+       only review event GitHub permits on your own PR, so it's surfaced for
+       authors and reviewers alike. -->
+  <GlassPill
+    variant="muted"
+    disabled={rcSubmitting !== null || !rcCanComment}
+    onclick={() => getRcOnComment()()}
+    title={!rcCanComment
+      ? "Add comments or select walkthrough issues first"
+      : "Post comments to GitHub without approving or requesting changes"}
+  >
+    <ChatCircle size={16} weight="regular" />
+    {rcSubmitting === "comment" ? "Posting…" : "Comment"}
+  </GlassPill>
+{/snippet}
+
 <div
   class="actions-float"
   in:gsapFadeY={{ duration: tokens.quick, y: 8 }}
@@ -113,10 +133,11 @@ async function runMerge(method: import("@revv/shared").MergeMethod): Promise<voi
     </GlassPill>
 
     {#if isPrOwner && pr}
-      <!-- Owner view — the reviewer's Approve / Request Changes pair
-           doesn't apply when you authored the PR, so we surface the
-           two actions a coder actually needs from this screen:
-           toggle draft state, and close the PR. -->
+      <!-- Owner view — GitHub rejects Approve / Request Changes on your own
+           PR, so instead of that pair we surface the actions a coder actually
+           needs here: post review comments (the one review event allowed on
+           your own PR), toggle draft state, merge, and close. -->
+      {@render commentPill()}
       {#if pr.isDraft}
         <GlassPill
           variant="accent"
@@ -214,17 +235,21 @@ async function runMerge(method: import("@revv/shared").MergeMethod): Promise<voi
       </GlassPill>
     {:else}
       <!-- Not the PR owner → a reviewer. Review mode is derived from identity
-           (see getReviewModeForPr), so "not owner" is exactly "reviewer". -->
+           (see getReviewModeForPr), so "not owner" is exactly "reviewer". One
+           "Submit Review" posts everything in a single GitHub review: the line
+           comments always go up, and it requests changes when walkthrough
+           issues are selected (otherwise it's a plain comment review). Approve
+           stays a distinct action. -->
       <GlassPill
         variant="accent"
-        disabled={rcSubmitting !== null || !rcHasContent}
+        disabled={rcSubmitting !== null || !rcCanComment}
         onclick={() => getRcOnSubmitReview()()}
-        title={!rcHasContent
+        title={!rcCanComment
           ? "Add comments or select walkthrough issues first"
-          : "Request changes on this pull request"}
+          : "Submit your review — posts your comments, and requests changes if any issues are selected"}
       >
         <ArrowUp size={16} weight="regular" />
-        {rcSubmitting === "request_changes" ? "Submitting…" : "Submit Review"}
+        {rcSubmitting !== null ? "Submitting…" : "Submit Review"}
       </GlassPill>
       <GlassPill
         variant="success"

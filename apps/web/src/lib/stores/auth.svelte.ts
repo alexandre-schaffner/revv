@@ -15,6 +15,9 @@ import { fetchSettings, reset as resetSettings } from "$lib/stores/settings.svel
 const storedToken =
   typeof localStorage !== "undefined" ? localStorage.getItem("rev_session_token") : null;
 
+const LOAD_USER_RETRY_DELAY_MS = 1000;
+const LOAD_USER_MAX_RETRIES = 10;
+
 let token = $state<string | null>(storedToken);
 let user = $state<{
   name: string;
@@ -26,6 +29,9 @@ let user = $state<{
 let isLoading = $state(false);
 let isSwitching = $state(false);
 let error = $state<string | null>(null);
+
+export type SignInErrorCode = "invalid_github_client_id" | "missing_github_client_id";
+let signInErrorCode = $state<SignInErrorCode | null>(null);
 
 let deviceFlow = $state<{
   userCode: string;
@@ -58,7 +64,12 @@ export type LocalAccount = {
 
 let _connectedAccounts = $state<ConnectedAccount[]>([]);
 let localAccounts = $state<LocalAccount[]>([]);
+let localAccountsLoaded = $state(typeof localStorage === "undefined");
 let accountJustRemoved = $state(false);
+let loadUserRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let loadUserRetryAttempts = $state(0);
+let authRestoreError = $state<string | null>(null);
+let authRestoreExhausted = $state(false);
 
 /**
  * Set when the active account's GitHub token is invalid and could not be
@@ -85,6 +96,10 @@ export function clearReauthRequired(): void {
 
 export function getLocalAccounts(): LocalAccount[] {
   return localAccounts;
+}
+
+export function getLocalAccountsLoaded(): boolean {
+  return localAccountsLoaded;
 }
 
 export function getAccountJustRemoved(): boolean {
@@ -129,8 +144,28 @@ export function getIsSwitching(): boolean {
   return isSwitching;
 }
 
+export function getAuthRestoreError(): string | null {
+  return authRestoreError;
+}
+
+export function getAuthRestoreExhausted(): boolean {
+  return authRestoreExhausted;
+}
+
+export function getAuthRestoreRetryAttempts(): number {
+  return loadUserRetryAttempts;
+}
+
+export function getAuthRestoreMaxRetries(): number {
+  return LOAD_USER_MAX_RETRIES;
+}
+
 export function getError(): string | null {
   return error;
+}
+
+export function getSignInErrorCode(): SignInErrorCode | null {
+  return signInErrorCode;
 }
 
 export function getDeviceFlow(): typeof deviceFlow {
@@ -138,6 +173,7 @@ export function getDeviceFlow(): typeof deviceFlow {
 }
 
 export function setToken(newToken: string): void {
+  resetLoadUserRetryState();
   token = newToken;
   if (typeof localStorage !== "undefined") {
     localStorage.setItem("rev_session_token", newToken);
@@ -145,6 +181,7 @@ export function setToken(newToken: string): void {
 }
 
 export function clearToken(): void {
+  resetLoadUserRetryState();
   token = null;
   user = null;
   _connectedAccounts = [];
@@ -153,13 +190,94 @@ export function clearToken(): void {
   // a dead session strands the modal with no account behind it.
   reauthRequired = null;
   error = null;
+  signInErrorCode = null;
   if (typeof localStorage !== "undefined") {
     localStorage.removeItem("rev_session_token");
   }
 }
 
-export async function signIn(host?: string): Promise<void> {
+function parseSignInErrorCode(value: unknown): SignInErrorCode | null {
+  return value === "missing_github_client_id" || value === "invalid_github_client_id"
+    ? value
+    : null;
+}
+
+async function signInHttpError(res: Response): Promise<Error> {
+  const body = await res.text().catch(() => "");
+  let detail = body.trim();
+  try {
+    const parsed = JSON.parse(body) as { error?: string; code?: unknown };
+    if (parsed?.error) detail = parsed.error;
+    signInErrorCode = parseSignInErrorCode(parsed?.code);
+  } catch {
+    // Plain-text body — use it as-is.
+  }
+  return new Error(`Sign-in request failed (${res.status})${detail ? `: ${detail}` : ""}`);
+}
+
+function signInErrorMessage(e: unknown): string {
+  if (e instanceof TypeError) {
+    return `Failed to reach the local Revv server at ${API_BASE_URL}: ${e.message}`;
+  }
+  if (e instanceof Error) return e.message;
+  return String(e);
+}
+
+function authErrorStatus(error: unknown): number | null {
+  if (typeof error !== "object" || error === null || !("status" in error)) return null;
+  const status = (error as { status: unknown }).status;
+  return typeof status === "number" ? status : null;
+}
+
+function authErrorMessage(error: unknown): string | null {
+  if (typeof error !== "object" || error === null || !("message" in error)) return null;
+  const message = (error as { message: unknown }).message;
+  return typeof message === "string" && message.length > 0 ? message : null;
+}
+
+function shouldClearTokenAfterSessionMiss(error: unknown): boolean {
+  if (error === null) return true;
+  const status = authErrorStatus(error);
+  return status === 401 || status === 403;
+}
+
+function clearLoadUserRetryTimer(): void {
+  if (!loadUserRetryTimer) return;
+  clearTimeout(loadUserRetryTimer);
+  loadUserRetryTimer = null;
+}
+
+function resetLoadUserRetryState(): void {
+  clearLoadUserRetryTimer();
+  loadUserRetryAttempts = 0;
+  authRestoreError = null;
+  authRestoreExhausted = false;
+}
+
+function scheduleLoadUserRetry(tokenSnapshot: string, message: string): void {
+  authRestoreError = message;
+  if (loadUserRetryAttempts >= LOAD_USER_MAX_RETRIES) {
+    authRestoreExhausted = true;
+    return;
+  }
+  if (loadUserRetryTimer) return;
+  loadUserRetryAttempts += 1;
+  loadUserRetryTimer = setTimeout(() => {
+    loadUserRetryTimer = null;
+    if (token === tokenSnapshot && !user) {
+      void loadUser();
+    }
+  }, LOAD_USER_RETRY_DELAY_MS);
+}
+
+export function retryAuthRestore(): void {
+  resetLoadUserRetryState();
+  void loadUser();
+}
+
+export async function signIn(host?: string): Promise<boolean> {
   error = null;
+  signInErrorCode = null;
   isLoading = true;
   try {
     const res = await fetch(`${API_BASE_URL}/api/auth/device/init`, {
@@ -168,20 +286,7 @@ export async function signIn(host?: string): Promise<void> {
         ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ host }) }
         : {}),
     });
-    if (!res.ok) {
-      // Surface the server's actual reason (e.g. "Signing in to <host> requires
-      // a GitHub App or OAuth App client ID") instead of a generic message.
-      // `device/init` returns either a JSON `{ error }` or a plain-text reason.
-      const body = await res.text().catch(() => "");
-      let detail = body.trim();
-      try {
-        const parsed = JSON.parse(body) as { error?: string };
-        if (parsed?.error) detail = parsed.error;
-      } catch {
-        /* plain-text body — use as-is */
-      }
-      throw new Error(detail || `Failed to initiate sign-in (HTTP ${res.status})`);
-    }
+    if (!res.ok) throw await signInHttpError(res);
     const data = (await res.json()) as {
       device_code: string;
       user_code: string;
@@ -198,19 +303,16 @@ export async function signIn(host?: string): Promise<void> {
       ...(host ? { host } : {}),
     };
     try {
-      const { isTauri } = await import("$lib/utils/platform");
-      if (isTauri()) {
-        const { openUrl } = await import("@tauri-apps/plugin-opener");
-        await openUrl(data.verification_uri);
-      } else {
-        window.open(data.verification_uri, "_blank");
-      }
+      const { openUrl } = await import("@tauri-apps/plugin-opener");
+      await openUrl(data.verification_uri);
     } catch {
       // Opening browser is best-effort
     }
     startPolling();
+    return true;
   } catch (e) {
-    error = `Failed to start sign-in: ${e instanceof Error ? e.message : String(e)}`;
+    error = `Failed to start sign-in: ${signInErrorMessage(e)}`;
+    return false;
   } finally {
     isLoading = false;
   }
@@ -231,6 +333,7 @@ async function poll(): Promise<void> {
 
   if (Date.now() > deviceFlow.expiresAt) {
     error = "Sign-in timed out. Please try again.";
+    signInErrorCode = null;
     cancelSignIn();
     return;
   }
@@ -305,6 +408,7 @@ async function poll(): Promise<void> {
           : data.error
             ? `Sign-in failed: ${data.error}`
             : "Sign-in failed. Please try again.";
+    signInErrorCode = null;
     cancelSignIn();
   } catch {
     // Network error — retry after current interval
@@ -321,14 +425,17 @@ export function cancelSignIn(): void {
 
 export function clearError(): void {
   error = null;
+  signInErrorCode = null;
 }
 
 export async function loadUser(): Promise<void> {
   if (!token) return;
+  const tokenSnapshot = token;
   isLoading = true;
   try {
     const session = await authClient.getSession();
     if (session.data?.user) {
+      resetLoadUserRetryState();
       const u = session.data.user;
       user = {
         name: u.name,
@@ -379,11 +486,23 @@ export async function loadUser(): Promise<void> {
       void fetchOrgs();
       void fetchConnectedAccounts();
       void fetchLocalAccounts();
-    } else {
+    } else if (shouldClearTokenAfterSessionMiss(session.error)) {
       clearToken();
+    } else {
+      const message =
+        authErrorMessage(session.error) ??
+        "Could not restore your session. Revv will retry when the local server is available.";
+      error = message;
+      scheduleLoadUserRetry(tokenSnapshot, message);
     }
-  } catch {
-    clearToken();
+  } catch (e) {
+    // A freshly-updated desktop app can open while the restarted local API is
+    // still booting. Treat that as a transient startup failure, not logout:
+    // clearing the persisted token here makes OnboardingGate believe this is a
+    // first-run install until the user closes and reopens the window.
+    const message = signInErrorMessage(e);
+    error = message;
+    scheduleLoadUserRetry(tokenSnapshot, message);
   } finally {
     isLoading = false;
   }
@@ -487,6 +606,8 @@ export async function fetchLocalAccounts(): Promise<void> {
     }
   } catch {
     // best-effort
+  } finally {
+    localAccountsLoaded = true;
   }
 }
 
@@ -497,6 +618,7 @@ if (typeof localStorage !== "undefined") {
 }
 
 export async function switchAccount(userId: string, host?: string): Promise<void> {
+  resetLoadUserRetryState();
   isSwitching = true;
   isLoading = true;
   // Suspend background sync for the duration of the switch — an in-flight
@@ -646,13 +768,8 @@ export function getIsLoading(): boolean {
 /** Bring the app window to the foreground after auth completes. */
 export async function focusWindow(): Promise<void> {
   try {
-    const { isTauri } = await import("$lib/utils/platform");
-    if (isTauri()) {
-      const { getCurrentWindow } = await import("@tauri-apps/api/window");
-      await getCurrentWindow().setFocus();
-    } else {
-      window.focus();
-    }
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    await getCurrentWindow().setFocus();
   } catch {
     // Focus is best-effort
   }

@@ -29,7 +29,6 @@ import {
   getRepositories,
   retryClone,
 } from "$lib/stores/prs.svelte";
-import { isTauri } from "$lib/utils/platform";
 import RepoDeleteConfirm from "./RepoDeleteConfirm.svelte";
 import RepoDialogHeader from "./RepoDialogHeader.svelte";
 import RepoField from "./RepoField.svelte";
@@ -69,7 +68,6 @@ let browsing = $state(false);
 let repoPendingDelete = $state<Repository | null>(null);
 let autoRetries = $state(0);
 let searchEl = $state<HTMLInputElement | null>(null);
-const runningInTauri = isTauri();
 
 // Focus the search on mount (rAF so it lands after the dialog's open motion),
 // avoiding the `autofocus` attribute and its a11y lint.
@@ -244,7 +242,7 @@ function rememberCloneBase(): void {
 }
 
 async function browseForCloneBase(): Promise<void> {
-  if (!runningInTauri || browsing) return;
+  if (browsing) return;
   browsing = true;
   try {
     const { open } = await import("@tauri-apps/plugin-dialog");
@@ -313,7 +311,7 @@ function prCountFor(
 				size="sm"
 				class="h-8 rounded-[var(--radius-card)]"
 				onclick={() => void browseForCloneBase()}
-				disabled={!runningInTauri || browsing}
+				disabled={browsing}
 				title="Browse for folder"
 			>
 				<Folder size={13} weight="fill" />

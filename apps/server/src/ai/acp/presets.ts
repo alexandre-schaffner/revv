@@ -12,18 +12,25 @@ import {
   type AcpAgentId,
   type ContextWindow,
   getAcpAgent,
+  getAcpAgentDefaultModel,
   getAgentCapabilities,
   isAcpAgentId,
   type ThinkingEffort,
 } from "@revv/shared";
 import { serverEnv } from "../../config";
-import { isCommandOnPath } from "../providers/cli-agent";
+import { detectClaudeSubscriptionAuth, isCommandOnPath } from "../providers/cli-agent";
 
 export interface AcpLaunch {
   readonly command: string;
   readonly args: readonly string[];
   /** Extra env vars merged over `process.env` when spawning (Claude Code model/effort/context). */
   readonly env?: Readonly<Record<string, string>>;
+}
+
+export interface AcpProcessLaunch {
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly env: Readonly<Record<string, string>>;
 }
 
 /**
@@ -36,6 +43,14 @@ export interface AcpLaunchConfig {
   readonly model?: string | undefined;
   readonly thinkingEffort?: ThinkingEffort | undefined;
   readonly contextWindow?: ContextWindow | undefined;
+}
+
+export interface AcpProcessEnvOptions {
+  /**
+   * Test seam for the Claude subscription status probe. Production leaves it
+   * undefined so subscription verification is read from the host.
+   */
+  readonly claudeSubscriptionAuth?: boolean | undefined;
 }
 
 // Revv thinking-effort tier → Codex `model_reasoning_effort`. Codex has no
@@ -123,24 +138,79 @@ export function resolveAcpLaunchById(id: AcpAgentId, config: AcpLaunchConfig = {
 }
 
 /**
+ * Build the environment for an ACP subprocess. Claude Code subscription auth is
+ * fragile when a stale `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` is inherited:
+ * Claude Code documents that those credentials can take precedence over a valid
+ * Pro/Max subscription and produce 401s. When subscription credentials are
+ * verified, drop the generic API credentials for the Claude ACP adapter while
+ * preserving `CLAUDE_CODE_OAUTH_TOKEN` and all Revv model/context overrides.
+ */
+function buildAcpProcessEnv(
+  id: AcpAgentId,
+  inheritedEnv: Readonly<Record<string, string | undefined>>,
+  launchEnv: Readonly<Record<string, string>> | undefined,
+  path: string,
+  options: AcpProcessEnvOptions = {},
+): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(inheritedEnv)) {
+    if (value !== undefined) env[key] = value;
+  }
+
+  const hasClaudeSubscriptionAuth =
+    options.claudeSubscriptionAuth ?? (id === "claude-code" && detectClaudeSubscriptionAuth());
+  if (id === "claude-code" && hasClaudeSubscriptionAuth) {
+    delete env.ANTHROPIC_API_KEY;
+    delete env.ANTHROPIC_AUTH_TOKEN;
+  }
+
+  return {
+    ...env,
+    ...(launchEnv ?? {}),
+    PATH: path,
+  };
+}
+
+/**
+ * Resolve a complete subprocess launch for an ACP agent. The connection layer
+ * intentionally calls this instead of composing env itself: all per-adapter
+ * launch quirks stay in this preset module, while `acp-connection` remains a
+ * transport/pool implementation.
+ */
+export function resolveAcpProcessLaunchById(
+  id: AcpAgentId,
+  config: AcpLaunchConfig,
+  inheritedEnv: Readonly<Record<string, string | undefined>>,
+  path: string,
+  options: AcpProcessEnvOptions = {},
+): AcpProcessLaunch {
+  const launch = resolveAcpLaunchById(id, config);
+  return {
+    command: launch.command,
+    args: launch.args,
+    env: buildAcpProcessEnv(id, inheritedEnv, launch.env, path, options),
+  };
+}
+
+/**
  * Pick a model that is actually valid for an agent's catalog. The recap
  * override can pin a different agent than the global one, so the configured
  * `aiModel` (written against the global agent's catalog) may not belong to the
  * resolved agent. Guard against that: if the configured id isn't in the agent's
  * catalog, fall back to that agent's default model. opencode's catalog is
- * dynamic, so its models are taken on trust. Returns `undefined` only when
- * there is no configured model and no static default (caller supplies its own
- * fallback).
+ * dynamic, so configured opencode models are taken on trust.
  */
 export function resolveGenerationModel(
   agent: AcpAgentId,
   configuredModel: string | null | undefined,
 ): string | undefined {
   const caps = getAgentCapabilities(agent);
-  if (caps.models === "dynamic") return configuredModel ?? undefined;
+  if (caps.models === "dynamic") return configuredModel ?? getAcpAgentDefaultModel(agent);
   if (configuredModel && caps.models.some((m) => m.value === configuredModel)) {
     return configuredModel;
   }
+  const defaultModel = getAcpAgentDefaultModel(agent);
+  if (caps.models.some((m) => m.value === defaultModel)) return defaultModel;
   return caps.models[0]?.value;
 }
 

@@ -3,6 +3,7 @@ export type {
   AcpAgentDescriptor,
   AcpAgentIconKey,
   AcpAgentId,
+  AcpAgentKeychainAuth,
   AcpAgentModel,
   AgentStatus,
   AgentStatusReport,
@@ -11,7 +12,9 @@ export {
   ACP_AGENT_IDS,
   ACP_AGENTS,
   getAcpAgent,
+  getAcpAgentDefaultModel,
   getAgentCapabilities,
+  getAgentKeychainAuth,
   isAcpAgentId,
 } from "./acp-agents";
 export type { Activity, ActivityKind, ActivityResult, ToolDiffOutput } from "./activity";
@@ -78,6 +81,7 @@ export {
 } from "./constants";
 export type { ServerEventMessage, WalkthroughEventEnvelope } from "./events";
 export * from "./events";
+export { GITHUB_CLIENT_ID_HINT, isLikelyGitHubClientId } from "./github-client-id";
 export { guessImageContentType, isImagePath } from "./images";
 export { isMaintainerLogin, MAINTAINER_LOGINS } from "./maintainers";
 export { detectMentionTrigger, extractMentionTokens, type MentionTrigger } from "./mentions";

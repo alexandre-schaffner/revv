@@ -33,6 +33,23 @@ const PHASE_MESSAGES = {
   rating: { phase: "rating" as const, message: "Scoring the PR across 9 axes..." },
 } satisfies Record<string, { phase: WalkthroughLifecyclePhase; message: string }>;
 
+function isMeaningfulProgressEvent(event: WalkthroughStreamEvent): boolean {
+  switch (event.type) {
+    case "summary":
+    case "sentiment":
+    case "semantic-step":
+    case "block":
+    case "issue":
+    case "rating":
+    case "phase:advanced":
+    case "done":
+    case "error":
+      return true;
+    default:
+      return false;
+  }
+}
+
 // ── Guard wrapper ───────────────────────────────────────────────────────────
 
 /**
@@ -158,26 +175,22 @@ export function guardWalkthroughStream(
 
         yield event;
 
-        // Track exploration-only stalls. Exploration events (tool_use / file reads)
-        // reset the inactivity timer above, so they can prevent it from ever firing.
-        // If the model keeps reading files but never produces meaningful output we
-        // need a separate check: abort if only exploration events have arrived for
-        // longer than explorationStallMs.
-        if (event.type === "exploration") {
-          if (Date.now() - lastProgressTime > explorationStallMs) {
-            debug(label, "Exploration stall — no progress for", explorationStallMs, "ms");
-            yield {
-              type: "error" as const,
-              data: {
-                code: "ExplorationStall",
-                message: `Walkthrough stalled — the model explored files for ${Math.round(explorationStallMs / 60_000)} minutes without producing output. Try regenerating.`,
-              },
-            };
-            return;
-          }
-        } else {
-          // Any non-exploration event counts as meaningful progress
+        // Track stalls independently from transport liveness. Exploration,
+        // reasoning, usage, and phase heartbeat events reset the inactivity
+        // timer above, but they do not prove the report advanced. Without this
+        // distinction a provider can sit on "Reading files..." indefinitely.
+        if (isMeaningfulProgressEvent(event)) {
           lastProgressTime = Date.now();
+        } else if (Date.now() - lastProgressTime > explorationStallMs) {
+          debug(label, "Exploration stall — no report progress for", explorationStallMs, "ms");
+          yield {
+            type: "error" as const,
+            data: {
+              code: "ExplorationStall",
+              message: `Walkthrough stalled — the model explored files for ${Math.round(explorationStallMs / 60_000)} minutes without producing output. Try regenerating.`,
+            },
+          };
+          return;
         }
 
         // Terminal event received — we're done

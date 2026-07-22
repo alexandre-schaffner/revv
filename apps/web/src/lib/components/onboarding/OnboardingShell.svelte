@@ -10,6 +10,7 @@ import {
   setThemePreference,
   type ThemePreference,
 } from "$lib/stores/theme.svelte";
+import RevvBrand from "./RevvBrand.svelte";
 
 /**
  * Cinematic frame for the onboarding flow. Calm, dark, type-led: a
@@ -114,10 +115,7 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 	<!-- Header: tiny brand glyph + step counter. Persistent across all
 	     steps — the eye anchors here rather than chasing a morphing logo. -->
 	<header class="header" data-tauri-drag-region>
-		<div class="header-left">
-			<img src="/icon.svg" alt="Revv" class="brand-glyph" />
-			<span class="brand-word">Revv</span>
-		</div>
+		<RevvBrand variant="onboarding" />
 		<div class="header-right">
 			<Dotmatrix variant={spinnerVariant} size="small" />
 			<span class="page-counter">
@@ -296,28 +294,6 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 		padding: 28px 36px;
 		z-index: 2;
 		animation: fade-up var(--duration-ceremonial-slow) var(--ease-out-expo) backwards;
-	}
-
-	.header-left {
-		display: flex;
-		align-items: center;
-		gap: 10px;
-	}
-
-	.brand-glyph {
-		width: 22px;
-		height: 22px;
-		border-radius: 5px;
-		display: block;
-	}
-
-	.brand-word {
-		font-family: 'Newsreader', Georgia, serif;
-		font-style: italic;
-		font-size: 17px;
-		font-weight: 500;
-		letter-spacing: 0.01em;
-		color: var(--ob-text-italic);
 	}
 
 	.header-right {

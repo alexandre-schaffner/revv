@@ -378,9 +378,31 @@ export async function fetchPrs(): Promise<void> {
   }
 }
 
+/**
+ * Serialize the active creator/team filter into the `authors` query param the
+ * archived endpoint expects (comma-separated logins). Returns `undefined` when
+ * no filter is active so the server applies no author restriction. Keeps
+ * `selectedAuthorLogins` the single source of truth for both the open and
+ * closed lists.
+ */
+function archivedAuthorsParam(): string | undefined {
+  if (selectedAuthorLogins.size === 0) return undefined;
+  return [...selectedAuthorLogins].join(",");
+}
+
+// Guards against out-of-order archived reloads: rapid filter toggles can fire
+// overlapping `fetchArchivedPrs` calls, and only the latest one's result should
+// win. Each call captures the token; a stale response is discarded.
+let archivedFetchToken = 0;
+
 export async function fetchArchivedPrs(): Promise<void> {
+  const token = ++archivedFetchToken;
   try {
-    const { data } = await api.api.prs.archived.get({ query: {} });
+    const authors = archivedAuthorsParam();
+    const { data } = await api.api.prs.archived.get({
+      query: authors === undefined ? {} : { authors },
+    });
+    if (token !== archivedFetchToken) return; // superseded by a newer reload
     if (data) {
       const page = data as { prs: PullRequest[]; nextCursor: string | null };
       archivedPrs = page.prs;
@@ -401,10 +423,20 @@ export async function fetchMoreArchived(): Promise<void> {
   if (archivedNextCursor === null) return;
   if (archivedLoadingMore) return;
   archivedLoadingMore = true;
+  // Capture the current filter generation (do not bump it — this is a
+  // continuation of the same feed, not a new reload). If a `fetchArchivedPrs`
+  // filter reload lands mid-flight, discard this page: appending it would mix
+  // stale-filter rows in and clobber the new cursor.
+  const token = archivedFetchToken;
   try {
+    const authors = archivedAuthorsParam();
     const { data } = await api.api.prs.archived.get({
-      query: { cursor: archivedNextCursor },
+      query:
+        authors === undefined
+          ? { cursor: archivedNextCursor }
+          : { cursor: archivedNextCursor, authors },
     });
+    if (token !== archivedFetchToken) return; // superseded by a filter reload
     if (data) {
       const page = data as { prs: PullRequest[]; nextCursor: string | null };
       // Deduplicate against existing rows in case a `pr:archived` patch
@@ -503,7 +535,12 @@ export function onPrArchived(data: {
     if (!existing) return;
     const archived = { ...existing, status: data.status, closedAt: data.closedAt };
     pullRequests = [...pullRequests.slice(0, openIdx), ...pullRequests.slice(openIdx + 1)];
-    archivedPrs = [archived, ...archivedPrs];
+    // Respect the active creator/team filter: the archived list is a
+    // server-filtered view, so a newly-closed PR whose author is filtered out
+    // must not pop into it. It's already gone from the open list above.
+    if (selectedAuthorLogins.size === 0 || selectedAuthorLogins.has(archived.authorLogin)) {
+      archivedPrs = [archived, ...archivedPrs];
+    }
   }
   // PR not known locally — wait for the `prs:updated` reconcile.
 }
@@ -547,6 +584,7 @@ export function toggleAuthorFilter(login: string): void {
   if (next.has(login)) next.delete(login);
   else next.add(login);
   selectedAuthorLogins = next;
+  void fetchArchivedPrs();
 }
 
 /**
@@ -563,11 +601,13 @@ export function setAuthorFilters(logins: readonly string[], selected: boolean): 
     else next.delete(login);
   }
   selectedAuthorLogins = next;
+  void fetchArchivedPrs();
 }
 
 export function clearAuthorFilters(): void {
   if (selectedAuthorLogins.size === 0) return;
   selectedAuthorLogins = new Set();
+  void fetchArchivedPrs();
 }
 
 export function getTeamsForOrg(owner: string): Team[] {
@@ -730,20 +770,21 @@ export async function markPrReadyForReview(prId: string): Promise<void> {
 }
 
 /**
- * Restore a PR from the archive back into the open list with prior status
- * and closedAt. Used by the `closePr` / `mergePr` rollback path — the
- * reverse of `onPrArchived`'s forward move. Touches only the one PR so
- * concurrent `prs:updated` reshuffles of other entries are preserved.
+ * Restore a PR back into the open list from the caller's pre-close snapshot.
+ * Used by the `closePr` / `mergePr` rollback path — the reverse of
+ * `onPrArchived`'s forward move.
+ *
+ * Restores from the passed snapshot rather than looking the PR up in
+ * `archivedPrs`, because the forward move may have skipped adding it there:
+ * when an author filter is active, `onPrArchived` filters out non-matching
+ * PRs, so a lookup would find nothing and the PR would be lost from both
+ * lists. Idempotent — no-ops the open-list insert if a concurrent
+ * `prs:updated` reconcile already restored it.
  */
-function restorePrFromArchive(
-  prId: string,
-  prevStatus: PullRequest["status"],
-  prevClosedAt: string | null,
-): void {
-  const archived = archivedPrs.find((p) => p.id === prId);
-  if (!archived) return;
-  archivedPrs = archivedPrs.filter((p) => p.id !== prId);
-  pullRequests = [{ ...archived, status: prevStatus, closedAt: prevClosedAt }, ...pullRequests];
+function restorePrFromArchive(snapshot: PullRequest): void {
+  archivedPrs = archivedPrs.filter((p) => p.id !== snapshot.id);
+  if (pullRequests.some((p) => p.id === snapshot.id)) return;
+  pullRequests = [snapshot, ...pullRequests];
 }
 
 export async function closePr(prId: string): Promise<void> {
@@ -758,8 +799,9 @@ export async function closePr(prId: string): Promise<void> {
     return;
   }
 
-  const prevStatus = pr.status;
-  const prevClosedAt = pr.closedAt;
+  // Snapshot the pre-close PR for rollback. `onPrArchived` never mutates this
+  // object (it builds a new one), so it stays a faithful `status:"open"` copy.
+  const snapshot = pr;
 
   onPrArchived({
     prId,
@@ -772,7 +814,7 @@ export async function closePr(prId: string): Promise<void> {
     const { error } = await api.api.prs({ id: prId }).close.post();
     if (error) throw new Error(`HTTP ${error.status}`);
   } catch (e) {
-    restorePrFromArchive(prId, prevStatus, prevClosedAt);
+    restorePrFromArchive(snapshot);
     toast.error(e instanceof Error ? e.message : "Failed to close PR");
     throw e;
   }
@@ -802,8 +844,8 @@ export async function mergePr(prId: string, mergeMethod: MergeMethod): Promise<v
     return;
   }
 
-  const prevStatus = pr.status;
-  const prevClosedAt = pr.closedAt;
+  // Snapshot the pre-merge PR for rollback (see closePr for why this is safe).
+  const snapshot = pr;
 
   onPrArchived({
     prId,
@@ -817,7 +859,7 @@ export async function mergePr(prId: string, mergeMethod: MergeMethod): Promise<v
     if (error) throw new Error(`HTTP ${error.status}`);
     toast.success("Pull request merged successfully");
   } catch (e) {
-    restorePrFromArchive(prId, prevStatus, prevClosedAt);
+    restorePrFromArchive(snapshot);
     toast.error(e instanceof Error ? e.message : "Failed to merge pull request");
     throw e;
   }

@@ -121,6 +121,9 @@ if (-not $libLoaded) {
 # Canonical paths
 $REVV_SUPPORT_DIR = $env:REVV_SUPPORT_DIR ?: "$env:APPDATA\Revv"
 $REVV_AUTH_KEY    = $env:REVV_AUTH_KEY    ?: "$env:APPDATA\Revv\auth.key"
+# Canonical DB path — mirrors the server's resolveDbPath (<appDataDir>\revv.db),
+# NOT the cwd/INSTALL_DIR. See apps/server/src/db/index.ts.
+$REVV_DB_PATH     = $env:REVV_DB_PATH     ?: "$REVV_SUPPORT_DIR\revv.db"
 
 function Find-App {
     foreach ($p in $script:APP_CANDIDATES) {
@@ -177,7 +180,7 @@ function Cmd-Path {
     Write-Host "  Helper lib:      $env:USERPROFILE\.local\share\revv\common.ps1"
     Write-Host ''
     Write-Host "${BOLD}Data${RESET}"
-    Write-Host "  Database:        $INSTALL_DIR\revv.db"
+    Write-Host "  Database:        $REVV_DB_PATH"
     Write-Host "  Git clones:      $env:USERPROFILE\.revv\repos\"
     Write-Host "  Settings:        $env:USERPROFILE\.revv\settings.json"
     Write-Host "  Auth key:        $REVV_AUTH_KEY"
@@ -433,7 +436,7 @@ function Cmd-Uninstall {
     $revvDataDir = "$env:USERPROFILE\.revv"
     $tauriAppSupport = "$env:LOCALAPPDATA\Revv"
 
-    $prodDb = "$INSTALL_DIR\revv.db"
+    $prodDb = "$REVV_DB_PATH"
 
     Write-Host @"
 

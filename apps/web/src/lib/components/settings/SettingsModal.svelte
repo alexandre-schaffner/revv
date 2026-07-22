@@ -1,5 +1,12 @@
 <script lang="ts">
-import { ACP_AGENTS, type RecapAgentChoice, type Repository } from "@revv/shared";
+import {
+  ACP_AGENTS,
+  type AgentStatus,
+  type AgentStatusReport,
+  getAgentKeychainAuth,
+  type RecapAgentChoice,
+  type Repository,
+} from "@revv/shared";
 import { Dialog as DialogPrimitive } from "bits-ui";
 import RotateCcw from "phosphor-svelte/lib/ArrowCounterClockwise";
 import ExternalLink from "phosphor-svelte/lib/ArrowSquareOut";
@@ -29,7 +36,11 @@ import { Switch } from "$lib/components/ui/switch";
 import { getUser, removeAccount, resetOnboarding, signOut } from "$lib/stores/auth.svelte";
 import { deleteRepo, getRepositories } from "$lib/stores/prs.svelte";
 import {
+  type AgentKeychainResult,
+  checkAgentKeychain,
+  fetchAgentStatus,
   fetchModels,
+  getAgentStatus,
   getAvailableModels,
   getSettings,
   updateSettings,
@@ -39,7 +50,6 @@ import {
   setThemePreference,
   type ThemePreference,
 } from "$lib/stores/theme.svelte";
-import { isTauri } from "$lib/utils/platform";
 import { authHeaders } from "$lib/utils/session-token";
 import UpdatesSection from "./UpdatesSection.svelte";
 import "./settings-layout.css";
@@ -66,7 +76,6 @@ interface NavItem {
   id: SectionId;
   label: string;
   icon: typeof User;
-  tauriOnly?: boolean;
 }
 
 const navItems: NavItem[] = [
@@ -76,7 +85,7 @@ const navItems: NavItem[] = [
   { id: "cache", label: "Team Cache", icon: Cloud },
   { id: "preferences", label: "Preferences", icon: SlidersHorizontal },
   { id: "onboarding", label: "Onboarding", icon: RotateCcw },
-  { id: "updates", label: "Updates", icon: Download, tauriOnly: true },
+  { id: "updates", label: "Updates", icon: Download },
   { id: "danger", label: "Danger Zone", icon: TriangleAlert },
 ];
 
@@ -219,9 +228,6 @@ const recapAgentOptions: { value: RecapAgentChoice; label: string }[] = [
   ...ACP_AGENTS.map((a) => ({ value: a.id, label: a.label })),
 ];
 
-const runningInTauri = isTauri();
-const visibleNavItems = $derived(navItems.filter((n) => !n.tauriOnly || runningInTauri));
-
 let activeSection = $state<SectionId>("account");
 let contentEl = $state<HTMLElement | null>(null);
 
@@ -229,7 +235,7 @@ let contentEl = $state<HTMLElement | null>(null);
 $effect(() => {
   if (!contentEl || !open) return;
 
-  const sectionEls = visibleNavItems
+  const sectionEls = navItems
     .map((n) => contentEl?.querySelector<HTMLElement>(`#section-${n.id}`))
     .filter((el): el is HTMLElement => el !== null);
 
@@ -297,10 +303,14 @@ const intervalOptions = [
 // ── AI Configuration ──────────────────────────────────────────────────────
 let aiConfigured = $state(false);
 let aiStatusLoading = $state(true);
+let providerStatus = $state<AgentStatusReport | null>(getAgentStatus());
+let providerStatusLoading = $state(false);
 // Agent / review-model / context-window / thinking-effort are configured from
 // the chat bottom bar (capability-driven per the selected ACP agent); the
 // settings modal only keeps the low-cost suggestions model + limits.
 let aiAgent = $derived(getSettings()?.aiAgent ?? "opencode");
+let currentAgent = $derived(ACP_AGENTS.find((a) => a.id === aiAgent));
+let currentAgentStatus = $derived(providerStatus?.agents[aiAgent] ?? null);
 let modelOptions = $derived(getAvailableModels(aiAgent));
 let currentSuggestionsModel = $derived(getSettings()?.aiSuggestionsModel ?? "");
 let currentSuggestionsModelLabel = $derived(
@@ -310,10 +320,33 @@ let currentSuggestionsModelLabel = $derived(
 $effect(() => {
   if (open) {
     fetchAiStatus();
+    void refreshProviderStatus();
     // Populate the suggestions-model dropdown for the current agent (boot
     // prefetch usually covers this; this backstops a cold cache).
     void fetchModels(aiAgent);
   }
+});
+
+// ── Agent keychain access check (Solution B: guide, don't store) ───────────
+// Shown only for keychain-backed agents (registry-declared); today that's
+// Claude Code, but any provider that adds `keychainAuth` surfaces here.
+let agentKeychainAuth = $derived(getAgentKeychainAuth(aiAgent));
+let keychainChecking = $state(false);
+let keychainResult = $state<AgentKeychainResult | null>(null);
+
+async function handleCheckAgentKeychain(): Promise<void> {
+  keychainChecking = true;
+  try {
+    keychainResult = await checkAgentKeychain(aiAgent);
+  } finally {
+    keychainChecking = false;
+  }
+}
+
+// Drop a stale result when the selected agent changes.
+$effect(() => {
+  void aiAgent;
+  keychainResult = null;
 });
 
 async function fetchAiStatus(): Promise<void> {
@@ -331,6 +364,31 @@ async function fetchAiStatus(): Promise<void> {
   } finally {
     aiStatusLoading = false;
   }
+}
+
+async function refreshProviderStatus(): Promise<void> {
+  providerStatusLoading = true;
+  try {
+    providerStatus = await fetchAgentStatus();
+  } finally {
+    providerStatusLoading = false;
+  }
+}
+
+function providerReady(s: AgentStatus | null | undefined): boolean {
+  return !!s?.installed && s.authed;
+}
+
+function providerStatusText(s: AgentStatus | null | undefined): string {
+  if (!s) return "Not checked";
+  if (!s.installed) return "Agent not installed";
+  if (!s.authed) return "Needs sign-in";
+  return s.authLabel;
+}
+
+function providerStateLabel(s: AgentStatus | null | undefined): string {
+  if (!providerReady(s)) return "Action needed";
+  return s?.verified ? "Connected" : "Configured";
 }
 
 // ── Max turns ─────────────────────────────────────────────────────────────
@@ -434,7 +492,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 					<span class="settings-title">Settings</span>
 				</div>
 				<ul class="settings-nav" role="list">
-					{#each visibleNavItems as item (item.id)}
+					{#each navItems as item (item.id)}
 						<li>
 							<button
 								class="settings-nav-item"
@@ -536,6 +594,51 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 			<section id="section-ai" class="settings-section">
 				<h2 class="section-head-title">AI Configuration</h2>
 
+				<div class="settings-subgroup">
+					<h3 class="settings-subgroup-heading">Provider</h3>
+
+					<div class="settings-row">
+						<div class="settings-row-info">
+							<p class="settings-row-label">{currentAgent?.label ?? 'Agent'}</p>
+							<p class="settings-row-hint">
+								{#if providerStatusLoading}
+									Checking provider connection…
+								{:else}
+									{providerStatusText(currentAgentStatus)}
+								{/if}
+							</p>
+							{#if currentAgentStatus?.authWarning}
+								<p class="provider-warning">
+									<TriangleAlert size={12} weight="fill" />
+									<span>{currentAgentStatus.authWarning}</span>
+								</p>
+							{/if}
+						</div>
+						<div class="provider-status-action">
+							<div class="status-line">
+								{#if providerStatusLoading}
+									<Loader2 size={11} weight="regular" class="motion-essential-spin text-text-muted" />
+									<span class="status-line-text">Checking</span>
+								{:else if providerReady(currentAgentStatus)}
+									<span
+										class="status-line-dot"
+										class:status-line-dot--success={currentAgentStatus?.verified}
+										class:status-line-dot--warning={!currentAgentStatus?.verified}
+										aria-hidden="true"
+									></span>
+									<span class="status-line-text">{providerStateLabel(currentAgentStatus)}</span>
+								{:else}
+									<span class="status-line-dot status-line-dot--warning" aria-hidden="true"></span>
+									<span class="status-line-text">Action needed</span>
+								{/if}
+							</div>
+							<Button variant="ghost" size="sm" onclick={refreshProviderStatus} disabled={providerStatusLoading} class="text-xs">
+								Check again
+							</Button>
+						</div>
+					</div>
+				</div>
+
 				<!-- Suggestions model (agent, review model, context window, and thinking
 				     effort are configured from the chat bottom bar). -->
 				<div class="settings-subgroup">
@@ -566,6 +669,55 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 						</Select.Root>
 					</div>
 				</div>
+
+				<!-- Keychain access (only for keychain-backed agents, e.g. Claude Code) -->
+				{#if agentKeychainAuth}
+					<div class="settings-subgroup">
+						<h3 class="settings-subgroup-heading">Keychain access</h3>
+
+						<div class="settings-row">
+							<div class="settings-row-info">
+								<p class="settings-row-label">Background access</p>
+								<p class="settings-row-hint">
+									Report generation runs in Revv's background service, which needs permission to
+									read your {currentAgent?.label ?? 'agent'} login from the macOS Keychain. Check
+									whether it's allowed.
+								</p>
+							</div>
+							<Button
+								size="sm"
+								variant="secondary"
+								class="text-xs"
+								disabled={keychainChecking}
+								onclick={handleCheckAgentKeychain}
+							>
+								{#if keychainChecking}
+									<Loader2 size={12} weight="regular" class="motion-essential-spin" />
+									Checking…
+								{:else}
+									Check access
+								{/if}
+							</Button>
+						</div>
+
+						{#if keychainResult}
+							<div class="status-line">
+								{#if keychainResult.readable === true}
+									<span class="status-line-dot status-line-dot--success" aria-hidden="true"></span>
+									<span class="status-line-text"
+										>Revv can read your {currentAgent?.label ?? 'agent'} login — you're set.</span
+									>
+								{:else if keychainResult.readable === false}
+									<span class="status-line-dot status-line-dot--warning" aria-hidden="true"></span>
+									<span class="status-line-text">{keychainResult.remediation}</span>
+								{:else}
+									<span class="status-line-dot status-line-dot--muted" aria-hidden="true"></span>
+									<span class="status-line-text">Check unavailable on this platform.</span>
+								{/if}
+							</div>
+						{/if}
+					</div>
+				{/if}
 
 				<!-- Limits -->
 				<div class="settings-subgroup">
@@ -1011,10 +1163,8 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 				</div>
 			</section>
 
-			<!-- Updates (Tauri only) -->
-			{#if runningInTauri}
-				<UpdatesSection />
-			{/if}
+			<!-- Updates -->
+			<UpdatesSection />
 
 		<!-- Danger Zone -->
 		{#if getUser()}
@@ -1394,6 +1544,24 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 
 	.status-line-dot--warning {
 		background: var(--color-warning);
+	}
+
+	.provider-status-action {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		flex-shrink: 0;
+	}
+
+	.provider-warning {
+		margin-top: 6px;
+		display: flex;
+		align-items: flex-start;
+		gap: 6px;
+		max-width: 440px;
+		font-size: 11px;
+		line-height: 1.45;
+		color: var(--color-warning);
 	}
 
 	/* ── Probe result (test connection feedback) ── */

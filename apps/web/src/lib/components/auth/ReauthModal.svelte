@@ -1,4 +1,5 @@
 <script lang="ts">
+import { GITHUB_CLIENT_ID_HINT, isLikelyGitHubClientId } from "@revv/shared";
 import { GithubLogo, WarningCircle } from "phosphor-svelte";
 import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
 import {
@@ -7,15 +8,31 @@ import {
   getError,
   getIsLoading,
   getReauthRequired,
+  getSignInErrorCode,
   signIn,
 } from "$lib/stores/auth.svelte";
+import { setGithubConfigStrict } from "$lib/stores/settings.svelte";
 
 const reauth = $derived(getReauthRequired());
 const deviceFlow = $derived(getDeviceFlow());
 const error = $derived(getError());
+const signInErrorCode = $derived(getSignInErrorCode());
 const isLoading = $derived(getIsLoading());
 
 let copied = $state(false);
+let clientId = $state("");
+let clientIdError = $state<string | null>(null);
+let isSavingClientId = $state(false);
+
+const needsClientId = $derived(
+  Boolean(
+    reauth?.host &&
+      reauth.host !== "github.com" &&
+      (signInErrorCode === "missing_github_client_id" ||
+        signInErrorCode === "invalid_github_client_id" ||
+        clientIdError),
+  ),
+);
 
 async function copyCode(): Promise<void> {
   if (!deviceFlow) return;
@@ -28,6 +45,31 @@ function startReauth(): void {
   // Re-auth against the same GitHub host the expired account belongs to so
   // GHE accounts land on the right instance.
   void signIn(reauth?.host ?? undefined);
+}
+
+async function saveClientIdAndRetry(): Promise<void> {
+  const host = reauth?.host;
+  const trimmed = clientId.trim();
+  if (!host || !trimmed || isSavingClientId) return;
+
+  clientIdError = null;
+  if (!isLikelyGitHubClientId(trimmed)) {
+    clientIdError = GITHUB_CLIENT_ID_HINT;
+    return;
+  }
+
+  isSavingClientId = true;
+  try {
+    await setGithubConfigStrict(host, trimmed);
+    const started = await signIn(host);
+    if (!started) {
+      clientIdError = getError() ?? "Failed to start sign-in. Check the client ID and try again.";
+    }
+  } catch (e) {
+    clientIdError = e instanceof Error ? e.message : String(e);
+  } finally {
+    isSavingClientId = false;
+  }
 }
 </script>
 
@@ -96,17 +138,51 @@ function startReauth(): void {
 					</button>
 				</div>
 			{:else}
-				{#if error}
+				{#if error && !clientIdError}
 					<p class="text-sm text-danger">{error}</p>
 				{/if}
-				<button
-					class="flex cursor-pointer items-center gap-2 rounded-lg border border-border bg-bg-tertiary px-4 py-2.5 text-sm font-medium text-text-primary transition-colors hover:bg-bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
-					onclick={startReauth}
-					disabled={isLoading}
-				>
-					<GithubLogo size={18} weight="fill" />
-					Sign in again
-				</button>
+				{#if needsClientId}
+					<form
+						class="flex w-full flex-col gap-3 text-left"
+						onsubmit={(e) => {
+							e.preventDefault();
+							void saveClientIdAndRetry();
+						}}
+					>
+						<label class="flex flex-col gap-1.5 text-xs font-medium text-text-secondary">
+							GitHub App client ID for {reauth.host}
+							<input
+								class="h-10 rounded-lg border border-border bg-bg-tertiary px-3 text-sm text-text-primary outline-none focus:border-accent"
+								type="text"
+								autocapitalize="off"
+								autocorrect="off"
+								spellcheck="false"
+								placeholder="Iv23xxxxxxxxxxxxxxxx"
+								bind:value={clientId}
+							/>
+						</label>
+						{#if clientIdError}
+							<p class="text-sm text-danger">{clientIdError}</p>
+						{/if}
+						<button
+							class="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-border bg-bg-tertiary px-4 py-2.5 text-sm font-medium text-text-primary transition-colors hover:bg-bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
+							type="submit"
+							disabled={isSavingClientId || clientId.trim().length === 0}
+						>
+							<GithubLogo size={18} weight="fill" />
+							Save and sign in
+						</button>
+					</form>
+				{:else}
+					<button
+						class="flex cursor-pointer items-center gap-2 rounded-lg border border-border bg-bg-tertiary px-4 py-2.5 text-sm font-medium text-text-primary transition-colors hover:bg-bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
+						onclick={startReauth}
+						disabled={isLoading}
+					>
+						<GithubLogo size={18} weight="fill" />
+						Sign in again
+					</button>
+				{/if}
 			{/if}
 		</div>
 	</div>

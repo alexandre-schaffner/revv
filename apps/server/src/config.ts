@@ -23,8 +23,20 @@ import { Config, Effect } from "effect";
  */
 export const ServerConfig = Config.all({
   port: Config.integer("PORT").pipe(Config.withDefault(API_PORT)),
+  // Bind interface. Loopback-only by default so the API is unreachable off-box.
+  // `REVV_HOST` is the escape hatch for self-hosting; a non-loopback value also
+  // disables the loopback request guard (an explicit opt-in to off-box exposure).
+  host: Config.string("REVV_HOST").pipe(Config.withDefault("127.0.0.1")),
   channel: Config.string("REVV_CHANNEL").pipe(Config.withDefault(DEFAULT_APP_CHANNEL)),
-  dbPath: Config.string("REVV_DB_PATH").pipe(Config.withDefault("./revv.db")),
+  // SQLite location. Empty (the default) means "auto-resolve to the per-user
+  // app-data dir" (`<appDataDir>/revv.db`) — the same durable tree as
+  // `auth.key` and the secret store, so the DB survives app updates. The old
+  // cwd-relative `./revv.db` default parked the file inside the launchd
+  // WorkingDirectory / git checkout and orphaned it on every update, forcing a
+  // full re-onboarding. `REVV_DB_PATH` overrides for dev/CI/self-hosting.
+  // Resolution lives in `db/index.ts` (`resolveDbPath`) to avoid a config↔paths
+  // import cycle.
+  dbPath: Config.string("REVV_DB_PATH").pipe(Config.withDefault("")),
   // Build edition. `oss` (default) authenticates via the classic OAuth App
   // with the coarse `repo` scope, bring-your-own-credentials, for self-hosting.
   // `pro` authenticates via the Revv GitHub App (fine-grained permissions,

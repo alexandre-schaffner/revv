@@ -211,7 +211,6 @@ if ($Mode -eq 'dev') {
     Write-Host "  ${_BOLD}Start developing:${_RESET}"
     Write-Host "    ${_DIM}$${_RESET} make dev             ${_DIM}# all services (web, server, Tauri)${_RESET}"
     Write-Host "    ${_DIM}$${_RESET} make dev-server      ${_DIM}# API only (port 45678)${_RESET}"
-    Write-Host "    ${_DIM}$${_RESET} make dev-web         ${_DIM}# frontend only (port 5173)${_RESET}"
     Write-Host ''
     Write-Host '  On first server start, Revv generates an auth key at:'
     Set-RevvPaths

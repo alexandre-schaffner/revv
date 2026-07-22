@@ -1,7 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import { ACP_AGENTS, getAcpAgent } from "@revv/shared";
 import { serverEnv } from "../../config";
-import { resolveAcpLaunchById, resolveGenerationModel } from "./presets";
+import { ACP_LOGIN_COMMAND } from "../providers/cli-agent";
+import {
+  resolveAcpLaunchById,
+  resolveAcpProcessLaunchById,
+  resolveGenerationModel,
+} from "./presets";
 
 describe("ACP agent registry", () => {
   it("is the single source of truth — adding an agent is one registry entry", () => {
@@ -19,9 +24,15 @@ describe("ACP agent registry", () => {
       expect(typeof def.command).toBe("string");
       expect(Array.isArray(def.args)).toBe(true);
       expect(def.capabilities).toBeDefined();
+      expect(typeof def.capabilities.defaultModel).toBe("string");
       expect(def.capabilities.models === "dynamic" || Array.isArray(def.capabilities.models)).toBe(
         true,
       );
+      if (def.capabilities.models !== "dynamic") {
+        expect(
+          def.capabilities.models.some((model) => model.value === def.capabilities.defaultModel),
+        ).toBe(true);
+      }
     }
   });
 });
@@ -88,12 +99,53 @@ describe("ACP launch presets", () => {
     ).toBe("true");
   });
 
+  it("strips stale Anthropic API credentials when Claude subscription auth exists", () => {
+    const launch = resolveAcpProcessLaunchById(
+      "claude-code",
+      { model: "claude-sonnet-4-6" },
+      {
+        ANTHROPIC_API_KEY: "stale-api-key",
+        ANTHROPIC_AUTH_TOKEN: "stale-bearer",
+        CLAUDE_CODE_OAUTH_TOKEN: "subscription-token",
+        KEEP_ME: "yes",
+      },
+      "/usr/bin",
+      { claudeSubscriptionAuth: true },
+    );
+
+    expect(launch.command).toBe("npx");
+    expect(launch.env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(launch.env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+    expect(launch.env.CLAUDE_CODE_OAUTH_TOKEN).toBe("subscription-token");
+    expect(launch.env.ANTHROPIC_MODEL).toBe("claude-sonnet-4-6");
+    expect(launch.env.KEEP_ME).toBe("yes");
+    expect(launch.env.PATH).toBe("/usr/bin");
+  });
+
+  it("keeps Anthropic API credentials when no Claude subscription auth exists", () => {
+    const launch = resolveAcpProcessLaunchById(
+      "claude-code",
+      {},
+      { ANTHROPIC_API_KEY: "api-key" },
+      "/usr/bin",
+      { claudeSubscriptionAuth: false },
+    );
+
+    expect(launch.env.ANTHROPIC_API_KEY).toBe("api-key");
+  });
+
   it("passes the selected model to opencode acp via --model", () => {
     if (serverEnv.acpCommand) return;
     expect(resolveAcpLaunchById("opencode", { model: "anthropic/claude-sonnet-4-6" })).toEqual({
       command: "opencode",
       args: ["acp", "--model", "anthropic/claude-sonnet-4-6"],
     });
+  });
+});
+
+describe("ACP login commands", () => {
+  it("uses Claude's subscription login path", () => {
+    expect(ACP_LOGIN_COMMAND["claude-code"]).toEqual(["claude", "auth", "login", "--claudeai"]);
   });
 });
 
@@ -105,12 +157,13 @@ describe("resolveGenerationModel", () => {
 
   it("falls back to the agent default when the model belongs to another agent", () => {
     // A Cursor model id left in the shared setting must not reach Claude Code.
-    expect(resolveGenerationModel("claude-code", "sonnet-4.6")).toBe("claude-opus-4-8");
+    expect(resolveGenerationModel("claude-code", "sonnet-4.6")).toBe("claude-sonnet-5");
   });
 
   it("trusts opencode's dynamic catalog", () => {
     expect(resolveGenerationModel("opencode", "some-provider/some-model")).toBe(
       "some-provider/some-model",
     );
+    expect(resolveGenerationModel("opencode", null)).toBe("opencode/big-pickle");
   });
 });

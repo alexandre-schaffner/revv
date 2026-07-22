@@ -9,6 +9,7 @@
       "entry": [
         "src/routes/**/+{page,layout,server,error,page.load,layout.load}.svelte",
         "src/routes/**/+{page,layout}.ts",
+        "src/**/*.test.ts",
         "src/app.html",
         "src/app.d.ts",
         "src/hooks.server.ts",
@@ -34,13 +35,6 @@
     },
     "packages/shared": {
       "entry": ["src/index.ts"]
-    },
-    "packages/ui": {
-      "entry": ["src/**/*.{ts,tsx}"],
-      "ignoreDependencies": ["@radix-ui/react-popover", "class-variance-authority"]
-    },
-    "packages/app": {
-      "entry": ["src/root.tsx", "src/routes/**/*.{ts,tsx}", "vite.config.ts", "app.config.ts"]
     }
   },
   "ignore": [

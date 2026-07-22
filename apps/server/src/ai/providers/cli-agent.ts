@@ -41,6 +41,10 @@ import { CLI_CACHE_TTL_MS } from "../../constants";
 // filesystem probe.
 
 type CliAgent = "opencode" | "claude" | "codex";
+type AgentAuthStatus = Pick<
+  AgentStatus,
+  "authed" | "verified" | "authSource" | "authLabel" | "authWarning"
+>;
 
 let cachedPath: { value: string; expiresAt: number } | null = null;
 
@@ -98,6 +102,33 @@ function pinnedBin(agent: CliAgent): string {
   return pinned && existsSync(pinned) ? pinned : "";
 }
 
+function statusCommandEnv(omit: readonly string[] = []): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    PATH: resolveUserPath(),
+  };
+  for (const key of omit) delete env[key];
+  return env;
+}
+
+function commandStatusOk(
+  command: string,
+  args: readonly string[],
+  env = statusCommandEnv(),
+): boolean {
+  try {
+    execFileSync(command, args, {
+      encoding: "utf-8",
+      timeout: 5000,
+      stdio: ["ignore", "pipe", "ignore"],
+      env,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Codex's config/auth dir — `$CODEX_HOME`, else `~/.codex`. */
 function codexHome(): string {
   const fromEnv = process.env.CODEX_HOME?.trim();
@@ -109,15 +140,81 @@ function codexLoggedIn(): boolean {
   return existsSync(join(codexHome(), "auth.json"));
 }
 
+function codexLoginVerified(): boolean {
+  return commandStatusOk(resolveCliBin("codex"), ["login", "status"]);
+}
+
+function codexAuthStatus(): AgentAuthStatus {
+  const hasLogin = codexLoggedIn();
+  const hasApiKey = !!process.env.OPENAI_API_KEY?.trim();
+  const verified = codexLoginVerified();
+  if (hasLogin && hasApiKey) {
+    return {
+      authed: true,
+      verified,
+      authSource: "local-credentials",
+      authLabel: verified ? "Codex login + OpenAI API key" : "Codex credentials configured",
+      authWarning:
+        "Both Codex login and OPENAI_API_KEY are present; provider precedence is owned by Codex.",
+    };
+  }
+  if (hasLogin) {
+    if (!verified) {
+      return {
+        authed: false,
+        verified: false,
+        authSource: "local-credentials",
+        authLabel: "Codex sign-in expired",
+        authWarning:
+          "Codex credential artifacts exist, but Codex login status does not confirm an active session. Sign in again with Codex.",
+      };
+    }
+    return {
+      authed: true,
+      verified: true,
+      authSource: "local-credentials",
+      authLabel: "Codex login",
+      authWarning: null,
+    };
+  }
+  if (hasApiKey) {
+    return {
+      authed: true,
+      verified,
+      authSource: "api-key",
+      authLabel: verified ? "OpenAI API key verified" : "OpenAI API key configured",
+      authWarning: verified
+        ? null
+        : "Revv found OPENAI_API_KEY, but Codex login status did not verify it without starting a generation.",
+    };
+  }
+  if (verified) {
+    return {
+      authed: true,
+      verified: true,
+      authSource: "local-credentials",
+      authLabel: "Codex login",
+      authWarning: null,
+    };
+  }
+  return {
+    authed: false,
+    verified: false,
+    authSource: "none",
+    authLabel: "Not signed in",
+    authWarning: null,
+  };
+}
+
 /**
- * Whether Claude Code is authenticated. The `claude-agent-acp` adapter runs on
- * the Claude Agent SDK (not the `claude` binary), so a logged-in user is usable
- * without the CLI on PATH. The SDK accepts, in order: an `ANTHROPIC_API_KEY`
- * env var; the OAuth creds Claude Code writes to `~/.claude/.credentials.json`
- * (Linux/other); or, on macOS, the same creds stored in the login Keychain.
+ * Whether Claude Code has subscription/OAuth credentials available. The
+ * `claude-agent-acp` adapter runs on the Claude Agent SDK, so a logged-in user
+ * is usable without the CLI on PATH. Subscription auth can come from a
+ * long-lived OAuth token, the credentials file Claude Code writes, or the macOS
+ * Keychain.
  */
-function claudeLoggedIn(): boolean {
-  if (process.env.ANTHROPIC_API_KEY?.trim()) return true;
+function detectClaudeSubscriptionAuthHint(): boolean {
+  if (process.env.CLAUDE_CODE_OAUTH_TOKEN?.trim()) return true;
   if (existsSync(join(homedir(), ".claude", ".credentials.json"))) return true;
   if (platform() === "darwin") {
     try {
@@ -132,6 +229,87 @@ function claudeLoggedIn(): boolean {
     }
   }
   return false;
+}
+
+function claudeSubscriptionVerified(): boolean {
+  try {
+    const out = execFileSync(resolveCliBin("claude"), ["auth", "status", "--json"], {
+      encoding: "utf-8",
+      timeout: 5000,
+      stdio: ["ignore", "pipe", "ignore"],
+      env: statusCommandEnv(["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]),
+    }).trim();
+    if (!out) return true;
+    const parsed = JSON.parse(out) as { loggedIn?: unknown };
+    return parsed.loggedIn === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether Claude Code subscription/OAuth auth is verified by Claude's own CLI
+ * status command. Credential artifacts alone are intentionally not enough:
+ * logout can leave files/keychain records behind even though launches fail with
+ * "Authentication required".
+ */
+export function detectClaudeSubscriptionAuth(): boolean {
+  return claudeSubscriptionVerified();
+}
+
+function claudeApiCredentialsConfigured(): boolean {
+  return !!(process.env.ANTHROPIC_API_KEY?.trim() || process.env.ANTHROPIC_AUTH_TOKEN?.trim());
+}
+
+function claudeLoggedIn(): boolean {
+  return claudeSubscriptionVerified() || claudeApiCredentialsConfigured();
+}
+
+function claudeAuthStatus(): AgentAuthStatus {
+  const hasSubscriptionHint = detectClaudeSubscriptionAuthHint();
+  const hasVerifiedSubscription = claudeSubscriptionVerified();
+  const hasApiCredentials = claudeApiCredentialsConfigured();
+  if (hasVerifiedSubscription) {
+    return {
+      authed: true,
+      verified: true,
+      authSource: "subscription",
+      authLabel: hasApiCredentials
+        ? "Claude subscription (API key ignored by Revv)"
+        : "Claude subscription",
+      authWarning: hasApiCredentials
+        ? "ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN is also present. Revv strips it for Claude ACP so the subscription is used."
+        : null,
+    };
+  }
+  if (hasApiCredentials) {
+    return {
+      authed: true,
+      verified: false,
+      authSource: "api-key",
+      authLabel: "Anthropic API key configured",
+      authWarning: hasSubscriptionHint
+        ? "Claude Code sign-in is not active. Revv will keep Anthropic API credentials instead of treating the stale Claude session as connected."
+        : null,
+    };
+  }
+  if (hasSubscriptionHint) {
+    return {
+      authed: false,
+      verified: false,
+      authSource: "subscription",
+      authLabel: "Claude sign-in expired",
+      authWarning:
+        "Claude credential artifacts exist, but Claude reports authentication is required. Sign in again with Claude Code.",
+    };
+  }
+  return {
+    authed: false,
+    verified: false,
+    authSource: "none",
+    authLabel: "Not signed in",
+    authWarning: null,
+  };
 }
 
 /**
@@ -160,6 +338,79 @@ function cursorLoggedIn(): boolean {
   return candidates.some((p) => existsSync(p));
 }
 
+function cursorLoginVerified(): boolean {
+  return commandStatusOk(resolveCommandPath("cursor-agent") ?? "cursor-agent", ["status"]);
+}
+
+function cursorAuthStatus(): AgentAuthStatus {
+  const verified = cursorLoginVerified();
+  if (process.env.CURSOR_API_KEY?.trim()) {
+    return {
+      authed: true,
+      verified,
+      authSource: "api-key",
+      authLabel: verified ? "Cursor API key verified" : "Cursor API key configured",
+      authWarning: verified
+        ? null
+        : "Revv found CURSOR_API_KEY, but Cursor status did not verify it without starting a generation.",
+    };
+  }
+  if (cursorLoggedIn()) {
+    if (!verified) {
+      return {
+        authed: false,
+        verified: false,
+        authSource: "local-credentials",
+        authLabel: "Cursor sign-in expired",
+        authWarning:
+          "Cursor credential artifacts exist, but Cursor status does not confirm an active session. Sign in again with Cursor.",
+      };
+    }
+    return {
+      authed: true,
+      verified: true,
+      authSource: "local-credentials",
+      authLabel: "Cursor login",
+      authWarning: null,
+    };
+  }
+  if (verified) {
+    return {
+      authed: true,
+      verified: true,
+      authSource: "local-credentials",
+      authLabel: "Cursor login",
+      authWarning: null,
+    };
+  }
+  return {
+    authed: false,
+    verified: false,
+    authSource: "none",
+    authLabel: "Not signed in",
+    authWarning: null,
+  };
+}
+
+function agentAuthStatus(agent: AcpAgentId): AgentAuthStatus {
+  switch (agent) {
+    case "opencode":
+      return {
+        authed: true,
+        verified: true,
+        authSource: "not-required",
+        authLabel: "No sign-in required",
+        authWarning: null,
+      };
+    case "claude-code":
+      return claudeAuthStatus();
+    case "codex":
+      return codexAuthStatus();
+    case "cursor":
+      return cursorAuthStatus();
+  }
+}
+
 /**
  * Whether the given registry agent is *authenticated* (logged in), independent
  * of whether its CLI is on PATH. Onboarding uses this to distinguish
@@ -168,16 +419,7 @@ function cursorLoggedIn(): boolean {
  * reports authed.
  */
 export function detectAgentAuth(agent: AcpAgentId): boolean {
-  switch (agent) {
-    case "opencode":
-      return true;
-    case "claude-code":
-      return claudeLoggedIn();
-    case "codex":
-      return codexLoggedIn();
-    case "cursor":
-      return cursorLoggedIn();
-  }
+  return agentAuthStatus(agent).authed;
 }
 
 /**
@@ -270,8 +512,10 @@ export const ACP_CLI_NAME: Record<AcpAgentId, "opencode" | "claude" | "codex" | 
  * Each is a dedicated, exit-after-auth login subcommand (verified against the
  * vendors' published CLI docs + the installed binaries' `--help`), so the
  * login flow's "spawn → wait for exit → re-check auth" model holds:
- *   - claude-code: `claude auth login`  (`/login` is the in-REPL slash command,
- *     NOT a CLI subcommand).
+ *   - claude-code: `claude auth login --claudeai`  (`/login` is the in-REPL
+ *     slash command, NOT a CLI subcommand). The explicit `--claudeai` matters:
+ *     Revv's Claude path is meant to use the user's Claude subscription, while
+ *     `--console` is the API-billing path.
  *   - codex:       `codex login`.
  *   - cursor:      `cursor-agent login` (the docs alias the binary as `agent`,
  *     but the installed binary — and our `ACP_CLI_NAME.cursor` key — is
@@ -282,10 +526,28 @@ export const ACP_CLI_NAME: Record<AcpAgentId, "opencode" | "claude" | "codex" | 
  */
 export const ACP_LOGIN_COMMAND: Record<AcpAgentId, readonly string[] | null> = {
   opencode: null,
-  "claude-code": ["claude", "auth", "login"],
+  "claude-code": ["claude", "auth", "login", "--claudeai"],
   codex: ["codex", "login"],
   cursor: ["cursor-agent", "login"],
 };
+
+/**
+ * Resolve the login command's argv[0] through the same pinned-bin / login-shell
+ * PATH chain used by runtime launches. This keeps the embedded login terminal
+ * working in packaged app launches where `claude`/`codex` are not on the
+ * sanitized process PATH.
+ */
+export function resolveAgentLoginCommand(agent: AcpAgentId): readonly string[] | null {
+  const argv = ACP_LOGIN_COMMAND[agent];
+  if (!argv) return null;
+  const [command, ...args] = argv;
+  if (!command) return argv;
+
+  const cli = ACP_CLI_NAME[agent];
+  const resolved =
+    cli === "cursor-agent" ? (resolveCommandPath(cli) ?? command) : resolveCliBin(cli);
+  return [resolved, ...args];
+}
 
 /** Whether the given registry agent's CLI is present (or otherwise usable). */
 export function detectAgentCli(agent: AcpAgentId): boolean {
@@ -303,11 +565,12 @@ export function detectAgentStatus(): AgentStatusReport {
   const agents = Object.fromEntries(
     ACP_AGENT_IDS.map((id) => {
       const cmd = ACP_LOGIN_COMMAND[id];
+      const auth = agentAuthStatus(id);
       return [
         id,
         {
           installed: detectAgentCli(id),
-          authed: detectAgentAuth(id),
+          ...auth,
           loginCommand: cmd ? cmd.join(" ") : null,
         } satisfies AgentStatus,
       ];

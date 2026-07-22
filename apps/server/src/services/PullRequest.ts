@@ -56,6 +56,12 @@ export interface ListArchivedPrsParams {
   readonly cursor?: string;
   /** Page size. Clamped to `[1, MAX_ARCHIVE_PAGE_LIMIT]`. */
   readonly limit?: number;
+  /**
+   * Restrict results to PRs authored by these logins. Empty/omitted means no
+   * author restriction. Mirrors the sidebar's creator/team filter so the
+   * closed list narrows the same way the open list does.
+   */
+  readonly authorLogins?: readonly string[];
 }
 
 export interface ListArchivedPrsResult {
@@ -415,6 +421,9 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
           }
           if (params?.repoId !== undefined) {
             conditions.push(eq(pullRequests.repositoryId, params.repoId));
+          }
+          if (params?.authorLogins && params.authorLogins.length > 0) {
+            conditions.push(inArray(pullRequests.authorLogin, [...params.authorLogins]));
           }
           if (params?.since !== undefined) {
             conditions.push(gte(pullRequests.closedAt, params.since));

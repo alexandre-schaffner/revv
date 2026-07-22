@@ -1,4 +1,4 @@
-import type { AcpAgentId, ThinkingEffort } from "@revv/shared";
+import { type AcpAgentId, getAcpAgentDefaultModel, type ThinkingEffort } from "@revv/shared";
 
 export type ModelOption = { label: string; value: string };
 
@@ -14,15 +14,8 @@ export const THINKING_EFFORT_OPTIONS: { label: string; value: ThinkingEffort }[]
   { label: "Low", value: "low" },
 ];
 
-const DEFAULT_MODEL_BY_AGENT: Record<AcpAgentId, string> = {
-  opencode: "opencode/big-pickle",
-  "claude-code": "claude-sonnet-4-6",
-  codex: "gpt-5.5",
-  cursor: "auto",
-};
-
 export function getDefaultModel(agent: AcpAgentId): string {
-  return DEFAULT_MODEL_BY_AGENT[agent];
+  return getAcpAgentDefaultModel(agent);
 }
 
 // Low-cost defaults for the right-panel suggestions feature. Pinned to the

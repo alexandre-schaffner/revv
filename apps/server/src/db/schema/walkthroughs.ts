@@ -1,4 +1,5 @@
 import { REVIEW_MODE, type WalkthroughMode } from "@revv/shared";
+import { sql } from "drizzle-orm";
 import {
   type AnySQLiteColumn,
   integer,
@@ -74,6 +75,28 @@ export const walkthroughs = sqliteTable(
     supersededBy: text("superseded_by").references((): AnySQLiteColumn => walkthroughs.id, {
       onDelete: "set null",
     }),
+    /**
+     * Optional parent row used by incremental refreshes. The parent is the
+     * previous review artifact the agent should treat as its starting point;
+     * this row remains a separate immutable artifact for the new head SHA.
+     */
+    parentWalkthroughId: text("parent_walkthrough_id").references(
+      (): AnySQLiteColumn => walkthroughs.id,
+      {
+        onDelete: "set null",
+      },
+    ),
+    /**
+     * The prior PR head used as the incremental base. Null for fresh full
+     * generations and for legacy rows.
+     */
+    baseHeadSha: text("base_head_sha"),
+    /**
+     * `full` is the original from-scratch pipeline. `incremental` produces
+     * the same visible report shape, seeded by `parentWalkthroughId` and the
+     * `baseHeadSha..prHeadSha` commit range.
+     */
+    generationMode: text("generation_mode").notNull().default("full"),
     generatedAt: text("generated_at").notNull(),
     /**
      * ISO 8601 timestamp set when {@link WalkthroughJobs.setStatus} transitions
@@ -166,10 +189,8 @@ export const walkthroughs = sqliteTable(
      * Superseded rows share the PR but differ on head_sha, so this uniqueness
      * doesn't block new-commit flows.
      */
-    prHeadShaUnique: uniqueIndex("walkthroughs_pr_head_sha_mode_unique").on(
-      t.pullRequestId,
-      t.prHeadSha,
-      t.mode,
-    ),
+    activePrHeadShaUnique: uniqueIndex("walkthroughs_active_pr_head_sha_unique")
+      .on(t.pullRequestId, t.prHeadSha, t.mode, t.generationMode)
+      .where(sql`${t.status} <> 'superseded'`),
   }),
 );

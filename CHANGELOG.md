@@ -1,5 +1,91 @@
 # Changelog
 
+## [0.18.1](https://github.com/alexandre-schaffner/revv/compare/v0.18.0...v0.18.1) (2026-07-16)
+
+
+### Bug Fixes
+
+* onboarding flow was not reopening correctly after an update ([4070207](https://github.com/alexandre-schaffner/revv/commit/407020797681d6b3317da1a128160fc97aaa5f2e))
+* onboarding flow when update ([36d0752](https://github.com/alexandre-schaffner/revv/commit/36d0752b271d9dc4c3899dd3a164d2e6b812b69f))
+
+## [0.18.0](https://github.com/alexandre-schaffner/revv/compare/v0.17.2...v0.18.0) (2026-07-15)
+
+
+### Features
+
+* set default model ([8d96872](https://github.com/alexandre-schaffner/revv/commit/8d968722b68a0cddd1214aa254a78d016e824c26))
+* set default model ([fd880e5](https://github.com/alexandre-schaffner/revv/commit/fd880e5ce84c40602053d04f40056cac0eddd99d))
+
+
+### Bug Fixes
+
+* rebase ([1726c46](https://github.com/alexandre-schaffner/revv/commit/1726c46713612967e9a1de08b64a2ead69728835))
+
+## [0.17.2](https://github.com/alexandre-schaffner/revv/compare/v0.17.1...v0.17.2) (2026-07-13)
+
+
+### Performance Improvements
+
+* **server:** make walkthrough rounds endpoint DB-only ([#174](https://github.com/alexandre-schaffner/revv/issues/174)) ([12d2415](https://github.com/alexandre-schaffner/revv/commit/12d24151e12d0c06e62b3d873bc8c0bce8756f6e))
+
+## [0.17.1](https://github.com/alexandre-schaffner/revv/compare/v0.17.0...v0.17.1) (2026-07-10)
+
+
+### Bug Fixes
+
+* **server:** bind API to loopback only + loopback request guard ([#171](https://github.com/alexandre-schaffner/revv/issues/171)) ([5350516](https://github.com/alexandre-schaffner/revv/commit/53505164faa6ac390853a6ecf69c110ef0b0bae0))
+
+## [0.17.0](https://github.com/alexandre-schaffner/revv/compare/v0.16.1...v0.17.0) (2026-07-09)
+
+
+### Features
+
+* add incremental walkthrough review rounds ([#141](https://github.com/alexandre-schaffner/revv/issues/141)) ([f90d117](https://github.com/alexandre-schaffner/revv/commit/f90d117b4a96257eb896dda62044bfb04d743102))
+
+## [0.16.1](https://github.com/alexandre-schaffner/revv/compare/v0.16.0...v0.16.1) (2026-07-07)
+
+
+### Bug Fixes
+
+* **acp:** inject stored agent credentials so packaged installs authenticate ([c873b7e](https://github.com/alexandre-schaffner/revv/commit/c873b7e16d62e9ec844ca51cdb56bebe0a1bd612))
+* **acp:** inject stored agent credentials so packaged installs authenticate ([1528945](https://github.com/alexandre-schaffner/revv/commit/15289457f548673bcb16bc82c7fc6118b9f33b46))
+* Revert [#158](https://github.com/alexandre-schaffner/revv/issues/158) (fix/acp-agent-credential-injection) ([4e7d6e9](https://github.com/alexandre-schaffner/revv/commit/4e7d6e94ea1ada781e59a5d746ba66793a0383a8))
+
+## [0.16.0](https://github.com/alexandre-schaffner/revv/compare/v0.15.3...v0.16.0) (2026-07-07)
+
+
+### Features
+
+* Worktree filter closed prs by creator ([#159](https://github.com/alexandre-schaffner/revv/issues/159)) ([a00d3d9](https://github.com/alexandre-schaffner/revv/commit/a00d3d96a29bd791b131a36ea8d57015e32851d9))
+
+## [0.15.3](https://github.com/alexandre-schaffner/revv/compare/v0.15.2...v0.15.3) (2026-07-07)
+
+
+### Bug Fixes
+
+* **cli:** read DB from app-data dir, not INSTALL_DIR ([#162](https://github.com/alexandre-schaffner/revv/issues/162)) ([4febd34](https://github.com/alexandre-schaffner/revv/commit/4febd349b609f7bc25642e9fb8e6922a5419fd4c))
+
+## [0.15.2](https://github.com/alexandre-schaffner/revv/compare/v0.15.1...v0.15.2) (2026-07-07)
+
+
+### Bug Fixes
+
+* Recover missing GHE client ID during reauth ([#160](https://github.com/alexandre-schaffner/revv/issues/160)) ([f139bcd](https://github.com/alexandre-schaffner/revv/commit/f139bcd3a9ca9ae1560b58d6327bb16a7a98d7d0))
+
+## [0.15.1](https://github.com/alexandre-schaffner/revv/compare/v0.15.0...v0.15.1) (2026-07-06)
+
+
+### Bug Fixes
+
+* persist DB in app-data dir so updates don't reset onboarding ([#155](https://github.com/alexandre-schaffner/revv/issues/155)) ([b985e5c](https://github.com/alexandre-schaffner/revv/commit/b985e5c350440e4bd2c0ca765ff59d60ba38ddbd))
+
+## [0.15.0](https://github.com/alexandre-schaffner/revv/compare/v0.14.1...v0.15.0) (2026-07-06)
+
+
+### Features
+
+* self comment + comment-only review action ([#143](https://github.com/alexandre-schaffner/revv/issues/143)) ([e05833b](https://github.com/alexandre-schaffner/revv/commit/e05833b4315abae025df2960dec631ecc4442c8e))
+
 ## [0.14.1](https://github.com/alexandre-schaffner/revv/compare/v0.14.0...v0.14.1) (2026-06-26)
 
 

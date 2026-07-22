@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { Effect, Schedule } from "effect";
 import {
+  GitHubAccessDeniedError,
   GitHubAuthError,
   type GitHubError,
   GitHubNetworkError,
@@ -11,6 +12,7 @@ import type { DbService } from "./Db";
 import { buildCacheKey, GitHubEtagCache } from "./GitHubEtagCache";
 
 const retrySchedule = Schedule.intersect(Schedule.exponential("2 seconds"), Schedule.recurs(3));
+const GITHUB_REQUEST_TIMEOUT_MS = 30_000;
 
 const isTransientGitHubError = (e: GitHubError): boolean => e instanceof GitHubNetworkError;
 
@@ -29,6 +31,7 @@ function cacheKeyForRequest(apiBase: string, path: string, token: string): strin
 export function toGitHubError(e: unknown): GitHubError {
   if (
     e instanceof GitHubAuthError ||
+    e instanceof GitHubAccessDeniedError ||
     e instanceof GitHubRateLimitError ||
     e instanceof GitHubNotFoundError ||
     e instanceof GitHubNetworkError
@@ -45,6 +48,28 @@ export function githubHeaders(token: string): Record<string, string> {
     Accept: "application/vnd.github.v3+json",
     "X-GitHub-Api-Version": "2022-11-28",
   };
+}
+
+async function githubHttpFetch(url: string, init: RequestInit, path: string): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), GITHUB_REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: controller.signal,
+    });
+  } catch (e) {
+    const name = typeof e === "object" && e !== null && "name" in e ? String(e.name) : "";
+    if (name === "AbortError") {
+      throw new GitHubNetworkError({
+        cause: `Request timed out after ${GITHUB_REQUEST_TIMEOUT_MS}ms for ${path}`,
+      });
+    }
+    const detail = e instanceof Error && e.message ? `${e.name}: ${e.message}` : String(e);
+    throw new GitHubNetworkError({ cause: `${detail} for ${path}` });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Assert a fetch response is successful, throwing the appropriate domain error on failure. */
@@ -83,8 +108,9 @@ export function assertGitHubOk(res: Response, path: string): void {
       });
     }
 
-    throw new GitHubNetworkError({
-      cause: `HTTP 403 - access denied for ${path} (check GitHub org OAuth app policies)`,
+    throw new GitHubAccessDeniedError({
+      resource: path,
+      message: `Access denied for ${path} (check GitHub org OAuth app policies)`,
     });
   }
   if (res.status === 404) {
@@ -116,9 +142,13 @@ export function githubFetch(
   })(
     Effect.tryPromise({
       try: async () => {
-        const res = await fetch(`${apiBase}${path}`, {
-          headers: githubHeaders(token),
-        });
+        const res = await githubHttpFetch(
+          `${apiBase}${path}`,
+          {
+            headers: githubHeaders(token),
+          },
+          path,
+        );
         assertGitHubOk(res, path);
         return res.json();
       },
@@ -143,7 +173,7 @@ export function conditionalFetch(
         if (cached) {
           headers["If-None-Match"] = cached.etag;
         }
-        const res = await fetch(`${apiBase}${path}`, { headers });
+        const res = await githubHttpFetch(`${apiBase}${path}`, { headers }, path);
 
         if (res.status === 304 && cached) {
           return { kind: "hit" as const, body: cached.body, bytes: 0 };
@@ -204,7 +234,7 @@ export function conditionalFetchPaginated(
           }
 
           const firstUrl = `${apiBase}${path}`;
-          let firstResponse = await fetch(firstUrl, { headers });
+          let firstResponse = await githubHttpFetch(firstUrl, { headers }, path);
 
           if (firstResponse.status === 304 && cached) {
             if (Array.isArray(cached.body)) {
@@ -214,7 +244,11 @@ export function conditionalFetchPaginated(
               }
             }
 
-            firstResponse = await fetch(firstUrl, { headers: githubHeaders(token) });
+            firstResponse = await githubHttpFetch(
+              firstUrl,
+              { headers: githubHeaders(token) },
+              path,
+            );
           }
 
           const results: unknown[] = [];
@@ -225,7 +259,9 @@ export function conditionalFetchPaginated(
 
           for (let page = 0; page < maxPages && url; page++) {
             const res =
-              page === 0 ? firstResponse : await fetch(url, { headers: githubHeaders(token) });
+              page === 0
+                ? firstResponse
+                : await githubHttpFetch(url, { headers: githubHeaders(token) }, path);
             assertGitHubOk(res, path);
 
             if (page === 0) {
@@ -292,11 +328,15 @@ export function githubPost(
   })(
     Effect.tryPromise({
       try: async () => {
-        const res = await fetch(`${apiBase}${path}`, {
-          method: "POST",
-          headers: { ...githubHeaders(token), "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
+        const res = await githubHttpFetch(
+          `${apiBase}${path}`,
+          {
+            method: "POST",
+            headers: { ...githubHeaders(token), "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          },
+          path,
+        );
         if (res.status === 422) {
           const text = await res.text().catch(() => "");
           throw new GitHubNetworkError({ cause: `422 Unprocessable Entity: ${text}` });
@@ -317,11 +357,15 @@ export function githubPatch(
 ): Effect.Effect<unknown, GitHubError> {
   return Effect.tryPromise({
     try: async () => {
-      const res = await fetch(`${apiBase}${path}`, {
-        method: "PATCH",
-        headers: { ...githubHeaders(token), "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
+      const res = await githubHttpFetch(
+        `${apiBase}${path}`,
+        {
+          method: "PATCH",
+          headers: { ...githubHeaders(token), "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+        path,
+      );
       if (res.status === 422) {
         const text = await res.text().catch(() => "");
         throw new GitHubNetworkError({ cause: `422 Unprocessable Entity: ${text}` });
@@ -341,11 +385,15 @@ export function githubPut(
 ): Effect.Effect<unknown, GitHubError> {
   return Effect.tryPromise({
     try: async () => {
-      const res = await fetch(`${apiBase}${path}`, {
-        method: "PUT",
-        headers: { ...githubHeaders(token), "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
+      const res = await githubHttpFetch(
+        `${apiBase}${path}`,
+        {
+          method: "PUT",
+          headers: { ...githubHeaders(token), "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+        path,
+      );
       if (res.status === 405) {
         const text = await res.text().catch(() => "");
         throw new GitHubNetworkError({ cause: `HTTP 405 Method Not Allowed: ${text}` });
@@ -356,6 +404,29 @@ export function githubPut(
       }
       assertGitHubOk(res, path);
       return res.json();
+    },
+    catch: toGitHubError,
+  });
+}
+
+export function githubDelete(
+  path: string,
+  token: string,
+  apiBase: string,
+): Effect.Effect<unknown, GitHubError> {
+  return Effect.tryPromise({
+    try: async () => {
+      const res = await githubHttpFetch(
+        `${apiBase}${path}`,
+        {
+          method: "DELETE",
+          headers: githubHeaders(token),
+        },
+        path,
+      );
+      assertGitHubOk(res, path);
+      const text = await res.text();
+      return text ? JSON.parse(text) : null;
     },
     catch: toGitHubError,
   });
@@ -373,11 +444,15 @@ export function githubGraphql<T = unknown>(
   })(
     Effect.tryPromise({
       try: async () => {
-        const res = await fetch(`${apiBase}/graphql`, {
-          method: "POST",
-          headers: { ...githubHeaders(token), "Content-Type": "application/json" },
-          body: JSON.stringify({ query, variables }),
-        });
+        const res = await githubHttpFetch(
+          `${apiBase}/graphql`,
+          {
+            method: "POST",
+            headers: { ...githubHeaders(token), "Content-Type": "application/json" },
+            body: JSON.stringify({ query, variables }),
+          },
+          "/graphql",
+        );
         assertGitHubOk(res, "/graphql");
         const payload = (await res.json()) as { data?: T; errors?: Array<{ message: string }> };
         if (payload.errors && payload.errors.length > 0) {
@@ -416,9 +491,13 @@ export function githubFetchPaginated(
         let url: string | null = `${apiBase}${path}`;
 
         for (let page = 0; page < maxPages && url; page++) {
-          const res = await fetch(url, {
-            headers: githubHeaders(token),
-          });
+          const res = await githubHttpFetch(
+            url,
+            {
+              headers: githubHeaders(token),
+            },
+            path,
+          );
           assertGitHubOk(res, path);
 
           const data = await res.json();

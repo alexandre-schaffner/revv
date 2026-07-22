@@ -5,6 +5,8 @@ import WalkthroughRatingsPanel from "$lib/components/walkthrough/WalkthroughRati
 import { sendChatMessage } from "$lib/stores/chat.svelte";
 import { resetRcActions, setRcHandlers, setRcState } from "$lib/stores/rcActions.svelte";
 import {
+  deleteThread,
+  getReviewFiles,
   getThreadMessages,
   getThreads,
   jumpToDiffLine,
@@ -28,7 +30,7 @@ interface Props {
 }
 let { prId }: Props = $props();
 
-type Action = "approve" | "request_changes";
+type Action = "approve" | "request_changes" | "comment";
 
 const issues = $derived(getIssues());
 const threads = $derived(getThreads());
@@ -37,6 +39,13 @@ const unresolvedThreads = $derived(
 );
 const ratings = $derived(getRatings());
 const blocks = $derived(getBlocks());
+
+// File paths currently part of the PR diff (new path + old path for renames).
+// A pending comment whose file isn't here is stale: its line no longer exists
+// in the diff, so including it would make GitHub 422 the whole review.
+const currentFilePaths = $derived(
+  new Set(getReviewFiles().flatMap((f) => (f.oldPath ? [f.path, f.oldPath] : [f.path]))),
+);
 
 let selectedIssueIds = $state<Set<string>>(new Set());
 // Derived from the walkthrough store — each issue carries its own
@@ -68,7 +77,20 @@ function handleApproveClick(): void {
 }
 
 const selectedCount = $derived(selectedIssueIds.size);
-const hasContent = $derived(selectedCount > 0);
+
+// Number of unresolved threads that carry at least one unsynced reviewer
+// message — i.e. line comments that would actually be pushed to GitHub.
+// Mirrors the filtering in buildComments() so the Comment button's enabled
+// state matches what gets sent.
+const pendingCommentCount = $derived(
+  unresolvedThreads.filter((t) =>
+    getThreadMessages(t.id).some(
+      (m) => m.authorRole === "reviewer" && m.externalId == null && m.body.trim().length > 0,
+    ),
+  ).length,
+);
+// A plain COMMENT review can go up with selected issues OR pending comments.
+const canComment = $derived(selectedCount > 0 || pendingCommentCount > 0);
 
 const approveBlockerSummary = $derived.by(() => {
   const parts: string[] = [];
@@ -128,6 +150,15 @@ function buildComments(): Array<{
 
   // Collect IDs of all unresolved threads
   for (const thread of unresolvedThreads) {
+    // Threads already on GitHub take the reply push path (see submit()), not
+    // the new-review-comment path — including them here would re-post the
+    // thread as a fresh comment on every submit.
+    if (thread.externalCommentId != null) continue;
+    // Skip pending comments whose file is no longer in the diff — sending one
+    // would make GitHub reject the entire review (422). It stays a local draft
+    // the user can remove with the Discard button. Skip the check when the
+    // diff hasn't loaded (empty set) so valid comments are never dropped.
+    if (currentFilePaths.size > 0 && !currentFilePaths.has(thread.filePath)) continue;
     const messages = getThreadMessages(thread.id).filter(
       (m) => m.authorRole === "reviewer" && m.externalId == null,
     );
@@ -193,9 +224,12 @@ async function submit(action: Action): Promise<void> {
     // Trigger sync-threads to pull back GitHub comment IDs
     await api.api.prs({ id: prId })["sync-threads"].post();
 
-    // Reload session so externalCommentId fields are refreshed locally
-    // (mode is derived inside loadSession from the PR's review perspective).
-    await loadSession(prId);
+    // Reload session so externalCommentId / externalId fields are refreshed
+    // locally (mode is derived inside loadSession from the PR's review
+    // perspective). `force` bypasses the 60s refetch short-circuit — without
+    // it the just-pushed comments keep their null externalId locally and a
+    // second submit would re-post them as duplicates.
+    await loadSession(prId, undefined, true);
 
     const payload = data as {
       htmlUrl?: string;
@@ -240,6 +274,7 @@ function generateChanges(): void {
 
 function actionLabel(a: Action): string {
   if (a === "approve") return "Approved";
+  if (a === "comment") return "Comments posted";
   return "Changes requested";
 }
 
@@ -269,7 +304,7 @@ $effect(() => {
   setRcState({
     submitting,
     selectedCount,
-    hasContent,
+    canComment,
     approveBlockerSummary,
   });
 });
@@ -277,7 +312,13 @@ $effect(() => {
 $effect(() => {
   setRcHandlers({
     onGenerateChanges: generateChanges,
-    onSubmitReview: () => void submit("request_changes"),
+    // One submit posts everything in a single GitHub review. The review event
+    // is decided by content: selecting walkthrough issues means "request
+    // changes"; with none it's a plain comment review. Either way the line
+    // comments ride along. Read `.size` live so the decision reflects the
+    // selection at click time, not when this handler was registered.
+    onSubmitReview: () => void submit(selectedIssueIds.size > 0 ? "request_changes" : "comment"),
+    onComment: () => void submit("comment"),
     onApprove: handleApproveClick,
   });
   return resetRcActions;
@@ -301,6 +342,7 @@ $effect(() => {
 			threads={unresolvedThreads}
 			{getThreadMessages}
 			onJump={jumpToDiffLine}
+			onDiscard={(threadId) => void deleteThread(threadId)}
 		/>
 
 		{#if ratings.length > 0}

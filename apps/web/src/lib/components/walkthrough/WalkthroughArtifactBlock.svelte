@@ -6,7 +6,6 @@ import { onDestroy, untrack } from "svelte";
 import { browser } from "$app/environment";
 import { gsap, tokens as motionTokens, prefersReducedMotion } from "$lib/motion";
 import { getResolvedTheme } from "$lib/stores/theme.svelte";
-import { isTauri } from "$lib/utils/platform";
 
 interface Props {
   block: ArtifactBlock;
@@ -47,7 +46,6 @@ let mountWatchdog: ReturnType<typeof setTimeout> | null = null;
 
 const hostUrl = $derived.by(() => {
   if (!browser) return "about:blank";
-  if (!isTauri()) return "/artifact-host.html";
   // Tauri addresses custom URI schemes differently per platform: macOS/iOS use
   // the real `artifact://localhost/...` scheme, while Windows (WebView2) and
   // Linux (WebKitGTK) expose it at `http://artifact.localhost/...`. Both forms

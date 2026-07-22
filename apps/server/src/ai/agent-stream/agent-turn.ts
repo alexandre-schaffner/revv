@@ -117,11 +117,50 @@ export async function withAgentTurn<T>(opts: WithAgentTurnOptions<T>): Promise<T
   await opts.jobStarted();
 
   try {
-    return await opts.run({
+    const ctx: AgentTurnContext = {
       signal: composed.signal,
       wasTimeout: () => timedOut,
       wasCancelled: () => cancelled,
+    };
+    const runPromise = opts.run(ctx);
+    let abortSettled = false;
+    const abortPromise = new Promise<never>((_, reject) => {
+      const onAbort = (): void => {
+        abortSettled = true;
+        const reason = composed.signal.reason;
+        reject(
+          reason instanceof Error
+            ? reason
+            : new Error(
+                timedOut
+                  ? `Agent turn timed out after ${Math.round(opts.hardTimeoutMs / 60_000)} minutes`
+                  : cancelled
+                    ? "Agent turn cancelled"
+                    : "Agent turn aborted",
+              ),
+        );
+      };
+      if (composed.signal.aborted) {
+        onAbort();
+        return;
+      }
+      composed.signal.addEventListener("abort", onAbort, { once: true });
+      runPromise.then(
+        () => composed.signal.removeEventListener("abort", onAbort),
+        () => composed.signal.removeEventListener("abort", onAbort),
+      );
     });
+
+    void runPromise.catch((err) => {
+      if (!abortSettled) return;
+      debug(
+        opts.debugLabel,
+        "run settled after abort:",
+        err instanceof Error ? err.message : String(err),
+      );
+    });
+
+    return await Promise.race([runPromise, abortPromise]);
   } finally {
     clearTimeout(timeoutId);
     if (externalAbort) {

@@ -44,11 +44,24 @@ function normalizeHost(raw: string): string {
 
 const resolvedHost = $derived(selected === CUSTOM ? normalizeHost(customHost) : selected);
 const resolvedClientId = $derived(selected === CUSTOM ? customClientId.trim() : "");
+const clientIdIsPlaceholder = $derived(
+  (() => {
+    const normalized = resolvedClientId.toLowerCase();
+    return (
+      normalized === "github_client_id" ||
+      normalized === "client_id" ||
+      normalized === "your_client_id" ||
+      normalized === "your-github-client-id" ||
+      normalized.includes("xxxxxxxx")
+    );
+  })(),
+);
 // Example URL for the "create a GitHub App" instructions — uses the host the
 // user typed once it's present, otherwise a placeholder.
 const appCreateUrl = $derived(`https://${resolvedHost || "your-ghe-host.com"}/settings/apps/new`);
 const canContinue = $derived(
-  selected !== CUSTOM || (resolvedHost.length > 0 && resolvedClientId.length > 0),
+  selected !== CUSTOM ||
+    (resolvedHost.length > 0 && resolvedClientId.length > 0 && !clientIdIsPlaceholder),
 );
 
 async function handleContinue() {
@@ -147,6 +160,9 @@ async function handleContinue() {
 					Revv has no app registered on your instance — you create one and paste its
 					public client ID here. It's safe to store (it isn't a secret).
 				</p>
+				{#if clientIdIsPlaceholder}
+					<p class="field-error">Paste the real client ID from your GitHub App or OAuth App.</p>
+				{/if}
 			</div>
 
 			<div class="guide" data-open={showInstructions}>
@@ -551,6 +567,14 @@ async function handleContinue() {
 		font-size: 13.5px;
 		line-height: 1.55;
 		color: var(--ob-text-muted);
+	}
+
+	.field-error {
+		margin: 0;
+		font-family: 'Newsreader', Georgia, serif;
+		font-size: 13.5px;
+		line-height: 1.45;
+		color: var(--danger, #f87171);
 	}
 
 	.guide {

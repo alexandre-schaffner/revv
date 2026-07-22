@@ -16,9 +16,10 @@ interface Props {
   threads: readonly CommentThread[];
   getThreadMessages: (threadId: string) => ThreadMessage[];
   onJump: (filePath: string, line: number) => void;
+  onDiscard?: ((threadId: string) => void) | undefined;
 }
 
-let { threads, getThreadMessages, onJump }: Props = $props();
+let { threads, getThreadMessages, onJump, onDiscard }: Props = $props();
 
 // ── Filter state ─────────────────────────────────────────
 
@@ -169,6 +170,7 @@ function onPanelKeydown(e: KeyboardEvent): void {
                         index={idx}
                         onToggleOpen={() => toggleRow(group.filePath)}
                         {onJump}
+                        {onDiscard}
                         onTriggerRef={(el) => setRowRef(group.filePath, el)}
                     />
                 {/each}

@@ -31,7 +31,7 @@ import {
   toggleRightPanel,
   toggleSidebar,
 } from "$lib/stores/sidebar.svelte";
-import { getPrWalkthroughStatus } from "$lib/stores/walkthrough.svelte";
+import { getPrWalkthroughStatus, markWalkthroughStale } from "$lib/stores/walkthrough.svelte";
 import BottomBar from "./BottomBar.svelte";
 import CommandPalette from "./CommandPalette.svelte";
 import FloatingTabs from "./FloatingTabs.svelte";
@@ -71,6 +71,11 @@ const hasNewCommit = $derived.by(() => {
   return loaded !== null && loaded !== pr.headSha;
 });
 const isPulling = $derived(pr ? getIsPullingCommit(pr.id) : false);
+
+$effect(() => {
+  if (pr && hasNewCommit) markWalkthroughStale(pr.id);
+});
+
 function onPullCommit(): void {
   if (pr) void pullLatestCommit(pr.id);
 }

@@ -13,17 +13,14 @@ import type {
   RecapSourcePrDigest,
 } from "../ai/providers/recap-tools";
 import type { ArchivedPrWithWalkthrough } from "./PullRequest";
+import { truncatePatchToChars } from "./patch-truncate";
 
 export const RECAP_DIFF_MAX_FILES_PER_PR = 25;
 export const RECAP_DIFF_MAX_PATCH_CHARS = 3000;
 
 export function truncatePatch(patch: string | null): { patch: string | null; truncated: boolean } {
   if (patch === null) return { patch: null, truncated: false };
-  if (patch.length <= RECAP_DIFF_MAX_PATCH_CHARS) return { patch, truncated: false };
-  return {
-    patch: `${patch.slice(0, RECAP_DIFF_MAX_PATCH_CHARS)}\n[…patch truncated to ${RECAP_DIFF_MAX_PATCH_CHARS} chars — original ${patch.length}…]`,
-    truncated: true,
-  };
+  return truncatePatchToChars(patch, RECAP_DIFF_MAX_PATCH_CHARS, "patch");
 }
 
 export function buildSourceBundle(

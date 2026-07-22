@@ -29,6 +29,8 @@ export interface AcpAgentModel {
  * default the persisted model. Anything not represented here is owned agent-side.
  */
 export interface AcpAgentCapabilities {
+  /** Revv's default model for this agent when no user-specific model is saved. */
+  readonly defaultModel: string;
   /**
    * Static model catalog (label + id), or the literal `"dynamic"` when the list
    * must be fetched live from the server (opencode runs `opencode models`). ACP
@@ -48,6 +50,21 @@ export interface AcpAgentCapabilities {
   readonly planMode: boolean;
 }
 
+/**
+ * Declares that an agent's login lives in the macOS login Keychain, so Revv's
+ * background service may be blocked from reading it (a per-machine Access-Control
+ * state) — surfacing as a 401 / "ACP connection closed". Present only for agents
+ * that use the keychain; file-based agents (their config is reachable via `$HOME`)
+ * omit it. Drives the keychain-access detection, probe, and remediation, so
+ * covering another keychain-using provider is one more entry here — no code change.
+ */
+export interface AcpAgentKeychainAuth {
+  /** `security` service name of the login item (e.g. `Claude Code-credentials`). */
+  readonly service: string;
+  /** User-facing steps to grant the background service access to that item. */
+  readonly remediation: string;
+}
+
 export interface AcpAgentDescriptor {
   /** Stable id — persisted as the chat-agent setting and the connection-pool key. */
   readonly id: string;
@@ -63,6 +80,12 @@ export interface AcpAgentDescriptor {
   readonly args: readonly string[];
   /** Model / context-window / thinking-effort surface Revv exposes for this agent. */
   readonly capabilities: AcpAgentCapabilities;
+  /**
+   * macOS keychain login details, when the agent stores its credential there and
+   * the background server can be ACL-blocked from reading it. Absent for
+   * file-based agents (codex/opencode/cursor), which the server reaches directly.
+   */
+  readonly keychainAuth?: AcpAgentKeychainAuth;
 }
 
 // ⇩ Add a new ACP agent here — one entry is all it takes. ⇩
@@ -75,8 +98,11 @@ export const ACP_AGENTS = [
     command: "npx",
     args: ["-y", "@agentclientprotocol/claude-agent-acp"],
     capabilities: {
+      defaultModel: "claude-sonnet-5",
       models: [
+        { label: "Claude Fable 5", value: "claude-fable-5" },
         { label: "Claude Opus 4.8", value: "claude-opus-4-8" },
+        { label: "Claude Sonnet 5", value: "claude-sonnet-5" },
         { label: "Claude Sonnet 4.6", value: "claude-sonnet-4-6" },
         { label: "Claude Haiku 4.5", value: "claude-haiku-4-5-20251001" },
       ],
@@ -84,6 +110,14 @@ export const ACP_AGENTS = [
       thinkingEfforts: ["ultrathink", "max", "extra-high", "high", "medium", "low"],
       // claude-agent-acp advertises a read-only plan mode.
       planMode: true,
+    },
+    keychainAuth: {
+      service: "Claude Code-credentials",
+      remediation:
+        "Revv's background service isn't allowed to read your Claude subscription login from " +
+        "the macOS Keychain, so the Claude Code agent can't authenticate. To grant access: open " +
+        'Keychain Access, search "Claude Code-credentials", double-click it, open the Access ' +
+        'Control tab, choose "Allow all applications to access this item", and Save Changes. Then retry.',
     },
   },
   {
@@ -94,6 +128,7 @@ export const ACP_AGENTS = [
     command: "opencode",
     args: ["acp"],
     capabilities: {
+      defaultModel: "opencode/big-pickle",
       // opencode exposes 75+ models across providers; fetched live via the
       // server's `opencode models` parse rather than curated here.
       models: "dynamic",
@@ -112,6 +147,7 @@ export const ACP_AGENTS = [
     command: "npx",
     args: ["-y", "@zed-industries/codex-acp"],
     capabilities: {
+      defaultModel: "gpt-5.5",
       models: [
         { label: "GPT-5.5", value: "gpt-5.5" },
         { label: "GPT-5.4", value: "gpt-5.4" },
@@ -135,6 +171,7 @@ export const ACP_AGENTS = [
     command: "npx",
     args: ["-y", "cursor-agent-acp"],
     capabilities: {
+      defaultModel: "auto",
       // Curated from Cursor's CLI model roster (`cursor-agent --list-models`).
       // Re-verify when Cursor ships/retires models.
       models: [
@@ -176,14 +213,25 @@ export function getAgentCapabilities(id: AcpAgentId): AcpAgentCapabilities {
   return getAcpAgent(id).capabilities;
 }
 
+/** Revv's persisted-model default for an ACP agent. */
+export function getAcpAgentDefaultModel(id: AcpAgentId): string {
+  return getAcpAgent(id).capabilities.defaultModel;
+}
+
+/** Keychain-login details for an agent, or `undefined` when it isn't keychain-backed. */
+export function getAgentKeychainAuth(id: AcpAgentId): AcpAgentKeychainAuth | undefined {
+  return getAcpAgent(id).keychainAuth;
+}
+
 /**
  * Per-agent onboarding setup status. A single detection call resolves both
  * facts the agent step needs so the UI never races two endpoints:
  *   - `installed` — the agent's CLI is present on PATH (or pinned via the
  *     LaunchAgent `REVV_*_BIN` env vars), or — for the SDK/auth-store agents —
  *     otherwise usable.
- *   - `authed` — the user is logged in. opencode needs no login, so it always
- *     reports `true`.
+ *   - `authed` — usable credentials are configured. opencode needs no login,
+ *     so it always reports `true`.
+ *   - `verified` — the provider's own status command confirmed the session.
  * `loginCommand` is the agent's official interactive login command (joined
  * argv), surfaced so the UI can show a manual hint where the embedded PTY login
  * isn't available; `null` for agents that need no login (opencode).
@@ -191,6 +239,22 @@ export function getAgentCapabilities(id: AcpAgentId): AcpAgentCapabilities {
 export interface AgentStatus {
   installed: boolean;
   authed: boolean;
+  /**
+   * `true` only when the provider's own status command confirms the session.
+   * Env keys and credential files can make an agent usable, but they are
+   * reported as configured rather than verified unless the provider can prove
+   * the connection without starting a generation.
+   */
+  verified: boolean;
+  authSource:
+    | "none"
+    | "not-required"
+    | "subscription"
+    | "api-key"
+    | "local-credentials"
+    | "unknown";
+  authLabel: string;
+  authWarning: string | null;
   loginCommand: string | null;
 }
 

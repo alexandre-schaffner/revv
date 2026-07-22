@@ -143,12 +143,79 @@ export async function revParse(
   return (await runGitCapture(["rev-parse", ref], worktreePath, timeoutMs)).trim();
 }
 
+export async function commitExists(worktreePath: string, sha: string): Promise<boolean> {
+  try {
+    await runGit(["cat-file", "-e", `${sha}^{commit}`], worktreePath, 10_000);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function fetchRefspec(
   worktreePath: string,
   authedUrl: string,
   refspec: string,
 ): Promise<void> {
   await runGit(["fetch", authedUrl, refspec], worktreePath);
+}
+
+export async function fetchCommit(
+  worktreePath: string,
+  authedUrl: string,
+  sha: string,
+): Promise<void> {
+  await runGit(["fetch", "--no-tags", authedUrl, sha], worktreePath);
+}
+
+export async function diffNameStatusZ(
+  worktreePath: string,
+  baseRef: string,
+  headRef: string,
+): Promise<string> {
+  return runGitCapture(
+    ["diff", "--find-renames", "--name-status", "-z", baseRef, headRef],
+    worktreePath,
+    30_000,
+  );
+}
+
+export async function diffPatchForPath(
+  worktreePath: string,
+  baseRef: string,
+  headRef: string,
+  path: string,
+): Promise<string> {
+  return runGitCapture(
+    ["diff", "--find-renames", "--unified=80", baseRef, headRef, "--", path],
+    worktreePath,
+    30_000,
+  );
+}
+
+/**
+ * Per-file added/deleted line counts for the range, computed by git itself
+ * (`--numstat`) in a single invocation. Cheap to parse (one integer pair per
+ * changed file) — unlike counting the lines of every file's full patch body,
+ * which forces a synchronous multi-MB `String.split` on the event loop for
+ * large/generated files. Output is `<added>\t<deleted>\t<path>` per line;
+ * binary files report `-\t-`.
+ *
+ * `core.quotePath=false` keeps non-ASCII paths verbatim (git octal-escapes
+ * them by default), so they match the verbatim paths that `--name-status -z`
+ * emits — otherwise every non-ASCII file would miss the numstat lookup and
+ * fall back to counting its patch body.
+ */
+export async function diffNumstat(
+  worktreePath: string,
+  baseRef: string,
+  headRef: string,
+): Promise<string> {
+  return runGitCapture(
+    ["-c", "core.quotePath=false", "diff", "--find-renames", "--numstat", baseRef, headRef],
+    worktreePath,
+    30_000,
+  );
 }
 
 export async function checkoutBranch(worktreePath: string, branch: string): Promise<void> {

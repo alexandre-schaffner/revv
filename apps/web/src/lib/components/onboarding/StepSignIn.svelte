@@ -104,7 +104,11 @@ async function copyCode() {
 			</p>
 
 			<div class="actions">
-				<button class="primary" onclick={() => signIn(isGhe ? githubHost : undefined)} disabled={isLoading}>
+				<button
+					class="primary"
+					onclick={() => void signIn(isGhe ? githubHost : undefined)}
+					disabled={isLoading}
+				>
 					<span>{isLoading ? `Opening ${hostLabel}…` : `Sign in with ${hostLabel}`}</span>
 					{#if !isLoading}
 						<svg

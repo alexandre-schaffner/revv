@@ -1,3 +1,4 @@
+import { GITHUB_CLIENT_ID_HINT, isLikelyGitHubClientId } from "@revv/shared";
 import { serverEnv } from "./config";
 
 /**
@@ -40,6 +41,30 @@ export function clientIdIsGitHubApp(clientId: string): boolean {
   return clientId.startsWith("Iv");
 }
 
+export class MissingGitHubClientIdError extends Error {
+  readonly code = "missing_github_client_id";
+
+  constructor(
+    readonly host: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "MissingGitHubClientIdError";
+  }
+}
+
+export class InvalidGitHubClientIdError extends Error {
+  readonly code = "invalid_github_client_id";
+
+  constructor(
+    readonly host: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "InvalidGitHubClientIdError";
+  }
+}
+
 /**
  * Client_id for a host.
  *
@@ -58,10 +83,19 @@ export function clientIdIsGitHubApp(clientId: string): boolean {
 export function clientIdForHost(host: string, customClientId?: string | null): string {
   if (usesGitHubApp(host)) return serverEnv.githubAppClientId;
   const custom = customClientId?.trim();
-  if (custom) return custom;
+  if (custom) {
+    if (!isLikelyGitHubClientId(custom)) {
+      throw new InvalidGitHubClientIdError(
+        host,
+        `The GitHub App or OAuth App client ID for ${host} is not valid. ${GITHUB_CLIENT_ID_HINT}`,
+      );
+    }
+    return custom;
+  }
   if (isPublicGitHub(host)) {
     if (!serverEnv.githubClientIdPublic) {
-      throw new Error(
+      throw new MissingGitHubClientIdError(
+        host,
         "Public GitHub sign-in requires GITHUB_CLIENT_ID_PUBLIC to be set. " +
           "Register an OAuth App on github.com and add GITHUB_CLIENT_ID_PUBLIC=<id> to your .env file.",
       );
@@ -69,7 +103,8 @@ export function clientIdForHost(host: string, customClientId?: string | null): s
     return serverEnv.githubClientIdPublic;
   }
   if (serverEnv.githubClientId) return serverEnv.githubClientId;
-  throw new Error(
+  throw new MissingGitHubClientIdError(
+    host,
     `Signing in to ${host} requires a GitHub App or OAuth App client ID. ` +
       "Add one during onboarding (GitHub Enterprise → client ID), or set GITHUB_CLIENT_ID for a fixed deployment.",
   );

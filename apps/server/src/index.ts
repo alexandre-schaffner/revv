@@ -4,7 +4,10 @@ import { Elysia } from "elysia";
 import { stopAllAcpConnections } from "./ai/acp/acp-connection";
 import { auth } from "./auth";
 import { serverEnv } from "./config";
+import { resolveDbPath } from "./db/index";
+import { CORS_ORIGINS } from "./http-origins";
 import { logError } from "./logger";
+import { isLoopbackAddress } from "./net";
 import { recordSpan } from "./observability/tracer";
 import { chatRoute } from "./routes/chat";
 import { debugRoutes } from "./routes/debug";
@@ -42,27 +45,31 @@ import { acquireSingleInstance } from "./singleInstance";
 // (revv.db) environments stay independent.  If a stale instance is found it
 // is SIGTERM'd (then SIGKILL'd after 3 s) before we bind the port.
 const port = serverEnv.port;
-const releasePidFile = acquireSingleInstance(`${serverEnv.dbPath}.${serverEnv.channel}.pid`);
+const releasePidFile = acquireSingleInstance(`${resolveDbPath()}.${serverEnv.channel}.pid`);
 
 logError("server", `starting on port ${port}`);
 
 const app = new Elysia()
   .use(
     cors({
-      origin: [
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://[::1]:5173",
-        "http://localhost:45678",
-        "http://localhost:45679",
-        "tauri://localhost",
-        "https://tauri.localhost",
-      ],
+      origin: [...CORS_ORIGINS],
       credentials: true,
       allowedHeaders: ["Content-Type", "Authorization"],
       methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     }),
   )
+  .onRequest(({ request, server, set }) => {
+    // Defense-in-depth: reject non-loopback peers so a future bind-widening
+    // can't silently re-expose the API. Skipped when bound to a non-loopback
+    // host; fails open when the peer IP is undeterminable.
+    if (isLoopbackAddress(serverEnv.host)) {
+      const peer = server?.requestIP(request)?.address;
+      if (peer && !isLoopbackAddress(peer)) {
+        set.status = 403;
+        return "Forbidden: this server only accepts loopback connections";
+      }
+    }
+  })
   .onRequest((ctx) => {
     // Stamp request start time for the post-hoc http.request span.
     (ctx.store as { _revvStartMs?: number })._revvStartMs = performance.now();
@@ -125,12 +132,14 @@ const app = new Elysia()
   }))
   .listen({
     port,
+    // Loopback only — without a hostname Bun binds to 0.0.0.0 (every interface).
+    hostname: serverEnv.host,
     // Prevent Bun's default idle timeout from killing long-running SSE streams
     // (e.g. agent chat turns that go quiet for >10 s during tool execution).
     idleTimeout: 255,
   });
 
-logError("server", `listening on http://localhost:${port}`);
+logError("server", `listening on http://${serverEnv.host}:${port}`);
 
 // Migrate any plaintext GitHub tokens left in the `account` table into the OS
 // secure store, then null the columns. Awaited before the sync scheduler boots
