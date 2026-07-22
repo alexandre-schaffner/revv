@@ -1,20 +1,24 @@
 <script lang="ts" module>
 import type { ChatSessionCommand } from "@revv/shared";
-import type { HTMLTextareaAttributes } from "svelte/elements";
+import type { HTMLAttributes } from "svelte/elements";
 
-export type PromptInputTextareaProps = HTMLTextareaAttributes & {
+export type PromptInputTextareaProps = Omit<HTMLAttributes<HTMLDivElement>, "contenteditable"> & {
   /** Placeholder text. */
   placeholder?: string;
   commands?: readonly ChatSessionCommand[];
   mentionPaths?: readonly string[];
+  /** When true the editor is read-only (no PR selected). */
+  disabled?: boolean;
 };
 </script>
 
 <script lang="ts">
 	import { detectMentionTrigger, type MentionTrigger } from "@revv/shared";
-	import { cn } from "$lib/utils.js";
-	import { fileIcon } from "$lib/utils/file-icon";
 	import { getContext } from "svelte";
+	import { cn } from "$lib/utils.js";
+	import { basename } from "$lib/utils/activity-groups";
+	import { fileIcon } from "$lib/utils/file-icon";
+	import { createFileGlyph } from "$lib/utils/file-glyph";
 	import { PROMPT_INPUT_CTX_KEY, type PromptInputContext } from "./context.js";
 	import PromptInputAutocompleteMenu from "./PromptInputAutocompleteMenu.svelte";
 
@@ -22,42 +26,35 @@ export type PromptInputTextareaProps = HTMLTextareaAttributes & {
 		placeholder = "Type a message...",
 		commands = [],
 		mentionPaths = [],
+		disabled = false,
 		class: className,
+		onfocus,
 		...restProps
 	}: PromptInputTextareaProps = $props();
 
 	const ctx = getContext<PromptInputContext>(PROMPT_INPUT_CTX_KEY);
-	let textareaEl: HTMLTextAreaElement | undefined = $state(undefined);
-	let overlayEl: HTMLDivElement | undefined = $state(undefined);
+	let editorEl: HTMLDivElement | undefined = $state(undefined);
 	let activeIndex = $state(0);
-	// Set true on Escape to hide the menu without changing the text; reset
-	// whenever the trigger token changes (see the activeIndex effect below).
+	// Set true on Escape to hide the menu without changing the text; reset on the
+	// next keystroke so a fresh token reopens it.
 	let dismissed = $state(false);
+	// The active autocomplete trigger at the caret. Unlike a textarea we can't
+	// derive this from a reactive value+selectionStart, so we recompute it
+	// imperatively whenever the caret could have moved (input / key / pointer).
+	let trigger = $state<MentionTrigger | null>(null);
 
-	const trigger = $derived.by<MentionTrigger | null>(() => {
-		const value = ctx.value;
-		// NOTE: `selectionStart` is read but is NOT reactive, so a caret-only
-		// move (arrow keys / clicking into an existing `@token`) does not
-		// re-evaluate the trigger and won't reopen the menu. This is by design —
-		// the menu opens while typing the token; editing the text re-triggers.
-		const caret = textareaEl?.selectionStart ?? value.length;
-		return detectMentionTrigger(value.slice(0, caret));
-	});
+	const mentionPathSet = $derived(new Set(mentionPaths));
 
 	const slashItems = $derived.by(() => {
 		if (trigger?.kind !== "slash") return [];
 		const q = trigger.query.toLowerCase();
-		return commands
-			.filter((command) => command.name.toLowerCase().includes(q))
-			.slice(0, 8);
+		return commands.filter((command) => command.name.toLowerCase().includes(q)).slice(0, 8);
 	});
 
 	const mentionItems = $derived.by(() => {
 		if (trigger?.kind !== "mention") return [];
 		const q = trigger.query.toLowerCase();
-		return mentionPaths
-			.filter((path) => path.toLowerCase().includes(q))
-			.slice(0, 10);
+		return mentionPaths.filter((path) => path.toLowerCase().includes(q)).slice(0, 10);
 	});
 
 	const menuOpen = $derived(
@@ -66,45 +63,184 @@ export type PromptInputTextareaProps = HTMLTextareaAttributes & {
 				(trigger?.kind === "mention" && mentionItems.length > 0)),
 	);
 
+	const isEmpty = $derived(ctx.value.trim().length === 0);
+
 	$effect(() => {
 		void trigger?.kind;
 		void trigger?.query;
 		activeIndex = 0;
 	});
 
-	function replaceToken(replacement: string) {
-		if (!trigger || !textareaEl) return;
-		const caret = textareaEl.selectionStart;
-		const before = ctx.value.slice(0, trigger.start);
-		const after = ctx.value.slice(caret);
-		const next = `${before}${replacement}${after}`;
-		ctx.setValue(next);
-		// Close the menu. The token is now complete and the caret moves past it,
-		// but `selectionStart` is non-reactive so the trigger re-derives against
-		// the stale caret (still inside the token) and would otherwise keep the
-		// menu open. Dismiss explicitly; the next real keystroke (`oninput`)
-		// clears it so a fresh token reopens the menu.
-		dismissed = true;
-		const nextCaret = before.length + replacement.length;
-		requestAnimationFrame(() => {
-			textareaEl?.focus();
-			textareaEl?.setSelectionRange(nextCaret, nextCaret);
+	// ── Mentions in the editor are atomic pills ──────────────────────────────
+	// The editor is a contenteditable surface, NOT a textarea: a `@path` mention
+	// is a real, non-editable pill node, while everything else is plain text.
+	// `ctx.value` stays a flat string (the backend's contract) by serializing the
+	// DOM — each pill back to its `@path` token — on every edit.
+	const MENTION_RE = /@((?:[\w.-]+\/)*[\w.-]+\.[A-Za-z0-9]+)(?::\d+)?/g;
+	const PILL_CLASS = "composer-pill";
+
+	function makePill(path: string): HTMLElement {
+		const span = document.createElement("span");
+		span.className = PILL_CLASS;
+		span.contentEditable = "false";
+		span.dataset.token = `@${path}`;
+		span.title = path;
+		span.appendChild(createFileGlyph(path, "composer-pill-icon"));
+		const label = document.createElement("span");
+		label.textContent = basename(path);
+		span.appendChild(label);
+		return span;
+	}
+
+	/** Serialize a node tree back to the flat `@path`-bearing message string. */
+	function serializeNode(node: Node): string {
+		if (node.nodeType === Node.TEXT_NODE) return node.nodeValue ?? "";
+		if (node.nodeType !== Node.ELEMENT_NODE) return "";
+		const el = node as HTMLElement;
+		if (el.classList.contains(PILL_CLASS)) return el.dataset.token ?? "";
+		if (el.tagName === "BR") return "\n";
+		let s = "";
+		for (const child of el.childNodes) s += serializeNode(child);
+		return s;
+	}
+
+	function serialize(root: Node | undefined): string {
+		if (!root) return "";
+		let s = "";
+		for (const child of root.childNodes) s += serializeNode(child);
+		return s;
+	}
+
+	/** Rebuild the editor DOM from a flat string, pillifying known mentions. */
+	function render(value: string) {
+		if (!editorEl) return;
+		const frag = document.createDocumentFragment();
+		let last = 0;
+		MENTION_RE.lastIndex = 0;
+		for (let m = MENTION_RE.exec(value); m; m = MENTION_RE.exec(value)) {
+			const path = m[1] ?? "";
+			if (!mentionPathSet.has(path)) continue;
+			if (m.index > last) appendText(frag, value.slice(last, m.index));
+			frag.append(makePill(path));
+			last = m.index + m[0].length;
+		}
+		if (last < value.length) appendText(frag, value.slice(last));
+		editorEl.replaceChildren(frag);
+	}
+
+	// Newlines render as <br> (matching what the browser inserts on Shift+Enter)
+	// so the two never mix; plain runs become text nodes.
+	function appendText(frag: DocumentFragment, text: string) {
+		const parts = text.split("\n");
+		parts.forEach((part, i) => {
+			if (i > 0) frag.append(document.createElement("br"));
+			if (part) frag.append(document.createTextNode(part));
 		});
 	}
 
-	// Single source for the inserted-token format, shared by the keyboard
-	// (`selectActive`) and mouse (`onselect`) paths so the marker + trailing
-	// space convention lives in exactly one place per kind.
-	function applySlash(name: string) {
-		replaceToken(`/${name} `);
-	}
-	function applyMention(path: string) {
-		replaceToken(`@${path} `);
+	// Keep the editor DOM in step with programmatic value changes (the submit
+	// clear, mainly). Skip when the DOM already serializes to `ctx.value` — i.e.
+	// during normal typing — so we never stomp the caret mid-edit.
+	$effect(() => {
+		const v = ctx.value;
+		if (!editorEl || v === serialize(editorEl)) return;
+		render(v);
+	});
+
+	function pushValue() {
+		ctx.setValue(serialize(editorEl));
 	}
 
-	function shortPath(path: string): string {
-		if (path.length <= 58) return path;
-		return `${path.slice(0, 24)}...${path.slice(-28)}`;
+	// ── Caret-relative trigger detection ─────────────────────────────────────
+	// The last collapsed caret inside the editor. Saved on every interaction so
+	// selecting an autocomplete row with the mouse — which would otherwise blur
+	// the editor and drop the live selection — can still target the right spot.
+	let savedRange: Range | null = null;
+
+	function editorCaret(): Range | null {
+		const sel = window.getSelection();
+		if (sel && sel.rangeCount > 0) {
+			const range = sel.getRangeAt(0);
+			if (range.collapsed && editorEl?.contains(range.startContainer)) return range;
+		}
+		return savedRange;
+	}
+
+	function caretTextBefore(): string {
+		const range = editorCaret();
+		if (!range || !editorEl) return "";
+		const pre = range.cloneRange();
+		pre.selectNodeContents(editorEl);
+		pre.setEnd(range.startContainer, range.startOffset);
+		return serialize(pre.cloneContents());
+	}
+
+	function refreshTrigger() {
+		const sel = window.getSelection();
+		if (sel && sel.rangeCount > 0) {
+			const range = sel.getRangeAt(0);
+			if (range.collapsed && editorEl?.contains(range.startContainer)) {
+				savedRange = range.cloneRange();
+			}
+		}
+		trigger = detectMentionTrigger(caretTextBefore());
+	}
+
+	// ── Token replacement (autocomplete selection) ───────────────────────────
+	// The active token is freshly-typed plain text ending at the caret, so it
+	// lives in one text node; delete `marker + query` chars and drop in the
+	// replacement (a pill for mentions, plain text for slash commands).
+	function replaceTokenRange(markerAndQueryLen: number): Range | null {
+		const caret = editorCaret();
+		if (!caret) return null;
+		const node = caret.startContainer;
+		if (node.nodeType !== Node.TEXT_NODE) return null;
+		const start = caret.startOffset - markerAndQueryLen;
+		if (start < 0) return null;
+		const r = document.createRange();
+		r.setStart(node, start);
+		r.setEnd(node, caret.startOffset);
+		r.deleteContents();
+		return r;
+	}
+
+	function placeCaretAfter(node: Node) {
+		const sel = window.getSelection();
+		if (!sel) return;
+		const r = document.createRange();
+		r.setStartAfter(node);
+		r.collapse(true);
+		sel.removeAllRanges();
+		sel.addRange(r);
+	}
+
+	function applyMention(path: string) {
+		if (trigger?.kind !== "mention") return;
+		const r = replaceTokenRange(trigger.query.length + 1);
+		if (!r) return;
+		const space = document.createTextNode(" ");
+		const pill = makePill(path);
+		r.insertNode(space);
+		r.insertNode(pill);
+		placeCaretAfter(space);
+		closeMenuAfterInsert();
+	}
+
+	function applySlash(name: string) {
+		if (trigger?.kind !== "slash") return;
+		const r = replaceTokenRange(trigger.query.length + 1);
+		if (!r) return;
+		const txt = document.createTextNode(`/${name} `);
+		r.insertNode(txt);
+		placeCaretAfter(txt);
+		closeMenuAfterInsert();
+	}
+
+	function closeMenuAfterInsert() {
+		pushValue();
+		trigger = null;
+		dismissed = true;
+		editorEl?.focus();
 	}
 
 	function selectActive() {
@@ -117,7 +253,75 @@ export type PromptInputTextareaProps = HTMLTextareaAttributes & {
 		}
 	}
 
+	function shortPath(path: string): string {
+		if (path.length <= 58) return path;
+		return `${path.slice(0, 24)}...${path.slice(-28)}`;
+	}
+
+	function isPill(node: Node | null): node is HTMLElement {
+		return (
+			node?.nodeType === Node.ELEMENT_NODE &&
+			(node as HTMLElement).classList.contains(PILL_CLASS)
+		);
+	}
+
+	// Walk past empty text nodes the browser may leave between siblings so an
+	// adjacent pill is still recognized.
+	function skipEmptyText(node: Node | null, dir: "prev" | "next"): Node | null {
+		let n = node;
+		while (n && n.nodeType === Node.TEXT_NODE && n.nodeValue === "") {
+			n = dir === "prev" ? n.previousSibling : n.nextSibling;
+		}
+		return n;
+	}
+
+	// The node a Backspace (prev) / Delete (next) would act on, given a collapsed
+	// caret. Returns null when there's ordinary text to delete in that direction
+	// (let the browser handle it).
+	function adjacentNode(range: Range, dir: "prev" | "next"): Node | null {
+		const { startContainer: c, startOffset: o } = range;
+		if (c.nodeType === Node.TEXT_NODE) {
+			const atEdge = dir === "prev" ? o === 0 : o === (c.nodeValue?.length ?? 0);
+			if (!atEdge) return null;
+			return skipEmptyText(dir === "prev" ? c.previousSibling : c.nextSibling, dir);
+		}
+		const child = dir === "prev" ? c.childNodes[o - 1] : c.childNodes[o];
+		return skipEmptyText(child ?? null, dir);
+	}
+
+	// Atomic pill deletion. WebKit otherwise needs two Backspaces on a
+	// `contenteditable=false` node (the first only steps the caret over it), so
+	// when a pill sits next to the caret we remove it ourselves in one press.
+	function deleteAdjacentPill(e: KeyboardEvent): boolean {
+		const sel = window.getSelection();
+		if (!sel || sel.rangeCount === 0) return false;
+		const range = sel.getRangeAt(0);
+		if (!range.collapsed) return false;
+		const dir = e.key === "Backspace" ? "prev" : "next";
+		const pill = adjacentNode(range, dir);
+		if (!isPill(pill)) return false;
+		e.preventDefault();
+		const anchor = pill.nextSibling;
+		const parent = pill.parentNode;
+		pill.remove();
+		const r = document.createRange();
+		if (anchor && anchor.parentNode === parent) r.setStartBefore(anchor);
+		else {
+			r.selectNodeContents(parent ?? (editorEl as Node));
+			r.collapse(false);
+		}
+		r.collapse(true);
+		sel.removeAllRanges();
+		sel.addRange(r);
+		pushValue();
+		refreshTrigger();
+		return true;
+	}
+
 	function handleKeydown(e: KeyboardEvent) {
+		if ((e.key === "Backspace" || e.key === "Delete") && !e.isComposing) {
+			if (deleteAdjacentPill(e)) return;
+		}
 		if (menuOpen) {
 			if (e.key === "ArrowDown") {
 				e.preventDefault();
@@ -136,82 +340,47 @@ export type PromptInputTextareaProps = HTMLTextareaAttributes & {
 				return;
 			}
 			if (e.key === "Escape") {
-				// Dismiss the menu without mutating the text or submitting.
 				e.preventDefault();
 				dismissed = true;
 				activeIndex = 0;
 				return;
 			}
-			if (e.key === " ") {
-				activeIndex = 0;
+			if (e.key === " ") activeIndex = 0;
+		}
+		if (e.key === "Enter" && !e.isComposing) {
+			// Enter submits; Shift+Enter inserts a newline as a <br> so the
+			// serializer sees a single, predictable break shape.
+			e.preventDefault();
+			if (e.shiftKey) {
+				document.execCommand("insertLineBreak");
+			} else {
+				ctx.submit();
 			}
 		}
-		if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
-			e.preventDefault();
-			ctx.submit();
-		}
 	}
 
-	// ── Mention highlight overlay ────────────────────────────────────────────
-	// A textarea can't render inline pills, so we mirror its text in an overlay
-	// behind transparent textarea text and style the `@path` tokens there. The
-	// overlay shares the textarea's exact box + typography so glyphs line up; the
-	// pill carries no horizontal padding (a box-shadow halo fakes the breathing
-	// room) so it never shifts the text the caret is editing.
-	const MENTION_RE = /@((?:[\w.-]+\/)*[\w.-]+\.[A-Za-z0-9]+)(?::\d+)?/g;
-	const mentionPathSet = $derived(new Set(mentionPaths));
-
-	function escapeHtml(s: string): string {
-		return s.replace(
-			/[&<>]/g,
-			(c) => (c === "&" ? "&amp;" : c === "<" ? "&lt;" : "&gt;"),
-		);
+	function handleInput() {
+		pushValue();
+		dismissed = false;
+		refreshTrigger();
 	}
 
-	// Only tokens that name a real mentionable file become pills; a bare `@foo`
-	// or an in-progress token stays plain text. Unmatched stretches fall through
-	// into the next plain slice, so nothing is dropped.
-	const overlayHtml = $derived.by(() => {
-		const value = ctx.value;
-		let html = "";
-		let last = 0;
-		MENTION_RE.lastIndex = 0;
-		for (let m = MENTION_RE.exec(value); m; m = MENTION_RE.exec(value)) {
-			const path = m[1] ?? "";
-			if (!mentionPathSet.has(path)) continue;
-			html += `${escapeHtml(value.slice(last, m.index))}<span class="composer-mention">${escapeHtml(m[0])}</span>`;
-			last = m.index + m[0].length;
-		}
-		html += escapeHtml(value.slice(last));
-		// A trailing newline leaves no glyph for the browser to give height to;
-		// a zero-width space keeps the overlay's last line in sync with the
-		// textarea's so the two never drift by a row.
-		return value.endsWith("\n") ? `${html}​` : html;
-	});
-
-	function syncScroll() {
-		if (!overlayEl || !textareaEl) return;
-		overlayEl.scrollTop = textareaEl.scrollTop;
-		overlayEl.scrollLeft = textareaEl.scrollLeft;
+	// Pillify any complete, known mention typed by hand (rather than picked from
+	// the menu) once the user leaves the field — a safe moment to rebuild the DOM
+	// since there's no caret to disturb. Serialization is unchanged, so ctx.value
+	// stays put.
+	function handleBlur() {
+		if (editorEl && ctx.value.trim().length > 0) render(ctx.value);
 	}
 
-	function autoResize() {
-		if (!textareaEl) return;
-		// Empty: defer to CSS min-height. Measuring scrollHeight during the
-		// first layout pass of the floating composer can latch oversized.
-		if (!ctx.value) {
-			textareaEl.style.height = "";
-			return;
-		}
-		textareaEl.style.height = "auto";
-		textareaEl.style.height = Math.min(textareaEl.scrollHeight, 160) + "px";
+	// Strip formatting from pasted content (and never inject HTML); file pastes
+	// carry no text/plain and fall through to the form's attachment handler.
+	function handlePaste(e: ClipboardEvent) {
+		const text = e.clipboardData?.getData("text/plain") ?? "";
+		if (!text) return;
+		e.preventDefault();
+		document.execCommand("insertText", false, text);
 	}
-
-	$effect(() => {
-		// Track ctx.value so autoResize fires on programmatic clear/fill.
-		void ctx.value;
-		autoResize();
-	});
 </script>
 
 {#snippet slashRow(item: ChatSessionCommand)}
@@ -253,72 +422,77 @@ export type PromptInputTextareaProps = HTMLTextareaAttributes & {
 	/>
 {/if}
 
-<div class="ta-wrap">
-	<!-- Visible mirror layer: same box + typography as the textarea, styling the
-	     `@path` tokens. The textarea above it carries transparent text + a
-	     visible caret, so editing semantics are untouched. -->
+<div class="pi-wrap">
+	{#if isEmpty}
+		<div class="pi-placeholder px-4 py-3 text-sm leading-relaxed" aria-hidden="true">
+			{placeholder}
+		</div>
+	{/if}
 	<div
-		bind:this={overlayEl}
-		aria-hidden="true"
-		class={cn("ta-overlay px-4 py-3 text-sm leading-relaxed text-foreground", className)}
-	>{@html overlayHtml}</div>
-	<textarea
-		bind:this={textareaEl}
-		value={ctx.value}
-		oninput={(e) => {
-			ctx.setValue(e.currentTarget.value);
-			// Real typing re-arms the menu after an Escape/selection dismiss.
-			dismissed = false;
-			autoResize();
-			syncScroll();
-		}}
-		onscroll={syncScroll}
+		bind:this={editorEl}
+		contenteditable={!disabled}
+		role="textbox"
+		tabindex="0"
+		aria-multiline="true"
+		aria-label={placeholder}
 		data-slot="prompt-input-textarea"
 		class={cn(
-			"ta-field block w-full min-h-[2.75rem] resize-none bg-transparent px-4 py-3 text-sm leading-relaxed placeholder:text-muted-foreground focus:outline-none",
+			"pi-editor block w-full min-h-[2.75rem] bg-transparent px-4 py-3 text-sm leading-relaxed text-foreground focus:outline-none",
 			className,
 		)}
-		{placeholder}
-		rows={1}
+		oninput={handleInput}
 		onkeydown={handleKeydown}
+		onkeyup={refreshTrigger}
+		onmouseup={refreshTrigger}
+		onblur={handleBlur}
+		onfocus={(e) => {
+			refreshTrigger();
+			onfocus?.(e);
+		}}
 		{...restProps}
-	></textarea>
+	></div>
 </div>
 
 <style>
-	.ta-wrap {
+	.pi-wrap {
 		position: relative;
 	}
-	/* Mirror layer sits under the textarea, sharing its exact box so glyphs
-	   register. Wrapping must match the textarea's: pre-wrap + break-anywhere. */
-	.ta-overlay {
+	.pi-editor {
+		box-sizing: border-box;
+		max-height: 160px;
+		overflow-y: auto;
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
+	}
+	.pi-placeholder {
 		position: absolute;
 		inset: 0;
 		z-index: 0;
-		/* Identical box model to the textarea is what keeps the available text
-		   width — and therefore every wrap point — in lockstep. */
-		box-sizing: border-box;
-		overflow: hidden;
-		white-space: pre-wrap;
-		overflow-wrap: anywhere;
 		pointer-events: none;
 		user-select: none;
-		color: var(--color-foreground);
+		color: var(--color-muted-foreground);
 	}
-	.ta-field {
-		position: relative;
-		z-index: 1;
-		box-sizing: border-box;
-		/* Text is invisible (the overlay renders it); only the caret shows. */
-		color: transparent;
-		caret-color: var(--color-foreground);
-	}
-	/* Injected via {@html}, so global. No horizontal padding — a box-shadow halo
-	   gives the pill breathing room without shifting the glyphs the caret tracks. */
-	:global(.ta-overlay .composer-mention) {
-		border-radius: 4px;
-		background: color-mix(in srgb, var(--color-accent) 16%, transparent);
-		box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--color-accent) 16%, transparent);
+	/* Atomic mention chip: a real, non-editable pill. Accent-tinted so it reads
+	   as a token on the dark composer; the file glyph keeps its own color. */
+	.pi-editor :global(.composer-pill) {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.25rem;
+		padding: 0.05rem 0.35rem;
+		margin: 0 1px;
+		border-radius: 5px;
+		border: 1px solid color-mix(in srgb, var(--color-accent) 35%, transparent);
+		background: color-mix(in srgb, var(--color-accent) 14%, transparent);
 		color: var(--color-accent);
+		font-size: 0.8125em;
+		line-height: 1.4;
+		white-space: nowrap;
+		user-select: none;
+		vertical-align: baseline;
+	}
+	.pi-editor :global(.composer-pill-icon) {
+		width: 0.85em;
+		height: 0.85em;
+		flex-shrink: 0;
 	}
 </style>
