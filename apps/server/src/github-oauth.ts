@@ -69,12 +69,20 @@ export class InvalidGitHubClientIdError extends Error {
  * Client_id for a host.
  *
  * - **Pro on github.com** → the bundled GitHub App id.
+ * - **github.com (OSS)** → the bundled public OAuth App id.
  * - **A user-added GHE host** → `customClientId`, the GitHub App/OAuth App id
  *   the user registered on their own instance (passed from settings). There is
  *   no bundled registration on a customer's host.
- * - **github.com (OSS)** → the bundled public OAuth App id.
  * - **A GHE host configured via env** → the `GITHUB_CLIENT_ID` override (for a
  *   fixed self-hosted deployment).
+ *
+ * github.com ALWAYS resolves to Revv's bundled registration, and the public
+ * paths are checked BEFORE `customClientId` — a `customClientId` is bound to a
+ * GHE host and must never be applied to github.com. Otherwise a stale GHE id
+ * left in settings after switching back to a github.com account (the switch
+ * updates only the host) would be POSTed to github.com's device-code endpoint,
+ * which 404s. See the `settings.githubHost==='github.com'` clamp in
+ * `SettingsService.updateSettings` and the guard in `resolveGithubUrls`.
  *
  * Throws a clear error when github.com lacks `GITHUB_CLIENT_ID_PUBLIC`, or when
  * a GHE host has no client ID at all, so the user gets a diagnosable message
@@ -82,16 +90,6 @@ export class InvalidGitHubClientIdError extends Error {
  */
 export function clientIdForHost(host: string, customClientId?: string | null): string {
   if (usesGitHubApp(host)) return serverEnv.githubAppClientId;
-  const custom = customClientId?.trim();
-  if (custom) {
-    if (!isLikelyGitHubClientId(custom)) {
-      throw new InvalidGitHubClientIdError(
-        host,
-        `The GitHub App or OAuth App client ID for ${host} is not valid. ${GITHUB_CLIENT_ID_HINT}`,
-      );
-    }
-    return custom;
-  }
   if (isPublicGitHub(host)) {
     if (!serverEnv.githubClientIdPublic) {
       throw new MissingGitHubClientIdError(
@@ -101,6 +99,16 @@ export function clientIdForHost(host: string, customClientId?: string | null): s
       );
     }
     return serverEnv.githubClientIdPublic;
+  }
+  const custom = customClientId?.trim();
+  if (custom) {
+    if (!isLikelyGitHubClientId(custom)) {
+      throw new InvalidGitHubClientIdError(
+        host,
+        `The GitHub App or OAuth App client ID for ${host} is not valid. ${GITHUB_CLIENT_ID_HINT}`,
+      );
+    }
+    return custom;
   }
   if (serverEnv.githubClientId) return serverEnv.githubClientId;
   throw new MissingGitHubClientIdError(

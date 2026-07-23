@@ -69,8 +69,9 @@ async function resolveGithubUrls(hostOverride?: string): Promise<{
   const host = hostOverride?.trim() || settings?.githubHost?.trim() || serverEnv.githubHost;
   const githubBase = `https://${host}`;
   const apiBase = isPublicGitHub(host) ? "https://api.github.com" : `https://api.${host}`;
-  // The BYO client ID applies only to the host it was saved with. For
-  // github.com it's empty and the resolver falls back to server config.
+  // The BYO client ID applies only to the host it was saved with. github.com
+  // ignores it regardless (see `clientIdForHost`), so no github.com-specific
+  // guard is needed here.
   const customClientId = settings?.githubHost?.trim() === host ? settings?.githubClientId : null;
   return {
     host,
