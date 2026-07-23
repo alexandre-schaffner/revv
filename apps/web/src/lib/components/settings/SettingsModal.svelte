@@ -1,9 +1,11 @@
 <script lang="ts">
 import {
   ACP_AGENTS,
+  type AcpAgentId,
   type AgentStatus,
   type AgentStatusReport,
   getAgentKeychainAuth,
+  type InstallEvent,
   type RecapAgentChoice,
   type Repository,
 } from "@revv/shared";
@@ -23,10 +25,12 @@ import Trash2 from "phosphor-svelte/lib/Trash";
 import User from "phosphor-svelte/lib/User";
 import TriangleAlert from "phosphor-svelte/lib/Warning";
 import X from "phosphor-svelte/lib/X";
+import { onDestroy } from "svelte";
 import { SvelteMap } from "svelte/reactivity";
 import { goto } from "$app/navigation";
 import { API_BASE_URL } from "$lib/api/base-url";
 import SignInButton from "$lib/components/auth/SignInButton.svelte";
+import AgentLoginTerminal from "$lib/components/onboarding/AgentLoginTerminal.svelte";
 import RepoDeleteConfirm from "$lib/components/sidebar/RepoDeleteConfirm.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import * as Dialog from "$lib/components/ui/dialog/index.js";
@@ -37,6 +41,7 @@ import { getUser, removeAccount, resetOnboarding, signOut } from "$lib/stores/au
 import { deleteRepo, getRepositories } from "$lib/stores/prs.svelte";
 import {
   type AgentKeychainResult,
+  cascadeChatAgentChange,
   checkAgentKeychain,
   fetchAgentStatus,
   fetchModels,
@@ -50,6 +55,12 @@ import {
   setThemePreference,
   type ThemePreference,
 } from "$lib/stores/theme.svelte";
+import {
+  type AgentInstallState,
+  agentInstallLog,
+  appendAgentInstallLog,
+  runAgentInstall,
+} from "$lib/utils/agent-install";
 import { authHeaders } from "$lib/utils/session-token";
 import UpdatesSection from "./UpdatesSection.svelte";
 import "./settings-layout.css";
@@ -305,9 +316,6 @@ let aiConfigured = $state(false);
 let aiStatusLoading = $state(true);
 let providerStatus = $state<AgentStatusReport | null>(getAgentStatus());
 let providerStatusLoading = $state(false);
-// Agent / review-model / context-window / thinking-effort are configured from
-// the chat bottom bar (capability-driven per the selected ACP agent); the
-// settings modal only keeps the low-cost suggestions model + limits.
 let aiAgent = $derived(getSettings()?.aiAgent ?? "opencode");
 let currentAgent = $derived(ACP_AGENTS.find((a) => a.id === aiAgent));
 let currentAgentStatus = $derived(providerStatus?.agents[aiAgent] ?? null);
@@ -317,6 +325,11 @@ let currentSuggestionsModelLabel = $derived(
   modelOptions.find((o) => o.value === currentSuggestionsModel)?.label ?? currentSuggestionsModel,
 );
 
+let providerInstall = $state<AgentInstallState>({ kind: "idle" });
+let providerInstallAbort: AbortController | null = null;
+let signingInAgent = $state<AcpAgentId | null>(null);
+let selectedLoginCommand = $derived(currentAgentStatus?.loginCommand ?? `${aiAgent} login`);
+
 $effect(() => {
   if (open) {
     fetchAiStatus();
@@ -325,6 +338,10 @@ $effect(() => {
     // prefetch usually covers this; this backstops a cold cache).
     void fetchModels(aiAgent);
   }
+});
+
+onDestroy(() => {
+  providerInstallAbort?.abort();
 });
 
 // ── Agent keychain access check (Solution B: guide, don't store) ───────────
@@ -347,6 +364,10 @@ async function handleCheckAgentKeychain(): Promise<void> {
 $effect(() => {
   void aiAgent;
   keychainResult = null;
+  providerInstallAbort?.abort();
+  providerInstallAbort = null;
+  providerInstall = { kind: "idle" };
+  signingInAgent = null;
 });
 
 async function fetchAiStatus(): Promise<void> {
@@ -366,10 +387,10 @@ async function fetchAiStatus(): Promise<void> {
   }
 }
 
-async function refreshProviderStatus(): Promise<void> {
+async function refreshProviderStatus(options: { refresh?: boolean } = {}): Promise<void> {
   providerStatusLoading = true;
   try {
-    providerStatus = await fetchAgentStatus();
+    providerStatus = await fetchAgentStatus(options);
   } finally {
     providerStatusLoading = false;
   }
@@ -389,6 +410,88 @@ function providerStatusText(s: AgentStatus | null | undefined): string {
 function providerStateLabel(s: AgentStatus | null | undefined): string {
   if (!providerReady(s)) return "Action needed";
   return s?.verified ? "Connected" : "Configured";
+}
+
+function agentLabel(agent: AcpAgentId): string {
+  return ACP_AGENTS.find((a) => a.id === agent)?.label ?? agent;
+}
+
+function providerInstallLabel(state: AgentInstallState): string {
+  return state.kind === "idle" ? "" : agentLabel(state.agent);
+}
+
+function retryProviderInstall(state: AgentInstallState): void {
+  if (state.kind !== "failed") return;
+  void handleProviderInstall(state.agent);
+}
+
+async function handleProviderChange(value: string | undefined): Promise<void> {
+  if (!value || value === aiAgent) return;
+  const agent = value as AcpAgentId;
+  if (agent === "opencode") void fetchModels("opencode");
+  await updateSettings(cascadeChatAgentChange(agent));
+  void fetchModels(agent);
+  void refreshProviderStatus();
+}
+
+function currentProviderLog(): string[] {
+  return agentInstallLog(providerInstall);
+}
+
+async function handleProviderInstall(agent: AcpAgentId): Promise<void> {
+  providerInstallAbort?.abort();
+  providerInstall = { kind: "running", agent, log: [] };
+  try {
+    const ctrl = new AbortController();
+    providerInstallAbort = ctrl;
+    await runAgentInstall(agent, ctrl.signal, (event) => applyProviderInstallEvent(event, agent));
+  } catch (err) {
+    if ((err as Error)?.name === "AbortError") return;
+    providerInstall = {
+      kind: "failed",
+      agent,
+      log: currentProviderLog(),
+      error: err instanceof Error ? err.message : "Install failed",
+    };
+  } finally {
+    providerInstallAbort = null;
+  }
+}
+
+async function applyProviderInstallEvent(event: InstallEvent, agent: AcpAgentId): Promise<void> {
+  if (event.type === "log") {
+    providerInstall = appendAgentInstallLog(providerInstall, agent, event.line);
+    return;
+  }
+  if (!event.success) {
+    providerInstall = {
+      kind: "failed",
+      agent,
+      log: currentProviderLog(),
+      error: event.error ?? "Install failed",
+    };
+    return;
+  }
+
+  providerStatus = await fetchAgentStatus();
+  providerInstall = { kind: "idle" };
+  if (providerStatus?.agents[agent]?.authed === false && providerStatus.embeddedLoginSupported) {
+    signingInAgent = agent;
+  }
+}
+
+function handleProviderSignIn(agent: AcpAgentId): void {
+  signingInAgent = agent;
+}
+
+async function onProviderLoginDone(): Promise<void> {
+  providerStatus = await fetchAgentStatus();
+  signingInAgent = null;
+  await fetchAiStatus();
+}
+
+function onProviderLoginSkip(): void {
+  signingInAgent = null;
 }
 
 // ── Max turns ─────────────────────────────────────────────────────────────
@@ -599,7 +702,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 
 					<div class="settings-row">
 						<div class="settings-row-info">
-							<p class="settings-row-label">{currentAgent?.label ?? 'Agent'}</p>
+							<p class="settings-row-label">Active provider</p>
 							<p class="settings-row-hint">
 								{#if providerStatusLoading}
 									Checking provider connection…
@@ -615,6 +718,16 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 							{/if}
 						</div>
 						<div class="provider-status-action">
+							<Select.Root type="single" value={aiAgent} onValueChange={handleProviderChange}>
+								<Select.Trigger class="w-40 text-xs truncate">
+									{currentAgent?.label ?? 'Agent'}
+								</Select.Trigger>
+								<Select.Content>
+									{#each ACP_AGENTS as agent (agent.id)}
+										<Select.Item value={agent.id} class="text-xs">{agent.label}</Select.Item>
+									{/each}
+								</Select.Content>
+							</Select.Root>
 							<div class="status-line">
 								{#if providerStatusLoading}
 									<Loader2 size={11} weight="regular" class="motion-essential-spin text-text-muted" />
@@ -632,11 +745,75 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 									<span class="status-line-text">Action needed</span>
 								{/if}
 							</div>
-							<Button variant="ghost" size="sm" onclick={refreshProviderStatus} disabled={providerStatusLoading} class="text-xs">
+							<Button
+								variant="ghost"
+								size="sm"
+								onclick={() => refreshProviderStatus({ refresh: true })}
+								disabled={providerStatusLoading}
+								class="text-xs"
+							>
 								Check again
 							</Button>
 						</div>
 					</div>
+
+					{#if signingInAgent}
+						<div class="provider-login-terminal">
+							<AgentLoginTerminal
+								agent={signingInAgent}
+								agentLabel={ACP_AGENTS.find((a) => a.id === signingInAgent)?.label ?? signingInAgent}
+								onDone={onProviderLoginDone}
+								onSkip={onProviderLoginSkip}
+							/>
+						</div>
+					{:else if providerInstall.kind === 'running'}
+						<div class="provider-setup-panel">
+							<div class="provider-setup-heading">
+								<Loader2 size={12} weight="regular" class="motion-essential-spin text-text-muted" />
+								<span>Installing {providerInstallLabel(providerInstall)}</span>
+							</div>
+							<div class="provider-install-log">
+								{#if providerInstall.log.length > 0}
+									{#each providerInstall.log as line, i (i)}
+										<div class="provider-install-log-line">{line}</div>
+									{/each}
+								{:else}
+									<div class="provider-install-log-line provider-install-log-line--muted">Starting installer…</div>
+								{/if}
+							</div>
+						</div>
+					{:else if providerInstall.kind === 'failed'}
+						<div class="provider-setup-panel provider-setup-panel--error">
+							<div class="provider-install-log">
+								{#each providerInstall.log as line, i (i)}
+									<div class="provider-install-log-line">{line}</div>
+								{/each}
+								<div class="provider-install-log-line provider-install-log-line--error">{providerInstall.error}</div>
+							</div>
+							<div class="provider-setup-actions">
+								<Button size="sm" class="text-xs" onclick={() => retryProviderInstall(providerInstall)}>
+									Retry install
+								</Button>
+							</div>
+						</div>
+					{:else if currentAgentStatus && !currentAgentStatus.installed}
+						<div class="provider-setup-actions">
+							<Button size="sm" class="text-xs" onclick={() => handleProviderInstall(aiAgent)}>
+								Install {currentAgent?.label ?? 'provider'}
+							</Button>
+						</div>
+					{:else if currentAgentStatus && !currentAgentStatus.authed && providerStatus?.embeddedLoginSupported}
+						<div class="provider-setup-actions">
+							<Button size="sm" class="text-xs" onclick={() => handleProviderSignIn(aiAgent)}>
+								Sign in to {currentAgent?.label ?? 'provider'}
+							</Button>
+						</div>
+					{:else if currentAgentStatus && !currentAgentStatus.authed}
+						<div class="provider-manual-login">
+							<span>Run this in a terminal, then click Check again:</span>
+							<code>{selectedLoginCommand}</code>
+						</div>
+					{/if}
 				</div>
 
 				<!-- Suggestions model (agent, review model, context window, and thinking
@@ -1562,6 +1739,99 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 		font-size: 11px;
 		line-height: 1.45;
 		color: var(--color-warning);
+	}
+
+	.provider-setup-actions {
+		display: flex;
+		justify-content: flex-end;
+		align-items: center;
+		gap: 8px;
+	}
+
+	.provider-setup-panel {
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+		padding: 12px;
+		border: 1px solid var(--color-border-subtle);
+		border-radius: 8px;
+		background: var(--color-bg-primary);
+	}
+
+	.provider-setup-panel--error {
+		border-color: color-mix(in srgb, var(--color-danger) 32%, var(--color-border-subtle));
+	}
+
+	.provider-setup-heading {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		font-size: 12px;
+		color: var(--color-text-secondary);
+	}
+
+	.provider-install-log {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		max-height: 132px;
+		overflow: auto;
+		font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+		font-size: 10.5px;
+		line-height: 1.45;
+		color: var(--color-text-secondary);
+	}
+
+	.provider-install-log-line {
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
+	}
+
+	.provider-install-log-line--muted {
+		color: var(--color-text-muted);
+	}
+
+	.provider-install-log-line--error {
+		color: var(--color-danger);
+	}
+
+	.provider-manual-login {
+		display: flex;
+		flex-wrap: wrap;
+		justify-content: flex-end;
+		align-items: center;
+		gap: 8px;
+		font-size: 11px;
+		color: var(--color-text-muted);
+	}
+
+	.provider-manual-login code {
+		padding: 4px 6px;
+		border: 1px solid var(--color-border-subtle);
+		border-radius: 6px;
+		background: var(--color-bg-primary);
+		color: var(--color-text-secondary);
+		font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+	}
+
+	.provider-login-terminal {
+		--ob-bg: var(--color-bg-secondary);
+		--ob-border: var(--color-border-subtle);
+		--ob-border-btn: var(--color-border);
+		--ob-error: var(--color-danger);
+		--ob-hover-subtle: var(--color-bg-primary);
+		--ob-row-highlight: color-mix(in srgb, var(--color-accent) 14%, transparent);
+		--ob-text: var(--color-text-primary);
+		--ob-text-body: var(--color-text-secondary);
+		--ob-text-dimmed: var(--color-text-muted);
+		--ob-text-heading: var(--color-text-primary);
+		--ob-text-italic: var(--color-accent);
+		--ob-text-label: var(--color-danger);
+		--ob-text-muted: var(--color-text-muted);
+		padding: 12px;
+		border: 1px solid var(--color-border-subtle);
+		border-radius: 8px;
+		background: var(--color-bg-primary);
 	}
 
 	/* ── Probe result (test connection feedback) ── */

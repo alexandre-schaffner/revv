@@ -7,7 +7,6 @@ import {
 } from "@revv/shared";
 import ChevronLeft from "phosphor-svelte/lib/CaretLeft";
 import { onDestroy, onMount } from "svelte";
-import { API_BASE_URL } from "$lib/api/base-url";
 import { acpAgentIcon } from "$lib/components/icons/acpAgentIcon";
 import Dotmatrix from "$lib/components/ui/dotmatrix/Dotmatrix.svelte";
 import {
@@ -19,8 +18,12 @@ import {
   resolveChatAgentId,
   updateSettings,
 } from "$lib/stores/settings.svelte";
-import { authHeaders } from "$lib/utils/session-token";
-import { parseSSEBuffer } from "$lib/utils/sse-parser";
+import {
+  type AgentInstallState,
+  agentInstallLog,
+  appendAgentInstallLog,
+  runAgentInstall,
+} from "$lib/utils/agent-install";
 import AgentLoginTerminal from "./AgentLoginTerminal.svelte";
 
 interface Props {
@@ -33,7 +36,6 @@ interface Props {
 let { onContinue, onBack, onSkip }: Props = $props();
 
 const OPENCODE: AcpAgentId = "opencode";
-const LOG_TAIL = 6;
 
 // ── State ──────────────────────────────────────────────────────────────────
 //
@@ -42,14 +44,9 @@ const LOG_TAIL = 6;
 // plus whether this host can drive the embedded PTY login). `install` is a
 // tagged request-state union; `signingIn` is the agent whose embedded sign-in
 // terminal is mounted. The adaptive CTA is derived from all three (see `cta`).
-type InstallState =
-  | { kind: "idle" }
-  | { kind: "running"; agent: AcpAgentId; log: string[] }
-  | { kind: "failed"; agent: AcpAgentId; log: string[]; error: string };
-
 let mode = $state<"loading" | "picker">("loading");
 let status = $state<AgentStatusReport | null>(null);
-let install = $state<InstallState>({ kind: "idle" });
+let install = $state<AgentInstallState>({ kind: "idle" });
 let signingIn = $state<AcpAgentId | null>(null);
 let isSaving = $state(false);
 let installAbort: AbortController | null = null;
@@ -138,25 +135,9 @@ async function handleContinue(): Promise<void> {
 async function handleInstall(agent: AcpAgentId): Promise<void> {
   install = { kind: "running", agent, log: [] };
   try {
-    const startRes = await fetch(`${API_BASE_URL}/api/onboarding/install`, {
-      method: "POST",
-      headers: { ...authHeaders(), "Content-Type": "application/json" },
-      body: JSON.stringify({ agent }),
-    });
-    if (!startRes.ok) {
-      install = {
-        kind: "failed",
-        agent,
-        log: currentLog(),
-        error: `Failed to start installer (HTTP ${startRes.status})`,
-      };
-      return;
-    }
-    const { jobId } = (await startRes.json()) as { jobId: string };
-
     const ctrl = new AbortController();
     installAbort = ctrl;
-    await streamInstallEvents(jobId, agent, ctrl.signal);
+    await runAgentInstall(agent, ctrl.signal, (event) => applyInstallEvent(event, agent));
   } catch (err) {
     if ((err as Error)?.name === "AbortError") return;
     install = {
@@ -172,44 +153,12 @@ async function handleInstall(agent: AcpAgentId): Promise<void> {
 
 /** Lines accumulated so far, preserved across a running → failed transition. */
 function currentLog(): string[] {
-  return install.kind === "idle" ? [] : install.log;
-}
-
-async function streamInstallEvents(
-  jobId: string,
-  agent: AcpAgentId,
-  signal: AbortSignal,
-): Promise<void> {
-  const url = `${API_BASE_URL}/api/onboarding/install/stream?jobId=${encodeURIComponent(jobId)}`;
-  const res = await fetch(url, { headers: authHeaders(), signal });
-  if (!res.ok || !res.body) {
-    install = {
-      kind: "failed",
-      agent,
-      log: currentLog(),
-      error: `Stream failed (HTTP ${res.status})`,
-    };
-    return;
-  }
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const result = parseSSEBuffer<InstallEvent>(buffer);
-    buffer = result.remaining;
-    for (const event of result.events) applyInstallEvent(event, agent);
-    if (result.done) break;
-  }
+  return agentInstallLog(install);
 }
 
 function applyInstallEvent(event: InstallEvent, agent: AcpAgentId): void {
   if (event.type === "log") {
-    if (install.kind === "running") {
-      install = { kind: "running", agent, log: [...install.log, event.line].slice(-LOG_TAIL) };
-    }
+    install = appendAgentInstallLog(install, agent, event.line);
     return;
   }
   // done

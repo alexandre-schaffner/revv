@@ -284,9 +284,12 @@ export function getAgentStatus(): AgentStatusReport | null {
   return agentStatus;
 }
 
-export async function fetchAgentStatus(): Promise<AgentStatusReport | null> {
+export async function fetchAgentStatus(
+  options: { refresh?: boolean } = {},
+): Promise<AgentStatusReport | null> {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/onboarding/agent-status`, {
+    const suffix = options.refresh ? "?refresh=1" : "";
+    const res = await fetch(`${API_BASE_URL}/api/onboarding/agent-status${suffix}`, {
       headers: authHeaders(),
     });
     if (!res.ok) return agentStatus;

@@ -2,6 +2,7 @@ import { type InstallEvent, isAcpAgentId, type LoginEvent } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { Elysia } from "elysia";
+import { invalidateCliAgentCache } from "../ai/providers/cli-agent";
 import { db } from "../auth";
 import { user } from "../db/schema";
 import { AppRuntime } from "../runtime";
@@ -118,6 +119,7 @@ export const onboardingRoutes = new Elysia({ prefix: "/api/onboarding" })
    */
   .get("/agent-status", async (ctx) => {
     try {
+      if (ctx.query?.refresh === "1") invalidateCliAgentCache();
       return await AppRuntime.runPromise(
         Effect.flatMap(OnboardingService, (s) => s.detectAgentStatus()),
       );
