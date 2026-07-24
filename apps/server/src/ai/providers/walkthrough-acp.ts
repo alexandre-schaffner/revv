@@ -83,7 +83,6 @@ const EXPLORATION_TOOLS = new Set(["Read", "Grep", "Glob", "Bash", "Write", "Edi
  */
 export interface ContinuationContext {
   walkthroughId: string;
-  existingHasReportContent: boolean;
   existingBlocks: WalkthroughBlock[];
   existingIssueCount: number;
   existingRatedAxes: RatingAxis[];

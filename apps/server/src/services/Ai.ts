@@ -286,7 +286,6 @@ export const AiServiceLive = Layer.effect(
             return guardWalkthroughStream(raw, {
               label: "walkthrough-acp",
               synthesizePhases: false,
-              hasReportContent: params.continuation?.existingHasReportContent ?? false,
             });
           }),
         ),

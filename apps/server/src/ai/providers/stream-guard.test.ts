@@ -24,68 +24,119 @@ async function collectUntilTerminal(
   return events;
 }
 
+const exploringPhase: WalkthroughStreamEvent = {
+  type: "phase",
+  data: { phase: "exploring", message: "Reading files and understanding changes..." },
+};
+
+const markdownBlock: WalkthroughStreamEvent = {
+  type: "block",
+  data: {
+    type: "markdown",
+    id: "b1",
+    order: 0,
+    content: "Chapter body.",
+    phase: "diff_analysis",
+    semanticStepIndex: 0,
+    stepIndex: 0,
+  },
+};
+
 describe("guardWalkthroughStream", () => {
-  it("does not treat phase heartbeats as report progress", async () => {
+  it("does not abort a long exploration phase that only emits heartbeats", async () => {
+    // Regression guard: there is no exploration-stall gate. As long as events
+    // keep arriving inside the inactivity window, a model that reads files for
+    // a long time before producing content runs to completion.
     const stream = guardWalkthroughStream(
       delayedEvents(
         [
-          {
-            type: "phase",
-            data: { phase: "exploring", message: "Reading files and understanding changes..." },
-          },
+          exploringPhase,
           { type: "usage", data: { tokenUsage: ZERO_TOKEN_USAGE } },
           { type: "thought", data: { text: "Still inspecting the diff." } },
+          exploringPhase,
+          { type: "thought", data: { text: "Reading another file." } },
+          exploringPhase,
           {
-            type: "phase",
-            data: { phase: "exploring", message: "Reading files and understanding changes..." },
+            type: "summary",
+            data: { summary: "Adds indexes for range queries.", riskLevel: "low" },
+          },
+          {
+            type: "done",
+            data: { walkthroughId: "walkthrough-1", tokenUsage: ZERO_TOKEN_USAGE },
           },
         ],
         15,
       ),
       {
-        explorationStallMs: 30,
-        firstEventTimeoutMs: 100,
-        inactivityTimeoutMs: 100,
+        firstEventTimeoutMs: 200,
+        inactivityTimeoutMs: 200,
         label: "stream-guard-test",
         synthesizePhases: false,
       },
     );
+
+    const events = await collectUntilTerminal(stream);
+
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      data: { walkthroughId: "walkthrough-1" },
+    });
+  });
+
+  it("aborts with FirstEventTimeout when the provider never starts", async () => {
+    const stream = guardWalkthroughStream(delayedEvents([exploringPhase], 200), {
+      firstEventTimeoutMs: 40,
+      inactivityTimeoutMs: 200,
+      label: "stream-guard-test",
+      synthesizePhases: false,
+    });
 
     const events = await collectUntilTerminal(stream);
 
     expect(events.at(-1)).toMatchObject({
       type: "error",
-      data: { code: "ExplorationStall" },
+      data: { code: "FirstEventTimeout" },
     });
   });
 
-  it("resets the report-progress stall timer when content arrives", async () => {
+  it("aborts with InactivityTimeout when events stop mid-stream", async () => {
+    async function* stallAfterFirst(): AsyncGenerator<WalkthroughStreamEvent> {
+      yield exploringPhase;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      yield {
+        type: "done",
+        data: { walkthroughId: "walkthrough-1", tokenUsage: ZERO_TOKEN_USAGE },
+      };
+    }
+
+    const stream = guardWalkthroughStream(stallAfterFirst(), {
+      firstEventTimeoutMs: 200,
+      inactivityTimeoutMs: 50,
+      label: "stream-guard-test",
+      synthesizePhases: false,
+    });
+
+    const events = await collectUntilTerminal(stream);
+
+    expect(events.at(-1)).toMatchObject({
+      type: "error",
+      data: { code: "InactivityTimeout" },
+    });
+  });
+
+  it("passes through a terminal done event", async () => {
     const stream = guardWalkthroughStream(
       delayedEvents(
         [
-          {
-            type: "phase",
-            data: { phase: "exploring", message: "Reading files and understanding changes..." },
-          },
-          {
-            type: "summary",
-            data: { summary: "Adds indexes for range queries.", riskLevel: "low" },
-          },
-          {
-            type: "phase",
-            data: { phase: "exploring", message: "Reading files and understanding changes..." },
-          },
-          {
-            type: "done",
-            data: { walkthroughId: "walkthrough-1", tokenUsage: ZERO_TOKEN_USAGE },
-          },
+          { type: "summary", data: { summary: "Adds indexes.", riskLevel: "low" } },
+          markdownBlock,
+          { type: "done", data: { walkthroughId: "walkthrough-1", tokenUsage: ZERO_TOKEN_USAGE } },
         ],
         15,
       ),
       {
-        explorationStallMs: 40,
-        firstEventTimeoutMs: 100,
-        inactivityTimeoutMs: 100,
+        firstEventTimeoutMs: 200,
+        inactivityTimeoutMs: 200,
         label: "stream-guard-test",
         synthesizePhases: false,
       },
@@ -99,35 +150,15 @@ describe("guardWalkthroughStream", () => {
     });
   });
 
-  it("does not enforce exploration stall after report content starts", async () => {
+  it("synthesizes a done event when the generator ends after content", async () => {
     const stream = guardWalkthroughStream(
       delayedEvents(
-        [
-          {
-            type: "summary",
-            data: { summary: "Adds indexes for range queries.", riskLevel: "low" },
-          },
-          {
-            type: "phase",
-            data: { phase: "writing", message: "Building walkthrough..." },
-          },
-          { type: "usage", data: { tokenUsage: ZERO_TOKEN_USAGE } },
-          { type: "thought", data: { text: "Still drafting the next chapter." } },
-          {
-            type: "phase",
-            data: { phase: "writing", message: "Building walkthrough..." },
-          },
-          {
-            type: "done",
-            data: { walkthroughId: "walkthrough-1", tokenUsage: ZERO_TOKEN_USAGE },
-          },
-        ],
+        [{ type: "summary", data: { summary: "Adds indexes.", riskLevel: "low" } }, markdownBlock],
         15,
       ),
       {
-        explorationStallMs: 30,
-        firstEventTimeoutMs: 100,
-        inactivityTimeoutMs: 100,
+        firstEventTimeoutMs: 200,
+        inactivityTimeoutMs: 200,
         label: "stream-guard-test",
         synthesizePhases: false,
       },
@@ -135,87 +166,22 @@ describe("guardWalkthroughStream", () => {
 
     const events = await collectUntilTerminal(stream);
 
-    expect(events.at(-1)).toMatchObject({
-      type: "done",
-      data: { walkthroughId: "walkthrough-1" },
-    });
+    expect(events.at(-1)).toMatchObject({ type: "done" });
   });
 
-  it("does not enforce exploration stall for continuation streams with prior report content", async () => {
-    const stream = guardWalkthroughStream(
-      delayedEvents(
-        [
-          {
-            type: "phase",
-            data: { phase: "rating", message: "Finishing walkthrough (phase B)..." },
-          },
-          { type: "usage", data: { tokenUsage: ZERO_TOKEN_USAGE } },
-          { type: "thought", data: { text: "Reconstructing prior walkthrough state." } },
-          {
-            type: "phase",
-            data: { phase: "rating", message: "Finishing walkthrough (phase B)..." },
-          },
-          {
-            type: "done",
-            data: { walkthroughId: "walkthrough-1", tokenUsage: ZERO_TOKEN_USAGE },
-          },
-        ],
-        15,
-      ),
-      {
-        explorationStallMs: 30,
-        firstEventTimeoutMs: 100,
-        hasReportContent: true,
-        inactivityTimeoutMs: 100,
-        label: "stream-guard-test",
-        synthesizePhases: false,
-      },
-    );
-
-    const events = await collectUntilTerminal(stream);
-
-    expect(events.at(-1)).toMatchObject({
-      type: "done",
-      data: { walkthroughId: "walkthrough-1" },
+  it("synthesizes an error when the generator ends without content", async () => {
+    const stream = guardWalkthroughStream(delayedEvents([exploringPhase], 15), {
+      firstEventTimeoutMs: 200,
+      inactivityTimeoutMs: 200,
+      label: "stream-guard-test",
+      synthesizePhases: false,
     });
-  });
-
-  it("treats report-content heartbeats as persisted output", async () => {
-    const stream = guardWalkthroughStream(
-      delayedEvents(
-        [
-          { type: "thinking", data: { reportContent: true } },
-          {
-            type: "phase",
-            data: { phase: "writing", message: "Building walkthrough..." },
-          },
-          { type: "usage", data: { tokenUsage: ZERO_TOKEN_USAGE } },
-          { type: "thought", data: { text: "Planning the first chapter." } },
-          {
-            type: "phase",
-            data: { phase: "writing", message: "Building walkthrough..." },
-          },
-          {
-            type: "done",
-            data: { walkthroughId: "walkthrough-1", tokenUsage: ZERO_TOKEN_USAGE },
-          },
-        ],
-        15,
-      ),
-      {
-        explorationStallMs: 30,
-        firstEventTimeoutMs: 100,
-        inactivityTimeoutMs: 100,
-        label: "stream-guard-test",
-        synthesizePhases: false,
-      },
-    );
 
     const events = await collectUntilTerminal(stream);
 
     expect(events.at(-1)).toMatchObject({
-      type: "done",
-      data: { walkthroughId: "walkthrough-1" },
+      type: "error",
+      data: { code: "IncompleteWalkthrough" },
     });
   });
 });

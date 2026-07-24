@@ -506,7 +506,7 @@ export type WalkthroughStreamEvent =
       data: { lastCompletedPhase: WalkthroughPipelinePhase };
     }
   | { type: "in-progress"; data: { walkthroughId: string } }
-  | { type: "thinking"; data: { reportContent?: boolean } }
+  | { type: "thinking"; data: Record<string, never> }
   /**
    * Streamed model reasoning text. Mirrors the recap `thought` event and is
    * separate from `thinking` (which is the empty stream-guard heartbeat).

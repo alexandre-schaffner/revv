@@ -441,14 +441,6 @@ export const WalkthroughJobsLive = Layer.effect(
         ),
       );
 
-    const isReportContentEvent = (event: WalkthroughStreamEvent): boolean =>
-      event.type === "summary" ||
-      event.type === "sentiment" ||
-      event.type === "semantic-step" ||
-      event.type === "block" ||
-      event.type === "issue" ||
-      event.type === "rating";
-
     // Subscriber fan-out lives in `subscribers` (job-subscribers.ts).
     // Commit-first / broadcast-second (invariant #8): by the time an event
     // reaches `subscribers.fanOut`, the MCP tool handler (content events) or
@@ -476,14 +468,6 @@ export const WalkthroughJobsLive = Layer.effect(
       readonly status: "generating" | "error";
       readonly opencodeSessionId: string | null;
     };
-
-    const hasReportContent = (partial: PartialSnapshot): boolean =>
-      partial.lastCompletedPhase !== "none" ||
-      partial.summary.trim().length > 0 ||
-      (partial.sentiment?.trim().length ?? 0) > 0 ||
-      partial.blocks.length > 0 ||
-      partial.issues.length > 0 ||
-      partial.ratings.length > 0;
 
     type ResolvedContext = {
       readonly pr: {
@@ -713,7 +697,6 @@ export const WalkthroughJobsLive = Layer.effect(
         if (partial) {
           const continuation: ContinuationContext = {
             walkthroughId: partial.id,
-            existingHasReportContent: hasReportContent(partial),
             existingBlocks: partial.blocks,
             existingIssueCount: partial.issues.length,
             existingRatedAxes: partial.ratings.map((r) => r.axis),
@@ -908,7 +891,6 @@ export const WalkthroughJobsLive = Layer.effect(
 
             const continuationCtx: ContinuationContext = {
               walkthroughId: partialForContinuation.id,
-              existingHasReportContent: hasReportContent(partialForContinuation),
               existingBlocks: partialForContinuation.blocks,
               existingIssueCount: partialForContinuation.issues.length,
               existingRatedAxes: partialForContinuation.ratings.map((r) => r.axis),
@@ -1839,10 +1821,7 @@ export const WalkthroughJobsLive = Layer.effect(
             const notify = notifiers.get(walkthroughId);
             if (notify) {
               try {
-                notify({
-                  type: "thinking",
-                  data: { ...(isReportContentEvent(event) ? { reportContent: true } : {}) },
-                });
+                notify({ type: "thinking", data: {} });
               } catch {
                 /* notifier threw — ignore */
               }
