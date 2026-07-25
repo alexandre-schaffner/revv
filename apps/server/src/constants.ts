@@ -33,10 +33,6 @@ export const WALKTHROUGH_HEARTBEAT_MS = 45_000; // 45 seconds
 /** Timeout for the first event from the AI provider — shorter since healthy providers emit immediately. */
 export const WALKTHROUGH_FIRST_EVENT_TIMEOUT_MS = 90_000; // 90 seconds
 
-/** Exploration-stall timeout: if only exploration events arrive for this long with no
- *  summary/block/phase progress, the model is stuck reading files — abort with an error. */
-export const WALKTHROUGH_EXPLORATION_STALL_MS = 6 * 60 * 1000; // 6 minutes
-
 /** TTL for the cached CLI agent availability check. */
 export const CLI_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 

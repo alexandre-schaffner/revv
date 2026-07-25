@@ -74,6 +74,7 @@ import {
   pollCloneUntilResolved,
   prepareEntry,
   regenerate,
+  resume,
   selectWalkthroughReport,
   startWalkthrough,
   stopClonePoll,
@@ -1056,6 +1057,10 @@ async function handleRetryClone(): Promise<void> {
 function handleRegenerate(): void {
   regenerate(prId, selectedMode);
 }
+
+function handleResume(): void {
+  resume(prId, selectedMode);
+}
 </script>
 
 <div class="walkthrough">
@@ -1204,9 +1209,9 @@ function handleRegenerate(): void {
 				</div>
 			{/if}
 			<p class="loading-text">Walkthrough generation stopped. Check the notification for details.</p>
-			<Button variant="outline" size="lg" style="cursor: pointer;" onclick={handleRegenerate}>
+			<Button variant="outline" size="lg" style="cursor: pointer;" onclick={handleResume}>
 				<RefreshCw size={16} weight="fill" />
-				Try again
+				Retry
 			</Button>
 		</div>
 	{:else if cloneInProgress && !summary && blocks.length === 0}
@@ -1285,6 +1290,19 @@ function handleRegenerate(): void {
 			class:walkthrough-content--no-anim={contentAnimated}
 			onanimationend={(e) => lockContainerAnimation('content', e)}
 		>
+			{#if streamError}
+				<div class="partial-error" role="status">
+					<div class="partial-error-copy">
+						<AlertTriangle size={14} weight="fill" />
+						<span>{streamError}</span>
+					</div>
+					<Button variant="outline" size="sm" style="cursor: pointer;" onclick={handleResume}>
+						<RefreshCw size={14} weight="fill" />
+						Retry
+					</Button>
+				</div>
+			{/if}
+
 			<!-- Issues — bucketed by severity (Critical → Warning → Info) so the
 			     reviewer's eye lands on blockers before nice-to-knows. The overall
 			     "N issues flagged" line is preserved as the section header; each
@@ -2421,6 +2439,31 @@ function handleRegenerate(): void {
 		font-size: 12px;
 		color: var(--color-danger);
 		margin-top: 8px;
+	}
+
+	.partial-error {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+		border: 1px solid color-mix(in srgb, var(--color-danger) 35%, transparent);
+		border-radius: 8px;
+		background: color-mix(in srgb, var(--color-danger) 8%, var(--color-surface));
+		color: var(--color-danger);
+		padding: 10px 12px;
+		font-size: 12px;
+		line-height: 1.45;
+	}
+
+	.partial-error-copy {
+		display: flex;
+		align-items: flex-start;
+		gap: 8px;
+		min-width: 0;
+	}
+
+	.partial-error-copy span {
+		overflow-wrap: anywhere;
 	}
 
 	/* ── Animations ──────────────────────────────────────────────────── */

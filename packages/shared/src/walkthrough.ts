@@ -308,6 +308,8 @@ export interface Walkthrough {
   ratings: WalkthroughRating[];
   /** Current phase pointer. See {@link WalkthroughPipelinePhase}. */
   lastCompletedPhase: WalkthroughPipelinePhase;
+  /** Last terminal generation failure, if this row is in `status='error'`. */
+  errorMessage?: string | null;
   generatedAt: string;
   modelUsed: string;
   tokenUsage: WalkthroughTokenUsage;
