@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.19.1](https://github.com/alexandre-schaffner/revv/compare/v0.19.0...v0.19.1) (2026-07-25)
+
+
+### Bug Fixes
+
+* **auth:** never apply a BYO GHE client_id to github.com ([#185](https://github.com/alexandre-schaffner/revv/issues/185)) ([0a87246](https://github.com/alexandre-schaffner/revv/commit/0a872468dd54b8253e5398dc20efd32e377cabbd))
+* debug large report crashes ([#182](https://github.com/alexandre-schaffner/revv/issues/182)) ([cf14520](https://github.com/alexandre-schaffner/revv/commit/cf1452086c59c8b5a21b067615c17fd275613b3e))
+
 ## [0.19.0](https://github.com/alexandre-schaffner/revv/compare/v0.18.1...v0.19.0) (2026-07-22)
 
 
