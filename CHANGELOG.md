@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.19.2](https://github.com/alexandre-schaffner/revv/compare/v0.19.1...v0.19.2) (2026-07-27)
+
+
+### Bug Fixes
+
+* enable provider setup recovery in settings ([879ba8a](https://github.com/alexandre-schaffner/revv/commit/879ba8aac807f22ae1e241b6005df3973f6cbed3))
+* enable provider setup recovery in settings ([cbed3a8](https://github.com/alexandre-schaffner/revv/commit/cbed3a8cf02856cf85917e4ae7a74c0d7c88d09c))
+
 ## [0.19.1](https://github.com/alexandre-schaffner/revv/compare/v0.19.0...v0.19.1) (2026-07-25)
 
 
