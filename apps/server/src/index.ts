@@ -240,6 +240,17 @@ AppRuntime.runPromise(Effect.flatMap(RepoCloneService, (svc) => svc.resumePendin
   },
 );
 
+// Reap Revv-owned review worktrees + `revv/pr-N` branches for PRs that are
+// closed/merged (or no longer tracked), left behind by prior runs. Bounds
+// accumulation in the user's clone so VSCode isn't overwhelmed. Runs after
+// `resumePending` so any in-flight generation's worktree is protected by
+// `pruneWorktree`'s `generating` guard. Best-effort; never crashes boot.
+AppRuntime.runPromise(Effect.flatMap(RepoCloneService, (svc) => svc.sweepStaleWorktrees())).catch(
+  (err) => {
+    logError("repo-clone", "sweepStaleWorktrees failed on boot:", err);
+  },
+);
+
 // Start DB maintenance scheduler: sweeps expired cache rows and checkpoints
 // the WAL every 6 hours to prevent unbounded disk growth.
 AppRuntime.runPromise(Effect.flatMap(DbMaintenance, (svc) => svc.start())).catch((err) => {
