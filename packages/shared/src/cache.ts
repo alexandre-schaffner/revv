@@ -36,7 +36,7 @@ export const CACHE_SCHEMA_VERSION = 2 as const;
 export interface GenerationProviderConfig {
   provider: "claude-agent-sdk" | "opencode" | "codex";
   model: string;
-  /** "ultrathink" | "max" | "extra-high" | "high" | "medium" | "low" | null. */
+  /** A `ThinkingEffort` tier as a raw string, or null. */
   thinkingEffort: string | null;
   /** `"200k"` | `"1m"` | null (null = SDK default). */
   contextWindow: string | null;

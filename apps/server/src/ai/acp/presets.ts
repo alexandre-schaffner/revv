@@ -72,15 +72,19 @@ const CODEX_REASONING_EFFORT: Partial<Record<ThinkingEffort, string>> = {
   low: "low",
 };
 
-// Revv thinking-effort tier → Claude Code `MAX_THINKING_TOKENS` budget. Rough
-// tiers mirroring Claude Code's own keyword ladder (think → ultrathink).
-const CLAUDE_THINKING_TOKENS: Record<ThinkingEffort, number> = {
-  low: 4_000,
-  medium: 10_000,
-  high: 24_000,
-  "extra-high": 32_000,
-  max: 48_000,
-  ultrathink: 64_000,
+// Revv thinking-effort tier → Claude Code `CLAUDE_CODE_EFFORT_LEVEL`. Effort is
+// the control for adaptive reasoning on every model Revv offers; the older
+// `MAX_THINKING_TOKENS` budget only applies to a *fixed* thinking budget (Opus
+// 4.6 / Sonnet 4.6 with `CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1`), so setting
+// it here was a no-op. `ultrathink` is not an effort level — it's a prompt
+// keyword — so a stale persisted value lands on the deepest real tier.
+const CLAUDE_EFFORT_LEVEL: Record<ThinkingEffort, string> = {
+  low: "low",
+  medium: "medium",
+  high: "high",
+  "extra-high": "xhigh",
+  max: "max",
+  ultrathink: "max",
 };
 
 function executableExists(command: string, path: string): boolean {
@@ -176,7 +180,7 @@ export function resolveAcpLaunchById(id: AcpAgentId, config: AcpLaunchConfig = {
       if (contextWindow) {
         env.CLAUDE_CODE_DISABLE_1M_CONTEXT = contextWindow === "1m" ? "false" : "true";
       }
-      if (thinkingEffort) env.MAX_THINKING_TOKENS = String(CLAUDE_THINKING_TOKENS[thinkingEffort]);
+      if (thinkingEffort) env.CLAUDE_CODE_EFFORT_LEVEL = CLAUDE_EFFORT_LEVEL[thinkingEffort];
       break;
     }
     case "opencode": {

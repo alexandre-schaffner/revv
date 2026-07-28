@@ -119,8 +119,8 @@ export const ACP_AGENTS = [
         { label: "Claude Haiku 4.5", value: "claude-haiku-4-5-20251001" },
       ],
       contextWindow: true,
-      // Claude Code takes a `MAX_THINKING_TOKENS` budget rather than a named
-      // tier, so every model accepts every tier — no per-model narrowing.
+      // Claude Code's named effort ladder tops out at `max`. `ultrathink` is
+      // retained for existing settings and is mapped to `max` at launch.
       thinkingEfforts: ["ultrathink", "max", "extra-high", "high", "medium", "low"],
       // claude-agent-acp advertises a read-only plan mode.
       planMode: true,

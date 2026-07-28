@@ -58,6 +58,13 @@ export interface PullRequest {
   closedAt: string | null;
 }
 
+/**
+ * Revv's thinking-effort tiers. `extra-high` is Revv's key for the providers'
+ * `xhigh` level (see `presets.ts` for the per-agent mapping). `ultrathink` is
+ * retained only so persisted `user_settings.ai_thinking_effort` rows written
+ * before the tier was retired still parse — no agent offers it, and both the
+ * selector and `applyAgentDefaults` coerce it away on next render.
+ */
 export type ThinkingEffort = "ultrathink" | "max" | "extra-high" | "high" | "medium" | "low";
 
 export type ContextWindow = "200k" | "1m";
