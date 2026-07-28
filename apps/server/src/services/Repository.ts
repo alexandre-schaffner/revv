@@ -1,5 +1,5 @@
 import type { Repository } from "@revv/shared";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { repositories } from "../db/schema/index";
 import { NotFoundError, ValidationError } from "../domain/errors";
@@ -106,34 +106,41 @@ export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
         name: data.name,
         fullName: data.fullName,
         defaultBranch: data.defaultBranch,
-        ...(data.avatarUrl !== null ? { avatarUrl: data.avatarUrl } : {}),
+        avatarUrl: data.avatarUrl,
         addedAt,
         githubHost: data.githubHost,
         managed: data.managed ?? true,
-        ...(data.clonePath !== undefined ? { clonePath: data.clonePath } : {}),
-        accountId,
-      } satisfies typeof repositories.$inferInsert;
-      yield* Effect.tryPromise({
-        try: () => Promise.resolve(db.insert(repositories).values(row).run()),
-        catch: (e) => new ValidationError({ message: String(e) }),
-      });
-      return rowToRepo({
-        id,
-        provider: data.provider,
-        owner: data.owner,
-        name: data.name,
-        fullName: data.fullName,
-        defaultBranch: data.defaultBranch,
-        avatarUrl: data.avatarUrl ?? null,
-        avatarContent: null,
-        addedAt,
         cloneStatus: "pending",
         clonePath: data.clonePath ?? null,
         cloneError: null,
-        managed: data.managed ?? true,
-        githubHost: data.githubHost,
         accountId,
+      } satisfies typeof repositories.$inferInsert;
+      const saved = yield* Effect.try({
+        try: () =>
+          db
+            .insert(repositories)
+            .values(row)
+            .onConflictDoUpdate({
+              target: [repositories.fullName, repositories.accountId],
+              set: {
+                provider: sql`excluded.provider`,
+                owner: sql`excluded.owner`,
+                name: sql`excluded.name`,
+                defaultBranch: sql`excluded.default_branch`,
+                avatarUrl: sql`excluded.avatar_url`,
+                addedAt: sql`excluded.added_at`,
+                githubHost: sql`excluded.github_host`,
+                managed: sql`excluded.managed`,
+                cloneStatus: sql`excluded.clone_status`,
+                clonePath: sql`excluded.clone_path`,
+                cloneError: sql`excluded.clone_error`,
+              },
+            })
+            .returning()
+            .get(),
+        catch: (e) => new ValidationError({ message: String(e) }),
       });
+      return rowToRepo(saved);
     }),
 
   deleteRepo: (id, accountId) =>
