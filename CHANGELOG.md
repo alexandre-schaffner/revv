@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.5](https://github.com/alexandre-schaffner/revv/compare/v0.19.4...v0.19.5) (2026-07-29)
+
+
+### Bug Fixes
+
+* ACP launch without npx ([2bbc3af](https://github.com/alexandre-schaffner/revv/commit/2bbc3af552391252bbf9c65af7cfe6ed7350f37e))
+
 ## [0.19.4](https://github.com/alexandre-schaffner/revv/compare/v0.19.3...v0.19.4) (2026-07-29)
 
 
