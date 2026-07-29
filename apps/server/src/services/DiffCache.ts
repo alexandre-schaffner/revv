@@ -1,4 +1,4 @@
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { prDiffFiles } from "../db/schema/index";
 import { type GitHubError, GitHubRateLimitError } from "../domain/errors";
@@ -60,23 +60,36 @@ export const DiffCacheServiceLive = Layer.succeed(DiffCacheService, {
   cacheFiles: (prId, files) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
-      db.transaction(() => {
-        db.delete(prDiffFiles).where(eq(prDiffFiles.prId, prId)).run();
+      db.transaction((tx) => {
+        tx.delete(prDiffFiles).where(eq(prDiffFiles.prId, prId)).run();
         if (files.length > 0) {
-          db.insert(prDiffFiles)
+          tx.insert(prDiffFiles)
             .values(
               files.map((f) => ({
                 id: `${prId}\0${f.path}`,
                 prId,
                 path: f.path,
-                ...(f.oldPath !== null ? { oldPath: f.oldPath } : {}),
+                oldPath: f.oldPath,
                 status: f.status,
                 additions: f.additions,
                 deletions: f.deletions,
-                ...(f.patch !== null ? { patch: f.patch } : {}),
+                patch: f.patch,
                 fetchedAt: f.fetchedAt,
               })),
             )
+            .onConflictDoUpdate({
+              target: prDiffFiles.id,
+              set: {
+                prId: sql`excluded.pr_id`,
+                path: sql`excluded.path`,
+                oldPath: sql`excluded.old_path`,
+                status: sql`excluded.status`,
+                additions: sql`excluded.additions`,
+                deletions: sql`excluded.deletions`,
+                patch: sql`excluded.patch`,
+                fetchedAt: sql`excluded.fetched_at`,
+              },
+            })
             .run();
         }
       });
