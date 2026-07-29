@@ -8,6 +8,8 @@
 // model protocol — per-adapter injection of the selected model / thinking-effort
 // / context-window at launch time (args for Codex/opencode, env for Claude Code).
 
+import { accessSync, constants } from "node:fs";
+import { delimiter, isAbsolute, join } from "node:path";
 import {
   type AcpAgentId,
   type ContextWindow,
@@ -72,6 +74,50 @@ const CLAUDE_THINKING_TOKENS: Record<ThinkingEffort, number> = {
   max: 48_000,
   ultrathink: 64_000,
 };
+
+function executableExists(command: string, path: string): boolean {
+  const candidates = isAbsolute(command)
+    ? [command]
+    : path
+        .split(delimiter)
+        .filter(Boolean)
+        .map((dir) => join(dir, command));
+
+  return candidates.some((candidate) => {
+    try {
+      accessSync(candidate, constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
+function stripNpxYes(args: readonly string[]): readonly string[] {
+  return args[0] === "-y" || args[0] === "--yes" ? args.slice(1) : args;
+}
+
+function resolvePackageRunner(
+  launch: AcpLaunch,
+  path: string,
+): Pick<AcpLaunch, "command" | "args"> {
+  if (launch.command !== "npx") {
+    return { command: launch.command, args: launch.args };
+  }
+  if (executableExists("npx", path)) {
+    return { command: launch.command, args: launch.args };
+  }
+
+  const args = stripNpxYes(launch.args);
+  if (executableExists("bunx", path)) {
+    return { command: "bunx", args };
+  }
+  if (executableExists("bun", path)) {
+    return { command: "bun", args: ["x", ...args] };
+  }
+
+  return { command: launch.command, args: launch.args };
+}
 
 /**
  * Apply the `REVV_ACP_AGENT` env override (a testing / power-user knob) over a
@@ -189,9 +235,10 @@ export function resolveAcpProcessLaunchById(
   options: AcpProcessEnvOptions = {},
 ): AcpProcessLaunch {
   const launch = resolveAcpLaunchById(id, config);
+  const runner = resolvePackageRunner(launch, path);
   return {
-    command: launch.command,
-    args: launch.args,
+    command: runner.command,
+    args: runner.args,
     env: buildAcpProcessEnv(id, inheritedEnv, launch.env, path, options),
   };
 }
@@ -226,6 +273,9 @@ export function resolveGenerationModel(
  */
 export function isAcpAgentAvailable(id: AcpAgentId): boolean {
   const { command } = resolveAcpLaunchById(id);
-  if (command === "npx" || command === "bunx") return true;
+  if (command === "npx") {
+    return isCommandOnPath("npx") || isCommandOnPath("bunx") || isCommandOnPath("bun");
+  }
+  if (command === "bunx") return isCommandOnPath("bunx") || isCommandOnPath("bun");
   return isCommandOnPath(command);
 }

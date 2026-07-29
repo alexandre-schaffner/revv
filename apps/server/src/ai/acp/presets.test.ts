@@ -1,4 +1,7 @@
 import { describe, expect, it } from "bun:test";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ACP_AGENTS, getAcpAgent } from "@revv/shared";
 import { serverEnv } from "../../config";
 import { ACP_LOGIN_COMMAND } from "../providers/cli-agent";
@@ -7,6 +10,18 @@ import {
   resolveAcpProcessLaunchById,
   resolveGenerationModel,
 } from "./presets";
+
+function withPathExecutable(command: string, fn: (path: string) => void): void {
+  const dir = mkdtempSync(join(tmpdir(), "revv-acp-preset-"));
+  try {
+    const bin = join(dir, command);
+    writeFileSync(bin, "#!/bin/sh\nexit 0\n");
+    chmodSync(bin, 0o755);
+    fn(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 describe("ACP agent registry", () => {
   it("is the single source of truth — adding an agent is one registry entry", () => {
@@ -120,6 +135,37 @@ describe("ACP launch presets", () => {
     expect(launch.env.ANTHROPIC_MODEL).toBe("claude-sonnet-4-6");
     expect(launch.env.KEEP_ME).toBe("yes");
     expect(launch.env.PATH).toBe("/usr/bin");
+  });
+
+  it("keeps npx when the selected PATH provides it", () => {
+    withPathExecutable("npx", (path) => {
+      const launch = resolveAcpProcessLaunchById("claude-code", {}, {}, path, {
+        claudeSubscriptionAuth: false,
+      });
+
+      expect(launch.command).toBe("npx");
+      expect(launch.args).toEqual(["-y", "@agentclientprotocol/claude-agent-acp"]);
+    });
+  });
+
+  it("falls back from npx to bunx and removes npx's yes flag", () => {
+    withPathExecutable("bunx", (path) => {
+      const launch = resolveAcpProcessLaunchById("claude-code", {}, {}, path, {
+        claudeSubscriptionAuth: false,
+      });
+
+      expect(launch.command).toBe("bunx");
+      expect(launch.args).toEqual(["@agentclientprotocol/claude-agent-acp"]);
+    });
+  });
+
+  it("falls back from npx to bun x when only bun is available", () => {
+    withPathExecutable("bun", (path) => {
+      const launch = resolveAcpProcessLaunchById("codex", { model: "gpt-5.5" }, {}, path);
+
+      expect(launch.command).toBe("bun");
+      expect(launch.args).toEqual(["x", "@zed-industries/codex-acp", "-c", 'model="gpt-5.5"']);
+    });
   });
 
   it("keeps Anthropic API credentials when no Claude subscription auth exists", () => {
