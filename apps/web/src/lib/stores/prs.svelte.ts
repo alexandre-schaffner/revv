@@ -690,7 +690,7 @@ export async function addRepo(input: AddRepoInput): Promise<void> {
   await fetchPrs();
 }
 
-export function deleteRepo(id: string): Promise<void> {
+export async function deleteRepo(id: string): Promise<void> {
   const snapshot = snapshotRepoState();
   const repo = repositories.find((r) => r.id === id);
   const toastOptions = repo ? { description: repo.fullName } : undefined;
@@ -698,30 +698,24 @@ export function deleteRepo(id: string): Promise<void> {
 
   removeRepoLocally(id);
 
-  void api.api
-    .repos({ id })
-    .delete()
-    .then(({ error }) => {
-      toast.dismiss(toastId);
-      if (error) {
-        restoreRepoState(snapshot);
-        const value = error.value as { error?: string; message?: string } | undefined;
-        toast.error(
-          value?.error ?? value?.message ?? `Failed to remove repository (HTTP ${error.status})`,
-        );
-        return;
-      }
+  try {
+    const { error } = await api.api.repos({ id }).delete();
+    if (error) {
+      const value = error.value as { error?: string; message?: string } | undefined;
+      throw new Error(
+        value?.error ?? value?.message ?? `Failed to remove repository (HTTP ${error.status})`,
+      );
+    }
+  } catch (e) {
+    toast.dismiss(toastId);
+    restoreRepoState(snapshot);
+    toast.error(e instanceof Error ? e.message : "Failed to remove repository");
+    throw e;
+  }
 
-      toast.success("Repository removed", toastOptions);
-      void Promise.all([fetchRepos(), fetchPrs()]);
-    })
-    .catch((e) => {
-      toast.dismiss(toastId);
-      restoreRepoState(snapshot);
-      toast.error(e instanceof Error ? e.message : "Failed to remove repository");
-    });
-
-  return Promise.resolve();
+  toast.dismiss(toastId);
+  toast.success("Repository removed", toastOptions);
+  void Promise.all([fetchRepos(), fetchPrs()]);
 }
 
 /**
