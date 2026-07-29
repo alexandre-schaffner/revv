@@ -550,6 +550,8 @@ async function handleDeleteRepo(id: string): Promise<void> {
   try {
     await deleteRepo(id);
     repoPendingDelete = null;
+  } catch {
+    // The store restores optimistic state and shows the failure toast.
   } finally {
     removingRepoId = null;
   }

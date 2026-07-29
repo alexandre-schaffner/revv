@@ -104,4 +104,18 @@ describe("RepositoryService.addRepo", () => {
     expect(managed.clonePath).toBeNull();
     expect(managed.cloneError).toBeNull();
   });
+
+  it("clears stale cached avatar content when the avatar URL changes", async () => {
+    const db = createDb(":memory:");
+    seedAccount(db);
+
+    const first = await addRepo(db, { avatarUrl: "https://example.com/old.png" });
+    db.update(repositories).set({ avatarContent: "data:image/png;base64,old" }).run();
+
+    const updated = await addRepo(db, { avatarUrl: "https://example.com/new.png" });
+
+    expect(updated.id).toBe(first.id);
+    expect(updated.avatarUrl).toBe("https://example.com/new.png");
+    expect(db.select().from(repositories).get()?.avatarContent).toBeNull();
+  });
 });

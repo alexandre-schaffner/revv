@@ -128,6 +128,7 @@ export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
                 name: sql`excluded.name`,
                 defaultBranch: sql`excluded.default_branch`,
                 avatarUrl: sql`excluded.avatar_url`,
+                avatarContent: sql`CASE WHEN ${repositories.avatarUrl} IS NOT excluded.avatar_url THEN NULL ELSE ${repositories.avatarContent} END`,
                 addedAt: sql`excluded.added_at`,
                 githubHost: sql`excluded.github_host`,
                 managed: sql`excluded.managed`,
