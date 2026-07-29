@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.4](https://github.com/alexandre-schaffner/revv/compare/v0.19.3...v0.19.4) (2026-07-29)
+
+
+### Bug Fixes
+
+* repo relink upsert ([b085eb3](https://github.com/alexandre-schaffner/revv/commit/b085eb30b6b8c929a62e77693d95a94bfd7a4a8f))
+
 ## [0.19.3](https://github.com/alexandre-schaffner/revv/compare/v0.19.2...v0.19.3) (2026-07-29)
 
 
