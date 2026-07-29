@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.3](https://github.com/alexandre-schaffner/revv/compare/v0.19.2...v0.19.3) (2026-07-29)
+
+
+### Bug Fixes
+
+* duplicate diff cache writes ([bba1509](https://github.com/alexandre-schaffner/revv/commit/bba1509cd100a1356abcb6bce7a235fece3150a5))
+
 ## [0.19.2](https://github.com/alexandre-schaffner/revv/compare/v0.19.1...v0.19.2) (2026-07-27)
 
 
