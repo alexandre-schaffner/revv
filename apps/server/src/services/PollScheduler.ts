@@ -15,6 +15,7 @@ import { GitHubEtagCache } from "./GitHubEtagCache";
 import { githubFetch } from "./github-rest";
 import { PullRequestService } from "./PullRequest";
 import { RemoteUserService } from "./RemoteUser";
+import { RepoCloneService } from "./RepoClone";
 import { RepositoryService } from "./Repository";
 import { SettingsService } from "./Settings";
 import { SyncService } from "./Sync";
@@ -62,6 +63,7 @@ export const PollSchedulerLive = Layer.effect(
     const syncService = yield* SyncService;
     const etagCache = yield* GitHubEtagCache;
     const walkthroughJobs = yield* WalkthroughJobs;
+    const repoClone = yield* RepoCloneService;
     const walkthroughService = yield* WalkthroughService;
     const tokenProvider = yield* TokenProvider;
     const { db } = yield* DbService;
@@ -682,6 +684,22 @@ export const PollSchedulerLive = Layer.effect(
 
             yield* withDb(prService.markPrsClosed(updates)).pipe(
               Effect.orElseSucceed(() => undefined),
+            );
+
+            // Reap the review worktree + `revv/pr-N` branch for each PR that
+            // just went terminal, so they stop accumulating in the user's
+            // clone (and cluttering VSCode). `pruneWorktree` self-guards
+            // against in-flight generations and un-pushed review commits, so
+            // this is safe to fire-and-forget; it must not block the sync loop.
+            yield* Effect.forkDaemon(
+              Effect.forEach(
+                closedPrObjects,
+                (pr) =>
+                  repoClone
+                    .pruneWorktree({ repoId: pr.repositoryId, prNumber: pr.externalId })
+                    .pipe(Effect.catchAll(() => Effect.void)),
+                { concurrency: 3, discard: true },
+              ),
             );
 
             // Targeted `pr:archived` envelopes for each transition. The full
