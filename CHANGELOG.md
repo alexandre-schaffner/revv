@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.0](https://github.com/alexandre-schaffner/revv/compare/v0.19.5...v0.20.0) (2026-07-31)
+
+
+### Features
+
+* (server) reap stale PR review worktrees and branches ([d28cf1d](https://github.com/alexandre-schaffner/revv/commit/d28cf1d8bbf7c7f1b3685db5201b87dd4a15065b))
+
 ## [0.19.5](https://github.com/alexandre-schaffner/revv/compare/v0.19.4...v0.19.5) (2026-07-29)
 
 
