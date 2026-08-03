@@ -282,18 +282,42 @@ async function readGitHead(worktreePath: string): Promise<string | null> {
  * walkthrough job for a different PR could be holding them legitimately —
  * `MAX_CONCURRENT_JOBS = 5` allows that concurrency.
  */
+/** Absolute path to a PR worktree's own `.git/worktrees/<name>` gitdir. */
+function prWorktreeGitdir(clonePath: string, prDirName: string): string {
+  return join(clonePath, ".git", "worktrees", prDirName);
+}
+
+/**
+ * The legacy PR-head fetch ref from the old (pre `refs/revv-pull/N`) scheme.
+ * Shared so every reader/writer of this ref name — the cold path's heal step,
+ * the reap/prune teardown, and `isWorktreeHealthy`'s health check — can never
+ * drift apart.
+ */
+function legacyPrRef(prNumber: number): string {
+  return `refs/revv/pr-${prNumber}`;
+}
+
+/**
+ * The fixed set of lock file paths tied to a single PR's worktree gitdir and
+ * its branch ref. Shared by `clearStalePrWorktreeLocks` (which deletes them)
+ * and `isWorktreeHealthy` (which only checks whether any exist), so the two
+ * lists can never drift apart.
+ */
+function prWorktreeLockPaths(clonePath: string, prDirName: string, branchName: string): string[] {
+  const worktreeGitdir = prWorktreeGitdir(clonePath, prDirName);
+  return [
+    join(worktreeGitdir, "index.lock"),
+    join(worktreeGitdir, "HEAD.lock"),
+    join(clonePath, ".git", "refs", "heads", `${branchName}.lock`),
+  ];
+}
+
 async function clearStalePrWorktreeLocks(
   clonePath: string,
   prDirName: string,
   branchName: string,
 ): Promise<void> {
-  const worktreeGitdir = join(clonePath, ".git", "worktrees", prDirName);
-  const candidates = [
-    join(worktreeGitdir, "index.lock"),
-    join(worktreeGitdir, "HEAD.lock"),
-    join(clonePath, ".git", "refs", "heads", `${branchName}.lock`),
-  ];
-  for (const lockPath of candidates) {
+  for (const lockPath of prWorktreeLockPaths(clonePath, prDirName, branchName)) {
     try {
       if (!existsSync(lockPath)) continue;
       await rm(lockPath, { force: true });
@@ -307,6 +331,82 @@ async function clearStalePrWorktreeLocks(
       );
     }
   }
+}
+
+/**
+ * Read-only health check for an existing PR worktree: true when it can be
+ * reused exactly as-is, with zero filesystem writes.
+ *
+ * Why this exists: `acquirePrWorktree` fires on every chat turn and every
+ * composer warm-up. Its cold path clears lock files, deletes a legacy ref,
+ * and aborts any in-progress merge/rebase — all writes under `.git`. When a
+ * user has the linked repo open in an editor, those writes fire a
+ * file-watcher event on *every single call* even though nothing was actually
+ * wrong. This check lets `acquirePrWorktree` skip straight to the existing
+ * early-return when the worktree is already healthy, so the common case
+ * (repeated acquires against a worktree nobody touched) never touches disk.
+ *
+ * Mirrors the conditions the cold path below would otherwise repair:
+ * directory exists, no lock files, no in-progress merge/rebase, checked out
+ * on the expected branch, at (or, unless `exactHead`, an ancestor of)
+ * `prHeadSha`, AND no legacy `refs/revv/pr-N` ref shadowing the branch (see
+ * the cold path's heal step below for why that ref is unsafe to leave in
+ * place). `rev-parse --verify --quiet` is a pure read — unlike `existsSync`,
+ * it also sees a ref folded into `packed-refs`, and it writes nothing so it
+ * can't trigger a file-watcher event either.
+ */
+export async function isWorktreeHealthy(params: {
+  clonePath: string;
+  prDirName: string;
+  branchName: string;
+  worktreePath: string;
+  prHeadSha: string;
+  exactHead: boolean;
+  prNumber: number;
+}): Promise<boolean> {
+  const { clonePath, prDirName, branchName, worktreePath, prHeadSha, exactHead, prNumber } = params;
+
+  if (!existsSync(worktreePath)) return false;
+
+  const worktreeGitdir = prWorktreeGitdir(clonePath, prDirName);
+  const inProgressMarkers = [
+    join(worktreeGitdir, "MERGE_HEAD"),
+    join(worktreeGitdir, "rebase-merge"),
+    join(worktreeGitdir, "rebase-apply"),
+  ];
+  if (inProgressMarkers.some((marker) => existsSync(marker))) return false;
+
+  if (
+    prWorktreeLockPaths(clonePath, prDirName, branchName).some((lockPath) => existsSync(lockPath))
+  ) {
+    return false;
+  }
+
+  // The legacy `refs/revv/pr-N` ref (see the cold path below) makes the bare
+  // name `revv/pr-N` ambiguous with the branch `refs/heads/revv/pr-N` — git
+  // resolves `refs/<name>` before `refs/heads/<name>`, so its mere presence
+  // silently breaks bare-name git ops even when everything else here checks
+  // out healthy. A worktree seeded before the heal step existed must fall
+  // through to the cold path so that heal actually runs.
+  if (
+    await runGitBestEffort(["rev-parse", "--verify", "--quiet", legacyPrRef(prNumber)], clonePath)
+  ) {
+    return false;
+  }
+
+  const headRef = await readGitHead(worktreePath);
+  if (headRef !== `refs/heads/${branchName}`) return false;
+
+  let currentSha: string;
+  try {
+    currentSha = (await runGitCapture(["rev-parse", "HEAD"], worktreePath)).trim();
+  } catch {
+    return false;
+  }
+  if (currentSha === prHeadSha) return true;
+  if (exactHead) return false;
+
+  return runGitBestEffort(["merge-base", "--is-ancestor", prHeadSha, currentSha], worktreePath);
 }
 
 /**
@@ -754,11 +854,7 @@ export const RepoCloneServiceLive = Layer.effect(
             clonePath,
             15_000,
           );
-          await runGitBestEffort(
-            ["update-ref", "-d", `refs/revv/pr-${prNumber}`],
-            clonePath,
-            15_000,
-          );
+          await runGitBestEffort(["update-ref", "-d", legacyPrRef(prNumber)], clonePath, 15_000);
           return { pruned: true };
         },
         catch: (err) =>
@@ -925,6 +1021,33 @@ export const RepoCloneServiceLive = Layer.effect(
                   const holderBase = worktreeHolderPath(row.owner, row.name);
                   const worktreePath = join(holderBase, prDirName);
 
+                  // Zero-touch fast path: if the worktree is already checked
+                  // out on the right branch, at (or ahead of) `prHeadSha`,
+                  // with no lock files, no in-progress merge/rebase, and no
+                  // legacy `refs/revv/pr-N` ref shadowing the branch, return
+                  // immediately. Nothing below this point may run — every
+                  // statement in the cold path that follows writes to
+                  // `.git` (lock cleanup, ref deletion, merge/rebase abort),
+                  // and those writes fire file-watcher events in any editor
+                  // that has the linked user repo open, on every chat turn
+                  // and composer warm-up. Only an unhealthy worktree should
+                  // ever pay that cost — and a worktree still carrying the
+                  // legacy ref counts as unhealthy specifically so the heal
+                  // step just below actually runs for it.
+                  if (
+                    await isWorktreeHealthy({
+                      clonePath,
+                      prDirName,
+                      branchName,
+                      worktreePath,
+                      prHeadSha,
+                      exactHead,
+                      prNumber,
+                    })
+                  ) {
+                    return { worktreePath, branchName };
+                  }
+
                   const authedUrl = `https://x-access-token:${githubToken}@${gitHost}/${row.fullName}.git`;
 
                   mkdirSync(holderBase, { recursive: true });
@@ -942,7 +1065,7 @@ export const RepoCloneServiceLive = Layer.effect(
                   // an already-checked-out worktree is fixed in place without a
                   // teardown, preserving any unpushed agent commits.
                   await runGitBestEffort(
-                    ["update-ref", "-d", `refs/revv/pr-${prNumber}`],
+                    ["update-ref", "-d", legacyPrRef(prNumber)],
                     clonePath,
                     10_000,
                   );
