@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.21.1](https://github.com/alexandre-schaffner/revv/compare/v0.21.0...v0.21.1) (2026-08-03)
+
+
+### Bug Fixes
+
+* **server:** zero-touch acquirePrWorktree fast path ([061195c](https://github.com/alexandre-schaffner/revv/commit/061195c58ff13bf3e6bf32500fb01ab54e098d66))
+* **server:** zero-touch acquirePrWorktree fast path for healthy worktrees ([056f767](https://github.com/alexandre-schaffner/revv/commit/056f7679ce6275ecfbe600adc3a728940271c49f))
+
 ## [0.21.0](https://github.com/alexandre-schaffner/revv/compare/v0.20.0...v0.21.0) (2026-08-03)
 
 
