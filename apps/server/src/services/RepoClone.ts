@@ -282,18 +282,32 @@ async function readGitHead(worktreePath: string): Promise<string | null> {
  * walkthrough job for a different PR could be holding them legitimately —
  * `MAX_CONCURRENT_JOBS = 5` allows that concurrency.
  */
+/** Absolute path to a PR worktree's own `.git/worktrees/<name>` gitdir. */
+function prWorktreeGitdir(clonePath: string, prDirName: string): string {
+  return join(clonePath, ".git", "worktrees", prDirName);
+}
+
+/**
+ * The fixed set of lock file paths tied to a single PR's worktree gitdir and
+ * its branch ref. Shared by `clearStalePrWorktreeLocks` (which deletes them)
+ * and `isWorktreeHealthy` (which only checks whether any exist), so the two
+ * lists can never drift apart.
+ */
+function prWorktreeLockPaths(clonePath: string, prDirName: string, branchName: string): string[] {
+  const worktreeGitdir = prWorktreeGitdir(clonePath, prDirName);
+  return [
+    join(worktreeGitdir, "index.lock"),
+    join(worktreeGitdir, "HEAD.lock"),
+    join(clonePath, ".git", "refs", "heads", `${branchName}.lock`),
+  ];
+}
+
 async function clearStalePrWorktreeLocks(
   clonePath: string,
   prDirName: string,
   branchName: string,
 ): Promise<void> {
-  const worktreeGitdir = join(clonePath, ".git", "worktrees", prDirName);
-  const candidates = [
-    join(worktreeGitdir, "index.lock"),
-    join(worktreeGitdir, "HEAD.lock"),
-    join(clonePath, ".git", "refs", "heads", `${branchName}.lock`),
-  ];
-  for (const lockPath of candidates) {
+  for (const lockPath of prWorktreeLockPaths(clonePath, prDirName, branchName)) {
     try {
       if (!existsSync(lockPath)) continue;
       await rm(lockPath, { force: true });
@@ -307,6 +321,65 @@ async function clearStalePrWorktreeLocks(
       );
     }
   }
+}
+
+/**
+ * Read-only health check for an existing PR worktree: true when it can be
+ * reused exactly as-is, with zero filesystem writes.
+ *
+ * Why this exists: `acquirePrWorktree` fires on every chat turn and every
+ * composer warm-up. Its cold path clears lock files, deletes a legacy ref,
+ * and aborts any in-progress merge/rebase — all writes under `.git`. When a
+ * user has the linked repo open in an editor, those writes fire a
+ * file-watcher event on *every single call* even though nothing was actually
+ * wrong. This check lets `acquirePrWorktree` skip straight to the existing
+ * early-return when the worktree is already healthy, so the common case
+ * (repeated acquires against a worktree nobody touched) never touches disk.
+ *
+ * Mirrors the conditions the cold path below would otherwise repair:
+ * directory exists, no lock files, no in-progress merge/rebase, checked out
+ * on the expected branch, and at (or, unless `exactHead`, an ancestor of)
+ * `prHeadSha`.
+ */
+export async function isWorktreeHealthy(params: {
+  clonePath: string;
+  prDirName: string;
+  branchName: string;
+  worktreePath: string;
+  prHeadSha: string;
+  exactHead: boolean;
+}): Promise<boolean> {
+  const { clonePath, prDirName, branchName, worktreePath, prHeadSha, exactHead } = params;
+
+  if (!existsSync(worktreePath)) return false;
+
+  const worktreeGitdir = prWorktreeGitdir(clonePath, prDirName);
+  const inProgressMarkers = [
+    join(worktreeGitdir, "MERGE_HEAD"),
+    join(worktreeGitdir, "rebase-merge"),
+    join(worktreeGitdir, "rebase-apply"),
+  ];
+  if (inProgressMarkers.some((marker) => existsSync(marker))) return false;
+
+  if (
+    prWorktreeLockPaths(clonePath, prDirName, branchName).some((lockPath) => existsSync(lockPath))
+  ) {
+    return false;
+  }
+
+  const headRef = await readGitHead(worktreePath);
+  if (headRef !== `refs/heads/${branchName}`) return false;
+
+  let currentSha: string;
+  try {
+    currentSha = (await runGitCapture(["rev-parse", "HEAD"], worktreePath)).trim();
+  } catch {
+    return false;
+  }
+  if (currentSha === prHeadSha) return true;
+  if (exactHead) return false;
+
+  return runGitBestEffort(["merge-base", "--is-ancestor", prHeadSha, currentSha], worktreePath);
 }
 
 /**
@@ -924,6 +997,29 @@ export const RepoCloneServiceLive = Layer.effect(
                   const prFetchRef = `refs/revv-pull/${prNumber}`;
                   const holderBase = worktreeHolderPath(row.owner, row.name);
                   const worktreePath = join(holderBase, prDirName);
+
+                  // Zero-touch fast path: if the worktree is already checked
+                  // out on the right branch, at (or ahead of) `prHeadSha`,
+                  // with no lock files or in-progress merge/rebase, return
+                  // immediately. Nothing below this point may run — every
+                  // statement in the cold path that follows writes to
+                  // `.git` (lock cleanup, ref deletion, merge/rebase abort),
+                  // and those writes fire file-watcher events in any editor
+                  // that has the linked user repo open, on every chat turn
+                  // and composer warm-up. Only an unhealthy worktree should
+                  // ever pay that cost.
+                  if (
+                    await isWorktreeHealthy({
+                      clonePath,
+                      prDirName,
+                      branchName,
+                      worktreePath,
+                      prHeadSha,
+                      exactHead,
+                    })
+                  ) {
+                    return { worktreePath, branchName };
+                  }
 
                   const authedUrl = `https://x-access-token:${githubToken}@${gitHost}/${row.fullName}.git`;
 
