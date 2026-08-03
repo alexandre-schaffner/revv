@@ -1,5 +1,6 @@
 import type { AcpAgentId, LoginEvent } from "@revv/shared";
 import { Context, Effect, Layer } from "effect";
+import { ensureClaudeConfigDir, resolveClaudeConfigDir } from "../ai/acp/claude-config";
 import {
   detectAgentAuth,
   invalidateCliAgentCache,
@@ -48,6 +49,25 @@ interface LoginMeta {
 }
 
 type LoginJob = Job<LoginEvent, LoginMeta>;
+
+/**
+ * Env for the interactive login PTY: the inherited env, widened to the user's
+ * login-shell PATH, plus `CLAUDE_CONFIG_DIR` when `claudeConfigDir` is set —
+ * the SAME resolution the agent spawn and the auth probe use (see
+ * `resolveClaudeConfigDir`), so this one-time login lands in the dir the
+ * agent will actually look for it in.
+ */
+export function buildLoginEnv(
+  baseEnv: Readonly<Record<string, string | undefined>>,
+  path: string,
+  claudeConfigDir: string | undefined,
+): Record<string, string | undefined> {
+  return {
+    ...baseEnv,
+    PATH: path,
+    ...(claudeConfigDir ? { CLAUDE_CONFIG_DIR: claudeConfigDir } : {}),
+  };
+}
 
 export class AgentLoginService extends Context.Tag("AgentLoginService")<
   AgentLoginService,
@@ -114,13 +134,22 @@ export const AgentLoginServiceLive = Layer.effect(
 
       debug("agent-login", `spawning login (${job.agentId}): ${argv.join(" ")}`);
 
+      // Isolated `CLAUDE_CONFIG_DIR` for claude-code — the SAME resolution the
+      // agent spawn (`acp-connection.ts`) and the auth probe (`cli-agent.ts`)
+      // use. This login PTY MUST run in that same dir: Claude Code's
+      // Keychain-backed OAuth item is scoped per config dir, so a login
+      // completed under the default `~/.claude` would authenticate the wrong
+      // (unscoped) Keychain item and leave the isolated agent still logged out.
+      const claudeConfigDir = resolveClaudeConfigDir(job.agentId);
+      if (claudeConfigDir) ensureClaudeConfigDir(claudeConfigDir);
+
       const decoder = new TextDecoder();
       let proc: ReturnType<typeof Bun.spawn>;
       try {
         proc = Bun.spawn([...argv], {
           // Resolve against the user's login-shell PATH so a freshly-installed
           // CLI (e.g. `cursor-agent`) is found without a server restart.
-          env: { ...process.env, PATH: resolveUserPath() },
+          env: buildLoginEnv(process.env, resolveUserPath(), claudeConfigDir),
           terminal: {
             cols: PTY_COLS,
             rows: PTY_ROWS,

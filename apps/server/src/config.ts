@@ -75,6 +75,20 @@ export const ServerConfig = Config.all({
   cloneDir: Config.string("REVV_CLONE_DIR").pipe(
     Config.withDefault(join(homedir(), ".revv", "repos")),
   ),
+  // Isolated `CLAUDE_CONFIG_DIR` for claude-code ACP agents (see
+  // `ai/acp/claude-config.ts`, injected centrally in `ai/acp/acp-connection.ts`).
+  // Keeps Revv's sessions out of `~/.claude`, whose `projects` registry VS
+  // Code's Copilot Chat extension force-opens as git repos — polluting the
+  // Source Control view with every PR worktree Revv spawns an agent in.
+  claudeConfigDir: Config.string("REVV_CLAUDE_CONFIG_DIR").pipe(
+    Config.withDefault(join(homedir(), ".revv", "claude")),
+  ),
+  // Escape hatch for the isolation above — set to `false` to have claude-code
+  // ACP agents fall back to the shared `~/.claude` (e.g. to inspect a session
+  // with the bare `claude` CLI, or while troubleshooting).
+  claudeConfigIsolation: Config.boolean("REVV_CLAUDE_CONFIG_ISOLATION").pipe(
+    Config.withDefault(true),
+  ),
   // ── ACP (Agent Client Protocol) chat transport ──────────────────────────
   // The right-pane chat (and merge-conflict resolution) run on a single ACP
   // client adapter — the agent runs as a subprocess spoken to over stdio
