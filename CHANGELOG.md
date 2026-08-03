@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.21.0](https://github.com/alexandre-schaffner/revv/compare/v0.20.0...v0.21.0) (2026-08-03)
+
+
+### Features
+
+* **server:** isolate Claude agent sessions in a private config dir ([91e8c5e](https://github.com/alexandre-schaffner/revv/commit/91e8c5e04ee8ed7fdb571cf3a24d394c91dfc6d1))
+* **server:** isolate Claude agent sessions in a private config dir ([cbb299e](https://github.com/alexandre-schaffner/revv/commit/cbb299e9010cde8020fb200af485d940a2b89a36))
+
 ## [0.20.0](https://github.com/alexandre-schaffner/revv/compare/v0.19.5...v0.20.0) (2026-07-31)
 
 
