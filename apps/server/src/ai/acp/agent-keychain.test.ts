@@ -1,7 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import { platform } from "node:os";
 import { getAgentKeychainAuth } from "@revv/shared";
-import { looksLikeAuthFailure, withAgentKeychainHint } from "./agent-keychain";
+import {
+  looksLikeAuthFailure,
+  probeAgentKeychainReadable,
+  withAgentKeychainHint,
+} from "./agent-keychain";
 
 const isMac = platform() === "darwin";
 
@@ -83,6 +87,32 @@ describe("withAgentKeychainHint", () => {
     const out = withAgentKeychainHint("claude-code", "ACP connection closed");
     expect(typeof out).toBe("string");
     expect(out).toContain("ACP connection closed");
+    expect(isMac).toBe(true);
+  });
+});
+
+describe("probeAgentKeychainReadable", () => {
+  // Regression coverage for the bug this fixes: the probe used to run a raw,
+  // unscoped Keychain existence check that couldn't see an isolated
+  // `CLAUDE_CONFIG_DIR`'s own scoped item, so it always reported `false` under
+  // isolation regardless of whether the user was actually logged in. It now
+  // delegates to the SAME context-aware auth check `withAgentKeychainHint`
+  // uses, via the same `isLoggedIn` test seam.
+
+  it("reports the probe's verdict directly for a keychain-backed agent", async () => {
+    expect(await probeAgentKeychainReadable("claude-code", () => true)).toBe(true);
+    expect(await probeAgentKeychainReadable("claude-code", () => false)).toBe(false);
+  });
+
+  it("returns null for agents that aren't keychain-backed, regardless of login state", async () => {
+    expect(await probeAgentKeychainReadable("opencode", () => true)).toBeNull();
+    expect(await probeAgentKeychainReadable("codex", () => false)).toBeNull();
+    expect(await probeAgentKeychainReadable("cursor", () => true)).toBeNull();
+  });
+
+  it("falls back to the real detectAgentAuth-based probe when no test seam is supplied (smoke test)", async () => {
+    const readable = await probeAgentKeychainReadable("claude-code");
+    expect(typeof readable).toBe("boolean");
     expect(isMac).toBe(true);
   });
 });

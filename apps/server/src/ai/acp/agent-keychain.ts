@@ -12,6 +12,12 @@
 // which remediation) comes from the registry, so covering another keychain-using
 // provider is one registry entry — no change here.
 //
+// `probeAgentKeychainReadable` (Settings' manual "Check access" button) no
+// longer probes the Keychain item directly — a raw, unscoped service-name
+// probe can't see an isolated `CLAUDE_CONFIG_DIR`'s own scoped item (see
+// `claude-config.ts`), so it delegates to the same context-aware auth probe
+// the agent spawn itself uses and reports that verdict.
+//
 // An auth-shaped failure has TWO real causes that look identical from the raw
 // ACP error alone (401 / "connection closed"): the agent simply isn't logged
 // in yet, or (rarer) it IS logged in but the background service is Keychain-ACL
@@ -23,7 +29,6 @@
 // "already signed in?" hint (agent reports not logged in, so ACL is only a
 // fallback guess — the status check itself could be what's ACL-blocked).
 
-import { execFile } from "node:child_process";
 import { type AcpAgentId, getAcpAgent, getAgentKeychainAuth } from "@revv/shared";
 import { detectAgentAuth } from "../providers/cli-agent";
 
@@ -84,34 +89,36 @@ export function agentKeychainRemediation(agent: AcpAgentId): string | null {
 }
 
 /**
- * Best-effort probe of whether THIS process (the server's own context) can read
- * the agent's keychain item — the same context the agent subprocess inherits, so
- * it's a meaningful signal here (unlike a probe from an interactive shell).
+ * Whether the agent can actually authenticate in the ACTIVE context — the
+ * source of truth for Settings' manual "Check access" button.
  *
- * Returns `true` (readable), `false` (blocked / prompted / not found), or `null`
- * (the agent isn't keychain-backed). A short timeout guards against a
- * confirmation dialog hanging the call — if it can't complete quickly, we treat
- * it as blocked. Heuristic: the agent's own read path may differ, so `false`
- * means "likely blocked", not proof. `-w` only exercises the Access-Control gate;
- * the secret is never read from stdout, logged, or stored.
+ * This used to run a raw `security find-generic-password -w -s <fixed service
+ * name>` readability probe. That check was already only a heuristic (a
+ * readable item can be stale — logout doesn't always clear it), but it became
+ * outright WRONG once claude-code sessions could isolate into a resolved
+ * `CLAUDE_CONFIG_DIR` (see `claude-config.ts`): macOS Keychain storage is
+ * scoped PER CONFIG DIR, under an unpublished per-dir service name suffix, so
+ * the fixed `<service>` name probe always missed an isolated login and
+ * reported `false` regardless of whether the user was actually signed in.
+ *
+ * There is also no reliable way to distinguish "not logged in" from
+ * "logged in but Keychain-ACL-blocked" from any available signal — a blocked
+ * read and a logged-out session both surface as "not logged in" from the
+ * agent's own status command (documented in the runbook). So rather than keep
+ * that false precision, this now delegates to `detectAgentAuth` — the SAME
+ * context-aware probe (`claudeStatusCommandEnv` → `resolveClaudeConfigDir`)
+ * the agent spawn and the walkthrough-failure diagnosis already rely on — and
+ * reports its verdict directly: `true` (authenticated), `false` (not — could
+ * be either cause above; the returned remediation text still covers both),
+ * or `null` (the agent isn't keychain-backed, so this check doesn't apply).
+ *
+ * @param isLoggedIn Test seam for the auth check — same contract as
+ * {@link withAgentKeychainHint}'s, defaults to `detectAgentAuth`.
  */
-export function probeAgentKeychainReadable(agent: AcpAgentId): Promise<boolean | null> {
-  const keychainAuth = getAgentKeychainAuth(agent);
-  if (!keychainAuth) return Promise.resolve(null);
-  return new Promise((resolve) => {
-    let settled = false;
-    const done = (v: boolean) => {
-      if (!settled) {
-        settled = true;
-        resolve(v);
-      }
-    };
-    const child = execFile(
-      "security",
-      ["find-generic-password", "-w", "-s", keychainAuth.service],
-      { timeout: 4000 },
-      (err) => done(!err),
-    );
-    child.on("error", () => done(false));
-  });
+export async function probeAgentKeychainReadable(
+  agent: AcpAgentId,
+  isLoggedIn: (agent: AcpAgentId) => boolean = detectAgentAuth,
+): Promise<boolean | null> {
+  if (!getAgentKeychainAuth(agent)) return null;
+  return isLoggedIn(agent);
 }

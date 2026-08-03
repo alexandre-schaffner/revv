@@ -140,12 +140,22 @@ step for ANY claude-code auth complaint on an isolation-enabled install:
 
 - The manual "check keychain access" probe in Settings
   (`agent-keychain.ts#probeAgentKeychainReadable`, `routes/settings.ts`
-  `/agent/keychain-check`) still checks the **default**, unscoped
-  `Claude Code-credentials` service name — it was not updated to resolve the
-  isolated dir's scoped service name (unknown hash algorithm, not worth
-  reverse-engineering). It may report misleading results when isolation is on;
-  the `claude auth status --json` probe above is authoritative, this one
-  isn't.
+  `/agent/keychain-check`) no longer probes the Keychain item's fixed service
+  name directly (that was context-blind and gave false results under
+  isolation) — it now delegates to the same context-aware auth probe the agent
+  spawn uses, and reports that verdict. This does mean the check's precision
+  is capped at what that probe can tell: it answers "can this agent
+  authenticate right now", not literally "is the Keychain item readable" —
+  those two causes (not logged in vs. logged in but ACL-blocked) aren't
+  reliably distinguishable from any available signal, so the UI's "action
+  needed" state can mean either.
+- `cli-agent.ts#detectClaudeSubscriptionAuthHint`'s own Keychain existence
+  probe (used only for "sign-in expired" vs. "not signed in" WORDING, never
+  the authoritative `authed` result) still checks the fixed default
+  `Claude Code-credentials` service name — genuinely can't be made scope-aware
+  without the isolated dir's per-config-dir service-name suffix, which is
+  unpublished. Documented in that function's own TSDoc; a false negative there
+  only costs slightly less precise wording.
 - A session started before switching `REVV_CLAUDE_CONFIG_ISOLATION` won't
   resume from the new location — the isolated dir starts with no prior
   session history, and a first-time switch to isolation needs the one-time
