@@ -288,6 +288,16 @@ function prWorktreeGitdir(clonePath: string, prDirName: string): string {
 }
 
 /**
+ * The legacy PR-head fetch ref from the old (pre `refs/revv-pull/N`) scheme.
+ * Shared so every reader/writer of this ref name — the cold path's heal step,
+ * the reap/prune teardown, and `isWorktreeHealthy`'s health check — can never
+ * drift apart.
+ */
+function legacyPrRef(prNumber: number): string {
+  return `refs/revv/pr-${prNumber}`;
+}
+
+/**
  * The fixed set of lock file paths tied to a single PR's worktree gitdir and
  * its branch ref. Shared by `clearStalePrWorktreeLocks` (which deletes them)
  * and `isWorktreeHealthy` (which only checks whether any exist), so the two
@@ -338,8 +348,12 @@ async function clearStalePrWorktreeLocks(
  *
  * Mirrors the conditions the cold path below would otherwise repair:
  * directory exists, no lock files, no in-progress merge/rebase, checked out
- * on the expected branch, and at (or, unless `exactHead`, an ancestor of)
- * `prHeadSha`.
+ * on the expected branch, at (or, unless `exactHead`, an ancestor of)
+ * `prHeadSha`, AND no legacy `refs/revv/pr-N` ref shadowing the branch (see
+ * the cold path's heal step below for why that ref is unsafe to leave in
+ * place). `rev-parse --verify --quiet` is a pure read — unlike `existsSync`,
+ * it also sees a ref folded into `packed-refs`, and it writes nothing so it
+ * can't trigger a file-watcher event either.
  */
 export async function isWorktreeHealthy(params: {
   clonePath: string;
@@ -348,8 +362,9 @@ export async function isWorktreeHealthy(params: {
   worktreePath: string;
   prHeadSha: string;
   exactHead: boolean;
+  prNumber: number;
 }): Promise<boolean> {
-  const { clonePath, prDirName, branchName, worktreePath, prHeadSha, exactHead } = params;
+  const { clonePath, prDirName, branchName, worktreePath, prHeadSha, exactHead, prNumber } = params;
 
   if (!existsSync(worktreePath)) return false;
 
@@ -363,6 +378,18 @@ export async function isWorktreeHealthy(params: {
 
   if (
     prWorktreeLockPaths(clonePath, prDirName, branchName).some((lockPath) => existsSync(lockPath))
+  ) {
+    return false;
+  }
+
+  // The legacy `refs/revv/pr-N` ref (see the cold path below) makes the bare
+  // name `revv/pr-N` ambiguous with the branch `refs/heads/revv/pr-N` — git
+  // resolves `refs/<name>` before `refs/heads/<name>`, so its mere presence
+  // silently breaks bare-name git ops even when everything else here checks
+  // out healthy. A worktree seeded before the heal step existed must fall
+  // through to the cold path so that heal actually runs.
+  if (
+    await runGitBestEffort(["rev-parse", "--verify", "--quiet", legacyPrRef(prNumber)], clonePath)
   ) {
     return false;
   }
@@ -827,11 +854,7 @@ export const RepoCloneServiceLive = Layer.effect(
             clonePath,
             15_000,
           );
-          await runGitBestEffort(
-            ["update-ref", "-d", `refs/revv/pr-${prNumber}`],
-            clonePath,
-            15_000,
-          );
+          await runGitBestEffort(["update-ref", "-d", legacyPrRef(prNumber)], clonePath, 15_000);
           return { pruned: true };
         },
         catch: (err) =>
@@ -1000,14 +1023,17 @@ export const RepoCloneServiceLive = Layer.effect(
 
                   // Zero-touch fast path: if the worktree is already checked
                   // out on the right branch, at (or ahead of) `prHeadSha`,
-                  // with no lock files or in-progress merge/rebase, return
+                  // with no lock files, no in-progress merge/rebase, and no
+                  // legacy `refs/revv/pr-N` ref shadowing the branch, return
                   // immediately. Nothing below this point may run — every
                   // statement in the cold path that follows writes to
                   // `.git` (lock cleanup, ref deletion, merge/rebase abort),
                   // and those writes fire file-watcher events in any editor
                   // that has the linked user repo open, on every chat turn
                   // and composer warm-up. Only an unhealthy worktree should
-                  // ever pay that cost.
+                  // ever pay that cost — and a worktree still carrying the
+                  // legacy ref counts as unhealthy specifically so the heal
+                  // step just below actually runs for it.
                   if (
                     await isWorktreeHealthy({
                       clonePath,
@@ -1016,6 +1042,7 @@ export const RepoCloneServiceLive = Layer.effect(
                       worktreePath,
                       prHeadSha,
                       exactHead,
+                      prNumber,
                     })
                   ) {
                     return { worktreePath, branchName };
@@ -1038,7 +1065,7 @@ export const RepoCloneServiceLive = Layer.effect(
                   // an already-checked-out worktree is fixed in place without a
                   // teardown, preserving any unpushed agent commits.
                   await runGitBestEffort(
-                    ["update-ref", "-d", `refs/revv/pr-${prNumber}`],
+                    ["update-ref", "-d", legacyPrRef(prNumber)],
                     clonePath,
                     10_000,
                   );

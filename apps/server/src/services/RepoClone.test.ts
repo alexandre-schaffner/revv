@@ -82,20 +82,34 @@ describe("isWorktreeHealthy", () => {
     await rm(base, { recursive: true, force: true });
   });
 
-  it("reports a healthy worktree without touching .git on disk", async () => {
-    const refsBefore = await snapshotMtimes(join(clonePath, ".git", "refs"));
-    const worktreeGitdirBefore = await snapshotMtimes(
-      join(clonePath, ".git", "worktrees", prDirName),
-    );
-
-    const healthy = await isWorktreeHealthy({
+  /** Common healthy-baseline params — tests override just what they're probing. */
+  function healthyParams(): {
+    clonePath: string;
+    prDirName: string;
+    branchName: string;
+    worktreePath: string;
+    prHeadSha: string;
+    exactHead: true;
+    prNumber: number;
+  } {
+    return {
       clonePath,
       prDirName,
       branchName,
       worktreePath,
       prHeadSha: headSha,
       exactHead: true,
-    });
+      prNumber,
+    };
+  }
+
+  it("reports a healthy worktree without touching .git on disk", async () => {
+    const refsBefore = await snapshotMtimes(join(clonePath, ".git", "refs"));
+    const worktreeGitdirBefore = await snapshotMtimes(
+      join(clonePath, ".git", "worktrees", prDirName),
+    );
+
+    const healthy = await isWorktreeHealthy(healthyParams());
 
     expect(healthy).toBe(true);
     expect(await snapshotMtimes(join(clonePath, ".git", "refs"))).toEqual(refsBefore);
@@ -107,30 +121,38 @@ describe("isWorktreeHealthy", () => {
   it("refuses a worktree with an in-progress merge (MERGE_HEAD present)", async () => {
     writeFileSync(join(clonePath, ".git", "worktrees", prDirName, "MERGE_HEAD"), `${headSha}\n`);
 
-    const healthy = await isWorktreeHealthy({
-      clonePath,
-      prDirName,
-      branchName,
-      worktreePath,
-      prHeadSha: headSha,
-      exactHead: true,
-    });
-
-    expect(healthy).toBe(false);
+    expect(await isWorktreeHealthy(healthyParams())).toBe(false);
   });
 
   it("refuses a worktree with a stale index.lock", async () => {
     writeFileSync(join(clonePath, ".git", "worktrees", prDirName, "index.lock"), "");
 
-    const healthy = await isWorktreeHealthy({
-      clonePath,
-      prDirName,
-      branchName,
-      worktreePath,
-      prHeadSha: headSha,
-      exactHead: true,
+    expect(await isWorktreeHealthy(healthyParams())).toBe(false);
+  });
+
+  describe("legacy refs/revv/pr-N ref", () => {
+    const legacyRef = `refs/revv/pr-${prNumber}`;
+
+    it("refuses an otherwise-healthy worktree while the legacy ref still exists", async () => {
+      git(clonePath, ["update-ref", legacyRef, headSha]);
+
+      expect(await isWorktreeHealthy(healthyParams())).toBe(false);
     });
 
-    expect(healthy).toBe(false);
+    it("reports healthy again once the legacy ref is deleted", async () => {
+      git(clonePath, ["update-ref", legacyRef, headSha]);
+      expect(await isWorktreeHealthy(healthyParams())).toBe(false);
+
+      git(clonePath, ["update-ref", "-d", legacyRef]);
+
+      expect(await isWorktreeHealthy(healthyParams())).toBe(true);
+    });
+
+    it("sees the legacy ref even when packed (not just loose)", async () => {
+      git(clonePath, ["update-ref", legacyRef, headSha]);
+      git(clonePath, ["pack-refs", "--all"]);
+
+      expect(await isWorktreeHealthy(healthyParams())).toBe(false);
+    });
   });
 });
