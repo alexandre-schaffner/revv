@@ -116,8 +116,10 @@ export const ACP_AGENTS = [
       remediation:
         "Revv's background service isn't allowed to read your Claude subscription login from " +
         "the macOS Keychain, so the Claude Code agent can't authenticate. To grant access: open " +
-        'Keychain Access, search "Claude Code-credentials", double-click it, open the Access ' +
-        'Control tab, choose "Allow all applications to access this item", and Save Changes. Then retry.',
+        'Keychain Access, search "Claude Code-credentials" — an isolated Revv session may show ' +
+        'it as "Claude Code-credentials-<hash>" instead — double-click the matching item, open ' +
+        'the Access Control tab, choose "Allow all applications to access this item", and Save ' +
+        "Changes. Then retry.",
     },
   },
   {

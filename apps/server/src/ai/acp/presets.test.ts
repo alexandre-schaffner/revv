@@ -168,6 +168,39 @@ describe("ACP launch presets", () => {
     });
   });
 
+  it("injects CLAUDE_CONFIG_DIR for claude-code when the option is set", () => {
+    const launch = resolveAcpProcessLaunchById(
+      "claude-code",
+      { model: "claude-sonnet-4-6" },
+      {},
+      "/usr/bin",
+      { claudeSubscriptionAuth: false, claudeConfigDir: "/tmp/x" },
+    );
+
+    expect(launch.env.CLAUDE_CONFIG_DIR).toBe("/tmp/x");
+  });
+
+  it("never leaks CLAUDE_CONFIG_DIR to a non-claude-code adapter", () => {
+    if (serverEnv.acpCommand) return;
+    const launch = resolveAcpProcessLaunchById("codex", { model: "gpt-5.5" }, {}, "/usr/bin", {
+      claudeConfigDir: "/tmp/x",
+    });
+
+    expect(launch.env.CLAUDE_CONFIG_DIR).toBeUndefined();
+  });
+
+  it("omits CLAUDE_CONFIG_DIR for claude-code when the option is absent", () => {
+    const launch = resolveAcpProcessLaunchById(
+      "claude-code",
+      { model: "claude-sonnet-4-6" },
+      {},
+      "/usr/bin",
+      { claudeSubscriptionAuth: false },
+    );
+
+    expect("CLAUDE_CONFIG_DIR" in launch.env).toBe(false);
+  });
+
   it("keeps Anthropic API credentials when no Claude subscription auth exists", () => {
     const launch = resolveAcpProcessLaunchById(
       "claude-code",

@@ -53,6 +53,13 @@ export interface AcpProcessEnvOptions {
    * undefined so subscription verification is read from the host.
    */
   readonly claudeSubscriptionAuth?: boolean | undefined;
+  /**
+   * Isolated `CLAUDE_CONFIG_DIR` to inject for claude-code. Resolved centrally
+   * in `acp-connection.ts#spawnConnection` from `serverEnv.claudeConfigDir` /
+   * `claudeConfigIsolation` — never supplied by a caller. Ignored for every
+   * other adapter (see the `id === "claude-code"` guard below).
+   */
+  readonly claudeConfigDir?: string | undefined;
 }
 
 // Revv thinking-effort tier → Codex `model_reasoning_effort`. Codex has no
@@ -209,9 +216,12 @@ function buildAcpProcessEnv(
 
   const hasClaudeSubscriptionAuth =
     options.claudeSubscriptionAuth ?? (id === "claude-code" && detectClaudeSubscriptionAuth());
-  if (id === "claude-code" && hasClaudeSubscriptionAuth) {
-    delete env.ANTHROPIC_API_KEY;
-    delete env.ANTHROPIC_AUTH_TOKEN;
+  if (id === "claude-code") {
+    if (hasClaudeSubscriptionAuth) {
+      delete env.ANTHROPIC_API_KEY;
+      delete env.ANTHROPIC_AUTH_TOKEN;
+    }
+    if (options.claudeConfigDir) env.CLAUDE_CONFIG_DIR = options.claudeConfigDir;
   }
 
   return {
