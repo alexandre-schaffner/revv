@@ -106,7 +106,7 @@ function onPanelKeydown(e: KeyboardEvent): void {
 
   let focusedPath: string | undefined;
   for (const [path, el] of rowRefs) {
-    if (el === target) {
+    if (el && target && (el === target || el.contains(target))) {
       focusedPath = path;
       break;
     }

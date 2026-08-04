@@ -163,7 +163,7 @@ function onPanelKeydown(e: KeyboardEvent): void {
   // Is focus on one of our row triggers?
   let focusedId: string | undefined;
   for (const [id, el] of rowRefs) {
-    if (el === target) {
+    if (el && target && (el === target || el.contains(target))) {
       focusedId = id;
       break;
     }

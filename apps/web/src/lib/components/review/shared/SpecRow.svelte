@@ -87,7 +87,10 @@ function focusTriggerOnPointerDown(e: PointerEvent): void {
         {open}
         onOpenChange={(next: boolean) => {
             if (disabled) return;
-            if (next !== open) onToggle();
+            if (next !== open) {
+                triggerRef?.focus({ preventScroll: true });
+                onToggle();
+            }
         }}
     >
         <Collapsible.Trigger
